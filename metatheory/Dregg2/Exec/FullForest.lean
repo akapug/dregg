@@ -387,9 +387,15 @@ def targetOf : FullActionA → CellId
   -- §MA-queue: the 4 ring-buffer FIFO queue effects act on the queue's representing `cell` (the
   -- `stateAuthB`-gated node the chained step touches).
   | .queueAllocateA _ _ cell _              => cell
-  | .queueEnqueueA _ _ _ cell               => cell
-  | .queueDequeueA _ _ cell                 => cell
+  | .queueEnqueueA _ _ _ cell _ _ _         => cell
+  | .queueDequeueA _ _ cell _ _             => cell
   | .queueResizeA _ _ _ cell                => cell
+  -- §MA-swiss: the 4 CapTP swiss-table effects act on the exporting/holding `exporter` cell (the
+  -- `stateAuthB`-gated node the chained step touches).
+  | .exportSturdyRefA _ _ exporter _ _ _    => exporter
+  | .enlivenRefA _ _ exporter _             => exporter
+  | .swissHandoffA _ _ _ exporter           => exporter
+  | .swissDropA _ _ exporter                => exporter
 
 mutual
 /-- **`sameTargetForest`** — the STRUCTURAL `DelegationMode::None` fidelity predicate: every child's

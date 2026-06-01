@@ -1166,24 +1166,31 @@ def queueAllocateChainA (s : RecChainedState) (id : Nat) (actor cell : CellId) (
   else none
 
 /-- **Chained queue enqueue** — gate on `stateAuthB actor cell` (the writer-ACL gate, `apply.rs:3334`)
-AND run `queueEnqueueK` (APPEND to the tail; fail-closed if absent OR FULL, `apply.rs:3348`). -/
-def queueEnqueueChainA (s : RecChainedState) (id : Nat) (m : Nat) (actor cell : CellId) :
-    Option RecChainedState :=
+AND run `queueEnqueueDepositK` (APPEND to the tail; fail-closed if absent OR FULL, `apply.rs:3348`; AND
+PARK the refundable anti-spam `deposit` of asset `dAsset` from the `actor` sender into the holding-store
+keyed by `depId`, fail-closed on `InsufficientBalance`, `apply.rs:3361`). The deposit move is
+COMBINED-CONSERVING (the bare ledger DROPS, the holding-store rises) — Wave-8 closed the residual: it is
+NO LONGER bal-neutral but combined-conserving, EXACTLY like a transfer. The receipt records the deposit
+move (`amt := deposit`, `src := actor` sender, `dst := cell` queue owner). -/
+def queueEnqueueChainA (s : RecChainedState) (id : Nat) (m : Nat) (actor cell : CellId)
+    (depId : Nat) (dAsset : AssetId) (deposit : ℤ) : Option RecChainedState :=
   if stateAuthB s.kernel.caps actor cell = true then
-    match queueEnqueueK s.kernel id m with
-    | some k' => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }
+    match queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+    | some k' => some { kernel := k', log := { actor := actor, src := actor, dst := cell, amt := deposit } :: s.log }
     | none    => none
   else none
 
 /-- **Chained queue dequeue** — gate on `stateAuthB actor cell` (the c-list read) AND run
-`queueDequeueK` with `actor` as the dequeuer (REMOVE-FROM-FRONT in FIFO order; fail-closed if absent, NOT
-the owner `apply.rs:3433`, OR EMPTY `apply.rs:3444`). The dequeued head message is dropped from the
-chained wrapper (it surfaces in the kernel transition's `Nat`); the receipt records the metadata row. -/
-def queueDequeueChainA (s : RecChainedState) (id : Nat) (actor cell : CellId) :
+`queueDequeueRefundK` with `actor` as the dequeuer (REMOVE-FROM-FRONT in FIFO order; fail-closed if
+absent, NOT the owner `apply.rs:3433`, OR EMPTY `apply.rs:3444`; AND REFUND the deposit record `depId`
+to the dequeuer, `apply.rs:3483`). The refund is COMBINED-CONSERVING (the bare ledger of the dequeuer
+RISES, the holding-store DROPS). The dequeued head message is dropped from the chained wrapper (it
+surfaces in the kernel transition's `Nat`); the receipt records the deposit refund move. -/
+def queueDequeueChainA (s : RecChainedState) (id : Nat) (actor cell : CellId) (depId : Nat) (deposit : ℤ) :
     Option RecChainedState :=
   if stateAuthB s.kernel.caps actor cell = true then
-    match queueDequeueK s.kernel id actor with
-    | some (k', _) => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }
+    match queueDequeueRefundK s.kernel id actor depId with
+    | some (k', _) => some { kernel := k', log := { actor := actor, src := cell, dst := actor, amt := deposit } :: s.log }
     | none         => none
   else none
 
@@ -1201,7 +1208,8 @@ def queueResizeChainA (s : RecChainedState) (id : Nat) (newCap : Nat) (actor cel
 implies the actor was authorized over the queue cell AND the kernel transition committed. The bridge the
 authority + bal-neutrality keystones reuse. Stated generically over the kernel `Option` result. -/
 theorem queueEnqueueChainA_authorized {s s' : RecChainedState} {id m : Nat} {actor cell : CellId}
-    (h : queueEnqueueChainA s id m actor cell = some s') :
+    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
+    (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') :
     stateAuthB s.kernel.caps actor cell = true := by
   unfold queueEnqueueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true
@@ -1209,7 +1217,8 @@ theorem queueEnqueueChainA_authorized {s s' : RecChainedState} {id m : Nat} {act
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueDequeueChainA_authorized {s s' : RecChainedState} {id : Nat} {actor cell : CellId}
-    (h : queueDequeueChainA s id actor cell = some s') :
+    {depId : Nat} {deposit : ℤ}
+    (h : queueDequeueChainA s id actor cell depId deposit = some s') :
     stateAuthB s.kernel.caps actor cell = true := by
   unfold queueDequeueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true
@@ -1232,35 +1241,38 @@ theorem queueResizeChainA_authorized {s s' : RecChainedState} {id newCap : Nat} 
   · exact hg
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- **`queueEnqueueChainA_balNeutral` — PROVED.** A committed enqueue leaves the COMBINED per-asset
-measure UNCHANGED ∀ asset (queues hold messages, not balance). Reuses `queueEnqueueK_balNeutral`. -/
+/-- **`queueEnqueueChainA_balNeutral` — PROVED (Wave-8: now COMBINED-CONSERVING, not bal-neutral).** A
+committed enqueue leaves the COMBINED per-asset measure UNCHANGED ∀ asset — but NO LONGER because it is
+bal-neutral: the refundable deposit GENUINELY moves the bare `recTotalAsset` (parked off-ledger), and
+the COMBINED measure is conserved because the parked value is counted in the holding-store. Reuses
+`queueEnqueueDepositK_conserves_combined` (the residual close). -/
 theorem queueEnqueueChainA_balNeutral {s s' : RecChainedState} {id m : Nat} {actor cell : CellId}
-    (h : queueEnqueueChainA s id m actor cell = some s') (b : AssetId) :
+    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
+    (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') (b : AssetId) :
     recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
   unfold queueEnqueueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true
   · rw [if_pos hg] at h
-    cases hk : queueEnqueueK s.kernel id m with
+    cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' =>
         rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-        obtain ⟨hr, he⟩ := queueEnqueueK_balNeutral hk b
-        simp only [recTotalAssetWithEscrow, hr, he]
+        exact queueEnqueueDepositK_conserves_combined hk b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueDequeueChainA_balNeutral {s s' : RecChainedState} {id : Nat} {actor cell : CellId}
-    (h : queueDequeueChainA s id actor cell = some s') (b : AssetId) :
+    {depId : Nat} {deposit : ℤ}
+    (h : queueDequeueChainA s id actor cell depId deposit = some s') (b : AssetId) :
     recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
   unfold queueDequeueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true
   · rw [if_pos hg] at h
-    cases hk : queueDequeueK s.kernel id actor with
+    cases hk : queueDequeueRefundK s.kernel id actor depId with
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some kr =>
         obtain ⟨k', m⟩ := kr
         rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-        obtain ⟨hr, he⟩ := queueDequeueK_balNeutral hk b
-        simp only [recTotalAssetWithEscrow, hr, he]
+        exact queueDequeueRefundK_conserves_combined hk b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueAllocateChainA_balNeutral {s s' : RecChainedState} {id : Nat} {actor cell : CellId} {cap : Nat}
@@ -1291,25 +1303,28 @@ theorem queueResizeChainA_balNeutral {s s' : RecChainedState} {id newCap : Nat} 
         simp only [recTotalAssetWithEscrow, hr, he]
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- **`queueEnqueueChainA_chainlink` — PROVED.** A committed enqueue appends EXACTLY one receipt row. -/
+/-- **`queueEnqueueChainA_chainlink` — PROVED.** A committed enqueue appends EXACTLY one receipt row
+(the deposit move `actor →(deposit)→ cell`). -/
 theorem queueEnqueueChainA_chainlink {s s' : RecChainedState} {id m : Nat} {actor cell : CellId}
-    (h : queueEnqueueChainA s id m actor cell = some s') :
-    s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log := by
+    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
+    (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') :
+    s'.log = { actor := actor, src := actor, dst := cell, amt := deposit } :: s.log := by
   unfold queueEnqueueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true
   · rw [if_pos hg] at h
-    cases hk : queueEnqueueK s.kernel id m with
+    cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueDequeueChainA_chainlink {s s' : RecChainedState} {id : Nat} {actor cell : CellId}
-    (h : queueDequeueChainA s id actor cell = some s') :
-    s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log := by
+    {depId : Nat} {deposit : ℤ}
+    (h : queueDequeueChainA s id actor cell depId deposit = some s') :
+    s'.log = { actor := actor, src := cell, dst := actor, amt := deposit } :: s.log := by
   unfold queueDequeueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true
   · rw [if_pos hg] at h
-    cases hk : queueDequeueK s.kernel id actor with
+    cases hk : queueDequeueRefundK s.kernel id actor depId with
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some kr => obtain ⟨k', m⟩ := kr; rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
   · rw [if_neg hg] at h; exact absurd h (by simp)
@@ -1332,6 +1347,190 @@ theorem queueResizeChainA_chainlink {s s' : RecChainedState} {id newCap : Nat} {
   by_cases hg : stateAuthB s.kernel.caps actor cell = true
   · rw [if_pos hg] at h
     cases hk : queueResizeK s.kernel id newCap with
+    | none    => rw [hk] at h; exact absurd h (by simp)
+    | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-! ### §MA-swiss — the REAL CapTP export/enliven/handoff/GC swiss-table effects (Wave-8 de-THIN). The
+chained wrappers over `RecordKernel`'s `swissExportK`/`swissEnlivenK`/`swissHandoffK`/`swissDropK`, EACH
+composed with a REAL `stateAuthB actor exporter` authority gate over the exporting/holding cell (dregg1's
+holder-of-the-cap / introducer gate, `apply.rs:3879`/`:4109`) — fail-closed if the actor lacks authority.
+The kernel transition carries the membership / non-amplification / refcount-GC gates; the chained wrapper
+adds the c-list authority gate and the receipt-chain row. ALL FOUR are balance-NEUTRAL: the swiss-table
+moves REFERENCES (capability routing), never balance. -/
+
+/-- **Chained swiss export** — gate on `stateAuthB actor exporter` (the holder of the cap may export it)
+AND run `swissExportK` (INSERT a swiss→cap entry, refcount 1; fail-closed on duplicate OR amplification). -/
+def swissExportChainA (s : RecChainedState) (sw : Nat) (actor exporter target : CellId)
+    (rights held : List Auth) : Option RecChainedState :=
+  if stateAuthB s.kernel.caps actor exporter = true then
+    match swissExportK s.kernel sw exporter target rights held with
+    | some k' => some { kernel := k', log := { actor := actor, src := exporter, dst := exporter, amt := 0 } :: s.log }
+    | none    => none
+  else none
+
+/-- **Chained swiss enliven** — gate on `stateAuthB actor exporter` (the c-list read over the exporting
+cell) AND run `swissEnlivenK` (LOOKUP-fail-closed + validate non-amplification + bump refcount). -/
+def swissEnlivenChainA (s : RecChainedState) (sw : Nat) (actor exporter : CellId) (claimed : List Auth) :
+    Option RecChainedState :=
+  if stateAuthB s.kernel.caps actor exporter = true then
+    match swissEnlivenK s.kernel sw claimed with
+    | some k' => some { kernel := k', log := { actor := actor, src := exporter, dst := exporter, amt := 0 } :: s.log }
+    | none    => none
+  else none
+
+/-- **Chained swiss handoff** — gate on `stateAuthB introducer exporter` (the 3-vat introducer holds the
+cap) AND run `swissHandoffK` (bind the cert + bump refcount; fail-closed if absent). -/
+def swissHandoffChainA (s : RecChainedState) (sw certHash : Nat) (introducer exporter : CellId) :
+    Option RecChainedState :=
+  if stateAuthB s.kernel.caps introducer exporter = true then
+    match swissHandoffK s.kernel sw certHash with
+    | some k' => some { kernel := k', log := { actor := introducer, src := exporter, dst := exporter, amt := 0 } :: s.log }
+    | none    => none
+  else none
+
+/-- **Chained swiss drop** — gate on `stateAuthB actor exporter` (the holder may GC its ref) AND run
+`swissDropK` (decrement refcount, GC at 0; fail-closed if absent OR already-zero). -/
+def swissDropChainA (s : RecChainedState) (sw : Nat) (actor exporter : CellId) : Option RecChainedState :=
+  if stateAuthB s.kernel.caps actor exporter = true then
+    match swissDropK s.kernel sw with
+    | some k' => some { kernel := k', log := { actor := actor, src := exporter, dst := exporter, amt := 0 } :: s.log }
+    | none    => none
+  else none
+
+/-- **The 4 swiss chained steps are AUTHORIZED — PROVED.** A committed swiss step implies the actor held
+authority over the exporting/holding cell. The bridge the D auth gate reuses. -/
+theorem swissExportChainA_authorized {s s' : RecChainedState} {sw : Nat} {actor exporter target : CellId}
+    {rights held : List Auth} (h : swissExportChainA s sw actor exporter target rights held = some s') :
+    stateAuthB s.kernel.caps actor exporter = true := by
+  unfold swissExportChainA at h
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · exact hg
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+theorem swissEnlivenChainA_authorized {s s' : RecChainedState} {sw : Nat} {actor exporter : CellId}
+    {claimed : List Auth} (h : swissEnlivenChainA s sw actor exporter claimed = some s') :
+    stateAuthB s.kernel.caps actor exporter = true := by
+  unfold swissEnlivenChainA at h
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · exact hg
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+theorem swissHandoffChainA_authorized {s s' : RecChainedState} {sw certHash : Nat} {introducer exporter : CellId}
+    (h : swissHandoffChainA s sw certHash introducer exporter = some s') :
+    stateAuthB s.kernel.caps introducer exporter = true := by
+  unfold swissHandoffChainA at h
+  by_cases hg : stateAuthB s.kernel.caps introducer exporter = true
+  · exact hg
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+theorem swissDropChainA_authorized {s s' : RecChainedState} {sw : Nat} {actor exporter : CellId}
+    (h : swissDropChainA s sw actor exporter = some s') :
+    stateAuthB s.kernel.caps actor exporter = true := by
+  unfold swissDropChainA at h
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · exact hg
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **The 4 swiss chained steps are balance-NEUTRAL — PROVED.** The swiss-table moves references, not
+balance, so the COMBINED per-asset measure is UNCHANGED ∀ asset. Reuses the kernel `*K_balNeutral`. -/
+theorem swissExportChainA_balNeutral {s s' : RecChainedState} {sw : Nat} {actor exporter target : CellId}
+    {rights held : List Auth} (h : swissExportChainA s sw actor exporter target rights held = some s')
+    (b : AssetId) : recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+  unfold swissExportChainA at h
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · rw [if_pos hg] at h
+    cases hk : swissExportK s.kernel sw exporter target rights held with
+    | none    => rw [hk] at h; exact absurd h (by simp)
+    | some k' =>
+        rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+        obtain ⟨hr, he⟩ := swissExportK_balNeutral hk b
+        simp only [recTotalAssetWithEscrow, hr, he]
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+theorem swissEnlivenChainA_balNeutral {s s' : RecChainedState} {sw : Nat} {actor exporter : CellId}
+    {claimed : List Auth} (h : swissEnlivenChainA s sw actor exporter claimed = some s') (b : AssetId) :
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+  unfold swissEnlivenChainA at h
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · rw [if_pos hg] at h
+    cases hk : swissEnlivenK s.kernel sw claimed with
+    | none    => rw [hk] at h; exact absurd h (by simp)
+    | some k' =>
+        rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+        obtain ⟨hr, he⟩ := swissEnlivenK_balNeutral hk b
+        simp only [recTotalAssetWithEscrow, hr, he]
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+theorem swissHandoffChainA_balNeutral {s s' : RecChainedState} {sw certHash : Nat} {introducer exporter : CellId}
+    (h : swissHandoffChainA s sw certHash introducer exporter = some s') (b : AssetId) :
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+  unfold swissHandoffChainA at h
+  by_cases hg : stateAuthB s.kernel.caps introducer exporter = true
+  · rw [if_pos hg] at h
+    cases hk : swissHandoffK s.kernel sw certHash with
+    | none    => rw [hk] at h; exact absurd h (by simp)
+    | some k' =>
+        rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+        obtain ⟨hr, he⟩ := swissHandoffK_balNeutral hk b
+        simp only [recTotalAssetWithEscrow, hr, he]
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+theorem swissDropChainA_balNeutral {s s' : RecChainedState} {sw : Nat} {actor exporter : CellId}
+    (h : swissDropChainA s sw actor exporter = some s') (b : AssetId) :
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+  unfold swissDropChainA at h
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · rw [if_pos hg] at h
+    cases hk : swissDropK s.kernel sw with
+    | none    => rw [hk] at h; exact absurd h (by simp)
+    | some k' =>
+        rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+        obtain ⟨hr, he⟩ := swissDropK_balNeutral hk b
+        simp only [recTotalAssetWithEscrow, hr, he]
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **The 4 swiss chained steps each append EXACTLY one receipt row — PROVED (the chainlink).** -/
+theorem swissExportChainA_chainlink {s s' : RecChainedState} {sw : Nat} {actor exporter target : CellId}
+    {rights held : List Auth} (h : swissExportChainA s sw actor exporter target rights held = some s') :
+    s'.log = { actor := actor, src := exporter, dst := exporter, amt := 0 } :: s.log := by
+  unfold swissExportChainA at h
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · rw [if_pos hg] at h
+    cases hk : swissExportK s.kernel sw exporter target rights held with
+    | none    => rw [hk] at h; exact absurd h (by simp)
+    | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+theorem swissEnlivenChainA_chainlink {s s' : RecChainedState} {sw : Nat} {actor exporter : CellId}
+    {claimed : List Auth} (h : swissEnlivenChainA s sw actor exporter claimed = some s') :
+    s'.log = { actor := actor, src := exporter, dst := exporter, amt := 0 } :: s.log := by
+  unfold swissEnlivenChainA at h
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · rw [if_pos hg] at h
+    cases hk : swissEnlivenK s.kernel sw claimed with
+    | none    => rw [hk] at h; exact absurd h (by simp)
+    | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+theorem swissHandoffChainA_chainlink {s s' : RecChainedState} {sw certHash : Nat} {introducer exporter : CellId}
+    (h : swissHandoffChainA s sw certHash introducer exporter = some s') :
+    s'.log = { actor := introducer, src := exporter, dst := exporter, amt := 0 } :: s.log := by
+  unfold swissHandoffChainA at h
+  by_cases hg : stateAuthB s.kernel.caps introducer exporter = true
+  · rw [if_pos hg] at h
+    cases hk : swissHandoffK s.kernel sw certHash with
+    | none    => rw [hk] at h; exact absurd h (by simp)
+    | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+theorem swissDropChainA_chainlink {s s' : RecChainedState} {sw : Nat} {actor exporter : CellId}
+    (h : swissDropChainA s sw actor exporter = some s') :
+    s'.log = { actor := actor, src := exporter, dst := exporter, amt := 0 } :: s.log := by
+  unfold swissDropChainA at h
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · rw [if_pos hg] at h
+    cases hk : swissDropK s.kernel sw with
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
   · rw [if_neg hg] at h; exact absurd h (by simp)
@@ -1666,21 +1865,52 @@ inductive FullActionA where
   holds authority over the queue's representing `cell` (`stateAuthB`). Generative. bal-NEUTRAL. -/
   | queueAllocateA  (id : Nat) (actor cell : CellId) (capacity : Nat)
   /-- `QueueEnqueue { queue, message_hash, deposit }` (dregg1 `apply_queue_enqueue`, `apply.rs:3310`):
-  APPEND message hash `m` to the TAIL of queue `id`'s FIFO buffer. Fail-closed if the queue is absent OR
-  FULL (`apply.rs:3348`). Authority: `actor` holds authority over the queue `cell` (the writer-ACL gate,
-  `apply.rs:3334`). The anti-spam deposit (the `EffectsPaired` cell-ledger flow) is orthogonal to the
-  ORDER mechanism. Conservative. bal-NEUTRAL. -/
-  | queueEnqueueA   (id : Nat) (m : Nat) (actor cell : CellId)
+  APPEND message hash `m` to the TAIL of queue `id`'s FIFO buffer AND PARK a REFUNDABLE anti-spam
+  `deposit` of asset `dAsset` from the `actor` sender into the holding-store keyed by `depId`. Fail-closed
+  if the queue is absent OR FULL (`apply.rs:3348`), OR the sender lacks the deposit (`InsufficientBalance`,
+  `apply.rs:3361`). Authority: `actor` holds authority over the queue `cell` (the writer-ACL gate,
+  `apply.rs:3334`). **Wave-8 residual close**: the deposit is NO LONGER unmodeled — it GENUINELY moves
+  the bare `recTotalAsset` (parked off-ledger) while the COMBINED measure is CONSERVED (a refundable
+  transfer-like move). Conservative, combined-conserving. -/
+  | queueEnqueueA   (id : Nat) (m : Nat) (actor cell : CellId) (depId : Nat) (dAsset : AssetId) (deposit : ℤ)
   /-- `QueueDequeue { queue }` (dregg1 `apply_queue_dequeue`, `apply.rs:3420`): REMOVE-FROM-FRONT of
-  queue `id`'s FIFO buffer (the OLDEST waiting message). Fail-closed if absent, the actor is NOT the
-  queue owner (`apply.rs:3433`), OR the buffer is EMPTY (`apply.rs:3444`). Authority: `actor` holds
-  authority over the queue `cell` AND is the kernel-level owner. Conservative. bal-NEUTRAL. -/
-  | queueDequeueA   (id : Nat) (actor cell : CellId)
+  queue `id`'s FIFO buffer (the OLDEST waiting message) AND REFUND the deposit record `depId` to the
+  dequeuer (`apply.rs:3483`). Fail-closed if absent, the actor is NOT the queue owner (`apply.rs:3433`),
+  the buffer is EMPTY (`apply.rs:3444`), OR the deposit record is absent. Authority: `actor` holds
+  authority over the queue `cell` AND is the kernel-level owner. **Wave-8**: the refund RETURNS the
+  deposit to the dequeuer's ledger (combined-conserving). Conservative. -/
+  | queueDequeueA   (id : Nat) (actor cell : CellId) (depId : Nat) (deposit : ℤ)
   /-- `QueueResize { queue, new_capacity }` (dregg1 `apply_queue_resize`, `apply.rs:3507`): change queue
   `id`'s capacity to `newCap`. Fail-closed if absent OR shrinking below the current occupancy
   (`apply.rs:3534`, "can't shrink below current occupancy"). Authority: `actor` holds authority over the
   queue `cell`. Generative. bal-NEUTRAL. -/
   | queueResizeA    (id : Nat) (newCap : Nat) (actor cell : CellId)
+  -- §MA-swiss: the 4 REAL CapTP swiss-table effects (Wave-8 de-THIN). Each touches ONLY the swiss
+  -- side-table (`swiss`), NEVER the `bal` ledger — the swiss-table moves REFERENCES (capability routing),
+  -- not balance, so `ledgerDeltaAsset = 0` for EVERY asset (bal-NEUTRAL). The export-INSERT /
+  -- enliven-LOOKUP-fail-closed / handoff-cert-bind / refcount-GC are the REAL registry (`swiss*K`), PROVED.
+  /-- `ExportSturdyRef { swiss_number, target, permissions }` (dregg1 `apply_export_sturdy_ref`,
+  `apply.rs:3879`): the holder `exporter` mints a sturdy ref — INSERT a swiss→cap entry (`sw` → `target`
+  with `rights`, refcount 1). Fail-closed on duplicate swiss OR on amplification (`rights ⊄ held`,
+  `apply.rs:3917`). Authority: `actor` holds authority over the `exporter` cell (holder of the cap).
+  Monotonic. bal-NEUTRAL. -/
+  | exportSturdyRefA (sw : Nat) (actor exporter target : CellId) (rights held : List Auth)
+  /-- `EnlivenRef { swiss_number, bearer, expected_cell_id, expected_permissions }` (dregg1
+  `apply_enliven_ref`, `apply.rs:3955`): VALIDATE a presented swiss number against the committed
+  swiss-table (fail-closed if absent) + validate non-amplification (`claimed ⊆ entry.rights`,
+  `apply.rs:3999`) + BUMP the refcount (a new live reference). Authority: `actor` over the `exporter` cell.
+  Monotonic. bal-NEUTRAL. -/
+  | enlivenRefA      (sw : Nat) (actor exporter : CellId) (claimed : List Auth)
+  /-- `ValidateHandoff { cert_hash, … }` (dregg1 `apply_validate_handoff`, `apply.rs:4109`): bind a 3-vat
+  introduce CERT to the swiss entry `sw` + bump the refcount (the recipient's new live ref). Fail-closed
+  if absent. Authority: the `introducer` holds authority over the `exporter` cell. The two-signature
+  crypto is the §8 portal. Monotonic. bal-NEUTRAL. -/
+  | swissHandoffA    (sw certHash : Nat) (introducer exporter : CellId)
+  /-- `DropRef { ref_id }` (dregg1 `apply_drop_ref`, `apply.rs:4035`): GC a reference — DECREMENT the
+  swiss entry `sw`'s refcount, REMOVING the entry when it hits 0. Fail-closed if absent OR already-zero
+  (`apply.rs:4051`). Authority: `actor` over the `exporter` cell. Terminal (the last drop GCs).
+  bal-NEUTRAL. -/
+  | swissDropA       (sw : Nat) (actor exporter : CellId)
 
 /-- **The per-asset COMBINED ledger delta of a `FullActionA`, indexed by asset `b`** — the move of the
 COMBINED measure `recTotalAssetWithEscrow` (= `bal`-ledger + per-asset holding-store). Transfer and
@@ -1743,9 +1973,14 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   -- §MA-queue: the 4 queue effects touch ONLY the `queues` side-table (messages, not balance), NEVER
   -- `bal`/`escrows` — so `0` for EVERY asset (balance-NEUTRAL; `recTotalAssetWithEscrow` UNCHANGED).
   | .queueAllocateA _ _ _ _,      _ => 0
-  | .queueEnqueueA _ _ _ _,       _ => 0
-  | .queueDequeueA _ _ _,         _ => 0
+  | .queueEnqueueA _ _ _ _ _ _ _, _ => 0
+  | .queueDequeueA _ _ _ _ _,     _ => 0
   | .queueResizeA _ _ _ _,        _ => 0
+  -- §MA-swiss: the 4 CapTP swiss-table effects move REFERENCES, never balance ⇒ `0` at every asset.
+  | .exportSturdyRefA _ _ _ _ _ _, _ => 0
+  | .enlivenRefA _ _ _ _,          _ => 0
+  | .swissHandoffA _ _ _ _,        _ => 0
+  | .swissDropA _ _ _,             _ => 0
 
 /-- **The per-asset full executor.** Dispatch each kind to its chained per-asset primitive. ONE
 executor over the per-asset op-set; the asset-typed analog of `execFull`. The 5 pure-state effects
@@ -1809,9 +2044,14 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   -- §MA-queue: the 4 queue effects route to the chained ring-buffer FIFO steps (authority-gated +
   -- the kernel-level capacity/owner/emptiness gates). The REAL FIFO automaton, NOT a flag.
   | .queueAllocateA id actor cell cap   => queueAllocateChainA s id actor cell cap
-  | .queueEnqueueA id m actor cell      => queueEnqueueChainA s id m actor cell
-  | .queueDequeueA id actor cell        => queueDequeueChainA s id actor cell
+  | .queueEnqueueA id m actor cell depId dAsset deposit => queueEnqueueChainA s id m actor cell depId dAsset deposit
+  | .queueDequeueA id actor cell depId deposit          => queueDequeueChainA s id actor cell depId deposit
   | .queueResizeA id newCap actor cell  => queueResizeChainA s id newCap actor cell
+  -- §MA-swiss: the 4 CapTP swiss-table effects route to the authority-gated swiss registry steps.
+  | .exportSturdyRefA sw actor exporter target rights held => swissExportChainA s sw actor exporter target rights held
+  | .enlivenRefA sw actor exporter claimed                 => swissEnlivenChainA s sw actor exporter claimed
+  | .swissHandoffA sw certHash introducer exporter         => swissHandoffChainA s sw certHash introducer exporter
+  | .swissDropA sw actor exporter                          => swissDropChainA s sw actor exporter
 
 /-- **`execFullA_ledger_per_asset` — PROVED (the COMBINED per-asset conservation VECTOR).** Every
 committed `FullActionA` moves the COMBINED per-asset measure `recTotalAssetWithEscrow b` (= `bal`-ledger
@@ -2120,12 +2360,12 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
             queueAllocateChainA_balNeutral h b]
       simp only [recTotalAssetWithEscrow]; ring
-  | queueEnqueueA id m actor cell =>
+  | queueEnqueueA id m actor cell depId dAsset deposit =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
             queueEnqueueChainA_balNeutral h b]
       simp only [recTotalAssetWithEscrow]; ring
-  | queueDequeueA id actor cell =>
+  | queueDequeueA id actor cell depId deposit =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
             queueDequeueChainA_balNeutral h b]
@@ -2134,6 +2374,27 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
             queueResizeChainA_balNeutral h b]
+      simp only [recTotalAssetWithEscrow]; ring
+  -- §MA-swiss: each swiss-table effect is balance-NEUTRAL (moves references, not balance) ⇒ `+0`.
+  | exportSturdyRefA sw actor exporter target rights held =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+            swissExportChainA_balNeutral h b]
+      simp only [recTotalAssetWithEscrow]; ring
+  | enlivenRefA sw actor exporter claimed =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+            swissEnlivenChainA_balNeutral h b]
+      simp only [recTotalAssetWithEscrow]; ring
+  | swissHandoffA sw certHash introducer exporter =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+            swissHandoffChainA_balNeutral h b]
+      simp only [recTotalAssetWithEscrow]; ring
+  | swissDropA sw actor exporter =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+            swissDropChainA_balNeutral h b]
       simp only [recTotalAssetWithEscrow]; ring
 
 /-- **The per-asset full turn executor.** A transaction of `FullActionA`s, all-or-nothing. -/
@@ -2271,12 +2532,20 @@ def fullReceiptA : FullActionA → Turn
   | .makeSovereignA actor cell       => { actor := actor, src := cell, dst := cell, amt := 0 }
   | .refusalA actor cell             => { actor := actor, src := cell, dst := cell, amt := 0 }
   | .receiptArchiveA actor cell      => { actor := actor, src := cell, dst := cell, amt := 0 }
-  -- §MA-queue: each queue effect appends a balance-`0` self-`Turn` on the queue `cell` (the metadata
-  -- clock row the chained step threads; the message lives in the off-ledger buffer, not the receipt).
+  -- §MA-queue: allocate/resize append a balance-`0` self-`Turn` on the queue `cell`; enqueue/dequeue
+  -- append the REFUNDABLE DEPOSIT move (Wave-8): enqueue is `actor →(deposit)→ cell` (the deposit
+  -- parked from the sender into the queue), dequeue is `cell →(deposit)→ actor` (the refund to the
+  -- dequeuer). The message lives in the off-ledger FIFO buffer, not the receipt.
   | .queueAllocateA _ actor cell _   => { actor := actor, src := cell, dst := cell, amt := 0 }
-  | .queueEnqueueA _ _ actor cell    => { actor := actor, src := cell, dst := cell, amt := 0 }
-  | .queueDequeueA _ actor cell      => { actor := actor, src := cell, dst := cell, amt := 0 }
+  | .queueEnqueueA _ _ actor cell _ _ deposit => { actor := actor, src := actor, dst := cell, amt := deposit }
+  | .queueDequeueA _ actor cell _ deposit     => { actor := actor, src := cell, dst := actor, amt := deposit }
   | .queueResizeA _ _ actor cell     => { actor := actor, src := cell, dst := cell, amt := 0 }
+  -- §MA-swiss: each swiss-table effect appends a balance-`0` self-`Turn` on the exporting `exporter`
+  -- cell (the metadata clock row; the swiss entry lives in the off-ledger registry, not the receipt).
+  | .exportSturdyRefA _ actor exporter _ _ _ => { actor := actor, src := exporter, dst := exporter, amt := 0 }
+  | .enlivenRefA _ actor exporter _          => { actor := actor, src := exporter, dst := exporter, amt := 0 }
+  | .swissHandoffA _ _ introducer exporter   => { actor := introducer, src := exporter, dst := exporter, amt := 0 }
+  | .swissDropA _ actor exporter             => { actor := actor, src := exporter, dst := exporter, amt := 0 }
 
 /-- **`execFullA_chainlink` — PROVED.** A committed `FullActionA` extends the receipt chain by EXACTLY
 its `fullReceiptA`, newest-first, with no fork or rewrite. The per-action generalization across the
@@ -2440,12 +2709,20 @@ theorem execFullA_chainlink (s s' : RecChainedState) (fa : FullActionA)
   -- §MA-queue: each queue chained step appends EXACTLY its `fullReceiptA` row (the chainlink lemma).
   | queueAllocateA id actor cell cap =>
       simp only [execFullA, fullReceiptA] at h ⊢; exact queueAllocateChainA_chainlink h
-  | queueEnqueueA id m actor cell =>
+  | queueEnqueueA id m actor cell depId dAsset deposit =>
       simp only [execFullA, fullReceiptA] at h ⊢; exact queueEnqueueChainA_chainlink h
-  | queueDequeueA id actor cell =>
+  | queueDequeueA id actor cell depId deposit =>
       simp only [execFullA, fullReceiptA] at h ⊢; exact queueDequeueChainA_chainlink h
   | queueResizeA id newCap actor cell =>
       simp only [execFullA, fullReceiptA] at h ⊢; exact queueResizeChainA_chainlink h
+  | exportSturdyRefA sw actor exporter target rights held =>
+      simp only [execFullA, fullReceiptA] at h ⊢; exact swissExportChainA_chainlink h
+  | enlivenRefA sw actor exporter claimed =>
+      simp only [execFullA, fullReceiptA] at h ⊢; exact swissEnlivenChainA_chainlink h
+  | swissHandoffA sw certHash introducer exporter =>
+      simp only [execFullA, fullReceiptA] at h ⊢; exact swissHandoffChainA_chainlink h
+  | swissDropA sw actor exporter =>
+      simp only [execFullA, fullReceiptA] at h ⊢; exact swissDropChainA_chainlink h
 
 /-- **`execFullA_obsadvance` — PROVED.** A committed `FullActionA` grows the chain by exactly one
 row, so a replayed action (which would re-append the same receipt) is detectable. -/
@@ -2700,14 +2977,16 @@ theorem execFullA_queueAllocateA_authorized (s s' : RecChainedState) (id : Nat) 
 /-- **`queueEnqueueA` authorized — PROVED.** A committed enqueue implies the actor held authority over
 the queue `cell` (dregg1's writer-ACL gate). -/
 theorem execFullA_queueEnqueueA_authorized (s s' : RecChainedState) (id m : Nat) (actor cell : CellId)
-    (h : execFullA s (.queueEnqueueA id m actor cell) = some s') :
+    (depId : Nat) (dAsset : AssetId) (deposit : ℤ)
+    (h : execFullA s (.queueEnqueueA id m actor cell depId dAsset deposit) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
   queueEnqueueChainA_authorized (by simpa only [execFullA] using h)
 
 /-- **`queueDequeueA` authorized — PROVED.** A committed dequeue implies the actor held authority over
 the queue `cell` (AND was the kernel-level owner — the `queueDequeueK` `actor = owner` gate). -/
 theorem execFullA_queueDequeueA_authorized (s s' : RecChainedState) (id : Nat) (actor cell : CellId)
-    (h : execFullA s (.queueDequeueA id actor cell) = some s') :
+    (depId : Nat) (deposit : ℤ)
+    (h : execFullA s (.queueDequeueA id actor cell depId deposit) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
   queueDequeueChainA_authorized (by simpa only [execFullA] using h)
 
@@ -2717,6 +2996,42 @@ theorem execFullA_queueResizeA_authorized (s s' : RecChainedState) (id newCap : 
     (h : execFullA s (.queueResizeA id newCap actor cell) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
   queueResizeChainA_authorized (by simpa only [execFullA] using h)
+
+/-! ### §MA-swiss authority obligations — the 4 CapTP swiss-table effects carry their REAL
+`stateAuthB actor exporter` authority gate over the exporting/holding cell (dregg1's holder-of-the-cap /
+introducer gate). The membership / non-amplification / refcount-GC gates are the SEPARATE kernel-level
+obligation (`swissExportK_amplification_rejects` / `swissEnlivenK_absent_rejects` /
+`swissDropK_gc_at_one`, in `RecordKernel`). Every conjunct has teeth, NOT `True`. -/
+
+/-- **`exportSturdyRefA` authorized — PROVED.** A committed export implies the actor held authority over
+the `exporter` cell (the holder of the cap). -/
+theorem execFullA_exportSturdyRefA_authorized (s s' : RecChainedState) (sw : Nat)
+    (actor exporter target : CellId) (rights held : List Auth)
+    (h : execFullA s (.exportSturdyRefA sw actor exporter target rights held) = some s') :
+    stateAuthB s.kernel.caps actor exporter = true :=
+  swissExportChainA_authorized (by simpa only [execFullA] using h)
+
+/-- **`enlivenRefA` authorized — PROVED.** A committed enliven implies the actor held authority over the
+`exporter` cell. -/
+theorem execFullA_enlivenRefA_authorized (s s' : RecChainedState) (sw : Nat) (actor exporter : CellId)
+    (claimed : List Auth) (h : execFullA s (.enlivenRefA sw actor exporter claimed) = some s') :
+    stateAuthB s.kernel.caps actor exporter = true :=
+  swissEnlivenChainA_authorized (by simpa only [execFullA] using h)
+
+/-- **`swissHandoffA` authorized — PROVED.** A committed handoff implies the introducer held authority
+over the `exporter` cell. -/
+theorem execFullA_swissHandoffA_authorized (s s' : RecChainedState) (sw certHash : Nat)
+    (introducer exporter : CellId)
+    (h : execFullA s (.swissHandoffA sw certHash introducer exporter) = some s') :
+    stateAuthB s.kernel.caps introducer exporter = true :=
+  swissHandoffChainA_authorized (by simpa only [execFullA] using h)
+
+/-- **`swissDropA` authorized — PROVED.** A committed drop implies the actor held authority over the
+`exporter` cell. -/
+theorem execFullA_swissDropA_authorized (s s' : RecChainedState) (sw : Nat) (actor exporter : CellId)
+    (h : execFullA s (.swissDropA sw actor exporter) = some s') :
+    stateAuthB s.kernel.caps actor exporter = true :=
+  swissDropChainA_authorized (by simpa only [execFullA] using h)
 
 /-! ### §MA-auth authority obligations — the 6 distinct authority effects carry their REAL,
 NON-VACUOUS integrity content (grounding / `addEdge` / `removeEdge` / non-amplification / held-cap).
@@ -3135,15 +3450,31 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .queueAllocateA _ actor cell _ =>
        stateAuthB s.kernel.caps actor cell = true ∧
        effectLinearity .queueAllocate = LinearityClass.Generative
-   | .queueEnqueueA _ _ actor cell =>
+   | .queueEnqueueA _ _ actor cell _ _ _ =>
        stateAuthB s.kernel.caps actor cell = true ∧
        effectLinearity .queueEnqueue = LinearityClass.Conservative
-   | .queueDequeueA _ actor cell =>
+   | .queueDequeueA _ actor cell _ _ =>
        stateAuthB s.kernel.caps actor cell = true ∧
        effectLinearity .queueDequeue = LinearityClass.Conservative
    | .queueResizeA _ _ actor cell =>
        stateAuthB s.kernel.caps actor cell = true ∧
-       effectLinearity .queueResize = LinearityClass.Generative)
+       effectLinearity .queueResize = LinearityClass.Generative
+   -- §MA-swiss: the 4 CapTP swiss-table effects carry their REAL `stateAuthB actor exporter` authority
+   -- gate over the exporting cell ∧ their catalog COLORING (export/enliven/handoff Monotonic, drop
+   -- Terminal). The membership / non-amplification / refcount-GC are the SEPARATE kernel obligation
+   -- (`swissExportK_amplification_rejects` / `swissEnlivenK_absent_rejects` / `swissDropK_gc_at_one`).
+   | .exportSturdyRefA _ actor exporter _ _ _ =>
+       stateAuthB s.kernel.caps actor exporter = true ∧
+       effectLinearity .exportSturdyRef = LinearityClass.Monotonic
+   | .enlivenRefA _ actor exporter _ =>
+       stateAuthB s.kernel.caps actor exporter = true ∧
+       effectLinearity .enlivenRef = LinearityClass.Monotonic
+   | .swissHandoffA _ _ introducer exporter =>
+       stateAuthB s.kernel.caps introducer exporter = true ∧
+       effectLinearity .validateHandoff = LinearityClass.Monotonic
+   | .swissDropA _ actor exporter =>
+       stateAuthB s.kernel.caps actor exporter = true ∧
+       effectLinearity .dropRef = LinearityClass.Terminal)
 
 /-- **`execFullA_attests_per_asset` — THE PER-ASSET OP-SET IS STEP-COMPLETE BY CONSTRUCTION
 (PROVED).** Every committed `FullActionA` attests its full `StepInv` content: the per-asset ledger
@@ -3231,12 +3562,21 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   -- §MA-queue: discharge each queue effect's (REAL `stateAuthB` authority gate ∧ the catalog coloring).
   | queueAllocateA id actor cell cap =>
       exact ⟨execFullA_queueAllocateA_authorized s s' id actor cell cap h, rfl⟩
-  | queueEnqueueA id m actor cell =>
-      exact ⟨execFullA_queueEnqueueA_authorized s s' id m actor cell h, rfl⟩
-  | queueDequeueA id actor cell =>
-      exact ⟨execFullA_queueDequeueA_authorized s s' id actor cell h, rfl⟩
+  | queueEnqueueA id m actor cell depId dAsset deposit =>
+      exact ⟨execFullA_queueEnqueueA_authorized s s' id m actor cell depId dAsset deposit h, rfl⟩
+  | queueDequeueA id actor cell depId deposit =>
+      exact ⟨execFullA_queueDequeueA_authorized s s' id actor cell depId deposit h, rfl⟩
   | queueResizeA id newCap actor cell =>
       exact ⟨execFullA_queueResizeA_authorized s s' id newCap actor cell h, rfl⟩
+  -- §MA-swiss: discharge each swiss effect's (REAL `stateAuthB` authority gate ∧ the catalog coloring).
+  | exportSturdyRefA sw actor exporter target rights held =>
+      exact ⟨execFullA_exportSturdyRefA_authorized s s' sw actor exporter target rights held h, rfl⟩
+  | enlivenRefA sw actor exporter claimed =>
+      exact ⟨execFullA_enlivenRefA_authorized s s' sw actor exporter claimed h, rfl⟩
+  | swissHandoffA sw certHash introducer exporter =>
+      exact ⟨execFullA_swissHandoffA_authorized s s' sw certHash introducer exporter h, rfl⟩
+  | swissDropA sw actor exporter =>
+      exact ⟨execFullA_swissDropA_authorized s s' sw actor exporter h, rfl⟩
 
 /-- **`execFullTurnA_each_attests` — PROVED.** Step-completeness holds at EVERY action of a committed
 per-asset transaction, across all kinds: the per-node `fullActionInvA` witness threaded along the
@@ -3340,6 +3680,27 @@ theorem execFullTurnA_each_attests :
 #assert_axioms queueEnqueueChainA_balNeutral
 #assert_axioms queueDequeueChainA_balNeutral
 #assert_axioms queueEnqueueChainA_chainlink
+-- Wave-8 residual close: the REFUNDABLE anti-spam DEPOSIT on queue enqueue/dequeue. The deposit
+-- GENUINELY moves the bare `recTotalAsset` (parked off-ledger) while the COMBINED measure is
+-- CONSERVED (a refundable transfer-like move, NOT bal-neutral) — the wave-7 residual, closed.
+#assert_axioms queueEnqueueDepositK_conserves_combined
+#assert_axioms queueEnqueueDepositK_debits
+#assert_axioms queueDequeueRefundK_conserves_combined
+-- Wave-8 §MA-swiss: the 4 REAL CapTP swiss-table effects (export/enliven/handoff/drop) on the per-asset
+-- dispatch. Each carries its REAL `stateAuthB actor exporter` authority gate over the exporting cell ∧
+-- the catalog coloring; the membership / non-amplification / refcount-GC are PROVED in `RecordKernel`
+-- (`swissExportK_amplification_rejects` / `swissEnlivenK_absent_rejects` / `swissEnlivenK_bumps_refcount`
+-- / `swissDropK_gc_at_one`, with their own `#assert_axioms`). The de-THIN content a flag-shadow lacks.
+#assert_axioms execFullA_exportSturdyRefA_authorized
+#assert_axioms execFullA_enlivenRefA_authorized
+#assert_axioms execFullA_swissHandoffA_authorized
+#assert_axioms execFullA_swissDropA_authorized
+#assert_axioms swissExportChainA_balNeutral
+#assert_axioms swissEnlivenChainA_balNeutral
+#assert_axioms swissHandoffChainA_balNeutral
+#assert_axioms swissDropChainA_balNeutral
+#assert_axioms swissExportChainA_chainlink
+#assert_axioms swissEnlivenChainA_chainlink
 -- META-FILL B Wave 2: the 6 DISTINCT AUTHORITY effects on the per-asset dispatch. The headline
 -- NON-AMPLIFICATION (genuine `capAuthConferred ⊆` over the real `List Auth` lattice) + the
 -- teeth (amplifying grant rejected) + grounding/addEdge/removeEdge/graph-unchanged graph moves,
