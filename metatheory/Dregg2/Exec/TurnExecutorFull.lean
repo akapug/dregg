@@ -1726,21 +1726,37 @@ def bridgeLockChainA (s : RecChainedState) (id : Nat) (actor originator destinat
   | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
   | none    => none
 
+/-- **`bridgeAuthOK` — the bridge finalize/cancel AUTHORITY gate (the missing one the re-audit flagged:
+"anyone can finalize/cancel any victim's lock by id").** Only the lock's RECORDED `creator` (the
+originator, read from the committed side-table — adversary-UNCONTROLLABLE state) may finalize or cancel
+it; a stranger who merely knows the `id` is fail-closed REJECTED. (A relayer-finalize-with-foreign-
+receipt is the §8 receipt portal, deferred to META-FILL E; creator-only is the sound CORE — the creator
+can always finalize/cancel their own lock.) -/
+def bridgeAuthOK (k : RecordKernelState) (id : Nat) (actor : CellId) : Bool :=
+  match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | some r => r.creator == actor
+  | none   => false
+
 /-- **Chained per-asset bridge FINALIZE** (the §8 confirmation arrived — the no-credit resolve; the
-value LEFT for the other chain, COMBINED measure DROPS by the DISCLOSED bridged `(asset, amount)`; the
-executor gates on the parked record matching). -/
+value LEFT for the other chain, COMBINED measure DROPS by the DISCLOSED bridged `(asset, amount)`).
+FAIL-CLOSED on the AUTHORITY gate `bridgeAuthOK` (only the recorded creator) THEN the parked record
+matching. -/
 def bridgeFinalizeChainA (s : RecChainedState) (id : Nat) (actor : CellId) (asset : AssetId) (amount : ℤ) :
     Option RecChainedState :=
-  match bridgeFinalizeKAsset s.kernel id asset amount with
-  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
-  | none    => none
+  if bridgeAuthOK s.kernel id actor then
+    match bridgeFinalizeKAsset s.kernel id asset amount with
+    | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+    | none    => none
+  else none
 
 /-- **Chained per-asset bridge CANCEL** (timeout/failure — single-cell credit back to the originator at
-the record's asset; combined CONSERVED). -/
+the record's asset; combined CONSERVED). FAIL-CLOSED on the AUTHORITY gate (only the recorded creator). -/
 def bridgeCancelChainA (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
-  match bridgeCancelKAsset s.kernel id with
-  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
-  | none    => none
+  if bridgeAuthOK s.kernel id actor then
+    match bridgeCancelKAsset s.kernel id with
+    | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+    | none    => none
+  else none
 
 /-- **`bridgeLockChainA_combined_neutral` — PROVED.** A committed bridge lock conserves the COMBINED
 per-asset measure at EVERY asset `b` (the bal debit at `asset` is offset by the holding-store rise).
@@ -1781,11 +1797,14 @@ theorem bridgeFinalizeChainA_burns_combined {s s' : RecChainedState} {id : Nat} 
     recTotalAssetWithEscrow s'.kernel b
       = recTotalAssetWithEscrow s.kernel b - (if b = asset then amount else 0) := by
   unfold bridgeFinalizeChainA at h
-  cases hc : bridgeFinalizeKAsset s.kernel id asset amount with
-  | none => rw [hc] at h; exact absurd h (by simp)
-  | some k' =>
-      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
-      exact bridgeFinalizeKAsset_moves_combined_per_asset b hc
+  by_cases hg : bridgeAuthOK s.kernel id actor = true
+  · rw [if_pos hg] at h
+    cases hc : bridgeFinalizeKAsset s.kernel id asset amount with
+    | none => rw [hc] at h; exact absurd h (by simp)
+    | some k' =>
+        rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+        exact bridgeFinalizeKAsset_moves_combined_per_asset b hc
+  · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **`bridgeCancelChainA_combined_neutral` — PROVED (the refund round-trip).** A committed bridge cancel
 conserves the COMBINED per-asset measure at EVERY asset (value returns to the LIVE, gate-checked
@@ -1794,11 +1813,42 @@ theorem bridgeCancelChainA_combined_neutral {s s' : RecChainedState} {id : Nat} 
     (b : AssetId) (h : bridgeCancelChainA s id actor = some s') :
     recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
   unfold bridgeCancelChainA at h
-  cases hc : bridgeCancelKAsset s.kernel id with
-  | none => rw [hc] at h; exact absurd h (by simp)
-  | some k' =>
-      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
-      exact bridge_cancel_conserves_combined_per_asset b hc
+  by_cases hg : bridgeAuthOK s.kernel id actor = true
+  · rw [if_pos hg] at h
+    cases hc : bridgeCancelKAsset s.kernel id with
+    | none => rw [hc] at h; exact absurd h (by simp)
+    | some k' =>
+        rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+        exact bridge_cancel_conserves_combined_per_asset b hc
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`bridgeFinalizeChainA_nonCreator_rejects` — THE BRIDGE AUTHORITY TEETH (PROVED).** The §8 finalize
+is FAIL-CLOSED on `bridgeAuthOK`: if the parked record matching `id` was created by someone OTHER than
+the caller (`r.creator ≠ actor` — the RECORDED owner, read off the COMMITTED `s.kernel.escrows`
+side-table, NOT a caller-supplied parameter), the whole leg returns `none`: no `amount` moves and no
+receipt is appended. Closes the re-audit's HIGH hole #4 ("anyone can finalize any victim's bridge lock
+by id"). NON-VACUOUS: the rejection is keyed on adversary-uncontrollable state. -/
+theorem bridgeFinalizeChainA_nonCreator_rejects {s : RecChainedState} {id : Nat}
+    {actor : CellId} {asset : AssetId} {amount : ℤ} {r : EscrowRecord}
+    (hfind : s.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r)
+    (hne : (r.creator == actor) = false) :
+    bridgeFinalizeChainA s id actor asset amount = none := by
+  have hgate : bridgeAuthOK s.kernel id actor = false := by
+    simp only [bridgeAuthOK, hfind, hne]
+  unfold bridgeFinalizeChainA
+  rw [if_neg (by simp [hgate])]
+
+/-- **`bridgeCancelChainA_nonCreator_rejects` — PROVED (the cancel-side teeth).** Same fail-closed gate
+on the refund path: a non-creator cannot trigger the refund-to-originator of a victim's parked lock. -/
+theorem bridgeCancelChainA_nonCreator_rejects {s : RecChainedState} {id : Nat}
+    {actor : CellId} {r : EscrowRecord}
+    (hfind : s.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r)
+    (hne : (r.creator == actor) = false) :
+    bridgeCancelChainA s id actor = none := by
+  have hgate : bridgeAuthOK s.kernel id actor = false := by
+    simp only [bridgeAuthOK, hfind, hne]
+  unfold bridgeCancelChainA
+  rw [if_neg (by simp [hgate])]
 
 /-- **`bridgeLockChainA_authorized` — PROVED.** A committed bridge lock required the actor to be
 authorized over the debited originator cell (the SAME `authorizedB` gate as `transfer`). -/
@@ -2860,14 +2910,20 @@ theorem execFullA_chainlink (s s' : RecChainedState) (fa : FullActionA)
       | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
   | bridgeFinalizeA id actor asset amount =>
       simp only [execFullA, bridgeFinalizeChainA, fullReceiptA] at h ⊢
-      cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      by_cases hg : bridgeAuthOK s.kernel id actor = true
+      · rw [if_pos hg] at h
+        cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   | bridgeCancelA id actor =>
       simp only [execFullA, bridgeCancelChainA, fullReceiptA] at h ⊢
-      cases hk : bridgeCancelKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      by_cases hg : bridgeAuthOK s.kernel id actor = true
+      · rw [if_pos hg] at h
+        cases hk : bridgeCancelKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   -- §MA-seal: each simple effect appends exactly the metadata clock row (`stateStep`).
   | sealA actor cell =>
       simp only [execFullA, fullReceiptA] at h ⊢
@@ -3965,6 +4021,8 @@ theorem execFullTurnA_each_attests :
 #assert_axioms bridgeLockChainA_bal_debits
 #assert_axioms bridgeFinalizeChainA_burns_combined
 #assert_axioms bridgeCancelChainA_combined_neutral
+#assert_axioms bridgeFinalizeChainA_nonCreator_rejects
+#assert_axioms bridgeCancelChainA_nonCreator_rejects
 #assert_axioms bridgeLockChainA_authorized
 #assert_axioms execFullA_bridgeLockA_authorized
 #assert_axioms execFullA_bridgeLockA_unauthorized_fails
