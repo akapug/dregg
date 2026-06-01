@@ -15,6 +15,7 @@
 import Dregg2.Tactics       -- shared proof automation
 import Dregg2.Core
 import Dregg2.Resource
+import Dregg2.Resource.TokenAutonomy   -- TOKEN AUTONOMY: an idempotent conserved resource (a*a=a, a≠1 — the capability lattice / nullifier+commitment SETs / CRDT GSet = Finset∪) admits NO sound retract into a CANCELLATIVE foreign token (ℤ/ADA), since cancellation forces every idempotent to the unit; so such a protocol MUST mint its OWN token (no_substitution_of_idempotent KEYSTONE + gset_not_substitutable_by_int witness). HONEST discriminator: cancellative payment (pure ℤ) DOES substitute (degenerate_payment_substitutes) — the cryptobro is right for money, wrong for privacy/authority. Object-level reflection of Resource.conservation_is_fpu. #assert_axioms-clean, #eval non-vacuity
 import Dregg2.Laws
 import Dregg2.Authority.Positional
 import Dregg2.Authority.Caveat   -- keys-as-caps token layer (biscuit/macaroon/caveat/discharge): attenuation chain + attenuate_narrows (the one rule, PROVED) + biscuit/macaroon=vat-boundary + token-as-Verify bridge + #eval
