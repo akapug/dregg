@@ -188,6 +188,65 @@ theorem qbuf_dequeue_length {buf : List Nat} {h : Nat} {rest : List Nat}
   | cons x t => simp only [qbufDequeue, Option.some.injEq, Prod.mk.injEq] at heq
                 obtain ⟨_, hr⟩ := heq; subst hr; simp
 
+/-! ### The SWISS-TABLE side-table — a REAL CapTP export/enliven/handoff/GC registry (Wave-8 de-THIN).
+
+dregg1's CapTP transport (`turn/src/action.rs` `ExportSturdyRef`/`EnlivenRef`/`ValidateHandoff`/`DropRef`;
+`turn/src/executor/apply.rs:3879 apply_export_sturdy_ref` / `:3955 apply_enliven_ref` /
+`:4035 apply_drop_ref` / `:4109 apply_validate_handoff`) keeps a swiss-table: an EXPORT mints an
+unguessable swiss number → (target cell, exported permission tier) entry and bumps an export counter;
+an ENLIVEN VALIDATES a presented swiss number against the committed table (membership, fail-closed if
+absent) and bumps the entry's use-count; a HANDOFF binds a 3-vat introduce CERT to the entry; a DROP
+GCs a reference (decrement-fail-closed-at-zero, `apply.rs:4051`). dregg1 scatters this across cell
+state fields (field[5]=refcount, field[6]=use-count, field[7]=export-counter) + a federation mirror; we
+model the REAL MECHANISM as a first-class swiss-table side-table keyed by swiss number, carrying the
+exported `cap`'s rights + a REFCOUNT (the GC counter) + the bound handoff `cert`. This is NOT a
+flag-shadow: export INSERTS, enliven LOOKS-UP-fail-closed-and-validates, handoff binds the cert, the
+refcount tracks live references and the entry is GC'd at zero. The export/enliven NON-AMPLIFICATION
+(claimed rights ⊆ entry rights) is the real CapTP soundness gate (`apply.rs:3917`, `:3999`). -/
+
+/-- **`SwissRecord`** — one entry of the swiss-table side-table, keyed by the `swiss` number (dregg1's
+32-byte unguessable swiss number, modelled as a `Nat` key). Carries the `exporter` cell (who minted the
+ref), the `target` cell the sturdy ref points to, the exported `rights` (the permission tier a bearer
+obtains on enliven — bound into the AIR's `EXPORT_PERMISSIONS`), the `refcount` (the GC counter — # of
+LIVE references; the entry is GC'd when it hits 0, `apply.rs:4051`), and the bound handoff `cert`
+(`none` until a 3-vat introduce cert is validated against this entry; `some h` once bound). -/
+structure SwissRecord where
+  /-- the swiss number key (dregg1's `[u8;32]`, modelled as a `Nat`). -/
+  swiss    : Nat
+  /-- the exporter cell — who minted this sturdy ref (`apply.rs:3879`). -/
+  exporter : CellId
+  /-- the target cell the sturdy ref grants access to (`ExportSturdyRef.target`). -/
+  target   : CellId
+  /-- the exported permission tier — the rights a bearer obtains on enliven. The enliven
+  non-amplification gate checks the bearer's CLAIMED rights are `⊆` THESE (`apply.rs:3999`). -/
+  rights   : List Auth
+  /-- the GC refcount — number of LIVE references. Export mints `1`; enliven/handoff bump; drop
+  decrements; the entry is GC'd (removed) when this hits `0` (`apply.rs:4051`). -/
+  refcount : Nat
+  /-- the bound 3-vat handoff cert hash (`none` until a `ValidateHandoff` binds one; `some h` after). -/
+  cert     : Option Nat := none
+deriving DecidableEq, Repr
+
+/-- Look up a swiss-table entry by swiss number (the first match), `none` if absent. The MEMBERSHIP
+primitive enliven/handoff/drop validate against — fail-closed when `none`. -/
+def findSwiss (ss : List SwissRecord) (swiss : Nat) : Option SwissRecord :=
+  ss.find? (fun e => e.swiss == swiss)
+
+/-- Replace the swiss entry with the given `swiss` number by `e'` (the first match), leaving others
+untouched. The update primitive shared by enliven/handoff (refcount bump + cert bind). -/
+def replaceSwiss (ss : List SwissRecord) (swiss : Nat) (e' : SwissRecord) : List SwissRecord :=
+  ss.map (fun e => if e.swiss == swiss then e' else e)
+
+/-- Remove the swiss entry with the given `swiss` number (the GC drop when refcount hits 0). -/
+def removeSwiss (ss : List SwissRecord) (swiss : Nat) : List SwissRecord :=
+  ss.filter (fun e => !(e.swiss == swiss))
+
+/-- **NARROWER-OR-EQUAL — the CapTP non-amplification predicate.** The bearer's CLAIMED `rights` must be
+a SUBSET of the entry's exported `rights` — a sturdy ref must NOT grant authority the export did not hold
+(`AuthRequired::is_narrower_or_equal`, `apply.rs:3917`, `:3999`). Modelled as list-subset over `Auth`. -/
+def rightsNarrowerOrEqual (claimed entry : List Auth) : Bool :=
+  claimed.all (fun a => entry.contains a)
+
 /-- Look up a queue record by id in the side-table (the first match), `none` if absent. -/
 def findQueue (qs : List QueueRecord) (id : Nat) : Option QueueRecord :=
   qs.find? (fun q => q.id == id)
@@ -242,6 +301,15 @@ structure RecordKernelState where
   `commitments` were added). The FIFO ORDER + capacity bound + empty-fail-closed are PROVED off
   `qbufEnqueue`/`qbufDequeue` (the de-THIN non-vacuity a flag-only model lacks). -/
   queues     : List QueueRecord := []
+  /-- **The SWISS-TABLE side-table** (Wave-8 de-THIN): the CapTP export/enliven/handoff/GC registry — a
+  list of live `SwissRecord` entries, each keyed by its swiss number, carrying the exported cap's
+  `rights` + a `refcount` (the GC counter) + the bound handoff `cert`. The swiss-table moves REFERENCES
+  (capability routing), NOT balance — so it is balance-NEUTRAL (`recTotalAssetWithEscrow` is UNCHANGED
+  ∀ asset; it reads `bal`+`escrows`, never `swiss`). DEFAULTS EMPTY (the additive extension, exactly as
+  `escrows`/`nullifiers`/`commitments`/`queues` were added). Export INSERTS, enliven LOOKS-UP-fail-closed
+  + validates non-amplification, handoff binds the cert, the refcount tracks live refs (GC at 0) — the
+  REAL mechanism a flag-shadow lacks. -/
+  swiss      : List SwissRecord := []
 
 /-- **The `balance`-domain measure** over the record cell-state: the total `balance` field across
 the live accounts. This is the conserved quantity — a domain measure over the named `balance`
@@ -1772,6 +1840,185 @@ theorem queueResizeK_balNeutral {k k' : RecordKernelState} {id newCap : Nat}
       · rw [if_pos hc] at h; simp only [Option.some.injEq] at h; subst h; exact ⟨rfl, rfl⟩
       · rw [if_neg hc] at h; exact absurd h (by simp)
 
+/-! ## §QUEUE-DEPOSIT — the REFUNDABLE ANTI-SPAM DEPOSIT (Wave-8 residual close).
+
+dregg1's `apply_queue_enqueue` (`turn/src/executor/apply.rs:3372-3386`) does TWO things: it appends the
+message hash to the FIFO buffer AND it moves a REFUNDABLE DEPOSIT — `set_balance(actor - deposit)` +
+`set_balance(queue + deposit)`, gated on `actor_cell.state.balance() >= deposit` (`:3361`, fail-closed
+`InsufficientBalance`). `apply_queue_dequeue` (`:3483-3501`) REFUNDS the per-message deposit to the
+dequeuer (`set_balance(queue - refund)` + `set_balance(dequeuer + refund)`). Wave-7 installed the
+message-ORDER but left the deposit unmodeled (`queueEnqueueK`/`queueDequeueK` bal-NEUTRAL). We CLOSE
+that residual: the deposit is a REFUNDABLE PARK — value leaves the sender's `bal` ledger and is held
+OFF-ledger (in the SHARED escrow holding-store, tagged to the queue) until the dequeuer claims its
+refund. This is IDENTICAL in shape to `createEscrowRawAsset`/`settleEscrowRawAsset` (the proven
+combined-conservation pair) — so `recTotalAsset` GENUINELY MOVES at enqueue (the deposit leaves the
+ledger), while the COMBINED `recTotalAssetWithEscrow` is CONSERVED (the parked value is counted in the
+holding-store). The dequeuer's refund settles it back (combined conserved again). The deposit record
+reuses `EscrowRecord` with `creator := sender` (refund-on-fail target), `recipient := queueOwner`,
+keyed by the deposit `id`; it lives in `escrows`, INERT to the FIFO buffer / queue side-table.
+
+We COMPOSE the FIFO transition (`queueEnqueueK`/`queueDequeueK`, carrying ALL the order/capacity/owner/
+emptiness gates UNCHANGED) with the escrow PARK/SETTLE (carrying the deposit + the combined-conservation
+spine UNCHANGED): the two operate on DISJOINT state slices (`queues` vs `bal`+`escrows`), so they
+commute and BOTH bodies of proof carry verbatim. -/
+
+/-- **`queueEnqueueDepositK`** — APPEND `m` to the tail of queue `id`'s FIFO buffer (the Wave-7
+order op, fail-closed if absent OR FULL) AND PARK a refundable anti-spam `deposit` of asset `dAsset`
+from `sender` into the SHARED holding-store, keyed by the deposit-record id `depId`, with
+`creator := sender` (refund target) and `recipient := owner` (the queue owner). Fail-closed if the FIFO
+gate rejects, if the deposit is negative, if `sender` lacks the deposit IN that asset
+(`apply.rs:3361`), if `sender` is not a live account, or if the deposit-record `depId` is already in
+use. The `bal` ledger of `dAsset` DROPS by `deposit` (a real per-asset debit — `recTotalAsset` MOVES)
+while the holding-store at `dAsset` RISES by `deposit` (COMBINED conserved), EXACTLY like
+`createEscrowRawAsset`. -/
+def queueEnqueueDepositK (k : RecordKernelState) (id m : Nat) (sender owner : CellId)
+    (depId : Nat) (dAsset : AssetId) (deposit : ℤ) : Option RecordKernelState :=
+  match queueEnqueueK k id m with
+  | none    => none
+  | some k₁ =>
+      if 0 ≤ deposit ∧ deposit ≤ k₁.bal sender dAsset ∧ sender ∈ k₁.accounts
+          ∧ ¬ (∃ r ∈ k₁.escrows, r.id = depId) then
+        some (createEscrowRawAsset k₁ depId sender owner dAsset deposit)
+      else none
+
+/-- **`queueDequeueRefundK`** — REMOVE-FROM-FRONT of queue `id`'s FIFO buffer (the Wave-7 order op,
+gated on `actor = owner`, fail-closed if absent / not-owner / EMPTY) AND REFUND the deposit-record
+`depId` to the dequeuer `actor` (`apply.rs:3483`: the dequeuer reclaims the per-message deposit). The
+refund single-cell CREDITS `actor` at the record's asset and marks the deposit record resolved — value
+RETURNS to the ledger (`recTotalAsset` rises) while the holding-store DROPS (COMBINED conserved),
+EXACTLY like `settleEscrowRawAsset`. Fail-closed if the FIFO gate rejects OR the deposit record is
+absent/already-resolved. Returns the post-state AND the dequeued head message (the FIFO witness). -/
+def queueDequeueRefundK (k : RecordKernelState) (id : Nat) (actor : CellId) (depId : Nat) :
+    Option (RecordKernelState × Nat) :=
+  match queueDequeueK k id actor with
+  | none          => none
+  | some (k₁, mh) =>
+      match k₁.escrows.find? (fun r => decide (r.id = depId ∧ r.resolved = false)) with
+      | some r => if actor ∈ k₁.accounts then
+                    some (settleEscrowRawAsset k₁ depId actor r.asset r.amount, mh)
+                  else none
+      | none   => none
+
+/-- **`queueEnqueueDepositK_conserves_combined` — THE RESIDUAL CLOSED (PROVED).** A committed
+deposit-enqueue PRESERVES the COMBINED per-asset total `recTotalAssetWithEscrow b` for EVERY asset `b`:
+the FIFO append is escrow/bal-neutral (it touches only `queues`), and the PARK is the proven
+combined-conserving escrow-create. NON-VACUOUS: the deposit GENUINELY moves the bare `recTotalAsset` at
+the deposit asset (witnessed by `queueEnqueueDepositK_debits`) — only the COMBINED measure is fixed. -/
+theorem queueEnqueueDepositK_conserves_combined {k k' : RecordKernelState} {id m : Nat}
+    {sender owner : CellId} {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
+    (h : queueEnqueueDepositK k id m sender owner depId dAsset deposit = some k') (b : AssetId) :
+    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+  unfold queueEnqueueDepositK at h
+  cases hq : queueEnqueueK k id m with
+  | none    => simp only [hq] at h; exact absurd h (by simp)
+  | some k₁ =>
+      simp only [hq] at h
+      by_cases hg : 0 ≤ deposit ∧ deposit ≤ k₁.bal sender dAsset ∧ sender ∈ k₁.accounts
+          ∧ ¬ (∃ r ∈ k₁.escrows, r.id = depId)
+      · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
+        obtain ⟨_, _, hlive, _⟩ := hg
+        -- PARK conserves the combined measure (escrow-create RAW body), and the FIFO step was
+        -- bal/escrow-neutral. We inline the combined-conservation of `createEscrowRawAsset` (the gate-free
+        -- core of `escrow_create_conserves_combined_per_asset`): the locked asset's bal-debit is offset by
+        -- the holding-store rise; every other asset is literally untouched.
+        have hpark : recTotalAssetWithEscrow (createEscrowRawAsset k₁ depId sender owner dAsset deposit) b
+            = recTotalAssetWithEscrow k₁ b := by
+          set newRec : EscrowRecord := { id := depId, creator := sender, recipient := owner,
+                                         amount := deposit, resolved := false, asset := dAsset } with hnewRec
+          unfold recTotalAssetWithEscrow createEscrowRawAsset
+          have hbal : recTotalAsset { k₁ with bal := recBalCreditCell k₁.bal sender dAsset (-deposit),
+                                              escrows := newRec :: k₁.escrows } b
+              = recTotalAsset k₁ b + (if b = dAsset then (-deposit) else 0) := by
+            show (∑ x ∈ k₁.accounts, recBalCreditCell k₁.bal sender dAsset (-deposit) x b) = _
+            exact recBalCreditCell_recTotalAsset k₁.accounts k₁.bal sender dAsset (-deposit) hlive b
+          have hheld : escrowHeldAsset { k₁ with bal := recBalCreditCell k₁.bal sender dAsset (-deposit),
+                                                 escrows := newRec :: k₁.escrows } b
+              = escrowHeldAsset k₁ b + (if dAsset = b then deposit else 0) := by
+            have hc := escrowHeldAsset_cons_unresolved
+              { k₁ with bal := recBalCreditCell k₁.bal sender dAsset (-deposit) } newRec b rfl
+            simpa [hnewRec] using hc
+          rw [hbal, hheld]
+          by_cases hba : b = dAsset
+          · subst hba; simp only [if_true, if_pos rfl]; ring
+          · rw [if_neg hba, if_neg (fun h => hba h.symm)]; ring
+        obtain ⟨hbal, hheld⟩ := queueEnqueueK_balNeutral hq b
+        rw [hpark]; simp only [recTotalAssetWithEscrow, hbal, hheld]
+      · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`queueEnqueueDepositK_debits` — PROVED (the NON-VACUITY: the deposit GENUINELY moves the ledger).**
+A committed deposit-enqueue DROPS the bare `recTotalAsset dAsset` by `deposit` (the parked value left
+the ledger). The combined measure is fixed (above); the BARE ledger genuinely moves — a flag/no-op
+shadow could not state this. -/
+theorem queueEnqueueDepositK_debits {k k' : RecordKernelState} {id m : Nat}
+    {sender owner : CellId} {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
+    (h : queueEnqueueDepositK k id m sender owner depId dAsset deposit = some k') :
+    recTotalAsset k' dAsset = recTotalAsset k dAsset - deposit := by
+  unfold queueEnqueueDepositK at h
+  cases hq : queueEnqueueK k id m with
+  | none    => simp only [hq] at h; exact absurd h (by simp)
+  | some k₁ =>
+      simp only [hq] at h
+      by_cases hg : 0 ≤ deposit ∧ deposit ≤ k₁.bal sender dAsset ∧ sender ∈ k₁.accounts
+          ∧ ¬ (∃ r ∈ k₁.escrows, r.id = depId)
+      · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
+        obtain ⟨_, _, hlive, _⟩ := hg
+        -- the bare debit at `dAsset`, plus the FIFO step left `recTotalAsset` fixed at every asset.
+        have hbare : recTotalAsset (createEscrowRawAsset k₁ depId sender owner dAsset deposit) dAsset
+            = recTotalAsset k₁ dAsset - deposit := by
+          show (∑ x ∈ k₁.accounts, recBalCreditCell k₁.bal sender dAsset (-deposit) x dAsset) = _
+          have := recBalCreditCell_recTotalAsset k₁.accounts k₁.bal sender dAsset (-deposit) hlive dAsset
+          simpa [recTotalAsset] using this
+        obtain ⟨hbal, _⟩ := queueEnqueueK_balNeutral hq dAsset
+        rw [hbare, hbal]
+      · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`queueDequeueRefundK_conserves_combined` — PROVED (the REFUND half, completing the pair).** A
+committed deposit-dequeue PRESERVES the COMBINED per-asset total `recTotalAssetWithEscrow b` for EVERY
+asset `b`: the FIFO remove is bal/escrow-neutral, and the REFUND is the proven combined-conserving
+escrow-settle (the dequeuer `actor` is the LIVE settlement target — gate-checked). -/
+theorem queueDequeueRefundK_conserves_combined {k k' : RecordKernelState} {id : Nat}
+    {actor : CellId} {depId mh : Nat}
+    (h : queueDequeueRefundK k id actor depId = some (k', mh)) (b : AssetId) :
+    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+  unfold queueDequeueRefundK at h
+  cases hq : queueDequeueK k id actor with
+  | none          => simp only [hq] at h; exact absurd h (by simp)
+  | some kr =>
+      obtain ⟨k₁, m⟩ := kr
+      simp only [hq] at h
+      cases hfind : k₁.escrows.find? (fun r => decide (r.id = depId ∧ r.resolved = false)) with
+      | none   => simp only [hfind] at h; exact absurd h (by simp)
+      | some r =>
+          simp only [hfind] at h
+          by_cases hlive : actor ∈ k₁.accounts
+          · rw [if_pos hlive] at h; simp only [Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨hk, _⟩ := h; subst hk
+            have hset : recTotalAssetWithEscrow (settleEscrowRawAsset k₁ depId actor r.asset r.amount) b
+                = recTotalAssetWithEscrow k₁ b :=
+              escrow_settle_conserves_combined_per_asset k₁ depId actor r b hlive hfind
+            obtain ⟨hbal, hheld⟩ := queueDequeueK_balNeutral hq b
+            rw [hset]; simp only [recTotalAssetWithEscrow, hbal, hheld]
+          · rw [if_neg hlive] at h; exact absurd h (by simp)
+
+/-- **`queueEnqueueDepositK_insufficient_rejects` — PROVED (the DEPOSIT GATE, fail-closed).** An
+enqueue whose `sender` lacks the `deposit` in asset `dAsset` (`deposit > sender's balance`) is REJECTED
+even when the FIFO append would succeed — dregg1's `InsufficientBalance` (`apply.rs:3361`). The gate a
+flag-only deposit could not enforce. -/
+theorem queueEnqueueDepositK_insufficient_rejects (k k₁ : RecordKernelState) (id m : Nat)
+    (sender owner : CellId) (depId : Nat) (dAsset : AssetId) (deposit : ℤ)
+    (hq : queueEnqueueK k id m = some k₁) (hpoor : k₁.bal sender dAsset < deposit) :
+    queueEnqueueDepositK k id m sender owner depId dAsset deposit = none := by
+  simp only [queueEnqueueDepositK, hq]
+  rw [if_neg (by rintro ⟨_, hle, _, _⟩; omega)]
+
+/-- **`queueDequeueRefundK_no_deposit_rejects` — PROVED (fail-closed).** A dequeue whose deposit
+record `depId` is absent/already-resolved is REJECTED even when the FIFO remove would succeed. -/
+theorem queueDequeueRefundK_no_deposit_rejects (k k₁ : RecordKernelState) (id : Nat) (actor : CellId)
+    (depId m : Nat) (hq : queueDequeueK k id actor = some (k₁, m))
+    (habsent : k₁.escrows.find? (fun r => decide (r.id = depId ∧ r.resolved = false)) = none) :
+    queueDequeueRefundK k id actor depId = none := by
+  simp only [queueDequeueRefundK, hq, habsent]
+
 /-- **`queueEnqueueK_full_rejects` — PROVED (the CAPACITY BOUND, fail-closed).** Enqueue into a FULL
 queue (`buffer.length ≥ capacity`) returns `none`. The bound a flag-only model could not enforce. -/
 theorem queueEnqueueK_full_rejects (k : RecordKernelState) (id m : Nat) (q : QueueRecord)
@@ -1828,6 +2075,328 @@ def kq0 : RecordKernelState :=
 #assert_axioms queueDequeueK_wrong_owner_rejects
 #assert_axioms queueEnqueueK_balNeutral
 #assert_axioms queueDequeueK_balNeutral
+
+/-! ## §QUEUE-DEPOSIT runs (`#eval`) — the REFUNDABLE DEPOSIT has TEETH (Wave-8 residual close).
+
+The deposit GENUINELY moves the bare `recTotalAsset` (the parked value leaves the ledger) while the
+COMBINED `recTotalAssetWithEscrow` is CONSERVED — the residual a bal-NEUTRAL shadow could not state. -/
+
+/-- A kernel with one queue (id 7, owner 0, cap 2, empty) AND a SENDER cell 5 holding `100` of asset 0.
+Both 0 and 5 are live accounts (so the deposit park/refund have live source + target). -/
+def kqd0 : RecordKernelState :=
+  { accounts := {0, 5}
+    cell := fun _ => .record [("balance", .int 0)]
+    caps := fun _ => []
+    bal := fun c _ => if c = 5 then 100 else 0
+    queues := [{ id := 7, owner := 0, capacity := 2, buffer := [] }] }
+
+-- DEPOSIT MOVES the bare ledger: enqueue 111 from sender 5 with deposit 30 (record id 9) ⇒ bare
+-- `recTotalAsset 0` DROPS 100 → 70 (the deposit left the sender's ledger and is PARKED).
+#eval (queueEnqueueDepositK kqd0 7 111 5 0 9 0 30).map (fun k => recTotalAsset k 0)  -- some 70 — bare ledger MOVED
+-- COMBINED CONSERVED: the parked deposit is counted in the holding-store, so the COMBINED measure is FIXED.
+#eval (queueEnqueueDepositK kqd0 7 111 5 0 9 0 30).map (fun k => recTotalAssetWithEscrow k 0)  -- some 100 — COMBINED conserved
+-- FIFO buffer ALSO advanced (the order op composed with the deposit): the message is in the buffer.
+#eval (queueEnqueueDepositK kqd0 7 111 5 0 9 0 30).bind (fun k => (findQueue k.queues 7).map (·.buffer))  -- some [111]
+-- REFUND on dequeue: enqueue-with-deposit then dequeue (owner 0 reclaims deposit) ⇒ bare ledger RETURNS to 100.
+#eval ((queueEnqueueDepositK kqd0 7 111 5 0 9 0 30).bind
+        (fun k => (queueDequeueRefundK k 7 0 9).map (fun p => recTotalAsset p.1 0)))  -- some 100 — refund RETURNED the deposit
+-- ROUND-TRIP combined: still conserved after enqueue+dequeue.
+#eval ((queueEnqueueDepositK kqd0 7 111 5 0 9 0 30).bind
+        (fun k => (queueDequeueRefundK k 7 0 9).map (fun p => recTotalAssetWithEscrow p.1 0)))  -- some 100 — combined conserved
+-- DEPOSIT GATE fail-closed: a deposit of 200 (> sender's 100) is REJECTED even though the FIFO append would succeed.
+#eval (queueEnqueueDepositK kqd0 7 111 5 0 9 0 200).isSome  -- false — InsufficientBalance (deposit gate)
+-- REFUND fail-closed: dequeue with a deposit-record id that was never parked ⇒ none.
+#eval ((queueEnqueueDepositK kqd0 7 111 5 0 9 0 30).bind
+        (fun k => (queueDequeueRefundK k 7 0 999).map Prod.snd)).isSome  -- false — no such deposit record
+
+#assert_axioms queueEnqueueDepositK_conserves_combined
+#assert_axioms queueEnqueueDepositK_debits
+#assert_axioms queueDequeueRefundK_conserves_combined
+#assert_axioms queueEnqueueDepositK_insufficient_rejects
+#assert_axioms queueDequeueRefundK_no_deposit_rejects
+
+/-! ## §SWISS — the kernel-level CapTP export/enliven/handoff/GC swiss-table transitions (Wave-8 de-THIN).
+
+The swiss-table side-table transitions, each FAIL-CLOSED exactly where dregg1 fails closed: export
+INSERTS a fresh swiss→cap entry with `refcount := 1` (rejecting a duplicate swiss number AND a rights
+amplification — the exported tier must be `⊆` the exporter's own `held` rights, `apply.rs:3917`); enliven
+LOOKS UP the swiss number (fail-closed if absent, `apply.rs:3955`), VALIDATES the bearer's claimed rights
+are `⊆` the entry's exported rights (the non-amplification gate, `apply.rs:3999`), and BUMPS the refcount
+(a new live reference); handoff binds a 3-vat introduce CERT to the entry + bumps the refcount
+(`apply.rs:4109`); drop DECREMENTS the refcount and GCs the entry when it hits 0 (rejecting a drop on a
+zero/absent entry, `apply.rs:4051`). ALL FOUR are balance-NEUTRAL — they touch ONLY `swiss`, never
+`bal`/`escrows` (CapTP moves references, not balance). -/
+
+/-- **`swissExportK`** — INSERT a fresh swiss-table entry: swiss number `sw` → (`target`, `rights`),
+exported by `exporter`, with `refcount := 1` (the bearer holds one live ref) and no bound cert.
+Fail-closed if the swiss number is already in use (no duplicate export) OR the exported `rights` are NOT
+`⊆` the exporter's `held` rights (amplification denied, `apply.rs:3917`). balance-NEUTRAL. -/
+def swissExportK (k : RecordKernelState) (sw : Nat) (exporter target : CellId) (rights held : List Auth) :
+    Option RecordKernelState :=
+  match findSwiss k.swiss sw with
+  | some _ => none
+  | none   =>
+      if rightsNarrowerOrEqual rights held then
+        some { k with swiss := { swiss := sw, exporter := exporter, target := target,
+                                 rights := rights, refcount := 1, cert := none } :: k.swiss }
+      else none
+
+/-- **`swissEnlivenK`** — VALIDATE a presented swiss number `sw` against the committed swiss-table and
+grant a live reference. Fail-closed if the swiss number is ABSENT (`apply.rs:3955`) OR the bearer's
+`claimed` rights are NOT `⊆` the entry's exported `rights` (the non-amplification gate, `apply.rs:3999`).
+On success BUMPS the entry's `refcount` (a new live reference). balance-NEUTRAL. -/
+def swissEnlivenK (k : RecordKernelState) (sw : Nat) (claimed : List Auth) :
+    Option RecordKernelState :=
+  match findSwiss k.swiss sw with
+  | none   => none
+  | some e =>
+      if rightsNarrowerOrEqual claimed e.rights then
+        some { k with swiss := replaceSwiss k.swiss sw { e with refcount := e.refcount + 1 } }
+      else none
+
+/-- **`swissHandoffK`** — bind a 3-vat introduce CERT `certHash` to the swiss entry `sw` and grant the
+recipient a live reference (`apply.rs:4109`). Fail-closed if the swiss number is ABSENT. On success binds
+`cert := some certHash` AND BUMPS the `refcount` (the recipient's new live ref). balance-NEUTRAL. -/
+def swissHandoffK (k : RecordKernelState) (sw certHash : Nat) :
+    Option RecordKernelState :=
+  match findSwiss k.swiss sw with
+  | none   => none
+  | some e =>
+      let e' : SwissRecord := { e with cert := some certHash, refcount := e.refcount + 1 }
+      some { k with swiss := replaceSwiss k.swiss sw e' }
+
+/-- **`swissDropK`** — GC a reference: DECREMENT the swiss entry `sw`'s `refcount`. Fail-closed if the
+swiss number is ABSENT OR the `refcount` is already `0` (`apply.rs:4051`, "refcount is already zero").
+When the decremented refcount hits `0` the entry is REMOVED (GC'd from the table); otherwise the entry
+stays with the lower count. balance-NEUTRAL. -/
+def swissDropK (k : RecordKernelState) (sw : Nat) : Option RecordKernelState :=
+  match findSwiss k.swiss sw with
+  | none   => none
+  | some e =>
+      if e.refcount = 0 then none
+      else if e.refcount - 1 = 0 then
+        some { k with swiss := removeSwiss k.swiss sw }
+      else
+        some { k with swiss := replaceSwiss k.swiss sw { e with refcount := e.refcount - 1 } }
+
+/-! ### The swiss-table is balance-NEUTRAL (touches only `swiss`). -/
+
+/-- **`swissExportK_balNeutral` — PROVED.** Export touches only `swiss`, never `bal`/`escrows`. -/
+theorem swissExportK_balNeutral {k k' : RecordKernelState} {sw : Nat} {exporter target : CellId}
+    {rights held : List Auth} (h : swissExportK k sw exporter target rights held = some k') (b : AssetId) :
+    recTotalAsset k' b = recTotalAsset k b ∧ escrowHeldAsset k' b = escrowHeldAsset k b := by
+  unfold swissExportK at h
+  cases hf : findSwiss k.swiss sw with
+  | some e => simp only [hf] at h; exact absurd h (by simp)
+  | none   =>
+      simp only [hf] at h
+      by_cases hr : rightsNarrowerOrEqual rights held
+      · rw [if_pos hr] at h; simp only [Option.some.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+      · rw [if_neg hr] at h; exact absurd h (by simp)
+
+/-- **`swissEnlivenK_balNeutral` — PROVED.** Enliven touches only `swiss`. -/
+theorem swissEnlivenK_balNeutral {k k' : RecordKernelState} {sw : Nat} {claimed : List Auth}
+    (h : swissEnlivenK k sw claimed = some k') (b : AssetId) :
+    recTotalAsset k' b = recTotalAsset k b ∧ escrowHeldAsset k' b = escrowHeldAsset k b := by
+  unfold swissEnlivenK at h
+  cases hf : findSwiss k.swiss sw with
+  | none   => simp only [hf] at h; exact absurd h (by simp)
+  | some e =>
+      simp only [hf] at h
+      by_cases hr : rightsNarrowerOrEqual claimed e.rights
+      · rw [if_pos hr] at h; simp only [Option.some.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+      · rw [if_neg hr] at h; exact absurd h (by simp)
+
+/-- **`swissHandoffK_balNeutral` — PROVED.** Handoff touches only `swiss`. -/
+theorem swissHandoffK_balNeutral {k k' : RecordKernelState} {sw certHash : Nat}
+    (h : swissHandoffK k sw certHash = some k') (b : AssetId) :
+    recTotalAsset k' b = recTotalAsset k b ∧ escrowHeldAsset k' b = escrowHeldAsset k b := by
+  unfold swissHandoffK at h
+  cases hf : findSwiss k.swiss sw with
+  | none   => simp only [hf] at h; exact absurd h (by simp)
+  | some e => simp only [hf, Option.some.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+
+/-- **`swissDropK_balNeutral` — PROVED.** Drop (refcount decrement / GC) touches only `swiss`. -/
+theorem swissDropK_balNeutral {k k' : RecordKernelState} {sw : Nat}
+    (h : swissDropK k sw = some k') (b : AssetId) :
+    recTotalAsset k' b = recTotalAsset k b ∧ escrowHeldAsset k' b = escrowHeldAsset k b := by
+  unfold swissDropK at h
+  cases hf : findSwiss k.swiss sw with
+  | none   => simp only [hf] at h; exact absurd h (by simp)
+  | some e =>
+      simp only [hf] at h
+      by_cases hz : e.refcount = 0
+      · rw [if_pos hz] at h; exact absurd h (by simp)
+      · rw [if_neg hz] at h
+        by_cases hone : e.refcount - 1 = 0
+        · rw [if_pos hone] at h; simp only [Option.some.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+        · rw [if_neg hone] at h; simp only [Option.some.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+
+/-! ### The REAL mechanism — fail-closed gates + the refcount lifecycle (the de-THIN non-vacuity). -/
+
+/-- **`swissExportK_inserts` — PROVED (export INSERTS a real entry, refcount 1).** A committed export
+puts a swiss-table entry for `sw` whose lookup returns the exported (target, rights) with `refcount = 1`.
+The de-THIN content a flag could not state. -/
+theorem swissExportK_inserts {k k' : RecordKernelState} {sw : Nat} {exporter target : CellId}
+    {rights held : List Auth} (h : swissExportK k sw exporter target rights held = some k') :
+    findSwiss k'.swiss sw = some { swiss := sw, exporter := exporter, target := target,
+                                   rights := rights, refcount := 1, cert := none } := by
+  unfold swissExportK at h
+  cases hf : findSwiss k.swiss sw with
+  | some e => simp only [hf] at h; exact absurd h (by simp)
+  | none   =>
+      simp only [hf] at h
+      by_cases hr : rightsNarrowerOrEqual rights held
+      · rw [if_pos hr] at h; simp only [Option.some.injEq] at h; subst h
+        simp only [findSwiss, List.find?_cons, beq_self_eq_true]
+      · rw [if_neg hr] at h; exact absurd h (by simp)
+
+/-- **`swissExportK_amplification_rejects` — PROVED (the NON-AMPLIFICATION gate, fail-closed).** An
+export whose declared `rights` are NOT `⊆` the exporter's `held` rights is REJECTED — a sturdy ref must
+not grant authority the exporter never held (`apply.rs:3917`). The CapTP soundness gate, NOT `True`. -/
+theorem swissExportK_amplification_rejects (k : RecordKernelState) (sw : Nat) (exporter target : CellId)
+    (rights held : List Auth) (hf : findSwiss k.swiss sw = none)
+    (hamp : rightsNarrowerOrEqual rights held = false) :
+    swissExportK k sw exporter target rights held = none := by
+  simp only [swissExportK, hf]; rw [if_neg (by simp [hamp])]
+
+/-- **`swissEnlivenK_absent_rejects` — PROVED (the MEMBERSHIP gate, fail-closed).** An enliven of an
+ABSENT swiss number is REJECTED (`apply.rs:3955`: validate membership against the committed table). The
+look-up-fail-closed a flag-shadow lacks. -/
+theorem swissEnlivenK_absent_rejects (k : RecordKernelState) (sw : Nat) (claimed : List Auth)
+    (hf : findSwiss k.swiss sw = none) : swissEnlivenK k sw claimed = none := by
+  simp only [swissEnlivenK, hf]
+
+/-- **`swissEnlivenK_amplification_rejects` — PROVED (the non-amplification gate, fail-closed).** An
+enliven whose CLAIMED rights exceed the entry's exported rights is REJECTED (`apply.rs:3999`). -/
+theorem swissEnlivenK_amplification_rejects (k : RecordKernelState) (sw : Nat) (claimed : List Auth)
+    (e : SwissRecord) (hf : findSwiss k.swiss sw = some e)
+    (hamp : rightsNarrowerOrEqual claimed e.rights = false) :
+    swissEnlivenK k sw claimed = none := by
+  simp only [swissEnlivenK, hf]; rw [if_neg (by simp [hamp])]
+
+/-- **`findSwiss_swiss_eq` — PROVED.** A found swiss entry has its key equal to the lookup key. -/
+theorem findSwiss_swiss_eq {ss : List SwissRecord} {sw : Nat} {e : SwissRecord}
+    (hf : findSwiss ss sw = some e) : e.swiss = sw := by
+  unfold findSwiss at hf
+  induction ss with
+  | nil => simp [List.find?] at hf
+  | cons hd tl ih =>
+      simp only [List.find?_cons] at hf
+      by_cases hhd : (hd.swiss == sw) = true
+      · simp only [hhd, if_true, Option.some.injEq] at hf; subst hf; simpa using hhd
+      · simp only [hhd, Bool.false_eq_true, if_false] at hf; exact ih hf
+
+/-- **`findSwiss_replaceSwiss_self` — PROVED (the side-table read/write law).** If `sw` is present and
+the replacement `e'` keeps the swiss number (`e'.swiss = sw`), then looking `sw` up after the replace
+returns exactly `e'`. The membership-map read/write law the refcount lifecycle reads off. -/
+theorem findSwiss_replaceSwiss_self (ss : List SwissRecord) (sw : Nat) (e e' : SwissRecord)
+    (hf : findSwiss ss sw = some e) (hsw : e'.swiss = sw) :
+    findSwiss (replaceSwiss ss sw e') sw = some e' := by
+  have he'sw : (e'.swiss == sw) = true := by simp [hsw]
+  induction ss with
+  | nil => simp [findSwiss, List.find?] at hf
+  | cons hd tl ih =>
+      simp only [findSwiss, List.find?_cons] at hf
+      simp only [findSwiss, replaceSwiss, List.map_cons, List.find?_cons]
+      by_cases hhd : (hd.swiss == sw) = true
+      · simp only [hhd, if_true] at hf ⊢
+        simp only [he'sw, if_true]
+      · simp only [hhd, Bool.false_eq_true, if_false] at hf ⊢
+        simp only [findSwiss, replaceSwiss] at ih
+        exact ih hf
+
+/-- **`swissEnlivenK_bumps_refcount` — PROVED (the refcount LIFECYCLE: a live ref is added).** A
+committed enliven RAISES the entry's refcount by one (a new live reference). -/
+theorem swissEnlivenK_bumps_refcount {k k' : RecordKernelState} {sw : Nat} {claimed : List Auth}
+    {e : SwissRecord} (hf : findSwiss k.swiss sw = some e)
+    (h : swissEnlivenK k sw claimed = some k') :
+    findSwiss k'.swiss sw = some { e with refcount := e.refcount + 1 } := by
+  unfold swissEnlivenK at h
+  simp only [hf] at h
+  by_cases hr : rightsNarrowerOrEqual claimed e.rights
+  · rw [if_pos hr] at h; simp only [Option.some.injEq] at h; subst h
+    exact findSwiss_replaceSwiss_self k.swiss sw e { e with refcount := e.refcount + 1 } hf
+      (by show e.swiss = sw; exact findSwiss_swiss_eq hf)
+  · rw [if_neg hr] at h; exact absurd h (by simp)
+
+/-- **`swissDropK_zero_rejects` — PROVED (the GC gate, fail-closed).** A drop on an entry whose refcount
+is already `0` is REJECTED (`apply.rs:4051`: "refcount is already zero"). -/
+theorem swissDropK_zero_rejects (k : RecordKernelState) (sw : Nat) (e : SwissRecord)
+    (hf : findSwiss k.swiss sw = some e) (hz : e.refcount = 0) :
+    swissDropK k sw = none := by
+  simp only [swissDropK, hf, if_pos hz]
+
+/-- **`findSwiss_removeSwiss_self` — PROVED.** After removing the `sw` entry, looking `sw` up returns
+`none` — every surviving entry has `swiss ≠ sw` (the filter dropped exactly the `sw`-matching ones). -/
+theorem findSwiss_removeSwiss_self (ss : List SwissRecord) (sw : Nat) :
+    findSwiss (removeSwiss ss sw) sw = none := by
+  unfold findSwiss removeSwiss
+  apply List.find?_eq_none.mpr
+  intro x hx
+  rw [List.mem_filter] at hx
+  obtain ⟨_, hx2⟩ := hx
+  simpa using hx2
+
+/-- **`swissDropK_gc_at_one` — PROVED (the GC: dropping the LAST ref REMOVES the entry).** Dropping a
+ref when `refcount = 1` GCs the entry — the subsequent lookup returns `none`. The de-THIN GC content. -/
+theorem swissDropK_gc_at_one {k k' : RecordKernelState} {sw : Nat} {e : SwissRecord}
+    (hf : findSwiss k.swiss sw = some e) (hone : e.refcount = 1)
+    (h : swissDropK k sw = some k') : findSwiss k'.swiss sw = none := by
+  unfold swissDropK at h
+  simp only [hf] at h
+  rw [if_neg (by omega : ¬ e.refcount = 0)] at h
+  rw [if_pos (by omega : e.refcount - 1 = 0)] at h
+  simp only [Option.some.injEq] at h; subst h
+  exact findSwiss_removeSwiss_self k.swiss sw
+
+/-! ## §SWISS runs (`#eval`) — export INSERTS, enliven LOOKS-UP-fail-closed + validates, refcount GCs. -/
+
+/-- A kernel with an EMPTY swiss-table; cell 0 holds `[read, call]` rights to be exported. -/
+def ksw0 : RecordKernelState :=
+  { accounts := {0, 1}
+    cell := fun _ => .record [("balance", .int 0)]
+    caps := fun _ => []
+    swiss := [] }
+
+-- EXPORT INSERTS: export swiss 42 → target 1 with rights [read] (⊆ held [read,call]) ⇒ entry present, refcount 1.
+#eval (swissExportK ksw0 42 0 1 [Auth.read] [Auth.read, Auth.call]).bind
+        (fun k => (findSwiss k.swiss 42).map (fun e => (e.target, e.refcount)))  -- some (1, 1) — INSERTED
+-- AMPLIFICATION DENIED on export: exporting [grant] when only [read] is held ⇒ none.
+#eval (swissExportK ksw0 42 0 1 [Auth.grant] [Auth.read]).isSome  -- false — amplification denied
+-- ENLIVEN LOOKS-UP-fail-closed: enliven an ABSENT swiss number ⇒ none.
+#eval (swissEnlivenK ksw0 99 [Auth.read]).isSome  -- false — absent ⇒ none (membership gate)
+-- ENLIVEN BUMPS refcount: export then enliven (claiming ⊆ rights) ⇒ refcount 1 → 2.
+#eval (((swissExportK ksw0 42 0 1 [Auth.read] [Auth.read, Auth.call]).bind
+        (fun k => swissEnlivenK k 42 [Auth.read]))).bind
+        (fun k => (findSwiss k.swiss 42).map (·.refcount))  -- some 2 — a new live reference
+-- ENLIVEN amplification denied: claiming [grant] against an entry exporting only [read] ⇒ none.
+#eval ((swissExportK ksw0 42 0 1 [Auth.read] [Auth.read, Auth.call]).bind
+        (fun k => swissEnlivenK k 42 [Auth.grant])).isSome  -- false — claim exceeds export
+-- HANDOFF binds the cert + bumps refcount: export then handoff cert 7 ⇒ cert = some 7, refcount 2.
+#eval ((swissExportK ksw0 42 0 1 [Auth.read] [Auth.read, Auth.call]).bind
+        (fun k => swissHandoffK k 42 7)).bind
+        (fun k => (findSwiss k.swiss 42).map (fun e => (e.cert, e.refcount)))  -- some (some 7, 2)
+-- DROP GCs at zero: export (refcount 1) then drop ⇒ entry REMOVED (refcount hit 0 ⇒ GC).
+#eval ((swissExportK ksw0 42 0 1 [Auth.read] [Auth.read, Auth.call]).bind
+        (fun k => swissDropK k 42)).map (fun k => (findSwiss k.swiss 42).isSome)  -- some false — GC'd
+-- DROP fail-closed at zero: a 2nd drop after GC ⇒ none (absent).
+#eval ((swissExportK ksw0 42 0 1 [Auth.read] [Auth.read, Auth.call]).bind
+        (fun k => (swissDropK k 42).bind (fun k => swissDropK k 42))).isSome  -- false
+-- balance-NEUTRAL: the combined measure is UNTOUCHED by export (and the rest).
+#eval (swissExportK ksw0 42 0 1 [Auth.read] [Auth.read, Auth.call]).map (fun k => recTotalAssetWithEscrow k 0)  -- some 0
+
+#assert_axioms swissExportK_inserts
+#assert_axioms swissExportK_amplification_rejects
+#assert_axioms swissEnlivenK_absent_rejects
+#assert_axioms swissEnlivenK_amplification_rejects
+#assert_axioms swissEnlivenK_bumps_refcount
+#assert_axioms swissDropK_zero_rejects
+#assert_axioms swissDropK_gc_at_one
+#assert_axioms swissExportK_balNeutral
+#assert_axioms swissEnlivenK_balNeutral
+#assert_axioms swissHandoffK_balNeutral
+#assert_axioms swissDropK_balNeutral
 
 /-! ## §ESCROW-PER-ASSET runs (`#eval`) — the combined measure has teeth + the asset-isolation guard. -/
 
