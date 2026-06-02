@@ -38,19 +38,22 @@ well-formed input — the *fuel-adequacy* obligation).
     induction on fuel (mirroring §5). A symmetric codec bug in the WHO layer forges authority silently
     past the differential; this theorem, pinning `parseAuthW` as the genuine left-inverse of
     `encodeAuthW`, is what catches it — removing the credential decoder from the Lean-side TCB;
-  * §7 — the `FullActionA` (WHAT) decoder (`parseActionW_roundtrip`): the 41 `simple` arms (every
-    `Nat`/`Int`-field effect — i.e. EVERY conserved-measure arm) closed uniformly by an auto-dispatch
-    tactic + a `do`-block collapse. Removes the bulk of the effect decoder from the TCB.
+  * §7 — the `FullActionA` (WHAT) decoder (`parseActionW_roundtrip`): 45 of 46 arms (every arm but
+    `setFieldA`), closed uniformly by an auto-dispatch tactic + a `do`-block collapse — EVERY
+    conserved-measure arm AND the 4 AUTHS-bearing capability-delegation/export arms. Removes nearly all
+    of the effect decoder from the TCB;
+  * §8 — the narrow `AUTHS` list (`parseAuths_encode`): the `Auth` tag array the `cA` action field
+    carries, AND the GATEWAY for the input-LENGTH-fuel `let rec` loop pattern (the adequacy is carried by
+    the self-maintaining `input.length < fuel` invariant — no length-bound lemma), reused by every
+    remaining length-fuel production.
 
 **DEFERRED (the codec for these is TCB — `#eval`-cross-validated in `FFI.lean` §W3/§W4/§W5/§W6/§WG, but
-NOT YET carrying a parse∘encode THEOREM here):** the 5 non-`simple` `parseActionW` arms (`setFieldA`'s
-JSON-string field + the 4 AUTHS-bearing arms, which need the narrow-`Auth` list lemma `parseAuths_encode`
-whose `let rec` fuel is input-LENGTH-based — a separate adequacy argument from §5/§6's structural fuel);
-`parseCaveatsW` (the per-node
+NOT YET carrying a parse∘encode THEOREM here):** the ONE remaining `parseActionW` arm `setFieldA` (its
+`cS` JSON-string field needs an escape-free `Wf` hypothesis); `parseCaveatsW` (the per-node
 caveat array, §W5c); `parseForestW`/`parseChildrenW` (the recursive action-TREE + delegation edges);
-the side-tables (`parseEscrow`/`parseNats`/`parseQueue`/`parseSwiss`) + `parseWState`; and
-`parseWTurn`/`parseWWire` (the Turn envelope + whole-wire object). Each is round-trip-`#eval`'d at its
-codec site; the proof obligation is the FILL-J completion follow-on.
+the side-tables (`parseEscrow`/`parseNats`/`parseQueue`/`parseSwiss`) + `parseWState` (all length-fuel
+loops — §8's invariant is the template); and `parseWTurn`/`parseWWire` (the Turn envelope + whole-wire
+object). Each is round-trip-`#eval`'d at its codec site; the proof obligation is the FILL-J follow-on.
 
 EVERY digest/commitment field is the low 256 bits of a `Nat`, so the PROVED roundtrips are the identity
 EXACTLY on the well-formed value space (`< 2^256`); we carry a `Wf` predicate that pins precisely that
@@ -1422,6 +1425,122 @@ example : parseAuthW 10 ((encodeAuthW witNestedAuth).toList ++ ['x']) = some (wi
   parseAuthW_roundtrip witNestedAuth ['x'] (by unfold witNestedAuth WfAuth WfAuthList; trivial) 10
     (by unfold witNestedAuth; decide)
 
+/-! ## §8 — the narrow `AUTHS` list (`parseAuths`) roundtrip — the INPUT-LENGTH-FUEL `let rec` loop
+pattern (the gateway reused by every remaining FILL-J production: `parseNats`/`parseEscrow`/`parseQueue`/
+`parseSwiss`/`parseForest` all share it). `parseAuths`'s inner `loop` runs on `cs.length + 1` fuel; the
+adequacy is carried by the invariant `input.length < fuel` (each iteration consumes ≥1 char while fuel
+drops by 1, so it is self-maintaining) — NO separate length-bound lemma is needed. Tags are single
+digits (`0..6`) and `authOfTag_authTag` (§0f) is already proved, so the per-element parse is trivial. -/
+
+/-- The `AUTHS` tail encoder (the `foldl` body in cons-recursive form, mirroring §6d). -/
+private def encodeAuthsTail (as : List Authority.Auth) : String :=
+  as.foldl (fun acc x => acc ++ "," ++ toString (authTag x)) ""
+
+/-- The accumulator pulls OUT of the tail fold (`List Char`-level, mirroring `foldl_authtail`). -/
+private theorem foldl_authsTail (as : List Authority.Auth) : ∀ (acc : String),
+    as.foldl (fun s x => s ++ "," ++ toString (authTag x)) acc
+      = acc ++ as.foldl (fun s x => s ++ "," ++ toString (authTag x)) "" := by
+  induction as with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ toString (authTag b)), ih ("" ++ "," ++ toString (authTag b))]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+/-- Rebracket a NON-EMPTY tag TAIL into comma-then-tag-then-tail (peelable). -/
+private theorem encAuthsTail_cons_shape (b : Authority.Auth) (bs : List Authority.Auth) (rest : PState) :
+    (encodeAuthsTail (b :: bs)).toList ++ rest
+      = ',' :: ((toString (authTag b)).toList ++ ((encodeAuthsTail bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeAuthsTail (b :: bs)
+      = ("" ++ "," ++ toString (authTag b)) ++ encodeAuthsTail bs from by
+      show (b :: bs).foldl (fun s x => s ++ "," ++ toString (authTag x)) "" = _
+      rw [List.foldl_cons]; exact foldl_authsTail bs ("" ++ "," ++ toString (authTag b))]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+/-- Rebracket a NON-EMPTY tag LIST into open-`[`-then-body form. -/
+private theorem encodeAuths_cons_shape (a : Authority.Auth) (as : List Authority.Auth) (rest : PState) :
+    (encodeAuths (a :: as)).toList ++ rest
+      = '[' :: ((toString (authTag a)).toList ++ ((encodeAuthsTail as).toList ++ (']' :: rest))) := by
+  simp only [encodeAuths]
+  rw [show (as.foldl (fun acc x => acc ++ "," ++ toString (authTag x)) "") = encodeAuthsTail as from rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+/-- A tag's `toString` is a nonempty digit string (length ≥ 1) — the per-iteration consume bound. -/
+private theorem tag_toString_len (a : Authority.Auth) : 1 ≤ (toString (authTag a)).toList.length := by
+  obtain ⟨h0, t0, ht0, _, _, _⟩ := repr_cons (authTag a)
+  rw [ht0]; simp
+
+/-- **The loop recovers the candidate list**, given the `input.length < fuel` invariant. By induction
+on the tail (the head `a` generalized); the recursive call lands at `fuel-1` with a strictly-shorter
+input, so the invariant is preserved (`omega`, using `tag_toString_len`). -/
+private theorem parseAuths_loop_works : ∀ (as : List Authority.Auth) (a : Authority.Auth) (rest : PState) (fuel : Nat),
+    ((toString (authTag a)).toList ++ ((encodeAuthsTail as).toList ++ (']' :: rest))).length < fuel →
+    parseAuths.loop fuel
+        ((toString (authTag a)).toList ++ ((encodeAuthsTail as).toList ++ (']' :: rest)))
+      = some (a :: as, rest) := by
+  intro as
+  induction as with
+  | nil =>
+      intro a rest fuel hf
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
+      rw [show (encodeAuthsTail ([] : List Authority.Auth)).toList = [] from rfl, List.nil_append]
+      unfold parseAuths.loop
+      rw [parseNat_toString (authTag a) (']' :: rest) (nd_brack rest)]
+      simp only []
+      rw [authOfTag_authTag]
+      simp only []
+      rw [show lit "," (']' :: rest) = none from by
+            rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+            exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+      simp only []
+      rw [lit_brack]
+  | cons a2 as2 ih =>
+      intro a rest fuel hf
+      have hlen : 1 ≤ (toString (authTag a)).toList.length := tag_toString_len a
+      rw [encAuthsTail_cons_shape a2 as2 (']' :: rest)] at hf ⊢
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by
+        simp only [List.length_append, List.length_cons] at hf; omega⟩
+      unfold parseAuths.loop
+      rw [parseNat_toString (authTag a) _ (nd_comma _)]
+      simp only []
+      rw [authOfTag_authTag]
+      simp only []
+      rw [lit_commaC]
+      simp only []
+      have hrec : ((toString (authTag a2)).toList ++ ((encodeAuthsTail as2).toList ++ (']' :: rest))).length < f := by
+        simp only [List.length_append, List.length_cons] at hf ⊢; omega
+      rw [ih a2 rest f hrec]
+
+/-- **FILL J production (d): the narrow `AUTHS` list roundtrip** (`parseAuths ∘ encodeAuths = id`). The
+`oneOf`-free `Auth` tag array the wide `cA` action field carries; the gateway for the length-fuel loops. -/
+theorem parseAuths_encode (rs : List Authority.Auth) (rest : PState) :
+    parseAuths ((encodeAuths rs).toList ++ rest) = some (rs, rest) := by
+  cases rs with
+  | nil =>
+      unfold parseAuths
+      simp only [encodeAuths]
+      rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+  | cons a as =>
+      unfold parseAuths
+      rw [encodeAuths_cons_shape a as rest]
+      obtain ⟨h0, t0, ht0, hh0dig, _, _⟩ := repr_cons (authTag a)
+      have hempty : lit "[]"
+          ('[' :: ((toString (authTag a)).toList ++ ((encodeAuthsTail as).toList ++ (']' :: rest)))) = none := by
+        rw [ht0, List.cons_append]
+        unfold lit
+        rw [show ("[]":String).toList = ['[', ']'] from by decide]
+        rw [litGo_cons_match, litGo_ne_head ']' [] h0 _ (by intro heq; subst heq; exact absurd hh0dig (by decide))]
+      rw [hempty]; simp only []
+      rw [show ('[' :: ((toString (authTag a)).toList ++ ((encodeAuthsTail as).toList ++ (']' :: rest))))
+            = ("[":String).toList ++ ((toString (authTag a)).toList ++ ((encodeAuthsTail as).toList ++ (']' :: rest)))
+            from rfl, lit_append]
+      simp only []
+      apply parseAuths_loop_works as a rest
+      simp only [List.length_append, List.length_cons]; omega
+
 /-! ## §7 — the `FullActionA` (WHAT) decoder roundtrip (FILL-J production (c): the 46-arm effect sum).
 
 `parseActionW` is FLAT (no fuel recursion) and uses `do`-notation over the `cN`/`cI`/`cS`/`cA` field
@@ -1451,18 +1570,21 @@ private theorem cI_step (i : Int) (rest : PState)
     cI ((",":String).toList ++ ((toString i).toList ++ rest)) = some (i, rest) := by
   unfold cI; rw [lit_append]; simp only []; exact parseInt_toString i rest hnd
 
-/-- The 5 arms needing MORE than the `N`/`I` field toolkit (the remaining FILL-J follow-on):
-`setFieldA` (a `cS` JSON-string field — needs an escape-free `Wf` hypothesis), and the 4 AUTHS-bearing
-arms `delegateAttenA`/`attenuateA`/`exportSturdyRefA`/`enlivenRefA` (a `cA` field — needs the narrow
-`parseAuths` list lemma, whose `let rec` fuel is input-LENGTH-based, a separate adequacy argument).
-Every OTHER arm is `simple` (a fixed `do`-walk of `N`/`I` fields). -/
+/-- `cA` (read `,` then an `AUTHS` tag array) on an `encodeAuthsW`-led tail — via §8's `parseAuths_encode`.
+This is the combinator that lets the 4 AUTHS-bearing action arms join the `simple` sweep. -/
+private theorem cA_step (rs : List Authority.Auth) (rest : PState) :
+    cA ((",":String).toList ++ ((encodeAuthsW rs).toList ++ rest)) = some (rs, rest) := by
+  unfold cA; rw [lit_append]; simp only []
+  unfold parseAuthsW encodeAuthsW
+  exact parseAuths_encode rs rest
+
+/-- The ONE arm needing more than the `N`/`I`/`A` field toolkit: `setFieldA`, whose `cS` JSON-string
+field needs an escape-free `Wf` hypothesis (it cannot be a hypothesis-free `simp` lemma). Every other
+arm — including the 4 AUTHS-bearing arms (`delegateAttenA`/`attenuateA`/`exportSturdyRefA`/`enlivenRefA`),
+now that §8's `cA_step`/`parseAuths_encode` closes the `cA` field — is `simple`. -/
 def isSimpleArm : TurnExecutorFull.FullActionA → Bool
-  | .setFieldA ..        => false
-  | .delegateAttenA ..   => false
-  | .attenuateA ..       => false
-  | .exportSturdyRefA .. => false
-  | .enlivenRefA ..      => false
-  | _                    => true
+  | .setFieldA .. => false
+  | _             => true
 
 /-- One `simple` arm, fully automatic: auto-dispatch to its tag, then collapse the `do`-block of `N`/`I`
 fields (`simp` selects the matching `nd_*` closer per field). `done` makes it all-or-nothing, so the
@@ -1475,17 +1597,18 @@ local macro "action_arm" : tactic =>
     simp only [lit_append,
       parseNat_toString _ _ (nd_litComma _), parseNat_toString _ _ (nd_litClose _),
       cN_step _ _ (nd_litComma _), cN_step _ _ (nd_litClose _),
-      cI_step _ _ (nd_litComma _), cI_step _ _ (nd_litClose _),
+      cI_step _ _ (nd_litComma _), cI_step _ _ (nd_litClose _), cA_step _ _,
       Option.bind_eq_bind, Option.bind]
     done))
 
 set_option maxHeartbeats 4000000 in
 set_option linter.unusedSimpArgs false in
-/-- **FILL J production (c): the `FullActionA` (WHAT) decoder roundtrip — the 41 `simple` arms.** Every
-`isSimpleArm` action round-trips through `encodeActionW`/`parseActionW`. This removes the BULK of the
-WHAT decoder — including EVERY conserved-measure arm (`bal`/`mint`/`burn`/escrow/queue/note/bridge/seal/
-sovereign…) the executor's per-asset laws range over — from the codec TCB. A symmetric bug in the WHAT
-layer (wrong effect tag/args agreed by encoder+decoder) is caught here, where it was `#eval`-only. -/
+/-- **FILL J production (c): the `FullActionA` (WHAT) decoder roundtrip — 45 of 46 arms.** Every
+`isSimpleArm` action (all but `setFieldA`) round-trips through `encodeActionW`/`parseActionW`, now
+INCLUDING the 4 AUTHS-bearing arms (via §8's `cA_step`). This removes nearly all of the WHAT decoder —
+EVERY conserved-measure arm (`bal`/`mint`/`burn`/escrow/queue/note/bridge/seal/sovereign…) the
+executor's per-asset laws range over, AND the capability-delegation/export arms — from the codec TCB. A
+symmetric bug in the WHAT layer (wrong effect tag/args agreed by encoder+decoder) is caught here. -/
 theorem parseActionW_roundtrip (act : TurnExecutorFull.FullActionA) (rest : PState)
     (h : isSimpleArm act = true) :
     parseActionW ((encodeActionW act).toList ++ rest) = some (act, rest) := by
@@ -1525,5 +1648,6 @@ zero-sorry guarantee on the codec roundtrip). -/
 #assert_axioms parseAuthW_roundtrip
 #assert_axioms parseAuthListW_roundtrip
 #assert_axioms parseActionW_roundtrip
+#assert_axioms parseAuths_encode
 
 end Dregg2.Exec.CodecRoundtrip
