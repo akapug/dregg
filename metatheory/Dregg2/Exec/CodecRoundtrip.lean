@@ -38,18 +38,17 @@ well-formed input — the *fuel-adequacy* obligation).
     induction on fuel (mirroring §5). A symmetric codec bug in the WHO layer forges authority silently
     past the differential; this theorem, pinning `parseAuthW` as the genuine left-inverse of
     `encodeAuthW`, is what catches it — removing the credential decoder from the Lean-side TCB;
-  * §7 — the `FullActionA` (WHAT) decoder (`parseActionW_roundtrip`): 45 of 46 arms (every arm but
-    `setFieldA`), closed uniformly by an auto-dispatch tactic + a `do`-block collapse — EVERY
-    conserved-measure arm AND the 4 AUTHS-bearing capability-delegation/export arms. Removes nearly all
-    of the effect decoder from the TCB;
+  * §7 — the `FullActionA` (WHAT) decoder, COMPLETE at **all 46 arms**: 45 via `parseActionW_roundtrip`
+    (the hypothesis-free `simple` arms — EVERY conserved-measure arm AND the 4 AUTHS-bearing capability
+    arms) + `setFieldA` via `parseActionW_setfield` (its `cS` JSON-string field needs an escape-free `Wf`
+    + a combined-separator split). The WHOLE effect decoder is out of the TCB;
   * §8 — the narrow `AUTHS` list (`parseAuths_encode`): the `Auth` tag array the `cA` action field
     carries, AND the GATEWAY for the input-LENGTH-fuel `let rec` loop pattern (the adequacy is carried by
     the self-maintaining `input.length < fuel` invariant — no length-bound lemma), reused by every
     remaining length-fuel production.
 
 **DEFERRED (the codec for these is TCB — `#eval`-cross-validated in `FFI.lean` §W3/§W4/§W5/§W6/§WG, but
-NOT YET carrying a parse∘encode THEOREM here):** the ONE remaining `parseActionW` arm `setFieldA` (its
-`cS` JSON-string field needs an escape-free `Wf` hypothesis); `parseCaveatsW` (the per-node
+NOT YET carrying a parse∘encode THEOREM here):** `parseCaveatsW` (the per-node
 caveat array, §W5c); `parseForestW`/`parseChildrenW` (the recursive action-TREE + delegation edges);
 the side-tables (`parseEscrow`/`parseNats`/`parseQueue`/`parseSwiss`) + `parseWState` (all length-fuel
 loops — §8's invariant is the template); and `parseWTurn`/`parseWWire` (the Turn envelope + whole-wire
@@ -1578,6 +1577,19 @@ private theorem cA_step (rs : List Authority.Auth) (rest : PState) :
   unfold parseAuthsW encodeAuthsW
   exact parseAuths_encode rs rest
 
+/-- `cS` (read `,` then a quoted JSON string) on an escape-free field — via §0d's `parseStr_clean`. The
+input is the SPLIT form (`","`/`"\""` as SEPARATE literals — `setFieldA` first splits its COMBINED
+`,"`/`",` separators so every comma is a plain `","`, matching `cN_step`/`nd_litComma`); the bridge to
+`parseStr_clean`'s `'"' :: …` is the `decide`-rewrite of `("\"").toList = ['"']`. -/
+private theorem cS_step (s : String) (rest : PState) (hcl : ∀ c ∈ s.toList, c ≠ '"' ∧ c ≠ '\\') :
+    cS ((",":String).toList ++ (("\"":String).toList ++ ((jsonEscape s).toList
+        ++ (("\"":String).toList ++ rest)))) = some (s, rest) := by
+  unfold cS; rw [lit_append]; simp only []
+  rw [show (("\"":String).toList ++ ((jsonEscape s).toList ++ (("\"":String).toList ++ rest)))
+        = '"' :: ((jsonEscape s).toList ++ ('"' :: rest)) from by
+        simp only [show ("\"":String).toList = ['"'] from by decide, List.cons_append, List.nil_append]]
+  exact parseStr_clean s rest hcl
+
 /-- The ONE arm needing more than the `N`/`I`/`A` field toolkit: `setFieldA`, whose `cS` JSON-string
 field needs an escape-free `Wf` hypothesis (it cannot be a hypothesis-free `simp` lemma). Every other
 arm — including the 4 AUTHS-bearing arms (`delegateAttenA`/`attenuateA`/`exportSturdyRefA`/`enlivenRefA`),
@@ -1624,6 +1636,30 @@ example : parseActionW ((encodeActionW (.balanceA ⟨1, 2, 3, 5⟩ 0)).toList ++
 example : parseActionW ((encodeActionW (.sealA 7 8)).toList ++ ['x']) = some (.sealA 7 8, ['x']) :=
   parseActionW_roundtrip (.sealA 7 8) ['x'] (by decide)
 
+set_option maxHeartbeats 1000000 in
+/-- **The last `FullActionA` arm: `setFieldA`** — proved SEPARATELY because (a) its `cS` JSON-string
+field needs the escape-free `Wf` hypothesis `hcl`, and (b) its encoder uses COMBINED separators `,"`/`",`
+which we first SPLIT into single `","` literals so the standard field combinators apply. With this +
+`parseActionW_roundtrip`, ALL 46 WHAT-decoder arms carry a parse∘encode theorem — the entire effect
+decoder is out of the Lean-side TCB. -/
+theorem parseActionW_setfield (actor cell : CellId) (field : String) (v : Int) (rest : PState)
+    (hcl : ∀ c ∈ field.toList, c ≠ '"' ∧ c ≠ '\\') :
+    parseActionW ((encodeActionW (.setFieldA actor cell field v)).toList ++ rest)
+      = some (.setFieldA actor cell field v, rest) := by
+  unfold parseActionW
+  simp only [encodeActionW]
+  rw [show (",\"" : String) = "," ++ "\"" from by decide,
+      show ("\"," : String) = "\"" ++ "," from by decide]
+  simp only [String.toList_append, List.append_assoc]
+  skip_to_arm
+  simp only [lit_append, parseNat_toString _ _ (nd_litComma _), cN_step _ _ (nd_litComma _),
+    cS_step _ _ hcl, cI_step _ _ (nd_litClose _), Option.bind_eq_bind, Option.bind]
+
+-- A setField effect with an escape-free field name round-trips (the WHAT decoder is now COMPLETE, 46/46):
+example : parseActionW ((encodeActionW (.setFieldA 1 2 "balance" 99)).toList ++ ['x'])
+            = some (.setFieldA 1 2 "balance" 99, ['x']) :=
+  parseActionW_setfield 1 2 "balance" 99 ['x'] (by decide)
+
 /-! ## §4 — axiom hygiene (the FILL-J no-`sorryAx` pins).
 
 Every keystone is `#assert_axioms`-pinned to the standard kernel triple `{propext, Classical.choice,
@@ -1648,6 +1684,7 @@ zero-sorry guarantee on the codec roundtrip). -/
 #assert_axioms parseAuthW_roundtrip
 #assert_axioms parseAuthListW_roundtrip
 #assert_axioms parseActionW_roundtrip
+#assert_axioms parseActionW_setfield
 #assert_axioms parseAuths_encode
 
 end Dregg2.Exec.CodecRoundtrip
