@@ -69,8 +69,19 @@ abbrev counterparty : CellId := 1
 /-- The privileged supply-authority holder (holds the `node 0` mint cap in `fma0`). -/
 abbrev minter : CellId := 9
 
-/-- The starting ledger — the already-proved `fma0` asset, reused (NOT re-instantiated). -/
-def world : RecChainedState := fma0
+/-- The starting ledger — `fma0`'s 2-asset accounts, but with the orchestrator's cap table GROUNDED so
+its delegation edges PASS the (now-EXECUTED, post-#138) `recCDelegateAtten` gate for the RIGHT reason.
+Cell **0** (the delegator of every scenario's edges) holds `endpoint 1 [read,write]` (→ confers an edge
+to the counterparty cell 1, the worker edges' target) AND `endpoint 0 [read]` (→ confers an edge to cell
+0, the deeper orchestration edge's target). Crucially it does NOT hold `node 0` — so the privileged
+`mintAuthorizedB` gate still REJECTS actor 0's out-of-scope mint (`badWorkerForest`/`unauthorized_mint`
+stay fail-closed); only `minter` = 9 keeps the `node 0` supply cap (preserved from `fma0`). Accounts are
+`fma0`'s verbatim. -/
+def world : RecChainedState :=
+  { fma0 with kernel :=
+      { fma0.kernel with
+        caps := fun l => if l = 0 then [Cap.endpoint 1 [Auth.read, Auth.write], Cap.endpoint 0 [Auth.read, Auth.write]]
+                         else fma0.kernel.caps l } }
 
 /-! ## §1 — SPAWN least-privilege workers + the NON-AMPLIFICATION theorem.
 
@@ -137,7 +148,8 @@ theorem workForest_conserves (s' : RecChainedState) (b : AssetId)
   -- Per-asset net is 0 in each asset (the two assets the ledger carries; others trivially 0).
   have hzero : turnLedgerDeltaAsset (lowerForestA workForest) b = 0 := by
     -- `balanceA` transfers have `ledgerDeltaAsset = 0` at EVERY asset, so the turn delta is 0 for any b.
-    simp only [workForest, lowerForestA, lowerChildrenA, turnLedgerDeltaAsset,
+    simp only [workForest, lowerForestA, lowerChildrenA, capTarget, orchestratorCap,
+               List.cons_append, List.nil_append, turnLedgerDeltaAsset,
                List.map_cons, List.map_nil, List.append_nil, List.sum_cons, List.sum_nil,
                ledgerDeltaAsset, add_zero]
   exact execFullForestA_conserves_per_asset world s' workForest b h hzero
@@ -309,7 +321,8 @@ theorem orchestration_conserves (s' : RecChainedState) (b : AssetId)
     recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow world.kernel b := by
   have hzero : turnLedgerDeltaAsset (lowerForestA orchestration) b = 0 := by
     -- asset 1: +50 (mint) − 50 (burn) = 0; asset 0: 0; every other asset: 0.
-    simp only [orchestration, lowerForestA, lowerChildrenA, turnLedgerDeltaAsset,
+    simp only [orchestration, lowerForestA, lowerChildrenA, capTarget, orchestratorCap,
+               List.cons_append, List.nil_append, turnLedgerDeltaAsset,
                List.map_cons, List.map_nil, List.append_nil, List.sum_cons, List.sum_nil,
                ledgerDeltaAsset, add_zero]
     by_cases hb : b = 1
