@@ -230,6 +230,17 @@ def recCDelegate (s : RecChainedState) (delegator recipient t : CellId) :
   | some k' => some { kernel := k', log := authReceipt delegator :: s.log }
   | none    => none
 
+/-- **Chained RIGHTS-CARRYING delegate.** Run `recKDelegateAtten` (the faithful `apply_introduce`:
+gate on the delegator holding a cap to `t`, then grant `recipient` the delegator's held cap to `t`
+ATTENUATED to `keep` — REAL rights `⊆` held, `recKDelegateAtten_non_amplifying`, NOT the rights-blind
+`node t`/control of `recKDelegate`); on commit, append an authority receipt. Balance-NEUTRAL: edits
+ONLY `caps` (`recKDelegateAtten_frame`), so `ledgerDeltaAsset = 0` for every asset. -/
+def recCDelegateAtten (s : RecChainedState) (delegator recipient t : CellId) (keep : List Auth) :
+    Option RecChainedState :=
+  match recKDelegateAtten s.kernel delegator recipient t keep with
+  | some k' => some { kernel := k', log := authReceipt delegator :: s.log }
+  | none    => none
+
 /-- **Chained revoke.** `recKRevokeTarget` always commits (revocation only subtracts authority);
 append an authority receipt. -/
 def recCRevoke (s : RecChainedState) (holder t : CellId) : RecChainedState :=
@@ -1950,6 +1961,12 @@ inductive FullActionA where
   3-party Granovetter introduce. `introducer` (holding connectivity to `target`) hands `recipient` a
   NON-AMPLIFYING edge to `target`. Reuses the `recCDelegate` connectivity spine. -/
   | introduceA      (introducer recipient target : CellId)
+  /-- `IntroduceAttenuated { delegator, recipient, target, keep }` — the RIGHTS-CARRYING Granovetter
+  delegation (the faithful `apply_introduce`, `apply.rs:2829` `is_attenuation(held, granted)`): the
+  `delegator` (holding a cap to `target`) hands `recipient` its held cap to `target` ATTENUATED to
+  `keep` — REAL conferred rights `⊆` held (`recKDelegateAtten_non_amplifying`), NOT the rights-blind
+  `node target`/control of `introduceA`. Routes to `recKDelegateAtten`. Balance-NEUTRAL (`caps`-only). -/
+  | delegateAttenA  (delegator recipient target : CellId) (keep : List Auth)
   /-- `AttenuateCapability { cell→actor, slot→idx, narrower_permissions→keep }` (dregg1
   `apply_attenuate_capability`, `apply.rs:4377`): monotonically NARROW the actor's `idx`-th held cap
   to `keep` (widening rejected). The purest non-amplification (`capAuthConferred ⊆`). -/
@@ -2161,6 +2178,7 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .setVKA _ _ _,        _ => 0
   -- §MA-auth: the 6 authority effects EDIT/CHECK `caps`, NEVER `bal` — so `0` for EVERY asset.
   | .introduceA _ _ _,    _ => 0
+  | .delegateAttenA _ _ _ _, _ => 0
   | .attenuateA _ _ _,    _ => 0
   | .dropRefA _ _,        _ => 0
   | .revokeDelegationA _ _, _ => 0
@@ -2227,6 +2245,7 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   | .setVKA actor cell vk             => stateStep s vkField actor cell (.int vk)
   -- §MA-auth: the 6 authority effects route to the (reused/re-founded) chained authority steps.
   | .introduceA intro rec t          => recCDelegate s intro rec t
+  | .delegateAttenA del rec t keep   => recCDelegateAtten s del rec t keep
   | .attenuateA actor idx keep       => some (attenuateStepA s actor idx keep)
   | .dropRefA holder t               => some (recCRevoke s holder t)
   | .revokeDelegationA holder t      => some (recCRevoke s holder t)
@@ -2397,6 +2416,18 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
           rw [hd] at h; simp only [Option.some.injEq] at h; subst h
           unfold recKDelegate at hd
           by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
+          · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
+            simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
+          · rw [if_neg hg] at hd; exact absurd hd (by simp)
+  | delegateAttenA del rec t keep =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      unfold recCDelegateAtten at h
+      cases hd : recKDelegateAtten s.kernel del rec t keep with
+      | none => rw [hd] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hd] at h; simp only [Option.some.injEq] at h; subst h
+          unfold recKDelegateAtten at hd
+          by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
           · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
             simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
           · rw [if_neg hg] at hd; exact absurd hd (by simp)
@@ -2729,6 +2760,7 @@ def fullReceiptA : FullActionA → Turn
   | .setVKA actor cell _        => { actor := actor, src := cell, dst := cell, amt := 0 }
   -- §MA-auth: each authority effect appends exactly its `authReceipt` (a self-`Turn`, amount `0`).
   | .introduceA intro _ _       => authReceipt intro
+  | .delegateAttenA del _ _ _   => authReceipt del
   | .attenuateA actor _ _       => authReceipt actor
   | .dropRefA holder _          => authReceipt holder
   | .revokeDelegationA holder _ => authReceipt holder
@@ -2827,6 +2859,11 @@ theorem execFullA_chainlink (s s' : RecChainedState) (fa : FullActionA)
   | introduceA intro rec t =>
       simp only [execFullA, recCDelegate, fullReceiptA] at h ⊢
       cases hd : recKDelegate s.kernel intro rec t with
+      | none => rw [hd] at h; exact absurd h (by simp)
+      | some k' => rw [hd] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | delegateAttenA del rec t keep =>
+      simp only [execFullA, recCDelegateAtten, fullReceiptA] at h ⊢
+      cases hd : recKDelegateAtten s.kernel del rec t keep with
       | none => rw [hd] at h; exact absurd h (by simp)
       | some k' => rw [hd] at h; simp only [Option.some.injEq] at h; subst h; rfl
   | attenuateA actor idx keep =>
@@ -3406,6 +3443,40 @@ theorem execFullA_validateHandoffA_non_amplifying (s s' : RecChainedState) (intr
         exact ⟨held, hmem, hconf, fun keep => attenuateF_non_amplifying keep held⟩
       · rw [if_neg hg] at hd; exact absurd hd (by simp)
 
+/-- **`execFullA_delegateAttenA_grounds` — PROVED.** A committed rights-delegation HOLDS the abstract
+source edge `del ⟶ ⟨t,()⟩` (the Granovetter connectivity premise — the delegator could already reach
+`t`). Reads `recKDelegateAtten_grounds`. -/
+theorem execFullA_delegateAttenA_grounds (s s' : RecChainedState) (del rec t : CellId) (keep : List Auth)
+    (h : execFullA s (.delegateAttenA del rec t keep) = some s') :
+    Dregg2.Spec.execGraph s.kernel.caps del (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) := by
+  simp only [execFullA, recCDelegateAtten] at h
+  cases hd : recKDelegateAtten s.kernel del rec t keep with
+  | none => rw [hd] at h; exact absurd h (by simp)
+  | some k' => exact recKDelegateAtten_grounds s.kernel k' del rec t keep hd
+
+/-- **`execFullA_delegateAttenA_grants` — PROVED.** On commit, the `recipient` GENUINELY HOLDS the
+delegator's held cap to `t` ATTENUATED to `keep` (the executable `grant_with_expiry` landed the
+attenuated permission). Reads `recKDelegateAtten_grants`. -/
+theorem execFullA_delegateAttenA_grants (s s' : RecChainedState) (del rec t : CellId) (keep : List Auth)
+    (h : execFullA s (.delegateAttenA del rec t keep) = some s') :
+    attenuate keep (heldCapTo s.kernel.caps del t) ∈ s'.kernel.caps rec := by
+  simp only [execFullA, recCDelegateAtten] at h
+  cases hd : recKDelegateAtten s.kernel del rec t keep with
+  | none => rw [hd] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hd] at h; simp only [Option.some.injEq] at h; subst h
+      exact recKDelegateAtten_grants s.kernel k' del rec t keep hd
+
+/-- **`execFullA_delegateAttenA_non_amplifying` — THE HEADLINE (PROVED, GENUINE & EXECUTED).** The cap
+the recipient actually RECEIVES confers a `List Auth` SUBSET of the delegator's held cap to `t`
+(`granted ⊆ held`) — `is_attenuation(held, granted)` over the EXECUTED grant, NOT a `()≤()` collapse
+and NOT the rights-blind `node t`/control of `introduceA`. Reads `attenuate_subset`. -/
+theorem execFullA_delegateAttenA_non_amplifying (s s' : RecChainedState) (del rec t : CellId) (keep : List Auth)
+    (_h : execFullA s (.delegateAttenA del rec t keep) = some s') :
+    IsNonAmplifyingF (heldCapTo s.kernel.caps del t) (attenuate keep (heldCapTo s.kernel.caps del t)) := by
+  unfold IsNonAmplifyingF
+  exact attenuate_subset keep (heldCapTo s.kernel.caps del t)
+
 /-- **`execFullA_exerciseA_authorized` — PROVED.** A committed exercise HOLDS the source edge:
 `actor ⟶ ⟨target,()⟩` on `execGraph` (the resolved c-list slot — only the holder may exercise). -/
 theorem execFullA_exerciseA_authorized (s s' : RecChainedState) (actor t : CellId)
@@ -3593,6 +3664,15 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
          (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
        ∃ held : Cap, held ∈ s.kernel.caps intro ∧ confersEdgeTo t held = true
          ∧ ∀ keep : List Auth, IsNonAmplifyingF held (attenuate keep held)
+   | .delegateAttenA del rec t keep =>
+       -- (a) grounds in held connectivity, (b) the recipient GENUINELY HOLDS the delegator's held
+       -- cap to `t` ATTENUATED to `keep` (the EXECUTED rights handoff — `recKDelegateAtten_grants`,
+       -- NOT a static claim), (c) GENUINE rights non-amplification: that granted cap confers a
+       -- `List Auth` SUBSET of the held cap (`is_attenuation(held, granted)`, `apply.rs:2829`).
+       Dregg2.Spec.execGraph s.kernel.caps del
+         (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
+       attenuate keep (heldCapTo s.kernel.caps del t) ∈ s'.kernel.caps rec ∧
+       IsNonAmplifyingF (heldCapTo s.kernel.caps del t) (attenuate keep (heldCapTo s.kernel.caps del t))
    | .exerciseA actor t =>
        -- authorized BY the held edge AND confers NO new authority (graph UNCHANGED).
        Dregg2.Spec.execGraph s.kernel.caps actor
@@ -3743,6 +3823,10 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
       exact ⟨execFullA_introduceA_grounds s s' intro rec t h,
              execFullA_introduceA_addEdge s s' intro rec t h,
              execFullA_introduceA_non_amplifying s s' intro rec t h⟩
+  | delegateAttenA del rec t keep =>
+      exact ⟨execFullA_delegateAttenA_grounds s s' del rec t keep h,
+             execFullA_delegateAttenA_grants s s' del rec t keep h,
+             execFullA_delegateAttenA_non_amplifying s s' del rec t keep h⟩
   | attenuateA actor idx keep => exact execFullA_attenuateA_non_amplifying s s' actor idx keep h
   | dropRefA holder t => exact execFullA_dropRefA_removeEdge s s' holder t h
   | revokeDelegationA holder t => exact execFullA_revokeDelegationA_removeEdge s s' holder t h
@@ -3970,6 +4054,9 @@ theorem execFullTurnA_each_attests :
 #assert_axioms execFullA_revokeDelegationA_removeEdge
 #assert_axioms execFullA_validateHandoffA_grounds
 #assert_axioms execFullA_validateHandoffA_non_amplifying
+#assert_axioms execFullA_delegateAttenA_grounds
+#assert_axioms execFullA_delegateAttenA_grants
+#assert_axioms execFullA_delegateAttenA_non_amplifying
 #assert_axioms execFullA_exerciseA_authorized
 #assert_axioms execFullA_exerciseA_graph_unchanged
 -- META-FILL C Wave 3: accounts-GROWTH (`createCell`/`spawn`, born EMPTY ⇒ conservation-NEUTRAL) +
