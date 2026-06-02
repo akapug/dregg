@@ -1761,6 +1761,122 @@ theorem parseNats_encode (ns : List Nat) (rest : PState) :
       apply parseNats_loop_works as a rest
       simp only [List.length_append, List.length_cons]; omega
 
+/-! ## §10 — the `BAL` ledger-list (`parseBal`) roundtrip — the CONSERVED-MEASURE `WState` field (what
+the executor's per-asset conservation laws range over). The length-fuel loop of §8/§9, but the element
+is the SELF-DELIMITING `[c,a,amt]` entry (`parseBalEntry`, already proved in §2) — so it round-trips for
+ANY tail, with NO non-digit post-byte condition. A `bal`-list codec bug is now caught. -/
+
+/-- One `BALENTRY` `[c,a,amt]` (matching `encodeBal`'s local `one`). -/
+private def balOne (p : CellId × AssetId × Int) : String :=
+  "[" ++ toString p.1 ++ "," ++ toString p.2.1 ++ "," ++ toString p.2.2 ++ "]"
+
+private def encodeBalTail (es : List (CellId × AssetId × Int)) : String :=
+  es.foldl (fun acc p => acc ++ "," ++ balOne p) ""
+
+/-- One entry round-trips for ANY tail (self-delimiting) — from §2's `parseBalEntry_encode`. -/
+private theorem parseBalEntry_one (e : CellId × AssetId × Int) (rest : PState) :
+    parseBalEntry ((balOne e).toList ++ rest) = some (e, rest) := by
+  obtain ⟨c, a, amt⟩ := e
+  exact parseBalEntry_encode c a amt rest
+
+/-- A `BALENTRY` opens with `'['` (so the `bal` list body is `[[…`, making `lit "[]"` fail). Explicit
+witness ⇒ no metavar; `simp` normalizes the left-assoc append on both sides. -/
+private theorem balOne_head (a : CellId × AssetId × Int) : ∃ t, (balOne a).toList = '[' :: t := by
+  refine ⟨((toString a.1 ++ "," ++ toString a.2.1 ++ "," ++ toString a.2.2 ++ "]" : String)).toList, ?_⟩
+  unfold balOne
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl, List.cons_append,
+    List.nil_append, List.append_assoc]
+
+private theorem foldl_balTail (es : List (CellId × AssetId × Int)) : ∀ (acc : String),
+    es.foldl (fun s p => s ++ "," ++ balOne p) acc
+      = acc ++ es.foldl (fun s p => s ++ "," ++ balOne p) "" := by
+  induction es with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ balOne b), ih ("" ++ "," ++ balOne b)]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+private theorem encBalTail_cons_shape (b : CellId × AssetId × Int) (bs : List (CellId × AssetId × Int))
+    (rest : PState) :
+    (encodeBalTail (b :: bs)).toList ++ rest
+      = ',' :: ((balOne b).toList ++ ((encodeBalTail bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeBalTail (b :: bs) = ("" ++ "," ++ balOne b) ++ encodeBalTail bs from by
+      show (b :: bs).foldl (fun s p => s ++ "," ++ balOne p) "" = _
+      rw [List.foldl_cons]; exact foldl_balTail bs ("" ++ "," ++ balOne b)]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+private theorem encodeBal_cons_shape (a : CellId × AssetId × Int) (as : List (CellId × AssetId × Int))
+    (rest : PState) :
+    (encodeBal (a :: as)).toList ++ rest
+      = '[' :: ((balOne a).toList ++ ((encodeBalTail as).toList ++ (']' :: rest))) := by
+  rw [show encodeBal (a :: as) = "[" ++ balOne a ++ encodeBalTail as ++ "]" from rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+private theorem parseBal_loop_works : ∀ (as : List (CellId × AssetId × Int)) (a : CellId × AssetId × Int)
+    (rest : PState) (fuel : Nat),
+    ((balOne a).toList ++ ((encodeBalTail as).toList ++ (']' :: rest))).length < fuel →
+    parseBal.loop fuel ((balOne a).toList ++ ((encodeBalTail as).toList ++ (']' :: rest)))
+      = some (a :: as, rest) := by
+  intro as
+  induction as with
+  | nil =>
+      intro a rest fuel hf
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
+      rw [show (encodeBalTail ([] : List (CellId × AssetId × Int))).toList = [] from rfl, List.nil_append]
+      unfold parseBal.loop
+      rw [parseBalEntry_one a (']' :: rest)]
+      simp only []
+      rw [show lit "," (']' :: rest) = none from by
+            rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+            exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+      simp only []
+      rw [lit_brack]
+  | cons a2 as2 ih =>
+      intro a rest fuel hf
+      rw [encBalTail_cons_shape a2 as2 (']' :: rest)] at hf ⊢
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by
+        simp only [List.length_append, List.length_cons] at hf; omega⟩
+      unfold parseBal.loop
+      rw [parseBalEntry_one a _]
+      simp only []
+      rw [lit_commaC]
+      simp only []
+      have hrec : ((balOne a2).toList ++ ((encodeBalTail as2).toList ++ (']' :: rest))).length < f := by
+        simp only [List.length_append, List.length_cons] at hf ⊢; omega
+      rw [ih a2 rest f hrec]
+
+/-- **FILL J production (f): the `BAL` ledger-list roundtrip** (`parseBal ∘ encodeBal = id`) — the
+CONSERVED-MEASURE `WState` field. The self-delimiting `[c,a,amt]` element makes this the cleanest
+length-fuel instance (no post-byte condition). -/
+theorem parseBal_encode (es : List (CellId × AssetId × Int)) (rest : PState) :
+    parseBal ((encodeBal es).toList ++ rest) = some (es, rest) := by
+  cases es with
+  | nil =>
+      unfold parseBal
+      rw [show (encodeBal ([] : List (CellId × AssetId × Int))) = "[]" from rfl]
+      rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+  | cons a as =>
+      unfold parseBal
+      rw [encodeBal_cons_shape a as rest]
+      have hempty : lit "[]"
+          ('[' :: ((balOne a).toList ++ ((encodeBalTail as).toList ++ (']' :: rest)))) = none := by
+        obtain ⟨t, ht⟩ := balOne_head a
+        rw [ht, List.cons_append]
+        unfold lit
+        rw [show ("[]":String).toList = ['[', ']'] from by decide]
+        rw [litGo_cons_match, litGo_ne_head ']' [] '[' _ (by decide)]
+      rw [hempty]; simp only []
+      rw [show ('[' :: ((balOne a).toList ++ ((encodeBalTail as).toList ++ (']' :: rest))))
+            = ("[":String).toList ++ ((balOne a).toList ++ ((encodeBalTail as).toList ++ (']' :: rest)))
+            from rfl, lit_append]
+      simp only []
+      apply parseBal_loop_works as a rest
+      simp only [List.length_append, List.length_cons]; omega
+
 /-! ## §4 — axiom hygiene (the FILL-J no-`sorryAx` pins).
 
 Every keystone is `#assert_axioms`-pinned to the standard kernel triple `{propext, Classical.choice,
@@ -1788,5 +1904,6 @@ zero-sorry guarantee on the codec roundtrip). -/
 #assert_axioms parseActionW_setfield
 #assert_axioms parseAuths_encode
 #assert_axioms parseNats_encode
+#assert_axioms parseBal_encode
 
 end Dregg2.Exec.CodecRoundtrip
