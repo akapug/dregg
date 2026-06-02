@@ -2267,6 +2267,1047 @@ theorem parseSwissTable_encode (ss : List SwissRecord) (rest : PState) :
       apply parseSwissTable_loop_works as a rest
       simp only [List.length_cons]; omega
 
+/-! ## §12 — the WIDE `CELLS` array (`parseCellsW`) roundtrip — the STATE DECODER's cell store.
+
+The `CELLS` field is `[[id,valueW],…]`: a length-fuel loop (§8 recipe) whose element `parseCellW`
+embeds the FULL recursive wide-`Value` codec (§5's `parseValueW_roundtrip`) for the payload. The one
+genuinely-new obligation versus the side-tables: the loop calls `parseCellW (cs.length+1) cs` —
+re-deriving the element's value-fuel from the REMAINING input length — so the per-element
+`parseValueW` adequacy is `valueSize v ≤ (remaining).length + 1`, which the byte-length lower bound
+`valueSize_le_encodeLen` (the parse-depth never exceeds the encoded width) discharges with slack. The
+codec boundary is §1's `WfValue` (digests `< 2^256`, names escape-free), so the list roundtrip carries
+a per-cell `WfCells` hypothesis (the SAME non-vacuous boundary the value roundtrip lives on). -/
+
+/-! A structural-size LOWER bound on the encoded width: the parse-depth `valueSize v` never exceeds the
+byte length of `encodeValueW v` (so the loop's `(remaining).length + 1` element-fuel always suffices).
+By the §5 mutual induction; every constructor emits strictly more bytes than its size counts. -/
+mutual
+theorem valueSize_le_encodeLen (v : Value) : valueSize v ≤ (encodeValueW v).toList.length := by
+  cases v with
+  | int i => simp only [valueSize, encodeValueW, String.toList_append]; simp
+  | dig d => simp only [valueSize, encodeValueW, String.toList_append]; simp
+  | sym s => simp only [valueSize, encodeValueW, String.toList_append]; simp
+  | record fs =>
+      simp only [valueSize, encodeValueW, String.toList_append, List.length_append]
+      have := fieldsSize_le_encodeLen fs
+      simp only [show ("{\"rec\":":String).toList.length = 7 from by decide,
+        show ("}":String).toList.length = 1 from by decide]
+      omega
+theorem fieldsSize_le_encodeLen (fs : List (FieldName × Value)) :
+    fieldsSize fs ≤ (encodeFieldsW fs).toList.length := by
+  cases fs with
+  | nil => simp [fieldsSize, encodeFieldsW]
+  | cons p gs =>
+      obtain ⟨n, v⟩ := p
+      simp only [fieldsSize, encodeFieldsW, String.toList_append, List.length_append]
+      have hv := valueSize_le_encodeLen v
+      have ht := fieldsTailSize_le_encodeLen gs
+      simp only [show ("[":String).toList.length = 1 from by decide,
+        show ("]":String).toList.length = 1 from by decide,
+        show ("[\"":String).toList.length = 2 from by decide,
+        show ("\",":String).toList.length = 2 from by decide]
+      omega
+theorem fieldsTailSize_le_encodeLen (fs : List (FieldName × Value)) :
+    fieldsSize fs ≤ (encodeFieldsTailW fs).toList.length := by
+  cases fs with
+  | nil => simp [fieldsSize, encodeFieldsTailW]
+  | cons p gs =>
+      obtain ⟨n, v⟩ := p
+      simp only [fieldsSize, encodeFieldsTailW, String.toList_append, List.length_append]
+      have hv := valueSize_le_encodeLen v
+      have ht := fieldsTailSize_le_encodeLen gs
+      simp only [show (",[\"":String).toList.length = 3 from by decide,
+        show ("\",":String).toList.length = 2 from by decide,
+        show ("]":String).toList.length = 1 from by decide]
+      omega
+end
+
+/-- Well-formed `CELLS`: every cell's payload satisfies the §1 `WfValue` boundary. -/
+def WfCells : List (CellId × Value) → Prop
+  | []          => True
+  | p :: ps     => WfValue p.2 ∧ WfCells ps
+
+/-- The wide-cell encoder (the inline `one` lambda of `encodeCellsW`, named for the proof). -/
+def encodeCellW (p : CellId × Value) : String :=
+  "[" ++ toString p.1 ++ "," ++ encodeValueW p.2 ++ "]"
+
+/-- **One wide `CELL` `[id,valueW]` round-trips** for ANY sufficient value-fuel — the `id` `Nat`
+(post-byte `,`) then the recursive payload via §5's `parseValueW_roundtrip`, then the closing `]`
+(`parseValueW` leaves its argument `rest`). Self-delimiting. -/
+theorem parseCellW_encode (p : CellId × Value) (rest : PState) (hwf : WfValue p.2)
+    (fuel : Nat) (hf : valueSize p.2 ≤ fuel) :
+    parseCellW fuel ((encodeCellW p).toList ++ rest) = some (p, rest) := by
+  obtain ⟨id, v⟩ := p
+  unfold parseCellW encodeCellW
+  -- After `String.toList_append`, the input is the right-associated
+  -- `"[".toList ++ (id.toList ++ (",".toList ++ ((encodeValueW v).toList ++ ("]".toList ++ rest))))`;
+  -- each literal is consumed via `lit_append` in its `"…".toList ++ _` form (NO `show` over the big
+  -- `encodeValueW v` body — that would WHNF-reduce it and time out; the §11/parseBalEntry recipe).
+  simp only [String.toList_append, List.append_assoc]
+  rw [lit_append]
+  simp only []
+  rw [parseNat_toString id _ (nd_litComma _)]
+  simp only []
+  rw [lit_append]
+  simp only []
+  rw [parseValueW_roundtrip v (("]":String).toList ++ rest) hwf fuel hf]
+  simp only []
+  rw [lit_append]
+  simp only [Option.map_some]
+
+private def encodeCellsTail (ps : List (CellId × Value)) : String :=
+  ps.foldl (fun acc x => acc ++ "," ++ encodeCellW x) ""
+
+/-- A wide `CELL` opens with `'['` (so the list body is `[[…`, making `lit "[]"` fail). -/
+private theorem encodeCellW_head (p : CellId × Value) : ∃ t, (encodeCellW p).toList = '[' :: t := by
+  refine ⟨(toString p.1 ++ "," ++ encodeValueW p.2 ++ "]" : String).toList, ?_⟩
+  unfold encodeCellW
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl, List.cons_append,
+    List.nil_append, List.append_assoc]
+
+private theorem foldl_cellsTail (ps : List (CellId × Value)) : ∀ (acc : String),
+    ps.foldl (fun s x => s ++ "," ++ encodeCellW x) acc
+      = acc ++ ps.foldl (fun s x => s ++ "," ++ encodeCellW x) "" := by
+  induction ps with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ encodeCellW b), ih ("" ++ "," ++ encodeCellW b)]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+private theorem encCellsTail_cons_shape (b : CellId × Value) (bs : List (CellId × Value)) (rest : PState) :
+    (encodeCellsTail (b :: bs)).toList ++ rest
+      = ',' :: ((encodeCellW b).toList ++ ((encodeCellsTail bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeCellsTail (b :: bs) = ("" ++ "," ++ encodeCellW b) ++ encodeCellsTail bs from by
+      show (b :: bs).foldl (fun s x => s ++ "," ++ encodeCellW x) "" = _
+      rw [List.foldl_cons]; exact foldl_cellsTail bs ("" ++ "," ++ encodeCellW b)]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+private theorem encodeCellsW_cons_shape (a : CellId × Value) (as : List (CellId × Value)) (rest : PState) :
+    (encodeCellsW (a :: as)).toList ++ rest
+      = '[' :: ((encodeCellW a).toList ++ ((encodeCellsTail as).toList ++ (']' :: rest))) := by
+  rw [show encodeCellsW (a :: as) = "[" ++ encodeCellW a ++ encodeCellsTail as ++ "]" from by
+        show "[" ++ encodeCellW a ++ (as.foldl (fun acc p => acc ++ "," ++ encodeCellW p) "") ++ "]" = _
+        rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+set_option maxHeartbeats 1000000 in
+private theorem parseCellsW_loop_works : ∀ (as : List (CellId × Value)) (a : CellId × Value)
+    (rest : PState) (fuel : Nat) (hwf : WfCells (a :: as)),
+    ((encodeCellW a).toList ++ ((encodeCellsTail as).toList ++ (']' :: rest))).length < fuel →
+    parseCellsW.loop fuel ((encodeCellW a).toList ++ ((encodeCellsTail as).toList ++ (']' :: rest)))
+      = some (a :: as, rest) := by
+  intro as
+  induction as with
+  | nil =>
+      intro a rest fuel hwf hf
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
+      rw [show (encodeCellsTail ([] : List (CellId × Value))).toList = [] from rfl, List.nil_append]
+      unfold parseCellsW.loop
+      rw [parseCellW_encode a (']' :: rest) hwf.1 _ (le_trans (valueSize_le_encodeLen a.2) (by
+        rw [show ((encodeCellW a).toList ++ (']' :: rest)).length + 1
+              = (encodeCellW a).toList.length + ((']' :: rest).length + 1) from by
+            simp only [List.length_append]; omega]
+        unfold encodeCellW
+        simp only [String.toList_append, List.length_append]; omega))]
+      simp only []
+      rw [show lit "," (']' :: rest) = none from by
+            rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+            exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+      simp only []
+      rw [lit_brack]
+  | cons a2 as2 ih =>
+      intro a rest fuel hwf hf
+      rw [encCellsTail_cons_shape a2 as2 (']' :: rest)] at hf ⊢
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by
+        simp only [List.length_append, List.length_cons] at hf; omega⟩
+      unfold parseCellsW.loop
+      rw [parseCellW_encode a _ hwf.1 _ (le_trans (valueSize_le_encodeLen a.2) (by
+        rw [show ((encodeCellW a).toList ++ (',' :: ((encodeCellW a2).toList ++ ((encodeCellsTail as2).toList ++ (']' :: rest))))).length + 1
+              = (encodeCellW a).toList.length + ((',' :: ((encodeCellW a2).toList ++ ((encodeCellsTail as2).toList ++ (']' :: rest)))).length + 1) from by
+            simp only [List.length_append]; omega]
+        -- expose that `(encodeValueW a.2).length` is a summand of `(encodeCellW a).length`
+        -- (else omega treats the cell-encoding as an opaque atom — same step the nil branch uses).
+        unfold encodeCellW
+        simp only [String.toList_append, List.length_append]; omega))]
+      simp only []
+      rw [lit_commaC]
+      simp only []
+      have hrec : ((encodeCellW a2).toList ++ ((encodeCellsTail as2).toList ++ (']' :: rest))).length < f := by
+        simp only [List.length_append, List.length_cons] at hf ⊢; omega
+      rw [ih a2 rest f hwf.2 hrec]
+
+/-- **FILL J production (j): the WIDE `CELLS` array roundtrip** (`parseCellsW ∘ encodeCellsW = id`) — the
+STATE DECODER's cell store, each element embedding the recursive `Value` payload (§5). Carries the §1
+`WfCells` boundary (digests `< 2^256`, names escape-free); fuel-adequate whenever the OUTER loop fuel
+exceeds the encoded width (the `parseWState` caller passes the whole-input length, so this is met). -/
+theorem parseCellsW_encode (cs : List (CellId × Value)) (rest : PState) (hwf : WfCells cs)
+    (fuel : Nat) (hf : ((encodeCellsW cs).toList ++ rest).length ≤ fuel) :
+    parseCellsW fuel ((encodeCellsW cs).toList ++ rest) = some (cs, rest) := by
+  cases cs with
+  | nil =>
+      unfold parseCellsW
+      rw [show (encodeCellsW ([] : List (CellId × Value))) = "[]" from rfl]
+      rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+  | cons a as =>
+      unfold parseCellsW
+      rw [encodeCellsW_cons_shape a as rest] at hf ⊢
+      have hempty : lit "[]"
+          ('[' :: ((encodeCellW a).toList ++ ((encodeCellsTail as).toList ++ (']' :: rest)))) = none := by
+        obtain ⟨t, ht⟩ := encodeCellW_head a
+        rw [ht, List.cons_append]
+        unfold lit
+        rw [show ("[]":String).toList = ['[', ']'] from by decide]
+        rw [litGo_cons_match, litGo_ne_head ']' [] '[' _ (by decide)]
+      rw [hempty]; simp only []
+      rw [lit_lbrack]
+      simp only []
+      apply parseCellsW_loop_works as a rest _ hwf
+      -- `hf` charges the `'['`-prefixed body; the loop wants the body itself (one byte shorter).
+      -- Expose both as sums of the same length-atoms (`simp only`, leaf lengths) so omega aligns them.
+      simp only [List.length_cons, List.length_append] at hf ⊢; omega
+
+/-! ## §13 — the `CAPS` table (`parseCapsEntries`) roundtrip — the STATE DECODER's capability store.
+
+Three NESTED length-fuel loops: the `CAPS` array `[[holder,CAPLIST],…]` whose element `parseCapEntry`
+embeds a `CAPLIST` array `[CAP,…]` whose element `parseCap` is the 3-arm capability sum
+(`{"null":0}`/`{"node":N}`/`{"ep":[N,AUTHS]}`) — the `ep` arm carrying a narrow `AUTHS` tag array
+(§8's `parseAuths_encode`). No `Wf` hypothesis: `Cap` carries only `Nat` targets + narrow-`Auth` tags
+(all total). Each loop is the §8 length-fuel recipe; the `CAP` element dispatches fail-closed via
+`lit_ne_pre` over the three concrete tags, mirroring §6's `parseAuthW` arm walk. -/
+
+/-- **One `CAP` round-trips** (`parseCap ∘ encodeCap = id`) — the 3-arm capability sum. `null` is a
+single literal consume; `node`/`ep` fail the earlier tags (`lit_ne_pre`), open their tag, read the
+target `Nat`, and (for `ep`) the rights `AUTHS` array via §8's `parseAuths_encode`, then close. The `ep`
+encoder's trailing `]}` is the AUTHS-array close (consumed by `parseAuths`) then the two literal
+closers. Self-delimiting. -/
+theorem parseCap_encode (c : Authority.Cap) (rest : PState) :
+    parseCap ((encodeCap c).toList ++ rest) = some (c, rest) := by
+  cases c with
+  | null =>
+      unfold parseCap encodeCap
+      rw [show (("{\"null\":0}":String).toList ++ rest) = ("{\"null\":0}":String).toList ++ rest from rfl,
+        lit_append]
+  | node t =>
+      unfold parseCap encodeCap
+      rw [show (("{\"node\":" ++ toString t ++ "}":String).toList ++ rest)
+            = ("{\"node\":":String).toList ++ ((toString t).toList ++ ('}' :: rest)) from by
+          simp only [String.toList_append, show ("}":String).toList = ['}'] from by decide,
+            List.append_assoc, List.cons_append, List.nil_append]]
+      rw [lit_ne_pre "{\"null\":0}" "{\"node\":" _ (by decide) (by decide)]
+      simp only []
+      rw [lit_append]
+      simp only []
+      rw [parseNat_toString t ('}' :: rest) (nd_brace rest)]
+      simp only []
+      rw [show lit "}" ('}' :: rest) = some rest from by
+            rw [show ('}' :: rest) = ("}":String).toList ++ rest from by
+              simp only [show ("}":String).toList = ['}'] from by decide, List.cons_append,
+                List.nil_append]]
+            exact lit_append "}" rest]
+      simp only [Option.map_some]
+  | endpoint t r =>
+      unfold parseCap encodeCap
+      rw [show (("{\"ep\":[" ++ toString t ++ "," ++ encodeAuths r ++ "]}":String).toList ++ rest)
+            = ("{\"ep\":[":String).toList ++ ((toString t).toList ++ (',' :: ((encodeAuths r).toList
+                ++ (']' :: ('}' :: rest))))) from by
+          simp only [String.toList_append, show (",":String).toList = [','] from by decide,
+            show ("]}":String).toList = [']', '}'] from by decide, List.append_assoc, List.cons_append,
+            List.nil_append]]
+      rw [lit_ne_pre "{\"null\":0}" "{\"ep\":[" _ (by decide) (by decide)]
+      simp only []
+      rw [lit_ne_pre "{\"node\":" "{\"ep\":[" _ (by decide) (by decide)]
+      simp only []
+      rw [lit_append]
+      simp only []
+      rw [parseNat_toString t _ (nd_comma _)]
+      simp only []
+      rw [show lit "," (',' :: ((encodeAuths r).toList ++ (']' :: ('}' :: rest))))
+            = some ((encodeAuths r).toList ++ (']' :: ('}' :: rest))) from by
+          rw [show (',' :: ((encodeAuths r).toList ++ (']' :: ('}' :: rest))))
+                = ("," : String).toList ++ ((encodeAuths r).toList ++ (']' :: ('}' :: rest))) from by
+              simp only [show (",":String).toList = [','] from by decide, List.cons_append,
+                List.nil_append]]
+          exact lit_append "," _]
+      simp only []
+      rw [parseAuths_encode r (']' :: ('}' :: rest))]
+      simp only []
+      rw [show lit "]" (']' :: ('}' :: rest)) = some ('}' :: rest) from by
+            rw [show (']' :: ('}' :: rest)) = ("]" : String).toList ++ ('}' :: rest) from by
+              simp only [show ("]":String).toList = [']'] from by decide, List.cons_append,
+                List.nil_append]]
+            exact lit_append "]" _]
+      simp only []
+      rw [show lit "}" ('}' :: rest) = some rest from by
+            rw [show ('}' :: rest) = ("}" : String).toList ++ rest from by
+              simp only [show ("}":String).toList = ['}'] from by decide, List.cons_append,
+                List.nil_append]]
+            exact lit_append "}" rest]
+      simp only [Option.map_some]
+
+private def encodeCapListTail (cs : List Authority.Cap) : String :=
+  cs.foldl (fun acc x => acc ++ "," ++ encodeCap x) ""
+
+/-- Every `CAP` opens with `'{'` — the head char that makes `lit "[]"` fail on a `[{`-led `CAPLIST`. -/
+private theorem encodeCap_head (c : Authority.Cap) : ∃ t, (encodeCap c).toList = '{' :: t := by
+  cases c with
+  | null => exact ⟨"\"null\":0}".toList, by unfold encodeCap; rfl⟩
+  | node t => refine ⟨("\"node\":" ++ toString t ++ "}" : String).toList, ?_⟩
+              unfold encodeCap
+              simp only [String.toList_append, show ("{\"node\":":String).toList = '{' :: "\"node\":".toList from by decide,
+                List.cons_append, List.nil_append, List.append_assoc]
+  | endpoint t r => refine ⟨("\"ep\":[" ++ toString t ++ "," ++ encodeAuths r ++ "]}" : String).toList, ?_⟩
+                    unfold encodeCap
+                    simp only [String.toList_append, show ("{\"ep\":[":String).toList = '{' :: "\"ep\":[".toList from by decide,
+                      List.cons_append, List.nil_append, List.append_assoc]
+
+private theorem foldl_capListTail (cs : List Authority.Cap) : ∀ (acc : String),
+    cs.foldl (fun s x => s ++ "," ++ encodeCap x) acc
+      = acc ++ cs.foldl (fun s x => s ++ "," ++ encodeCap x) "" := by
+  induction cs with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ encodeCap b), ih ("" ++ "," ++ encodeCap b)]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+private theorem encCapListTail_cons_shape (b : Authority.Cap) (bs : List Authority.Cap) (rest : PState) :
+    (encodeCapListTail (b :: bs)).toList ++ rest
+      = ',' :: ((encodeCap b).toList ++ ((encodeCapListTail bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeCapListTail (b :: bs) = ("" ++ "," ++ encodeCap b) ++ encodeCapListTail bs from by
+      show (b :: bs).foldl (fun s x => s ++ "," ++ encodeCap x) "" = _
+      rw [List.foldl_cons]; exact foldl_capListTail bs ("" ++ "," ++ encodeCap b)]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+private theorem encodeCapList_cons_shape (a : Authority.Cap) (as : List Authority.Cap) (rest : PState) :
+    (encodeCapList (a :: as)).toList ++ rest
+      = '[' :: ((encodeCap a).toList ++ ((encodeCapListTail as).toList ++ (']' :: rest))) := by
+  rw [show encodeCapList (a :: as) = "[" ++ encodeCap a ++ encodeCapListTail as ++ "]" from by
+        show "[" ++ encodeCap a ++ (as.foldl (fun acc x => acc ++ "," ++ encodeCap x) "") ++ "]" = _
+        rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+private theorem parseCapList_loop_works : ∀ (as : List Authority.Cap) (a : Authority.Cap)
+    (rest : PState) (fuel : Nat),
+    ((encodeCap a).toList ++ ((encodeCapListTail as).toList ++ (']' :: rest))).length < fuel →
+    parseCapList.loop fuel ((encodeCap a).toList ++ ((encodeCapListTail as).toList ++ (']' :: rest)))
+      = some (a :: as, rest) := by
+  intro as
+  induction as with
+  | nil =>
+      intro a rest fuel hf
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
+      rw [show (encodeCapListTail ([] : List Authority.Cap)).toList = [] from rfl, List.nil_append]
+      unfold parseCapList.loop
+      rw [parseCap_encode a (']' :: rest)]
+      simp only []
+      rw [show lit "," (']' :: rest) = none from by
+            rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+            exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+      simp only []
+      rw [lit_brack]
+  | cons a2 as2 ih =>
+      intro a rest fuel hf
+      rw [encCapListTail_cons_shape a2 as2 (']' :: rest)] at hf ⊢
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by
+        simp only [List.length_append, List.length_cons] at hf; omega⟩
+      unfold parseCapList.loop
+      rw [parseCap_encode a _]
+      simp only []
+      rw [lit_commaC]
+      simp only []
+      have hrec : ((encodeCap a2).toList ++ ((encodeCapListTail as2).toList ++ (']' :: rest))).length < f := by
+        simp only [List.length_append, List.length_cons] at hf ⊢; omega
+      rw [ih a2 rest f hrec]
+
+/-- **The `CAPLIST` array roundtrip** (`parseCapList ∘ encodeCapList = id`) — a holder's cap list. -/
+theorem parseCapList_encode (cs : List Authority.Cap) (rest : PState) :
+    parseCapList ((encodeCapList cs).toList ++ rest) = some (cs, rest) := by
+  cases cs with
+  | nil =>
+      unfold parseCapList
+      rw [show (encodeCapList ([] : List Authority.Cap)) = "[]" from rfl]
+      rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+  | cons a as =>
+      unfold parseCapList
+      rw [encodeCapList_cons_shape a as rest]
+      have hempty : lit "[]"
+          ('[' :: ((encodeCap a).toList ++ ((encodeCapListTail as).toList ++ (']' :: rest)))) = none := by
+        obtain ⟨t, ht⟩ := encodeCap_head a
+        rw [ht, List.cons_append]
+        unfold lit
+        rw [show ("[]":String).toList = ['[', ']'] from by decide]
+        rw [litGo_cons_match, litGo_ne_head ']' [] '{' _ (by decide)]
+      rw [hempty]; simp only []
+      rw [lit_lbrack]
+      simp only []
+      apply parseCapList_loop_works as a rest
+      simp only [List.length_cons]; omega
+
+/-- The `CAPENTRY` encoder (the inline `one` lambda of `encodeCapsEntries`, named for the proof). -/
+def encodeCapEntry (p : CellId × List Authority.Cap) : String :=
+  "[" ++ toString p.1 ++ "," ++ encodeCapList p.2 ++ "]"
+
+/-- **One `CAPENTRY` `[holder,CAPLIST]` round-trips** — the holder `Nat` (post-byte `,`) then the
+`CAPLIST` via `parseCapList_encode`, then the closing `]` (`parseCapList` leaves its argument `rest`).
+Self-delimiting. -/
+theorem parseCapEntry_encode (p : CellId × List Authority.Cap) (rest : PState) :
+    parseCapEntry ((encodeCapEntry p).toList ++ rest) = some (p, rest) := by
+  obtain ⟨holder, cl⟩ := p
+  unfold parseCapEntry encodeCapEntry
+  rw [show (("[" ++ toString holder ++ "," ++ encodeCapList cl ++ "]":String).toList ++ rest)
+        = ("[":String).toList ++ ((toString holder).toList ++ (',' :: ((encodeCapList cl).toList
+            ++ (']' :: rest)))) from by
+      simp only [String.toList_append, show (",":String).toList = [','] from by decide,
+        show ("]":String).toList = [']'] from by decide, List.append_assoc, List.cons_append,
+        List.nil_append]]
+  rw [lit_append]
+  simp only []
+  rw [parseNat_toString holder _ (nd_comma _)]
+  simp only []
+  rw [show lit "," (',' :: ((encodeCapList cl).toList ++ (']' :: rest)))
+        = some ((encodeCapList cl).toList ++ (']' :: rest)) from by
+      rw [show (',' :: ((encodeCapList cl).toList ++ (']' :: rest)))
+            = ("," : String).toList ++ ((encodeCapList cl).toList ++ (']' :: rest)) from by
+          simp only [show (",":String).toList = [','] from by decide, List.cons_append,
+            List.nil_append]]
+      exact lit_append "," _]
+  simp only []
+  rw [parseCapList_encode cl (']' :: rest)]
+  simp only []
+  rw [show lit "]" (']' :: rest) = some rest from by
+        rw [show (']' :: rest) = ("]" : String).toList ++ rest from by
+          simp only [show ("]":String).toList = [']'] from by decide, List.cons_append,
+            List.nil_append]]
+        exact lit_append "]" rest]
+  simp only [Option.map_some]
+
+private def encodeCapsEntriesTail (es : List (CellId × List Authority.Cap)) : String :=
+  es.foldl (fun acc x => acc ++ "," ++ encodeCapEntry x) ""
+
+/-- A `CAPENTRY` opens with `'['` (so the list body is `[[…`, making `lit "[]"` fail). -/
+private theorem encodeCapEntry_head (p : CellId × List Authority.Cap) : ∃ t, (encodeCapEntry p).toList = '[' :: t := by
+  refine ⟨(toString p.1 ++ "," ++ encodeCapList p.2 ++ "]" : String).toList, ?_⟩
+  unfold encodeCapEntry
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl, List.cons_append,
+    List.nil_append, List.append_assoc]
+
+private theorem foldl_capsEntriesTail (es : List (CellId × List Authority.Cap)) : ∀ (acc : String),
+    es.foldl (fun s x => s ++ "," ++ encodeCapEntry x) acc
+      = acc ++ es.foldl (fun s x => s ++ "," ++ encodeCapEntry x) "" := by
+  induction es with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ encodeCapEntry b), ih ("" ++ "," ++ encodeCapEntry b)]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+private theorem encCapsEntriesTail_cons_shape (b : CellId × List Authority.Cap)
+    (bs : List (CellId × List Authority.Cap)) (rest : PState) :
+    (encodeCapsEntriesTail (b :: bs)).toList ++ rest
+      = ',' :: ((encodeCapEntry b).toList ++ ((encodeCapsEntriesTail bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeCapsEntriesTail (b :: bs) = ("" ++ "," ++ encodeCapEntry b) ++ encodeCapsEntriesTail bs from by
+      show (b :: bs).foldl (fun s x => s ++ "," ++ encodeCapEntry x) "" = _
+      rw [List.foldl_cons]; exact foldl_capsEntriesTail bs ("" ++ "," ++ encodeCapEntry b)]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+private theorem encodeCapsEntries_cons_shape (a : CellId × List Authority.Cap)
+    (as : List (CellId × List Authority.Cap)) (rest : PState) :
+    (encodeCapsEntries (a :: as)).toList ++ rest
+      = '[' :: ((encodeCapEntry a).toList ++ ((encodeCapsEntriesTail as).toList ++ (']' :: rest))) := by
+  rw [show encodeCapsEntries (a :: as) = "[" ++ encodeCapEntry a ++ encodeCapsEntriesTail as ++ "]" from by
+        show "[" ++ (fun (p : CellId × List Authority.Cap) => "[" ++ toString p.1 ++ "," ++ encodeCapList p.2 ++ "]") a
+            ++ (as.foldl (fun acc p => acc ++ "," ++ (fun (p : CellId × List Authority.Cap) => "[" ++ toString p.1 ++ "," ++ encodeCapList p.2 ++ "]") p) "") ++ "]" = _
+        rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+private theorem parseCapsEntries_loop_works : ∀ (as : List (CellId × List Authority.Cap))
+    (a : CellId × List Authority.Cap) (rest : PState) (fuel : Nat),
+    ((encodeCapEntry a).toList ++ ((encodeCapsEntriesTail as).toList ++ (']' :: rest))).length < fuel →
+    parseCapsEntries.loop fuel ((encodeCapEntry a).toList ++ ((encodeCapsEntriesTail as).toList ++ (']' :: rest)))
+      = some (a :: as, rest) := by
+  intro as
+  induction as with
+  | nil =>
+      intro a rest fuel hf
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
+      rw [show (encodeCapsEntriesTail ([] : List (CellId × List Authority.Cap))).toList = [] from rfl, List.nil_append]
+      unfold parseCapsEntries.loop
+      rw [parseCapEntry_encode a (']' :: rest)]
+      simp only []
+      rw [show lit "," (']' :: rest) = none from by
+            rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+            exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+      simp only []
+      rw [lit_brack]
+  | cons a2 as2 ih =>
+      intro a rest fuel hf
+      rw [encCapsEntriesTail_cons_shape a2 as2 (']' :: rest)] at hf ⊢
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by
+        simp only [List.length_append, List.length_cons] at hf; omega⟩
+      unfold parseCapsEntries.loop
+      rw [parseCapEntry_encode a _]
+      simp only []
+      rw [lit_commaC]
+      simp only []
+      have hrec : ((encodeCapEntry a2).toList ++ ((encodeCapsEntriesTail as2).toList ++ (']' :: rest))).length < f := by
+        simp only [List.length_append, List.length_cons] at hf ⊢; omega
+      rw [ih a2 rest f hrec]
+
+/-- **FILL J production (k): the `CAPS` table roundtrip** (`parseCapsEntries ∘ encodeCapsEntries = id`) —
+the STATE DECODER's capability store: `(holder, capList)` entries, each cap a `null`/`node`/`ep` sum (the
+`ep` arm carrying a narrow AUTHS rights array via §8). No `Wf` hypothesis (all `Nat`/narrow-tag). -/
+theorem parseCapsEntries_encode (es : List (CellId × List Authority.Cap)) (rest : PState) :
+    parseCapsEntries ((encodeCapsEntries es).toList ++ rest) = some (es, rest) := by
+  cases es with
+  | nil =>
+      unfold parseCapsEntries
+      rw [show (encodeCapsEntries ([] : List (CellId × List Authority.Cap))) = "[]" from rfl]
+      rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+  | cons a as =>
+      unfold parseCapsEntries
+      rw [encodeCapsEntries_cons_shape a as rest]
+      have hempty : lit "[]"
+          ('[' :: ((encodeCapEntry a).toList ++ ((encodeCapsEntriesTail as).toList ++ (']' :: rest)))) = none := by
+        obtain ⟨t, ht⟩ := encodeCapEntry_head a
+        rw [ht, List.cons_append]
+        unfold lit
+        rw [show ("[]":String).toList = ['[', ']'] from by decide]
+        rw [litGo_cons_match, litGo_ne_head ']' [] '[' _ (by decide)]
+      rw [hempty]; simp only []
+      rw [lit_lbrack]
+      simp only []
+      apply parseCapsEntries_loop_works as a rest
+      simp only [List.length_cons]; omega
+
+/-! ## §11d — the per-node `CAVEATS` array (`parseCaveatsW`) roundtrip — the SOUNDNESS-FIX discharge leg
+(§W5c). The transported tiered caveat thread that gives `caveatsDischarged` real teeth over the swap
+boundary. Length-fuel loop (§10/§11 template); the element is the SELF-DELIMITING `[tier,cell,asset,min]`
+tuple (`parseCaveatW`), where `tier ∈ {0,1,2,3}` (the `DriftStable.DriftTier` ordinal) is the codec's ONE
+boundary constraint — the parser's `if tier > 3 then none` guard rejects an out-of-range tier, so the
+roundtrip carries a per-element `WfCaveat` (`c.tier ≤ 3`), exactly the §1-`WfValue`/§6-`WfAuthList`
+boundary discipline. (`cell`/`asset` are unconstrained `Nat`; `min` is signed `Int` via `cI`.) A
+caveat-codec bug — a dropped tier, a sign flip on the threshold, a mis-bracketed body — is now caught. -/
+
+/-- The per-caveat well-formedness boundary: the `tier` ordinal is in `{0,1,2,3}` (the four
+`DriftStable.DriftTier` levels). This is exactly the constraint `parseCaveatW`'s `if tier > 3` guard
+pins; the encoder writes the tier verbatim, so the round-trip holds precisely on well-formed tiers. -/
+def WfCaveat (c : WCaveat) : Prop := c.tier ≤ 3
+
+/-- A `CAVEATS` array is well-formed iff every caveat is (every `tier ∈ {0,1,2,3}`). -/
+def WfCaveats : List WCaveat → Prop
+  | []      => True
+  | c :: cs => WfCaveat c ∧ WfCaveats cs
+
+set_option maxHeartbeats 1000000 in
+/-- **The `WCAVEAT` entry roundtrip** — the 4-field tuple `[tier,cell,asset,min]`. The leading `tier`
+walks via `parseNat` (post-byte `,`); its `if tier > 3` guard is discharged `else`-ward by `htier`
+(`c.tier ≤ 3`, so `¬ (3 < c.tier)`). The `cell`/`asset` `Nat`s and signed `min` `Int` walk via
+`cN_step`/`cI_step` (post-byte `,`/`]`); self-delimiting, so it round-trips for ANY tail. -/
+theorem parseCaveatW_encode (c : WCaveat) (rest : PState) (htier : WfCaveat c) :
+    parseCaveatW ((encodeCaveatW c).toList ++ rest) = some (c, rest) := by
+  unfold parseCaveatW encodeCaveatW WfCaveat at *
+  simp only [String.toList_append, List.append_assoc]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseNat_toString c.tier _ (nd_litComma _)]; simp only [Option.bind]
+  rw [if_neg (by omega : ¬ c.tier > 3)]
+  simp only [cN_step _ _ (nd_litComma _), cI_step _ _ (nd_litBrack _), Option.bind_eq_bind, Option.bind]
+  rw [lit_append]
+
+private def encodeCaveatsWTail (cs : List WCaveat) : String :=
+  cs.foldl (fun acc x => acc ++ "," ++ encodeCaveatW x) ""
+
+/-- A `WCAVEAT` entry opens with `'['` (so the list body is `[[…`, making `lit "[]"` fail). Explicit
+witness ⇒ no metavar. -/
+private theorem encodeCaveatW_head (c : WCaveat) : ∃ t, (encodeCaveatW c).toList = '[' :: t := by
+  refine ⟨(toString c.tier ++ "," ++ toString c.cell ++ "," ++ toString c.asset ++ ","
+    ++ toString c.min ++ "]" : String).toList, ?_⟩
+  unfold encodeCaveatW
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl, List.cons_append,
+    List.nil_append, List.append_assoc]
+
+private theorem foldl_caveatsWTail (cs : List WCaveat) : ∀ (acc : String),
+    cs.foldl (fun s x => s ++ "," ++ encodeCaveatW x) acc
+      = acc ++ cs.foldl (fun s x => s ++ "," ++ encodeCaveatW x) "" := by
+  induction cs with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ encodeCaveatW b), ih ("" ++ "," ++ encodeCaveatW b)]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+private theorem encCaveatsWTail_cons_shape (b : WCaveat) (bs : List WCaveat) (rest : PState) :
+    (encodeCaveatsWTail (b :: bs)).toList ++ rest
+      = ',' :: ((encodeCaveatW b).toList ++ ((encodeCaveatsWTail bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeCaveatsWTail (b :: bs) = ("" ++ "," ++ encodeCaveatW b) ++ encodeCaveatsWTail bs from by
+      show (b :: bs).foldl (fun s x => s ++ "," ++ encodeCaveatW x) "" = _
+      rw [List.foldl_cons]; exact foldl_caveatsWTail bs ("" ++ "," ++ encodeCaveatW b)]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+private theorem encodeCaveatsW_cons_shape (a : WCaveat) (as : List WCaveat) (rest : PState) :
+    (encodeCaveatsW (a :: as)).toList ++ rest
+      = '[' :: ((encodeCaveatW a).toList ++ ((encodeCaveatsWTail as).toList ++ (']' :: rest))) := by
+  rw [show encodeCaveatsW (a :: as) = "[" ++ encodeCaveatW a ++ encodeCaveatsWTail as ++ "]" from rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+set_option maxHeartbeats 1000000 in
+/-- **The loop recovers the caveat list**, given the `input.length < fuel` invariant AND that every
+caveat is well-formed (each `tier ≤ 3`, threaded through `parseCaveatW_encode`). By induction on the
+tail (the head `a` generalized); the recursive call lands at `fuel-1` with strictly-shorter input. -/
+private theorem parseCaveatsW_loop_works : ∀ (as : List WCaveat) (a : WCaveat)
+    (rest : PState) (fuel : Nat), WfCaveat a → WfCaveats as →
+    ((encodeCaveatW a).toList ++ ((encodeCaveatsWTail as).toList ++ (']' :: rest))).length < fuel →
+    parseCaveatsW.loop fuel ((encodeCaveatW a).toList ++ ((encodeCaveatsWTail as).toList ++ (']' :: rest)))
+      = some (a :: as, rest) := by
+  intro as
+  induction as with
+  | nil =>
+      intro a rest fuel hwfa _ hf
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
+      rw [show (encodeCaveatsWTail ([] : List WCaveat)).toList = [] from rfl, List.nil_append]
+      unfold parseCaveatsW.loop
+      rw [parseCaveatW_encode a (']' :: rest) hwfa]
+      simp only []
+      rw [show lit "," (']' :: rest) = none from by
+            rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+            exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+      simp only []
+      rw [lit_brack]
+  | cons a2 as2 ih =>
+      intro a rest fuel hwfa hwfas hf
+      obtain ⟨hwfa2, hwfas2⟩ : WfCaveat a2 ∧ WfCaveats as2 := hwfas
+      rw [encCaveatsWTail_cons_shape a2 as2 (']' :: rest)] at hf ⊢
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by
+        simp only [List.length_append, List.length_cons] at hf; omega⟩
+      unfold parseCaveatsW.loop
+      rw [parseCaveatW_encode a _ hwfa]
+      simp only []
+      rw [lit_commaC]
+      simp only []
+      have hrec : ((encodeCaveatW a2).toList ++ ((encodeCaveatsWTail as2).toList ++ (']' :: rest))).length < f := by
+        simp only [List.length_append, List.length_cons] at hf ⊢; omega
+      rw [ih a2 rest f hwfa2 hwfas2 hrec]
+
+set_option maxHeartbeats 1000000 in
+/-- **FILL J production (l): the per-node `CAVEATS` array roundtrip** (`parseCaveatsW ∘ encodeCaveatsW =
+id`) — the SOUNDNESS-FIX discharge leg (§W5c). The transported tiered caveat thread, round-tripped
+FAITHFULLY (every `tier ∈ {0,1,2,3}` via `WfCaveats`; a dropped tier / sign-flipped threshold is caught),
+so a violated caveat fail-closes the gate over the swap boundary. -/
+theorem parseCaveatsW_encode (cs : List WCaveat) (rest : PState) (hwf : WfCaveats cs) :
+    parseCaveatsW ((encodeCaveatsW cs).toList ++ rest) = some (cs, rest) := by
+  cases cs with
+  | nil =>
+      unfold parseCaveatsW
+      rw [show (encodeCaveatsW ([] : List WCaveat)) = "[]" from rfl]
+      rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+  | cons a as =>
+      obtain ⟨hwfa, hwfas⟩ : WfCaveat a ∧ WfCaveats as := hwf
+      unfold parseCaveatsW
+      rw [encodeCaveatsW_cons_shape a as rest]
+      have hempty : lit "[]"
+          ('[' :: ((encodeCaveatW a).toList ++ ((encodeCaveatsWTail as).toList ++ (']' :: rest)))) = none := by
+        obtain ⟨t, ht⟩ := encodeCaveatW_head a
+        rw [ht, List.cons_append]
+        unfold lit
+        rw [show ("[]":String).toList = ['[', ']'] from by decide]
+        rw [litGo_cons_match, litGo_ne_head ']' [] '[' _ (by decide)]
+      rw [hempty]; simp only []
+      rw [lit_lbrack]
+      simp only []
+      apply parseCaveatsW_loop_works as a rest _ hwfa hwfas
+      simp only [List.length_cons]; omega
+
+/-- NON-VACUITY: a real tiered caveat list round-trips (a `.locked`/tier-2 threshold and a `.monotone`/
+tier-0 read, the `min` a NEGATIVE bound — the sign is load-bearing). -/
+example : parseCaveatsW ((encodeCaveatsW
+    [{ tier := 2, cell := 7, asset := 3, min := -5 }, { tier := 0, cell := 1, asset := 1, min := 9 }]).toList
+      ++ ['x'])
+    = some ([{ tier := 2, cell := 7, asset := 3, min := -5 }, { tier := 0, cell := 1, asset := 1, min := 9 }], ['x']) :=
+  -- `WfCaveats [c₁,c₂]` is DEFINITIONALLY `c₁.tier ≤ 3 ∧ c₂.tier ≤ 3 ∧ True`; give each leaf as the
+  -- bare `≤` (whnf checks it against the folded `WfCaveat` — avoids needing a `Decidable (WfCaveat …)`).
+  parseCaveatsW_encode _ ['x'] ⟨(by decide : (2:Nat) ≤ 3), (by decide : (0:Nat) ≤ 3), trivial⟩
+
+/-! ## §15 — the RECURSIVE action-TREE (`parseForestW`/`parseChildrenW`) roundtrip — FILL-J production
+(the call-FOREST + delegation edges). THE hardest production: a four-way mutual recursion (`parseForestW`
+/ `parseChildrenW` / `parseChildrenLoopW` / `parseChildW`), each fuel-bounded for structural termination.
+A node `{"auth":AUTH,"caveats":WCAVEATS,"action":ACTIONW,"children":KIDS}` carries the per-node credential
+(§6 `parseAuthW_roundtrip`, the WHO), the tiered caveats (§11d `parseCaveatsW_encode`, the discharge leg),
+the 51-arm action (§7 `parseActionW_roundtrip`/`_setfield`, the WHAT), and the delegated children, each a
+`{"holder":N,"keep":AUTHS,"cap":CAP,"sub":NODE}` edge carrying its attenuation `keep` (§8
+`parseAuths_encode`), the delegated `parentCap` (§13 `parseCap_encode`), and the recursive sub-tree.
+
+It mirrors §6's `authGoal_all` exactly: a bundled mutual goal (forest / children-list / children-loop),
+strong-induction on fuel, the recursive `children` arm threading fuel through the edge list as §6's
+`oneOf` threads it through the candidate list. The ONE structural delta from §6 is the EXTRA `parseChildW`
+fuel layer between the children-loop and the recursive `parseForestW` call: the loop decrements once to
+reach `parseChildW`, which decrements again to reach `parseForestW`. So `childrenSize` charges `+2` per
+edge (vs §6's `+1`), guaranteeing two fuel units survive each descent. A symmetric codec bug anywhere in
+the tree — a forged credential on a deep node, a dropped delegation edge, a mis-bracketed sub-tree —
+passes the differential silently; this theorem, pinning `parseForestW` as the genuine left-inverse of
+`encodeForestW`, catches it, removing the whole action-tree codec from the Lean-side TCB. -/
+
+/-! ### §15a — well-formedness (the codec boundary, mutual over the tree). The node's `auth` carries the
+§6 `WfAuth` boundary (digests `< 2^256`), its `caveats` the §11d `WfCaveats` (`tier ≤ 3`), and its
+`action` an escape-free `setFieldA` field name (every other arm is unconstrained); children recurse. -/
+
+/-- The per-node ACTION boundary: a `setFieldA` field name must be escape-free (no `"`/`\`), exactly the
+§7 `parseActionW_setfield` hypothesis; every other (`simple`) arm is unconstrained. -/
+def WfActionW : TurnExecutorFull.FullActionA → Prop
+  | .setFieldA _ _ field _ => ∀ c ∈ field.toList, c ≠ '"' ∧ c ≠ '\\'
+  | _                      => True
+
+/-- **`parseActionW` inverts `encodeActionW` on EVERY arm** — the `simple` arms via §7's
+`parseActionW_roundtrip`, the `setFieldA` arm via §7's `parseActionW_setfield` (under its escape-free
+`WfActionW`). The unified WHAT-decoder leaf the node element calls. -/
+theorem parseActionW_any (act : TurnExecutorFull.FullActionA) (rest : PState) (hwf : WfActionW act) :
+    parseActionW ((encodeActionW act).toList ++ rest) = some (act, rest) := by
+  cases act with
+  | setFieldA actor cell field v => exact parseActionW_setfield actor cell field v rest hwf
+  | _ => exact parseActionW_roundtrip _ rest rfl
+
+mutual
+/-- Well-formed `WForest`: a well-formed credential (§6), well-formed caveats (§11d), a well-formed action
+(escape-free `setFieldA` name), and well-formed children (recursively). Constructor-pattern form (the
+structural recursion the termination checker needs sees `sub`/`kids` as subterms). -/
+def WfForest : WForest → Prop
+  | ⟨na, cavs, a, kids⟩ => WfAuth na ∧ WfCaveats cavs ∧ WfActionW a ∧ WfChildren kids
+/-- Well-formed child-edge list: each edge's sub-tree is well-formed (the `keep`/`parentCap` are narrow
+total codecs — no boundary). -/
+def WfChildren : List WChild → Prop
+  | []                  => True
+  | ⟨_, _, _, sub⟩ :: cs => WfForest sub ∧ WfChildren cs
+end
+
+/-! ### §15b — the structural fuel measure (mutual). Each EDGE charges `+2` (the children-loop +
+`parseChildW` double fuel descent to the recursive sub-tree), plus the sub-tree's own size; the node
+charges `+1` over its credential and children. The fuel-adequacy: this measure DOMINATES the parse depth,
+so each `fuel=0`/decremented sub-call lands with fuel to spare. -/
+mutual
+/-- Structural size of a `WForest`: `1 + authSize auth + childrenSize children`. Constructor-pattern form. -/
+def forestSize : WForest → Nat
+  | ⟨na, _, _, kids⟩ => 1 + authSize na + childrenSize kids
+/-- Structural size of a child-edge list: `Σ (2 + forestSize sub)` (the `+2` covers the two fuel layers
+between the children-loop and the recursive `parseForestW`). -/
+def childrenSize : List WChild → Nat
+  | []                  => 0
+  | ⟨_, _, _, sub⟩ :: cs => 2 + forestSize sub + childrenSize cs
+end
+
+/-! ### §15c — the EDGE-list (KIDS) tail encoder normalized into peelable cons form (mirroring §6d). -/
+
+/-- The `KIDS` tail encoder (the `foldl` body in cons-recursive form). -/
+private def encodeChildrenTailW (cs : List WChild) : String :=
+  cs.foldl (fun acc x => acc ++ "," ++ encodeChildW x) ""
+
+/-- Every `encodeChildW` edge opens with `'{'` — the head making `lit "[]"` fail on a `[{`-led KIDS body.
+Explicit witness ⇒ no metavar. -/
+private theorem encodeChildW_head (c : WChild) : ∃ t, (encodeChildW c).toList = '{' :: t := by
+  obtain ⟨h, k, pc, sub⟩ := c
+  refine ⟨("\"holder\":" ++ toString h ++ ",\"keep\":" ++ encodeAuthsW k ++ ",\"cap\":" ++ encodeCap pc
+    ++ ",\"sub\":" ++ encodeForestW sub ++ "}" : String).toList, ?_⟩
+  show (encodeChildW ⟨h, k, pc, sub⟩).toList = _
+  unfold encodeChildW
+  simp only [String.toList_append, show ("{\"holder\":":String).toList = '{' :: "\"holder\":".toList from by decide,
+    List.cons_append, List.nil_append, List.append_assoc]
+
+/-- The accumulator pulls OUT of the tail fold (`List Char`-level, mirroring `foldl_authtail`). -/
+private theorem foldl_childrenTailW (cs : List WChild) : ∀ (acc : String),
+    cs.foldl (fun s x => s ++ "," ++ encodeChildW x) acc
+      = acc ++ cs.foldl (fun s x => s ++ "," ++ encodeChildW x) "" := by
+  induction cs with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ encodeChildW b), ih ("" ++ "," ++ encodeChildW b)]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+/-- Rebracket a NON-EMPTY edge TAIL `,EDGE ++ TAIL` into comma-then-edge-then-tail (peelable). -/
+private theorem encChildrenTailW_cons_shape (b : WChild) (bs : List WChild) (rest : PState) :
+    (encodeChildrenTailW (b :: bs)).toList ++ rest
+      = ',' :: ((encodeChildW b).toList ++ ((encodeChildrenTailW bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeChildrenTailW (b :: bs)
+      = ("" ++ "," ++ encodeChildW b) ++ encodeChildrenTailW bs from by
+      show (b :: bs).foldl (fun s x => s ++ "," ++ encodeChildW x) "" = _
+      rw [List.foldl_cons]; exact foldl_childrenTailW bs ("" ++ "," ++ encodeChildW b)]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+/-- Rebracket a NON-EMPTY edge LIST `[EDGE ++ TAIL ++ ]` into open-`[`-then-body form. -/
+private theorem encodeChildrenW_cons_shape (a : WChild) (as : List WChild) (rest : PState) :
+    (encodeChildrenW (a :: as)).toList ++ rest
+      = '[' :: ((encodeChildW a).toList ++ ((encodeChildrenTailW as).toList ++ (']' :: rest))) := by
+  conv_lhs => rw [show encodeChildrenW (a :: as)
+                = "[" ++ encodeChildW a ++ encodeChildrenTailW as ++ "]" from by
+              unfold encodeChildrenW; rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+/-! ### §15d — the NODE/EDGE `do`-block element shapes (rebracket into the parser-step sequence).
+
+`encodeForestW`/`encodeChildW` are `String ++` chains; we rebracket each into the right-associated
+`tag ++ (field ++ (sep ++ …))` form the `lit`/sub-parse steps consume. Following §11's perf gotchas: a
+single `String.toList_append`/`List.append_assoc` `simp only` (NOT full `simp`) right-associates the
+whole chain, and the closing `}` is exposed as `'}' :: rest`. -/
+
+/-- Rebracket the NODE encoding into the `{"auth":` ++ AUTH ++ ,"caveats": ++ … sequence. -/
+private theorem encForestW_node_shape (na : AuthW) (cavs : List WCaveat) (a : TurnExecutorFull.FullActionA)
+    (kids : List WChild) (rest : PState) :
+    (encodeForestW ⟨na, cavs, a, kids⟩).toList ++ rest
+      = ("{\"auth\":":String).toList ++ ((encodeAuthW na).toList
+          ++ ((",\"caveats\":":String).toList ++ ((encodeCaveatsW cavs).toList
+          ++ ((",\"action\":":String).toList ++ ((encodeActionW a).toList
+          ++ ((",\"children\":":String).toList ++ ((encodeChildrenW kids).toList
+          ++ ('}' :: rest)))))))) := by
+  show (encodeForestW ⟨na, cavs, a, kids⟩).toList ++ rest = _
+  unfold encodeForestW
+  simp only [String.toList_append, show ("}":String).toList = ['}'] from by decide,
+    List.append_assoc, List.cons_append, List.nil_append]
+
+/-- Rebracket one EDGE encoding into the `{"holder":` ++ N ++ ,"keep": ++ … sequence. -/
+private theorem encChildW_edge_shape (h : CellId) (k : List Authority.Auth) (pc : Authority.Cap)
+    (sub : WForest) (rest : PState) :
+    (encodeChildW ⟨h, k, pc, sub⟩).toList ++ rest
+      = ("{\"holder\":":String).toList ++ ((toString h).toList
+          ++ ((",\"keep\":":String).toList ++ ((encodeAuthsW k).toList
+          ++ ((",\"cap\":":String).toList ++ ((encodeCap pc).toList
+          ++ ((",\"sub\":":String).toList ++ ((encodeForestW sub).toList
+          ++ ('}' :: rest)))))))) := by
+  show (encodeChildW ⟨h, k, pc, sub⟩).toList ++ rest = _
+  unfold encodeChildW
+  simp only [String.toList_append, show ("}":String).toList = ['}'] from by decide,
+    List.append_assoc, List.cons_append, List.nil_append]
+
+/-! ### §15e — the bundled fuel-adequate roundtrip (forest / children-list / children-loop, by strong
+induction on fuel). Mirrors §6e: establish the LOOP clause (depends on the IH at strictly-smaller fuel
+through `parseChildW`'s sub-tree call), then the LIST clause re-uses it at the same fuel, then the FOREST
+clause runs the node `do`-block (auth §6 → caveats §11d → action §7 → children via the LIST clause). -/
+
+/-- The bundled mutual goal at a given fuel: the forest parser, the children-list parser, and the
+children-loop body all recover their argument whenever the fuel meets the `forestSize`/`childrenSize`
+bound. The loop clause is stated over the loop BODY (post opening-`[`): the first edge, the
+comma-prefixed tail, then the closing `]`. -/
+private def ForestGoal (fuel : Nat) : Prop :=
+  (∀ (f : WForest) (rest : PState), WfForest f → forestSize f ≤ fuel →
+      parseForestW fuel ((encodeForestW f).toList ++ rest) = some (f, rest))
+  ∧ (∀ (cs : List WChild) (rest : PState), WfChildren cs → childrenSize cs ≤ fuel →
+      parseChildrenW fuel ((encodeChildrenW cs).toList ++ rest) = some (cs, rest))
+  ∧ (∀ (a : WChild) (as' : List WChild) (rest : PState), WfForest a.sub → WfChildren as' →
+        childrenSize (a :: as') ≤ fuel →
+      parseChildrenLoopW fuel ((encodeChildW a).toList ++ ((encodeChildrenTailW as').toList ++ (']' :: rest)))
+        = some (a :: as', rest))
+
+set_option maxHeartbeats 1000000 in
+/-- **The combined action-TREE fuel-adequate roundtrip.** By STRONG induction on fuel; each recursive
+sub-call lands at strictly-smaller fuel (the `+2` edge charge guarantees the `parseChildW`→`parseForestW`
+double descent stays funded), so the IH applies. The engine; the public `parseForestW_roundtrip` /
+`parseChildrenW_roundtrip` below unwrap it. -/
+private theorem forestGoal_all : ∀ fuel, ForestGoal fuel := by
+  intro fuel
+  induction fuel using Nat.strong_induction_on with
+  | _ fuel IH =>
+    -- LOOP clause first (depends only on IH at strictly-smaller fuel through `parseChildW`).
+    have hloop : ∀ (a : WChild) (as' : List WChild) (rest : PState), WfForest a.sub → WfChildren as' →
+        childrenSize (a :: as') ≤ fuel →
+        parseChildrenLoopW fuel ((encodeChildW a).toList ++ ((encodeChildrenTailW as').toList ++ (']' :: rest)))
+          = some (a :: as', rest) := by
+      intro a as' rest hwfa hwfas hsz
+      obtain ⟨h, k, pc, sub⟩ := a
+      -- `childrenSize (⟨h,k,pc,sub⟩::as')` reduces DEFINITIONALLY (constructor match) to the RHS:
+      have hsz' : 2 + forestSize sub + childrenSize as' ≤ fuel := hsz
+      -- two fuel layers: loop (g+1) → childW (g) where g ≥ 1 + forestSize sub + ...
+      obtain ⟨g, rfl⟩ : ∃ k', fuel = k' + 1 := ⟨fuel - 1, by omega⟩
+      unfold parseChildrenLoopW
+      -- the loop's `parseChildW g` step: rebracket the edge, walk holder/keep/cap, then the sub-tree.
+      obtain ⟨g', rfl⟩ : ∃ k', g = k' + 1 := ⟨g - 1, by omega⟩
+      have hsubfuel : forestSize sub ≤ g' := by omega
+      have hparseChild : parseChildW (g' + 1) ((encodeChildW ⟨h, k, pc, sub⟩).toList
+            ++ ((encodeChildrenTailW as').toList ++ (']' :: rest)))
+          = some (⟨h, k, pc, sub⟩, ((encodeChildrenTailW as').toList ++ (']' :: rest))) := by
+        unfold parseChildW
+        rw [encChildW_edge_shape h k pc sub ((encodeChildrenTailW as').toList ++ (']' :: rest))]
+        rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+        rw [parseNat_toString h _ (Or.inr ⟨',', _, by
+              rw [show (",\"keep\":":String).toList = ',' :: ("\"keep\":":String).toList from by decide]; rfl,
+            by decide⟩)]
+        simp only [Option.bind_eq_bind, Option.bind]
+        rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+        rw [show parseAuthsW = parseAuths from rfl, show encodeAuthsW k = encodeAuths k from rfl,
+            parseAuths_encode k _]
+        simp only [Option.bind_eq_bind, Option.bind]
+        rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+        rw [parseCap_encode pc _]; simp only [Option.bind_eq_bind, Option.bind]
+        rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+        -- the recursive sub-tree via the IH at g' < g'+1 = g < g+1 = fuel:
+        rw [(IH g' (by omega)).1 sub _ hwfa hsubfuel]
+        simp only [Option.bind_eq_bind, Option.bind]
+        rw [lit_brace]
+      rw [hparseChild]
+      simp only []
+      cases as' with
+      | nil =>
+          simp only [show (encodeChildrenTailW ([] : List WChild)).toList = [] from rfl, List.nil_append]
+          rw [show lit "," (']' :: rest) = none from by
+                rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+                exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+          simp only []
+          rw [lit_brack]
+      | cons a2 as2 =>
+          obtain ⟨h2, k2, pc2, sub2⟩ := a2
+          -- `WfChildren (⟨..⟩::as2)` / `childrenSize (⟨..⟩::as2)` now reduce (constructor match):
+          obtain ⟨hwfa2, hwfas2⟩ : WfForest sub2 ∧ WfChildren as2 := hwfas
+          rw [encChildrenTailW_cons_shape ⟨h2, k2, pc2, sub2⟩ as2 (']' :: rest), lit_commaC]
+          simp only []
+          -- the loop RECURSES at `g'+1` (`parseChildrenLoopW (g+1)` calls `parseChildrenLoopW g`, g=g'+1):
+          have hszrec : childrenSize (⟨h2, k2, pc2, sub2⟩ :: as2) ≤ g' + 1 := by
+            have hh : 2 + forestSize sub + (2 + forestSize sub2 + childrenSize as2) ≤ g' + 1 + 1 := hsz'
+            show 2 + forestSize sub2 + childrenSize as2 ≤ g' + 1
+            omega
+          rw [(IH (g' + 1) (by omega)).2.2 ⟨h2, k2, pc2, sub2⟩ as2 rest hwfa2 hwfas2 hszrec]
+    -- LIST clause (re-uses `hloop` at the SAME fuel).
+    have hlistW : ∀ (cs : List WChild) (rest : PState), WfChildren cs → childrenSize cs ≤ fuel →
+        parseChildrenW fuel ((encodeChildrenW cs).toList ++ rest) = some (cs, rest) := by
+      intro cs rest hwf hsz
+      match cs with
+      | [] =>
+          unfold parseChildrenW
+          simp only [encodeChildrenW]
+          rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+      | a :: as' =>
+          obtain ⟨h, k, pc, sub⟩ := a
+          obtain ⟨hwfa, hwfas⟩ : WfForest sub ∧ WfChildren as' := hwf
+          unfold parseChildrenW
+          rw [encodeChildrenW_cons_shape ⟨h, k, pc, sub⟩ as' rest]
+          have hempty : lit "[]"
+              ('[' :: ((encodeChildW ⟨h, k, pc, sub⟩).toList ++ ((encodeChildrenTailW as').toList ++ (']' :: rest)))) = none := by
+            obtain ⟨t, ht⟩ := encodeChildW_head ⟨h, k, pc, sub⟩
+            rw [ht, List.cons_append]; rfl
+          rw [hempty]; simp only []
+          rw [lit_lbrack]
+          exact hloop ⟨h, k, pc, sub⟩ as' rest hwfa hwfas hsz
+    refine ⟨?_, hlistW, hloop⟩
+    -- FOREST clause: the node `do`-block (auth §6 → caveats §11d → action §7 → children via `hlistW`).
+    intro f rest hwf hsz
+    obtain ⟨na, cavs, a, kids⟩ := f
+    -- `WfForest ⟨..⟩` / `forestSize ⟨..⟩` reduce DEFINITIONALLY (constructor match):
+    obtain ⟨hwfna, hwfcavs, hwfa, hwfkids⟩ : WfAuth na ∧ WfCaveats cavs ∧ WfActionW a ∧ WfChildren kids := hwf
+    have hsz' : 1 + authSize na + childrenSize kids ≤ fuel := hsz
+    obtain ⟨f', rfl⟩ : ∃ k', fuel = k' + 1 := ⟨fuel - 1, by omega⟩
+    have hnafuel : authSize na ≤ f' := by omega
+    have hkidsfuel : childrenSize kids ≤ f' := by omega
+    unfold parseForestW
+    rw [encForestW_node_shape na cavs a kids rest]
+    rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+    -- auth via §6 (parser calls `parseAuthW f'`; the IH-independent public roundtrip suffices):
+    rw [parseAuthW_roundtrip na _ hwfna f' hnafuel]
+    simp only [Option.bind_eq_bind, Option.bind]
+    rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+    -- caveats via §11d:
+    rw [parseCaveatsW_encode cavs _ hwfcavs]; simp only [Option.bind_eq_bind, Option.bind]
+    rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+    -- action via §7 (the unified leaf):
+    rw [parseActionW_any a _ hwfa]; simp only [Option.bind_eq_bind, Option.bind]
+    rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+    -- children: the parser calls `parseChildrenW f'` (DECREMENTED) — use the IH's LIST clause at `f'`:
+    rw [(IH f' (by omega)).2.1 kids _ hwfkids hkidsfuel]; simp only [Option.bind_eq_bind, Option.bind]
+    rw [lit_brace]
+
+/-! ### §15f — the public FILL-J action-TREE roundtrip facts (the call-forest decoder leaves the TCB). -/
+
+/-- **FILL J production (the action-TREE): the FULL `WForest` roundtrip.** Every well-formed action tree —
+including the recursive delegated children — round-trips through `encodeForestW`/`parseForestW`, given
+fuel `≥ forestSize f` (the structural tree-depth bound). The node's credential (§6), caveats (§11d),
+action (§7), and each child's `keep`/`parentCap` (§8/§13) round-trip; the recursion is REAL (children call
+back into the forest parser). This REMOVES the whole action-tree codec — the call-forest the wholesale
+swap marshals — from the Lean-side TCB. -/
+theorem parseForestW_roundtrip (f : WForest) (rest : PState) (hwf : WfForest f) (fuel : Nat)
+    (hfuel : forestSize f ≤ fuel) :
+    parseForestW fuel ((encodeForestW f).toList ++ rest) = some (f, rest) :=
+  (forestGoal_all fuel).1 f rest hwf hfuel
+
+/-- **The KIDS (children edge-list) roundtrip** (`parseChildrenW ∘ encodeChildrenW = id`) — the delegation
+edges, empty or non-empty, given fuel `≥ childrenSize cs`. -/
+theorem parseChildrenW_roundtrip (cs : List WChild) (rest : PState) (hwf : WfChildren cs) (fuel : Nat)
+    (hfuel : childrenSize cs ≤ fuel) :
+    parseChildrenW fuel ((encodeChildrenW cs).toList ++ rest) = some (cs, rest) :=
+  (forestGoal_all fuel).2.1 cs rest hwf hfuel
+
+/-! ### NON-VACUITY witnesses for the action-tree decoder (the recursion + every node field are real). -/
+
+/-- A well-formedness proof for the §W5-eval `demoTree` (the 2-level tree with a credential + caveat on
+each node): every digest `< 2^256`, every tier `≤ 3`, every action `simple`. -/
+private theorem demoTree_wf : WfForest demoTree :=
+  -- the nested `And` of `WfForest`/`WfChildren`/`WfCaveats` (anonymous-ctor notation whnf-reduces each
+  -- mutual def against the expected type); the two `2^256` digest bounds are `signature 7`/`token 3`,
+  -- the one caveat tier is `0 ≤ 3` (each leaf `show`n in its unfolded `WfAuth`/`WfCaveat` form).
+  ⟨show (7:Nat) < 2^256 by norm_num, ⟨show (0:Nat) ≤ 3 by decide, trivial⟩, trivial,
+    ⟨show (3:Nat) < 2^256 by norm_num, trivial, trivial,
+      ⟨⟨trivial, trivial, trivial, trivial⟩, trivial⟩⟩, trivial⟩
+
+-- The whole `demoTree` round-trips through the wire (the recursion is real — the root's child + grandchild
+-- each call back into the forest parser; fuel `forestSize demoTree` is adequate):
+example : parseForestW (forestSize demoTree) ((encodeForestW demoTree).toList ++ ['x'])
+            = some (demoTree, ['x']) :=
+  parseForestW_roundtrip demoTree ['x'] demoTree_wf (forestSize demoTree) (le_refl _)
+
+/-! ## §14 — the WIDE STATE record (`parseWState`) roundtrip — THE STATE DECODER (the differential's
+core). The 9-field `do`-block assembling every side-table proved above: cells (§12), caps (§13),
+bal (§10), escrows (§11), nullifiers/commitments/revoked (§9), queues (§11b), swiss (§11c). Strict on
+field ORDER + the closing `}`. Carries one `Wf` hypothesis (`WfCells w.cells`, the §1 value boundary on
+the cell payloads); every other field is a total-codec side-table. Fuel-adequate whenever the outer fuel
+exceeds the encoded width (the `parseWWire` caller passes the whole-input length). -/
+
+set_option maxHeartbeats 2000000 in
+/-- **FILL J production (the STATE DECODER): the WIDE STATE record roundtrip**
+(`parseWState ∘ encodeWState = id`) — the post-state object the differential re-decodes. Composes the
+nine side-table roundtrips through the `do`-block: each `lit ",\"field\":"` is a clean literal consume;
+each field arm is its proved leaf; the cells loop's outer fuel is met by the width hypothesis. This
+removes the STATE codec — the heart of the wholesale-swap differential — from the Lean-side TCB. -/
+theorem parseWState_encode (w : WState) (rest : PState) (hwf : WfCells w.cells) (fuel : Nat)
+    (hf : ((encodeWState w).toList ++ rest).length ≤ fuel) :
+    parseWState fuel ((encodeWState w).toList ++ rest) = some (w, rest) := by
+  obtain ⟨cells, caps, bal, escrows, nullifiers, commitments, queues, swiss, revoked⟩ := w
+  unfold parseWState
+  -- unfold `encodeWState` in BOTH `hf` and the goal (so the width hypothesis expands to the SAME
+  -- field-length sum the per-field fuel obligations reference; `unfold` alone misses `hf`).
+  simp only [encodeWState, String.toList_append, List.append_assoc] at hf ⊢
+  -- open `{"cells":`, then the cells store (outer fuel ≥ width)
+  rw [lit_append]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseCellsW_encode cells _ hwf fuel (by
+    simp only [List.length_append] at hf ⊢; omega)]
+  simp only [Option.bind_eq_bind, Option.bind]
+  -- the remaining 8 fields: each a clean `lit ",\"field\":"` then its proved leaf
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseCapsEntries_encode caps _]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseBal_encode bal _]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseEscrows_encode escrows _]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseNats_encode nullifiers _]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseNats_encode commitments _]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseQueues_encode queues _]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseSwissTable_encode swiss _]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseNats_encode revoked _]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]
+
 /-! ## §4 — axiom hygiene (the FILL-J no-`sorryAx` pins).
 
 Every keystone is `#assert_axioms`-pinned to the standard kernel triple `{propext, Classical.choice,
@@ -2302,5 +3343,17 @@ zero-sorry guarantee on the codec roundtrip). -/
 #assert_axioms parseOptNat_encode
 #assert_axioms parseSwiss_encode
 #assert_axioms parseSwissTable_encode
+#assert_axioms parseCellW_encode
+#assert_axioms parseCellsW_encode
+#assert_axioms parseCap_encode
+#assert_axioms parseCapList_encode
+#assert_axioms parseCapEntry_encode
+#assert_axioms parseCapsEntries_encode
+#assert_axioms parseWState_encode
+#assert_axioms parseCaveatW_encode
+#assert_axioms parseCaveatsW_encode
+#assert_axioms parseActionW_any
+#assert_axioms parseForestW_roundtrip
+#assert_axioms parseChildrenW_roundtrip
 
 end Dregg2.Exec.CodecRoundtrip
