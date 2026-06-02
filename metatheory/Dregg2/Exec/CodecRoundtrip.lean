@@ -3308,6 +3308,281 @@ theorem parseWState_encode (w : WState) (rest : PState) (hwf : WfCells w.cells) 
   rw [parseNats_encode revoked _]; simp only [Option.bind_eq_bind, Option.bind]
   rw [lit_append]
 
+/-! ## §16 — the complete-turn ENVELOPE (`parseWTurn`/`parseWWire`) roundtrip — the OUTER WIRE
+(the last FILL-J leaf). The Turn envelope `{"agent":N,"nonce":N,"fee":Z,"valid_until":N,"prev":"H64",
+"root":NODE}` carries the dregg1 outer fields (`parseNat`/`parseInt`/`parseHex32` leaves, §0) wrapping the
+recursive action-tree root (§15 `parseForestW_roundtrip`); the wire `{"state":STATEW,"turn":TURNW}` then
+composes the §14 wide-state decoder with this envelope, requiring the WHOLE input consumed (`lit "}"` must
+yield `some []` — fail-closed on trailing bytes). This removes the OUTERMOST codec layer — the envelope the
+wholesale swap actually hands the C entry point — from the Lean-side TCB.
+
+### §16a — the structural-fuel ADEQUACY bridge: `forestSize f ≤ (encodeForestW f).length`. The envelope
+parser funds the tree recursion with `cs.length + 1` (the whole-input length); since the encoded tree is a
+SUBSTRING of the input, this bound dominates `forestSize`. The bound itself: every `+1`/`+2` charge in the
+size measure is paid by ≥1 literal byte the encoder emits (the credential by its `{…}` body, each edge by
+its `{"holder":…}` body). Mutual over auth / auth-list / auth-tail / forest / children. -/
+
+/-! Each charge in `authSize`/`authListSize` is paid by ≥1 encoded byte. Mutual: the `oneOf` body's `+1`
+by the `{"oneof":[` prefix, each candidate by its own encoding (recursively), each tail comma by `,`. -/
+mutual
+private theorem authSize_le_encode (a : AuthW) : authSize a ≤ (encodeAuthW a).toList.length := by
+  -- every arm's encoding opens with `'{'` (length ≥ 1); `ht` specializes per case below.
+  obtain ⟨t, ht⟩ := encodeAuthW_head a
+  cases a with
+  | oneOf cands i =>
+      -- `authSize (.oneOf …) = 1 + authListSize cands`; the encoding holds the candidate list verbatim,
+      -- prefixed by `{"oneof":[` (length 9) — slack covers the `+1`.
+      have hl := authListSize_le_encode cands
+      show 1 + authListSize cands ≤ (encodeAuthW (.oneOf cands i)).toList.length
+      -- `encodeAuthW` is mutual ⇒ doesn't reduce by `rfl`; unfold its oneOf equation via `simp only`.
+      simp only [encodeAuthW, String.toList_append, List.length_append,
+        show ("{\"oneof\":[":String).toList.length = 10 from by decide]
+      omega
+  | _ =>
+      -- every other arm has `authSize = 1`; its encoding (now `'{' :: t` via `ht`) has length ≥ 1.
+      rw [ht]; simp only [authSize, List.length_cons]; omega
+private theorem authListSize_le_encode (as : List AuthW) : authListSize as ≤ (encodeAuthListW as).toList.length := by
+  cases as with
+  | nil => simp [authListSize]
+  | cons a as' =>
+      -- `[` + first auth + tail + `]`; the first via `authSize_le_encode`, the tail via the tail bound.
+      have ha := authSize_le_encode a
+      have ht := authTailSize_le_encode as'
+      have hshape := encAuthListW_cons_shape a as' []
+      simp only [List.append_nil] at hshape
+      show 1 + authSize a + authListSize as' ≤ (encodeAuthListW (a :: as')).toList.length
+      rw [hshape]
+      simp only [List.length_cons, List.length_append]
+      omega
+private theorem authTailSize_le_encode (as : List AuthW) : authListSize as ≤ (encodeAuthTailW as).toList.length := by
+  cases as with
+  | nil => simp [authListSize, encodeAuthTailW]
+  | cons a as' =>
+      -- `,` + auth + tail; the auth via `authSize_le_encode`, the tail by self-recursion.
+      have ha := authSize_le_encode a
+      have ht := authTailSize_le_encode as'
+      have hshape := encAuthTailW_cons_shape a as' []
+      simp only [List.append_nil] at hshape
+      show 1 + authSize a + authListSize as' ≤ (encodeAuthTailW (a :: as')).toList.length
+      rw [hshape]
+      simp only [List.length_cons, List.length_append]
+      omega
+end
+
+/-! Each charge in `forestSize`/`childrenSize` is paid by ≥1 encoded byte. Mutual: the node's `+1` by the
+`{"auth":` prefix, the credential by `authSize_le_encode`, each edge's `+2` by its `{"holder":`-led body and
+the `sub` recursion. The fuel-adequacy fact the envelope parser relies on. -/
+mutual
+private theorem forestSize_le_encode (f : WForest) : forestSize f ≤ (encodeForestW f).toList.length := by
+  obtain ⟨na, cavs, a, kids⟩ := f
+  have hna := authSize_le_encode na
+  have hkids := childrenSize_le_encode kids
+  -- the node opens with `{"auth":` (length 8) then the credential, …, then the children array.
+  have hshape := encForestW_node_shape na cavs a kids []
+  simp only [List.append_nil] at hshape
+  show 1 + authSize na + childrenSize kids ≤ (encodeForestW ⟨na, cavs, a, kids⟩).toList.length
+  rw [hshape]
+  simp only [List.length_cons, List.length_append,
+    show ("{\"auth\":":String).toList.length = 8 from by decide]
+  omega
+private theorem childrenSize_le_encode (cs : List WChild) : childrenSize cs ≤ (encodeChildrenW cs).toList.length := by
+  cases cs with
+  | nil => simp [childrenSize, encodeChildrenW]
+  | cons c cs' =>
+      obtain ⟨h, k, pc, sub⟩ := c
+      have hsub := forestSize_le_encode sub
+      have htail := childrenTailSize_le_encode cs'
+      -- `[` + first edge + tail + `]`; the edge `+2` charge is covered by its `{"holder":` body (length 10),
+      -- the sub-tree by `forestSize_le_encode`, the tail by the tail bound.
+      have hshape := encodeChildrenW_cons_shape ⟨h, k, pc, sub⟩ cs' []
+      simp only [List.append_nil] at hshape
+      have hedge := encChildW_edge_shape h k pc sub []
+      simp only [List.append_nil] at hedge
+      show 2 + forestSize sub + childrenSize cs' ≤ (encodeChildrenW (⟨h, k, pc, sub⟩ :: cs')).toList.length
+      rw [hshape, hedge]
+      simp only [List.length_cons, List.length_append,
+        show ("{\"holder\":":String).toList.length = 10 from by decide]
+      omega
+private theorem childrenTailSize_le_encode (cs : List WChild) : childrenSize cs ≤ (encodeChildrenTailW cs).toList.length := by
+  cases cs with
+  | nil => simp [childrenSize, encodeChildrenTailW]
+  | cons c cs' =>
+      obtain ⟨h, k, pc, sub⟩ := c
+      have hsub := forestSize_le_encode sub
+      have htail := childrenTailSize_le_encode cs'
+      -- `,` + edge + tail; the edge `{"holder":` body (length 10) covers the `+2`, the sub via the forest bound.
+      have hshape := encChildrenTailW_cons_shape ⟨h, k, pc, sub⟩ cs' []
+      simp only [List.append_nil] at hshape
+      have hedge := encChildW_edge_shape h k pc sub []
+      simp only [List.append_nil] at hedge
+      show 2 + forestSize sub + childrenSize cs' ≤ (encodeChildrenTailW (⟨h, k, pc, sub⟩ :: cs')).toList.length
+      rw [hshape, hedge]
+      simp only [List.length_cons, List.length_append,
+        show ("{\"holder\":":String).toList.length = 10 from by decide]
+      omega
+end
+
+/-! ### §16b — the Turn ENVELOPE roundtrip (a fixed-field `do`-block; the tree via §15). -/
+
+/-- Well-formed Turn: the `prev` digest fits the `[u8;32]` width (`< 2^256`, else `parseHex32` wraps) and
+the root tree is well-formed (§15a). The `agent`/`nonce`/`valid_until` are `Nat`, `fee` an `Int` — total. -/
+def WfTurn (t : WTurn) : Prop := t.prevHash < 2 ^ 256 ∧ WfForest t.root
+
+set_option maxHeartbeats 1000000 in
+/-- **FILL J production (the ENVELOPE): the Turn-envelope roundtrip** (`parseWTurn ∘ encodeWTurn = id`).
+The dregg1 outer fields (`agent`/`nonce`/`fee`/`valid_until`/`prev`) walk their `parseNat`/`parseInt`/
+`parseHex32` leaves (§0), the `prev` digest losslessly under the `< 2^256` boundary, then the action-tree
+root via §15's `parseForestW_roundtrip` (fuel `≥ forestSize root`). Strict on field ORDER + the closing
+`}`. The wire-envelope decoder the wholesale swap hands the C entry point — out of the Lean TCB. -/
+theorem parseWTurn_encode (t : WTurn) (rest : PState) (hwf : WfTurn t) (fuel : Nat)
+    (hfuel : forestSize t.root ≤ fuel) :
+    parseWTurn fuel ((encodeWTurn t).toList ++ rest) = some (t, rest) := by
+  obtain ⟨agent, nonce, fee, validUntil, prevHash, root⟩ := t
+  obtain ⟨hprev, hroot⟩ : prevHash < 2 ^ 256 ∧ WfForest root := hwf
+  unfold parseWTurn
+  -- rebracket the `++` chain into the right-associated field sequence the parser steps consume.
+  rw [show (encodeWTurn ⟨agent, nonce, fee, validUntil, prevHash, root⟩).toList ++ rest
+        = ("{\"agent\":":String).toList ++ ((toString agent).toList
+            ++ ((",\"nonce\":":String).toList ++ ((toString nonce).toList
+            ++ ((",\"fee\":":String).toList ++ ((toString fee).toList
+            ++ ((",\"valid_until\":":String).toList ++ ((toString validUntil).toList
+            ++ ((",\"prev\":\"":String).toList ++ ((toHex32 prevHash).toList
+            ++ (("\",\"root\":":String).toList ++ ((encodeForestW root).toList
+            ++ ('}' :: rest)))))))))))) from by
+        show (encodeWTurn ⟨agent, nonce, fee, validUntil, prevHash, root⟩).toList ++ rest = _
+        unfold encodeWTurn
+        simp only [String.toList_append, show ("}":String).toList = ['}'] from by decide,
+          show ("\",\"root\":":String).toList = ("\"":String).toList ++ (",\"root\":":String).toList from by decide,
+          List.append_assoc, List.cons_append, List.nil_append]]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseNat_toString agent _ (Or.inr ⟨',', _, by
+        rw [show (",\"nonce\":":String).toList = ',' :: ("\"nonce\":":String).toList from by decide]; rfl, by decide⟩)]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseNat_toString nonce _ (Or.inr ⟨',', _, by
+        rw [show (",\"fee\":":String).toList = ',' :: ("\"fee\":":String).toList from by decide]; rfl, by decide⟩)]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseInt_toString fee _ (Or.inr ⟨',', _, by
+        rw [show (",\"valid_until\":":String).toList = ',' :: ("\"valid_until\":":String).toList from by decide]; rfl, by decide⟩)]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseNat_toString validUntil _ (Or.inr ⟨',', _, by
+        rw [show (",\"prev\":\"":String).toList = ',' :: ("\"prev\":\"":String).toList from by decide]; rfl, by decide⟩)]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseHex32_toHex32 prevHash _, Nat.mod_eq_of_lt hprev]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseForestW_roundtrip root _ hroot fuel hfuel]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [show lit "}" ('}' :: rest) = some rest from by
+        rw [show ('}' :: rest) = ("}":String).toList ++ rest from rfl, lit_append]]
+
+/-! ### §16c — the complete-turn WIRE roundtrip (state §14 ∘ envelope §16b; the WHOLE input consumed). -/
+
+/-- The complete-turn wire ENCODER (the inline `{"state":STATEW,"turn":TURNW}` the C entry point reads —
+matching `wideDemoInput`/`execFullTurnWide`'s input shape). -/
+def encodeWWire (w : WWire) : String :=
+  "{\"state\":" ++ encodeWState w.state ++ ",\"turn\":" ++ encodeWTurn w.turn ++ "}"
+
+set_option maxHeartbeats 1000000 in
+/-- **FILL J production (the OUTERMOST WIRE): the complete-turn wire roundtrip**
+(`parseWWire ∘ encodeWWire = id`). Composes the §14 wide-state decoder with the §16b envelope, then
+requires the WHOLE input consumed (`lit "}"` yields `some []` — trailing bytes fail-closed). The fuel
+(`input.length + 1`) dominates both the state width and `forestSize root` (each `≤` the encoded length, the
+encoded objects being substrings of the input, §16a). This removes the OUTERMOST codec — the envelope the
+wholesale swap hands `execFullTurnWide` — from the Lean-side TCB; with §14/§15 the wire codec is FULLY out. -/
+theorem parseWWire_encode (w : WWire) (hcells : WfCells w.state.cells) (hturn : WfTurn w.turn) :
+    parseWWire (encodeWWire w) = some w := by
+  obtain ⟨state, turn⟩ := w
+  -- `parseWWire` runs on `(encodeWWire ⟨state,turn⟩).toList` at fuel `len + 1`; expose the field layout.
+  have hwire : (encodeWWire ⟨state, turn⟩).toList
+      = ("{\"state\":":String).toList ++ ((encodeWState state).toList
+          ++ ((",\"turn\":":String).toList ++ ((encodeWTurn turn).toList ++ "}".toList))) := by
+    show (encodeWWire ⟨state, turn⟩).toList = _
+    unfold encodeWWire
+    simp only [String.toList_append, List.append_assoc]
+  unfold parseWWire
+  -- zeta-reduce the `let cs`/`let fuel` bindings so the input expression is exposed for `rw [hwire]`.
+  simp only []
+  -- the outer fuel: the whole-input length + 1, which dominates every inner width.
+  set fuel := (encodeWWire ⟨state, turn⟩).toList.length + 1 with hfueldef
+  -- open `{"state":`
+  rw [hwire]
+  rw [show lit "{\"state\":" (("{\"state\":":String).toList ++ ((encodeWState state).toList
+          ++ ((",\"turn\":":String).toList ++ ((encodeWTurn turn).toList ++ "}".toList))))
+        = some ((encodeWState state).toList ++ ((",\"turn\":":String).toList
+            ++ ((encodeWTurn turn).toList ++ "}".toList))) from
+        lit_append "{\"state\":" _]
+  -- reduce the `match some _ with | some r0 => …` so `parseWState_encode` can rewrite the exposed input.
+  simp only []
+  -- the wide STATE via §14 (outer fuel ≥ encoded width; the rest is `,"turn":TURN}`):
+  rw [parseWState_encode state (((",\"turn\":":String).toList ++ ((encodeWTurn turn).toList ++ "}".toList)))
+        hcells fuel (by
+        rw [hfueldef, hwire]
+        simp only [List.length_append]
+        omega)]
+  -- iota-reduce the `match some (state, _) with | some (state, r1) => …` pair-pattern match.
+  dsimp only
+  -- `,"turn":` then the envelope via §16b (outer fuel ≥ forestSize root via §16a):
+  rw [show lit ",\"turn\":" ((",\"turn\":":String).toList ++ ((encodeWTurn turn).toList ++ "}".toList))
+        = some ((encodeWTurn turn).toList ++ "}".toList) from lit_append ",\"turn\":" _]
+  simp only []
+  rw [parseWTurn_encode turn "}".toList hturn fuel (by
+        -- `forestSize turn.root ≤ (encodeForestW turn.root).length ≤ full input length < fuel`.
+        have hbridge := forestSize_le_encode turn.root
+        rw [hfueldef, hwire]
+        -- the encoded forest is a substring of the envelope, hence of the whole input.
+        have hsub : (encodeForestW turn.root).toList.length ≤ (encodeWTurn turn).toList.length := by
+          obtain ⟨agent, nonce, fee, validUntil, prevHash, root⟩ := turn
+          show (encodeForestW root).toList.length ≤ (encodeWTurn ⟨agent, nonce, fee, validUntil, prevHash, root⟩).toList.length
+          rw [show (encodeWTurn ⟨agent, nonce, fee, validUntil, prevHash, root⟩)
+                = "{\"agent\":" ++ toString agent ++ ",\"nonce\":" ++ toString nonce ++ ",\"fee\":" ++ toString fee
+                    ++ ",\"valid_until\":" ++ toString validUntil ++ ",\"prev\":\"" ++ toHex32 prevHash ++ "\""
+                    ++ ",\"root\":" ++ encodeForestW root ++ "}" from rfl]
+          simp only [String.toList_append, List.length_append]
+          omega
+        simp only [List.length_append]
+        omega)]
+  dsimp only
+  -- the closing `}` must consume the WHOLE remaining input (`some []` ⇒ accept):
+  rw [show lit "}" "}".toList = some [] from by
+        rw [show ("}":String).toList = ("}":String).toList ++ ([] : PState) from by simp, lit_append]]
+
+/-! ### §16d — NON-VACUITY: a complete wire WITH a delegation edge round-trips (the recursion + the
+envelope + every state field are real). -/
+
+/-- A real multi-node turn: the root credential bears a delegation EDGE (`keep`/`cap`/`sub`), so the wire
+exercises the §15 children recursion, not just a leaf root; wrapped in a populated wide state. -/
+private def wireWitness : WWire :=
+  { state := { cells := [(0, .record [("balance", .int 100)])], caps := [(9, [.node 0])], bal := [(0, 0, 100)],
+               escrows := [], nullifiers := [], commitments := [], queues := [], swiss := [] }
+    turn  := { agent := 0, nonce := 1, fee := 2, validUntil := 9, prevHash := 7
+               root := ⟨ .signature 3 3, [{ tier := 0, cell := 0, asset := 0, min := 1 }],
+                         .balanceA { actor := 0, src := 0, dst := 1, amt := 10 } 0,
+                         [⟨1, [.read], .node 0, ⟨.unchecked, [], .revoke 0 0, []⟩⟩] ⟩ } }
+
+/-- The witness state's cells are well-formed (the one digest-free `int` balance). -/
+private theorem wireWitness_cells_wf : WfCells wireWitness.state.cells := by
+  show WfCells [(0, .record [("balance", .int 100)])]
+  exact ⟨⟨by decide, trivial, trivial⟩, trivial⟩
+
+/-- The witness turn is well-formed: `prev = 7 < 2^256`, root credential `signature 3 < 2^256`, the one
+caveat tier `0 ≤ 3`, every action `simple`/total, and the one delegation edge's sub-tree well-formed. -/
+private theorem wireWitness_turn_wf : WfTurn wireWitness.turn := by
+  refine ⟨by decide, ?_⟩
+  show WfForest ⟨ .signature 3 3, [{ tier := 0, cell := 0, asset := 0, min := 1 }],
+                  .balanceA { actor := 0, src := 0, dst := 1, amt := 10 } 0,
+                  [⟨1, [.read], .node 0, ⟨.unchecked, [], .revoke 0 0, []⟩⟩] ⟩
+  -- the sub-tree's credential is `.unchecked` (`WfAuth = True`), its caveats/action/children all trivial.
+  exact ⟨show (3:Nat) < 2^256 by norm_num, ⟨by unfold WfCaveat; decide, trivial⟩, trivial,
+    ⟨⟨trivial, trivial, trivial, trivial⟩, trivial⟩⟩
+
+-- The WHOLE wire — populated state + a delegation-bearing tree — round-trips through `parseWWire`:
+example : parseWWire (encodeWWire wireWitness) = some wireWitness :=
+  parseWWire_encode wireWitness wireWitness_cells_wf wireWitness_turn_wf
+
 /-! ## §4 — axiom hygiene (the FILL-J no-`sorryAx` pins).
 
 Every keystone is `#assert_axioms`-pinned to the standard kernel triple `{propext, Classical.choice,
@@ -3355,5 +3630,8 @@ zero-sorry guarantee on the codec roundtrip). -/
 #assert_axioms parseActionW_any
 #assert_axioms parseForestW_roundtrip
 #assert_axioms parseChildrenW_roundtrip
+#assert_axioms forestSize_le_encode
+#assert_axioms parseWTurn_encode
+#assert_axioms parseWWire_encode
 
 end Dregg2.Exec.CodecRoundtrip
