@@ -351,6 +351,7 @@ def targetOf : FullActionA → CellId
   | .setVKA _ cell _        => cell
   -- §MA-auth: the 6 authority effects act on the introducer/holder/actor (the cap-graph node).
   | .introduceA intro _ _   => intro
+  | .delegateAttenA del _ _ _ => del
   | .attenuateA actor _ _   => actor
   | .dropRefA holder _      => holder
   | .revokeDelegationA holder _ => holder

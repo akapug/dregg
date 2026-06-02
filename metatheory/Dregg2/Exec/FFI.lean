@@ -1569,6 +1569,7 @@ field names as JSON strings, the swiss `rights`/`held` as the narrow `AUTHS` arr
       | {"setperms":[actor,cell,perms]}          -- setPermissionsA
       | {"setvk":[actor,cell,vk]}                -- setVKA
       | {"introduce":[introducer,recipient,target]}  -- introduceA
+      | {"delatten":[delegator,recipient,target,AUTHS]} -- delegateAttenA (rights-carrying)
       | {"atten":[actor,idx,AUTHS]}              -- attenuateA
       | {"dropref":[holder,target]}              -- dropRefA
       | {"revdel":[holder,target]}               -- revokeDelegationA
@@ -1635,6 +1636,8 @@ def encodeActionW : FullActionA → String
   | .setVKA actor cell vk => "{\"setvk\":[" ++ toString actor ++ "," ++ toString cell ++ ","
                                ++ toString vk ++ "]}"
   | .introduceA i r t => "{\"introduce\":[" ++ toString i ++ "," ++ toString r ++ "," ++ toString t ++ "]}"
+  | .delegateAttenA del rec t keep => "{\"delatten\":[" ++ toString del ++ "," ++ toString rec ++ ","
+                                        ++ toString t ++ "," ++ encodeAuthsW keep ++ "]}"
   | .attenuateA actor idx keep => "{\"atten\":[" ++ toString actor ++ "," ++ toString idx ++ ","
                                     ++ encodeAuthsW keep ++ "]}"
   | .dropRefA holder target => "{\"dropref\":[" ++ toString holder ++ "," ++ toString target ++ "]}"
@@ -1777,6 +1780,12 @@ def parseActionW (cs : PState) : Option (FullActionA × PState) :=
   | some r0 => do
       let (i, r1) ← parseNat r0; let (r, r2) ← cN r1; let (t, r3) ← cN r2; let r4 ← lit "]}" r3
       some (.introduceA i r t, r4)
+  | none =>
+  match lit "{\"delatten\":[" cs with
+  | some r0 => do
+      let (del, r1) ← parseNat r0; let (recp, r2) ← cN r1; let (t, r3) ← cN r2
+      let (keep, r4) ← cA r3; let r5 ← lit "]}" r4
+      some (.delegateAttenA del recp t keep, r5)
   | none =>
   match lit "{\"atten\":[" cs with
   | some r0 => do
@@ -1988,6 +1997,7 @@ def allActions : List FullActionA :=
   , .setPermissionsA 29 30 (-31)
   , .setVKA 32 33 (-34)
   , .introduceA 35 36 37
+  , .delegateAttenA 35 36 37 [.read, .write]
   , .attenuateA 38 39 [.read, .write]
   , .dropRefA 40 41
   , .revokeDelegationA 42 43
@@ -2026,8 +2036,10 @@ def allActions : List FullActionA :=
 /-- EVERY representative round-trips (the 51-arm non-vacuity guard). -/
 def allActionsRoundtrip : Bool := allActions.all actionRoundtrips
 
-#eval allActions.length                                                     -- 45 (one per FullActionA arm)
+#eval allActions.length                                                     -- 46 (one per FullActionA arm)
 #eval allActionsRoundtrip                                                    -- true (every arm round-trips)
+-- HARD CI check (fails the build if ANY arm — incl. the new `delegateAttenA` — stops round-tripping):
+#guard allActionsRoundtrip
 -- a couple of spot checks of the actual wire bytes:
 #eval encodeActionW (.balanceA { actor := 1, src := 2, dst := 3, amt := -4 } 5)
 -- {"bal":[1,2,3,-4,5]}
