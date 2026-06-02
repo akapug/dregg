@@ -1877,6 +1877,124 @@ theorem parseBal_encode (es : List (CellId × AssetId × Int)) (rest : PState) :
       apply parseBal_loop_works as a rest
       simp only [List.length_append, List.length_cons]; omega
 
+/-! ## §11 — the `ESCROWS` side-table (`parseEscrows`) roundtrip. Length-fuel loop (§10 template), but
+the element `parseEscrow` is a 7-field `do`-block with two 0/1 FLAGS (`parseFlag_bool`, §0f). The first
+side-table whose element itself needs a `do`-block roundtrip proof. -/
+
+/-- `lit "[" ('[' :: rest) = some rest` — GENERIC (proved once, no per-element defeq), so consuming the
+list-open `[` never whnf-reduces a big element term. -/
+private theorem lit_lbrack (rest : PState) : lit "[" ('[' :: rest) = some rest := by
+  unfold lit; rw [show ("[":String).toList = ['['] from by decide, litGo_cons_match]; rfl
+
+set_option maxHeartbeats 1000000 in
+/-- **The `ESC` entry roundtrip** — the 7-field record `[id,creator,recipient,amount,resolved,asset,
+bridge]` (flags via §0f's `parseFlag_bool`); self-delimiting, so round-trips for ANY tail. -/
+theorem parseEscrow_encode (e : EscrowRecord) (rest : PState) :
+    parseEscrow ((encodeEscrow e).toList ++ rest) = some (e, rest) := by
+  unfold parseEscrow encodeEscrow
+  simp only [String.toList_append, List.append_assoc]
+  simp only [lit_append, parseNat_toString _ _ (nd_litComma _), cN_step _ _ (nd_litComma _),
+    cI_step _ _ (nd_litComma _), parseFlag_bool _ _ (nd_litComma _), parseFlag_bool _ _ (nd_litBrack _),
+    Option.bind_eq_bind, Option.bind]
+
+private def encodeEscrowsTail (es : List EscrowRecord) : String :=
+  es.foldl (fun acc x => acc ++ "," ++ encodeEscrow x) ""
+
+/-- An `ESC` entry opens with `'['` (so the list body is `[[…`, making `lit "[]"` fail). -/
+private theorem encodeEscrow_head (e : EscrowRecord) : ∃ t, (encodeEscrow e).toList = '[' :: t := by
+  refine ⟨(toString e.id ++ "," ++ toString e.creator ++ "," ++ toString e.recipient ++ ","
+    ++ toString e.amount ++ "," ++ (if e.resolved then "1" else "0") ++ "," ++ toString e.asset ++ ","
+    ++ (if e.bridge then "1" else "0") ++ "]" : String).toList, ?_⟩
+  unfold encodeEscrow
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl, List.cons_append,
+    List.nil_append, List.append_assoc]
+
+private theorem foldl_escrowsTail (es : List EscrowRecord) : ∀ (acc : String),
+    es.foldl (fun s x => s ++ "," ++ encodeEscrow x) acc
+      = acc ++ es.foldl (fun s x => s ++ "," ++ encodeEscrow x) "" := by
+  induction es with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ encodeEscrow b), ih ("" ++ "," ++ encodeEscrow b)]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+private theorem encEscrowsTail_cons_shape (b : EscrowRecord) (bs : List EscrowRecord) (rest : PState) :
+    (encodeEscrowsTail (b :: bs)).toList ++ rest
+      = ',' :: ((encodeEscrow b).toList ++ ((encodeEscrowsTail bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeEscrowsTail (b :: bs) = ("" ++ "," ++ encodeEscrow b) ++ encodeEscrowsTail bs from by
+      show (b :: bs).foldl (fun s x => s ++ "," ++ encodeEscrow x) "" = _
+      rw [List.foldl_cons]; exact foldl_escrowsTail bs ("" ++ "," ++ encodeEscrow b)]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+private theorem encodeEscrows_cons_shape (a : EscrowRecord) (as : List EscrowRecord) (rest : PState) :
+    (encodeEscrows (a :: as)).toList ++ rest
+      = '[' :: ((encodeEscrow a).toList ++ ((encodeEscrowsTail as).toList ++ (']' :: rest))) := by
+  rw [show encodeEscrows (a :: as) = "[" ++ encodeEscrow a ++ encodeEscrowsTail as ++ "]" from rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+set_option maxHeartbeats 1000000 in
+private theorem parseEscrows_loop_works : ∀ (as : List EscrowRecord) (a : EscrowRecord)
+    (rest : PState) (fuel : Nat),
+    ((encodeEscrow a).toList ++ ((encodeEscrowsTail as).toList ++ (']' :: rest))).length < fuel →
+    parseEscrows.loop fuel ((encodeEscrow a).toList ++ ((encodeEscrowsTail as).toList ++ (']' :: rest)))
+      = some (a :: as, rest) := by
+  intro as
+  induction as with
+  | nil =>
+      intro a rest fuel hf
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
+      rw [show (encodeEscrowsTail ([] : List EscrowRecord)).toList = [] from rfl, List.nil_append]
+      unfold parseEscrows.loop
+      rw [parseEscrow_encode a (']' :: rest)]
+      simp only []
+      rw [show lit "," (']' :: rest) = none from by
+            rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+            exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+      simp only []
+      rw [lit_brack]
+  | cons a2 as2 ih =>
+      intro a rest fuel hf
+      rw [encEscrowsTail_cons_shape a2 as2 (']' :: rest)] at hf ⊢
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by
+        simp only [List.length_append, List.length_cons] at hf; omega⟩
+      unfold parseEscrows.loop
+      rw [parseEscrow_encode a _]
+      simp only []
+      rw [lit_commaC]
+      simp only []
+      have hrec : ((encodeEscrow a2).toList ++ ((encodeEscrowsTail as2).toList ++ (']' :: rest))).length < f := by
+        simp only [List.length_append, List.length_cons] at hf ⊢; omega
+      rw [ih a2 rest f hrec]
+
+set_option maxHeartbeats 1000000 in
+/-- **FILL J production (g): the `ESCROWS` side-table roundtrip** (`parseEscrows ∘ encodeEscrows = id`). -/
+theorem parseEscrows_encode (es : List EscrowRecord) (rest : PState) :
+    parseEscrows ((encodeEscrows es).toList ++ rest) = some (es, rest) := by
+  cases es with
+  | nil =>
+      unfold parseEscrows
+      rw [show (encodeEscrows ([] : List EscrowRecord)) = "[]" from rfl]
+      rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+  | cons a as =>
+      unfold parseEscrows
+      rw [encodeEscrows_cons_shape a as rest]
+      have hempty : lit "[]"
+          ('[' :: ((encodeEscrow a).toList ++ ((encodeEscrowsTail as).toList ++ (']' :: rest)))) = none := by
+        obtain ⟨t, ht⟩ := encodeEscrow_head a
+        rw [ht, List.cons_append]
+        unfold lit
+        rw [show ("[]":String).toList = ['[', ']'] from by decide]
+        rw [litGo_cons_match, litGo_ne_head ']' [] '[' _ (by decide)]
+      rw [hempty]; simp only []
+      rw [lit_lbrack]
+      simp only []
+      apply parseEscrows_loop_works as a rest
+      simp only [List.length_cons]; omega
+
 /-! ## §4 — axiom hygiene (the FILL-J no-`sorryAx` pins).
 
 Every keystone is `#assert_axioms`-pinned to the standard kernel triple `{propext, Classical.choice,
@@ -1905,5 +2023,7 @@ zero-sorry guarantee on the codec roundtrip). -/
 #assert_axioms parseAuths_encode
 #assert_axioms parseNats_encode
 #assert_axioms parseBal_encode
+#assert_axioms parseEscrow_encode
+#assert_axioms parseEscrows_encode
 
 end Dregg2.Exec.CodecRoundtrip
