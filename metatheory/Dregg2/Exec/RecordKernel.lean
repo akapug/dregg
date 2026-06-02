@@ -279,6 +279,14 @@ structure RecordKernelState where
   escrows    : List EscrowRecord := []
   /-- The spent-note nullifier SET (`self.note_nullifiers`); DEFAULTS EMPTY. -/
   nullifiers : List Nat := []
+  /-- **The KERNEL-STATE REVOCATION REGISTRY** (`self.revocation_channel`, hole #3 / `#139`): the
+  committed set of revoked credential nullifiers — the MDB/derivation-table root that `cap_revoke`
+  tears down (single-machine ⇒ immediate revocation). A node's credential is revoked iff its
+  `credNul` is in THIS set, read off committed state (NOT the wire-supplied, formerly-pinned
+  `NodeAuth.rev`), so the fail-closed gate `gateOK` can finally honour revocation. Balance-NEUTRAL
+  (`recTotalAssetWithEscrow` reads `bal`+`escrows`, never `revoked`). DEFAULTS EMPTY (the additive
+  extension, exactly as `nullifiers`/`commitments` were added). -/
+  revoked    : List Nat := []
   /-- **The note COMMITMENT SET** (`META-FILL C`, closing `#121`): the grow-only dual of
   `nullifiers`. dregg1's `apply_note_create` inserts a fresh Pedersen commitment into the off-ledger
   commitment tree (a §8 CryptoPortal-gated range proof guards the hidden value). A `noteCreate` grows
