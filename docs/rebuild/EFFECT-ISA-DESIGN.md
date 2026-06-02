@@ -1,5 +1,20 @@
 # EFFECT-ISA-DESIGN — is the 54-effect VM the right instruction set for a verified capability kernel?
 
+> ⚑ **GROUND-CHECKED vs live Lean 2026-06-02** (post-2-compaction drift-repair); REAL/DECORATIVE/ASPIRATIONAL
+> tags carry file:line receipts. The Rust side (`action.rs`, `columns.rs`, `apply.rs`) is unchanged at 54;
+> the DRIFT was on the Lean side, which this doc had only as a secondary cross-check + a wishlist of
+> "MISSING" primitives. **What actually landed (the good-direction drift):** the doc's *#1 CORE-MISSING*
+> primitive — **per-asset balance (multi-asset C1/C2)** — is now the **primary executable kernel surface**
+> (`FullActionA`, `TurnExecutorFull.lean:1928`, 46 constructors, each money-moving arm carrying
+> `(asset : AssetId)`; `MultiAsset.lean:38`; per-asset conservation **PROVED + `#assert_axioms`-pinned**,
+> `execFullForestA_conserves_per_asset` `FullForest.lean:224`/:421). The doc's *#4* one-shot linear
+> continuation / await family **also landed** in the verify-side metatheory (`Await.lean`,
+> `four_faces_unify:426`, term-proved). The vat-boundary **law** landed coinductively (`Boundary.lean`,
+> `boundary_respecting_sound:244`) though ρ_in/ρ_out as a *typed selector* is still absent (the
+> effect-level claim stands). The forest-delegation handoff is the one gap that did **not** close:
+> `execFullChildrenA` still discards the edge (`FullForest.lean:124`, pattern `⟨_, _, _, sub⟩`) — **#138
+> genuinely OPEN**. See **§0.5 (Lean ground-truth)** for the full receipt block.
+>
 > **Scope / method.** Read-only design analysis. The question is whether dregg's effect set is the
 > RIGHT *orthogonal basis* for a verified capability kernel that will REPLACE the Rust kernel —
 > answered in BOTH directions: **(A) reduction** (where it is bloated / redundant) and **(B)
@@ -12,8 +27,16 @@
 > selectors at `circuit/src/effect_vm/columns.rs:78` (indices 0..53 at `:82–:250`), per-variant
 > witness in `circuit/src/effect_vm/effect.rs`, per-selector constraints in
 > `circuit/src/effect_vm/air.rs`. The actual mutations: `turn/src/executor/apply.rs` (one
-> `apply_*` per effect, dispatch at `:26`). The Lean mirror: `metatheory/Dregg2/CatalogEffects.lean`
-> (the 52-tag coloring, exhaustive). Prior evidence: `docs/rebuild/FAITHFULNESS-AUDIT.md` ("the
+> `apply_*` per effect, dispatch at `:26`). **The Lean mirror (CORRECTED 2026-06-02):** the 52-tag
+> abstract coloring `inductive EffectKind` is in **`metatheory/Dregg2/CatalogInstances.lean:285`**
+> (exactly 52 constructors, grep-counted), with `effectLinearity` total + `every_effect_classified`
+> exhaustive at `CatalogEffects.lean:201` (`CatalogEffects.lean` *extends*, never redefines, the
+> coloring). But the **executable** ISA — the one the swap actually runs — is now the **46-arm
+> `inductive FullActionA`** at `metatheory/Dregg2/Exec/TurnExecutorFull.lean:1928`, dispatched by
+> `execFullA` (`:2236`–`:2660`, 46 arms). The 52-vs-54 gap (Lean colors 52, Rust enums 54) is the
+> honest delta: `queueAtomicTx`/`queuePipelineStep` are colored but the executable `FullActionA`
+> folds them, and a couple of Rust variants have no Lean tag yet. Prior evidence:
+> `docs/rebuild/FAITHFULNESS-AUDIT.md` ("the
 > 52-effect catalog is ~6 shapes wearing ~50 names"). Architecture: `docs/rebuild/REORIENT.md §2`,
 > `cand-A-vat-coalgebra.md`, `cand-C-cap-distributed.md`, `study-mina-relink.md`.
 >
@@ -25,6 +48,81 @@
 > simplification (`EffectsPaired.lean` made escrow a balance-conserving two-cell transfer); the
 > *Rust* `apply_create_escrow` (`apply.rs:1674`) is single-cell debit + side-table insert — a
 > distinct shape. The honest shape count, read off `apply.rs`, is **~9–11**, not 6.
+
+---
+
+## 0.5 Lean ground-truth receipt block (the 2026-06-02 drift-repair)
+
+This doc was written against the *Rust* runtime as the ISA to be replaced, with the Lean side as a
+secondary cross-check and a wishlist. Two compactions later, the live Lean has moved **toward** the
+proposed basis. Here is what the executable Lean kernel actually is, tagged **REAL** (a term-proved
+Lean object with teeth), **DECORATIVE** (vocabulary only — no Lean object; grep-confirmed absent), or
+**ASPIRATIONAL** (honestly-named OPEN / unbuilt). Receipts are `file:line` into `metatheory/Dregg2/`.
+
+**The executable ISA is `FullActionA` — and it is per-asset.** — **REAL.**
+`inductive FullActionA` (`Exec/TurnExecutorFull.lean:1928`, **46 constructors**), dispatched by
+`execFullA` (`:2236`–`:2660`, **46 arms**, zero `sorry`/`admit`/`native_decide`). Every value-moving
+arm carries `(asset : AssetId)`: `balanceA (turn) (asset)`, `mintA/burnA (…) (asset)`,
+`bridgeMintA/bridgeLockA/bridgeFinalizeA (…) (asset)`, `createEscrowA/createObligationA/createCommittedEscrowA (…) (asset)`.
+This is the **executable artifact of the proposed §A CORE** (C1 balance, C2 supply, C9/C10 side-table
+lock/settle, C8 lifecycle, C4 authority, C11/C12 notes) — not a wishlist; it runs.
+
+**§1's #1 "MISSING-NEEDS-PRIMITIVE: per-asset C1/C2" — LANDED.** — **REAL.** `MultiAsset.lean:38`
+`abbrev AssetId := Nat`; balances are a total `MACellId → AssetId → ℤ` (`:47`); the conserved quantity
+is the per-asset family `maTotal k a := ∑ c, k.bal c a` (`:86`). Keystones, all term-proved +
+`#assert_axioms`-pinned: `maExec_conserves_per_asset` (`MultiAsset.lean:130`); at the forest level
+`execFullForestA_conserves_per_asset` (`FullForest.lean:224`, pinned `:421`) — *a committed forest whose
+net per-asset delta is 0 in asset b preserves b's total supply, the `CONSERVATION_VECTOR`*. The doc's
+"this must be CORE before the kernel replaces Rust" is satisfied on the executable layer. (Task **#129
+FILL 1** is still `in_progress` — the residual is breadth/wiring, not the keystone, which is proved.)
+
+**The forest no-amplification (Granovetter) law — PROVED, but as forest *data*, not the *handoff*.**
+— **REAL theorem / ASPIRATIONAL execution.** `execFullForestA_no_amplify` (`FullForest.lean:251`,
+pinned `:423`) proves `∀ e ∈ forestEdgesA f, capAuthConferred (attenuate e.1 e.2) ⊆ capAuthConferred e.2`
+via `derive_no_amplify` — REAL over the edge *list*. **BUT** the executor does NOT install those caps:
+`execFullChildrenA` (`FullForest.lean:124`, pattern `| ⟨_, _, _, sub⟩ :: rest =>` — the holder/keep/
+parentCap fields **discarded**; same discard at `:145` lowering and `:412`) runs each child against the
+**unchanged** state (the `DelegationMode::None` default, candidly stated `FullForest.lean:317` §9). The
+§9 docstring at `:119`–`:121` *claims* "the delegated cap is `derive`d into the child holder's slot" —
+that text is **ASPIRATIONAL**; the code is a no-op handoff. **Routing the edge onto
+`recKDelegateAtten` is task #138, genuinely OPEN.** This is the one place the doc's framing under-states
+the gap: forest delegation is *decorative on execution* today (cf. memory "Forest Delegation Decorative").
+
+**Per-node attestation across the whole tree — PROVED.** — **REAL.** `execFullForestA_each_attests`
+(`FullForest.lean:290`, pinned `:426`): every tree node attests `fullActionInvA` (per-asset ledger
+vector ∧ ChainLink ∧ ObsAdvance ∧ the kind obligation) — read through `execFullForestA_eq_execFullTurnA`
+over the pre-order lowering. `execFullForestA_unauthorized_fails` (`:309`) is the fail-closed root.
+
+**§B #4 "one-shot linear continuation typing + the await family" — LANDED in the verify metatheory.**
+— **REAL (verify-side), still ASPIRATIONAL as a kernel selector.** `Await.lean` encodes the await
+family as algebraic effects + a one-shot continuation: `OneShot` (`:109`, "intentionally **no**
+projection back to a reusable `k`", `:103`); `four_faces_unify` (`:426`, term-proved) collapses
+zkpromise / discharge / intent / eventual to one `AwaitCore`; `runtime_guard_is_double_spend` (`:223`)
+and `commit_resumes_once` (`:312`) are term-proved. ⚠ **Docstring drift:** the header says "`sorry`
+bodies are real obligations" (`Await.lean:42`) — **STALE**; grep finds zero proof-term `sorry` (the only
+`sorry` tokens are that comment). The await *engine* the doc called "MISSING as a typed effect" is now a
+proved algebra; it is still **not** a kernel selector/effect, so the ISA-level §B claim stands.
+
+**The vat-boundary *law* — LANDED coinductively; ρ_in/ρ_out as a *typed selector* — still absent.**
+— Boundary law **REAL**, ρ-effect **ASPIRATIONAL**. `Boundary.lean` carries the coinductive
+`BoundaryRespecting` law + `boundary_respecting_sound` (`:244`, term-proved `:= by exact hbr.admissible …`).
+⚠ **Docstring drift:** "every theorem is stated with a `sorry` body" (`:29`) and "Stated `sorry`" (`:243`)
+are **STALE** — those theorems have real bodies. But this is the *soundness law of the membrane*, **not**
+a `Cap.exportAsKey`/`importKey` effect: grep confirms no ρ_in/ρ_out selector in `FullActionA` or
+`Exec/VatBoundary.lean`. So §B #3 (ρ_in/ρ_out as first-class typed effects) is **still genuinely OPEN**.
+
+**The FFI swap target is wired.** — **REAL (wire), DIFFERENTIAL-pending.** `@[export] dregg_exec_full_forest_auth`
+(`Exec/FFI.lean:3027`) is the gated complete-turn export (the swap entry per the memory roadmap), alongside
+`dregg_exec_full_turn` (`:938`) and `dregg_exec_full_turn_wide` (`:2732`). The COMPLETE-turn wire codec
+roundtrip (FILL J, task #136 `in_progress`) is PROVED for most productions incl. `FullActionA` "complete at
+all 46 arms" and the per-asset `BAL` ledger entry, `#assert_axioms`-pinned (`Exec/CodecRoundtrip.lean:21,41,70`);
+the one in-progress production is `parseCaveatsW` (`:58`).
+
+**Net for this doc:** the §A CORE basis is no longer a *proposal* — its money/lifecycle/authority/note
+shapes are the **live `FullActionA`**, per-asset, term-proved, axiom-pinned. The §B expansion list is
+**half-retired**: multi-asset (#1) DONE, one-shot await (#4 engine) DONE in metatheory; the genuinely-open
+remainder is **forest-delegation handoff (#138)**, **ρ_in/ρ_out typed effects (#3)**, **cross-cell BoundDelta
+as a kernel arm (#2)**, **return-projection (#4 the return face)**, and **fork (#5)** — see §3's revised ranking.
 
 ---
 
@@ -303,50 +401,76 @@ retained log, per `cand-A §5/§10`).
 | **checkpoint** (name a `(head,receipt)` point) | `cand-A §5` | NONE; `ReceiptArchive` (51) is the *embryo* (it names a prefix) but archives, not checkpoints | **IS-A-RUNTIME-THEOREM** + a thin **MISSING** "name-a-head" effect if checkpoints must be on-chain |
 | **replay** (re-run from the log) | `cand-A §5` | NONE (differential harness does it off-chain) | **IS-A-RUNTIME-THEOREM** |
 | **time-travel** (fork at a checkpoint, alt turn-stream) | `cand-A §5` | NONE | **IS-A-RUNTIME-THEOREM** (= fork at step n) |
-| **JointTurn participation / CG-5 bound-delta half-edge** | `study-mina-relink §1`, `REORIENT §2` | `balance_change: Option<i64>` (`action.rs:96`) is a turn-level half-delta; `StateConstraint::BoundDelta` (`program.rs:747`) names the peer | **MISSING-NEEDS-PRIMITIVE** as a *cross-cell* half-edge: today `balance_change` is intra-turn only; the cross-side existence binding (CG-5) is unmodeled |
-| **vat-boundary ρ_out** (serialize held cap → biscuit key-as-cap) | `cand-C §398`, `cand-A §11` | `Authorization::Token` export is the *carrier* (`action.rs:422`) but there is no *effect* that performs ρ_out | **MISSING-NEEDS-PRIMITIVE** (a typed `Cap.exportAsKey` boundary effect; today only `ExportSturdyRef` (14), which is CapTP-swiss, not biscuit ρ_out) |
-| **vat-boundary ρ_in** (re-mint key-as-cap → c-list slot) | `cand-C §399` | `EnlivenRef` (15) re-mints a *swiss* ref; `Authorization::CapTpDelivered`/`Token` verify on entry | **PARTIAL** — `EnlivenRef` is the swiss flavor; biscuit ρ_in is **MISSING** as a cap-graph-add-from-verified-key effect |
+| **JointTurn participation / CG-5 bound-delta half-edge** | `study-mina-relink §1`, `REORIENT §2` | `balance_change: Option<i64>` (`action.rs:96`) is a turn-level half-delta; `StateConstraint::BoundDelta` (`program.rs:747`) names the peer | **MISSING (kernel arm) — but the LAW landed**: `Exec/CrossCellForest.lean` carries `crossForest_conserves` (the N-ary cross-cell Σ=0 binding-carried CG-5), `crossForest_no_amplify`, `crossForest_attests` (REAL, routed from `FullForest.lean:328` §9). The cross-cell **Σ=0 measure** is proved; what is still missing is a **first-class `FullActionA` half-edge arm with a peer-existence witness** (today cross-target is a routing overlay, not an executable action) |
+| **vat-boundary ρ_out** (serialize held cap → biscuit key-as-cap) | `cand-C §398`, `cand-A §11` | `Authorization::Token` export is the *carrier* (`action.rs:422`) but there is no *effect* that performs ρ_out | **STILL MISSING (effect) — but the boundary LAW landed**: `Boundary.lean` proves the coinductive `BoundaryRespecting`/`boundary_respecting_sound:244` (REAL); ρ_out as a typed `Cap.exportAsKey` selector is still absent in `FullActionA` (grep-confirmed). Today only `exportSturdyRefA` (CapTP-swiss), not biscuit ρ_out |
+| **vat-boundary ρ_in** (re-mint key-as-cap → c-list slot) | `cand-C §399` | `enlivenRefA` re-mints a *swiss* ref; `Authorization::CapTpDelivered`/`Token` verify on entry | **PARTIAL (unchanged)** — `enlivenRefA` is the swiss flavor; biscuit ρ_in is **MISSING** as a cap-graph-add-from-verified-key effect. The membrane *soundness obligation* is discharged (Boundary.lean); the *typed crossing effect* is not |
 | **revocable-forwarder / named-lossy Φ** (the membrane) | `cand-A §2.1`, `cand-C §210` | NONE (the loss is by-construction; `revocation_channel` on bearer caps `action.rs:470` is the closest) | **IS-A-RUNTIME-THEOREM** (`LossyMorphism` theorem, `cand-A §8`) + revocation = a tombstone edge (C8/C4) |
 | **beacon / VRF randomness** | (implied by any fair-ordering / leader / lottery; absent from canon as a primitive) | NONE — only `note_spending_air.rs:305` note `randomness` (a blinding scalar, not a beacon) | **MISSING-NEEDS-PRIMITIVE** *iff* the kernel must consume verifiable randomness in a turn (leader election lives in finality, but app-level lotteries need it) — **deferrable** |
 | **proof-carrying-forest ops** (attest a forest of step-proofs) | `circuit/src/proof_forest.rs` (new), `ProofForest.lean` | NONE at the effect level (forest is a *turn/finality* structure, not an effect) | **NOT an effect** — it is the JointTurn aggregation layer; correctly above the ISA |
-| **conditional / await (zkpromise/zkawait)** | `cand-A §3` | `PipelinedSend` (36) + `pending.rs`/`conditional.rs` (`ProofCondition`, `ConditionProof`) | **COMPOSABLE-IN-DSL partially** — the await *engine* exists; the **one-shot linear continuation typing** (`cand-A §3`) and the **settled-call return projection** (`cand-A §2.2`) are **MISSING** as typed effects |
-| **return projection** (typed `Obs`-delta the callee commits, caller awaits) | `cand-A §2.2/§3` | NONE | **MISSING-NEEDS-PRIMITIVE** (the "second observation" face; today turns are one-directional) |
+| **conditional / await (zkpromise/zkawait)** | `cand-A §3` | `pipelinedSend` + `pending.rs`/`conditional.rs` (`ProofCondition`, `ConditionProof`) | **ENGINE LANDED in metatheory (2026-06-02)** — `Await.lean` now proves the **one-shot linear continuation typing** as a term-proved algebra: `OneShot:109` (no reusable-`k` projection, `:103`), `four_faces_unify:426` (zkpromise/discharge/intent/eventual unified), `runtime_guard_is_double_spend:223`. ⚠ its header "`sorry` bodies" comment (`Await.lean:42`) is STALE. Still **not a kernel selector**; the **settled-call return projection** (next row) remains MISSING |
+| **return projection** (typed `Obs`-delta the callee commits, caller awaits) | `cand-A §2.2/§3` | NONE | **STILL MISSING — the genuinely-open #4 residual.** The `Await` one-shot covers the *caller-resumes-once* face; the *callee commits a typed `Obs`-delta the caller awaits* (the "second observation", bidirectional turn) is unbuilt. Task #82 (`W3-I` zkpromise/zkawait + await unification) is `in_progress` |
 | **sealer/unsealer + three-vat handoff** | `cand-A §3`, Miller | `CreateSealPair` (28), `Seal` (10), `Unseal` (11) | **COVERED** (shape S11) — but overloaded with field-seal at selector 10 |
-| **multi-asset / Resource camera** | `REORIENT §2`, `Resource.lean` | NONE — balance is a single `u64` slot; `asset_type` exists only inside notes (`action.rs:818`) | **MISSING-NEEDS-PRIMITIVE** — C1/C2 must become *per-asset-class* (`CONSERVATION_VECTOR`, `cand-A §1.3`), not a scalar `bal`; this is a soundness gap, not cosmetic |
+| **multi-asset / Resource camera** | `REORIENT §2`, `Resource.lean` | ✅ **DONE (Lean executable layer)** — `FullActionA` arms carry `(asset : AssetId)` (`Exec/TurnExecutorFull.lean:1928`); the per-asset ledger + conservation vector is REAL (`MultiAsset.lean:38,86,130`; `FullForest.lean:224`). `Resource.lean` is the Iris-**camera** conceptual tier (`Resource.lean:22`). (Rust `bal` is still a scalar `u64` — the Lean kernel is now *ahead* of Rust here, which is the point of the swap.) | **WAS the #1 soundness gap; now REAL on the executable kernel.** Residual = wire/breadth (task #129) |
 | **I-confluence / merge (BEC)** | `REORIENT §2`, `cand-A §6` | NONE (merge is a fork-resolution, above the ISA) | **IS-A-RUNTIME-THEOREM** / finality-layer — merge = CRDT join for lattice state, provable-fail for linear (`cand-A §6`) |
 
 ### Ranked MISSING primitives (genuinely CORE, not deferrable)
 
-1. **Per-asset-class balance (multi-asset C1/C2).** The single biggest soundness gap. `cand-A §1.3`
-   makes conservation a *per-class* `CONSERVATION_VECTOR`; the current `bal` is one scalar. Without
-   this, the kernel cannot conserve more than one asset and the "drifting future" (`cand-A §4`)
-   leaks per-class. **This must be CORE before the kernel replaces Rust.**
-2. **The cross-cell BoundDelta half-edge (CG-5).** `study-mina-relink §1` + `REORIENT §2`: the
-   JointTurn's cross-side existence binding is *irreducible* (`νF₁⊗νF₂` is not final). `balance_change`
-   is the intra-turn seed; the **cross-cell** half-edge with a peer-existence witness is missing and
-   is on the soundness-critical path for any multi-cell atomic commit.
-3. **Vat-boundary ρ_in/ρ_out as typed effects.** `cand-C §398`/`cand-A §11`: cap↔key crossing is
-   *the* membrane. Today it is split across `ExportSturdyRef`/`EnlivenRef` (swiss flavor) +
-   `Authorization::Token` (biscuit carrier) with no unifying effect. A verified capability OS needs
-   ρ_out (serialize-held-slot→key, attenuation-only) and ρ_in (verify-key→mint-slot) as first-class,
-   named-lossy primitives — this is what makes it cross-vat at all.
-4. **Return projection / settled-call await.** `cand-A §2.2`: turns are one-directional today; the
-   typed `Obs`-delta return + the caller's resumption gate is the zkRPC product and is unmodeled.
-5. **Fork (span/pushout) as a primitive.** `cand-A §6`: fork is the one structural hole; time-travel
-   and merge derive from it. `Spawn` is child-creation, not self-fork.
-6. *(Deferrable)* **Beacon/VRF randomness** — only if app-level lotteries enter the core; leader
+> ⚑ **Drift-repair note (2026-06-02):** items **#1 (multi-asset) and the *engine* half of #4 (one-shot
+> await)** are no longer missing — they LANDED in the live Lean (see §0.5). The list below is kept as the
+> historical analysis with each item's *current* status stamped inline.
+
+1. **Per-asset-class balance (multi-asset C1/C2).** ✅ **DONE — REAL, not missing (2026-06-02).** The
+   single biggest soundness gap *was* this; it is now the executable kernel's primary shape.
+   `cand-A §1.3`'s per-class `CONSERVATION_VECTOR` is realized as `maTotal k a` over a
+   `MACellId → AssetId → ℤ` ledger (`MultiAsset.lean:38,47,86`); every money-moving `FullActionA` arm
+   carries `(asset : AssetId)` (`Exec/TurnExecutorFull.lean:1928`); per-asset conservation is term-proved
+   + `#assert_axioms`-pinned at both turn level (`maExec_conserves_per_asset`, `MultiAsset.lean:130`) and
+   forest level (`execFullForestA_conserves_per_asset`, `FullForest.lean:224`/:421). The "must be CORE
+   before the kernel replaces Rust" bar is **met on the executable layer** (task #129 residual = breadth/
+   wiring, not the keystone).
+2. **The cross-cell BoundDelta half-edge (CG-5).** 🟡 **LAW landed; kernel-arm still open.** The N-ary
+   cross-cell Σ=0 binding is PROVED as `crossForest_conserves` (`Exec/CrossCellForest.lean:241`,
+   "binding LOAD-BEARING", `#assert_axioms`-pinned), with `crossForest_no_amplify:217` and
+   `crossForest_attests:278`. So the *irreducible cross-side conservation measure* (`study-mina-relink §1`;
+   the `νF₁⊗νF₂`-is-not-final intuition, now correctly framed in the canon as **sound joint-turns form a
+   PROPER SUBOBJECT of the product**, `Hyperedge.lean` `hyper_binding_is_proper:164` / `Core.lean`
+   `conservation_step:176`) is term-proved at the FOREST level. What remains OPEN is a **first-class
+   `FullActionA` half-edge *arm*** carrying a peer-existence witness — today cross-target subtrees are a
+   routing overlay (`FullForest.lean:328`), not an executable action. (Closely tied to forest-delegation
+   #138.)
+3. **Vat-boundary ρ_in/ρ_out as typed effects.** 🟡 **Boundary LAW landed; typed effect still open.** The
+   coinductive membrane soundness obligation is discharged — `Boundary.lean` `boundary_respecting_sound:244`
+   (REAL; its "Stated `sorry`" docstring `:243` is STALE). But ρ_out (serialize-held-slot→key,
+   attenuation-only) and ρ_in (verify-key→mint-slot) are **still not selectors/arms**: today the crossing is
+   split across `exportSturdyRefA`/`enlivenRefA` (swiss) + `Authorization::Token` (biscuit carrier) with no
+   unifying typed effect. This is what makes it cross-vat at all — **genuinely OPEN as a primitive.**
+4. **Return projection / settled-call await.** 🟡 **One-shot continuation landed; the *return face* open.**
+   `Await.lean` proves the one-shot linear continuation algebra (`OneShot:109`, `four_faces_unify:426`,
+   `commit_resumes_once:312`) — the caller-resumes-once half of `cand-A §2.2/§3`, term-proved in the verify
+   metatheory. The *callee-commits-a-typed-`Obs`-delta-the-caller-awaits* second-observation face
+   (bidirectional turn / zkRPC product) is **still unbuilt** (task #82 `in_progress`).
+5. **Fork (span/pushout) as a primitive.** 🔴 **Still OPEN (unchanged).** `cand-A §6`: fork is the one
+   structural hole; time-travel and merge derive from it. `spawnA` is child-creation, not self-fork.
+6. *(Deferrable, unchanged)* **Beacon/VRF randomness** — only if app-level lotteries enter the core; leader
    election is a finality concern, not an effect.
-7. *(Deferrable)* **On-chain checkpoint naming** — only if checkpoints must be attested on-chain
+7. *(Deferrable, unchanged)* **On-chain checkpoint naming** — only if checkpoints must be attested on-chain
    rather than being a pure runtime theorem.
 
-### Layer recommendation for the gaps
+### Layer recommendation for the gaps (2026-06-02 revised)
 
-- **Into CORE now:** multi-asset C1/C2 (#1), cross-cell BoundDelta (#2), ρ_in/ρ_out (#3).
-- **New CORE coalgebra ops, after the living cell lands:** return projection (#4), fork (#5).
+- **Already in CORE (done):** ✅ multi-asset C1/C2 (#1) — the executable `FullActionA` is per-asset and
+  conservation is proved (§0.5).
+- **Into CORE next (the genuinely-open kernel-arm work):** the cross-cell BoundDelta **arm** (#2; the *law*
+  is done, the executable half-edge action is not), ρ_in/ρ_out typed effects (#3), forest-delegation
+  handoff (#138 — route the discarded edge onto `recKDelegateAtten`; today `FullForest.lean:124` drops it).
+- **New CORE coalgebra ops, after the living cell lands:** return projection (#4 — the *return face*; the
+  one-shot face is already proved in `Await.lean`), fork (#5).
 - **Runtime theorems (no effect):** checkpoint/restore/replay/time-travel/merge — per `cand-A §5/§6`
-  these are *consequences* of codata + retained log + rollback-handler turn, NOT primitives. Adding
-  them as effects would be a category error (the FAITHFULNESS-AUDIT's "moved-complexity" trap in
-  reverse).
+  these are *consequences* of codata + retained log + rollback-handler turn, NOT primitives. The
+  ChainLink/`ObsAdvance` half is the executable substrate they ride on (`Exec/TurnExecutorFull.lean:472,484`
+  — `ChainLink` PROVED: a committed action extends the newest-first chain by *exactly* its receipt, so a
+  replayed action that re-appends the same receipt is detectable, `:513` — the anti-replay seed). Adding them as
+  effects would be a category error (the FAITHFULNESS-AUDIT's "moved-complexity" trap in reverse).
 - **DSL/portal:** queue semantics, refusal non-action proof, committed-escrow crypto.
 
 ---
@@ -357,8 +481,10 @@ retained log, per `cand-A §5/§10`).
   ≈24 passthrough-with-bind selectors (§S6) into **C7 `Meta.bind(domain_tag, hash)`** — they already
   share one row algebra in `air.rs` (state passthrough + fold-hash-into-effects_hash + nonce tick),
   distinguished only by a domain constant. Fewer selectors = fewer per-selector AIR constraint
-  blocks to audit = smaller verifier. The Lean `CatalogEffects` 52-tag exhaustive coloring shrinks
-  to ~13 shape-tags + a `domain_tag` enum.
+  blocks to audit = smaller verifier. The Lean 52-tag exhaustive coloring (`EffectKind`,
+  `CatalogInstances.lean:285`; `every_effect_classified`, `CatalogEffects.lean:201`) shrinks
+  to ~13 shape-tags + a `domain_tag` enum. (The *executable* `FullActionA` already collapses below 54 —
+  46 arms — by folding `queueAtomicTx`/`queuePipelineStep` and aliasing `createObligationA`→`createEscrowA`.)
 - **In-circuit atomicity is the hard constraint — these MUST stay primitive.** The EffectVmAir bakes
   54 selectors into ONE trace partly so a whole turn's effects prove atomically (one proof, one
   `OLD_COMMIT→NEW_COMMIT`). Any shape whose *row algebra* genuinely differs MUST keep a selector:
@@ -389,11 +515,14 @@ retained log, per `cand-A §5/§10`).
   - `NoteSpend`/`NoteCreate` vs escrow S2: both "conservative," but the conserved domain differs
     (nullifier-set+note-tree vs cell-ledger+side-table). Merging would conflate two conservation
     laws.
-- **Additions that are genuinely CORE vs deferrable.** Multi-asset (#1), BoundDelta (#2), ρ_in/ρ_out
-  (#3) are CORE — without them it is not a multi-asset cross-vat capability OS. Return projection
-  (#4) and fork (#5) are CORE-but-after-the-living-cell-lands. Beacon/VRF (#6) and on-chain
+- **Additions that are genuinely CORE vs deferrable (2026-06-02).** Multi-asset (#1) is **DONE and
+  REAL** on the executable kernel (it *is* now a multi-asset capability OS at the Lean layer). BoundDelta
+  (#2) and ρ_in/ρ_out (#3) have their **soundness laws proved** (`crossForest_conserves`,
+  `boundary_respecting_sound`) but their **executable kernel arms/effects** are the open CORE work.
+  Return projection (#4) is half-done — the one-shot `Await` algebra is proved (`Await.lean:426`); the
+  *return face* and fork (#5) are CORE-but-after-the-living-cell-lands. Beacon/VRF (#6) and on-chain
   checkpoint (#7) are deferrable. Proof-carrying-forest is NOT an effect (it is the JointTurn/finality
-  aggregation layer) — adding it to the ISA would be a layer violation.
+  aggregation layer — `Exec/ProofForest.lean`) — adding it to the ISA would be a layer violation.
 
 ---
 
@@ -413,10 +542,14 @@ status quo (which is ~24 passthrough rows wearing different domain constants).
 `C8 Lifecycle.transition(phase)` · `C9 SideTable.lock` · `C10 SideTable.settle(predicate)` ·
 `C11 NoteTree.insert` · `C12 Nullifier.spend` · `C13 Nonce.tick` · `C11′ Sealer.brand{create,seal,unseal}`.
 
-**NEW CORE (architecture-demanded, ranked):**
-`Asset` parameterization on C1/C2 (#1, now) · `BoundDelta.halfEdge(peer,δ,existence-witness)` (#2,
-now) · `Boundary.exportKey` / `Boundary.importKey` ρ_out/ρ_in (#3, now) · `Return.project(Obs-delta)`
-+ `Await.settle` (#4, after living cell) · `Fork.span` (#5, after living cell).
+**NEW CORE (architecture-demanded, ranked) — 2026-06-02 status stamped:**
+✅ `Asset` parameterization on C1/C2 (#1) — **DONE** (`FullActionA` per-asset, conservation proved, §0.5) ·
+🟡 `BoundDelta.halfEdge(peer,δ,existence-witness)` (#2) — **the Σ=0 LAW is proved** (`crossForest_conserves`,
+`Exec/CrossCellForest.lean:241`); the executable *arm* with a peer-existence witness is the open half ·
+🔴 `Boundary.exportKey` / `Boundary.importKey` ρ_out/ρ_in (#3) — **the membrane LAW is proved**
+(`Boundary.lean:244`); the typed *effect* is open · 🟡 `Return.project(Obs-delta)` + `Await.settle` (#4) —
+**the one-shot `Await` algebra is proved** (`Await.lean:426`); the *return face* is open ·
+🔴 `Fork.span` (#5) — open.
 
 **DERIVED-MACRO (executor expands to CORE; no selector):** Introduce, CreateCellFromFactory, Spawn,
 Queue{Allocate,Resize,AtomicTx,PipelineStep}, all escrow/obligation release/refund/fulfill/slash,
@@ -440,14 +573,21 @@ revocable-forwarder lossiness — per `cand-A §5/§6/§8`.
 2. **Phase R2.** Fold `Introduce`→C4-guarded, `Spawn`/`Factory`→C3-param, `Bridge*`/escrow-settle→
    C9/C10/C2-with-portal as DERIVED-MACRO in the trace generator (no new selectors). Model the
    consent+expiry guards the FAITHFULNESS-AUDIT found unmodeled.
-3. **Phase E1 (the soundness-critical additions).** Parameterize C1/C2 by **asset class**
-   (multi-asset `CONSERVATION_VECTOR`) — the #1 gap. Add the cross-cell **BoundDelta half-edge**
-   (CG-5). These are prerequisites for a kernel that replaces Rust.
+3. **Phase E1 (the soundness-critical additions).** ✅ **Asset-class half DONE** — C1/C2 are
+   per-asset on the executable kernel and the `CONSERVATION_VECTOR` is proved (`MultiAsset.lean:130`,
+   `FullForest.lean:224`). 🟡 The cross-cell **BoundDelta half-edge** (CG-5) has its **Σ=0 law proved**
+   (`crossForest_conserves`, `Exec/CrossCellForest.lean:241`); the remaining E1 work is the
+   executable *arm* + threading the forest-delegation edge that `execFullChildrenA` currently discards
+   (`FullForest.lean:124`, task #138) so delegation has teeth on execution, not just on edge-data.
 4. **Phase E2 (the membrane).** Add `Boundary.exportKey`/`importKey` (ρ_out/ρ_in) unifying the CapTP
-   swiss family and the `Authorization::Token` carrier into typed, named-lossy boundary effects.
-5. **Phase E3 (the coalgebra faces, after the living cell lands per REORIENT §5).** Add
-   `Return.project` + `Await.settle` (the second observation / zkRPC) and `Fork.span`; derive
-   checkpoint/restore/replay/time-travel/merge as **theorems**, not effects.
+   swiss family and the `Authorization::Token` carrier into typed, named-lossy boundary effects. The
+   coinductive *boundary law* they must satisfy is already proved (`Boundary.lean:244`) — E2 is the
+   *typed effect surface* on top of it, still OPEN.
+5. **Phase E3 (the coalgebra faces, after the living cell lands per REORIENT §5).** 🟡 The one-shot
+   `Await` algebra (`Await.lean:426`, `four_faces_unify`) is **already proved** — E3 adds the
+   `Return.project` *return face* (the second observation / zkRPC, task #82) and `Fork.span`; derive
+   checkpoint/restore/replay/time-travel/merge as **theorems**, not effects (the ChainLink anti-replay
+   substrate is proved, `Exec/TurnExecutorFull.lean:484,513`).
 6. **Phase D (move-to-DSL, last, behind a verified program law).** Demote queue semantics, refusal
    proof, and committed-escrow crypto to verified CellProgram/Custom obligations — only after the
    `CellProgram` law is proved (else it is moved-complexity, not reduction).
@@ -457,8 +597,20 @@ collapse + the macro demotions) yet **larger in what it can express** (multi-ass
 half-edges, the membrane, the coalgebra return/fork faces) — the right orthogonal basis for a
 verified capability OS rather than a verified ledger.
 
+**Where we actually are (2026-06-02).** The §A CORE is no longer a proposal: the executable
+`FullActionA` (46 arms, `Exec/TurnExecutorFull.lean:1928`) *is* the per-asset money/lifecycle/authority/
+note basis, term-proved and `#assert_axioms`-pinned. The §B expansion has flipped from "all missing" to
+"the laws landed, the kernel arms are next": multi-asset DONE (#1); the Σ=0 cross-cell law
+(`crossForest_conserves`), the membrane law (`boundary_respecting_sound`), and the one-shot await algebra
+(`four_faces_unify`) all PROVED in the metatheory. The genuinely-open frontier is the small, named set:
+the **forest-delegation handoff** (#138 — `execFullChildrenA` discards the edge, `FullForest.lean:124`),
+the **BoundDelta executable arm** (#2), **ρ_in/ρ_out as typed effects** (#3), the **return face** (#4), and
+**fork** (#5). The *reduction* side (the §S6→C7 passthrough collapse) is still entirely future work on the
+Rust circuit selectors.
+
 ---
 
 *A closing couplet, since the egg is still warm:*
 *fifty-four names, but the shapes are thirteen — / a basis is found where the rows agree;*
-*yet the membrane, the asset, the half-edge between — / are the primitives the OS still needs to be.* 🐉🥚
+*the asset arrived, and the forest conserves — / now the membrane, the half-edge, the handoff it serves.*
+🐉🥚

@@ -1,5 +1,17 @@
 # FOUNDATIONS — limits, the tensor non-finality, and the simplicial / ∞ structure
 
+> **Current as of 2026-06-02.** Re-grounded against the live Lean. The limit / tensor /
+> simplicial spine (`Hyperedge.lean`, `JointTurn.lean`, `Boundary.lean`, `JointViaHyper.lean`,
+> `Finality.lean`) is UNCHANGED and every `file:line` receipt below still lands exactly. TWO
+> claims went stale in the *good* direction — **both former `sorry`s were retired** (the
+> zero-sorry sweep, task #128): `conservation_step` (§2.5, was `Core.lean:154` `sorry`) is now a
+> PROVED theorem off a typeclass field discharged by the kernel; `phi_functorial` (§6, was
+> `VatBoundary.lean:392,401` `sorry`) is now PROVED under an explicit `NonDegenerate` hypothesis
+> and `#assert_axioms`-pinned. Both corrected in place below (search "**[2026-06-02 UPDATE]**").
+> Verified: the ENTIRE `Dregg2/**` tree now has **zero** real `sorry` tokens (guarded two ways —
+> `scripts/no-sorry-metatheory.sh` textual CI grep + the `#assert_axioms` pins; see
+> `Claims.lean:31-43`). This lens's content is otherwise WAS-CURRENT.
+
 > **What this is.** A READ-ONLY categorical-foundations excavation of dregg2 through ONE
 > lens: **limits (the wide pullback / equalizer), the tensor non-finality, and the
 > simplicial / ∞-cell structure.** No code changed. Every categorical claim is grounded in a
@@ -38,9 +50,12 @@ tensor `⊗` of cells is **not** a categorical product / not final for the joint
 to "a full simplicial object / ∞-category of the interaction complex": there is **no
 proved face/degeneracy/simplicial-identity layer** in the Lean — the simplicial reading is
 an *analogy* (a real and illuminating one, tied to a cited epistemic-logic paper) that buys
-no theorem until each face carries its own binding. What is **ASPIRATIONAL** is `Φ`-being-a-
+no theorem until each face carries its own binding. ~~What is **ASPIRATIONAL** is `Φ`-being-a-
 functor (`Spec.VatBoundary.phi_functorial` is a by-design `sorry`; only a concrete witness is
-proved). The infinity question splits cleanly into **two orthogonal infinities** — temporal
+proved).~~ **[2026-06-02 UPDATE]** `Φ`-being-a-functor is now **REAL under an explicit
+`NonDegenerate` hypothesis** (`phi_functorial` is PROVED, no `sorry`, `#assert_axioms`-pinned —
+see §6); the residual is the *honest named hypothesis* (an abstract `Verify` may accept no
+witness), not an unproven body. The infinity question splits cleanly into **two orthogonal infinities** — temporal
 (νF, the greatest fixpoint, REAL via Paco) and arity (the ∞-cell = colimit over all cells,
 the global atomic turn, which is *unfillable across a partition* — REAL-as-impossibility,
 unbuilt-as-object).

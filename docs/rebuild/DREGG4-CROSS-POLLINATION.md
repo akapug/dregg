@@ -1,5 +1,56 @@
 # DREGG4 — CROSS-POLLINATION: ideas dregg has not yet considered, mined from adjacent systems
 
+> **⚑ GROUND-CHECKED vs live Lean 2026-06-02 (post-2-compaction drift-repair); REAL / DECORATIVE /
+> ASPIRATIONAL tags carry `file:line` receipts.** This is a *forward-vision* doc, so most of its 13
+> ideas are honestly ASPIRATIONAL by design. The ground-check found the drift runs IN THE GOOD
+> DIRECTION — three of the doc's "build-first" / "we-should-obviously-have-this" frontier items have
+> since LANDED in Lean and are now `theorem`-proved, kernel-clean:
+> - **§13.1 keystone (verifier-indexed attestation / transferability dial) — REAL & DONE.**
+>   `Dregg2/Authority/DesignatedVerifier.lean` (374 lines) defines `DischargedFor : Verifier → … →
+>   Prop` (`:113`), `Transferable`/`DesignatedFor` endpoints (`:129`,`:138`), `TransferDial`/`DialHolds`
+>   (`:146`,`:156`), and proves `public_convinces_any_third_party`/`designated_not_transferable`/
+>   `designated_is_deniable`/`dial_endpoints_distinct` — all `sorry`-free, `#print axioms`-audited
+>   (`:369-372`). The deniability crypto is an honest §8 `DVKernel` class portal (`:84`), NEVER faked.
+> - **§0 disclosure dial — REAL.** `Metatheory/EpistemicDial.lean` proves `Dial` a `LinearOrder` +
+>   `BoundedOrder` (`acceptanceOnly < selective < fullDisclosure`, `:92`,`:100`), `#assert_axioms`-pinned
+>   (`:119`).
+> - **§2.2 ρ_in/ρ_out + 3-vat handoff — REAL (NO LONGER "missing"/"four counter bumps").** Wave-8 de-THIN
+>   landed `exportSturdyRefA`/`enlivenRefA` as executed effects with authorization + balance-neutral
+>   theorems (`swissExportChainA`/`swissEnlivenChainA`, `TurnExecutorFull.lean:1551`,`:1561`), and
+>   `validateHandoffA` now binds a REAL 3-vat introduce cert + bumps a refcount (`swissHandoffK`,
+>   `RecordKernel.lean:2188`) with `execFullA_validateHandoffA_non_amplifying` PROVED
+>   (`TurnExecutorFull.lean:3425`). Only the *live OCapN network gossip protocol* stays aspirational.
+>
+> **Two corrections to fold in (good-direction):** the executor is NOT a tiny toy — `execFullForestA`
+> runs a **44-arm** effect dispatch as an all-or-nothing tree (`FullForest.lean:113`, holder-resolver
+> arms `:341-397`). And the §1.1/§3.2 CSpace container substrate landed (`CSpace.lean`, 220 lines,
+> `reaches_mono_grant :146` / `writeThroughGrant_mono :204` / `attenuateC_cAuth_subset :102` all PROVED).
+> **One genuinely-OPEN caveat the code confirms:** forest *delegation edges* are STILL discarded by the
+> executor — `execFullChildrenA` pattern-matches `⟨_, _, _, sub⟩` (`FullForest.lean:124`), dropping the
+> `(holder, keep, parentCap)` edge and recursing only on the subtree. So no-amplification across forest
+> edges is vacuous on execution; routing them onto `recKDelegateAtten` is task **#138 (in_progress)**.
+>
+> Tag legend used inline below: **REAL** = a Lean object exists, term/tactic-proved (often
+> `#assert_axioms`/`#print axioms`-pinned) with teeth; **DECORATIVE** = vocabulary only, no Lean object
+> (grep-confirmed absent); **ASPIRATIONAL** = honestly-named OPEN/unbuilt frontier. `#assert_axioms`
+> certifies KERNEL-CLEAN (no sorry/axiom), never faithful-or-non-vacuous — meaning is read from the body.
+>
+> **Current as of 2026-06-02.** This is a *forward-looking dregg4 vision* doc; its
+> architecture/vision content is largely still live. BUT it was written when the
+> **transferability dial was a stub**, and that is **no longer true** — the doc's own
+> §13.1 "build first" keystone (verifier-indexed `DischargedFor` + the public↔designated
+> transferability dial) **has since been built** in `Dregg2/Authority/DesignatedVerifier.lean`
+> (374 lines, all `theorem`s `sorry`-free) and the disclosure dial unified in
+> `Metatheory/EpistemicDial.lean` (`#assert_axioms`-pinned). The "dregg has it? **NO**"
+> cells for designated-verifier/deniable in §13.1's table are therefore **STALE**; corrected
+> inline below. Several other "dregg lacks X" claims have likewise partially moved (CSpace
+> container model for §1.1/§3.2 → `Dregg2/Authority/CSpace.lean`; the disputation thesis the
+> doc never cited was refuted+rebuilt → `Metatheory/Disputation.lean`). The *frontier* items
+> (MPC §10, FHE §11, flow-lattice §1.2, Kachina bi-state §5.1) remain genuinely unbuilt.
+> Receipts are `file:line` into `metatheory/`. (Many `cand-*`/`EFFECT-ISA-*`/`LEARNINGS-*`
+> doc cites below are to *sibling design docs*, not Lean, and are NOT re-verified here — only
+> the **Lean-state** claims are checked against current source.)
+>
 > **Scope / method.** READ-ONLY galaxy-brain design exploration for **dregg4** (the
 > advanced/generalized successor — see `CARRY-FORWARD-SYNTHESIS.md §4`). dregg2 is the *faithful
 > kernel* (three faces modeled honestly: EFFECTS + CAVEATS/AUTH + ATTESTATION, small core, two
@@ -34,14 +85,24 @@ Everything below is plotted on five axes, because that is the actual shape of th
 - **Disclosure dial** — *what* of a turn is revealed (`FieldVisibility`, selective disclosure). Today
   it controls content.
 - **Transferability dial** — *to whom the attestation is convincing* (non-repudiable ↔
-  designated-verifier ↔ deniable). **Today pinned at "maximal / non-repudiable"**
-  (`CARRY-FORWARD-SYNTHESIS §2 Face 3`). This dial barely exists; many of the best ideas below land
-  on it.
+  designated-verifier ↔ deniable). **[2026-06-02 UPDATE: NO LONGER A STUB — REAL.]** When this doc was
+  written the dial was pinned at "maximal / non-repudiable" (`CARRY-FORWARD-SYNTHESIS §2 Face 3`).
+  It has since been built as a first-class two-endpoint dial: `Dregg2/Authority/DesignatedVerifier.lean`
+  defines the **verifier-INDEXED discharge** `DischargedFor : Verifier → Statement → Proof → Prop`
+  (`:113`), the `Transferable` endpoint (`:129`, `= ∀ V, DischargedFor V …` — the old "maximal" mode),
+  the `DesignatedFor V₀` endpoint (`:138`, deniable), and a `TransferDial`/`DialHolds` selector
+  (`:146`,`:156`). The keystone moves of §13.1 below are **DONE**, not future — REAL, `#print
+  axioms`-audited (`:369-372`).
 
-The single most important meta-observation from the mining: **dregg's two dials are both
-under-developed, and the transferability dial is essentially a stub.** A large fraction of the
-genuinely-new ideas are *not* new effects — they are new *positions on the two dials* that the
-current architecture cannot even *express*. That is the galaxy-brain center of gravity for dregg4.
+The single most important meta-observation from the mining (AS-WRITTEN): *dregg's two dials are both
+under-developed, and the transferability dial is essentially a stub.* **This is now resolved at both
+endpoints (REAL):** the *transferability* dial's two endpoints (public ↔ designated/deniable) are built
+and proved (`DesignatedVerifier.lean`), and the *disclosure* dial's three positions are unified as one
+chain in `Metatheory/EpistemicDial.lean` (`Dial`, `acceptanceOnly < selective < fullDisclosure`, a
+proved `LinearOrder` (`:92`) + `BoundedOrder` (`:100`), `#assert_axioms`-pinned `:119`). The remaining
+genuinely-new ideas below are mostly the
+*frontier* positions (MPC-between-co-parties §10, hide-from-executor/FHE §11, the flow-lattice §1.2,
+the leakage-descriptor §5.2) that the *crypto portals* (DV/deniable) still leave as honest §8 obligations.
 
 ---
 
@@ -50,13 +111,24 @@ current architecture cannot even *express*. That is the galaxy-brain center of g
 dregg already steals the seL4 integrity case-split (the vat-boundary law, `cand-C §4A`,
 `LEARNINGS-capability-boundary §F`). What it has **not** stolen:
 
-### 1.1 capDL as a first-class, *attested* system-description language (NEW)
+### 1.1 capDL as a first-class, *attested* system-description language (PARTIAL — substrate REAL, attested-realizes ASPIRATIONAL)
 seL4 has **capDL** (`pdfs` "capdl-sel4") — a formal capability-distribution language describing the
 entire CSpace layout, with a *verified* initializer that instantiates exactly that capability
 distribution and a proof the running system matches the spec (`capdl-sel4`; `OPEN-PROBLEMS.md` notes
 it as the teleport/transport format, unread). dregg has `(id, head, rule)` cell descriptors
 (`cand-A §2.1`) but **no language for describing — and proving — the shape of a whole *constellation*
 of cells and the cap-edges between them.**
+
+> **[2026-06-02 PARTIAL — the substrate landed.]** A seL4-CSpace **container** capability model now
+> exists as a sandbox prototype: `Dregg2/Authority/CSpace.lean` defines `CCap` (`:33` —
+> `null`/`endpoint`/`cnode table rights`), a navigable distributed `CSpace := Label → List CCap`
+> (`:43`), a fuel-bounded `reaches` walk (`:65`), and proved monotonicity laws
+> (`reaches_mono_grant :146`, `writeThroughGrant_mono :204`, `attenuateC_cAuth_subset :102`). This is
+> the *graph/topology substrate* a CapDAG-spec would describe — holding one `cnode` confers reach to a
+> whole subtree (the O(1) structural sharing the flat `Caps` could not express). What is **still
+> absent** is the *attested-realizes* theorem (`realizes : Constellation → CapDAGSpec → Prop` + a STARK
+> over the forest): the doc's galaxy-brain target remains the open part. The prototype is explicitly
+> "BEFORE migrating the executor onto it" (`CSpace.lean:5`); migration is task **#140 (pending)**.
 
 - **The galaxy-brain version:** a **CapDAG-spec** — a content-addressed Preserves value (`pdfs`
   "preserves-spec") describing a multi-cell subsystem's *entire* authority topology, paired with a
@@ -127,28 +199,46 @@ effect, no operator-facing time-travel debugger (`EFFECT-ISA-DESIGN §3` ranks F
 - **Genuinely new?** The time-travel *theorem* exists; the **attested causal-provenance of message
   sends** does not. That is the new thing.
 
-### 2.2 OCapN's *machine-spanning object identity & three-vat handoff as a network protocol* dregg only half-mirrors (NEW)
+### 2.2 OCapN's *machine-spanning object identity & three-vat handoff as a network protocol* dregg only half-mirrors (PARTIAL→LANDED, REAL — only the NETWORK is left)
 OCapN (`pdfs` "ocapn-interoperable-capabilities-network-spritely", "captp-capability-transport-protocol-spritely")
 specifies **the actual gossip/handoff protocol** — including the **third-party handoff** where vat A
-introduces vat B to vat C's object, with a *gift/withdraw* certificate exchange (the
-`ValidateHandoff` effect `S9` is dregg's on-chain *shadow* of this, but as four disconnected counter
-bumps, `EFFECT-ISA-DESIGN §S9`). dregg has **no live CapTP-3-party-handoff protocol with the
-sturdyref/locator naming discipline** — it has the on-chain reflection but not the network reality.
+introduces vat B to vat C's object, with a *gift/withdraw* certificate exchange.
 
-- **The galaxy-brain version:** adopt OCapN's **locator/sturdyref distinction as the two ends of the
-  transferability dial**: a *live reference* (caps-as-caps, non-transferable, mediator-enforced) vs a
-  *sturdyref* (keys-as-caps, transferable, offline). dregg's `ρ_in`/`ρ_out` (`EFFECT-ISA-DESIGN §B #3`,
-  the missing vat-boundary primitives) **are exactly the OCapN enliven/export ops** — but OCapN also
-  specifies the *gift table* and *handoff certificate* that make the **third-party introduction
-  unforgeable across mutually-distrustful vats**. That protocol is the operational realization of the
-  `Introduce` effect (`S5`) at network scale, which dregg models only intra-graph.
-- **Three-faced map:** **CAVEATS/AUTH** (handoff = a cross-vat attenuated grant) + the
-  **transferability dial** (locator ↔ sturdyref is *the* dial, named by the lineage).
-- **Build sketch:** lift `ValidateHandoff` from four counter-bumps to a typed `Boundary.handoff(gift,
-  certificate)` effect whose admissibility is the OCapN three-vat handoff check; differential-test
-  against the Spritely reference. Cost: moderate; this is mostly *unifying* existing dregg effects
-  under the protocol the lineage already specified. **This is the single most "we should obviously
-  already have this" idea in the doc.**
+> **[2026-06-02 — the on-chain reality LANDED; this was "the single most we-should-obviously-have-this
+> idea" and Wave-8 de-THIN built it. REAL.]** The doc was written when `ValidateHandoff` was "four
+> disconnected counter bumps" and `ρ_in`/`ρ_out` were "the missing vat-boundary primitives." Both are
+> now **executed effects with proved laws** in the swiss-table CapTP registry:
+> - `exportSturdyRefA` / `enlivenRefA` (= ρ_out / ρ_in) run real registry ops `swissExportChainA`
+>   (`TurnExecutorFull.lean:1551`) / `swissEnlivenChainA` (`:1561`), each with an authorization theorem
+>   (`swissExportChainA_authorized :1590`, `swissEnlivenChainA_authorized :1598`) and balance-neutrality
+>   (`swissExportChainA_balNeutral :1624`). They sit in the 44-arm `execFullForestA` dispatch
+>   (`FullForest.lean:396-397`) and have FFI wire-codec arms (`FFI.lean:1701`,`:1965`).
+> - `validateHandoffA` (`S9`) is **no longer counter bumps**: `swissHandoffK` binds a REAL 3-vat
+>   introduce cert hash to the swiss entry + bumps its refcount, balance-neutral (`RecordKernel.lean:2188`;
+>   the cert field is `cert : Option Nat`, `none` until bound, `:226`). And the Granovetter-introduce
+>   semantics are PROVED: `execFullA_validateHandoffA_grounds` (the handoff IS an introduce edge,
+>   `TurnExecutorFull.lean:3417`) and `execFullA_validateHandoffA_non_amplifying` — THE HEADLINE, the
+>   conferred attenuated cap cannot amplify (`:3425`).
+>
+> What is **STILL aspirational** is the *live OCapN network*: a real cross-machine gossip/handoff
+> transport with the gift/withdraw certificate exchange differential-tested against the Spritely
+> reference. dregg now has the **executed, attested in-graph handoff**; it does not yet have the
+> **wire protocol across mutually-distrustful machines**. The galaxy-brain residue below is now that
+> network gap, not the effects.
+
+- **The galaxy-brain version (residue):** adopt OCapN's **locator/sturdyref distinction as the two ends
+  of the transferability dial**: a *live reference* (caps-as-caps, non-transferable, mediator-enforced)
+  vs a *sturdyref* (keys-as-caps, transferable, offline). The export/enliven ops above ARE the OCapN
+  enliven/export ops; what is left is OCapN's *gift table* + *handoff certificate exchange* run as a
+  **network transport** that makes the third-party introduction unforgeable across mutually-distrustful
+  *machines* (today the cert binds in-state; the cross-machine gossip is unbuilt).
+- **Three-faced map:** **CAVEATS/AUTH** (handoff = a cross-vat attenuated grant — REAL: the
+  non-amplification theorem) + the **transferability dial** (locator ↔ sturdyref is *the* dial, named by
+  the lineage — REAL endpoints in `DesignatedVerifier.lean`).
+- **Build sketch (residue):** wrap the proved `swissHandoffK` / `swiss*ChainA` effects in a typed
+  `Boundary.handoff(gift, certificate)` **network** message whose admissibility is the OCapN three-vat
+  handoff check; differential-test against the Spritely reference. Cost: now low-moderate — the
+  *semantics* are built and proved; the work left is the *transport*.
 
 ---
 
@@ -193,8 +283,12 @@ the subsystem can leak** — the factory is a *compiler from a cap-set to a conf
   **ATTESTATION** (the badge now carries a confinement proof, not just a permission proof).
 - **Genuinely new?** Yes — dregg attests *permission* (de-jure, `OPEN-PROBLEMS #6`); a *confinement
   bound* is a statement about *what cannot happen*, the dual. dregg has `Refusal` (evidence of
-  *one* non-action, `EFFECT-ISA-DESIGN §S12`) but nothing attesting a *standing* bound on future
-  authority. This is `Refusal` generalized from a point to a region.
+  *one* non-action, `EFFECT-ISA-DESIGN §S12`; still live — `Dregg2/Exec/Effect.lean`,
+  `EffectsState.lean`) but nothing attesting a *standing* bound on future authority. This is `Refusal`
+  generalized from a point to a region. **[2026-06-02: STILL OPEN.]** The *substrate* for the
+  confinement-reach computation now exists (`CSpace.lean`'s fuel-bounded `reaches :65` + the MDB/revoke
+  derivation walk), but the *attested* `mutable(minted) ⊆ authorized` badge (the galaxy-brain part) is
+  unbuilt — the prototype proves *monotonicity of reach*, not a *standing confinement bound in-circuit*.
 
 ---
 
@@ -358,11 +452,22 @@ determinism is not a stated contract with a versioned semantics* — and its `AI
 dregg cites CALM, BEC, I-confluence heavily (`GLOSSARY` three judgements; `OPEN-PROBLEMS #7`;
 `pdfs/discoveries-2 §2,§5`). It knows the *theory*. What it has **not** built:
 
-### 9.1 A CALM/Bloom-style *monotonicity type system* that compiles the coordination-free fragment (NEW — and it closes a live OPEN)
+### 9.1 A CALM/Bloom-style *monotonicity type system* that compiles the coordination-free fragment (ASPIRATIONAL — partial precursor exists; closes a live OPEN)
 `discoveries-2 §5` flags that dregg cites the CALM theorem but **not the languages** (Bloom, Dedalus,
 Hydro — `pdfs` "dedalus-datalog-in-time-and-space", "hydro-compiler-for-distributed-programs"). The
 live soundness risk (`OPEN-PROBLEMS #7`): nothing stops a developer declaring a `balance≥0` cell at
 tier-1, violating BEC. **The fix dregg names but has not built is a static monotonicity analysis.**
+
+> **[2026-06-02 — still ASPIRATIONAL; a PARTIAL precursor exists.]** There is no
+> `CellProgram`-level monotonicity *type system* that auto-derives the finality tier (grep finds no
+> `deriveFinalityTier` / monotone-inference). The closest landed object is `effectLinearity`
+> (`Dregg2/Exec/EffectsState.lean`) — a per-effect *hand-assigned* classification into
+> `Monotonic`/`Linear`/`Idempotent` (e.g. `exportSturdyRef_is_monotonic :473`,
+> `refusal_is_monotonic :479`), which is the *vocabulary* of the lattice but NOT the static analysis:
+> it tags effects one-by-one, it does not *infer* monotonicity of a transition set nor bind a derived
+> tier into the content-addressed program. The CSpace work proves a related monotonicity *fact*
+> (`reaches_mono_grant`, `CSpace.lean:146` — grant never removes reach), but that is a theorem about
+> the grant fragment, not a compile-time tier check. The galaxy-brain target (the inference) is open.
 
 - **The galaxy-brain version:** a **monotonicity/lattice type for `CellProgram`** — analyze whether a
   cell's transition set is *monotone* (a join-semilattice homomorphism) and *automatically derive the
@@ -451,8 +556,10 @@ confidentiality* — the host computes but cannot read.
 ## 12. Intent-centric / solver architectures — dregg has the seam; the missing market machinery
 
 dregg has the intent/await family and the verify/find seam *precisely* (`LEARNINGS-intent-matching`,
-the `no_general_matcher` theorem). The matcher is an untrusted plugin. What dregg lacks is the
-*economic* layer (`gaps-1`, `gaps-2` flag market machinery as out-of-core):
+the `no_general_matcher` *argument* — general match ⪰ higher-order unification, undecidable, carried in
+`Dregg2/Authority/Intent.lean:32`,`:191` as a docstring rationale, not a standalone term-proved theorem
+object). The matcher is an untrusted plugin. What dregg lacks is the *economic* layer (`gaps-1`,
+`gaps-2` flag market machinery as out-of-core):
 
 ### 12.1 Credible-auction / mechanism-design as a *verified clearing predicate* (NEW)
 `pdfs` "credible-optimal-auctions-via-blockchains", "winner-determination-combinatorial-auctions-sandholm".
@@ -482,29 +589,36 @@ is that dregg's attestation is **pinned at maximal transferability (non-repudiab
 above (designated-verifier from the credentials literature `pdfs` "coconut-threshold-selective-disclosure",
 deniable from MPC/ring sigs, FHE's hide-from-executor) all land on this axis. The galaxy-brain rethink:
 
-### 13.1 Make `Discharged` verifier-indexed and the attestation a *family* over the transferability dial (NEW — the keystone dregg4 move)
-Today `Discharged P w` is a single universal predicate (`cand-A §8`, the vat-boundary law). dregg4
-should make it **`Discharged P w v`** — indexed by *to whom it is convincing* — and provide the badge
-as a *family*:
+### 13.1 Make `Discharged` verifier-indexed and the attestation a *family* over the transferability dial (LANDED at both bilateral endpoints — REAL — the keystone dregg4 move)
+The doc-as-written: today `Discharged P w` is a single universal predicate (`cand-A §8`, the
+vat-boundary law); dregg4 should make it **`Discharged P w v`** — indexed by *to whom it is convincing*
+— and provide the badge as a *family*. **[2026-06-02 — the two bilateral endpoints are BUILT and
+PROVED. REAL.]** The verifier-indexed `DischargedFor V s p` exists (`DesignatedVerifier.lean:113`); the
+maximal-transferability cell is recovered as the `∀ V` collapse (`publicMode_collapses_to_universal
+:186`); the designated/deniable cell is `DesignatedFor V₀` with `designated_is_deniable :224` (the
+simulator-repudiation argument) and `designated_not_transferable :206` (teeth: a concrete unconvinced
+third party). The two FHE/MPC cells remain honest frontiers.
 
 | transferability position | who is convinced | mechanism | dregg has it? |
 |---|---|---|---|
-| **maximal / non-repudiable** | anyone, forever | the current STARK badge | YES (only this) |
-| **designated-verifier** | only party V | DV-ZK / chameleon hash | NO |
-| **deniable** | V now, no one later | deniable authentication / ring | NO |
-| **hidden-from-executor** | the holder, host cannot read | FHE + ZK (§11) | NO (frontier) |
-| **hidden-from-co-party** | the aggregate, not peers | MPC / secure-agg (§10) | NO (frontier) |
+| **maximal / non-repudiable** | anyone, forever | the current STARK badge | **YES — REAL** (`Transferable :129`; `publicMode_collapses_to_universal :186`; `public_convinces_any_third_party :176`) |
+| **designated-verifier** | only party V | DV-ZK / chameleon hash | **YES — REAL** (`DesignatedFor :138`; `designated_not_transferable :206`; crypto is honest §8 `DVKernel :84`) |
+| **deniable** | V now, no one later | deniable authentication / ring | **YES — REAL** (`designated_is_deniable :224`, the simulator repudiation; `dial_endpoints_distinct :346`) |
+| **hidden-from-executor** | the holder, host cannot read | FHE + ZK (§11) | NO (frontier — ASPIRATIONAL) |
+| **hidden-from-co-party** | the aggregate, not peers | MPC / secure-agg (§10) | NO (frontier — ASPIRATIONAL) |
 
 - **Why this is the keystone:** it is the *one change* that subsumes §1.2 (flow lattice),
   §5.2 (leakage descriptor), §10 (MPC), §11 (FHE), and the carry-forward repudiation hole — they are
-  all *positions on one verifier-indexed attestation family*. The faithful-kernel (dregg2) keeps the
-  consensus/forest path on maximal transferability (it is *required* there, `CARRY-FORWARD-SYNTHESIS §2`);
-  dregg4 adds the *parallel private artifact* on bilateral channels.
+  all *positions on one verifier-indexed attestation family*. **The abstraction is now built**, so the
+  remaining ideas are positions to fill on an existing axis, not a missing axis. The faithful-kernel
+  (dregg2) keeps the consensus/forest path on maximal transferability (it is *required* there,
+  `CARRY-FORWARD-SYNTHESIS §2`); dregg4 adds the *parallel private artifact* on bilateral channels —
+  exactly the split `DesignatedVerifier.lean`'s module docstring (`:21-25`) draws.
 - **Three-faced map:** **the transferability dial**, promoted from a pinned constant to a first-class
-  parameter of the **ATTESTATION** face. Build sketch: `Discharged` gains a verifier index in
-  `Boundary.lean`; the designated-verifier and deniable positions are new predicate-engines in the
-  `WitnessedCondition` family (`GLOSSARY`). Cost: the DV/deniable positions are moderate (known crypto);
-  the keystone *abstraction* is cheap and unblocks everything.
+  parameter of the **ATTESTATION** face — DONE. The index lives in `DesignatedVerifier.lean` (a new
+  `Dregg2.Authority.DV` namespace), NOT yet wired into the running `Boundary.lean`/`presentation.rs::verify`
+  path (which still has no verifier index, `:10-19` — that wiring is the next frontier). The DV/deniable
+  crypto stays a §8 `DVKernel` portal (the chameleon-hash / DV-NIZK FFI), never faked in Lean.
 
 ---
 
@@ -512,13 +626,21 @@ as a *family*:
 
 ### A. Most promising (highest value, buildable on the dregg2 kernel, closes a known gap)
 
-1. **Verifier-indexed attestation family / the transferability dial (§13.1).** THE keystone. Subsumes
-   the repudiation hole + §1.2/§5.2/§10/§11 as positions on one axis. Cheap abstraction, unblocks the
-   most. **Build first.**
-2. **OCapN three-vat handoff protocol, unifying `ρ_in`/`ρ_out`/`ValidateHandoff`/`Introduce` (§2.2).**
-   The "we should obviously already have this" idea — it is mostly *unifying existing dregg effects*
-   under the protocol the direct lineage already specified. High value, moderate cost, grounds the
-   network reality dregg only mirrors on-chain.
+> **[2026-06-02 — shortlist re-scored: #1 and #2's cores are DONE.]** The two highest-ranked "build
+> first" items have LANDED in Lean (REAL). The live frontier moves UP to wiring (#1: index the
+> *running* `Boundary.lean`/`presentation.rs` path; #2: the OCapN *network transport*) and to the
+> still-unbuilt structural items (#3 Kachina, #4 CALM-tier, #5 Tahoe).
+
+1. ~~**Verifier-indexed attestation family / the transferability dial (§13.1). Build first.**~~
+   **DONE — REAL.** The keystone abstraction + both bilateral endpoints are built and proved
+   (`DesignatedVerifier.lean`, `#print axioms`-clean). New frontier: thread `DischargedFor`'s verifier
+   index into the *running* discharge path (`Boundary.lean`, `presentation.rs::verify`, which is still
+   index-free) so the dial is live, not only modeled.
+2. ~~**OCapN three-vat handoff protocol, unifying `ρ_in`/`ρ_out`/`ValidateHandoff`/`Introduce` (§2.2).**~~
+   **Core DONE — REAL.** `exportSturdyRefA`/`enlivenRefA`/`validateHandoffA` are executed effects with
+   authorization + balance-neutral + non-amplification theorems (Wave-8 de-THIN). New frontier: the
+   *live network transport* (cross-machine gossip + gift/withdraw certificate exchange,
+   differential-tested vs the Spritely reference). The semantics are proved; the wire is the residue.
 3. **Kachina public/private bi-stated cell (§5.1).** The highest-value *structural* idea: gives privacy
    a clean architecture, gives I-confluence a typed home, matches the Midnight interop target.
    Genuinely changes the cell type → dregg4, not dregg2.
@@ -562,18 +684,28 @@ as a *family*:
 
 ## 15. What to explicitly NOT do (galaxy-brain traps that violate proven bounds)
 
+*(All four trap-bounds below are REAL tags in `OPEN-PROBLEMS.md` — ground-checked 2026-06-02. A
+galaxy-brain idea crossing one is a trap, not a feature.)*
+
 - **A *consistent* global checkpoint (§3.1 over-read).** EROS's single-machine global snapshot does not
-  survive partition (`OPEN-PROBLEMS`: cross-partition atomic commit blocks). Build the *causal* cut;
-  never sell it as a consistent cut.
+  survive partition — `OPEN-PROBLEMS #2` "Cross-disjoint-group atomic commit is BLOCKING under
+  partition `[IMPOSSIBLE]`" (`OPEN-PROBLEMS.md:47`). Build the *causal* cut; never sell it as a
+  consistent cut.
 - **Clean global revocation / FHE-or-MPC as a soundness shortcut.** Revocation has a recency floor under
-  partition (`OPEN-PROBLEMS #6`); MPC is interactive (breaks the single-witness verify/find seam unless
-  modeled as MPC-in-the-head). Honor the seam.
+  partition — `OPEN-PROBLEMS` "Revocation's recency floor under partition `[IMPOSSIBLE]`"
+  (`OPEN-PROBLEMS.md:154`); the badge means permitted-not-de-facto-authority (`#6`, `:110`). MPC is
+  interactive (breaks the single-witness verify/find seam unless modeled as MPC-in-the-head). Honor the
+  seam.
 - **Distributed cycle GC via cooperative back-edge reporting (Urbit/actor temptation).** Rejected for
-  cause (`study-gc`, `OPEN-PROBLEMS`): unenforceable + leaks the graph privacy exists to hide. Lease
-  expiry only.
+  cause — `OPEN-PROBLEMS` "Distributed cycle GC is out of scope `[IMPOSSIBLE-in-practice]`"
+  (`OPEN-PROBLEMS.md:143`): unenforceable + leaks the graph privacy exists to hide. Lease expiry only.
 - **Putting any *search* (matcher, optimal clearing, flow inference) in the TCB/circuit.** The whole
-  architecture rests on verify-not-find (`cand-B`, `LEARNINGS-intent-matching`). Optimality/monotonicity
-  attestations are *witnesses checked*, never *searches trusted*.
+  architecture rests on verify-not-find (`cand-B`, `LEARNINGS-intent-matching`). The `no_general_matcher`
+  result is the *argument* (general match ⪰ higher-order unification, undecidable) carried in design and
+  reflected in `Dregg2/Authority/Intent.lean:32`,`:191` — it is a named docstring argument, NOT a
+  term-proved Lean theorem object (DECORATIVE as a Lean name; REAL as the discipline the matcher-plugin
+  contract enforces). Optimality/monotonicity attestations are *witnesses checked*, never *searches
+  trusted*.
 
 ---
 

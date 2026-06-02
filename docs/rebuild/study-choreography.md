@@ -1,11 +1,70 @@
 # Study — Grounding (and correcting) the dregg2 coordination layer in the choreography / session-type / I-confluence literature
 
+**Current as of 2026-06-02.**
+
 > Target: `docs/rebuild/dregg2-multicell-privacy.md` §6 (the coordination layer) + `pdfs/discoveries.md`.
 > Method: not a summary — test the §6 claims against the literature in `pdfs/`, refute the false ones with
 > citations, and locate the genuine open problems. Tags: **[G]** grounded in a read paper, **[F]** forward,
 > **[REFUTED]/[CONFIRMED]** = verdict on a §6 claim, **[MISSING]** = paper we should fetch.
+
+> ---
+> ## ⚑ STATUS UPDATE 2026-06-02 — the SCHOLARSHIP held; two FRAMINGS are now stale; the open problem is BUILT
 >
-> **Library reality check (done first, as instructed).** The session-type PDFs we hold —
+> This study's **six claim-verdicts are still correct and remain load-bearing** — and, crucially, they were
+> **adopted verbatim into the Lean**: `Dregg2/Coordination.lean` cites `study-choreography` claims #1–#6 *by
+> number* in its docstrings and implements every correction (e.g. the three-orthogonal-judgements split of
+> claim #1, the sound-but-incomplete `mergeLocal` of claim #2, the coalgebra embedding of claim #3). So the
+> **analytic content below is LIVE.** Two of its *framing* sections, however, are now FALSE against the
+> filesystem and the code, and are annotated **[SUPERSEDED 2026-06-02]** inline:
+>
+> 1. **The "Library reality check" is obsolete.** It claimed *"the word 'choreography' appears in ZERO of
+>    [the PDFs] … We have NO MPST paper and NO choreographic-programming paper."* As of 2026-06-02 the
+>    `pdfs/` corpus (now **287 PDFs**) contains **11 choreography papers** and the *entire* "Papers we are
+>    MISSING" wish-list — `mpst-honda-yoshida-carbone-jacm.pdf`, `less-is-more-mpst-revisited.pdf`
+>    (Scalas–Yoshida), `montesi-choreographic-programming-book.pdf`, `omission-failures-choreographic-
+>    1712.05465.pdf` (a fault-tolerant choreography), `mpst-meet-communicating-automata-denielou-yoshida.pdf`
+>    (the coalgebra/CFSM paper claim #3 wanted), `mpst-generalising-projection-2107.03984.pdf` (the
+>    completeness frontier of claim #2) — **all now present.** Every "[MISSING]" / "UNGROUNDED in corpus"
+>    qualifier below is **discharged**; the verdicts that previously rested on external knowledge are now
+>    corpus-witnessable. (`pdftotext montesi-choreographic-programming-book.pdf | grep -ic choreograph` = 721,
+>    the literal refutation of the "ZERO" claim.)
+>
+> 2. **The "single most important open problem" is now substantially BUILT in Lean** — it is no longer an
+>    open problem, it is a (mostly-proved, `#assert_axioms`-pinned) module stack. The MPST coordination layer
+>    this study said §6 *"describes but does not have"* now exists:
+>    * `metatheory/Dregg2/Coordination.lean` (926 lines) — `GlobalType` / `project` / `Projectable`
+>      (`MergesAt`, non-vacuous, `projectBranches_can_fail:334`); `projection_sound:416` (head-duality
+>      **PROVED** at :422–428; the full bisimulation is the one remaining `sorry:415`);
+>      `deadlock_freedom_by_design:816` **PROVED** over *reachable* configs (`GReach`) and
+>      `#assert_axioms`-pinned at :912 (with `deadlock_initial_counterexample:765` machine-refuting the naive
+>      initial-config form); `privacy_by_projection:567` **PROVED** on the `NoRec` fragment and pinned at
+>      :614 (with `privacy_var_counterexample:529` showing the bare statement is false). It carries the
+>      coalgebra embedding of claim #3 (`ProtocolCell:356`, a `Boundary.TurnCoalg`).
+>    * `metatheory/Dregg2/Confluence.lean` — claim #1's **third judgement** as real Lean: `IConfluent:44`,
+>      `admits_sound:58` (the BEC lattice gate), `nonpairwise_escalation:70` (the constructive coupled
+>      witness), and the non-vacuity pair `top_iconfluent:95` / `cardLeOne_not_iconfluent:104`. **No `sorry`.**
+>    * `metatheory/Dregg2/Projection.lean` — cand-D's **blue/red projection-split** (`BlueEligible:56`,
+>      `blue_merge_safe:74` **PROVED**, `route:89`). The Byzantine-EPP refinement of claims #5/#6 is the
+>      genuine residual, honestly held as a named obligation (`byzantine_epp_by_monitoring`, doc-comment
+>      :122, **not** a faked theorem). **No `sorry`.**
+>    * Plus a CRDT instance catalog (`Dregg2/Confluence/CRDT.lean`), a `dregg_choreo {…}` **eDSL surface**
+>      that elaborates to `GlobalType` and inherits the proofs (`Dregg2/DSLChoreo.lean`), the drift-stable
+>      bridge (`Dregg2/Confluence/DriftStable.lean`), and the **both-poles-PROVED** contention dichotomy
+>      (`Dregg2/Proof/ContendedCrossCell.lean`: `contended_commits_confluent:249` +
+>      `coupled_no_schedule_agnostic_commit:381`, no `sorry`).
+>
+>    **What remains genuinely OPEN** (so claim #5/#6 are not fully discharged): the *cryptographic / Byzantine*
+>    half — projection soundness over Byzantine endpoints (red fragment) and ZK-conformance to a committed `G`
+>    — bottoms out on the blocklace/BEC substrate and is carried as a HYPOTHESIS, not derived. That is the true
+>    live frontier; the *static blue/red split itself* is now a theorem stack, not a slogan. See the rewritten
+>    final section for the corrected open problem.
+> ---
+>
+> **Library reality check (done first, as instructed).** **[SUPERSEDED 2026-06-02 — the corpus has since
+> grown to 287 PDFs and now holds 11 choreography papers + the entire MPST wishlist; every "ZERO
+> choreography" / "NO MPST paper" / "UNGROUNDED in corpus" assertion in this paragraph and the rest of the
+> doc is OBSOLETE. The 2026-05-29 snapshot is preserved below for history; read it as "as of the original
+> writing".]** The session-type PDFs we hold —
 > `sessions-as-propositions` (Lindley–Morris), `comparing-session-type-systems-linear-logic`
 > (van den Heuvel–Pérez), `dependent-session-types-verified-concurrency` (Fu–Xi–Das),
 > `girard-linear-logic-syntax-semantics` — are **ALL binary, propositions-as-sessions (linear-logic-derived)**.
@@ -78,6 +137,15 @@ waved through as "free cross-group" if linearity were trusted to detect coupling
 
 ## Claim 2: "MPST projection is partial + incomplete." — **[CONFIRMED, but UNGROUNDED in our corpus]**
 
+> **[UPDATE 2026-06-02]** Verdict CONFIRMED stands; "**UNGROUNDED in corpus" is DISCHARGED** — the corpus now
+> holds `mpst-honda-yoshida-carbone-jacm.pdf` (the projection rules), `less-is-more-mpst-revisited.pdf`
+> (Scalas–Yoshida, CFSM/full-merge completeness), and `mpst-generalising-projection-2107.03984.pdf` (the
+> generalised-projection completeness frontier). **Realised in Lean:** `Coordination.mergeLocal:223` commits
+> to the *simplest sound classical merge* (identity: `if L₁ = L₂ then some L₁ else none`), with
+> `projectBranches_can_fail:334` machine-witnessing the incompleteness this claim predicted (a `Projectable`
+> failure on disagreeing passive-role branches). The "which dregg2 coordinations are projectable" question is
+> now answerable in-code via the non-vacuous `Projectable`/`MergesAt:299` predicate.
+
 True to the literature (external knowledge): classical MPST (Honda–Yoshida–Carbone) projects a global type
 `G` to a local type `G↾p` via a **partial** function guarded by **mergeability/projectability** side-
 conditions on branching (`⊕`/`&`); the classic merge operator rejects safe protocols where a non-active role
@@ -107,6 +175,16 @@ acceptance step. Both losses are exactly where claim #4 bites. **Verdict: a fait
 to the synchronous, single-port restriction; bisimulation gives the correctness criterion ("the cell
 simulates the projection"). Genuinely buildable, but the loss must be stated.** **[MISSING: a coalgebraic /
 communicating-automata MPST semantics paper to make this precise.]**
+
+> **[UPDATE 2026-06-02]** The "[MISSING]" paper **is now in corpus**:
+> `mpst-meet-communicating-automata-denielou-yoshida.pdf` (the local-type ↔ communicating-FSM
+> correspondence) — exactly the bridge claim #3 wanted. **BUILT in Lean:** the embedding is
+> `Coordination.ProtocolCell:356` — a `Boundary.TurnCoalg Obs AdmissibleTurn` whose `step` IS `G`'s
+> transition, carrier = residual global types, with `start_is_G` the witness. The two predicted losses are
+> still real and explicit: duality is re-imposed as the `Dual:394` admissibility predicate (the *who-owns-
+> which-endpoint* structure is not in `Obs × (AdmissibleTurn⇒X)`), and asynchrony collapses (the LTS is the
+> synchronous `GStep:640` reduction). The bisimulation correctness criterion is named but only its
+> head-duality content is proved (`projection_sound:416`; full bisim is the remaining `sorry:415`).
 
 ## Claim 4 (implicit in §1, used by §6): "A step can be an atomic N-cell JointTurn." — **[GENUINE EXTENSION / OPEN]**
 

@@ -1,30 +1,62 @@
 # GROUND-AUTH-ATTESTATION — the authorization + attestation dimension, Rust as ground truth
 
-READ-ONLY grounding pass. No code changed. Every claim cites `file:line`. The
-mission: establish the **Rust** semantics of dregg's authorization/attestation
-layer as ground truth, audit the Lean's fidelity against it, and analyze the
+> ⚑ **GROUND-CHECKED vs live Lean 2026-06-02 (post-2-compaction drift-repair); REAL/DECORATIVE/ASPIRATIONAL tags carry file:line receipts.**
+>
+> **The headline of this doc has been SUPERSEDED in the GOOD direction.** When this
+> was written it was a READ-ONLY audit concluding the Lean *overlooks* four advanced
+> Rust features. **All four of those carry-forward modules have since LANDED in Lean,
+> fully term-proved, kernel-clean, and imported into `Dregg2.lean` (lines 186–189).**
+> The four "O"/"S→O" verdicts in §1.6 are now **CLOSED-WITH-TEETH**; the Part-2
+> "genuinely new theory" — a verifier-indexed `Discharged` — is **BUILT**:
+> - `Authority/CaveatChain.lean` — REAL HMAC append-only caveat chain (was: "**O**, inexpressible"). [REAL]
+> - `Authority/ThirdPartyDischarge.lean` — REAL ticket/VID/bind/freshness 3P protocol (was: "**S→O**, a `Bool` flip"). [REAL]
+> - `Authority/SelectiveDisclosure.lean` — selective disclosure + predicate proofs + multi-show unlinkability wired to the credential path (was: "**O** + **S, disconnected**"). [REAL]
+> - `Authority/DesignatedVerifier.lean` — verifier-indexed `DischargedFor` + the transferability DIAL (public ⇒ non-repudiable; designated ⇒ deniable via the simulator) (was Part-2: "a genuinely new piece of theory" needed). [REAL]
+>
+> Each is a §8-honest *reduction* (the underlying HMAC/AEAD/STARK soundness stays an
+> explicit Prop-portal — see the per-module "§8 portal" sections), NOT a fake "we
+> proved the crypto" claim. The Rust-grounding (Part 1 §1.1–§1.5) and the anonymity
+> findings (Part 2 §2.2a) remain accurate as written. What is *still* genuinely OPEN
+> is narrower and named at the bottom (the BASE `Credential.lean` is still
+> all-or-nothing; ring/chameleon repudiation is still unbuilt in Rust; the §8 crypto
+> soundness itself is — correctly — never discharged in Lean). Original BLUF kept
+> below for the record, then corrected inline.
+
+READ-ONLY grounding pass *as originally written* (the audit half is now history; the
+carry-forward landed). Every claim cites `file:line`. The mission: establish the
+**Rust** semantics of dregg's authorization/attestation layer as ground truth, audit
+the Lean's fidelity against it, and analyze the
 repudiation/deniability/designated-verifier concern. This is the dimension an
 effect-VM-centric view under-weights: caveats *gate* effects and attestation is
 the turn *output*, so the real turn vocabulary is **effects ⊕ caveat-gates ⊕
 attestation**, not effects alone.
 
-Bottom line up front:
+Bottom line up front (ORIGINAL — see the ⚑ banner above for the corrections):
 - The Rust is **substantially richer** than the Lean on this axis. The Lean
   Authority modules model the *algebraic discipline* (attenuation-only,
   discharge-monotone, issued-and-not-revoked, six-mode dispatch soundness) at a
   high level of faithfulness — and in one place (CapTP non-amplification) the
-  Lean models the *correct* semantics the Rust is *missing*. But the Lean
+  Lean models the *correct* semantics the Rust is *missing*. ~~But the Lean
   **overlooks** the cryptographic substance of the most advanced Rust features:
   the HMAC caveat chain, the third-party discharge protocol (encrypted
   ticket/VID, bind-to-parent, freshness), credential selective-disclosure +
   predicate proofs + blinded multi-show, the stealth one-time-key auth mode, and
-  the StarkDelegation anonymous-delegation public-input binding.
+  the StarkDelegation anonymous-delegation public-input binding.~~ **CORRECTION
+  (2026-06-02):** all of these EXCEPT stealth/StarkDelegation-at-the-auth-mode-layer
+  are now modeled in Lean with term-proved reductions (§1.6 table re-tagged below).
+  The remaining true overlook is just **stealth + StarkDelegation as first-class
+  *auth modes* in `AuthModes.lean`** — the credential-layer anonymity (BlindedSet
+  multi-show) now IS modeled (`SelectiveDisclosure.lean`).
 - On Part 2: dregg's proofs/attestations are **hardwired to maximal
-  transferability** (publicly-verifiable STARK + Ed25519 signatures ⇒
-  non-repudiable). dregg HAS strong **anonymity** (who-hiding) and has it modeled
-  in Lean; it has **zero deniability** and **zero designated-verifier**
-  machinery in either Rust or Lean. There is no mode/dial for non-transferable
-  proof today.
+  transferability** in the *running Rust* (publicly-verifiable STARK + Ed25519
+  signatures ⇒ non-repudiable) — still true of the code. dregg HAS strong
+  **anonymity** (who-hiding) and has it modeled in Lean. ~~it has **zero
+  deniability** and **zero designated-verifier** machinery in either Rust or
+  Lean.~~ **CORRECTION (2026-06-02):** the *Rust* still has zero DV machinery, but
+  the **Lean now MODELS the missing axis** — `DesignatedVerifier.lean` builds the
+  verifier-indexed discharge + the transferability dial + the simulator-based
+  deniability theorems. The dial is now *specified*; the Rust impl is the
+  ASPIRATIONAL remainder (§2.4).
 
 ---
 
@@ -186,67 +218,92 @@ co-equal with the effect dimension and must be carried as such.
 
 ---
 
-## 1.6 LEAN FIDELITY AUDIT (faithful / shadow / overlooked)
+## 1.6 LEAN FIDELITY AUDIT (faithful / shadow / overlooked) — RE-TAGGED 2026-06-02
 
 Legend: **F** faithful (semantics match), **S** simplified-shadow (the shape is
 present but the cryptographic/semantic substance is abstracted to an oracle or a
 `Bool`), **O** overlooked-absent (no Lean counterpart).
 
+**2026-06-02 re-tag:** each row now also carries a structural tag with a file:line
+receipt — **[REAL]** = a term-proved Lean object with teeth (often `#assert_axioms`-
+or `#print axioms`-pinned to the kernel whitelist `{propext, Classical.choice,
+Quot.sound}`); **[DECORATIVE]** = vocabulary only, no Lean object (grep-confirmed
+absent); **[ASPIRATIONAL]** = honestly-named OPEN, unbuilt. The four rows that were
+**O**/**S→O**/**S** at audit time (HMAC chain, 3P discharge, selective disclosure,
+multi-show) are now **[REAL]** — their carry-forward modules landed
+(`Dregg2.lean:186-189`). `#assert_axioms` certifies *kernel-clean*, NOT
+faithful/non-vacuous — the non-vacuity teeth are the separately-cited
+`*_has_teeth` / `*_rejected` / `disclosed_slot_is_revealed` / `dial_endpoints_distinct`
+theorems.
+
 | Rust feature (file:line) | Lean counterpart (file:line) | Verdict | Note |
 |---|---|---|---|
 | Attenuation = append caveat, narrowing-only (`macaroon.rs:151`, `caveat.rs:47`) | `Token.attenuate` + `attenuate_narrows` (`Authority/Caveat.lean:81-101`) | **F** | The keystone law is genuinely proved; matches Rust discipline exactly. |
 | Token admits iff ALL caveats hold (`token/src/dregg_caveats.rs:388`) | `Token.admits` = `List.all` (`Authority/Caveat.lean:76`) | **F** | Conjunction/meet semantics match. |
-| HMAC chain `Tᵢ=HMAC(Tᵢ₋₁,Cᵢ)`, tamper/removal detection (`macaroon.rs:204-262`) | — caveats are `Ctx→Bool` (`Authority/Caveat.lean:43-46`) | **O** | **Lean has NO chain integrity.** Caveat removal/tamper soundness is the whole point of the HMAC tail; the Lean model cannot even express it. This is a §8-oracle gap that is currently *unstated*. |
+| HMAC chain `Tᵢ=HMAC(Tᵢ₋₁,Cᵢ)`, tamper/removal detection (`macaroon.rs:204-262`) | **`CaveatChain.lean`** — `Chain`/`replayTag`/`Chain.verify` + `verify_iff_wellTagged` (`:168`), `forgery_requires_mac_query` (`:305`), `removal_breaks_tail` (`:328`); HMAC = §8 `MacKernel.unforgeable` portal (`:78-87`) | ~~**O**~~ → **F (REAL, term-proved reduction)** | **DRIFT FIXED (2026-06-02).** The old "Lean has NO chain integrity / cannot even express it" is **superseded**: `CaveatChain.lean` models the macaroon as the REAL append-only HMAC chain (`Chain.append` = `add_first_party`, `:153`), the replay-and-compare verifier (`Chain.verify`, `:160`), and proves the integrity *reduction* with teeth: a forged-but-accepted chain yields a MAC collision over differing link-lists (`forgery_requires_mac_query`, `:305-320`), and dropping a caveat without re-signing forces a no-op MAC step (`removal_breaks_tail`, `:328-351`). The HMAC's *security* stays an honest §8 `Prop`-carrier (`MacKernel.unforgeable`) — never faked as proved. Bridges back to `Caveat.lean` via `verifiedChainGate`/`chainToken` (`:244-262`). [REAL] |
 | Biscuit (pubkey, cross-vat) vs macaroon (HMAC, intra-vat) split (`token/src/{biscuit,macaroon}_backend.rs`) | `TokenKind` + `crossVatVerifiable` + `macaroon_not_crossvat` (`Authority/Caveat.lean:57-126`) | **F** (shape) / **S** (crypto) | The *policy* (macaroon not off-island) is proved; the *reason* (HMAC secret) is an unmodeled premise. |
-| 3P caveat: encrypted ticket/VID, ephemeral key `r` (`caveat_3p.rs:71-102`) | `Caveat.thirdParty (gateway)` + `Discharges` flag (`Authority/Caveat.lean:43-55`) | **S→O** | The discharge *monotonicity* is beautifully modeled (`Discharge.lean`), but the **cryptographic ticket/VID protocol is entirely absent** — a gateway is a `Bool`. No model of "only the chain-replayer recovers `r`." |
-| bind-to-parent + freshness (`macaroon.rs:267-332`) | — | **O** | No Lean model of discharge↔root binding or 300s freshness/replay. A discharge in Lean is an unconditional flip. |
+| 3P caveat: encrypted ticket/VID, ephemeral key `r` (`caveat_3p.rs:71-102`) | **`ThirdPartyDischarge.lean`** — `ThirdPartyCaveat{vid,ticket,predicate}` (`:124`), `recoverKey = aeadUnseal parentTail vid` (`:213`), `accepts_iff` (`:246`); AEAD = §8 `DischargeCrypto` portal (`:74-90`) | ~~**S→O**~~ → **F (REAL, term-proved gate)** | **DRIFT FIXED (2026-06-02).** The old "cryptographic ticket/VID protocol is entirely absent — a gateway is a `Bool`" is **superseded**: `ThirdPartyDischarge.lean` models the VID (`seal(parentTail, r)`) and ticket (`seal(K_A, …)`) and proves acceptance is EXACTLY the four-conjunct gate `accepts_iff` (`:246-267`): recover `r` from the VID under the replayed parent-tail ∧ keyed-by-`r` ∧ fresh ∧ chain-valid ∧ bound ∧ predicate. "Only the chain-replayer recovers `r`" is the `recoverKey` semantics (`unseal parentTail vid`) — only a verifier who replayed to `parentTail` decrypts it. AEAD/keyed-hash *soundness* stays the §8 `DischargeCrypto.cryptoSound` carrier. [REAL] |
+| bind-to-parent + freshness (`macaroon.rs:267-332`) | **`ThirdPartyDischarge.lean`** — `boundTo`/`bindCaveat`/`fresh` (`:170-209`), `unbound_discharge_rejected` (`:318`), `cross_bound_rejected` (`:333`), `stale_discharge_rejected` (`:304`); `maxDischargeAge = 300` (`:104`) | ~~**O**~~ → **F (REAL, teeth)** | **DRIFT FIXED (2026-06-02).** Discharge↔root binding and the 300s freshness window are now modeled WITH TEETH: a discharge minted for parent A presented against a different parent B is REJECTED (`cross_bound_rejected`, `:333-354`, honest `bindingHash tailB ≠ bindingHash tailA`), and a stale/replayed discharge (`fresh = false`, beyond `maxDischargeAge`, or `createdAt = 0`) is REJECTED (`stale_discharge_rejected`, `:304-311`). The honest round-trip closes the loop (`honest_discharge_accepted`, `:275`). Not "an unconditional flip" anymore. [REAL] |
 | Discharge accumulates / resolves forward (`discharge-gateway/`) | `admits_mono_discharge`, `resolve_forward`, `settle_le` (`Authority/Discharge.lean:77-174`) | **F** | Strong, faithful: the await-authority monotonicity keystone. |
 | Credential issue/present/verify/revoke (`credentials/src/{issuance,presentation,verification,revocation}.rs`) | `VC`, `issue/present/verify/revoke`, `credential_verifies_iff_issued_and_not_revoked` (`Authority/Credential.lean:55-209`) | **F** (lifecycle) | The issued-and-not-revoked discipline is faithful; revocation reuses the nullifier G-Set with real I-confluence (`Credential.lean:226-244`). |
-| **Selective disclosure** (revealed-facts commitment) (`presentation.rs:256-270`) | — `VC.claim` is one opaque `Nat`; `verify` is all-or-nothing (`Credential.lean:153-155`) | **O** | The Lean credential cannot disclose a *subset* of attributes; the Poseidon2 revealed-facts commitment has no analog. (Field-tier `project`/`field_projection_hides_private` in `Privacy.lean:89-114` is the *cell-state* projection, a different object.) |
-| **Predicate proofs** Gte/Lte/InRange on hidden attrs (`presentation.rs:307-351`) | `WitnessedKind` enumerated but verifier is abstract `Stmt→Wit→Bool` (`Authority/Predicate.lean:40-72`) | **S** | The *dispatch* is faithfully modeled with a real soundness-by-verification keystone (`registry_sound`, `Predicate.lean:106-111`); the *range-proof relation itself* is a §8 oracle, never characterized. |
-| **Anonymous multi-show unlinkability** (fresh blinding ⇒ different `blinded_leaf`) (`presentation.rs:176-212, 292-299`) | `WitnessedKind.blindedSet` (dispatch only, `Predicate.lean:51`) **+** `BlindedMembershipKernel.blinded_membership_hides_element` / k-anonymity (`Privacy.lean:489-507`) | **S** (split) | Two halves modeled in *different* places and **not connected**: `Predicate.lean` has the dispatch but no hiding; `Privacy.lean` has the hiding law but it is not wired to the credential `present`/`verify` path. The credential module (`Credential.lean`) — the thing that actually does multi-show in Rust — has **no** unlinkability statement at all. |
+| **Selective disclosure** (revealed-facts commitment) (`presentation.rs:256-270`) | **`SelectiveDisclosure.lean`** — `Credential{attr : Fin n → Nat}` (`:134`), `disclosedView`/`observerView` (`:204-222`), `presentation_hides_undisclosed` (`:239`) + non-vacuity `disclosed_slot_is_revealed` (`:260`) | ~~**O**~~ → **F (REAL, view-collapse, #assert_axioms-pinned)** | **DRIFT FIXED (2026-06-02).** The Lean credential now carries a *vector* of attributes and can disclose a SUBSET: `presentation_hides_undisclosed` (`:239-253`) proves two credentials agreeing on the disclosed slots + proven predicates produce the SAME observer-view (so the view is independent of hidden attributes), and `disclosed_slot_is_revealed` (`:260-272`) gives the non-vacuity teeth (distinct disclosed values ⇒ distinct views). Pinned `#assert_axioms` (`:409-410`). The Poseidon2 commitment's *computational* binding stays §8. NOTE: this is a NEW credential object (`SelectiveDisclosure.Credential`); the BASE `Credential.lean` `claim:Nat` is still all-or-nothing (see "still OPEN"). [REAL] |
+| **Predicate proofs** Gte/Lte/InRange on hidden attrs (`presentation.rs:307-351`) | `WitnessedKind` dispatch + `registry_sound` (`Predicate.lean:106`) **AND** **`SelectiveDisclosure.lean`** — `Predicate` enum + `evalPred` (`:95-121`), `ProvenPredicate{holds}` (`:153`), `proven_predicate_holds` (`:287`) + teeth `predicate_proof_has_teeth` (`:298`) | ~~**S**~~ → **F (REAL, the relation is now characterized)** | **DRIFT FIXED (2026-06-02).** The "range-proof relation itself … never characterized" is **superseded**: `SelectiveDisclosure.evalPred` (`:115-121`) IS the decidable arithmetic of Gte/Lte/Gt/Lt/Neq/InRange, and a `ProvenPredicate` is *uninhabitable* for a false predicate (`predicate_proof_has_teeth`: no proof of `.gte 18` over value `17`, `:298-306`). `registry_sound` (the dispatch keystone) remains. Circuit *binding* of the value stays §8. [REAL] |
+| **Anonymous multi-show unlinkability** (fresh blinding ⇒ different `blinded_leaf`) (`presentation.rs:176-212, 292-299`) | **`SelectiveDisclosure.lean`** — `multishow_unlinkable` (`:326`) + `multishow_blinding_invisible` (`:341`), wired to the credential `Presentation` object; plus `Privacy.blinded_membership_hides_element` (`Privacy.lean:489`) | ~~**S** (split, disconnected)~~ → **F (REAL, NOW WIRED to the credential path)** | **DRIFT FIXED (2026-06-02).** The "modeled in the wrong place, disconnected" verdict is **resolved**: `multishow_unlinkable` (`:326-334`) states unlinkability *about the credential `Presentation`* — two shows of the SAME credential with DIFFERENT fresh blinding (`p₁.blinding ≠ p₂.blinding`) have EQUAL observer-views, because the blinding is not in the view. `multishow_blinding_invisible` (`:341-345`) gives the concrete non-vacuity (blinding 0 vs 1 collapse). This is exactly `Privacy.unlinkable`'s view-collapse landed on the credential multi-show path the audit said it governed. `#assert_axioms`-pinned (`:413-414`). [REAL] |
 | Six-mode `verify_authorization` dispatch (`authorize.rs`) | `AuthMode` + `authModeAdmits` + per-mode `*_sound` (`Exec/AuthModes.lean:135-410`) | **F+** | Faithful to OneOf recursion rules, Custom registry, Bearer/Token caveats, Unchecked-no-escalation. **And superior**: it models the *correct* CapTP `granted ≤ held` non-amplification that the Rust `verify_captp_delivered` is documented to be MISSING (`AuthModes.lean:20-25, 268-296`). |
 | **Stealth one-time-key auth** (`authorize.rs:1337+`, `cell/src/stealth.rs`) | `CatalogInstances.lean:236-240` (a verify-seam stub) + `Privacy.unlinkable` (`Privacy.lean:457-461`) | **S→O** | `AuthModes.lean`'s "six modes" **omit Stealth entirely** (it lists OneOf/Custom/CapTpDelivered/Bearer/Token/Unchecked). `CatalogInstances` reduces stealth to a generic `Discharged`. The `P = c·G + S` relation and its unlinkability are *not* the same object as the `Privacy.unlinkable` payment-graph law; the auth-mode unlinkability is unmodeled. |
 | **StarkDelegation** anonymous bearer (hidden delegator/bearer, scope-bound PI) (`authorize.rs:1252-1333`) | `AuthMode.bearer` carries `held/granted` *in the clear* (`AuthModes.lean:152, 305-314`) | **O** | The Lean bearer models the *non-amplification* edge but **not the anonymous variant**: there is no notion that delegator/bearer can be hidden behind a `root_issuer_commitment` while only public scope is bound. The anonymity of the delegation path is overlooked. |
-| WitnessedReceipt attestation badge + bilateral chain (`witnessed_receipt.rs`) | `Exec/Receipt.lean`, `Exec/ProofForest.lean`, `Exec/TurnForest.lean` (badge/forest spine) | **S** | The forest/receipt *structure* is modeled; the STARK `proof_bytes`/witness-hash binding is a §8 oracle (correctly so), but transferability/non-repudiation as a *property* is not stated (see Part 2). |
+| WitnessedReceipt attestation badge + bilateral chain (`witnessed_receipt.rs`) | `Exec/Receipt.lean`, `Exec/ProofForest.lean`, `Exec/TurnForest.lean` (badge/forest spine) **+** transferability now formalized in **`DesignatedVerifier.lean`** (`public_convinces_any_third_party`, `:176`; `publicMode_collapses_to_universal`, `:186`) | ~~**S**~~ → **S (structure) / F (transferability-as-property now STATED)** | **PARTIAL DRIFT FIXED (2026-06-02).** The forest/receipt *structure* is modeled and the STARK binding stays a §8 oracle (correctly). The old "transferability/non-repudiation as a *property* is not stated" is now **superseded**: `DesignatedVerifier.lean` formalizes exactly that — the current universal `Discharged` (`Laws.lean:41`, `CryptoKernel.lean:75`) IS the `public` endpoint `∀V` (`publicMode_collapses_to_universal`, `:186-190`), hence non-repudiable (`public_convinces_any_third_party`, `:176-180`). [REAL for the property; the receipt↔dial *wiring* is still ASPIRATIONAL.] |
 | Pedersen committed conservation (value tier) (`wasm/src/privacy.rs:283-475`, cell commitments) | `Exec/CellPrivacy.lean` `committed_transfer_conserves` (`CellPrivacy.lean:161-169`) | **F** | Genuinely faithful homomorphic-sum conservation over hidden amounts, via the `commit_hom` interface law. |
 
-### Where the Lean is a FICTION or an OVERLOOK (the load-bearing flags)
+### Where the Lean WAS a FICTION or an OVERLOOK (the load-bearing flags) — STATUS 2026-06-02
 
-1. **No HMAC chain integrity** (O). The single most important macaroon property —
-   "caveats can only be added, the tail proves it" — is *inexpressible* in the
-   current `Caveat Ctx Gateway` (`Authority/Caveat.lean:43`). The Lean proves
-   attenuation *narrows* but never that an adversary cannot *remove* a caveat. In
-   Rust this is the constant-time tail compare (`macaroon.rs:257`). This is not
-   wrong, but it is an *unstated* §8 obligation; it should be made explicit, like
-   the credential attestation oracle is.
-2. **The 3P discharge protocol is a `Bool` flip** (S→O). `Discharge.lean` models
-   *when* discharges resolve a turn (monotone, forward-only) — excellent — but the
-   ticket/VID encryption, the `r`-recovery-only-by-chain-replayer property, and
-   bind-to-parent + freshness are absent. A reader of `Discharge.lean` would not
-   know any cryptography is involved.
-3. **Selective disclosure is missing from the credential model** (O). The Rust
-   credential's headline feature (disclose attribute subset + predicate proofs)
-   has no analog in `Credential.lean`, whose `claim` is one opaque `Nat`.
-4. **Multi-show unlinkability is modeled but disconnected** (S). The hiding law
-   exists (`Privacy.lean:489-507`) but is not wired to the credential
-   `present`/`verify` path (`Credential.lean`) that actually performs multi-show
-   in Rust. The "the same credential is unlinkable across shows" theorem is not
-   stated about the credential object.
-5. **Stealth and StarkDelegation anonymity are overlooked at the auth-mode layer**
-   (O). `AuthModes.lean` is otherwise the best module on this axis, but it drops
-   two of the real `Authorization` variants — exactly the two that carry
-   actor-anonymity.
+**Items 1–4 are now CLOSED-WITH-TEETH** (the four carry-forward modules landed,
+`Dregg2.lean:186-189`); only item 5 remains genuinely open. Original findings kept
+for the record, each tagged with its resolution:
+
+1. ~~**No HMAC chain integrity** (O).~~ **CLOSED [REAL].** `CaveatChain.lean` makes
+   "caveats can only be added, the tail proves it" expressible AND proved: removal
+   without re-signing forces a MAC no-op (`removal_breaks_tail`, `:328`), forgery
+   reduces to a MAC collision (`forgery_requires_mac_query`, `:305`). The §8 obligation
+   is now *explicit* (`MacKernel.unforgeable`, `:78-87`), exactly as the original asked.
+2. ~~**The 3P discharge protocol is a `Bool` flip** (S→O).~~ **CLOSED [REAL].**
+   `ThirdPartyDischarge.lean` carries the ticket/VID encryption (`recoverKey`, `:213`),
+   the `r`-recovery-only-by-chain-replayer property (`unseal parentTail vid`), and
+   bind-to-parent + freshness with rejection teeth (`cross_bound_rejected` `:333`,
+   `stale_discharge_rejected` `:304`). `Discharge.lean`'s monotonicity is now the
+   *await-face* of a fully crypto-grounded protocol, not the whole story.
+3. ~~**Selective disclosure is missing from the credential model** (O).~~ **CLOSED
+   [REAL]** at the new credential object: `SelectiveDisclosure.lean`'s
+   `Credential{attr : Fin n → Nat}` + `presentation_hides_undisclosed` (`:239`) disclose
+   an attribute subset with view-collapse hiding. *Residual:* the BASE `Credential.lean`
+   (`claim:Nat`, all-or-nothing) is unchanged — the two are not yet unified (still OPEN,
+   below).
+4. ~~**Multi-show unlinkability is modeled but disconnected** (S).~~ **CLOSED [REAL].**
+   `SelectiveDisclosure.multishow_unlinkable` (`:326`) states "the same credential is
+   unlinkable across shows" *about the credential `Presentation` object* — the exact wiring
+   the original said was missing.
+5. **Stealth and StarkDelegation anonymity are STILL overlooked at the auth-mode layer**
+   (O) — **GENUINELY OPEN.** `AuthModes.lean` remains the best module on the axis but still
+   models only OneOf/Custom/CapTpDelivered/Bearer/Token/Unchecked — it drops the two
+   `Authorization` variants that carry *actor*-anonymity. (Grep-confirmed 2026-06-02: no
+   `Stealth`/`StarkDelegation` constructor in `AuthModes.lean`'s `AuthMode` inductive,
+   `:135`.) NOTE the *credential-layer* anonymity (BlindedSet multi-show) is now covered by
+   `SelectiveDisclosure.lean`; what is missing is specifically the stealth `P = c·G + S`
+   one-time-key relation and the StarkDelegation hidden-delegator/bearer binding *as auth
+   modes*. [ASPIRATIONAL — honestly-named open; no Lean object yet.]
 
 ### Where the Lean LEADS the Rust (carry the Lean semantics forward)
 
-- **CapTP non-amplification** (`AuthModes.lean:268-296`): the Lean proves
-  `granted ≤ held`, which the Rust `verify_captp_delivered` is documented to omit
-  (it checks signatures + facet masks but not the authority lattice). This is a
-  *real bug surfaced by the Lean*. Carry the Lean's `captp_granted_le_held` gate
-  into the verified kernel and **fix the Rust to match it**, per the
-  improve-don't-degrade rule. (Cross-check: this is the FID-ESCROW pattern in
-  reverse — here the Lean is the *better* spec.)
+- **CapTP non-amplification** [REAL] (`AuthModes.lean` — `captp_granted_le_held`
+  `:273`, `captp_sound` `:289`): the Lean proves `granted ≤ held`, which the Rust
+  `verify_captp_delivered` is documented to omit (it checks signatures + facet masks
+  but not the authority lattice). This is a *real bug surfaced by the Lean*. Carry the
+  Lean's `captp_granted_le_held` gate into the verified kernel and **fix the Rust to
+  match it**, per the improve-don't-degrade rule. (Cross-check: this is the FID-ESCROW
+  pattern in reverse — here the Lean is the *better* spec.) Verified live 2026-06-02:
+  both theorems present and term-proved (the dispatcher gate `authModeAdmits` for
+  `CapTpDelivered` requires `decide (cert.granted.rights ≤ cert.held.rights)`,
+  `AuthModes.lean:199`).
 
 ---
 
@@ -325,25 +382,39 @@ mention in `turn/src/action.rs` doc and `audit/src/tests.rs`). The Lean tree has
   permanent, transferable fact. Anonymity hides *who among a set*, but for the
   *actual* signer there is no plausible-deniability mechanism.
 
-### (c) DESIGNATED-VERIFIER / non-transferable proof — ABSENT
+### (c) DESIGNATED-VERIFIER / non-transferable proof — ABSENT IN RUST, **NOW MODELED IN LEAN**
 
-- No interactive / OTR-style protocol, no designated-verifier ZK (DVZK), no
-  "proof valid only to holder of verifier-sk" construction exists in Rust or Lean.
-- Every verifier path (`verifier::*`, `verify_issuer_stark`, `verify_signature`,
-  `stark::verify`) takes only *public* inputs + a *global* VK and returns a
-  universal accept/reject. None takes a verifier secret key.
+- ~~No "proof valid only to holder of verifier-sk" construction exists in Rust or
+  Lean.~~ **CORRECTION (2026-06-02):** still **absent in the running Rust**
+  (verified: `circuit/src/presentation.rs::verify` takes only `&self` + public root,
+  no verifier-secret — a grep finds none), but the **Lean now MODELS the axis**:
+  `Authority/DesignatedVerifier.lean` builds the verifier-indexed discharge
+  `DischargedFor : Verifier → Statement → Proof → Prop` (`:113`) and the
+  transferability dial. [Lean: REAL. Rust: ASPIRATIONAL.]
+- Every *running* verifier path (`verifier::*`, `verify_issuer_stark`,
+  `verify_signature`, `stark::verify`) takes only *public* inputs + a *global* VK and
+  returns a universal accept/reject — none takes a verifier secret key. (Still true;
+  the §8 `DVKernel.verifyFor` oracle that DOES take a verifier index is Lean-only,
+  awaiting a DV-NIZK/chameleon Rust impl.)
 - The one place that *strips* private data — `Presentation::to_wire` removing the
   `AuthorizationTrace` (`presentation.rs:133-152`) — protects the *prover's*
   witness from leaking; it does **not** make the resulting proof non-transferable.
   The stripped proof is still universally verifiable.
+- **What the Lean now proves about the absent-in-Rust mode:** the *designated* mode
+  convinces a specific `V₀` and is NOT transferable (`designated_not_transferable`,
+  `DesignatedVerifier.lean:206` — extracts a concrete unconvinced verifier), and it is
+  *deniable* via the simulator (`designated_is_deniable`, `:224` — `V₀` could have
+  produced the convincing transcript itself, so it carries zero third-party evidence).
+  The two endpoints are a *witnessed* separation, not a vacuous `True`
+  (`dial_endpoints_distinct`, `:346`). The DV-ZK crypto stays the §8 `DVKernel` portal.
 
-**Summary table:**
+**Summary table (corrected 2026-06-02):**
 
 | Property | dregg status | Mechanism / absence (file:line) |
 |---|---|---|
-| Anonymity (hide who) | **HAS, strong, partly proved** | stealth `cell/src/stealth.rs`; StarkDelegation `authorize.rs:1252`; BlindedSet `credentials/src/presentation.rs:176`; Lean `Privacy.lean:457-541` |
-| Deniability / repudiation | **LACKS entirely** | no ring sig / chameleon / disavowal anywhere (grep-confirmed) |
-| Designated-verifier / non-transferable | **LACKS entirely** | all verifiers take public PI + global VK; no verifier-sk path |
+| Anonymity (hide who) | **HAS, strong, partly proved** | stealth `cell/src/stealth.rs`; StarkDelegation `authorize.rs:1252`; BlindedSet `credentials/src/presentation.rs:176`; Lean `Privacy.lean:457-541`; credential-layer now also `SelectiveDisclosure.lean:326` (multi-show unlinkable) |
+| Deniability / repudiation | **Rust LACKS; Lean MODELS the dial** | Rust: no ring sig / chameleon / disavowal (grep-confirmed). Lean: `DesignatedVerifier.designated_is_deniable` (`:224`, simulator repudiation) — the *property* is specified; a ring/chameleon Rust impl is the ASPIRATIONAL remainder |
+| Designated-verifier / non-transferable | **Rust LACKS; Lean MODELS the axis** | Rust: all verifiers take public PI + global VK, no verifier-sk path. Lean: `DesignatedVerifier.DischargedFor` (`:113`) + `Transferable`/`DesignatedFor` dial + `designated_not_transferable` (`:206`) |
 
 ## 2.3 The tension: verifiability ⊥ deniability — and is there a dial?
 
@@ -357,14 +428,23 @@ The tension is real and dregg sits at one pole:
 - **Deniability (non-transferable)** is what private bilateral interaction wants:
   "I'll prove to *you* I'm authorized, but you can't show it to anyone else."
 
-dregg today has **no dial**: the existing disclosure controls
-(`FieldVisibility::{Public, Committed, SelectivelyDisclosable}` at
-`cell/src/state.rs:16-25`; presentation `disclose` at `presentation.rs:36-37`;
+dregg's *running Rust* today has **no transferability dial**: the existing
+disclosure controls (`FieldVisibility::{Public, Committed, SelectivelyDisclosable}`
+at `cell/src/state.rs:16-25`; presentation `disclose` at `presentation.rs:36-37`;
 fully-private vs selective-disclosure `revealed_facts_commitment` at
 `bridge/src/present.rs:131-136`) all dial **what is revealed** — never **to whom
 the proof is convincing**. Even "fully private" is *universally* verifiable; it
 just reveals fewer facts. The transferability axis is orthogonal to the disclosure
-axis and is currently pinned at "maximal."
+axis and is, in the Rust, still pinned at "maximal."
+
+**CORRECTION (2026-06-02):** the *Lean specification* of the dial now EXISTS —
+`Authority/DesignatedVerifier.lean`'s `TransferDial` (`:146`) is exactly the second
+axis this paragraph said was missing, beside the disclosure dials. Its `.transferable`
+endpoint provably collapses to dregg's current universal verdict
+(`publicMode_collapses_to_universal`, `:186`), and its `.designated V₀` endpoint is
+the non-transferable/deniable mode (`DesignatedFor`, `:138`). So the dial is no longer
+un-conceived; it is *specified and proved-coherent in Lean*, and the gap is now purely
+the Rust DV-NIZK/chameleon implementation (§2.4).
 
 ## 2.4 What a designated-verifier / deniable MODE would take (sketch)
 
@@ -399,69 +479,115 @@ third axis **transferability ∈ {public, designated, deniable}** alongside
 
 In every case the **consensus/forest path keeps the transferable badge** (it must;
 finality depends on it); the new mode is a *parallel private artifact* on the
-bilateral channel. The Lean model would need a new `Transferable` vs `Designated`
-distinction on the verify seam (`Laws.Verifiable`): today `Discharged` is a single
-universal predicate; deniability requires indexing it by *which verifier* is
-convinced — a genuinely new piece of theory.
+bilateral channel.
+
+~~The Lean model would need a new `Transferable` vs `Designated` distinction on the
+verify seam (`Laws.Verifiable`): today `Discharged` is a single universal predicate;
+deniability requires indexing it by *which verifier* is convinced — a genuinely new
+piece of theory.~~ **DONE (2026-06-02) — the theory landed:**
+`Authority/DesignatedVerifier.lean` builds exactly the `Transferable` vs `Designated`
+distinction (`:129`/`:138`) over a verifier-indexed `DischargedFor` (`:113`),
+recovering the single universal `Laws.Discharged` (`Laws.lean:41`) as the `∀V`
+collapse (`publicMode_collapses_to_universal`, `:186`). The Lean half of all three
+§2.4 sketches now has its *specification*:
+- (1) **DVZK** — `DesignatedFor` + the simulator law `DVKernel.simulate_verifies`
+  (`:102`) is the Lean-side statement of "the verifier could have forged it" (the
+  OR-with-Schnorr disjunction's effect); the *circuit* is the Rust remainder. [Lean spec REAL; Rust circuit ASPIRATIONAL.]
+- (2) **deniable auth** — `designated_is_deniable` (`:224`) is the "convinced live,
+  no transferable transcript" property; the SIGMA/OTR `captp/handoff` impl is the Rust remainder.
+- (3) **ring repudiation** — `repudiation_no_third_party_evidence` (`:246`) captures
+  the "carries zero evidence to W" bite; the ring *signature* (vs membership proof) is the Rust remainder.
+
+So the *new piece of theory* exists and is proved-coherent over a reference DV-kernel
+(`dial_endpoints_distinct`, `:346`); what remains is **three Rust crypto
+implementations**, not a missing Lean concept.
 
 ---
 
 # CARRY-FORWARD VERDICT
 
-## Rust semantics that MUST be carried forward faithfully (currently §8-oracle'd or absent in Lean)
-1. **HMAC caveat-chain integrity** — the constant-time tail compare and
-   removal/tamper soundness (`macaroon.rs:204-262`). Make it an *explicit* §8
-   obligation in the kernel, not an unstated one.
-2. **The 3P discharge protocol's cryptographic core** — encrypted ticket/VID,
-   `r`-recovery-only-by-chain-replayer, bind-to-parent, 300s freshness
-   (`caveat_3p.rs:71-141`, `macaroon.rs:267-347`). The Lean's beautiful discharge
-   *monotonicity* must be *paired with* this binding obligation.
-3. **Credential selective disclosure + predicate proofs + anonymous multi-show**
-   (`credentials/src/presentation.rs`) — the headline feature, almost entirely
-   un-modeled at the credential layer.
+## Rust semantics that MUST be carried forward faithfully — STATUS 2026-06-02
+
+**Items 1–3 are DONE in Lean** (term-proved reductions, `Dregg2.lean:186-189`); item
+4 remains open. This is the section the work actually closed.
+
+1. ~~**HMAC caveat-chain integrity**~~ — **DONE [REAL].** `CaveatChain.lean` carries
+   the replay-and-compare verifier and the integrity reduction
+   (`forgery_requires_mac_query` `:305`, `removal_breaks_tail` `:328`); the HMAC is now
+   an *explicit* §8 obligation (`MacKernel.unforgeable`, `:78-87`) — exactly "explicit,
+   not unstated," as asked.
+2. ~~**The 3P discharge protocol's cryptographic core**~~ — **DONE [REAL].**
+   `ThirdPartyDischarge.lean` pairs the discharge monotonicity with the binding
+   obligation: ticket/VID `r`-recovery (`recoverKey`, `:213`), bind-to-parent +
+   freshness with teeth (`cross_bound_rejected` `:333`, `stale_discharge_rejected`
+   `:304`), AEAD as §8 `DischargeCrypto.cryptoSound`.
+3. ~~**Credential selective disclosure + predicate proofs + anonymous multi-show**~~ —
+   **DONE [REAL]** at the new credential object: `SelectiveDisclosure.lean`
+   (`presentation_hides_undisclosed` `:239`, `proven_predicate_holds` `:287` with teeth
+   `:298`, `multishow_unlinkable` `:326`). *Residual:* unify with the BASE
+   `Credential.lean` (still all-or-nothing `claim:Nat`).
 4. **Stealth + StarkDelegation actor-anonymity** as first-class auth modes
-   (`authorize.rs:1252-1417`, `cell/src/stealth.rs`).
+   (`authorize.rs:1252-1417`, `cell/src/stealth.rs`) — **STILL OPEN [ASPIRATIONAL].**
+   `AuthModes.lean`'s `AuthMode` inductive (`:135`) still omits both. The
+   *credential-layer* anonymity is now covered; the *auth-mode-layer* stealth
+   `P = c·G + S` relation and StarkDelegation hidden-delegator binding are not yet
+   Lean objects (grep-confirmed absent 2026-06-02).
 
-## Where the Lean is currently a FICTION / OVERLOOK
-- **Fiction-adjacent:** a reader of `Authority/Caveat.lean` + `Discharge.lean`
-  would believe the token layer is fully captured; in fact *all* of the
-  cryptographic substance (HMAC chain, ticket/VID, binding, freshness) is absent
-  and unflagged. This is the FID-ESCROW failure mode — the Lean shape looks
-  complete but the Rust does something cryptographically load-bearing the Lean
-  omits. Flag and §8-rail it explicitly.
-- **Overlook:** selective disclosure in `Credential.lean`; Stealth +
-  StarkDelegation in `AuthModes.lean`; multi-show unlinkability is *present in
-  `Privacy.lean` but not wired to the credential path it actually governs*.
-- **Counter-note (Lean is BETTER):** CapTP non-amplification
-  (`AuthModes.lean:268-296`) is the *correct* spec; the Rust
-  `verify_captp_delivered` is the buggy side. Carry the Lean forward and fix Rust.
+## Where the Lean WAS a FICTION / OVERLOOK — STATUS 2026-06-02
+- ~~**Fiction-adjacent:** a reader of `Authority/Caveat.lean` + `Discharge.lean` would
+  believe the token layer is fully captured; in fact *all* of the cryptographic
+  substance … is absent and unflagged.~~ **RESOLVED.** The cryptographic substance now
+  lives in `CaveatChain.lean` + `ThirdPartyDischarge.lean`, each with an *explicit* §8
+  portal section flagging precisely what is assumed (`MacKernel`/`DischargeCrypto`).
+  `Caveat.lean`/`Discharge.lean` are now correctly understood as the *algebraic faces*
+  (narrowing, await-monotonicity) of crypto-grounded protocols, not the whole truth.
+  The FID-ESCROW failure mode is averted: shape AND substance are present, and the
+  assumption boundary is named.
+- **Remaining overlook:** Stealth + StarkDelegation in `AuthModes.lean` (item 4 above).
+  Selective disclosure and multi-show unlinkability are NO LONGER overlooks — they are
+  in `SelectiveDisclosure.lean`, wired to the credential `Presentation` object.
+- **Counter-note (Lean is BETTER), UNCHANGED:** CapTP non-amplification
+  (`AuthModes.lean` — `captp_granted_le_held` `:273`, `captp_sound` `:289`) is the
+  *correct* spec; the Rust `verify_captp_delivered` is the buggy side. Carry the Lean
+  forward and fix Rust. [REAL — this finding still stands.]
 
-## Ranked advanced token/auth features that were MISSED (most → least load-bearing)
-1. **HMAC caveat-chain integrity** (the macaroon's reason to exist) — unmodeled.
-2. **Third-party discharge crypto** (ticket/VID/bind/freshness) — only the
-   monotonicity skeleton is modeled.
-3. **Credential selective disclosure + predicate proofs** — overlooked.
-4. **Anonymous multi-show unlinkability bound to the credential object** —
-   modeled in the wrong place, disconnected.
-5. **Stealth one-time-key auth mode** — dropped from the six-mode model.
-6. **StarkDelegation anonymous delegation** (hidden delegator/bearer) — bearer is
-   modeled only in the clear.
-7. **bind-to-parent + discharge freshness/replay** — absent.
+## Ranked advanced token/auth features — STATUS 2026-06-02 (most → least load-bearing)
+1. ~~**HMAC caveat-chain integrity**~~ — **MODELED** (`CaveatChain.lean`). [REAL]
+2. ~~**Third-party discharge crypto** (ticket/VID/bind/freshness)~~ — **MODELED**
+   (`ThirdPartyDischarge.lean`). [REAL]
+3. ~~**Credential selective disclosure + predicate proofs**~~ — **MODELED**
+   (`SelectiveDisclosure.lean`). [REAL]
+4. ~~**Anonymous multi-show unlinkability bound to the credential object**~~ —
+   **MODELED & WIRED** (`SelectiveDisclosure.multishow_unlinkable`). [REAL]
+5. **Stealth one-time-key auth mode** — STILL dropped from the auth-mode model. [ASPIRATIONAL]
+6. **StarkDelegation anonymous delegation** (hidden delegator/bearer) — bearer STILL
+   modeled only in the clear (`AuthModes.bearer`). [ASPIRATIONAL]
+7. ~~**bind-to-parent + discharge freshness/replay**~~ — **MODELED**
+   (`ThirdPartyDischarge`: `cross_bound_rejected`, `stale_discharge_rejected`). [REAL]
 
-## Part-2 verdict
-dregg is **deliberately, structurally non-repudiable**: transferable proofs are
-load-bearing for its distributed core, so this is not an oversight but an
-architectural commitment. It has **strong, partly-proved anonymity** but **zero
-deniability and zero designated-verifier** capability. A private-interaction mode
-(DVZK / deniable auth / ring repudiation) is a genuinely new axis —
-*transferability* orthogonal to the existing *disclosure* dials — and would
-require both new circuits/protocols in Rust and a new verifier-indexed `Discharged`
-in the Lean. Nothing in the current code is a stepping stone toward it except the
-anonymity-set commitment, which gets you the weakest (ring) form.
+**Net: 5 of 7 missed features are now closed; the residual frontier is the two
+auth-mode actor-anonymity variants (5, 6).**
+
+## Part-2 verdict — STATUS 2026-06-02
+The *running Rust* is **deliberately, structurally non-repudiable**: transferable
+proofs are load-bearing for its distributed core, so this is not an oversight but an
+architectural commitment, and the running code still has **zero deniability and zero
+designated-verifier** capability. **CORRECTION:** the *Lean* is no longer silent on
+this — `Authority/DesignatedVerifier.lean` now MODELS the missing axis: the
+verifier-indexed `DischargedFor` (`:113`), the transferability dial (`:146`), and the
+simulator-based deniability theorems (`designated_is_deniable` `:224`,
+`designated_not_transferable` `:206`, `dial_endpoints_distinct` `:346`). The
+private-interaction mode is *transferability* orthogonal to the existing *disclosure*
+dials, and its **theory is now built and proved-coherent in Lean**; what remains is the
+**three Rust crypto implementations** (DVZK circuit / deniable-auth SIGMA-MAC / ring
+signature) — see §2.4. The anonymity-set commitment is still the only *running* stepping
+stone, and it gets you the weakest (ring) form.
 
 ---
 
 ```
-( ⌐■_■ )  the badge travels. the question for the kernel is whether we ever
-          want one that doesn't — and today the answer in code is "never".
+( ⌐■_■ )  the badge travels — and now, in Lean, we have also written down the badge
+          that DOESN'T. the running code still answers "the badge always travels";
+          the kernel now knows how to say "only to you." the Rust crypto is the
+          remaining mile.   ( the spec caught up; the silicon hasn't yet )
 ```
