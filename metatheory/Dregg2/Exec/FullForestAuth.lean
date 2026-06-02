@@ -249,6 +249,11 @@ structure NodeAuth (Digest Proof Request Stmt Wit CellId Rights Ctx Gateway Byte
     [SemilatticeInf Rights] [OrderTop Rights] where
   /-- The credential (the WHO) — routed through the §8 `AuthPortal.credentialValid`. -/
   cred       : Authorization Digest Proof
+  /-- **The credential's revocation NULLIFIER** (hole #3 / `#139`): the `Nat` serial that identifies
+  this credential in the KERNEL-STATE revocation registry `s.kernel.revoked`. The gate fail-closes
+  when `credNul ∈ s.kernel.revoked` — revocation read off COMMITTED state, not the wire-supplied
+  `rev`. DEFAULTS `0` (the additive extension; a node with no nullifier is unrevocable-by-id). -/
+  credNul    : Nat := 0
   /-- The revocation root the credential is checked against (the negative-discharge seam). -/
   rev        : Credential.RevocationSet
   /-- The cap-authority mode (the WHAT) — dispatched by `AuthModes.authModeAdmits`, VERIFIED-in-Lean. -/
@@ -441,14 +446,37 @@ def caveatsDischarged
     (s : RecChainedState) : Bool :=
   na.caveats.all (fun c => c.holds s) && chainGateG na
 
-/-- **`gateOK` — the 3-part conjunction (FAIL-CLOSED on ANY leg).** `credentialValid && capAuthorityG
-&& caveatsDischarged`. A single false leg ⇒ `none` ⇒ whole-forest rollback. The WHO (portal) ∧ the WHAT
-(verified) ∧ the caveats (state-reading). -/
+/-- **`revocationGate` — the REVOCATION leg (hole #3 / `#139`, kernel-state-read, FAIL-CLOSED).** The
+node's credential is admitted only if its nullifier `na.credNul` is NOT in the COMMITTED revocation
+registry `s.kernel.revoked` (the MDB root). This reads adversary-uncontrollable kernel state — NOT the
+formerly-pinned wire-supplied `na.rev` — so a revoked credential finally fail-closes. -/
+def revocationGate
+    (na : NodeAuthC (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
+      (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway) (Bytes := Bytes) (Tag := Tag))
+    (s : RecChainedState) : Bool :=
+  !(s.kernel.revoked.contains na.credNul)
+
+/-- **`gateOK` — the 4-part conjunction (FAIL-CLOSED on ANY leg).** `credentialValid && capAuthorityG
+&& caveatsDischarged && revocationGate`. A single false leg ⇒ `none` ⇒ whole-forest rollback. The WHO
+(portal) ∧ the WHAT (verified) ∧ the caveats (state-reading) ∧ NOT-REVOKED (kernel-state registry). -/
 def gateOK
     (na : NodeAuthC (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway) (Bytes := Bytes) (Tag := Tag))
     (s : RecChainedState) : Bool :=
-  credentialValidG na && capAuthorityG na && caveatsDischarged na s
+  credentialValidG na && capAuthorityG na && caveatsDischarged na s && revocationGate na s
+
+/-- **`gateOK_revoked_fails` — THE REVOCATION TEETH (PROVED).** A node whose credential nullifier sits
+in the COMMITTED revocation registry `s.kernel.revoked` is REJECTED by the gate (`gateOK = false`) —
+so `execFullAGated` returns `none` and the whole forest rolls back. NON-VACUOUS: the rejection reads
+the committed registry (adversary-uncontrollable), so a revoked credential cannot pass no matter how
+valid its signature or how discharged its caveats. Closes hole #3 — the formerly-decorative `rev`. -/
+theorem gateOK_revoked_fails
+    (na : NodeAuthC (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
+      (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway) (Bytes := Bytes) (Tag := Tag))
+    (s : RecChainedState) (hrev : s.kernel.revoked.contains na.credNul = true) :
+    gateOK na s = false := by
+  unfold gateOK revocationGate
+  rw [hrev]; simp
 
 /-! ## §4 — `execFullAGated` + the gated tree executor `execFullForestG` (the FAIL-CLOSED wrapper).
 
@@ -815,7 +843,7 @@ theorem execFullAGated_attests (s s' : RecChainedState)
   have h3 : credentialValidG na = true ∧ capAuthorityG na = true ∧ caveatsDischarged na s = true := by
     unfold gateOK at hgate
     simp only [Bool.and_eq_true] at hgate
-    exact ⟨hgate.1.1, hgate.1.2, hgate.2⟩
+    exact ⟨hgate.1.1.1, hgate.1.1.2, hgate.1.2⟩
   exact ⟨h3.1, h3.2.1, h3.2.2, execFullA_attests_per_asset hfa⟩
 
 /-- **`execFullForestG_unauthorized_fails` — PROVED (fail-closed at the root, ANY leg).** If the root
@@ -1037,6 +1065,7 @@ the circuit's obligation, never a Lean law). -/
 #assert_axioms forestEdgesG_eq_forestEdgesA_eraseG
 #assert_axioms execFullAGated_some_iff
 #assert_axioms gatedNode_check_eq_use
+#assert_axioms gateOK_revoked_fails
 #assert_axioms execFullTurnG_append
 #assert_axioms execFullForestG_eq_execFullTurnG
 #assert_axioms execFullTurnG_erases

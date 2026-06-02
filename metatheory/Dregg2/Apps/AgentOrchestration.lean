@@ -273,7 +273,7 @@ theorem false_caveat_denied :
                List.all_nil, GatedCaveat.holds, chainGateG, Bool.and_true, world]
     decide
   show gateOK falseCaveatForestG.auth world = false
-  simp only [gateOK, hcav, Bool.and_false]
+  simp only [gateOK, hcav, Bool.and_false, Bool.false_and]
 
 /-! ## §6 — THE WHOLE ORCHESTRATION IS A THEOREM (the headline).
 
