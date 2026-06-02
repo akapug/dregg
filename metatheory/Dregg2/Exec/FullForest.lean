@@ -99,244 +99,27 @@ structure FullChildA where
   sub       : FullForestA
 end
 
-/-! ## §2 — `execFullForestA`: run the tree as an ALL-OR-NOTHING transaction (the executable artifact).
+/-! ## §1.5 — `capTarget`: the cell a `parentCap` confers an edge TO (the delegation's target).
 
-Each node runs its own `FullActionA` via `execFullA` (the fail-closed per-kind gate, extending the
-receipt chain, moving the per-asset ledger by exactly `ledgerDeltaAsset`). Then each child runs in
-turn, threading the chained state forward. Any `none` anywhere aborts the whole forest to `none` (the
-journal/rollback discipline — no partial commit), exactly as `execFullTurnA`'s `Option` fold. The
-recursion is structural over the tree (`execFullForestA`/`execFullChildrenA` mutual, decreasing on
-`sizeOf`). -/
+A delegation edge hands the child an ATTENUATED copy of `parentCap`. The `recKDelegateAtten` gate
+(reused below) GATES on the DELEGATOR genuinely holding a cap conferring an edge to the parentCap's
+TARGET — so we must read that target off `parentCap`. A `node t`/`endpoint t _` cap names target `t`;
+a `null` cap names NO object (it confers `[]`), so it has no delegation target — the faithful handoff
+of a null cap installs NOTHING (the child receives no new authority; `recKDelegateAtten` is not even
+reachable). This `Option` is the discriminant the executor and lowering BOTH read. -/
 
-mutual
-/-- Run a node: its own action, then all its children (each delegated, all-or-nothing). -/
-def execFullForestA (s : RecChainedState) : FullForestA → Option RecChainedState
-  | ⟨a, kids⟩ =>
-    match execFullA s a with
-    | some s' => execFullChildrenA s' kids
-    | none    => none
-
-/-- Run a list of child delegation edges left-to-right, threading the chained state. The delegated
-cap is `derive`d into the child holder's slot (the non-amplifying handoff); the child's own action
-gate then runs via `execFullForestA`. -/
-def execFullChildrenA (s : RecChainedState) : List FullChildA → Option RecChainedState
-  | []            => some s
-  | ⟨_, _, _, sub⟩ :: rest =>
-    match execFullForestA s sub with
-    | some s' => execFullChildrenA s' rest
-    | none    => none
-end
-
-/-! ## §3 — The pre-order lowering: the forest's flattened action list (OPTION B carrier).
-
-The forest's actions, in EXECUTION ORDER (pre-order: a node before its children, children
-left-to-right). `execFullForestA` is exactly `execFullTurnA` over `lowerForestA` — so every
-`execFullTurnA` theorem lifts to the forest by this flattening. We prove that equivalence
-(`execFullForestA_eq_execFullTurnA`) and read all the per-asset conjuncts through it. -/
-
-mutual
-/-- The node-actions of a forest in pre-order (the node, then its children's flattenings). -/
-def lowerForestA : FullForestA → List FullActionA
-  | ⟨a, kids⟩ => a :: lowerChildrenA kids
-
-/-- The node-actions of a child list in order. -/
-def lowerChildrenA : List FullChildA → List FullActionA
-  | []                     => []
-  | ⟨_, _, _, sub⟩ :: rest => lowerForestA sub ++ lowerChildrenA rest
-end
-
-mutual
-/-- Every delegation edge of a forest, in pre-order (this node's child edges, then recursively each
-child subtree's edges). Each entry is the `(keep, parentCap)` of one delegation. -/
-def forestEdgesA : FullForestA → List (List Auth × Cap)
-  | ⟨_, kids⟩ => childrenEdgesA kids
-
-/-- Every delegation edge of a child list (this edge, then the child subtree's edges, then the
-rest). -/
-def childrenEdgesA : List FullChildA → List (List Auth × Cap)
-  | []                         => []
-  | ⟨_, keep, pc, sub⟩ :: rest => (keep, pc) :: (forestEdgesA sub ++ childrenEdgesA rest)
-end
-
-/-! ## §4 — The BRIDGE: `execFullForestA` IS `execFullTurnA` over the pre-order lowering (PROVED).
-
-The tree transaction equals the linear per-asset transaction over its pre-ordered node-actions:
-`execFullForestA s f = execFullTurnA s (lowerForestA f)`. This is the bridge that lifts EVERY
-`execFullTurnA` theorem (`execFullTurnA_ledger_per_asset`, `execFullTurnA_each_attests`, …) to the
-forest — the recursion threads the chained state in exactly the pre-order `Option`-fold
-`execFullTurnA` performs. PROVED by mutual structural induction over the tree, mutually with the
-child-list lowering `execFullChildrenA_eq_execFullTurnA`. Rests on `execFullTurnA_append`. -/
-
-mutual
-theorem execFullForestA_eq_execFullTurnA (s : RecChainedState) (f : FullForestA) :
-    execFullForestA s f = execFullTurnA s (lowerForestA f) := by
-  obtain ⟨a, kids⟩ := f
-  show (match execFullA s a with
-        | some s' => execFullChildrenA s' kids
-        | none    => none)
-      = execFullTurnA s (a :: lowerChildrenA kids)
-  rw [show execFullTurnA s (a :: lowerChildrenA kids)
-        = (match execFullA s a with
-           | some s' => execFullTurnA s' (lowerChildrenA kids)
-           | none    => none) from rfl]
-  cases execFullA s a with
-  | none    => rfl
-  | some s' => exact execFullChildrenA_eq_execFullTurnA s' kids
-
-theorem execFullChildrenA_eq_execFullTurnA (s : RecChainedState) (kids : List FullChildA) :
-    execFullChildrenA s kids = execFullTurnA s (lowerChildrenA kids) := by
-  match kids with
-  | [] => rfl
-  | ⟨h, k, pc, sub⟩ :: rest =>
-    show (match execFullForestA s sub with
-          | some s' => execFullChildrenA s' rest
-          | none    => none)
-        = execFullTurnA s (lowerForestA sub ++ lowerChildrenA rest)
-    rw [execFullTurnA_append, execFullForestA_eq_execFullTurnA s sub]
-    cases execFullTurnA s (lowerForestA sub) with
-    | none    => rfl
-    | some s' => exact execFullChildrenA_eq_execFullTurnA s' rest
-end
-
-/-! ## §5 — Conservation COROLLARIES: the per-asset VECTOR across the whole tree (one-line via the bridge).
-
-These INHERIT the FILL-1 per-asset vector. We do NOT state a blanket `recTotal`-fixed: that is FALSE
-for a mint/burn tree (a forest that mints or burns legitimately moves the supply, with the delta
-disclosed). The honest law is: `recTotalAsset … b` moves by EXACTLY the net per-asset ledger delta of
-the lowered turn, for EVERY asset `b` independently. -/
-
-/-- **`execFullForestA_ledger_per_asset` — PROVED (the per-asset conservation VECTOR, whole tree).** A
-committed full-forest moves `recTotalAsset b` by EXACTLY the net per-asset ledger delta of its
-pre-order lowering, for EVERY asset `b` independently. The tree generalization of
-`execFullTurnA_ledger_per_asset`, riding the bridge. THIS is the FILL-1 vector — a scalar aggregate
-could not state it (it would let a mint of asset B net against a burn of asset A). -/
-theorem execFullForestA_ledger_per_asset (s s' : RecChainedState) (f : FullForestA) (b : AssetId)
-    (h : execFullForestA s f = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b + turnLedgerDeltaAsset (lowerForestA f) b := by
-  rw [execFullForestA_eq_execFullTurnA] at h
-  exact execFullTurnA_ledger_per_asset s s' (lowerForestA f) b h
-
-/-- **`execFullForestA_conserves_per_asset` — PROVED.** A committed full-forest whose net per-asset
-ledger delta is `0` *in asset `b`* preserves asset `b`'s total supply. Applied with `∀ b, … = 0` this
-gives FULL per-asset conservation across the whole tree: a transfer/authority-only forest, or one
-whose per-asset mint/burn nets out in EACH asset, conserves EVERY asset class. The
-`CONSERVATION_VECTOR` at the forest level. -/
-theorem execFullForestA_conserves_per_asset (s s' : RecChainedState) (f : FullForestA) (b : AssetId)
-    (h : execFullForestA s f = some s') (hzero : turnLedgerDeltaAsset (lowerForestA f) b = 0) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
-  rw [execFullForestA_ledger_per_asset s s' f b h, hzero, add_zero]
-
-/-! ## §6 — `execFullForestA_no_amplify`: delegated caps NEVER amplify (Granovetter across the forest).
-
-Each `FullChildA` edge `⟨holder, keep, parentCap, _⟩` delegates `attenuate keep parentCap` to
-`holder` (the `Caps.derive` handoff). The cap-system no-amplification law `Caps.derive_no_amplify`
-says the derived cap confers ≤ the parent's authority — so NO child gains authority the parent lacked.
-We collect every edge of the tree and prove this holds of ALL of them: Granovetter (only connectivity
-begets connectivity) across the whole forest. SAME law + edge data as
-`TurnForest.execForest_no_amplify` — reused, never re-stubbed. A STRUCTURAL fact (holds of every
-well-formed forest, committed or not). -/
-
-/-- **`edge_no_amplify` — PROVED (the per-edge Granovetter law).** A single delegation edge is
-non-amplifying: the cap delegated to the child (`attenuate keep parentCap`) confers ≤ the parent's
-authority. This is `Caps.derive_no_amplify` — reused verbatim, never faked. -/
-theorem edge_no_amplify (keep : List Auth) (parentCap : Cap) :
-    capAuthConferred (attenuate keep parentCap) ⊆ capAuthConferred parentCap :=
-  derive_no_amplify keep parentCap
-
-/-- **`execFullForestA_no_amplify` — THE FOREST GRANOVETTER LAW (PROVED).** EVERY delegation edge of
-the full-op-set forest is non-amplifying: for each `(keep, parentCap)` edge, the cap handed to the
-child confers ≤ the parent's authority (`derive_no_amplify`). No child anywhere in the tree — at any
-nesting depth — gains authority the parent lacked: *only connectivity begets connectivity*, across the
-whole forest. A structural property of the forest data. -/
-theorem execFullForestA_no_amplify (f : FullForestA) :
-    ∀ e ∈ forestEdgesA f, capAuthConferred (attenuate e.1 e.2) ⊆ capAuthConferred e.2 := by
-  intro e _
-  exact edge_no_amplify e.1 e.2
-
-/-! ## §7 — Per-node attestation: every tree node attests its `fullActionInvA` (membership-lift).
-
-The pre-order lowering contains EXACTLY the tree's nodes (`execFullForestA_node_mem_lowered`), and
-`execFullTurnA_each_attests` proves every action of the committed lowered turn attests `fullActionInvA`
-(the per-asset ledger vector ∧ ChainLink ∧ ObsAdvance ∧ the kind obligation). Composing the two: every
-tree node attests its per-asset step-completeness. -/
-
-mutual
-/-- Every tree node's action is in the pre-order lowering (mutual structural induction). -/
-theorem execFullForestA_node_mem_lowered (f : FullForestA) :
-    f.action ∈ lowerForestA f := by
-  obtain ⟨a, kids⟩ := f
-  show a ∈ a :: lowerChildrenA kids
-  exact List.mem_cons_self
-
-/-- Every action of a child list's subtrees is in the child list's pre-order lowering. -/
-theorem execFullChildrenA_node_mem_lowered (kids : List FullChildA) (c : FullChildA)
-    (hc : c ∈ kids) : c.sub.action ∈ lowerChildrenA kids := by
-  match kids with
-  | [] => exact absurd hc List.not_mem_nil
-  | ⟨h, k, pc, sub⟩ :: rest =>
-    show c.sub.action ∈ lowerForestA sub ++ lowerChildrenA rest
-    rcases List.mem_cons.mp hc with hceq | hcrest
-    · subst hceq
-      exact List.mem_append_left _ (execFullForestA_node_mem_lowered sub)
-    · exact List.mem_append_right _ (execFullChildrenA_node_mem_lowered rest c hcrest)
-end
-
-/-- **`execFullForestA_each_attests` — PROVED (per-node step-completeness, whole tree).** Every node
-of a committed full-forest attests its `fullActionInvA`: the per-asset ledger VECTOR ∧ ChainLink ∧
-ObsAdvance ∧ the kind-specific obligation. Read through the bridge into `execFullTurnA_each_attests`
-over the pre-order lowering. The per-asset, full-op-set generalization of `execForest`'s attestation —
-NON-VACUOUS: it asserts every node's per-asset conservation vector, chain extension, and authority
-obligation, not a triviality. -/
-theorem execFullForestA_each_attests (s s' : RecChainedState) (f : FullForestA)
-    (h : execFullForestA s f = some s') :
-    ∀ fa ∈ lowerForestA f, ∃ sa sa', execFullA sa fa = some sa' ∧ fullActionInvA sa fa sa' := by
-  rw [execFullForestA_eq_execFullTurnA] at h
-  exact execFullTurnA_each_attests s s' (lowerForestA f) h
-
-/-- **The root node itself attests — PROVED (corollary).** The root's own action attests its
-`fullActionInvA` (the per-node membership-lift specialized to the root via
-`execFullForestA_node_mem_lowered`). -/
-theorem execFullForestA_root_attests (s s' : RecChainedState) (f : FullForestA)
-    (h : execFullForestA s f = some s') :
-    ∃ sa sa', execFullA sa f.action = some sa' ∧ fullActionInvA sa f.action sa' :=
-  execFullForestA_each_attests s s' f h f.action (execFullForestA_node_mem_lowered f)
-
-/-! ## §8 — Fail-closed at the root (the journal/rollback discipline). -/
-
-/-- **`execFullForestA_unauthorized_fails` — PROVED (fail-closed at the root).** If the root node's
-action is rejected (`execFullA s a = none`), the whole forest rejects (no partial commit). The
-all-or-nothing discipline through the `execFullForestA` root. -/
-theorem execFullForestA_unauthorized_fails (s : RecChainedState) (a : FullActionA)
-    (kids : List FullChildA) (h : execFullA s a = none) :
-    execFullForestA s ⟨a, kids⟩ = none := by
-  show (match execFullA s a with
-        | some s' => execFullChildrenA s' kids
-        | none    => none) = none
-  rw [h]
-
-/-! ## §9 — Fidelity overlay: `sameTargetForest` (the `DelegationMode::None` default) + cross-cell routing.
-
-The executor here is the `DelegationMode::None` default: a child's `FullActionA` runs on the SAME
-TARGET CELL as its parent. `targetOf` reads the cell a `FullActionA` acts on (the `src`/`cell` field);
-`sameTargetForest` is the STRUCTURAL predicate that every child's target equals its parent's. This is
-the INTRA-cell fidelity overlay — the forest's nodes all touch the one record cell's ledger, so the
-per-asset conservation VECTOR (`execFullForestA_conserves_per_asset`) is DERIVED, not binding-carried,
-exactly as `TurnForest`'s intra-cell conservation is derived.
-
-A CROSS-TARGET subtree — a child whose target cell DIFFERS from its parent's — is the cross-cell axis.
-It is ROUTED to `Exec/CrossCellForest.lean` (`crossForest_conserves`, the N-ary cross-cell Σ=0 binding-
-carried CG-5; `crossForest_no_amplify`; `crossForest_attests`), where the whole-forest conservation is
-the inviolable Σ=0 binding carried as a HYPOTHESIS (NOT derivable, because cross-cell halves need not
-individually cancel). We deliberately do NOT bake a cross-target branch into `execFullForestA`, and we
-do NOT re-prove the cross-cell axis here — the routing is the honest division of labor.
-
-Bearer-bypass (a cap presented WITHOUT a delegation edge — `DelegationMode::Bearer`) is scoped OUT for
-v1: every node here runs under its own `execFullA` authority gate, and delegation is the only authority
-handoff modeled. -/
+/-- **`capTarget cap`** — the target cell a cap confers an edge to (`node t`/`endpoint t _ ⇒ some t`;
+`null ⇒ none`, a cap that names no object). The delegation gate (`recKDelegateAtten`) checks the
+delegator holds a cap to THIS target before handing the child the attenuated copy. -/
+def capTarget : Cap → Option Label
+  | .node t       => some t
+  | .endpoint t _ => some t
+  | .null         => none
 
 /-- The target cell a `FullActionA` acts on (the `src` for a transfer, the `cell` for mint/burn, the
-delegator/holder for authority, the written `cell` for the 5 pure-state field/log effects). The
-discriminant `sameTargetForest` reads. -/
+delegator/holder for authority, the written `cell` for the 5 pure-state field/log effects). Read by
+the executor as the DELEGATOR of each child edge (the authority being delegated downward), and by the
+fidelity predicate `sameTargetForest` (§9). -/
 def targetOf : FullActionA → CellId
   | .balanceA t _       => t.src
   | .delegate del _ _   => del
@@ -398,6 +181,376 @@ def targetOf : FullActionA → CellId
   | .swissHandoffA _ _ _ exporter           => exporter
   | .swissDropA _ _ exporter                => exporter
 
+/-! ## §2 — `execFullForestA`: run the tree as an ALL-OR-NOTHING transaction (the executable artifact).
+
+Each node runs its own `FullActionA` via `execFullA` (the fail-closed per-kind gate, extending the
+receipt chain, moving the per-asset ledger by exactly `ledgerDeltaAsset`). Then each child runs under
+a REAL, EXECUTED delegation handoff: the edge `⟨holder, keep, parentCap, sub⟩` is routed through the
+PROVED `recCDelegateAtten s delegator holder t keep` (the faithful `apply_introduce`) — where
+`delegator` is the PARENT node's target (`targetOf a`, the authority being delegated) and `t :=
+capTarget parentCap`. That step GATES on the delegator genuinely holding a cap to `t`
+(`recKDelegateAtten_non_amplifying`: the granted cap's rights are `⊆` the held cap's) and INSTALLS the
+attenuated cap into `holder`'s slot — balance-neutral (`recKDelegateAtten_frame`, edits only `caps`).
+A FORGED/UNAUTHORIZED edge (the delegator holds NO cap to `t`) ⇒ `recCDelegateAtten = none` ⇒ the
+WHOLE forest rejects (the non-amplification is now NON-vacuous ON EXECUTION). Only AFTER the handoff
+commits does the child subtree run via `execFullForestA`. A `null` parentCap names no target
+(`capTarget = none`) so it delegates NOTHING — the child runs under its own independent authority (a
+null cap confers `[]`; there is no authority to hand over). Any `none` anywhere aborts the whole
+forest (the journal/rollback discipline — no partial commit), exactly as `execFullTurnA`'s `Option`
+fold. The recursion is structural over the tree (`execFullForestA`/`execFullChildrenA` mutual). -/
+
+mutual
+/-- Run a node: its own action, then all its children — each under a REAL executed
+`recCDelegateAtten` handoff from this node's target (`targetOf a`). All-or-nothing. -/
+def execFullForestA (s : RecChainedState) : FullForestA → Option RecChainedState
+  | ⟨a, kids⟩ =>
+    match execFullA s a with
+    | some s' => execFullChildrenA (targetOf a) s' kids
+    | none    => none
+
+/-- Run a list of child delegation edges left-to-right, threading the chained state. For each edge,
+the `delegator` (the parent node's target) hands `holder` its held cap to `t := capTarget parentCap`
+ATTENUATED to `keep` via the PROVED `recCDelegateAtten` (gate: delegator holds a real cap to `t`,
+`granted ≤ held`); the child subtree then runs via `execFullForestA`. A forged/unauthorized edge ⇒
+`none` ⇒ whole-forest rollback. A `null` parentCap (`capTarget = none`) delegates nothing — the child
+runs under its existing authority. -/
+def execFullChildrenA (delegator : CellId) (s : RecChainedState) :
+    List FullChildA → Option RecChainedState
+  | []            => some s
+  | ⟨holder, keep, parentCap, sub⟩ :: rest =>
+    match capTarget parentCap with
+    | some t =>
+      match recCDelegateAtten s delegator holder t keep with
+      | some s1 =>
+        match execFullForestA s1 sub with
+        | some s2 => execFullChildrenA delegator s2 rest
+        | none    => none
+      | none    => none
+    | none =>
+      -- a `null` parentCap delegates nothing (it confers `[]`): the child runs under its own authority.
+      match execFullForestA s sub with
+      | some s2 => execFullChildrenA delegator s2 rest
+      | none    => none
+end
+
+/-! ## §3 — The pre-order lowering: the forest's flattened action list (OPTION B carrier).
+
+The forest's actions, in EXECUTION ORDER (pre-order: a node before its children, children
+left-to-right). `execFullForestA` is exactly `execFullTurnA` over `lowerForestA` — so every
+`execFullTurnA` theorem lifts to the forest by this flattening. We prove that equivalence
+(`execFullForestA_eq_execFullTurnA`) and read all the per-asset conjuncts through it. -/
+
+mutual
+/-- The node-actions of a forest in pre-order (the node, then its children's flattenings, each child
+preceded by its EXECUTED delegation action — `delegator := targetOf a`). -/
+def lowerForestA : FullForestA → List FullActionA
+  | ⟨a, kids⟩ => a :: lowerChildrenA (targetOf a) kids
+
+/-- The node-actions of a child list in order, threading the parent `delegator`. For each edge, the
+EXECUTED `delegateAttenA delegator holder t keep` (with `t := capTarget parentCap`) is emitted BEFORE
+that child subtree's actions — so `execFullTurnA` runs the SAME `recCDelegateAtten` handoff the tree
+executor does (the bridge `execFullChildrenA_eq_execFullTurnA` rests on this). A `null` parentCap
+(`capTarget = none`) emits NO delegation (it delegates nothing) — only the subtree's actions. -/
+def lowerChildrenA (delegator : CellId) : List FullChildA → List FullActionA
+  | []                            => []
+  | ⟨holder, keep, parentCap, sub⟩ :: rest =>
+    match capTarget parentCap with
+    | some t => FullActionA.delegateAttenA delegator holder t keep
+                  :: (lowerForestA sub ++ lowerChildrenA delegator rest)
+    | none   => lowerForestA sub ++ lowerChildrenA delegator rest
+end
+
+mutual
+/-- Every delegation edge of a forest, in pre-order (this node's child edges, then recursively each
+child subtree's edges). Each entry is the `(keep, parentCap)` of one delegation. -/
+def forestEdgesA : FullForestA → List (List Auth × Cap)
+  | ⟨_, kids⟩ => childrenEdgesA kids
+
+/-- Every delegation edge of a child list (this edge, then the child subtree's edges, then the
+rest). -/
+def childrenEdgesA : List FullChildA → List (List Auth × Cap)
+  | []                         => []
+  | ⟨_, keep, pc, sub⟩ :: rest => (keep, pc) :: (forestEdgesA sub ++ childrenEdgesA rest)
+end
+
+/-! ## §4 — The BRIDGE: `execFullForestA` IS `execFullTurnA` over the pre-order lowering (PROVED).
+
+The tree transaction equals the linear per-asset transaction over its pre-ordered node-actions:
+`execFullForestA s f = execFullTurnA s (lowerForestA f)`. This is the bridge that lifts EVERY
+`execFullTurnA` theorem (`execFullTurnA_ledger_per_asset`, `execFullTurnA_each_attests`, …) to the
+forest — the recursion threads the chained state in exactly the pre-order `Option`-fold
+`execFullTurnA` performs. PROVED by mutual structural induction over the tree, mutually with the
+child-list lowering `execFullChildrenA_eq_execFullTurnA`. Rests on `execFullTurnA_append`. -/
+
+mutual
+theorem execFullForestA_eq_execFullTurnA (s : RecChainedState) (f : FullForestA) :
+    execFullForestA s f = execFullTurnA s (lowerForestA f) := by
+  obtain ⟨a, kids⟩ := f
+  show (match execFullA s a with
+        | some s' => execFullChildrenA (targetOf a) s' kids
+        | none    => none)
+      = execFullTurnA s (a :: lowerChildrenA (targetOf a) kids)
+  rw [show execFullTurnA s (a :: lowerChildrenA (targetOf a) kids)
+        = (match execFullA s a with
+           | some s' => execFullTurnA s' (lowerChildrenA (targetOf a) kids)
+           | none    => none) from rfl]
+  cases execFullA s a with
+  | none    => rfl
+  | some s' => exact execFullChildrenA_eq_execFullTurnA (targetOf a) s' kids
+
+theorem execFullChildrenA_eq_execFullTurnA (delegator : CellId) (s : RecChainedState)
+    (kids : List FullChildA) :
+    execFullChildrenA delegator s kids = execFullTurnA s (lowerChildrenA delegator kids) := by
+  match kids with
+  | [] => rfl
+  | ⟨holder, keep, parentCap, sub⟩ :: rest =>
+    -- Both the executor and the lowering branch on the SAME scrutinee `capTarget parentCap`; `cases`
+    -- on it reduces BOTH at once. `some t` ⇒ the executed `recCDelegateAtten` handoff (=
+    -- `execFullA (delegateAttenA …)`) precedes the subtree; `none` (a `null` cap) ⇒ subtree directly.
+    show (match capTarget parentCap with
+          | some t =>
+            match recCDelegateAtten s delegator holder t keep with
+            | some s1 => match execFullForestA s1 sub with
+                         | some s2 => execFullChildrenA delegator s2 rest
+                         | none    => none
+            | none    => none
+          | none =>
+            match execFullForestA s sub with
+            | some s2 => execFullChildrenA delegator s2 rest
+            | none    => none)
+        = execFullTurnA s
+            (match capTarget parentCap with
+             | some t => FullActionA.delegateAttenA delegator holder t keep
+                           :: (lowerForestA sub ++ lowerChildrenA delegator rest)
+             | none   => lowerForestA sub ++ lowerChildrenA delegator rest)
+    -- Case-split on `capTarget parentCap` (the shared scrutinee of BOTH matches); `simp only [hct]`
+    -- rewrites every occurrence and iota-reduces both the executor and the lowering matches.
+    cases hct : capTarget parentCap with
+    | some t =>
+      -- `some t`: `execFullA s (delegateAttenA …) = recCDelegateAtten s …` (definitional). Reduce the
+      -- `capTarget` match (`hct`) and the `delegateAttenA` head, then split on the handoff result.
+      cases hd : recCDelegateAtten s delegator holder t keep with
+      | none    => simp only [hct, execFullTurnA, execFullA, hd]
+      | some s1 =>
+          simp only [hct, execFullTurnA, execFullA, hd, execFullTurnA_append,
+                     execFullForestA_eq_execFullTurnA s1 sub]
+          cases execFullTurnA s1 (lowerForestA sub) with
+          | none    => rfl
+          | some s2 => exact execFullChildrenA_eq_execFullTurnA delegator s2 rest
+    | none =>
+      -- `none` (`null` cap): subtree directly, no delegation emitted.
+      simp only [hct, execFullTurnA_append, execFullForestA_eq_execFullTurnA s sub]
+      cases execFullTurnA s (lowerForestA sub) with
+      | none    => rfl
+      | some s2 => exact execFullChildrenA_eq_execFullTurnA delegator s2 rest
+end
+
+/-! ## §5 — Conservation COROLLARIES: the per-asset VECTOR across the whole tree (one-line via the bridge).
+
+These INHERIT the FILL-1 per-asset vector. We do NOT state a blanket `recTotal`-fixed: that is FALSE
+for a mint/burn tree (a forest that mints or burns legitimately moves the supply, with the delta
+disclosed). The honest law is: `recTotalAsset … b` moves by EXACTLY the net per-asset ledger delta of
+the lowered turn, for EVERY asset `b` independently. -/
+
+/-- **`execFullForestA_ledger_per_asset` — PROVED (the per-asset conservation VECTOR, whole tree).** A
+committed full-forest moves `recTotalAsset b` by EXACTLY the net per-asset ledger delta of its
+pre-order lowering, for EVERY asset `b` independently. The tree generalization of
+`execFullTurnA_ledger_per_asset`, riding the bridge. THIS is the FILL-1 vector — a scalar aggregate
+could not state it (it would let a mint of asset B net against a burn of asset A). -/
+theorem execFullForestA_ledger_per_asset (s s' : RecChainedState) (f : FullForestA) (b : AssetId)
+    (h : execFullForestA s f = some s') :
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b + turnLedgerDeltaAsset (lowerForestA f) b := by
+  rw [execFullForestA_eq_execFullTurnA] at h
+  exact execFullTurnA_ledger_per_asset s s' (lowerForestA f) b h
+
+/-- **`execFullForestA_conserves_per_asset` — PROVED.** A committed full-forest whose net per-asset
+ledger delta is `0` *in asset `b`* preserves asset `b`'s total supply. Applied with `∀ b, … = 0` this
+gives FULL per-asset conservation across the whole tree: a transfer/authority-only forest, or one
+whose per-asset mint/burn nets out in EACH asset, conserves EVERY asset class. The
+`CONSERVATION_VECTOR` at the forest level. -/
+theorem execFullForestA_conserves_per_asset (s s' : RecChainedState) (f : FullForestA) (b : AssetId)
+    (h : execFullForestA s f = some s') (hzero : turnLedgerDeltaAsset (lowerForestA f) b = 0) :
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+  rw [execFullForestA_ledger_per_asset s s' f b h, hzero, add_zero]
+
+/-! ## §6 — `execFullForestA_no_amplify`: delegated caps NEVER amplify (Granovetter across the forest).
+
+Each `FullChildA` edge `⟨holder, keep, parentCap, _⟩` delegates `attenuate keep parentCap` to
+`holder` (the `Caps.derive` handoff). The cap-system no-amplification law `Caps.derive_no_amplify`
+says the derived cap confers ≤ the parent's authority — so NO child gains authority the parent lacked.
+We collect every edge of the tree and prove this holds of ALL of them: Granovetter (only connectivity
+begets connectivity) across the whole forest. SAME law + edge data as
+`TurnForest.execForest_no_amplify` — reused, never re-stubbed. A STRUCTURAL fact (holds of every
+well-formed forest, committed or not). -/
+
+/-- **`edge_no_amplify` — PROVED (the per-edge Granovetter law).** A single delegation edge is
+non-amplifying: the cap delegated to the child (`attenuate keep parentCap`) confers ≤ the parent's
+authority. This is `Caps.derive_no_amplify` — reused verbatim, never faked. -/
+theorem edge_no_amplify (keep : List Auth) (parentCap : Cap) :
+    capAuthConferred (attenuate keep parentCap) ⊆ capAuthConferred parentCap :=
+  derive_no_amplify keep parentCap
+
+/-- **`execFullForestA_no_amplify` — THE FOREST GRANOVETTER LAW (PROVED).** EVERY delegation edge of
+the full-op-set forest is non-amplifying: for each `(keep, parentCap)` edge, the cap handed to the
+child confers ≤ the parent's authority (`derive_no_amplify`). No child anywhere in the tree — at any
+nesting depth — gains authority the parent lacked: *only connectivity begets connectivity*, across the
+whole forest. A structural property of the forest data. -/
+theorem execFullForestA_no_amplify (f : FullForestA) :
+    ∀ e ∈ forestEdgesA f, capAuthConferred (attenuate e.1 e.2) ⊆ capAuthConferred e.2 := by
+  intro e _
+  exact edge_no_amplify e.1 e.2
+
+/-! ### §6.EXECUTED — the no-amplification ON THE COMMITTED HANDOFF (de-vacuified, granted-vs-HELD).
+
+`execFullForestA_no_amplify` above is STRUCTURAL (it bounds each edge's `attenuate keep parentCap` by
+the DECLARED `parentCap`, true of any forest, committed or not). The de-vacuified law is about the
+EXECUTED handoff: when the executor's per-edge step `recCDelegateAtten s delegator holder t keep`
+COMMITS, the cap it actually INSTALLS into `holder`'s slot confers `List Auth` rights `⊆` the cap the
+delegator GENUINELY HELD to `t` (`recKDelegateAtten_non_amplifying`, granted-vs-HELD — two different
+caps, NOT a `()≤()` collapse). And a forged/unauthorized edge (the delegator holds no cap to `t`)
+NEVER commits (`recCDelegateAtten = none` ⇒ whole-forest rollback). THIS is the soundness content the
+old decorative executor lacked: the gate is exercised ON EXECUTION, referencing the COMMITTED kernel
+caps. -/
+
+/-- **`recCDelegateAtten_executed_no_amplify` — PROVED (the EXECUTED handoff is non-amplifying).** When
+the executor's per-edge delegation step COMMITS (`recCDelegateAtten s delegator holder t keep = some
+s'`), (a) `holder` GENUINELY HOLDS the granted cap `attenuate keep (heldCapTo s.kernel.caps delegator
+t)` in the COMMITTED post-state, and (b) that granted cap's conferred rights are `⊆` the delegator's
+HELD cap to `t` (`confRights granted ≤ confRights held`, `recKDelegateAtten_non_amplifying`). The
+de-vacuified Granovetter law, on the executed kernel state — NOT the declared edge data. -/
+theorem recCDelegateAtten_executed_no_amplify
+    (s s' : RecChainedState) (delegator holder t : CellId) (keep : List Auth)
+    (h : recCDelegateAtten s delegator holder t keep = some s') :
+    attenuate keep (heldCapTo s.kernel.caps delegator t) ∈ s'.kernel.caps holder
+      ∧ confRights (attenuate keep (heldCapTo s.kernel.caps delegator t))
+          ≤ confRights (heldCapTo s.kernel.caps delegator t) := by
+  -- `recCDelegateAtten` wraps `recKDelegateAtten s.kernel …`; on commit `s'.kernel = k'`.
+  unfold recCDelegateAtten at h
+  cases hd : recKDelegateAtten s.kernel delegator holder t keep with
+  | none    => rw [hd] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hd] at h; simp only [Option.some.injEq] at h; subst h
+      refine ⟨?_, recKDelegateAtten_non_amplifying s.kernel.caps delegator t keep⟩
+      exact recKDelegateAtten_grants s.kernel k' delegator holder t keep hd
+
+/-- **`execFullChildrenA_unauthorized_edge_fails` — PROVED (forged edge ⇒ REJECT, the gate has teeth).**
+If the FIRST child edge's executed handoff `recCDelegateAtten` is rejected (`= none` — the delegator
+holds NO cap to `t := capTarget parentCap`), the whole child list rejects (`none`). So a
+forged/unauthorized delegation edge aborts the forest — the non-amplification gate is NON-vacuous ON
+EXECUTION (`forgedEdgeForest` is the executable witness). -/
+theorem execFullChildrenA_unauthorized_edge_fails
+    (delegator : CellId) (s : RecChainedState) (holder : Label) (keep : List Auth) (t : Label)
+    (parentCap : Cap) (sub : FullForestA) (rest : List FullChildA)
+    (ht : capTarget parentCap = some t)
+    (hforged : recCDelegateAtten s delegator holder t keep = none) :
+    execFullChildrenA delegator s (⟨holder, keep, parentCap, sub⟩ :: rest) = none := by
+  show (match capTarget parentCap with
+        | some t =>
+          match recCDelegateAtten s delegator holder t keep with
+          | some s1 => match execFullForestA s1 sub with
+                       | some s2 => execFullChildrenA delegator s2 rest
+                       | none    => none
+          | none    => none
+        | none =>
+          match execFullForestA s sub with
+          | some s2 => execFullChildrenA delegator s2 rest
+          | none    => none) = none
+  simp only [ht, hforged]
+
+/-! ## §7 — Per-node attestation: every tree node attests its `fullActionInvA` (membership-lift).
+
+The pre-order lowering contains EXACTLY the tree's nodes (`execFullForestA_node_mem_lowered`), and
+`execFullTurnA_each_attests` proves every action of the committed lowered turn attests `fullActionInvA`
+(the per-asset ledger vector ∧ ChainLink ∧ ObsAdvance ∧ the kind obligation). Composing the two: every
+tree node attests its per-asset step-completeness. -/
+
+mutual
+/-- Every tree node's action is in the pre-order lowering (mutual structural induction). -/
+theorem execFullForestA_node_mem_lowered (f : FullForestA) :
+    f.action ∈ lowerForestA f := by
+  obtain ⟨a, kids⟩ := f
+  show a ∈ a :: lowerChildrenA (targetOf a) kids
+  exact List.mem_cons_self
+
+/-- Every action of a child list's subtrees is in the child list's pre-order lowering (threading the
+parent `delegator`; the per-edge `delegateAttenA` prefix — when present — only adds to the list, so
+each subtree's action remains a member). -/
+theorem execFullChildrenA_node_mem_lowered (delegator : CellId) (kids : List FullChildA)
+    (c : FullChildA) (hc : c ∈ kids) : c.sub.action ∈ lowerChildrenA delegator kids := by
+  match kids with
+  | [] => exact absurd hc List.not_mem_nil
+  | ⟨h, k, pc, sub⟩ :: rest =>
+    show c.sub.action ∈
+      (match capTarget pc with
+       | some t => FullActionA.delegateAttenA delegator h t k
+                     :: (lowerForestA sub ++ lowerChildrenA delegator rest)
+       | none   => lowerForestA sub ++ lowerChildrenA delegator rest)
+    have hbody : c.sub.action ∈ lowerForestA sub ++ lowerChildrenA delegator rest := by
+      rcases List.mem_cons.mp hc with hceq | hcrest
+      · subst hceq
+        exact List.mem_append_left _ (execFullForestA_node_mem_lowered sub)
+      · exact List.mem_append_right _ (execFullChildrenA_node_mem_lowered delegator rest c hcrest)
+    cases capTarget pc with
+    | some t => exact List.mem_cons_of_mem _ hbody
+    | none   => exact hbody
+end
+
+/-- **`execFullForestA_each_attests` — PROVED (per-node step-completeness, whole tree).** Every node
+of a committed full-forest attests its `fullActionInvA`: the per-asset ledger VECTOR ∧ ChainLink ∧
+ObsAdvance ∧ the kind-specific obligation. Read through the bridge into `execFullTurnA_each_attests`
+over the pre-order lowering. The per-asset, full-op-set generalization of `execForest`'s attestation —
+NON-VACUOUS: it asserts every node's per-asset conservation vector, chain extension, and authority
+obligation, not a triviality. -/
+theorem execFullForestA_each_attests (s s' : RecChainedState) (f : FullForestA)
+    (h : execFullForestA s f = some s') :
+    ∀ fa ∈ lowerForestA f, ∃ sa sa', execFullA sa fa = some sa' ∧ fullActionInvA sa fa sa' := by
+  rw [execFullForestA_eq_execFullTurnA] at h
+  exact execFullTurnA_each_attests s s' (lowerForestA f) h
+
+/-- **The root node itself attests — PROVED (corollary).** The root's own action attests its
+`fullActionInvA` (the per-node membership-lift specialized to the root via
+`execFullForestA_node_mem_lowered`). -/
+theorem execFullForestA_root_attests (s s' : RecChainedState) (f : FullForestA)
+    (h : execFullForestA s f = some s') :
+    ∃ sa sa', execFullA sa f.action = some sa' ∧ fullActionInvA sa f.action sa' :=
+  execFullForestA_each_attests s s' f h f.action (execFullForestA_node_mem_lowered f)
+
+/-! ## §8 — Fail-closed at the root (the journal/rollback discipline). -/
+
+/-- **`execFullForestA_unauthorized_fails` — PROVED (fail-closed at the root).** If the root node's
+action is rejected (`execFullA s a = none`), the whole forest rejects (no partial commit). The
+all-or-nothing discipline through the `execFullForestA` root. -/
+theorem execFullForestA_unauthorized_fails (s : RecChainedState) (a : FullActionA)
+    (kids : List FullChildA) (h : execFullA s a = none) :
+    execFullForestA s ⟨a, kids⟩ = none := by
+  show (match execFullA s a with
+        | some s' => execFullChildrenA (targetOf a) s' kids
+        | none    => none) = none
+  rw [h]
+
+/-! ## §9 — Fidelity overlay: `sameTargetForest` (the `DelegationMode::None` default) + cross-cell routing.
+
+The executor here is the `DelegationMode::None` default: a child's `FullActionA` runs on the SAME
+TARGET CELL as its parent. `targetOf` reads the cell a `FullActionA` acts on (the `src`/`cell` field);
+`sameTargetForest` is the STRUCTURAL predicate that every child's target equals its parent's. This is
+the INTRA-cell fidelity overlay — the forest's nodes all touch the one record cell's ledger, so the
+per-asset conservation VECTOR (`execFullForestA_conserves_per_asset`) is DERIVED, not binding-carried,
+exactly as `TurnForest`'s intra-cell conservation is derived.
+
+A CROSS-TARGET subtree — a child whose target cell DIFFERS from its parent's — is the cross-cell axis.
+It is ROUTED to `Exec/CrossCellForest.lean` (`crossForest_conserves`, the N-ary cross-cell Σ=0 binding-
+carried CG-5; `crossForest_no_amplify`; `crossForest_attests`), where the whole-forest conservation is
+the inviolable Σ=0 binding carried as a HYPOTHESIS (NOT derivable, because cross-cell halves need not
+individually cancel). We deliberately do NOT bake a cross-target branch into `execFullForestA`, and we
+do NOT re-prove the cross-cell axis here — the routing is the honest division of labor.
+
+Bearer-bypass (a cap presented WITHOUT a delegation edge — `DelegationMode::Bearer`) is scoped OUT for
+v1: every node here runs under its own `execFullA` authority gate, and delegation is the only authority
+handoff modeled. -/
+
+-- `targetOf` is defined in §1.5 (it is now load-bearing for the executor: it is the DELEGATOR of each
+-- child edge — the authority handed downward). `sameTargetForest` reuses it as its discriminant.
+
 mutual
 /-- **`sameTargetForest`** — the STRUCTURAL `DelegationMode::None` fidelity predicate: every child's
 `FullActionA` target equals the parent node's target (the intra-cell forest). A CROSS-TARGET subtree
@@ -421,6 +574,8 @@ end
 #assert_axioms execFullForestA_conserves_per_asset
 #assert_axioms edge_no_amplify
 #assert_axioms execFullForestA_no_amplify
+#assert_axioms recCDelegateAtten_executed_no_amplify
+#assert_axioms execFullChildrenA_unauthorized_edge_fails
 #assert_axioms execFullForestA_node_mem_lowered
 #assert_axioms execFullChildrenA_node_mem_lowered
 #assert_axioms execFullForestA_each_attests
@@ -435,13 +590,35 @@ of asset 1; cell 1 holds 5 of asset 0; actor 9 holds the privileged `node 0` min
 Owner authority (actor = src) for balance transfers. We build trees over the FULL op-set
 (mintA/balanceA/burnA), per-asset. -/
 
-/-- **`goodFullForest`** — a 3-node, 3-level full-op-set tree, per-asset NET ZERO ⇒ conserved:
+/-- **`fmaDeleg`** — `fma0`'s 2-asset ledger, but with the cap table GROUNDED so each forest's
+delegators GENUINELY hold a cap conferring an edge to the parentCap's target (so the EXECUTED
+`recCDelegateAtten` gate PASSES for the right reason, not vacuously). Cell **9** keeps the privileged
+`node 0` mint cap (`mintA`/`burnA` authority). Cell **0** (the delegator of `goodFullForest`'s two
+edges) holds `endpoint 1 [read,write]` (→ confers an edge to cell 1, the first edge's target) AND
+`node 0` (→ confers an edge to cell 0, the deeper edge's target). Cell **1** (a delegator in
+`deepFullForest`) holds `endpoint 0 [read,write]` (→ confers an edge to cell 0). These are the held
+caps the `recKDelegateAtten` connectivity gate checks — WITHOUT them the forests REJECT (see
+`forgedEdgeForest`). The ledger/accounts are `fma0`'s verbatim. -/
+def fmaDeleg : RecChainedState :=
+  { fma0 with kernel :=
+      { fma0.kernel with
+        caps := fun l => if l = 9 then [Cap.node 0]
+                         else if l = 0 then [Cap.endpoint 1 [Auth.read, Auth.write], Cap.node 0]
+                         else if l = 1 then [Cap.endpoint 0 [Auth.read, Auth.write]]
+                         else [] } }
+
+/-- **`goodFullForest`** — a 3-node, 3-level full-op-set tree, per-asset NET ZERO ⇒ conserved. Run
+against `fmaDeleg`, where every delegation edge's parent GENUINELY holds the delegated cap (the
+EXECUTED `recCDelegateAtten` handoff commits for the RIGHT reason — see `forgedEdgeForest` for the
+adversarial twin that REJECTS):
   * ROOT: `mintA 9 0 1 50` — actor 9 mints +50 of ASSET 1 on cell 0 (privileged, disclosed);
-  * CHILD (delegated, `[read] ⊆ [read,write]`): `balanceA ⟨0,0,1,30⟩ 0` — actor 0 transfers 30 of
-    ASSET 0 from cell 0 to cell 1 (conserves asset 0);
-  * GRANDCHILD (delegated): `burnA 9 0 1 50` — actor 9 burns −50 of ASSET 1 on cell 0 (disclosed).
+  * CHILD (delegated 0⟶0-holder, `[read] ⊆ [read,write]`, target cell 1): `balanceA ⟨0,0,1,30⟩ 0` —
+    actor 0 transfers 30 of ASSET 0 from cell 0 to cell 1 (conserves asset 0). The delegation handoff
+    GATES on cell 0 holding a cap to cell 1 (`endpoint 1 [r,w]` in `fmaDeleg`);
+  * GRANDCHILD (delegated, target cell 0): `burnA 9 0 1 50` — actor 9 burns −50 of ASSET 1 on cell 0.
+    The handoff GATES on cell 0 holding a cap to cell 0 (`node 0` in `fmaDeleg`).
 The per-asset net is `0` in BOTH assets (asset 1: +50 −50 = 0; asset 0: 0), so the whole tree
-conserves PER-ASSET. The delegation edges are non-amplifying. -/
+conserves PER-ASSET. The delegation edges are non-amplifying AND now EXECUTED (gated). -/
 def goodFullForest : FullForestA :=
   ⟨ .mintA 9 0 1 50
   , [ { holder := 0, keep := [Auth.read], parentCap := .endpoint 1 [Auth.read, Auth.write]
@@ -449,35 +626,56 @@ def goodFullForest : FullForestA :=
                , [ { holder := 9, keep := [], parentCap := .endpoint 0 [Auth.read]
                    , sub := ⟨ .burnA 9 0 1 50, [] ⟩ } ] ⟩ } ] ⟩
 
-#eval (execFullForestA fma0 goodFullForest).isSome                          -- true (whole tree commits)
--- The pre-order lowering IS the per-asset linear turn over the three node-actions:
-#eval (lowerForestA goodFullForest).length                                  -- 3
--- The per-asset NET is 0 in BOTH assets ⇒ conserved per-asset:
+#eval (execFullForestA fmaDeleg goodFullForest).isSome                       -- true (whole tree commits — gated handoffs PASS)
+-- The pre-order lowering now INTERLEAVES the EXECUTED `delegateAttenA` per edge: 3 nodes + 2 edges = 5:
+#eval (lowerForestA goodFullForest).length                                  -- 5 (3 node-actions + 2 delegations)
+-- The per-asset NET is 0 in BOTH assets (delegations are balance-neutral) ⇒ conserved per-asset:
 #eval turnLedgerDeltaAsset (lowerForestA goodFullForest) 0                   -- 0 (asset 0)
 #eval turnLedgerDeltaAsset (lowerForestA goodFullForest) 1                   -- 0 (asset 1: +50 -50)
 -- The per-asset supply AFTER the tree: asset 0 = 105 (conserved), asset 1 = 7 (conserved):
-#eval (execFullForestA fma0 goodFullForest).map
+#eval (execFullForestA fmaDeleg goodFullForest).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))      -- some (105, 7)
-#eval (recTotalAsset fma0.kernel 0, recTotalAsset fma0.kernel 1)            -- (105, 7)
--- The chain grew by exactly the node count (3):
-#eval (execFullForestA fma0 goodFullForest).map (fun s => s.log.length)      -- some 3
+#eval (recTotalAsset fmaDeleg.kernel 0, recTotalAsset fmaDeleg.kernel 1)     -- (105, 7)
+-- The chain grew by node count + edge count (3 + 2 = 5; each handoff lands an authority receipt):
+#eval (execFullForestA fmaDeleg goodFullForest).map (fun s => s.log.length)  -- some 5
 -- Every delegation edge is non-amplifying: each child's keep ⊆ its parent's cap rights.
 #eval (forestEdgesA goodFullForest).map (fun e => decide
         ((capAuthConferred (attenuate e.1 e.2)).length ≤ (capAuthConferred e.2).length))  -- [true, true]
 
-/-- **`deepFullForest`** — a 3-level INTRA-asset tree (deeper nesting works; recursion fully general):
-root transfer 0→1 of 10 (asset 0), child transfer 1→0 of 5 (asset 0, actor 1 owns cell 1), grandchild
-transfer 0→1 of 5 (asset 0). All transfers conserve asset 0 (and trivially asset 1). -/
+/-- **`forgedEdgeForest` — THE ADVERSARIAL TWIN (the proof the delegation gate is REAL, NON-vacuous).**
+IDENTICAL to `goodFullForest` EXCEPT the first delegation edge's `parentCap` claims an edge to cell
+**2** — a cap the delegator (cell 0) does NOT hold in `fmaDeleg` (cell 0 holds caps to 1 and 0, never
+2). So the EXECUTED `recCDelegateAtten` handoff FAILS its connectivity gate ⇒ the whole forest REJECTS
+(`isSome = false`). If this were `true`, the gate would be VACUOUS — this `#eval` is the executable
+witness that a FORGED/UNAUTHORIZED edge cannot commit. -/
+def forgedEdgeForest : FullForestA :=
+  ⟨ .mintA 9 0 1 50
+  , [ { holder := 0, keep := [Auth.read], parentCap := .endpoint 2 [Auth.read, Auth.write]  -- target 2: UNHELD
+      , sub := ⟨ .balanceA ⟨0, 0, 1, 30⟩ 0
+               , [ { holder := 9, keep := [], parentCap := .endpoint 0 [Auth.read]
+                   , sub := ⟨ .burnA 9 0 1 50, [] ⟩ } ] ⟩ } ] ⟩
+
+-- ★ THE FORGED-EDGE TEETH: the parent (cell 0) holds NO cap to cell 2 ⇒ the whole forest is REJECTED:
+#eval (execFullForestA fmaDeleg forgedEdgeForest).isSome                     -- false (forged edge ⇒ REJECTED)
+-- For contrast, the genuine forest commits on the SAME state (the gate is the ONLY difference):
+#eval (execFullForestA fmaDeleg goodFullForest).isSome                       -- true (the held-cap edge PASSES)
+
+/-- **`deepFullForest`** — a 3-level INTRA-asset tree (deeper nesting works; recursion fully general).
+Run against `fmaDeleg`: root transfer 0→1 of 10 (asset 0), child transfer 1→0 of 5 (asset 0, actor 1
+owns cell 1), grandchild transfer 0→1 of 5 (asset 0). The two delegation edges are EXECUTED: the first
+GATES on cell 0 holding a cap to cell 1 (`endpoint 1 [r,w]`), the deeper one (delegator = cell 1, the
+inner transfer's `src`) GATES on cell 1 holding a cap to cell 0 (`endpoint 0 [r,w]`). All transfers
+conserve asset 0 (and trivially asset 1). -/
 def deepFullForest : FullForestA :=
   ⟨ .balanceA ⟨0, 0, 1, 10⟩ 0
   , [ { holder := 1, keep := [Auth.read], parentCap := .endpoint 1 [Auth.read, Auth.write]
       , sub := ⟨ .balanceA ⟨1, 1, 0, 5⟩ 0
-               , [ { holder := 0, keep := [], parentCap := .endpoint 0 [Auth.read]
+               , [ { holder := 0, keep := [], parentCap := .endpoint 0 [Auth.read, Auth.write]
                    , sub := ⟨ .balanceA ⟨0, 0, 1, 5⟩ 0, [] ⟩ } ] ⟩ } ] ⟩
 
-#eval (execFullForestA fma0 deepFullForest).isSome                          -- true (3 levels commit)
-#eval (execFullForestA fma0 deepFullForest).map (fun s => s.log.length)      -- some 3
-#eval (execFullForestA fma0 deepFullForest).map
+#eval (execFullForestA fmaDeleg deepFullForest).isSome                       -- true (3 levels commit — gated handoffs PASS)
+#eval (execFullForestA fmaDeleg deepFullForest).map (fun s => s.log.length)  -- some 5 (3 transfers + 2 delegations)
+#eval (execFullForestA fmaDeleg deepFullForest).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))      -- some (105, 7) (conserved)
 #eval turnLedgerDeltaAsset (lowerForestA deepFullForest) 0                   -- 0 (asset 0 conserved)
 
@@ -548,21 +746,22 @@ def stateFullForest : FullForestA :=
   , [ { holder := 0, keep := [Auth.read], parentCap := .endpoint 0 [Auth.read, Auth.write]
       , sub := ⟨ .incrementNonceA 0 0 1, [] ⟩ } ] ⟩
 
-#eval (execFullForestA fma0 stateFullForest).isSome                          -- true (pure-state tree commits)
--- The pre-order lowering is the 2 pure-state node-actions:
-#eval (lowerForestA stateFullForest).length                                  -- 2
--- The per-asset net is 0 in BOTH assets (pure-state effects move NO asset's supply):
+-- Run against `fmaDeleg` (cell 0 holds `node 0`, so the 0⟶0-target handoff gate passes):
+#eval (execFullForestA fmaDeleg stateFullForest).isSome                       -- true (pure-state tree commits)
+-- The pre-order lowering is the 2 pure-state node-actions + 1 EXECUTED delegation = 3:
+#eval (lowerForestA stateFullForest).length                                  -- 3 (2 state effects + 1 delegation)
+-- The per-asset net is 0 in BOTH assets (pure-state effects + delegation move NO asset's supply):
 #eval (turnLedgerDeltaAsset (lowerForestA stateFullForest) 0,
        turnLedgerDeltaAsset (lowerForestA stateFullForest) 1)                 -- (0, 0)
 -- The per-asset supply AFTER the pure-state tree: UNCHANGED at (105, 7) — balance-NEUTRALITY:
-#eval (execFullForestA fma0 stateFullForest).map
+#eval (execFullForestA fmaDeleg stateFullForest).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))       -- some (105, 7)
 -- ...the written fields read back (status=7, nonce=1) — the metadata domain DID advance:
-#eval (execFullForestA fma0 stateFullForest).map
+#eval (execFullForestA fmaDeleg stateFullForest).map
         (fun s => (EffectsState.fieldOf "status" (s.kernel.cell 0),
                    EffectsState.fieldOf "nonce" (s.kernel.cell 0)))           -- some (7, 1)
--- ...the chain grew by exactly the node count (2):
-#eval (execFullForestA fma0 stateFullForest).map (fun s => s.log.length)      -- some 2
+-- ...the chain grew by node count + 1 delegation (2 + 1 = 3):
+#eval (execFullForestA fmaDeleg stateFullForest).map (fun s => s.log.length)  -- some 3
 
 /-- **`emitOnlyForest`** — a single-node tree carrying an authority-FREE `emitEventA` (dregg1
 `apply_emit_event` runs NO cap check), by an actor (5) who owns nothing: it STILL commits (the

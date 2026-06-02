@@ -496,26 +496,40 @@ def execFullAGated (s : RecChainedState)
 
 mutual
 /-- **`execFullForestG`/`execFullChildrenG` — the GATED tree executor.** Each node runs its
-`execFullAGated` (the gate THEN `execFullA`), then its children; any `none` aborts the whole forest
-(the all-or-nothing rollback). The gated dual of `execFullForestA`. -/
+`execFullAGated` (the gate THEN `execFullA`), then its children — each child under a REAL EXECUTED
+delegation handoff (mirroring `execFullForestA`): the edge `⟨holder, keep, parentCap, sub⟩` runs
+`execFullAGated sub.auth s (delegateAttenA delegator holder t keep)` (the SAME `recCDelegateAtten`
+spine the ungated executor uses, gated by the CHILD's credential `sub.auth`), with `delegator :=
+targetOf a` and `t := capTarget parentCap`. A forged/unauthorized edge (delegator holds no cap to `t`)
+⇒ `none` ⇒ whole-forest rollback. A `null` parentCap delegates nothing (subtree runs directly). Any
+`none` aborts the whole forest. The gated dual of `execFullForestA`. -/
 def execFullForestG (s : RecChainedState) :
     FullForestG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt) (Wit := Wit)
       (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
       (Bytes := Bytes) (Tag := Tag) → Option RecChainedState
   | ⟨na, a, kids⟩ =>
     match execFullAGated s na a with
-    | some s' => execFullChildrenG s' kids
+    | some s' => execFullChildrenG (targetOf a) s' kids
     | none    => none
 
-def execFullChildrenG (s : RecChainedState) :
+def execFullChildrenG (delegator : Dregg2.Exec.CellId) (s : RecChainedState) :
     List (FullChildG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
       (Bytes := Bytes) (Tag := Tag)) → Option RecChainedState
   | []            => some s
-  | ⟨_, _, _, sub⟩ :: rest =>
-    match execFullForestG s sub with
-    | some s' => execFullChildrenG s' rest
-    | none    => none
+  | ⟨holder, keep, parentCap, sub⟩ :: rest =>
+    match capTarget parentCap with
+    | some t =>
+      match execFullAGated s sub.auth (FullActionA.delegateAttenA delegator holder t keep) with
+      | some s1 =>
+        match execFullForestG s1 sub with
+        | some s2 => execFullChildrenG delegator s2 rest
+        | none    => none
+      | none    => none
+    | none =>
+      match execFullForestG s sub with
+      | some s2 => execFullChildrenG delegator s2 rest
+      | none    => none
 end
 
 /-- **`execFullAGated_some_iff` — PROVED (the load-bearing unfolding lemma).** The gated step commits
@@ -567,7 +581,8 @@ def NodeAuthS : Type :=
 
 mutual
 /-- **`lowerForestG`** — the gated forest's `(auth, action)` pairs in pre-order (the node, then its
-children's flattenings). The auth-decorated mirror of `lowerForestA`. -/
+children's flattenings, each child preceded by its EXECUTED delegation pair — `delegator := targetOf
+a`). The auth-decorated mirror of `lowerForestA`. -/
 def lowerForestG :
     FullForestG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt) (Wit := Wit)
       (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
@@ -575,17 +590,26 @@ def lowerForestG :
     List (NodeAuthS (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
       (Bytes := Bytes) (Tag := Tag) × FullActionA)
-  | ⟨na, a, kids⟩ => (na, a) :: lowerChildrenG kids
+  | ⟨na, a, kids⟩ => (na, a) :: lowerChildrenG (targetOf a) kids
 
-def lowerChildrenG :
+/-- The gated child list's `(auth, action)` pairs, threading the parent `delegator`. For each edge,
+the EXECUTED delegation pair `(sub.auth, delegateAttenA delegator holder t keep)` (with `t :=
+capTarget parentCap`, gated by the CHILD's credential) is emitted BEFORE the child subtree's pairs —
+so `execFullTurnG` runs the SAME gated `recCDelegateAtten` handoff the gated tree executor does. A
+`null` parentCap emits no delegation. -/
+def lowerChildrenG (delegator : Dregg2.Exec.CellId) :
     List (FullChildG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
       (Bytes := Bytes) (Tag := Tag)) →
     List (NodeAuthS (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
       (Bytes := Bytes) (Tag := Tag) × FullActionA)
-  | []                     => []
-  | ⟨_, _, _, sub⟩ :: rest => lowerForestG sub ++ lowerChildrenG rest
+  | []                            => []
+  | ⟨holder, keep, parentCap, sub⟩ :: rest =>
+    match capTarget parentCap with
+    | some t => (sub.auth, FullActionA.delegateAttenA delegator holder t keep)
+                  :: (lowerForestG sub ++ lowerChildrenG delegator rest)
+    | none   => lowerForestG sub ++ lowerChildrenG delegator rest
 end
 
 /-- **`execFullTurnG`** — the gated linear fold over `(auth, action)` pairs (`execFullA →
@@ -643,21 +667,43 @@ theorem lowerForestG_actions_eq_eraseG
       (Bytes := Bytes) (Tag := Tag)) :
     (lowerForestG f).map Prod.snd = lowerForestA (eraseG f) := by
   obtain ⟨na, a, kids⟩ := f
-  show (((na, a) :: lowerChildrenG kids).map Prod.snd) = a :: lowerChildrenA (eraseChildrenG kids)
+  show (((na, a) :: lowerChildrenG (targetOf a) kids).map Prod.snd)
+      = a :: lowerChildrenA (targetOf a) (eraseChildrenG kids)
   rw [List.map_cons]
-  exact congrArg (a :: ·) (lowerChildrenG_actions_eq_eraseG kids)
+  exact congrArg (a :: ·) (lowerChildrenG_actions_eq_eraseG (targetOf a) kids)
 
-theorem lowerChildrenG_actions_eq_eraseG
+theorem lowerChildrenG_actions_eq_eraseG (delegator : Dregg2.Exec.CellId)
     (kids : List (FullChildG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
       (Bytes := Bytes) (Tag := Tag))) :
-    (lowerChildrenG kids).map Prod.snd = lowerChildrenA (eraseChildrenG kids) := by
+    (lowerChildrenG delegator kids).map Prod.snd = lowerChildrenA delegator (eraseChildrenG kids) := by
   match kids with
   | [] => rfl
-  | ⟨h, k, pc, sub⟩ :: rest =>
-      show ((lowerForestG sub ++ lowerChildrenG rest).map Prod.snd)
-          = lowerForestA (eraseG sub) ++ lowerChildrenA (eraseChildrenG rest)
-      rw [List.map_append, lowerForestG_actions_eq_eraseG sub, lowerChildrenG_actions_eq_eraseG rest]
+  | ⟨holder, keep, pc, sub⟩ :: rest =>
+      -- `eraseChildrenG` preserves `pc`, so both sides read the SAME `capTarget pc`.
+      show ((match capTarget pc with
+             | some t => (sub.auth, FullActionA.delegateAttenA delegator holder t keep)
+                           :: (lowerForestG sub ++ lowerChildrenG delegator rest)
+             | none   => lowerForestG sub ++ lowerChildrenG delegator rest).map Prod.snd)
+          = (match capTarget pc with
+             | some t => FullActionA.delegateAttenA delegator holder t keep
+                           :: (lowerForestA (eraseG sub) ++ lowerChildrenA delegator (eraseChildrenG rest))
+             | none   => lowerForestA (eraseG sub) ++ lowerChildrenA delegator (eraseChildrenG rest))
+      -- both `capTarget` arms reduce to the SAME tail equality `map Prod.snd (lowerForestG sub ++
+      -- lowerChildrenG delegator rest) = lowerForestA (eraseG sub) ++ lowerChildrenA delegator
+      -- (eraseChildrenG rest)`. We rewrite the RHS back to `map`-form via the IHs (plain applications —
+      -- no `++` to confuse the matcher) then close the `map (a ++ b)` split by `apply List.map_append`
+      -- (defeq unification, sidestepping the `HAppend` syntactic mismatch that defeats `rw [map_append]`).
+      cases hct : capTarget pc with
+      | some t =>
+          simp only [hct, List.map_cons]
+          refine congrArg (FullActionA.delegateAttenA delegator holder t keep :: ·) ?_
+          rw [← lowerForestG_actions_eq_eraseG sub, ← lowerChildrenG_actions_eq_eraseG delegator rest]
+          apply List.map_append
+      | none =>
+          simp only [hct]
+          rw [← lowerForestG_actions_eq_eraseG sub, ← lowerChildrenG_actions_eq_eraseG delegator rest]
+          apply List.map_append
 end
 
 /-! ## §6 — The gated BRIDGE + the EFFECT-PROJECTION (erasure) bridge.
@@ -680,33 +726,59 @@ theorem execFullForestG_eq_execFullTurnG (s : RecChainedState)
     execFullForestG s f = execFullTurnG s (lowerForestG f) := by
   obtain ⟨na, a, kids⟩ := f
   show (match execFullAGated s na a with
-        | some s' => execFullChildrenG s' kids
+        | some s' => execFullChildrenG (targetOf a) s' kids
         | none    => none)
-      = execFullTurnG s ((na, a) :: lowerChildrenG kids)
-  rw [show execFullTurnG s ((na, a) :: lowerChildrenG kids)
+      = execFullTurnG s ((na, a) :: lowerChildrenG (targetOf a) kids)
+  rw [show execFullTurnG s ((na, a) :: lowerChildrenG (targetOf a) kids)
         = (match execFullAGated s na a with
-           | some s' => execFullTurnG s' (lowerChildrenG kids)
+           | some s' => execFullTurnG s' (lowerChildrenG (targetOf a) kids)
            | none    => none) from rfl]
   cases execFullAGated s na a with
   | none    => rfl
-  | some s' => exact execFullChildrenG_eq_execFullTurnG s' kids
+  | some s' => exact execFullChildrenG_eq_execFullTurnG (targetOf a) s' kids
 
-theorem execFullChildrenG_eq_execFullTurnG (s : RecChainedState)
+theorem execFullChildrenG_eq_execFullTurnG (delegator : Dregg2.Exec.CellId) (s : RecChainedState)
     (kids : List (FullChildG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
       (Bytes := Bytes) (Tag := Tag))) :
-    execFullChildrenG s kids = execFullTurnG s (lowerChildrenG kids) := by
+    execFullChildrenG delegator s kids = execFullTurnG s (lowerChildrenG delegator kids) := by
   match kids with
   | [] => rfl
-  | ⟨h, k, pc, sub⟩ :: rest =>
-    show (match execFullForestG s sub with
-          | some s' => execFullChildrenG s' rest
-          | none    => none)
-        = execFullTurnG s (lowerForestG sub ++ lowerChildrenG rest)
-    rw [execFullTurnG_append, execFullForestG_eq_execFullTurnG s sub]
-    cases execFullTurnG s (lowerForestG sub) with
-    | none    => rfl
-    | some s' => exact execFullChildrenG_eq_execFullTurnG s' rest
+  | ⟨holder, keep, parentCap, sub⟩ :: rest =>
+    -- Mirror the A-bridge: split on `capTarget parentCap` (the shared scrutinee), threading delegator.
+    show (match capTarget parentCap with
+          | some t =>
+            match execFullAGated s sub.auth (FullActionA.delegateAttenA delegator holder t keep) with
+            | some s1 => match execFullForestG s1 sub with
+                         | some s2 => execFullChildrenG delegator s2 rest
+                         | none    => none
+            | none    => none
+          | none =>
+            match execFullForestG s sub with
+            | some s2 => execFullChildrenG delegator s2 rest
+            | none    => none)
+        = execFullTurnG s
+            (match capTarget parentCap with
+             | some t => (sub.auth, FullActionA.delegateAttenA delegator holder t keep)
+                           :: (lowerForestG sub ++ lowerChildrenG delegator rest)
+             | none   => lowerForestG sub ++ lowerChildrenG delegator rest)
+    cases hct : capTarget parentCap with
+    | some t =>
+      -- The gated linear fold's head pair `(sub.auth, delegateAttenA …)` is exactly the tree
+      -- executor's gated handoff `execFullAGated s sub.auth (delegateAttenA …)`.
+      cases hga : execFullAGated s sub.auth (FullActionA.delegateAttenA delegator holder t keep) with
+      | none    => simp only [hct, execFullTurnG, hga]
+      | some s1 =>
+          simp only [hct, execFullTurnG, hga, execFullTurnG_append,
+                     execFullForestG_eq_execFullTurnG s1 sub]
+          cases execFullTurnG s1 (lowerForestG sub) with
+          | none    => rfl
+          | some s2 => exact execFullChildrenG_eq_execFullTurnG delegator s2 rest
+    | none =>
+      simp only [hct, execFullTurnG_append, execFullForestG_eq_execFullTurnG s sub]
+      cases execFullTurnG s (lowerForestG sub) with
+      | none    => rfl
+      | some s2 => exact execFullChildrenG_eq_execFullTurnG delegator s2 rest
 end
 
 /-- **`execFullTurnG_erases` — PROVED.** On the COMMIT path the gated linear fold equals the ungated
@@ -860,7 +932,7 @@ theorem execFullForestG_unauthorized_fails (s : RecChainedState)
     (h : gateOK na s = false) :
     execFullForestG s ⟨na, a, kids⟩ = none := by
   show (match execFullAGated s na a with
-        | some s' => execFullChildrenG s' kids
+        | some s' => execFullChildrenG (targetOf a) s' kids
         | none    => none) = none
   have : execFullAGated s na a = none := by unfold execFullAGated; rw [if_neg (by simp [h])]
   rw [this]
@@ -917,7 +989,7 @@ theorem execFullForestG_root_attests (s s' : RecChainedState)
     ∃ sa sa', execFullAGated sa f.auth f.action = some sa' ∧ gatedActionInvG sa f.auth f.action sa' := by
   obtain ⟨na, a, kids⟩ := f
   have hmem : ((na, a) : _ × FullActionA) ∈ lowerForestG (⟨na, a, kids⟩ : FullForestG ..) := by
-    show (na, a) ∈ (na, a) :: lowerChildrenG kids
+    show (na, a) ∈ (na, a) :: lowerChildrenG (targetOf a) kids
     exact List.mem_cons_self
   exact execFullForestG_each_attests s s' ⟨na, a, kids⟩ h (na, a) hmem
 
@@ -1026,32 +1098,33 @@ def launderFullForestG : DForest :=
   , [ ({ holder := 9, keep := [Auth.read], parentCap := .endpoint 0 [Auth.read, Auth.write]
        , sub := ⟨ mkAuth goodCred [trueCaveat], .burnA 9 0 0 50, [] ⟩ } : DChild) ] ⟩
 
--- (1) VALID credential + discharged caveats ⇒ the whole gated forest COMMITS:
-#eval (execFullForestG fma0 goodFullForestG).isSome                                  -- true
--- ...per-asset NET is 0 in BOTH assets ⇒ conserved (the gate is orthogonal to conservation):
+-- (1) VALID credential + discharged caveats ⇒ the whole gated forest COMMITS. Run against the GROUNDED
+--     `fmaDeleg` (cell 0 holds the caps the EXECUTED delegation handoffs gate on — same as the A-side):
+#eval (execFullForestG fmaDeleg goodFullForestG).isSome                              -- true
+-- ...per-asset NET is 0 in BOTH assets ⇒ conserved (the gate AND the delegations are ledger-orthogonal):
 #eval turnLedgerDeltaAsset ((lowerForestG goodFullForestG).map Prod.snd) 0           -- 0 (asset 0)
 #eval turnLedgerDeltaAsset ((lowerForestG goodFullForestG).map Prod.snd) 1           -- 0 (asset 1)
-#eval (execFullForestG fma0 goodFullForestG).map
+#eval (execFullForestG fmaDeleg goodFullForestG).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7)
 -- (2) FORGED credential ⇒ none EVEN WITH valid caps (credential-orthogonality):
-#eval (execFullForestG fma0 forgedCredForestG).isSome                               -- false
+#eval (execFullForestG fmaDeleg forgedCredForestG).isSome                            -- false
 #eval credentialValidG forgedCredForestG.auth                                       -- false (portal fail-closes)
 #eval credentialValidG goodFullForestG.auth                                         -- true  (portal accepts)
 -- (3) VALID credential, FALSE caveat ⇒ none (caveat-orthogonality):
-#eval (execFullForestG fma0 falseCaveatForestG).isSome                              -- false
-#eval caveatsDischarged falseCaveatForestG.auth fma0                                -- false (caveat fail-closes)
-#eval caveatsDischarged goodFullForestG.auth fma0                                   -- true  (caveat discharges)
+#eval (execFullForestG fmaDeleg falseCaveatForestG).isSome                           -- false
+#eval caveatsDischarged falseCaveatForestG.auth fmaDeleg                             -- false (caveat fail-closes)
+#eval caveatsDischarged goodFullForestG.auth fmaDeleg                                -- true  (caveat discharges)
 -- (4) the launder forest COMMITS through the gate but the per-asset delta is NONZERO in EACH asset
 --     (CAUGHT — a scalar aggregate would hide both):
-#eval (execFullForestG fma0 launderFullForestG).isSome                              -- true (auth orthogonal)
+#eval (execFullForestG fmaDeleg launderFullForestG).isSome                           -- true (auth orthogonal)
 #eval turnLedgerDeltaAsset ((lowerForestG launderFullForestG).map Prod.snd) 0        -- -50 (NOT 0)
 #eval turnLedgerDeltaAsset ((lowerForestG launderFullForestG).map Prod.snd) 1        -- 50  (NOT 0)
-#eval (execFullForestG fma0 launderFullForestG).map
+#eval (execFullForestG fmaDeleg launderFullForestG).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (55, 57) CAUGHT
 -- ...the gate passing then erasing gives the IDENTICAL committed run (effect-projection bridge):
-#eval (execFullForestA fma0 (eraseG goodFullForestG)).isSome                         -- true
-#eval ((execFullForestG fma0 goodFullForestG).map (fun s => s.log.length)
-        == (execFullForestA fma0 (eraseG goodFullForestG)).map (fun s => s.log.length))  -- true (identical run)
+#eval (execFullForestA fmaDeleg (eraseG goodFullForestG)).isSome                     -- true
+#eval ((execFullForestG fmaDeleg goodFullForestG).map (fun s => s.log.length)
+        == (execFullForestA fmaDeleg (eraseG goodFullForestG)).map (fun s => s.log.length))  -- true (identical run)
 
 end Demo
 
