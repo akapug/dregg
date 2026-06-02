@@ -67,6 +67,7 @@ open Dregg2.Exec.EffectsState (setField fieldOf writeField stateAuthB stateStep 
   setField_balOf state_caps_unchanged state_authGraph_unchanged state_authorized state_obsadvance
   state_field_written)
 open scoped BigOperators
+open Dregg2.Tactics  -- the effect-arm combinators (`reject_none`/`commit_subst`/`gate_peel`/`bal_neutral`)
 
 /-! ## §1 — Record-cell MINT/BURN: the supply generators over the `balance` FIELD.
 
@@ -2423,14 +2424,11 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCDelegateAtten at h
       cases hd : recKDelegateAtten s.kernel del rec t keep with
-      | none => rw [hd] at h; exact absurd h (by simp)
+      | none => reject_none h hd
       | some k' =>
-          rw [hd] at h; simp only [Option.some.injEq] at h; subst h
+          commit_subst h hd
           unfold recKDelegateAtten at hd
-          by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
-          · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-            simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
-          · rw [if_neg hg] at hd; exact absurd hd (by simp)
+          gate_peel hd with bal_neutral
   | attenuateA actor idx keep =>
       simp only [execFullA, ledgerDeltaAsset, Option.some.injEq] at h ⊢
       subst h
@@ -2864,8 +2862,8 @@ theorem execFullA_chainlink (s s' : RecChainedState) (fa : FullActionA)
   | delegateAttenA del rec t keep =>
       simp only [execFullA, recCDelegateAtten, fullReceiptA] at h ⊢
       cases hd : recKDelegateAtten s.kernel del rec t keep with
-      | none => rw [hd] at h; exact absurd h (by simp)
-      | some k' => rw [hd] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      | none => reject_none h hd
+      | some k' => commit_subst h hd; rfl
   | attenuateA actor idx keep =>
       simp only [execFullA, attenuateStepA, fullReceiptA, Option.some.injEq] at h ⊢
       subst h; rfl

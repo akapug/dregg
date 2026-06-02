@@ -1128,6 +1128,15 @@ EACH ASSET independently. -/
 def recTotalAssetWithEscrow (k : RecordKernelState) (b : AssetId) : ℤ :=
   recTotalAsset k b + escrowHeldAsset k b
 
+/-- `bal_neutral` — the balance-NEUTRAL finisher (the fourth effect-arm combinator; the other
+three live in `Dregg2/Tactics.lean`). A caps/log-only edit leaves the per-asset COMBINED measure
+`recTotalAssetWithEscrow = bal-ledger + holding-store` FIXED: unfold the measure and close by
+`ring`. Defined HERE (not in the generic `Tactics.lean`) so macro hygiene resolves the measure's
+simp-lemma names against THIS scope. For arms that first need their step def unfolded, do that
+simp beforehand (`simp only [recKRevokeTarget] …; bal_neutral`). -/
+macro "bal_neutral" : tactic =>
+  `(tactic| (simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring))
+
 /-- The raw per-asset escrow-list filtered-sum (the unfolded `escrowHeldAsset`). -/
 def heldSumAsset (es : List EscrowRecord) (b : AssetId) : ℤ :=
   (es.filter (heldAssetPred b)).foldr (fun r acc => r.amount + acc) 0

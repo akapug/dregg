@@ -11,6 +11,7 @@ helper does not close a goal, the goal is real: prove it properly or leave an ex
 Grows as recurring patterns emerge from the proof-discharge swarm.
 -/
 import Mathlib.Tactic.Tauto
+import Mathlib.Tactic.Ring
 import Lean
 
 /-! ## Axiom-hygiene tripwire — the `sorryAx` regression guard.
@@ -136,5 +137,45 @@ to its component equalities; the standard first move when reading back a protoco
 that returned `some (newState…)`. -/
 macro "option_inj" "at" h:ident : tactic =>
   `(tactic| simp only [Option.some.injEq, Prod.mk.injEq] at $h:ident)
+
+/-! ## §3 — Effect-arm combinators (the per-effect dispatch-proof de-boilerplaters).
+
+The big `cases fa with` dispatch proofs (`execFullA_ledger_per_asset`, `_chainlink`,
+`_attests_per_asset`, … over the ~46-arm `FullActionA`) repeat a tiny vocabulary of moves per
+arm: reject the `none` (fail-closed) branch against the commit hypothesis, substitute the
+committed state on the `some` branch, peel an inner `if gate then … else none`, and discharge a
+balance-NEUTRAL (caps/log-only) edit. Each combinator below is a `macro` that expands to EXACTLY
+those visible tactic steps — it can only do what the spelled-out block does (NO oracle, no
+`native_decide`), so a wrong arm still fails loudly. They make adding the next effect a few
+lines instead of a 9-site copy-paste (and shrink the laundering surface: less copy-paste, fewer
+places a subtly-wrong arm can hide). -/
+
+/-- `reject_none h hk` — the FAIL-CLOSED `none` branch. `hk : f = none` rewrites the commit
+hypothesis `h : f = some _` to `none = some _`, closed by `absurd`. -/
+macro "reject_none" h:ident hk:ident : tactic =>
+  `(tactic| (rw [$hk:ident] at $h:ident; exact absurd $h:ident (by simp)))
+
+/-- `commit_subst h hk` — the `some` branch. `hk : f = some k'` rewrites `h`, peels the
+`some`-injection, and substitutes the committed state into the goal. -/
+macro "commit_subst" h:ident hk:ident : tactic =>
+  `(tactic| (rw [$hk:ident] at $h:ident; simp only [Option.some.injEq] at $h:ident; subst $h:ident))
+
+/-- `gate_peel hk with finisher` — peel an `if guard then some _ else none` inside a chained step
+`hk : (if … then some _ else none) = some _`. Uses `split` (so the guard need NOT be named): the
+`then` branch substitutes the committed kernel and runs `finisher`; the `else` branch is
+FAIL-CLOSED against `hk`. -/
+macro "gate_peel" hk:ident " with " fin:tactic : tactic =>
+  `(tactic|
+    (split at $hk:ident
+     · simp only [Option.some.injEq] at $hk:ident
+       subst $hk:ident
+       $fin
+     · exact absurd $hk:ident (by simp)))
+
+-- NOTE: the balance-NEUTRAL finisher `bal_neutral` (the fourth combinator) lives in
+-- `Dregg2/Exec/RecordKernel.lean`, next to the per-asset measure (`recTotalAssetWithEscrow`)
+-- it unfolds — a tactic-macro must reference user globals from a site where they are in
+-- scope (macro hygiene resolves the simp-lemma names at the DEFINITION site, not the use
+-- site), so a domain-specific finisher belongs with its domain, not in this generic file.
 
 end Dregg2.Tactics
