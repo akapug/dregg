@@ -1,5 +1,21 @@
 # DREGG4-HYPERSYSTEM — occupying any point/edge of the dial-cube, traversing higher cells of the interaction complex
 
+> ⚑ **GROUND-CHECKED vs live Lean 2026-06-02 (post-2-compaction drift-repair); REAL/DECORATIVE/ASPIRATIONAL
+> tags carry file:line receipts.** The code drifted *past* this doc in the GOOD direction — three claims the
+> doc filed as "unbuilt / named-new / paper-only" have **landed in Lean since it was written**, and two
+> `Finality` line-citations drifted. Folded forward below; the load-bearing structure (the two complexes,
+> the two obstructions, the single-machine collapse) is **unchanged and all still grounds out**. Headline
+> deltas: (1) **the transferability dial / `Discharged[V]` is no longer "entirely new / UNBUILT"** — it is a
+> proved, axiom-clean module `Dregg2/Authority/DesignatedVerifier.lean` (`DischargedFor:113`, `TransferDial:146`,
+> `designated_is_deniable:224`, `designated_excludes_public:257`); the §8.1 "first step" is *substantially
+> done*. (2) **§5's epistemic tie now has Lean teeth** — `Dregg2/Apps/EpistemicSheaf.lean` realizes `D_B`
+> distributed-knowledge (`DistKnows:106`), consensus-as-global-section (`consensus_on_clearance:199`), and the
+> H¹ Byzantine-non-gluing obstruction (`fork_is_genuine:297`) — an *epistemic-frame (Kripke S5)* port, **not**
+> a simplicial object, so §4.3/§8.2's "the interaction complex is a simplicial/∞-category" stays DECORATIVE
+> (grep-confirmed: `SimplicialObject`/`face_map`/`Kan`/degeneracy are **absent** from `Dregg2/`). (3)
+> `crossTierJoin`/`no_downgrade` were cited at `Finality.lean:95-96`; they actually live at `:219`/`:280`
+> (PROVED). Everything in §4 (the `Hyperedge` wide-pullback) verified EXACT, citation-for-citation.
+
 > **What this is.** A READ-ONLY galaxy-brain design exploration. **No code changed.** It asks
 > ember's question rigorously: *can dregg become a "hypersystem" that lets you occupy ANY point or
 > edge of its configuration space, and traverse HIGHER CELLS of the interaction complex?*
@@ -16,6 +32,11 @@
 > `Dregg2/Finality.lean`; and the paper
 > `pdfs/zotero-simplicial-epistemic-logic-faulty-agents.pdf` (Goubault–Kniazev–Ledent–Rajsbaum,
 > *Simplicial Models for the Epistemic Logic of Faulty Agents*, arXiv:2311.01351v3).
+>
+> **Sources ADDED at the 2026-06-02 ground-check** (modules that landed after the original draft):
+> `Dregg2/Authority/DesignatedVerifier.lean` (the transferability dial + `Discharged[V]` + deniability,
+> §2.1/§8.1) and `Dregg2/Apps/EpistemicSheaf.lean` (the Lean port of the same arXiv:2311.01351 epistemic
+> machinery — `DistKnows`/consensus-as-section/H¹-fork, §5.2).
 
 ---
 
@@ -70,7 +91,7 @@ from consensus*, which the simplicial paper shows *is* fill-height (§5). That r
 
 ## 2. COMPLEX 1 — the configuration dial-cube, developed
 
-### 2.1 The three axes (real content: two exist, one is named-new)
+### 2.1 The three axes (real content: all three now have Lean homes; was "two exist, one named-new")
 
 From `DREGG4-UNIFICATION §4` and `CARRY-FORWARD-SYNTHESIS §2 Face 3`, the attestation face of a turn
 is a point in a 3-cube whose axes are the three honest "to-whom/what/how-many" judgements *on the
@@ -80,9 +101,21 @@ output object `Obs`*:
   (`DREGG4-UNIFICATION §3` `inductive Disclosure`). **Partly built** — `FieldVisibility` exists
   (`cell/src/state.rs`), generalization to per-turn is the work (`§4.1`).
 - **Transferability** (*to whom convincing*): `public | designated(V) | deniable(ring)`
-  (`§3`/`§4.2`). **Entirely new** — grep-confirmed zero deniability/designated-verifier
-  (`GROUND-AUTH §2.2(b)(c)`, cited via `CARRY-FORWARD §2 Face 3`). The named-new theory piece is
-  the **verifier-indexed `Discharged[V]`** (`DREGG4-UNIFICATION §4.2`).
+  (`§3`/`§4.2`). **REAL — LANDED IN LEAN since this doc was written** (was "entirely new").
+  `Dregg2/Authority/DesignatedVerifier.lean` (axiom-clean, zero `sorry`, `#print axioms`-audited
+  `:369-372`) builds the whole axis: the **verifier-indexed `Discharged[V]`** the doc filed as the
+  "named-new theory piece" is the proved `DischargedFor V stmt proof` (`DesignatedVerifier.lean:113`);
+  the dial itself is `inductive TransferDial = transferable | designated V₀` (`:146`); `Transferable`
+  is the `∀ V` public collapse (`:129`), `DesignatedFor` the non-transferable endpoint (`:138`).
+  **The deniability is proved, not asserted:** `designated_is_deniable` (`:224`, PROVED) is the
+  simulator/repudiation argument (the designated verifier could have forged the transcript itself, so it
+  is zero third-party evidence), and `designated_excludes_public` (`:257`) proves the two endpoints are
+  *disjoint* propositions, witnessed non-vacuously over a reference DV-kernel by `dial_endpoints_distinct`
+  (`:346`). **Honest seam:** the DV-NIZK / chameleon CRYPTO is an explicit **§8 Prop-portal** — the
+  `DVKernel.simulate_verifies` *law field* (`:102`) is assumed (the circuit's ZK-simulation obligation),
+  never a Lean theorem. So: REAL as a *transferability dial + deniability logic*; PORTAL for the crypto
+  primitive underneath. (Note: the older `GROUND-AUTH §2.2(b)(c)` "grep-confirmed zero" reading is
+  superseded by this module.)
 - **Agreement** (*how many must concur it is canonical*): the finality tier as a dial, **named-new as
   a dial in `§4.3`** — pinned today as a per-cell property, but structurally the same shape. The four
   rungs are real and encoded: `Tier.causal < ackThreshold < bft < constitutional`, a proved
@@ -117,10 +150,13 @@ turn `k+1` at `(d',t',a')`. Two concrete edges the question names:
   transferable.
 - **`local-final → distributed-final`** (Agreement edge): a tier-1 causal commit later ratified by a
   tier-3 BFT quorum. This edge is exactly `Finality`'s **`no_downgrade`** law's *allowed* direction:
-  `crossTierJoin` is the `max` of the tier `LinearOrder` (`Finality.lean:95-96`, "The `max` of this
-  order is the cross-tier commit join"). You may **raise** agreement; you may not lower it
-  (`GLOSSARY: finality tiers` — "no finalized value downgrades"). So the Agreement axis is a
-  *directed* edge structure, not a free groupoid.
+  `crossTierJoin a b := max a b` (`Finality.lean:219`, PROVED `crossTierJoin_ge_left:230`) is the `max`
+  of the tier `LinearOrder` (`Finality.lean:96`, "The `max` of this order is the cross-tier commit
+  join"). You may **raise** agreement; you may not lower it: `no_downgrade` (`Finality.lean:280`, PROVED
+  — along ANY run of `finalitySystem`, `t₀ ≤ t`) is the real teeth (`GLOSSARY: finality tiers` — "no
+  finalized value downgrades"). So the Agreement axis is a *directed* edge structure, not a free
+  groupoid. [Citation drift fixed: `crossTierJoin`/`no_downgrade` are at `:219`/`:280`, not `:95-96` —
+  that line is only the `LinearOrder Tier` instance.]
 
 > **REAL content.** The directedness is load-bearing and proved-shaped: `Finality.no_downgrade`
 > (`Finality.lean`, the cross-tier law) makes the Agreement edges one-way. The cube is therefore a
@@ -189,11 +225,17 @@ infeasible** or **logically contradictory**. Mapping it concretely:
 >
 > Its **boundary (the impossibility surface)** is the join of: the `deniable × high-agreement` empty
 > face, the `acceptanceOnly × public × high-agreement` empty corner, and the directed "already
-> published / already finalized" walls. **The interior** — the genuinely-new occupiable region the
-> system does not yet use — is the **low/mid-agreement, designated-or-deniable, selective-disclosure**
-> volume: *private, bilateral, locally-final interaction*. That is precisely the
-> "anonymous-collaboration OS" privacy hole `CARRY-FORWARD §2 Face 3` flags as the deepest missing
-> capability, and it is **occupiable** (no contradiction) — only unbuilt.
+> published / already finalized" walls. **The interior** — the genuinely-new occupiable region — is the
+> **low/mid-agreement, designated-or-deniable, selective-disclosure** volume: *private, bilateral,
+> locally-final interaction*. That is precisely the "anonymous-collaboration OS" privacy hole
+> `CARRY-FORWARD §2 Face 3` flags as the deepest missing capability, and it is **occupiable** (no
+> contradiction). **FOLDED FORWARD:** the *transferability half* of that interior is now BUILT in Lean —
+> `DesignatedVerifier.lean` realizes the `designated`/`deniable` endpoint (`TransferDial:146`,
+> `designated_is_deniable:224`); and selective `Disclosure` has a Lean home too (`Privacy.lean:66`
+> "Field privacy (selective disclosure)", `Authority.SelectiveDisclosure` per `Claims.lean:502`). What
+> remains unbuilt is the *cube assembly* (the per-turn attestation type carrying all three coordinates
+> at once, with the §2.4 coherences as theorems) and the §8.1 impossibility-surface refutation lemma —
+> see the updated §8.1.
 
 This is a faithful, concrete map. **Real content:** constraints 1–3 are each grounded in a cited
 impossibility/law. **Decorative trap avoided:** I do *not* claim the surface is a smooth variety; it
@@ -326,6 +368,26 @@ Goubault–Kniazev–Ledent–Rajsbaum (arXiv:2311.01351v3), pages read:
   models.
 
 ### 5.2 The identification (the bridge, and it is exact)
+
+> **NEW SINCE THIS DOC (folded forward).** The paper's epistemic machinery — which §5.1 cited as
+> paper-only — now has a **proved, axiom-clean Lean realization**: `Dregg2/Apps/EpistemicSheaf.lean`
+> (327 lines, zero `sorry`, `#assert_axioms`-pinned `:318-325`). It ports arXiv:2311.01351 directly:
+> `Frame`/`Indist` (the simplicial `∼ᵢ` indistinguishability, `:86,90`); **`DistKnows B φ w`** = the
+> paper's distributed-knowledge `D_B φ = ∩_{a∈B} ∼_a` (`:106`, PROVED keystones
+> `honest_distributed_knows_discharged:115`, `honest_dist_knowledge_composes:129`);
+> **`consensus_on_clearance`** = "consensus = a global section (H⁰ content)" — a discharged claim is
+> distributed knowledge of the honest agents, no central cop (`:199`, PROVED); and the H¹ obstruction
+> the bridge predicts: `byzantine_section_does_not_glue` (`:288`) + `fork_is_genuine` (`:297`) prove a
+> Byzantine disagreement is a genuine non-gluing (a fork = the cohomological obstruction).
+> **Honest scope caveat:** this is an *epistemic-frame (Kripke S5)* realization keyed by
+> indistinguishability relations, instantiated on an *orbital-clearance application* (`Constellation`,
+> `ClearanceProblem`) — it is **not** wired to `Hyperedge`/`Tier`/the COMPLEX-2 interaction object, and
+> it is **not** a simplicial *object* (no `face_map`/`Kan`; grep-absent). So it gives §5's bridge real
+> Lean teeth on the *agreement = distributed-knowledge = H⁰/H¹* side, while §4.3/§8.2's "the interaction
+> complex is a simplicial/∞-category" stays DECORATIVE-until-built. The remaining frontier is to
+> *connect* the two: instantiate `EpistemicSheaf`'s `Frame` at a `Hyperedge`'s incidence set, so
+> `DistKnows F.Honest (apex tid)` becomes a literal theorem and `legs_agree` ⟹ distributed-knowledge of
+> `tid` is *derived*, not narrated.
 
 > **Distributed agreement = filling a higher simplex. Common knowledge = a filled top-simplex.**
 
@@ -461,12 +523,13 @@ Two things the single-machine collapse does **not** erase:
 | ring/cycle = ONE hyperedge (telescoping Σ=0) | **REAL, PROVED** | `ringHyperedge:272` |
 | Agreement = simplex fill-height = common knowledge | **REAL** (proved-Lean + paper theorems) | `legs_agree:111`, `Tier:49`, paper p.2-8 |
 | validity ≠ canonicity = a simplex filled two ways = consensus is the chooser | **REAL, PROVED** | `JointViaHyper.lean:226,280` |
-| the dial-cube `Disclosure × Transferability × Agreement` | **REAL** (3 grounded axes; cube is a directed poset-product) | `DREGG4-UNIFICATION §4`; `Finality:96` directedness |
-| impossibility surface: `deniable × high-agreement` is empty (agreement fights deniability) | **REAL** (theorem-shaped) | `OPEN-PROBLEMS #6`, `DREGG4-UNIFICATION §8` |
+| the dial-cube `Disclosure × Transferability × Agreement` | **REAL** (3 grounded axes; cube is a directed poset-product) | `DREGG4-UNIFICATION §4`; directedness `Finality.lean:280` `no_downgrade` + `:219` `crossTierJoin` |
+| impossibility surface: `deniable × high-agreement` is empty (agreement fights deniability) | **REAL** (theorem-shaped) | `OPEN-PROBLEMS #6`, `DREGG4-UNIFICATION §8`; the disjoint-endpoints half is now PROVED `designated_excludes_public` (`DesignatedVerifier.lean:257`) |
 | single-machine = full hypersystem; distributed = partition-bounded | **REAL** (the `#2` collapse at n=1) | `OPEN-PROBLEMS #2`, ember's principle |
 | Agreement dial = the topology connectivity parameter | **REAL** (the bridge between the complexes) | §5+§6, paper p.2-3 |
-| transferability dial / `Discharged[V]` verifier-indexing | **REAL but UNBUILT** (named-new theory) | `DREGG4-UNIFICATION §4.2` |
-| "the interaction complex is a full simplicial / ∞-category" | **SUGGESTIVE** until each face carries its own binding | §4.3, §4.4 |
+| transferability dial / `Discharged[V]` verifier-indexing | **REAL — NOW BUILT** (was "UNBUILT named-new"); crypto primitive still a §8 portal | `DesignatedVerifier.lean:113` `DischargedFor`, `:146` `TransferDial`, `:224` `designated_is_deniable` |
+| `D_B` distributed-knowledge / consensus = H⁰ global section / fork = H¹ obstruction | **REAL — NOW BUILT in Lean** (was paper-only); epistemic-frame port, not yet wired to `Hyperedge` | `EpistemicSheaf.lean:106` `DistKnows`, `:199` `consensus_on_clearance`, `:297` `fork_is_genuine` |
+| "the interaction complex is a full simplicial / ∞-category" (`face_map`/`Kan`/degeneracy) | **DECORATIVE** — grep-confirmed ABSENT from `Dregg2/`; SUGGESTIVE until each face carries its own binding | §4.3, §4.4; grep `SimplicialObject\|face_map\|Kan` = ∅ |
 | "occupy any point" as a smooth/continuous configuration manifold | **DECORATIVE** — it is a finite *directed* cube | §2.3 |
 | free higher fillers / Kan-complex of interactions | **DECORATIVE & UNSOUND** — would assert the wrong factoring | `study-category §1.3` |
 | ∞-category notation dissolving the binding | **DECORATIVE** — the residue is irreducible | `Hyperedge.lean:558` |
@@ -479,45 +542,60 @@ Two candidates from the question; both are now sharpened by what is already buil
 
 ### 8.1 PREFERRED — make the dials first-class with composition coherences (COMPLEX 1)
 
-The interaction-complex side (`Fin 2 → Fin n`) is **already done and proved** (`Hyperedge`,
-`hyperedge_sound`). The *unbuilt* side is COMPLEX 1 — the configuration cube. So the highest-leverage
-first step is **lifting the attestation face from one corner to the cube, with the §2.4 coherences as
-theorems**:
+> **PROGRESS SINCE THIS DOC: steps 1–2 are substantially LANDED; the frontier has moved to step 3–4
+> (the cube *assembly* + coherences).** The interaction-complex side (`Fin 2 → Fin n`) is **already done
+> and proved** (`Hyperedge`, `hyperedge_sound`). The configuration cube's *individual axes* are now also
+> mostly built — what is left unbuilt is gluing them into **one per-turn attestation type** and proving
+> the §2.4 coherences as theorems.
 
-1. **Add the `Agreement` coordinate to the attestation type** so `Turn.attest` is a full cube-point
-   `Disclosure × Transferability × Agreement` (`DREGG4-UNIFICATION §3` `structure Turn` already has
-   `Disclosure × Transferability`; add the tier).
-2. **Make `Discharged` verifier-indexed** — `Discharged[V]` — the one *named-new* piece of theory
-   (`DREGG4-UNIFICATION §4.2`); this is what lets the cube express the §3 interior (designated/deniable
-   corners).
-3. **Prove the two coherence 2-cells:** (a) the disclosure×transferability square **commutes** (both
-   are post-hoc projections of one `ObsDelta` — orthogonality, §2.4); (b) the Agreement edges are
-   **directed** (`Finality.no_downgrade`, reuse the existing `crossTierJoin`/`LinearOrder`,
-   `Finality.lean:96`) and `public → designated` is **unreachable** (the §3.2 wall) — encode the
-   achievable sub-complex as the order-ideal of §3.3.
-4. **Encode the impossibility surface as a refutation**: a Lean lemma
+1. **Add the `Agreement` coordinate to the attestation type** so a turn carries a full cube-point
+   `Disclosure × Transferability × Agreement`. *Pieces in place:* the `Agreement` rung is `Finality.Tier`
+   (`Finality.lean:49`, a proved `LinearOrder`); the `Transferability` rung is `DV.TransferDial`
+   (`DesignatedVerifier.lean:146`); `Disclosure`/selective-disclosure has `Privacy.lean:66`. **Unbuilt:**
+   the single `structure` that bundles all three onto one turn (no `inductive Disclosure` /
+   combined attestation type yet exists in `Dregg2/` — grep-confirmed). This is the assembly step.
+2. ✅ **`Discharged` verifier-indexed** — `Discharged[V]` — **DONE** (was "the one named-new piece of
+   theory"): it is the proved `DV.DischargedFor V stmt proof` (`DesignatedVerifier.lean:113`), with the
+   designated/deniable corners of the §3 interior realized as `DesignatedFor` (`:138`) and the proved
+   `designated_is_deniable` (`:224`). The crypto under it is an honest §8 portal (`DVKernel`, `:84`).
+3. **Prove the two coherence 2-cells** (still OPEN — these are the new frontier): (a) the
+   disclosure×transferability square **commutes** (both are post-hoc projections of one `ObsDelta` —
+   orthogonality, §2.4); (b) the Agreement edges are **directed** — *reuse the now-correctly-cited*
+   `Finality.no_downgrade` (`Finality.lean:280`) + `crossTierJoin`/`LinearOrder` (`:219`/`:96`) — and
+   `public → designated` is **unreachable** (the §3.2 wall; the *static* disjointness is already proved
+   as `designated_excludes_public:257`, but the *edge-irreversibility* — no turn moves public→designated
+   — is the unbuilt directed-wall theorem). Encode the achievable sub-complex as the §3.3 order-ideal.
+4. **Encode the impossibility surface as a refutation** (still OPEN): a Lean lemma
    `deniable_high_agreement_empty : ¬ ∃ badge, transferability badge = deniable ∧ agreement badge ≥ bft`
-   (the §3.1 contradiction, in the same spirit as `hyperedge_is_validity_not_canonicity`).
+   (the §3.1 contradiction, in the same spirit as `hyperedge_is_validity_not_canonicity`). The two
+   ingredients are now both proved objects — `DV.DesignatedFor`'s non-transferability (`:141`) and
+   `Tier ≥ bft` — so this is now *assembly of existing teeth*, not new theory.
 
 This is buildable, mostly Lean-side, reuses proved infrastructure (`Tier`, `crossTierJoin`,
-`Hyperedge`), and *completes* the half the codebase has not touched.
+`DV.DischargedFor`/`TransferDial`, `Hyperedge`), and *finishes* the cube the codebase has now mostly
+built axis-by-axis.
 
 ### 8.2 ALTERNATIVE — promote `Hyperedge` to a proved simplicial object (COMPLEX 2)
 
 If the goal is COMPLEX-2 depth: add the **face maps** ∂ᵢ on `Hyperedge` (restrict an `ι`-hyperedge to
 a sub-incidence-set `ι' ⊆ ι`) and prove the **simplicial identities carry the binding** — i.e. a face
 of an admissible hyperedge is admissible **iff its own CG-5 sub-sum is 0** (it need *not* be: a sub-set
-of a balanced set is generally unbalanced — this is `hyper_not_all_admissible` again,
-`Hyperedge.lean:505`). That negative result is the *content*: it tells you the interaction complex is
-**not a Kan complex** (faces don't freely extend), and the precise obstruction is per-face CG-5. This
-is more research-grade and lower-leverage than 8.1, but it is the honest way to earn the word
-"simplicial object" — and its first theorem is a *refutation* of free fillability, exactly matching the
-discipline that made `Hyperedge` honest.
+of a balanced set is generally unbalanced — this re-aims `hyper_not_all_admissible`, `Hyperedge.lean:505`,
+the general-`ι` proper-subobject obstruction, whose `ι = Unit, b = 1` instance is the apex
+`hyper_binding_is_proper`, `:164`). That negative result is the *content*: it tells you the interaction
+complex is **not a Kan complex** (faces don't freely extend), and the precise obstruction is per-face
+CG-5. **STILL UNBUILT, grep-confirmed:** there is no `face_map`/∂ᵢ, no `SimplicialObject`, no `Kan` in
+`Dregg2/` — so this remains the honest *aspirational* way to earn the word "simplicial object". Its
+first theorem is a *refutation* of free fillability, exactly matching the discipline that made
+`Hyperedge` honest.
 
-**Recommendation:** do **8.1** first (completes the unbuilt cube, reuses proved parts, surfaces the
-named-new `Discharged[V]`), and treat **8.2** as the way to *state* the simplicial structure honestly
-later — beginning, like `Hyperedge`, with the negative (non-Kan) theorem so the notation never
-outruns the binding.
+**Recommendation:** do **8.1's remaining step 3–4** first (the cube *assembly* + coherences — the axes
+now exist axis-by-axis, see updated §8.1, so this finishes COMPLEX 1 by gluing proved parts), and treat
+**8.2** as the way to *state* the simplicial structure honestly later — beginning, like `Hyperedge`,
+with the negative (non-Kan) theorem so the notation never outruns the binding. A third, newly-surfaced
+direction: *connect* `EpistemicSheaf`'s `Frame`/`DistKnows` (now built, §5.2) to a `Hyperedge`'s
+incidence set, so distributed-knowledge of the apex `tid` becomes a derived theorem rather than the
+paper-anchored narration of §5.
 
 ---
 
@@ -529,9 +607,12 @@ outruns the binding.
 >    edge of the dial-cube **within the achievable sub-complex** — the order-ideal cut out by three
 >    grounded constraints (§3.3), whose boundary (the impossibility surface) is concrete and
 >    theorem-shaped: `deniable × high-agreement` is empty (agreement fights deniability), publish/reveal
->    are one-way, agreement never downgrades. The system today lives on one corner; the interior
->    (private, bilateral, locally-final) is occupiable-but-unbuilt, and §8.1 builds it. **The cube is a
->    *directed* finite poset-product — calling it a manifold or ∞-groupoid is decorative; the directed
+>    are one-way, agreement never downgrades. The system shipped on one corner; the interior (private,
+>    bilateral, locally-final) is occupiable, and **its axes have now largely LANDED in Lean** — the
+>    transferability/deniability axis is proved (`DesignatedVerifier.lean`: `DischargedFor:113`,
+>    `designated_is_deniable:224`), `Tier` and `Disclosure` have homes — so §8.1's remaining work is the
+>    *cube assembly* (one attestation type + the §2.4 coherence theorems), not new theory. **The cube is
+>    a *directed* finite poset-product — calling it a manifold or ∞-groupoid is decorative; the directed
 >    order-ideal is the real object.**
 >
 > 2. **As an interaction hypersystem (COMPLEX 2):** dregg *can* traverse higher cells — the n-ary

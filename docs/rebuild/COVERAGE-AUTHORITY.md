@@ -1,9 +1,52 @@
 # Dregg1 ↔ Dregg2 Authority/Capability Coverage Audit
 
-**Date:** 2026-05-31  
-**Scope:** dregg1's CAPABILITY/AUTHORITY/CREDENTIAL semantics against dregg2's Lean metatheory  
-**Methodology:** Deep read of Rust source (captp/, credentials/, macaroon/, intent/, token/) cross-referenced against Lean metatheory (Dregg2/Authority/*.lean, Exec/CapTP.lean, Privacy.lean)  
+**Date:** 2026-05-31 (original); **Current as of 2026-06-02.**
+**Scope:** dregg1's CAPABILITY/AUTHORITY/CREDENTIAL semantics against dregg2's Lean metatheory
+**Methodology:** Deep read of Rust source (captp/, credentials/, macaroon/, intent/, token/) cross-referenced against Lean metatheory (Dregg2/Authority/*.lean, Exec/CapTP.lean, Privacy.lean)
 **Confidence:** High (file:line citations throughout)
+
+---
+
+> **⚑ 2026-06-02 RE-GROUNDING (CODE WINS).** This audit was written 2026-05-31 around the thesis
+> *"Lean is aspirational, Rust is actual; Lean ASSUMES the handoff check, Rust DOESN'T enforce it."*
+> Since then the executable Lean turn was rebuilt and the headline CRITICAL gap was **closed on the
+> Lean-executed side**. What changed (verified against the source 2026-06-02):
+>
+> 1. **The CapTP handoff non-amplification (`granted ≤ held`) is now EXECUTED in Lean, not merely
+>    assumed.** `AuthModes.authModeAdmits` `.capTpDelivered` arm runs
+>    `decide (cert.granted.rights ≤ cert.held.rights) && c.facetOk && c.freshOk`
+>    (`Dregg2/Exec/AuthModes.lean:194–199`). Task **#94 (W9-CAPTP) is COMPLETED** — the differential
+>    + `validate_handoff` enforcement landed on the Rust side too. The §2/§4/§6-Q1 framing below
+>    ("Rust copies permissions verbatim, no check") describes the **pre-#94** state and is
+>    **SUPERSEDED** (annotated inline).
+> 2. **There is now a real EXECUTED auth gate** — `Dregg2/Exec/FullForestAuth.lean`'s 4-leg
+>    `gateOK na s = credentialValidG na && capAuthorityG na && caveatsDischarged na s &&
+>    revocationGate na s` (`FullForestAuth.lean:462–466`, fail-closed on any leg), fired IN FRONT of
+>    the tree executor `execFullForestG`. The WHAT leg `capAuthorityG` IS `authModeAdmits` over the
+>    node's mode (`FullForestAuth.lean:419–421`). This is META-FILL D, task **#132 (COMPLETED)**.
+> 3. **Revocation is now a kernel-state registry**, not a wire-supplied flag. `revocationGate`
+>    reads `s.kernel.revoked` (the committed MDB root, adversary-uncontrollable) — `FullForestAuth.lean:453–457`;
+>    `RecordKernelState.revoked : List Nat` at `RecordKernel.lean:289`; teeth proved by
+>    `gateOK_revoked_fails` (`FullForestAuth.lean:473–479`). Task **#139 (COMPLETED)**.
+> 4. **The §8 crypto floor is now `@[extern]`-shaped**, not only an abstract class. `Dregg2/Crypto/
+>    PortalFloor.lean` (META-FILL E) declares the ~8 floor decls — `ed25519VerifyExtern`,
+>    `starkVerifyExtern`, `pedersenCommitExtern`, `poseidon2HashExtern`, `blake3HashExtern`,
+>    `nullifierDeriveExtern`, `aeadOpenExtern`, `hmacSha256Extern` (`PortalFloor.lean:61,98,133,181,218,248,274,308`),
+>    `#assert_axioms`-pinned. The abstract `CryptoKernel` (`Dregg2/CryptoKernel.lean`) still backs the
+>    "§8 oracle" rows below — those remain TRUE; the floor is the concrete instance of that seam.
+> 5. **A WHO wire codec with 10 `Authorization` variants now exists, with a roundtrip THEOREM.**
+>    `Authorization` (10 ctors) at `FullForestAuth.lean:103–130`; `AuthW := Authorization Nat Nat`
+>    (`FFI.lean:1350`); `parseAuthW_roundtrip` PROVED + axiom-pinned (`CodecRoundtrip.lean:1411`,
+>    `#assert_axioms` at `:2494`). This is a NEW layer (META-FILL I + FILL J, tasks #135/#136) the
+>    original audit predates. NB: the 10 *wire* `Authorization` variants ≠ the 6 *executed* `AuthMode`
+>    modes (`AuthModes.lean:135–157`); the codec is wider than the gate dispatcher.
+>
+> The Authority *laws* in §1's matrix (attenuation, credential keystone, registry soundness, privacy
+> tiers, the CapTP Lean theorems) were re-checked line-by-line and **remain accurate** (receipts
+> refreshed). The two still-genuine OPEN items are **promise GC liveness** (§3, a `-- OPEN:` comment,
+> not a sorry — confirmed `CapTP.lean:405–412`) and **zkpromise/ConditionalTurn** (task #82, still
+> `in_progress`). The 85%/15% headline at §7 is now optimistic in dregg2's FAVOUR for authority: the
+> handoff gap (the bulk of the "dangerous 15%") is closed on the Lean side.
 
 ---
 

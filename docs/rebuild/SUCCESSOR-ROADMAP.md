@@ -1,23 +1,72 @@
 # dregg2 → real dregg1 SUCCESSOR — the gear-shift roadmap
 
-> **Honest status (2026-05-29, end of the big session).** What exists is a **verified
-> micro-core + the right architecture + a working cascade mechanism** — NOT a verified
-> distributed OS, and NOT yet a dregg1 successor. This doc is the plan to make it one.
-> Reads with `DREGG1-TO-DREGG2.md` (crate fates), `ROADMAP.md`, `dregg2.md`.
+> **Current as of 2026-06-02.** This doc has been re-grounded against the live Lean. The
+> 2026-05-29 status block below is SUPERSEDED — the project moved well past the 5-effect
+> scalar micro-core. What exists today is a **tree-shaped, full-op-set, per-asset executable
+> turn with an executed auth gate + a complete FFI wire codec being proven a left-inverse** —
+> a real start on Phase A/B, though still NOT a verified distributed OS. This doc is the plan
+> to finish. Reads with `DREGG1-TO-DREGG2.md` (crate fates), `ROADMAP.md`, `dregg2.md`,
+> `../THE-SWAP.md` (the cutover map).
 
-## What's REAL today (machine-checked, no inflation)
-- A Lean4 project that compiles: **31 modules, ~2979 jobs, 0 errors, 19 honest `sorry`**.
-- A **toy kernel core**: `KernelState = Finset accounts + bal : CellId→ℤ + cap list`;
-  `exec`/`step` does ONE of {transfer, mint, burn, grant/revoke cap}. PROVED for it:
-  conservation, fail-closed authorization, **step-completeness** (`Exec/StepComplete.cexec_attests`
-  — all 4 `StepInv` conjuncts), and a **circuit bridge** (`Circuit.bridge :
-  satisfied kernelCircuit ↔ fullStepInv`, both directions) from which `CryptoKernel.verify`'s
-  §8 law is DERIVED.
-- The **portals** `CryptoKernel`/`World` (uninterpreted Lean⟷Rust interface).
-- A **working FFI** (`dregg-lean-ffi/`): Rust hosts the compiled kernel; **10k/10k
-  golden-oracle differential** vs a Rust reference.
-- Honest classification of the 19 `sorry`: interface obligations (portal laws) + genuine
-  open theorems (Byzantine quorum-intersection, GST-liveness, family joint-soundness).
+## What's REAL today (machine-checked, no inflation) — 2026-06-02
+- A Lean4 project that compiles: **~181 `Dregg2/**` modules + 12 `Metatheory/**` modules**
+  (was "31"). **ZERO real `sorry`/`admit`/`axiom`/`native_decide`** across the corpus
+  (the last 3 by-design sorries were retired + a CI guard now forbids `sorry`; task #128 /
+  `WF-ZERO-SORRY`). The hundreds of grep hits for "sorry" are all prose in doc-comments.
+- **The executable turn is no longer a 5-effect scalar kernel.** `Dregg2/Exec/TurnExecutorFull.lean`
+  defines `FullActionA` — a **46-arm** per-asset action sum (`TurnExecutorFull.lean:1928`) —
+  and `execFullA` dispatches **all 46 arms** (`:2236`): transfer/mint/burn (per-asset), 5
+  pure-state field/log effects (setField/emitEvent/incrementNonce/setPermissions/setVK), 6
+  authority effects (introduce/delegateAtten/attenuate/dropRef/revokeDelegation/validateHandoff/
+  exercise), supply (createCell/spawn/bridgeMint), escrow+obligation+note side-tables,
+  committed-escrow, the 3 bridge-lock ops, seal/unseal/sealPair/makeSovereign/refusal/
+  receiptArchive, the 4 queue ops (ring-buffer FIFO), and the 4 CapTP swiss-table ops.
+  `Dregg2/Exec/FullForest.lean` wraps this in a **TREE**: `FullForestA` (`:82`) with operational
+  executor `execFullForestA` (`:113`), proven equal to `execFullTurnA` over a pre-order lowering
+  (`execFullForestA_eq_execFullTurnA`, `:171`), carrying per-asset conservation, non-amplification,
+  per-node attestation, and root fail-closed.
+- **Per-asset CONSERVATION VECTOR (FILL 1, task #129) is live on the record kernel.**
+  `Dregg2/Exec/RecordKernel.lean` carries `bal : CellId → AssetId → ℤ` (`:304`) and the combined
+  conserved measure `recTotalAssetWithEscrow b` (per-asset, reads `bal`+`escrows`);
+  `execFullTurnA_conserves_per_asset` (`TurnExecutorFull.lean:2699`) proves every committed turn
+  moves the measure by exactly the turn's per-asset ledger delta.
+- **An EXECUTED credential+caveat AUTH GATE** (META-FILL D, task #132): `Dregg2/Exec/FullForestAuth.lean`
+  defines `gateOK = credentialValidG && capAuthorityG && caveatsDischarged && revocationGate`
+  (`:462`, a **4-leg** fail-closed conjunction). `capAuthorityG` is VERIFIED-IN-LEAN via
+  `AuthModes.authModeAdmits` (`Dregg2/Exec/AuthModes.lean:184`, an **8-constructor** `AuthMode`
+  sum — custom/capTpDelivered/bearer/token/oneOf/unchecked + leaves — each with an
+  `authModeAdmits ⇒ abstract-authority` proof). `revocationGate` reads the kernel-state revocation
+  registry `s.kernel.revoked : List Nat` (task #139); `gateOK_revoked_fails` (`:473`) proves a
+  revoked credential rejects. The gate fires IN FRONT of `execFullA` via `execFullAGated` (`:489`),
+  no-TOCTOU by construction.
+- The **portals** `CryptoKernel`/`World` (uninterpreted Lean⟷Rust interface) stand exactly as
+  designed: `CryptoKernel.verify` is an **opaque `Bool` oracle** (the §8 boundary), NOT a Lean
+  law — `Dregg2/CryptoKernel.lean:46`. A Rust impl instantiates it via `@[extern]` (e.g.
+  `dregg_poseidon_hash`); the §8 soundness is the CIRCUIT obligation, derivable from
+  `Circuit.bridge` (`Dregg2/Circuit.lean:229`, `satisfied kernelCircuit ↔ fullStepInv`, both
+  directions). Crypto is still a PORTAL, not real `@[extern]` Pedersen/WHIR in this tree.
+- **Step-completeness** is intact: `Exec/StepComplete.cexec_attests` (`StepComplete.lean:75`) —
+  every committed chained step attests the full 4-conjunct `StepInv`.
+- A **working FFI** (`/Users/ember/dev/breadstuffs/dregg-lean-ffi/`): Rust hosts the compiled
+  kernel; **10k/10k golden-oracle differential** vs a Rust reference (`differential.rs:91`,
+  `const N = 10_000`). The wire codec was **widened to the complete turn** (META-FILL I, task
+  #135): `Dregg2/Exec/FFI.lean` exports `dregg_exec_full_turn` (`:938`), `dregg_exec_full_turn_wide`
+  (`:2732`), and the GATED `dregg_exec_full_forest_auth` (with REAL caveat teeth, §WG). A verified
+  **Rust marshaller** `dregg-lean-ffi/src/marshal.rs` (+ `marshal_roundtrip.rs`) is byte-exact vs
+  the live export (task #142, THE SWAP Rust half — in progress).
+- **FILL J — the codec is being PROVED a left-inverse** (task #136). `Dregg2/Exec/CodecRoundtrip.lean`
+  proves, all sorry-free and `#assert_axioms`-pinned (29 keystones, `:2479`–`:2507`): every leaf
+  (§0), the per-asset `BAL` entry (§2), recursive `Value`/`FIELDS` (§5), the SECURITY-CRITICAL
+  `Authorization`/WHO decoder at all **10 variants + recursive `oneOf`** (§6, `parseAuthW_roundtrip`),
+  the `FullActionA`/WHAT decoder at **all 46 arms** (§7, `parseActionW_roundtrip` + `parseActionW_setfield`),
+  and EVERY wide-state side-table list (§8–§11c: AUTHS/Nats/Bal/Escrows/Queues/Swiss). The
+  top-level `parseWState`/`parseWTurn`/`parseWWire` assembly is the remaining follow-on (its
+  component list-productions are all proven).
+- Honest classification of the genuine OPEN theorems (now isolated in `Metatheory/Open/`, NOT
+  `sorry`'d — stated as honest scope-notes / named assumptions): Byzantine quorum-intersection
+  & GST-liveness (`Dregg2/Proof/BFT.lean`, `BFTLiveness.lean`), family joint-soundness
+  (`ConservationMultiEdge`, `CrossCellBisim`), perfect ZK/UC (`PerfectZK`, `PerfectUC`),
+  final-coalgebra & authority-closure.
 
 ## The toy→real gap (what "successor" actually requires)
 | Layer | Toy now | Real dregg1-successor needs |

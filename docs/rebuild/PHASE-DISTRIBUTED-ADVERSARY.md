@@ -1,5 +1,24 @@
 # PHASE — The Distributed-Adversary / Byzantine / GST / UC Model
 
+> **Current as of 2026-06-02.** Re-grounded against the live Lean. **The original
+> research below (the §3b "ABSENT" corpus inventory, the §1 `_OPEN` line receipts,
+> the §6 "papers to fetch", and even the 2026-05-30 UPDATE) is now SUPERSEDED.**
+> Since this was written: (1) **all** the named papers were FETCHED into `pdfs/`
+> (`fetch-DLS88-partial-synchrony.pdf`, `fetch-FLP-impossibility-1985.pdf`,
+> `fetch-hotstuff-2019.pdf`, `fetch-streamlet-2020.pdf`, `fetch-canetti-uc-2001.pdf`,
+> `zotero-reconfigurable-heterogeneous-quorum-systems.pdf` = Li–Lesani/Malkhi–Reiter
+> quorum systems, + view-sync papers) — the §3b "zero hits" finding is **stale**;
+> (2) the OPEN theorems were renamed (no more `_OPEN` suffix) and **all four are
+> closed**; (3) the STRONG forms the UPDATE deferred are now **PROVED**:
+> `Dregg2.Proof.BFT.bft_safety` (`Dregg2/Proof/BFT.lean:174`, O1 STRONG — conflicting
+> quorums ⇒ ⊥) and `Dregg2.Proof.BFTLiveness.gst_liveness_of_pacemaker`
+> (`Dregg2/Proof/BFTLiveness.lean:206`, O2 — `World.gst_liveness` now **DERIVED** from
+> a DLS88+HotStuff `Pacemaker`, not merely assumed). Both modules are live in the
+> build (`Dregg2.lean:117,121`) and `#assert_namespace_axioms`-clean
+> (`Dregg2/Claims.lean:355,370`). The corpus is at **zero `sorry`**. See the
+> §0-STATUS block immediately below and the rewritten UPDATE at the bottom; the body
+> §1–§7 is retained as the (now-historical) research that drove this.
+>
 > **Provenance.** 2026-05-30, read-only research agent (Claude Opus 4.8, 1M).
 > Scope: do the four honest-OPEN `sorry`s in `World.lean` / `Liveness.lean` /
 > `Spec/Lifecycle.lean` that name a *distributed-adversary / Byzantine /

@@ -1,5 +1,14 @@
 # cand-D — Choreography as the syntactic spine
 
+> **Current as of 2026-06-02.** This candidate is **no longer purely forward-design**: its
+> "Metatheory delta" (§7) has been **BUILT**. The choreography front-end now lives in
+> `Dregg2/Projection.lean` (NOT the proposed `Metatheory/Projection.lean`) plus a dedicated
+> projection↔hyperedge bridge `Dregg2/Spec/Choreography.lean`, sitting atop
+> `Dregg2/Coordination.lean` (the MPST `GlobalType`/`project`/`LocalType`/`projection_sound`
+> machinery). See §7 for the as-built receipts. Several `[F]` (forward-design) claims below are
+> now `[C]` (grounded-in-code). The architecture/vision content (§0–§6, §8, §9) remains live and
+> accurate; status corrections are inlined with `file:line` receipts.
+
 > **Status:** a *fourth* candidate, of a different kind than A/B/C. Where `cand-A`
 > (vat-coalgebra), `cand-B` (witness-PCA), `cand-C` (cap-distributed) are three
 > projections of the **turn** — the *semantic* generator (`00-synthesis §1`) — cand-D
@@ -62,7 +71,18 @@ artifact + one analysis**, instead of three dynamic per-turn side-conditions:
   *blue* (partition-progressing, no commit); the rest are *red* (atomic JointTurn). The
   classifier is Whittaker's segmented invariant-confluence (`interactive-checks-coordination-avoidance-vldb19`),
   tightened by `byzantine-eventual-consistency` (the iff) and `cryptoconcurrency` (escalate
-  only on the actual N-ary conflicting set). `[G/T]`
+  only on the actual N-ary conflicting set). `[G/C]`
+  - **As-built receipt + a sharpening (2026-06-02):** the colour classifier is now
+    `Projection.BlueEligible := Confluence.IConfluent` (`Dregg2/Projection.lean:56`); blue ⟺
+    "merges preserve the invariant" is PROVED as `blue_merge_safe` (`Projection.lean:74`), which
+    genuinely *uses* the I-confluence and FAILS for non-blue invariants
+    (`Confluence.cardLeOne_not_iconfluent`). **Correction to the §1 framing above:** Coordination
+    records `study-choreography` claim #1 as **[REFUTED]** — the linearity⇒I-confluence
+    conflation (`Dregg2/Coordination.lean:36,444`). The colour is the **third judgement
+    (`Confluence.IConfluent`), NOT the session/linear type**. So "Conservation = linear typing"
+    (first bullet) and "I-confluence = the colour" are *kept orthogonal* in code — the linear
+    payload type does **not** decide blue/red. The doc's three-annotations picture survives, but
+    the colour classifier is `Confluence`, not the linearity reading.
 
 So `G` carries all three; **projection is the compiler that discharges them** into
 per-cell obligations. This is a genuine collapse and a cathedral-shaped one: `dregg2`
@@ -83,9 +103,21 @@ cand-D's value is that, viewed top-down, three things dregg2 keeps separate beco
    monitor *is* dregg2's vat-boundary: the monitor = the verifier, the per-message
    conformance check = the checkable witness (`cand-B`'s soundness-by-verification), and
    **blame = the de-jure/de-facto split** (`dregg2 §0`: the protocol said you may do X; you
-   didn't; here is the proof). The vat-boundary law (`Positional.lean`) and the EPP-
-   correspondence theorem (`deadlock-freedom-by-design-choreography-cm13`) are **the same
-   theorem.** `[G/T]`
+   didn't; here is the proof). The vat-boundary law and the EPP-correspondence theorem
+   (`deadlock-freedom-by-design-choreography-cm13`) are **intended to be the same theorem.**
+   `[G/T]`
+   - **As-built receipt (2026-06-02), with a naming correction:** there are now TWO proven
+     vat-boundary laws (the doc's bare `Positional.lean` reference was imprecise):
+     `Authority.Positional.boundary_law` (`Dregg2/Authority/Positional.lean:152`, the PAS-refined
+     access-control law) and `Exec.VatBoundary.vat_boundary_law`
+     (`Dregg2/Exec/VatBoundary.lean:88`, PROVED on the *executable* living cell). The EPP side is
+     `Projection.epp_correspondence` (`Dregg2/Projection.lean:112`), which today is an **explicit
+     alias** for `Coordination.projection_sound` (head-duality only). The "same theorem at two
+     altitudes" identification is therefore **NOT yet a proof** — `Projection.lean`'s own docstring
+     (lines 18–22, 101–111) flags it as the *intended* stronger statement, blocked on the
+     operational LTS of `Coordination` (the parallel-composed-projection ⤳ `pc.coalg`
+     bisimulation). Honest status: membrane-duality and the executable boundary law both hold
+     *separately*; their unification is the open residue.
 3. **The deferred coordination module → the front-end.** dregg2's ROADMAP defers
    multi-party/multi-turn choreography as "research-grade, build JointTurn first." cand-D
    makes it the thing you program in; the JointTurn becomes *one projected interaction*.
@@ -145,12 +177,27 @@ the blue/red split) + a monitored boundary. **Make `G` mandatory and cand-D dies
 
 - A **blue** interaction projects to a `CellProgram` admissibility clause (`cand-A`,
   `cell/src/program.rs`) — runs cross-group, partition-tolerant, no commit. Eligible **iff**
-  its write-set is I-confluent (`Confluence.lean`, `STUDY-confluence-module.md`). `[C/F]`
+  its write-set is I-confluent (`Confluence.lean:44` `IConfluent`, `STUDY-confluence-module.md`).
+  `[C]`
 - A **red** interaction projects to a **JointTurn** — the already-built γ.2 bilateral
-  aggregation (`circuit::bilateral_aggregation_air`, CG-2 turn-id pullback ⊗ CG-5 conservation
-  equalizer), atomic, committed at the join of the written cells' tiers. `[C]`
+  aggregation (`circuit::bilateral_aggregation_air` — confirmed live in
+  `turn/src/aggregate_bilateral_prover.rs`, `circuit/src/ivc.rs`; CG-2 turn-id pullback ⊗ CG-5
+  conservation equalizer), atomic, committed at the join of the written cells' tiers. `[C]`
 - The **boundary** between two endpoints is a **monitor** enforcing each side's projected
   local type — a proof-carrying turn (`cand-B`) whose conformance check is the witness. `[F]`
+
+> **As-built (2026-06-02):** this whole blue→CellProgram / red→JointTurn routing is now
+> formalized in `Dregg2/Spec/Choreography.lean` as the **projection↔hyperedge bridge** — the
+> red target is the N-ary `Hyperedge` (`Dregg2/Hyperedge.lean`, the wide pullback over `TurnId`,
+> a *generalization* of the bilateral JointTurn). `Interaction.routeOf` (`Choreography.lean:124`)
+> makes the routing target a function of the colour alone (`Projection.route`,
+> `Projection.lean:89`). PROVED keystones (all `#assert_axioms`-pinned, `Choreography.lean:339–345`):
+> `red_projects_to_hyperedge` (structural half — a red commit assembles a `Hyperedge`),
+> `blue_needs_no_hyperedge` (a blue interaction commits independently per cell, no Σ=0 cut),
+> `red_iff_coupled` (red ⟺ ¬I-confluent, with the forced-escalation clashing-pair witness
+> `Confluence.nonpairwise_escalation`). The single OPEN residue is OPERATIONAL (the live red
+> commit *operationally produces* exactly that hyperedge along the not-yet-formalized
+> composed-projection bisimulation), `-- OPEN` at `Choreography.lean:184`.
 
 So cand-D *reuses the entire dregg2 runtime*; it only adds the front-end (`G` + projection)
 and reframes the JointTurn as a projection target.
@@ -219,9 +266,17 @@ substrate, a new front door.
 
 ---
 
-## 7. Metatheory delta
+## 7. Metatheory delta — **BUILT** (as of 2026-06-02)
 
-Add `Metatheory/Projection.lean` (peer of `Boundary.lean`):
+> This section was originally a *proposal* ("Add `Metatheory/Projection.lean` …"). It is now
+> **realized in code** — but in `Dregg2/`, NOT `Metatheory/`. The actual modules are
+> `Dregg2/Coordination.lean` (the MPST base: `GlobalType`/`project`/`LocalType`/`Projectable`/
+> `projection_sound`/`ProtocolCell`/`Dual`) and **two cand-D-specific modules**:
+> `Dregg2/Projection.lean` (the blue/red split + the keystone aliases) and
+> `Dregg2/Spec/Choreography.lean` (the projection↔hyperedge bridge, §4 above). The original
+> proposal is preserved below, annotated with as-built status + `file:line` receipts.
+
+**ORIGINAL PROPOSAL (preserved): add `Metatheory/Projection.lean` (peer of `Boundary.lean`):**
 - `Projectable G` — well-formedness (projectability + boundedness ∧ conservation typing ∧ a
   sound I-confluence segmentation exists).
 - `project : Choreo → Role → LocalType`.
@@ -236,6 +291,40 @@ Add `Metatheory/Projection.lean` (peer of `Boundary.lean`):
   binding in `Boundary.lean`). This names §5a/§5c as a premise, honestly.
 
 Crypto-soundness stays out (the monitor's `Verify` is a decidable oracle; `dregg2 §8`).
+
+**AS-BUILT STATUS (the code wins):**
+- `Projectable G` — **BUILT** as `Coordination.Projectable` (`Dregg2/Coordination.lean:325`).
+  Caveat: it is the MPST projectability predicate; the conservation-typing / I-confluence-
+  segmentation conjuncts of the proposal are carried *separately* (conservation in the record
+  kernel; the blue/red colour in `Projection.BlueEligible`), not folded into this one `Prop`.
+- `project : … → Role → LocalType` — **BUILT** as `Coordination.project`
+  (`Coordination.lean:241`); the carrier is the MPST `GlobalType` (`Coordination.lean:98`), not a
+  bespoke `Choreo`. `Role := Nat`, `Payload := Nat` (`Coordination.lean:73,80`).
+- **`epp_correspondence`** — **BUILT** (`Dregg2/Projection.lean:112`), but **scoped honestly to
+  head-duality, NOT the full bisimulation**. It is an explicit alias
+  `:= Coordination.projection_sound …` (`Coordination.lean:416`, itself PROVED for head-duality
+  via `simp`, ending the docstring's "full bisimulation … `sorry`" residual as a *comment about
+  what's still aspirational*, not an `axiom`/`admit` in the proof). The proposal's "extends
+  `deadlock-freedom-by-design` to carry conservation + the blue/red split" is **NOT yet** in this
+  theorem. The "same theorem as `boundary_law` at two altitudes" claim is the **intended**
+  stronger statement (`Projection.lean:18–22,101–111`), blocked on the operational LTS — see the
+  §2 correction. The two-altitude *conjunction at current scope* IS proved:
+  `Spec.epp_membrane_is_projection` (`Choreography.lean:323`, `#assert_axioms`-pinned) shows
+  membrane-duality AND hyperedge incidence-agreement both hold for a red head interaction.
+- **`byzantine_epp_by_monitoring`** — **deliberately NOT a Lean `theorem`** (the honest call,
+  `Projection.lean:121–138`): a faithful statement needs the operational monitor LTS + a
+  refinement relation `Coordination` does not yet provide, so it is recorded as a *named
+  obligation* in a comment, not written as a vacuous-or-unprovable `theorem`. The PROVABLE part
+  of the Byzantine story — the **blue (I-confluent) fragment** stays invariant-safe under *any*
+  adversarially-permuted concurrent merge — IS proved (`blue_merge_safe`, `Projection.lean:74`;
+  `blue_commits_independently`, `Choreography.lean:230`). The red/coupled fragment's
+  Byzantine-EPP is the open theorem the blocklace owns — exactly §5a/§5c.
+- **NEW, not in the original proposal:** the projection↔hyperedge bridge
+  (`Dregg2/Spec/Choreography.lean`) — `red_projects_to_hyperedge`, `blue_needs_no_hyperedge`,
+  `red_iff_coupled`, `red_legs_agree`, all PROVED + `#assert_axioms`-pinned (§4 receipt). This is
+  the as-built realization of "blue → CellProgram, red → JointTurn" at the *N-ary* hyperedge
+  generalization (`Dregg2/Hyperedge.lean`), strictly more than the bilateral JointTurn the
+  proposal named.
 
 ---
 
