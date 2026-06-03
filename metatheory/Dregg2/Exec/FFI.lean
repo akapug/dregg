@@ -1038,7 +1038,7 @@ delta), ids/nonces/counters are `Nat` (a negative id is rejected fail-closed by 
 
 namespace Wide
 
-open Dregg2.Exec.TurnExecutorFull (FullActionA execFullA)
+open Dregg2.Exec.TurnExecutorFull (FullActionA execFullA QueueTxOpA)
 open Dregg2.Exec.FullForest (FullForestA FullChildA execFullForestA lowerForestA)
 open Dregg2.Exec.FullForestAuth (Authorization)
 
@@ -1598,7 +1598,7 @@ field names as JSON strings, the swiss `rights`/`held` as the narrow `AUTHS` arr
       | {"sobl":[id,actor]}                      -- slashObligationA
       | {"nspend":[nf,actor]}                    -- noteSpendA
       | {"ncreate":[cm,actor]}                   -- noteCreateA
-      | {"ccesc":[id,actor,creator,recipient,asset,amount]}     -- createCommittedEscrowA
+      | {"ccesc":[id,actor,creator,recipient,asset,amount,hidingProof]}  -- createCommittedEscrowA (hidingProof = 0/1 flag)
       | {"rccesc":[id,actor]}                    -- releaseCommittedEscrowA
       | {"fccesc":[id,actor]}                    -- refundCommittedEscrowA
       | {"block":[id,actor,originator,destination,asset,amount]}  -- bridgeLockA
@@ -1618,16 +1618,54 @@ field names as JSON strings, the swiss `rights`/`held` as the narrow `AUTHS` arr
       | {"enliven":[sw,actor,exporter,AUTHS]}    -- enlivenRefA(claimed)
       | {"shandoff":[sw,certHash,introducer,exporter]}     -- swissHandoffA
       | {"sdrop":[sw,actor,exporter]}            -- swissDropA
+      | {"qatomic":[actor,OPS]}                  -- queueAtomicTxA (OPS := QueueTxOpA array)
+      | {"qpipe":[srcId,owner,NATSW,NATSW]}      -- queuePipelineStepA (sinkCells, sinkIds)
+      | {"psend":[actor]}                        -- pipelinedSendA
+
+The QueueTxOpA sub-op array `OPS := [] | [OP(,OP)*]` with
+      OP := {"enq":[id,m,actor,cell,depId,dAsset,deposit]}   -- QueueTxOpA.enqueue
+          | {"deq":[id,actor,cell,depId,deposit]}            -- QueueTxOpA.dequeue
+and `NATSW := [] | [N(,N)*]` a plain `Nat` array.
 
 Every id/asset/idx/capacity/newNonce/nf/cm/sw/certHash is a `Nat`; every amt/value/amount/stake/
 deposit/v/perms/vk/topic/data is a SIGNED `Int`; "FIELD" is a JSON string; AUTHS is the narrow `Auth`
-tag array (0..6). -/
+tag array (0..6); hidingProof is a `0`/`1` flag. -/
 
 /-- Encode a `List Auth` as the `AUTHS` tag array (reuses the narrow `authTag` enumeration). -/
 def encodeAuthsW (rs : List Auth) : String := encodeAuths rs
 
 /-- Parse an `AUTHS` tag array (reuses the narrow `parseAuths`). -/
 def parseAuthsW (cs : PState) : Option (List Auth × PState) := parseAuths cs
+
+/-! ### §W4-batch helpers — `Nat`-list + `QueueTxOpA`-list codecs (the WAVE-4 batch payloads).
+
+`queuePipelineStepA` carries TWO `Nat` lists (`sinkCells`/`sinkIds`, both `CellId = AssetId = Nat`)
+and `queueAtomicTxA` carries a `List QueueTxOpA`. These helpers are defined BEFORE the `mutual`
+action codec (which references them) — distinct from the later state-level `encodeNats`/`parseNats`
+(used by the queue/nullifier side-tables) so naming `…W` keeps the two layers separate. -/
+
+/-- Encode a `Nat` list as the `NATSW` array `[N(,N)*]` (or `[]`). -/
+def encodeNatsW : List Nat → String
+  | []      => "[]"
+  | n :: ns => "[" ++ toString n ++ (ns.foldl (fun acc x => acc ++ "," ++ toString x) "") ++ "]"
+
+/-- Encode ONE `QueueTxOpA` sub-op to its tagged wire form. `enqueue` carries the full deposit-park
+shape (matching `queueEnqueueA`); `dequeue` carries the refund shape (matching `queueDequeueA`). -/
+def encodeQueueTxOp : QueueTxOpA → String
+  | QueueTxOpA.enqueue id m actor cell depId dAsset deposit =>
+      "{\"enq\":[" ++ toString id ++ "," ++ toString m ++ "," ++ toString actor ++ ","
+        ++ toString cell ++ "," ++ toString depId ++ "," ++ toString dAsset ++ ","
+        ++ toString deposit ++ "]}"
+  | QueueTxOpA.dequeue id actor cell depId deposit =>
+      "{\"deq\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString cell ++ ","
+        ++ toString depId ++ "," ++ toString deposit ++ "]}"
+
+/-- Encode a `List QueueTxOpA` as the `OPS` array `[OP(,OP)*]` (or `[]`) — the atomic-batch body. -/
+def encodeQueueTxOps : List QueueTxOpA → String
+  | []        => "[]"
+  | op :: ops =>
+      "[" ++ encodeQueueTxOp op
+        ++ (ops.foldl (fun acc x => acc ++ "," ++ encodeQueueTxOp x) "") ++ "]"
 
 mutual
 /-- Encode ONE `FullActionA` to its wide tagged wire form (all arms). `exerciseA` RECURSES, encoding
@@ -1681,9 +1719,10 @@ def encodeActionW : FullActionA → String
   | .slashObligationA id actor => "{\"sobl\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
   | .noteSpendA nf actor => "{\"nspend\":[" ++ toString nf ++ "," ++ toString actor ++ "]}"
   | .noteCreateA cm actor => "{\"ncreate\":[" ++ toString cm ++ "," ++ toString actor ++ "]}"
-  | .createCommittedEscrowA id actor creator recipient a amount =>
+  | .createCommittedEscrowA id actor creator recipient a amount hidingProof =>
       "{\"ccesc\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString creator ++ ","
-        ++ toString recipient ++ "," ++ toString a ++ "," ++ toString amount ++ "]}"
+        ++ toString recipient ++ "," ++ toString a ++ "," ++ toString amount ++ ","
+        ++ (if hidingProof then "1" else "0") ++ "]}"
   | .releaseCommittedEscrowA id actor => "{\"rccesc\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
   | .refundCommittedEscrowA id actor => "{\"fccesc\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
   | .bridgeLockA id actor originator destination a amount =>
@@ -1727,6 +1766,15 @@ def encodeActionW : FullActionA → String
   | .cellDestroyA actor cell ch => "{\"cdestroy\":[" ++ toString actor ++ "," ++ toString cell ++ ","
                                      ++ toString ch ++ "]}"
   | .refreshDelegationA actor child => "{\"rdel\":[" ++ toString actor ++ "," ++ toString child ++ "]}"
+  -- §MA-queue-batch (WAVE 4): the atomic cross-queue tx, the pipeline fan-out step, and the
+  -- E-style promise-pipelined send. `qatomic` carries the `OPS` sub-op array; `qpipe` carries the
+  -- two `NATSW` sink arrays; `psend` carries just the dispatching actor.
+  | .queueAtomicTxA actor ops => "{\"qatomic\":[" ++ toString actor ++ ","
+                                    ++ encodeQueueTxOps ops ++ "]}"
+  | .queuePipelineStepA srcId owner sinkCells sinkIds =>
+      "{\"qpipe\":[" ++ toString srcId ++ "," ++ toString owner ++ ","
+        ++ encodeNatsW sinkCells ++ "," ++ encodeNatsW sinkIds ++ "]}"
+  | .pipelinedSendA actor => "{\"psend\":[" ++ toString actor ++ "]}"
 
 /-- Encode a `List FullActionA` as a `;`-joined sequence of action-encodings (the inner-effect array an
 `exerciseA` carries on the wire). Empty ⇒ the empty string (the wire `[]`). -/
@@ -1754,6 +1802,72 @@ def cS (cs : PState) : Option (String × PState) :=
 /-- Read a leading `,` then an `AUTHS` tag array. -/
 def cA (cs : PState) : Option (List Auth × PState) :=
   match lit "," cs with | none => none | some r => parseAuthsW r
+
+/-! ### §W4-batch parse helpers — `Nat`-list + `QueueTxOpA`-list decoders (mirror the encoders). -/
+
+/-- Parse a `NATSW` array `[N(,N)*]` (or `[]`), fail-closed on any deviation. -/
+def parseNatsW (cs : PState) : Option (List Nat × PState) :=
+  match lit "[]" cs with
+  | some rest => some ([], rest)
+  | none =>
+    match lit "[" cs with
+    | none => none
+    | some r0 =>
+      let rec loop (fuel : Nat) (cs : PState) : Option (List Nat × PState) :=
+        match fuel with
+        | 0 => none
+        | fuel + 1 =>
+          match parseNat cs with
+          | none => none
+          | some (n, r1) =>
+            match lit "," r1 with
+            | some r2 => match loop fuel r2 with
+                         | some (rest, r3) => some (n :: rest, r3)
+                         | none => none
+            | none => match lit "]" r1 with
+                      | some r3 => some ([n], r3)
+                      | none => none
+      loop (cs.length + 1) r0
+
+/-- Parse ONE `QueueTxOpA` (`enq`/`deq`), fail-closed on any deviation. -/
+def parseQueueTxOp (cs : PState) : Option (QueueTxOpA × PState) :=
+  match lit "{\"enq\":[" cs with
+  | some r0 => do
+      let (id, r1) ← parseNat r0; let (m, r2) ← cN r1; let (actor, r3) ← cN r2
+      let (cell, r4) ← cN r3; let (depId, r5) ← cN r4; let (dAsset, r6) ← cN r5
+      let (deposit, r7) ← cI r6; let r8 ← lit "]}" r7
+      some (QueueTxOpA.enqueue id m actor cell depId dAsset deposit, r8)
+  | none =>
+  match lit "{\"deq\":[" cs with
+  | some r0 => do
+      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (cell, r3) ← cN r2
+      let (depId, r4) ← cN r3; let (deposit, r5) ← cI r4; let r6 ← lit "]}" r5
+      some (QueueTxOpA.dequeue id actor cell depId deposit, r6)
+  | none => none
+
+/-- Parse an `OPS` array `[OP(,OP)*]` (or `[]`) — the atomic-batch body, fail-closed. -/
+def parseQueueTxOps (cs : PState) : Option (List QueueTxOpA × PState) :=
+  match lit "[]" cs with
+  | some rest => some ([], rest)
+  | none =>
+    match lit "[" cs with
+    | none => none
+    | some r0 =>
+      let rec loop (fuel : Nat) (cs : PState) : Option (List QueueTxOpA × PState) :=
+        match fuel with
+        | 0 => none
+        | fuel + 1 =>
+          match parseQueueTxOp cs with
+          | none => none
+          | some (op, r1) =>
+            match lit "," r1 with
+            | some r2 => match loop fuel r2 with
+                         | some (rest, r3) => some (op :: rest, r3)
+                         | none => none
+            | none => match lit "]" r1 with
+                      | some r3 => some ([op], r3)
+                      | none => none
+      loop (cs.length + 1) r0
 
 mutual
 /-- Parse ONE `FullActionA` (all arms). Dispatch on the tag literal; read each arm's typed args; close
@@ -1924,8 +2038,11 @@ def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState)
   match lit "{\"ccesc\":[" cs with
   | some r0 => do
       let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (creator, r3) ← cN r2
-      let (recipient, r4) ← cN r3; let (a, r5) ← cN r4; let (amount, r6) ← cI r5; let r7 ← lit "]}" r6
-      some (.createCommittedEscrowA id actor creator recipient a amount, r7)
+      let (recipient, r4) ← cN r3; let (a, r5) ← cN r4; let (amount, r6) ← cI r5
+      -- the 7th field: the §8 hiding-portal witness, a strict `0`/`1` flag (≤ 1 ⇒ fail-closed).
+      let (hp, r7) ← cN r6; let r8 ← lit "]}" r7
+      if hp ≤ 1 then some (.createCommittedEscrowA id actor creator recipient a amount (hp == 1), r8)
+      else none
   | none =>
   match lit "{\"rccesc\":[" cs with
   | some r0 => do
@@ -2052,6 +2169,25 @@ def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState)
   | some r0 => do
       let (actor, r1) ← parseNat r0; let (child, r2) ← cN r1; let r3 ← lit "]}" r2
       some (.refreshDelegationA actor child, r3)
+  | none =>
+  -- §MA-queue-batch (WAVE 4): the atomic cross-queue tx, the pipeline fan-out, and the promise send.
+  match lit "{\"qatomic\":[" cs with
+  | some r0 => do
+      let (actor, r1) ← parseNat r0; let r1b ← lit "," r1
+      let (ops, r2) ← parseQueueTxOps r1b; let r3 ← lit "]}" r2
+      some (.queueAtomicTxA actor ops, r3)
+  | none =>
+  match lit "{\"qpipe\":[" cs with
+  | some r0 => do
+      let (srcId, r1) ← parseNat r0; let (owner, r2) ← cN r1; let r2b ← lit "," r2
+      let (sinkCells, r3) ← parseNatsW r2b; let r3b ← lit "," r3
+      let (sinkIds, r4) ← parseNatsW r3b; let r5 ← lit "]}" r4
+      some (.queuePipelineStepA srcId owner sinkCells sinkIds, r5)
+  | none =>
+  match lit "{\"psend\":[" cs with
+  | some r0 => do
+      let (actor, r1) ← parseNat r0; let r2 ← lit "]}" r1
+      some (.pipelinedSendA actor, r2)
   | none => none
 
 /-- Parse the `;`-joined inner-effect array body an `exerciseA` carries (everything up to the closing
@@ -2082,7 +2218,7 @@ def parseActionW (cs : PState) : Option (FullActionA × PState) :=
 /-! ### §W4-eval — EVERY one of the arms round-trips through the wide action codec.
 
 `actionRoundtrips a` re-encodes the reparse of `encodeActionW a` and compares strings (FullActionA
-has no BEq). `allActions` lists ONE representative of EACH of the 51 arms (distinct args so a
+has no BEq). `allActions` lists ONE representative of EACH of the 56 arms (distinct args so a
 mis-parse of any field is caught), and `allActionsRoundtrip` asserts EVERY one round-trips — the
 non-vacuity guard that the codec faithfully covers the WHOLE effect surface, not a sliver. -/
 
@@ -2092,7 +2228,7 @@ def actionRoundtrips (a : FullActionA) : Bool :=
   | some (a', []) => encodeActionW a' == encodeActionW a
   | _             => false
 
-/-- ONE representative of each of the 51 `FullActionA` arms (distinct args per field). -/
+/-- ONE representative of each of the 56 `FullActionA` arms (distinct args per field). -/
 def allActions : List FullActionA :=
   [ .balanceA { actor := 1, src := 2, dst := 3, amt := -4 } 5
   , .delegate 6 7 8
@@ -2112,6 +2248,7 @@ def allActions : List FullActionA :=
   , .validateHandoffA 44 45 46
   , .exerciseA 47 48 [.emitEventA 200 201 (-202) 203, .setFieldA 204 205 "balance" (-206)]
   , .createCellA 49 50
+  , .createCellFromFactoryA 250 251 (-252)
   , .spawnA 51 52 53
   , .bridgeMintA 54 55 56 (-57)
   , .createEscrowA 58 59 60 61 62 (-63)
@@ -2122,7 +2259,7 @@ def allActions : List FullActionA :=
   , .slashObligationA 202 203
   , .noteSpendA 74 75
   , .noteCreateA 76 77
-  , .createCommittedEscrowA 78 79 80 81 82 (-83)
+  , .createCommittedEscrowA 78 79 80 81 82 (-83) true
   , .releaseCommittedEscrowA 84 85
   , .refundCommittedEscrowA 86 87
   , .bridgeLockA 88 89 90 91 92 (-93)
@@ -2145,12 +2282,18 @@ def allActions : List FullActionA :=
   , .cellSealA 149 150
   , .cellUnsealA 151 152
   , .cellDestroyA 153 154 155
-  , .refreshDelegationA 156 157 ]
+  , .refreshDelegationA 156 157
+    -- §MA-queue-batch (WAVE 4): a non-empty atomic batch (one enqueue + one dequeue sub-op), a
+    -- pipeline fan-out with two distinct sinks, and a promise-pipelined send.
+  , .queueAtomicTxA 158 [ QueueTxOpA.enqueue 159 160 161 162 163 164 (-165),
+                          QueueTxOpA.dequeue 166 167 168 169 (-170) ]
+  , .queuePipelineStepA 171 172 [173, 174] [175, 176]
+  , .pipelinedSendA 177 ]
 
-/-- EVERY representative round-trips (the 51-arm non-vacuity guard). -/
+/-- EVERY representative round-trips (the 56-arm non-vacuity guard). -/
 def allActionsRoundtrip : Bool := allActions.all actionRoundtrips
 
-#eval allActions.length                                                     -- 52 (one per FullActionA arm)
+#eval allActions.length                                                     -- 56 (one per FullActionA arm)
 #eval allActionsRoundtrip                                                    -- true (every arm round-trips)
 -- HARD CI check (fails the build if ANY arm — incl. the Wave-3 seal/lifecycle arms — stops round-tripping):
 #guard allActionsRoundtrip
