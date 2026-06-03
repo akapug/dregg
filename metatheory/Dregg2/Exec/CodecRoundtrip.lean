@@ -41,6 +41,7 @@ namespace Dregg2.Exec.CodecRoundtrip
 open Dregg2.Exec
 open Dregg2.Exec.FFI
 open Dregg2.Exec.FFI.Wide
+open Dregg2.Exec.TurnExecutorFull (QueueTxOpA)
 
 /-! ## §0a — the decimal-number leaf (`parseInt` / `parseNat` invert `toString`).
 
@@ -1567,6 +1568,11 @@ def isSimpleArm : TurnExecutorFull.FullActionA → Bool
   | .setFieldA .. => false
   | .exerciseA .. => false   -- RECURSES: carries a nested `;`-joined inner-effect array, not a flat arm.
   | .sealA ..     => false   -- carries a `Cap` PAYLOAD field (not a flat `N`/`I`/`A`); see `parseActionW_seal`.
+  -- WAVE-4 non-simple arms: a `0`/`1` BOOL flag (parsed under an `if hp ≤ 1` gate), and the two
+  -- LIST-bearing batch arms (a `QueueTxOpA` array / two `Nat` arrays) — closed separately below.
+  | .createCommittedEscrowA .. => false  -- carries the `hidingProof` flag; see `parseActionW_committedescrow`.
+  | .queueAtomicTxA ..         => false  -- carries the `OPS` `QueueTxOpA` array; see `parseActionW_qatomic`.
+  | .queuePipelineStepA ..     => false  -- carries two `NATSW` arrays; see `parseActionW_qpipe`.
   | _             => true
 
 /-- One `simple` arm, fully automatic: auto-dispatch to its tag, then collapse the `do`-block of `N`/`I`
@@ -2532,6 +2538,339 @@ theorem parseActionW_seal (pid : Nat) (actor : CellId) (payload : Authority.Cap)
     parseCap_encode payload (("]}":String).toList ++ rest), lit_append,
     Option.bind_eq_bind, Option.bind]
 
+/-! ### §7-WAVE4 — the WAVE-4 non-simple arms: the `createCommittedEscrowA` HIDING-FLAG arm and the two
+LIST-bearing batch arms (`queueAtomicTxA` / `queuePipelineStepA`). The flag arm carries a `0`/`1` `Bool`
+parsed under an `if hp ≤ 1` gate; the batch arms carry a `QueueTxOpA`/`Nat` array. -/
+
+set_option maxHeartbeats 1000000 in
+/-- **The WAVE-4 `createCommittedEscrowA` arm** — proved SEPARATELY because its 7th field is the
+`hidingProof` BOOL, encoded as a `0`/`1` flag and parsed under the `if hp ≤ 1` gate (which the generic
+`action_arm` `simp` cannot reduce). We case-split on `hidingProof`: `true` encodes `1` (`1 ≤ 1`, `1 == 1`),
+`false` encodes `0` (`0 ≤ 1`, `0 == 1 = false`), each recovering the flag exactly. -/
+theorem parseActionW_committedescrow (id : Nat) (actor creator recipient : CellId) (a : AssetId)
+    (amount : Int) (hidingProof : Bool) (rest : PState) :
+    parseActionW ((encodeActionW (.createCommittedEscrowA id actor creator recipient a amount hidingProof)).toList ++ rest)
+      = some (.createCommittedEscrowA id actor creator recipient a amount hidingProof, rest) := by
+  unfold parseActionW parseActionWFuel
+  -- the flag is encoded as `","` ++ ("1"/"0"); split it into a plain `","` literal so `cN_step` applies.
+  cases hidingProof with
+  | true =>
+      -- `simp` reduces the encoder's `if (true:Bool) then "1" else "0"` flag literal to `"1"`; we rewrite
+      -- it to `toString (1:Nat)` so the closing `cN_step` reads it (closer `]}`), then `simp` evaluates the
+      -- parser's `if 1 ≤ 1`/`(1 == 1) = true` gate to recover `true`.
+      simp only [encodeActionW, if_true]
+      rw [show ("1":String) = toString (1:Nat) from by decide]
+      simp only [String.toList_append, List.append_assoc]
+      skip_to_arm
+      simp only [lit_append, parseNat_toString _ _ (nd_litComma _),
+        cN_step _ _ (nd_litComma _), cN_step _ _ (nd_litClose _),
+        cI_step _ _ (nd_litComma _), Option.bind_eq_bind, Option.bind,
+        show ((1:Nat) ≤ 1) = True from by simp, if_true, beq_self_eq_true]
+  | false =>
+      -- `simp` reduces `if (false:Bool) then "1" else "0"` to `"0"` (the `false = true` decidable prop is
+      -- `False`); rewrite to `toString (0:Nat)`, then `simp` evaluates `0 ≤ 1`/`(0 == 1) = false`.
+      simp only [encodeActionW, Bool.false_eq_true, if_false]
+      rw [show ("0":String) = toString (0:Nat) from by decide]
+      simp only [String.toList_append, List.append_assoc]
+      skip_to_arm
+      simp only [lit_append, parseNat_toString _ _ (nd_litComma _),
+        cN_step _ _ (nd_litComma _), cN_step _ _ (nd_litClose _),
+        cI_step _ _ (nd_litComma _), Option.bind_eq_bind, Option.bind,
+        show ((0:Nat) ≤ 1) = True from by simp, if_true, show ((0:Nat) == 1) = false from by decide]
+
+-- A committed-escrow effect (privacy escrow, the `hidingProof = true` portal-discharged variant) round-trips:
+example : parseActionW ((encodeActionW (.createCommittedEscrowA 1 2 3 4 5 9 true)).toList ++ ['x'])
+            = some (.createCommittedEscrowA 1 2 3 4 5 9 true, ['x']) :=
+  parseActionW_committedescrow 1 2 3 4 5 9 true ['x']
+-- ...and the `hidingProof = false` variant too (the flag is REAL, not erased):
+example : parseActionW ((encodeActionW (.createCommittedEscrowA 1 2 3 4 5 9 false)).toList ++ ['x'])
+            = some (.createCommittedEscrowA 1 2 3 4 5 9 false, ['x']) :=
+  parseActionW_committedescrow 1 2 3 4 5 9 false ['x']
+
+/-! ### §7-WAVE4-LIST — the `queuePipelineStepA` (two `NATSW` arrays) and `queueAtomicTxA` (a `QueueTxOpA`
+array) arms. The list-roundtrip infrastructure mirrors §9's `parseNats`/§10's `parseBal` length-fuel loops
+verbatim: a `*_cons_shape` exposing the head, a `*_loop_works` induction, and the array-`encode` theorem. -/
+
+-- ===== the `NATSW` array (`parseNatsW ∘ encodeNatsW = id`) — STRUCTURALLY §9's `parseNats`. =====
+
+private def encodeNatsWTail (ns : List Nat) : String :=
+  ns.foldl (fun acc x => acc ++ "," ++ toString x) ""
+
+private theorem foldl_natsWTail (ns : List Nat) : ∀ (acc : String),
+    ns.foldl (fun s x => s ++ "," ++ toString x) acc
+      = acc ++ ns.foldl (fun s x => s ++ "," ++ toString x) "" := by
+  induction ns with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ toString b), ih ("" ++ "," ++ toString b)]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+private theorem encNatsWTail_cons_shape (b : Nat) (bs : List Nat) (rest : PState) :
+    (encodeNatsWTail (b :: bs)).toList ++ rest
+      = ',' :: ((toString b).toList ++ ((encodeNatsWTail bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeNatsWTail (b :: bs) = ("" ++ "," ++ toString b) ++ encodeNatsWTail bs from by
+      show (b :: bs).foldl (fun s x => s ++ "," ++ toString x) "" = _
+      rw [List.foldl_cons]; exact foldl_natsWTail bs ("" ++ "," ++ toString b)]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+private theorem encodeNatsW_cons_shape (a : Nat) (as : List Nat) (rest : PState) :
+    (encodeNatsW (a :: as)).toList ++ rest
+      = '[' :: ((toString a).toList ++ ((encodeNatsWTail as).toList ++ (']' :: rest))) := by
+  simp only [encodeNatsW]
+  rw [show (as.foldl (fun acc x => acc ++ "," ++ toString x) "") = encodeNatsWTail as from rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+private theorem parseNatsW_loop_works : ∀ (as : List Nat) (a : Nat) (rest : PState) (fuel : Nat),
+    ((toString a).toList ++ ((encodeNatsWTail as).toList ++ (']' :: rest))).length < fuel →
+    parseNatsW.loop fuel ((toString a).toList ++ ((encodeNatsWTail as).toList ++ (']' :: rest)))
+      = some (a :: as, rest) := by
+  intro as
+  induction as with
+  | nil =>
+      intro a rest fuel hf
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
+      rw [show (encodeNatsWTail ([] : List Nat)).toList = [] from rfl, List.nil_append]
+      unfold parseNatsW.loop
+      rw [parseNat_toString a (']' :: rest) (nd_brack rest)]
+      simp only []
+      rw [show lit "," (']' :: rest) = none from by
+            rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+            exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+      simp only []
+      rw [lit_brack]
+  | cons a2 as2 ih =>
+      intro a rest fuel hf
+      rw [encNatsWTail_cons_shape a2 as2 (']' :: rest)] at hf ⊢
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by
+        simp only [List.length_append, List.length_cons] at hf; omega⟩
+      unfold parseNatsW.loop
+      rw [parseNat_toString a _ (nd_comma _)]
+      simp only []
+      rw [lit_commaC]
+      simp only []
+      have hrec : ((toString a2).toList ++ ((encodeNatsWTail as2).toList ++ (']' :: rest))).length < f := by
+        simp only [List.length_append, List.length_cons] at hf ⊢; omega
+      rw [ih a2 rest f hrec]
+
+/-- **`parseNatsW ∘ encodeNatsW = id`** — the WAVE-4 `Nat`-list (sink arrays) roundtrip (§9's recipe). -/
+theorem parseNatsW_encode (ns : List Nat) (rest : PState) :
+    parseNatsW ((encodeNatsW ns).toList ++ rest) = some (ns, rest) := by
+  cases ns with
+  | nil =>
+      unfold parseNatsW
+      simp only [encodeNatsW]
+      rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+  | cons a as =>
+      unfold parseNatsW
+      rw [encodeNatsW_cons_shape a as rest]
+      obtain ⟨h0, t0, ht0, hh0dig, _, _⟩ := repr_cons a
+      have hempty : lit "[]"
+          ('[' :: ((toString a).toList ++ ((encodeNatsWTail as).toList ++ (']' :: rest)))) = none := by
+        rw [ht0, List.cons_append]
+        unfold lit
+        rw [show ("[]":String).toList = ['[', ']'] from by decide]
+        rw [litGo_cons_match, litGo_ne_head ']' [] h0 _ (by intro heq; subst heq; exact absurd hh0dig (by decide))]
+      rw [hempty]; simp only []
+      rw [show ('[' :: ((toString a).toList ++ ((encodeNatsWTail as).toList ++ (']' :: rest))))
+            = ("[":String).toList ++ ((toString a).toList ++ ((encodeNatsWTail as).toList ++ (']' :: rest)))
+            from rfl, lit_append]
+      simp only []
+      apply parseNatsW_loop_works as a rest
+      simp only [List.length_append, List.length_cons]; omega
+
+-- ===== the `OPS` array (`parseQueueTxOps ∘ encodeQueueTxOps = id`) — STRUCTURALLY §10's `parseBal`,
+-- with the self-delimiting element `encodeQueueTxOp` (a flat `enq`/`deq` tag closing on `]}`). =====
+
+/-- **One `QueueTxOpA` round-trips for ANY tail** (self-delimiting: it closes on `]}`, no post-byte
+condition). Dispatch on the `enq`/`deq` tag; each is a flat `N`/`I` do-block (§7 field combinators). -/
+theorem parseQueueTxOp_encode (op : QueueTxOpA) (rest : PState) :
+    parseQueueTxOp ((encodeQueueTxOp op).toList ++ rest) = some (op, rest) := by
+  cases op with
+  | enqueue id m actor cell depId dAsset deposit =>
+      unfold parseQueueTxOp
+      simp only [encodeQueueTxOp, String.toList_append, List.append_assoc]
+      rw [lit_append]
+      simp only [parseNat_toString _ _ (nd_litComma _),
+        cN_step _ _ (nd_litComma _), cN_step _ _ (nd_litClose _),
+        cI_step _ _ (nd_litClose _), lit_append, Option.bind_eq_bind, Option.bind]
+  | dequeue id actor cell depId deposit =>
+      unfold parseQueueTxOp
+      simp only [encodeQueueTxOp, String.toList_append, List.append_assoc]
+      -- the `enq` tag fails first (the `deq` shape is `{"deq":…`), then the `deq` arm fires.
+      rw [show lit "{\"enq\":[" (("{\"deq\":[":String).toList ++ _) = none from
+            lit_ne_pre "{\"enq\":[" "{\"deq\":[" _ (by decide) (by decide)]
+      simp only []
+      rw [lit_append]
+      simp only [parseNat_toString _ _ (nd_litComma _),
+        cN_step _ _ (nd_litComma _), cN_step _ _ (nd_litClose _),
+        cI_step _ _ (nd_litClose _), lit_append, Option.bind_eq_bind, Option.bind]
+
+private def encodeQueueTxOpsTail (ops : List QueueTxOpA) : String :=
+  ops.foldl (fun acc x => acc ++ "," ++ encodeQueueTxOp x) ""
+
+/-- Every `OP` opens with `'{'` (so the `OPS` body is `[{…`, making `lit "[]"` fail). -/
+private theorem encodeQueueTxOp_head (op : QueueTxOpA) : ∃ t, (encodeQueueTxOp op).toList = '{' :: t := by
+  cases op with
+  | enqueue id m actor cell depId dAsset deposit =>
+      refine ⟨("\"enq\":[" ++ toString id ++ "," ++ toString m ++ "," ++ toString actor ++ ","
+        ++ toString cell ++ "," ++ toString depId ++ "," ++ toString dAsset ++ ","
+        ++ toString deposit ++ "]}" : String).toList, ?_⟩
+      unfold encodeQueueTxOp
+      simp only [String.toList_append, show ("{\"enq\":[":String).toList = '{' :: "\"enq\":[".toList from by decide,
+        List.cons_append, List.nil_append, List.append_assoc]
+  | dequeue id actor cell depId deposit =>
+      refine ⟨("\"deq\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString cell ++ ","
+        ++ toString depId ++ "," ++ toString deposit ++ "]}" : String).toList, ?_⟩
+      unfold encodeQueueTxOp
+      simp only [String.toList_append, show ("{\"deq\":[":String).toList = '{' :: "\"deq\":[".toList from by decide,
+        List.cons_append, List.nil_append, List.append_assoc]
+
+private theorem foldl_opsTail (ops : List QueueTxOpA) : ∀ (acc : String),
+    ops.foldl (fun s x => s ++ "," ++ encodeQueueTxOp x) acc
+      = acc ++ ops.foldl (fun s x => s ++ "," ++ encodeQueueTxOp x) "" := by
+  induction ops with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ encodeQueueTxOp b), ih ("" ++ "," ++ encodeQueueTxOp b)]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+private theorem encOpsTail_cons_shape (b : QueueTxOpA) (bs : List QueueTxOpA) (rest : PState) :
+    (encodeQueueTxOpsTail (b :: bs)).toList ++ rest
+      = ',' :: ((encodeQueueTxOp b).toList ++ ((encodeQueueTxOpsTail bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeQueueTxOpsTail (b :: bs)
+        = ("" ++ "," ++ encodeQueueTxOp b) ++ encodeQueueTxOpsTail bs from by
+      show (b :: bs).foldl (fun s x => s ++ "," ++ encodeQueueTxOp x) "" = _
+      rw [List.foldl_cons]; exact foldl_opsTail bs ("" ++ "," ++ encodeQueueTxOp b)]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+private theorem encodeQueueTxOps_cons_shape (a : QueueTxOpA) (as : List QueueTxOpA) (rest : PState) :
+    (encodeQueueTxOps (a :: as)).toList ++ rest
+      = '[' :: ((encodeQueueTxOp a).toList ++ ((encodeQueueTxOpsTail as).toList ++ (']' :: rest))) := by
+  rw [show encodeQueueTxOps (a :: as) = "[" ++ encodeQueueTxOp a ++ encodeQueueTxOpsTail as ++ "]" from rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+private theorem parseQueueTxOps_loop_works : ∀ (as : List QueueTxOpA) (a : QueueTxOpA) (rest : PState) (fuel : Nat),
+    ((encodeQueueTxOp a).toList ++ ((encodeQueueTxOpsTail as).toList ++ (']' :: rest))).length < fuel →
+    parseQueueTxOps.loop fuel ((encodeQueueTxOp a).toList ++ ((encodeQueueTxOpsTail as).toList ++ (']' :: rest)))
+      = some (a :: as, rest) := by
+  intro as
+  induction as with
+  | nil =>
+      intro a rest fuel hf
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
+      rw [show (encodeQueueTxOpsTail ([] : List QueueTxOpA)).toList = [] from rfl, List.nil_append]
+      unfold parseQueueTxOps.loop
+      rw [parseQueueTxOp_encode a (']' :: rest)]
+      simp only []
+      rw [show lit "," (']' :: rest) = none from by
+            rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+            exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+      simp only []
+      rw [lit_brack]
+  | cons a2 as2 ih =>
+      intro a rest fuel hf
+      rw [encOpsTail_cons_shape a2 as2 (']' :: rest)] at hf ⊢
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by
+        simp only [List.length_append, List.length_cons] at hf; omega⟩
+      unfold parseQueueTxOps.loop
+      rw [parseQueueTxOp_encode a _]
+      simp only []
+      rw [lit_commaC]
+      simp only []
+      have hrec : ((encodeQueueTxOp a2).toList ++ ((encodeQueueTxOpsTail as2).toList ++ (']' :: rest))).length < f := by
+        simp only [List.length_append, List.length_cons] at hf ⊢; omega
+      rw [ih a2 rest f hrec]
+
+/-- **`parseQueueTxOps ∘ encodeQueueTxOps = id`** — the WAVE-4 atomic-batch `OPS` array roundtrip (§10's
+self-delimiting-element recipe, the element being a `QueueTxOpA`). -/
+theorem parseQueueTxOps_encode (ops : List QueueTxOpA) (rest : PState) :
+    parseQueueTxOps ((encodeQueueTxOps ops).toList ++ rest) = some (ops, rest) := by
+  cases ops with
+  | nil =>
+      unfold parseQueueTxOps
+      rw [show (encodeQueueTxOps ([] : List QueueTxOpA)) = "[]" from rfl]
+      rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+  | cons a as =>
+      unfold parseQueueTxOps
+      rw [encodeQueueTxOps_cons_shape a as rest]
+      have hempty : lit "[]"
+          ('[' :: ((encodeQueueTxOp a).toList ++ ((encodeQueueTxOpsTail as).toList ++ (']' :: rest)))) = none := by
+        obtain ⟨t, ht⟩ := encodeQueueTxOp_head a
+        rw [ht, List.cons_append]
+        unfold lit
+        rw [show ("[]":String).toList = ['[', ']'] from by decide]
+        rw [litGo_cons_match, litGo_ne_head ']' [] '{' _ (by decide)]
+      rw [hempty]; simp only []
+      rw [show ('[' :: ((encodeQueueTxOp a).toList ++ ((encodeQueueTxOpsTail as).toList ++ (']' :: rest))))
+            = ("[":String).toList ++ ((encodeQueueTxOp a).toList ++ ((encodeQueueTxOpsTail as).toList ++ (']' :: rest)))
+            from rfl, lit_append]
+      simp only []
+      apply parseQueueTxOps_loop_works as a rest
+      simp only [List.length_append, List.length_cons]; omega
+
+set_option maxHeartbeats 1000000 in
+/-- **The WAVE-4 `queueAtomicTxA` arm** — `{"qatomic":[actor,OPS]}`: read `actor` (post-tag `Nat`), then
+the `,` + the `OPS` `QueueTxOpA` array (via `parseQueueTxOps_encode`), then `]}`. -/
+theorem parseActionW_qatomic (actor : CellId) (ops : List QueueTxOpA) (rest : PState) :
+    parseActionW ((encodeActionW (.queueAtomicTxA actor ops)).toList ++ rest)
+      = some (.queueAtomicTxA actor ops, rest) := by
+  unfold parseActionW parseActionWFuel
+  simp only [encodeActionW, String.toList_append, List.append_assoc]
+  skip_to_arm
+  rw [lit_append]
+  -- read `actor` (closer `,`), then `lit ","` (via `lit_append`), then the `OPS` array, then `]}`. The
+  -- `Option.bind` reductions expose each step's input for the next rewrite.
+  simp only [parseNat_toString _ _ (nd_litComma _), Option.bind_eq_bind, Option.bind]
+  rw [lit_append]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseQueueTxOps_encode ops (("]}":String).toList ++ rest)]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]
+
+-- An atomic batch (one enqueue + one dequeue sub-op) round-trips (the WHAT decoder covers the batch arm):
+example : parseActionW ((encodeActionW (.queueAtomicTxA 1 [QueueTxOpA.enqueue 2 3 4 5 6 7 8,
+            QueueTxOpA.dequeue 9 10 11 12 13])).toList ++ ['x'])
+            = some (.queueAtomicTxA 1 [QueueTxOpA.enqueue 2 3 4 5 6 7 8,
+                QueueTxOpA.dequeue 9 10 11 12 13], ['x']) :=
+  parseActionW_qatomic 1 [QueueTxOpA.enqueue 2 3 4 5 6 7 8, QueueTxOpA.dequeue 9 10 11 12 13] ['x']
+
+set_option maxHeartbeats 1000000 in
+/-- **The WAVE-4 `queuePipelineStepA` arm** — `{"qpipe":[srcId,owner,SINKCELLS,SINKIDS]}`: read `srcId`
+(post-tag `Nat`) + `owner` (`cN`), then `,` + the two `NATSW` arrays (via `parseNatsW_encode`), then `]}`. -/
+theorem parseActionW_qpipe (srcId : Nat) (owner : CellId) (sinkCells sinkIds : List Nat) (rest : PState) :
+    parseActionW ((encodeActionW (.queuePipelineStepA srcId owner sinkCells sinkIds)).toList ++ rest)
+      = some (.queuePipelineStepA srcId owner sinkCells sinkIds, rest) := by
+  unfold parseActionW parseActionWFuel
+  simp only [encodeActionW, String.toList_append, List.append_assoc]
+  skip_to_arm
+  rw [lit_append]
+  -- read `srcId` (closer `,`) + `owner` (`cN`, closer `,`), then `,` + SINKCELLS, then `,` + SINKIDS, then
+  -- `]}`. Each `lit`/array step is followed by an `Option.bind` reduction exposing the next input.
+  simp only [parseNat_toString _ _ (nd_litComma _), cN_step _ _ (nd_litComma _),
+    Option.bind_eq_bind, Option.bind]
+  rw [lit_append]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseNatsW_encode sinkCells _]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [parseNatsW_encode sinkIds (("]}":String).toList ++ rest)]
+  simp only [Option.bind_eq_bind, Option.bind]
+  rw [lit_append]
+
+-- A pipeline step with two distinct sinks round-trips (the fan-out routing arm decodes exactly):
+example : parseActionW ((encodeActionW (.queuePipelineStepA 1 2 [3, 4] [5, 6])).toList ++ ['x'])
+            = some (.queuePipelineStepA 1 2 [3, 4] [5, 6], ['x']) :=
+  parseActionW_qpipe 1 2 [3, 4] [5, 6] ['x']
+
 -- A Wave-3 SEAL effect (the Cap-bearing arm) round-trips (the WHAT decoder is COMPLETE, every arm):
 example : parseActionW ((encodeActionW (.sealA 7 8 (Authority.Cap.endpoint 9 [.read]))).toList ++ ['x'])
             = some (.sealA 7 8 (Authority.Cap.endpoint 9 [.read]), ['x']) :=
@@ -3011,6 +3350,12 @@ theorem parseActionW_any (act : TurnExecutorFull.FullActionA) (rest : PState) (h
       -- `WfActionW` pins `inner = []` (the codec boundary); the empty-inner arm round-trips.
       simp only [WfActionW] at hwf; subst hwf
       exact parseActionW_exercise_nil actor target rest
+  -- WAVE-4 non-simple arms (the `hidingProof` flag + the two list-bearing batch arms):
+  | createCommittedEscrowA id actor creator recipient a amount hp =>
+      exact parseActionW_committedescrow id actor creator recipient a amount hp rest
+  | queueAtomicTxA actor ops => exact parseActionW_qatomic actor ops rest
+  | queuePipelineStepA srcId owner sinkCells sinkIds =>
+      exact parseActionW_qpipe srcId owner sinkCells sinkIds rest
   | _ => exact parseActionW_roundtrip _ rest rfl
 
 mutual
@@ -3644,6 +3989,12 @@ zero-sorry guarantee on the codec roundtrip). -/
 #assert_axioms parseAuthListW_roundtrip
 #assert_axioms parseActionW_roundtrip
 #assert_axioms parseActionW_setfield
+#assert_axioms parseActionW_committedescrow
+#assert_axioms parseNatsW_encode
+#assert_axioms parseQueueTxOp_encode
+#assert_axioms parseQueueTxOps_encode
+#assert_axioms parseActionW_qatomic
+#assert_axioms parseActionW_qpipe
 #assert_axioms parseAuths_encode
 #assert_axioms parseNats_encode
 #assert_axioms parseBal_encode

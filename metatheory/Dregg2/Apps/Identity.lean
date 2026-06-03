@@ -129,6 +129,104 @@ private theorem swissDropK_revoked (k : RecordKernelState) (sw : Nat)
       · injection h with h; subst h; rfl
       · injection h with h; subst h; rfl
 
+/-! ### WAVE-4 queue-batch frame lemmas — the atomic-tx / pipeline-step chains touch ONLY `queues`.
+
+`queueAtomicTxChainA` folds `queueTxOpStepA` sub-ops (each routing to the proven `queueEnqueueChainA`
+/`queueDequeueChainA`); `queuePipelineStepA` is a source `queueDequeueK` then a `pipelineFanoutK`
+enqueue fold. Every kernel write is to `queues` — `revoked` is a DISTINCT side-table, untouched. We hoist
+the `_revoked` frame for each so the new dispatch arms below close by `Eq.refl` after the chain. -/
+
+/-- `queueEnqueueChainA` commits through `queueEnqueueDepositK` (a `queues`-only write) — `revoked`
+untouched (the chained-state wrapper re-uses the same kernel, so `s'.kernel = k'`). -/
+private theorem queueEnqueueChainA_revoked {s s' : RecChainedState} {id m : Nat} {actor cell : CellId}
+    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
+    (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') :
+    s'.kernel.revoked = s.kernel.revoked := by
+  unfold queueEnqueueChainA at h
+  split at h
+  · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+    | none => rw [hk] at h; exact absurd h (by simp)
+    | some k' =>
+        rw [hk] at h; option_inj at h; subst h
+        exact queueEnqueueDepositK_revoked s.kernel id m actor cell depId dAsset deposit k' hk
+  · exact absurd h (by simp)
+
+/-- `queueDequeueChainA` commits through `queueDequeueRefundK` (a `queues`-only write) — `revoked`
+untouched. -/
+private theorem queueDequeueChainA_revoked {s s' : RecChainedState} {id : Nat} {actor cell : CellId}
+    {depId : Nat} {deposit : ℤ}
+    (h : queueDequeueChainA s id actor cell depId deposit = some s') :
+    s'.kernel.revoked = s.kernel.revoked := by
+  unfold queueDequeueChainA at h
+  split at h
+  · cases hk : queueDequeueRefundK s.kernel id actor depId with
+    | none => rw [hk] at h; exact absurd h (by simp)
+    | some kp =>
+        rw [hk] at h; obtain ⟨k', mhd⟩ := kp; option_inj at h; subst h
+        exact queueDequeueRefundK_revoked s.kernel id actor depId k' mhd hk
+  · exact absurd h (by simp)
+
+/-- A single atomic-batch sub-op (`queueTxOpStepA`) routes to the enqueue/dequeue chain — `revoked`
+untouched either way. -/
+private theorem queueTxOpStepA_revoked {s s' : RecChainedState} {op : QueueTxOpA}
+    (h : queueTxOpStepA s op = some s') : s'.kernel.revoked = s.kernel.revoked := by
+  cases op with
+  | enqueue id m actor cell depId dAsset deposit =>
+      exact queueEnqueueChainA_revoked (s := s) (s' := s') h
+  | dequeue id actor cell depId deposit =>
+      exact queueDequeueChainA_revoked (s := s) (s' := s') h
+
+/-- The all-or-nothing atomic batch `queueAtomicTxChainA` leaves `revoked` UNCHANGED — by induction over
+the op list, each committed sub-op frames `revoked` (`queueTxOpStepA_revoked`), chained by `Eq.trans`. -/
+private theorem queueAtomicTxChainA_revoked {s s' : RecChainedState} {ops : List QueueTxOpA}
+    (h : queueAtomicTxChainA s ops = some s') : s'.kernel.revoked = s.kernel.revoked := by
+  induction ops generalizing s with
+  | nil => simp only [queueAtomicTxChainA, Option.some.injEq] at h; subst h; rfl
+  | cons op rest ih =>
+      simp only [queueAtomicTxChainA] at h
+      cases hop : queueTxOpStepA s op with
+      | none => rw [hop] at h; exact absurd h (by simp)
+      | some s1 => rw [hop] at h; exact (ih h).trans (queueTxOpStepA_revoked hop)
+
+/-- The pipeline sink fan-out (`pipelineFanoutK`) is a `queueEnqueueK` fold — `revoked` untouched. By
+induction over the sink list, each committed enqueue frames `revoked`. -/
+private theorem pipelineFanoutK_revoked {k k' : RecordKernelState} {actor : CellId} {m : Nat}
+    {sinks : List CellId} {sids : List Nat}
+    (h : pipelineFanoutK k actor m sinks sids = some k') : k'.revoked = k.revoked := by
+  induction sinks generalizing k sids with
+  | nil => cases sids <;> (simp only [pipelineFanoutK, Option.some.injEq] at h; subst h; rfl)
+  | cons sink rest ih =>
+      cases sids with
+      | nil => simp only [pipelineFanoutK] at h; exact absurd h (by simp)
+      | cons sid sids' =>
+          simp only [pipelineFanoutK] at h
+          split at h
+          · cases hq : queueEnqueueK k sid m with
+            | none => rw [hq] at h; exact absurd h (by simp)
+            | some k1 =>
+                rw [hq] at h
+                exact (ih h).trans (queueEnqueueK_revoked k sid m k1 hq)
+          · exact absurd h (by simp)
+
+/-- The chained pipeline step (`queuePipelineStepA`) — source `queueDequeueK` then sink fan-out, both
+`queues`-only — leaves `revoked` UNCHANGED (chain by `Eq.trans`). -/
+private theorem queuePipelineStepA_revoked {s s' : RecChainedState} {srcId : Nat} {owner : CellId}
+    {sinkCells : List CellId} {sinkIds : List Nat}
+    (h : queuePipelineStepA s srcId owner sinkCells sinkIds = some s') :
+    s'.kernel.revoked = s.kernel.revoked := by
+  unfold queuePipelineStepA at h
+  cases hd : queueDequeueK s.kernel srcId owner with
+  | none => simp only [hd] at h; exact absurd h (by simp)
+  | some km =>
+      obtain ⟨k1, m⟩ := km
+      simp only [hd] at h
+      cases hf : pipelineFanoutK k1 owner m sinkCells sinkIds with
+      | none => simp only [hf] at h; exact absurd h (by simp)
+      | some k2 =>
+          simp only [hf, Option.some.injEq] at h; subst h
+          show k2.revoked = s.kernel.revoked
+          exact (pipelineFanoutK_revoked hf).trans (queueDequeueK_revoked s.kernel srcId owner k1 m hd)
+
 /-! ## Step 1 — `execFullA_revoked_eq`: the per-effect registry frame (46-arm dispatch).
 
 Every arm leaves `revoked` unchanged: no current effect grows the credential-revocation registry
@@ -375,16 +473,22 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
   | noteCreateA cm actor =>
       simp only [execFullA, noteCreateChainA, noteCreateCommitment] at h
       option_inj at h; subst h; rfl
-  | createCommittedEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; option_inj at h; subst h
-          show k'.revoked = s.kernel.revoked
-          unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
+  -- §committed-escrow (WAVE 4) — the §8 hiding-portal create. Under the discharged portal it routes to
+  -- the SAME escrow holding-store (`createEscrowKAsset`, a `bal`/`escrows` write), `revoked` untouched;
+  -- under a failed portal (`hidingProof = false`) the chain is `none` (the `else` branch absurds `h`).
+  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
+      simp only [execFullA, createCommittedEscrowChainA] at h
+      split at h
+      · simp only [createEscrowChainA] at h
+        cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            rw [hk] at h; option_inj at h; subst h
+            show k'.revoked = s.kernel.revoked
+            unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+      · exact absurd h (by simp)
   | releaseCommittedEscrowA id actor =>
       simp only [execFullA, releaseEscrowChainA] at h
       cases hk : releaseEscrowKAsset s.kernel id with
@@ -583,6 +687,22 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
   | refreshDelegationA actor child =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; rfl
+  -- §queue-batch (WAVE 4) — atomic-tx + pipeline-step route to `queues`-only chains; pipelined-send
+  -- leaves the kernel LITERALLY unchanged (only a clock row). NONE touches the revocation registry.
+  | queueAtomicTxA actor ops =>
+      simp only [execFullA, queueAtomicTxA] at h
+      cases hf : queueAtomicTxChainA s ops with
+      | none => simp only [hf] at h; exact absurd h (by simp)
+      | some s1 =>
+          simp only [hf, Option.some.injEq] at h; subst h
+          show s1.kernel.revoked = s.kernel.revoked
+          exact queueAtomicTxChainA_revoked hf
+  | queuePipelineStepA srcId owner sinkCells sinkIds =>
+      simp only [execFullA] at h
+      exact queuePipelineStepA_revoked h
+  | pipelinedSendA actor =>
+      -- `kernel := s.kernel` LITERALLY — only `log` grows; `revoked` is read straight off `s.kernel`.
+      simp only [execFullA, Option.some.injEq] at h; subst h; rfl
 
 /-- **`execInnerA_revoked_eq`** — the inner-effect fold an `exerciseA` recurses through leaves the
 credential revocation registry UNCHANGED. Mutual with `execFullA_revoked_eq`; chains `Eq.trans`. -/

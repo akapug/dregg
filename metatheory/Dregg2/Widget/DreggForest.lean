@@ -52,7 +52,7 @@ namespace Dregg2.Widget
 
 These are the heart of "no placeholders": each is a total fold over the ACTUAL inductive, so the glyph a
 node/edge shows is a function of the value. `ctorName` returns the genuine `FullActionA` constructor name
-(all 46 arms of `TurnExecutorFull.lean:1928`); `ctorSummary` additionally splices the constructor's real
+(all 56 arms of `TurnExecutorFull.lean`'s `FullActionA`); `ctorSummary` additionally splices the constructor's real
 argument vector. Swap the forest and the labels follow — nothing is hard-coded. -/
 
 /-- One `Auth` right, short. -/
@@ -84,7 +84,7 @@ def capTargetText (c : Cap) : String :=
   | none   => "none (null cap)"
 
 /-- **`ctorName a`** — the genuine `FullActionA` constructor name at this node. A TOTAL fold over the real
-46-constructor inductive (`TurnExecutorFull.lean:1928`); this is the node's headline glyph, derived from
+56-constructor inductive (`TurnExecutorFull.lean`'s `FullActionA`); this is the node's headline glyph, derived from
 the value (NOT a placeholder). -/
 def ctorName : FullActionA → String
   | .balanceA _ _              => "balanceA"
@@ -116,7 +116,7 @@ def ctorName : FullActionA → String
   | .slashObligationA _ _      => "slashObligationA"
   | .noteSpendA _ _            => "noteSpendA"
   | .noteCreateA _ _           => "noteCreateA"
-  | .createCommittedEscrowA _ _ _ _ _ _ => "createCommittedEscrowA"
+  | .createCommittedEscrowA _ _ _ _ _ _ _ => "createCommittedEscrowA"
   | .releaseCommittedEscrowA _ _ => "releaseCommittedEscrowA"
   | .refundCommittedEscrowA _ _  => "refundCommittedEscrowA"
   | .bridgeLockA _ _ _ _ _ _   => "bridgeLockA"
@@ -132,6 +132,9 @@ def ctorName : FullActionA → String
   | .queueEnqueueA _ _ _ _ _ _ _ => "queueEnqueueA"
   | .queueDequeueA _ _ _ _ _   => "queueDequeueA"
   | .queueResizeA _ _ _ _      => "queueResizeA"
+  | .queueAtomicTxA _ _        => "queueAtomicTxA"
+  | .queuePipelineStepA _ _ _ _ => "queuePipelineStepA"
+  | .pipelinedSendA _          => "pipelinedSendA"
   | .exportSturdyRefA _ _ _ _ _ => "exportSturdyRefA"
   | .enlivenRefA _ _ _ _       => "enlivenRefA"
   | .swissHandoffA _ _ _ _     => "swissHandoffA"
