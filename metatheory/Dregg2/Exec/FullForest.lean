@@ -139,9 +139,10 @@ def targetOf : FullActionA → CellId
   | .dropRefA holder _      => holder
   | .revokeDelegationA holder _ => holder
   | .validateHandoffA intro _ _ => intro
-  | .exerciseA actor _      => actor
-  -- §MA-supply: createCell/spawn act on the fresh cell they mint; bridgeMint on the credited cell.
+  | .exerciseA actor _ _    => actor
+  -- §MA-supply: createCell/spawn/factory act on the fresh cell they mint; bridgeMint on the credited cell.
   | .createCellA _ newCell  => newCell
+  | .createCellFromFactoryA _ newCell _ => newCell
   | .spawnA _ child _       => child
   | .bridgeMintA _ cell _ _ => cell
   -- §MA-escrow: escrow/obligation/committed act on the debited `creator`/`obligor` cell; notes act on
@@ -150,9 +151,11 @@ def targetOf : FullActionA → CellId
   | .releaseEscrowA _ actor                 => actor
   | .refundEscrowA _ actor                  => actor
   | .createObligationA _ _ obligor _ _ _    => obligor
+  | .fulfillObligationA _ actor             => actor
+  | .slashObligationA _ actor               => actor
   | .noteSpendA _ actor                     => actor
   | .noteCreateA _ actor                    => actor
-  | .createCommittedEscrowA _ _ creator _ _ _ => creator
+  | .createCommittedEscrowA _ _ creator _ _ _ _ => creator
   | .releaseCommittedEscrowA _ actor        => actor
   | .refundCommittedEscrowA _ actor         => actor
   -- §MA-bridge: the bridge LOCK acts on the debited `originator` cell; finalize/cancel act on the
@@ -160,11 +163,12 @@ def targetOf : FullActionA → CellId
   | .bridgeLockA _ _ originator _ _ _       => originator
   | .bridgeFinalizeA _ actor _ _            => actor
   | .bridgeCancelA _ actor                  => actor
-  -- §MA-seal: the 6 simple bal-neutral effects act on the WRITTEN cell (the flag/metadata/refusal
-  -- record they touch); `createSealPair` acts on the `sealerHolder` it writes the pair record into.
-  | .sealA _ cell                           => cell
-  | .unsealA _ cell                         => cell
-  | .createSealPairA _ sealerHolder _       => sealerHolder
+  -- §MA-seal (Wave-3 DE-SHADOW): seal acts on the sealing `actor` (the box-storing node); unseal on the
+  -- `recipient` (the cap's new holder); createSealPair on the `sealerHolder`. makeSovereign/refusal/
+  -- receiptArchive act on the WRITTEN cell.
+  | .sealA _ actor _                        => actor
+  | .unsealA _ _ recipient                  => recipient
+  | .createSealPairA _ _ sealerHolder _     => sealerHolder
   | .makeSovereignA _ cell                  => cell
   | .refusalA _ cell                        => cell
   | .receiptArchiveA _ cell                 => cell
@@ -174,12 +178,23 @@ def targetOf : FullActionA → CellId
   | .queueEnqueueA _ _ _ cell _ _ _         => cell
   | .queueDequeueA _ _ cell _ _             => cell
   | .queueResizeA _ _ _ cell                => cell
+  -- §MA-queue-batch (WAVE 4): the atomic batch + pipelinedSend act on the `actor` (the batch-commit /
+  -- apply-time node); the pipeline step on the source-queue `owner` (the dequeuer the routing roots at).
+  | .queueAtomicTxA actor _                 => actor
+  | .queuePipelineStepA _ owner _ _         => owner
+  | .pipelinedSendA actor                   => actor
   -- §MA-swiss: the 4 CapTP swiss-table effects act on the exporting/holding `exporter` cell (the
   -- `stateAuthB`-gated node the chained step touches).
   | .exportSturdyRefA _ _ exporter _ _      => exporter
   | .enlivenRefA _ _ exporter _             => exporter
   | .swissHandoffA _ _ _ exporter           => exporter
   | .swissDropA _ _ exporter                => exporter
+  -- §MA-lifecycle (Wave-3): seal/unseal/destroy act on the `cell` (the lifecycle-transitioned node);
+  -- refresh on the `child` (the self-refreshed delegate). The `stateAuthB`-gated nodes the steps touch.
+  | .cellSealA _ cell                       => cell
+  | .cellUnsealA _ cell                     => cell
+  | .cellDestroyA _ cell _                  => cell
+  | .refreshDelegationA _ child             => child
 
 /-! ## §2 — `execFullForestA`: run the tree as an ALL-OR-NOTHING transaction (the executable artifact).
 
@@ -785,7 +800,7 @@ balance-NEUTRAL in EVERY asset (per-asset net `0`) — the cap graph moves, the 
 def authFullForest : FullForestA :=
   ⟨ .introduceA 9 1 0
   , [ { holder := 9, keep := [Auth.read], parentCap := .node 0
-      , sub := ⟨ .exerciseA 9 0, [] ⟩ } ] ⟩
+      , sub := ⟨ .exerciseA 9 0 [], [] ⟩ } ] ⟩
 
 #eval (execFullForestA fma0 authFullForest).isSome                            -- true (authority tree commits)
 -- The pre-order lowering is the 2 authority node-actions:

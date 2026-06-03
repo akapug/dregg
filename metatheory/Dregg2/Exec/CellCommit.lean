@@ -259,6 +259,52 @@ theorem queueResizeK_commitments {k k' : RecordKernelState} {id newCap : Nat}
     · simp only [Option.some.injEq] at h; subst h; rfl
     · exact absurd h (by simp)
 
+/-- WAVE 4: one atomic-batch sub-op leaves `commitments` unchanged (the deposit-park frames it via the
+escrow-create / settle bodies; the FIFO move via the queue bodies). -/
+theorem queueTxOpStepA_commitments {s s' : RecChainedState} {op : QueueTxOpA}
+    (h : queueTxOpStepA s op = some s') : s'.kernel.commitments = s.kernel.commitments := by
+  cases op with
+  | enqueue id m actor cell depId dAsset deposit =>
+      simp only [queueTxOpStepA, queueEnqueueChainA] at h; split at h
+      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact queueEnqueueDepositK_commitments hk
+      · exact absurd h (by simp)
+  | dequeue id actor cell depId deposit =>
+      simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
+      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some p => obtain ⟨k', mh⟩ := p
+                    rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact queueDequeueRefundK_commitments hk
+      · exact absurd h (by simp)
+
+/-- WAVE 4: the ALL-OR-NOTHING atomic batch leaves `commitments` unchanged (induction over the sub-ops). -/
+theorem queueAtomicTxChainA_commitments {s s' : RecChainedState} {ops : List QueueTxOpA}
+    (h : queueAtomicTxChainA s ops = some s') : s'.kernel.commitments = s.kernel.commitments := by
+  induction ops generalizing s with
+  | nil => simp only [queueAtomicTxChainA, Option.some.injEq] at h; subst h; rfl
+  | cons op rest ih =>
+      simp only [queueAtomicTxChainA] at h
+      cases hop : queueTxOpStepA s op with
+      | none => rw [hop] at h; exact absurd h (by simp)
+      | some s1 => rw [hop] at h; rw [ih h, queueTxOpStepA_commitments hop]
+
+/-- WAVE 4: the pipeline fan-out enqueue fold leaves `commitments` unchanged (each `queueEnqueueK` frames it). -/
+theorem pipelineFanoutK_commitments {k k' : RecordKernelState} {actor : CellId} {m : Nat}
+    {sinks : List CellId} {sids : List Nat}
+    (h : pipelineFanoutK k actor m sinks sids = some k') : k'.commitments = k.commitments := by
+  induction sinks generalizing k sids with
+  | nil => cases sids <;> (simp only [pipelineFanoutK, Option.some.injEq] at h; subst h; rfl)
+  | cons sink rest ih =>
+      cases sids with
+      | nil => simp only [pipelineFanoutK] at h; exact absurd h (by simp)
+      | cons sid sids' =>
+          simp only [pipelineFanoutK] at h; split at h
+          · cases hq : queueEnqueueK k sid m with
+            | none => rw [hq] at h; exact absurd h (by simp)
+            | some k1 => rw [hq] at h; rw [ih h, queueEnqueueK_commitments hq]
+          · exact absurd h (by simp)
+
 /-- Swiss export leaves `commitments` unchanged (edits only `swiss`). -/
 theorem swissExportK_commitments {k k' : RecordKernelState} {sw : Nat} {exporter target : CellId}
     {rights : List Auth} (h : swissExportK k sw exporter target rights = some k') :
@@ -298,18 +344,20 @@ theorem swissDropK_commitments {k k' : RecordKernelState} {sw : Nat}
 
 /-! ## Step 1 — `execFullA_commitments_grow`: the PER-STEP registry frame (grow-only across one step). -/
 
+mutual
 /-- **`execFullA_commitments_grow` (PROVED) — THE per-step registry frame.** A committed real `execFullA`
 step only GROWS the note-commitment set: `s.kernel.commitments ⊆ s'.kernel.commitments`. By case analysis
-on the 46-effect kind — `noteCreate` conses a fresh commitment (`noteCreateCommitment`, so the old set is a
+on the effect kind — `noteCreate` conses a fresh commitment (`noteCreateCommitment`, so the old set is a
 sublist hence subset), and EVERY OTHER effect leaves `commitments` literally UNCHANGED (each via its
 per-mutator frame above; the chained `stateStep`/`emit`/`attenuate`/`exercise`/`spawn`/`createCell`
-wrappers edit `cell`/`caps`/`accounts`/`bal`/`escrows`/`queues`/`swiss`, never `commitments`). This is the
-META-FILL-C grow-only DUAL of the nullifier registry, on the SHIPPED executor — the load-bearing one-step
-content of the commitment-persistence crown. -/
+wrappers edit `cell`/`caps`/`accounts`/`bal`/`escrows`/`queues`/`swiss`, never `commitments`); `exerciseA`
+RECURSES (mutual `execInnerA_commitments_grow`). This is the META-FILL-C grow-only DUAL of the nullifier
+registry, on the SHIPPED executor — the load-bearing one-step content of the commitment-persistence crown. -/
 theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
     (h : execFullA s fa = some s') : s.kernel.commitments ⊆ s'.kernel.commitments := by
   -- A uniform "the kernel mutator left `commitments` fixed" closer for the framing arms:
   -- expose `s' = { kernel := k', … }`, rewrite `commitments` by the per-mutator frame, `subset_refl`.
+  -- `exerciseA` RECURSES — its inner fold can only GROW the set (mutual `execInnerA_commitments_grow`).
   cases fa with
   | balanceA t a =>
       simp only [execFullA, recCexecAsset] at h
@@ -335,7 +383,8 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact subset_of_commitments_eq (recKBurnAsset_commitments hk)
   | setFieldA actor cell f v =>
-      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      -- §SLOT-CAVEAT: `setFieldA` runs the caveat-gated write; peel it to the `stateStep` post-state.
+      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq h); subst hs'
       exact subset_of_commitments_eq (writeField_commitments _ _ _ _)
   | emitEventA actor cell topic data =>
       simp only [execFullA, emitStep, Option.some.injEq] at h; subst h
@@ -373,13 +422,23 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKDelegate s.kernel intro rec t with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact subset_of_commitments_eq (recKDelegate_commitments hk)
-  | exerciseA actor t =>
-      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := exerciseStepA_factors h; subst hs'
-      exact List.Subset.refl _
+  | exerciseA actor t inner =>
+      simp only [execFullA] at h
+      cases hg : exerciseStepA s actor t with
+      | none => rw [hg] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [hg] at h
+          obtain ⟨_, hs1⟩ := exerciseStepA_factors hg
+          have hk : s1.kernel.commitments = s.kernel.commitments := by rw [hs1]
+          exact hk ▸ execInnerA_commitments_grow s1 s' inner h
   | createCellA actor newCell =>
       simp only [execFullA] at h
       obtain ⟨_, _, hs'⟩ := createCellChainA_factors h; subst hs'
       exact subset_of_commitments_eq (createCellIntoAsset_commitments _ _)
+  | createCellFromFactoryA actor newCell vk =>
+      -- §MA-factory: the factory install leaves `commitments` UNTOUCHED (frame lemma).
+      simp only [execFullA] at h
+      exact subset_of_commitments_eq (createCellFromFactoryChainA_sideTables h).1
   | spawnA actor child target =>
       simp only [execFullA] at h
       obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors h; subst hs'
@@ -411,6 +470,17 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact subset_of_commitments_eq (createEscrowKAsset_commitments hk)
+  -- fulfill/slash route to refund/release (escrow SETTLE) — `commitments` literally unchanged.
+  | fulfillObligationA id actor =>
+      simp only [execFullA, refundEscrowChainA] at h
+      cases hk : refundEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact subset_of_commitments_eq (refundEscrowKAsset_commitments hk)
+  | slashObligationA id actor =>
+      simp only [execFullA, releaseEscrowChainA] at h
+      cases hk : releaseEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact subset_of_commitments_eq (releaseEscrowKAsset_commitments hk)
   | noteSpendA nf actor =>
       simp only [execFullA, noteSpendChainA] at h
       cases hk : noteSpendNullifier s.kernel nf with
@@ -422,11 +492,12 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       show s.kernel.commitments ⊆ (noteCreateCommitment s.kernel cm).commitments
       unfold noteCreateCommitment
       exact List.subset_cons_self cm s.kernel.commitments
-  | createCommittedEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact subset_of_commitments_eq (createEscrowKAsset_commitments hk)
+  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
+      simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
+      · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact subset_of_commitments_eq (createEscrowKAsset_commitments hk)
+      · exact absurd h (by simp)
   | releaseCommittedEscrowA id actor =>
       simp only [execFullA, releaseEscrowChainA] at h
       cases hk : releaseEscrowKAsset s.kernel id with
@@ -456,15 +527,17 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
         | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h
                      exact subset_of_commitments_eq (bridgeCancelKAsset_commitments hk)
       · exact absurd h (by simp)
-  | sealA actor cell =>
-      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
-      exact subset_of_commitments_eq (writeField_commitments _ _ _ _)
-  | unsealA actor cell =>
-      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
-      exact subset_of_commitments_eq (writeField_commitments _ _ _ _)
-  | createSealPairA actor sealerHolder x =>
-      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
-      exact subset_of_commitments_eq (writeField_commitments _ _ _ _)
+  -- §seal (Wave-3 DE-SHADOW) — seal/unseal/createSealPair edit `caps`/`sealedBoxes`, never `commitments`
+  -- (frame: `rfl`); makeSovereign/refusal/receiptArchive write the cell record.
+  | sealA pid actor payload =>
+      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'
+      exact subset_of_commitments_eq rfl
+  | unsealA pid actor recipient =>
+      simp only [execFullA] at h; obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'
+      exact subset_of_commitments_eq rfl
+  | createSealPairA pid actor sealerHolder x =>
+      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'
+      exact subset_of_commitments_eq rfl
   | makeSovereignA actor cell =>
       simp only [execFullA] at h; obtain ⟨_, hs'⟩ := makeSovereignStep_factors h; subst hs'
       exact subset_of_commitments_eq (makeSovereignKernel_commitments _ _)
@@ -499,6 +572,21 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact subset_of_commitments_eq (queueResizeK_commitments hk)
       · exact absurd h (by simp)
+  -- §MA-queue-batch (WAVE 4): the atomic batch / pipeline step edit only `queues`/`escrows`/`bal` (the
+  -- deposit park, the FIFO move), never `commitments` (the witness lemmas + frame helpers); pipelinedSend
+  -- edits NOTHING.
+  | queueAtomicTxA actor ops =>
+      simp only [execFullA] at h
+      obtain ⟨s1, hf, _, hk⟩ := queueAtomicTxA_atomic_witness h
+      rw [show s'.kernel.commitments = s1.kernel.commitments from by rw [hk]]
+      exact subset_of_commitments_eq (queueAtomicTxChainA_commitments hf)
+  | queuePipelineStepA srcId owner sinkCells sinkIds =>
+      simp only [execFullA] at h
+      obtain ⟨k1, mh, hd, hfo⟩ := queuePipelineStepA_routing_witness h
+      exact subset_of_commitments_eq
+        ((pipelineFanoutK_commitments hfo).trans (queueDequeueK_commitments hd))
+  | pipelinedSendA actor =>
+      simp only [execFullA, Option.some.injEq] at h; subst h; exact subset_of_commitments_eq rfl
   | exportSturdyRefA sw actor exporter target rights =>
       simp only [execFullA, swissExportChainA] at h; split at h
       · cases hk : swissExportK s.kernel sw exporter target rights with
@@ -523,6 +611,37 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; exact subset_of_commitments_eq (swissDropK_commitments hk)
       · exact absurd h (by simp)
+  -- §lifecycle (Wave-3) — seal/unseal/destroy edit `lifecycle`/`deathCert`; refresh edits `delegations`
+  -- — none touch `commitments` (frame: `rfl`).
+  | cellSealA actor cell =>
+      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := cellSealChainA_factors h; subst hs'
+      exact subset_of_commitments_eq rfl
+  | cellUnsealA actor cell =>
+      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := cellUnsealChainA_factors h; subst hs'
+      exact subset_of_commitments_eq rfl
+  | cellDestroyA actor cell ch =>
+      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := cellDestroyChainA_factors h; subst hs'
+      exact subset_of_commitments_eq rfl
+  | refreshDelegationA actor child =>
+      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'
+      exact subset_of_commitments_eq rfl
+
+/-- **`execInnerA_commitments_grow`** — the inner-effect fold an `exerciseA` recurses through never
+shrinks the commitment set. Mutual with `execFullA_commitments_grow`; chains `List.Subset.trans`. -/
+theorem execInnerA_commitments_grow (s s' : RecChainedState) (inner : List FullActionA)
+    (h : execInnerA s inner = some s') : s.kernel.commitments ⊆ s'.kernel.commitments := by
+  cases inner with
+  | nil => simp only [execInnerA, Option.some.injEq] at h; subst h; exact List.Subset.refl _
+  | cons a rest =>
+      simp only [execInnerA] at h
+      cases ha : execFullA s a with
+      | none => rw [ha] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [ha] at h
+          exact List.Subset.trans
+            (execFullA_commitments_grow s s1 a ha)
+            (execInnerA_commitments_grow s1 s' rest h)
+end
 
 /-! ## Step 2 — the turn/forest lift: a committed full-FOREST only grows `commitments`. -/
 

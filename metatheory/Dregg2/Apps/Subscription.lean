@@ -59,7 +59,7 @@ open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Authority
-open Dregg2.Exec.EffectsState (stateStep stateStep_factors)
+open Dregg2.Exec.EffectsState (stateStep stateStep_factors stateStepGuarded_eq)
 open Dregg2.Tactics
 
 /-! ## §A — The faithful self-contained slot automaton: `seq_tail ≤ seq_head`, proved + carried forever.
@@ -362,6 +362,53 @@ private theorem queueDequeueRefundK_subWF {k k' : RecordKernelState} {id : Nat} 
         · exact absurd hh (by simp)                                -- target not a live account
       · exact absurd hh (by simp)                                  -- deposit record absent
 
+/-- WAVE 4: one atomic-batch sub-op preserves `subWF` (the deposit-enqueue / refund-dequeue movers). -/
+private theorem queueTxOpStepA_subWF {s s' : RecChainedState} {op : QueueTxOpA}
+    (hh : queueTxOpStepA s op = some s') (h : subWF s.kernel) : subWF s'.kernel := by
+  cases op with
+  | enqueue id m actor cell depId dAsset deposit =>
+      simp only [queueTxOpStepA, queueEnqueueChainA] at hh; split at hh
+      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+        | none => rw [hk] at hh; exact absurd hh (by simp)
+        | some k' => rw [hk] at hh; simp only [Option.some.injEq] at hh; subst hh
+                     exact queueEnqueueDepositK_subWF hk h
+      · exact absurd hh (by simp)
+  | dequeue id actor cell depId deposit =>
+      simp only [queueTxOpStepA, queueDequeueChainA] at hh; split at hh
+      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+        | none => rw [hk] at hh; exact absurd hh (by simp)
+        | some p => obtain ⟨k', mh⟩ := p
+                    rw [hk] at hh; simp only [Option.some.injEq] at hh; subst hh
+                    exact queueDequeueRefundK_subWF hk h
+      · exact absurd hh (by simp)
+
+/-- WAVE 4: the ALL-OR-NOTHING atomic batch preserves `subWF` (induction over the sub-ops). -/
+private theorem queueAtomicTxChainA_subWF {s s' : RecChainedState} {ops : List QueueTxOpA}
+    (hh : queueAtomicTxChainA s ops = some s') (h : subWF s.kernel) : subWF s'.kernel := by
+  induction ops generalizing s with
+  | nil => simp only [queueAtomicTxChainA, Option.some.injEq] at hh; subst hh; exact h
+  | cons op rest ih =>
+      simp only [queueAtomicTxChainA] at hh
+      cases hop : queueTxOpStepA s op with
+      | none => rw [hop] at hh; exact absurd hh (by simp)
+      | some s1 => rw [hop] at hh; exact ih hh (queueTxOpStepA_subWF hop h)
+
+/-- WAVE 4: the pipeline fan-out enqueue fold preserves `subWF` (each sink `queueEnqueueK` is within cap). -/
+private theorem pipelineFanoutK_subWF {k k' : RecordKernelState} {actor : CellId} {m : Nat}
+    {sinks : List CellId} {sids : List Nat}
+    (hh : pipelineFanoutK k actor m sinks sids = some k') (h : subWF k) : subWF k' := by
+  induction sinks generalizing k sids with
+  | nil => cases sids <;> (simp only [pipelineFanoutK, Option.some.injEq] at hh; subst hh; exact h)
+  | cons sink rest ih =>
+      cases sids with
+      | nil => simp only [pipelineFanoutK] at hh; exact absurd hh (by simp)
+      | cons sid sids' =>
+          simp only [pipelineFanoutK] at hh; split at hh
+          · cases hq : queueEnqueueK k sid m with
+            | none => rw [hq] at hh; exact absurd hh (by simp)
+            | some k1 => rw [hq] at hh; exact ih hh (queueEnqueueK_subWF hq h)
+          · exact absurd hh (by simp)
+
 /-! ### §B.2 — `execFullA_subWF_preserved`: the per-effect FRAME (the 46-arm dispatch).
 
 Mirrors `CellNullifier.execFullA_nullifiers_grow`'s walk. Only the FOUR queue arms touch `queues`
@@ -370,12 +417,13 @@ shrinks, resize's gate is `len ≤ newCap`); the OTHER 42 arms leave `queues` li
 `subWF` is preserved via `subWF_of_queues_eq` (the `.queues` projection is `rfl` for a record-update of
 another field). -/
 
+mutual
 /-- **`execFullA_subWF_preserved` (PROVED) — the per-effect subscription FRAME.** A committed
 `FullActionA` preserves `subWF`: NO queue ends over capacity. The four queue effects move `queues` but
 keep every record within capacity (the capacity gate of `queueEnqueueK` / the resize gate / the
-allocate-empty / the dequeue-shrink); the other 42 effects touch other kernel fields only (frame:
-`queues` literally unchanged). The structural dual of the conservation frame
-`execFullA_ledger_per_asset` and of `CellNullifier`'s registry frame `execFullA_nullifiers_grow`. -/
+allocate-empty / the dequeue-shrink); the other effects touch other kernel fields only (frame: `queues`
+literally unchanged); `exerciseA` RECURSES (mutual `execInnerA_subWF_preserved`). The structural dual of
+the conservation frame `execFullA_ledger_per_asset` and `CellNullifier`'s `execFullA_nullifiers_grow`. -/
 theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
     (h : execFullA s fa = some s') (hwf : subWF s.kernel) : subWF s'.kernel := by
   cases fa with
@@ -426,8 +474,9 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
           · exact absurd hk (by simp)
   -- §pure-state — `stateStep` / `emitStep` (field write / event), a `cell`-only update.
   | setFieldA actor cell f v =>
+      -- §SLOT-CAVEAT: peel the caveat gate (`stateStepGuarded_eq`); the field write never edits `queues`.
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact hwf
+      obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq h); subst hs'; exact hwf
   | emitEventA actor cell topic data =>
       simp only [execFullA, emitStep] at h
       option_inj at h; subst h; exact hwf
@@ -481,14 +530,27 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
           unfold recKDelegate at hk; split at hk
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
-  | exerciseA actor t =>
+  | exerciseA actor t inner =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := exerciseStepA_factors h; subst hs'; exact hwf
+      cases hg : exerciseStepA s actor t with
+      | none => rw [hg] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [hg] at h
+          obtain ⟨_, hs1⟩ := exerciseStepA_factors hg
+          -- the hold-gate frames `queues`; the inner fold preserves `subWF` step-by-step.
+          have hwf1 : subWF s1.kernel := subWF_of_queues_eq (k := s.kernel) (by rw [hs1]) hwf
+          exact execInnerA_subWF_preserved s1 s' inner h hwf1
   -- §supply-growth — createCell/spawn factor through their gates (createCellIntoAsset / + caps grant —
   -- neither touches `queues`); bridgeMint reuses recCMintAsset.
   | createCellA actor newCell =>
       obtain ⟨_, _, hs'⟩ := createCellChainA_factors (by simpa only [execFullA] using h)
       subst hs'; exact hwf
+  | createCellFromFactoryA actor newCell vk =>
+      -- §MA-factory: the factory install edits `cell`/`slotCaveats`/`accounts`/`bal`, never `queues`.
+      obtain ⟨_, s1, _, _, hc, hs'⟩ :=
+        createCellFromFactoryChainA_factors (by simpa only [execFullA] using h)
+      obtain ⟨_, _, hs1⟩ := createCellChainA_factors hc
+      subst hs' hs1; exact hwf
   | spawnA actor child target =>
       obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
       subst hs'
@@ -550,6 +612,33 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
           unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
+  -- fulfill/slash route to refund/release (escrow SETTLE) — `queues` literally unchanged (frame).
+  | fulfillObligationA id actor =>
+      simp only [execFullA, refundEscrowChainA] at h
+      cases hk : refundEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; option_inj at h; subst h
+          refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
+          unfold refundEscrowKAsset settleEscrowRawAsset at hk
+          split at hk
+          · split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          · exact absurd hk (by simp)
+  | slashObligationA id actor =>
+      simp only [execFullA, releaseEscrowChainA] at h
+      cases hk : releaseEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; option_inj at h; subst h
+          refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
+          unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+          split at hk
+          · split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          · exact absurd hk (by simp)
   -- §note — spend grows `nullifiers`, create grows `commitments` — `queues` untouched in both.
   | noteSpendA nf actor =>
       simp only [execFullA, noteSpendChainA] at h
@@ -564,16 +653,17 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
   | noteCreateA cm actor =>
       simp only [execFullA, noteCreateChainA, noteCreateCommitment] at h
       option_inj at h; subst h; exact hwf
-  | createCommittedEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; option_inj at h; subst h
-          refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-          unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
+  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
+      simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
+      · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            rw [hk] at h; option_inj at h; subst h
+            refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
+            unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+      · exact absurd h (by simp)
   | releaseCommittedEscrowA id actor =>
       simp only [execFullA, releaseEscrowChainA] at h
       cases hk : releaseEscrowKAsset s.kernel id with
@@ -641,16 +731,17 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
               · exact absurd hk (by simp)
             · exact absurd hk (by simp)
       · exact absurd h (by simp)
-  -- §seal — six bal-neutral field writes via stateStep / makeSovereignStep (cell-only update).
-  | sealA actor cell =>
+  -- §seal — the DE-SHADOWED seal/unseal/createSealPair edit `caps`/`sealedBoxes`; makeSovereign/refusal/
+  -- receiptArchive write the cell record — none touch `queues` (frame: `subWF` preserved).
+  | sealA pid actor payload =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact hwf
-  | unsealA actor cell =>
+      obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; exact hwf
+  | unsealA pid actor recipient =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact hwf
-  | createSealPairA actor sealerHolder unsealerHolder =>
+      obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'; exact hwf
+  | createSealPairA pid actor sealerHolder unsealerHolder =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact hwf
+      obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'; exact hwf
   | makeSovereignA actor cell =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := makeSovereignStep_factors h; subst hs'; exact hwf
@@ -660,6 +751,20 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
   | receiptArchiveA actor cell =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact hwf
+  -- §lifecycle (Wave-3) — seal/unseal/destroy edit `lifecycle`/`deathCert`; refresh edits `delegations`
+  -- — none touch `queues` (frame: `subWF` preserved).
+  | cellSealA actor cell =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellSealChainA_factors h; subst hs'; exact hwf
+  | cellUnsealA actor cell =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellUnsealChainA_factors h; subst hs'; exact hwf
+  | cellDestroyA actor cell ch =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellDestroyChainA_factors h; subst hs'; exact hwf
+  | refreshDelegationA actor child =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; exact hwf
   -- §QUEUE — THE FOUR MOVERS. Each `if stateAuthB … then match queueK … | some k' => …`; gate-peel the
   -- outer `if`, then the kernel op preserves the capacity bound (allocate empty / enqueue-gate /
   -- dequeue-shrink / resize-gate) via the §B.0/§B.1 lemmas.
@@ -719,6 +824,20 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
                   exact hc
                 · rw [if_neg hc] at hk; exact absurd hk (by simp)
       · exact absurd h (by simp)
+  -- §MA-queue-batch (WAVE 4): the atomic batch / pipeline step PRESERVE the queue well-formedness
+  -- `subWF` (each sub-op enqueue stays within capacity, each dequeue shrinks); pipelinedSend leaves
+  -- `queues` UNCHANGED. The non-trivial faithful-mirror content: the batch/fan-out cannot overflow a queue.
+  | queueAtomicTxA actor ops =>
+      simp only [execFullA] at h
+      obtain ⟨s1, hf, _, hk⟩ := queueAtomicTxA_atomic_witness h
+      rw [show s'.kernel = s1.kernel from hk]
+      exact queueAtomicTxChainA_subWF hf hwf
+  | queuePipelineStepA srcId owner sinkCells sinkIds =>
+      simp only [execFullA] at h
+      obtain ⟨k1, mh, hd, hfo⟩ := queuePipelineStepA_routing_witness h
+      exact pipelineFanoutK_subWF hfo (queueDequeueK_subWF hd hwf)
+  | pipelinedSendA actor =>
+      simp only [execFullA, Option.some.injEq] at h; subst h; exact hwf
   -- §swiss — four CapTP swiss-table effects (kernel updates `swiss`, never `queues`).
   | exportSturdyRefA sw actor exporter target rights =>
       simp only [execFullA, swissExportChainA] at h
@@ -776,6 +895,21 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
                 · injection hk with hk; subst hk; rfl
                 · injection hk with hk; subst hk; rfl
       · exact absurd h (by simp)
+
+/-- **`execInnerA_subWF_preserved`** — the inner-effect fold an `exerciseA` recurses through preserves
+queue well-formedness. Mutual with `execFullA_subWF_preserved`; induction on the inner list. -/
+theorem execInnerA_subWF_preserved (s s' : RecChainedState) (inner : List FullActionA)
+    (h : execInnerA s inner = some s') (hwf : subWF s.kernel) : subWF s'.kernel := by
+  cases inner with
+  | nil => simp only [execInnerA, Option.some.injEq] at h; subst h; exact hwf
+  | cons a rest =>
+      simp only [execInnerA] at h
+      cases ha : execFullA s a with
+      | none => rw [ha] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [ha] at h
+          exact execInnerA_subWF_preserved s1 s' rest h (execFullA_subWF_preserved s s1 a ha hwf)
+end
 
 /-! ### §B.3 — the turn- and forest-level lift (induction on the list + the pre-order bridge). -/
 

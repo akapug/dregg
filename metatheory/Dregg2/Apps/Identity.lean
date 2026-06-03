@@ -35,7 +35,7 @@ open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Authority
-open Dregg2.Exec.EffectsState (stateStep stateStep_factors)
+open Dregg2.Exec.EffectsState (stateStep stateStep_factors stateStepGuarded_eq)
 
 /-! ## Step 0 — registry-frame lemmas for the deeply-nested kernel ops (queue-deposit + swiss).
 
@@ -135,9 +135,11 @@ Every arm leaves `revoked` unchanged: no current effect grows the credential-rev
 (`noteSpend` grows `nullifiers`; the authority `revoke`/`dropRef`/`revokeDelegation` effects edit `caps`
 via `recKRevokeTarget`). Each arm reduces `k'.revoked = s.kernel.revoked` by `rfl`. -/
 
+mutual
 /-- **`execFullA_revoked_eq`** — a committed `FullActionA` leaves the credential revocation registry
 unchanged: `s'.kernel.revoked = s.kernel.revoked`. No current effect grows it; every kernel transform
-writes a different field. The sharpest dual of `execFullA_ledger_per_asset`. -/
+writes a different field; `exerciseA` RECURSES (mutual `execInnerA_revoked_eq`). The sharpest dual of
+`execFullA_ledger_per_asset`. -/
 theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
     (h : execFullA s fa = some s') : s'.kernel.revoked = s.kernel.revoked := by
   cases fa with
@@ -190,8 +192,9 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
   -- §pure-state — `stateStep` (field write); factors through `stateStep_factors` (kernel = writeField,
   -- a `cell`-only update, `revoked` untouched ⇒ `rfl`). All four share the proof.
   | setFieldA actor cell f v =>
+      -- §SLOT-CAVEAT: peel the caveat gate (`stateStepGuarded_eq`); the field write never edits `revoked`.
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
+      obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq h); subst hs'; rfl
   | emitEventA actor cell topic data =>
       simp only [execFullA, emitStep] at h
       option_inj at h; subst h; rfl
@@ -246,14 +249,26 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
           unfold recKDelegate at hk; split at hk
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
-  | exerciseA actor t =>
+  | exerciseA actor t inner =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := exerciseStepA_factors h; subst hs'; rfl
+      cases hg : exerciseStepA s actor t with
+      | none => rw [hg] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [hg] at h
+          obtain ⟨_, hs1⟩ := exerciseStepA_factors hg
+          -- the hold-gate frames `revoked`; the inner fold preserves it (no effect touches it).
+          rw [execInnerA_revoked_eq s1 s' inner h, hs1]
   -- §supply-growth — createCell/spawn factor through their gates (createCellIntoAsset / + a caps grant
   -- — neither touches `revoked`); bridgeMint reuses recCMintAsset.
   | createCellA actor newCell =>
       obtain ⟨_, _, hs'⟩ := createCellChainA_factors (by simpa only [execFullA] using h)
       subst hs'; rfl
+  | createCellFromFactoryA actor newCell vk =>
+      -- §MA-factory: the factory install edits `cell`/`slotCaveats`/`accounts`/`bal`, never `revoked`.
+      obtain ⟨_, s1, _, _, hc, hs'⟩ :=
+        createCellFromFactoryChainA_factors (by simpa only [execFullA] using h)
+      obtain ⟨_, _, hs1⟩ := createCellChainA_factors hc
+      subst hs' hs1; rfl
   | spawnA actor child target =>
       obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
       subst hs'
@@ -316,6 +331,33 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
           show k'.revoked = s.kernel.revoked
           unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+  -- fulfill/slash route to refund/release (escrow SETTLE) — `revoked` literally unchanged (frame).
+  | fulfillObligationA id actor =>
+      simp only [execFullA, refundEscrowChainA] at h
+      cases hk : refundEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; option_inj at h; subst h
+          show k'.revoked = s.kernel.revoked
+          unfold refundEscrowKAsset settleEscrowRawAsset at hk
+          split at hk
+          · split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          · exact absurd hk (by simp)
+  | slashObligationA id actor =>
+      simp only [execFullA, releaseEscrowChainA] at h
+      cases hk : releaseEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; option_inj at h; subst h
+          show k'.revoked = s.kernel.revoked
+          unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+          split at hk
+          · split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
           · exact absurd hk (by simp)
   -- §NOTE-SPEND — grows `nullifiers` (a DIFFERENT registry), `revoked` UNTOUCHED. This is the arm that
   -- moves the nullifier set in `CellNullifier`; here it frames the credential-revocation registry.
@@ -410,16 +452,17 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
               · exact absurd hk (by simp)
             · exact absurd hk (by simp)
       · exact absurd h (by simp)
-  -- §seal — six bal-neutral field writes via stateStep / makeSovereignStep (cell-only update).
-  | sealA actor cell =>
+  -- §seal — the DE-SHADOWED seal/unseal/createSealPair edit `caps`/`sealedBoxes`; makeSovereign/refusal/
+  -- receiptArchive write the cell record — none touch `revoked` (frame: `rfl`).
+  | sealA pid actor payload =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
-  | unsealA actor cell =>
+      obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; rfl
+  | unsealA pid actor recipient =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
-  | createSealPairA actor sealerHolder unsealerHolder =>
+      obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'; rfl
+  | createSealPairA pid actor sealerHolder unsealerHolder =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
+      obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'; rfl
   | makeSovereignA actor cell =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := makeSovereignStep_factors h; subst hs'; rfl
@@ -526,6 +569,35 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
             show k'.revoked = s.kernel.revoked
             exact swissDropK_revoked s.kernel sw k' hk
       · exact absurd h (by simp)
+  -- §lifecycle (Wave-3) — seal/unseal/destroy edit `lifecycle`/`deathCert`; refresh edits `delegations`
+  -- — none touch `revoked` (frame: `rfl`).
+  | cellSealA actor cell =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellSealChainA_factors h; subst hs'; rfl
+  | cellUnsealA actor cell =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellUnsealChainA_factors h; subst hs'; rfl
+  | cellDestroyA actor cell ch =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellDestroyChainA_factors h; subst hs'; rfl
+  | refreshDelegationA actor child =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; rfl
+
+/-- **`execInnerA_revoked_eq`** — the inner-effect fold an `exerciseA` recurses through leaves the
+credential revocation registry UNCHANGED. Mutual with `execFullA_revoked_eq`; chains `Eq.trans`. -/
+theorem execInnerA_revoked_eq (s s' : RecChainedState) (inner : List FullActionA)
+    (h : execInnerA s inner = some s') : s'.kernel.revoked = s.kernel.revoked := by
+  cases inner with
+  | nil => simp only [execInnerA, Option.some.injEq] at h; subst h; rfl
+  | cons a rest =>
+      simp only [execInnerA] at h
+      cases ha : execFullA s a with
+      | none => rw [ha] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [ha] at h
+          rw [execInnerA_revoked_eq s1 s' rest h, execFullA_revoked_eq s s1 a ha]
+end
 
 /-! ## Step 2 — the turn- and forest-level lift (induction on the list + the pre-order bridge). -/
 

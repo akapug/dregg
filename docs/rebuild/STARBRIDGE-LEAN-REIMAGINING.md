@@ -350,3 +350,32 @@ because every panel is a Lean term the user's own browser elaborated, checked, o
 - **Critical path remaining:** the v4.30 wasm-Lean-runtime build (background) → swap
   `tiny.wasm` → the real executor/kernel/elaborator in the proven host; then Pillars 1B/1C/4
   proper.
+- 2026-06-03 — **wasm runtime: the real ABI bug FOUND+FIXED; pivoted to the official cross-build
+  (in progress).** Full detail + reproduction in `web/spike/RECIPE.md` (§"UPDATE 2026-06-03").
+  Headline: the prior light-path build crashed at boot (`unknown parser category \`level\``). Root
+  cause = the Lean `.c` were compiled for wasm **without `-DLEAN_EMSCRIPTEN`**, which truncates every
+  baked `Name` hash to 32 bits (`lean.h`'s `LEAN_SCALAR_PTR_LITERAL` is gated on that macro) → no
+  parser category is ever found. **Fixed + verified in isolation** (`` (`level).hash `` now matches
+  native exactly); the parser machinery works in wasm — the foundation Rungs B/C need, not a stripped
+  executor. A 2nd bug then surfaced (emscripten-5.0.1 strict function-signature trap in
+  `lean_mk_bool_data_value` during option registration — a light-path ABI inconsistency). **ember's
+  call:** do the **official `make stage1` emscripten cross-build** (native elan lean as `PREV_STAGE`,
+  `MULTI_THREAD=OFF` for node-testability) — one consistent pipeline that fixes #2 by construction.
+  Configured + building: core stdlib compiles for wasm (~2900/4625 modules ✔); applied the post-4.15
+  bit-rot fixes (conditional `-pthread`; `.so`→`.dylib` elan symlinks; `leanc/Leanc.lean` copy; ported
+  `src/runtime/{thread.h,uv/*}` patches from `stage0/src`). **Executor does not yet round-trip** —
+  blocked on finishing the cross-build (then relink + byte-compare vs the native golden oracle).
+- 2026-06-03 (cont.) — **official cross-build COMPLETED (leanshared 100%, 4625 stdlib modules);
+  bug #2 root cause pinned; executor still not round-tripping — precise wall identified.** Full
+  write-up in `web/spike/RECIPE.md` §"FINAL STATUS". Summary: bug #2 = `bool`(IR `i1`) vs `uint8_t`
+  (IR `i8`) signature mismatches between the C++ runtime's externs and the stdlib defs, which only
+  reconcile when leancpp+stdlib+closure all come from ONE pipeline. Tried 3 link combos: all-`-flto`
+  → bitcast `unreachable` trap; mixed LTO/non-LTO → invalid wasm (arity); all-stage1 → CLEAN but the
+  stage1 stdlib's `___aux` names version-skew the elan-emitted closure (can't re-emit w/o the slow
+  Lean recompile). Also fixed a rogue entry: `Apps/AgentOrchestration`'s `def main` was hijacking
+  the wasm entry over `exec_host`'s. **Measured executor wasm weight ≈ 44 MB** (`-flto -Oz
+  --gc-sections`) — NOT a few MB, because mathlib's module-init graph is unconditionally
+  runtime-reachable so `--gc-sections` can't prune it (honest correction to the earlier estimate).
+  **Path through (next session):** one consistent pipeline — re-emit the closure `.c` with stage1 +
+  link all-stage1; OR (lighter, try first) patch the runtime's `extern "C"` Lean-`Bool` decls
+  `bool`→`uint8_t` (`util/kvmap.cpp` is the one hit at init) + rebuild `leancpp`, keeping all-`-flto`.

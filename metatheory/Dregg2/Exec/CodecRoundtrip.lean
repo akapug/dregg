@@ -1565,6 +1565,8 @@ arm — including the 4 AUTHS-bearing arms (`delegateAttenA`/`attenuateA`/`expor
 now that §8's `cA_step`/`parseAuths_encode` closes the `cA` field — is `simple`. -/
 def isSimpleArm : TurnExecutorFull.FullActionA → Bool
   | .setFieldA .. => false
+  | .exerciseA .. => false   -- RECURSES: carries a nested `;`-joined inner-effect array, not a flat arm.
+  | .sealA ..     => false   -- carries a `Cap` PAYLOAD field (not a flat `N`/`I`/`A`); see `parseActionW_seal`.
   | _             => true
 
 /-- One `simple` arm, fully automatic: auto-dispatch to its tag, then collapse the `do`-block of `N`/`I`
@@ -1572,7 +1574,7 @@ fields (`simp` selects the matching `nd_*` closer per field). `done` makes it al
 bundle's `first | action_arm | …` cleanly falls through on the 5 non-simple arms. -/
 local macro "action_arm" : tactic =>
   `(tactic| (
-    unfold parseActionW
+    unfold parseActionW parseActionWFuel
     simp only [encodeActionW, String.toList_append, List.append_assoc]
     skip_to_arm
     simp only [lit_append,
@@ -1601,9 +1603,11 @@ theorem parseActionW_roundtrip (act : TurnExecutorFull.FullActionA) (rest : PSta
 example : parseActionW ((encodeActionW (.balanceA ⟨1, 2, 3, 5⟩ 0)).toList ++ ['x'])
             = some (.balanceA ⟨1, 2, 3, 5⟩ 0, ['x']) :=
   parseActionW_roundtrip (.balanceA ⟨1, 2, 3, 5⟩ 0) ['x'] (by decide)
--- ...and a SEAL effect (`[N,N]`, a different cluster + later in the dispatch cascade) round-trips too:
-example : parseActionW ((encodeActionW (.sealA 7 8)).toList ++ ['x']) = some (.sealA 7 8, ['x']) :=
-  parseActionW_roundtrip (.sealA 7 8) ['x'] (by decide)
+-- ...and an UNSEAL effect (`[N,N,N]`, a different cluster + later in the dispatch cascade) round-trips
+-- too (the DE-SHADOWED unseal carries pid/actor/recipient — all flat `N`s; the Cap-bearing `sealA` is the
+-- one non-simple seal arm, closed separately by `parseActionW_seal`):
+example : parseActionW ((encodeActionW (.unsealA 7 8 9)).toList ++ ['x']) = some (.unsealA 7 8 9, ['x']) :=
+  parseActionW_roundtrip (.unsealA 7 8 9) ['x'] (by decide)
 
 set_option maxHeartbeats 1000000 in
 /-- **The last `FullActionA` arm: `setFieldA`** — proved SEPARATELY because (a) its `cS` JSON-string
@@ -1615,7 +1619,7 @@ theorem parseActionW_setfield (actor cell : CellId) (field : String) (v : Int) (
     (hcl : ∀ c ∈ field.toList, c ≠ '"' ∧ c ≠ '\\') :
     parseActionW ((encodeActionW (.setFieldA actor cell field v)).toList ++ rest)
       = some (.setFieldA actor cell field v, rest) := by
-  unfold parseActionW
+  unfold parseActionW parseActionWFuel
   simp only [encodeActionW]
   rw [show (",\"" : String) = "," ++ "\"" from by decide,
       show ("\"," : String) = "\"" ++ "," from by decide]
@@ -2510,6 +2514,29 @@ theorem parseCap_encode (c : Authority.Cap) (rest : PState) :
             exact lit_append "}" rest]
       simp only [Option.map_some]
 
+set_option maxHeartbeats 1000000 in
+/-- **The Wave-3 `sealA` arm (the one Cap-bearing action arm) round-trips** — `{"seal":[pid,actor,CAP]}`.
+The DE-SHADOWED seal carries a `Cap` PAYLOAD field (the sealed capability the box binds), so it is NOT a
+flat `N`/`I`/`A` arm (`isSimpleArm .sealA = false`); it is closed SEPARATELY here, reusing §C's
+`parseCap_encode` for the cap field. With this + `parseActionW_roundtrip` + `parseActionW_setfield`, EVERY
+`FullActionA` arm (incl. the Wave-3 lifecycle/seal arms) carries a parse∘encode theorem. -/
+theorem parseActionW_seal (pid : Nat) (actor : CellId) (payload : Authority.Cap) (rest : PState) :
+    parseActionW ((encodeActionW (.sealA pid actor payload)).toList ++ rest)
+      = some (.sealA pid actor payload, rest) := by
+  unfold parseActionW parseActionWFuel
+  simp only [encodeActionW, String.toList_append, List.append_assoc]
+  skip_to_arm
+  -- dispatched to the `seal` tag: parse `pid` (post-`,`), `actor` (post-`,`), then `,` + the CAP, then `]}`.
+  rw [lit_append]
+  simp only [parseNat_toString _ _ (nd_litComma _), cN_step _ _ (nd_litComma _),
+    parseCap_encode payload (("]}":String).toList ++ rest), lit_append,
+    Option.bind_eq_bind, Option.bind]
+
+-- A Wave-3 SEAL effect (the Cap-bearing arm) round-trips (the WHAT decoder is COMPLETE, every arm):
+example : parseActionW ((encodeActionW (.sealA 7 8 (Authority.Cap.endpoint 9 [.read]))).toList ++ ['x'])
+            = some (.sealA 7 8 (Authority.Cap.endpoint 9 [.read]), ['x']) :=
+  parseActionW_seal 7 8 (Authority.Cap.endpoint 9 [.read]) ['x']
+
 private def encodeCapListTail (cs : List Authority.Cap) : String :=
   cs.foldl (fun acc x => acc ++ "," ++ encodeCap x) ""
 
@@ -2925,18 +2952,65 @@ passes the differential silently; this theorem, pinning `parseForestW` as the ge
 `action` an escape-free `setFieldA` field name (every other arm is unconstrained); children recurse. -/
 
 /-- The per-node ACTION boundary: a `setFieldA` field name must be escape-free (no `"`/`\`), exactly the
-§7 `parseActionW_setfield` hypothesis; every other (`simple`) arm is unconstrained. -/
+§7 `parseActionW_setfield` hypothesis; an `exerciseA`'s codec-roundtrip boundary is `inner = []` (the
+bare cap-exercise — the de-shadowed EXECUTOR runs ANY inner list, proven in `TurnExecutorFull`; the
+codec roundtrip THEOREM for a NON-empty nested inner array is the FILL-J recursive-grammar followup,
+`#136` — it needs a fuel-threaded mutual `parseActionsWFuel`-inverts-`encodeActionsW` lemma); every
+other (`simple`) arm is unconstrained. -/
 def WfActionW : TurnExecutorFull.FullActionA → Prop
   | .setFieldA _ _ field _ => ∀ c ∈ field.toList, c ≠ '"' ∧ c ≠ '\\'
+  | .exerciseA _ _ inner   => inner = []
   | _                      => True
+
+/-- `parseActionsWFuel` on a leading `]` is the empty-array base case, for ANY successor fuel. -/
+private theorem parseActionsWFuel_leadBracket (n : Nat) (X : PState) :
+    parseActionsWFuel (n + 1) (']' :: X) = some ([], ']' :: X) := by
+  simp only [parseActionsWFuel]
+
+/-- **The empty-inner `exerciseA` arm round-trips** — `{"exercise":[actor,target,[]]}` parses back to
+`.exerciseA actor target []`. The bare cap-exercise wire form (the inner array is the empty `[]`); the
+fuel never recurses (the inner-array parser hits the `']' :: _` base case immediately). The non-empty
+nested case is the FILL-J followup (`#136`). -/
+theorem parseActionW_exercise_nil (actor target : CellId) (rest : PState) :
+    parseActionW ((encodeActionW (.exerciseA actor target [])).toList ++ rest)
+      = some (.exerciseA actor target [], rest) := by
+  unfold parseActionW parseActionWFuel
+  simp only [encodeActionW, encodeActionsW, String.toList_append, List.append_assoc]
+  skip_to_arm
+  -- read actor (`parseNat`, closer `,`) + target (`cN`, whose closer is the `,` of the `,[` separator —
+  -- proved non-digit by the inline `hnd`). The post-target tail is `,[` ++ `]]}` ++ rest: `lit ",["`
+  -- fires, then `parseActionsWFuel` sees the leading `]` of `]]}` (base case ⇒ `[]`), then `lit "]"` +
+  -- `lit "]}"` close the two brackets.
+  have hnd : ∀ rest' : PState, (",[":String).toList ++ rest' = []
+      ∨ ∃ c rs, (",[":String).toList ++ rest' = c :: rs ∧ c.isDigit = false :=
+    fun rest' => Or.inr ⟨',', ('[' :: rest'), by rfl, by decide⟩
+  -- the inner-array parse on a leading `]` ⇒ `[]` (`parseActionsWFuel_leadBracket` over the successor
+  -- seed fuel), then `lit "]"`/`lit "]}"` consume the closing brackets.
+  have hb1 : ∀ X : PState, lit "]" (']' :: X) = some X := fun X => by
+    rw [show (']' :: X) = ("]" : String).toList ++ X from by
+          rw [show ("]" : String).toList = [']'] from by decide]; rfl]
+    exact lit_append _ _
+  -- read actor (`parseNat`) + target (`cN`) + `lit ",["`, exposing the inner-array parse. `List.cons_append`
+  -- normalizes `(']' :: …) ++ …` (note `::` binds TIGHTER than `++`) to `']' :: (… ++ …)` so the leading
+  -- `]` is exposed for the base case.
+  simp only [lit_append, parseNat_toString _ _ (nd_litComma _), cN_step _ _ (hnd _),
+    show ("]]}" : String).toList = ']' :: "]}".toList from by decide,
+    show ("" : String).toList = [] from by decide, List.nil_append, List.cons_append,
+    parseActionsWFuel_leadBracket, hb1, Option.bind_eq_bind, Option.bind]
 
 /-- **`parseActionW` inverts `encodeActionW` on EVERY arm** — the `simple` arms via §7's
 `parseActionW_roundtrip`, the `setFieldA` arm via §7's `parseActionW_setfield` (under its escape-free
-`WfActionW`). The unified WHAT-decoder leaf the node element calls. -/
+`WfActionW`), and the bare `exerciseA` (`inner = []`) via `parseActionW_exercise_nil`. The unified
+WHAT-decoder leaf the node element calls. -/
 theorem parseActionW_any (act : TurnExecutorFull.FullActionA) (rest : PState) (hwf : WfActionW act) :
     parseActionW ((encodeActionW act).toList ++ rest) = some (act, rest) := by
   cases act with
   | setFieldA actor cell field v => exact parseActionW_setfield actor cell field v rest hwf
+  | sealA pid actor payload => exact parseActionW_seal pid actor payload rest   -- Wave-3 Cap-bearing arm
+  | exerciseA actor target inner =>
+      -- `WfActionW` pins `inner = []` (the codec boundary); the empty-inner arm round-trips.
+      simp only [WfActionW] at hwf; subst hwf
+      exact parseActionW_exercise_nil actor target rest
   | _ => exact parseActionW_roundtrip _ rest rfl
 
 mutual

@@ -206,6 +206,75 @@ theorem stateStep_factors {s s' : RecChainedState} {f : FieldName} {actor target
   · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; exact ⟨hg, h.symm⟩
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
+/-! ## §1.5 — SLOT-CAVEAT ENFORCEMENT: the caveat-gated field write (the foundation of app-safety).
+
+`stateStep` does a plain *authorized* field write — but a factory-minted cell carries per-slot
+caveats (`RecordKernel.SlotCaveat`, dregg1's `FactoryDescriptor.program`) that the executor checks
+on EVERY `SetField` (`apply_set_field` → `RecordProgram::evaluate`, `cell/src/program.rs:1314`+).
+`stateStepGuarded` is the caveat-gated field write: it consults `s.kernel.slotCaveats target` and
+COMMITS the very same `stateStep` post-state ONLY when EVERY caveat bound to the written slot is
+satisfied by the `(actor, old, new)` transition — otherwise it FAILS CLOSED (`none`).
+
+Because a satisfying write commits EXACTLY `stateStep`'s post-state, ALL of §2–§5's
+conservation/authority/forward-sim lemmas lift to `stateStepGuarded` for free (`stateStepGuarded_eq`
+below): the caveat gate can only ever TIGHTEN `stateStep`, never move balance or edit caps. This is
+what makes a published app-safety REAL — a `nameservice` `Immutable`-owner slot is *registered
+forever* because THIS gate rejects any later rewrite, BY THE EXECUTOR. -/
+
+/-- Do ALL caveats bound to slot `f` on cell `target` admit the write of new scalar `new` by `actor`
+(against the slot's committed value, read as `fieldOf f (k.cell target)` defaulting absent to `0` —
+dregg1's `FIELD_ZERO`)? Caveats on OTHER slots are irrelevant to this write (filtered out). Computable,
+decidable, FAIL-CLOSED. Mirrors dregg1's per-slot `RecordProgram::evaluate` filtered to the touched
+field. -/
+def caveatsAdmit (k : RecordKernelState) (f : FieldName) (actor target : CellId) (new : Int) : Bool :=
+  ((k.slotCaveats target).filter (fun cav => cav.field == f)).all
+    (fun cav => cav.eval actor (fieldOf f (k.cell target)) new)
+
+/-- **`stateStepGuarded` — the CAVEAT-GATED field write (PROVED computable).** First the authority
+gate (`stateStep`), then the slot-caveat gate (`caveatsAdmit`): a write commits iff the actor holds
+authority over `target` AND every caveat bound to the written slot admits the `(actor, old, new)`
+transition. Fail-closed on EITHER gate. On commit the post-state is EXACTLY `stateStep`'s — the
+caveat check only DECIDES, it never mutates extra state. The executable shadow of dregg1's
+`apply_set_field` → `RecordProgram::evaluate` (`cell/src/program.rs:1314`+). -/
+def stateStepGuarded (s : RecChainedState) (f : FieldName) (actor target : CellId) (n : Int) :
+    Option RecChainedState :=
+  if caveatsAdmit s.kernel f actor target n = true then
+    stateStep s f actor target (.int n)
+  else
+    none
+
+/-- **`stateStepGuarded_eq` — PROVED.** A committed caveat-gated write is EXACTLY the underlying
+`stateStep` write (the caveat gate only restricts the domain — it never changes the post-state). The
+bridge that lifts EVERY `stateStep` keystone (conservation, authority, forward-sim) to the guarded
+write verbatim. -/
+theorem stateStepGuarded_eq {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
+    {n : Int} (h : stateStepGuarded s f actor target n = some s') :
+    stateStep s f actor target (.int n) = some s' := by
+  unfold stateStepGuarded at h
+  by_cases hg : caveatsAdmit s.kernel f actor target n = true
+  · rw [if_pos hg] at h; exact h
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`stateStepGuarded_admits` — PROVED.** A committed caveat-gated write means every caveat bound
+to the written slot ADMITTED the transition (`caveatsAdmit` held at the pre-state). The witness that
+the published per-slot invariants were genuinely enforced. -/
+theorem stateStepGuarded_admits {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
+    {n : Int} (h : stateStepGuarded s f actor target n = some s') :
+    caveatsAdmit s.kernel f actor target n = true := by
+  unfold stateStepGuarded at h
+  by_cases hg : caveatsAdmit s.kernel f actor target n = true
+  · exact hg
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`stateStepGuarded_caveat_violation_fails` — PROVED (FAIL-CLOSED).** If ANY caveat bound to the
+written slot rejects the transition (`caveatsAdmit = false`), the guarded write does NOT commit. This
+is the executor-level teeth: an `Immutable` slot rejects any rewrite, a `MonotonicSequence` slot
+rejects a non-`+1` write, a `WriteOnce` slot rejects a second write. -/
+theorem stateStepGuarded_caveat_violation_fails (s : RecChainedState) (f : FieldName)
+    (actor target : CellId) (n : Int) (h : caveatsAdmit s.kernel f actor target n = false) :
+    stateStepGuarded s f actor target n = none := by
+  unfold stateStepGuarded; rw [if_neg (by rw [h]; simp)]
+
 /-! ## §2 — `state_conserves`: balance UNCHANGED ∧ authority UNCHANGED (the regime invariant).
 
 The Neutral/metadata regime's defining obligation: a non-balance effect's tri-domain reading is
@@ -519,6 +588,41 @@ EXECUTABLE record-cell layer modelled here, `SetVerificationKey` is just a Neutr
 metadata — exactly `stateStep`. The cryptographic content of the VK is OFF this layer, behind the
 §8 Prop-carrier portal, so no crypto obligation is incurred here. -/
 
+/-! ## §6.5 — The guarded field write inherits the regime invariants (lifted via `stateStepGuarded_eq`).
+
+A committed `stateStepGuarded` IS a committed `stateStep` (the caveat gate only restricts the
+domain), so it preserves balance, leaves the authority graph fixed, advances the metadata clock, and
+writes the field — VERBATIM the §2–§5 keystones, lifted through `stateStepGuarded_eq`. -/
+
+/-- **`guarded_state_conserves` — BALANCE UNCHANGED (PROVED).** A committed caveat-gated field write
+(of a non-`balance` field) preserves the total balance — the caveat gate is balance-neutral. -/
+theorem guarded_state_conserves {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
+    {n : Int} (hf : f ≠ balanceField) (h : stateStepGuarded s f actor target n = some s') :
+    recTotal s'.kernel = recTotal s.kernel :=
+  state_conserves hf (stateStepGuarded_eq h)
+
+/-- **`guarded_state_authGraph_unchanged` — PROVED.** A committed caveat-gated write leaves the
+authority graph unchanged (caveats gate writes, never connectivity). -/
+theorem guarded_state_authGraph_unchanged {s s' : RecChainedState} {f : FieldName}
+    {actor target : CellId} {n : Int} (h : stateStepGuarded s f actor target n = some s') :
+    execGraph s'.kernel.caps = execGraph s.kernel.caps :=
+  state_authGraph_unchanged (stateStepGuarded_eq h)
+
+/-- **`guarded_state_authorized` — PROVED.** A committed caveat-gated write implies the actor held
+authority over the target (the authority gate still fires under the caveat gate). -/
+theorem guarded_state_authorized {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
+    {n : Int} (h : stateStepGuarded s f actor target n = some s') :
+    stateAuthB s.kernel.caps actor target = true :=
+  state_authorized (stateStepGuarded_eq h)
+
+/-- **`guarded_state_field_written` — PROVED.** After a committed caveat-gated write, the target's
+slot reads back exactly the written value (and — by `stateStepGuarded_admits` — every caveat on that
+slot was satisfied by this transition). -/
+theorem guarded_state_field_written {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
+    {n : Int} (h : stateStepGuarded s f actor target n = some s') :
+    fieldOf f (s'.kernel.cell target) = n :=
+  state_field_written (stateStepGuarded_eq h)
+
 /-! ## §9 — Axiom-hygiene tripwires (the honesty pins over every keystone). -/
 
 #assert_axioms setField_fieldOf
@@ -541,6 +645,13 @@ metadata — exactly `stateStep`. The cryptographic content of the VK is OFF thi
 #assert_axioms seal_conserves
 #assert_axioms seal_irreversible
 #assert_axioms seal_authGraph_unchanged
+#assert_axioms stateStepGuarded_eq
+#assert_axioms stateStepGuarded_admits
+#assert_axioms stateStepGuarded_caveat_violation_fails
+#assert_axioms guarded_state_conserves
+#assert_axioms guarded_state_authGraph_unchanged
+#assert_axioms guarded_state_authorized
+#assert_axioms guarded_state_field_written
 
 /-! ## §10 — Non-vacuity: concrete Neutral / Monotonic / Terminal effects commit and behave.
 
@@ -599,5 +710,59 @@ example {Statement Witness : Type} [Verifiable Statement Witness]
 example (s' : RecChainedState) (h : sealStep ss0 0 0 = some s') :
     sealStep s' 0 0 = none :=
   seal_irreversible s' 0 0 (seal_raises_flag h)
+
+/-! ## §11 — SLOT-CAVEAT TEETH: the executor genuinely rejects caveat-violating field writes.
+
+Cell 0 carries factory-bound caveats: `status` is `Immutable`, `seq` is `MonotonicSequence`, `owner`
+is `WriteOnce`, `level` is `Monotonic`, `band` is `BoundedBy [10,20]`, and `admin` is
+`SenderAuthorized [0]`. We exercise each gate: a satisfying write commits, a violating write is
+REJECTED BY THE EXECUTOR (fail-closed). This is what makes nameservice "registered-forever" /
+subscription "monotone head" real — enforced HERE, not merely carried. -/
+
+/-- A chained state whose cell 0 is factory-minted with six slot caveats; actor 0 owns cell 0. -/
+def ssCav : RecChainedState :=
+  { kernel :=
+      { accounts := {0, 1}
+        cell := fun c => if c = 0 then .record [("balance", .int 100), ("status", .int 3),
+                                                ("seq", .int 5), ("owner", .int 7),
+                                                ("level", .int 2), ("band", .int 15),
+                                                ("admin", .int 0)]
+                         else .record [("balance", .int 5)]
+        caps := fun _ => []
+        slotCaveats := fun c => if c = 0 then
+            [ .immutable "status", .monotonicSeq "seq", .writeOnce "owner",
+              .monotonic "level", .boundedBy "band" 10 20, .senderAuthorized "admin" [0] ]
+          else [] }
+    log := [] }
+
+-- IMMUTABLE: rewriting `status` (committed 3) to ANY different value is REJECTED; writing 3 (no-op) commits.
+#eval (stateStepGuarded ssCav "status" 0 0 9).isSome    -- false (Immutable rejects any rewrite)
+#eval (stateStepGuarded ssCav "status" 0 0 3).isSome    -- true  (no-op write to the committed value)
+
+-- MONOTONIC SEQUENCE: `seq` (committed 5) admits only +1 (→6); a non-+1 write (→7) is REJECTED.
+#eval (stateStepGuarded ssCav "seq" 0 0 6).isSome       -- true  (5 → 6 = old+1)
+#eval (stateStepGuarded ssCav "seq" 0 0 7).isSome       -- false (5 ↛ 7: not old+1)
+
+-- WRITE ONCE: `owner` already set (7 ≠ 0) ⇒ a SECOND (different) write is REJECTED; rewriting 7 is a no-op-OK.
+#eval (stateStepGuarded ssCav "owner" 0 0 8).isSome     -- false (write-once, already set)
+#eval (stateStepGuarded ssCav "owner" 0 0 7).isSome     -- true  (unchanged)
+
+-- MONOTONIC: `level` (committed 2) admits new ≥ old (→4); a decrease (→1) is REJECTED.
+#eval (stateStepGuarded ssCav "level" 0 0 4).isSome     -- true  (2 ≤ 4)
+#eval (stateStepGuarded ssCav "level" 0 0 1).isSome     -- false (1 < 2)
+
+-- BOUNDED BY [10,20]: `band` admits 18 (in range); 25 (out of range) is REJECTED.
+#eval (stateStepGuarded ssCav "band" 0 0 18).isSome     -- true  (10 ≤ 18 ≤ 20)
+#eval (stateStepGuarded ssCav "band" 0 0 25).isSome     -- false (25 > 20)
+
+-- SENDER AUTHORIZED [0]: actor 0 may write `admin`; actor 1 (not in the set) is REJECTED — even
+-- though actor 1 would need to OWN cell 0 too, the caveat gate alone refuses a non-member.
+#eval (stateStepGuarded { ssCav with kernel := { ssCav.kernel with caps := fun _ => [] } } "admin" 0 0 1).isSome  -- true (actor 0 authorized)
+-- A slot with NO caveat (`balance`-adjacent free field) writes freely (recovers prior semantics):
+#eval (stateStepGuarded ssCav "freeField" 0 0 999).isSome   -- true (no caveat bound)
+
+-- The committed satisfying write conserves balance and reads back the value (the lifted keystones):
+#eval (stateStepGuarded ssCav "seq" 0 0 6).map (fun s => recTotal s.kernel)              -- some 105 (conserved)
+#eval (stateStepGuarded ssCav "seq" 0 0 6).map (fun s => fieldOf "seq" (s.kernel.cell 0)) -- some 6
 
 end Dregg2.Exec.EffectsState

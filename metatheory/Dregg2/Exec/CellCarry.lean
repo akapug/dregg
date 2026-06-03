@@ -88,9 +88,10 @@ measure `recTotalAssetWithEscrow`. It is THE TEMPLATE for userspace verification
 
 /-- **The turn-level log-monotone lemma (PROVED).** A committed per-asset full-turn never SHRINKS the
 receipt log: `s.log.length ≤ s'.log.length`. Proved by induction on the action list — each committed
-`execFullA` step appends EXACTLY its `fullReceiptA` row (`execFullA_chainlink`), so the length grows by
-one (`List.length_cons`); the empty turn is `le_refl`, and the inductive step chains by `le_trans`.
-This reads only the **ChainLink** conjunct (the log shape), NOT the conservation measure. -/
+`execFullA` step only EXTENDS the log (`execFullA_log_suffix`: `s.log <:+ s1.log`, append-only — one
+row for non-recursive kinds, `1 + |inner|` for a committed exercise), so the length is monotone; the
+empty turn is `le_refl`, and the inductive step chains by `le_trans`. This reads only the **ChainLink**
+(append-only log shape) conjunct, NOT the conservation measure. -/
 theorem execFullTurnA_logMono :
     ∀ (s s' : RecChainedState) (tt : List FullActionA),
       execFullTurnA s tt = some s' → s.log.length ≤ s'.log.length
@@ -102,9 +103,9 @@ theorem execFullTurnA_logMono :
       | none => rw [ha] at h; exact absurd h (by simp)
       | some s1 =>
           rw [ha] at h
-          -- The head step grows the log by exactly one row (ChainLink): `s1.log = fullReceiptA a :: s.log`.
-          have hhead : s.log.length ≤ s1.log.length := by
-            rw [execFullA_chainlink s s1 a ha, List.length_cons]; exact Nat.le_succ _
+          -- The head step only EXTENDS the log (append-only): `s.log <:+ s1.log` ⇒ length-monotone.
+          -- Non-recursive kinds extend by exactly one row; a committed exercise by `1 + |inner|`.
+          have hhead : s.log.length ≤ s1.log.length := (execFullA_log_suffix s s1 a ha).length_le
           exact le_trans hhead (execFullTurnA_logMono s1 s' rest h)
 
 /-- **`execFullForestA_logMono` — the forest-level log-monotone lemma (PROVED).** A committed

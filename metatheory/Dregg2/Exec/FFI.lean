@@ -1585,14 +1585,17 @@ field names as JSON strings, the swiss `rights`/`held` as the narrow `AUTHS` arr
       | {"dropref":[holder,target]}              -- dropRefA
       | {"revdel":[holder,target]}               -- revokeDelegationA
       | {"vhandoff":[introducer,recipient,target]}   -- validateHandoffA
-      | {"exercise":[actor,target]}              -- exerciseA
+      | {"exercise":[actor,target,[INNER;…]]}    -- exerciseA (INNER = nested `;`-joined action array)
       | {"createcell":[actor,newCell]}           -- createCellA
+      | {"createcellfactory":[actor,newCell,vk]} -- createCellFromFactoryA
       | {"spawn":[actor,child,target]}           -- spawnA
       | {"bmint":[actor,cell,asset,value]}       -- bridgeMintA
       | {"cesc":[id,actor,creator,recipient,asset,amount]}      -- createEscrowA
       | {"resc":[id,actor]}                      -- releaseEscrowA
       | {"fesc":[id,actor]}                      -- refundEscrowA
       | {"cobl":[id,actor,obligor,beneficiary,asset,stake]}     -- createObligationA
+      | {"fobl":[id,actor]}                      -- fulfillObligationA
+      | {"sobl":[id,actor]}                      -- slashObligationA
       | {"nspend":[nf,actor]}                    -- noteSpendA
       | {"ncreate":[cm,actor]}                   -- noteCreateA
       | {"ccesc":[id,actor,creator,recipient,asset,amount]}     -- createCommittedEscrowA
@@ -1626,7 +1629,10 @@ def encodeAuthsW (rs : List Auth) : String := encodeAuths rs
 /-- Parse an `AUTHS` tag array (reuses the narrow `parseAuths`). -/
 def parseAuthsW (cs : PState) : Option (List Auth × PState) := parseAuths cs
 
-/-- Encode ONE `FullActionA` to its wide tagged wire form (all 51 arms). -/
+mutual
+/-- Encode ONE `FullActionA` to its wide tagged wire form (all arms). `exerciseA` RECURSES, encoding
+its `inner` list as a nested `;`-joined action-array (the mutual `encodeActionsW`), so the wire form
+carries the FULL de-shadowed exercise — actor, target, AND the inner effects that run against it. -/
 def encodeActionW : FullActionA → String
   | .balanceA t a => "{\"bal\":[" ++ toString t.actor ++ "," ++ toString t.src ++ "," ++ toString t.dst
                        ++ "," ++ toString t.amt ++ "," ++ toString a ++ "]}"
@@ -1654,8 +1660,11 @@ def encodeActionW : FullActionA → String
   | .dropRefA holder target => "{\"dropref\":[" ++ toString holder ++ "," ++ toString target ++ "]}"
   | .revokeDelegationA holder target => "{\"revdel\":[" ++ toString holder ++ "," ++ toString target ++ "]}"
   | .validateHandoffA i r t => "{\"vhandoff\":[" ++ toString i ++ "," ++ toString r ++ "," ++ toString t ++ "]}"
-  | .exerciseA actor target => "{\"exercise\":[" ++ toString actor ++ "," ++ toString target ++ "]}"
+  | .exerciseA actor target inner => "{\"exercise\":[" ++ toString actor ++ "," ++ toString target
+                                       ++ ",[" ++ encodeActionsW inner ++ "]]}"
   | .createCellA actor newCell => "{\"createcell\":[" ++ toString actor ++ "," ++ toString newCell ++ "]}"
+  | .createCellFromFactoryA actor newCell vk => "{\"createcellfactory\":[" ++ toString actor ++ ","
+                                                  ++ toString newCell ++ "," ++ toString vk ++ "]}"
   | .spawnA actor child target => "{\"spawn\":[" ++ toString actor ++ "," ++ toString child ++ ","
                                     ++ toString target ++ "]}"
   | .bridgeMintA actor cell a value => "{\"bmint\":[" ++ toString actor ++ "," ++ toString cell ++ ","
@@ -1668,6 +1677,8 @@ def encodeActionW : FullActionA → String
   | .createObligationA id actor obligor beneficiary a stake =>
       "{\"cobl\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString obligor ++ ","
         ++ toString beneficiary ++ "," ++ toString a ++ "," ++ toString stake ++ "]}"
+  | .fulfillObligationA id actor => "{\"fobl\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
+  | .slashObligationA id actor => "{\"sobl\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
   | .noteSpendA nf actor => "{\"nspend\":[" ++ toString nf ++ "," ++ toString actor ++ "]}"
   | .noteCreateA cm actor => "{\"ncreate\":[" ++ toString cm ++ "," ++ toString actor ++ "]}"
   | .createCommittedEscrowA id actor creator recipient a amount =>
@@ -1681,10 +1692,12 @@ def encodeActionW : FullActionA → String
   | .bridgeFinalizeA id actor a amount => "{\"bfin\":[" ++ toString id ++ "," ++ toString actor ++ ","
                                             ++ toString a ++ "," ++ toString amount ++ "]}"
   | .bridgeCancelA id actor => "{\"bcancel\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
-  | .sealA actor cell => "{\"seal\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
-  | .unsealA actor cell => "{\"unseal\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
-  | .createSealPairA actor sh uh => "{\"csp\":[" ++ toString actor ++ "," ++ toString sh ++ ","
-                                      ++ toString uh ++ "]}"
+  | .sealA pid actor payload => "{\"seal\":[" ++ toString pid ++ "," ++ toString actor ++ ","
+                                  ++ encodeCap payload ++ "]}"
+  | .unsealA pid actor recipient => "{\"unseal\":[" ++ toString pid ++ "," ++ toString actor ++ ","
+                                      ++ toString recipient ++ "]}"
+  | .createSealPairA pid actor sh uh => "{\"csp\":[" ++ toString pid ++ "," ++ toString actor ++ ","
+                                          ++ toString sh ++ "," ++ toString uh ++ "]}"
   | .makeSovereignA actor cell => "{\"sov\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
   | .refusalA actor cell => "{\"refusal\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
   | .receiptArchiveA actor cell => "{\"rarchive\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
@@ -1709,8 +1722,21 @@ def encodeActionW : FullActionA → String
         ++ toString exporter ++ "]}"
   | .swissDropA sw actor exporter => "{\"sdrop\":[" ++ toString sw ++ "," ++ toString actor ++ ","
                                        ++ toString exporter ++ "]}"
+  | .cellSealA actor cell => "{\"cseal\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
+  | .cellUnsealA actor cell => "{\"cunseal\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
+  | .cellDestroyA actor cell ch => "{\"cdestroy\":[" ++ toString actor ++ "," ++ toString cell ++ ","
+                                     ++ toString ch ++ "]}"
+  | .refreshDelegationA actor child => "{\"rdel\":[" ++ toString actor ++ "," ++ toString child ++ "]}"
 
-/-! ### §W4 parser — recursive-descent over the 51-arm `ACTIONW` grammar.
+/-- Encode a `List FullActionA` as a `;`-joined sequence of action-encodings (the inner-effect array an
+`exerciseA` carries on the wire). Empty ⇒ the empty string (the wire `[]`). -/
+def encodeActionsW : List FullActionA → String
+  | []      => ""
+  | [a]     => encodeActionW a
+  | a :: as => encodeActionW a ++ ";" ++ encodeActionsW as
+end
+
+/-! ### §W4 parser — recursive-descent over the `ACTIONW` grammar.
 
 Helpers `pN`/`pI`/`pS`/`pA` read ONE typed arg AFTER a comma (or, for the first arg, directly):
 `pN` a `Nat`, `pI` an `Int`, `pS` a JSON string, `pA` an `AUTHS` array. Each arm threads the parse
@@ -1729,9 +1755,12 @@ def cS (cs : PState) : Option (String × PState) :=
 def cA (cs : PState) : Option (List Auth × PState) :=
   match lit "," cs with | none => none | some r => parseAuthsW r
 
-/-- Parse ONE `FullActionA` (all 51 arms). Dispatch on the tag literal; read each arm's typed args;
-close on `]}`. Fail-closed on any deviation. -/
-def parseActionW (cs : PState) : Option (FullActionA × PState) :=
+mutual
+/-- Parse ONE `FullActionA` (all arms). Dispatch on the tag literal; read each arm's typed args; close
+on `]}`. Fail-closed on any deviation. `fuel`-bounded so the recursive `exerciseA` inner-list parse is
+total (each inner level consumes one fuel; the seed is the wire length, an upper bound on nesting
+depth — the same discipline as `parseValue`). -/
+def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState) :=
   match lit "{\"bal\":[" cs with
   | some r0 => do
       let (actor, r1) ← parseNat r0; let (src, r2) ← cN r1; let (dst, r3) ← cN r2
@@ -1820,8 +1849,19 @@ def parseActionW (cs : PState) : Option (FullActionA × PState) :=
   | none =>
   match lit "{\"exercise\":[" cs with
   | some r0 => do
-      let (actor, r1) ← parseNat r0; let (target, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.exerciseA actor target, r3)
+      let (actor, r1) ← parseNat r0; let (target, r2) ← cN r1
+      -- parse the nested inner-effect array `,[ … ]` (the de-shadowed inner effects).
+      let r3 ← lit ",[" r2
+      let (inner, r4) ← parseActionsWFuel fuel r3
+      let r5 ← lit "]" r4; let r6 ← lit "]}" r5
+      some (.exerciseA actor target inner, r6)
+  | none =>
+  -- §MA-factory: the factory tag is tried BEFORE `createcell` (its tag is a strict prefix) so the
+  -- longer tag wins; `vk` is the trailing `Int` (the content-addressed factory id).
+  match lit "{\"createcellfactory\":[" cs with
+  | some r0 => do
+      let (actor, r1) ← parseNat r0; let (newCell, r2) ← cN r1; let (vk, r3) ← cI r2; let r4 ← lit "]}" r3
+      some (.createCellFromFactoryA actor newCell vk, r4)
   | none =>
   match lit "{\"createcell\":[" cs with
   | some r0 => do
@@ -1860,6 +1900,16 @@ def parseActionW (cs : PState) : Option (FullActionA × PState) :=
       let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (obligor, r3) ← cN r2
       let (beneficiary, r4) ← cN r3; let (a, r5) ← cN r4; let (stake, r6) ← cI r5; let r7 ← lit "]}" r6
       some (.createObligationA id actor obligor beneficiary a stake, r7)
+  | none =>
+  match lit "{\"fobl\":[" cs with
+  | some r0 => do
+      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
+      some (.fulfillObligationA id actor, r3)
+  | none =>
+  match lit "{\"sobl\":[" cs with
+  | some r0 => do
+      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
+      some (.slashObligationA id actor, r3)
   | none =>
   match lit "{\"nspend\":[" cs with
   | some r0 => do
@@ -1906,18 +1956,20 @@ def parseActionW (cs : PState) : Option (FullActionA × PState) :=
   | none =>
   match lit "{\"seal\":[" cs with
   | some r0 => do
-      let (actor, r1) ← parseNat r0; let (cell, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.sealA actor cell, r3)
+      let (pid, r1) ← parseNat r0; let (actor, r2) ← cN r1
+      let r2c ← lit "," r2; let (payload, r3) ← parseCap r2c; let r4 ← lit "]}" r3
+      some (.sealA pid actor payload, r4)
   | none =>
   match lit "{\"unseal\":[" cs with
   | some r0 => do
-      let (actor, r1) ← parseNat r0; let (cell, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.unsealA actor cell, r3)
+      let (pid, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (recipient, r3) ← cN r2; let r4 ← lit "]}" r3
+      some (.unsealA pid actor recipient, r4)
   | none =>
   match lit "{\"csp\":[" cs with
   | some r0 => do
-      let (actor, r1) ← parseNat r0; let (sh, r2) ← cN r1; let (uh, r3) ← cN r2; let r4 ← lit "]}" r3
-      some (.createSealPairA actor sh uh, r4)
+      let (pid, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (sh, r3) ← cN r2; let (uh, r4) ← cN r3
+      let r5 ← lit "]}" r4
+      some (.createSealPairA pid actor sh uh, r5)
   | none =>
   match lit "{\"sov\":[" cs with
   | some r0 => do
@@ -1980,9 +2032,54 @@ def parseActionW (cs : PState) : Option (FullActionA × PState) :=
   | some r0 => do
       let (sw, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (exporter, r3) ← cN r2; let r4 ← lit "]}" r3
       some (.swissDropA sw actor exporter, r4)
+  | none =>
+  match lit "{\"cseal\":[" cs with
+  | some r0 => do
+      let (actor, r1) ← parseNat r0; let (cell, r2) ← cN r1; let r3 ← lit "]}" r2
+      some (.cellSealA actor cell, r3)
+  | none =>
+  match lit "{\"cunseal\":[" cs with
+  | some r0 => do
+      let (actor, r1) ← parseNat r0; let (cell, r2) ← cN r1; let r3 ← lit "]}" r2
+      some (.cellUnsealA actor cell, r3)
+  | none =>
+  match lit "{\"cdestroy\":[" cs with
+  | some r0 => do
+      let (actor, r1) ← parseNat r0; let (cell, r2) ← cN r1; let (ch, r3) ← cN r2; let r4 ← lit "]}" r3
+      some (.cellDestroyA actor cell ch, r4)
+  | none =>
+  match lit "{\"rdel\":[" cs with
+  | some r0 => do
+      let (actor, r1) ← parseNat r0; let (child, r2) ← cN r1; let r3 ← lit "]}" r2
+      some (.refreshDelegationA actor child, r3)
   | none => none
 
-/-! ### §W4-eval — EVERY one of the 51 arms round-trips through the wide action codec.
+/-- Parse the `;`-joined inner-effect array body an `exerciseA` carries (everything up to the closing
+`]`), `fuel`-bounded. An EMPTY array (the next char is `]`) ⇒ `[]`; otherwise parse one action and, if a
+`;` follows, recurse. Mirrors `encodeActionsW`. -/
+def parseActionsWFuel (fuel : Nat) (cs : PState) : Option (List FullActionA × PState) :=
+  match fuel with
+  | 0          => none
+  | fuel' + 1  =>
+    match cs with
+    | ']' :: _ => some ([], cs)            -- empty inner array
+    | _        =>
+      match parseActionWFuel fuel' cs with
+      | none          => none
+      | some (a, r0)  =>
+        match lit ";" r0 with
+        | some r1 =>
+          match parseActionsWFuel fuel' r1 with
+          | some (as, r2) => some (a :: as, r2)
+          | none          => none
+        | none    => some ([a], r0)        -- last element (no trailing `;`)
+end
+
+/-- Parse ONE `FullActionA`, seeding the fuel with the wire length (an upper bound on nesting depth). -/
+def parseActionW (cs : PState) : Option (FullActionA × PState) :=
+  parseActionWFuel (cs.length + 1) cs
+
+/-! ### §W4-eval — EVERY one of the arms round-trips through the wide action codec.
 
 `actionRoundtrips a` re-encodes the reparse of `encodeActionW a` and compares strings (FullActionA
 has no BEq). `allActions` lists ONE representative of EACH of the 51 arms (distinct args so a
@@ -2013,7 +2110,7 @@ def allActions : List FullActionA :=
   , .dropRefA 40 41
   , .revokeDelegationA 42 43
   , .validateHandoffA 44 45 46
-  , .exerciseA 47 48
+  , .exerciseA 47 48 [.emitEventA 200 201 (-202) 203, .setFieldA 204 205 "balance" (-206)]
   , .createCellA 49 50
   , .spawnA 51 52 53
   , .bridgeMintA 54 55 56 (-57)
@@ -2021,6 +2118,8 @@ def allActions : List FullActionA :=
   , .releaseEscrowA 64 65
   , .refundEscrowA 66 67
   , .createObligationA 68 69 70 71 72 (-73)
+  , .fulfillObligationA 200 201
+  , .slashObligationA 202 203
   , .noteSpendA 74 75
   , .noteCreateA 76 77
   , .createCommittedEscrowA 78 79 80 81 82 (-83)
@@ -2029,27 +2128,31 @@ def allActions : List FullActionA :=
   , .bridgeLockA 88 89 90 91 92 (-93)
   , .bridgeFinalizeA 94 95 96 (-97)
   , .bridgeCancelA 98 99
-  , .sealA 100 101
-  , .unsealA 102 103
-  , .createSealPairA 104 105 106
-  , .makeSovereignA 107 108
-  , .refusalA 109 110
-  , .receiptArchiveA 111 112
-  , .queueAllocateA 113 114 115 116
-  , .queueEnqueueA 117 118 119 120 121 122 (-123)
-  , .queueDequeueA 124 125 126 127 (-128)
-  , .queueResizeA 129 130 131 132
-  , .exportSturdyRefA 133 134 135 136 [.read]
-  , .enlivenRefA 137 138 139 [.call]
-  , .swissHandoffA 140 141 142 143
-  , .swissDropA 144 145 146 ]
+  , .sealA 100 101 (Cap.endpoint 150 [.read, .write])
+  , .unsealA 102 103 104
+  , .createSealPairA 105 106 107 108
+  , .makeSovereignA 109 110
+  , .refusalA 111 112
+  , .receiptArchiveA 113 114
+  , .queueAllocateA 115 116 117 118
+  , .queueEnqueueA 119 120 121 122 123 124 (-125)
+  , .queueDequeueA 126 127 128 129 (-130)
+  , .queueResizeA 131 132 133 134
+  , .exportSturdyRefA 135 136 137 138 [.read]
+  , .enlivenRefA 139 140 141 [.call]
+  , .swissHandoffA 142 143 144 145
+  , .swissDropA 146 147 148
+  , .cellSealA 149 150
+  , .cellUnsealA 151 152
+  , .cellDestroyA 153 154 155
+  , .refreshDelegationA 156 157 ]
 
 /-- EVERY representative round-trips (the 51-arm non-vacuity guard). -/
 def allActionsRoundtrip : Bool := allActions.all actionRoundtrips
 
-#eval allActions.length                                                     -- 46 (one per FullActionA arm)
+#eval allActions.length                                                     -- 52 (one per FullActionA arm)
 #eval allActionsRoundtrip                                                    -- true (every arm round-trips)
--- HARD CI check (fails the build if ANY arm — incl. the new `delegateAttenA` — stops round-tripping):
+-- HARD CI check (fails the build if ANY arm — incl. the Wave-3 seal/lifecycle arms — stops round-tripping):
 #guard allActionsRoundtrip
 -- a couple of spot checks of the actual wire bytes:
 #eval encodeActionW (.balanceA { actor := 1, src := 2, dst := 3, amt := -4 } 5)

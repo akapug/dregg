@@ -112,8 +112,12 @@ def workForest : FullForestA :=
 /-- **`workForest_delta0` / `workForest_delta1` — per-asset net is `0` in both assets.** Transfers move
 value within the cell set; no minting or burning. These discharge the `hzero` premise of conservation.
 Non-vacuous: a mint would make them nonzero. -/
-theorem workForest_delta0 : turnLedgerDeltaAsset (lowerForestA workForest) 0 = 0 := by decide
-theorem workForest_delta1 : turnLedgerDeltaAsset (lowerForestA workForest) 1 = 0 := by decide
+theorem workForest_delta0 : turnLedgerDeltaAsset (lowerForestA workForest) 0 = 0 := by
+  simp [turnLedgerDeltaAsset, lowerForestA, lowerChildrenA, workForest, ledgerDeltaAsset, targetOf,
+    capTarget, orchestratorCap]
+theorem workForest_delta1 : turnLedgerDeltaAsset (lowerForestA workForest) 1 = 0 := by
+  simp [turnLedgerDeltaAsset, lowerForestA, lowerChildrenA, workForest, ledgerDeltaAsset, targetOf,
+    capTarget, orchestratorCap]
 
 /-- **`workForest_conserves` — ② conservation.** A committed work forest preserves every asset's total
 supply (`recTotalAssetWithEscrow … b` for every `b`): the per-asset conservation vector across the whole
