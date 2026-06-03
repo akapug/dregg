@@ -24,7 +24,7 @@ open Dregg2.Boundary
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Authority
-open Dregg2.Exec.EffectsState (stateStep stateStep_factors)
+open Dregg2.Exec.EffectsState (stateStep stateStep_factors stateStepGuarded_eq)
 open Dregg2.Tactics
 
 /-! ## Step 0 — nullifier-frame lemmas for the DEEPLY-NESTED kernel ops (queue-deposit + swiss).
@@ -93,6 +93,52 @@ private theorem queueDequeueRefundK_nullifiers (k : RecordKernelState) (id : Nat
         · exact absurd h (by simp)                           -- target not a live account
       · exact absurd h (by simp)                             -- deposit record absent
 
+/-- WAVE 4: one atomic-batch sub-op leaves `nullifiers` untouched (the deposit-park / FIFO frame). -/
+private theorem queueTxOpStepA_nullifiers (s s' : RecChainedState) (op : QueueTxOpA)
+    (h : queueTxOpStepA s op = some s') : s'.kernel.nullifiers = s.kernel.nullifiers := by
+  cases op with
+  | enqueue id m actor cell depId dAsset deposit =>
+      simp only [queueTxOpStepA, queueEnqueueChainA] at h; split at h
+      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; option_inj at h; subst h
+                     exact queueEnqueueDepositK_nullifiers s.kernel id m actor cell depId dAsset deposit k' hk
+      · exact absurd h (by simp)
+  | dequeue id actor cell depId deposit =>
+      simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
+      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some kp => obtain ⟨k', mhd⟩ := kp
+                     rw [hk] at h; option_inj at h; subst h
+                     exact queueDequeueRefundK_nullifiers s.kernel id actor depId k' mhd hk
+      · exact absurd h (by simp)
+
+/-- WAVE 4: the ALL-OR-NOTHING atomic batch leaves `nullifiers` untouched (induction over the sub-ops). -/
+private theorem queueAtomicTxChainA_nullifiers (s s' : RecChainedState) (ops : List QueueTxOpA)
+    (h : queueAtomicTxChainA s ops = some s') : s'.kernel.nullifiers = s.kernel.nullifiers := by
+  induction ops generalizing s with
+  | nil => simp only [queueAtomicTxChainA, Option.some.injEq] at h; subst h; rfl
+  | cons op rest ih =>
+      simp only [queueAtomicTxChainA] at h
+      cases hop : queueTxOpStepA s op with
+      | none => rw [hop] at h; exact absurd h (by simp)
+      | some s1 => simp only [hop] at h; rw [ih s1 h, queueTxOpStepA_nullifiers _ _ _ hop]
+
+/-- WAVE 4: the pipeline fan-out enqueue fold leaves `nullifiers` untouched (each `queueEnqueueK` frames it). -/
+private theorem pipelineFanoutK_nullifiers (k k' : RecordKernelState) (actor : CellId) (m : Nat)
+    (sinks : List CellId) (sids : List Nat)
+    (h : pipelineFanoutK k actor m sinks sids = some k') : k'.nullifiers = k.nullifiers := by
+  induction sinks generalizing k sids with
+  | nil => cases sids <;> (simp only [pipelineFanoutK, Option.some.injEq] at h; subst h; rfl)
+  | cons sink rest ih =>
+      cases sids with
+      | nil => simp only [pipelineFanoutK] at h; exact absurd h (by simp)
+      | cons sid sids' =>
+          simp only [pipelineFanoutK] at h; split at h
+          · cases hq : queueEnqueueK k sid m with
+            | none => rw [hq] at h; exact absurd h (by simp)
+            | some k1 => simp only [hq] at h; rw [ih k1 sids' h, queueEnqueueK_nullifiers k sid m k1 hq]
+          · exact absurd h (by simp)
 
 /-- `swissEnlivenK` commits to `{ k with swiss := … }` — `nullifiers` untouched. -/
 private theorem swissEnlivenK_nullifiers (k : RecordKernelState) (sw : Nat) (claimed : List Auth)
@@ -135,9 +181,11 @@ GROWS it by one — `List.subset_cons_self`), and EVERY other arm leaves it lite
 (`List.Subset.refl`), because every kernel transform is a record-update of a field OTHER than
 `nullifiers`, so the `.nullifiers` projection reduces by `rfl`. -/
 
+mutual
 /-- **`execFullA_nullifiers_grow`** — a committed `FullActionA` never shrinks the spent-note
 nullifier set: `s.kernel.nullifiers ⊆ s'.kernel.nullifiers`. `noteSpendA` conses a fresh nullifier;
-the other 45 effects touch other kernel fields only (frame: `nullifiers` literally unchanged). -/
+the other effects touch other kernel fields only (frame: `nullifiers` literally unchanged); `exerciseA`
+RECURSES — its inner fold can only GROW the set further (mutual `execInnerA_nullifiers_grow`). -/
 theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
     (h : execFullA s fa = some s') : s.kernel.nullifiers ⊆ s'.kernel.nullifiers := by
   cases fa with
@@ -198,8 +246,9 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
   -- §pure-state — `stateStep` (field write); factors through `stateStep_factors` (kernel = writeField,
   -- a `cell`-only update). All nine share the proof.
   | setFieldA actor cell f v =>
+      -- §SLOT-CAVEAT: peel the caveat gate to the `stateStep` post-state (a `cell`-only write).
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact List.Subset.refl _
+      obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq h); subst hs'; exact List.Subset.refl _
   | emitEventA actor cell topic data =>
       simp only [execFullA, emitStep] at h
       option_inj at h; subst h; exact List.Subset.refl _
@@ -260,14 +309,27 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
             · injection hk with hk; subst hk; rfl
             · exact absurd hk (by simp)
           exact hn ▸ List.Subset.refl _
-  | exerciseA actor t =>
+  | exerciseA actor t inner =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := exerciseStepA_factors h; subst hs'; exact List.Subset.refl _
+      cases hg : exerciseStepA s actor t with
+      | none => rw [hg] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [hg] at h
+          -- the hold-gate leaves the kernel (hence `nullifiers`) UNCHANGED; the inner fold only GROWS it.
+          obtain ⟨_, hs1⟩ := exerciseStepA_factors hg
+          have hk : s1.kernel.nullifiers = s.kernel.nullifiers := by rw [hs1]
+          exact hk ▸ execInnerA_nullifiers_grow s1 s' inner h
   -- §supply-growth — createCell/spawn factor through their gates (kernel = createCellIntoAsset / + a
   -- caps grant — neither touches `nullifiers`); bridgeMint reuses recCMintAsset.
   | createCellA actor newCell =>
       obtain ⟨_, _, hs'⟩ := createCellChainA_factors (by simpa only [execFullA] using h)
       subst hs'; exact List.Subset.refl _
+  | createCellFromFactoryA actor newCell vk =>
+      -- §MA-factory: the factory install edits `cell`/`slotCaveats`/`accounts`/`bal`, never `nullifiers`.
+      obtain ⟨_, s1, _, _, hc, hs'⟩ :=
+        createCellFromFactoryChainA_factors (by simpa only [execFullA] using h)
+      obtain ⟨_, _, hs1⟩ := createCellChainA_factors hc
+      subst hs' hs1; exact List.Subset.refl _
   | spawnA actor child target =>
       obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
       subst hs'
@@ -341,6 +403,37 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
             · injection hk with hk; subst hk; rfl
             · exact absurd hk (by simp)
           exact hn ▸ List.Subset.refl _
+  -- fulfill/slash route to refund/release (escrow SETTLE) — `nullifiers` literally unchanged.
+  | fulfillObligationA id actor =>
+      simp only [execFullA, refundEscrowChainA] at h
+      cases hk : refundEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; option_inj at h; subst h
+          show s.kernel.nullifiers ⊆ k'.nullifiers
+          have hn : k'.nullifiers = s.kernel.nullifiers := by
+            unfold refundEscrowKAsset settleEscrowRawAsset at hk
+            split at hk
+            · split at hk
+              · injection hk with hk; subst hk; rfl
+              · exact absurd hk (by simp)
+            · exact absurd hk (by simp)
+          exact hn ▸ List.Subset.refl _
+  | slashObligationA id actor =>
+      simp only [execFullA, releaseEscrowChainA] at h
+      cases hk : releaseEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; option_inj at h; subst h
+          show s.kernel.nullifiers ⊆ k'.nullifiers
+          have hn : k'.nullifiers = s.kernel.nullifiers := by
+            unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+            split at hk
+            · split at hk
+              · injection hk with hk; subst hk; rfl
+              · exact absurd hk (by simp)
+            · exact absurd hk (by simp)
+          exact hn ▸ List.Subset.refl _
   -- §NOTE-SPEND — THE GROWER. `noteSpendNullifier` conses `nf` onto `nullifiers`, so the OLD set is a
   -- subset of the new (`List.subset_cons_self`). This is the ONE arm that moves the measured set.
   | noteSpendA nf actor =>
@@ -360,18 +453,19 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
   | noteCreateA cm actor =>
       simp only [execFullA, noteCreateChainA, noteCreateCommitment] at h
       option_inj at h; subst h; exact List.Subset.refl _
-  | createCommittedEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; option_inj at h; subst h
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
+  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
+      simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
+      · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            rw [hk] at h; option_inj at h; subst h
+            show s.kernel.nullifiers ⊆ k'.nullifiers
+            have hn : k'.nullifiers = s.kernel.nullifiers := by
+              unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
+              · injection hk with hk; subst hk; rfl
+              · exact absurd hk (by simp)
+            exact hn ▸ List.Subset.refl _
+      · exact absurd h (by simp)
   | releaseCommittedEscrowA id actor =>
       simp only [execFullA, releaseEscrowChainA] at h
       cases hk : releaseEscrowKAsset s.kernel id with
@@ -450,16 +544,17 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
               · exact absurd hk (by simp)
             exact hn ▸ List.Subset.refl _
       · exact absurd h (by simp)
-  -- §seal — six bal-neutral field writes via stateStep / makeSovereignStep (cell-only update).
-  | sealA actor cell =>
+  -- §seal — the DE-SHADOWED seal/unseal/createSealPair move capabilities (edit `caps`/`sealedBoxes`),
+  -- makeSovereign/refusal/receiptArchive write the cell record — none touch `nullifiers` (frame: `rfl`).
+  | sealA pid actor payload =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact List.Subset.refl _
-  | unsealA actor cell =>
+      obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; exact List.Subset.refl _
+  | unsealA pid actor recipient =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact List.Subset.refl _
-  | createSealPairA actor sealerHolder unsealerHolder =>
+      obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'; exact List.Subset.refl _
+  | createSealPairA pid actor sealerHolder unsealerHolder =>
       simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact List.Subset.refl _
+      obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'; exact List.Subset.refl _
   | makeSovereignA actor cell =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := makeSovereignStep_factors h; subst hs'; exact List.Subset.refl _
@@ -469,6 +564,20 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
   | receiptArchiveA actor cell =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact List.Subset.refl _
+  -- §lifecycle (Wave-3) — seal/unseal/destroy edit `lifecycle`/`deathCert`; refresh edits `delegations`
+  -- — none touch `nullifiers` (frame: `rfl`).
+  | cellSealA actor cell =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellSealChainA_factors h; subst hs'; exact List.Subset.refl _
+  | cellUnsealA actor cell =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellUnsealChainA_factors h; subst hs'; exact List.Subset.refl _
+  | cellDestroyA actor cell ch =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellDestroyChainA_factors h; subst hs'; exact List.Subset.refl _
+  | refreshDelegationA actor child =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; exact List.Subset.refl _
   -- §queue — four ring-buffer effects, each `if stateAuthB … then match queueK … | some k' => …`
   -- (kernel updates `queues`, never `nullifiers`). Gate-peel the outer `if`, then cases the kernel op.
   | queueAllocateA id actor cell cap =>
@@ -531,6 +640,24 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
                 · exact absurd hk (by simp)
             exact hn ▸ List.Subset.refl _
       · exact absurd h (by simp)
+  -- §MA-queue-batch (WAVE 4): the atomic batch / pipeline step edit `queues`/`escrows`/`bal`, never
+  -- `nullifiers` (the witness lemmas + frame helpers); pipelinedSend edits NOTHING.
+  | queueAtomicTxA actor ops =>
+      simp only [execFullA] at h
+      obtain ⟨s1, hf, _, hk⟩ := queueAtomicTxA_atomic_witness h
+      show s.kernel.nullifiers ⊆ s'.kernel.nullifiers
+      rw [show s'.kernel.nullifiers = s1.kernel.nullifiers from by rw [hk]]
+      exact (queueAtomicTxChainA_nullifiers s s1 ops hf) ▸ List.Subset.refl _
+  | queuePipelineStepA srcId owner sinkCells sinkIds =>
+      simp only [execFullA] at h
+      obtain ⟨k1, mh, hd, hfo⟩ := queuePipelineStepA_routing_witness h
+      show s.kernel.nullifiers ⊆ s'.kernel.nullifiers
+      have hn : s'.kernel.nullifiers = s.kernel.nullifiers :=
+        (pipelineFanoutK_nullifiers k1 s'.kernel owner mh sinkCells sinkIds hfo).trans
+          (queueDequeueK_nullifiers s.kernel srcId owner k1 mh hd)
+      exact hn ▸ List.Subset.refl _
+  | pipelinedSendA actor =>
+      simp only [execFullA, Option.some.injEq] at h; subst h; exact List.Subset.refl _
   -- §swiss — four CapTP swiss-table effects, each `if stateAuthB … then match swissK … | some k' => …`
   -- (kernel updates `swiss`, never `nullifiers`). Gate-peel + cases, as the queue arms.
   | exportSturdyRefA sw actor exporter target rights =>
@@ -585,6 +712,23 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
               swissDropK_nullifiers s.kernel sw k' hk
             exact hn ▸ List.Subset.refl _
       · exact absurd h (by simp)
+
+/-- **`execInnerA_nullifiers_grow`** — the inner-effect fold an `exerciseA` recurses through never
+shrinks the nullifier set. Mutual with `execFullA_nullifiers_grow`; chains `List.Subset.trans`. -/
+theorem execInnerA_nullifiers_grow (s s' : RecChainedState) (inner : List FullActionA)
+    (h : execInnerA s inner = some s') : s.kernel.nullifiers ⊆ s'.kernel.nullifiers := by
+  cases inner with
+  | nil => simp only [execInnerA, Option.some.injEq] at h; subst h; exact List.Subset.refl _
+  | cons a rest =>
+      simp only [execInnerA] at h
+      cases ha : execFullA s a with
+      | none => rw [ha] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [ha] at h
+          exact List.Subset.trans
+            (execFullA_nullifiers_grow s s1 a ha)
+            (execInnerA_nullifiers_grow s1 s' rest h)
+end
 
 /-! ## Step 2 — the turn- and forest-level lift (induction on the list + the pre-order bridge). -/
 

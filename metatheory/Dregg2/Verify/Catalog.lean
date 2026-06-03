@@ -141,17 +141,18 @@ lemma routes every cap-writing effect — grant/attenuate/revoke — under `U`; 
 `.forever` then gives *"caps stay confined by `U` at every index, every schedule"* — capability safety,
 forever, the seL4 shape. -/
 
-/-- **`confinement% U`** — the authority-confinement shape: expands to `Auth.control ∈ U →
-CellContract`, the contract being `CapsConfined U ·.kernel.caps` carried by `cellNextA_confine`. The
-`control ∈ U` hypothesis is surfaced explicitly (the carry genuinely needs it). Apply to a proof to get
-a real `CellContract`. -/
+/-- **`confinement% U`** — the authority-confinement shape: expands to `(control ∈ U ∧ grant ∈ U ∧
+reply ∈ U) → CellContract`, the contract being the COMBINED `KConfined U ·.kernel` (caps + the Wave-3
+sealed-box payloads) carried by `cellNextA_kconfine`. The three membership hypotheses are surfaced
+explicitly (the de-shadowed seal cluster genuinely needs `grant`/`reply` ⊆ `U` for its pair caps, and
+the carry needs `control` for the connectivity grants). Apply to a proof to get a real `CellContract`. -/
 syntax (name := confinementStx) "confinement% " term:max : term
 
 macro_rules
   | `(confinement% $U:term) =>
-    `((fun (hctrl : Auth.control ∈ $U) =>
-        ({  Inv := fun s => CapsConfined $U s.kernel.caps
-            step_ob := fun a cf h => cellNextA_confine hctrl a cf h
+    `((fun (h : Auth.control ∈ $U ∧ Auth.grant ∈ $U ∧ Auth.reply ∈ $U) =>
+        ({  Inv := fun s => KConfined $U s.kernel
+            step_ob := fun a cf hf => cellNextA_kconfine h.1 h.2.1 h.2.2 a cf hf
             shape := .other } : CellContract)))
 
 /-! ## §4 — `automaton_inv% a b` — a field-RELATIONAL invariant (linear field algebra).
@@ -238,10 +239,11 @@ full authority ceiling (which contains `control`, supplied by `by decide`). -/
 def gateConfined : CellContract :=
   (confinement% fullAuthCeiling) (by decide)
 
-/-- **GATE (3, payoff) — `confinement%` reproduces `CellConfine.livingCellA_confinement`.** *Caps stay
-confined by the ceiling at every index of every adversarial trajectory* — capability safety, forever. -/
-example (s : RecChainedState) (hinit : CapsConfined fullAuthCeiling s.kernel.caps) (sched : SchedA) :
-    ∀ n, CapsConfined fullAuthCeiling (trajA s sched n).kernel.caps :=
+/-- **GATE (3, payoff) — `confinement%` reproduces `CellConfine.livingCellA_confinement`.** The COMBINED
+`KConfined` (caps + the Wave-3 sealed-box payloads) stays confined by the ceiling at every index of every
+adversarial trajectory — capability safety (with the de-shadowed seal cap-movement), forever. -/
+example (s : RecChainedState) (hinit : KConfined fullAuthCeiling s.kernel) (sched : SchedA) :
+    ∀ n, KConfined fullAuthCeiling (trajA s sched n).kernel :=
   ((confinement% fullAuthCeiling) (by decide)).forever hinit sched
 
 /-- **GATE (4) — `automaton_inv% 0 1` builds.** The combined two-asset supply relational invariant,

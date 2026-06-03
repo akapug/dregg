@@ -53,6 +53,127 @@ the total, never crashes the sum — the data-tier shadow of `Value.flatten`'s z
 is the named-field measure that replaces `KernelState.bal`'s whole-state scalar. -/
 def balOf (v : Value) : Int := (v.scalar balanceField).getD 0
 
+/-! ### SLOT CAVEATS — the per-slot invariants a factory binds onto a cell's fields.
+
+dregg1's `FactoryDescriptor` (`cell/src/factory.rs`) attaches a `program : RecordProgram` whose
+`StateConstraint`s (`cell/src/program.rs:570`, "**21 variants**") are checked by the executor on
+EVERY `SetField`/`CellProgram::Cases` transition (`evaluate`, `cell/src/program.rs:1314`+). This is
+the foundation that makes a starbridge-app's published safety REAL: a `nameservice` slot bound
+`Immutable` is *registered forever* because the EXECUTOR rejects any later rewrite, not because some
+downstream theorem merely carries the wish.
+
+`SlotCaveat` names the six transition caveats the executor checks PER FIELD — the actor-aware,
+name-keyed transcription of the corresponding `StateConstraint` arms (`cell/src/program.rs`):
+  * `immutable f`        — `Immutable { index }`        (`:624` / eval `:1314`): `new == old`.
+  * `monotonicSeq f`     — `MonotonicSequence { seq }`  (`:719` / eval `:1862`): `new == old + 1`.
+  * `monotonic f`        — `Monotonic { index }`        (`:639` / eval `:1364`): `new ≥ old`.
+  * `writeOnce f`        — `WriteOnce { index }`         (`:619` / eval `:1337`): `old = 0 ∨ new = old`.
+  * `senderAuthorized f authorized` — `SenderAuthorized { set }` (`:675` / eval `:1576`): the actor
+    must be a member of the slot's authorized set (the membership-witness crypto is the §8 portal;
+    here the set is the EXECUTABLE authorized list the executor checks `actor ∈`).
+  * `boundedBy f lo hi`  — `BoundedBy`/`FieldDeltaInRange` family (`:489`/`:636`, eval `:1424`): the
+    bounded-value caveat `lo ≤ new ≤ hi` (the executable shadow of the range gate).
+
+`old` defaults to `0` for an absent/ill-typed slot — dregg1's `FIELD_ZERO` default for a fresh slot
+(`old_state.map(|o| o.fields[idx]).unwrap_or(FIELD_ZERO)`, `cell/src/program.rs:1331`). The
+evaluator is decidable, computable, and FAIL-CLOSED (a violated caveat ⇒ `false` ⇒ the write is
+rejected). -/
+inductive SlotCaveat where
+  /-- `Immutable { index }` (`cell/src/program.rs:624`, eval `:1314`): the slot is read-only —
+  `new == old` (no rewrite). A `nameservice` `owner` slot bound here is *registered forever*. -/
+  | immutable        (field : FieldName)
+  /-- `MonotonicSequence { seq_index }` (`:719`, eval `:1862`): `new == old + 1` — replay-safe
+  sequencing (a subscription head/tail advances by exactly one). -/
+  | monotonicSeq     (field : FieldName)
+  /-- `Monotonic { index }` (`:639`, eval `:1364`): `new ≥ old` — append-only counter / expiry
+  extension / nullifier-root growth. -/
+  | monotonic        (field : FieldName)
+  /-- `WriteOnce { index }` (`:619`, eval `:1337`): `old == FIELD_ZERO` (first write) OR `new == old`
+  (unchanged); after the first non-zero write the slot is frozen. -/
+  | writeOnce        (field : FieldName)
+  /-- `SenderAuthorized { set }` (`:675`, eval `:1576`): the turn's actor must be a member of the
+  slot's `authorized` set. (The Merkle/blinded membership *proof* is the §8 Prop-carrier portal; the
+  EXECUTABLE check here is `actor ∈ authorized`.) -/
+  | senderAuthorized (field : FieldName) (authorized : List CellId)
+  /-- `BoundedBy`/`FieldDeltaInRange` range family (`:489`/`:636`, eval `:1424`): the new value must
+  lie in `[lo, hi]` (a bounded-growth / windowed slot). -/
+  | boundedBy        (field : FieldName) (lo hi : Int)
+  deriving Repr, DecidableEq
+
+/-- The field a `SlotCaveat` guards. -/
+def SlotCaveat.field : SlotCaveat → FieldName
+  | .immutable f          => f
+  | .monotonicSeq f       => f
+  | .monotonic f          => f
+  | .writeOnce f          => f
+  | .senderAuthorized f _ => f
+  | .boundedBy f _ _      => f
+
+/-- **`SlotCaveat.eval cav actor old new`** — does writing `new` to the caveat's slot (whose
+committed value is `old`, the actor being `actor`) SATISFY the caveat? Decidable, computable,
+FAIL-CLOSED (a violated caveat returns `false`). Mirrors dregg1's `StateConstraint::evaluate`
+arms (`cell/src/program.rs`) for the six transition caveats, with `old` defaulting to the fresh
+`FIELD_ZERO = 0`. -/
+def SlotCaveat.eval : SlotCaveat → CellId → Int → Int → Bool
+  | .immutable _,             _,     old, new => decide (new = old)
+  | .monotonicSeq _,          _,     old, new => decide (new = old + 1)
+  | .monotonic _,             _,     old, new => decide (old ≤ new)
+  | .writeOnce _,             _,     old, new => decide (old = 0) || decide (new = old)
+  | .senderAuthorized _ auth, actor, _,   _   => auth.contains actor
+  | .boundedBy _ lo hi,       _,     _,   new => decide (lo ≤ new) && decide (new ≤ hi)
+
+/-- **`SlotCaveat.bornFresh cav new`** — does the caveat ADMIT a value `new` as a FRESH cell's genesis
+state (dregg1's `None` / genesis arm, `cell/src/program.rs:1331`: a transition caveat permits the
+FIRST write on a fresh cell `nonce==0`)? The four TRANSITION caveats (immutable/writeOnce/monotonic/
+monotonicSeq) permit any first write (they only constrain SUBSEQUENT transitions); the ABSOLUTE
+caveats (`boundedBy` value-range, `senderAuthorized` set-membership) still genuinely constrain the
+genesis value — a `BoundedBy [0,10]` slot CANNOT be born at 99. Used by `FactoryEntry.conforms`. -/
+def SlotCaveat.bornFresh : SlotCaveat → Int → Bool
+  | .immutable _,        _   => true                                    -- first write permitted (genesis)
+  | .monotonicSeq _,     _   => true
+  | .monotonic _,        _   => true
+  | .writeOnce _,        _   => true
+  | .senderAuthorized _ _, _ => true                                    -- sender check is a turn-time gate, not genesis
+  | .boundedBy _ lo hi,  new => decide (lo ≤ new) && decide (new ≤ hi)  -- value-range STILL binds at birth
+
+/-! ### The FACTORY DESCRIPTOR — a published contract that mints conforming, caveat-bound cells.
+
+dregg1's `FactoryDescriptor` (`cell/src/factory.rs`) is a content-addressed contract: the executor
+validates a `CreateCellFromFactory` against the factory's declared constraints
+(`validate_and_record`, `apply_create_cell_from_factory`, `turn/src/executor/apply.rs:3112`+), then
+mints a cell carrying the factory's `program` (its slot caveats), `initialFields`, and `programVk`.
+`FactoryEntry` is the executable transcription: the published `(caveats, initialFields, programVk)`
+every minted child carries for its WHOLE LIFE. -/
+structure FactoryEntry where
+  /-- The per-slot caveats the factory installs on every minted cell (its `program`). These become
+  the cell's `slotCaveats`, so the published invariants are enforced over the cell's whole life. -/
+  caveats       : List SlotCaveat
+  /-- The factory's declared INITIAL field layout `(field, value)` for a fresh cell
+  (`params.initial_fields`, `apply.rs:3185`). The cell is born carrying exactly these. -/
+  initialFields : List (FieldName × Int)
+  /-- The program verification-key hash the factory installs (`effective_vk`, `apply.rs:3197`). The
+  crypto content of the VK is the §8 portal; here it is the recorded identifier. -/
+  programVk     : Int
+  deriving Repr, DecidableEq
+
+/-- **`FactoryEntry.conforms e`** — does the factory's OWN declared initial state satisfy its OWN
+caveats (read against a fresh slot, `old = 0`, by a privileged minter `actor = 0`)? This is the
+creation-time constraint check (`validate_and_record`): a well-formed factory cannot publish initial
+fields that already VIOLATE the invariants it claims to enforce (e.g. a `BoundedBy [10,20]` slot born
+at `25`). Decidable, computable, FAIL-CLOSED. Each caveat reads its own field's initial value
+(defaulting absent to `0`). -/
+def FactoryEntry.conforms (e : FactoryEntry) : Bool :=
+  e.caveats.all (fun cav =>
+    let newVal := (e.initialFields.find? (fun p => p.1 == cav.field)).elim 0 (·.2)
+    -- genesis: a fresh cell permits the first write of every TRANSITION caveat (dregg1's `None` arm,
+    -- `cell/src/program.rs:1331`), but the ABSOLUTE value-range caveats STILL bind — a `BoundedBy
+    -- [0,10]` slot cannot be born at 99 (`bornFresh`). This is what gives `conforms` real teeth.
+    cav.bornFresh newVal)
+
+/-- Look up a factory by its content-addressed VK in a registry list (the first match). -/
+def findFactory (fs : List (Nat × FactoryEntry)) (vk : Nat) : Option FactoryEntry :=
+  (fs.find? (fun p => p.1 == vk)).map (·.2)
+
 /-! ### The OFF-LEDGER holding-store: the escrow side-table (dregg1's `self.escrows`).
 
 dregg1's `apply_create_escrow` (`turn/src/executor/apply.rs:1674`) does NOT do a balance-conserving
@@ -256,6 +377,36 @@ The side-table update primitive shared by enqueue/dequeue/resize. -/
 def replaceQueue (qs : List QueueRecord) (id : Nat) (q' : QueueRecord) : List QueueRecord :=
   qs.map (fun q => if q.id == id then q' else q)
 
+/-! ## §SEAL — the sealed-box holding-store (Wave-3 de-shadow of `apply_seal`/`apply_unseal`).
+
+dregg1's seal/unseal genuinely MOVE a capability through an AEAD box: `apply_create_seal_pair`
+(`apply.rs:2675`) grants a sealer + unsealer cap; `apply_seal` (`apply.rs:2743`) seals a HELD `Cap`
+into a box bound to the sealer key; `apply_unseal` (`apply.rs:2874`) opens it under the unsealer key
+and GRANTS the recovered `Cap` to the recipient's c-list. The wave-6 model collapsed all three to a
+field flag (`sealed_box := 1`) — NO capability ever moved. We de-shadow by carrying the box as a
+first-class side-table entry whose payload is the SEALED `Cap`; the AEAD crypto is the §8 portal, but
+the WHICH-cap binding and the c-list move are REAL. -/
+
+/-- **`SealedBoxRecord`** — one entry of the sealed-box holding-store, keyed by `pairId` (dregg1's
+`SealedBox.pair_id`). Carries the cell that SEALED it (the sealer-cap holder) and the `payload : Cap`
+the box binds — the genuine capability that `unseal` will recover and grant. The AEAD ciphertext that
+binds `payload` is the §8 portal; what is REAL here is that the box holds a SPECIFIC cap (not a flag),
+so unseal moves THAT cap and no other. -/
+structure SealedBoxRecord where
+  /-- the seal-pair id key (dregg1's `[u8;32]`, modelled as a `Nat`). -/
+  pairId  : Nat
+  /-- the cell that sealed the box (held the sealer cap, `apply_seal`'s `actor`). -/
+  sealer  : CellId
+  /-- the SEALED capability the box binds — recovered and granted by `unseal` (`apply_unseal`'s
+  `cap` from `pair.unseal(sealed_box)`, `apply.rs:2922`). The REAL payload, not a flag. -/
+  payload : Cap
+deriving DecidableEq, Repr
+
+/-- Look up a sealed box by `pairId` in the holding-store (the first match), `none` if absent. The
+membership primitive `unseal` validates against — fail-closed when `none`. -/
+def findSealedBox (bs : List SealedBoxRecord) (pid : Nat) : Option SealedBoxRecord :=
+  bs.find? (fun e => e.pairId == pid)
+
 /-- **Record kernel state:** the finite set of live `accounts`, a per-cell **content-addressed
 record** state (`cell : CellId → Value`, each a `Value.record` carrying at least a `balance`
 field), and the capability table — PLUS dregg1's two off-ledger side-tables, both DEFAULTING EMPTY
@@ -318,6 +469,59 @@ structure RecordKernelState where
   + validates non-amplification, handoff binds the cert, the refcount tracks live refs (GC at 0) — the
   REAL mechanism a flag-shadow lacks. -/
   swiss      : List SwissRecord := []
+  /-- **The PER-CELL SLOT-CAVEAT registry** (dregg1's `FactoryDescriptor.program` carried per minted
+  cell, `cell/src/factory.rs`): the list of `SlotCaveat`s the executor checks on EVERY `SetField` to
+  that cell (`apply_set_field` → `RecordProgram::evaluate`, `cell/src/program.rs:1314`+). A factory
+  installs these at `createCellFromFactory` time; thereafter `stateStepGuarded` (the caveat-gated
+  field write) rejects any write violating a caveat on the written slot. This is what makes a
+  published app-safety REAL — `nameservice` `Immutable`-owner = *registered forever*, enforced BY THE
+  EXECUTOR. Caveats touch NO balance, so this is balance-NEUTRAL (`recTotalAssetWithEscrow` reads
+  `bal`+`escrows`, never `slotCaveats`). DEFAULTS EMPTY (the additive extension, exactly as
+  `escrows`/`nullifiers`/`commitments`/`queues`/`swiss` were added — a cell with no factory-bound
+  caveats writes freely, recovering the prior unguarded semantics). -/
+  slotCaveats : CellId → List SlotCaveat := fun _ => []
+  /-- **The PUBLISHED FACTORY REGISTRY** (dregg1's `self.factory_registry`, `cell/src/factory.rs`):
+  the content-addressed map from a factory's VK to its `FactoryEntry` (its published
+  caveats/initial-fields/programVk). `apply_create_cell_from_factory` looks a factory up HERE
+  (`validate_and_record`, `apply.rs:3140`), validates the creation, and mints a cell carrying the
+  factory's program. Factories hold NO balance, so this is balance-NEUTRAL. DEFAULTS EMPTY (the
+  additive extension). -/
+  factories  : List (Nat × FactoryEntry) := []
+  /-- **The PER-CELL LIFECYCLE registry** (Wave-3; dregg1's `Cell.lifecycle : CellLifecycle`,
+  `cell/src/lifecycle.rs:37`). Modelled by the stable discriminant (`CellLifecycle::discriminant`,
+  `lifecycle.rs:95`): `0` = Live, `1` = Sealed, `3` = Destroyed (the three states Wave-3 transitions
+  cover; `2`/`4` Migrated/Archived are out of scope and keep their unused discriminants). A cell
+  DEFAULTS Live (`0`), so every existing construction is unaffected. `cellSeal` does Live→Sealed
+  (`seal`, `cell.rs:528`), `cellUnseal` Sealed→Live (`unseal`, `cell.rs:559`), `cellDestroy`
+  non-terminal→Destroyed (`destroy`, `cell.rs:583`); `acceptsEffects` (= dregg1's
+  `CellLifecycle::accepts_effects`, `lifecycle.rs:109`) gates which cells admit effects (Live here).
+  Lifecycle touches NO balance, so this is balance-NEUTRAL (`recTotalAssetWithEscrow` reads
+  `bal`+`escrows`, never `lifecycle`). DEFAULTS Live. -/
+  lifecycle  : CellId → Nat := fun _ => 0
+  /-- **The PER-CELL DEATH-CERTIFICATE binding** (Wave-3; dregg1's `CellLifecycle::Destroyed
+  { death_certificate_hash, .. }`, `lifecycle.rs:63`). A destroyed cell binds the death-certificate
+  hash into its FINAL state (`cell.rs:593`); we carry it keyed by cell. `0` until destruction, `h`
+  once `cellDestroy` binds the disclosed `certHash`. Balance-NEUTRAL. DEFAULTS `0`. -/
+  deathCert  : CellId → Nat := fun _ => 0
+  /-- **The PER-CELL DELEGATION parent pointer + c-list snapshot** (Wave-3; dregg1's `Cell.delegate :
+  Option<CellId>` parent pointer + `Cell.delegation : Option<DelegatedRef>` whose `clist` snapshots the
+  parent's c-list, `apply_spawn_with_delegation`/`apply_refresh_delegation`, `apply.rs:2947`/`:2991`).
+  `delegate c` is the parent of `c` (`none` = no parent; modelled as `Option CellId`, dregg1's
+  `Option<CellId>` — so cell `0` is a legitimate PARENT, distinct from "no parent"); `delegations c` is
+  the SNAPSHOT of the parent's c-list carried in `c`'s `DelegatedRef` (a `List Cap`, EMPTY when no
+  delegation). `refreshDelegation` (`apply.rs:2991`) takes a FRESH snapshot of the parent's CURRENT
+  `caps` into `delegations child`. Delegation snapshots touch NO balance, so this is balance-NEUTRAL.
+  DEFAULTS `none`/empty. -/
+  delegate    : CellId → Option CellId := fun _ => none
+  delegations : CellId → List Cap := fun _ => []
+  /-- **The SEALED-BOX holding-store** (Wave-3 de-shadow; dregg1's per-cell `state.fields[7]` seal
+  commitment + the AEAD box, `apply_seal`/`apply_unseal`, `apply.rs:2743`/`:2874`). The list of live
+  `SealedBoxRecord`s, each binding a `pairId` → the SEALED `Cap` payload. `seal` INSERTS a box binding a
+  HELD cap; `unseal` LOOKS-UP-fail-closed + (under the §8 AEAD-open portal) GRANTS the recovered cap to
+  the recipient. This carries a REAL capability (not a flag), so the cap genuinely MOVES through the box.
+  The AEAD ciphertext is the §8 portal; the which-cap binding + c-list grant are REAL. Boxes hold
+  capabilities, NOT balance — balance-NEUTRAL. DEFAULTS EMPTY. -/
+  sealedBoxes : List SealedBoxRecord := []
 
 /-- **The `balance`-domain measure** over the record cell-state: the total `balance` field across
 the live accounts. This is the conserved quantity — a domain measure over the named `balance`
