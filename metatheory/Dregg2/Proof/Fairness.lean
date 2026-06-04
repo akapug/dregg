@@ -491,20 +491,25 @@ The crux flag (`INTENT-REFS-fairness.md` §5) marks the commit-vs-commit half of
 INTERFERENCE-FREE COMMITTED step preserves a commit — as the honest residue (a uniform per-effect
 locality lemma over all ~60 `FullActionA` kinds is carried as `JustLTSC.commits_stable`, not yet proved
 in full generality). Here we PROVE a CONCRETE, GENUINELY NON-STUTTER instance of it: an independent
-authority-free emit on a far cell `7` COMMITS (it is no stutter) and yet leaves `transferCF`'s commit on
-cells `{0,1}` intact. This de-vacuifies the carried field: it shows the commit-vs-commit closure is a
+authority-free emit on the LIVE-but-independent cell `1` COMMITS (it is no stutter — cell 1 is live, so
+it clears Codex's new live-cell emit guard) and yet leaves `transferCF`'s commit (necessary participant
+`{0}`) intact. This de-vacuifies the carried field: it shows the commit-vs-commit closure is a
 TRUE fact about real independent COMMITTING forests on the actual executor, not merely the stutter case.
 
-`emitFar` (actor 5 emits event on cell 7) is authority-free (dregg1 `apply_emit_event` runs no cap
-check, `FullForest` §11-state), so it commits even though actor 5 owns nothing. It affects only cell `7`
-(`afcA = {7}`), disjoint from `transferCF`'s participants `{0}` ⇒ `concurrent transferCF emitFar`. -/
+`emitFar` (actor 5 emits event on the LIVE-but-independent cell 1) is authority-free (dregg1
+`apply_emit_event` runs no cap check, `FullForest` §11-state), so it commits even though actor 5 owns
+nothing — and, under Codex's NEW live-cell emit guard (`emitEventA` rejects unless `cell ∈ accounts`,
+`TurnExecutorFull` §emitStep), the target cell MUST be live, so we emit on cell `1` (live in `fma0`'s
+`accounts = {0,1}`) rather than a dead ghost cell. It affects only cell `1` (`afcA = {1}`), disjoint
+from `transferCF`'s participants `{0}` ⇒ `concurrent transferCF emitFar`. -/
 
 /-- `emitFar` — an INDEPENDENT, authority-free COMMITTING forest: actor 5 emits event `9` (payload 42) on
-the far cell `7`. It commits at `fma0` (emit runs no auth gate), affects only `{7}`, and moves NO asset's
-supply (balance-neutral) ⇒ inhabits `ConservingForest`. The non-stutter independent step for closure
-(3). -/
+the LIVE-but-independent cell `1`. It commits at `fma0` (emit runs no auth gate, and cell 1 IS live so it
+clears the new live-cell guard), affects only `{1}`, and moves NO asset's supply (balance-neutral) ⇒
+inhabits `ConservingForest`. The non-stutter independent step for closure (3) — disjoint from
+`transferCF`'s `{0}`, yet a genuine COMMIT (not a stutter). -/
 def emitFar : ConservingForest :=
-  ⟨⟨.emitEventA 5 7 9 42, []⟩, by
+  ⟨⟨.emitEventA 5 1 9 42, []⟩, by
     intro b
     simp only [lowerForestA, lowerChildrenA, turnLedgerDeltaAsset, List.map_cons, List.map_nil,
       List.sum_cons, List.sum_nil, ledgerDeltaAsset, add_zero]⟩
@@ -513,7 +518,7 @@ def emitFar : ConservingForest :=
 theorem emitFar_commits : Commits fma0 emitFar := by
   show (execFullForestA fma0 emitFar.1).isSome = true; decide
 
-/-- `transferCF`'s participants `{0}` are disjoint from `emitFar`'s affected cell `{7}` ⇒ the two are
+/-- `transferCF`'s participants `{0}` are disjoint from `emitFar`'s affected cell `{1}` ⇒ the two are
 CONCURRENT (`emitFar` interferes with nothing `transferCF` needs). -/
 theorem transferCF_concurrent_emitFar : concurrent transferCF emitFar := by
   unfold concurrent
@@ -699,8 +704,8 @@ theorem refund_demo_eventually : Eventually Pgoal fma0 transferSched :=
 #eval (execFullForestA fma0 cf5.1).isSome                          -- false (cells 5,6 not live ⇒ a STUTTER — the self-loop)
 #eval (execFullForestA fma0 badRootFullForest).isSome              -- false (a STUTTER — the fail-closed self-loop branch)
 -- §6.bis closure-(3) commit-vs-commit (NON-stutter): an independent COMMITTING emit preserves a commit.
-#eval (execFullForestA fma0 emitFar.1).isSome                      -- true  (emitFar COMMITS — not a stutter)
-#eval decide (Disjoint (npcA transferCF) (afcA emitFar))          -- true  (transferCF ‖ emitFar — concurrent)
+#eval (execFullForestA fma0 emitFar.1).isSome                      -- true  (emitFar COMMITS on LIVE cell 1 — not a stutter)
+#eval decide (Disjoint (npcA transferCF) (afcA emitFar))          -- true  (transferCF {0} ‖ emitFar {1} — concurrent)
 #eval (execFullForestA (cellNextA fma0 emitFar) transferCF.1).isSome  -- true  (commit PRESERVED across the independent step)
 -- §7.bis the concrete liveness demonstrator: the goal IS reached at index 1 (the receipt lands).
 #eval (trajA fma0 transferSched 0).log.length                     -- 0     (fma0: non-Pgoal — the unique non-goal index)

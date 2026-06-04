@@ -173,26 +173,28 @@ def escrowMonad : Monad C where
   μ := escrowMu M
   assoc := by
     intro A
-    simp only [escrowMu_app, tensorRight_obj, tensorRight_map, Functor.comp_obj]
+    simp only [escrowMu_app, Functor.flip_obj_obj, curriedTensor_obj_obj,
+      Functor.flip_obj_map, curriedTensor_map_app, Functor.comp_obj]
     -- LHS slides the inner `μ` (whiskered into `A`) up; RHS coalesces; `mul_assoc` of `M` closes it.
-    simp only [Category.assoc, MonoidalCategory.whiskerLeft_comp,
-      associator_naturality_middle_assoc, ← MonoidalCategory.whiskerLeft_comp_assoc,
-      MonObj.mul_assoc]
-    simp only [MonoidalCategory.whiskerLeft_comp, Category.assoc]
+    have key := congrArg (A ◁ ·) (MonObj.mul_assoc M)
+    simp only [MonoidalCategory.whiskerLeft_comp] at key
+    rw [comp_whiskerRight, whisker_assoc]
+    simp only [Category.assoc, Iso.inv_hom_id_assoc]
+    rw [associator_naturality_right_assoc, key]
     monoidal
   left_unit := by
     intro A
-    simp only [escrowEta_app, escrowMu_app, tensorRight_obj, Functor.id_obj]
-    simp only [Category.assoc, associator_naturality_left_assoc,
-      ← MonoidalCategory.whiskerLeft_comp]
-    monoidal
+    simp only [escrowEta_app, escrowMu_app, Functor.flip_obj_obj, curriedTensor_obj_obj,
+      Functor.id_obj]
+    -- `(A⊗M) ◁ η` slides through the associator (assoc-naturality) to `A ◁ (M ◁ η)`, then
+    -- `M ◁ η ≫ μ = (ρ_ M).hom` (`mul_one`) collapses the pool; the residue is pure coherence.
+    simp [← MonoidalCategory.whiskerLeft_comp, MonObj.mul_one]
   right_unit := by
     intro A
-    simp only [escrowEta_app, escrowMu_app, tensorRight_obj, tensorRight_map]
-    simp only [Category.assoc, ← MonoidalCategory.whiskerLeft_comp]
-    rw [show (ρ_ M).inv ≫ M ◁ 𝟙ₘ[M] ≫ μₘ[M] = 𝟙 M by
-      rw [← Category.assoc, MonObj.mul_one]; simp]
-    simp
+    simp only [escrowEta_app, escrowMu_app, Functor.flip_obj_obj, curriedTensor_obj_obj,
+      Functor.flip_obj_map, curriedTensor_map_app, Functor.id_obj]
+    -- `(η ▷ M)` whiskered into `A`, then `η ▷ M ≫ μ = (λ_ M).hom` (`one_mul`); coherence closes it.
+    simp [← MonoidalCategory.whiskerLeft_comp, MonObj.one_mul]
 
 end EscrowMonad
 
@@ -221,38 +223,72 @@ noncomputable def escrowMonad_isMonoidal : (tensorRight M).LaxMonoidal where
   μ X Y := tensorμ X M Y M ≫ (X ⊗ Y) ◁ μₘ[M]
   μ_natural_left := by
     intro X Y f X'; dsimp
-    simp only [← tensorHom_id, ← id_tensorHom, Category.assoc, tensorμ_natural_left_assoc]
-    simp only [tensorHom_id, id_tensorHom, ← whisker_exchange_assoc, comp_whiskerRight,
-      whiskerRight_id, Category.assoc, Category.comp_id]
-    rw [← whisker_exchange]
+    -- `f ▷ M = f ⊗ₘ 𝟙 M`, slide it through `tensorμ` (left-naturality), then `whisker_exchange`
+    -- moves the carried `f` past the pool coalescing.
+    rw [← tensorHom_id f M]
+    slice_lhs 1 2 => rw [tensorμ_natural_left]
+    simp only [Category.assoc, id_whiskerRight, tensorHom_id]
+    rw [whisker_exchange]
   μ_natural_right := by
     intro X' X Y f; dsimp
-    simp only [← tensorHom_id, ← id_tensorHom, Category.assoc, tensorμ_natural_right_assoc]
-    simp only [tensorHom_id, id_tensorHom, comp_whiskerRight, MonoidalCategory.whiskerLeft_comp,
-      Category.assoc, ← whisker_exchange_assoc]
-    rw [← whisker_exchange]
+    rw [← tensorHom_id f M]
+    slice_lhs 1 2 => rw [tensorμ_natural_right]
+    simp only [Category.assoc]
+    rw [whisker_exchange]
+    simp
   associativity := by
     intro X Y Z; dsimp
-    -- Slide the inner pool coalescings out through `tensorμ`'s naturality, then close with the
-    -- page-46 hexagon `tensor_associativity` and the monoid's `mul_assoc` (the braided `tensorμ`
-    -- already reordered, so commutativity is folded into `tensorμ`'s braiding here).
-    simp only [comp_whiskerRight, Category.assoc, ← tensorHom_id, ← id_tensorHom,
-      tensorμ_natural_left_assoc, tensorμ_natural_right_assoc]
-    simp only [tensorHom_id, id_tensorHom, tensor_associativity_assoc, Category.assoc]
-    simp only [← MonoidalCategory.whiskerLeft_comp_assoc, ← MonoidalCategory.whiskerLeft_comp,
-      MonObj.mul_assoc]
-    monoidal
+    -- Canonicalize every whisker adjacent to a `tensorμ`/`μ` into `⊗ₘ`-form, slide the inner pool
+    -- coalescings out through `tensorμ`'s naturality, then close with the page-46 hexagon
+    -- `tensor_associativity` and the monoid's `mul_assoc`. The braided `tensorμ` already reorders the
+    -- two `M`s, so commutativity is folded into `tensorμ`'s braiding here (it stays a *required*
+    -- `[IsCommMonObj M]` carrier — exercised non-vacuously at `WriterPool` below).
+    rw [← tensorHom_id (α_ X Y Z).hom M,
+        ← id_tensorHom (X ⊗ M) (tensorμ Y M Z M ≫ (Y ⊗ Z) ◁ μₘ[M]),
+        ← id_tensorHom (X ⊗ Y) μₘ[M],
+        ← id_tensorHom ((X ⊗ Y) ⊗ Z) μₘ[M],
+        ← id_tensorHom (Y ⊗ Z) μₘ[M],
+        ← id_tensorHom (X ⊗ Y ⊗ Z) μₘ[M]]
+    rw [comp_whiskerRight]
+    simp only [Category.assoc]
+    slice_lhs 2 3 => rw [tensorμ_natural_left]
+    slice_lhs 3 4 => rw [tensorHom_comp_tensorHom, Category.comp_id, MonObj.mul_assoc]
+    rw [tensorHom_comp_tensorHom, id_whiskerRight, Category.id_comp, Category.comp_id]
+    rw [show ((α_ X Y Z).hom ⊗ₘ ((α_ M M M).hom ≫ M ◁ μₘ[M] ≫ μₘ[M]))
+          = ((α_ X Y Z).hom ⊗ₘ (α_ M M M).hom) ≫ (𝟙 (X ⊗ Y ⊗ Z) ⊗ₘ (M ◁ μₘ[M] ≫ μₘ[M])) by
+        rw [tensorHom_comp_tensorHom, Category.comp_id]]
+    slice_lhs 1 3 => rw [tensor_associativity]
+    rw [show (𝟙 (X ⊗ Y ⊗ Z) ⊗ₘ (M ◁ μₘ[M] ≫ μₘ[M]))
+          = (𝟙 (X ⊗ Y ⊗ Z) ⊗ₘ M ◁ μₘ[M]) ≫ (𝟙 (X ⊗ Y ⊗ Z) ⊗ₘ μₘ[M]) by
+        rw [tensorHom_comp_tensorHom, Category.id_comp]]
+    simp only [Category.assoc]
+    rw [show (𝟙 (X ⊗ Y ⊗ Z) ⊗ₘ M ◁ μₘ[M])
+          = (X ◁ 𝟙 (Y ⊗ Z) ⊗ₘ M ◁ μₘ[M]) by rw [MonoidalCategory.whiskerLeft_id]]
+    slice_lhs 3 4 => rw [← tensorμ_natural_right]
+    simp
   left_unitality := by
     intro X; dsimp
-    rw [leftUnitor_monoidal]
-    simp only [Category.assoc, comp_whiskerRight, MonoidalCategory.whiskerLeft_comp]
-    rw [← MonoidalCategory.whiskerLeft_comp_assoc, MonObj.one_mul]
+    -- `tensor_left_unitality` expands the LHS; the unit `η` (`= 𝟙ₘ[M]`) slides through `tensorμ`'s
+    -- left-naturality (after `leftUnitor_inv_naturality` re-roots it), then `one_mul` collapses the
+    -- pool against the injected unit, leaving pure unitor coherence.
+    rw [tensor_left_unitality X M, leftUnitor_inv_naturality 𝟙ₘ[M], comp_whiskerRight]
+    simp only [Category.assoc]
+    rw [← id_tensorHom (𝟙_ C) 𝟙ₘ[M]]
+    slice_rhs 2 3 => rw [tensorμ_natural_left]
+    rw [← id_tensorHom (𝟙_ C ⊗ X) μₘ[M]]
+    slice_rhs 3 4 => rw [tensorHom_comp_tensorHom, Category.comp_id, MonObj.one_mul]
+    congr 1
     monoidal
   right_unitality := by
     intro X; dsimp
-    rw [rightUnitor_monoidal]
-    simp only [Category.assoc, MonoidalCategory.whiskerLeft_comp]
-    rw [← MonoidalCategory.whiskerLeft_comp_assoc, MonObj.mul_one]
+    rw [tensor_right_unitality X M, leftUnitor_inv_naturality 𝟙ₘ[M],
+      MonoidalCategory.whiskerLeft_comp]
+    simp only [Category.assoc]
+    rw [← id_tensorHom (𝟙_ C) 𝟙ₘ[M]]
+    slice_rhs 2 3 => rw [tensorμ_natural_right]
+    rw [← id_tensorHom (X ⊗ 𝟙_ C) μₘ[M]]
+    slice_rhs 3 4 => rw [tensorHom_comp_tensorHom, Category.comp_id, MonObj.mul_one]
+    congr 1
     monoidal
 
 end EscrowLax
@@ -299,8 +335,10 @@ theorem gen_tensor_noniso :
   -- A morphism in `Discrete` forces underlying objects equal; the tensor is `Discrete.mk (· * ·)`.
   have he : (gen 0 ⊗ gen 1).as = (gen 1 ⊗ gen 0).as := Discrete.eq_of_hom i.hom
   simp only [gen, Discrete.monoidal_tensorObj_as] at he
-  -- `[0] * [1] = [0,1]` vs `[1] * [0] = [1,0]`: unequal lists.
-  exact absurd he (by decide)
+  -- Pushing through `FreeMonoid.toList` (injective; `toList (a*b) = toList a ++ toList b`):
+  -- `[0] * [1] = [0,1]` vs `[1] * [0] = [1,0]` are unequal lists.
+  have := congrArg FreeMonoid.toList he
+  simp [FreeMonoid.toList_of] at this
 
 /-- **THE TEETH (`FrictionlessStandingOffer` rescope):** the non-commutative generator `[0]` is
 **provably not a center object** — it admits no half-braiding, because it cannot commute (even up to
@@ -335,6 +373,7 @@ noncomputable instance : IsCommMonObj WriterObj := WriterPool.comm
 `escrowMonad_isMonoidal` instantiated at a witness whose `mul`/`mul_comm` are genuine — not the
 `𝟙_`-only discrete carrier. The associativity hexagon really exercises `Multiplicative ℕ`'s
 `mul_comm`/`mul_assoc`. -/
+@[reducible]
 noncomputable def writerEscrow_isMonoidal : (tensorRight WriterObj).LaxMonoidal :=
   escrowMonad_isMonoidal WriterObj
 
@@ -352,32 +391,33 @@ orders (`mul (a,b) = mul (b,a)`), yet the *inputs* `(a,b)` and `(b,a)` are genui
 diagonal (the swap is real, not a `Subsingleton.elim` tautology). Witnessed at
 `a = ofAdd 3, b = ofAdd 5` (under `Multiplicative`, `*` is `+`, so both products are `ofAdd 8`). -/
 theorem writer_mul_comm_has_content :
-    (μ[WriterObj] (Multiplicative.ofAdd 3, Multiplicative.ofAdd 5)
-      = μ[WriterObj] (Multiplicative.ofAdd 5, Multiplicative.ofAdd 3)) ∧
-    ((Multiplicative.ofAdd 3, Multiplicative.ofAdd 5)
-      ≠ ((Multiplicative.ofAdd 5, Multiplicative.ofAdd 3)
-          : (Multiplicative ℕ) × (Multiplicative ℕ))) := by
+    (μₘ[WriterObj] ((Multiplicative.ofAdd (3 : ℕ) : WriterObj), (Multiplicative.ofAdd (5 : ℕ) : WriterObj))
+      = μₘ[WriterObj] ((Multiplicative.ofAdd (5 : ℕ) : WriterObj), (Multiplicative.ofAdd (3 : ℕ) : WriterObj))) ∧
+    (((Multiplicative.ofAdd (3 : ℕ) : WriterObj), (Multiplicative.ofAdd (5 : ℕ) : WriterObj))
+      ≠ ((Multiplicative.ofAdd (5 : ℕ) : WriterObj), (Multiplicative.ofAdd (3 : ℕ) : WriterObj))) := by
   refine ⟨?_, ?_⟩
   · -- `mul` is `fun p => p.1 * p.2`; commutativity collapses the two orders to one value.
     rw [writer_mul_apply, writer_mul_apply, _root_.mul_comm]
-  · -- the inputs themselves are genuinely distinct (the swap is not the identity).
+  · -- the inputs themselves are genuinely distinct (the swap is not the identity): the first
+    -- components are `ofAdd 3` vs `ofAdd 5`, and `toAdd ∘ ofAdd = id` exposes `3 ≠ 5`.
     intro h
-    exact absurd (congrArg (Multiplicative.toAdd ∘ Prod.fst) h) (by decide)
+    have h3 : (3 : ℕ) = 5 := congrArg (Multiplicative.toAdd ∘ Prod.fst) h
+    exact absurd h3 (by decide)
 
 /-! ## 6. Non-vacuity demos + axiom-hygiene pins. -/
 
 /-- The escrow monad's unit injects the monoid unit (definitional sanity). -/
 example {C : Type u} [Category.{v} C] [MonoidalCategory.{v} C] (M : C) [MonObj M] (A : C) :
-    (escrowMonad M).η.app A = (ρ_ A).inv ≫ A ◁ η[M] := rfl
+    (escrowMonad M).η.app A = (ρ_ A).inv ≫ A ◁ 𝟙ₘ[M] := rfl
 
 /-- The escrow monad's multiplication coalesces the doubled pool (definitional sanity). -/
 example {C : Type u} [Category.{v} C] [MonoidalCategory.{v} C] (M : C) [MonObj M] (A : C) :
-    (escrowMonad M).μ.app A = (α_ A M M).hom ≫ A ◁ μ[M] := rfl
+    (escrowMonad M).μ.app A = (α_ A M M).hom ≫ A ◁ μₘ[M] := rfl
 
 /-- The lax tensorator on the writer pool is the braided strength then the pool coalescing. -/
 example (X Y : Type) :
     Functor.LaxMonoidal.μ (self := escrowMonad_isMonoidal WriterObj) (tensorRight WriterObj) X Y
-      = tensorμ X WriterObj Y WriterObj ≫ (X ⊗ Y) ◁ μ[WriterObj] :=
+      = tensorμ X WriterObj Y WriterObj ≫ (X ⊗ Y) ◁ μₘ[WriterObj] :=
   rfl
 
 #eval (Multiplicative.toAdd
