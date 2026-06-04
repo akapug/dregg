@@ -64,6 +64,7 @@ import Dregg2.Protocol.Workflow  -- authenticated, capability-gated, attested mu
 -- ─── Living-cell growth: additional safety and authority slices ───
 import Dregg2.Authority.Discharge   -- discharge = the await authority-face: admits_mono_discharge (resolves forward, never un-resolves)
 import Dregg2.Authority.CDT          -- capability-derivation-tree spine: path_attenuates (authority shrinks down any derivation chain) + CDT≡biscuit bridge to Caveat
+import Dregg2.Authority.BiscuitGraph -- Track F: the biscuit PUBLIC-KEY delegation chain (what CDT abstracts away) — offline attenuation via a signed block chain; biscuit_narrows (leaf rights ⊆ root, mirrors path_attenuates) + amplifying/forged-block teeth; SigChecker = §8 SignatureKernel carrier (unforgeability stays §8, never a Lean law)
 import Dregg2.Authority.Intent       -- intent = the ∃-resolver / inverse-vat-boundary await face: intent_fill_verifies (soundness-by-verification vs adversarial matcher); FIND stays undecidable/OPEN
 import Dregg2.Exec.MultiAsset        -- multi-asset conservation: maExec_conserves_per_asset (per-asset Σ_k) + camera-FPU bridge
 import Dregg2.Exec.RecordCell        -- RecordProgram as the structure-map on a record cell: recExec_admitted (nothing commits the program rejects)
