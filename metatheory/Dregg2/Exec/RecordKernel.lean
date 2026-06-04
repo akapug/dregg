@@ -156,19 +156,35 @@ structure FactoryEntry where
   programVk     : Int
   deriving Repr, DecidableEq
 
+/-- Factory initial fields may initialize application slots, but not the conserved legacy
+`balance` field. The actual per-asset ledger is born empty separately, so allowing an initial
+`"balance"` field would create a split-brain scalar view that the per-asset conservation theorems do
+not track. -/
+def FactoryEntry.initialFieldsNoBalance (e : FactoryEntry) : Bool :=
+  e.initialFields.all (fun p => p.1 != balanceField)
+
 /-- **`FactoryEntry.conforms e`** — does the factory's OWN declared initial state satisfy its OWN
-caveats (read against a fresh slot, `old = 0`, by a privileged minter `actor = 0`)? This is the
-creation-time constraint check (`validate_and_record`): a well-formed factory cannot publish initial
-fields that already VIOLATE the invariants it claims to enforce (e.g. a `BoundedBy [10,20]` slot born
-at `25`). Decidable, computable, FAIL-CLOSED. Each caveat reads its own field's initial value
-(defaulting absent to `0`). -/
+caveats (read against a fresh slot, `old = 0`, by a privileged minter `actor = 0`) and avoid writing the
+reserved conserved `balance` field? This is the creation-time constraint check (`validate_and_record`):
+a well-formed factory cannot publish initial fields that already VIOLATE the invariants it claims to
+enforce (e.g. a `BoundedBy [10,20]` slot born at `25`) or smuggle scalar balance into the record while
+the per-asset ledger is born empty. Decidable, computable, FAIL-CLOSED. Each caveat reads its own field's
+initial value (defaulting absent to `0`). -/
 def FactoryEntry.conforms (e : FactoryEntry) : Bool :=
-  e.caveats.all (fun cav =>
+  e.initialFieldsNoBalance && e.caveats.all (fun cav =>
     let newVal := (e.initialFields.find? (fun p => p.1 == cav.field)).elim 0 (·.2)
     -- genesis: a fresh cell permits the first write of every TRANSITION caveat (dregg1's `None` arm,
     -- `cell/src/program.rs:1331`), but the ABSOLUTE value-range caveats STILL bind — a `BoundedBy
     -- [0,10]` slot cannot be born at 99 (`bornFresh`). This is what gives `conforms` real teeth.
     cav.bornFresh newVal)
+
+/-- A conforming factory has no reserved `balance` initializer. -/
+theorem FactoryEntry.conforms_no_balance (e : FactoryEntry) (h : e.conforms = true) :
+    e.initialFieldsNoBalance = true := by
+  unfold FactoryEntry.conforms at h
+  cases hb : e.initialFieldsNoBalance
+  · simp [hb] at h
+  · rfl
 
 /-- Look up a factory by its content-addressed VK in a registry list (the first match). -/
 def findFactory (fs : List (Nat × FactoryEntry)) (vk : Nat) : Option FactoryEntry :=
@@ -1697,30 +1713,36 @@ def bridgeLockKAsset (k : RecordKernelState) (id : Nat) (actor originator destin
     some (createBridgeRawAsset k id originator destination asset amount)
   else none
 
-/-- **`bridgeFinalizeKAsset` (executable, fail-closed).** Looks up the unresolved record by `id` AND
-checks the parked record's `(asset, amount)` MATCH the receipt-DISCLOSED `(asset, amount)` (dregg1's
-finalize verifies the receipt against the pending bridge — `finalize_bridge` checks nullifier/destination
-consistency); on a match, marks it resolved WITHOUT a credit — the value LEFT for the other chain (the
-burn). The §8 confirmation receipt (the destination-federation signature, `verify_bridge_receipt`) is the
-THEOREM-level portal — here we model the LEDGER move gated on the record being present-and-unresolved (the
-`Locked`-state gate) AND matching the disclosed outflow. Rejects a missing/already-resolved/mismatched
-record. -/
+/-- **`bridgeFinalizeKAsset` (executable, fail-closed).** Looks up the first unresolved record by `id`,
+requires it to be a BRIDGE record, and checks the parked record's `(asset, amount)` MATCH the
+receipt-DISCLOSED `(asset, amount)` (dregg1's finalize verifies the receipt against the pending bridge
+— `finalize_bridge` checks nullifier/destination consistency); on a match, marks it resolved WITHOUT a
+credit — the value LEFT for the other chain (the burn). The §8 confirmation receipt (the
+destination-federation signature, `verify_bridge_receipt`) is the THEOREM-level portal — here we model
+the LEDGER move gated on the record being present-and-unresolved, bridge-tagged (`Locked` bridge state),
+and matching the disclosed outflow. Rejects a missing/already-resolved/non-bridge/mismatched record. -/
 def bridgeFinalizeKAsset (k : RecordKernelState) (id : Nat) (asset : AssetId) (amount : ℤ) :
     Option RecordKernelState :=
   match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | some r => if r.asset = asset ∧ r.amount = amount then some (bridgeFinalizeRawAsset k id) else none
+  | some r =>
+      if r.bridge = true ∧ r.asset = asset ∧ r.amount = amount then
+        some (bridgeFinalizeRawAsset k id)
+      else none
   | none   => none
 
-/-- **`bridgeCancelKAsset` (executable, fail-closed).** Looks up the unresolved record by `id`; on
-success single-cell credits the `creator` (the ORIGINATOR — the refund target) AT the record's asset and
-marks resolved (dregg1's `cancel_bridge` — note unlocked, value returned to the owner). **SETTLE-LIVENESS
-GATE** (the originator MUST be a LIVE account) — same rationale as `refundEscrowKAsset`: crediting a
-non-account would silently DESTROY value, breaking combined conservation; this makes the per-asset
-combined-conservation hold UNCONDITIONALLY. The timeout gate is carried at the effect/theorem layer. -/
+/-- **`bridgeCancelKAsset` (executable, fail-closed).** Looks up the first unresolved record by `id` and
+requires it to be a BRIDGE record; on success single-cell credits the `creator` (the ORIGINATOR — the
+refund target) AT the record's asset and marks resolved (dregg1's `cancel_bridge` — note unlocked,
+value returned to the owner). **SETTLE-LIVENESS GATE** (the originator MUST be a LIVE account) — same
+rationale as `refundEscrowKAsset`: crediting a non-account would silently DESTROY value, breaking
+combined conservation; this makes the per-asset combined-conservation hold UNCONDITIONALLY. The
+timeout gate is carried at the effect/theorem layer. Non-bridge escrow records reject. -/
 def bridgeCancelKAsset (k : RecordKernelState) (id : Nat) : Option RecordKernelState :=
   match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | some r => if r.creator ∈ k.accounts then some (settleEscrowRawAsset k id r.creator r.asset r.amount)
-              else none
+  | some r =>
+      if r.bridge = true ∧ r.creator ∈ k.accounts then
+        some (settleEscrowRawAsset k id r.creator r.asset r.amount)
+      else none
   | none   => none
 
 /-! ### The REAL bridge combined-measure invariants. -/
@@ -1842,9 +1864,9 @@ theorem bridgeFinalizeKAsset_moves_combined_per_asset {k k' : RecordKernelState}
   | none => rw [hfind] at h; exact absurd h (by simp)
   | some r =>
       rw [hfind] at h; simp only at h
-      by_cases hm : r.asset = asset ∧ r.amount = amount
+      by_cases hm : r.bridge = true ∧ r.asset = asset ∧ r.amount = amount
       · rw [if_pos hm] at h; simp only [Option.some.injEq] at h
-        obtain ⟨hra, hrm⟩ := hm
+        obtain ⟨_, hra, hrm⟩ := hm
         rw [← h, bridge_finalize_moves_combined_per_asset k id r b hfind]
         -- rewrite the record's (asset, amount) into the disclosed (asset, amount):
         rw [hra, hrm]
@@ -1868,10 +1890,11 @@ theorem bridge_cancel_conserves_combined_per_asset {k k' : RecordKernelState} {i
   | none => rw [hfind] at h; exact absurd h (by simp)
   | some r =>
       rw [hfind] at h; simp only at h
-      by_cases hlive : r.creator ∈ k.accounts
-      · rw [if_pos hlive] at h; simp only [Option.some.injEq] at h; subst h
+      by_cases hg : r.bridge = true ∧ r.creator ∈ k.accounts
+      · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
+        have hlive : r.creator ∈ k.accounts := hg.2
         exact escrow_settle_conserves_combined_per_asset k id r.creator r b hlive hfind
-      · rw [if_neg hlive] at h; exact absurd h (by simp)
+      · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-! ### §BRIDGE runs (`#eval`) — the lock/finalize/cancel triple has teeth on the combined measure. -/
 
@@ -1913,6 +1936,14 @@ def brgLocked : Option RecordKernelState := bridgeLockKAsset brg0 9 0 0 1 1 30
 #eval (brgLocked.bind (fun k => bridgeLockKAsset k 9 0 0 1 1 10)).isSome                -- false
 -- unauthorized lock fail-closed (actor 5 owns nothing):
 #eval (bridgeLockKAsset brg0 9 5 0 1 1 30).isSome                                       -- false
+-- ORDINARY escrow rows in the shared holding-store are NOT bridge rows: finalize/cancel reject them.
+def brgOrdinaryEscrowSameId : RecordKernelState :=
+  { brg0 with
+    escrows := [{ id := 9, creator := 0, recipient := 1, amount := 30, resolved := false,
+                  asset := 1, bridge := false }] }
+
+#eval (bridgeFinalizeKAsset brgOrdinaryEscrowSameId 9 1 30).isSome                      -- false
+#eval (bridgeCancelKAsset brgOrdinaryEscrowSameId 9).isSome                              -- false
 
 #assert_axioms bridge_lock_conserves_combined_per_asset
 #assert_axioms bridge_lock_debits_per_asset

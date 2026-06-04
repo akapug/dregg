@@ -24,7 +24,7 @@ proved against the same five-keystone pattern:
   * `CreateCellFromFactory` (`g_createCellFromFactory`, Generative) — `CreateCell` whose child runs
     a published `FactoryDescriptor` program: constructor transparency + the same disclosed-balance creation.
   * `SpawnWithDelegation` (`g_spawnWithDelegation`, Generative) — spawn a child with a disclosed
-    delegated authority snapshot; `recTotal` grows by the disclosed child balance.
+    copy of an already-held parent cap; `recTotal` grows by the disclosed child balance.
   * `BridgeMint` (`g_bridgeMint`, Generative — §8 portal inflow) — credit a cell by a disclosed
     `value` observed off a foreign chain. dregg2 cannot verify foreign consensus, so the foreign
     finality is a `Prop`-carrier portal `ForeignFinal` carried as a hypothesis (OPEN: discharged
@@ -289,41 +289,68 @@ theorem factory_create_metadata {s : RecChainedState} {actor newCell : CellId} {
       execGraph s'.kernel.caps = execGraph s.kernel.caps :=
   create_metadata (factory_create_factors h).2
 
-/-! ## §3 — `SpawnWithDelegation`: a child spawned with a disclosed delegated authority snapshot.
+/-! ## §3 — `SpawnWithDelegation`: a child spawned with a disclosed parent-cap copy.
 
 `Effect::SpawnWithDelegation` (`CatalogEffects.g_spawnWithDelegation`, Generative) spawns a child cell
 that inherits a snapshot of the parent's authority. Modeled as `createCellStep` (the disclosed-supply
-child) composed with handing the child a delegated cap (the disclosed authority snapshot). The balance
-creation is the disclosed `+bal`; the authority grant adds a new cap edge. -/
+child) composed with copying an already-held parent cap to the child. The balance creation is the
+disclosed `+bal`; the authority copy adds no ungrounded cap edge. -/
 
 /-- **`spawnStep` — `SpawnWithDelegation`'s executable semantics.** Fail-closed via `createCellStep` (the
-authorized, fresh-id, non-negative child), and on commit ALSO grant the child a snapshot cap to `target`
-(the delegated authority). The child's provenance is the spawning `actor` (recorded on the receipt). -/
+authorized, fresh-id, non-negative child) AND unless the actor already holds a live cap edge to the
+parent `target`. On commit, copy that concrete held cap to the child, record its parent, and store the
+parent's c-list snapshot at birth. The child's provenance is the spawning `actor` (recorded on the
+receipt). -/
 def spawnStep (s : RecChainedState) (actor child target : CellId) (bal : ℤ) :
     Option RecChainedState :=
-  match createCellStep s actor child bal with
-  | some s1 =>
-      some { s1 with kernel :=
-        { s1.kernel with caps := fun l => if l = child then Cap.node target :: s1.kernel.caps l
-                                          else s1.kernel.caps l } }
-  | none => none
+  if (s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true ∧
+      target ∈ s.kernel.accounts then
+    match createCellStep s actor child bal with
+    | some s1 =>
+        some { s1 with kernel :=
+          { s1.kernel with caps := fun l =>
+              if l = child then heldCapTo s.kernel.caps actor target :: s1.kernel.caps l
+              else s1.kernel.caps l
+                           delegate := fun c => if c = child then some actor else s1.kernel.delegate c
+                           delegations := fun c => if c = child then s1.kernel.caps actor
+                                                   else s1.kernel.delegations c } }
+    | none => none
+  else
+    none
 
 /-- **`spawnStep` factors through `createCellStep` — PROVED.** A committed spawn is a committed
-`createCellStep` (into `s1`) followed by the child-cap grant. -/
+`createCellStep` (into `s1`) whose parent target was already live and held by the actor, followed by
+the concrete held-cap copy and initial delegation snapshot. -/
 theorem spawnStep_factors {s s' : RecChainedState} {actor child target : CellId} {bal : ℤ}
     (h : spawnStep s actor child target bal = some s') :
-    ∃ s1, createCellStep s actor child bal = some s1 ∧
+    ∃ s1, ((s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true ∧
+             target ∈ s.kernel.accounts) ∧
+      createCellStep s actor child bal = some s1 ∧
       s' = { s1 with kernel :=
-        { s1.kernel with caps := fun l => if l = child then Cap.node target :: s1.kernel.caps l
-                                          else s1.kernel.caps l } } := by
+        { s1.kernel with caps := fun l =>
+            if l = child then heldCapTo s.kernel.caps actor target :: s1.kernel.caps l
+            else s1.kernel.caps l
+                         delegate := fun c => if c = child then some actor else s1.kernel.delegate c
+                         delegations := fun c => if c = child then s1.kernel.caps actor
+                                                 else s1.kernel.delegations c } } := by
   unfold spawnStep at h
-  cases hc : createCellStep s actor child bal with
-  | none => rw [hc] at h; exact absurd h (by simp)
-  | some s1 => rw [hc] at h; simp only [Option.some.injEq] at h; exact ⟨s1, rfl, h.symm⟩
+  by_cases hg : (s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true ∧
+      target ∈ s.kernel.accounts
+  · rw [if_pos hg] at h
+    cases hc : createCellStep s actor child bal with
+    | none => rw [hc] at h; exact absurd h (by simp)
+    | some s1 =>
+        rw [hc] at h
+        simp only [Option.some.injEq] at h
+        exact ⟨s1, hg, rfl, h.symm⟩
+  · rw [if_neg hg] at h
+    exact absurd h (by simp)
 
-/-- The cap grant preserves `recTotal` (it edits `caps`, never the `balance` field) — PROVED. -/
-theorem spawn_grant_recTotal (k : RecordKernelState) (child target : CellId) :
-    recTotal { k with caps := fun l => if l = child then Cap.node target :: k.caps l else k.caps l }
+/-- The cap/metadata grant preserves `recTotal` (it edits no balance fields) — PROVED. -/
+theorem spawn_grant_recTotal (k : RecordKernelState) (actor child : CellId) (cap : Cap) :
+    recTotal { k with caps := fun l => if l = child then cap :: k.caps l else k.caps l
+                      delegate := fun c => if c = child then some actor else k.delegate c
+                      delegations := fun c => if c = child then k.caps actor else k.delegations c }
       = recTotal k := rfl
 
 /-- **`spawn_conserves` — DISCLOSED non-conservation (PROVED).** A committed spawn raises `recTotal` by
@@ -331,9 +358,9 @@ exactly the disclosed child endowment `bal` (the cap grant does not touch the ba
 theorem spawn_conserves {s s' : RecChainedState} {actor child target : CellId} {bal : ℤ}
     (h : spawnStep s actor child target bal = some s') :
     recTotal s'.kernel = recTotal s.kernel + bal := by
-  obtain ⟨s1, hc, hs'⟩ := spawnStep_factors h
+  obtain ⟨s1, _, hc, hs'⟩ := spawnStep_factors h
   subst hs'
-  rw [spawn_grant_recTotal s1.kernel child target]
+  rw [spawn_grant_recTotal s1.kernel actor child (heldCapTo s.kernel.caps actor target)]
   exact create_conserves hc
 
 /-- **`spawn_discloses` — PROVED.** `SpawnWithDelegation` is Generative ⇒ disclosed. -/
@@ -347,18 +374,41 @@ the child (the parent's privilege to spawn). -/
 theorem spawn_authorized {s s' : RecChainedState} {actor child target : CellId} {bal : ℤ}
     (h : spawnStep s actor child target bal = some s') :
     mintAuthorizedB s.kernel.caps actor child = true := by
-  obtain ⟨s1, hc, _⟩ := spawnStep_factors h
+  obtain ⟨s1, _, hc, _⟩ := spawnStep_factors h
   exact create_authorized hc
 
-/-- **`spawn_provenance` — PROVED.** The spawned child carries exactly the delegated snapshot cap
-`node target` (its disclosed authority provenance): reading the child's cap table after a committed
-spawn yields `Cap.node target :: <inherited>`. -/
+/-- **`spawn_parent_grounded` — PROVED.** A committed spawn implies the actor already held a live edge
+to the parent target; child creation alone cannot introduce a fresh target edge. -/
+theorem spawn_parent_grounded {s s' : RecChainedState} {actor child target : CellId} {bal : ℤ}
+    (h : spawnStep s actor child target bal = some s') :
+    Dregg2.Spec.execGraph s.kernel.caps actor
+        (⟨target, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
+      target ∈ s.kernel.accounts := by
+  obtain ⟨_, hg, _, _⟩ := spawnStep_factors h
+  exact hg
+
+/-- **`spawn_provenance` — PROVED.** The spawned child receives exactly the concrete cap the actor
+already held to the parent target. -/
 theorem spawn_provenance {s s' : RecChainedState} {actor child target : CellId} {bal : ℤ}
     (h : spawnStep s actor child target bal = some s') :
-    ∃ rest, s'.kernel.caps child = Cap.node target :: rest := by
-  obtain ⟨s1, _, hs'⟩ := spawnStep_factors h
+    heldCapTo s.kernel.caps actor target ∈ s'.kernel.caps child := by
+  obtain ⟨s1, _, _, hs'⟩ := spawnStep_factors h
   subst hs'
-  exact ⟨s1.kernel.caps child, by simp⟩
+  simp
+
+/-- **`spawn_parent_snapshot` — PROVED.** Spawn initializes the child parent pointer and its birth
+snapshot of the parent's c-list. -/
+theorem spawn_parent_snapshot {s s' : RecChainedState} {actor child target : CellId} {bal : ℤ}
+    (h : spawnStep s actor child target bal = some s') :
+    s'.kernel.delegate child = some actor ∧ s'.kernel.delegations child = s.kernel.caps actor := by
+  obtain ⟨s1, _, hc, hs'⟩ := spawnStep_factors h
+  subst hs'
+  have hcaps : s1.kernel.caps = s.kernel.caps := by
+    obtain ⟨_, _, _, hs1⟩ := createCellStep_factors hc
+    subst hs1
+    rfl
+  simp only [if_true, true_and]
+  rw [hcaps]
 
 /-- **`spawn_metadata` — PROVED.** A committed spawn grows the receipt chain by exactly one (the child's
 creation row); the cap edit is the disclosed child grant (NOT a frame — spawn DOES extend authority, the
@@ -366,7 +416,7 @@ sole §3 difference from `CreateCell`). -/
 theorem spawn_metadata {s s' : RecChainedState} {actor child target : CellId} {bal : ℤ}
     (h : spawnStep s actor child target bal = some s') :
     s'.log.length = s.log.length + 1 := by
-  obtain ⟨s1, hc, hs'⟩ := spawnStep_factors h
+  obtain ⟨s1, _, hc, hs'⟩ := spawnStep_factors h
   subst hs'
   have := (create_metadata hc).1
   simpa using this
@@ -775,7 +825,9 @@ never faked. -/
 #assert_axioms spawn_conserves
 #assert_axioms spawn_discloses
 #assert_axioms spawn_authorized
+#assert_axioms spawn_parent_grounded
 #assert_axioms spawn_provenance
+#assert_axioms spawn_parent_snapshot
 #assert_axioms spawn_metadata
 
 #assert_axioms bridgeMintStep_factors
@@ -836,11 +888,15 @@ def ss0 : RecChainedState :=
 -- A non-fresh id (cell 1 already live) is rejected:
 #eval (createCellStep ss0 9 1 50).isSome                                    -- false
 
--- SpawnWithDelegation: actor 9 spawns child 2 (balance 20) with a delegated `node 1` cap:
-#eval (spawnStep ss0 9 2 1 20).isSome                                       -- true
-#eval (spawnStep ss0 9 2 1 20).map (fun s => recTotal s.kernel)             -- some 125 (disclosed +20)
--- ...and the child carries its disclosed authority snapshot (`node 1` at the head):
-#eval ((spawnStep ss0 9 2 1 20).map (fun s => s.kernel.caps 2)).getD []     -- [Cap.node 1]
+-- SpawnWithDelegation: child creation alone cannot mint authority to an unheld parent target:
+#eval (spawnStep ss0 9 2 1 20).isSome                                       -- false
+-- ...but actor 9 can spawn child 2 (balance 20) with a copy of its held parent `node 0` cap:
+#eval (spawnStep ss0 9 2 0 20).isSome                                       -- true
+#eval (spawnStep ss0 9 2 0 20).map (fun s => recTotal s.kernel)             -- some 125 (disclosed +20)
+-- ...and the child carries the concrete copied parent cap (`node 0`), not a manufactured target cap:
+#eval ((spawnStep ss0 9 2 0 20).map (fun s => s.kernel.caps 2)).getD []     -- [Cap.node 0]
+#eval (spawnStep ss0 9 2 0 20).map
+        (fun s => (s.kernel.delegate 2, s.kernel.delegations 2))             -- some (some 9, [Cap.node 0, Cap.node 2])
 
 -- BridgeMint: actor 9 (holds `node 0`) mints +40 into cell 0 — local credit commits, discloses +40:
 #eval (bridgeMintStep ss0 9 0 40).isSome                                    -- true
