@@ -234,8 +234,8 @@ def recCDelegate (s : RecChainedState) (delegator recipient t : CellId) :
 
 /-- **Chained RIGHTS-CARRYING delegate.** Run `recKDelegateAtten` (the faithful `apply_introduce`:
 gate on the delegator holding a cap to `t`, then grant `recipient` the delegator's held cap to `t`
-ATTENUATED to `keep` — REAL rights `⊆` held, `recKDelegateAtten_non_amplifying`, NOT the rights-blind
-`node t`/control of `recKDelegate`); on commit, append an authority receipt. Balance-NEUTRAL: edits
+ATTENUATED to `keep` — REAL rights `⊆` held, `recKDelegateAtten_non_amplifying`, stricter than the
+unattenuated held-cap copy of `recKDelegate`); on commit, append an authority receipt. Balance-NEUTRAL: edits
 ONLY `caps` (`recKDelegateAtten_frame`), so `ledgerDeltaAsset = 0` for every asset. -/
 def recCDelegateAtten (s : RecChainedState) (delegator recipient t : CellId) (keep : List Auth) :
     Option RecChainedState :=
@@ -448,12 +448,26 @@ theorem execFull_delegate_addEdge (s s' : RecChainedState) (del rec t : CellId)
   | none => rw [hd] at h; exact absurd h (by simp)
   | some k' =>
       rw [hd] at h; simp only [Option.some.injEq] at h; subst h
-      -- `recKDelegate` commits ⟹ it took the `grant` branch, so `k'.caps = grant …`.
+      -- `recKDelegate` commits ⟹ it copied the held cap that witnesses connectivity to `t`.
       unfold recKDelegate at hd
       by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
       · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-        exact recKDelegate_execGraph s.kernel.caps rec t
+        exact recKDelegate_execGraph s.kernel.caps del rec t hg
       · rw [if_neg hg] at hd; exact absurd hd (by simp)
+
+/-- **Delegation grants the copied held cap — PROVED.** The scalar executor's concrete cap edit is
+the same non-amplifying held-cap copy as `recKDelegate`, not a fresh control cap. -/
+theorem execFull_delegate_grants_held_cap (s s' : RecChainedState) (del rec t : CellId)
+    (h : execFull s (.delegate del rec t) = some s') :
+    heldCapTo s.kernel.caps del t ∈ s'.kernel.caps rec := by
+  simp only [execFull, recCDelegate] at h
+  cases hd : recKDelegate s.kernel del rec t with
+  | none => rw [hd] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hd] at h
+      simp only [Option.some.injEq] at h
+      subst h
+      exact recKDelegate_grants s.kernel k' del rec t hd
 
 /-- **Revocation IS `removeEdge` — PROVED.** After a committed revocation, the reconstructed graph
 is the pre-graph with the single Spec edge `holder ⟶ ⟨t,()⟩` REMOVED — `Spec.Revoke`'s `result`
@@ -756,12 +770,14 @@ def recCBurnAsset (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt
 dregg1's `Effect::CreateCell` (`turn/src/executor/apply.rs:748`) is the PRIVILEGED creation of a FRESH
 cell, born with `balance == 0` (`apply.rs:757` rejects `CreateCellNonZeroBalance`) — so on the per-asset
 ledger it is conservation-NEUTRAL (`ledgerDeltaAsset = 0` for EVERY asset). `Effect::SpawnWithDelegation`
-(`apply.rs` / `EffectsSupply.spawnStep`) is `createCell` PLUS a delegated cap to the spawned child
-(`Cap.node target`); the create leg is neutral and the cap grant is bal-orthogonal, so spawn is neutral
-too. We reuse the `EffectsSupply` GATE shape verbatim (`mintAuthorizedB` — creation is privileged supply —
-AND the freshness gate `newCell ∉ accounts`), but found the growth on `RecordKernel.createCellIntoAsset`
-(grow `accounts` + RESET the fresh `bal` column to `0`), so neutrality is PROVED via
-`recTotalAsset_insert_fresh`, NOT assumed. -/
+(`apply.rs` / `EffectsSupply.spawnStep`) is `createCell` PLUS a delegated parent cap to the spawned child:
+the spawner must already hold a live edge to `target`, and the child receives THAT concrete held cap.
+The create leg is neutral and the cap copy is bal-orthogonal, so spawn is neutral too. We reuse the
+`EffectsSupply` creation gate (`mintAuthorizedB` — creation is privileged supply — AND the freshness gate
+`newCell ∉ accounts`), but add the parent-edge premise so child creation cannot manufacture authority to
+an unrelated target. The account growth lives in `RecordKernel.createCellIntoAsset` (grow `accounts` +
+RESET the fresh `bal` column to `0`), so neutrality is PROVED via `recTotalAsset_insert_fresh`, NOT
+assumed. -/
 
 /-- **`createCellChainA` — `CreateCell`'s per-asset chained semantics.** Fail-closed: an authorized
 creator (`mintAuthorizedB actor newCell` — creation coins a fresh cell, privileged like mint) AND a FRESH
@@ -787,31 +803,56 @@ theorem createCellChainA_factors {s s' : RecChainedState} {actor newCell : CellI
   · rw [if_pos hg, Option.some.injEq] at h; exact ⟨hg.1, hg.2, h.symm⟩
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- **`spawnChainA` — `SpawnWithDelegation`'s per-asset chained semantics.** Fail-closed via
-`createCellChainA` (the authorized, fresh-id child, born EMPTY), and on commit ALSO grant the child a
-delegated `Cap.node target` cap (the disclosed authority snapshot). The cap edit is bal-orthogonal — it
-touches `caps`, never `bal`/`accounts` — so the per-asset measure is unmoved (neutral). Reuses the
-`EffectsSupply.spawnStep` grant shape. -/
+/-- **`spawnChainA` — `SpawnWithDelegation`'s per-asset chained semantics.** Fail-closed unless
+the actor can both create the fresh `child` AND already holds a live cap edge to the parent `target`.
+On commit, copy the actor's concrete held parent cap to the child. This is the least-amplifying
+authority handoff: child creation no longer manufactures `Cap.node target`, and an endpoint-limited
+parent cap remains endpoint-limited. The cap edit is bal-orthogonal — it touches `caps`, never
+`bal`/`accounts` — so the per-asset measure is unmoved (neutral). The delegation lifecycle fields are
+initialized so `refreshDelegationA` has a parent/snapshot to refresh from. -/
 def spawnChainA (s : RecChainedState) (actor child target : CellId) : Option RecChainedState :=
-  match createCellChainA s actor child with
-  | some s1 =>
-      some { s1 with kernel :=
-        { s1.kernel with caps := fun l => if l = child then Cap.node target :: s1.kernel.caps l
-                                          else s1.kernel.caps l } }
-  | none => none
+  if (s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true ∧
+      target ∈ s.kernel.accounts then
+    match createCellChainA s actor child with
+    | some s1 =>
+        some { s1 with kernel :=
+          { s1.kernel with caps := fun l =>
+              if l = child then heldCapTo s.kernel.caps actor target :: s1.kernel.caps l
+              else s1.kernel.caps l
+                           delegate := fun c => if c = child then some actor else s1.kernel.delegate c
+                           delegations := fun c => if c = child then s1.kernel.caps actor
+                                                   else s1.kernel.delegations c } }
+    | none => none
+  else
+    none
 
 /-- **`spawnChainA` factors through `createCellChainA` — PROVED.** A committed spawn is a committed
-`createCellChainA` (into `s1`) followed by the child-cap grant. -/
+`createCellChainA` (into `s1`) whose parent target was already live and held by the actor, followed by
+the concrete held-cap copy and initial delegation snapshot. -/
 theorem spawnChainA_factors {s s' : RecChainedState} {actor child target : CellId}
     (h : spawnChainA s actor child target = some s') :
-    ∃ s1, createCellChainA s actor child = some s1 ∧
+    ∃ s1, ((s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true ∧
+             target ∈ s.kernel.accounts) ∧
+      createCellChainA s actor child = some s1 ∧
       s' = { s1 with kernel :=
-        { s1.kernel with caps := fun l => if l = child then Cap.node target :: s1.kernel.caps l
-                                          else s1.kernel.caps l } } := by
+        { s1.kernel with caps := fun l =>
+            if l = child then heldCapTo s.kernel.caps actor target :: s1.kernel.caps l
+            else s1.kernel.caps l
+                         delegate := fun c => if c = child then some actor else s1.kernel.delegate c
+                         delegations := fun c => if c = child then s1.kernel.caps actor
+                                                 else s1.kernel.delegations c } } := by
   unfold spawnChainA at h
-  cases hc : createCellChainA s actor child with
-  | none => rw [hc] at h; exact absurd h (by simp)
-  | some s1 => rw [hc] at h; simp only [Option.some.injEq] at h; exact ⟨s1, rfl, h.symm⟩
+  by_cases hg : (s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true ∧
+      target ∈ s.kernel.accounts
+  · rw [if_pos hg] at h
+    cases hc : createCellChainA s actor child with
+    | none => rw [hc] at h; exact absurd h (by simp)
+    | some s1 =>
+        rw [hc] at h
+        simp only [Option.some.injEq] at h
+        exact ⟨s1, hg, rfl, h.symm⟩
+  · rw [if_neg hg] at h
+    exact absurd h (by simp)
 
 /-- **`createCellChainA_neutral` — ACCOUNT-GROWTH IS CONSERVATION-NEUTRAL (PROVED).** A committed
 `createCellChainA` leaves `recTotalAsset` UNCHANGED for EVERY asset `b`: the index set `accounts`
@@ -856,10 +897,13 @@ theorem createCellChainA_chainlink {s s' : RecChainedState} {actor newCell : Cel
     s'.log = { actor := actor, src := newCell, dst := newCell, amt := 0 } :: s.log := by
   obtain ⟨_, _, hs'⟩ := createCellChainA_factors h; subst hs'; rfl
 
-/-- The spawn cap grant is bal-orthogonal — it edits `caps`, never `bal`/`accounts` — so the per-asset
-measure is literally unchanged (PROVED). The per-asset analog of `EffectsSupply.spawn_grant_recTotal`. -/
-theorem spawnGrant_recTotalAsset (k : RecordKernelState) (child target : CellId) (b : AssetId) :
-    recTotalAsset { k with caps := fun l => if l = child then Cap.node target :: k.caps l else k.caps l } b
+/-- The spawn metadata/cap copy is bal-orthogonal — it edits `caps`, parent pointer, and delegation
+snapshot, never `bal`/`accounts` — so the per-asset measure is literally unchanged (PROVED). -/
+theorem spawnGrant_recTotalAsset (k : RecordKernelState) (actor child : CellId) (cap : Cap)
+    (b : AssetId) :
+    recTotalAsset { k with caps := fun l => if l = child then cap :: k.caps l else k.caps l
+                           delegate := fun c => if c = child then some actor else k.delegate c
+                           delegations := fun c => if c = child then k.caps actor else k.delegations c } b
       = recTotalAsset k b := rfl
 
 /-- **`spawnChainA_neutral` — PROVED.** A committed spawn leaves `recTotalAsset` UNCHANGED for EVERY asset:
@@ -867,9 +911,9 @@ the create leg is neutral (born EMPTY), the cap grant is bal-orthogonal. -/
 theorem spawnChainA_neutral {s s' : RecChainedState} {actor child target : CellId} (b : AssetId)
     (h : spawnChainA s actor child target = some s') :
     recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
-  obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors h
+  obtain ⟨s1, _, hc, hs'⟩ := spawnChainA_factors h
   subst hs'
-  rw [spawnGrant_recTotalAsset s1.kernel child target b]
+  rw [spawnGrant_recTotalAsset s1.kernel actor child (heldCapTo s.kernel.caps actor target) b]
   exact createCellChainA_neutral b hc
 
 /-- **`spawnChainA_authorized` — PROVED.** A committed spawn implies the spawner held creation authority
@@ -877,25 +921,49 @@ over the child. -/
 theorem spawnChainA_authorized {s s' : RecChainedState} {actor child target : CellId}
     (h : spawnChainA s actor child target = some s') :
     mintAuthorizedB s.kernel.caps actor child = true := by
-  obtain ⟨s1, hc, _⟩ := spawnChainA_factors h
+  obtain ⟨s1, _, hc, _⟩ := spawnChainA_factors h
   exact createCellChainA_authorized hc
 
-/-- **`spawnChainA_provenance` (the DISCLOSED-AUTHORITY keystone — PROVED).** The spawned child carries
-EXACTLY the delegated snapshot cap `Cap.node target` at the head of its cap list (its disclosed authority
-provenance). The generative resource is created with disclosed authority. -/
+/-- **`spawnChainA_grounds` — PROVED.** A committed spawn implies the actor already held a live
+connectivity edge to the parent target. Child creation alone cannot introduce an unrelated edge. -/
+theorem spawnChainA_grounds {s s' : RecChainedState} {actor child target : CellId}
+    (h : spawnChainA s actor child target = some s') :
+    Dregg2.Spec.execGraph s.kernel.caps actor
+        (⟨target, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
+      target ∈ s.kernel.accounts := by
+  obtain ⟨_, hg, _, _⟩ := spawnChainA_factors h
+  exact hg
+
+/-- **`spawnChainA_provenance` (the DISCLOSED-AUTHORITY keystone — PROVED).** The spawned child receives
+EXACTLY the concrete cap the actor already held to the parent target. This preserves rights (endpoint
+rights stay endpoint rights) instead of manufacturing `node target` control. -/
 theorem spawnChainA_provenance {s s' : RecChainedState} {actor child target : CellId}
     (h : spawnChainA s actor child target = some s') :
-    ∃ rest, s'.kernel.caps child = Cap.node target :: rest := by
-  obtain ⟨s1, _, hs'⟩ := spawnChainA_factors h
+    heldCapTo s.kernel.caps actor target ∈ s'.kernel.caps child := by
+  obtain ⟨s1, _, _, hs'⟩ := spawnChainA_factors h
   subst hs'
-  exact ⟨s1.kernel.caps child, by simp⟩
+  simp
+
+/-- **`spawnChainA_parent_snapshot` — PROVED.** Spawn initializes the delegation lifecycle: the child
+records its parent (`actor`) and stores a birth snapshot of the parent's current c-list. -/
+theorem spawnChainA_parent_snapshot {s s' : RecChainedState} {actor child target : CellId}
+    (h : spawnChainA s actor child target = some s') :
+    s'.kernel.delegate child = some actor ∧ s'.kernel.delegations child = s.kernel.caps actor := by
+  obtain ⟨s1, _, hc, hs'⟩ := spawnChainA_factors h
+  subst hs'
+  have hcaps : s1.kernel.caps = s.kernel.caps := by
+    obtain ⟨_, _, hs1⟩ := createCellChainA_factors hc
+    subst hs1
+    rfl
+  simp only [if_true, true_and]
+  rw [hcaps]
 
 /-- **`spawnChainA_chainlink` — PROVED.** A committed spawn extends the receipt chain by EXACTLY the
 child's (balance-`0`) creation row (the cap grant edits only `caps`, not the log). -/
 theorem spawnChainA_chainlink {s s' : RecChainedState} {actor child target : CellId}
     (h : spawnChainA s actor child target = some s') :
     s'.log = { actor := actor, src := child, dst := child, amt := 0 } :: s.log := by
-  obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors h
+  obtain ⟨s1, _, hc, hs'⟩ := spawnChainA_factors h
   subst hs'
   show s1.log = { actor := actor, src := child, dst := child, amt := 0 } :: s.log
   exact createCellChainA_chainlink hc
@@ -1062,6 +1130,20 @@ theorem createCellFromFactoryChainA_nonconforming_fails (s : RecChainedState) (a
     createCellFromFactoryChainA s actor newCell vk = none := by
   simp only [createCellFromFactoryChainA, hfind, hbad, Bool.false_eq_true, if_false]
 
+/-- **`createCellFromFactoryChainA_balance_field_fails` — PROVED (fail-closed).** Factory initial fields
+cannot initialize the reserved scalar `balance` field. The fresh per-asset ledger is born empty
+separately; permitting a record-level `"balance"` initializer would split the scalar view from the
+conserved asset ledger. -/
+theorem createCellFromFactoryChainA_balance_field_fails (s : RecChainedState) (actor newCell : CellId)
+    (vk : Int) (e : FactoryEntry) (hfind : findFactory s.kernel.factories vk.toNat = some e)
+    (hbad : e.initialFieldsNoBalance = false) :
+    createCellFromFactoryChainA s actor newCell vk = none := by
+  have hconf : e.conforms = false := by
+    unfold FactoryEntry.conforms
+    rw [hbad]
+    simp
+  exact createCellFromFactoryChainA_nonconforming_fails s actor newCell vk e hfind hconf
+
 /-- **`createCellFromFactoryChainA_chainlink` — PROVED.** A committed factory creation extends the
 receipt chain by EXACTLY the (balance-`0`) creation row (the field/caveat install edits state, not
 the log). -/
@@ -1165,12 +1247,13 @@ theorem stateStepGuarded_recTotalAssetWithEscrow {s s' : RecChainedState} {f : F
   rw [writeField_recTotalAsset s.kernel f target (.int n) b,
       show escrowHeldAsset (writeField s.kernel f target (.int n)) b = escrowHeldAsset s.kernel b from rfl]
 
-/-- **The `EmitEvent` chained step — log-only, authority-FREE (dregg1 `apply_emit_event` ~:703).**
+/-- **The `EmitEvent` raw chained step — log-only, authority-FREE (dregg1 `apply_emit_event` ~:703).**
 Unlike the field-writing effects, `EmitEvent` runs NO authority/cross-cell check (in dregg1 the only
 gate is cell-existence) and writes NO state — it appends an event receipt to the chain and nothing
 else. We model the observation faithfully: a self-`Turn` receipt (amount `0`) carrying the event,
 with the kernel UNCHANGED (so `bal`/`cell`/`caps`/`accounts` are all fixed). The `topic`/`data`
-ride the receipt's `src`/`dst` as the event payload markers. ALWAYS commits (no gate). -/
+ride the receipt's `src`/`dst` as the event payload markers. The concrete `execFullA` branch gates
+this raw append on `cell ∈ accounts`. -/
 def emitStep (s : RecChainedState) (actor cell : CellId) (topic data : Int) : RecChainedState :=
   { kernel := s.kernel,
     log    := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }
@@ -1425,18 +1508,21 @@ NEVER the `bal` ledger — so `ledgerDeltaAsset = 0` for EVERY asset and `recTot
 (balance-NEUTRAL). The HEADLINE obligation for this cluster is NON-AMPLIFICATION — the genuine
 `capAuthConferred ⊆` over the REAL `List Auth` lattice (`attenuate_subset`), not a `()≤()` collapse.
 
-  * `Introduce { introducer, recipient, target, permissions }` (`apply.rs:2791`, `:2835`
-    "amplification denied") — the 3-party Granovetter introduce. Reuses the proven `recCDelegate`
-    connectivity spine; the rights it confers are an ATTENUATION of a held cap (`attenuate_subset`).
+  * `Introduce { introducer, recipient, target }` — the graph skeleton of the 3-party Granovetter
+    introduce. Reuses the proven `recCDelegate` connectivity spine and copies the concrete held cap.
+    The rights-carrying/narrowing form is `delegateAttenA` below.
   * `AttenuateCapability { cell, slot, narrower_permissions }` (`apply.rs:4377`) — monotonically
     NARROW a held cap in the actor's c-list (widening rejected). The purest non-amplification.
   * `DropRef { ref_id }` (`apply.rs:4034`) — a CapTP GC decrement: the holder drops its edge to the
     target. Reuses `recKRevokeTarget` (`removeEdge`); authority strictly shrinks.
   * `RevokeDelegation { child }` (`apply.rs:3044`) — a parent revokes a child's delegation. Reuses
     `recKRevokeTarget` (`removeEdge`). (Distinct dregg1 op from `DropRef`; same graph move.)
-  * `ValidateHandoff { … }` (`apply.rs:4069`) — accept a two-signature CapTP handoff certificate.
-    The handoff IS a Granovetter introduce, so the conferred (attenuated) cap is non-amplifying
-    (`granted ⊆ held`, `attenuate_subset`). The two-signature crypto is a §8 Prop-carrier portal.
+  * `ValidateHandoff { … }` (`apply.rs:4069`) — the graph-level consequence of accepting a
+    two-signature CapTP handoff certificate. The executable action below carries only
+    `(introducer, recipient, target)`, so it can prove the introduce skeleton by copying the held cap.
+    The certificate's granted permissions / allowed-effect mask and the genuine
+    `granted ⊆ held` check live in `Exec.CapTP.HandoffCert` and the swiss-table path, not in this
+    three-field skeleton.
   * `ExerciseViaCapability { cap_slot, inner_effects }` (`apply.rs:2441`) — exercise a HELD cap. The
     cap graph is UNCHANGED (only connectivity begets connectivity); gated on holding the edge.
 
@@ -2608,14 +2694,15 @@ def bridgeLockChainA (s : RecChainedState) (id : Nat) (actor originator destinat
   | none    => none
 
 /-- **`bridgeAuthOK` — the bridge finalize/cancel AUTHORITY gate (the missing one the re-audit flagged:
-"anyone can finalize/cancel any victim's lock by id").** Only the lock's RECORDED `creator` (the
-originator, read from the committed side-table — adversary-UNCONTROLLABLE state) may finalize or cancel
-it; a stranger who merely knows the `id` is fail-closed REJECTED. (A relayer-finalize-with-foreign-
-receipt is the §8 receipt portal, deferred to META-FILL E; creator-only is the sound CORE — the creator
-can always finalize/cancel their own lock.) -/
+"anyone can finalize/cancel any victim's lock by id").** Only a BRIDGE-tagged lock's RECORDED `creator`
+(the originator, read from the committed side-table — adversary-UNCONTROLLABLE state) may finalize or
+cancel it; a stranger who merely knows the `id` is fail-closed REJECTED. Ordinary escrow rows in the
+shared holding-store are not bridge-authorizable. (A relayer-finalize-with-foreign-receipt is the §8
+receipt portal, deferred to META-FILL E; creator-only is the sound CORE — the creator can always
+finalize/cancel their own lock.) -/
 def bridgeAuthOK (k : RecordKernelState) (id : Nat) (actor : CellId) : Bool :=
   match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | some r => r.creator == actor
+  | some r => r.bridge == true && r.creator == actor
   | none   => false
 
 /-- **Chained per-asset bridge FINALIZE** (the §8 confirmation arrived — the no-credit resolve; the
@@ -2715,7 +2802,9 @@ theorem bridgeFinalizeChainA_nonCreator_rejects {s : RecChainedState} {id : Nat}
     (hne : (r.creator == actor) = false) :
     bridgeFinalizeChainA s id actor asset amount = none := by
   have hgate : bridgeAuthOK s.kernel id actor = false := by
-    simp only [bridgeAuthOK, hfind, hne]
+    unfold bridgeAuthOK
+    rw [hfind]
+    cases r.bridge <;> simp [hne]
   unfold bridgeFinalizeChainA
   rw [if_neg (by simp [hgate])]
 
@@ -2727,7 +2816,9 @@ theorem bridgeCancelChainA_nonCreator_rejects {s : RecChainedState} {id : Nat}
     (hne : (r.creator == actor) = false) :
     bridgeCancelChainA s id actor = none := by
   have hgate : bridgeAuthOK s.kernel id actor = false := by
-    simp only [bridgeAuthOK, hfind, hne]
+    unfold bridgeAuthOK
+    rw [hfind]
+    cases r.bridge <;> simp [hne]
   unfold bridgeCancelChainA
   rw [if_neg (by simp [hgate])]
 
@@ -2894,8 +2985,9 @@ inductive FullActionA where
   /-- `IntroduceAttenuated { delegator, recipient, target, keep }` — the RIGHTS-CARRYING Granovetter
   delegation (the faithful `apply_introduce`, `apply.rs:2829` `is_attenuation(held, granted)`): the
   `delegator` (holding a cap to `target`) hands `recipient` its held cap to `target` ATTENUATED to
-  `keep` — REAL conferred rights `⊆` held (`recKDelegateAtten_non_amplifying`), NOT the rights-blind
-  `node target`/control of `introduceA`. Routes to `recKDelegateAtten`. Balance-NEUTRAL (`caps`-only). -/
+  `keep` — REAL conferred rights `⊆` held (`recKDelegateAtten_non_amplifying`), stricter than the
+  unattenuated held-cap copy used by `introduceA`. Routes to `recKDelegateAtten`. Balance-NEUTRAL
+  (`caps`-only). -/
   | delegateAttenA  (delegator recipient target : CellId) (keep : List Auth)
   /-- `AttenuateCapability { cell→actor, slot→idx, narrower_permissions→keep }` (dregg1
   `apply_attenuate_capability`, `apply.rs:4377`): monotonically NARROW the actor's `idx`-th held cap
@@ -2909,10 +3001,12 @@ inductive FullActionA where
   `recKRevokeTarget` (`removeEdge`). A DISTINCT dregg1 op from `DropRef` (parent-revocation vs.
   holder-GC), sharing the graph move. -/
   | revokeDelegationA (holder target : CellId)
-  /-- `ValidateHandoff { … }` (dregg1 `apply_validate_handoff`, `apply.rs:4069`): accept a
-  two-signature CapTP handoff certificate. The handoff IS a Granovetter introduce — so it runs the
-  `recCDelegate` connectivity spine and the conferred (attenuated) cap is non-amplifying
-  (`granted ⊆ held`). The two-signature crypto is the §8 Prop-carrier portal. -/
+  /-- `ValidateHandoff { … }` (dregg1 `apply_validate_handoff`, `apply.rs:4069`): graph-level
+  consequence of an accepted two-signature CapTP handoff certificate. This constructor intentionally
+  carries only `(introducer, recipient, target)`, so its executable content is the introduce skeleton:
+  run `recCDelegate` and copy the introducer's held cap to `target`. The real certificate permissions
+  and `granted ⊆ held` attenuation check are modeled by `Exec.CapTP.HandoffCert` / the swiss-table
+  handoff path (`swissHandoffA`), not by pretending this skeleton has an uncarried `keep` payload. -/
   | validateHandoffA (introducer recipient target : CellId)
   /-- `ExerciseViaCapability { cap_slot→target, inner_effects }` (dregg1 `apply_exercise_via_capability`,
   `apply.rs:2441`): exercise a HELD cap to RUN `inner` effects against the target cell. dregg1's
@@ -2941,8 +3035,9 @@ inductive FullActionA where
   CONSTRAINTS are the point: the cell is *registered-forever / monotone-head* from birth. -/
   | createCellFromFactoryA (actor newCell : CellId) (vk : Int)
   /-- `SpawnWithDelegation { … }` (dregg1 `apply_spawn_with_delegation`): `createCell` (born EMPTY) PLUS
-  a delegated `Cap.node target` cap to the spawned child — the disclosed authority snapshot. The create
-  leg is neutral; the cap grant is bal-orthogonal, so spawn is conservation-NEUTRAL too. -/
+  a copy of the actor's already-held parent cap to `target`. The create leg is neutral; the cap copy is
+  bal-orthogonal, so spawn is conservation-NEUTRAL too, without manufacturing authority to unrelated
+  targets. -/
   | spawnA          (actor child target : CellId)
   /-- `BridgeMint { cell, value, asset_type, nullifier }` (dregg1 `apply_bridge_mint`, `apply.rs:1106`):
   the §8 PORTAL inflow — credit `cell`'s asset `asset` by a disclosed `value` observed off a FOREIGN
@@ -3296,7 +3391,8 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   -- caveat on slot `f` of `cell` is REJECTED (fail-closed). The other field writes (nonce/perms/vk —
   -- protocol-managed slots, not developer SetField) stay on the bare authority-gated `stateStep`.
   | .setFieldA actor cell f v        => stateStepGuarded s f actor cell v
-  | .emitEventA actor cell topic data => some (emitStep s actor cell topic data)
+  | .emitEventA actor cell topic data =>
+      if cell ∈ s.kernel.accounts then some (emitStep s actor cell topic data) else none
   | .incrementNonceA actor cell n     => stateStep s nonceField actor cell (.int n)
   | .setPermissionsA actor cell p     => stateStep s permsField actor cell (.int p)
   | .setVKA actor cell vk             => stateStep s vkField actor cell (.int vk)
@@ -3491,9 +3587,14 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       rw [stateStepGuarded_recTotalAssetWithEscrow h b]; ring
   | emitEventA actor cell topic data =>
-      simp only [execFullA, ledgerDeltaAsset, Option.some.injEq] at h ⊢
-      subst h
-      simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset, emitStep]; ring
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      by_cases hlive : cell ∈ s.kernel.accounts
+      · rw [if_pos hlive] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset, emitStep]; ring
+      · rw [if_neg hlive] at h
+        exact absurd h (by simp)
   | incrementNonceA actor cell n =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
@@ -3587,7 +3688,7 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
   | spawnA actor child target =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       have hesc : escrowHeldAsset s'.kernel b = escrowHeldAsset s.kernel b := by
-        obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
+        obtain ⟨s1, _, hc, hs'⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
         subst hs'
         obtain ⟨_, _, hc'⟩ := createCellChainA_factors hc; subst hc'; rfl
       unfold recTotalAssetWithEscrow
@@ -4062,8 +4163,13 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
       simp only [execFullA, fullReceiptA] at h ⊢
       obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq h); subst hs'; rfl
   | emitEventA actor cell topic data =>
-      simp only [execFullA, fullReceiptA, Option.some.injEq] at h ⊢
-      subst h; rfl
+      simp only [execFullA, fullReceiptA] at h ⊢
+      by_cases hlive : cell ∈ s.kernel.accounts
+      · rw [if_pos hlive] at h
+        simp only [Option.some.injEq] at h
+        subst h; rfl
+      · rw [if_neg hlive] at h
+        exact absurd h (by simp)
   | incrementNonceA actor cell n =>
       simp only [execFullA, fullReceiptA] at h ⊢
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
@@ -4384,8 +4490,22 @@ theorem execFullA_delegate_addEdge (s s' : RecChainedState) (del rec t : CellId)
       unfold recKDelegate at hd
       by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
       · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-        exact recKDelegate_execGraph s.kernel.caps rec t
+        exact recKDelegate_execGraph s.kernel.caps del rec t hg
       · rw [if_neg hg] at hd; exact absurd hd (by simp)
+
+/-- **Per-asset delegation grants the copied held cap — PROVED.** The concrete authority move copies
+the delegator's held witness cap; the abstract graph still sees exactly `addEdge`. -/
+theorem execFullA_delegate_grants_held_cap (s s' : RecChainedState) (del rec t : CellId)
+    (h : execFullA s (.delegate del rec t) = some s') :
+    heldCapTo s.kernel.caps del t ∈ s'.kernel.caps rec := by
+  simp only [execFullA, recCDelegate] at h
+  cases hd : recKDelegate s.kernel del rec t with
+  | none => rw [hd] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hd] at h
+      simp only [Option.some.injEq] at h
+      subst h
+      exact recKDelegate_grants s.kernel k' del rec t hd
 
 /-- **Per-asset revocation IS `removeEdge` — PROVED.** REUSES `recKRevokeTarget_execGraph`. -/
 theorem execFullA_revoke_removeEdge (s s' : RecChainedState) (holder t : CellId)
@@ -4718,7 +4838,7 @@ theorem execFullA_introduceA_addEdge (s s' : RecChainedState) (intro rec t : Cel
       unfold recKDelegate at hd
       by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
       · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-        exact recKDelegate_execGraph s.kernel.caps rec t
+        exact recKDelegate_execGraph s.kernel.caps intro rec t hg
       · rw [if_neg hg] at hd; exact absurd hd (by simp)
 
 /-- **`execFullA_introduceA_holds_real_cap` — PROVED.** A committed introduce WITNESSES the concrete
@@ -4739,18 +4859,28 @@ theorem execFullA_introduceA_holds_real_cap (s s' : RecChainedState) (intro rec 
         exact ⟨held, hmem, hconf⟩
       · rw [if_neg hg] at hd; exact absurd hd (by simp)
 
-/-- **`execFullA_introduceA_non_amplifying` — THE HEADLINE (PROVED, GENUINE).** Whatever rights an
-introduce confers are bounded by a held cap: it WITNESSES a concrete held cap `held`, and the
-conferred (attenuated) cap is a GENUINE `List Auth` SUBSET — `IsNonAmplifyingF held (attenuate keep
-held)` for any `keep` — via `Caps.attenuate_subset`. This is `is_attenuation(held, granted)`,
-"amplification denied" (`apply.rs:2835`), over the REAL lattice. NOT a `()≤()` skeleton — an
-amplifying grant is rejected (`amplifyingF_rejected`). -/
-theorem execFullA_introduceA_non_amplifying (s s' : RecChainedState) (intro rec t : CellId)
+/-- **`execFullA_introduceA_grants_held_cap` — PROVED.** A committed introduce grants the recipient
+the concrete held cap selected by `heldCapTo`; no endpoint cap is widened into `node`/control. -/
+theorem execFullA_introduceA_grants_held_cap (s s' : RecChainedState) (intro rec t : CellId)
     (h : execFullA s (.introduceA intro rec t) = some s') :
-    ∃ held : Cap, held ∈ s.kernel.caps intro ∧ confersEdgeTo t held = true
-      ∧ ∀ keep : List Auth, IsNonAmplifyingF held (attenuate keep held) := by
-  obtain ⟨held, hmem, hconf⟩ := execFullA_introduceA_holds_real_cap s s' intro rec t h
-  exact ⟨held, hmem, hconf, fun keep => attenuateF_non_amplifying keep held⟩
+    heldCapTo s.kernel.caps intro t ∈ s'.kernel.caps rec := by
+  simp only [execFullA, recCDelegate] at h
+  cases hd : recKDelegate s.kernel intro rec t with
+  | none => rw [hd] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hd] at h
+      simp only [Option.some.injEq] at h
+      subst h
+      exact recKDelegate_grants s.kernel k' intro rec t hd
+
+/-- **`execFullA_introduceA_non_amplifying` — THE HEADLINE (PROVED, GENUINE).** The actual executable
+grant made by `introduceA` is a copy of the introducer's held cap to `t`, hence it is non-amplifying
+over the exact cap it copied. Explicit narrowing belongs to `delegateAttenA`; this theorem states the
+concrete copy branch rather than an uncarried attenuation payload. -/
+theorem execFullA_introduceA_non_amplifying (s s' : RecChainedState) (intro rec t : CellId)
+    (_h : execFullA s (.introduceA intro rec t) = some s') :
+    IsNonAmplifyingF (heldCapTo s.kernel.caps intro t) (heldCapTo s.kernel.caps intro t) :=
+  fun _ ha => ha
 
 /-- **`execFullA_attenuateA_non_amplifying` — THE HEADLINE (PROVED, GENUINE).** Whatever cap the
 actor narrows, the narrowed cap confers a genuine `List Auth` SUBSET of the original:
@@ -4803,24 +4933,46 @@ theorem execFullA_validateHandoffA_grounds (s s' : RecChainedState) (intro rec t
   | none => rw [hd] at h; exact absurd h (by simp)
   | some k' => exact recKDelegate_grounds s.kernel k' intro rec t hd
 
-/-- **`execFullA_validateHandoffA_non_amplifying` — THE HEADLINE (PROVED, GENUINE).** The conferred
-(attenuated) cap of a handoff is a genuine `List Auth` SUBSET of a held cap (`granted ⊆ held`,
-EXACTLY the `is_attenuation(held, granted)` check dregg1's `verify_captp_delivered` was MISSING) —
-it WITNESSES the introducer's held cap and the non-amplification of its attenuation. -/
-theorem execFullA_validateHandoffA_non_amplifying (s s' : RecChainedState) (intro rec t : CellId)
+/-- **`execFullA_validateHandoffA_addEdge` — PROVED.** A committed handoff edits the reconstructed
+authority graph by exactly `addEdge … rec ⟨t,()⟩`, because it routes through the same held-cap
+delegation primitive as `introduceA`. -/
+theorem execFullA_validateHandoffA_addEdge (s s' : RecChainedState) (intro rec t : CellId)
     (h : execFullA s (.validateHandoffA intro rec t) = some s') :
-    ∃ held : Cap, held ∈ s.kernel.caps intro ∧ confersEdgeTo t held = true
-      ∧ ∀ keep : List Auth, IsNonAmplifyingF held (attenuate keep held) := by
+    Dregg2.Spec.execGraph s'.kernel.caps
+      = Dregg2.Spec.addEdge (Dregg2.Spec.execGraph s.kernel.caps) rec
+          (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) := by
   simp only [execFullA, recCDelegate] at h
   cases hd : recKDelegate s.kernel intro rec t with
   | none => rw [hd] at h; exact absurd h (by simp)
   | some k' =>
+      rw [hd] at h; simp only [Option.some.injEq] at h; subst h
       unfold recKDelegate at hd
       by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
-      · rw [List.any_eq_true] at hg
-        obtain ⟨held, hmem, hconf⟩ := hg
-        exact ⟨held, hmem, hconf, fun keep => attenuateF_non_amplifying keep held⟩
+      · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
+        exact recKDelegate_execGraph s.kernel.caps intro rec t hg
       · rw [if_neg hg] at hd; exact absurd hd (by simp)
+
+/-- **`execFullA_validateHandoffA_grants_held_cap` — PROVED.** A committed handoff grants the concrete
+held cap selected by `heldCapTo`; it does not widen endpoint authority into `node`/control. -/
+theorem execFullA_validateHandoffA_grants_held_cap (s s' : RecChainedState) (intro rec t : CellId)
+    (h : execFullA s (.validateHandoffA intro rec t) = some s') :
+    heldCapTo s.kernel.caps intro t ∈ s'.kernel.caps rec := by
+  simp only [execFullA, recCDelegate] at h
+  cases hd : recKDelegate s.kernel intro rec t with
+  | none => rw [hd] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hd] at h
+      simp only [Option.some.injEq] at h
+      subst h
+      exact recKDelegate_grants s.kernel k' intro rec t hd
+
+/-- **`execFullA_validateHandoffA_non_amplifying` — THE HEADLINE (PROVED, GENUINE).** The actual cap
+granted by `validateHandoffA` is the introducer's held cap to `t`, hence it is non-amplifying over the
+real `List Auth` lattice by reflexivity of `⊆`. -/
+theorem execFullA_validateHandoffA_non_amplifying (s s' : RecChainedState) (intro rec t : CellId)
+    (_h : execFullA s (.validateHandoffA intro rec t) = some s') :
+    IsNonAmplifyingF (heldCapTo s.kernel.caps intro t) (heldCapTo s.kernel.caps intro t) :=
+  fun _ ha => ha
 
 /-- **`execFullA_delegateAttenA_grounds` — PROVED.** A committed rights-delegation HOLDS the abstract
 source edge `del ⟶ ⟨t,()⟩` (the Granovetter connectivity premise — the delegator could already reach
@@ -4848,8 +5000,8 @@ theorem execFullA_delegateAttenA_grants (s s' : RecChainedState) (del rec t : Ce
 
 /-- **`execFullA_delegateAttenA_non_amplifying` — THE HEADLINE (PROVED, GENUINE & EXECUTED).** The cap
 the recipient actually RECEIVES confers a `List Auth` SUBSET of the delegator's held cap to `t`
-(`granted ⊆ held`) — `is_attenuation(held, granted)` over the EXECUTED grant, NOT a `()≤()` collapse
-and NOT the rights-blind `node t`/control of `introduceA`. Reads `attenuate_subset`. -/
+(`granted ⊆ held`) — `is_attenuation(held, granted)` over the EXECUTED grant, NOT a `()≤()` collapse.
+Reads `attenuate_subset`. -/
 theorem execFullA_delegateAttenA_non_amplifying (s s' : RecChainedState) (del rec t : CellId) (keep : List Auth)
     (_h : execFullA s (.delegateAttenA del rec t keep) = some s') :
     IsNonAmplifyingF (heldCapTo s.kernel.caps del t) (attenuate keep (heldCapTo s.kernel.caps del t)) := by
@@ -5012,12 +5164,13 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
        (effectLinearity burnEffect).is_disclosed_non_conservation = true
    -- §MA-state: the field-writing pure-state effects carry their REAL authority gate
    -- (`stateAuthB` over the cell) ∧ their `Neutral`/`Monotonic` linearity coloring (the
-   -- faithful-mirror tripwire). `emitEventA` is authority-FREE (dregg1 runs no cap check), so its
-   -- obligation is JUST the `Neutral` coloring — honestly NOT an authority claim.
+   -- faithful-mirror tripwire). `emitEventA` is authority-FREE (dregg1 runs no cap check), but it
+   -- carries the dregg1 cell-existence gate plus its `Neutral` coloring — honestly NOT an authority claim.
    | .setFieldA actor cell _ _ =>
        stateAuthB s.kernel.caps actor cell = true ∧
        effectLinearity .setField = LinearityClass.Neutral
-   | .emitEventA _ _ _ _ =>
+   | .emitEventA _ cell _ _ =>
+       cell ∈ s.kernel.accounts ∧
        effectLinearity .emitEvent = LinearityClass.Neutral
    | .incrementNonceA actor cell _ =>
        stateAuthB s.kernel.caps actor cell = true ∧
@@ -5033,14 +5186,15 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    -- (`IsNonAmplifyingF`, witnessed against a HELD cap), NOT a `()≤()` collapse — and the `addEdge`/
    -- `removeEdge`/graph-unchanged graph move + grounding in held connectivity.
    | .introduceA intro rec t =>
-       -- (a) grounds in held connectivity, (b) edits the graph by `addEdge`, (c) GENUINE rights
-       -- non-amplification: the conferred (attenuated) cap of a HELD cap confers a `List Auth` SUBSET.
+       -- (a) grounds in held connectivity, (b) edits the graph by `addEdge`, (c) grants the concrete
+       -- held cap selected by the executable lookup, and (d) that actual copied cap is non-amplifying.
+       -- Explicit attenuation is the separate `delegateAttenA` branch.
        Dregg2.Spec.execGraph s.kernel.caps intro
          (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
        Dregg2.Spec.execGraph s'.kernel.caps
          = Dregg2.Spec.addEdge (Dregg2.Spec.execGraph s.kernel.caps) rec ⟨t, ()⟩ ∧
-       ∃ held : Cap, held ∈ s.kernel.caps intro ∧ confersEdgeTo t held = true
-         ∧ ∀ keep : List Auth, IsNonAmplifyingF held (attenuate keep held)
+       heldCapTo s.kernel.caps intro t ∈ s'.kernel.caps rec ∧
+       IsNonAmplifyingF (heldCapTo s.kernel.caps intro t) (heldCapTo s.kernel.caps intro t)
    | .attenuateA _ idx keep =>
        -- GENUINE non-amplification: narrowing to `keep` confers a `List Auth` SUBSET of ANY cap.
        ∀ c : Cap, IsNonAmplifyingF c (attenuate keep c)
@@ -5050,13 +5204,17 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .revokeDelegationA holder t =>
        Dregg2.Spec.execGraph s'.kernel.caps
          = Dregg2.Spec.removeEdge (Dregg2.Spec.execGraph s.kernel.caps) holder ⟨t, ()⟩
-   | .validateHandoffA intro _ t =>
-       -- (a) grounds in held connectivity, (b) the conferred (attenuated) cap is non-amplifying
-       -- (`granted ⊆ held`) — the `is_attenuation` check dregg1's `verify_captp_delivered` missed.
+   | .validateHandoffA intro rec t =>
+       -- Graph-level handoff consequence: (a) grounds in held connectivity, (b) edits the graph by
+       -- `addEdge`, (c) grants the concrete held cap, and (d) the actual executable grant is a
+       -- non-amplifying copy. The richer certificate-level `granted ≤ held` obligation is carried by
+       -- `Exec.CapTP.HandoffCert`/`swissHandoffA`, where permissions and effect masks actually exist.
        Dregg2.Spec.execGraph s.kernel.caps intro
          (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
-       ∃ held : Cap, held ∈ s.kernel.caps intro ∧ confersEdgeTo t held = true
-         ∧ ∀ keep : List Auth, IsNonAmplifyingF held (attenuate keep held)
+       Dregg2.Spec.execGraph s'.kernel.caps
+         = Dregg2.Spec.addEdge (Dregg2.Spec.execGraph s.kernel.caps) rec ⟨t, ()⟩ ∧
+       heldCapTo s.kernel.caps intro t ∈ s'.kernel.caps rec ∧
+       IsNonAmplifyingF (heldCapTo s.kernel.caps intro t) (heldCapTo s.kernel.caps intro t)
    | .delegateAttenA del rec t keep =>
        -- (a) grounds in held connectivity, (b) the recipient GENUINELY HOLDS the delegator's held
        -- cap to `t` ATTENUATED to `keep` (the EXECUTED rights handoff — `recKDelegateAtten_grants`,
@@ -5097,7 +5255,13 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .spawnA actor child target =>
        mintAuthorizedB s.kernel.caps actor child = true ∧
        child ∉ s.kernel.accounts ∧
-       (∃ rest, s'.kernel.caps child = Cap.node target :: rest) ∧
+       target ∈ s.kernel.accounts ∧
+       Dregg2.Spec.execGraph s.kernel.caps actor
+         (⟨target, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
+       heldCapTo s.kernel.caps actor target ∈ s'.kernel.caps child ∧
+       IsNonAmplifyingF (heldCapTo s.kernel.caps actor target) (heldCapTo s.kernel.caps actor target) ∧
+       s'.kernel.delegate child = some actor ∧
+       s'.kernel.delegations child = s.kernel.caps actor ∧
        (effectLinearity .spawnWithDelegation).is_disclosed_non_conservation = true
    | .bridgeMintA actor cell _ _ =>
        mintAuthorizedB s.kernel.caps actor cell = true ∧
@@ -5262,9 +5426,13 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   | mintA actor cell a amt => exact ⟨execFullA_mintA_authorized s s' actor cell a amt h, mint_discloses⟩
   | burnA actor cell a amt => exact ⟨execFullA_burnA_authorized s s' actor cell a amt h, burn_discloses⟩
   -- §MA-state: discharge the field-writing effects' (authority ∧ coloring) obligation; emitEvent's
-  -- coloring-only obligation (authority-free, dregg1-faithful).
+  -- live-cell ∧ coloring obligation (authority-free, but not ghost-cell-free).
   | setFieldA actor cell f v => exact ⟨execFullA_setFieldA_authorized s s' actor cell f v h, rfl⟩
-  | emitEventA actor cell topic data => exact rfl
+  | emitEventA actor cell topic data =>
+      by_cases hlive : cell ∈ s.kernel.accounts
+      · exact ⟨hlive, rfl⟩
+      · simp only [execFullA, hlive, if_false] at h
+        cases h
   | incrementNonceA actor cell n => exact ⟨execFullA_incrementNonceA_authorized s s' actor cell n h, rfl⟩
   | setPermissionsA actor cell p => exact ⟨execFullA_setPermissionsA_authorized s s' actor cell p h, rfl⟩
   | setVKA actor cell vk => exact ⟨execFullA_setVKA_authorized s s' actor cell vk h, rfl⟩
@@ -5273,6 +5441,7 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   | introduceA intro rec t =>
       exact ⟨execFullA_introduceA_grounds s s' intro rec t h,
              execFullA_introduceA_addEdge s s' intro rec t h,
+             execFullA_introduceA_grants_held_cap s s' intro rec t h,
              execFullA_introduceA_non_amplifying s s' intro rec t h⟩
   | delegateAttenA del rec t keep =>
       exact ⟨execFullA_delegateAttenA_grounds s s' del rec t keep h,
@@ -5283,6 +5452,8 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   | revokeDelegationA holder t => exact execFullA_revokeDelegationA_removeEdge s s' holder t h
   | validateHandoffA intro rec t =>
       exact ⟨execFullA_validateHandoffA_grounds s s' intro rec t h,
+             execFullA_validateHandoffA_addEdge s s' intro rec t h,
+             execFullA_validateHandoffA_grants_held_cap s s' intro rec t h,
              execFullA_validateHandoffA_non_amplifying s s' intro rec t h⟩
   | exerciseA actor t inner =>
       exact ⟨execFullA_exerciseA_authorized s s' actor t inner h,
@@ -5305,9 +5476,14 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
                Dregg2.CatalogEffects.g_createCellFromFactory⟩
   | spawnA actor child target =>
       simp only [execFullA] at h
-      obtain ⟨s1, hc, _⟩ := spawnChainA_factors h
+      obtain ⟨s1, _, hc, _⟩ := spawnChainA_factors h
+      have hground := spawnChainA_grounds (by simpa only [execFullA] using h)
+      have hsnap := spawnChainA_parent_snapshot (by simpa only [execFullA] using h)
       exact ⟨createCellChainA_authorized hc, (createCellChainA_factors hc).2.1,
+             hground.2, hground.1,
              spawnChainA_provenance (by simpa only [execFullA] using h),
+             (fun _ ha => ha),
+             hsnap.1, hsnap.2,
              Dregg2.CatalogEffects.generative_discloses .spawnWithDelegation
                Dregg2.CatalogEffects.g_spawnWithDelegation⟩
   | bridgeMintA actor cell a value =>
@@ -5417,6 +5593,7 @@ theorem execFullTurnA_each_attests :
 #assert_axioms execFull_mint_authorized
 #assert_axioms execFull_burn_authorized
 #assert_axioms execFull_delegate_addEdge
+#assert_axioms execFull_delegate_grants_held_cap
 #assert_axioms execFull_revoke_removeEdge
 #assert_axioms execFull_chainlink
 #assert_axioms execFull_obsadvance
@@ -5439,6 +5616,7 @@ theorem execFullTurnA_each_attests :
 #assert_axioms execFullA_balance_authorized
 #assert_axioms execFullA_delegate_grounds
 #assert_axioms execFullA_delegate_addEdge
+#assert_axioms execFullA_delegate_grants_held_cap
 #assert_axioms execFullA_revoke_removeEdge
 #assert_axioms execFullA_mintA_authorized
 #assert_axioms recKBurnAsset_authorized
@@ -5541,12 +5719,15 @@ theorem execFullTurnA_each_attests :
 #assert_axioms execFullA_introduceA_grounds
 #assert_axioms execFullA_introduceA_addEdge
 #assert_axioms execFullA_introduceA_holds_real_cap
+#assert_axioms execFullA_introduceA_grants_held_cap
 #assert_axioms execFullA_introduceA_non_amplifying
 #assert_axioms execFullA_attenuateA_non_amplifying
 #assert_axioms execFullA_attenuateA_confined
 #assert_axioms execFullA_dropRefA_removeEdge
 #assert_axioms execFullA_revokeDelegationA_removeEdge
 #assert_axioms execFullA_validateHandoffA_grounds
+#assert_axioms execFullA_validateHandoffA_addEdge
+#assert_axioms execFullA_validateHandoffA_grants_held_cap
 #assert_axioms execFullA_validateHandoffA_non_amplifying
 #assert_axioms execFullA_delegateAttenA_grounds
 #assert_axioms execFullA_delegateAttenA_grants
@@ -5579,12 +5760,15 @@ theorem execFullTurnA_each_attests :
 #assert_axioms createCellFromFactoryChainA_installs_program
 #assert_axioms createCellFromFactoryChainA_unknown_factory_fails
 #assert_axioms createCellFromFactoryChainA_nonconforming_fails
+#assert_axioms createCellFromFactoryChainA_balance_field_fails
 #assert_axioms createCellFromFactoryChainA_caps_eq
 #assert_axioms createCellFromFactoryChainA_sideTables
 #assert_axioms spawnChainA_factors
 #assert_axioms spawnChainA_neutral
 #assert_axioms spawnChainA_authorized
+#assert_axioms spawnChainA_grounds
 #assert_axioms spawnChainA_provenance
+#assert_axioms spawnChainA_parent_snapshot
 #assert_axioms spawnChainA_chainlink
 #assert_axioms execFullA_bridgeMintA_authorized
 #assert_axioms execFullA_bridgeMintA_unauthorized_fails
@@ -5783,12 +5967,14 @@ def fmaS : RecChainedState :=
 #eval (execFullA fmaS (.setVKA 0 0 99)).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7)
 
--- EmitEvent: authority-FREE (even actor 9, who owns nothing, commits — dregg1 runs NO cap check),
---   writes NO state, grows the chain by one, balance-neutral:
+-- EmitEvent: authority-FREE (even actor 9, who owns nothing, commits — dregg1 runs NO cap check)
+--   but cell-existence-gated; writes NO state, grows the chain by one, balance-neutral:
 #eval (execFullA fmaS (.emitEventA 9 0 7 123)).isSome                                -- true (authority-free)
 #eval (execFullA fmaS (.emitEventA 9 0 7 123)).map (fun s => s.log.length)           -- some 1
 #eval (execFullA fmaS (.emitEventA 9 0 7 123)).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7)
+-- Non-live event targets reject: no ghost-cell event rows.
+#eval (execFullA fmaS (.emitEventA 9 99 7 123)).isSome                               -- false
 
 -- A MIXED per-asset turn interleaving pure-state effects with a transfer: ALL balance-neutral
 --   (the transfer conserves; the field writes/emit move no asset) ⇒ (105, 7) preserved:
@@ -5835,6 +6021,16 @@ def fmaA : RecChainedState :=
 -- An introducer with NO connectivity to the target cannot introduce it (FAIL-CLOSED ⇒ none):
 #eval (execFullA fmaA (.introduceA 5 1 7)).isSome                                     -- false
 
+/-- Actor 0 holds only endpoint-write connectivity to target 7. -/
+def fmaEndpointIntro : RecChainedState :=
+  { fmaA with
+    kernel := { fmaA.kernel with
+      caps := fun l => if l = 0 then [Cap.endpoint 7 [Auth.write]] else [] } }
+
+-- INTRODUCE from an endpoint witness copies the endpoint cap; it does not upgrade to `node`/control.
+#eval ((execFullA fmaEndpointIntro (.introduceA 0 1 7)).map (fun s => s.kernel.caps 1)).getD []
+-- [Cap.endpoint 7 [Auth.write]]
+
 -- (1') THE TEETH — genuine rights NON-AMPLIFICATION over the real `List Auth` lattice.
 -- Attenuating the held `endpoint 9 [read, write]` to keep only `[read]` STRICTLY DROPS `write`:
 #eval capAuthConferred (attenuate [Auth.read] (Cap.endpoint 9 [Auth.read, Auth.write]))  -- [read] ⊊ [read,write]
@@ -5866,12 +6062,14 @@ example : ¬ IsNonAmplifyingF (Cap.endpoint 9 [Auth.read, Auth.write]) (Cap.node
 #eval (execFullA fmaA (.revokeDelegationA 0 7)).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))               -- some (105, 7)
 
--- (5) VALIDATE-HANDOFF: actor 0 (holds connectivity to 7) accepts a handoff introducing 1 to 7.
---   COMMITS (the handoff IS a Granovetter introduce), balance-neutral. An AMPLIFYING handoff (no
---   held connectivity) is REJECTED ⇒ none (the `granted ≤ held` gate dregg1 was missing):
+-- (5) VALIDATE-HANDOFF: actor 0 (holds connectivity to 7) accepts the graph-level consequence of a
+--   handoff introducing 1 to 7. COMMITS (the handoff consequence IS a Granovetter introduce),
+--   balance-neutral. A handoff consequence with no held source connectivity is REJECTED ⇒ none:
 #eval (execFullA fmaA (.validateHandoffA 0 1 7)).isSome                               -- true
 #eval (execFullA fmaA (.validateHandoffA 0 1 7)).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))               -- some (105, 7)
+#eval ((execFullA fmaEndpointIntro (.validateHandoffA 0 1 7)).map (fun s => s.kernel.caps 1)).getD []
+-- [Cap.endpoint 7 [Auth.write]]
 #eval (execFullA fmaA (.validateHandoffA 5 1 7)).isSome                               -- false (FAIL-CLOSED)
 
 -- (6) EXERCISE (DE-SHADOWED): actor 0 (holds `node 7`) exercises its cap to target 7 to RUN inner
@@ -5941,13 +6139,19 @@ def fmaSup : RecChainedState :=
 -- A NON-FRESH id (cell 1 already live) is REJECTED (the freshness gate has TEETH):
 #eval (execFullA fmaSup (.createCellA 9 1)).isSome                                    -- false
 
--- SPAWN: actor 9 spawns child 2 (born EMPTY) with a delegated `node 7` cap — COMMITS, NEUTRAL,
---   and the child carries its disclosed authority snapshot (`node 7` at the head):
-#eval (execFullA fmaSup (.spawnA 9 2 7)).isSome                                       -- true
-#eval (execFullA fmaSup (.spawnA 9 2 7)).map
+-- SPAWN: child creation alone cannot mint authority to an unheld/non-live target:
+#eval (execFullA fmaSup (.spawnA 9 2 7)).isSome                                       -- false
+-- ...but actor 9 can spawn child 2 (born EMPTY) with a COPY of its held parent `node 1` cap — COMMITS,
+--   NEUTRAL, and the child carries the concrete copied parent cap (`node 1`):
+#eval (execFullA fmaSup (.spawnA 9 2 1)).isSome                                       -- true
+#eval (execFullA fmaSup (.spawnA 9 2 1)).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7) (NEUTRAL)
-#eval ((execFullA fmaSup (.spawnA 9 2 7)).map (fun s => s.kernel.caps 2)).getD []     -- [Cap.node 7]
-#eval (execFullA fmaSup (.spawnA 9 2 7)).map (fun s => decide (2 ∈ s.kernel.accounts))  -- some true (GREW)
+#eval ((execFullA fmaSup (.spawnA 9 2 1)).map (fun s => s.kernel.caps 2)).getD []     -- [Cap.node 1]
+#eval (execFullA fmaSup (.spawnA 9 2 1)).map (fun s => decide (2 ∈ s.kernel.accounts))  -- some true (GREW)
+#eval (execFullA fmaSup (.spawnA 9 2 1)).map
+        (fun s => (s.kernel.delegate 2, s.kernel.delegations 2))                    -- some (some 9, [Cap.node 0, Cap.node 1, Cap.node 2])
+#eval ((execFullA fmaSup (.spawnA 9 2 1)).bind
+        (fun s => execFullA s (.refreshDelegationA 2 2))).isSome                    -- true (spawn initialized parent)
 
 -- ★ THE BRIDGE-MINT DISCLOSURE WITNESS: actor 9 (holds `node 0`) bridge-mints +40 of ASSET 1 into the
 --   live cell 0 — COMMITS, asset 1 RISES by exactly 40 (7 → 47) while asset 0 is LEFT FIXED (105):
@@ -6248,8 +6452,20 @@ def facS : RecChainedState :=
                 factories := [(42, subFactory)] }
     log := [] }
 
+/-- A malformed factory attempting to initialize the reserved scalar `balance` field. -/
+def badBalanceFactory : FactoryEntry :=
+  { caveats := []
+    initialFields := [(balanceField, 999)]
+    programVk := 7 }
+
+def facBadBalanceS : RecChainedState :=
+  { facS with kernel := { facS.kernel with factories := [(43, badBalanceFactory)] } }
+
 -- The factory's own declared initial state CONFORMS to its own caveats (validate_and_record):
 #eval subFactory.conforms                                                         -- true
+-- A factory cannot smuggle scalar `balance` through initial fields; per-asset `bal` is born empty:
+#eval badBalanceFactory.conforms                                                  -- false
+#eval (execFullA facBadBalanceS (.createCellFromFactoryA 0 5 43)).isSome           -- false
 -- An UNKNOWN factory vk (99 ∉ registry) is REJECTED (fail-closed, apply.rs:3140):
 #eval (execFullA facS (.createCellFromFactoryA 0 5 99)).isSome                     -- false
 -- The conforming factory (vk 42) MINTS the fresh cell 5 (born EMPTY ⇒ conservation-neutral):

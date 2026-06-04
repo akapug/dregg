@@ -1584,7 +1584,7 @@ field names as JSON strings, the swiss `rights`/`held` as the narrow `AUTHS` arr
       | {"atten":[actor,idx,AUTHS]}              -- attenuateA
       | {"dropref":[holder,target]}              -- dropRefA
       | {"revdel":[holder,target]}               -- revokeDelegationA
-      | {"vhandoff":[introducer,recipient,target]}   -- validateHandoffA
+      | {"vhandoff":[introducer,recipient,target]}   -- validateHandoffA graph consequence
       | {"exercise":[actor,target,[INNER;…]]}    -- exerciseA (INNER = nested `;`-joined action array)
       | {"createcell":[actor,newCell]}           -- createCellA
       | {"createcellfactory":[actor,newCell,vk]} -- createCellFromFactoryA

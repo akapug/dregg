@@ -10,7 +10,8 @@ schedule. *Only connectivity begets connectivity, never beyond the ceiling.*
 The one-step obligation `cellNextA_confine` is discharged by how `execFullForestA` moves `caps`:
 most effects frame `caps`; `revoke`/`dropRef`/`revokeDelegation` filter a slot; `attenuateCapability`
 narrows in place; `delegateAtten` grants `attenuate keep (heldCapTo …)` (conferred ⊆ held ⊆ `U`);
-`delegate`/`introduce`/`validateHandoff`/`spawn` grant a `Cap.node` conferring `[control] ⊆ U`.
+`delegate`/`introduce`/`validateHandoff` copy an already-held witness cap; `spawn` grants a disclosed
+`Cap.node` conferring `[control] ⊆ U`.
 -/
 import Dregg2.Exec.CellCarry
 import Dregg2.Exec.AuthTurn
@@ -80,8 +81,8 @@ theorem mem_modify_cases {α : Type _} (f : α → α) :
 
 /-- **`CapsConfined.grant` — the grant closure.** Prepending a cap `c` to `holder`'s slot
 preserves confinement provided `c`'s own conferred authority lies within `U`. Covers every authority
-grant (`delegate`/`introduce`/`validateHandoff`/`spawn` grant `Cap.node t` conferring `[control]`;
-`delegateAtten` grants `attenuate keep (heldCapTo …)` whose conferred authority is bounded separately). -/
+grant: ordinary delegation, validate-handoff, and spawn copy a confined held cap; `delegateAtten` grants
+an attenuation of a held cap; seal-pair creation grants fresh seal caps under the explicit ceiling. -/
 theorem CapsConfined.grant {U : List Auth} {caps : Caps} {holder : Label} {c : Cap}
     (hc : ∀ a ∈ capAuthConferred c, a ∈ U) (h : CapsConfined U caps) :
     CapsConfined U (Dregg2.Exec.grant caps holder c) := by
@@ -625,7 +626,14 @@ theorem execFullA_sealedBoxes_frame (s s' : RecChainedState) (fa : FullActionA)
       obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq (by simpa only [execFullA] using h))
       subst hs'; rfl
   | emitEventA actor cell topic data =>
-      simp only [execFullA, Option.some.injEq] at h; subst h; rfl
+      simp only [execFullA] at h
+      by_cases hlive : cell ∈ s.kernel.accounts
+      · rw [if_pos hlive] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        rfl
+      · rw [if_neg hlive] at h
+        exact absurd h (by simp)
   | incrementNonceA actor cell n =>
       obtain ⟨_, hs'⟩ := stateStep_factors (by simpa only [execFullA] using h); subst hs'; rfl
   | setPermissionsA actor cell p =>
@@ -677,8 +685,8 @@ theorem execFullA_sealedBoxes_frame (s s' : RecChainedState) (fa : FullActionA)
       -- post = `{s1 with kernel := {s1.kernel with cell/slotCaveats}}`; `sealedBoxes` framed off `s1`, off `s`.
       obtain ⟨_, _, hc'⟩ := createCellChainA_factors hc; subst hc'; rfl
   | spawnA actor child target =>
-      obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
-      subst hs'; obtain ⟨_, _, hc'⟩ := createCellChainA_factors hc; subst hc'; rfl
+      obtain ⟨s1, _, hc, rfl⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
+      obtain ⟨_, _, hc'⟩ := createCellChainA_factors hc; subst hc'; rfl
   | createEscrowA id actor creator recipient asset amount =>
       simp only [execFullA, createEscrowChainA] at h
       cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
@@ -875,10 +883,10 @@ mutual
 /-- **`execFullA_confine` — the per-action confinement step.** With `control ∈ U`, every
 committed `FullActionA` preserves `CapsConfined U`. The ~40 non-authority effects frame `caps`
 (`*_caps_unchanged`/`rfl`); `revoke`/`dropRef`/`revokeDelegation` filter (`mono`); `attenuate`
-narrows in place (`attenuateSlot`); `delegate`/`introduce`/`validateHandoff`/`spawn` grant a
-`Cap.node` conferring `[control] ⊆ U` (`grant`); `delegateAtten` grants `attenuate keep (heldCapTo …)`
-whose conferred authority is ⊆ the held parent cap ⊆ `U` (`grant` + `attenuate_subset`); `exerciseA`
-RECURSES (mutual `execInnerA_confine`, same ceiling). This is `confinement_preserved` discharged on the
+narrows in place (`attenuateSlot`); `delegate`/`introduce`/`validateHandoff` copy an already-held cap;
+`delegateAtten` grants `attenuate keep (heldCapTo …)` whose conferred authority is ⊆ the held parent cap
+⊆ `U` (`grant` + `attenuate_subset`); `spawn` grants `Cap.node` under the explicit `[control] ⊆ U`
+ceiling. `exerciseA` RECURSES (mutual `execInnerA_confine`, same ceiling). This is `confinement_preserved` discharged on the
 executor, per effect. -/
 theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
     (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U)
@@ -918,28 +926,36 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
         (state_caps_unchanged (stateStepGuarded_eq (by simpa only [execFullA] using h))) hpre
   | emitEventA actor cell topic data =>
       refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, emitStep] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      simp only [execFullA] at h
+      by_cases hlive : cell ∈ s.kernel.accounts
+      · rw [if_pos hlive] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        rfl
+      · rw [if_neg hlive] at h
+        exact absurd h (by simp)
   | incrementNonceA actor cell n =>
       exact CapsConfined.of_caps_eq (state_caps_unchanged (by simpa only [execFullA] using h)) hpre
   | setPermissionsA actor cell p =>
       exact CapsConfined.of_caps_eq (state_caps_unchanged (by simpa only [execFullA] using h)) hpre
   | setVKA actor cell vk =>
       exact CapsConfined.of_caps_eq (state_caps_unchanged (by simpa only [execFullA] using h)) hpre
-  -- ===== AUTHORITY effects: the 5 cap-writing arms. =====
+  -- ===== AUTHORITY effects: the cap-writing arms. =====
   | introduceA intro rec t =>
-      -- grants `Cap.node t` conferring `[control]`.
+      -- grants the held witness cap; confinement follows because that cap was already confined.
       simp only [execFullA, recCDelegate] at h
       cases hd : recKDelegate s.kernel intro rec t with
       | none => rw [hd] at h; exact absurd h (by simp)
       | some k' =>
           rw [hd] at h; simp only [Option.some.injEq] at h; subst h
           show CapsConfined U k'.caps
-          unfold recKDelegate at hd; split at hd
-          · simp only [Option.some.injEq] at hd; subst hd
-            show CapsConfined U (Dregg2.Exec.grant s.kernel.caps rec (Cap.node t))
+          unfold recKDelegate at hd
+          by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
+          · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
+            show CapsConfined U (Dregg2.Exec.grant s.kernel.caps rec (heldCapTo s.kernel.caps intro t))
             refine CapsConfined.grant (fun a ha => ?_) hpre
-            simp only [capAuthConferred, List.mem_singleton] at ha; subst ha; exact hctrl
-          · exact absurd hd (by simp)
+            exact hpre intro (heldCapTo s.kernel.caps intro t) a (heldCapTo_mem s.kernel.caps intro t hg).1 ha
+          · rw [if_neg hg] at hd; exact absurd hd (by simp)
   | delegate del rec t =>
       simp only [execFullA, recCDelegate] at h
       cases hd : recKDelegate s.kernel del rec t with
@@ -947,12 +963,13 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
       | some k' =>
           rw [hd] at h; simp only [Option.some.injEq] at h; subst h
           show CapsConfined U k'.caps
-          unfold recKDelegate at hd; split at hd
-          · simp only [Option.some.injEq] at hd; subst hd
-            show CapsConfined U (Dregg2.Exec.grant s.kernel.caps rec (Cap.node t))
+          unfold recKDelegate at hd
+          by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
+          · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
+            show CapsConfined U (Dregg2.Exec.grant s.kernel.caps rec (heldCapTo s.kernel.caps del t))
             refine CapsConfined.grant (fun a ha => ?_) hpre
-            simp only [capAuthConferred, List.mem_singleton] at ha; subst ha; exact hctrl
-          · exact absurd hd (by simp)
+            exact hpre del (heldCapTo s.kernel.caps del t) a (heldCapTo_mem s.kernel.caps del t hg).1 ha
+          · rw [if_neg hg] at hd; exact absurd hd (by simp)
   | validateHandoffA intro rec t =>
       simp only [execFullA, recCDelegate] at h
       cases hd : recKDelegate s.kernel intro rec t with
@@ -960,12 +977,13 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
       | some k' =>
           rw [hd] at h; simp only [Option.some.injEq] at h; subst h
           show CapsConfined U k'.caps
-          unfold recKDelegate at hd; split at hd
-          · simp only [Option.some.injEq] at hd; subst hd
-            show CapsConfined U (Dregg2.Exec.grant s.kernel.caps rec (Cap.node t))
+          unfold recKDelegate at hd
+          by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
+          · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
+            show CapsConfined U (Dregg2.Exec.grant s.kernel.caps rec (heldCapTo s.kernel.caps intro t))
             refine CapsConfined.grant (fun a ha => ?_) hpre
-            simp only [capAuthConferred, List.mem_singleton] at ha; subst ha; exact hctrl
-          · exact absurd hd (by simp)
+            exact hpre intro (heldCapTo s.kernel.caps intro t) a (heldCapTo_mem s.kernel.caps intro t hg).1 ha
+          · rw [if_neg hg] at hd; exact absurd hd (by simp)
   | delegateAttenA del rec t keep =>
       -- grants `attenuate keep (heldCapTo s.kernel.caps del t)`; conferred ⊆ the held parent cap ⊆ U.
       simp only [execFullA, recCDelegateAtten] at h
@@ -1013,7 +1031,7 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
           have hbox1 : ∀ box ∈ s1.kernel.sealedBoxes, ∀ a ∈ capAuthConferred box.payload, a ∈ U := by
             rw [hs1]; exact hboxes
           exact execInnerA_confine hctrl hgrant hreply s1 s' inner h hpre1 hbox1
-  -- ===== supply: createCell FRAMEs caps; spawn grants `Cap.node target` ([control]). =====
+  -- ===== supply: createCell FRAMEs caps; spawn copies a held parent cap plus metadata. =====
   | createCellA actor newCell =>
       refine CapsConfined.of_caps_eq ?_ hpre
       exact createCellChainA_caps_eq (by simpa only [execFullA] using h)
@@ -1023,16 +1041,17 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
       exact createCellFromFactoryChainA_caps_eq (by simpa only [execFullA] using h)
   | spawnA actor child target =>
       simp only [execFullA] at h
-      obtain ⟨s1, hc1, hs'⟩ := spawnChainA_factors h
-      subst hs'
+      obtain ⟨s1, hground, hc1, rfl⟩ := spawnChainA_factors h
       show CapsConfined U
-        (fun l => if l = child then Cap.node target :: s1.kernel.caps l else s1.kernel.caps l)
-      -- `s1.kernel.caps = s.kernel.caps` (createCell frames caps); then a `Cap.node target` grant.
+        (fun l => if l = child then heldCapTo s.kernel.caps actor target :: s1.kernel.caps l
+                  else s1.kernel.caps l)
+      -- `s1.kernel.caps = s.kernel.caps` (createCell frames caps); then copy the parent's held cap.
       have hcaps1 : s1.kernel.caps = s.kernel.caps := createCellChainA_caps_eq hc1
       have hpre1 : CapsConfined U s1.kernel.caps := CapsConfined.of_caps_eq hcaps1 hpre
       have := CapsConfined.grant (U := U) (caps := s1.kernel.caps) (holder := child)
-        (c := Cap.node target) (fun a ha => by
-          simp only [capAuthConferred, List.mem_singleton] at ha; subst ha; exact hctrl) hpre1
+        (c := heldCapTo s.kernel.caps actor target) (fun a ha => by
+          exact hpre actor (heldCapTo s.kernel.caps actor target) a
+            (heldCapTo_mem s.kernel.caps actor target hground.1).1 ha) hpre1
       simpa only [Dregg2.Exec.grant] using this
   | bridgeMintA actor cell a value =>
       refine CapsConfined.of_caps_eq ?_ hpre
@@ -1398,9 +1417,10 @@ confined at every index of the unbounded adversarial trajectory `trajA s sched`,
 
 This is the seL4 object-integrity confinement (`Authority/Positional.confinement_preserved`, lifted from
 l4v `call_kernel_pas_refined`: a turn never grows authority beyond the policy upper bound) carried
-coinductively: the attenuating delegation edges and the `Cap.node` connectivity grants never push
-conferred authority past the fixed ceiling, for all time. `cellNextA_confine` is the one-step obligation;
-`livingCellA_carries` carries it over the entire adversarial future. -/
+coinductively: held-cap copies (ordinary delegation, handoff, spawn), attenuating delegation edges, and
+fresh seal caps never push conferred authority past the fixed ceiling, for all time.
+`cellNextA_confine` is the one-step obligation; `livingCellA_carries` carries it over the entire
+adversarial future. -/
 theorem livingCellA_confinement {U : List Auth} (hctrl : Auth.control ∈ U)
     (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U)
     (s : RecChainedState) (hinit : KConfined U s.kernel) (sched : SchedA) :

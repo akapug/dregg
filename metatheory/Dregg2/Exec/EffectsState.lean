@@ -183,27 +183,28 @@ def writeField (k : RecordKernelState) (f : FieldName) (target : CellId) (v : Va
   { k with cell := fun c => if c = target then setField f (k.cell c) v else k.cell c }
 
 /-- **`stateStep` — the executable semantics of a Neutral/Monotonic/Terminal effect (PROVED
-computable).** Fail-closed: commits only when the actor holds authority over `target`. On commit,
-write field `f` of `target` to `v` and extend the receipt chain by one row (the metadata advance).
-NO balance move, NO cap edit — the regime invariant. -/
+computable).** Fail-closed: commits only when the actor holds authority over `target` AND `target` is
+a live account. On commit, write field `f` of `target` to `v` and extend the receipt chain by one row
+(the metadata advance). NO balance move, NO cap edit — the regime invariant. -/
 def stateStep (s : RecChainedState) (f : FieldName) (actor target : CellId) (v : Value) :
     Option RecChainedState :=
-  if stateAuthB s.kernel.caps actor target = true then
+  if stateAuthB s.kernel.caps actor target = true ∧ target ∈ s.kernel.accounts then
     some { kernel := writeField s.kernel f target v,
            log    := { actor := actor, src := target, dst := target, amt := 0 } :: s.log }
   else
     none
 
 /-- **`stateStep_factors` — PROVED.** A committed `stateStep` was authorized and produced exactly
-the field-write post-state + a one-row chain extension. The bridge every downstream theorem reuses. -/
+the field-write post-state + a one-row chain extension. The live-target gate is exposed separately by
+`state_target_live`. The bridge every downstream theorem reuses. -/
 theorem stateStep_factors {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
     {v : Value} (h : stateStep s f actor target v = some s') :
     stateAuthB s.kernel.caps actor target = true ∧
       s' = { kernel := writeField s.kernel f target v,
              log := { actor := actor, src := target, dst := target, amt := 0 } :: s.log } := by
   unfold stateStep at h
-  by_cases hg : stateAuthB s.kernel.caps actor target = true
-  · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; exact ⟨hg, h.symm⟩
+  by_cases hg : stateAuthB s.kernel.caps actor target = true ∧ target ∈ s.kernel.accounts
+  · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; exact ⟨hg.1, h.symm⟩
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-! ## §1.5 — SLOT-CAVEAT ENFORCEMENT: the caveat-gated field write (the foundation of app-safety).
@@ -340,13 +341,26 @@ theorem state_authorized {s s' : RecChainedState} {f : FieldName} {actor target 
     stateAuthB s.kernel.caps actor target = true :=
   (stateStep_factors h).1
 
+/-- **`state_target_live` — PROVED.** A committed Neutral/metadata field write targeted a live account.
+This prevents self-authorized writes from creating ghost cell state outside `accounts`. -/
+theorem state_target_live {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
+    {v : Value} (h : stateStep s f actor target v = some s') :
+    target ∈ s.kernel.accounts := by
+  unfold stateStep at h
+  by_cases hg : stateAuthB s.kernel.caps actor target = true ∧ target ∈ s.kernel.accounts
+  · exact hg.2
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
 /-- **`state_unauthorized_fails` — PROVED (fail-closed).** If the actor lacks authority over the
 target, no Neutral/metadata effect commits. The integrity/confinement core for the regime. -/
 theorem state_unauthorized_fails (s : RecChainedState) (f : FieldName) (actor target : CellId)
     (v : Value) (h : stateAuthB s.kernel.caps actor target = false) :
     stateStep s f actor target v = none := by
   unfold stateStep
-  rw [if_neg]; rw [h]; simp
+  rw [if_neg]
+  intro hg
+  rw [h] at hg
+  exact absurd hg.1 (by simp)
 
 /-! ## §4 — `state_metadata`: the metadata domain advances (the only moving domain).
 
@@ -634,6 +648,7 @@ theorem guarded_state_field_written {s s' : RecChainedState} {f : FieldName} {ac
 #assert_axioms state_caps_unchanged
 #assert_axioms state_authGraph_unchanged
 #assert_axioms state_authorized
+#assert_axioms state_target_live
 #assert_axioms state_unauthorized_fails
 #assert_axioms state_obsadvance
 #assert_axioms state_field_written
@@ -684,6 +699,8 @@ def ss0 : RecChainedState :=
 #eval (stateStep ss0 "status" 0 0 (.int 7)).map (fun s => s.log.length)             -- some 1
 -- An unauthorized actor (9 owns nothing) cannot write a field (fail-closed):
 #eval (stateStep ss0 "status" 9 0 (.int 7)).isSome                                  -- false
+-- Self-targeting a non-live cell is rejected too: ownership alone cannot create ghost state.
+#eval (stateStep ss0 "status" 9 9 (.int 7)).isSome                                  -- false
 
 -- A Monotonic counter bump (nonce 0 → 1) commits and conserves:
 #eval (stateStep ss0 "nonce" 0 0 (.int 1)).map (fun s => fieldOf "nonce" (s.kernel.cell 0)) -- some 1

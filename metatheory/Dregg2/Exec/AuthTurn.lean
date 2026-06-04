@@ -10,8 +10,9 @@ Granovetter delegate or a revoke) rather than the balance field — and proves:
 
 Why `execGraph` matches: rights are abstracted to `ExecRights = Unit` (connectivity skeleton), so a
 `Spec.Cap Label ExecRights` is determined by its target (`c = ⟨t, ()⟩ ↔ c.target = t`). Hence
-granting a `node t` cap IS `addEdge … ⟨t,()⟩`, and revoking all `t`-conferring caps IS
-`removeEdge … ⟨t,()⟩` — i.e. `Spec.Introduce.result` / `Spec.Revoke.result` verbatim.
+granting any held concrete cap that confers an edge to `t` IS `addEdge … ⟨t,()⟩`, and revoking all
+`t`-conferring caps IS `removeEdge … ⟨t,()⟩` — i.e. `Spec.Introduce.result` / `Spec.Revoke.result`
+verbatim, without upgrading concrete endpoint rights into control.
 
 No `axiom`/`admit`/`native_decide`/`sorry`. Reuses `Exec/Caps.lean`, `Spec.Authority`, and
 `Spec.ExecRefinement.execGraph`.
@@ -62,34 +63,34 @@ theorem specCap_eq_iff_target (c : Spec.Cap Label ExecRights) (t : Label) :
 
 /-! ## §3 — `recKDelegate` — the executable Granovetter delegation.
 
-Edits `caps` (grants `recipient` a fresh `node t` cap) and leaves the `cell`/balance state
-untouched. Fail-closed: gates on the delegator already holding connectivity to `t` — "only
-connectivity begets connectivity" (the Granovetter `Introduce` premise). -/
-
-/-- The executable authority turn: `delegator` hands `recipient` a `node t` cap. Commits only when
-the delegator already holds a `t`-conferring cap (Granovetter connectivity premise); on commit
-rewrites only `caps`, leaving every balance intact. -/
-def recKDelegate (k : RecordKernelState) (delegator recipient t : Label) :
-    Option RecordKernelState :=
-  -- The delegator must already hold a cap conferring an edge to `t` (`Spec.Endow.holds_source`).
-  if (k.caps delegator).any (fun cap => confersEdgeTo t cap) = true then
-    some { k with caps := grant k.caps recipient (Cap.node t) }
-  else
-    none
-
-/-! ### §3.RIGHTS — The rights-carrying delegation (the genuine `is_attenuation` mirror).
-
-`recKDelegate` grants a `node t` connectivity cap but is rights-blind. dregg1's `apply_introduce`
-additionally looks up the introducer's held cap to `t` (`lookup_by_target`), checks
-`is_attenuation(held.permissions, granted)`, and grants an attenuated copy. `recKDelegateAtten`
-mirrors that: locate the held cap, attenuate to `keep`, and grant the attenuated `endpoint` cap.
-The granted cap's conferred rights are `⊆` the held cap's (`attenuate_confRights_le`) — the genuine
-`granted.rights ≤ held.rights` over `ExecAuth`, not a `()≤()` collapse. -/
+Edits `caps` and leaves the `cell`/balance state untouched. Fail-closed: gates on the delegator
+already holding connectivity to `t` — "only connectivity begets connectivity" (the Granovetter
+`Introduce` premise). On commit it copies the concrete held cap that witnesses the premise, rather
+than manufacturing a fresh `node t` control cap. -/
 
 /-- The introducer's held cap conferring an edge to `t` (executable `lookup_by_target`): the first
 cap in `h`'s slot that `confersEdgeTo t`, or `Cap.null` if none. -/
 def heldCapTo (caps : Caps) (h t : Label) : Cap :=
   ((caps h).find? (fun cap => confersEdgeTo t cap)).getD Cap.null
+
+/-- The executable authority turn: `delegator` copies to `recipient` the concrete cap it already
+holds that confers an edge to `t`. Commits only when the delegator already holds such a cap
+(Granovetter connectivity premise); on commit rewrites only `caps`, leaving every balance intact.
+This preserves the abstract `addEdge` behavior while avoiding rights amplification. -/
+def recKDelegate (k : RecordKernelState) (delegator recipient t : Label) :
+    Option RecordKernelState :=
+  -- The delegator must already hold a cap conferring an edge to `t` (`Spec.Endow.holds_source`).
+  if (k.caps delegator).any (fun cap => confersEdgeTo t cap) = true then
+    some { k with caps := grant k.caps recipient (heldCapTo k.caps delegator t) }
+  else
+    none
+
+/-! ### §3.RIGHTS — The attenuating delegation (the genuine `is_attenuation` mirror).
+
+`recKDelegate` copies the witness cap unchanged. `recKDelegateAtten` is the explicitly attenuating
+variant: locate the held cap, attenuate to `keep`, and grant the attenuated cap. The granted cap's
+conferred rights are `⊆` the held cap's (`attenuate_confRights_le`) — the genuine `granted.rights ≤
+held.rights` over `ExecAuth`, not a `()≤()` collapse. -/
 
 /-- The rights-carrying Granovetter delegation (faithful `apply_introduce`): on commit, grant
 `recipient` the delegator's held cap to `t` attenuated to `keep`. The granted cap carries real
@@ -127,6 +128,23 @@ theorem recKDelegate_frame (k k' : RecordKernelState) (delegator recipient t : L
     rfl
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
+/-- A committed ordinary delegation grants exactly the delegator's held `t`-conferring cap. -/
+theorem recKDelegate_grants (k k' : RecordKernelState) (delegator recipient t : Label)
+    (h : recKDelegate k delegator recipient t = some k') :
+    heldCapTo k.caps delegator t ∈ k'.caps recipient := by
+  unfold recKDelegate at h
+  by_cases hg : (k.caps delegator).any (fun cap => confersEdgeTo t cap) = true
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    exact grant_adds k.caps recipient (heldCapTo k.caps delegator t)
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- A copied held cap is non-amplifying against the cap it copies, over the real `ExecAuth` lattice. -/
+theorem recKDelegate_copy_non_amplifying (caps : Caps) (delegator t : Label) :
+    confRights (heldCapTo caps delegator t) ≤ confRights (heldCapTo caps delegator t) :=
+  le_rfl
+
 /-- A target-revocation preserves `recTotal` and `accounts` (edits only `caps`). -/
 theorem recKRevokeTarget_frame (k : RecordKernelState) (holder t : Label) :
     recTotal (recKRevokeTarget k holder t) = recTotal k ∧
@@ -150,45 +168,56 @@ theorem confersEdgeTo_unique (cap : Cap) (a t : Label)
       simp only [reduceCtorEq, false_or, Bool.and_eq_true, beq_iff_eq] at ha ht
       rw [← ha.1, ← ht.1]
 
-/-! ## §5 — The graph-change lemma: the cap-edit IS `addEdge`/`removeEdge`.
+/-- When the delegator holds some cap conferring an edge to `t`, `heldCapTo` returns an actual
+member of its slot that `confersEdgeTo t` (executable `lookup_by_target` succeeds). -/
+theorem heldCapTo_mem (caps : Caps) (delegator t : Label)
+    (hg : (caps delegator).any (fun cap => confersEdgeTo t cap) = true) :
+    heldCapTo caps delegator t ∈ caps delegator
+      ∧ confersEdgeTo t (heldCapTo caps delegator t) = true := by
+  unfold heldCapTo
+  rw [List.any_eq_true] at hg
+  obtain ⟨c, hmem, hconf⟩ := hg
+  -- `find?` with a satisfied predicate returns `some`, and the result satisfies the predicate.
+  cases hfind : (caps delegator).find? (fun cap => confersEdgeTo t cap) with
+  | none =>
+      -- impossible: `c` satisfies the predicate, so `find?` cannot be `none`.
+      rw [List.find?_eq_none] at hfind
+      exact absurd hconf (by simpa using hfind c hmem)
+  | some d =>
+      simp only [Option.getD_some]
+      exact ⟨List.mem_of_find?_eq_some hfind, List.find?_some hfind⟩
 
-`execGraph` of the post-state equals `Spec.addEdge`/`Spec.removeEdge` of the single Spec edge
-`⟨t,()⟩` applied to `execGraph` of the pre-state — verbatim `Spec.Introduce.result` /
-`Spec.Revoke.result`. Proved by `funext`/`propext` reducing `.any` over the edited slot. -/
-
-/-- After delegating a `node t` cap to `recipient`, the reconstructed graph equals the pre-graph
-with edge `recipient ⟶ ⟨t,()⟩` added — `Spec.Introduce.result` verbatim. -/
-theorem recKDelegate_execGraph (caps : Caps) (recipient t : Label) :
-    execGraph (grant caps recipient (Cap.node t))
+/-- Granting any concrete cap that confers the target edge reconstructs as adding that single
+connectivity edge in the abstract `ExecRights = Unit` graph. This is the rights-parametric version
+of the old `node t` graph lemma. -/
+theorem grant_conferring_execGraph (caps : Caps) (recipient t : Label) (cap : Cap)
+    (hcap : confersEdgeTo t cap = true) :
+    execGraph (grant caps recipient cap)
       = addEdge (execGraph caps) recipient (⟨t, ()⟩ : Spec.Cap Label ExecRights) := by
   funext h c
   -- Unfold both sides to a `Prop` equality and prove by `propext`.
-  show ((grant caps recipient (Cap.node t) h).any (fun cap => confersEdgeTo c.target cap) = true)
+  show ((grant caps recipient cap h).any (fun cap' => confersEdgeTo c.target cap') = true)
       = (execGraph caps h c ∨ (h = recipient ∧ c = ⟨t, ()⟩))
   apply propext
   unfold grant
   by_cases hh : h = recipient
   · subst hh
-    -- the edited slot: `grant` prepends `node t`; the `.any` gains the disjunct.
+    -- the edited slot: `grant` prepends a cap that already confers the target edge.
     rw [if_pos rfl]
     rw [execGraph_eq_any]
     simp only [List.any_cons, Bool.or_eq_true]
     constructor
-    · rintro (hnode | hrest)
-      · -- the new `node t` cap confers an edge iff `c.target = t`, i.e. `c = ⟨t,()⟩`.
+    · rintro (hnew | hrest)
+      · -- the new cap can confer only one connectivity target, so it is the edge to `t`.
         refine Or.inr ⟨by trivial, ?_⟩
-        have ht : c.target = t := by
-          have : (Cap.node t == Cap.node c.target) = true := by
-            simpa [confersEdgeTo] using hnode
-          have := (beq_iff_eq (a := Cap.node t) (b := Cap.node c.target)).mp this
-          exact (Cap.node.injEq t c.target ▸ this).symm
+        have ht : c.target = t := confersEdgeTo_unique cap c.target t hnew hcap
         exact (specCap_eq_iff_target c t).mpr ht
       · exact Or.inl hrest
     · rintro (hpre | ⟨_, hc⟩)
       · exact Or.inr hpre
-      · -- `c = ⟨t,()⟩` ⟹ `c.target = t` ⟹ the `node t` cap confers the edge.
+      · -- `c = ⟨t,()⟩` ⟹ `c.target = t` ⟹ the granted cap confers the edge.
         have ht : c.target = t := (specCap_eq_iff_target c t).mp hc
-        exact Or.inl (by simp [confersEdgeTo, ht])
+        exact Or.inl (by simpa [ht] using hcap)
   · -- an untouched slot: the graph is unchanged and the added-edge disjunct is false.
     rw [if_neg hh, execGraph_eq_any]
     constructor
@@ -196,6 +225,22 @@ theorem recKDelegate_execGraph (caps : Caps) (recipient t : Label) :
     · rintro (hpre | ⟨heq, _⟩)
       · exact hpre
       · exact absurd heq hh
+
+/-! ## §5 — The graph-change lemma: the cap-edit IS `addEdge`/`removeEdge`.
+
+`execGraph` of the post-state equals `Spec.addEdge`/`Spec.removeEdge` of the single Spec edge
+`⟨t,()⟩` applied to `execGraph` of the pre-state — verbatim `Spec.Introduce.result` /
+`Spec.Revoke.result`. Proved by `funext`/`propext` reducing `.any` over the edited slot. -/
+
+/-- After copying the delegator's held `t`-conferring cap to `recipient`, the reconstructed graph
+equals the pre-graph with edge `recipient ⟶ ⟨t,()⟩` added — `Spec.Introduce.result` verbatim,
+without assuming the concrete cap was `node t`. -/
+theorem recKDelegate_execGraph (caps : Caps) (delegator recipient t : Label)
+    (hg : (caps delegator).any (fun cap => confersEdgeTo t cap) = true) :
+    execGraph (grant caps recipient (heldCapTo caps delegator t))
+      = addEdge (execGraph caps) recipient (⟨t, ()⟩ : Spec.Cap Label ExecRights) := by
+  exact grant_conferring_execGraph caps recipient t (heldCapTo caps delegator t)
+    (heldCapTo_mem caps delegator t hg).2
 
 /-- After revoking every `t`-conferring cap from `holder`, the reconstructed graph equals the
 pre-graph with edge `holder ⟶ ⟨t,()⟩` removed — `Spec.Revoke.result` verbatim. -/
@@ -269,25 +314,6 @@ When `recKDelegateAtten` commits: (a) `heldCapTo` is a real member of the delega
 `confersEdgeTo t`; (b) the granted cap's real conferred rights are `⊆` the held cap's
 (`is_attenuation` over `ExecAuth`) — granted-vs-held, not self-vs-self. -/
 
-/-- When the delegator holds some cap conferring an edge to `t`, `heldCapTo` returns an actual
-member of its slot that `confersEdgeTo t` (executable `lookup_by_target` succeeds). -/
-theorem heldCapTo_mem (caps : Caps) (delegator t : Label)
-    (hg : (caps delegator).any (fun cap => confersEdgeTo t cap) = true) :
-    heldCapTo caps delegator t ∈ caps delegator
-      ∧ confersEdgeTo t (heldCapTo caps delegator t) = true := by
-  unfold heldCapTo
-  rw [List.any_eq_true] at hg
-  obtain ⟨c, hmem, hconf⟩ := hg
-  -- `find?` with a satisfied predicate returns `some`, and the result satisfies the predicate.
-  cases hfind : (caps delegator).find? (fun cap => confersEdgeTo t cap) with
-  | none =>
-      -- impossible: `c` satisfies the predicate, so `find?` cannot be `none`.
-      rw [List.find?_eq_none] at hfind
-      exact absurd hconf (by simpa using hfind c hmem)
-  | some d =>
-      simp only [Option.getD_some]
-      exact ⟨List.mem_of_find?_eq_some hfind, List.find?_some hfind⟩
-
 /-- A committed rights-delegation grants a cap whose real authority is `⊆` the introducer's held
 cap: `confRights (attenuate keep held) ≤ confRights held` over `ExecAuth`. The genuine
 `is_attenuation(held, granted)` inequality via `attenuate_confRights_le`. -/
@@ -327,7 +353,10 @@ theorem recKDelegateAtten_grounds (k k' : RecordKernelState) (delegator recipien
 /-! ## §7 — Axiom-hygiene tripwires. -/
 
 #assert_axioms recKDelegate_frame
+#assert_axioms recKDelegate_grants
+#assert_axioms recKDelegate_copy_non_amplifying
 #assert_axioms recKRevokeTarget_frame
+#assert_axioms grant_conferring_execGraph
 #assert_axioms recKDelegate_execGraph
 #assert_axioms recKRevokeTarget_execGraph
 #assert_axioms recKDelegate_grounds
@@ -353,5 +382,13 @@ def rsCap : RecordKernelState :=
 #eval ((recKDelegate rsCap 0 1 7).map (fun k => k.caps 1)).getD []   -- [Cap.node 7]
 -- Revocation always commits (it only subtracts): revoking 7 from 0 empties its slot.
 #eval ((recKRevokeTarget rsCap 0 7).caps 0)  -- [] (the `node 7` cap is filtered out)
+
+/-- A state where delegator 0 holds only endpoint-write authority to target 7. -/
+def rsEndpointWrite : RecordKernelState :=
+  { rs0 with caps := fun l => if l = 0 then [Cap.endpoint 7 [Auth.write]] else [] }
+
+-- Ordinary delegation copies the held endpoint cap; it does not upgrade write into `node`/control.
+#eval ((recKDelegate rsEndpointWrite 0 1 7).map (fun k => k.caps 1)).getD []
+-- [Cap.endpoint 7 [Auth.write]]
 
 end Dregg2.Exec
