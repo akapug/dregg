@@ -477,9 +477,10 @@ theorem lowEq_separates :
   have hsep := hcell 0 hc "commitment" (by simp) (by decide)
   -- LHS reads `commitment` from `[(balance,0),(secret,7)]` (reduces to `none`); RHS reads it from
   -- `[(balance,0),(commitment,5)]` (reduces to `some (.int 5)`). `none = some _` is absurd.
-  rw [show ((Value.record [(balanceField, .int 0), ("commitment", .int 5)]).field "commitment"
+  rw [show ((sLeak.kernel.cell 0).field "commitment" : Option Value) = none from rfl,
+      show ((Value.record [(balanceField, .int 0), ("commitment", .int 5)]).field "commitment"
             : Option Value) = some (.int 5) from rfl] at hsep
-  simp at hsep
+  exact absurd hsep (by simp)
 
 /-! ### T4 — non-vacuity: K1's slice is inhabited by a real committing step. -/
 
