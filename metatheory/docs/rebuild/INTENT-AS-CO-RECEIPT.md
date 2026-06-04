@@ -10,6 +10,42 @@ gallery auction (and eventually DeFi) against. Companion to the relativistic tim
 
 ---
 
+## 0. The frame: constructive knowledge is the constraint
+
+This is not a new idea in this doc — it is the frame the whole project has been held in. Everything
+below is *read off* it rather than chosen.
+
+**To know X is to hold a witness for X** (BHK / Curry–Howard). Run that through a distributed system
+and the valid designs collapse to a thin manifold — which is *why* independent serious efforts
+(Anoma's resource machine, ours) converge: the constraints do the choosing. Convergence is two proofs
+of one theorem, not imitation.
+
+Every piece of the spine is forced by it:
+- **authority** — you cannot *assert* you are authorized; you must *exhibit a capability* (a witness).
+  Ambient authority is non-constructive existence — ruled out.
+- **the receipt** — a witness that a turn happened.
+- **the intent** — a *predicate* demanding a witness, whose resources are the constructive content
+  that funds the demand. `Predicate ⊣ Witness` (`Dregg2.Laws`) *is* the demand-a-proof ⊣ supply-a-proof
+  adjunction; receipt and intent are its two polarities (§3).
+- **conservation** — you cannot witness value you do not hold; no-forgery is "no proof of a false
+  existential."
+- **time** — the causal/frame split (§4) *is* the constructive/classical split: `causal_after(E)` =
+  "I hold a witness — E is in my lace-past, checkable"; `frame_within(F,T,δ)` = "I trust an authority's
+  classical assertion I cannot constructively verify." The lightcone is the epistemic accessibility
+  relation: you can only constructively know what is in your causal past. So the moment time goes
+  classical it *must* become an explicit trust portal — that was forced, not designed.
+
+**The validity test** (a knife for staying on the manifold): of any proposed feature, ask *"what is the
+witness, and whose construction is it?"* If it needs a non-constructive move — ambient authority,
+unwitnessed existence, a global *now* — it is either invalid or must be named as an explicit trust
+portal (with its δ, its honest-within-f-faults carrier).
+
+Already load-bearing in the codebase: `Metatheory/ConstructiveKnowledge.lean`,
+`Metatheory/EpistemicConsensus.lean`, `EpistemicDial.lean`, and the verdict that `Predicate ⊣ Witness`
+is the *base* of a Lawvere hyperdoctrine. This section just promotes the standing frame to the front.
+
+---
+
 ## 1. The duality: a co-receipt is a typed string-diagram *hole*
 
 A **receipt** attests a *completed* turn — a full string diagram: boxes wired, inputs consumed,
