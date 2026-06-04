@@ -18,12 +18,21 @@ only these theorems, pinning the decoder as the genuine left-inverse of the enco
   * §5–§6 — recursive `Value`/`FIELDS` tree and the security-critical `Authorization` decoder
     (all 10 variants + recursive `oneOf`, by strong induction on fuel);
   * §7 — the `FullActionA` decoder, complete at all 46 arms;
-  * §8–§11c — every wide-state side-table list (AUTHS, Nat-list, BAL-list, ESCROWS, QUEUES, SWISS).
+  * §8–§11c — every wide-state side-table list (AUTHS, Nat-list, BAL-list, ESCROWS, QUEUES, SWISS);
+  * §11d — the per-node `CAVEATS` array (`parseCaveatsW`, the soundness-fix discharge leg, `tier ≤ 3`);
+  * §12–§13 — the wide `CELLS` store (recursive `Value` payload) and the `CAPS` table (3-arm cap sum);
+  * §15 — the RECURSIVE action-TREE (`parseForestW`/`parseChildrenW`: the call-forest + delegation
+    edges, by strong induction on fuel — credential §6, caveats §11d, action §7, sub-trees recursive);
+  * §14 — the WIDE STATE record (`parseWState`, the 9-field state decoder = the differential's core);
+  * §16 — the complete-turn ENVELOPE + WHOLE wire (`parseWTurn`/`parseWWire`, whole-input-consumed).
+    The wire codec is now FULLY out of the Lean-side TCB.
 
-**DEFERRED (codec is TCB — `#eval`-cross-validated at each codec site, no proof here yet):**
-`parseCaveatsW` (per-node caveat array); `parseForestW`/`parseChildrenW` (recursive action-tree +
-delegation edges); `parseWState`/`parseWTurn`/`parseWWire` (wide-state record + Turn envelope +
-whole-wire object). The side-table list productions they assemble are all proved above (§9–§11c).
+**DEFERRED (the one remaining grammar gap — `#eval`-cross-validated at the codec site, no proof yet):**
+a NON-empty nested `exerciseA` inner-effect array. The codec boundary `WfActionW .exerciseA` pins
+`inner = []` (the bare cap-exercise, proven by `parseActionW_exercise_nil`); a non-empty `;`-joined
+inner array needs a fuel-threaded mutual `parseActionsWFuel`-inverts-`encodeActionsW` lemma (issue
+`#136`). The de-shadowed EXECUTOR already runs ANY inner list (proven in `TurnExecutorFull`); only the
+codec roundtrip THEOREM for the recursive inner grammar is outstanding. Everything else round-trips.
 
 Every digest/commitment field is the low 256 bits of a `Nat`. Proved roundtrips are the identity on
 the well-formed value space (`< 2^256`). NON-VACUOUS: the `Wf` hypothesis is satisfiable (demo values
