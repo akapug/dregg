@@ -270,6 +270,14 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
                 offset: pi::OWNER_CELL_ID_BASE,
                 length_in_felts: pi::OWNER_CELL_ID_LEN,
             },
+            // D5: NoteSpend nullifier cross-binding (approach A). Single felt
+            // carrying fold_bytes32_to_bb(nullifier); pinned to every
+            // sel::NOTE_SPEND row's param0 by the per-row gated constraint.
+            crate::air_descriptor::PiSlot {
+                name: "notespend_nullifier",
+                offset: pi::NOTESPEND_NULLIFIER,
+                length_in_felts: 1,
+            },
         ],
         // Constraint groups: selector validity (NUM_EFFECTS+1), per-effect
         // gated constraints (~NUM_EFFECTS large groups), boundary bindings
@@ -283,7 +291,9 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
         // unconditional constraints. We fold its presence into the descriptor
         // count (+1 for the group) so the VK-v2 fingerprint binds the new AIR
         // shape; the per-bit constraints are an internal property of the group.
-        constraint_polynomial_count: NUM_EFFECTS + 1 + NUM_EFFECTS + 1,
+        // + 1 (D5: NoteSpend nullifier cross-binding — one per-row gated
+        //   equality `s_notespend * (param0 - PI[NOTESPEND_NULLIFIER])`).
+        constraint_polynomial_count: NUM_EFFECTS + 1 + NUM_EFFECTS + 1 + 1,
         // 32 prior + 8 (γ.2 #131/#132: 4 FEDERATION_ID + 4 OWNER_CELL_ID
         // row-0 boundary bindings).
         boundary_constraint_count: 40,
@@ -1033,6 +1043,34 @@ impl StarkAir for EffectVmAir {
                 * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
                     - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
             combined = combined + alpha_pow * c;
+            alpha_pow = alpha_pow * alpha;
+        }
+        // ====================================================================
+        // D5: NoteSpend nullifier CROSS-BINDING (approach A) — per-row gated
+        // PI equality. When sel::NOTE_SPEND == 1, the row's param0 (the
+        // single folded `fold_bytes32_to_bb(nullifier)` felt) MUST equal
+        // PI[NOTESPEND_NULLIFIER]. Same mechanism as the EMIT_EVENT topic /
+        // payload pin above: PI is a constant across rows, so a malicious
+        // prover that feeds a different M into the EffectVM (param0 = fold(M))
+        // cannot satisfy this at any FRI evaluation point unless PI also
+        // carries fold(M).
+        //
+        // The off-AIR verifier (turn::executor::proof_verify) reconstructs
+        // PI[NOTESPEND_NULLIFIER] from the SCHEMA_NOTE_SPEND binding proof's
+        // fields[0] — the proof that certifies the nullifier against the spent
+        // note's preimage. Its PI-match loop rejects any proof whose PI
+        // disagrees. Together: param0 == PI[NOTESPEND_NULLIFIER] == fold(the
+        // binding-proof-certified nullifier), so the EffectVM can no longer
+        // spend a nullifier other than the one the spending proof enforced.
+        //
+        // Gated by s_notespend, so non-NoteSpend rows are unaffected; on
+        // proofs with no NoteSpend row, the slot stays at the ZERO sentinel
+        // and this constraint is vacuous (no row has s_notespend == 1).
+        if public_inputs.len() >= pi::BASE_COUNT {
+            let pi_nullifier = public_inputs[pi::NOTESPEND_NULLIFIER];
+            let c_ns_nullifier =
+                s_notespend * (local[PARAM_BASE + param::NULLIFIER] - pi_nullifier);
+            combined = combined + alpha_pow * c_ns_nullifier;
             alpha_pow = alpha_pow * alpha;
         }
 

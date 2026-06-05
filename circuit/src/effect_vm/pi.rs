@@ -315,6 +315,7 @@ pub const VK_PI_LAYOUT_VERSION: u32 = 2;
 ///   182..190 EMIT_EVENT_PAYLOAD_HASH[8]          (closes #110)
 ///   190..194 FEDERATION_ID[4]                    (γ.2 #131)
 ///   194..198 OWNER_CELL_ID[4]                    (γ.2 #132)
+///   198     NOTESPEND_NULLIFIER                  (D5 nullifier cross-binding)
 ///
 /// ---- Slot-caveat manifest (Cav-Codex Block 3) ----
 ///
@@ -550,7 +551,46 @@ pub const FEDERATION_ID_LEN: usize = 4;
 pub const OWNER_CELL_ID_BASE: usize = FEDERATION_ID_BASE + FEDERATION_ID_LEN; // 194
 pub const OWNER_CELL_ID_LEN: usize = 4;
 
-pub const BASE_COUNT: usize = OWNER_CELL_ID_BASE + OWNER_CELL_ID_LEN; // 198
+// ---- D5: NoteSpend nullifier cross-binding (approach A) ----
+//
+// THE GAP this closes: the EffectVM's NoteSpend row carries `param0` = a
+// single folded BabyBear nullifier (`fold_bytes32_to_bb(nullifier.0)`),
+// absorbed into `effects_hash`. But that param was NOT cross-bound to the
+// proof that actually enforces the nullifier against the spent note's
+// preimage — the `SCHEMA_NOTE_SPEND` binding proof (`effect_action_air`,
+// `fields[0]` = the 32-byte nullifier) and `note_spending_air` (which
+// derives the nullifier from the preimage). So a malicious executor could
+// prove nullifier N via the spending/binding proof yet feed a DIFFERENT M
+// into the EffectVM, and nothing rejected the mismatch.
+//
+// Approach A closes it with three teeth that all reference the SAME folded
+// nullifier:
+//   (1) this PI slot — a single felt carrying `fold_bytes32_to_bb(nullifier)`.
+//   (2) AIR per-row constraint (air.rs), gated by `sel::NOTE_SPEND`: every
+//       NoteSpend row's `param0` MUST equal `PI[NOTESPEND_NULLIFIER]`.
+//   (3) off-AIR equality (turn::executor::proof_verify): the verifier
+//       reconstructs `PI[NOTESPEND_NULLIFIER]` from the SCHEMA_NOTE_SPEND
+//       binding proof's `fields[0]` (the cross-proof source) and the
+//       PI-match loop rejects any proof whose PI disagrees.
+//
+// Single felt (one slot, not 8): matches the in-trace `param0` width the
+// AIR already pins. The full 256-bit binding of the nullifier lives in the
+// SCHEMA_NOTE_SPEND binding proof (fields[0], 8 limbs) + note_spending_air;
+// this slot is the weld that forbids the EffectVM from spending a different
+// nullifier than the one the binding proof certified. Mirrors EMIT_EVENT's
+// "first row's value, shared across all matching rows" single-slot shape:
+// the per-row gated equality forces every NoteSpend row in one proof to
+// share this nullifier (multi-distinct-nullifier proofs need PI extension,
+// deferred — same posture as EmitEvent's EMIT_EVENT_COUNT > 1 note).
+//
+// Sentinel: BabyBear::ZERO when the proof carries no NoteSpend row. A
+// NoteSpend whose folded nullifier is genuinely zero is indistinguishable
+// from the sentinel, but `fold_bytes32_to_bb` of a real preimage-derived
+// nullifier is ~never zero (and the binding proof independently certifies
+// the 256-bit value), so the sentinel collision is not an exploit surface.
+pub const NOTESPEND_NULLIFIER: usize = OWNER_CELL_ID_BASE + OWNER_CELL_ID_LEN; // 198
+
+pub const BASE_COUNT: usize = NOTESPEND_NULLIFIER + 1; // 199
 /// Elements per custom effect entry in PI (8 vk_hash + 4 proof_commit).
 /// Was 8 in PI layout v1; widened to 12 in v2 (`VK_PI_LAYOUT_VERSION == 2`).
 pub const CUSTOM_ENTRY_SIZE: usize = 12;

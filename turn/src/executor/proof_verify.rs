@@ -192,6 +192,42 @@ impl TurnExecutor {
             }
         }
 
+        // D5: NoteSpend nullifier CROSS-BINDING (approach A) — off-AIR
+        // equality. Reconstruct PI[NOTESPEND_NULLIFIER] from the trusted
+        // nullifier source so the PI-match loop below rejects any EffectVM
+        // proof whose folded NoteSpend param0 disagrees.
+        //
+        // Source priority (mirrors the FEDERATION_ID/OWNER_CELL_ID cross-
+        // proof pattern above — reconstruct from the trusted side, then let
+        // the PI-match loop enforce equality):
+        //
+        //   (1) If the turn carries a `SCHEMA_NOTE_SPEND` binding proof for a
+        //       NoteSpend effect, take that proof's CERTIFIED nullifier
+        //       (fields[0]) — the proof that enforces the nullifier against
+        //       the spent note's preimage (note_spending_air) and is itself
+        //       STARK-verified + PI-matched in
+        //       `verify_effect_binding_proofs`. Folding it with the SAME
+        //       `fold_bytes32_to_bb` the trace uses yields the param0 the AIR
+        //       must carry. This is the real cross-proof weld: a malicious
+        //       executor that proves nullifier N via the binding/spending
+        //       proof but feeds a different M into the EffectVM gets
+        //       param0 = fold(M) ≠ fold(N) = PI[NOTESPEND_NULLIFIER], so the
+        //       AIR's gated boundary fails (if it lies in PI) or this PI-match
+        //       fails (if PI ≠ fold(N)).
+        //
+        //   (2) Otherwise (no binding proof — backwards-compat path), fall
+        //       back to the runtime NoteSpend's own nullifier. The AIR + PI
+        //       still pin param0 to the runtime value (no NEW rejection beyond
+        //       the existing executor trust), but the cross-PROOF certification
+        //       only kicks in once a binding proof is supplied.
+        //
+        // Sentinel ZERO when this cell's proof carries no NoteSpend row.
+        if let Some(nullifier_bb) =
+            self.expected_notespend_nullifier_bb(cell_id, turn, &vm_effects)
+        {
+            public_inputs[effect_vm::pi::NOTESPEND_NULLIFIER] = nullifier_bb;
+        }
+
         // Sovereign-witness AIR teeth (SOVEREIGN-WITNESS-AIR-DESIGN.md §3.2):
         //
         // This path (`verify_and_commit_proof`) is the proof-carrying path
@@ -1230,6 +1266,67 @@ impl TurnExecutor {
             ("escrow_id", Effect::RefundEscrow { escrow_id, .. }) => Some(*escrow_id),
             _ => None,
         }
+    }
+
+    /// D5 (NoteSpend nullifier cross-binding, approach A): compute the
+    /// expected `PI[NOTESPEND_NULLIFIER]` felt for `cell_id`'s EffectVM
+    /// proof, or `None` when this cell's proof carries no NoteSpend row (the
+    /// PI slot then stays at the ZERO sentinel).
+    ///
+    /// The returned felt is `fold_bytes32_to_bb(nullifier)`, matching the
+    /// trace's `param0` for the first NoteSpend row. The nullifier is sourced
+    /// from the TRUSTED side:
+    ///   1. the turn's `SCHEMA_NOTE_SPEND` binding proof, if present (its
+    ///      `fields[0]` is the certified nullifier — the value
+    ///      `verify_effect_binding_proofs` STARK-verifies + PI-matches against
+    ///      the spent note's preimage); failing that
+    ///   2. the runtime NoteSpend effect's own nullifier (backwards compat).
+    ///
+    /// `vm_effects` is this cell's projected VM effect list (already folded);
+    /// we use it only to detect whether a NoteSpend row exists for this cell
+    /// and as the source for the felt we ultimately return, so the value is
+    /// byte-identical to the trace's `param0`.
+    fn expected_notespend_nullifier_bb(
+        &self,
+        _cell_id: &CellId,
+        turn: &Turn,
+        vm_effects: &[dregg_circuit::effect_vm::Effect],
+    ) -> Option<dregg_circuit::field::BabyBear> {
+        use dregg_circuit::effect_vm::{Effect as VmEffect, fold_bytes32_to_bb};
+
+        // No NoteSpend row in this cell's proof → sentinel ZERO (None).
+        // Mirror the trace generator: the PI slot binds the FIRST NoteSpend
+        // row's folded nullifier (param0). The per-row AIR constraint forces
+        // every NoteSpend row to share it.
+        let runtime_fold = vm_effects.iter().find_map(|e| match e {
+            VmEffect::NoteSpend { nullifier, .. } => Some(*nullifier),
+            _ => None,
+        })?;
+
+        // Prefer the binding-proof-certified nullifier. Walk the turn's
+        // SCHEMA_NOTE_SPEND binding proofs; for the first that references an
+        // Effect::NoteSpend, fold its certified `nullifier.0` (== fields[0]
+        // per `extract_binding_params`). Because the binding-proof sweep
+        // (`verify_effect_binding_proofs`) independently STARK-verifies and
+        // PI-matches that proof against this same nullifier, sourcing it here
+        // welds the EffectVM param0 to the spending proof's certified value.
+        let effects = Self::dfs_collect_effects(turn);
+        for bp in &turn.effect_binding_proofs {
+            if bp.schema_id != "dregg-effect-note-spend-v1" {
+                continue;
+            }
+            if let Some(eff) = effects.get(bp.effect_index as usize) {
+                if let Some(nullifier_32) = Self::extract_named_field_32b(eff, "nullifier") {
+                    if matches!(eff, Effect::NoteSpend { .. }) {
+                        return Some(fold_bytes32_to_bb(&nullifier_32));
+                    }
+                }
+            }
+        }
+
+        // No binding proof: fall back to the runtime fold (already byte-
+        // identical to the trace's param0).
+        Some(runtime_fold)
     }
 
     /// Stage 7-γ.2 Phase 1: bilateral cross-cell PI consistency check.

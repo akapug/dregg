@@ -1663,6 +1663,27 @@ pub fn generate_effect_vm_trace_ext(
         }
     }
 
+    // ---- D5: NoteSpend nullifier cross-binding (approach A) ----
+    //
+    // Surface the first NoteSpend row's folded nullifier (param0) into
+    // PI[NOTESPEND_NULLIFIER]. The AIR's per-row gated constraint pins every
+    // sel::NOTE_SPEND row's param0 to this slot, and the off-AIR verifier
+    // reconstructs the same value from the SCHEMA_NOTE_SPEND binding proof's
+    // fields[0]. Sentinel: ZERO when no NoteSpend row is present. Multiple
+    // NoteSpend rows must share the same folded nullifier (the per-row
+    // constraint forces it) — multi-distinct-nullifier proofs need PI
+    // extension (deferred, same as EmitEvent's EMIT_EVENT_COUNT > 1 note).
+    let first_notespend_nullifier: Option<BabyBear> = effects.iter().find_map(|eff| {
+        if let Effect::NoteSpend { nullifier, .. } = eff {
+            Some(*nullifier)
+        } else {
+            None
+        }
+    });
+    if let Some(n) = first_notespend_nullifier {
+        public_inputs[pi::NOTESPEND_NULLIFIER] = n;
+    }
+
     // ---- γ.2 follow-up (#131/#132): per-cell federation + owner binding ----
     //
     // Surface the 4-felt commitments to the federation id + owner cell id.
