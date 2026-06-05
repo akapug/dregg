@@ -537,6 +537,281 @@ theorem diamond_not_inf :
 
 end DiamondNotMeet
 
+/-! ### §B.5 The de Morgan ◇/□ MATE (`◇ = ¬□¬`), faithfully for ANY relation.
+
+In modal logic the diamond is the de Morgan dual of the box: `◇φ = ¬□¬φ`. The SUBTLETY for a
+faithful relational reading is the DIRECTION of `R`. Our `relExists R S = {w | ∃ s, R s w ∧ s ∈ S}`
+pushes `S` FORWARD along `R` (predecessors-in-`S`), whereas `relForall R T = {s | ∀ w, R s w → w ∈ T}`
+quantifies over `R`-SUCCESSORS. So `(relForall R Sᶜ)ᶜ` is the diamond of the CONVERSE relation, not
+of `R` itself. We make this precise: the mate holds with the converse `Rᵒᵖ`, for EVERY relation, and
+we show by concrete teeth that the *naive same-`R*` mate `relExists R = (relForall R ·ᶜ)ᶜ` FAILS on a
+non-symmetric (Byzantine) relation — so the converse is genuinely load-bearing, not cosmetic. -/
+
+/-- The CONVERSE / opposite relation `Rᵒᵖ s w := R w s`. -/
+def converse (R : Ω → Ω → Prop) : Ω → Ω → Prop := fun s w => R w s
+
+/-- **The de Morgan ◇/□ MATE, PROVED for ARBITRARY `R`.** `◇ = ¬□¬`, in the faithful relational
+form that respects direction: `relExists (Rᵒᵖ) S = (relForall R Sᶜ)ᶜ`. Equivalently the diamond of
+`R` is `¬□¬` of the CONVERSE box. No symmetry/reflexivity is assumed — pure classical de Morgan over
+the successor quantifier. -/
+theorem relExists_converse_eq_compl_relForall_compl (R : Ω → Ω → Prop) (S : Set Ω) :
+    relExists (converse R) S = (relForall R Sᶜ)ᶜ := by
+  apply Set.ext; intro s
+  rw [Set.mem_compl_iff]
+  show (∃ w, R s w ∧ w ∈ S) ↔ ¬ (∀ w, R s w → w ∈ Sᶜ)
+  constructor
+  · -- ∃ w, R s w ∧ w ∈ S  ⇒  ¬ ∀ w, R s w → w ∈ Sᶜ
+    rintro ⟨w, hsw, hwS⟩ hcon
+    exact (hcon w hsw) hwS
+  · -- ¬ ∀ w, R s w → w ∈ Sᶜ  ⇒  ∃ w, R s w ∧ w ∈ S
+    intro hcon
+    by_contra hne
+    apply hcon
+    intro w hsw
+    rw [Set.mem_compl_iff]
+    intro hwS
+    exact hne ⟨w, hsw, hwS⟩
+
+/-- **The MATE, written the other way: `◇_R = ¬□_{Rᵒᵖ}¬`, PROVED.** `relExists R S = (relForall Rᵒᵖ Sᶜ)ᶜ`.
+This is the same de Morgan law solved for `relExists R` (apply the previous lemma to `Rᵒᵖ` and use
+`converse (converse R) = R`). -/
+theorem relExists_eq_compl_relForall_converse_compl (R : Ω → Ω → Prop) (S : Set Ω) :
+    relExists R S = (relForall (converse R) Sᶜ)ᶜ := by
+  have h := relExists_converse_eq_compl_relForall_compl (converse R) S
+  -- converse (converse R) = R definitionally.
+  simpa [converse] using h
+
+/-- **The box as the de Morgan dual of the diamond: `□_R = ¬◇_{Rᵒᵖ}¬`, PROVED.** The mate read the
+other direction: `relForall R T = (relExists (Rᵒᵖ) Tᶜ)ᶜ`. -/
+theorem relForall_eq_compl_relExists_converse_compl (R : Ω → Ω → Prop) (T : Set Ω) :
+    relForall R T = (relExists (converse R) Tᶜ)ᶜ := by
+  rw [relExists_converse_eq_compl_relForall_compl, compl_compl, compl_compl]
+
+namespace MateNeedsConverse
+
+open S4Breaks (R instDecR)
+
+/-- The separating witness set for the naive-mate failure: `S := {1}`. -/
+def Smate : Set (Fin 3) := {1}
+
+instance : DecidablePred (· ∈ Smate) := fun w => by unfold Smate; exact inferInstance
+instance : DecidablePred (· ∈ (Smate : Set (Fin 3))ᶜ) := fun w => by
+  unfold Smate; exact inferInstance
+
+/-- `2 ∈ relExists R {1}` — PROVED. World `2` is an `R`-successor of `1 ∈ {1}` (`R 1 2`), so it is
+reached forward along `R`. -/
+theorem two_mem_relExists : (2 : Fin 3) ∈ relExists R Smate := by
+  show ∃ s, R s 2 ∧ s ∈ Smate
+  decide
+
+/-- `2 ∉ (relForall R {1}ᶜ)ᶜ` — PROVED, equivalently `2 ∈ relForall R {1}ᶜ`. World `2`'s only
+`R`-successor is `2` itself, which lies in `{1}ᶜ`; so all of `2`'s successors avoid `{1}`. -/
+theorem two_not_mem_naive_mate :
+    (2 : Fin 3) ∉ (relForall R (Smate : Set (Fin 3))ᶜ)ᶜ := by
+  -- `2 ∉ Xᶜ` ↔ `2 ∈ X`; show membership in the box directly.
+  rw [Set.mem_compl_iff, not_not]
+  show ∀ w, R 2 w → w ∈ (Smate : Set (Fin 3))ᶜ
+  decide
+
+/-- **The NAIVE same-`R` mate FAILS — PROVED.** `relExists R S ≠ (relForall R Sᶜ)ᶜ` on the Byzantine
+(non-symmetric) relation with `S = {1}`: world `2` lies in the forward-diamond `◇_R{1}` (it is an
+`R`-successor of `1`) but NOT in `(□_R {1}ᶜ)ᶜ` (which is the diamond of the CONVERSE — predecessors).
+So `◇ = ¬□¬` is only faithful with the converse relation; on a non-symmetric relation the directions
+genuinely differ. (For a SYMMETRIC `R`, `converse R = R` and the two coincide — recovering the
+classical S5 mate.) -/
+theorem naive_mate_fails :
+    relExists R Smate ≠ (relForall R (Smate : Set (Fin 3))ᶜ)ᶜ := by
+  intro h
+  exact two_not_mem_naive_mate (h ▸ two_mem_relExists)
+
+/-- For a SYMMETRIC relation the naive same-`R` mate DOES hold — the converse is `R` itself. This
+certifies the teeth above are about asymmetry, not a defect of the law: `relExists R S = (relForall R Sᶜ)ᶜ`
+whenever `R` is symmetric. -/
+theorem naive_mate_holds_of_symm {R : Ω → Ω → Prop} (hsymm : ∀ a b, R a b → R b a) (S : Set Ω) :
+    relExists R S = (relForall R Sᶜ)ᶜ := by
+  have hReq : converse R = R := by
+    funext a b
+    show R b a = R a b
+    exact propext ⟨fun h => hsymm b a h, fun h => hsymm a b h⟩
+  rw [← relExists_converse_eq_compl_relForall_compl, hReq]
+
+end MateNeedsConverse
+
+/-! ### §B.6 Relational FROBENIUS reciprocity for `∃_R ⊣ ∀_R`.
+
+The hyperdoctrine projection formula in Part A was the EQUALITY `∃_f(S ∩ f*T) = ∃_f S ∩ T`, available
+because `f*` is a frame homomorphism. For a general relation the literal posetal equality
+`relExists R (S ∩ relForall R T) = relExists R S ∩ T` FAILS (non-functional `R`). What genuinely holds
+— and is the honest relational Frobenius / projection LAX law — is the `⊆` half, valid for EVERY `R`:
+
+      relExists R (S ∩ relForall R T) ⊆ relExists R S ∩ T.
+
+We prove it, prove that on a SURJECTIVE-image / functional structure the reverse also holds
+(recovering the Part-A equality via the graph), and add teeth showing the reverse — hence the naive
+posetal equality — FAILS on the Byzantine relation. -/
+
+/-- **Relational Frobenius reciprocity (the LAX `⊆` half), PROVED for ARBITRARY `R`.**
+`relExists R (S ∩ relForall R T) ⊆ relExists R S ∩ T`. This is the genuine projection formula that
+survives the loss of functoriality: any world reached from a source that is in `S` AND knows `T` is
+both in `∃_R S` and (being a successor of a `T`-knower) in `T`. -/
+theorem frobenius_le (R : Ω → Ω → Prop) (S T : Set Ω) :
+    relExists R (S ∩ relForall R T) ⊆ relExists R S ∩ T := by
+  rintro w ⟨s, hsw, hsS, hsT⟩
+  refine ⟨⟨s, hsw, hsS⟩, ?_⟩
+  exact hsT w hsw
+
+/-- The reverse inclusion holds when every source's `R`-successors are forced into `T` once a single
+named successor is — concretely, when `R` is the **graph of a function** (each source has a UNIQUE
+successor). Then `relExists R (S ∩ relForall R T) = relExists R S ∩ T`, recovering Part A's Frobenius
+equality inside the relational fibre. -/
+theorem frobenius_eq_graph (f : Ω → Ω) (S T : Set Ω) :
+    relExists (fun s w => f s = w) (S ∩ relForall (fun s w => f s = w) T)
+      = relExists (fun s w => f s = w) S ∩ T := by
+  apply Set.Subset.antisymm (frobenius_le _ S T)
+  rintro w ⟨⟨s, hfs, hsS⟩, hwT⟩
+  refine ⟨s, hfs, hsS, ?_⟩
+  -- s's unique successor is f s = w ∈ T.
+  intro v hv
+  rw [← hv, hfs]; exact hwT
+
+namespace FrobeniusFails
+
+open S4Breaks (R instDecR)
+
+/-- Frobenius witnesses: source set `S := {0}`, target set `T := {1}`. -/
+def Sf : Set (Fin 3) := {0}
+def Tf : Set (Fin 3) := {1}
+
+instance : DecidablePred (· ∈ Sf) := fun w => by unfold Sf; exact inferInstance
+instance : DecidablePred (· ∈ Tf) := fun w => by unfold Tf; exact inferInstance
+
+/-- `1 ∈ relExists R S ∩ T` — PROVED. `1` is an `R`-successor of `0 ∈ S` (`R 0 1`) and `1 ∈ T`. -/
+theorem one_mem_rhs : (1 : Fin 3) ∈ relExists R Sf ∩ Tf := by
+  show (∃ s, R s 1 ∧ s ∈ Sf) ∧ (1 : Fin 3) ∈ Tf
+  decide
+
+/-- `1 ∉ relExists R (S ∩ relForall R T)` — PROVED. The only source for `1` in `S = {0}` is `0`, but
+`0 ∉ relForall R T = □_R{1}` (because `0`'s successor `1`... wait, `0` also sees `0 ∉ {1}`), so the
+intersection `S ∩ □_R T` is empty over the relevant source. Hence `1` has no qualifying source. -/
+theorem one_not_mem_lhs : (1 : Fin 3) ∉ relExists R (Sf ∩ relForall R Tf) := by
+  show ¬ ∃ s, R s 1 ∧ s ∈ Sf ∧ (∀ w, R s w → w ∈ Tf)
+  decide
+
+/-- **The naive posetal Frobenius EQUALITY FAILS — PROVED.**
+`relExists R (S ∩ relForall R T) ≠ relExists R S ∩ T` on the Byzantine relation with `S = {0}`,
+`T = {1}`: world `1` is in the RHS (it is an `R`-successor of the `S`-element `0`, and `1 ∈ T`) but
+NOT in the LHS (the only `S`-source `0` does NOT know `T` — `0` also `R`-sees `0 ∉ T`). So the
+reverse (`⊇`) of `frobenius_le` is false here; only the LAX `⊆` half is a theorem for general `R`.
+(For the function/graph fibre the equality is restored — `frobenius_eq_graph`.) -/
+theorem frobenius_eq_fails :
+    relExists R (Sf ∩ relForall R Tf) ≠ relExists R Sf ∩ Tf := by
+  intro h
+  exact one_not_mem_lhs (h ▸ one_mem_rhs)
+
+end FrobeniusFails
+
+/-! ### §B.7 Relational composition functoriality / Beck–Chevalley.
+
+`relExists` is a (covariant) FUNCTOR from the category of relations (under composition) to
+endomaps of `Set Ω`, and `relForall` is the corresponding CONTRAVARIANT functor (it reverses
+composition). With `relComp R S` meaning "apply `S`, then `R`" (function-composition order,
+`(R∘S) a c := ∃ b, S a b ∧ R b c`):
+
+  * `relExists (R ∘ S) = relExists R ∘ relExists S`   (∃ is functorial / covariant in the relation);
+  * `relForall (R ∘ S) = relForall S ∘ relForall R`   (□ reverses composition / is contravariant).
+
+These are the relational Beck–Chevalley / functoriality coherences. They hold for ANY relations,
+with no pullback hypothesis — composition of relations is total, so the relational fibre satisfies
+the coherence UNCONDITIONALLY (contrast Part A, where Beck–Chevalley needed a genuine pullback). -/
+
+/-- Relation composition in function-composition order: `relComp R S` first applies `S`, then `R`.
+`(R ∘ S) a c := ∃ b, S a b ∧ R b c`. -/
+def relComp (R S : Ω → Ω → Prop) : Ω → Ω → Prop := fun a c => ∃ b, S a b ∧ R b c
+
+/-- **∃ is FUNCTORIAL in the relation (relational Beck–Chevalley for the diamond), PROVED.**
+`relExists (relComp R S) = relExists R ∘ relExists S` for ALL relations — no pullback needed. -/
+theorem relExists_comp (R S : Ω → Ω → Prop) :
+    relExists (relComp R S) = relExists R ∘ relExists S := by
+  funext X
+  apply Set.ext; intro c
+  simp only [relComp, relExists, Function.comp_apply, Set.mem_setOf_eq]
+  constructor
+  · -- ∃ a, (∃ b, S a b ∧ R b c) ∧ a ∈ X  ⇒  ∃ b, R b c ∧ (∃ a, S a b ∧ a ∈ X)
+    rintro ⟨a, ⟨b, hSab, hRbc⟩, haX⟩
+    exact ⟨b, hRbc, a, hSab, haX⟩
+  · -- ∃ b, R b c ∧ (∃ a, S a b ∧ a ∈ X)  ⇒  ∃ a, (∃ b, S a b ∧ R b c) ∧ a ∈ X
+    rintro ⟨b, hRbc, a, hSab, haX⟩
+    exact ⟨a, ⟨b, hSab, hRbc⟩, haX⟩
+
+/-- **□ REVERSES composition (contravariant functoriality / box Beck–Chevalley), PROVED.**
+`relForall (relComp R S) = relForall S ∘ relForall R` for ALL relations. The box of a composite is
+the box of the FIRST step applied to the box of the SECOND — the order flips, as a right adjoint /
+contravariant assignment must. -/
+theorem relForall_comp (R S : Ω → Ω → Prop) :
+    relForall (relComp R S) = relForall S ∘ relForall R := by
+  funext T
+  apply Set.ext; intro a
+  simp only [relComp, relForall, Function.comp_apply, Set.mem_setOf_eq]
+  constructor
+  · -- (∀ c, (∃ b, S a b ∧ R b c) → c ∈ T)  ⇒  ∀ b, S a b → ∀ c, R b c → c ∈ T
+    intro h b hSab c hRbc
+    exact h c ⟨b, hSab, hRbc⟩
+  · -- ∀ b, S a b → ∀ c, R b c → c ∈ T  ⇒  ∀ c, (∃ b, S a b ∧ R b c) → c ∈ T
+    rintro h c ⟨b, hSab, hRbc⟩
+    exact h b hSab c hRbc
+
+/-- **Functoriality is genuinely COMPATIBLE with the adjunction: the composite still adjoins.**
+`relExists (R ∘ S) ⊣ relForall (R ∘ S)`, and by the two functoriality laws this is exactly
+`(relExists R ∘ relExists S) ⊣ (relForall S ∘ relForall R)` — the adjunction of a composite of
+adjunctions, with the right adjoints composing in reverse. A non-vacuous corollary tying §B.1 to
+§B.7. -/
+theorem comp_adjunction (R S : Ω → Ω → Prop) :
+    GaloisConnection (relExists R ∘ relExists S) (relForall S ∘ relForall R) := by
+  rw [← relExists_comp, ← relForall_comp]
+  exact relExists_adj_relForall (relComp R S)
+
+namespace CompFunctorial
+
+open S4Breaks (R instDecR)
+
+/-- A SECOND concrete relation on `Fin 3` to compose with the Byzantine `R`, so the functoriality
+laws are exercised on a non-trivial composite (not just `R ∘ R`). `Q a b` holds iff `a = b` or the
+single extra edge `2 ∼ 0`. -/
+def Q : Fin 3 → Fin 3 → Prop := fun a b => a = b ∨ (a = 2 ∧ b = 0)
+
+instance instDecQ : DecidableRel Q := fun a b => by unfold Q; exact inferInstance
+
+/-- A discriminating probe set. -/
+def W : Set (Fin 3) := {2}
+
+instance : DecidablePred (· ∈ W) := fun w => by unfold W; exact inferInstance
+
+/-- The composite diamond is NON-TRIVIAL here — `relExists (relComp R Q) {2}` actually reaches new
+worlds, so the functoriality law `relExists_comp` is not asserting an identity on trivial data.
+`relComp R Q` first does `Q` (so `2 → 0` and `2 → 2`), then `R` (so `0 → {0,1}`, `2 → 2`); starting
+from `{2}` this reaches `{0,1,2}`. We verify `1 ∈ relExists (relComp R Q) {2}` — a world UNREACHABLE
+by `R` alone from `{2}` (since `R 2 1` is false), proving the composite is genuinely richer. -/
+theorem one_mem_comp_dia : (1 : Fin 3) ∈ relExists (relComp R Q) W := by
+  show ∃ a, (∃ b, Q a b ∧ R b 1) ∧ a ∈ W
+  decide
+
+/-- And `1 ∉ relExists R {2}` — confirming the composite reaches strictly more than `R` alone, so
+`relExists_comp` (which equates the composite diamond with `relExists R ∘ relExists Q`) carries real
+content on this data. -/
+theorem one_not_mem_single_dia : (1 : Fin 3) ∉ relExists R W := by
+  show ¬ ∃ s, R s 1 ∧ s ∈ W
+  decide
+
+/-- **Functoriality VERIFIED on the concrete composite — PROVED.** The general law `relExists_comp`
+specialized to `R`, `Q`, `{2}` gives `relExists (relComp R Q) {2} = (relExists R ∘ relExists Q) {2}`;
+combined with `one_mem_comp_dia` this exhibits `1` on the right-hand side too, certifying the law is
+non-vacuous on discriminating data (the composite genuinely reaches `1`, unreachable by `R` alone). -/
+theorem comp_dia_reaches_one :
+    (1 : Fin 3) ∈ (relExists R ∘ relExists Q) W := by
+  rw [← relExists_comp]; exact one_mem_comp_dia
+
+end CompFunctorial
+
 end PartB
 
 /-! ###############################################################################
@@ -567,5 +842,19 @@ Quot.sound}`. A `sorryAx` or stray `axiom` would fail the pin and the build. -/
 #assert_axioms PartB.S4Breaks.R_not_trans
 #assert_axioms PartB.S4Breaks.box_box_ne_box
 #assert_axioms PartB.DiamondNotMeet.diamond_not_inf
+
+-- PART B frontier: de Morgan mate, relational Frobenius, composition functoriality, + their teeth.
+#assert_axioms PartB.relExists_converse_eq_compl_relForall_compl
+#assert_axioms PartB.relExists_eq_compl_relForall_converse_compl
+#assert_axioms PartB.relForall_eq_compl_relExists_converse_compl
+#assert_axioms PartB.MateNeedsConverse.naive_mate_fails
+#assert_axioms PartB.MateNeedsConverse.naive_mate_holds_of_symm
+#assert_axioms PartB.frobenius_le
+#assert_axioms PartB.frobenius_eq_graph
+#assert_axioms PartB.FrobeniusFails.frobenius_eq_fails
+#assert_axioms PartB.relExists_comp
+#assert_axioms PartB.relForall_comp
+#assert_axioms PartB.comp_adjunction
+#assert_axioms PartB.CompFunctorial.comp_dia_reaches_one
 
 end Dregg2.Metatheory.Lawvere
