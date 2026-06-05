@@ -935,7 +935,11 @@ length (which equals the number of committed actions) with `ok:1`. On a turn tha
 (`execFullTurn = none`) we ECHO the UNCHANGED input cells + input caps with `loglen:0` and `ok:0` —
 the rollback is observable: state is exactly the pre-state. On a malformed wire we fail-closed to
 `{"cells":[],"caps":[],"loglen":0,"ok":0}`. -/
-@[export dregg_exec_full_turn]
+-- D1 CONSOLIDATION (one-entry, 2026-06-05): @[export] REMOVED. This is an UNGATED, credential-ERASED
+-- turn (deprecated 5-arm FullAction; no Authorization/caveat/revocation gate). It is NO LONGER
+-- C-callable — the sole production turn entry is `dregg_exec_full_forest_auth` (the credential-gated
+-- `execFullForestG`). The def is retained Lean-side as the ungated-projection reference + codec
+-- round-trip witness only.
 def execFullTurnStep (input : String) : String :=
   match parseFullTurn input with
   | none => encodeFullOut [] [] 0 false
@@ -2975,7 +2979,11 @@ ALL-OR-NOTHING: on a committed turn we emit the post-state (cells/caps/bal read 
 orderings, the side-tables verbatim) + the receipt-log length with `ok:1`. On a tree that aborts
 mid-way (`execFullForestA = none`) we ECHO the UNCHANGED input state with `loglen:0` and `ok:0` — the
 rollback is observable. On a malformed wire we fail-closed to an empty state with `ok:0`. -/
-@[export dregg_exec_full_turn_wide]
+-- D1 CONSOLIDATION (one-entry, 2026-06-05): @[export] REMOVED. UNGATED — runs
+-- `execFullForestA (eraseAuth root)`, ERASING the per-node Authorization. Its wire is IDENTICAL to
+-- `dregg_exec_full_forest_auth`; callers migrate by switching symbol name only, and any turn that
+-- passed ONLY because the credential was erased now correctly fail-closes under the gate. Retained
+-- Lean-side as the ungated-projection reference + codec round-trip witness only — NOT C-callable.
 def execFullTurnWide (input : String) : String :=
   match parseWWire input with
   | none => encodeWOut { cells := [], caps := [], bal := [], escrows := [], nullifiers := [],
@@ -3270,6 +3278,12 @@ ALL-OR-NOTHING: on a committed gated turn we emit the post-state (cells/caps/bal
 orderings, the side-tables verbatim) + the receipt-log length with `ok:1`. On a tree that aborts on ANY gate
 leg OR an unauthorized action (`execFullForestG = none`) we ECHO the UNCHANGED input state with `loglen:0`
 and `ok:0` — the rollback is observable. On a malformed wire we fail-closed to an empty state with `ok:0`. -/
+-- ★ D1 — THE ONE PRODUCTION TURN ENTRY ★ (consolidation 2026-06-05). The SOLE credential-gated turn
+-- the C boundary may call: it runs the PROVED `execFullForestG` with the 4-leg fail-closed gate
+-- `credentialValid ∧ capAuthorityG ∧ caveatsDischarged ∧ revocationGate` in front of every effect, so
+-- the credential is UNAVOIDABLE — no ungated/auth-erasing turn export remains. The other turn defs
+-- (`execFullTurnStep`/`execFullTurnWide`) are de-exported Lean-side references; the `dregg_kernel_*` /
+-- `dregg_record_*` exports are TEST-ONLY differential oracles (single steps, not turns).
 @[export dregg_exec_full_forest_auth]
 def execFullForestAuthStep (input : String) : String :=
   match parseWWire input with
