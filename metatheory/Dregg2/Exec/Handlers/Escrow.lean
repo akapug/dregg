@@ -212,8 +212,8 @@ def releaseEscrowA : EffectHandler SettleArgs where
       | none => rw [hfind] at h; exact absurd h (by simp)
       | some r =>
           rw [hfind] at h; simp only at h
-          by_cases hlive : r.recipient ∈ s.accounts
-          · exact decide_eq_true hlive
+          by_cases hlive : r.recipient ∈ s.accounts ∧ cellLifecycleLive s r.recipient = true
+          · exact decide_eq_true hlive.1
           · rw [if_neg hlive] at h; exact absurd h (by simp)
     · rw [if_neg hg] at h; exact absurd h (by simp)
   conserves := by
@@ -251,8 +251,8 @@ def refundEscrowA : EffectHandler SettleArgs where
       | none => rw [hfind] at h; exact absurd h (by simp)
       | some r =>
           rw [hfind] at h; simp only at h
-          by_cases hlive : r.creator ∈ s.accounts
-          · exact decide_eq_true hlive
+          by_cases hlive : r.creator ∈ s.accounts ∧ cellLifecycleLive s r.creator = true
+          · exact decide_eq_true hlive.1
           · rw [if_neg hlive] at h; exact absurd h (by simp)
     · rw [if_neg hg] at h; exact absurd h (by simp)
   conserves := by

@@ -1453,6 +1453,16 @@ theorem heldSumAsset_markResolved_found (id : Nat) (r : EscrowRecord) (b : Asset
 
 /-! ### The faithful PER-ASSET escrow lifecycle (over the `bal` ledger). -/
 
+/-- **`cellLifecycleLive k c` — the kernel-level lifecycle-LIVENESS predicate (the D3 settle-target gate).**
+Does cell `c`'s lifecycle admit new effects (a credit/debit landing on it)? `true` only for the Live
+discriminant (`0`); a Sealed (`1`) or Destroyed (`3`) cell is fail-closed REJECTED. This is the
+kernel-twin of `TurnExecutorFull.acceptsEffects`/`EffectsState.cellLive` (both read the SAME `lifecycle`
+side-table and check `== 0`), defined HERE because the escrow/bridge SETTLE-target gates live in
+`RecordKernel` (imported BY `TurnExecutorFull`, so it cannot import `acceptsEffects` back without a cycle).
+`acceptsEffects k c = cellLifecycleLive k c` definitionally (`acceptsEffects_eq_cellLifecycleLive`), so the
+two are interchangeable at the cutover. -/
+def cellLifecycleLive (k : RecordKernelState) (c : CellId) : Bool := k.lifecycle c == 0
+
 /-- **`createEscrowRawAsset`** — the per-asset create: a SINGLE-cell, single-asset DEBIT of `amount`
 from `creator`'s asset `asset` column PLUS an insert of an unresolved `EscrowRecord` (carrying `asset`)
 into the off-ledger holding-store. The `bal`-ledger supply of `asset` DROPS by `amount`; the per-asset
@@ -1494,7 +1504,8 @@ is dregg1-faithful (you cannot credit a non-existent cell) and makes the per-ass
 hold UNCONDITIONALLY (the keystone needs no carried `htgt`). -/
 def releaseEscrowKAsset (k : RecordKernelState) (id : Nat) : Option RecordKernelState :=
   match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | some r => if r.recipient ∈ k.accounts then some (settleEscrowRawAsset k id r.recipient r.asset r.amount)
+  | some r => if r.recipient ∈ k.accounts ∧ cellLifecycleLive k r.recipient = true then
+                some (settleEscrowRawAsset k id r.recipient r.asset r.amount)
               else none
   | none   => none
 
@@ -1504,7 +1515,8 @@ success single-cell credits the `creator` (refund target) AT the record's asset 
 `releaseEscrowKAsset`: unconditional combined-conservation, dregg1-faithful. -/
 def refundEscrowKAsset (k : RecordKernelState) (id : Nat) : Option RecordKernelState :=
   match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | some r => if r.creator ∈ k.accounts then some (settleEscrowRawAsset k id r.creator r.asset r.amount)
+  | some r => if r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true then
+                some (settleEscrowRawAsset k id r.creator r.asset r.amount)
               else none
   | none   => none
 
@@ -1594,9 +1606,9 @@ theorem releaseEscrowKAsset_conserves_combined_per_asset {k k' : RecordKernelSta
   | none => rw [hfind] at h; exact absurd h (by simp)
   | some r =>
       rw [hfind] at h; simp only at h
-      by_cases hlive : r.recipient ∈ k.accounts
+      by_cases hlive : r.recipient ∈ k.accounts ∧ cellLifecycleLive k r.recipient = true
       · rw [if_pos hlive] at h; simp only [Option.some.injEq] at h; subst h
-        exact escrow_settle_conserves_combined_per_asset k id r.recipient r b hlive hfind
+        exact escrow_settle_conserves_combined_per_asset k id r.recipient r b hlive.1 hfind
       · rw [if_neg hlive] at h; exact absurd h (by simp)
 
 /-- **`refundEscrowKAsset` PRESERVES the COMBINED per-asset total — PROVED (UNCONDITIONAL).** The refund
@@ -1610,9 +1622,9 @@ theorem refundEscrowKAsset_conserves_combined_per_asset {k k' : RecordKernelStat
   | none => rw [hfind] at h; exact absurd h (by simp)
   | some r =>
       rw [hfind] at h; simp only at h
-      by_cases hlive : r.creator ∈ k.accounts
+      by_cases hlive : r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true
       · rw [if_pos hlive] at h; simp only [Option.some.injEq] at h; subst h
-        exact escrow_settle_conserves_combined_per_asset k id r.creator r b hlive hfind
+        exact escrow_settle_conserves_combined_per_asset k id r.creator r b hlive.1 hfind
       · rw [if_neg hlive] at h; exact absurd h (by simp)
 
 /-- **`escrow_create_debits_per_asset` — PROVED.** A committed per-asset create DROPS asset `asset`'s
@@ -1709,6 +1721,7 @@ def bridgeLockKAsset (k : RecordKernelState) (id : Nat) (actor originator destin
     (asset : AssetId) (amount : ℤ) : Option RecordKernelState :=
   if authorizedB k.caps { actor := actor, src := originator, dst := destination, amt := amount } = true
       ∧ 0 ≤ amount ∧ amount ≤ k.bal originator asset ∧ originator ∈ k.accounts
+      ∧ cellLifecycleLive k originator = true
       ∧ ¬ (∃ r ∈ k.escrows, r.id = id) then
     some (createBridgeRawAsset k id originator destination asset amount)
   else none
@@ -1740,7 +1753,7 @@ timeout gate is carried at the effect/theorem layer. Non-bridge escrow records r
 def bridgeCancelKAsset (k : RecordKernelState) (id : Nat) : Option RecordKernelState :=
   match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
   | some r =>
-      if r.bridge = true ∧ r.creator ∈ k.accounts then
+      if r.bridge = true ∧ r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true then
         some (settleEscrowRawAsset k id r.creator r.asset r.amount)
       else none
   | none   => none
@@ -1761,11 +1774,12 @@ theorem bridge_lock_conserves_combined_per_asset {k k' : RecordKernelState} {id 
   unfold bridgeLockKAsset at h
   by_cases hg : authorizedB k.caps { actor := actor, src := originator, dst := destination, amt := amount } = true
       ∧ 0 ≤ amount ∧ amount ≤ k.bal originator asset ∧ originator ∈ k.accounts
+      ∧ cellLifecycleLive k originator = true
       ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
     subst h
-    obtain ⟨_, _, _, hlive, _⟩ := hg
+    obtain ⟨_, _, _, hlive, _, _⟩ := hg
     set newRec : EscrowRecord := { id := id, creator := originator, recipient := destination,
                                    amount := amount, resolved := false, asset := asset, bridge := true } with hnewRec
     show recTotalAssetWithEscrow (createBridgeRawAsset k id originator destination asset amount) b
@@ -1801,11 +1815,12 @@ theorem bridge_lock_debits_per_asset {k k' : RecordKernelState} {id : Nat}
   unfold bridgeLockKAsset at h
   by_cases hg : authorizedB k.caps { actor := actor, src := originator, dst := destination, amt := amount } = true
       ∧ 0 ≤ amount ∧ amount ≤ k.bal originator asset ∧ originator ∈ k.accounts
+      ∧ cellLifecycleLive k originator = true
       ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
     subst h
-    obtain ⟨_, _, _, hlive, _⟩ := hg
+    obtain ⟨_, _, _, hlive, _, _⟩ := hg
     refine ⟨?_, rfl⟩
     show (∑ x ∈ k.accounts, recBalCreditCell k.bal originator asset (-amount) x asset) = _
     have := recBalCreditCell_recTotalAsset k.accounts k.bal originator asset (-amount) hlive asset
@@ -1821,6 +1836,7 @@ theorem bridgeLockKAsset_authorized {k k' : RecordKernelState} {id : Nat}
   unfold bridgeLockKAsset at h
   by_cases hg : authorizedB k.caps { actor := actor, src := originator, dst := destination, amt := amount } = true
       ∧ 0 ≤ amount ∧ amount ≤ k.bal originator asset ∧ originator ∈ k.accounts
+      ∧ cellLifecycleLive k originator = true
       ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
@@ -1890,11 +1906,67 @@ theorem bridge_cancel_conserves_combined_per_asset {k k' : RecordKernelState} {i
   | none => rw [hfind] at h; exact absurd h (by simp)
   | some r =>
       rw [hfind] at h; simp only at h
-      by_cases hg : r.bridge = true ∧ r.creator ∈ k.accounts
+      by_cases hg : r.bridge = true ∧ r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true
       · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
-        have hlive : r.creator ∈ k.accounts := hg.2
+        have hlive : r.creator ∈ k.accounts := hg.2.1
         exact escrow_settle_conserves_combined_per_asset k id r.creator r b hlive hfind
       · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-! ### §D3 — SECONDARY-CELL LIFECYCLE-LIVENESS TEETH (the credited/debited cell must be Live).
+
+The R6 fix (`EffectsState.cellLive`/`acceptsEffects`) gated the FIELD-WRITE target. D3 cascades the SAME
+lifecycle-liveness discriminant to the SECONDARY cells these holding-store effects credit/debit WITHOUT a
+prior liveness check: the escrow RELEASE/REFUND RECIPIENT/CREATOR, the bridge LOCK ORIGINATOR, and the
+bridge CANCEL ORIGINATOR. Previously each gated only on MEMBERSHIP (`∈ accounts`) — a Sealed/Destroyed but
+still-member cell would be credited/debited, smuggling value onto a cell that `cellSeal` had frozen.
+The `cellLifecycleLive` conjunct closes that: a settle into a non-Live cell now FAILS CLOSED (`none`),
+matching the field-write gate. Each is a fail-closed teeth theorem + a non-vacuity #guard below. -/
+
+/-- **`releaseEscrowKAsset_nonlive_fails` — PROVED (FAIL-CLOSED, the D3 escrow-release teeth).** A
+release whose found record's RECIPIENT is NOT lifecycle-live (`cellLifecycleLive = false`: Sealed/Destroyed)
+does NOT commit — even if the recipient is still a member. Crediting a frozen cell is rejected. -/
+theorem releaseEscrowKAsset_nonlive_fails {k : RecordKernelState} {id : Nat} {r : EscrowRecord}
+    (hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r)
+    (hdead : cellLifecycleLive k r.recipient = false) :
+    releaseEscrowKAsset k id = none := by
+  unfold releaseEscrowKAsset
+  rw [hfind]
+  simp only [hdead, Bool.false_eq_true, and_false, if_false]
+
+/-- **`refundEscrowKAsset_nonlive_fails` — PROVED (FAIL-CLOSED, the D3 escrow-refund teeth).** A refund
+whose found record's CREATOR (the refund target) is NOT lifecycle-live does NOT commit. -/
+theorem refundEscrowKAsset_nonlive_fails {k : RecordKernelState} {id : Nat} {r : EscrowRecord}
+    (hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r)
+    (hdead : cellLifecycleLive k r.creator = false) :
+    refundEscrowKAsset k id = none := by
+  unfold refundEscrowKAsset
+  rw [hfind]
+  simp only [hdead, Bool.false_eq_true, and_false, if_false]
+
+/-- **`bridgeLockKAsset_nonlive_fails` — PROVED (FAIL-CLOSED, the D3 bridge-lock teeth).** A bridge lock
+whose ORIGINATOR (the debited cell) is NOT lifecycle-live does NOT commit — a Sealed/Destroyed cell cannot
+have value locked out of it (it is frozen). -/
+theorem bridgeLockKAsset_nonlive_fails {k : RecordKernelState} {id : Nat}
+    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
+    (hdead : cellLifecycleLive k originator = false) :
+    bridgeLockKAsset k id actor originator destination asset amount = none := by
+  unfold bridgeLockKAsset
+  simp only [hdead, Bool.false_eq_true, and_false, false_and, if_false]
+
+/-- **`bridgeCancelKAsset_nonlive_fails` — PROVED (FAIL-CLOSED, the D3 bridge-cancel teeth).** A bridge
+cancel whose found record's ORIGINATOR/CREATOR (the refund target) is NOT lifecycle-live does NOT commit. -/
+theorem bridgeCancelKAsset_nonlive_fails {k : RecordKernelState} {id : Nat} {r : EscrowRecord}
+    (hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r)
+    (hdead : cellLifecycleLive k r.creator = false) :
+    bridgeCancelKAsset k id = none := by
+  unfold bridgeCancelKAsset
+  rw [hfind]
+  simp only [hdead, Bool.false_eq_true, and_false, if_false]
+
+#assert_axioms releaseEscrowKAsset_nonlive_fails
+#assert_axioms refundEscrowKAsset_nonlive_fails
+#assert_axioms bridgeLockKAsset_nonlive_fails
+#assert_axioms bridgeCancelKAsset_nonlive_fails
 
 /-! ### §BRIDGE runs (`#eval`) — the lock/finalize/cancel triple has teeth on the combined measure. -/
 
@@ -1944,6 +2016,43 @@ def brgOrdinaryEscrowSameId : RecordKernelState :=
 
 #guard ((bridgeFinalizeKAsset brgOrdinaryEscrowSameId 9 1 30).isSome) == false  --  false
 #guard ((bridgeCancelKAsset brgOrdinaryEscrowSameId 9).isSome) == false  --  false
+
+/-! ### §D3-TEETH non-vacuity: the SECONDARY cell being Sealed REJECTS the credit/debit (was committing).
+
+A bridge LOCK from a SEALED originator (cell 0 flipped to lifecycle `1`) is now REJECTED — was `true`
+(value locked out of a frozen cell). A bridge CANCEL refunding a SEALED originator is REJECTED. An escrow
+RELEASE into a SEALED recipient is REJECTED. Each LIVE counterpart still COMMITS — the gate only tightens
+the non-live case. -/
+
+/-- `brg0` with cell 0 flipped to Sealed (lifecycle `1`); cell 0 still EXISTS + actor 0 still OWNS it. -/
+def brgSealed0 : RecordKernelState := { brg0 with lifecycle := fun c => if c = 0 then 1 else 0 }
+
+-- A bridge LOCK debiting the now-SEALED originator 0 is REJECTED (D3 CLOSED) — was `true` (the live HOLE):
+#guard ((bridgeLockKAsset brgSealed0 9 0 0 1 1 30).isSome) == false  --  false (D3 CLOSED)
+-- ...even though authority + membership + balance STILL hold (the cell exists, the actor owns it, funded):
+#guard (decide (0 ∈ brgSealed0.accounts) && decide (30 ≤ brgSealed0.bal 0 1))  --  true
+-- A LIVE originator (the default brg0, lifecycle 0) still locks — the gate only tightens the sealed case:
+#guard ((bridgeLockKAsset brg0 9 0 0 1 1 30).isSome)  --  true (live originator ok)
+
+-- An escrow RELEASE/REFUND into a SEALED recipient/creator is REJECTED. Park a record on brg0 (live),
+-- then SEAL the settle target before settling. The parked record id 7 has creator 0, RECIPIENT 1:
+def escParked : Option RecordKernelState := createEscrowKAsset brg0 7 0 0 1 1 30  -- creator 0, recipient 1
+/-- The parked state with the RECIPIENT (cell 1) flipped to Sealed (the release target). -/
+def escParkedRecipSealed : Option RecordKernelState :=
+  escParked.map (fun k => { k with lifecycle := fun c => if c = 1 then 1 else 0 })
+/-- The parked state with the CREATOR (cell 0) flipped to Sealed (the refund target). -/
+def escParkedCreatorSealed : Option RecordKernelState :=
+  escParked.map (fun k => { k with lifecycle := fun c => if c = 0 then 1 else 0 })
+-- RELEASE into the now-SEALED recipient (cell 1) is REJECTED (D3 CLOSED); the LIVE parked release commits:
+#guard ((escParkedRecipSealed.bind (fun k => releaseEscrowKAsset k 7)).isSome) == false  --  false (D3 CLOSED)
+#guard ((escParked.bind (fun k => releaseEscrowKAsset k 7)).isSome)  --  true (live recipient ok)
+-- REFUND to the now-SEALED creator (cell 0) is REJECTED (D3 CLOSED); the LIVE parked refund commits:
+#guard ((escParkedCreatorSealed.bind (fun k => refundEscrowKAsset k 7)).isSome) == false  --  false (D3 CLOSED)
+#guard ((escParked.bind (fun k => refundEscrowKAsset k 7)).isSome)  --  true (live creator ok)
+-- A bridge CANCEL refunding the now-SEALED originator is REJECTED; the LIVE locked cancel commits:
+#guard ((brgLocked.map (fun k => { k with lifecycle := fun c => if c = 0 then 1 else 0 })).bind
+        (fun k => bridgeCancelKAsset k 9)).isSome == false  --  false (D3 CLOSED)
+#guard ((brgLocked.bind (fun k => bridgeCancelKAsset k 9)).isSome)  --  true (live originator ok)
 
 #assert_axioms bridge_lock_conserves_combined_per_asset
 #assert_axioms bridge_lock_debits_per_asset

@@ -1623,6 +1623,16 @@ non-sealed state; Archived `4` would also accept but is out of Wave-3 scope). A 
 (`3`) cell is fail-closed REJECTED. The gate the lifecycle transitions read. -/
 def acceptsEffects (k : RecordKernelState) (cell : CellId) : Bool := k.lifecycle cell == lcLive
 
+/-- **`acceptsEffects_eq_cellLifecycleLive` — PROVED.** The live-executor lifecycle gate `acceptsEffects`
+and the kernel-level settle-target gate `cellLifecycleLive` (the D3 escrow/bridge secondary-cell gate) are
+DEFINITIONALLY the same predicate: both read the `lifecycle` side-table and check `== 0` (`lcLive`). This
+is the cutover witness that the D3 secondary-cell gate is the SAME liveness discriminant as the R6
+field-write gate. -/
+theorem acceptsEffects_eq_cellLifecycleLive (k : RecordKernelState) (cell : CellId) :
+    acceptsEffects k cell = cellLifecycleLive k cell := rfl
+
+#assert_axioms acceptsEffects_eq_cellLifecycleLive
+
 /-- Set `cell`'s lifecycle discriminant to `lc` (the cell-side lifecycle write; every other cell and
 field untouched — the lifecycle is a side-table, not a `cell` record field). -/
 def setLifecycle (k : RecordKernelState) (cell : CellId) (lc : Nat) : RecordKernelState :=
@@ -2030,7 +2040,7 @@ NO LONGER bal-neutral but combined-conserving, EXACTLY like a transfer. The rece
 move (`amt := deposit`, `src := actor` sender, `dst := cell` queue owner). -/
 def queueEnqueueChainA (s : RecChainedState) (id : Nat) (m : Nat) (actor cell : CellId)
     (depId : Nat) (dAsset : AssetId) (deposit : ℤ) : Option RecChainedState :=
-  if stateAuthB s.kernel.caps actor cell = true then
+  if stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true then
     match queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
     | some k' => some { kernel := k', log := { actor := actor, src := actor, dst := cell, amt := deposit } :: s.log }
     | none    => none
@@ -2044,7 +2054,7 @@ RISES, the holding-store DROPS). The dequeued head message is dropped from the c
 surfaces in the kernel transition's `Nat`); the receipt records the deposit refund move. -/
 def queueDequeueChainA (s : RecChainedState) (id : Nat) (actor cell : CellId) (depId : Nat) (deposit : ℤ) :
     Option RecChainedState :=
-  if stateAuthB s.kernel.caps actor cell = true then
+  if stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true then
     match queueDequeueRefundK s.kernel id actor depId with
     | some (k', _) => some { kernel := k', log := { actor := actor, src := cell, dst := actor, amt := deposit } :: s.log }
     | none         => none
@@ -2054,7 +2064,7 @@ def queueDequeueChainA (s : RecChainedState) (id : Nat) (actor cell : CellId) (d
 absent OR shrinking below the current occupancy, `apply.rs:3534`). -/
 def queueResizeChainA (s : RecChainedState) (id : Nat) (newCap : Nat) (actor cell : CellId) :
     Option RecChainedState :=
-  if stateAuthB s.kernel.caps actor cell = true then
+  if stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true then
     match queueResizeK s.kernel id newCap with
     | some k' => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }
     | none    => none
@@ -2068,8 +2078,8 @@ theorem queueEnqueueChainA_authorized {s s' : RecChainedState} {id m : Nat} {act
     (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') :
     stateAuthB s.kernel.caps actor cell = true := by
   unfold queueEnqueueChainA at h
-  by_cases hg : stateAuthB s.kernel.caps actor cell = true
-  · exact hg
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
+  · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueDequeueChainA_authorized {s s' : RecChainedState} {id : Nat} {actor cell : CellId}
@@ -2077,8 +2087,8 @@ theorem queueDequeueChainA_authorized {s s' : RecChainedState} {id : Nat} {actor
     (h : queueDequeueChainA s id actor cell depId deposit = some s') :
     stateAuthB s.kernel.caps actor cell = true := by
   unfold queueDequeueChainA at h
-  by_cases hg : stateAuthB s.kernel.caps actor cell = true
-  · exact hg
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
+  · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueAllocateChainA_authorized {s s' : RecChainedState} {id : Nat} {actor cell : CellId} {cap : Nat}
@@ -2093,8 +2103,8 @@ theorem queueResizeChainA_authorized {s s' : RecChainedState} {id newCap : Nat} 
     (h : queueResizeChainA s id newCap actor cell = some s') :
     stateAuthB s.kernel.caps actor cell = true := by
   unfold queueResizeChainA at h
-  by_cases hg : stateAuthB s.kernel.caps actor cell = true
-  · exact hg
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
+  · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **`queueEnqueueChainA_balNeutral` — PROVED (Wave-8: now COMBINED-CONSERVING, not bal-neutral).** A
@@ -2107,7 +2117,7 @@ theorem queueEnqueueChainA_balNeutral {s s' : RecChainedState} {id m : Nat} {act
     (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') (b : AssetId) :
     recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
   unfold queueEnqueueChainA at h
-  by_cases hg : stateAuthB s.kernel.caps actor cell = true
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hg] at h
     cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
     | none    => rw [hk] at h; exact absurd h (by simp)
@@ -2121,7 +2131,7 @@ theorem queueDequeueChainA_balNeutral {s s' : RecChainedState} {id : Nat} {actor
     (h : queueDequeueChainA s id actor cell depId deposit = some s') (b : AssetId) :
     recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
   unfold queueDequeueChainA at h
-  by_cases hg : stateAuthB s.kernel.caps actor cell = true
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hg] at h
     cases hk : queueDequeueRefundK s.kernel id actor depId with
     | none    => rw [hk] at h; exact absurd h (by simp)
@@ -2149,7 +2159,7 @@ theorem queueResizeChainA_balNeutral {s s' : RecChainedState} {id newCap : Nat} 
     (h : queueResizeChainA s id newCap actor cell = some s') (b : AssetId) :
     recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
   unfold queueResizeChainA at h
-  by_cases hg : stateAuthB s.kernel.caps actor cell = true
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hg] at h
     cases hk : queueResizeK s.kernel id newCap with
     | none    => rw [hk] at h; exact absurd h (by simp)
@@ -2166,7 +2176,7 @@ theorem queueEnqueueChainA_chainlink {s s' : RecChainedState} {id m : Nat} {acto
     (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') :
     s'.log = { actor := actor, src := actor, dst := cell, amt := deposit } :: s.log := by
   unfold queueEnqueueChainA at h
-  by_cases hg : stateAuthB s.kernel.caps actor cell = true
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hg] at h
     cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
     | none    => rw [hk] at h; exact absurd h (by simp)
@@ -2178,7 +2188,7 @@ theorem queueDequeueChainA_chainlink {s s' : RecChainedState} {id : Nat} {actor 
     (h : queueDequeueChainA s id actor cell depId deposit = some s') :
     s'.log = { actor := actor, src := cell, dst := actor, amt := deposit } :: s.log := by
   unfold queueDequeueChainA at h
-  by_cases hg : stateAuthB s.kernel.caps actor cell = true
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hg] at h
     cases hk : queueDequeueRefundK s.kernel id actor depId with
     | none    => rw [hk] at h; exact absurd h (by simp)
@@ -2200,12 +2210,63 @@ theorem queueResizeChainA_chainlink {s s' : RecChainedState} {id newCap : Nat} {
     (h : queueResizeChainA s id newCap actor cell = some s') :
     s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log := by
   unfold queueResizeChainA at h
-  by_cases hg : stateAuthB s.kernel.caps actor cell = true
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hg] at h
     cases hk : queueResizeK s.kernel id newCap with
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
   · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-! ### §D3 — QUEUE-CELL LIFECYCLE-LIVENESS TEETH (the queue's owning cell must be Live).
+
+The queue effects write/credit the queue's OWNING `cell` (the writer-ACL / owner cell, dregg1's
+`apply.rs:3334`/`:3433`/`:3534`) and previously gated ONLY on `stateAuthB actor cell` (the c-list
+authority) — so a queue on a SEALED/Destroyed owning cell would still enqueue/dequeue/resize, bypassing
+`cellSeal`. The `acceptsEffects s.kernel cell` conjunct (the SAME lifecycle gate as the R6 field write
+and the `cellSeal` state machine) closes that: a queue op whose owning cell is not lifecycle-live now
+FAILS CLOSED. The atomic batch inherits it (each sub-op routes through the gated chained step). -/
+
+/-- **`queueEnqueueChainA_lifecycle_live` — PROVED.** A committed enqueue's owning cell was lifecycle-live
+(`acceptsEffects`, the D3 queue gate). -/
+theorem queueEnqueueChainA_lifecycle_live {s s' : RecChainedState} {id m : Nat} {actor cell : CellId}
+    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
+    (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') :
+    acceptsEffects s.kernel cell = true := by
+  unfold queueEnqueueChainA at h
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
+  · exact hg.2
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`queueEnqueueChainA_nonlive_fails` — PROVED (FAIL-CLOSED, the D3 queue-enqueue teeth).** An enqueue
+onto a queue whose owning cell is NOT lifecycle-live (Sealed/Destroyed) does NOT commit — even with c-list
+authority. A frozen cell's queue rejects new messages/deposits. -/
+theorem queueEnqueueChainA_nonlive_fails (s : RecChainedState) (id m : Nat) (actor cell : CellId)
+    (depId : Nat) (dAsset : AssetId) (deposit : ℤ) (h : acceptsEffects s.kernel cell = false) :
+    queueEnqueueChainA s id m actor cell depId dAsset deposit = none := by
+  unfold queueEnqueueChainA
+  rw [if_neg]; intro hg; rw [h] at hg; exact absurd hg.2 (by simp)
+
+/-- **`queueDequeueChainA_nonlive_fails` — PROVED (FAIL-CLOSED, the D3 queue-dequeue teeth).** A dequeue
+from a queue whose owning cell is NOT lifecycle-live does NOT commit (the refund-credit cannot land on a
+frozen cell's queue). -/
+theorem queueDequeueChainA_nonlive_fails (s : RecChainedState) (id : Nat) (actor cell : CellId)
+    (depId : Nat) (deposit : ℤ) (h : acceptsEffects s.kernel cell = false) :
+    queueDequeueChainA s id actor cell depId deposit = none := by
+  unfold queueDequeueChainA
+  rw [if_neg]; intro hg; rw [h] at hg; exact absurd hg.2 (by simp)
+
+/-- **`queueResizeChainA_nonlive_fails` — PROVED (FAIL-CLOSED, the D3 queue-resize teeth).** A resize of a
+queue whose owning cell is NOT lifecycle-live does NOT commit. -/
+theorem queueResizeChainA_nonlive_fails (s : RecChainedState) (id newCap : Nat) (actor cell : CellId)
+    (h : acceptsEffects s.kernel cell = false) :
+    queueResizeChainA s id newCap actor cell = none := by
+  unfold queueResizeChainA
+  rw [if_neg]; intro hg; rw [h] at hg; exact absurd hg.2 (by simp)
+
+#assert_axioms queueEnqueueChainA_lifecycle_live
+#assert_axioms queueEnqueueChainA_nonlive_fails
+#assert_axioms queueDequeueChainA_nonlive_fails
+#assert_axioms queueResizeChainA_nonlive_fails
 
 /-! ### §MA-queue-batch — WAVE 4: the ATOMIC cross-queue transaction + the PIPELINE fan-out step
 (`QueueAtomicTx`/`QueuePipelineStep`, dregg1 `apply.rs:3586`/`:3747`). The atomic batch executes a LIST
@@ -2288,6 +2349,36 @@ theorem queueAtomicTxChainA_head_fails {s : RecChainedState} {op : QueueTxOpA} {
     (h : queueTxOpStepA s op = none) :
     queueAtomicTxChainA s (op :: rest) = none := by
   simp only [queueAtomicTxChainA, h]
+
+/-- **`queueTxOpStepA_nonlive_fails` — PROVED (FAIL-CLOSED, the D3 atomic-sub-op teeth).** A single atomic
+sub-op (enqueue/dequeue) whose touched queue's owning `cell` is NOT lifecycle-live does NOT commit — the
+batch sub-op inherits the D3 queue gate. -/
+theorem queueTxOpStepA_nonlive_fails (s : RecChainedState) (op : QueueTxOpA)
+    (hcell : ∀ id m actor cell depId dAsset deposit,
+              op = .enqueue id m actor cell depId dAsset deposit → acceptsEffects s.kernel cell = false)
+    (hcell2 : ∀ id actor cell depId deposit,
+              op = .dequeue id actor cell depId deposit → acceptsEffects s.kernel cell = false) :
+    queueTxOpStepA s op = none := by
+  cases op with
+  | enqueue id m actor cell depId dAsset deposit =>
+      exact queueEnqueueChainA_nonlive_fails s id m actor cell depId dAsset deposit
+        (hcell id m actor cell depId dAsset deposit rfl)
+  | dequeue id actor cell depId deposit =>
+      exact queueDequeueChainA_nonlive_fails s id actor cell depId deposit
+        (hcell2 id actor cell depId deposit rfl)
+
+/-- **`queueAtomicTxChainA_nonlive_head_fails` — PROVED (the D3 atomic-batch teeth).** An atomic batch
+whose HEAD sub-op enqueues onto a queue with a non-live owning cell ROLLS BACK ENTIRELY (`none`) — the
+all-or-nothing discipline cascades the D3 liveness gate to the whole transaction. -/
+theorem queueAtomicTxChainA_nonlive_head_fails (s : RecChainedState)
+    (id m : Nat) (actor cell : CellId) (depId : Nat) (dAsset : AssetId) (deposit : ℤ)
+    (rest : List QueueTxOpA) (h : acceptsEffects s.kernel cell = false) :
+    queueAtomicTxChainA s (.enqueue id m actor cell depId dAsset deposit :: rest) = none :=
+  queueAtomicTxChainA_head_fails (s := s)
+    (queueEnqueueChainA_nonlive_fails s id m actor cell depId dAsset deposit h)
+
+#assert_axioms queueTxOpStepA_nonlive_fails
+#assert_axioms queueAtomicTxChainA_nonlive_head_fails
 
 /-- **`queueAtomicTxChainA_commits_iff_all` — PROVED (the all-or-nothing characterization).** The batch
 commits iff the fold threads a `some` through every sub-op. For a `cons`, it commits iff the head
