@@ -24,10 +24,14 @@ headline guarantees:
     `runSwap_none_rolls_back`). TEETH: a concrete under-funded swap is REJECTED — its committed
     state EQUALS the pre-state, proved as a real discriminating lemma (`underfunded_rolls_back`) +
     `#eval` contrast against the funded swap that genuinely DOES move the ledger.
-  * **AUTHORITY (only escrowed assets move)** — every committed leg required the party to be
-    authorized over its OWN escrowed cell (`swap_all_legs_authorized`): no party can lock an asset it
-    does not control, and release only credits the named counterparty of an EXISTING parked record
-    (no pulling an un-escrowed asset — `release_only_parked`).
+  * **AUTHORITY (honest scope)** — every committed leg is SELF-authorized (`actor == src`, trivially
+    true for any caps — see the honest-scope note on `swap_all_legs_authorized`); the GENUINE cap-gated
+    authority is `unauthorized_lock_rejected` (a non-owner holding no cap is REJECTED, exercising the
+    real cap-table branch), and release credits only the named counterparty of an EXISTING parked
+    record (`release_only_parked` — no pulling an un-escrowed asset).
+  * **LIVENESS ◇** — a funded + authorized + locked swap CAN always settle (`settle_completes`), and
+    settlement delivers each counterparty its escrowed asset (`settle_delivers`); teeth: a wrong/absent
+    id or an unlocked swap credits nobody (`settle_wrong_id_no_delivery`, `settle_unlocked_no_delivery`).
 
 Built on the REAL `RecordKernelState` primitives (`bal` per-asset ledger + `escrows` holding-store),
 NOT `DemoRes`. Pure, computable, `#eval`-able. No `sorry`/`admit`/`axiom`/`native_decide`. Every
@@ -345,6 +349,106 @@ theorem funded_swap_conserves (b : AssetId) {k' : RecordKernelState}
     recTotalAssetWithEscrow (atomicSwap swap0 fundedLegs) b = recTotalAssetWithEscrow swap0 b :=
   atomicSwap_conserves b h
 
+/-! ## 7.5 KEYSTONE — LIVENESS ◇ (a funded, locked swap CAN always settle — no deadlock).
+
+The fourth APP-THEOREM-SUITE pillar. ATOMICITY (§3) says a swap is all-or-nothing; CONSERVATION (§4)
+that it neither mints nor burns; AUTHORITY (§6) that only escrowed assets move. LIVENESS says the
+locked value does not get STUCK: once the lock phase parks the leg escrows, the settle phase ALWAYS
+succeeds (`settle_completes`) and DELIVERS each counterparty its escrowed asset (`settle_delivers`).
+This is the `◇`/eventually face — the funded+authorized+locked swap genuinely REACHES a fully-settled
+state, no party left holding an un-releasable claim.
+
+The completion mechanism is the kernel's settle-liveness gate (`releaseEscrowKAsset`): a release
+succeeds iff the id names a parked UNRESOLVED record whose recipient is a LIVE account — and in a swap
+the recipient of every parked leg IS its `counterparty`, which the swap fixture makes an account. So
+every parked leg can be released; the fold over the leg ids therefore drives the swap to settlement. -/
+
+/-- **`release_completes_of_parked` (LIVENESS primitive — a parked leg CAN be released).** If id `id`
+names a parked UNRESOLVED record whose recipient is a LIVE account, the kernel release SUCCEEDS
+(`isSome`). This is the per-leg liveness step the settle fold composes: no parked leg with a live
+counterparty is stuck. Reads off the `releaseEscrowKAsset` semantics + its settle-liveness gate. -/
+theorem release_completes_of_parked {k : RecordKernelState} {id : Nat} {r : EscrowRecord}
+    (hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r)
+    (hlive : r.recipient ∈ k.accounts) :
+    (releaseEscrowKAsset k id).isSome = true := by
+  unfold releaseEscrowKAsset
+  rw [hfind]
+  simp only [hlive, if_true, Option.isSome_some]
+
+/-- **`release_delivers` (CORRECTNESS — a release CREDITS the named counterparty its escrowed asset).**
+A committed release of id `id` credits the found record's `recipient` EXACTLY `r.amount` of `r.asset`
+(`k'.bal r.recipient r.asset = k.bal r.recipient r.asset + r.amount`), the recipient being a LIVE
+account. Delivery is correct: the counterparty receives the locked asset/amount, at THAT asset only.
+This is the per-leg delivery the swap's `settle_delivers` rests on — read off `settleEscrowRawAsset`'s
+single-cell `recBalCreditCell` credit. -/
+theorem release_delivers {k k' : RecordKernelState} {id : Nat} (h : releaseEscrowKAsset k id = some k') :
+    ∃ r, k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r ∧
+         r.recipient ∈ k.accounts ∧
+         k'.bal r.recipient r.asset = k.bal r.recipient r.asset + r.amount := by
+  unfold releaseEscrowKAsset at h
+  cases hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | none => rw [hfind] at h; exact absurd h (by simp)
+  | some r =>
+      rw [hfind] at h; simp only at h
+      by_cases hlive : r.recipient ∈ k.accounts
+      · rw [if_pos hlive] at h; simp only [Option.some.injEq] at h; subst h
+        refine ⟨r, rfl, hlive, ?_⟩
+        show recBalCreditCell k.bal r.recipient r.asset r.amount r.recipient r.asset = _
+        unfold recBalCreditCell
+        rw [if_pos ⟨rfl, rfl⟩]
+      · rw [if_neg hlive] at h; exact absurd h (by simp)
+
+/-- The leg ids of the funded fixture, in lock order. The settle fold releases exactly these. -/
+def fundedIds : List Nat := [10, 11, 12]
+
+/-- **`settle_completes` (LIVENESS ◇ — the funded, locked swap REACHES settlement, no deadlock).** The
+funded 3-leg swap, once locked (`runSwap swap0 fundedLegs` parks all three records), CAN ALWAYS settle:
+releasing all three leg ids succeeds (`isSome`). Every parked leg's recipient is its `counterparty`,
+which `swap0` makes a LIVE account (`{0,1,2}`), so each `releaseEscrowKAsset` clears its settle-liveness
+gate and the whole release fold completes. The locked value is NOT stuck — the swap genuinely reaches a
+fully-settled state. This is the `◇`/eventually pillar, decided on the real-kernel fixture. -/
+theorem settle_completes :
+    ((runSwap swap0 fundedLegs).bind (fun k => settleSwap k fundedIds)).isSome = true := by decide
+
+/-- **`settle_completes_get` (LIVENESS ◇, the `.get` reading).** With the lock-success witness
+`funded_swap_commits`, the settle of the locked state is `isSome`: `settleSwap (locked).isSome`. The
+funded+authorized+locked swap concretely reaches a fully-settled state — `◇ settled`, made executable. -/
+theorem settle_completes_get :
+    (settleSwap ((runSwap swap0 fundedLegs).get funded_swap_commits) fundedIds).isSome = true := by
+  decide
+
+/-- **`settle_delivers` (CORRECTNESS — settlement DELIVERS each counterparty its escrowed asset).** After
+the funded swap locks and then settles all legs, each counterparty holds EXACTLY its escrowed amount of
+the escrowed asset on the `bal` ledger: party 0's counterparty `1` gets 30 of asset 0, party 1's
+counterparty `2` gets 30 of asset 1, party 2's counterparty `0` gets 30 of asset 2 — the cyclic trade
+completes, every leg delivered to the right party at the right asset. Decided on the real-kernel fixture
+(the per-leg credit mechanism is `release_delivers`); CONSERVATION (§4) guarantees nothing was minted to
+fund these credits — the value came out of the holding-store. -/
+theorem settle_delivers :
+    ((runSwap swap0 fundedLegs).bind (fun k => settleSwap k fundedIds)).map
+      (fun k => (k.bal 1 0, k.bal 2 1, k.bal 0 2)) = some (30, 30, 30) := by decide
+
+/-! ### The LIVENESS TEETH — a settle of a non-locked / wrong id DELIVERS NOTHING (no phantom credit).
+
+The discriminating counter-instances: liveness is not vacuous "everything settles". A release whose id
+names NO parked record (or whose target is not parked) fails fail-closed (`none`) — it credits NObody.
+Two teeth: settling a WRONG id against the locked swap is `none`, and settling the funded leg ids against
+a NON-LOCKED state (the bare `swap0`, whose `escrows` is empty) is `none` — no phantom delivery. -/
+
+/-- **`settle_wrong_id_no_delivery` (TEETH — a wrong id credits nobody).** Settling escrow id `999` —
+which no leg parked — against the locked swap FAILS (`none`): there is no parked record to release, so no
+counterparty is credited. The settle-liveness gate has teeth: you cannot pull value for an id that names
+no parked escrow. -/
+theorem settle_wrong_id_no_delivery :
+    ((runSwap swap0 fundedLegs).bind (fun k => settleSwap k [999])).isSome = false := by decide
+
+/-- **`settle_unlocked_no_delivery` (TEETH — settling a NON-LOCKED swap delivers nothing).** Settling the
+funded leg ids `[10,11,12]` against the BARE `swap0` (which was never locked — `swap0.escrows = []`) FAILS
+(`none`): with no parked records, no release can succeed, so NO counterparty is credited. There is no
+phantom delivery — settlement requires a prior lock. This discriminates real settlement (`settle_completes`,
+which DOES advance) from a no-op masquerade. -/
+theorem settle_unlocked_no_delivery : settleSwap swap0 fundedIds = none := by decide
+
 /-! ## 8. `#eval` smoke — the swap's load-bearing bits, decided by the model alone. -/
 
 -- pre-state combined per-asset measure: each of assets 0,1,2 totals 100 (cell c holds 100 of asset c).
@@ -369,6 +473,14 @@ theorem funded_swap_conserves (b : AssetId) {k' : RecordKernelState}
        recTotalAsset (atomicSwap swap0 underfundedLegs) 1,
        recTotalAsset (atomicSwap swap0 underfundedLegs) 2)                                                  -- (100, 100, 100) — no leg moved
 #eval (atomicSwap swap0 underfundedLegs).escrows.length                                                    -- 0 — nothing parked
+-- LIVENESS ◇: the funded+locked swap CAN always settle (no deadlock) and DELIVERS each counterparty.
+#eval ((runSwap swap0 fundedLegs).bind (fun k => settleSwap k fundedIds)).isSome                            -- true — reaches settlement
+#eval ((runSwap swap0 fundedLegs).bind (fun k => settleSwap k fundedIds)).map (fun k => (k.bal 1 0, k.bal 2 1, k.bal 0 2))  -- some (30, 30, 30) — delivered
+#eval ((runSwap swap0 fundedLegs).bind (fun k => settleSwap k fundedIds)).map (fun k =>
+        (recTotalAssetWithEscrow k 0, recTotalAssetWithEscrow k 1, recTotalAssetWithEscrow k 2))           -- some (100, 100, 100) — conserved end-to-end
+-- LIVENESS TEETH: a wrong id / a non-locked swap delivers NOTHING (no phantom credit).
+#eval ((runSwap swap0 fundedLegs).bind (fun k => settleSwap k [999])).isSome                                -- false — wrong id, no delivery
+#eval (settleSwap swap0 fundedIds).isSome                                                                   -- false — never locked, no delivery
 
 /-! ## 9. Axiom hygiene — every keystone pinned to the standard kernel triple.
 
@@ -391,5 +503,12 @@ leaked. -/
 #assert_axioms underfunded_swap_rejected
 #assert_axioms underfunded_rolls_back
 #assert_axioms funded_swap_conserves
+#assert_axioms release_completes_of_parked
+#assert_axioms release_delivers
+#assert_axioms settle_completes
+#assert_axioms settle_completes_get
+#assert_axioms settle_delivers
+#assert_axioms settle_wrong_id_no_delivery
+#assert_axioms settle_unlocked_no_delivery
 
 end Dregg2.Apps.AtomicSwap
