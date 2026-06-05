@@ -453,6 +453,116 @@ fn test_note_spend_and_create() {
     assert_eq!(delta, 300);
 }
 
+/// D5 (NoteSpend nullifier cross-binding, approach A) — POSITIVE.
+///
+/// An honest NoteSpend whose EffectVM param0 (folded nullifier) matches
+/// PI[NOTESPEND_NULLIFIER] verifies, and the gated per-row constraint is
+/// satisfied (zero) on the NoteSpend row.
+#[test]
+fn test_notespend_nullifier_cross_binding_positive() {
+    let state = make_initial_state(1000);
+    let nullifier = BabyBear::new(0x1234_5678);
+    let effects = vec![Effect::NoteSpend {
+        nullifier,
+        value: 500,
+    }];
+
+    let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+
+    // The trace generator surfaced the folded nullifier into the PI slot.
+    assert_eq!(
+        public_inputs[pi::NOTESPEND_NULLIFIER], nullifier,
+        "PI[NOTESPEND_NULLIFIER] must carry the NoteSpend's nullifier"
+    );
+    // ...and the NoteSpend row's param0 carries the same value.
+    assert_eq!(
+        trace[0][PARAM_BASE + param::NULLIFIER],
+        nullifier,
+        "row 0 param0 must equal the nullifier"
+    );
+
+    let air = EffectVmAir::new(trace.len());
+    // Gated constraint is zero on every row (NoteSpend row included).
+    for alpha_val in [7u32, 13, 101] {
+        let alpha = BabyBear::new(alpha_val);
+        for row in 0..trace.len().saturating_sub(1) {
+            let c = air.eval_constraints(&trace[row], &trace[row + 1], &public_inputs, alpha);
+            assert_eq!(
+                c,
+                BabyBear::ZERO,
+                "matched nullifier: constraint non-zero at row {row} alpha={alpha_val}"
+            );
+        }
+    }
+    let proof = prove(&air, &trace, &public_inputs);
+    let result = verify(&air, &proof, &public_inputs);
+    assert!(
+        result.is_ok(),
+        "matched NoteSpend nullifier should verify: {:?}",
+        result.err()
+    );
+}
+
+/// D5 (NoteSpend nullifier cross-binding, approach A) — ADVERSARIAL.
+///
+/// THE ATTACK: a malicious executor proves nullifier N via the spending /
+/// binding proof but feeds a DIFFERENT M into the EffectVM. We model that by
+/// SWAPPING the EffectVM trace's param0 (the folded nullifier the AIR sees)
+/// to a value distinct from PI[NOTESPEND_NULLIFIER] (which the off-AIR
+/// verifier reconstructs from the binding proof's certified nullifier). The
+/// gated per-row equality `s_notespend * (param0 - PI[NOTESPEND_NULLIFIER])`
+/// MUST fire, and the STARK MUST reject. If it does not, the binding is fake.
+#[test]
+fn test_notespend_nullifier_cross_binding_rejects_swap() {
+    let state = make_initial_state(1000);
+    let nullifier = BabyBear::new(0x1234_5678);
+    let effects = vec![Effect::NoteSpend {
+        nullifier,
+        value: 500,
+    }];
+
+    // Honest trace + PI (PI[NOTESPEND_NULLIFIER] == nullifier, the value the
+    // off-AIR verifier would reconstruct from the binding proof).
+    let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+    assert_eq!(public_inputs[pi::NOTESPEND_NULLIFIER], nullifier);
+
+    // SWAP: the executor feeds a different folded nullifier M into the
+    // EffectVM's NoteSpend param0, while the PI still commits to N. This is
+    // exactly the "prove N, spend M" attack at the AIR boundary.
+    let swapped = BabyBear::new(0x0BAD_C0DE);
+    assert_ne!(swapped, nullifier, "swap must change the value");
+    trace[0][PARAM_BASE + param::NULLIFIER] = swapped;
+
+    let air = EffectVmAir::new(trace.len());
+
+    // (1) The gated constraint MUST be non-zero on the NoteSpend row for at
+    // least one challenge — the binding genuinely catches the swap. If this
+    // assertion fails, the cross-binding is FAKE.
+    let mut fired = false;
+    for alpha_val in [7u32, 13, 101] {
+        let alpha = BabyBear::new(alpha_val);
+        let c = air.eval_constraints(&trace[0], &trace[1], &public_inputs, alpha);
+        if c != BabyBear::ZERO {
+            fired = true;
+        }
+    }
+    assert!(
+        fired,
+        "ADVERSARIAL: swapped NoteSpend nullifier did NOT trip the gated AIR \
+         constraint — the cross-binding is FAKE"
+    );
+
+    // (2) End-to-end: the STARK proof+verify MUST reject the swapped trace.
+    let result = std::panic::catch_unwind(|| {
+        let proof = prove(&air, &trace, &public_inputs);
+        verify(&air, &proof, &public_inputs)
+    });
+    assert!(
+        result.is_err() || matches!(result, Ok(Err(_))),
+        "ADVERSARIAL: swapped NoteSpend nullifier must be REJECTED by the STARK"
+    );
+}
+
 #[test]
 fn test_setfield_correct() {
     let state = make_initial_state(100);
