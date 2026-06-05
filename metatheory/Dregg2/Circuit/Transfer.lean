@@ -328,6 +328,73 @@ theorem recKExec_iff_guard (k : RecordKernelState) (t : Turn) :
     · rw [if_neg hg] at h; exact absurd h (by simp)
   · intro hg; exact ⟨_, by rw [if_pos hg]⟩
 
+/-! ## §6b — FULL-STATE SEMANTIC SPEC (the INDEPENDENT reference) + executor⟺spec.
+
+`admitGuard` + debit/credit/conserve is a PROJECTION of correctness onto the conserved slice — NOT
+full semantic correctness. The whole truth of a committed transfer is the COMPLETE state
+transition: the two moved cells get the debit/credit (their other record fields preserved), every
+OTHER cell is untouched, and ALL 16 non-`cell` state components — `accounts` `caps` `bal` `escrows`
+`nullifiers` `revoked` `commitments` `queues` `swiss` `slotCaveats` `factories` `lifecycle`
+`deathCert` `delegate` `delegations` `sealedBoxes` — are LITERALLY unchanged. `TransferSpec` is that
+complete declarative post-state, written INDEPENDENTLY of the executor (no `recKExec`/`recCexec`
+term in any frame clause), and `recKExec_iff_spec` proves the executor meets it EXACTLY, both ways.
+This is the apex reference truth that the executor (here) and the circuit (§7b, full-state) are each
+proven equal to — killing the "two-balance projection" ghost. -/
+
+/-- **`recTransfer_correct`** — the cell-update helper validated DECLARATIVELY (not trusted): a
+transfer debits `src`'s balance by `amt`, credits `dst`'s by `amt`, and leaves every other cell's
+whole record untouched. So the spec's `k'.cell = recTransfer …` clause genuinely encodes
+debit ∧ credit ∧ cell-frame, rather than blindly trusting the helper. -/
+theorem recTransfer_correct (cell : CellId → Value) (src dst : CellId) (amt : ℤ) (hne : src ≠ dst) :
+    balOf (recTransfer cell src dst amt src) = balOf (cell src) - amt
+    ∧ balOf (recTransfer cell src dst amt dst) = balOf (cell dst) + amt
+    ∧ (∀ c, c ≠ src → c ≠ dst → recTransfer cell src dst amt c = cell c) := by
+  refine ⟨?_, ?_, ?_⟩
+  · simp only [recTransfer]; exact setBalance_balOf _ _
+  · have hdne : dst ≠ src := fun h => hne h.symm
+    simp only [recTransfer, if_neg hdne]; exact setBalance_balOf _ _
+  · intro c hcs hcd; simp only [recTransfer, if_neg hcs, if_neg hcd]
+
+/-- **The full-state declarative spec of a committed Transfer** — the INDEPENDENT reference
+semantics. The guard holds; the post-state's `cell` map is the debit/credit transfer (other record
+fields preserved by `setBalance`, other cells whole-preserved — see `recTransfer_correct`); and
+every one of the 16 non-`cell` state components is unchanged. No frame clause mentions the
+executor. -/
+def TransferSpec (k : RecordKernelState) (t : Turn) (k' : RecordKernelState) : Prop :=
+  admitGuard k t
+  ∧ k'.cell = recTransfer k.cell t.src t.dst t.amt
+  ∧ k'.accounts = k.accounts ∧ k'.caps = k.caps ∧ k'.bal = k.bal
+  ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+  ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
+  ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
+  ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
+  ∧ k'.sealedBoxes = k.sealedBoxes
+
+/-- **`recKExec_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The executable record
+kernel commits a transfer into `k'` IFF `k'` is EXACTLY the spec'd full post-state. The `→`
+direction VALIDATES `recKExec` against the independent spec — all 17 components are checked, so had
+the executor silently mutated `bal`/`nullifiers`/`caps`/… the frame clauses would make this proof
+FAIL; the `←` reconstructs the committed state from the spec. This is the executor corner of the
+spec⟺executor⟺circuit triangle. -/
+theorem recKExec_iff_spec (k : RecordKernelState) (t : Turn) (k' : RecordKernelState) :
+    recKExec k t = some k' ↔ TransferSpec k t k' := by
+  unfold recKExec TransferSpec admitGuard
+  by_cases hg : authorizedB k.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ balOf (k.cell t.src)
+      ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts
+  · rw [if_pos hg]
+    constructor
+    · intro h
+      simp only [Option.some.injEq] at h; subst h
+      exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨_, hcell, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+      cases k'
+      subst hcell h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      rfl
+  · rw [if_neg hg]
+    constructor
+    · intro h; exact absurd h (by simp)
+    · rintro ⟨hg', _⟩; exact absurd hg' hg
+
 /-! ## §7 — THE BRIDGE: the Transfer circuit is SOUND ∧ COMPLETE vs the real executor. -/
 
 /-- **`transfer_circuit_sound` — SOUNDNESS (the `→` half).** A satisfying witness on the encoded
@@ -578,6 +645,8 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`ad
 #assert_axioms recKExec_src_debit
 #assert_axioms recKExec_dst_credit
 #assert_axioms recKExec_iff_guard
+#assert_axioms recTransfer_correct
+#assert_axioms recKExec_iff_spec
 #assert_axioms transfer_circuit_sound
 #assert_axioms transfer_circuit_admits
 #assert_axioms transfer_circuit_complete
