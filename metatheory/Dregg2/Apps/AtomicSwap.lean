@@ -273,8 +273,8 @@ theorem release_only_parked {k k' : RecordKernelState} {id : Nat} (h : releaseEs
   | none => rw [hfind] at h; exact absurd h (by simp)
   | some r =>
       rw [hfind] at h; simp only at h
-      by_cases hlive : r.recipient ∈ k.accounts
-      · exact ⟨r, rfl, hlive⟩
+      by_cases hlive : r.recipient ∈ k.accounts ∧ cellLifecycleLive k r.recipient = true
+      · exact ⟨r, rfl, hlive.1⟩
       · rw [if_neg hlive] at h; exact absurd h (by simp)
 
 /-! ## 7. The TEETH — a concrete underfunded swap is REJECTED (state == pre-state), vs a funded one.
@@ -364,16 +364,17 @@ the recipient of every parked leg IS its `counterparty`, which the swap fixture 
 every parked leg can be released; the fold over the leg ids therefore drives the swap to settlement. -/
 
 /-- **`release_completes_of_parked` (LIVENESS primitive — a parked leg CAN be released).** If id `id`
-names a parked UNRESOLVED record whose recipient is a LIVE account, the kernel release SUCCEEDS
-(`isSome`). This is the per-leg liveness step the settle fold composes: no parked leg with a live
-counterparty is stuck. Reads off the `releaseEscrowKAsset` semantics + its settle-liveness gate. -/
+names a parked UNRESOLVED record whose recipient is a LIVE account AND is lifecycle-live (the D3
+settle-target gate — a Sealed/Destroyed recipient would block delivery), the kernel release SUCCEEDS
+(`isSome`). This is the per-leg liveness step the settle fold composes: no parked leg with a live,
+non-frozen counterparty is stuck. Reads off the `releaseEscrowKAsset` semantics + its settle-liveness gate. -/
 theorem release_completes_of_parked {k : RecordKernelState} {id : Nat} {r : EscrowRecord}
     (hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r)
-    (hlive : r.recipient ∈ k.accounts) :
+    (hlive : r.recipient ∈ k.accounts) (hlc : cellLifecycleLive k r.recipient = true) :
     (releaseEscrowKAsset k id).isSome = true := by
   unfold releaseEscrowKAsset
   rw [hfind]
-  simp only [hlive, if_true, Option.isSome_some]
+  simp only [hlive, hlc, and_self, if_true, Option.isSome_some]
 
 /-- **`release_delivers` (CORRECTNESS — a release CREDITS the named counterparty its escrowed asset).**
 A committed release of id `id` credits the found record's `recipient` EXACTLY `r.amount` of `r.asset`
@@ -390,9 +391,9 @@ theorem release_delivers {k k' : RecordKernelState} {id : Nat} (h : releaseEscro
   | none => rw [hfind] at h; exact absurd h (by simp)
   | some r =>
       rw [hfind] at h; simp only at h
-      by_cases hlive : r.recipient ∈ k.accounts
+      by_cases hlive : r.recipient ∈ k.accounts ∧ cellLifecycleLive k r.recipient = true
       · rw [if_pos hlive] at h; simp only [Option.some.injEq] at h; subst h
-        refine ⟨r, rfl, hlive, ?_⟩
+        refine ⟨r, rfl, hlive.1, ?_⟩
         show recBalCreditCell k.bal r.recipient r.asset r.amount r.recipient r.asset = _
         unfold recBalCreditCell
         rw [if_pos ⟨rfl, rfl⟩]
