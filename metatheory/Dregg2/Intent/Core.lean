@@ -160,8 +160,9 @@ def demoReg : Registry Nat Nat := fun _ => none
 /-- Demo statement encoder. -/
 def demoStmtOf : FrameStatement → Nat := fun _ => 0
 
-/-- **A real intent:** offer 1 art, want 1 art, accept exactly 1 art, escrow funded, causal deadline
-"after genesis `g0`". -/
+/-- **DEMO (non-production): a real intent** — offer 1 art, want 1 art, accept exactly 1 art, escrow
+funded, causal deadline "after genesis `g0`". A non-vacuity fixture for the keystones, NOT a shipped
+auction artifact. -/
 def demoIntent : Intent DemoRes Dregg2.Authority.Blocklace.demoLace demoReg demoStmtOf where
   offered := res 0 1
   wanted := res 0 1
@@ -182,8 +183,9 @@ theorem demo_escrow_consumed : demoReceipt.spentEscrow.locked = false := rfl
 
 /-! ### Teeth — each face can REFUSE a fill (independently). -/
 
-/-- **Predicate-face teeth:** an intent that demands "5 gold 5 art" but only wants "1 art" cannot be
-fulfilled — the predicate REJECTS the wanted outcome, so `hpred` is unprovable. -/
+/-- **DEMO (non-production): predicate-face teeth** — an intent that demands "5 gold 5 art" but only
+wants "1 art" cannot be fulfilled: the predicate REJECTS the wanted outcome, so `hpred` is unprovable. A
+toy fixture proving the predicate face has teeth, NOT a shipped intent. -/
 def demoBadPred : Intent DemoRes Dregg2.Authority.Blocklace.demoLace demoReg demoStmtOf where
   offered := res 0 1
   wanted := res 0 1
@@ -199,8 +201,9 @@ theorem demoBadPred_unfulfillable : ¬ demoBadPred.predicate demoBadPred.wanted 
   have hb : mkBundle 0 1 = mkBundle 5 5 := congrArg Discrete.as h
   exact absurd (Multiplicative.ofAdd.injective hb) (by decide)
 
-/-- **Boundary-face teeth:** an intent offering "2 gold" but demanding "1 art" cannot be fulfilled —
-no conversion `offered ⟶ wanted` exists (the hole is unpluggable). Reuses `demo_no_convert`. -/
+/-- **DEMO (non-production): boundary-face teeth** — an intent offering "2 gold" but demanding "1 art"
+cannot be fulfilled: no conversion `offered ⟶ wanted` exists (the hole is unpluggable). Reuses
+`demo_no_convert`. A toy fixture for the boundary face, NOT a shipped intent. -/
 def demoBadBoundary : Intent DemoRes Dregg2.Authority.Blocklace.demoLace demoReg demoStmtOf where
   offered := res 2 0
   wanted := res 0 1

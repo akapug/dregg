@@ -1,7 +1,12 @@
 /-
 # Dregg2.Intent.KernelBridge — the Intent/auction layer is a FAITHFUL SHADOW of the real bal-ledger.
 
-**The toy-remediation seam.** The whole Intent/auction stack (`Intent/Resource.lean`,
+**DEMO (non-production): the TOY-REMEDIATION seam.** This module exists precisely BECAUSE the
+Intent/auction stack above it runs on a toy. It proves the toy *refines* the real kernel ledger, but the
+`DemoRes` carrier it bridges from is itself the non-production two-asset `(gold, art)` demo — the
+refinement is the remediation, not a claim that the toy is itself a shipped resource theory.
+
+The whole Intent/auction stack (`Intent/Resource.lean`,
 `Intent/Core.lean`, `Intent/Kernel.lean`) runs on the `DemoRes` TOY: `Discrete (Multiplicative
 (ℕ × ℕ))`, the discrete symmetric-monoidal category on `(gold, art)` count bundles. Its conservation
 (`fulfill_conserves` / the `Converts offered outcome` shadow) is HONEST but ABSTRACT — it says only "a

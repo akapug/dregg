@@ -114,7 +114,10 @@ abbrev Bundle := Multiplicative (ℕ × ℕ)
 /-- Construct a bundle from explicit `(gold, art)` counts. -/
 def mkBundle (gold art : ℕ) : Bundle := Multiplicative.ofAdd (gold, art)
 
-/-- **The demo resource theory:** the discrete symmetric monoidal category on asset bundles. -/
+/-- **DEMO (non-production): the demo resource theory** — the discrete symmetric monoidal category on
+asset bundles. A two-asset `(gold, art)` TOY carrier for exercising the convertibility relation's teeth;
+the real per-asset ledger it shadows is `Exec/RecordKernel.lean` (the bridge is `Intent/KernelBridge`).
+NOT a shipped resource theory. -/
 abbrev DemoRes := Discrete Bundle
 
 /-- `DemoRes` is symmetric: mathlib gives `BraidedCategory (Discrete M)` for a `CommMonoid`; symmetry
