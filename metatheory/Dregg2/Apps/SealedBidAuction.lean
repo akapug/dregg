@@ -505,13 +505,28 @@ offered bundle. A `Prop`-valued predicate on `EscrowWitness offered` — the abs
 inequality compares the two escrows on. -/
 abbrev EscrowGuarantee (offered : DreggResources) := EscrowWitness offered → Prop
 
-/-- **`UserspaceDominatesKernel` (the (a) OPEN, as a carried hypothesis)** — the userspace escrow over
-`offered` UPHOLDS at least every guarantee the kernel escrow does. Formally: for every guarantee `G`, if
-the kernel escrow `ke` satisfies `G` then the userspace escrow `ue` does too. This is the `⊑` refinement
-typed at the abstract `EscrowWitness` layer (architect Q6 option (ii)); option (i) — a userspace-escrow
-cell-program with its own release/refund semantics so `⊑` is an executable simulation against
-`createEscrowKAsset` — is the deferred build. **CARRIED, never assumed of a specific escrow: a theorem
-takes it as a hypothesis.** -/
+/-- **OPEN/BLOCKED: `UserspaceDominatesKernel` is the auction's (a) obligation — it is NOT a proved
+guarantee, it is a carried HYPOTHESIS.**
+
+To keep the honesty seam unmissable, this auction's results split into two disjoint piles:
+
+  * **PROVED (shipped green, kernel-clean — these ARE guarantees):** `no_frontrunning` /
+    `no_frontrunning_teeth` (causal reveal-ordering EXCLUDES frontrunning), `settle_conserves` /
+    `settle_sigma_conserves` (the settle conserves every asset's Σ-total — no value minted),
+    `settle_cannot_mint` / `mint_rejected_by_sigma` / `skim_rejected_by_sigma` (a minting/skimming
+    settle is structurally rejected), `settle_no_double` (one-shot), `auction_loser_refunded` (the
+    genuine `◇`). Each is `#assert_axioms`-pinned below.
+
+  * **OPEN / BLOCKED (NOT proved — do not read as a guarantee):** `UserspaceDominatesKernel` itself.
+    It states that the userspace escrow over `offered` would uphold at least every guarantee the kernel
+    escrow does (for every guarantee `G`, `G ke → G ue`) — the `⊑` refinement typed at the abstract
+    `EscrowWitness` layer (architect Q6 option (ii)). This relation is **CARRIED as a hypothesis**, never
+    asserted of any specific escrow: the corollary `escrow_refinement_sound` only *consumes* it, and the
+    only inhabitant proved is the trivial reflexive one (`escrow_refinement_reflexive`). The NON-trivial
+    witness — a userspace-escrow cell-program with its own release/refund semantics so `⊑` is an
+    executable simulation against `createEscrowKAsset` (option (i)) — DOES NOT EXIST in the green tree and
+    is the OPEN model-shape call for ember (see §7 banner). Treat any `UserspaceDominatesKernel _ _` you
+    see in a theorem's hypotheses as an unmet debt, not a fact this file establishes. -/
 def UserspaceDominatesKernel {offered : DreggResources}
     (ke ue : EscrowWitness offered) : Prop :=
   ∀ G : EscrowGuarantee offered, G ke → G ue

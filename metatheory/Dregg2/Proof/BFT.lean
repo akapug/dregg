@@ -2,6 +2,19 @@
 # Dregg2.Proof.BFT — the distributed-adversary / Byzantine / partial-synchrony model,
 # layered over `World`, with the strong forms of both BFT obligations.
 
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║ ⚠ THIS IS NOT dregg1's CONSENSUS PROTOCOL. ⚠                                            ║
+║                                                                                        ║
+║ This file models CLASSICAL quorum-intersection BFT (Li–Lesani / Malkhi–Reiter /        ║
+║ DLS88 / HotStuff-style `n > 3f`, `n − f` quorums, honest-vote-once). dregg1 does NOT   ║
+║ run a classical BFT protocol — it runs a Cordial-Miners DAG + Stingray. The faithful   ║
+║ model of the protocol dregg actually runs lives in `Dregg2.Proof.CordialMiners`.       ║
+║                                                                                        ║
+║ `BFT.lean` is therefore a REUSABLE quorum-intersection UTILITY (the pigeonhole-at-an-  ║
+║ honest-process safety argument), NOT "THE consensus model" of this system. Do not read ║
+║ its theorems as statements about what dregg1/dregg2 actually ships.                    ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+
 `World.lean` delivers the two BFT obligations only weakly:
   * O1: `quorum_intersection_safety` proves the bare pigeonhole (two quorums share a voter),
     without the adversary/honesty model needed to turn that shared voter into a contradiction.
