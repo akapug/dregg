@@ -158,23 +158,45 @@ theorem apex_iff_dropSpec (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
   constructor
   · rintro ⟨hg, hsw, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    obtain ⟨e, hf, hpos⟩ := hg.2
-    have hk := (dropSwissUpdate_eq_k s.kernel args.sw s'.kernel.swiss).mp <|
-      by simpa [dropSwissPostClause, dropSwissPost_eq_update] using hsw
-    refine ⟨hg, s'.kernel, hk, ?_⟩
-    cases s'; simp [hlog]
-  · rintro ⟨hg, k', hk, hs'⟩
+    cases s' with | mk kernel log =>
+    obtain ⟨e, ⟨hf, hpos⟩⟩ := hg.2
+    have hK : kernel = { s.kernel with swiss := kernel.swiss } :=
+      recKernel_ext hAcc hCell hCaps hEsc hNul hRev hCom hBal hQ rfl hSC hFac hLif hDC hDel hDgs hSB
+    have hupd := dropSwissPost_eq_update s.kernel.swiss args.sw e hf hpos
+    have hcl : dropSwissPostClause s args = dropSwissPost s.kernel.swiss args.sw e := by
+      simp [dropSwissPostClause, hupd]
+    have hpost : dropSwissPost s.kernel.swiss args.sw e = kernel.swiss := (hsw.trans hcl).symm
+    have hsome : dropSwissUpdate s.kernel.swiss args.sw = some kernel.swiss := by
+      rw [hupd, congr_arg some hpost]
+    have hk' := (dropSwissUpdate_eq_k s.kernel args.sw kernel.swiss).mp hsome
+    have hk : swissDropK s.kernel args.sw = some kernel :=
+      hk'.trans (congr_arg some hK.symm)
+    refine ⟨hg, ⟨kernel, ⟨hk, ?_⟩⟩⟩
+    simpa using hlog
+  · rintro ⟨hg, ⟨k', hk, hs'⟩⟩
     rcases withSwiss_preserves_rest s.kernel k'.swiss with
       ⟨hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
-    obtain ⟨e, hf, hpos⟩ := hg.2
+    obtain ⟨e, ⟨hf, hpos⟩⟩ := hg.2
     have hupd := dropSwissPost_eq_update s.kernel.swiss args.sw e hf hpos
     have hk' := swissDropK_eq_withSwiss hk
-    have hsw := (dropSwissUpdate_eq_k s.kernel args.sw k'.swiss).mpr hk'
-    cases s'
-    subst hs'
-    simp [dropSwissPostClause, hsw, hupd]
-    exact ⟨hg, rfl, rfl, ⟨hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
-      hDC, hDel, hDgs, hSB⟩⟩
+    have hupd' : dropSwissUpdate s.kernel.swiss args.sw = some k'.swiss :=
+      (dropSwissUpdate_eq_k s.kernel args.sw k'.swiss).mpr hk'
+    have hpost : dropSwissPost s.kernel.swiss args.sw e = k'.swiss :=
+      Option.some.inj (hupd.symm.trans hupd')
+    have hsw' : k'.swiss =
+        match dropSwissUpdate s.kernel.swiss args.sw with
+        | some ss => ss
+        | none => s.kernel.swiss := by
+      simp [dropSwissPostClause, hupd, hpost]
+    have hker : s'.kernel = k' := congr_arg RecChainedState.kernel hs'
+    have hlog : s'.log = dropReceipt args.actor args.exporter :: s.log := congr_arg RecChainedState.log hs'
+    have hK' := swissDropK_only_swiss hk
+    have hrest : (swissDropE LE cN hN hLE).restFrame s.kernel s'.kernel := by
+      rw [hker, hK']
+      exact restFrame_of_withSwiss rfl
+    refine ⟨hg, ?_, hlog, hrest⟩
+    rw [hker]
+    exact hsw'
 
 /-! ### §2c — THE VALIDATION. -/
 

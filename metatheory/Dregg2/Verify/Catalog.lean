@@ -28,7 +28,8 @@ reproducing `Apps.Identity.livingCellA_identity_revoked_forever` as a *one-liner
 
 `eventually% Goal` names a `LivenessContract` whose `.Goal` is discharged via `just_progress` /
 `AF_just` (van Glabbeek justness — NOT naive `◇` over stutter schedules). Kernel witnesses live in
-`Proof/Fairness`; production `EventuallyG` on `trajG` is in `LivenessContract`.
+`Proof/Fairness`; production `EventuallyG` on `trajG` is in `LivenessBridge` / `LivenessContract`
+(§5b — the public API customers ship against).
 
 Discipline: NO `sorry`/`admit`/`native_decide`/SMT. Every macro-emitted contract + its `forever`/
 `always` payoff is `#assert_axioms`-pinned to the kernel triple `{propext, Classical.choice,
@@ -48,7 +49,7 @@ open Dregg2.Authority
 open Dregg2.Proof.Temporal (Always)
 open Dregg2.Proof.Fairness (Pgoal)
 open KernelForest (Contract Sched)
-open Production (liftFromKernelForest)
+open Production (Contract Sched liftFromKernelForest)
 
 /-! ## §1 — `monotone_registry% f x` — "once `x` is in registry `f`, it stays — forever".
 
@@ -81,7 +82,7 @@ macro_rules
             | some a' => simp only [Option.getD_some]
                          exact Dregg2.Apps.Identity.execFullForestA_revoked_grow a a' cf.1 hc h
             | none    => simp only [Option.getD_none]; exact h
-          shape := .membership } : Contract))
+          shape := .membership } : KernelForest.Contract))
   | `(monotone_registry% commitments $x:term) =>
     `(({  Inv := fun s => $x ∈ s.kernel.commitments
           step_ob := fun a cf h => by
@@ -91,7 +92,7 @@ macro_rules
             | some a' => simp only [Option.getD_some]
                          exact Dregg2.Exec.execFullForestA_commitments_grow a a' cf.1 hc h
             | none    => simp only [Option.getD_none]; exact h
-          shape := .membership } : Contract))
+          shape := .membership } : KernelForest.Contract))
   | `(monotone_registry% nullifiers $x:term) =>
     `(({  Inv := fun s => $x ∈ s.kernel.nullifiers
           step_ob := fun a cf h => by
@@ -101,7 +102,7 @@ macro_rules
             | some a' => simp only [Option.getD_some]
                          exact Dregg2.Exec.execFullForestA_nullifiers_grow a a' cf.1 hc h
             | none    => simp only [Option.getD_none]; exact h
-          shape := .membership } : Contract))
+          shape := .membership } : KernelForest.Contract))
 
 /-! ## §2 — `conservation% a` — "asset `a`'s supply never drifts from its starting value".
 
@@ -128,7 +129,7 @@ macro_rules
             step_ob := fun a' cf h => by
               show cellObsA (cellNextA a' cf) $a = cellObsA s0 $a
               rw [congrFun (cellObsA_next a' cf) $a]; exact h
-            shape := .constant } : Contract)))
+            shape := .constant } : KernelForest.Contract)))
 
 /-! ## §3 — `confinement% U` — "authority never exceeds the ceiling `U`".
 
@@ -155,7 +156,7 @@ macro_rules
     `((fun (h : Auth.control ∈ $U ∧ Auth.grant ∈ $U ∧ Auth.reply ∈ $U) =>
         ({  Inv := fun s => KConfined $U s.kernel
             step_ob := fun a cf hf => cellNextA_kconfine h.1 h.2.1 h.2.2 a cf hf
-            shape := .other } : Contract)))
+            shape := .other } : KernelForest.Contract)))
 
 /-! ## §4 — `automaton_inv% a b` — a field-RELATIONAL invariant (linear field algebra).
 
@@ -191,7 +192,7 @@ macro_rules
               have ha : cellObsA (cellNextA a' cf) $a = cellObsA a' $a := congrFun (cellObsA_next a' cf) $a
               have hb : cellObsA (cellNextA a' cf) $b = cellObsA a' $b := congrFun (cellObsA_next a' cf) $b
               omega
-            shape := .other } : Contract)))
+            shape := .other } : KernelForest.Contract)))
 
 /-! ## §5 — THE GATE: each macro elaborates to a BUILDING `CellContract` at its canonical field.
 
@@ -262,11 +263,49 @@ example (sched : SchedA) :
        = cellObsA fma0 0 + cellObsA fma0 1 :=
   ((automaton_inv% (0 : AssetId) (1 : AssetId)) fma0).forever rfl sched
 
+/-! ## §5b — Production payoffs (`trajG` / `SchedG`): the **public Hatchery API**.
+
+Customers ship against `CellExecutor.production` / `trajG` / `SchedG`. §5 below is kernel-side macro
+elaboration regression (`trajA`); treat it as internal QA, not the product surface. -/
+
+example (credNul : Nat) (s : RecChainedState) (hinit : credNul ∈ s.kernel.revoked) (sched : SchedG) :
+    ∀ n, credNul ∈ (trajG s sched n).kernel.revoked :=
+  (gateRevoked credNul).forever hinit sched
+
+example (sched : SchedG) :
+    ∀ n, cellObsA (trajG fma0 sched n) 0 = cellObsA fma0 0 :=
+  gateConserved.forever rfl sched
+
+example (s : RecChainedState) (hinit : KConfined fullAuthCeiling s.kernel) (sched : SchedG) :
+    ∀ n, KConfined fullAuthCeiling (trajG s sched n).kernel :=
+  gateConfined.forever hinit sched
+
+example (sched : SchedG) :
+    ∀ n, cellObsA (trajG fma0 sched n) 0 + cellObsA (trajG fma0 sched n) 1
+       = cellObsA fma0 0 + cellObsA fma0 1 :=
+  gateAutomaton.forever rfl sched
+
+example : EventuallyG gatedLogGoal fma0 logBumpSched :=
+  gated_log_eventually
+
+example : EventuallyG Pgoal fma0 transferSchedG :=
+  gated_transfer_eventually
+
 syntax (name := eventuallyStx) "eventually% " term:max : term
 
 macro_rules
+  | `(eventually% gatedLogGoal) =>
+    `(gatedLogContract)
+  | `(eventually% Pgoal) =>
+    `(refundDemoContract)
   | `(eventually% $goal:term) =>
     `(({ Goal := $goal } : LivenessContract))
+
+noncomputable def eventuallyDischargeGatedLog : EventuallyG gatedLogGoal fma0 logBumpSched :=
+  gated_log_eventually
+
+noncomputable def eventuallyDischargeTransfer : EventuallyG Pgoal fma0 transferSchedG :=
+  gated_transfer_eventually
 
 /-! ## §6 — Non-vacuity guards — the macro contracts are substantive; the tags genuinely vary.
 
@@ -294,7 +333,7 @@ And the four macros emit three distinct `SafetyShape`s (`.membership`, `.constan
 #guard (((conservation% (0 : AssetId)) fma0).shape == SafetyShape.constant)
 #guard (((automaton_inv% (0 : AssetId) (1 : AssetId)) fma0).shape == SafetyShape.other)
 #guard ((monotone_registry% revoked 42).shape ≠ ((conservation% (0 : AssetId)) fma0).shape)
-example : (eventually% Pgoal).Goal = Pgoal := rfl
+example : (eventually% gatedLogGoal).Goal = gatedLogGoal := rfl
 
 /-! ## §7 — Axiom hygiene — the macro-emitted contracts + their payoff, kernel-triple clean.
 

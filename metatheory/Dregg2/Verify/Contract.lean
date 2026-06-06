@@ -166,6 +166,17 @@ def revokedPersists (x : Nat) : Contract where
     | none    => simp only [Option.getD_none]; exact h
   shape := .membership
 
+def nullifierPersists (nf : Nat) : Contract where
+  Inv s := nf ∈ s.kernel.nullifiers
+  step_ob a cf h := by
+    rw [CellExecutor.kernelForest_next_eq]
+    unfold cellNextA
+    cases hc : execFullForestA a cf.1 with
+    | some a' => simp only [Option.getD_some]
+                 exact (execFullForestA_nullifiers_grow a a' cf.1 hc) h
+    | none    => simp only [Option.getD_none]; exact h
+  shape := .membership
+
 def nameRegisteredContract (name owner : Dregg2.Apps.NameService.Name) : Contract where
   Inv s := Dregg2.Apps.NameService.isRegistered s name owner = true
   step_ob a cf h := by
@@ -226,6 +237,9 @@ noncomputable def conserved (s0 : RecChainedState) : Contract :=
 
 noncomputable def revokedPersists (x : Nat) : Contract :=
   liftFromKernelForest (KernelForest.revokedPersists x)
+
+noncomputable def nullifierPersists (nf : Nat) : Contract :=
+  liftFromKernelForest (KernelForest.nullifierPersists nf)
 
 noncomputable def nameRegisteredContract (name owner : Dregg2.Apps.NameService.Name) : Contract :=
   liftFromKernelForest (KernelForest.nameRegisteredContract name owner)
@@ -297,7 +311,7 @@ theorem identity_revoked_forever_production (x : Nat) (s : RecChainedState)
 theorem spent_note_never_respent_production (nf : Nat) (s : RecChainedState)
     (hinit : nf ∈ s.kernel.nullifiers) (sched : SchedG) :
     ∀ n, nf ∈ (trajG s sched n).kernel.nullifiers :=
-  (subsetNullifiersContract [nf]).forever (List.singleton_subset_iff.mpr hinit) sched
+  (nullifierPersists nf).forever hinit sched
 
 theorem no_double_spend_production (nul0 : List Nat) (s : RecChainedState)
     (hinit : nul0 ⊆ s.kernel.nullifiers) (sched : SchedG) :
@@ -361,6 +375,7 @@ contracts carry three DISTINCT `SafetyShape`s, so the tag is real classifying da
 #assert_axioms logAppendOnly
 #assert_axioms conserved
 #assert_axioms revokedPersists
+#assert_axioms nullifierPersists
 #assert_axioms nameRegisteredContract
 #assert_axioms subWFContract
 #assert_axioms identity_revoked_forever_production

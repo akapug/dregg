@@ -27,7 +27,7 @@ def handoffSwissUpdate (ss : List SwissRecord) (sw certHash : Nat) : Option (Lis
 
 def HandoffGuard (s : RecChainedState) (sw : Nat) (introducer exporter : CellId) : Prop :=
   stateAuthB s.kernel.caps introducer exporter = true
-  ∧ ∃ e : SwissRecord, findSwiss s.kernel.swiss sw = some e
+  ∧ (findSwiss s.kernel.swiss sw).isSome = true
 
 theorem handoffRecord_correct (e : SwissRecord) (certHash : Nat) :
     (handoffRecord e certHash).swiss = e.swiss
@@ -87,7 +87,7 @@ theorem handoffChain_iff_spec (s : RecChainedState) (sw certHash : Nat) (introdu
         unfold swissHandoffK at hk
         cases hf : findSwiss s.kernel.swiss sw with
         | none => simp [hf] at hk
-        | some e => simp only [hf] at hk; exact ⟨e, rfl⟩
+        | some _ => simp [hf, Option.isSome]
       · rintro ⟨_, ⟨k'', hk', hs'⟩⟩
         simp only [Option.some.injEq] at hk'
         subst hk'

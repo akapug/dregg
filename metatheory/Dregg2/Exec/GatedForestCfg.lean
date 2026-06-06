@@ -14,7 +14,8 @@ open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Authority
 open Dregg2.Spec (Guard)
-open Dregg2.Exec.AuthModes (AuthMode AuthContext)
+open Dregg2.Exec.AuthModes (AuthMode AuthContext unchecked_unconstrained_admits)
+open Dregg2.Crypto.Reference
 
 /-- **Carrier record** for the credential-gated call-forest executor. -/
 structure GatedForestCarriers where
@@ -81,6 +82,14 @@ theorem execForestG_erases (s s' : RecChainedState) (f : DForest)
     execFullForestA s (eraseForestG f) = some s' :=
   execFullForestG_erases s s' f h
 
+/-- Childless gated forest = single gated node step. -/
+theorem execFullForestG_leaf (s : RecChainedState) (na : DNodeAuth) (a : FullActionA) :
+    execFullForestG s (⟨na, a, []⟩ : DForest) = execFullAGated s na a := by
+  show (match execFullAGated s na a with
+        | some s' => execFullChildrenG (targetOf a) s' ([] : List DChild)
+        | none    => none) = execFullAGated s na a
+  cases execFullAGated s na a <;> rfl
+
 def baseCapCtx : AuthContext Rq St Wt Label Unit Cx Gw :=
   { req := true, customStmt := 0, wit := fun _ => 0
   , registry := fun _ => none, caveatCtx := 150, discharges := fun _ => false
@@ -118,6 +127,95 @@ def launderFullForestG : DForest :=
   , [ ({ holder := 9, keep := [Auth.read], parentCap := .endpoint 0 [Auth.read, Auth.write]
        , sub := ⟨ mkAuth goodCred [trueCaveat], .burnA 9 0 0 50, [] ⟩ } : DChild) ] ⟩
 
+/-- Gated forest erasing to the canonical `transferCF` (actor 0, cell 0→1, asset 0). -/
+def transferForestG : DForest :=
+  ⟨ mkAuth goodCred [trueCaveat], .balanceA ⟨0, 0, 1, 30⟩ 0, [] ⟩
+
+/-- Single-node gated forest for production `◇` witnesses: one `emitEvent`, balance-neutral. -/
+def logBumpForestG : DForest :=
+  ⟨ mkAuth goodCred [trueCaveat], .emitEventA 0 0 0 0, [] ⟩
+
+theorem transferForestG_turn_delta_zero (b : AssetId) :
+    turnLedgerDeltaAsset ((lowerForestG transferForestG).map Prod.snd) b = 0 := by
+  simp only [turnLedgerDeltaAsset, lowerForestG, lowerChildrenG, transferForestG, ledgerDeltaAsset,
+    List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, add_zero]
+
+theorem logBumpForestG_turn_delta_zero (b : AssetId) :
+    turnLedgerDeltaAsset ((lowerForestG logBumpForestG).map Prod.snd) b = 0 := by
+  simp only [turnLedgerDeltaAsset, lowerForestG, lowerChildrenG, logBumpForestG, ledgerDeltaAsset,
+    List.map_cons, List.sum_cons, List.map_nil, List.sum_nil, add_zero]
+
+/-- The log-bump forest shares the good-credential root auth with `goodFullForestG`. -/
+theorem logBumpForestG_auth_eq : logBumpForestG.auth = goodFullForestG.auth := rfl
+
+theorem logBumpForestG_credential_valid : credentialValidG logBumpForestG.auth = true := by
+  unfold logBumpForestG credentialValidG mkAuth goodCred
+  decide
+
+theorem logBumpForestG_cap_authority : capAuthorityG logBumpForestG.auth = true := by
+  unfold logBumpForestG capAuthorityG mkAuth
+  exact unchecked_unconstrained_admits (Guard.all []) baseCapCtx (fun _ _ => by simp)
+
+theorem logBumpForestG_caveats_fma0 : caveatsDischarged logBumpForestG.auth fma0 = true := by
+  unfold logBumpForestG caveatsDischarged mkAuth trueCaveat baseCapCtx chainGateG fma0
+  simp only [List.all_cons, List.all_nil, Bool.and_true, GatedCaveat.holds, decide_eq_true_eq]
+  norm_num
+
+theorem logBumpForestG_revocation_fma0 : revocationGate logBumpForestG.auth fma0 = true := by
+  unfold logBumpForestG revocationGate mkAuth fma0
+  simp
+
+/-- Gate legs for the log-bump witness forest at `fma0`. -/
+theorem logBumpForestG_gateOK : gateOK logBumpForestG.auth fma0 = true := by
+  unfold gateOK
+  simp only [Bool.and_eq_true, logBumpForestG_credential_valid, logBumpForestG_cap_authority,
+             logBumpForestG_caveats_fma0, logBumpForestG_revocation_fma0]
+  trivial
+
+theorem transferForestG_auth_eq : transferForestG.auth = logBumpForestG.auth := rfl
+
+theorem transferForestG_gateOK : gateOK transferForestG.auth fma0 = true := by
+  rw [transferForestG_auth_eq]
+  exact logBumpForestG_gateOK
+
+theorem transferForestG_erase_eq :
+    eraseForestG transferForestG = ⟨.balanceA ⟨0, 0, 1, 30⟩ 0, []⟩ := rfl
+
+theorem transferForestG_kernel_commits :
+    (execFullForestA fma0 (eraseForestG transferForestG)).isSome := by decide
+
+theorem transferForestG_commits : (execFullForestG fma0 transferForestG).isSome := by
+  rcases Option.isSome_iff_exists.mp transferForestG_kernel_commits with ⟨s', hs'⟩
+  refine Option.isSome_iff_exists.mpr ⟨s', ?_⟩
+  dsimp [execFullForestG, transferForestG, execFullChildrenG]
+  have hga := (execFullAGated_some_iff fma0 s' (mkAuth goodCred [trueCaveat]) (.balanceA ⟨0, 0, 1, 30⟩ 0)).mpr
+    ⟨transferForestG_gateOK, hs'⟩
+  simpa [hga]
+
+/-- The erased log-bump action commits at `fma0` (authority-free emit on a live cell). -/
+theorem logBump_erase_commits : (execFullForestA fma0 (eraseG logBumpForestG)).isSome := by decide
+
+/-- The production log-bump forest COMMITS at `fma0` (gate + credential + caveat all pass). -/
+theorem logBumpForestG_commits : (execFullForestG fma0 logBumpForestG).isSome := by
+  rcases Option.isSome_iff_exists.mp logBump_erase_commits with ⟨s', hs'⟩
+  refine Option.isSome_iff_exists.mpr ⟨s', ?_⟩
+  dsimp [execFullForestG, logBumpForestG, execFullChildrenG]
+  have hga := (execFullAGated_some_iff fma0 s' (mkAuth goodCred [trueCaveat]) (.emitEventA 0 0 0 0)).mpr
+    ⟨logBumpForestG_gateOK, hs'⟩
+  simpa [hga]
+
+/-- The committed post-state lands exactly one receipt. -/
+theorem logBumpForestG_log_one {s' : RecChainedState}
+    (h : execFullForestG fma0 logBumpForestG = some s') : s'.log.length = 1 := by
+  have herase := execFullForestG_erases fma0 s' logBumpForestG h
+  have hlen : (execFullForestA fma0 (eraseG logBumpForestG)).map (fun s => s.log.length) = some 1 := by
+    decide
+  rw [herase] at hlen
+  simpa using hlen
+
+#guard ((execFullForestG fma0 logBumpForestG).isSome)
+#guard ((execFullForestG fma0 logBumpForestG).map (fun s => s.log.length) == some 1)
+
 #guard ((execFullForestG fmaDeleg goodFullForestG).isSome)
 #guard (turnLedgerDeltaAsset ((lowerForestG goodFullForestG).map Prod.snd) 0) == 0
 #guard (turnLedgerDeltaAsset ((lowerForestG goodFullForestG).map Prod.snd) 1) == 0
@@ -137,6 +235,8 @@ def launderFullForestG : DForest :=
 #guard ((execFullForestA fmaDeleg (eraseG goodFullForestG)).isSome)
 #guard (((execFullForestG fmaDeleg goodFullForestG).map (fun s => s.log.length)
         == (execFullForestA fmaDeleg (eraseG goodFullForestG)).map (fun s => s.log.length)))
+#guard ((execFullForestG fmaDeleg goodFullForestG).map
+        (fun s' => decide (fmaDeleg.log.length < s'.log.length)) == some true)
 
 end StarbridgeGated
 

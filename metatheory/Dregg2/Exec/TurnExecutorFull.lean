@@ -744,12 +744,24 @@ theorem recKMintAsset_authorized (k k' : RecordKernelState) (actor cell : CellId
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
+/-- The three lifecycle discriminants (full §MA-lifecycle commentary below). -/
+def lcLive      : Nat := 0
+def lcSealed    : Nat := 1
+def lcDestroyed : Nat := 3
+
+/-- **`acceptsEffects`** — dregg1's `CellLifecycle::accepts_effects`: `true` only for Live. -/
+def acceptsEffects (k : RecordKernelState) (cell : CellId) : Bool := k.lifecycle cell == lcLive
+
 /-- **The chained per-asset transfer/mint/burn** (thread the receipt chain, newest-first, exactly as
-`recCexec`/`recCMint`/`recCBurn` do for the scalar kernel). -/
+`recCexec`/`recCMint`/`recCBurn` do for the scalar kernel). The transfer arm gates on
+`acceptsEffects` at `t.dst` (R1: no credit into a Sealed/Destroyed cell — dregg1's
+`CellLifecycle::accepts_effects`). -/
 def recCexecAsset (s : RecChainedState) (t : Turn) (a : AssetId) : Option RecChainedState :=
-  match recKExecAsset s.kernel t a with
-  | some k' => some { kernel := k', log := t :: s.log }
-  | none    => none
+  if acceptsEffects s.kernel t.dst then
+    match recKExecAsset s.kernel t a with
+    | some k' => some { kernel := k', log := t :: s.log }
+    | none    => none
+  else none
 
 /-- Chained per-asset mint. -/
 def recCMintAsset (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
@@ -1621,17 +1633,6 @@ lifecycle.rs:95`) in `k.lifecycle`, and bind the death-certificate hash in `k.de
 authority-gated (dregg1 requires `target == action_target` — the self-lifecycle gate — so the cell's own
 authority `stateAuthB actor cell`). All balance-NEUTRAL (edit `lifecycle`/`deathCert`, never `bal`). -/
 
-/-- The three lifecycle discriminants Wave-3 covers (`CellLifecycle::discriminant`, `lifecycle.rs:95`). -/
-def lcLive      : Nat := 0
-def lcSealed    : Nat := 1
-def lcDestroyed : Nat := 3
-
-/-- **`acceptsEffects k cell`** — dregg1's `CellLifecycle::accepts_effects` (`lifecycle.rs:109`): does
-`cell`'s lifecycle state admit new effects? `true` only for Live (Wave-3's modelled non-terminal,
-non-sealed state; Archived `4` would also accept but is out of Wave-3 scope). A Sealed (`1`) or Destroyed
-(`3`) cell is fail-closed REJECTED. The gate the lifecycle transitions read. -/
-def acceptsEffects (k : RecordKernelState) (cell : CellId) : Bool := k.lifecycle cell == lcLive
-
 /-- **`acceptsEffects_eq_cellLifecycleLive` — PROVED.** The live-executor lifecycle gate `acceptsEffects`
 and the kernel-level settle-target gate `cellLifecycleLive` (the D3 escrow/bridge secondary-cell gate) are
 DEFINITIONALLY the same predicate: both read the `lifecycle` side-table and check `== 0` (`lcLive`). This
@@ -1998,17 +1999,84 @@ def createEscrowChainA (s : RecChainedState) (id : Nat) (actor creator recipient
   | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
   | none    => none
 
-/-- **Chained per-asset escrow release** (single-cell credit to the recipient at the record's asset). -/
-def releaseEscrowChainA (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
-  match releaseEscrowKAsset s.kernel id with
-  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
-  | none    => none
+/-- Find an unresolved escrow record by `id` (the kernel's own `find?` predicate). -/
+def findUnresolvedEscrow (k : RecordKernelState) (id : Nat) : Option EscrowRecord :=
+  k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false))
 
-/-- **Chained per-asset escrow refund** (single-cell credit back to the creator at the record's asset). -/
+/-- **The RELEASE settle-actor gate (R2).** The actor must be authorized over the recipient. -/
+def releaseSettleAuthB (k : RecordKernelState) (id : Nat) (actor : CellId) : Bool :=
+  match findUnresolvedEscrow k id with
+  | some r => authorizedB k.caps { actor := actor, src := r.recipient, dst := r.recipient, amt := 0 }
+  | none => false
+
+/-- **The REFUND settle-actor gate (R2).** The actor must be authorized over the creator. -/
+def refundSettleAuthB (k : RecordKernelState) (id : Nat) (actor : CellId) : Bool :=
+  match findUnresolvedEscrow k id with
+  | some r => authorizedB k.caps { actor := actor, src := r.creator, dst := r.creator, amt := 0 }
+  | none => false
+
+/-- **Chained per-asset escrow release** (single-cell credit to the recipient at the record's asset).
+R2-closed: the settling actor must be authorized over the recipient. -/
+def releaseEscrowChainA (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
+  if releaseSettleAuthB s.kernel id actor then
+    match releaseEscrowKAsset s.kernel id with
+    | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+    | none    => none
+  else none
+
+/-- **Chained per-asset escrow refund** (single-cell credit back to the creator at the record's asset).
+R2-closed: the settling actor must be authorized over the creator. -/
 def refundEscrowChainA (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
-  match refundEscrowKAsset s.kernel id with
-  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
-  | none    => none
+  if refundSettleAuthB s.kernel id actor then
+    match refundEscrowKAsset s.kernel id with
+    | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+    | none    => none
+  else none
+
+/-- **`recCexecAsset_factors` — PROVED.** A committed per-asset transfer passed `acceptsEffects` at
+`dst` and factors through `recKExecAsset`. -/
+theorem recCexecAsset_factors {s s' : RecChainedState} (t : Turn) (a : AssetId)
+    (h : recCexecAsset s t a = some s') :
+    acceptsEffects s.kernel t.dst ∧
+    ∃ k', recKExecAsset s.kernel t a = some k' ∧ s' = { kernel := k', log := t :: s.log } := by
+  simp only [recCexecAsset] at h
+  by_cases hadm : acceptsEffects s.kernel t.dst
+  · rw [if_pos hadm] at h
+    rcases hr : recKExecAsset s.kernel t a with ⟨⟩ | ⟨k''⟩
+    · rw [hr] at h; exact absurd h (by simp)
+    · rw [hr] at h; simp at h
+      exact ⟨hadm, ⟨k'', rfl, h.symm⟩⟩
+  · rw [if_neg hadm] at h; exact absurd h (by simp)
+
+/-- **`releaseEscrowChainA_factors` — PROVED.** A committed release passed settle-actor auth. -/
+theorem releaseEscrowChainA_factors {s s' : RecChainedState} (id : Nat) (actor : CellId)
+    (h : releaseEscrowChainA s id actor = some s') :
+    releaseSettleAuthB s.kernel id actor ∧
+    ∃ k', releaseEscrowKAsset s.kernel id = some k' ∧
+      s' = { kernel := k', log := escrowReceiptA actor :: s.log } := by
+  simp only [releaseEscrowChainA] at h
+  by_cases hg : releaseSettleAuthB s.kernel id actor
+  · rw [if_pos hg] at h
+    rcases hr : releaseEscrowKAsset s.kernel id with ⟨⟩ | ⟨k''⟩
+    · rw [hr] at h; exact absurd h (by simp)
+    · rw [hr] at h; simp at h
+      exact ⟨hg, ⟨k'', rfl, h.symm⟩⟩
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`refundEscrowChainA_factors` — PROVED.** A committed refund passed settle-actor auth. -/
+theorem refundEscrowChainA_factors {s s' : RecChainedState} (id : Nat) (actor : CellId)
+    (h : refundEscrowChainA s id actor = some s') :
+    refundSettleAuthB s.kernel id actor ∧
+    ∃ k', refundEscrowKAsset s.kernel id = some k' ∧
+      s' = { kernel := k', log := escrowReceiptA actor :: s.log } := by
+  simp only [refundEscrowChainA] at h
+  by_cases hg : refundSettleAuthB s.kernel id actor
+  · rw [if_pos hg] at h
+    rcases hr : refundEscrowKAsset s.kernel id with ⟨⟩ | ⟨k''⟩
+    · rw [hr] at h; exact absurd h (by simp)
+    · rw [hr] at h; simp at h
+      exact ⟨hg, ⟨k'', rfl, h.symm⟩⟩
+  · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **Chained note-create** — grow the commitment SET (the §8 range-proof portal is the THEOREM-level
 hypothesis, like bridgeMint's foreign finality; the ledger move is the grow-only insert). Always
@@ -3637,17 +3705,20 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
   | balanceA t a =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCexecAsset at h
-      cases hx : recKExecAsset s.kernel t a with
-      | none => rw [hx] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hx] at h; simp only [Option.some.injEq] at h; subst h
-          show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
-          rw [show escrowHeldAsset k' b = escrowHeldAsset s.kernel b from by
-                rw [show k' = { s.kernel with bal := recTransferBal s.kernel.bal t.src t.dst a t.amt } from by
-                      unfold recKExecAsset at hx; split at hx
-                      · simpa only [Option.some.injEq] using hx.symm
-                      · exact absurd hx (by simp)]; rfl,
-              recKExecAsset_conserves_per_asset s.kernel k' t a hx b]; ring
+      by_cases hadm : acceptsEffects s.kernel t.dst
+      · rw [if_pos hadm] at h
+        cases hx : recKExecAsset s.kernel t a with
+        | none => rw [hx] at h; exact absurd h (by simp)
+        | some k' =>
+            rw [hx] at h; simp only [Option.some.injEq] at h; subst h
+            show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
+            rw [show escrowHeldAsset k' b = escrowHeldAsset s.kernel b from by
+                  rw [show k' = { s.kernel with bal := recTransferBal s.kernel.bal t.src t.dst a t.amt } from by
+                        unfold recKExecAsset at hx; split at hx
+                        · simpa only [Option.some.injEq] using hx.symm
+                        · exact absurd hx (by simp)]; rfl,
+                recKExecAsset_conserves_per_asset s.kernel k' t a hx b]; ring
+      · rw [if_neg hadm] at h; exact absurd h (by simp)
   | delegate del rec t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCDelegate at h
@@ -3826,21 +3897,27 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
   | releaseEscrowA id actor =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [releaseEscrowChainA] at h
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-          show recTotalAssetWithEscrow k' b = _ + 0
-          rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      by_cases hg : releaseSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : releaseEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+            show recTotalAssetWithEscrow k' b = _ + 0
+            rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   | refundEscrowA id actor =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [refundEscrowChainA] at h
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-          show recTotalAssetWithEscrow k' b = _ + 0
-          rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      by_cases hg : refundSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : refundEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+            show recTotalAssetWithEscrow k' b = _ + 0
+            rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   | createObligationA id actor obligor beneficiary asset stake =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       rw [createEscrowChainA_combined_neutral b h, add_zero]
@@ -3848,22 +3925,28 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
   | fulfillObligationA id actor =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [refundEscrowChainA] at h
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-          show recTotalAssetWithEscrow k' b = _ + 0
-          rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      by_cases hg : refundSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : refundEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+            show recTotalAssetWithEscrow k' b = _ + 0
+            rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   -- slash = the per-asset escrow RELEASE (stake → beneficiary/recipient): combined-conserving.
   | slashObligationA id actor =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [releaseEscrowChainA] at h
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-          show recTotalAssetWithEscrow k' b = _ + 0
-          rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      by_cases hg : releaseSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : releaseEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+            show recTotalAssetWithEscrow k' b = _ + 0
+            rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   | noteSpendA nf actor =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [noteSpendChainA] at h
@@ -3891,21 +3974,27 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
   | releaseCommittedEscrowA id actor =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [releaseEscrowChainA] at h
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-          show recTotalAssetWithEscrow k' b = _ + 0
-          rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      by_cases hg : releaseSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : releaseEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+            show recTotalAssetWithEscrow k' b = _ + 0
+            rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   | refundCommittedEscrowA id actor =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [refundEscrowChainA] at h
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-          show recTotalAssetWithEscrow k' b = _ + 0
-          rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      by_cases hg : refundSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : refundEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+            show recTotalAssetWithEscrow k' b = _ + 0
+            rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   -- §MA-bridge: lock/cancel are COMBINED-conserving (combined delta `0`); finalize is the disclosed
   -- OUTFLOW (combined DROPS by `-amount` at the disclosed asset — the value LEFT for the other chain).
   | bridgeLockA id actor originator destination asset amount =>
@@ -4247,9 +4336,12 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
   | queueAtomicTxA actor ops => exact absurd rfl (hnb actor ops)
   | balanceA t a =>
       simp only [execFullA, recCexecAsset, fullReceiptA] at h ⊢
-      cases hx : recKExecAsset s.kernel t a with
-      | none => rw [hx] at h; exact absurd h (by simp)
-      | some k' => rw [hx] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      by_cases hadm : acceptsEffects s.kernel t.dst
+      · rw [if_pos hadm] at h
+        cases hx : recKExecAsset s.kernel t a with
+        | none => rw [hx] at h; exact absurd h (by simp)
+        | some k' => rw [hx] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      · rw [if_neg hadm] at h; exact absurd h (by simp)
   | delegate del rec t =>
       simp only [execFullA, recCDelegate, fullReceiptA] at h ⊢
       cases hd : recKDelegate s.kernel del rec t with
@@ -4339,14 +4431,20 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
       | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
   | releaseEscrowA id actor =>
       simp only [execFullA, releaseEscrowChainA, fullReceiptA] at h ⊢
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      by_cases hg : releaseSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : releaseEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   | refundEscrowA id actor =>
       simp only [execFullA, refundEscrowChainA, fullReceiptA] at h ⊢
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      by_cases hg : refundSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : refundEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   | createObligationA id actor obligor beneficiary asset stake =>
       simp only [execFullA, createEscrowChainA, fullReceiptA] at h ⊢
       cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
@@ -4354,14 +4452,20 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
       | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
   | fulfillObligationA id actor =>
       simp only [execFullA, refundEscrowChainA, fullReceiptA] at h ⊢
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      by_cases hg : refundSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : refundEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   | slashObligationA id actor =>
       simp only [execFullA, releaseEscrowChainA, fullReceiptA] at h ⊢
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      by_cases hg : releaseSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : releaseEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   | noteSpendA nf actor =>
       simp only [execFullA, noteSpendChainA, fullReceiptA] at h ⊢
       cases hk : noteSpendNullifier s.kernel nf with
@@ -4381,14 +4485,20 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
       · rw [if_neg hp] at h; exact absurd h (by simp)
   | releaseCommittedEscrowA id actor =>
       simp only [execFullA, releaseEscrowChainA, fullReceiptA] at h ⊢
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      by_cases hg : releaseSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : releaseEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   | refundCommittedEscrowA id actor =>
       simp only [execFullA, refundEscrowChainA, fullReceiptA] at h ⊢
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      by_cases hg : refundSettleAuthB s.kernel id actor
+      · rw [if_pos hg] at h
+        cases hk : refundEscrowKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      · rw [if_neg hg] at h; exact absurd h (by simp)
   -- §MA-bridge: each bridge leg appends exactly its `escrowReceiptA` (the metadata clock row).
   | bridgeLockA id actor originator destination asset amount =>
       simp only [execFullA, bridgeLockChainA, fullReceiptA] at h ⊢
@@ -4573,9 +4683,41 @@ theorem execFullA_obsadvance (s s' : RecChainedState) (fa : FullActionA)
 theorem execFullA_balance_authorized (s s' : RecChainedState) (t : Turn) (a : AssetId)
     (h : execFullA s (.balanceA t a) = some s') : authorizedB s.kernel.caps t = true := by
   simp only [execFullA, recCexecAsset] at h
-  cases hx : recKExecAsset s.kernel t a with
-  | none => rw [hx] at h; exact absurd h (by simp)
-  | some k' => exact recKExecAsset_authorized s.kernel k' t a hx
+  by_cases hadm : acceptsEffects s.kernel t.dst
+  · rw [if_pos hadm] at h
+    cases hx : recKExecAsset s.kernel t a with
+    | none => rw [hx] at h; exact absurd h (by simp)
+    | some k' => exact recKExecAsset_authorized s.kernel k' t a hx
+  · rw [if_neg hadm] at h; exact absurd h (by simp)
+
+/-- **Per-asset transfer destination liveness — PROVED (R1).** A committed transfer credits only a
+Live destination cell (`acceptsEffects` at `t.dst`). -/
+theorem execFullA_balance_dst_live (s s' : RecChainedState) (t : Turn) (a : AssetId)
+    (h : execFullA s (.balanceA t a) = some s') : acceptsEffects s.kernel t.dst = true := by
+  simp only [execFullA, recCexecAsset] at h
+  by_cases hadm : acceptsEffects s.kernel t.dst
+  · exact hadm
+  · rw [if_neg hadm] at h; exact absurd h (by simp)
+
+/-- **Escrow release settle-actor authorized — PROVED (R2).** A committed release proves the actor
+passed `releaseSettleAuthB` (authorized over the recipient). -/
+theorem execFullA_releaseEscrowA_authorized (s s' : RecChainedState) (id : Nat) (actor : CellId)
+    (h : execFullA s (.releaseEscrowA id actor) = some s') :
+    releaseSettleAuthB s.kernel id actor = true := by
+  simp only [execFullA, releaseEscrowChainA] at h
+  by_cases hg : releaseSettleAuthB s.kernel id actor
+  · exact hg
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **Escrow refund settle-actor authorized — PROVED (R2).** A committed refund proves the actor
+passed `refundSettleAuthB` (authorized over the creator). -/
+theorem execFullA_refundEscrowA_authorized (s s' : RecChainedState) (id : Nat) (actor : CellId)
+    (h : execFullA s (.refundEscrowA id actor) = some s') :
+    refundSettleAuthB s.kernel id actor = true := by
+  simp only [execFullA, refundEscrowChainA] at h
+  by_cases hg : refundSettleAuthB s.kernel id actor
+  · exact hg
+  · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **Per-asset delegation grounds — PROVED.** A committed per-asset-turn delegation HOLDS the
 Granovetter source edge `delegator ⟶ ⟨t,()⟩` on `execGraph` (REUSES the same `recCDelegate`/
@@ -5259,7 +5401,7 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
   (s.log.length < s'.log.length) ∧
   -- KindObligation: the kind-specific authority/graph/disclosure content (asset-orthogonal).
   (match fa with
-   | .balanceA t _       => authorizedB s.kernel.caps t = true
+   | .balanceA t _       => authorizedB s.kernel.caps t = true ∧ acceptsEffects s.kernel t.dst = true
    | .delegate del rec t =>
        Dregg2.Spec.execGraph s.kernel.caps del
          (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
@@ -5384,9 +5526,11 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .createEscrowA _ actor creator recipient _ amount =>
        authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true ∧
        effectLinearity .createEscrow = LinearityClass.Conservative
-   | .releaseEscrowA _ _ =>
+   | .releaseEscrowA id actor =>
+       releaseSettleAuthB s.kernel id actor = true ∧
        effectLinearity .releaseEscrow = LinearityClass.Conservative
-   | .refundEscrowA _ _ =>
+   | .refundEscrowA id actor =>
+       refundSettleAuthB s.kernel id actor = true ∧
        effectLinearity .refundEscrow = LinearityClass.Conservative
    | .createObligationA _ actor obligor beneficiary _ stake =>
        authorizedB s.kernel.caps { actor := actor, src := obligor, dst := beneficiary, amt := stake } = true ∧
@@ -5394,9 +5538,11 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    -- fulfill/slash SETTLE the parked obligation record back onto the ledger (combined-conserving): the
    -- `Conservative` coloring. The obligor-only (fulfill) / post-deadline (slash) gates are the
    -- §8/theorem-layer carriers (block-height + obligor identity), off this executable layer.
-   | .fulfillObligationA _ _ =>
+   | .fulfillObligationA id actor =>
+       refundSettleAuthB s.kernel id actor = true ∧
        effectLinearity .fulfillObligation = LinearityClass.Conservative
-   | .slashObligationA _ _ =>
+   | .slashObligationA id actor =>
+       releaseSettleAuthB s.kernel id actor = true ∧
        effectLinearity .slashObligation = LinearityClass.Conservative
    | .noteSpendA nf _ =>
        -- anti-replay: the spent nullifier is now IN the set (a subsequent spend fails-closed).
@@ -5411,9 +5557,11 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
        hidingProof = true ∧
        authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true ∧
        effectLinearity .createCommittedEscrow = LinearityClass.Conservative
-   | .releaseCommittedEscrowA _ _ =>
+   | .releaseCommittedEscrowA id actor =>
+       releaseSettleAuthB s.kernel id actor = true ∧
        effectLinearity .releaseCommittedEscrow = LinearityClass.Conservative
-   | .refundCommittedEscrowA _ _ =>
+   | .refundCommittedEscrowA id actor =>
+       refundSettleAuthB s.kernel id actor = true ∧
        effectLinearity .refundCommittedEscrow = LinearityClass.Conservative
    -- §MA-bridge: LOCK carries the REAL `authorizedB` originator gate (over the debited cell) ∧ the
    -- `Conservative` coloring (combined-conserving lock). FINALIZE carries the genuine DISCLOSED-OUTFLOW
@@ -5531,7 +5679,8 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   refine ⟨fun b => execFullA_ledger_per_asset s s' fa b h,
           execFullA_chainlink s s' fa h, execFullA_obsadvance s s' fa h, ?_⟩
   cases fa with
-  | balanceA t a => exact execFullA_balance_authorized s s' t a h
+  | balanceA t a =>
+      exact ⟨execFullA_balance_authorized s s' t a h, execFullA_balance_dst_live s s' t a h⟩
   | delegate del rec t =>
       exact ⟨execFullA_delegate_grounds s s' del rec t h, execFullA_delegate_addEdge s s' del rec t h⟩
   | revoke holder t => exact execFullA_revoke_removeEdge s s' holder t h
@@ -5604,12 +5753,16 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   -- coloring, and the noteSpend/noteCreate SET-membership witness.
   | createEscrowA id actor creator recipient asset amount =>
       exact ⟨execFullA_createEscrowA_authorized s s' id actor creator recipient asset amount h, rfl⟩
-  | releaseEscrowA id actor => exact rfl
-  | refundEscrowA id actor => exact rfl
+  | releaseEscrowA id actor =>
+      exact ⟨execFullA_releaseEscrowA_authorized s s' id actor h, rfl⟩
+  | refundEscrowA id actor =>
+      exact ⟨execFullA_refundEscrowA_authorized s s' id actor h, rfl⟩
   | createObligationA id actor obligor beneficiary asset stake =>
       exact ⟨execFullA_createObligationA_authorized s s' id actor obligor beneficiary asset stake h, rfl⟩
-  | fulfillObligationA id actor => exact rfl
-  | slashObligationA id actor => exact rfl
+  | fulfillObligationA id actor =>
+      exact ⟨execFullA_refundEscrowA_authorized s s' id actor h, rfl⟩
+  | slashObligationA id actor =>
+      exact ⟨execFullA_releaseEscrowA_authorized s s' id actor h, rfl⟩
   | noteSpendA nf actor => exact ⟨execFullA_noteSpendA_inserts s s' nf actor h, rfl⟩
   | noteCreateA cm actor => exact ⟨execFullA_noteCreateA_inserts s s' cm actor h, rfl⟩
   | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
@@ -5617,8 +5770,10 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
       simp only [execFullA] at h
       obtain ⟨hhide, hauth⟩ := createCommittedEscrowChainA_authorized h
       exact ⟨hhide, hauth, rfl⟩
-  | releaseCommittedEscrowA id actor => exact rfl
-  | refundCommittedEscrowA id actor => exact rfl
+  | releaseCommittedEscrowA id actor =>
+      exact ⟨execFullA_releaseEscrowA_authorized s s' id actor h, rfl⟩
+  | refundCommittedEscrowA id actor =>
+      exact ⟨execFullA_refundEscrowA_authorized s s' id actor h, rfl⟩
   -- §MA-bridge: discharge LOCK's (authority ∧ Conservative coloring), FINALIZE's (disclosed-OUTFLOW
   -- move ∧ coloring), CANCEL's (refund-conservation ∧ coloring).
   | bridgeLockA id actor originator destination asset amount =>
@@ -6048,7 +6203,7 @@ def fmaS : RecChainedState :=
                                                 ("status", .int 0), ("permissions", .int 0),
                                                 ("verification_key", .int 0)]
                          else .record [("balance", .int 0)]
-        caps := fun _ => []
+        caps := fun c => if c = 0 then [Cap.node 0, Cap.node 1] else []
         bal := fun c a => if c = 0 then (if a = 0 then 100 else if a = 1 then 7 else 0)
                           else if c = 1 then (if a = 0 then 5 else 0) else 0 }
     log := [] }
@@ -6407,7 +6562,7 @@ def fmaW3 : RecChainedState :=
 -- CreateSealPair: GRANT a sealer cap to holder 0 AND an unsealer cap to holder 1 — TWO real c-list
 -- grants (NOT a `seal_pair := 1` flag). Authority over `sealerHolder` (cell 0 owns itself):
 #guard ((execFullA fmaS (.createSealPairA 5 0 0 1)).isSome)  --  true
-#guard ((execFullA fmaS (.createSealPairA 5 0 0 1)).map (fun s => (s.kernel.caps 0).length)) == some 1  --  some 1 (sealer cap granted)
+#guard ((execFullA fmaS (.createSealPairA 5 0 0 1)).map (fun s => (s.kernel.caps 0).length)) == some 3  --  some 3 (2 settle-auth caps + sealer grant)
 #guard ((execFullA fmaS (.createSealPairA 5 0 0 1)).map (fun s => (s.kernel.caps 1).length)) == some 1  --  some 1 (unsealer cap granted)
 #guard ((execFullA fmaS (.createSealPairA 5 0 0 1)).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7) (bal-NEUTRAL)

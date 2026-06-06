@@ -86,9 +86,10 @@ def matchPred (id : Nat) : EscrowRecord → Bool := fun r => decide (r.id = id �
 /-- The full admissibility guard `refundEscrowKAsset` checks, as a `Prop` carrying the found record:
 an unresolved record `r` with this `id` EXISTS, and its `creator` (the refund target) is a LIVE
 account whose lifecycle admits effects. -/
-def admitRefund (k : RecordKernelState) (id : Nat) (r : EscrowRecord) : Prop :=
+def admitRefund (k : RecordKernelState) (id : Nat) (actor : CellId) (r : EscrowRecord) : Prop :=
   k.escrows.find? (matchPred id) = some r
     ∧ r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true
+    ∧ refundSettleAuthB k id actor = true
 
 /-! ## §2 — the post-state helper `settleEscrowRawAsset`, validated DECLARATIVELY.
 
@@ -145,7 +146,7 @@ is `escrowReceiptA actor :: st.log`; and every one of the 15 other RecordKernelS
 unchanged. -/
 def RefundEscrowSpec (st : RecChainedState) (id : Nat) (actor : CellId) (st' : RecChainedState) : Prop :=
   ∃ r : EscrowRecord,
-    admitRefund st.kernel id r
+    admitRefund st.kernel id actor r
     ∧ st'.kernel.bal = recBalCreditCell st.kernel.bal r.creator r.asset r.amount
     ∧ st'.kernel.escrows = markResolved st.kernel.escrows id
     ∧ st'.log = escrowReceiptA actor :: st.log
@@ -174,52 +175,53 @@ refund executor commits into `st'` IFF `st'` is EXACTLY the spec'd full post-sta
 theorem refundEscrowChainA_iff_spec (st : RecChainedState) (id : Nat) (actor : CellId)
     (st' : RecChainedState) :
     refundEscrowChainA st id actor = some st' ↔ RefundEscrowSpec st id actor st' := by
-  unfold refundEscrowChainA RefundEscrowSpec admitRefund refundEscrowKAsset
-  cases hf : st.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | none =>
-    dsimp only
-    constructor
-    · intro h; exact absurd h (by simp)
-    · rintro ⟨r, ⟨hfind, _⟩, _⟩
-      -- the spec's `find? = some r` contradicts `find? = none`
-      rw [show (fun r => decide (r.id = id ∧ r.resolved = false))
-            = matchPred id from rfl] at hf
-      rw [hf] at hfind; exact absurd hfind (by simp)
-  | some r =>
-    dsimp only
-    by_cases hg : r.creator ∈ st.kernel.accounts ∧ cellLifecycleLive st.kernel r.creator = true
-    · rw [if_pos hg]
-      constructor
-      · intro h
-        simp only [Option.some.injEq] at h
-        subst h
-        refine ⟨r, ⟨?_, hg.1, hg.2⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-          rfl, rfl, rfl, rfl, rfl⟩
-        rw [show (fun r => decide (r.id = id ∧ r.resolved = false)) = matchPred id from rfl] at hf
-        exact hf
-      · rintro ⟨r', ⟨hfind, _⟩, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12,
-          h13, h14, h15⟩
-        -- the spec's found record is THIS `r` (find? is functional)
-        rw [show (fun r => decide (r.id = id ∧ r.resolved = false)) = matchPred id from rfl] at hf
-        rw [hf] at hfind
-        simp only [Option.some.injEq] at hfind
-        subst hfind
-        -- reconstruct st' field-by-field from the spec
-        obtain ⟨k', l'⟩ := st'
-        obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-        simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-        subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-        rfl
-    · rw [if_neg hg]
+  unfold refundEscrowChainA RefundEscrowSpec admitRefund refundEscrowKAsset refundSettleAuthB
+         findUnresolvedEscrow
+  by_cases hauth : refundSettleAuthB st.kernel id actor
+  · cases hf : st.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+    | none =>
+      dsimp only [hauth, if_pos hauth]
       constructor
       · intro h; exact absurd h (by simp)
-      · rintro ⟨r', ⟨hfind, hlive, hlc⟩, _⟩
-        -- the spec's found record is THIS `r`, so its creator passes the gate — contradiction with hg
+      · rintro ⟨r, ⟨hfind, _⟩, _⟩
         rw [show (fun r => decide (r.id = id ∧ r.resolved = false)) = matchPred id from rfl] at hf
-        rw [hf] at hfind
-        simp only [Option.some.injEq] at hfind
-        subst hfind
-        exact absurd ⟨hlive, hlc⟩ hg
+        rw [hf] at hfind; exact absurd hfind (by simp)
+    | some r =>
+      dsimp only [hauth, if_pos hauth]
+      by_cases hg : r.creator ∈ st.kernel.accounts ∧ cellLifecycleLive st.kernel r.creator = true
+      · rw [if_pos hg]
+        constructor
+        · intro h
+          simp only [Option.some.injEq] at h
+          subst h
+          refine ⟨r, ⟨?_, hg.1, hg.2, hauth⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+            rfl, rfl, rfl, rfl, rfl⟩
+          rw [show (fun r => decide (r.id = id ∧ r.resolved = false)) = matchPred id from rfl] at hf
+          exact hf
+        · rintro ⟨r', ⟨hfind, _, _, _⟩, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12,
+            h13, h14, h15⟩
+          rw [show (fun r => decide (r.id = id ∧ r.resolved = false)) = matchPred id from rfl] at hf
+          rw [hf] at hfind
+          simp only [Option.some.injEq] at hfind
+          subst hfind
+          obtain ⟨k', l'⟩ := st'
+          obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
+          simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+          subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+          rfl
+      · rw [if_neg hg]
+        constructor
+        · intro h; exact absurd h (by simp)
+        · rintro ⟨r', ⟨hfind, hlive, hlc, _⟩, _⟩
+          rw [show (fun r => decide (r.id = id ∧ r.resolved = false)) = matchPred id from rfl] at hf
+          rw [hf] at hfind
+          simp only [Option.some.injEq] at hfind
+          subst hfind
+          exact absurd ⟨hlive, hlc⟩ hg
+  · dsimp only [hauth, if_neg hauth]
+    constructor
+    · intro h; exact absurd h (by simp)
+    · rintro ⟨r, ⟨_, _, _, hauth'⟩, _⟩; exact absurd hauth' hauth
 
 /-- **`execFullA_refundEscrowA_iff_spec` — the UNIFIED-ACTION executor corner (refund variant).** The
 action executor `execFullA` dispatches `.refundEscrowA id actor` to `refundEscrowChainA s id actor`, so
@@ -290,19 +292,20 @@ theorem refundEscrow_rejects_missing (st : RecChainedState) (id : Nat) (actor : 
     (hbad : st.kernel.escrows.find? (matchPred id) = none) :
     execFullA st (.refundEscrowA id actor) = none := by
   show refundEscrowChainA st id actor = none
-  unfold refundEscrowChainA refundEscrowKAsset
-  rw [show (fun r => decide (r.id = id ∧ r.resolved = false)) = matchPred id from rfl, hbad]
+  unfold refundEscrowChainA refundSettleAuthB findUnresolvedEscrow refundEscrowKAsset
+  rw [show (fun r => decide (r.id = id ∧ r.resolved = false)) = matchPred id from rfl, hbad, if_neg]
 
 /-- **`refundEscrow_rejects_dead_creator` — PROVED.** The found record's `creator` (refund target) is
 NOT a live account ⇒ the refund does NOT commit (the settle-liveness leg fails) — crediting a
 non-account would silently DESTROY value. -/
 theorem refundEscrow_rejects_dead_creator (st : RecChainedState) (id : Nat) (actor : CellId)
     (r : EscrowRecord) (hr : st.kernel.escrows.find? (matchPred id) = some r)
+    (hauth : refundSettleAuthB st.kernel id actor = true)
     (hbad : r.creator ∉ st.kernel.accounts) :
     execFullA st (.refundEscrowA id actor) = none := by
   show refundEscrowChainA st id actor = none
-  unfold refundEscrowChainA refundEscrowKAsset
-  rw [show (fun r => decide (r.id = id ∧ r.resolved = false)) = matchPred id from rfl, hr]
+  unfold refundEscrowChainA refundSettleAuthB findUnresolvedEscrow refundEscrowKAsset
+  rw [show (fun r => decide (r.id = id ∧ r.resolved = false)) = matchPred id from rfl, hr, hauth, if_pos hauth]
   dsimp only
   rw [if_neg (by rintro ⟨h, _⟩; exact hbad h)]
 

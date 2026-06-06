@@ -118,7 +118,7 @@ theorem publish_preserves_WF (s s' : SubState) (hwf : s.WF) (h : publish s = som
   unfold publish at h
   by_cases hc : s.inFlight < s.capacity
   · rw [if_pos hc] at h
-    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨rfl⟩ := h
     simp only [SubState.WF, SubState.inFlight] at hwf hc ⊢
     omega
   · rw [if_neg hc] at h; exact absurd h (by simp)
@@ -131,7 +131,7 @@ theorem consume_preserves_WF (s s' : SubState) (hwf : s.WF) (h : consume s = som
   unfold consume at h
   by_cases hc : s.tail < s.head
   · rw [if_pos hc] at h
-    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨rfl⟩ := h
     simp only [SubState.WF] at hwf ⊢
     omega
   · rw [if_neg hc] at h; exact absurd h (by simp)
@@ -439,7 +439,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKExecAsset s.kernel t a with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold recKExecAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -449,20 +449,20 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKDelegate s.kernel del rec t with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold recKDelegate at hk; split at hk
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
   | revoke holder t =>
       simp only [execFullA, recCRevoke] at h
-      option_inj at h; subst h; exact hwf
+      obtain ⟨rfl⟩ := h; exact hwf
   | mintA actor cell a amt =>
       simp only [execFullA, recCMintAsset] at h
       cases hk : recKMintAsset s.kernel actor cell a amt with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold recKMintAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -472,7 +472,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKBurnAsset s.kernel actor cell a amt with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold recKBurnAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -505,7 +505,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKDelegate s.kernel intro rec t with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold recKDelegate at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -515,26 +515,26 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKDelegateAtten s.kernel del rec t keep with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold recKDelegateAtten at hk; split at hk
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
   | attenuateA actor idx keep =>
       simp only [execFullA, attenuateStepA] at h
-      option_inj at h; subst h; exact hwf
+      obtain ⟨rfl⟩ := h; exact hwf
   | dropRefA holder t =>
       simp only [execFullA, recCRevoke] at h
-      option_inj at h; subst h; exact hwf
+      obtain ⟨rfl⟩ := h; exact hwf
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevoke] at h
-      option_inj at h; subst h; exact hwf
+      obtain ⟨rfl⟩ := h; exact hwf
   | validateHandoffA intro rec t =>
       simp only [execFullA, recCDelegate] at h
       cases hk : recKDelegate s.kernel intro rec t with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold recKDelegate at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -572,7 +572,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKMintAsset s.kernel actor cell a value with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold recKMintAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -583,7 +583,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -593,7 +593,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : releaseEscrowKAsset s.kernel id with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold releaseEscrowKAsset settleEscrowRawAsset at hk
           split at hk
@@ -606,7 +606,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : refundEscrowKAsset s.kernel id with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold refundEscrowKAsset settleEscrowRawAsset at hk
           split at hk
@@ -619,7 +619,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -630,7 +630,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : refundEscrowKAsset s.kernel id with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold refundEscrowKAsset settleEscrowRawAsset at hk
           split at hk
@@ -643,7 +643,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : releaseEscrowKAsset s.kernel id with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold releaseEscrowKAsset settleEscrowRawAsset at hk
           split at hk
@@ -657,20 +657,20 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : noteSpendNullifier s.kernel nf with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold noteSpendNullifier at hk; split at hk
           · exact absurd hk (by simp)
           · injection hk with hk; subst hk; rfl
   | noteCreateA cm actor =>
       simp only [execFullA, noteCreateChainA, noteCreateCommitment] at h
-      option_inj at h; subst h; exact hwf
+      obtain ⟨rfl⟩ := h; exact hwf
   | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
       simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
       · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; option_inj at h; subst h
+            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
             refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
             unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
             · injection hk with hk; subst hk; rfl
@@ -681,7 +681,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : releaseEscrowKAsset s.kernel id with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold releaseEscrowKAsset settleEscrowRawAsset at hk
           split at hk
@@ -694,7 +694,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : refundEscrowKAsset s.kernel id with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold refundEscrowKAsset settleEscrowRawAsset at hk
           split at hk
@@ -708,7 +708,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; option_inj at h; subst h
+          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
           refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
           unfold bridgeLockKAsset createBridgeRawAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -719,7 +719,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; option_inj at h; subst h
+            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
             refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
             unfold bridgeFinalizeKAsset bridgeFinalizeRawAsset at hk
             split at hk
@@ -734,7 +734,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : bridgeCancelKAsset s.kernel id with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; option_inj at h; subst h
+            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
             refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
             unfold bridgeCancelKAsset settleEscrowRawAsset at hk
             split at hk
@@ -786,7 +786,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : queueAllocateK s.kernel id actor cap with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; option_inj at h; subst h
+            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
             -- queueAllocateK conses a FRESH queue with an EMPTY buffer (`0 ≤ cap`) onto `queues`.
             unfold queueAllocateK at hk
             split at hk
@@ -801,7 +801,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; option_inj at h; subst h
+            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
             exact queueEnqueueDepositK_subWF hk hwf
       · exact absurd h (by simp)
   | queueDequeueA id actor cell depId deposit =>
@@ -812,7 +812,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
         | some kp =>
             rw [hk] at h
             obtain ⟨k', mhd⟩ := kp
-            option_inj at h; subst h
+            obtain ⟨rfl⟩ := h
             exact queueDequeueRefundK_subWF hk hwf
       · exact absurd h (by simp)
   | queueResizeA id newCap actor cell =>
@@ -821,7 +821,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : queueResizeK s.kernel id newCap with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; option_inj at h; subst h
+            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
             -- queueResizeK gate is `len ≤ newCap`, so the resized record stays within (the NEW) capacity.
             unfold queueResizeK at hk
             cases hf : findQueue s.kernel.queues id with
@@ -857,7 +857,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissExportK s.kernel sw exporter target rights with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; option_inj at h; subst h
+            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
             refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
             unfold swissExportK at hk; split at hk
             · exact absurd hk (by simp)
@@ -871,7 +871,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissEnlivenK s.kernel sw claimed with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; option_inj at h; subst h
+            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
             refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
             unfold swissEnlivenK at hk; split at hk
             · exact absurd hk (by simp)
@@ -885,7 +885,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissHandoffK s.kernel sw certHash with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; option_inj at h; subst h
+            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
             refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
             unfold swissHandoffK at hk; split at hk
             · exact absurd hk (by simp)
@@ -897,7 +897,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissDropK s.kernel sw with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; option_inj at h; subst h
+            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
             refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
             unfold swissDropK at hk; split at hk
             · exact absurd hk (by simp)
