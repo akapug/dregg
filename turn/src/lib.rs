@@ -1,5 +1,29 @@
 //! `dregg-turn`: Call-forest transaction model for atomic agent execution turns.
 //!
+//! # ⚠️ LEGACY dregg1 — pending the verified-Lean SWAP
+//!
+//! **This crate is the LEGACY dregg1 Rust executor. It is NOT the source of
+//! truth for dregg's semantics.** The verified semantics live in Lean under
+//! `metatheory/Dregg2/` (the `CellProgram`, `Authorization`, `Caveat`,
+//! `Predicate`, effect-executor and circuit-descriptor definitions). This
+//! Rust code is hand-written, UNVERIFIED, and is the thing dregg2 *replaces*.
+//!
+//! It remains here because the running devnet node (`dregg-node` →
+//! `dregg-turn`) currently EXECUTES on this Rust executor. It is load-bearing
+//! UNTIL THE SWAP (cutover to the verified Lean executor via the
+//! `dregg-lean-ffi` bridge / `dregg_exec_full_forest_auth`), tracked in
+//! `metatheory/docs/rebuild/SUCCESSOR-ROADMAP.md` and
+//! `metatheory/Dregg2/Exec/FullForestAuth.lean`.
+//!
+//! While the swap is in flight, [`lean_shadow`] runs the verified Lean
+//! executor as a *shadow* (gated on `DREGG_LEAN_SHADOW=1`) and compares its
+//! commit decision against this Rust path — that comparison is the
+//! differential harness validating the eventual cutover. The Lean side is the
+//! oracle; this Rust side is the subject under test, never the reverse.
+//!
+//! Do NOT read this crate as "the dregg semantics". Read `metatheory/Dregg2/`.
+//! See `metatheory/docs/rebuild/DREGG1-TO-DREGG2.md`.
+//!
 //! # Trust Model
 //!
 //! This crate spans TWO trust levels with a clear boundary:
