@@ -631,6 +631,16 @@ theorem decodeE_emittedTransfer :
     decodeE emittedTransfer = transferCircuit :=
   decodeE_emit transferAirName transferTraceWidth transferCircuit
 
+/-- **`transferDescriptorJson`** — the canonical wire string for the REAL emitted transfer circuit,
+via the general `CircuitEmit.emitDescriptorJson`. THIS is the byte string the Rust
+`lean_descriptor_air::parse_descriptor` decoder ingests to drive the Plonky3 prover on the
+genuine Lean-derived `transferCircuit` (not a hand-coded mirror). Copy this exact string into the
+Rust `lean_emitted_transfer_roundtrip` golden. -/
+def transferDescriptorJson : String := emitDescriptorJson emittedTransfer
+
+-- Print the transfer wire bytes the Rust decoder parses (the golden input for the Rust round-trip).
+#eval transferDescriptorJson
+
 -- Sanity: the emitted descriptor has the nine gates and eleven wires.
 #guard emittedTransfer.constraints.length == 9
 #guard emittedTransfer.traceWidth == 11
