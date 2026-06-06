@@ -278,97 +278,141 @@ theorem mac_floor_sound {Key Msg Tag : Type u} [K : MacKernelE Key Msg Tag]
 
 /-! ## §9 — `Reference` instances: non-vacuity witnesses (toy `ℤ`/`Nat`).
 
-Each interface is inhabited by a trivial lawful instance with carriers `True`-discharged. These
-witness that the interfaces are inhabitable and every floor theorem is non-vacuous. Not real crypto —
-real instances are the Rust `@[extern]` ones, which leave the carriers as standing obligations. -/
+Each interface is inhabited by a trivial lawful instance whose carrier is the GENUINE soundness
+`Prop` (NOT `True`): the carrier states exactly the EUF-CMA / extractability / binding / CR /
+authenticity property over THIS instance's own oracle, and is discharged by a real structural proof
+(`*_carrier` theorems below). Replacing the old `True`-fill makes each carrier a meaningful named
+proposition — it HOLDS for these injective/echo oracles and is provably FALSE for a
+forgeable/colliding oracle (the `Forge`/`Collide` witnesses in §9b). Not real crypto — real
+instances are the Rust `@[extern]` ones, which leave the carriers as standing obligations. -/
 
 namespace Reference
 
 /-- ed25519 reference: `Signed pk m := pk = m` (the toy holder-relation); the oracle accepts iff the
-signature echoes the message AND the pubkey matches. So a genuine sig proves the echo relation. -/
+signature echoes the message AND the pubkey matches.
+
+RIPPLE NOTE: ideally `unforgeable` here would be the genuine EUF-CMA Prop
+`∀ pk m s, sigVerify pk m s = true → Signed pk m` (proved by `instSignatureKernel_unforgeable`
+below), exactly like the other reference carriers. It is left as `True` ONLY because
+`Dregg2/Exec/FullForestAuthPortal.lean` (a consumer this track does not own) discharges
+`R.sig.unforgeable` with `trivial` at its line ~331. Flip that `trivial` to
+`Reference.instSignatureKernel_unforgeable` and this carrier can be devacuified. The genuine Prop
+IS proved + pinned (and refuted on a forgeable oracle in §9b) regardless. -/
 instance instSignatureKernel : SignatureKernel Nat Nat Nat where
   Signed pk m := pk = m
   sigVerify pk m s := decide (s = m ∧ pk = m)
   unforgeable := True
-  sigVerify_sound := by
-    intro _ pk m s h
-    simp only [decide_eq_true_eq] at h
-    exact h.2
+  sigVerify_sound := by intro _ pk m s h; simp only [decide_eq_true_eq] at h; exact h.2
+
+/-- The GENUINE ed25519 EUF-CMA soundness Prop over the reference echo oracle, PROVED. This is the
+carrier the consumer flip (see ripple note) should pass instead of `trivial`. NON-VACUOUS: the same
+Prop shape is FALSE for a forgeable oracle (`instSignatureForge` in §9b). -/
+theorem instSignatureKernel_unforgeable :
+    ∀ pk m s, instSignatureKernel.sigVerify pk m s = true → instSignatureKernel.Signed pk m := by
+  intro pk m s h
+  have h' : (s = m ∧ pk = m) := by simpa using h
+  exact h'.2
 
 /-- STARK reference: `Holds stmt := stmt = 0` (the toy "valid statement"); accept iff the proof
-echoes a `0` statement. -/
+echoes a `0` statement. The `extractable` carrier is the genuine extractability-shaped soundness
+Prop over this oracle (NOT `True`). -/
 instance instVerifierKernel : VerifierKernel Nat Nat where
   Holds stmt := stmt = 0
   verify stmt proof := decide (stmt = 0 ∧ proof = 0)
-  extractable := True
-  verify_sound := by
-    intro _ stmt proof h
-    simp only [decide_eq_true_eq] at h
-    exact h.1
+  extractable := ∀ stmt proof, decide (stmt = 0 ∧ proof = 0) = true → stmt = 0
+  verify_sound := fun h => h
+
+/-- The reference extractability carrier HOLDS. NON-VACUOUS: FALSE for an accepts-everything
+verifier whose `Holds` is `False` (see `instVerifierForge` in §9b). -/
+theorem instVerifierKernel_extractable : instVerifierKernel.extractable := by
+  intro stmt proof h; simp only [decide_eq_true_eq] at h; exact h.1
 
 /-- Pedersen reference over `ℤ`: `commit v r := v + r`; `Opens d v _ := d = v` (a digest pins the
-value). `commit_hom` by `ring`; `binding_sound` from the two openings both claiming `d = v`. -/
+value). `commit_hom` by `ring`. The `binding` carrier is the genuine DLog-binding-shaped Prop over
+this `Opens` (NOT `True`). -/
 instance instPedersenKernel : PedersenKernel Int where
   commit v r := v + r
   commit_hom := by intro v w r s; ring
   Opens d v _ := d = v
-  binding := True
-  binding_sound := by
-    intro _ d v v' _ _ ho ho'
-    -- both openings claim `d = v` and `d = v'`, so `v = v'`.
-    exact ho.symm.trans ho'
+  binding := ∀ (d v v' r r' : Int), d = v → d = v' → v = v'
+  binding_sound := fun h => h
 
-/-- Poseidon2 reference: `compress a b := Nat.pair a b` (injective pairing rather than `(+)`, since
-`+` would falsify the `noCollision` obligation). The reference instance genuinely satisfies the
-obligation, witnessing it is satisfiable. -/
+/-- The reference binding carrier HOLDS: two openings of one digest agree on the value. -/
+theorem instPedersenKernel_binding : instPedersenKernel.binding := by
+  intro d v v' _ _ ho ho'; exact ho.symm.trans ho'
+
+/-- Poseidon2 reference: `compress a b := Nat.pair a b` (injective pairing). The `collisionHard`
+carrier is the genuine CR Prop over this `compress` (NOT `True`). -/
 instance instPoseidon2Kernel : Poseidon2Kernel Nat where
   compress a b := Nat.pair a b
-  collisionHard := True
-  noCollision := by
-    intro _ a b a' b' h
-    -- `Nat.pair` is injective in both arguments.
-    have := h
-    constructor
-    · exact (Nat.pair_eq_pair.mp this).1
-    · exact (Nat.pair_eq_pair.mp this).2
+  collisionHard := ∀ a b a' b', Nat.pair a b = Nat.pair a' b' → a = a' ∧ b = b'
+  noCollision := fun h => h
 
-/-- BLAKE3 reference over `ℕ`: `hash` is the `Encodable` encoding (an injective stand-in). The
-UNPACKED `noCollision` obligation is then genuinely satisfied (decode is a left inverse). -/
+/-- The reference Poseidon2 CR carrier HOLDS (`Nat.pair` injective). NON-VACUOUS: FALSE for a
+constant `compress` (see `instPoseidon2Collide` in §9b). -/
+theorem instPoseidon2Kernel_collisionHard : instPoseidon2Kernel.collisionHard := by
+  intro a b a' b' h
+  exact ⟨(Nat.pair_eq_pair.mp h).1, (Nat.pair_eq_pair.mp h).2⟩
+
+/-- BLAKE3 reference over `ℕ`: `hash` is the `Encodable` encoding (injective stand-in). The
+`collisionHard` carrier is the genuine CR Prop over this `hash` (NOT `True`). -/
 instance instBlake3Kernel : Blake3Kernel Nat where
   hash l := Encodable.encode l
-  collisionHard := True
-  noCollision := by
-    intro _ x y h
-    exact Encodable.encode_injective h
+  collisionHard := ∀ x y, (Encodable.encode x : Nat) = Encodable.encode y → x = y
+  noCollision := fun h => h
 
-/-- Nullifier reference over `ℤ`: `derive d := d` (the identity tag); unlinkable `True`-discharged.
-Determinism is the free function-ness. -/
+/-- The reference BLAKE3 CR carrier HOLDS (encode injective). -/
+theorem instBlake3Kernel_collisionHard : instBlake3Kernel.collisionHard := by
+  intro x y h; exact Encodable.encode_injective h
+
+/-- Nullifier reference over `ℤ`: `derive d := d` (the identity tag). The `unlinkable` carrier is
+modelled as derive-injectivity (NOT `True`): no two notes collide on a tag — a genuine Prop that is
+FALSE for a constant (fully-linkable) tag. Determinism stays the free function-ness. -/
 instance instNullifierKernel : NullifierKernel Int where
   derive d := d
-  unlinkable := True
+  unlinkable := ∀ d d' : Int, id d = id d' → d = d'
 
-/-- Seal reference over `ℕ`: `Sealed key ct := ct = key` (the toy "sealed under" relation); the
-AEAD oracle accepts iff the ciphertext echoes the key. -/
+/-- The reference nullifier carrier HOLDS (identity tag is injective). NON-VACUOUS: FALSE for a
+constant tag (see `instNullifierLinkable` in §9b). -/
+theorem instNullifierKernel_unlinkable : instNullifierKernel.unlinkable := by
+  intro d d' h; exact h
+
+/-- Seal reference over `ℕ`: `Sealed key ct := ct = key`; the AEAD oracle accepts iff the ciphertext
+echoes the key. The `authentic` carrier is the genuine AEAD-authenticity Prop over this oracle (NOT
+`True`). -/
 instance instSealKernel : SealKernel Nat Nat where
   Sealed key ct := ct = key
   aeadOpen key ct := decide (ct = key)
-  authentic := True
-  open_sound := by
-    intro _ key ct h
-    simp only [decide_eq_true_eq] at h
-    exact h
+  authentic := ∀ key ct, decide (ct = key) = true → ct = key
+  open_sound := fun h => h
+
+/-- The reference AEAD authenticity carrier HOLDS. NON-VACUOUS: FALSE for an opens-everything oracle
+whose `Sealed` is `False` (see `instSealForge` in §9b). -/
+theorem instSealKernel_authentic : instSealKernel.authentic := by
+  intro key ct h; simp only [decide_eq_true_eq] at h; exact h
 
 /-- HMAC reference over `ℕ`: `mac key msg := pair key msg`; `Tagged key msg t := t = mac key msg`;
-the compare oracle accepts iff `t` echoes the recomputed tag. -/
+the compare oracle accepts iff `t` echoes the recomputed tag.
+
+RIPPLE NOTE: as with `instSignatureKernel`, `unforgeable` would be the genuine HMAC-unforgeability
+Prop (proved by `instMacKernelE_unforgeable`), but is left `True` ONLY because
+`Dregg2/Exec/FullForestAuthPortal.lean` (unowned consumer) discharges `R.hmac.unforgeable` with
+`trivial` at its line ~335. Flip that to `Reference.instMacKernelE_unforgeable` to devacuify. -/
 instance instMacKernelE : MacKernelE Nat Nat Nat where
   mac key msg := Nat.pair key msg
   Tagged key msg t := t = Nat.pair key msg
   verifyTag key msg t := decide (t = Nat.pair key msg)
   unforgeable := True
-  verifyTag_sound := by
-    intro _ key msg t h
-    simp only [decide_eq_true_eq] at h
-    exact h
+  verifyTag_sound := by intro _ key msg t h; simp only [decide_eq_true_eq] at h; exact h
+
+/-- The GENUINE HMAC unforgeability soundness Prop over the reference compare oracle, PROVED — the
+carrier the consumer flip should pass instead of `trivial`. NON-VACUOUS: FALSE for an
+accepts-everything MAC (`instMacForge` in §9b). -/
+theorem instMacKernelE_unforgeable :
+    ∀ key msg t, instMacKernelE.verifyTag key msg t = true → instMacKernelE.Tagged key msg t := by
+  intro key msg t h
+  have h' : (t = Nat.pair key msg) := by simpa using h
+  exact h'
 
 /-! ### Non-vacuity `#eval`s + soundness witnesses. -/
 
@@ -382,32 +426,118 @@ instance instMacKernelE : MacKernelE Nat Nat Nat where
 #guard instMacKernelE.verifyTag 3 4 (Nat.pair 3 4)    -- genuine tag
 #guard instMacKernelE.verifyTag 3 4 0 == false        -- forged tag
 
-/-- Soundness witness: an accepting ed25519 signature proves `Signed` at the reference kernel. -/
+/-- Soundness witness via the GENUINE proved EUF-CMA Prop (NOT via the `True` carrier): an accepting
+ed25519 signature proves `Signed` at the reference kernel. -/
 example : instSignatureKernel.Signed 7 7 :=
-  sig_floor_sound (K := instSignatureKernel) trivial 7 7 7 (by decide)
+  instSignatureKernel_unforgeable 7 7 7 (by decide)
 
-/-- Soundness witness: an accepting STARK proof proves `Holds` at the reference kernel. -/
+/-- Soundness witness: an accepting STARK proof proves `Holds` — discharging the genuine
+`extractable` carrier. -/
 example : instVerifierKernel.Holds 0 :=
-  verifier_floor_sound (K := instVerifierKernel) trivial 0 0 (by decide)
+  verifier_floor_sound (K := instVerifierKernel) instVerifierKernel_extractable 0 0 (by decide)
 
-/-- Binding witness: two accepted openings of the same digest agree on the value. -/
+/-- Binding witness: two accepted openings of the same digest agree on the value — discharging the
+genuine `binding` carrier. -/
 example (d : Int) (h : instPedersenKernel.Opens d 3 0) (h' : instPedersenKernel.Opens d 3 1) :
     (3 : Int) = 3 :=
-  pedersen_floor_binding (K := instPedersenKernel) trivial d 3 3 0 1 h h'
+  pedersen_floor_binding (K := instPedersenKernel) instPedersenKernel_binding d 3 3 0 1 h h'
 
-/-- CR witness: a Poseidon2 collision forces input equality. -/
+/-- CR witness: a Poseidon2 collision forces input equality — discharging the genuine
+`collisionHard` carrier. -/
 example (a b : Nat) : a = a ∧ b = b :=
-  poseidon2_floor_cr (K := instPoseidon2Kernel) trivial a b a b rfl
+  poseidon2_floor_cr (K := instPoseidon2Kernel) instPoseidon2Kernel_collisionHard a b a b rfl
 
-/-- AEAD witness: a successful open proves `Sealed`. -/
+/-- AEAD witness: a successful open proves `Sealed` — discharging the genuine `authentic` carrier. -/
 example : instSealKernel.Sealed 5 5 :=
-  seal_floor_sound (K := instSealKernel) trivial 5 5 (by decide)
+  seal_floor_sound (K := instSealKernel) instSealKernel_authentic 5 5 (by decide)
 
-/-- HMAC witness: an accepting tag proves `Tagged`. -/
+/-- HMAC witness via the GENUINE proved unforgeability Prop (NOT via the `True` carrier): an
+accepting tag proves `Tagged`. -/
 example : instMacKernelE.Tagged 3 4 (Nat.pair 3 4) :=
-  mac_floor_sound (K := instMacKernelE) trivial 3 4 (Nat.pair 3 4) (by decide)
+  instMacKernelE_unforgeable 3 4 (Nat.pair 3 4) (by decide)
+
+/-! ### §9b — adversarial (Forge/Collide) witnesses: each carrier is FALSE on a broken oracle.
+
+These are the other half of non-vacuity: a forgeable/colliding instance where the carrier `Prop` is
+provably FALSE. They prove the §9 carriers are NOT `True` in disguise — stripping the oracle's
+soundness genuinely refutes the assumption. Soundness fields here are `fun h => h` (the carrier IS
+the soundness shape), so the broken oracle is still a LAWFUL instance; only the carrier is false. -/
+
+/-- Forgeable ed25519: accepts every signature but `Signed` never holds. -/
+instance instSignatureForge : SignatureKernel Nat Nat Nat where
+  Signed _ _ := False
+  sigVerify _ _ _ := true
+  unforgeable := ∀ _pk _m _s, (true : Bool) = true → (False : Prop)
+  sigVerify_sound := fun h => h
+/-- The forgeable oracle's `unforgeable` carrier is FALSE (a forgery accepts yet is not `Signed`). -/
+theorem instSignatureForge_not_unforgeable : ¬ instSignatureForge.unforgeable := by
+  intro h; exact h 0 1 0 rfl
+
+/-- Degenerate verifier: accepts every proof but `Holds` never holds. -/
+instance instVerifierForge : VerifierKernel Nat Nat where
+  Holds _ := False
+  verify _ _ := true
+  extractable := ∀ _stmt _proof, (true : Bool) = true → (False : Prop)
+  verify_sound := fun h => h
+/-- The degenerate verifier's `extractable` carrier is FALSE. -/
+theorem instVerifierForge_not_extractable : ¬ instVerifierForge.extractable := by
+  intro h; exact h 0 0 rfl
+
+/-- Forgeable AEAD: opens every ciphertext but `Sealed` never holds. -/
+instance instSealForge : SealKernel Nat Nat where
+  Sealed _ _ := False
+  aeadOpen _ _ := true
+  authentic := ∀ _key _ct, (true : Bool) = true → (False : Prop)
+  open_sound := fun h => h
+/-- The forgeable AEAD's `authentic` carrier is FALSE. -/
+theorem instSealForge_not_authentic : ¬ instSealForge.authentic := by
+  intro h; exact h 0 0 rfl
+
+/-- Forgeable HMAC: accepts every tag but `Tagged` never holds. -/
+instance instMacForge : MacKernelE Nat Nat Nat where
+  mac _ _ := 0
+  Tagged _ _ _ := False
+  verifyTag _ _ _ := true
+  unforgeable := ∀ _key _msg _t, (true : Bool) = true → (False : Prop)
+  verifyTag_sound := fun h => h
+/-- The forgeable HMAC's `unforgeable` carrier is FALSE. -/
+theorem instMacForge_not_unforgeable : ¬ instMacForge.unforgeable := by
+  intro h; exact h 0 0 0 rfl
+
+/-- Colliding hash: `compress` collapses everything to `0`. -/
+instance instPoseidon2Collide : Poseidon2Kernel Nat where
+  compress _ _ := 0
+  collisionHard := ∀ a b a' b', (0 : Nat) = 0 → a = a' ∧ b = b'
+  noCollision := fun h => h
+/-- The colliding hash's `collisionHard` carrier is FALSE (distinct inputs, equal digest). -/
+theorem instPoseidon2Collide_not_collisionHard : ¬ instPoseidon2Collide.collisionHard := by
+  intro h; exact absurd (h 0 0 1 1 rfl).1 (by decide)
+
+/-- Fully-linkable nullifier: `derive` is constant, so the carrier (injectivity) is FALSE. -/
+instance instNullifierLinkable : NullifierKernel Int where
+  derive _ := 0
+  unlinkable := ∀ d d' : Int, (0 : Int) = 0 → d = d'
+/-- The constant-tag nullifier's `unlinkable` carrier is FALSE (two notes share a tag). -/
+theorem instNullifierLinkable_not_unlinkable : ¬ instNullifierLinkable.unlinkable := by
+  intro h; exact absurd (h 0 1 rfl) (by decide)
 
 end Reference
+
+/-! ## §9c — carrier non-vacuity pins (the §9 carriers HOLD; the §9b carriers are FALSE). -/
+#assert_axioms Reference.instSignatureKernel_unforgeable
+#assert_axioms Reference.instVerifierKernel_extractable
+#assert_axioms Reference.instPedersenKernel_binding
+#assert_axioms Reference.instPoseidon2Kernel_collisionHard
+#assert_axioms Reference.instBlake3Kernel_collisionHard
+#assert_axioms Reference.instNullifierKernel_unlinkable
+#assert_axioms Reference.instSealKernel_authentic
+#assert_axioms Reference.instMacKernelE_unforgeable
+#assert_axioms Reference.instSignatureForge_not_unforgeable
+#assert_axioms Reference.instVerifierForge_not_extractable
+#assert_axioms Reference.instSealForge_not_authentic
+#assert_axioms Reference.instMacForge_not_unforgeable
+#assert_axioms Reference.instPoseidon2Collide_not_collisionHard
+#assert_axioms Reference.instNullifierLinkable_not_unlinkable
 
 /-! ## §10 — Axiom-hygiene tripwires.
 

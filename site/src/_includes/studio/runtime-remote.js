@@ -455,7 +455,7 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
 function pickHeight(status) {
   if (!status || typeof status !== 'object') return null;
   // Common field names seen across node versions.
-  const candidates = ['height', 'block_height', 'tip_height', 'head_height', 'cursor'];
+  const candidates = ['latest_height', 'height', 'block_height', 'tip_height', 'head_height', 'cursor'];
   for (const k of candidates) {
     const v = status[k];
     if (typeof v === 'number') return v;

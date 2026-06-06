@@ -38,8 +38,14 @@ extern lean_object *dregg_exec_full_forest_auth(lean_object *input);
 /* The @[export]ed Lean `String -> String` HANDLER-CUTOVER COMPLETE-TURN executor: decodes the §WIDE wire
  * (Turn envelope + action-tree + full state), runs admission ∘ `execHandlerTurn` over the lowered flat
  * action list (`lowerForestA (eraseAuth root)`), and re-encodes the §WIDE output (post-state + receipt-log
- * length + commit; on inadmissible rollback ok:0 echoes the unchanged pre-state). */
+ * length + commit; on inadmissible rollback ok:0 echoes the unchanged pre-state).
+ *
+ * GATED on DREGG_HANDLER_TURN: this secondary export is absent from older archives. build.rs probes the
+ * archive and only `#define`s DREGG_HANDLER_TURN when the symbol is present, so a stale archive does not
+ * leave a dangling reference that `-dead_strip` would resolve by dropping the entire shim object. */
+#ifdef DREGG_HANDLER_TURN
 extern lean_object *dregg_exec_handler_turn(lean_object *input);
+#endif
 
 /* Returns 0 on success, 1 if module initialization reported an IO error. */
 int dregg_ffi_init(void) {
@@ -147,6 +153,7 @@ size_t dregg_exec_full_forest_auth_str(const char *in_utf8, char *out, size_t ou
  * output is `{"state":STATEW,"loglen":N,"ok":B}`. The executed object is admission ∘ `execHandlerTurn`
  * over the lowered action list (the handler-registry cutover path). Same return contract (full byte
  * length; (size_t)-1 only on an unusable buffer). */
+#ifdef DREGG_HANDLER_TURN
 size_t dregg_exec_handler_turn_str(const char *in_utf8, char *out, size_t out_cap) {
     if (out == 0 || out_cap == 0) {
         return (size_t)-1;
@@ -161,3 +168,4 @@ size_t dregg_exec_handler_turn_str(const char *in_utf8, char *out, size_t out_ca
     lean_dec_ref(res);
     return full;
 }
+#endif /* DREGG_HANDLER_TURN */

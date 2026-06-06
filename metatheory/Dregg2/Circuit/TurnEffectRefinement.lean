@@ -128,31 +128,14 @@ theorem hole_fullAction_circuit_refines_spec_fallback
     (fa : FullActionA) (h : hole_circuit_step st fa st') : fullActionStep st fa st' := by
   simpa [hole_circuit_step] using h
 
-/-- HOLE: `exerciseA` inner-turn fold not yet arithmetized in circuit. -/
+/-- HOLE: `exerciseA` inner-turn fold not yet arithmetized in circuit. The hold-gate is closeable but
+    the inner `List FullActionA` fold needs a per-step recursive witness (Wave 7
+    `exercise_inner_turn_witness` / `exercise_r4_facet_mask`) — the single remaining open front here. -/
 theorem hole_exerciseA_circuit_refines_spec
     (actor target : CellId) (inner : List FullActionA)
     (h : hole_circuit_step st (.exerciseA actor target inner) st') :
     fullActionStep st (.exerciseA actor target inner) st' := by
   sorry -- HOLE: exerciseA inner-turn facets
-
-/-- HOLE: `createObligationA` — no Inst emission yet. -/
-theorem hole_createObligationA_circuit_refines_spec
-    (id : Nat) (actor obligor beneficiary : CellId) (asset : AssetId) (stake : ℤ)
-    (h : hole_circuit_step st (.createObligationA id actor obligor beneficiary asset stake) st') :
-    fullActionStep st (.createObligationA id actor obligor beneficiary asset stake) st' := by
-  sorry -- HOLE: createObligationA
-
-/-- HOLE: `releaseCommittedEscrowA` — no Inst emission yet. -/
-theorem hole_releaseCommittedEscrowA_circuit_refines_spec
-    (id : Nat) (actor : CellId) (h : hole_circuit_step st (.releaseCommittedEscrowA id actor) st') :
-    fullActionStep st (.releaseCommittedEscrowA id actor) st' := by
-  sorry -- HOLE: releaseCommittedEscrowA
-
-/-- HOLE: `refundCommittedEscrowA` — no Inst emission yet. -/
-theorem hole_refundCommittedEscrowA_circuit_refines_spec
-    (id : Nat) (actor : CellId) (h : hole_circuit_step st (.refundCommittedEscrowA id actor) st') :
-    fullActionStep st (.refundCommittedEscrowA id actor) st' := by
-  sorry -- HOLE: refundCommittedEscrowA
 
 end HolePortals
 
@@ -365,6 +348,21 @@ def fullActionCircuitStep
       cellDestroyCircuitStep S DLife hDLife DDC hDDC st ⟨actor, cell, certHash⟩ st'
   | .refreshDelegationA actor child =>
       refreshDelegationCircuitStep S DDgs hDDgs st ⟨actor, child⟩ st'
+  | .createObligationA id actor obligor beneficiary asset stake =>
+      -- `createObligationA` is a DEFINITIONAL ALIAS of `createEscrowA` on the chained step
+      -- (`TurnExecutorFull.lean:3685`), so it reuses the per-asset escrow-create circuit step; its
+      -- emitted-AIR content is `EscrowHoldingCreateSpec … obligor beneficiary asset stake`.
+      createEscrowCircuitStep S D_bal hD_bal LE_escrow cN hN hLE_escrow
+        st ⟨id, actor, obligor, beneficiary, asset, stake⟩ st'
+  | .releaseCommittedEscrowA id actor =>
+      -- dispatch-ALIASED to the plain per-asset escrow settle (`releaseEscrowChainA`,
+      -- `TurnExecutorFull.lean:3702`); reuses the dual-component release circuit step. Its emitted
+      -- content is `ReleaseEscrowSpec`, which is exactly `CommittedEscrowSettleSpec … recipient …`.
+      releaseEscrowCircuitStep S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st'
+  | .refundCommittedEscrowA id actor =>
+      -- dispatch-ALIASED to `refundEscrowChainA` (`TurnExecutorFull.lean:3703`); reuses the dual
+      -- refund circuit step. Emitted content is `RefundEscrowSpec` = `CommittedEscrowSettleSpec … creator …`.
+      refundEscrowCircuitStep S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st'
   | fa' =>
       hole_circuit_step st fa' st'
 
@@ -398,11 +396,45 @@ abbrev fullActionCircuitStepInst
     hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS DBal hDBal DSide hDSide DLeg hDLeg
     DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth
 
+/-! ### Alias bridges: the obligation/committed-settle arms' emitted spec ⟹ their `fullActionStep`.
+
+`createObligationA`/`releaseCommittedEscrowA`/`refundCommittedEscrowA` dispatch (in the executor and
+in `fullActionCircuitStep`) to the SAME chained steps as `createEscrowA`/`releaseEscrowA`/`refundEscrowA`.
+The reused circuit steps emit `EscrowHoldingCreateSpec`/`ReleaseEscrowSpec`/`RefundEscrowSpec`; these
+bridges convert that emitted content to the obligation/committed `fullActionStep` predicate it equals
+(through the leaf `*ChainA_iff_spec` ⟺ and the executor definitional dispatch). NOT an exact-`h`
+fallback: the post-state's ALL-17-fields content is carried unchanged. -/
+
+/-- `ReleaseEscrowSpec` ⟹ the committed-release `fullActionStep` content (same chained step). -/
+private theorem releaseEscrowSpec_to_committed (s : RecChainedState) (id : Nat) (actor : CellId)
+    (s' : RecChainedState)
+    (h : Dregg2.Circuit.Spec.EscrowHoldingRelease.ReleaseEscrowSpec s id actor s') :
+    Dregg2.Circuit.Spec.EscrowCommitted.CommittedEscrowSettleSpec s id actor (fun r => r.recipient)
+      releaseSettleAuthB s' := by
+  have hchain : releaseEscrowChainA s id actor = some s' :=
+    (Dregg2.Circuit.Spec.EscrowHoldingRelease.releaseEscrowChainA_iff_spec s id actor s').mpr h
+  -- `execFullA (.releaseCommittedEscrowA id actor) = releaseEscrowChainA s id actor` (rfl).
+  exact (Dregg2.Circuit.Spec.EscrowCommitted.execFullA_releaseCommittedEscrowA_iff_spec s id actor s').mp
+    hchain
+
+/-- `RefundEscrowSpec` ⟹ the committed-refund `fullActionStep` content (same chained step). -/
+private theorem refundEscrowSpec_to_committed (s : RecChainedState) (id : Nat) (actor : CellId)
+    (s' : RecChainedState)
+    (h : Dregg2.Circuit.Spec.EscrowHoldingRefund.RefundEscrowSpec s id actor s') :
+    Dregg2.Circuit.Spec.EscrowCommitted.CommittedEscrowSettleSpec s id actor (fun r => r.creator)
+      refundSettleAuthB s' := by
+  have hchain : refundEscrowChainA s id actor = some s' :=
+    (Dregg2.Circuit.Spec.EscrowHoldingRefund.refundEscrowChainA_iff_spec s id actor s').mpr h
+  exact (Dregg2.Circuit.Spec.EscrowCommitted.execFullA_refundCommittedEscrowA_iff_spec s id actor s').mp
+    hchain
+
 /-- **`fullAction_circuit_refines_spec`** — per-action SOUNDNESS: circuit ⊑ `fullActionStep`.
 
-CONDITIONAL: four effect arms (`exerciseA`, `createObligationA`, `releaseCommittedEscrowA`,
-`refundCommittedEscrowA`) are open fronts (sorry-bearing downstream); this theorem transitively
-depends on `sorry` and is NOT `#assert_axioms`-certified. Not whole-action adversarial soundness. -/
+CONDITIONAL: ONE effect arm (`exerciseA`, the inner-turn fold — Wave 7 `exercise_inner_turn_witness`)
+remains an open front (sorry-bearing downstream); this theorem transitively depends on `sorry` and is
+NOT `#assert_axioms`-certified. Not whole-action adversarial soundness. The `createObligationA`,
+`releaseCommittedEscrowA`, `refundCommittedEscrowA` arms are now CLOSED via their dispatch-alias
+circuit steps (escrow-create / dual release / dual refund). -/
 theorem fullAction_circuit_refines_spec
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
@@ -542,8 +574,11 @@ theorem fullAction_circuit_refines_spec
       exact refundEscrow_circuit_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
         st _ st' h
   | .createObligationA id actor obligor beneficiary asset stake =>
-      simp only [fullActionStep, hole_circuit_step, fullActionCircuitStep]
-      exact hole_createObligationA_circuit_refines_spec id actor obligor beneficiary asset stake h
+      simp only [fullActionStep]
+      -- emitted content IS `EscrowHoldingCreateSpec … obligor beneficiary asset stake` (the
+      -- `createObligationA` arm of `fullActionStep`); the create circuit step proves it directly.
+      exact createEscrow_circuit_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
+        st ⟨id, actor, obligor, beneficiary, asset, stake⟩ st' h
   | .fulfillObligationA id actor =>
       simp only [fullActionStep]
       exact refundEscrow_circuit_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
@@ -557,11 +592,17 @@ theorem fullAction_circuit_refines_spec
       exact createCommittedEscrow_circuit_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
         st _ st' h
   | .releaseCommittedEscrowA id actor =>
-      simp only [fullActionStep, hole_circuit_step, fullActionCircuitStep]
-      exact hole_releaseCommittedEscrowA_circuit_refines_spec id actor h
+      simp only [fullActionStep]
+      -- reuse the release circuit step (emits `ReleaseEscrowSpec`), then bridge to the committed
+      -- settle spec the `fullActionStep` arm demands (same chained step, all-17-field content carried).
+      exact releaseEscrowSpec_to_committed st id actor st'
+        (releaseEscrow_circuit_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
+          st ⟨id, actor⟩ st' h)
   | .refundCommittedEscrowA id actor =>
-      simp only [fullActionStep, hole_circuit_step, fullActionCircuitStep]
-      exact hole_refundCommittedEscrowA_circuit_refines_spec id actor h
+      simp only [fullActionStep]
+      exact refundEscrowSpec_to_committed st id actor st'
+        (refundEscrow_circuit_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
+          st ⟨id, actor⟩ st' h)
   | .bridgeLockA id actor originator destination asset amount =>
       simp only [fullActionStep]
       exact bridgeLock_circuit_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
@@ -661,7 +702,7 @@ theorem fullAction_circuit_refines_spec
 /-- **`fullAction_turn_circuit_refines_spec`** — turn circuit ⊑ `turnSpec fullActionStep`.
 
 CONDITIONAL: depends on `fullAction_circuit_refines_spec`, so it transitively depends on `sorry`
-(four open effect arms) and is NOT `#assert_axioms`-certified. Not whole-turn adversarial soundness. -/
+(the `exerciseA` inner-turn fold) and is NOT `#assert_axioms`-certified. Not whole-turn adversarial soundness. -/
 theorem fullAction_turn_circuit_refines_spec
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
@@ -721,7 +762,7 @@ theorem fullAction_turn_circuit_refines_spec
 /-- **`fullAction_turn_circuit_refines_exec`** — full diamond: turn circuit ⊑ `execFullTurnA`.
 
 CONDITIONAL: depends on `fullAction_circuit_refines_spec`, so it transitively depends on `sorry`
-(four open effect arms) and is NOT `#assert_axioms`-certified. Not whole-turn adversarial soundness. -/
+(the `exerciseA` inner-turn fold) and is NOT `#assert_axioms`-certified. Not whole-turn adversarial soundness. -/
 theorem fullAction_turn_circuit_refines_exec
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)

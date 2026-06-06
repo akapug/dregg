@@ -28,6 +28,10 @@ pub fn shadow_exec_full_forest_auth(wire: &str) -> Result<String, String> {
 }
 
 /// Handler-cutover shadow path — admission ∘ `execHandlerTurn` on the same wire.
+///
+/// Available only when the linked archive exports `dregg_exec_handler_turn`
+/// (cfg `dregg_handler_present`, set by build.rs). The forest-auth gate
+/// ([`shadow_exec_full_forest_auth`]) is the load-bearing path and is always present.
 pub fn shadow_exec_handler_turn(wire: &str) -> Result<String, String> {
     ensure_lean_init()?;
     lean_handler_turn(wire)
@@ -62,6 +66,7 @@ mod ffi {
             out: *mut c_char,
             out_cap: usize,
         ) -> usize;
+        #[cfg(dregg_handler_present)]
         fn dregg_exec_handler_turn_str(
             in_utf8: *const c_char,
             out: *mut c_char,
@@ -109,8 +114,14 @@ mod ffi {
         lean_string_bridge(wire, dregg_exec_full_forest_auth_str, "dregg_exec_full_forest_auth_str")
     }
 
+    #[cfg(dregg_handler_present)]
     pub fn lean_handler_turn(wire: &str) -> Result<String, String> {
         lean_string_bridge(wire, dregg_exec_handler_turn_str, "dregg_exec_handler_turn_str")
+    }
+
+    #[cfg(not(dregg_handler_present))]
+    pub fn lean_handler_turn(_wire: &str) -> Result<String, String> {
+        Err("dregg_exec_handler_turn not exported by the linked archive (rebuild to enable)".into())
     }
 }
 

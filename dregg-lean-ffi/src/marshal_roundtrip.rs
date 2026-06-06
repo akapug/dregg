@@ -124,9 +124,9 @@ fn gated_demo_turn() -> WireTurn {
         fee: 5,
         valid_until: 1000,
         block_height: 0,
-        prev_hash: 0,
+        prev_hash: Digest::default(),
         root: WForest {
-            auth: WireAuth::Signature { pubkey: 7, sig: 7 },
+            auth: WireAuth::Signature { pubkey: Digest::from_u64(7), sig: 7 },
             caveats: vec![WireCaveat { tier: 0, cell: 0, asset: 0, min: 0 }],
             action: WireAction::Balance { actor: 0, src: 0, dst: 1, amt: 30, asset: 0 },
             children: vec![],
@@ -149,9 +149,9 @@ fn forged_turn() -> WireTurn {
         fee: 0,
         valid_until: 0,
         block_height: 0,
-        prev_hash: 0,
+        prev_hash: Digest::default(),
         root: WForest {
-            auth: WireAuth::Signature { pubkey: 7, sig: 8 },
+            auth: WireAuth::Signature { pubkey: Digest::from_u64(7), sig: 8 },
             caveats: vec![],
             action: WireAction::Balance { actor: 0, src: 0, dst: 1, amt: 30, asset: 0 },
             children: vec![],
@@ -184,7 +184,7 @@ fn overspend_turn() -> WireTurn {
         fee: 0,
         valid_until: 0,
         block_height: 0,
-        prev_hash: 0,
+        prev_hash: Digest::default(),
         root: WForest {
             auth: WireAuth::Unchecked,
             caveats: vec![],
