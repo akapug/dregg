@@ -243,6 +243,17 @@ def emitJson (d : EmittedDescriptor) : String :=
   "{\"name\":\"" ++ d.name ++ "\",\"trace_width\":" ++ toString d.traceWidth ++
   ",\"constraints\":" ++ constraintsToJson d.constraints ++ "}"
 
+/-- **`emitDescriptorJson`** — the GENERAL `EmittedDescriptor → String` wire emitter (the named,
+documented entry point for any emitted PART-I descriptor: the kernel circuit, the `Transfer`
+circuit, or any other `emit …`-produced descriptor). Definitionally `emitJson`; the schema is the
+stable grammar the Rust `lean_descriptor_air::parse_descriptor` decoder ingests:
+
+    {"name":S,"trace_width":N,"constraints":[{"lhs":<expr>,"rhs":<expr>},…]}
+
+with `<expr>` one of `{"t":"var","v":i}` / `{"t":"const","v":c}` /
+`{"t":"add","l":<expr>,"r":<expr>}` / `{"t":"mul","l":<expr>,"r":<expr>}`. -/
+def emitDescriptorJson (d : EmittedDescriptor) : String := emitJson d
+
 /-- The canonical wire string for the kernel circuit — copy this into the Rust golden. -/
 def kernelWire : String := emitJson emittedKernel
 
