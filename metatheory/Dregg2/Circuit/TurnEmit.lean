@@ -45,7 +45,37 @@ open Dregg2.Circuit.EffectCommit (encodeE)
 open Dregg2.Circuit.EffectInstances (setFieldE)
 open Dregg2.Exec.CircuitEmit (EmittedDescriptor satisfiedEmitted emitDescriptorJson)
 open Dregg2.Circuit.EffectEmittedRefinement
-open Dregg2.Circuit.TurnEffectRefinement (fullActionCircuitStepInst fullAction_circuit_refines_spec)
+open Dregg2.Circuit.TurnEffectRefinement
+  (fullActionCircuitStep fullActionCircuitStepInst fullAction_circuit_refines_spec)
+open Dregg2.Circuit.Inst.SealA (SealArgs)
+open Dregg2.Circuit.Inst.BridgeLockA (BridgeLockArgs)
+open Dregg2.Circuit.Inst.QueueEnqueueA (EnqueueArgs)
+open Dregg2.Circuit.Inst.CreateEscrowA (CreateEscrowArgs)
+open Dregg2.Circuit.Inst.NoteSpendA (NoteSpendArgs)
+open Dregg2.Circuit.Inst.NoteCreateA (NoteCreateArgs)
+open Dregg2.Circuit.Inst.CreateCellA (CreateCellArgs)
+open Dregg2.Circuit.Inst.SpawnA (SpawnArgs)
+open Dregg2.Circuit.Inst.MintA (MintArgs)
+open Dregg2.Circuit.Inst.BurnA (BurnArgs)
+open Dregg2.Circuit.Inst.Delegate (DelegateArgs)
+open Dregg2.Circuit.Inst.Revoke (RevokeArgs)
+open Dregg2.Circuit.Inst.ReleaseEscrowA (ReleaseArgs)
+open Dregg2.Circuit.Inst.RefundEscrowA (RefundEscrowArgs)
+open Dregg2.Circuit.Inst.BalanceA (BalanceArgs balanceAE)
+open Dregg2.Circuit.Inst.MintA (mintE)
+open Dregg2.Circuit.Inst.BurnA (burnE)
+open Dregg2.Circuit.Inst.Delegate (delegateE)
+open Dregg2.Circuit.Inst.CreateCellA (createCellE)
+open Dregg2.Circuit.Inst.SpawnA (spawnE)
+open Dregg2.Circuit.Inst.CreateEscrowA (createEscrowE)
+open Dregg2.Circuit.Inst.NoteSpendA (noteSpendE)
+open Dregg2.Circuit.Inst.NoteCreateA (noteCreateE)
+open Dregg2.Circuit.Inst.ReleaseEscrowA (releaseEscrowE)
+open Dregg2.Circuit.Inst.RefundEscrowA (refundEscrowE)
+open Dregg2.Circuit.Inst.Revoke (revokeE)
+open Dregg2.Circuit.Inst.SealA (sealE)
+open Dregg2.Circuit.Inst.BridgeLockA (bridgeLockE)
+open Dregg2.Circuit.Inst.QueueEnqueueA (queueEnqueueE)
 open Dregg2.Circuit.StateCommit
   (logHashInjective compressNInjective RestHashIffFrame AccountsWF cellLeafInjective)
 open Dregg2.Circuit.EffectCommit (CommitSurface)
@@ -255,17 +285,17 @@ def stepEmittedEncodeAgrees
       assignmentOf sw.assignment = encodeE2 S (revokeE D_caps hD_caps) st ⟨holder, t⟩ st'
   | .sealA pid actor payload =>
       assignmentOf sw.assignment =
-        encodeE2 S (sealE LE_sealed cN hN hLE_sealed) st ⟨pid, actor, payload⟩ st'
+        encodeE2 S (sealE LE_sealed cN hN hLE_sealed) st { pid, actor, payload } st'
   | .bridgeLockA id actor originator destination asset amount =>
       assignmentOf sw.assignment =
         encodeE2Dual S (bridgeLockE D_bal hD_bal LE_escrow cN hN hLE_escrow) st
-          ⟨id, actor, originator, destination, asset, amount⟩ st'
+          { id, actor, originator, destination, asset, amount } st'
   | .queueEnqueueA id m actor cell depId dAsset deposit =>
       assignmentOf sw.assignment =
         encodeE2Triple S (queueEnqueueE D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow) st
-          ⟨id, m, actor, cell, depId, dAsset, deposit⟩ st'
+          { id, m, actor, cell, depId, dAsset, deposit } st'
   | .setFieldA actor cell f v =>
-      assignmentOf sw.assignment = encodeE S CS setFieldE st ⟨actor, cell, f, v⟩ st'
+      assignmentOf sw.assignment = encodeE S CS setFieldE st { actor, cell, f, v } st'
   | fa' =>
       assignmentOf sw.assignment = assignmentOf sw.assignment ∧ fa' = fa'
 
@@ -308,137 +338,122 @@ theorem step_emitted_refines_fullActionStep
         hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS DBal hDBal DSide hDSide DLeg hDLeg
         DCaps hDCaps DDel hDDel DDgs hDDgs st fa st') :
     fullActionStep st fa st' := by
-  unfold stepEmittedEncodeAgrees at hEnc
-  unfold fullActionCircuitStepInst at hcircuit
-  rcases h with ⟨htag, d, hlookup, hsat⟩
+  unfold fullActionCircuitStepInst fullActionCircuitStep at hcircuit
   match fa with
   | .balanceA t a =>
       simp only [fullActionStep]
-      exact balanceA_emitted_refines_spec S D_bal hD_bal hRestBal hLog st _ st'
-        ((balanceA_emitted_equiv_circuit S D_bal hD_bal st _ st').mpr
-          (by simpa [hEnc, balanceAEmittedStep, effect2EmittedStepLocal] using hsat))
+      exact balanceA_emitted_refines_spec S D_bal hD_bal hRestBal hLog st ⟨t, a⟩ st'
+        ((balanceA_emitted_equiv_circuit S D_bal hD_bal st ⟨t, a⟩ st').mp hcircuit)
   | .delegate del rec t =>
       simp only [fullActionStep]
-      exact delegate_emitted_refines_spec S D_caps hD_caps hRestCaps hLog st _ st'
-        ((delegate_emitted_equiv_circuit S D_caps hD_caps st _ st').mpr
-          (by simpa [hEnc, delegateEmittedStep, effect2EmittedStepLocal] using hsat))
+      exact delegate_emitted_refines_spec S D_caps hD_caps hRestCaps hLog st ⟨del, rec, t⟩ st'
+        ((delegate_emitted_equiv_circuit S D_caps hD_caps st ⟨del, rec, t⟩ st').mp hcircuit)
   | .mintA actor cell a amt =>
       simp only [fullActionStep]
-      exact mint_emitted_refines_spec S D_bal hD_bal hRestBal hLog st _ st'
-        ((mint_emitted_equiv_circuit S D_bal hD_bal st _ st').mpr
-          (by simpa [hEnc, mintEmittedStep, effect2EmittedStepLocal] using hsat))
+      exact mint_emitted_refines_spec S D_bal hD_bal hRestBal hLog st ⟨actor, cell, a, amt⟩ st'
+        ((mint_emitted_equiv_circuit S D_bal hD_bal st ⟨actor, cell, a, amt⟩ st').mp hcircuit)
   | .burnA actor cell a amt =>
       simp only [fullActionStep]
-      exact burn_emitted_refines_spec S D_bal hD_bal hRestBal hLog st _ st'
-        ((burn_emitted_equiv_circuit S D_bal hD_bal st _ st').mpr
-          (by simpa [hEnc, burnEmittedStep, effect2EmittedStepLocal] using hsat))
+      exact burn_emitted_refines_spec S D_bal hD_bal hRestBal hLog st ⟨actor, cell, a, amt⟩ st'
+        ((burn_emitted_equiv_circuit S D_bal hD_bal st ⟨actor, cell, a, amt⟩ st').mp hcircuit)
   | .introduceA intro rec t =>
       simp only [fullActionStep]
-      exact delegate_emitted_refines_spec S D_caps hD_caps hRestCaps hLog st _ st'
-        ((delegate_emitted_equiv_circuit S D_caps hD_caps st _ st').mpr
-          (by simpa [hEnc, delegateEmittedStep, effect2EmittedStepLocal] using hsat))
+      exact delegate_emitted_refines_spec S D_caps hD_caps hRestCaps hLog st ⟨intro, rec, t⟩ st'
+        ((delegate_emitted_equiv_circuit S D_caps hD_caps st ⟨intro, rec, t⟩ st').mp hcircuit)
   | .validateHandoffA intro rec t =>
       simp only [fullActionStep]
-      exact delegate_emitted_refines_spec S D_caps hD_caps hRestCaps hLog st _ st'
-        ((delegate_emitted_equiv_circuit S D_caps hD_caps st _ st').mpr
-          (by simpa [hEnc, delegateEmittedStep, effect2EmittedStepLocal] using hsat))
+      exact delegate_emitted_refines_spec S D_caps hD_caps hRestCaps hLog st ⟨intro, rec, t⟩ st'
+        ((delegate_emitted_equiv_circuit S D_caps hD_caps st ⟨intro, rec, t⟩ st').mp hcircuit)
   | .createCellA actor newCell =>
       simp only [fullActionStep]
       exact createCell_emitted_refines_spec S LE_cell cN hN hLE_cell DBal hDBal DSide hDSide hRestAccounts
-        hLog st _ st'
-        ((createCell_emitted_equiv_circuit S LE_cell cN hN hLE_cell DBal hDBal DSide hDSide st _ st').mpr
-          (by simpa [hEnc, createCellEmittedStep, effect2tripleEmittedStepLocal] using hsat))
+        hLog st ⟨actor, newCell⟩ st'
+        ((createCell_emitted_equiv_circuit S LE_cell cN hN hLE_cell DBal hDBal DSide hDSide st ⟨actor, newCell⟩ st').mp
+          hcircuit)
   | .spawnA actor child target =>
       simp only [fullActionStep]
       exact spawn_emitted_refines_spec S LE_cell cN hN hLE_cell DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs
-        hRestSpawn hLog st _ st'
+        hRestSpawn hLog st ⟨actor, child, target⟩ st'
         ((spawn_emitted_equiv_circuit S LE_cell cN hN hLE_cell DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs
-            st _ st').mpr
-          (by simpa [hEnc, spawnEmittedStep, effect2quintEmittedStepLocal] using hsat))
+            st ⟨actor, child, target⟩ st').mp hcircuit)
   | .bridgeMintA actor cell a value =>
       simp only [fullActionStep]
-      exact mint_emitted_refines_spec S D_bal hD_bal hRestBal hLog st _ st'
-        ((mint_emitted_equiv_circuit S D_bal hD_bal st _ st').mpr
-          (by simpa [hEnc, mintEmittedStep, effect2EmittedStepLocal] using hsat))
+      exact mint_emitted_refines_spec S D_bal hD_bal hRestBal hLog st ⟨actor, cell, a, value⟩ st'
+        ((mint_emitted_equiv_circuit S D_bal hD_bal st ⟨actor, cell, a, value⟩ st').mp hcircuit)
   | .createEscrowA id actor creator recipient asset amount =>
       simp only [fullActionStep]
-      exact createEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog st _ st'
-        ((createEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st _ st').mpr
-          (by simpa [hEnc, createEscrowEmittedStep, effect2dualEmittedStepLocal] using hsat))
+      exact createEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog st
+        ⟨id, actor, creator, recipient, asset, amount⟩ st'
+        ((createEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st
+            ⟨id, actor, creator, recipient, asset, amount⟩ st').mp hcircuit)
   | .noteSpendA nf actor =>
       simp only [fullActionStep]
-      exact noteSpend_emitted_refines_spec S LE_null cN hN hLE_null hRestNull hLog st _ st'
-        ((noteSpend_emitted_equiv_circuit S LE_null cN hN hLE_null st _ st').mpr
-          (by simpa [hEnc, noteSpendEmittedStep, effect2EmittedStepLocal] using hsat))
+      exact noteSpend_emitted_refines_spec S LE_null cN hN hLE_null hRestNull hLog st ⟨nf, actor⟩ st'
+        ((noteSpend_emitted_equiv_circuit S LE_null cN hN hLE_null st ⟨nf, actor⟩ st').mp hcircuit)
   | .noteCreateA cm actor =>
       simp only [fullActionStep]
-      exact noteCreate_emitted_refines_spec S LE_null cN hN hLE_null hRestCommitments hLog st _ st'
-        ((noteCreate_emitted_equiv_circuit S LE_null cN hN hLE_null st _ st').mpr
-          (by simpa [hEnc, noteCreateEmittedStep, effect2EmittedStepLocal] using hsat))
+      exact noteCreate_emitted_refines_spec S LE_null cN hN hLE_null hRestCommitments hLog st ⟨cm, actor⟩ st'
+        ((noteCreate_emitted_equiv_circuit S LE_null cN hN hLE_null st ⟨cm, actor⟩ st').mp hcircuit)
   | .revoke holder t =>
       simp only [fullActionStep]
       exact revoke_emitted_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps) hLog
-        st _ st'
-        ((revoke_emitted_equiv_circuit S D_caps hD_caps st _ st').mpr
-          (by simpa [hEnc, revokeEmittedStep, effect2EmittedStepLocal] using hsat))
+        st ⟨holder, t⟩ st'
+        ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mp hcircuit)
   | .setFieldA actor cell f v =>
       simp only [fullActionStep]
       rcases hcircuit with ⟨hwf, hwf', hc⟩
-      exact setField_emitted_refines_spec CS hCSN hCSL hRestFrame hLogCS st _ st' hwf hwf'
-        ((setField_emitted_equiv_circuit CS st _ st').mpr
-          (by simpa [hEnc, setFieldEmittedStep, effect1EmittedStepLocal] using hsat))
+      exact setField_emitted_refines_spec CS hCSN hCSL hRestFrame hLogCS st ⟨actor, cell, f, v⟩ st' hwf hwf'
+        ((setField_emitted_equiv_circuit CS st ⟨actor, cell, f, v⟩ st').mp hc)
   | .dropRefA holder t =>
       simp only [fullActionStep]
       exact revoke_emitted_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps) hLog
-        st _ st'
-        ((revoke_emitted_equiv_circuit S D_caps hD_caps st _ st').mpr
-          (by simpa [hEnc, revokeEmittedStep, effect2EmittedStepLocal] using hsat))
+        st ⟨holder, t⟩ st'
+        ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mp hcircuit)
   | .revokeDelegationA holder t =>
       simp only [fullActionStep]
       exact revoke_emitted_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps) hLog
-        st _ st'
-        ((revoke_emitted_equiv_circuit S D_caps hD_caps st _ st').mpr
-          (by simpa [hEnc, revokeEmittedStep, effect2EmittedStepLocal] using hsat))
+        st ⟨holder, t⟩ st'
+        ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mp hcircuit)
   | .releaseEscrowA id actor =>
       simp only [fullActionStep]
       exact releaseEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
-        st _ st'
-        ((releaseEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st _ st').mpr
-          (by simpa [hEnc, releaseEscrowEmittedStep, effect2dualEmittedStepLocal] using hsat))
+        st ⟨id, actor⟩ st'
+        ((releaseEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mp
+          hcircuit)
   | .refundEscrowA id actor =>
       simp only [fullActionStep]
       exact refundEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
-        st _ st'
-        ((refundEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st _ st').mpr
-          (by simpa [hEnc, refundEscrowEmittedStep, effect2dualEmittedStepLocal] using hsat))
+        st ⟨id, actor⟩ st'
+        ((refundEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mp
+          hcircuit)
   | .fulfillObligationA id actor =>
       simp only [fullActionStep]
       exact refundEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
-        st _ st'
-        ((refundEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st _ st').mpr
-          (by simpa [hEnc, refundEscrowEmittedStep, effect2dualEmittedStepLocal] using hsat))
+        st ⟨id, actor⟩ st'
+        ((refundEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mp
+          hcircuit)
   | .slashObligationA id actor =>
       simp only [fullActionStep]
       exact releaseEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
-        st _ st'
-        ((releaseEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st _ st').mpr
-          (by simpa [hEnc, releaseEscrowEmittedStep, effect2dualEmittedStepLocal] using hsat))
+        st ⟨id, actor⟩ st'
+        ((releaseEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mp
+          hcircuit)
   | .bridgeLockA id actor originator destination asset amount =>
       simp only [fullActionStep]
-      exact bridgeLock_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog st _ st'
-        ((bridgeLock_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st _ st').mpr
-          (by simpa [hEnc, bridgeLockEmittedStep, effect2dualEmittedStepLocal] using hsat))
+      exact bridgeLock_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog st
+        ⟨id, actor, originator, destination, asset, amount⟩ st'
+        ((bridgeLock_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st
+            ⟨id, actor, originator, destination, asset, amount⟩ st').mp hcircuit)
   | .sealA pid actor payload =>
       simp only [fullActionStep]
-      exact seal_emitted_refines_spec S LE_sealed cN hN hLE_sealed hRestSealed hLog st _ st'
-        ((seal_emitted_equiv_circuit S LE_sealed cN hN hLE_sealed st _ st').mpr
-          (by simpa [hEnc, sealEmittedStep, effect2EmittedStepLocal] using hsat))
+      exact seal_emitted_refines_spec S LE_sealed cN hN hLE_sealed hRestSealed hLog st { pid, actor, payload } st'
+        ((seal_emitted_equiv_circuit S LE_sealed cN hN hLE_sealed st { pid, actor, payload } st').mp hcircuit)
   | .queueEnqueueA id m actor cell depId dAsset deposit =>
       simp only [fullActionStep]
       exact queueEnqueue_emitted_refines_spec S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow
-        hRestQueues hLog st _ st'
-        ((queueEnqueue_emitted_equiv_circuit S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow st _ st').mpr
-          (by simpa [hEnc, queueEnqueueEmittedStep, effect2tripleEmittedStepLocal] using hsat))
+        hRestQueues hLog st { id, m, actor, cell, depId, dAsset, deposit } st'
+        ((queueEnqueue_emitted_equiv_circuit S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow st
+            { id, m, actor, cell, depId, dAsset, deposit } st').mp hcircuit)
   | fa' =>
       exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow LE_sealed
         cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame hLogCS DBal hDBal
@@ -485,6 +500,4 @@ theorem turn_emitted_demo_mint_burn :
 #assert_axioms turn_emitted_demo_mint_burn
 #assert_axioms turn_emitted_refines_turnSpec
 #assert_axioms turn_emitted_refines_exec
-#assert_axioms step_emitted_refines_fullActionStep
-
 end Dregg2.Circuit.TurnEmit

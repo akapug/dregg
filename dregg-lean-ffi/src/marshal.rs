@@ -467,6 +467,8 @@ pub struct WireTurn {
     /// fee is a SIGNED Int (i128) on the wire, even though a real fee is non-negative.
     pub fee: i128,
     pub valid_until: u64,
+    /// Blocklace height threaded into Lean `AdmCtx.blockHeight` (omitted on wire when 0).
+    pub block_height: u64,
     /// The previous-receipt hash, a [u8;32] (encoded as 64-hex).
     pub prev_hash: u64,
     pub root: WForest,
@@ -500,6 +502,7 @@ pub fn demo_turn_for_action(action: WireAction) -> WireTurn {
         nonce: 7,
         fee: 0,
         valid_until: 0,
+        block_height: 0,
         prev_hash: 0,
         root: WForest {
             auth: WireAuth::Unchecked,
@@ -1325,6 +1328,10 @@ fn encode_wturn(t: &WireTurn, out: &mut String) -> Result<(), MarshalError> {
     push_int(out, t.fee);
     out.push_str(",\"valid_until\":");
     push_nat(out, t.valid_until);
+    if t.block_height > 0 {
+        out.push_str(",\"block_height\":");
+        push_nat(out, t.block_height);
+    }
     out.push_str(",\"prev\":\"");
     out.push_str(&to_hex32(t.prev_hash));
     out.push_str("\",\"root\":");

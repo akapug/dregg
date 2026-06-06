@@ -19,6 +19,7 @@ pub mod metrics;
 pub mod multi_group;
 mod relay_service;
 mod routing_table;
+mod executor_setup;
 mod starbridge_seed;
 mod state;
 mod ws;

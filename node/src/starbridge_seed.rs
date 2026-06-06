@@ -67,6 +67,9 @@ pub fn seed_starbridge_factory_cells(
 
     let mut turn_executor = TurnExecutor::new(ComputronCosts::default());
     turn_executor.set_local_federation_id(federation_id);
+    // Genesis seeding runs before the first finalized block; height 1 matches the
+    // first submit path (`BlockHeightMode::Next` from attested 0).
+    turn_executor.set_block_height(1);
     for descriptor in &factory_descriptors {
         turn_executor.deploy_factory(descriptor.clone());
     }
