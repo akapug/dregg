@@ -64,7 +64,8 @@ component(s):
 | `bal` / `caps` (whole function) | **v2 `EffectCommit2`** | `funcComponent` + injective whole-function digest | `Inst/mintA.lean` (bal) or `Inst/attenuateA.lean` (caps) |
 | `List` side-table | **v2 `EffectCommit2`** | `listComponent` + `ListDigestBindsList` | `Inst/noteCreateA.lean` or `Inst/queueAllocateA.lean` |
 | Log only (kernel frozen) | **v1 `EffectCommit`** with `touched := ∅` | log hash only | `Inst/emitEventA.lean` |
-| 2+ components (escrow, enqueue, …) | **DEFERRED** — multi-component v2 extension | — | — |
+| 2 components (`bal` + `escrows`) | **v2-dual `EffectCommit2Dual`** | two `ActiveComponent`s + two bind gates | `Inst/createEscrowA.lean` |
+| 3+ components (enqueue, spawn, …) | **DEFERRED** — triple-component extension | — | — |
 | `accounts` growth | **DEFERRED** — set-digest carrier | — | — |
 
 **Critical:** v1's `kernelFrame` lists `bal` before `escrows`; most bespoke specs list `bal` after
@@ -105,6 +106,18 @@ Adding circuit⟺spec for a bal/list/caps effect is a **thin instance** (~80–1
 
 The generic v2 theorems are proved **once** in `EffectCommit2.lean`. Carriers:
 `ListCommit.ListDigestBindsList`, `KeyedCommit.KeyedDigestBindsKeys` (for finite keyed domains only).
+
+## 5b. The per-effect recipe (v2-dual — two non-cell components)
+
+For `bal`+`escrows` (or any two-component effect), ~100 lines in `Inst/<effect>.lean`:
+
+1. A `RestIffNo<Field1><Field2> RH` portal omitting BOTH touched fields from the rest hash.
+2. An `EffectSpec2Dual` with `active1` + `active2` (`funcComponent` + `listComponent` typical).
+3. `GuardDecodes2Dual` / `GuardEncodes2Dual`, `RestFrameDecodes2Dual`.
+4. `apex_iff_<BespokeSpec>` bridge.
+5. `<effect>_full_sound` via `effect2dual_circuit_full_sound`.
+
+Template: `Inst/createEscrowA.lean`. Wire indices `64..73` (`traceWidth = 74`); tactic `ec2d_lookup`.
 
 ## 6. Proof-strategy playbook (the reusable tactics — avoid the known tarpits)
 
@@ -152,13 +165,14 @@ The generic v2 theorems are proved **once** in `EffectCommit2.lean`. Carriers:
 | sealA / unsealA | SealSpec / UnsealSpec | v2 list | `Inst/sealA.lean`, `Inst/unsealA.lean` |
 | queueAllocateA / queueResizeA | QueueAllocateSpec / QueueResizeSpec | v2 list | `Inst/queueAllocateA.lean`, etc. |
 | swissExportA | ExportSpec | v2 list | `Inst/swissExportA.lean` |
+| createEscrowA | EscrowHoldingCreateSpec | v2-dual (`bal`+`escrows`) | `Inst/createEscrowA.lean` |
 
 ### Circuit⟺spec DEFERRED (executor⟺spec done; circuit corner open)
 
-These touch **2+ components** or **accounts growth** — need multi-component v2 or a set-digest carrier:
+These touch **3+ components** or **accounts growth** — need triple-component v2 or a set-digest carrier:
 
 - **Accounts growth:** `createCellA`, `spawnA`, `createCellFromFactoryA`
-- **Escrow:** `createEscrowA`, `releaseEscrowA`, `refundEscrowA`, `createCommittedEscrowA`
+- **Escrow (remaining):** `releaseEscrowA`, `refundEscrowA`, `createCommittedEscrowA`
 - **Bridge outbound:** `bridgeLockA`, `bridgeFinalizeA`, `bridgeCancelA`
 - **Queue pipeline:** `queueEnqueueA`, `queueDequeueA` (queues + bal + escrows), `queuePipelineStepA`,
   pipelined send with deposit
@@ -196,6 +210,7 @@ circuits with Poseidon2 gates is the next step.
 - `Dregg2/Circuit/ListCommit.lean` — v2 list carrier (`ListDigestBindsList`).
 - `Dregg2/Circuit/KeyedCommit.lean` — v2 keyed carrier (finite domains only).
 - `Dregg2/Circuit/EffectCommit2.lean` — **v2 GENERIC** framework (single non-cell component).
+- `Dregg2/Circuit/EffectCommit2Dual.lean` — **v2-dual GENERIC** framework (two non-cell components).
 - `Dregg2/Circuit/EffectInstances.lean` — v1 validation templates (`transferE`, `setFieldE`).
 - `Dregg2/Circuit/EffectInstances2.lean` — v2 validation templates (`mintE`, `noteSpendE`).
 - `Dregg2/Circuit/Inst/<effect>.lean` — **production instances** (one file per effect; this is what you add).
