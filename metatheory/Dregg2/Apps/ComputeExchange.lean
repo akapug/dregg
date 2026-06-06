@@ -40,7 +40,7 @@ def cxOrder (amount : Int) : FullForestA :=
   ⟨ .createEscrowA jobId buyer buyer provider payAsset amount, [] ⟩
 
 def cxSettle : FullForestA :=
-  ⟨ .releaseEscrowA jobId buyer, [] ⟩
+  ⟨ .releaseEscrowA jobId provider, [] ⟩
 
 def cxRefund : FullForestA :=
   ⟨ .refundEscrowA jobId buyer, [] ⟩
@@ -76,9 +76,12 @@ theorem cx_settle_requires_live_provider (s : RecChainedState) {r : EscrowRecord
     (hfind : s.kernel.escrows.find? (fun r => decide (r.id = jobId ∧ r.resolved = false)) = some r)
     (hdead : cellLifecycleLive s.kernel r.recipient = false) :
     execFullForestA s cxSettle = none := by
-  have hchain : releaseEscrowChainA s jobId buyer = none := by
+  have hchain : releaseEscrowChainA s jobId provider = none := by
     unfold releaseEscrowChainA
-    rw [releaseEscrowKAsset_nonlive_fails hfind hdead]
+    by_cases hg : releaseSettleAuthB s.kernel jobId provider
+    · rw [if_pos hg]
+      rw [releaseEscrowKAsset_nonlive_fails hfind hdead]
+    · rw [if_neg hg]
   rw [execFullForestA_eq_execFullTurnA]
   simp only [cxSettle, lowerForestA, lowerChildrenA, execFullTurnA, execFullA, hchain]
 

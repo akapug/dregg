@@ -106,7 +106,7 @@ private theorem queueTxOpStepA_nullifiers (s s' : RecChainedState) (op : QueueTx
       simp only [queueTxOpStepA, queueEnqueueChainA] at h; split at h
       · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
         | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+        | some k' => commit_subst h hk
                      exact queueEnqueueDepositK_nullifiers s.kernel id m actor cell depId dAsset deposit k' hk
       · exact absurd h (by simp)
   | dequeue id actor cell depId deposit =>
@@ -114,7 +114,7 @@ private theorem queueTxOpStepA_nullifiers (s s' : RecChainedState) (op : QueueTx
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some kp => obtain ⟨k', mhd⟩ := kp
-                     rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+                     commit_subst h hk
                      exact queueDequeueRefundK_nullifiers s.kernel id actor depId k' mhd hk
       · exact absurd h (by simp)
 
@@ -198,23 +198,20 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
   -- wrappers. Read back the committed `k'`, then `k'.nullifiers = s.kernel.nullifiers` (the kernel op
   -- updates a NON-`nullifiers` field, so the projection is `rfl`).
   | balanceA t a =>
-      simp only [execFullA, recCexecAsset] at h
-      cases hk : recKExecAsset s.kernel t a with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold recKExecAsset at hk; split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := recCexecAsset_factors t a (by simpa only [execFullA] using h)
+      subst h'
+      show s.kernel.nullifiers ⊆ k'.nullifiers
+      have hn : k'.nullifiers = s.kernel.nullifiers := by
+        unfold recKExecAsset at hk; split at hk
+        · injection hk with hk; subst hk; rfl
+        · exact absurd hk (by simp)
+      exact hn ▸ List.Subset.refl _
   | delegate del rec t =>
       simp only [execFullA, recCDelegate] at h
       cases hk : recKDelegate s.kernel del rec t with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           have hn : k'.nullifiers = s.kernel.nullifiers := by
             unfold recKDelegate at hk; split at hk
@@ -229,7 +226,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKMintAsset s.kernel actor cell a amt with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           have hn : k'.nullifiers = s.kernel.nullifiers := by
             unfold recKMintAsset at hk; split at hk
@@ -241,7 +238,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKBurnAsset s.kernel actor cell a amt with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           have hn : k'.nullifiers = s.kernel.nullifiers := by
             unfold recKBurnAsset at hk; split at hk
@@ -279,7 +276,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKDelegate s.kernel intro rec t with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           have hn : k'.nullifiers = s.kernel.nullifiers := by
             unfold recKDelegate at hk; split at hk
@@ -291,7 +288,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKDelegateAtten s.kernel del rec t keep with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           have hn : k'.nullifiers = s.kernel.nullifiers := by
             unfold recKDelegateAtten at hk; split at hk
@@ -312,7 +309,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKDelegate s.kernel intro rec t with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           have hn : k'.nullifiers = s.kernel.nullifiers := by
             unfold recKDelegate at hk; split at hk
@@ -353,7 +350,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKMintAsset s.kernel actor cell a value with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           have hn : k'.nullifiers = s.kernel.nullifiers := by
             unfold recKMintAsset at hk; split at hk
@@ -368,7 +365,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           have hn : k'.nullifiers = s.kernel.nullifiers := by
             unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
@@ -376,41 +373,35 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
             · exact absurd hk (by simp)
           exact hn ▸ List.Subset.refl _
   | releaseEscrowA id actor =>
-      simp only [execFullA, releaseEscrowChainA] at h
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-            split at hk
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      show s.kernel.nullifiers ⊆ k'.nullifiers
+      have hn : k'.nullifiers = s.kernel.nullifiers := by
+        unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      exact hn ▸ List.Subset.refl _
   | refundEscrowA id actor =>
-      simp only [execFullA, refundEscrowChainA] at h
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold refundEscrowKAsset settleEscrowRawAsset at hk
-            split at hk
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      show s.kernel.nullifiers ⊆ k'.nullifiers
+      have hn : k'.nullifiers = s.kernel.nullifiers := by
+        unfold refundEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      exact hn ▸ List.Subset.refl _
   | createObligationA id actor obligor beneficiary asset stake =>
       simp only [execFullA, createEscrowChainA] at h
       cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           have hn : k'.nullifiers = s.kernel.nullifiers := by
             unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
@@ -419,35 +410,29 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
           exact hn ▸ List.Subset.refl _
   -- fulfill/slash route to refund/release (escrow SETTLE) — `nullifiers` literally unchanged.
   | fulfillObligationA id actor =>
-      simp only [execFullA, refundEscrowChainA] at h
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold refundEscrowKAsset settleEscrowRawAsset at hk
-            split at hk
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      show s.kernel.nullifiers ⊆ k'.nullifiers
+      have hn : k'.nullifiers = s.kernel.nullifiers := by
+        unfold refundEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      exact hn ▸ List.Subset.refl _
   | slashObligationA id actor =>
-      simp only [execFullA, releaseEscrowChainA] at h
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-            split at hk
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      show s.kernel.nullifiers ⊆ k'.nullifiers
+      have hn : k'.nullifiers = s.kernel.nullifiers := by
+        unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      exact hn ▸ List.Subset.refl _
   -- §NOTE-SPEND — THE GROWER. `noteSpendNullifier` conses `nf` onto `nullifiers`, so the OLD set is a
   -- subset of the new (`List.subset_cons_self`). This is the ONE arm that moves the measured set.
   | noteSpendA nf actor =>
@@ -455,7 +440,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : noteSpendNullifier s.kernel nf with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           -- k' = { s.kernel with nullifiers := nf :: s.kernel.nullifiers } (the GROWER) ⇒ old ⊆ new.
           rw [show k' = { s.kernel with nullifiers := nf :: s.kernel.nullifiers } from by
@@ -465,14 +450,17 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
           exact List.subset_cons_self _ _
   -- §NOTE-CREATE — grows `commitments` (a DIFFERENT set), `nullifiers` untouched (always-commit).
   | noteCreateA cm actor =>
-      simp only [execFullA, noteCreateChainA, noteCreateCommitment] at h
-      obtain ⟨rfl⟩ := h; exact List.Subset.refl _
+      simp only [execFullA, noteCreateChainA] at h
+      option_inj at h; subst h
+      show s.kernel.nullifiers ⊆ (noteCreateCommitment s.kernel cm).nullifiers
+      unfold noteCreateCommitment
+      exact List.Subset.refl _
   | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
       simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
       · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+            commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
             have hn : k'.nullifiers = s.kernel.nullifiers := by
               unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
@@ -481,42 +469,36 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
             exact hn ▸ List.Subset.refl _
       · exact absurd h (by simp)
   | releaseCommittedEscrowA id actor =>
-      simp only [execFullA, releaseEscrowChainA] at h
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-            split at hk
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      show s.kernel.nullifiers ⊆ k'.nullifiers
+      have hn : k'.nullifiers = s.kernel.nullifiers := by
+        unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      exact hn ▸ List.Subset.refl _
   | refundCommittedEscrowA id actor =>
-      simp only [execFullA, refundEscrowChainA] at h
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold refundEscrowKAsset settleEscrowRawAsset at hk
-            split at hk
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      show s.kernel.nullifiers ⊆ k'.nullifiers
+      have hn : k'.nullifiers = s.kernel.nullifiers := by
+        unfold refundEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      exact hn ▸ List.Subset.refl _
   -- §bridge — lock/finalize/cancel over the SHARED escrow holding-store (kernel updates bal/escrows).
   | bridgeLockA id actor originator destination asset amount =>
       simp only [execFullA, bridgeLockChainA] at h
       cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+          commit_subst h hk
           show s.kernel.nullifiers ⊆ k'.nullifiers
           have hn : k'.nullifiers = s.kernel.nullifiers := by
             unfold bridgeLockKAsset createBridgeRawAsset at hk; split at hk
@@ -530,7 +512,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+            commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
             have hn : k'.nullifiers = s.kernel.nullifiers := by
               unfold bridgeFinalizeKAsset bridgeFinalizeRawAsset at hk
@@ -547,7 +529,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : bridgeCancelKAsset s.kernel id with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+            commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
             have hn : k'.nullifiers = s.kernel.nullifiers := by
               unfold bridgeCancelKAsset settleEscrowRawAsset at hk
@@ -600,7 +582,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : queueAllocateK s.kernel id actor cap with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+            commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
             have hn : k'.nullifiers = s.kernel.nullifiers := by
               -- queueAllocateK = `match findQueue | some _ => none | none => some {k with queues:=…}`.
@@ -615,7 +597,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+            commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
             -- queueEnqueueDepositK moves bal/queues/escrows only — read its frame on `nullifiers`.
             have hn : k'.nullifiers = s.kernel.nullifiers :=
@@ -642,7 +624,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : queueResizeK s.kernel id newCap with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+            commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
             have hn : k'.nullifiers = s.kernel.nullifiers := by
               -- queueResizeK = `match findQueue | none => none | some q => if … then some {…} else none`.
@@ -680,7 +662,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissExportK s.kernel sw exporter target rights with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+            commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
             have hn : k'.nullifiers = s.kernel.nullifiers := by
               unfold swissExportK at hk; split at hk
@@ -696,7 +678,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissEnlivenK s.kernel sw claimed with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+            commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
             have hn : k'.nullifiers = s.kernel.nullifiers :=
               swissEnlivenK_nullifiers s.kernel sw claimed k' hk
@@ -708,7 +690,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissHandoffK s.kernel sw certHash with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+            commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
             have hn : k'.nullifiers = s.kernel.nullifiers :=
               swissHandoffK_nullifiers s.kernel sw certHash k' hk
@@ -720,7 +702,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissDropK s.kernel sw with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := Option.some.injEq.mp h
+            commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
             have hn : k'.nullifiers = s.kernel.nullifiers :=
               swissDropK_nullifiers s.kernel sw k' hk

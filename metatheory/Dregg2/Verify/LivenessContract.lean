@@ -17,10 +17,12 @@ import Dregg2.Exec.GatedForestCfg
 namespace Dregg2.Verify
 
 open Dregg2.Exec
+open Dregg2.Exec.FullForestAuth (execFullForestG)
 open Dregg2.Exec.StarbridgeGated
-  (logBumpForestG logBumpForestG_turn_delta_zero logBumpForestG_commits logBumpForestG_log_one
-    transferSchedG transferForestCG)
+  (execForestG logBumpForestG logBumpForestG_turn_delta_zero logBumpForestG_commits
+    logBumpForestG_log_one)
 open Dregg2.Exec.TurnExecutorFull (fma0)
+open Dregg2.Verify (transferSchedG refund_demo_production_eventually)
 open Dregg2.Proof.Temporal (Eventually transferSched)
 open Dregg2.Proof.Fairness (Just JustProgress just_progress Pgoal BReg)
 open Dregg2.Proof.CTLLiveness (AF_just)

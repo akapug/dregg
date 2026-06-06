@@ -156,7 +156,8 @@ theorem recCexecAsset_iff_spec (st : RecChainedState) (t : Turn) (a : AssetId) (
         simp only [Option.some.injEq] at h
         subst h
         rcases hg with ⟨ha, hnn, havail, hne, hsrc, hdst⟩
-        exact ⟨ha, hnn, havail, hne, hsrc, hdst, hadm, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+        exact ⟨⟨ha, hnn, havail, hne, hsrc, hdst, hadm⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+               rfl, rfl⟩
       · rintro ⟨hguard, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
         obtain ⟨k', l'⟩ := st'
         obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
@@ -166,12 +167,13 @@ theorem recCexecAsset_iff_spec (st : RecChainedState) (t : Turn) (a : AssetId) (
     · rw [if_pos hadm, if_neg hg]
       constructor
       · intro h; exact absurd h (by simp)
-      · rintro ⟨hguard, _⟩; rcases hguard with ⟨_, _, _, _, _, _, hadm'⟩
-        rcases hg with ⟨_, _, _, _, _, _⟩; exact absurd hadm' hadm
+      · rintro ⟨hguard, _⟩
+        rcases hguard with ⟨ha, hnn, havail, hne, hsrc, hdst, _⟩
+        exact absurd ⟨ha, hnn, havail, hne, hsrc, hdst⟩ hg
   · rw [if_neg hadm]
     constructor
     · intro h; exact absurd h (by simp)
-    · rintro ⟨hguard, _⟩; rcases hguard with ⟨_, _, _, _, _, _, _, hadm'⟩; exact absurd hadm' hadm
+    · rintro ⟨hguard, _⟩; rcases hguard with ⟨_, _, _, _, _, _, hadm'⟩; exact absurd hadm' hadm
 
 /-- **`execFullA_balanceA_iff_spec` — the UNIFIED-ACTION executor corner.** The action executor
 `execFullA` dispatches `.balanceA t a` to `recCexecAsset s t a`, so committing the unified action into
@@ -275,7 +277,7 @@ theorem balanceMovement_rejects_sealed_dst (st : RecChainedState) (t : Turn) (a 
     execFullA st (.balanceA t a) = none := by
   show recCexecAsset st t a = none
   unfold recCexecAsset
-  rw [if_neg hbad]
+  rw [if_neg (by intro h; rw [h] at hbad; cases hbad)]
 
 /-! ## §6 — Axiom-hygiene tripwires.
 
