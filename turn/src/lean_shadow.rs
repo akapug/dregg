@@ -172,6 +172,7 @@ fn effect_is_mappable(eff: &Effect, id_map: &HashMap<CellId, u64>) -> bool {
         Effect::SetField { cell, .. } => has(cell),
         Effect::Transfer { from, to, .. } => has(from) && has(to),
         Effect::SetPermissions { cell, .. } => has(cell),
+        Effect::SetVerificationKey { cell, .. } => has(cell),
         Effect::EmitEvent { cell, .. } => has(cell),
         Effect::MakeSovereign { cell } => has(cell),
         Effect::RevokeDelegation { child } => has(child),
@@ -282,6 +283,20 @@ fn effect_to_wire(
             actor,
             cell: id(cell)?,
             perms: permissions_to_i128(new_permissions),
+        },
+        // The verified Lean executor models `SetVk` directly (see
+        // `Dregg2/Circuit/Inst/setVKA.lean` + the `setvk` wire arm). The VK is a
+        // structured `{hash, data}`; the wire arm carries a scalar, so we collapse to
+        // the low 64 bits of the canonical vk hash — the same digest-collapse the
+        // `SetField`/`SetPerms` arms use. A cleared VK (`None`) maps to the `0` marker,
+        // matching the executor's "no verification key" sentinel.
+        Effect::SetVerificationKey { cell, new_vk } => WireAction::SetVk {
+            actor,
+            cell: id(cell)?,
+            vk: new_vk
+                .as_ref()
+                .map(|vk| bytes32_to_nat(&vk.hash) as i128)
+                .unwrap_or(0),
         },
         Effect::EmitEvent { cell, event } => WireAction::Emit {
             actor,
