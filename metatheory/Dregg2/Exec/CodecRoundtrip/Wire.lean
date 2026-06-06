@@ -129,15 +129,29 @@ theorem parseWTurn_encode (t : WTurn) (rest : PState) (hwf : WfTurn t) (fuel : N
             ++ ('}' :: rest))))) = some (0, (",\"prev\":\"":String).toList ++ ((toHex32 prevHash).toList
             ++ (("\",\"root\":":String).toList ++ ((encodeForestW root).toList
             ++ ('}' :: rest))))) := by
-    dsimp only [parseBlockHeightW, lit]
-    rw [show (",\"block_height\":":String).toList =
-          ',' :: '"' :: 'b' :: 'l' :: 'o' :: 'c' :: 'k' :: '_' :: 'h' :: 'e' :: 'i' :: 'g' :: 'h' :: 't' :: '"' :: ':' :: []
-        from by decide,
-        show (",\"prev\":\"":String).toList =
-          ',' :: '"' :: 'p' :: 'r' :: 'e' :: 'v' :: '"' :: ':' :: '"' :: []
-        from by decide]
-    rw [litGo_cons_match, litGo_cons_match]
-    exact litGo_ne_head 'b' _ 'p' _ (by decide)
+    have hnone : litGo (",\"block_height\":":String).toList
+        ((",\"prev\":\"":String).toList ++ ((toHex32 prevHash).toList
+          ++ (("\",\"root\":":String).toList ++ ((encodeForestW root).toList ++ ('}' :: rest))))) = none := by
+      set tail := ((toHex32 prevHash).toList
+        ++ (("\",\"root\":":String).toList ++ ((encodeForestW root).toList ++ ('}' :: rest)))) with htail
+      rw [show (",\"block_height\":":String).toList =
+            ',' :: '"' :: 'b' :: 'l' :: 'o' :: 'c' :: 'k' :: '_' :: 'h' :: 'e' :: 'i' :: 'g' :: 'h' :: 't' :: '"' :: ':' :: []
+          from by decide,
+          show (",\"prev\":\"":String).toList =
+            ',' :: '"' :: 'p' :: 'r' :: 'e' :: 'v' :: '"' :: ':' :: '"' :: [] from by decide,
+          htail, List.cons_append]
+      rw [@litGo_cons_match ',']
+      rw [show (['"', 'p', 'r', 'e', 'v', '"', ':', '"'] : List Char) ++ tail =
+            '"' :: 'p' :: 'r' :: 'e' :: 'v' :: '"' :: ':' :: '"' :: tail from by simp [List.cons_append]]
+      rw [@litGo_cons_match '"']
+      rw [show (['b', 'l', 'o', 'c', 'k', '_', 'h', 'e', 'i', 'g', 'h', 't', '"', ':'] : List Char) =
+            'b' :: 'l' :: 'o' :: 'c' :: 'k' :: '_' :: 'h' :: 'e' :: 'i' :: 'g' :: 'h' :: 't' :: '"' :: ':' :: [] from rfl]
+      exact litGo_ne_head 'b' _ 'p' _ (by decide)
+    have hlit : lit ",\"block_height\":" ((",\"prev\":\"":String).toList ++ ((toHex32 prevHash).toList
+          ++ (("\",\"root\":":String).toList ++ ((encodeForestW root).toList ++ ('}' :: rest))))) = none := by
+      dsimp only [lit]; exact hnone
+    dsimp only [parseBlockHeightW]
+    rw [hlit]
   rw [hskip]
   simp only [Option.bind_eq_bind, Option.bind]
   rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
