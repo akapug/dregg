@@ -9,8 +9,8 @@
  * internal version signal that all observed-object signals depend on. There
  * is no diff; the signals refetch on read. Coarse but correct for v0.
  *
- * Subscription/event API is not yet wired up; mutating calls fire on the
- * `_events` EventTarget if any visualizer wants to listen directly.
+ * Cell-scoped event bus: `subscribeEvents(uri, topic, cb)` listens for
+ * `EmitEvent` effects surfaced after turn execution (see `emitCellEvent`).
  */
 
 import { attachRuntimeObjectAdapter } from './runtime-object-adapter.js';
@@ -62,6 +62,51 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     events.dispatchEvent(new CustomEvent(type, { detail }));
   }
   function bump() { version.value = version.value + 1; }
+
+  function normalizeCellId(uriOrId) {
+    return String(uriOrId || '').replace(/^dregg:\/\/cell\//, '');
+  }
+
+  /**
+   * Emit a cell-scoped event (from EmitEvent turn effects or wasm trace).
+   * @param {string} cellUriOrId
+   * @param {string} topic
+   * @param {Array} [data]
+   * @param {object} [extra]
+   */
+  function emitCellEvent(cellUriOrId, topic, data = [], extra = {}) {
+    const cellId = normalizeCellId(cellUriOrId);
+    const cellUri = String(cellUriOrId || '').startsWith('dregg://')
+      ? String(cellUriOrId)
+      : `dregg://cell/${cellId}`;
+    const detail = {
+      cell: cellUri,
+      cellId,
+      topic,
+      data: data || [],
+      ...extra,
+    };
+    fire('cell-event', detail);
+    fire(`cell-event:${topic}`, detail);
+    return detail;
+  }
+
+  /**
+   * Subscribe to cell-scoped events (workflow-step-advanced, storage-op-committed, …).
+   * Returns an unsubscribe function.
+   */
+  function subscribeEvents(cellUriOrId, topic, callback) {
+    const cellId = normalizeCellId(cellUriOrId);
+    const handler = (e) => {
+      const d = e.detail || {};
+      const eventCell = normalizeCellId(d.cell || d.cellId || d.cell_uri || '');
+      if (eventCell && eventCell !== cellId) return;
+      if (d.topic !== topic) return;
+      callback(d);
+    };
+    events.addEventListener('cell-event', handler);
+    return () => events.removeEventListener('cell-event', handler);
+  }
 
   // --- Observed-object signals (cached per id) ---
   const cellCache = new Map();
@@ -360,6 +405,17 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     }
     bump();
     fire('turn-executed', { agentIndex, actions, result });
+    // Surface any emit_event actions that rode along with the turn.
+    for (const action of actions || []) {
+      const type = action?.type || action?.kind;
+      if (type !== 'emit_event' && type !== 'EmitEvent') continue;
+      const cellRef = action.cell || action.cell_id || action.target;
+      const topic = action.topic || action.event || action.name;
+      if (!cellRef || !topic) continue;
+      emitCellEvent(cellRef, topic, action.data || action.payload || [], {
+        turn_hash: result?.turn_hash || null,
+      });
+    }
     return result;
   }
   async function mintToken(agentIndex, resource, actions, expiry = 0) {
@@ -688,6 +744,8 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     version,
     cursor,
     events,
+    emitCellEvent,
+    subscribeEvents,
 
     getCell,
     listCells,

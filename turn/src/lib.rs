@@ -76,6 +76,7 @@ pub mod executor;
 pub mod fast_path;
 pub mod forest;
 pub(crate) mod journal;
+pub mod lean_shadow;
 pub mod obligation;
 pub mod pending;
 pub mod presence_discharge;

@@ -33,6 +33,22 @@ fn lean_sysroot() -> PathBuf {
 
 fn main() {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lean_archive = crate_dir.join("libdregg_lean.a");
+
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/lean_init.c");
+    println!("cargo:rerun-if-changed=libdregg_lean.a");
+
+    if !lean_archive.exists() {
+        println!(
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a absent — building marshal-only; \
+             lean_available() will be false. Build via scripts/rebuild-dregg2-closure.sh."
+        );
+        return;
+    }
+
+    println!("cargo:rustc-cfg=lean_lib_present");
+
     let sysroot = lean_sysroot();
     let lean_lib = sysroot.join("lib").join("lean");
     let lean_include = sysroot.join("include");
@@ -56,9 +72,4 @@ fn main() {
     }
     // C++ runtime + system frameworks the Lean runtime needs on macOS.
     println!("cargo:rustc-link-lib=dylib=c++");
-
-    // Rebuild triggers.
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=src/lean_init.c");
-    println!("cargo:rerun-if-changed=libdregg_lean.a");
 }

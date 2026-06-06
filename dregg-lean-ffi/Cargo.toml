@@ -5,18 +5,28 @@
 name = "dregg-lean-ffi"
 version = "0.1.0"
 edition = "2021"
-# `cargo run` (no --bin) runs the differential harness — the cascade beachhead.
+# With `lean-lib` + `libdregg_lean.a` present: `cargo run --features lean-lib`.
 default-run = "differential"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# Enable Lean FFI linking + differential/marshal binaries (requires libdregg_lean.a).
+lean-lib = []
 
 [[bin]]
 name = "dregg-lean-ffi"
 path = "src/main.rs"
+required-features = ["lean-lib"]
 
 # The cascade beachhead: a property-based DIFFERENTIAL harness that makes the
 # verified Lean kernel the golden oracle for a Rust reference implementation.
 [[bin]]
 name = "differential"
 path = "src/differential.rs"
+required-features = ["lean-lib"]
 
 # The CIRCUIT-extraction differential: decodes the Lean-`emit`ted kernelCircuit
 # wire form and binds it to the Rust-native AIR by fingerprint. Does not call
@@ -24,6 +34,7 @@ path = "src/differential.rs"
 [[bin]]
 name = "circuit_differential"
 path = "src/circuit_differential.rs"
+required-features = ["lean-lib"]
 
 # The STATE differential: marshals a real `Value` record `RecordKernelState` (not a
 # scalar) across the FFI, runs the verified `recKExec` via the C string bridge
@@ -32,6 +43,7 @@ path = "src/circuit_differential.rs"
 [[bin]]
 name = "state_differential"
 path = "src/state_differential.rs"
+required-features = ["lean-lib"]
 
 # The FULL-TURN differential (E6 / Path A): marshals a whole
 # (RecChainedState, List FullAction) across the FFI, runs the verified `execFullTurn`
@@ -41,6 +53,7 @@ path = "src/state_differential.rs"
 [[bin]]
 name = "full_turn_differential"
 path = "src/full_turn_differential.rs"
+required-features = ["lean-lib"]
 
 # THE SWAP marshaller round-trip GATE (T8/T9): marshals a WireState + WireTurn with the
 # byte-exact `marshal.rs` encoder, feeds it to the GATED complete-turn executor via the C
@@ -51,6 +64,7 @@ path = "src/full_turn_differential.rs"
 [[bin]]
 name = "marshal_roundtrip"
 path = "src/marshal_roundtrip.rs"
+required-features = ["lean-lib"]
 
 [dependencies]
 # Reproduces circuit::air_descriptor::fingerprint (BLAKE3-derive-key) so the

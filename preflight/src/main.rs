@@ -25,6 +25,7 @@ fn run_all_subsystems() -> Vec<SubsystemResult> {
         run_subsystem("Turn execution", checks::turns::run()),
         run_subsystem("Proofs", checks::proofs::run()),
         run_subsystem("Effect VM", checks::effect_vm::run()),
+        run_subsystem("Lean marshal", checks::lean_marshal::run()),
         run_subsystem("Privacy", checks::privacy::run()),
         run_subsystem("Capabilities", checks::caps::run()),
         run_subsystem("Intents", checks::intents::run()),

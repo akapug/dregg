@@ -72,6 +72,18 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  lean-marshal-gate:
+    name: Lean marshal gate
+    runs-on: ubuntu-latest
+    # Skips gracefully when libdregg_lean.a is absent (see scripts/check-lean-marshal.sh).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: bash scripts/check-lean-marshal.sh
+
   no-unchecked-auth:
     name: No-Unchecked-Auth grep guard (P2.F)
     runs-on: ubuntu-latest
