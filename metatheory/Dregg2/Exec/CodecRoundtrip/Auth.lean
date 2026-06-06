@@ -28,7 +28,6 @@ payload WALK is three tactic macros. `WfAuth` pins the codec boundary (every dig
 `[u8;32]` width), recursively over `oneOf`. -/
 
 /-! ### §6a — the per-arm tactic combinators (the payload walk + the fail-closed dispatch).
-
 `lit_ok` consumes the literal at the head; `lit_fail k b` discharges a WRONG-tag `lit k` on input that
 begins with the concrete tag `b` (both `decide`-checkable); `dig_ok h` consumes a `"H64"` digest field
 (`h : d < 2^256`); `nat_ok` consumes a decimal number whose post-byte is `,`/`]}`/`]` (the three
@@ -108,7 +107,6 @@ def authListSize : List AuthW → Nat
 end
 
 /-! ### §6c — the 9 NON-recursive arms (no induction; the dispatch+walk script per arm).
-
 This standalone helper closes every arm EXCEPT `oneOf`; the bundled `authGoal_all` (§6e) delegates its
 9 flat cases straight to here, so the recursive proof carries no duplication. -/
 
@@ -217,7 +215,6 @@ theorem parseAuthW_flat (a : AuthW) (rest : PState) (fuel : Nat)
       lit_ok; dig_ok hkey; lit_ok; nat_ok; lit_ok; rfl
 
 /-! ### §6d — the candidate-list encoder shape (normalizing the `foldl` into peelable cons form).
-
 `encodeAuthListW`'s tail is a left-`foldl` accumulator (FFI.lean:1384), which does NOT syntactically
 expose the `","`-prefixed head the cons-recursive `parseAuthLoopW` peels. So — unlike §5, whose
 `encodeFieldsTailW` was already cons-recursive at the FFI site — we must NORMALIZE the fold. The
@@ -409,5 +406,44 @@ example : parseAuthW 10 ((encodeAuthW witNestedAuth).toList ++ ['x']) = some (wi
   parseAuthW_roundtrip witNestedAuth ['x'] (by unfold witNestedAuth WfAuth WfAuthList; trivial) 10
     (by unfold witNestedAuth; decide)
 
+/-! Each charge in `authSize`/`authListSize` is paid by ≥1 encoded byte. Mutual: the `oneOf` body's `+1`
+by the `{"oneof":[` prefix, each candidate by its own encoding (recursively), each tail comma by `,`. -/
+mutual
+theorem authSize_le_encode (a : AuthW) : authSize a ≤ (encodeAuthW a).toList.length := by
+  obtain ⟨t, ht⟩ := encodeAuthW_head a
+  cases a with
+  | oneOf cands i =>
+      have hl := authListSize_le_encode cands
+      show 1 + authListSize cands ≤ (encodeAuthW (.oneOf cands i)).toList.length
+      simp only [encodeAuthW, String.toList_append, List.length_append,
+        show ("{\"oneof\":[":String).toList.length = 10 from by decide]
+      omega
+  | _ =>
+      rw [ht]; simp only [authSize, List.length_cons]; omega
+theorem authListSize_le_encode (as : List AuthW) : authListSize as ≤ (encodeAuthListW as).toList.length := by
+  cases as with
+  | nil => simp [authListSize]
+  | cons a as' =>
+      have ha := authSize_le_encode a
+      have ht := authTailSize_le_encode as'
+      have hshape := encAuthListW_cons_shape a as' []
+      simp only [List.append_nil] at hshape
+      show 1 + authSize a + authListSize as' ≤ (encodeAuthListW (a :: as')).toList.length
+      rw [hshape]
+      simp only [List.length_cons, List.length_append]
+      omega
+theorem authTailSize_le_encode (as : List AuthW) : authListSize as ≤ (encodeAuthTailW as).toList.length := by
+  cases as with
+  | nil => simp [authListSize, encodeAuthTailW]
+  | cons a as' =>
+      have ha := authSize_le_encode a
+      have ht := authTailSize_le_encode as'
+      have hshape := encAuthTailW_cons_shape a as' []
+      simp only [List.append_nil] at hshape
+      show 1 + authSize a + authListSize as' ≤ (encodeAuthTailW (a :: as')).toList.length
+      rw [hshape]
+      simp only [List.length_cons, List.length_append]
+      omega
+end
 
 end Dregg2.Exec.CodecRoundtrip

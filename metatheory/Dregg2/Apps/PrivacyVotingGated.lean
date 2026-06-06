@@ -53,6 +53,11 @@ re-cast — so no-double-vote is enforced BY THE EXECUTOR, not merely carried.
   4. `pv_cast_conserves`            — a committed cast-vote moves NO asset's supply (per-asset Δ = 0):
      the ballot write touches metadata, never balance.
 
+Plus a parallel **TOKEN + MACAROON-CHAIN** voter arm (§2b/§5b): `.token` credentials for the WHO leg
+and `NodeAuth.chain := some …` for the macaroon `verifiedChainGate` caveat leg — with
+`pv_token_forged_rejected`, `pv_chain_forged_rejected`, `pv_chain_caveat_violation_rejected`, and
+`pv_token_good_commits` witnessed on `ballot0` alongside the signature arm.
+
 Plus a concrete ballot-cell state (`ballot0`) whose `#guard`s show a GOOD first cast COMMITS, a forged
 credential gives `none`, a revoked voter gives `none`, and a double-vote gives `none` — every theorem
 witnessed REAL, not vacuous.
@@ -73,6 +78,17 @@ open Dregg2.Exec.EffectsState
 open Dregg2.Exec.FullForestAuth
 open Dregg2.Exec.StarbridgeGated
 open Dregg2.Exec.StarbridgeGated
+open Dregg2.Exec.AuthModes (unchecked_unconstrained_admits)
+open Dregg2.Spec (Guard)
+open Dregg2.Authority
+open Dregg2.Authority.CaveatChain
+open Dregg2.Authority.CaveatChain.Demo
+
+/-- Pin the toy `MacKernel` at the starbridge `Tag`/`Bytes` carriers so `#guard`/`decide` can reduce
+`chainGateG` (the Demo namespace's instance is not otherwise visible to evaluation here). -/
+instance pvMacKernel : MacKernel (Key Tg) Bt Tg where
+  mac k m := 31 * k + 7 * m + 1
+  unforgeable := True
 
 /-! ## §1 — The private-vote DOMAIN at the Demo carriers (the ballot cell, the per-voter nullifier slots).
 
@@ -121,6 +137,50 @@ identical to `castNode`. -/
 def castNodeNul (cred : Authorization Dg Pf) (nul : Nat) (voterSlot : FieldName) (mark : Int) : DForest :=
   ⟨ { mkAuth cred [] with credNul := nul }, .setFieldA ballotActor ballotCell voterSlot mark, [] ⟩
 
+/-! ## §2b — The TOKEN + MACAROON-CHAIN voter arm (parallel to the `.signature` credential arm).
+
+The signature arm supplies the WHO via `portalVerify (.signature stmt sig)`. The token arm supplies
+the WHO via `portalVerify (.token key sig)` (the HMAC macaroon tag) AND the macaroon caveat leg via
+`NodeAuth.chain := some …` — `chainGateG` requires `verifiedChainGate` = HMAC replay-and-compare ∧
+caveat meet. Empty within-cell `caveats` (as in `mkAuth`); the chain IS the attenuation gate. -/
+
+/-- A genuine macaroon TOKEN credential (the tag echoes the issuer key under `Crypto.Reference`). -/
+def goodTokenCred : Authorization Dg Pf := .token 7 7
+/-- A FORGED macaroon TOKEN credential (wrong tag). -/
+def forgedTokenCred : Authorization Dg Pf := .token 7 8
+
+/-- The chain caveat-context for voter authorization (matches `baseCapCtx.caveatCtx = 150`). -/
+def pvChainCtx : Cx := 150
+/-- No third-party gateway discharges on the voter chain. -/
+def pvNoDis : Discharges Gw := fun _ => false
+
+/-- Root macaroon for the voter chain (`Macaroon::new`). -/
+def pvChainRoot : Chain Cx Gw (Key Tg) Bt Tg := seed (Ctx := Cx) (Gateway := Gw) 5 9
+
+/-- A GOOD voter macaroon chain: attenuated with `height ≥ 100` then `height ≤ 200` — admits
+`pvChainCtx = 150`. -/
+def pvGoodChain : Chain Cx Gw (Key Tg) Bt Tg :=
+  (pvChainRoot.append { caveat := .local (fun h => decide (100 ≤ h)), encoded := 100 }).append
+    { caveat := .local (fun h => decide (h ≤ 200)), encoded := 200 }
+
+/-- A FORGED voter chain: `windowed`'s tail with the last caveat dropped (the
+`test_removed_caveat_fails` attack) — `verify = false`. -/
+def pvForgedChain : Chain Cx Gw (Key Tg) Bt Tg :=
+  { pvGoodChain with links := pvGoodChain.links.dropLast }
+
+/-- A caveat-VIOLATION voter chain: verifies but does NOT admit `pvChainCtx = 150` (`height ≤ 50` only). -/
+def pvCaveatViolationChain : Chain Cx Gw (Key Tg) Bt Tg :=
+  pvChainRoot.append { caveat := .local (fun h => decide (h ≤ 50)), encoded := 50 }
+
+/-- `NodeAuth` carrying a macaroon chain (the token+chain voter decoration). -/
+def mkAuthWithChain (cred : Authorization Dg Pf) (chain : Chain Cx Gw (Key Tg) Bt Tg) : DNodeAuth :=
+  { mkAuth cred [] with chain := some chain, chainCtx := pvChainCtx, chainDis := pvNoDis }
+
+/-- A gated cast-vote node with a TOKEN credential and a macaroon chain. -/
+def castNodeWithChain (cred : Authorization Dg Pf) (chain : Chain Cx Gw (Key Tg) Bt Tg)
+    (voterSlot : FieldName) (mark : Int) : DForest :=
+  ⟨ mkAuthWithChain cred chain, .setFieldA ballotActor ballotCell voterSlot mark, [] ⟩
+
 /-! ## §3 — The leaf-collapse bridge: a childless gated forest runs EXACTLY its single gated node. -/
 
 /-- **`execFullForestG_leaf` — PROVED (the load-bearing collapse).** A gated forest with NO children runs
@@ -148,6 +208,16 @@ theorem execFullForestG_castNode (s : RecChainedState) (cred : Authorization Dg 
   rw [castNode, execFullForestG_leaf, execFullAGated]
   rfl
 
+/-- **`execFullForestG_castNodeWithChain` — the token+chain cast-vote collapse.** -/
+theorem execFullForestG_castNodeWithChain (s : RecChainedState) (cred : Authorization Dg Pf)
+    (chain : Chain Cx Gw (Key Tg) Bt Tg) (voterSlot : FieldName) (mark : Int) :
+    execFullForestG s (castNodeWithChain cred chain voterSlot mark)
+      = (if gateOK (mkAuthWithChain cred chain) s = true
+         then stateStepGuarded s voterSlot ballotActor ballotCell mark
+         else none) := by
+  rw [castNodeWithChain, execFullForestG_leaf, execFullAGated]
+  rfl
+
 /-! ## §4 — The CREDENTIAL gate: a FORGED credential fails-closed (state-independent).
 
 `gateOK (mkAuth cred []) s = credentialValidG (mkAuth cred []) && capAuthorityG (mkAuth cred []) &&
@@ -165,6 +235,42 @@ theorem gateOK_forged_false (s : RecChainedState) : gateOK (mkAuth forgedCred []
   rw [hcred]
   simp
 
+/-! ## §4b — The TOKEN + MACAROON-CHAIN gate legs (parallel to §4's signature forgery). -/
+
+/-- **`gateOK_token_forged_false` — PROVED.** A FORGED macaroon token's gate leg is FALSE
+(`portalVerify (.token 7 8) = false`) — independent of state and chain. -/
+theorem gateOK_token_forged_false (s : RecChainedState) (chain : Chain Cx Gw (Key Tg) Bt Tg) :
+    gateOK (mkAuthWithChain forgedTokenCred chain) s = false := by
+  have hcred : credentialValidG (mkAuthWithChain forgedTokenCred chain) = false := rfl
+  unfold gateOK
+  rw [hcred]
+  simp
+
+/-- **`gateOK_chain_forged_false` — PROVED.** A FORGED macaroon chain (HMAC tail mismatch) fails the
+`chainGateG` leg — independent of state, even with a genuine token. -/
+theorem gateOK_chain_forged_false (s : RecChainedState) :
+    gateOK (mkAuthWithChain goodTokenCred pvForgedChain) s = false := by
+  have hverify : pvForgedChain.verify = false := by decide
+  have hcav : caveatsDischarged (mkAuthWithChain goodTokenCred pvForgedChain) s = false := by
+    simp only [caveatsDischarged, mkAuthWithChain, mkAuth, List.all_nil, chainGateG, hverify]
+    decide
+  unfold gateOK
+  rw [hcav]
+  simp
+
+/-- **`gateOK_chain_caveat_violation_false` — PROVED.** A verifying chain whose caveats do NOT admit
+`pvChainCtx` fails the `chainGateG` leg — the caveat meet bites. -/
+theorem gateOK_chain_caveat_violation_false (s : RecChainedState) :
+    gateOK (mkAuthWithChain goodTokenCred pvCaveatViolationChain) s = false := by
+  have hverify : pvCaveatViolationChain.verify = true := by decide
+  have hadmits : pvCaveatViolationChain.admits pvChainCtx pvNoDis = false := by decide
+  have hcav : caveatsDischarged (mkAuthWithChain goodTokenCred pvCaveatViolationChain) s = false := by
+    simp only [caveatsDischarged, mkAuthWithChain, mkAuth, List.all_nil, chainGateG, hverify, hadmits]
+    decide
+  unfold gateOK
+  rw [hcav]
+  simp
+
 /-! ## §5 — END-USER THEOREM 1: a FORGED voter credential ⇒ the whole gated turn REJECTS. -/
 
 /-- **`pv_forged_credential_rejected` — PROVED.** A cast-vote (any voter-slot/mark) presented with a
@@ -176,6 +282,43 @@ theorem pv_forged_credential_rejected (s : RecChainedState) (voterSlot : FieldNa
   rw [castNode]
   exact execFullForestG_unauthorized_fails s (mkAuth forgedCred [])
     (.setFieldA ballotActor ballotCell voterSlot mark) [] (gateOK_forged_false s)
+
+/-! ## §5b — TOKEN + MACAROON-CHAIN arm: forgery rejections and a good cast commits. -/
+
+/-- **`pv_token_forged_rejected` — PROVED.** A cast-vote with a FORGED macaroon token credential is
+rejected — `execFullForestG s (castNodeWithChain forgedTokenCred pvGoodChain …) = none`, ∀ state —
+even when the macaroon chain is genuine. -/
+theorem pv_token_forged_rejected (s : RecChainedState) (voterSlot : FieldName) (mark : Int) :
+    execFullForestG s (castNodeWithChain forgedTokenCred pvGoodChain voterSlot mark) = none := by
+  rw [castNodeWithChain]
+  exact execFullForestG_unauthorized_fails s (mkAuthWithChain forgedTokenCred pvGoodChain)
+    (.setFieldA ballotActor ballotCell voterSlot mark) []
+    (gateOK_token_forged_false s pvGoodChain)
+
+/-- **`pv_chain_forged_rejected` — PROVED.** A cast-vote with a FORGED macaroon chain is rejected —
+`execFullForestG s (castNodeWithChain goodTokenCred pvForgedChain …) = none`, ∀ state — even with a
+genuine token credential. -/
+theorem pv_chain_forged_rejected (s : RecChainedState) (voterSlot : FieldName) (mark : Int) :
+    execFullForestG s (castNodeWithChain goodTokenCred pvForgedChain voterSlot mark) = none := by
+  rw [castNodeWithChain]
+  exact execFullForestG_unauthorized_fails s (mkAuthWithChain goodTokenCred pvForgedChain)
+    (.setFieldA ballotActor ballotCell voterSlot mark) [] (gateOK_chain_forged_false s)
+
+/-- **`pv_chain_caveat_violation_rejected` — PROVED.** A cast-vote whose macaroon chain verifies but
+does NOT admit `pvChainCtx` is rejected — the chain caveat meet fail-closes. -/
+theorem pv_chain_caveat_violation_rejected (s : RecChainedState) (voterSlot : FieldName) (mark : Int) :
+    execFullForestG s (castNodeWithChain goodTokenCred pvCaveatViolationChain voterSlot mark) = none := by
+  rw [castNodeWithChain]
+  exact execFullForestG_unauthorized_fails s
+    (mkAuthWithChain goodTokenCred pvCaveatViolationChain)
+    (.setFieldA ballotActor ballotCell voterSlot mark) [] (gateOK_chain_caveat_violation_false s)
+
+/-- **`pv_token_good_cast_runs_write` — the gate-passing collapse for `goodTokenCred` + `pvGoodChain`.** -/
+theorem pv_token_good_cast_runs_write (s : RecChainedState) (voterSlot : FieldName) (mark : Int)
+    (hgate : gateOK (mkAuthWithChain goodTokenCred pvGoodChain) s = true) :
+    execFullForestG s (castNodeWithChain goodTokenCred pvGoodChain voterSlot mark)
+      = stateStepGuarded s voterSlot ballotActor ballotCell mark := by
+  rw [execFullForestG_castNodeWithChain, if_pos hgate]
 
 /-! ## §6 — END-USER THEOREM 2 (a REVOKED voter): a revoked credential can NEVER vote.
 
@@ -288,6 +431,40 @@ registry — A is REVOKED. Every cast presented with credential-nullifier `42` m
 def ballotRevoked : RecChainedState :=
   { ballot0 with kernel := { ballot0.kernel with revoked := [42] } }
 
+/-- **`pv_ballot0_token_caveats_discharged` — the good token+chain caveat leg passes on `ballot0`. -/
+theorem pv_ballot0_token_caveats_discharged :
+    caveatsDischarged (mkAuthWithChain goodTokenCred pvGoodChain) ballot0 = true := by
+  unfold caveatsDischarged mkAuthWithChain mkAuth chainGateG
+  simp only [List.all_nil, Bool.true_and]
+  decide
+
+/-- **`pv_ballot0_token_gate_ok` — the good token+chain 4-leg gate passes on `ballot0`. -/
+theorem pv_ballot0_token_gate_ok :
+    gateOK (mkAuthWithChain goodTokenCred pvGoodChain) ballot0 = true := by
+  unfold gateOK
+  have hcred : credentialValidG (mkAuthWithChain goodTokenCred pvGoodChain) = true := by decide
+  have hcap : capAuthorityG (mkAuthWithChain goodTokenCred pvGoodChain) = true := by
+    exact unchecked_unconstrained_admits (Guard.all []) baseCapCtx (fun _ _ => by simp)
+  have hrev : revocationGate (mkAuthWithChain goodTokenCred pvGoodChain) ballot0 = true := by
+    simp only [revocationGate, mkAuthWithChain, mkAuth, ballot0]
+    decide
+  rw [hcred, hcap, pv_ballot0_token_caveats_discharged, hrev]
+  decide
+
+/-- **`pv_ballot0_token_write_commits` — voter B's fresh-slot write admits under `ballot0`. -/
+theorem pv_ballot0_token_write_commits :
+    (stateStepGuarded ballot0 voterNullB ballotActor ballotCell 9).isSome := by
+  unfold stateStepGuarded ballot0 voterNullB ballotActor ballotCell ballotCaveats
+  decide
+
+/-- **`pv_token_good_commits` — PROVED (concrete non-vacuity).** On `ballot0`, voter B's FIRST cast
+with a genuine macaroon token + a verifying, admitting macaroon chain COMMITS over the fresh
+`null_B` slot. -/
+theorem pv_token_good_commits :
+    (execFullForestG ballot0 (castNodeWithChain goodTokenCred pvGoodChain voterNullB 9)).isSome := by
+  rw [pv_token_good_cast_runs_write ballot0 voterNullB 9 pv_ballot0_token_gate_ok]
+  simpa using pv_ballot0_token_write_commits
+
 -- The gate passes for the genuine credential on `ballot0` (credential ∧ revocation legs are the live legs):
 #guard (gateOK (mkAuth goodCred []) ballot0)                       --  true  (genuine + not revoked)
 #guard (gateOK (mkAuth forgedCred []) ballot0) == false            --  false (forged ⇒ fail-closed)
@@ -318,14 +495,53 @@ def ballotRevoked : RecChainedState :=
 #guard ((execFullForestG ballot0 (castNode goodCred voterNullB 9)).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7)
 
+-- TOKEN + MACAROON-CHAIN arm witnesses (parallel to the signature arm above):
+#guard (portalVerify goodTokenCred)                                              --  true  (genuine macaroon tag)
+#guard (portalVerify forgedTokenCred) == false                                   --  false (forged tag)
+#guard pvGoodChain.verify                                                        --  true  (good chain)
+#guard pvForgedChain.verify == false                                             --  false (forged chain)
+#guard pvCaveatViolationChain.verify                                           --  true  (verifies, but narrow)
+#guard pvGoodChain.admits pvChainCtx pvNoDis                                     --  true  (150 ∈ [100,200])
+#guard pvCaveatViolationChain.admits pvChainCtx pvNoDis == false                   --  false (150 ≰ 50)
+#guard (verifiedChainGate pvGoodChain pvNoDis pvChainCtx)                        --  verified ∧ admits
+#guard (verifiedChainGate pvCaveatViolationChain pvNoDis pvChainCtx) == false   --  false (caveat violation)
+#guard (gateOK (mkAuthWithChain goodTokenCred pvGoodChain) ballot0)              --  true  (token+chain pass)
+#guard (gateOK (mkAuthWithChain forgedTokenCred pvGoodChain) ballot0) == false    --  false (forged token)
+#guard (gateOK (mkAuthWithChain goodTokenCred pvForgedChain) ballot0) == false    --  false (forged chain)
+#guard (gateOK (mkAuthWithChain goodTokenCred pvCaveatViolationChain) ballot0) == false
+  --  false (chain caveat violation: 150 ≰ 50)
+
+-- voter B's FIRST cast via token+chain COMMITS:
+#guard ((execFullForestG ballot0 (castNodeWithChain goodTokenCred pvGoodChain voterNullB 9)).isSome)
+  --  true (B voted via macaroon!)
+#guard ((execFullForestG ballot0 (castNodeWithChain goodTokenCred pvGoodChain voterNullB 9)).map
+        (fun s => fieldOf voterNullB (s.kernel.cell 0))) == some 9  --  some 9
+-- forged token / forged chain / caveat-violation chain ⇒ none:
+#guard ((execFullForestG ballot0 (castNodeWithChain forgedTokenCred pvGoodChain voterNullB 9)).isSome) == false
+#guard ((execFullForestG ballot0 (castNodeWithChain goodTokenCred pvForgedChain voterNullB 9)).isSome) == false
+#guard ((execFullForestG ballot0
+          (castNodeWithChain goodTokenCred pvCaveatViolationChain voterNullB 9)).isSome) == false
+
 /-! ## §10 — Axiom-hygiene tripwires (the honesty pins). Every keystone depends ONLY on the three
 standard kernel axioms `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`native_decide`. (The
 portal soundness is a Prop carrier in `FullForestAuth`, never an axiom, so it does not appear.) -/
 
 #assert_axioms execFullForestG_leaf
 #assert_axioms execFullForestG_castNode
+#assert_axioms execFullForestG_castNodeWithChain
 #assert_axioms gateOK_forged_false
+#assert_axioms gateOK_token_forged_false
+#assert_axioms gateOK_chain_forged_false
+#assert_axioms gateOK_chain_caveat_violation_false
 #assert_axioms pv_forged_credential_rejected
+#assert_axioms pv_token_forged_rejected
+#assert_axioms pv_chain_forged_rejected
+#assert_axioms pv_chain_caveat_violation_rejected
+#assert_axioms pv_ballot0_token_caveats_discharged
+#assert_axioms pv_ballot0_token_gate_ok
+#assert_axioms pv_ballot0_token_write_commits
+#assert_axioms pv_token_good_cast_runs_write
+#assert_axioms pv_token_good_commits
 #assert_axioms pv_revoked_voter_rejected
 #assert_axioms pv_good_cast_runs_write
 #assert_axioms pv_no_double_vote
