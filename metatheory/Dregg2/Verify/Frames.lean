@@ -262,4 +262,70 @@ the registry has teeth — shown in `Apps/Identity.lean`.) -/
 #assert_axioms revoked_grow_forever
 #assert_axioms logLen_grow_forever
 
+/-! ## §6 — Production forest-grow frames (`execForestG`, erasure-lifted).
+
+The public Hatchery frame family for `CellExecutor.production`. Kernel-forest grow lemmas are reused
+via `execForestG_erases`; admission-only `none` arms are the universal stay-put close. -/
+
+namespace Production
+
+open Dregg2.Exec.StarbridgeGated
+open Dregg2.Exec.StarbridgeGated (DForest execForestG execForestG_erases eraseForestG)
+
+theorem execForestG_revoked_subset_grow (s s' : RecChainedState) (f : DForest)
+    (h : execForestG s f = some s') :
+    s.kernel.revoked ⊆ s'.kernel.revoked := by
+  have er := execForestG_erases s s' f h
+  exact Dregg2.Apps.Identity.execFullForestA_revoked_grow s s' (eraseForestG f) er
+
+theorem execForestG_commitments_grow (s s' : RecChainedState) (f : DForest)
+    (h : execForestG s f = some s') :
+    s.kernel.commitments ⊆ s'.kernel.commitments := by
+  have er := execForestG_erases s s' f h
+  exact execFullForestA_commitments_grow s s' (eraseForestG f) er
+
+theorem execForestG_nullifiers_grow (s s' : RecChainedState) (f : DForest)
+    (h : execForestG s f = some s') :
+    s.kernel.nullifiers ⊆ s'.kernel.nullifiers := by
+  have er := execForestG_erases s s' f h
+  exact execFullForestA_nullifiers_grow s s' (eraseForestG f) er
+
+theorem execForestG_logMono (s s' : RecChainedState) (f : DForest)
+    (h : execForestG s f = some s') :
+    s.log.length ≤ s'.log.length := by
+  have er := execForestG_erases s s' f h
+  exact execFullForestA_logMono s s' (eraseForestG f) er
+
+theorem cellNextG_carries_rel {α : Type _} (R : α → α → Prop) [Trans R R R]
+    (proj : RecChainedState → α)
+    (forestGrowG : ∀ (s s' : RecChainedState) (f : DForest),
+      execForestG s f = some s' → R (proj s) (proj s'))
+    {base : α} {s : RecChainedState} (h : R base (proj s)) (cg : ConservingGatedForest) :
+    R base (proj (cellNextG s cg)) := by
+  dsimp [cellNextG]
+  cases hc : execForestG s cg.val with
+  | some s' => simp only [Option.getD_some]
+               exact Trans.trans h (forestGrowG s s' cg.val hc)
+  | none    => simp only [Option.getD_none]; exact h
+
+attribute [aesop safe apply (rule_sets := [Dregg2])]
+  execForestG_revoked_subset_grow
+  execForestG_commitments_grow
+  execForestG_nullifiers_grow
+
+/-- `@[dregg_frame]` — production forest-grow lemmas for `exec_frame_production`. -/
+attribute [dregg_frame]
+  execForestG_revoked_subset_grow
+  execForestG_commitments_grow
+  execForestG_nullifiers_grow
+  execForestG_logMono
+
+#assert_axioms execForestG_revoked_subset_grow
+#assert_axioms execForestG_commitments_grow
+#assert_axioms execForestG_nullifiers_grow
+#assert_axioms execForestG_logMono
+#assert_axioms cellNextG_carries_rel
+
+end Production
+
 end Dregg2.Verify

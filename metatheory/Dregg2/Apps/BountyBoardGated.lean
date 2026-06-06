@@ -49,7 +49,7 @@ Zero `sorry`/`admit`/`native_decide`/`axiom`. NEW file only — does NOT touch `
 keystones + the proved kernel escrow conservation/liveness teeth. `#assert_axioms`-pinned to
 `{propext, Classical.choice, Quot.sound}`.
 -/
-import Dregg2.Exec.FullForestAuth
+import Dregg2.Exec.GatedForestCfg
 
 namespace Dregg2.Apps.BountyBoardGated
 
@@ -57,14 +57,8 @@ open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Exec.FullForestAuth
-open Dregg2.Exec.FullForestAuth.Demo
-
-/-- The file-local `Verifiable` instance the `Gate`/`Gated` dispatcher signatures need at the Demo
-carriers (`Stmt = Wit = Nat`), re-declared exactly as `FullForestAuth.Demo`/`NameserviceGated` do (the
-upstream instance is file-local, so it does not escape the import). Without it `gateOK`/`execFullForestG`
-cannot elaborate. -/
-local instance demoVerifiableBB : Dregg2.Laws.Verifiable St Wt where
-  Verify _ _ := true
+open Dregg2.Exec.StarbridgeGated
+open Dregg2.Exec.StarbridgeGated
 
 /-! ## §1 — Each bounty-board op as a GATED LEAF NODE through `execFullForestG`.
 

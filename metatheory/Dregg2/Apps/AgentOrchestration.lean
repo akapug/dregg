@@ -32,7 +32,7 @@ Zero `sorry`/`admit`/`native_decide`/`axiom`. Every keystone is `#assert_axioms`
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Exec.FullForest
-import Dregg2.Exec.FullForestAuth
+import Dregg2.Exec.GatedForestCfg
 import Dregg2.Exec.Caps
 
 namespace Dregg2.Apps.AgentOrchestration
@@ -199,13 +199,8 @@ keystone `execFullForestG_root_attests` gives the attestation on a committed nod
 is the fail-closed half. `FullForestAuth.Demo` instances provide the concrete test cases. -/
 
 open Dregg2.Exec.FullForestAuth
-open Dregg2.Exec.FullForestAuth.Demo
-
-/-- The `Verifiable` seam `execFullForestG`'s type requires over the Demo carriers (`St = Wt = Nat`).
-`FullForestAuth`'s own `demoVerifiable` is `local`; this re-pins the same trivial seam so the gated
-executor resolves. -/
-instance demoVerifiableAO : Dregg2.Laws.Verifiable St Wt where
-  Verify _ _ := true
+open Dregg2.Exec.StarbridgeGated
+open Dregg2.Exec.StarbridgeGated
 
 /-- **`gate_committed_implies_credential_and_caveats` — ⑤ auth gate: committed ⇒ credential validated
 ∧ caveats discharged.** If the good gated forest commits, its root attests `gatedActionInvG`:

@@ -13,7 +13,7 @@ inadmissible turn is rejected with no edit (`runTurn_inadmissible_rejects`).
 ADDITIVE: imports `Admission` + `FullForestAuth`; edits none.
 -/
 import Dregg2.Exec.Admission
-import Dregg2.Exec.FullForestAuth
+import Dregg2.Exec.GatedForestCfg
 
 namespace Dregg2.Exec.TurnAdmission
 
@@ -21,11 +21,7 @@ open Dregg2.Exec (balOf)
 open Dregg2.Exec.Admission
 open Dregg2.Exec.EffectTransfer (nonceOf)
 open Dregg2.Exec.FullForestAuth
-open Dregg2.Exec.FullForestAuth.Demo (DForest St Wt)
-
-/-- Pin the Demo `Verifiable` instance (local in `Demo`, not visible here). -/
-local instance turnAdmissionVerifiable : Dregg2.Laws.Verifiable St Wt where
-  Verify _ _ := true
+open Dregg2.Exec.StarbridgeGated (DForest St Wt)
 
 /-- **Devnet-shaped turn execution:** admission prologue ∘ gated call-forest body. -/
 def runGatedForestTurn (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)

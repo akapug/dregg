@@ -48,7 +48,7 @@ revoked credential ⇒ `none`, and a transfer COMMITS (the gate + the caveat are
 Zero `sorry`/`admit`/`native_decide`/`axiom`. Does NOT touch `FullForestAuth.lean` nor `Dregg2.lean`.
 Reuses ONLY the proved gated-executor keystones + the proved `stateStepGuarded` fail-closed teeth.
 -/
-import Dregg2.Exec.FullForestAuth
+import Dregg2.Exec.GatedForestCfg
 
 namespace Dregg2.Apps.GalleryGated
 
@@ -57,13 +57,8 @@ open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Exec.EffectsState
 open Dregg2.Exec.FullForestAuth
-open Dregg2.Exec.FullForestAuth.Demo
-
-/-- The file-local `Verifiable` instance the `Gate`/`Gated` dispatcher signatures need at the Demo
-carriers (`Stmt = Wit = Nat`), re-declared here exactly as `FullForestAuth.Demo` does (its instance is
-file-local, so it does not escape the import). Without it `gateOK`/`execFullForestG` cannot elaborate. -/
-local instance demoVerifiableG : Dregg2.Laws.Verifiable St Wt where
-  Verify _ _ := true
+open Dregg2.Exec.StarbridgeGated
+open Dregg2.Exec.StarbridgeGated
 
 /-! ## §1 — The gallery DOMAIN at the Demo carriers (artworks, owners, the artwork cell, the slots). -/
 

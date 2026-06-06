@@ -26,7 +26,10 @@
 //!   * the recursive ACTION-TREE node (`auth,caveats,action,children`) + delegation EDGEs;
 //!   * the 10-variant `Authorization` sum (`sig/pf/bread/bearer/unchecked/captp/custom/
 //!     oneof/stealth/token`);
-//!   * the ~38 representable `FullActionA` arms (the simple ones the task enumerates).
+//!   * all 56 `FullActionA` arms via `WireAction` (byte-exact with `encodeActionW`);
+//!   * dregg1 `GrantCapability` / `RevokeCapability` map to `Delegate` / `Revoke` on the wire;
+//!   * dregg1 `BiscuitIssuer` / `CellScopedMacaroon` map to `Token` / `Custom` via
+//!     `auth_biscuit_issuer` / `auth_cell_macaroon`.
 //!
 //! What is DEFERRED (documented, NEVER silently mis-encoded — a dropped field is worse
 //! than an error). See `MarshalError` and the `// GAP:` comments:
@@ -40,8 +43,6 @@
 //!   * **P0 — `CellId ([u8;32]) -> Nat`** is not injective into the executor id-space;
 //!     there must be one canonical agreed map shared with the kernel. `cell_id_to_nat`
 //!     is the seam.
-//!   * **P1 — 13 Rust `Effect` variants + 2 auth variants have NO wire arm.** They MUST
-//!     return `UnrepresentableEffect`/`UnrepresentableAuth`.
 //!
 //! This module is intentionally self-contained (the crate is workspace-detached for
 //! swarm safety): it defines the wire-level types directly, the same discipline the
@@ -58,13 +59,6 @@
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarshalError {
-    /// A Rust `Effect` with no wire arm in the `dregg_exec_full_forest_auth` grammar
-    /// (GrantCapability/RevokeCapability/RefreshDelegation/sealed-box Seal·Unseal/
-    /// FulfillObligation/SlashObligation/PipelinedSend/CreateCellFromFactory/
-    /// QueueAtomicTx/QueuePipelineStep/CellDestroy).
-    UnrepresentableEffect(&'static str),
-    /// An auth variant with no wire arm (BiscuitIssuer / CellScopedMacaroon).
-    UnrepresentableAuth(&'static str),
     /// A wire-`Nat` field (agent/nonce/valid_until/id/...) was given a negative value.
     NonNatField { field: &'static str },
     /// An AUTHS tag exceeded 6 (the `Auth` enumeration is 0..6).
@@ -76,10 +70,6 @@ pub enum MarshalError {
 impl std::fmt::Display for MarshalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MarshalError::UnrepresentableEffect(s) => {
-                write!(f, "effect has no wire arm in dregg_exec_full_forest_auth grammar: {s}")
-            }
-            MarshalError::UnrepresentableAuth(s) => write!(f, "auth variant has no wire arm: {s}"),
             MarshalError::NonNatField { field } => {
                 write!(f, "wire-Nat field `{field}` was negative (grammar needs Nat)")
             }
@@ -266,6 +256,16 @@ pub enum WireAuth {
     Token { issuer_key: u64, sig: u64 },
 }
 
+/// Map dregg1 `BiscuitIssuer` to the wire `token` arm (proof bytes dropped at the seam).
+pub fn auth_biscuit_issuer(issuer_key: u64) -> WireAuth {
+    WireAuth::Token { issuer_key, sig: 0 }
+}
+
+/// Map dregg1 `CellScopedMacaroon` to the wire `custom` arm (proof bytes dropped at the seam).
+pub fn auth_cell_macaroon(cell: u64) -> WireAuth {
+    WireAuth::Custom { kind_stmt: cell, proof: 0 }
+}
+
 // ===================================================================
 // CAVEAT — the per-node within-cell threshold (FFI.lean:2091 encodeCaveatW).
 //   WCAVEAT := [tier,cell,asset,min]   (tier in {0,1,2,3}; min SIGNED)
@@ -281,10 +281,33 @@ pub struct WireCaveat {
 }
 
 // ===================================================================
-// ACTION — the 51-arm `FullActionA` (FFI.lean:1619 encodeActionW). We model the
-// representable arms the task enumerates. Each `id/asset/idx/...` is a Nat; each
+// ACTION — the 56-arm `FullActionA` (FFI.lean:1684 encodeActionW). Every arm is
+// representable via `WireAction`. Each `id/asset/idx/...` is a Nat; each
 // `amt/value/amount/stake/deposit/v/perms/vk/topic/data` is SIGNED.
 // ===================================================================
+
+/// A sub-op inside `QueueAtomicTx` (FFI.lean:1664 encodeQueueTxOp).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueueTxOp {
+    /// {"enq":[id,m,actor,cell,depId,dAsset,deposit]}
+    Enqueue {
+        id: u64,
+        m: u64,
+        actor: u64,
+        cell: u64,
+        dep_id: u64,
+        d_asset: u64,
+        deposit: i128,
+    },
+    /// {"deq":[id,actor,cell,depId,deposit]}
+    Dequeue {
+        id: u64,
+        actor: u64,
+        cell: u64,
+        dep_id: u64,
+        deposit: i128,
+    },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireAction {
@@ -320,10 +343,12 @@ pub enum WireAction {
     RevokeDelegation { holder: u64, target: u64 },
     /// {"vhandoff":[introducer,recipient,target]}
     ValidateHandoff { introducer: u64, recipient: u64, target: u64 },
-    /// {"exercise":[actor,target]}
-    Exercise { actor: u64, target: u64 },
+    /// {"exercise":[actor,target,[inner;...]]}  (inner `;`-joined inside `[ ]`)
+    Exercise { actor: u64, target: u64, inner: Vec<WireAction> },
     /// {"createcell":[actor,newCell]}
     CreateCell { actor: u64, new_cell: u64 },
+    /// {"createcellfactory":[actor,newCell,vk]}
+    CreateCellFromFactory { actor: u64, new_cell: u64, vk: i128 },
     /// {"spawn":[actor,child,target]}
     Spawn { actor: u64, child: u64, target: u64 },
     /// {"bmint":[actor,cell,asset,value]}  (value SIGNED)
@@ -336,12 +361,24 @@ pub enum WireAction {
     RefundEscrow { id: u64, actor: u64 },
     /// {"cobl":[id,actor,obligor,beneficiary,asset,stake]}  (stake SIGNED)
     CreateObligation { id: u64, actor: u64, obligor: u64, beneficiary: u64, asset: u64, stake: i128 },
+    /// {"fobl":[id,actor]}
+    FulfillObligation { id: u64, actor: u64 },
+    /// {"sobl":[id,actor]}
+    SlashObligation { id: u64, actor: u64 },
     /// {"nspend":[nf,actor]}
     NoteSpend { nf: u64, actor: u64 },
     /// {"ncreate":[cm,actor]}
     NoteCreate { cm: u64, actor: u64 },
-    /// {"ccesc":[id,actor,creator,recipient,asset,amount]}  (amount SIGNED)
-    CreateCommittedEscrow { id: u64, actor: u64, creator: u64, recipient: u64, asset: u64, amount: i128 },
+    /// {"ccesc":[id,actor,creator,recipient,asset,amount,hidingProof]}  (amount SIGNED; hidingProof 0/1)
+    CreateCommittedEscrow {
+        id: u64,
+        actor: u64,
+        creator: u64,
+        recipient: u64,
+        asset: u64,
+        amount: i128,
+        hiding_proof: bool,
+    },
     /// {"rccesc":[id,actor]}
     ReleaseCommittedEscrow { id: u64, actor: u64 },
     /// {"fccesc":[id,actor]}
@@ -352,12 +389,12 @@ pub enum WireAction {
     BridgeFinalize { id: u64, actor: u64, asset: u64, amount: i128 },
     /// {"bcancel":[id,actor]}
     BridgeCancel { id: u64, actor: u64 },
-    /// {"seal":[actor,cell]}
-    Seal { actor: u64, cell: u64 },
-    /// {"unseal":[actor,cell]}
-    Unseal { actor: u64, cell: u64 },
-    /// {"csp":[actor,sealerHolder,unsealerHolder]}
-    CreateSealPair { actor: u64, sealer_holder: u64, unsealer_holder: u64 },
+    /// {"seal":[pid,actor,CAP]}
+    Seal { pair_id: u64, actor: u64, payload: Cap },
+    /// {"unseal":[pid,actor,recipient]}
+    Unseal { pair_id: u64, actor: u64, recipient: u64 },
+    /// {"csp":[pid,actor,sealerHolder,unsealerHolder]}
+    CreateSealPair { pair_id: u64, actor: u64, sealer_holder: u64, unsealer_holder: u64 },
     /// {"sov":[actor,cell]}
     MakeSovereign { actor: u64, cell: u64 },
     /// {"refusal":[actor,cell]}
@@ -380,6 +417,20 @@ pub enum WireAction {
     SwissHandoff { sw: u64, cert_hash: u64, introducer: u64, exporter: u64 },
     /// {"sdrop":[sw,actor,exporter]}
     SwissDrop { sw: u64, actor: u64, exporter: u64 },
+    /// {"cseal":[actor,cell]}
+    CellSeal { actor: u64, cell: u64 },
+    /// {"cunseal":[actor,cell]}
+    CellUnseal { actor: u64, cell: u64 },
+    /// {"cdestroy":[actor,cell,ch]}
+    CellDestroy { actor: u64, cell: u64, cert_hash: u64 },
+    /// {"rdel":[actor,child]}
+    RefreshDelegation { actor: u64, child: u64 },
+    /// {"qatomic":[actor,OPS]}
+    QueueAtomicTx { actor: u64, ops: Vec<QueueTxOp> },
+    /// {"qpipe":[srcId,owner,NATSW,NATSW]}
+    QueuePipelineStep { src_id: u64, owner: u64, sink_cells: Vec<u64>, sink_ids: Vec<u64> },
+    /// {"psend":[actor]}
+    PipelinedSend { actor: u64 },
 }
 
 // ===================================================================
@@ -437,6 +488,26 @@ pub fn marshal_turn(state: &WireState, turn: &WireTurn) -> Result<String, Marsha
     encode_wturn(turn, &mut s)?;
     s.push('}');
     Ok(s)
+}
+
+/// Build a minimal gated turn with `action` as the root, compatible with `wide_demo_state`.
+///
+/// Uses `.unchecked` auth and agent/nonce aligned with the wide-demo cell-0 snapshot so admission
+/// succeeds; we only need Lean to PARSE the action arm (commit is not required).
+pub fn demo_turn_for_action(action: WireAction) -> WireTurn {
+    WireTurn {
+        agent: 0,
+        nonce: 7,
+        fee: 0,
+        valid_until: 0,
+        prev_hash: 0,
+        root: WForest {
+            auth: WireAuth::Unchecked,
+            caveats: vec![],
+            action,
+            children: vec![],
+        },
+    }
 }
 
 // ---- scalar primitives (mirror FFI.lean parseInt/parseNat/toHex32) ----
@@ -689,7 +760,73 @@ fn encode_caveats(cs: &[WireCaveat], out: &mut String) {
     out.push(']');
 }
 
-// ---- WireAction (FFI.lean:1619 encodeActionW), all representable arms ----
+// ---- WireAction (FFI.lean:1684 encodeActionW), all 56 arms ----
+
+/// Encode a `Nat` list as the `NATSW` array `[N(,N)*]` (or `[]`) — FFI.lean:1658.
+fn encode_nats_w(ns: &[u64], out: &mut String) {
+    out.push('[');
+    for (i, n) in ns.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        push_nat(out, *n);
+    }
+    out.push(']');
+}
+
+/// Encode ONE `QueueTxOp` sub-op — FFI.lean:1664 encodeQueueTxOp.
+fn encode_queue_tx_op(op: &QueueTxOp, out: &mut String) {
+    match op {
+        QueueTxOp::Enqueue { id, m, actor, cell, dep_id, d_asset, deposit } => {
+            out.push_str("{\"enq\":[");
+            for (i, n) in [*id, *m, *actor, *cell, *dep_id, *d_asset].iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                push_nat(out, *n);
+            }
+            out.push(',');
+            push_int(out, *deposit);
+            out.push_str("]}");
+        }
+        QueueTxOp::Dequeue { id, actor, cell, dep_id, deposit } => {
+            out.push_str("{\"deq\":[");
+            for (i, n) in [*id, *actor, *cell, *dep_id].iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                push_nat(out, *n);
+            }
+            out.push(',');
+            push_int(out, *deposit);
+            out.push_str("]}");
+        }
+    }
+}
+
+/// Encode a `List QueueTxOp` as the `OPS` array `[OP(,OP)*]` (or `[]`) — FFI.lean:1674.
+fn encode_queue_tx_ops(ops: &[QueueTxOp], out: &mut String) {
+    out.push('[');
+    for (i, op) in ops.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        encode_queue_tx_op(op, out);
+    }
+    out.push(']');
+}
+
+/// Encode inner exercise effects as `[a1;a2;...]` (empty ⇒ `[]`) — FFI.lean:1791 encodeActionsW.
+fn encode_inner_actions(actions: &[WireAction], out: &mut String) {
+    out.push('[');
+    for (i, a) in actions.iter().enumerate() {
+        if i > 0 {
+            out.push(';');
+        }
+        encode_action(a, out);
+    }
+    out.push(']');
+}
 
 fn encode_action(a: &WireAction, out: &mut String) {
     // Helper macros emit `{"tag":[ ... ]}` with mixed Nat/Int/AUTHS/String args, comma-joined.
@@ -846,11 +983,13 @@ fn encode_action(a: &WireAction, out: &mut String) {
             push_nat(out, *target);
             out.push_str("]}");
         }
-        WireAction::Exercise { actor, target } => {
+        WireAction::Exercise { actor, target, inner } => {
             out.push_str("{\"exercise\":[");
             push_nat(out, *actor);
             out.push(',');
             push_nat(out, *target);
+            out.push(',');
+            encode_inner_actions(inner, out);
             out.push_str("]}");
         }
         WireAction::CreateCell { actor, new_cell } => {
@@ -858,6 +997,15 @@ fn encode_action(a: &WireAction, out: &mut String) {
             push_nat(out, *actor);
             out.push(',');
             push_nat(out, *new_cell);
+            out.push_str("]}");
+        }
+        WireAction::CreateCellFromFactory { actor, new_cell, vk } => {
+            out.push_str("{\"createcellfactory\":[");
+            push_nat(out, *actor);
+            out.push(',');
+            push_nat(out, *new_cell);
+            out.push(',');
+            push_int(out, *vk);
             out.push_str("]}");
         }
         WireAction::Spawn { actor, child, target } => {
@@ -906,9 +1054,19 @@ fn encode_action(a: &WireAction, out: &mut String) {
             push_int(out, *stake);
             out.push_str("]}");
         }
+        WireAction::FulfillObligation { id, actor } => emit_id_actor("fobl", *id, *actor, out),
+        WireAction::SlashObligation { id, actor } => emit_id_actor("sobl", *id, *actor, out),
         WireAction::NoteSpend { nf, actor } => emit_id_actor("nspend", *nf, *actor, out),
         WireAction::NoteCreate { cm, actor } => emit_id_actor("ncreate", *cm, *actor, out),
-        WireAction::CreateCommittedEscrow { id, actor, creator, recipient, asset, amount } => {
+        WireAction::CreateCommittedEscrow {
+            id,
+            actor,
+            creator,
+            recipient,
+            asset,
+            amount,
+            hiding_proof,
+        } => {
             out.push_str("{\"ccesc\":[");
             for (i, n) in [*id, *actor, *creator, *recipient, *asset].iter().enumerate() {
                 if i > 0 {
@@ -918,6 +1076,8 @@ fn encode_action(a: &WireAction, out: &mut String) {
             }
             out.push(',');
             push_int(out, *amount);
+            out.push(',');
+            out.push(if *hiding_proof { '1' } else { '0' });
             out.push_str("]}");
         }
         WireAction::ReleaseCommittedEscrow { id, actor } => emit_id_actor("rccesc", *id, *actor, out),
@@ -946,10 +1106,28 @@ fn encode_action(a: &WireAction, out: &mut String) {
             out.push_str("]}");
         }
         WireAction::BridgeCancel { id, actor } => emit_id_actor("bcancel", *id, *actor, out),
-        WireAction::Seal { actor, cell } => emit_id_actor("seal", *actor, *cell, out),
-        WireAction::Unseal { actor, cell } => emit_id_actor("unseal", *actor, *cell, out),
-        WireAction::CreateSealPair { actor, sealer_holder, unsealer_holder } => {
+        WireAction::Seal { pair_id, actor, payload } => {
+            out.push_str("{\"seal\":[");
+            push_nat(out, *pair_id);
+            out.push(',');
+            push_nat(out, *actor);
+            out.push(',');
+            encode_cap(payload, out);
+            out.push_str("]}");
+        }
+        WireAction::Unseal { pair_id, actor, recipient } => {
+            out.push_str("{\"unseal\":[");
+            push_nat(out, *pair_id);
+            out.push(',');
+            push_nat(out, *actor);
+            out.push(',');
+            push_nat(out, *recipient);
+            out.push_str("]}");
+        }
+        WireAction::CreateSealPair { pair_id, actor, sealer_holder, unsealer_holder } => {
             out.push_str("{\"csp\":[");
+            push_nat(out, *pair_id);
+            out.push(',');
             push_nat(out, *actor);
             out.push(',');
             push_nat(out, *sealer_holder);
@@ -1048,6 +1226,41 @@ fn encode_action(a: &WireAction, out: &mut String) {
             push_nat(out, *actor);
             out.push(',');
             push_nat(out, *exporter);
+            out.push_str("]}");
+        }
+        WireAction::CellSeal { actor, cell } => emit_id_actor("cseal", *actor, *cell, out),
+        WireAction::CellUnseal { actor, cell } => emit_id_actor("cunseal", *actor, *cell, out),
+        WireAction::CellDestroy { actor, cell, cert_hash } => {
+            out.push_str("{\"cdestroy\":[");
+            push_nat(out, *actor);
+            out.push(',');
+            push_nat(out, *cell);
+            out.push(',');
+            push_nat(out, *cert_hash);
+            out.push_str("]}");
+        }
+        WireAction::RefreshDelegation { actor, child } => emit_id_actor("rdel", *actor, *child, out),
+        WireAction::QueueAtomicTx { actor, ops } => {
+            out.push_str("{\"qatomic\":[");
+            push_nat(out, *actor);
+            out.push(',');
+            encode_queue_tx_ops(ops, out);
+            out.push_str("]}");
+        }
+        WireAction::QueuePipelineStep { src_id, owner, sink_cells, sink_ids } => {
+            out.push_str("{\"qpipe\":[");
+            push_nat(out, *src_id);
+            out.push(',');
+            push_nat(out, *owner);
+            out.push(',');
+            encode_nats_w(sink_cells, out);
+            out.push(',');
+            encode_nats_w(sink_ids, out);
+            out.push_str("]}");
+        }
+        WireAction::PipelinedSend { actor } => {
+            out.push_str("{\"psend\":[");
+            push_nat(out, *actor);
             out.push_str("]}");
         }
     }
@@ -1250,14 +1463,179 @@ fn encode_wstate(w: &WireState, out: &mut String) -> Result<(), MarshalError> {
 }
 
 fn encode_nats(ns: &[u64], out: &mut String) {
-    out.push('[');
-    for (i, n) in ns.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        push_nat(out, *n);
-    }
-    out.push(']');
+    encode_nats_w(ns, out);
+}
+
+/// ONE representative per Lean `allActions` arm (FFI.lean:2242-2301) — the 56-arm demo set.
+pub fn all_action_arms_demo() -> Vec<WireAction> {
+    vec![
+        WireAction::Balance { actor: 1, src: 2, dst: 3, amt: -4, asset: 5 },
+        WireAction::Delegate { delegator: 6, recipient: 7, t: 8 },
+        WireAction::Revoke { holder: 9, t: 10 },
+        WireAction::Mint { actor: 11, cell: 12, asset: 13, amt: -14 },
+        WireAction::Burn { actor: 15, cell: 16, asset: 17, amt: 18 },
+        WireAction::SetField { actor: 19, cell: 20, field: "balance".into(), v: -21 },
+        WireAction::Emit { actor: 22, cell: 23, topic: -24, data: 25 },
+        WireAction::IncNonce { actor: 26, cell: 27, new_nonce: -28 },
+        WireAction::SetPerms { actor: 29, cell: 30, perms: -31 },
+        WireAction::SetVk { actor: 32, cell: 33, vk: -34 },
+        WireAction::Introduce { introducer: 35, recipient: 36, target: 37 },
+        WireAction::DelegateAtten {
+            delegator: 35,
+            recipient: 36,
+            target: 37,
+            keep: vec![Auth::Read, Auth::Write],
+        },
+        WireAction::Attenuate { actor: 38, idx: 39, keep: vec![Auth::Read, Auth::Write] },
+        WireAction::DropRef { holder: 40, target: 41 },
+        WireAction::RevokeDelegation { holder: 42, target: 43 },
+        WireAction::ValidateHandoff { introducer: 44, recipient: 45, target: 46 },
+        WireAction::Exercise {
+            actor: 47,
+            target: 48,
+            inner: vec![
+                WireAction::Emit { actor: 200, cell: 201, topic: -202, data: 203 },
+                WireAction::SetField {
+                    actor: 204,
+                    cell: 205,
+                    field: "balance".into(),
+                    v: -206,
+                },
+            ],
+        },
+        WireAction::CreateCell { actor: 49, new_cell: 50 },
+        WireAction::CreateCellFromFactory { actor: 250, new_cell: 251, vk: -252 },
+        WireAction::Spawn { actor: 51, child: 52, target: 53 },
+        WireAction::BridgeMint { actor: 54, cell: 55, asset: 56, value: -57 },
+        WireAction::CreateEscrow {
+            id: 58,
+            actor: 59,
+            creator: 60,
+            recipient: 61,
+            asset: 62,
+            amount: -63,
+        },
+        WireAction::ReleaseEscrow { id: 64, actor: 65 },
+        WireAction::RefundEscrow { id: 66, actor: 67 },
+        WireAction::CreateObligation {
+            id: 68,
+            actor: 69,
+            obligor: 70,
+            beneficiary: 71,
+            asset: 72,
+            stake: -73,
+        },
+        WireAction::FulfillObligation { id: 200, actor: 201 },
+        WireAction::SlashObligation { id: 202, actor: 203 },
+        WireAction::NoteSpend { nf: 74, actor: 75 },
+        WireAction::NoteCreate { cm: 76, actor: 77 },
+        WireAction::CreateCommittedEscrow {
+            id: 78,
+            actor: 79,
+            creator: 80,
+            recipient: 81,
+            asset: 82,
+            amount: -83,
+            hiding_proof: true,
+        },
+        WireAction::ReleaseCommittedEscrow { id: 84, actor: 85 },
+        WireAction::RefundCommittedEscrow { id: 86, actor: 87 },
+        WireAction::BridgeLock {
+            id: 88,
+            actor: 89,
+            originator: 90,
+            destination: 91,
+            asset: 92,
+            amount: -93,
+        },
+        WireAction::BridgeFinalize { id: 94, actor: 95, asset: 96, amount: -97 },
+        WireAction::BridgeCancel { id: 98, actor: 99 },
+        WireAction::Seal {
+            pair_id: 100,
+            actor: 101,
+            payload: Cap::Endpoint(150, vec![Auth::Read, Auth::Write]),
+        },
+        WireAction::Unseal { pair_id: 102, actor: 103, recipient: 104 },
+        WireAction::CreateSealPair {
+            pair_id: 105,
+            actor: 106,
+            sealer_holder: 107,
+            unsealer_holder: 108,
+        },
+        WireAction::MakeSovereign { actor: 109, cell: 110 },
+        WireAction::Refusal { actor: 111, cell: 112 },
+        WireAction::ReceiptArchive { actor: 113, cell: 114 },
+        WireAction::QueueAllocate { id: 115, actor: 116, cell: 117, capacity: 118 },
+        WireAction::QueueEnqueue {
+            id: 119,
+            m: 120,
+            actor: 121,
+            cell: 122,
+            dep_id: 123,
+            d_asset: 124,
+            deposit: -125,
+        },
+        WireAction::QueueDequeue {
+            id: 126,
+            actor: 127,
+            cell: 128,
+            dep_id: 129,
+            deposit: -130,
+        },
+        WireAction::QueueResize { id: 131, new_cap: 132, actor: 133, cell: 134 },
+        WireAction::ExportSturdyRef {
+            sw: 135,
+            actor: 136,
+            exporter: 137,
+            target: 138,
+            rights: vec![Auth::Read],
+        },
+        WireAction::EnlivenRef {
+            sw: 139,
+            actor: 140,
+            exporter: 141,
+            claimed: vec![Auth::Call],
+        },
+        WireAction::SwissHandoff {
+            sw: 142,
+            cert_hash: 143,
+            introducer: 144,
+            exporter: 145,
+        },
+        WireAction::SwissDrop { sw: 146, actor: 147, exporter: 148 },
+        WireAction::CellSeal { actor: 149, cell: 150 },
+        WireAction::CellUnseal { actor: 151, cell: 152 },
+        WireAction::CellDestroy { actor: 153, cell: 154, cert_hash: 155 },
+        WireAction::RefreshDelegation { actor: 156, child: 157 },
+        WireAction::QueueAtomicTx {
+            actor: 158,
+            ops: vec![
+                QueueTxOp::Enqueue {
+                    id: 159,
+                    m: 160,
+                    actor: 161,
+                    cell: 162,
+                    dep_id: 163,
+                    d_asset: 164,
+                    deposit: -165,
+                },
+                QueueTxOp::Dequeue {
+                    id: 166,
+                    actor: 167,
+                    cell: 168,
+                    dep_id: 169,
+                    deposit: -170,
+                },
+            ],
+        },
+        WireAction::QueuePipelineStep {
+            src_id: 171,
+            owner: 172,
+            sink_cells: vec![173, 174],
+            sink_ids: vec![175, 176],
+        },
+        WireAction::PipelinedSend { actor: 177 },
+    ]
 }
 
 // ===================================================================

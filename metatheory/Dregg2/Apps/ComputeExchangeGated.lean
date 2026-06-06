@@ -53,7 +53,7 @@ Zero `sorry`/`admit`/`native_decide`/`axiom`. NEW file only — does NOT touch a
 `FullForestAuth.lean`, nor `Dregg2.lean`. Reuses ONLY the proved gated-executor keystones + the proved
 escrow combined-conservation/liveness teeth.
 -/
-import Dregg2.Exec.FullForestAuth
+import Dregg2.Exec.GatedForestCfg
 
 namespace Dregg2.Apps.ComputeExchangeGated
 
@@ -62,13 +62,8 @@ open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Exec.EffectsState
 open Dregg2.Exec.FullForestAuth
-open Dregg2.Exec.FullForestAuth.Demo
-
-/-- The file-local `Verifiable` instance the `Gate`/`Gated` dispatcher signatures need at the Demo
-carriers (`Stmt = Wit = Nat`), re-declared exactly as `FullForestAuth.Demo` does (its instance is
-file-local, so it does not escape the import). Without it `gateOK`/`execFullForestG` cannot elaborate. -/
-local instance demoVerifiableCX : Dregg2.Laws.Verifiable St Wt where
-  Verify _ _ := true
+open Dregg2.Exec.StarbridgeGated
+open Dregg2.Exec.StarbridgeGated
 
 /-! ## §1 — The compute-market DOMAIN at the Demo carriers (buyer, provider, the job's payment asset). -/
 

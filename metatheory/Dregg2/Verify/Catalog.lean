@@ -47,6 +47,8 @@ open Dregg2.Exec.TurnExecutorFull (fma0)
 open Dregg2.Exec.FullForest
 open Dregg2.Authority
 open Dregg2.Proof.Temporal (Always)
+open KernelForest (Contract Sched)
+open Production (liftFromKernelForest)
 
 /-! ## §1 — `monotone_registry% f x` — "once `x` is in registry `f`, it stays — forever".
 
@@ -79,7 +81,7 @@ macro_rules
             | some a' => simp only [Option.getD_some]
                          exact Dregg2.Apps.Identity.execFullForestA_revoked_grow a a' cf.1 hc h
             | none    => simp only [Option.getD_none]; exact h
-          shape := .membership } : CellContract))
+          shape := .membership } : Contract))
   | `(monotone_registry% commitments $x:term) =>
     `(({  Inv := fun s => $x ∈ s.kernel.commitments
           step_ob := fun a cf h => by
@@ -89,7 +91,7 @@ macro_rules
             | some a' => simp only [Option.getD_some]
                          exact Dregg2.Exec.execFullForestA_commitments_grow a a' cf.1 hc h
             | none    => simp only [Option.getD_none]; exact h
-          shape := .membership } : CellContract))
+          shape := .membership } : Contract))
   | `(monotone_registry% nullifiers $x:term) =>
     `(({  Inv := fun s => $x ∈ s.kernel.nullifiers
           step_ob := fun a cf h => by
@@ -99,7 +101,7 @@ macro_rules
             | some a' => simp only [Option.getD_some]
                          exact Dregg2.Exec.execFullForestA_nullifiers_grow a a' cf.1 hc h
             | none    => simp only [Option.getD_none]; exact h
-          shape := .membership } : CellContract))
+          shape := .membership } : Contract))
 
 /-! ## §2 — `conservation% a` — "asset `a`'s supply never drifts from its starting value".
 
@@ -126,7 +128,7 @@ macro_rules
             step_ob := fun a' cf h => by
               show cellObsA (cellNextA a' cf) $a = cellObsA s0 $a
               rw [congrFun (cellObsA_next a' cf) $a]; exact h
-            shape := .constant } : CellContract)))
+            shape := .constant } : Contract)))
 
 /-! ## §3 — `confinement% U` — "authority never exceeds the ceiling `U`".
 
@@ -153,7 +155,7 @@ macro_rules
     `((fun (h : Auth.control ∈ $U ∧ Auth.grant ∈ $U ∧ Auth.reply ∈ $U) =>
         ({  Inv := fun s => KConfined $U s.kernel
             step_ob := fun a cf hf => cellNextA_kconfine h.1 h.2.1 h.2.2 a cf hf
-            shape := .other } : CellContract)))
+            shape := .other } : Contract)))
 
 /-! ## §4 — `automaton_inv% a b` — a field-RELATIONAL invariant (linear field algebra).
 
@@ -189,7 +191,7 @@ macro_rules
               have ha : cellObsA (cellNextA a' cf) $a = cellObsA a' $a := congrFun (cellObsA_next a' cf) $a
               have hb : cellObsA (cellNextA a' cf) $b = cellObsA a' $b := congrFun (cellObsA_next a' cf) $b
               omega
-            shape := .other } : CellContract)))
+            shape := .other } : Contract)))
 
 /-! ## §5 — THE GATE: each macro elaborates to a BUILDING `CellContract` at its canonical field.
 
@@ -198,7 +200,8 @@ delivers the unbounded-time carry). The headline: `monotone_registry% revoked` r
 `Apps.Identity.livingCellA_identity_revoked_forever` as a single `.forever` call. -/
 
 /-- **GATE (1) — `monotone_registry% revoked` builds.** The contract at the revocation registry. -/
-def gateRevoked (credNul : Nat) : CellContract := monotone_registry% revoked credNul
+noncomputable def gateRevoked (credNul : Nat) : Production.Contract :=
+  liftFromKernelForest (monotone_registry% revoked credNul)
 
 /-- **GATE (1, headline) — `monotone_registry% revoked` reproduces the Identity crown as a ONE-LINER.**
 `Apps.Identity.livingCellA_identity_revoked_forever`'s statement — *a revoked credential stays revoked
@@ -212,7 +215,7 @@ example (credNul : Nat) (s : RecChainedState) (hinit : credNul ∈ s.kernel.revo
 /-- …and `.always` lifts the SAME one-liner into the LTL `□` modality. -/
 example (credNul : Nat) (s : RecChainedState) (hinit : credNul ∈ s.kernel.revoked) (sched : SchedA) :
     Always (fun s' => credNul ∈ s'.kernel.revoked) s sched :=
-  (monotone_registry% revoked credNul).always hinit sched
+  KernelForest.always (monotone_registry% revoked credNul) hinit sched
 
 /-- **GATE (1′) — `monotone_registry% commitments` builds + reproduces commitment-persistence.** -/
 example (c : Nat) (s : RecChainedState) (hinit : c ∈ s.kernel.commitments) (sched : SchedA) :
@@ -226,7 +229,8 @@ example (n : Nat) (s : RecChainedState) (hinit : n ∈ s.kernel.nullifiers) (sch
 
 /-- **GATE (2) — `conservation% 0` builds.** The per-asset conservation contract at asset `0`,
 baseline `fma0`. -/
-def gateConserved : CellContract := (conservation% (0 : AssetId)) fma0
+noncomputable def gateConserved : Production.Contract :=
+  liftFromKernelForest ((conservation% (0 : AssetId)) fma0)
 
 /-- **GATE (2, payoff) — `conservation% 0` reproduces `CellReal.livingCellA_obs_invariant` (asset 0).**
 *Asset 0's total supply never drifts from its starting value, at every index of every trajectory.* -/
@@ -236,8 +240,8 @@ example (sched : SchedA) :
 
 /-- **GATE (3) — `confinement% fullAuthCeiling` builds.** The capability-confinement contract under the
 full authority ceiling (which contains `control`, supplied by `by decide`). -/
-def gateConfined : CellContract :=
-  (confinement% fullAuthCeiling) (by decide)
+noncomputable def gateConfined : Production.Contract :=
+  liftFromKernelForest ((confinement% fullAuthCeiling) (by decide))
 
 /-- **GATE (3, payoff) — `confinement%` reproduces `CellConfine.livingCellA_confinement`.** The COMBINED
 `KConfined` (caps + the Wave-3 sealed-box payloads) stays confined by the ceiling at every index of every
@@ -248,7 +252,8 @@ example (s : RecChainedState) (hinit : KConfined fullAuthCeiling s.kernel) (sche
 
 /-- **GATE (4) — `automaton_inv% 0 1` builds.** The combined two-asset supply relational invariant,
 baseline `fma0`. -/
-def gateAutomaton : CellContract := (automaton_inv% (0 : AssetId) (1 : AssetId)) fma0
+noncomputable def gateAutomaton : Production.Contract :=
+  liftFromKernelForest ((automaton_inv% (0 : AssetId) (1 : AssetId)) fma0)
 
 /-- **GATE (4, payoff) — `automaton_inv% 0 1`: the combined `asset0 + asset1` supply is conserved
 forever.** A linear relation among two ledger fields, carried at every index of every trajectory. -/
@@ -286,10 +291,10 @@ And the four macros emit three distinct `SafetyShape`s (`.membership`, `.constan
         (fun s' => decide (cellObsA s' 0 + cellObsA s' 1 = cellObsA fma0 0 + cellObsA fma0 1))  -- some true
 
 -- The macros emit GENUINELY DISTINCT `SafetyShape`s (not a single hard-wired tag).
-#eval (gateRevoked 42).shape                                                      -- SafetyShape.membership
-#eval gateConserved.shape                                                         -- SafetyShape.constant
-#eval gateAutomaton.shape                                                         -- SafetyShape.other
-#eval decide ((gateRevoked 42).shape ≠ gateConserved.shape)                       -- true (distinct shapes)
+#eval (monotone_registry% revoked 42).shape                                                      -- SafetyShape.membership
+#eval ((conservation% (0 : AssetId)) fma0).shape                                                         -- SafetyShape.constant
+#eval ((automaton_inv% (0 : AssetId) (1 : AssetId)) fma0).shape                                                         -- SafetyShape.other
+#eval decide ((monotone_registry% revoked 42).shape ≠ ((conservation% (0 : AssetId)) fma0).shape)                       -- true
 
 /-! ## §7 — Axiom hygiene — the macro-emitted contracts + their payoff, kernel-triple clean.
 
