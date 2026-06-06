@@ -30,6 +30,7 @@ open Dregg2.Circuit.Spec.SwissHandoff
 open Dregg2.Circuit.Spec.SwissFrame
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
+open Dregg2.Exec.EffectsState (stateAuthB)
 
 set_option linter.dupNamespace false
 
@@ -68,7 +69,8 @@ def handoffGuardProp (s : RecChainedState) (args : HandoffArgs) : Prop :=
   HandoffGuard s args.sw args.introducer args.exporter
 
 instance (s : RecChainedState) (args : HandoffArgs) : Decidable (handoffGuardProp s args) := by
-  unfold handoffGuardProp HandoffGuard; exact inferInstanceAs (Decidable (_ ∧ _))
+  unfold handoffGuardProp HandoffGuard
+  exact inferInstanceAs (Decidable (_ ∧ _))
 
 def handoffGuardEncode (s : RecChainedState) (args : HandoffArgs) (_s' : RecChainedState) : Assignment :=
   fun w => if w = vBitGuard then Circuit.propBit (handoffGuardProp s args) else 0
@@ -159,23 +161,51 @@ theorem apex_iff_handoffSpec (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
   constructor
   · rintro ⟨hg, hsw, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    obtain ⟨e, hf⟩ := hg.2
-    have hk := (handoffSwissUpdate_eq_k s.kernel args.sw args.certHash s'.kernel.swiss).mp <|
-      by simpa [handoffSwissPostClause, handoffSwissUpdate_some] using hsw
-    refine ⟨hg, s'.kernel, hk, ?_⟩
-    cases s'; simp [hlog]
-  · rintro ⟨hg, k', hk, hs'⟩
+    cases s' with | mk kernel log =>
+    cases hf : findSwiss s.kernel.swiss args.sw with
+    | none => exact absurd hg.2 (by simp [hf, Option.isSome])
+    | some e =>
+      have hK : kernel = { s.kernel with swiss := kernel.swiss } :=
+        recKernel_ext hAcc hCell hCaps hEsc hNul hRev hCom hBal hQ rfl hSC hFac hLif hDC hDel hDgs hSB
+      have hupd := handoffSwissUpdate_some s.kernel.swiss args.sw args.certHash e hf
+      have hcl : handoffSwissPostClause s args = handoffSwissPost s.kernel.swiss args.sw e args.certHash := by
+        simp [handoffSwissPostClause, hupd]
+      have hpost : handoffSwissPost s.kernel.swiss args.sw e args.certHash = kernel.swiss :=
+        (hsw.trans hcl).symm
+      have hsome : handoffSwissUpdate s.kernel.swiss args.sw args.certHash = some kernel.swiss := by
+        rw [hupd, congr_arg some hpost]
+      have hk' := (handoffSwissUpdate_eq_k s.kernel args.sw args.certHash kernel.swiss).mp hsome
+      have hk : swissHandoffK s.kernel args.sw args.certHash = some kernel :=
+        hk'.trans (congr_arg some hK.symm)
+      refine ⟨hg, ⟨kernel, ⟨hk, ?_⟩⟩⟩
+      simpa using hlog
+  · rintro ⟨hg, ⟨k', hk, hs'⟩⟩
     rcases withSwiss_preserves_rest s.kernel k'.swiss with
       ⟨hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
-    obtain ⟨e, hf⟩ := hg.2
-    have hupd := handoffSwissUpdate_some s.kernel.swiss args.sw args.certHash e hf
-    have hk' := swissHandoffK_eq_withSwiss hk
-    have hsw := (handoffSwissUpdate_eq_k s.kernel args.sw args.certHash k'.swiss).mpr hk'
-    cases s'
-    subst hs'
-    simp [handoffSwissPostClause, hsw, hupd]
-    exact ⟨hg, rfl, rfl, ⟨hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
-      hDC, hDel, hDgs, hSB⟩⟩
+    cases hf : findSwiss s.kernel.swiss args.sw with
+    | none => exact absurd hg.2 (by simp [hf, Option.isSome])
+    | some e =>
+      have hupd := handoffSwissUpdate_some s.kernel.swiss args.sw args.certHash e hf
+      have hk' := swissHandoffK_eq_withSwiss hk
+      have hupd' : handoffSwissUpdate s.kernel.swiss args.sw args.certHash = some k'.swiss :=
+        (handoffSwissUpdate_eq_k s.kernel args.sw args.certHash k'.swiss).mpr hk'
+      have hpost : handoffSwissPost s.kernel.swiss args.sw e args.certHash = k'.swiss :=
+        Option.some.inj (hupd.symm.trans hupd')
+      have hsw' : k'.swiss =
+          match handoffSwissUpdate s.kernel.swiss args.sw args.certHash with
+          | some ss => ss
+          | none => s.kernel.swiss := by
+        simp [handoffSwissPostClause, hupd, hpost]
+      have hker : s'.kernel = k' := congr_arg RecChainedState.kernel hs'
+      have hlog : s'.log = handoffReceipt args.introducer args.exporter :: s.log :=
+        congr_arg RecChainedState.log hs'
+      have hK' := swissHandoffK_only_swiss hk
+      have hrest : (swissHandoffE LE cN hN hLE).restFrame s.kernel s'.kernel := by
+        rw [hker, hK']
+        exact restFrame_of_withSwiss rfl
+      refine ⟨hg, ?_, hlog, hrest⟩
+      rw [hker]
+      exact hsw'
 
 /-! ### §2c — THE VALIDATION. -/
 

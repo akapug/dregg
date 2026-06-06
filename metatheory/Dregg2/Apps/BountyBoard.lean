@@ -103,7 +103,10 @@ theorem bb_claim_requires_live_claimant (s : RecChainedState) (id : BountyId) (a
     execFullForestA s (bbClaim id actor) = none := by
   have hchain : releaseEscrowChainA s id actor = none := by
     unfold releaseEscrowChainA
-    rw [releaseEscrowKAsset_nonlive_fails hfind hdead]
+    by_cases hg : releaseSettleAuthB s.kernel id actor
+    · rw [if_pos hg]
+      rw [releaseEscrowKAsset_nonlive_fails hfind hdead]
+    · rw [if_neg hg]
   rw [execFullForestA_eq_execFullTurnA]
   simp only [bbClaim, lowerForestA, lowerChildrenA, execFullTurnA, execFullA, hchain]
 
@@ -115,7 +118,10 @@ theorem bb_cancel_requires_live_poster (s : RecChainedState) (id : BountyId) (ac
     execFullForestA s (bbCancel id actor) = none := by
   have hchain : refundEscrowChainA s id actor = none := by
     unfold refundEscrowChainA
-    rw [refundEscrowKAsset_nonlive_fails hfind hdead]
+    by_cases hg : refundSettleAuthB s.kernel id actor
+    · rw [if_pos hg]
+      rw [refundEscrowKAsset_nonlive_fails hfind hdead]
+    · rw [if_neg hg]
   rw [execFullForestA_eq_execFullTurnA]
   simp only [bbCancel, lowerForestA, lowerChildrenA, execFullTurnA, execFullA, hchain]
 

@@ -272,10 +272,11 @@ over the SETTLE-found record, indexed by the chosen target field. -/
 /-- The settle admissibility predicate (release/refund), parameterised by the chosen target picker
 (`fun r => r.recipient` for release, `fun r => r.creator` for refund): an unresolved record matches
 `id`, and its picked target is a LIVE account. Stated declaratively over the FOUND record. -/
-def settleGuard (k : RecordKernelState) (id : Nat) (pick : EscrowRecord → CellId)
-    (r : EscrowRecord) : Prop :=
+def settleGuard (k : RecordKernelState) (id : Nat) (actor : CellId) (pick : EscrowRecord → CellId)
+    (r : EscrowRecord) (authB : RecordKernelState → Nat → CellId → Bool) : Prop :=
   k.escrows.find? (fun x => decide (x.id = id ∧ x.resolved = false)) = some r
     ∧ pick r ∈ k.accounts ∧ cellLifecycleLive k (pick r) = true
+    ∧ authB k id actor = true
 
 /-- **The full-state declarative spec of a committed settle** (release: `pick = .recipient`; refund:
 `pick = .creator`) — INDEPENDENT of the executor. The settle guard holds; the post-`bal` ledger credits
@@ -283,9 +284,10 @@ def settleGuard (k : RecordKernelState) (id : Nat) (pick : EscrowRecord → Cell
 resolved (`markResolved`); the chained `log` advances by `escrowReceiptA actor ::`; and every one of the
 15 other RecordKernelState components is unchanged (the FRAME). -/
 def CommittedEscrowSettleSpec (st : RecChainedState) (id : Nat) (actor : CellId)
-    (pick : EscrowRecord → CellId) (st' : RecChainedState) : Prop :=
+    (pick : EscrowRecord → CellId) (authB : RecordKernelState → Nat → CellId → Bool)
+    (st' : RecChainedState) : Prop :=
   ∃ r : EscrowRecord,
-    settleGuard st.kernel id pick r
+    settleGuard st.kernel id actor pick r authB
     ∧ st'.kernel.bal = recBalCreditCell st.kernel.bal (pick r) r.asset r.amount
     ∧ st'.kernel.escrows = markResolved st.kernel.escrows id
     ∧ st'.log = escrowReceiptA actor :: st.log
@@ -313,21 +315,20 @@ def CommittedEscrowSettleSpec (st : RecChainedState) (id : Nat) (actor : CellId)
 theorem execFullA_releaseCommittedEscrowA_iff_spec (st : RecChainedState) (id : Nat) (actor : CellId)
     (st' : RecChainedState) :
     execFullA st (.releaseCommittedEscrowA id actor) = some st'
-      ↔ CommittedEscrowSettleSpec st id actor (fun r => r.recipient) st' := by
+      ↔ CommittedEscrowSettleSpec st id actor (fun r => r.recipient) releaseSettleAuthB st' := by
   show releaseEscrowChainA st id actor = some st'
-        ↔ CommittedEscrowSettleSpec st id actor (fun r => r.recipient) st'
-  unfold releaseEscrowChainA releaseEscrowKAsset CommittedEscrowSettleSpec
-  -- keep `settleGuard` FOLDED so the spec's `find?` is hidden from `rw [hfind]` (which reduces ONLY
-  -- the executor's `match find? …` on the goal's left).
-  cases hfind : st.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | none =>
-      simp only []
+        ↔ CommittedEscrowSettleSpec st id actor (fun r => r.recipient) releaseSettleAuthB st'
+  unfold releaseEscrowChainA releaseEscrowKAsset CommittedEscrowSettleSpec releaseSettleAuthB
+         findUnresolvedEscrow
+  by_cases hauth : releaseSettleAuthB st.kernel id actor
+  · cases hfind : st.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+    | none =>
+      simp only [hauth, if_pos hauth]
       constructor
       · intro h; exact absurd h (by simp)
-      · rintro ⟨r, hsg, _⟩
-        have hf := hsg.1; rw [hfind] at hf; exact absurd hf (by simp)
-  | some r =>
-      simp only []
+      · rintro ⟨r, hsg, _⟩; rcases hsg with ⟨hf, _⟩; rw [hfind] at hf; exact absurd hf (by simp)
+    | some r =>
+      simp only [hauth, if_pos hauth]
       by_cases hgate : r.recipient ∈ st.kernel.accounts ∧ cellLifecycleLive st.kernel r.recipient = true
       · rw [if_pos hgate]
         simp only [settleEscrowRawAsset]
@@ -335,12 +336,11 @@ theorem execFullA_releaseCommittedEscrowA_iff_spec (st : RecChainedState) (id : 
         · intro h
           simp only [Option.some.injEq] at h
           subst h
-          exact ⟨r, ⟨hfind, hgate.1, hgate.2⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+          exact ⟨r, ⟨hfind, hgate.1, hgate.2, hauth⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
                  rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
         · rintro ⟨r', hsg, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11,
                  h12, h13, h14, h15⟩
-          have hf' := hsg.1
-          rw [hfind] at hf'; simp only [Option.some.injEq] at hf'; subst hf'
+          rcases hsg with ⟨hf, _, _, _⟩; rw [hfind] at hf; simp only [Option.some.injEq] at hf; subst hf
           obtain ⟨k', l'⟩ := st'
           obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
           simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
@@ -349,10 +349,12 @@ theorem execFullA_releaseCommittedEscrowA_iff_spec (st : RecChainedState) (id : 
       · rw [if_neg hgate]
         constructor
         · intro h; exact absurd h (by simp)
-        · rintro ⟨r', hsg, _⟩
-          have hf' := hsg.1; have hlive := hsg.2.1; have hlc := hsg.2.2
-          rw [hfind] at hf'; simp only [Option.some.injEq] at hf'; subst hf'
-          exact absurd ⟨hlive, hlc⟩ hgate
+        · rintro ⟨r', hsg, _⟩; rcases hsg with ⟨hf, hlive, hlc, _⟩; rw [hfind] at hf
+          simp only [Option.some.injEq] at hf; subst hf; exact absurd ⟨hlive, hlc⟩ hgate
+  · simp only [hauth, if_neg hauth]
+    constructor
+    · intro h; exact absurd h (by simp)
+    · rintro ⟨r, hsg, _⟩; rcases hsg with ⟨_, _, _, hauth'⟩; exact absurd hauth' hauth
 
 /-- **`execFullA_refundCommittedEscrowA_iff_spec` — EXECUTOR ⟺ SPEC (refund).** `execFullA` dispatches
 `.refundCommittedEscrowA id actor` to `refundEscrowChainA`, which credits the FOUND record's `creator`.
@@ -360,19 +362,20 @@ The settle spec with `pick = .creator` is met IFF the executor commits, both way
 theorem execFullA_refundCommittedEscrowA_iff_spec (st : RecChainedState) (id : Nat) (actor : CellId)
     (st' : RecChainedState) :
     execFullA st (.refundCommittedEscrowA id actor) = some st'
-      ↔ CommittedEscrowSettleSpec st id actor (fun r => r.creator) st' := by
+      ↔ CommittedEscrowSettleSpec st id actor (fun r => r.creator) refundSettleAuthB st' := by
   show refundEscrowChainA st id actor = some st'
-        ↔ CommittedEscrowSettleSpec st id actor (fun r => r.creator) st'
-  unfold refundEscrowChainA refundEscrowKAsset CommittedEscrowSettleSpec
-  cases hfind : st.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | none =>
-      simp only []
+        ↔ CommittedEscrowSettleSpec st id actor (fun r => r.creator) refundSettleAuthB st'
+  unfold refundEscrowChainA refundEscrowKAsset CommittedEscrowSettleSpec refundSettleAuthB
+         findUnresolvedEscrow
+  by_cases hauth : refundSettleAuthB st.kernel id actor
+  · cases hfind : st.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+    | none =>
+      simp only [hauth, if_pos hauth]
       constructor
       · intro h; exact absurd h (by simp)
-      · rintro ⟨r, hsg, _⟩
-        have hf := hsg.1; rw [hfind] at hf; exact absurd hf (by simp)
-  | some r =>
-      simp only []
+      · rintro ⟨r, hsg, _⟩; rcases hsg with ⟨hf, _⟩; rw [hfind] at hf; exact absurd hf (by simp)
+    | some r =>
+      simp only [hauth, if_pos hauth]
       by_cases hgate : r.creator ∈ st.kernel.accounts ∧ cellLifecycleLive st.kernel r.creator = true
       · rw [if_pos hgate]
         simp only [settleEscrowRawAsset]
@@ -380,12 +383,11 @@ theorem execFullA_refundCommittedEscrowA_iff_spec (st : RecChainedState) (id : N
         · intro h
           simp only [Option.some.injEq] at h
           subst h
-          exact ⟨r, ⟨hfind, hgate.1, hgate.2⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+          exact ⟨r, ⟨hfind, hgate.1, hgate.2, hauth⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
                  rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
         · rintro ⟨r', hsg, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11,
                  h12, h13, h14, h15⟩
-          have hf' := hsg.1
-          rw [hfind] at hf'; simp only [Option.some.injEq] at hf'; subst hf'
+          rcases hsg with ⟨hf, _, _, _⟩; rw [hfind] at hf; simp only [Option.some.injEq] at hf; subst hf
           obtain ⟨k', l'⟩ := st'
           obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
           simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
@@ -394,10 +396,12 @@ theorem execFullA_refundCommittedEscrowA_iff_spec (st : RecChainedState) (id : N
       · rw [if_neg hgate]
         constructor
         · intro h; exact absurd h (by simp)
-        · rintro ⟨r', hsg, _⟩
-          have hf' := hsg.1; have hlive := hsg.2.1; have hlc := hsg.2.2
-          rw [hfind] at hf'; simp only [Option.some.injEq] at hf'; subst hf'
-          exact absurd ⟨hlive, hlc⟩ hgate
+        · rintro ⟨r', hsg, _⟩; rcases hsg with ⟨hf, hlive, hlc, _⟩; rw [hfind] at hf
+          simp only [Option.some.injEq] at hf; subst hf; exact absurd ⟨hlive, hlc⟩ hgate
+  · simp only [hauth, if_neg hauth]
+    constructor
+    · intro h; exact absurd h (by simp)
+    · rintro ⟨r, hsg, _⟩; rcases hsg with ⟨_, _, _, hauth'⟩; exact absurd hauth' hauth
 
 /-! ## §6 — NON-VACUITY: the executor REJECTS bad inputs (each guard leg, fail-closed).
 
@@ -483,8 +487,8 @@ theorem committedRelease_rejects_missing_record (st : RecChainedState) (id : Nat
     (hbad : st.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = none) :
     execFullA st (.releaseCommittedEscrowA id actor) = none := by
   show releaseEscrowChainA st id actor = none
-  unfold releaseEscrowChainA releaseEscrowKAsset
-  rw [hbad]
+  unfold releaseEscrowChainA releaseSettleAuthB findUnresolvedEscrow releaseEscrowKAsset
+  rw [hbad, if_neg]
 
 /-- **`committedRefund_rejects_missing_record` — PROVED.** A refund whose `id` matches NO unresolved
 record does NOT commit (the lookup is `none` ⇒ fail-closed). -/
@@ -492,8 +496,8 @@ theorem committedRefund_rejects_missing_record (st : RecChainedState) (id : Nat)
     (hbad : st.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = none) :
     execFullA st (.refundCommittedEscrowA id actor) = none := by
   show refundEscrowChainA st id actor = none
-  unfold refundEscrowChainA refundEscrowKAsset
-  rw [hbad]
+  unfold refundEscrowChainA refundSettleAuthB findUnresolvedEscrow refundEscrowKAsset
+  rw [hbad, if_neg]
 
 /-! ## §7 — Axiom-hygiene tripwires.
 

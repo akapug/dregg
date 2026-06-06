@@ -52,6 +52,7 @@ import Dregg2.Exec.Handlers.Authority
 import Dregg2.Exec.Handlers.Queue
 import Dregg2.Exec.Handlers.Bridge
 import Dregg2.Exec.Handlers.Exercise
+import Dregg2.Exec.Handlers.Lifecycle
 
 namespace Dregg2.Exec.HandlerExecutor
 
@@ -59,7 +60,9 @@ open Dregg2.Authority Dregg2.Execution
 open Dregg2.Exec
 open Dregg2.Exec.Handler
 open Dregg2.Exec.TurnExecutorFull
-  (acceptsEffects lcLive lcSealed lcDestroyed setLifecycle execFullA FullActionA QueueTxOpA)
+  (acceptsEffects lcLive lcSealed lcDestroyed setLifecycle parentClist cellSealChainA cellUnsealChainA
+   cellDestroyChainA refreshDelegationChainA emitStep execFullA FullActionA QueueTxOpA)
+open Dregg2.Exec.EffectsState (stateAuthB)
 open scoped BigOperators
 
 -- module-qualified aliases for the seven batches (every handler + ClosedEffect builder lives here)
@@ -70,6 +73,7 @@ open Dregg2.Exec.Handlers.Authority
 open Dregg2.Exec.Handlers.Queue
 open Dregg2.Exec.Handlers.Bridge
 open Dregg2.Exec.Handlers.Exercise
+open Dregg2.Exec.Handlers.Lifecycle
 
 /-! ## §1 — Pretty names for the master registry indices (the audit-trail tags).
 
@@ -115,13 +119,19 @@ def masterRegistry : Registry :=
   , ⟨BridgeLockArgs, bridgeLockA⟩, ⟨BridgeFinalizeArgs, bridgeFinalizeA⟩
   , ⟨BridgeCancelArgs, bridgeCancelA⟩, ⟨PipelinedSendArgs, pipelinedSendA⟩
   -- §exercise (Exercise — the recursive sub-effect forest)
-  , ⟨ExerciseArgs, exerciseH⟩ ]
+  , ⟨ExerciseArgs, exerciseH⟩
+  -- §lifecycle / emit (Lifecycle — real side-table semantics, not field-write stubs)
+  , ⟨CellLifecycleArgs, cellSealH⟩
+  , ⟨CellLifecycleArgs, cellUnsealH⟩
+  , ⟨CellDestroyArgs, cellDestroyH⟩
+  , ⟨RefreshDelegationArgs, refreshDelegationH⟩
+  , ⟨EmitEventArgs, emitEventH⟩ ]
 
-/-- The master registry packs 42 distinct handler ENTRIES (the 56 op-set constructors collapse onto these
+/-- The master registry packs 47 distinct handler ENTRIES (the 56 op-set constructors collapse onto these
 via the aliasing of `toClosedEffect` — obligation↔escrow, committed↔escrow, slash↔release, fulfill↔refund,
 introduce/validateHandoff↔delegateAtten, bridgeMint↔mint, factory/spawn↔createCell, dropRef/
 revokeDelegation↔revoke). -/
-theorem masterRegistry_length : masterRegistry.length = 42 := rfl
+theorem masterRegistry_length : masterRegistry.length = 47 := rfl
 
 /-! ## §3 — `toClosedEffect`: the TOTAL `FullActionA → ClosedEffect` dispatch (56/56 constructors).
 
@@ -134,10 +144,10 @@ born-empty createCell, a dropRef / revoke-delegation IS a target revocation, a c
 escrow at the executable layer (the §8 hiding portal is off-ledger).
 
 The lifecycle/emit family (`emitEventA` / `cellSealA` / `cellUnsealA` / `cellDestroyA` /
-`refreshDelegationA`) and the seven named-field writes (`setFieldA` / `incrementNonceA` / `setPermissionsA`
-/ `setVKA` / `makeSovereignA` / `refusalA` / `receiptArchiveA`) all map onto the GENERIC live-gated
-`stateWriteH` (a balance-neutral named-field write through the `acceptsEffects` admission gate) at a
-fixed field name — the very gate `execFullA`'s `emitEventA` / lifecycle arms lack (R6). The committed
+`refreshDelegationA`) routes to the dedicated `Lifecycle` handlers (real `lifecycle`/`deathCert`/
+`delegations` side-table edits + authority-free emit membership gate). The seven named-field writes
+(`setFieldA` / `incrementNonceA` / `setPermissionsA` / `setVKA` / `makeSovereignA` / `refusalA` /
+`receiptArchiveA`) map onto the GENERIC live-gated `stateWriteH`. The committed
 escrow / queue-atomic-tx args that carry shapes the bare kernel handler does not (the `hidingProof`
 witness; the `QueueTxOpA` discriminant) are projected onto the handler's executable core (the escrow
 lock; the `QueueTxOpK` sub-op list) — documented at each arm. -/
@@ -163,7 +173,7 @@ def toClosedEffect : FullActionA → ClosedEffect
   | .burnA actor cell a amt     => burnEffect actor cell a amt
   -- §field writes (the 4 protocol-managed + the 3 Wave-6 flags) → generic live-gated write at a field
   | .setFieldA actor cell f v        => stateWriteEffect actor cell f v
-  | .emitEventA actor cell _topic data => stateWriteEffect actor cell "event" data
+  | .emitEventA actor cell topic data => emitEventEffect actor cell topic data
   | .incrementNonceA actor cell n     => incrementNonceEffect actor cell n
   | .setPermissionsA actor cell p     => setPermissionsEffect actor cell p
   | .setVKA actor cell vk             => setVKEffect actor cell vk
@@ -228,13 +238,11 @@ def toClosedEffect : FullActionA → ClosedEffect
   | .swissHandoffA sw certHash introducer exporter =>
       swissHandoffEffect sw certHash introducer exporter
   | .swissDropA sw actor exporter          => swissDropEffect sw actor exporter
-  -- §lifecycle (cell seal/unseal/destroy + refresh-delegation) → generic live-gated write at a field
-  -- (the REAL Live↔Sealed/Destroyed state machine is `cellSealChainA` &c.; here the algebra-level
-  -- balance-neutral content is the live-gated write the migration cuts the state-machine arm onto next).
-  | .cellSealA actor cell          => stateWriteEffect actor cell "lifecycle" 1
-  | .cellUnsealA actor cell        => stateWriteEffect actor cell "lifecycle" 0
-  | .cellDestroyA actor cell _certHash => stateWriteEffect actor cell "lifecycle" 3
-  | .refreshDelegationA actor child => stateWriteEffect actor child "delegation_refresh" 1
+  -- §lifecycle (cell seal/unseal/destroy + refresh-delegation) → real side-table handlers
+  | .cellSealA actor cell          => cellSealEffect actor cell
+  | .cellUnsealA actor cell        => cellUnsealEffect actor cell
+  | .cellDestroyA actor cell certHash => cellDestroyEffect actor cell certHash
+  | .refreshDelegationA actor child => refreshDelegationEffect actor child
 
 /-! ## §4 — `execHandlerTurn`: the registry executor over the chained state.
 
@@ -380,7 +388,7 @@ theorem handler_refines_execFullA_transfer (s s' : RecChainedState) (t : Turn) (
     refine ⟨{ kernel := s'.kernel, log := t :: s.log }, ?_, rfl⟩
     show Dregg2.Exec.TurnExecutorFull.recCexecAsset s t a = _
     unfold Dregg2.Exec.TurnExecutorFull.recCexecAsset
-    rw [hstep]
+    rw [if_pos hadm, hstep]
   · rw [if_neg hadm] at hstep; exact absurd hstep (by simp)
 
 /-! ### §6.2 — R2: ESCROW RELEASE. `execHandlerOne (.releaseEscrowA id actor)` commits ⇒ `execFullA` commits. -/
@@ -405,7 +413,13 @@ theorem handler_refines_execFullA_release (s s' : RecChainedState) (id : Nat) (a
               log := Dregg2.Exec.TurnExecutorFull.escrowReceiptA actor :: s.log }, ?_, rfl⟩
     show Dregg2.Exec.TurnExecutorFull.releaseEscrowChainA s id actor = _
     unfold Dregg2.Exec.TurnExecutorFull.releaseEscrowChainA
-    rw [hstep]
+    have hauth : Dregg2.Exec.TurnExecutorFull.releaseSettleAuthB s.kernel id actor = true := by
+      unfold Dregg2.Exec.Handlers.Escrow.releaseSettleAuthB
+             Dregg2.Exec.Handlers.Escrow.findUnresolved
+             Dregg2.Exec.TurnExecutorFull.releaseSettleAuthB
+             Dregg2.Exec.TurnExecutorFull.findUnresolvedEscrow at hg ⊢
+      exact hg
+    rw [if_pos hauth, hstep]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
 /-! ### §6.3 — R6: STATE WRITE. The handler and `execFullA` now gate on the SAME predicates (RECONCILED).
@@ -463,7 +477,109 @@ theorem handler_refines_execFullA_stateWrite (s s' : RecChainedState) (actor cel
       rw [← hstep]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
-/-! ## §7 — THE TEETH: concrete attacks `execFullA` ADMITS but `execHandlerTurn` REJECTS.
+/-! ### §6.4 — LIFECYCLE: `execHandlerOne (.cellSealA …)` commits ⇒ `execFullA` commits, kernels AGREE. -/
+
+/-- **`handler_refines_execFullA_cellSeal` — THE LIFECYCLE STRENGTHENING (PROVED).** A committed cell
+seal under the handler executor is EXACTLY the bare `setLifecycle` post-state `execFullA`'s
+`cellSealChainA` arm produces on the kernel. -/
+theorem handler_refines_execFullA_cellSeal (s s' : RecChainedState) (actor cell : CellId)
+    (h : execHandlerOne (.cellSealA actor cell) s = some s') :
+    ∃ s'', execFullA s (.cellSealA actor cell) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.cellSealA actor cell) s s' h
+  rw [toClosedEffect] at hstep
+  change cellSealStep s.kernel { actor := actor, cell := cell } = some s'.kernel at hstep
+  unfold cellSealStep at hstep
+  by_cases hg : stateAuthB s.kernel.caps actor cell && acceptsEffects s.kernel cell
+  · rw [if_pos hg] at hstep
+    have hg' : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true := by
+      simp only [Bool.and_eq_true] at hg; exact ⟨hg.1, hg.2⟩
+    have hk : setLifecycle s.kernel cell lcSealed = s'.kernel := by
+      simpa only [Option.some.injEq] using hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }, ?_, rfl⟩
+    show cellSealChainA s actor cell = _
+    unfold cellSealChainA
+    rw [if_pos hg', hk]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_cellUnseal (s s' : RecChainedState) (actor cell : CellId)
+    (h : execHandlerOne (.cellUnsealA actor cell) s = some s') :
+    ∃ s'', execFullA s (.cellUnsealA actor cell) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.cellUnsealA actor cell) s s' h
+  rw [toClosedEffect] at hstep
+  change cellUnsealStep s.kernel { actor := actor, cell := cell } = some s'.kernel at hstep
+  unfold cellUnsealStep at hstep
+  by_cases hg : stateAuthB s.kernel.caps actor cell && (s.kernel.lifecycle cell == lcSealed)
+  · rw [if_pos hg] at hstep
+    have hg' : stateAuthB s.kernel.caps actor cell = true ∧ (s.kernel.lifecycle cell == lcSealed) = true := by
+      simp only [Bool.and_eq_true] at hg; exact ⟨hg.1, hg.2⟩
+    have hk : setLifecycle s.kernel cell lcLive = s'.kernel := by
+      simpa only [Option.some.injEq] using hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }, ?_, rfl⟩
+    show cellUnsealChainA s actor cell = _
+    unfold cellUnsealChainA
+    rw [if_pos hg', hk]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_cellDestroy (s s' : RecChainedState) (actor cell : CellId)
+    (certHash : Nat) (h : execHandlerOne (.cellDestroyA actor cell certHash) s = some s') :
+    ∃ s'', execFullA s (.cellDestroyA actor cell certHash) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.cellDestroyA actor cell certHash) s s' h
+  rw [toClosedEffect] at hstep
+  change cellDestroyStep s.kernel { actor := actor, cell := cell, certHash := certHash } = some s'.kernel at hstep
+  unfold cellDestroyStep at hstep
+  by_cases hg : stateAuthB s.kernel.caps actor cell && (s.kernel.lifecycle cell != lcDestroyed)
+  · rw [if_pos hg] at hstep
+    have hg' : stateAuthB s.kernel.caps actor cell = true ∧ (s.kernel.lifecycle cell != lcDestroyed) = true := by
+      simp only [Bool.and_eq_true] at hg; exact ⟨hg.1, hg.2⟩
+    have hk : { (setLifecycle s.kernel cell lcDestroyed) with
+                  deathCert := fun c => if c = cell then certHash else s.kernel.deathCert c } = s'.kernel := by
+      simpa only [Option.some.injEq] using hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }, ?_, rfl⟩
+    show cellDestroyChainA s actor cell certHash = _
+    unfold cellDestroyChainA
+    rw [if_pos hg', hk]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_refreshDelegation (s s' : RecChainedState) (actor child : CellId)
+    (h : execHandlerOne (.refreshDelegationA actor child) s = some s') :
+    ∃ s'', execFullA s (.refreshDelegationA actor child) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.refreshDelegationA actor child) s s' h
+  rw [toClosedEffect] at hstep
+  change refreshDelegationStep s.kernel { actor := actor, child := child } = some s'.kernel at hstep
+  unfold refreshDelegationStep at hstep
+  by_cases hg : stateAuthB s.kernel.caps actor child && (s.kernel.delegate child).isSome
+  · rw [if_pos hg] at hstep
+    have hg' : stateAuthB s.kernel.caps actor child = true ∧ (s.kernel.delegate child).isSome = true := by
+      simp only [Bool.and_eq_true] at hg; exact ⟨hg.1, hg.2⟩
+    have hk : { s.kernel with
+                  delegations := fun c => if c = child then parentClist s.kernel child
+                                        else s.kernel.delegations c } = s'.kernel := by
+      simpa only [Option.some.injEq] using hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := child, dst := child, amt := 0 } :: s.log }, ?_, rfl⟩
+    show refreshDelegationChainA s actor child = _
+    unfold refreshDelegationChainA
+    rw [if_pos hg', hk]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_emitEvent (s s' : RecChainedState) (actor cell : CellId)
+    (topic data : Int) (h : execHandlerOne (.emitEventA actor cell topic data) s = some s') :
+    ∃ s'', execFullA s (.emitEventA actor cell topic data) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.emitEventA actor cell topic data) s s' h
+  rw [toClosedEffect] at hstep
+  change emitEventStep s.kernel { actor := actor, cell := cell, topic := topic, data := data } = some s'.kernel at hstep
+  unfold emitEventStep at hstep
+  by_cases hmem : cell ∈ s.kernel.accounts
+  · rw [if_pos hmem] at hstep
+    have hk : s.kernel = s'.kernel := by simpa only [Option.some.injEq] using hstep
+    refine ⟨emitStep s actor cell topic data, ?_, hk⟩
+    simp only [execFullA, hmem, if_pos hmem]
+  · rw [if_neg hmem] at hstep; exact absurd hstep (by simp)
+
+/-! ## §7 — THE TEETH: R1/R2/R6 holes closed in BOTH executors (parity witnesses).
 
 The payoff. For each hole, a single fixture exhibits the LIVE EXECUTOR `execFullA` accepting the attack
 (`= some` — the hole) while the handler executor `execHandlerTurn` REJECTS it (`= none` — the algebra
@@ -488,14 +604,15 @@ def teethEscrow : Option RecChainedState :=
     { kernel :=
         { accounts := {0, 1}
           cell := fun _ => .record [("balance", .int 0)]
-          caps := fun _ => []
+          caps := fun c => if c = 1 then [Cap.node 1] else []
           bal := fun c a => if c = 0 ∧ a = 0 then 100 else 0 }
       log := [] }
     (.createEscrowA 9 0 0 1 0 40)
 
--- §TEETH-R1 (TRANSFER INTO A SEALED CELL): `execFullA` ADMITS a transfer into the SEALED cell 1 — the
--- LIVE HOLE (no `acceptsEffects` gate on the bare `recKExecAsset`). The handler executor REJECTS it.
-#guard ((execFullA teethSealed (.balanceA { actor := 0, src := 0, dst := 1, amt := 30 } 0)).isSome)  --  true  (LIVE HOLE)
+-- §TEETH-R1 (TRANSFER INTO A SEALED CELL): R1 is now CLOSED IN THE LIVE EXECUTOR TOO. `recCexecAsset`
+-- gates on `acceptsEffects` at `t.dst`, so `execFullA` AND `execHandlerTurn` both REJECT a credit into
+-- the SEALED cell 1.
+#guard ((execFullA teethSealed (.balanceA { actor := 0, src := 0, dst := 1, amt := 30 } 0)).isSome) == false  --  false (R1 CLOSED in live executor)
 #guard ((execHandlerOne (.balanceA { actor := 0, src := 0, dst := 1, amt := 30 } 0) teethSealed).isSome) == false  --  false (CLOSED)
 
 -- §TEETH-R6 (STATE WRITE INTO A SEALED CELL): R6 is now CLOSED IN THE LIVE EXECUTOR TOO. The bare
@@ -507,12 +624,12 @@ def teethEscrow : Option RecChainedState :=
 #guard ((execFullA teethSealed (.incrementNonceA 0 0 7)).isSome)  --  true  (live cell still accepts)
 #guard ((execHandlerOne (.incrementNonceA 0 0 7) teethSealed).isSome)  --  true  (live cell still accepts)
 
--- §TEETH-R2 (ESCROW RELEASE BY A STRANGER): `execFullA` ADMITS a release of escrow 9 by cell 5 (a
--- stranger, NOT the recipient) — the LIVE HOLE (`releaseEscrowKAsset` takes only the id, no actor).
--- The handler executor REJECTS it (the settle-actor `authorizedB` gate bites).
-#guard ((teethEscrow.bind (fun s => execFullA s (.releaseEscrowA 9 5))).isSome)  --  true  (LIVE HOLE)
+-- §TEETH-R2 (ESCROW RELEASE BY A STRANGER): R2 is now CLOSED IN THE LIVE EXECUTOR TOO.
+-- `releaseEscrowChainA` gates on `releaseSettleAuthB`; both executors REJECT a stranger's release.
+#guard ((teethEscrow.bind (fun s => execFullA s (.releaseEscrowA 9 5))).isSome) == false  --  false (R2 CLOSED in live executor)
 #guard ((teethEscrow.bind (fun s => execHandlerOne (.releaseEscrowA 9 5) s)).isSome) == false  --  false (CLOSED)
--- the HONEST release (by the recipient cell 1) STILL succeeds under the handler executor (not everything-rejected).
+-- the HONEST release (by the recipient cell 1) STILL succeeds under BOTH executors.
+#guard ((teethEscrow.bind (fun s => execFullA s (.releaseEscrowA 9 1))).isSome)  --  true  (honest path admitted)
 #guard ((teethEscrow.bind (fun s => execHandlerOne (.releaseEscrowA 9 1) s)).isSome)  --  true  (honest path admitted)
 
 -- §TEETH-CONSERVATION: a whole handler turn conserves the combined measure (the derived global law,
@@ -541,6 +658,11 @@ seven batches the registry packs — would FAIL these pins (and the build). -/
 #assert_axioms handler_refines_execFullA_transfer
 #assert_axioms handler_refines_execFullA_release
 #assert_axioms handler_refines_execFullA_stateWrite
+#assert_axioms handler_refines_execFullA_cellSeal
+#assert_axioms handler_refines_execFullA_cellUnseal
+#assert_axioms handler_refines_execFullA_cellDestroy
+#assert_axioms handler_refines_execFullA_refreshDelegation
+#assert_axioms handler_refines_execFullA_emitEvent
 
 /-! ## §DEFER — honest scope of THIS cutover keystone (additive; the call-site switch is mechanical).
 

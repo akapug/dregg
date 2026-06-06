@@ -24,10 +24,13 @@ nor `Dregg2.lean`. Reuses ONLY the proved gated-executor keystones (`gateOK_revo
 `execFullForestG_unauthorized_fails`, `execFullForestG_conserves_per_asset`).
 -/
 import Dregg2.Exec.GatedForestCfg
+import Dregg2.Verify.Catalog
 
 namespace Dregg2.Apps.IdentityGated
 
 open Dregg2.Exec
+open Dregg2.Verify (gateRevoked identity_revoked_forever_production)
+open Production (Contract Sched)
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Exec.EffectsState
@@ -115,6 +118,21 @@ theorem id_op_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf)
   execFullForestG_conserves_per_asset s s' (idNode cred slot value) b h
     (idNode_delta_zero cred slot value b)
 
+/-! ## §6b — Hatchery bridge: registry persistence + forever rejection on `trajG`. -/
+
+theorem id_revoked_registry_forever (credNul : Nat) (s : RecChainedState)
+    (hinit : credNul ∈ s.kernel.revoked) (sched : SchedG) :
+    ∀ n, credNul ∈ (trajG s sched n).kernel.revoked :=
+  (gateRevoked credNul).forever hinit sched
+
+theorem id_revoked_rejected_forever (s : RecChainedState) (slot : FieldName) (value : Int)
+    (hinit : (mkAuth goodCred []).credNul ∈ s.kernel.revoked) (sched : SchedG) :
+    ∀ n, execFullForestG (trajG s sched n) (idNode goodCred slot value) = none := by
+  intro n
+  exact id_revoked_rejected (trajG s sched n) slot value
+    (List.contains_iff_mem.mpr
+      (id_revoked_registry_forever (mkAuth goodCred []).credNul s hinit sched n))
+
 /-! ## §7 — NON-VACUITY: concrete states + `#guard` witnesses (the revocation teeth are REAL). -/
 
 /-- A non-revoked identity state (cell 0 live, empty revocation registry; supply asset0 = 105, asset1 = 7). -/
@@ -155,5 +173,7 @@ def idRevoked : RecChainedState :=
 #assert_axioms id_revoked_rejected
 #assert_axioms idNode_delta_zero
 #assert_axioms id_op_conserves
+#assert_axioms id_revoked_registry_forever
+#assert_axioms id_revoked_rejected_forever
 
 end Dregg2.Apps.IdentityGated

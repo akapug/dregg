@@ -70,6 +70,7 @@ the AVAILABILITY conjunct reads the GENUINE per-asset ledger `k.bal t.src a` —
 def admitGuardA (k : RecordKernelState) (t : Turn) (a : AssetId) : Prop :=
   authorizedB k.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ k.bal t.src a
     ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts
+    ∧ acceptsEffects k t.dst = true
 
 /-! ## §2 — the post-`bal` ledger helper, validated DECLARATIVELY.
 
@@ -146,26 +147,31 @@ theorem recCexecAsset_iff_spec (st : RecChainedState) (t : Turn) (a : AssetId) (
     recCexecAsset st t a = some st' ↔ BalanceMovementSpec st t a st' := by
   unfold recCexecAsset BalanceMovementSpec admitGuardA
   unfold recKExecAsset
-  by_cases hg : authorizedB st.kernel.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ st.kernel.bal t.src a
-      ∧ t.src ≠ t.dst ∧ t.src ∈ st.kernel.accounts ∧ t.dst ∈ st.kernel.accounts
-  · rw [if_pos hg]
-    constructor
-    · intro h
-      simp only [Option.some.injEq] at h
-      subst h
-      exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    · rintro ⟨_, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
-      -- reconstruct st' from the spec: its kernel matches `{ st.kernel with bal := … }` field-by-field,
-      -- and its log matches `t :: st.log`.
-      obtain ⟨k', l'⟩ := st'
-      obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-      simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      rfl
-  · rw [if_neg hg]
+  by_cases hadm : acceptsEffects st.kernel t.dst
+  · by_cases hg : authorizedB st.kernel.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ st.kernel.bal t.src a
+        ∧ t.src ≠ t.dst ∧ t.src ∈ st.kernel.accounts ∧ t.dst ∈ st.kernel.accounts
+    · rw [if_pos hadm, if_pos hg]
+      constructor
+      · intro h
+        simp only [Option.some.injEq] at h
+        subst h
+        rcases hg with ⟨ha, hnn, havail, hne, hsrc, hdst⟩
+        exact ⟨ha, hnn, havail, hne, hsrc, hdst, hadm, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+      · rintro ⟨hguard, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+        obtain ⟨k', l'⟩ := st'
+        obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
+        simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+        subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+        rfl
+    · rw [if_pos hadm, if_neg hg]
+      constructor
+      · intro h; exact absurd h (by simp)
+      · rintro ⟨hguard, _⟩; rcases hguard with ⟨_, _, _, _, _, _, hadm'⟩
+        rcases hg with ⟨_, _, _, _, _, _⟩; exact absurd hadm' hadm
+  · rw [if_neg hadm]
     constructor
     · intro h; exact absurd h (by simp)
-    · rintro ⟨hg', _⟩; exact absurd hg' hg
+    · rintro ⟨hguard, _⟩; rcases hguard with ⟨_, _, _, _, _, _, _, hadm'⟩; exact absurd hadm' hadm
 
 /-- **`execFullA_balanceA_iff_spec` — the UNIFIED-ACTION executor corner.** The action executor
 `execFullA` dispatches `.balanceA t a` to `recCexecAsset s t a`, so committing the unified action into
@@ -221,7 +227,10 @@ theorem balanceMovement_rejects_unauthorized (st : RecChainedState) (t : Turn) (
     execFullA st (.balanceA t a) = none := by
   show recCexecAsset st t a = none
   unfold recCexecAsset recKExecAsset
-  rw [if_neg (by rw [hbad]; rintro ⟨h, _⟩; exact absurd h (by simp))]
+  by_cases hadm : acceptsEffects st.kernel t.dst
+  · rw [if_pos hadm]
+    rw [if_neg (by rw [hbad]; rintro ⟨h, _⟩; exact absurd h (by simp))]
+  · rw [if_neg hadm]
 
 /-- **`balanceMovement_rejects_overdraft` — PROVED.** A movement of more than the source holds in
 asset `a` (`¬ t.amt ≤ k.bal t.src a`) does NOT commit (the AVAILABILITY leg fails). -/
@@ -230,7 +239,10 @@ theorem balanceMovement_rejects_overdraft (st : RecChainedState) (t : Turn) (a :
     execFullA st (.balanceA t a) = none := by
   show recCexecAsset st t a = none
   unfold recCexecAsset recKExecAsset
-  rw [if_neg (by rintro ⟨_, _, h, _⟩; exact hbad h)]
+  by_cases hadm : acceptsEffects st.kernel t.dst
+  · rw [if_pos hadm]
+    rw [if_neg (by rintro ⟨_, _, h, _⟩; exact hbad h)]
+  · rw [if_neg hadm]
 
 /-- **`balanceMovement_rejects_self` — PROVED.** A self-movement (`src = dst`) does NOT commit (the
 DISTINCTNESS leg fails) — no value can be conjured by moving to oneself. -/
@@ -239,7 +251,10 @@ theorem balanceMovement_rejects_self (st : RecChainedState) (t : Turn) (a : Asse
     execFullA st (.balanceA t a) = none := by
   show recCexecAsset st t a = none
   unfold recCexecAsset recKExecAsset
-  rw [if_neg (by rintro ⟨_, _, _, h, _⟩; exact h hbad)]
+  by_cases hadm : acceptsEffects st.kernel t.dst
+  · rw [if_pos hadm]
+    rw [if_neg (by rintro ⟨_, _, _, h, _⟩; exact h hbad)]
+  · rw [if_neg hadm]
 
 /-- **`balanceMovement_rejects_dead_src` — PROVED.** A movement out of a non-account source does NOT
 commit (the source-LIVENESS leg fails). -/
@@ -248,7 +263,19 @@ theorem balanceMovement_rejects_dead_src (st : RecChainedState) (t : Turn) (a : 
     execFullA st (.balanceA t a) = none := by
   show recCexecAsset st t a = none
   unfold recCexecAsset recKExecAsset
-  rw [if_neg (by rintro ⟨_, _, _, _, h, _⟩; exact hbad h)]
+  by_cases hadm : acceptsEffects st.kernel t.dst
+  · rw [if_pos hadm]
+    rw [if_neg (by rintro ⟨_, _, _, _, h, _⟩; exact hbad h)]
+  · rw [if_neg hadm]
+
+/-- **`balanceMovement_rejects_sealed_dst` — PROVED (R1).** A transfer into a non-Live destination
+(Sealed/Destroyed ⇒ `acceptsEffects = false`) does NOT commit. -/
+theorem balanceMovement_rejects_sealed_dst (st : RecChainedState) (t : Turn) (a : AssetId)
+    (hbad : acceptsEffects st.kernel t.dst = false) :
+    execFullA st (.balanceA t a) = none := by
+  show recCexecAsset st t a = none
+  unfold recCexecAsset
+  rw [if_neg hbad]
 
 /-! ## §6 — Axiom-hygiene tripwires.
 
@@ -265,5 +292,6 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`ad
 #assert_axioms balanceMovement_rejects_overdraft
 #assert_axioms balanceMovement_rejects_self
 #assert_axioms balanceMovement_rejects_dead_src
+#assert_axioms balanceMovement_rejects_sealed_dst
 
 end Dregg2.Circuit.Spec.BalanceMovement

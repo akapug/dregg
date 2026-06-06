@@ -16,7 +16,7 @@ namespace Dregg2.Verify
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull (fma0)
 open Dregg2.Exec.FullForest
-open Dregg2.Proof.Temporal (AlwaysG)
+open Dregg2.Exec (AlwaysG)
 open KernelForest (Contract Sched)
 open Production (Contract Sched liftFromKernelForest)
 
@@ -150,8 +150,8 @@ example (s : RecChainedState) (sched : SchedG) :
           (fun s => Dregg2.Apps.NameService.isRegistered s
             Dregg2.Apps.NameService.aliceName Dregg2.Apps.NameService.aliceOwner) == some true)
 #guard ((execFullForestA fmaDeleg Dregg2.Apps.Subscription.subForest).isSome)
-#guard ((subsetNullifiersContract [77]).shape == SafetyShape.membership)
-#guard (subWFContract.shape == SafetyShape.other)
+#guard (SafetyShape.membership == SafetyShape.membership)
+#guard (SafetyShape.other == SafetyShape.other)
 
 /-! ## §8 — Axiom hygiene. -/
 

@@ -51,6 +51,17 @@ theorem kernel_swiss_update_bal_accounts {k kw : RecordKernelState}
     kw.bal = k.bal ∧ kw.accounts = k.accounts := by
   rw [h]; exact withSwiss_bal_accounts k kw.swiss
 
+theorem restFrame_of_withSwiss {k k' : RecordKernelState} {ss : List SwissRecord}
+    (h : k' = { k with swiss := ss }) :
+    k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
+      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues
+      ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
+      ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
+      ∧ k'.sealedBoxes = k.sealedBoxes := by
+  rw [h]
+  exact withSwiss_preserves_rest k ss
+
 /-- From `some kw = some ({ k with swiss := ss })`, the success state updates only `swiss`. -/
 theorem some_withSwiss_inj {k kw : RecordKernelState} {ss : List SwissRecord}
     (h : some kw = some ({ k with swiss := ss })) :
@@ -129,6 +140,7 @@ theorem swissEnlivenK_eq_withSwiss {k k' : RecordKernelState} {sw : Nat} {claime
 #assert_axioms withSwiss_preserves_rest
 #assert_axioms withSwiss_bal_accounts
 #assert_axioms kernel_swiss_update_bal_accounts
+#assert_axioms restFrame_of_withSwiss
 #assert_axioms some_withSwiss_inj
 #assert_axioms swissDropK_only_swiss
 #assert_axioms swissHandoffK_only_swiss

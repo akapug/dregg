@@ -83,14 +83,14 @@ re-assembly. -/
 /-- The decidable `find?` predicate the kernel walks `escrows` with: an UNRESOLVED record of this id. -/
 def matchesId (id : Nat) : EscrowRecord → Bool := fun r => decide (r.id = id ∧ r.resolved = false)
 
-/-- **`releaseGuard s id r`** — the executor's admissibility for a release of escrow `id`, witnessed by
-the FOUND record `r`: `r` is the first unresolved id-matching record (`find? = some r`), and its
-settlement target (the `recipient`) is a LIVE account (`recipient ∈ accounts ∧ cellLifecycleLive`).
-This is the EXACT conjunction of `releaseEscrowKAsset`'s `match`-arm + `if`-condition. -/
-def releaseGuard (s : RecChainedState) (id : Nat) (r : EscrowRecord) : Prop :=
+/-- **`releaseGuard s id actor r`** — the executor's admissibility for a release of escrow `id`,
+witnessed by the FOUND record `r`: unresolved record present, recipient live, AND the settling actor
+is authorized over the recipient (R2 settle-actor gate). -/
+def releaseGuard (s : RecChainedState) (id : Nat) (actor : CellId) (r : EscrowRecord) : Prop :=
   s.kernel.escrows.find? (matchesId id) = some r
     ∧ r.recipient ∈ s.kernel.accounts
     ∧ cellLifecycleLive s.kernel r.recipient = true
+    ∧ releaseSettleAuthB s.kernel id actor = true
 
 /-! ## §2 — The post-state's touched `bal`/`escrows`, validated DECLARATIVELY (the `recTransfer_correct`
 analogue).
@@ -133,7 +133,7 @@ ghost. -/
 def ReleaseEscrowSpec (s : RecChainedState) (id : Nat) (actor : CellId) (s' : RecChainedState) :
     Prop :=
   ∃ r : EscrowRecord,
-    releaseGuard s id r
+    releaseGuard s id actor r
     ∧ s'.kernel.bal = recBalCreditCell s.kernel.bal r.recipient r.asset r.amount
     ∧ s'.kernel.escrows = markResolved s.kernel.escrows id
     ∧ s'.log = escrowReceiptA actor :: s.log
@@ -167,71 +167,56 @@ theorem releaseEscrowChainA_iff_spec (s : RecChainedState) (id : Nat) (actor : C
     (s' : RecChainedState) :
     releaseEscrowChainA s id actor = some s' ↔ ReleaseEscrowSpec s id actor s' := by
   unfold releaseEscrowChainA releaseEscrowKAsset ReleaseEscrowSpec releaseGuard matchesId
-         settleEscrowRawAsset
-  -- split on whether an unresolved id-matching record is found. `cases hf` substitutes the value into
-  -- BOTH the executor `match` AND the spec's `find?` clause; the following `simp only` iota-reduces the
-  -- now-`some r`/`none` executor `match` arm.
-  cases hf : s.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | none =>
-    simp only
-    constructor
-    · intro h; exact absurd h (by simp)
-    · rintro ⟨r, hfind, _⟩; exact absurd hfind (by simp)
-  | some r =>
-    simp only
-    -- now split on the settle-liveness gate.
-    by_cases hg : r.recipient ∈ s.kernel.accounts ∧ cellLifecycleLive s.kernel r.recipient = true
-    · rw [if_pos hg]
-      constructor
-      · intro h
-        simp only [Option.some.injEq] at h
-        subst h
-        exact ⟨r, ⟨rfl, hg.1, hg.2⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-               rfl, rfl, rfl, rfl, rfl⟩
-      · rintro ⟨r', ⟨hfind', _, _⟩, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11,
-               h12, h13, h14, h15⟩
-        -- the found record is unique: the spec's `find?` reduced to `some r`, and `hfind' : some r = some r'`.
-        simp only [Option.some.injEq] at hfind'
-        subst hfind'
-        -- reconstruct `s'` from its 18 components.
-        obtain ⟨k', log'⟩ := s'
-        obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb⟩ := k'
-        simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-        subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-        rfl
-    · rw [if_neg hg]
+         settleEscrowRawAsset releaseSettleAuthB findUnresolvedEscrow
+  by_cases hauth : releaseSettleAuthB s.kernel id actor
+  · cases hf : s.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+    | none =>
+      simp only [hauth, if_pos hauth]
       constructor
       · intro h; exact absurd h (by simp)
-      · rintro ⟨r', ⟨hfind', hrec, hlive⟩, _⟩
-        simp only [Option.some.injEq] at hfind'
-        subst hfind'
-        exact absurd ⟨hrec, hlive⟩ hg
+      · rintro ⟨r, hfind, _⟩; exact absurd hfind (by simp)
+    | some r =>
+      simp only [hauth, if_pos hauth]
+      by_cases hg : r.recipient ∈ s.kernel.accounts ∧ cellLifecycleLive s.kernel r.recipient = true
+      · rw [if_pos hg]
+        constructor
+        · intro h
+          simp only [Option.some.injEq] at h
+          subst h
+          exact ⟨r, ⟨rfl, hg.1, hg.2, hauth⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+                 rfl, rfl, rfl, rfl, rfl⟩
+        · rintro ⟨r', ⟨hfind', _, _, hauth'⟩, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11,
+                 h12, h13, h14, h15⟩
+          simp only [Option.some.injEq] at hfind'
+          subst hfind'
+          obtain ⟨k', log'⟩ := s'
+          obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb⟩ := k'
+          simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+          subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+          rfl
+      · rw [if_neg hg]
+        constructor
+        · intro h; exact absurd h (by simp)
+        · rintro ⟨r', ⟨hfind', hrec, hlive, _⟩, _⟩
+          simp only [Option.some.injEq] at hfind'
+          subst hfind'
+          exact absurd ⟨hrec, hlive⟩ hg
+  · simp only [hauth, if_neg hauth]
+    constructor
+    · intro h; exact absurd h (by simp)
+    · rintro ⟨r, ⟨_, _, _, hauth'⟩, _⟩; exact absurd hauth' hauth
 
 /-- **`releaseEscrowChainA_iff_guard` — commitment IFF the guard** (the existence form).
 `releaseEscrowChainA` commits SOME post-state iff there is a found unresolved record whose recipient
 is live. -/
 theorem releaseEscrowChainA_iff_guard (s : RecChainedState) (id : Nat) (actor : CellId) :
-    (∃ s', releaseEscrowChainA s id actor = some s') ↔ (∃ r, releaseGuard s id r) := by
-  unfold releaseEscrowChainA releaseEscrowKAsset releaseGuard matchesId
-  cases hf : s.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | none =>
-    simp only
-    constructor
-    · rintro ⟨s', h⟩; exact absurd h (by simp)
-    · rintro ⟨r, hfind, _⟩; exact absurd hfind (by simp)
-  | some r =>
-    simp only
-    by_cases hg : r.recipient ∈ s.kernel.accounts ∧ cellLifecycleLive s.kernel r.recipient = true
-    · rw [if_pos hg]
-      constructor
-      · intro _; exact ⟨r, rfl, hg.1, hg.2⟩
-      · intro _; exact ⟨_, rfl⟩
-    · rw [if_neg hg]
-      constructor
-      · rintro ⟨s', h⟩; exact absurd h (by simp)
-      · rintro ⟨r', hfind', hrec, hlive⟩
-        simp only [Option.some.injEq] at hfind'; subst hfind'
-        exact absurd ⟨hrec, hlive⟩ hg
+    (∃ s', releaseEscrowChainA s id actor = some s') ↔ (∃ r, releaseGuard s id actor r) := by
+  constructor
+  · rintro ⟨s', h⟩
+    rcases (releaseEscrowChainA_iff_spec s id actor s').mp h with ⟨r, hg, _⟩
+    exact ⟨r, hg⟩
+  · rintro ⟨r, hg⟩
+    refine ⟨_, (releaseEscrowChainA_iff_spec s id actor _).mpr ⟨r, hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩⟩
 
 /-! ## §5 — EXECUTOR ⟺ SPEC, lifted to `execFullA` for BOTH family constructors.
 
@@ -275,7 +260,7 @@ record's `recipient` by exactly `+amount` at the record's `asset`. Derived from 
 clause + the declaratively-validated settle helper. -/
 theorem release_credits_recipient (s : RecChainedState) (id : Nat) (actor : CellId)
     (s' : RecChainedState) (h : ReleaseEscrowSpec s id actor s') :
-    ∃ r, releaseGuard s id r ∧
+    ∃ r, releaseGuard s id actor r ∧
       s'.kernel.bal r.recipient r.asset = s.kernel.bal r.recipient r.asset + r.amount := by
   obtain ⟨r, hg, hbal, _⟩ := h
   refine ⟨r, hg, ?_⟩
@@ -287,7 +272,7 @@ committed release leaves EVERY cell/asset `bal` entry other than `(recipient, re
 literally unchanged. So the credit is a genuine single-cell, single-asset move. -/
 theorem release_balance_only_recipient_asset (s : RecChainedState) (id : Nat) (actor : CellId)
     (s' : RecChainedState) (h : ReleaseEscrowSpec s id actor s') :
-    ∃ r, releaseGuard s id r ∧
+    ∃ r, releaseGuard s id actor r ∧
       ∀ x b, ¬ (x = r.recipient ∧ b = r.asset) → s'.kernel.bal x b = s.kernel.bal x b := by
   obtain ⟨r, hg, hbal, _⟩ := h
   refine ⟨r, hg, ?_⟩
@@ -319,8 +304,8 @@ holding-store does not park. -/
 theorem release_rejects_missing (s : RecChainedState) (id : Nat) (actor : CellId)
     (hbad : s.kernel.escrows.find? (matchesId id) = none) :
     releaseEscrowChainA s id actor = none := by
-  unfold releaseEscrowChainA releaseEscrowKAsset matchesId at *
-  simp only [hbad]
+  unfold releaseEscrowChainA releaseSettleAuthB findUnresolvedEscrow matchesId at *
+  simp only [hbad, if_neg]
 
 /-- **`release_rejects_dead_recipient` — NEGATIVE teeth (the SETTLE-LIVENESS gate).** Even with a
 present unresolved record, if its `recipient` is NOT a live account the release is FAIL-CLOSED:
@@ -328,10 +313,11 @@ present unresolved record, if its `recipient` is NOT a live account the release 
 (breaking combined conservation) — the executor refuses by construction. -/
 theorem release_rejects_dead_recipient (s : RecChainedState) (id : Nat) (actor : CellId)
     (r : EscrowRecord) (hfind : s.kernel.escrows.find? (matchesId id) = some r)
+    (hauth : releaseSettleAuthB s.kernel id actor = true)
     (hbad : ¬ (r.recipient ∈ s.kernel.accounts ∧ cellLifecycleLive s.kernel r.recipient = true)) :
     releaseEscrowChainA s id actor = none := by
-  unfold releaseEscrowChainA releaseEscrowKAsset matchesId at *
-  simp only [hfind, if_neg hbad]
+  unfold releaseEscrowChainA releaseEscrowKAsset releaseSettleAuthB findUnresolvedEscrow matchesId at *
+  simp only [hfind, hauth, if_pos hauth, if_neg hbad]
 
 /-! ## §7 — Concrete #guard witnesses: a live-recipient unresolved escrow releases; a missing or
 dead-recipient one is rejected.
@@ -346,12 +332,12 @@ amount 30, asset 0. Cells 0 and 1 are live accounts; lifecycle defaults Live (0)
 def sR0 : RecChainedState :=
   { kernel := { accounts := {0, 1}
                 cell := fun _ => .record [("balance", .int 0)]
-                caps := fun _ => []
+                caps := fun c => if c = 0 then [Cap.node 1] else []
                 escrows := [{ id := 7, creator := 0, recipient := 1, amount := 30,
                               resolved := false, asset := 0 }] }
     log := [] }
 
--- A release of the parked escrow 7 commits (recipient 1 is a live account):
+-- A release of the parked escrow 7 commits (actor 0 holds `node 1` over recipient 1 — R2 settle-auth):
 #guard (execFullA sR0 (.releaseEscrowA 7 0)).isSome  --  true
 -- ...and recipient 1's per-asset `bal` at asset 0 GENUINELY rises by 30 (the parked value settles):
 #guard ((execFullA sR0 (.releaseEscrowA 7 0)).map (fun s' => s'.kernel.bal 1 0)).getD 0 == 30
@@ -364,6 +350,8 @@ def sR0 : RecChainedState :=
 
 -- A release of a NON-existent escrow id 99 is REJECTED (fail-closed, no such record):
 #guard (execFullA sR0 (.releaseEscrowA 99 0)).isNone  --  true
+-- An UNAUTHORIZED stranger (cell 5, no cap over recipient 1) cannot release — R2 teeth:
+#guard (execFullA sR0 (.releaseEscrowA 7 5)).isNone  --  true
 
 /-- A state parking an escrow whose recipient (cell 5) is NOT a live account. -/
 def sRDead : RecChainedState :=

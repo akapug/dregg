@@ -256,7 +256,10 @@ theorem bb_claim_requires_live_claimant (s : RecChainedState) (id : Nat) (actor 
   rw [claimNode, bb_good_node_runs s (.releaseEscrowA id actor) hgate]
   show releaseEscrowChainA s id actor = none
   unfold releaseEscrowChainA
-  rw [releaseEscrowKAsset_nonlive_fails hfind hdead]
+  by_cases hauth : releaseSettleAuthB s.kernel id actor
+  · rw [if_pos hauth]
+    rw [releaseEscrowKAsset_nonlive_fails hfind hdead]
+  · rw [if_neg hauth]
 
 /-- **`bb_cancel_requires_live_poster` — PROVED (END-USER THEOREM 7, the symmetric refund teeth).** A
 cancel whose found escrow record's CREATOR (the poster/refund target) is NOT lifecycle-live is REJECTED
@@ -271,7 +274,10 @@ theorem bb_cancel_requires_live_poster (s : RecChainedState) (id : Nat) (actor :
   rw [cancelNode, bb_good_node_runs s (.refundEscrowA id actor) hgate]
   show refundEscrowChainA s id actor = none
   unfold refundEscrowChainA
-  rw [refundEscrowKAsset_nonlive_fails hfind hdead]
+  by_cases hauth : refundSettleAuthB s.kernel id actor
+  · rw [if_pos hauth]
+    rw [refundEscrowKAsset_nonlive_fails hfind hdead]
+  · rw [if_neg hauth]
 
 /-! ## §8 — NON-VACUITY: a concrete FUNDED bounty board + `#guard` witnesses.
 

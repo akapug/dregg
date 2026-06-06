@@ -162,23 +162,46 @@ theorem apex_iff_enlivenSpec (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
   constructor
   · rintro ⟨hg, hsw, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    obtain ⟨e, hf, hr⟩ := hg.2
-    have hk := (enlivenSwissUpdate_eq_k s.kernel args.sw args.claimed s'.kernel.swiss).mp <|
-      by simpa [enlivenSwissPostClause, enlivenSwissUpdate_some] using hsw
-    refine ⟨hg, s'.kernel, hk, ?_⟩
-    cases s'; simp [hlog]
-  · rintro ⟨hg, k', hk, hs'⟩
+    cases s' with | mk kernel log =>
+    obtain ⟨e, ⟨hf, hr⟩⟩ := hg.2
+    have hK : kernel = { s.kernel with swiss := kernel.swiss } :=
+      recKernel_ext hAcc hCell hCaps hEsc hNul hRev hCom hBal hQ rfl hSC hFac hLif hDC hDel hDgs hSB
+    have hupd := enlivenSwissUpdate_some s.kernel.swiss args.sw args.claimed e hf hr
+    have hcl : enlivenSwissPostClause s args = enlivenSwissPost s.kernel.swiss args.sw e := by
+      simp [enlivenSwissPostClause, hupd]
+    have hpost : enlivenSwissPost s.kernel.swiss args.sw e = kernel.swiss := (hsw.trans hcl).symm
+    have hsome : enlivenSwissUpdate s.kernel.swiss args.sw args.claimed = some kernel.swiss := by
+      rw [hupd, congr_arg some hpost]
+    have hk' := (enlivenSwissUpdate_eq_k s.kernel args.sw args.claimed kernel.swiss).mp hsome
+    have hk : swissEnlivenK s.kernel args.sw args.claimed = some kernel :=
+      hk'.trans (congr_arg some hK.symm)
+    refine ⟨hg, ⟨kernel, ⟨hk, ?_⟩⟩⟩
+    simpa using hlog
+  · rintro ⟨hg, ⟨k', hk, hs'⟩⟩
     rcases withSwiss_preserves_rest s.kernel k'.swiss with
       ⟨hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
-    obtain ⟨e, hf, hr⟩ := hg.2
+    obtain ⟨e, ⟨hf, hr⟩⟩ := hg.2
     have hupd := enlivenSwissUpdate_some s.kernel.swiss args.sw args.claimed e hf hr
     have hk' := swissEnlivenK_eq_withSwiss hk
-    have hsw := (enlivenSwissUpdate_eq_k s.kernel args.sw args.claimed k'.swiss).mpr hk'
-    cases s'
-    subst hs'
-    simp [enlivenSwissPostClause, hsw, hupd]
-    exact ⟨hg, rfl, rfl, ⟨hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
-      hDC, hDel, hDgs, hSB⟩⟩
+    have hupd' : enlivenSwissUpdate s.kernel.swiss args.sw args.claimed = some k'.swiss :=
+      (enlivenSwissUpdate_eq_k s.kernel args.sw args.claimed k'.swiss).mpr hk'
+    have hpost : enlivenSwissPost s.kernel.swiss args.sw e = k'.swiss :=
+      Option.some.inj (hupd.symm.trans hupd')
+    have hsw' : k'.swiss =
+        match enlivenSwissUpdate s.kernel.swiss args.sw args.claimed with
+        | some ss => ss
+        | none => s.kernel.swiss := by
+      simp [enlivenSwissPostClause, hupd, hpost]
+    have hker : s'.kernel = k' := congr_arg RecChainedState.kernel hs'
+    have hlog : s'.log = enlivenReceipt args.actor args.exporter :: s.log :=
+      congr_arg RecChainedState.log hs'
+    have hK' := swissEnlivenK_only_swiss hk
+    have hrest : (enlivenE LE cN hN hLE).restFrame s.kernel s'.kernel := by
+      rw [hker, hK']
+      exact restFrame_of_withSwiss rfl
+    refine ⟨hg, ?_, hlog, hrest⟩
+    rw [hker]
+    exact hsw'
 
 /-! ### §2c — THE VALIDATION. -/
 
