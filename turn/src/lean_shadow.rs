@@ -23,29 +23,32 @@ struct ShadowPreLedger {
 
 thread_local! {
     static SHADOW_PRE: RefCell<Option<ShadowPreLedger>> = const { RefCell::new(None) };
+    static SHADOW_BLOCK_HEIGHT: RefCell<u64> = const { RefCell::new(0) };
 }
 
 /// Capture a minimal pre-state snapshot when shadow mode may run later.
 ///
 /// Call at the start of [`crate::executor::TurnExecutor::execute`] before any
 /// ledger mutation so the Lean oracle sees the same admission inputs as Rust.
-pub fn capture_pre_state_if_eligible(turn: &Turn, ledger: &Ledger) {
+pub fn capture_pre_state_if_eligible(turn: &Turn, ledger: &Ledger, block_height: u64) {
     let snapshot = if shadow_env_enabled() && is_setfield_only_single_action(turn) {
         Some(build_pre_ledger(turn, ledger))
     } else {
         None
     };
     SHADOW_PRE.with(|slot| *slot.borrow_mut() = snapshot);
+    SHADOW_BLOCK_HEIGHT.with(|h| *h.borrow_mut() = block_height);
 }
 
 /// Shadow-execute eligible turns against the Lean kernel and log divergences.
 ///
 /// Uses the pre-execution snapshot stored by [`capture_pre_state_if_eligible`].
 /// The `ledger` argument matches the public API; marshalling uses the captured pre-state.
-pub fn maybe_shadow_turn(turn: &Turn, ledger: &Ledger, result: &TurnResult) {
-    let _ = ledger;
+pub fn maybe_shadow_turn(turn: &Turn, ledger: &Ledger, result: &TurnResult, block_height: u64) {
+    let _ = (ledger, block_height);
     if !shadow_env_enabled() {
         SHADOW_PRE.with(|slot| slot.borrow_mut().take());
+        SHADOW_BLOCK_HEIGHT.with(|h| *h.borrow_mut() = 0);
         return;
     }
 
@@ -65,7 +68,8 @@ pub fn maybe_shadow_turn(turn: &Turn, ledger: &Ledger, result: &TurnResult) {
             return;
         }
 
-        match run_shadow(turn, &pre) {
+        let height = SHADOW_BLOCK_HEIGHT.with(|h| *h.borrow());
+        match run_shadow(turn, &pre, height) {
             Ok(lean_committed) => {
                 let rust_committed = result.is_committed();
                 if lean_committed != rust_committed {
@@ -157,12 +161,12 @@ fn build_pre_ledger(turn: &Turn, ledger: &Ledger) -> ShadowPreLedger {
 }
 
 #[cfg(feature = "lean-shadow")]
-fn run_shadow(turn: &Turn, pre: &ShadowPreLedger) -> Result<bool, String> {
+fn run_shadow(turn: &Turn, pre: &ShadowPreLedger, block_height: u64) -> Result<bool, String> {
     use dregg_lean_ffi::marshal::marshal_turn;
 
     let root = &turn.call_forest.roots[0];
     let wire_state = ledger_to_wire_state(pre)?;
-    let wire_turn = turn_to_wire_turn(turn, root, pre)?;
+    let wire_turn = turn_to_wire_turn(turn, root, pre, block_height)?;
     let wire = marshal_turn(&wire_state, &wire_turn).map_err(|e| e.to_string())?;
     let out = dregg_lean_ffi::shadow_exec_full_forest_auth(&wire)?;
     let verdict = dregg_lean_ffi::decode_shadow_verdict(&out)?;
@@ -222,6 +226,7 @@ fn turn_to_wire_turn(
     turn: &Turn,
     root: &CallTree,
     pre: &ShadowPreLedger,
+    block_height: u64,
 ) -> Result<dregg_lean_ffi::marshal::WireTurn, String> {
     use dregg_lean_ffi::marshal::{WireAction, WireTurn, WForest};
 
@@ -260,6 +265,7 @@ fn turn_to_wire_turn(
         nonce: turn.nonce,
         fee: turn.fee as i128,
         valid_until,
+        block_height,
         prev_hash,
         root: WForest {
             auth: auth_to_wire(&root.action.authorization),

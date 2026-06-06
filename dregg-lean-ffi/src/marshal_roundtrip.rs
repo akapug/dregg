@@ -123,6 +123,7 @@ fn gated_demo_turn() -> WireTurn {
         nonce: 7,
         fee: 5,
         valid_until: 1000,
+        block_height: 0,
         prev_hash: 0,
         root: WForest {
             auth: WireAuth::Signature { pubkey: 7, sig: 7 },
@@ -147,6 +148,7 @@ fn forged_turn() -> WireTurn {
         nonce: 0,
         fee: 0,
         valid_until: 0,
+        block_height: 0,
         prev_hash: 0,
         root: WForest {
             auth: WireAuth::Signature { pubkey: 7, sig: 8 },
@@ -181,6 +183,7 @@ fn overspend_turn() -> WireTurn {
         nonce: 0,
         fee: 0,
         valid_until: 0,
+        block_height: 0,
         prev_hash: 0,
         root: WForest {
             auth: WireAuth::Unchecked,

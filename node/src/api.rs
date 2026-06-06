@@ -1876,7 +1876,7 @@ async fn post_submit_turn(
     let pre_ledger = s.ledger.clone();
 
     // Execute the turn locally FIRST.
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let executor = crate::executor_setup::new_submit_executor(&s);
     seed_executor_receipt_head(&executor, turn.agent, previous_receipt_hash);
     let exec_result = executor.execute(&turn, &mut s.ledger);
 
@@ -2119,7 +2119,7 @@ async fn post_submit_signed_turn(
     }
 
     let pre_ledger = s.ledger.clone();
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let executor = crate::executor_setup::new_submit_executor(&s);
     seed_executor_receipt_head(&executor, signed.turn.agent, expected_prev);
     let exec_result = executor.execute(&signed.turn, &mut s.ledger);
 
@@ -2515,7 +2515,7 @@ async fn post_submit_encrypted_turn(
             }
         };
 
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let executor = crate::executor_setup::new_submit_executor(&s);
     let expected_prev = s.cclerk.receipt_chain().last().map(|r| r.receipt_hash());
     seed_executor_receipt_head(&executor, encrypted.agent, expected_prev);
 
@@ -3794,10 +3794,9 @@ async fn post_fast_path_certificate(
 
     // Execute the certified turn.
     let mut s = state.write().await;
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
-
     // Split borrows: take mutable refs to disjoint fields.
     let inner = &mut *s;
+    let executor = crate::executor_setup::new_submit_executor(inner);
     let result = dregg_turn::execute_certified_turn(
         &cert,
         &executor,
@@ -3989,7 +3988,7 @@ async fn post_resolve_conditional(
 
             let conditional = s.pending_conditionals.remove(idx);
 
-            let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+            let executor = crate::executor_setup::new_submit_executor(&s);
             let exec_result = executor.execute(&conditional.turn, &mut s.ledger);
 
             match exec_result {
@@ -5439,24 +5438,7 @@ async fn post_bearer_auth(
     let _target_cell =
         hex_decode_32_result(&req.target_cell).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    // Build a TurnExecutor configured with current block height and revocation state.
-    let current_height = s
-        .store
-        .latest_attested_root()
-        .ok()
-        .flatten()
-        .map(|r| r.height)
-        .unwrap_or(0);
-
-    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
-    executor.set_block_height(current_height);
-
-    // F-P1-7: use the node's stable `silo_id` as the federation ID. Prior code
-    // picked `known_federation_keys.first()`, but that set is `HashSet`-derived
-    // and iteration order is not stable across runs — the federation ID used for
-    // delegation signature verification could vary unpredictably.
-    let fed_id = s.silo_id;
-    executor.set_local_federation_id(fed_id);
+    let mut executor = crate::executor_setup::new_verify_executor(&s);
 
     // Call the executor's verify_bearer_cap with an empty path (top-level check).
     match executor.verify_bearer_cap(&bearer_proof, &s.ledger, &[]) {

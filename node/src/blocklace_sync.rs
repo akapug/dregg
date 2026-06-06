@@ -1463,33 +1463,11 @@ async fn execute_finalized_turn(
     let mut s = state.write().await;
     let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
 
-    // Configure the executor with the canonical federation_id (audit F1).
-    // Falls back to discovery-mode (cipherclerk-hash) only if no committee has
-    // been loaded yet — solo devnet pre-genesis.
-    let local_fed_id = if s.federation_configured {
-        s.federation_id
-    } else {
-        *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
-    };
-    executor.set_local_federation_id(local_fed_id);
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    executor.set_timestamp(now);
-
-    let prior_height = s
-        .store
-        .latest_attested_root()
-        .ok()
-        .flatten()
-        .map(|r| r.height)
-        .unwrap_or(0);
-    // Block height advances per finalized turn so downstream verifiers see a
-    // monotone sequence (audit gap D: was always 0).
-    let new_height = prior_height.saturating_add(1);
-    executor.set_block_height(new_height);
+    crate::executor_setup::configure_turn_executor(
+        &mut executor,
+        &s,
+        crate::executor_setup::BlockHeightMode::Next,
+    );
 
     let exec_result = executor.execute(&signed_turn.turn, &mut s.ledger);
 
