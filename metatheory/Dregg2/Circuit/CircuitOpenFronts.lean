@@ -48,10 +48,10 @@ def openFronts : List OpenFront := [
   , ⟨"attenuateA_circuit", .w3_diamond, some "attenuateA", "v2 Inst diamond"⟩
   , ⟨"exerciseA_composite_circuit", .w3_diamond, some "exerciseA", "hold + inner turn fold"⟩
   , ⟨"createCellFromFactoryA_circuit", .w3_diamond, some "createCellFromFactoryA", "v2 quint diamond"⟩
-  , ⟨"createObligationA_circuit", .w3_diamond, some "createObligationA", "no Inst yet"⟩
+  -- createObligationA / releaseCommittedEscrowA / refundCommittedEscrowA: CLOSED — dispatch-aliased to
+  -- the escrow-create / dual-release / dual-refund circuit steps (TurnEffectRefinement), real emitted
+  -- spec content (EscrowHoldingCreate / Release / Refund) bridged to their committed `fullActionStep`.
   , ⟨"createCommittedEscrowA_circuit", .w3_diamond, some "createCommittedEscrowA", "v2 dual diamond"⟩
-  , ⟨"releaseCommittedEscrowA_circuit", .w3_diamond, some "releaseCommittedEscrowA", "alias Inst TBD"⟩
-  , ⟨"refundCommittedEscrowA_circuit", .w3_diamond, some "refundCommittedEscrowA", "alias Inst TBD"⟩
   , ⟨"bridgeFinalizeA_circuit", .w3_diamond, some "bridgeFinalizeA", "v2 Inst diamond"⟩
   , ⟨"bridgeCancelA_circuit", .w3_diamond, some "bridgeCancelA", "v2 dual diamond"⟩
   , ⟨"unsealA_circuit", .w3_diamond, some "unsealA", "v2 Inst diamond"⟩

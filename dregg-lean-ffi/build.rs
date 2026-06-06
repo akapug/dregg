@@ -15,24 +15,68 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-fn lean_sysroot() -> PathBuf {
-    // Prefer `lake env` (authoritative for the project's toolchain).
-    if let Ok(out) = Command::new("lake")
-        .args(["env", "printenv", "LEAN_SYSROOT"])
-        .current_dir("/Users/ember/dev/breadstuffs/metatheory")
-        .output()
-    {
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !s.is_empty() {
-            return PathBuf::from(s);
+/// Locate the project's `metatheory` Lean directory relative to this crate, so
+/// `lake env` runs against the project's pinned toolchain regardless of the host
+/// (no hardcoded absolute paths — works on macOS dev boxes and the Linux deploy
+/// box alike). `CARGO_MANIFEST_DIR` is `.../dregg-lean-ffi`; the sibling is
+/// `.../metatheory`. An explicit `DREGG_METATHEORY_DIR` override wins if set.
+fn metatheory_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("DREGG_METATHEORY_DIR") {
+        let p = PathBuf::from(dir);
+        if p.join("lean-toolchain").exists() {
+            return Some(p);
         }
     }
-    // Fallback: the pinned toolchain.
-    PathBuf::from("/Users/ember/.elan/toolchains/leanprover--lean4---v4.30.0")
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let candidate = crate_dir.parent().map(|p| p.join("metatheory"));
+    candidate.filter(|p| p.join("lean-toolchain").exists())
+}
+
+fn lean_sysroot() -> Option<PathBuf> {
+    // Prefer `lake env` (authoritative for the project's toolchain). `DREGG_LEAN_SYSROOT`
+    // overrides for environments where `lake` is not on PATH at build time.
+    if let Ok(s) = std::env::var("DREGG_LEAN_SYSROOT") {
+        if !s.trim().is_empty() {
+            return Some(PathBuf::from(s.trim()));
+        }
+    }
+    if let Some(meta) = metatheory_dir() {
+        if let Ok(out) = Command::new("lake")
+            .args(["env", "printenv", "LEAN_SYSROOT"])
+            .current_dir(&meta)
+            .output()
+        {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() {
+                return Some(PathBuf::from(s));
+            }
+        }
+    }
+    None
+}
+
+/// Probe the archive for an exported symbol via `nm`, so the C shim only declares string
+/// bridges whose underlying Lean `@[export]` actually exists in THIS archive. A stale
+/// archive missing a later export (e.g. `dregg_exec_handler_turn`) would otherwise leave a
+/// dangling reference that `-dead_strip` resolves by dropping the WHOLE shim object — taking
+/// the forest-auth + init bridges with it. We fail-closed: absent ⇒ the bridge is compiled out.
+fn archive_exports(archive: &std::path::Path, symbol: &str) -> bool {
+    let Ok(out) = Command::new("nm").arg(archive).output() else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    // A DEFINED symbol shows in the text section as `T <name>`. The C symbol name is mangled
+    // with a leading underscore on Mach-O (macOS) but NOT on ELF (Linux), so accept both
+    // ` T _<symbol>` and ` T <symbol>`.
+    let mach_o = format!(" T _{symbol}");
+    let elf = format!(" T {symbol}");
+    text.lines()
+        .any(|l| l.trim_end().ends_with(&mach_o) || l.trim_end().ends_with(&elf))
 }
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(lean_lib_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_handler_present)");
 
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lean_archive = crate_dir.join("libdregg_lean.a");
@@ -49,18 +93,46 @@ fn main() {
         return;
     }
 
-    println!("cargo:rustc-cfg=lean_lib_present");
-
-    let sysroot = lean_sysroot();
+    // Resolve the Lean sysroot BEFORE committing to the `lean_lib_present` cfg: linking the
+    // archive requires the Lean runtime/stdlib from the toolchain. If we cannot find it, we must
+    // NOT advertise `lean_lib_present` (that cfg drives `lean_available()` and the FFI link), or
+    // the build would either fail to link or falsely claim the Lean kernel is available.
+    let Some(sysroot) = lean_sysroot() else {
+        println!(
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a present but could not resolve the Lean \
+             sysroot (no DREGG_LEAN_SYSROOT and `lake env` failed) — building marshal-only. \
+             Install elan + the project toolchain, or set DREGG_LEAN_SYSROOT to the toolchain root."
+        );
+        return;
+    };
     let lean_lib = sysroot.join("lib").join("lean");
     let lean_include = sysroot.join("include");
 
+    println!("cargo:rustc-cfg=lean_lib_present");
+
+    // The handler-cutover export is a SECONDARY path; older archives predate it. Only wire its
+    // string bridge when the archive actually exports it (otherwise the dangling ref breaks the
+    // whole shim under -dead_strip). The forest-auth gate is the load-bearing path and is always
+    // present.
+    let handler_present = archive_exports(&lean_archive, "dregg_exec_handler_turn");
+    if handler_present {
+        println!("cargo:rustc-cfg=dregg_handler_present");
+    } else {
+        println!(
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a lacks `dregg_exec_handler_turn` — \
+             the handler-cutover bridge is compiled out (forest-auth gate unaffected). \
+             Rebuild the archive to enable shadow_exec_handler_turn."
+        );
+    }
+
     // Compile the C init shim (it uses the `static inline` runtime helpers from
     // <lean/lean.h>, which have no linkable symbol and so must be used from C).
-    cc::Build::new()
-        .file("src/lean_init.c")
-        .include(&lean_include)
-        .compile("dregg_ffi_shim");
+    let mut shim = cc::Build::new();
+    shim.file("src/lean_init.c").include(&lean_include);
+    if handler_present {
+        shim.define("DREGG_HANDLER_TURN", None);
+    }
+    shim.compile("dregg_ffi_shim");
 
     // Our archive of the compiled Lean kernel + transitive closure.
     println!("cargo:rustc-link-search=native={}", crate_dir.display());
@@ -72,6 +144,14 @@ fn main() {
     for lib in ["leancpp", "Init", "Std", "Lean", "leanrt", "Lake", "gmp", "uv"] {
         println!("cargo:rustc-link-lib=static={lib}");
     }
-    // C++ runtime + system frameworks the Lean runtime needs on macOS.
-    println!("cargo:rustc-link-lib=dylib=c++");
+    // C++ runtime the Lean runtime needs. macOS/clang uses libc++ (`c++`); Linux/gcc uses
+    // libstdc++ (`stdc++`). Pick by target OS so the same build.rs links on both hosts.
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "macos" {
+        println!("cargo:rustc-link-lib=dylib=c++");
+    } else {
+        // Linux (and other ELF targets): libstdc++. `m`/`dl`/`pthread` are pulled in by the
+        // default Rust link, and gmp/uv are linked statically above.
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    }
 }

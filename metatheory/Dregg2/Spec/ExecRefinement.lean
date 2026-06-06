@@ -36,6 +36,7 @@ Faithful `Prop`s; `#assert_axioms` on all keystones; the `-- OPEN:` is prose, no
 -/
 import Dregg2.Exec.Kernel
 import Dregg2.Exec.RecordKernel
+import Dregg2.Exec.Caps
 import Dregg2.Spec.Conservation
 import Dregg2.Spec.Guard
 import Dregg2.Spec.Authority
@@ -201,13 +202,104 @@ delegation) and `Graph.has` (the holder reaches a target). We reconstruct a Spec
 `Exec.caps` and show the executable gate's two branches land on it: ownership is the reflexive
 self-conferral `confers c c`, and a held node/endpoint-write cap witnesses `Graph.has`. -/
 
-/-- The abstract rights carrier for the reconstructed graph: `Unit` with the trivial
-meet-semilattice (every cap confers the same, full authority). This suffices to witness the
-*connectivity* skeleton of `Exec.caps` — the executable model carries no rights lattice of its
-own (its caps are `node`/`endpoint`-with-`List Auth`), so the faithful Spec image is the
-connectivity graph, with rights abstracted to the trivial order. (A richer image keyed on
-`List Auth` is possible; the connectivity skeleton is what the authority *gate* reads.) -/
+/-- The **connectivity-skeleton** rights carrier for the reconstructed `execGraph`: `Unit`.
+This is NOT a claim that the executable model lacks rights — it is the deliberate carrier for
+the CONNECTIVITY projection. `execGraph h c` reads a `Bool` ("does `h`'s slot confer a
+node/endpoint-write edge to `c.target`?"); a single slot may hold MANY caps to one target with
+DIFFERENT rights, so there is no well-defined rights label to hang on a connectivity edge. The
+connectivity graph's edge-set is therefore keyed purely by target — which is exactly why its
+rights carrier is `Unit` (`⟨t,()⟩` is the unique connectivity edge to `t`). The genuine RIGHTS
+attenuation order lives on `ExecCapRights` below (and on `Exec.confRights`/`ExecAuth`), where it
+is a real `Finset Auth` ⊆-lattice with teeth — see §2.2. Keeping the connectivity carrier `Unit`
+and the rights carrier `Finset Auth` SEPARATE is faithful: connectivity (Granovetter reach) and
+rights (attenuation) are distinct projections of one cap, and the unowned effect kernels
+(`Exec.EffectsAuthority`, `Exec.TurnExecutorFull`, …) consume `execGraph`'s `⟨t,()⟩` connectivity
+edges, while the genuine `granted.rights ≤ held.rights` discipline is the `ExecCapRights` order. -/
 abbrev ExecRights := Unit
+
+/-! ### §2.2 — The GENUINE executable rights lattice `ExecCapRights := Finset Auth` (DE-VACUIFIED).
+
+`ExecRights = Unit` above is the connectivity carrier; on it `confers` collapses to "same
+target" (the rights conjunct is `() ≤ () = True`, vacuous). The REAL rights an executable cap
+carries are a `List Auth` (`Exec.capAuthConferred`), whose attenuation order is **subset of
+conferred authorities** (`granted ⊆ held`, the `is_attenuation` of `cell/src/capability.rs`).
+The deduplicated, order-insensitive carrier with a genuine `SemilatticeInf` + `OrderTop` is
+`Finset Auth` (= `Exec.ExecAuth`), so it slots DIRECTLY into `Spec.Authority`'s
+`{Rights} [SemilatticeInf Rights] [OrderTop Rights]` interface. We state the rights-bearing
+`confers` / non-amplification theorems over THIS carrier — where `≤` is a real `⊆` test that can
+genuinely FAIL on an amplifying grant — and connect it to executable caps via `Exec.confRights`.
+This is the de-vacuification: every theorem below has a strict-attenuation witness AND an
+amplification-rejection witness (§2.3), neither of which `Unit` can grow. -/
+
+/-- **`ExecCapRights`** — the genuine executable rights lattice: a `Finset Auth` ordered by `⊆`
+(attenuation), with `⊤ = Finset.univ` (full authority). The real order the executable caps live
+in; `a ≤ b` is a non-trivial subset test, NOT the `Unit` collapse. (`= Exec.ExecAuth`.) -/
+abbrev ExecCapRights := ExecAuth
+
+example : SemilatticeInf ExecCapRights := inferInstance
+example : OrderTop ExecCapRights := inferInstance
+
+/-- Lift an executable cap into a rights-labelled `Spec.Cap` over the GENUINE rights lattice:
+target preserved, rights = the cap's actual conferred authority (`Exec.confRights`). This is the
+rights-AWARE Spec image of a cap (contrast `execGraph`, the connectivity skeleton). -/
+def capToSpec (target : Label) (c : Authority.Cap) : Cap Label ExecCapRights :=
+  ⟨target, confRights c⟩
+
+/-! ### §2.3 — Non-amplification over `ExecCapRights`, WITH TEETH.
+
+The headline `granted.rights ≤ held.rights` over the genuine lattice. `attenuate` narrows real
+rights (`Exec.attenuate_confRights_le`); we lift it to `confers` on rights-labelled Spec caps,
+then exhibit BOTH a strict-attenuation witness (held has a right granted lacks) AND an
+amplification-rejection witness (`confers` is FALSE for an amplifying grant). On `ExecRights =
+Unit` both collapse to `True`; here the second is genuinely FALSE. -/
+
+/-- **`attenuate_confers_real` (PROVED, NON-VACUOUS).** Attenuating a held cap and re-labelling
+the Spec image yields a `confers`-child of the held cap's Spec image — over the GENUINE
+`ExecCapRights` lattice. The rights conjunct is `confRights (attenuate keep c) ≤ confRights c`
+(`Exec.attenuate_confRights_le`), a real `⊆`, NOT `() ≤ ()`. This is the rights non-amplification
+of delegation, stated where it can fail. -/
+theorem attenuate_confers_real (t : Label) (keep : List Authority.Auth) (c : Authority.Cap) :
+    confers (capToSpec t c) (capToSpec t (attenuate keep c)) := by
+  refine ⟨rfl, ?_⟩
+  show confRights (attenuate keep c) ≤ confRights c
+  exact attenuate_confRights_le keep c
+
+/-- **`confers_real_forbids_amplification` (PROVED, the TOOTH).** If a child Spec cap (over the
+genuine lattice) `confers`-descends from a parent, then its rights are `⊆` the parent's: it
+CANNOT carry an authority the parent lacks. Contrapositive of "amplification allowed". On `Unit`
+this is vacuous (`() ≤ ()`); here it genuinely constrains — see `amplifying_grant_refused`. -/
+theorem confers_real_forbids_amplification
+    {parent child : Cap Label ExecCapRights} (h : confers parent child) :
+    child.rights ≤ parent.rights :=
+  h.2
+
+/-- **`amplifying_grant_refused` (PROVED — the NON-VACUITY TOOTH).** A child cap requesting
+`{read, write}` does NOT `confers`-descend from a parent holding only `{read}`: the amplifying
+grant is REJECTED. This is the exact case `ExecRights := Unit` could never reject (there, every
+same-target child confers). The `decide` discharges the real `⊄` over `Finset Auth`. -/
+theorem amplifying_grant_refused :
+    ¬ confers (⟨7, {Authority.Auth.read}⟩ : Cap Label ExecCapRights)
+              (⟨7, {Authority.Auth.read, Authority.Auth.write}⟩ : Cap Label ExecCapRights) := by
+  rintro ⟨_, hle⟩
+  -- `{read,write} ≤ {read}` is FALSE over the genuine ⊆-lattice.
+  exact absurd hle (by decide)
+
+/-- **`strict_attenuation_witness` (PROVED — the STRICT-ATTENUATION TOOTH).** A held cap confers
+`{read, write}`; the granted child confers only `{read}` — the held cap has a right (`write`) the
+granted does NOT, and the grant `confers` SOUNDLY (strict `⊂`). Exhibits that `≤` is not
+everywhere-trivial: it admits the sound narrowing AND (by `amplifying_grant_refused`) rejects the
+amplification. Strictness: `{read} ⊆ {read,write}` but `{read} ≠ {read,write}`. -/
+theorem strict_attenuation_witness :
+    confers (⟨7, {Authority.Auth.read, Authority.Auth.write}⟩ : Cap Label ExecCapRights)
+            (⟨7, {Authority.Auth.read}⟩ : Cap Label ExecCapRights)
+      ∧ ({Authority.Auth.read} : ExecCapRights) ≠ {Authority.Auth.read, Authority.Auth.write} := by
+  refine ⟨⟨rfl, by decide⟩, by decide⟩
+
+-- The decidable teeth as `#guard`s: the order is genuinely non-trivial (NOT everywhere-true).
+#guard decide (({Authority.Auth.read, Authority.Auth.write} : ExecCapRights)
+                  ≤ {Authority.Auth.read}) = false   -- amplification REJECTED
+#guard decide (({Authority.Auth.read} : ExecCapRights)
+                  ≤ {Authority.Auth.read, Authority.Auth.write}) = true   -- attenuation SOUND
 
 /-- **`execGraph caps`** — the `Spec.Authority.Graph` reconstructed from the executable cap
 table: cell `h` holds a Spec edge to `t` iff, in `Exec.caps`, `h` holds a `node t` cap or an
@@ -222,25 +314,36 @@ def execGraph (caps : Caps) : Graph Label ExecRights :=
        | .endpoint t rights => (t == c.target) && rights.contains Auth.write
        | _ => false)) = true
 
-/-- **`exec_owns_self_confers` (PROVED)** — the authority object the ownership branch lands on
-is the **reflexive self-conferral**, a CONNECTIVITY-skeleton fact (rights = `ExecRights = Unit`).
-When a turn is admitted via ownership (`turn.actor = turn.src`), the self-cap `⟨turn.src, ⊤⟩` confers
-itself: the ownership hypothesis `hown` is load-bearing — it is what collapses the two endpoints to
-one, so this is `Authority.confers`-reflexivity specialised to the self-edge.
+/-- **`exec_owns_self_confers` (PROVED, NOW OVER THE GENUINE RIGHTS LATTICE)** — the authority
+object the ownership branch lands on is the **reflexive self-conferral**, stated over the REAL
+`ExecCapRights = Finset Auth` lattice (NOT the `Unit` skeleton). When a turn is admitted via
+ownership (`turn.actor = turn.src`), the owner's self-cap (carrying its ACTUAL conferred rights
+`r : ExecCapRights`) confers itself: the rights conjunct is `r ≤ r` over the genuine `⊆`-order —
+the SAME order that REJECTS an amplifying grant (`amplifying_grant_refused`). The ownership
+hypothesis `hown` is load-bearing — it collapses the two endpoints to one.
 
-SCOPE (honesty): this is a connectivity statement — the rights conjunct is the trivial `⊤ ≤ ⊤` over
-the `Unit` skeleton, NOT a genuine rights non-amplification. The GENUINE rights non-amplification —
-`granted ⊆ held` over the REAL `List Auth` lattice, with teeth (an amplifying grant rejected) — lives
-in `Dregg2.Exec.EffectsAuthority.introduce_non_amplifying`/`amplifying_grant_rejected` (via
-`Caps.attenuate_subset`) and in `AuthModes.captp_granted_le_held`. This lemma names ONLY the
-connectivity object (it does NOT witness the gate's acceptance — that is `exec_authz_grounds_in_graph`
-below, which consumes `authorizedB`). -/
-theorem exec_owns_self_confers (turn : Turn) (hown : turn.actor = turn.src) :
-    confers (⟨turn.actor, (⊤ : ExecRights)⟩ : Cap Label ExecRights)
-            (⟨turn.src, (⊤ : ExecRights)⟩ : Cap Label ExecRights) := by
+SCOPE: reflexivity is intrinsically `r ≤ r`, but it now lives in the non-trivial lattice, so it
+composes (via `confers_trans`) with the genuine narrowing `attenuate_confers_real` to bound a
+delegated grant — and the order it uses is the one with teeth (§2.3), not `() ≤ ()`. -/
+theorem exec_owns_self_confers (turn : Turn) (r : ExecCapRights) (hown : turn.actor = turn.src) :
+    confers (⟨turn.actor, r⟩ : Cap Label ExecCapRights)
+            (⟨turn.src, r⟩ : Cap Label ExecCapRights) := by
   -- ownership makes `actor = src`, so the conferred edge is the reflexive self-cap.
   rw [hown]
   exact confers_refl _
+
+/-- **`exec_owns_attenuated_confers` (PROVED, NON-VACUOUS COMPOSITION)** — the de-vacuified
+payoff: an owner may delegate from its own cap ONLY a non-amplifying (attenuated) child, over the
+genuine rights lattice. Composing `exec_owns_self_confers` (reflexive, `r ≤ r`) with
+`attenuate_confers_real` (the real `⊆` narrowing) via `confers_trans`: the attenuated grant
+`confers`-descends from the owner's self-cap, and its rights are `⊆` the owner's. An amplifying
+grant is OUTSIDE this relation (`confers_real_forbids_amplification` + `amplifying_grant_refused`).
+This is the ownership branch with REAL rights teeth, not the `Unit` collapse. -/
+theorem exec_owns_attenuated_confers (turn : Turn) (c : Authority.Cap)
+    (keep : List Authority.Auth) (hown : turn.actor = turn.src) :
+    confers (capToSpec turn.actor c) (capToSpec turn.src (attenuate keep c)) := by
+  rw [hown]
+  exact confers_trans (confers_refl _) (attenuate_confers_real turn.src keep c)
 
 /-- **`exec_heldcap_is_graph_has` (PROVED)** — the held-cap branch of `authorizedB` refines
 `Graph.has` on the reconstructed graph. If the actor is NOT the owner yet `authorizedB` admits
@@ -499,7 +602,12 @@ residue (§4) is an `-- OPEN:` prose obligation, not a `sorry`; the whole file i
 #assert_axioms exec_authz_refines_guard
 #assert_axioms exec_authz_iff_guard
 #assert_axioms exec_step_passes_guard
+#assert_axioms attenuate_confers_real
+#assert_axioms confers_real_forbids_amplification
+#assert_axioms amplifying_grant_refused
+#assert_axioms strict_attenuation_witness
 #assert_axioms exec_owns_self_confers
+#assert_axioms exec_owns_attenuated_confers
 #assert_axioms exec_heldcap_is_graph_has
 #assert_axioms exec_authz_grounds_in_graph
 #assert_axioms refines_absOf

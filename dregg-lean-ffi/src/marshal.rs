@@ -131,6 +131,48 @@ pub enum Cap {
 }
 
 // ===================================================================
+// DIGEST — a full 256-bit `[u8;32]` carried byte-exact across the wire.
+//
+// The wire grammar encodes EVERY digest (auth pubkeys/vks/one-time-keys, the turn
+// `prev` hash, the `dig` value) as 64 LOWERCASE big-endian hex of the FULL 256 bits.
+// The historical `to_hex32(n: u64)` zero-padded the high 192 bits, so any real
+// credential digest lost 3/4 of its entropy at the seam (a tamper of those bits was
+// invisible to the gate). `Digest` carries the whole `[u8;32]` so the credential
+// WHO-leg crosses faithfully; `Digest::from_u64` reproduces the old zero-padded form
+// for the demo/fixture call sites that only ever held a low-u64 digest.
+// ===================================================================
+
+/// A 256-bit digest (`[u8;32]`), big-endian, encoded as 64 lowercase hex on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Digest(pub [u8; 32]);
+
+impl Digest {
+    /// The full 32-byte digest.
+    pub fn from_bytes(b: [u8; 32]) -> Self {
+        Digest(b)
+    }
+    /// Zero-pad a low `u64` into the low 8 bytes (big-endian) — the legacy `to_hex32(u64)`
+    /// shape, kept for demo fixtures that genuinely only carry a small-int digest.
+    pub fn from_u64(n: u64) -> Self {
+        let mut b = [0u8; 32];
+        b[24..32].copy_from_slice(&n.to_be_bytes());
+        Digest(b)
+    }
+}
+
+impl From<u64> for Digest {
+    fn from(n: u64) -> Self {
+        Digest::from_u64(n)
+    }
+}
+
+impl From<[u8; 32]> for Digest {
+    fn from(b: [u8; 32]) -> Self {
+        Digest(b)
+    }
+}
+
+// ===================================================================
 // VALUE — the wide `Value` codec (`dig` as the 64-hex ByteArray32 field).
 // FFI.lean:1121 (encodeValueW). NOTE: `dig` is WIDE here (quoted 64-hex), unlike the
 // narrow record-kernel codec where `dig` was a bare Nat.
@@ -229,40 +271,45 @@ impl WireState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireAuth {
-    /// {"sig":["H64",P]} — signature(pubkeyMsg, sig).
-    Signature { pubkey: u64, sig: u64 },
+    /// {"sig":["H64",P]} — signature(pubkeyMsg, sig). `pubkey` is a full 256-bit digest.
+    Signature { pubkey: Digest, sig: u64 },
     /// {"pf":["H64",P,N,N]} — proof(vk, proofBytes, boundAction, boundResource).
     /// NOTE: `bound_action`/`bound_resource` are Nat here; the dregg1 `Authorization::Proof`
     /// carries them as Strings — `String -> Nat` is LOSSY/irreversible (GAP, see module doc).
-    Proof { vk: u64, proof: u64, bound_action: u64, bound_resource: u64 },
+    Proof { vk: Digest, proof: u64, bound_action: u64, bound_resource: u64 },
     /// {"bread":[N]} — breadstuff(token).
     Breadstuff { token: u64 },
     /// {"bearer":["H64",P,B]} — bearer(delegMsg, delegSig, starkDelegation).
     /// GAP: the full `BearerCapProof` collapses to (delegMsg, delegSig, starkBool); the
     /// SignedDelegation|StarkDelegation distinction is the ONLY bit that survives.
-    Bearer { deleg_msg: u64, deleg_sig: u64, stark: bool },
+    Bearer { deleg_msg: Digest, deleg_sig: u64, stark: bool },
     /// {"unchecked":0} — TAG-ONLY literal.
     Unchecked,
     /// {"captp":["H64","H64",P,P]} — capTpDelivered(introMsg, senderMsg, introSig, senderSig).
-    CapTpDelivered { intro_msg: u64, sender_msg: u64, intro_sig: u64, sender_sig: u64 },
-    /// {"custom":["H64",P]} — custom(kindStmt, proofBytes).
-    Custom { kind_stmt: u64, proof: u64 },
+    CapTpDelivered { intro_msg: Digest, sender_msg: Digest, intro_sig: u64, sender_sig: u64 },
+    /// {"custom":["H64",P]} — custom(kindStmt, proofBytes). `kind_stmt` is a full 256-bit digest
+    /// (the witnessed-predicate commitment — the credential WHO-leg the gate reads).
+    Custom { kind_stmt: Digest, proof: u64 },
     /// {"oneof":[[AUTH(,AUTH)*],N]} — oneOf(candidates, proofIndex). RECURSES.
     OneOf { candidates: Vec<WireAuth>, proof_index: u64 },
     /// {"stealth":["H64","H64",P]} — stealth(oneTimePk, ephemeralPk, sig).
-    Stealth { one_time_pk: u64, ephemeral_pk: u64, sig: u64 },
-    /// {"token":["H64",P]} — token(issuerKey, sig).
-    /// GAP: the dregg1 `Token` `encoded`/`discharges`/full `key_ref` are DROPPED.
-    Token { issuer_key: u64, sig: u64 },
+    Stealth { one_time_pk: Digest, ephemeral_pk: Digest, sig: u64 },
+    /// {"token":["H64",P]} — token(issuerKey, sig). `issuer_key` is a full 256-bit digest
+    /// (the biscuit issuer pubkey / macaroon root anchor the gate authenticates).
+    /// GAP: the dregg1 `Token` `encoded`/`discharges` blobs are DROPPED (the issuer key + sig
+    /// are the load-bearing WHO-leg; the encoded caveats are a separate verifier concern).
+    Token { issuer_key: Digest, sig: u64 },
 }
 
-/// Map dregg1 `BiscuitIssuer` to the wire `token` arm (proof bytes dropped at the seam).
-pub fn auth_biscuit_issuer(issuer_key: u64) -> WireAuth {
+/// Map dregg1 `BiscuitIssuer` to the wire `token` arm (the issuer pubkey crosses in full;
+/// the encoded caveat-blob is dropped at the seam — it is a separate verifier concern).
+pub fn auth_biscuit_issuer(issuer_key: Digest) -> WireAuth {
     WireAuth::Token { issuer_key, sig: 0 }
 }
 
-/// Map dregg1 `CellScopedMacaroon` to the wire `custom` arm (proof bytes dropped at the seam).
-pub fn auth_cell_macaroon(cell: u64) -> WireAuth {
+/// Map dregg1 `CellScopedMacaroon` to the wire `custom` arm (the cell-scoped root anchor
+/// crosses as the `kind_stmt` digest; the encoded caveat-blob is dropped at the seam).
+pub fn auth_cell_macaroon(cell: Digest) -> WireAuth {
     WireAuth::Custom { kind_stmt: cell, proof: 0 }
 }
 
@@ -469,8 +516,8 @@ pub struct WireTurn {
     pub valid_until: u64,
     /// Blocklace height threaded into Lean `AdmCtx.blockHeight` (omitted on wire when 0).
     pub block_height: u64,
-    /// The previous-receipt hash, a [u8;32] (encoded as 64-hex).
-    pub prev_hash: u64,
+    /// The previous-receipt hash, a [u8;32] (encoded as 64-hex, byte-exact).
+    pub prev_hash: Digest,
     pub root: WForest,
 }
 
@@ -503,7 +550,7 @@ pub fn demo_turn_for_action(action: WireAction) -> WireTurn {
         fee: 0,
         valid_until: 0,
         block_height: 0,
-        prev_hash: 0,
+        prev_hash: Digest::default(),
         root: WForest {
             auth: WireAuth::Unchecked,
             caveats: vec![],
@@ -545,6 +592,19 @@ fn to_hex32(n: u64) -> String {
         s.push('0');
     }
     s.push_str(&format!("{n:016x}")); // lowercase, zero-padded to 16 nibbles
+    debug_assert_eq!(s.len(), 64);
+    s
+}
+
+/// 64 LOWERCASE hex, big-endian, of the FULL 256-bit digest — the byte-exact carrier the
+/// wire grammar actually expects. Unlike `to_hex32(u64)` (which zero-pads 192 high bits),
+/// this preserves every bit, so a tampered credential digest changes the wire (the gate sees
+/// the difference) instead of silently colliding with all other digests sharing a low u64.
+fn to_hex32_bytes(d: &Digest) -> String {
+    let mut s = String::with_capacity(64);
+    for b in d.0.iter() {
+        s.push_str(&format!("{b:02x}"));
+    }
     debug_assert_eq!(s.len(), 64);
     s
 }
@@ -649,23 +709,23 @@ fn encode_fields(fs: &[(String, WireValue)], out: &mut String) {
 // ---- WireAuth (FFI.lean:1365 encodeAuthW) ----
 
 fn encode_auth(a: &WireAuth, out: &mut String) {
-    // encDig (FFI.lean:1353) = the QUOTED 64-hex digest.
-    let push_dig = |out: &mut String, d: u64| {
+    // encDig (FFI.lean:1353) = the QUOTED 64-hex digest (FULL 256 bits, byte-exact).
+    let push_dig = |out: &mut String, d: &Digest| {
         out.push('"');
-        out.push_str(&to_hex32(d));
+        out.push_str(&to_hex32_bytes(d));
         out.push('"');
     };
     match a {
         WireAuth::Signature { pubkey, sig } => {
             out.push_str("{\"sig\":[");
-            push_dig(out, *pubkey);
+            push_dig(out, pubkey);
             out.push(',');
             push_nat(out, *sig);
             out.push_str("]}");
         }
         WireAuth::Proof { vk, proof, bound_action, bound_resource } => {
             out.push_str("{\"pf\":[");
-            push_dig(out, *vk);
+            push_dig(out, vk);
             out.push(',');
             push_nat(out, *proof);
             out.push(',');
@@ -681,7 +741,7 @@ fn encode_auth(a: &WireAuth, out: &mut String) {
         }
         WireAuth::Bearer { deleg_msg, deleg_sig, stark } => {
             out.push_str("{\"bearer\":[");
-            push_dig(out, *deleg_msg);
+            push_dig(out, deleg_msg);
             out.push(',');
             push_nat(out, *deleg_sig);
             out.push(',');
@@ -691,9 +751,9 @@ fn encode_auth(a: &WireAuth, out: &mut String) {
         WireAuth::Unchecked => out.push_str("{\"unchecked\":0}"),
         WireAuth::CapTpDelivered { intro_msg, sender_msg, intro_sig, sender_sig } => {
             out.push_str("{\"captp\":[");
-            push_dig(out, *intro_msg);
+            push_dig(out, intro_msg);
             out.push(',');
-            push_dig(out, *sender_msg);
+            push_dig(out, sender_msg);
             out.push(',');
             push_nat(out, *intro_sig);
             out.push(',');
@@ -702,7 +762,7 @@ fn encode_auth(a: &WireAuth, out: &mut String) {
         }
         WireAuth::Custom { kind_stmt, proof } => {
             out.push_str("{\"custom\":[");
-            push_dig(out, *kind_stmt);
+            push_dig(out, kind_stmt);
             out.push(',');
             push_nat(out, *proof);
             out.push_str("]}");
@@ -721,16 +781,16 @@ fn encode_auth(a: &WireAuth, out: &mut String) {
         }
         WireAuth::Stealth { one_time_pk, ephemeral_pk, sig } => {
             out.push_str("{\"stealth\":[");
-            push_dig(out, *one_time_pk);
+            push_dig(out, one_time_pk);
             out.push(',');
-            push_dig(out, *ephemeral_pk);
+            push_dig(out, ephemeral_pk);
             out.push(',');
             push_nat(out, *sig);
             out.push_str("]}");
         }
         WireAuth::Token { issuer_key, sig } => {
             out.push_str("{\"token\":[");
-            push_dig(out, *issuer_key);
+            push_dig(out, issuer_key);
             out.push(',');
             push_nat(out, *sig);
             out.push_str("]}");
@@ -1333,7 +1393,7 @@ fn encode_wturn(t: &WireTurn, out: &mut String) -> Result<(), MarshalError> {
         push_nat(out, t.block_height);
     }
     out.push_str(",\"prev\":\"");
-    out.push_str(&to_hex32(t.prev_hash));
+    out.push_str(&to_hex32_bytes(&t.prev_hash));
     out.push_str("\",\"root\":");
     encode_forest(&t.root, out);
     out.push('}');

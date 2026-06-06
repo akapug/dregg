@@ -30,7 +30,9 @@ open Dregg2.Circuit.TurnEmit
    step_emitted_refines_fullActionStep turn_emitted_refines_exec
    defaultDescriptorLookup)
 open Dregg2.Circuit.TurnWitness
-  (StepWitness TurnWitness turnWitnessSatisfies foldStepRoots stepWitnessDigest)
+  (StepWitness TurnWitness turnWitnessSatisfies foldStepRoots stepWitnessDigest
+   authenticTurnRoots turnWitnessSatisfies_binds_postRoot tampered_postRoot_rejects)
+open Dregg2.Circuit.StateCommit (recStateCommit)
 open Dregg2.Circuit.ActionDispatch
   (fullActionStep actionTag turnSpec execFullTurnA_iff_turnSpec)
 open Dregg2.Exec.CircuitEmit (EmittedDescriptor decodeE satisfiedEmitted)
@@ -71,10 +73,38 @@ def hole_turn_macaroon_chain
     (w : TurnWitness) (authChain : ℤ) : Prop :=
   sorry
 
-/-- HOLE W5: abstract `compress` portal binds `preRoot`/`postRoot` to the step-root fold. -/
+/-- **`hole_turn_root_compress_binding` — DISCHARGED (was a `sorry` portal).**
+
+The abstract `compress` portal now binds `preRoot`/`postRoot` to a GENUINE full-state commitment:
+the witness's boundary roots ARE `StateCommit.recStateCommit` of the boundary kernels (over a chosen
+commitment surface `CH`/`RH`/`cmb`/`compress`/`compressN` + turn `t`). No `sorry`: this is the real
+`TurnWitness.authenticTurnRoots` predicate. Consumed by `turn_root_binds_post_commitment` below,
+which makes `turnWitnessSatisfies` load-bearing (the prover-folded post-root = the real post-state
+commitment), so a tampered `postRoot` is rejected (`tampered_postRoot_rejects`). -/
 def hole_turn_root_compress_binding
-    (compress : ℤ → ℤ → ℤ) (stepRoot : StepWitness → ℤ) (w : TurnWitness) : Prop :=
-  sorry
+    (CH : CellId → Value → ℤ) (RH : RecordKernelState → ℤ)
+    (cmb compress compressN' : ℤ → ℤ → ℤ) (compressN : List ℤ → ℤ)
+    (s s' : RecChainedState) (t : Turn) (w : TurnWitness) : Prop :=
+  authenticTurnRoots CH RH cmb compress compressN s s' t w
+
+/-- **`turn_root_binds_post_commitment` — `turnWitnessSatisfies` is load-bearing.**
+
+Consume a `TurnEmittedChain` (whose `root_chain` field IS `turnWitnessSatisfies`) and the now-genuine
+root-binding portal: the step-root fold reaching `postRoot` is forced to equal the GENUINE
+`recStateCommit` of `s'.kernel`. The root chain is no longer decorative — it equates the prover's
+folded post-root with the real post-state commitment. -/
+theorem turn_root_binds_post_commitment
+    (lookup : DescriptorLookup)
+    (CH : CellId → Value → ℤ) (RH : RecordKernelState → ℤ)
+    (cmb compressN' : ℤ → ℤ → ℤ) (compressN : List ℤ → ℤ)
+    (s s' : RecChainedState) (acts : List FullActionA) (w : TurnWitness)
+    (compress : ℤ → ℤ → ℤ) (stepRoot : StepWitness → ℤ) (t : Turn)
+    (h : TurnEmittedChain lookup compress stepRoot s acts s' w)
+    (hroot : hole_turn_root_compress_binding CH RH cmb compress compressN' compressN s s' t w) :
+    foldStepRoots compress stepRoot w.preRoot w.steps
+      = recStateCommit CH RH cmb compress compressN s'.kernel t :=
+  turnWitnessSatisfies_binds_postRoot CH RH cmb compress compressN stepRoot compress
+    s s' t w hroot h.root_chain
 
 /-- HOLE W5: multi-step emitted AIR glue (per-step trace widths aligned across the fold). -/
 def hole_turn_multi_step_glue
@@ -85,20 +115,28 @@ def hole_turn_multi_step_glue
 
 /-- **`turn_emitted_refines_exec_direct`** — compose a per-step emitted ⊑ `fullActionStep` lemma
 (supplied as the `hstep` hypothesis, e.g. `step_emitted_refines_fullActionStep`) with
-`turn_emitted_refines_exec`. Macaroon chain, root-compress binding, and multi-step glue are
-explicit sorry obligations (not hidden in a circuit fallback). -/
+`turn_emitted_refines_exec`. The root-compress binding is now DISCHARGED (genuine `authenticTurnRoots`,
+no `sorry`) and load-bearing: alongside the executor refinement we EXPORT that the prover-folded
+post-root equals the genuine `recStateCommit s'.kernel` (so a tampered post-root is impossible). The
+macaroon chain and multi-step glue remain explicit sorry obligations (not hidden in a fallback). -/
 theorem turn_emitted_refines_exec_direct
     (lookup : DescriptorLookup)
     (hstep :
       ∀ (sw : StepWitness) (st st' : RecChainedState) (fa : FullActionA),
         stepEmittedSat lookup sw st st' fa → fullActionStep st fa st')
+    (CH : CellId → Value → ℤ) (RH : RecordKernelState → ℤ)
+    (cmb compressN' : ℤ → ℤ → ℤ) (compressN : List ℤ → ℤ) (t : Turn)
     (s s' : RecChainedState) (acts : List FullActionA) (w : TurnWitness)
     (compress : ℤ → ℤ → ℤ) (stepRoot : StepWitness → ℤ)
     (h : TurnEmittedChain lookup compress stepRoot s acts s' w)
     (_hmac : hole_turn_macaroon_chain w w.authChain)
-    (_hroot : hole_turn_root_compress_binding compress stepRoot w)
+    (hroot : hole_turn_root_compress_binding CH RH cmb compress compressN' compressN s s' t w)
     (_hglue : hole_turn_multi_step_glue [] w) :
-    execFullTurnA s acts = some s' := by
-  exact turn_emitted_refines_exec lookup hstep s s' acts w compress stepRoot h
+    execFullTurnA s acts = some s' ∧
+      foldStepRoots compress stepRoot w.preRoot w.steps
+        = recStateCommit CH RH cmb compress compressN s'.kernel t :=
+  ⟨turn_emitted_refines_exec lookup hstep s s' acts w compress stepRoot h,
+   turn_root_binds_post_commitment lookup CH RH cmb compressN' compressN s s' acts w
+     compress stepRoot t h hroot⟩
 
 end Dregg2.Circuit.TurnCircuitCompose
