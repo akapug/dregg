@@ -165,15 +165,19 @@ Template: `Inst/createEscrowA.lean`. Wire indices `64..73` (`traceWidth = 74`); 
 | sealA / unsealA | SealSpec / UnsealSpec | v2 list | `Inst/sealA.lean`, `Inst/unsealA.lean` |
 | queueAllocateA / queueResizeA | QueueAllocateSpec / QueueResizeSpec | v2 list | `Inst/queueAllocateA.lean`, etc. |
 | swissExportA | ExportSpec | v2 list | `Inst/swissExportA.lean` |
-| createEscrowA | EscrowHoldingCreateSpec | v2-dual (`bal`+`escrows`) | `Inst/createEscrowA.lean` |
+| createEscrowA | EscrowHoldingCreateSpec | v2-dual | `Inst/createEscrowA.lean` |
+| releaseEscrowA | ReleaseEscrowSpec | v2-dual | `Inst/releaseEscrowA.lean` |
+| refundEscrowA | RefundEscrowSpec | v2-dual | `Inst/refundEscrowA.lean` |
+| bridgeLockA | BridgeOutboundLockSpec | v2-dual | `Inst/bridgeLockA.lean` |
+| bridgeCancelA | BridgeOutboundCancelSpec | v2-dual | `Inst/bridgeCancelA.lean` |
+| bridgeFinalizeA | BridgeFinalizeSpec | v2 escrows-only | `Inst/bridgeFinalizeA.lean` |
 
 ### Circuit⟺spec DEFERRED (executor⟺spec done; circuit corner open)
 
 These touch **3+ components** or **accounts growth** — need triple-component v2 or a set-digest carrier:
 
 - **Accounts growth:** `createCellA`, `spawnA`, `createCellFromFactoryA`
-- **Escrow (remaining):** `releaseEscrowA`, `refundEscrowA`, `createCommittedEscrowA`
-- **Bridge outbound:** `bridgeLockA`, `bridgeFinalizeA`, `bridgeCancelA`
+- **Escrow (remaining):** `createCommittedEscrowA`
 - **Queue pipeline:** `queueEnqueueA`, `queueDequeueA` (queues + bal + escrows), `queuePipelineStepA`,
   pipelined send with deposit
 

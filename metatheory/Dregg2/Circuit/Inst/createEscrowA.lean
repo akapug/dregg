@@ -33,19 +33,7 @@ def cBitGuard : Constraint := { lhs := .var vBitGuard, rhs := .const 1 }
 theorem propBit_eq_one {p : Prop} [Decidable p] : Circuit.propBit p = 1 ↔ p := by
   unfold Circuit.propBit; split <;> simp_all
 
-/-! ## §1 — `RestIffNoBalEscrows` (rest hash omits BOTH touched fields). -/
-
-/-- **`RestIffNoBalEscrows RH`** — the rest hash binds the 15 non-`bal`-non-`escrows` components
-(BIDIRECTIONAL). Frame order is VERBATIM `EscrowHoldingCreateSpec`'s frame. -/
-def RestIffNoBalEscrows (RH : RecordKernelState → ℤ) : Prop :=
-  ∀ k k' : RecordKernelState, RH k = RH k' ↔
-    (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
-      ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats
-      ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert
-      ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes)
-
-/-! ## §2 — the `createEscrowE` dual instance (`bal` + `escrows`). -/
+/-! ## §1 — the `createEscrowE` dual instance (`bal` + `escrows`). -/
 
 structure CreateEscrowArgs where
   id        : Nat

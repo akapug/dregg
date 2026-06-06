@@ -37,6 +37,18 @@ open Dregg2.Exec.CircuitEmit
 
 set_option linter.dupNamespace false
 
+/-! ## §0b — shared `RestIffNoBalEscrows` portal (the bal+escrows dual family). -/
+
+/-- **`RestIffNoBalEscrows RH`** — the rest hash binds the 15 non-`bal`-non-`escrows` components
+(BIDIRECTIONAL). Frame order matches the escrow/bridge dual specs. -/
+def RestIffNoBalEscrows (RH : RecordKernelState → ℤ) : Prop :=
+  ∀ k k' : RecordKernelState, RH k = RH k' ↔
+    (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
+      ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats
+      ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert
+      ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes)
+
 /-! ## §1 — `EffectSpec2Dual` (two touched non-`cell` components). -/
 
 /-- **`EffectSpec2Dual St Args`** — per-effect data for a DUAL-component non-`cell` effect. -/
