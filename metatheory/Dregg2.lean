@@ -195,7 +195,12 @@ import Dregg2.Circuit.KeyedCommit       -- D5 v2 carrier (FUNCTION-field shape):
 import Dregg2.Circuit.ListCommit        -- D5 v2 carrier (the breadth bottleneck-breaker): listDigest + ListDigestBindsList — the list-side-table commitment binding (compressN-inj + injective leaf ⇒ WHOLE post-list pinned, so a drop/reorder/wrong-cons is REJECTED). The ONE new crypto carrier v2 needs; unlocks the ~12 list-changing effects (notes/escrows/queues/seal/swiss/revoked). #assert_axioms-clean
 import Dregg2.Circuit.EffectCommit2      -- D5 v2 GENERIC core (single non-cell component): effect2_circuit_full_sound/_complete + 3 anti-ghost teeth + emission, proved ONCE for an effect touching ONE non-cell component (a function-field via funcComponent/keyedComponent, or a list side-table via listComponent — off ListCommit/KeyedCommit). Generalizes v1's "touched=cell" to "touched=one ActiveComponent"; soundness gets the postClause from active.binds (no funext, no ghost). #assert_axioms-clean
 import Dregg2.Circuit.EffectCommit2Dual  -- D5 v2-dual GENERIC core (TWO non-cell components): effect2dual_circuit_full_sound/_complete + 4 anti-ghost teeth + emission, proved ONCE for bal+escrows-style effects. Gate 1 keystone; unlocks escrow + bridge-outbound families. #assert_axioms-clean
-import Dregg2.Circuit.Inst.createEscrowA -- D5 v2-dual VALIDATION: createEscrowA_full_sound ⇒ EscrowHoldingCreateSpec (bal funcComponent + escrows listComponent) through EffectCommit2Dual
+import Dregg2.Circuit.Inst.createEscrowA   -- D5 v2-dual: createEscrowA_full_sound ⇒ EscrowHoldingCreateSpec
+import Dregg2.Circuit.Inst.releaseEscrowA -- D5 v2-dual: releaseEscrowA_full_sound ⇒ ReleaseEscrowSpec
+import Dregg2.Circuit.Inst.refundEscrowA  -- D5 v2-dual: refundEscrowA_full_sound ⇒ RefundEscrowSpec
+import Dregg2.Circuit.Inst.bridgeLockA    -- D5 v2-dual: bridgeLockA_full_sound ⇒ BridgeOutboundLockSpec
+import Dregg2.Circuit.Inst.bridgeFinalizeA -- D5 v2 breadth: bridgeFinalizeA_full_sound ⇒ BridgeFinalizeSpec (escrows listComponent; bal framed)
+import Dregg2.Circuit.Inst.bridgeCancelA -- D5 v2-dual VALIDATION: bridgeCancelA_full_sound ⇒ BridgeOutboundCancelSpec (bal funcComponent + escrows listComponent) through EffectCommit2Dual
 import Dregg2.Circuit.Inst.attenuateA        -- D5 v2 breadth: attenuateA_full_sound ⇒ AttenuateSpec (caps funcComponent)
 import Dregg2.Circuit.Inst.balanceA         -- D5 v2 breadth: balanceA_full_sound ⇒ BalanceMovementSpec (bal funcComponent)
 import Dregg2.Circuit.Inst.bridgeMintA     -- D5 v2 breadth: bridgeMintA_full_sound ⇒ InboundMintSpec (bal credit)
