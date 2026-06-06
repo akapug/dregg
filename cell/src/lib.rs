@@ -1,5 +1,19 @@
 //! # dregg-cell
 //!
+//! ## ⚠️ LEGACY dregg1 — pending the verified-Lean SWAP
+//!
+//! **This crate is the LEGACY dregg1 Rust cell-state model. It is NOT the
+//! source of truth.** The verified cell / program / predicate / caveat
+//! semantics live in Lean under `metatheory/Dregg2/` (`Exec/Cell.lean`,
+//! `Exec/CellProgram.lean`, `Authority/Caveat.lean`, `Exec/RecordCell.lean`).
+//! The Rust types here (`CellProgram`, `Permissions`, `Predicate`,
+//! capability/delegation, `Nullifier`/`NoteCommitment`) are hand-written,
+//! UNVERIFIED duplicates that dregg2 *replaces*. They remain because
+//! `dregg-turn` (the running executor) depends on them until THE SWAP. Treat
+//! the Lean as the spec; this Rust as the legacy subject-under-test. The exact
+//! Rust↔Lean duplication map is in
+//! `metatheory/docs/rebuild/_DREGG1-DREGG2-UNIFICATION-LEDGER.md`.
+//!
 //! The agent cell model: capability-secure isolated execution contexts.
 //!
 //! A Cell is the agent-model analog of a Mina zkApp account. It holds:
