@@ -295,7 +295,7 @@ def stepEmittedEncodeAgrees
         encodeE2Triple S (queueEnqueueE D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow) st
           { id, m, actor, cell, depId, dAsset, deposit } st'
   | .setFieldA actor cell f v =>
-      assignmentOf sw.assignment = encodeE S CS setFieldE st { actor, cell, f, v } st'
+      assignmentOf sw.assignment = encodeE CS setFieldE st { actor, cell, f, v } st'
   | fa' =>
       assignmentOf sw.assignment = assignmentOf sw.assignment ∧ fa' = fa'
 
@@ -343,117 +343,117 @@ theorem step_emitted_refines_fullActionStep
   | .balanceA t a =>
       simp only [fullActionStep]
       exact balanceA_emitted_refines_spec S D_bal hD_bal hRestBal hLog st ⟨t, a⟩ st'
-        ((balanceA_emitted_equiv_circuit S D_bal hD_bal st ⟨t, a⟩ st').mp hcircuit)
+        ((balanceA_emitted_equiv_circuit S D_bal hD_bal st ⟨t, a⟩ st').mpr hcircuit)
   | .delegate del rec t =>
       simp only [fullActionStep]
       exact delegate_emitted_refines_spec S D_caps hD_caps hRestCaps hLog st ⟨del, rec, t⟩ st'
-        ((delegate_emitted_equiv_circuit S D_caps hD_caps st ⟨del, rec, t⟩ st').mp hcircuit)
+        ((delegate_emitted_equiv_circuit S D_caps hD_caps st ⟨del, rec, t⟩ st').mpr hcircuit)
   | .mintA actor cell a amt =>
       simp only [fullActionStep]
       exact mint_emitted_refines_spec S D_bal hD_bal hRestBal hLog st ⟨actor, cell, a, amt⟩ st'
-        ((mint_emitted_equiv_circuit S D_bal hD_bal st ⟨actor, cell, a, amt⟩ st').mp hcircuit)
+        ((mint_emitted_equiv_circuit S D_bal hD_bal st ⟨actor, cell, a, amt⟩ st').mpr hcircuit)
   | .burnA actor cell a amt =>
       simp only [fullActionStep]
       exact burn_emitted_refines_spec S D_bal hD_bal hRestBal hLog st ⟨actor, cell, a, amt⟩ st'
-        ((burn_emitted_equiv_circuit S D_bal hD_bal st ⟨actor, cell, a, amt⟩ st').mp hcircuit)
+        ((burn_emitted_equiv_circuit S D_bal hD_bal st ⟨actor, cell, a, amt⟩ st').mpr hcircuit)
   | .introduceA intro rec t =>
       simp only [fullActionStep]
       exact delegate_emitted_refines_spec S D_caps hD_caps hRestCaps hLog st ⟨intro, rec, t⟩ st'
-        ((delegate_emitted_equiv_circuit S D_caps hD_caps st ⟨intro, rec, t⟩ st').mp hcircuit)
+        ((delegate_emitted_equiv_circuit S D_caps hD_caps st ⟨intro, rec, t⟩ st').mpr hcircuit)
   | .validateHandoffA intro rec t =>
       simp only [fullActionStep]
       exact delegate_emitted_refines_spec S D_caps hD_caps hRestCaps hLog st ⟨intro, rec, t⟩ st'
-        ((delegate_emitted_equiv_circuit S D_caps hD_caps st ⟨intro, rec, t⟩ st').mp hcircuit)
+        ((delegate_emitted_equiv_circuit S D_caps hD_caps st ⟨intro, rec, t⟩ st').mpr hcircuit)
   | .createCellA actor newCell =>
       simp only [fullActionStep]
       exact createCell_emitted_refines_spec S LE_cell cN hN hLE_cell DBal hDBal DSide hDSide hRestAccounts
         hLog st ⟨actor, newCell⟩ st'
-        ((createCell_emitted_equiv_circuit S LE_cell cN hN hLE_cell DBal hDBal DSide hDSide st ⟨actor, newCell⟩ st').mp
+        ((createCell_emitted_equiv_circuit S LE_cell cN hN hLE_cell DBal hDBal DSide hDSide st ⟨actor, newCell⟩ st').mpr
           hcircuit)
   | .spawnA actor child target =>
       simp only [fullActionStep]
       exact spawn_emitted_refines_spec S LE_cell cN hN hLE_cell DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs
         hRestSpawn hLog st ⟨actor, child, target⟩ st'
         ((spawn_emitted_equiv_circuit S LE_cell cN hN hLE_cell DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs
-            st ⟨actor, child, target⟩ st').mp hcircuit)
+            st ⟨actor, child, target⟩ st').mpr hcircuit)
   | .bridgeMintA actor cell a value =>
       simp only [fullActionStep]
       exact mint_emitted_refines_spec S D_bal hD_bal hRestBal hLog st ⟨actor, cell, a, value⟩ st'
-        ((mint_emitted_equiv_circuit S D_bal hD_bal st ⟨actor, cell, a, value⟩ st').mp hcircuit)
+        ((mint_emitted_equiv_circuit S D_bal hD_bal st ⟨actor, cell, a, value⟩ st').mpr hcircuit)
   | .createEscrowA id actor creator recipient asset amount =>
       simp only [fullActionStep]
       exact createEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog st
         ⟨id, actor, creator, recipient, asset, amount⟩ st'
         ((createEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st
-            ⟨id, actor, creator, recipient, asset, amount⟩ st').mp hcircuit)
+            ⟨id, actor, creator, recipient, asset, amount⟩ st').mpr hcircuit)
   | .noteSpendA nf actor =>
       simp only [fullActionStep]
       exact noteSpend_emitted_refines_spec S LE_null cN hN hLE_null hRestNull hLog st ⟨nf, actor⟩ st'
-        ((noteSpend_emitted_equiv_circuit S LE_null cN hN hLE_null st ⟨nf, actor⟩ st').mp hcircuit)
+        ((noteSpend_emitted_equiv_circuit S LE_null cN hN hLE_null st ⟨nf, actor⟩ st').mpr hcircuit)
   | .noteCreateA cm actor =>
       simp only [fullActionStep]
       exact noteCreate_emitted_refines_spec S LE_null cN hN hLE_null hRestCommitments hLog st ⟨cm, actor⟩ st'
-        ((noteCreate_emitted_equiv_circuit S LE_null cN hN hLE_null st ⟨cm, actor⟩ st').mp hcircuit)
+        ((noteCreate_emitted_equiv_circuit S LE_null cN hN hLE_null st ⟨cm, actor⟩ st').mpr hcircuit)
   | .revoke holder t =>
       simp only [fullActionStep]
       exact revoke_emitted_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps) hLog
         st ⟨holder, t⟩ st'
-        ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mp hcircuit)
+        ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mpr hcircuit)
   | .setFieldA actor cell f v =>
       simp only [fullActionStep]
       rcases hcircuit with ⟨hwf, hwf', hc⟩
       exact setField_emitted_refines_spec CS hCSN hCSL hRestFrame hLogCS st ⟨actor, cell, f, v⟩ st' hwf hwf'
-        ((setField_emitted_equiv_circuit CS st ⟨actor, cell, f, v⟩ st').mp hc)
+        ((setField_emitted_equiv_circuit CS st ⟨actor, cell, f, v⟩ st').mpr hc)
   | .dropRefA holder t =>
       simp only [fullActionStep]
       exact revoke_emitted_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps) hLog
         st ⟨holder, t⟩ st'
-        ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mp hcircuit)
+        ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mpr hcircuit)
   | .revokeDelegationA holder t =>
       simp only [fullActionStep]
       exact revoke_emitted_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps) hLog
         st ⟨holder, t⟩ st'
-        ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mp hcircuit)
+        ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mpr hcircuit)
   | .releaseEscrowA id actor =>
       simp only [fullActionStep]
       exact releaseEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
         st ⟨id, actor⟩ st'
-        ((releaseEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mp
+        ((releaseEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mpr
           hcircuit)
   | .refundEscrowA id actor =>
       simp only [fullActionStep]
       exact refundEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
         st ⟨id, actor⟩ st'
-        ((refundEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mp
+        ((refundEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mpr
           hcircuit)
   | .fulfillObligationA id actor =>
       simp only [fullActionStep]
       exact refundEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
         st ⟨id, actor⟩ st'
-        ((refundEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mp
+        ((refundEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mpr
           hcircuit)
   | .slashObligationA id actor =>
       simp only [fullActionStep]
       exact releaseEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
         st ⟨id, actor⟩ st'
-        ((releaseEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mp
+        ((releaseEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mpr
           hcircuit)
   | .bridgeLockA id actor originator destination asset amount =>
       simp only [fullActionStep]
       exact bridgeLock_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog st
         ⟨id, actor, originator, destination, asset, amount⟩ st'
         ((bridgeLock_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st
-            ⟨id, actor, originator, destination, asset, amount⟩ st').mp hcircuit)
+            ⟨id, actor, originator, destination, asset, amount⟩ st').mpr hcircuit)
   | .sealA pid actor payload =>
       simp only [fullActionStep]
       exact seal_emitted_refines_spec S LE_sealed cN hN hLE_sealed hRestSealed hLog st { pid, actor, payload } st'
-        ((seal_emitted_equiv_circuit S LE_sealed cN hN hLE_sealed st { pid, actor, payload } st').mp hcircuit)
+        ((seal_emitted_equiv_circuit S LE_sealed cN hN hLE_sealed st { pid, actor, payload } st').mpr hcircuit)
   | .queueEnqueueA id m actor cell depId dAsset deposit =>
       simp only [fullActionStep]
       exact queueEnqueue_emitted_refines_spec S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow
         hRestQueues hLog st { id, m, actor, cell, depId, dAsset, deposit } st'
         ((queueEnqueue_emitted_equiv_circuit S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow st
-            { id, m, actor, cell, depId, dAsset, deposit } st').mp hcircuit)
+            { id, m, actor, cell, depId, dAsset, deposit } st').mpr hcircuit)
   | fa' =>
       exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow LE_sealed
         cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame hLogCS DBal hDBal
