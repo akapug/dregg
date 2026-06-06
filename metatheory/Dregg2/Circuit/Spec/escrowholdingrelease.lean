@@ -83,6 +83,10 @@ re-assembly. -/
 /-- The decidable `find?` predicate the kernel walks `escrows` with: an UNRESOLVED record of this id. -/
 def matchesId (id : Nat) : EscrowRecord → Bool := fun r => decide (r.id = id ∧ r.resolved = false)
 
+/-- `findUnresolvedEscrow` and `matchesId` use the same predicate (definitional bridge). -/
+theorem findUnresolvedEscrow_matchesId (k : RecordKernelState) (id : Nat) :
+    findUnresolvedEscrow k id = k.escrows.find? (matchesId id) := rfl
+
 /-- **`releaseGuard s id actor r`** — the executor's admissibility for a release of escrow `id`,
 witnessed by the FOUND record `r`: unresolved record present, recipient live, AND the settling actor
 is authorized over the recipient (R2 settle-actor gate). -/
@@ -166,45 +170,40 @@ commits a release into `s'` iff `s'` is exactly the spec'd full post-state. -/
 theorem releaseEscrowChainA_iff_spec (s : RecChainedState) (id : Nat) (actor : CellId)
     (s' : RecChainedState) :
     releaseEscrowChainA s id actor = some s' ↔ ReleaseEscrowSpec s id actor s' := by
-  unfold releaseEscrowChainA releaseEscrowKAsset ReleaseEscrowSpec releaseGuard matchesId
-         settleEscrowRawAsset releaseSettleAuthB findUnresolvedEscrow
-  by_cases hauth : releaseSettleAuthB s.kernel id actor
-  · cases hf : s.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-    | none =>
-      simp only [hauth, if_pos hauth]
-      constructor
-      · intro h; exact absurd h (by simp)
-      · rintro ⟨r, hfind, _⟩; exact absurd hfind (by simp)
-    | some r =>
-      simp only [hauth, if_pos hauth]
-      by_cases hg : r.recipient ∈ s.kernel.accounts ∧ cellLifecycleLive s.kernel r.recipient = true
-      · rw [if_pos hg]
-        constructor
-        · intro h
-          simp only [Option.some.injEq] at h
-          subst h
-          exact ⟨r, ⟨rfl, hg.1, hg.2, hauth⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-                 rfl, rfl, rfl, rfl, rfl⟩
-        · rintro ⟨r', ⟨hfind', _, _, hauth'⟩, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11,
-                 h12, h13, h14, h15⟩
-          simp only [Option.some.injEq] at hfind'
-          subst hfind'
-          obtain ⟨k', log'⟩ := s'
-          obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb⟩ := k'
-          simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-          subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-          rfl
-      · rw [if_neg hg]
-        constructor
-        · intro h; exact absurd h (by simp)
-        · rintro ⟨r', ⟨hfind', hrec, hlive, _⟩, _⟩
-          simp only [Option.some.injEq] at hfind'
-          subst hfind'
-          exact absurd ⟨hrec, hlive⟩ hg
-  · simp only [hauth, if_neg hauth]
-    constructor
-    · intro h; exact absurd h (by simp)
-    · rintro ⟨r, ⟨_, _, _, hauth'⟩, _⟩; exact absurd hauth' hauth
+  constructor
+  · intro h
+    obtain ⟨hauth, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor h
+    rcases hfind : findUnresolvedEscrow s.kernel id with ⟨⟩ | ⟨r⟩
+    · rw [releaseSettleAuthB_false_of_none s.kernel id actor hfind] at hauth
+      cases hauth
+    · by_cases hg : r.recipient ∈ s.kernel.accounts ∧ cellLifecycleLive s.kernel r.recipient = true
+      · have hksome := releaseEscrowKAsset_some s.kernel id r hfind hg
+        rw [hksome] at hk
+        simp only [Option.some.injEq] at hk
+        subst hk
+        have hfind' : s.kernel.escrows.find? (matchesId id) = some r := by
+          simpa [findUnresolvedEscrow_matchesId] using hfind
+        rw [hs']
+        exact ⟨r, ⟨hfind', hg.1, hg.2, hauth⟩, by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], rfl,
+          by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset],
+          by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset],
+          by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset],
+          by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset],
+          by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset]⟩
+      · have hknone := releaseEscrowKAsset_none_of_not_live s.kernel id r hfind hg
+        rw [hknone] at hk; cases hk
+  · intro ⟨r, ⟨hfind, hrec, hlive, hauth⟩, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11,
+           h12, h13, h14, h15⟩
+    obtain ⟨k', log'⟩ := s'
+    obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb⟩ := k'
+    simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+    subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+    have hfind' : findUnresolvedEscrow s.kernel id = some r := by
+      simpa [findUnresolvedEscrow_matchesId] using hfind
+    have hk := releaseEscrowKAsset_some s.kernel id r hfind' ⟨hrec, hlive⟩
+    unfold releaseEscrowChainA
+    rw [if_pos hauth, hk]
+    rfl
 
 /-- **`releaseEscrowChainA_iff_guard` — commitment IFF the guard** (the existence form).
 `releaseEscrowChainA` commits SOME post-state iff there is a found unresolved record whose recipient
@@ -216,7 +215,15 @@ theorem releaseEscrowChainA_iff_guard (s : RecChainedState) (id : Nat) (actor : 
     rcases (releaseEscrowChainA_iff_spec s id actor s').mp h with ⟨r, hg, _⟩
     exact ⟨r, hg⟩
   · rintro ⟨r, hg⟩
-    refine ⟨_, (releaseEscrowChainA_iff_spec s id actor _).mpr ⟨r, hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩⟩
+    refine ⟨{ kernel := settleEscrowRawAsset s.kernel id r.recipient r.asset r.amount,
+              log := escrowReceiptA actor :: s.log }, ?_⟩
+    exact (releaseEscrowChainA_iff_spec s id actor _).mpr
+      ⟨r, hg, by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], rfl,
+       by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset],
+       by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset],
+       by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset],
+       by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset],
+       by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset], by simp [settleEscrowRawAsset]⟩
 
 /-! ## §5 — EXECUTOR ⟺ SPEC, lifted to `execFullA` for BOTH family constructors.
 
@@ -304,8 +311,13 @@ holding-store does not park. -/
 theorem release_rejects_missing (s : RecChainedState) (id : Nat) (actor : CellId)
     (hbad : s.kernel.escrows.find? (matchesId id) = none) :
     releaseEscrowChainA s id actor = none := by
-  unfold releaseEscrowChainA releaseSettleAuthB findUnresolvedEscrow matchesId at *
-  simp only [hbad, if_neg]
+  simp only [releaseEscrowChainA]
+  have hnone : findUnresolvedEscrow s.kernel id = none := by
+    simpa [findUnresolvedEscrow_matchesId] using hbad
+  have hfalse := releaseSettleAuthB_false_of_none s.kernel id actor hnone
+  by_cases hb : releaseSettleAuthB s.kernel id actor
+  · simp [hb] at hfalse
+  · simp [hb]
 
 /-- **`release_rejects_dead_recipient` — NEGATIVE teeth (the SETTLE-LIVENESS gate).** Even with a
 present unresolved record, if its `recipient` is NOT a live account the release is FAIL-CLOSED:
@@ -316,8 +328,11 @@ theorem release_rejects_dead_recipient (s : RecChainedState) (id : Nat) (actor :
     (hauth : releaseSettleAuthB s.kernel id actor = true)
     (hbad : ¬ (r.recipient ∈ s.kernel.accounts ∧ cellLifecycleLive s.kernel r.recipient = true)) :
     releaseEscrowChainA s id actor = none := by
-  unfold releaseEscrowChainA releaseEscrowKAsset releaseSettleAuthB findUnresolvedEscrow matchesId at *
-  simp only [hfind, hauth, if_pos hauth, if_neg hbad]
+  have hfind' : findUnresolvedEscrow s.kernel id = some r := by
+    simpa [findUnresolvedEscrow_matchesId] using hfind
+  have hk := releaseEscrowKAsset_none_of_not_live s.kernel id r hfind' hbad
+  unfold releaseEscrowChainA
+  rw [if_pos (by simpa using hauth), hk]
 
 /-! ## §7 — Concrete #guard witnesses: a live-recipient unresolved escrow releases; a missing or
 dead-recipient one is rejected.

@@ -36,6 +36,7 @@ open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Authority
 open Dregg2.Exec.EffectsState (stateStep stateStep_factors stateStepGuarded_eq)
+open Dregg2.Tactics
 
 /-! ## Step 0 — registry-frame lemmas for the deeply-nested kernel ops (queue-deposit + swiss).
 
@@ -152,7 +153,7 @@ private theorem queueEnqueueChainA_revoked {s s' : RecChainedState} {id m : Nat}
   · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
     | none => rw [hk] at h; exact absurd h (by simp)
     | some k' =>
-        rw [hk] at h; obtain ⟨rfl⟩ := h
+        commit_subst h hk
         exact queueEnqueueDepositK_revoked s.kernel id m actor cell depId dAsset deposit k' hk
   · exact absurd h (by simp)
 
@@ -167,7 +168,7 @@ private theorem queueDequeueChainA_revoked {s s' : RecChainedState} {id : Nat} {
   · cases hk : queueDequeueRefundK s.kernel id actor depId with
     | none => rw [hk] at h; exact absurd h (by simp)
     | some kp =>
-        obtain ⟨k', mhd⟩ := kp; rw [hk] at h; obtain ⟨rfl⟩ := h
+        obtain ⟨k', mhd⟩ := kp; commit_subst h hk
         exact queueDequeueRefundK_revoked s.kernel id actor depId k' mhd hk
   · exact absurd h (by simp)
 
@@ -248,21 +249,18 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
   cases fa with
   -- §catalog / supply / authority — chained `match kernelOp | some k' => some {kernel:=k',…}` wrappers.
   | balanceA t a =>
-      simp only [execFullA, recCexecAsset] at h
-      cases hk : recKExecAsset s.kernel t a with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
-          show k'.revoked = s.kernel.revoked
-          unfold recKExecAsset at hk; split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
+      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := recCexecAsset_factors t a (by simpa only [execFullA] using h)
+      subst hs'
+      show k'.revoked = s.kernel.revoked
+      unfold recKExecAsset at hk; split at hk
+      · injection hk with hk; subst hk; rfl
+      · exact absurd hk (by simp)
   | delegate del rec t =>
       simp only [execFullA, recCDelegate] at h
       cases hk : recKDelegate s.kernel del rec t with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold recKDelegate at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -270,14 +268,13 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
   | revoke holder t =>
       -- `recCRevoke`/`recKRevokeTarget` edit ONLY `caps` — the credential-revocation registry is a
       -- DISTINCT side-table, untouched (the projection through the `{caps := …}` update is `rfl`).
-      simp only [execFullA, recCRevoke] at h
-      obtain ⟨rfl⟩ := h
+      simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h; rfl
   | mintA actor cell a amt =>
       simp only [execFullA, recCMintAsset] at h
       cases hk : recKMintAsset s.kernel actor cell a amt with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold recKMintAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -287,7 +284,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKBurnAsset s.kernel actor cell a amt with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold recKBurnAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -321,7 +318,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKDelegate s.kernel intro rec t with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold recKDelegate at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -331,26 +328,23 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKDelegateAtten s.kernel del rec t keep with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold recKDelegateAtten at hk; split at hk
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
   | attenuateA actor idx keep =>
-      simp only [execFullA, attenuateStepA] at h
-      obtain ⟨rfl⟩ := h
+      simp only [execFullA, attenuateStepA, Option.some.injEq] at h; subst h; rfl
   | dropRefA holder t =>
-      simp only [execFullA, recCRevoke] at h
-      obtain ⟨rfl⟩ := h
+      simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h; rfl
   | revokeDelegationA holder t =>
-      simp only [execFullA, recCRevoke] at h
-      obtain ⟨rfl⟩ := h
+      simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h; rfl
   | validateHandoffA intro rec t =>
       simp only [execFullA, recCDelegate] at h
       cases hk : recKDelegate s.kernel intro rec t with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold recKDelegate at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -385,7 +379,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKMintAsset s.kernel actor cell a value with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold recKMintAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -398,74 +392,62 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
   | releaseEscrowA id actor =>
-      simp only [execFullA, releaseEscrowChainA] at h
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
-          show k'.revoked = s.kernel.revoked
-          unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-          split at hk
-          · split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          · exact absurd hk (by simp)
+      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst hs'
+      show k'.revoked = s.kernel.revoked
+      unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+      split at hk
+      · split at hk
+        · injection hk with hk; subst hk; rfl
+        · exact absurd hk (by simp)
+      · exact absurd hk (by simp)
   | refundEscrowA id actor =>
-      simp only [execFullA, refundEscrowChainA] at h
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
-          show k'.revoked = s.kernel.revoked
-          unfold refundEscrowKAsset settleEscrowRawAsset at hk
-          split at hk
-          · split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          · exact absurd hk (by simp)
+      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst hs'
+      show k'.revoked = s.kernel.revoked
+      unfold refundEscrowKAsset settleEscrowRawAsset at hk
+      split at hk
+      · split at hk
+        · injection hk with hk; subst hk; rfl
+        · exact absurd hk (by simp)
+      · exact absurd hk (by simp)
   | createObligationA id actor obligor beneficiary asset stake =>
       simp only [execFullA, createEscrowChainA] at h
       cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
   -- fulfill/slash route to refund/release (escrow SETTLE) — `revoked` literally unchanged (frame).
   | fulfillObligationA id actor =>
-      simp only [execFullA, refundEscrowChainA] at h
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
-          show k'.revoked = s.kernel.revoked
-          unfold refundEscrowKAsset settleEscrowRawAsset at hk
-          split at hk
-          · split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          · exact absurd hk (by simp)
+      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst hs'
+      show k'.revoked = s.kernel.revoked
+      unfold refundEscrowKAsset settleEscrowRawAsset at hk
+      split at hk
+      · split at hk
+        · injection hk with hk; subst hk; rfl
+        · exact absurd hk (by simp)
+      · exact absurd hk (by simp)
   | slashObligationA id actor =>
-      simp only [execFullA, releaseEscrowChainA] at h
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
-          show k'.revoked = s.kernel.revoked
-          unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-          split at hk
-          · split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          · exact absurd hk (by simp)
+      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst hs'
+      show k'.revoked = s.kernel.revoked
+      unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+      split at hk
+      · split at hk
+        · injection hk with hk; subst hk; rfl
+        · exact absurd hk (by simp)
+      · exact absurd hk (by simp)
   -- §NOTE-SPEND — grows `nullifiers` (a DIFFERENT registry), `revoked` UNTOUCHED. This is the arm that
   -- moves the nullifier set in `CellNullifier`; here it frames the credential-revocation registry.
   | noteSpendA nf actor =>
@@ -473,15 +455,14 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       cases hk : noteSpendNullifier s.kernel nf with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold noteSpendNullifier at hk; split at hk
           · exact absurd hk (by simp)
           · injection hk with hk; subst hk; rfl
   -- §NOTE-CREATE — grows `commitments` (a DIFFERENT set), `revoked` untouched (always-commit).
   | noteCreateA cm actor =>
-      simp only [execFullA, noteCreateChainA, noteCreateCommitment] at h
-      obtain ⟨rfl⟩ := h
+      simp only [execFullA, noteCreateChainA, noteCreateCommitment, Option.some.injEq] at h; subst h; rfl
   -- §committed-escrow (WAVE 4) — the §8 hiding-portal create. Under the discharged portal it routes to
   -- the SAME escrow holding-store (`createEscrowKAsset`, a `bal`/`escrows` write), `revoked` untouched;
   -- under a failed portal (`hidingProof = false`) the chain is `none` (the `else` branch absurds `h`).
@@ -492,45 +473,39 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
         cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := h
+            commit_subst h hk
             show k'.revoked = s.kernel.revoked
             unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
             · injection hk with hk; subst hk; rfl
             · exact absurd hk (by simp)
       · exact absurd h (by simp)
   | releaseCommittedEscrowA id actor =>
-      simp only [execFullA, releaseEscrowChainA] at h
-      cases hk : releaseEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
-          show k'.revoked = s.kernel.revoked
-          unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-          split at hk
-          · split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          · exact absurd hk (by simp)
+      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst hs'
+      show k'.revoked = s.kernel.revoked
+      unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+      split at hk
+      · split at hk
+        · injection hk with hk; subst hk; rfl
+        · exact absurd hk (by simp)
+      · exact absurd hk (by simp)
   | refundCommittedEscrowA id actor =>
-      simp only [execFullA, refundEscrowChainA] at h
-      cases hk : refundEscrowKAsset s.kernel id with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
-          show k'.revoked = s.kernel.revoked
-          unfold refundEscrowKAsset settleEscrowRawAsset at hk
-          split at hk
-          · split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          · exact absurd hk (by simp)
+      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst hs'
+      show k'.revoked = s.kernel.revoked
+      unfold refundEscrowKAsset settleEscrowRawAsset at hk
+      split at hk
+      · split at hk
+        · injection hk with hk; subst hk; rfl
+        · exact absurd hk (by simp)
+      · exact absurd hk (by simp)
   -- §bridge — lock/finalize/cancel over the SHARED escrow holding-store (kernel updates bal/escrows).
   | bridgeLockA id actor originator destination asset amount =>
       simp only [execFullA, bridgeLockChainA] at h
       cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' =>
-          rw [hk] at h; obtain ⟨rfl⟩ := h
+          commit_subst h hk
           show k'.revoked = s.kernel.revoked
           unfold bridgeLockKAsset createBridgeRawAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
@@ -541,7 +516,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := h
+            commit_subst h hk
             show k'.revoked = s.kernel.revoked
             unfold bridgeFinalizeKAsset bridgeFinalizeRawAsset at hk
             split at hk
@@ -556,7 +531,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : bridgeCancelKAsset s.kernel id with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := h
+            commit_subst h hk
             show k'.revoked = s.kernel.revoked
             unfold bridgeCancelKAsset settleEscrowRawAsset at hk
             split at hk
@@ -593,7 +568,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : queueAllocateK s.kernel id actor cap with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := h
+            commit_subst h hk
             show k'.revoked = s.kernel.revoked
             unfold queueAllocateK at hk; split at hk
             · exact absurd hk (by simp)
@@ -605,7 +580,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := h
+            commit_subst h hk
             show k'.revoked = s.kernel.revoked
             exact queueEnqueueDepositK_revoked s.kernel id m actor cell depId dAsset deposit k' hk
       · exact absurd h (by simp)
@@ -627,7 +602,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : queueResizeK s.kernel id newCap with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := h
+            commit_subst h hk
             show k'.revoked = s.kernel.revoked
             unfold queueResizeK at hk
             split at hk
@@ -644,7 +619,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissExportK s.kernel sw exporter target rights with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := h
+            commit_subst h hk
             show k'.revoked = s.kernel.revoked
             unfold swissExportK at hk; split at hk
             · exact absurd hk (by simp)
@@ -658,7 +633,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissEnlivenK s.kernel sw claimed with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := h
+            commit_subst h hk
             show k'.revoked = s.kernel.revoked
             exact swissEnlivenK_revoked s.kernel sw claimed k' hk
       · exact absurd h (by simp)
@@ -668,7 +643,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissHandoffK s.kernel sw certHash with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := h
+            commit_subst h hk
             show k'.revoked = s.kernel.revoked
             exact swissHandoffK_revoked s.kernel sw certHash k' hk
       · exact absurd h (by simp)
@@ -678,7 +653,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       · cases hk : swissDropK s.kernel sw with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
-            rw [hk] at h; obtain ⟨rfl⟩ := h
+            commit_subst h hk
             show k'.revoked = s.kernel.revoked
             exact swissDropK_revoked s.kernel sw k' hk
       · exact absurd h (by simp)

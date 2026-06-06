@@ -414,10 +414,10 @@ theorem handler_refines_execFullA_release (s s' : RecChainedState) (id : Nat) (a
     show Dregg2.Exec.TurnExecutorFull.releaseEscrowChainA s id actor = _
     unfold Dregg2.Exec.TurnExecutorFull.releaseEscrowChainA
     have hauth : Dregg2.Exec.TurnExecutorFull.releaseSettleAuthB s.kernel id actor = true := by
-      unfold Dregg2.Exec.Handlers.Escrow.releaseSettleAuthB
-             Dregg2.Exec.Handlers.Escrow.findUnresolved
-             Dregg2.Exec.TurnExecutorFull.releaseSettleAuthB
-             Dregg2.Exec.TurnExecutorFull.findUnresolvedEscrow at hg ⊢
+      dsimp [Dregg2.Exec.TurnExecutorFull.releaseSettleAuthB,
+             Dregg2.Exec.Handlers.Escrow.releaseSettleAuthB,
+             Dregg2.Exec.TurnExecutorFull.findUnresolvedEscrow,
+             Dregg2.Exec.Handlers.Escrow.findUnresolved]
       exact hg
     rw [if_pos hauth, hstep]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
@@ -576,7 +576,7 @@ theorem handler_refines_execFullA_emitEvent (s s' : RecChainedState) (actor cell
   · rw [if_pos hmem] at hstep
     have hk : s.kernel = s'.kernel := by simpa only [Option.some.injEq] using hstep
     refine ⟨emitStep s actor cell topic data, ?_, hk⟩
-    simp only [execFullA, hmem, if_pos hmem]
+    simp only [execFullA, if_pos hmem, emitStep]
   · rw [if_neg hmem] at hstep; exact absurd hstep (by simp)
 
 /-! ## §7 — THE TEETH: R1/R2/R6 holes closed in BOTH executors (parity witnesses).

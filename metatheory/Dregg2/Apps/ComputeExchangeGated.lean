@@ -19,7 +19,7 @@ op = one gated turn, NOT a multi-node forest:
     parks `amount` of `asset` off the buyer's ledger into the holding-store, keyed to the provider as
     eventual recipient. (`creator := buyer` is the refund target, `recipient := provider` the pay
     target.) Per-asset COMBINED-NEUTRAL (the bal-debit is exactly offset by the holding-store rise).
-  * **settle** — the PROVIDER is PAID on delivery. `releaseEscrowA id actor` credits the parked
+  * **settle** — the PROVIDER is PAID on delivery. `releaseEscrowA id provider` credits the parked
     record's `recipient` (= the provider) AT the record's asset and marks it resolved. Per-asset
     COMBINED-NEUTRAL (the holding-store drop is exactly offset by the provider's bal-credit). The D3
     SETTLE-LIVENESS GATE fires here: the provider MUST be a LIVE account — settling to a Sealed
@@ -102,11 +102,11 @@ provider as eventual recipient. A genuine credential ⇒ the gate passes; the es
 def orderNode (cred : Authorization Dg Pf) (amount : Int) : DForest :=
   cxNode cred (.createEscrowA jobId buyer buyer provider payAsset amount)
 
-/-- **settle** — the PROVIDER is PAID on delivery. `releaseEscrowA jobId buyer`: credit the parked
+/-- **settle** — the PROVIDER is PAID on delivery. `releaseEscrowA jobId provider`: credit the parked
 record's `recipient` (= the provider) AT the record's asset, mark resolved. The D3 settle-liveness gate
 fires inside `releaseEscrowKAsset` — the provider must be a LIVE account. -/
 def settleNode (cred : Authorization Dg Pf) : DForest :=
-  cxNode cred (.releaseEscrowA jobId buyer)
+  cxNode cred (.releaseEscrowA jobId provider)
 
 /-- **refund** — the BUYER is REFUNDED on failure. `refundEscrowA jobId buyer`: credit the parked
 record's `creator` (= the buyer) back, mark resolved. -/
@@ -253,7 +253,7 @@ theorem cx_settle_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf
     (b : AssetId) (h : execFullForestG s (settleNode cred) = some s') :
     recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
   execFullForestG_conserves_per_asset s s' (settleNode cred) b h
-    (settleNode_delta_zero cred jobId buyer b)
+    (settleNode_delta_zero cred jobId provider b)
 
 /-- **`cx_refund_conserves` — PROVED (the refund face of conservation).** A COMMITTED refund preserves
 EVERY asset's combined supply (the payment returns from the holding-store to the buyer, combined-neutral).
@@ -274,10 +274,10 @@ fail-closes (`none`). You cannot pay a dead cell; the value would silently vanis
 
 /-- **`settle_runs_release` — the gate-passing collapse for a SETTLE.** When the genuine credential
 admits and the credential is not revoked, the settle op IS its underlying `releaseEscrowChainA`:
-`execFullForestG s (settleNode goodCred) = releaseEscrowChainA s jobId buyer`. The hinge for the D3
+`execFullForestG s (settleNode goodCred) = releaseEscrowChainA s jobId provider`. The hinge for the D3
 liveness theorem: any liveness-rejection of the release rejects the whole turn. -/
 theorem settle_runs_release (s : RecChainedState) (hgate : gateOK (mkAuth goodCred []) s = true) :
-    execFullForestG s (settleNode goodCred) = releaseEscrowChainA s jobId buyer := by
+    execFullForestG s (settleNode goodCred) = releaseEscrowChainA s jobId provider := by
   rw [settleNode, execFullForestG_cxNode, if_pos hgate]
   rfl
 
@@ -298,14 +298,15 @@ theorem cx_settle_requires_live_provider (s : RecChainedState) (r : EscrowRecord
     cases hf : s.kernel.escrows.find? (fun r => decide (r.id = jobId ∧ r.resolved = false)) with
     | none   => rfl
     | some r' =>
-        -- the located record is exactly `r` (find? is functional), so its recipient is dead;
-        -- reduce the `match some r'` to its `if`, then fail-close on the negated liveness gate.
         rw [hf] at hfind; injection hfind with hr; subst hr
         show (if r'.recipient ∈ s.kernel.accounts ∧ cellLifecycleLive s.kernel r'.recipient = true then
                 some (settleEscrowRawAsset s.kernel jobId r'.recipient r'.asset r'.amount) else none) = none
         rw [if_neg hdead]
   rw [settle_runs_release s hgate]
-  simp only [releaseEscrowChainA, hrel]
+  unfold releaseEscrowChainA
+  by_cases hauth : releaseSettleAuthB s.kernel jobId provider
+  · rw [if_pos hauth, hrel]
+  · rw [if_neg hauth]
 
 /-! ## §9 — NON-VACUITY: a concrete FUNDED market + `#guard` witnesses (the gate + escrow are REAL).
 

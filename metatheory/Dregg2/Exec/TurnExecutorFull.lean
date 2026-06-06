@@ -2078,6 +2078,81 @@ theorem refundEscrowChainA_factors {s s' : RecChainedState} (id : Nat) (actor : 
       exact ⟨hg, ⟨k'', rfl, h.symm⟩⟩
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
+/-- No unresolved record ⇒ the release settle-actor gate is false (R2 fail-closed). -/
+theorem releaseSettleAuthB_false_of_none (k : RecordKernelState) (id : Nat) (actor : CellId)
+    (h : findUnresolvedEscrow k id = none) : releaseSettleAuthB k id actor = false := by
+  unfold releaseSettleAuthB; simp [h]
+
+/-- No unresolved record ⇒ the refund settle-actor gate is false (R2 fail-closed). -/
+theorem refundSettleAuthB_false_of_none (k : RecordKernelState) (id : Nat) (actor : CellId)
+    (h : findUnresolvedEscrow k id = none) : refundSettleAuthB k id actor = false := by
+  unfold refundSettleAuthB; simp [h]
+
+/-- `findUnresolvedEscrow` is the inline `escrows.find?` predicate (definitional bridge). -/
+theorem findUnresolvedEscrow_eq (k : RecordKernelState) (id : Nat) :
+    findUnresolvedEscrow k id =
+      k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) := rfl
+
+/-- After kernel unfolding, the unresolved-record `decide` predicate splits on `resolved : Bool`. -/
+theorem decide_escrow_unresolved (r : EscrowRecord) (id : Nat) :
+    decide (r.id = id ∧ r.resolved = false) = (decide (r.id = id) && !r.resolved) := by
+  rcases r with ⟨_i, _c, _rec, _a, res, _as⟩
+  cases res <;> simp
+
+/-- The two `find?` predicates for unresolved escrows are definitionally aligned after `decide` reduction. -/
+theorem escrow_findPred_eq (id : Nat) :
+    (fun r : EscrowRecord => decide (r.id = id ∧ r.resolved = false)) =
+    (fun r : EscrowRecord => decide (r.id = id) && !r.resolved) := by
+  funext r; exact decide_escrow_unresolved r id
+
+/-- A live unresolved record ⇒ `releaseEscrowKAsset` settles to the raw post-kernel. -/
+theorem releaseEscrowKAsset_some (k : RecordKernelState) (id : Nat) (r : EscrowRecord)
+    (hfind : findUnresolvedEscrow k id = some r)
+    (hlive : r.recipient ∈ k.accounts ∧ cellLifecycleLive k r.recipient = true) :
+    releaseEscrowKAsset k id = some (settleEscrowRawAsset k id r.recipient r.asset r.amount) := by
+  have hfind' :
+      k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r := by
+    simpa [findUnresolvedEscrow] using hfind
+  unfold releaseEscrowKAsset
+  rw [hfind']
+  simp [hlive]
+
+/-- A dead/non-account recipient ⇒ `releaseEscrowKAsset` fail-closes. -/
+theorem releaseEscrowKAsset_none_of_not_live (k : RecordKernelState) (id : Nat) (r : EscrowRecord)
+    (hfind : findUnresolvedEscrow k id = some r)
+    (hbad : ¬ (r.recipient ∈ k.accounts ∧ cellLifecycleLive k r.recipient = true)) :
+    releaseEscrowKAsset k id = none := by
+  have hfind' :
+      k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r := by
+    simpa [findUnresolvedEscrow] using hfind
+  unfold releaseEscrowKAsset
+  rw [hfind']
+  simp [hbad]
+
+/-- A live unresolved record ⇒ `refundEscrowKAsset` settles to the raw post-kernel. -/
+theorem refundEscrowKAsset_some (k : RecordKernelState) (id : Nat) (r : EscrowRecord)
+    (hfind : findUnresolvedEscrow k id = some r)
+    (hlive : r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true) :
+    refundEscrowKAsset k id = some (settleEscrowRawAsset k id r.creator r.asset r.amount) := by
+  have hfind' :
+      k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r := by
+    simpa [findUnresolvedEscrow] using hfind
+  unfold refundEscrowKAsset
+  rw [hfind']
+  simp [hlive]
+
+/-- A dead/non-account creator ⇒ `refundEscrowKAsset` fail-closes. -/
+theorem refundEscrowKAsset_none_of_not_live (k : RecordKernelState) (id : Nat) (r : EscrowRecord)
+    (hfind : findUnresolvedEscrow k id = some r)
+    (hbad : ¬ (r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true)) :
+    refundEscrowKAsset k id = none := by
+  have hfind' :
+      k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r := by
+    simpa [findUnresolvedEscrow] using hfind
+  unfold refundEscrowKAsset
+  rw [hfind']
+  simp [hbad]
+
 /-- **Chained note-create** — grow the commitment SET (the §8 range-proof portal is the THEOREM-level
 hypothesis, like bridgeMint's foreign finality; the ledger move is the grow-only insert). Always
 commits at the ledger layer (a fresh commitment cannot conflict). -/

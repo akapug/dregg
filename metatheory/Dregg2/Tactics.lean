@@ -142,7 +142,7 @@ macro "reject_none" h:ident hk:ident : tactic =>
 /-- `commit_subst h hk` — the `some` branch. `hk : f = some k'` rewrites `h`, peels the
 `some`-injection, and substitutes the committed state into the goal. -/
 macro "commit_subst" h:ident hk:ident : tactic =>
-  `(tactic| (rw [$hk:ident] at $h:ident; simp only [Option.some.injEq] at $h:ident; subst $h:ident))
+  `(tactic| (rw [$hk:ident] at $h:ident; simp only [Option.some.injEq] at $h:ident; rcases $h:ident with ⟨rfl⟩))
 
 /-- `gate_peel hk with finisher` — peel an `if guard then some _ else none` inside a chained step
 `hk : (if … then some _ else none) = some _`. Uses `split` (so the guard need NOT be named): the
