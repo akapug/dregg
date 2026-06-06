@@ -4,6 +4,11 @@
 Packages the `execFullForestG` carrier parameters as a `GatedForestCarriers` record, with
 `starbridgeCarriers` the canonical production instance. Downstream modules `open StarbridgeGated`
 instead of a pinned `Demo`/`Production` namespace.
+
+**Production routing for `.coordinated` caveats:** intra-cell `execFullForestG` fail-closes
+(see `FullForestAuth.GatedCaveat.holds`); the positive bilateral path is
+`CoordinatedForestGLift.execCoordinatedForestG` over a `BilateralForestPairG` of two
+`RecChainedState` snapshots (honest — no cross-cell reads on one cell).
 -/
 import Dregg2.Exec.FullForestAuth
 

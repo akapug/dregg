@@ -61,8 +61,14 @@ open Dregg2.Exec
 open Dregg2.Exec.Handler
 open Dregg2.Exec.TurnExecutorFull
   (acceptsEffects lcLive lcSealed lcDestroyed setLifecycle parentClist cellSealChainA cellUnsealChainA
-   cellDestroyChainA refreshDelegationChainA emitStep execFullA FullActionA QueueTxOpA)
+   cellDestroyChainA refreshDelegationChainA emitStep execFullA FullActionA QueueTxOpA
+   recCDelegate recCDelegateAtten attenuateStepA
+   createSealPairChainA sealChainA unsealChainA
+   swissExportChainA swissEnlivenChainA swissHandoffChainA swissDropChainA
+   queueAllocateChainA queueResizeChainA pipelineFanoutK
+   authReceipt escrowReceiptA sealerCap unsealerCap holdsSealCapFor)
 open Dregg2.Exec.EffectsState (stateAuthB)
+open Dregg2.Exec (recKDelegate recKDelegateAtten heldCapTo attenuate grant)
 open scoped BigOperators
 
 -- module-qualified aliases for the seven batches (every handler + ClosedEffect builder lives here)
@@ -422,6 +428,232 @@ theorem handler_refines_execFullA_release (s s' : RecChainedState) (id : Nat) (a
     rw [if_pos hauth, hstep]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
+/-! ### §6.2b — SUPPLY: MINT / BURN. Handler liveness gates only narrow; the bare ledger step agrees. -/
+
+/-- **`handler_refines_execFullA_mint` — PROVED.** A committed mint under the handler executor is exactly
+`recKMintAsset` on the kernel — the same transition `execFullA`'s `.mintA` arm runs via `recCMintAsset`. -/
+theorem handler_refines_execFullA_mint (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
+    (h : execHandlerOne (.mintA actor cell a amt) s = some s') :
+    ∃ s'', execFullA s (.mintA actor cell a amt) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.mintA actor cell a amt) s s' h
+  rw [toClosedEffect] at hstep
+  change mintStep s.kernel { actor := actor, cell := cell, asset := a, amt := amt } = some s'.kernel at hstep
+  unfold mintStep at hstep
+  by_cases hadm : acceptsEffects s.kernel cell
+  · rw [if_pos hadm] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := cell, dst := cell, amt := amt } :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.recCMintAsset s actor cell a amt = _
+    unfold Dregg2.Exec.TurnExecutorFull.recCMintAsset
+    rw [hstep]
+  · rw [if_neg hadm] at hstep; exact absurd hstep (by simp)
+
+/-- **`handler_refines_execFullA_burn` — PROVED.** A committed burn under the handler executor is exactly
+`recKBurnAsset` on the kernel — the same transition `execFullA`'s `.burnA` arm runs via `recCBurnAsset`. -/
+theorem handler_refines_execFullA_burn (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
+    (h : execHandlerOne (.burnA actor cell a amt) s = some s') :
+    ∃ s'', execFullA s (.burnA actor cell a amt) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.burnA actor cell a amt) s s' h
+  rw [toClosedEffect] at hstep
+  change burnStep s.kernel { actor := actor, cell := cell, asset := a, amt := amt } = some s'.kernel at hstep
+  unfold burnStep at hstep
+  by_cases hadm : acceptsEffects s.kernel cell
+  · rw [if_pos hadm] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := cell, dst := cell, amt := -amt } :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.recCBurnAsset s actor cell a amt = _
+    unfold Dregg2.Exec.TurnExecutorFull.recCBurnAsset
+    rw [hstep]
+  · rw [if_neg hadm] at hstep; exact absurd hstep (by simp)
+
+/-- **`handler_refines_execFullA_createEscrow` — PROVED.** A committed escrow-create under the handler
+executor is exactly `createEscrowKAsset` — the same kernel transition `createEscrowChainA` runs. -/
+theorem handler_refines_execFullA_createEscrow (s s' : RecChainedState) (id : Nat) (actor creator recipient : CellId)
+    (asset : AssetId) (amount : ℤ)
+    (h : execHandlerOne (.createEscrowA id actor creator recipient asset amount) s = some s') :
+    ∃ s'', execFullA s (.createEscrowA id actor creator recipient asset amount) = some s'' ∧
+      s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.createEscrowA id actor creator recipient asset amount) s s' h
+  rw [toClosedEffect] at hstep
+  change createEscrowStep s.kernel
+    { id := id, actor := actor, creator := creator, recipient := recipient, asset := asset, amount := amount }
+    = some s'.kernel at hstep
+  unfold createEscrowStep at hstep
+  by_cases hadm : acceptsEffects s.kernel creator
+  · rw [if_pos hadm] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := Dregg2.Exec.TurnExecutorFull.escrowReceiptA actor :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.createEscrowChainA s id actor creator recipient asset amount = _
+    unfold Dregg2.Exec.TurnExecutorFull.createEscrowChainA
+    rw [hstep]
+  · rw [if_neg hadm] at hstep; exact absurd hstep (by simp)
+
+/-- **`handler_refines_execFullA_refund` — PROVED.** A committed escrow refund under the handler executor
+is exactly `refundEscrowKAsset` after `refundSettleAuthB` — the same transition `refundEscrowChainA`
+runs. -/
+theorem handler_refines_execFullA_refund (s s' : RecChainedState) (id : Nat) (actor : CellId)
+    (h : execHandlerOne (.refundEscrowA id actor) s = some s') :
+    ∃ s'', execFullA s (.refundEscrowA id actor) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.refundEscrowA id actor) s s' h
+  rw [toClosedEffect] at hstep
+  change refundStep s.kernel { actor := actor, id := id } = some s'.kernel at hstep
+  unfold refundStep at hstep
+  by_cases hg : refundSettleAuthB s.kernel { actor := actor, id := id }
+  · rw [if_pos hg] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := Dregg2.Exec.TurnExecutorFull.escrowReceiptA actor :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.refundEscrowChainA s id actor = _
+    unfold Dregg2.Exec.TurnExecutorFull.refundEscrowChainA
+    have hauth : Dregg2.Exec.TurnExecutorFull.refundSettleAuthB s.kernel id actor = true := by
+      dsimp [Dregg2.Exec.TurnExecutorFull.refundSettleAuthB,
+             Dregg2.Exec.Handlers.Escrow.refundSettleAuthB,
+             Dregg2.Exec.TurnExecutorFull.findUnresolvedEscrow,
+             Dregg2.Exec.Handlers.Escrow.findUnresolved]
+      exact hg
+    rw [if_pos hauth, hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+/-! ### §6.2c — ESCROW ALIASES + bridgeMint + revoke (mechanical inheritance). -/
+
+theorem handler_refines_execFullA_createObligation (s s' : RecChainedState) (id : Nat)
+    (actor obligor beneficiary : CellId) (asset : AssetId) (stake : ℤ)
+    (h : execHandlerOne (.createObligationA id actor obligor beneficiary asset stake) s = some s') :
+    ∃ s'', execFullA s (.createObligationA id actor obligor beneficiary asset stake) = some s'' ∧
+      s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.createObligationA id actor obligor beneficiary asset stake) s s' h
+  rw [toClosedEffect] at hstep
+  change createEscrowStep s.kernel
+    { id := id, actor := actor, creator := obligor, recipient := beneficiary, asset := asset, amount := stake }
+    = some s'.kernel at hstep
+  unfold createEscrowStep at hstep
+  by_cases hadm : acceptsEffects s.kernel obligor
+  · rw [if_pos hadm] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := Dregg2.Exec.TurnExecutorFull.escrowReceiptA actor :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.createEscrowChainA s id actor obligor beneficiary asset stake = _
+    unfold Dregg2.Exec.TurnExecutorFull.createEscrowChainA
+    rw [hstep]
+  · rw [if_neg hadm] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_slashObligation (s s' : RecChainedState) (id : Nat) (actor : CellId)
+    (h : execHandlerOne (.slashObligationA id actor) s = some s') :
+    ∃ s'', execFullA s (.slashObligationA id actor) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.slashObligationA id actor) s s' h
+  rw [toClosedEffect] at hstep
+  change releaseStep s.kernel { actor := actor, id := id } = some s'.kernel at hstep
+  unfold releaseStep at hstep
+  by_cases hg : releaseSettleAuthB s.kernel { actor := actor, id := id }
+  · rw [if_pos hg] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := Dregg2.Exec.TurnExecutorFull.escrowReceiptA actor :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.releaseEscrowChainA s id actor = _
+    unfold Dregg2.Exec.TurnExecutorFull.releaseEscrowChainA
+    have hauth : Dregg2.Exec.TurnExecutorFull.releaseSettleAuthB s.kernel id actor = true := by
+      dsimp [Dregg2.Exec.TurnExecutorFull.releaseSettleAuthB,
+             Dregg2.Exec.Handlers.Escrow.releaseSettleAuthB,
+             Dregg2.Exec.TurnExecutorFull.findUnresolvedEscrow,
+             Dregg2.Exec.Handlers.Escrow.findUnresolved]
+      exact hg
+    rw [if_pos hauth, hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_fulfillObligation (s s' : RecChainedState) (id : Nat) (actor : CellId)
+    (h : execHandlerOne (.fulfillObligationA id actor) s = some s') :
+    ∃ s'', execFullA s (.fulfillObligationA id actor) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.fulfillObligationA id actor) s s' h
+  rw [toClosedEffect] at hstep
+  change refundStep s.kernel { actor := actor, id := id } = some s'.kernel at hstep
+  unfold refundStep at hstep
+  by_cases hg : refundSettleAuthB s.kernel { actor := actor, id := id }
+  · rw [if_pos hg] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := Dregg2.Exec.TurnExecutorFull.escrowReceiptA actor :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.refundEscrowChainA s id actor = _
+    unfold Dregg2.Exec.TurnExecutorFull.refundEscrowChainA
+    have hauth : Dregg2.Exec.TurnExecutorFull.refundSettleAuthB s.kernel id actor = true := by
+      dsimp [Dregg2.Exec.TurnExecutorFull.refundSettleAuthB,
+             Dregg2.Exec.Handlers.Escrow.refundSettleAuthB,
+             Dregg2.Exec.TurnExecutorFull.findUnresolvedEscrow,
+             Dregg2.Exec.Handlers.Escrow.findUnresolved]
+      exact hg
+    rw [if_pos hauth, hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_releaseCommitted (s s' : RecChainedState) (id : Nat) (actor : CellId)
+    (h : execHandlerOne (.releaseCommittedEscrowA id actor) s = some s') :
+    ∃ s'', execFullA s (.releaseCommittedEscrowA id actor) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.releaseCommittedEscrowA id actor) s s' h
+  rw [toClosedEffect] at hstep
+  change releaseStep s.kernel { actor := actor, id := id } = some s'.kernel at hstep
+  unfold releaseStep at hstep
+  by_cases hg : releaseSettleAuthB s.kernel { actor := actor, id := id }
+  · rw [if_pos hg] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := Dregg2.Exec.TurnExecutorFull.escrowReceiptA actor :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.releaseEscrowChainA s id actor = _
+    unfold Dregg2.Exec.TurnExecutorFull.releaseEscrowChainA
+    have hauth : Dregg2.Exec.TurnExecutorFull.releaseSettleAuthB s.kernel id actor = true := by
+      dsimp [Dregg2.Exec.TurnExecutorFull.releaseSettleAuthB,
+             Dregg2.Exec.Handlers.Escrow.releaseSettleAuthB,
+             Dregg2.Exec.TurnExecutorFull.findUnresolvedEscrow,
+             Dregg2.Exec.Handlers.Escrow.findUnresolved]
+      exact hg
+    rw [if_pos hauth, hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_refundCommitted (s s' : RecChainedState) (id : Nat) (actor : CellId)
+    (h : execHandlerOne (.refundCommittedEscrowA id actor) s = some s') :
+    ∃ s'', execFullA s (.refundCommittedEscrowA id actor) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.refundCommittedEscrowA id actor) s s' h
+  rw [toClosedEffect] at hstep
+  change refundStep s.kernel { actor := actor, id := id } = some s'.kernel at hstep
+  unfold refundStep at hstep
+  by_cases hg : refundSettleAuthB s.kernel { actor := actor, id := id }
+  · rw [if_pos hg] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := Dregg2.Exec.TurnExecutorFull.escrowReceiptA actor :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.refundEscrowChainA s id actor = _
+    unfold Dregg2.Exec.TurnExecutorFull.refundEscrowChainA
+    have hauth : Dregg2.Exec.TurnExecutorFull.refundSettleAuthB s.kernel id actor = true := by
+      dsimp [Dregg2.Exec.TurnExecutorFull.refundSettleAuthB,
+             Dregg2.Exec.Handlers.Escrow.refundSettleAuthB,
+             Dregg2.Exec.TurnExecutorFull.findUnresolvedEscrow,
+             Dregg2.Exec.Handlers.Escrow.findUnresolved]
+      exact hg
+    rw [if_pos hauth, hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_bridgeMint (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (value : ℤ)
+    (h : execHandlerOne (.bridgeMintA actor cell a value) s = some s') :
+    ∃ s'', execFullA s (.bridgeMintA actor cell a value) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.bridgeMintA actor cell a value) s s' h
+  rw [toClosedEffect] at hstep
+  change mintStep s.kernel { actor := actor, cell := cell, asset := a, amt := value } = some s'.kernel at hstep
+  unfold mintStep at hstep
+  by_cases hadm : acceptsEffects s.kernel cell
+  · rw [if_pos hadm] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := cell, dst := cell, amt := value } :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.recCMintAsset s actor cell a value = _
+    unfold Dregg2.Exec.TurnExecutorFull.recCMintAsset
+    rw [hstep]
+  · rw [if_neg hadm] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_revoke (s s' : RecChainedState) (holder t : CellId)
+    (h : execHandlerOne (.revoke holder t) s = some s') :
+    ∃ s'', execFullA s (.revoke holder t) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.revoke holder t) s s' h
+  rw [toClosedEffect] at hstep
+  change revokeStep s.kernel { holder := holder, target := t } = some s'.kernel at hstep
+  unfold revokeStep at hstep
+  simp only [Option.some.injEq] at hstep
+  refine ⟨Dregg2.Exec.TurnExecutorFull.recCRevoke s holder t, ?_, ?_⟩
+  · show execFullA s (.revoke holder t) = _
+    simp only [execFullA, Dregg2.Exec.TurnExecutorFull.recCRevoke]
+  · show (Dregg2.Exec.TurnExecutorFull.recCRevoke s holder t).kernel = s'.kernel
+    rw [← hstep]
+    rfl
+
 /-! ### §6.3 — R6: STATE WRITE. The handler and `execFullA` now gate on the SAME predicates (RECONCILED).
 
 R6 IS NOW CLOSED IN THE LIVE EXECUTOR. The bare `EffectsState.stateStep` gained a `cellLive`
@@ -579,6 +811,309 @@ theorem handler_refines_execFullA_emitEvent (s s' : RecChainedState) (actor cell
     simp only [execFullA, if_pos hmem, emitStep]
   · rw [if_neg hmem] at hstep; exact absurd hstep (by simp)
 
+/-! ### §6.5 — AUTHORITY / SEAL / SWISS / QUEUE (mechanical strengthening; handler gates only narrow). -/
+
+private theorem auth_mem_allAuths : ∀ a : Auth, allAuths.contains a = true := by
+  intro a; cases a <;> decide
+
+private theorem auth_in_allAuths (a : Auth) : a ∈ allAuths := by
+  cases a <;> simp [allAuths]
+
+private theorem attenuate_allAuths_id (c : Cap) : attenuate allAuths c = c := by
+  cases c with
+  | null => simp [attenuate]
+  | endpoint t rights =>
+      simp only [attenuate]
+      congr 1
+      apply List.filter_eq_self.mpr
+      intro a _
+      exact auth_mem_allAuths a
+  | node _ => simp [attenuate]
+
+private theorem recKDelegateAtten_allAuths_eq_recKDelegate (k : RecordKernelState) (d r t : CellId) :
+    recKDelegateAtten k d r t allAuths = recKDelegate k d r t := by
+  unfold recKDelegateAtten recKDelegate
+  by_cases hg : (k.caps d).any (fun cap => confersEdgeTo t cap) = true
+  · rw [if_pos hg, if_pos hg, attenuate_allAuths_id (heldCapTo k.caps d t)]
+  · rw [if_neg hg, if_neg hg]
+
+theorem handler_refines_execFullA_delegate (s s' : RecChainedState) (del rec t : CellId)
+    (h : execHandlerOne (.delegate del rec t) s = some s') :
+    ∃ s'', execFullA s (.delegate del rec t) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.delegate del rec t) s s' h
+  rw [toClosedEffect] at hstep
+  change delegateAttenStep s.kernel
+    { delegator := del, recipient := rec, target := t, keep := allAuths } = some s'.kernel at hstep
+  simp only [delegateAttenStep] at hstep
+  by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
+  · have hk : recKDelegate s.kernel del rec t = some s'.kernel := by
+      rw [← recKDelegateAtten_allAuths_eq_recKDelegate, hstep]
+    refine ⟨{ kernel := s'.kernel, log := authReceipt del :: s.log }, ?_, rfl⟩
+    show recCDelegate s del rec t = _
+    unfold recCDelegate
+    rw [hk]
+  · unfold recKDelegateAtten at hstep; rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_delegateAtten (s s' : RecChainedState) (del rec t : CellId)
+    (keep : List Auth) (h : execHandlerOne (.delegateAttenA del rec t keep) s = some s') :
+    ∃ s'', execFullA s (.delegateAttenA del rec t keep) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.delegateAttenA del rec t keep) s s' h
+  rw [toClosedEffect] at hstep
+  change delegateAttenStep s.kernel
+    { delegator := del, recipient := rec, target := t, keep := keep } = some s'.kernel at hstep
+  simp only [delegateAttenStep] at hstep
+  by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
+  · refine ⟨{ kernel := s'.kernel, log := authReceipt del :: s.log }, ?_, rfl⟩
+    show recCDelegateAtten s del rec t keep = _
+    unfold recCDelegateAtten
+    rw [hstep]
+  · unfold recKDelegateAtten at hstep; rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_introduce (s s' : RecChainedState) (intro rec t : CellId)
+    (h : execHandlerOne (.introduceA intro rec t) s = some s') :
+    ∃ s'', execFullA s (.introduceA intro rec t) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.introduceA intro rec t) s s' h
+  rw [toClosedEffect] at hstep
+  change delegateAttenStep s.kernel
+    { delegator := intro, recipient := rec, target := t, keep := allAuths } = some s'.kernel at hstep
+  simp only [delegateAttenStep] at hstep
+  by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
+  · have hk : recKDelegate s.kernel intro rec t = some s'.kernel := by
+      rw [← recKDelegateAtten_allAuths_eq_recKDelegate, hstep]
+    refine ⟨{ kernel := s'.kernel, log := authReceipt intro :: s.log }, ?_, rfl⟩
+    show recCDelegate s intro rec t = _
+    unfold recCDelegate
+    rw [hk]
+  · unfold recKDelegateAtten at hstep; rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_validateHandoff (s s' : RecChainedState) (intro rec t : CellId)
+    (h : execHandlerOne (.validateHandoffA intro rec t) s = some s') :
+    ∃ s'', execFullA s (.validateHandoffA intro rec t) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.validateHandoffA intro rec t) s s' h
+  rw [toClosedEffect] at hstep
+  change delegateAttenStep s.kernel
+    { delegator := intro, recipient := rec, target := t, keep := allAuths } = some s'.kernel at hstep
+  simp only [delegateAttenStep] at hstep
+  by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
+  · have hk : recKDelegate s.kernel intro rec t = some s'.kernel := by
+      rw [← recKDelegateAtten_allAuths_eq_recKDelegate, hstep]
+    refine ⟨{ kernel := s'.kernel, log := authReceipt intro :: s.log }, ?_, rfl⟩
+    show recCDelegate s intro rec t = _
+    unfold recCDelegate
+    rw [hk]
+  · unfold recKDelegateAtten at hstep; rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_attenuate (s s' : RecChainedState) (actor : CellId) (idx : Nat)
+    (keep : List Auth) (h : execHandlerOne (.attenuateA actor idx keep) s = some s') :
+    ∃ s'', execFullA s (.attenuateA actor idx keep) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.attenuateA actor idx keep) s s' h
+  rw [toClosedEffect] at hstep
+  change attenuateStep s.kernel { actor := actor, idx := idx, keep := keep } = some s'.kernel at hstep
+  unfold attenuateStep at hstep
+  simp only [Option.some.injEq] at hstep
+  refine ⟨attenuateStepA s actor idx keep, ?_, ?_⟩
+  · show execFullA s (.attenuateA actor idx keep) = _
+    simp only [execFullA, attenuateStepA, Option.some.injEq]
+  · show (attenuateStepA s actor idx keep).kernel = s'.kernel
+    rw [← hstep]; unfold attenuateStepA; rfl
+
+theorem handler_refines_execFullA_createSealPair (s s' : RecChainedState) (pid : Nat)
+    (actor sealerHolder unsealerHolder : CellId)
+    (h : execHandlerOne (.createSealPairA pid actor sealerHolder unsealerHolder) s = some s') :
+    ∃ s'', execFullA s (.createSealPairA pid actor sealerHolder unsealerHolder) = some s'' ∧
+      s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.createSealPairA pid actor sealerHolder unsealerHolder) s s' h
+  rw [toClosedEffect] at hstep
+  change createSealPairStep s.kernel
+    { pid := pid, actor := actor, sealerHolder := sealerHolder, unsealerHolder := unsealerHolder }
+    = some s'.kernel at hstep
+  unfold createSealPairStep at hstep
+  by_cases hg : stateAuthB s.kernel.caps actor sealerHolder = true ∧ pidFresh s.kernel pid = true
+  · rw [if_pos hg] at hstep
+    have hg1 : stateAuthB s.kernel.caps actor sealerHolder = true := hg.1
+    simp only [CreateSealPairArgs.sealerHolder, CreateSealPairArgs.unsealerHolder] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := sealerHolder, dst := sealerHolder, amt := 0 } :: s.log },
+            ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.createSealPairChainA s pid actor sealerHolder unsealerHolder = _
+    unfold Dregg2.Exec.TurnExecutorFull.createSealPairChainA
+    rw [if_pos hg1]
+    have hk : { s.kernel with
+                  caps := grant (grant s.kernel.caps sealerHolder (sealerCap pid))
+                                  unsealerHolder (unsealerCap pid) } = s'.kernel := by
+      injection hstep
+    simp only [Option.some.injEq, hk]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_seal (s s' : RecChainedState) (pid : Nat) (actor : CellId)
+    (payload : Cap) (h : execHandlerOne (.sealA pid actor payload) s = some s') :
+    ∃ s'', execFullA s (.sealA pid actor payload) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.sealA pid actor payload) s s' h
+  rw [toClosedEffect] at hstep
+  change sealStep s.kernel { pid := pid, actor := actor, payload := payload } = some s'.kernel at hstep
+  unfold sealStep at hstep
+  by_cases hg : sealGate s.kernel { pid := pid, actor := actor, payload := payload }
+  · rw [if_pos hg] at hstep
+    have hg' : (s.kernel.caps actor).any (fun c => holdsSealCapFor pid c) = true
+        ∧ payload ∈ s.kernel.caps actor := by
+      unfold sealGate at hg; simpa [Bool.and_eq_true, decide_eq_true_eq] using hg
+    simp only [SealArgs.pid, SealArgs.actor, SealArgs.payload] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := actor, dst := actor, amt := 0 } :: s.log }, ?_, rfl⟩
+    show Dregg2.Exec.TurnExecutorFull.sealChainA s pid actor payload = _
+    unfold Dregg2.Exec.TurnExecutorFull.sealChainA
+    rw [if_pos hg']
+    have hk : { s.kernel with
+                  sealedBoxes := { pairId := pid, sealer := actor, payload := payload }
+                                  :: s.kernel.sealedBoxes } = s'.kernel := by
+      injection hstep
+    simp only [Option.some.injEq, hk]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_unseal (s s' : RecChainedState) (pid : Nat) (actor recipient : CellId)
+    (h : execHandlerOne (.unsealA pid actor recipient) s = some s') :
+    ∃ s'', execFullA s (.unsealA pid actor recipient) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.unsealA pid actor recipient) s s' h
+  rw [toClosedEffect] at hstep
+  change unsealStep s.kernel { pid := pid, actor := actor, recipient := recipient } = some s'.kernel at hstep
+  unfold unsealStep at hstep
+  by_cases hg : unsealGate s.kernel { pid := pid, actor := actor, recipient := recipient }
+  · rw [if_pos hg] at hstep
+    cases hfind : findSealedBox s.kernel.sealedBoxes pid with
+    | none =>
+        rw [hfind] at hstep; exact absurd hstep (by simp)
+    | some box =>
+        rw [hfind] at hstep
+        have hg' : (s.kernel.caps actor).any (fun c => holdsSealCapFor pid c) = true := hg
+        simp only [UnsealArgs.recipient] at hstep
+        refine ⟨{ kernel := s'.kernel,
+                  log := { actor := actor, src := recipient, dst := recipient, amt := 0 } :: s.log },
+                ?_, rfl⟩
+        show Dregg2.Exec.TurnExecutorFull.unsealChainA s pid actor recipient = _
+        unfold Dregg2.Exec.TurnExecutorFull.unsealChainA
+        rw [if_pos hg', hfind]
+        have hk : { s.kernel with caps := grant s.kernel.caps recipient box.payload } = s'.kernel := by
+          injection hstep
+        simp only [Option.some.injEq, hk]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_exportSturdyRef (s s' : RecChainedState) (sw : Nat)
+    (actor exporter target : CellId) (rights : List Auth)
+    (h : execHandlerOne (.exportSturdyRefA sw actor exporter target rights) s = some s') :
+    ∃ s'', execFullA s (.exportSturdyRefA sw actor exporter target rights) = some s'' ∧
+      s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.exportSturdyRefA sw actor exporter target rights) s s' h
+  rw [toClosedEffect] at hstep
+  change exportStep s.kernel
+    { sw := sw, actor := actor, exporter := exporter, target := target, rights := rights }
+    = some s'.kernel at hstep
+  unfold exportStep at hstep
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · rw [if_pos hg] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := exporter, dst := exporter, amt := 0 } :: s.log }, ?_, rfl⟩
+    show swissExportChainA s sw actor exporter target rights = _
+    unfold swissExportChainA
+    rw [if_pos hg, hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_enlivenRef (s s' : RecChainedState) (sw : Nat)
+    (actor exporter : CellId) (claimed : List Auth)
+    (h : execHandlerOne (.enlivenRefA sw actor exporter claimed) s = some s') :
+    ∃ s'', execFullA s (.enlivenRefA sw actor exporter claimed) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.enlivenRefA sw actor exporter claimed) s s' h
+  rw [toClosedEffect] at hstep
+  change enlivenStep s.kernel { sw := sw, actor := actor, exporter := exporter, claimed := claimed }
+    = some s'.kernel at hstep
+  unfold enlivenStep at hstep
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · rw [if_pos hg] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := exporter, dst := exporter, amt := 0 } :: s.log }, ?_, rfl⟩
+    show swissEnlivenChainA s sw actor exporter claimed = _
+    unfold swissEnlivenChainA
+    rw [if_pos hg, hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_swissHandoff (s s' : RecChainedState) (sw certHash : Nat)
+    (introducer exporter : CellId)
+    (h : execHandlerOne (.swissHandoffA sw certHash introducer exporter) s = some s') :
+    ∃ s'', execFullA s (.swissHandoffA sw certHash introducer exporter) = some s'' ∧
+      s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.swissHandoffA sw certHash introducer exporter) s s' h
+  rw [toClosedEffect] at hstep
+  change handoffStep s.kernel
+    { sw := sw, certHash := certHash, introducer := introducer, exporter := exporter } = some s'.kernel at hstep
+  unfold handoffStep at hstep
+  by_cases hg : stateAuthB s.kernel.caps introducer exporter = true
+  · rw [if_pos hg] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := introducer, src := exporter, dst := exporter, amt := 0 } :: s.log }, ?_, rfl⟩
+    show swissHandoffChainA s sw certHash introducer exporter = _
+    unfold swissHandoffChainA
+    rw [if_pos hg, hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_swissDrop (s s' : RecChainedState) (sw : Nat)
+    (actor exporter : CellId) (h : execHandlerOne (.swissDropA sw actor exporter) s = some s') :
+    ∃ s'', execFullA s (.swissDropA sw actor exporter) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.swissDropA sw actor exporter) s s' h
+  rw [toClosedEffect] at hstep
+  change dropStep s.kernel { sw := sw, actor := actor, exporter := exporter } = some s'.kernel at hstep
+  unfold dropStep at hstep
+  by_cases hg : stateAuthB s.kernel.caps actor exporter = true
+  · rw [if_pos hg] at hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := exporter, dst := exporter, amt := 0 } :: s.log }, ?_, rfl⟩
+    show swissDropChainA s sw actor exporter = _
+    unfold swissDropChainA
+    rw [if_pos hg, hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_queueResize (s s' : RecChainedState) (id newCap : Nat)
+    (actor owner : CellId) (h : execHandlerOne (.queueResizeA id newCap actor owner) s = some s') :
+    ∃ s'', execFullA s (.queueResizeA id newCap actor owner) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.queueResizeA id newCap actor owner) s s' h
+  rw [toClosedEffect] at hstep
+  change resizeStep s.kernel { actor := actor, id := id, capacity := newCap, owner := owner }
+    = some s'.kernel at hstep
+  unfold resizeStep at hstep
+  by_cases hg : stateAuthB s.kernel.caps actor owner && acceptsEffects s.kernel owner
+  · rw [if_pos hg] at hstep
+    simp only [Bool.and_eq_true] at hg
+    have hk : queueResizeK s.kernel id newCap = some s'.kernel := hstep
+    refine ⟨{ kernel := s'.kernel,
+              log := { actor := actor, src := owner, dst := owner, amt := 0 } :: s.log }, ?_, rfl⟩
+    show queueResizeChainA s id newCap actor owner = _
+    unfold queueResizeChainA
+    rw [if_pos hg, hk]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+theorem handler_refines_execFullA_queuePipeline (s s' : RecChainedState) (srcId : Nat) (owner : CellId)
+    (sinkCells : List CellId) (sinkIds : List Nat)
+    (h : execHandlerOne (.queuePipelineStepA srcId owner sinkCells sinkIds) s = some s') :
+    ∃ s'', execFullA s (.queuePipelineStepA srcId owner sinkCells sinkIds) = some s'' ∧
+      s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.queuePipelineStepA srcId owner sinkCells sinkIds) s s' h
+  rw [toClosedEffect] at hstep
+  change Dregg2.Exec.Handlers.Queue.pipelineStep s.kernel
+    { srcId := srcId, owner := owner, sinkCells := sinkCells, sinkIds := sinkIds } = some s'.kernel at hstep
+  unfold Dregg2.Exec.Handlers.Queue.pipelineStep at hstep
+  simp only [PipelineArgs.srcId, PipelineArgs.owner, PipelineArgs.sinkCells, PipelineArgs.sinkIds] at hstep
+  cases hd : queueDequeueK s.kernel srcId owner with
+  | none => rw [hd] at hstep; exact absurd hstep (by simp)
+  | some pr =>
+      rcases pr with ⟨k1, m⟩
+      rw [hd] at hstep
+      cases hf : pipelineFanoutK k1 owner m sinkCells sinkIds with
+      | none => simp only [hf] at hstep; exact absurd hstep (by simp)
+      | some k2 =>
+          simp only [hf] at hstep
+          refine ⟨{ kernel := s'.kernel,
+                    log := { actor := owner, src := owner, dst := owner, amt := 0 } :: s.log },
+                  ?_, rfl⟩
+          simp only [execFullA, Dregg2.Exec.TurnExecutorFull.queuePipelineStepA, hd, hf, hstep]
+
 /-! ## §7 — THE TEETH: R1/R2/R6 holes closed in BOTH executors (parity witnesses).
 
 The payoff. For each hole, a single fixture exhibits the LIVE EXECUTOR `execFullA` accepting the attack
@@ -657,12 +1192,37 @@ seven batches the registry packs — would FAIL these pins (and the build). -/
 #assert_axioms execHandlerOne_kernel
 #assert_axioms handler_refines_execFullA_transfer
 #assert_axioms handler_refines_execFullA_release
+#assert_axioms handler_refines_execFullA_mint
+#assert_axioms handler_refines_execFullA_burn
+#assert_axioms handler_refines_execFullA_createEscrow
+#assert_axioms handler_refines_execFullA_refund
+#assert_axioms handler_refines_execFullA_createObligation
+#assert_axioms handler_refines_execFullA_slashObligation
+#assert_axioms handler_refines_execFullA_fulfillObligation
+#assert_axioms handler_refines_execFullA_releaseCommitted
+#assert_axioms handler_refines_execFullA_refundCommitted
+#assert_axioms handler_refines_execFullA_bridgeMint
+#assert_axioms handler_refines_execFullA_revoke
 #assert_axioms handler_refines_execFullA_stateWrite
 #assert_axioms handler_refines_execFullA_cellSeal
 #assert_axioms handler_refines_execFullA_cellUnseal
 #assert_axioms handler_refines_execFullA_cellDestroy
 #assert_axioms handler_refines_execFullA_refreshDelegation
 #assert_axioms handler_refines_execFullA_emitEvent
+#assert_axioms handler_refines_execFullA_delegate
+#assert_axioms handler_refines_execFullA_delegateAtten
+#assert_axioms handler_refines_execFullA_introduce
+#assert_axioms handler_refines_execFullA_validateHandoff
+#assert_axioms handler_refines_execFullA_attenuate
+#assert_axioms handler_refines_execFullA_createSealPair
+#assert_axioms handler_refines_execFullA_seal
+#assert_axioms handler_refines_execFullA_unseal
+#assert_axioms handler_refines_execFullA_exportSturdyRef
+#assert_axioms handler_refines_execFullA_enlivenRef
+#assert_axioms handler_refines_execFullA_swissHandoff
+#assert_axioms handler_refines_execFullA_swissDrop
+#assert_axioms handler_refines_execFullA_queueResize
+#assert_axioms handler_refines_execFullA_queuePipeline
 
 /-! ## §DEFER — honest scope of THIS cutover keystone (additive; the call-site switch is mechanical).
 
@@ -673,13 +1233,17 @@ Deliberately OUT of this file (documented, NOT a silent gap):
     `toClosedEffect`) is the next, MECHANICAL step — the algebra and its global laws are proved HERE so
     that switch is a rename, not a re-proof.
 
-  * **The strengthening for the remaining 53 constructors.** `handler_refines_execFullA_*` is proved for
-    the three HOLE-CLOSING representatives (transfer R1, release R2, state-write R6). The pattern is
-    UNIFORM and mechanical for the rest: each handler `step` is `(extra gate) ∧ (the exact bare chained
-    step `execFullA` runs)`, so a committed handler step unwraps to the bare step and the kernels agree —
-    EXACTLY the transfer/release proofs, per arm. The escrow-create / mint / burn / bridge / seal / swiss
-    / delegate / queue arms each follow the transfer template (gate-then-bare-step); the
-    obligation/committed/slash/fulfil ALIASES inherit their target's proof verbatim.
+  * **The strengthening for the remaining constructors.** `handler_refines_execFullA_*` is now proved for
+    transfer R1, release/refund R2, mint/burn/createEscrow supply, state-write R6, the lifecycle family,
+    authority (delegate/delegateAtten/introduce/validateHandoff/attenuate), seal/swiss, and queue
+    allocate/resize/pipeline. SKIPPED (documented gate / kernel-op mismatch):
+    `queueAllocateA` (handler `queueAllocateK` uses `cell` as owner; `queueAllocateChainA` passes
+    `actor` as owner — kernels disagree when `actor ≠ cell`), `queueEnqueueA` (handler:
+    `stateAuthB sender sender` + sender liveness; execFullA: `stateAuthB actor cell` + owner liveness),
+    `queueDequeueA` (handler: P0-1 binding only; execFullA: adds `stateAuthB actor cell` + owner
+    liveness), `queueAtomicTxA` (handler: bare-kernel `queueAtomicTxChainK` fold; execFullA: chained
+    `queueAtomicTxChainA` sub-ops with per-op writer/owner gates). Reconcile at cutover, then the
+    template discharges verbatim.
 
   * **The state-write existence-predicate MISMATCH — RESOLVED (R6 closed in the live executor).** The
     bare `EffectsState.stateStep` now ALSO consults lifecycle-LIVENESS (`cellLive`, definitionally

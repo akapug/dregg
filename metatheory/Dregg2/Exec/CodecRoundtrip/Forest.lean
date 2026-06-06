@@ -115,7 +115,6 @@ theorem encodeChildrenW_cons_shape (a : WChild) (as : List WChild) (rest : PStat
   simp [List.append_assoc]
 
 /-! ### §15d — the NODE/EDGE `do`-block element shapes (rebracket into the parser-step sequence).
-
 `encodeForestW`/`encodeChildW` are `String ++` chains; we rebracket each into the right-associated
 `tag ++ (field ++ (sep ++ …))` form the `lit`/sub-parse steps consume. Following §11's perf gotchas: a
 single `String.toList_append`/`List.append_assoc` `simp only` (NOT full `simp`) right-associates the
@@ -320,58 +319,12 @@ private theorem demoTree_wf : WfForest demoTree :=
 example : parseForestW (forestSize demoTree) ((encodeForestW demoTree).toList ++ ['x'])
             = some (demoTree, ['x']) :=
   parseForestW_roundtrip demoTree ['x'] demoTree_wf (forestSize demoTree) (le_refl _)
-/-! Each charge in `authSize`/`authListSize` is paid by ≥1 encoded byte. Mutual: the `oneOf` body's `+1`
-by the `{"oneof":[` prefix, each candidate by its own encoding (recursively), each tail comma by `,`. -/
-mutual
-private theorem authSize_le_encode (a : AuthW) : authSize a ≤ (encodeAuthW a).toList.length := by
-  -- every arm's encoding opens with `'{'` (length ≥ 1); `ht` specializes per case below.
-  obtain ⟨t, ht⟩ := encodeAuthW_head a
-  cases a with
-  | oneOf cands i =>
-      -- `authSize (.oneOf …) = 1 + authListSize cands`; the encoding holds the candidate list verbatim,
-      -- prefixed by `{"oneof":[` (length 9) — slack covers the `+1`.
-      have hl := authListSize_le_encode cands
-      show 1 + authListSize cands ≤ (encodeAuthW (.oneOf cands i)).toList.length
-      -- `encodeAuthW` is mutual ⇒ doesn't reduce by `rfl`; unfold its oneOf equation via `simp only`.
-      simp only [encodeAuthW, String.toList_append, List.length_append,
-        show ("{\"oneof\":[":String).toList.length = 10 from by decide]
-      omega
-  | _ =>
-      -- every other arm has `authSize = 1`; its encoding (now `'{' :: t` via `ht`) has length ≥ 1.
-      rw [ht]; simp only [authSize, List.length_cons]; omega
-private theorem authListSize_le_encode (as : List AuthW) : authListSize as ≤ (encodeAuthListW as).toList.length := by
-  cases as with
-  | nil => simp [authListSize]
-  | cons a as' =>
-      -- `[` + first auth + tail + `]`; the first via `authSize_le_encode`, the tail via the tail bound.
-      have ha := authSize_le_encode a
-      have ht := authTailSize_le_encode as'
-      have hshape := encAuthListW_cons_shape a as' []
-      simp only [List.append_nil] at hshape
-      show 1 + authSize a + authListSize as' ≤ (encodeAuthListW (a :: as')).toList.length
-      rw [hshape]
-      simp only [List.length_cons, List.length_append]
-      omega
-private theorem authTailSize_le_encode (as : List AuthW) : authListSize as ≤ (encodeAuthTailW as).toList.length := by
-  cases as with
-  | nil => simp [authListSize, encodeAuthTailW]
-  | cons a as' =>
-      -- `,` + auth + tail; the auth via `authSize_le_encode`, the tail by self-recursion.
-      have ha := authSize_le_encode a
-      have ht := authTailSize_le_encode as'
-      have hshape := encAuthTailW_cons_shape a as' []
-      simp only [List.append_nil] at hshape
-      show 1 + authSize a + authListSize as' ≤ (encodeAuthTailW (a :: as')).toList.length
-      rw [hshape]
-      simp only [List.length_cons, List.length_append]
-      omega
-end
 
 /-! Each charge in `forestSize`/`childrenSize` is paid by ≥1 encoded byte. Mutual: the node's `+1` by the
 `{"auth":` prefix, the credential by `authSize_le_encode`, each edge's `+2` by its `{"holder":`-led body and
 the `sub` recursion. The fuel-adequacy fact the envelope parser relies on. -/
 mutual
-private theorem forestSize_le_encode (f : WForest) : forestSize f ≤ (encodeForestW f).toList.length := by
+theorem forestSize_le_encode (f : WForest) : forestSize f ≤ (encodeForestW f).toList.length := by
   obtain ⟨na, cavs, a, kids⟩ := f
   have hna := authSize_le_encode na
   have hkids := childrenSize_le_encode kids

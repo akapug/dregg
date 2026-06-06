@@ -228,6 +228,8 @@ def subWFContract : Contract where
     | none    => simp only [Option.getD_none]; exact h
   shape := .other
 
+
+
 /-- **`subsetNullifiersContract base` — the `⊆`-shaped grow-only nullifier contract.** -/
 def subsetNullifiersContract (base : List Nat) : Contract where
   Inv s := base ⊆ s.kernel.nullifiers
