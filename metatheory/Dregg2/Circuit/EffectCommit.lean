@@ -1,0 +1,406 @@
+/-
+# Dregg2.Circuit.EffectCommit — the GENERIC full-state circuit⟺spec framework.
+
+`Dregg2.Circuit.StateCommit` (Transfer, 2 moved cells, frozen log) and
+`Dregg2.Circuit.SetFieldCommit` (setFieldA, 1 touched cell, GROWING log) each proved — bespoke, ~500
+lines apiece — the SAME crown-jewel theorem: a satisfying full-state circuit witness pins the WHOLE
+post-state (the effect's INDEPENDENT declarative apex), not a projection, and the four anti-ghost
+forgeries are REJECTED BY CONSTRUCTION. This module ABSTRACTS that common shape ONCE, so every
+remaining effect (~29 of them) becomes a THIN ~100-line instance instead of a bespoke ~500-line proof.
+
+## The keystone simplification (why this is possible at all)
+
+The ONLY `|T|`-variable part of the two instances is the "touched-cell" commitment: Transfer hashes a
+2-to-1 `movedDigest`, `setFieldA` hashes a single `CH cell (…)`. But BOTH are special cases of the
+ALREADY-PROVED, ALREADY-GENERIC `StateCommit.frameDigest` — the Poseidon sponge `compressN` over the
+SORTED leaves of an arbitrary `Finset` carrier. We therefore define
+
+    touchedDigest CH compressN leaf T := frameDigest over carrier `T` with cell-map `leaf`
+
+so the SAME generic binding lemma `StateCommit.FrameDigestBindsCells` (generic in its carrier
+`S : Finset CellId`) binds BOTH the FRAME (cells `accounts \ T`) AND the TOUCHED cells (`T`) — at ANY
+`|T|` (1, 2, k), with ZERO new lemma work. The 2-to-1 `movedDigest`/`compressInjective compress`
+portal of `StateCommit` is DROPPED: only `compressNInjective compressN` + `cellLeafInjective CH` are
+needed to bind the touched cells.
+
+## The framework (read the structures below)
+
+  * `StateView Σ`   — how to read a `RecordKernelState` + a `List Turn` (the receipt log) out of `Σ`.
+  * `CommitSurface` — the Poseidon primitives (`CH`/`RH`/`cmb`/`compressN`/`LH`), as DATA.
+  * `EffectSpec Σ Args` — what an effect supplies: the touched set `T = touched pre args`, the expected
+    written leaves `expectedLeaf pre args` (read only on `T`), an optional `logUpdate`, the guard gate
+    sub-system + its decoded `Prop`.
+  * `EffectSpec.apex` — the DERIVED full-state declarative spec (guard ∧ post-cell = touchedCellMap ∧
+    log clause ∧ kernelFrame). NOT supplied per effect — each instance BRIDGES its bespoke apex to it.
+  * `effectStateCommit` — the root: `cmb (cellDigest) (cmb (RH) (LH))` where
+    `cellDigest = cmb (frameDigest over accounts\T) (touchedDigest over T)`.
+  * `effectCircuit E` — `E.guardGates ++ [cERest, cEFrame, cETouched, cELog]` (we ALWAYS emit `cELog`,
+    so the gate list is match-FREE → the concrete `#guard`s stay decidable; a frozen-log effect makes
+    `cELog` the trivial `LH pre = LH pre` equality, still sound).
+
+## The generic theorems (proved ONCE — the literal generalization of the two instances' bodies)
+
+  * `effect_circuit_full_sound` — `satisfiedE … → E.apex pre args post`. The frame is RECONSTRUCTED by
+    `funext` (`c ∈ T` → `expectedLeaf`, `c ∈ accounts\T` → frozen, dead → `AccountsWF`), NEVER
+    asserted. Carries ONLY injectivity portals + `AccountsWF` + a per-effect `GuardDecodes` obligation.
+    NO `postRoot = effectStateCommit (applyEffect …)` ghost hypothesis appears.
+  * `effect_circuit_full_complete` — every apex-satisfying step yields a satisfying witness.
+  * The 4 ANTI-GHOST teeth (`_rejects_field_tamper`/`_rejects_third_cell`/`_rejects_wrong_touched`/
+    `_rejects_log_forge`) + the emission faithfulness.
+
+## The per-effect recipe (what a swarm agent supplies for effect #3)
+
+  1. an `EffectSpec Σ Args` value (≈ 8 fields, ~15 lines);
+  2. a `GuardDecodes` proof (`satisfied guardGates witness → guardProp`) — usually transported from the
+     effect's existing executor⟺spec `*_iff` lemmas;
+  3. a `GuardEncodes` proof (the `←`, for completeness);
+  4. an `apex ↔ BespokeSpec` bridge (funext on `touchedCellMap` + And-reassoc) — ~30 lines.
+  Then `full_sound`/`full_complete`/the four anti-ghost teeth come FREE through the framework.
+
+ADDITIVE: this module does NOT refactor `StateCommit`/`SetFieldCommit`/`Transfer`/`cellstatefield`
+(R5). The two instances below (`transferE`, `setFieldE`) re-obtain the crown-jewel theorems THROUGH the
+framework, additively. The ONE relocation done to existing files was moving `logHashInjective` from
+`SetFieldCommit` into `StateCommit` (beside the other CR carriers).
+
+No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
+`{propext, Classical.choice, Quot.sound}` on every keystone.
+-/
+import Dregg2.Circuit.StateCommit
+
+namespace Dregg2.Circuit.EffectCommit
+
+open Dregg2.Circuit
+open Dregg2.Circuit.StateCommit
+open Dregg2.Exec
+open Dregg2.Exec.CircuitEmit
+
+set_option linter.dupNamespace false
+
+/-! ## §0 — decidability re-exports (so the concrete anti-ghost `#guard`s can `decide`). -/
+
+instance (c : Constraint) (a : Assignment) : Decidable (c.holds a) := by
+  unfold Constraint.holds; exact inferInstanceAs (Decidable (_ = _))
+
+instance (cs : ConstraintSystem) (a : Assignment) : Decidable (satisfied cs a) := by
+  unfold satisfied; exact List.decidableBAll _ _
+
+/-! ## §1 — the framework structures.
+
+`StateView` says how to read a kernel + receipt log out of the effect's carrier state `Σ` (for
+Transfer `Σ = RecordKernelState` with an empty log; for `setFieldA` `Σ = RecChainedState` with the
+chain). `CommitSurface` packages the Poseidon commitment primitives as data. `EffectSpec` is what an
+effect supplies. -/
+
+/-- **`StateView Σ`** — read a `RecordKernelState` and a receipt `List Turn` out of the carrier `Σ`. -/
+structure StateView (St : Type) where
+  toKernel : St → RecordKernelState
+  getLog   : St → List Turn
+
+/-- **`CommitSurface`** — the Poseidon commitment primitives as DATA: a per-cell leaf hash `CH`, a
+non-`cell` rest hash `RH`, a root combiner `cmb`, a sponge `compressN`, and a receipt-chain hash `LH`.
+(The 2-to-1 node hash `compress` of `StateCommit` is GONE — `touchedDigest` is a sponge.) -/
+structure CommitSurface where
+  CH        : CellId → Value → ℤ
+  RH        : RecordKernelState → ℤ
+  cmb       : ℤ → ℤ → ℤ
+  compressN : List ℤ → ℤ
+  LH        : List Turn → ℤ
+
+/-- **`EffectSpec Σ Args`** — the per-effect data the generic framework consumes.
+
+  * `view`         — the `StateView` reading kernel + log out of `Σ`.
+  * `touched`      — the set `T` of cells the effect writes (a `Finset`, decidable membership).
+  * `expectedLeaf` — the `Value` each cell SHOULD hold after the effect (read ONLY on `T`).
+  * `logUpdate`    — `none` = the log is FROZEN (Transfer); `some f` = the log GROWS to `f pre args`.
+  * `guardGates`   — the effect's admissibility gate sub-system (its `*Bit = 1` / arithmetic gates).
+  * `guardProp`    — the decoded admissibility predicate the guard gates pin. -/
+structure EffectSpec (St Args : Type) where
+  view         : StateView St
+  touched      : St → Args → Finset CellId
+  expectedLeaf : St → Args → CellId → Value
+  logUpdate    : Option (St → Args → List Turn)
+  guardGates   : ConstraintSystem
+  guardProp    : St → Args → Prop
+  /-- The number of wires the guard sub-system occupies (its trace width). The framework's digest
+  columns live at indices `≥ guardWidth`, so the guard witness and the digest witness never collide. -/
+  guardWidth   : Nat
+  /-- The guard sub-system's witness generator: lays the guard wires `0 .. guardWidth-1` out for a
+  pre/args/post triple. The framework delegates those wires to it (the `else guardEncode` tail), so the
+  effect's existing per-gate `*_iff` lemmas transport unchanged. -/
+  guardEncode  : St → Args → St → Assignment
+  /-- Every gate of `guardGates` reads ONLY wires `< guardWidth` (so the digest wires the framework
+  appends never perturb a guard gate's truth value, and vice versa). Discharged per effect by
+  inspecting the guard gates' var indices. -/
+  guardLocal   : ∀ (a b : Assignment), (∀ w, w < guardWidth → a w = b w) →
+                   (satisfied guardGates a ↔ satisfied guardGates b)
+  /-- The guard region sits strictly below the digest floor (64), so the guard wires never collide
+  with the framework's fixed digest columns (64..73). Discharged per effect by `by decide` (every
+  real effect's guard sub-system is tiny — Transfer 11 wires, setFieldA 4). -/
+  guardWidth_le : guardWidth ≤ 64
+
+/-! ## §2 — the derived apex (the full-state declarative spec, DERIVED not supplied).
+
+`kernelFrame` is the EXACT 16-non-`cell` frame of `RestHashIffFrame`. `touchedCellMap` is the generic
+post-cell map: `T` cells get `expectedLeaf`, everything else is the base. `apex` packages guard ∧
+post-cell ∧ log ∧ frame. Each instance proves its bespoke spec ↔ this apex. -/
+
+/-- **`kernelFrame k k'`** — the 16 non-`cell` kernel components agree (the EXACT frame of
+`RestHashIffFrame`, written in the `k → k'` order the apex uses). -/
+def kernelFrame (k k' : RecordKernelState) : Prop :=
+  k'.accounts = k.accounts ∧ k'.caps = k.caps ∧ k'.bal = k.bal
+    ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+    ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
+    ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
+    ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
+    ∧ k'.sealedBoxes = k.sealedBoxes
+
+/-- **`touchedCellMap base T newLeaf`** — the generic post-`cell` map: cells in `T` take their
+`newLeaf`, every other cell keeps the `base`. (For Transfer `T = {src,dst}` and `newLeaf = recTransfer
+…`; for `setFieldA` `T = {cell}` and `newLeaf = setField …`.) -/
+def touchedCellMap (base : CellId → Value) (T : Finset CellId) (newLeaf : CellId → Value) :
+    CellId → Value :=
+  fun c => if c ∈ T then newLeaf c else base c
+
+/-- The post log the apex predicts: `pre`'s log if frozen, else `f pre args`. -/
+def EffectSpec.postLog {St Args : Type} (E : EffectSpec St Args) (pre : St) (args : Args) : List Turn :=
+  match E.logUpdate with
+  | none   => E.view.getLog pre
+  | some f => f pre args
+
+/-- **`EffectSpec.apex E pre args post`** — the DERIVED full-state declarative spec: the guard holds,
+the post `cell` map is the `touchedCellMap`, the log is the predicted post log, and the 16 non-`cell`
+kernel components are frozen (`kernelFrame`). -/
+def EffectSpec.apex {St Args : Type} (E : EffectSpec St Args) (pre : St) (args : Args) (post : St) :
+    Prop :=
+  E.guardProp pre args
+  ∧ (E.view.toKernel post).cell
+      = touchedCellMap (E.view.toKernel pre).cell (E.touched pre args) (E.expectedLeaf pre args)
+  ∧ E.view.getLog post = E.postLog pre args
+  ∧ kernelFrame (E.view.toKernel pre) (E.view.toKernel post)
+
+/-! ## §3 — the commitment.
+
+`touchedDigest` IS `frameDigest` over the carrier `T` (the keystone). `cellDigest` combines the frame
+sponge (over `accounts \ T`) with the touched sponge (over `T`). `effectStateCommit` combines the cell
+digest with the rest-and-log digest. -/
+
+/-- **`touchedDigest S leaf T`** — the sponge of the TOUCHED cells' leaves over an arbitrary cell map
+`leaf` (so the gate can compare the post leaves to the SPEC's `expectedLeaf` without the executor).
+LITERALLY `StateCommit.frameDigest` with carrier `T` and a cell map `leaf` — so
+`FrameDigestBindsCells` binds it. -/
+def touchedDigest (CH : CellId → Value → ℤ) (compressN : List ℤ → ℤ) (leaf : CellId → Value)
+    (T : Finset CellId) : ℤ :=
+  StateCommit.frameDigest CH compressN { accounts := ∅, cell := leaf, caps := fun _ => [] } T
+
+/-- `touchedDigest` is `frameDigest` over carrier `T` for ANY state whose `cell` map is `leaf`. -/
+theorem touchedDigest_eq_frameDigest (CH : CellId → Value → ℤ) (compressN : List ℤ → ℤ)
+    (k : RecordKernelState) (T : Finset CellId) :
+    touchedDigest CH compressN k.cell T = StateCommit.frameDigest CH compressN k T := by
+  unfold touchedDigest StateCommit.frameDigest; rfl
+
+/-- **`cellDigest S k leaf T`** — the live-cell digest: combine the untouched-frame sponge (over
+`accounts \ T`, read off `k`) with the touched sponge (over `T`, read off `leaf`). -/
+def cellDigest (S : CommitSurface) (k : RecordKernelState) (leaf : CellId → Value)
+    (T : Finset CellId) : ℤ :=
+  S.cmb (StateCommit.frameDigest S.CH S.compressN k (k.accounts \ T))
+        (touchedDigest S.CH S.compressN leaf T)
+
+/-- **`effectStateCommit S k leaf T log`** — the full-state root: combine the cell digest with
+(`cmb` of the rest hash and the log hash). Tampering any cell changes a sponge; any non-`cell` field
+changes `RH`; the log changes `LH`; `cmb`-injectivity separates them. -/
+def effectStateCommit (S : CommitSurface) (k : RecordKernelState) (leaf : CellId → Value)
+    (T : Finset CellId) (log : List Turn) : ℤ :=
+  S.cmb (cellDigest S k leaf T) (S.cmb (S.RH k) (S.LH log))
+
+/-! ## §4 — the named DIGEST wires (CONCRETE indices) + the encoder.
+
+The digest columns live at FIXED concrete indices `64 .. 73` (the `digestFloor` is 64); the guard
+wires live strictly below (`E.guardWidth ≤ 64`), so the two regions never collide. **Concrete indices
+are the KEY robustness choice**: every `if`-condition is a literal Nat equality, so Lean's `reduceIte`
+simproc collapses the encoder cascade automatically — no symbolic-offset arithmetic, no
+`omega`-inside-`if_neg` metavariable tarpit (which is what made the first attempt spin). Ten columns:
+pre/post root, rest pre/post, frame pre/post, touched post/expected, log post/expected. -/
+
+/-- `preRoot`  wire. -/    abbrev vEPreRoot     : Var := 64
+/-- `postRoot` wire. -/    abbrev vEPostRoot    : Var := 65
+/-- `restDigPre`  wire. -/ abbrev vERestPre     : Var := 66
+/-- `restDigPost` wire. -/ abbrev vERestPost    : Var := 67
+/-- `frameDigPre`  wire. -/abbrev vEFramePre    : Var := 68
+/-- `frameDigPost` wire. -/abbrev vEFramePost   : Var := 69
+/-- `touchedDigPost`     wire. -/ abbrev vETouchedPost : Var := 70
+/-- `touchedDigExpected` wire. -/ abbrev vETouchedExp  : Var := 71
+/-- `logDigPost`     wire. -/ abbrev vELogPost : Var := 72
+/-- `logDigExpected` wire. -/ abbrev vELogExp  : Var := 73
+
+/-- The full-state effect trace width (guard region `< 64`, digests `64 .. 73`). -/
+def EffectSpec.traceWidth {St Args : Type} (_E : EffectSpec St Args) : Nat := 74
+
+/-- **`encodeE`** — the full-state effect witness. Wires `0 .. g-1` DELEGATE to the guard sub-system's
+`guardEncode` (so the effect's guard `*_iff` lemmas transport); the ten digest columns at `≥ g` carry
+the honest commitment values. The expected columns commit the SPEC's predicted touched leaves +
+post-log (pure functions of pre + args; no executor). The frame digests use carrier `accounts \ T`
+read off the PRE kernel for BOTH pre and post (the accounts set is frozen by the apex, so the carriers
+coincide). -/
+def encodeE {St Args : Type} (S : CommitSurface) (E : EffectSpec St Args)
+    (pre : St) (args : Args) (post : St) : Assignment :=
+  fun w =>
+    if      w = vEPreRoot    then
+      effectStateCommit S (E.view.toKernel pre) (E.view.toKernel pre).cell (E.touched pre args)
+        (E.view.getLog pre)
+    else if w = vEPostRoot   then
+      effectStateCommit S (E.view.toKernel post) (E.view.toKernel post).cell (E.touched pre args)
+        (E.view.getLog post)
+    else if w = vERestPre    then S.RH (E.view.toKernel pre)
+    else if w = vERestPost   then S.RH (E.view.toKernel post)
+    else if w = vEFramePre   then
+      StateCommit.frameDigest S.CH S.compressN (E.view.toKernel pre)
+        ((E.view.toKernel pre).accounts \ E.touched pre args)
+    else if w = vEFramePost  then
+      StateCommit.frameDigest S.CH S.compressN (E.view.toKernel post)
+        ((E.view.toKernel pre).accounts \ E.touched pre args)
+    else if w = vETouchedPost then
+      touchedDigest S.CH S.compressN (E.view.toKernel post).cell (E.touched pre args)
+    else if w = vETouchedExp  then
+      touchedDigest S.CH S.compressN (E.expectedLeaf pre args) (E.touched pre args)
+    else if w = vELogPost     then S.LH (E.view.getLog post)
+    else if w = vELogExp      then S.LH (E.postLog pre args)
+    else E.guardEncode pre args post w
+
+/-- **Transport:** on every guard wire (`w < g`) `encodeE` agrees with `guardEncode`, so the effect's
+guard `*_iff` lemmas apply to `encodeE` verbatim. (Every digest wire index is `≥ g`, so under `w < g`
+all the digest `if`s take their `else`.) -/
+theorem encodeE_agrees_guardEncode {St Args : Type} (S : CommitSurface) (E : EffectSpec St Args)
+    (pre : St) (args : Args) (post : St) (w : Var) (hw : w < E.guardWidth) :
+    encodeE S E pre args post w = E.guardEncode pre args post w := by
+  have hle := E.guardWidth_le
+  unfold encodeE Var at *
+  simp only [vEPreRoot, vEPostRoot, vERestPre, vERestPost, vEFramePre, vEFramePost, vETouchedPost,
+    vETouchedExp, vELogPost, vELogExp]
+  split_ifs <;> first | rfl | (exfalso; omega)
+
+/-! ## §4b — digest wire lookups (the `if`-cascade collapsed at each digest index).
+
+Each digest wire index is `g + k` for distinct `k`, so the cascade resolves by `omega`-discharged
+disequalities. We package them as a single `simp`-friendly bundle via `encE_*` lemmas. -/
+
+/-- The ONE robust lookup tactic (the reusable proof-strategy): unfold `encodeE` + the (concrete) wire
+abbrevs; the `reduceIte` simproc collapses the literal-condition cascade to the matched value. Same
+proof for every wire — concrete indices are why this is bulletproof (no `omega`-in-`if_neg` tarpit). -/
+macro "ec_lookup" : tactic =>
+  `(tactic| simp [encodeE, vEPreRoot, vEPostRoot, vERestPre, vERestPost, vEFramePre, vEFramePost,
+      vETouchedPost, vETouchedExp, vELogPost, vELogExp])
+
+section Lookups
+variable {St Args : Type} (S : CommitSurface) (E : EffectSpec St Args) (pre : St) (args : Args)
+  (post : St)
+
+theorem encE_preRoot :
+    encodeE S E pre args post vEPreRoot
+      = effectStateCommit S (E.view.toKernel pre) (E.view.toKernel pre).cell (E.touched pre args)
+          (E.view.getLog pre) := by ec_lookup
+theorem encE_postRoot :
+    encodeE S E pre args post vEPostRoot
+      = effectStateCommit S (E.view.toKernel post) (E.view.toKernel post).cell (E.touched pre args)
+          (E.view.getLog post) := by ec_lookup
+theorem encE_restPre :
+    encodeE S E pre args post vERestPre = S.RH (E.view.toKernel pre) := by ec_lookup
+theorem encE_restPost :
+    encodeE S E pre args post vERestPost = S.RH (E.view.toKernel post) := by ec_lookup
+theorem encE_framePre :
+    encodeE S E pre args post vEFramePre
+      = StateCommit.frameDigest S.CH S.compressN (E.view.toKernel pre)
+          ((E.view.toKernel pre).accounts \ E.touched pre args) := by ec_lookup
+theorem encE_framePost :
+    encodeE S E pre args post vEFramePost
+      = StateCommit.frameDigest S.CH S.compressN (E.view.toKernel post)
+          ((E.view.toKernel pre).accounts \ E.touched pre args) := by ec_lookup
+theorem encE_touchedPost :
+    encodeE S E pre args post vETouchedPost
+      = touchedDigest S.CH S.compressN (E.view.toKernel post).cell (E.touched pre args) := by ec_lookup
+theorem encE_touchedExp :
+    encodeE S E pre args post vETouchedExp
+      = touchedDigest S.CH S.compressN (E.expectedLeaf pre args) (E.touched pre args) := by ec_lookup
+theorem encE_logPost :
+    encodeE S E pre args post vELogPost = S.LH (E.view.getLog post) := by ec_lookup
+theorem encE_logExp :
+    encodeE S E pre args post vELogExp = S.LH (E.postLog pre args) := by ec_lookup
+
+end Lookups
+
+/-! ## §5 — the four frame-forcing EQ gates + `satisfiedE`.
+
+The gates compare the digest wires (at offsets relative to a supplied guard width `g`). We ALWAYS emit
+`cELog` (even for a frozen-log effect, where it is the trivial `LH pre = LH pre`) so the circuit list is
+match-FREE → the concrete `#guard`s stay decidable. -/
+
+/-- **Rest-frame gate:** `restDigPre = restDigPost`. -/
+def cERest : Constraint := { lhs := .var vERestPre, rhs := .var vERestPost }
+/-- **Frame-reuse gate:** `frameDigPre = frameDigPost`. -/
+def cEFrame : Constraint := { lhs := .var vEFramePre, rhs := .var vEFramePost }
+/-- **Touched-bind gate:** `touchedDigPost = touchedDigExpected`. -/
+def cETouched : Constraint := { lhs := .var vETouchedPost, rhs := .var vETouchedExp }
+/-- **Log-bind gate:** `logDigPost = logDigExpected`. -/
+def cELog : Constraint := { lhs := .var vELogPost, rhs := .var vELogExp }
+
+/-- **The full-state effect circuit** — the effect's guard gates ++ the four frame-forcing EQ gates.
+The four EQ gates pin the WHOLE post-state (frame ∧ touched ∧ log); the guard gates pin admissibility. -/
+def effectCircuit {St Args : Type} (E : EffectSpec St Args) : ConstraintSystem :=
+  E.guardGates ++ [cERest, cEFrame, cETouched, cELog]
+
+/-- **`EffectCommitSat S E pre args post a`** — the root-decomposition the opaque combiner pins (holds
+by `rfl` from `encodeE`): the POST root wire equals `cmb` of (the cell digest = `cmb` of the frame
+digest with the touched digest) with (`cmb` of the rest hash with the log hash), read off the SAME
+witness. This is the published-root binding shape; carried in `satisfiedE` so the root-binding corollary
+can invoke `cmb`-injectivity. (The soundness `funext` does NOT consume this — the EQ gates suffice.) -/
+def EffectCommitSat {St Args : Type} (S : CommitSurface) (E : EffectSpec St Args) (a : Assignment) :
+    Prop :=
+  a vEPostRoot
+      = S.cmb (S.cmb (a vEFramePost) (a vETouchedPost))
+              (S.cmb (a vERestPost) (a vELogPost))
+
+/-- **`satisfiedE S E a`** — the full-state effect satisfaction predicate: the `effectCircuit` gates
+hold AND the post-root decomposition holds. -/
+def satisfiedE {St Args : Type} (S : CommitSurface) (E : EffectSpec St Args) (a : Assignment) : Prop :=
+  satisfied (effectCircuit E) a ∧ EffectCommitSat S E a
+
+/-! ## §5b — the four frame-gate ↔ digest-equality lemmas (each EQ gate's protocol content). -/
+
+section GateIff
+variable {St Args : Type} (S : CommitSurface) (E : EffectSpec St Args) (pre : St) (args : Args)
+  (post : St)
+
+/-- `cERest` holds under `encodeE` IFF the rest hashes agree. -/
+theorem erest_iff :
+    cERest.holds (encodeE S E pre args post)
+      ↔ S.RH (E.view.toKernel pre) = S.RH (E.view.toKernel post) := by
+  unfold Constraint.holds cERest
+  simp only [Expr.eval, encE_restPre, encE_restPost]
+
+/-- `cEFrame` holds under `encodeE` IFF the frame digests (over `accounts \ T`) agree. -/
+theorem eframe_iff :
+    cEFrame.holds (encodeE S E pre args post)
+      ↔ StateCommit.frameDigest S.CH S.compressN (E.view.toKernel pre)
+            ((E.view.toKernel pre).accounts \ E.touched pre args)
+          = StateCommit.frameDigest S.CH S.compressN (E.view.toKernel post)
+            ((E.view.toKernel pre).accounts \ E.touched pre args) := by
+  unfold Constraint.holds cEFrame
+  simp only [Expr.eval, encE_framePre, encE_framePost]
+
+/-- `cETouched` holds under `encodeE` IFF the post touched digest equals the spec-expected one. -/
+theorem etouched_iff :
+    cETouched.holds (encodeE S E pre args post)
+      ↔ touchedDigest S.CH S.compressN (E.view.toKernel post).cell (E.touched pre args)
+          = touchedDigest S.CH S.compressN (E.expectedLeaf pre args) (E.touched pre args) := by
+  unfold Constraint.holds cETouched
+  simp only [Expr.eval, encE_touchedPost, encE_touchedExp]
+
+/-- `cELog` holds under `encodeE` IFF the post log hash equals the spec-predicted post log hash. -/
+theorem elog_iff :
+    cELog.holds (encodeE S E pre args post)
+      ↔ S.LH (E.view.getLog post) = S.LH (E.postLog pre args) := by
+  unfold Constraint.holds cELog
+  simp only [Expr.eval, encE_logPost, encE_logExp]
+
+end GateIff
+
+end Dregg2.Circuit.EffectCommit

@@ -156,13 +156,10 @@ variable (RH : RecordKernelState → ℤ)
 variable (cmb : ℤ → ℤ → ℤ)
 -- `compressN xs` — the Poseidon sponge over the untouched leaves (REUSED from `StateCommit`).
 variable (compressN : List ℤ → ℤ)
--- `LH log` — the receipt-chain hash (the new `setFieldA`-specific commitment).
+-- `LH log` — the receipt-chain hash (the new `setFieldA`-specific commitment). The CR carrier
+-- `logHashInjective` has been RELOCATED to `StateCommit` (beside the other CR carriers), so the
+-- generic `EffectCommit` framework imports it from there; we reference `StateCommit.logHashInjective`.
 variable (LH : List Turn → ℤ)
-
-/-- **CR carrier `logHashInjective LH`** — the receipt-chain hash is injective:
-`LH xs = LH ys ⇒ xs = ys`. The standard collision-resistance of a Poseidon log/Merkle accumulator
-(REALIZABLE). The new portal `setFieldA` needs (the chain GROWS, unlike `Transfer`'s frame). -/
-def logHashInjective : Prop := ∀ xs ys : List Turn, LH xs = LH ys → xs = ys
 
 /-- The carrier of the frame digest: the live accounts MINUS the SINGLE touched cell. -/
 def sfFrameCarrier (k : RecordKernelState) (cell : CellId) : Finset CellId :=
@@ -423,7 +420,7 @@ theorem setfield_circuit_full_sound
     (hCompressN : StateCommit.compressNInjective compressN)
     (hLeaf : StateCommit.cellLeafInjective CH)
     (hRest : StateCommit.RestHashIffFrame RH)
-    (hLog : logHashInjective LH)
+    (hLog : StateCommit.logHashInjective LH)
     (s : RecChainedState) (actor cell : CellId) (f : FieldName) (v : Int) (s' : RecChainedState)
     (hwf : StateCommit.AccountsWF s.kernel) (hwf' : StateCommit.AccountsWF s'.kernel)
     (h : satisfiedSF cmb (encodeSF CH RH cmb compressN LH s actor cell f v s')) :
@@ -650,7 +647,7 @@ post log is NOT the honest one-row extension makes `satisfiedSF` UNSATISFIABLE: 
 forces `LH post = LH (receipt :: pre)`, and `logHashInjective` forces the post log to be EXACTLY the
 one-row extension — contradiction. Forging/dropping receipts is FORBIDDEN BY CONSTRUCTION. -/
 theorem setFieldCircuit_rejects_log_forge
-    (hLog : logHashInjective LH)
+    (hLog : StateCommit.logHashInjective LH)
     (s : RecChainedState) (actor cell : CellId) (f : FieldName) (v : Int) (s' : RecChainedState)
     (hbadlog : s'.log ≠ { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log) :
     ¬ satisfiedSF cmb (encodeSF CH RH cmb compressN LH s actor cell f v s') := by
