@@ -28,6 +28,10 @@ postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 x25519-dalek = { workspace = true }
+dregg-lean-ffi = { path = "../dregg-lean-ffi", optional = true }
+
+[features]
+lean-shadow = ["dep:dregg-lean-ffi", "dregg-lean-ffi/lean-lib"]
 
 [dev-dependencies]
 proptest = { workspace = true }

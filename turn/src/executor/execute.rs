@@ -52,6 +52,13 @@ impl TurnExecutor {
     /// Future: once Effect VM covers all effect types, every turn will carry a STARK proof,
     /// making this function a thin verify-and-commit wrapper (trustless).
     pub fn execute(&self, turn: &Turn, ledger: &mut Ledger) -> TurnResult {
+        crate::lean_shadow::capture_pre_state_if_eligible(turn, ledger);
+        let result = self.execute_without_shadow(turn, ledger);
+        crate::lean_shadow::maybe_shadow_turn(turn, ledger, &result);
+        result
+    }
+
+    fn execute_without_shadow(&self, turn: &Turn, ledger: &mut Ledger) -> TurnResult {
         // Phase 0: basic validation.
         if turn.call_forest.is_empty() {
             return TurnResult::Rejected {

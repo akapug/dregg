@@ -37,18 +37,25 @@ explicit `AdmCtx` keeps the prologue a pure function of (turn-fields, host-conte
 exactly the seam the FFI marshaller crosses. -/
 
 /-- The host-fed admission context (the bits of `self` that `execute.rs:54-177` reads):
-  * `now`        — the executor clock (`self.current_timestamp`), checked against `validUntil`;
-  * `frozen`     — the migration freeze-set (`self.frozen_cells`); a turn touching any frozen cell
-                   is rejected;
-  * `storedHead` — the agent's stored receipt-chain head (`self.receipt_heads[agent]`), the P0-3
-                   self-binding; `none` = the agent's genesis turn;
-  * `budget`     — the Stingray silo budget slice; the fee must fit. -/
+  * `now`         — the executor clock (`self.current_timestamp`), checked against `validUntil`;
+  * `blockHeight` — the chain clock dimension (`self.block_height`); preferred over `now` for expiry
+                    when wired (defaults to `0` = fall back to `now`);
+  * `frozen`      — the migration freeze-set (`self.frozen_cells`); a turn touching any frozen cell
+                    is rejected;
+  * `storedHead`  — the agent's stored receipt-chain head (`self.receipt_heads[agent]`), the P0-3
+                    self-binding; `none` = the agent's genesis turn;
+  * `budget`      — the Stingray silo budget slice; the fee must fit. -/
 structure AdmCtx where
-  now        : Nat
-  frozen     : List CellId
-  storedHead : Option Nat
-  budget     : Nat
+  now         : Nat
+  blockHeight : Nat := 0
+  frozen      : List CellId
+  storedHead  : Option Nat
+  budget      : Nat
 deriving Repr
+
+/-- The clock dimension used for `validUntil` expiry: prefer `blockHeight` when wired, else `now`. -/
+def admissionClock (ctx : AdmCtx) : Nat :=
+  if ctx.blockHeight > 0 then ctx.blockHeight else ctx.now
 
 /-- The turn-level fields the prologue gates against: `agent`, `nonce`, `fee`, `valid_until`,
 `previous_receipt_hash`, and the write-set extracted from the call-forest. The forest itself is the
@@ -95,7 +102,7 @@ def admissible (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState) : Bool :=
   -- 2. AgentLive
   decide (h.agent ∈ s.kernel.accounts) &&
   -- 3. Expiry
-  (match h.validUntil with | none => true | some vu => decide (ctx.now ≤ vu)) &&
+  (match h.validUntil with | none => true | some vu => decide (admissionClock ctx ≤ vu)) &&
   -- 4. NonceMatch
   decide (h.nonce = storedNonce s h.agent) &&
   -- 5. FeeCoverage
@@ -118,13 +125,26 @@ theorem admissible_rejects_empty (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedSta
     (hempty : h.forestNonEmpty = false) : admissible ctx h s = false := by
   simp [admissible, hempty]
 
-/-- `now > validUntil` implies inadmissible. -/
+/-- `admissionClock > validUntil` implies inadmissible. -/
 theorem admissible_rejects_expired (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)
-    (vu : Nat) (hvu : h.validUntil = some vu) (hexp : ctx.now > vu) :
+    (vu : Nat) (hvu : h.validUntil = some vu) (hexp : admissionClock ctx > vu) :
     admissible ctx h s = false := by
   simp only [admissible, hvu]
-  have : decide (ctx.now ≤ vu) = false := by simp; omega
-  simp [this]
+  have hdec : decide (admissionClock ctx ≤ vu) = false := by
+    by_cases hzero : ctx.blockHeight = 0
+    · have hnow : admissionClock ctx = ctx.now := by simp [admissionClock, hzero]
+      have : decide (ctx.now ≤ vu) = false := by
+        have : ctx.now > vu := by simpa [hnow] using hexp
+        simp; omega
+      simpa [hnow] using this
+    · have hbpos : 0 < ctx.blockHeight := Nat.pos_of_ne_zero hzero
+      have hbh : admissionClock ctx = ctx.blockHeight := by
+        simp [admissionClock, hzero, if_neg (Nat.ne_of_gt hbpos)]
+      have : decide (ctx.blockHeight ≤ vu) = false := by
+        have : ctx.blockHeight > vu := by simpa [hbh] using hexp
+        simp; omega
+      simpa [hbh] using this
+  simp [hdec]
 
 /-- A turn whose `nonce` does not match the agent's stored nonce is inadmissible (replay gate). -/
 theorem admissible_rejects_replay (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)

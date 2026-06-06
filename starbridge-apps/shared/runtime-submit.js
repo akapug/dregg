@@ -152,6 +152,7 @@ export async function submitTurnSpec(turnSpec) {
   }
 
   const actions = [];
+  const emitted = [];
   for (const eff of turnSpec.effects || []) {
     if (eff.kind === 'SetField') {
       actions.push({
@@ -160,8 +161,9 @@ export async function submitTurnSpec(turnSpec) {
         index: Number(eff.index),
         value_hex: valueToHex(eff.value),
       });
+    } else if (eff.kind === 'EmitEvent') {
+      emitted.push(eff);
     }
-    // EmitEvent is UI/audit-only here (not in the wasm action surface).
   }
 
   if (actions.length === 0) {
@@ -182,7 +184,7 @@ export async function submitTurnSpec(turnSpec) {
   if (result && result.status === 'rejected') {
     throw new Error(`turn rejected: ${result.error || 'unknown'} at ${JSON.stringify(result.at_action)}`);
   }
-  return {
+  const receipt = {
     id: result?.turn_hash || '',
     turnId: result?.turn_hash || '',
     submitted: true,
@@ -191,6 +193,16 @@ export async function submitTurnSpec(turnSpec) {
     post_state_hash: result?.post_state_hash || '',
     computrons_used: result?.computrons_used ?? 0,
   };
+  // Surface EmitEvent effects on the runtime cell-event bus so inspectors
+  // can refresh bidirectionally (workflow-step-advanced, storage-op-committed, …).
+  for (const eff of emitted) {
+    const cellRef = eff.cell || targetUri;
+    rt.emitCellEvent?.(cellRef, eff.topic, eff.data || [], {
+      turn_hash: receipt.id || null,
+      method: turnSpec.method || '',
+    });
+  }
+  return receipt;
 }
 
 /**
@@ -243,6 +255,10 @@ export function installRealSignTurn() {
       return null;
     }
   };
+
+  if (!api.subscribeEvents && typeof rt.subscribeEvents === 'function') {
+    api.subscribeEvents = (uri, topic, cb) => rt.subscribeEvents(uri, topic, cb);
+  }
 
   // Real nameservice enumerator: surface the cells we've created with their
   // current slot values (one registered name per registry cell in preview).

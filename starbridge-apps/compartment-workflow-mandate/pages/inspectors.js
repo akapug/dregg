@@ -26,6 +26,17 @@ function fieldToU64(bytes) {
   return Number(v);
 }
 
+function receiptHash(receipt) {
+  return receipt?.id || receipt?.turnId || receipt?.turn_hash || receipt?.hash_hex || null;
+}
+
+function receiptLink(hash) {
+  if (!hash) return '';
+  const uri = `dregg://receipt/${hash}`;
+  const href = `?at=${encodeURIComponent(uri)}`;
+  return `<a href="${escapeHtml(href)}" data-dregg-uri="${escapeHtml(uri)}"><code>${escapeHtml(hash.slice(0, 18))}…</code></a>`;
+}
+
 class CwmMandateInspector extends HTMLElement {
   static get observedAttributes() { return ['uri']; }
 
@@ -35,18 +46,47 @@ class CwmMandateInspector extends HTMLElement {
     this._poll = null;
     this._state = null;
     this._error = null;
+    this._eventUnsub = null;
   }
 
   connectedCallback() {
     this.refresh();
     this._poll = setInterval(() => this.refresh(), POLL_MS);
+    this.#bindEvents();
+    document.addEventListener('starbridge-app:runtime-ready', this.#onRuntimeReady);
+    document.addEventListener('cwm-step-advanced', this.#onExternalRefresh);
+    document.addEventListener('cwm-mandate-initialized', this.#onExternalRefresh);
   }
 
   disconnectedCallback() {
     if (this._poll) clearInterval(this._poll);
+    this._eventUnsub?.();
+    document.removeEventListener('starbridge-app:runtime-ready', this.#onRuntimeReady);
+    document.removeEventListener('cwm-step-advanced', this.#onExternalRefresh);
+    document.removeEventListener('cwm-mandate-initialized', this.#onExternalRefresh);
   }
 
-  attributeChangedCallback() { this.refresh(); }
+  #onRuntimeReady = () => {
+    this.#bindEvents();
+    this.refresh();
+  };
+
+  #onExternalRefresh = () => this.refresh();
+
+  attributeChangedCallback() {
+    this.#bindEvents();
+    this.refresh();
+  }
+
+  #bindEvents() {
+    this._eventUnsub?.();
+    const uri = this.getAttribute('uri');
+    if (!uri || !window.dregg?.subscribeEvents) return;
+    this._eventUnsub = window.dregg.subscribeEvents(uri, 'workflow-step-advanced', () => this.refresh());
+    const unsubInit = window.dregg.subscribeEvents(uri, 'workflow-mandate-initialized', () => this.refresh());
+    const prev = this._eventUnsub;
+    this._eventUnsub = () => { prev?.(); unsubInit?.(); };
+  }
 
   async refresh() {
     const uri = this.getAttribute('uri');
@@ -75,6 +115,7 @@ class CwmMandateInspector extends HTMLElement {
         dl { display: grid; grid-template-columns: 10rem 1fr; gap: 0.25rem 1rem; margin: 0; }
         dt { color: #666; }
         .err { color: #b00020; }
+        a { color: #3956c8; }
       </style>
       <div class="card">
         <h3>Workflow Mandate</h3>
@@ -98,9 +139,36 @@ class CwmAdvanceForm extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._busy = false;
     this._msg = '';
+    this._receipt = null;
+    this._eventUnsub = null;
   }
 
-  connectedCallback() { this.render(); }
+  connectedCallback() {
+    this.render();
+    this.#bindEvents();
+    document.addEventListener('starbridge-app:runtime-ready', this.#onRuntimeReady);
+  }
+
+  disconnectedCallback() {
+    this._eventUnsub?.();
+    document.removeEventListener('starbridge-app:runtime-ready', this.#onRuntimeReady);
+  }
+
+  #onRuntimeReady = () => this.#bindEvents();
+
+  attributeChangedCallback() {
+    this.#bindEvents();
+    this.render();
+  }
+
+  #bindEvents() {
+    this._eventUnsub?.();
+    const uri = this.getAttribute('mandate-uri');
+    if (!uri || !window.dregg?.subscribeEvents) return;
+    this._eventUnsub = window.dregg.subscribeEvents(uri, 'workflow-step-advanced', () => {
+      this.closest('dregg-app')?.querySelector('dregg-cwm-mandate')?.refresh?.();
+    });
+  }
 
   async #cursor() {
     const uri = this.getAttribute('mandate-uri');
@@ -118,11 +186,44 @@ class CwmAdvanceForm extends HTMLElement {
       return;
     }
     this._busy = true;
+    this._receipt = null;
     this.render();
     try {
       const cur = await this.#cursor();
-      await b.advance_step(uri, cur);
+      const receipt = await b.advance_step(uri, cur);
+      this._receipt = receipt;
       this._msg = `Advanced ${cur} → ${cur + 1}`;
+      this.dispatchEvent(new CustomEvent('cwm-step-advanced', {
+        bubbles: true,
+        detail: { uri, from: cur, to: cur + 1, receipt },
+      }));
+      this.closest('dregg-app')?.querySelector('dregg-cwm-mandate')?.refresh?.();
+    } catch (e) {
+      this._msg = String(e?.message || e);
+    }
+    this._busy = false;
+    this.render();
+  }
+
+  async initMandate() {
+    const uri = this.getAttribute('mandate-uri');
+    const b = window.dregg?.builders?.compartmentWorkflowMandate;
+    if (!uri || !b?.init_mandate) {
+      this._msg = 'builders.compartmentWorkflowMandate.init_mandate unavailable';
+      this.render();
+      return;
+    }
+    this._busy = true;
+    this._receipt = null;
+    this.render();
+    try {
+      const receipt = await b.init_mandate(uri);
+      this._receipt = receipt;
+      this._msg = 'Mandate initialized';
+      this.dispatchEvent(new CustomEvent('cwm-mandate-initialized', {
+        bubbles: true,
+        detail: { uri, receipt },
+      }));
       this.closest('dregg-app')?.querySelector('dregg-cwm-mandate')?.refresh?.();
     } catch (e) {
       this._msg = String(e?.message || e);
@@ -132,21 +233,30 @@ class CwmAdvanceForm extends HTMLElement {
   }
 
   render() {
+    const hash = receiptHash(this._receipt);
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; font: 14px/1.4 system-ui, sans-serif; }
         .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; }
+        .ops { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
         button { padding: 0.5rem 1rem; cursor: pointer; }
         button:disabled { opacity: 0.5; }
         .msg { margin-top: 0.75rem; color: #444; font-size: 0.9rem; }
+        .receipt { margin-top: 0.5rem; font-size: 0.85rem; }
+        a { color: #3956c8; }
       </style>
       <div class="card">
         <h3>Advance Step</h3>
         <p>Commits <code>advance_step</code> — MonotonicSequence +1 with phase event.</p>
-        <button id="go" ?disabled="${this._busy}">${this._busy ? 'Submitting…' : 'Advance workflow step'}</button>
+        <div class="ops">
+          <button id="init" ?disabled="${this._busy}">${this._busy ? 'Submitting…' : 'Initialize mandate'}</button>
+          <button id="go" ?disabled="${this._busy}">${this._busy ? 'Submitting…' : 'Advance workflow step'}</button>
+        </div>
         ${this._msg ? `<p class="msg">${escapeHtml(this._msg)}</p>` : ''}
+        ${hash ? `<p class="receipt">Receipt: ${receiptLink(hash)}</p>` : ''}
       </div>`;
     this.shadowRoot.getElementById('go')?.addEventListener('click', () => this.advance());
+    this.shadowRoot.getElementById('init')?.addEventListener('click', () => this.initMandate());
   }
 }
 

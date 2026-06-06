@@ -14,6 +14,7 @@ ADDITIVE: imports `Admission` + `FullForestAuth`; edits none.
 -/
 import Dregg2.Exec.Admission
 import Dregg2.Exec.GatedForestCfg
+import Dregg2.Exec.HandlerExecutor
 
 namespace Dregg2.Exec.TurnAdmission
 
@@ -21,12 +22,21 @@ open Dregg2.Exec (balOf)
 open Dregg2.Exec.Admission
 open Dregg2.Exec.EffectTransfer (nonceOf)
 open Dregg2.Exec.FullForestAuth
+open Dregg2.Exec.HandlerExecutor (execHandlerTurn)
 open Dregg2.Exec.StarbridgeGated (DForest St Wt)
+open Dregg2.Exec.TurnExecutorFull (FullActionA)
 
 /-- **Devnet-shaped turn execution:** admission prologue ∘ gated call-forest body. -/
 def runGatedForestTurn (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)
     (forest : DForest) : Option RecChainedState :=
   runTurn ctx h s (fun s₁ => (execFullForestG s₁) forest)
+
+/-- **Handler-cutover turn execution:** admission prologue ∘ flat `execHandlerTurn` action list.
+The soundness-strengthening path: the wire tree is lowered (`lowerForestA (eraseAuth root)`) and
+dispatched through the proved handler registry — no per-node credential gate on the body. -/
+def runHandlerTurn (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)
+    (acts : List FullActionA) : Option RecChainedState :=
+  runTurn ctx h s (fun s₁ => execHandlerTurn acts s₁)
 
 theorem runGatedForestTurn_inadmissible_rejects (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)
     (forest : DForest) (hbad : admissible ctx h s = false) :

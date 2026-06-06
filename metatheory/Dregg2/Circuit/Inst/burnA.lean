@@ -33,6 +33,7 @@ open Dregg2.Circuit.EffectCommit (StateView)
 open Dregg2.Circuit.EffectCommit2
 open Dregg2.Circuit.Spec.SupplyDestruction
 open Dregg2.Exec
+open Dregg2.Exec.CircuitEmit
 open Dregg2.Exec.TurnExecutorFull
 
 set_option linter.dupNamespace false
@@ -198,7 +199,41 @@ theorem burnA_full_sound
       (burnRestFrameDecodes S D hD hRest) hLog (burnGuardDecodes D hD) s args s' h
   exact (apex_iff_burnSpec D hD s args s').mp hapex
 
-/-! ## §2 — axiom-hygiene tripwires.
+/-! ## §2 — EMISSION: production burn circuit on the Lean→Plonky3 wire.
+
+`effectCircuit2` depends only on `guardGates` (not on the digest function `D`), so a wire-only
+`burnEWire` yields the same bytes as any lawful `burnE D hD`. -/
+
+/-- Wire-emission carrier: same guard sub-system as `burnE`, dummy `active` (not read by `effectCircuit2`). -/
+def burnEWire : EffectSpec2 RecChainedState BurnArgs where
+  view         := chainView
+  active       :=
+    { digest := fun _ => 0, expected := fun _ _ => 0
+    , postClause := fun _ _ _ => True
+    , binds := fun _ _ _ _ => trivial, encodes := fun _ _ _ _ => rfl }
+  logUpdate    := none
+  restFrame    := fun _ _ => True
+  guardGates   := burnGuardGates
+  guardProp    := burnGuardProp
+  guardWidth   := 1
+  guardEncode  := burnGuardEncode
+  guardLocal   := burnGuardLocal
+  guardWidth_le := by decide
+
+theorem burnEWire_circuit_eq (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D) :
+    effectCircuit2 burnEWire = effectCircuit2 (burnE D hD) := rfl
+
+def burnAirName : String := "dregg-burn-v2"
+
+def burnEmitted : EmittedDescriptor := emittedEffect2 burnAirName burnEWire
+
+/-- Canonical burn wire string — copy into Rust `lean_emitted_burn_roundtrip` golden. -/
+def burnDescriptorJson : String := emitDescriptorJson burnEmitted
+
+#guard burnEmitted.name == burnAirName
+#guard burnEmitted.traceWidth == 72
+
+/-! ## §3 — axiom-hygiene tripwires.
 
 Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
 `native_decide`. -/
@@ -208,5 +243,6 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`ad
 #assert_axioms burnGuardEncodes
 #assert_axioms apex_iff_burnSpec
 #assert_axioms burnA_full_sound
+#assert_axioms burnEWire_circuit_eq
 
 end Dregg2.Circuit.Inst.BurnA

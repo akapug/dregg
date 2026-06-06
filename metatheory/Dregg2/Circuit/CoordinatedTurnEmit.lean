@@ -115,78 +115,78 @@ def encodeCoordinatedTurn
 
 /-! ### Encoder wire lookups (collapse the `if`-cascade at each index). -/
 
-private theorem encCT_vPubRootA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vPubRootA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vPubRootA = pub.rootA := by simp [encodeCoordinatedTurn, vPubRootA]
 
-private theorem encCT_vPubRootB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vPubRootB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vPubRootB = pub.rootB := by
   simp [encodeCoordinatedTurn, vPubRootB, vPubRootA, vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vPubCharterHash (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vPubCharterHash (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vPubCharterHash = pub.charterHash := by
   simp [encodeCoordinatedTurn, vPubCharterHash, vPubRootB, vPubRootA, vPubBindingHash]
 
-private theorem encCT_vPubBindingHash (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vPubBindingHash (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vPubBindingHash = pub.bindingHash := by
   simp [encodeCoordinatedTurn, vPubBindingHash, vPubCharterHash, vPubRootB, vPubRootA]
 
-private theorem encCT_vLegRootA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vLegRootA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vLegRootA = legRootA sA.kernel step.bt := by
   simp [encodeCoordinatedTurn, vLegRootA, vPubRootA, vPubRootB, vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vCharterDig (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vCharterDig (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vCharterDig =
         covenantH step.covenant (recChainedKernelView sA) (recChainedKernelView sB) := by
   simp [encodeCoordinatedTurn, vCharterDig, vLegRootA, vPubRootA, vPubRootB, vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vBindingDig (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vBindingDig (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vBindingDig = bindH step.bt step.bind := by
   simp [encodeCoordinatedTurn, vBindingDig, vCharterDig, vLegRootA, vPubRootA, vPubRootB,
     vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vRestDigPreA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vRestDigPreA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vRestDigPreA = RH sA.kernel := by
   simp [encodeCoordinatedTurn, vRestDigPreA, vBindingDig, vCharterDig, vLegRootA, vPubRootA, vPubRootB,
     vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vRestDigPostA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vRestDigPostA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vRestDigPostA = RH sA'.kernel := by
   simp [encodeCoordinatedTurn, vRestDigPostA, vRestDigPreA, vBindingDig, vCharterDig, vLegRootA,
     vPubRootA, vPubRootB, vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vFrameDigPreA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vFrameDigPreA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vFrameDigPreA = frameDigest CH compressN sA.kernel (halfOutCarrier sA.kernel step.bt) := by
   simp [encodeCoordinatedTurn, vFrameDigPreA, vRestDigPostA, vRestDigPreA, vBindingDig, vCharterDig,
     vLegRootA, vPubRootA, vPubRootB, vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vFrameDigPostA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vFrameDigPostA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vFrameDigPostA = frameDigest CH compressN sA'.kernel (halfOutCarrier sA.kernel step.bt) := by
   simp [encodeCoordinatedTurn, vFrameDigPostA, vFrameDigPreA, vRestDigPostA, vRestDigPreA, vBindingDig,
     vCharterDig, vLegRootA, vPubRootA, vPubRootB, vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vMovedDigPostA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vMovedDigPostA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vMovedDigPostA = movedDigest CH compress sA'.kernel.cell step.bt.srcA step.bt.srcA := by
@@ -194,7 +194,7 @@ private theorem encCT_vMovedDigPostA (pub : CoordinatedPublicInputs) (sA sB : Re
     vRestDigPostA, vRestDigPreA, vBindingDig, vCharterDig, vLegRootA, vPubRootA, vPubRootB,
     vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vMovedDigExpectedA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vMovedDigExpectedA (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vMovedDigExpectedA =
@@ -203,7 +203,7 @@ private theorem encCT_vMovedDigExpectedA (pub : CoordinatedPublicInputs) (sA sB 
     vRestDigPostA, vRestDigPreA, vBindingDig, vCharterDig, vLegRootA, vPubRootA, vPubRootB,
     vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vLegRootB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vLegRootB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vLegRootB = legRootB sB.kernel step.bt := by
@@ -211,7 +211,7 @@ private theorem encCT_vLegRootB (pub : CoordinatedPublicInputs) (sA sB : RecChai
     vRestDigPostA, vRestDigPreA, vBindingDig, vCharterDig, vLegRootA, vPubRootA, vPubRootB, vPubCharterHash,
     vPubBindingHash]
 
-private theorem encCT_vRestDigPreB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vRestDigPreB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vRestDigPreB = RH sB.kernel := by
@@ -219,7 +219,7 @@ private theorem encCT_vRestDigPreB (pub : CoordinatedPublicInputs) (sA sB : RecC
     vFrameDigPreA, vRestDigPostA, vRestDigPreA, vBindingDig, vCharterDig, vLegRootA, vPubRootA, vPubRootB,
     vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vRestDigPostB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vRestDigPostB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vRestDigPostB = RH sB'.kernel := by
@@ -227,7 +227,7 @@ private theorem encCT_vRestDigPostB (pub : CoordinatedPublicInputs) (sA sB : Rec
     vFrameDigPostA, vFrameDigPreA, vRestDigPostA, vRestDigPreA, vBindingDig, vCharterDig, vLegRootA, vPubRootA,
     vPubRootB, vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vFrameDigPreB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vFrameDigPreB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vFrameDigPreB = frameDigest CH compressN sB.kernel (halfInCarrier sB.kernel step.bt) := by
@@ -235,7 +235,7 @@ private theorem encCT_vFrameDigPreB (pub : CoordinatedPublicInputs) (sA sB : Rec
     vMovedDigPostA, vFrameDigPostA, vFrameDigPreA, vRestDigPostA, vRestDigPreA, vBindingDig, vCharterDig,
     vLegRootA, vPubRootA, vPubRootB, vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vFrameDigPostB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vFrameDigPostB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vFrameDigPostB = frameDigest CH compressN sB'.kernel (halfInCarrier sB.kernel step.bt) := by
@@ -243,7 +243,7 @@ private theorem encCT_vFrameDigPostB (pub : CoordinatedPublicInputs) (sA sB : Re
     vMovedDigExpectedA, vMovedDigPostA, vFrameDigPostA, vFrameDigPreA, vRestDigPostA, vRestDigPreA, vBindingDig,
     vCharterDig, vLegRootA, vPubRootA, vPubRootB, vPubCharterHash, vPubBindingHash]
 
-private theorem encCT_vMovedDigPostB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vMovedDigPostB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vMovedDigPostB = movedDigest CH compress sB'.kernel.cell step.bt.dstB step.bt.dstB := by
@@ -252,7 +252,7 @@ private theorem encCT_vMovedDigPostB (pub : CoordinatedPublicInputs) (sA sB : Re
     vRestDigPostA, vRestDigPreA, vBindingDig, vCharterDig, vLegRootA, vPubRootA, vPubRootB, vPubCharterHash,
     vPubBindingHash]
 
-private theorem encCT_vMovedDigExpectedB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
+theorem encCT_vMovedDigExpectedB (pub : CoordinatedPublicInputs) (sA sB : RecChainedState)
     (step : BilateralStep) (sA' sB' : RecChainedState) :
     encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
       vMovedDigExpectedB =
@@ -297,75 +297,78 @@ example : coordinatedTurnCircuit.length = 10 := rfl
 
 /-! ## §4 — gate ↔ digest lemmas (circuit content under `encodeCoordinatedTurn`). -/
 
-private abbrev enc := encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH
+def encCT (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
+    (sA' sB' : RecChainedState) : Assignment :=
+  encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
 
 theorem ct_pub_rootA_iff (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState) :
-    cCTPubRootA.holds (enc pub sA sB step sA' sB') ↔ legRootA sA.kernel step.bt = pub.rootA := by
-  unfold Constraint.holds cCTPubRootA
+    cCTPubRootA.holds (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') ↔
+      legRootA sA.kernel step.bt = pub.rootA := by
+  unfold Constraint.holds cCTPubRootA encCT
   simp only [Expr.eval, encCT_vLegRootA, encCT_vPubRootA]
 
 theorem ct_pub_rootB_iff (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState) :
-    cCTPubRootB.holds (enc pub sA sB step sA' sB') ↔ legRootB sB.kernel step.bt = pub.rootB := by
-  unfold Constraint.holds cCTPubRootB
+    cCTPubRootB.holds (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') ↔ legRootB sB.kernel step.bt = pub.rootB := by
+  unfold Constraint.holds cCTPubRootB encCT
   simp only [Expr.eval, encCT_vLegRootB, encCT_vPubRootA, encCT_vPubRootB]
 
 theorem ct_pub_charter_iff (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState) :
-    cCTPubCharter.holds (enc pub sA sB step sA' sB') ↔
+    cCTPubCharter.holds (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') ↔
       covenantH step.covenant (recChainedKernelView sA) (recChainedKernelView sB) = pub.charterHash := by
-  unfold Constraint.holds cCTPubCharter
+  unfold Constraint.holds cCTPubCharter encCT
   simp only [Expr.eval, encCT_vCharterDig, encCT_vPubRootA, encCT_vPubCharterHash]
 
 theorem ct_pub_binding_iff (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState) :
-    cCTPubBinding.holds (enc pub sA sB step sA' sB') ↔ bindH step.bt step.bind = pub.bindingHash := by
-  unfold Constraint.holds cCTPubBinding
+    cCTPubBinding.holds (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') ↔ bindH step.bt step.bind = pub.bindingHash := by
+  unfold Constraint.holds cCTPubBinding encCT
   simp only [Expr.eval, encCT_vBindingDig, encCT_vPubBindingHash]
 
 theorem ct_a_restframe_iff (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState) :
-    cCTARestFrame.holds (enc pub sA sB step sA' sB') ↔ RH sA.kernel = RH sA'.kernel := by
-  unfold Constraint.holds cCTARestFrame
+    cCTARestFrame.holds (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') ↔ RH sA.kernel = RH sA'.kernel := by
+  unfold Constraint.holds cCTARestFrame encCT
   simp only [Expr.eval, encCT_vRestDigPreA, encCT_vRestDigPostA]
 
 theorem ct_a_framereuse_iff (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState) :
-    cCTAFrameReuse.holds (enc pub sA sB step sA' sB') ↔
+    cCTAFrameReuse.holds (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') ↔
       frameDigest CH compressN sA.kernel (halfOutCarrier sA.kernel step.bt)
         = frameDigest CH compressN sA'.kernel (halfOutCarrier sA.kernel step.bt) := by
-  unfold Constraint.holds cCTAFrameReuse
+  unfold Constraint.holds cCTAFrameReuse encCT
   simp only [Expr.eval, encCT_vFrameDigPreA, encCT_vFrameDigPostA]
 
 theorem ct_a_movedbind_iff (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState) :
-    cCTAMovedBind.holds (enc pub sA sB step sA' sB') ↔
+    cCTAMovedBind.holds (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') ↔
       movedDigest CH compress sA'.kernel.cell step.bt.srcA step.bt.srcA
         = movedDigest CH compress (recDebit sA.kernel.cell step.bt.srcA step.bt.amt) step.bt.srcA step.bt.srcA := by
-  unfold Constraint.holds cCTAMovedBind
+  unfold Constraint.holds cCTAMovedBind encCT
   simp only [Expr.eval, encCT_vMovedDigPostA, encCT_vMovedDigExpectedA]
 
 theorem ct_b_restframe_iff (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState) :
-    cCTBRestFrame.holds (enc pub sA sB step sA' sB') ↔ RH sB.kernel = RH sB'.kernel := by
-  unfold Constraint.holds cCTBRestFrame
+    cCTBRestFrame.holds (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') ↔ RH sB.kernel = RH sB'.kernel := by
+  unfold Constraint.holds cCTBRestFrame encCT
   simp only [Expr.eval, encCT_vRestDigPreB, encCT_vRestDigPostB]
 
 theorem ct_b_framereuse_iff (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState) :
-    cCTBFrameReuse.holds (enc pub sA sB step sA' sB') ↔
+    cCTBFrameReuse.holds (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') ↔
       frameDigest CH compressN sB.kernel (halfInCarrier sB.kernel step.bt)
         = frameDigest CH compressN sB'.kernel (halfInCarrier sB.kernel step.bt) := by
-  unfold Constraint.holds cCTBFrameReuse
+  unfold Constraint.holds cCTBFrameReuse encCT
   simp only [Expr.eval, encCT_vFrameDigPreB, encCT_vFrameDigPostB]
 
 theorem ct_b_movedbind_iff (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState) :
-    cCTBMovedBind.holds (enc pub sA sB step sA' sB') ↔
+    cCTBMovedBind.holds (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') ↔
       movedDigest CH compress sB'.kernel.cell step.bt.dstB step.bt.dstB
         = movedDigest CH compress (recCredit sB.kernel.cell step.bt.dstB step.bt.amt) step.bt.dstB step.bt.dstB := by
-  unfold Constraint.holds cCTBMovedBind
+  unfold Constraint.holds cCTBMovedBind encCT
   simp only [Expr.eval, encCT_vMovedDigPostB, encCT_vMovedDigExpectedB]
 
 /-! ## §5 — circuit ⊑ Prop scaffold bridge + completeness on honest digests. -/
@@ -381,8 +384,8 @@ theorem coordinated_circuit_step_of_sat
     (hOut : applyRecHalfOut sA.kernel step.bt = some sA'.kernel)
     (hIn : applyRecHalfIn sB.kernel step.bt = some sB'.kernel)
     (hφ : step.covenant.φ (recChainedKernelView sA) (recChainedKernelView sB) = true)
-    (h : satisfied coordinatedTurnCircuit (enc pub sA sB step sA' sB')) :
-    coordinatedTurnCircuitStep legRootA legRootB covenantH bindH CH RH compress compressN
+    (h : satisfied coordinatedTurnCircuit (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB')) :
+    coordinatedTurnCircuitStep legRootA legRootB covenantH (fun {bt} bind => bindH bt bind) CH RH compress compressN
       pub sA sB step sA' sB' := by
   unfold coordinatedTurnCircuitStep
   refine ⟨hwfA, hwfB, hwfA', hwfB', ?_, ?_, ?_, hφ⟩
@@ -437,15 +440,15 @@ theorem coordinated_circuit_complete_of_digests
     (hMovedB :
       movedDigest CH compress sB'.kernel.cell step.bt.dstB step.bt.dstB
         = movedDigest CH compress (recCredit sB.kernel.cell step.bt.dstB step.bt.amt) step.bt.dstB step.bt.dstB) :
-    satisfied coordinatedTurnCircuit (enc pub sA sB step sA' sB') := by
+    satisfied coordinatedTurnCircuit (@encCT CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB') := by
   unfold satisfied coordinatedTurnCircuit
   intro c hc
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
   rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
-  · exact (ct_pub_rootA_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hPub.1
-  · exact (ct_pub_rootB_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hPub.2.1
-  · exact (ct_pub_charter_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hPub.2.2.1
-  · exact (ct_pub_binding_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hPub.2.2.2
+  · exact (ct_pub_rootA_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hPub.1.symm
+  · exact (ct_pub_rootB_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hPub.2.1.symm
+  · exact (ct_pub_charter_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hPub.2.2.1.symm
+  · exact (ct_pub_binding_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hPub.2.2.2.symm
   · exact (ct_a_restframe_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hRestA
   · exact (ct_a_framereuse_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hFrameA
   · exact (ct_a_movedbind_iff CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB').mpr hMovedA
@@ -480,6 +483,8 @@ theorem coordinated_emitted_refines_spec
     (legRootA legRootB : RecordKernelState → BiTurn → ℤ)
     (covenantH : CoordinatedCaveat → KernelState → KernelState → ℤ)
     (bindH : (bt : BiTurn) → SharedBinding bt → ℤ)
+    (hCompress : compressInjective compress) (hCompressN : compressNInjective compressN)
+    (hLeaf : cellLeafInjective CH) (hRest : RestHashIffFrame RH)
     (pub : CoordinatedPublicInputs) (sA sB : RecChainedState) (step : BilateralStep)
     (sA' sB' : RecChainedState)
     (hwfA : AccountsWF sA.kernel) (hwfB : AccountsWF sB.kernel)
@@ -497,11 +502,12 @@ theorem coordinated_emitted_refines_spec
         (encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB')) :
     BilateralTurnSpec sA.kernel sB.kernel step sA'.kernel sB'.kernel := by
   let a := encodeCoordinatedTurn CH RH compress compressN legRootA legRootB covenantH bindH pub sA sB step sA' sB'
-  have hCircuit := (coordinated_emitted_refines_circuit a).mp hEmit
+  have hCircuit := (coordinated_emitted_refines_circuit a).mpr hEmit
   have hstep := coordinated_circuit_step_of_sat CH RH compress compressN legRootA legRootB covenantH bindH
       pub sA sB step sA' sB' hwfA hwfB hwfA' hwfB' hOut hIn hφ hCircuit
   exact coordinated_turn_circuit_refines_spec_honest CH RH compress compressN legRootA legRootB
-      covenantH bindH pub sA sB step sA' sB' hPub hstep
+      covenantH (fun {bt} bind => bindH bt bind) hCompress hCompressN hLeaf hRest
+      pub sA sB step sA' sB' hPub hstep
 
 /-- Round-trip decode recovers the source circuit. -/
 theorem decodeE_emittedCoordinatedTurn :
@@ -541,7 +547,7 @@ def demoPub : CoordinatedPublicInputs :=
   { rootA := legRootDemoA demoRecA.kernel demoStep.bt
   , rootB := legRootDemoB demoRecB.kernel demoStep.bt
   , charterHash := covenantHDemo demoStep.covenant (recChainedKernelView demoRecA) (recChainedKernelView demoRecB)
-  , bindingHash := bindHDemo demoStep.bind }
+  , bindingHash := bindHDemo demoStep.bt demoStep.bind }
 
 def demoPostPair : RecChainedState × RecChainedState :=
   (execCoordinatedForestG demoForestStep).getD (demoRecA, demoRecB)
@@ -549,8 +555,8 @@ def demoPostPair : RecChainedState × RecChainedState :=
 def demoPostA : RecChainedState := demoPostPair.1
 def demoPostB : RecChainedState := demoPostPair.2
 
--- The emitted circuit ACCEPTS the honest demo witness (every gate decides true):
-#guard decide (satisfiedEmitted emittedCoordinatedTurn
+-- The circuit ACCEPTS the honest demo witness (every gate decides true):
+#guard decide (satisfied coordinatedTurnCircuit
   (encodeCoordinatedTurn chDemo rhDemo compressDemo compressNDemo legRootDemoA legRootDemoB
     covenantHDemo bindHDemo demoPub demoRecA demoRecB demoStep demoPostA demoPostB))
 

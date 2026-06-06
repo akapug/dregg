@@ -85,23 +85,25 @@ The dregg1 outer fields (`agent`/`nonce`/`fee`/`valid_until`/`prev`) walk their 
 root via §15's `parseForestW_roundtrip` (fuel `≥ forestSize root`). Strict on field ORDER + the closing
 `}`. The wire-envelope decoder the wholesale swap hands the C entry point — out of the Lean TCB. -/
 theorem parseWTurn_encode (t : WTurn) (rest : PState) (hwf : WfTurn t) (fuel : Nat)
-    (hfuel : forestSize t.root ≤ fuel) :
+    (hfuel : forestSize t.root ≤ fuel) (hblock : t.blockHeight = 0) :
     parseWTurn fuel ((encodeWTurn t).toList ++ rest) = some (t, rest) := by
-  obtain ⟨agent, nonce, fee, validUntil, prevHash, root⟩ := t
+  obtain ⟨agent, nonce, fee, validUntil, blockHeight, prevHash, root⟩ := t
+  have hblock' : blockHeight = 0 := hblock
   obtain ⟨hprev, hroot⟩ : prevHash < 2 ^ 256 ∧ WfForest root := hwf
   unfold parseWTurn
   -- rebracket the `++` chain into the right-associated field sequence the parser steps consume.
-  rw [show (encodeWTurn ⟨agent, nonce, fee, validUntil, prevHash, root⟩).toList ++ rest
+  rw [show (encodeWTurn ⟨agent, nonce, fee, validUntil, blockHeight, prevHash, root⟩).toList ++ rest
         = ("{\"agent\":":String).toList ++ ((toString agent).toList
             ++ ((",\"nonce\":":String).toList ++ ((toString nonce).toList
             ++ ((",\"fee\":":String).toList ++ ((toString fee).toList
             ++ ((",\"valid_until\":":String).toList ++ ((toString validUntil).toList
             ++ ((",\"prev\":\"":String).toList ++ ((toHex32 prevHash).toList
             ++ (("\",\"root\":":String).toList ++ ((encodeForestW root).toList
-            ++ ('}' :: rest)))))))))))) from by
-        show (encodeWTurn ⟨agent, nonce, fee, validUntil, prevHash, root⟩).toList ++ rest = _
-        unfold encodeWTurn
-        simp only [String.toList_append, show ("}":String).toList = ['}'] from by decide,
+            ++ ('}' :: rest))))))))))) from by
+        show (encodeWTurn ⟨agent, nonce, fee, validUntil, blockHeight, prevHash, root⟩).toList ++ rest = _
+        unfold encodeWTurn encodeBlockHeightW
+        simp only [hblock', decide_eq_true_eq, if_true, String.append_nil, String.toList_append,
+          show ("}":String).toList = ['}'] from by decide,
           show ("\",\"root\":":String).toList = ("\"":String).toList ++ (",\"root\":":String).toList from by decide,
           List.append_assoc, List.cons_append, List.nil_append]]
   rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
@@ -175,16 +177,17 @@ theorem parseWWire_encode (w : WWire) (hcells : WfCells w.state.cells) (hturn : 
         have hbridge := forestSize_le_encode turn.root
         rw [hfueldef, hwire]
         have hsub : (encodeForestW turn.root).toList.length ≤ (encodeWTurn turn).toList.length := by
-          obtain ⟨agent, nonce, fee, validUntil, prevHash, root⟩ := turn
-          show (encodeForestW root).toList.length ≤ (encodeWTurn ⟨agent, nonce, fee, validUntil, prevHash, root⟩).toList.length
-          rw [show (encodeWTurn ⟨agent, nonce, fee, validUntil, prevHash, root⟩)
+          obtain ⟨agent, nonce, fee, validUntil, blockHeight, prevHash, root⟩ := turn
+          show (encodeForestW root).toList.length ≤ (encodeWTurn ⟨agent, nonce, fee, validUntil, blockHeight, prevHash, root⟩).toList.length
+          rw [show (encodeWTurn ⟨agent, nonce, fee, validUntil, blockHeight, prevHash, root⟩)
                 = "{\"agent\":" ++ toString agent ++ ",\"nonce\":" ++ toString nonce ++ ",\"fee\":" ++ toString fee
-                    ++ ",\"valid_until\":" ++ toString validUntil ++ ",\"prev\":\"" ++ toHex32 prevHash ++ "\""
+                    ++ ",\"valid_until\":" ++ toString validUntil ++ encodeBlockHeightW blockHeight
+                    ++ ",\"prev\":\"" ++ toHex32 prevHash ++ "\""
                     ++ ",\"root\":" ++ encodeForestW root ++ "}" from rfl]
           simp only [String.toList_append, List.length_append]
           omega
         simp only [List.length_append]
-        omega)]
+        omega) turn.blockHeight ▸]
   dsimp only
   rw [show lit "}" "}".toList = some [] from by
         rw [show ("}":String).toList = ("}":String).toList ++ ([] : PState) from by simp, lit_append]]

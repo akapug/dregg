@@ -174,6 +174,8 @@ class DreggAppList extends HTMLElement {
       'identity',
       'governed-namespace',
       'subscription',
+      'compartment-workflow-mandate',
+      'storage-gateway-mandate',
       'bounty-board',
       'gallery',
       'privacy-voting',
@@ -203,6 +205,18 @@ class DreggAppList extends HTMLElement {
         name: 'Subscription',
         description: 'Pub/sub topic and capability subscription app.',
         page: '/starbridge-apps/subscription/pages/index.html',
+      },
+      'compartment-workflow-mandate': {
+        id: 'compartment-workflow-mandate',
+        name: 'Compartment Workflow Mandate',
+        description: 'DAG workflow mandate with MonotonicSequence step cursor and clearance admission.',
+        page: '/starbridge-apps/compartment-workflow-mandate/pages/index.html',
+      },
+      'storage-gateway-mandate': {
+        id: 'storage-gateway-mandate',
+        name: 'Storage Gateway Mandate',
+        description: 'VFS gateway mandate with GET/PUT/LIST ops and Stingray volume budget.',
+        page: '/starbridge-apps/storage-gateway-mandate/pages/index.html',
       },
       'bounty-board': {
         id: 'bounty-board',
@@ -325,6 +339,8 @@ import './inspectors/pubsub-topic.js';
 import './inspectors/relay-operator.js';
 import './inspectors/witnessed-predicate.js';
 import './inspectors/activity.js';  // <dregg-activity> live observability feed (STARBRIDGE-03 #30)
+import './inspectors/cwm-mandate.js';
+import './inspectors/sgm-gateway.js';
 
 // --- Full Wave 3 §4.5 integration (STARBRIDGE-FOLLOWUP-02) -----------------
 // All 22 from plan table now have files + barrel registration.

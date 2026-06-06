@@ -12,6 +12,7 @@ pub mod demo_agent;
 pub mod effect_vm;
 pub mod federation;
 pub mod intents;
+pub mod lean_marshal;
 pub mod nameservice;
 pub mod node;
 pub mod privacy;

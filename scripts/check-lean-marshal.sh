@@ -23,13 +23,13 @@ fi
 echo "check-lean-marshal: building marshal_roundtrip (Lean lib present)..."
 (
   cd "$ROOT"
-  cargo build --release -p dregg-lean-ffi --bin marshal_roundtrip
+  cargo build --release -p dregg-lean-ffi --features lean-lib --bin marshal_roundtrip
 )
 
 echo "check-lean-marshal: running marshal_roundtrip gate..."
 (
   cd "$ROOT"
-  cargo run --release -p dregg-lean-ffi --bin marshal_roundtrip --quiet
+  cargo run --release -p dregg-lean-ffi --features lean-lib --bin marshal_roundtrip --quiet
 )
 
 echo "check-lean-marshal: PASS — marshaller round-trip gate green."

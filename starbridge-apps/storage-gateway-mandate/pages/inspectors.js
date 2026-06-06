@@ -26,6 +26,17 @@ function fieldToU64(bytes) {
   return Number(v);
 }
 
+function receiptHash(receipt) {
+  return receipt?.id || receipt?.turnId || receipt?.turn_hash || receipt?.hash_hex || null;
+}
+
+function receiptLink(hash) {
+  if (!hash) return '';
+  const uri = `dregg://receipt/${hash}`;
+  const href = `?at=${encodeURIComponent(uri)}`;
+  return `<a href="${escapeHtml(href)}" data-dregg-uri="${escapeHtml(uri)}"><code>${escapeHtml(hash.slice(0, 18))}…</code></a>`;
+}
+
 class SgmGatewayInspector extends HTMLElement {
   static get observedAttributes() { return ['uri']; }
 
@@ -35,18 +46,47 @@ class SgmGatewayInspector extends HTMLElement {
     this._poll = null;
     this._state = null;
     this._error = null;
+    this._eventUnsub = null;
   }
 
   connectedCallback() {
     this.refresh();
     this._poll = setInterval(() => this.refresh(), POLL_MS);
+    this.#bindEvents();
+    document.addEventListener('starbridge-app:runtime-ready', this.#onRuntimeReady);
+    document.addEventListener('sgm-storage-op', this.#onExternalRefresh);
+    document.addEventListener('sgm-gateway-initialized', this.#onExternalRefresh);
   }
 
   disconnectedCallback() {
     if (this._poll) clearInterval(this._poll);
+    this._eventUnsub?.();
+    document.removeEventListener('starbridge-app:runtime-ready', this.#onRuntimeReady);
+    document.removeEventListener('sgm-storage-op', this.#onExternalRefresh);
+    document.removeEventListener('sgm-gateway-initialized', this.#onExternalRefresh);
   }
 
-  attributeChangedCallback() { this.refresh(); }
+  #onRuntimeReady = () => {
+    this.#bindEvents();
+    this.refresh();
+  };
+
+  #onExternalRefresh = () => this.refresh();
+
+  attributeChangedCallback() {
+    this.#bindEvents();
+    this.refresh();
+  }
+
+  #bindEvents() {
+    this._eventUnsub?.();
+    const uri = this.getAttribute('uri');
+    if (!uri || !window.dregg?.subscribeEvents) return;
+    this._eventUnsub = window.dregg.subscribeEvents(uri, 'storage-op-committed', () => this.refresh());
+    const unsubInit = window.dregg.subscribeEvents(uri, 'storage-gateway-initialized', () => this.refresh());
+    const prev = this._eventUnsub;
+    this._eventUnsub = () => { prev?.(); unsubInit?.(); };
+  }
 
   async refresh() {
     const uri = this.getAttribute('uri');
@@ -103,9 +143,36 @@ class SgmStorageForm extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._busy = false;
     this._msg = '';
+    this._receipt = null;
+    this._eventUnsub = null;
   }
 
-  connectedCallback() { this.render(); }
+  connectedCallback() {
+    this.render();
+    this.#bindEvents();
+    document.addEventListener('starbridge-app:runtime-ready', this.#onRuntimeReady);
+  }
+
+  disconnectedCallback() {
+    this._eventUnsub?.();
+    document.removeEventListener('starbridge-app:runtime-ready', this.#onRuntimeReady);
+  }
+
+  #onRuntimeReady = () => this.#bindEvents();
+
+  attributeChangedCallback() {
+    this.#bindEvents();
+    this.render();
+  }
+
+  #bindEvents() {
+    this._eventUnsub?.();
+    const uri = this.getAttribute('mandate-uri');
+    if (!uri || !window.dregg?.subscribeEvents) return;
+    this._eventUnsub = window.dregg.subscribeEvents(uri, 'storage-op-committed', () => {
+      this.closest('dregg-app')?.querySelector('dregg-sgm-gateway')?.refresh?.();
+    });
+  }
 
   async submit(op) {
     const uri = this.getAttribute('mandate-uri');
@@ -117,12 +184,46 @@ class SgmStorageForm extends HTMLElement {
       return;
     }
     this._busy = true;
+    this._receipt = null;
     this.render();
     try {
-      if (op === 'GET') await b.storage_get(uri, key);
-      else if (op === 'PUT') await b.storage_put(uri, key, 3735928559);
-      else await b.storage_list(uri, key);
+      let receipt;
+      if (op === 'GET') receipt = await b.storage_get(uri, key);
+      else if (op === 'PUT') receipt = await b.storage_put(uri, key, 3735928559);
+      else receipt = await b.storage_list(uri, key);
+      this._receipt = receipt;
       this._msg = `${op} committed for ${key}`;
+      this.dispatchEvent(new CustomEvent('sgm-storage-op', {
+        bubbles: true,
+        detail: { uri, op, key, receipt },
+      }));
+      this.closest('dregg-app')?.querySelector('dregg-sgm-gateway')?.refresh?.();
+    } catch (e) {
+      this._msg = String(e?.message || e);
+    }
+    this._busy = false;
+    this.render();
+  }
+
+  async initGateway() {
+    const uri = this.getAttribute('mandate-uri');
+    const b = window.dregg?.builders?.storageGatewayMandate;
+    if (!uri || !b?.init_gateway) {
+      this._msg = 'builders.storageGatewayMandate.init_gateway unavailable';
+      this.render();
+      return;
+    }
+    this._busy = true;
+    this._receipt = null;
+    this.render();
+    try {
+      const receipt = await b.init_gateway(uri);
+      this._receipt = receipt;
+      this._msg = 'Gateway initialized';
+      this.dispatchEvent(new CustomEvent('sgm-gateway-initialized', {
+        bubbles: true,
+        detail: { uri, receipt },
+      }));
       this.closest('dregg-app')?.querySelector('dregg-sgm-gateway')?.refresh?.();
     } catch (e) {
       this._msg = String(e?.message || e);
@@ -132,6 +233,7 @@ class SgmStorageForm extends HTMLElement {
   }
 
   render() {
+    const hash = receiptHash(this._receipt);
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; font: 14px/1.4 system-ui, sans-serif; }
@@ -142,6 +244,8 @@ class SgmStorageForm extends HTMLElement {
         button { padding: 0.5rem 1rem; cursor: pointer; }
         button:disabled { opacity: 0.5; }
         .msg { margin-top: 0.75rem; color: #444; font-size: 0.9rem; }
+        .receipt { margin-top: 0.5rem; font-size: 0.85rem; }
+        a { color: #3956c8; }
       </style>
       <div class="card">
         <h3>Storage Op</h3>
@@ -149,12 +253,15 @@ class SgmStorageForm extends HTMLElement {
           <input id="key" type="text" value="uploads/doc.txt" />
         </label>
         <div class="ops">
+          <button id="init" ?disabled="${this._busy}">${this._busy ? 'Submitting…' : 'Initialize gateway'}</button>
           <button data-op="GET" ?disabled="${this._busy}">GET</button>
           <button data-op="PUT" ?disabled="${this._busy}">PUT</button>
           <button data-op="LIST" ?disabled="${this._busy}">LIST</button>
         </div>
         ${this._msg ? `<p class="msg">${escapeHtml(this._msg)}</p>` : ''}
+        ${hash ? `<p class="receipt">Receipt: ${receiptLink(hash)}</p>` : ''}
       </div>`;
+    this.shadowRoot.getElementById('init')?.addEventListener('click', () => this.initGateway());
     for (const btn of this.shadowRoot.querySelectorAll('button[data-op]')) {
       btn.addEventListener('click', () => this.submit(btn.dataset.op));
     }

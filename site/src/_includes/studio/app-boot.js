@@ -72,6 +72,9 @@ function installPreviewBridge(runtime, wasm) {
   if (!api.nameservice.listEntries) {
     api.nameservice.listEntries = async () => [];
   }
+  if (!api.subscribeEvents && typeof runtime.subscribeEvents === 'function') {
+    api.subscribeEvents = (uri, topic, cb) => runtime.subscribeEvents(uri, topic, cb);
+  }
 
   return api;
 }

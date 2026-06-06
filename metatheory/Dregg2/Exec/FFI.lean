@@ -13,15 +13,17 @@ import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Exec.FullForest         -- the PROVED tree executor `execFullForestA` (META-FILL A)
 import Dregg2.Exec.FullForestAuth     -- the 10-variant `Authorization` sum (META-FILL D)
 import Dregg2.Exec.Admission           -- `AdmCtx` / `TurnHdr` / `runTurn` prologue
-import Dregg2.Exec.TurnAdmission      -- `runGatedForestTurn` = admission ∘ gated forest (devnet entry)
+import Dregg2.Exec.TurnAdmission      -- `runGatedForestTurn` / `runHandlerTurn` = admission ∘ body
 import Dregg2.Exec.AdmissionWire      -- write-set extraction + `TurnHdr` builders for the wire
+import Dregg2.Exec.HandlerExecutor    -- `execHandlerTurn` = the handler-registry cutover executor
 
 namespace Dregg2.Exec.FFI
 
 open Dregg2.Exec
 open Dregg2.Authority
 open Dregg2.Exec.Admission (AdmCtx)
-open Dregg2.Exec.TurnAdmission (runGatedForestTurn)
+open Dregg2.Exec.TurnAdmission (runGatedForestTurn runHandlerTurn)
+open Dregg2.Exec.HandlerExecutor (execHandlerTurn)
 open Dregg2.Exec.AdmissionWire (turnHdrOf prevReceiptOf)
 
 /-- **C entry point — run one transfer, return the conserved total.**
@@ -2895,7 +2897,7 @@ inputs: `agent` (the signer), `nonce` (replay counter), `fee` (the gas budget), 
 expiry height), `previous_receipt_hash` (the receipt-chain link). FILL H gates on these; the wide
 codec MARSHALS them so the whole turn — envelope + tree + state — crosses the seam. The grammar:
 
-    TURNW := {"agent":N,"nonce":N,"fee":Z,"valid_until":N,"prev":"H64","root":NODE}
+    TURNW := {"agent":N,"nonce":N,"fee":Z,"valid_until":N[,"block_height":N],"prev":"H64","root":NODE}
     WIRE  := {"state":STATEW,"turn":TURNW}                                       (input)
     OUT   := {"state":STATEW,"loglen":N,"ok":B}                                  (output)
 
@@ -2913,12 +2915,17 @@ input state (the observable all-or-nothing rollback); on a malformed wire we fai
 
 /-- The decoded Turn ENVELOPE (the dregg1 outer fields) + the action-tree root. -/
 structure WTurn where
-  agent      : CellId
-  nonce      : Nat
-  fee        : Int
-  validUntil : Nat
-  prevHash   : Nat
-  root       : WForest
+  agent       : CellId
+  nonce       : Nat
+  fee         : Int
+  validUntil  : Nat
+  blockHeight : Nat := 0
+  prevHash    : Nat
+  root        : WForest
+
+/-- Optional `block_height` wire suffix (additive; omitted when `0` for backward compatibility). -/
+def encodeBlockHeightW (bh : Nat) : String :=
+  if bh > 0 then ",\"block_height\":" ++ toString bh else ""
 
 /-- Encode the Turn ENVELOPE + root tree `{"agent":N,…,"prev":"H64","root":NODE}`. -/
 def encodeWTurn (t : WTurn) : String :=
@@ -2926,6 +2933,7 @@ def encodeWTurn (t : WTurn) : String :=
     ++ ",\"nonce\":" ++ toString t.nonce
     ++ ",\"fee\":" ++ toString t.fee
     ++ ",\"valid_until\":" ++ toString t.validUntil
+    ++ encodeBlockHeightW t.blockHeight
     ++ ",\"prev\":\"" ++ toHex32 t.prevHash ++ "\""
     ++ ",\"root\":" ++ encodeForestW t.root ++ "}"
 
@@ -2939,13 +2947,21 @@ def parseWTurn (fuel : Nat) (cs : PState) : Option (WTurn × PState) := do
   let (fee, r5) ← parseInt r4
   let r6 ← lit ",\"valid_until\":" r5
   let (validUntil, r7) ← parseNat r6
-  let r8 ← lit ",\"prev\":\"" r7
+  -- optional `block_height` (additive; absent ⇒ 0)
+  let (blockHeight, r7b) ←
+    match lit ",\"block_height\":" r7 with
+    | some rest =>
+        match parseNat rest with
+        | some p => some p
+        | none   => none
+    | none => some (0, r7)
+  let r8 ← lit ",\"prev\":\"" r7b
   let (prevHash, r9) ← parseHex32 r8
   let r10 ← lit "\",\"root\":" r9
   let (root, r11) ← parseForestW fuel r10
   let r12 ← lit "}" r11
   some ({ agent := agent, nonce := nonce, fee := fee, validUntil := validUntil,
-          prevHash := prevHash, root := root }, r12)
+          blockHeight := blockHeight, prevHash := prevHash, root := root }, r12)
 
 /-- The decoded complete-turn WIRE: the wide STATE + the Turn envelope/tree. -/
 structure WWire where
@@ -2953,9 +2969,11 @@ structure WWire where
   turn  : WTurn
 
 /-- Derive the host `AdmCtx` from the turn envelope until the Rust executor plumbs `self` explicitly.
-`now` is pinned to `validUntil` (non-expired at the boundary); `storedHead` from `prevHash`. -/
+`now` is pinned to `validUntil` (non-expired at the boundary); `blockHeight` from the wire clock
+dimension; `storedHead` from `prevHash`. -/
 def admCtxOfTurn (t : WTurn) : AdmCtx :=
-  { now := t.validUntil, frozen := [], storedHead := prevReceiptOf t.prevHash, budget := 1000000000 }
+  { now := t.validUntil, blockHeight := t.blockHeight, frozen := [], storedHead := prevReceiptOf t.prevHash,
+    budget := 1000000000 }
 
 /-- Encode the complete-turn INPUT `{"state":STATEW,"turn":TURNW}`. -/
 def encodeWWire (w : WWire) : String :=
@@ -3516,3 +3534,115 @@ instances pull `Classical.choice`/`Quot.sound`; a `sorryAx` would FAIL the asser
 #assert_axioms liftCaveatsW
 #assert_axioms caveat_teeth_same_wire
 #assert_axioms caveat_teeth_coordinated
+
+/-! # §WH — the HANDLER-CUTOVER complete-turn export `dregg_exec_handler_turn`.
+
+Mirrors `dregg_exec_full_forest_auth` on the SAME `{"state":STATEW,"turn":TURNW}` wire, but the body
+runs the proved handler-registry executor `execHandlerTurn` over the flat pre-order action list
+`lowerForestA (eraseAuth root)` — NOT the per-node gated tree `execFullForestG`. The admission
+prologue (`runHandlerTurn` = `Admission.runTurn` ∘ `execHandlerTurn`) still fires (fee/nonce/replay/
+expiry/budget), so inadmissible turns are rejected with no edit; a body abort still commits the
+prologue. The per-node credential/caveat gate is intentionally ABSENT on this path — it is the
+soundness-strengthening cutover entry (handler algebra closes holes `execFullA` admits). -/
+
+/-- **C entry point — marshal the COMPLETE TURN, run admission ∘ `execHandlerTurn`, marshal back.**
+
+Identical wire to `dregg_exec_full_forest_auth`, but the EXECUTED body is `execHandlerTurn` over the
+lowered action list. ALL-OR-NOTHING at the handler level: on a committed turn we emit the post-state
+with `ok:1`; on an inadmissible turn or a handler-aborted body after prologue we echo the observable
+rollback state with `ok:0` (inadmissible) or `ok:1` with prologue edits (body abort, matching
+`runGatedForestTurn` discipline). Malformed wire ⇒ fail-closed empty state, `ok:0`. -/
+@[export dregg_exec_handler_turn]
+def execHandlerTurnStep (input : String) : String :=
+  match parseWWire input with
+  | none => encodeWOut { cells := [], caps := [], bal := [], escrows := [], nullifiers := [],
+                         commitments := [], queues := [], swiss := [] } 0 false
+  | some w =>
+    let k0 := stateOfWState w.state
+    let s0 : RecChainedState := { kernel := k0, log := [] }
+    let cellIds := w.state.cells.map Prod.fst
+    let capLabels := w.state.caps.map Prod.fst
+    let balKeys := balKeysOf w.state
+    let ctx := admCtxOfTurn w.turn
+    let hdr := turnHdrOf w.turn.agent (eraseAuth w.turn.root) w.turn.nonce w.turn.fee
+                  w.turn.validUntil w.turn.prevHash
+    let acts := lowerForestA (eraseAuth w.turn.root)
+    match runHandlerTurn ctx hdr s0 acts with
+    | some s' =>
+        encodeWOut (wstateOfState cellIds capLabels balKeys s'.kernel) s'.log.length true
+    | none =>
+        encodeWOut (wstateOfState cellIds capLabels balKeys s0.kernel) 0 false
+
+/-! ### §WH-eval — the handler export round-trips and matches `runHandlerTurn` run directly. -/
+
+-- the handler export commits the gated-demo transfer (no per-node credential gate on the body):
+#guard (wireOk1 (execHandlerTurnStep gatedDemoInput))
+-- ...and its output MATCHES running `runHandlerTurn` directly on the lowered action list:
+#guard ((match parseWWire gatedDemoInput with
+       | some w =>
+         let s0 : RecChainedState := { kernel := stateOfWState w.state, log := [] }
+         let cellIds := w.state.cells.map Prod.fst
+         let capLabels := w.state.caps.map Prod.fst
+         let balKeys := balKeysOf w.state
+         let ctx := admCtxOfTurn w.turn
+         let hdr := turnHdrOf w.turn.agent (eraseAuth w.turn.root) w.turn.nonce w.turn.fee
+                       w.turn.validUntil w.turn.prevHash
+         let acts := lowerForestA (eraseAuth w.turn.root)
+         (match runHandlerTurn ctx hdr s0 acts with
+          | some s' => encodeWOut (wstateOfState cellIds capLabels balKeys s'.kernel) s'.log.length true
+          | none    => encodeWOut (wstateOfState cellIds capLabels balKeys s0.kernel) 0 false)
+           == execHandlerTurnStep gatedDemoInput
+       | none => false))  --  true (export = direct run)
+
+-- the FORGED-credential turn COMMITS under the handler path (credential is not consulted on the body):
+#guard (wireOk1 (execHandlerTurnStep forgedGatedInput))
+-- ...whereas the GATED forest export rolls the body back (the WHO leg fires):
+#guard (wireOk1 (execFullForestAuthStep forgedGatedInput))
+
+-- malformed wire ⇒ fail-closed empty state, ok:0:
+#guard (execHandlerTurnStep "garbage" ==
+  "{\"state\":{\"cells\":[],\"caps\":[],\"bal\":[],\"escrows\":[],\"nullifiers\":[],\"commitments\":[],\"queues\":[],\"swiss\":[],\"revoked\":[]},\"loglen\":0,\"ok\":0}")
+
+/-! ### §WH-eval-admission — the admission prologue has teeth over the handler export. -/
+
+#guard ((match parseWWire (encodeWWire { state := wideDemoState, turn := badNonceGatedTurn }) with
+         | some w =>
+           let k0 := stateOfWState w.state
+           let s0 : RecChainedState := { kernel := k0, log := [] }
+           let ctx := admCtxOfTurn w.turn
+           let hdr := turnHdrOf w.turn.agent (eraseAuth w.turn.root) w.turn.nonce w.turn.fee
+                         w.turn.validUntil w.turn.prevHash
+           let acts := lowerForestA (eraseAuth w.turn.root)
+           (runHandlerTurn ctx hdr s0 acts).isNone
+         | none => false))  --  true (nonce replay ⇒ inadmissible)
+
+/-! ### §WH-eval-block_height — the optional clock dimension threads through admission. -/
+
+/-- A turn with `block_height` wired below `valid_until` (admissible at the boundary). -/
+def blockHeightDemoTurn : WTurn :=
+  { agent := 0, nonce := 7, fee := 5, validUntil := 1000, blockHeight := 500, prevHash := 0
+    root := gatedDemoTurn.root }
+
+def blockHeightDemoInput : String :=
+  encodeWWire { state := wideDemoState, turn := blockHeightDemoTurn }
+
+#guard ((parseWWire blockHeightDemoInput).map (·.turn.blockHeight)) == some 500  --  parses block_height
+#guard (wireOk1 (execHandlerTurnStep blockHeightDemoInput))  --  commits with wired clock
+
+/-- A turn whose wired `block_height` exceeds `valid_until` ⇒ inadmissible ⇒ no edit. -/
+def expiredBlockHeightTurn : WTurn :=
+  { agent := 0, nonce := 7, fee := 5, validUntil := 100, blockHeight := 500, prevHash := 0
+    root := gatedDemoTurn.root }
+
+#guard ((match parseWWire (encodeWWire { state := wideDemoState, turn := expiredBlockHeightTurn }) with
+         | some w =>
+           let k0 := stateOfWState w.state
+           let s0 : RecChainedState := { kernel := k0, log := [] }
+           let ctx := admCtxOfTurn w.turn
+           let hdr := turnHdrOf w.turn.agent (eraseAuth w.turn.root) w.turn.nonce w.turn.fee
+                         w.turn.validUntil w.turn.prevHash
+           let acts := lowerForestA (eraseAuth w.turn.root)
+           (runHandlerTurn ctx hdr s0 acts).isNone
+         | none => false))  --  true (block_height 500 > valid_until 100 ⇒ expired)
+
+#assert_axioms execHandlerTurnStep
