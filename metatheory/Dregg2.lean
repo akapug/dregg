@@ -195,7 +195,15 @@ import Dregg2.Circuit.KeyedCommit       -- D5 v2 carrier (FUNCTION-field shape):
 import Dregg2.Circuit.ListCommit        -- D5 v2 carrier (the breadth bottleneck-breaker): listDigest + ListDigestBindsList — the list-side-table commitment binding (compressN-inj + injective leaf ⇒ WHOLE post-list pinned, so a drop/reorder/wrong-cons is REJECTED). The ONE new crypto carrier v2 needs; unlocks the ~12 list-changing effects (notes/escrows/queues/seal/swiss/revoked). #assert_axioms-clean
 import Dregg2.Circuit.EffectCommit2      -- D5 v2 GENERIC core (single non-cell component): effect2_circuit_full_sound/_complete + 3 anti-ghost teeth + emission, proved ONCE for an effect touching ONE non-cell component (a function-field via funcComponent/keyedComponent, or a list side-table via listComponent — off ListCommit/KeyedCommit). Generalizes v1's "touched=cell" to "touched=one ActiveComponent"; soundness gets the postClause from active.binds (no funext, no ghost). #assert_axioms-clean
 import Dregg2.Circuit.EffectCommit2Dual  -- D5 v2-dual GENERIC core (TWO non-cell components): effect2dual_circuit_full_sound/_complete + 4 anti-ghost teeth + emission, proved ONCE for bal+escrows-style effects. Gate 1 keystone; unlocks escrow + bridge-outbound families. #assert_axioms-clean
+import Dregg2.Circuit.AccountsCommit    -- D5 accounts-growth carrier: accountsComponent (sorted-Finset list digest) for createCellA/spawnA
+import Dregg2.Circuit.EffectCommit3   -- D5 v2-triple GENERIC core (THREE non-cell components): queueEnqueue/Dequeue (queues+bal+escrows). #assert_axioms-clean
+import Dregg2.Circuit.EffectCommit4    -- D5 v2-quad GENERIC core (FOUR non-cell components): createCellFromFactoryA. #assert_axioms-clean
+import Dregg2.Circuit.EffectCommit5    -- D5 v2-quint GENERIC core (FIVE non-cell components): spawnA. #assert_axioms-clean
 import Dregg2.Circuit.Inst.createEscrowA   -- D5 v2-dual: createEscrowA_full_sound ⇒ EscrowHoldingCreateSpec
+import Dregg2.Circuit.Inst.createCommittedEscrowA -- D5 v2-dual: createCommittedEscrowA_full_sound ⇒ CommittedEscrowCreateSpec (§8 portal)
+import Dregg2.Circuit.Inst.createCellA       -- D5 v2-dual: createCellA_full_sound ⇒ CreateCellSpec (accounts+bal)
+import Dregg2.Circuit.Inst.createCellFromFactoryA -- D5 v2-quad: createCellFromFactoryA_full_sound ⇒ CreateFromFactorySpec
+import Dregg2.Circuit.Inst.spawnA           -- D5 v2-quint: spawnA_full_sound ⇒ SpawnSpec
 import Dregg2.Circuit.Inst.releaseEscrowA -- D5 v2-dual: releaseEscrowA_full_sound ⇒ ReleaseEscrowSpec
 import Dregg2.Circuit.Inst.refundEscrowA  -- D5 v2-dual: refundEscrowA_full_sound ⇒ RefundEscrowSpec
 import Dregg2.Circuit.Inst.bridgeLockA    -- D5 v2-dual: bridgeLockA_full_sound ⇒ BridgeOutboundLockSpec
@@ -214,7 +222,11 @@ import Dregg2.Circuit.Inst.mintA           -- D5 v2 breadth: mintA_full_sound �
 import Dregg2.Circuit.Inst.noteCreateA     -- D5 v2 breadth: noteCreateA_full_sound ⇒ NoteCreateASpec (commitments list)
 import Dregg2.Circuit.Inst.noteSpendA      -- D5 v2 breadth: noteSpendA_full_sound ⇒ NoteSpendSpec (nullifiers list)
 import Dregg2.Circuit.Inst.queueAllocateA  -- D5 v2 breadth: queueAllocateA_full_sound ⇒ QueueAllocateSpec (queues list)
+import Dregg2.Circuit.Inst.queueEnqueueA  -- D5 v2-triple: queueEnqueueA_full_sound ⇒ QueueEnqueueSpec (queues+bal+escrows)
+import Dregg2.Circuit.Inst.queueDequeueA  -- D5 v2-triple: queueDequeueA_full_sound ⇒ QueueDequeueSpec (queues+bal+escrows)
+import Dregg2.Circuit.Inst.queuePipelineStepA -- D5 v2 breadth: queuePipelineStepA_full_sound ⇒ QueuePipelineFanoutSpec (queues list)
 import Dregg2.Circuit.Inst.queueResizeA    -- D5 v2 breadth: queueResizeA_full_sound ⇒ QueueResizeSpec (queues list)
+import Dregg2.Circuit.Inst.pipelinedSendA   -- D5 v1 breadth: pipelinedSendA_full_sound ⇒ PipelinedSendSpec (log-only)
 import Dregg2.Circuit.Inst.revoke          -- D5 v2 breadth: revoke_full_sound ⇒ RevokeSpec (caps)
 import Dregg2.Circuit.Inst.revokeDelegationA -- D5 v2 breadth: revokeDelegationA_full_sound ⇒ RevokeSpec (caps)
 import Dregg2.Circuit.Inst.sealA           -- D5 v2 breadth: sealA_full_sound ⇒ SealSpec (sealedBoxes list)
