@@ -218,6 +218,14 @@ def compressNInjective (h : List ℤ → ℤ) : Prop := ∀ xs ys : List ℤ, h 
 serialization + Poseidon leaf hash). -/
 def cellLeafInjective : Prop := ∀ (c : CellId) (v w : Value), CH c v = CH c w → v = w
 
+/-- **CR carrier `logHashInjective LH`** — the receipt-chain hash is injective:
+`LH xs = LH ys ⇒ xs = ys`. The standard collision-resistance of a Poseidon log/Merkle accumulator
+(REALIZABLE). The portal a log-GROWING effect (`setFieldA`, …) needs (unlike a frozen-log effect like
+`Transfer`). RELOCATED here (beside the other CR carriers) so the generic `EffectCommit` framework can
+import the log CR portal from `StateCommit` directly, not from a specific instance. (Takes `LH` as an
+explicit binder — the `Surface` section variables `CH`/`RH`/… are irrelevant to it.) -/
+def logHashInjective (LH : List Turn → ℤ) : Prop := ∀ xs ys : List Turn, LH xs = LH ys → xs = ys
+
 /-- **PORTAL `RestHashIffFrame`** — the rest hash is injective on the 16 non-`cell` components
 (BIDIRECTIONAL: `→` binds them in soundness/anti-ghost, `←` rebuilds the hash in completeness). Pure
 injectivity, stated as the iff. -/
@@ -782,6 +790,7 @@ set. PROVED (everything else, crucially THE FRAME): the keystones below. NO `pos
 
 #assert_axioms recKExec_preserves_AccountsWF
 #assert_axioms encodeS_agrees_encodeT
+#assert_axioms logHashInjective
 #assert_axioms MovedDigestBindsCells
 #assert_axioms FrameDigestBindsCells
 #assert_axioms CombineInjective
