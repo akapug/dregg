@@ -1,5 +1,24 @@
 //! # dregg-sdk
 //!
+//! # Which semantics does a deployed SDK run?
+//!
+//! The SDK builds and signs turns; the **federation node executes them**. Today
+//! that execution runs on the LEGACY dregg1 Rust executor (`dregg-turn`), with
+//! the VERIFIED Lean executor (`metatheory/Dregg2/`, via `dregg-lean-ffi`)
+//! running as a SHADOW that compares its commit decision against the Rust path
+//! (gated on `DREGG_LEAN_SHADOW=1`). The source of truth for the semantics is
+//! the Lean — the Rust executor is the subject-under-test pending THE SWAP
+//! (cutover to `dregg_exec_full_forest_auth` as the authoritative executor).
+//!
+//! Concretely, when you deploy this SDK today: turn-building, key management,
+//! attenuation and proof generation are SDK-local Rust; the on-chain *effect
+//! semantics* applied to those turns are the legacy Rust executor's, validated
+//! turn-by-turn against the verified Lean (for every effect the shadow projector
+//! covers — see `turn/src/lean_shadow.rs` and
+//! `metatheory/docs/rebuild/_DREGG1-DREGG2-UNIFICATION-LEDGER.md`). After the
+//! swap, the verified Lean semantics ARE what runs. Track the cutover in
+//! `metatheory/docs/rebuild/SUCCESSOR-ROADMAP.md`.
+//!
 //! # Trust Model
 //!
 //! This crate operates at the **CLIENT-LOCAL** trust level.

@@ -2,6 +2,21 @@
 
 Launch a local 3-node federation with one command.
 
+## Which semantics does the devnet run?
+
+The devnet nodes execute turns on the **LEGACY dregg1 Rust executor**
+(`dregg-turn`). The **VERIFIED Lean executor** (`metatheory/Dregg2/`, source of
+truth) is wired as a SHADOW that re-executes each turn and compares its commit
+decision against the Rust path — but only when `DREGG_LEAN_SHADOW=1` is set in
+the node environment. **By default the shadow is OFF, so the deployed devnet
+runs pure legacy Rust with no Lean cross-check.** To validate every turn against
+the verified semantics, set `DREGG_LEAN_SHADOW=1` in the node service env (the
+node must be built with the `lean-shadow` feature, which it is by default — see
+`node/Cargo.toml`). The cutover that makes the Lean *authoritative* (not just a
+shadow) is THE SWAP, tracked in
+`metatheory/docs/rebuild/SUCCESSOR-ROADMAP.md` and the unification ledger
+`metatheory/docs/rebuild/_DREGG1-DREGG2-UNIFICATION-LEDGER.md`.
+
 ## Quick Start
 
 ```bash

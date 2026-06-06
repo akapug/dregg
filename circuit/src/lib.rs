@@ -1,5 +1,28 @@
 //! `dregg-circuit`: Zero-knowledge proof circuits for dregg authorization token chains.
 //!
+//! # ⚠️ dregg1 hand-written AIRs vs the verified dregg2 descriptor path
+//!
+//! Most AIRs in this crate are **hand-written, UNVERIFIED dregg1 circuits**.
+//! They are NOT the source of truth. The verified circuit semantics live in
+//! Lean under `metatheory/Dregg2/Circuit/` — 52 per-effect descriptor
+//! instances (`Inst/*.lean`), each with a full-state soundness keystone over
+//! ALL kernel-state fields, grounded on the single named `Poseidon2SpongeCR`
+//! hypothesis (kernel-clean: `lake build` green, `#assert_namespace_axioms`
+//! whitelisting only `{propext, Classical.choice, Quot.sound}`).
+//!
+//! The Lean is verified at the **digest / state-transition layer**; it
+//! abstracts Poseidon2 / Merkle / selector-dispatch as a hypothesis. The
+//! hand-written AIRs here (`effect_vm/`, `note_spending_air`, `poseidon2_air`,
+//! `effect_action_air`) are the layer that actually computes those hashes /
+//! Merkle paths in-circuit — a DIFFERENT abstraction layer, not a competing
+//! implementation. They retire one FRONTIER at a time as the Lean-emitted
+//! descriptor interpreter (`lean_descriptor_air`) gains hash / limb / dispatch
+//! gates. Do NOT duplicate or hand-extend a circuit without checking whether the
+//! verified Lean descriptor already covers the statement; see
+//! `metatheory/docs/rebuild/_RUST-CIRCUIT-CONSOLIDATION.md` and
+//! `_DREGG1-DREGG2-UNIFICATION-LEDGER.md`. Dead/duplicate AIRs get deleted, not
+//! kept (already gone: `effect_interp`, `garbled_air_p3`).
+//!
 //! # Trust Model
 //!
 //! This crate operates at the **TRUSTLESS** trust level.
