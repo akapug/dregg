@@ -1,7 +1,7 @@
 # Contributing to dregg2 circuits (a guide for Composer & other agents)
 
-This is a **living, accurate** guide (last verified against the build at commit pending — run
-`lake build Dregg2` and update this line when you land work). Lean 4.30 / mathlib v4.30. If you change
+This is a **living, accurate** guide (last verified against the build at commit pending Gate 2/3 —
+`lake build Dregg2` green at **3664 jobs**). Lean 4.30 / mathlib v4.30. If you change
 the code and a claim here goes stale, **fix this file too**. Trust the *code* over any prose; if in
 doubt, `lake build` it.
 
@@ -49,9 +49,10 @@ For each protocol effect E there is a **three-corner triangle** (this is the ant
   adds the receipt `log`. **Miss one field in the frame and the spec is itself a ghost.**
 - **executor ⟺ spec** lives in `Dregg2/Circuit/Spec/<family>.lean` (31/31 effect families done — see
   `<exec>_iff_spec` lemmas). This validates the executor against the independent spec.
-- **circuit ⟺ spec** is the ZK part. As of the current build, **~32 effect variants** have full-state
-  `*_full_sound` theorems (see §7 coverage table). The rest are deferred multi-component or
-  accounts-growth effects (§8).
+- **circuit ⟺ spec** is the ZK part. As of the current build, **all 31 executor⟺spec families** have at
+  least one full-state `*_full_sound` instance (see §7). Dispatch-aliased variants (e.g.
+  `createObligationA` = `createEscrowA`, `fulfillObligationA` = `refundEscrowA`) inherit the same
+  circuit. Composite meta-actions (`exerciseA`, `queueAtomicTxA`) remain out of scope (§8).
 
 ## 3. Which framework? (the decision tree)
 
@@ -64,9 +65,11 @@ component(s):
 | `bal` / `caps` (whole function) | **v2 `EffectCommit2`** | `funcComponent` + injective whole-function digest | `Inst/mintA.lean` (bal) or `Inst/attenuateA.lean` (caps) |
 | `List` side-table | **v2 `EffectCommit2`** | `listComponent` + `ListDigestBindsList` | `Inst/noteCreateA.lean` or `Inst/queueAllocateA.lean` |
 | Log only (kernel frozen) | **v1 `EffectCommit`** with `touched := ∅` | log hash only | `Inst/emitEventA.lean` |
-| 2 components (`bal` + `escrows`) | **v2-dual `EffectCommit2Dual`** | two `ActiveComponent`s + two bind gates | `Inst/createEscrowA.lean` |
-| 3+ components (enqueue, spawn, …) | **DEFERRED** — triple-component extension | — | — |
-| `accounts` growth | **DEFERRED** — set-digest carrier | — | — |
+| 2 components (`bal` + `escrows`, `accounts` + `bal`) | **v2-dual `EffectCommit2Dual`** | two `ActiveComponent`s + two bind gates | `Inst/createEscrowA.lean`, `Inst/createCellA.lean` |
+| 3 components (`queues` + `bal` + `escrows`) | **v2-triple `EffectCommit3`** | three `ActiveComponent`s + three bind gates | `Inst/queueEnqueueA.lean` |
+| 4 components (factory create) | **v2-quad `EffectCommit4`** | four bind gates | `Inst/createCellFromFactoryA.lean` |
+| 5 components (`spawnA`) | **v2-quint `EffectCommit5`** | five bind gates | `Inst/spawnA.lean` |
+| `accounts` growth | **`AccountsCommit.accountsComponent`** | sorted-`Finset` list digest | `Inst/createCellA.lean` |
 
 **Critical:** v1's `kernelFrame` lists `bal` before `escrows`; most bespoke specs list `bal` after
 `commitments`. The `apex_iff_*` bridge always needs an **And-reassoc** (copy `setFieldE` in
@@ -118,6 +121,18 @@ For `bal`+`escrows` (or any two-component effect), ~100 lines in `Inst/<effect>.
 5. `<effect>_full_sound` via `effect2dual_circuit_full_sound`.
 
 Template: `Inst/createEscrowA.lean`. Wire indices `64..73` (`traceWidth = 74`); tactic `ec2d_lookup`.
+
+## 5c. The per-effect recipe (v2-triple / quad / quint)
+
+For 3–5 touched non-`cell` components, mirror `EffectCommit3`/`EffectCommit4`/`EffectCommit5`:
+
+1. A `RestIffNo*` portal omitting ALL touched fields from the rest hash.
+2. An `EffectSpec2Triple` / `EffectSpec2Quad` / `EffectSpec2Quint` with `active1`..`activeN`.
+3. Guard/rest-frame decode lemmas + `apex_iff_<BespokeSpec>`.
+4. `<effect>_full_sound` via `effect2triple_circuit_full_sound` (or quad/quint).
+
+Wire indices: triple `64..75` (`traceWidth = 76`, `ec2t_lookup`); quad `64..77` (`78`, `ec2q_lookup`);
+quint `64..79` (`80`, `ec2u_lookup`).
 
 ## 6. Proof-strategy playbook (the reusable tactics — avoid the known tarpits)
 
@@ -171,15 +186,28 @@ Template: `Inst/createEscrowA.lean`. Wire indices `64..73` (`traceWidth = 74`); 
 | bridgeLockA | BridgeOutboundLockSpec | v2-dual | `Inst/bridgeLockA.lean` |
 | bridgeCancelA | BridgeOutboundCancelSpec | v2-dual | `Inst/bridgeCancelA.lean` |
 | bridgeFinalizeA | BridgeFinalizeSpec | v2 escrows-only | `Inst/bridgeFinalizeA.lean` |
+| createCommittedEscrowA | CommittedEscrowCreateSpec | v2-dual + §8 portal | `Inst/createCommittedEscrowA.lean` |
+| createCellA | CreateCellSpec | v2-dual accounts+bal | `Inst/createCellA.lean` |
+| createCellFromFactoryA | CreateFromFactorySpec | v2-quad | `Inst/createCellFromFactoryA.lean` |
+| spawnA | SpawnSpec | v2-quint | `Inst/spawnA.lean` |
+| queueEnqueueA | QueueEnqueueSpec | v2-triple | `Inst/queueEnqueueA.lean` |
+| queueDequeueA | QueueDequeueSpec | v2-triple | `Inst/queueDequeueA.lean` |
+| queuePipelineStepA | QueuePipelineFanoutSpec | v2 queues | `Inst/queuePipelineStepA.lean` |
+| pipelinedSendA | PipelinedSendSpec | v1 log-only | `Inst/pipelinedSendA.lean` |
 
-### Circuit⟺spec DEFERRED (executor⟺spec done; circuit corner open)
+### Dispatch aliases (same circuit as the canonical variant)
 
-These touch **3+ components** or **accounts growth** — need triple-component v2 or a set-digest carrier:
+| Alias | Inherits circuit from |
+|-------|----------------------|
+| `createObligationA` | `createEscrowA` |
+| `fulfillObligationA` | `refundEscrowA` |
+| `slashObligationA` | `releaseEscrowA` |
+| `releaseCommittedEscrowA` / `refundCommittedEscrowA` | `releaseEscrowA` / `refundEscrowA` |
 
-- **Accounts growth:** `createCellA`, `spawnA`, `createCellFromFactoryA`
-- **Escrow (remaining):** `createCommittedEscrowA`
-- **Queue pipeline:** `queueEnqueueA`, `queueDequeueA` (queues + bal + escrows), `queuePipelineStepA`,
-  pipelined send with deposit
+### Circuit⟺spec OUT OF SCOPE (composite meta-actions)
+
+- **`exerciseA`** — dispatches an inner `List FullActionA` (composite, not a single effect family).
+- **`queueAtomicTxA`** — batches multiple queue ops in one turn.
 
 ## 8. The cardinal sins (what makes a "proof" worthless)
 
@@ -215,6 +243,10 @@ circuits with Poseidon2 gates is the next step.
 - `Dregg2/Circuit/KeyedCommit.lean` — v2 keyed carrier (finite domains only).
 - `Dregg2/Circuit/EffectCommit2.lean` — **v2 GENERIC** framework (single non-cell component).
 - `Dregg2/Circuit/EffectCommit2Dual.lean` — **v2-dual GENERIC** framework (two non-cell components).
+- `Dregg2/Circuit/AccountsCommit.lean` — accounts-growth carrier (`accountsComponent`).
+- `Dregg2/Circuit/EffectCommit3.lean` — **v2-triple GENERIC** framework (three non-cell components).
+- `Dregg2/Circuit/EffectCommit4.lean` — **v2-quad GENERIC** framework (four non-cell components).
+- `Dregg2/Circuit/EffectCommit5.lean` — **v2-quint GENERIC** framework (five non-cell components).
 - `Dregg2/Circuit/EffectInstances.lean` — v1 validation templates (`transferE`, `setFieldE`).
 - `Dregg2/Circuit/EffectInstances2.lean` — v2 validation templates (`mintE`, `noteSpendE`).
 - `Dregg2/Circuit/Inst/<effect>.lean` — **production instances** (one file per effect; this is what you add).
