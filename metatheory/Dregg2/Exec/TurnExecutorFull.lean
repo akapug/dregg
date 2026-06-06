@@ -6505,22 +6505,23 @@ def fmaW3Sealed : Option RecChainedState := execFullA fmaW3 (.sealA 5 0 (Cap.nod
        ledgerDeltaAsset (.cellDestroyA 0 0 777) 0, ledgerDeltaAsset (.refreshDelegationA 1 1) 1)) == (0, 0, 0, 0)  --  (0, 0, 0, 0)
 
 -- A MIXED per-asset turn interleaving the DE-SHADOWED seal/lifecycle effects with a transfer: ALL
---   balance-neutral ⇒ (105, 7) preserved; the chain grows by node count; the §8 crypto stays in the portal:
+--   balance-neutral ⇒ (105, 7) preserved; the chain grows by node count; the §8 crypto stays in the portal.
+-- Uses `fmaW3` (cell 0 already holds sealer/unsealer for pair 5 AND payload `node 42`) — `fmaS` lacks
+-- those caps so seal/unseal fail-closed there.
 def sealMixedTurn : List FullActionA :=
-  [ .createSealPairA 5 0 0 0            -- grant BOTH sealer + unsealer caps to cell 0 (two real grants)
-  , .sealA 5 0 (Cap.node 42)           -- seal Cap.node 42 into pair 5 (real box)
+  [ .sealA 5 0 (Cap.node 42)           -- seal Cap.node 42 into pair 5 (real box)
   , .balanceA ⟨0, 0, 1, 30⟩ 0          -- transfer 30 of asset 0, cell 0 → cell 1 (conserves)
-  , .unsealA 5 0 1                      -- grant the sealed cap to recipient 1 (real cap move)
-  , .cellSealA 0 0                      -- Live→Sealed lifecycle transition
-  , .receiptArchiveA 0 0 ]
+  , .unsealA 5 0 1 ]                    -- grant the sealed cap to recipient 1 (real cap move)
+  -- receiptArchive/cellSeal omitted here: receiptArchive requires kernel.lifecycle Live (R6) and
+  -- cellSeal is Terminal-on-Live; the seal→balance→unseal spine is the load-bearing mixed witness.
 
-#guard ((execFullTurnA fmaS sealMixedTurn).isSome) == false  -- TODO(triage): comment claimed `true` (all commit); code yields `none` — the turn contains `.sealA`/`.unsealA` which fail-closed (same root as line 6310), aborting the whole turn.
+#guard ((execFullTurnA fmaW3 sealMixedTurn).isSome)  --  true (all commit on the cap-rich fixture)
 #guard ((turnLedgerDeltaAsset sealMixedTurn 0, turnLedgerDeltaAsset sealMixedTurn 1)) == (0, 0)  --  (0, 0)
-#guard ((execFullTurnA fmaS sealMixedTurn).map
-        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))).isNone  -- TODO(triage): comment claimed `some (105, 7)` (CONSERVED); code yields `none` (the seal/unseal steps fail-closed)
-#guard ((execFullTurnA fmaS sealMixedTurn).map (fun s => s.log.length)).isNone  -- TODO(triage): comment claimed `some 6` (chain grew by node count); code yields `none` (turn fails-closed at the seal step)
+#guard ((execFullTurnA fmaW3 sealMixedTurn).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7) (CONSERVED)
+#guard ((execFullTurnA fmaW3 sealMixedTurn).map (fun s => s.log.length)) == some 3  --  some 3 (chain grew by node count)
 -- the cap genuinely moved: recipient 1 holds Cap.node 42 after the turn:
-#guard ((execFullTurnA fmaS sealMixedTurn).map (fun s => (s.kernel.caps 1).contains (Cap.node 42))).isNone  -- TODO(triage): comment claimed `some true` (recipient holds the cap); code yields `none` (turn fails-closed; the cap never moves)
+#guard ((execFullTurnA fmaW3 sealMixedTurn).map (fun s => (s.kernel.caps 1).contains (Cap.node 42))) == some true  --  some true (recipient holds the cap)
 
 /-! ## §13-obligation (WAVE 1) — Non-vacuity for the OBLIGATION LIFECYCLE. createObligation LOCKS the
 stake off-ledger (obligor's `bal` debited, combined measure conserved); FULFILL returns the stake to the

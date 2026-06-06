@@ -23,7 +23,7 @@ Zero `sorry`/`admit`/`native_decide`/`axiom`. Does NOT touch `Identity.lean`, `F
 nor `Dregg2.lean`. Reuses ONLY the proved gated-executor keystones (`gateOK_revoked_fails`,
 `execFullForestG_unauthorized_fails`, `execFullForestG_conserves_per_asset`).
 -/
-import Dregg2.Exec.FullForestAuth
+import Dregg2.Exec.GatedForestCfg
 
 namespace Dregg2.Apps.IdentityGated
 
@@ -32,13 +32,8 @@ open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Exec.EffectsState
 open Dregg2.Exec.FullForestAuth
-open Dregg2.Exec.FullForestAuth.Demo
-
-/-- The file-local `Verifiable` instance the `Gate`/`Gated` dispatcher signatures need at the Demo
-carriers (`Stmt = Wit = Nat`), re-declared exactly as `FullForestAuth.Demo` does (its instance is
-file-local). Without it `gateOK`/`execFullForestG` cannot elaborate at the Demo carriers. -/
-local instance demoVerifiableId : Dregg2.Laws.Verifiable St Wt where
-  Verify _ _ := true
+open Dregg2.Exec.StarbridgeGated
+open Dregg2.Exec.StarbridgeGated
 
 /-! ## §1 — The identity DOMAIN at the Demo carriers. -/
 

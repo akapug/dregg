@@ -460,15 +460,52 @@ fn main() -> ExitCode {
     }
 
     // ---------------------------------------------------------------------
-    // CASE 5 — T8 honesty: an unrepresentable EFFECT must HARD-ERROR, never
-    //          silently drop. (We don't have a Rust `Effect` here; we assert the
-    //          error TYPE exists and is constructed where the projection would call
-    //          it. This documents the fail-closed contract at the boundary.)
+    // CASE 5 — all 56 FullActionA arms PARSE through the live Lean kernel.
+    //          For each arm: marshal a minimal turn rooted at that action against
+    //          wide_demo_state, call lean_forest_auth, assert the output is NOT the
+    //          MalformedWireSentinel (unmarshal_result succeeds — we don't need commit).
     // ---------------------------------------------------------------------
     {
-        // The marshaller errors (never panics/drops) on an unrepresentable effect.
-        let e = MarshalError::UnrepresentableEffect("GrantCapability");
-        println!("  [case5] PASS (contract): unrepresentable effects hard-error, e.g. `{e}`");
+        let state = wide_demo_state();
+        let arms = all_action_arms_demo();
+        assert_eq!(arms.len(), 56, "all_action_arms_demo must cover every Lean arm");
+        let mut arm_failures = 0u32;
+        for (i, action) in arms.iter().enumerate() {
+            let turn = demo_turn_for_action(action.clone());
+            let wire = match marshal_turn(&state, &turn) {
+                Ok(w) => w,
+                Err(e) => {
+                    println!("  [case5] arm {i} FAIL: marshal_turn errored: {e}");
+                    arm_failures += 1;
+                    continue;
+                }
+            };
+            let out = lean_forest_auth(&wire);
+            match unmarshal_result(&out) {
+                Ok(_res) => {
+                    // Parsed successfully — commit/rollback both acceptable.
+                }
+                Err(UnmarshalError::MalformedWireSentinel) => {
+                    println!(
+                        "  [case5] arm {i} FAIL: Lean returned MalformedWireSentinel — action did not parse"
+                    );
+                    arm_failures += 1;
+                }
+                Err(e) => {
+                    println!("  [case5] arm {i} FAIL: unmarshal_result errored: {e}");
+                    arm_failures += 1;
+                }
+            }
+        }
+        if arm_failures == 0 {
+            println!(
+                "  [case5] PASS: all {} FullActionA arms marshal+parse through dregg_exec_full_forest_auth",
+                arms.len()
+            );
+        } else {
+            println!("  [case5] FAIL: {arm_failures}/{} arms did not parse", arms.len());
+            failures += arm_failures;
+        }
     }
 
     println!();

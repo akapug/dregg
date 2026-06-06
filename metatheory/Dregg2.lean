@@ -161,6 +161,8 @@ import Dregg2.Exec.Handlers.Exercise    -- the LAST handler: exerciseA recursive
 import Dregg2.Exec.HandlerExecutor      -- ★ THE CUTOVER KEYSTONE (additive; live-switch is mechanical): masterRegistry packs all 42 proved handler entries; toClosedEffect : FullActionA→ClosedEffect maps all 56 ctors (aliases collapse); execHandlerTurn = the registry executor over RecChainedState. execHandlerTurn_conserves = the DERIVED global per-asset conservation, LIFTING the generic turn_conserves (the 56-arm execFullA_ledger_per_asset matrix collapses into ONE lift) + gate companions (head_authorized/_admitted). handler_refines_execFullA_{transfer,release,stateWrite} = the SOUND-STRENGTHENING relation (handler-commits ⊆ execFullA-commits, kernels agree). TEETH: a transfer/state-write into a Sealed cell (R1/R6) + an escrow release by a stranger (R2) — execFullA=some (the live hole) vs execHandlerTurn=none (the algebra closes it)
 import Dregg2.Exec.FullForestAuthPortal -- real §8 AuthPortal: RealAuthPortal bundles ed25519/STARK/HMAC floors; portalVerifyReal routes each Authorization variant to its own oracle; realAuthPortal.soundness = ed25519.unforgeable ∧ STARK.extractable ∧ HMAC.unforgeable (not True, not one shared collisionHard); per-variant security theorems take the carrier as an explicit hypothesis; unchecked_arm_rejects + no_reachable_arm_is_trivially_true (anti-vacuity); #assert_axioms-clean
 import Dregg2.Exec.FullForestAuth      -- executed credential+caveat auth gate on the call-forest: gated tree FullForestG with NodeAuth (10-variant Authorization + tiered caveats + macaroon chain); gateOK = credentialValid (§8 AuthPortal) ∧ capAuthorityG (granted≤held verified) ∧ caveatsDischarged; execFullForestG_conserves_per_asset/_no_amplify derived via eraseG; gatedNode_check_eq_use = no TOCTOU; non-vacuous (forged cred, false caveat, and per-asset launder all yield none)
+import Dregg2.Exec.GatedForestCfg      -- first-class `GatedForestCarriers` bundle + `starbridgeCarriers` instance (replaces pinned Demo/Production namespace)
+import Dregg2.Exec.CellExecutor        -- `CellExecutor.production` (gated starbridge) + internal `kernelForest` for erasure reuse
 import Dregg2.Exec.SigningMessage      -- byte-exact signing-message preimages (guards the §8 AuthPortal's opaque `stmt` Digest), ported from dregg1 (authorize.rs:1713–1880): 6 preimage builders (sigMsgFull/Partial/Custom/Stealth/Bearer/HandoffCert) + domain-separator theorems (sigMsg*_hasPrefix, domainSep_injective — 15 pairs distinct) + binding teeth (tampered field ⇒ different preimage); #assert_axioms-clean, non-vacuous (#eval tamper ⇒ false)
 import Dregg2.Exec.Admission           -- fail-closed admission prologue in front of the FullForestAuth kernel fold (admission ≠ kernel): `admissible` = 8 host-fed gates (expiry + agent-existence + nonce-replay + fee-coverage + write-set/agent freeze + receipt-chain self-binding + Stingray budget); `commitPrologue` (fee-debit + nonce-tick) is never rolled back — prologue_survives_failed_body proves fee−balance ∧ nonce+1 even on body failure (anti-DoS + replay-closed); pure_fold_loses_prologue proves the naive all-or-nothing bind discards the prologue; #assert_axioms-clean; #eval non-vacuity
 import Dregg2.Exec.TurnAdmission        -- devnet-shaped entry: `runGatedForestTurn` = `Admission.runTurn` ∘ `FullForestAuth.execFullForestG` (prologue survives gated-forest body failure; inadmissible turns rejected with no edit); #assert_axioms-clean
@@ -231,6 +233,7 @@ import Dregg2.Circuit.Inst.noteSpendA      -- D5 v2 breadth: noteSpendA_full_sou
 import Dregg2.Circuit.Inst.queueAllocateA  -- D5 v2 breadth: queueAllocateA_full_sound ⇒ QueueAllocateSpec (queues list)
 import Dregg2.Circuit.Inst.queueEnqueueA  -- D5 v2-triple: queueEnqueueA_full_sound ⇒ QueueEnqueueSpec (queues+bal+escrows)
 import Dregg2.Circuit.Inst.queueDequeueA  -- D5 v2-triple: queueDequeueA_full_sound ⇒ QueueDequeueSpec (queues+bal+escrows)
+import Dregg2.Circuit.Inst.queueAtomicTxA -- D5 v2-triple: queueAtomicTxA_full_sound ⇒ QueueAtomicTxSpec (queues+bal+escrows batch)
 import Dregg2.Circuit.Inst.queuePipelineStepA -- D5 v2 breadth: queuePipelineStepA_full_sound ⇒ QueuePipelineFanoutSpec (queues list)
 import Dregg2.Circuit.Inst.queueResizeA    -- D5 v2 breadth: queueResizeA_full_sound ⇒ QueueResizeSpec (queues list)
 import Dregg2.Circuit.Inst.pipelinedSendA   -- D5 v1 breadth: pipelinedSendA_full_sound ⇒ PipelinedSendSpec (log-only)
@@ -238,6 +241,9 @@ import Dregg2.Circuit.Inst.revoke          -- D5 v2 breadth: revoke_full_sound �
 import Dregg2.Circuit.Inst.revokeDelegationA -- D5 v2 breadth: revokeDelegationA_full_sound ⇒ RevokeSpec (caps)
 import Dregg2.Circuit.Inst.sealA           -- D5 v2 breadth: sealA_full_sound ⇒ SealSpec (sealedBoxes list)
 import Dregg2.Circuit.Inst.swissExportA    -- D5 v2 breadth: swissExportA_full_sound ⇒ ExportSpec (swiss list)
+import Dregg2.Circuit.Inst.enlivenRefA     -- D5 v2 breadth: enlivenRefA_full_sound ⇒ EnlivenSpec (swiss list)
+import Dregg2.Circuit.Inst.swissHandoffA   -- D5 v2 breadth: swissHandoffA_full_sound ⇒ HandoffSpec (swiss list)
+import Dregg2.Circuit.Inst.swissDropA      -- D5 v2 breadth: swissDropA_full_sound ⇒ DropSpec (swiss list)
 import Dregg2.Circuit.Inst.transfer        -- D5 v2 breadth: transfer_full_sound ⇒ BalanceMovementSpec (bal funcComponent)
 import Dregg2.Circuit.Inst.unsealA        -- D5 v2 breadth: unsealA_full_sound ⇒ UnsealSpec (sealedBoxes list)
 import Dregg2.Circuit.Inst.validateHandoffA -- D5 v2 breadth: validateHandoffA_full_sound ⇒ DelegateSpec (caps)
@@ -248,6 +254,10 @@ import Dregg2.Circuit.Inst.receiptArchiveA -- D5 v1 breadth: receiptArchiveA_ful
 import Dregg2.Circuit.Inst.refusalA        -- D5 v1 breadth: refusalA_full_sound ⇒ RefusalSpec (cell audit)
 import Dregg2.Circuit.Inst.setPermissionsA -- D5 v1 breadth: setPermissionsA_full_sound ⇒ SetPermissionsSpec (cell)
 import Dregg2.Circuit.Inst.setVKA          -- D5 v1 breadth: setVKA_full_sound ⇒ SetVKSpec (cell)
+import Dregg2.Circuit.Inst.cellSealA       -- D5 v2 breadth: cellSealA_full_sound ⇒ CellSealSpec (lifecycle funcComponent)
+import Dregg2.Circuit.Inst.cellUnsealA    -- D5 v2 breadth: cellUnsealA_full_sound ⇒ CellUnsealSpec (lifecycle funcComponent)
+import Dregg2.Circuit.Inst.cellDestroyA    -- D5 v2-dual: cellDestroyA_full_sound ⇒ CellDestroySpec (lifecycle+deathCert)
+import Dregg2.Circuit.Inst.refreshDelegationA -- D5 v2 breadth: refreshDelegationA_full_sound ⇒ RefreshDelegationSpec (delegations)
 import Dregg2.Circuit.EffectInstances2   -- D5 v2 VALIDATION: mintE_full_sound ⇒ MintASpec (bal, funcComponent) + noteSpendE_full_sound ⇒ NoteSpendSpec (nullifiers list, listComponent + growing log), both re-derived THROUGH the v2 framework. Proves v2 works for BOTH non-cell shapes; the TEMPLATE for the ~25 non-cell effects
 import Dregg2.Circuit.EffectInstances   -- D5 framework VALIDATION + templates: transferE/setFieldE re-derive Transfer's & setFieldA's circuit⟺spec THROUGH the generic EffectCommit framework — transferE_full_sound ⇒ TransferSpec, setFieldE_full_sound ⇒ SetFieldSpec (the bespoke specs, from realizable Poseidon-CR portals only). Proves the framework is instantiable + sound; the worked TEMPLATE the remaining ~29 effects copy (~100 lines each). #assert_axioms-clean
 import Dregg2.Circuit.SetFieldCommit    -- D5 breadth (effect #2/31): FULL-STATE circuit⟺spec for setFieldA — setfield_circuit_full_sound (satisfiedSF ⇒ the full SetFieldSpec, frame reconstructed by funext) + completeness + 4 ANTI-GHOST teeth (rejects field-tamper / third-cell / wrong-target / log-forge) + concrete #guard. INJECTIVITY-only portals (compressNInjective/cellLeafInjective/RestHashIffFrame REUSED from StateCommit + logHashInjective NEW for the receipt-chain growth + AccountsWF). Confirms the generic framework shape: {restHash ⊕ frame-sponge ⊕ touched-leaf ⊕ log-hash}
@@ -285,6 +295,8 @@ import Dregg2.Circuit.Spec.swissexport           -- exportSturdyRefA: CapTP stur
 import Dregg2.Circuit.Spec.queuefifocore         -- queueAllocate/Resize/Enqueue/DequeueA: the 4 FIFO ring-buffer ops (insert-fresh / no-id-reuse / no-shrink-below-occupancy / dead-cell-rejection, balance-neutral)
 import Dregg2.Circuit.Spec.queuepipelinefanout   -- queuePipelineStepA: atomic dequeue→fanout-enqueue pipeline step spec
 import Dregg2.Circuit.Spec.bridgeoutboundcancel  -- bridgeCancelA: timeout-refund spec (credit originator + resolve, combined-conserving)
+import Dregg2.Circuit.Spec.celllifecycle       -- cellSealA/cellUnsealA/cellDestroyA: Live↔Sealed↔Destroyed lifecycle spec
+import Dregg2.Circuit.Spec.refreshdelegation     -- refreshDelegationA: parent c-list snapshot into delegations
 import Dregg2.DSLEffect                -- `dregg_effect <name> : <Class>` effects eDSL → Spec.Conservation LinearityClass coloring + inherited obligation; #assert_namespace_axioms-clean
 import Dregg2.Exec.Gas                  -- gas-metering layered beside execFullTurn: gasCost_pos (no free action) + gas_exhaustion_fails_closed (over-budget ⇒ none, no partial mutation) + gas_sufficient_runs (pure guard, identical state) + gas_conserves/_preserves_attests (removes no safety); Nat-resource orthogonal to ℤ-conservation
 import Dregg2.Proof.BeaconSpaceInterior -- interior-h non-vacuity witness: Measure.infinitePi (Bernoulli 3/4)^ℕ at h=3/4, indep_block via infinitePi_pi; BeaconSpace is non-vacuously instantiable at a genuine interior honest-fraction
@@ -336,6 +348,9 @@ import Dregg2.Verify.Tactics    -- Tier 1: carry_forever (livingCellA_carries pl
 import Dregg2.Verify.Contract   -- Tier 3: first-class CellContract (Inv + step_ob) → forever (livingCellA_carries) + always (the REAL LTL □ via Proof.Temporal.always_of_step_invariant); three concrete contracts discharged through the engine
 import Dregg2.Verify.Catalog    -- Tier 4: declarative shape macros monotone_registry% / conservation% / confinement% / automaton_inv% → real CellContracts (confinement surfaces its control∈U hypothesis honestly; automaton_inv is genuinely relational, obs a + obs b)
 import Dregg2.Verify.Regression -- H4 gate: six shipped crowns (identity_revoked_forever / no_double_spend / commitments_persist / …) reproduced via the catalog with both-directions defeq witnesses vs the hand proofs
+import Dregg2.Verify.FramesG     -- gated Hatchery Tier 2: erasure-lifted forest-grow lemmas + `cellNextG_carries_rel`
+import Dregg2.Verify.TacticsG    -- gated Hatchery Tier 1: `carry_foreverG` + identity/logMono forever crowns on `execFullForestG`
+import Dregg2.Verify.ContractG   -- deprecated re-export; production contracts live in `Verify/Contract`
 -- ── THE WEB-CITIZEN SURFACE: ProofWidgets driven by REAL Lean terms (no placeholder data — the prime directive). ──
 import Dregg2.Widget.Basic             -- shared Html helpers + the trust-badge classifier: tier read off Lean.collectAxioms (KernelChecked / CarrierBounded / ExtraAxioms) — cannot be hand-faked; 2 by-design demo axioms exhibit the amber carrier-bounded tier
 import Dregg2.Widget.ProofBadgeGallery -- tabulates the collectAxioms trust verdict over real theorems (green) vs a synthetic carrier-bounded demonstrator (amber)

@@ -3194,14 +3194,8 @@ action (`execFullForestG = none`) we ECHO the UNCHANGED input state with `loglen
 is observable. On a malformed wire we fail-closed to an empty state with `ok:0`. -/
 
 open Dregg2.Exec.FullForestAuth (Authorization execFullForestG GatedCaveat portalVerify caveatsDischarged)
-open Dregg2.Exec.FullForestAuth.Demo (Dg Pf St Wt DNodeAuth DForest DChild mkAuth)
-
-/-- The trivial verify seam the gated dispatcher's signature needs (`Verifiable St Wt`). The WHAT leg of the
-gated node is `.unchecked (Guard.all [])`, which does NOT consult `Verify`; this instance only pins the type
-so `execFullForestG` over the Demo carriers elaborates (mirrors `Demo.demoVerifiable`, which is `local` and
-thus not visible here). -/
-local instance fillxVerifiable : Dregg2.Laws.Verifiable St Wt where
-  Verify _ _ := true
+open Dregg2.Exec.StarbridgeGated (Dg Pf St Wt DNodeAuth DForest DChild mkAuth)
+open Dregg2.Exec.StarbridgeGated
 
 /-! ## §WG1 — lift the wire credential `Authorization Nat Nat → Authorization Int Int`.
 

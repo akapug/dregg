@@ -66,6 +66,8 @@ open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull (fma0)
 open Dregg2.Exec.FullForest
 open Dregg2.Proof.Temporal (Always)
+open KernelForest (Contract Sched)
+open Production (liftFromKernelForest)
 
 /-! ## §1 — Identity: `monotone_registry% revoked` reproduces the revocation crown.
 
@@ -97,7 +99,7 @@ example (credNul : Nat) (s : RecChainedState) (hinit : credNul ∈ s.kernel.revo
 theorem identity_revoked_always_via_catalog (credNul : Nat) (s : RecChainedState)
     (hinit : credNul ∈ s.kernel.revoked) (sched : SchedA) :
     Always (fun s' => credNul ∈ s'.kernel.revoked) s sched :=
-  (monotone_registry% revoked credNul).always hinit sched
+  KernelForest.always (monotone_registry% revoked credNul) hinit sched
 
 /-! ## §2 — CellNullifier headline: `monotone_registry% nullifiers` reproduces "spent ⇒ spent forever".
 
@@ -136,10 +138,10 @@ by `List.Subset.trans` (exactly the hand crowns' one-step body). `.forever` then
 /-- **`subsetNullifiersContract base` — the `⊆`-shaped grow-only nullifier contract.** `Inv s := base ⊆
 s.kernel.nullifiers`, carried by `execFullForestA_nullifiers_grow` (commit: chain by `Subset.trans`;
 reject: stay-put). The `⊆` generalization of `monotone_registry% nullifiers` over a baseline list. -/
-def subsetNullifiersContract (base : List Nat) : CellContract where
+def subsetNullifiersContract (base : List Nat) : Contract where
   Inv s := base ⊆ s.kernel.nullifiers
   step_ob a cf h := by
-    show base ⊆ (cellNextA a cf).kernel.nullifiers
+    rw [CellExecutor.kernelForest_next_eq]
     unfold cellNextA
     cases hc : execFullForestA a cf.1 with
     | some a' => simp only [Option.getD_some]
@@ -150,10 +152,10 @@ def subsetNullifiersContract (base : List Nat) : CellContract where
 /-- **`subsetCommitmentsContract base` — the `⊆`-shaped grow-only commitment contract.** `Inv s := base ⊆
 s.kernel.commitments`, carried by `execFullForestA_commitments_grow`. The `⊆` generalization of
 `monotone_registry% commitments`. -/
-def subsetCommitmentsContract (base : List Nat) : CellContract where
+def subsetCommitmentsContract (base : List Nat) : Contract where
   Inv s := base ⊆ s.kernel.commitments
   step_ob a cf h := by
-    show base ⊆ (cellNextA a cf).kernel.commitments
+    rw [CellExecutor.kernelForest_next_eq]
     unfold cellNextA
     cases hc : execFullForestA a cf.1 with
     | some a' => simp only [Option.getD_some]
@@ -216,7 +218,7 @@ theorem nameservice_registration_forever_via_contract (s : RecChainedState)
     (name owner : Dregg2.Apps.NameService.Name)
     (hinit : Dregg2.Apps.NameService.isRegistered s name owner = true) (sched : SchedA) :
     ∀ n, Dregg2.Apps.NameService.isRegistered (trajA s sched n) name owner = true :=
-  (nameRegisteredContract name owner).forever hinit sched
+  (KernelForest.nameRegisteredContract name owner).forever hinit sched
 
 /-- Regression-equality (→): our reproduction discharges the shipped crown's type. -/
 example (s : RecChainedState) (name owner : Dregg2.Apps.NameService.Name)
@@ -248,7 +250,7 @@ Identical statement; no hand temporal proof. -/
 theorem subscription_wellformed_forever_via_contract (s : RecChainedState)
     (hinit : Dregg2.Apps.Subscription.subWF s.kernel) (sched : SchedA) :
     ∀ n, Dregg2.Apps.Subscription.subWF (trajA s sched n).kernel :=
-  subWFContract.forever hinit sched
+  KernelForest.subWFContract.forever hinit sched
 
 /-- Regression-equality (→): our reproduction discharges the shipped crown's type. -/
 example (s : RecChainedState) (hinit : Dregg2.Apps.Subscription.subWF s.kernel) (sched : SchedA) :
@@ -295,8 +297,8 @@ non-trivial — the Hatchery reproduces the non-vacuous theorems, not vacuities:
 
 -- The reproduced contracts carry genuinely distinct `SafetyShape`s (not one hard-wired tag).
 #eval (subsetNullifiersContract [77]).shape                                 -- SafetyShape.membership
-#eval subWFContract.shape                                                   -- SafetyShape.other
-#eval decide ((subsetNullifiersContract [77]).shape ≠ subWFContract.shape)  -- true (distinct shapes)
+#eval KernelForest.subWFContract.shape                                                   -- SafetyShape.other
+#eval decide ((subsetNullifiersContract [77]).shape ≠ KernelForest.subWFContract.shape)  -- true (distinct shapes)
 
 /-! ## §7 — Axiom hygiene — every reproduced crown pinned to the kernel triple `{propext, Classical.choice, Quot.sound}`.
 

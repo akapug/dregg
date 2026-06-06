@@ -20,7 +20,7 @@ executor (not merely carried); the op conserves every asset.
 
 Mirrors the green `NameserviceGated`/`IdentityGated` template. Zero sorry/admit/native_decide/axiom.
 -/
-import Dregg2.Exec.FullForestAuth
+import Dregg2.Exec.GatedForestCfg
 
 namespace Dregg2.Apps.SubscriptionGated
 
@@ -29,10 +29,8 @@ open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Exec.EffectsState
 open Dregg2.Exec.FullForestAuth
-open Dregg2.Exec.FullForestAuth.Demo
-
-local instance demoVerifiableSub : Dregg2.Laws.Verifiable St Wt where
-  Verify _ _ := true
+open Dregg2.Exec.StarbridgeGated
+open Dregg2.Exec.StarbridgeGated
 
 /-- The subscription cell. Cell `0` so `actor = 0` self-authorizes — the gate's load-bearing leg is the
 §8 credential, and the SEQUENCE invariant is the `MonotonicSequence` slot caveat. -/

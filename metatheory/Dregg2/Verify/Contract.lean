@@ -44,6 +44,7 @@ Discipline: NO `sorry`/`admit`/`native_decide`/SMT. Every keystone (`CellContrac
 `{propext, Classical.choice, Quot.sound}` at the foot of the file.
 -/
 import Dregg2.Verify.Tactics
+import Dregg2.Exec.CellExecutor
 import Dregg2.Proof.Temporal
 import Dregg2.Apps.NameService
 import Dregg2.Apps.Subscription
@@ -79,96 +80,134 @@ inductive SafetyShape
 
 /-! ## §2 — `CellContract`: the first-class verified-invariant object. -/
 
-/-- **`CellContract`** — a verified app invariant, packaged as a value. Bundles exactly the pair the
-Hatchery's parametric crown (`Exec.livingCellA_carries`) consumes:
-
-* `Inv`     — a state predicate on the REAL kernel state `RecChainedState`;
-* `step_ob` — the app's ONE obligation: a single living-cell step `cellNextA` preserves `Inv`
-  (dischargeable by `exec_frame` / a supplied forest-grow lemma — the Tier-1/2 engine);
-* `shape`   — the `SafetyShape` classification tag (for the widget layer; gates no proof).
-
-From `(Inv, step_ob)` alone, `CellContract.forever` derives the unbounded every-schedule carry and
-`CellContract.always` derives the LTL `□`. The author writes the two real fields; the rest is free. -/
-structure CellContract where
-  /-- The carried state predicate on the real 46-effect kernel state. -/
+/-- **`CellContract E`** — a verified app invariant on executor `E`, packaged as a value. -/
+structure CellContract (E : CellExecutor) where
   Inv : RecChainedState → Prop
-  /-- The ONE real obligation: a single living-cell step preserves `Inv` (commit-grows / stay-put). -/
-  step_ob : ∀ s cf, Inv s → Inv (cellNextA s cf)
-  /-- The qualitative classification of the safety, for the contract-card widget. -/
+  step_ob : ∀ s c, Inv s → Inv (E.next s c)
   shape : SafetyShape := .other
 
-/-- **`CellContract.forever` (PROVED) — THE PAYOFF: a contract holds at every index, every schedule.**
-Given a contract `C` and a starting state `s` satisfying `C.Inv`, `C.Inv` holds at EVERY index of the
-unbounded adversarial trajectory `trajA s sched`, under EVERY schedule `sched`. This is the Hatchery's
-parametric crown `Exec.livingCellA_carries` applied to the contract's own `(Inv, step_ob)` — the whole
-reason to package an invariant as a `CellContract`: the forever-carry is a method call, not a re-proof. -/
-theorem CellContract.forever (C : CellContract) {s : RecChainedState} (h : C.Inv s) (sched : SchedA) :
-    ∀ n, C.Inv (trajA s sched n) :=
-  livingCellA_carries C.Inv C.step_ob s h sched
+/-- Lift a contract along a one-step preservation implication. -/
+def CellContract.lift {E E' : CellExecutor} (C : CellContract E)
+    (lift_pres : ∀ s c, C.Inv s → C.Inv (E'.next s c)) : CellContract E' where
+  Inv := C.Inv
+  step_ob := lift_pres
+  shape := C.shape
 
-/-- **`CellContract.always` (PROVED) — the TEMPORAL face: a contract IS an LTL `□`-formula.** The same
-contract, read into the linear-temporal-logic `□` modality of `Proof/Temporal.lean`: `Always C.Inv s
-sched` (`□C.Inv` along the living cell's time-line). Wired through `always_of_step_invariant` — whose
-one-step hypothesis is *exactly* `C.step_ob`'s type — so no extra proof obligation arises. A
-`CellContract` is therefore simultaneously a forever-trajectory invariant (`forever`) and a temporal
-`□`-formula (`always`); the temporal algebra of `Proof/Temporal.lean` (`always_and`, `always_mono`,
-`always_imp_next`, `□`/`◇` duality, …) applies to it for free. -/
-theorem CellContract.always (C : CellContract) {s : RecChainedState} (h : C.Inv s) (sched : SchedA) :
+namespace CellContract
+
+/-- Forever carry — parametric over any `CellExecutor` with a `CellCarries` instance. -/
+theorem forever {E : CellExecutor} [CellCarries E] (C : CellContract E) {s : RecChainedState}
+    (h : C.Inv s) (sched : E.TurnSched) :
+    ∀ n, C.Inv (E.traj s sched n) :=
+  CellCarries.carries C.Inv C.step_ob s h sched
+
+end CellContract
+
+namespace Production
+
+noncomputable abbrev Executor := CellExecutor.production
+abbrev Sched := SchedG
+abbrev Contract := CellContract Executor
+
+theorem always (C : Contract) {s : RecChainedState} (h : C.Inv s) (sched : Sched) :
+    AlwaysG C.Inv s sched :=
+  alwaysG_of_step_invariant C.Inv C.step_ob s h sched
+
+/-- Lift a kernel-forest contract to production via the commit-path erasure bridge. -/
+noncomputable def liftFromKernelForest (C : CellContract CellExecutor.kernelForest) : Contract :=
+  C.lift fun s cg h =>
+    CellExecutor.production_erases_kernelForest C.Inv
+      (fun s' cf h' => by simpa [CellExecutor.kernelForest_next_eq] using C.step_ob s' cf h') s cg h
+
+end Production
+
+/-! Internal: contracts whose `step_ob` is discharged on the auth-stripped kernel forest.
+Used only by catalog macro elaboration and the Regression suite's bidirectional witnesses against
+legacy `trajA` crowns — NOT the public Hatchery API. -/
+
+namespace KernelForest
+
+noncomputable abbrev Executor := CellExecutor.kernelForest
+abbrev Sched := SchedA
+abbrev Contract := CellContract Executor
+
+theorem always (C : Contract) {s : RecChainedState} (h : C.Inv s) (sched : Sched) :
     Always C.Inv s sched :=
-  always_of_step_invariant C.Inv C.step_ob s h sched
+  always_of_step_invariant C.Inv
+    (fun a cf h' => by simpa [CellExecutor.kernelForest_next_eq] using C.step_ob a cf h')
+    s h sched
 
-/-! ## §3 — Concrete contracts (the tag genuinely VARIES; the proofs use the Tier-1/2 engine).
-
-Three shipped contracts, one per non-`other` `SafetyShape`, so the tag carries genuinely distinct
-information (not a single hard-wired value). Each `step_ob` is discharged through the Hatchery ENGINE,
-demonstrating Tier 3 sits ON TOP of Tiers 1+2:
-
-| contract          | shape        | `Inv`                                   | `step_ob` via                         |
-|-------------------|--------------|-----------------------------------------|---------------------------------------|
-| `logAppendOnly`   | `monotone`   | `s0.log.length ≤ ·.log.length`          | `exec_frame execFullForestA_logMono`  |
-| `conserved`       | `constant`   | `cellObsA · = cellObsA s0`              | `cellObsA_next` (rewrite)             |
-| `revokedPersists` | `membership` | `x ∈ ·.kernel.revoked`                  | `exec_frame …execFullForestA_revoked_grow` |
--/
-
-/-- **`logAppendOnly s0` — the append-only audit-log contract (`monotone`).** `Inv := s0.log.length ≤
-·.log.length`: the receipt/audit log never shrinks below its starting length — the canonical OS
-*"the log is the truth, never rewritten"* / non-repudiation safety. The `step_ob` is discharged by the
-Tier-1 `exec_frame` tactic supplied the forest log-monotone lemma `execFullForestA_logMono`: the commit
-arm chains the baseline `≤` with the lemma (`Nat`'s `≤` is `Trans`), the reject arm is the universal
-stay-put close. This is `CellCarry.livingCellA_logMono` repackaged as a first-class contract. -/
-def logAppendOnly (s0 : RecChainedState) : CellContract where
+def logAppendOnly (s0 : RecChainedState) : Contract where
   Inv s := s0.log.length ≤ s.log.length
-  step_ob := by exec_frame execFullForestA_logMono
+  step_ob s cf h := by
+    rw [CellExecutor.kernelForest_next_eq]
+    simp only [cellNextA]
+    rcases hc : execFullForestA s cf.1 with _ | s'
+    · simp only [Option.getD_none]; exact h
+    · simp only [Option.getD_some]
+      exact le_trans h (execFullForestA_logMono s s' cf.1 hc)
   shape := .monotone
 
-/-- **`conserved s0` — the per-asset conservation contract (`constant`).** `Inv := cellObsA · =
-cellObsA s0`: the per-asset conservation badge `cellObsA` never drifts from its starting value. The
-`step_ob` is discharged by the proved one-step `cellObsA_next` (commit conserves per-asset; stay-put is
-trivial). This is `CellReal.livingCellA_obs_invariant` repackaged as a first-class contract. -/
-def conserved (s0 : RecChainedState) : CellContract where
+def conserved (s0 : RecChainedState) : Contract where
   Inv s := cellObsA s = cellObsA s0
   step_ob a cf h := by
-    show cellObsA (cellNextA a cf) = cellObsA s0
-    rw [cellObsA_next]; exact h
+    rw [CellExecutor.kernelForest_next_eq, cellObsA_next]
+    exact h
   shape := .constant
 
-/-- **`revokedPersists x` — the permanent-revocation contract (`membership`).** `Inv := x ∈
-·.kernel.revoked`: a credential nullifier `x` that is in the revocation registry STAYS in it — the
-single-machine immediate-and-permanent revocation root-of-trust (`#139`: a revoked cap is never
-silently un-revoked). The `step_ob` is discharged by `exec_frame` supplied the forest revocation-grow
-lemma: the commit arm chains membership through `s.kernel.revoked ⊆ s'.kernel.revoked`
-(`List.Subset.trans`-style, mediated by the [Dregg2] rule-set's `Subset.trans`), the reject arm is the
-universal stay-put close. The `membership` shape — a third, qualitatively distinct predicate form. -/
-def revokedPersists (x : Nat) : CellContract where
+def revokedPersists (x : Nat) : Contract where
   Inv s := x ∈ s.kernel.revoked
   step_ob a cf h := by
-    show x ∈ (cellNextA a cf).kernel.revoked
+    rw [CellExecutor.kernelForest_next_eq]
     unfold cellNextA
     cases hc : execFullForestA a cf.1 with
     | some a' => simp only [Option.getD_some]
                  exact Dregg2.Apps.Identity.execFullForestA_revoked_grow a a' cf.1 hc h
     | none    => simp only [Option.getD_none]; exact h
   shape := .membership
+
+def nameRegisteredContract (name owner : Dregg2.Apps.NameService.Name) : Contract where
+  Inv s := Dregg2.Apps.NameService.isRegistered s name owner = true
+  step_ob a cf h := by
+    rw [CellExecutor.kernelForest_next_eq]
+    unfold cellNextA
+    cases hc : execFullForestA a cf.1 with
+    | some a' => simp only [Option.getD_some]
+                 exact Dregg2.Apps.NameService.nameservice_step_preserves a a' cf.1 name owner hc h
+    | none    => simp only [Option.getD_none]; exact h
+  shape := .membership
+
+def subWFContract : Contract where
+  Inv s := Dregg2.Apps.Subscription.subWF s.kernel
+  step_ob a cf h := by
+    rw [CellExecutor.kernelForest_next_eq]
+    unfold cellNextA
+    cases hc : execFullForestA a cf.1 with
+    | some a' => simp only [Option.getD_some]
+                 exact Dregg2.Apps.Subscription.execFullForestA_subWF_preserved a a' cf.1 hc h
+    | none    => simp only [Option.getD_none]; exact h
+  shape := .other
+
+end KernelForest
+
+open Production (Contract Sched liftFromKernelForest)
+
+/-! ## §3 — Production contracts (lifted from kernel-forest proofs via erasure). -/
+
+noncomputable def logAppendOnly (s0 : RecChainedState) : Contract :=
+  liftFromKernelForest (KernelForest.logAppendOnly s0)
+
+noncomputable def conserved (s0 : RecChainedState) : Contract :=
+  liftFromKernelForest (KernelForest.conserved s0)
+
+noncomputable def revokedPersists (x : Nat) : Contract :=
+  liftFromKernelForest (KernelForest.revokedPersists x)
+
+noncomputable def nameRegisteredContract (name owner : Dregg2.Apps.NameService.Name) : Contract :=
+  liftFromKernelForest (KernelForest.nameRegisteredContract name owner)
+
+noncomputable def subWFContract : Contract :=
+  liftFromKernelForest KernelForest.subWFContract
 
 /-! ## §3a — The three standing apps, re-expressed as first-class `CellContract`s (HATCHERY.md H3 gate).
 
@@ -184,51 +223,16 @@ is the APP'S OWN proved one-step lemma — Tier 3 absorbing an app invariant whi
 `execFullForestA`. These two defs are the single source of truth; `Verify/Regression.lean §4–§5` reuses
 them for the rigorous BOTH-DIRECTIONS defeq witness against the shipped crowns. -/
 
-/-- **`nameRegisteredContract name owner` — NameService's "registered ⇒ registered forever" as a
-contract.** `Inv s := isRegistered s name owner = true` (the name→owner binding commitment lives in the
-grow-only registry), `step_ob` the app's own `nameservice_step_preserves` (commit: the grow-only registry
-keeps the binding registered; reject: stay-put). `.forever` reproduces
-`Apps.NameService.nameservice_registration_forever`. `membership` shape (a registry-presence fact). -/
-def nameRegisteredContract (name owner : Dregg2.Apps.NameService.Name) : CellContract where
-  Inv s := Dregg2.Apps.NameService.isRegistered s name owner = true
-  step_ob a cf h := by
-    show Dregg2.Apps.NameService.isRegistered (cellNextA a cf) name owner = true
-    unfold cellNextA
-    cases hc : execFullForestA a cf.1 with
-    | some a' => simp only [Option.getD_some]
-                 exact Dregg2.Apps.NameService.nameservice_step_preserves a a' cf.1 name owner hc h
-    | none    => simp only [Option.getD_none]; exact h
-  shape := .membership
-
-/-- **`subWFContract` — Subscription's "no queue ever over capacity, forever" as a contract.** `Inv s :=
-subWF s.kernel` (every queue record's in-flight count is within its capacity — dregg1's `head − tail ≤
-capacity`), `step_ob` the app's own `execFullForestA_subWF_preserved` (commit: the capacity gate keeps
-every record within bounds; reject: stay-put leaves `queues` unchanged). `.forever` reproduces
-`Apps.Subscription.subscription_wellformed_forever`. `other` shape — a `∀ q ∈ queues` field bound, the
-one app invariant outside the catalog's four bare shapes. -/
-def subWFContract : CellContract where
-  Inv s := Dregg2.Apps.Subscription.subWF s.kernel
-  step_ob a cf h := by
-    show Dregg2.Apps.Subscription.subWF (cellNextA a cf).kernel
-    unfold cellNextA
-    cases hc : execFullForestA a cf.1 with
-    | some a' => simp only [Option.getD_some]
-                 exact Dregg2.Apps.Subscription.execFullForestA_subWF_preserved a a' cf.1 hc h
-    | none    => simp only [Option.getD_none]; exact h
-  shape := .other
-
-/-- **NameService — `.forever` reproduces `nameservice_registration_forever`.** The ascribed type IS the
+/-- **NameService — `.forever` on production trajectories.** The ascribed type IS the
 shipped crown's type, so this example witnesses statement-level regression-equality (a registered binding
 stays registered at every index of every trajectory), with NO hand temporal proof. -/
 example (s : RecChainedState) (name owner : Dregg2.Apps.NameService.Name)
-    (hinit : Dregg2.Apps.NameService.isRegistered s name owner = true) (sched : SchedA) :
-    ∀ n, Dregg2.Apps.NameService.isRegistered (trajA s sched n) name owner = true :=
+    (hinit : Dregg2.Apps.NameService.isRegistered s name owner = true) (sched : SchedG) :
+    ∀ n, Dregg2.Apps.NameService.isRegistered (trajG s sched n) name owner = true :=
   (nameRegisteredContract name owner).forever hinit sched
 
-/-- **Subscription — `.forever` reproduces `subscription_wellformed_forever`.** The ascribed type IS the
-shipped crown's type: no queue is ever over capacity at any index of any adversarial trajectory. -/
-example (s : RecChainedState) (hinit : Dregg2.Apps.Subscription.subWF s.kernel) (sched : SchedA) :
-    ∀ n, Dregg2.Apps.Subscription.subWF (trajA s sched n).kernel :=
+example (s : RecChainedState) (hinit : Dregg2.Apps.Subscription.subWF s.kernel) (sched : SchedG) :
+    ∀ n, Dregg2.Apps.Subscription.subWF (trajG s sched n).kernel :=
   subWFContract.forever hinit sched
 
 /-! ## §3′ — Using a contract: `forever` / `always` are method calls, not re-proofs.
@@ -238,23 +242,20 @@ NO bespoke proof — the shipped hand crowns. These `example`s are build-checked
 contract object delivers the SAME forever / `□` statements as `CellCarry`, `CellReal`, `Identity`. -/
 
 /-- A contract delivers the hand crown `Exec.livingCellA_logMono`'s statement via `.forever`. -/
-example (s : RecChainedState) (sched : SchedA) :
-    ∀ n, s.log.length ≤ (trajA s sched n).log.length :=
+example (s : RecChainedState) (sched : SchedG) :
+    ∀ n, s.log.length ≤ (trajG s sched n).log.length :=
   (logAppendOnly s).forever (le_refl _) sched
 
-/-- …and its LTL-`□` reading via `.always` (the `Proof/Temporal.always_logMono` statement). -/
-example (s : RecChainedState) (sched : SchedA) :
-    Always (fun s' => s.log.length ≤ s'.log.length) s sched :=
-  (logAppendOnly s).always (le_refl _) sched
+example (s : RecChainedState) (sched : SchedG) :
+    AlwaysG (fun s' => s.log.length ≤ s'.log.length) s sched :=
+  Production.always (logAppendOnly s) (le_refl _) sched
 
-/-- The conservation contract delivers `CellReal.livingCellA_obs_invariant` via `.forever`. -/
-example (s : RecChainedState) (sched : SchedA) :
-    ∀ n, cellObsA (trajA s sched n) = cellObsA s :=
+example (s : RecChainedState) (sched : SchedG) :
+    ∀ n, cellObsA (trajG s sched n) = cellObsA s :=
   (conserved s).forever rfl sched
 
-/-- The revocation contract delivers `Identity.livingCellA_identity_revoked_forever` via `.forever`. -/
-example (x : Nat) (s : RecChainedState) (hinit : x ∈ s.kernel.revoked) (sched : SchedA) :
-    ∀ n, x ∈ (trajA s sched n).kernel.revoked :=
+example (x : Nat) (s : RecChainedState) (hinit : x ∈ s.kernel.revoked) (sched : SchedG) :
+    ∀ n, x ∈ (trajG s sched n).kernel.revoked :=
   (revokedPersists x).forever hinit sched
 
 /-! ## §4 — It runs (`#eval`) — the contracts are NON-VACUOUS and the tag carries DISTINCT info.
@@ -271,11 +272,11 @@ contracts carry three DISTINCT `SafetyShape`s, so the tag is real classifying da
 #eval (execFullForestA fma0 transferCF.1).map (fun s' => decide (fma0.log.length ≤ s'.log.length))     -- some true (the carried `Inv` of `logAppendOnly fma0` holds AFTER)
 
 -- The `SafetyShape` tag carries GENUINELY DISTINCT info across the three shipped contracts.
-#eval (logAppendOnly fma0).shape                                  -- SafetyShape.monotone
-#eval (conserved fma0).shape                                      -- SafetyShape.constant
-#eval (revokedPersists 42).shape                                  -- SafetyShape.membership
-#eval decide ((logAppendOnly fma0).shape ≠ (conserved fma0).shape)        -- true (distinct shapes — not a constant tag)
-#eval decide ((conserved fma0).shape ≠ (revokedPersists 42).shape)        -- true
+#eval (KernelForest.logAppendOnly fma0).shape                                  -- SafetyShape.monotone
+#eval (KernelForest.conserved fma0).shape                                      -- SafetyShape.constant
+#eval (KernelForest.revokedPersists 42).shape                                  -- SafetyShape.membership
+#eval decide ((KernelForest.logAppendOnly fma0).shape ≠ (KernelForest.conserved fma0).shape)        -- true
+#eval decide ((KernelForest.conserved fma0).shape ≠ (KernelForest.revokedPersists 42).shape)        -- true
 
 -- The two added app contracts (§3a) are NON-VACUOUS: the registry/queue readers DISCRIMINATE.
 -- NameService: a binding not yet registered is genuinely `false` (the registry has teeth), and a real
@@ -284,18 +285,19 @@ contracts carry three DISTINCT `SafetyShape`s, so the tag is real classifying da
         Dregg2.Apps.NameService.aliceName Dregg2.Apps.NameService.aliceOwner                   -- false (not registered — teeth)
 #eval Dregg2.Apps.NameService.afterRegister.map (fun s => Dregg2.Apps.NameService.isRegistered s
         Dregg2.Apps.NameService.aliceName Dregg2.Apps.NameService.aliceOwner)                  -- some true (a real register lands it)
-#eval (nameRegisteredContract Dregg2.Apps.NameService.aliceName
+#eval (KernelForest.nameRegisteredContract Dregg2.Apps.NameService.aliceName
         Dregg2.Apps.NameService.aliceOwner).shape                                              -- SafetyShape.membership
 -- Subscription: a real committed program builds a within-capacity queue (in-flight 1 ≤ capacity 2 — teeth).
 #eval (execFullForestA fmaDeleg Dregg2.Apps.Subscription.subForest).map
         (fun s => s.kernel.queues.all (fun q => decide (q.buffer.length ≤ q.capacity)))        -- some true (the carried subWF holds AFTER)
-#eval subWFContract.shape                                                                      -- SafetyShape.other
-#eval decide ((nameRegisteredContract 1 100).shape ≠ subWFContract.shape)                      -- true (the apps carry distinct shapes)
+#eval KernelForest.subWFContract.shape                                                                      -- SafetyShape.other
+#eval decide ((KernelForest.nameRegisteredContract 1 100).shape ≠ KernelForest.subWFContract.shape)                      -- true
 
 /-! ## §5 — Axiom hygiene — the contract object + its methods + the instances, kernel-triple clean. -/
 
 #assert_axioms CellContract.forever
-#assert_axioms CellContract.always
+#assert_axioms Production.always
+#assert_axioms Production.liftFromKernelForest
 #assert_axioms logAppendOnly
 #assert_axioms conserved
 #assert_axioms revokedPersists

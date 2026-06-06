@@ -36,6 +36,7 @@ ordinary kernel-checked terms with NO new axiom and NO `sorry`/`native_decide`/S
 Substrate: Lean 4.30 `elab`/`macro` + `aesop` (an existing v4.30 dependency). No new lake deps.
 -/
 import Dregg2.Verify.Frames
+import Dregg2.Exec.CellExecutor
 
 namespace Dregg2.Verify
 
@@ -216,5 +217,67 @@ tactics reproduce non-vacuous theorems, not vacuities. -/
 #assert_axioms identity_revoked_forever_via_tactics
 #assert_axioms commitments_persist_via_auto
 #assert_axioms logMono_handback_demo
+
+/-! ## §8 — Production Hatchery (`CellExecutor.production` / `execForestG`).
+
+`carry_forever_production` + `exec_frame_production` are the production counterparts of §1–§2.
+`carry_foreverG` / `exec_frameG` remain as aliases in `TacticsG.lean` (deprecated import path). -/
+
+namespace Production
+
+open Dregg2.Exec.StarbridgeGated
+open Dregg2.Exec.StarbridgeGated (execForestG)
+
+macro "carry_forever_production" Good:term : tactic =>
+  `(tactic| refine livingCellG_carries $Good ?hpres _ ?hinit _)
+
+/-- Production executor case-split (mirrors `exec_frame` on `cellNextG` / `execForestG`). -/
+elab "exec_frame_production" grow?:(ppSpace colGt term)? : tactic => do
+  let s     := mkIdent `s
+  let cg    := mkIdent `cg
+  let hgood := mkIdent `hgood
+  let hc    := mkIdent `hc
+  let s'    := mkIdent `s'
+  evalTactic (← `(tactic| intro $s:ident $cg:ident $hgood:ident))
+  evalTactic (← `(tactic| dsimp [cellNextG]))
+  evalTactic (← `(tactic| rcases $hc:ident : execForestG $s:ident ($cg:ident).val with _ | $s':ident))
+  evalTactic (← `(tactic| · simp only [Option.getD_none]; exact $hgood:ident))
+  evalTactic (← `(tactic| simp only [Option.getD_some]))
+  let closer ← match grow? with
+    | some g => `(tactic| first
+        | exact Trans.trans $hgood:ident ($g $s:ident $s':ident ($cg:ident).val $hc:ident)
+        | aesop (rule_sets := [Dregg2])
+        | skip)
+    | none   => `(tactic| first
+        | aesop (rule_sets := [Dregg2])
+        | skip)
+  evalTactic closer
+
+theorem logMono_via_tactics (s : RecChainedState) (sched : SchedG) :
+    ∀ n, s.log.length ≤ (trajG s sched n).log.length := by
+  carry_forever_production (fun s' => s.log.length ≤ s'.log.length)
+  case hpres => exec_frame_production Production.execForestG_logMono
+  case hinit => exact le_refl _
+
+theorem revoked_grow_via_tactics (rev0 : List Nat) (s : RecChainedState)
+    (hinit : rev0 ⊆ s.kernel.revoked) (sched : SchedG) :
+    ∀ n, rev0 ⊆ (trajG s sched n).kernel.revoked := by
+  carry_forever_production (fun s' => rev0 ⊆ s'.kernel.revoked)
+  case hpres => exec_frame_production Production.execForestG_revoked_subset_grow
+  case hinit => exact hinit
+
+theorem identity_revoked_forever_via_tactics (credNul : Nat) (s : RecChainedState)
+    (hinit : credNul ∈ s.kernel.revoked) (sched : SchedG) :
+    ∀ n, credNul ∈ (trajG s sched n).kernel.revoked := by
+  intro n
+  have h := revoked_grow_via_tactics [credNul] s
+    (by intro x hx; rw [List.mem_singleton] at hx; subst hx; exact hinit) sched n
+  exact h (List.mem_singleton.mpr rfl)
+
+#assert_axioms logMono_via_tactics
+#assert_axioms revoked_grow_via_tactics
+#assert_axioms identity_revoked_forever_via_tactics
+
+end Production
 
 end Dregg2.Verify
