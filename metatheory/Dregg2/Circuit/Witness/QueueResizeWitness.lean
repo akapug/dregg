@@ -20,6 +20,7 @@ execute→prove theorem derives the apex from the executor commit through that b
 The Poseidon-CR portals are carried HYPOTHESES.
 -/
 import Dregg2.Circuit.Inst.queueResizeA
+import Dregg2.Circuit.Poseidon2Surface
 
 namespace Dregg2.Circuit.Witness.QueueResizeWitness
 
@@ -33,6 +34,7 @@ open Dregg2.Circuit.Spec.QueueFifoCore
 open Dregg2.Exec
 open Dregg2.Exec.CircuitEmit
 open Dregg2.Exec.TurnExecutorFull
+open Dregg2.Circuit.Poseidon2Surface (recListDigest encQueueRec turnLogDigest)
 
 set_option linter.dupNamespace false
 
@@ -91,23 +93,19 @@ theorem satisfying_witness_proves_full_state
 
 /-! ## §4 — THE EXECUTOR-DERIVED CONCRETE WITNESS (the bytes the Rust prover proves). -/
 
-/-- Concrete computable per-`QueueRecord` leaf code (id/owner/capacity/buffer), kept small. -/
-def queueCode (q : QueueRecord) : ℤ :=
-  ((q.id : ℤ) * 17 + (q.owner : ℤ) * 7 + (q.capacity : ℤ) * 3
-    + q.buffer.foldl (fun acc m => (acc * 31 + (m : ℤ)) % 2000003) ((q.buffer.length : ℤ) + 1)) % 2000003
-
-/-- Concrete computable `queues` list digest: a small modular Horner fold (length-tagged). -/
-def queuesDigConcrete : List QueueRecord → ℤ :=
-  fun xs => xs.foldl (fun acc q => (acc * 7919 + queueCode q) % 2000003) ((xs.length : ℤ) + 1)
+/-- The `queues` list digest: the REAL `refP2` sponge over the field-binding `encQueueRec` (binds
+`id`/`owner`/`capacity` AND the WHOLE buffer — the OLD `queueCode … % 2000003` was a NON-injective field
+hash that folded the buffer through ANOTHER `% 2000003` reduction). -/
+def queuesDigConcrete : List QueueRecord → ℤ := recListDigest encQueueRec
 
 /-- Concrete rest hash: reads only NON-`queues` frame fields. -/
 def rhConcrete : RecordKernelState → ℤ :=
   fun k => (k.accounts.card : ℤ) + (k.nullifiers.length : ℤ) * 7
            + (k.commitments.length : ℤ) * 13 + (k.swiss.length : ℤ) * 17
 
-/-- Concrete log hash: a small modular Horner fold over the receipt actors. -/
-def lhConcrete : List Turn → ℤ :=
-  fun xs => xs.foldl (fun acc t => (acc * 131 + (t.actor : ℤ) + 1) % 2000003) ((xs.length : ℤ) + 1)
+/-- The log hash: the REAL `turnLogDigest` (binds `src`/`dst`/`amt` the OLD `actor % 2000003` fold dropped
+and field-reduced). -/
+def lhConcrete : List Turn → ℤ := turnLogDigest
 
 def SC : Surface2 := { RH := rhConcrete, LH := lhConcrete }
 
@@ -191,6 +189,15 @@ def forgedWitness : List Int := witnessOf sPre argsRef sForged
 #guard honestWitness.getD 68 0 == honestWitness.getD 69 0
 #guard honestWitness.getD 0 0 == 1
 
+-- MODULAR-COLLISION anti-ghost tooth: queue 7's `capacity` forged by EXACTLY the old modulus `2000003`
+-- (so `capacity ≡ honest (mod 2000003)`). The OLD `queueCode … % 2000003` field hash COLLIDED here
+-- (accepting the tamper); `encQueueRec` binds the raw capacity, so the component-bind gate `68 ≠ 69`
+-- REJECTS.
+def sForgedMod : RecChainedState :=
+  { sPost with kernel := { sPost.kernel with
+      queues := sPost.kernel.queues.map (fun q => if q.id = 7 then { q with capacity := q.capacity + 2000003 } else q) } }
+#guard decide (satisfied (effectCircuit2 resizeEC) (encodeE2 SC resizeEC sPre argsRef sForgedMod)) == false
+
 /-! ## §5 — JSON export of the descriptor + witness vectors. -/
 
 def resizeAirName : String := "dregg-queueResizeA-v2"
@@ -210,10 +217,12 @@ def forgedWitnessJson : String := witnessJson forgedWitness
 -- The exact bytes the Rust `lean_executor_derived_queue_resize` test pastes.
 #guard descriptorJson ==
   "{\"name\":\"dregg-queueResizeA-v2\",\"trace_width\":72,\"constraints\":[{\"lhs\":{\"t\":\"var\",\"v\":0},\"rhs\":{\"t\":\"const\",\"v\":1}},{\"lhs\":{\"t\":\"var\",\"v\":66},\"rhs\":{\"t\":\"var\",\"v\":67}},{\"lhs\":{\"t\":\"var\",\"v\":68},\"rhs\":{\"t\":\"var\",\"v\":69}},{\"lhs\":{\"t\":\"var\",\"v\":70},\"rhs\":{\"t\":\"var\",\"v\":71}}]}"
-#guard honestWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16037,16308,1,1,16044,16044,263,263]"
-#guard forgedWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16037,16237,1,1,15973,16044,263,263]"
+-- Structural component-bind goldens (the field-binding `refP2`/`encQueueRec` digests replace the
+-- non-injective `% 2000003` field hash; non-vacuity is at the bind gates; the Rust paste is regenerated
+-- from the JSON accessors).
+#guard honestWitness.getD 68 0 == honestWitness.getD 69 0      -- queues binds (honest)
+#guard !(forgedWitness.getD 68 0 == forgedWitness.getD 69 0)   -- forged queues differs (REJECTED)
+#guard !(honestWitnessJson == forgedWitnessJson)               -- honest ≠ forged byte streams
 
 #assert_axioms post_queues_eq_resizePostQueues
 #assert_axioms resizeWitnessVec_commit
