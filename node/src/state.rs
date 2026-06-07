@@ -144,6 +144,15 @@ pub struct NodeStateInner {
     /// When true, after each finalized block the node generates a transition proof
     /// and gossips it to peers.
     pub prove_transitions: bool,
+    /// Whether the node proves EVERY finalized turn on the commit path
+    /// (--prove-turns / devnet). When true,
+    /// [`crate::blocklace_sync::execute_finalized_turn`] generates a real
+    /// full-turn STARK proof for each committed turn, gates acceptance on the
+    /// proof verifying (verify→accept leg), and persists the proof bytes keyed
+    /// by turn hash. This is what makes the public "every state transition is
+    /// proven" claim TRUE for the running node. Default `false` because full
+    /// proving per turn is on the hot path; the devnet enables it.
+    pub full_turn_proving_enabled: bool,
     /// Cached PIR intent index. Invalidated on intent pool mutations.
     /// Avoids O(n) rebuild on every PIR request (prevents CPU DoS).
     pub pir_index_cache: Option<dregg_intent::pir::IntentIndex>,
@@ -572,6 +581,7 @@ impl NodeState {
                 pruning_enabled: false,
                 checkpoint_interval: dregg_federation::DEFAULT_CHECKPOINT_INTERVAL,
                 prove_transitions: false,
+                full_turn_proving_enabled: false,
                 pir_index_cache: None,
                 discharge_gateway: None,
                 program_registry: ProgramRegistry::new(),
@@ -664,6 +674,7 @@ impl NodeState {
                 pruning_enabled: false,
                 checkpoint_interval: dregg_federation::DEFAULT_CHECKPOINT_INTERVAL,
                 prove_transitions: false,
+                full_turn_proving_enabled: false,
                 pir_index_cache: None,
                 discharge_gateway: None,
                 program_registry: ProgramRegistry::new(),

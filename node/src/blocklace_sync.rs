@@ -1471,6 +1471,19 @@ async fn execute_finalized_turn(
     let new_height = executor.block_height;
     let now = executor.current_timestamp;
 
+    // Full-turn proving (commit-path): capture the actor cell's pre-execution
+    // state BEFORE the executor mutates the ledger. The full-turn proof binds
+    // `old_commit` to this pre-state; capturing it after execution would let a
+    // forged transition pass. Only collected when proving is enabled (devnet).
+    let full_turn_pre_state: Option<(u64, u64)> = if s.full_turn_proving_enabled {
+        s.ledger
+            .get(&signed_turn.turn.agent)
+            .map(|cell| (cell.state.balance(), cell.state.nonce()))
+            .or(Some((0, 0)))
+    } else {
+        None
+    };
+
     let exec_result = executor.execute(&signed_turn.turn, &mut s.ledger);
 
     match exec_result {
@@ -1509,6 +1522,68 @@ async fn execute_finalized_turn(
                 .append_receipt(receipt.clone())
                 .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
+            // ── Full-turn proving (commit path) ──────────────────────────
+            // When enabled (devnet), prove EVERY committed turn and gate
+            // acceptance on the proof verifying. This is what makes the public
+            // "every state transition is proven" claim TRUE for the running
+            // node: the finalized turn produces a real composed STARK proof
+            // (Effect-VM AIR over the actor cell's transition), which is then
+            // re-verified against the actor cell's pre-state commitment and the
+            // proven post-state commitment (verify→accept leg). A turn whose
+            // proof does not verify is logged as a serious soundness event and
+            // its proof is NOT attached. The proof bytes are persisted keyed by
+            // turn hash so any peer / operator can fetch the attached proof.
+            let full_turn_proof_attached: Option<Vec<u8>> =
+                if let Some((pre_balance, pre_nonce)) = full_turn_pre_state {
+                    let effects: Vec<dregg_turn::Effect> = signed_turn
+                        .turn
+                        .call_forest
+                        .total_effects()
+                        .into_iter()
+                        .cloned()
+                        .collect();
+                    match crate::turn_proving::prove_and_verify_finalized_turn(
+                        &signed_turn.turn.agent,
+                        pre_balance,
+                        pre_nonce,
+                        &effects,
+                        computed_hash,
+                    ) {
+                        Ok(proven) => {
+                            let proof_bytes = proven.proof_bytes().to_vec();
+                            let key = crate::turn_proving::turn_proof_config_key(&turn_hash_hex);
+                            if let Err(e) = s.store.set_config(&key, &proof_bytes) {
+                                warn!(error = %e, turn_hash = %turn_hash_hex,
+                                    "failed to persist full-turn proof");
+                            }
+                            info!(
+                                turn_hash = %turn_hash_hex,
+                                block_id = %block_id,
+                                proof_bytes = proof_bytes.len(),
+                                old_commit = ?proven.old_commit,
+                                new_commit = ?proven.new_commit,
+                                "full-turn proof generated and verified (commit path)"
+                            );
+                            Some(proof_bytes)
+                        }
+                        Err(e) => {
+                            // SOUNDNESS: a committed turn whose full-turn proof
+                            // does not verify is a serious event. We surface it
+                            // loudly and refuse to attach an unverified proof.
+                            error!(
+                                turn_hash = %turn_hash_hex,
+                                block_id = %block_id,
+                                error = %e,
+                                "full-turn proof generation/verification FAILED; \
+                                 turn committed but carries NO verified proof"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
             // ── Lift TurnReceipt → FederationReceipt (audit F7) ──────────
             // We carry the committed turn into a federation-shaped receipt
             // by hashing its post-state into the body and signing with the
@@ -1520,10 +1595,10 @@ async fn execute_finalized_turn(
 
             // ── Write a fresh AttestedRoot anchored to (block_id, round)
             // (audit F3 / gap D). The merkle_root is the BLAKE3 of the
-            // ledger's canonical bytes — fine as a soundness commitment for
-            // now; the Poseidon2 note-tree root is threaded as a BabyBear
-            // serialized to bytes (best-effort; full STARK root binding is a
-            // separate workitem).
+            // ledger's canonical bytes. When full-turn proving is enabled
+            // (devnet) the committed turn ALSO carries a real, re-verified
+            // full-turn STARK proof (see `full_turn_proof_attached` above);
+            // the note-tree Poseidon2 root binding remains threaded separately.
             let merkle_root = canonical_ledger_root(&s.ledger);
             let note_tree_root: Option<[u8; 32]> = None;
             let timestamp_for_root = now;
@@ -1638,6 +1713,7 @@ async fn execute_finalized_turn(
                 block_id = %block_id,
                 height = new_height,
                 round = ?finality_round,
+                full_turn_proven = full_turn_proof_attached.is_some(),
                 "finalized turn executed (blocklace consensus)"
             );
         }
