@@ -247,6 +247,8 @@ pub mod backends;
 pub mod joint_turn_aggregation;
 #[cfg(feature = "recursion")]
 pub mod joint_turn_recursive;
+#[cfg(feature = "recursion")]
+pub mod ivc_turn_chain;
 pub mod proof_forest;
 pub mod proof_tier;
 

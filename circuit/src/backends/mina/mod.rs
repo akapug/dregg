@@ -62,16 +62,18 @@ pub(crate) use super::ProofBackend;
 // Kimchi/Pasta imports
 pub(crate) use ark_ec::AffineRepr;
 pub(crate) use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
-pub(crate) use ark_poly::{DenseUVPolynomial, univariate::DensePolynomial};
+pub(crate) use ark_poly::{DenseUVPolynomial, EvaluationDomain, univariate::DensePolynomial};
 pub(crate) use groupmap::GroupMap;
 pub(crate) use kimchi::{
     circuits::{
+        constraints::ConstraintSystem,
         gate::{CircuitGate, GateType},
         polynomials::poseidon::generate_witness,
         wires::{COLUMNS, Wire},
     },
     curve::KimchiCurve,
     proof::{ProverProof, RecursionChallenge},
+    prover_index::ProverIndex,
     verifier,
 };
 pub(crate) use mina_curves::pasta::{Fp, Fq, Pallas, PallasParameters, Vesta, VestaParameters};
@@ -111,6 +113,61 @@ pub(crate) type PallasBaseSponge = DefaultFqSponge<PallasParameters, SpongeParam
 pub(crate) type PallasScalarSponge = DefaultFrSponge<Fq, SpongeParams, FULL_ROUNDS>;
 #[allow(dead_code)]
 pub(crate) type PallasOpeningProof = OpeningProof<Pallas, FULL_ROUNDS>;
+
+// ============================================================================
+// Production prover index (no test SRS, no `testing` module)
+// ============================================================================
+
+/// Build a **production** Kimchi prover index over Vesta from a circuit.
+///
+/// This replaces `kimchi::prover_index::testing::new_index_for_test_with_lookups`
+/// — the "TEST kimchi index" a prior audit flagged. Two things made that
+/// constructor a *test* artifact, and only two:
+///
+/// 1. It builds the constraint system via the crate-internal
+///    `circuits::constraints::testing::create_constraint_system`. That helper is
+///    a verbatim wrapper around the production builder
+///    (`ConstraintSystem::create(gates).public(..).prev_challenges(..).build()`)
+///    — we call the production builder directly here, so the constraint system
+///    is identical but no longer routed through a `testing` symbol.
+///
+/// 2. It uses `precomputed_srs::get_srs_test()` — a **test** structured
+///    reference string — for circuits up to `SERIALIZED_SRS_SIZE`. We instead
+///    derive the SRS with [`SRS::create`], the *deterministic* IPA SRS
+///    generator. IPA over Pasta needs **no trusted setup**: the SRS is a
+///    sequence of group generators sampled from a fixed hash-to-curve, so
+///    `SRS::create(size)` is the genuine production SRS (the same generators the
+///    external/Mina verifier reconstructs). We then precompute the Lagrange
+///    basis for the circuit's evaluation domain (required by the prover).
+///
+/// Everything downstream — `ProverProof::create_recursive`,
+/// `verifier::verify`, the IPA accumulator carry-forward — is unchanged and was
+/// already real. This swaps the *index/SRS provenance* from test to production.
+pub(crate) fn build_production_index_vesta(
+    gates: Vec<CircuitGate<Fp>>,
+    public: usize,
+    prev_challenges: usize,
+) -> ProverIndex<FULL_ROUNDS, Vesta, SRS<Vesta>> {
+    // (1) Production constraint system (same builder the test helper wraps).
+    let cs = ConstraintSystem::<Fp>::create(gates)
+        .public(public)
+        .prev_challenges(prev_challenges)
+        .build()
+        .expect("production constraint system build must succeed");
+
+    // (2) Deterministic IPA SRS (no trusted setup) sized to the circuit domain,
+    //     with the Lagrange basis precomputed for that domain.
+    let domain = cs.domain.d1;
+    let srs_size = domain.size();
+    let srs = SRS::<Vesta>::create(srs_size);
+    srs.get_lagrange_basis(domain);
+    let srs = Arc::new(srs);
+
+    // (3) Production index assembly (the same `ProverIndex::create` the test
+    //     helper ultimately calls).
+    let &endo_q = <Vesta as KimchiCurve<FULL_ROUNDS>>::other_curve_endo();
+    ProverIndex::create(cs, endo_q, srs, false)
+}
 
 // ============================================================================
 // Poseidon hash for Merkle tree (native to Mina)
