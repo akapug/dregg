@@ -99,6 +99,9 @@ import Dregg2.Circuit.Inst.makeSovereignA
 import Dregg2.Circuit.Inst.receiptArchiveA
 import Dregg2.Circuit.Inst.refusalA
 import Dregg2.Circuit.Inst.emitEventA
+import Dregg2.Circuit.Inst.enlivenRefA
+import Dregg2.Circuit.Inst.swissDropA
+import Dregg2.Circuit.Inst.swissHandoffA
 import Dregg2.Spec.FunctionalRefinement
 
 namespace Dregg2.Spec.CircuitSpecTriangle
@@ -1452,6 +1455,122 @@ theorem emitEvent_circuit_rejects_wrong_log
     ¬ satisfiedE S emitEventE (encodeE S emitEventE s args s') :=
   fun h => hwrong (emitEvent_circuit_pins_intent S hN hL hRest hLog s args s' hwf hwf' h)
 
+/-! ## §17 — THE SWISS STURDY-REF FAMILY (enliven / drop / handoff): circuit pins the INTENT
+swiss-table image over the FOUND record.
+
+These effects mutate the `swiss` sturdy-ref table over the record found by `sw`. The circuit
+soundness gives the op-delegated `*Spec` (`s' = { kernel := swissOpK …, log := … }`); we connect it,
+THROUGH the executor⟺`*SpecFull` biconditionals (`execFullA_*_iff_spec` then `_iff_specFull`), to the
+INDEPENDENT swiss clause `∃ e, s'.kernel.swiss = <op>SwissPost s.kernel.swiss sw e` — the declarative
+refcount/cert image over the found record `e`, with NO `swissOpK` in the conclusion. So a verifying
+witness pins the EXACT intended swiss-table transformation. -/
+
+open Dregg2.Circuit.Inst.EnlivenRefA (EnlivenArgs enlivenE enlivenRefA_full_sound)
+open Dregg2.Circuit.Spec.SwissEnliven
+  (EnlivenSpec EnlivenSpecFull enlivenSwissPost execFullA_enliven_iff_spec execFullA_enliven_iff_specFull)
+
+/-- **ENLIVEN circuit pins the intent swiss refcount-bump image.** A verifying `enlivenE` witness
+forces, for the found sturdy-ref record `e`, the post-`swiss` to be EXACTLY `enlivenSwissPost …
+s.kernel.swiss sw e` (the refcount-bumped image — NO `swissEnlivenK` in the conclusion). -/
+theorem enliven_circuit_pins_intent
+    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.EnlivenRefA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : EnlivenArgs) (s' : RecChainedState)
+    (h : satisfiedE2 S (enlivenE LE cN hN hLE) (encodeE2 S (enlivenE LE cN hN hLE) s args s')) :
+    ∃ e : SwissRecord, s'.kernel.swiss = enlivenSwissPost s.kernel.swiss args.sw e := by
+  have hspec : EnlivenSpec s args.sw args.actor args.exporter args.claimed s' :=
+    enlivenRefA_full_sound S LE cN hN hLE hRest hLog s args s' h
+  -- circuit-spec ⇒ executor commit ⇒ the STRENGTHENED full spec ⇒ the swiss clause.
+  have hexec : execFullA s (.enlivenRefA args.sw args.actor args.exporter args.claimed) = some s' :=
+    (execFullA_enliven_iff_spec s args.sw args.actor args.exporter args.claimed s').mpr hspec
+  have hfull : EnlivenSpecFull s args.sw args.actor args.exporter args.claimed s' :=
+    (execFullA_enliven_iff_specFull s args.sw args.actor args.exporter args.claimed s').mp hexec
+  obtain ⟨_, ⟨e, _, _, hsw⟩, _⟩ := hfull
+  exact ⟨e, hsw⟩
+
+/-- **ENLIVEN circuit anti-ghost.** A post-`swiss` matching NO found-record refcount-bump image does
+not verify. -/
+theorem enliven_circuit_rejects_wrong_swiss
+    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.EnlivenRefA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : EnlivenArgs) (s' : RecChainedState)
+    (hwrong : ∀ e : SwissRecord, s'.kernel.swiss ≠ enlivenSwissPost s.kernel.swiss args.sw e) :
+    ¬ satisfiedE2 S (enlivenE LE cN hN hLE) (encodeE2 S (enlivenE LE cN hN hLE) s args s') := by
+  intro h
+  obtain ⟨e, he⟩ := enliven_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h
+  exact hwrong e he
+
+open Dregg2.Circuit.Inst.SwissDropA (DropArgs swissDropE swissDropA_full_sound)
+open Dregg2.Circuit.Spec.SwissDrop
+  (DropSpec DropSpecFull dropSwissPost execFullA_drop_iff_spec execFullA_drop_iff_specFull)
+
+/-- **DROP circuit pins the intent swiss refcount-decrement image.** A verifying `swissDropE` witness
+forces, for the found record `e`, the post-`swiss` to be EXACTLY `dropSwissPost … sw e`. -/
+theorem swissDrop_circuit_pins_intent
+    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.SwissDropA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : DropArgs) (s' : RecChainedState)
+    (h : satisfiedE2 S (swissDropE LE cN hN hLE) (encodeE2 S (swissDropE LE cN hN hLE) s args s')) :
+    ∃ e : SwissRecord, s'.kernel.swiss = dropSwissPost s.kernel.swiss args.sw e := by
+  have hspec : DropSpec s args.sw args.actor args.exporter s' :=
+    swissDropA_full_sound S LE cN hN hLE hRest hLog s args s' h
+  have hexec : execFullA s (.swissDropA args.sw args.actor args.exporter) = some s' :=
+    (execFullA_drop_iff_spec s args.sw args.actor args.exporter s').mpr hspec
+  have hfull : DropSpecFull s args.sw args.actor args.exporter s' :=
+    (execFullA_drop_iff_specFull s args.sw args.actor args.exporter s').mp hexec
+  obtain ⟨_, ⟨e, _, _, hsw⟩, _⟩ := hfull
+  exact ⟨e, hsw⟩
+
+/-- **DROP circuit anti-ghost.** -/
+theorem swissDrop_circuit_rejects_wrong_swiss
+    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.SwissDropA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : DropArgs) (s' : RecChainedState)
+    (hwrong : ∀ e : SwissRecord, s'.kernel.swiss ≠ dropSwissPost s.kernel.swiss args.sw e) :
+    ¬ satisfiedE2 S (swissDropE LE cN hN hLE) (encodeE2 S (swissDropE LE cN hN hLE) s args s') := by
+  intro h
+  obtain ⟨e, he⟩ := swissDrop_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h
+  exact hwrong e he
+
+open Dregg2.Circuit.Inst.SwissHandoffA (HandoffArgs swissHandoffE swissHandoffA_full_sound)
+open Dregg2.Circuit.Spec.SwissHandoff
+  (HandoffSpec HandoffSpecFull handoffSwissPost execFullA_handoff_iff_spec execFullA_handoff_iff_specFull)
+
+/-- **HANDOFF circuit pins the intent swiss cert-binding image.** A verifying `swissHandoffE` witness
+forces, for the found record `e`, the post-`swiss` to be EXACTLY `handoffSwissPost … sw e certHash`
+(the cert-bound image). -/
+theorem swissHandoff_circuit_pins_intent
+    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.SwissHandoffA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : HandoffArgs) (s' : RecChainedState)
+    (h : satisfiedE2 S (swissHandoffE LE cN hN hLE) (encodeE2 S (swissHandoffE LE cN hN hLE) s args s')) :
+    ∃ e : SwissRecord, s'.kernel.swiss = handoffSwissPost s.kernel.swiss args.sw e args.certHash := by
+  have hspec : HandoffSpec s args.sw args.certHash args.introducer args.exporter s' :=
+    swissHandoffA_full_sound S LE cN hN hLE hRest hLog s args s' h
+  have hexec : execFullA s (.swissHandoffA args.sw args.certHash args.introducer args.exporter) = some s' :=
+    (execFullA_handoff_iff_spec s args.sw args.certHash args.introducer args.exporter s').mpr hspec
+  have hfull : HandoffSpecFull s args.sw args.certHash args.introducer args.exporter s' :=
+    (execFullA_handoff_iff_specFull s args.sw args.certHash args.introducer args.exporter s').mp hexec
+  obtain ⟨_, ⟨e, _, hsw⟩, _⟩ := hfull
+  exact ⟨e, hsw⟩
+
+/-- **HANDOFF circuit anti-ghost.** -/
+theorem swissHandoff_circuit_rejects_wrong_swiss
+    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.SwissHandoffA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : HandoffArgs) (s' : RecChainedState)
+    (hwrong : ∀ e : SwissRecord, s'.kernel.swiss ≠ handoffSwissPost s.kernel.swiss args.sw e args.certHash) :
+    ¬ satisfiedE2 S (swissHandoffE LE cN hN hLE) (encodeE2 S (swissHandoffE LE cN hN hLE) s args s') := by
+  intro h
+  obtain ⟨e, he⟩ := swissHandoff_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h
+  exact hwrong e he
+
 /-! ## §4 — axiom-hygiene tripwires. Every triangle corner rests only on the kernel axioms +
 the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 
@@ -1538,5 +1657,12 @@ the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 #assert_axioms makeSovereign_circuit_rejects_wrong_cell
 #assert_axioms emitEvent_circuit_pins_intent
 #assert_axioms emitEvent_circuit_rejects_wrong_log
+
+#assert_axioms enliven_circuit_pins_intent
+#assert_axioms enliven_circuit_rejects_wrong_swiss
+#assert_axioms swissDrop_circuit_pins_intent
+#assert_axioms swissDrop_circuit_rejects_wrong_swiss
+#assert_axioms swissHandoff_circuit_pins_intent
+#assert_axioms swissHandoff_circuit_rejects_wrong_swiss
 
 end Dregg2.Spec.CircuitSpecTriangle
