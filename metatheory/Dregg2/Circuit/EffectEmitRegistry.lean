@@ -1,6 +1,5 @@
 /-
 # Dregg2.Circuit.EffectEmitRegistry — central AIR registry (Wave 2).
-No `sorry`/`admit`/`axiom`.
 -/
 import Dregg2.Exec.CircuitEmit
 import Dregg2.Circuit.ActionDispatch

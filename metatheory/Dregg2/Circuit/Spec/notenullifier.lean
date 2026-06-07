@@ -53,8 +53,6 @@ So a committed `noteSpendA`:
      nullifier-set growth, its log row, and its kernel-frame), the `recTransfer_correct` analog for
      this family.
   4. `#assert_axioms` on every theorem (whitelist `{propext, Classical.choice, Quot.sound}`).
-
-No `sorry`/`admit`/`axiom`/`native_decide`.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

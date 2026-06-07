@@ -23,8 +23,6 @@ THE PIECES THIS MODULE SUPPLIES (the `TransferWitness`/`EmitEventWitness` patter
       (a minted bystander cell 2) yields a vector the circuit REJECTS — a real UNSAT (the frame-reuse
       gate, the anti-ghost tooth end-to-end).
   (5) the JSON the Rust `lean_executor_derived_refusal` prover proves+verifies (honest) / rejects.
-
-No `sorry`/`admit`/`axiom`/`native_decide`.
 -/
 import Dregg2.Circuit.Witness.Common
 import Dregg2.Circuit.Inst.refusalA

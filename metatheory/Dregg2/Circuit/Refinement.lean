@@ -20,7 +20,7 @@ it governs every circuit-accepted step — the "no value forged" guarantee desce
 The circuit⟺spec direction carries exactly the realizable Poseidon collision-resistance portals
 (`compressInjective`/`compressNInjective`/`cellLeafInjective`/`RestHashIffFrame`) + the
 `AccountsWF` well-formedness invariant (PROVED preserved in `StateCommit`) — NOT the impossible
-sum-injectivity that the de-portaling removed. No `sorry`/`admit`/`native_decide`/`axiom`.
+sum-injectivity that the de-portaling removed.
 -/
 import Dregg2.Circuit.StateCommit
 import Dregg2.Circuit.Lookup

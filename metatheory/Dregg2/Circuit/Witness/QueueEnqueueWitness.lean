@@ -9,7 +9,7 @@ forged ANY-of-the-three component (a tampered bystander queue / a wrong ledger e
 is visible to its bind gate.
 
 Reuses (not re-proved): `Inst.QueueEnqueueA.queueEnqueueA_full_sound`,
-`effect2triple_circuit_full_complete`, `encodeE2Triple`. No `sorry`/`admit`/`axiom`/`native_decide`.
+`effect2triple_circuit_full_complete`, `encodeE2Triple`.
 -/
 import Dregg2.Circuit.Inst.queueEnqueueA
 import Dregg2.Circuit.Poseidon2Surface

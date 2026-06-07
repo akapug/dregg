@@ -6,10 +6,10 @@ Folds a list of per-step `EmittedDescriptor`s into a composed `ConstraintSystem`
 execution soundness (`turn_emitted_refines_exec_direct`) **without** the `fullAction_circuit_refines_spec`
 fallback arm.
 
-NO `sorry` PORTALS — every former composition gap is a genuine predicate + discharge + tooth:
-  * `macaroonChainBinds` (was `hole_turn_macaroon_chain : Prop := sorry`) — the `authChain` column IS
+Every composition gap is a genuine predicate + discharge + tooth:
+  * `macaroonChainBinds` — the `authChain` column IS
     the caveat fold from `baseAuth`; `macaroon_chain_teeth` rejects a forged auth digest.
-  * `multiStepGlueAligned` (was `hole_turn_multi_step_glue : Prop := sorry`) — composed circuit length
+  * `multiStepGlueAligned` — composed circuit length
     = sum of per-step widths ∧ descriptor count = witness step count; `multi_step_glue_teeth` rejects
     a count mismatch.
   * the root-compress binding (`preRoot`/`postRoot` ↔ `foldStepRoots`) is the genuine
@@ -73,11 +73,10 @@ theorem turnCircuitOfEmitted_length (steps : List EmittedDescriptor) :
       rw [ih (acc ++ decodeE d), List.length_append]
       omega
 
-/-! ## §2 — composition predicates (Wave 5) — CLOSED (no `sorry`).
+/-! ## §2 — composition predicates (Wave 5).
 
-The two former `def … : Prop := sorry` portals (`hole_turn_macaroon_chain`, `hole_turn_multi_step_glue`)
-were OPAQUE Props (a `sorry` *body* on a `Prop`-valued def asserts nothing and cannot be a real gate).
-They are now GENUINE predicates with content + discharge lemmas + non-vacuity teeth:
+`macaroonChainBinds` and `multiStepGlueAligned` are GENUINE predicates with content + discharge
+lemmas + non-vacuity teeth:
 
   * `macaroonChainBinds` (was `hole_turn_macaroon_chain`): the witness `authChain` digest IS the
     left-fold of the per-step witness digests under `compress` from a `baseAuth` seed — the macaroon
@@ -116,11 +115,11 @@ theorem macaroon_chain_teeth (compress : ℤ → ℤ → ℤ) (stepRoot : StepWi
     ¬ macaroonChainBinds compress stepRoot baseAuth w := by
   intro h; exact hforge h.1
 
-/-- **`hole_turn_root_compress_binding` — DISCHARGED (was a `sorry` portal).**
+/-- **`hole_turn_root_compress_binding`.**
 
-The abstract `compress` portal now binds `preRoot`/`postRoot` to a GENUINE full-state commitment:
+The abstract `compress` portal binds `preRoot`/`postRoot` to a GENUINE full-state commitment:
 the witness's boundary roots ARE `StateCommit.recStateCommit` of the boundary kernels (over a chosen
-commitment surface `CH`/`RH`/`cmb`/`compress`/`compressN` + turn `t`). No `sorry`: this is the real
+commitment surface `CH`/`RH`/`cmb`/`compress`/`compressN` + turn `t`). This is the real
 `TurnWitness.authenticTurnRoots` predicate. Consumed by `turn_root_binds_post_commitment` below,
 which makes `turnWitnessSatisfies` load-bearing (the prover-folded post-root = the real post-state
 commitment), so a tampered `postRoot` is rejected (`tampered_postRoot_rejects`). -/
@@ -173,7 +172,7 @@ theorem multi_step_glue_teeth (steps : List EmittedDescriptor) (w : TurnWitness)
 
 /-! ## §4 — whole-turn emitted ⊑ `execFullTurnA` (direct path, no fallback) — COMPLETE STACK. -/
 
-/-- **`turn_emitted_refines_exec_direct`** — the COMPLETE whole-turn stack (no `sorry`, no fallback).
+/-- **`turn_emitted_refines_exec_direct`** — the COMPLETE whole-turn stack (no fallback).
 Compose a per-step emitted ⊑ `fullActionStep` lemma (e.g. `step_emitted_refines_fullActionStep`) with
 `turn_emitted_refines_exec`, and EXPORT all four pillars as the conclusion:
 
@@ -185,7 +184,7 @@ Compose a per-step emitted ⊑ `fullActionStep` lemma (e.g. `step_emitted_refine
   4. the multi-step wires are ALIGNED (`multiStepGlueAligned`, load-bearing — the gate rejects a
      step-count / width mismatch, `multi_step_glue_teeth`).
 
-Every former `sorry` portal is gone: the macaroon chain and multi-step glue are genuine predicates
+The macaroon chain and multi-step glue are genuine predicates
 discharged from `hmac`/`hglue` and re-exported (so they are not dead `_`-hypotheses). -/
 theorem turn_emitted_refines_exec_direct
     (lookup : DescriptorLookup)

@@ -8,8 +8,6 @@ with `execFullTurnA_iff_turnSpec` for the executor corner. Conservation per asse
 turn's net ledger delta is zero.
 
 Links to `TurnWitness.lean` for circuit-level witness scaffolding and `ActionDispatch.fullActionStep`.
-
-No `sorry`/`admit`/`native_decide`/`axiom`.
 -/
 import Dregg2.Circuit.Refinement
 import Dregg2.Circuit.ActionDispatch

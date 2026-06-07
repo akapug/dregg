@@ -514,10 +514,10 @@ the circuit dispatch (`fullAction_circuit_refines_spec`).
 
 HONEST CAVEAT (this is NOT whole-turn adversarial soundness):
 
-1. **All arms CLOSED (no `sorry`).** The four arms that were once open holes — `exerciseA`,
+1. **All arms CLOSED.** The four arms that were once open holes — `exerciseA`,
    `createObligationA`, `releaseCommittedEscrowA`, `refundCommittedEscrowA` — now discharge through
-   `fullAction_circuit_refines_spec` (itself sorry-free; the `exerciseA` inner-turn fold is a REAL
-   composite circuit step). No effect arm depends on `sorry`.
+   `fullAction_circuit_refines_spec` (the `exerciseA` inner-turn fold is a REAL
+   composite circuit step).
 
 2. **Honest-trace only (dead `hEnc`).** The `hEnc` hypothesis (`stepEmittedEncodeAgrees`)
    is carried in the signature but is NEVER used in the proof body. Consequently this proves

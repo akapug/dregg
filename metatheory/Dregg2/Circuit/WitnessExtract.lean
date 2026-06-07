@@ -26,9 +26,6 @@ preimage, so the published digest fixes the post component / frame / log uniquel
 NON-VACUITY: `effect2_extract_rejects_*` — a trace whose digest wires are PI-bound but whose state
 VIOLATES the apex (wrong component / tampered frame / forged log) is UNSAT. This is the anti-ghost
 tooth: the extractor genuinely constrains.
-
-Each keystone pins exactly `{propext, Classical.choice,
-Quot.sound}` (asserted at the foot).
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Circuit.Poseidon2Binding

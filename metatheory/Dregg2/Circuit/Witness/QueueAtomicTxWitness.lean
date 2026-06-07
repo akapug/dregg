@@ -7,7 +7,7 @@ supplies the executor-derived witness generator (76-wide, three bind gates), mir
 witness modules. A forged ANY-of-the-three post-component is visible to its bind gate.
 
 Reuses (not re-proved): `Inst.QueueAtomicTxA.queueAtomicTxA_full_sound`,
-`effect2triple_circuit_full_complete`, `encodeE2Triple`. No `sorry`/`admit`/`axiom`/`native_decide`.
+`effect2triple_circuit_full_complete`, `encodeE2Triple`.
 -/
 import Dregg2.Circuit.Inst.queueAtomicTxA
 import Dregg2.Circuit.Poseidon2Surface

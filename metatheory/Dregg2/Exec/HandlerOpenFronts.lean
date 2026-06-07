@@ -101,7 +101,7 @@ theorem portal_exercise_inner_turn
 
 /-- **R4 facet-mask CLOSED** (P2 canonical-semantics): `execFullA`'s `exerciseA` now enforces the same
 facet mask the handler bridge tags, so a handler-committed exercise refines `execFullA` on the same
-kernel — given the orthogonal inner-turn fold (`hinner`). Delegates to the now-`sorry`-free
+kernel — given the orthogonal inner-turn fold (`hinner`). Delegates to
 `ExerciseInnerTurn.exercise_r4_facet_mask`. -/
 theorem portal_exercise_r4_facet_mask (actor target : CellId) (inner : List FullActionA)
     (hinner : ∃ s₁, execInnerA (Dregg2.Exec.HandlerExecutor.exerciseHoldState s actor) inner = some s₁ ∧

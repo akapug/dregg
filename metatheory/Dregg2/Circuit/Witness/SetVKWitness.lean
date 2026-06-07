@@ -10,8 +10,6 @@ surface `Witness.Common.{SConc, layoutE}`.
 §1 the executor-driven `setVKWitnessVec`; §2 abstract execute→prove + verify→accept; §3 the concrete
 `#guard`s (honest SATISFIES, REAL forged third-cell-mint UNSAT on the frame-reuse gate 68/69); §4 the
 JSON the Rust `lean_executor_derived_set_vk` prover proves+verifies / rejects.
-
-No `sorry`/`admit`/`axiom`/`native_decide`.
 -/
 import Dregg2.Circuit.Witness.Common
 import Dregg2.Circuit.Inst.setVKA

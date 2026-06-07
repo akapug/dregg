@@ -231,6 +231,12 @@ pub mod bilateral_aggregation_air;
 #[cfg(feature = "recursion")]
 pub mod effect_vm_p3_air;
 
+/// Constraint-COMPLETE Plonky3 `Air` for the Effect VM: the live commit-path
+/// EffectVM proof migrated OFF the bespoke `crate::stark` (unaudited FRI) and
+/// ONTO the audited `p3-batch-stark` verifier, with real in-circuit Poseidon2
+/// for every state-commitment / cap-root hash. See module docs.
+pub mod effect_vm_p3_full_air;
+
 /// Sorted-set neighbor-adjacency STARK: proves two leaves are *consecutive*
 /// under a committed binary Merkle root, closing the Silver non-membership
 /// wide-bracket forge. See module docs and `dregg_cell::predicate`'s

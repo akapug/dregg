@@ -1,10 +1,10 @@
 /-
 # Dregg2.Circuit.TurnAdmission — Wave 5 Prop-level whole-turn proof gate — CLOSED.
 
-The commit-time admission gate (`turnProofRequired`) and its discharge are now genuine: the former
-`hole_rust_proof_at_commit` `sorry` is a REAL proof — given the per-step emitted ⊑ `fullActionStep`
+The commit-time admission gate (`turnProofRequired`) and its discharge `rust_proof_admits_commit`:
+given the per-step emitted ⊑ `fullActionStep`
 refinement (what the commit-time STARK over the folded turn circuit attests, supplied as `hstep`) plus
-the emitted chain, the executor commits (`rust_proof_admits_commit`). No silent admission, no `sorry`.
+the emitted chain, the executor commits. No silent admission.
 -/
 import Dregg2.Circuit.TurnWitness
 import Dregg2.Circuit.TurnEmit
@@ -57,7 +57,7 @@ theorem turnProofRequired_of_chain_and_macaroon
 /-- **`rust_proof_admits_commit`** (was `hole_rust_proof_at_commit`) — the Rust commit path requires a
 STARK proof over the folded turn circuit. That proof's CONTENT is exactly the per-step emitted ⊑
 `fullActionStep` refinement (`hstep`, discharged by `TurnEmit.step_emitted_refines_fullActionStep`).
-Given it plus the emitted chain, the executor commits — no silent admission, no `sorry`. -/
+Given it plus the emitted chain, the executor commits — no silent admission. -/
 theorem rust_proof_admits_commit
     (compress : ℤ → ℤ → ℤ) (stepRoot : StepWitness → ℤ)
     (hstep :

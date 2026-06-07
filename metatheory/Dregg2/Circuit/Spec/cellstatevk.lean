@@ -44,7 +44,6 @@ the `log` so no ghost field can be silently mutated.
      untouched.
 
   4. `#assert_axioms` on every theorem — whitelist `{propext, Classical.choice, Quot.sound}` only.
-     No `sorry`/`admit`/`native_decide`/`axiom`.
 
 The family has the single executable variant `setVKA`. The generic `vkStateStep_iff_spec` engine
 below is re-derived LOCALLY (so this leaf is self-contained — no dependence on a sibling spec module)

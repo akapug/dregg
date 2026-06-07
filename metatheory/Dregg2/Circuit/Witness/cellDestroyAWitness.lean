@@ -11,8 +11,6 @@ has FIVE gates: guard (`var 0 = 1`), rest (`66=67`), component-1 `lifecycle` (`6
 post-state that ALSO destroys a BYSTANDER cell (lifecycle-component tamper) is REJECTED by the
 component-1 bind gate `68 ≠ 69`. `Inst.cellDestroyA.cellDestroyA_full_sound` proved the crown jewel
 (`⇒ CellDestroySpec`).
-
-`#assert_axioms` whitelists exactly `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Inst.cellDestroyA
 

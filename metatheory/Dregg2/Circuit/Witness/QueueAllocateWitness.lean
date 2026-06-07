@@ -8,8 +8,7 @@ id-freshness; the log GROWS by the allocate receipt). The concrete digest reads 
 queue record) is visible to the BIND gate.
 
 Reuses (not re-proved): `Inst.QueueAllocateA.queueAllocateA_full_sound`,
-`effect2_circuit_full_complete`, `encodeE2`. No `sorry`/`admit`/`axiom`/`native_decide`.
-`#assert_axioms` whitelists exactly `{propext, Classical.choice, Quot.sound}`.
+`effect2_circuit_full_complete`, `encodeE2`.
 -/
 import Dregg2.Circuit.Inst.queueAllocateA
 import Dregg2.Circuit.Poseidon2Surface

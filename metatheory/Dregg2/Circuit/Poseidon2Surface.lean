@@ -30,8 +30,7 @@ This module supplies the REAL binding surface every witness module now shares:
     obligation (`Poseidon2SpongeCR` of the *real* permutation) is carried abstractly by the soundness
     theorems.
 
-`#assert_axioms` whitelists `{propext, Classical.choice,
-Quot.sound}` on every keystone; the sole crypto carrier is the NAMED `Poseidon2SpongeCR`.
+The sole crypto carrier is the NAMED `Poseidon2SpongeCR`.
 -/
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.ListCommit

@@ -44,7 +44,6 @@ actually REJECTS, breaking the `←` direction. So `SetPermissionsGuard` carries
      `permissions ≠ balance`) intact, and leaves every OTHER cell's whole record untouched.
 
   4. `#assert_axioms` on every theorem — whitelist `{propext, Classical.choice, Quot.sound}` only.
-     No `sorry`/`admit`/`native_decide`/`axiom`.
 
 The family has the single executable variant `setPermissionsA`; it shares the EXACT `stateStep` shape
 with `incrementNonceA`/`setVKA` (different `FieldName`), so the generic `stateStep_iff_spec` proved

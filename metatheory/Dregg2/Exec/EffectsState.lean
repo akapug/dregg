@@ -40,9 +40,7 @@ Terminal effects additionally carry an **irreversibility-shaped** obligation (th
 has no inverse): once the lifecycle flag is set it stays set under idempotent re-application, and a
 sealed cell rejects a second seal — the executable shadow of `LinearityClass::Terminal`.
 
-## Discipline
-`#assert_axioms` whitelists exactly `{propext,
-Classical.choice, Quot.sound}` on every keystone. Reuses ONLY the already-built
+Reuses ONLY the already-built
 `Exec.TurnExecutor`/`Exec.RecordKernel`/`Spec.ExecRefinement` primitives. Verified standalone:
 `lake env lean Dregg2/Exec/EffectsState.lean`.
 -/

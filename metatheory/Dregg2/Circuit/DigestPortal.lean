@@ -4,12 +4,10 @@
 Connects the abstract `cellLeafInjective` / `compressNInjective` / `logHashInjective` carriers used
 in `StateCommit` to the in-circuit Poseidon2 sponge gadget (`Poseidon2Emit`). The refinement
 direction composes `emit_faithful_poseidon2_compress` with `GadgetRefinement`; the CR→injectivity
-discharge — formerly explicit `sorry` HOLEs — is now PROVED (`cellLeafInjective_from_poseidon2_cr`,
-`compressNInjective_from_poseidon2_emit`, `logHashInjective_from_poseidon2_emit`) from the single
+discharge is `cellLeafInjective_from_poseidon2_cr`,
+`compressNInjective_from_poseidon2_emit`, `logHashInjective_from_poseidon2_emit`, from the single
 Poseidon2 collision-resistance assumption (`Poseidon2Binding.Poseidon2SpongeCR`), the correct
 crypto carrier — not idealized `ℤ` injectivity.
-
-No `sorry`/`admit`/`axiom`/`native_decide`; every theorem pins `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Poseidon2Emit
 import Dregg2.Circuit.Poseidon2Binding
@@ -61,9 +59,9 @@ theorem digest_emit_refines_merkle_portal {Digest : Type}
       (GadgetRefinement.merklePortalStep compress) :=
   poseidon2_emitted_refines_merkle_portal compress
 
-/-! ## §3 — DISCHARGED: Poseidon2 CR ⇒ the three injectivity portals (the holes are now theorems).
+/-! ## §3 — Poseidon2 CR ⇒ the three injectivity portals.
 
-These were `def … : Prop := sorry` placeholders. They are now PROVED bridges from the SINGLE
+These are PROVED bridges from the SINGLE
 Poseidon2 sponge collision-resistance assumption (`Poseidon2Binding.Poseidon2SpongeCR`), composed
 with the proved injective serializations, to the abstract injectivity portals the whole
 `StateCommit`/`EffectCommit` soundness tower carries. No abstract `ℤ` injectivity is assumed: CR is
