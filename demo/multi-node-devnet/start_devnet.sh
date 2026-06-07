@@ -137,6 +137,15 @@ touch "$STATE_DIR/.devnet-up"
 # devnet uses solo for fast iteration but the topology supports the
 # full-mode upgrade once gossip stabilises.
 FEDERATION_MODE="${FEDERATION_MODE:-solo}"
+# Full-turn proving on the commit path: the devnet proves EVERY committed turn
+# (real STARK proof + verify→accept gate). Default ON so the devnet makes the
+# public "every state transition is proven" claim TRUE. Set PROVE_TURNS=0 to
+# disable for a faster hot path.
+PROVE_TURNS="${PROVE_TURNS:-1}"
+PROVE_TURNS_FLAG=""
+if [ "$PROVE_TURNS" = "1" ] || [ "$PROVE_TURNS" = "true" ]; then
+    PROVE_TURNS_FLAG="--prove-turns"
+fi
 
 for fed in "${FEDERATIONS[@]}"; do
     for i in $(seq 1 "$NODES_PER_FED"); do
@@ -168,6 +177,7 @@ for fed in "${FEDERATIONS[@]}"; do
             --federation-mode "$FEDERATION_MODE" \
             --consensus blocklace \
             --enable-faucet \
+            $PROVE_TURNS_FLAG \
             > "$log" 2>&1 &
         echo $! > "$pidfile"
         devnet_dim "$fed node-$i pid=$(cat "$pidfile") http=$port gossip=$gport"

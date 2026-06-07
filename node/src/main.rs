@@ -22,6 +22,7 @@ mod routing_table;
 mod executor_setup;
 mod starbridge_seed;
 mod state;
+mod turn_proving;
 mod ws;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -77,6 +78,15 @@ enum Command {
         /// Off by default (archival mode). Turn on to bound storage growth.
         #[arg(long)]
         enable_pruning: bool,
+
+        /// Prove EVERY finalized turn on the commit path. When set, each
+        /// committed turn produces a real full-turn STARK proof and acceptance
+        /// is gated on the proof verifying (verify→accept). This is what makes
+        /// the public "every state transition is proven" claim TRUE for the
+        /// running node. Off by default (full proving is on the hot path); the
+        /// devnet enables it. Can also be enabled via `DREGG_PROVE_TURNS=1`.
+        #[arg(long)]
+        prove_turns: bool,
 
         /// Checkpoint interval in blocks (default: 1000).
         #[arg(long, default_value = "1000")]
@@ -311,6 +321,7 @@ async fn main() {
             node_index,
             federation_size,
             enable_pruning,
+            prove_turns,
             checkpoint_interval,
             blocklace_checkpoint_interval,
             blocklace_wave_timeout_ms,
@@ -332,6 +343,7 @@ async fn main() {
                 node_index,
                 federation_size,
                 enable_pruning,
+                prove_turns,
                 checkpoint_interval,
                 blocklace_checkpoint_interval,
                 blocklace_wave_timeout_ms,
@@ -406,6 +418,7 @@ async fn run_node(
     _node_index: usize,
     _federation_size: usize,
     enable_pruning: bool,
+    prove_turns: bool,
     checkpoint_interval: u64,
     blocklace_checkpoint_interval: u64,
     blocklace_wave_timeout_ms: u64,
@@ -564,6 +577,20 @@ async fn run_node(
         let mut s = node_state.write().await;
         s.pruning_enabled = enable_pruning;
         s.checkpoint_interval = checkpoint_interval;
+
+        // Full-turn proving on the commit path (--prove-turns or
+        // DREGG_PROVE_TURNS=1, devnet). When enabled, every finalized turn is
+        // proven + verify-gated; see `turn_proving::prove_and_verify_finalized_turn`.
+        let prove_turns_env = std::env::var("DREGG_PROVE_TURNS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        s.full_turn_proving_enabled = prove_turns || prove_turns_env;
+        if s.full_turn_proving_enabled {
+            info!(
+                "full-turn proving ENABLED: every committed turn produces a \
+                 verified full-turn STARK proof on the commit path"
+            );
+        }
 
         // In solo mode, initialize the SoloConsensusState with the node's signing key.
         if is_solo_mode {
