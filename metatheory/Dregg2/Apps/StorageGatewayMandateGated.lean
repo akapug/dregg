@@ -239,6 +239,59 @@ theorem sgm_safety_forever (s0 : RecChainedState) (nul : Nat) (bucket : Int) (s 
   rcases h with ⟨⟨⟨hstep', hpay'⟩, hrev'⟩, hbucket'⟩
   exact And.intro hstep' (And.intro hpay' (And.intro hrev' hbucket'))
 
+/-! ### §strong — the VALUE-PINNING bucket invariant along an anchor-safe schedule.
+
+The Hatchery `Contract` machinery carries `sgmInBucket` (program-live) unconditionally, but the LITERAL
+bucket binding `sgmAnchor = bucket` can be broken by exactly one un-caveat-gated action: `makeSovereign`
+aimed at the mandate cell (it rebinds the record behind a state commitment, dropping every field). So
+the value-pinning forever quantifies over schedulers whose every (erased) forest is anchor-safe for the
+mandate cell — `SchedAnchorSafe` — and carries the STRONG predicate `sgmInBucketStrong`. -/
+
+open Dregg2.Exec (cellNextG conservingGated_erase)
+open Dregg2.Exec.StarbridgeGated (eraseForestG execForestG execForestG_erases)
+
+/-- A gated schedule is anchor-safe for the mandate cell iff every erased forest it issues is. -/
+def SchedAnchorSafe (sched : SchedG) : Prop :=
+  ∀ n, anchorForestOK mandateCell (eraseForestG (sched n).val)
+
+/-- **`sgmStrong_cellNextG_carries` (PROVED)** — one anchor-safe gated step preserves the conjunction
+`mandateCell live ∧ sgmInBucketStrong`. Bridges `cellNextG` to `execFullForestA` via the erase. -/
+theorem sgmStrong_cellNextG_carries (bucket : Int) (s : RecChainedState) (cg : ConservingGatedForest)
+    (hok : anchorForestOK mandateCell (eraseForestG cg.val))
+    (hinv : mandateCell ∈ s.kernel.accounts ∧ sgmInBucketStrong s.kernel bucket) :
+    mandateCell ∈ (cellNextG s cg).kernel.accounts ∧ sgmInBucketStrong (cellNextG s cg).kernel bucket := by
+  obtain ⟨hlive, hstrong⟩ := hinv
+  unfold cellNextG
+  cases hc : execForestG s cg.val with
+  | none => simp only [Option.getD_none]; exact ⟨hlive, hstrong⟩
+  | some s' =>
+      simp only [Option.getD_some]
+      have hfa : execFullForestA s (eraseForestG cg.val) = some s' := execForestG_erases s s' cg.val hc
+      have hokE : anchorForestOK mandateCell (eraseForestG cg.val) := hok
+      have hstrong' := sgmBucketStrong_traj_carries s s' (eraseForestG cg.val) bucket hfa hstrong hokE hlive
+      refine ⟨?_, hstrong'⟩
+      -- liveness persists (the program-live frame again)
+      exact (execFullForestA_progLive_preserved s s' (eraseForestG cg.val) mandateCell mandateCaveats
+        hfa hlive hstrong.2).1
+
+/-- **`sgm_bucket_strong_forever` (PROVED) — VALUE-PINNING CROWN LEG.** Along EVERY anchor-safe gated
+schedule, the agent stays in the SPECIFIC bucket: `sgmAnchor (trajG …) = bucket` (the literal binding),
+not merely "some program is live". This is the strong predicate wired onto the living trajectory. -/
+theorem sgm_bucket_strong_forever (bucket : Int) (s : RecChainedState)
+    (hlive : mandateCell ∈ s.kernel.accounts) (hstrong : sgmInBucketStrong s.kernel bucket)
+    (sched : SchedG) (hsafe : SchedAnchorSafe sched) :
+    ∀ n, mandateCell ∈ (trajG s sched n).kernel.accounts
+          ∧ sgmInBucketStrong (trajG s sched n).kernel bucket := by
+  intro n
+  induction n with
+  | zero => exact ⟨hlive, hstrong⟩
+  | succ k ih =>
+      show mandateCell ∈ (cellNextG (trajG s sched k) (sched k)).kernel.accounts
+            ∧ sgmInBucketStrong (cellNextG (trajG s sched k) (sched k)).kernel bucket
+      exact sgmStrong_cellNextG_carries bucket (trajG s sched k) (sched k) (hsafe k) ih
+
+/-! ### §strong-teeth — the value-pinning predicate is NON-VACUOUS: drift REJECTED, honest ADMITTED. -/
+
 def sgmG0 : RecChainedState :=
   { kernel :=
       { accounts := {0}
@@ -252,6 +305,16 @@ def sgmG0 : RecChainedState :=
         slotCaveats := fun c => if c = mandateCell then mandateCaveats else [] }
     log := [] }
 
+/-- A drifted genesis: anchor rebound to a DIFFERENT bucket value (`demoMandate.anchor + 1`). -/
+def sgmDriftCell : CellId → Value := fun c =>
+  if c = mandateCell then
+    .record [("balance", .int 0), (objectKeySlot, .int 0), (lastOpSlot, .int (-1)),
+             (volumeSpentSlot, .int 0), (commitmentAnchorSlot, .int (demoMandate.anchor + 1))]
+  else .record [("balance", .int 0)]
+
+def sgmDriftG0 : RecChainedState :=
+  { sgmG0 with kernel := { sgmG0.kernel with cell := sgmDriftCell } }
+
 def sgmGPutKey : Option RecChainedState :=
   execFullForestG sgmG0 (sgmSetKeyNode goodCred demoKeyCode)
 
@@ -260,6 +323,12 @@ def sgmGPutOp : Option RecChainedState :=
 
 def sgmGPutEmit : Option RecChainedState :=
   sgmGPutOp.bind (fun s => execFullForestG s (sgmEmitNode goodCred demoBlobHash))
+
+-- VALUE-PINNING NON-VACUITY: honest in-bucket genesis ADMITTED; drifted anchor REJECTED.
+#guard (sgmInBucketStrong sgmG0.kernel (demoMandate.anchor : Int))                          -- TRUE
+#guard (sgmInBucketStrong sgmDriftG0.kernel (demoMandate.anchor : Int)) == false            -- drift REJECTED
+#guard (sgmAnchor sgmDriftG0.kernel == sgmAnchor sgmG0.kernel) == false                     -- anchors genuinely differ
+#guard (sgmInBucketStrong sgmDriftG0.kernel (demoMandate.anchor + 1 : Int))                 -- drift IS in its own bucket
 
 #guard (gateOK (mkAuth goodCred []) sgmG0)
 #guard (sgmAdmitM demoMandate (SgmRuntime.init demoMandate) demoPutReq).isSome
@@ -299,5 +368,7 @@ def sgmGPutEmit : Option RecChainedState :=
 #assert_axioms sgm_revoked_rejected_forever
 #assert_axioms sgmSafetyContract
 #assert_axioms sgm_safety_forever
+#assert_axioms sgmStrong_cellNextG_carries
+#assert_axioms sgm_bucket_strong_forever
 
 end Dregg2.Apps.StorageGatewayMandateGated

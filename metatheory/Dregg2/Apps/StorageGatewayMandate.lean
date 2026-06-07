@@ -33,8 +33,10 @@ open Dregg2.Exec (cellObsA)
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.FullForest
 open Dregg2.Exec.EffectsState (caveatsAdmit fieldOf writeField stateStepGuarded stateStepGuarded_admits
-  stateStepGuarded_caveat_violation_fails stateStepGuarded_eq stateStep_factors guarded_state_field_written)
-open Dregg2.Proof.Noninterference (writeField_cell_other writeField_field_ne field_setField_ne)
+  stateStepGuarded_caveat_violation_fails stateStepGuarded_eq stateStep_factors guarded_state_field_written
+  setField_fieldOf setField)
+open Dregg2.Proof.Noninterference (writeField_cell_other writeField_field_ne field_setField_ne
+  field_setField_eq execFullA_setFieldA_writeField)
 open Dregg2.Authority.ClearanceGraph
 open Dregg2.Proof.Stingray
 
@@ -329,6 +331,130 @@ private theorem pipelineFanoutK_frame (k k' : RecordKernelState) (actor : CellId
                 obtain ⟨ha1, hc1⟩ := ih k1 sids' h
                 obtain ⟨ha0, hc0⟩ := queueEnqueueK_frame k sid m k1 hq
                 exact ⟨ha1.trans ha0, hc1.trans hc0⟩
+          · exact absurd h (by simp)
+
+/-! ### Queue `.cell`-frames — every queue/escrow kernel op edits only `queues`/`bal`/`escrows`,
+NEVER the per-cell record `.cell`. These `_cellframe` companions expose exactly that for the
+anchor-value frame (the `_frame` versions above only carry `accounts`/`slotCaveats`). -/
+
+private theorem queueEnqueueK_cellframe {k k₁ : RecordKernelState} {id m : Nat}
+    (hq : queueEnqueueK k id m = some k₁) : k₁.cell = k.cell := by
+  unfold queueEnqueueK at hq; split at hq
+  · exact absurd hq (by simp)
+  · split at hq
+    · injection hq with hq; subst hq; rfl
+    · exact absurd hq (by simp)
+
+private theorem queueEnqueueDepositK_cellframe (k : RecordKernelState) (id m : Nat)
+    (sender owner : CellId) (depId : Nat) (dAsset : AssetId) (deposit : ℤ) (k' : RecordKernelState)
+    (h : queueEnqueueDepositK k id m sender owner depId dAsset deposit = some k') :
+    k'.accounts = k.accounts ∧ k'.slotCaveats = k.slotCaveats ∧ k'.cell = k.cell := by
+  obtain ⟨ha, hc⟩ := queueEnqueueDepositK_frame k id m sender owner depId dAsset deposit k' h
+  refine ⟨ha, hc, ?_⟩
+  unfold queueEnqueueDepositK at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i k₁ hq
+    split at h
+    · obtain ⟨rfl⟩ := h
+      show (createEscrowRawAssetQueue k₁ depId sender owner dAsset deposit id m).cell = k.cell
+      unfold createEscrowRawAssetQueue; show k₁.cell = k.cell; exact queueEnqueueK_cellframe hq
+    · exact absurd h (by simp)
+
+private theorem queueDequeueK_cellframe (k : RecordKernelState) (id : Nat) (actor : CellId)
+    (k₁ : RecordKernelState) (mh : Nat) (hq : queueDequeueK k id actor = some (k₁, mh)) :
+    k₁.accounts = k.accounts ∧ k₁.slotCaveats = k.slotCaveats ∧ k₁.cell = k.cell := by
+  unfold queueDequeueK at hq; split at hq
+  · exact absurd hq (by simp)
+  · split at hq
+    · split at hq
+      · exact absurd hq (by simp)
+      · option_inj at hq; obtain ⟨hq, _⟩ := hq; subst hq; exact ⟨rfl, rfl, rfl⟩
+    · exact absurd hq (by simp)
+
+private theorem queueDequeueRefundK_cellframe (k : RecordKernelState) (id : Nat) (actor : CellId)
+    (depId : Nat) (k' : RecordKernelState) (mh : Nat)
+    (h : queueDequeueRefundK k id actor depId = some (k', mh)) :
+    k'.accounts = k.accounts ∧ k'.slotCaveats = k.slotCaveats ∧ k'.cell = k.cell := by
+  unfold queueDequeueRefundK at h
+  cases hq : queueDequeueK k id actor with
+  | none => rw [hq] at h; exact absurd h (by simp)
+  | some kp =>
+      obtain ⟨k₁, mh₁⟩ := kp
+      rw [hq] at h; simp only [] at h
+      by_cases hbind : dequeueMsgBindB k₁ actor depId id mh₁
+      · rw [if_pos hbind] at h
+        cases hfind : findUnresolvedDeposit k₁ depId with
+        | none => simp only [hfind] at h; exact absurd h (by simp)
+        | some r =>
+            simp only [hfind] at h
+            by_cases ha : actor ∈ k₁.accounts
+            · rw [if_pos ha, Option.some.injEq, Prod.mk.injEq] at h
+              obtain ⟨he, _⟩ := h; subst he
+              obtain ⟨ha', hc', hcell'⟩ := queueDequeueK_cellframe k id actor k₁ mh₁ hq
+              refine ⟨?_, ?_, ?_⟩
+              · show (settleEscrowRawAsset k₁ depId actor r.asset r.amount).accounts = k.accounts
+                unfold settleEscrowRawAsset; show k₁.accounts = k.accounts; exact ha'
+              · show (settleEscrowRawAsset k₁ depId actor r.asset r.amount).slotCaveats = k.slotCaveats
+                unfold settleEscrowRawAsset; show k₁.slotCaveats = k.slotCaveats; exact hc'
+              · show (settleEscrowRawAsset k₁ depId actor r.asset r.amount).cell = k.cell
+                unfold settleEscrowRawAsset; show k₁.cell = k.cell; exact hcell'
+            · rw [if_neg ha] at h; exact absurd h (by simp)
+      · rw [if_neg hbind] at h; exact absurd h (by simp)
+
+private theorem queueTxOpStepA_cellframe (s s' : RecChainedState) (op : QueueTxOpA)
+    (h : queueTxOpStepA s op = some s') : s'.kernel.cell = s.kernel.cell := by
+  cases op with
+  | enqueue id m actor cell depId dAsset deposit =>
+      simp only [queueTxOpStepA, queueEnqueueChainA] at h; split at h
+      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' => commit_subst h hk
+                     exact (queueEnqueueDepositK_cellframe s.kernel id m actor cell depId dAsset deposit k' hk).2.2
+      · exact absurd h (by simp)
+  | dequeue id actor cell depId =>
+      simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
+      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some kp => obtain ⟨k', mhd⟩ := kp
+                     commit_subst h hk
+                     exact (queueDequeueRefundK_cellframe s.kernel id actor depId k' mhd hk).2.2
+      · exact absurd h (by simp)
+
+private theorem queueAtomicTxChainA_cellframe (s s' : RecChainedState) (ops : List QueueTxOpA)
+    (h : queueAtomicTxChainA s ops = some s') :
+    s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
+      ∧ s'.kernel.cell = s.kernel.cell := by
+  induction ops generalizing s with
+  | nil => simp only [queueAtomicTxChainA, Option.some.injEq] at h; subst h; exact ⟨rfl, rfl, rfl⟩
+  | cons op rest ih =>
+      simp only [queueAtomicTxChainA] at h
+      cases hop : queueTxOpStepA s op with
+      | none => rw [hop] at h; exact absurd h (by simp)
+      | some s1 =>
+          simp only [hop] at h
+          obtain ⟨ha1, hc1, hcell1⟩ := ih s1 h
+          obtain ⟨ha0, hc0⟩ := queueTxOpStepA_frame _ _ _ hop
+          exact ⟨ha1.trans ha0, hc1.trans hc0, hcell1.trans (queueTxOpStepA_cellframe _ _ _ hop)⟩
+
+private theorem pipelineFanoutK_cellframe (k k' : RecordKernelState) (actor : CellId) (m : Nat)
+    (sinks : List CellId) (sids : List Nat)
+    (h : pipelineFanoutK k actor m sinks sids = some k') :
+    k'.accounts = k.accounts ∧ k'.slotCaveats = k.slotCaveats ∧ k'.cell = k.cell := by
+  induction sinks generalizing k sids with
+  | nil => cases sids <;> (simp only [pipelineFanoutK, Option.some.injEq] at h; subst h; exact ⟨rfl, rfl, rfl⟩)
+  | cons sink rest ih =>
+      cases sids with
+      | nil => simp only [pipelineFanoutK] at h; exact absurd h (by simp)
+      | cons sid sids' =>
+          simp only [pipelineFanoutK] at h; split at h
+          · cases hq : queueEnqueueK k sid m with
+            | none => rw [hq] at h; exact absurd h (by simp)
+            | some k1 =>
+                simp only [hq] at h
+                obtain ⟨ha1, hc1, hcell1⟩ := ih k1 sids' h
+                obtain ⟨ha0, hc0⟩ := queueEnqueueK_frame k sid m k1 hq
+                exact ⟨ha1.trans ha0, hc1.trans hc0, hcell1.trans (queueEnqueueK_cellframe hq)⟩
           · exact absurd h (by simp)
 
 mutual
@@ -870,6 +996,697 @@ theorem execFullForestA_progLive_preserved (s s' : RecChainedState) (f : FullFor
   rw [execFullForestA_eq_execFullTurnA] at h
   exact execFullTurnA_progLive_preserved s s' (lowerForestA f) c cav h hlive hprog
 
+/-! ## §B″ — the ANCHOR-VALUE FRAME: a committed forest preserves the immutable `commitment_anchor`.
+
+`progLive_preserved` carries liveness + the caveat program (the *enforcement* of the immutable
+anchor) but NOT the literal anchor *value*. This section closes that gap: the actual stored
+`commitment_anchor` scalar on a cell whose published program contains `.immutable commitmentAnchorSlot`
+is preserved across EVERY committed action — with ONE genuine exception, `makeSovereign` on that very
+cell, which is NOT caveat-gated and rebinds the cell record behind a state commitment (it provably
+clobbers any field; see `Proof.Noninterference.makeSovereign_leaks`). We carry an explicit
+`anchorActionOK`/`anchorForestOK` guard EXCLUDING that one action, and prove the value frame under it. -/
+
+/-- `fieldOf` of a value depends only on its `Value.field` read at that slot. -/
+theorem fieldOf_of_field_eq {f : FieldName} {v w : Value} (h : v.field f = w.field f) :
+    fieldOf f v = fieldOf f w := by
+  unfold fieldOf Value.scalar; rw [h]
+
+/-- A FRESH-cell create leaves every OLD cell's record verbatim (`c ≠ newCell`). -/
+theorem createCellIntoAsset_cell_other (k : RecordKernelState) (newCell c : CellId)
+    (hne : c ≠ newCell) : (createCellIntoAsset k newCell).cell c = k.cell c := by
+  simp only [createCellIntoAsset, bornEmptyCellSlots, if_neg hne]
+
+/-- A single action is anchor-safe FOR cell `c`: it is anything except `makeSovereign` aimed at `c`
+(the sole un-caveat-gated cell-record rebind, which drops every field — see the §B″ note). Every
+other `FullActionA` either leaves `c`'s record untouched or edits it only through a caveat-GATED
+field write, against which the `.immutable commitmentAnchorSlot` caveat defends the anchor scalar.
+`exerciseA` RECURSES into its inner fold (which `execFullA` runs after the hold-gate), so its inner
+list must itself be anchor-safe — otherwise a `makeSovereign c` could hide inside a facet exercise.
+
+Boolean shadow (`anchorActionOKB`): the structural recursion over `exerciseA`'s inner list field lives
+here, with `termination_by` on the action `sizeOf` (each inner element is a strict subterm). -/
+def anchorActionOKB (c : CellId) : FullActionA → Bool
+  | .makeSovereignA _ cell => !(cell == c)
+  | .exerciseA _ _ inner   => inner.attach.all (fun a => anchorActionOKB c a.1)
+  | _                      => true
+termination_by a => sizeOf a
+decreasing_by
+  · simp_wf
+    rename_i a hmem
+    have := List.sizeOf_lt_of_mem a.2
+    omega
+
+/-- A single action is anchor-safe FOR cell `c`. -/
+def anchorActionOK (c : CellId) (a : FullActionA) : Prop := anchorActionOKB c a = true
+
+instance anchorActionOKDecidable (c : CellId) (a : FullActionA) : Decidable (anchorActionOK c a) := by
+  unfold anchorActionOK; infer_instance
+
+theorem anchorActionOK_makeSovereign {c actor cell : CellId}
+    (h : anchorActionOK c (.makeSovereignA actor cell)) : cell ≠ c := by
+  unfold anchorActionOK at h
+  simp only [anchorActionOKB] at h
+  simpa using h
+
+/-- An inner-effect list / lowered forest is anchor-safe for `c`: every action is. -/
+def anchorListOK (c : CellId) (l : List FullActionA) : Prop := ∀ a ∈ l, anchorActionOK c a
+
+/-- A forest is anchor-safe for `c` iff its pre-order lowering is. -/
+def anchorForestOK (c : CellId) (f : FullForestA) : Prop := anchorListOK c (lowerForestA f)
+
+/-- From a safe `exerciseA` guard, the inner list is anchor-safe. -/
+theorem anchorListOK_of_exercise {c : CellId} {actor t : CellId} {inner : List FullActionA}
+    (hok : anchorActionOK c (.exerciseA actor t inner)) : anchorListOK c inner := by
+  intro a ha
+  unfold anchorActionOK at hok ⊢
+  simp only [anchorActionOKB] at hok
+  have hall := List.all_eq_true.1 hok
+  exact hall ⟨a, ha⟩ (List.mem_attach inner ⟨a, ha⟩)
+
+mutual
+/-- **`execFullA_anchorVal_preserved` (PROVED) — the per-effect ANCHOR-VALUE frame.** A committed
+`FullActionA` that is anchor-safe for `c` (`anchorActionOK c fa`) preserves `c`'s stored
+`commitment_anchor` scalar, PROVIDED `c` carries the `.immutable commitmentAnchorSlot` caveat in its
+published program. Every non-cell-touching arm leaves `c`'s record verbatim; the field-write arms
+(`incrementNonce`/`setPermissions`/`setVK`/`refusal`/`receiptArchive`) write a DISTINCT field, so
+`field_setField_ne` keeps the anchor; the caveat-gated `setFieldA` is admitted only if the immutable
+caveat passes — i.e. a `commitment_anchor` rewrite must be `new = old`, and a write to any OTHER slot
+leaves the anchor untouched. `makeSovereign` aimed at `c` is the excluded arm. -/
+theorem execFullA_anchorVal_preserved (s s' : RecChainedState) (fa : FullActionA) (c : CellId)
+    (h : execFullA s fa = some s')
+    (hlive : c ∈ s.kernel.accounts)
+    (himm : .immutable commitmentAnchorSlot ∈ s.kernel.slotCaveats c)
+    (hok : anchorActionOK c fa) :
+    fieldOf commitmentAnchorSlot (s'.kernel.cell c) = fieldOf commitmentAnchorSlot (s.kernel.cell c) := by
+  cases fa with
+  | balanceA t a =>
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := recCexecAsset_factors t a (by simpa only [execFullA] using h)
+      subst h'
+      have hn : k' = { s.kernel with bal := k'.bal } := by
+        unfold recKExecAsset at hk; split at hk
+        · injection hk with hk; subst hk; rfl
+        · exact absurd hk (by simp)
+      rw [hn]
+  | delegate del rec t =>
+      simp only [execFullA, recCDelegate] at h
+      cases hk : recKDelegate s.kernel del rec t with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          commit_subst h hk
+          have hn : k' = { s.kernel with caps := k'.caps } := by
+            unfold recKDelegate at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          rw [hn]
+  | revoke holder t =>
+      simp only [execFullA, recCRevoke] at h; obtain ⟨rfl⟩ := h; rfl
+  | mintA actor cell a amt =>
+      simp only [execFullA, recCMintAsset] at h
+      cases hk : recKMintAsset s.kernel actor cell a amt with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          commit_subst h hk
+          have hn : k' = { s.kernel with bal := k'.bal } := by
+            unfold recKMintAsset at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          rw [hn]
+  | burnA actor cell a amt =>
+      simp only [execFullA, recCBurnAsset] at h
+      cases hk : recKBurnAsset s.kernel actor cell a amt with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          commit_subst h hk
+          have hn : k' = { s.kernel with bal := k'.bal } := by
+            unfold recKBurnAsset at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          rw [hn]
+  | setFieldA actor cell f v =>
+      -- the caveat-GATED write: `field_setField_ne` for f ≠ anchor; the `.immutable` caveat for f = anchor.
+      have hstep : stateStepGuarded s f actor cell v = some s' := h
+      have hadm : caveatsAdmit s.kernel f actor cell v = true := stateStepGuarded_admits hstep
+      rw [execFullA_setFieldA_writeField h]
+      by_cases hcell : c = cell
+      · subst hcell
+        by_cases hf : f = commitmentAnchorSlot
+        · -- writing the anchor slot ITSELF: the immutable caveat forced `v = old` (`fieldOf`-level).
+          subst hf
+          have hmem : (.immutable commitmentAnchorSlot : SlotCaveat) ∈
+              (s.kernel.slotCaveats c).filter (fun cav => cav.field == commitmentAnchorSlot) := by
+            rw [List.mem_filter]
+            exact ⟨himm, by rfl⟩
+          have heval : (SlotCaveat.immutable commitmentAnchorSlot).eval actor
+              (fieldOf commitmentAnchorSlot (s.kernel.cell c)) v = true := by
+            have := List.all_eq_true.1 hadm _ hmem; simpa using this
+          have hveq : v = fieldOf commitmentAnchorSlot (s.kernel.cell c) := by
+            simpa [SlotCaveat.eval] using heval
+          show fieldOf commitmentAnchorSlot
+                ((writeField s.kernel commitmentAnchorSlot c (.int v)).cell c)
+              = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+          have hcw : (writeField s.kernel commitmentAnchorSlot c (.int v)).cell c
+              = setField commitmentAnchorSlot (s.kernel.cell c) (.int v) := by
+            unfold writeField; simp only [if_pos]
+          rw [hcw, setField_fieldOf]; exact hveq
+        · -- writing a DIFFERENT slot: anchor read untouched.
+          show fieldOf commitmentAnchorSlot ((writeField s.kernel f c (.int v)).cell c)
+              = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+          exact fieldOf_of_field_eq
+            (writeField_field_ne s.kernel f commitmentAnchorSlot c c (.int v) (fun he => hf he.symm))
+      · -- the write targets a different cell entirely.
+        show fieldOf commitmentAnchorSlot ((writeField s.kernel f cell (.int v)).cell c)
+            = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+        rw [writeField_cell_other s.kernel f cell c (.int v) hcell]
+  | emitEventA actor cell topic data =>
+      simp only [execFullA] at h
+      by_cases hl : cell ∈ s.kernel.accounts
+      · rw [if_pos hl] at h; simp only [emitStep, Option.some.injEq] at h; subst h; rfl
+      · rw [if_neg hl] at h; exact absurd h (by simp)
+  | incrementNonceA actor cell n =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      exact fieldOf_of_field_eq
+        (writeField_field_ne s.kernel nonceField commitmentAnchorSlot cell c (.int n) (by decide))
+  | setPermissionsA actor cell p =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      exact fieldOf_of_field_eq
+        (writeField_field_ne s.kernel permsField commitmentAnchorSlot cell c (.int p) (by decide))
+  | setVKA actor cell vk =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      exact fieldOf_of_field_eq
+        (writeField_field_ne s.kernel vkField commitmentAnchorSlot cell c (.int vk) (by decide))
+  | introduceA intro rec t =>
+      simp only [execFullA, recCDelegate] at h
+      cases hk : recKDelegate s.kernel intro rec t with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          commit_subst h hk
+          have hn : k' = { s.kernel with caps := k'.caps } := by
+            unfold recKDelegate at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          rw [hn]
+  | delegateAttenA del rec t keep =>
+      simp only [execFullA, recCDelegateAtten] at h
+      cases hk : recKDelegateAtten s.kernel del rec t keep with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          commit_subst h hk
+          have hn : k' = { s.kernel with caps := k'.caps } := by
+            unfold recKDelegateAtten at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          rw [hn]
+  | attenuateA actor idx keep =>
+      simp only [execFullA, attenuateStepA] at h; obtain ⟨rfl⟩ := h; rfl
+  | dropRefA holder t =>
+      simp only [execFullA, recCRevoke] at h; obtain ⟨rfl⟩ := h; rfl
+  | revokeDelegationA holder t =>
+      simp only [execFullA, recCRevoke] at h; obtain ⟨rfl⟩ := h; rfl
+  | validateHandoffA intro rec t =>
+      simp only [execFullA, recCDelegate] at h
+      cases hk : recKDelegate s.kernel intro rec t with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          commit_subst h hk
+          have hn : k' = { s.kernel with caps := k'.caps } := by
+            unfold recKDelegate at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          rw [hn]
+  | exerciseA actor t inner =>
+      simp only [execFullA] at h
+      by_cases hf : innerFacetsAdmittedA s actor t inner = true
+      · rw [if_pos hf] at h
+        cases hg : exerciseStepA s actor t with
+        | none => rw [hg] at h; exact absurd h (by simp)
+        | some s1 =>
+            rw [hg] at h
+            obtain ⟨_, hs1⟩ := exerciseStepA_factors hg
+            have hlive1 : c ∈ s1.kernel.accounts := by rw [hs1]; exact hlive
+            have himm1 : .immutable commitmentAnchorSlot ∈ s1.kernel.slotCaveats c := by
+              rw [hs1]; exact himm
+            have hcell1 : s1.kernel.cell c = s.kernel.cell c := by rw [hs1]
+            -- `exerciseStepA` only appends a log row (`s1.kernel = s.kernel`); the inner fold then
+            -- runs `inner`, which the `exerciseA` guard requires to be anchor-safe for `c`.
+            rw [hcell1.symm]
+            exact execInnerA_anchorVal_preserved s1 s' inner c hlive1 h himm1
+              (anchorListOK_of_exercise hok)
+      · rw [if_neg hf] at h; exact absurd h (by simp)
+  | createCellA actor newCell =>
+      obtain ⟨_, hfresh, hs'⟩ := createCellChainA_factors (by simpa only [execFullA] using h)
+      have hne : c ≠ newCell := fun heq => hfresh (heq ▸ hlive)
+      subst hs'
+      rw [createCellIntoAsset_cell_other s.kernel newCell c hne]
+  | createCellFromFactoryA actor newCell vk =>
+      obtain ⟨e, s1, _, _, hc, hs'⟩ :=
+        createCellFromFactoryChainA_factors (by simpa only [execFullA] using h)
+      obtain ⟨_, hfresh, hs1⟩ := createCellChainA_factors hc
+      have hne : c ≠ newCell := fun heq => hfresh (heq ▸ hlive)
+      subst hs' hs1
+      simp only [createCellIntoAsset, bornEmptyCellSlots, if_neg hne]
+  | spawnA actor child target =>
+      obtain ⟨s1, _, hc, hs'⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
+      obtain ⟨_, hfresh, hc'⟩ := createCellChainA_factors hc
+      have hne : c ≠ child := fun heq => hfresh (heq ▸ hlive)
+      subst hs' hc'
+      show fieldOf commitmentAnchorSlot ((createCellIntoAsset s.kernel child).cell c)
+            = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+      rw [createCellIntoAsset_cell_other s.kernel child c hne]
+  | bridgeMintA actor cell a value =>
+      simp only [execFullA, recCMintAsset] at h
+      cases hk : recKMintAsset s.kernel actor cell a value with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          commit_subst h hk
+          have hn : k' = { s.kernel with bal := k'.bal } := by
+            unfold recKMintAsset at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          rw [hn]
+  | createEscrowA id actor creator recipient asset amount =>
+      simp only [execFullA, createEscrowChainA] at h
+      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          commit_subst h hk
+          have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+            unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          rw [hn]
+  | releaseEscrowA id actor =>
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+        unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      rw [hn]
+  | refundEscrowA id actor =>
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+        unfold refundEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      rw [hn]
+  | createObligationA id actor obligor beneficiary asset stake =>
+      simp only [execFullA, createEscrowChainA] at h
+      cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          commit_subst h hk
+          have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+            unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          rw [hn]
+  | fulfillObligationA id actor =>
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+        unfold refundEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      rw [hn]
+  | slashObligationA id actor =>
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+        unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      rw [hn]
+  | noteSpendA nf actor spendProof =>
+      simp only [execFullA, noteSpendChainA] at h
+      by_cases hp : spendProof = true
+      · rw [if_pos hp] at h
+        cases hk : noteSpendNullifier s.kernel nf with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            have hn : k' = { s.kernel with nullifiers := nf :: s.kernel.nullifiers } := by
+              unfold noteSpendNullifier at hk; split at hk
+              · exact absurd hk (by simp)
+              · injection hk with hk; exact hk.symm
+            rw [hn]
+      · rw [if_neg hp] at h; exact absurd h (by simp)
+  | noteCreateA cm actor =>
+      simp only [execFullA, noteCreateChainA] at h
+      option_inj at h; subst h
+      show fieldOf commitmentAnchorSlot ((noteCreateCommitment s.kernel cm).cell c)
+            = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+      unfold noteCreateCommitment; rfl
+  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
+      simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
+      · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+              unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
+              · injection hk with hk; subst hk; rfl
+              · exact absurd hk (by simp)
+            rw [hn]
+      · exact absurd h (by simp)
+  | releaseCommittedEscrowA id actor =>
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+        unfold releaseEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      rw [hn]
+  | refundCommittedEscrowA id actor =>
+      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
+      subst h'
+      have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+        unfold refundEscrowKAsset settleEscrowRawAsset at hk
+        split at hk
+        · split at hk
+          · injection hk with hk; subst hk; rfl
+          · exact absurd hk (by simp)
+        · exact absurd hk (by simp)
+      rw [hn]
+  | bridgeLockA id actor originator destination asset amount =>
+      simp only [execFullA, bridgeLockChainA] at h
+      cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          commit_subst h hk
+          have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+            unfold bridgeLockKAsset createBridgeRawAsset at hk; split at hk
+            · injection hk with hk; subst hk; rfl
+            · exact absurd hk (by simp)
+          rw [hn]
+  | bridgeFinalizeA id actor asset amount =>
+      simp only [execFullA, bridgeFinalizeChainA] at h
+      split at h
+      · cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+              unfold bridgeFinalizeKAsset bridgeFinalizeRawAsset at hk
+              split at hk
+              · split at hk
+                · injection hk with hk; subst hk; rfl
+                · exact absurd hk (by simp)
+              · exact absurd hk (by simp)
+            rw [hn]
+      · exact absurd h (by simp)
+  | bridgeCancelA id actor =>
+      simp only [execFullA, bridgeCancelChainA] at h
+      split at h
+      · cases hk : bridgeCancelKAsset s.kernel id with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            have hn : k' = { s.kernel with bal := k'.bal, escrows := k'.escrows } := by
+              unfold bridgeCancelKAsset settleEscrowRawAsset at hk
+              split at hk
+              · split at hk
+                · injection hk with hk; subst hk; rfl
+                · exact absurd hk (by simp)
+              · exact absurd hk (by simp)
+            rw [hn]
+      · exact absurd h (by simp)
+  | sealA pid actor payload =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; rfl
+  | unsealA pid actor recipient =>
+      simp only [execFullA] at h
+      obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'; rfl
+  | createSealPairA pid actor sealerHolder unsealerHolder =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'; rfl
+  | makeSovereignA actor cell =>
+      -- THE EXCLUDED ARM: `anchorActionOK c (.makeSovereignA actor cell) = (cell ≠ c)`.
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := makeSovereignStep_factors h; subst hs'
+      have hne : cell ≠ c := anchorActionOK_makeSovereign hok
+      show fieldOf commitmentAnchorSlot ((makeSovereignKernel s.kernel cell).cell c)
+            = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+      have hcell : (makeSovereignKernel s.kernel cell).cell c = s.kernel.cell c := by
+        unfold makeSovereignKernel sovereignRebind
+        simp only [if_neg (fun he : c = cell => hne he.symm)]
+      rw [hcell]
+  | refusalA actor cell =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      exact fieldOf_of_field_eq
+        (writeField_field_ne s.kernel refusalField commitmentAnchorSlot cell c (.int 1) (by decide))
+  | receiptArchiveA actor cell =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      exact fieldOf_of_field_eq
+        (writeField_field_ne s.kernel lifecycleField commitmentAnchorSlot cell c (.int 1) (by decide))
+  | cellSealA actor cell =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellSealChainA_factors h; subst hs'
+      show fieldOf commitmentAnchorSlot ((setLifecycle s.kernel cell lcSealed).cell c)
+            = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+      unfold setLifecycle; rfl
+  | cellUnsealA actor cell =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellUnsealChainA_factors h; subst hs'
+      show fieldOf commitmentAnchorSlot ((setLifecycle s.kernel cell lcLive).cell c)
+            = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+      unfold setLifecycle; rfl
+  | cellDestroyA actor cell ch =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := cellDestroyChainA_factors h; subst hs'
+      show fieldOf commitmentAnchorSlot (({ (setLifecycle s.kernel cell lcDestroyed) with deathCert := _ }).cell c)
+            = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+      unfold setLifecycle; rfl
+  | refreshDelegationA actor child =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; rfl
+  | queueAllocateA id actor cell cap =>
+      simp only [execFullA, queueAllocateChainA] at h
+      split at h
+      · cases hk : queueAllocateK s.kernel id actor cap with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            have hn : k' = { s.kernel with queues := k'.queues } := by
+              unfold queueAllocateK at hk; split at hk
+              · exact absurd hk (by simp)
+              · injection hk with hk; subst hk; rfl
+            rw [hn]
+      · exact absurd h (by simp)
+  | queueEnqueueA id m actor cell depId dAsset deposit =>
+      simp only [execFullA, queueEnqueueChainA] at h
+      split at h
+      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            obtain ⟨_, _, hcelleq⟩ :=
+              queueEnqueueDepositK_cellframe s.kernel id m actor cell depId dAsset deposit k' hk
+            rw [hcelleq]
+      · exact absurd h (by simp)
+  | queueDequeueA id actor cell depId =>
+      simp only [execFullA, queueDequeueChainA] at h
+      split at h
+      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some kp =>
+            rw [hk] at h
+            obtain ⟨k', mhd⟩ := kp
+            obtain ⟨rfl⟩ := h
+            obtain ⟨_, _, hcelleq⟩ :=
+              queueDequeueRefundK_cellframe s.kernel id actor depId k' mhd hk
+            rw [hcelleq]
+      · exact absurd h (by simp)
+  | queueResizeA id newCap actor cell =>
+      simp only [execFullA, queueResizeChainA] at h
+      split at h
+      · cases hk : queueResizeK s.kernel id newCap with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            have hn : k' = { s.kernel with queues := k'.queues } := by
+              unfold queueResizeK at hk
+              split at hk
+              · exact absurd hk (by simp)
+              · split at hk
+                · injection hk with hk; subst hk; rfl
+                · exact absurd hk (by simp)
+            rw [hn]
+      · exact absurd h (by simp)
+  | queueAtomicTxA actor ops =>
+      simp only [execFullA] at h
+      obtain ⟨s1, hf, _, hk⟩ := queueAtomicTxA_atomic_witness h
+      obtain ⟨_, _, hcelleq⟩ := queueAtomicTxChainA_cellframe s s1 ops hf
+      have : s'.kernel.cell = s.kernel.cell := by rw [hk]; exact hcelleq
+      rw [this]
+  | queuePipelineStepA srcId owner sinkCells sinkIds =>
+      simp only [execFullA] at h
+      obtain ⟨k1, mh, hd, hfo⟩ := queuePipelineStepA_routing_witness h
+      obtain ⟨_, _, hfcelleq⟩ := pipelineFanoutK_cellframe k1 s'.kernel owner mh sinkCells sinkIds hfo
+      obtain ⟨_, _, hdcelleq⟩ := queueDequeueK_cellframe s.kernel srcId owner k1 mh hd
+      have hcell : s'.kernel.cell = s.kernel.cell := hfcelleq.trans hdcelleq
+      rw [hcell]
+  | pipelinedSendA actor =>
+      simp only [execFullA, Option.some.injEq] at h; subst h; rfl
+  | exportSturdyRefA sw actor exporter target rights =>
+      simp only [execFullA, swissExportChainA] at h
+      split at h
+      · cases hk : swissExportK s.kernel sw exporter target rights with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            have hn : k' = { s.kernel with swiss := k'.swiss } := by
+              unfold swissExportK at hk; split at hk
+              · exact absurd hk (by simp)
+              · split at hk
+                · injection hk with hk; subst hk; rfl
+                · exact absurd hk (by simp)
+            rw [hn]
+      · exact absurd h (by simp)
+  | enlivenRefA sw actor exporter claimed =>
+      simp only [execFullA, swissEnlivenChainA] at h
+      split at h
+      · cases hk : swissEnlivenK s.kernel sw claimed with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            have hn : k' = { s.kernel with swiss := k'.swiss, caps := k'.caps } := by
+              unfold swissEnlivenK at hk; split at hk
+              · exact absurd hk (by simp)
+              · split at hk
+                · injection hk with hk; subst hk; rfl
+                · exact absurd hk (by simp)
+            rw [hn]
+      · exact absurd h (by simp)
+  | swissHandoffA sw certHash introducer exporter =>
+      simp only [execFullA, swissHandoffChainA] at h
+      split at h
+      · cases hk : swissHandoffK s.kernel sw certHash with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            have hn : k' = { s.kernel with swiss := k'.swiss } := by
+              unfold swissHandoffK at hk; split at hk
+              · exact absurd hk (by simp)
+              · injection hk with hk; subst hk; rfl
+            rw [hn]
+      · exact absurd h (by simp)
+  | swissDropA sw actor exporter =>
+      simp only [execFullA, swissDropChainA] at h
+      split at h
+      · cases hk : swissDropK s.kernel sw with
+        | none => rw [hk] at h; exact absurd h (by simp)
+        | some k' =>
+            commit_subst h hk
+            have hn : k' = { s.kernel with swiss := k'.swiss } := by
+              unfold swissDropK at hk; split at hk
+              · exact absurd hk (by simp)
+              · split at hk
+                · exact absurd hk (by simp)
+                · split at hk
+                  · injection hk with hk; subst hk; rfl
+                  · injection hk with hk; subst hk; rfl
+            rw [hn]
+      · exact absurd h (by simp)
+
+/-- **`execInnerA_anchorVal_preserved`** — the inner-effect fold preserves `c`'s anchor scalar when
+every inner action is anchor-safe for `c`. Mutual with `execFullA_anchorVal_preserved`. -/
+theorem execInnerA_anchorVal_preserved (s s' : RecChainedState) (inner : List FullActionA) (c : CellId)
+    (hlive : c ∈ s.kernel.accounts)
+    (h : execInnerA s inner = some s')
+    (himm : .immutable commitmentAnchorSlot ∈ s.kernel.slotCaveats c)
+    (hok : anchorListOK c inner) :
+    fieldOf commitmentAnchorSlot (s'.kernel.cell c) = fieldOf commitmentAnchorSlot (s.kernel.cell c) := by
+  cases inner with
+  | nil => simp only [execInnerA, Option.some.injEq] at h; subst h; rfl
+  | cons a rest =>
+      simp only [execInnerA] at h
+      cases ha : execFullA s a with
+      | none => rw [ha] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [ha] at h
+          have hoka : anchorActionOK c a := hok a List.mem_cons_self
+          have hokrest : anchorListOK c rest := fun b hb => hok b (List.mem_cons_of_mem _ hb)
+          -- liveness + the full caveat program (hence the immutable membership) persist across the step.
+          obtain ⟨hlive1, hprog1⟩ :=
+            execFullA_progLive_preserved s s1 a c (s.kernel.slotCaveats c) ha hlive rfl
+          have himm1 : .immutable commitmentAnchorSlot ∈ s1.kernel.slotCaveats c := by
+            rw [hprog1]; exact himm
+          have hstep := execFullA_anchorVal_preserved s s1 a c ha hlive himm hoka
+          have hrec := execInnerA_anchorVal_preserved s1 s' rest c hlive1 h himm1 hokrest
+          rw [hrec, hstep]
+end
+
+/-- **`execFullTurnA_anchorVal_preserved` (PROVED).** A committed per-asset full TURN whose action list
+is anchor-safe for `c` preserves `c`'s `commitment_anchor` scalar (given `c` live + carrying the
+immutable caveat). Induction on the action list, reusing `progLive_preserved` to carry liveness+caveat
+across each step. -/
+theorem execFullTurnA_anchorVal_preserved :
+    ∀ (s s' : RecChainedState) (tt : List FullActionA) (c : CellId),
+      execFullTurnA s tt = some s' → c ∈ s.kernel.accounts →
+      .immutable commitmentAnchorSlot ∈ s.kernel.slotCaveats c → anchorListOK c tt →
+        fieldOf commitmentAnchorSlot (s'.kernel.cell c) = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+  | s, s', [], c, h, _, _, _ => by
+      simp only [execFullTurnA, Option.some.injEq] at h; subst h; rfl
+  | s, s', a :: rest, c, h, hlive, himm, hok => by
+      simp only [execFullTurnA] at h
+      cases ha : execFullA s a with
+      | none => rw [ha] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [ha] at h
+          have hoka : anchorActionOK c a := hok a List.mem_cons_self
+          have hokrest : anchorListOK c rest := fun b hb => hok b (List.mem_cons_of_mem _ hb)
+          obtain ⟨hlive1, hprog1⟩ :=
+            execFullA_progLive_preserved s s1 a c (s.kernel.slotCaveats c) ha hlive rfl
+          have himm1 : .immutable commitmentAnchorSlot ∈ s1.kernel.slotCaveats c := by
+            rw [hprog1]; exact himm
+          have hstep := execFullA_anchorVal_preserved s s1 a c ha hlive himm hoka
+          have hrec := execFullTurnA_anchorVal_preserved s1 s' rest c h hlive1 himm1 hokrest
+          rw [hrec, hstep]
+
+/-- **`execFullForestA_anchorVal_preserved` (PROVED) — THE ANCHOR-VALUE FOREST FRAME.** A committed
+full FOREST that is anchor-safe for `c` (`anchorForestOK c f` — no `makeSovereign` aimed at `c`, even
+nested inside an `exerciseA`) preserves `c`'s stored `commitment_anchor` scalar, provided `c` is live
+and carries the `.immutable commitmentAnchorSlot` caveat. Through the pre-order bridge
+`execFullForestA_eq_execFullTurnA`. This is the value-pinning frame the §B″ comment said was the
+precise residual missing from `progLive_preserved`. -/
+theorem execFullForestA_anchorVal_preserved (s s' : RecChainedState) (f : FullForestA) (c : CellId)
+    (h : execFullForestA s f = some s') (hlive : c ∈ s.kernel.accounts)
+    (himm : .immutable commitmentAnchorSlot ∈ s.kernel.slotCaveats c)
+    (hok : anchorForestOK c f) :
+    fieldOf commitmentAnchorSlot (s'.kernel.cell c) = fieldOf commitmentAnchorSlot (s.kernel.cell c) := by
+  rw [execFullForestA_eq_execFullTurnA] at h
+  exact execFullTurnA_anchorVal_preserved s s' (lowerForestA f) c h hlive himm hok
+
+/-- Anchor-value frame phrased at the `sgmAnchor`/`cwmAnchor` accessor level (same statement; the
+mutual theorem already lands at the `fieldOf` level). -/
+theorem execFullForestA_anchorOf_preserved (s s' : RecChainedState) (f : FullForestA) (c : CellId)
+    (h : execFullForestA s f = some s') (hlive : c ∈ s.kernel.accounts)
+    (himm : .immutable commitmentAnchorSlot ∈ s.kernel.slotCaveats c)
+    (hok : anchorForestOK c f) :
+    fieldOf commitmentAnchorSlot (s'.kernel.cell c) = fieldOf commitmentAnchorSlot (s.kernel.cell c) :=
+  execFullForestA_anchorVal_preserved s s' f c h hlive himm hok
+
 /-! ## §B′ — `sgmWF` kernel predicates (volume bound + anchor tag). -/
 
 def sgmVolumeSpent (k : RecordKernelState) : Int :=
@@ -905,14 +1722,14 @@ enforced on the cell for its WHOLE life, along EVERY adversarial `trajG`. Carrie
 def sgmWF (k : RecordKernelState) : Prop :=
   mandateCell ∈ k.accounts ∧ sgmMandateProgramOK k
 
-/-- **`sgmInBucket` — NON-VACUOUS bucket-binding invariant.** Carries the program-live core (mandate
-cell live + its published per-slot caveat program installed). The `bucket` tag is the binding's domain:
-the binding to `bucket` is ENFORCED for life by the persisted `.immutable commitmentAnchorSlot` caveat
-inside `mandateCaveats` (the executor rejects any later anchor rewrite — `sgm_over_debit_rejected_*` and
-the immutable teeth). Carried by `execFullForestA_progLive_preserved`. NOTE (precise residual): the
-literal anchor-VALUE conjunct `sgmAnchorIs k bucket` is NOT carried here — that needs a second
-cell-record frame (`fieldOf commitmentAnchorSlot (cell mandateCell)` preserved across the 53 arms via
-the immutable caveat block + balance-field non-interference). Strictly stronger than `True`. -/
+/-- **`sgmInBucket` — NON-VACUOUS bucket-binding invariant (program-live, UNCONDITIONAL).** Carries the
+program-live core (mandate cell live + its published per-slot caveat program installed) along EVERY
+forest. The `bucket` tag is the binding's domain: the binding to `bucket` is ENFORCED for life by the
+persisted `.immutable commitmentAnchorSlot` caveat inside `mandateCaveats`. Carried by
+`execFullForestA_progLive_preserved`. The LITERAL anchor-VALUE conjunct (`sgmAnchor = bucket`) is the
+STRONGER predicate `sgmInBucketStrong`, now carried along anchor-safe schedules by
+`sgmBucketStrong_traj_carries` / `sgm_bucket_strong_forever` (the second cell-record frame
+`execFullForestA_anchorOf_preserved`, excluding the one un-caveat-gated `makeSovereign` rebind). -/
 def sgmInBucket (_k : RecordKernelState) (_bucket : Int) : Prop :=
   mandateCell ∈ _k.accounts ∧ sgmMandateProgramOK _k
 
@@ -960,6 +1777,35 @@ theorem sgmBucket_traj_carries (s s' : RecChainedState) (cf : FullForestA) (buck
     sgmInBucket s'.kernel bucket := by
   obtain ⟨hlive, hprog⟩ := hb
   exact execFullForestA_progLive_preserved s s' cf mandateCell mandateCaveats h hlive hprog
+
+/-- The mandate program installs the `.immutable commitmentAnchorSlot` caveat — so a cell carrying
+`mandateCaveats` carries the immutable-anchor caveat (the precondition of the anchor-value frame). -/
+theorem mandateCaveats_has_immutable_anchor :
+    (.immutable commitmentAnchorSlot : SlotCaveat) ∈ mandateCaveats := by
+  simp [mandateCaveats]
+
+/-- **`sgmBucketStrong_traj_carries` (PROVED) — the VALUE-PINNING carry.** A committed forest that is
+anchor-safe for the mandate cell (no `makeSovereign` aimed at it — the sole un-caveat-gated rebind that
+drops fields) preserves the LITERAL bucket binding `sgmAnchor = bucket`, not merely program-liveness.
+This is the residual the §B″ note said was missing from the program-live carry — now PROVED via the
+`execFullForestA_anchorOf_preserved` frame. The `mandateCaveats` program supplies the immutable-anchor
+caveat the frame needs (`mandateCaveats_has_immutable_anchor`). -/
+theorem sgmBucketStrong_traj_carries (s s' : RecChainedState) (cf : FullForestA) (bucket : Int)
+    (h : execFullForestA s cf = some s') (hb : sgmInBucketStrong s.kernel bucket)
+    (hok : anchorForestOK mandateCell cf) (hlive : mandateCell ∈ s.kernel.accounts) :
+    sgmInBucketStrong s'.kernel bucket := by
+  obtain ⟨hanchor, hprog⟩ := hb
+  have himm : .immutable commitmentAnchorSlot ∈ s.kernel.slotCaveats mandateCell := by
+    rw [show s.kernel.slotCaveats mandateCell = mandateCaveats from hprog]
+    exact mandateCaveats_has_immutable_anchor
+  have hanchorEq : fieldOf commitmentAnchorSlot (s'.kernel.cell mandateCell)
+      = fieldOf commitmentAnchorSlot (s.kernel.cell mandateCell) :=
+    execFullForestA_anchorOf_preserved s s' cf mandateCell h hlive himm hok
+  obtain ⟨_, hprog'⟩ :=
+    execFullForestA_progLive_preserved s s' cf mandateCell mandateCaveats h hlive hprog
+  refine ⟨?_, hprog'⟩
+  unfold sgmAnchorIs sgmAnchor at hanchor ⊢
+  rw [hanchorEq]; exact hanchor
 
 /-! ## §C — Stingray volume-budget demo (PUT debits exhaust slice). -/
 

@@ -309,6 +309,67 @@ theorem cwm_safety_forever (s0 : RecChainedState) (nul : Nat) (comp : Int) (s : 
   rcases h with ⟨⟨⟨hstep', hpay'⟩, hrev'⟩, hcomp'⟩
   exact And.intro hstep' (And.intro hpay' (And.intro hrev' hcomp'))
 
+/-! ### §strong — the VALUE-PINNING compartment invariant along an anchor-safe schedule.
+
+As for the storage gateway, `cwmInCompartment` (program-live) carries unconditionally, but the literal
+binding `cwmAnchor = comp` can be broken ONLY by `makeSovereign` aimed at the mandate cell. The strong
+forever quantifies over anchor-safe schedules (`SchedAnchorSafe`) and carries `cwmInCompartmentStrong`. -/
+
+open Dregg2.Exec (cellNextG)
+open Dregg2.Apps.StorageGatewayMandate (anchorForestOK)
+open Dregg2.Exec.StarbridgeGated (eraseForestG execForestG_erases)
+
+/-- A gated schedule is anchor-safe for the CWM mandate cell. -/
+def SchedAnchorSafe (sched : SchedG) : Prop :=
+  ∀ n, anchorForestOK mandateCell (eraseForestG (sched n).val)
+
+/-- **`cwmStrong_cellNextG_carries` (PROVED)** — one anchor-safe gated step preserves
+`mandateCell live ∧ programOK ∧ cwmInCompartmentStrong`. -/
+theorem cwmStrong_cellNextG_carries (comp : Int) (s : RecChainedState) (cg : ConservingGatedForest)
+    (hok : anchorForestOK mandateCell (eraseForestG cg.val))
+    (hinv : mandateCell ∈ s.kernel.accounts ∧ cwmMandateProgramOK s.kernel
+            ∧ cwmInCompartmentStrong s.kernel comp) :
+    mandateCell ∈ (cellNextG s cg).kernel.accounts ∧ cwmMandateProgramOK (cellNextG s cg).kernel
+      ∧ cwmInCompartmentStrong (cellNextG s cg).kernel comp := by
+  obtain ⟨hlive, hprog, hstrong⟩ := hinv
+  unfold cellNextG
+  cases hc : execForestG s cg.val with
+  | none => simp only [Option.getD_none]; exact ⟨hlive, hprog, hstrong⟩
+  | some s' =>
+      simp only [Option.getD_some]
+      have hfa : execFullForestA s (eraseForestG cg.val) = some s' := execForestG_erases s s' cg.val hc
+      obtain ⟨hlive', hprog'⟩ :=
+        Dregg2.Apps.StorageGatewayMandate.execFullForestA_progLive_preserved
+          s s' (eraseForestG cg.val) mandateCell mandateCaveats hfa hlive hprog
+      have hstrong' := cwmCompartmentStrong_traj_carries s s' (eraseForestG cg.val) comp hfa hstrong hprog hok hlive
+      exact ⟨hlive', hprog', hstrong'⟩
+
+/-- **`cwm_compartment_strong_forever` (PROVED) — VALUE-PINNING CROWN LEG.** Along EVERY anchor-safe
+gated schedule, the agent stays in the SPECIFIC compartment: `cwmAnchor (trajG …) = comp` (the literal
+binding), not merely "some program is live". -/
+theorem cwm_compartment_strong_forever (comp : Int) (s : RecChainedState)
+    (hlive : mandateCell ∈ s.kernel.accounts) (hprog : cwmMandateProgramOK s.kernel)
+    (hstrong : cwmInCompartmentStrong s.kernel comp)
+    (sched : SchedG) (hsafe : SchedAnchorSafe sched) :
+    ∀ n, mandateCell ∈ (trajG s sched n).kernel.accounts
+          ∧ cwmMandateProgramOK (trajG s sched n).kernel
+          ∧ cwmInCompartmentStrong (trajG s sched n).kernel comp := by
+  intro n
+  induction n with
+  | zero => exact ⟨hlive, hprog, hstrong⟩
+  | succ k ih =>
+      show mandateCell ∈ (cellNextG (trajG s sched k) (sched k)).kernel.accounts
+            ∧ cwmMandateProgramOK (cellNextG (trajG s sched k) (sched k)).kernel
+            ∧ cwmInCompartmentStrong (cellNextG (trajG s sched k) (sched k)).kernel comp
+      exact cwmStrong_cellNextG_carries comp (trajG s sched k) (sched k) (hsafe k) ih
+
+/-- A drifted genesis: anchor rebound to a DIFFERENT compartment tag (`cwmCompartmentTag + 1`). -/
+def cwmDriftCell : CellId → Value := fun c =>
+  if c = mandateCell then
+    .record [("balance", .int 100), (stepCursorSlot, .int 0),
+             (commitmentAnchorSlot, .int (cwmCompartmentTag + 1))]
+  else .record [("balance", .int 0)]
+
 def cwmG0 : RecChainedState :=
   { kernel :=
       { accounts := {0, 1}
@@ -353,6 +414,10 @@ def cwmGSigned : Option RecChainedState :=
 #guard (cwmClearanceOK cwmG0.kernel)
 #guard (cwmWFStrong cwmG0.kernel)
 #guard (cwmInCompartmentStrong cwmG0.kernel cwmCompartmentTag)
+-- VALUE-PINNING NON-VACUITY: honest in-compartment ADMITTED; drifted anchor REJECTED.
+#guard (decide (cwmInCompartmentStrong ({ cwmG0 with kernel := { cwmG0.kernel with cell := cwmDriftCell } }).kernel cwmCompartmentTag)) == false  -- drift REJECTED
+#guard (decide (cwmInCompartmentStrong ({ cwmG0 with kernel := { cwmG0.kernel with cell := cwmDriftCell } }).kernel (cwmCompartmentTag + 1)))      -- drift IS in its own compartment
+#guard (cwmAnchor ({ cwmG0 with kernel := { cwmG0.kernel with cell := cwmDriftCell } }).kernel == cwmAnchor cwmG0.kernel) == false               -- anchors genuinely differ
 #guard ((execFullForestG cwmG0 (cwmRefreshNode goodCred)).isSome)
 #guard ((execFullForestG cwmG0 (cwmRefreshNode goodCred)).map
         (fun s => (s.kernel.delegations cwmMonitorCell).length)) == some 2
@@ -388,5 +453,7 @@ def cwmGSigned : Option RecChainedState :=
 #assert_axioms cwm_refresh_conserves
 #assert_axioms cwmSafetyContract
 #assert_axioms cwm_safety_forever
+#assert_axioms cwmStrong_cellNextG_carries
+#assert_axioms cwm_compartment_strong_forever
 
 end Dregg2.Apps.CompartmentWorkflowMandateGated
