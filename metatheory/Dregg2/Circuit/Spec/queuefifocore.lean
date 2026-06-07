@@ -11,8 +11,8 @@ the REAL ring-buffer FIFO queue effects the unified action executor `execFullA` 
     execFullA s (.queueResizeA id newCap actor cell) = queueResizeChainA s id newCap actor cell -- :3572
     execFullA s (.queueEnqueueA id m actor cell depId dAsset deposit)
       = queueEnqueueChainA s id m actor cell depId dAsset deposit                               -- :3570
-    execFullA s (.queueDequeueA id actor cell depId deposit)
-      = queueDequeueChainA s id actor cell depId deposit                                        -- :3571
+    execFullA s (.queueDequeueA id actor cell depId)
+      = queueDequeueChainA s id actor cell depId                                                -- :3571
 
 ## Scope of this leaf (truthful)
 
@@ -538,13 +538,14 @@ theorem enqueue_rejects_dead_cell (st : RecChainedState) (id m : Nat) (actor cel
 
 /-! ## §4 — `queueDequeueA` — FIFO pop-front + deposit REFUND (queues + bal + escrows).
 
-`execFullA s (.queueDequeueA id actor cell depId deposit)
-  = queueDequeueChainA s id actor cell depId deposit` (`TurnExecutorFull:3571`).
+`execFullA s (.queueDequeueA id actor cell depId)
+  = queueDequeueChainA s id actor cell depId` (`TurnExecutorFull:3571`).
 
-    queueDequeueChainA s id actor cell depId deposit                             -- :2055
+    queueDequeueChainA s id actor cell depId                                     -- :2055
       = if stateAuthB caps actor cell ∧ acceptsEffects cell then
           match queueDequeueRefundK s.kernel id actor depId with
-          | some (k', _) => some { kernel := k', log := {actor, src:=cell, dst:=actor, amt:=deposit} :: s.log }
+          | some (k', _) => some { kernel := k',
+              log := {actor, src:=cell, dst:=actor, amt:=dequeueRefundAmount s.kernel depId} :: s.log }
           | none         => none
         else none
 
@@ -561,20 +562,20 @@ semantics. The guard holds; `queueDequeueRefundK` commits some `(k', m)` with me
 (`dequeueMsgBindB` inside the kernel op); the post kernel is EXACTLY `k'`; the chained `log` advances
 by the refund receipt. -/
 def QueueDequeueSpec (st : RecChainedState) (id : Nat) (actor cell : CellId) (depId : Nat)
-    (deposit : ℤ) (st' : RecChainedState) : Prop :=
+    (st' : RecChainedState) : Prop :=
   stateAuthB st.kernel.caps actor cell = true ∧ acceptsEffects st.kernel cell = true
     ∧ dequeueBindB st.kernel actor depId = true
     ∧ queueDequeueHeadB st.kernel id actor depId = true
     ∧ ∃ k' m, queueDequeueRefundK st.kernel id actor depId = some (k', m)
         ∧ st'.kernel = k'
-        ∧ st'.log = dequeueReceipt actor cell deposit :: st.log
+        ∧ st'.log = dequeueReceipt actor cell (dequeueRefundAmount st.kernel depId) :: st.log
 
 /-- **`queueDequeueChainA_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions)** on the chained
 dequeue step. -/
 theorem queueDequeueChainA_iff_spec (st : RecChainedState) (id : Nat) (actor cell : CellId)
-    (depId : Nat) (deposit : ℤ) (st' : RecChainedState) :
-    queueDequeueChainA st id actor cell depId deposit = some st'
-      ↔ QueueDequeueSpec st id actor cell depId deposit st' := by
+    (depId : Nat) (st' : RecChainedState) :
+    queueDequeueChainA st id actor cell depId = some st'
+      ↔ QueueDequeueSpec st id actor cell depId st' := by
   unfold queueDequeueChainA QueueDequeueSpec
   by_cases hg : stateAuthB st.kernel.caps actor cell = true ∧ acceptsEffects st.kernel cell = true
       ∧ dequeueBindB st.kernel actor depId = true ∧ queueDequeueHeadB st.kernel id actor depId = true
@@ -608,30 +609,30 @@ theorem queueDequeueChainA_iff_spec (st : RecChainedState) (id : Nat) (actor cel
 
 /-- **`execFullA_queueDequeueA_iff_spec` — the UNIFIED-ACTION executor corner.** -/
 theorem execFullA_queueDequeueA_iff_spec (st : RecChainedState) (id : Nat) (actor cell : CellId)
-    (depId : Nat) (deposit : ℤ) (st' : RecChainedState) :
-    execFullA st (.queueDequeueA id actor cell depId deposit) = some st'
-      ↔ QueueDequeueSpec st id actor cell depId deposit st' := by
-  show queueDequeueChainA st id actor cell depId deposit = some st'
-        ↔ QueueDequeueSpec st id actor cell depId deposit st'
-  exact queueDequeueChainA_iff_spec st id actor cell depId deposit st'
+    (depId : Nat) (st' : RecChainedState) :
+    execFullA st (.queueDequeueA id actor cell depId) = some st'
+      ↔ QueueDequeueSpec st id actor cell depId st' := by
+  show queueDequeueChainA st id actor cell depId = some st'
+        ↔ QueueDequeueSpec st id actor cell depId st'
+  exact queueDequeueChainA_iff_spec st id actor cell depId st'
 
 /-! ### dequeue non-vacuity. -/
 
 /-- **`dequeue_rejects_unauthorized` — PROVED.** -/
 theorem dequeue_rejects_unauthorized (st : RecChainedState) (id : Nat) (actor cell : CellId)
-    (depId : Nat) (deposit : ℤ)
+    (depId : Nat)
     (hbad : stateAuthB st.kernel.caps actor cell = false) :
-    execFullA st (.queueDequeueA id actor cell depId deposit) = none := by
-  show queueDequeueChainA st id actor cell depId deposit = none
+    execFullA st (.queueDequeueA id actor cell depId) = none := by
+  show queueDequeueChainA st id actor cell depId = none
   unfold queueDequeueChainA
   rw [if_neg (by rw [hbad]; rintro ⟨h, _⟩; exact absurd h (by simp))]
 
 /-- **`dequeue_rejects_dead_cell` — PROVED.** -/
 theorem dequeue_rejects_dead_cell (st : RecChainedState) (id : Nat) (actor cell : CellId)
-    (depId : Nat) (deposit : ℤ)
+    (depId : Nat)
     (hbad : acceptsEffects st.kernel cell = false) :
-    execFullA st (.queueDequeueA id actor cell depId deposit) = none := by
-  show queueDequeueChainA st id actor cell depId deposit = none
+    execFullA st (.queueDequeueA id actor cell depId) = none := by
+  show queueDequeueChainA st id actor cell depId = none
   unfold queueDequeueChainA
   rw [if_neg (by rw [hbad]; rintro ⟨_, h⟩; exact absurd h (by simp))]
 

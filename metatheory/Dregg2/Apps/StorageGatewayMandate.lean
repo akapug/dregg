@@ -248,7 +248,7 @@ private theorem queueTxOpStepA_frame (s s' : RecChainedState) (op : QueueTxOpA)
         | some k' => commit_subst h hk
                      exact queueEnqueueDepositK_frame s.kernel id m actor cell depId dAsset deposit k' hk
       · exact absurd h (by simp)
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
         | none => rw [hk] at h; exact absurd h (by simp)
@@ -674,7 +674,7 @@ theorem execFullA_progLive_preserved (s s' : RecChainedState) (fa : FullActionA)
               queueEnqueueDepositK_frame s.kernel id m actor cell depId dAsset deposit k' hk
             exact ⟨hacc ▸ hlive, by rw [hcav]; exact hprog⟩
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId deposit =>
+  | queueDequeueA id actor cell depId =>
       simp only [execFullA, queueDequeueChainA] at h
       split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with

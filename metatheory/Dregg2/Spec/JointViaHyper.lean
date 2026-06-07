@@ -293,6 +293,71 @@ theorem selector_needs_more_than_validity :
   -- constant selectors picking `t₁` resp. `t₂`: each returns a valid turn at `xs`, they differ.
   exact ⟨T, turnId, halfEdge, xs, fun _ => t₁, fun _ => t₂, h₁, h₂, hne⟩
 
+/-! ## §3.4 — the CG-2 REJECTION tooth: mismatched legs admit no hyperedge.
+
+This is the formal counterpart of the *cross-cell aggregation* circuit's load-bearing
+rejection (`circuit/src/joint_turn_aggregation.rs`, `JointTurnAggregationAir` constraint 1 /
+`SharedTurnIdMismatch`): the Rust aggregator binds N per-cell whole-turn proofs into ONE proof
+ONLY when every leg agrees on the shared turn-id, and REJECTS a bundle whose any leg carries a
+different turn-id — even when each per-cell proof is individually valid. The apex side of that
+is `Hyperedge.agree : ∀ i, turnId i (T.next (x i) t) = tid`: a *single* `tid` every leg must
+hit. If two legs hit DIFFERENT post-step turn-ids for the same turn `t`, there is no `tid` they
+both equal, so NO `Hyperedge` over that incidence tuple exists. We prove exactly that, making
+the binding's CG-2 a genuine constraint (it rejects), not a vacuous record.
+
+This is the "validity is a real gate" half that complements §3.2's "validity ≠ canonicity":
+§3.2 shows two *agreeing* admissible turns can't be told apart by validity; §3.4 shows two
+*disagreeing* legs are rejected by validity outright. Together: the apex agreement is necessary
+(rejects mismatch) but not sufficient for canonicity (two valid apexes can collide). -/
+
+/-- **`mismatched_legs_have_no_hyperedge` — CG-2 rejects disagreeing legs (PROVED).**
+
+If two incidences `i j : ι` reach DIFFERENT post-step turn-ids under the SAME turn `t`
+(`turnId i (T.next (x i) t) ≠ turnId j (T.next (x j) t)`), then there is NO `Hyperedge`
+`H` over `T`/`turnId`/`halfEdge` whose bound pre-states are `x` and whose turn is `t`. The
+apex `H.tid` would have to equal both post-step ids (`H.agree i`, `H.agree j`), contradicting
+their inequality.
+
+This is the Lean mirror of the Rust aggregator's `SharedTurnIdMismatch`: per-leg data that
+disagrees on the turn identity cannot be bound into one joint turn. The hyperedge's `agree`
+field is therefore a real gate — it has a case it provably REJECTS. -/
+theorem mismatched_legs_have_no_hyperedge
+    {ι : Type u} [Fintype ι]
+    (T : TurnCoalg Obs AdmissibleTurn)
+    (turnId : ι → TurnIdOf (TurnId := TurnId) T)
+    (halfEdge : ι → HalfEdgeOf (Bal := Bal) T)
+    (x : ι → T.Carrier) (t : AdmissibleTurn) (i j : ι)
+    (hmis : turnId i (T.next (x i) t) ≠ turnId j (T.next (x j) t)) :
+    ¬ ∃ H : Hyperedge ι T turnId halfEdge, H.x = x ∧ H.t = t := by
+  rintro ⟨H, hx, ht⟩
+  -- both legs must equal the single apex `tid`; substitute the bound `x`/`t`.
+  subst hx; subst ht
+  exact hmis ((H.agree i).trans (H.agree j).symm)
+
+/-- **`mismatch_rejection_is_nonvacuous` — the rejection fires on a concrete instance (PROVED).**
+
+The §3.4 tooth is not vacuously true: we exhibit a concrete coalgebra (carrier `Bool`,
+identity transition, `turnId = id`) and two pre-states `x 0 = false`, `x 1 = true` whose legs
+DISAGREE, so `mismatched_legs_have_no_hyperedge` actually denies a hyperedge there. This is the
+non-vacuity witness for the rejection (the Lean analogue of the Rust
+`disagreeing_turn_id_rejected_even_with_valid_proofs` test). -/
+theorem mismatch_rejection_is_nonvacuous :
+    ∃ (T : TurnCoalg Unit Unit)
+      (turnId : Fin 2 → TurnIdOf (TurnId := Bool) T)
+      (halfEdge : Fin 2 → HalfEdgeOf (Bal := ℤ) T)
+      (x : Fin 2 → T.Carrier) (t : Unit) (i j : Fin 2),
+      turnId i (T.next (x i) t) ≠ turnId j (T.next (x j) t) ∧
+      ¬ ∃ H : Hyperedge (Fin 2) T turnId halfEdge, H.x = x ∧ H.t = t := by
+  -- carrier `Bool`, transition = identity (ignore the `Unit` turn), `turnId = id`.
+  let T : TurnCoalg Unit Unit :=
+    { Carrier := Bool, step := fun b => ((), fun _ => b) }
+  refine ⟨T, fun _ => (fun b => b), fun _ => (fun _ _ => (0 : ℤ)),
+    ![false, true], (), 0, 1, ?_, ?_⟩
+  · -- leg 0 post-id = `false`, leg 1 post-id = `true`; distinct.
+    decide
+  · exact mismatched_legs_have_no_hyperedge T (fun _ => (fun b => b)) (fun _ => (fun _ _ => (0 : ℤ)))
+      ![false, true] () 0 1 (by decide)
+
 /-! ## §4 — How `joint_via_hyperedge` discharges what `family_joint_sound` could not.
 
 `family_joint_sound` (`JointTurn.lean:447`, `sorry`) has TWO problems the apex fixes:
@@ -318,6 +383,8 @@ theorem selector_needs_more_than_validity :
 #assert_axioms binary_binding_from_hyperedge
 #assert_axioms binary_joint_via_hyperedge
 #assert_axioms singletonHyperedge
+#assert_axioms mismatched_legs_have_no_hyperedge
+#assert_axioms mismatch_rejection_is_nonvacuous
 #assert_axioms hyperedge_is_validity_not_canonicity
 #assert_axioms selector_needs_more_than_validity
 

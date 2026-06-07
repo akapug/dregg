@@ -314,9 +314,9 @@ def fullActionCircuitStep
       receiptArchiveCircuitStep CS st ⟨actor, cell⟩ st'
   | .queueAllocateA id actor cell cap =>
       queueAllocateCircuitStep S LQ cN hN hLQ st ⟨id, actor, cell, cap⟩ st'
-  | .queueDequeueA id actor cell depId deposit =>
+  | .queueDequeueA id actor cell depId =>
       queueDequeueCircuitStep S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow
-        st ⟨id, actor, cell, depId, deposit⟩ st'
+        st ⟨id, actor, cell, depId⟩ st'
   | .queueResizeA id newCap actor cell =>
       queueResizeCircuitStep S LQ cN hN hLQ st ⟨id, newCap, actor, cell⟩ st'
   | .queueAtomicTxA actor ops =>
@@ -686,7 +686,7 @@ theorem fullAction_circuit_refines_spec
       simp only [fullActionStep]
       exact queueEnqueue_circuit_refines_spec S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow
         hRestQueues hLog st _ st' h
-  | .queueDequeueA id actor cell depId deposit =>
+  | .queueDequeueA id actor cell depId =>
       simp only [fullActionStep]
       exact queueDequeue_circuit_refines_spec S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow
         hRestQueues hLog st _ st' h

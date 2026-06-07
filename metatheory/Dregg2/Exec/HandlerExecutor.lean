@@ -234,7 +234,7 @@ def toClosedEffect : FullActionA → ClosedEffect
   | .queueAllocateA id actor cell cap   => allocateEffect actor id cell cap
   | .queueEnqueueA id m actor cell depId dAsset deposit =>
       enqueueEffect id m actor cell depId dAsset deposit
-  | .queueDequeueA id actor _cell depId _deposit => dequeueEffect id actor depId
+  | .queueDequeueA id actor _cell depId => dequeueEffect id actor depId
   | .queueResizeA id newCap actor cell  => resizeEffect actor id newCap cell
   | .queueAtomicTxA actor ops           => atomicTxEffect actor (txOpsToK ops)
   | .queuePipelineStepA srcId owner sinkCells sinkIds =>
@@ -1597,12 +1597,12 @@ theorem hole_queue_actor_ne_cell (s s' : RecChainedState) (id : Nat) (actor cell
 /-- **`handler_refines_execFullA_queueDequeue`** — when the chained writer-ACL + owner-liveness gates
 hold (`hg`), a handler P0-1-closing dequeue refines `queueDequeueChainA` on the same kernel. -/
 theorem handler_refines_execFullA_queueDequeue (s s' : RecChainedState) (id : Nat) (actor cell : CellId)
-    (depId : Nat) (deposit : ℤ)
+    (depId : Nat)
     (hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true)
-    (h : execHandlerOne (.queueDequeueA id actor cell depId deposit) s = some s') :
-    ∃ s'', execFullA s (.queueDequeueA id actor cell depId deposit) = some s'' ∧
+    (h : execHandlerOne (.queueDequeueA id actor cell depId) s = some s') :
+    ∃ s'', execFullA s (.queueDequeueA id actor cell depId) = some s'' ∧
       s''.kernel = s'.kernel := by
-  have hstep := execHandlerOne_kernel (.queueDequeueA id actor cell depId deposit) s s' h
+  have hstep := execHandlerOne_kernel (.queueDequeueA id actor cell depId) s s' h
   rw [toClosedEffect] at hstep
   change dequeueBindStep s.kernel { id := id, actor := actor, depId := depId } = some s'.kernel at hstep
   unfold dequeueBindStep at hstep
@@ -1619,13 +1619,14 @@ theorem handler_refines_execFullA_queueDequeue (s s' : RecChainedState) (id : Na
         dsimp [Dregg2.Exec.Handlers.Queue.dequeueBindB, dargs] at hbind
         exact hbind.1
       refine ⟨{ kernel := s'.kernel,
-                log := { actor := actor, src := cell, dst := actor, amt := deposit } :: s.log }, ?_, rfl⟩
+                log := { actor := actor, src := cell, dst := actor,
+                         amt := dequeueRefundAmount s.kernel depId } :: s.log }, ?_, rfl⟩
       have hall : stateAuthB s.kernel.caps actor cell = true ∧
           acceptsEffects s.kernel cell = true ∧
           Dregg2.Exec.dequeueBindB s.kernel actor depId = true ∧
           queueDequeueHeadB s.kernel id actor depId = true :=
         ⟨hg.1, hg.2, hbindR, hbind.2⟩
-      show queueDequeueChainA s id actor cell depId deposit = _
+      show queueDequeueChainA s id actor cell depId = _
       unfold queueDequeueChainA
       rw [if_pos hall, hk]
   · rw [if_neg hbind] at hstep; exact absurd hstep (by simp)

@@ -378,7 +378,7 @@ private theorem queueTxOpStepA_subWF {s s' : RecChainedState} {op : QueueTxOpA}
         | some k' => rw [hk] at hh; simp only [Option.some.injEq] at hh; subst hh
                      exact queueEnqueueDepositK_subWF hk h
       · exact absurd hh (by simp)
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       simp only [queueTxOpStepA, queueDequeueChainA] at hh; split at hh
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
         | none => rw [hk] at hh; exact absurd hh (by simp)
@@ -784,7 +784,7 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
             commit_subst h hk
             exact queueEnqueueDepositK_subWF hk hwf
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId deposit =>
+  | queueDequeueA id actor cell depId =>
       simp only [execFullA, queueDequeueChainA] at h
       split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with

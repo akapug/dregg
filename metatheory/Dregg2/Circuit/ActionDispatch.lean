@@ -173,7 +173,7 @@ def actionTag : FullActionA → Nat
   | .receiptArchiveA _ _ => 40
   | .queueAllocateA _ _ _ _ => 41
   | .queueEnqueueA _ _ _ _ _ _ _ => 42
-  | .queueDequeueA _ _ _ _ _ => 43
+  | .queueDequeueA _ _ _ _ => 43
   | .queueResizeA _ _ _ _ => 44
   | .queueAtomicTxA _ _ => 45
   | .queuePipelineStepA _ _ _ _ => 46
@@ -307,8 +307,8 @@ mutual
         QueueAllocateSpec st id actor cell cap st'
     | .queueEnqueueA id m actor cell depId dAsset deposit =>
         QueueEnqueueSpec st id m actor cell depId dAsset deposit st'
-    | .queueDequeueA id actor cell depId deposit =>
-        QueueDequeueSpec st id actor cell depId deposit st'
+    | .queueDequeueA id actor cell depId =>
+        QueueDequeueSpec st id actor cell depId st'
     | .queueResizeA id newCap actor cell =>
         QueueResizeSpec st id newCap actor cell st'
     | .queueAtomicTxA actor ops =>
@@ -585,9 +585,9 @@ mutual
     | .queueEnqueueA id m actor cell depId dAsset deposit => by
       simp only [fullActionStep, execFullA]
       exact execFullA_queueEnqueueA_iff_spec st id m actor cell depId dAsset deposit st'
-    | .queueDequeueA id actor cell depId deposit => by
+    | .queueDequeueA id actor cell depId => by
       simp only [fullActionStep, execFullA]
-      exact execFullA_queueDequeueA_iff_spec st id actor cell depId deposit st'
+      exact execFullA_queueDequeueA_iff_spec st id actor cell depId st'
     | .queueResizeA id newCap actor cell => by
       simp only [fullActionStep, execFullA]
       exact execFullA_queueResizeA_iff_spec st id newCap actor cell st'

@@ -132,7 +132,7 @@ def actionAirName : FullActionA → String
   | .receiptArchiveA _ _ => Dregg2.Circuit.Inst.ReceiptArchiveA.receiptArchiveAAirName
   | .queueAllocateA _ _ _ _ => Dregg2.Circuit.Inst.QueueAllocateA.queueAllocateAAirName
   | .queueEnqueueA _ _ _ _ _ _ _ => Dregg2.Circuit.Inst.QueueEnqueueA.queueEnqueueAAirName
-  | .queueDequeueA _ _ _ _ _ => Dregg2.Circuit.Inst.QueueDequeueA.queueDequeueAAirName
+  | .queueDequeueA _ _ _ _ => Dregg2.Circuit.Inst.QueueDequeueA.queueDequeueAAirName
   | .queueResizeA _ _ _ _ => Dregg2.Circuit.Inst.QueueResizeA.queueResizeAAirName
   | .queueAtomicTxA _ _ => Dregg2.Circuit.Inst.QueueAtomicTxA.queueAtomicTxAAirName
   | .queuePipelineStepA _ _ _ _ => Dregg2.Circuit.Inst.QueuePipelineStepA.queuePipelineStepAAirName

@@ -299,7 +299,7 @@ theorem parseQueueTxOp_encode (op : QueueTxOpA) (rest : PState) :
       simp only [parseNat_toString _ _ (nd_litComma _),
         cN_step _ _ (nd_litComma _), cN_step _ _ (nd_litClose _),
         cI_step _ _ (nd_litClose _), lit_append, Option.bind_eq_bind, Option.bind]
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       unfold parseQueueTxOp
       simp only [encodeQueueTxOp, String.toList_append, List.append_assoc]
       -- the `enq` tag fails first (the `deq` shape is `{"deq":…`), then the `deq` arm fires.
@@ -309,7 +309,7 @@ theorem parseQueueTxOp_encode (op : QueueTxOpA) (rest : PState) :
       rw [lit_append]
       simp only [parseNat_toString _ _ (nd_litComma _),
         cN_step _ _ (nd_litComma _), cN_step _ _ (nd_litClose _),
-        cI_step _ _ (nd_litClose _), lit_append, Option.bind_eq_bind, Option.bind]
+        lit_append, Option.bind_eq_bind, Option.bind]
 
 private def encodeQueueTxOpsTail (ops : List QueueTxOpA) : String :=
   ops.foldl (fun acc x => acc ++ "," ++ encodeQueueTxOp x) ""
@@ -324,9 +324,9 @@ private theorem encodeQueueTxOp_head (op : QueueTxOpA) : ∃ t, (encodeQueueTxOp
       unfold encodeQueueTxOp
       simp only [String.toList_append, show ("{\"enq\":[":String).toList = '{' :: "\"enq\":[".toList from by decide,
         List.cons_append, List.nil_append, List.append_assoc]
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       refine ⟨("\"deq\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString cell ++ ","
-        ++ toString depId ++ "," ++ toString deposit ++ "]}" : String).toList, ?_⟩
+        ++ toString depId ++ "]}" : String).toList, ?_⟩
       unfold encodeQueueTxOp
       simp only [String.toList_append, show ("{\"deq\":[":String).toList = '{' :: "\"deq\":[".toList from by decide,
         List.cons_append, List.nil_append, List.append_assoc]
@@ -439,10 +439,10 @@ theorem parseActionW_qatomic (actor : CellId) (ops : List QueueTxOpA) (rest : PS
 
 -- An atomic batch (one enqueue + one dequeue sub-op) round-trips (the WHAT decoder covers the batch arm):
 example : parseActionW ((encodeActionW (.queueAtomicTxA 1 [QueueTxOpA.enqueue 2 3 4 5 6 7 8,
-            QueueTxOpA.dequeue 9 10 11 12 13])).toList ++ ['x'])
+            QueueTxOpA.dequeue 9 10 11 12])).toList ++ ['x'])
             = some (.queueAtomicTxA 1 [QueueTxOpA.enqueue 2 3 4 5 6 7 8,
-                QueueTxOpA.dequeue 9 10 11 12 13], ['x']) :=
-  parseActionW_qatomic 1 [QueueTxOpA.enqueue 2 3 4 5 6 7 8, QueueTxOpA.dequeue 9 10 11 12 13] ['x']
+                QueueTxOpA.dequeue 9 10 11 12], ['x']) :=
+  parseActionW_qatomic 1 [QueueTxOpA.enqueue 2 3 4 5 6 7 8, QueueTxOpA.dequeue 9 10 11 12] ['x']
 
 set_option maxHeartbeats 1000000 in
 /-- **The WAVE-4 `queuePipelineStepA` arm** — `{"qpipe":[srcId,owner,SINKCELLS,SINKIDS]}`: read `srcId`

@@ -176,7 +176,7 @@ def targetOf : FullActionA → CellId
   -- `stateAuthB`-gated node the chained step touches).
   | .queueAllocateA _ _ cell _              => cell
   | .queueEnqueueA _ _ _ cell _ _ _         => cell
-  | .queueDequeueA _ _ cell _ _             => cell
+  | .queueDequeueA _ _ cell _             => cell
   | .queueResizeA _ _ _ cell                => cell
   -- §MA-queue-batch (WAVE 4): the atomic batch + pipelinedSend act on the `actor` (the batch-commit /
   -- apply-time node); the pipeline step on the source-queue `owner` (the dequeuer the routing roots at).

@@ -523,7 +523,7 @@ theorem queueTxOpStepA_caps {s s' : RecChainedState} {op : QueueTxOpA}
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueDepositK_caps hk
       · exact absurd h (by simp)
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
         | none => rw [hk] at h; exact absurd h (by simp)
@@ -566,7 +566,7 @@ theorem queueTxOpStepA_sealedBoxes {s s' : RecChainedState} {op : QueueTxOpA}
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueDepositK_sealedBoxes hk
       · exact absurd h (by simp)
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
         | none => rw [hk] at h; exact absurd h (by simp)
@@ -830,7 +830,7 @@ theorem execFullA_sealedBoxes_frame (s s' : RecChainedState) (fa : FullActionA)
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueDepositK_sealedBoxes hk
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId deposit =>
+  | queueDequeueA id actor cell depId =>
       simp only [execFullA, queueDequeueChainA] at h; split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
         | none => rw [hk] at h; exact absurd h (by simp)
@@ -1220,7 +1220,7 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueDepositK_caps hk
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId deposit =>
+  | queueDequeueA id actor cell depId =>
       refine CapsConfined.of_caps_eq ?_ hpre
       simp only [execFullA, queueDequeueChainA] at h
       split at h

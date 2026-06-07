@@ -160,8 +160,8 @@ private theorem queueEnqueueChainA_revoked {s s' : RecChainedState} {id m : Nat}
 /-- `queueDequeueChainA` commits through `queueDequeueRefundK` (a `queues`-only write) — `revoked`
 untouched. -/
 private theorem queueDequeueChainA_revoked {s s' : RecChainedState} {id : Nat} {actor cell : CellId}
-    {depId : Nat} {deposit : ℤ}
-    (h : queueDequeueChainA s id actor cell depId deposit = some s') :
+    {depId : Nat}
+    (h : queueDequeueChainA s id actor cell depId = some s') :
     s'.kernel.revoked = s.kernel.revoked := by
   unfold queueDequeueChainA at h
   split at h
@@ -179,7 +179,7 @@ private theorem queueTxOpStepA_revoked {s s' : RecChainedState} {op : QueueTxOpA
   cases op with
   | enqueue id m actor cell depId dAsset deposit =>
       exact queueEnqueueChainA_revoked (s := s) (s' := s') h
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       exact queueDequeueChainA_revoked (s := s) (s' := s') h
 
 /-- The all-or-nothing atomic batch `queueAtomicTxChainA` leaves `revoked` UNCHANGED — by induction over
@@ -584,7 +584,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
             show k'.revoked = s.kernel.revoked
             exact queueEnqueueDepositK_revoked s.kernel id m actor cell depId dAsset deposit k' hk
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId deposit =>
+  | queueDequeueA id actor cell depId =>
       simp only [execFullA, queueDequeueChainA] at h
       split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
