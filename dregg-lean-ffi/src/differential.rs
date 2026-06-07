@@ -15,6 +15,9 @@
 //! certificate: once a Rust component is differentially-equal to the Lean oracle,
 //! it can be replaced with confidence that it matches the proved semantics.
 
+// Force an rlib edge so this bin inherits the propagated native-lib link directives.
+extern crate dregg_lean_ffi as _;
+
 use std::process::ExitCode;
 
 // --- Lean entry points (C ABI), identical to src/main.rs. ---

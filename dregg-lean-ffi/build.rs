@@ -79,6 +79,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_handler_present)");
 
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
     let lean_archive = crate_dir.join("libdregg_lean.a");
 
     println!("cargo:rerun-if-changed=build.rs");
@@ -127,31 +128,60 @@ fn main() {
 
     // Compile the C init shim (it uses the `static inline` runtime helpers from
     // <lean/lean.h>, which have no linkable symbol and so must be used from C).
+    //
+    // We suppress cc's automatic `rustc-link-lib` directive (`cargo_metadata(false)`)
+    // and emit our own `+whole-archive` directive below. Reason: the final link runs
+    // under `-Wl,-dead_strip` with `-nodefaultlibs`, and on macOS ld64 the shim's
+    // single object is otherwise dead-stripped before the linker has recorded the
+    // binary's undefined references to `dregg_ffi_init` / `dregg_exec_full_forest_auth_str`
+    // (an archive-member-ordering hazard). Forcing the whole archive in guarantees the
+    // bridge symbols are present regardless of link order — the empirical fix for the
+    // `marshal_roundtrip` / `full_turn_differential` link failures.
     let mut shim = cc::Build::new();
     shim.file("src/lean_init.c").include(&lean_include);
     if handler_present {
         shim.define("DREGG_HANDLER_TURN", None);
     }
+    // We drive the link with `rustc-link-lib` / `rustc-link-search` directives, NOT
+    // `rustc-link-arg`. WHY: with the package's `links = "dregg_lean"` key, build-script
+    // `rustc-link-lib` / `rustc-link-search` directives PROPAGATE to every DOWNSTREAM binary
+    // (the `dregg-turn` lean-shadow tests, the node, …) — whereas `rustc-link-arg` is local
+    // to this crate's own targets only. The cross-crate propagation is exactly what the
+    // shadow harness needs to resolve `dregg_ffi_init` / `dregg_exec_full_forest_auth_str`.
+    //
+    // The shim is linked `+whole-archive` so its single bridge object survives the final
+    // `-Wl,-dead_strip` regardless of archive-member ordering (the empirical fix for the
+    // earlier `Undefined symbols` link failures). `+whole-archive` is a link-LIB modifier,
+    // so it propagates too.
+    shim.cargo_metadata(false);
     shim.compile("dregg_ffi_shim");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let shim_archive = out_dir.join("libdregg_ffi_shim.a");
 
-    // Our archive of the compiled Lean kernel + transitive closure.
+    // We drive the link with `rustc-link-lib` / `rustc-link-search` directives ONLY. With the
+    // package's `links = "dregg_lean"` key these PROPAGATE to EVERY target that links this
+    // crate's rlib — the `dregg-turn` lean-shadow tests + node (downstream) AND this crate's
+    // own bins/tests (which `use dregg_lean_ffi` and so link the rlib). Emitting `rustc-link-arg`
+    // in ADDITION would DOUBLE-link the shim for the FFI-crate-internal consumers (they'd see
+    // the shim both via the propagated lib AND the arg) → "duplicate symbol" errors. So: one
+    // mechanism. The standalone differential bins each carry `use dregg_lean_ffi as _;` to force
+    // the rlib edge so they inherit these propagated directives.
+    //
+    // The shim is linked `+whole-archive` so its single bridge object survives the final
+    // `-Wl,-dead_strip` regardless of archive-member ordering (the empirical link-failure fix).
+    let _ = shim_archive;
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static:+whole-archive=dregg_ffi_shim");
     println!("cargo:rustc-link-search=native={}", crate_dir.display());
     println!("cargo:rustc-link-lib=static=dregg_lean");
-
-    // The Lean runtime + stdlib (mirrors `leanc --print-ldflags`).
     println!("cargo:rustc-link-search=native={}", lean_lib.display());
     println!("cargo:rustc-link-search=native={}", sysroot.join("lib").display());
-    for lib in ["leancpp", "Init", "Std", "Lean", "leanrt", "Lake", "gmp", "uv"] {
-        println!("cargo:rustc-link-lib=static={lib}");
+    for name in ["leancpp", "Init", "Std", "Lean", "leanrt", "Lake", "gmp", "uv"] {
+        println!("cargo:rustc-link-lib=static={name}");
     }
-    // C++ runtime the Lean runtime needs. macOS/clang uses libc++ (`c++`); Linux/gcc uses
-    // libstdc++ (`stdc++`). Pick by target OS so the same build.rs links on both hosts.
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "macos" {
         println!("cargo:rustc-link-lib=dylib=c++");
     } else {
-        // Linux (and other ELF targets): libstdc++. `m`/`dl`/`pthread` are pulled in by the
-        // default Rust link, and gmp/uv are linked statically above.
         println!("cargo:rustc-link-lib=dylib=stdc++");
     }
 }

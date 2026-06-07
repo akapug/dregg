@@ -13,6 +13,10 @@
 //!
 //! Run with `cargo run --bin circuit_differential` in this crate. No Lean link.
 
+// Force an rlib edge so this bin inherits the propagated native-lib link directives
+// (build.rs is crate-global; this bin links the archive even though it does not call it).
+extern crate dregg_lean_ffi as _;
+
 #[path = "circuit_decode.rs"]
 mod circuit_decode;
 

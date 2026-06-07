@@ -27,6 +27,9 @@
 //! identically would pass. What it buys: every adversarial input where Lean and Rust disagree is
 //! surfaced and minimized, hardening the one piece of Path A that is TCB (the marshalling).
 
+// Force an rlib edge so this bin inherits the propagated native-lib link directives.
+extern crate dregg_lean_ffi as _;
+
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
 use std::collections::BTreeSet;

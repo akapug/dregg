@@ -2002,6 +2002,27 @@ mod tests {
         v2_beachhead(BURN_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
     }
 
+    /// `dregg-bridgeMintA-v2`: bridge-INBOUND per-asset mint (touched = `bal`, credit).
+    /// The forged post-state ALSO mints bystander cell 2 (50 → 999); the component-bind
+    /// gate `68 = 69` breaks. Goldens pinned by Lean's
+    /// `Dregg2.Circuit.Witness.BridgeMintAWitness`.
+    const BRIDGE_MINT_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-bridgeMintA-v2","trace_width":72,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_bridge_mint_a() {
+        let honest: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 100000053, 130000054, 3, 3, 130000050, 130000050, 1, 1,
+        ];
+        let forged: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 100000053, 130001003, 3, 3, 130000999, 130000050, 1, 1,
+        ];
+        v2_beachhead(BRIDGE_MINT_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
+    }
+
     /// `dregg-delegate-v2`: the Granovetter unattenuated held-cap copy (touched =
     /// `kernel.caps`, a `funcComponent`). Honest: delegator 0 (holding `node 5`)
     /// grants recipient 1 the held cap to target 5. The forged post-state has
@@ -2191,6 +2212,56 @@ mod tests {
         );
     }
 
+    /// `dregg-receiptArchiveA-v1`: the cell-state-audit lifecycle-slot write (v1 framework,
+    /// width 74, 5 gates). Same shape as `refusalA` (single touched cell + growing receipt
+    /// log), differing only in the written slot. Forged post-state mints bystander cell 2
+    /// (50 → 999): the frame-reuse gate `68 = 69` breaks. Goldens from Lean
+    /// `Dregg2.Circuit.Witness.ReceiptArchiveWitness.{honest,forgedCell}WitnessJson`.
+    const RECEIPTARCHIVEA_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-receiptArchiveA-v1","trace_width":74,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}},{"lhs":{"t":"var","v":72},"rhs":{"t":"var","v":73}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_receipt_archive() {
+        let honest: [i64; 74] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 3, 3, 2000005000050, 2000005000050, 1000100, 1000100, 1000000, 1000000,
+        ];
+        let forged_cell: [i64; 74] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 3, 3, 2000005000050, 2000005000999, 1000100, 1000100, 1000000, 1000000,
+        ];
+        v1_beachhead(
+            RECEIPTARCHIVEA_DESCRIPTOR_JSON,
+            &honest,
+            &[("minted bystander cell", &forged_cell, 68, 69)],
+        );
+    }
+
+    /// `dregg-refreshDelegationA-v2`: the parent-c-list snapshot into `kernel.delegations`
+    /// (a `funcComponent`, width 72). Honest: child 1 (parent 0 holding `[node 5]`) refreshes
+    /// its delegation snapshot to `[node 5]`. The forged post-state TAMPERS the snapshot
+    /// (child 1 steals an extra `node 9`): the component-bind gate `68 = 69` breaks while the
+    /// rest frame + log stay honest. Goldens from Lean
+    /// `Dregg2.Circuit.Witness.RefreshDelegationWitness.{honest,forged}WitnessJson`.
+    const REFRESHDELEGATIONA_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-refreshDelegationA-v2","trace_width":72,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_refresh_delegation() {
+        let honest: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 927922, 774219, 2, 2, 773953, 773953, 264, 264,
+        ];
+        // Forged: child 1's delegation snapshot tampered (stole node 9): wire 68 changes.
+        let forged: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 927922, 710615, 2, 2, 710349, 773953, 264, 264,
+        ];
+        v2_beachhead(REFRESHDELEGATIONA_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
+    }
+
     // ========================================================================
     // Batch B6: ten more v2/v5 effects on the verifiable-execution beachhead.
     // Each pastes the EXACT executor-derived witness bytes the Lean
@@ -2221,5 +2292,52 @@ mod tests {
             0, 0, 0, 0, 501156, 501418, 2, 2, 501153, 1170548, 263, 263,
         ];
         v2_beachhead(REVOKE_DELEGATION_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
+    }
+
+    /// `dregg-unsealA-v2`: the seal-box UNSEAL (touched = `kernel.caps`, a `funcComponent`).
+    /// Honest: actor 0 (holding the unsealer cap `endpoint 7 [reply]`) unseals pair 7 from the
+    /// store and grants the recovered payload `node 5` to recipient 1. The forged post-state
+    /// DROPS the grant (recipient 1 stays empty): the component-bind gate `68 = 69` breaks while
+    /// the rest frame + log stay honest. Goldens from Lean
+    /// `Dregg2.Circuit.Witness.UnsealWitness.{descriptorJson, honest/forgedWitnessJson}`.
+    const UNSEALA_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-unsealA-v2","trace_width":72,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_unseal() {
+        let honest: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 97833, 1944132, 15, 15, 1943854, 1943854, 263, 263,
+        ];
+        // Forged: the unseal grant is dropped; wire 68 (post caps digest) differs.
+        let forged: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 97833, 98095, 15, 15, 97817, 1943854, 263, 263,
+        ];
+        v2_beachhead(UNSEALA_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
+    }
+
+    /// `dregg-validateHandoffA-v2`: the 3-vat handoff = Granovetter unattenuated held-cap copy
+    /// (touched = `kernel.caps`, a `funcComponent`, executor `recCDelegate`). Honest: intro 0
+    /// (holding `node 5`) hands the held cap to recipient 1. The forged post-state has recipient 1
+    /// STEAL an extra `node 9` cap; the component-bind gate `68 = 69` breaks. Goldens from Lean
+    /// `Dregg2.Circuit.Witness.ValidateHandoffWitness.{descriptorJson, honest/forgedWitnessJson}`.
+    const VALIDATE_HANDOFF_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-validateHandoffA-v2","trace_width":72,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_validate_handoff() {
+        let honest: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 1672998, 1519294, 2, 2, 1519029, 1519029, 263, 263,
+        ];
+        // Forged: recipient 1 steals an extra `node 9`; wire 68 (post caps digest) differs.
+        let forged: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 1672998, 1455690, 2, 2, 1455425, 1519029, 263, 263,
+        ];
+        v2_beachhead(VALIDATE_HANDOFF_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
     }
 }

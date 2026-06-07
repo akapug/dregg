@@ -20,6 +20,9 @@
 //! AND a wire round-trip. Agreement is the cross-validation certificate for the
 //! marshalling boundary (it is cross-validation, NOT certification — the codec is TCB).
 
+// Force an rlib edge so this bin inherits the propagated native-lib link directives.
+extern crate dregg_lean_ffi as _;
+
 use std::ffi::CString;
 use std::os::raw::c_char;
 use std::process::ExitCode;
