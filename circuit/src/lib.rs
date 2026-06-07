@@ -239,6 +239,8 @@ pub mod membership_adjacency_air;
 
 pub mod backends;
 pub mod joint_turn_aggregation;
+#[cfg(feature = "recursion")]
+pub mod joint_turn_recursive;
 pub mod proof_forest;
 pub mod proof_tier;
 

@@ -377,8 +377,116 @@ theorem mismatch_rejection_is_nonvacuous :
     it, leaving `family_joint_sound` untouched (as instructed). The remaining open
     bisimulation form is recorded honestly in `Hyperedge.hyperedge_sound_bisim`. -/
 
+/-! ## §5 — GOLD: recursive aggregation is the apex conjunction, no leak.
+
+The Rust `circuit/src/joint_turn_recursive.rs` (`prove_joint_turn_recursive`) folds `N` per-cell
+whole-turn proofs **and** the shared-turn-id binding leaf into ONE succinct recursive proof via a
+binary aggregation tree (`build_and_prove_aggregation_layer`, chained `BatchOnly`). The verifier
+checks only the ROOT proof, at cost independent of `N` — the Golden Vision's constant-verifier
+property.
+
+For that to be *sound*, the recursive fold must accept exactly the bundles whose every leg
+verifies (no acceptance the legs don't justify) AND drops none (every all-legs-verify bundle is
+accepted). The aggregation node is logically a **conjunction** of its two children's acceptance
+(`build_and_prove_aggregation_layer` verifies BOTH sub-proofs in one circuit), so the whole tree
+computes the `N`-fold conjunction of the leaf acceptances. We model the per-leg acceptance as an
+abstract predicate `accept : ι → Prop` (read: "leg `i`'s recursive verifier sub-circuit is
+satisfied") and prove the binary-tree fold equals `∀ i, accept i`.
+
+This is the faithful meaning of "ONE root proof attests all `N` legs": the root accepts iff every
+leg accepts — `recursive_agg_no_leak` is the soundness+completeness of the fold itself
+(orthogonal to per-leg STARK soundness, which is the Rust leaf verifier circuits' job, and to the
+CG-2 apex agreement, which is `mismatched_legs_have_no_hyperedge` above). The constant-verifier
+claim is then: the verifier evaluates this single conjunction-via-root rather than `N` separate
+checks. -/
+
+/-- A binary aggregation tree over leaves indexed by a list — the structural shape of the Rust
+`aggregate_tree`'s pairwise fold (`Leaf` = one wrapped per-cell/binding proof, `Node` = one
+`build_and_prove_aggregation_layer` over two sub-proofs). -/
+inductive AggTree (α : Type u) where
+  | leaf : α → AggTree α
+  | node : AggTree α → AggTree α → AggTree α
+
+namespace AggTree
+
+variable {α : Type u}
+
+/-- The multiset of leaves of an aggregation tree (the bundle it attests). -/
+def leaves : AggTree α → List α
+  | .leaf a => [a]
+  | .node l r => l.leaves ++ r.leaves
+
+/-- **`accepts`** — the tree's acceptance: a leaf accepts iff its own verifier sub-circuit is
+satisfied (`accept a`); a node accepts iff BOTH children accept (the `build_and_prove_aggregation_layer`
+conjunction — both sub-proofs verify in the one aggregation circuit). -/
+def accepts (accept : α → Prop) : AggTree α → Prop
+  | .leaf a => accept a
+  | .node l r => l.accepts accept ∧ r.accepts accept
+
+/-- **`recursive_agg_no_leak` — the recursive aggregation root accepts iff every leaf accepts
+(PROVED).**
+
+For ANY aggregation tree shape (any pairing order the Rust `aggregate_tree` produces, balanced or
+with carried odd leaves), the root's acceptance is logically equivalent to the conjunction of all
+leaf acceptances: `t.accepts accept ↔ ∀ a ∈ t.leaves, accept a`.
+
+So the recursive fold:
+  * adds NO acceptance (soundness of the fold): if the root accepts, every leaf accepted — the
+    verifier never certifies a bundle with an unverified leg;
+  * drops NO acceptance (completeness of the fold): if every leg accepted, the root accepts.
+
+This is exactly what makes "check ONE root proof" equivalent to "check all `N` leaves" while
+costing `O(1)` in `N`. The per-leaf `accept` carries the actual STARK soundness (the Rust leaf
+verifier circuits); this theorem is the *composition* law that the tree does not leak. -/
+theorem accepts_iff_all_leaves (accept : α → Prop) :
+    ∀ t : AggTree α, t.accepts accept ↔ ∀ a ∈ t.leaves, accept a
+  | .leaf a => by simp [accepts, leaves]
+  | .node l r => by
+      simp only [accepts, leaves, List.mem_append]
+      rw [accepts_iff_all_leaves accept l, accepts_iff_all_leaves accept r]
+      constructor
+      · rintro ⟨hl, hr⟩ a (ha | ha)
+        · exact hl a ha
+        · exact hr a ha
+      · intro h
+        exact ⟨fun a ha => h a (Or.inl ha), fun a ha => h a (Or.inr ha)⟩
+
+/-- **`recursive_agg_rejects_unverified_leaf` — the tooth: ONE unverified leaf sinks the root
+(PROVED).**
+
+If any leaf `a ∈ t.leaves` fails its verifier (`¬ accept a`), the root does NOT accept. This is
+the Lean mirror of the Rust `recursive_layer_rejects_mismatched_leaf_public_inputs` /
+`recursive_rejects_tampered_participant_proof` teeth: a tampered participant proof breaks its leaf
+sub-circuit, so the conjunction — hence the root — fails. The recursion is a real gate, not a
+rubber stamp. -/
+theorem rejects_unverified_leaf (accept : α → Prop) (t : AggTree α)
+    {a : α} (ha : a ∈ t.leaves) (hbad : ¬ accept a) :
+    ¬ t.accepts accept := by
+  rw [accepts_iff_all_leaves]
+  intro h
+  exact hbad (h a ha)
+
+end AggTree
+
+/-- **`recursive_agg_constant_shape` — the root attests the WHOLE bundle regardless of tree shape
+(PROVED).** Two aggregation trees with the SAME leaf multiset accept on the same condition (`∀
+leaf, accept`). So the pairing order the Rust `aggregate_tree` chooses (and the carried odd leaf)
+does not change WHAT the root attests — only one root proof is checked either way. This underwrites
+"the verification cost doesn't grow with the number of cells": the root's meaning is the leaf
+conjunction, independent of how the tree was folded. -/
+theorem recursive_agg_constant_shape {α : Type u} (accept : α → Prop)
+    (t₁ t₂ : AggTree α) (hsame : ∀ a, a ∈ t₁.leaves ↔ a ∈ t₂.leaves) :
+    t₁.accepts accept ↔ t₂.accepts accept := by
+  rw [AggTree.accepts_iff_all_leaves, AggTree.accepts_iff_all_leaves]
+  constructor
+  · intro h a ha; exact h a ((hsame a).mpr ha)
+  · intro h a ha; exact h a ((hsame a).mp ha)
+
 /-! ## Axiom-hygiene pins (PROVED keystones only). -/
 
+#assert_axioms AggTree.accepts_iff_all_leaves
+#assert_axioms AggTree.rejects_unverified_leaf
+#assert_axioms recursive_agg_constant_shape
 #assert_axioms joint_via_hyperedge
 #assert_axioms binary_binding_from_hyperedge
 #assert_axioms binary_joint_via_hyperedge
