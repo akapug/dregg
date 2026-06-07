@@ -13,6 +13,9 @@
 //!      mathlib, …) and returns an `IO` result object;
 //!   3. `lean_io_mark_end_initialization()` — freeze initialization.
 
+// Force an rlib edge so this bin inherits the propagated native-lib link directives.
+extern crate dregg_lean_ffi as _;
+
 // --- Lean entry points (C ABI). ---
 extern "C" {
     // Our C shim (src/lean_init.c): runs the full embedding init ritual

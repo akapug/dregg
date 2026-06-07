@@ -95,23 +95,38 @@ pub fn maybe_shadow_turn(turn: &Turn, ledger: &Ledger, result: &TurnResult, bloc
         }
 
         let height = SHADOW_BLOCK_HEIGHT.with(|h| *h.borrow());
+        let kinds = turn_effect_kinds(turn).join("+");
         match run_shadow(turn, &pre, height) {
             Ok(lean_committed) => {
                 let rust_committed = result.is_committed();
                 if lean_committed != rust_committed {
+                    // A live RUST↔LEAN divergence. Logged with the effect kinds so the operator
+                    // can map it straight to the divergence ledger / a marshaller gap.
                     tracing::warn!(
+                        target: "dregg::lean_shadow::divergence",
                         agent = ?turn.agent,
+                        effects = %kinds,
                         lean_committed,
                         rust_committed,
-                        "lean shadow divergence: commit bit mismatch"
+                        "RUST↔LEAN divergence: commit-bit mismatch (apply.rs vs verified Lean executor)"
+                    );
+                } else {
+                    tracing::debug!(
+                        target: "dregg::lean_shadow",
+                        agent = ?turn.agent,
+                        effects = %kinds,
+                        committed = lean_committed,
+                        "lean shadow agrees"
                     );
                 }
             }
             Err(e) => {
                 tracing::warn!(
+                    target: "dregg::lean_shadow",
                     agent = ?turn.agent,
+                    effects = %kinds,
                     error = %e,
-                    "lean shadow: marshal/exec failed"
+                    "lean shadow: marshal/exec failed (turn NOT compared)"
                 );
             }
         }
@@ -126,6 +141,192 @@ pub fn maybe_shadow_turn(turn: &Turn, ledger: &Ledger, result: &TurnResult, bloc
 
 fn shadow_env_enabled() -> bool {
     std::env::var("DREGG_LEAN_SHADOW").as_deref() == Ok("1")
+}
+
+// ===================================================================
+// STRUCTURED DIVERGENCE REPORT — for the corpus divergence-finder.
+//
+// `maybe_shadow_turn` logs divergences via `tracing` (side-effect only). The divergence
+// LEDGER harness needs a structured per-turn outcome so it can build an effect-by-effect
+// map of where the verified Lean executor models the Rust `apply.rs` executor and whether
+// the two agree. `shadow_report` runs the SAME marshal+exec path and returns that outcome.
+// ===================================================================
+
+/// Per-turn outcome of running the Lean FFI shadow alongside the real Rust executor.
+#[derive(Clone, Debug)]
+pub struct ShadowReport {
+    /// The distinct effect variant names present in the turn's forest (pre-order).
+    pub effect_kinds: Vec<&'static str>,
+    /// Whether EVERY effect in the turn maps to a Lean wire action (turn is Lean-eligible).
+    pub lean_eligible: bool,
+    /// The Rust `apply.rs` commit decision.
+    pub rust_committed: bool,
+    /// The Lean executor commit decision (`Some` iff eligible AND the FFI ran).
+    pub lean_committed: Option<bool>,
+    /// `Some(true)` agree, `Some(false)` DIVERGE, `None` not comparable (ineligible / FFI off).
+    pub agree: Option<bool>,
+    /// Marshal/exec error, if the FFI path failed for an eligible turn.
+    pub error: Option<String>,
+}
+
+impl ShadowReport {
+    /// True when the turn was comparable and the two executors DISAGREED on commit.
+    pub fn diverged(&self) -> bool {
+        self.agree == Some(false)
+    }
+}
+
+/// Static variant name for an effect (used to characterise the corpus per effect).
+pub fn effect_kind(eff: &Effect) -> &'static str {
+    match eff {
+        Effect::SetField { .. } => "SetField",
+        Effect::Transfer { .. } => "Transfer",
+        Effect::GrantCapability { .. } => "GrantCapability",
+        Effect::RevokeCapability { .. } => "RevokeCapability",
+        Effect::EmitEvent { .. } => "EmitEvent",
+        Effect::IncrementNonce { .. } => "IncrementNonce",
+        Effect::CreateCell { .. } => "CreateCell",
+        Effect::SetPermissions { .. } => "SetPermissions",
+        Effect::SetVerificationKey { .. } => "SetVerificationKey",
+        Effect::NoteSpend { .. } => "NoteSpend",
+        Effect::NoteCreate { .. } => "NoteCreate",
+        Effect::CreateSealPair { .. } => "CreateSealPair",
+        Effect::Seal { .. } => "Seal",
+        Effect::Unseal { .. } => "Unseal",
+        Effect::SpawnWithDelegation { .. } => "SpawnWithDelegation",
+        Effect::RefreshDelegation => "RefreshDelegation",
+        Effect::RevokeDelegation { .. } => "RevokeDelegation",
+        Effect::BridgeMint { .. } => "BridgeMint",
+        Effect::BridgeLock { .. } => "BridgeLock",
+        Effect::BridgeFinalize { .. } => "BridgeFinalize",
+        Effect::BridgeCancel { .. } => "BridgeCancel",
+        Effect::Introduce { .. } => "Introduce",
+        Effect::PipelinedSend { .. } => "PipelinedSend",
+        Effect::CreateObligation { .. } => "CreateObligation",
+        Effect::FulfillObligation { .. } => "FulfillObligation",
+        Effect::SlashObligation { .. } => "SlashObligation",
+        Effect::CreateEscrow { .. } => "CreateEscrow",
+        Effect::ReleaseEscrow { .. } => "ReleaseEscrow",
+        Effect::RefundEscrow { .. } => "RefundEscrow",
+        Effect::CreateCommittedEscrow { .. } => "CreateCommittedEscrow",
+        Effect::ReleaseCommittedEscrow { .. } => "ReleaseCommittedEscrow",
+        Effect::RefundCommittedEscrow { .. } => "RefundCommittedEscrow",
+        Effect::ExerciseViaCapability { .. } => "ExerciseViaCapability",
+        Effect::MakeSovereign { .. } => "MakeSovereign",
+        Effect::CreateCellFromFactory { .. } => "CreateCellFromFactory",
+        Effect::QueueAllocate { .. } => "QueueAllocate",
+        Effect::QueueEnqueue { .. } => "QueueEnqueue",
+        Effect::QueueDequeue { .. } => "QueueDequeue",
+        Effect::QueueResize { .. } => "QueueResize",
+        Effect::QueueAtomicTx { .. } => "QueueAtomicTx",
+        Effect::QueuePipelineStep { .. } => "QueuePipelineStep",
+        Effect::ExportSturdyRef { .. } => "ExportSturdyRef",
+        Effect::EnlivenRef { .. } => "EnlivenRef",
+        Effect::DropRef { .. } => "DropRef",
+        Effect::ValidateHandoff { .. } => "ValidateHandoff",
+        Effect::Refusal { .. } => "Refusal",
+        Effect::CellSeal { .. } => "CellSeal",
+        Effect::CellUnseal { .. } => "CellUnseal",
+        Effect::CellDestroy { .. } => "CellDestroy",
+        Effect::Burn { .. } => "Burn",
+        Effect::AttenuateCapability { .. } => "AttenuateCapability",
+        Effect::ReceiptArchive { .. } => "ReceiptArchive",
+        #[allow(unreachable_patterns)]
+        _ => "Unknown",
+    }
+}
+
+fn turn_effect_kinds(turn: &Turn) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    fn walk(tree: &CallTree, out: &mut Vec<&'static str>) {
+        for eff in &tree.action.effects {
+            out.push(effect_kind(eff));
+        }
+        for c in &tree.children {
+            walk(c, out);
+        }
+    }
+    for r in &turn.call_forest.roots {
+        walk(r, &mut out);
+    }
+    out
+}
+
+/// Run the Lean FFI shadow against the real Rust result and return a STRUCTURED outcome.
+///
+/// Unlike [`maybe_shadow_turn`] (which only logs), this returns a [`ShadowReport`] for the
+/// corpus divergence-finder. Must be called with the SAME `ledger` and `block_height` as the
+/// `execute` call that produced `result`; it internally re-snapshots the pre-state from the
+/// post-state would be wrong, so callers should snapshot BEFORE executing (see the harness).
+#[cfg(feature = "lean-shadow")]
+pub fn shadow_report(
+    turn: &Turn,
+    pre_ledger: &Ledger,
+    rust_committed: bool,
+    block_height: u64,
+) -> ShadowReport {
+    let effect_kinds = turn_effect_kinds(turn);
+    let eligible = forest_is_marshallable(turn);
+
+    if !eligible {
+        return ShadowReport {
+            effect_kinds,
+            lean_eligible: false,
+            rust_committed,
+            lean_committed: None,
+            agree: None,
+            error: None,
+        };
+    }
+
+    if !dregg_lean_ffi::lean_available() {
+        return ShadowReport {
+            effect_kinds,
+            lean_eligible: true,
+            rust_committed,
+            lean_committed: None,
+            agree: None,
+            error: Some("lean unavailable".into()),
+        };
+    }
+
+    let pre = build_pre_ledger(turn, pre_ledger);
+    match run_shadow(turn, &pre, block_height) {
+        Ok(lean_committed) => ShadowReport {
+            effect_kinds,
+            lean_eligible: true,
+            rust_committed,
+            lean_committed: Some(lean_committed),
+            agree: Some(lean_committed == rust_committed),
+            error: None,
+        },
+        Err(e) => ShadowReport {
+            effect_kinds,
+            lean_eligible: true,
+            rust_committed,
+            lean_committed: None,
+            agree: None,
+            error: Some(e),
+        },
+    }
+}
+
+/// Non-FFI build: shadow report is always "ineligible to compare" (no Lean linked).
+#[cfg(not(feature = "lean-shadow"))]
+pub fn shadow_report(
+    turn: &Turn,
+    _pre_ledger: &Ledger,
+    rust_committed: bool,
+    _block_height: u64,
+) -> ShadowReport {
+    ShadowReport {
+        effect_kinds: turn_effect_kinds(turn),
+        lean_eligible: forest_is_marshallable(turn),
+        rust_committed,
+        lean_committed: None,
+        agree: None,
+        error: Some("lean-shadow feature off".into()),
+    }
 }
 
 // ===================================================================
@@ -350,7 +551,13 @@ fn run_shadow(turn: &Turn, pre: &ShadowPreLedger, block_height: u64) -> Result<b
     let wire_state = ledger_to_wire_state(pre)?;
     let wire_turn = turn_to_wire_turn(turn, pre, block_height)?;
     let wire = marshal_turn(&wire_state, &wire_turn).map_err(|e| e.to_string())?;
+    if std::env::var("DREGG_LEAN_SHADOW_DEBUG").as_deref() == Ok("1") {
+        eprintln!("[shadow wire IN ] {wire}");
+    }
     let out = dregg_lean_ffi::shadow_exec_full_forest_auth(&wire)?;
+    if std::env::var("DREGG_LEAN_SHADOW_DEBUG").as_deref() == Ok("1") {
+        eprintln!("[shadow wire OUT] {out}");
+    }
     let verdict = dregg_lean_ffi::decode_shadow_verdict(&out)?;
     Ok(verdict.committed)
 }

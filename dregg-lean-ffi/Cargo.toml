@@ -7,6 +7,12 @@ version = "0.1.0"
 edition = "2021"
 # With `lean-lib` + `libdregg_lean.a` present: `cargo run --features lean-lib`.
 default-run = "differential"
+# Declares a native lib so the build script's `rustc-link-lib` / `rustc-link-search`
+# directives PROPAGATE to every downstream binary (the `dregg-turn` lean-shadow tests + the
+# node), not just this crate's own bins. Without `links`, a build script's link directives are
+# local only — which is why the `dregg-turn` shadow tests previously failed to resolve
+# `dregg_ffi_init` / `dregg_exec_full_forest_auth_str`.
+links = "dregg_lean"
 
 [lib]
 path = "src/lib.rs"

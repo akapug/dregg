@@ -22,6 +22,10 @@
 //!     genuine `.signature 7 7` + a monotone caveat, with a child escrow under `.token 3 3`.
 //!     Both credentials pass the §1 portal ⇒ the gated tree COMMITS (ok:1).
 
+// Force an rlib edge to the `dregg_lean_ffi` lib so this bin inherits the build script's
+// PROPAGATED native-lib link directives (the shim + Lean closure via `links = "dregg_lean"`).
+extern crate dregg_lean_ffi as _;
+
 #[path = "marshal.rs"]
 mod marshal;
 
