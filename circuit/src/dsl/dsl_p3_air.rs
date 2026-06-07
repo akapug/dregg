@@ -89,8 +89,12 @@ pub struct DslP3Air {
     descriptor: crate::dsl::circuit::CircuitDescriptor,
     /// Base trace width (descriptor columns) without Poseidon2 aux blocks.
     base_width: usize,
-    /// FULL trace width = base_width + num_hashes * POSEIDON2_PERM_AUX_COLS.
+    /// FULL trace width = base_width + num_hashes * POSEIDON2_PERM_AUX_COLS +
+    /// interior-row selector aux block.
     full_width: usize,
+    /// Column where the interior-row selector aux block begins (counter + per
+    /// interior-boundary IsZero witness). == base_width + hash aux blocks.
+    interior_aux_base: usize,
 }
 
 impl DslP3Air {
@@ -106,6 +110,7 @@ impl DslP3Air {
             descriptor: dsl.descriptor.clone(),
             base_width: dsl.descriptor.trace_width,
             full_width: air_width(dsl),
+            interior_aux_base: interior_aux_base(dsl),
         })
     }
 }
@@ -138,10 +143,14 @@ impl core::fmt::Display for DslP3Error {
 impl std::error::Error for DslP3Error {}
 
 /// Confirm a constraint is supported by this p3 AIR. Pure-algebraic forms and
-/// the Poseidon2 hash forms (`Hash`/`Hash2to1`/`Hash4to1`/`MerkleHash`) are
-/// supported (hashes via the real in-circuit `poseidon2_permute_expr` gadget).
-/// `Lookup` still requires the LogUp bus (`lean_lookup_air`) and is surfaced as
-/// an error rather than silently dropped.
+/// the Poseidon2 hash forms (`Hash`/`Hash2to1`/`Hash4to1`) are supported
+/// (hashes via the real in-circuit `poseidon2_permute_expr` gadget). `Hash` is
+/// the single-permutation `hash_fact` sponge (predicate + ≤4 terms, leaf
+/// domain separation); it consumes one Poseidon2 aux block exactly like
+/// `Hash2to1`/`Hash4to1`. `MerkleHash` (position-indexed) routes through
+/// `P3MerklePoseidon2Air`, and `Lookup` requires the LogUp bus
+/// (`lean_lookup_air`); both are surfaced as errors rather than silently
+/// dropped.
 fn check_algebraic(c: &ConstraintExpr, index: usize) -> Result<(), DslP3Error> {
     match c {
         ConstraintExpr::Equality { .. }
@@ -152,15 +161,12 @@ fn check_algebraic(c: &ConstraintExpr, index: usize) -> Result<(), DslP3Error> {
         | ConstraintExpr::Polynomial { .. }
         | ConstraintExpr::ConditionalNonzero { .. }
         | ConstraintExpr::AtLeastOne { .. }
+        | ConstraintExpr::Hash { .. }
         | ConstraintExpr::Hash2to1 { .. }
         | ConstraintExpr::Hash4to1 { .. } => Ok(()),
         ConstraintExpr::Gated { inner, .. }
         | ConstraintExpr::InvertedGated { inner, .. }
         | ConstraintExpr::Squared { inner } => check_algebraic(inner, index),
-        ConstraintExpr::Hash { .. } => Err(DslP3Error::NonAlgebraicConstraint {
-            index,
-            form: "Hash (sponge; route through P3MerklePoseidon2Air)",
-        }),
         ConstraintExpr::MerkleHash { .. } => Err(DslP3Error::NonAlgebraicConstraint {
             index,
             form: "MerkleHash (use P3MerklePoseidon2Air for position-indexed Merkle hashing)",
@@ -173,11 +179,15 @@ fn check_algebraic(c: &ConstraintExpr, index: usize) -> Result<(), DslP3Error> {
 }
 
 /// Whether a constraint is a Poseidon2 hash form needing one permutation aux
-/// block (Hash2to1 / Hash4to1 — the node-hashing forms).
+/// block (Hash sponge / Hash2to1 / Hash4to1 — the single-permutation hashing
+/// forms). All three resolve to ONE Poseidon2 permutation, so each consumes
+/// exactly one aux block.
 fn is_hash(c: &ConstraintExpr) -> bool {
     matches!(
         c,
-        ConstraintExpr::Hash2to1 { .. } | ConstraintExpr::Hash4to1 { .. }
+        ConstraintExpr::Hash { .. }
+            | ConstraintExpr::Hash2to1 { .. }
+            | ConstraintExpr::Hash4to1 { .. }
     )
 }
 
@@ -186,9 +196,64 @@ fn hash_count(dsl: &DslCircuit) -> usize {
     dsl.descriptor.constraints.iter().filter(|c| is_hash(c)).count()
 }
 
-/// The FULL p3 trace width: base columns + one Poseidon2 aux block per hash.
-fn air_width(dsl: &DslCircuit) -> usize {
+/// An interior-row boundary `trace[k][col] == target` where `k` is an absolute
+/// row index `> 0` (so it has no p3 first/last selector). `target` is either a
+/// public input (`Some(pi_index)`) or a fixed value (`None` ⇒ use `fixed`).
+#[derive(Clone, Debug)]
+struct InteriorBoundary {
+    row: usize,
+    col: usize,
+    pi_index: Option<usize>,
+    fixed: BabyBear,
+}
+
+/// Collect the interior-row boundaries (absolute index `> 0`). `First`, `Last`,
+/// and `Index(0)` are NOT interior (they map to p3 row selectors).
+fn interior_boundaries(dsl: &DslCircuit) -> Vec<InteriorBoundary> {
+    let mut out = Vec::new();
+    for b in &dsl.descriptor.boundaries {
+        match b {
+            BoundaryDef::PiBinding { row: BoundaryRow::Index(k), col, pi_index } if *k != 0 => {
+                out.push(InteriorBoundary {
+                    row: *k,
+                    col: *col,
+                    pi_index: Some(*pi_index),
+                    fixed: BabyBear::ZERO,
+                });
+            }
+            BoundaryDef::Fixed { row: BoundaryRow::Index(k), col, value } if *k != 0 => {
+                out.push(InteriorBoundary {
+                    row: *k,
+                    col: *col,
+                    pi_index: None,
+                    fixed: *value,
+                });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The interior-row selector aux block: one shared `row_idx` counter column,
+/// then 2 columns per interior boundary (`inv`, `is_k`) for the IsZero gadget.
+/// Sits AFTER the hash aux blocks. Empty (0 columns) when there are no interior
+/// boundaries — so circuits without them keep their exact previous width.
+fn interior_aux_cols(dsl: &DslCircuit) -> usize {
+    let n = interior_boundaries(dsl).len();
+    if n == 0 { 0 } else { 1 + 2 * n }
+}
+
+/// Base offset (after base columns + hash aux blocks) where the interior-row
+/// selector aux block begins.
+fn interior_aux_base(dsl: &DslCircuit) -> usize {
     dsl.descriptor.trace_width + hash_count(dsl) * POSEIDON2_PERM_AUX_COLS
+}
+
+/// The FULL p3 trace width: base columns + one Poseidon2 aux block per hash +
+/// the interior-row selector aux block (counter + per-boundary IsZero witness).
+fn air_width(dsl: &DslCircuit) -> usize {
+    interior_aux_base(dsl) + interior_aux_cols(dsl)
 }
 
 /// Build the 16-wide Poseidon2 input state (as `AB::Expr`) for a hash form,
@@ -200,6 +265,19 @@ fn hash_input_state<AB: AirBuilder>(
 ) -> [AB::Expr; POSEIDON2_WIDTH] {
     let mut st: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|_| AB::Expr::ZERO);
     match c {
+        // `hash_fact(predicate, terms)`: state[0]=predicate, state[1..1+|terms|]=
+        // terms (≤4 absorbed at rate positions 1..5), capacity carries the leaf
+        // domain separation tags state[5]=0xFACF and state[6]=1. Mirrors
+        // `crate::poseidon2::hash_fact` exactly.
+        ConstraintExpr::Hash { input_cols, .. } => {
+            st[0] = local[input_cols[0]].into();
+            let nterms = (input_cols.len() - 1).min(4);
+            for k in 0..nterms {
+                st[1 + k] = local[input_cols[1 + k]].into();
+            }
+            st[5] = AB::Expr::from_u64(0xFACF);
+            st[6] = AB::Expr::ONE;
+        }
         ConstraintExpr::Hash2to1 { input_col_a, input_col_b, .. } => {
             st[0] = local[*input_col_a].into();
             st[1] = local[*input_col_b].into();
@@ -212,7 +290,7 @@ fn hash_input_state<AB: AirBuilder>(
             st[3] = local[input_cols[3]].into();
             st[4] = AB::Expr::from_u64(4); // arity tag (matches hash_4_to_1)
         }
-        _ => unreachable!("hash_input_state only called on Hash2to1/Hash4to1"),
+        _ => unreachable!("hash_input_state only called on Hash/Hash2to1/Hash4to1"),
     }
     st
 }
@@ -220,9 +298,10 @@ fn hash_input_state<AB: AirBuilder>(
 /// The output column a hash form binds its digest to.
 fn hash_output_col(c: &ConstraintExpr) -> usize {
     match c {
-        ConstraintExpr::Hash2to1 { output_col, .. }
+        ConstraintExpr::Hash { output_col, .. }
+        | ConstraintExpr::Hash2to1 { output_col, .. }
         | ConstraintExpr::Hash4to1 { output_col, .. } => *output_col,
-        _ => unreachable!("hash_output_col only called on Hash2to1/Hash4to1"),
+        _ => unreachable!("hash_output_col only called on Hash/Hash2to1/Hash4to1"),
     }
 }
 
@@ -231,6 +310,15 @@ fn hash_output_col(c: &ConstraintExpr) -> usize {
 fn hash_input_state_concrete(c: &ConstraintExpr, row: &[BabyBear]) -> [BabyBear; POSEIDON2_WIDTH] {
     let mut st = [BabyBear::ZERO; POSEIDON2_WIDTH];
     match c {
+        ConstraintExpr::Hash { input_cols, .. } => {
+            st[0] = row[input_cols[0]];
+            let nterms = (input_cols.len() - 1).min(4);
+            for k in 0..nterms {
+                st[1 + k] = row[input_cols[1 + k]];
+            }
+            st[5] = BabyBear::new(0xFACF);
+            st[6] = BabyBear::ONE;
+        }
         ConstraintExpr::Hash2to1 { input_col_a, input_col_b, .. } => {
             st[0] = row[*input_col_a];
             st[1] = row[*input_col_b];
@@ -385,22 +473,113 @@ where
             }
         }
 
-        // ---- boundary constraints ----
+        // ---- boundary constraints (First / Last / Index(0)) ----
+        // Interior-row boundaries (`Index(k)`, k>0) are handled by the
+        // interior-row selector block below — skip them here.
         for bdef in &self.descriptor.boundaries {
             match bdef {
                 BoundaryDef::PiBinding { row, col, pi_index } => {
+                    if matches!(row, BoundaryRow::Index(k) if *k != 0) {
+                        continue;
+                    }
                     let lv: AB::Expr = local[*col].into();
                     let pv: AB::Expr = public_values[*pi_index].clone();
                     apply_boundary::<AB>(builder, *row, lv - pv);
                 }
                 BoundaryDef::Fixed { row, col, value } => {
+                    if matches!(row, BoundaryRow::Index(k) if *k != 0) {
+                        continue;
+                    }
                     let lv: AB::Expr = local[*col].into();
                     let fv: AB::Expr = lift::<AB>(*value);
                     apply_boundary::<AB>(builder, *row, lv - fv);
                 }
             }
         }
+
+        // ---- interior-row boundaries via a sound row-indicator gadget ----
+        //
+        // p3 has no selector for an arbitrary interior row `k`. We add ONE shared
+        // `row_idx` counter column (pinned `row_idx == 0` on the first row, and
+        // `next.row_idx == row_idx + 1` on every transition — so `row_idx` is the
+        // genuine absolute row index), plus, per interior boundary, an
+        // IsZero(row_idx - k) gadget (`inv`, `is_k`):
+        //
+        //   is_k * (row_idx - k)              == 0   (is_k ⇒ row == k)
+        //   (row_idx - k) * inv + is_k - 1    == 0   (row != k ⇒ is_k = 0; row == k ⇒ is_k = 1)
+        //
+        // These two force `is_k == [row_idx == k]` EXACTLY (standard IsZero), so
+        // the binding `is_k * (col - target) == 0` fires on exactly row k and is
+        // vacuous elsewhere. The counter makes `row_idx` unforgeable, so a prover
+        // cannot dodge the binding by mislabelling rows.
+        let interiors = interior_boundaries_from_descriptor(&self.descriptor);
+        if !interiors.is_empty() {
+            let aux_base = self.interior_aux_base;
+            let row_idx: AB::Expr = local[aux_base].into();
+            let next_row_idx: AB::Expr = next[aux_base].into();
+
+            // Counter pins: first row 0, +1 each transition.
+            builder.when_first_row().assert_zero(row_idx.clone());
+            builder
+                .when_transition()
+                .assert_zero(next_row_idx - row_idx.clone() - AB::Expr::ONE);
+
+            for (i, ib) in interiors.iter().enumerate() {
+                let inv: AB::Expr = local[aux_base + 1 + 2 * i].into();
+                let is_k: AB::Expr = local[aux_base + 2 + 2 * i].into();
+                let diff = row_idx.clone() - AB::Expr::from_u64(ib.row as u64);
+
+                // IsZero gadget.
+                builder.assert_zero(is_k.clone() * diff.clone());
+                builder.assert_zero(diff * inv + is_k.clone() - AB::Expr::ONE);
+
+                // The binding, active only on row k.
+                let target: AB::Expr = match ib.pi_index {
+                    Some(p) => public_values[p].clone(),
+                    None => lift::<AB>(ib.fixed),
+                };
+                let cell: AB::Expr = local[ib.col].into();
+                builder.assert_zero(is_k * (cell - target));
+            }
+        }
     }
+}
+
+/// Interior-row boundary, recomputed inside `eval` from the stored descriptor
+/// (mirrors [`InteriorBoundary`]; kept here so `eval` needs no extra fields).
+struct EvalInteriorBoundary {
+    row: usize,
+    col: usize,
+    pi_index: Option<usize>,
+    fixed: BabyBear,
+}
+
+fn interior_boundaries_from_descriptor(
+    desc: &crate::dsl::circuit::CircuitDescriptor,
+) -> Vec<EvalInteriorBoundary> {
+    let mut out = Vec::new();
+    for b in &desc.boundaries {
+        match b {
+            BoundaryDef::PiBinding { row: BoundaryRow::Index(k), col, pi_index } if *k != 0 => {
+                out.push(EvalInteriorBoundary {
+                    row: *k,
+                    col: *col,
+                    pi_index: Some(*pi_index),
+                    fixed: BabyBear::ZERO,
+                });
+            }
+            BoundaryDef::Fixed { row: BoundaryRow::Index(k), col, value } if *k != 0 => {
+                out.push(EvalInteriorBoundary {
+                    row: *k,
+                    col: *col,
+                    pi_index: None,
+                    fixed: *value,
+                });
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Whether a constraint reads the `next` row (must be transition-gated).
@@ -414,13 +593,13 @@ fn references_next(c: &ConstraintExpr) -> bool {
     }
 }
 
-/// Apply a boundary expression at the indicated row position.
+/// Apply a boundary expression at a `First` / `Last` / `Index(0)` row position.
 ///
-/// `First`/`Last` map to p3's first/last-row selectors. Absolute-index
-/// boundaries beyond row 0 / last are NOT expressible with p3's row selectors
-/// alone; the DSL only ever emits First/Last in practice (and Index(0) ==
-/// First). We map Index(0) → first row; any other absolute index is a build
-/// error surfaced at prove time (`assert_no_interior_boundary`).
+/// `First`/`Last`/`Index(0)` map to p3's first/last-row selectors. Interior
+/// boundaries (`Index(k)`, k>0) are NOT routed here — `eval` skips them and
+/// enforces them via the sound row-indicator gadget (counter + IsZero) instead.
+/// Reaching the `Index(_>0)` arm would be a caller bug; we no-op (assert 0) so
+/// no spurious over-constraint is emitted.
 fn apply_boundary<AB: AirBuilder>(builder: &mut AB, row: BoundaryRow, expr: AB::Expr) {
     match row {
         BoundaryRow::First => {
@@ -433,34 +612,10 @@ fn apply_boundary<AB: AirBuilder>(builder: &mut AB, row: BoundaryRow, expr: AB::
             builder.when_first_row().assert_zero(expr);
         }
         BoundaryRow::Index(_) => {
-            // Interior-row boundaries have no p3 selector. prove_dsl_p3 rejects
-            // descriptors with such boundaries up front; reaching here means a
-            // descriptor slipped through — fail closed by asserting the expr
-            // unconditionally is WRONG (would over-constrain), so we assert the
-            // trivially-true 0 and rely on the up-front rejection.
             let _ = expr;
             builder.assert_zero(AB::Expr::ZERO);
         }
     }
-}
-
-/// Reject descriptors whose boundaries target an interior row (unsupported by
-/// p3 row selectors). Live Lean-emitted descriptors only use First/Last.
-fn assert_no_interior_boundary(dsl: &DslCircuit) -> Result<(), DslP3Error> {
-    for (i, b) in dsl.descriptor.boundaries.iter().enumerate() {
-        let row = match b {
-            BoundaryDef::PiBinding { row, .. } | BoundaryDef::Fixed { row, .. } => row,
-        };
-        if let BoundaryRow::Index(n) = row {
-            if *n != 0 {
-                return Err(DslP3Error::NonAlgebraicConstraint {
-                    index: i,
-                    form: "interior-row boundary (use First/Last)",
-                });
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Prove a DSL circuit through the **audited Plonky3 prover** (`p3-batch-stark`).
@@ -478,7 +633,6 @@ pub fn prove_dsl_p3(
     public_inputs: &[BabyBear],
 ) -> Result<DslP3Proof, DslP3Error> {
     let air = DslP3Air::try_from_dsl(dsl)?;
-    assert_no_interior_boundary(dsl)?;
 
     let config = create_config();
     // Extend each base trace row with the Poseidon2 aux blocks the hash
@@ -517,7 +671,6 @@ pub fn verify_dsl_p3(
     public_inputs: &[BabyBear],
 ) -> Result<(), DslP3Error> {
     let air = DslP3Air::try_from_dsl(dsl)?;
-    assert_no_interior_boundary(dsl)?;
 
     let config = create_config();
     let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
@@ -533,10 +686,12 @@ pub fn verify_dsl_p3(
     })
 }
 
-/// Extend each base-width trace row with the Poseidon2 intermediate-state aux
-/// columns the hash constraints' in-circuit permutation gadget reads, in the
-/// same declaration order `eval` consumes them. A descriptor with no hashes
-/// returns the trace unchanged.
+/// Extend each base-width trace row with (1) the Poseidon2 intermediate-state
+/// aux columns the hash constraints' in-circuit permutation gadget reads (in the
+/// same declaration order `eval` consumes them), then (2) the interior-row
+/// selector aux block: a `row_idx` counter (= the absolute row index) followed
+/// by per-interior-boundary `(inv, is_k)` IsZero witnesses. A descriptor with
+/// neither hashes nor interior boundaries returns the trace unchanged.
 fn extend_trace_with_hash_aux(dsl: &DslCircuit, trace: &[Vec<BabyBear>]) -> Vec<Vec<BabyBear>> {
     let hashes: Vec<&ConstraintExpr> = dsl
         .descriptor
@@ -544,16 +699,33 @@ fn extend_trace_with_hash_aux(dsl: &DslCircuit, trace: &[Vec<BabyBear>]) -> Vec<
         .iter()
         .filter(|c| is_hash(c))
         .collect();
-    if hashes.is_empty() {
+    let interiors = interior_boundaries(dsl);
+    if hashes.is_empty() && interiors.is_empty() {
         return trace.to_vec();
     }
     trace
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(r, row)| {
             let mut full = row.clone();
+            // (1) Poseidon2 hash aux blocks (declaration order).
             for c in &hashes {
                 let input = hash_input_state_concrete(c, row);
                 full.extend(poseidon2_permute_aux_witness(input));
+            }
+            // (2) interior-row selector block: counter + per-boundary IsZero.
+            if !interiors.is_empty() {
+                full.push(BabyBear::new(r as u32)); // row_idx counter
+                for ib in &interiors {
+                    let diff = BabyBear::new(r as u32) - BabyBear::new(ib.row as u32);
+                    if diff == BabyBear::ZERO {
+                        full.push(BabyBear::ZERO); // inv (unused on the matching row)
+                        full.push(BabyBear::ONE); // is_k = 1
+                    } else {
+                        full.push(diff.inverse().expect("nonzero diff is invertible")); // inv = (row_idx - k)^{-1}
+                        full.push(BabyBear::ZERO); // is_k = 0
+                    }
+                }
             }
             full
         })
@@ -742,6 +914,117 @@ mod tests {
         assert!(
             res.is_err(),
             "a forged Poseidon2 digest MUST be rejected by the in-circuit permutation constraints"
+        );
+    }
+
+    /// REAL Poseidon2 `hash_fact` SPONGE in-circuit through the audited p3
+    /// verifier: a `Hash` constraint (`out == hash_fact(predicate, terms)`)
+    /// proves+verifies, and a forged digest is REJECTED by the genuine
+    /// permutation constraints. This is the form the derivation `derived_hash`
+    /// and the non-revocation node-hashes use, so it is the load-bearing
+    /// arithmetization that retires those legs' bespoke `stark` path.
+    #[test]
+    fn hash_sponge_real_poseidon2_round_trips_through_p3() {
+        use crate::poseidon2::hash_fact;
+
+        // predicate + 3 terms (cols 0..4), digest at col 4.
+        let desc = CircuitDescriptor {
+            name: "dsl_p3_hash_sponge".to_string(),
+            trace_width: 5, // [pred, t0, t1, t2, out]
+            max_degree: 7,  // Poseidon2 S-box
+            columns: vec![
+                ColumnDef { name: "pred".into(), index: 0, kind: ColumnKind::Value },
+                ColumnDef { name: "t0".into(), index: 1, kind: ColumnKind::Value },
+                ColumnDef { name: "t1".into(), index: 2, kind: ColumnKind::Value },
+                ColumnDef { name: "t2".into(), index: 3, kind: ColumnKind::Value },
+                ColumnDef { name: "out".into(), index: 4, kind: ColumnKind::Hash },
+            ],
+            constraints: vec![ConstraintExpr::Hash {
+                output_col: 4,
+                input_cols: vec![0, 1, 2, 3],
+            }],
+            boundaries: vec![],
+            public_input_count: 0,
+            lookup_tables: vec![],
+        };
+        let dsl = DslCircuit::new(desc);
+
+        let pred = BabyBear::new(7);
+        let t0 = BabyBear::new(101);
+        let t1 = BabyBear::new(202);
+        let t2 = BabyBear::new(303);
+        let out = hash_fact(pred, &[t0, t1, t2]);
+        let trace = vec![vec![pred, t0, t1, t2, out]; 4];
+
+        let proof = prove_dsl_p3(&dsl, &trace, &[])
+            .expect("honest hash_fact sponge must prove+verify through audited p3");
+        verify_dsl_p3(&dsl, &proof, &[]).expect("audited p3 verify accepts the honest sponge hash");
+
+        // ANTI-GHOST: forge the digest. The in-circuit permutation constraints
+        // must make this UNSAT (prove self-verifies → error).
+        let forged = vec![vec![pred, t0, t1, t2, out + BabyBear::new(1)]; 4];
+        let res = prove_dsl_p3(&dsl, &forged, &[]);
+        assert!(
+            res.is_err(),
+            "a forged hash_fact sponge digest MUST be rejected by the in-circuit Poseidon2"
+        );
+    }
+
+    /// Interior-row boundary (`Index(k)`, k>0) through the AUDITED p3 verifier
+    /// via the sound row-indicator gadget: bind `col 0` at row 2 to public
+    /// input 0. An honest trace (row 2's col 0 == PI) proves+verifies, and a
+    /// forgery (row 2's col 0 != PI) is REJECTED — the IsZero gadget fires on
+    /// exactly row 2 because the counter pins `row_idx`.
+    #[test]
+    fn interior_row_boundary_round_trips_and_rejects_forgery() {
+        let desc = CircuitDescriptor {
+            name: "dsl_p3_interior_row".to_string(),
+            trace_width: 1, // [v]
+            max_degree: 2,
+            columns: vec![ColumnDef { name: "v".into(), index: 0, kind: ColumnKind::Value }],
+            constraints: vec![],
+            boundaries: vec![BoundaryDef::PiBinding {
+                row: BoundaryRow::Index(2), // INTERIOR row
+                col: 0,
+                pi_index: 0,
+            }],
+            public_input_count: 1,
+            lookup_tables: vec![],
+        };
+        let dsl = DslCircuit::new(desc);
+
+        // 4-row trace; row 2 carries the bound value 777.
+        let trace = vec![
+            vec![BabyBear::new(10)],
+            vec![BabyBear::new(20)],
+            vec![BabyBear::new(777)], // row 2 == PI[0]
+            vec![BabyBear::new(40)],
+        ];
+        let pis = vec![BabyBear::new(777)];
+        let proof = prove_dsl_p3(&dsl, &trace, &pis)
+            .expect("honest interior-row binding must prove+verify through audited p3");
+        verify_dsl_p3(&dsl, &proof, &pis).expect("audited p3 verify accepts honest interior binding");
+
+        // ANTI-GHOST: a forged PI[0] (claim row 2 == 999) must be rejected.
+        let forged_pis = vec![BabyBear::new(999)];
+        let res = verify_dsl_p3(&dsl, &proof, &forged_pis);
+        assert!(
+            res.is_err(),
+            "SOUNDNESS: an interior-row binding to the wrong value MUST be rejected"
+        );
+
+        // ANTI-GHOST: a trace where row 2 != PI cannot produce a verifying proof
+        // (prove self-verifies → error). The counter pins which row is checked.
+        let bad_trace = vec![
+            vec![BabyBear::new(10)],
+            vec![BabyBear::new(20)],
+            vec![BabyBear::new(778)], // row 2 != 777
+            vec![BabyBear::new(40)],
+        ];
+        let res = prove_dsl_p3(&dsl, &bad_trace, &pis);
+        assert!(
+            res.is_err(),
+            "SOUNDNESS: a trace violating the interior-row binding must not verify"
         );
     }
 

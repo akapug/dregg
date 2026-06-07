@@ -41,10 +41,13 @@
 //! - Effect VM old_commitment is the cell state the actor is authorized to mutate
 //! - Non-revocation root matches the federation's published revocation accumulator
 
-use dregg_circuit::dsl::derivation::{derivation_circuit_descriptor, prove_derivation_dsl};
-use dregg_circuit::dsl::membership::{generate_merkle_poseidon2_trace, prove_membership_dsl};
+use dregg_circuit::dsl::derivation::{
+    derivation_circuit_descriptor, prove_derivation_p3, verify_derivation_p3,
+};
+use dregg_circuit::dsl::dsl_p3_air::DslP3Proof;
 use dregg_circuit::dsl::revocation::{
-    DslRevocationTree, non_revocation_circuit_descriptor, prove_non_revocation_dsl,
+    DslRevocationTree, non_revocation_circuit_descriptor, prove_non_revocation_p3,
+    verify_non_revocation_p3,
 };
 use dregg_circuit::dsl::dsl_p3_air::{prove_dsl_p3, verify_dsl_p3};
 use dregg_circuit::effect_vm::{self, CellState, generate_effect_vm_trace};
@@ -52,7 +55,9 @@ use dregg_circuit::effect_vm_p3_full_air::{
     EffectVmP3Proof, prove_effect_vm_p3, verify_effect_vm_p3,
 };
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::stark;
+use dregg_circuit::merkle_air::{
+    MembershipP3Proof, membership_public_inputs, prove_membership_p3, verify_membership_p3,
+};
 use dregg_dsl_runtime::composition::{AttachedSubProof, ComposedProof, compose_aggregate};
 use dregg_dsl_runtime::{CircuitDescriptor, ComposedCircuitDescriptor};
 use serde::{Deserialize, Serialize};
@@ -278,10 +283,16 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // 2. Authorization proof (derivation chain)
     // ========================================================================
     if let Some(auth_witness) = &witness.authorization {
-        let auth_proof = prove_derivation_dsl(&auth_witness.derivation).ok_or_else(|| {
-            SdkError::InvalidWitness("derivation witness is internally inconsistent".into())
+        // AUDITED PATH: the derivation chain is proven through the real Plonky3
+        // verifier (`p3-batch-stark`) via `prove_derivation_p3`. The derivation
+        // circuit's only non-algebraic constraint (C4 `derived_hash` `hash_fact`
+        // sponge) is arithmetized in-circuit by the real Poseidon2 gadget, so a
+        // forged `derived_hash` is UNSAT — NOT the bespoke `stark`.
+        let auth_proof = prove_derivation_p3(&auth_witness.derivation)
+            .map_err(|e| SdkError::InvalidWitness(format!("derivation p3 proof failed: {e}")))?;
+        let auth_proof_bytes = postcard::to_allocvec(&auth_proof).map_err(|e| {
+            SdkError::InvalidWitness(format!("derivation p3 proof serialize failed: {e}"))
         })?;
-        let auth_proof_bytes = stark::proof_to_bytes(&auth_proof);
 
         // Derivation public inputs: [state_root, derived_hash, not_after, org_id, budget]
         let auth_pi = vec![
@@ -306,20 +317,28 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // 3. Membership proof (c-list Merkle)
     // ========================================================================
     if let Some(mem_witness) = &witness.membership {
-        let mem_proof = prove_membership_dsl(
+        // AUDITED PATH: the c-list Merkle membership is proven through the real
+        // Plonky3 verifier (`p3-batch-stark`) via `prove_membership_p3`, which
+        // reuses the constraint-complete `P3MerklePoseidon2Air` (real in-circuit
+        // Poseidon2, position validity, hash-chain continuity, `[leaf, root]`
+        // boundary) — NOT the bespoke `stark`. A forged root is rejected.
+        let mem_proof = prove_membership_p3(
             mem_witness.leaf_hash,
             &mem_witness.siblings,
             &mem_witness.positions,
         )
-        .map_err(|e| SdkError::InvalidWitness(format!("membership proof failed: {}", e)))?;
-        let mem_proof_bytes = stark::proof_to_bytes(&mem_proof);
+        .map_err(|e| SdkError::InvalidWitness(format!("membership p3 proof failed: {e}")))?;
+        let mem_proof_bytes = postcard::to_allocvec(&mem_proof).map_err(|e| {
+            SdkError::InvalidWitness(format!("membership p3 proof serialize failed: {e}"))
+        })?;
 
         // Membership public inputs: [leaf_hash, root]
-        let (_, mem_pi) = generate_merkle_poseidon2_trace(
+        let mem_pi = membership_public_inputs(
             mem_witness.leaf_hash,
             &mem_witness.siblings,
             &mem_witness.positions,
-        );
+        )
+        .map_err(|e| SdkError::InvalidWitness(format!("membership PI failed: {e}")))?;
 
         components.has_membership = true;
         all_public_inputs.extend_from_slice(&mem_pi);
@@ -361,9 +380,18 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // 5. Non-revocation proof (token freshness)
     // ========================================================================
     if let Some(revoc_witness) = &witness.non_revocation {
-        let revoc_proof = prove_non_revocation_dsl(&revoc_witness.tree, revoc_witness.item_hash)
-            .map_err(|e| SdkError::InvalidWitness(format!("non-revocation proof failed: {}", e)))?;
-        let revoc_proof_bytes = stark::proof_to_bytes(&revoc_proof);
+        // AUDITED PATH: non-revocation (sorted-tree non-membership) is proven
+        // through the real Plonky3 verifier (`p3-batch-stark`) via
+        // `prove_non_revocation_p3`. Its two `hash_fact` node-hash constraints
+        // are arithmetized in-circuit by the real Poseidon2 gadget — NOT the
+        // bespoke `stark`.
+        let revoc_proof = prove_non_revocation_p3(&revoc_witness.tree, revoc_witness.item_hash)
+            .map_err(|e| {
+                SdkError::InvalidWitness(format!("non-revocation p3 proof failed: {e}"))
+            })?;
+        let revoc_proof_bytes = postcard::to_allocvec(&revoc_proof).map_err(|e| {
+            SdkError::InvalidWitness(format!("non-revocation p3 proof serialize failed: {e}"))
+        })?;
 
         // Non-revocation public inputs: [revocation_root]
         let revoc_pi = vec![revoc_witness.tree.root()];
@@ -482,37 +510,53 @@ pub fn verify_full_turn(
                     })?;
                 verify_effect_vm_p3(&p3, &attached.sub_public_inputs).map_err(|e| format!("{e}"))
             }
-            // NOTE (named gap): authorization / membership / non-revocation
-            // sub-proofs are still verified by the bespoke `stark` verifier.
-            // Their DSL circuits contain non-algebraic forms (MerkleHash /
-            // Lookup / Hash sponge) that `prove_dsl_p3` / `verify_dsl_p3`
-            // reject, so porting them requires the arithmetized p3 AIRs
-            // (lean_lookup_air / P3MerklePoseidon2Air). These sub-proofs are
-            // NOT exercised by the node commit path (`prove_turn_self_sovereign`
-            // omits them); migrating them is tracked as follow-up.
+            // AUTHORIZATION / MEMBERSHIP / NON-REVOCATION: all now verified by
+            // the AUDITED Plonky3 verifier (`p3-batch-stark`). ZERO `stark::`
+            // calls remain. Each proof is a postcard-serialized batch proof; the
+            // standalone verifier reconstructs CommonData from the AIR + the
+            // proof's degree bits (witness-free). The non-algebraic forms each
+            // circuit carries (derived_hash / node-hash `hash_fact` sponges,
+            // position-indexed Merkle hashing) are arithmetized in-circuit by the
+            // real Poseidon2 gadget, so a forged auth / membership / freshness
+            // witness is UNSAT (see the anti-ghost tests in each AIR).
             "authorization" => {
-                let sub_proof =
-                    stark::proof_from_bytes(&attached.proof_bytes).map_err(|e| {
-                        FullTurnVerifyError::SubProofDeserialize { index: i, reason: e }
+                let p3: DslP3Proof =
+                    postcard::from_bytes(&attached.proof_bytes).map_err(|e| {
+                        FullTurnVerifyError::SubProofDeserialize {
+                            index: i,
+                            reason: format!("authorization p3 deserialize: {e}"),
+                        }
                     })?;
-                let circuit = dregg_circuit::dsl::derivation::derivation_dsl_circuit();
-                stark::verify(&circuit, &sub_proof, &attached.sub_public_inputs)
+                verify_derivation_p3(&p3, &attached.sub_public_inputs)
             }
             "membership" => {
-                let sub_proof =
-                    stark::proof_from_bytes(&attached.proof_bytes).map_err(|e| {
-                        FullTurnVerifyError::SubProofDeserialize { index: i, reason: e }
+                let p3: MembershipP3Proof =
+                    postcard::from_bytes(&attached.proof_bytes).map_err(|e| {
+                        FullTurnVerifyError::SubProofDeserialize {
+                            index: i,
+                            reason: format!("membership p3 deserialize: {e}"),
+                        }
                     })?;
-                let circuit = dregg_circuit::dsl::descriptors::merkle_poseidon2_circuit();
-                stark::verify(&circuit, &sub_proof, &attached.sub_public_inputs)
+                verify_membership_p3(&p3, &attached.sub_public_inputs)
+                    .map_err(|e| format!("{e}"))
             }
             "non-revocation" => {
-                let sub_proof =
-                    stark::proof_from_bytes(&attached.proof_bytes).map_err(|e| {
-                        FullTurnVerifyError::SubProofDeserialize { index: i, reason: e }
+                let p3: DslP3Proof =
+                    postcard::from_bytes(&attached.proof_bytes).map_err(|e| {
+                        FullTurnVerifyError::SubProofDeserialize {
+                            index: i,
+                            reason: format!("non-revocation p3 deserialize: {e}"),
+                        }
                     })?;
-                let circuit = dregg_circuit::dsl::revocation::non_revocation_dsl_circuit();
-                stark::verify(&circuit, &sub_proof, &attached.sub_public_inputs)
+                // Non-revocation PI is [revocation_root].
+                let root = attached
+                    .sub_public_inputs
+                    .first()
+                    .copied()
+                    .ok_or_else(|| FullTurnVerifyError::MalformedPublicInputs(
+                        "non-revocation PI missing revocation_root".into(),
+                    ))?;
+                verify_non_revocation_p3(&p3, root)
             }
             other => Err(format!("unknown sub-proof label: {}", other)),
         };
@@ -982,6 +1026,113 @@ mod tests {
             result.is_err(),
             "SOUNDNESS: a forged post-state commitment MUST be rejected by the \
              audited p3 EffectVM verifier (got Ok — the migration is unsound!)"
+        );
+    }
+
+    /// END-TO-END: a full turn with EFFECT-VM + MEMBERSHIP + NON-REVOCATION sub
+    /// proofs proves and verifies — ALL three legs now route through the AUDITED
+    /// p3 verifier (`p3-batch-stark`). This exercises the migrated membership and
+    /// non-revocation legs through `prove_full_turn`/`verify_full_turn`.
+    #[test]
+    fn full_turn_with_membership_and_non_revocation_through_audited_p3() {
+        use dregg_circuit::dsl::membership::create_test_witness as merkle_test_witness;
+        use dregg_circuit::dsl::revocation::DslRevocationTree;
+        use dregg_circuit::poseidon2::hash_many;
+
+        let initial = CellState::new(1000, 0);
+        let effects = vec![VmEffect::Transfer { amount: 100, direction: 1 }];
+
+        // Membership witness: a leaf genuinely in a depth-4 Merkle tree.
+        let leaf = BabyBear::new(424242);
+        let (siblings, positions, _root) = merkle_test_witness(leaf, 4);
+
+        // Non-revocation witness: an item NOT in a 20-entry sorted revocation tree.
+        let revoked: Vec<BabyBear> = (1..=20u32)
+            .map(|i| hash_many(&[BabyBear::new(i * 100), BabyBear::new(0xDEAD)]))
+            .collect();
+        let tree = DslRevocationTree::new(revoked, 4);
+        let fresh_item = hash_many(&[BabyBear::new(0xBEEF), BabyBear::new(0xCAFE)]);
+
+        let witness = FullTurnWitness {
+            initial_cell_state: initial.clone(),
+            effects: effects.clone(),
+            authorization: None,
+            membership: Some(MembershipWitness {
+                leaf_hash: leaf,
+                siblings,
+                positions,
+            }),
+            conservation: None,
+            non_revocation: Some(NonRevocationWitness {
+                tree,
+                item_hash: fresh_item,
+            }),
+            turn_hash: [0x77u8; 32],
+        };
+
+        let proof = prove_full_turn(&witness).expect("full turn proof should generate");
+        assert!(proof.components.has_state_transition);
+        assert!(proof.components.has_membership);
+        assert!(proof.components.has_non_revocation);
+
+        let old_commit = initial.state_commitment;
+        let mut expected_final = initial.clone();
+        expected_final.balance = 900;
+        expected_final.nonce = 1;
+        expected_final.refresh_commitment();
+        let new_commit = expected_final.state_commitment;
+
+        verify_full_turn(&proof, old_commit, new_commit)
+            .expect("full turn with membership + non-revocation must verify on the audited p3 path");
+    }
+
+    /// ANTI-GHOST end-to-end: forging the published MEMBERSHIP root in a finished
+    /// full-turn proof MUST be rejected by the audited membership verifier (the
+    /// proof binds the genuine hash-chain root, not the forged PI).
+    #[test]
+    fn full_turn_rejects_forged_membership_root() {
+        use dregg_circuit::dsl::membership::create_test_witness as merkle_test_witness;
+
+        let initial = CellState::new(1000, 0);
+        let effects = vec![VmEffect::Transfer { amount: 100, direction: 1 }];
+        let leaf = BabyBear::new(555111);
+        let (siblings, positions, _root) = merkle_test_witness(leaf, 4);
+
+        let witness = FullTurnWitness {
+            initial_cell_state: initial.clone(),
+            effects,
+            authorization: None,
+            membership: Some(MembershipWitness {
+                leaf_hash: leaf,
+                siblings,
+                positions,
+            }),
+            conservation: None,
+            non_revocation: None,
+            turn_hash: [0x88u8; 32],
+        };
+        let mut proof = prove_full_turn(&witness).expect("honest proof should generate");
+
+        // Forge the published membership root (PI[1] of the membership sub-proof).
+        let mem = proof
+            .composed
+            .sub_proofs
+            .iter_mut()
+            .find(|sp| sp.label == "membership")
+            .expect("membership sub-proof present");
+        mem.sub_public_inputs[1] = mem.sub_public_inputs[1] + BabyBear::new(1);
+
+        let old_commit = initial.state_commitment;
+        let mut expected_final = initial.clone();
+        expected_final.balance = 900;
+        expected_final.nonce = 1;
+        expected_final.refresh_commitment();
+        let new_commit = expected_final.state_commitment;
+
+        let res = verify_full_turn(&proof, old_commit, new_commit);
+        assert!(
+            res.is_err(),
+            "SOUNDNESS: a forged membership root MUST be rejected by the audited p3 verifier"
         );
     }
 }

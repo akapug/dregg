@@ -920,6 +920,44 @@ pub fn verify_derivation_dsl(proof: &StarkProof, public_inputs: &[BabyBear]) -> 
 }
 
 // ============================================================================
+// AUDITED p3 derivation proving / verification (`p3-batch-stark`)
+// ============================================================================
+//
+// These route the SAME derivation statement through the audited Plonky3
+// verifier (`dsl_p3_air::prove_dsl_p3` / `verify_dsl_p3` → `p3-batch-stark`)
+// instead of the bespoke `crate::stark`. The derivation circuit is fully
+// algebraic except its single C4 `ConstraintExpr::Hash` (the `derived_hash`
+// `hash_fact` sponge), which `dsl_p3_air` arithmetizes via the real in-circuit
+// Poseidon2 gadget — so a forged `derived_hash` is UNSAT against the audited
+// verifier. The proof carries a REAL terminal low-degree test (FRI).
+
+/// Prove a derivation step through the AUDITED Plonky3 prover (`p3-batch-stark`).
+///
+/// Returns `None` if the witness is internally inconsistent (degenerate
+/// ConditionalNonzero inverse — should not happen for honest witnesses), or the
+/// `DslP3Error` if the audited prover/verifier rejects.
+#[cfg(feature = "recursion")]
+pub fn prove_derivation_p3(
+    witness: &DerivationWitness,
+) -> Result<crate::dsl::dsl_p3_air::DslP3Proof, String> {
+    let circuit = derivation_dsl_circuit();
+    let (trace, public_inputs) = generate_derivation_trace_dsl(witness);
+    crate::dsl::dsl_p3_air::prove_dsl_p3(&circuit, &trace, &public_inputs)
+        .map_err(|e| format!("derivation p3 proof failed: {e}"))
+}
+
+/// Verify a derivation proof on the AUDITED Plonky3 verifier (`p3-batch-stark`).
+#[cfg(feature = "recursion")]
+pub fn verify_derivation_p3(
+    proof: &crate::dsl::dsl_p3_air::DslP3Proof,
+    public_inputs: &[BabyBear],
+) -> Result<(), String> {
+    let circuit = derivation_dsl_circuit();
+    crate::dsl::dsl_p3_air::verify_dsl_p3(&circuit, proof, public_inputs)
+        .map_err(|e| format!("derivation p3 verification failed: {e}"))
+}
+
+// ============================================================================
 // Multi-Step DSL Authorization
 // ============================================================================
 
@@ -1212,6 +1250,57 @@ mod tests {
 
         let result = verify_derivation_dsl(&proof, &wrong_pi);
         assert!(result.is_err(), "Should reject proof with wrong state_root");
+    }
+
+    /// AUDITED p3 path: an honest derivation proves+verifies through the real
+    /// Plonky3 verifier (`p3-batch-stark`) — including the in-circuit Poseidon2
+    /// arithmetization of the `derived_hash` `hash_fact` sponge.
+    #[cfg(feature = "recursion")]
+    #[test]
+    fn p3_prove_and_verify_roundtrip() {
+        let witness = create_test_derivation();
+        let (_, pi) = generate_derivation_trace_dsl(&witness);
+        let proof =
+            prove_derivation_p3(&witness).expect("p3 derivation proof should generate+verify");
+        verify_derivation_p3(&proof, &pi).expect("audited p3 verify accepts honest derivation");
+    }
+
+    /// ANTI-GHOST on the AUDITED p3 path: a forged `derived_hash` public input
+    /// (PI[1]) MUST be rejected. The in-circuit Poseidon2 binds `derived_hash`
+    /// to the genuine `hash_fact` digest of the head, so a tampered PI cannot
+    /// pass — this is the soundness the migration off bespoke `stark` preserves.
+    #[cfg(feature = "recursion")]
+    #[test]
+    fn p3_rejects_forged_derived_hash() {
+        let witness = create_test_derivation();
+        let (_, pi) = generate_derivation_trace_dsl(&witness);
+        let proof = prove_derivation_p3(&witness).expect("honest p3 proof");
+
+        let mut forged = pi.clone();
+        forged[1] = forged[1] + BabyBear::new(1); // forge derived_hash
+        let res = verify_derivation_p3(&proof, &forged);
+        assert!(
+            res.is_err(),
+            "SOUNDNESS: a forged derived_hash MUST be rejected by the audited p3 verifier"
+        );
+    }
+
+    /// ANTI-GHOST: a forged `state_root` public input (PI[0]) MUST be rejected
+    /// on the audited p3 path (the body roots are PI-bound to state_root).
+    #[cfg(feature = "recursion")]
+    #[test]
+    fn p3_rejects_forged_state_root() {
+        let witness = create_test_derivation();
+        let (_, pi) = generate_derivation_trace_dsl(&witness);
+        let proof = prove_derivation_p3(&witness).expect("honest p3 proof");
+
+        let mut forged = pi.clone();
+        forged[0] = BabyBear::new(11111); // forge state_root
+        let res = verify_derivation_p3(&proof, &forged);
+        assert!(
+            res.is_err(),
+            "SOUNDNESS: a forged state_root MUST be rejected by the audited p3 verifier"
+        );
     }
 
     #[test]

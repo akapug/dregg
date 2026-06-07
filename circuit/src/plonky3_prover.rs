@@ -189,6 +189,7 @@ const PARENT_COL: usize = P3_TRACE_WIDTH - 1; // 245
 /// 3. Hash output binding: parent == final_state[0]
 /// 4. Chain continuity: next_row.current == this_row.parent
 /// 5. Boundary: public_inputs bind leaf and root
+#[derive(Clone, Debug)]
 pub struct P3MerklePoseidon2Air;
 
 impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for P3MerklePoseidon2Air {
