@@ -4,6 +4,16 @@
 
 use super::*;
 
+/// Maximum size (bytes) of a ZK authorization proof the executor will accept.
+///
+/// This is an anti-amplification / DoS bound applied before verification. It
+/// MUST exceed the size of the genuine STARK proofs the system produces — a
+/// real self-sovereign full-turn proof (80 FRI queries, ~124-bit security)
+/// serializes to ~80 KiB, so a smaller cap makes the verified-execution path
+/// unreachable. 256 KiB admits real proofs with headroom while staying a tight
+/// bound (a verifier still has to do the FRI work, so this only caps decode).
+pub(super) const MAX_AUTHORIZATION_PROOF_BYTES: usize = 256 * 1024;
+
 impl TurnExecutor {
     pub(crate) fn verify_authorization(
         &self,
@@ -951,10 +961,20 @@ impl TurnExecutor {
                 path.to_vec(),
             ));
         }
-        if proof_bytes.len() > 65536 {
+        // DoS guard: bound the proof size before handing it to the verifier.
+        // This must be set ABOVE the size of the genuine STARK proofs the system
+        // produces, or the verified-execution path is unreachable. A real
+        // self-sovereign full-turn proof (80 FRI queries, ~124-bit security)
+        // serializes to ~80 KiB; the previous 64 KiB cap rejected every honest
+        // proof. 256 KiB admits real proofs (with headroom for larger AIRs /
+        // higher query counts) while remaining a tight anti-amplification bound.
+        if proof_bytes.len() > MAX_AUTHORIZATION_PROOF_BYTES {
             return Err((
                 TurnError::InvalidAuthorization {
-                    reason: format!("proof too large: {} bytes (max 65536)", proof_bytes.len()),
+                    reason: format!(
+                        "proof too large: {} bytes (max {MAX_AUTHORIZATION_PROOF_BYTES})",
+                        proof_bytes.len()
+                    ),
                 },
                 path.to_vec(),
             ));
