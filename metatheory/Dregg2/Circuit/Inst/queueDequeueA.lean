@@ -4,7 +4,7 @@
 `queueDequeueA` is the FIFO dequeue + deposit REFUND effect: it POP-FRONTS queue `id`'s buffer (via
 `queueDequeueK`), CREDITS the per-asset ledger `bal` at `(actor, asset)` by the deposit amount, and
 RESOLVES the deposit `EscrowRecord` in `escrows` (via `settleEscrowRawAsset` inside
-`queueDequeueRefundK`), advances the log by `dequeueReceipt actor cell deposit ::`, and FREEZES the
+`queueDequeueRefundK`), advances the log by `dequeueReceipt actor cell (record amount) ::`, and FREEZES the
 other 14 kernel fields. Gate 3 validator: `queueDequeueA_full_sound ⇒ QueueDequeueSpec` THROUGH the
 generic triple-component framework.
 
@@ -57,7 +57,6 @@ structure DequeueArgs where
   actor   : CellId
   cell    : CellId
   depId   : Nat
-  deposit : ℤ
 
 def chainView : StateView RecChainedState :=
   { toKernel := (·.kernel), getLog := (·.log) }
@@ -135,7 +134,8 @@ def queueDequeueE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Inje
   active1      := queuesComponent LQ cNQ hNQ hLQ
   active2      := balComponent D hD
   active3      := escrowsComponent LE cNE hNE hLE
-  logUpdate    := some (fun s args => dequeueReceipt args.actor args.cell args.deposit :: s.log)
+  logUpdate    := some (fun s args =>
+    dequeueReceipt args.actor args.cell (dequeueRefundAmount s.kernel args.depId) :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
@@ -342,7 +342,7 @@ theorem apex_iff_queueDequeueSpec (D : (CellId → AssetId → ℤ) → ℤ) (hD
     (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
     (s : RecChainedState) (args : DequeueArgs) (s' : RecChainedState) :
     (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE).apex s args s' ↔
-      QueueDequeueSpec s args.id args.actor args.cell args.depId args.deposit s' := by
+      QueueDequeueSpec s args.id args.actor args.cell args.depId s' := by
   constructor
   · rintro ⟨hg, hq, hbal, hesc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
@@ -395,7 +395,7 @@ theorem queueDequeueA_full_sound
     (s : RecChainedState) (args : DequeueArgs) (s' : RecChainedState)
     (h : satisfiedE2Triple S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
         (encodeE2Triple S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) s args s')) :
-    QueueDequeueSpec s args.id args.actor args.cell args.depId args.deposit s' := by
+    QueueDequeueSpec s args.id args.actor args.cell args.depId s' := by
   have hapex : (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE).apex s args s' :=
     effect2triple_circuit_full_sound S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
       (dequeueRestFrameDecodes S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest) hLog

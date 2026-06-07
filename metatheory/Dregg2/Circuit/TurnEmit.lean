@@ -467,10 +467,10 @@ def stepEmittedEncodeAgrees
   | .queueAllocateA id actor cell cap =>
       assignmentOf sw.assignment =
         encodeE2 S (queueAllocateE LQ cN hN hLQ) st ⟨id, actor, cell, cap⟩ st'
-  | .queueDequeueA id actor cell depId deposit =>
+  | .queueDequeueA id actor cell depId =>
       assignmentOf sw.assignment =
         encodeE2Triple S (queueDequeueE D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow) st
-          ⟨id, actor, cell, depId, deposit⟩ st'
+          ⟨id, actor, cell, depId⟩ st'
   | .queueResizeA id newCap actor cell =>
       assignmentOf sw.assignment =
         encodeE2 S (queueResizeE LQ cN hN hLQ) st ⟨id, newCap, actor, cell⟩ st'
@@ -824,12 +824,12 @@ theorem step_emitted_refines_fullActionStep
       exact queueAllocateA_emitted_refines_spec S LQ cN hN hLQ hRestQueuesOnly hLog st
         ⟨id, actor, cell, capacity⟩ st'
         ((queueAllocateA_emitted_equiv_circuit S LQ cN hN hLQ st ⟨id, actor, cell, capacity⟩ st').mpr hcircuit)
-  | .queueDequeueA id actor cell depId deposit =>
+  | .queueDequeueA id actor cell depId =>
       simp only [fullActionStep]
       exact queueDequeueA_emitted_refines_spec S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow hRestQueues
-        hLog st ⟨id, actor, cell, depId, deposit⟩ st'
+        hLog st ⟨id, actor, cell, depId⟩ st'
         ((queueDequeueA_emitted_equiv_circuit S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow st
-            ⟨id, actor, cell, depId, deposit⟩ st').mpr hcircuit)
+            ⟨id, actor, cell, depId⟩ st').mpr hcircuit)
   | .queueResizeA id newCap actor cell =>
       simp only [fullActionStep]
       exact queueResizeA_emitted_refines_spec S LQ cN hN hLQ hRestQueuesOnly hLog st ⟨id, newCap, actor, cell⟩ st'

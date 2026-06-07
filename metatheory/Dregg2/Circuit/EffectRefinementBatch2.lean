@@ -497,7 +497,7 @@ theorem queueDequeue_circuit_refines_spec (S : Surface2) (D : (CellId → AssetI
     (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : DequeueArgs) (s' : RecChainedState)
     (h : queueDequeueCircuitStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s') :
-    QueueDequeueSpec s args.id args.actor args.cell args.depId args.deposit s' :=
+    QueueDequeueSpec s args.id args.actor args.cell args.depId s' :=
   queueDequeueA_full_sound S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog s args s' h
 
 def queueAtomicTxCircuitStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)

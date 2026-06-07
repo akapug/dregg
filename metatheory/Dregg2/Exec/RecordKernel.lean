@@ -2332,6 +2332,16 @@ def queueDequeueRefundK (k : RecordKernelState) (id : Nat) (actor : CellId) (dep
         | none   => none
       else none
 
+/-- **`dequeueRefundAmount`** — the REAL refunded amount of a dequeue: the `amount` of the named
+unresolved deposit record `depId` (the value `queueDequeueRefundK` actually credits to the dequeuer via
+`settleEscrowRawAsset … r.amount`), or `0` if no such record exists. The receipt MUST read this, not a
+caller-supplied number, so a committed dequeue's receipt amount equals the value that genuinely moved.
+`queueDequeueK` touches only `queues`, so the pre-state lookup agrees with the post-pop lookup. -/
+def dequeueRefundAmount (k : RecordKernelState) (depId : Nat) : ℤ :=
+  match findUnresolvedDeposit k depId with
+  | some r => r.amount
+  | none   => 0
+
 /-- **`queueEnqueueDepositK_conserves_combined` — THE RESIDUAL CLOSED (PROVED).** A committed
 deposit-enqueue PRESERVES the COMBINED per-asset total `recTotalAssetWithEscrow b` for EVERY asset `b`:
 the FIFO append is escrow/bal-neutral (it touches only `queues`), and the PARK is the proven

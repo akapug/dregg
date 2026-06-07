@@ -130,7 +130,7 @@ def ctorName : FullActionA → String
   | .receiptArchiveA _ _       => "receiptArchiveA"
   | .queueAllocateA _ _ _ _    => "queueAllocateA"
   | .queueEnqueueA _ _ _ _ _ _ _ => "queueEnqueueA"
-  | .queueDequeueA _ _ _ _ _   => "queueDequeueA"
+  | .queueDequeueA _ _ _ _   => "queueDequeueA"
   | .queueResizeA _ _ _ _      => "queueResizeA"
   | .queueAtomicTxA _ _        => "queueAtomicTxA"
   | .queuePipelineStepA _ _ _ _ => "queuePipelineStepA"

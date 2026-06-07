@@ -275,7 +275,7 @@ theorem queueTxOpStepA_commitments {s s' : RecChainedState} {op : QueueTxOpA}
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => commit_subst h hk; exact queueEnqueueDepositK_commitments hk
       · exact absurd h (by simp)
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
         | none => rw [hk] at h; exact absurd h (by simp)
@@ -557,7 +557,7 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => commit_subst h hk; exact subset_of_commitments_eq (queueEnqueueDepositK_commitments hk)
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId deposit =>
+  | queueDequeueA id actor cell depId =>
       simp only [execFullA, queueDequeueChainA] at h; split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
         | none => rw [hk] at h; exact absurd h (by simp)

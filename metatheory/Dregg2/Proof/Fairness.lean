@@ -178,7 +178,7 @@ def affectedOf : FullActionA → List CellId
   -- queues (the FIFO side-table cell).
   | .queueAllocateA _ actor cell _ => [actor, cell]
   | .queueEnqueueA _ _ actor cell _ _ _ => [actor, cell]
-  | .queueDequeueA _ actor cell _ _ => [actor, cell]
+  | .queueDequeueA _ actor cell _ => [actor, cell]
   | .queueResizeA _ _ actor cell => [actor, cell]
   | .queueAtomicTxA actor _     => [actor]
   | .queuePipelineStepA _ owner sinkCells _ => owner :: sinkCells

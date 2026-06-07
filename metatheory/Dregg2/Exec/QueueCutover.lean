@@ -32,7 +32,7 @@ batch); dequeue drops the receipt-only `deposit`/`cell` metadata. -/
 def txOpToK : QueueTxOpA → QueueTxOpK
   | .enqueue id m actor _cell depId dAsset deposit =>
       .enqueue id m actor actor depId dAsset deposit
-  | .dequeue id actor _cell depId _deposit =>
+  | .dequeue id actor _cell depId =>
       .dequeue id actor depId
 
 /-- Project a chained atomic-batch op list onto the bare-kernel list (the `toClosedEffect` image). -/
@@ -48,7 +48,7 @@ def queueTxOpA_chainGate (s : RecChainedState) (op : QueueTxOpA) : Prop :=
   | .enqueue id m actor cell depId dAsset deposit =>
       actor = cell ∧
       (stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true)
-  | .dequeue id actor cell depId deposit =>
+  | .dequeue id actor cell depId =>
       stateAuthB s.kernel.caps actor cell = true ∧
       acceptsEffects s.kernel cell = true ∧
       dequeueBindB s.kernel actor depId = true ∧
@@ -83,7 +83,7 @@ theorem queueTxOpStepK_kernel_eq_of_chainGate {s s' : RecChainedState} {op : Que
           simp only [hk, Option.some.injEq] at hA; subst hA
           simpa [queueTxOpStepK, txOpToK, enqueueStep,
             if_pos (by simpa [hac] using And.intro hauth hlive), hac] using hk
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       obtain ⟨hauth, hlive, hbind, hhead⟩ := hg
       simp only [queueTxOpStepA, queueDequeueChainA] at hA
       rw [if_pos ⟨hauth, hlive, hbind, hhead⟩] at hA
@@ -112,7 +112,7 @@ theorem queueTxOpStepA_of_chainGate_and_K {s : RecChainedState} {op : QueueTxOpA
               ?_, rfl⟩
       simp only [queueTxOpStepA, queueEnqueueChainA,
         if_pos (And.intro hauth hlive), hk]
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       obtain ⟨hauth, hlive, hbind, hhead⟩ := hg
       have hgate : Dregg2.Exec.Handlers.Queue.dequeueBindB s.kernel { id := id, actor := actor, depId := depId } = true ∧
           queueDequeueHeadB s.kernel id actor depId = true := by
@@ -126,7 +126,8 @@ theorem queueTxOpStepA_of_chainGate_and_K {s : RecChainedState} {op : QueueTxOpA
             simpa [queueTxOpStepK, txOpToK, dequeueBindStep, if_pos hgate, hk, Option.map_some] using hK
           subst hEq
           refine ⟨{ kernel := k₁,
-                    log := { actor := actor, src := cell, dst := actor, amt := deposit } :: s.log },
+                    log := { actor := actor, src := cell, dst := actor,
+                             amt := dequeueRefundAmount s.kernel depId } :: s.log },
                   ?_, rfl⟩
           simp only [queueTxOpStepA, queueDequeueChainA,
             if_pos (And.intro hauth (And.intro hlive (And.intro hbind hhead))), hk]

@@ -79,7 +79,7 @@ def actionWriteSet : FullActionA → List CellId
   | .receiptArchiveA _ cell => [cell]
   | .queueAllocateA _ _ cell _ => [cell]
   | .queueEnqueueA _ _ _ cell _ _ _ => [cell]
-  | .queueDequeueA _ _ cell _ _ => [cell]
+  | .queueDequeueA _ _ cell _ => [cell]
   | .queueResizeA _ _ _ cell => [cell]
   | .exportSturdyRefA _ _ exporter _ _ => [exporter]
   | .enlivenRefA _ _ exporter _ => [exporter]
@@ -91,7 +91,7 @@ def actionWriteSet : FullActionA → List CellId
       addAll (ops.flatMap fun op =>
         match op with
         | .enqueue _ _ _ c _ _ _ => [c]
-        | .dequeue _ _ c _ _ => [c]) [actor]
+        | .dequeue _ _ c _ => [c]) [actor]
   | .queuePipelineStepA _ owner sinkCells _ =>
       addUnique owner (sinkCells.foldl (fun acc c => addUnique c acc) [])
   | .pipelinedSendA actor => [actor]

@@ -215,9 +215,9 @@ theorem queueTxOpStepA_preserves_rest {s s' : RecChainedState} {op : QueueTxOpA}
         ⟨hAcc₂.trans hAcc₁, hCell₂.trans hCell₁, hCaps₂.trans hCaps₁, hNul₂.trans hNul₁,
           hRev₂.trans hRev₁, hCom₂.trans hCom₁, hSw₂.trans hSw₁, hSC₂.trans hSC₁, hFac₂.trans hFac₁,
           hLif₂.trans hLif₁, hDC₂.trans hDC₁, hDel₂.trans hDel₁, hDgs₂.trans hDgs₁, hSB₂.trans hSB₁⟩
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       simp only [queueTxOpStepA] at h
-      rcases queueDequeueChainA_iff_spec s id actor cell depId deposit s' |>.mp h with
+      rcases queueDequeueChainA_iff_spec s id actor cell depId s' |>.mp h with
         ⟨_, _, _, _, k', _, hk, hker, _⟩
       simpa [hker] using queueDequeueRefundK_preserves_rest hk
 

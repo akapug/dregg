@@ -109,7 +109,7 @@ private theorem queueTxOpStepA_nullifiers (s s' : RecChainedState) (op : QueueTx
         | some k' => commit_subst h hk
                      exact queueEnqueueDepositK_nullifiers s.kernel id m actor cell depId dAsset deposit k' hk
       · exact absurd h (by simp)
-  | dequeue id actor cell depId deposit =>
+  | dequeue id actor cell depId =>
       simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
         | none => rw [hk] at h; exact absurd h (by simp)
@@ -604,7 +604,7 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
               queueEnqueueDepositK_nullifiers s.kernel id m actor cell depId dAsset deposit k' hk
             exact hn ▸ List.Subset.refl _
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId deposit =>
+  | queueDequeueA id actor cell depId =>
       simp only [execFullA, queueDequeueChainA] at h
       split at h
       · cases hk : queueDequeueRefundK s.kernel id actor depId with
