@@ -25,7 +25,7 @@ Surface: `capHolders`/`capGraphRows` (the table read off a `Caps` over an explic
 `authTag`/`capEdges`/`capVertices` (the graph data, pure & `#eval`-able) · `capGraphHtml` (the rendered
 `GraphDisplay`) · the `#html` force-render + the `#dregg_badge` non-amplification proof-fact.
 
-Discipline: NO `sorry`/`admit`/`native_decide`/SMT. No new `axiom`s. Every datum is computed from a
+Every datum is computed from a
 real `Caps` value; the proof-fact is read off the real axiom set. Reuses `Widget/Basic.lean` +
 `Exec/Caps.lean`; edits neither.
 -/

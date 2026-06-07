@@ -35,7 +35,7 @@ definition: a public-key biscuit crosses; a cell-scoped HMAC macaroon does not.
 What is PROVED here: `cross_vat_needs_witness`, `phi_drops_confinement`,
 `forwarded_cap_is_revocable`, `macaroon_does_not_cross_phi`, `biscuit_crosses_phi`,
 `phi_composes_with_attenuation`, and the FULL categorical functoriality of `Φ`
-(`phi_functorial`) — PROVED (no `sorry`) under an explicit `NonDegenerate` hypothesis that
+(`phi_functorial`) — PROVED under an explicit `NonDegenerate` hypothesis that
 bundles exactly what the functor laws need (an accepting witness exists; `stmtOf` is
 non-injective with two distinct caps collapsing; discharge propagates along conferral). Over a
 *degenerate* verifier (`Verify ≡ false`, or injective `stmtOf`) the laws are genuinely FALSE,
@@ -417,7 +417,7 @@ The hypothesis is exactly what makes the abstract claim TRUE rather than false: 
 injective `stmtOf`. With it, all three `PhiFunctorial` fields are PROVED for the SAME
 `Phi stmtOf`, tying the positional graph dynamics to the epistemic discharge composition into
 identity/composition-preserving functor laws simultaneously with the lossiness witness — the
-full two-category bridge. No `sorry`; the residual is honestly the named `NonDegenerate`
+full two-category bridge. The residual is honestly the named `NonDegenerate`
 hypothesis, which §7.1 proves is satisfiable. -/
 theorem phi_functorial [Verifiable Statement Witness]
     (stmtOf : Cap CellId Rights → Statement)
@@ -516,11 +516,10 @@ theorem phi_functorial_concrete :
 
 /-! ## §8 — Axiom-hygiene tripwires.
 
-Every PROVED keystone depends ONLY on the three standard kernel axioms (no `sorryAx`).
-`phi_functorial` is now PINNED (no longer omitted): it carries NO `sorry` — it is PROVED under
+Every PROVED keystone depends ONLY on the three standard kernel axioms.
+`phi_functorial` is PINNED: it is PROVED under
 the explicit `NonDegenerate` hypothesis (the honest residual is that named hypothesis, which
-`nonDegenerate_concrete` proves is satisfiable, NOT a `sorry`). The old `sorry`-bodied abstract
-form is gone; `phi_functorial_concrete` is now a CONSEQUENCE of `phi_functorial` applied to the
+`nonDegenerate_concrete` proves is satisfiable). `phi_functorial_concrete` is a CONSEQUENCE of `phi_functorial` applied to the
 discriminating witness, and both are axiom-clean. -/
 
 #assert_axioms phi_admits_iff_discharged

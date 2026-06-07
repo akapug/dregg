@@ -2,8 +2,7 @@
 # Metatheory.Categorical — deriving the abstract spec from categorical first principles.
 
 `Dregg2.*` postulates its spec structures as fields or named constructions. This module
-takes minimal categorical axioms and derives them as consequences (kernel-clean,
-`#assert_axioms`-pinned, zero `sorry`).
+takes minimal categorical axioms and derives them as consequences.
 
 - **§1 Conservation.** From "`Σ` is a lax monoidal functor `C ⥤ Discrete M`" we derive
   `Σ̃(A⊗B) = Σ̃A + Σ̃B` (tensorator `μ`) and `Σ̃ I = 0` (unit `ε`), recovering

@@ -5,7 +5,7 @@ A holder proves membership in an issuer's authorized set (a Poseidon2 Merkle com
 members) without revealing which member (`blinded_leaf = hash_fact(leaf,[blinding])`). The
 membership relation IS a Merkle membership against the issuer root, so the gadget reuses
 `Crypto.Merkle` wholesale. Blinding is a separate epistemic obligation (dial floor +
-`HolderAnonymity` carrier), never an `axiom`/`sorry`.
+`HolderAnonymity` carrier).
 
     blindedset_bridge       : Satisfies blindedSetCircuit (root, member) ↔ MemberOf member set
     blindedset_verify_sound : verify accepts → MemberOf  (derived off the bridge + `extractable`)
@@ -13,7 +13,7 @@ membership relation IS a Merkle membership against the issuer root, so the gadge
 
 Cryptographic residue: (a) `compress` collision-resistance (`collisionHard`, consumed by
 `extractable`); (b) holder-anonymity indistinguishability (`HolderAnonymity` carrier). Both are
-honest `Prop` carriers, never `axiom`/`sorry`.
+honest `Prop` carriers.
 -/
 import Dregg2.Crypto.Merkle
 import Dregg2.Crypto.VerifierKernel
@@ -134,7 +134,7 @@ class HolderAnonymity (Digest : Type u) where
 /-- **`blindedset_hides_holder` — holder anonymity, de-vacuified.** Given two GENUINE authorized
 members `m`, `m'` of the same issuer `root`, their blinded views are indistinguishable: the
 verifier learns "a holder is authorized" but NOT which one. Body is the kernel's `hides_law`
-FIELD — non-vacuous (witnessed by `Reference`), NOT `sorry`. The analog of
+FIELD — non-vacuous (witnessed by `Reference`). The analog of
 `Privacy.blinded_membership_hides_element` for the issuer-set kind. -/
 theorem blindedset_hides_holder [K : HolderAnonymity Digest]
     (root m m' : Digest)
@@ -173,7 +173,7 @@ class BlindedSetVerifierKernel (Digest : Type u) (Proof : Type u) where
   verify : Statement Digest → Proof → Bool
   /-- **CARRIER — STARK extractability/soundness** (FRI + Fiat-Shamir + `compress` CR binding the
   proof to the issuer root): accept ⇒ a satisfying membership trace for some member exists. A
-  `Prop`; never proved, never `sorry`. -/
+  `Prop`; never proved. -/
   extractable : Prop
   /-- `extractable` UNPACKED: an accepted proof witnesses a satisfying Merkle membership trace
   against the issuer root for SOME member key (the cleartext member is hidden by the blinding —
@@ -402,9 +402,8 @@ example :
 
 end Reference
 
--- Tripwires: bridge + verify-soundness + cascade + dial wiring + holder-anonymity are kernel-clean.
 -- Crypto residue: `extractable` carrier and `HolderAnonymity` advantage bound (honest `Prop`
--- carriers), never a `sorry`.
+-- carriers).
 #assert_axioms blindedset_bridge
 #assert_axioms blindedset_verify_sound
 #assert_axioms blindedset_hides_holder

@@ -33,7 +33,7 @@ every committed per-asset transfer preserves `recTotalAsset k' b = recTotalAsset
 The badge colour is a function of that theorem's real `collectAxioms` set (it comes back green —
 kernel-clean), so the "conserved" claim under the chart is not decoration: it is the proof term's verdict.
 
-Discipline: NO `sorry`/`admit`/`native_decide`/SMT, NO new `axiom`s. Every charting helper is a total,
+Every charting helper is a total,
 term-level read of the real executor state; the pure derivations are `#assert_axioms`-pinned to the
 standard kernel triple. The `#html`/`#eval`s at the bottom force the render path AND exhibit the
 non-vacuity (the conserved totals are flat while the per-cell balances genuinely move).

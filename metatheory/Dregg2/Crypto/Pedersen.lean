@@ -12,7 +12,7 @@ non-negative (no inflation hidden behind commitments).
 The algebra is the genuinely grounded part: `CryptoPrimitives.commit_hom` is the proved additive
 homomorphism; conservation is `map_sum` over it. Non-negativity uses `Exec/RecordCircuit.range_iff`
 (no seam). The only crypto residue is the Pedersen `binding` carrier (DLog) — a `Prop`, never a
-Lean law, never `sorry`: binding is what makes the commitment-sum equation testify to the amount
+Lean law: binding is what makes the commitment-sum equation testify to the amount
 equation. The conservation algebra itself is unconditional.
 -/
 import Dregg2.Crypto.Primitives
@@ -275,7 +275,7 @@ class PedersenVerifierKernel (Digest : Type u) (Proof : Type u) [AddCommGroup Di
   `proof` discharge the disclosed statement `(insC, outsC)`? -/
   verify : Statement Digest → Proof → Bool
   /-- **CARRIER — STARK extractability/soundness** (FRI + Fiat-Shamir): accept ⇒ a satisfying
-  trace exists. A `Prop`; never proved, never `sorry`. -/
+  trace exists. A `Prop`; never proved. -/
   extractable : Prop
   /-- **CARRIER — Pedersen/DLog binding**: the commitment equation cannot be opened to unbalanced
   amounts. A `Prop`; never a Lean law. -/
@@ -534,9 +534,9 @@ example :
 
 end Reference
 
--- Tripwires: bridge + verify-soundness + cascade + dial wiring are kernel-clean. The algebra
+-- The algebra
 -- rests on `commit_hom` and the `range_iff` gadget (no primitive seam). Crypto residue:
--- `extractable`/`binding` carriers (hypotheses), never a `sorry`.
+-- `extractable`/`binding` carriers (hypotheses).
 #assert_axioms commit_sum
 #assert_axioms pedersen_conservation_bridge
 #assert_axioms pedersen_amounts_nonneg

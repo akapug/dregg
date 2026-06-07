@@ -53,7 +53,7 @@ whose `step_ob` is the app's own one-step lemma (`nameservice_step_preserves` /
 bare catalog does not template, while STILL handing back `forever` for free. NONE is faked: every
 `step_ob` is a real proof term over the shipped executor.
 
-Discipline (HATCHERY.md §190): NO `sorry`/`admit`/`native_decide`/SMT. Every reproduced crown is
+Every reproduced crown is
 `#assert_axioms`-pinned to the kernel triple `{propext, Classical.choice, Quot.sound}` at the foot.
 -/
 import Dregg2.Verify.Catalog
@@ -262,7 +262,7 @@ example (s : RecChainedState) (hinit : Dregg2.Apps.Subscription.subWF s.kernel) 
 /-! ## §7 — Axiom hygiene — every reproduced crown pinned to the kernel triple `{propext, Classical.choice, Quot.sound}`.
 
 `#assert_axioms` on each reproduced theorem certifies the Hatchery reproductions are ordinary
-kernel-checked terms with NO `sorry`/`native_decide`/SMT oracle — the H4 gate's hygiene requirement. -/
+kernel-checked terms — the H4 gate's hygiene requirement. -/
 
 #assert_axioms identity_revoked_forever_via_catalog
 #assert_axioms identity_revoked_always_via_catalog

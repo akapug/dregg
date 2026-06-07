@@ -148,9 +148,9 @@ theorem bridge_bridge (compress : Digest → Digest → Digest)
   ⟨fun circuit hsat => bridge_sound compress circuit c threshold v hsat,
    fun vDigest salt h => bridge_complete compress c threshold v vDigest salt h⟩
 
--- Tripwires: both bridge directions are kernel-clean. Comparison is fully proved via `range_iff`
+-- Comparison is fully proved via `range_iff`
 -- (no primitive seam); opening is an abstract `compress` equation (CR/binding is the Layer-A
--- carrier, never invoked here). Crypto residue: `extractable`, never a `sorry`.
+-- carrier, never invoked here). Crypto residue: `extractable`.
 #assert_axioms bridge_sound
 #assert_axioms bridge_complete
 #assert_axioms bridge_bridge
@@ -180,7 +180,7 @@ the STARK `extractable` carrier. `extract` unpacks `extractable` to its operatio
 proof witnesses a satisfying bridge trace for the disclosed `(c, threshold)` at SOME observed value `v`
 — the existence FRI/Fiat-Shamir soundness + the digest binding deliver. The `binding` of `compress` (the
 opening cannot be forged) and STARK extractability are folded into the single `extractable` `Prop`
-carrier; never proved, never `sorry`. -/
+carrier; never proved. -/
 class BridgeVerifierKernel (Dg : Type) [AddCommGroup Dg] (Proof : Type) where
   /-- The Layer-A node hash this kernel's openings are committed under (the `compress` of `Opens`). -/
   compress : Dg → Dg → Dg
@@ -188,7 +188,7 @@ class BridgeVerifierKernel (Dg : Type) [AddCommGroup Dg] (Proof : Type) where
   disclosed commitment + threshold statement? -/
   verify : Statement Dg → Proof → Bool
   /-- **CARRIER — STARK extractability + digest binding** (FRI + Fiat-Shamir + Poseidon2 CR): accept ⇒
-  a satisfying trace exists for some observed value. A `Prop`; never proved, never `sorry`. -/
+  a satisfying trace exists for some observed value. A `Prop`; never proved. -/
   extractable : Prop
   /-- `extractable` UNPACKED: an accepted proof witnesses a satisfying bridge trace for the disclosed
   `(c, threshold)` at some observed value `v`. The named form the bridge composes with. -/
@@ -414,9 +414,9 @@ example : (bridgeKindObligation Int).dialFloor = Dial.selective :=
 
 end Reference
 
--- Tripwires: bridge + verify-soundness + cascade + dial wiring are kernel-clean. Comparison is
+-- Comparison is
 -- fully proved via `range_iff` (no primitive seam); opening is an abstract `compress` equation
--- (CR/binding is the Layer-A carrier, never invoked). Crypto residue: `extractable`, never a `sorry`.
+-- (CR/binding is the Layer-A carrier, never invoked). Crypto residue: `extractable`.
 #assert_axioms bridge_bridge
 #assert_axioms bridge_verify_sound
 #assert_axioms bridge_registry_cascade

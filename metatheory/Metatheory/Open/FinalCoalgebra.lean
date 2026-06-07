@@ -9,7 +9,7 @@ It proves the *uniqueness* half of finality (`ana_unique`, `final_unique_roundtr
 
     ∃ νF : Cell Obs Adm, IsFinalCell νF
 
-This module CLOSES that OPEN, constructively and `sorry`-free, by exhibiting the
+This module CLOSES that OPEN, constructively, by exhibiting the
 classical **Moore-behaviour** final coalgebra: the carrier is `List Adm → Obs` (a state
 is "what would I observe after each finite input word"), the structure map reads the
 empty-word observation and shifts each successor by prepending its input letter, and the
@@ -170,7 +170,7 @@ theorem nuF_isFinal : IsFinalCell (nuF Obs Adm) where
 theorem nuF_exists : ∃ νF : Cell Obs Adm, IsFinalCell νF :=
   ⟨nuF Obs Adm, nuF_isFinal⟩
 
-/-! ## Self-check: pin to the kernel (errors if any `sorry`/extra axiom leaked). -/
+/-! ## Self-check: pin to the kernel (errors if any extra axiom leaked). -/
 
 #assert_axioms nuF_exists
 #assert_axioms nuF_isFinal

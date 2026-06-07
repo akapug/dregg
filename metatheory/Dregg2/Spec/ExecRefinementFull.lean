@@ -26,8 +26,6 @@ This module closes that open for the whole `FullAction` op-set:
 The single named residue is `OnlyConnectivityCloses` — the whole-history connectivity
 closure. This is a property of multi-step runs, isolated as a named `def`-level hypothesis,
 not a `sorry`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. All keystones are axiom-clean.
 -/
 import Dregg2.Spec.ExecRefinement
 import Dregg2.Exec.TurnExecutorFull

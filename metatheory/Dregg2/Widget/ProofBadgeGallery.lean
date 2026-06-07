@@ -50,8 +50,8 @@ gallery's final row is the **clearly-labelled synthetic demonstrator** `Dregg2.W
 is the discriminator that proves the gallery's colours partition. Its presence keeps the surface honest: the
 real theorems are all green, and the one amber cell openly says why it is amber.
 
-Discipline: NO `sorry`/`admit`/`native_decide`/SMT, NO new `axiom`s here (the demo axioms live in `Basic`).
-Every helper is term-level and kernel-clean; the only non-`MetaM` content is pure `Html`/`String` assembly.
+No new `axiom`s here (the demo axioms live in `Basic`).
+Every helper is term-level; the only non-`MetaM` content is pure `Html`/`String` assembly.
 -/
 import Dregg2.Widget.Basic
 import Dregg2.Apps.Identity

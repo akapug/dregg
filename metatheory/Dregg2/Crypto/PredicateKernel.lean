@@ -158,8 +158,7 @@ example (leaf : Int) :
 
 end Reference
 
--- Tripwires: the cascade + dial wiring rest only on the `extractable` carrier (as a hypothesis),
--- never a hidden `sorry`.
+-- The cascade + dial wiring rest only on the `extractable` carrier (as a hypothesis).
 #assert_axioms merkle_registry_cascade
 #assert_axioms merkle_dial_wired
 

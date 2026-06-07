@@ -12,7 +12,7 @@ discipline parametrically. Mirrors dregg1's `custom` map (`predicate.rs:300`).
 
 A `CustomRegistration` bundles `vk`, circuit/statement/witness algebras, a relation, and the app's
 own `bridge` proof — the same shape the built-ins discharge. Crypto residue: `extractable` (STARK
-soundness for the app's circuit), never an `axiom`/`sorry`.
+soundness for the app's circuit).
 -/
 import Dregg2.Authority.Predicate
 import Metatheory.EpistemicDial
@@ -118,7 +118,7 @@ class CustomVerifierKernel (R : CustomRegistration) (Proof : Type u) where
   the disclosed `stmt` under the relation `vk` denotes? An opaque `Bool`; soundness is `extractable`. -/
   verify : R.Statement → Proof → Bool
   /-- **CARRIER — STARK extractability/soundness** for the registered circuit (FRI + Fiat-Shamir): an
-  accepted proof witnesses a satisfying trace. A `Prop`; never proved, never `sorry`. -/
+  accepted proof witnesses a satisfying trace. A `Prop`; never proved. -/
   extractable : Prop
   /-- `extractable` UNPACKED: an accepted proof witnesses a satisfying trace of the registered
   circuit `R.circuit` for SOME witness, at the disclosed statement. The form the bridge composes
@@ -341,8 +341,7 @@ example (v : Verifier Int Int) (stmt wit : Int) :
 
 end Reference
 
--- Tripwires: parametric bridge + verify-soundness + cascade + dial wiring are kernel-clean.
--- The bridge is the registration's own equivalence; crypto residue: `extractable`, never a `sorry`.
+-- The bridge is the registration's own equivalence; crypto residue: `extractable`.
 #assert_axioms custom_bridge
 #assert_axioms custom_verify_sound
 #assert_axioms custom_registry_cascade

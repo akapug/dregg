@@ -64,8 +64,7 @@ This module replaces `≈` by `=` (the perfect collapse) and `View`-ensembles by
 it does NOT model probability, PPT, or computational indistinguishability, and makes NO claim
 to. That is a probabilistic-process-calculus module of its own.
 
-ZERO `sorry`/`admit`/`axiom`/`native_decide`. Each keystone is pinned `#assert_axioms`
-(kernel-clean: only `propext`/`Classical.choice`/`Quot.sound`). Verifies standalone via
+Verifies standalone via
 `lake env lean Metatheory/Open/PerfectUC.lean`; NOT part of the `Dregg2` root.
 -/
 import Metatheory.EpistemicConsensus

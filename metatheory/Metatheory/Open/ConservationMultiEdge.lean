@@ -53,8 +53,6 @@ maneuvers — a flow on the **multi-edge** conjunction graph. The headline:
     captures the *whole* round. The residual OPEN is therefore narrowed to: *canonically derive
     the `Placement` from the executable `BiTurn`/`ConjGraph` data* (the ledger-cell ⇄ vertex
     dictionary), after which `round_flow_is_wl_cut_flow` discharges the rest with no new ideas.
-
-Zero `sorry`/`admit`/`native_decide`/`axiom`. Keystones `#assert_axioms`-pinned.
 -/
 import Dregg2.Apps.ConservationBridge
 import Dregg2.Apps.WhoYields

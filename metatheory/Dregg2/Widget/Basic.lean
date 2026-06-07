@@ -35,7 +35,7 @@ This is the shared foundation every leaf inspector widget reuses. It carries two
    (the `MetaM Name → Tier` metaprogram) · `proofFactBadge` (the `Name → MetaM Html` renderer) ·
    `#dregg_badge <ident>` (the command that prints the badge in the infoview).
 
-Discipline: NO `sorry`/`admit`/`native_decide`/SMT. The only `axiom`s in this file are two clearly-named
+The only `axiom`s in this file are two clearly-named
 *demo* carriers in the final §, present solely to exhibit that the classifier reports a DIFFERENT tier for
 an axiom-bearing decl — the non-vacuity witness. Every real definition is term-level and kernel-clean.
 -/

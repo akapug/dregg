@@ -34,7 +34,7 @@ keystone is certified by a discriminating concrete model (§5) where an agent pr
 NOT know a fact while another does, and the honest group's distributed knowledge strictly
 exceeds any single honest agent's.
 
-DISCIPLINE: candidate-independent abstract Props; no `axiom`/`admit`/`sorry`-as-success; no
+Candidate-independent abstract Props; no
 `True`-valued toys. This is a `Metatheory.*` SIBLING lib — it verifies standalone via
 `lake env lean Metatheory/EpistemicConsensus.lean` and is NOT part of the `Dregg2` root.
 -/
@@ -387,8 +387,7 @@ computational indistinguishability), explicitly NEVER merged into a Lean order-l
 honest residue here is the *static* fragment plus the standing parametricity of the
 metatheory (every keystone holds for ANY `Verifiable` instance — the type-theoretic shadow of
 "the verified component stays sound under composition"). Discharging the dynamic theorem is a
-probabilistic-process-calculus module of its own, NOT done here, and NOT faked by any
-`axiom`/`sorry`. -/
+probabilistic-process-calculus module of its own, NOT done here. -/
 
 /-! # Coda
 

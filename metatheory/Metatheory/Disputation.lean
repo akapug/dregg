@@ -27,7 +27,7 @@ vote, and is therefore Byzantine-majority-proof on the certifiable domain* — i
 DOMAIN to certifiable claims** (a Universal-Domain violation: you only adjudicate what admits a
 certificate). It rests entirely on the existing kernel-clean witness-fiber theorems
 (`honest_dist_knowledge_iff_holds`, `no_dist_knowledge_of_unrealizable`), now read as an ADJUDICATION
-law rather than a knowledge law. Discipline: faithful Props; `#assert_axioms`-pinned; no `sorry`.
+law rather than a knowledge law. Faithful Props.
 -/
 import Metatheory.EpistemicConsensus
 
