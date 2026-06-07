@@ -252,11 +252,14 @@ generic `StorageGatewayMandate.execFullForestA_progLive_preserved` frame (no `Tr
 def cwmWF (k : RecordKernelState) : Prop :=
   mandateCell ∈ k.accounts ∧ cwmMandateProgramOK k
 
-/-- **`cwmInCompartment` — NON-VACUOUS compartment-binding invariant.** Carries the program-live core.
-The `comp` tag is the binding's domain: the binding to `comp` is ENFORCED for life by the persisted
-`.immutable commitmentAnchorSlot` caveat in `mandateCaveats` (any later anchor rewrite is rejected). The
-literal anchor-VALUE conjunct is the precise residual (a second cell-record frame). Strictly stronger
-than `True`. -/
+/-- **`cwmInCompartment` — NON-VACUOUS compartment-binding invariant (program-live, UNCONDITIONAL).**
+Carries the program-live core along EVERY forest. The `comp` tag is the binding's domain: the binding to
+`comp` is ENFORCED for life by the persisted `.immutable commitmentAnchorSlot` caveat in `mandateCaveats`
+(any later anchor rewrite is rejected). The LITERAL anchor-VALUE conjunct (`cwmAnchor = comp`) is the
+STRONGER predicate `cwmInCompartmentStrong`, now carried along anchor-safe schedules by
+`cwmCompartmentStrong_traj_carries` / `cwm_compartment_strong_forever` (the shared
+`StorageGatewayMandate.execFullForestA_anchorOf_preserved` frame, excluding the one un-caveat-gated
+`makeSovereign` rebind). -/
 def cwmInCompartment (_k : RecordKernelState) (_comp : Int) : Prop :=
   mandateCell ∈ _k.accounts ∧ cwmMandateProgramOK _k
 
@@ -285,6 +288,32 @@ theorem cwmCompartment_traj_carries (s s' : RecChainedState) (cf : FullForestA) 
   obtain ⟨hlive, hprog⟩ := hcomp
   exact Dregg2.Apps.StorageGatewayMandate.execFullForestA_progLive_preserved
     s s' cf mandateCell mandateCaveats h hlive hprog
+
+/-- The CWM mandate program installs the `.immutable commitmentAnchorSlot` caveat. -/
+theorem cwm_mandateCaveats_has_immutable_anchor :
+    (.immutable commitmentAnchorSlot : SlotCaveat) ∈ mandateCaveats := by
+  simp [mandateCaveats]
+
+/-- **`cwmCompartmentStrong_traj_carries` (PROVED) — the VALUE-PINNING carry.** A committed forest that
+is anchor-safe for the mandate cell (no `makeSovereign` aimed at it) preserves the LITERAL compartment
+binding `cwmAnchor = comp`, not merely program-liveness — via the shared
+`StorageGatewayMandate.execFullForestA_anchorOf_preserved` frame. Requires the program installed (to
+witness the immutable-anchor caveat) and the cell live; both are crown invariants. -/
+theorem cwmCompartmentStrong_traj_carries (s s' : RecChainedState) (cf : FullForestA) (comp : Int)
+    (h : execFullForestA s cf = some s') (hcomp : cwmInCompartmentStrong s.kernel comp)
+    (hprog : cwmMandateProgramOK s.kernel)
+    (hok : Dregg2.Apps.StorageGatewayMandate.anchorForestOK mandateCell cf)
+    (hlive : mandateCell ∈ s.kernel.accounts) :
+    cwmInCompartmentStrong s'.kernel comp := by
+  have himm : .immutable commitmentAnchorSlot ∈ s.kernel.slotCaveats mandateCell := by
+    rw [show s.kernel.slotCaveats mandateCell = mandateCaveats from hprog]
+    exact cwm_mandateCaveats_has_immutable_anchor
+  have hanchorEq : fieldOf commitmentAnchorSlot (s'.kernel.cell mandateCell)
+      = fieldOf commitmentAnchorSlot (s.kernel.cell mandateCell) :=
+    Dregg2.Apps.StorageGatewayMandate.execFullForestA_anchorOf_preserved
+      s s' cf mandateCell h hlive himm hok
+  unfold cwmInCompartmentStrong cwmAnchor at hcomp ⊢
+  rw [hanchorEq]; exact hcomp
 
 theorem cwmWFStrong_of_cursor_unchanged {k k' : RecordKernelState}
     (hcur : cwmCursor k' = cwmCursor k) (hwf : cwmWFStrong k) : cwmWFStrong k' := by
