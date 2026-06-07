@@ -39,11 +39,11 @@ instance {St Args : Type} (S : Surface2) (E : EffectSpec2 St Args) (a : Assignme
 
 /-! ## §1 — the CONCRETE commitment surface. -/
 
-/-- Concrete commitment-list digest: an INJECTIVE positional Horner fold over the `commitments` list
-(length folded in so distinct-length lists never collide; each entry shifted by a base larger than any
-toy commitment). A drop/reorder/inject of an entry changes this digest. -/
+/-- Concrete commitment-list digest: the REAL CR-grounded `Poseidon2Surface.refP2` sponge over the
+`commitments` list (length-seeded, binding each entry — the genuinely-injective `refP2_injOn`, realizing
+the real `babyBearD4W16` Poseidon2; the OLD base-`10⁶` Horner aliased entries ≥ 10⁶). -/
 def comDigConcrete : List Nat → ℤ :=
-  fun xs => xs.foldl (fun acc x => acc * 1000000 + (x : ℤ)) (xs.length : ℤ)
+  fun xs => Dregg2.Circuit.Poseidon2Surface.refP2 (xs.map (fun x => (x : ℤ)))
 
 /-- Concrete rest hash: a field-count of the non-`commitments` components. -/
 def rhConcrete : RecordKernelState → ℤ :=

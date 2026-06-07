@@ -21,6 +21,7 @@ the `swiss` list is NOT updated (the refcount stays at 1 instead of the enlivene
 component-bind gate (68/69) rejects (a real UNSAT), while the rest frame + guard + log stay honest.
 -/
 import Dregg2.Circuit.Inst.enlivenRefA
+import Dregg2.Circuit.Poseidon2Surface
 
 namespace Dregg2.Circuit.Witness.EnlivenWitness
 
@@ -35,6 +36,7 @@ open Dregg2.Exec
 open Dregg2.Exec.CircuitEmit
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Authority (Auth)
+open Dregg2.Circuit.Poseidon2Surface (refP2 recListDigest encOptNat turnLogDigest)
 
 set_option linter.dupNamespace false
 
@@ -80,24 +82,26 @@ A concrete, computable swiss-list digest surface over a toy domain. The leaf enc
 `SwissRecord`'s fields (crucially `refcount`, which enliven bumps), so the component digest moves when
 the list is enlivened — and a forged post-state that fails to bump shows up. -/
 
-/-- Concrete swiss-record leaf: a positional fold over the record's fields (including `refcount`). -/
-def swissLeafC : SwissRecord → ℤ :=
-  fun e => (e.swiss : ℤ) * 1000000 + (e.exporter : ℤ) * 10000 + (e.target : ℤ) * 100
-           + (e.rights.length : ℤ) * 10 + (e.refcount : ℤ)
+/-- Field-binding `Auth` index. -/
+def authCode : Auth → ℤ
+  | .read => 0 | .write => 1 | .grant => 2 | .call => 3 | .reply => 4 | .reset => 5 | .control => 6
 
-/-- Concrete swiss-list sponge: a positional Horner fold (length-tagged). -/
-def swissListC : List ℤ → ℤ :=
-  fun xs => xs.foldl (fun acc x => acc * 100000000 + x) (xs.length : ℤ)
+/-- **Field-binding** `SwissRecord` encoder: ALL six fields (`swiss, exporter, target`, the WHOLE
+`rights` list, `refcount`, `cert`). The OLD `swissLeafC` packed `swiss*10⁶ + exporter*10⁴ + target*100 +
+rights.length*10 + refcount` — ALIASING across the per-field windows AND dropping WHICH rights (only
+their count) and the `cert` entirely. -/
+def encSwiss (e : SwissRecord) : List ℤ :=
+  (e.swiss : ℤ) :: (e.exporter : ℤ) :: (e.target : ℤ) :: (e.rights.length : ℤ) ::
+    (e.rights.map authCode ++ ((e.refcount : ℤ) :: encOptNat e.cert))
 
-/-- Concrete swiss side-table digest: the sponge of the per-record leaves. -/
-def swissDigC (ss : List SwissRecord) : ℤ := swissListC (ss.map swissLeafC)
+/-- Concrete swiss side-table digest: the REAL `refP2` sponge over the field-binding `encSwiss`. -/
+def swissDigC (ss : List SwissRecord) : ℤ := recListDigest encSwiss ss
 
 /-- Concrete rest hash (reads only the non-`swiss` frame fields). -/
 def rhC : RecordKernelState → ℤ := fun k => (k.accounts.card : ℤ) + (k.nullifiers.length : ℤ)
 
-/-- Concrete log hash. -/
-def lhC : List Turn → ℤ :=
-  fun xs => xs.foldl (fun acc t => acc * 1000000 + (t.actor : ℤ) + 1) ((xs.length : ℤ) + 1)
+/-- Concrete log hash: the REAL `turnLogDigest` (binds `src`/`dst`/`amt` the OLD actor-only fold dropped). -/
+def lhC : List Turn → ℤ := turnLogDigest
 
 def SC : Surface2 := { RH := rhC, LH := lhC }
 
@@ -167,6 +171,15 @@ def forgedWitness : List Int := witnessOf sPre argsRef sForged
 #guard honestWitness.getD 68 0 == honestWitness.getD 69 0
 #guard honestWitness.getD 0 0 == 1
 
+-- RIGHTS-CONFUSION anti-ghost tooth (the class the OLD `rights.length*10` leaf MISSED — it bound the
+-- COUNT, not WHICH rights). The honest record exports `[read]`; the post is forged to export `[grant]`
+-- (SAME length 1, an authority SWAP a bearer would enliven). `encSwiss` binds the rights list itself, so
+-- the swiss component-bind gate `68 ≠ 69` REJECTS.
+def sForgedRights : RecChainedState :=
+  { sPost with kernel := { sPost.kernel with
+      swiss := sPost.kernel.swiss.map (fun e => if e.swiss = 0 then { e with rights := [Auth.grant] } else e) } }
+#guard decide (satisfied (effectCircuit2 enlivenEC) (encodeE2 SC enlivenEC sPre argsRef sForgedRights)) == false
+
 /-! ## §5 — JSON export. -/
 
 def enlivenAirName : String := "dregg-enlivenRefA-v2"
@@ -179,9 +192,12 @@ def forgedWitnessJson : String := witnessJson forgedWitness
 #guard emittedEnliven.constraints.length == 4
 #guard emittedEnliven.traceWidth == 72
 #guard descriptorJson == "{\"name\":\"dregg-enlivenRefA-v2\",\"trace_width\":72,\"constraints\":[{\"lhs\":{\"t\":\"var\",\"v\":0},\"rhs\":{\"t\":\"const\",\"v\":1}},{\"lhs\":{\"t\":\"var\",\"v\":66},\"rhs\":{\"t\":\"var\",\"v\":67}},{\"lhs\":{\"t\":\"var\",\"v\":68},\"rhs\":{\"t\":\"var\",\"v\":69}},{\"lhs\":{\"t\":\"var\",\"v\":70},\"rhs\":{\"t\":\"var\",\"v\":71}}]}"
-#guard honestWitness.getD 68 0 == 100000112   -- enlivened (refcount 2) component digest
-#guard forgedWitness.getD 68 0 == 100000111   -- un-bumped (refcount 1) — differs
-#guard forgedWitness.getD 69 0 == 100000112   -- expected stays the enlivened list
+-- Structural component-bind goldens (the field-binding `refP2`/`encSwiss` digests are arbitrary-precision,
+-- replacing the aliasing `swiss*10⁶ + …` packing; non-vacuity is at the bind gates; the Rust paste is
+-- regenerated from the JSON accessors).
+#guard honestWitness.getD 68 0 == honestWitness.getD 69 0      -- swiss component binds (honest enliven)
+#guard !(forgedWitness.getD 68 0 == forgedWitness.getD 69 0)   -- forged (un-bumped) differs (REJECTED)
+#guard !(honestWitnessJson == forgedWitnessJson)               -- honest ≠ forged byte streams
 
 #assert_axioms enlivenWitnessVec_commit
 #assert_axioms execute_produces_satisfying_witness
