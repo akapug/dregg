@@ -95,6 +95,13 @@ fn verify_participant(p: &JointParticipant) -> Result<(), String> {
     stark::verify(&air, &p.proof, &p.public_inputs)
 }
 
+/// Public re-export of the per-cell whole-turn soundness check, so the
+/// whole-chain IVC accumulator ([`crate::ivc_turn_chain`]) reuses exactly the
+/// same per-turn admission discipline.
+pub fn verify_participant_pub(p: &JointParticipant) -> Result<(), String> {
+    verify_participant(p)
+}
+
 impl JointParticipant {
     /// The shared turn identity this participant claims (`TURN_HASH` position 0).
     /// Every participant of one joint turn MUST agree on this value — the

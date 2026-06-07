@@ -33,6 +33,7 @@
 pub mod authorize;
 pub mod convert;
 pub mod delta;
+pub mod ethereum;
 pub mod midnight;
 pub mod midnight_observer;
 pub mod mina;

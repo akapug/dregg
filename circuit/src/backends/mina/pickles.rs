@@ -529,19 +529,12 @@ pub fn prove_recursive_step(
 
     let num_prev_challenges = prev_challenges.len();
 
-    // Create the prover index with the correct number of prev_challenges.
-    // This is critical: the verifier index records how many prev_challenges it
-    // expects, and verification fails if the proof's prev_challenges.len() differs.
-    let index = kimchi::prover_index::testing::new_index_for_test_with_lookups::<FULL_ROUNDS, Vesta>(
-        gates,
-        public_count,
-        num_prev_challenges,
-        vec![], // no lookup tables
-        None,   // no runtime tables
-        false,  // don't disable gates checks
-        None,   // no override SRS size
-        false,  // no lazy mode
-    );
+    // Create the PRODUCTION prover index with the correct number of
+    // prev_challenges. This is critical: the verifier index records how many
+    // prev_challenges it expects, and verification fails if the proof's
+    // prev_challenges.len() differs. (Productionized: real ConstraintSystem +
+    // deterministic IPA SRS, not the `testing` helper / test SRS.)
+    let index = build_production_index_vesta(gates, public_count, num_prev_challenges);
 
     // Generate the Kimchi proof using create_recursive with the previous
     // proof's IPA accumulator. This is the key change from the old code which
@@ -709,19 +702,11 @@ pub fn verify_recursive_proof(
     // Build the circuit matching the proof's structure
     let (gates, public_count) = build_recursive_step_circuit(has_previous);
 
-    // Create the verifier index with the correct prev_challenges count.
-    // This is essential: the verifier checks that
-    // proof.prev_challenges.len() == verifier_index.prev_challenges
-    let index = kimchi::prover_index::testing::new_index_for_test_with_lookups::<FULL_ROUNDS, Vesta>(
-        gates,
-        public_count,
-        num_prev_challenges,
-        vec![],
-        None,
-        false,
-        None,
-        false,
-    );
+    // Create the PRODUCTION verifier index with the correct prev_challenges
+    // count. This is essential: the verifier checks that
+    // proof.prev_challenges.len() == verifier_index.prev_challenges.
+    // (Productionized: real ConstraintSystem + deterministic IPA SRS.)
+    let index = build_production_index_vesta(gates, public_count, num_prev_challenges);
     let verifier_index = index.verifier_index();
     let group_map = <Vesta as CommitmentCurve>::Map::setup();
 
