@@ -2119,6 +2119,31 @@ mod tests {
         v2_beachhead(BRIDGE_LOCK_DESCRIPTOR_JSON, 74, &honest, &forged, 68, 69);
     }
 
+    /// `dregg-bridgeCancelA-v2`: the v2-DUAL bridge-OUTBOUND CANCEL / timeout-refund
+    /// (touched = `bal` credit-back AND `escrows` resolve; `trace_width = 74`, FIVE
+    /// gates). Honest: creator 0 credited back +5 (to 100), record id 7 resolved. The
+    /// forged post-state ALSO mints bystander cell 2 (50 → 999); the component-1 (`bal`)
+    /// bind gate `68 = 69` breaks. Goldens pinned by Lean's
+    /// `Dregg2.Circuit.Witness.BridgeCancelAWitness`.
+    const BRIDGE_CANCEL_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-bridgeCancelA-v2","trace_width":74,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}},{"lhs":{"t":"var","v":72},"rhs":{"t":"var","v":73}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_bridge_cancel_a() {
+        let honest: [i64; 74] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 2000705001095809154, 2000705101100809155, 3, 3, 100000050, 100000050,
+            2000705101000809101, 2000705101000809101, 1, 1,
+        ];
+        let forged: [i64; 74] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 2000705001095809154, 2000705101100810104, 3, 3, 100000999, 100000050,
+            2000705101000809101, 2000705101000809101, 1, 1,
+        ];
+        v2_beachhead(BRIDGE_CANCEL_DESCRIPTOR_JSON, 74, &honest, &forged, 68, 69);
+    }
+
     /// `dregg-delegate-v2`: the Granovetter unattenuated held-cap copy (touched =
     /// `kernel.caps`, a `funcComponent`). Honest: delegator 0 (holding `node 5`)
     /// grants recipient 1 the held cap to target 5. The forged post-state has
@@ -2797,6 +2822,59 @@ mod tests {
         );
     }
 
+    /// `dregg-spawnA-v2` (the v2-QUINT family): coin a fresh child cell, touching FIVE non-`cell`
+    /// components at once (accounts, the create-leg, caps, delegate, delegations). The emitted circuit
+    /// is EIGHT gates over an 80-wide trace: guard (`v0 = 1`), rest (66/67), five component-bind gates
+    /// (68/69, 70/71, 72/73, 74/75, 76/77), log (78/79). Honest: actor 9 spawns child 2 off parent 0.
+    /// The forged post-state copies the WRONG parent cap into the child's `caps` (component 3); the
+    /// comp3-bind gate `72 = 73` breaks while the other four components stay honest. Goldens from Lean
+    /// `Dregg2.Circuit.Witness.SpawnWitness.{descriptorJson, honest/forgedWitnessJson}`.
+    const SPAWN_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-spawnA-v2","trace_width":80,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}},{"lhs":{"t":"var","v":72},"rhs":{"t":"var","v":73}},{"lhs":{"t":"var","v":74},"rhs":{"t":"var","v":75}},{"lhs":{"t":"var","v":76},"rhs":{"t":"var","v":77}},{"lhs":{"t":"var","v":78},"rhs":{"t":"var","v":79}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_spawn() {
+        let desc = parse_descriptor(SPAWN_DESCRIPTOR_JSON).expect("spawn quint descriptor must parse");
+        assert_eq!(desc.trace_width, 80, "quint trace width");
+        assert_eq!(desc.constraints.len(), 8, "quint gate count");
+
+        let honest: [i64; 80] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 3093429, 3833413, 0, 0, 906041, 906041, 187653, 187653, 906403, 906403, 187663,
+            187663, 1645381, 1645381, 272, 272,
+        ];
+        // Forged: the child's caps copy the WRONG parent cap; wire 72 (comp3-post digest) differs.
+        let forged: [i64; 80] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 3093429, 3833416, 0, 0, 906041, 906041, 187653, 187653, 906406, 906403, 187663,
+            187663, 1645381, 1645381, 272, 272,
+        ];
+        // The honest witness satisfies every gate (the five component-bind gates + rest + log).
+        for &(lo, hi) in &[(66usize, 67usize), (68, 69), (70, 71), (72, 73), (74, 75), (76, 77), (78, 79)] {
+            assert_eq!(honest[lo], honest[hi], "honest quint gate {lo}={hi}");
+        }
+        // EXECUTE → PROVE → VERIFY: the executor-derived honest quint witness proves+verifies.
+        let proof = prove_executor_derived_v2(SPAWN_DESCRIPTOR_JSON, &honest)
+            .expect("the EXECUTOR-DERIVED spawn quint witness must prove+verify");
+        verify_descriptor(&desc, &proof).expect("re-verify of the spawn quint proof must succeed");
+
+        // ANTI-GHOST: the wrong-child-cap forgery breaks the comp3-bind gate (72 = 73) — a real UNSAT.
+        assert_ne!(forged[72], forged[73], "the forged child cap shows up in the comp3 digest");
+        assert_eq!(forged[68], forged[69], "the other four components stay honest (accounts)");
+        let tampered = std::panic::catch_unwind(|| {
+            let p = prove_descriptor(&desc, &forged)?;
+            verify_descriptor(&desc, &p)
+        });
+        match tampered {
+            Err(_) => {} // prover panicked on the broken comp3 gate: forgery rejected (real UNSAT)
+            Ok(verify_result) => assert!(
+                verify_result.is_err(),
+                "spawn quint wrong-child-cap forgery MUST be rejected by the comp3-bind gate"
+            ),
+        }
+    }
+
     // ========================================================================
     // Batch B3 (escrow + queue families): two v2-DUAL effects (width 74, 5 gates:
     // guard, rest 66/67, bind1 68/69, bind2 70/71, log 72/73) and two v2 queue-list
@@ -2969,6 +3047,29 @@ mod tests {
             1000000, 1000000,
         ];
         v2_beachhead(INTRODUCE_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
+    }
+
+    /// `dregg-enlivenRefA-v2`: the CapTP sturdy-ref ENLIVEN (a `swiss` side-table
+    /// refcount bump — a `listComponent`, touched = `kernel.swiss`). Honest: actor 0
+    /// enlivens sturdy-ref 0 (refcount 1 → 2). Forged: the `swiss` list is NOT
+    /// enlivened (refcount stays 1); the component-bind gate `68 = 69` breaks. Goldens
+    /// from Lean `Dregg2.Circuit.Witness.EnlivenWitness.{honest,forged}WitnessJson`.
+    const ENLIVEN_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-enlivenRefA-v2","trace_width":72,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_enliven() {
+        let honest: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 100000114, 102000115, 2, 2, 100000112, 100000112, 2000001, 2000001,
+        ];
+        // Forged: swiss not enlivened (refcount stays 1); wire 68 (component-post) differs.
+        let forged: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 100000114, 102000114, 2, 2, 100000111, 100000112, 2000001, 2000001,
+        ];
+        v2_beachhead(ENLIVEN_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
     }
 
 }
