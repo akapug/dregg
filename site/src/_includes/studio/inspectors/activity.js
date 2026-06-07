@@ -54,9 +54,34 @@ function kindBadge(kind, html) {
   return html`<span style=${style}>${label}</span>`;
 }
 
-// Trust tier badge (sim = Placeholder; remote can be Silver/Golden later).
-function tierBadge(html) {
+// Feed-source badge. The in-memory sim feed is Placeholder-tier; a live node's
+// committed /api/events backlog is real on-chain history (per-event proof_status
+// carries the actual trust signal), so we label it "live node" not "sim".
+function tierBadge(html, hasCommitted = false) {
+  if (hasCommitted) {
+    return html`<span style="background:#ecfdf5;color:#065f46;border:1px solid #10b981;padding:0 4px;border-radius:2px;font-size:0.65rem;margin-left:4px;">live node</span>`;
+  }
   return html`<span style="background:#f3f4f6;color:#374151;border:1px solid #d1d5db;padding:0 4px;border-radius:2px;font-size:0.65rem;margin-left:4px;">Placeholder (sim)</span>`;
+}
+
+// Proof-status badge for committed events polled from /api/events (F2). The
+// node's typed ActivityProofStatus is the authoritative trust signal; null/
+// absent must NOT read as proved.
+const PROOF_STATUS_META = {
+  proved:                  { label: 'proved',       bg: '#ecfdf5', fg: '#065f46', border: '#10b981' },
+  not_required:            { label: 'no proof req',  bg: '#f3f4f6', fg: '#374151', border: '#9ca3af' },
+  missing_pre_state:       { label: 'missing pre',   bg: '#fffbeb', fg: '#92400e', border: '#f59e0b' },
+  proof_generation_failed: { label: 'proof failed',  bg: '#fef2f2', fg: '#991b1b', border: '#ef4444' },
+  not_committed:           { label: 'not committed', bg: '#f3f4f6', fg: '#6b7280', border: '#d1d5db' },
+};
+
+function proofStatusBadge(status, html) {
+  if (!status) return null;
+  const key = String(status).toLowerCase();
+  const m = PROOF_STATUS_META[key] || { label: key, bg: '#f3f4f6', fg: '#374151', border: '#9ca3af' };
+  const style = `background:${m.bg};color:${m.fg};border:1px solid ${m.border};` +
+    `padding:0 5px;border-radius:2px;font-size:0.65rem;font-weight:600;margin-left:4px;`;
+  return html`<span title=${'proof_status: ' + key} style=${style}>${m.label}</span>`;
 }
 
 // Render payload summary for each of the 7 variants (using platform vocab).
@@ -67,13 +92,24 @@ function renderPayload(kind, payload, html) {
     const p = payload;
     const phase = p.phase || 'unknown';
     if (phase === 'committed' || phase === 'Committed') {
+      // Committed events from /api/events carry a typed proof_status + effects.
+      const ps = proofStatusBadge(p.proof_status, html);
+      const effects = Array.isArray(p.effects) && p.effects.length
+        ? p.effects.join(', ')
+        : null;
       return html`
-        <div>Committed • actions: ${String(p.action_count || 0)} • computrons: ${String(p.computrons_used || 0)}</div>
-        <div style="font-size:0.7rem;color:var(--fg-dim)">receipt ${shortHex(p.receipt_hash, 12)} → post ${shortHex(p.post_state_hash, 8)}</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span>Committed • actions: ${String(p.action_count || 0)}${p.computrons_used != null ? ` • computrons: ${String(p.computrons_used)}` : ''}</span>
+          ${ps}
+        </div>
+        ${effects ? html`<div style="font-size:0.7rem;color:var(--fg-dim)">effects: ${effects}</div>` : ''}
+        <div style="font-size:0.7rem;color:var(--fg-dim)">${p.receipt_hash ? html`receipt ${shortHex(p.receipt_hash, 12)}` : ''}${p.post_state_hash ? html` → post ${shortHex(p.post_state_hash, 8)}` : ''}${p.cell_id ? html` • cell ${shortHex(p.cell_id, 8)}` : ''}</div>
       `;
     }
     if (phase === 'rejected' || phase === 'Rejected') {
-      return html`<div>Rejected: ${String(p.reason || 'unknown')} @ ${JSON.stringify(p.at_action || [])}</div>`;
+      const ps = proofStatusBadge(p.proof_status, html);
+      const at = p.at_action != null ? html` @ ${JSON.stringify(p.at_action)}` : '';
+      return html`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span>Rejected: ${String(p.reason || 'unknown')}${at}</span>${ps}</div>`;
     }
     if (phase === 'expired' || phase === 'Expired') {
       return html`<div>Expired (valid_until passed)</div>`;
@@ -139,13 +175,15 @@ class DreggActivity extends InspectorBase {
       const data = eventsSignal ? eventsSignal.value : null;
       const evs = (data && data.events) || [];
       const count = data ? (data.event_count || evs.length) : 0;
+      // True once any event came from the node's committed /api/events history.
+      const hasCommitted = evs.some((e) => e && e.source === 'committed');
 
       if (mode === 'compact') {
         const last = evs.length ? evs[evs.length - 1] : null;
         const lastKind = last ? (last.kind || '—') : '—';
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
-            ${count} events${tierBadge(html)} • last: ${lastKind}
+            ${count} events${tierBadge(html, hasCommitted)} • last: ${lastKind}
           </span>`;
       }
 
@@ -154,7 +192,7 @@ class DreggActivity extends InspectorBase {
         return html`
           <div class="dregg-inspector dregg-inspector--empty">
             No observability events yet. Execute turns to populate the live feed.
-            ${tierBadge(html)}
+            ${tierBadge(html, hasCommitted)}
           </div>`;
       }
 
@@ -181,7 +219,7 @@ class DreggActivity extends InspectorBase {
       return html`
         <div class="dregg-inspector dregg-inspector--activity" style="max-height:320px;overflow:auto;border:1px solid var(--line,#333);border-radius:4px;padding:4px;background:var(--bg-raised,#111)">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 6px 4px;font-size:0.75rem;color:var(--fg-dim)">
-            <span>Live Activity Feed ${tierBadge(html)}</span>
+            <span>Live Activity Feed ${tierBadge(html, hasCommitted)}</span>
             <span>${count} events</span>
           </div>
           ${items}

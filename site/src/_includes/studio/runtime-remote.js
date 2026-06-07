@@ -52,12 +52,40 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   const events = new EventTarget();
 
   // Observability live events (Task #30). Same signal shape as InMemoryRuntime.
-  // Populated by SSE consumer below (or empty until /observability/stream connected).
+  // Populated by two sources merged together (F2):
+  //   - SSE /observability/stream — live, low-latency trace events (no backlog).
+  //   - polled /api/events        — committed history with typed proof_status.
+  // <dregg-activity> consumes the merged feed and renders a proof_status badge.
   const traceEventsSignal = signal({ schema_version: 1, event_count: 0, events: [] });
   function getTraceEvents() { return traceEventsSignal; }
 
+  // Latest payload from each source; republished as a merged, de-duplicated feed.
+  let sseEvents = [];          // events from the SSE stream
+  let committedEvents = [];    // events mapped from /api/events committed history
+  let lastEventsHeight = 0;    // high-water mark for /api/events since_height cursor
+
+  // Merge SSE (live) + committed (history) into a single chronological feed,
+  // de-duplicated by a stable identity key. Committed events win on conflict
+  // because they carry the authoritative proof_status. Published oldest→newest
+  // so <dregg-activity> (which reverses for display) shows newest first.
+  function publishMergedTraceEvents() {
+    const byKey = new Map();
+    for (const e of committedEvents) byKey.set(traceEventKey(e), e);
+    for (const e of sseEvents) {
+      const k = traceEventKey(e);
+      if (!byKey.has(k)) byKey.set(k, e);
+    }
+    const merged = Array.from(byKey.values()).sort(compareTraceEvents);
+    traceEventsSignal.value = {
+      schema_version: 1,
+      schema_name: 'dregg-observability-event-stream-v1',
+      event_count: merged.length,
+      events: merged,
+    };
+  }
+
   // SSE consumer for remote observability stream (broadcast from node).
-  // Uses browser EventSource; pushes parsed JSON log into the signal.
+  // Uses browser EventSource; pushes parsed JSON log into the live source.
   let obsEs = null;
   if (base && typeof EventSource !== 'undefined') {
     try {
@@ -65,11 +93,30 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
       obsEs.onmessage = (msg) => {
         try {
           const data = JSON.parse(msg.data || '{}');
-          traceEventsSignal.value = data;
+          sseEvents = Array.isArray(data && data.events) ? data.events : [];
+          publishMergedTraceEvents();
         } catch {}
       };
       obsEs.onerror = () => { /* keep last good value */ };
     } catch {}
+  }
+
+  // Poll /api/events for committed history with proof_status (F2). Unlike the
+  // SSE stream (live-only), this gives a backlog the moment the page opens and
+  // a typed proof_status per event. Mapped into the same TraceEvent shape so a
+  // single <dregg-activity> renders both. since_height advances the cursor.
+  async function pollEventsOnce() {
+    if (destroyed || !base) return;
+    const data = await getJSON(`/api/events?since_height=0&limit=200`);
+    if (destroyed || !Array.isArray(data)) return;
+    const mapped = data.map(committedEventToTraceEvent);
+    // Cheap change detection: count + last height.
+    const top = data.reduce((m, e) => Math.max(m, Number(e.height || 0)), 0);
+    if (mapped.length !== committedEvents.length || top !== lastEventsHeight) {
+      committedEvents = mapped;
+      lastEventsHeight = top;
+      publishMergedTraceEvents();
+    }
   }
 
   // --- Extension bridge for passive debugger (Phase 1/2, STARBRIDGE-FOLLOWUP-06) ---
@@ -118,6 +165,8 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   let intentListSignal = null;
   let capabilityListSignal = null;
   const receiptSignals = new Map();
+  const receiptWitnessPending = new Map(); // hash -> in-flight Promise (dedupe lazy witness fetch)
+  const receiptWitnessFetched = new Set(); // hash -> already merged DWR1 artifacts (don't refetch)
   const blockSignals = new Map();
   const intentSignals = new Map();
 
@@ -231,7 +280,12 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
       if (!sameIdListShape(normalized, cachedReceipts, receiptIdOf)) changed = true;
       cachedReceipts = normalized;
       if (receiptListSignal) receiptListSignal.value = normalized;
-      for (const [id, sig] of receiptSignals) sig.value = findReceipt(normalized, id);
+      // Re-point observed single-receipt signals at the freshly polled record,
+      // but carry forward any DWR1 witness artifacts already lazy-fetched for
+      // that hash so a poll doesn't wipe the merged blobs (F1).
+      for (const [id, sig] of receiptSignals) {
+        sig.value = withMergedWitnesses(findReceipt(normalized, id), sig.value);
+      }
     }
 
     if (blocks) {
@@ -266,6 +320,10 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
       bump();
       fire('poll', { status: cachedStatus, cells: cachedCellList });
     }
+
+    // Refresh the committed activity backlog (F2). Independent of `changed` so
+    // newly-proven events surface even when cell/receipt shapes are stable.
+    await pollEventsOnce();
   }
 
   function startPolling() {
@@ -307,6 +365,12 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   // We don't have a real subscribe loop for those — piggy-back on the poll.
   events.addEventListener('poll', () => {
     for (const [id, sig] of cellSignals) fetchCellInto(id, sig);
+    // Retry lazy witness fetch for observed receipts that weren't proven yet
+    // (artifacts may appear once the node finishes proving the turn).
+    for (const [id, sig] of receiptSignals) {
+      const hash = String(id || '').toLowerCase();
+      if (!receiptWitnessFetched.has(hash)) fetchReceiptWitnessesInto(id, sig);
+    }
   });
 
   function listReceipts() {
@@ -315,8 +379,50 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   }
 
   function getReceipt(id) {
-    if (!receiptSignals.has(id)) receiptSignals.set(id, signal(findReceipt(cachedReceipts, id)));
-    return receiptSignals.get(id);
+    if (!receiptSignals.has(id)) {
+      receiptSignals.set(id, signal(findReceipt(cachedReceipts, id)));
+    }
+    const sig = receiptSignals.get(id);
+    // F1: the receipt-list payload never carries DWR1 witness blobs. Lazy-fetch
+    // GET /api/receipts/{hash}/witnesses on first observation and merge the real
+    // artifact_format + witness_artifacts + witnessed_receipts into the signal,
+    // so <dregg-witnessed-receipt> can render scope-2 artifacts instead of
+    // always falling back to "not exposed".
+    fetchReceiptWitnessesInto(id, sig);
+    return sig;
+  }
+
+  // Lazy single-fetch of the per-receipt DWR1 witness artifacts. Resolves the
+  // receipt hash (a turn/receipt hash is the path key), merges the response
+  // fields into the receipt signal, and dedupes via receiptWitnessPending.
+  async function fetchReceiptWitnessesInto(id, sig) {
+    const hash = String(id || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hash)) return; // witness route keys on a 32-byte hash
+    if (receiptWitnessFetched.has(hash) || receiptWitnessPending.has(hash)) return;
+    const p = (async () => {
+      const data = await getJSON(`/api/receipts/${hash}/witnesses`);
+      if (destroyed || !data) return;
+      const artifacts = Array.isArray(data.witness_artifacts) ? data.witness_artifacts : [];
+      // Only mark "fetched" (and merge) when the node actually returns artifacts;
+      // an empty list for a not-yet-proven receipt should be retried after the
+      // next poll bump rather than cached as "no witnesses, ever".
+      if (!artifacts.length) return;
+      receiptWitnessFetched.add(hash);
+      const witnessFields = {
+        artifact_format: data.artifact_format || 'DWR1',
+        witness_artifacts: artifacts,
+        witness_count: Number(data.witness_count ?? artifacts.length),
+        has_witness: true,
+        witnessed_receipts: Array.isArray(data.witnessed_receipts) ? data.witnessed_receipts : undefined,
+      };
+      // Merge onto whatever the signal currently holds (poll may have refreshed
+      // it). If the base receipt hasn't loaded yet, seed a minimal record so the
+      // artifacts aren't lost.
+      const base = sig.value || findReceipt(cachedReceipts, id) || { turn_hash: hash, receipt_hash: hash };
+      sig.value = { ...base, ...witnessFields };
+    })();
+    receiptWitnessPending.set(hash, p);
+    try { await p; } finally { receiptWitnessPending.delete(hash); }
   }
 
   function listBlocks() {
@@ -505,8 +611,13 @@ function normalizeReceipts(receipts) {
   return list.map((entry) => {
     const r = entry.receipt || entry;
     const turnHash = r.turn_hash || r.turnHash || r.hash || r.receipt_hash || '';
-    const witnessArtifacts = Array.isArray(r.witness_artifacts) ? r.witness_artifacts : [];
-    const witnessCount = Number(r.witness_count ?? witnessArtifacts.length ?? 0);
+    // NOTE: the receipt-LIST payload (node `ReceiptInfo`) carries `has_witness`
+    // + `witness_count` but NOT the DWR1 hex blobs — those live only at
+    // GET /api/receipts/{hash}/witnesses and are merged in lazily by
+    // fetchReceiptWitnessesInto() on first getReceipt(). So we DON'T fabricate
+    // `artifact_format`/`witness_artifacts` here: they stay absent until the
+    // node confirms them, and <dregg-witnessed-receipt> renders real artifacts.
+    const witnessCount = Number(r.witness_count ?? 0);
     return {
       ...entry,
       ...r,
@@ -519,8 +630,6 @@ function normalizeReceipts(receipts) {
       timestamp: r.timestamp ?? r.committed_at ?? '',
       has_witness: Boolean(r.has_witness || witnessCount > 0),
       witness_count: witnessCount,
-      artifact_format: r.artifact_format || (witnessArtifacts.length ? 'DWR1' : undefined),
-      witness_artifacts: witnessArtifacts,
       proof_view: r.proof_view || (r.has_proof || r.has_witness || witnessCount > 0 ? {
         kind: (r.has_witness || witnessCount > 0) ? 'WitnessedReceipt' : 'ExecutorSignature',
         public_inputs: [],
@@ -543,6 +652,81 @@ function findReceipt(receipts, id) {
     String(r.receipt_hash || '').toLowerCase() === want ||
     String(r.hash || '').toLowerCase() === want
   ) || null;
+}
+
+// Carry forward DWR1 witness artifacts already lazy-fetched onto `prev` when a
+// poll produces a fresh `next` record for the same receipt (F1). The list
+// payload never has these fields, so a naive overwrite would drop them.
+function withMergedWitnesses(next, prev) {
+  if (!next) return next;
+  if (!prev || !Array.isArray(prev.witness_artifacts) || prev.witness_artifacts.length === 0) {
+    return next;
+  }
+  return {
+    ...next,
+    artifact_format: prev.artifact_format || 'DWR1',
+    witness_artifacts: prev.witness_artifacts,
+    witness_count: prev.witness_count ?? next.witness_count,
+    has_witness: true,
+    witnessed_receipts: prev.witnessed_receipts ?? next.witnessed_receipts,
+  };
+}
+
+// Map a node CommittedEvent ({height, status, proof_status, turn_hash,
+// cell_id, effects, timestamp}) into the TraceEvent shape <dregg-activity>
+// renders. We use the `turn_lifecycle` kind (the only committed-turn variant)
+// and carry status + proof_status on the payload so the inspector can badge it.
+function committedEventToTraceEvent(e) {
+  const effects = Array.isArray(e.effects) ? e.effects : [];
+  const phase = e.status === 'rejected' ? 'rejected' : 'committed';
+  return {
+    kind: 'turn_lifecycle',
+    source: 'committed',
+    envelope: {
+      seq: Number(e.height || 0),
+      timestamp: secondsToIso(e.timestamp),
+      actor: e.cell_id || '',
+      height: Number(e.height || 0),
+    },
+    payload: {
+      phase,
+      proof_status: e.proof_status || null,
+      status: e.status || null,
+      receipt_hash: e.turn_hash || '',
+      turn_hash: e.turn_hash || '',
+      cell_id: e.cell_id || '',
+      effects,
+      action_count: effects.length,
+      reason: phase === 'rejected' ? (effects.join(', ') || 'rejected') : undefined,
+    },
+  };
+}
+
+function secondsToIso(ts) {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  // CommittedEvent.timestamp is unix seconds.
+  const ms = n > 10_000_000_000 ? n : n * 1000;
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+// Stable identity for a trace event so SSE-live and committed-history copies of
+// the same turn collapse to one row. Falls back to a JSON digest when no hash.
+function traceEventKey(e) {
+  const env = e.envelope || {};
+  const pl = e.payload || {};
+  const hash = pl.turn_hash || pl.receipt_hash || '';
+  if (hash) return `${e.kind || '?'}:${hash}:${pl.phase || ''}`;
+  return `${e.kind || '?'}:${env.seq ?? ''}:${env.timestamp ?? ''}`;
+}
+
+// Order trace events oldest→newest by height/seq then timestamp.
+function compareTraceEvents(a, b) {
+  const ea = a.envelope || {}, eb = b.envelope || {};
+  const ha = Number(ea.height ?? ea.seq ?? 0), hb = Number(eb.height ?? eb.seq ?? 0);
+  if (ha !== hb) return ha - hb;
+  return String(ea.timestamp || '').localeCompare(String(eb.timestamp || ''));
 }
 
 function normalizeBlocks(blocks) {
