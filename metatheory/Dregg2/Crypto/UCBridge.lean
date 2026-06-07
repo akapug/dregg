@@ -56,8 +56,8 @@ with Isabelle2025-RC3 at the ML/proof-automation level; it needs the RC3-matched
 long-established in the AFP; what is blocked is recompiling that AFP under this release candidate.
 
 ## Axiom hygiene.
-This module is `#assert_axioms`-clean: the cross-system facts are fields of the `FComDischarge`
-structure, passed as hypotheses — no `axiom`, no `sorry`. The bridge theorem
+The cross-system facts are fields of the `FComDischarge`
+structure, passed as hypotheses. The bridge theorem
 `binding_unlinkable_discharged_by_crypthol` proves (in Lean, kernel-clean) that given such a
 discharge structure, the `binding` and `unlinkable` carriers are inhabited — witnessed by CryptHOL,
 not assumed.
@@ -155,8 +155,8 @@ example : (instCryptoPrimitives.binding) ∧ (instCryptoPrimitives.unlinkable) :
 
 end Reference
 
--- Tripwires: the bridge theorems rest only on the carried `FComDischarge` fields (passed as a
--- hypothesis), never on a Lean `axiom` or hidden `sorry`. This is a carrier, not a Lean UC proof.
+-- The bridge theorems rest only on the carried `FComDischarge` fields (passed as a
+-- hypothesis). This is a carrier, not a Lean UC proof.
 #assert_axioms binding_discharged_by_crypthol
 #assert_axioms unlinkable_discharged_by_crypthol
 #assert_axioms binding_unlinkable_discharged_by_crypthol

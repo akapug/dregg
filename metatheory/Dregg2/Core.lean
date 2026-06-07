@@ -142,7 +142,7 @@ balances inflow against outflow: `count A + minted tag = count B + burned tag`.
 The equality cannot be derived from the abstract `Conservation`/`Turn` data alone — it is
 the law the operational semantics must satisfy. It is carried as an explicit typeclass field
 (the `CryptoKernel`/`World` Prop-portal idiom), so the abstract corollaries below take
-`[ConservesStep cons]` and are proved from the field with no `sorry`.
+`[ConservesStep cons]` and are proved from the field.
 
 This is NOT a vacuous assumption: the executable kernel discharges it. The instance is
 provided in `Exec.StepComplete` from the proved `conservation_step_realized`. -/

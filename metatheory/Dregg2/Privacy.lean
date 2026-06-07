@@ -45,8 +45,8 @@ circuit/cryptographic obligation, NEVER discharged in this Lean law (cf.
 with their computational laws — as the FIELDS of a `GraphPrivacyKernel` /
 `BlindedMembershipKernel` class (the `CryptoKernel.lean` idiom). The parametric graph-tier
 theorems take an instance and their bodies ARE the law-fields, so they are non-vacuous
-(witnessed by a `Reference` instance) and carry NO `sorry` — the crypto advantage bounds
-live, faithfully, as the lawful-instance obligation, never an `axiom`/`sorry`.
+(witnessed by a `Reference` instance) — the crypto advantage bounds
+live, faithfully, as the lawful-instance obligation.
 -/
 import Dregg2.Core
 import Dregg2.Laws
@@ -87,7 +87,7 @@ abbrev State (Name : Type u) (V : Type u) := Name → V
 abbrev Obs (Name : Type u) (V : Type u) := Name → Option V
 
 /-- **The public projection.** Reveal only the `public` fields of a state; withhold
-(`none`) the `private` ones. Computable and cheap, so it is defined, not `sorry`'d. -/
+(`none`) the `private` ones. Computable and cheap, so it is defined. -/
 def project {Name V : Type u} (s : State Name V) (vis : FieldVisibility Name) :
     Obs Name V :=
   fun n => match vis n with
@@ -416,7 +416,7 @@ class BlindedMembershipKernel (Elem : Type u) [DecidableEq Elem] where
     ∃ s : Finset Elem, k ≤ s.card ∧ e ∈ s ∧
       ∀ e' ∈ s, memberOf e' sc ∧ memberView e' sc = memberView e sc
 
-/-! ### The parametric graph-tier laws (bodies are the law-fields, no `sorry`).
+/-! ### The parametric graph-tier laws (bodies are the law-fields).
 
 Indistinguishability is observer-view equality: `addrView a = addrView a'`,
 `memberView e sc = memberView e' sc`, `nullifierView n = nullifierView n'`. The theorems
@@ -427,7 +427,7 @@ instantiates them at a view that is genuinely non-constant. -/
 /-- **Graph tier law: stealth unlinkability (perfect, on the view).** Two stealth addresses
 derived for the *same* recipient have the SAME observer-view — two payments to one recipient
 are indistinguishable on the public graph (`§2 graph`). The body is the kernel's
-`unlinkable_law` FIELD. Non-vacuous (the `Reference` view is non-constant), NOT `sorry`. -/
+`unlinkable_law` FIELD. Non-vacuous (the `Reference` view is non-constant). -/
 theorem unlinkable [GraphPrivacyKernel]
     (R : Recipient) (a a' : StealthAddr)
     (h : GraphPrivacyKernel.derivedFrom a R) (h' : GraphPrivacyKernel.derivedFrom a' R) :
@@ -448,7 +448,7 @@ theorem stealth_anonymity_set_large [GraphPrivacyKernel] (a : StealthAddr) :
 /-- **Graph tier law: ZK auth-chain soundness, path-hiding.** If the verifier accepts
 the chain's witness (`Discharged`), a legal derivation path exists — yet the verifier
 only touched `pred`/`wit`, never the path's nodes. The body routes through the kernel's
-`zkauthchain_law` FIELD (the extractability obligation), non-vacuous, NOT `sorry`. -/
+`zkauthchain_law` FIELD (the extractability obligation), non-vacuous. -/
 theorem zkauthchain_sound [GraphPrivacyKernel]
     {P W : Type u} [Verifiable P W] (chain : ZkAuthChain P W)
     (_h : Discharged chain.pred chain.wit) :
@@ -459,7 +459,7 @@ theorem zkauthchain_sound [GraphPrivacyKernel]
 Stated correctly as *view-equality of two GIVEN members* (not bare existence of two distinct
 members, false at `Elem = Unit`). Given two witnessed members `e e'` of the same commitment
 `sc`, their observer-views are EQUAL — a verifier confirms membership while learning nothing
-about which element was committed. Body is `hides_law`, non-vacuous, NOT `sorry`. -/
+about which element was committed. Body is `hides_law`, non-vacuous. -/
 theorem blinded_membership_hides_element {Elem : Type u} [DecidableEq Elem]
     [BlindedMembershipKernel Elem]
     (sc : SetCommitment Elem) (e e' : Elem)
@@ -507,7 +507,7 @@ theorem nullifier_prevents_double_spend [GraphPrivacyKernel]
 view).** The observer-view of any two published nullifiers is EQUAL — the view is a single
 constant, independent of *which* note (hence of the holder), so observing nullifiers-out
 reveals nothing about *who* spent. The body is the kernel's `nullifier_hides_law` FIELD;
-non-vacuous by `Reference` (whose `nullifierView` is a genuine constant map), NOT `sorry`.
+non-vacuous by `Reference` (whose `nullifierView` is a genuine constant map).
 Stated for two arbitrary notes to make the holder-independence explicit. -/
 theorem nullifier_hides_identity [GraphPrivacyKernel] (note note' : Note) :
     GraphPrivacyKernel.nullifierView (GraphPrivacyKernel.nullifierOf note)

@@ -62,7 +62,7 @@ about the (external, untrusted-by-default) plugin — there is no in-module rela
 an arbitrary `find` and `Verify` from which to derive it (that is exactly why the untrusted
 `Searchable` above does NOT carry it, and why `Authority.Intent` re-`Verify`s instead of
 appealing to the contract). Carried as a Prop field, the assumption is explicit and
-auto-resolved at call sites that demand a CONTRACTED plugin; never a `sorry`. -/
+auto-resolved at call sites that demand a CONTRACTED plugin. -/
 class SoundSearchable (P : Type*) (W : Type*) [Verifiable P W] extends Searchable P W where
   /-- **Soundness-by-verification.** The ONLY guarantee a contracted plugin owes: whatever
   it returns must verify. (No completeness; no termination — `find` may still return `none`

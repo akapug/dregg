@@ -74,10 +74,8 @@ dregg1 actually runs) and the finalization→executor bridge (`Exec.ConsensusExe
 * The Sridhar 16-model characterization is ADOPTED, not re-derived (§4 of the grounding note);
   `ResiliencePair` carries dregg's *one* deployment point.
 
-## Rails
-
-No `sorry`/`admit`/`axiom`/`native_decide`. Every adversary assumption is a structure field or
-a named theorem hypothesis. Keystones are `#assert_axioms`-clean. Verified with
+Every adversary assumption is a structure field or
+a named theorem hypothesis. Verified with
 `lake build Dregg2.Distributed.Consensus`.
 -/
 import Dregg2.Exec.ConsensusExec
@@ -569,10 +567,10 @@ theorem view_sync_class_empty [World Msg]
 
 /-! ## 8. Axiom-hygiene tripwires — the keystones are kernel-clean.
 
-Every PROVED keystone rides only `sorry`-free lemmas (`cordial_no_conflicting_final_leaders_from_lace`,
-`equivocation_detectable`, `gst_liveness_from_round_model`, and pure list/order facts). The only
+Every PROVED keystone rides only the lemmas `cordial_no_conflicting_final_leaders_from_lace`,
+`equivocation_detectable`, `gst_liveness_from_round_model`, and pure list/order facts. The only
 genuinely-OPEN part is `PostGSTProgress` — a NAMED hypothesis the liveness theorems are stated
-conditionally on (never a `sorry`); `leaderless_progress` proves progress FROM it. -/
+conditionally on; `leaderless_progress` proves progress FROM it. -/
 #assert_axioms resilience_gap_real
 #assert_axioms safety_resilience_high
 #assert_axioms liveness_resilience_strictly_lower

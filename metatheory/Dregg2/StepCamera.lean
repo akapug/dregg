@@ -220,7 +220,7 @@ substitution, and the extension axiom is just associativity/decomposition with t
 `≡{n}≡` read as `=`. It exhibits `Resource.lean`'s discrete tier as the `n`-collapsed
 special case of the full camera — the bottom rung of the same ladder.
 
-**PROVED (no `sorry`):** the full `Camera R` instance is constructed below. With the
+**PROVED:** the full `Camera R` instance is constructed below. With the
 `Eqv 0`-totality non-axiom dropped from `OFE`, the faithful discrete OFE `Eqv n := Eq`
 (`discreteEqv`) is admissible at every depth (including `n = 0`); then every camera field
 reads through `=` (the OFE laws are `Eq` refl/symm/trans/mono/limit, `validN` collapses to

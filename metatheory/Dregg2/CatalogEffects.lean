@@ -14,8 +14,7 @@ opens them, never redefines them):
     `every_effect_classified` (paired ⊕ disclosed ⊕ inert), and the bespoke
     `effectObligation` discriminator with `effectObligation_coincides`.
 
-Discipline: no `axiom`/`admit`/`native_decide`/`sorry`. Whole namespace pinned via
-`#assert_namespace_axioms Dregg2.CatalogEffects`.
+Whole namespace pinned via `#assert_namespace_axioms Dregg2.CatalogEffects`.
 -/
 import Dregg2.CatalogInstances
 import Dregg2.Spec.Conservation

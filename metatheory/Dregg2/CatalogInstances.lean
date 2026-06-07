@@ -17,7 +17,7 @@ Hand-written (codegen emits Guard triples; these are not Guards):
     `Effect::linearity` (exhaustive match, no default arm) + conservation obligations.
   * `AnyOf`/`Not` carry explicit `by` proofs (still generated, not the default `simp [name]`).
 
-Discipline: no `axiom`/`admit`/`native_decide`/`sorry`. A planted `sorry` fails at
+A planted `sorry` fails at
 generation time. Module-wide pinned via `#assert_namespace_axioms Dregg2.CatalogInstances`.
 -/
 import Dregg2.Catalog

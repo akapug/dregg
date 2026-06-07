@@ -49,7 +49,7 @@ where the bound is positive) AND (b) a negative tooth (a deployment where the gu
 weakens — the same `tightness_tooth` instance, re-read as "the fibre over this base point is strictly
 weaker than the terminal fibre").
 
-Pure, computable where decidable. No `axiom`/`sorry`/`admit`/`native_decide`.
+Pure, computable where decidable.
 -/
 import Dregg2.Distributed.Revocation
 

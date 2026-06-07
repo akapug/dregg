@@ -14,8 +14,6 @@ lemmas check co-instantiation of interacting carriers.
 OPEN: faithfulness to the real Rust system is a separate grounding axis, not proved here.
 The crypto-standard carriers (`collisionHard`, `binding`, `extractable`, …) cannot be proved in
 Lean — they are honestly isolated in §4 and are NOT the non-vacuity evidence.
-
-No `sorry`/`admit`/`axiom`/`native_decide`.
 -/
 
 import Mathlib.Tactic
