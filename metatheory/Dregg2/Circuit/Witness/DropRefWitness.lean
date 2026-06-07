@@ -18,6 +18,7 @@ edge to the dropped target) — the component-bind gate (68/69) rejects (a real 
 frame + guard + log stay honest (a projection circuit would have passed it).
 -/
 import Dregg2.Circuit.Inst.dropRefA
+import Dregg2.Circuit.Poseidon2Surface
 
 namespace Dregg2.Circuit.Witness.DropRefWitness
 
@@ -31,6 +32,7 @@ open Dregg2.Exec
 open Dregg2.Exec.CircuitEmit
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Authority (Caps Cap Auth)
+open Dregg2.Circuit.Poseidon2Surface (refP2 recListDigest turnLogDigest)
 
 set_option linter.dupNamespace false
 
@@ -72,16 +74,21 @@ theorem satisfying_witness_proves_full_state
 A concrete, computable caps surface over a toy domain (small modular folds, so the digests fit i64 —
 the v2 gate only checks EQUALITY). -/
 
-def capCode : Cap → ℤ
-  | .null         => 1
-  | .node t       => 101 + (t : ℤ) * 3
-  | .endpoint t r => 11 + (t : ℤ) * 3 + (r.length : ℤ)
+/-- Field-binding `Auth` index (so endpoint `rights` are bound, not collapsed to `.length`). -/
+def authCode : Auth → ℤ
+  | .read => 0 | .write => 1 | .grant => 2 | .call => 3 | .reply => 4 | .reset => 5 | .control => 6
+/-- **Field-binding** `Cap` encoder: tag + target + the WHOLE rights list. -/
+def encCap : Cap → List ℤ
+  | .null         => [0]
+  | .node t       => [1, (t : ℤ)]
+  | .endpoint t r => 2 :: (t : ℤ) :: (r.length : ℤ) :: r.map authCode
 
-def capListCode (cs : List Cap) : ℤ :=
-  cs.foldl (fun acc c => (acc * 131 + capCode c) % 2000003) ((cs.length : ℤ) + 1)
+/-- One cell's cap-list digest: the REAL `refP2` sponge over the field-binding `encCap` (the OLD
+`% 2000003` Horner was a NON-injective field hash). -/
+def capListCode (cs : List Cap) : ℤ := recListDigest encCap cs
 
 def capsDigConcrete : Caps → ℤ :=
-  fun caps => (List.range 4).foldl (fun acc l => (acc * 7919 + capListCode (caps l)) % 2000003) 1
+  fun caps => refP2 ((List.range 4).map (fun l => capListCode (caps l)))
 
 /-- Concrete rest hash: reads only the NON-`caps` frame fields (so a pure cap forgery leaves it fixed —
 the component-bind gate bites, not the rest gate). -/
@@ -89,8 +96,9 @@ def rhConcrete : RecordKernelState → ℤ :=
   fun k => (k.accounts.card : ℤ) + (k.nullifiers.length : ℤ) * 7
            + (k.commitments.length : ℤ) * 13 + (k.swiss.length : ℤ) * 17
 
-def lhConcrete : List Turn → ℤ :=
-  fun xs => xs.foldl (fun acc t => (acc * 131 + (t.actor : ℤ) + 1) % 2000003) ((xs.length : ℤ) + 1)
+/-- The log hash: the REAL `turnLogDigest` (binds `src`/`dst`/`amt` the OLD `actor % 2000003` fold
+DROPPED and field-reduced). -/
+def lhConcrete : List Turn → ℤ := turnLogDigest
 
 def SC : Surface2 := { RH := rhConcrete, LH := lhConcrete }
 
@@ -179,6 +187,15 @@ def forgedWitnessJson : String := witnessJson forgedWitness
 -- the honest component digest binds; the forged (un-revoked) one differs.
 #guard !(honestWitness.getD 68 0 == forgedWitness.getD 68 0)
 #guard honestWitness.getD 68 0 == honestWitness.getD 69 0
+
+-- RIGHTS-ATTENUATION anti-ghost tooth: instead of un-revoking, holder 0's slot is forged to keep an
+-- `endpoint 5 [grant]` (the dropped target 5 re-appears as an AMPLIFIED endpoint). The OLD rights-LENGTH
+-- `capCode % 2000003` could alias such tampers; `encCap` binds the full rights, so the component-bind
+-- gate `68 ≠ 69` REJECTS.
+def sForgedRights : RecChainedState :=
+  { sPost with kernel := { sPost.kernel with
+      caps := fun l => if l = 0 then [Cap.node 7, Cap.endpoint 5 [Auth.grant]] else sPost.kernel.caps l } }
+#guard decide (satisfied (effectCircuit2 dropRefEC) (encodeE2 SC dropRefEC sPre argsRef sForgedRights)) == false
 
 #assert_axioms dropRefWitnessVec_eq
 #assert_axioms execute_produces_satisfying_witness

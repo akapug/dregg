@@ -17,6 +17,7 @@ cap — the comp3-bind gate (72/73) breaks, a real UNSAT.
 CR portals carried HYPOTHESES on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.spawnA
+import Dregg2.Circuit.Poseidon2Surface
 
 namespace Dregg2.Circuit.Witness.SpawnWitness
 
@@ -33,6 +34,7 @@ open Dregg2.Exec
 open Dregg2.Exec.CircuitEmit
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Authority (Caps Cap Auth)
+open Dregg2.Circuit.Poseidon2Surface (refP2 recListDigest turnLogDigest)
 
 set_option linter.dupNamespace false
 
@@ -71,45 +73,51 @@ theorem satisfying_witness_proves_full_state
 
 /-! ## §4 — THE EXECUTOR-DERIVED CONCRETE WITNESS (five concrete computable components). -/
 
-def capCode : Cap → ℤ
-  | .null         => 1
-  | .node t       => 101 + (t : ℤ) * 3
-  | .endpoint t r => 11 + (t : ℤ) * 3 + (r.length : ℤ)
+/-- Field-binding `Auth` index (so endpoint `rights` are bound, not collapsed to `.length`). -/
+def authCode : Auth → ℤ
+  | .read => 0 | .write => 1 | .grant => 2 | .call => 3 | .reply => 4 | .reset => 5 | .control => 6
+/-- **Field-binding** `Cap` encoder: tag + target + the WHOLE rights list. -/
+def encCap : Cap → List ℤ
+  | .null         => [0]
+  | .node t       => [1, (t : ℤ)]
+  | .endpoint t r => 2 :: (t : ℤ) :: (r.length : ℤ) :: r.map authCode
 
-def capListCode (cs : List Cap) : ℤ :=
-  cs.foldl (fun acc c => (acc * 131 + capCode c) % 2000003) ((cs.length : ℤ) + 1)
+/-- One cell's cap-list digest: the REAL `refP2` sponge over the field-binding `encCap`. -/
+def capListCode (cs : List Cap) : ℤ := recListDigest encCap cs
 
 /-- The toy carrier window the digests fold over. -/
 def win : List Nat := [0, 1, 2]
 
-/-- Component 1 — accounts: a digest of membership over the window. -/
+/-- Component 1 — accounts: the REAL `refP2` sponge of membership over the window (the OLD `% 2000003`
+fold was a NON-injective field hash). -/
 def accountsDigC : RecordKernelState → ℤ :=
-  fun k => win.foldl (fun acc l => (acc * 7919 + (if l ∈ k.accounts then 1 else 0)) % 2000003) 1
+  fun k => refP2 (win.map (fun l => (if l ∈ k.accounts then 1 else 0)))
 
-/-- Component 2 — the create-leg: a digest of `bal · 0` + the lifecycle slot over the window. -/
+/-- Component 2 — the create-leg: the REAL `refP2` sponge over each cell's `[bal, lifecycle, deathCert]`
+(binds each field SEPARATELY — the OLD `% 2000003` packing of `bal*13 + lifecycle*17 + deathCert*19`
+aliased). -/
 def createLegDigC : RecordKernelState → ℤ :=
-  fun k => win.foldl (fun acc l =>
-    (acc * 7919 + (k.bal l 0) * 13 + (k.lifecycle l : ℤ) * 17 + (k.deathCert l : ℤ) * 19) % 2000003) 1
+  fun k => refP2 (win.flatMap (fun l => [k.bal l 0, (k.lifecycle l : ℤ), (k.deathCert l : ℤ)]))
 
-/-- Component 3 — caps: a digest of each cell's cap-list over the window. -/
+/-- Component 3 — caps: the REAL `refP2` sponge of each cell's field-binding cap-list digest. -/
 def capsDigC : RecordKernelState → ℤ :=
-  fun k => win.foldl (fun acc l => (acc * 7919 + capListCode (k.caps l)) % 2000003) 1
+  fun k => refP2 (win.map (fun l => capListCode (k.caps l)))
 
-/-- Component 4 — delegate: a digest of the `delegate` pointer over the window. -/
+/-- Component 4 — delegate: the REAL `refP2` sponge of the `delegate` pointer over the window. -/
 def delegateDigC : RecordKernelState → ℤ :=
-  fun k => win.foldl (fun acc l =>
-    (acc * 7919 + (match k.delegate l with | none => 0 | some c => (c : ℤ) + 1)) % 2000003) 1
+  fun k => refP2 (win.map (fun l => (match k.delegate l with | none => 0 | some c => (c : ℤ) + 1)))
 
-/-- Component 5 — delegations: a digest of the `delegations` snapshot over the window. -/
+/-- Component 5 — delegations: the REAL `refP2` sponge of each cell's field-binding delegation digest. -/
 def delegationsDigC : RecordKernelState → ℤ :=
-  fun k => win.foldl (fun acc l => (acc * 7919 + capListCode (k.delegations l)) % 2000003) 1
+  fun k => refP2 (win.map (fun l => capListCode (k.delegations l)))
 
 def rhConcrete : RecordKernelState → ℤ :=
   fun k => (k.nullifiers.length : ℤ) + (k.commitments.length : ℤ) * 7
            + (k.swiss.length : ℤ) * 13 + (k.escrows.length : ℤ) * 17
 
-def lhConcrete : List Turn → ℤ :=
-  fun xs => xs.foldl (fun acc t => (acc * 131 + (t.actor : ℤ) + 1) % 2000003) ((xs.length : ℤ) + 1)
+/-- The log hash: the REAL `turnLogDigest` (binds `src`/`dst`/`amt` the OLD `actor % 2000003` fold dropped
+and field-reduced). -/
+def lhConcrete : List Turn → ℤ := turnLogDigest
 
 def SC : Surface2 := { RH := rhConcrete, LH := lhConcrete }
 
@@ -215,13 +223,11 @@ def forgedWitnessJson : String := witnessJson forgedWitness
 #guard emittedSpawn.traceWidth == 80
 #guard descriptorJson ==
   "{\"name\":\"dregg-spawnA-v2\",\"trace_width\":80,\"constraints\":[{\"lhs\":{\"t\":\"var\",\"v\":0},\"rhs\":{\"t\":\"const\",\"v\":1}},{\"lhs\":{\"t\":\"var\",\"v\":66},\"rhs\":{\"t\":\"var\",\"v\":67}},{\"lhs\":{\"t\":\"var\",\"v\":68},\"rhs\":{\"t\":\"var\",\"v\":69}},{\"lhs\":{\"t\":\"var\",\"v\":70},\"rhs\":{\"t\":\"var\",\"v\":71}},{\"lhs\":{\"t\":\"var\",\"v\":72},\"rhs\":{\"t\":\"var\",\"v\":73}},{\"lhs\":{\"t\":\"var\",\"v\":74},\"rhs\":{\"t\":\"var\",\"v\":75}},{\"lhs\":{\"t\":\"var\",\"v\":76},\"rhs\":{\"t\":\"var\",\"v\":77}},{\"lhs\":{\"t\":\"var\",\"v\":78},\"rhs\":{\"t\":\"var\",\"v\":79}}]}"
-#guard honestWitness.getD 72 0 == 906403   -- caps component binds (honest child cap = node 0)
-#guard forgedWitness.getD 72 0 == 906406    -- forged caps digest differs (wrong child cap node 1)
-#guard forgedWitness.getD 73 0 == 906403    -- expected stays the spec caps map
-#guard honestWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3093429,3833413,0,0,906041,906041,187653,187653,906403,906403,187663,187663,1645381,1645381,272,272]"
-#guard forgedWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3093429,3833416,0,0,906041,906041,187653,187653,906406,906403,187663,187663,1645381,1645381,272,272]"
+-- Structural component-bind goldens (the field-binding `refP2`/`encCap` digests replace the non-injective
+-- `% 2000003` field hashes; non-vacuity is at the bind gates; the Rust paste is regenerated from JSON).
+#guard honestWitness.getD 72 0 == honestWitness.getD 73 0      -- caps component binds (honest)
+#guard !(forgedWitness.getD 72 0 == forgedWitness.getD 73 0)   -- forged caps differs (REJECTED)
+#guard !(honestWitnessJson == forgedWitnessJson)               -- honest ≠ forged byte streams
 
 #assert_axioms spawnWitnessVec_commit
 #assert_axioms execute_produces_satisfying_witness

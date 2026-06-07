@@ -14,6 +14,7 @@ value — a phantom live ref). The component-bind gate 68≠69 = a real UNSAT.
 CR portals carried HYPOTHESES on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.swissDropA
+import Dregg2.Circuit.Poseidon2Surface
 
 namespace Dregg2.Circuit.Witness.SwissDropWitness
 
@@ -28,6 +29,7 @@ open Dregg2.Exec
 open Dregg2.Exec.CircuitEmit
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Authority (Auth)
+open Dregg2.Circuit.Poseidon2Surface (refP2 recListDigest encOptNat turnLogDigest)
 
 set_option linter.dupNamespace false
 
@@ -62,20 +64,24 @@ theorem satisfying_witness_proves_full_state
 def authCode : Auth → ℤ
   | .read => 1 | .write => 2 | .grant => 3 | .call => 4 | .reply => 5 | .reset => 6 | .control => 7
 
-def swissCode (r : SwissRecord) : ℤ :=
-  ((r.swiss : ℤ) * 101 + (r.exporter : ℤ) * 103 + (r.target : ℤ) * 107
-    + r.rights.foldl (fun acc a => (acc * 11 + authCode a) % 2000003) 1 * 109
-    + (r.refcount : ℤ) * 113 + (match r.cert with | none => 0 | some h => (h : ℤ) + 1) * 127) % 2000003
+/-- **Field-binding** `SwissRecord` encoder: ALL six fields — `swiss, exporter, target`, the WHOLE
+`rights` list (length-prefixed), `refcount`, and the `cert` option. The OLD `swissCode … % 2000003` was a
+NON-injective field hash that folded `rights` through ANOTHER `% 2000003` reduction (dropping WHICH rights
+a bearer obtains — the enliven non-amplification gate's content). -/
+def encSwiss (r : SwissRecord) : List ℤ :=
+  (r.swiss : ℤ) :: (r.exporter : ℤ) :: (r.target : ℤ) :: (r.rights.length : ℤ) ::
+    (r.rights.map authCode ++ ((r.refcount : ℤ) :: encOptNat r.cert))
 
-def swissDigConcrete : List SwissRecord → ℤ :=
-  fun rs => rs.foldl (fun acc r => (acc * 7919 + swissCode r) % 2000003) ((rs.length : ℤ) + 1)
+/-- The swiss-table list digest: the REAL `refP2` sponge over the field-binding `encSwiss`. -/
+def swissDigConcrete : List SwissRecord → ℤ := recListDigest encSwiss
 
 def rhConcrete : RecordKernelState → ℤ :=
   fun k => (k.accounts.card : ℤ) + (k.nullifiers.length : ℤ) * 7
            + (k.commitments.length : ℤ) * 13 + (k.caps 0).length * 17
 
-def lhConcrete : List Turn → ℤ :=
-  fun xs => xs.foldl (fun acc t => (acc * 131 + (t.actor : ℤ) + 1) % 2000003) ((xs.length : ℤ) + 1)
+/-- The log hash: the REAL `turnLogDigest` (binds `src`/`dst`/`amt` the OLD `actor % 2000003` fold dropped
+and field-reduced). -/
+def lhConcrete : List Turn → ℤ := turnLogDigest
 
 def SC : Surface2 := { RH := rhConcrete, LH := lhConcrete }
 
@@ -162,13 +168,12 @@ def forgedWitnessJson : String := witnessJson forgedWitness
 #guard emittedSwissDrop.traceWidth == 72
 #guard descriptorJson ==
   "{\"name\":\"dregg-swissDropA-v2\",\"trace_width\":72,\"constraints\":[{\"lhs\":{\"t\":\"var\",\"v\":0},\"rhs\":{\"t\":\"const\",\"v\":1}},{\"lhs\":{\"t\":\"var\",\"v\":66},\"rhs\":{\"t\":\"var\",\"v\":67}},{\"lhs\":{\"t\":\"var\",\"v\":68},\"rhs\":{\"t\":\"var\",\"v\":69}},{\"lhs\":{\"t\":\"var\",\"v\":70},\"rhs\":{\"t\":\"var\",\"v\":71}}]}"
-#guard honestWitness.getD 68 0 == 16874   -- component digest binds (refcount decremented to 1)
-#guard forgedWitness.getD 68 0 == 16987    -- forged component digest differs (phantom refcount 2)
-#guard forgedWitness.getD 69 0 == 16874    -- expected stays the spec decrement
-#guard honestWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16990,17139,2,2,16874,16874,263,263]"
-#guard forgedWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16990,17252,2,2,16987,16874,263,263]"
+-- Structural component-bind goldens (the field-binding `refP2`/`encSwiss` digests replace the
+-- non-injective `% 2000003` field hash; non-vacuity is at the bind gates; the Rust paste is regenerated
+-- from the JSON accessors).
+#guard honestWitness.getD 68 0 == honestWitness.getD 69 0      -- swiss component binds (honest)
+#guard !(forgedWitness.getD 68 0 == forgedWitness.getD 69 0)   -- forged swiss differs (REJECTED)
+#guard !(honestWitnessJson == forgedWitnessJson)               -- honest ≠ forged byte streams
 
 #assert_axioms swissDropWitnessVec_commit
 #assert_axioms execute_produces_satisfying_witness

@@ -13,6 +13,7 @@ component-1 bind gate `68 ≠ 69`. `Inst.cellDestroyA.cellDestroyA_full_sound` p
 (`⇒ CellDestroySpec`).
 -/
 import Dregg2.Circuit.Inst.cellDestroyA
+import Dregg2.Circuit.Poseidon2Surface
 
 namespace Dregg2.Circuit.Witness.CellDestroyAWitness
 
@@ -23,6 +24,7 @@ open Dregg2.Circuit.Inst.CellDestroyA
 open Dregg2.Circuit.Spec.CellLifecycle
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
+open Dregg2.Circuit.Poseidon2Surface (refP2 turnLogDigest)
 
 set_option linter.dupNamespace false
 set_option linter.unusedVariables false
@@ -36,15 +38,18 @@ instance (cs : ConstraintSystem) (a : Assignment) : Decidable (satisfied cs a) :
 
 def rhConcrete2 : RecordKernelState → ℤ :=
   fun k => (k.accounts.card : ℤ) + (k.nullifiers.length : ℤ)
-def lhConcrete : List Turn → ℤ := fun l => (l.length : ℤ)
+/-- The log hash: the REAL `turnLogDigest` (binds the WHOLE receipt chain; the OLD `.length` collapse
+dropped its content). -/
+def lhConcrete : List Turn → ℤ := turnLogDigest
 
 /-- The probe cells the concrete `CellId → Nat` digests sample: the destroyed `cell`, plus a bystander
 cell `1` (so a bystander destroy / cert bind shows up). -/
 def natProbes (cell : CellId) : List CellId := [cell, 1]
 
-/-- Concrete injective `CellId → Nat` digest: an injective positional Horner fold over the probe values. -/
+/-- Concrete `CellId → Nat` digest: the REAL `refP2` sponge over the probe values (binds each — NO lossy
+`% 10⁶` collapse, so a probe value ≥ 10⁶ no longer aliases). -/
 def natFnDigestC (cell : CellId) (f : CellId → Nat) : ℤ :=
-  (natProbes cell).foldl (fun acc c => acc * 1000000 + (f c : ℤ)) 0
+  refP2 ((natProbes cell).map (fun c => (f c : ℤ)))
 
 def cellDestroySurfaceC : Surface2 := { RH := rhConcrete2, LH := lhConcrete }
 
@@ -146,6 +151,16 @@ def forgedWitness : List Int := witnessOf 0 sC0 goodArgsC forgedPostC
   (encodeE2Dual cellDestroySurfaceC (cellDestroyEC 0) sC0 goodArgsC forgedPostC)) == false
 #guard !(forgedWitness.getD 68 0 == forgedWitness.getD 69 0)   -- lifecycle component REJECTED
 
+-- HIGH-field MODULAR-COLLISION anti-ghost tooth: bystander cell 1's `deathCert` forged ABOVE the OLD
+-- `% 10⁶` Horner window (a substituted certificate hash). The OLD positional fold carried/aliased across
+-- 10⁶; `refP2` does NOT, so the deathCert comp2 bind gate `70 ≠ 71` REJECTS.
+def forgedCertC : CellId → Nat :=
+  fun c => if c = 1 then goodPostC.kernel.deathCert 1 + 1000000 else goodPostC.kernel.deathCert c
+def forgedCertPostC : RecChainedState :=
+  { kernel := { goodPostC.kernel with deathCert := forgedCertC }, log := goodPostC.log }
+#guard decide (satisfied (effectCircuit2Dual (cellDestroyEC 0))
+  (encodeE2Dual cellDestroySurfaceC (cellDestroyEC 0) sC0 goodArgsC forgedCertPostC)) == false
+
 /-! ## §5 — JSON export. -/
 
 def witnessJson (xs : List Int) : String :=
@@ -153,11 +168,12 @@ def witnessJson (xs : List Int) : String :=
 def cellDestroyHonestWitnessJson : String := witnessJson honestWitness
 def cellDestroyForgedWitnessJson : String := witnessJson forgedWitness
 
--- The EXACT bytes the Rust `lean_executor_derived_cell_destroy_a` test pastes (goldens).
-#guard cellDestroyHonestWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,80000003,2,2,3000000,3000000,77000000,77000000,1,1]"
-#guard cellDestroyForgedWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,80000006,2,2,3000003,3000000,77000000,77000000,1,1]"
+-- Structural component-bind goldens (the field-binding `refP2` digests are arbitrary-precision; non-vacuity
+-- is at the bind gates; the Rust paste is regenerated from the JSON accessors).
+#guard honestWitness.getD 68 0 == honestWitness.getD 69 0   -- lifecycle binds (honest)
+#guard honestWitness.getD 70 0 == honestWitness.getD 71 0   -- deathCert binds (honest)
+#guard honestWitness.getD 72 0 == honestWitness.getD 73 0   -- log binds (honest)
+#guard !(cellDestroyHonestWitnessJson == cellDestroyForgedWitnessJson)
 
 #assert_axioms cellDestroyWitnessVec_commit
 #assert_axioms witnessOf_get

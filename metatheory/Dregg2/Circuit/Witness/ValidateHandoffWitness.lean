@@ -14,6 +14,7 @@ the honest grant — the component-bind gate 68≠69 = a real UNSAT.
 CR portals carried HYPOTHESES on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.validateHandoffA
+import Dregg2.Circuit.Poseidon2Surface
 
 namespace Dregg2.Circuit.Witness.ValidateHandoffWitness
 
@@ -27,6 +28,7 @@ open Dregg2.Exec
 open Dregg2.Exec.CircuitEmit
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Authority (Caps Cap Auth)
+open Dregg2.Circuit.Poseidon2Surface (refP2 recListDigest turnLogDigest)
 
 set_option linter.dupNamespace false
 
@@ -57,23 +59,29 @@ theorem satisfying_witness_proves_full_state
 
 /-! ## §4 — THE EXECUTOR-DERIVED CONCRETE WITNESS. -/
 
-def capCode : Cap → ℤ
-  | .null         => 1
-  | .node t       => 101 + (t : ℤ) * 3
-  | .endpoint t r => 11 + (t : ℤ) * 3 + (r.length : ℤ)
+/-- Field-binding `Auth` index (so endpoint `rights` are bound, not collapsed to `.length`). -/
+def authCode : Auth → ℤ
+  | .read => 0 | .write => 1 | .grant => 2 | .call => 3 | .reply => 4 | .reset => 5 | .control => 6
+/-- **Field-binding** `Cap` encoder: tag + target + the WHOLE rights list. -/
+def encCap : Cap → List ℤ
+  | .null         => [0]
+  | .node t       => [1, (t : ℤ)]
+  | .endpoint t r => 2 :: (t : ℤ) :: (r.length : ℤ) :: r.map authCode
 
-def capListCode (cs : List Cap) : ℤ :=
-  cs.foldl (fun acc c => (acc * 131 + capCode c) % 2000003) ((cs.length : ℤ) + 1)
+/-- One cell's cap-list digest: the REAL `refP2` sponge over the field-binding `encCap` (the OLD
+`% 2000003` Horner was a NON-injective field hash). -/
+def capListCode (cs : List Cap) : ℤ := recListDigest encCap cs
 
 def capsDigConcrete : Caps → ℤ :=
-  fun caps => (List.range 4).foldl (fun acc l => (acc * 7919 + capListCode (caps l)) % 2000003) 1
+  fun caps => refP2 ((List.range 4).map (fun l => capListCode (caps l)))
 
 def rhConcrete : RecordKernelState → ℤ :=
   fun k => (k.accounts.card : ℤ) + (k.nullifiers.length : ℤ) * 7
            + (k.commitments.length : ℤ) * 13 + (k.swiss.length : ℤ) * 17
 
-def lhConcrete : List Turn → ℤ :=
-  fun xs => xs.foldl (fun acc t => (acc * 131 + (t.actor : ℤ) + 1) % 2000003) ((xs.length : ℤ) + 1)
+/-- The log hash: the REAL `turnLogDigest` (binds `src`/`dst`/`amt` the OLD `actor % 2000003` fold
+DROPPED and field-reduced). -/
+def lhConcrete : List Turn → ℤ := turnLogDigest
 
 def SC : Surface2 := { RH := rhConcrete, LH := lhConcrete }
 
@@ -143,6 +151,14 @@ def forgedWitness : List Int := witnessOf sPre argsRef sForged
 #guard forgedWitness.getD 66 0 == forgedWitness.getD 67 0
 #guard forgedWitness.getD 70 0 == forgedWitness.getD 71 0
 
+-- RIGHTS-ATTENUATION anti-ghost tooth: recipient 1's handoff grant is forged to an `endpoint 5 [grant]`
+-- (amplified authority) instead of the honest `node 5`. The OLD rights-LENGTH `capCode % 2000003` could
+-- alias such tampers; `encCap` binds the full rights, so the component-bind gate `68 ≠ 69` REJECTS.
+def sForgedRights : RecChainedState :=
+  { sPost with kernel := { sPost.kernel with
+      caps := fun l => if l = 1 then [Cap.endpoint 5 [Auth.grant]] else sPost.kernel.caps l } }
+#guard decide (satisfied (effectCircuit2 validateHandoffEC) (encodeE2 SC validateHandoffEC sPre argsRef sForgedRights)) == false
+
 /-! ## §5 — JSON export. -/
 
 def validateHandoffAirName : String := "dregg-validateHandoffA-v2"
@@ -156,13 +172,11 @@ def forgedWitnessJson : String := witnessJson forgedWitness
 #guard emittedValidateHandoff.traceWidth == 72
 #guard descriptorJson ==
   "{\"name\":\"dregg-validateHandoffA-v2\",\"trace_width\":72,\"constraints\":[{\"lhs\":{\"t\":\"var\",\"v\":0},\"rhs\":{\"t\":\"const\",\"v\":1}},{\"lhs\":{\"t\":\"var\",\"v\":66},\"rhs\":{\"t\":\"var\",\"v\":67}},{\"lhs\":{\"t\":\"var\",\"v\":68},\"rhs\":{\"t\":\"var\",\"v\":69}},{\"lhs\":{\"t\":\"var\",\"v\":70},\"rhs\":{\"t\":\"var\",\"v\":71}}]}"
-#guard honestWitness.getD 68 0 == 1519029   -- component digest binds (honest handoff grant)
-#guard forgedWitness.getD 68 0 == 1455425    -- forged component digest differs (stolen node 9)
-#guard forgedWitness.getD 69 0 == 1519029    -- expected stays the spec grant
-#guard honestWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1672998,1519294,2,2,1519029,1519029,263,263]"
-#guard forgedWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1672998,1455690,2,2,1455425,1519029,263,263]"
+-- Structural component-bind goldens (the field-binding `refP2`/`encCap` digests replace the non-injective
+-- `% 2000003` field hash; non-vacuity is at the bind gates; the Rust paste is regenerated from JSON).
+#guard honestWitness.getD 68 0 == honestWitness.getD 69 0      -- component binds (honest)
+#guard !(forgedWitness.getD 68 0 == forgedWitness.getD 69 0)   -- forged component differs (REJECTED)
+#guard !(honestWitnessJson == forgedWitnessJson)               -- honest ≠ forged byte streams
 
 #assert_axioms validateHandoffWitnessVec_commit
 #assert_axioms execute_produces_satisfying_witness
