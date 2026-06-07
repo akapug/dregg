@@ -100,6 +100,8 @@ pub mod executor;
 pub mod fast_path;
 pub mod forest;
 pub(crate) mod journal;
+#[cfg(feature = "lean-shadow")]
+pub mod lean_apply;
 pub mod lean_shadow;
 pub mod obligation;
 pub mod pending;

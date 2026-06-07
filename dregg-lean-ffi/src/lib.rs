@@ -7,7 +7,7 @@
 #[path = "marshal.rs"]
 pub mod marshal;
 
-pub use marshal::TurnStatus;
+pub use marshal::{TurnStatus, WireState};
 
 /// Decoded Lean gated-forest verdict (T9 output envelope).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +76,49 @@ pub fn decode_shadow_verdict(output: &str) -> Result<ShadowVerdict, String> {
             status: r.status,
             divergence_note: None,
         }),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// The verified Lean executor's verdict PAIRED WITH the full post-state it produced.
+///
+/// THE SWAP (authority inversion): `decode_shadow_verdict` keeps only the {committed, loglen,
+/// status} bits and THROWS AWAY the `state` the verified executor produced — which is exactly the
+/// gap that forces the legacy Rust `TurnExecutor` to remain the state PRODUCER. This decoder keeps
+/// the post-state `WireState` so a caller can reconstitute the authoritative ledger from the
+/// VERIFIED executor's output (see `dregg_turn::lean_apply::wire_state_to_ledger`).
+///
+/// `decode_shadow_verdict` is left intact (veto-only callers are unaffected); this is the additive
+/// state-producing path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShadowState {
+    /// The veto-shaped verdict bits (same as [`decode_shadow_verdict`]).
+    pub verdict: ShadowVerdict,
+    /// The FULL post-state the verified executor committed (on `committed`/rollback the echoed
+    /// pre-state). This is the state-producer payload the swap installs as authoritative.
+    pub state: WireState,
+}
+
+/// Parse a shadow output wire into a [`ShadowState`] — the verdict bits AND the produced
+/// post-state. This is the state-PRODUCING decode (THE SWAP), as opposed to the veto-only
+/// [`decode_shadow_verdict`] which discards `.state`.
+pub fn decode_shadow_state(output: &str) -> Result<ShadowState, String> {
+    match marshal::unmarshal_result(output) {
+        Ok(r) => {
+            let committed = match r.status {
+                Some(s) => s == TurnStatus::BodyCommitted,
+                None => r.committed,
+            };
+            Ok(ShadowState {
+                verdict: ShadowVerdict {
+                    committed,
+                    loglen: r.loglen,
+                    status: r.status,
+                    divergence_note: None,
+                },
+                state: r.state,
+            })
+        }
         Err(e) => Err(e.to_string()),
     }
 }
