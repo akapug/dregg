@@ -66,6 +66,7 @@ pub mod server;
 pub mod starbridge;
 pub mod store;
 pub mod vk;
+pub mod webgen;
 
 /// Legacy module alias — `cipherclerk` was renamed to `cipherclerk`. This
 /// alias keeps `dregg_app_framework::cipherclerk::...` callers compiling
@@ -169,6 +170,11 @@ pub use starbridge::{
 // common pattern: build a cipherclerk, build an executor, hand them
 // to a StarbridgeAppContext.
 pub use cipherclerk::{EmbeddedExecutor, ExecutorSubmitError};
+
+// Anti-drift JS-constants generation: render an app's slot layout +
+// event-topic vocabulary to a canonical `constants.generated.js` the web
+// pages import, so the JS surface cannot drift from the Rust source of truth.
+pub use webgen::{ConstantsModule, Slot};
 
 // Re-export FactoryDescriptor from dregg-cell at the framework root
 // so starbridge-apps only need dregg-app-framework in their Cargo.toml
