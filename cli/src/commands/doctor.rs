@@ -39,6 +39,9 @@ pub async fn run(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::
     // 7. Receipts / receipt chain health.
     checks.push(check_receipts(cfg).await);
 
+    // 8. Verified-execution surface (THE SWAP — informational).
+    checks.push(check_producer(cfg).await);
+
     // Display results.
     let pass_count = checks.iter().filter(|c| c.passed).count();
     let fail_count = checks.len() - pass_count;
@@ -86,6 +89,38 @@ async fn check_node(cfg: &Config) -> Check {
             name: "node".to_string(),
             passed: false,
             detail: format!("Node unreachable at {} ({})", cfg.node.url, e),
+        },
+    }
+}
+
+async fn check_producer(cfg: &Config) -> Check {
+    match get_json(cfg, "/api/node/producer").await {
+        Ok(data) => {
+            let lean = data["lean_producer_enabled"].as_bool().unwrap_or(false);
+            let proving = data["full_turn_proving"].as_bool().unwrap_or(false);
+            let covered = data["covered_effects"].as_array().map(|a| a.len()).unwrap_or(0);
+            let total = data["total_effect_kinds"].as_u64().unwrap_or(0);
+            let detail = if lean {
+                format!(
+                    "Verified Lean producer ENABLED ({covered}/{total} effects; proving {})",
+                    if proving { "on" } else { "off" }
+                )
+            } else {
+                format!(
+                    "State producer: rust (legacy). Lean producer off; {covered}/{total} effects ready to default. Set DREGG_LEAN_PRODUCER=1 to enable."
+                )
+            };
+            Check {
+                name: "producer".to_string(),
+                // Informational: reaching the surface is the pass condition.
+                passed: true,
+                detail,
+            }
+        }
+        Err(_) => Check {
+            name: "producer".to_string(),
+            passed: false,
+            detail: "Verified-execution surface unavailable (node unreachable or old).".to_string(),
         },
     }
 }

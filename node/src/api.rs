@@ -72,6 +72,71 @@ pub struct StatusResponse {
     pub note_count: u64,
     pub federation_mode: String,
     pub public_key: String,
+    /// THE SWAP — honest verified-execution surface. The authoritative state
+    /// producer on the commit path:
+    ///   * `"lean"`  — the VERIFIED Lean executor produces the committed state
+    ///     for eligible turns (`DREGG_LEAN_PRODUCER=1`); the Rust executor is a
+    ///     logged differential cross-check.
+    ///   * `"rust"`  — the legacy Rust executor produces (Lean runs at most as a
+    ///     veto-only shadow). This is the unchanged devnet default.
+    pub state_producer: String,
+    /// Whether the verified Lean producer is enabled (mirrors `state_producer ==
+    /// "lean"`). Convenience boolean for clients.
+    pub lean_producer: bool,
+    /// Whether the node generates + verifies a full-turn STARK proof for every
+    /// committed turn on the commit path (the "every transition is proven"
+    /// claim). When `false`, only activity proofs are produced on submission.
+    pub full_turn_proving: bool,
+    /// Number of effect KINDS the verified producer covers (defaults to Lean
+    /// for). A turn touching only these effects runs on the verified producer;
+    /// a turn touching any other effect falls back to Rust for that turn. See
+    /// `GET /api/node/producer` for the full per-effect breakdown.
+    pub producer_covered_effects: usize,
+}
+
+/// Response from `GET /api/node/producer` — the honest verified-execution
+/// surface (THE SWAP boundary). Tells a client EXACTLY which state producer
+/// runs the commit path and, when the verified Lean producer is enabled, which
+/// effect kinds it covers (defaults to Lean for) vs. which still fall back to
+/// the Rust producer.
+#[derive(Serialize)]
+pub struct ProducerStatusResponse {
+    /// `"lean"` or `"rust"` — the authoritative state producer on the commit path.
+    pub state_producer: String,
+    /// Whether the verified Lean producer is enabled (`DREGG_LEAN_PRODUCER=1`).
+    pub lean_producer_enabled: bool,
+    /// Whether a full-turn STARK proof is generated + verified per committed turn.
+    pub full_turn_proving: bool,
+    /// Effect kinds the producer covers (a turn touching ONLY these runs on the
+    /// verified producer when enabled). Mirrors the marshaller's wire-projected set.
+    pub covered_effects: Vec<String>,
+    /// Total number of distinct on-chain effect kinds.
+    pub total_effect_kinds: usize,
+    /// Effect kinds NOT yet covered — a turn touching any of these falls back to
+    /// the Rust producer for that turn. This is the honest "blocks the full
+    /// default" list.
+    pub uncovered_effects: Vec<String>,
+    /// Human-readable summary of the boundary.
+    pub summary: String,
+}
+
+/// Response from `GET /api/node/identity` — the node operator's own identity.
+/// The `agent_cell` is the cell `/turn/submit` acts on by default (the node
+/// signs every operator turn as this cell); a client can fund it via the faucet
+/// or target it directly. This makes the "who am I / what's my cell" question a
+/// first-class answer instead of a derivation a client has to reproduce.
+#[derive(Serialize)]
+pub struct NodeIdentityResponse {
+    /// Hex-encoded operator Ed25519 public key.
+    pub public_key: String,
+    /// Hex-encoded operator agent cell id (`derive_raw(public_key, H("default"))`).
+    pub agent_cell: String,
+    /// Whether the operator's cipherclerk is unlocked (turns can be signed).
+    pub unlocked: bool,
+    /// Current balance of the agent cell, if it exists in the ledger.
+    pub agent_balance: Option<u64>,
+    /// Current nonce of the agent cell, if it exists.
+    pub agent_nonce: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -1309,6 +1374,8 @@ pub fn router_with_cors(
     let mut public_routes = Router::new()
         .route("/status", get(get_status))
         .route("/health", get(get_status))
+        .route("/api/node/producer", get(get_producer_status))
+        .route("/api/node/identity", get(get_node_identity))
         .route("/federation/roots", get(get_federation_roots))
         .route("/api/blocks", get(get_federation_roots))
         .route("/api/federations", get(get_federations))
@@ -1567,6 +1634,12 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     // single genesis block at seq 0 still counts as "producing".
     let healthy = store_ok && consensus_live && block_count > 0;
 
+    let lean_producer = s.lean_producer_enabled;
+    let full_turn_proving = s.full_turn_proving_enabled;
+    let state_producer = if lean_producer { "lean" } else { "rust" }.to_string();
+    let producer_covered_effects =
+        dregg_turn::lean_shadow::producer_covered_effects().len();
+
     Json(StatusResponse {
         healthy,
         peer_count,
@@ -1578,6 +1651,81 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         note_count,
         federation_mode,
         public_key: hex_encode(&s.cclerk.public_key().0),
+        state_producer,
+        lean_producer,
+        full_turn_proving,
+        producer_covered_effects,
+    })
+}
+
+/// GET /api/node/producer — the honest THE-SWAP verified-execution boundary.
+async fn get_producer_status(State(state): State<NodeState>) -> Json<ProducerStatusResponse> {
+    let s = state.read().await;
+    let lean_producer_enabled = s.lean_producer_enabled;
+    let full_turn_proving = s.full_turn_proving_enabled;
+    drop(s);
+
+    let covered: Vec<String> = dregg_turn::lean_shadow::producer_covered_effects()
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
+    let uncovered: Vec<String> = dregg_turn::lean_shadow::producer_uncovered_effects()
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
+    let total_effect_kinds = dregg_turn::lean_shadow::all_effect_kinds().len();
+
+    let state_producer = if lean_producer_enabled { "lean" } else { "rust" }.to_string();
+
+    let summary = if lean_producer_enabled {
+        format!(
+            "Verified Lean executor is the authoritative state producer for turns touching only \
+             the {} covered effect kinds; turns touching any of the {} uncovered kinds fall back \
+             to the Rust producer for that turn (Rust runs as a logged differential cross-check). \
+             Full-turn STARK proving: {}.",
+            covered.len(),
+            uncovered.len(),
+            if full_turn_proving { "ON" } else { "off" }
+        )
+    } else {
+        format!(
+            "Legacy Rust executor is the authoritative state producer (verified Lean producer \
+             OFF — set DREGG_LEAN_PRODUCER=1 to enable it for the {} covered effect kinds). \
+             Full-turn STARK proving: {}.",
+            covered.len(),
+            if full_turn_proving { "ON" } else { "off" }
+        )
+    };
+
+    Json(ProducerStatusResponse {
+        state_producer,
+        lean_producer_enabled,
+        full_turn_proving,
+        covered_effects: covered,
+        total_effect_kinds,
+        uncovered_effects: uncovered,
+        summary,
+    })
+}
+
+/// GET /api/node/identity — the operator's pubkey + derived agent cell.
+async fn get_node_identity(State(state): State<NodeState>) -> Json<NodeIdentityResponse> {
+    let s = state.read().await;
+    let public_key = s.cclerk.public_key().0;
+    let default_token_id = *blake3::hash(b"default").as_bytes();
+    let agent_cell = dregg_cell::CellId::derive_raw(&public_key, &default_token_id);
+    let (agent_balance, agent_nonce) = match s.ledger.get(&agent_cell) {
+        Some(cell) => (Some(cell.state.balance()), Some(cell.state.nonce())),
+        None => (None, None),
+    };
+    let unlocked = s.unlocked;
+    drop(s);
+    Json(NodeIdentityResponse {
+        public_key: hex_encode(&public_key),
+        agent_cell: hex_encode(&agent_cell.0),
+        unlocked,
+        agent_balance,
+        agent_nonce,
     })
 }
 
