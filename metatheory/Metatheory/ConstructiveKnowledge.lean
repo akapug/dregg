@@ -102,15 +102,20 @@ verification (no completeness, no termination). This lifts `Dregg2.Laws.search_s
 the `Knower`/`Holds` reading: the untrusted side can only ever *establish* real knowledge,
 never fake it, because its output is funnelled through the trusted `Verify`. -/
 theorem find_realizes (k : Knower P W) (X : Claim P) (w : W)
+    (hsound : ∀ (p : P) (w : W),
+      Searchable.find (self := k.search) p = some w → @Discharged P W k.verify p w)
     (h : Searchable.find (self := k.search) X.stmt = some w) :
     @Holds P W k.verify X :=
-  ⟨w, @search_sound P W k.verify k.search X.stmt w h⟩
+  ⟨w, hsound X.stmt w h⟩
 
--- NOTE: `find_realizes` is NOT kernel-clean — it rests (correctly) on the **search
--- contract** `Dregg2.Laws.search_sound`, which is a deliberate `sorry`'d *primitive*
--- (the soundness-by-verification contract on the external, untrusted prover plugin: there
--- is no in-module data relating an opaque `Searchable.find` to `Verify`). So this is a
--- REST-ON-A-PRIMITIVE keystone, not a PROVED-clean one; deliberately NOT `#assert_axioms`'d.
+-- NOTE: `find_realizes` rests (correctly) on the **search contract** `hsound` — the
+-- soundness-by-verification guarantee carried as an EXPLICIT HYPOTHESIS on the external,
+-- untrusted prover plugin (`Knower.search` is a bare, untrusted `Searchable` by design, so
+-- there is no in-module data relating its opaque `find` to `Verify`). This is the
+-- `SoundSearchable.find_sound` / `Dregg2.Laws.search_sound` contract made explicit; given
+-- it, the theorem is kernel-clean (no `sorry`, no `search_sound` primitive appeal). A
+-- contracted searcher (`[SoundSearchable P W]`) discharges `hsound` via `search_sound`.
+#assert_axioms find_realizes
 
 /-- **Realizability closure under the verify seam — PROVED, kernel-clean.** Holding is
 *closed under the `Verify` seam*: if a knower already verifies a witness `w` for `X`

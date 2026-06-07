@@ -332,6 +332,17 @@ import Dregg2.Circuit.Witness.attenuateAWitness      -- B1 v2 WITNESS (attenuate
 import Dregg2.Circuit.Witness.cellDestroyAWitness    -- B1 v2-dual WITNESS (cellDestroyA lifecycle+deathCert): cellDestroyWitnessVec runs cellDestroyChainA (width 74); forged bystander collateral-kill REJECTED (lifecycle comp-1 gate 68≠69). Rust lean_executor_derived_cell_destroy_a. Reuses cellDestroyA_full_sound.
 import Dregg2.Circuit.Witness.bridgeLockAWitness     -- B1 v2-dual WITNESS (bridgeLockA bal+escrows): bridgeLockWitnessVec runs bridgeLockChainA (width 74); forged bystander bal mint REJECTED (bal comp-1 gate 68≠69). Rust lean_executor_derived_bridge_lock_a. Reuses bridgeLockA_full_sound.
 import Dregg2.Circuit.Witness.bridgeCancelAWitness   -- B1 v2-dual WITNESS (bridgeCancelA bal+escrows, refund): bridgeCancelWitnessVec runs bridgeCancelChainA (width 74); forged bystander bal mint REJECTED (bal comp-1 gate 68≠69). Rust lean_executor_derived_bridge_cancel_a. Reuses bridgeCancelA_full_sound.
+-- B2/B1 v2 WITNESS (tail): the remaining executor-derived witness modules (CI-coverage; each forges a 3rd-party tamper that the component-bind gate rejects):
+import Dregg2.Circuit.Witness.SealWitness            -- sealA witness
+import Dregg2.Circuit.Witness.UnsealWitness          -- unsealA witness
+import Dregg2.Circuit.Witness.SetPermissionsWitness  -- setPermissionsA witness
+import Dregg2.Circuit.Witness.SetVKWitness           -- setVKA witness
+import Dregg2.Circuit.Witness.SpawnWitness           -- spawnA witness
+import Dregg2.Circuit.Witness.RevokeDelegationWitness -- revokeDelegationA witness
+import Dregg2.Circuit.Witness.SwissDropWitness       -- swissDropA witness
+import Dregg2.Circuit.Witness.SwissExportWitness     -- swissExportA witness
+import Dregg2.Circuit.Witness.SwissHandoffWitness    -- swissHandoffA witness
+import Dregg2.Circuit.Witness.ValidateHandoffWitness -- validateHandoffA witness
 -- D5 executor⟺spec wave (independent declarative full-state spec + executor⟺spec per effect family; each #assert_axioms-clean):
 import Dregg2.Circuit.Spec.balancemovement       -- balanceA: recCexecAsset_iff_spec + debit/credit/other-untouched + rejects unauthorized/overdraft/self
 import Dregg2.Circuit.Spec.supplycreation        -- mintA: per-asset supply mint spec (supply Δ = +amt at one asset, frame elsewhere)
@@ -406,6 +417,19 @@ import Dregg2.Intent.Match       -- the solver as mathlib's coend ∫^B (A⟶B)�
 import Dregg2.Intent.Kernel      -- concrete KernelIntent over asset-bundle DreggResources: settle_discharges/settle_conserves/settle_no_double = the abstract keystones TRANSFERRED by instantiation; crossBid_needs_market (cross-asset bid unfillable w/o Phase-4 market offers); causal reveal-ordering = anti-frontrunning
 import Dregg2.Intent.Centers     -- Phase-3 (escrow KEPT SEPARATE from one-shot Intent escrow): CommCentralMonoid := CommMon_(Center R); escrowMonad (–⊗M) + escrowMonad_isMonoidal (Thm 5.6, lax-monoidal for ANY braided monoid — NO mul_comm needed); escrowMonadHom = FLP Cor 3.11 monad morphism (–⊗𝟙_)⟹id (component=Prod.fst, not 𝟙) + escrowProjectionEquiv = Cor 3.20 rigidity equivalence; teeth = noncommuting_admits_no_halfBraiding (§4 centrality) + escrow_no_iso_without_rigidity (§7.3); mathlib Center/CommMon_/Rigid reuse
 import Dregg2.Metatheory.Lawvere -- Track K: the Lawvere hyperdoctrine triple ∃_f⊣f*⊣∀_f — Part A posetal Set special case (Set.image_preimage/preimage_kernImage + Frobenius via image_inter_preimage + Beck-Chevalley; teeth: BC fails off-pullback, non-monotone reindex breaks Galois) + Part B the faithful relation-form ∀_R=Knows (□/◇ adjunction for ANY relation, contains Part A via the graph; teeth: S4 □□≠□ + ◇ fails binary meets on a Byzantine reflexive-non-transitive Fin 3 relation). K8 dual-H¹ PARKED
+-- ── Metatheory/* tree (epistemic/categorical core): pulled into the default `lake build` root so CI covers it (previously only Categorical/Open.* were reachable via separate `lake env lean`). ──
+import Metatheory.ConstructiveKnowledge   -- constructive (witness-carrying) knowledge modality
+import Metatheory.EpistemicDial            -- the Disclosure×Transferability×Agreement epistemic dial
+import Metatheory.EpistemicConsensus       -- epistemic consensus / common-knowledge front
+import Metatheory.Disputation              -- disputation / adjudication game
+import Metatheory.Categorical              -- categorical core (final-coalgebra base)
+import Metatheory.Open.FinalCoalgebra      -- OPEN: final-coalgebra boundary
+import Metatheory.Open.AuthorityClosure    -- OPEN: authority closure
+import Metatheory.Open.ConservationMultiEdge -- OPEN: multi-edge conservation
+import Metatheory.Open.CrossCellBisim      -- OPEN: cross-cell bisimulation
+import Metatheory.Open.CurvatureScreen     -- OPEN: curvature screen
+import Metatheory.Open.PerfectUC           -- OPEN: perfect UC-security front
+import Metatheory.Open.PerfectZK           -- OPEN: perfect ZK front
 import Dregg2.Metatheory.IndexedMonoidal -- the WELD (linear/dependent doctrine FLOOR): IndexedMonoidalCategory (base ⥤ Cat, monoidal fibres, lax reindexing) + Total = Grothendieck; concrete dreggIM (Ctx poset base + non-injective dropArt reindexing + Discrete Bundle ⊗-fibres) carries BOTH the ∃_f⊣f*⊣∀_f reindexing adjoints AND the fibrewise resource ⊗ on ONE total category; projection/Frobenius interaction (equality for the Set fibre, honest lax ⊆ for general relations + frobenius_eq_fails teeth); weldMorphism = one ∫F arrow touching both the predicate base and the resource fibre
 import Dregg2.Intent.KernelBridge -- TOY-REMEDIATION: the DemoRes Intent settle REFINES the real RecordKernelState per-asset conservation — toBal (bundle→bal delta) + settleIntent_refines + bridge_accepts_iff_conserves; teeth crossBid_rejected_by_bridge / bridge_rejects_nonconserving (a non-conserving settle the thin shadow would pass is caught by the real ledger)
 import Dregg2.Consistency               -- global soundness witness: dregg_consistent_nonempty = a single axiom-clean SystemModel instantiating all 11 Prop-carriers jointly; no carrier-pair derives False; not vacuous, not contradictory at the system level
