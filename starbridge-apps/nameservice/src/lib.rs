@@ -80,10 +80,10 @@
 
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellId, CellMode,
-    CellProgram, ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
-    InputRef, InspectorDescriptor, StarbridgeAppContext, StateConstraint, WitnessedPredicate,
-    WitnessedPredicateKind, canonical_program_vk, field_from_bytes, field_from_u64, hex_encode_32,
-    symbol,
+    CellProgram, ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor,
+    FieldConstraint, FieldElement, InputRef, InspectorDescriptor, StarbridgeAppContext,
+    StateConstraint, WitnessedPredicate, WitnessedPredicateKind, canonical_program_vk,
+    field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
 
 // =============================================================================
@@ -610,6 +610,34 @@ pub fn resolve_target(uri: &str) -> FieldElement {
 /// and reach `ctx.cipherclerk()`, `ctx.executor()`, or
 /// `ctx.factory_registry()` uniformly across all starbridge-apps
 /// mounted on the same host.
+/// The canonical web-constants module for this app — the single source of
+/// truth the `pages/constants.generated.js` file is rendered from.
+///
+/// Every value here is read from this crate's `pub const`s (slot indices,
+/// factory-vk) and `symbol(..)` topic strings, so the generated JS cannot drift
+/// from the executor's slot layout / event vocabulary. The
+/// `constants_generator` example renders this to `pages/constants.generated.js`;
+/// the `constants_js_is_in_sync` test fails if that file is stale.
+pub fn web_constants() -> ConstantsModule {
+    ConstantsModule::new("nameservice")
+        .slot("NAME_HASH_SLOT", NAME_HASH_SLOT as u64)
+        .slot("OWNER_HASH_SLOT", OWNER_HASH_SLOT as u64)
+        .slot("EXPIRY_SLOT", EXPIRY_SLOT as u64)
+        .slot("REVOKED_SLOT", REVOKED_SLOT as u64)
+        .slot("RESOLVE_TARGET_SLOT", RESOLVE_TARGET_SLOT as u64)
+        .string("FACTORY_VK_HEX", hex_encode_32(&NAME_FACTORY_VK))
+        .string(
+            "REVOKED_TOMBSTONE_PREFIX",
+            // The exact prefix `revoked_tombstone` hashes (see src/lib.rs).
+            "dregg-nameservice-revoked:",
+        )
+        .topic("REGISTERED", "name-registered")
+        .topic("RENEWED", "name-renewed")
+        .topic("TRANSFERRED", "name-transferred")
+        .topic("REVOKED", "name-revoked")
+        .topic("TARGET_SET", "name-target-set")
+}
+
 pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
     // 1. Register the name factory descriptor. The returned vk is
     // `NAME_FACTORY_VK`; downstream code looks descriptors up by it.
