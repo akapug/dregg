@@ -324,6 +324,120 @@ pub fn effect_kind(eff: &Effect) -> &'static str {
     }
 }
 
+/// THE SWAP — honest producer-coverage report.
+///
+/// The effect kinds the marshaller PROJECTS to a wire action (`effect_is_mappable`'s supported
+/// set, mirroring the FFI's `effect_to_wire`). A turn whose every effect is in this set is
+/// eligible for the VERIFIED Lean producer on the commit path; the Lean executor produces the
+/// committed state and the Rust executor is demoted to a differential cross-check. A turn with ANY
+/// effect outside this set falls back to the Rust producer for that turn (honest boundary).
+///
+/// MUST be kept in sync with [`effect_is_mappable`] (the actual gate). This is the public,
+/// node-surfaced enumeration so a node/CLI can report PRECISELY which effects default to the
+/// verified producer vs. which still block it. Names match [`effect_kind`].
+pub fn producer_covered_effects() -> &'static [&'static str] {
+    &[
+        "SetField",
+        "Transfer",
+        "SetPermissions",
+        "SetVerificationKey",
+        "EmitEvent",
+        "MakeSovereign",
+        "RevokeDelegation",
+        "NoteSpend",
+        "NoteCreate",
+        "IncrementNonce",
+        "Refusal",
+        "ReceiptArchive",
+        "RefreshDelegation",
+        "CellSeal",
+        "CellUnseal",
+        "CellDestroy",
+        "Burn",
+        "RevokeCapability",
+        "QueueAllocate",
+        "GrantCapability",
+    ]
+}
+
+/// Whether the producer covers (defaults to Lean for) a given effect-kind name.
+/// `name` should be an [`effect_kind`] / [`producer_covered_effects`] string.
+pub fn producer_covers_kind(name: &str) -> bool {
+    producer_covered_effects().contains(&name)
+}
+
+/// Every on-chain effect KIND name (the full `Effect` enum surface, as named by
+/// [`effect_kind`]). Used to report the honest producer boundary: the kinds in
+/// this list but NOT in [`producer_covered_effects`] are the effects that still
+/// fall back to the Rust producer.
+pub fn all_effect_kinds() -> &'static [&'static str] {
+    &[
+        "SetField",
+        "Transfer",
+        "GrantCapability",
+        "RevokeCapability",
+        "EmitEvent",
+        "IncrementNonce",
+        "CreateCell",
+        "SetPermissions",
+        "SetVerificationKey",
+        "NoteSpend",
+        "NoteCreate",
+        "CreateSealPair",
+        "Seal",
+        "Unseal",
+        "SpawnWithDelegation",
+        "RefreshDelegation",
+        "RevokeDelegation",
+        "BridgeMint",
+        "BridgeLock",
+        "BridgeFinalize",
+        "BridgeCancel",
+        "Introduce",
+        "PipelinedSend",
+        "CreateObligation",
+        "FulfillObligation",
+        "SlashObligation",
+        "CreateEscrow",
+        "ReleaseEscrow",
+        "RefundEscrow",
+        "CreateCommittedEscrow",
+        "ReleaseCommittedEscrow",
+        "RefundCommittedEscrow",
+        "ExerciseViaCapability",
+        "MakeSovereign",
+        "CreateCellFromFactory",
+        "QueueAllocate",
+        "QueueEnqueue",
+        "QueueDequeue",
+        "QueueResize",
+        "QueueAtomicTx",
+        "QueuePipelineStep",
+        "ExportSturdyRef",
+        "EnlivenRef",
+        "DropRef",
+        "ValidateHandoff",
+        "Refusal",
+        "CellSeal",
+        "CellUnseal",
+        "CellDestroy",
+        "Burn",
+        "AttenuateCapability",
+        "ReceiptArchive",
+    ]
+}
+
+/// The effect kinds NOT yet projected to the wire — a turn touching any of these
+/// falls back to the Rust producer for that turn. The honest "blocks the full
+/// Lean-producer default" list.
+pub fn producer_uncovered_effects() -> Vec<&'static str> {
+    all_effect_kinds()
+        .iter()
+        .copied()
+        .filter(|k| !producer_covers_kind(k))
+        .collect()
+}
+
 fn turn_effect_kinds(turn: &Turn) -> Vec<&'static str> {
     let mut out = Vec::new();
     fn walk(tree: &CallTree, out: &mut Vec<&'static str>) {
@@ -1329,4 +1443,47 @@ fn permissions_to_i128(_perms: &dregg_cell::Permissions) -> i128 {
 #[cfg(feature = "lean-shadow")]
 fn event_data_to_i128(_event: &crate::action::Event) -> i128 {
     0
+}
+
+#[cfg(test)]
+mod producer_coverage_tests {
+    use super::*;
+
+    /// The public coverage list must stay non-empty, deduplicated, and every entry must be a
+    /// real effect-kind name. Guards against silent shrinkage of the producer-default surface
+    /// (a shrink would quietly demote effects back to the Rust producer).
+    #[test]
+    fn covered_effects_are_well_formed() {
+        let covered = producer_covered_effects();
+        assert!(!covered.is_empty(), "producer coverage must not be empty");
+        let mut seen = std::collections::HashSet::new();
+        for name in covered {
+            assert!(seen.insert(*name), "duplicate effect in coverage list: {name}");
+            assert!(producer_covers_kind(name), "producer_covers_kind disagrees for {name}");
+        }
+        // Twenty effect kinds are projected to the wire today (mirrors effect_is_mappable).
+        assert_eq!(covered.len(), 20, "producer coverage count changed — update the report and confirm effect_is_mappable agrees");
+    }
+
+    /// Every covered effect must appear in the full enumeration, and the
+    /// uncovered list must be exactly the complement (no overlaps, full cover).
+    #[test]
+    fn coverage_partitions_the_effect_surface() {
+        let all: std::collections::HashSet<&str> = all_effect_kinds().iter().copied().collect();
+        assert_eq!(all.len(), all_effect_kinds().len(), "all_effect_kinds has duplicates");
+        for c in producer_covered_effects() {
+            assert!(all.contains(c), "covered effect {c} missing from all_effect_kinds");
+        }
+        let uncovered: std::collections::HashSet<&str> =
+            producer_uncovered_effects().into_iter().collect();
+        // Partition: covered ∪ uncovered = all, covered ∩ uncovered = ∅.
+        assert_eq!(
+            producer_covered_effects().len() + uncovered.len(),
+            all.len(),
+            "covered + uncovered must equal the full effect surface"
+        );
+        for c in producer_covered_effects() {
+            assert!(!uncovered.contains(c), "{c} is both covered and uncovered");
+        }
+    }
 }
