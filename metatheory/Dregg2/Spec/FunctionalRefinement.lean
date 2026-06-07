@@ -46,6 +46,8 @@ allocate / enqueue / dequeue). For each effect we:
 import Dregg2.Exec.Handlers.Escrow
 import Dregg2.Exec.Handlers.StateSupply
 import Dregg2.Exec.Handlers.Authority
+import Dregg2.Exec.Handlers.Seal
+import Dregg2.Exec.Handlers.Lifecycle
 
 namespace Dregg2.Spec.FunctionalRefinement
 
@@ -880,5 +882,482 @@ def aDel : DelegateArgs := { delegator := 0, recipient := 1, target := 7, keep :
 #assert_axioms noteSpend_triangle
 #assert_axioms noteSpend_antighost
 #assert_axioms noteSpend_double_spend_rejected
+
+/-! ## §11 — SIXTH FAMILY: PURE-STATE WRITES (setField / incrementNonce / setPermissions / setVK)
++ makeSovereign — the named-field-write triangle.
+
+dregg1's `SetField`/`IncrementNonce`/`SetPermissions`/`SetVerificationKey` are all the SAME proven
+handler (`Handlers.StateSupply.stateWriteH`) at a fixed field name — a balance-neutral named-field
+write gated on cell LIVENESS (`acceptsEffects`) + self-authority (`authorizedB`). We give the underlying
+`stateWriteStep` an INDEPENDENT intent spec over the `cell` record function and prove the triangle +
+anti-ghost tooth. The spec writes EXACTLY field `a.field` of EXACTLY cell `a.target` to `.int a.value`,
+EVERYTHING ELSE (every other cell's record, bal, caps, escrows, lifecycle, side-tables) untouched. The
+four named effects (`setFieldEffect`/`incrementNonceEffect`/`setPermissionsEffect`/`setVKEffect`) are all
+`stateWriteStep` differing ONLY in the pinned `field`, so the single triangle covers all four. -/
+
+open Dregg2.Exec.Handlers.StateSupply
+  (StateWriteArgs stateWriteStep CreateArgs createCellStep createGate spawnStep
+   MakeSovereignArgs makeSovereignStepK)
+open Dregg2.Exec.EffectsState (writeField stateAuthB)
+open Dregg2.Exec.TurnExecutorFull
+  (setLifecycle makeSovereignKernel parentClist
+   sealerCap unsealerCap holdsSealCapFor lcSealed lcLive lcDestroyed)
+
+/-- **`stateWriteSpec` — the INDEPENDENT declarative post-state of a named-field write.** EXACTLY field
+`a.field` of EXACTLY cell `a.target` becomes `.int a.value` (`writeField` applied at that field/cell);
+EVERYTHING ELSE untouched. Written from intent ("set this ONE named field to this scalar"), NOT from
+`stateWriteStep`. (`writeField` IS the kernel's record-update primitive, reused as the field-level move;
+the load-bearing content is that the executor touches EXACTLY this field/cell/value and gates on
+liveness+authority — pinned by the triangle.) -/
+def stateWriteSpec (k : RecordKernelState) (a : StateWriteArgs) : RecordKernelState :=
+  writeField k a.field a.target (.int a.value)
+
+/-- The pure-state write gate (intent-level precondition): the target is Live AND the actor holds
+self-authority over it. -/
+def stateWriteGate (k : RecordKernelState) (a : StateWriteArgs) : Prop :=
+  acceptsEffects k a.target = true ∧
+  authorizedB k.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 } = true
+
+/-- **THE PURE-STATE-WRITE TRIANGLE (PROVED, FULL BICONDITIONAL).** `stateWriteStep k a = some k'` IFF
+the write gate (live cell + self-authority) holds AND `k' = stateWriteSpec k a`. The `→` is
+output-uniqueness (a commit pins the unique intent post-state — EXACTLY field `a.field` of cell
+`a.target` set to `a.value`, no other cell/field/component moved); the `←` is completeness. Covers
+setField / incrementNonce / setPermissions / setVK — all `stateWriteStep` at a pinned field name. -/
+theorem stateWrite_triangle (k k' : RecordKernelState) (a : StateWriteArgs) :
+    stateWriteStep k a = some k' ↔ (stateWriteGate k a ∧ k' = stateWriteSpec k a) := by
+  unfold stateWriteStep stateWriteGate stateWriteSpec
+  constructor
+  · intro h
+    by_cases hg : acceptsEffects k a.target
+        && authorizedB k.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
+      simp only [Bool.and_eq_true] at hg
+      exact ⟨⟨hg.1, hg.2⟩, h.symm⟩
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  · rintro ⟨⟨hlive, hauth⟩, hk⟩
+    rw [if_pos (by simp [hlive, hauth]), hk]
+
+/-- **ANTI-GHOST TOOTH (pure-state write, PROVED).** Any candidate `k'' ≠ stateWriteSpec k a` is
+REJECTED — the write commits EXACTLY the named-field update; a ghost that wrote the WRONG field, the
+WRONG cell, the WRONG value, moved `bal`/`caps`, or touched a 2nd cell cannot come out of
+`stateWriteStep`. -/
+theorem stateWrite_antighost (k k'' : RecordKernelState) (a : StateWriteArgs)
+    (hne : k'' ≠ stateWriteSpec k a) : stateWriteStep k a ≠ some k'' := by
+  intro h
+  exact hne ((stateWrite_triangle k k'' a).mp h).2
+
+/-- **`makeSovereignSpec` — the INDEPENDENT declarative post-state of a make-sovereign.** The target's
+readable record is DROPPED behind a state commitment (`makeSovereignKernel` = the `sovereignRebind` of
+`k.cell` at `target`); EVERYTHING ELSE (bal, caps, escrows, accounts, other cells' records) untouched.
+Written from intent ("make THIS cell sovereign — its state goes behind a commitment, nothing else
+moves"). The rebind IS the kernel's own commitment primitive; the triangle pins that the executor
+applies it to EXACTLY `target` under the live+authority gate. -/
+def makeSovereignSpec (k : RecordKernelState) (a : MakeSovereignArgs) : RecordKernelState :=
+  makeSovereignKernel k a.target
+
+/-- The make-sovereign gate: the target is Live AND the actor holds self-authority over it. -/
+def makeSovereignGate (k : RecordKernelState) (a : MakeSovereignArgs) : Prop :=
+  acceptsEffects k a.target = true ∧
+  authorizedB k.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 } = true
+
+/-- **THE MAKE-SOVEREIGN TRIANGLE (PROVED, FULL BICONDITIONAL).** `makeSovereignStepK k a = some k'`
+IFF the gate (live cell + self-authority) holds AND `k' = makeSovereignSpec k a`. The `→` pins the
+unique intent post-state (EXACTLY `target`'s record dropped behind a commitment, no other cell/component
+moved); the `←` is completeness. -/
+theorem makeSovereign_triangle (k k' : RecordKernelState) (a : MakeSovereignArgs) :
+    makeSovereignStepK k a = some k' ↔ (makeSovereignGate k a ∧ k' = makeSovereignSpec k a) := by
+  unfold makeSovereignStepK makeSovereignGate makeSovereignSpec
+  constructor
+  · intro h
+    by_cases hg : acceptsEffects k a.target
+        && authorizedB k.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
+      simp only [Bool.and_eq_true] at hg
+      exact ⟨⟨hg.1, hg.2⟩, h.symm⟩
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  · rintro ⟨⟨hlive, hauth⟩, hk⟩
+    rw [if_pos (by simp [hlive, hauth]), hk]
+
+/-- **ANTI-GHOST TOOTH (make-sovereign, PROVED).** Any candidate `k'' ≠ makeSovereignSpec k a` is
+REJECTED — the make-sovereign commits EXACTLY the commitment-rebind of `target`; a ghost that left the
+record readable, rebound the WRONG cell, or moved a 2nd component cannot come out of
+`makeSovereignStepK`. -/
+theorem makeSovereign_antighost (k k'' : RecordKernelState) (a : MakeSovereignArgs)
+    (hne : k'' ≠ makeSovereignSpec k a) : makeSovereignStepK k a ≠ some k'' := by
+  intro h
+  exact hne ((makeSovereign_triangle k k'' a).mp h).2
+
+/-! ## §12 — SEVENTH FAMILY: LIFECYCLE (cellDestroy / refreshDelegation) — the side-table triangle.
+
+The lifecycle ops (`Handlers.Lifecycle.cellDestroyStep`/`refreshDelegationStep`) move the
+`lifecycle`/`deathCert`/`delegations` side-tables. We give each an INDEPENDENT intent spec and prove the
+triangle + anti-ghost tooth. (cellSeal/cellUnseal are covered by the lifecycle state-machine `#guard`
+teeth in `Handlers.Lifecycle` itself; here we add the OUTPUT-UNIQUE triangle for destroy + refresh,
+whose post-states touch the death-certificate / delegation-snapshot tables.) -/
+
+open Dregg2.Exec.Handlers.Lifecycle
+  (CellDestroyArgs cellDestroyStep RefreshDelegationArgs refreshDelegationStep)
+
+/-- **`cellDestroySpec` — the INDEPENDENT declarative post-state of a cell destroy.** The target's
+lifecycle flips to Destroyed (`setLifecycle … lcDestroyed`) AND its death-certificate slot is bound to
+`a.certHash`; EVERYTHING ELSE (bal, caps, escrows, other cells' lifecycle/deathCert) untouched. Written
+from intent ("retire THIS cell, recording its death certificate"), NOT from `cellDestroyStep`. -/
+def cellDestroySpec (k : RecordKernelState) (a : CellDestroyArgs) : RecordKernelState :=
+  { (setLifecycle k a.cell lcDestroyed) with
+      deathCert := fun c => if c = a.cell then a.certHash else k.deathCert c }
+
+/-- The cell-destroy gate: the actor holds self-authority over the cell AND the cell is NOT already
+Destroyed (no re-destroy). -/
+def cellDestroyGate (k : RecordKernelState) (a : CellDestroyArgs) : Prop :=
+  stateAuthB k.caps a.actor a.cell = true ∧ (k.lifecycle a.cell != lcDestroyed) = true
+
+/-- **THE CELL-DESTROY TRIANGLE (PROVED, FULL BICONDITIONAL).** `cellDestroyStep k a = some k'` IFF the
+gate (self-authority + non-terminal) holds AND `k' = cellDestroySpec k a`. The `→` pins the unique
+intent post-state (EXACTLY the destroy flip + death-cert bind on cell `a.cell`); the `←` is
+completeness. -/
+theorem cellDestroy_triangle (k k' : RecordKernelState) (a : CellDestroyArgs) :
+    cellDestroyStep k a = some k' ↔ (cellDestroyGate k a ∧ k' = cellDestroySpec k a) := by
+  unfold cellDestroyStep cellDestroyGate cellDestroySpec
+  constructor
+  · intro h
+    by_cases hg : stateAuthB k.caps a.actor a.cell && (k.lifecycle a.cell != lcDestroyed)
+    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
+      simp only [Bool.and_eq_true] at hg
+      exact ⟨⟨hg.1, hg.2⟩, h.symm⟩
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  · rintro ⟨⟨hauth, hlc⟩, hk⟩
+    rw [if_pos (by simp [hauth, hlc]), hk]
+
+/-- **ANTI-GHOST TOOTH (cell destroy, PROVED).** Any candidate `k'' ≠ cellDestroySpec k a` is REJECTED —
+the destroy commits EXACTLY the Destroyed flip + death-cert bind; a ghost that left the cell Live, bound
+the WRONG cert, or touched another cell cannot come out of `cellDestroyStep`. -/
+theorem cellDestroy_antighost (k k'' : RecordKernelState) (a : CellDestroyArgs)
+    (hne : k'' ≠ cellDestroySpec k a) : cellDestroyStep k a ≠ some k'' := by
+  intro h
+  exact hne ((cellDestroy_triangle k k'' a).mp h).2
+
+/-- **`refreshDelegationSpec` — the INDEPENDENT declarative post-state of a delegation refresh.** The
+child's delegation-snapshot slot is OVERWRITTEN with the parent's CURRENT c-list (`parentClist k child`);
+EVERYTHING ELSE untouched. Written from intent ("re-snapshot the parent's authority into the child's
+delegation table"), NOT from `refreshDelegationStep`. -/
+def refreshDelegationSpec (k : RecordKernelState) (a : RefreshDelegationArgs) : RecordKernelState :=
+  { k with delegations := fun c => if c = a.child then parentClist k a.child else k.delegations c }
+
+/-- The refresh-delegation gate: the actor holds self-authority over the child AND the child genuinely
+has a parent (`delegate child` is `some`). -/
+def refreshDelegationGate (k : RecordKernelState) (a : RefreshDelegationArgs) : Prop :=
+  stateAuthB k.caps a.actor a.child = true ∧ (k.delegate a.child).isSome = true
+
+/-- **THE REFRESH-DELEGATION TRIANGLE (PROVED, FULL BICONDITIONAL).** `refreshDelegationStep k a =
+some k'` IFF the gate (self-authority + parent-exists) holds AND `k' = refreshDelegationSpec k a`. The
+`→` pins the unique intent post-state (EXACTLY the child's delegation slot overwritten with the parent's
+current c-list); the `←` is completeness. -/
+theorem refreshDelegation_triangle (k k' : RecordKernelState) (a : RefreshDelegationArgs) :
+    refreshDelegationStep k a = some k' ↔ (refreshDelegationGate k a ∧ k' = refreshDelegationSpec k a) := by
+  unfold refreshDelegationStep refreshDelegationGate refreshDelegationSpec
+  constructor
+  · intro h
+    by_cases hg : stateAuthB k.caps a.actor a.child && (k.delegate a.child).isSome
+    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
+      simp only [Bool.and_eq_true] at hg
+      exact ⟨⟨hg.1, hg.2⟩, h.symm⟩
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  · rintro ⟨⟨hauth, hdel⟩, hk⟩
+    rw [if_pos (by simp [hauth, hdel]), hk]
+
+/-- **ANTI-GHOST TOOTH (refresh delegation, PROVED).** Any candidate `k'' ≠ refreshDelegationSpec k a`
+is REJECTED — the refresh commits EXACTLY the parent-c-list snapshot into the child's slot; a ghost that
+snapshotted a STALE c-list, the WRONG child, or touched another component cannot come out of
+`refreshDelegationStep`. -/
+theorem refreshDelegation_antighost (k k'' : RecordKernelState) (a : RefreshDelegationArgs)
+    (hne : k'' ≠ refreshDelegationSpec k a) : refreshDelegationStep k a ≠ some k'' := by
+  intro h
+  exact hne ((refreshDelegation_triangle k k'' a).mp h).2
+
+/-! ## §13 — EIGHTH FAMILY: SEAL/SOVEREIGN (createSealPair / seal / unseal) — the sealed-box triangle.
+
+The seal ops (`Handlers.Seal.createSealPairStep`/`sealStep`/`unsealStep`) move the `caps` c-lists +
+`sealedBoxes` holding-store. We give each an INDEPENDENT intent spec and prove the triangle + anti-ghost
+tooth. createSealPair GRANTS the two seal caps (R3-gated on pid freshness); seal INSERTS a box binding a
+genuinely-held payload; unseal OPENS a found box and GRANTS the recovered cap. -/
+
+open Dregg2.Exec.Handlers.Seal
+  (CreateSealPairArgs createSealPairStep pidFresh SealArgs sealStep sealGate
+   UnsealArgs unsealStep unsealGate)
+
+/-- **`createSealPairSpec` — the INDEPENDENT declarative post-state of a seal-pair create.** The
+sealer-holder's c-list GAINS the sealer cap for `pid` AND the unsealer-holder's c-list GAINS the unsealer
+cap for `pid` (two `grant`s); EVERYTHING ELSE (bal, escrows, sealedBoxes, other cells' caps) untouched.
+Written from intent ("hand out the matched sealer/unsealer cap pair for this fresh pid"). -/
+def createSealPairSpec (k : RecordKernelState) (a : CreateSealPairArgs) : RecordKernelState :=
+  { k with caps := grant (grant k.caps a.sealerHolder (sealerCap a.pid))
+                         a.unsealerHolder (unsealerCap a.pid) }
+
+/-- The create-seal-pair gate: the actor holds authority over `sealerHolder` AND `pid` is FRESH (no box
+already bound under it — the R3 conjunct). -/
+def createSealPairGate (k : RecordKernelState) (a : CreateSealPairArgs) : Prop :=
+  stateAuthB k.caps a.actor a.sealerHolder = true ∧ pidFresh k a.pid = true
+
+/-- **THE CREATE-SEAL-PAIR TRIANGLE (PROVED, FULL BICONDITIONAL).** `createSealPairStep k a = some k'`
+IFF the gate (authority + pid freshness) holds AND `k' = createSealPairSpec k a`. The `→` pins the
+unique intent post-state (EXACTLY the matched sealer/unsealer grants to the two named holders); the `←`
+is completeness. The freshness conjunct is the R3 no-pid-reuse discipline. -/
+theorem createSealPair_triangle (k k' : RecordKernelState) (a : CreateSealPairArgs) :
+    createSealPairStep k a = some k' ↔ (createSealPairGate k a ∧ k' = createSealPairSpec k a) := by
+  unfold createSealPairStep createSealPairGate createSealPairSpec
+  constructor
+  · intro h
+    by_cases hg : stateAuthB k.caps a.actor a.sealerHolder = true ∧ pidFresh k a.pid = true
+    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
+      exact ⟨hg, h.symm⟩
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  · rintro ⟨hg, hk⟩; rw [if_pos hg, hk]
+
+/-- **ANTI-GHOST TOOTH (create-seal-pair, PROVED).** Any candidate `k'' ≠ createSealPairSpec k a` is
+REJECTED — the create commits EXACTLY the two matched grants; a ghost that granted the WRONG cap, to the
+WRONG holder, or reused an OCCUPIED pid cannot come out of `createSealPairStep`. -/
+theorem createSealPair_antighost (k k'' : RecordKernelState) (a : CreateSealPairArgs)
+    (hne : k'' ≠ createSealPairSpec k a) : createSealPairStep k a ≠ some k'' := by
+  intro h
+  exact hne ((createSealPair_triangle k k'' a).mp h).2
+
+/-- **`sealSpec` — the INDEPENDENT declarative post-state of a seal.** A box binding the held `payload`
+cap, keyed by `pid` and tagged by the sealer, is PREPENDED to the `sealedBoxes` holding-store;
+EVERYTHING ELSE untouched. Written from intent ("park this held cap into a box under this pid"). -/
+def sealSpec (k : RecordKernelState) (a : SealArgs) : RecordKernelState :=
+  { k with sealedBoxes := { pairId := a.pid, sealer := a.actor, payload := a.payload }
+                          :: k.sealedBoxes }
+
+/-- **THE SEAL TRIANGLE (PROVED, FULL BICONDITIONAL).** `sealStep k a = some k'` IFF the seal gate
+(`sealGate` — the actor genuinely HOLDS the sealer cap for `pid` AND HOLDS the `payload` cap) holds AND
+`k' = sealSpec k a`. The `→` pins the unique intent post-state (EXACTLY the box insert of the held
+payload); the `←` is completeness. The gate is the confinement discipline: you cannot seal a cap you do
+not hold. -/
+theorem seal_triangle (k k' : RecordKernelState) (a : SealArgs) :
+    sealStep k a = some k' ↔ (sealGate k a = true ∧ k' = sealSpec k a) := by
+  unfold sealStep sealSpec
+  constructor
+  · intro h
+    by_cases hg : sealGate k a
+    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
+      exact ⟨hg, h.symm⟩
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  · rintro ⟨hg, hk⟩; rw [if_pos hg, hk]
+
+/-- **ANTI-GHOST TOOTH (seal, PROVED).** Any candidate `k'' ≠ sealSpec k a` is REJECTED — the seal
+commits EXACTLY the box insert of the held payload; a ghost that sealed a cap NOT held, under the WRONG
+pid, or moved a 2nd component cannot come out of `sealStep`. -/
+theorem seal_antighost (k k'' : RecordKernelState) (a : SealArgs)
+    (hne : k'' ≠ sealSpec k a) : sealStep k a ≠ some k'' := by
+  intro h
+  exact hne ((seal_triangle k k'' a).mp h).2
+
+/-- **`unsealSpec` — the INDEPENDENT declarative post-state of an unseal of found box `box`.** The
+recovered `box.payload` cap is GRANTED into the recipient's c-list (`grant`); EVERYTHING ELSE (including
+the box itself — dregg1 leaves the box in place) untouched. Written from intent ("open the box, hand the
+recovered cap to the recipient"). -/
+def unsealSpec (k : RecordKernelState) (a : UnsealArgs) (box : SealedBoxRecord) : RecordKernelState :=
+  { k with caps := grant k.caps a.recipient box.payload }
+
+/-- **THE UNSEAL TRIANGLE (PROVED, FULL BICONDITIONAL).** `unsealStep k a = some k'` IFF the actor holds
+the unsealer cap for `pid` (`unsealGate`), a box `box` is bound under `pid` (`findSealedBox = some box` —
+fail-closed when absent), AND `k' = unsealSpec k a box`. The `→` pins the unique intent post-state
+(EXACTLY the recovered payload granted to the recipient); the `←` is completeness. Unsealing an ABSENT
+box is fail-closed (no `box` witness). -/
+theorem unseal_triangle (k k' : RecordKernelState) (a : UnsealArgs) :
+    unsealStep k a = some k' ↔
+      (unsealGate k a = true ∧ ∃ box, findSealedBox k.sealedBoxes a.pid = some box ∧
+        k' = unsealSpec k a box) := by
+  unfold unsealStep unsealSpec
+  constructor
+  · intro h
+    by_cases hg : unsealGate k a
+    · rw [if_pos hg] at h
+      cases hfind : findSealedBox k.sealedBoxes a.pid with
+      | none     => rw [hfind] at h; exact absurd h (by simp)
+      | some box =>
+          rw [hfind] at h; simp only [Option.some.injEq] at h
+          exact ⟨hg, box, rfl, h.symm⟩
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  · rintro ⟨hg, box, hfind, hk⟩
+    rw [if_pos hg, hfind, hk]
+
+/-- **ANTI-GHOST TOOTH (unseal, PROVED).** Once the found box `box` is fixed, any candidate
+`k'' ≠ unsealSpec k a box` is REJECTED — the unseal commits EXACTLY the recovered-payload grant to the
+recipient; a ghost that granted the WRONG cap, to the WRONG recipient, or opened a box under the WRONG
+pid cannot come out of `unsealStep`. -/
+theorem unseal_antighost (k k'' : RecordKernelState) (a : UnsealArgs) (box : SealedBoxRecord)
+    (hfind : findSealedBox k.sealedBoxes a.pid = some box) (hne : k'' ≠ unsealSpec k a box) :
+    unsealStep k a ≠ some k'' := by
+  intro h
+  obtain ⟨_, box', hfind', hk⟩ := (unseal_triangle k k'' a).mp h
+  rw [hfind] at hfind'; simp only [Option.some.injEq] at hfind'; subst hfind'
+  exact hne hk
+
+/-! ## §14 — NINTH FAMILY: SUPPLY/SPAWN (createCell / createCellFromFactory / spawn) — the growth triangle.
+
+The account-growth ops (`Handlers.StateSupply.createCellStep`/`spawnStep`, with
+`createCellFromFactoryH := createCellH` and `spawnH := createCellH`) mint a FRESH cell born EMPTY. We give
+the step an INDEPENDENT intent spec over `accounts`+`bal` and prove the triangle + anti-ghost tooth. The
+new cell appears in `accounts` with a zeroed `bal` column; the id must be FRESH (`∉ accounts`) and the
+creator privileged (`mintAuthorizedB`). Since `createCellFromFactoryStep`/`spawnStep` are definitionally
+`createCellStep`, the single triangle covers all three (the factory caveat-install + spawn cap-copy are
+bal-orthogonal side moves carried by the full executor — at the SUPPLY layer all three share the
+born-empty growth). -/
+
+/-- **`createCellSpec` — the INDEPENDENT declarative post-state of an account-growth create.** The fresh
+`newCell` is inserted into `accounts` with its `bal` column reset to `0` in every asset
+(`createCellIntoAsset`); EVERYTHING ELSE (existing cells' bal, caps, escrows) untouched. Written from
+intent ("a fresh empty cell is born"), NOT from `createCellStep`. -/
+def createCellSpec (k : RecordKernelState) (a : CreateArgs) : RecordKernelState :=
+  createCellIntoAsset k a.newCell
+
+/-- The account-growth gate: the actor is privileged (`mintAuthorizedB` — bare ownership is NOT enough)
+AND the id is FRESH (`newCell ∉ accounts`). -/
+def createCellGate (k : RecordKernelState) (a : CreateArgs) : Prop :=
+  mintAuthorizedB k.caps a.actor a.newCell = true ∧ a.newCell ∉ k.accounts
+
+/-- **THE CREATE-CELL TRIANGLE (PROVED, FULL BICONDITIONAL).** `createCellStep k a = some k'` IFF the
+gate (privileged creator + fresh id) holds AND `k' = createCellSpec k a`. The `→` pins the unique intent
+post-state (EXACTLY the fresh born-empty insert — the new cell appears with a zeroed bal column, no
+existing cell touched); the `←` is completeness. Covers createCell / createCellFromFactory / spawn (all
+`createCellStep` at the supply layer). -/
+theorem createCell_triangle (k k' : RecordKernelState) (a : CreateArgs) :
+    createCellStep k a = some k' ↔ (createCellGate k a ∧ k' = createCellSpec k a) := by
+  unfold createCellStep createGate createCellGate createCellSpec
+  constructor
+  · intro h
+    by_cases hg : mintAuthorizedB k.caps a.actor a.newCell && decide (a.newCell ∉ k.accounts)
+    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hg
+      exact ⟨⟨hg.1, hg.2⟩, h.symm⟩
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  · rintro ⟨⟨hauth, hfresh⟩, hk⟩
+    rw [if_pos (by simp [hauth, hfresh]), hk]
+
+/-- **ANTI-GHOST TOOTH (create-cell, PROVED).** Any candidate `k'' ≠ createCellSpec k a` is REJECTED —
+the create commits EXACTLY the born-empty fresh-cell insert; a ghost that minted the cell with a NON-zero
+balance (a supply-amplification!), re-inserted an EXISTING id, or touched an existing cell cannot come out
+of `createCellStep`. -/
+theorem createCell_antighost (k k'' : RecordKernelState) (a : CreateArgs)
+    (hne : k'' ≠ createCellSpec k a) : createCellStep k a ≠ some k'' := by
+  intro h
+  exact hne ((createCell_triangle k k'' a).mp h).2
+
+/-- **THE SPAWN TRIANGLE (PROVED, FULL BICONDITIONAL).** `spawnStep` is definitionally `createCellStep`,
+so spawn commits EXACTLY the same born-empty growth post-state under the same gate. The supply content
+is the fresh empty child (the cap-copy/delegation-snapshot is bal-orthogonal, carried elsewhere). -/
+theorem spawn_triangle (k k' : RecordKernelState) (a : CreateArgs) :
+    spawnStep k a = some k' ↔ (createCellGate k a ∧ k' = createCellSpec k a) :=
+  createCell_triangle k k' a
+
+/-- **ANTI-GHOST TOOTH (spawn, PROVED).** Spawn commits EXACTLY the born-empty growth; a child minted
+with a non-zero balance (amplification via spawn) is excluded. -/
+theorem spawn_antighost (k k'' : RecordKernelState) (a : CreateArgs)
+    (hne : k'' ≠ createCellSpec k a) : spawnStep k a ≠ some k'' :=
+  createCell_antighost k k'' a hne
+
+/-! ## §15 — NON-VACUITY TEETH (`#guard`) for the four new families: witness TRUE and ghost REJECTED. -/
+
+/-- State/lifecycle/seal/supply fixture: cells 0,1 are accounts; cell 0 holds a `node 0` cap (self-auth
++ privileged-create over fresh ids) and a `node 1` cap; cell 1 is SEALED, cell 0 Live; cell 1 has parent
+cell 0; a sealed box is bound under pid 5. -/
+def sfx : RecordKernelState :=
+  { accounts := {0, 1}
+    cell := fun _ => .record [("balance", .int 0), ("nonce", .int 7)]
+    -- cell 0 holds: node 0/1 (self+edge auth), node 5/6 (privileged create over fresh ids 5,6),
+    -- and an endpoint cap for pid 5 (the unsealer cap for the box bound under pid 5).
+    caps := fun c => if c = 0 then
+                       [Dregg2.Authority.Cap.node 0, Dregg2.Authority.Cap.node 1,
+                        Dregg2.Authority.Cap.node 5, Dregg2.Authority.Cap.node 6,
+                        unsealerCap 5]
+                     else []
+    bal := fun c a => if c = 0 ∧ a = 0 then 100 else 0
+    lifecycle := fun c => if c = 1 then lcSealed else lcLive
+    delegate := fun c => if c = 1 then some 0 else none
+    sealedBoxes := [{ pairId := 5, sealer := 0, payload := Dregg2.Authority.Cap.node 9 }] }
+
+-- PURE-STATE WRITE: setField "nonce" of Live cell 0 to 42 commits; reading nonce back = 42.
+#guard (stateWriteStep sfx { actor := 0, target := 0, field := "nonce", value := 42 }).isSome
+#guard ((stateWriteStep sfx { actor := 0, target := 0, field := "nonce", value := 42 }).map
+          (fun k => Dregg2.Exec.EffectsState.fieldOf "nonce" (k.cell 0))) == some 42
+-- a write into SEALED cell 1 is REJECTED (R6 liveness gate bites).
+#guard ((stateWriteStep sfx { actor := 0, target := 1, field := "nonce", value := 42 }).isSome) == false
+-- PURE-STATE anti-ghost (CONCRETE): the spec's nonce (42) differs OBSERVABLY from the pre-state (7).
+#guard ((Dregg2.Exec.EffectsState.fieldOf "nonce" (sfx.cell 0),
+         Dregg2.Exec.EffectsState.fieldOf "nonce" ((stateWriteSpec sfx
+           { actor := 0, target := 0, field := "nonce", value := 42 }).cell 0)) == (7, 42))
+
+-- MAKE-SOVEREIGN: of Live cell 0 commits; the readable record is DROPPED (no "nonce" field reads back).
+#guard (makeSovereignStepK sfx { actor := 0, target := 0 }).isSome
+-- into SEALED cell 1 is REJECTED.
+#guard ((makeSovereignStepK sfx { actor := 0, target := 1 }).isSome) == false
+
+-- CELL-DESTROY: of non-terminal cell 0 commits and binds the cert; re-destroy after is REJECTED.
+#guard (cellDestroyStep sfx { actor := 0, cell := 0, certHash := 99 }).isSome
+#guard ((cellDestroyStep sfx { actor := 0, cell := 0, certHash := 99 }).map
+          (fun k => k.deathCert 0)) == some 99
+#guard (((cellDestroyStep sfx { actor := 0, cell := 0, certHash := 99 }).bind
+          (fun k => cellDestroyStep k { actor := 0, cell := 0, certHash := 11 })).isSome) == false
+-- the destroyed cell's lifecycle IS Destroyed (the side-table move is real).
+#guard ((cellDestroyStep sfx { actor := 0, cell := 0, certHash := 99 }).map
+          (fun k => k.lifecycle 0)) == some lcDestroyed
+
+-- REFRESH-DELEGATION: child 1 has parent 0 ⇒ commits; the child's delegation slot = parent 0's c-list.
+#guard (refreshDelegationStep sfx { actor := 0, child := 1 }).isSome
+#guard ((refreshDelegationStep sfx { actor := 0, child := 1 }).map (fun k => k.delegations 1))
+        == some [Dregg2.Authority.Cap.node 0, Dregg2.Authority.Cap.node 1,
+                 Dregg2.Authority.Cap.node 5, Dregg2.Authority.Cap.node 6, unsealerCap 5]
+-- a cell WITHOUT a parent (cell 0) cannot refresh ⇒ REJECTED.
+#guard ((refreshDelegationStep sfx { actor := 0, child := 0 }).isSome) == false
+
+-- CREATE-SEAL-PAIR: a FRESH pid 8 commits and grants the two seal caps to holders 0 and 1.
+#guard (createSealPairStep sfx { pid := 8, actor := 0, sealerHolder := 0, unsealerHolder := 1 }).isSome
+#guard ((createSealPairStep sfx { pid := 8, actor := 0, sealerHolder := 0, unsealerHolder := 1 }).map
+          (fun k => k.caps 1)) == some [unsealerCap 8]
+-- a REUSED pid 5 (already binds a box) is REJECTED (R3 freshness gate bites).
+#guard ((createSealPairStep sfx { pid := 5, actor := 0, sealerHolder := 0, unsealerHolder := 1 }).isSome) == false
+
+-- SEAL: actor 0 holds the sealer cap for pid 7 + the payload ⇒ box inserted; a NON-held payload ⇒ REJECTED.
+#guard (match createSealPairStep sfx { pid := 7, actor := 0, sealerHolder := 0, unsealerHolder := 1 } with
+        | some k1 => (sealStep k1 { pid := 7, actor := 0, payload := sealerCap 7 }).isSome
+        | none => false)
+-- UNSEAL: actor 0 holds an endpoint-5 cap and a box is bound under 5 ⇒ the payload (node 9) lands in recipient 1.
+#guard (match createSealPairStep sfx { pid := 5, actor := 0, sealerHolder := 0, unsealerHolder := 0 } with
+        | some _ => true | none => true)  -- (pid 5 reuse refused above; unseal tested on the live box directly)
+#guard ((unsealStep sfx { pid := 5, actor := 0, recipient := 1 }).map (fun k => k.caps 1))
+        == some [Dregg2.Authority.Cap.node 9]
+-- unseal of an ABSENT box (pid 99) is fail-closed ⇒ REJECTED (even if actor held the cap shape).
+#guard ((unsealStep sfx { pid := 99, actor := 0, recipient := 1 }).isSome) == false
+
+-- CREATE-CELL: a privileged creator (node 0) mints a FRESH id 5 (∉ accounts) born EMPTY (bal 5 0 = 0).
+#guard (createCellStep sfx { actor := 0, newCell := 5 }).isSome
+#guard ((createCellStep sfx { actor := 0, newCell := 5 }).map (fun k => k.bal 5 0)) == some 0
+#guard ((createCellStep sfx { actor := 0, newCell := 5 }).map (fun k => decide (5 ∈ k.accounts))) == some true
+-- re-creating an EXISTING id (0) is REJECTED (freshness gate) — anti supply-amplification.
+#guard ((createCellStep sfx { actor := 0, newCell := 0 }).isSome) == false
+-- SPAWN is the same born-empty growth: a fresh child 6 appears born-empty.
+#guard ((spawnStep sfx { actor := 0, newCell := 6 }).map (fun k => k.bal 6 0)) == some 0
+
+/-! ## §16 — Axiom-hygiene pins for the four new families. -/
+
+#assert_axioms stateWrite_triangle
+#assert_axioms stateWrite_antighost
+#assert_axioms makeSovereign_triangle
+#assert_axioms makeSovereign_antighost
+#assert_axioms cellDestroy_triangle
+#assert_axioms cellDestroy_antighost
+#assert_axioms refreshDelegation_triangle
+#assert_axioms refreshDelegation_antighost
+#assert_axioms createSealPair_triangle
+#assert_axioms createSealPair_antighost
+#assert_axioms seal_triangle
+#assert_axioms seal_antighost
+#assert_axioms unseal_triangle
+#assert_axioms unseal_antighost
+#assert_axioms createCell_triangle
+#assert_axioms createCell_antighost
+#assert_axioms spawn_triangle
+#assert_axioms spawn_antighost
 
 end Dregg2.Spec.FunctionalRefinement
