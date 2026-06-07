@@ -193,6 +193,113 @@ theorem drop_no_spec_when_unauthorized (s : RecChainedState) (sw : Nat) (actor e
     ¬ execFullA s (.swissDropA sw actor exporter) = some s' := by
   rw [drop_rejects_unauthorized s sw actor exporter hbad]; simp
 
+/-! ## §X — STRENGTHENED full-state spec (projection → INDEPENDENT declarative frame).
+
+The original `DropSpec` pins the post-state via `s' = { kernel := swissDropK s.kernel sw, log := … }`
+— it DELEGATES the whole kernel to the executor helper. That is technically a sound executor⟺spec,
+but it is NOT an *independent* declarative reference: it never states WHICH of the 17 kernel fields a
+committed drop may touch, so the only frame facts recoverable from it were `bal`/`accounts` (via the
+`drop_spec_balance_neutral` corollary). The other 14 fields (`caps`, `escrows`, `nullifiers`,
+`revoked`, `commitments`, `queues`, `slotCaveats`, `factories`, `lifecycle`, `deathCert`, `delegate`,
+`delegations`, `sealedBoxes`, and `cell`) were only "whatever `swissDropK` happens to do" — a
+PROJECTION, not full-state soundness (the conservation-≠-correctness failure mode).
+
+`DropSpecFull` is the INDEPENDENT, fully-declarative full-state spec: the guard holds; the post-`swiss`
+is EXACTLY the declarative GC/decrement image `dropSwissPost`; the log gains exactly the receipt; and
+EVERY one of the 16 non-`swiss` kernel fields is LITERALLY unchanged (the explicit frame — no executor
+helper `swissDropK` appears in any clause). -/
+def DropSpecFull (s : RecChainedState) (sw : Nat) (actor exporter : CellId)
+    (s' : RecChainedState) : Prop :=
+  DropGuard s sw actor exporter
+  -- the TOUCHED component: post-`swiss` is the declarative GC/decrement image of the found entry.
+  ∧ (∃ e : SwissRecord, findSwiss s.kernel.swiss sw = some e ∧ 0 < e.refcount
+       ∧ s'.kernel.swiss = dropSwissPost s.kernel.swiss sw e)
+  -- the log gains exactly the drop receipt.
+  ∧ s'.log = dropReceipt actor exporter :: s.log
+  -- THE FRAME: every one of the 16 non-`swiss` kernel fields LITERALLY unchanged.
+  ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.cell = s.kernel.cell
+  ∧ s'.kernel.caps = s.kernel.caps ∧ s'.kernel.escrows = s.kernel.escrows
+  ∧ s'.kernel.nullifiers = s.kernel.nullifiers ∧ s'.kernel.revoked = s.kernel.revoked
+  ∧ s'.kernel.commitments = s.kernel.commitments ∧ s'.kernel.bal = s.kernel.bal
+  ∧ s'.kernel.queues = s.kernel.queues ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
+  ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
+  ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
+  ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+
+/-- **`execFullA_drop_iff_specFull` — EXECUTOR ⟺ the STRENGTHENED full-state spec.** The full record
+executor commits a `swissDropA` into `s'` IFF `s'` is EXACTLY the independent full-state post-state:
+the declarative `swiss` GC/decrement image, the one receipt row, AND all 16 frame fields literally
+unchanged. Had the executor silently mutated `caps`/`escrows`/any other field, the corresponding frame
+clause would make the `→` direction FAIL — so this is genuine full-state soundness, not a projection. -/
+theorem execFullA_drop_iff_specFull (s : RecChainedState) (sw : Nat) (actor exporter : CellId)
+    (s' : RecChainedState) :
+    execFullA s (.swissDropA sw actor exporter) = some s'
+      ↔ DropSpecFull s sw actor exporter s' := by
+  rw [execFullA_drop_iff_spec]
+  constructor
+  · rintro ⟨hg, ⟨kw, hk, hs'⟩⟩
+    -- recover the found entry + positivity from the guard.
+    obtain ⟨hauth, e, hf, hpos⟩ := hg
+    -- the helper output touches only `swiss`, with the declarative GC/decrement image.
+    have hupd : dropSwissUpdate s.kernel.swiss sw = some (dropSwissPost s.kernel.swiss sw e) :=
+      dropSwissPost_eq_update s.kernel.swiss sw e hf hpos
+    have hkeq : kw = { s.kernel with swiss := dropSwissPost s.kernel.swiss sw e } := by
+      have := (dropSwissUpdate_eq_k s.kernel sw (dropSwissPost s.kernel.swiss sw e)).mp hupd
+      exact Option.some.inj (hk.symm.trans this)
+    subst hs'
+    refine ⟨⟨hauth, e, hf, hpos⟩, ⟨e, hf, hpos, ?_⟩, rfl, ?_⟩
+    · rw [hkeq]
+    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  · rintro ⟨hg, ⟨e, hf, hpos, hsw⟩, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13,
+      h14, h15, h16⟩
+    refine ⟨hg, ⟨{ s.kernel with swiss := dropSwissPost s.kernel.swiss sw e }, ?_, ?_⟩⟩
+    · exact (dropSwissUpdate_eq_k s.kernel sw _).mp (dropSwissPost_eq_update s.kernel.swiss sw e hf hpos)
+    · obtain ⟨k', lg'⟩ := s'
+      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      have hke : k' = { s.kernel with swiss := dropSwissPost s.kernel.swiss sw e } :=
+        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 (h9.trans rfl) hsw h10 h11 h12 h13 h14 h15 h16
+      subst hke hlog; rfl
+
+/-- **The strengthening is REAL (DropSpec ≡ DropSpecFull).** The weak executor-delegating spec and the
+strong independent full-state spec characterize EXACTLY the same post-states — so nothing was lost in
+the move, but the strong one now states the frame as 16 checkable conjuncts. -/
+theorem dropSpec_iff_specFull (s : RecChainedState) (sw : Nat) (actor exporter : CellId)
+    (s' : RecChainedState) :
+    DropSpec s sw actor exporter s' ↔ DropSpecFull s sw actor exporter s' :=
+  Iff.trans (execFullA_drop_iff_spec s sw actor exporter s').symm
+            (execFullA_drop_iff_specFull s sw actor exporter s')
+
+/-! ## §X.tooth — the strengthening REJECTS a tampering the weak frame could not see.
+
+The proof that `DropSpecFull` is genuinely MORE POWERFUL than the bare `bal`/`accounts`-recoverable
+projection: take the TRUE committed post-state `s'` and tamper ONLY `caps` (an untouched field) to get
+`s'_bad`. `s'_bad` agrees with `s'` on 16 of 17 kernel fields AND the log (a near-miss the old
+projection-recoverable corollaries `drop_spec_balance_neutral` / `drop_spec_gcs_at_one` would all still
+accept), yet `DropSpecFull s'_bad` is FALSE — its `caps` frame conjunct catches the ghost. -/
+theorem dropSpecFull_rejects_caps_tamper (s s' : RecChainedState) (sw : Nat) (actor exporter : CellId)
+    (h : execFullA s (.swissDropA sw actor exporter) = some s')
+    (badCaps : Dregg2.Authority.Caps) (hne : badCaps ≠ s.kernel.caps) :
+    ¬ DropSpecFull s sw actor exporter
+        { s' with kernel := { s'.kernel with caps := badCaps } } := by
+  -- from the true run, the genuine post-`caps` equals `s.kernel.caps` (a frame fact of the STRONG spec).
+  have hgood : s'.kernel.caps = s.kernel.caps :=
+    ((execFullA_drop_iff_specFull s sw actor exporter s').mp h).2.2.2.2.2.1
+  rintro ⟨_, _, _, _, _, hcaps, _⟩
+  -- the tampered state's `caps` is `badCaps`; the STRONG spec demands it equal `s.kernel.caps`.
+  exact hne hcaps
+
+/-- The near-miss is genuinely NEAR: the tampered state still satisfies the OLD recoverable projection
+(`bal` + `accounts` unchanged) — so a spec that only pinned those would WRONGLY accept the ghost. This
+is the proof the frame strengthening added real discriminating power (15 fields the projection missed). -/
+theorem dropSpecFull_tamper_passes_old_projection (s s' : RecChainedState) (sw : Nat)
+    (actor exporter : CellId)
+    (h : execFullA s (.swissDropA sw actor exporter) = some s')
+    (badCaps : Dregg2.Authority.Caps) :
+    ({ s' with kernel := { s'.kernel with caps := badCaps } }).kernel.bal = s.kernel.bal
+    ∧ ({ s' with kernel := { s'.kernel with caps := badCaps } }).kernel.accounts = s.kernel.accounts := by
+  obtain ⟨hbal, hacc⟩ := drop_spec_balance_neutral s sw actor exporter s' h
+  exact ⟨hbal, hacc⟩
+
 #assert_axioms dropSwissUpdate_some_gc
 #assert_axioms dropSwissUpdate_some_decrement
 #assert_axioms dropSwissUpdate_eq_k
@@ -206,5 +313,9 @@ theorem drop_no_spec_when_unauthorized (s : RecChainedState) (sw : Nat) (actor e
 #assert_axioms drop_rejects_absent
 #assert_axioms drop_rejects_zero_refcount
 #assert_axioms drop_no_spec_when_unauthorized
+#assert_axioms execFullA_drop_iff_specFull
+#assert_axioms dropSpec_iff_specFull
+#assert_axioms dropSpecFull_rejects_caps_tamper
+#assert_axioms dropSpecFull_tamper_passes_old_projection
 
 end Dregg2.Circuit.Spec.SwissDrop

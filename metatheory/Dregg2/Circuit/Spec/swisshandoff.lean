@@ -155,6 +155,82 @@ theorem handoff_no_spec_when_unauthorized (s : RecChainedState) (sw certHash : N
     ¬ execFullA s (.swissHandoffA sw certHash introducer exporter) = some s' := by
   rw [handoff_rejects_unauthorized s sw certHash introducer exporter hbad]; simp
 
+/-! ## §X — STRENGTHENED full-state spec (projection → INDEPENDENT declarative frame).
+
+`HandoffSpec` pins the post-state via `s' = { kernel := swissHandoffK s.kernel sw certHash, log := … }`
+— it DELEGATES the kernel to the executor helper, never independently stating WHICH of the 17 fields a
+committed handoff may touch (a PROJECTION). `HandoffSpecFull` is the INDEPENDENT, fully-declarative
+full-state spec: the guard holds; post-`swiss` is EXACTLY the declarative cert-bind/refcount-bump image
+`handoffSwissPost`; the log gains exactly the receipt; and EVERY one of the 16 non-`swiss` kernel fields
+is LITERALLY unchanged (no `swissHandoffK` in any clause). -/
+def HandoffSpecFull (s : RecChainedState) (sw certHash : Nat) (introducer exporter : CellId)
+    (s' : RecChainedState) : Prop :=
+  HandoffGuard s sw introducer exporter
+  ∧ (∃ e : SwissRecord, findSwiss s.kernel.swiss sw = some e
+       ∧ s'.kernel.swiss = handoffSwissPost s.kernel.swiss sw e certHash)
+  ∧ s'.log = handoffReceipt introducer exporter :: s.log
+  ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.cell = s.kernel.cell
+  ∧ s'.kernel.caps = s.kernel.caps ∧ s'.kernel.escrows = s.kernel.escrows
+  ∧ s'.kernel.nullifiers = s.kernel.nullifiers ∧ s'.kernel.revoked = s.kernel.revoked
+  ∧ s'.kernel.commitments = s.kernel.commitments ∧ s'.kernel.bal = s.kernel.bal
+  ∧ s'.kernel.queues = s.kernel.queues ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
+  ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
+  ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
+  ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+
+/-- **`execFullA_handoff_iff_specFull` — EXECUTOR ⟺ the STRENGTHENED full-state spec.** -/
+theorem execFullA_handoff_iff_specFull (s : RecChainedState) (sw certHash : Nat)
+    (introducer exporter : CellId) (s' : RecChainedState) :
+    execFullA s (.swissHandoffA sw certHash introducer exporter) = some s'
+      ↔ HandoffSpecFull s sw certHash introducer exporter s' := by
+  rw [execFullA_handoff_iff_spec]
+  constructor
+  · rintro ⟨hg, ⟨kw, hk, hs'⟩⟩
+    obtain ⟨hauth, hsome⟩ := hg
+    obtain ⟨e, hf⟩ := Option.isSome_iff_exists.mp hsome
+    have hupd : handoffSwissUpdate s.kernel.swiss sw certHash
+        = some (handoffSwissPost s.kernel.swiss sw e certHash) :=
+      handoffSwissUpdate_some s.kernel.swiss sw certHash e hf
+    have hkeq : kw = { s.kernel with swiss := handoffSwissPost s.kernel.swiss sw e certHash } := by
+      have := (handoffSwissUpdate_eq_k s.kernel sw certHash (handoffSwissPost s.kernel.swiss sw e certHash)).mp hupd
+      exact Option.some.inj (hk.symm.trans this)
+    subst hs'
+    refine ⟨⟨hauth, hsome⟩, ⟨e, hf, ?_⟩, rfl, ?_⟩
+    · rw [hkeq]
+    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  · rintro ⟨hg, ⟨e, hf, hsw⟩, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13,
+      h14, h15, h16⟩
+    refine ⟨hg, ⟨{ s.kernel with swiss := handoffSwissPost s.kernel.swiss sw e certHash }, ?_, ?_⟩⟩
+    · exact (handoffSwissUpdate_eq_k s.kernel sw certHash _).mp (handoffSwissUpdate_some s.kernel.swiss sw certHash e hf)
+    · obtain ⟨k', lg'⟩ := s'
+      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      have hke : k' = { s.kernel with swiss := handoffSwissPost s.kernel.swiss sw e certHash } :=
+        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 hsw h10 h11 h12 h13 h14 h15 h16
+      subst hke hlog; rfl
+
+/-- **The strengthening is REAL (HandoffSpec ≡ HandoffSpecFull).** -/
+theorem handoffSpec_iff_specFull (s : RecChainedState) (sw certHash : Nat) (introducer exporter : CellId)
+    (s' : RecChainedState) :
+    HandoffSpec s sw certHash introducer exporter s' ↔ HandoffSpecFull s sw certHash introducer exporter s' :=
+  Iff.trans (execFullA_handoff_iff_spec s sw certHash introducer exporter s').symm
+            (execFullA_handoff_iff_specFull s sw certHash introducer exporter s')
+
+/-! ## §X.tooth — the strengthening REJECTS a `delegate` tampering the weak frame could not see. -/
+
+/-- The STRONG full-state spec REJECTS a post-state that tampers ONLY the `delegate` parent-pointer map
+(an untouched field) — even though it agrees with the true output on 16 of 17 kernel fields + the log
+(the near-miss the old `bal`/`accounts` projection would still accept). The `delegate` frame conjunct
+catches the ghost the executor-delegating spec only avoided by accident of the helper. -/
+theorem handoffSpecFull_rejects_delegate_tamper (s s' : RecChainedState) (sw certHash : Nat)
+    (introducer exporter : CellId)
+    (h : execFullA s (.swissHandoffA sw certHash introducer exporter) = some s')
+    (badDelegate : CellId → Option CellId) (hne : badDelegate ≠ s.kernel.delegate) :
+    ¬ HandoffSpecFull s sw certHash introducer exporter
+        { s' with kernel := { s'.kernel with delegate := badDelegate } } := by
+  -- the strong spec's `delegate` frame conjunct (`= s.kernel.delegate`) contradicts `badDelegate`.
+  rintro ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hdel, _⟩
+  exact hne hdel
+
 #assert_axioms handoffRecord_correct
 #assert_axioms handoffRecord_lookup
 #assert_axioms handoffSwissUpdate_some
@@ -167,5 +243,8 @@ theorem handoff_no_spec_when_unauthorized (s : RecChainedState) (sw certHash : N
 #assert_axioms handoff_rejects_unauthorized
 #assert_axioms handoff_rejects_absent
 #assert_axioms handoff_no_spec_when_unauthorized
+#assert_axioms execFullA_handoff_iff_specFull
+#assert_axioms handoffSpec_iff_specFull
+#assert_axioms handoffSpecFull_rejects_delegate_tamper
 
 end Dregg2.Circuit.Spec.SwissHandoff
