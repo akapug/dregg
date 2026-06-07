@@ -183,9 +183,51 @@ pub fn verify_token_datalog(
     // 5. Get the full policy set (standard + extended for all caveat types)
     let rules = full_policy();
 
-    // 6. Run the evaluator
-    let evaluator = Evaluator::new(trace_facts, rules);
-    let trace = evaluator.evaluate(&trace_request);
+    // 6. Run the evaluator.
+    //
+    // Action expansion (parity with `verify_caveats`): a token grant
+    // `app(id, "rw")` is decomposed into ATOMIC `action_allowed(id, "r")` /
+    // `action_allowed(id, "w")` facts (see `committed_facts_to_trace`), and the
+    // policy rules unify `request_action($act)` against a single atomic `$act`.
+    // A request for the COMPOUND action `"rw"` therefore cannot match a single
+    // atomic fact. The correct semantics (mirroring `Action::contains`) is that
+    // a compound request is authorized iff EVERY requested atomic action is
+    // individually authorized. We evaluate once per atomic action and require
+    // all of them to Allow; the trace returned is the last evaluation (used only
+    // for diagnostics / capability extraction on the Allow path).
+    let atomic_actions = expand_request_action(request);
+    let trace = if atomic_actions.len() <= 1 {
+        let evaluator = Evaluator::new(trace_facts, rules);
+        evaluator.evaluate(&trace_request)
+    } else {
+        let mut last_trace = None;
+        let mut all_allow = true;
+        let mut allow_rule_id = 0u32;
+        for atom in &atomic_actions {
+            let mut sub_request = trace_request.clone();
+            sub_request.action = Some(symbol_from_str(atom));
+            let evaluator = Evaluator::new(trace_facts.clone(), rules.clone());
+            let t = evaluator.evaluate(&sub_request);
+            match &t.conclusion {
+                Conclusion::Allow { policy_rule_id } => allow_rule_id = *policy_rule_id,
+                Conclusion::Deny => all_allow = false,
+            }
+            last_trace = Some(t);
+            if !all_allow {
+                break;
+            }
+        }
+        let mut t = last_trace.expect("atomic_actions is non-empty");
+        // Collapse the per-action verdicts: Allow iff ALL atomic actions allowed.
+        t.conclusion = if all_allow {
+            Conclusion::Allow {
+                policy_rule_id: allow_rule_id,
+            }
+        } else {
+            Conclusion::Deny
+        };
+        t
+    };
 
     // 7. Interpret conclusion
     match &trace.conclusion {
@@ -918,6 +960,38 @@ fn field_element_to_int(fe: &FieldElement) -> Option<i64> {
 }
 
 /// Convert a `token::AuthRequest` to a `trace::AuthorizationRequest`.
+/// Decompose a request's `action` field into atomic action chars (`r`, `w`,
+/// `c`, `d`, `C`), matching the grant-side expansion in
+/// `committed_facts_to_trace`. A request for the compound action `"rw"` yields
+/// `["r", "w"]`; the caller requires every atomic action to be authorized.
+///
+/// Returns an empty vector when the request carries no action (action-agnostic
+/// request, fast single-evaluation path) and a single-element vector for an
+/// already-atomic action. When the action string does not decompose into the
+/// known atomic verbs (e.g. a custom verb), a single-element vector is returned
+/// so the caller takes the unchanged single-evaluation path using the original
+/// (unexpanded) request symbol.
+fn expand_request_action(request: &AuthRequest) -> Vec<&'static str> {
+    use dregg_macaroon::action::Action;
+
+    let Some(action_str) = request.action.as_deref() else {
+        return Vec::new();
+    };
+    let requested = Action::parse(action_str);
+    let mut atoms = Vec::new();
+    for action_char in ["r", "w", "c", "d", "C"] {
+        if requested.contains(Action::parse(action_char)) {
+            atoms.push(action_char);
+        }
+    }
+    // Unrecognized / custom action verb: keep the legacy single-symbol path
+    // (one element ⇒ caller evaluates the original `trace_request` as-is).
+    if atoms.is_empty() {
+        atoms.push("");
+    }
+    atoms
+}
+
 fn auth_request_to_trace(request: &AuthRequest) -> Result<TraceRequest, TokenError> {
     let app_id = request.app_id.as_deref().map(symbol_from_str);
     let service = request.service.as_deref().map(symbol_from_str);
@@ -2028,6 +2102,55 @@ mod tests {
         assert!(
             result.is_ok(),
             "token with both dimensions should allow service request"
+        );
+    }
+
+    #[test]
+    fn test_compound_action_request_against_time_bounded_token() {
+        // Regression (devnet demo-agent denial): a TIME-BOUNDED token granting
+        // app=agent-runtime rw + service=compute rw must authorize a request for
+        // the COMPOUND action "rw". The grant expands to atomic action_allowed
+        // facts (r, w); the request action "rw" must be decomposed and EVERY
+        // atomic action must be individually allowed. Previously this denied
+        // ("authorization denied by policy evaluation") because "rw" never
+        // unified with the atomic "r"/"w" facts.
+        let mut set = CaveatSet::new();
+        set.push(WireCaveat::new(
+            CAV_APP,
+            encode_name_actions("agent-runtime", "rw"),
+        ));
+        set.push(WireCaveat::new(CAV_SERVICE, encode_name_actions("compute", "rw")));
+        // Time bound (forces Rules 10-18, exercising the temporal path).
+        set.push(WireCaveat::new(
+            CAV_VALIDITY_WINDOW,
+            encode_validity_window(None, Some(2_000_000_000)),
+        ));
+
+        // Compound "rw" request inside the validity window: ALLOW.
+        let req = AuthRequest {
+            app_id: Some("agent-runtime".into()),
+            service: Some("compute".into()),
+            action: Some("rw".into()),
+            now: Some(1_700_000_000),
+            ..Default::default()
+        };
+        assert!(
+            verify_token_datalog_full(&set, &req).is_ok(),
+            "compound rw request must be authorized by an rw grant (time-bounded)"
+        );
+
+        // A "wd" request (write + delete) must DENY: the token grants r/w only,
+        // so the atomic "d" is not allowed — confirms the expansion still
+        // enforces least-privilege (not just an OR-any short-circuit).
+        let req_wd = AuthRequest {
+            app_id: Some("agent-runtime".into()),
+            action: Some("wd".into()),
+            now: Some(1_700_000_000),
+            ..Default::default()
+        };
+        assert!(
+            verify_token_datalog_full(&set, &req_wd).is_err(),
+            "compound wd request must be denied — token does not grant delete"
         );
     }
 
