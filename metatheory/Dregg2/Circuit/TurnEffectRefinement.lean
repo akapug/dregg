@@ -821,7 +821,7 @@ end
 
 /-- **`fullAction_turn_circuit_refines_spec`** — turn circuit ⊑ `turnSpec fullActionStep`.
 
-Rests on `fullAction_circuit_refines_spec` (now `sorry`-free; the `exerciseA` inner-turn fold is a REAL
+Rests on `fullAction_circuit_refines_spec` (the `exerciseA` inner-turn fold is a REAL
 composite circuit step via `exerciseInnerFold_refines_turnSpec`). Per-action soundness, lifted to the
 turn fold; not whole-turn adversarial soundness (kernel-axiom hygiene tracked separately). -/
 theorem fullAction_turn_circuit_refines_spec
@@ -882,7 +882,7 @@ theorem fullAction_turn_circuit_refines_spec
 
 /-- **`fullAction_turn_circuit_refines_exec`** — full diamond: turn circuit ⊑ `execFullTurnA`.
 
-Rests on `fullAction_circuit_refines_spec` (now `sorry`-free; the `exerciseA` inner-turn fold is a REAL
+Rests on `fullAction_circuit_refines_spec` (the `exerciseA` inner-turn fold is a REAL
 composite circuit step via `exerciseInnerFold_refines_turnSpec`). Per-action soundness, lifted to the
 turn fold; not whole-turn adversarial soundness (kernel-axiom hygiene tracked separately). -/
 theorem fullAction_turn_circuit_refines_exec
@@ -996,10 +996,10 @@ theorem fullAction_turn_conservation_descends
       hRestLifecycleDeathCert hRestDelegations hLog s s' acts hc)
     hzero
 
-/-! ## §3 — axiom-hygiene tripwires: the (formerly `sorry`-bearing) exerciseA tower is kernel-clean.
-The exerciseA inner-turn arm is now a REAL composite circuit step; these pins certify the per-action
-refinement and its mutual inner-fold helper rest on exactly `{propext, Classical.choice, Quot.sound}`
-(no `sorryAx`). A regression that re-introduces a hole into the exerciseA arm trips the build here. -/
+/-! ## §3 — axiom-hygiene tripwires for the exerciseA tower.
+The exerciseA inner-turn arm is a REAL composite circuit step; these pins certify the per-action
+refinement and its mutual inner-fold helper rest on exactly `{propext, Classical.choice, Quot.sound}`.
+A regression that re-introduces a hole into the exerciseA arm trips the build here. -/
 #assert_axioms fullAction_circuit_refines_spec
 #assert_axioms exerciseInnerFold_refines_turnSpec
 

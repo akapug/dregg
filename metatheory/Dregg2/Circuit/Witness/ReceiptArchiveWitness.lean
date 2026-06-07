@@ -10,8 +10,6 @@ audit slot is written. The pieces reused (not re-proved):
   * `Spec.CellStateAudit.execFullA_receiptArchiveA_iff_spec` — executor ⟺ `ReceiptArchiveSpec`.
   * `Inst.ReceiptArchiveA.{receiptArchiveE, apex_iff_ReceiptArchiveSpec, receiptArchiveA_full_sound}`.
   * `EffectCommit.{encodeE, satisfiedE, effect_circuit_full_complete}` + `Witness.Common.{SConc,layoutE}`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`.
 -/
 import Dregg2.Circuit.Witness.Common
 import Dregg2.Circuit.Inst.receiptArchiveA

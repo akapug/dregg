@@ -3,8 +3,6 @@
 
 Extends `EffectRefinement.lean` with `*CircuitStep` + `*_circuit_refines_spec` for batch-2
 `FullActionA` arms that have Inst `*_full_sound`. Composed into `TurnEffectRefinement` dispatch.
-
-No `sorry`/`admit`/`native_decide`/`axiom`.
 -/
 import Dregg2.Circuit.EffectRefinement
 import Dregg2.Circuit.EffectCommit3

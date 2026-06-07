@@ -18,7 +18,7 @@ lookup is membership-in-the-table (the meaning); LogUp is merely how the prover 
 efficiently — that lives in the Rust AIR, not in this semantics.
 
 `rangeCheck e k` is the range-check lookup; `rangeCheck_holds_iff` proves its meaning
-(`(rangeCheck e k).holds a ↔ ∃ n < 2^k, e.eval a = n`). No `sorry`/`admit`/`native_decide`/`axiom`.
+(`(rangeCheck e k).holds a ↔ ∃ n < 2^k, e.eval a = n`).
 -/
 import Dregg2.Circuit
 

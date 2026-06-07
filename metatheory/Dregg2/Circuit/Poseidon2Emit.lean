@@ -7,12 +7,9 @@ and `ConstraintExpr::MerkleHash` enforce). The abstract Layer-A `compress` remai
 hash; a multi-row trace is a sponge-style fold of rate-4 absorption chunks — NOT an idealized
 `ℤ` injectivity portal.
 
-The former `sorry` HOLEs for wiring this gadget into the full `StateCommit` frame sponge and the
-growing log-hash sponge are now DISCHARGED theorems (`state_commit_sponge_binding`,
-`log_hash_sponge_binding`), grounded on the single Poseidon2 collision-resistance assumption
-(`Poseidon2Binding.Poseidon2SpongeCR`) via `Poseidon2Binding`.
-
-Every theorem is `#assert_axioms`-clean (pins `{propext, Classical.choice, Quot.sound}`); no `sorry`.
+Wiring this gadget into the full `StateCommit` frame sponge and the growing log-hash sponge is done by
+the theorems `state_commit_sponge_binding` / `log_hash_sponge_binding`, grounded on the single Poseidon2
+collision-resistance assumption (`Poseidon2Binding.Poseidon2SpongeCR`) via `Poseidon2Binding`.
 -/
 import Dregg2.Circuit.Refinement
 import Dregg2.Circuit.GadgetRefinement
@@ -139,13 +136,13 @@ theorem poseidon2_emitted_iff_portal {Digest : Type}
       ↔ MerkleMembers compress root leaf :=
   emittedMerkle_bridge compress root leaf
 
-/-! ## §5 — frame/log sponge binding (DISCHARGED from Poseidon2 CR; the holes are now theorems).
+/-! ## §5 — frame/log sponge binding (from Poseidon2 CR).
 
-These were `def … : Prop := sorry` placeholders. They now state — and PROVE — the real binding facts:
+These state — and PROVE — the real binding facts:
 the `StateCommit` frame-sponge injectivity portal (`compressNInjective`) and the growing log-hash
 injectivity portal (`logHashInjective`) are GROUNDED on the single Poseidon2 sponge collision-
 resistance assumption (`Poseidon2Binding.Poseidon2SpongeCR`). The frame portal is LITERALLY CR; the
-log portal composes CR with the injective receipt serialization (a `LogRealization`). No `sorry`. -/
+log portal composes CR with the injective receipt serialization (a `LogRealization`). -/
 
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR LogRealization
   compressNInjective_of_poseidon2CR logHashInjective_of_realization)

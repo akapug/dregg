@@ -74,9 +74,7 @@ reused across the regime. BESPOKE per effect: the particular cap-slot write and 
 `execGraph`/`capAuthConferred` non-interference (e.g. attenuate's per-slot subset, setPermissions'
 admit-set monotonicity) — the one new lemma each effect supplies.
 
-## Discipline
-`#assert_axioms` whitelists exactly `{propext,
-Classical.choice, Quot.sound}` on every keystone. Self-contained: reuses ONLY already-built
+Self-contained: reuses ONLY already-built
 `Exec.AuthTurn`/`Exec.TurnExecutorFull`/`Exec.CapTP`/`Authority.*`/`Spec.*` primitives. Verified
 standalone: `lake env lean Dregg2/Exec/EffectsAuthority.lean`.
 -/

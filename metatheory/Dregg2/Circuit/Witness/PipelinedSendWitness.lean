@@ -9,7 +9,7 @@ is a THIRD-CELL tamper (any cell value changed) — caught by the FRAME-reuse ga
 "pale ghost" the projection circuit would miss.
 
 Reuses (not re-proved): `Inst.PipelinedSendA.pipelinedSendA_full_sound`, `effect_circuit_full_complete`,
-`encodeE`. `#assert_axioms` whitelists exactly `{propext, Classical.choice, Quot.sound}` on the keystones.
+`encodeE`.
 -/
 import Dregg2.Circuit.Inst.pipelinedSendA
 import Dregg2.Circuit.Poseidon2Surface

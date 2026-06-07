@@ -28,7 +28,7 @@ THE MISSING PIECE supplied here:
     proves+verifies (honest) and rejects (forged).
 
 The Poseidon-CR portals are carried HYPOTHESES on the
-abstract keystones (the template). `#assert_axioms` whitelists `{propext, Classical.choice, Quot.sound}`.
+abstract keystones (the template).
 -/
 import Dregg2.Circuit.Inst.revokeDelegationA
 

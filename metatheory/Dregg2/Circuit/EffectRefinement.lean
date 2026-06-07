@@ -5,8 +5,6 @@ Extends `Refinement.lean`'s tower to v2 single-component effects. The generic la
 `effect2CircuitStep ⟺ apex` and `emitted ⟺ circuit` for ANY `EffectSpec2`; concrete instances
 (mint, burn, …) compose with their executor⟺spec bridges for the full diamond down to `execFullA`
 and the Plonky3 wire bytes.
-
-No `sorry`/`admit`/`native_decide`/`axiom`.
 -/
 import Dregg2.Circuit.Refinement
 import Dregg2.Circuit.EffectCommit2

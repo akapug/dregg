@@ -815,9 +815,7 @@ rest CR set; `compressInjective cmb` only for the root-binding corollary); `Acco
 invariant, PROVED preserved by `recKExec_preserves_AccountsWF`). The old per-digest binding portals
 `FrameDigestBindsCells`/`MovedDigestBindsCells`/`CombineInjective` are now PROVED LEMMAS off the CR
 set. PROVED (everything else, crucially THE FRAME): the keystones below. NO `postRoot = recStateCommit
-(applyTransfer …)` ghost hypothesis appears anywhere.
-
-`#assert_axioms` whitelists exactly `{propext, Classical.choice, Quot.sound}`. -/
+(applyTransfer …)` ghost hypothesis appears anywhere. -/
 
 #assert_axioms recKExec_preserves_AccountsWF
 #assert_axioms encodeS_agrees_encodeT

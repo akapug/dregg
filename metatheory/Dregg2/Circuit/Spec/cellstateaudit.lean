@@ -58,7 +58,6 @@ frame interaction. No `frameGaps` arise.
      `balance` (a DISTINCT slot) intact, and leaves every OTHER cell's whole record untouched.
 
   4. `#assert_axioms` on every theorem — whitelist `{propext, Classical.choice, Quot.sound}` only.
-     No `sorry`/`admit`/`native_decide`/`axiom`.
 
 The generic `auditStateStep_iff_spec` engine below is re-derived LOCALLY (so this leaf is
 self-contained — no dependence on a sibling spec module) and specialized to BOTH variants over their

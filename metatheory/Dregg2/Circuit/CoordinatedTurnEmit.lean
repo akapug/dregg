@@ -5,8 +5,6 @@ Extends `CoordinatedTurnRefinement` with an `Expr`/`ConstraintSystem` scaffold: 
 gates (`rootA`/`rootB`/`charterHash`/`bindingHash`) plus per-leg frame EQ gates reusing the
 `StateCommit` rest/frame/moved pattern. Serializes via `CircuitEmit.emit` with emit-faithfulness
 and composes soundness with `coordinated_turn_circuit_refines_spec_honest`.
-
-No `sorry`/`admit`/`axiom`.
 -/
 import Dregg2.Circuit
 import Dregg2.Exec.CircuitEmit
@@ -611,8 +609,7 @@ def demoPostB : RecChainedState := demoPostPair.2
 
 /-! ## §9 — Wave 6 covenant-guard predicate + exec bridge (RecordKernelState lift CLOSED).
 
-The two former Wave-6 portals (`hole_coordinated_covenant_guard` + `coordinated_emitted_refines_execCoordinatedForestG`'s
-`sorry`) are now genuine proofs:
+The two Wave-6 covenant proofs:
 
   * `coordinatedCovenantGuardHolds` is the covenant-`φ` guard as a named `Prop` (the single
     `vCovenantGuard` column). The former `hole_coordinated_covenant_guard : ∀ step sA sB, …guard…`
@@ -622,7 +619,7 @@ The two former Wave-6 portals (`hole_coordinated_covenant_guard` + `coordinated_
     `φ = false` has NO satisfying witness, see `covenantGuard_emitted_teeth`).
   * `coordinated_emitted_refines_execCoordinatedForestG` lifts to `execCoordinatedForestG` (the
     `RecordKernelState` step), consuming the extracted guard + the half-edge applies + the per-leg
-    log-frame (the honest forest leaves receipt logs untouched). No `sorry`. -/
+    log-frame (the honest forest leaves receipt logs untouched). -/
 
 /-- Covenant φ guard as a named Prop (the single `vCovenantGuard` column). -/
 def coordinatedCovenantGuardHolds (step : BilateralStep) (sA sB : RecChainedState) : Prop :=
@@ -679,7 +676,7 @@ theorem covenantGuard_emitted_teeth
 /-- **`coordinated_emitted_refines_execCoordinatedForestG`** — emitted coordinated-turn satisfaction
 on the honest encoder COMMITS `execCoordinatedForestG` (the `RecordKernelState` step). The covenant
 guard is EXTRACTED from the witness (`covenantGuard_of_emitted`), the half-edge applies are supplied,
-and the per-leg logs are framed (the honest forest does not splice receipt logs). No `sorry`. -/
+and the per-leg logs are framed (the honest forest does not splice receipt logs). -/
 theorem coordinated_emitted_refines_execCoordinatedForestG
     (CH : CellId → Value → ℤ) (RH : RecordKernelState → ℤ)
     (compress : ℤ → ℤ → ℤ) (compressN : List ℤ → ℤ)

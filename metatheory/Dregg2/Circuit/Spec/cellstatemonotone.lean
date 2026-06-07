@@ -39,7 +39,6 @@ field can be silently mutated.
      and leaves every OTHER cell's whole record untouched.
 
   4. `#assert_axioms` on every theorem — whitelist `{propext, Classical.choice, Quot.sound}` only.
-     No `sorry`/`admit`/`native_decide`/`axiom`.
 
 The family has the single executable variant `incrementNonceA`; `setPermissionsA`/`setVKA` share the
 EXACT same `stateStep` shape (different `FieldName`/`Value`), so the representative theorem + the

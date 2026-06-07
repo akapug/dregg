@@ -14,7 +14,7 @@ action list, mirroring `execFullTurnA`'s definitional fold.
 flattening rests on this). Concrete per-action specs (mint, burn, balance, …) plug in as `step`;
 this module stays executor-generic.
 
-Import `TurnExecutorFull` only. No `sorry`/`admit`/`axiom`.
+Import `TurnExecutorFull` only.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

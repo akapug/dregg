@@ -7,7 +7,7 @@ Bridges the exec joint/charter layer (`CoordinatedForestGLift`, `JointCharterBri
   exec coordinated forest  ⊑  `BilateralTurnSpec`  ⊑  circuit witness (Prop scaffold)
 
 Wave 1 is Prop-level: per-leg abstract digest wires reuse the `StateCommit` frame pattern;
-full `Expr` emission is a later wave. No `sorry`/`admit`/`axiom`.
+full `Expr` emission is a later wave.
 -/
 import Dregg2.Circuit.Refinement
 import Dregg2.Circuit.StateCommit

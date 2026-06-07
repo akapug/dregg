@@ -27,8 +27,7 @@ protection), and leaves capabilities untouched. It is balance-conserving across 
 Each catalog effect copies the five-step skeleton. The mechanical steps reuse `recCexec_attests`
 verbatim; the bespoke step is per-effect (here, the `nonce` bump and its `balOf`-non-interference).
 
-`#assert_axioms` whitelists exactly `{propext,
-Classical.choice, Quot.sound}` on every keystone. Reuses only `Exec.TurnExecutor`/`Exec.RecordKernel`/
+Reuses only `Exec.TurnExecutor`/`Exec.RecordKernel`/
 `Spec.ExecRefinement`; edits none.
 -/
 import Dregg2.Exec.TurnExecutor

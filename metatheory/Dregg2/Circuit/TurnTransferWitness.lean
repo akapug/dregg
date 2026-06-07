@@ -36,8 +36,7 @@ forged FINAL post-state that mints a bystander cell in `k₂` — the anti-ghost
 step's frame-reuse + root-binding gates: a real UNSAT for the whole turn).
 
 The Poseidon-CR portals carried by
-`transfer_circuit_full_sound` are the template's standard hypotheses. `#assert_axioms` whitelists
-exactly `{propext, Classical.choice, Quot.sound}` on the keystones.
+`transfer_circuit_full_sound` are the template's standard hypotheses.
 -/
 import Dregg2.Circuit.TransferWitness
 

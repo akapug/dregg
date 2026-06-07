@@ -5,8 +5,6 @@ Links the emitted wire forms in `Exec/CircuitEmit` and `Exec/CircuitEmitGadgets`
 portal predicates (`MerkleMembers`, `NonMember`, `InWindow`) via the relational refinement
 framework in `Refinement.lean`. Each bridge composes emit-faithfulness with the gadget's own
 `*_bridge` theorem — the same soundness∧completeness the Rust decoder inherits.
-
-No `sorry`/`admit`/`native_decide`/`axiom`.
 -/
 import Dregg2.Circuit.Refinement
 import Dregg2.Exec.CircuitEmit

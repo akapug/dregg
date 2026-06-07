@@ -49,8 +49,6 @@ So a committed `pipelinedSendA`:
   3. `pipelinedSendStep_correct` — the post-state image validated DECLARATIVELY (its log row + its
      kernel-frame), the `recTransfer_correct` analog for this family.
   4. `#assert_axioms` on every theorem (whitelist `{propext, Classical.choice, Quot.sound}`).
-
-No `sorry`/`admit`/`axiom`/`native_decide`.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

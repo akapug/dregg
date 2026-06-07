@@ -4,8 +4,6 @@
 The Wave-1 dispatcher (`fullActionStep`, `turnSpec`, `fullActionStep_exec_iff`) lives in
 `Circuit/ActionDispatch.lean`. This module re-exports those symbols for downstream callers that
 imported `Spec.exercise` historically.
-
-No `sorry`/`admit`/`axiom`/`native_decide`.
 -/
 import Dregg2.Circuit.ActionDispatch
 

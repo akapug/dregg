@@ -22,8 +22,6 @@ keeping every emitted number inside `i64` (the concrete sponge over the live cel
 root that would overflow the Rust prover's `i64` parser; the CONSTRAINED frame/touched/log digest
 wires `66..73` are ~10¹⁸ and fit). This mirrors `TransferWitness`, whose root wires happened to fit
 i64 (a 2-leaf `compress`, not the full sponge); zeroing the unconstrained roots is the robust analog.
-
-No `sorry`/`admit`/`axiom`/`native_decide`.
 -/
 import Dregg2.Circuit.EffectCommit
 

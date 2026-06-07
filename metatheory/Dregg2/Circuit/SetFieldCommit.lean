@@ -766,9 +766,7 @@ new chain piece; `compressInjective cmb` only for the root-binding corollary); `
 STRUCTURAL invariant, REUSED from `StateCommit`, proved preserved there); `SetFieldGuard` is supplied
 via the four guard gates (the executor's domain restriction). The binding lemmas
 `FrameDigestBindsCells`/`CombineInjective` are PROVED `StateCommit` theorems off the CR set. NO
-`postRoot = recSetFieldCommit (applySetField …)` ghost hypothesis appears anywhere.
-
-`#assert_axioms` whitelists exactly `{propext, Classical.choice, Quot.sound}`. -/
+`postRoot = recSetFieldCommit (applySetField …)` ghost hypothesis appears anywhere. -/
 
 #assert_axioms sfcaveat_iff
 #assert_axioms sfrest_iff
