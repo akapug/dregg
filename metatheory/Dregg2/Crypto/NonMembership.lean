@@ -245,7 +245,7 @@ class NonMembershipVerifierKernel (Digest : Type u) (Proof : Type u) [LinearOrde
   verify : Statement Digest → Proof → Bool
   /-- **CARRIER — STARK extractability/soundness** (FRI + Fiat-Shamir, plus `compress` CR binding the
   committed list to the root): accept ⇒ a satisfying trace over the genuine committed list exists. A
-  `Prop`; never proved, never `sorry`. -/
+  `Prop`; never proved. -/
   extractable : Prop
   /-- `extractable` UNPACKED: an accepted proof witnesses a satisfying trace over some genuine sorted
   committed leaf list with the disclosed root. The named form the bridge composes with. -/
@@ -480,8 +480,8 @@ example :
 
 end Reference
 
--- Tripwires: bridge + verify-soundness + cascade + dial wiring are kernel-clean. `sorted_gap_excludes`
--- and both Merkle sub-proofs are fully proved. Crypto residue: `extractable`, never a `sorry`.
+-- `sorted_gap_excludes`
+-- and both Merkle sub-proofs are fully proved. Crypto residue: `extractable`.
 #assert_axioms sorted_gap_excludes
 #assert_axioms nonmembership_bridge
 #assert_axioms nonmembership_verify_sound

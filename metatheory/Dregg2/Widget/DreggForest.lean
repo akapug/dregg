@@ -29,7 +29,7 @@ The driving value is `Dregg2.Exec.FullForest.goodFullForest` — the project's o
 is `some`) with two genuinely-held, non-amplifying delegation edges. The `#html` at the bottom forces the
 render path to elaborate over that real value, so the build EXERCISES the whole derivation.
 
-Discipline: NO `sorry`/`admit`/`native_decide`/SMT. Every rendering function is a total, term-level fold
+Every rendering function is a total, term-level fold
 over the real `FullForestA`/`FullActionA`/`Cap` data; the pure derivations are `#assert_axioms`-pinned to
 the standard kernel triple. The `#html`/`#eval`s at the bottom are the non-vacuity witnesses (a different
 forest yields a different graph — proven by an `#eval` contrast on the derived vertex/edge counts).

@@ -36,7 +36,7 @@ We keep as CONCRETE instances the four monotone registries whose forest-grow lem
 (`commitments`, `nullifiers`, `revoked` as `⊆`; `log.length` as `≤`), since their `forestGrow`
 witnesses are theorems we merely supply — the combinator does not re-prove them.
 
-Discipline: NO `sorry`/`admit`/`native_decide`/SMT. Every theorem is `#assert_axioms`-pinned to the
+Every theorem is `#assert_axioms`-pinned to the
 kernel triple `{propext, Classical.choice, Quot.sound}` at the foot of the file.
 -/
 import Dregg2.Exec.CellCommit

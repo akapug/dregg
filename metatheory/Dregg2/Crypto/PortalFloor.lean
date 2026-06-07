@@ -5,15 +5,14 @@ Each portal is a typeclass with a runnable §8 oracle (`Bool`) and a soundness `
 e.g. `sigVerify_sound : sigVerify pk m s = true → Signed pk m`. The carrier names the genuine
 cryptographic assumption (ed25519 EUF-CMA / STARK extractability / DLog binding / Poseidon2 CR /
 BLAKE3 CR / nullifier determinism / AEAD+X25519 / HMAC unforgeability), discharged by the Rust
-impl and circuits, never proved in Lean, never `sorry`. Each portal's soundness theorem takes the
+impl and circuits, never proved in Lean. Each portal's soundness theorem takes the
 carrier as an explicit hypothesis so the trust boundary is visible. `Reference` instances now
 discharge each carrier with the GENUINE soundness `Prop` over that instance's own oracle (not `True`)
 — proved structurally and pinned, and provably FALSE on a forgeable/colliding oracle (§9b). This now
 holds for ALL eight reference carriers including `instSignatureKernel`/`instMacKernelE`
 `unforgeable` (the consumer `FullForestAuthPortal.lean` passes the proved theorems
 `instSignatureKernel_unforgeable`/`instMacKernelE_unforgeable`, not `trivial`). No `True` carrier
-remains. Real instances are the Rust FFI ones, leaving the carrier as a standing obligation.
-No `axiom`/`admit`/`native_decide`/`sorry`. -/
+remains. Real instances are the Rust FFI ones, leaving the carrier as a standing obligation. -/
 import Mathlib.Algebra.Group.Defs
 import Mathlib.Data.Nat.Pairing
 import Mathlib.Logic.Encodable.Basic
@@ -548,7 +547,7 @@ end Reference
 /-! ## §10 — Axiom-hygiene tripwires.
 
 Each soundness theorem rests only on `{propext, Classical.choice, Quot.sound}` plus its explicit
-carrier hypothesis — no hidden `sorry` or `axiom`. Eight primitives assumed (the carriers), every
+carrier hypothesis. Eight primitives assumed (the carriers), every
 consumer verified given those carriers. -/
 
 #assert_axioms sig_floor_sound

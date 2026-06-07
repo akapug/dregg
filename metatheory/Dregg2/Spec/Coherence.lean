@@ -366,7 +366,7 @@ end AttenuationOneOrder
 
 /-! ## §6 — Axiom-hygiene tripwires.
 
-Every cross-link above depends only on the three standard kernel axioms (no `sorry`); the
+Every cross-link above depends only on the three standard kernel axioms; the
 pins certify the web is genuinely woven. The independently-built modules carry their own
 honest OPENs (`Authority.only_connectivity_begets_connectivity`,
 `Lifecycle.distributed_death_…`, `Hyperedge.hyperedge_sound_bisim`,

@@ -175,7 +175,7 @@ class DfaVerifierKernel (State Sym : Type) (Proof : Type) where
   disclosed automaton statement? -/
   verify : Statement State Sym → Proof → Bool
   /-- **CARRIER — STARK extractability/soundness** (FRI + Fiat-Shamir): accept ⇒ a satisfying trace
-  exists. A `Prop`; never proved, never `sorry`. -/
+  exists. A `Prop`; never proved. -/
   extractable : Prop
   /-- `extractable` UNPACKED: an accepted proof witnesses a satisfying DFA trace for the disclosed
   automaton. The named form the bridge composes with — STARK soundness. -/
@@ -313,8 +313,8 @@ A concrete automaton recognizing `a⁺b` (one-or-more `a` then a `b`), the `dfa_
 `circuit.rs:1724`: states `{0,1,2,3}`, bytes `{0x61='a', 0x62='b'}`. The transition relation `δ` is the
 table's membership predicate; the run for `"aab"` is `0 →a 1 →a 1 →b 2`, ending in the accept state `2`.
 
-To build an HONEST reference kernel (`verify` genuinely checks the proof against the statement, NO
-`sorry`), we use a `Statement` whose `δ`/`accept` are DECIDABLE — they are disjunctions / equalities
+To build an HONEST reference kernel (`verify` genuinely checks the proof against the statement),
+we use a `Statement` whose `δ`/`accept` are DECIDABLE — they are disjunctions / equalities
 over `ℕ`. The `Proof` IS the candidate trace; `verify stmt tr` literally DECIDES whether `tr` is an
 accepting run of `stmt`'s automaton (so it works for ANY statement, not just the reference), and
 `extract` reads back the decided acceptance. This is the genuine soundness-by-decision; the
@@ -367,7 +367,7 @@ example : ∃ circuit : CircuitIR Nat Nat, Satisfies δ q₀ accept circuit :=
 /-- Non-vacuity of the BRIDGE soundness half, end-to-end on the concrete automaton: the `dfa_bridge`'s
 SOUNDNESS conjunct, fed the canonical `"aab"` satisfying trace (which is exactly the genuine accepting
 run), certifies `DfaAccepts`. This exercises the deliverable on a real automaton (the `a⁺b` DFA of
-`circuit.rs:1724`) with NO `sorry`, NO crypto. -/
+`circuit.rs:1724`) with NO crypto. -/
 example : DfaAccepts δ q₀ accept aabTrace :=
   (dfa_bridge δ q₀ accept aabTrace).1 ⟨aabTrace⟩ rfl aab_accepts
 

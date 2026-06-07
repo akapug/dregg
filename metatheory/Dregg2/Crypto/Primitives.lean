@@ -20,7 +20,7 @@ universe u
 /-- `CryptoPrimitives` — cryptographic operations with algebraic laws and hardness carriers.
 `Digest` is the hash/commitment type (`AddCommGroup` because Pedersen commitments compose).
 `commit_hom` is the one proved algebraic law; `collisionHard`/`binding`/`unlinkable` are `Prop`
-carriers — genuine cryptographic assumptions, never proved, never `sorry`. -/
+carriers — genuine cryptographic assumptions, never proved. -/
 class CryptoPrimitives (Digest : Type u) [AddCommGroup Digest] where
   /-- Poseidon2 4-to-1 compression (`hash_2_to_1`, the Merkle node hash). Uninterpreted —
   collision-resistance is the carried `collisionHard`, not an equational law. -/
@@ -28,7 +28,7 @@ class CryptoPrimitives (Digest : Type u) [AddCommGroup Digest] where
   /-- Poseidon2 sponge (`hash_many`): absorb a list of digests, squeeze one. Uninterpreted;
   CR is `collisionHard`. -/
   compressN : List Digest → Digest
-  /-- CARRIER — Poseidon2 collision-resistance (`Prop`, never proved, never `sorry`). The correct
+  /-- CARRIER — Poseidon2 collision-resistance (`Prop`, never proved). The correct
   assumption: CR, not idealized injectivity. -/
   collisionHard : Prop
   /-- **Pedersen commitment** `commit value blinding` over the curve. -/

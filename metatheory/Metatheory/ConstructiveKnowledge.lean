@@ -369,8 +369,7 @@ drifts from the truth it claims.
 This is `stepComplete_preserves` (the well-posed, PROVED keystone of `Dregg2.Boundary`)
 read under the knowledge lens: `Good := Knows`. We re-derive it (rather than re-prove the
 safety machinery) so the no-drift statement is *named and kernel-clean* in the metatheory's
-own vocabulary — and so `#assert_axioms` certifies the constructive-knowledge form
-inherits no `sorry`. -/
+own vocabulary. -/
 theorem knowledge_does_not_drift
     (Impl : TurnCoalg Obs AdmissibleTurn)
     (conservation authority chainLink obsAdvance :

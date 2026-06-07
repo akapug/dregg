@@ -31,7 +31,7 @@ reproducing `Apps.Identity.livingCellA_identity_revoked_forever` as a *one-liner
 `Proof/Fairness`; production `EventuallyG` on `trajG` is in `LivenessBridge` / `LivenessContract`
 (§5b — the public API customers ship against).
 
-Discipline: NO `sorry`/`admit`/`native_decide`/SMT. Every macro-emitted contract + its `forever`/
+Every macro-emitted contract + its `forever`/
 `always` payoff is `#assert_axioms`-pinned to the kernel triple `{propext, Classical.choice,
 Quot.sound}` at the foot of the file. The macros emit ordinary kernel-checked terms — the catalog
 cannot launder a gap into a false "PROVED": if a discharge tactic failed, the elaboration would error.
@@ -339,7 +339,7 @@ example : (eventually% gatedLogGoal).Goal = gatedLogGoal := rfl
 
 `#assert_axioms` on each GATE `def` pins the macro-EMITTED `CellContract` (Inv + the tactic-discharged
 `step_ob`) to `{propext, Classical.choice, Quot.sound}` — certifying the catalog macros produce
-ordinary kernel-checked terms with NO `sorry`/`native_decide`/SMT oracle. -/
+ordinary kernel-checked terms. -/
 
 #assert_axioms gateRevoked
 #assert_axioms gateConserved

@@ -6,7 +6,7 @@ mirrors `stark::verify(air, proof, public_inputs)`:
 
 - `verify : Statement → Proof → Bool` — the §8 oracle;
 - `extractable : Prop` — the one genuine cryptographic carrier: STARK soundness (FRI + Fiat-Shamir)
-  gives "verify accepts ⇒ a satisfying trace exists". Never proved, never `sorry`;
+  gives "verify accepts ⇒ a satisfying trace exists". Never proved;
 - `merkle_verify_sound` — derived: accept ⇒ `MerkleMembers`, by composing `extractable` with
   `merkle_bridge` (satisfying circuit ⇔ membership, fully proved, no primitive seam).
 -/
@@ -31,7 +31,7 @@ class MerkleVerifierKernel (Digest : Type u) (Proof : Type u) where
   soundness is the carried `extractable`. -/
   verify : Digest → Digest → Proof → Bool
   /-- CARRIER — STARK extractability/soundness (FRI proximity + Fiat-Shamir): `verify` accepts ⇒
-  a satisfying trace exists. Single trust boundary; `Prop`, never proved, never `sorry`. -/
+  a satisfying trace exists. Single trust boundary; `Prop`, never proved. -/
   extractable : Prop
   /-- `extractable` unpacked: an accepted proof witnesses a satisfying circuit. -/
   extract : extractable →
@@ -81,8 +81,7 @@ example (leaf : Int) :
 
 end Reference
 
--- Tripwire: the derived verify law rests only on the `extractable` carrier (passed as a
--- hypothesis), never on a hidden `sorry`.
+-- The derived verify law rests only on the `extractable` carrier (passed as a hypothesis).
 #assert_axioms merkle_verify_sound
 
 end Dregg2.Crypto

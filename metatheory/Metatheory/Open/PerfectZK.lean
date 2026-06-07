@@ -39,8 +39,7 @@ ciphertext is identically the same constant regardless of witness) where the law
 an explicit NON-perfect instance (the view leaks the witness verbatim) where
 `view_indep_of_witness` FAILS. So `hperf` is a *real constraint*, not always-true.
 
-DISCIPLINE: faithful Props, ZERO `sorry`/`admit`/`native_decide`/`axiom`. Every keystone is
-pinned with `#assert_axioms` (kernel-clean: only `propext`/`Classical.choice`/`Quot.sound`).
+Faithful Props.
 -/
 import Metatheory.ConstructiveKnowledge
 import Metatheory.EpistemicDial

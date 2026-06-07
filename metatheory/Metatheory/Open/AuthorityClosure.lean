@@ -36,8 +36,6 @@ typing* (that `Generative`/amplifying acts are forced on-chain and un-strippable
 operational obligation on the executable system, not an order-theoretic fact about
 `AmpProduces`, and is not modelled here. The closure proved is exactly the reachability
 statement the §3 note quantifies over — no more, no less.
-
-ZERO `sorry`/`admit`/`native_decide`/`axiom`; keystones pinned with `#assert_axioms`.
 -/
 import Metatheory.ConstructiveKnowledge
 import Mathlib.Logic.Relation

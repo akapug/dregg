@@ -62,8 +62,6 @@ is OUT OF SCOPE — exactly as `coarseClear` does not derive `vmax` from the dyn
 What is CLOSED: the curvature screen is genuinely sound for a CURVED (non-affine) trajectory
 under a stated `κ` envelope, and strictly generalizes the affine screen. That is the OPEN's
 "curvature-aware screen … recovering an exact continuous guarantee without assuming affinity."
-
-Zero `sorry`/`admit`/`native_decide`/`axiom`. Keystones `#assert_axioms`-pinned.
 -/
 import Dregg2.Apps.OrbitalScreen
 import Mathlib.Tactic

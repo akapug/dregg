@@ -39,7 +39,7 @@ yet lifted to the forest executor), NOT a branching/bisimulation property (`Coin
 and NOT a liveness/fairness statement (`◇`-progress needs a fairness hypothesis on `SchedA`). It is
 exactly the reusable, first-class form of the SAFETY (`□`) crowns the Hatchery mechanizes.
 
-Discipline: NO `sorry`/`admit`/`native_decide`/SMT. Every keystone (`CellContract.forever`,
+Every keystone (`CellContract.forever`,
 `CellContract.always`, the three concrete contracts) is `#assert_axioms`-pinned to the kernel triple
 `{propext, Classical.choice, Quot.sound}` at the foot of the file.
 -/

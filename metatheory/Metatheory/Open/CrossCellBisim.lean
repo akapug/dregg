@@ -67,8 +67,7 @@ is the CONTENDED (non-disjoint) infinite case — there is provably NO schedule-
 (`coupled_no_schedule_agnostic_commit`), so its whole-history "closure" is the consensus/escalation
 boundary, not a confluence theorem. We do NOT attempt to fake a confluence there.
 
-## Discipline (the rails)
-No `axiom`/`admit`/`native_decide`/`sorry`. `#assert_axioms` on every keystone. Read-only consumer of
+Read-only consumer of
 `Exec.JointCell`, `Proof.ContendedCrossCell`, `Proof.CoinductiveAdversary`, `Boundary`; edits nothing.
 -/
 import Dregg2.Proof.ContendedCrossCell

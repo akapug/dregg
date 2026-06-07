@@ -31,7 +31,7 @@ The §3 GATE reproduces, via these tactics, the one-step obligation of the hand-
 (`Apps/Identity.lean:572` / `…_identity_revoked_forever:593`) — proving the SAME forever statements with
 `carry_forever`/`exec_frame` instead of the bespoke proofs. The reproduced theorems are `#assert_axioms`-
 pinned to the kernel triple `{propext, Classical.choice, Quot.sound}`, certifying the tactics emit
-ordinary kernel-checked terms with NO new axiom and NO `sorry`/`native_decide`/SMT oracle.
+ordinary kernel-checked terms.
 
 Substrate: Lean 4.30 `elab`/`macro` + `aesop` (an existing v4.30 dependency). No new lake deps.
 -/

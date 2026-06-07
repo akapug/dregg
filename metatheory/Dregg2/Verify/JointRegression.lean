@@ -5,8 +5,6 @@ Tier-4 (`Verify/Catalog.lean`) covers intra-cell contract shapes. Cross-vat mane
 (not exotic): coordinated covenant + bilateral equalizer + per-leg credentials. This module is the
 regression harness — it re-exports the proved keystones from the joint/charter spine so downstream
 Apps and FFI cutover can import ONE module and get the full bilateral guarantee bundle.
-
-Zero `sorry`/`admit`/`native_decide`/`axiom`.
 -/
 import Dregg2.Exec.JointCharterBridge
 import Dregg2.Apps.CrossCellCovenantGated

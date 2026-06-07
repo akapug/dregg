@@ -34,7 +34,7 @@ witness exists), `satisfying_witness_proves_full_state` (verify ⟹ the WHOLE 18
 not a projection — soundness), and `stateCircuit_rejects_third_cell` (the anti-ghost tooth). The panel SHOWS
 the pipeline; the badges PROVE it sound.
 
-Discipline: NO `sorry`/`admit`/`native_decide`/SMT, NO new `axiom`s. Every wire value, every gate verdict, and
+Every wire value, every gate verdict, and
 the forged-rejection are READ off the real `TransferWitness`/`StateCommit` derivation; the pure helpers are
 `#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}`. The `#html`/`#guard`s at the bottom force
 the render path AND exhibit the non-vacuity (honest verifies, forged rejected, and they differ on wire 16).

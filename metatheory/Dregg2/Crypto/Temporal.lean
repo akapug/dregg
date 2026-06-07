@@ -126,7 +126,7 @@ class TemporalVerifierKernel (Proof : Type) where
   /-- The §8 verify oracle: does `proof` discharge the disclosed window statement `(lo, hi, t)`? -/
   verify : Statement → Proof → Bool
   /-- CARRIER — STARK extractability/soundness (FRI + Fiat-Shamir): accept ⇒ a satisfying trace
-  exists. A `Prop`; never proved, never `sorry`. -/
+  exists. A `Prop`; never proved. -/
   extractable : Prop
   /-- `extractable` unpacked: an accepted proof witnesses a satisfying temporal trace. -/
   extract : extractable →
@@ -311,9 +311,9 @@ example : temporalKindObligation.dialFloor = Dial.selective :=
 
 end Reference
 
--- Tripwires: bridge + verify-soundness + cascade + dial wiring are kernel-clean. No primitive seam
+-- No primitive seam
 -- anywhere (no hash/commitment in the temporal predicate). Only cryptographic residue is the
--- `extractable` carrier (passed as a hypothesis), never a hidden `sorry`.
+-- `extractable` carrier (passed as a hypothesis).
 #assert_axioms temporal_bridge
 #assert_axioms temporal_verify_sound
 #assert_axioms temporal_registry_cascade
