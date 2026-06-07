@@ -71,49 +71,54 @@ the combined per-asset measure is unchanged. We WRAP it with the queue-cell auth
 (`stateAuthB actor owner`, the dregg1 chained-step gate — the actor must hold authority over the owning
 cell) and the owner-Live admission gate; `conserves` cites `queueAllocateK_balNeutral`. -/
 
-/-- Queue-allocate arguments: the actor (authority subject), the fresh queue `id`, the queue `owner`,
-and the buffer `capacity`. -/
+/-- Queue-allocate arguments. ALIGNED to `execFullA`'s `queueAllocateChainA`: the queue record's
+STORED owner is the **actor** (`queueAllocateK k id actor cap`), and the authority/admission gate is on
+the **`gateCell`** the queue is created on (`stateAuthB actor gateCell`). Earlier the handler stored
+owner = `cell` (a DIVERGENCE from `execFullA`, which stored owner = `actor`); separating the stored
+owner (`actor`) from the gate cell (`gateCell`) closes the §6.6 hole. -/
 structure AllocateArgs where
-  /-- The actor performing the allocate (must hold authority over `owner`). -/
+  /-- The actor performing the allocate — and the STORED queue owner (only the owner may dequeue). -/
   actor : CellId
   /-- The fresh queue id (rejected if already in use). -/
   id : Nat
-  /-- The queue owner (only the owner may dequeue). -/
-  owner : CellId
+  /-- The cell the queue is created on — the authority + admission gate target. -/
+  gateCell : CellId
   /-- The buffer capacity. -/
   capacity : Nat
 
-/-- The authority-gated allocate step: the actor must hold authority over `owner` AND `owner` must be a
-Live cell, then run the proved `queueAllocateK`. -/
+/-- The authority-gated allocate step: the actor must hold authority over `gateCell` AND `gateCell` must
+be a Live cell, then run the proved `queueAllocateK` with the STORED owner = `actor` (the `execFullA`
+alignment). -/
 def allocateStep (k : RecordKernelState) (a : AllocateArgs) : Option RecordKernelState :=
-  if stateAuthB k.caps a.actor a.owner && acceptsEffects k a.owner then
-    queueAllocateK k a.id a.owner a.capacity
+  if stateAuthB k.caps a.actor a.gateCell && acceptsEffects k a.gateCell then
+    queueAllocateK k a.id a.actor a.capacity
   else none
 
 /-- **`queueAllocateA` — the registered queue-allocate handler.** `delta = 0` (touches only `queues`).
-`conserves` from `queueAllocateK_balNeutral`. `auth_gated`/`admission_gated` from the wrapping gate. -/
+`conserves` from `queueAllocateK_balNeutral`. `auth_gated`/`admission_gated` from the wrapping gate.
+The stored owner is `actor` (aligned to `execFullA`); the gate is on `gateCell`. -/
 def queueAllocateA : EffectHandler AllocateArgs where
   step := allocateStep
   delta := fun _ _ => 0
-  auth := fun k a => stateAuthB k.caps a.actor a.owner
-  admission := fun k a => acceptsEffects k a.owner
-  trace := fun a => { actor := a.actor, src := a.owner, dst := a.owner, amt := 0 }
+  auth := fun k a => stateAuthB k.caps a.actor a.gateCell
+  admission := fun k a => acceptsEffects k a.gateCell
+  trace := fun a => { actor := a.actor, src := a.gateCell, dst := a.gateCell, amt := 0 }
   auth_gated := by
     intro s a s' h
     unfold allocateStep at h
-    by_cases hg : stateAuthB s.caps a.actor a.owner && acceptsEffects s a.owner
+    by_cases hg : stateAuthB s.caps a.actor a.gateCell && acceptsEffects s a.gateCell
     · simp only [Bool.and_eq_true] at hg; exact hg.1
     · rw [if_neg hg] at h; exact absurd h (by simp)
   admission_gated := by
     intro s a s' h
     unfold allocateStep at h
-    by_cases hg : stateAuthB s.caps a.actor a.owner && acceptsEffects s a.owner
+    by_cases hg : stateAuthB s.caps a.actor a.gateCell && acceptsEffects s a.gateCell
     · simp only [Bool.and_eq_true] at hg; exact hg.2
     · rw [if_neg hg] at h; exact absurd h (by simp)
   conserves := by
     intro s a s' h b
     unfold allocateStep at h
-    by_cases hg : stateAuthB s.caps a.actor a.owner && acceptsEffects s a.owner
+    by_cases hg : stateAuthB s.caps a.actor a.gateCell && acceptsEffects s a.gateCell
     · rw [if_pos hg] at h
       obtain ⟨hbal, hheld⟩ := queueAllocateK_balNeutral h b
       unfold recTotalAssetWithEscrow; rw [hbal, hheld]; ring
@@ -483,10 +488,11 @@ def queueBatchRegistry : Registry :=
     ⟨AtomicTxArgs, queueAtomicTxA⟩,
     ⟨PipelineArgs, queuePipelineStepA⟩ ]
 
-/-- Build a closed queue-allocate effect (tag `0`). -/
-def allocateEffect (actor : CellId) (id : Nat) (owner : CellId) (capacity : Nat) : ClosedEffect :=
+/-- Build a closed queue-allocate effect (tag `0`). The STORED queue owner is `actor` (aligned to
+`execFullA`'s `queueAllocateChainA`); `gateCell` is the cell the queue is created on (the gate target). -/
+def allocateEffect (actor : CellId) (id : Nat) (gateCell : CellId) (capacity : Nat) : ClosedEffect :=
   { tag := 0, Args := AllocateArgs,
-    args := { actor := actor, id := id, owner := owner, capacity := capacity }, handler := queueAllocateA }
+    args := { actor := actor, id := id, gateCell := gateCell, capacity := capacity }, handler := queueAllocateA }
 
 /-- Build a closed queue-enqueue (deposit-park) effect (tag `1`). -/
 def enqueueEffect (id m : Nat) (sender owner : CellId) (depId : Nat) (dAsset : AssetId) (deposit : Int) :

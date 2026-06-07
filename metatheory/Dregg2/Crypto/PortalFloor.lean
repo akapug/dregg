@@ -8,11 +8,11 @@ BLAKE3 CR / nullifier determinism / AEAD+X25519 / HMAC unforgeability), discharg
 impl and circuits, never proved in Lean, never `sorry`. Each portal's soundness theorem takes the
 carrier as an explicit hypothesis so the trust boundary is visible. `Reference` instances now
 discharge each carrier with the GENUINE soundness `Prop` over that instance's own oracle (not `True`)
-— proved structurally and pinned, and provably FALSE on a forgeable/colliding oracle (§9b). Two
-exceptions (`instSignatureKernel`/`instMacKernelE` `unforgeable`) keep a `True` carrier ONLY to
-avoid breaking an unowned consumer's `trivial` discharge; the genuine Prop for them is still proved
-+ pinned as `instSignatureKernel_unforgeable`/`instMacKernelE_unforgeable` (see their ripple notes).
-Real instances are the Rust FFI ones, leaving the carrier as a standing obligation.
+— proved structurally and pinned, and provably FALSE on a forgeable/colliding oracle (§9b). This now
+holds for ALL eight reference carriers including `instSignatureKernel`/`instMacKernelE`
+`unforgeable` (the consumer `FullForestAuthPortal.lean` passes the proved theorems
+`instSignatureKernel_unforgeable`/`instMacKernelE_unforgeable`, not `trivial`). No `True` carrier
+remains. Real instances are the Rust FFI ones, leaving the carrier as a standing obligation.
 No `axiom`/`admit`/`native_decide`/`sorry`. -/
 import Mathlib.Algebra.Group.Defs
 import Mathlib.Data.Nat.Pairing
@@ -295,18 +295,17 @@ namespace Reference
 /-- ed25519 reference: `Signed pk m := pk = m` (the toy holder-relation); the oracle accepts iff the
 signature echoes the message AND the pubkey matches.
 
-RIPPLE NOTE: ideally `unforgeable` here would be the genuine EUF-CMA Prop
-`∀ pk m s, sigVerify pk m s = true → Signed pk m` (proved by `instSignatureKernel_unforgeable`
-below), exactly like the other reference carriers. It is left as `True` ONLY because
-`Dregg2/Exec/FullForestAuthPortal.lean` (a consumer this track does not own) discharges
-`R.sig.unforgeable` with `trivial` at its line ~331. Flip that `trivial` to
-`Reference.instSignatureKernel_unforgeable` and this carrier can be devacuified. The genuine Prop
-IS proved + pinned (and refuted on a forgeable oracle in §9b) regardless. -/
+DEVACUIFIED: `unforgeable` is now the GENUINE EUF-CMA Prop over this echo oracle (stated
+standalone — `∀ pk m s, decide (s = m ∧ pk = m) = true → pk = m` — NO self-reference to the
+instance, so no circularity), exactly like the other reference carriers. The consumer
+`Dregg2/Exec/FullForestAuthPortal.lean` discharges `R.sig.unforgeable` with
+`Reference.instSignatureKernel_unforgeable` (the proved theorem below). NON-VACUOUS: FALSE for a
+forgeable oracle (`instSignatureForge` in §9b). -/
 instance instSignatureKernel : SignatureKernel Nat Nat Nat where
   Signed pk m := pk = m
   sigVerify pk m s := decide (s = m ∧ pk = m)
-  unforgeable := True
-  sigVerify_sound := by intro _ pk m s h; simp only [decide_eq_true_eq] at h; exact h.2
+  unforgeable := ∀ pk m s, decide (s = m ∧ pk = m) = true → pk = m
+  sigVerify_sound := by intro hunf pk m s h; exact hunf pk m s h
 
 /-- The GENUINE ed25519 EUF-CMA soundness Prop over the reference echo oracle, PROVED. This is the
 carrier the consumer flip (see ripple note) should pass instead of `trivial`. NON-VACUOUS: the same
@@ -399,16 +398,17 @@ theorem instSealKernel_authentic : instSealKernel.authentic := by
 /-- HMAC reference over `ℕ`: `mac key msg := pair key msg`; `Tagged key msg t := t = mac key msg`;
 the compare oracle accepts iff `t` echoes the recomputed tag.
 
-RIPPLE NOTE: as with `instSignatureKernel`, `unforgeable` would be the genuine HMAC-unforgeability
-Prop (proved by `instMacKernelE_unforgeable`), but is left `True` ONLY because
-`Dregg2/Exec/FullForestAuthPortal.lean` (unowned consumer) discharges `R.hmac.unforgeable` with
-`trivial` at its line ~335. Flip that to `Reference.instMacKernelE_unforgeable` to devacuify. -/
+DEVACUIFIED: `unforgeable` is now the GENUINE HMAC-unforgeability Prop over this compare oracle
+(stated standalone — `∀ key msg t, decide (t = Nat.pair key msg) = true → t = Nat.pair key msg` —
+NO self-reference, no circularity). The consumer `Dregg2/Exec/FullForestAuthPortal.lean` discharges
+`R.hmac.unforgeable` with `Reference.instMacKernelE_unforgeable` (proved below). NON-VACUOUS: FALSE
+for an accepts-everything MAC (`instMacForge` in §9b). -/
 instance instMacKernelE : MacKernelE Nat Nat Nat where
   mac key msg := Nat.pair key msg
   Tagged key msg t := t = Nat.pair key msg
   verifyTag key msg t := decide (t = Nat.pair key msg)
-  unforgeable := True
-  verifyTag_sound := by intro _ key msg t h; simp only [decide_eq_true_eq] at h; exact h
+  unforgeable := ∀ key msg t, decide (t = Nat.pair key msg) = true → t = Nat.pair key msg
+  verifyTag_sound := by intro hunf key msg t h; exact hunf key msg t h
 
 /-- The GENUINE HMAC unforgeability soundness Prop over the reference compare oracle, PROVED — the
 carrier the consumer flip should pass instead of `trivial`. NON-VACUOUS: FALSE for an

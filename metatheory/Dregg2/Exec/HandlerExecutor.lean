@@ -1011,38 +1011,83 @@ theorem handler_refines_execFullA_refusal (s s' : RecChainedState) (actor cell :
     · rw [← hstep]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
-/-! ### §6.3b — FLAG WRITES deferred: `makeSovereignA` / `receiptArchiveA` field alignment.
+/-! ### §6.3b — `makeSovereignA` / `receiptArchiveA` ALIGNED to `execFullA` (holes CLOSED).
 
-The handler routes both through `stateWriteH` at pinned field names (`sovereignField` /
-`receiptArchiveField`). `execFullA` uses DISTINCT semantics: `makeSovereignStep` whole-record
-commitment-rebind (`makeSovereignKernel`) and `stateStep` at `lifecycleField` for receipt archive.
-Kernel agreement on the honest commit path is therefore BLOCKED until a field-alignment lemma bridges
-the representations — tracked as explicit `sorry` portals below (see `Dregg2.Exec.HandlerOpenFronts`). -/
+The handlers are now SEMANTICALLY ALIGNED to `execFullA`:
+* `makeSovereignA` routes through `makeSovereignH` — the SAME commitment-rebind (`makeSovereignKernel`,
+  whole-record drop) `execFullA`'s `makeSovereignStep` does, NOT the old `sovereign := 1` flag write.
+* `receiptArchiveA` routes through `receiptArchiveEffect` at the `"lifecycle"` field (`receiptArchiveField`
+  is now `"lifecycle"`) — the SAME slot `execFullA`'s `stateStep s lifecycleField actor cell (.int 1)`
+  writes, NOT the old `"receipt_archive"` flag.
+Both kernel-agreement obligations are now GENUINELY DISCHARGED (no `sorry`): the handler commit produces
+EXACTLY the `execFullA` post-kernel. -/
 
-/-- HOLE: handler `sovereignField` stub ⊑ `makeSovereignStep` commitment-rebind (field mismatch). -/
+/-- **`handler_refines_execFullA_makeSovereign` — CLOSED.** A committed handler make-sovereign commits
+in `execFullA` to the SAME kernel: both run the `makeSovereignKernel` commitment-rebind (the readable
+record dropped behind a state commitment). The handler ADDS the `acceptsEffects` live-cell gate
+(strengthening); when it commits, `stateAuthB` held, so `execFullA`'s `makeSovereignStep` commits too. -/
 theorem hole_handler_makeSovereign (s s' : RecChainedState) (actor cell : CellId)
     (_hmem : cell ∈ s.kernel.accounts)
     (h : execHandlerOne (.makeSovereignA actor cell) s = some s') :
     ∃ s'', execFullA s (.makeSovereignA actor cell) = some s'' ∧ s''.kernel = s'.kernel := by
-  sorry
+  have hstep := execHandlerOne_kernel (.makeSovereignA actor cell) s s' h
+  rw [toClosedEffect] at hstep
+  change Dregg2.Exec.Handlers.StateSupply.makeSovereignStepK s.kernel
+    { actor := actor, target := cell } = some s'.kernel at hstep
+  unfold Dregg2.Exec.Handlers.StateSupply.makeSovereignStepK at hstep
+  by_cases hg : acceptsEffects s.kernel cell
+      && authorizedB s.kernel.caps { actor := actor, src := cell, dst := cell, amt := 0 }
+  · rw [if_pos hg] at hstep
+    simp only [Bool.and_eq_true] at hg
+    simp only [Option.some.injEq] at hstep
+    have hauth : Dregg2.Exec.EffectsState.stateAuthB s.kernel.caps actor cell = true := hg.2
+    refine ⟨{ kernel := Dregg2.Exec.TurnExecutorFull.makeSovereignKernel s.kernel cell,
+              log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }, ?_, ?_⟩
+    · show Dregg2.Exec.TurnExecutorFull.makeSovereignStep s actor cell = _
+      unfold Dregg2.Exec.TurnExecutorFull.makeSovereignStep
+      rw [if_pos hauth]
+    · rw [← hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
-/-- **`handler_refines_execFullA_makeSovereign` — DEFERRED (field mismatch).** Handler commits a
-`sovereignField` write; `execFullA` commits `makeSovereignStep` commitment-rebind. -/
+/-- **`handler_refines_execFullA_receiptArchive` — CLOSED.** A committed handler receipt-archive commits
+in `execFullA` to the SAME kernel: both write the `"lifecycle"` record slot to `1`. The handler gate
+(`acceptsEffects && authorizedB`) implies `execFullA`'s `stateStep` gate (authority + membership +
+liveness) given `cell ∈ accounts`. -/
+theorem hole_handler_receiptArchive (s s' : RecChainedState) (actor cell : CellId)
+    (hmem : cell ∈ s.kernel.accounts)
+    (h : execHandlerOne (.receiptArchiveA actor cell) s = some s') :
+    ∃ s'', execFullA s (.receiptArchiveA actor cell) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.receiptArchiveA actor cell) s s' h
+  rw [toClosedEffect] at hstep
+  change stateWriteStep s.kernel
+    { actor := actor, target := cell,
+      field := Dregg2.Exec.Handlers.StateSupply.receiptArchiveField, value := 1 }
+    = some s'.kernel at hstep
+  unfold stateWriteStep at hstep
+  by_cases hg : acceptsEffects s.kernel cell
+      && authorizedB s.kernel.caps { actor := actor, src := cell, dst := cell, amt := 0 }
+  · rw [if_pos hg] at hstep
+    simp only [Bool.and_eq_true] at hg
+    simp only [Option.some.injEq] at hstep
+    have hlive : cellLive s.kernel cell = true := hg.1
+    have hfield : Dregg2.Exec.Handlers.StateSupply.receiptArchiveField =
+        Dregg2.Exec.TurnExecutorFull.lifecycleField := rfl
+    refine ⟨{ kernel := writeField s.kernel Dregg2.Exec.Handlers.StateSupply.receiptArchiveField cell (.int 1),
+              log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }, ?_, ?_⟩
+    · show Dregg2.Exec.EffectsState.stateStep s Dregg2.Exec.TurnExecutorFull.lifecycleField actor cell (.int 1) = _
+      unfold Dregg2.Exec.EffectsState.stateStep Dregg2.Exec.EffectsState.stateAuthB
+      rw [if_pos ⟨hg.2, hmem, hlive⟩, hfield]
+    · rw [← hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
+/-- **`handler_refines_execFullA_makeSovereign`** — the strengthening (now PROVED, alias). -/
 theorem handler_refines_execFullA_makeSovereign (s s' : RecChainedState) (actor cell : CellId)
     (hmem : cell ∈ s.kernel.accounts)
     (h : execHandlerOne (.makeSovereignA actor cell) s = some s') :
     ∃ s'', execFullA s (.makeSovereignA actor cell) = some s'' ∧ s''.kernel = s'.kernel :=
   hole_handler_makeSovereign s s' actor cell hmem h
 
-/-- HOLE: handler `receipt_archive` field ⊑ executor `lifecycleField` write (field mismatch). -/
-theorem hole_handler_receiptArchive (s s' : RecChainedState) (actor cell : CellId)
-    (_hmem : cell ∈ s.kernel.accounts)
-    (h : execHandlerOne (.receiptArchiveA actor cell) s = some s') :
-    ∃ s'', execFullA s (.receiptArchiveA actor cell) = some s'' ∧ s''.kernel = s'.kernel := by
-  sorry
-
-/-- **`handler_refines_execFullA_receiptArchive` — DEFERRED (field mismatch).** Handler commits a
-`receipt_archive` field write; `execFullA` commits `stateStep` at `lifecycleField`. -/
+/-- **`handler_refines_execFullA_receiptArchive`** — the strengthening (now PROVED, alias). -/
 theorem handler_refines_execFullA_receiptArchive (s s' : RecChainedState) (actor cell : CellId)
     (hmem : cell ∈ s.kernel.accounts)
     (h : execHandlerOne (.receiptArchiveA actor cell) s = some s') :
@@ -1487,27 +1532,29 @@ writer-ACL vs self-ACL) when `actor ≠ cell`. On the **honest production path**
 allocate/enqueue; chain gates explicit for dequeue/atomic), handler-commits ⊆ execFullA-commits with
 identical kernels. -/
 
-/-- **`handler_refines_execFullA_queueAllocate`** — when the queue owner IS the acting cell
-(`actor = cell`), a handler allocate commit refines `queueAllocateChainA` (which stores `actor` as
-`QueueRecord.owner`; the handler's `allocateStep` stores `owner = cell`, hence the alignment hyp). -/
+/-- **`handler_refines_execFullA_queueAllocate` — CLOSED, UNCONDITIONAL (no `actor = cell`).** The
+handler now stores the queue owner as `actor` (the §3.1 alignment in `Handlers.Queue.allocateStep`,
+`queueAllocateK … actor …`), EXACTLY as `execFullA`'s `queueAllocateChainA` does — so a committed
+handler allocate refines `execFullA` to the SAME kernel for ANY `actor`/`cell`. The handler ADDS the
+`acceptsEffects cell` live-cell gate (strengthening). -/
 theorem handler_refines_execFullA_queueAllocate (s s' : RecChainedState) (id : Nat) (actor cell : CellId)
-    (cap : Nat) (hac : actor = cell)
+    (cap : Nat)
     (h : execHandlerOne (.queueAllocateA id actor cell cap) s = some s') :
     ∃ s'', execFullA s (.queueAllocateA id actor cell cap) = some s'' ∧ s''.kernel = s'.kernel := by
   have hstep := execHandlerOne_kernel (.queueAllocateA id actor cell cap) s s' h
   rw [toClosedEffect] at hstep
-  change allocateStep s.kernel { actor := actor, id := id, owner := cell, capacity := cap }
+  change allocateStep s.kernel { actor := actor, id := id, gateCell := cell, capacity := cap }
     = some s'.kernel at hstep
   unfold allocateStep at hstep
   by_cases hg : stateAuthB s.kernel.caps actor cell && acceptsEffects s.kernel cell
   · rw [if_pos hg] at hstep
     simp only [Bool.and_eq_true] at hg
-    have hk : queueAllocateK s.kernel id cell cap = some s'.kernel := hstep
+    have hk : queueAllocateK s.kernel id actor cap = some s'.kernel := hstep
     refine ⟨{ kernel := s'.kernel,
               log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }, ?_, rfl⟩
     show queueAllocateChainA s id actor cell cap = _
     unfold queueAllocateChainA
-    rw [if_pos hg.1, show queueAllocateK s.kernel id actor cap = some s'.kernel from by simpa only [hac] using hk]
+    rw [if_pos hg.1, hk]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
 /-- **`handler_refines_execFullA_queueEnqueue`** — when sender = queue owner cell (`actor = cell`),
@@ -1536,13 +1583,16 @@ theorem handler_refines_execFullA_queueEnqueue (s s' : RecChainedState) (id m : 
     rw [if_pos hg', hk]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
-/-- HOLE §6.6 DEFER: when `actor ≠ cell`, handler allocate owner metadata diverges from
-`queueAllocateChainA` — kernel agreement on the unconditional path is unproved. -/
+/-- **`hole_queue_actor_ne_cell` — CLOSED.** Formerly a `sorry` for `actor ≠ cell` (the owner
+metadata diverged: handler stored owner = `cell`, `execFullA` stored owner = `actor`). The handler is
+now ALIGNED to store owner = `actor`, so kernel agreement holds UNCONDITIONALLY — the `actor ≠ cell`
+case is just the general `handler_refines_execFullA_queueAllocate` (the `_hne` hypothesis is no longer
+needed). -/
 theorem hole_queue_actor_ne_cell (s s' : RecChainedState) (id : Nat) (actor cell : CellId) (cap : Nat)
     (_hne : actor ≠ cell)
     (h : execHandlerOne (.queueAllocateA id actor cell cap) s = some s') :
-    ∃ s'', execFullA s (.queueAllocateA id actor cell cap) = some s'' ∧ s''.kernel = s'.kernel := by
-  sorry
+    ∃ s'', execFullA s (.queueAllocateA id actor cell cap) = some s'' ∧ s''.kernel = s'.kernel :=
+  handler_refines_execFullA_queueAllocate s s' id actor cell cap h
 
 /-- **`handler_refines_execFullA_queueDequeue`** — when the chained writer-ACL + owner-liveness gates
 hold (`hg`), a handler P0-1-closing dequeue refines `queueDequeueChainA` on the same kernel. -/
@@ -1797,6 +1847,11 @@ seven batches the registry packs — would FAIL these pins (and the build). -/
 #assert_axioms handler_refines_execFullA_queueResize
 #assert_axioms handler_refines_execFullA_queuePipeline
 #assert_axioms handler_refines_execFullA_queueAllocate
+#assert_axioms hole_queue_actor_ne_cell
+#assert_axioms hole_handler_makeSovereign
+#assert_axioms handler_refines_execFullA_makeSovereign
+#assert_axioms hole_handler_receiptArchive
+#assert_axioms handler_refines_execFullA_receiptArchive
 #assert_axioms handler_refines_execFullA_queueEnqueue
 #assert_axioms handler_refines_execFullA_queueDequeue
 #assert_axioms handler_refines_execFullA_queueAtomicTx
@@ -1823,11 +1878,14 @@ Deliberately OUT of this file (documented, NOT a silent gap):
     when the chained fold reaches the same kernel (`hchain` — now discharged by
     `handler_refines_execFullA_queueAtomicTx_strong` when the per-op `QueueAtomicTxGateFold` witness
     holds; see `Dregg2.Exec.QueueCutover`).
+    NOW CLOSED (§6.3b / §6.6): `makeSovereignA` (handler ALIGNED to the `makeSovereignKernel`
+    commitment-rebind — `hole_handler_makeSovereign`), `receiptArchiveA` (handler ALIGNED to the
+    `"lifecycle"` field write — `hole_handler_receiptArchive`), and UNCONDITIONAL queue allocate (handler
+    now stores owner = `actor` like `execFullA`, so `hole_queue_actor_ne_cell` is just the general
+    `handler_refines_execFullA_queueAllocate` — no `actor = cell` needed).
     REMAINING: `spawnA` / `createCellFromFactoryA` **full** `spawnChainA`/`createCellFromFactoryChainA`
     metadata (the born-empty `createCellA` core is now covered by
-    `handler_refines_execFullA_{spawn,createCellFromFactory}`), `makeSovereignA` (handler field-write
-    stub vs `makeSovereignStep` commitment-rebind), `receiptArchiveA` (handler `receipt_archive` field
-    vs executor `lifecycle` field), unconditional queue allocate/enqueue when `actor ≠ cell`. For
+    `handler_refines_execFullA_{spawn,createCellFromFactory}`), queue enqueue when `actor ≠ cell`. For
     `exerciseA`, kernel agreement is on the **inner-turn honest path**
     (`handler_refines_execFullA_exercise` + `hinner`); the R4 facet-mask still narrows handler-commits.
 
