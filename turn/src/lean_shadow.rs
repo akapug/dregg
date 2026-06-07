@@ -42,9 +42,9 @@ use crate::turn::{Turn, TurnResult};
 /// is decided identically, hence the conditional `allow(dead_code)`.
 #[derive(Clone, Debug)]
 #[cfg_attr(not(feature = "lean-shadow"), allow(dead_code))]
-struct ShadowPreLedger {
-    cells: HashMap<CellId, Cell>,
-    id_map: HashMap<CellId, u64>,
+pub(crate) struct ShadowPreLedger {
+    pub(crate) cells: HashMap<CellId, Cell>,
+    pub(crate) id_map: HashMap<CellId, u64>,
 }
 
 /// The HOST/NODE-fed admission context (boundary-P1 bug-1). These come from the EXECUTOR's own
@@ -430,7 +430,7 @@ pub fn shadow_report(
 /// True when every effect in the forest maps to a wire action and the cell-id set is
 /// closed (so a Nat id can be assigned). Any unmappable effect ⇒ ineligible (the turn is
 /// skipped rather than silently mis-encoded). Decided identically in both builds.
-fn forest_is_marshallable(turn: &Turn) -> bool {
+pub(crate) fn forest_is_marshallable(turn: &Turn) -> bool {
     if turn.call_forest.roots.is_empty() {
         return false;
     }
@@ -581,7 +581,7 @@ const FRESH_ID_BASE: u64 = 1_000_000;
 // PRE-STATE — snapshot every referenced cell present in the ledger.
 // ===================================================================
 
-fn build_pre_ledger(turn: &Turn, ledger: &Ledger) -> ShadowPreLedger {
+pub(crate) fn build_pre_ledger(turn: &Turn, ledger: &Ledger) -> ShadowPreLedger {
     let id_map = collect_id_map(turn);
     let mut cells = HashMap::new();
     for id in id_map.keys() {
@@ -875,6 +875,46 @@ fn run_shadow(turn: &Turn, pre: &ShadowPreLedger, host: &ShadowHostCtx) -> Resul
     }
     let verdict = dregg_lean_ffi::decode_shadow_verdict(&out)?;
     Ok(verdict.committed)
+}
+
+/// THE SWAP state-producing path: marshal the turn, run the VERIFIED Lean executor, and return
+/// the full decoded post-state (NOT just the commit bit). This is the half `run_shadow` throws
+/// away — the verified executor's produced `WireState`, which `lean_apply` reconstitutes into the
+/// authoritative `Ledger`. The pre-snapshot id_map is returned alongside so the caller can invert
+/// the wire Nats back to real `CellId`s.
+#[cfg(feature = "lean-shadow")]
+pub(crate) fn run_shadow_state(
+    turn: &Turn,
+    pre: &ShadowPreLedger,
+    host: &ShadowHostCtx,
+) -> Result<dregg_lean_ffi::ShadowState, String> {
+    use dregg_lean_ffi::marshal::marshal_turn_hosted;
+
+    let block_height = host.block_height;
+    let wire_state = ledger_to_wire_state(pre)?;
+    let wire_turn = turn_to_wire_turn(turn, pre, block_height)?;
+    let frozen_nats: Vec<u64> = host
+        .frozen
+        .iter()
+        .filter_map(|c| pre.id_map.get(c).copied())
+        .collect();
+    let stored_head_nat = host.stored_head.map(|h| bytes32_to_nat(&h)).unwrap_or(0);
+    let host_wire = dregg_lean_ffi::marshal::WireHostCtx {
+        now: block_height,
+        block_height,
+        frozen: frozen_nats,
+        stored_head: stored_head_nat,
+        budget: host.budget,
+    };
+    let wire = marshal_turn_hosted(&host_wire, &wire_state, &wire_turn).map_err(|e| e.to_string())?;
+    if std::env::var("DREGG_LEAN_SHADOW_DEBUG").as_deref() == Ok("1") {
+        eprintln!("[shadow wire IN ] {wire}");
+    }
+    let out = dregg_lean_ffi::shadow_exec_full_forest_auth(&wire)?;
+    if std::env::var("DREGG_LEAN_SHADOW_DEBUG").as_deref() == Ok("1") {
+        eprintln!("[shadow wire OUT] {out}");
+    }
+    dregg_lean_ffi::decode_shadow_state(&out)
 }
 
 #[cfg(feature = "lean-shadow")]
