@@ -2970,12 +2970,26 @@ structure WWire where
   state : WState
   turn  : WTurn
 
+/-- Host-default **proposer** cell credited 50% of the turn fee (`self.proposer_cell`). The wire
+`WTurn` carries no proposer field, so until the Rust executor plumbs `self` explicitly we pin the
+host's reserved system-proposer cell. Distinguished from the host treasury and from any plausible
+agent so the 50/30 distribution genuinely fires on the default path. -/
+def hostProposerCell : CellId := 0xF00
+
+/-- Host-default **treasury** cell credited 30% of the turn fee (`self.treasury_cell`). Reserved
+system cell, distinct from `hostProposerCell`. -/
+def hostTreasuryCell : CellId := 0xF01
+
 /-- Derive the host `AdmCtx` from the turn envelope until the Rust executor plumbs `self` explicitly.
 `now` is pinned to `validUntil` (non-expired at the boundary); `blockHeight` from the wire clock
-dimension; `storedHead` from `prevHash`. -/
+dimension; `storedHead` from `prevHash`. `proposer`/`treasury` are wired to the host's reserved
+system cells (`hostProposerCell`/`hostTreasuryCell`) so the 50/30 fee distribution fires by default
+(the residue ≈20% burned) — conservation-modulo-burn holds for ANY recipient choice, so this keeps
+the keystone proof (`runGatedForestTurn_conserves_modulo_burn`, hypothesised over `some p`/`some t`)
+intact while exercising the credited path instead of the all-burned `none`/`none` shadow. -/
 def admCtxOfTurn (t : WTurn) : AdmCtx :=
   { now := t.validUntil, blockHeight := t.blockHeight, frozen := [], storedHead := prevReceiptOf t.prevHash,
-    budget := 1000000000 }
+    budget := 1000000000, proposer := some hostProposerCell, treasury := some hostTreasuryCell }
 
 /-- Encode the complete-turn INPUT `{"state":STATEW,"turn":TURNW}`. -/
 def encodeWWire (w : WWire) : String :=
@@ -3395,6 +3409,25 @@ def gatedDemoInput : String := encodeWWire { state := wideDemoState, turn := gat
           | none    => encodeWOut (wstateOfState cellIds capLabels balKeys s0.kernel) 0 false)
            == execFullForestAuthStep gatedDemoInput
        | none => false))  --  true (export = direct run)
+
+-- A2 DEFAULT-PATH FEE WIRING: the wire-derived `admCtxOfTurn` now carries the host proposer/treasury
+-- (NOT the all-burned `none`/`none` shadow), so the 50/30 distribution FIRES on the default production
+-- path. The derived ctx pins the reserved system cells:
+#guard ((admCtxOfTurn gatedDemoTurn).proposer == some hostProposerCell)  --  some 0xF00 (not none)
+#guard ((admCtxOfTurn gatedDemoTurn).treasury == some hostTreasuryCell)  --  some 0xF01 (not none)
+-- ...and running the gated turn through that DEFAULT ctx credits proposer +fee/2 (5/2=2) and
+-- treasury +fee*3/10 (5*3/10=1) on top of the prologue — the residue (5−2−1=2) burned:
+#guard ((match parseWWire gatedDemoInput with
+       | some w =>
+         let s0 : RecChainedState := { kernel := stateOfWState w.state, log := [] }
+         let ctx := admCtxOfTurn w.turn  -- the DEFAULT wire-derived ctx (host proposer/treasury)
+         let hdr := turnHdrOf w.turn.agent (eraseAuth w.turn.root) w.turn.nonce w.turn.fee
+                       w.turn.validUntil w.turn.prevHash
+         (match runGatedForestTurn ctx hdr s0 (liftForestG w.turn.root) with
+          | some s' => (balOf (s'.kernel.cell hostProposerCell),
+                        balOf (s'.kernel.cell hostTreasuryCell))
+          | none    => (-1, -1))
+       | none => (-1, -1)) == (2, 1))  --  proposer +2, treasury +1 (distribution fired on the default path)
 
 /-- A FORGED-credential gated turn: the SAME transfer but under `.signature 7 8` (proof does NOT echo ⇒ the
 portal REJECTS). The gate fail-closes ⇒ whole-turn rollback. -/

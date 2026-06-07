@@ -1,5 +1,5 @@
 name = "Dregg2"
-defaultTargets = ["Dregg2"]
+defaultTargets = ["Dregg2", "Metatheory"]
 
 # Pin mathlib to the revision matching ~/src/mathlib4 @ v4.30.0
 # (rev 1c2b90b13009c65b090d95a83c98e248deafb6f1). Using a local `path`
@@ -11,3 +11,12 @@ path = "../../../src/mathlib4"
 
 [[lean_lib]]
 name = "Dregg2"
+
+# The Metatheory/* epistemic+categorical tree. Globbed (no `Metatheory.lean`
+# root needed) so the WHOLE subtree — Categorical, Disputation, and every
+# Open/* front — lands in the default `lake build` target and CI covers it.
+# Previously only EpistemicConsensus/EpistemicDial were reachable (via Dregg2's
+# Crypto imports); Categorical/Open.* were verified only via `lake env lean`.
+[[lean_lib]]
+name = "Metatheory"
+globs = ["Metatheory.+"]
