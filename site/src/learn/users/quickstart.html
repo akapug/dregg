@@ -83,8 +83,8 @@ dregg cap export &lt;cell-id&gt;</code></pre>
       A turn is an atomic state transition. You build a call forest targeting
       one or more cells, execute it locally, then submit
       <code>(turn_hash, new_commitment, proof)</code> to the federation. The
-      Effect VM supports 24 effects: transfers, capability grants/revocations,
-      cell creation, seal/unseal, pipelined sends, bridge operations, and more.
+      Effect VM supports 54 effects: transfers, capability grants/revocations,
+      cell creation, seal/unseal, escrow, queues, pipelined sends, bridge operations, and more.
       Each turn produces a STARK proof that the transition is valid.
     </p>
 
