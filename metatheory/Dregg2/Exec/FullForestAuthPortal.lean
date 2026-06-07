@@ -326,13 +326,18 @@ def forgedToken : Authorization Nat Nat := .token 3 0
 #guard (AuthPortal.credentialValid (Ctx := Unit) goodSig ())  --  true
 #guard (AuthPortal.credentialValid (Ctx := Unit) forgedSig ()) == false  --  false
 
-/-- Soundness witness at the reference kernel: a genuine signature arm proves `Signed`. -/
+/-- Soundness witness at the reference kernel: a genuine signature arm proves `Signed`. The
+`unforgeable` carrier is now the GENUINE EUF-CMA Prop (not `True`), discharged by the proved
+`Reference.instSignatureKernel_unforgeable`. -/
 example : (instRealAuthPortal.sig).Signed 7 7 :=
-  signature_arm_sound (R := instRealAuthPortal) trivial 7 7 (by decide)
+  signature_arm_sound (R := instRealAuthPortal)
+    Reference.instSignatureKernel_unforgeable 7 7 (by decide)
 
-/-- Soundness witness: a genuine token arm proves `Tagged`. -/
+/-- Soundness witness: a genuine token arm proves `Tagged`. The `unforgeable` carrier is now the
+GENUINE HMAC-unforgeability Prop (not `True`), discharged by `Reference.instMacKernelE_unforgeable`. -/
 example : (instRealAuthPortal.hmac).Tagged 3 3 (Nat.pair 3 3) :=
-  token_arm_sound (R := instRealAuthPortal) trivial 3 (Nat.pair 3 3) (by decide)
+  token_arm_sound (R := instRealAuthPortal)
+    Reference.instMacKernelE_unforgeable 3 (Nat.pair 3 3) (by decide)
 
 end Demo
 

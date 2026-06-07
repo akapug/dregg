@@ -34,20 +34,20 @@ structure OpenFront where
 
 /-! ## §1 — inventory (every named handler gap; shrink this list). -/
 
+-- CLOSED (this wave): `handler_makeSovereign` (handler ALIGNED to the `makeSovereignKernel`
+-- commitment-rebind), `handler_receiptArchive` (ALIGNED to the `"lifecycle"` field write), and the
+-- queue-allocate `actor ≠ cell` front (handler now stores owner = `actor`, so kernel agreement is
+-- UNCONDITIONAL). Their `hole_*` theorems in `HandlerExecutor` are now genuine proofs (no `sorry`),
+-- and the `portal_*` re-exports below delegate to them. Removed from the open inventory.
 def openFronts : List OpenFront := [
-  -- Wave 7: flag-write field alignment (handler stateWriteH vs execFullA distinct semantics)
-  ⟨"handler_makeSovereign", .w7_flag_alignment, some "makeSovereignA",
-    "handler sovereignField vs makeSovereignStep commitment-rebind"⟩
-  , ⟨"handler_receiptArchive", .w7_flag_alignment, some "receiptArchiveA",
-    "handler receipt_archive vs lifecycleField write"⟩
   -- Wave 7: exercise inner turn + R4 facet mask
-  , ⟨"exercise_inner_turn_witness", .w7_exercise_r4, some "exerciseA",
+  ⟨"exercise_inner_turn_witness", .w7_exercise_r4, some "exerciseA",
     "inner List FullActionA emitted fold from hold post-state"⟩
   , ⟨"exercise_r4_facet_mask", .w7_exercise_r4, some "exerciseA",
     "facetedOf Auth.control alignment vs execInnerA"⟩
-  -- Wave 6/7 queue defer: actor ≠ cell owner alignment
-  , ⟨"queue_actor_ne_cell", .w6_queue_defer, none,
-    "queueAllocate/queueEnqueue when actor ≠ cell — owner metadata mismatch"⟩
+  -- Wave 6/7 queue defer: actor ≠ cell owner alignment — REMAINS for queue ENQUEUE only
+  , ⟨"queue_enqueue_actor_ne_cell", .w6_queue_defer, none,
+    "queueEnqueue when actor ≠ cell — owner metadata mismatch (allocate is now CLOSED)"⟩
   -- Wave 7: spawn/factory metadata beyond born-empty createCell core
   , ⟨"spawn_factory_metadata", .w7_spawn_metadata, some "spawnA",
     "spawnChainA/createCellFromFactoryChainA metadata beyond createCellH core"⟩
@@ -61,21 +61,21 @@ section HolePortals
 
 variable {s s' : RecChainedState}
 
-/-- HOLE: `makeSovereignA` handler ⊑ `execFullA` (field alignment). -/
+/-- CLOSED: `makeSovereignA` handler ⊑ `execFullA` (commitment-rebind ALIGNED; proved). -/
 theorem portal_handler_makeSovereign
     (actor cell : CellId) (hmem : cell ∈ s.kernel.accounts)
     (h : execHandlerOne (.makeSovereignA actor cell) s = some s') :
     ∃ s'', execFullA s (.makeSovereignA actor cell) = some s'' ∧ s''.kernel = s'.kernel :=
   handler_refines_execFullA_makeSovereign s s' actor cell hmem h
 
-/-- HOLE: `receiptArchiveA` handler ⊑ `execFullA` (field alignment). -/
+/-- CLOSED: `receiptArchiveA` handler ⊑ `execFullA` (`"lifecycle"` field ALIGNED; proved). -/
 theorem portal_handler_receiptArchive
     (actor cell : CellId) (hmem : cell ∈ s.kernel.accounts)
     (h : execHandlerOne (.receiptArchiveA actor cell) s = some s') :
     ∃ s'', execFullA s (.receiptArchiveA actor cell) = some s'' ∧ s''.kernel = s'.kernel :=
   handler_refines_execFullA_receiptArchive s s' actor cell hmem h
 
-/-- HOLE §6.6: queue allocate when `actor ≠ cell`. -/
+/-- CLOSED §6.6: queue allocate when `actor ≠ cell` (handler stores owner = `actor`; proved). -/
 theorem portal_queue_actor_ne_cell (id : Nat) (actor cell : CellId) (cap : Nat)
     (hne : actor ≠ cell)
     (h : execHandlerOne (.queueAllocateA id actor cell cap) s = some s') :
@@ -103,6 +103,6 @@ theorem portal_exercise_r4_facet_mask (actor target : CellId) (inner : List Full
 
 end HolePortals
 
-#guard countOpenFronts == 6
+#guard countOpenFronts == 3
 
 end Dregg2.Exec.HandlerOpenFronts

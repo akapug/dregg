@@ -372,7 +372,11 @@ def permissionsField  : FieldName := "permissions"
 def vkField           : FieldName := "verification_key"
 def sovereignField    : FieldName := "sovereign"
 def refusalField      : FieldName := "refusal"
-def receiptArchiveField : FieldName := "receipt_archive"
+/-- The receipt-archive write targets the `"lifecycle"` RECORD slot — ALIGNED to `execFullA`'s
+`receiptArchiveA` arm (`stateStep s lifecycleField actor cell (.int 1)`, see `Circuit/Spec/
+cellstateaudit.lean`). Earlier this was a distinct `"receipt_archive"` flag, which made the
+handler-vs-`execFullA` kernel diverge (the §6.3b hole); writing `"lifecycle"` closes it. -/
+def receiptArchiveField : FieldName := "lifecycle"
 
 /-! ## §3 — The SUPPLY+STATE registry coproduct and the `ClosedEffect` builders. -/
 
@@ -428,9 +432,75 @@ def setPermissionsEffect (actor target : CellId) (p : Int) : ClosedEffect :=
 /-- `SetVerificationKey` — a write to the `verification_key` field. -/
 def setVKEffect (actor target : CellId) (vk : Int) : ClosedEffect :=
   stateWriteEffect actor target vkField vk
-/-- `MakeSovereign` — a write to the `sovereign` flag. -/
+/-! ### §3.1 — `MakeSovereign` is a COMMITMENT-REBIND handler, not a flag write.
+
+ALIGNED to `execFullA`'s `makeSovereignA` arm (`TurnExecutorFull.makeSovereignStep`): making a cell
+sovereign DROPS its readable record and REPLACES it with a commitment-only record
+(`makeSovereignKernel` / `sovereignRebind`, the faithful model of dregg1's
+`cells.remove(id)` + `sovereign_commitments.insert(id, cell.state_commitment())`). The earlier flag
+write (`sovereign := 1`) left the value readable — a semantic DIVERGENCE from `execFullA` (the
+§6.3b hole). This handler runs the genuine rebind under the SAME live-cell + authority gate as the
+other state writes (a STRENGTHENING: `execFullA` gates on `stateAuthB` alone; this adds
+`acceptsEffects`). -/
+
+/-- `MakeSovereign` arguments: the acting cell and the target made sovereign. -/
+structure MakeSovereignArgs where
+  /-- The actor (must hold authority over `target`). -/
+  actor : CellId
+  /-- The cell whose readable record is dropped behind a state commitment. -/
+  target : CellId
+
+/-- The commitment-rebind step: under the live-cell + self-authority gate, run the proved
+`makeSovereignKernel` (drop the record, keep only the §8 state commitment). Fail-closed otherwise.
+The committed kernel is EXACTLY `execFullA`'s `makeSovereignStep` post-kernel. -/
+def makeSovereignStepK (k : RecordKernelState) (a : MakeSovereignArgs) : Option RecordKernelState :=
+  if acceptsEffects k a.target
+      && authorizedB k.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 } then
+    some (Dregg2.Exec.TurnExecutorFull.makeSovereignKernel k a.target)
+  else none
+
+/-- **`makeSovereignH` — the commitment-rebind handler.** `delta = 0` (the rebind touches ONLY
+`k.cell`; `recTotalAsset`/`escrowHeld` read `k.bal`/`k.escrows`, both fixed — `rfl`-grade). `auth` is
+the self-targeted authority conjunct (= `stateAuthB`); `admission` is the `acceptsEffects` live-cell
+gate. The headline is `admission_gated`: a make-sovereign into a SEALED cell is REJECTED — exactly the
+live-cell discipline the other state writes carry, now over the whole-record drop. -/
+def makeSovereignH : EffectHandler MakeSovereignArgs where
+  step := makeSovereignStepK
+  delta := fun _ _ => 0
+  auth := fun k a => authorizedB k.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+  admission := fun k a => acceptsEffects k a.target
+  trace := fun a => { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+  auth_gated := by
+    intro s a s' h
+    unfold makeSovereignStepK at h
+    by_cases hg : acceptsEffects s a.target
+        && authorizedB s.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+    · simp only [Bool.and_eq_true] at hg; exact hg.2
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  admission_gated := by
+    intro s a s' h
+    unfold makeSovereignStepK at h
+    by_cases hg : acceptsEffects s a.target
+        && authorizedB s.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+    · simp only [Bool.and_eq_true] at hg; exact hg.1
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  conserves := by
+    intro s a s' h b
+    unfold makeSovereignStepK at h
+    by_cases hg : acceptsEffects s a.target
+        && authorizedB s.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
+      unfold recTotalAssetWithEscrow
+      rw [Dregg2.Exec.TurnExecutorFull.makeSovereignKernel_recTotalAsset s a.target b,
+          show escrowHeldAsset (Dregg2.Exec.TurnExecutorFull.makeSovereignKernel s a.target) b
+            = escrowHeldAsset s b from rfl]; ring
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- `MakeSovereign` — the commitment-rebind closed effect (tag `6`, the state family slot). DROPS
+the readable record behind a state commitment, matching `execFullA`. -/
 def makeSovereignEffect (actor target : CellId) : ClosedEffect :=
-  stateWriteEffect actor target sovereignField 1
+  { tag := 6, Args := MakeSovereignArgs,
+    args := { actor := actor, target := target }, handler := makeSovereignH }
 /-- `Refusal` — a write to the `refusal` field. -/
 def refusalEffect (actor target : CellId) : ClosedEffect :=
   stateWriteEffect actor target refusalField 1
@@ -496,6 +566,18 @@ def hs0Destroyed : RecordKernelState :=
 #guard ((execEffect (makeSovereignEffect 0 0) hs0Sealed).isSome) == false  --  false
 #guard ((execEffect (refusalEffect 0 0) hs0Sealed).isSome) == false  --  false
 #guard ((execEffect (receiptArchiveEffect 0 0 9) hs0Sealed).isSome) == false  --  false
+-- §TEETH-11b: ALIGNMENT — into a LIVE cell, makeSovereign DROPS the readable record and replaces it
+-- with the commitment-only record (the `execFullA` `makeSovereignKernel` rebind), so the readable
+-- `balance` is GONE (`fieldOf "balance" = 0`, the FIELD_ZERO default) — NOT the old flag model where
+-- balance stayed 100. NON-VACUITY: a flag handler would read `100` here; the rebind reads `0`.
+#guard ((execEffect (makeSovereignEffect 0 0) hs0).map
+        (fun k => fieldOf "balance" (k.cell 0))) == some 0  --  some 0 (record dropped)
+-- and the rebound cell IS the commitment-only record (proved, not `#eval`'d — `Value` has no `BEq`):
+example : (execEffect (makeSovereignEffect 0 0) hs0).map (fun k => k.cell 0)
+    = some (Value.record
+        [(Dregg2.Exec.TurnExecutorFull.commitmentField,
+          Value.dig (Dregg2.Exec.TurnExecutorFull.stateCommitment (hs0.cell 0)))]) := by
+  rfl
 
 /-! ## §5 — turnDelta cross-check: the SUMMED non-zero deltas match the §TEETH-10 turn.
 
@@ -516,6 +598,7 @@ triple — a `sorryAx` anywhere in the composed lemmas would fail the pin (and t
 #assert_axioms createCellFromFactoryH
 #assert_axioms spawnH
 #assert_axioms stateWriteH
+#assert_axioms makeSovereignH
 #assert_axioms mintStep_escrowHeld_fixed
 #assert_axioms burnStep_escrowHeld_fixed
 #assert_axioms stateWrite_recTotalAsset_fixed
