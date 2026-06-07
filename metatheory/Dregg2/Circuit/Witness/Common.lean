@@ -24,6 +24,7 @@ wires `66..73` are ~10¹⁸ and fit). This mirrors `TransferWitness`, whose root
 i64 (a 2-leaf `compress`, not the full sponge); zeroing the unconstrained roots is the robust analog.
 -/
 import Dregg2.Circuit.EffectCommit
+import Dregg2.Circuit.Poseidon2Surface
 
 namespace Dregg2.Circuit.Witness.Common
 
@@ -44,22 +45,18 @@ instance (cs : ConstraintSystem) (a : Assignment) : Decidable (satisfied cs a) :
 
 /-! ## §1 — the concrete log hash + the concrete `CommitSurface`.
 
-NOTE: this shared v1 surface's `lhConcrete` ALREADY binds `(actor,src,dst,amt)` of each receipt (it
-does NOT drop `src`/`dst`, unlike the per-effect toy logs the real-surface migration replaced), and its
-sponge `compressN`/`cmb`/`CH` are the injective `StateCommit` primitives. It is therefore a genuine
-binding commitment, not a field-dropping toy. The CR-grounded `Poseidon2Surface.refP2` migration is
-applied to the genuinely-lossy per-effect surfaces (the queue/note family); grounding THIS shared
-surface on `refP2` is a follow-up (it would re-pin the 8 v1 goldens + their Rust tests). -/
+NOTE: `lhConcrete` is now the CR-grounded `Poseidon2Surface.turnLogDigest` (the `refP2` sponge over the
+FULL `encTurnRec`, realizing the real `babyBearD4W16` Poseidon2). The OLD `acc*10⁶ + actor*1000 +
+src*100 + dst*10 + amt` packing bound the four fields but ALIASED across the per-field windows (an `amt ≥
+10` carried into `dst`, etc.); the field-binding `encTurnRec` does not. The sponge `compressN`/`cmb`/`CH`
+remain the injective `StateCommit` primitives, so the whole `SConc` surface is now genuinely binding. -/
 
 /-- **`lhConcrete`** — the concrete receipt-chain hash: an INJECTIVE positional Horner fold over the
 `(actor,src,dst,amt)` of each receipt row (each row shifted by a base larger than any toy row field),
 with the length folded in so distinct-length chains never collide. A genuine binding commitment to the
 receipt list (NOT a lossy sum, and it does NOT drop `src`/`dst`), so the log-bind gate genuinely catches
 a forged receipt. -/
-def lhConcrete : List Turn → ℤ :=
-  fun ts => ts.foldl (fun acc t =>
-    acc * 1000000 + (t.actor : ℤ) * 1000 + (t.src : ℤ) * 100 + (t.dst : ℤ) * 10 + t.amt)
-    (ts.length : ℤ)
+def lhConcrete : List Turn → ℤ := Dregg2.Circuit.Poseidon2Surface.turnLogDigest
 
 /-- **`SConc`** — the concrete commitment surface for the witness generators: the `StateCommit`
 injective primitives plus `lhConcrete`. Every digest column the witness lays out is a REAL field number

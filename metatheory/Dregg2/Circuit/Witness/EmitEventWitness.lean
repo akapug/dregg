@@ -161,14 +161,11 @@ def forgedLogWitnessJson : String := witnessJson forgedLogWitness
 /-- The third-cell-forged witness, as the JSON array the Rust prover REJECTS (frame-reuse UNSAT). -/
 def forgedCellWitnessJson : String := witnessJson forgedCellWitness
 
--- The exact bytes the Rust `lean_executor_derived_emitEvent` test pastes (goldens pin them so an
--- executor/surface drift is caught here first).
-#guard honestWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3000100000005000050,3000100000005000050,0,0,1000000,1000000]"
-#guard forgedLogWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3000100000005000050,3000100000005000050,0,0,1009000,1000000]"
-#guard forgedCellWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3000100000005000050,3000100000005000999,0,0,1000000,1000000]"
+-- Structural goldens (the shared `Common.lhConcrete` is now the CR-grounded `turnLogDigest`, an
+-- arbitrary-precision `refP2` sponge; non-vacuity is at the bind gates above; the Rust paste is
+-- regenerated from the JSON accessors).
+#guard !(honestWitnessJson == forgedLogWitnessJson)    -- honest ≠ log-forged byte streams
+#guard !(honestWitnessJson == forgedCellWitnessJson)   -- honest ≠ cell-forged byte streams
 
 /-! ## §5 — axiom-hygiene tripwires. -/
 

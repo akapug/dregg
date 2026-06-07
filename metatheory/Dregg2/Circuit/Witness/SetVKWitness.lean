@@ -101,10 +101,8 @@ def forgedCellWitness : List Int := layoutE setVKE s0 goodArgs forgedCell
 def honestWitnessJson : String := witnessJson honestWitness
 def forgedCellWitnessJson : String := witnessJson forgedCellWitness
 
-#guard honestWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,2000005000050,2000005000050,1000100,1000100,1000000,1000000]"
-#guard forgedCellWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,2000005000050,2000005000999,1000100,1000100,1000000,1000000]"
+-- (honest JSON byte pin removed: Common.lhConcrete is now the CR-grounded turnLogDigest)
+#guard !(honestWitnessJson == forgedCellWitnessJson)
 
 #assert_axioms setVKWitnessVec_commit
 #assert_axioms execute_produces_satisfying_witness

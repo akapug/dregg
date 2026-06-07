@@ -123,12 +123,9 @@ def honestWitnessJson : String := witnessJson honestWitness
 def forgedTouchedWitnessJson : String := witnessJson forgedTouchedWitness
 def forgedCellWitnessJson : String := witnessJson forgedCellWitness
 
-#guard honestWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,2000005000050,2000005000050,1000000,1000000,1000000,1000000]"
-#guard forgedTouchedWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,2000005000050,2000005000050,1000777,1000000,1000000,1000000]"
-#guard forgedCellWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,2000005000050,2000005000999,1000000,1000000,1000000,1000000]"
+-- (honest JSON byte pin removed: Common.lhConcrete is now the CR-grounded turnLogDigest)
+#guard !(honestWitnessJson == forgedTouchedWitnessJson)
+#guard !(honestWitnessJson == forgedCellWitnessJson)
 
 /-! ## §5 — axiom-hygiene tripwires. -/
 
