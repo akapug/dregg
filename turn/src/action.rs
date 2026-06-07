@@ -449,6 +449,29 @@ pub enum TokenKeyRef {
     CellScopedMacaroon { cell: CellId },
 }
 
+/// Derive the deterministic, cell-scoped macaroon root secret for a
+/// [`TokenKeyRef::CellScopedMacaroon`] credential.
+///
+/// This is the SINGLE source of truth for the secret: the executor derives it
+/// at verify time (see `TurnExecutor::verify_token_authorization`), and a
+/// credential minter (e.g. the SDK's `AgentRuntime` spawning a sub-agent) must
+/// mint the macaroon under the SAME secret so the executor's
+/// `Authorization::Token` path is the real, in-runtime gate — not an out-of-band
+/// `cap.verify()`.
+///
+/// HMAC macaroons require the verifier to hold the root secret, so this path is
+/// only sound where the federation legitimately owns the cell's secret. The
+/// secret is a domain-separated BLAKE3 KDF over the federation id + the cell id,
+/// so it is deterministic (consensus-safe, no wall-clock), cell-scoped (a
+/// different cell yields a different secret), and federation-scoped (a
+/// cross-federation mint produces a different secret and will not verify).
+pub fn derive_cell_macaroon_secret(federation_id: &[u8; 32], cell: &CellId) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-cell-macaroon-secret-v1");
+    hasher.update(federation_id);
+    hasher.update(cell.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
 /// Proof-carrying bearer capability: demonstrates delegated authority to exercise
 /// a capability without holding it in a c-list.
 ///

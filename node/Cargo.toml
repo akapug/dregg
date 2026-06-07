@@ -13,6 +13,7 @@ description = "Federation node daemon — hosts an agent cipherclerk, participat
 dregg-types = { path = "../types" }
 dregg-cell = { path = "../cell" }
 dregg-turn = { path = "../turn", features = ["lean-shadow"] }
+dregg-token = { path = "../token", default-features = false, features = ["macaroon", "biscuit", "rand-deps"] }
 dregg-persist = { path = "../persist" }
 dregg-federation = { path = "../federation" }
 dregg-sdk = { path = "../sdk" }

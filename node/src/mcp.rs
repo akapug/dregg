@@ -1357,6 +1357,230 @@ fn tool_definitions() -> Vec<McpToolDef> {
 // Tool dispatch
 // =============================================================================
 
+/// The capability scope an MCP tool requires: an action VERB the caller's
+/// `Authorization::Token` must cover. The resource (the granting authority) is
+/// the node's own identity cell — the node is its own granting authority and
+/// issues scoped tools-access biscuits against its key.
+///
+/// The verbs partition the ~45 tools by the authority they exercise:
+/// - `"read"`   — pure observation (status / reads / list / verify), no mutation;
+/// - `"write"`  — mutates cell/ledger/intent state on behalf of the caller;
+/// - `"admin"`  — capability/identity administration (grant/revoke/delegate,
+///   factories, sovereignty, federation governance) — the most powerful verb.
+///
+/// A capability credential that grants `"admin"` for the node's cell covers the
+/// admin tools; one that grants only `"read"` does NOT — the executor rejects an
+/// admin `tools/call` presenting a read-only token. A tool absent from this
+/// table is treated as `"admin"` (fail-closed: an unmapped tool requires the
+/// strongest authority rather than silently passing).
+fn tool_required_scope(tool: &str) -> &'static str {
+    match tool {
+        // ── read: observation only ───────────────────────────────────────────
+        "dregg_get_status"
+        | "dregg_check_capabilities"
+        | "dregg_read_cell"
+        | "dregg_get_receipt_chain"
+        | "dregg_verify_provenance"
+        | "dregg_verify_sovereign_proof"
+        | "dregg_get_blocklace_status"
+        | "dregg_get_constitution"
+        | "dregg_check_resource_budget"
+        | "dregg_list_auctions" => "read",
+
+        // ── write: state mutation on the caller's behalf ─────────────────────
+        "dregg_authorize"
+        | "dregg_submit_turn"
+        | "dregg_post_intent"
+        | "dregg_fulfill_intent"
+        | "dregg_seal_data"
+        | "dregg_unseal_data"
+        | "dregg_bridge_note"
+        | "dregg_prove_sovereign_turn"
+        | "dregg_create_stealth_address"
+        | "dregg_private_transfer"
+        | "dregg_encrypt_intent"
+        | "dregg_prove_predicate"
+        | "dregg_compose_proofs"
+        | "dregg_debit_shared_resource"
+        | "dregg_place_bid"
+        | "dregg_captp_deliver"
+        | "dregg_exercise_handoff_cert"
+        | "dregg_sign_sovereign_witness"
+        | "dregg_bilateral_action"
+        | "dregg_register_name"
+        | "dregg_publish_subscription"
+        | "dregg_register_service" => "write",
+
+        // ── admin: capability / identity / governance administration ─────────
+        "dregg_create_agent"
+        | "dregg_grant_capability"
+        | "dregg_revoke_capability"
+        | "dregg_delegate"
+        | "dregg_make_sovereign"
+        | "dregg_peer_exchange"
+        | "dregg_compress_history"
+        | "dregg_create_bearer_cap"
+        | "dregg_exercise_bearer_cap"
+        | "dregg_deploy_factory"
+        | "dregg_create_from_factory"
+        | "dregg_create_cell_from_factory_effect"
+        | "dregg_propose_membership"
+        | "dregg_issue_credential" => "admin",
+
+        // Fail-closed: an unmapped tool requires the strongest authority.
+        _ => "admin",
+    }
+}
+
+/// Derive the node's deterministic MCP-cap ISSUER keypair from its cipherclerk.
+///
+/// The node issues tools-access biscuits under this key. It is a one-way,
+/// domain-separated derivation of the cipherclerk's signing key, so it is stable
+/// across restarts and never exposes the raw identity key. The biscuit cover the
+/// executor verifies is anchored in this issuer's public key (recorded as the
+/// authority cell's `verification_key`), so only the node can mint a credential
+/// the gate will accept.
+fn mcp_cap_issuer_keypair(cclerk: &AgentCipherclerk) -> dregg_token::biscuit_auth::KeyPair {
+    let seed = cclerk.derive_symmetric_key("dregg-mcp-cap-issuer-v1");
+    let private = dregg_token::biscuit_auth::PrivateKey::from_bytes(
+        &seed,
+        dregg_token::biscuit_auth::Algorithm::Ed25519,
+    )
+    .expect("32-byte ed25519 seed yields a valid biscuit private key");
+    dregg_token::biscuit_auth::KeyPair::from(&private)
+}
+
+/// The node's MCP-cap issuer public key (the trust anchor the executor checks).
+fn mcp_cap_issuer_pubkey(cclerk: &AgentCipherclerk) -> [u8; 32] {
+    mcp_cap_issuer_keypair(cclerk)
+        .public()
+        .to_bytes()
+        .try_into()
+        .expect("ed25519 public key is 32 bytes")
+}
+
+/// The node's granting-authority cell — the resource an MCP capability scope
+/// names. Its `verification_key` is the node's MCP-cap issuer public key, so a
+/// biscuit minted under that issuer (`TokenKeyRef::BiscuitIssuer { issuer }`) is
+/// trusted by the executor (the `vk_match` trust anchor). The cell id is the
+/// SAME derivation the node uses for its agent cell
+/// (`CellId::derive_raw(node_pk, [0;32])`), so a biscuit scoping
+/// `service(authority_cell, verb)` is consistent everywhere.
+fn mcp_authority_cell(node_pk: &[u8; 32], issuer_pubkey: &[u8; 32]) -> dregg_cell::Cell {
+    let mut cell = dregg_cell::Cell::new(*node_pk, [0u8; 32]);
+    cell.verification_key = Some(dregg_cell::VerificationKey {
+        hash: *blake3::hash(issuer_pubkey).as_bytes(),
+        data: issuer_pubkey.to_vec(),
+    });
+    cell
+}
+
+/// Mint a tools-access biscuit granting `scope_verb` on the node's authority
+/// cell, under the node's MCP-cap issuer key. This is what the node hands a
+/// client so a `tools/call` can pass the per-tool gate. `scope_verb` is one of
+/// the verbs in [`tool_required_scope`] (`"read"` / `"write"` / `"admin"`).
+///
+/// Returns the encoded `eb2_…` biscuit string.
+fn mint_tool_cap(
+    cclerk: &AgentCipherclerk,
+    node_pk: &[u8; 32],
+    scope_verb: &str,
+) -> Result<String, dregg_token::TokenError> {
+    use dregg_token::traits::AuthToken;
+    let kp = mcp_cap_issuer_keypair(cclerk);
+    let authority_cell_id = dregg_cell::CellId::derive_raw(node_pk, &[0u8; 32]);
+    let svc = hex_encode(authority_cell_id.as_bytes());
+    let action = hex_encode(dregg_turn::action::symbol(scope_verb).as_slice());
+    let token =
+        dregg_token::BiscuitToken::mint_dregg(&kp, &[], &[(svc, action)], &[], &[], &[], None)?;
+    token.to_encoded()
+}
+
+/// Parse a presented MCP capability credential from a `tools/call`'s arguments.
+///
+/// Convention: the caller supplies the credential under the `_cap` argument key
+/// as an object `{ "biscuit": "eb2_…" }` — an encoded biscuit minted by the node
+/// under its MCP-cap issuer key. Returns `None` if no credential is present.
+fn parse_presented_cap(
+    arguments: &Value,
+    issuer_pubkey: &[u8; 32],
+) -> Option<dregg_turn::Authorization> {
+    let cap = arguments.get("_cap")?;
+    let encoded = cap.get("biscuit").and_then(|v| v.as_str())?;
+    Some(dregg_turn::Authorization::Token {
+        encoded: encoded.as_bytes().to_vec(),
+        key_ref: dregg_turn::TokenKeyRef::BiscuitIssuer {
+            issuer_pubkey: *issuer_pubkey,
+        },
+        discharges: Vec::new(),
+    })
+}
+
+/// THE per-tool capability gate. Before a `tools/call` reaches its tool body,
+/// require the caller's presented `Authorization::Token` to cover the tool's
+/// declared `(action, resource)` scope — verified by the EXECUTOR's
+/// `verify_token_for_scope`, the SAME verification used to admit a turn.
+///
+/// - A presented credential is ALWAYS verified against the tool's scope; a token
+///   that does not cover the scope (wrong issuer/target, an un-granted verb, or
+///   expired) is REJECTED — the call never reaches the tool.
+/// - When `mcp_cap_enforce` is on, a MISSING credential is also rejected
+///   (fail-closed). When off, a missing credential passes (back-compat), but the
+///   global unlock still gates the tool body separately.
+///
+/// Returns `Ok(())` to admit, or `Err(message)` to reject.
+async fn enforce_tool_cap(
+    tool: &str,
+    arguments: &Value,
+    state: &NodeState,
+) -> Result<(), String> {
+    let (enforce, node_pk, issuer_pubkey, federation_id) = {
+        let s = state.read().await;
+        (
+            s.mcp_cap_enforce,
+            s.cclerk.public_key().0,
+            mcp_cap_issuer_pubkey(&s.cclerk),
+            s.federation_id,
+        )
+    };
+
+    let presented = parse_presented_cap(arguments, &issuer_pubkey);
+
+    let credential = match presented {
+        Some(c) => c,
+        None => {
+            if enforce {
+                return Err(format!(
+                    "capability enforcement is on: tool '{tool}' requires a covering \
+                     '_cap' biscuit (scope '{}')",
+                    tool_required_scope(tool)
+                ));
+            }
+            // Back-compat: no credential presented and enforcement off.
+            return Ok(());
+        }
+    };
+
+    let scope_action = dregg_turn::action::symbol(tool_required_scope(tool));
+    let authority_cell = mcp_authority_cell(&node_pk, &issuer_pubkey);
+
+    // Build the verifying executor under the node's federation id so its
+    // AuthRequest binding matches the node. The biscuit cover is keyed on
+    // (service = authority cell, action = scope verb) + the issuer anchored in
+    // the authority cell's verification_key, so this is the real admission check.
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    executor.set_local_federation_id(federation_id);
+
+    executor
+        .verify_token_for_scope(&credential, &authority_cell, scope_action)
+        .map_err(|e| {
+            format!(
+                "capability '_cap' does not cover tool '{tool}' (required scope '{}'): {e}",
+                tool_required_scope(tool)
+            )
+        })
+}
+
 async fn dispatch_tool(name: &str, params: Value, state: &NodeState) -> McpToolResult {
     match name {
         "dregg_get_status" => tool_get_status(state).await,
@@ -6613,6 +6837,20 @@ async fn handle_tools_call(id: Value, params: Value, state: &NodeState) -> JsonR
         .cloned()
         .unwrap_or(Value::Object(serde_json::Map::new()));
 
+    // Per-tool capability gate (TOKEN-CAPABILITY-UNIFICATION): require the
+    // caller's presented `Authorization::Token` to cover this tool's declared
+    // scope, verified by the EXECUTOR. A non-covering or (under enforcement) a
+    // missing credential is REJECTED here — the call never reaches the tool.
+    if let Err(reason) = enforce_tool_cap(&tool_name, &arguments, state).await {
+        let denied = McpToolResult::error(format!("capability denied: {reason}"));
+        return match serde_json::to_value(denied) {
+            Ok(v) => JsonRpcResponse::success(id, v),
+            Err(e) => {
+                JsonRpcResponse::internal_error(id, format!("failed to serialize tool result: {e}"))
+            }
+        };
+    }
+
     let result = dispatch_tool(&tool_name, arguments, state).await;
 
     match serde_json::to_value(result) {
@@ -6862,6 +7100,129 @@ mod tests {
                 .map(|s| s.len() == 64)
                 .unwrap_or(false),
             "[{label}] witness_hash_hex must be a 64-char hex string"
+        );
+    }
+
+    // =====================================================================
+    // MCP per-tool capability gate — THE TEETH.
+    //
+    // Before this work, `tools/call` was a flat match over ~45 tools behind a
+    // single global `unlocked` bit: once unlocked, any client could invoke any
+    // tool with NO per-tool authority check. Now each tool declares a scope verb
+    // (`tool_required_scope`) and `enforce_tool_cap` requires the caller's
+    // presented `Authorization::Token` to COVER that scope, verified by the
+    // EXECUTOR's `verify_token_for_scope`.
+    //
+    // The negative test (`mcp_overscope_cap_rejected_by_executor`) is the
+    // deliverable: a client presenting a `read`-scoped biscuit is REJECTED when
+    // it calls an `admin` tool — and the rejection is the executor's
+    // capability-cover failure, not narration.
+    // =====================================================================
+
+    /// Mint an MCP tools-access biscuit for `scope_verb`, packaged as the `_cap`
+    /// argument a `tools/call` presents.
+    async fn cap_arg_for(state: &NodeState, scope_verb: &str) -> Value {
+        let s = state.read().await;
+        let node_pk = s.cclerk.public_key().0;
+        let biscuit = mint_tool_cap(&s.cclerk, &node_pk, scope_verb).expect("mint tool cap");
+        serde_json::json!({ "_cap": { "biscuit": biscuit } })
+    }
+
+    #[tokio::test]
+    async fn mcp_in_scope_cap_admitted_by_executor() {
+        // POSITIVE tooth: a `read`-scoped biscuit covers a `read` tool. The gate
+        // verifies the credential against the tool's scope via the executor and
+        // ADMITS the call (Ok).
+        let (state, _tmp) = fresh_unlocked_state().await;
+        {
+            state.write().await.mcp_cap_enforce = true;
+        }
+        let args = cap_arg_for(&state, "read").await;
+        // dregg_get_status requires the "read" scope.
+        assert_eq!(tool_required_scope("dregg_get_status"), "read");
+        enforce_tool_cap("dregg_get_status", &args, &state)
+            .await
+            .expect("a read-scoped cap must cover a read tool (executor admits)");
+    }
+
+    #[tokio::test]
+    async fn mcp_overscope_cap_rejected_by_executor() {
+        // NEGATIVE tooth (THE deliverable): a `read`-scoped biscuit does NOT
+        // cover an `admin` tool. The gate runs the EXECUTOR's
+        // verify_token_for_scope, which denies the cover, and the call is
+        // rejected — it never reaches the tool body.
+        let (state, _tmp) = fresh_unlocked_state().await;
+        {
+            state.write().await.mcp_cap_enforce = true;
+        }
+        let args = cap_arg_for(&state, "read").await;
+        // dregg_grant_capability requires the "admin" scope.
+        assert_eq!(tool_required_scope("dregg_grant_capability"), "admin");
+        let err = enforce_tool_cap("dregg_grant_capability", &args, &state)
+            .await
+            .expect_err("a read-scoped cap MUST NOT cover an admin tool");
+        assert!(
+            err.contains("does not cover"),
+            "rejection must be the executor's capability-cover failure, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_missing_cap_rejected_under_enforcement() {
+        // With enforcement ON, a `tools/call` presenting NO `_cap` is rejected
+        // fail-closed — the per-tool cap gate is a real boundary, not optional.
+        let (state, _tmp) = fresh_unlocked_state().await;
+        {
+            state.write().await.mcp_cap_enforce = true;
+        }
+        let no_cap = serde_json::json!({});
+        let err = enforce_tool_cap("dregg_grant_capability", &no_cap, &state)
+            .await
+            .expect_err("missing cap under enforcement must be rejected");
+        assert!(
+            err.contains("requires a covering"),
+            "expected a missing-cap rejection, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_wrong_issuer_cap_rejected() {
+        // A biscuit minted under a DIFFERENT issuer key (not the node's MCP-cap
+        // issuer) must be rejected: the executor's trust anchor requires the
+        // issuer to equal the authority cell's verification key. This proves the
+        // gate binds the credential to THIS node's granting authority.
+        let (state, _tmp) = fresh_unlocked_state().await;
+        {
+            state.write().await.mcp_cap_enforce = true;
+        }
+        // Mint an admin-scoped biscuit under an unrelated keypair.
+        let foreign_kp = dregg_token::biscuit_auth::KeyPair::new();
+        let node_pk = { state.read().await.cclerk.public_key().0 };
+        let authority_cell_id = dregg_cell::CellId::derive_raw(&node_pk, &[0u8; 32]);
+        let svc = hex_encode(authority_cell_id.as_bytes());
+        let action = hex_encode(dregg_turn::action::symbol("admin").as_slice());
+        let foreign = {
+            use dregg_token::traits::AuthToken;
+            dregg_token::BiscuitToken::mint_dregg(
+                &foreign_kp,
+                &[],
+                &[(svc, action)],
+                &[],
+                &[],
+                &[],
+                None,
+            )
+            .unwrap()
+            .to_encoded()
+            .unwrap()
+        };
+        let args = serde_json::json!({ "_cap": { "biscuit": foreign } });
+        let err = enforce_tool_cap("dregg_grant_capability", &args, &state)
+            .await
+            .expect_err("a foreign-issuer cap MUST be rejected by the executor's trust anchor");
+        assert!(
+            err.contains("does not cover"),
+            "expected an executor trust-anchor/cover rejection, got: {err}"
         );
     }
 

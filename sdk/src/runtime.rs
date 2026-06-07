@@ -10,11 +10,11 @@
 
 use std::sync::{Arc, Mutex, RwLock};
 
-use dregg_cell::{Cell, CellId, Ledger};
-use dregg_token::{Attenuation, AuthToken};
+use dregg_cell::{Cell, CellId, Ledger, VerificationKey};
+use dregg_token::{Attenuation, AuthToken, BiscuitToken, biscuit_auth};
 use dregg_turn::{
     Action, Authorization, BudgetGate, BudgetSlice, CallForest, ComputronCosts, DelegationMode,
-    Effect, Turn, TurnExecutor, TurnReceipt, TurnResult, action::symbol,
+    Effect, TokenKeyRef, Turn, TurnExecutor, TurnReceipt, TurnResult, action::symbol,
 };
 use dregg_types::PublicKey;
 
@@ -42,6 +42,83 @@ pub fn lean_producer_env_enabled() -> bool {
     {
         false
     }
+}
+
+/// The default method a [`SubAgent`] is scoped to when no explicit set is
+/// given: the `execute` verb its `execute()` path submits.
+pub const DEFAULT_SUBAGENT_METHOD: &str = "execute";
+
+/// Map a worker method NAME to the action string the executor's token verifier
+/// matches against.
+///
+/// The executor binds `request.action = hex(action.method)` where
+/// `action.method = symbol(name) = blake3(name)`. The biscuit authorizer fires
+/// `allow if service($svc, $actions), request_service($svc), request_action($act),
+/// $actions.contains($act)` — a RAW-STRING match — so the grant's action for a
+/// method must be exactly `hex(symbol(name))`. Then a worker turn invoking a
+/// method OUTSIDE its granted set has a `request_action` no grant `.contains`,
+/// the default-deny fires, and the EXECUTOR rejects the turn.
+fn method_scope_fragment(method_name: &str) -> String {
+    hex::encode(symbol(method_name))
+}
+
+/// Whether an [`Attenuation`] would produce no caveats (an empty attenuation,
+/// which the token backends reject). Mirrors the dimensions the macaroon /
+/// biscuit caveat builders actually emit.
+fn restrictions_are_empty(att: &Attenuation) -> bool {
+    att.apps.is_empty()
+        && att.services.is_empty()
+        && att.features.is_empty()
+        && att.not_after.is_none()
+        && att.not_before.is_none()
+        && att.confine_user.is_none()
+        && att.oauth_providers.is_empty()
+        && att.oauth_scopes.is_empty()
+        && att.feature_globs.is_none()
+        && att.budget.is_none()
+}
+
+/// Mint the ENFORCED capability credential a sub-agent carries on every turn it
+/// submits: a public-key biscuit, granting `service(sub_cell, method)` for
+/// EXACTLY the set of `methods` the worker may invoke.
+///
+/// This is the heart of internalizing the guarantee. The biscuit is minted under
+/// a fresh issuer keypair; the sub-agent's cell records that issuer's public key
+/// as its `verification_key` — the trust anchor the executor's
+/// `verify_token_authorization` (`TokenKeyRef::BiscuitIssuer`) checks. The worker
+/// presents the credential as `Authorization::Token` on its turn, so the EXECUTOR
+/// — not an out-of-band `cap.verify()` — admits or rejects: a turn whose method
+/// is outside the granted set has no covering `service(...)` grant, the biscuit's
+/// default-deny fires, and the executor rejects with
+/// `TokenInsufficientCapability`.
+///
+/// The service name is the sub-agent's cell id (hex) and each granted action is
+/// `hex(symbol(method))`, mirroring exactly what the executor binds from
+/// `(action.target, action.method)`.
+///
+/// Returns `(encoded_biscuit, issuer_pubkey)`.
+fn mint_subagent_cap_token(
+    sub_cell: CellId,
+    methods: &[&str],
+) -> Result<(Vec<u8>, [u8; 32]), SdkError> {
+    let kp = biscuit_auth::KeyPair::new();
+    let issuer: [u8; 32] = kp
+        .public()
+        .to_bytes()
+        .try_into()
+        .expect("ed25519 public key is 32 bytes");
+    let svc = hex::encode(sub_cell.as_bytes());
+    // One service grant per allowed method: `service(cell_hex, hex(symbol(m)))`.
+    // The authorizer's `$actions.contains($act)` then matches exactly the
+    // request action `hex(action.method)` for an in-scope verb and nothing else.
+    let services: Vec<(String, String)> = methods
+        .iter()
+        .map(|m| (svc.clone(), method_scope_fragment(m)))
+        .collect();
+    let token = BiscuitToken::mint_dregg(&kp, &[], &services, &[], &[], &[], None)
+        .map_err(SdkError::Token)?;
+    let encoded = token.to_encoded().map_err(SdkError::Token)?.into_bytes();
+    Ok((encoded, issuer))
 }
 
 /// The agent runtime: orchestrates cipherclerk, ledger, and execution.
@@ -506,6 +583,10 @@ impl AgentRuntime {
     /// this agent's tokens, narrowed by the given restrictions. The sub-agent
     /// operates on the same ledger but with reduced authority.
     ///
+    /// The sub-agent is scoped to the single [`DEFAULT_SUBAGENT_METHOD`] verb its
+    /// [`SubAgent::execute`] path uses. Use [`Self::spawn_sub_agent_scoped`] to
+    /// grant a worker an explicit set of method verbs.
+    ///
     /// # Arguments
     ///
     /// * `restrictions` - Restrictions to apply to the delegated token.
@@ -519,13 +600,52 @@ impl AgentRuntime {
         restrictions: &Attenuation,
         token: &HeldToken,
     ) -> Result<SubAgent, SdkError> {
+        self.spawn_sub_agent_scoped(restrictions, token, &[DEFAULT_SUBAGENT_METHOD])
+    }
+
+    /// Spawn a sub-agent scoped to an explicit set of method verbs.
+    ///
+    /// Identical to [`Self::spawn_sub_agent`], but the worker's ENFORCED
+    /// capability credential (the public-key biscuit it presents as
+    /// `Authorization::Token` on every turn) grants exactly `allowed_methods`.
+    /// The EXECUTOR — not an out-of-band `cap.verify()` — rejects a worker turn
+    /// whose method is outside this set (`TokenInsufficientCapability`). This is
+    /// the in-runtime admission gate: the credential the worker carries IS the
+    /// boundary.
+    pub fn spawn_sub_agent_scoped(
+        &self,
+        restrictions: &Attenuation,
+        token: &HeldToken,
+        allowed_methods: &[&str],
+    ) -> Result<SubAgent, SdkError> {
         // Create a new cipherclerk for the sub-agent.
         let mut sub_cclerk = AgentCipherclerk::new();
         let sub_pk = sub_cclerk.public_key();
 
+        // The delegated (narration) HeldToken must carry at least one caveat —
+        // an empty attenuation is rejected. When the caller relies purely on
+        // `allowed_methods` and passes empty `restrictions`, narrow the
+        // delegated token to those method verbs as a service grant so the
+        // narration token is itself scoped and the attenuation is non-empty.
+        let effective_restrictions = if restrictions_are_empty(restrictions) {
+            // A `feature` caveat naming the worker's scope keeps the (legacy,
+            // out-of-band) delegation token itself narrowed and the attenuation
+            // non-empty. The ENFORCED gate is the biscuit `cap_token` minted
+            // below; this token is the redundant defense-in-depth presentation.
+            Attenuation {
+                features: allowed_methods
+                    .iter()
+                    .map(|m| format!("subagent-method:{m}"))
+                    .collect(),
+                ..Default::default()
+            }
+        } else {
+            restrictions.clone()
+        };
+
         // Attenuate the token for the sub-agent.
         let decoded = token.decode()?;
-        let attenuated_boxed = decoded.attenuate(restrictions)?;
+        let attenuated_boxed = decoded.attenuate(&effective_restrictions)?;
         let encoded = attenuated_boxed.to_encoded()?;
 
         let token_id = format!("sub:{}:{}", token.id(), sub_pk.short_hex());
@@ -570,7 +690,7 @@ impl AgentRuntime {
                 delegated_label,
                 token_id,
                 sub_pk,
-                restrictions.clone(),
+                effective_restrictions.clone(),
                 proof_key,
                 None, // no pre-generated membership proof in this path
                 None, // no caveat_chain_hash; sub-agent operates on local state
@@ -578,15 +698,34 @@ impl AgentRuntime {
         };
         sub_cclerk.receive_local_delegation(local, &parent_pubkey)?;
 
-        // Create the sub-agent's cell in the ledger.
         let sub_cell_id = sub_cclerk.cell_id(&self.domain);
+
+        // Mint the ENFORCED capability credential the worker carries on every
+        // turn: a public-key biscuit granting `service(sub_cell, method)` for
+        // exactly `allowed_methods`. The worker presents this as
+        // `Authorization::Token`, so the EXECUTOR's `verify_token_authorization`
+        // — not an out-of-band `cap.verify()` — is the real admission gate.
+        let federation_id = self.executor.local_federation_id;
+        let (cap_token, cap_issuer) = mint_subagent_cap_token(sub_cell_id, allowed_methods)?;
+        let cap_methods: Vec<String> = allowed_methods.iter().map(|m| m.to_string()).collect();
+
+        // Create the sub-agent's cell in the ledger, recording the biscuit
+        // issuer's public key as the cell's `verification_key` — the trust anchor
+        // the executor checks (`TokenKeyRef::BiscuitIssuer` requires the issuer to
+        // equal the target cell's pk or its verification key). This binds the
+        // worker's credential to ITS OWN cell: a credential issued by any other
+        // key is rejected by the executor.
         {
             let mut ledger = self.ledger.lock().unwrap();
-            let sub_cell = Cell::with_balance(
+            let mut sub_cell = Cell::with_balance(
                 sub_pk.0,
                 *blake3::hash(self.domain.as_bytes()).as_bytes(),
                 100_000, // 100k computrons for sub-agent
             );
+            sub_cell.verification_key = Some(VerificationKey {
+                hash: *blake3::hash(&cap_issuer).as_bytes(),
+                data: cap_issuer.to_vec(),
+            });
             // Ignore error if cell already exists (idempotent).
             let _ = ledger.insert_cell(sub_cell);
         }
@@ -595,13 +734,16 @@ impl AgentRuntime {
             cipherclerk: Arc::new(sub_cclerk),
             cell_id: sub_cell_id,
             token: delegated_token,
+            cap_token,
+            cap_issuer,
+            cap_methods,
             parent: self
                 .cipherclerk
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
                 .public_key(),
             domain: self.domain.clone(),
-            federation_id: self.executor.local_federation_id,
+            federation_id,
             ledger: self.ledger.clone(),
             nonce: Mutex::new(0),
             last_receipt_hash: Mutex::new(None),
@@ -651,6 +793,21 @@ pub struct SubAgent {
     pub(crate) cell_id: CellId,
     /// The attenuated token this sub-agent holds.
     pub(crate) token: HeldToken,
+    /// The ENFORCED capability credential: a public-key biscuit (encoded
+    /// `eb2_…`) granting `service(sub_cell, method)` for exactly the method verbs
+    /// the worker may invoke. Presented as [`Authorization::Token`] on every turn
+    /// so the EXECUTOR's `verify_token_authorization` is the admission gate — an
+    /// over-broad worker turn (a method outside `cap_methods`) is rejected by the
+    /// executor itself, not by an out-of-band `cap.verify()`.
+    pub(crate) cap_token: Vec<u8>,
+    /// The biscuit issuer public key the worker's `cap_token` is signed under.
+    /// Carried in the [`Authorization::Token`] as the
+    /// [`TokenKeyRef::BiscuitIssuer`] anchor; the executor checks it against the
+    /// sub-agent cell's `verification_key`.
+    pub(crate) cap_issuer: [u8; 32],
+    /// The method verbs the worker's `cap_token` grants (for diagnostics; the
+    /// authoritative scope lives in the biscuit's `service(...)` grants).
+    pub(crate) cap_methods: Vec<String>,
     /// The parent agent's public key.
     pub(crate) parent: PublicKey,
     /// The domain this sub-agent operates in.
@@ -745,14 +902,74 @@ impl SubAgent {
         }
     }
 
-    /// Execute effects on the shared ledger using this sub-agent's cell.
+    /// Read-only access to the worker's ENFORCED capability credential (the
+    /// encoded biscuit presented as [`Authorization::Token`]).
+    pub fn cap_token(&self) -> &[u8] {
+        &self.cap_token
+    }
+
+    /// The method verbs the worker's capability credential grants (diagnostic;
+    /// the authoritative scope is the biscuit's `service(...)` grants, enforced
+    /// by the executor).
+    pub fn cap_methods(&self) -> &[String] {
+        &self.cap_methods
+    }
+
+    /// Build the [`Authorization::Token`] the worker presents on its turns.
     ///
-    /// Each turn is bound to this sub-agent's receipt chain via `previous_receipt_hash`,
-    /// which prevents reordering and replay of sub-agent turns. The binding is updated
-    /// after each successful commit.
+    /// The credential is the public-key biscuit minted at spawn; the executor
+    /// verifies it against the issuer anchored in the sub-agent cell's
+    /// `verification_key` via [`TokenKeyRef::BiscuitIssuer`] and runs the
+    /// biscuit's `service(cell, action)` cover against THIS call. An over-scope
+    /// call is rejected by the executor itself.
+    fn cap_authorization(&self) -> Authorization {
+        Authorization::Token {
+            encoded: self.cap_token.clone(),
+            key_ref: TokenKeyRef::BiscuitIssuer {
+                issuer_pubkey: self.cap_issuer,
+            },
+            discharges: Vec::new(),
+        }
+    }
+
+    /// Execute effects on the shared ledger using this sub-agent's cell, under
+    /// the worker's default [`DEFAULT_SUBAGENT_METHOD`] scope.
+    ///
+    /// The worker presents its capability credential as [`Authorization::Token`],
+    /// so the EXECUTOR's `verify_token_authorization` is the admission gate.
+    /// Each turn is bound to this sub-agent's receipt chain via
+    /// `previous_receipt_hash`, which prevents reordering and replay of
+    /// sub-agent turns. The binding is updated after each successful commit.
     #[must_use = "dropping the TurnReceipt silently discards proof of execution"]
     pub fn execute(&self, effects: Vec<Effect>) -> Result<TurnReceipt, SdkError> {
-        let executor = TurnExecutor::new(ComputronCosts::default_costs());
+        self.execute_method(DEFAULT_SUBAGENT_METHOD, effects)
+    }
+
+    /// Execute effects under an explicit `method` verb.
+    ///
+    /// The worker presents its biscuit capability credential as
+    /// [`Authorization::Token`]. If `method` is OUTSIDE the worker's granted
+    /// scope (the biscuit's `service(cell, action)` grants fixed at spawn), the
+    /// EXECUTOR rejects the turn with `TokenInsufficientCapability` — the
+    /// credential is the boundary, not an out-of-band check.
+    #[must_use = "dropping the TurnReceipt silently discards proof of execution"]
+    pub fn execute_method(
+        &self,
+        method: &str,
+        effects: Vec<Effect>,
+    ) -> Result<TurnReceipt, SdkError> {
+        let executor = {
+            let mut e = TurnExecutor::new(ComputronCosts::default_costs());
+            // Run under the runtime's federation id so the token verifier's
+            // AuthRequest (which binds `app_id = hex(federation_id)`) and the
+            // receipt-chain domain separation match the parent runtime. The
+            // biscuit cover is keyed on `service(cell, action)` and the issuer
+            // anchored in the cell's verification_key, so it verifies regardless
+            // of federation — but keeping the executor on the same federation
+            // keeps signing/domain context consistent.
+            e.set_local_federation_id(self.federation_id);
+            e
+        };
 
         let nonce = {
             let mut n = self.nonce.lock().unwrap();
@@ -764,12 +981,14 @@ impl SubAgent {
         // Read the current receipt chain head for binding.
         let previous_receipt_hash = *self.last_receipt_hash.lock().unwrap();
 
-        // Build unsigned action to compute signing message.
-        let action_unsigned = Action {
+        // The worker authorizes by PRESENTING its capability credential. No
+        // signature is needed: a verified `Authorization::Token` is the complete
+        // authorization (the executor's token path returns on success).
+        let action = Action {
             target: self.cell_id,
-            method: symbol("execute"),
+            method: symbol(method),
             args: Vec::new(),
-            authorization: Authorization::Unchecked,
+            authorization: self.cap_authorization(),
             preconditions: Default::default(),
             effects,
             may_delegate: DelegationMode::None,
@@ -778,18 +997,8 @@ impl SubAgent {
             witness_blobs: vec![],
         };
 
-        // Sign with the sub-agent's cipherclerk using the parent's federation_id
-        // for correct domain separation.
-        let message = TurnExecutor::compute_signing_message(&action_unsigned, &self.federation_id);
-        let sig = self.cipherclerk.sign_bytes(&message);
-
-        let action_signed = Action {
-            authorization: Authorization::from_sig_bytes(sig.0),
-            ..action_unsigned
-        };
-
         let mut forest = CallForest::new();
-        forest.add_root(action_signed);
+        forest.add_root(action);
 
         let turn = Turn {
             agent: self.cell_id,

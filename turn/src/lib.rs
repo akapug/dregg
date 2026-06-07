@@ -118,7 +118,7 @@ mod tests;
 // Re-export primary types at crate root.
 pub use action::{
     Action, Authorization, BearerCapProof, CommitmentMode, DelegationMode, DelegationProofData,
-    Effect, Event, QueueTxOp,
+    Effect, Event, QueueTxOp, TokenKeyRef, derive_cell_macaroon_secret,
 };
 pub use budget_gate::{BudgetGate, BudgetSlice};
 pub use builder::{
