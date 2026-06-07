@@ -95,6 +95,10 @@ import Dregg2.Circuit.Inst.introduceA
 import Dregg2.Circuit.Inst.validateHandoffA
 import Dregg2.Circuit.Inst.refreshDelegationA
 import Dregg2.Circuit.Inst.bridgeFinalizeA
+import Dregg2.Circuit.Inst.makeSovereignA
+import Dregg2.Circuit.Inst.receiptArchiveA
+import Dregg2.Circuit.Inst.refusalA
+import Dregg2.Circuit.Inst.emitEventA
 import Dregg2.Spec.FunctionalRefinement
 
 namespace Dregg2.Spec.CircuitSpecTriangle
@@ -1324,6 +1328,130 @@ theorem bridgeFinalize_circuit_rejects_wrong_escrows
         (encodeE2 S (bridgeFinalizeE LE cN hN hLE) s args s') :=
   fun h => hwrong (bridgeFinalize_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h)
 
+/-! ## §16 — THE CELL-AUDIT / SOVEREIGN / EMIT-EVENT FAMILY (v1 commit framework).
+
+`receiptArchive` / `refusal` write an AUDIT marker (`.int 1`) to one slot of one cell — an instance of
+the §7 `intentSetCellField` oracle (at `f = lifecycle / refusal`, `v = 1`). `makeSovereign` rebinds a
+cell to its sovereign-commitment value (`sovereignRebind`). `emitEvent` is LOG-ONLY (the kernel is
+frozen; the intent is the receipt-chain advance). We pin each. -/
+
+open Dregg2.Circuit.Inst.ReceiptArchiveA (ReceiptArchiveArgs receiptArchiveE receiptArchiveA_full_sound)
+open Dregg2.Circuit.Spec.CellStateAudit (ReceiptArchiveSpec RefusalSpec auditCellMap)
+
+/-- **`auditCellMap_eq_intent` (PROVED).** The audit cell-map IS the intent slot-write of the marker
+`.int 1` at field `f` (an instance of §7's `intentSetCellField`). -/
+theorem auditCellMap_eq_intent (k : RecordKernelState) (cell : CellId) (f : FieldName) :
+    auditCellMap k cell f = intentSetCellField k.cell cell f 1 := rfl
+
+/-- **RECEIPT-ARCHIVE circuit pins the intent audit-marker write.** A verifying `receiptArchiveE`
+witness forces the post-`cell` map to be EXACTLY `intentSetCellField … cell lifecycleField 1`. -/
+theorem receiptArchive_circuit_pins_intent
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : ReceiptArchiveArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : satisfiedE S receiptArchiveE (encodeE S receiptArchiveE s args s')) :
+    s'.kernel.cell = intentSetCellField s.kernel.cell args.cell lifecycleField 1 := by
+  have hspec : ReceiptArchiveSpec s args.actor args.cell s' :=
+    receiptArchiveA_full_sound S hN hL hRest hLog s args s' hwf hwf' h
+  rw [hspec.2.1, auditCellMap_eq_intent]
+
+/-- **RECEIPT-ARCHIVE circuit anti-ghost.** -/
+theorem receiptArchive_circuit_rejects_wrong_cell
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : ReceiptArchiveArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (hwrong : s'.kernel.cell ≠ intentSetCellField s.kernel.cell args.cell lifecycleField 1) :
+    ¬ satisfiedE S receiptArchiveE (encodeE S receiptArchiveE s args s') :=
+  fun h => hwrong (receiptArchive_circuit_pins_intent S hN hL hRest hLog s args s' hwf hwf' h)
+
+open Dregg2.Circuit.Inst.RefusalA (RefusalArgs refusalE refusalA_full_sound)
+
+/-- **REFUSAL circuit pins the intent refusal-marker write.** -/
+theorem refusal_circuit_pins_intent
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : RefusalArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : satisfiedE S refusalE (encodeE S refusalE s args s')) :
+    s'.kernel.cell = intentSetCellField s.kernel.cell args.cell refusalField 1 := by
+  have hspec : RefusalSpec s args.actor args.cell s' :=
+    refusalA_full_sound S hN hL hRest hLog s args s' hwf hwf' h
+  rw [hspec.2.1, auditCellMap_eq_intent]
+
+/-- **REFUSAL circuit anti-ghost.** -/
+theorem refusal_circuit_rejects_wrong_cell
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : RefusalArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (hwrong : s'.kernel.cell ≠ intentSetCellField s.kernel.cell args.cell refusalField 1) :
+    ¬ satisfiedE S refusalE (encodeE S refusalE s args s') :=
+  fun h => hwrong (refusal_circuit_pins_intent S hN hL hRest hLog s args s' hwf hwf' h)
+
+open Dregg2.Circuit.Inst.MakeSovereignA (MakeSovereignArgs makeSovereignE makeSovereignA_full_sound)
+open Dregg2.Circuit.Spec.SovereignCommitment (MakeSovereignSpec)
+
+/-- **MAKE-SOVEREIGN circuit pins the intent sovereign-rebind.** A verifying `makeSovereignE` witness
+forces the post-`cell` map to be EXACTLY `sovereignRebind … cell` (cell `cell` rebound to its
+sovereign-commitment value, every other cell untouched). -/
+theorem makeSovereign_circuit_pins_intent
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : MakeSovereignArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : satisfiedE S makeSovereignE (encodeE S makeSovereignE s args s')) :
+    s'.kernel.cell = sovereignRebind s.kernel.cell args.cell := by
+  have hspec : MakeSovereignSpec s args.actor args.cell s' :=
+    makeSovereignA_full_sound S hN hL hRest hLog s args s' hwf hwf' h
+  exact hspec.2.1
+
+/-- **MAKE-SOVEREIGN circuit anti-ghost.** -/
+theorem makeSovereign_circuit_rejects_wrong_cell
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : MakeSovereignArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (hwrong : s'.kernel.cell ≠ sovereignRebind s.kernel.cell args.cell) :
+    ¬ satisfiedE S makeSovereignE (encodeE S makeSovereignE s args s') :=
+  fun h => hwrong (makeSovereign_circuit_pins_intent S hN hL hRest hLog s args s' hwf hwf' h)
+
+open Dregg2.Circuit.Inst.EmitEventA (EmitEventArgs emitEventE emitEventA_full_sound)
+open Dregg2.Circuit.Spec.CellStateLog (EmitEventSpec emitReceipt)
+
+/-- **EMIT-EVENT circuit pins the intent log advance.** `emitEvent` is LOG-ONLY (the kernel is frozen).
+A verifying `emitEventE` witness forces the post-`log` to be EXACTLY `emitReceipt actor cell :: log`
+(the disclosed event receipt prepended) — the intent receipt-chain advance, every kernel field frozen. -/
+theorem emitEvent_circuit_pins_intent
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : EmitEventArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : satisfiedE S emitEventE (encodeE S emitEventE s args s')) :
+    s'.log = emitReceipt args.actor args.cell :: s.log := by
+  have hspec : EmitEventSpec s args.actor args.cell args.topic args.data s' :=
+    emitEventA_full_sound S hN hL hRest hLog s args s' hwf hwf' h
+  exact hspec.2.1
+
+/-- **EMIT-EVENT circuit anti-ghost (log).** -/
+theorem emitEvent_circuit_rejects_wrong_log
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : EmitEventArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (hwrong : s'.log ≠ emitReceipt args.actor args.cell :: s.log) :
+    ¬ satisfiedE S emitEventE (encodeE S emitEventE s args s') :=
+  fun h => hwrong (emitEvent_circuit_pins_intent S hN hL hRest hLog s args s' hwf hwf' h)
+
 /-! ## §4 — axiom-hygiene tripwires. Every triangle corner rests only on the kernel axioms +
 the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 
@@ -1400,5 +1528,15 @@ the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 #assert_axioms refreshDelegation_circuit_rejects_wrong_delegations
 #assert_axioms bridgeFinalize_circuit_pins_intent
 #assert_axioms bridgeFinalize_circuit_rejects_wrong_escrows
+
+#assert_axioms auditCellMap_eq_intent
+#assert_axioms receiptArchive_circuit_pins_intent
+#assert_axioms receiptArchive_circuit_rejects_wrong_cell
+#assert_axioms refusal_circuit_pins_intent
+#assert_axioms refusal_circuit_rejects_wrong_cell
+#assert_axioms makeSovereign_circuit_pins_intent
+#assert_axioms makeSovereign_circuit_rejects_wrong_cell
+#assert_axioms emitEvent_circuit_pins_intent
+#assert_axioms emitEvent_circuit_rejects_wrong_log
 
 end Dregg2.Spec.CircuitSpecTriangle
