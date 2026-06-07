@@ -37,9 +37,6 @@ created pair has no boxes yet.) The spec correctly FRAMES `sealedBoxes` as UNCHA
 proof goes through, CONFIRMING the executor does not silently mutate it. This is recorded in
 `frameGaps` as a brief↔executor discrepancy (the brief over-described the rewrite set), not a missing
 frame clause.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

@@ -11,7 +11,7 @@ touched component `kernel.sealedBoxes` (a `listComponent`). Reused: `Exec.sealCh
 witness JSON. The anti-ghost forgery: the prepended box binds a DIFFERENT payload than the one sealed
 (a cap-substitution) — the component-bind gate 68≠69 = a real UNSAT.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. CR portals carried HYPOTHESES on the abstract keystones.
+CR portals carried HYPOTHESES on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.sealA
 

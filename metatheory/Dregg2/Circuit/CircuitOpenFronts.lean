@@ -48,7 +48,7 @@ def openFronts : List OpenFront := [
   , ⟨"attenuateA_circuit", .w3_diamond, some "attenuateA", "v2 Inst diamond"⟩
   -- exerciseA_composite_circuit: CLOSED — `fullActionCircuitStep`'s exerciseA arm is now a REAL
   -- composite (hold-gate ∘ inner-turn CIRCUIT fold), proven ⊑ `turnSpec` by mutual structural recursion
-  -- (`exerciseInnerFold_refines_turnSpec` / `fullAction_circuit_refines_spec`, both sorry-free).
+  -- (`exerciseInnerFold_refines_turnSpec` / `fullAction_circuit_refines_spec`).
   -- createCellFromFactoryA_circuit: CLOSED — `createCellFromFactoryA_emitted_refines_spec` discharged
   -- via `createCellFromFactoryA_full_sound` + the born-empty-authority bridge.
   -- createObligationA / releaseCommittedEscrowA / refundCommittedEscrowA: CLOSED — dispatch-aliased to
@@ -83,11 +83,11 @@ def openFronts : List OpenFront := [
   -- Wave 4: crypto — CLOSED. `poseidon2_in_circuit` + `digest_injective_to_cr` are grounded on the
   -- single named `Poseidon2Binding.Poseidon2SpongeCR` assumption: `Poseidon2Emit.state_commit_sponge_binding`
   -- / `log_hash_sponge_binding` and `DigestPortal.{cellLeafInjective,compressNInjective,logHashInjective}_*`
-  -- discharge the abstract injectivity portals from real Poseidon2 CR (no `sorry`, no double-assumed hash).
+  -- discharge the abstract injectivity portals from real Poseidon2 CR (no double-assumed hash).
   -- Wave 5: whole-turn — ALL THREE CLOSED:
   --   * turn_circuit_composition: `TurnCircuitCompose.turnCircuitOfEmitted` folds per-step emitted AIRs;
   --     `turn_emitted_refines_exec_direct` is now the COMPLETE stack (executor commit + authentic root +
-  --     bound macaroon chain `macaroonChainBinds` + aligned wires `multiStepGlueAligned`), no `sorry`.
+  --     bound macaroon chain `macaroonChainBinds` + aligned wires `multiStepGlueAligned`).
   --   * turn_macaroon_caveats: `macaroonChainBinds` binds `authChain` to the caveat fold (TOOTH:
   --     `macaroon_chain_teeth` rejects a forged auth digest). No longer a free column.
   --   * rust_proof_required_at_commit: `TurnAdmission.rust_proof_admits_commit` is a real proof —
@@ -97,11 +97,11 @@ def openFronts : List OpenFront := [
   --     `CoordinatedTurnEmit.covenantGuard_of_emitted` EXTRACTS `φ = true` from any satisfying witness
   --     (TOOTH: `covenantGuard_emitted_teeth` — a `φ = false` step has NO satisfying witness).
   --   * record_kernel_state_lift: `CoordinatedTurnEmit.coordinated_emitted_refines_execCoordinatedForestG`
-  --     lifts emitted satisfaction to `execCoordinatedForestG` (the `RecordKernelState` step), no `sorry`.
+  --     lifts emitted satisfaction to `execCoordinatedForestG` (the `RecordKernelState` step).
   , ⟨"privacy_voting_token", .w6_inter_vat, none, "pv_token_good_commits regression"⟩
   -- Wave 7: exercise — `exercise_inner_turn_witness` CLOSED: the inner emitted chain refines `turnSpec`
-  -- (`ExerciseInnerTurn.exercise_inner_emitted_refines_turnSpec` via `TurnEmit.turn_emitted_refines_turnSpec`,
-  -- sorry-free). `exercise_r4_facet_mask` REMAINS: handler `facetedOf Auth.control` masking vs bare
+  -- (`ExerciseInnerTurn.exercise_inner_emitted_refines_turnSpec` via `TurnEmit.turn_emitted_refines_turnSpec`).
+  -- `exercise_r4_facet_mask` REMAINS: handler `facetedOf Auth.control` masking vs bare
   -- `execFullA` inner path is a genuine executor-semantics alignment obligation (needs a facet-bridge
   -- lemma), NOT a circuit soundness hole.
   , ⟨"exercise_r4_facet_mask", .w7_exercise_r4, some "exerciseA", "handler facetedOf alignment"⟩

@@ -10,7 +10,7 @@ Reused (not re-proved): `execFullA … (.cellSealA/.cellUnsealA …)` (the chain
 `Inst.CellSealA.cellSealA_full_sound` / `Inst.CellUnsealA.cellUnsealA_full_sound`, the executor⟺spec
 corners `cellSeal_iff_spec` / `cellUnseal_iff_spec`, and `effect2_circuit_full_complete`.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. Poseidon-CR portals carried on the abstract keystones.
+Poseidon-CR portals carried on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.cellSealA
 import Dregg2.Circuit.Inst.cellUnsealA

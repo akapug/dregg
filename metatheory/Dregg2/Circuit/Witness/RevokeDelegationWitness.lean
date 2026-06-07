@@ -27,7 +27,7 @@ THE MISSING PIECE supplied here:
   * §5 the descriptor JSON + witness JSON the Rust `lean_executor_derived_revoke_delegation` prover
     proves+verifies (honest) and rejects (forged).
 
-No `sorry`/`admit`/`axiom`/`native_decide`. The Poseidon-CR portals are carried HYPOTHESES on the
+The Poseidon-CR portals are carried HYPOTHESES on the
 abstract keystones (the template). `#assert_axioms` whitelists `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Inst.revokeDelegationA

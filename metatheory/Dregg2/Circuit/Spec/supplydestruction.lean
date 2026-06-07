@@ -56,9 +56,6 @@ FRAME). No frame clause mentions the executor. `recCBurnAsset_iff_spec` proves t
 EXACTLY, both ways — the `→` VALIDATES the executor against the spec (a silently-mutated field would
 make the proof FAIL), the `←` reconstructs the committed state. `recBurn_ledger_correct` validates
 the `recBalCredit` post-ledger helper declaratively (the analog of `recTransfer_correct`).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

@@ -62,9 +62,6 @@ here, NOT `recKRevokeTarget`), validated against the executor's helper by `recKR
   * `revoke_drops_holder_edges` — after a revoke, `holder` confers NO edge to `t` (the edge is gone).
   * `revoke_preserves_other_holders` — any holder `≠ holder` keeps its cap-list verbatim.
   * `revoke_preserves_balances` — `recTotal` (and `accounts`/`cell`) unchanged — the dual frame.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

@@ -226,7 +226,43 @@ class DreggProof extends InspectorBase {
       );
     };
 
-    const ProofDetail = ({ pv }) => {
+    // FULL-STATE BINDING / ANTI-GHOST (mirrors the Lean widget
+    // Dregg2/Widget/VerifiedTurn.lean + the theorem stateCircuit_rejects_third_cell).
+    //
+    // A projection proof ("pale ghost") only binds the MOVED cells, so a forged
+    // post-state that mints a bystander third cell can still satisfy it. The
+    // full-state circuit additionally pins pre_state_root → post_state_root with
+    // a frame-reuse gate that hashes EVERY untouched cell, so any third-cell
+    // tamper is rejected by construction. We surface the receipt's REAL state-root
+    // transition (pre_state_hash → post_state_hash) so the UI shows the binding
+    // that makes the proof a full-state attestation, not a projection.
+    const FullStateBindingSection = ({ r }) => {
+      const pre = r && (r.pre_state_hash || r.pre_state || '');
+      const post = r && (r.post_state_hash || r.post_state || '');
+      const bound = Boolean(pre) && Boolean(post) && pre !== post;
+      if (!pre && !post) return null;
+      return h('div', { class: 'dregg-proof__fullstate', style: 'margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:6px;' },
+        h('div', { style: 'color:#7fd1b0;font-size:0.82rem;font-weight:700;margin-bottom:6px;letter-spacing:0.04em;' },
+          'full-state binding · anti-ghost'
+        ),
+        h('dl', { class: 'dregg-inspector__kv', style: 'font-size:0.8rem;' },
+          h('dt', null, 'pre-state root'),  h('dd', null, h('code', { title: pre },  pre ? shortHex(pre, 16) : h('em', { style: 'opacity:0.6;' }, 'absent'))),
+          h('dt', null, 'post-state root'), h('dd', null, h('code', { title: post }, post ? shortHex(post, 16) : h('em', { style: 'opacity:0.6;' }, 'absent'))),
+          h('dt', null, 'frame-reuse gate'),
+          h('dd', null, h('strong', { style: 'color:' + (bound ? '#7fd1b0' : 'var(--fg-dim)') + ';' },
+            bound
+              ? 'BOUND — post-root hashes every untouched cell; a forged bystander mint is rejected'
+              : (pre && post && pre === post ? 'no-op turn (roots equal)' : 'roots not both present')
+          ))
+        ),
+        h('div', { style: 'color:var(--fg-dim);font-size:0.72rem;margin-top:6px;line-height:1.5;' },
+          'A projection proof binds only the moved cells (the "pale ghost" a forged third cell escapes); the full-state circuit pins pre → post and reuses the frozen-frame digest over every untouched cell. ',
+          h('span', { style: 'opacity:0.85;' }, 'Lean: stateCircuit_rejects_third_cell — kernel-checked.')
+        )
+      );
+    };
+
+    const ProofDetail = ({ pv, r }) => {
       const piList = pv.public_inputs && pv.public_inputs.length
         ? h('ul', { style: 'list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:2px;' },
             ...pv.public_inputs.map((pi, i) =>
@@ -245,7 +281,8 @@ class DreggProof extends InspectorBase {
           h('dt', null, 'public inputs'), h('dd', null, piList)
         ),
         h(BilateralPiSection, { bp: pv.bilateral_pi || null }),
-        h(BilateralAggregateSection, { agg: pv.bilateral_aggregate || null })
+        h(BilateralAggregateSection, { agg: pv.bilateral_aggregate || null }),
+        h(FullStateBindingSection, { r })
       );
     };
 
@@ -289,7 +326,7 @@ class DreggProof extends InspectorBase {
           ' ',
           h(TierBadge, { tier })
         ),
-        pv ? h(ProofDetail, { pv }) : h(Scope0Box, { tier })
+        pv ? h(ProofDetail, { pv, r }) : h(Scope0Box, { tier })
       );
     };
 

@@ -33,9 +33,6 @@ digest — the realizable Poseidon-CR bar). NO `AccountsWF` (the touched thing i
 
 ADDITIVE: imports `EffectInstances2` (for the validated v2 glue + `chainView`/`balComponent`/the bit
 guard) and the bespoke spec; edits neither, nor any framework/`StateCommit`/`Dregg2.lean`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectInstances2
 import Dregg2.Circuit.Spec.bridgeinboundmint

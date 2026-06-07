@@ -35,7 +35,7 @@ an `axiom`), so every theorem here pins exactly `{propext, Classical.choice, Quo
     `Reference` instances below exhibit injective encoders and discharge CR with `True`); it is an
     honestly-separated STRUCTURAL field, while CR is the SOLE crypto carrier.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. The toy `Reference` realizations (over injective `ℤ`
+The toy `Reference` realizations (over injective `ℤ`
 encoders + `True`-discharged CR) witness non-vacuity: every derivation fires on a real instance.
 -/
 import Dregg2.Circuit.StateCommit

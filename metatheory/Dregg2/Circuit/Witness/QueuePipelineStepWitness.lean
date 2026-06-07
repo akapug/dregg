@@ -13,7 +13,7 @@ framework (`EffectCommit2`), since `queuePipelineStepA` touches a single non-`ce
     queuePipelineStepA_full_sound}`.
   * `EffectCommit2.{encodeE2, effect2_circuit_full_complete, emittedEffect2}`.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. The Poseidon-CR portals are carried HYPOTHESES.
+The Poseidon-CR portals are carried HYPOTHESES.
 -/
 import Dregg2.Circuit.Inst.queuePipelineStepA
 

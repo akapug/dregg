@@ -22,9 +22,6 @@ truth in `Dregg2/Circuit/Spec/queuefifocore.lean`, whose executor corner is
 
 ADDITIVE: imports `EffectCommit2` + the queue-fifo-core spec; edits NEITHER of them NOR `Dregg2.lean`.
 Follows the `noteCreateA` template EXACTLY + the recipe in `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

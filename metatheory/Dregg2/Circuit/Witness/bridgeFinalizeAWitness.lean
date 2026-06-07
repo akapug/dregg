@@ -9,9 +9,6 @@ the `escrows` side-table, not a function digest). The honest witness satisfies `
 post-state whose `escrows` list is TAMPERED (the finalized record left UNresolved, or a bystander record
 mutated) is REJECTED by the component-bind gate `68 ≠ 69`. `Inst.bridgeFinalizeA.bridgeFinalizeA_full_sound`
 proved the crown jewel (`⇒ BridgeFinalizeSpec`).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Inst.bridgeFinalizeA
 

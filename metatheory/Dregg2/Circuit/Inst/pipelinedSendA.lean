@@ -17,9 +17,6 @@ THE VALIDATION: `pipelinedSendA_full_sound ⇒ PipelinedSendSpec` THROUGH the v1
 
 ADDITIVE: imports `EffectCommit` + the queue-pipelined-send spec; edits neither. Follows the
 `emitEventA`/`noteCreateA` v1 template (single `propBit` guard, And-reassoc frame bridge).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit
 import Dregg2.Exec.CircuitEmit

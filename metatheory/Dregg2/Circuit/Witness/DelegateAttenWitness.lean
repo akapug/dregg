@@ -19,9 +19,6 @@ with the concrete `#guard`s; §5 the JSON the Rust `lean_executor_derived_delega
 proves+verifies / rejects. ANTI-GHOST: a forged post-state where recipient 1 STEALS an extra `node 9`
 cap on top of the attenuated grant — the component-bind gate (68/69) rejects (a real UNSAT), while the
 rest frame + guard + log stay honest (a projection circuit would have passed it).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Inst.delegateAttenA
 import Dregg2.Circuit.Witness.DelegateWitness

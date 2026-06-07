@@ -37,9 +37,6 @@ to the chain `log`, and leaves EVERYTHING ELSE literally unchanged.
   3. `writeFieldCellMap_correct` : the declarative validation of the touched-cell post helper (the
      `setFieldA` analog of `recTransfer_correct`): the written slot reads back `v`, OTHER cells whole-
      preserved.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Tactics

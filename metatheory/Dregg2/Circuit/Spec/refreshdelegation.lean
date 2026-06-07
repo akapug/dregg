@@ -6,9 +6,6 @@
 (`delegate child ≠ none`). On commit it OVERWRITES `delegations child` with a fresh snapshot of the
 parent's CURRENT c-list (`parentClist`), prepends a self-targeted receipt, and frames the other 16
 kernel fields. Balance-neutral.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

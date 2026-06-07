@@ -61,9 +61,6 @@ ADDITIVE: this module does NOT refactor `StateCommit`/`SetFieldCommit`/`Transfer
 (R5). The two instances below (`transferE`, `setFieldE`) re-obtain the crown-jewel theorems THROUGH the
 framework, additively. The ONE relocation done to existing files was moving `logHashInjective` from
 `SetFieldCommit` into `StateCommit` (beside the other CR carriers).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.StateCommit
 

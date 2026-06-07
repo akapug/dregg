@@ -12,8 +12,7 @@ post-state that ALSO destroys a BYSTANDER cell (lifecycle-component tamper) is R
 component-1 bind gate `68 ≠ 69`. `Inst.cellDestroyA.cellDestroyA_full_sound` proved the crown jewel
 (`⇒ CellDestroySpec`).
 
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}`.
+`#assert_axioms` whitelists exactly `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Inst.cellDestroyA
 

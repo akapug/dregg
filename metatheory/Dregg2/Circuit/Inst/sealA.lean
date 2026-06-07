@@ -24,9 +24,6 @@ witness for `sealE` proves the complete declarative `SealSpec` (the apex truth i
 ADDITIVE: imports `EffectCommit2` + the seal-box-operations spec; edits NEITHER them NOR any `Spec/*`
 file NOR `Dregg2.lean`. Follows the `noteCreateA` LIST-field template (`Inst/noteCreateA.lean`) and
 the recipe in `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

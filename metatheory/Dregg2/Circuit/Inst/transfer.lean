@@ -31,9 +31,6 @@ so no "subset ⇐ full-equality" weakening is needed.
 ADDITIVE: imports `EffectCommit2` + the balance-movement spec; edits NEITHER `EffectCommit2`/`StateCommit`
 NOR any `Spec/*` file NOR `Dregg2.lean`. Follows the `burnA` template EXACTLY + the recipe in
 `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

@@ -57,9 +57,6 @@ complements are framed. We give it a full declarative spec too, factored through
   3. `createCellIntoAsset_correct` — the touched post helper validated DECLARATIVELY (the
      `recTransfer_correct` analog): the new id is a live account with a `0` ledger column ∀ asset,
      every other (cell,asset) entry preserved, every other account preserved.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

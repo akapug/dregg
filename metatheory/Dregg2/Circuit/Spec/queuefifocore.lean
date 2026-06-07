@@ -61,9 +61,6 @@ For EACH of the four variants `<V>`:
   * **`acceptsEffects` asymmetry.** allocate's guard is `stateAuthB` ALONE; resize/enqueue/dequeue
     additionally require `acceptsEffects s.kernel cell = true` (the lifecycle-liveness gate). Faithful
     to the executor; pinned per-variant.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Tactics

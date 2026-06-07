@@ -1019,7 +1019,7 @@ theorem createCellFromFactoryA_emitted_refines_spec (S : Surface2) (LE : CellId 
       s args s') :
     CreateFromFactorySpec s args.actor args.newCell args.vk s' := by
   -- emitted â†” satisfiedE2Quint (faithful decode), then the validated `full_sound` apex spec, then the
-  -- born-empty-authority bridge back to the declarative `CreateFromFactorySpec`. No `sorry`.
+  -- born-empty-authority bridge back to the declarative `CreateFromFactorySpec`.
   have hsat :
       satisfiedE2Quint S
         (createFromFactoryE LE cN hN hLE DBal hDBal DCell hDCell DSC hDSC DAuth hDAuth)
@@ -1650,7 +1650,6 @@ theorem refreshDelegationA_emitted_refines_spec (S : Surface2) (DDel : (CellId â
 #assert_axioms queueEnqueue_emitted_refines_spec
 #assert_axioms setField_emitted_refines_spec
 #assert_axioms exerciseHold_emitted_refines_spec
--- Formerly `sorry`-bearing; now PROVED via `createCellFromFactoryA_full_sound` + born-empty-authority bridge.
 #assert_axioms createCellFromFactoryA_emitted_refines_spec
 
 end Dregg2.Circuit.EffectEmittedRefinement

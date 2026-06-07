@@ -25,9 +25,6 @@ in `Dregg2/Circuit/Spec/authorityrevocation.lean`, whose executor corner for thi
 
 ADDITIVE: imports `EffectCommit2` + the authority-revocation spec; edits NONE of them. Follows the
 `burnA` template (`Inst/burnA.lean`) + the recipe in `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

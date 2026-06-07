@@ -41,7 +41,7 @@ proved against the same five-keystone pattern:
   * `BridgeCancel` (`c_bridgeCancel`, Conservative) — Phase-4 cancel after timeout: refund the
     escrow back to the owner (the inverse of the lock — `Σδ = 0`) + retire the lock nonce.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly `{propext,
+`#assert_axioms` whitelists exactly `{propext,
 Classical.choice, Quot.sound}` on every keystone. Pure, computable, `#eval`-able. Reuses only built
 modules (`TurnExecutorFull`/`RecordKernel`/`Factory`/`CatalogEffects`/`Spec.ExecRefinement`); edits none.
 -/

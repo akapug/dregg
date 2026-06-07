@@ -179,7 +179,6 @@ def poseidon2CompressWire : String := emitMerkleJson emittedPoseidon2Compress
 #assert_axioms emit_faithful_poseidon2_compress
 #assert_axioms poseidon2_emitted_refines_merkle_portal
 #assert_axioms poseidon2_emitted_iff_portal
--- The former `sorry` HOLEs are now DISCHARGED theorems, kernel-clean on the CR hypothesis alone:
 #assert_axioms state_commit_sponge_binding
 #assert_axioms log_hash_sponge_binding
 

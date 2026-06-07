@@ -10,9 +10,6 @@ concrete commitment surface (the touched-component digest is now an injective di
 a forged post-state whose `caps` table is TAMPERED (a bystander label given an EXTRA `node` cap — a
 privilege escalation the attenuation never authorized) is REJECTED by the component-bind gate `68 ≠ 69`.
 `Inst.attenuateA.attenuateA_full_sound` proved the crown jewel (`⇒ AttenuateSpec`).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Inst.attenuateA
 

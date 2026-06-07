@@ -35,9 +35,6 @@ Two `#guard`s tie it down (decidably, no `native_decide`):
 
 The `#eval`-able JSON strings (`balanceHonestWitnessJson`/`balanceForgedWitnessJson`) are the EXACT bytes
 the Rust `lean_executor_derived_balanceA` test proves+verifies (honest) and rejects (forged).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Inst.balanceA
 

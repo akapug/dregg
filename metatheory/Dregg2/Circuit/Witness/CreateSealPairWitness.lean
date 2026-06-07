@@ -9,7 +9,7 @@ fields are frozen. Mirrors `DelegateWitness` (the v2 template) — the same `cap
 Reused (not re-proved): `execFullA … (.createSealPairA …)` (the chained executor),
 `Inst.CreateSealPairA.createSealPairA_full_sound`, and `effect2_circuit_full_complete`.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. Poseidon-CR portals carried on the abstract keystones.
+Poseidon-CR portals carried on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.createSealPairA
 

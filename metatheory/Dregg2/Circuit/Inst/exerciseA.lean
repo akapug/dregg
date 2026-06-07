@@ -18,9 +18,6 @@ refinement theorems `exercise_circuit_refines_spec` / `exercise_circuit_refines_
 hold-layer circuit with an inner `innerTurnH` hypothesis and `execFullA_exerciseA_iff_spec`.
 
 ADDITIVE: imports `EffectCommit` + `ActionDispatch` + `Spec.exercise`; edits none of them.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit
 import Dregg2.Exec.CircuitEmit

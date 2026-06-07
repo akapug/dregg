@@ -38,9 +38,6 @@ touched component is the reference style; the FRAME clauses below use NO helper)
                                 executor silently mutated `bal`/`nullifiers`/`caps`/… the frame proof
                                 would FAIL.
   * `queuePipelineStepA_iff_spec` — the same characterization at the bare `queuePipelineStepA` layer.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Tactics

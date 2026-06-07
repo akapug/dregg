@@ -12,9 +12,6 @@ already proved the v2 circuit⟺spec crown jewel (`⇒ BurnSpec`, the 17-field d
 `effectCircuit2`, and a REAL forged post-state (a bystander third cell minted into) is REJECTED by the
 component-bind gate `68 ≠ 69` — the anti-ghost tooth, end-to-end from a genuine forged state. The
 JSON strings are the EXACT bytes the Rust `lean_executor_derived_burn_a` test proves+verifies / rejects.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Inst.burnA
 

@@ -35,7 +35,7 @@ witness vectors the Rust `lean_executor_derived_turn` test proves+verifies (hone
 forged FINAL post-state that mints a bystander cell in `k₂` — the anti-ghost tooth bites the second
 step's frame-reuse + root-binding gates: a real UNSAT for the whole turn).
 
-No `sorry`/`admit`/`axiom`/`native_decide`. The Poseidon-CR portals carried by
+The Poseidon-CR portals carried by
 `transfer_circuit_full_sound` are the template's standard hypotheses. `#assert_axioms` whitelists
 exactly `{propext, Classical.choice, Quot.sound}` on the keystones.
 -/

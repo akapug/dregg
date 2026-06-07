@@ -11,7 +11,7 @@ framework (`EffectCommit2Dual`). Reused (not re-proved):
   * `Inst.RefundEscrowA.{refundEscrowE, apex_iff_refundEscrowSpec, refundEscrowA_full_sound}`.
   * `EffectCommit2Dual.{encodeE2Dual, effect2dual_circuit_full_complete, emittedEffect2Dual}`.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. The Poseidon-CR portals are carried HYPOTHESES.
+The Poseidon-CR portals are carried HYPOTHESES.
 -/
 import Dregg2.Circuit.Inst.refundEscrowA
 import Dregg2.Circuit.Spec.escrowholdingrelease

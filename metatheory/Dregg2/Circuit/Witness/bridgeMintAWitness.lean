@@ -7,9 +7,6 @@ The mint analog of `burnAWitness`: `bridgeMintWitnessVec` RUNS the REAL chained 
 `encodeE2` assignment out as a flat `List Int` over the concrete commitment surface. The honest witness
 satisfies `effectCircuit2`; a forged bystander-mint post-state is REJECTED by the component-bind gate
 `68 ≠ 69`. `Inst.bridgeMintA.bridgeMintA_full_sound` proved the crown jewel (`⇒ InboundMintSpec`).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Inst.bridgeMintA
 

@@ -25,9 +25,6 @@ per-gate `*_iff` lemmas; v2's representatives have a `Prop`-level guard, so one 
 swarm copies whichever matches its effect.)
 
 ADDITIVE: imports `EffectCommit2` + the two specs; edits none of them.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 

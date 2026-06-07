@@ -12,7 +12,7 @@ executor; §5 the descriptor + witness JSON. The anti-ghost forgery: the post sw
 record with a FORGED `refcount` (2 not the spec's 1 — a double-counted ref) — the component-bind gate
 68≠69 = a real UNSAT.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. CR portals carried HYPOTHESES on the abstract keystones.
+CR portals carried HYPOTHESES on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.swissExportA
 

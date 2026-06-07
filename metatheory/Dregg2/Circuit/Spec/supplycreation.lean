@@ -28,9 +28,6 @@ The supply-creation family on `execFullA` is `mintA` (and its §8-portal twin `b
 dispatches to the SAME `recCMintAsset` — a corollary, `execBridgeMintA_iff_spec`, is included). The
 companion conservation corollary `mintA_supply_delta` pins the SEMANTIC content: a committed mint
 raises asset `a`'s supply by exactly `amt` and leaves every other asset's supply unchanged.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

@@ -48,9 +48,6 @@ while the chained log gets `t` prepended.
   * Non-vacuity: `…_rejects_unauthorized`, `…_rejects_overdraft`, `…_rejects_self`,
     `…_rejects_dead_src` — each forged input fails a guard leg ⇒ the executor returns `none` ⇒ no
     spec post-state exists. A spec that accepts everything would be worthless.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Tactics

@@ -62,9 +62,6 @@ OTHER kernel field, untouched.
      ⇒ the executor returns `none` ⇒ no spec post-state exists. A spec that accepts everything is
      worthless. Concrete `#guard` witnesses (genuine `decide`, NOT `native_decide`) exhibit a good mint
      committing and the three forgeries decidably rejected.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Tactics

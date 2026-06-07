@@ -44,9 +44,6 @@ encoder), exactly the v1 bar. NO `AccountsWF` is needed (the touched thing is no
 
 ADDITIVE: imports `EffectCommit`/`ListCommit`/`KeyedCommit`/`StateCommit` + the two validating specs;
 edits none of them.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit
 import Dregg2.Circuit.ListCommit

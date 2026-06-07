@@ -17,7 +17,7 @@ The spec's `queues` clause is a CONDITIONAL (`∀ q, findQueue … = some q → 
 guard guarantees the queue EXISTS, so the apex's FULL-list `resizePostQueues` clause follows. The
 execute→prove theorem derives the apex from the executor commit through that branch.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. The Poseidon-CR portals are carried HYPOTHESES.
+The Poseidon-CR portals are carried HYPOTHESES.
 -/
 import Dregg2.Circuit.Inst.queueResizeA
 

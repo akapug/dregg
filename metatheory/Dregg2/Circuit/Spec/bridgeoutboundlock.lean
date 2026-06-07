@@ -62,9 +62,6 @@ and on commit it produces `createBridgeRawAsset` (`RecordKernel.lean:1701`):
     `…_rejects_dead_originator`, `…_rejects_nonlive_originator`, `…_rejects_id_reuse` — each forged
     input fails a guard leg ⇒ the executor returns `none` ⇒ no spec post-state exists. A spec that
     accepts everything would be worthless.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Tactics

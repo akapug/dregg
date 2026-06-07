@@ -40,9 +40,6 @@ executor; R4 is a later strengthening layer.
   * `execFullA_exerciseA_iff_spec` — exercise ⟺ `ExerciseSpec`.
   * `turnSpec_ledger_per_asset` / `exerciseSpec_ledger_per_asset` — conservation corollaries via
     `execInnerA_ledger_per_asset`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Spec.accountgrowth
 import Dregg2.Circuit.Spec.authorityattenuation

@@ -12,9 +12,6 @@ Through the v2 framework (`EffectCommit2`):
   * the frame is the 16 non-`swiss` kernel fields (`RestIffNoSwiss`).
 
 `swissHandoffA_full_sound` CONCLUDES the bespoke `Spec.SwissHandoff.HandoffSpec` THROUGH the framework.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

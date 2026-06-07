@@ -725,7 +725,7 @@ theorem step_emitted_refines_fullActionStep
         ((attenuateA_emitted_equiv_circuit S D_caps hD_caps st ⟨actor, idx, keep⟩ st').mpr hcircuit)
   | .exerciseA actor target inner =>
       -- CLOSED: the `fullActionCircuitStep` exerciseA arm is now a REAL composite (hold-gate ∘ inner
-      -- CIRCUIT fold); `fullAction_circuit_refines_spec` (sorry-free) discharges circuit ⊑ spec, and
+      -- CIRCUIT fold); `fullAction_circuit_refines_spec` discharges circuit ⊑ spec, and
       -- `hcircuit` is exactly that circuit acceptance.
       exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow
         LE_sealed cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame
@@ -743,7 +743,7 @@ theorem step_emitted_refines_fullActionStep
             createCellFromFactoryAAirName st ⟨actor, newCell, vk⟩ st').mpr hcircuit)
   | .createObligationA id actor obligor beneficiary asset stake =>
       -- CLOSED: dispatch-aliased to the escrow-create circuit step in `fullActionCircuitStep`;
-      -- `fullAction_circuit_refines_spec` (sorry-free) discharges it from `hcircuit`.
+      -- `fullAction_circuit_refines_spec` discharges it from `hcircuit`.
       exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow
         LE_sealed cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame
         hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife
@@ -758,8 +758,8 @@ theorem step_emitted_refines_fullActionStep
         ((createCommittedEscrowA_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st
             ⟨id, actor, creator, recipient, asset, amount, hidingProof⟩ st').mpr hcircuit)
   | .releaseCommittedEscrowA id actor =>
-      -- CLOSED: dispatch-aliased to the dual release circuit step; `fullAction_circuit_refines_spec`
-      -- (sorry-free) discharges it from `hcircuit`.
+      -- CLOSED: dispatch-aliased to the dual release circuit step;
+      -- `fullAction_circuit_refines_spec` discharges it from `hcircuit`.
       exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow
         LE_sealed cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame
         hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife
@@ -768,8 +768,8 @@ theorem step_emitted_refines_fullActionStep
         hRestSwiss hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog st
         (.releaseCommittedEscrowA id actor) st' hcircuit
   | .refundCommittedEscrowA id actor =>
-      -- CLOSED: dispatch-aliased to the dual refund circuit step; `fullAction_circuit_refines_spec`
-      -- (sorry-free) discharges it from `hcircuit`.
+      -- CLOSED: dispatch-aliased to the dual refund circuit step;
+      -- `fullAction_circuit_refines_spec` discharges it from `hcircuit`.
       exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow
         LE_sealed cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame
         hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife
@@ -1070,7 +1070,7 @@ theorem turn_emitted_demo_mint_burn :
 #assert_axioms turn_emitted_demo_mint_burn
 #assert_axioms turn_emitted_refines_turnSpec
 #assert_axioms turn_emitted_refines_exec
--- The adversarial-witness extractor (mint reference) — sorry-FREE, kernel-clean.
+-- The adversarial-witness extractor (mint reference).
 #assert_axioms mintA_extract
 #assert_axioms mintA_extract_emitted
 #assert_axioms mintA_extract_rejects_wrong_supply

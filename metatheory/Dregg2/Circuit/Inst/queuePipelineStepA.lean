@@ -12,9 +12,6 @@ THE VALIDATION: `queuePipelineStepA_full_sound ⇒ QueuePipelineFanoutSpec` THRO
 
 ADDITIVE: imports `EffectCommit2` + the queue-pipeline-fanout spec; edits neither. Follows the
 `queueAllocateA` template + the `queueResizeA` canonical-post-list pattern.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

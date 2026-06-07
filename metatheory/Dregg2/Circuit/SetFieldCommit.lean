@@ -66,9 +66,6 @@ injectivity of a genuine hash, never `axiom`, never sum-injectivity):
   * `AccountsWF k` — NOT crypto: the structural invariant "cells outside `accounts` hold the default",
                      REUSED from `StateCommit` (proved preserved there by `recKExec_preserves_AccountsWF`).
   * `SetFieldGuard s actor cell f v` — the executor's admissibility guard (the cellstatefield gate).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.StateCommit
 import Dregg2.Circuit.Spec.cellstatefield
