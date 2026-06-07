@@ -20,9 +20,25 @@ A capability here is **constructive knowledge**: to *hold* one is to be able to 
 witness that verifies* — never merely to assert. Everything below is a projection of that.
 
 Toolchain `leanprover/lean4:v4.30.0`; mathlib via a local `path` require. **It builds**:
-`lake build` ⇒ **3042 jobs, 0 errors, 0 cheats, and exactly 3 `sorry`** — and all three are
-*by design* (see [§ What the sorries mean](#what-the-sorries-mean)). We drove the count from ~25
-down to 3 by a sustained **de-vacuify** discipline: a read-only audit + reconcile-build pass
+`lake build` ⇒ **3804 jobs, 0 errors**. The Abstract Spec, the `Spec` middle layer, the executor
+core, and every `#assert_axioms`-pinned keystone are **`sorry`-free and kernel-clean**; the
+remaining `sorry`s are *named, tracked open fronts* — whole-turn / coordinated proof composition
+(macaroon columns, multi-step glue, the coordinated-forest lift) plus a couple of executor-semantics
+alignment portals — never hidden beneath a "PROVED" claim.
+
+**New since the last writing — verifiable execution is real.** ~49 effects now carry an
+executor-derived witness → a real Plonky3 STARK `prove`/`verify` with forged-state rejection
+(`Dregg2/Circuit/Witness/*`, the anti-ghost tooth makes tampering any kernel field UNSAT); whole-turn
+proofs bind a turn's effects to **one authenticated state root** (per cell); the node commit path
+proves every finalized turn under `--prove-turns`; and the l4v **data refinement**
+(`Exec/ConcreteKernel`, HashMap-backed) is *proved* to transfer the abstract soundness to an efficient
+runtime. The honest frontier is now at the **executable boundary** (the FFI admission context must be
+host-fed, not taken from the untrusted turn envelope; the success-bit must distinguish a committed
+body from a fee-only prologue; one ungated handler export must be fenced) and **the swap** (making the
+verified executor *be* the runtime). These are tracked, not hidden — see `docs/rebuild/`.
+
+The discipline that got us here is the same **de-vacuify** one: a read-only audit + reconcile-build
+pass repeatedly found that "deep" `sorry`s were in fact
 repeatedly found that "deep" `sorry`s were in fact **false, contradictory, or ill-posed *as
 stated*** (e.g. `dead_undecidable` quantified over arbitrary deciders that `Classical.decide`
 always supplies; `quorum_intersection`'s bound was self-contradictory; `privacy_by_projection`
