@@ -726,6 +726,49 @@ pub fn verify_non_revocation_dsl(
 }
 
 // ============================================================================
+// AUDITED p3 non-revocation proving / verification (`p3-batch-stark`)
+// ============================================================================
+//
+// These route the SAME non-revocation (sorted-tree non-membership) statement
+// through the audited Plonky3 verifier (`dsl_p3_air::prove_dsl_p3` /
+// `verify_dsl_p3` → `p3-batch-stark`) instead of the bespoke `crate::stark`.
+// The non-revocation circuit is algebraic except its two `ConstraintExpr::Hash`
+// (`hash_fact` sponge) node-hash constraints, which `dsl_p3_air` arithmetizes
+// via the real in-circuit Poseidon2 gadget. The proof carries a REAL terminal
+// low-degree test (FRI). Public inputs: `[revocation_root]`.
+
+/// Prove `item_hash` is NOT revoked through the AUDITED Plonky3 prover
+/// (`p3-batch-stark`). Returns `Err` if the item IS in the tree (cannot prove
+/// non-membership) or the audited prover/verifier rejects.
+#[cfg(feature = "recursion")]
+pub fn prove_non_revocation_p3(
+    tree: &DslRevocationTree,
+    item_hash: BabyBear,
+) -> Result<crate::dsl::dsl_p3_air::DslP3Proof, String> {
+    let witness = tree
+        .prove_non_membership(&item_hash)
+        .ok_or_else(|| "item is in the revocation tree (revoked)".to_string())?;
+    let root = tree.root();
+    let (trace, public_inputs) = generate_non_revocation_trace(&witness, root);
+    let circuit = non_revocation_dsl_circuit();
+    crate::dsl::dsl_p3_air::prove_dsl_p3(&circuit, &trace, &public_inputs)
+        .map_err(|e| format!("non-revocation p3 proof failed: {e}"))
+}
+
+/// Verify a non-revocation proof on the AUDITED Plonky3 verifier
+/// (`p3-batch-stark`). The verifier needs only the revocation `root`.
+#[cfg(feature = "recursion")]
+pub fn verify_non_revocation_p3(
+    proof: &crate::dsl::dsl_p3_air::DslP3Proof,
+    root: BabyBear,
+) -> Result<(), String> {
+    let circuit = non_revocation_dsl_circuit();
+    let public_inputs = vec![root];
+    crate::dsl::dsl_p3_air::verify_dsl_p3(&circuit, proof, &public_inputs)
+        .map_err(|e| format!("non-revocation p3 verification failed: {e}"))
+}
+
+// ============================================================================
 // Utility functions
 // ============================================================================
 
@@ -737,4 +780,63 @@ pub fn verify_non_revocation_dsl(
 pub fn revocation_hash_to_field(hash: &[u8; 32]) -> BabyBear {
     let elements = BabyBear::encode_hash(hash);
     hash_many(&elements)
+}
+
+#[cfg(all(test, feature = "recursion"))]
+mod p3_tests {
+    use super::*;
+
+    fn build_tree(num_revoked: u32) -> DslRevocationTree {
+        let hashes: Vec<BabyBear> = (1..=num_revoked)
+            .map(|i| hash_many(&[BabyBear::new(i * 100), BabyBear::new(0xDEAD)]))
+            .collect();
+        DslRevocationTree::new(hashes, TREE_DEPTH)
+    }
+
+    /// AUDITED p3 path: an honest non-revocation proof (item NOT in the tree)
+    /// proves+verifies through the real Plonky3 verifier (`p3-batch-stark`),
+    /// including the in-circuit Poseidon2 arithmetization of the node-hash
+    /// `hash_fact` sponge constraints.
+    #[test]
+    fn p3_non_revocation_roundtrip() {
+        let tree = build_tree(20);
+        let root = tree.root();
+        // An item NOT in the tree.
+        let fresh = hash_many(&[BabyBear::new(0xBEEF), BabyBear::new(0xCAFE)]);
+
+        let proof =
+            prove_non_revocation_p3(&tree, fresh).expect("honest non-revocation must prove+verify");
+        verify_non_revocation_p3(&proof, root).expect("audited p3 verify accepts honest freshness");
+    }
+
+    /// ANTI-GHOST: a forged revocation `root` public input MUST be rejected by
+    /// the audited p3 verifier (the proof binds the genuine sorted-tree root).
+    #[test]
+    fn p3_non_revocation_rejects_forged_root() {
+        let tree = build_tree(20);
+        let root = tree.root();
+        let fresh = hash_many(&[BabyBear::new(0xBEEF), BabyBear::new(0xCAFE)]);
+        let proof = prove_non_revocation_p3(&tree, fresh).expect("honest proof");
+
+        let forged_root = root + BabyBear::new(1);
+        let res = verify_non_revocation_p3(&proof, forged_root);
+        assert!(
+            res.is_err(),
+            "SOUNDNESS: a forged revocation root MUST be rejected by the audited p3 verifier"
+        );
+    }
+
+    /// ANTI-GHOST: a REVOKED item (present in the tree) cannot produce a
+    /// non-revocation proof — `prove_non_membership` returns `None`, so the
+    /// prover errors. A revoked capability cannot forge freshness.
+    #[test]
+    fn p3_revoked_item_cannot_prove_freshness() {
+        let revoked = hash_many(&[BabyBear::new(100), BabyBear::new(0xDEAD)]); // i=1 ⇒ in tree
+        let tree = build_tree(20);
+        let res = prove_non_revocation_p3(&tree, revoked);
+        assert!(
+            res.is_err(),
+            "SOUNDNESS: a REVOKED item must NOT be able to prove non-revocation"
+        );
+    }
 }
