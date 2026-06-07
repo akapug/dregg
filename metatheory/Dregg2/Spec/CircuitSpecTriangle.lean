@@ -110,6 +110,10 @@ import Dregg2.Circuit.Inst.balanceA
 import Dregg2.Circuit.Inst.queueResizeA
 import Dregg2.Circuit.Inst.pipelinedSendA
 import Dregg2.Circuit.Inst.exerciseA
+import Dregg2.Circuit.Inst.queueEnqueueA
+import Dregg2.Circuit.Inst.queueDequeueA
+import Dregg2.Circuit.Inst.queueAtomicTxA
+import Dregg2.Circuit.Inst.queuePipelineStepA
 import Dregg2.Spec.FunctionalRefinement
 
 namespace Dregg2.Spec.CircuitSpecTriangle
@@ -1838,6 +1842,107 @@ theorem exercise_circuit_pins_intent
     exerciseA_full_sound S hN hL hRest hLog s args s' hwf hwf' h
   exact hspec.2
 
+/-! ## §20 — THE TRANSACTIONAL QUEUE FAMILY (enqueue / dequeue / atomic-tx / pipeline-step):
+circuit pins the FIFO/atomic op result determined the whole post-state.
+
+These effects bundle a FIFO queue move with a deposit/refund escrow leg (enqueue/dequeue) or an
+atomic batch / fan-out (atomic-tx / pipeline-step). Their circuit specs are op-delegated existentials.
+The honest intent connection: a verifying witness pins that the FIFO/atomic operation SUCCEEDED and
+its result IS the committed post-state — the prover cannot fabricate a post-state that is not the
+genuine queue-op image (no out-of-FIFO insertion, no phantom refund). We pin the op-result existence
+over the witness `k₁`/`k'`/`s1`. -/
+
+open Dregg2.Circuit.Inst.QueueEnqueueA (EnqueueArgs queueEnqueueE queueEnqueueA_full_sound)
+open Dregg2.Circuit.Spec.QueueFifoCore (QueueEnqueueSpec QueueDequeueSpec)
+
+/-- **QUEUE-ENQUEUE circuit pins the FIFO tail-append + deposit result.** A verifying `queueEnqueueE`
+witness pins that the FIFO enqueue `queueEnqueueK s.kernel id m` SUCCEEDED (some `k₁`) and the
+post-`kernel` is EXACTLY the deposit-escrow image `createEscrowRawAssetQueue k₁ …` — the genuine
+tail-append + deposit, no fabricated post-state. -/
+theorem queueEnqueue_circuit_pins_intent
+    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ) (hNQ : compressNInjective cNQ)
+    (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ) (cNE : List ℤ → ℤ)
+    (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.QueueEnqueueA.RestIffNoQueuesBalEscrows S.RH)
+    (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState)
+    (h : satisfiedE2Triple S (queueEnqueueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
+        (encodeE2Triple S (queueEnqueueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) s args s')) :
+    ∃ k₁, queueEnqueueK s.kernel args.id args.m = some k₁
+      ∧ s'.kernel = createEscrowRawAssetQueue k₁ args.depId args.actor args.cell args.dAsset
+          args.deposit args.id args.m := by
+  have hspec : QueueEnqueueSpec s args.id args.m args.actor args.cell args.depId args.dAsset
+      args.deposit s' := queueEnqueueA_full_sound S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog s args s' h
+  obtain ⟨k₁, _, _, henq, _, _, _, _, hk, _⟩ := hspec
+  exact ⟨k₁, henq, hk⟩
+
+open Dregg2.Circuit.Inst.QueueDequeueA (DequeueArgs queueDequeueE queueDequeueA_full_sound)
+
+/-- **QUEUE-DEQUEUE circuit pins the FIFO head-removal + refund result.** A verifying `queueDequeueE`
+witness pins that the FIFO dequeue-and-refund `queueDequeueRefundK s.kernel id actor depId` SUCCEEDED
+(some `(k', m)`) and the post-`kernel` is EXACTLY `k'` — the genuine head-removal + refund. -/
+theorem queueDequeue_circuit_pins_intent
+    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ) (hNQ : compressNInjective cNQ)
+    (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ) (cNE : List ℤ → ℤ)
+    (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.QueueDequeueA.RestIffNoQueuesBalEscrows S.RH)
+    (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : DequeueArgs) (s' : RecChainedState)
+    (h : satisfiedE2Triple S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
+        (encodeE2Triple S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) s args s')) :
+    ∃ k' m, queueDequeueRefundK s.kernel args.id args.actor args.depId = some (k', m)
+      ∧ s'.kernel = k' := by
+  have hspec : QueueDequeueSpec s args.id args.actor args.cell args.depId s' :=
+    queueDequeueA_full_sound S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog s args s' h
+  obtain ⟨_, _, _, _, k', m, hdeq, hk, _⟩ := hspec
+  exact ⟨k', m, hdeq, hk⟩
+
+open Dregg2.Circuit.Inst.QueueAtomicTxA (AtomicTxArgs queueAtomicTxE queueAtomicTxA_full_sound)
+open Dregg2.Circuit.Spec.QueueAtomicTx (QueueAtomicTxSpec)
+
+/-- **QUEUE-ATOMIC-TX circuit pins the atomic batch result.** A verifying `queueAtomicTxE` witness
+pins that the atomic transaction chain `queueAtomicTxChainA s ops` SUCCEEDED (some `s1`) and the
+post-`kernel` is EXACTLY `s1.kernel` — all-or-nothing: the whole batch committed as one, no partial
+application. -/
+theorem queueAtomicTx_circuit_pins_intent
+    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ) (hNQ : compressNInjective cNQ)
+    (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ) (cNE : List ℤ → ℤ)
+    (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.QueueAtomicTxA.RestIffNoQueuesBalEscrows S.RH)
+    (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : AtomicTxArgs) (s' : RecChainedState)
+    (h : satisfiedE2Triple S (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
+        (encodeE2Triple S (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) s args s')) :
+    ∃ s1, queueAtomicTxChainA s args.ops = some s1 ∧ s'.kernel = s1.kernel := by
+  have hspec : QueueAtomicTxSpec s args.actor args.ops s' :=
+    queueAtomicTxA_full_sound S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog s args s' h
+  obtain ⟨s1, hchain, hk, _⟩ := hspec
+  exact ⟨s1, hchain, hk⟩
+
+open Dregg2.Circuit.Inst.QueuePipelineStepA (PipelineArgs queuePipelineStepE queuePipelineStepA_full_sound)
+open Dregg2.Circuit.Spec.QueuePipelineFanout (QueuePipelineFanoutSpec)
+
+/-- **QUEUE-PIPELINE-STEP circuit pins the dequeue + fan-out result.** A verifying `queuePipelineStepE`
+witness pins that the source FIFO dequeue `queueDequeueK s.kernel srcId owner` SUCCEEDED (some
+`(k1, m)`) and the fan-out `pipelineFanoutK k1 owner m sinkCells sinkIds` produced EXACTLY the
+post-`kernel` — the genuine pipeline routing, no fabricated sink delivery. -/
+theorem queuePipelineStep_circuit_pins_intent
+    (S : Surface2) (LE : QueueRecord → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.QueuePipelineStepA.RestIffNoQueues S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : PipelineArgs) (s' : RecChainedState)
+    (h : satisfiedE2 S (queuePipelineStepE LE cN hN hLE)
+        (encodeE2 S (queuePipelineStepE LE cN hN hLE) s args s')) :
+    ∃ k1 m, queueDequeueK s.kernel args.srcId args.owner = some (k1, m)
+      ∧ pipelineFanoutK k1 args.owner m args.sinkCells args.sinkIds = some s'.kernel := by
+  have hspec : QueuePipelineFanoutSpec s args.srcId args.owner args.sinkCells args.sinkIds s' :=
+    queuePipelineStepA_full_sound S LE cN hN hLE hRest hLog s args s' h
+  obtain ⟨⟨k1, m, hdeq, hfan⟩, _⟩ := hspec
+  exact ⟨k1, m, hdeq, hfan⟩
+
 /-! ## §4 — axiom-hygiene tripwires. Every triangle corner rests only on the kernel axioms +
 the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 
@@ -1945,5 +2050,10 @@ the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 #assert_axioms queueResize_circuit_pins_intent
 #assert_axioms pipelinedSend_circuit_pins_intent
 #assert_axioms exercise_circuit_pins_intent
+
+#assert_axioms queueEnqueue_circuit_pins_intent
+#assert_axioms queueDequeue_circuit_pins_intent
+#assert_axioms queueAtomicTx_circuit_pins_intent
+#assert_axioms queuePipelineStep_circuit_pins_intent
 
 end Dregg2.Spec.CircuitSpecTriangle
