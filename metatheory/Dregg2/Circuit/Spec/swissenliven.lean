@@ -180,6 +180,81 @@ theorem enliven_rejects_amplifying (s : RecChainedState) (sw : Nat) (actor expor
   · rw [if_pos hauth, swissEnlivenK_amplification_rejects s.kernel sw claimed e hf hbad]
   · rw [if_neg hauth]
 
+/-! ## §X — STRENGTHENED full-state spec (projection → INDEPENDENT declarative frame).
+
+`EnlivenSpec` pins the post-state via `s' = { kernel := swissEnlivenK s.kernel sw claimed, log := … }`
+— it DELEGATES the kernel to the executor helper, never independently stating WHICH of the 17 fields a
+committed enliven may touch (a PROJECTION). `EnlivenSpecFull` is the INDEPENDENT, fully-declarative
+full-state spec: the guard holds; post-`swiss` is EXACTLY the declarative refcount-bump image
+`enlivenSwissPost`; the log gains exactly the receipt; and EVERY one of the 16 non-`swiss` kernel fields
+is LITERALLY unchanged (no `swissEnlivenK` in any clause). -/
+def EnlivenSpecFull (s : RecChainedState) (sw : Nat) (actor exporter : CellId) (claimed : List Auth)
+    (s' : RecChainedState) : Prop :=
+  EnlivenGuard s sw actor exporter claimed
+  ∧ (∃ e : SwissRecord, findSwiss s.kernel.swiss sw = some e
+       ∧ rightsNarrowerOrEqual claimed e.rights = true
+       ∧ s'.kernel.swiss = enlivenSwissPost s.kernel.swiss sw e)
+  ∧ s'.log = enlivenReceipt actor exporter :: s.log
+  ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.cell = s.kernel.cell
+  ∧ s'.kernel.caps = s.kernel.caps ∧ s'.kernel.escrows = s.kernel.escrows
+  ∧ s'.kernel.nullifiers = s.kernel.nullifiers ∧ s'.kernel.revoked = s.kernel.revoked
+  ∧ s'.kernel.commitments = s.kernel.commitments ∧ s'.kernel.bal = s.kernel.bal
+  ∧ s'.kernel.queues = s.kernel.queues ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
+  ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
+  ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
+  ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+
+/-- **`execFullA_enliven_iff_specFull` — EXECUTOR ⟺ the STRENGTHENED full-state spec.** -/
+theorem execFullA_enliven_iff_specFull (s : RecChainedState) (sw : Nat) (actor exporter : CellId)
+    (claimed : List Auth) (s' : RecChainedState) :
+    execFullA s (.enlivenRefA sw actor exporter claimed) = some s'
+      ↔ EnlivenSpecFull s sw actor exporter claimed s' := by
+  rw [execFullA_enliven_iff_spec]
+  constructor
+  · rintro ⟨hg, ⟨kw, hk, hs'⟩⟩
+    obtain ⟨hauth, e, hf, hr⟩ := hg
+    have hupd : enlivenSwissUpdate s.kernel.swiss sw claimed = some (enlivenSwissPost s.kernel.swiss sw e) :=
+      enlivenSwissUpdate_some s.kernel.swiss sw claimed e hf hr
+    have hkeq : kw = { s.kernel with swiss := enlivenSwissPost s.kernel.swiss sw e } := by
+      have := (enlivenSwissUpdate_eq_k s.kernel sw claimed (enlivenSwissPost s.kernel.swiss sw e)).mp hupd
+      exact Option.some.inj (hk.symm.trans this)
+    subst hs'
+    refine ⟨⟨hauth, e, hf, hr⟩, ⟨e, hf, hr, ?_⟩, rfl, ?_⟩
+    · rw [hkeq]
+    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  · rintro ⟨hg, ⟨e, hf, hr, hsw⟩, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13,
+      h14, h15, h16⟩
+    refine ⟨hg, ⟨{ s.kernel with swiss := enlivenSwissPost s.kernel.swiss sw e }, ?_, ?_⟩⟩
+    · exact (enlivenSwissUpdate_eq_k s.kernel sw claimed _).mp (enlivenSwissUpdate_some s.kernel.swiss sw claimed e hf hr)
+    · obtain ⟨k', lg'⟩ := s'
+      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      have hke : k' = { s.kernel with swiss := enlivenSwissPost s.kernel.swiss sw e } :=
+        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 hsw h10 h11 h12 h13 h14 h15 h16
+      subst hke hlog; rfl
+
+/-- **The strengthening is REAL (EnlivenSpec ≡ EnlivenSpecFull).** -/
+theorem enlivenSpec_iff_specFull (s : RecChainedState) (sw : Nat) (actor exporter : CellId)
+    (claimed : List Auth) (s' : RecChainedState) :
+    EnlivenSpec s sw actor exporter claimed s' ↔ EnlivenSpecFull s sw actor exporter claimed s' :=
+  Iff.trans (execFullA_enliven_iff_spec s sw actor exporter claimed s').symm
+            (execFullA_enliven_iff_specFull s sw actor exporter claimed s')
+
+/-! ## §X.tooth — the strengthening REJECTS a `sealedBoxes` tampering the weak frame could not see. -/
+
+/-- The STRONG full-state spec REJECTS a post-state that tampers ONLY `sealedBoxes` (an untouched field)
+— even though it agrees with the true output on 16 of 17 kernel fields + the log (the near-miss the
+old `bal`/`accounts` projection would still accept). The `sealedBoxes` frame conjunct catches the ghost
+the executor-delegating spec only avoided by accident of the helper. -/
+theorem enlivenSpecFull_rejects_sealedBoxes_tamper (s s' : RecChainedState) (sw : Nat)
+    (actor exporter : CellId) (claimed : List Auth)
+    (h : execFullA s (.enlivenRefA sw actor exporter claimed) = some s')
+    (badBoxes : List SealedBoxRecord) (hne : badBoxes ≠ s.kernel.sealedBoxes) :
+    ¬ EnlivenSpecFull s sw actor exporter claimed
+        { s' with kernel := { s'.kernel with sealedBoxes := badBoxes } } := by
+  -- the strong spec's `sealedBoxes` frame conjunct (`= s.kernel.sealedBoxes`) contradicts `badBoxes`.
+  rintro ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hboxes⟩
+  exact hne hboxes
+
 #assert_axioms enlivenRecord_correct
 #assert_axioms enlivenRecord_lookup
 #assert_axioms enlivenSwissUpdate_some
@@ -193,5 +268,8 @@ theorem enliven_rejects_amplifying (s : RecChainedState) (sw : Nat) (actor expor
 #assert_axioms enliven_rejects_unauthorized
 #assert_axioms enliven_rejects_absent
 #assert_axioms enliven_rejects_amplifying
+#assert_axioms execFullA_enliven_iff_specFull
+#assert_axioms enlivenSpec_iff_specFull
+#assert_axioms enlivenSpecFull_rejects_sealedBoxes_tamper
 
 end Dregg2.Circuit.Spec.SwissEnliven

@@ -465,4 +465,24 @@ theorem three_fibres_one_lift
    lift_from_apex (conservationFibre Hc) src dst hsrc,
    lift_from_apex (attenuationFibre Ha) src dst hsrc⟩
 
+/-! ## 11. Axiom-hygiene tripwires.
+
+The fibration's load-bearing results are pinned to the standard kernel whitelist (`propext`,
+`Classical.choice`, `Quot.sound`). The negative tooth (`fibre_weakens_offApex`, `distBase_not_apex`)
+and the assembled non-vacuity (`fibration_nonvacuous`) are pinned alongside the structural functor laws
+so a regression that smuggles in an axiom — or silently makes a witness vacuous — is caught here. -/
+
+#assert_axioms lift_collapse
+#assert_axioms lift_from_apex
+#assert_axioms lift_monotone_into_apex
+#assert_axioms apexPoint_isApex
+#assert_axioms revocation_terminal_collapse
+#assert_axioms distBase_not_apex
+#assert_axioms fibre_weakens_offApex
+#assert_axioms apexBase_isApex
+#assert_axioms fibration_nonvacuous
+#assert_axioms conservation_terminal_collapse
+#assert_axioms attenuation_terminal_collapse
+#assert_axioms three_fibres_one_lift
+
 end Dregg2.Distributed.Fibration
