@@ -373,6 +373,29 @@ impl EmbeddedExecutor {
         self.cell_id
     }
 
+    /// THE SWAP — toggle producer mode on the embedded runtime (authority inversion).
+    ///
+    /// When enabled, every turn this executor submits is committed by the VERIFIED Lean executor
+    /// (`dregg_turn::lean_apply::produce_via_lean`, via [`dregg_sdk::AgentRuntime`]) and the Rust
+    /// `TurnExecutor` is demoted to a logged differential. This is the seam through which the common
+    /// app substrate (and the discord-bot + starbridge-apps that inherit it) routes the user-facing
+    /// surface through the verified kernel.
+    ///
+    /// Default mirrors `DREGG_LEAN_PRODUCER` (off unless the env opt-in is set). Has NO effect unless
+    /// `dregg-sdk` was built with the `lean-producer` feature (enable via the app-framework
+    /// `lean-producer` feature). Returns the runtime's resulting producer-mode state.
+    pub fn set_lean_producer(&self, enabled: bool) -> bool {
+        let mut rt = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        rt.set_lean_producer(enabled);
+        rt.lean_producer_enabled()
+    }
+
+    /// Whether producer mode is active on the embedded runtime. See [`Self::set_lean_producer`].
+    pub fn lean_producer_enabled(&self) -> bool {
+        let rt = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        rt.lean_producer_enabled()
+    }
+
     /// Ensure a cell exists in the embedded ledger.
     ///
     /// If the cell is not already present, it is inserted with the given

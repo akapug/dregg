@@ -21,6 +21,29 @@ use dregg_types::PublicKey;
 use crate::cipherclerk::{AgentCipherclerk, HeldToken};
 use crate::error::SdkError;
 
+/// THE SWAP — read the producer-mode opt-in from the environment.
+/// `DREGG_LEAN_PRODUCER=1` (or `true`/`TRUE`) makes the VERIFIED Lean executor the authoritative
+/// state producer on this runtime's execute paths, with the Rust `TurnExecutor` demoted to a
+/// parallel differential cross-check. Any other value (or unset) keeps the legacy Rust-producer
+/// path, so every existing SDK consumer is byte-for-byte unchanged by default.
+///
+/// Mirrors `dregg_node::state::lean_producer_env_enabled` so the node and the SDK read the SAME
+/// switch. When the crate is built WITHOUT the `lean-producer` feature this always returns `false`
+/// (the producer path is not compiled in), so wasm/default consumers never link the Lean archive.
+pub fn lean_producer_env_enabled() -> bool {
+    #[cfg(feature = "lean-producer")]
+    {
+        matches!(
+            std::env::var("DREGG_LEAN_PRODUCER").ok().as_deref(),
+            Some("1") | Some("true") | Some("TRUE")
+        )
+    }
+    #[cfg(not(feature = "lean-producer"))]
+    {
+        false
+    }
+}
+
 /// The agent runtime: orchestrates cipherclerk, ledger, and execution.
 ///
 /// This is the top-level coordination layer for an agent. It manages:
@@ -61,6 +84,15 @@ pub struct AgentRuntime {
     executor: TurnExecutor,
     /// Current nonce for the agent's cell (tracks submitted turns).
     nonce: Mutex<u64>,
+    /// THE SWAP — producer mode (authority inversion). When `true`, [`Self::execute`] and
+    /// [`Self::execute_turn`] make the VERIFIED Lean executor the authoritative state PRODUCER
+    /// (`dregg_turn::lean_apply::produce_via_lean`): the committed ledger is reconstituted from the
+    /// Lean FFI's post-state, and the Rust [`TurnExecutor`] is demoted to a parallel runtime
+    /// DIFFERENTIAL cross-check (a divergence is logged loudly as a real soundness finding, never
+    /// reconciled). Default mirrors `DREGG_LEAN_PRODUCER` (off unless the env opt-in is set);
+    /// `false` is the legacy Rust-producer path, byte-for-byte unchanged. Only ever `true` when the
+    /// crate is built with the `lean-producer` feature; an unlinked archive self-falls-back per turn.
+    lean_producer_enabled: bool,
 }
 
 impl AgentRuntime {
@@ -135,6 +167,7 @@ impl AgentRuntime {
             ledger: Arc::new(Mutex::new(ledger)),
             executor,
             nonce: Mutex::new(0),
+            lean_producer_enabled: lean_producer_env_enabled(),
         }
     }
 
@@ -160,6 +193,7 @@ impl AgentRuntime {
             ledger,
             executor,
             nonce: Mutex::new(0),
+            lean_producer_enabled: lean_producer_env_enabled(),
         }
     }
 
@@ -215,6 +249,94 @@ impl AgentRuntime {
     /// verification. Must match the federation id used to sign actions.
     pub fn set_local_federation_id(&mut self, id: [u8; 32]) {
         self.executor.set_local_federation_id(id);
+    }
+
+    /// THE SWAP — toggle producer mode on this runtime (authority inversion).
+    ///
+    /// When enabled, [`Self::execute`] / [`Self::execute_turn`] route the committed state through
+    /// the VERIFIED Lean executor (`dregg_turn::lean_apply::produce_via_lean`) and demote the Rust
+    /// `TurnExecutor` to a logged differential. The constructors default this to
+    /// [`lean_producer_env_enabled`] (the `DREGG_LEAN_PRODUCER` env opt-in); use this to set it
+    /// explicitly (e.g. an app that wires the producer path from its own config field rather than
+    /// the env var).
+    ///
+    /// Has NO effect unless the crate was built with the `lean-producer` feature — without it the
+    /// producer path is not compiled in and execution always uses the legacy Rust producer.
+    pub fn set_lean_producer(&mut self, enabled: bool) {
+        self.lean_producer_enabled = enabled;
+    }
+
+    /// Whether producer mode (the verified Lean executor as the authoritative state producer) is
+    /// active on this runtime. See [`Self::set_lean_producer`].
+    pub fn lean_producer_enabled(&self) -> bool {
+        self.lean_producer_enabled
+    }
+
+    /// Run one fully-built turn against `ledger`, choosing the PRODUCER per [`Self::lean_producer_enabled`].
+    ///
+    /// THE SWAP authority inversion lives here: when producer mode is on (and the crate was built
+    /// with the `lean-producer` feature), the VERIFIED Lean executor produces the committed ledger
+    /// via `dregg_turn::lean_apply::produce_via_lean`, and the Rust `TurnExecutor` is demoted to a
+    /// parallel differential — its post-state root is compared against the Lean-produced root, and a
+    /// divergence is logged loudly (`error!`) as a real soundness finding, never silently reconciled.
+    /// The returned [`TurnResult`] is always the Rust executor's (it carries the receipt / events the
+    /// commit path consumes); only the COMMITTED ledger state is swapped to the verified output.
+    ///
+    /// When producer mode is off — or the turn is ineligible for the verified producer (an effect
+    /// with no wire arm) / the archive is unlinked — this is exactly the legacy
+    /// `self.executor.execute(turn, ledger)` path, byte-for-byte unchanged.
+    fn run_turn(&self, turn: &Turn, ledger: &mut Ledger) -> TurnResult {
+        #[cfg(feature = "lean-producer")]
+        {
+            if self.lean_producer_enabled {
+                use dregg_turn::lean_apply::{self, ProducerOutcome};
+                let (rust_result, outcome) =
+                    lean_apply::produce_via_lean(&self.executor, turn, ledger);
+                match &outcome {
+                    ProducerOutcome::LeanProduced {
+                        committed,
+                        agree,
+                        lean_root,
+                        rust_root,
+                        rust_committed,
+                    } => {
+                        if *agree {
+                            tracing::info!(
+                                target: "dregg::sdk::lean_producer",
+                                agent = ?turn.agent,
+                                committed = *committed,
+                                "THE SWAP producer mode (SDK): verified Lean executor PRODUCED the \
+                                 committed state; Rust differential AGREES"
+                            );
+                        } else {
+                            tracing::error!(
+                                target: "dregg::sdk::lean_producer",
+                                agent = ?turn.agent,
+                                lean_committed = *committed,
+                                rust_committed = *rust_committed,
+                                lean_root = ?lean_root,
+                                rust_root = ?rust_root,
+                                "THE SWAP producer DIVERGENCE (SDK): verified Lean producer and Rust \
+                                 differential disagree on the committed state — REAL soundness \
+                                 finding (Lean output committed; investigate)"
+                            );
+                        }
+                    }
+                    ProducerOutcome::Fallback { reason } => {
+                        tracing::warn!(
+                            target: "dregg::sdk::lean_producer",
+                            agent = ?turn.agent,
+                            reason = %reason,
+                            "THE SWAP producer mode (SDK): turn not eligible for the verified \
+                             producer — fell back to the Rust producer for this turn"
+                        );
+                    }
+                }
+                return rust_result;
+            }
+        }
+        // Legacy Rust-producer path (also the only path when `lean-producer` is not compiled in).
+        self.executor.execute(turn, ledger)
     }
 
     /// Execute a list of effects against the local ledger.
@@ -309,8 +431,9 @@ impl AgentRuntime {
             effect_witness_index_map: Vec::new(),
         };
 
-        // Execute against the local ledger.
-        let result = self.executor.execute(&turn, &mut ledger);
+        // Execute against the local ledger (producer mode routes through the verified Lean executor
+        // when enabled; otherwise the legacy Rust producer). See [`Self::run_turn`].
+        let result = self.run_turn(&turn, &mut ledger);
 
         match result {
             TurnResult::Committed { receipt, .. } => {
@@ -356,7 +479,8 @@ impl AgentRuntime {
                 *n = turn.nonce + 1;
             }
         }
-        let result = self.executor.execute(&turn, &mut ledger);
+        // Producer mode routes through the verified Lean executor when enabled (see `run_turn`).
+        let result = self.run_turn(&turn, &mut ledger);
 
         match result {
             TurnResult::Committed { receipt, .. } => {

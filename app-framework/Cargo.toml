@@ -37,6 +37,12 @@ tower = "0.5"
 [features]
 default = []
 dev = ["dregg-sdk/dev"]
+# THE SWAP — opt-in producer mode passthrough. Enables `dregg-sdk/lean-producer`, which makes the
+# verified Lean executor the authoritative state producer inside the `EmbeddedExecutor`'s
+# `AgentRuntime` (the common bypass substrate that discord-bot + starbridge-apps inherit). Gated at
+# runtime by `DREGG_LEAN_PRODUCER=1` (default OFF) / `EmbeddedExecutor::set_lean_producer`. With the
+# feature OFF the framework behaves byte-for-byte as before.
+lean-producer = ["dregg-sdk/lean-producer"]
 
 [lints]
 workspace = true
