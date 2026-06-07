@@ -43,18 +43,22 @@
 
     <p>
       Every turn is proven by the Effect VM -- a single STARK circuit with
-      <strong>371 AIR columns</strong> and <strong>24 effects</strong>:
+      <strong>186 AIR columns</strong> and <strong>54 effects</strong>:
     </p>
 
     <ul>
-      <li>State: SetField, CreateCell, IncrementNonce, SetPermissions, SetVerificationKey</li>
-      <li>Transfer: Transfer (computrons between cells)</li>
-      <li>Capabilities: GrantCapability, RevokeCapability, RevokeDelegation, SpawnWithDelegation</li>
+      <li>State: SetField, CreateCell, CreateCellFromFactory, IncrementNonce, SetPermissions, SetVerificationKey, MakeSovereign, CellDestroy</li>
+      <li>Transfer: Transfer (computrons between cells), Burn</li>
+      <li>Capabilities: GrantCapability, RevokeCapability, AttenuateCapability, ExerciseViaCapability, RevokeDelegation, RefreshDelegation, SpawnWithDelegation</li>
       <li>Events: EmitEvent</li>
       <li>Privacy: NoteSpend, NoteCreate (shielded notes with Pedersen commitments)</li>
-      <li>Sealing: CreateSealPair, Seal, Unseal (E-rights pattern)</li>
-      <li>Messaging: Introduce (three-party), PipelinedSend, CreateObligation</li>
+      <li>Sealing: CreateSealPair, Seal, Unseal, CellSeal, CellUnseal (E-rights pattern)</li>
+      <li>Messaging: Introduce (three-party), PipelinedSend, PipelineStep, CreateObligation, FulfillObligation, SlashObligation</li>
+      <li>Escrow: CreateEscrow, ReleaseEscrow, RefundEscrow, CreateCommittedEscrow, ReleaseCommittedEscrow, RefundCommittedEscrow</li>
+      <li>Queues: AllocateQueue, EnqueueMessage, DequeueMessage, ResizeQueue, AtomicQueueTx</li>
+      <li>References: DropRef, EnlivenRef, ExportSturdyRef, ValidateHandoff, ReceiptArchive, Refusal</li>
       <li>Bridge: BridgeMint, BridgeLock, BridgeFinalize, BridgeCancel</li>
+      <li>Escape hatch: Custom (DSL-compiled constraint dispatch)</li>
     </ul>
 
     <p>
