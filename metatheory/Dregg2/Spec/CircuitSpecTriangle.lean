@@ -102,6 +102,10 @@ import Dregg2.Circuit.Inst.emitEventA
 import Dregg2.Circuit.Inst.enlivenRefA
 import Dregg2.Circuit.Inst.swissDropA
 import Dregg2.Circuit.Inst.swissHandoffA
+import Dregg2.Circuit.Inst.createCellA
+import Dregg2.Circuit.Inst.spawnA
+import Dregg2.Circuit.Inst.createCellFromFactoryA
+import Dregg2.Circuit.Inst.cellDestroyA
 import Dregg2.Spec.FunctionalRefinement
 
 namespace Dregg2.Spec.CircuitSpecTriangle
@@ -115,6 +119,8 @@ open Dregg2.Circuit.EffectCommit
 open Dregg2.Exec.EffectsState (setField)
 open Dregg2.Circuit.EffectCommit2
 open Dregg2.Circuit.EffectCommit2Dual
+open Dregg2.Circuit.EffectCommit3
+open Dregg2.Circuit.EffectCommit5
 open Dregg2.Circuit.ListCommit (listLeafInjective)
 open Dregg2.Spec.FunctionalRefinement (intentCredit intentDebit intentCredit_eq_balCredit
   intentDebit_eq_balCredit intentDebit_eq_credit intentCredit_eq_credit escrowCreateRecord)
@@ -1571,6 +1577,181 @@ theorem swissHandoff_circuit_rejects_wrong_swiss
   obtain ⟨e, he⟩ := swissHandoff_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h
   exact hwrong e he
 
+/-! ## §18 — THE CELL-CREATION FAMILY (createCell / spawn / createCellFromFactory) and CELL-DESTROY:
+circuit pins the INTENT account-set growth / lifecycle-and-deathCert image.
+
+`createCell` / `spawn` / `createCellFromFactory` all GROW the live account set by the new cell
+(`insert newCell accounts` / `insert child accounts`). We build the intent oracle
+`intentAccountInsert` and pin the accounts-growth (the capability-creation move — a cell brought to
+life). `cellDestroy` writes the lifecycle + deathCert markers (`destroyKernelMap`); we pin both. Even
+under the heavy multi-digest commit frameworks (Triple/Quint/Dual), the intent connection is a clean
+projection of the full-state soundness. -/
+
+open Dregg2.Circuit.BornEmptyCommit (BornEmptySideTables SpawnCreateLeg)
+
+/-- **`intentAccountInsert accounts cell`** — the INTENT account set after a cell creation: the live
+account set GROWS by `cell` (`insert`). Written from intent ("bring `cell` to life as a live
+account"); the SAME `insert` the circuit specs pin. -/
+def intentAccountInsert (accounts : Finset CellId) (cell : CellId) : Finset CellId :=
+  insert cell accounts
+
+/-! ### §18a — CREATE-CELL: circuit pins the intent account-insert (Triple framework). -/
+
+open Dregg2.Circuit.Inst.CreateCellA (CreateCellArgs createCellE createCellA_full_sound)
+open Dregg2.Circuit.Spec.AccountGrowth (CreateCellSpec SpawnSpec)
+
+/-- **CREATE-CELL circuit pins the intent account-insert.** A verifying `createCellE` witness forces
+the post-`accounts` to be EXACTLY `intentAccountInsert … newCell` (the new cell brought to life). -/
+theorem createCell_circuit_pins_intent
+    (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (DBal : (CellId → AssetId → ℤ) → ℤ) (hDBal : Function.Injective DBal)
+    (DSide : BornEmptySideTables → ℤ) (hDSide : Function.Injective DSide)
+    (hRest : Dregg2.Circuit.Inst.CreateCellA.RestIffNoAccountsBalBorn S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : CreateCellArgs) (s' : RecChainedState)
+    (h : satisfiedE2Triple S (createCellE LE cN hN hLE DBal hDBal DSide hDSide)
+        (encodeE2Triple S (createCellE LE cN hN hLE DBal hDBal DSide hDSide) s args s')) :
+    s'.kernel.accounts = intentAccountInsert s.kernel.accounts args.newCell := by
+  have hspec : CreateCellSpec s args.actor args.newCell s' :=
+    createCellA_full_sound S LE cN hN hLE DBal hDBal DSide hDSide hRest hLog s args s' h
+  exact hspec.2.1
+
+/-- **CREATE-CELL circuit anti-ghost.** -/
+theorem createCell_circuit_rejects_wrong_accounts
+    (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (DBal : (CellId → AssetId → ℤ) → ℤ) (hDBal : Function.Injective DBal)
+    (DSide : BornEmptySideTables → ℤ) (hDSide : Function.Injective DSide)
+    (hRest : Dregg2.Circuit.Inst.CreateCellA.RestIffNoAccountsBalBorn S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : CreateCellArgs) (s' : RecChainedState)
+    (hwrong : s'.kernel.accounts ≠ intentAccountInsert s.kernel.accounts args.newCell) :
+    ¬ satisfiedE2Triple S (createCellE LE cN hN hLE DBal hDBal DSide hDSide)
+        (encodeE2Triple S (createCellE LE cN hN hLE DBal hDBal DSide hDSide) s args s') :=
+  fun h => hwrong (createCell_circuit_pins_intent S LE cN hN hLE DBal hDBal DSide hDSide hRest hLog s args s' h)
+
+/-! ### §18b — SPAWN: circuit pins the intent account-insert (Quint framework). -/
+
+open Dregg2.Circuit.Inst.SpawnA (SpawnArgs spawnE spawnA_full_sound)
+
+/-- **SPAWN circuit pins the intent account-insert.** A verifying `spawnE` witness forces the
+post-`accounts` to be EXACTLY `intentAccountInsert … child` (the spawned child brought to life). -/
+theorem spawn_circuit_pins_intent
+    (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
+    (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
+    (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
+    (DDgs : (CellId → List Dregg2.Authority.Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (hRest : Dregg2.Circuit.Inst.SpawnA.RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
+    (h : satisfiedE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
+        (encodeE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) s args s')) :
+    s'.kernel.accounts = intentAccountInsert s.kernel.accounts args.child := by
+  have hspec : SpawnSpec s args.actor args.child args.target s' :=
+    spawnA_full_sound S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog s args s' h
+  exact hspec.2.1
+
+/-- **SPAWN circuit anti-ghost.** -/
+theorem spawn_circuit_rejects_wrong_accounts
+    (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
+    (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
+    (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
+    (DDgs : (CellId → List Dregg2.Authority.Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (hRest : Dregg2.Circuit.Inst.SpawnA.RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
+    (hwrong : s'.kernel.accounts ≠ intentAccountInsert s.kernel.accounts args.child) :
+    ¬ satisfiedE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
+        (encodeE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) s args s') :=
+  fun h => hwrong (spawn_circuit_pins_intent S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog s args s' h)
+
+/-! ### §18c — CELL-DESTROY: circuit pins the intent lifecycle + deathCert image (Dual framework). -/
+
+open Dregg2.Circuit.Inst.CellDestroyA (CellDestroyArgs cellDestroyE cellDestroyA_full_sound)
+open Dregg2.Circuit.Spec.CellLifecycle (CellDestroySpec destroyKernelMap)
+
+/-- **CELL-DESTROY circuit pins the intent lifecycle + deathCert image.** A verifying `cellDestroyE`
+witness forces the post-`lifecycle` AND post-`deathCert` maps to be EXACTLY the `destroyKernelMap`
+image (cell `cell` marked destroyed with cert `certHash`, no other cell's lifecycle/deathCert
+changed). -/
+theorem cellDestroy_circuit_pins_intent
+    (S : Surface2) (DLif : (CellId → Nat) → ℤ) (hDLif : Function.Injective DLif)
+    (DDC : (CellId → Nat) → ℤ) (hDDC : Function.Injective DDC)
+    (hRest : Dregg2.Circuit.Inst.CellDestroyA.RestIffNoLifecycleDeathCert S.RH)
+    (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : CellDestroyArgs) (s' : RecChainedState)
+    (h : satisfiedE2Dual S (cellDestroyE DLif hDLif DDC hDDC)
+        (encodeE2Dual S (cellDestroyE DLif hDLif DDC hDDC) s args s')) :
+    s'.kernel.lifecycle = (destroyKernelMap s.kernel args.cell args.certHash).lifecycle
+    ∧ s'.kernel.deathCert = (destroyKernelMap s.kernel args.cell args.certHash).deathCert := by
+  have hspec : CellDestroySpec s args.actor args.cell args.certHash s' :=
+    cellDestroyA_full_sound S DLif hDLif DDC hDDC hRest hLog s args s' h
+  exact ⟨hspec.2.1, hspec.2.2.1⟩
+
+/-- **CELL-DESTROY circuit anti-ghost.** -/
+theorem cellDestroy_circuit_rejects_wrong_lifecycle
+    (S : Surface2) (DLif : (CellId → Nat) → ℤ) (hDLif : Function.Injective DLif)
+    (DDC : (CellId → Nat) → ℤ) (hDDC : Function.Injective DDC)
+    (hRest : Dregg2.Circuit.Inst.CellDestroyA.RestIffNoLifecycleDeathCert S.RH)
+    (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : CellDestroyArgs) (s' : RecChainedState)
+    (hwrong : s'.kernel.lifecycle ≠ (destroyKernelMap s.kernel args.cell args.certHash).lifecycle) :
+    ¬ satisfiedE2Dual S (cellDestroyE DLif hDLif DDC hDDC)
+        (encodeE2Dual S (cellDestroyE DLif hDLif DDC hDDC) s args s') :=
+  fun h => hwrong (cellDestroy_circuit_pins_intent S DLif hDLif DDC hDDC hRest hLog s args s' h).1
+
+/-! ### §18d — CREATE-CELL-FROM-FACTORY: circuit pins the intent account-insert (Quint framework,
+existential over the conforming factory entry `e`). -/
+
+open Dregg2.Circuit.Inst.CreateCellFromFactoryA
+  (CreateFromFactoryArgs createFromFactoryE createCellFromFactoryA_full_sound
+   CreateFromFactoryCircuitSpec)
+open Dregg2.Circuit.BornEmptyCommit (BornEmptyAuthorityTables)
+
+/-- **CREATE-CELL-FROM-FACTORY circuit pins the intent account-insert.** A verifying
+`createFromFactoryE` witness forces the post-`accounts` to be EXACTLY `intentAccountInsert … newCell`
+(the factory-instantiated cell brought to life — for the conforming registered factory entry `e`). -/
+theorem createFromFactory_circuit_pins_intent
+    (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (DBal : (CellId → AssetId → ℤ) → ℤ) (hDBal : Function.Injective DBal)
+    (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
+    (DSC : (CellId → List SlotCaveat) → ℤ) (hDSC : Function.Injective DSC)
+    (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth)
+    (hRest : Dregg2.Circuit.Inst.CreateCellFromFactoryA.RestIffNoFactoryTouched S.RH)
+    (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : CreateFromFactoryArgs) (s' : RecChainedState)
+    (h : satisfiedE2Quint S
+        (createFromFactoryE LE cN hN hLE DBal hDBal DCell hDCell DSC hDSC DAuth hDAuth)
+        (encodeE2Quint S
+          (createFromFactoryE LE cN hN hLE DBal hDBal DCell hDCell DSC hDSC DAuth hDAuth) s args s')) :
+    s'.kernel.accounts = intentAccountInsert s.kernel.accounts args.newCell := by
+  have hspec : CreateFromFactoryCircuitSpec s args.actor args.newCell args.vk s' :=
+    createCellFromFactoryA_full_sound S LE cN hN hLE DBal hDBal DCell hDCell DSC hDSC DAuth hDAuth
+      hRest hLog s args s' h
+  obtain ⟨_e, _, hacc, _⟩ := hspec
+  exact hacc
+
+/-- **CREATE-CELL-FROM-FACTORY circuit anti-ghost.** -/
+theorem createFromFactory_circuit_rejects_wrong_accounts
+    (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (DBal : (CellId → AssetId → ℤ) → ℤ) (hDBal : Function.Injective DBal)
+    (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
+    (DSC : (CellId → List SlotCaveat) → ℤ) (hDSC : Function.Injective DSC)
+    (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth)
+    (hRest : Dregg2.Circuit.Inst.CreateCellFromFactoryA.RestIffNoFactoryTouched S.RH)
+    (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : CreateFromFactoryArgs) (s' : RecChainedState)
+    (hwrong : s'.kernel.accounts ≠ intentAccountInsert s.kernel.accounts args.newCell) :
+    ¬ satisfiedE2Quint S
+        (createFromFactoryE LE cN hN hLE DBal hDBal DCell hDCell DSC hDSC DAuth hDAuth)
+        (encodeE2Quint S
+          (createFromFactoryE LE cN hN hLE DBal hDBal DCell hDCell DSC hDSC DAuth hDAuth) s args s') :=
+  fun h => hwrong (createFromFactory_circuit_pins_intent S LE cN hN hLE DBal hDBal DCell hDCell DSC hDSC
+    DAuth hDAuth hRest hLog s args s' h)
+
 /-! ## §4 — axiom-hygiene tripwires. Every triangle corner rests only on the kernel axioms +
 the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 
@@ -1664,5 +1845,14 @@ the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 #assert_axioms swissDrop_circuit_rejects_wrong_swiss
 #assert_axioms swissHandoff_circuit_pins_intent
 #assert_axioms swissHandoff_circuit_rejects_wrong_swiss
+
+#assert_axioms createCell_circuit_pins_intent
+#assert_axioms createCell_circuit_rejects_wrong_accounts
+#assert_axioms spawn_circuit_pins_intent
+#assert_axioms spawn_circuit_rejects_wrong_accounts
+#assert_axioms cellDestroy_circuit_pins_intent
+#assert_axioms cellDestroy_circuit_rejects_wrong_lifecycle
+#assert_axioms createFromFactory_circuit_pins_intent
+#assert_axioms createFromFactory_circuit_rejects_wrong_accounts
 
 end Dregg2.Spec.CircuitSpecTriangle
