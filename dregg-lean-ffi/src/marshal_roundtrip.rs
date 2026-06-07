@@ -198,6 +198,54 @@ fn overspend_turn() -> WireTurn {
     }
 }
 
+/// The DELEGATION pre-state (mirror of FFI.lean:3730 `delegState`): `wide_demo_state` PLUS
+/// cell 0 holding `.endpoint 1 [read, write]` — the cap the root (acting on cell 0) hands
+/// off to the delegated child. With this cap present the EXECUTED delegation handoff succeeds
+/// on the non-amplifying edge, so the child genuinely COMMITS rather than aborting on a
+/// missing-cap install (which would mask the WHAT-leg contrast we are isolating).
+fn deleg_state() -> WireState {
+    let mut s = wide_demo_state();
+    s.caps = vec![
+        (0, vec![Cap::Endpoint(1, vec![Auth::Read, Auth::Write]), Cap::Node(0)]),
+        (9, vec![Cap::Node(0)]),
+    ];
+    s
+}
+
+/// A DELEGATING turn (mirror of FFI.lean:3737 `delegTurn`): the root emits on cell 0 under a
+/// genuine `.signature 7 7`, with ONE delegated child to holder 1 carrying attenuation `keep`
+/// over `parent_cap` (target cell 1), whose sub-node runs a balance-neutral `emitEvent` on
+/// cell 1. The CHILD node's WHAT leg (`capAuthorityG`) gates `keep ⊆ parent_cap.rights` over
+/// the real `ExecAuth` lattice — an AMPLIFYING edge (`keep ⊄ parent_cap.rights`) fail-closes
+/// the gate ⇒ whole-forest rollback. The credential (WHO) is identical on both nodes, so the
+/// ONLY discriminator between the two cases below is this transported delegation `keep`/`cap`.
+fn deleg_turn(keep: Vec<Auth>, parent_cap: Cap) -> WireTurn {
+    WireTurn {
+        agent: 0,
+        nonce: 7,
+        fee: 5,
+        valid_until: 1000,
+        block_height: 0,
+        prev_hash: Digest::default(),
+        root: WForest {
+            auth: WireAuth::Signature { pubkey: Digest::from_u64(7), sig: 7 },
+            caveats: vec![],
+            action: WireAction::Emit { actor: 0, cell: 0, topic: 0, data: 0 },
+            children: vec![WChild {
+                holder: 1,
+                keep,
+                parent_cap,
+                sub: WForest {
+                    auth: WireAuth::Signature { pubkey: Digest::from_u64(7), sig: 7 },
+                    caveats: vec![],
+                    action: WireAction::Emit { actor: 1, cell: 1, topic: 0, data: 0 },
+                    children: vec![],
+                },
+            }],
+        },
+    }
+}
+
 /// Read `bal cell asset` out of a decoded post-state (0 if the slot is absent — matching
 /// the Lean `balOfEntries` "listed slot, else 0" regime read at the input's bal keys).
 fn bal_of(st: &WireState, cell: u64, asset: u64) -> i128 {
@@ -516,12 +564,113 @@ fn main() -> ExitCode {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // CASE 8 — THE WHAT-LEG TOOTH (capability attenuation, `granted ≤ held`):
+    //          an AMPLIFYING delegation edge (`keep = [read, write]` over a parent cap
+    //          `ep:[1,[read]]`, so `{read,write} ⊄ {read}`) makes the CHILD node's
+    //          `capAuthorityG` leg fail-closed ⇒ the whole gated forest ROLLS BACK
+    //          (ok:0, state echoed unchanged, loglen 0). This is the proved `granted ≤ held`
+    //          attenuation theory BITING at the production wire: the credential (WHO) and
+    //          caveats are identical to the committing CASE 9 below — the ONLY difference is
+    //          the transported delegation `keep`/`cap`. Under the OLD `.unchecked (Guard.all
+    //          [])` per-node default (which made `authModeAdmits = true` for ALL inputs) this
+    //          over-grant was ADMITTED; now it is REJECTED. (Mirror of FFI.lean
+    //          `amplifyDelegInput` / `capauth_teeth_same_wire`.)
+    // ---------------------------------------------------------------------
+    {
+        let state = deleg_state();
+        let turn = deleg_turn(vec![Auth::Read, Auth::Write], Cap::Endpoint(1, vec![Auth::Read]));
+        let wire = marshal_turn(&state, &turn).expect("marshal amplifying deleg");
+        let out = lean_forest_auth(&wire);
+        match unmarshal_result(&out) {
+            Ok(res) => {
+                // Amplifying ⇒ WHAT leg fail-closes ⇒ whole forest aborts: no commit, no
+                // receipts, state echoed verbatim (balances + caps untouched).
+                let rolled_back = !res.committed
+                    && res.loglen == 0
+                    && bal_of(&res.state, 0, 0) == 100
+                    && bal_of(&res.state, 1, 0) == 5;
+                if rolled_back {
+                    println!("  [case8] PASS: AMPLIFYING delegation (keep=[read,write] ⊄ parent [read]) REJECTED by capAuthorityG ⇒ rollback (ok:0, loglen=0, state unchanged) — the granted≤held tooth BITES at the wire");
+                } else {
+                    println!(
+                        "  [case8] FAIL: expected over-grant rollback; got committed={} loglen={} bal0={} bal1={} — the WHAT leg did NOT bite (admit-by-construction regression?)",
+                        res.committed,
+                        res.loglen,
+                        bal_of(&res.state, 0, 0),
+                        bal_of(&res.state, 1, 0)
+                    );
+                    failures += 1;
+                }
+            }
+            Err(UnmarshalError::MalformedWireSentinel) => {
+                println!("  [case8] FAIL: kernel returned the malformed-wire sentinel — our delegation wire was MALFORMED (marshalling bug), not a rejection!");
+                failures += 1;
+            }
+            Err(e) => {
+                println!("  [case8] FAIL: unmarshal_result errored: {e}");
+                failures += 1;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // CASE 9 — THE BEFORE/AFTER CONTRAST: a WITHIN-AUTHORITY delegation edge
+    //          (`keep = [read]` over a parent cap `ep:[1,[read,write]]`, so `{read} ⊆
+    //          {read,write}`) ADMITS at `capAuthorityG`. Same wire path, same credential,
+    //          same caveats as CASE 8 — only the transported `keep`/`cap` differs, and here
+    //          the forest COMMITS (root emit + delegation handoff + child emit ⇒ the body's
+    //          receipt log GROWS). Together with CASE 8 this proves the gate CONSULTS the
+    //          delegation rights (admits within-authority, rejects over-grant) — no longer
+    //          admit-by-construction. (Mirror of FFI.lean `okDelegInput`.)
+    // ---------------------------------------------------------------------
+    {
+        let state = deleg_state();
+        let turn = deleg_turn(vec![Auth::Read], Cap::Endpoint(1, vec![Auth::Read, Auth::Write]));
+        let wire = marshal_turn(&state, &turn).expect("marshal within-authority deleg");
+        let out = lean_forest_auth(&wire);
+        match unmarshal_result(&out) {
+            Ok(res) => {
+                // Within-authority ⇒ WHAT leg admits ⇒ the balance-neutral body COMMITS
+                // (the emits append receipts; balances stay 100/5, conserved).
+                let committed = res.committed
+                    && res.loglen >= 1
+                    && bal_of(&res.state, 0, 0) == 100
+                    && bal_of(&res.state, 1, 0) == 5;
+                if committed {
+                    println!(
+                        "  [case9] PASS: WITHIN-AUTHORITY delegation (keep=[read] ⊆ parent [read,write]) ADMITTED by capAuthorityG ⇒ COMMIT (ok:1, loglen={}, balances 100/5 conserved) — within-authority grant still admits",
+                        res.loglen
+                    );
+                } else {
+                    println!(
+                        "  [case9] FAIL: expected within-authority commit; got committed={} loglen={} bal0={} bal1={} — a legitimate non-amplifying grant was wrongly rejected (gate too tight)",
+                        res.committed,
+                        res.loglen,
+                        bal_of(&res.state, 0, 0),
+                        bal_of(&res.state, 1, 0)
+                    );
+                    failures += 1;
+                }
+            }
+            Err(UnmarshalError::MalformedWireSentinel) => {
+                println!("  [case9] FAIL: kernel returned the malformed-wire sentinel — our delegation wire was MALFORMED (marshalling bug), not a rejection!");
+                failures += 1;
+            }
+            Err(e) => {
+                println!("  [case9] FAIL: unmarshal_result errored: {e}");
+                failures += 1;
+            }
+        }
+    }
+
     println!();
     if failures == 0 {
         println!(
             "ALL PASS — the T8/T9 marshaller's wire is BYTE-CORRECT against the live Lean parser \
              (dregg_exec_full_forest_auth): admission+gated commit conserved, \
-             forged/overspend/admission rejections roll back or no-edit, malformed wire distinguished."
+             forged/overspend/admission rejections roll back or no-edit, malformed wire distinguished, \
+             AND the capability-attenuation WHAT leg bites (over-grant rejects, within-authority admits)."
         );
         ExitCode::SUCCESS
     } else {
