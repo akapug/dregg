@@ -98,6 +98,16 @@ function latestHeight() {
   } catch { return 0; }
 }
 
+// First strictly-positive finite number among the candidates, else 0. Used to
+// pick the most meaningful height field a node exposes (linear or DAG).
+function firstPositive(...vals) {
+  for (const v of vals) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
 function whenDreggUi() {
   return new Promise(resolve => {
     if (window.dreggUi) return resolve(window.dreggUi);
@@ -156,11 +166,19 @@ function updateStatusChrome(status) {
     if (metaEl) metaEl.textContent = connected ? 'connected' : 'not connected';
     return;
   }
-  const h = status.latest_height ?? status.height ?? status.block_height ?? 0;
+  // dregg runs DAG consensus (Cordial-Miners), so a solo/DAG node reports its
+  // progress as `dag_height`/`block_count` while the linear `latest_height`
+  // stays 0. Fall back through the DAG fields so a live node shows its real
+  // height instead of a misleading 0.
+  const h = firstPositive(
+    status.latest_height, status.height, status.block_height,
+    status.dag_height, status.block_count,
+  );
   if (heightEl) heightEl.textContent = String(h);
   if (metaEl) {
     const mode = status.federation_mode || (status.healthy ? 'healthy' : 'responding');
-    metaEl.textContent = `${mode} · height ${h} · ${status.peer_count ?? 0} peer(s)`;
+    const live = status.consensus_live ? ' · consensus live' : '';
+    metaEl.textContent = `${mode} · height ${h} · ${status.peer_count ?? 0} peer(s)${live}`;
   }
 }
 
