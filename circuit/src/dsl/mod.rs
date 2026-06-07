@@ -19,6 +19,7 @@ pub mod accumulator;
 pub mod circuit;
 pub mod committed_threshold;
 pub mod derivation;
+pub mod dsl_p3_air;
 pub mod descriptors;
 pub mod fold;
 pub mod garbled;
