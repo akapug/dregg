@@ -19,9 +19,6 @@ witness over a concrete swiss-list digest surface) with the concrete `#guard`s; 
 `lean_executor_derived_enliven` prover proves+verifies / rejects. ANTI-GHOST: a forged post-state where
 the `swiss` list is NOT updated (the refcount stays at 1 instead of the enlivened 2) — the
 component-bind gate (68/69) rejects (a real UNSAT), while the rest frame + guard + log stay honest.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Inst.enlivenRefA
 

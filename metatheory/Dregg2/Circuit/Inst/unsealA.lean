@@ -38,9 +38,6 @@ chain, and the `restFrame` field order is VERBATIM `UnsealSpec`'s frame order.
 ADDITIVE: imports `EffectCommit2` + the seal-box-operations spec; edits NEITHER. Follows the `revoke`
 template (funcComponent `caps`-field + added `RestIffNoCaps` portal) + the `burnA` template (real
 conjunctive guard) + the recipe in `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

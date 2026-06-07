@@ -8,9 +8,6 @@ forged third commitment (a tampered post-list — drop/reorder/inject) is visibl
 
 Reuses (not re-proved): `Inst.NoteCreateA.noteCreateA_full_sound` (a satisfying v2 witness ⇒
 `NoteCreateASpec`), `effect2_circuit_full_complete` (execute ⇒ satisfying), `encodeE2` (the layout).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on the keystones.
 -/
 import Dregg2.Circuit.Inst.noteCreateA
 import Dregg2.Circuit.Poseidon2Surface

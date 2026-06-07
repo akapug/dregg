@@ -61,9 +61,6 @@ and the chained `log` gets `escrowReceiptA actor` prepended. EVERY OTHER kernel 
   * Non-vacuity: `…_rejects_missing` (no unresolved record with this id ⇒ none), `…_rejects_dead_creator`
     (refund target not a live account ⇒ none) — each forged input fails a guard leg ⇒ the executor
     returns `none` ⇒ no spec post-state exists.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Tactics

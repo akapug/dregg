@@ -16,7 +16,7 @@ real executor; §5 the descriptor + witness JSON the Rust prover consumes. The a
 post `caps` table where `recipient` does NOT receive the recovered payload (the unseal grant is
 dropped) — the component-bind gate 68≠69 = a real UNSAT.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. CR portals carried HYPOTHESES on the abstract keystones.
+CR portals carried HYPOTHESES on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.unsealA
 

@@ -8,8 +8,7 @@ nullifier-set rewrite (a dropped/reordered prior nullifier — a double-spend la
 the BIND gate (the circuit-level anti-replay tooth).
 
 Reuses (not re-proved): `Inst.NoteSpendA.noteSpendA_full_sound`, `effect2_circuit_full_complete`,
-`encodeE2`. No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}`.
+`encodeE2`. `#assert_axioms` whitelists exactly `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Inst.noteSpendA
 import Dregg2.Circuit.Poseidon2Surface

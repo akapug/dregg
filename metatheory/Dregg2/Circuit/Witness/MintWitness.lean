@@ -31,9 +31,6 @@ Two halves (both reuse existing machinery, no new portals):
     REAL forged post-state (a tampered THIRD ledger entry / a wrong-amount mint) produces a vector the
     circuit REJECTS — a real UNSAT (the bind or rest gate fails). These are the EXACT bytes the Rust
     adversarial test feeds the prover.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on the keystones.
 -/
 import Dregg2.Circuit.Inst.mintA
 

@@ -24,9 +24,6 @@ so a satisfying full-state witness for `balanceAE` proves the COMPLETE independe
 circuit⟺spec corner, closing the triangle for value-movement THROUGH the v2 framework).
 
 ADDITIVE: imports `EffectCommit2` + `Spec.balancemovement`; edits none of them.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

@@ -37,16 +37,16 @@ structure OpenFront where
 -- CLOSED (this wave): `handler_makeSovereign` (handler ALIGNED to the `makeSovereignKernel`
 -- commitment-rebind), `handler_receiptArchive` (ALIGNED to the `"lifecycle"` field write), and the
 -- queue-allocate `actor ≠ cell` front (handler now stores owner = `actor`, so kernel agreement is
--- UNCONDITIONAL). Their `hole_*` theorems in `HandlerExecutor` are now genuine proofs (no `sorry`),
+-- UNCONDITIONAL). Their `hole_*` theorems in `HandlerExecutor` are now genuine proofs,
 -- and the `portal_*` re-exports below delegate to them. Removed from the open inventory.
 -- CLOSED (this wave): `exercise_inner_turn_witness` — the inner `List FullActionA` emitted fold from
 -- the hold post-state now refines `turnSpec` via `ExerciseInnerTurn.exercise_inner_emitted_refines_turnSpec`
--- (sorry-free; the `portal_exercise_inner_turn` re-export below delegates to it). Removed from the
+-- (the `portal_exercise_inner_turn` re-export below delegates to it). Removed from the
 -- open inventory. The two GENUINELY-open R4/queue/spawn fronts remain.
 -- CLOSED (P2 canonical-semantics): `exercise_r4_facet_mask` — `execFullA`'s `exerciseA` now ENFORCES
 -- the R4 facet mask (`innerFacetsAdmittedA`) and the handler bridge tags each inner with its REAL
 -- `requiredFacetA fa` (not blanket `Auth.control`), so the two facet gates are the SAME check. The
--- facet front is discharged (`ExerciseInnerTurn.exercise_r4_facet_mask`, no `sorry`); only the
+-- facet front is discharged (`ExerciseInnerTurn.exercise_r4_facet_mask`); only the
 -- ORTHOGONAL inner-turn fold remains, carried as an explicit `hinner` hypothesis there.
 def openFronts : List OpenFront := [
   -- Wave 6/7 queue defer: actor ≠ cell owner alignment — REMAINS for queue ENQUEUE only

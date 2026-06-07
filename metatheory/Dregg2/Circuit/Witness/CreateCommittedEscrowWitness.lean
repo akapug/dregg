@@ -9,7 +9,7 @@ proof), over the v2-dual framework (`EffectCommit2Dual`). Width 74, five gates. 
 
 Reused: `execFullA … (.createCommittedEscrowA …)`,
 `Inst.CreateCommittedEscrowA.createCommittedEscrowA_full_sound`, `effect2dual_circuit_full_complete`.
-No `sorry`/`axiom`/`native_decide`; CR portals carried.
+CR portals carried.
 -/
 import Dregg2.Circuit.Inst.createCommittedEscrowA
 

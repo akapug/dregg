@@ -20,9 +20,6 @@ Wire layout (`traceWidth = 74`, guard `< 64`):
 
 ADDITIVE: imports `EffectCommit2` (reuses `ActiveComponent`, smart constructors, `Surface2`,
 `StateView`); edits none of the v1/v2 keystones.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 

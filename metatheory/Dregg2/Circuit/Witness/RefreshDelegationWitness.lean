@@ -13,7 +13,7 @@ Closes the verifiable-execution beachhead for `refreshDelegationA` (the parent-c
     refreshDelegationA_full_sound}`.
   * `EffectCommit2.{encodeE2, effect2_circuit_full_complete, emittedEffect2}`.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. The Poseidon-CR portals are carried HYPOTHESES on the
+The Poseidon-CR portals are carried HYPOTHESES on the
 abstract keystones (the template).
 -/
 import Dregg2.Circuit.Inst.refreshDelegationA

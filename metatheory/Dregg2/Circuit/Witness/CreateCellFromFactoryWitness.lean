@@ -12,7 +12,7 @@ components.
 Reused (not re-proved): `execFullA … (.createCellFromFactoryA …)`,
 `Inst.CreateCellFromFactoryA.createCellFromFactoryA_full_sound`, `effect2quint_circuit_full_complete`.
 The reference pre-state is the executor's own `facS` fixture (vk 42 → `subFactory`).
-No `sorry`/`axiom`/`native_decide`; CR portals carried.
+CR portals carried.
 -/
 import Dregg2.Circuit.Inst.createCellFromFactoryA
 

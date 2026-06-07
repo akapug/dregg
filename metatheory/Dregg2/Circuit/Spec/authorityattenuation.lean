@@ -30,9 +30,6 @@ is genuinely independent of the executor it validates.
 The `→` direction of each `…_iff_spec` VALIDATES the executor against the independent spec: all 17
 kernel fields + the log are checked, so had the arm silently mutated `bal`/`nullifiers`/`revoked`/…
 a frame clause would make the proof FAIL. (None do — see `frameGaps = []` in the run report.)
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

@@ -35,9 +35,6 @@ Two proofs tie it down (both reusing existing machinery, no new portals):
 
 The exported `#eval transferWitnessJson` / `forgedWitnessJson` strings are the executor-derived witness
 vectors the Rust `lean_executor_derived_transfer` test proves+verifies (honest) and rejects (forged).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on the keystone.
 -/
 import Dregg2.Circuit.StateCommit
 

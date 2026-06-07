@@ -18,9 +18,6 @@ for `burnE` proves the complete declarative `BurnSpec` (the apex truth in
 
 ADDITIVE: imports `EffectCommit2` + the supply-destruction spec; edits NONE of them. Follows the
 `mintE` template (`EffectInstances2.lean`) EXACTLY + the recipe in `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Circuit.Spec.supplydestruction

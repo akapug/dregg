@@ -41,7 +41,7 @@ has no inverse): once the lifecycle flag is set it stays set under idempotent re
 sealed cell rejects a second seal — the executable shadow of `LinearityClass::Terminal`.
 
 ## Discipline
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly `{propext,
+`#assert_axioms` whitelists exactly `{propext,
 Classical.choice, Quot.sound}` on every keystone. Reuses ONLY the already-built
 `Exec.TurnExecutor`/`Exec.RecordKernel`/`Spec.ExecRefinement` primitives. Verified standalone:
 `lake env lean Dregg2/Exec/EffectsState.lean`.

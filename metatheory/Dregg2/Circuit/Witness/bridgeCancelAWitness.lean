@@ -9,9 +9,6 @@ over a concrete surface. FIVE gates: guard (`var 0 = 1`), rest (`66=67`), `bal` 
 (`70=71`), log (`72=73`). The honest witness satisfies `effectCircuit2Dual`; a forged post-state that
 ALSO mints a bystander cell's `bal` (component-1 tamper) is REJECTED by the `bal` bind gate `68 ≠ 69`.
 `Inst.bridgeCancelA.bridgeCancelA_full_sound` proved the crown jewel (`⇒ BridgeOutboundCancelSpec`).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Circuit.Inst.bridgeCancelA
 

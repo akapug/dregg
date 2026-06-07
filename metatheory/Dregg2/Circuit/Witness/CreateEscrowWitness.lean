@@ -7,7 +7,7 @@ the v2-dual framework (`EffectCommit2Dual`). Width 74, five gates (guard + rest 
 + log). Mirrors `DelegateWitness` but with TWO touched components.
 
 Reused (not re-proved): `execFullA … (.createEscrowA …)`, `Inst.CreateEscrowA.createEscrowA_full_sound`,
-`effect2dual_circuit_full_complete`. No `sorry`/`axiom`/`native_decide`; CR portals carried.
+`effect2dual_circuit_full_complete`. CR portals carried.
 -/
 import Dregg2.Circuit.Inst.createEscrowA
 

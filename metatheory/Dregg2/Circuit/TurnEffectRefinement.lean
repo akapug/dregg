@@ -580,7 +580,7 @@ theorem fullAction_circuit_refines_spec
       -- (`exerciseInnerFold`) refines the declarative `turnSpec` via `exerciseInnerFold_refines_turnSpec`,
       -- which inducts on `inner` reusing the per-action refinement supplied here as `hper`. The `hper`
       -- it consumes is built by THIS theorem recursively (each inner action is structurally smaller than
-      -- the enclosing `.exerciseA`). No `sorry`, no spec-fallback.
+      -- the enclosing `.exerciseA`). No spec-fallback.
       simp only [fullActionStep]
       have hexpand : innerFacetsAdmittedA st actor target inner = true ∧ exerciseGuard st actor target ∧
           fullActionCircuitStep.exerciseInnerFold S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow

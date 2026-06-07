@@ -20,9 +20,6 @@ witness for `refusalE` proves the complete declarative `RefusalSpec` (the apex t
 ADDITIVE: imports `EffectCommit` + the cell-state-audit spec; edits NEITHER. Follows
 `EffectInstances.setFieldE` + the `mintA` `propBit` guard pattern + the recipe in
 `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit
 import Dregg2.Exec.CircuitEmit

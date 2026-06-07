@@ -6,9 +6,6 @@ Each arm drives the `lifecycle` side-table (and `deathCert` on destroy) through 
 `cellSealChainA` / `cellUnsealChainA` / `cellDestroyChainA` (`TurnExecutorFull.lean:1654`–`:1681`):
 authority-gated (`stateAuthB actor cell`), state-machine-gated, balance-neutral, one self-targeted
 receipt row prepended to the log.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

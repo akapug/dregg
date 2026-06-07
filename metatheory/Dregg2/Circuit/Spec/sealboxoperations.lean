@@ -82,9 +82,6 @@ executor helper in the frame clauses.
      `payload`; the recovered cap is granted to exactly `recipient`.
   4. Non-vacuity: the box genuinely binds the sealed cap; unseal genuinely grants it; fail-closed on
      the missing cap / missing box.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

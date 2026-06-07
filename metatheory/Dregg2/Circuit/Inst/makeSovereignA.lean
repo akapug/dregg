@@ -13,9 +13,6 @@ full-state witness for `makeSovereignE` proves the complete declarative `MakeSov
 
 ADDITIVE: imports `EffectCommit` + the sovereign-commitment spec; edits neither. Follows the
 `incrementNonceA` template (single touched cell, single `propBit` guard, And-reassoc frame bridge).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit
 import Dregg2.Exec.CircuitEmit

@@ -37,9 +37,6 @@ the circuit⟺spec corner here completes the dropRefA triangle.
 
 ADDITIVE: imports `EffectCommit2` + the bespoke spec `Dregg2.Circuit.Spec.authorityrevocation`; edits
 NEITHER `EffectCommit2`/`EffectInstances2`/`StateCommit` NOR any `Spec/*` file NOR `Dregg2.lean`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

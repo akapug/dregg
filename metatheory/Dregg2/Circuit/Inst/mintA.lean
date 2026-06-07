@@ -18,9 +18,6 @@ for `mintE` proves the complete declarative `MintASpec` (the apex truth in
 
 ADDITIVE: imports `EffectCommit2` + the supply-creation spec; edits NEITHER. Follows the
 `burnA`/`noteCreateA` templates EXACTLY + the recipe in `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Circuit.Spec.supplycreation

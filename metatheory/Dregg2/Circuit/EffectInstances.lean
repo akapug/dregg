@@ -25,9 +25,6 @@ ADDITIVE: this file does NOT edit `EffectCommit`/`StateCommit`/`SetFieldCommit`/
   4. `apex ↔ BespokeSpec` — a `funext` on `touchedCellMap` (the touched cells coincide with the
      bespoke post-cell helper off `T`) + an And-reassoc of the 16 frame clauses (DEFEQ for Transfer,
      a genuine reassoc for `setFieldA` whose `SetFieldSpec` lists the frame in a different order).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit
 import Dregg2.Circuit.Transfer

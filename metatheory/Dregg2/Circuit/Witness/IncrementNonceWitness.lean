@@ -23,9 +23,6 @@ row (log-bind gate). The wrong-nonce soundness is carried by the ABSTRACT `satis
 full_state` via the `cellLeafInjective CH` portal (a REAL Poseidon leaf binds the WHOLE `Value`,
 nonce included); the concrete toy only needs to exhibit a genuine UNSAT, which the two visible
 forgeries do.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Witness.Common
 import Dregg2.Circuit.Inst.incrementNonceA

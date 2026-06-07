@@ -17,9 +17,6 @@ proves+verifies / rejects.
 The rebind DROPS the readable record at the target and installs a commitment-only one, so its balance
 field MOVES — the touched-bind gate (70/71) is MEANINGFUL here: a wrong-touched forgery (installing the
 wrong rebound value) is a visible UNSAT, alongside the bystander-mint (frame gate 68/69).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Witness.Common
 import Dregg2.Circuit.Inst.makeSovereignA

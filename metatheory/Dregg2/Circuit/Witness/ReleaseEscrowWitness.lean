@@ -16,7 +16,7 @@ The dual circuit (width 74, 5 gates): guard(0), rest(66=67), bind1(68=69, `bal`)
 `escrows`), log(72=73). The anti-ghost forgery tampers comp1 (`bal`): a minted recipient credit beyond
 the parked amount breaks gate 68=69.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. The Poseidon-CR portals are carried HYPOTHESES on the
+The Poseidon-CR portals are carried HYPOTHESES on the
 abstract keystones.
 -/
 import Dregg2.Circuit.Inst.releaseEscrowA

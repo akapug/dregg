@@ -14,9 +14,6 @@ full-state witness for `incrementNonceE` proves the complete declarative `Increm
 ADDITIVE: imports `EffectCommit` + the cell-state-monotone spec; edits neither. Follows the `setFieldE`
 template (`EffectInstances.lean`) for the touched-cell / growing-log shape, and the single-`propBit` guard
 column (`mintA.lean`) for the 3-conjunct `incNonceGuard`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit
 import Dregg2.Exec.CircuitEmit

@@ -30,9 +30,6 @@ full-state witness for `validateHandoffE` proves the complete declarative bespok
 ADDITIVE: imports `EffectCommit2` + the authority-unattenuated spec; edits NEITHER. Adds a 1-line
 `RestIffNoCaps` portal (the v1 `RestHashIffFrame` minus `caps` — no existing `RestIffNo*` omits `caps`).
 Follows `burnA.lean`'s `funcComponent` template EXACTLY + the recipe in `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

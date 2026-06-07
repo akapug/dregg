@@ -26,9 +26,6 @@ the bespoke spec.
 ADDITIVE: imports `EffectCommit2` + the authority-attenuation spec; edits NEITHER them NOR any other
 file. Follows the `burnA` template (function-field `funcComponent`) + the `noteCreateA` template
 (trivial `True` guard + a fresh `RestIffNo*` portal) + the recipe in `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

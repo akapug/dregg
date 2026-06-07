@@ -57,9 +57,6 @@ and on commit it produces the post-state with `balOf src' = balOf src − amt`,
 
 `emitTransferFaithful` confirms the new circuit composes with `CircuitEmit.emit`/`emit_faithful`:
 the derived transfer circuit serializes to the wire form losslessly (satisfied iff satisfiedEmitted).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit
 import Dregg2.Exec.CircuitEmit

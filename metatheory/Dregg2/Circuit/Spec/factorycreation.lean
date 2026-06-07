@@ -45,9 +45,6 @@ prompt anticipates — handled cleanly via the factoring lemma. The companion ne
 `createFromFactoryA_supply_delta` pins the SEMANTIC content (the mint is conservation-neutral on
 every asset), and the keystone corollary `createFromFactoryA_installs_program` lifts the
 constructor-transparency keystone to the `execFullA` level off the spec.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

@@ -19,9 +19,6 @@ SUPPLIED (the `TransferWitness` pattern): `exerciseWitnessVec`; `execute_produce
 `satisfying_witness_proves_full_state`; the concrete `#guard`s; the JSON the Rust
 `lean_executor_derived_exercise` prover proves+verifies / rejects. Forgeries (log-only effect): a
 tampered receipt row (log-bind gate 72/73) and a minted bystander cell (frame-reuse gate 68/69).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Witness.Common
 import Dregg2.Circuit.Inst.exerciseA

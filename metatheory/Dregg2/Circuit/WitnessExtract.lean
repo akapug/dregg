@@ -27,7 +27,7 @@ NON-VACUITY: `effect2_extract_rejects_*` — a trace whose digest wires are PI-b
 VIOLATES the apex (wrong component / tampered frame / forged log) is UNSAT. This is the anti-ghost
 tooth: the extractor genuinely constrains.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. Each keystone pins exactly `{propext, Classical.choice,
+Each keystone pins exactly `{propext, Classical.choice,
 Quot.sound}` (asserted at the foot).
 -/
 import Dregg2.Circuit.EffectCommit2

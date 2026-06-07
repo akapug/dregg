@@ -9,7 +9,7 @@ touched components.
 
 Reused (not re-proved): `execFullA … (.createCellA …)`,
 `Inst.CreateCellA.createCellA_full_sound`, `effect2triple_circuit_full_complete`.
-No `sorry`/`axiom`/`native_decide`; CR portals carried.
+CR portals carried.
 -/
 import Dregg2.Circuit.Inst.createCellA
 

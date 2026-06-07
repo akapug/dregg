@@ -59,9 +59,6 @@ PROVED (everything else — crucially THE FRAME): `recKExec_preserves_AccountsWF
 (`stateCircuit_rejects_field_tamper`, `stateCircuit_rejects_third_cell`) + concrete `#guard`s, and
 the emission faithfulness. NO `postRoot = recStateCommit (applyTransfer …)` hypothesis appears —
 that forbidden "ghost-in-disguise" would carry the whole answer; here the answer is RECONSTRUCTED.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Transfer
 

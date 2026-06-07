@@ -61,9 +61,6 @@ and on commit it produces `createEscrowRawAsset` (`RecordKernel.lean:1471`):
   * Non-vacuity: the create's PRIVACY-BOUNDARY teeth (`…_rejects_no_hiding`) plus each lock-guard leg
     (`…_rejects_unauthorized`/`…_rejects_negative`/`…_rejects_overdraft`/`…_rejects_dead_creator`/
     `…_rejects_id_reuse`), and the settle's `…_rejects_missing_record`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Spec.escrowholdingrelease
 import Dregg2.Circuit.Spec.escrowholdingrefund

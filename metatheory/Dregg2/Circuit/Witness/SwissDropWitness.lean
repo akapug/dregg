@@ -11,7 +11,7 @@ component `kernel.swiss` (a `listComponent`). Reused: `Exec.swissDropChainA`,
 witness JSON. The anti-ghost forgery: the post entry does NOT decrement the refcount (stays at its old
 value — a phantom live ref). The component-bind gate 68≠69 = a real UNSAT.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. CR portals carried HYPOTHESES on the abstract keystones.
+CR portals carried HYPOTHESES on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.swissDropA
 

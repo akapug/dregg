@@ -40,9 +40,6 @@ The companion semantic corollaries pin the content: a committed `noteCreate` INS
 (`noteCreateA_inserts`), PRESERVES every prior commitment (`noteCreateA_preserves`), is balance-NEUTRAL
 on every asset (`noteCreateA_bal_neutral`), and — the headline distinguishing it from `noteSpend` —
 ALWAYS COMMITS regardless of state (`noteCreateA_total`), the append-only "no double-check" theorem.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

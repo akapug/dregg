@@ -10,9 +10,9 @@ The executable turn (`Exec/TurnExecutorFull`, `Exec/FullForest`, `Exec/FullFores
 pure computable Lean: `main` runs the scenes by calling the real executor, and every ✓ printed is backed
 by one of the theorems below.
 
-## Honesty label
+## What the theorems mean
 
-What is genuine: every theorem is a real, non-vacuous fact about the concrete run —
+Every theorem is a real, non-vacuous fact about the concrete run —
   * conservation: per-asset `recTotalAssetWithEscrow` vector over the actual forest (a scalar aggregate
     could not state it);
   * fail-closed: a real proved `execFullForestA … = none` for the concrete bad worker turn, not an `#eval`;
@@ -21,14 +21,11 @@ What is genuine: every theorem is a real, non-vacuous fact about the concrete ru
   * escrow combined-conservation: `execFullA_ledger_per_asset` with `ledgerDeltaAsset = 0`;
   * auth gate committed⇒(credential ∧ caveats): `execFullForestG_root_attests` on the gated tree.
 
-What is a portal (NOT a Lean law, by design): `credentialValid` is the §8 `AuthPortal` oracle (the
-circuit's obligation, never proved sound inside Lean — the seL4 floor). We prove the gate discipline
-(fail-closed on a forged/revoked credential), not the crypto.
+`credentialValid` is the §8 `AuthPortal` oracle (the circuit's obligation, never proved sound
+inside Lean — the seL4 floor): we prove the gate behaviour (fail-closed on a forged/revoked
+credential), not the crypto.
 
 The scenario is intra-cell: the cross-cell axis is in `Exec/CrossCellForest.lean`.
-
-Zero `sorry`/`admit`/`native_decide`/`axiom`. Every keystone is `#assert_axioms`-pinned to
-`{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Exec.FullForest

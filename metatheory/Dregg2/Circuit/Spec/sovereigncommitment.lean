@@ -50,9 +50,6 @@ the per-asset supply). So in THIS model `bal` is a FRAME field, not a rewritten 
   3. `sovereignRebindMap_correct` : the declarative validation of the touched-cell post helper (the
      `makeSovereignA` analog of `recTransfer_correct`): the rebound cell IS the commitment-only
      record, OTHER cells whole-preserved.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Tactics

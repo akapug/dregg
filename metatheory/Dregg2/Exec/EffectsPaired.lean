@@ -55,7 +55,7 @@ genuinely proved over the state move. A note spend that does not carry `CryptoOK
 (fail-closed on the portal), and one that does commits as a balance debit + a nullifier-set insert.
 
 ## Discipline
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly `{propext,
+`#assert_axioms` whitelists exactly `{propext,
 Classical.choice, Quot.sound}` on every keystone. Self-contained: reuses ONLY the already-built
 `Exec.TurnExecutor` / `Exec.RecordKernel` / `Spec.ExecRefinement` primitives (same imports as
 `EffectTransfer`). Verified standalone: `lake env lean Dregg2/Exec/EffectsPaired.lean`.

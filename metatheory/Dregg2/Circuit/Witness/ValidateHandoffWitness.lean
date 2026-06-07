@@ -11,7 +11,7 @@ component `kernel.caps` (a `funcComponent`). Reused: `Exec.recCDelegate`,
 descriptor + witness JSON. The anti-ghost forgery: recipient steals an extra `node 9` cap on top of
 the honest grant — the component-bind gate 68≠69 = a real UNSAT.
 
-No `sorry`/`admit`/`axiom`/`native_decide`. CR portals carried HYPOTHESES on the abstract keystones.
+CR portals carried HYPOTHESES on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.validateHandoffA
 

@@ -17,9 +17,6 @@ SUPPLIED: §3 the abstract execute→prove / prove→state halves; §4 the execu
 the concrete `#guard`s; §5 the JSON the Rust `lean_executor_derived_introduce` prover proves+verifies /
 rejects. ANTI-GHOST: a forged post-state where recipient 1 STEALS an extra `node 9` cap on top of the
 introduced grant — the component-bind gate (68/69) rejects (a real UNSAT).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Inst.introduceA
 import Dregg2.Circuit.Witness.DelegateWitness

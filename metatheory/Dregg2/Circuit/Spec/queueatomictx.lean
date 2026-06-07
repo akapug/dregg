@@ -16,9 +16,6 @@
 The batch touches THREE kernel components (`queues` + `bal` + `escrows`) through its sub-ops; the
 other 14 kernel fields are the FRAME (each sub-op preserves them). On commit the per-op receipts land
 inside the fold's log, then ONE batch-commit row `escrowReceiptA actor` is prepended.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Spec.queuefifocore
 import Dregg2.Exec.TurnExecutorFull

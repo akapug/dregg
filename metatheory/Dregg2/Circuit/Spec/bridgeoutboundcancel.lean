@@ -73,9 +73,6 @@ move only.) On commit `settleEscrowRawAsset` (`RecordKernel.lean:1481`) produces
   * Non-vacuity: `…_rejects_no_record`, `…_rejects_nonbridge`, `…_rejects_noncreator`,
     `…_rejects_dead_creator`, `…_rejects_nonlive_creator` — each forged input fails a guard leg ⇒ the
     executor returns `none` ⇒ no spec post-state exists. A spec that accepts everything is worthless.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Tactics

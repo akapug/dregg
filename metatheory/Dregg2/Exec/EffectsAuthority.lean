@@ -75,7 +75,7 @@ reused across the regime. BESPOKE per effect: the particular cap-slot write and 
 admit-set monotonicity) — the one new lemma each effect supplies.
 
 ## Discipline
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly `{propext,
+`#assert_axioms` whitelists exactly `{propext,
 Classical.choice, Quot.sound}` on every keystone. Self-contained: reuses ONLY already-built
 `Exec.AuthTurn`/`Exec.TurnExecutorFull`/`Exec.CapTP`/`Authority.*`/`Spec.*` primitives. Verified
 standalone: `lake env lean Dregg2/Exec/EffectsAuthority.lean`.

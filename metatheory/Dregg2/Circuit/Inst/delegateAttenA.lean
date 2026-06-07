@@ -29,9 +29,6 @@ file nor `Dregg2.lean`). Adds the `RestIffNoCaps` portal locally (the 1-line `Re
 with `caps` omitted — no `caps`-omitting `RestIffNo*` existed in `EffectCommit2`). Follows the `burnA`
 template (function-field) + the `noteCreateA` template (local `RestIffNo*`, direct identity bridge) +
 the recipe in `Dregg2/Circuit/CONTRIBUTING.md`.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.EffectCommit2
 import Dregg2.Exec.CircuitEmit

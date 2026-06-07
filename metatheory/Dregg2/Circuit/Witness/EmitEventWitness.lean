@@ -26,9 +26,6 @@ THE PIECES THIS MODULE SUPPLIES (the `TransferWitness` pattern, per effect):
       (a tampered receipt row, and a minted bystander cell) yields a vector the circuit REJECTS — a
       real UNSAT (the log-bind / frame-reuse gate, the anti-ghost tooth end-to-end).
   (5) the JSON the Rust `lean_executor_derived_emitEvent` prover proves+verifies (honest) / rejects.
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Circuit.Witness.Common
 import Dregg2.Circuit.Inst.emitEventA

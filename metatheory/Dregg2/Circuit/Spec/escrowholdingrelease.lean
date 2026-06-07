@@ -61,9 +61,6 @@ Hence a committed `releaseEscrow`:
 `ReleaseEscrowSpec` states EXACTLY this as a `Prop`, with NO executor term in any frame clause, and
 `releaseEscrowChainA_iff_spec` proves the executor meets it iff — the `→` validates the executor
 against the independent spec (a silently-mutated field would make the frame clause FAIL).
-
-No `sorry`/`admit`/`axiom`/`native_decide`. `#assert_axioms` whitelists exactly
-`{propext, Classical.choice, Quot.sound}` on every keystone.
 -/
 import Dregg2.Exec.TurnExecutorFull
 
