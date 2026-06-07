@@ -1,7 +1,7 @@
 //! Proof tier markers — informational classification of proof backends.
 //!
 //! The codebase has multiple proof backends (custom STARK, Kimchi native, Mina/Pickles,
-//! SP1, Binius, constraint prover, structural stubs). All produce bytes that look like
+//! constraint prover, structural stubs). All produce bytes that look like
 //! "proofs," but only a subset provide real cryptographic soundness guarantees.
 //!
 //! This module introduces:
@@ -33,7 +33,7 @@ pub enum ProofTier {
     /// Produced by: custom STARK (base-field only).
     Experimental,
     /// Structural validation only — no cryptographic guarantees.
-    /// Produced by: SP1 stub (no feature), Binius stub (no feature), constraint prover.
+    /// Produced by: the constraint prover.
     /// These proofs cannot pass STARK verification and are rejected naturally.
     Structural,
 }
@@ -163,30 +163,6 @@ pub fn poseidon_stark_tier() -> ProofTier {
     ProofTier::Production
 }
 
-/// Returns the proof tier for the SP1 backend.
-///
-/// With the `sp1` feature enabled, SP1 produces real STARK proofs via the zkVM.
-/// Without the feature, it produces structural stubs only.
-pub fn sp1_tier() -> ProofTier {
-    if cfg!(feature = "sp1") {
-        ProofTier::Experimental
-    } else {
-        ProofTier::Structural
-    }
-}
-
-/// Returns the proof tier for the Binius backend.
-///
-/// With the `binius` feature enabled, Binius produces real proofs over binary towers.
-/// Without the feature, it produces structural stubs only.
-pub fn binius_tier() -> ProofTier {
-    if cfg!(feature = "binius") {
-        ProofTier::Experimental
-    } else {
-        ProofTier::Structural
-    }
-}
-
 /// Returns the proof tier for the constraint prover (mock prover).
 ///
 /// The constraint prover validates AIR constraints directly on the execution trace
@@ -212,10 +188,6 @@ pub const STARK_BACKEND: &str = "custom-stark";
 pub const KIMCHI_BACKEND: &str = "kimchi-native";
 /// Backend name for the Poseidon STARK.
 pub const POSEIDON_STARK_BACKEND: &str = "poseidon-stark";
-/// Backend name for SP1 zkVM.
-pub const SP1_BACKEND: &str = "sp1";
-/// Backend name for Binius binary towers.
-pub const BINIUS_BACKEND: &str = "binius";
 /// Backend name for the constraint prover.
 pub const CONSTRAINT_PROVER_BACKEND: &str = "constraint-prover";
 /// Backend name for Plonky3.

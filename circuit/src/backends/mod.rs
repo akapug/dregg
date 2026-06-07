@@ -3,11 +3,6 @@
 //! While the primary STARK backend (`crate::stark`) uses BabyBear + FRI,
 //! these backends provide alternative proof systems with different tradeoffs:
 //!
-//! - **Binius** (binary field towers): Operates natively over GF(2) tower extensions,
-//!   producing very small proofs for hash-intensive circuits. Uses Groestl-256 (AES-based)
-//!   which is native to the binary tower. Post-quantum secure. Expected ~1-4 KiB proofs
-//!   for Merkle membership. Always compiled; structural validation without feature flag.
-//!
 //! - **Mina/Kimchi** (Plonk variant over Pasta curves with IPA): Experimental
 //!   Pickles-style IVC over the Pasta cycle. This path generates Kimchi proofs
 //!   and verifies base-step proofs with Kimchi, but multi-step standalone
@@ -57,22 +52,6 @@ pub mod stark_in_pickles;
 /// over committed sets, native L1 verification on Mina.
 #[cfg(feature = "mina")]
 pub mod kimchi_native;
-
-/// SP1 backend: Succinct's RISC-V zkVM for provable Datalog evaluation.
-///
-/// Always compiled. When the `sp1` feature is enabled, uses sp1-sdk for real
-/// proof generation via the zkVM. Without the feature, provides structural
-/// stubs that validate circuit logic and produce simulated proofs (same pattern
-/// as the binius backend).
-pub mod sp1;
-
-/// Binius backend: binary field tower proof system using Groestl-256 hashing.
-///
-/// Always compiled. When the `binius` feature is enabled, provides full proof
-/// generation and verification using the Binius binary tower library from
-/// IrreducibleOSS. Without the feature, provides structural validation that
-/// verifies circuit logic and produces structurally-correct proofs.
-pub mod binius;
 
 /// Plonky3 backend: production-grade STARK using BabyBear + FRI.
 ///
