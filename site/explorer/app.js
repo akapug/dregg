@@ -74,6 +74,11 @@ const KIND_TO_PAGE = {
 // Some dregg:// kinds alias to a different inspector element.
 const INSPECTOR_ALIASES = {
   token: 'attenuated-token',
+  // A single receipt opens the unified witnessed view: it embeds <dregg-receipt>
+  // + <dregg-proof> AND renders the real DWR1 witness artifacts that
+  // RemoteRuntime lazy-fetches from /api/receipts/{hash}/witnesses (F1). The
+  // receipt-list and turn views are unaffected (different kinds).
+  receipt: 'witnessed-receipt',
 };
 
 // ---------------------------------------------------------------------------

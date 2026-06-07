@@ -144,7 +144,13 @@ class DreggWitnessedReceipt extends InspectorBase {
 
     let parsed = null;
     try { parsed = parseRef(refAttr); } catch { /* fall through to renderParseError */ }
-    if (renderParseError(this, refAttr, parsed, 'receipt')) return;
+    // This is the unified receipt view — accept either dregg://receipt/<id> or
+    // the explorer's alias dregg://witnessed-receipt/<id>. Both resolve the same
+    // receipt via getReceipt().
+    if (!parsed) { renderParseError(this, refAttr, parsed, 'receipt'); return; }
+    if (parsed.kind !== 'receipt' && parsed.kind !== 'witnessed-receipt') {
+      if (renderParseError(this, refAttr, parsed, 'receipt')) return;
+    }
 
     const sig = this._runtime.getReceipt(parsed.id);
     const root = document.createElement('div');
