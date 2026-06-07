@@ -1485,6 +1485,70 @@ impl TurnExecutor {
     /// produces different facts, so the token's caveats / Datalog no longer
     /// authorize → the verify call denies. This mirrors `Proof`'s
     /// bound_action/bound_resource and `CapTpDelivered`'s signing message.
+    /// Verify that a presented [`Authorization::Token`] credential covers a
+    /// `(scope_cell, scope_method)` capability scope — the in-runtime gate a
+    /// front-end (e.g. the MCP `tools/call` surface) uses to admit a request.
+    ///
+    /// This is the SAME verification the executor runs when admitting a turn:
+    /// it builds the root action the scope describes (target = `scope_cell`,
+    /// method = `scope_method`) carrying the presented credential, then runs
+    /// `verify_token_authorization` against `scope_cell`'s own trust anchor
+    /// (its public key / verification key for biscuits; its cell-scoped secret
+    /// for macaroons). A credential that does not cover the scope — wrong issuer,
+    /// wrong target, an action the token's caveats/Datalog do not grant, or an
+    /// expired token — is rejected with the same `TurnError` the executor would
+    /// raise. Fail-closed: a non-`Token` authorization is rejected outright.
+    ///
+    /// The caller supplies `scope_cell` (the authority the tool's scope names)
+    /// and `scope_method` (the action verb). The credential must present an
+    /// `Authorization::Token`; everything else is rejected so this can never be
+    /// used to launder an `Unchecked`/signature credential into a scope grant.
+    pub fn verify_token_for_scope(
+        &self,
+        credential: &Authorization,
+        scope_cell: &Cell,
+        scope_method: crate::action::Symbol,
+    ) -> Result<(), TurnError> {
+        let Authorization::Token {
+            encoded,
+            key_ref,
+            discharges,
+        } = credential
+        else {
+            return Err(TurnError::InvalidAuthorization {
+                reason: "capability scope check requires an Authorization::Token credential"
+                    .to_string(),
+            });
+        };
+
+        // Build the action the scope describes. The token verifier binds its
+        // AuthRequest to `(action.method, action.target)`, so this is exactly
+        // the call the scope authorizes; a token not covering it is denied.
+        let scoped_action = Action {
+            target: scope_cell.id(),
+            method: scope_method,
+            args: Vec::new(),
+            authorization: credential.clone(),
+            preconditions: Default::default(),
+            effects: Vec::new(),
+            may_delegate: crate::action::DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+            witness_blobs: Vec::new(),
+        };
+
+        self.verify_token_authorization(
+            &scoped_action,
+            scope_cell,
+            encoded,
+            key_ref,
+            discharges,
+            &[0],
+            0,
+        )
+        .map_err(|(err, _path)| err)
+    }
+
     fn token_auth_request(&self, action: &Action) -> dregg_token::AuthRequest {
         let mut req = dregg_token::AuthRequest::default();
         req.action = Some(hex::encode(action.method));
@@ -1703,10 +1767,10 @@ impl TurnExecutor {
     /// shared HMAC secret ever crosses domains; cross-domain auth must use a
     /// biscuit).
     fn derive_cell_macaroon_secret(&self, cell: &CellId) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_derive_key("dregg-cell-macaroon-secret-v1");
-        hasher.update(&self.local_federation_id);
-        hasher.update(cell.as_bytes());
-        *hasher.finalize().as_bytes()
+        // Single source of truth: `crate::action::derive_cell_macaroon_secret`,
+        // which a credential minter (e.g. the SDK sub-agent path) calls to mint
+        // a macaroon under the SAME secret the executor verifies against.
+        crate::action::derive_cell_macaroon_secret(&self.local_federation_id, cell)
     }
 
     /// Compute the delegation message signed by a delegator for a bearer capability.

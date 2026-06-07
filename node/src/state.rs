@@ -38,6 +38,25 @@ pub fn lean_producer_env_enabled() -> bool {
     )
 }
 
+/// MCP per-tool capability enforcement opt-in (`DREGG_MCP_CAP_ENFORCE=1`).
+///
+/// When enabled, the MCP `tools/call` surface REQUIRES every call to present an
+/// `Authorization::Token` capability whose biscuit scope covers the tool's
+/// declared `(action, resource)` scope, verified by the EXECUTOR's
+/// `verify_token_for_scope`. A missing or non-covering credential is rejected
+/// (the call never reaches the tool body).
+///
+/// Independently of this flag, a credential that IS presented is ALWAYS verified
+/// — presenting a wrong/over-broad token always rejects. The flag only governs
+/// whether a *missing* credential is rejected, so existing callers are
+/// unaffected by default while the gate is genuinely enforced when armed.
+pub fn mcp_cap_enforce_env_enabled() -> bool {
+    matches!(
+        std::env::var("DREGG_MCP_CAP_ENFORCE").ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE")
+    )
+}
+
 // =============================================================================
 // Events (broadcast to WebSocket clients)
 // =============================================================================
@@ -175,6 +194,13 @@ pub struct NodeStateInner {
     /// construction) or by setting this field. Ineligible turns (an effect with no wire arm) fall
     /// back to the Rust producer for that turn.
     pub lean_producer_enabled: bool,
+    /// MCP per-tool capability enforcement. When `true`, the `tools/call`
+    /// surface REQUIRES a covering `Authorization::Token` for every call (a
+    /// missing credential is rejected). Independent of this flag, any presented
+    /// credential is always verified against the tool's scope. Default mirrors
+    /// [`mcp_cap_enforce_env_enabled`] (`DREGG_MCP_CAP_ENFORCE`). See
+    /// [`crate::mcp`] for the tool→scope table and the gate.
+    pub mcp_cap_enforce: bool,
     /// Cached PIR intent index. Invalidated on intent pool mutations.
     /// Avoids O(n) rebuild on every PIR request (prevents CPU DoS).
     pub pir_index_cache: Option<dregg_intent::pir::IntentIndex>,
@@ -605,6 +631,7 @@ impl NodeState {
                 prove_transitions: false,
                 full_turn_proving_enabled: false,
                 lean_producer_enabled: lean_producer_env_enabled(),
+                mcp_cap_enforce: mcp_cap_enforce_env_enabled(),
                 pir_index_cache: None,
                 discharge_gateway: None,
                 program_registry: ProgramRegistry::new(),
@@ -699,6 +726,7 @@ impl NodeState {
                 prove_transitions: false,
                 full_turn_proving_enabled: false,
                 lean_producer_enabled: lean_producer_env_enabled(),
+                mcp_cap_enforce: mcp_cap_enforce_env_enabled(),
                 pir_index_cache: None,
                 discharge_gateway: None,
                 program_registry: ProgramRegistry::new(),

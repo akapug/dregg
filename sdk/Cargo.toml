@@ -33,7 +33,7 @@ dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
 dregg-dsl-tests = { path = "../dregg-dsl-tests" }
 dregg-intent = { path = "../intent" }
 dregg-macaroon = { workspace = true, features = ["crypto"] }
-dregg-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+dregg-token = { path = "../token", default-features = false, features = ["macaroon", "biscuit", "rand-deps"] }
 dregg-trace = { path = "../trace" }
 
 async-trait = "0.1"
@@ -42,6 +42,7 @@ blake3 = "1"
 curve25519-dalek = { version = "4", features = ["alloc"] }
 ed25519-dalek = { version = "2", features = ["std"] }
 getrandom = { workspace = true }
+hex = "0.4"
 hmac = { workspace = true }
 pbkdf2 = "0.12"
 postcard = { version = "1", features = ["use-std"] }
