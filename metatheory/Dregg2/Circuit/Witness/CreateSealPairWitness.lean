@@ -12,6 +12,7 @@ Reused (not re-proved): `execFullA … (.createSealPairA …)` (the chained exec
 Poseidon-CR portals carried on the abstract keystones.
 -/
 import Dregg2.Circuit.Inst.createSealPairA
+import Dregg2.Circuit.Poseidon2Surface
 
 namespace Dregg2.Circuit.Witness.CreateSealPairWitness
 
@@ -25,6 +26,7 @@ open Dregg2.Exec
 open Dregg2.Exec.CircuitEmit
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Authority (Caps Cap Auth)
+open Dregg2.Circuit.Poseidon2Surface (refP2 recListDigest turnLogDigest)
 
 set_option linter.dupNamespace false
 
@@ -59,24 +61,25 @@ theorem satisfying_witness_proves_full_state
 
 /-! ## §4 — THE EXECUTOR-DERIVED CONCRETE WITNESS. -/
 
-/-- Concrete small cap code (null=0, node t = 10+t, endpoint t _ = 500+t). -/
-def capCode : Cap → ℤ
-  | .null         => 0
-  | .node t       => 10 + (t : ℤ)
-  | .endpoint t _ => 500 + (t : ℤ)
-
-/-- Concrete cap-list digest (Horner fold, base 1000, length folded in). -/
-def capListCode (cs : List Cap) : ℤ :=
-  cs.foldl (fun acc c => acc * 1000 + capCode c) (cs.length : ℤ)
-
-/-- Concrete caps digest over carrier `[0,1,2]` (base 1000000 ⇒ fits i64). -/
+/-- Field-binding `Auth` index (so endpoint `rights` are bound, not dropped). -/
+def authCode : Auth → ℤ
+  | .read => 0 | .write => 1 | .grant => 2 | .call => 3 | .reply => 4 | .reset => 5 | .control => 6
+/-- **Field-binding** `Cap` encoder: tag + target + the WHOLE rights list (the OLD `capCode` dropped
+`endpoint`'s rights via `500 + t`). -/
+def encCap : Cap → List ℤ
+  | .null         => [0]
+  | .node t       => [1, (t : ℤ)]
+  | .endpoint t r => 2 :: (t : ℤ) :: (r.length : ℤ) :: r.map authCode
+/-- One cell's cap-list digest: the REAL `refP2` sponge over the field-binding `encCap`. -/
+def capListCode (cs : List Cap) : ℤ := recListDigest encCap cs
+/-- Concrete caps digest over carrier `[0,1,2]`: the REAL `refP2` sponge of each cell's cap-list digest. -/
 def capsDigConcrete : Caps → ℤ :=
-  fun caps => [0, 1, 2].foldl (fun acc c => acc * 1000000 + capListCode (caps c)) 0
+  fun caps => refP2 ([0, 1, 2].map (fun c => capListCode (caps c)))
 
 def rhConcrete : RecordKernelState → ℤ :=
   fun k => (k.accounts.card : ℤ) + (k.nullifiers.length : ℤ)
-def lhConcrete : List Turn → ℤ :=
-  fun log => log.foldl (fun acc t => acc * 1000000 + ((t.actor : ℤ) * 1000 + t.src)) (log.length : ℤ)
+/-- The log hash: the REAL `turnLogDigest` (binds `dst`/`amt` the OLD `actor*1000 + src` fold dropped). -/
+def lhConcrete : List Turn → ℤ := turnLogDigest
 def SC : Surface2 := { RH := rhConcrete, LH := lhConcrete }
 
 /-- The concrete `caps` component (computable digest; `postClause` = the digest equality). -/
@@ -137,6 +140,16 @@ def forgedWitness : List Int := witnessOf sPre argsRef sForged
 #guard honestWitness.getD 66 0 == honestWitness.getD 67 0
 #guard honestWitness.getD 0 0 == 1
 
+-- RIGHTS-CONFUSION anti-ghost tooth (the class the OLD `capCode endpoint t _ => 500+t` MISSED — it made
+-- `sealerCap 7 = endpoint 7 [grant]` and `unsealerCap 7 = endpoint 7 [reply]` COLLIDE on the SAME `507`).
+-- Here cell 0 is forged to hold the UNSEALER cap (wrong rights) instead of the SEALER cap. `encCap`
+-- binds the rights, so the component-bind gate `68 ≠ 69` REJECTS.
+def sForgedRights : RecChainedState :=
+  { kernel := { kPre with
+      caps := fun c => if c = 0 then [unsealerCap 7] else if c = 1 then [unsealerCap 7] else [] }
+  , log := createSealPairReceipt 0 0 :: sPre.log }
+#guard decide (satisfied (effectCircuit2 createSealPairEC) (encodeE2 SC createSealPairEC sPre argsRef sForgedRights)) == false
+
 /-! ## §5 — JSON export. -/
 
 def emittedCSP : EmittedDescriptor := emittedEffect2 "dregg-createSealPairA-v2" createSealPairEC
@@ -148,10 +161,11 @@ def forgedWitnessJson : String := witnessJson forgedWitness
 #guard emittedCSP.constraints.length == 4
 #guard emittedCSP.traceWidth == 72
 
--- Golden pins (the bytes the Rust `lean_executor_derived_create_seal_pair` test pastes).
-#guard honestWitness.getD 68 0 == 1507001507000000
-#guard forgedWitness.getD 68 0 == 1507001507001019
-#guard forgedWitness.getD 69 0 == 1507001507000000
+-- Structural component-bind goldens (the field-binding `refP2`/`encCap` digests are arbitrary-precision;
+-- non-vacuity is at the bind gates; the Rust paste is regenerated from the JSON accessors).
+#guard honestWitness.getD 68 0 == honestWitness.getD 69 0      -- component binds (honest)
+#guard !(forgedWitness.getD 68 0 == forgedWitness.getD 69 0)   -- forged component differs (REJECTED)
+#guard !(honestWitnessJson == forgedWitnessJson)               -- honest ≠ forged byte streams
 
 #assert_axioms execute_produces_satisfying_witness
 #assert_axioms satisfying_witness_proves_full_state

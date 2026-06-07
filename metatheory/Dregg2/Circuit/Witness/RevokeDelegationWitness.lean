@@ -31,6 +31,7 @@ The Poseidon-CR portals are carried HYPOTHESES on the
 abstract keystones (the template).
 -/
 import Dregg2.Circuit.Inst.revokeDelegationA
+import Dregg2.Circuit.Poseidon2Surface
 
 namespace Dregg2.Circuit.Witness.RevokeDelegationWitness
 
@@ -44,6 +45,7 @@ open Dregg2.Exec
 open Dregg2.Exec.CircuitEmit
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Authority (Caps Cap Auth)
+open Dregg2.Circuit.Poseidon2Surface (refP2 recListDigest turnLogDigest)
 
 set_option linter.dupNamespace false
 
@@ -91,20 +93,24 @@ A CONCRETE, COMPUTABLE commitment surface over a toy domain (the role `capCode`/
 in `DelegateWitness`). Every primitive stays SMALL (mod a prime) so the folded digests fit i64 — the
 v2 gate only checks EQUALITY, so a bounded computable hash suffices. -/
 
-/-- Concrete computable per-`Cap` code (tag + target), kept small. -/
-def capCode : Cap → ℤ
-  | .null         => 1
-  | .node t       => 101 + (t : ℤ) * 3
-  | .endpoint t r => 11 + (t : ℤ) * 3 + (r.length : ℤ)
+/-- Field-binding `Auth` index (so endpoint `rights` are bound, not collapsed to `.length`). -/
+def authCode : Auth → ℤ
+  | .read => 0 | .write => 1 | .grant => 2 | .call => 3 | .reply => 4 | .reset => 5 | .control => 6
+/-- **Field-binding** `Cap` encoder: tag + target + the WHOLE rights list (the OLD `capCode` reduced
+`endpoint t r => 11 + t*3 + r.length`, dropping WHICH rights for the LENGTH). -/
+def encCap : Cap → List ℤ
+  | .null         => [0]
+  | .node t       => [1, (t : ℤ)]
+  | .endpoint t r => 2 :: (t : ℤ) :: (r.length : ℤ) :: r.map authCode
 
-/-- Concrete computable cap-list code: a small modular Horner fold (length-tagged). -/
-def capListCode (cs : List Cap) : ℤ :=
-  cs.foldl (fun acc c => (acc * 131 + capCode c) % 2000003) ((cs.length : ℤ) + 1)
+/-- One cell's cap-list digest: the REAL `refP2` sponge over the field-binding `encCap` (the OLD
+`% 2000003` Horner was a NON-injective field hash). -/
+def capListCode (cs : List Cap) : ℤ := recListDigest encCap cs
 
-/-- Concrete caps digest over the fixed label window `[0,4)` (the toy domain), mod a small prime. A
-tamper of ANY window cell's caps changes this number; it stays well under 2³¹. -/
+/-- Concrete caps digest over the fixed label window `[0,4)`: the REAL `refP2` sponge of each cell's
+cap-list digest. -/
 def capsDigConcrete : Caps → ℤ :=
-  fun caps => (List.range 4).foldl (fun acc l => (acc * 7919 + capListCode (caps l)) % 2000003) 1
+  fun caps => refP2 ((List.range 4).map (fun l => capListCode (caps l)))
 
 /-- Concrete rest hash: reads only the NON-`caps` frame fields (so a pure cap forgery leaves it fixed —
 the COMPONENT-bind gate bites, not the rest gate). -/
@@ -112,9 +118,9 @@ def rhConcrete : RecordKernelState → ℤ :=
   fun k => (k.accounts.card : ℤ) + (k.nullifiers.length : ℤ) * 7
            + (k.commitments.length : ℤ) * 13 + (k.swiss.length : ℤ) * 17
 
-/-- Concrete log hash: a small modular Horner fold over the receipt actors (length-tagged). -/
-def lhConcrete : List Turn → ℤ :=
-  fun xs => xs.foldl (fun acc t => (acc * 131 + (t.actor : ℤ) + 1) % 2000003) ((xs.length : ℤ) + 1)
+/-- Concrete log hash: the REAL `turnLogDigest` (binds `src`/`dst`/`amt` the OLD `actor % 2000003` fold
+DROPPED and field-reduced). -/
+def lhConcrete : List Turn → ℤ := turnLogDigest
 
 /-- The concrete v2 surface. -/
 def SC : Surface2 := { RH := rhConcrete, LH := lhConcrete }
@@ -210,6 +216,15 @@ def forgedWitness : List Int := witnessOf sPre argsRef sForged
 #guard honestWitness.getD 68 0 == honestWitness.getD 69 0      -- honest component binds
 #guard honestWitness.getD 0 0 == 1                              -- guard propBit = 1
 
+-- RIGHTS-ATTENUATION anti-ghost tooth: instead of un-revoking, holder 0's slot is forged to a
+-- `node 7 ++ endpoint 5 [grant]` (the revoked target 5 re-appears as an AMPLIFIED endpoint). The OLD
+-- rights-LENGTH `capCode` over `% 2000003` could alias such tampers; `encCap` binds the full rights so
+-- the component-bind gate `68 ≠ 69` REJECTS.
+def sForgedRights : RecChainedState :=
+  { sPost with kernel := { sPost.kernel with
+      caps := fun l => if l = 0 then [Cap.node 7, Cap.endpoint 5 [Auth.grant]] else sPost.kernel.caps l } }
+#guard decide (satisfied (effectCircuit2 revokeEC) (encodeE2 SC revokeEC sPre argsRef sForgedRights)) == false
+
 /-! ## §5 — JSON export of the descriptor + witness vectors (the bytes the Rust prover consumes). -/
 
 def revokeAirName : String := "dregg-revokeDelegationA-v2"
@@ -232,13 +247,11 @@ def forgedWitnessJson : String := witnessJson forgedWitness
 -- The exact bytes the Rust `lean_executor_derived_revoke_delegation` test pastes (golden pins).
 #guard descriptorJson ==
   "{\"name\":\"dregg-revokeDelegationA-v2\",\"trace_width\":72,\"constraints\":[{\"lhs\":{\"t\":\"var\",\"v\":0},\"rhs\":{\"t\":\"const\",\"v\":1}},{\"lhs\":{\"t\":\"var\",\"v\":66},\"rhs\":{\"t\":\"var\",\"v\":67}},{\"lhs\":{\"t\":\"var\",\"v\":68},\"rhs\":{\"t\":\"var\",\"v\":69}},{\"lhs\":{\"t\":\"var\",\"v\":70},\"rhs\":{\"t\":\"var\",\"v\":71}}]}"
-#guard honestWitness.getD 68 0 == 1170548   -- component digest binds (honest revoke)
-#guard forgedWitness.getD 68 0 == 501153    -- forged component digest differs (kept node 5)
-#guard forgedWitness.getD 69 0 == 1170548   -- expected stays the spec removeEdge
-#guard honestWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,501156,1170813,2,2,1170548,1170548,263,263]"
-#guard forgedWitnessJson ==
-  "[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,501156,501418,2,2,501153,1170548,263,263]"
+-- Structural component-bind goldens (the field-binding `refP2`/`encCap` digests replace the non-injective
+-- `% 2000003` field hashes; non-vacuity is at the bind gates; the Rust paste is regenerated from JSON).
+#guard honestWitness.getD 68 0 == honestWitness.getD 69 0      -- component binds (honest)
+#guard !(forgedWitness.getD 68 0 == forgedWitness.getD 69 0)   -- forged component differs (REJECTED)
+#guard !(honestWitnessJson == forgedWitnessJson)               -- honest ≠ forged byte streams
 
 #assert_axioms revokeWitnessVec_commit
 #assert_axioms execute_produces_satisfying_witness
