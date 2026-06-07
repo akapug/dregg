@@ -2053,6 +2053,49 @@ mod tests {
         v2_beachhead(DELEGATE_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
     }
 
+    /// `dregg-cellSealA-v2`: Live → Sealed lifecycle transition (touched =
+    /// `kernel.lifecycle`, a `funcComponent`). Honest: actor 0 self-seals cell 0.
+    /// The forged post-state ALSO flips a THIRD cell (2) to Sealed — a bystander
+    /// lifecycle tamper; the component-bind gate `68 = 69` breaks. Goldens pinned by
+    /// `Dregg2.Circuit.Witness.CellSealWitness.{sealDescriptorJson, seal*WitnessJson}`.
+    const CELLSEAL_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-cellSealA-v2","trace_width":72,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_cell_seal() {
+        let honest: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 3, 2000003, 3, 3, 1000000, 1000000, 1000000, 1000000,
+        ];
+        let forged: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 3, 2000004, 3, 3, 1000001, 1000000, 1000000, 1000000,
+        ];
+        v2_beachhead(CELLSEAL_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
+    }
+
+    /// `dregg-cellUnsealA-v2`: Sealed → Live (touched = `kernel.lifecycle`). Honest:
+    /// actor 0 self-unseals cell 0 (it was Sealed). The forged post-state flips a
+    /// THIRD cell (2) to Sealed; the component-bind gate `68 = 69` breaks. Goldens
+    /// pinned by `CellSealWitness.{unsealDescriptorJson, unseal*WitnessJson}`.
+    const CELLUNSEAL_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-cellUnsealA-v2","trace_width":72,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_cell_unseal() {
+        let honest: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 1000003, 1000003, 3, 3, 0, 0, 1000000, 1000000,
+        ];
+        let forged: [i64; 72] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 1000003, 1000004, 3, 3, 1, 0, 1000000, 1000000,
+        ];
+        v2_beachhead(CELLUNSEAL_DESCRIPTOR_JSON, 72, &honest, &forged, 68, 69);
+    }
+
     // ========================================================================
     // The v1 verifiable-execution beachhead tests (the CELL/LOG effect family,
     // `EffectCommit`). Each emits the SAME 74-wire, 5-gate full-state circuit:
@@ -2182,6 +2225,80 @@ mod tests {
             &[
                 ("minted bystander cell", &forged_cell, 68, 69),
                 ("tampered receipt row", &forged_log, 72, 73),
+            ],
+        );
+    }
+
+    /// `dregg-makeSovereignA-v1` (commitment rebind): actor 0 rebinds cell 0 to a
+    /// commitment-only record. Forgeries: (F1) the rebound cell installed with the
+    /// WRONG value (balance 777) ⇒ touched-bind gate `70=71` breaks (the rebind MOVES
+    /// the balance, so the touched gate is meaningful here); (F2) a minted bystander
+    /// cell 2 (50 → 999) ⇒ frame-reuse gate `68=69` breaks.
+    const MAKE_SOVEREIGN_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-makeSovereignA-v1","trace_width":74,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}},{"lhs":{"t":"var","v":72},"rhs":{"t":"var","v":73}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_make_sovereign() {
+        // Lean `MakeSovereignWitness.honestWitnessJson`.
+        let honest: [i64; 74] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 3, 3, 2000005000050, 2000005000050, 1000000, 1000000, 1000000, 1000000,
+        ];
+        // `forgedTouchedWitnessJson` (wrong rebound value): wire 70 != 71.
+        let forged_touched: [i64; 74] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 3, 3, 2000005000050, 2000005000050, 1000777, 1000000, 1000000, 1000000,
+        ];
+        // `forgedCellWitnessJson` (minted bystander cell 2): wire 68 != 69.
+        let forged_cell: [i64; 74] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 3, 3, 2000005000050, 2000005000999, 1000000, 1000000, 1000000, 1000000,
+        ];
+        v1_beachhead(
+            MAKE_SOVEREIGN_DESCRIPTOR_JSON,
+            &honest,
+            &[
+                ("wrong rebound value", &forged_touched, 70, 71),
+                ("minted bystander cell", &forged_cell, 68, 69),
+            ],
+        );
+    }
+
+    /// `dregg-exerciseA-v1` (composite hold-gate, log-only outer layer): actor 0
+    /// holds a `node 1` cap, exercises the edge to target 1 (kernel frozen, auth
+    /// receipt prepended). Forgeries: (F1) a tampered receipt row ⇒ log-bind gate
+    /// `72=73` breaks; (F2) a minted bystander cell 2 (50 → 999) ⇒ frame-reuse gate
+    /// `68=69` breaks.
+    const EXERCISE_HOLD_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-exerciseA-v1","trace_width":74,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}},{"lhs":{"t":"var","v":72},"rhs":{"t":"var","v":73}}]}"#;
+
+    #[test]
+    fn lean_executor_derived_exercise() {
+        // Lean `ExerciseWitness.honestWitnessJson`.
+        let honest: [i64; 74] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 3, 3, 3000100000005000050, 3000100000005000050, 0, 0, 1000000, 1000000,
+        ];
+        // `forgedLogWitnessJson` (tampered auth receipt): wire 72 != 73.
+        let forged_log: [i64; 74] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 3, 3, 3000100000005000050, 3000100000005000050, 0, 0, 1009990, 1000000,
+        ];
+        // `forgedCellWitnessJson` (minted bystander cell 2): wire 68 != 69.
+        let forged_cell: [i64; 74] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 3, 3, 3000100000005000050, 3000100000005000999, 0, 0, 1000000, 1000000,
+        ];
+        v1_beachhead(
+            EXERCISE_HOLD_DESCRIPTOR_JSON,
+            &honest,
+            &[
+                ("tampered auth receipt", &forged_log, 72, 73),
+                ("minted bystander cell", &forged_cell, 68, 69),
             ],
         );
     }
