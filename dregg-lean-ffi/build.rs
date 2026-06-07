@@ -254,7 +254,286 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
             "cargo:warning=dregg-lean-ffi: archive splice failed ({e}) — the archive was left \
              unchanged; a previous-but-consistent build will be linked."
         );
+        return;
     }
+
+    // (4) Closure-completion. The freshly-built Dregg2 objects may import NEW dependency modules
+    // (e.g. a `Mathlib.Order.Extension.Linear` that a concurrent edit just added) whose initializer
+    // objects are NOT in the frozen base archive's dependency closure. Splicing in only the Dregg2
+    // objects would then leave a dangling `_initialize_<dep>` undefined symbol and the FINAL Rust
+    // link fails. So we close the archive: detect undefined `_initialize_*` symbols, compile the
+    // matching `.c` from the Lean source/dependency IR trees, splice them in, and repeat until the
+    // archive is self-contained (or no resolvable `.c` remains — which we surface loudly).
+    complete_initializer_closure(meta, sysroot, archive, out_dir);
+}
+
+/// Discover every `.lake/build/ir` directory that can supply a `.c` for the dependency closure:
+/// the project's own IR, each git-package IR (`.lake/packages/*/.lake/build/ir`), and each
+/// `type:path` dependency's IR (its `dir` is recorded in `lake-manifest.json`; we scan the manifest
+/// text for `"dir": "..."` rather than pull a JSON crate into build-deps).
+fn discover_ir_roots(meta: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let project_ir = meta.join(".lake/build/ir");
+    if project_ir.is_dir() {
+        roots.push(project_ir);
+    }
+    let pkgs = meta.join(".lake/packages");
+    if let Ok(entries) = std::fs::read_dir(&pkgs) {
+        for entry in entries.flatten() {
+            let ir = entry.path().join(".lake/build/ir");
+            if ir.is_dir() {
+                roots.push(ir);
+            }
+        }
+    }
+    // `type:path` deps (e.g. a local mathlib checkout): pull their `dir` from the manifest.
+    if let Ok(text) = std::fs::read_to_string(meta.join("lake-manifest.json")) {
+        for raw in text.split("\"dir\":") {
+            // The value is the first quoted string after the key.
+            if let Some(start) = raw.find('"') {
+                if let Some(end) = raw[start + 1..].find('"') {
+                    let dir = &raw[start + 1..start + 1 + end];
+                    let p = meta.join(dir).join(".lake/build/ir");
+                    if p.is_dir() && !roots.iter().any(|r| r == &p) {
+                        roots.push(p);
+                    }
+                }
+            }
+        }
+    }
+    roots
+}
+
+/// Lean's C-symbol mangling of a module path: each path component has its INTERNAL underscores
+/// doubled (`_`→`__`), then the components are joined with a single `_`. So `A/B/CommMon_.c` →
+/// `A_B_CommMon__` — which is exactly the `<flat>` that appears in `_initialize_<lib>_<flat>`. This
+/// is what lets the resolver match modules whose name itself contains `_` (e.g. mathlib's `CommMon_`,
+/// `Mon_`), which a naive `/`→`_` flatten would get wrong (one `_` instead of two).
+fn lean_mangle_relpath(rel: &Path) -> String {
+    rel.with_extension("")
+        .components()
+        .map(|comp| comp.as_os_str().to_string_lossy().replace('_', "__"))
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+/// Index every `.c` under the IR roots by its Lean-mangled module name (see `lean_mangle_relpath`,
+/// e.g. `Mathlib/Order/Extension/Linear.c` → `Mathlib_Order_Extension_Linear`). An undefined
+/// `_initialize_<lib>_<flat>` symbol then resolves by stripping the `_initialize_` prefix and
+/// matching some suffix of the remainder against this index (the leading `<lib>` token is dropped).
+fn build_cfile_index(roots: &[PathBuf]) -> std::collections::HashMap<String, PathBuf> {
+    let mut index = std::collections::HashMap::new();
+    for root in roots {
+        let mut files = Vec::new();
+        collect_files(root, &mut files);
+        for c in files {
+            if c.extension().map(|e| e == "c").unwrap_or(false) {
+                if let Ok(rel) = c.strip_prefix(root) {
+                    let flat = lean_mangle_relpath(rel);
+                    // First writer wins; module names are unique across roots in practice.
+                    index.entry(flat).or_insert(c);
+                }
+            }
+        }
+    }
+    index
+}
+
+/// The Lean module initializers that are UNDEFINED in the archive AS A WHOLE: referenced (`U`) by
+/// some member but DEFINED (`T`) by NO member. (`nm -u` is unreliable on archives — it lists symbols
+/// undefined in individual members even when another member defines them — so we run full `nm` once
+/// and compute the U-minus-T set ourselves.) These are the genuine dangling dependency edges the
+/// final Rust link would fail on; closure-completion must supply each one's defining object.
+fn undefined_initializers(archive: &Path) -> Vec<String> {
+    let Ok(out) = Command::new("nm").arg(archive).output() else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut defined = std::collections::HashSet::new();
+    let mut referenced = std::collections::HashSet::new();
+    for line in text.lines() {
+        // `nm` archive symbol lines come in two shapes:
+        //   "                 U _sym"   (undefined: type letter, then symbol)
+        //   "0000000000001234 T _sym"   (defined: address, type letter, symbol)
+        // Other lines (blank, "archive.a:", "obj.o:") have no type+symbol and are skipped.
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        let (ty, sym) = match toks.as_slice() {
+            [ty, sym] if ty.len() == 1 => (*ty, *sym), // undefined / no-address
+            [_addr, ty, sym] if ty.len() == 1 => (*ty, *sym), // defined / with-address
+            _ => continue,
+        };
+        let name = sym.trim_start_matches('_');
+        if let Some(rest) = name.strip_prefix("initialize_") {
+            // The toolchain stdlib initializers (Init/Std/Lean/Lake) are supplied by the sysroot
+            // static libs the FINAL Rust link pulls in (rustc-link-lib=static={Init,Std,Lean,Lake});
+            // they have no `.c` in the project/dependency IR and are NOT ours to splice. Skip them so
+            // closure-completion chases only genuinely-missing in-closure modules.
+            let toolchain = ["Init", "Std", "Lean", "Lake"]
+                .iter()
+                .any(|lib| rest == *lib || rest.starts_with(&format!("{lib}_")));
+            if toolchain {
+                continue;
+            }
+            if ty == "U" {
+                referenced.insert(name.to_string());
+            } else {
+                defined.insert(name.to_string());
+            }
+        }
+    }
+    let mut missing: Vec<String> = referenced.difference(&defined).cloned().collect();
+    missing.sort();
+    missing
+}
+
+/// Map a bare initializer symbol (`initialize_<lib>_<flat>`) to its source `.c` via the index. The
+/// `<lib>` token is a single library name (no internal-underscore doubling); we strip `initialize_`,
+/// then strip a KNOWN library token + `_`, leaving exactly the Lean-mangled `<flat>` index key. This
+/// is unambiguous (vs suffix-guessing, which breaks on `__`-mangled names like `CommMon__`). We try
+/// the known tokens longest-first so e.g. `LeanSearchClient` is preferred over a shorter prefix.
+fn resolve_initializer_cfile<'a>(
+    sym: &str,
+    index: &'a std::collections::HashMap<String, PathBuf>,
+) -> Option<(String, &'a PathBuf)> {
+    let rest = sym.strip_prefix("initialize_")?;
+    // Library tokens that prefix a module initializer (the project libs + every dependency package).
+    // `Init`/`Std`/`Lean`/`Lake` are filtered out earlier (sysroot-provided), so they need not appear.
+    let mut libs = [
+        "Dregg2",
+        "Metatheory",
+        "mathlib",
+        "aesop",
+        "batteries",
+        "importGraph",
+        "LeanSearchClient",
+        "plausible",
+        "proofwidgets",
+        "Qq",
+        "Cli",
+    ];
+    libs.sort_by_key(|l| std::cmp::Reverse(l.len()));
+    for lib in libs {
+        if let Some(flat) = rest.strip_prefix(lib).and_then(|r| r.strip_prefix('_')) {
+            if let Some(cfile) = index.get(flat) {
+                return Some((flat.to_string(), cfile));
+            }
+        }
+    }
+    None
+}
+
+/// Iteratively add the dependency-closure objects the freshly-spliced Dregg2 objects need, until the
+/// archive has no resolvable undefined `_initialize_*` edge left. Each pass compiles the missing
+/// `.c` (cached by flattened name under OUT_DIR) and splices them in; new objects can introduce
+/// further deps, hence the loop. Bounded to avoid runaway; unresolved symbols are surfaced loudly.
+fn complete_initializer_closure(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &Path) {
+    let inc = sysroot.join("include");
+    let dep_dir = out_dir.join("dregg2_closure_deps");
+    if std::fs::create_dir_all(&dep_dir).is_err() {
+        return;
+    }
+    let roots = discover_ir_roots(meta);
+    let index = build_cfile_index(&roots);
+
+    for pass in 0..16 {
+        let undefined = undefined_initializers(archive);
+        if undefined.is_empty() {
+            return;
+        }
+        // Resolve as many as we can to source `.c`; compile those not already cached.
+        let mut to_add: Vec<(String, PathBuf)> = Vec::new(); // (objname, objpath)
+        let mut unresolved = Vec::new();
+        for sym in &undefined {
+            match resolve_initializer_cfile(sym, &index) {
+                Some((flat, cfile)) => {
+                    let obj = dep_dir.join(format!("{flat}.o"));
+                    if newer_than(cfile, &obj) {
+                        let status = Command::new("lake")
+                            .args(["env", "leanc", "-c", "-I"])
+                            .arg(&inc)
+                            .arg(cfile)
+                            .arg("-o")
+                            .arg(&obj)
+                            .current_dir(meta)
+                            .status();
+                        if !matches!(status, Ok(s) if s.success()) {
+                            let _ = std::fs::remove_file(&obj);
+                            println!(
+                                "cargo:warning=dregg-lean-ffi: closure leanc failed on {} (dep of \
+                                 {sym})",
+                                cfile.display()
+                            );
+                            continue;
+                        }
+                    }
+                    to_add.push((format!("{flat}.o"), obj));
+                }
+                None => unresolved.push(sym.clone()),
+            }
+        }
+
+        if to_add.is_empty() {
+            if !unresolved.is_empty() {
+                println!(
+                    "cargo:warning=dregg-lean-ffi: {} undefined initializer(s) could not be \
+                     resolved to a `.c` in the IR trees (e.g. {}); the archive may not self-link. \
+                     Re-seed the closure (scripts/seed-dregg2-closure.sh) if the dependency set \
+                     changed substantially.",
+                    unresolved.len(),
+                    unresolved.first().map(|s| s.as_str()).unwrap_or("?")
+                );
+            }
+            return;
+        }
+
+        if let Err(e) = add_objects_to_archive(archive, &to_add, out_dir) {
+            println!("cargo:warning=dregg-lean-ffi: closure splice failed on pass {pass} ({e}).");
+            return;
+        }
+        println!(
+            "cargo:warning=dregg-lean-ffi: closure pass {pass}: added {} dependency object(s).",
+            to_add.len()
+        );
+    }
+    println!(
+        "cargo:warning=dregg-lean-ffi: closure completion hit the 16-pass bound — archive may \
+         still have undefined initializers. Consider re-seeding the closure."
+    );
+}
+
+/// Add (replace) the given objects into the archive, preserving everything else. Like `splice_objects`
+/// but for an arbitrary object set (the dependency-closure additions), and incremental — it does NOT
+/// re-extract the whole archive; it uses `ar r` to insert/replace members by name, then `ranlib`.
+fn add_objects_to_archive(
+    archive: &Path,
+    objs: &[(String, PathBuf)],
+    out_dir: &Path,
+) -> std::io::Result<()> {
+    // Stage the objects under their archive member names in a scratch dir, then `ar r` them in.
+    let stage = out_dir.join("dregg2_closure_stage");
+    if stage.exists() {
+        std::fs::remove_dir_all(&stage)?;
+    }
+    std::fs::create_dir_all(&stage)?;
+    let mut names = Vec::new();
+    for (name, path) in objs {
+        std::fs::copy(path, stage.join(name))?;
+        names.push(name.clone());
+    }
+    // `ar r <archive> *.o` inserts or replaces the named members in place (preserving the other
+    // ~6100 members). We pass the absolute archive path and run in the stage dir for clean names.
+    let r = Command::new("ar")
+        .arg("r")
+        .arg(archive)
+        .args(&names)
+        .current_dir(&stage)
+        .status()?;
+    if !r.success() {
+        return Err(std::io::Error::other(format!("`ar r` exited {r}")));
+    }
+    let _ = Command::new("ranlib").arg(archive).status();
+    let _ = std::fs::remove_dir_all(&stage);
+    Ok(())
 }
 
 /// Whether the archive already contains any `Dregg2_*.o` member (via `ar t`). Used to force a
@@ -268,9 +547,39 @@ fn archive_has_dregg2(archive: &Path) -> bool {
         .any(|l| l.trim().starts_with("Dregg2_") && l.trim().ends_with(".o"))
 }
 
-/// Splice the freshly-built `Dregg2_*.o` into `archive`, preserving every non-Dregg2 dependency
-/// object. Mirrors the shell script: extract → drop old `Dregg2_*.o` → drop in the new ones →
-/// `ar rcs` + `ranlib`. Works in a scratch dir under `OUT_DIR` (writable, target-local).
+/// The set of archive MEMBER names (e.g. `Await.o`, `Dregg2_Spec_Await.o`) that define a project
+/// module initializer (`_initialize_Dregg2_*` / `_initialize_Metatheory_*`). Computed with `nm -A`,
+/// which prefixes each symbol line with the member location. The prefix format differs by platform:
+///   * macOS/llvm-nm: `<archive>:<member.o>: <addr> T <sym>`
+///   * GNU/binutils:  `<archive>[<member.o>]: <addr> T <sym>`
+/// We extract the member by taking the basename of the path segment ending in `.o`, so the splice can
+/// purge stale project objects regardless of how they were named when the base archive was seeded.
+fn members_defining_project_initializers(archive: &Path) -> std::collections::HashSet<String> {
+    let mut members = std::collections::HashSet::new();
+    let Ok(out) = Command::new("nm").arg("-A").arg(archive).output() else {
+        return members;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        // Only DEFINING (`T`) lines for a project initializer; skip undefined (`U`) references.
+        if !(line.contains("T _initialize_Dregg2_") || line.contains("T _initialize_Metatheory_")) {
+            continue;
+        }
+        // The location prefix is everything up to the first `: ` (space-separated from the address).
+        let Some(prefix) = line.split(": ").next() else { continue };
+        // Strip a trailing `]` (GNU bracket form), then take the basename and keep it iff it's a `.o`.
+        let prefix = prefix.trim_end_matches(']');
+        let member = prefix.rsplit(['/', ':', '[']).next().unwrap_or(prefix);
+        if member.ends_with(".o") {
+            members.insert(member.to_string());
+        }
+    }
+    members
+}
+
+/// Splice the freshly-built `Dregg2_*.o` into `archive`, preserving every non-project dependency
+/// object. Extract → purge stale project members (by defined symbol, see above) → drop in the fresh
+/// `Dregg2_*.o` → `ar rcs` + `ranlib`. Works in a scratch dir under `OUT_DIR` (writable, local).
 fn splice_objects(archive: &Path, obj_dir: &Path, out_dir: &Path) -> std::io::Result<()> {
     let work = out_dir.join("dregg2_splice_work");
     if work.exists() {
@@ -288,11 +597,21 @@ fn splice_objects(archive: &Path, obj_dir: &Path, out_dir: &Path) -> std::io::Re
         return Err(std::io::Error::other(format!("`ar x` exited {extract}")));
     }
 
-    // Replace the Dregg2 members: remove the extracted old ones, copy in the freshly compiled ones.
+    // Purge EVERY stale project-module object, by DEFINED SYMBOL not just filename. The base archive
+    // was historically seeded with SHORT member names (`Await.o`, `Transfer.o`, …) while our splice
+    // uses flattened names (`Dregg2_Spec_Await.o`); a filename-only purge would leave the short-named
+    // stale copies behind as DUPLICATE definitions — and, when a concurrent edit renames/deletes a
+    // module, those stale copies carry dangling references to the old name (the empirical cause of the
+    // `_initialize_…burnAWitness` / `_initialize_Metatheory_Metatheory_Core` link failures). So we
+    // drop every extracted member that defines a `_initialize_Dregg2_*` or `_initialize_Metatheory_*`
+    // symbol, then re-add ONLY the freshly compiled objects.
+    let stale_members = members_defining_project_initializers(archive);
     for entry in std::fs::read_dir(&work)?.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("Dregg2_") && name.ends_with(".o") {
+        let fname = entry.file_name();
+        let name = fname.to_string_lossy();
+        let is_flattened_project = (name.starts_with("Dregg2_") || name.starts_with("Metatheory_"))
+            && name.ends_with(".o");
+        if is_flattened_project || stale_members.contains(name.as_ref()) {
             std::fs::remove_file(entry.path())?;
         }
     }
