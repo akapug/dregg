@@ -596,10 +596,16 @@ impl NodeState {
         // Derive the silo ID from the cipherclerk's public key.
         let silo_id: SiloId = *blake3::hash(cclerk.public_key().as_bytes()).as_bytes();
 
-        // Issue 10: Log a warning — node starts in discovery mode with no federation keys.
-        tracing::warn!(
-            "node starting with zero federation keys — operating in discovery mode. \
-             Attested roots will NOT be finalized until federation keys are loaded."
+        // Issue 10: the freshly-constructed state has no federation keys yet.
+        // This is expected: `run_node` loads them from `genesis.json` (via
+        // `set_federation_keys`) immediately after construction, which emits the
+        // definitive "federation keys loaded — exiting discovery mode" line. We
+        // log this at DEBUG (not WARN) so a normal genesis boot does not surface
+        // a spurious "zero federation keys" alarm; a node that truly never loads
+        // keys still reveals itself by the ABSENCE of the "keys loaded" line.
+        tracing::debug!(
+            "node state constructed with zero federation keys — awaiting genesis \
+             load. Attested roots will not finalize until federation keys are set."
         );
 
         Ok(Self {

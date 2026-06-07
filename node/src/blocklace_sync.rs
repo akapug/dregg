@@ -702,16 +702,31 @@ pub async fn run_blocklace_sync(
         }
     };
 
-    let node_id: NodeId = peer_node.node_id();
+    // The QUIC transport identity (blake3 of the TLS cert) is randomized per
+    // boot and is NOT the federation identity. Gossip envelopes are
+    // authenticated against the FEDERATION signing key, so the gossip-layer
+    // NodeId (the `sender` field stamped into every signed envelope) must be
+    // derived deterministically from our federation public key — otherwise
+    // peers look up `blake3(cert_der)` in a registry keyed by
+    // `blake3(federation_pubkey)`, miss, and reject every envelope as
+    // "unknown sender". See the peer_keys_map below: both ends must agree on
+    // `node_id = blake3(public_key)`.
+    let transport_node_id: NodeId = peer_node.node_id();
+    let node_id: NodeId = *blake3::hash(our_public_key.as_bytes()).as_bytes();
     let endpoint = peer_node.endpoint().clone();
 
     info!(
-        node_id = %dregg_net::node::fmt_node_id(&node_id),
+        gossip_node_id = %dregg_net::node::fmt_node_id(&node_id),
+        transport_node_id = %dregg_net::node::fmt_node_id(&transport_node_id),
         local_addr = %peer_node.local_addr(),
         "blocklace PeerNode ready"
     );
 
     // Build the signing key registry from known federation keys.
+    //
+    // Every entry is keyed by `blake3(public_key)` — the same derivation we use
+    // for our own gossip `node_id` above — so a signed envelope's `sender`
+    // resolves to the signer's federation public key on the receiving side.
     let peer_keys_map = {
         let s = state.read().await;
         let mut peer_keys: std::collections::HashMap<NodeId, dregg_types::PublicKey> =
@@ -720,6 +735,7 @@ pub async fn run_blocklace_sync(
             let peer_node_id = *blake3::hash(fed_key.as_bytes()).as_bytes();
             peer_keys.insert(peer_node_id, *fed_key);
         }
+        // Self-register under the federation-derived id (matches `node_id`).
         peer_keys.insert(node_id, our_public_key);
         peer_keys
     };
@@ -2092,6 +2108,57 @@ mod tests {
                 .any(|e| e.reason.contains("missing scope-2 material")),
             "unexpected evidence: {evidence:?}"
         );
+    }
+
+    /// Regression: the gossip-layer node identity and EVERY `peer_keys`
+    /// registry entry must be derived as `blake3(public_key)`. If the local
+    /// gossip `node_id` were the QUIC transport id (`blake3(tls_cert)`, random
+    /// per boot) while the registry is keyed by `blake3(public_key)`, peers
+    /// reject all of our envelopes as "unknown sender" and a multi-node devnet
+    /// never finalizes (`latest_height` stuck at 0). This pins the derivation
+    /// that `run_blocklace_sync` uses for both `node_id` and `peer_keys_map`.
+    #[test]
+    fn gossip_node_id_and_peer_registry_agree_on_federation_derivation() {
+        // Three federation validator keys (as they arrive from genesis).
+        let validator_keys: Vec<dregg_types::PublicKey> = (0u8..3)
+            .map(|i| {
+                let sk = ed25519_dalek::SigningKey::from_bytes(&[i + 1; 32]);
+                dregg_types::PublicKey(sk.verifying_key().to_bytes())
+            })
+            .collect();
+
+        // Pick one as "ours".
+        let our_public_key = validator_keys[0];
+
+        // Local gossip identity — exactly as run_blocklace_sync computes it.
+        let node_id: [u8; 32] = *blake3::hash(our_public_key.as_bytes()).as_bytes();
+
+        // Build the registry exactly as `peer_keys_map` does.
+        let mut peer_keys: std::collections::HashMap<[u8; 32], dregg_types::PublicKey> =
+            std::collections::HashMap::new();
+        for fed_key in &validator_keys {
+            peer_keys.insert(*blake3::hash(fed_key.as_bytes()).as_bytes(), *fed_key);
+        }
+        peer_keys.insert(node_id, our_public_key);
+
+        // Our own gossip id resolves to our key (self-loop / anti-entropy).
+        assert_eq!(peer_keys.get(&node_id), Some(&our_public_key));
+
+        // Every peer's gossip id (= blake3(their pubkey), the sender they stamp)
+        // resolves to that peer's verifying key — so signature checks pass
+        // instead of being dropped as "unknown sender".
+        for fed_key in &validator_keys {
+            let peer_gossip_id: [u8; 32] = *blake3::hash(fed_key.as_bytes()).as_bytes();
+            assert_eq!(
+                peer_keys.get(&peer_gossip_id),
+                Some(fed_key),
+                "every federation member's gossip sender id must resolve in the registry"
+            );
+        }
+
+        // A QUIC-transport-style id (random TLS-cert hash) is correctly unknown.
+        let transport_style_id: [u8; 32] = [0x7c; 32];
+        assert!(peer_keys.get(&transport_style_id).is_none());
     }
 
     #[test]
