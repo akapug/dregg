@@ -161,6 +161,17 @@ def forgedWitness : List Int := witnessOf sPre argsRef sForged
 #guard honestWitness.getD 68 0 == honestWitness.getD 69 0
 #guard honestWitness.getD 0 0 == 1
 
+-- RIGHTS-AMPLIFICATION anti-ghost tooth (THE headline for an attenuation effect — the class the OLD
+-- rights-dropping `capCode` MISSED). The attenuated grant keeps ONLY `[write]`, but recipient 1 is
+-- forged to receive `endpoint 5 [write, grant]` (an EXTRA `grant` right beyond the attenuation = a
+-- privilege escalation). `encCap` binds the full rights list, so the component-bind gate `68 ≠ 69`
+-- REJECTS — the field-binding surface ENFORCES attenuation, where the toy fold did not.
+def sForgedAmplify : RecChainedState :=
+  { kernel := { kPre with
+      caps := fun c => if c = 1 then [Cap.endpoint 5 [Auth.write, Auth.grant]] else sPost.kernel.caps c }
+  , log := sPost.log }
+#guard decide (satisfied (effectCircuit2 delAttenEC) (encodeE2 SC delAttenEC sPre argsRef sForgedAmplify)) == false
+
 /-! ## §5 — JSON export. -/
 
 def delegateAttenAirName : String := "dregg-delegateAttenA-v2"
@@ -172,9 +183,12 @@ def forgedWitnessJson : String := witnessJson forgedWitness
 #guard emittedDelegateAtten.constraints.length == 4
 #guard emittedDelegateAtten.traceWidth == 72
 #guard descriptorJson == "{\"name\":\"dregg-delegateAttenA-v2\",\"trace_width\":72,\"constraints\":[{\"lhs\":{\"t\":\"var\",\"v\":0},\"rhs\":{\"t\":\"const\",\"v\":1}},{\"lhs\":{\"t\":\"var\",\"v\":66},\"rhs\":{\"t\":\"var\",\"v\":67}},{\"lhs\":{\"t\":\"var\",\"v\":68},\"rhs\":{\"t\":\"var\",\"v\":69}},{\"lhs\":{\"t\":\"var\",\"v\":70},\"rhs\":{\"t\":\"var\",\"v\":71}}]}"
-#guard honestWitness.getD 68 0 == 1015001015000000
-#guard forgedWitness.getD 68 0 == 1017019015000000
-#guard forgedWitness.getD 69 0 == 1015001015000000
+-- Structural component-bind goldens (reuses DelegateWitness.capsDigConcrete, now the field-binding
+-- `refP2`/`encCap` surface — arbitrary-precision, so non-vacuity is at the bind gates; the Rust paste
+-- is regenerated from the JSON accessors).
+#guard honestWitness.getD 68 0 == honestWitness.getD 69 0      -- component binds (honest)
+#guard !(forgedWitness.getD 68 0 == forgedWitness.getD 69 0)   -- forged component differs (REJECTED)
+#guard !(honestWitnessJson == forgedWitnessJson)               -- honest ≠ forged byte streams
 
 #assert_axioms delegateAttenWitnessVec_commit
 #assert_axioms execute_produces_satisfying_witness
