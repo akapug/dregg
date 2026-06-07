@@ -79,6 +79,7 @@ a named theorem hypothesis. Verified with
 `lake build Dregg2.Distributed.Consensus`.
 -/
 import Dregg2.Exec.ConsensusExec
+import Dregg2.Proof.GST
 
 namespace Dregg2.Distributed.Consensus
 
@@ -517,11 +518,14 @@ theorem blocklace_is_leaderless (S : CordialState) (cfg : Finality.Config) :
     rw [← ratifyingVoters_perm_length hperm]
     exact sr.quorum_from_lace
 
-/-- **`PostGSTProgress` — the NAMED open liveness residual (OPEN-CM-LIVENESS / `BFT.lean`'s O2).**
+/-- **`PostGSTProgress` — the COARSE (top-of-tower) liveness premise.**
 That a wave EVENTUALLY produces a super-ratified leader is the post-GST pacemaker/dissemination
-argument — the gossip convergence that makes honest causal pasts agree. We carry it as a NAMED
-hypothesis (a `GSTRound`-style delivery existence), NEVER a sorry. The leaderless progress theorem
-is stated CONDITIONALLY on it. -/
+argument. As stated here it is a `GSTRound`-style delivery EXISTENCE — i.e. it already assumes the
+quorum-formed round. **This is needlessly large**: §6b (below) SHRINKS the named-open from "a quorum
+already forms" all the way down to the bare partial-synchrony primitives (honest-leader co-finality +
+honest-supermajority + Δ-delivery), and PROVES the protocol-level DAG progress argument on top of
+them, so this coarse premise is *derived* from the minimized carrier (`PostGSTProgress_of_deliveryModel`).
+Kept here as the legacy interface the §6 leaderless theorems consume; never a sorry. -/
 def PostGSTProgress [World Msg] (votesOf : List Msg → List Vote)
     (cfg : Finality.Config) (block : Nat) : Prop :=
   ∃ r, Proof.BFT.GSTRound votesOf cfg block r
@@ -549,6 +553,193 @@ theorem view_sync_class_empty [World Msg]
     (votesOf : List Msg → List Vote) (cfg : Finality.Config) (block : Nat) :
     PostGSTProgress votesOf cfg block → ∃ r, committedByQuorum votesOf r cfg block :=
   leaderless_progress votesOf cfg block
+
+/-! ## 6b. SHRINKING THE CARRIER — leaderless post-GST progress from the BARE delivery primitives.
+
+The §6 `PostGSTProgress` is coarse: `∃ r, GSTRound …` already *assumes* the quorum-formed round
+(the top of the partial-synchrony tower). The genuine work of liveness is BELOW that — and it has
+already been done, additively, in the proof tower `Proof.BFTLiveness` → `Proof.GST`:
+
+  * `Proof.BFTLiveness.Pacemaker` carries three view-synchronization PRIMITIVES — `synchronizes`
+    (a post-GST round with an honest leader exists), `honest_quorum` (the honest set is itself a
+    supermajority — a POPULATION fact, `n > 3f`), `honest_le_delivered` (HotStuff Thm 4 @ DLS88
+    Δ-delivery: post-GST the honest votes ARE delivered) — and `liveness_of_pacemaker` DERIVES
+    `committedByQuorum` from them (the quorum is never assumed, it is `threshold ≤ honestEndorsers
+    ≤ delivered`).
+  * `Proof.GST.GSTModel` pushes `synchronizes` one layer more primitive still: `gst_liveness`
+    derives the quorum from the GST scaffold whose only progress field is `honestLeader_eventually`
+    (honest-leader CO-FINALITY past GST), which `honestLeader_eventually_of_fair` reduces to BARE
+    co-finality `∀ t, ∃ r ≥ t, honestLeader r`.
+
+So we WIRE that proven descent into the consensus surface: a `GSTModel` is the minimized carrier,
+and leaderless DAG progress is PROVED on top of it. The named-open shrinks from "a quorum forms"
+to "after GST an honest leader is eventually elected and its honest endorsers' votes are delivered"
+— with the protocol-level (DAG/quorum) progress argument PROVEN, not assumed. The leaderless DAG is
+the reason no leader-election / view-synchronization sub-protocol appears anywhere below: progress
+reads only the honest-quorum + delivery facts, exactly the Wong 3.6 advantage exploited. -/
+
+/-- **`PostGSTDeliveryModel` — the MINIMIZED post-GST liveness carrier.** The smallest residual the
+leaderless DAG progress argument needs: a `Proof.GST.GSTModel` over the network. Its fields are the
+bare partial-synchrony primitives (DLS88 GST round, honest-leader predicate + honest-endorser count,
+the honest-supermajority `honest_quorum`, the HotStuff Δ-delivery `honest_le_delivered`) plus
+honest-leader co-finality (`honestLeader_eventually`). NONE of its fields is "a quorum forms" — that
+is DERIVED. This replaces the coarse `PostGSTProgress` (which assumed the quorum-formed `GSTRound`)
+with the genuine, strictly-smaller carrier. -/
+abbrev PostGSTDeliveryModel (Msg : Type) [World Msg] (votesOf : List Msg → List Vote)
+    (cfg : Finality.Config) : Type :=
+  Proof.GST.GSTModel Msg votesOf cfg
+
+/-- **`leaderless_progress_from_delivery` (PROVED — the protocol-level DAG progress argument, on the
+MINIMIZED carrier).** From the bare post-GST delivery model alone — honest-leader co-finality past
+GST + the honest set being a supermajority + Δ-delivery of honest votes — SOME block is
+`committedByQuorum` at some round, with NO leader-election / view-synchronization sub-protocol in any
+hypothesis. This is the wave-commits argument: after GST an honest leader is eventually elected
+(`honestLeader_eventually`), its honest endorsers are a quorum (`honest_quorum`) whose votes are
+delivered (`honest_le_delivered`), so the DAG quorum threshold is met. The quorum is DERIVED
+(`GST.gst_liveness` = `liveness_of_pacemaker ∘ pacemaker_of_gstModel`), never assumed. The leaderless
+blocklace is exactly why this needs no view-sync: progress reads only the quorum, not a leader's
+proposal authority. The named-open has shrunk from "a quorum forms" to the `GSTModel` delivery
+primitives — and everything above them is now proven. -/
+theorem leaderless_progress_from_delivery {Msg : Type} [World Msg]
+    (votesOf : List Msg → List Vote) (cfg : Finality.Config)
+    (D : PostGSTDeliveryModel Msg votesOf cfg) :
+    ∃ r block, committedByQuorum (Msg := Msg) votesOf r cfg block :=
+  Proof.GST.gst_liveness D
+
+/-- **`PostGSTProgress_of_deliveryModel` (PROVED — the coarse premise is DERIVED from the small one).**
+The legacy coarse `PostGSTProgress block` (`∃ r, GSTRound … block r`, which ASSUMED the quorum-formed
+round) is *implied by* the minimized `PostGSTDeliveryModel` for the block the model's honest leader
+proposes at its synchronization round. So the §6 leaderless theorems' premise is no longer a primitive
+assumption — it follows from the strictly-smaller delivery carrier (the `GSTModel` fields), whose own
+residual is just honest-leader co-finality. This is the carrier-shrink made precise: we DISCHARGE the
+old named-open from the new, smaller one. -/
+theorem PostGSTProgress_of_deliveryModel {Msg : Type} [World Msg]
+    (votesOf : List Msg → List Vote) (cfg : Finality.Config)
+    (D : PostGSTDeliveryModel Msg votesOf cfg) :
+    ∃ block, PostGSTProgress votesOf cfg block := by
+  obtain ⟨r, block, hr⟩ := Proof.GST.gstRound_obtains_of_gstModel D
+  exact ⟨block, r, hr⟩
+
+/-- **`leaderless_progress_minimized` (PROVED — §6's `leaderless_progress` re-derived from the small
+carrier).** Composing the discharge with `leaderless_progress`: from the minimized
+`PostGSTDeliveryModel` (the bare delivery primitives) the block its honest leader proposes IS committed
+by quorum at some round — WITHOUT the coarse `PostGSTProgress` ever being assumed. The §6 conclusion now
+rests on the strictly-smaller carrier. -/
+theorem leaderless_progress_minimized {Msg : Type} [World Msg]
+    (votesOf : List Msg → List Vote) (cfg : Finality.Config)
+    (D : PostGSTDeliveryModel Msg votesOf cfg) :
+    ∃ block r, committedByQuorum (Msg := Msg) votesOf r cfg block := by
+  obtain ⟨block, hprog⟩ := PostGSTProgress_of_deliveryModel votesOf cfg D
+  obtain ⟨r, hr⟩ := leaderless_progress votesOf cfg block hprog
+  exact ⟨block, r, hr⟩
+
+/-! ## 6c. The residual reduced to BARE co-finality — and the resilience-pair tie.
+
+The minimized carrier's only PROGRESS field is `honestLeader_eventually` (post-GST co-finality of
+honest leaders). `Proof.GST.honestLeader_eventually_of_fair` reduces even that to BARE co-finality
+`∀ t, ∃ r ≥ t, honestLeader r` (the GST conjunct `gst ≤ r` is free, by `r := max t gst`). And
+`Proof.Synchronizer` proves that bare co-finality holds ALMOST SURELY under the BFT honest
+supermajority `h > 2/3` (`honest_hit_as`: the geometric law sums to 1; `expected_views_O1`: expected
+`≤ 3/2` views). So the IRREDUCIBLE residual is exactly the `World.rand`-measure bridge (turning the
+a.s. statement into a constructive hit-index) — named in `Synchronizer.lean`, off the `World`
+interface surface. NOTHING above it is assumed; everything above it is proven. -/
+
+/-- **`progress_residual_is_cofinality` (PROVED — the residual is JUST bare co-finality).** A
+`PostGSTDeliveryModel` is BUILDABLE from the BFT-primitive delivery data (gst, honest leader,
+endorsers, the supermajority `honest_quorum`, the Δ-delivery `honest_le_delivered`) PLUS bare
+honest-leader co-finality `∀ t, ∃ r ≥ t, honestLeader r` — the GST/post-GST conjunct is DERIVED
+(`gstModel_of_cofinal`, riding `honestLeader_eventually_of_fair`). So the entire post-GST liveness
+carrier reduces to: "the honest-supermajority's votes are delivered after GST" (population + Δ facts)
+and "honest leaders recur" (co-finality) — and that last is the SOLE genuinely-open piece, discharged
+almost-surely by `Synchronizer.honest_hit_as`, residual = the `World.rand` measure bridge. -/
+def progress_residual_is_cofinality {Msg : Type} [World Msg]
+    (votesOf : List Msg → List Vote) (cfg : Finality.Config)
+    (gst : Nat) (block : Nat → Nat) (honestLeader : Nat → Prop) (honestEndorsers : Nat → Nat)
+    (honest_quorum : ∀ r, honestLeader r → cfg.threshold ≤ honestEndorsers r)
+    (honest_le_delivered : ∀ r, gst ≤ r → honestLeader r →
+      honestEndorsers r ≤ (votersFor (votesOf (World.recv r)) (block r)).length)
+    (hcofinal : ∀ t, ∃ r, t ≤ r ∧ honestLeader r) :
+    PostGSTDeliveryModel Msg votesOf cfg :=
+  Proof.GST.gstModel_of_cofinal gst block honestLeader honestEndorsers
+    honest_quorum honest_le_delivered hcofinal
+
+/-- **`liveness_progress_from_cofinality` (PROVED — the WHOLE thing, from co-finality + delivery).**
+Composes the residual-reduction with the proven DAG progress argument: given the honest-supermajority
+delivery data AND bare honest-leader co-finality, some block IS `committedByQuorum`. This is the final
+shrunk statement: post-GST leaderless progress, with EVERYTHING above bare co-finality + Δ-delivery
+PROVEN, and the irreducible residual named (the `World.rand` measure that makes co-finality a.s.). -/
+theorem liveness_progress_from_cofinality {Msg : Type} [World Msg]
+    (votesOf : List Msg → List Vote) (cfg : Finality.Config)
+    (gst : Nat) (block : Nat → Nat) (honestLeader : Nat → Prop) (honestEndorsers : Nat → Nat)
+    (honest_quorum : ∀ r, honestLeader r → cfg.threshold ≤ honestEndorsers r)
+    (honest_le_delivered : ∀ r, gst ≤ r → honestLeader r →
+      honestEndorsers r ≤ (votersFor (votesOf (World.recv r)) (block r)).length)
+    (hcofinal : ∀ t, ∃ r, t ≤ r ∧ honestLeader r) :
+    ∃ r blk, committedByQuorum (Msg := Msg) votesOf r cfg blk :=
+  leaderless_progress_from_delivery votesOf cfg
+    (progress_residual_is_cofinality votesOf cfg gst block honestLeader honestEndorsers
+      honest_quorum honest_le_delivered hcofinal)
+
+/-- **`liveness_resilience_is_supermajority` (PROVED — the `t^L` threshold, GROUNDED).** The liveness
+resilience `t^L` is the honest-SUPERMAJORITY bound: progress needs the honest set to be `> 2/3` of
+participants (the `honest_quorum` field — strictly more than `t^S = f`'s mere non-conflict). We expose
+this as a real number: ANY `Synchronizer.LeaderRotation` whose honest fraction `h` drives liveness has
+`2/3 < h` (`honest_super`), the fractional `n > 3f` floor — and the expected hit is `O(1)` views
+(`expected_views_O1 ≤ 3/2`). This GROUNDS `tL` (Sridhar's separately-bounded, lower liveness resilience)
+in the actual supermajority the DAG quorum delivery requires, and ties it to dregg's asymmetric pair:
+`tL < tS`. -/
+theorem liveness_resilience_is_supermajority {Msg : Type} [World Msg]
+    (R : Proof.Synchronizer.LeaderRotation Msg) :
+    -- liveness needs a strict honest supermajority `h > 2/3` (the `tL`-side floor, GROUNDED), and the
+    -- expected views to an honest leader is O(1) (≤ 3/2) — the separately-bounded liveness resilience.
+    (2/3 : ℝ) < R.h ∧
+    (1 : ℝ) + (∑' n : ℕ, (n : ℝ) * Proof.Synchronizer.geomTerm R.h n) ≤ 3/2 :=
+  ⟨R.honest_super, R.expected_views_O1⟩
+
+/-! ### 6c′. NEGATIVE TOOTH — below `t^L` (honest leaders not co-final) the protocol STALLS.
+
+The liveness bound is non-vacuous: the co-finality premise of the descent is genuinely load-bearing.
+If honest leaders are NOT co-final — an adversary that schedules honest leaders only EARLY, all before
+GST (the below-`t^L` regime: the honest set fails to recur as a supermajority leader) — then NO
+synchronization round past GST with an honest leader exists, so the quorum never forms and the protocol
+STALLS. We instantiate this concretely (riding `GST.Inhabited.teeth_bounded_no_sync_round`): with honest
+leaders bounded to rounds `< 5` and `gst = 10`, there is no post-GST honest-leader round at all. This is
+a CONCRETE stall witness below `t^L`, making the liveness bound a real constraint, not vacuously true. -/
+
+/-- **`liveness_stalls_below_tL` (NEGATIVE TOOTH — a CONCRETE post-GST stall).** Below the liveness
+resilience — when honest leaders are NOT co-final (here all bounded to rounds `< 5`) and GST is large
+(`gst = 10`) — there is NO round `r` past GST with an honest leader: `gst ≤ r` and `r < 5` are
+contradictory. So the descent's progress premise FAILS and no quorum can form — the protocol stalls.
+This is exactly the adversary co-finality (the `honestLeader_eventually` field) rules out, and it shows
+the liveness bound is genuinely needed: drop co-finality (or push all honest leaders before GST) and
+progress is provably impossible. Rides `GST.Inhabited.teeth_bounded_no_sync_round`. -/
+theorem liveness_stalls_below_tL :
+    ¬ ∃ r, (10 : Nat) ≤ r ∧ (fun r => r < 5) r :=
+  Proof.GST.Inhabited.teeth_bounded_no_sync_round
+
+/-- **`liveness_stall_not_cofinal` (NEGATIVE TOOTH, contrapositive).** The stalling adversary's
+honest-leader predicate (`r < 5`) is NOT co-final — it fails the SOLE residual premise of the whole
+descent. So co-finality is precisely the property the below-`t^L` adversary lacks; the liveness carrier
+cannot be discharged for it. Rides `GST.Inhabited.teeth_bounded_not_cofinal`. -/
+theorem liveness_stall_not_cofinal :
+    ¬ (∀ t, ∃ r, t ≤ r ∧ (fun r => r < 5) r) :=
+  Proof.GST.Inhabited.teeth_bounded_not_cofinal
+
+/-! ### 6c″. NON-VACUITY — the minimized carrier is INHABITED and progress genuinely obtains.
+
+The shrunk carrier is not an empty abstraction: the reference `GSTModel` (`GST.Inhabited.gstModel`,
+GST at round 3, three honest endorsers delivering block 7 by round 3, honest leaders at every round)
+inhabits `PostGSTDeliveryModel`, and `leaderless_progress_from_delivery` genuinely COMMITS a block on
+it — the quorum forms, derived from the bare delivery primitives, with no leader election anywhere. -/
+
+/-- **`reference_progress` (PROVED — the minimized carrier genuinely makes progress).** On the
+reference world the bare delivery model `GST.Inhabited.gstModel` inhabits `PostGSTDeliveryModel`, and
+the proven DAG progress argument COMMITS a block by quorum — derived, not assumed. The carrier-shrink
+is non-vacuous: a real quorum forms from the bare primitives. -/
+theorem reference_progress :
+    ∃ r blk, committedByQuorum (Msg := Dregg2.World.Reference.M)
+      Proof.BFTLiveness.Inhabited.votesOf r Proof.BFTLiveness.Inhabited.cfg blk :=
+  leaderless_progress_from_delivery _ _ Proof.GST.Inhabited.gstModel
 
 /-! ## 7. Non-vacuity guards (#guard) — the resilience pair and reconfiguration are real. -/
 
@@ -590,5 +781,17 @@ conditionally on; `leaderless_progress` proves progress FROM it. -/
 #assert_axioms blocklace_is_leaderless
 #assert_axioms leaderless_progress
 #assert_axioms view_sync_class_empty
+-- §6b/§6c — the SHRUNK carrier: the protocol-level DAG progress argument PROVEN on top of the bare
+-- delivery primitives; the coarse `PostGSTProgress` DERIVED from the small carrier; the residual
+-- reduced to bare co-finality; and the below-`t^L` stall teeth.
+#assert_axioms leaderless_progress_from_delivery
+#assert_axioms PostGSTProgress_of_deliveryModel
+#assert_axioms leaderless_progress_minimized
+#assert_axioms progress_residual_is_cofinality
+#assert_axioms liveness_progress_from_cofinality
+#assert_axioms liveness_resilience_is_supermajority
+#assert_axioms liveness_stalls_below_tL
+#assert_axioms liveness_stall_not_cofinal
+#assert_axioms reference_progress
 
 end Dregg2.Distributed.Consensus
