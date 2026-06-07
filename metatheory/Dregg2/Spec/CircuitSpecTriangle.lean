@@ -106,6 +106,10 @@ import Dregg2.Circuit.Inst.createCellA
 import Dregg2.Circuit.Inst.spawnA
 import Dregg2.Circuit.Inst.createCellFromFactoryA
 import Dregg2.Circuit.Inst.cellDestroyA
+import Dregg2.Circuit.Inst.balanceA
+import Dregg2.Circuit.Inst.queueResizeA
+import Dregg2.Circuit.Inst.pipelinedSendA
+import Dregg2.Circuit.Inst.exerciseA
 import Dregg2.Spec.FunctionalRefinement
 
 namespace Dregg2.Spec.CircuitSpecTriangle
@@ -1752,6 +1756,88 @@ theorem createFromFactory_circuit_rejects_wrong_accounts
   fun h => hwrong (createFromFactory_circuit_pins_intent S LE cN hN hLE DBal hDBal DCell hDCell DSC hDSC
     DAuth hDAuth hRest hLog s args s' h)
 
+/-! ## §19 — THE TAIL: balanceA (2nd value-movement instance) / queue-resize / pipelined-send /
+exercise. -/
+
+/-! ### §19a — BALANCE-A: the SECOND v2 instance of the value movement, pinned to `intentTransfer`. -/
+
+open Dregg2.Circuit.Inst.BalanceA (balanceAE balanceA_full_sound)
+open Dregg2.Circuit.Spec.BalanceMovement (BalanceMovementSpec)
+
+/-- **BALANCE-A circuit pins the intent debit+credit.** The alternate `balanceAE` instance of the
+value movement also forces the post-`bal` to be EXACTLY `intentTransfer … src dst a amt` (same intent
+as `transfer`, §2). -/
+theorem balanceA_circuit_pins_intent
+    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+    (hRest : RestIffNoBal S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : Dregg2.Circuit.Inst.BalanceA.BalanceArgs) (s' : RecChainedState)
+    (h : satisfiedE2 S (balanceAE D hD) (encodeE2 S (balanceAE D hD) s args s')) :
+    s'.kernel.bal = intentTransfer s.kernel.bal args.t.src args.t.dst args.a args.t.amt := by
+  have hspec : BalanceMovementSpec s args.t args.a s' :=
+    balanceA_full_sound S D hD hRest hLog s args s' h
+  have hne : args.t.src ≠ args.t.dst := hspec.1.2.2.2.1
+  exact pin_intent_of_bridge hspec.2.1 (intentTransfer_eq_recTransferBal _ _ _ _ _ hne).symm
+
+/-! ### §19b — QUEUE-RESIZE: circuit pins the intent capacity-change over the found queue. -/
+
+open Dregg2.Circuit.Inst.QueueResizeA (ResizeArgs queueResizeE queueResizeA_full_sound)
+open Dregg2.Circuit.Spec.QueueFifoCore (QueueResizeSpec)
+
+/-- **QUEUE-RESIZE circuit pins the intent capacity change.** A verifying `queueResizeE` witness
+forces, for the found queue `q` (by `id`), the post-`queues` to be EXACTLY `replaceQueue … id { q with
+capacity := newCap }` (the capacity changed in place, buffer + every other queue preserved). -/
+theorem queueResize_circuit_pins_intent
+    (S : Surface2) (LE : QueueRecord → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : Dregg2.Circuit.Inst.QueueResizeA.RestIffNoQueues S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : ResizeArgs) (s' : RecChainedState) (q : QueueRecord)
+    (hq : findQueue s.kernel.queues args.id = some q)
+    (h : satisfiedE2 S (queueResizeE LE cN hN hLE) (encodeE2 S (queueResizeE LE cN hN hLE) s args s')) :
+    s'.kernel.queues = replaceQueue s.kernel.queues args.id { q with capacity := args.newCap } := by
+  have hspec : QueueResizeSpec s args.id args.newCap args.actor args.cell s' :=
+    queueResizeA_full_sound S LE cN hN hLE hRest hLog s args s' h
+  exact hspec.2.1 q hq
+
+/-! ### §19c — PIPELINED-SEND: log-only; circuit pins the intent receipt advance. -/
+
+open Dregg2.Circuit.Inst.PipelinedSendA (PipelinedSendArgs pipelinedSendE pipelinedSendA_full_sound)
+open Dregg2.Circuit.Spec.QueuePipelinedSend (PipelinedSendSpec pipelinedSendReceipt)
+
+/-- **PIPELINED-SEND circuit pins the intent log advance.** `pipelinedSend` is LOG-ONLY (the kernel is
+frozen). A verifying witness forces the post-`log` to be EXACTLY `pipelinedSendReceipt actor :: log`. -/
+theorem pipelinedSend_circuit_pins_intent
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : PipelinedSendArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : satisfiedE S pipelinedSendE (encodeE S pipelinedSendE s args s')) :
+    s'.log = pipelinedSendReceipt args.actor :: s.log := by
+  have hspec : PipelinedSendSpec s args.actor s' :=
+    pipelinedSendA_full_sound S hN hL hRest hLog s args s' hwf hwf' h
+  exact hspec.1
+
+/-! ### §19d — EXERCISE: circuit pins the whole intent hold-exercise post-state. -/
+
+open Dregg2.Circuit.Inst.ExerciseA (ExerciseHoldArgs exerciseE exerciseA_full_sound)
+open Dregg2.Circuit.Spec.Exercise (ExerciseHoldSpec)
+open Dregg2.Circuit.ActionDispatch (exerciseHoldState)
+
+/-- **EXERCISE circuit pins the intent hold-exercise post-state.** A verifying `exerciseE` witness
+forces the WHOLE post-state to be EXACTLY `exerciseHoldState s actor` (the declarative hold-exercise
+result). -/
+theorem exercise_circuit_pins_intent
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : ExerciseHoldArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : satisfiedE S exerciseE (encodeE S exerciseE s args s')) :
+    s' = exerciseHoldState s args.actor := by
+  have hspec : ExerciseHoldSpec s args.actor args.target s' :=
+    exerciseA_full_sound S hN hL hRest hLog s args s' hwf hwf' h
+  exact hspec.2
+
 /-! ## §4 — axiom-hygiene tripwires. Every triangle corner rests only on the kernel axioms +
 the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 
@@ -1854,5 +1940,10 @@ the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 #assert_axioms cellDestroy_circuit_rejects_wrong_lifecycle
 #assert_axioms createFromFactory_circuit_pins_intent
 #assert_axioms createFromFactory_circuit_rejects_wrong_accounts
+
+#assert_axioms balanceA_circuit_pins_intent
+#assert_axioms queueResize_circuit_pins_intent
+#assert_axioms pipelinedSend_circuit_pins_intent
+#assert_axioms exercise_circuit_pins_intent
 
 end Dregg2.Spec.CircuitSpecTriangle
