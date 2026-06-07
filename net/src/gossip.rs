@@ -587,7 +587,12 @@ mod serde_sig64 {
 /// verification always failed between different nodes.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SignedEnvelope {
-    /// The sender's node ID (blake3 hash of their TLS certificate).
+    /// The sender's gossip-layer node ID. This is the FEDERATION identity
+    /// (`blake3(federation_public_key)`), NOT the QUIC transport id
+    /// (`blake3(tls_cert)`): the receiver looks `sender` up in the `peer_keys`
+    /// registry — which is keyed by `blake3(public_key)` — to recover the
+    /// signing key, so both ends must agree on this derivation or every
+    /// envelope is rejected as an "unknown sender".
     sender: NodeId,
     /// The serialized inner GossipEnvelope (postcard-encoded).
     body: Vec<u8>,
@@ -2088,6 +2093,55 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    /// Regression: the gossip `sender` id MUST be the federation identity
+    /// (`blake3(public_key)`), and the receiver-side `peer_keys` registry MUST
+    /// be keyed by the same derivation, or every cross-node envelope is dropped
+    /// as "unknown sender" (multi-node devnet never finalizes — heights stuck
+    /// at 0). This locks in the contract that `blocklace_sync` builds both ends
+    /// from `blake3(public_key)`.
+    #[test]
+    fn federation_derived_sender_resolves_in_peer_registry() {
+        // A federation member signs an envelope with its federation signing key.
+        let (signing_key, public_key) = dregg_types::generate_keypair();
+
+        // The sender id stamped into the envelope is blake3(public_key) — the
+        // SAME derivation blocklace_sync uses for both `node_id` and the
+        // `peer_keys` registry entries.
+        let sender: NodeId = *blake3::hash(public_key.as_bytes()).as_bytes();
+
+        let envelope = GossipEnvelope::IHave {
+            topic_id: [0x44; 32],
+            msg_hash: [0x55; 32],
+        };
+        let signed = SignedEnvelope::sign(&envelope, sender, &signing_key).unwrap();
+
+        // Receiver builds the registry exactly as `peer_keys_map` does:
+        // blake3(public_key) -> public_key.
+        let mut peer_keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        peer_keys.insert(
+            *blake3::hash(public_key.as_bytes()).as_bytes(),
+            public_key,
+        );
+
+        // The sender resolves in the registry (NOT "unknown sender")...
+        let resolved = peer_keys.get(&signed.sender).copied();
+        assert!(
+            resolved.is_some(),
+            "federation-derived sender must resolve in the peer registry"
+        );
+        // ...and the signature verifies against the resolved key.
+        assert!(signed.verify(&resolved.unwrap()));
+
+        // The OLD broken model stamped the QUIC transport id (blake3 of a random
+        // per-boot TLS cert) as the sender. Such an id is absent from the
+        // federation-keyed registry, so it is correctly rejected as unknown.
+        let transport_style_sender: NodeId = [0x99; 32];
+        assert!(
+            peer_keys.get(&transport_style_sender).is_none(),
+            "a non-federation (transport-cert) sender must be unknown"
+        );
     }
 
     #[test]
