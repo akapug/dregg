@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>POC: booting…</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, monospace; max-width: 70ch; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.1rem; }
+  pre { background: #f4f4f4; padding: .75rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+  .ok { color: #197b30; font-weight: bold; }
+  .bad { color: #b00020; font-weight: bold; }
+  .muted { color: #777; }
+</style>
+</head>
+<body>
+<h1>Real verified Lean executor (<code>execFullForestG</code> / <code>dregg_exec_full_forest_auth</code>) in the browser</h1>
+<p class="muted">This page loads the wasm compiled from the PROVED Lean executor and runs two real
+turns entirely client-side — no server-side Lean, no Rust reimplementation. The post-state JSON
+below is produced by the same <code>execFullForestG</code> whose conservation/integrity/fail-closed
+laws are proved in Lean.</p>
+
+<div id="status">Loading wasm…</div>
+<h2>① Genuine gated turn — should COMMIT (100/5 → 70/35, conserved)</h2>
+<pre id="out1">…</pre>
+<h2>② Forged-credential turn — should ROLL BACK (ok:0, state unchanged 100/5)</h2>
+<pre id="out2">…</pre>
+<div id="verdict"></div>
+
+<script type="module">
+// The minimal browser-shape API: the ES6 factory boots the Lean runtime, then
+// dregg_run_json marshals a JSON wire String -> String through the real executor.
+import createDregg from "../out-web/dregg.mjs";
+
+// Golden input wires (byte-identical to exec_host.c's GOLDEN_INPUT / FORGED_INPUT,
+// which the native dregg-lean-ffi differential captured from the Lean #eval fixtures).
+const GENUINE =
+'{"state":{"cells":[[0,{"rec":[["balance",{"int":100}]]}],[1,{"rec":[["balance",{"int":5}]]}]],'+
+'"caps":[[9,[{"node":0}]]],"bal":[[0,0,100],[1,0,5]],"escrows":[[1,0,1,7,0,0,0]],'+
+'"nullifiers":[111],"commitments":[222],"queues":[[1,0,4,[333,444]]],'+
+'"swiss":[[5,0,1,[0,1],1,{"some":99}]],"revoked":[]},'+
+'"turn":{"agent":0,"nonce":7,"fee":5,"valid_until":1000,'+
+'"prev":"0000000000000000000000000000000000000000000000000000000000000000",'+
+'"root":{"auth":{"sig":["0000000000000000000000000000000000000000000000000000000000000007",7]},'+
+'"caveats":[[0,0,0,0]],"action":{"bal":[0,0,1,30,0]},"children":[]}}}';
+
+const FORGED =
+'{"state":{"cells":[[0,{"rec":[["balance",{"int":100}]]}],[1,{"rec":[["balance",{"int":5}]]}]],'+
+'"caps":[[9,[{"node":0}]]],"bal":[[0,0,100],[1,0,5]],"escrows":[[1,0,1,7,0,0,0]],'+
+'"nullifiers":[111],"commitments":[222],"queues":[[1,0,4,[333,444]]],'+
+'"swiss":[[5,0,1,[0,1],1,{"some":99}]],"revoked":[]},'+
+'"turn":{"agent":0,"nonce":0,"fee":0,"valid_until":0,'+
+'"prev":"0000000000000000000000000000000000000000000000000000000000000000",'+
+'"root":{"auth":{"sig":["0000000000000000000000000000000000000000000000000000000000000007",8]},'+
+'"caveats":[],"action":{"bal":[0,0,1,30,0]},"children":[]}}}';
+
+function setDone(pass, detail) {
+  document.getElementById("verdict").innerHTML =
+    pass ? '<p class="ok">VERDICT: PASS — the real Lean executor ran in-browser.</p>'
+         : '<p class="bad">VERDICT: FAIL — ' + detail + '</p>';
+  // Encode the outcome in the title so a headless driver (CDP) can read it without a server.
+  document.title = pass ? "POC:PASS" : "POC:FAIL:" + detail;
+  window.__POC_RESULT__ = { pass, detail };
+}
+
+try {
+  const t0 = performance.now();
+  const M = await createDregg();
+  const boot = (performance.now() - t0).toFixed(0);
+  const run = (j) => M.ccall("dregg_run_json", "string", ["string"], [j]);
+  document.getElementById("status").innerHTML =
+    '<span class="ok">Lean runtime booted in ' + boot + ' ms.</span> Running turns…';
+
+  const o1 = run(GENUINE);
+  document.getElementById("out1").textContent = o1;
+  const o2 = run(FORGED);
+  document.getElementById("out2").textContent = o2;
+
+  const commit  = o1.includes('"ok":1') && o1.includes('[0,0,70]') && o1.includes('[1,0,35]');
+  const rollback = o2.includes('"ok":0') && o2.includes('[0,0,100]') && o2.includes('[1,0,5]');
+  if (commit && rollback) setDone(true);
+  else setDone(false, `commit=${commit} rollback=${rollback}`);
+} catch (e) {
+  document.getElementById("status").innerHTML = '<span class="bad">ERROR: ' + e + '</span>';
+  setDone(false, String(e).slice(0, 120));
+}
+</script>
+</body>
+</html>
