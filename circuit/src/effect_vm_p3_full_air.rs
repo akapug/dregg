@@ -1395,11 +1395,66 @@ where
         fb_.assert_zero(lc(AUX_BASE + 4) - pv[pi::EFFECTS_HASH_BASE].clone());
         fb_.assert_zero(lc(AUX_BASE + 5) - pv[pi::EFFECTS_HASH_BASE + 1].clone());
         fb_.assert_zero(lc(AUX_BASE + aux_off::CUSTOM_COUNT_ACC));
+        // ---- DRIFT FIX (circuit-correspondence differential): the following
+        // first-row boundary pins are in `EffectVmAir::boundary_constraints` but
+        // were DROPPED from the original hand-port. Without them the audited p3
+        // verifier accepts turns the constraint reference REJECTS — a forged
+        // actor nonce (#49 AIR nonce-bump invisibility), a swapped sovereign
+        // witness identity, or a proof minted under the wrong federation / owner
+        // cell. Each is restored here term-for-term from the reference. The
+        // `effect_vm_p3_descriptor_differential` test pins this set going forward.
+        //
+        // Row-0 actor-nonce binding (γ.0a turn-identity): state_before.nonce ==
+        // PI[ACTOR_NONCE].
+        fb_.assert_zero(lc(STATE_BEFORE_BASE + state::NONCE) - pv[pi::ACTOR_NONCE].clone());
+        // Sovereign-witness identity: row-0 witness-key-commit + sequence aux
+        // columns pinned to their PI slots (sentinel-zero on the hosted path).
+        fb_.assert_zero(
+            lc(AUX_BASE + aux_off::WITNESS_KEY_COMMIT_0)
+                - pv[pi::SOVEREIGN_WITNESS_KEY_COMMIT_BASE].clone(),
+        );
+        fb_.assert_zero(
+            lc(AUX_BASE + aux_off::WITNESS_KEY_COMMIT_1)
+                - pv[pi::SOVEREIGN_WITNESS_KEY_COMMIT_BASE + 1].clone(),
+        );
+        fb_.assert_zero(
+            lc(AUX_BASE + aux_off::WITNESS_KEY_COMMIT_2)
+                - pv[pi::SOVEREIGN_WITNESS_KEY_COMMIT_BASE + 2].clone(),
+        );
+        fb_.assert_zero(
+            lc(AUX_BASE + aux_off::WITNESS_KEY_COMMIT_3)
+                - pv[pi::SOVEREIGN_WITNESS_KEY_COMMIT_BASE + 3].clone(),
+        );
+        fb_.assert_zero(
+            lc(AUX_BASE + aux_off::WITNESS_SEQUENCE) - pv[pi::SOVEREIGN_WITNESS_SEQUENCE].clone(),
+        );
+        // Federation / owner-cell binding: a proof minted under one federation
+        // (resp. owner cell) cannot claim a PI federation/owner disagreeing with
+        // the row-0 aux columns its trace committed.
+        for i in 0..pi::FEDERATION_ID_LEN {
+            fb_.assert_zero(
+                lc(AUX_BASE + aux_off::FEDERATION_ID_0 + i)
+                    - pv[pi::FEDERATION_ID_BASE + i].clone(),
+            );
+        }
+        for i in 0..pi::OWNER_CELL_ID_LEN {
+            fb_.assert_zero(
+                lc(AUX_BASE + aux_off::OWNER_CELL_ID_0 + i)
+                    - pv[pi::OWNER_CELL_ID_BASE + i].clone(),
+            );
+        }
 
         let mut lb = builder.when_last_row();
         lb.assert_zero(lc(STATE_AFTER_BASE + state::STATE_COMMIT) - pv[pi::NEW_COMMIT].clone());
         lb.assert_zero(lc(STATE_AFTER_BASE + state::BALANCE_LO) - pv[pi::FINAL_BAL_LO].clone());
         lb.assert_zero(lc(STATE_AFTER_BASE + state::BALANCE_HI) - pv[pi::FINAL_BAL_HI].clone());
+        // ---- DRIFT FIX (continued): the custom-effect count sum-check closes on
+        // the LAST row (`aux[CUSTOM_COUNT_ACC] == PI[CUSTOM_EFFECT_COUNT]`). The
+        // hand-port ported only the row-0 anchor (`== 0`) above, leaving the
+        // count unbound — a prover could claim any CUSTOM_EFFECT_COUNT.
+        lb.assert_zero(
+            lc(AUX_BASE + aux_off::CUSTOM_COUNT_ACC) - pv[pi::CUSTOM_EFFECT_COUNT].clone(),
+        );
     }
 }
 
@@ -1512,6 +1567,108 @@ pub fn verify_effect_vm_p3(
     let common = ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).common;
     verify_batch(&config, &airs, proof, &pvs, &common)
         .map_err(|e| EffectVmP3Error::VerificationFailed(format!("{e:?}")))
+}
+
+// ============================================================================
+// CIRCUIT-CORRESPONDENCE DIFFERENTIAL — the running p3 AIR vs the constraint
+// reference it claims to mirror.
+//
+// `EffectVmP3Air::eval` is documented as a *term-for-term symbolic mirror* of
+// the bespoke `EffectVmAir::eval_constraints`. The audited p3 verifier is sound
+// about THIS AIR's constraints; if those constraints drifted from the reference
+// the soundness would be about the wrong circuit. These helpers expose a
+// CONCRETE, FRI-free decision for the running p3 AIR (via Plonky3's own
+// `check_all_constraints`, the canonical debug constraint checker that both
+// uni-stark and batch-stark use) so a differential test can assert the running
+// AIR and the reference decide accept/reject IDENTICALLY over a shared witness
+// corpus — honest AND tampered. A trace one accepts and the other rejects is a
+// drift and FAILS the test.
+//
+// The decision returned here is the SAME predicate the audited verifier
+// enforces — `check_all_constraints` evaluates exactly `EffectVmP3Air::eval`
+// over the trace (with the genuine wrap-around `next` window and the
+// first/last/transition selectors), so "all constraints satisfied" here ⟺ the
+// prover can build a verifying proof there. It is purely deterministic (no
+// random FRI queries), so the differential has a sharp, reproducible tooth.
+// ============================================================================
+
+/// Concrete accept/reject decision of the RUNNING p3 AIR (`EffectVmP3Air`) on a
+/// base Effect-VM trace + public inputs, via Plonky3's `check_all_constraints`.
+///
+/// `base_trace` is the bespoke trace (`EFFECT_VM_WIDTH` columns); it is extended
+/// with the Poseidon2 aux blocks exactly as the prover does
+/// ([`extend_trace_with_hashes`]) before constraint checking, so the hash-site
+/// gadget constraints are exercised on real witness data.
+///
+/// Returns `true` iff EVERY constraint of `EffectVmP3Air::eval` vanishes on
+/// every row (the exact predicate the audited p3 verifier accepts).
+pub fn p3_air_accepts(base_trace: &[Vec<BabyBear>], public_inputs: &[BabyBear]) -> bool {
+    let air = EffectVmP3Air;
+    let full_trace = extend_trace_with_hashes(base_trace);
+    let matrix = to_matrix(&full_trace);
+    let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+    let report = p3_air::check_all_constraints(&air, &matrix, &pis, Some(1));
+    report.is_ok()
+}
+
+/// Concrete accept/reject decision of the REFERENCE constraint system — the
+/// bespoke `EffectVmAir::eval_constraints` body the p3 AIR mirrors term-for-term
+/// — on the SAME base trace + public inputs, using the SAME row-window semantics
+/// `check_all_constraints` uses for the p3 AIR (the `next` row wraps around at
+/// the last row).
+///
+/// The bespoke evaluator alpha-folds every constraint into one field element;
+/// it accepts a row iff that fold is zero. To make the fold a faithful AND of
+/// the individual gates (a fold could spuriously cancel for one unlucky alpha),
+/// we require it to vanish for EVERY alpha in `alphas` — a non-trivial gate
+/// makes the fold a non-zero polynomial in alpha with at most (#gates) roots,
+/// so several independent alphas pin "all gates satisfied" with overwhelming
+/// confidence and zero false-accepts in practice.
+///
+/// The reference decision = ALL transition gates vanish on every (wrap-around)
+/// row AND ALL boundary pins (`EffectVmAir::boundary_constraints`) hold. This is
+/// the same constraint set the p3 AIR's `eval` enforces (its `when_transition`
+/// gates + its `when_first_row` / `when_last_row` boundary asserts), so a
+/// disagreement between this and [`p3_air_accepts`] is a genuine drift.
+///
+/// Returns `true` iff the reference accepts.
+pub fn bespoke_air_accepts(
+    base_trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+    alphas: &[BabyBear],
+) -> bool {
+    use crate::effect_vm::EffectVmAir;
+    use crate::stark::StarkAir;
+    let air = EffectVmAir::new(base_trace.len());
+    let n = base_trace.len();
+
+    // (1) Transition gates: `eval_constraints` folded to zero on every
+    //     TRANSITION row (0..n-1), for every probe alpha (so the fold faithfully
+    //     ANDs the individual gates). The bespoke prover divides the whole
+    //     constraint polynomial by Z_T, so `eval_constraints` is enforced on
+    //     rows 0..n-2 exactly — the SAME domain the p3 AIR's `when_transition()`
+    //     covers. (The last row n-1 carries no `eval_constraints` obligation in
+    //     either circuit; its post-state commitment is pinned by the boundary
+    //     below, and additionally by the p3 AIR's unconditional GROUP-4
+    //     last-row anti-ghost binding — a strengthening checked separately.)
+    for row in 0..n.saturating_sub(1) {
+        let next = &base_trace[row + 1];
+        let local = &base_trace[row];
+        for &alpha in alphas {
+            let c = air.eval_constraints(local, next, public_inputs, alpha);
+            if c != BabyBear::ZERO {
+                return false;
+            }
+        }
+    }
+
+    // (2) Boundary pins: each `(row, col, value)` must hold exactly.
+    for bc in air.boundary_constraints(public_inputs, n) {
+        if base_trace[bc.row][bc.col] != bc.value {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
