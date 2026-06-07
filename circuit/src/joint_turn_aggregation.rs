@@ -257,6 +257,77 @@ fn trace_to_matrix(trace: &[[BabyBear; 4]]) -> RowMajorMatrix<P3BabyBear> {
 }
 
 // ============================================================================
+// Shared seams reused by the Gold (recursive) path.
+// ============================================================================
+
+/// Run the joint-turn preconditions and return the agreed shared turn id.
+///
+/// This is the Silver per-cell soundness gate + the host-side CG-2 check,
+/// factored out so the Gold (`joint_turn_recursive`) path reuses **exactly**
+/// the same admission discipline before building any recursion tree:
+///
+///   1. `>= 2` participants;
+///   2. each participant's PI vector long enough to carry the projections;
+///   3. **per-cell soundness** — every per-cell whole-turn proof verifies under
+///      the real [`EffectVmAir`] (the first line of the tooth: a tampered
+///      participant proof is rejected here, at its index);
+///   4. **CG-2** — all participants agree on the shared turn id (a disagreeing
+///      cell is rejected with [`JointAggError::SharedTurnIdMismatch`]).
+///
+/// Returns the shared turn id on success.
+pub fn check_joint_preconditions(
+    participants: &[JointParticipant],
+) -> Result<BabyBear, JointAggError> {
+    if participants.len() < 2 {
+        return Err(JointAggError::TooFewParticipants {
+            count: participants.len(),
+        });
+    }
+    let min_len = JointParticipant::min_pi_len();
+    for (i, p) in participants.iter().enumerate() {
+        if p.public_inputs.len() < min_len {
+            return Err(JointAggError::MalformedPublicInputs {
+                index: i,
+                len: p.public_inputs.len(),
+            });
+        }
+    }
+    // (3) per-cell soundness gate.
+    for (i, p) in participants.iter().enumerate() {
+        verify_participant(p).map_err(|e| JointAggError::ParticipantProofInvalid {
+            index: i,
+            reason: e,
+        })?;
+    }
+    // (4) CG-2 host check.
+    let shared_tid = participants[0].shared_turn_id();
+    for (i, p) in participants.iter().enumerate() {
+        if p.shared_turn_id() != shared_tid {
+            return Err(JointAggError::SharedTurnIdMismatch {
+                index: i,
+                expected: shared_tid.0,
+                found: p.shared_turn_id().0,
+            });
+        }
+    }
+    Ok(shared_tid)
+}
+
+/// Build the [`JointTurnAggregationAir`] trace as a `p3` matrix plus its public
+/// inputs, for the Gold recursive binding leaf. Mirrors the Silver
+/// [`prove_joint_turn`] trace, but hands back a `RowMajorMatrix` so the
+/// recursion-compatible prover can consume it directly.
+///
+/// Errors if the participants disagree on the shared turn id (the same CG-2
+/// rejection the Silver path enforces).
+pub fn recursion_binding_trace(
+    participants: &[JointParticipant],
+) -> Result<(RowMajorMatrix<P3BabyBear>, Vec<BabyBear>), JointAggError> {
+    let (trace, pis, _shared) = generate_joint_trace(participants)?;
+    Ok((trace_to_matrix(&trace), pis))
+}
+
+// ============================================================================
 // Errors
 // ============================================================================
 
@@ -699,24 +770,40 @@ mod tests {
         let config = create_config();
         let p3_public: Vec<P3BabyBear> = pis.iter().map(|&v| to_p3(v)).collect();
 
-        // Under the aggregation AIR's CG-2 constraint (row_tid == pub_tid),
-        // the tampered trace is UNSATISFIABLE. `p3_uni_stark::prove` runs a
-        // debug-mode constraint check that PANICS on an unsatisfiable trace
-        // (the prover refuses to forge a proof for a violated constraint) — an
-        // even stronger rejection than an invalid proof. We catch that panic
-        // and confirm it fires; an honest (matching) trace, by contrast, proves
-        // fine (exercised by the positive tests).
+        // Under the aggregation AIR's CG-2 constraint (row_tid == pub_tid), the
+        // tampered trace is UNSATISFIABLE. The rejection must hold in BOTH build
+        // modes, so we check the two mode-independent ways it can surface:
+        //   * debug builds: `p3_uni_stark::prove` runs `p3_air::check_constraints`
+        //     (gated on `cfg(debug_assertions)`) and PANICS on an unsatisfiable
+        //     trace — the prover refuses to forge a proof;
+        //   * release builds: the debug check is compiled out, so `prove` may
+        //     emit a (bogus) proof — but `p3_uni_stark::verify` then REJECTS it,
+        //     because the published `pub_tid` cannot equal the tampered row's
+        //     turn id at every row.
+        // Either way the tampered trace is rejected; an honest (matching) trace
+        // proves AND verifies fine (the positive tests).
         let trace_for_move = trace.clone();
         let pub_for_move = p3_public.clone();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let config_for_move = config.clone();
+        let prove_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let air = JointTurnAggregationAir;
             let matrix = trace_to_matrix(&trace_for_move);
-            p3_uni_stark::prove(&config, &air, matrix, &pub_for_move)
+            p3_uni_stark::prove(&config_for_move, &air, matrix, &pub_for_move)
         }));
+
+        let rejected = match prove_result {
+            // Debug: prover panicked on the unsatisfiable trace — rejected.
+            Err(_) => true,
+            // Release: prover emitted a proof; the verifier MUST reject it.
+            Ok(proof) => {
+                let air = JointTurnAggregationAir;
+                p3_uni_stark::verify(&config, &air, &proof, &p3_public).is_err()
+            }
+        };
         assert!(
-            result.is_err(),
-            "tampered-turn-id trace must be UNSAT under the aggregation AIR's CG-2 constraint \
-             (the prover must refuse it)"
+            rejected,
+            "tampered-turn-id trace must be rejected under the aggregation AIR's CG-2 constraint \
+             — the prover refuses it (debug) or the verifier rejects the forged proof (release)"
         );
     }
 
