@@ -174,3 +174,33 @@ fn b4_executor_derived_queue_allocate() {
         "queueAllocateA",
     );
 }
+
+// ===========================================================================
+// queueEnqueueA — v3 / triple (`Dregg2.Circuit.Witness.QueueEnqueueWitness`).
+// 76 wires, 6 gates (rest 66/67; queues 68/69; bal 70/71; escrows 72/73; log 74/75).
+// Forgery: parked escrow amount 30 → 999 (tampered escrow side-table) ⇒ escrow bind gate (72 ≠ 73).
+// ===========================================================================
+
+const QUEUEENQUEUE_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-queueEnqueueA-v2","trace_width":76,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}},{"lhs":{"t":"var","v":72},"rhs":{"t":"var","v":73}},{"lhs":{"t":"var","v":74},"rhs":{"t":"var","v":75}}]}"#;
+
+const QUEUEENQUEUE_HONEST: [i64; 76] = [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1000000000600004111, 2000000001271005240, 2, 2, 1000000000500004908, 1000000000500004908,
+    70000000, 70000000, 1000000000700000300, 1000000000700000300, 1000030, 1000030,
+];
+
+const QUEUEENQUEUE_FORGED: [i64; 76] = [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1000000000600004111, 2000000001271014930, 2, 2, 1000000000500004908, 1000000000500004908,
+    70000000, 70000000, 1000000000700009990, 1000000000700000300, 1000030, 1000030,
+];
+
+#[test]
+fn b4_executor_derived_queue_enqueue() {
+    check_honest_proves_and_forged_rejects(
+        QUEUEENQUEUE_DESCRIPTOR_JSON, 76, 6, &QUEUEENQUEUE_HONEST, &QUEUEENQUEUE_FORGED, 72, 73,
+        "queueEnqueueA",
+    );
+}
