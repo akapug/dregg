@@ -95,3 +95,29 @@ fn b4_executor_derived_mint() {
         MINT_DESCRIPTOR_JSON, 72, 4, &MINT_HONEST, &MINT_FORGED, 68, 69, "mintA",
     );
 }
+
+// ===========================================================================
+// noteCreateA — v2 (`Dregg2.Circuit.Witness.NoteCreateWitness`).
+// Forgery: bystander commitment 22 → 999 (tampered post-list) ⇒ bind gate (68 ≠ 69).
+// ===========================================================================
+
+const NOTECREATE_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-noteCreateA-v2","trace_width":72,"constraints":[{"lhs":{"t":"var","v":0},"rhs":{"t":"const","v":1}},{"lhs":{"t":"var","v":66},"rhs":{"t":"var","v":67}},{"lhs":{"t":"var","v":68},"rhs":{"t":"var","v":69}},{"lhs":{"t":"var","v":70},"rhs":{"t":"var","v":71}}]}"#;
+
+const NOTECREATE_HONEST: [i64; 72] = [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    2000011000024, 3000077000012000024, 2, 2, 3000077000011000022, 3000077000011000022, 1000000, 1000000,
+];
+
+const NOTECREATE_FORGED: [i64; 72] = [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    2000011000024, 3000077000012001001, 2, 2, 3000077000011000999, 3000077000011000022, 1000000, 1000000,
+];
+
+#[test]
+fn b4_executor_derived_note_create() {
+    check_honest_proves_and_forged_rejects(
+        NOTECREATE_DESCRIPTOR_JSON, 72, 4, &NOTECREATE_HONEST, &NOTECREATE_FORGED, 68, 69, "noteCreateA",
+    );
+}
