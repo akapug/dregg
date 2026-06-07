@@ -73,6 +73,15 @@ import Dregg2.Circuit.Inst.bridgeLockA
 import Dregg2.Circuit.Inst.refundEscrowA
 import Dregg2.Circuit.Inst.bridgeCancelA
 import Dregg2.Circuit.Inst.releaseEscrowA
+import Dregg2.Circuit.Inst.delegate
+import Dregg2.Circuit.Inst.delegateAttenA
+import Dregg2.Circuit.Inst.attenuateA
+import Dregg2.Circuit.Inst.revoke
+import Dregg2.Circuit.Inst.setPermissionsA
+import Dregg2.Circuit.Inst.setVKA
+import Dregg2.Circuit.Inst.incrementNonceA
+import Dregg2.Circuit.Inst.noteCreateA
+import Dregg2.Circuit.Inst.noteSpendA
 import Dregg2.Spec.FunctionalRefinement
 
 namespace Dregg2.Spec.CircuitSpecTriangle
@@ -80,7 +89,10 @@ namespace Dregg2.Spec.CircuitSpecTriangle
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Circuit
-open Dregg2.Circuit.StateCommit (compressNInjective logHashInjective)
+open Dregg2.Circuit.StateCommit (compressNInjective logHashInjective cellLeafInjective
+  RestHashIffFrame AccountsWF)
+open Dregg2.Circuit.EffectCommit
+open Dregg2.Exec.EffectsState (setField)
 open Dregg2.Circuit.EffectCommit2
 open Dregg2.Circuit.EffectCommit2Dual
 open Dregg2.Circuit.ListCommit (listLeafInjective)
@@ -573,6 +585,319 @@ theorem release_circuit_pins_intent
   obtain ⟨r, _, hbal, _⟩ := releaseEscrowA_full_sound S D hD LE cN hN hLE hRest hLog s args s' h
   exact ⟨r, pin_intent_of_bridge hbal (intentCredit_eq_credit _ _ _ _).symm⟩
 
+/-! ## §6 — THE AUTHORITY (caps) FAMILY: the circuit pins the INTENT cap-graph move.
+
+The cap-graph effects move the `caps` side-table. `FunctionalRefinement` already carries the INTENT
+cap functions (`delegateSpec`/`attenuateSpec`/`revokeSpec` — written from "hand recipient a
+keep-narrowed copy of the cap I hold to target" / "narrow my own idx-th cap" / "the holder loses its
+reach to target"). The circuit-side specs (`DelegateAttenSpec`/`AttenuateSpec`/`RevokeSpec`) pin the
+caps clause to the SAME `grant … (attenuate …)` / `attenuateSlotF` / `removeEdgeCaps` shapes. We
+bridge each circuit caps clause to the INTENT cap function — so a verifying cap-graph witness pins the
+EXACT intended capability set (an over-broad grant, a grant to the wrong recipient, a revoke of the
+wrong target, a touched 2nd slot is excluded as a ghost — at the circuit level). -/
+
+open Dregg2.Authority (Caps Auth)
+
+/-- **`intentDelegateCaps caps del rec t keep`** — the INTENT cap function of an attenuated
+delegation, written from protocol intent: the recipient's slot GAINS exactly the delegator's held cap
+to `t`, attenuated to `keep` (`grant … (attenuate keep (heldCapTo …))`); every OTHER slot untouched.
+This is `FunctionalRefinement.delegateSpec`'s caps projection, re-expressed at the circuit args. -/
+def intentDelegateCaps (caps : Caps) (del rec t : CellId) (keep : List Auth) : Caps :=
+  grant caps rec (attenuate keep (heldCapTo caps del t))
+
+/-- **`intentRevokeCaps caps holder t`** — the INTENT cap function of a revocation: the holder's slot
+DROPS every cap conferring an edge to `t` (`filter ¬confersEdgeTo`), every OTHER slot untouched.
+Written from intent ("the holder loses its reach to `t`, nothing else") — the SAME filter
+`FunctionalRefinement.revokeTargetCaps` uses. -/
+def intentRevokeCaps (caps : Caps) (holder t : CellId) : Caps :=
+  fun l => if l = holder then (caps l).filter (fun cap => ¬ confersEdgeTo t cap) else caps l
+
+/-! ### §6a — DELEGATE-WITH-ATTENUATION: circuit pins `intentDelegateCaps`. -/
+
+open Dregg2.Circuit.Inst.DelegateAttenA (DelegateAttenArgs delegateAttenE delegateAttenA_full_sound)
+open Dregg2.Circuit.Spec.AuthorityAttenuation (DelegateAttenSpec)
+
+/-- **DELEGATE-ATTEN circuit pins the intent cap-grant.** A verifying `delegateAttenE` witness forces
+the post-`caps` to be EXACTLY `intentDelegateCaps … del recv t keep` (the recipient gains the
+attenuated held cap; no other slot changes). The bridge is definitional — the circuit spec's caps
+clause IS the intent grant. -/
+theorem delegateAtten_circuit_pins_intent
+    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (hRest : Dregg2.Circuit.Inst.DelegateAttenA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : DelegateAttenArgs) (s' : RecChainedState)
+    (h : satisfiedE2 S (delegateAttenE D hD) (encodeE2 S (delegateAttenE D hD) s args s')) :
+    s'.kernel.caps = intentDelegateCaps s.kernel.caps args.del args.recv args.t args.keep := by
+  have hspec : DelegateAttenSpec s args.del args.recv args.t args.keep s' :=
+    delegateAttenA_full_sound S D hD hRest hLog s args s' h
+  exact hspec.2.1
+
+/-- **DELEGATE-ATTEN circuit anti-ghost: a non-intent post-`caps` does NOT verify.** -/
+theorem delegateAtten_circuit_rejects_wrong_caps
+    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (hRest : Dregg2.Circuit.Inst.DelegateAttenA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : DelegateAttenArgs) (s' : RecChainedState)
+    (hwrong : s'.kernel.caps ≠ intentDelegateCaps s.kernel.caps args.del args.recv args.t args.keep) :
+    ¬ satisfiedE2 S (delegateAttenE D hD) (encodeE2 S (delegateAttenE D hD) s args s') :=
+  fun h => hwrong (delegateAtten_circuit_pins_intent S D hD hRest hLog s args s' h)
+
+/-! ### §6b — ATTENUATE (self): circuit pins `attenuateSlotF` (FR `attenuateSpec`'s caps). -/
+
+open Dregg2.Circuit.Inst.AttenuateA (AttenuateArgs attenuateE attenuateA_full_sound)
+open Dregg2.Circuit.Spec.AuthorityAttenuation (AttenuateSpec)
+
+/-- **ATTENUATE circuit pins the intent self-narrowing.** A verifying `attenuateE` witness forces the
+post-`caps` to be EXACTLY `attenuateSlotF … actor idx keep` — the actor's own `idx`-th cap narrowed in
+place, NO other slot touched. This IS `FunctionalRefinement.attenuateSpec`'s caps projection. -/
+theorem attenuate_circuit_pins_intent
+    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (hRest : Dregg2.Circuit.Inst.AttenuateA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : AttenuateArgs) (s' : RecChainedState)
+    (h : satisfiedE2 S (attenuateE D hD) (encodeE2 S (attenuateE D hD) s args s')) :
+    s'.kernel.caps = attenuateSlotF s.kernel.caps args.actor args.idx args.keep := by
+  have hspec : AttenuateSpec s args.actor args.idx args.keep s' :=
+    attenuateA_full_sound S D hD hRest hLog s args s' h
+  exact hspec.1
+
+/-- **ATTENUATE circuit anti-ghost.** -/
+theorem attenuate_circuit_rejects_wrong_caps
+    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (hRest : Dregg2.Circuit.Inst.AttenuateA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : AttenuateArgs) (s' : RecChainedState)
+    (hwrong : s'.kernel.caps ≠ attenuateSlotF s.kernel.caps args.actor args.idx args.keep) :
+    ¬ satisfiedE2 S (attenuateE D hD) (encodeE2 S (attenuateE D hD) s args s') :=
+  fun h => hwrong (attenuate_circuit_pins_intent S D hD hRest hLog s args s' h)
+
+/-! ### §6c — REVOKE: circuit pins `intentRevokeCaps` (FR `revokeTargetCaps`). -/
+
+open Dregg2.Circuit.Inst.Revoke (RevokeArgs revokeE revoke_full_sound)
+open Dregg2.Circuit.Spec.AuthorityRevocation (RevokeSpec removeEdgeCaps)
+
+/-- **`intentRevokeCaps_eq_removeEdgeCaps` (PROVED — definitional identity).** The intent revoke
+filter is EXACTLY the circuit spec's `removeEdgeCaps`. Two independently-written cap functions proven
+EQUAL (FALSE if either filtered the wrong slot or wrong target). -/
+theorem intentRevokeCaps_eq_removeEdgeCaps (caps : Caps) (holder t : CellId) :
+    intentRevokeCaps caps holder t = removeEdgeCaps caps holder t := rfl
+
+/-- **REVOKE circuit pins the intent revocation.** A verifying `revokeE` witness forces the
+post-`caps` to be EXACTLY `intentRevokeCaps … holder t` — the holder's `t`-conferring caps filtered
+out, every other slot fixed. This IS `FunctionalRefinement.revokeTargetCaps`. -/
+theorem revoke_circuit_pins_intent
+    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (hRest : Dregg2.Circuit.Inst.Revoke.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : RevokeArgs) (s' : RecChainedState)
+    (h : satisfiedE2 S (revokeE D hD) (encodeE2 S (revokeE D hD) s args s')) :
+    s'.kernel.caps = intentRevokeCaps s.kernel.caps args.holder args.t := by
+  have hspec : RevokeSpec s args.holder args.t s' :=
+    revoke_full_sound S D hD hRest hLog s args s' h
+  rw [intentRevokeCaps_eq_removeEdgeCaps]; exact hspec.2.1
+
+/-- **REVOKE circuit anti-ghost.** -/
+theorem revoke_circuit_rejects_wrong_caps
+    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (hRest : Dregg2.Circuit.Inst.Revoke.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : RevokeArgs) (s' : RecChainedState)
+    (hwrong : s'.kernel.caps ≠ intentRevokeCaps s.kernel.caps args.holder args.t) :
+    ¬ satisfiedE2 S (revokeE D hD) (encodeE2 S (revokeE D hD) s args s') :=
+  fun h => hwrong (revoke_circuit_pins_intent S D hD hRest hLog s args s' h)
+
+/-! ## §7 — THE CELL-METADATA FAMILY: a NEW intent functional spec + circuit pinning.
+
+The cell-metadata effects (`setPermissions` / `setVK` / `incrementNonce`) write ONE slot of ONE
+cell's record. `FunctionalRefinement` carries no oracle for them, so we BUILD one here in its spirit:
+`intentSetCellField cells cell f v` — the protocol intent "write slot `f` of cell `cell` to value `v`,
+every OTHER cell's whole record untouched", a single-cell single-field write written WITHOUT reference
+to the executor's `writeField`/`setPermsCellMap`. We prove the circuit's validated cell-map helper IS
+this intent oracle (a `rfl` once the field name is fixed), so a verifying cell-metadata witness pins
+the EXACT intended single-slot write — a write to the wrong cell, the wrong slot, or a touched 2nd
+cell is excluded. -/
+
+/-- **`intentSetCellField cells cell f v`** — the INTENT cell-map of a single-slot write: cell `cell`'s
+record has slot `f` set to `.int v` (`setField`), every OTHER cell's whole record literally unchanged.
+Written from intent ("write field `f` of `cell` to `v`, touch nothing else"); the THREE cell-metadata
+effects are its instances at `f = permissions / verification_key / nonce`. -/
+def intentSetCellField (cells : CellId → Value) (cell : CellId) (f : FieldName) (v : Int) :
+    CellId → Value :=
+  fun c => if c = cell then setField f (cells c) (.int v) else cells c
+
+/-! ### §7a — SET-PERMISSIONS: circuit pins `intentSetCellField … permsField`. -/
+
+open Dregg2.Circuit.Inst.SetPermissionsA (SetPermissionsArgs setPermissionsE setPermissionsA_full_sound)
+open Dregg2.Circuit.Spec.CellStatePermissions (SetPermissionsSpec setPermsCellMap)
+
+/-- **`setPermsCellMap_eq_intent` (PROVED — definitional identity).** The circuit's validated
+permissions cell-map IS the intent single-slot write at `f = permsField`. -/
+theorem setPermsCellMap_eq_intent (k : RecordKernelState) (cell : CellId) (p : Int) :
+    setPermsCellMap k cell p = intentSetCellField k.cell cell permsField p := rfl
+
+/-- **SET-PERMISSIONS circuit pins the intent slot-write.** A verifying `setPermissionsE` witness forces
+the post-`cell` map to be EXACTLY `intentSetCellField … cell permsField p` (cell `cell`'s permissions
+slot set to `p`, every other cell untouched). -/
+theorem setPermissions_circuit_pins_intent
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : SetPermissionsArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : satisfiedE S setPermissionsE (encodeE S setPermissionsE s args s')) :
+    s'.kernel.cell = intentSetCellField s.kernel.cell args.cell permsField args.p := by
+  have hspec : SetPermissionsSpec s args.actor args.cell args.p s' :=
+    setPermissionsA_full_sound S hN hL hRest hLog s args s' hwf hwf' h
+  rw [hspec.2.1, setPermsCellMap_eq_intent]
+
+/-- **SET-PERMISSIONS circuit anti-ghost: a non-intent post-`cell` map does NOT verify.** -/
+theorem setPermissions_circuit_rejects_wrong_cell
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : SetPermissionsArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (hwrong : s'.kernel.cell ≠ intentSetCellField s.kernel.cell args.cell permsField args.p) :
+    ¬ satisfiedE S setPermissionsE (encodeE S setPermissionsE s args s') :=
+  fun h => hwrong (setPermissions_circuit_pins_intent S hN hL hRest hLog s args s' hwf hwf' h)
+
+/-! ### §7b — SET-VK: circuit pins `intentSetCellField … vkField`. -/
+
+open Dregg2.Circuit.Inst.SetVKA (SetVKArgs setVKE setVKA_full_sound)
+open Dregg2.Circuit.Spec.CellStateVK (SetVKSpec setVKCellMap)
+
+/-- **`setVKCellMap_eq_intent` (PROVED).** The validated verification-key cell-map IS the intent
+single-slot write at `f = vkField`. -/
+theorem setVKCellMap_eq_intent (k : RecordKernelState) (cell : CellId) (vk : Int) :
+    setVKCellMap k cell vk = intentSetCellField k.cell cell vkField vk := rfl
+
+/-- **SET-VK circuit pins the intent slot-write.** -/
+theorem setVK_circuit_pins_intent
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : SetVKArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : satisfiedE S setVKE (encodeE S setVKE s args s')) :
+    s'.kernel.cell = intentSetCellField s.kernel.cell args.cell vkField args.vk := by
+  have hspec : SetVKSpec s args.actor args.cell args.vk s' :=
+    setVKA_full_sound S hN hL hRest hLog s args s' hwf hwf' h
+  rw [hspec.2.1, setVKCellMap_eq_intent]
+
+/-- **SET-VK circuit anti-ghost.** -/
+theorem setVK_circuit_rejects_wrong_cell
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : SetVKArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (hwrong : s'.kernel.cell ≠ intentSetCellField s.kernel.cell args.cell vkField args.vk) :
+    ¬ satisfiedE S setVKE (encodeE S setVKE s args s') :=
+  fun h => hwrong (setVK_circuit_pins_intent S hN hL hRest hLog s args s' hwf hwf' h)
+
+/-! ### §7c — INCREMENT-NONCE: circuit pins `intentSetCellField … nonceField`. -/
+
+open Dregg2.Circuit.Inst.IncrementNonceA (IncrementNonceArgs incrementNonceE incrementNonceA_full_sound)
+open Dregg2.Circuit.Spec.CellStateMonotone (IncrementNonceSpec incNonceCellMap)
+
+/-- **`incNonceCellMap_eq_intent` (PROVED).** The validated nonce cell-map IS the intent single-slot
+write at `f = nonceField`. -/
+theorem incNonceCellMap_eq_intent (k : RecordKernelState) (cell : CellId) (n : Int) :
+    incNonceCellMap k cell n = intentSetCellField k.cell cell nonceField n := rfl
+
+/-- **INCREMENT-NONCE circuit pins the intent slot-write.** -/
+theorem incrementNonce_circuit_pins_intent
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : IncrementNonceArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : satisfiedE S incrementNonceE (encodeE S incrementNonceE s args s')) :
+    s'.kernel.cell = intentSetCellField s.kernel.cell args.cell nonceField args.n := by
+  have hspec : IncrementNonceSpec s args.actor args.cell args.n s' :=
+    incrementNonceA_full_sound S hN hL hRest hLog s args s' hwf hwf' h
+  rw [hspec.2.1, incNonceCellMap_eq_intent]
+
+/-- **INCREMENT-NONCE circuit anti-ghost.** -/
+theorem incrementNonce_circuit_rejects_wrong_cell
+    (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : IncrementNonceArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (hwrong : s'.kernel.cell ≠ intentSetCellField s.kernel.cell args.cell nonceField args.n) :
+    ¬ satisfiedE S incrementNonceE (encodeE S incrementNonceE s args s') :=
+  fun h => hwrong (incrementNonce_circuit_pins_intent S hN hL hRest hLog s args s' hwf hwf' h)
+
+/-! ## §8 — THE NOTE (privacy) FAMILY: a NEW intent functional spec + circuit pinning.
+
+The note effects (`noteCreate` / `noteSpend`) advance the privacy side-tables: `noteCreate` PREPENDS a
+commitment to `commitments` (append-only — value is hidden yet conserved), `noteSpend` PREPENDS a
+nullifier to `nullifiers` (the no-double-spend marker). We build intent oracles
+`intentNoteCommit`/`intentNoteNullify` (prepend the commitment / nullifier; touch nothing else) and
+pin the circuit to them — so a verifying note witness pins the EXACT privacy-table advance (a dropped
+commitment, a rewritten nullifier set, a wrong front element is excluded). -/
+
+/-- **`intentNoteCommit commitments cm`** — the INTENT commitments-list of a note creation: the fresh
+commitment `cm` is PREPENDED (newest-first, append-only — nothing lost). Written from intent. -/
+def intentNoteCommit (commitments : List Nat) (cm : Nat) : List Nat := cm :: commitments
+
+/-- **`intentNoteNullify nullifiers nf`** — the INTENT nullifiers-list of a note spend: the nullifier
+`nf` is PREPENDED (the no-double-spend marker). Written from intent. -/
+def intentNoteNullify (nullifiers : List Nat) (nf : Nat) : List Nat := nf :: nullifiers
+
+/-! ### §8a — NOTE-CREATE: circuit pins `intentNoteCommit`. -/
+
+open Dregg2.Circuit.Inst.NoteCreateA (NoteCreateArgs noteCreateE noteCreateA_full_sound RestIffNoCommitments)
+open Dregg2.Circuit.Spec.NoteCommitment (NoteCreateASpec)
+
+/-- **NOTE-CREATE circuit pins the intent commitment-prepend.** A verifying `noteCreateE` witness forces
+the post-`commitments` to be EXACTLY `intentNoteCommit … cm` (the fresh commitment prepended, the rest
+preserved). -/
+theorem noteCreate_circuit_pins_intent
+    (S : Surface2) (LE : Nat → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : RestIffNoCommitments S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : NoteCreateArgs) (s' : RecChainedState)
+    (h : satisfiedE2 S (noteCreateE LE cN hN hLE) (encodeE2 S (noteCreateE LE cN hN hLE) s args s')) :
+    s'.kernel.commitments = intentNoteCommit s.kernel.commitments args.cm := by
+  have hspec : NoteCreateASpec s args.cm args.actor s' :=
+    noteCreateA_full_sound S LE cN hN hLE hRest hLog s args s' h
+  exact hspec.2.1
+
+/-- **NOTE-CREATE circuit anti-ghost.** -/
+theorem noteCreate_circuit_rejects_wrong_commitments
+    (S : Surface2) (LE : Nat → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : RestIffNoCommitments S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : NoteCreateArgs) (s' : RecChainedState)
+    (hwrong : s'.kernel.commitments ≠ intentNoteCommit s.kernel.commitments args.cm) :
+    ¬ satisfiedE2 S (noteCreateE LE cN hN hLE) (encodeE2 S (noteCreateE LE cN hN hLE) s args s') :=
+  fun h => hwrong (noteCreate_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h)
+
+/-! ### §8b — NOTE-SPEND: circuit pins `intentNoteNullify`. -/
+
+open Dregg2.Circuit.Inst.NoteSpendA (NoteSpendArgs noteSpendE noteSpendA_full_sound)
+open Dregg2.Circuit.Spec.NoteNullifier (NoteSpendSpec)
+
+/-- **NOTE-SPEND circuit pins the intent nullifier-prepend.** A verifying `noteSpendE` witness forces
+the post-`nullifiers` to be EXACTLY `intentNoteNullify … nf` (the spend nullifier prepended). The
+no-double-spend marker is pinned — a witness that dropped or rewrote the nullifier set is rejected. -/
+theorem noteSpend_circuit_pins_intent
+    (S : Surface2) (LE : Nat → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : RestIffNoNullifiers S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : NoteSpendArgs) (s' : RecChainedState)
+    (h : satisfiedE2 S (noteSpendE LE cN hN hLE) (encodeE2 S (noteSpendE LE cN hN hLE) s args s')) :
+    s'.kernel.nullifiers = intentNoteNullify s.kernel.nullifiers args.nf := by
+  have hspec : NoteSpendSpec s args.nf args.actor args.spendProof s' :=
+    noteSpendA_full_sound S LE cN hN hLE hRest hLog s args s' h
+  exact hspec.2.1
+
+/-- **NOTE-SPEND circuit anti-ghost.** -/
+theorem noteSpend_circuit_rejects_wrong_nullifiers
+    (S : Surface2) (LE : Nat → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (hRest : RestIffNoNullifiers S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : NoteSpendArgs) (s' : RecChainedState)
+    (hwrong : s'.kernel.nullifiers ≠ intentNoteNullify s.kernel.nullifiers args.nf) :
+    ¬ satisfiedE2 S (noteSpendE LE cN hN hLE) (encodeE2 S (noteSpendE LE cN hN hLE) s args s') :=
+  fun h => hwrong (noteSpend_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h)
+
 /-! ## §4 — axiom-hygiene tripwires. Every triangle corner rests only on the kernel axioms +
 the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 
@@ -600,5 +925,25 @@ the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 #assert_axioms refund_circuit_pins_intent
 #assert_axioms bridgeCancel_circuit_pins_intent
 #assert_axioms release_circuit_pins_intent
+#assert_axioms delegateAtten_circuit_pins_intent
+#assert_axioms delegateAtten_circuit_rejects_wrong_caps
+#assert_axioms attenuate_circuit_pins_intent
+#assert_axioms attenuate_circuit_rejects_wrong_caps
+#assert_axioms intentRevokeCaps_eq_removeEdgeCaps
+#assert_axioms revoke_circuit_pins_intent
+#assert_axioms revoke_circuit_rejects_wrong_caps
+#assert_axioms setPermsCellMap_eq_intent
+#assert_axioms setPermissions_circuit_pins_intent
+#assert_axioms setPermissions_circuit_rejects_wrong_cell
+#assert_axioms setVKCellMap_eq_intent
+#assert_axioms setVK_circuit_pins_intent
+#assert_axioms setVK_circuit_rejects_wrong_cell
+#assert_axioms incNonceCellMap_eq_intent
+#assert_axioms incrementNonce_circuit_pins_intent
+#assert_axioms incrementNonce_circuit_rejects_wrong_cell
+#assert_axioms noteCreate_circuit_pins_intent
+#assert_axioms noteCreate_circuit_rejects_wrong_commitments
+#assert_axioms noteSpend_circuit_pins_intent
+#assert_axioms noteSpend_circuit_rejects_wrong_nullifiers
 
 end Dregg2.Spec.CircuitSpecTriangle
