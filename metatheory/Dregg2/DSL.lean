@@ -8,7 +8,7 @@ verified `RecordProgram` (`Exec/Program.lean`). A `dregg_program { … }` term I
 
 The eDSL is a parser onto already-proved smart constructors: `declare_syntax_cat` +
 `macro_rules` translating each atom to the exact `SimpleConstraint`/`StateConstraint`/
-`RecordProgram` constructor of `Exec/Program.lean`. No new metatheory, no `sorry`.
+`RecordProgram` constructor of `Exec/Program.lean`. No new metatheory.
 
 Covered atoms (each → its catalog constructor):
   `f >= v` / `f <= v` / `f = v`     → `.simple (.fieldGe/.fieldLe/.fieldEquals …)`

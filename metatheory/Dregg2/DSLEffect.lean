@@ -13,8 +13,6 @@ an effect's color generates (not hand-writes) its conservation obligation:
 The generated obligation is closed by the proved `CatalogEffects` per-class lemmas (or `rfl`).
 The `(args)` are documentary (payload field names); an effect's linearity is a property of
 its kind, not its payload values. Args may be omitted: `dregg_effect setField : Neutral`.
-
-No `axiom`/`admit`/`native_decide`/`sorry`.
 -/
 import Dregg2.CatalogEffects
 import Dregg2.Tactics      -- for the `#assert_axioms` / `#assert_namespace_axioms` honesty pins

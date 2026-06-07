@@ -10,8 +10,6 @@ Factors out two patterns that appear verbatim in the executable kernels:
 3. `commit_cases h with pat` — structural split for a fail-closed `if guard then some … else none`
    executor: discharges the `none` branch and performs read-back + guard extraction on the `some`
    branch, leaving the content goal open.
-
-No `axiom` / `admit` / `native_decide` / `sorry`.
 -/
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import Mathlib.Tactic.Ring

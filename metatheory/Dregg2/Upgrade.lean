@@ -91,7 +91,7 @@ instance (live stored : AirVersion) (auth : UpgradeAuth) :
 
 /-- **`adminBySignature`** — the always-true witness that the signature arm is admissible at any
 versions. The computable core of the anti-brick guarantee: regardless of `live`/`stored`, the
-owner can sign. (Cheap, so proved, not `sorry`'d.) -/
+owner can sign. (Cheap, so proved.) -/
 theorem adminBySignature (live _stored : AirVersion) :
     setProgramAdmissible live _stored UpgradeAuth.bySignature := trivial
 

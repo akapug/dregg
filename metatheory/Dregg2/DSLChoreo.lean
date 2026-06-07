@@ -7,7 +7,7 @@ A term-level eDSL that elaborates a readable MPST block directly to a verified
 `privacy_by_projection` apply to the exact elaborated term.
 
 The eDSL is a parser onto already-proved constructors (`declare_syntax_cat` + `macro_rules`),
-with no new metatheory and no `sorry`.
+with no new metatheory.
 
 Surface (textbook MPST → `GlobalType`):
   `a ~(label)~> b ; cont`               → `.comm a b label cont`

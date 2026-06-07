@@ -48,7 +48,7 @@ class CryptoKernel (Digest : Type) (Proof : Type) [AddCommGroup Digest] where
   assumption). The previous `hash_inj : Function.Injective hash` was an *idealized
   INJECTIVITY* — but real Poseidon2 is only collision-RESISTANT, not injective: a mismatch
   of KIND, not strength. So this is a `Prop` carrier — "no PPT adversary finds a collision"
-  — the crypto layer discharges, NEVER a Lean law, NEVER `sorry`. (The fully-split form
+  — the crypto layer discharges, NEVER a Lean law. (The fully-split form
   lives in `Crypto/Primitives.lean::CryptoPrimitives.collisionHard`.) -/
   collisionHard : Prop
 

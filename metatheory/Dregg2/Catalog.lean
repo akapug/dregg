@@ -18,8 +18,6 @@ Two deliverables:
 2. **`discharge`** — the guard-seam opener. Rewrites goals mentioning `Guard.admits` via the
    structural `admits_*` simp set + `Bool.and/or_eq_true`, leaving one goal per leaf. The
    `Dregg2` aesop rule-set closes leaves automatically — behind the fail-loud rail.
-
-Discipline: no `axiom`/`admit`/`native_decide`/`sorry`.
 -/
 import Dregg2.Spec.Guard
 import Dregg2.Tactics
