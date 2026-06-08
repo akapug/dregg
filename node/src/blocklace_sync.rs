@@ -25,8 +25,7 @@ use dregg_blocklace::constitution::{
 };
 use dregg_blocklace::dissemination::MAX_BLOCKS_PER_PUSH;
 use dregg_blocklace::finality::{
-    Block, BlockError, BlockId, Blocklace, FinalityLevel, MembershipAction, Payload,
-    TurnArtifactBundle,
+    Block, BlockId, Blocklace, FinalityLevel, MembershipAction, Payload, TurnArtifactBundle,
 };
 use dregg_blocklace::ordering::tau;
 use dregg_net::gossip::{GossipEvent, GossipNetwork, TopicHandle};
@@ -108,6 +107,15 @@ pub struct BlocklaceHandle {
     /// Allows operators to tune for devnet (low latency, small budgets) vs production
     /// (larger windows, conservative timeouts) without "wrong way" source hacks.
     pub checkpoint_interval: u64,
+    /// Causal staging area for blocks that arrived before their predecessors.
+    ///
+    /// The A1-fixed insert (`finality.rs::receive_block`) rejects a block whose
+    /// predecessors are unknown. Rather than drop such an orphan (forcing a
+    /// re-gossip), we buffer it here keyed by the predecessors it waits on; when a
+    /// predecessor lands the orphan is re-applied in causal order. This is what
+    /// makes catch-up over lossy/out-of-order gossip reconstruct the
+    /// causally-closed finalized set. See `crate::catchup`.
+    pub orphans: Arc<RwLock<crate::catchup::OrphanBuffer>>,
 }
 
 /// A read-only view of one blocklace block, shaped to mirror the wasm
@@ -359,6 +367,61 @@ impl BlocklaceHandle {
             let msg = BlocklaceGossipMessage::Push(vec![block.clone()]);
             self.broadcast_gossip_message(&msg).await;
         }
+    }
+
+    /// Gossip our current frontier (per-creator tips) so peers compute the delta
+    /// we are missing and push it. This is the PROACTIVE half of catch-up: a node
+    /// already connected to the topic that has fallen behind announces what it has,
+    /// and `handle_frontier` on the peer side replies with the causally-ordered
+    /// blocks we lack. Cheap (one map of tip ids) and quiescent-friendly (only sent
+    /// on join, on a slow timer, or when a gap is detected).
+    pub async fn send_frontier(&self) {
+        let frontier_tips: HashMap<[u8; 32], BlockId> = {
+            let lace = self.lace.read().await;
+            lace.tips().iter().map(|(k, v)| (*k, *v)).collect()
+        };
+        let msg = BlocklaceGossipMessage::Frontier(frontier_tips);
+        self.broadcast_gossip_message(&msg).await;
+    }
+
+    /// One catch-up sweep: re-request any predecessors that buffered orphans are
+    /// still waiting on, and (if we are staging orphans or were asked to) announce
+    /// our frontier so peers push the rest of their lace. Returns the number of
+    /// orphans still buffered after the sweep (0 ⇒ no detected gap).
+    ///
+    /// This is the driver that lets a node which fell behind (or whose gossip
+    /// dropped intermediate blocks) make forward progress without waiting for a
+    /// fresh `PeerJoined` event: the buffered-orphan roots are exactly the missing
+    /// finalized predecessors, and pulling them (with their causal past) drains the
+    /// buffer toward the finalized prefix.
+    pub async fn catchup_tick(&self) -> usize {
+        let (buffered, roots) = {
+            let buf = self.orphans.read().await;
+            (buf.len(), buf.unmet_roots())
+        };
+        // Re-request still-missing predecessors of buffered orphans.
+        if !roots.is_empty() {
+            // Filter out any roots that have since landed.
+            let lace = self.lace.read().await;
+            let still_missing: Vec<BlockId> =
+                roots.into_iter().filter(|r| !lace.contains(r)).collect();
+            drop(lace);
+            if !still_missing.is_empty() {
+                debug!(
+                    roots = still_missing.len(),
+                    buffered, "catch-up: re-requesting missing predecessors"
+                );
+                self.broadcast_gossip_message(&BlocklaceGossipMessage::Pull(still_missing))
+                    .await;
+            }
+        }
+        // If we have an open gap, also announce our frontier so a peer pushes the
+        // delta proactively (covers blocks lost before they ever reached our
+        // orphan buffer — a pure tip-delta with peers).
+        if buffered > 0 {
+            self.send_frontier().await;
+        }
+        buffered
     }
 
     /// Broadcast a blocklace gossip message to the topic.
@@ -952,6 +1015,7 @@ pub async fn run_blocklace_sync(
         finality_notify: finality_notify.clone(),
         auto_approve_joins, // F-CRIT-2: gated by main.rs on --auto-approve-joins CLI flag OR .devnet marker
         checkpoint_interval: blocklace_checkpoint_interval,
+        orphans: Arc::new(RwLock::new(crate::catchup::OrphanBuffer::new())),
     };
 
     info!("blocklace gossip layer initialized, processing messages");
@@ -1013,6 +1077,28 @@ pub async fn run_blocklace_sync(
             "block cadence disabled (--block-cadence-ms 0): blocks produced only on turn submission"
         );
     }
+
+    // ─── Spawn the Catch-up Driver ──────────────────────────────────────────
+    //
+    // Reactive catch-up lives in `handle_push` (orphan buffer + pull). This timer
+    // is the safety net for gaps whose triggering gossip was lost. The interval is
+    // intentionally slow relative to block cadence; if cadence is disabled we still
+    // run a modest 5s sweep so a connected-but-behind node converges.
+    let catchup_interval_ms = if block_cadence_ms > 0 {
+        (block_cadence_ms * 4).max(2_000)
+    } else {
+        5_000
+    };
+    spawn_catchup_driver(handle.clone(), catchup_interval_ms);
+
+    // A fresh/restarted node proactively announces its frontier once gossip is up,
+    // so peers push whatever it is missing (initial catch-up without waiting for a
+    // peer to notice us first).
+    let frontier_handle = handle.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        frontier_handle.send_frontier().await;
+    });
 
     // If we're not already a federation participant, propose joining.
     // This enables new nodes to join at runtime via the constitutional amendment
@@ -1091,79 +1177,66 @@ async fn handle_push(
     }
 
     let block_count = blocks.len();
-    let mut lace = handle.lace.write().await;
-    let mut inserted = 0usize;
-    let mut inserted_blocks: Vec<Block> = Vec::new();
-    let mut missing_deps: Vec<BlockId> = Vec::new();
 
-    for block in blocks {
-        let block_clone = block.clone();
-        match lace.receive_block(block) {
-            Ok(()) => {
-                inserted += 1;
-                inserted_blocks.push(block_clone);
-            }
-            Err(BlockError::MissingPredecessor { missing, .. }) => {
-                missing_deps.push(missing);
-            }
-            Err(BlockError::Equivocation {
-                creator,
-                seq,
-                proof,
-            }) => {
-                let creator_hex: String = creator[..4].iter().map(|b| format!("{b:02x}")).collect();
-                warn!(
-                    from = %from,
-                    creator = %creator_hex,
-                    seq = seq,
-                    "equivocation detected from peer"
-                );
-                // Auto-evict equivocator from the constitution.
-                drop(lace);
-                let mut constitution = handle.constitution.write().await;
-                constitution.auto_evict(&proof);
-                drop(constitution);
-                lace = handle.lace.write().await;
-                inserted += 1;
-                inserted_blocks.push(block_clone);
-            }
-            Err(BlockError::InvalidSignature { creator, seq }) => {
-                let creator_hex: String = creator[..4].iter().map(|b| format!("{b:02x}")).collect();
-                warn!(
-                    from = %from,
-                    creator = %creator_hex,
-                    seq = seq,
-                    "invalid signature on block from peer"
-                );
-            }
+    // Apply the batch through the orphan-buffering catch-up path. Blocks that
+    // arrive before their predecessors are STAGED (not dropped) and re-applied in
+    // causal order once the gap closes; the A1-fixed `receive_block` re-verifies
+    // sig/seq/equivocation on every (re-)application. Out-of-order or partial
+    // delivery from gossip therefore still converges to the causally-closed set.
+    let outcome = {
+        let mut lace = handle.lace.write().await;
+        let mut buffer = handle.orphans.write().await;
+        crate::catchup::apply_with_buffering(&mut lace, &mut buffer, blocks)
+    };
+
+    // Auto-evict any equivocators surfaced during application (keeps the block as
+    // evidence, mirrors the previous behaviour).
+    if !outcome.equivocations.is_empty() {
+        let mut constitution = handle.constitution.write().await;
+        for proof in &outcome.equivocations {
+            let creator_hex: String = proof.creator[..4]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            warn!(
+                from = %from,
+                creator = %creator_hex,
+                "equivocation detected from peer"
+            );
+            constitution.auto_evict(proof);
         }
+        drop(constitution);
     }
-    drop(lace);
+
+    let inserted = outcome.inserted.len();
 
     // Persist newly inserted blocks to the store (batch write for efficiency).
-    if !inserted_blocks.is_empty() {
+    if !outcome.inserted.is_empty() {
         let s = state.read().await;
-        if let Err(e) = s.store.persist_blocks(&inserted_blocks) {
+        if let Err(e) = s.store.persist_blocks(&outcome.inserted) {
             warn!(error = %e, "failed to persist received blocks to store");
         }
         drop(s);
     }
 
     if inserted > 0 {
+        let buffered = handle.orphans.read().await.len();
         info!(
             from = %from,
             inserted = inserted,
             total_received = block_count,
+            buffered_orphans = buffered,
             "received blocks from peer"
         );
         // Signal the finality executor that new blocks may advance ordering.
         handle.finality_notify.notify_one();
     }
 
-    // If we have missing dependencies, request them.
-    if !missing_deps.is_empty() {
-        missing_deps.dedup();
-        let pull_msg = BlocklaceGossipMessage::Pull(missing_deps);
+    // If a gap remains (missing predecessors of buffered orphans), request the
+    // catch-up roots so a peer pushes them; their causal past comes along
+    // (handle_pull includes `causal_past`), draining the buffer.
+    if !outcome.pull_roots.is_empty() {
+        let pull_msg = BlocklaceGossipMessage::Pull(outcome.pull_roots);
         handle.broadcast_gossip_message(&pull_msg).await;
     }
 }
@@ -1387,6 +1460,39 @@ fn spawn_block_cadence(state: NodeState, handle: BlocklaceHandle, cadence_ms: u6
 
             // Idle: produce an empty heartbeat block so height keeps advancing.
             handle.submit_heartbeat(&state).await;
+        }
+    });
+}
+
+// ─── Catch-up Driver ─────────────────────────────────────────────────────────
+
+/// Spawn the periodic catch-up driver.
+///
+/// The block-reception path (`handle_push`) already drives catch-up REACTIVELY:
+/// out-of-order blocks are buffered and their missing predecessors pulled the
+/// moment a gap is seen. This driver is the SAFETY NET for the case where the
+/// triggering gossip was itself lost — a node that fell behind while a peer's
+/// `Push` never arrived has nothing in its orphan buffer to react to. On a slow
+/// timer it (a) re-requests any still-unmet predecessors of buffered orphans (in
+/// case the earlier `Pull` was dropped), and (b) when a gap is open, re-announces
+/// its frontier so peers recompute and push the delta. Quiescent when fully synced
+/// (empty buffer ⇒ a frontier ping at most, and only if `interval_ms > 0`).
+fn spawn_catchup_driver(handle: BlocklaceHandle, interval_ms: u64) {
+    if interval_ms == 0 {
+        info!("catch-up driver disabled (interval 0): catch-up is purely reactive");
+        return;
+    }
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        ticker.tick().await; // skip immediate tick
+        info!(interval_ms, "catch-up driver active");
+        loop {
+            ticker.tick().await;
+            let buffered = handle.catchup_tick().await;
+            if buffered > 0 {
+                debug!(buffered, "catch-up driver: gap still open, requested sync");
+            }
         }
     });
 }
