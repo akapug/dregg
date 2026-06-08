@@ -346,8 +346,8 @@ small N (L4).
 | Handoff reject is side-effect-free | pure decision `Prop` | read-only `check`; enliven only on success | **HOLDS — F-2 CLOSED** |
 | GC no-premature-reclaim (B4, lease) | lease only reclaims expired | (lease path proven) | holds for lease path |
 | GC session-Byzantine resistance | wrong session can't drop | session path: rejected | **HOLDS** for session path |
-| GC drop authentication | **§6 refcount-drop modeled** (`captp_drop_requires_minting_session`) | legacy `process_drop` fail-closed (`#[deprecated]`, returns `Invalid`) | **HOLDS — F-11 CLOSED (+ proof extended)** |
-| GC session granularity | (n/a) | **holder-scoped, re-export rewrites all refs' session** | **GAP — F-12** |
+| GC drop authentication | **refcount-drop path modeled** (`CapTPGCConcrete.processDrop` + `f11_session_free_drop_denied`) | legacy `process_drop` fail-closed (`#[deprecated]`, returns `Invalid`) | **HOLDS — F-11 CLOSED (+ proof extended)** |
+| GC session granularity | **per-ref scoping** (`f12_reexport_preserves_original_session_rights` / `f12_session_drops_only_its_own`) | **per-session buckets** (`RefCount.sessions`); re-export keeps original session's rights | **HOLDS — F-12 CLOSED** |
 | Equivocation detection | detectable + evict | self-fork detected; forgery rejected | **HOLDS** (evidence) |
 | Honest-creator non-framing | author honest ⇒ no equiv | malleability framing **fails** (dalek-v2 strict) | **HOLDS** (evidence, beyond proof) |
 | Forward secrecy (B6) | ephemeral-key idealized | real x25519+HKDF+ChaCha20Poly1305 | **HOLDS** (primitives vetted) |
@@ -366,26 +366,39 @@ The two NEW GC findings (F-11, F-12) are the GC analogues of F-2 and F-3:
   open door is the default-named method. Reproduced by
   `finding_legacy_process_drop_bypasses_session_byzantine_defense`.
   **CLOSED:** (a) `process_drop` is now `#[deprecated]` and **fail-closed** — it
-  performs NO mutation and always returns `DropResult::Invalid`; the per-session
-  bucket model (`RefCount.sessions`) makes session validation mandatory in
-  `process_drop_inner`. The red-team test is **flipped to DEFENDED**. (b) The Lean
-  blind spot is closed too: `Exec/CapTPGC.lean` §6 now MODELS the refcount-drop
-  path (per-session `Buckets`, `applyDrop`) and proves
-  `captp_drop_requires_minting_session` (an unauthorized/session-free drop is a
-  total NO-OP on the buckets — the law the pre-fix code VIOLATED) plus
-  `captp_drop_scoped_to_session` / `captp_reexport_preserves_original_session`
-  (F-12 per-ref scoping) and `captp_authorized_drop_decrements_own_bucket` (the
-  genuine holder still gets through). `#assert_axioms`-clean, no `sorry`.
-- **F-12 (FINDING — `redteam`-proven, design subtlety):** `session_id` is stored
+  performs NO mutation and always returns `DropResult::Invalid`. `process_drop_inner`
+  takes a mandatory `SessionId` (the `Option`/session-free arm is gone) and
+  decrements only the requesting session's bucket. The red-team test
+  `finding_legacy_process_drop_bypasses_session_byzantine_defense` is **flipped to
+  DEFENDED** (`[GC ATTACK 2 / F-11] DEFENDED (denied, fail-closed)`). (b) The Lean
+  blind spot is closed too: `Exec/CapTPGCConcrete.lean` §2 now models the
+  refcount-drop path with a mandatory-session `processDrop` over per-session buckets
+  (`HolderRef.sessions`), and §4a proves `f11_session_free_drop_denied` — a session
+  that minted no ref (the session-free / forged / "session 0" credential) is a total
+  NO-OP on the table: `(invalid, t)` with `totalRefs` unchanged (the law the pre-fix
+  code VIOLATED). The honest holder still gets through (`right_session_decrements`),
+  and `byzantine_cannot_drop_victim_ref` carries over. `#assert_axioms`-clean, no
+  `sorry`.
+- **F-12 (FINDING — `redteam`-proven, design subtlety):** `session_id` was stored
   **per-(cell, federation) holder, not per-ref** (`gc.rs:129-139`). A re-export to
-  the same federation on a new session **overwrites the session id of ALL that
-  holder's existing refs** and bumps the count. Consequence: after a re-export,
-  the *original* session can no longer drop even the refs it legitimately minted,
-  while the *new* session can drop refs it never minted. So "a drop from the
-  wrong session is a no-op" is true only between *concurrent distinct* sessions;
-  a re-export collapses them. Reproduced by
-  `finding_reexport_supersedes_session_for_all_existing_refs`. *Fix: scope
-  session id per-ref, or make re-export allocate a distinct holder slot.*
+  the same federation on a new session **overwrote the session id of ALL that
+  holder's existing refs** and bumped the count. Consequence: after a re-export,
+  the *original* session could no longer drop even the refs it legitimately minted,
+  while the *new* session could drop refs it never minted. Reproduced by
+  `finding_reexport_supersedes_session_for_all_existing_refs`.
+  **CLOSED:** `RefCount` now carries per-session buckets (`sessions: HashMap<SessionId,
+  u64>`, summed by `count`); `record_export_with_session` mints into the named
+  session's bucket and never touches the others, and `process_drop_inner` decrements
+  only the requesting session's bucket. The original session keeps its drop rights and
+  a session can drop only what it minted. The red-team tests
+  `finding_reexport_supersedes_session_for_all_existing_refs` and
+  `new_session_cannot_overdrop_into_original_sessions_refs` are **flipped to DEFENDED**
+  (`[GC ATTACK 3 / F-12] DEFENDED`, `[GC ATTACK 3b / F-12] DEFENDED`). On the Lean side
+  `Exec/CapTPGCConcrete.lean` §4a proves `f12_reexport_preserves_original_session_rights`
+  (a new session's bucket leaves the original session's bucket untouched) and
+  `f12_session_drops_only_its_own` (a drop touches only the named session's bucket).
+  The `gcDifferentialCorpus` (Lean ⟷ Rust `gc_session_tooth_matches_lean_corpus`) now
+  pins the corrected per-ref rows. `#assert_axioms`-clean, no `sorry`.
 
 ---
 
@@ -399,8 +412,9 @@ it touches no SWAP/circuit/apps/lightclient code. It depends on the real
 - `tests/captp_attacks.rs` — 8 tests: confinement, permission/mask amplification,
   forgery, interception-replay, untrusted-introducer (DEFENDED) + F-2 grief +
   F-3 oracle (FINDINGS asserted reproducible).
-- `tests/gc_attacks.rs` — 4 tests: wrong-session drop, over-drop (DEFENDED) +
-  F-11 bypass + F-12 supersede (FINDINGS asserted reproducible).
+- `tests/gc_attacks.rs` — 5 tests: wrong-session drop, over-drop (DEFENDED) +
+  F-11 legacy session-free bypass (now **DEFENDED** — fail-closed) + F-12 re-export
+  supersede + F-12 new-session over-drop (now **DEFENDED** — per-ref scoping).
 - `tests/blocklace_attacks.rs` — 4 tests: self-fork detection, cross-creator
   forgery, idempotent replay (DEFENDED) + the malleability-framing PROBE
   (DEFENDED by dalek-v2 strictness).
@@ -437,12 +451,13 @@ test finding_amplifying_handoff_consumes_a_use_on_rejection ... [ATTACK 4 / FIND
 test finding_enliven_error_taxonomy_is_a_membership_oracle ... [ATTACK 5 / FINDING] enliven error taxonomy distinguishes present-vs-absent: LEAK (FINDING)
 test result: ok. 8 passed; 0 failed
 
-running 4 tests   (gc_attacks)
+running 5 tests   (gc_attacks)
 test attack_byzantine_wrong_session_drop_is_noop ... [GC ATTACK 1] wrong-session drop: DEFENDED
 test attack_overdrop_does_not_underflow_or_overrevoke ... [GC ATTACK 4] over-drop: DEFENDED (no underflow)
-test finding_legacy_process_drop_bypasses_session_byzantine_defense ... [GC ATTACK 2 / FINDING] legacy process_drop bypasses session defense: BROKEN
-test finding_reexport_supersedes_session_for_all_existing_refs ... [GC ATTACK 3 / FINDING] session is holder-scoped, not ref-scoped: BROKEN-ish
-test result: ok. 4 passed; 0 failed
+test finding_legacy_process_drop_bypasses_session_byzantine_defense ... [GC ATTACK 2 / F-11] legacy session-free process_drop: DEFENDED (denied, fail-closed)
+test finding_reexport_supersedes_session_for_all_existing_refs ... [GC ATTACK 3 / F-12] session is PER-REF; re-export keeps the original session's rights: DEFENDED
+test new_session_cannot_overdrop_into_original_sessions_refs ... [GC ATTACK 3b / F-12] new session cannot over-drop into another session's refs: DEFENDED
+test result: ok. 5 passed; 0 failed
 ```
 
 Live devnet probe (`GET /status`, real response — L1/F-8):
@@ -465,7 +480,7 @@ Live devnet `POST /turn/submit` → **405** (mutation disabled on the deployment
 |----|-------|----------|-------|-------|-----|
 | F-2 | grief / DoS | MED | `captp/src/handoff.rs` enliven-before-amplify | CapTP | **CLOSED** — read-only `check`; enliven only on success (redteam DEFENDED) |
 | F-3 | info leak | LOW | `captp/src/sturdy.rs` EnlivenError taxonomy | CapTP | **CLOSED** — opaque `"denied"` at boundary (redteam DEFENDED) |
-| F-11 | premature reclaim | HIGH | `captp/src/gc.rs::process_drop` session-free | CapTP | **CLOSED** — `#[deprecated]` fail-closed + Lean §6 refcount-drop proof (redteam DEFENDED) |
+| F-11 | premature reclaim | HIGH | `captp/src/gc.rs::process_drop` session-free | CapTP | **CLOSED** — `#[deprecated]` fail-closed + Lean `CapTPGCConcrete.f11_session_free_drop_denied` (refcount-drop path; redteam DEFENDED) |
 | F-12 | GC session granularity | MED | `captp/src/gc.rs` holder-scoped session | CapTP | **CLOSED** — per-ref session buckets + Lean scoping proof (redteam DEFENDED) |
 | F-10 | pipeline sender-binding | MED | `captp/src/pipeline.rs` bridge placeholder | CapTP | **CLOSED** — mandatory `CapTpState::new(fed)` binds real sender (redteam DEFENDED) |
 | F-1 | rate-limit bypass | MED | `node/src/api.rs` per-IP behind proxy | SWAP/node | trust forwarded-for |
