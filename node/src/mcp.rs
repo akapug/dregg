@@ -577,15 +577,47 @@ struct McpInitializeResult {
     capabilities: McpCapabilities,
     #[serde(rename = "serverInfo")]
     server_info: McpServerInfo,
+    /// MCP `instructions`: a server-level orientation hint shown to the model on
+    /// connect, BEFORE it lists anything. dregg uses it to immediately point an
+    /// arriving agent at its self-orientation surface (`dregg://about`,
+    /// `dregg://ontology`, `dregg://identity`) and explain the `_cap` ocap
+    /// convention — so the agent knows it is INHABITING a place, not calling an
+    /// RPC grab-bag, from the very first message.
+    instructions: &'static str,
 }
 
 #[derive(Serialize)]
 struct McpCapabilities {
     tools: McpToolsCapability,
+    resources: McpResourcesCapability,
+    prompts: McpPromptsCapability,
+    /// MCP `completions` capability: this server answers `completion/complete`
+    /// for prompt arguments and resource-template variables (e.g. completing a
+    /// `dregg://cell/{cell_id}` from the cells it knows). An empty object is the
+    /// spec's way of advertising the capability with no sub-flags.
+    completions: McpCompletionsCapability,
 }
 
 #[derive(Serialize)]
+struct McpCompletionsCapability {}
+
+#[derive(Serialize)]
 struct McpToolsCapability {
+    #[serde(rename = "listChanged")]
+    list_changed: bool,
+}
+
+#[derive(Serialize)]
+struct McpResourcesCapability {
+    /// We support resources/subscribe for live state (cell state, blocklace
+    /// status) via the node's event broadcast, advertised but realized lazily.
+    subscribe: bool,
+    #[serde(rename = "listChanged")]
+    list_changed: bool,
+}
+
+#[derive(Serialize)]
+struct McpPromptsCapability {
     #[serde(rename = "listChanged")]
     list_changed: bool,
 }
@@ -611,6 +643,13 @@ struct McpToolDef {
     description: &'static str,
     #[serde(rename = "inputSchema")]
     input_schema: Value,
+    /// MCP 2025-06-18 `outputSchema`: the JSON-schema of the tool's
+    /// `structuredContent`. Declaring it lets a client validate the typed result
+    /// and know the shape before calling. dregg's mutating tools all return a
+    /// common "receipt" shape; reads return their own structured state. Injected
+    /// in the list pass from [`tool_output_schema`].
+    #[serde(rename = "outputSchema", skip_serializing_if = "Option::is_none")]
+    output_schema: Option<Value>,
     /// MCP behavioural ANNOTATIONS (`readOnlyHint` / `destructiveHint` /
     /// `idempotentHint` / `openWorldHint`). These are hints — an agent uses
     /// them to decide whether a call mutates, can be safely retried, or touches
@@ -902,23 +941,95 @@ fn tool_annotations(tool: &str) -> McpToolAnnotations {
     }
 }
 
+/// The declared `outputSchema` for a tool's `structuredContent` (MCP 2025-06-18).
+///
+/// Most dregg tools that change state return the SAME structured "receipt" shape
+/// (turn hash + commit flag + the Effect-VM STARK proof material). Declaring it
+/// once, by reuse, lets a client validate the typed result and — crucially for an
+/// agent's VERIFY mode — know up front that a turn carries a proof to check. Read
+/// tools and a few bespoke shapes return `None` (their `structuredContent` is the
+/// state object itself, whose shape is self-describing).
+fn tool_output_schema(tool: &str) -> Option<Value> {
+    // The common verified-turn receipt shape produced by `run_*_action` /
+    // `tool_submit_turn` / capability + app tools.
+    let receipt = || {
+        serde_json::json!({
+            "type": "object",
+            "description": "A dregg verified-turn receipt: the committed state transition plus \
+                            its Effect-VM STARK proof material (verify via dregg://receipts or \
+                            the standalone dregg-verifier).",
+            "properties": {
+                "committed": { "type": "boolean", "description": "Whether the turn committed to the ledger." },
+                "turn_hash": { "type": "string", "description": "Hex hash of the committed turn." },
+                "post_state_root": { "type": "string", "description": "Hex post-state root the proof binds to." },
+                "effect_vm_proof_hex": { "type": "string", "description": "Hex-encoded Effect-VM STARK proof of the transition." },
+                "effect_vm_public_inputs": { "type": "array", "items": { "type": "integer" }, "description": "The proof's public inputs." },
+                "effect_vm_witness_hash_hex": { "type": "string", "description": "Hex witness hash binding the trace." }
+            },
+            "required": ["committed"]
+        })
+    };
+    match tool {
+        // Tools that submit a verified turn and return the receipt shape.
+        "dregg_submit_turn"
+        | "dregg_grant_capability"
+        | "dregg_revoke_capability"
+        | "dregg_delegate"
+        | "dregg_make_sovereign"
+        | "dregg_register_name"
+        | "dregg_publish_subscription"
+        | "dregg_register_service"
+        | "dregg_issue_credential"
+        | "dregg_exercise_bearer_cap"
+        | "dregg_fulfill_intent" => Some(receipt()),
+        _ => None,
+    }
+}
+
 /// The public tool list: the raw definitions DECORATED with title, behavioural
-/// annotations, and a `group` tag in the input schema's metadata. This is what
-/// `tools/list` serves.
+/// annotations, an output schema, and a `group` tag in the input schema's
+/// metadata. This is what `tools/list` serves.
 fn tool_definitions() -> Vec<McpToolDef> {
     let mut defs = tool_definitions_raw();
     for d in defs.iter_mut() {
         d.title = Some(tool_title(d.name));
         d.annotations = Some(tool_annotations(d.name));
+        d.output_schema = tool_output_schema(d.name);
         // Stamp the legible group + required capability scope into the schema's
         // top-level metadata so an agent self-orienting from tools/list alone
         // can see which mode each tool belongs to and what authority it needs.
+        let scope = tool_required_scope(d.name);
         if let Value::Object(map) = &mut d.input_schema {
             map.insert("x-dregg-group".to_string(), Value::String(tool_group(d.name).to_string()));
-            map.insert(
-                "x-dregg-scope".to_string(),
-                Value::String(tool_required_scope(d.name).to_string()),
-            );
+            map.insert("x-dregg-scope".to_string(), Value::String(scope.to_string()));
+            // Declare the ocap `_cap` argument in the SCHEMA, not just prose.
+            // When capability enforcement is on, a covering tools-access biscuit
+            // (scope verb '{scope}') must be presented here; an agent reading
+            // tools/list — and a schema-validating client — discovers the
+            // requirement without having to read dregg://about. Optional in the
+            // schema (enforcement may be off), but its presence makes the ocap
+            // model legible right at the tool boundary.
+            if let Some(props) = map.get_mut("properties").and_then(|p| p.as_object_mut()) {
+                props.insert(
+                    "_cap".to_string(),
+                    serde_json::json!({
+                        "type": "object",
+                        "description": format!(
+                            "ocap credential. When capability enforcement is on, present a \
+                             tools-access biscuit covering this tool's '{scope}' scope, minted by \
+                             this node under its mcp_cap_issuer_pubkey (see dregg://identity). \
+                             Omit when enforcement is off."
+                        ),
+                        "properties": {
+                            "biscuit": {
+                                "type": "string",
+                                "description": "The encoded 'eb2_…' biscuit string."
+                            }
+                        },
+                        "required": ["biscuit"]
+                    }),
+                );
+            }
         }
     }
     defs
@@ -929,6 +1040,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_get_status",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Get node status (height, peers, health)",
             input_schema: serde_json::json!({
@@ -940,6 +1052,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_create_agent",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Register this node's cipherclerk as a cell in the local ledger (idempotent). Returns the content-addressed cell_id.",
             input_schema: serde_json::json!({
@@ -954,6 +1067,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_authorize",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Prove authorization for an action using ZK proof",
             input_schema: serde_json::json!({
@@ -969,6 +1083,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_submit_turn",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Submit an atomic turn (set of actions) for execution. Pass an `effects` array to actually perform work (transfers, set_field, etc.); omit it for a no-op turn that just chains a receipt.",
             input_schema: serde_json::json!({
@@ -990,6 +1105,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_grant_capability",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Grant a capability to another agent",
             input_schema: serde_json::json!({
@@ -1005,6 +1121,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_revoke_capability",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Revoke a previously granted capability",
             input_schema: serde_json::json!({
@@ -1018,6 +1135,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_post_intent",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Post an intent to the marketplace (request a capability/service)",
             input_schema: serde_json::json!({
@@ -1034,6 +1152,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_fulfill_intent",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Fulfill a matching intent from the marketplace",
             input_schema: serde_json::json!({
@@ -1047,6 +1166,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_delegate",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Delegate a bounded sub-capability to another agent",
             input_schema: serde_json::json!({
@@ -1063,6 +1183,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_check_capabilities",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "List all capabilities held by the current agent",
             input_schema: serde_json::json!({
@@ -1074,6 +1195,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_read_cell",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Read a cell's state (balance, fields, permissions)",
             input_schema: serde_json::json!({
@@ -1087,6 +1209,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_get_receipt_chain",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Get the agent's auditable receipt chain (action history)",
             input_schema: serde_json::json!({
@@ -1100,6 +1223,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_seal_data",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Encrypt data that only a specific agent can decrypt",
             input_schema: serde_json::json!({
@@ -1114,6 +1238,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_unseal_data",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Decrypt sealed data addressed to this agent",
             input_schema: serde_json::json!({
@@ -1127,6 +1252,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_bridge_note",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Bridge a note to another federation",
             input_schema: serde_json::json!({
@@ -1142,6 +1268,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_make_sovereign",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Transition a cell to sovereign mode (cell stores its own state, federation only holds commitment)",
             input_schema: serde_json::json!({
@@ -1155,6 +1282,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_peer_exchange",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Initiate P2P state exchange with another sovereign cell, producing a STARK proof of the transition",
             input_schema: serde_json::json!({
@@ -1170,6 +1298,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_compress_history",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "IVC-compress a sovereign cell's turn history into a single constant-size proof",
             input_schema: serde_json::json!({
@@ -1186,6 +1315,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_create_bearer_cap",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Create a bearer capability proof (immediate grant, no c-list storage required)",
             input_schema: serde_json::json!({
@@ -1202,6 +1332,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_exercise_bearer_cap",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Exercise a bearer capability to perform an action without c-list storage. Pass an `effects` array to actually perform work (e.g. transfer from the target cell).",
             input_schema: serde_json::json!({
@@ -1226,6 +1357,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_deploy_factory",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Deploy a factory descriptor to the ProgramRegistry (defines what new cells can be created)",
             input_schema: serde_json::json!({
@@ -1242,6 +1374,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_create_from_factory",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Create a new cell from a deployed factory (with provenance tracking)",
             input_schema: serde_json::json!({
@@ -1257,6 +1390,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_verify_provenance",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Verify a cell's factory provenance (check its creation lineage)",
             input_schema: serde_json::json!({
@@ -1272,6 +1406,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_prove_sovereign_turn",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Generate a STARK proof for a sovereign cell's multi-effect turn via the Effect VM",
             input_schema: serde_json::json!({
@@ -1300,6 +1435,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_verify_sovereign_proof",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Verify a STARK proof generated by the Effect VM for a sovereign turn",
             input_schema: serde_json::json!({
@@ -1319,6 +1455,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_create_stealth_address",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Generate a one-time stealth address for a recipient (unlinkable receive address)",
             input_schema: serde_json::json!({
@@ -1333,6 +1470,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_private_transfer",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Perform a private value transfer using Pedersen commitments (hides amount)",
             input_schema: serde_json::json!({
@@ -1349,6 +1487,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_encrypt_intent",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Post an SSE-encrypted intent (body hidden, matchable via search tokens)",
             input_schema: serde_json::json!({
@@ -1364,6 +1503,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_prove_predicate",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Prove a predicate over private data (e.g. balance >= threshold) without revealing the value",
             input_schema: serde_json::json!({
@@ -1382,6 +1522,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_compose_proofs",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Compose multiple proofs using logical operators (and/or/chain/aggregate)",
             input_schema: serde_json::json!({
@@ -1409,6 +1550,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_get_blocklace_status",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Get blocklace consensus status (tip, finality level, participants, wave)",
             input_schema: serde_json::json!({
@@ -1420,6 +1562,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_get_constitution",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Get the current federation constitution (membership set, threshold, version)",
             input_schema: serde_json::json!({
@@ -1431,6 +1574,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_propose_membership",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Propose a membership change (join/leave/threshold change) to the federation",
             input_schema: serde_json::json!({
@@ -1447,6 +1591,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_check_resource_budget",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Query remaining budget allowance for a shared resource (bounded-counter coordination)",
             input_schema: serde_json::json!({
@@ -1460,6 +1605,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_debit_shared_resource",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Optimistic debit from a shared resource (Tier 2: consensus-free if within local budget slice)",
             input_schema: serde_json::json!({
@@ -1476,6 +1622,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_list_auctions",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "List active gallery auctions (commit-reveal sealed-bid)",
             input_schema: serde_json::json!({
@@ -1489,6 +1636,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_place_bid",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Place a sealed bid on a gallery auction (commit phase: bid amount hidden behind commitment)",
             input_schema: serde_json::json!({
@@ -1505,6 +1653,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_captp_deliver",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Construct and submit a Turn whose root action is authorized by `Authorization::CapTpDelivered` (introducer-signed HandoffCertificate + sender Ed25519 sig over the canonical delivery message). The node cipherclerk plays the recipient/sender; the introducer key is constructed in-process for testing. Returns the turn hash and the cert nonce.",
             input_schema: serde_json::json!({
@@ -1530,6 +1679,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_exercise_handoff_cert",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Exercise a CapTP HandoffCertificate: constructs a Turn authorized by \
                 `Authorization::CapTpDelivered` (mirroring `dregg_captp_deliver`) and attaches a \
@@ -1564,6 +1714,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_sign_sovereign_witness",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Build a properly-signed `SovereignCellWitness` for a sovereign cell currently in the local ledger. Signs the canonical message (cell_id || old_commitment || new_commitment || effects_hash || timestamp || sequence) with the node cipherclerk's Ed25519 key. Pass `attach_proof=true` to also generate an Effect-VM STARK proof binding the transition. Returns the witness postcard-encoded as hex plus structured fields.",
             input_schema: serde_json::json!({
@@ -1587,6 +1738,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_bilateral_action",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Submit a Turn with a single bilateral effect (Transfer / GrantCapability / Introduce) and return the WitnessedReceipts for BOTH cells involved. The executor's bilateral schedule binds the from-side and to-side accumulator roots; this tool surfaces the per-side trace + proof bytes so callers can verify the bilateral identity end-to-end.",
             input_schema: serde_json::json!({
@@ -1613,6 +1765,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_register_name",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Register a name in a starbridge-nameservice registry cell via the canonical credential-attested builder. Wraps `starbridge_nameservice::build_register_with_credential_action` (the attested-tier variant). Receipt carries STARK proof binding the three SetField updates (name_hash, owner_hash, expiry).",
             input_schema: serde_json::json!({
@@ -1632,6 +1785,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_publish_subscription",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Publish a bounty-state notification to a starbridge-subscription cell via the canonical bounty-lifecycle builder. Wraps `starbridge_subscription::build_bounty_state_publish_action`. Receipt carries STARK proof binding the three SetField updates (seq_head, message_root, latest_payload).",
             input_schema: serde_json::json!({
@@ -1651,6 +1805,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_issue_credential",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Issue a credential and anchor the issuance on a starbridge-identity issuer cell via the canonical builder. Wraps `dregg_credentials::issue` + `starbridge_identity::build_issue_credential_action`. Receipt carries STARK proof binding the two SetField updates (issuance_counter, revocation_root) and the credential id is returned for downstream binding.",
             input_schema: serde_json::json!({
@@ -1671,6 +1826,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_register_service",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Register a service entry at a named path on a starbridge-governed-namespace cell via the canonical builder. Wraps `starbridge_governed_namespace::build_register_service_action`. The underlying action is event-only (EmitEvent('service-registered', [path_hash, target])); the EffectVmAir carries a canonical EmitEvent row variant (#110) so the STARK proof binds the actual (topic_hash, payload_hash) of the emitted event into PI[EMIT_EVENT_TOPIC_HASH] / PI[EMIT_EVENT_PAYLOAD_HASH]. No synthesised state mutation is required.",
             input_schema: serde_json::json!({
@@ -1687,6 +1843,7 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
         McpToolDef {
             name: "dregg_create_cell_from_factory_effect",
             title: None,
+            output_schema: None,
             annotations: None,
             description: "Emit a canonical `Effect::CreateCellFromFactory` inside a Turn so the new cell is created through the factory descriptor's validate_creation path (instead of the legacy direct insertion). Use this from the wasm/extension surface when a factory has been deployed and you want all child-cell creations to flow through the descriptor's constraints.",
             input_schema: serde_json::json!({
@@ -1879,6 +2036,66 @@ fn parse_presented_cap(
     })
 }
 
+/// The node-side trust context needed to verify a presented MCP capability:
+/// the issuer pubkey (trust anchor), the authority cell the scope names, and the
+/// federation id the verifying executor binds to. Snapshotting it once lets a
+/// caller cover-check MANY tools (e.g. to filter `tools/list`) without
+/// re-reading node state or rebuilding the executor per tool.
+struct McpCapContext {
+    enforce: bool,
+    issuer_pubkey: [u8; 32],
+    authority_cell: dregg_cell::Cell,
+    federation_id: [u8; 32],
+}
+
+impl McpCapContext {
+    async fn snapshot(state: &NodeState) -> Self {
+        let s = state.read().await;
+        let node_pk = s.cclerk.public_key().0;
+        let issuer_pubkey = mcp_cap_issuer_pubkey(&s.cclerk);
+        McpCapContext {
+            enforce: s.mcp_cap_enforce,
+            issuer_pubkey,
+            authority_cell: mcp_authority_cell(&node_pk, &issuer_pubkey),
+            federation_id: s.federation_id,
+        }
+    }
+
+    /// Does `credential` cover `tool`'s required scope? Runs the EXACT executor
+    /// admission check (`verify_token_for_scope`) used to gate a real turn — the
+    /// SAME teeth, reused read-only so it can also drive tool VISIBILITY.
+    ///
+    /// Build the verifying executor under the node's federation id so its
+    /// AuthRequest binding matches the node. The biscuit cover is keyed on
+    /// (service = authority cell, action = scope verb) + the issuer anchored in
+    /// the authority cell's verification_key, so this is the real admission check.
+    fn cap_covers_tool(
+        &self,
+        credential: &dregg_turn::Authorization,
+        tool: &str,
+    ) -> Result<(), String> {
+        let scope = tool_required_scope(tool);
+        let scope_action = dregg_turn::action::symbol(scope);
+        let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        executor.set_local_federation_id(self.federation_id);
+        executor
+            .verify_token_for_scope(credential, &self.authority_cell, scope_action)
+            .map_err(|e| {
+                format!("capability '_cap' does not cover tool '{tool}' (required scope '{scope}'): {e}")
+            })
+    }
+
+    /// Whether `tool` is INVOCABLE under an optionally-presented credential.
+    /// Mirrors [`enforce_tool_cap`]'s admission decision exactly — used to filter
+    /// `tools/list` so an agent only SEES tools its caps permit (ocap visibility).
+    fn tool_invocable(&self, presented: Option<&dregg_turn::Authorization>, tool: &str) -> bool {
+        match presented {
+            Some(cred) => self.cap_covers_tool(cred, tool).is_ok(),
+            None => !self.enforce, // no cap + enforcement off ⇒ back-compat pass
+        }
+    }
+}
+
 /// THE per-tool capability gate. Before a `tools/call` reaches its tool body,
 /// require the caller's presented `Authorization::Token` to cover the tool's
 /// declared `(action, resource)` scope — verified by the EXECUTOR's
@@ -1897,22 +2114,13 @@ async fn enforce_tool_cap(
     arguments: &Value,
     state: &NodeState,
 ) -> Result<(), String> {
-    let (enforce, node_pk, issuer_pubkey, federation_id) = {
-        let s = state.read().await;
-        (
-            s.mcp_cap_enforce,
-            s.cclerk.public_key().0,
-            mcp_cap_issuer_pubkey(&s.cclerk),
-            s.federation_id,
-        )
-    };
-
-    let presented = parse_presented_cap(arguments, &issuer_pubkey);
+    let ctx = McpCapContext::snapshot(state).await;
+    let presented = parse_presented_cap(arguments, &ctx.issuer_pubkey);
 
     let credential = match presented {
         Some(c) => c,
         None => {
-            if enforce {
+            if ctx.enforce {
                 return Err(format!(
                     "capability enforcement is on: tool '{tool}' requires a covering \
                      '_cap' biscuit (scope '{}')",
@@ -1924,24 +2132,7 @@ async fn enforce_tool_cap(
         }
     };
 
-    let scope_action = dregg_turn::action::symbol(tool_required_scope(tool));
-    let authority_cell = mcp_authority_cell(&node_pk, &issuer_pubkey);
-
-    // Build the verifying executor under the node's federation id so its
-    // AuthRequest binding matches the node. The biscuit cover is keyed on
-    // (service = authority cell, action = scope verb) + the issuer anchored in
-    // the authority cell's verification_key, so this is the real admission check.
-    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
-    executor.set_local_federation_id(federation_id);
-
-    executor
-        .verify_token_for_scope(&credential, &authority_cell, scope_action)
-        .map_err(|e| {
-            format!(
-                "capability '_cap' does not cover tool '{tool}' (required scope '{}'): {e}",
-                tool_required_scope(tool)
-            )
-        })
+    ctx.cap_covers_tool(&credential, tool)
 }
 
 async fn dispatch_tool(name: &str, params: Value, state: &NodeState) -> McpToolResult {
@@ -2174,13 +2365,23 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
     let target_cell_bytes = match hex_decode(target_cell_hex) {
         Ok(b) => b,
         Err(_) => {
-            return McpToolResult::error("invalid hex for target_cell (expected 64 hex chars)");
+            return McpToolResult::actionable_error(
+                format!(
+                    "invalid hex for target_cell (got {} chars)",
+                    target_cell_hex.len()
+                ),
+                "target_cell must be exactly 64 hex chars (a 32-byte cell id). Read \
+                 dregg://identity for your own agent cell id.",
+            );
         }
     };
 
     let mut s = state.write().await;
     if !s.unlocked {
-        return McpToolResult::error("cipherclerk is locked; unlock first");
+        return McpToolResult::actionable_error(
+            "cipherclerk is locked",
+            "Unlock the node's cipherclerk first; it holds the signing key for turns.",
+        );
     }
 
     // SECURITY: Use the cipherclerk's own cell ID as the turn agent (not caller-supplied).
@@ -7145,8 +7346,14 @@ pub async fn run_stdio(state: NodeState) {
 
         let response = match request.method.as_str() {
             "initialize" => handle_initialize(id),
-            "tools/list" => handle_tools_list(id),
+            "tools/list" => handle_tools_list(id, request.params, &state).await,
             "tools/call" => handle_tools_call(id, request.params, &state).await,
+            "resources/list" => handle_resources_list(id, request.params, &state).await,
+            "resources/templates/list" => handle_resource_templates_list(id),
+            "resources/read" => handle_resources_read(id, request.params, &state).await,
+            "prompts/list" => handle_prompts_list(id),
+            "prompts/get" => handle_prompts_get(id, request.params),
+            "completion/complete" => handle_completion_complete(id, request.params, &state).await,
             "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
             _ => JsonRpcResponse::method_not_found(id),
         };
@@ -7162,31 +7369,132 @@ pub async fn run_stdio(state: NodeState) {
 
 fn handle_initialize(id: Value) -> JsonRpcResponse {
     let result = McpInitializeResult {
-        protocol_version: "2024-11-05",
+        // 2025-06-18: the revision that standardized tool annotations +
+        // structured tool output, both of which this server now emits.
+        protocol_version: "2025-06-18",
         capabilities: McpCapabilities {
             tools: McpToolsCapability {
                 list_changed: false,
             },
+            resources: McpResourcesCapability {
+                subscribe: true,
+                list_changed: false,
+            },
+            prompts: McpPromptsCapability {
+                list_changed: false,
+            },
+            completions: McpCompletionsCapability {},
         },
         server_info: McpServerInfo {
             name: "dregg-node",
             version: env!("CARGO_PKG_VERSION"),
         },
+        instructions:
+            "You are inhabiting dregg — verified, capability-secure polis-infrastructure for AI \
+             minds. This is a place, not an RPC grab-bag. Before acting, ORIENT: read the \
+             resources `dregg://about` (what dregg is + the four modes orient/act/delegate/verify), \
+             `dregg://ontology` (the 56 verified effects you can drive), and `dregg://identity` \
+             (who you are here). Then read `dregg://capabilities` (or call \
+             `dregg_check_capabilities`) to see what authority you hold. Every state-changing turn \
+             runs through a Lean-verified kernel and returns a STARK-proved receipt — VERIFY your \
+             actions via `dregg://receipt/{turn_hash}`. Capabilities are unforgeable and \
+             attenuable: DELEGATE bounded authority to sub-agents with `dregg_delegate`. Tools are \
+             capability-gated — when enforcement is on, present your tools-access biscuit under the \
+             `_cap` argument (`{\"_cap\":{\"biscuit\":\"eb2_…\"}}`) and `tools/list` will show only \
+             the tools it covers. The MCP `prompts` (orient, submit_turn, delegate_capability, \
+             register_name, verify_turn, publish_intent) are guided walkthroughs of the common \
+             workflows.",
     };
 
     JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_tools_list(id: Value) -> JsonRpcResponse {
-    let result = McpToolsListResult {
-        tools: tool_definitions(),
-    };
-    match serde_json::to_value(result) {
-        Ok(v) => JsonRpcResponse::success(id, v),
-        Err(e) => {
-            JsonRpcResponse::internal_error(id, format!("failed to serialize tools list: {e}"))
-        }
+/// Page size for paginated list endpoints (tools/resources). Opaque cursors are
+/// just the next start index encoded as a decimal string, so pagination is
+/// stable across calls as long as the underlying list is stable (it is — tool
+/// and resource sets are static per build).
+const MCP_PAGE_SIZE: usize = 20;
+
+/// Decode an opaque `cursor` param into a start index. Absent / malformed →
+/// start at 0 (fail-open to the first page rather than erroring a list call).
+fn decode_cursor(params: &Value) -> usize {
+    params
+        .get("cursor")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+/// Produce the `nextCursor` value for a page, or `None` when the page is the
+/// last one. The cursor is the opaque encoding of the next start index.
+fn next_cursor(start: usize, page_len: usize, total: usize) -> Option<String> {
+    let consumed = start + page_len;
+    if consumed < total {
+        Some(consumed.to_string())
+    } else {
+        None
     }
+}
+
+/// `tools/list` — CAPABILITY-FILTERED (the ocap model through MCP).
+///
+/// An agent only SEES the tools its capabilities permit. When `mcp_cap_enforce`
+/// is on, a client may present its tools-access biscuit under `_cap` in the list
+/// params; we filter the catalog to exactly the tools that biscuit COVERS — the
+/// same `verify_token_for_scope` admission check that gates invocation, reused
+/// read-only for VISIBILITY. With enforcement on and NO `_cap`, the catalog is
+/// empty (you can't invoke anything, so you see nothing). With enforcement off,
+/// the full catalog is visible (back-compat). This makes the tool surface an
+/// honest reflection of the authority held — not an RPC grab-bag.
+///
+/// Pagination is applied AFTER filtering, so cursors page the visible subset.
+async fn handle_tools_list(id: Value, params: Value, state: &NodeState) -> JsonRpcResponse {
+    let ctx = McpCapContext::snapshot(state).await;
+    // The optional presented capability lives under `_cap` in the list params
+    // (same convention as a tools/call). Absent ⇒ no credential.
+    let presented = parse_presented_cap(&params, &ctx.issuer_pubkey);
+
+    let all = tool_definitions();
+    let visible: Vec<McpToolDef> = all
+        .into_iter()
+        .filter(|d| ctx.tool_invocable(presented.as_ref(), d.name))
+        .collect();
+    let total = visible.len();
+    let start = decode_cursor(&params).min(total);
+    let page: Vec<McpToolDef> = visible.into_iter().skip(start).take(MCP_PAGE_SIZE).collect();
+    let cursor = next_cursor(start, page.len(), total);
+
+    let mut result = match serde_json::to_value(McpToolsListResult { tools: page }) {
+        Ok(v) => v,
+        Err(e) => {
+            return JsonRpcResponse::internal_error(
+                id,
+                format!("failed to serialize tools list: {e}"),
+            );
+        }
+    };
+    if let Value::Object(map) = &mut result {
+        if let Some(c) = cursor {
+            map.insert("nextCursor".to_string(), Value::String(c));
+        }
+        // Surface WHY the visible set may be smaller than the full catalog, so an
+        // agent self-orienting from tools/list understands the ocap filtering.
+        map.insert(
+            "_meta".to_string(),
+            serde_json::json!({
+                "dregg.cap_enforcement": ctx.enforce,
+                "dregg.cap_presented": presented.is_some(),
+                "dregg.visible_tool_count": total,
+                "dregg.note": if ctx.enforce {
+                    "tools/list is capability-filtered: you see only the tools your '_cap' \
+                     biscuit covers. Present a covering '_cap' (read/write/admin) to reveal more."
+                } else {
+                    "capability enforcement is off: the full tool catalog is visible."
+                },
+            }),
+        );
+    }
+    JsonRpcResponse::success(id, result)
 }
 
 async fn handle_tools_call(id: Value, params: Value, state: &NodeState) -> JsonRpcResponse {
@@ -7222,6 +7530,802 @@ async fn handle_tools_call(id: Value, params: Value, state: &NodeState) -> JsonR
             JsonRpcResponse::internal_error(id, format!("failed to serialize tool result: {e}"))
         }
     }
+}
+
+// =============================================================================
+// RESOURCES — readable dregg state with stable URIs (self-orientation surface)
+// =============================================================================
+//
+// Resources let an AI agent ORIENT before it acts: read the dregg ontology
+// (the 56 verified effects + constraint vocabulary), the node's own identity,
+// its receipt chain, capabilities, consensus/finality status, and any cell's
+// state — all by URI, without invoking a (gated, side-effecting) tool. This is
+// the "what is this place and what do I hold" half of inhabiting dregg.
+
+/// The verified dregg ontology catalog, embedded at build time. AUTOGENERATED
+/// (see `site/tools/gen-ontology-catalog.js`) from the Lean source of truth
+/// (`Dregg2/Exec/TurnExecutorFull.lean` + `Dregg2/Exec/FFI.lean`): the 56
+/// effects, their wire codecs, facets, categories, and semantics. An agent
+/// reading `dregg://ontology` learns the entire effect vocabulary it can drive.
+const DREGG_ONTOLOGY_CATALOG: &str =
+    include_str!("../../site/src/_includes/studio/ontology-catalog.generated.json");
+
+/// A static MCP resource the node always exposes.
+struct StaticResource {
+    uri: &'static str,
+    name: &'static str,
+    title: &'static str,
+    description: &'static str,
+    mime_type: &'static str,
+}
+
+/// The fixed (non-templated) resources. Cell state is a separate TEMPLATE
+/// (`dregg://cell/{id}`) advertised via resources/templates/list.
+fn static_resources() -> Vec<StaticResource> {
+    vec![
+        StaticResource {
+            uri: "dregg://ontology",
+            name: "dregg-ontology",
+            title: "dregg Ontology (56 verified effects)",
+            description:
+                "The complete dregg effect vocabulary — 56 effects with wire codecs, facets \
+                 (write/grant/control), categories, and semantics, autogenerated from the \
+                 verified Lean executor. READ THIS FIRST to learn everything an agent can do.",
+            mime_type: "application/json",
+        },
+        StaticResource {
+            uri: "dregg://about",
+            name: "dregg-about",
+            title: "What is dregg? (agent orientation)",
+            description:
+                "A concise orientation: what dregg is (polis-infrastructure for AI minds), the \
+                 core primitives (cells, turns, capabilities, intents), the verified-execution \
+                 story, and how to inhabit the system as an agent.",
+            mime_type: "text/markdown",
+        },
+        StaticResource {
+            uri: "dregg://identity",
+            name: "dregg-identity",
+            title: "This Node's Identity",
+            description:
+                "This node's own identity: public key, content-addressed agent cell id, federation \
+                 id, and the MCP capability-issuer trust anchor. Who am I in dregg?",
+            mime_type: "application/json",
+        },
+        StaticResource {
+            uri: "dregg://status",
+            name: "dregg-status",
+            title: "Node Health & Height",
+            description: "Live node health: latest attested height, peers, note/revocation counts.",
+            mime_type: "application/json",
+        },
+        StaticResource {
+            uri: "dregg://blocklace",
+            name: "dregg-blocklace",
+            title: "Blocklace / Finality Status",
+            description:
+                "Consensus state: latest height, federation mode (solo/full), participant count — \
+                 the finality surface for verifying that an action committed.",
+            mime_type: "application/json",
+        },
+        StaticResource {
+            uri: "dregg://constitution",
+            name: "dregg-constitution",
+            title: "Federation Constitution",
+            description: "Federation membership set and BFT quorum threshold.",
+            mime_type: "application/json",
+        },
+        StaticResource {
+            uri: "dregg://capabilities",
+            name: "dregg-capabilities",
+            title: "My Held Capabilities",
+            description:
+                "The capabilities (biscuit tokens) this agent currently holds — the authority it \
+                 can exercise or delegate. What can I do?",
+            mime_type: "application/json",
+        },
+        StaticResource {
+            uri: "dregg://receipts",
+            name: "dregg-receipts",
+            title: "My Receipt Chain",
+            description:
+                "This agent's auditable receipt chain: every turn it has executed, with pre/post \
+                 state roots and witness (proof) status. Did my action commit & prove?",
+            mime_type: "application/json",
+        },
+        StaticResource {
+            uri: "dregg://tools",
+            name: "dregg-tools",
+            title: "Tool Catalog by Group",
+            description:
+                "The full tool catalog grouped by agent mode (orient / act / delegate / verify / \
+                 privacy / apps), each with its required capability scope and behavioural hints.",
+            mime_type: "application/json",
+        },
+    ]
+}
+
+fn static_resource_to_json(r: &StaticResource) -> Value {
+    serde_json::json!({
+        "uri": r.uri,
+        "name": r.name,
+        "title": r.title,
+        "description": r.description,
+        "mimeType": r.mime_type,
+    })
+}
+
+async fn handle_resources_list(id: Value, params: Value, _state: &NodeState) -> JsonRpcResponse {
+    let all = static_resources();
+    let total = all.len();
+    let start = decode_cursor(&params).min(total);
+    let page: Vec<Value> = all
+        .iter()
+        .skip(start)
+        .take(MCP_PAGE_SIZE)
+        .map(static_resource_to_json)
+        .collect();
+    let cursor = next_cursor(start, page.len(), total);
+
+    let mut result = serde_json::json!({ "resources": page });
+    if let (Value::Object(map), Some(c)) = (&mut result, cursor) {
+        map.insert("nextCursor".to_string(), Value::String(c));
+    }
+    JsonRpcResponse::success(id, result)
+}
+
+fn handle_resource_templates_list(id: Value) -> JsonRpcResponse {
+    // The parameterized resources: any cell's state by id, and any committed
+    // turn's receipt + finality by turn hash (the VERIFY surface).
+    let templates = serde_json::json!({
+        "resourceTemplates": [
+            {
+                "uriTemplate": "dregg://cell/{cell_id}",
+                "name": "dregg-cell",
+                "title": "Cell State by ID",
+                "description":
+                    "Read any cell's state by its hex cell id: balance, nonce, capability count, \
+                     sovereignty, and the program's declared StateConstraint set (slot caveats). \
+                     e.g. dregg://cell/<64-hex-chars>",
+                "mimeType": "application/json"
+            },
+            {
+                "uriTemplate": "dregg://receipt/{turn_hash}",
+                "name": "dregg-receipt",
+                "title": "Turn Receipt & Finality by Turn Hash",
+                "description":
+                    "VERIFY a specific turn: look up its receipt by hex turn hash and read its \
+                     pre/post state roots, whether it carries an Effect-VM STARK witness, and the \
+                     node's current attested height (finality context). Answers 'did my action \
+                     commit & prove?' e.g. dregg://receipt/<64-hex-chars>",
+                "mimeType": "application/json"
+            }
+        ]
+    });
+    JsonRpcResponse::success(id, templates)
+}
+
+/// Wrap a JSON value as an MCP resource-contents entry for `resources/read`.
+fn resource_text_contents(uri: &str, mime: &str, body: String) -> Value {
+    serde_json::json!({
+        "contents": [{
+            "uri": uri,
+            "mimeType": mime,
+            "text": body,
+        }]
+    })
+}
+
+/// The `dregg://about` orientation document.
+fn dregg_about_markdown() -> String {
+    String::from(
+        "# dregg — polis-infrastructure for AI minds\n\n\
+        dregg is a verified, capability-secure substrate where an AI agent can hold value, \
+        prove its actions, and delegate bounded authority to sub-agents. You are not calling \
+        an RPC API; you are INHABITING a place.\n\n\
+        ## Core primitives\n\
+        - **Cell** — a content-addressed account holding balance, state fields, and capabilities. \
+        Your identity is a cell (`dregg://identity`). Read any cell at `dregg://cell/{id}`.\n\
+        - **Turn** — an atomic, fee-paid bundle of effects, executed by the verified kernel. \
+        Submit one with `dregg_submit_turn`; the receipt carries a STARK proof of the state \
+        transition.\n\
+        - **Capability** — unforgeable, attenuable authority (ocap). Grant with \
+        `dregg_grant_capability`, narrow-and-hand-off with `dregg_delegate`, withdraw with \
+        `dregg_revoke_capability`. Capabilities also gate THIS MCP surface: present a `_cap` \
+        biscuit covering a tool's scope to invoke it.\n\
+        - **Intent** — a posted request for a service/capability that another agent can fulfill \
+        (`dregg_post_intent` / `dregg_fulfill_intent`).\n\n\
+        ## The four modes of inhabiting dregg\n\
+        1. **Orient** — read `dregg://ontology` (56 verified effects), `dregg://identity`, \
+        `dregg://capabilities`, `dregg://status`. (Tool group: `orient`.)\n\
+        2. **Act** — submit verified turns, transfer value, use apps. (Tool group: `act` / `apps`.)\n\
+        3. **Delegate** — grant attenuated capabilities to sub-agents; this is the \
+        agent-orchestration substrate. (Tool group: `delegate`.)\n\
+        4. **Verify** — confirm your action was proven and committed via `dregg://receipts`, \
+        a single turn at `dregg://receipt/{turn_hash}`, `dregg://blocklace`, and the proof \
+        tools. (Tool group: `verify`.)\n\n\
+        ## Capabilities gate what you SEE, not just what you do\n\
+        `tools/list` is capability-filtered: when enforcement is on, present your tools-access \
+        biscuit under `_cap` and you will only see the tools it covers. The tool surface is an \
+        honest reflection of your authority — the ocap model, all the way through MCP.\n\n\
+        ## Verified execution\n\
+        Every state-changing turn runs through a kernel whose semantics are machine-checked in \
+        Lean. Receipts carry Effect-VM STARK proofs binding the pre→post state transition, and \
+        the standalone `dregg-verifier` can replay your whole receipt chain. Your actions are \
+        not merely logged — they are PROVEN.\n\n\
+        ## Apps you can drive\n\
+        nameservice (`dregg_register_name`), subscriptions/bounties \
+        (`dregg_publish_subscription`), identity/credentials (`dregg_issue_credential`), \
+        governed namespaces (`dregg_register_service`), sealed-bid auctions \
+        (`dregg_list_auctions` / `dregg_place_bid`), and capability/tool delegation.\n\n\
+        Start by reading `dregg://ontology` and `dregg://identity`, then call \
+        `dregg_check_capabilities` to see what authority you hold.\n",
+    )
+}
+
+/// Build the `dregg://tools` catalog grouped by agent mode.
+fn dregg_tools_catalog_json() -> Value {
+    let mut groups: std::collections::BTreeMap<&'static str, Vec<Value>> =
+        std::collections::BTreeMap::new();
+    for d in tool_definitions_raw() {
+        groups.entry(tool_group(d.name)).or_default().push(serde_json::json!({
+            "name": d.name,
+            "title": tool_title(d.name),
+            "scope": tool_required_scope(d.name),
+            "annotations": tool_annotations(d.name),
+        }));
+    }
+    serde_json::json!({
+        "group_legend": {
+            "orient": "read state / self-orient (read-only)",
+            "act": "submit verified turns, transfer value",
+            "delegate": "grant / attenuate / revoke capabilities to sub-agents (ocap)",
+            "verify": "generate or check proofs; confirm commitment",
+            "privacy": "sealed data, stealth addresses, private transfers, encrypted intents",
+            "apps": "drive the shipped dregg apps (nameservice/identity/subscription/namespace/factories)",
+        },
+        "scope_legend": {
+            "read": "observation only; no '_cap' verb beyond read required",
+            "write": "mutates ledger/cell/intent state on the caller's behalf",
+            "admin": "capability/identity/governance administration — the strongest verb",
+        },
+        "groups": groups,
+        "note": "Present a '_cap' biscuit (under the '_cap' argument) covering a tool's scope to invoke it when capability enforcement is on. See dregg://about.",
+    })
+}
+
+/// The `dregg://receipt/{turn_hash}` VERIFY surface: find the receipt for a
+/// committed turn (by hex turn hash) in the agent's receipt chain and report its
+/// finality context — pre/post state roots, whether it carries an Effect-VM
+/// witness, and the node's current attested height. This is the "did my action
+/// commit AND prove?" lookup an agent uses to confirm a turn it submitted.
+async fn receipt_resource_json(turn_hex: &str, state: &NodeState) -> Result<Value, String> {
+    let want = hex_decode(turn_hex)
+        .map_err(|_| format!("invalid turn hash '{turn_hex}': expected 64 hex chars"))?;
+    let s = state.read().await;
+    if !s.unlocked {
+        return Err("cipherclerk is locked; unlock to read receipts".to_string());
+    }
+    let latest_height = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| r.height)
+        .unwrap_or(0);
+
+    let chain = s.cclerk.receipt_chain();
+    let found = chain.iter().rev().find(|r| r.turn_hash == want);
+    match found {
+        Some(r) => {
+            let receipt_hash = r.receipt_hash();
+            let witness_count = s.witnessed_receipt_count(&receipt_hash);
+            Ok(serde_json::json!({
+                "turn_hash": hex_encode(&r.turn_hash),
+                "receipt_hash": hex_encode(&receipt_hash),
+                "pre_state": hex_encode(&r.pre_state_hash),
+                "post_state": hex_encode(&r.post_state_hash),
+                "timestamp": r.timestamp,
+                "computrons_used": r.computrons_used,
+                "action_count": r.action_count,
+                "committed": true,
+                "has_witness": witness_count > 0,
+                "witness_count": witness_count,
+                "finality": {
+                    "latest_attested_height": latest_height,
+                    "note": "A committed receipt with has_witness=true carries an Effect-VM STARK \
+                             proof of its state transition; replay the whole chain with the \
+                             standalone dregg-verifier to check it end-to-end.",
+                },
+            }))
+        }
+        None => Err(format!(
+            "no receipt for turn hash '{turn_hex}' in this agent's receipt chain \
+             (it may belong to another agent, or not have committed). \
+             Read dregg://receipts for the full chain."
+        )),
+    }
+}
+
+async fn handle_resources_read(id: Value, params: Value, state: &NodeState) -> JsonRpcResponse {
+    let uri = match params.get("uri").and_then(|v| v.as_str()) {
+        Some(u) => u.to_string(),
+        None => return JsonRpcResponse::invalid_params(id, "missing 'uri' in resources/read"),
+    };
+
+    // Templated cell-state resource: dregg://cell/{hex}
+    if let Some(cell_hex) = uri.strip_prefix("dregg://cell/") {
+        let cell_params = serde_json::json!({ "cell_id": cell_hex });
+        let result = tool_read_cell(&cell_params, state).await;
+        let body = result
+            .structured_content
+            .clone()
+            .map(|v| serde_json::to_string_pretty(&v).unwrap_or_default())
+            .unwrap_or_else(|| {
+                result
+                    .content
+                    .first()
+                    .map(|c| c.text.clone())
+                    .unwrap_or_default()
+            });
+        return JsonRpcResponse::success(
+            id,
+            resource_text_contents(&uri, "application/json", body),
+        );
+    }
+
+    // Templated turn-receipt resource: dregg://receipt/{turn_hash} — the VERIFY
+    // surface. Look the receipt up by turn hash in the agent's own receipt chain
+    // and report its finality context (commit + witness + attested height).
+    if let Some(turn_hex) = uri.strip_prefix("dregg://receipt/") {
+        let body = receipt_resource_json(turn_hex, state).await;
+        return match body {
+            Ok(v) => JsonRpcResponse::success(
+                id,
+                resource_text_contents(&uri, "application/json", serde_json::to_string_pretty(&v).unwrap_or_default()),
+            ),
+            Err(msg) => JsonRpcResponse::error(id, -32002, msg),
+        };
+    }
+
+    // Fixed resources.
+    let body: Result<(String, &'static str), String> = match uri.as_str() {
+        "dregg://ontology" => Ok((DREGG_ONTOLOGY_CATALOG.to_string(), "application/json")),
+        "dregg://about" => Ok((dregg_about_markdown(), "text/markdown")),
+        "dregg://tools" => Ok((
+            serde_json::to_string_pretty(&dregg_tools_catalog_json()).unwrap_or_default(),
+            "application/json",
+        )),
+        "dregg://identity" => {
+            let s = state.read().await;
+            let pk = s.cclerk.public_key().0;
+            let cell_id = dregg_cell::CellId::derive_raw(&pk, &[0u8; 32]);
+            let issuer = mcp_cap_issuer_pubkey(&s.cclerk);
+            let v = serde_json::json!({
+                "public_key": hex_encode(&pk),
+                "agent_cell_id": hex_encode(cell_id.as_bytes()),
+                "federation_id": hex_encode(&s.federation_id),
+                "mcp_cap_issuer_pubkey": hex_encode(&issuer),
+                "mcp_cap_enforcement": s.mcp_cap_enforce,
+                "unlocked": s.unlocked,
+                "note": "agent_cell_id is content-addressed from public_key + zero token domain; \
+                         present a '_cap' biscuit issued under mcp_cap_issuer_pubkey to pass tool gates.",
+            });
+            Ok((serde_json::to_string_pretty(&v).unwrap_or_default(), "application/json"))
+        }
+        "dregg://status" => Ok((
+            resource_body_from_tool(tool_get_status(state).await),
+            "application/json",
+        )),
+        "dregg://blocklace" => Ok((
+            resource_body_from_tool(tool_get_blocklace_status(state).await),
+            "application/json",
+        )),
+        "dregg://constitution" => Ok((
+            resource_body_from_tool(tool_get_constitution(state).await),
+            "application/json",
+        )),
+        "dregg://capabilities" => Ok((
+            resource_body_from_tool(tool_check_capabilities(state).await),
+            "application/json",
+        )),
+        "dregg://receipts" => Ok((
+            resource_body_from_tool(
+                tool_get_receipt_chain(&serde_json::json!({}), state).await,
+            ),
+            "application/json",
+        )),
+        other => Err(format!("unknown resource uri: {other}")),
+    };
+
+    match body {
+        Ok((text, mime)) => {
+            JsonRpcResponse::success(id, resource_text_contents(&uri, mime, text))
+        }
+        // -32002 = MCP "resource not found".
+        Err(msg) => JsonRpcResponse::error(id, -32002, msg),
+    }
+}
+
+/// Extract a resource body (the structured JSON, pretty) from a tool result we
+/// reuse to back a read-only resource.
+fn resource_body_from_tool(result: McpToolResult) -> String {
+    result
+        .structured_content
+        .map(|v| serde_json::to_string_pretty(&v).unwrap_or_default())
+        .unwrap_or_else(|| {
+            result
+                .content
+                .first()
+                .map(|c| c.text.clone())
+                .unwrap_or_default()
+        })
+}
+
+// =============================================================================
+// PROMPTS — reusable guided workflows for inhabiting dregg
+// =============================================================================
+//
+// Prompts are templates an agent (or its human) can expand into a guided
+// message for a common dregg workflow: submit a turn, register a name, delegate
+// a capability to a sub-agent, publish/fulfill an intent, or just orient. Each
+// prompt embeds the right tool/resource references so the agent has a path.
+
+/// One MCP prompt: name + arguments + the rendered messages.
+struct PromptSpec {
+    name: &'static str,
+    title: &'static str,
+    description: &'static str,
+    /// (arg name, description, required)
+    arguments: &'static [(&'static str, &'static str, bool)],
+}
+
+fn prompt_specs() -> Vec<PromptSpec> {
+    vec![
+        PromptSpec {
+            name: "orient",
+            title: "Orient in dregg",
+            description:
+                "Get your bearings: read the ontology, your identity, and your held capabilities \
+                 before acting.",
+            arguments: &[],
+        },
+        PromptSpec {
+            name: "submit_turn",
+            title: "Submit a verified turn",
+            description:
+                "Walk through submitting an atomic, fee-paid turn (e.g. a transfer) and verifying \
+                 its STARK-proved receipt.",
+            arguments: &[
+                ("target_cell", "Hex cell id to act on (defaults to your agent cell).", false),
+                ("intent", "Plain-language description of what the turn should do.", true),
+            ],
+        },
+        PromptSpec {
+            name: "delegate_capability",
+            title: "Delegate authority to a sub-agent",
+            description:
+                "Grant an ATTENUATED capability to a sub-agent — the agent-orchestration pattern. \
+                 Narrow the scope, then hand it off.",
+            arguments: &[
+                ("to_agent", "Hex public key of the sub-agent.", true),
+                ("target_cell", "Hex cell id the capability applies to.", true),
+                ("restrictions", "How to attenuate (permissions, expiry, services).", false),
+            ],
+        },
+        PromptSpec {
+            name: "register_name",
+            title: "Register a name",
+            description: "Register a human-readable name in the nameservice app, attested by a credential.",
+            arguments: &[
+                ("name", "The name to register, e.g. 'alice.dev'.", true),
+                ("expiry_height", "Block height at which the registration expires.", true),
+            ],
+        },
+        PromptSpec {
+            name: "verify_turn",
+            title: "Verify a turn committed & proved",
+            description:
+                "Confirm an action you submitted actually committed and carries a STARK proof — \
+                 close the loop on a verified turn.",
+            arguments: &[
+                ("turn_hash", "Hex turn hash returned by the tool that submitted it.", true),
+            ],
+        },
+        PromptSpec {
+            name: "publish_intent",
+            title: "Publish & fulfill an intent",
+            description:
+                "Post an intent to the marketplace requesting a service/capability, then have it \
+                 fulfilled — the cross-agent coordination path.",
+            arguments: &[
+                ("action", "The action you need, e.g. 'read', 'execute'.", true),
+                ("resource", "The resource pattern, e.g. 'documents/*'.", true),
+                ("max_fee", "Max computrons you'll pay.", false),
+            ],
+        },
+    ]
+}
+
+fn handle_prompts_list(id: Value) -> JsonRpcResponse {
+    let prompts: Vec<Value> = prompt_specs()
+        .iter()
+        .map(|p| {
+            let args: Vec<Value> = p
+                .arguments
+                .iter()
+                .map(|(name, desc, req)| {
+                    serde_json::json!({ "name": name, "description": desc, "required": req })
+                })
+                .collect();
+            serde_json::json!({
+                "name": p.name,
+                "title": p.title,
+                "description": p.description,
+                "arguments": args,
+            })
+        })
+        .collect();
+    JsonRpcResponse::success(id, serde_json::json!({ "prompts": prompts }))
+}
+
+fn handle_prompts_get(id: Value, params: Value) -> JsonRpcResponse {
+    let name = match params.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n,
+        None => return JsonRpcResponse::invalid_params(id, "missing 'name' in prompts/get"),
+    };
+    let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+    let get = |k: &str, default: &str| -> String {
+        args.get(k)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| default.to_string())
+    };
+
+    let (description, text): (&str, String) = match name {
+        "orient" => (
+            "Orient in dregg",
+            "You're inhabiting dregg. Before acting:\n\
+             1. Read resource `dregg://about` and `dregg://ontology` to learn the 56 effects.\n\
+             2. Read `dregg://identity` to see who you are (your agent cell id, federation).\n\
+             3. Call `dregg_check_capabilities` (or read `dregg://capabilities`) to see what \
+             authority you hold.\n\
+             Then decide what to do."
+                .to_string(),
+        ),
+        "submit_turn" => {
+            let intent = get("intent", "<describe the action>");
+            let target = get("target_cell", "<your agent cell id>");
+            (
+                "Submit a verified turn",
+                format!(
+                    "Goal: {intent}\n\n\
+                     1. Confirm the target cell `{target}` exists and its state via \
+                     `dregg://cell/{target}`.\n\
+                     2. Call `dregg_submit_turn` with target_cell={target}, a `method`, and an \
+                     `effects` array (e.g. [{{\"type\":\"transfer\",\"from\":...,\"to\":...,\"amount\":...}}]).\n\
+                     3. The result carries the turn hash and a STARK-proved receipt.\n\
+                     4. Verify it committed via `dregg://receipts` and `dregg://blocklace`."
+                ),
+            )
+        }
+        "delegate_capability" => {
+            let to = get("to_agent", "<sub-agent pubkey>");
+            let cell = get("target_cell", "<target cell id>");
+            let restr = get("restrictions", "tighten permissions + set an expiry");
+            (
+                "Delegate authority to a sub-agent",
+                format!(
+                    "You are handing bounded authority to a sub-agent.\n\n\
+                     1. (Optional) `dregg_grant_capability` to_agent={to}, target_cell={cell} to \
+                     establish the base grant.\n\
+                     2. `dregg_delegate` with capability=<slot>, to_agent={to}, restrictions=({restr}). \
+                     Delegation can only ATTENUATE — a sub-agent never gets more than you hold.\n\
+                     3. The sub-agent presents the resulting biscuit as `_cap` on its own tool calls."
+                ),
+            )
+        }
+        "register_name" => {
+            let nm = get("name", "<name>");
+            let exp = get("expiry_height", "<block height>");
+            (
+                "Register a name",
+                format!(
+                    "Register `{nm}` in the nameservice.\n\n\
+                     1. (If needed) issue/obtain a credential via `dregg_issue_credential`.\n\
+                     2. Call `dregg_register_name` with name={nm}, expiry_height={exp}.\n\
+                     3. The receipt's STARK proof binds the three SetFields (name_hash, owner_hash, \
+                     expiry). Verify via `dregg://receipts`."
+                ),
+            )
+        }
+        "verify_turn" => {
+            let turn = get("turn_hash", "<turn hash>");
+            (
+                "Verify a turn committed & proved",
+                format!(
+                    "Close the loop on a turn you submitted.\n\n\
+                     1. Read `dregg://receipt/{turn}` — it reports `committed`, the pre/post state \
+                     roots, and `has_witness` (whether the receipt carries an Effect-VM STARK \
+                     proof of the transition).\n\
+                     2. Read `dregg://blocklace` for the current attested height (finality \
+                     context).\n\
+                     3. If `has_witness` is true, the standalone `dregg-verifier replay-chain` can \
+                     re-check the whole receipt chain end-to-end. Your action is not merely \
+                     logged — it is PROVEN."
+                ),
+            )
+        }
+        "publish_intent" => {
+            let action = get("action", "<action>");
+            let resource = get("resource", "<resource pattern>");
+            let fee = get("max_fee", "0");
+            (
+                "Publish & fulfill an intent",
+                format!(
+                    "Coordinate with another agent via the intent marketplace.\n\n\
+                     1. `dregg_post_intent` action={action}, resource={resource}, max_fee={fee}.\n\
+                     2. A counterparty calls `dregg_fulfill_intent` with the returned intent_id.\n\
+                     3. Fulfillment is the counit: a real, proved turn that satisfies the intent."
+                ),
+            )
+        }
+        other => {
+            return JsonRpcResponse::error(id, -32602, format!("unknown prompt: {other}"));
+        }
+    };
+
+    JsonRpcResponse::success(
+        id,
+        serde_json::json!({
+            "description": description,
+            "messages": [{
+                "role": "user",
+                "content": { "type": "text", "text": text }
+            }]
+        }),
+    )
+}
+
+// =============================================================================
+// COMPLETION — argument autocompletion for prompts & resource templates
+// =============================================================================
+//
+// `completion/complete` lets an inhabiting agent autocomplete the variable parts
+// of a dregg URI or a prompt argument from what the node actually knows: the
+// cell ids in its ledger, the turn hashes in its receipt chain. This turns the
+// templated resources (`dregg://cell/{cell_id}`, `dregg://receipt/{turn_hash}`)
+// and the workflow prompts into a guided surface rather than a blank field — the
+// agent discovers the concrete handles it can act on. Completions are RANKED by
+// prefix match and capped per the spec (≤100 values).
+
+/// The MCP per-spec cap on returned completion values.
+const MCP_COMPLETION_LIMIT: usize = 100;
+
+/// Hex cell ids currently in the node's ledger (the things `dregg://cell/{id}`,
+/// `dregg_read_cell`, and turn `target_cell` arguments can name). Read-only.
+async fn known_cell_ids(state: &NodeState) -> Vec<String> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Vec::new();
+    }
+    s.ledger
+        .iter()
+        .map(|(id, _)| hex_encode(id.as_bytes()))
+        .collect()
+}
+
+/// Hex turn hashes in this agent's receipt chain (the things
+/// `dregg://receipt/{turn_hash}` and the `verify_turn` prompt name). Read-only.
+async fn known_turn_hashes(state: &NodeState) -> Vec<String> {
+    let s = state.read().await;
+    if !s.unlocked {
+        return Vec::new();
+    }
+    s.cclerk
+        .receipt_chain()
+        .iter()
+        .rev()
+        .map(|r| hex_encode(&r.turn_hash))
+        .collect()
+}
+
+/// Rank a candidate pool by the partial value: case-insensitive prefix matches
+/// first (then substring), de-duplicated, capped at the MCP limit. Returns the
+/// `completion` result object the spec expects (`values` + `total` + `hasMore`).
+fn rank_completions(pool: Vec<String>, partial: &str) -> Value {
+    let needle = partial.to_lowercase();
+    let mut prefix: Vec<String> = Vec::new();
+    let mut substr: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for cand in pool {
+        if !seen.insert(cand.clone()) {
+            continue;
+        }
+        let lc = cand.to_lowercase();
+        if needle.is_empty() || lc.starts_with(&needle) {
+            prefix.push(cand);
+        } else if lc.contains(&needle) {
+            substr.push(cand);
+        }
+    }
+    prefix.extend(substr);
+    let total = prefix.len();
+    let values: Vec<String> = prefix.into_iter().take(MCP_COMPLETION_LIMIT).collect();
+    let has_more = total > values.len();
+    serde_json::json!({
+        "completion": {
+            "values": values,
+            "total": total,
+            "hasMore": has_more,
+        }
+    })
+}
+
+/// An empty completion result (no candidates / unknown ref). Always well-formed.
+fn empty_completion() -> Value {
+    serde_json::json!({ "completion": { "values": [], "total": 0, "hasMore": false } })
+}
+
+/// `completion/complete` — autocomplete a prompt argument or resource-template
+/// variable. The `ref` selects the context (a prompt by name, or a resource
+/// template by uriTemplate) and `argument` carries the variable name + the
+/// partial value typed so far. We complete cell-id / turn-hash variables from
+/// live node state; unknown refs return an empty (but valid) completion.
+async fn handle_completion_complete(id: Value, params: Value, state: &NodeState) -> JsonRpcResponse {
+    let ref_obj = params.get("ref");
+    let argument = params.get("argument");
+    let arg_name = argument
+        .and_then(|a| a.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let partial = argument
+        .and_then(|a| a.get("value"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let ref_type = ref_obj
+        .and_then(|r| r.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    // Which variable kind does (ref, argument) name?  We recognize the two
+    // dregg handle kinds: cell ids and turn hashes.
+    enum Handle {
+        CellId,
+        TurnHash,
+        Unknown,
+    }
+    let handle = match ref_type {
+        // Resource template: dregg://cell/{cell_id} or dregg://receipt/{turn_hash}.
+        "ref/resource" => {
+            let uri = ref_obj
+                .and_then(|r| r.get("uri"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if uri.starts_with("dregg://cell/") {
+                Handle::CellId
+            } else if uri.starts_with("dregg://receipt/") {
+                Handle::TurnHash
+            } else {
+                Handle::Unknown
+            }
+        }
+        // Prompt argument: map the known argument names to their handle kind.
+        "ref/prompt" => match arg_name {
+            "target_cell" => Handle::CellId,
+            "turn_hash" => Handle::TurnHash,
+            _ => Handle::Unknown,
+        },
+        _ => Handle::Unknown,
+    };
+
+    let result = match handle {
+        Handle::CellId => rank_completions(known_cell_ids(state).await, partial),
+        Handle::TurnHash => rank_completions(known_turn_hashes(state).await, partial),
+        Handle::Unknown => empty_completion(),
+    };
+    JsonRpcResponse::success(id, result)
 }
 
 async fn write_response(
@@ -7489,6 +8593,117 @@ mod tests {
         let node_pk = s.cclerk.public_key().0;
         let biscuit = mint_tool_cap(&s.cclerk, &node_pk, scope_verb).expect("mint tool cap");
         serde_json::json!({ "_cap": { "biscuit": biscuit } })
+    }
+
+    // =====================================================================
+    // Best-practices surface tests: every advertised prompt resolves, the
+    // ocap `_cap` argument is declared in each tool schema, and the
+    // completion endpoint autocompletes live dregg handles.
+    // =====================================================================
+
+    /// Every prompt in `prompts/list` MUST resolve in `prompts/get` — an
+    /// advertised capability that errors is a best-practice violation. This
+    /// regression pins the `verify_turn` prompt (previously listed but
+    /// unhandled, so it fell into the unknown-prompt error branch).
+    #[test]
+    fn every_advertised_prompt_resolves() {
+        for spec in prompt_specs() {
+            // Supply each required arg so the get path doesn't reject on a
+            // missing one; the point is that the NAME is handled.
+            let mut args = serde_json::Map::new();
+            for (name, _desc, _req) in spec.arguments {
+                args.insert((*name).to_string(), Value::String("dead".repeat(16)));
+            }
+            let resp = handle_prompts_get(
+                Value::from(1),
+                serde_json::json!({ "name": spec.name, "arguments": args }),
+            );
+            let v = serde_json::to_value(&resp).unwrap();
+            assert!(
+                v.get("error").is_none(),
+                "advertised prompt '{}' must resolve in prompts/get, got error: {v}",
+                spec.name
+            );
+            assert!(
+                v.get("result")
+                    .and_then(|r| r.get("messages"))
+                    .and_then(|m| m.as_array())
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false),
+                "prompt '{}' must render at least one message",
+                spec.name
+            );
+        }
+    }
+
+    /// Every tool's input schema declares the ocap `_cap` argument, so an agent
+    /// reading tools/list — and a schema-validating client — discovers the
+    /// capability requirement at the tool boundary (not just in prose).
+    #[test]
+    fn every_tool_schema_declares_cap_argument() {
+        for d in tool_definitions() {
+            let cap = d
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.get("_cap"));
+            assert!(
+                cap.is_some(),
+                "tool '{}' input schema must declare the '_cap' ocap argument",
+                d.name
+            );
+            // And the group/scope metadata an orienting agent reads.
+            assert!(
+                d.input_schema.get("x-dregg-scope").is_some(),
+                "tool '{}' schema must stamp x-dregg-scope",
+                d.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn completion_completes_cell_ids_for_resource_template() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let agent_cell = {
+            let s = state.read().await;
+            hex_encode(dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]).as_bytes())
+        };
+        // Complete the dregg://cell/{cell_id} template variable with a prefix of
+        // the agent cell that's actually in the ledger.
+        let prefix = &agent_cell[..6];
+        let resp = handle_completion_complete(
+            Value::from(1),
+            serde_json::json!({
+                "ref": { "type": "ref/resource", "uri": "dregg://cell/" },
+                "argument": { "name": "cell_id", "value": prefix }
+            }),
+            &state,
+        )
+        .await;
+        let v = serde_json::to_value(&resp).unwrap();
+        let values = v["result"]["completion"]["values"]
+            .as_array()
+            .expect("completion values array");
+        assert!(
+            values.iter().any(|x| x.as_str() == Some(agent_cell.as_str())),
+            "completion must surface the in-ledger agent cell id; got {values:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_unknown_ref_returns_well_formed_empty() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let resp = handle_completion_complete(
+            Value::from(1),
+            serde_json::json!({
+                "ref": { "type": "ref/prompt", "name": "orient" },
+                "argument": { "name": "nonexistent", "value": "x" }
+            }),
+            &state,
+        )
+        .await;
+        let v = serde_json::to_value(&resp).unwrap();
+        assert_eq!(v["result"]["completion"]["values"].as_array().map(|a| a.len()), Some(0));
+        assert_eq!(v["result"]["completion"]["hasMore"], Value::Bool(false));
     }
 
     #[tokio::test]
@@ -8525,6 +9740,217 @@ mod tests {
         assert!(
             dregg_circuit::stark::proof_from_bytes(&forged).is_err(),
             "forged proof bytes must NOT deserialize as a valid proof"
+        );
+    }
+
+    // =====================================================================
+    // MCP best-practices surface tests: annotations, structured content,
+    // resources (incl. self-orientation), prompts, pagination, cap-gating.
+    // =====================================================================
+
+    #[test]
+    fn every_tool_has_title_annotations_group_and_scope() {
+        let defs = tool_definitions();
+        assert!(defs.len() >= 40, "expected the full dregg toolset");
+        for d in &defs {
+            assert!(d.title.is_some(), "tool {} missing title", d.name);
+            let ann = d.annotations.expect("annotations present");
+            // read-only tools must NOT be flagged destructive.
+            if ann.read_only_hint {
+                assert!(
+                    ann.destructive_hint != Some(true),
+                    "read-only tool {} flagged destructive",
+                    d.name
+                );
+            }
+            // group + scope stamped into schema metadata for self-orientation.
+            let schema = &d.input_schema;
+            assert!(
+                schema.get("x-dregg-group").and_then(|v| v.as_str()).is_some(),
+                "tool {} missing x-dregg-group",
+                d.name
+            );
+            assert!(
+                schema.get("x-dregg-scope").and_then(|v| v.as_str()).is_some(),
+                "tool {} missing x-dregg-scope",
+                d.name
+            );
+            assert_ne!(tool_group(d.name), "other", "tool {} ungrouped", d.name);
+        }
+    }
+
+    #[test]
+    fn read_tools_are_read_only_and_idempotent() {
+        let ann = tool_annotations("dregg_read_cell");
+        assert!(ann.read_only_hint && ann.idempotent_hint);
+        // a mutating, irreversible tool is marked destructive + not read-only.
+        let revoke = tool_annotations("dregg_revoke_capability");
+        assert!(!revoke.read_only_hint && revoke.destructive_hint == Some(true));
+        // bridging reaches the open world.
+        assert_eq!(tool_annotations("dregg_bridge_note").open_world_hint, Some(true));
+    }
+
+    #[test]
+    fn structured_content_mirrors_json_results() {
+        let v = serde_json::json!({ "a": 1, "b": "x" });
+        let r = McpToolResult::json(&v);
+        assert_eq!(r.structured_content.as_ref(), Some(&v));
+        assert!(r.is_error.is_none());
+        // actionable errors carry error+hint structure.
+        let e = McpToolResult::actionable_error("boom", "do X");
+        assert_eq!(e.is_error, Some(true));
+        let sc = e.structured_content.expect("error has structured content");
+        assert_eq!(sc.get("error").and_then(|v| v.as_str()), Some("boom"));
+        assert_eq!(sc.get("hint").and_then(|v| v.as_str()), Some("do X"));
+    }
+
+    #[test]
+    fn initialize_advertises_tools_resources_prompts() {
+        let resp = handle_initialize(serde_json::json!(1));
+        let v = serde_json::to_value(&resp).unwrap();
+        let caps = &v["result"]["capabilities"];
+        assert!(caps.get("tools").is_some());
+        assert!(caps.get("resources").is_some());
+        assert!(caps.get("prompts").is_some());
+        assert!(caps.get("completions").is_some(), "must advertise completions");
+        assert_eq!(v["result"]["protocolVersion"], "2025-06-18");
+        // Server-level orientation instructions point the agent at its
+        // self-orientation surface on connect.
+        let instr = v["result"]["instructions"].as_str().unwrap_or("");
+        assert!(
+            instr.contains("dregg://about") && instr.contains("_cap"),
+            "instructions must orient the agent (about + ocap convention)"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_list_paginates() {
+        // With enforcement OFF (default), the full catalog is visible, so
+        // pagination pages the whole tool set. Follow cursors to the end and
+        // confirm the union reconstructs every tool exactly once.
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let mut collected: Vec<String> = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0;
+        loop {
+            let params = match &cursor {
+                Some(c) => serde_json::json!({ "cursor": c }),
+                None => serde_json::json!({}),
+            };
+            let r = handle_tools_list(serde_json::json!(1), params, &state).await;
+            let v = serde_json::to_value(&r).unwrap();
+            let page = v["result"]["tools"].as_array().unwrap();
+            assert!(
+                page.len() <= MCP_PAGE_SIZE,
+                "no page may exceed MCP_PAGE_SIZE"
+            );
+            for t in page {
+                collected.push(t["name"].as_str().unwrap().to_string());
+            }
+            pages += 1;
+            match v["result"]["nextCursor"].as_str() {
+                Some(c) => cursor = Some(c.to_string()),
+                None => break,
+            }
+            assert!(pages < 100, "pagination must terminate");
+        }
+        assert!(pages >= 2, "46 tools at page size 20 must span multiple pages");
+        assert_eq!(
+            collected.len(),
+            tool_definitions().len(),
+            "paging through all cursors must yield every tool exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn ontology_resource_exposes_56_effects() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let resp = handle_resources_read(
+            serde_json::json!(1),
+            serde_json::json!({ "uri": "dregg://ontology" }),
+            &state,
+        )
+        .await;
+        let v = serde_json::to_value(&resp).unwrap();
+        let text = v["result"]["contents"][0]["text"].as_str().unwrap();
+        let catalog: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(catalog["effect_count"], 56);
+        assert!(catalog["effects"].as_array().unwrap().len() >= 56);
+    }
+
+    #[tokio::test]
+    async fn identity_and_cell_resources_resolve() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        // identity resource reflects the node's own agent cell.
+        let id_resp = handle_resources_read(
+            serde_json::json!(1),
+            serde_json::json!({ "uri": "dregg://identity" }),
+            &state,
+        )
+        .await;
+        let idv = serde_json::to_value(&id_resp).unwrap();
+        let text = idv["result"]["contents"][0]["text"].as_str().unwrap();
+        let ident: Value = serde_json::from_str(text).unwrap();
+        let cell_hex = ident["agent_cell_id"].as_str().unwrap().to_string();
+        // templated cell resource reads that same cell.
+        let cell_resp = handle_resources_read(
+            serde_json::json!(2),
+            serde_json::json!({ "uri": format!("dregg://cell/{cell_hex}") }),
+            &state,
+        )
+        .await;
+        let cellv = serde_json::to_value(&cell_resp).unwrap();
+        let ctext = cellv["result"]["contents"][0]["text"].as_str().unwrap();
+        let cell: Value = serde_json::from_str(ctext).unwrap();
+        assert_eq!(cell["found"], true, "agent cell should exist in ledger");
+    }
+
+    #[test]
+    fn prompts_list_and_get_render() {
+        let list = handle_prompts_list(serde_json::json!(1));
+        let lv = serde_json::to_value(&list).unwrap();
+        let names: Vec<&str> = lv["result"]["prompts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"orient"));
+        assert!(names.contains(&"delegate_capability"));
+        // get renders a user message with the substituted arg.
+        let get = handle_prompts_get(
+            serde_json::json!(2),
+            serde_json::json!({
+                "name": "submit_turn",
+                "arguments": { "intent": "transfer 5 to bob" }
+            }),
+        );
+        let gv = serde_json::to_value(&get).unwrap();
+        let msg = gv["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(msg.contains("transfer 5 to bob"));
+    }
+
+    #[tokio::test]
+    async fn cap_gating_rejects_uncovered_token_but_allows_read_when_unenforced() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        // Enforcement OFF (default in tests): missing _cap passes the gate.
+        assert!(
+            enforce_tool_cap("dregg_read_cell", &serde_json::json!({}), &state)
+                .await
+                .is_ok(),
+            "missing cap should pass when enforcement is off (back-compat)"
+        );
+        // A garbage presented credential is ALWAYS verified and REJECTED,
+        // even with enforcement off — the per-tool gate never trusts an
+        // un-covering token.
+        let bogus = serde_json::json!({ "_cap": { "biscuit": "eb2_not_a_real_biscuit" } });
+        assert!(
+            enforce_tool_cap("dregg_grant_capability", &bogus, &state)
+                .await
+                .is_err(),
+            "a non-covering/garbage _cap must be rejected"
         );
     }
 }
