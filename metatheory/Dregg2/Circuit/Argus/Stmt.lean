@@ -348,4 +348,120 @@ theorem setCaps_writes :
 #assert_axioms setLifecycle_writes
 #assert_axioms setCaps_writes
 
+/-! ## §E — THE SIDE-TABLE EFFECT: createEscrow as an IR term (TWO components + a list side-table).
+
+The §M generalization (mint/burn) re-validated the refinement pattern, but every effect so far —
+transfer, mint, burn — is SINGLE-COMPONENT: the body is one `setCell`/`setBal` move on the per-cell
+state. `createEscrow` is the genuinely DIFFERENT shape, and the de-risk that matters before the
+per-effect farm: the kernel step `createEscrowKAsset` (`RecordKernel.lean:1550`) touches **two**
+`RecordKernelState` components at once —
+
+  * it DEBITS the per-asset ledger `bal` at `(creator, asset)` by `amount`
+    (`bal := recBalCreditCell k.bal creator asset (-amount)`), AND
+  * it PREPENDS an unresolved `EscrowRecord` onto the `escrows` list side-table
+    (`escrows := ⟨id, creator, recipient, amount, false, asset⟩ :: k.escrows`),
+
+after a five-conjunct admissibility gate (authority · non-negativity · per-asset availability ·
+creator-liveness · id-freshness). This is exactly the shape the §A component-write primitives were
+built for: `setBal` writes the ledger, `setEscrows` writes the list. The term is therefore a
+`seq (guard …) (seq (setBal …) (setEscrows …))` — gate, then the two component writes in sequence —
+and the cornerstone is that `interp` of THIS term IS the verified kernel step `createEscrowKAsset`.
+
+The refinement is the same two ingredients as transfer/mint/burn — a guard-decode lemma and the
+component-map equalities — but the component leg is now TWO writes chained through `seq`. The
+load-bearing fact the side-table shape exercises (and the single-cell effects never did): the second
+write (`setEscrows`) reads its `g k₁` on the INTERMEDIATE state `k₁` produced by the first write
+(`setBal`), and because `setBal` does not touch `escrows`, `k₁.escrows = k.escrows`, so the prepend
+lands on the ORIGINAL list — matching `createEscrowRawAsset` exactly. -/
+
+/-- The escrow-create admissibility gate as a `Bool` — exactly `createEscrowKAsset`'s `if` (the five
+conjuncts: authority over the create-turn `actor: creator ⇒ recipient`, non-negative amount, the
+amount available *in asset `asset`* on the per-asset ledger, the creator a live account, and the `id`
+not already parked). -/
+def createEscrowGuard (id : Nat) (actor creator recipient : CellId) (asset : AssetId) (amount : Int)
+    (k : RecordKernelState) : Bool :=
+  authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount }
+    && decide (0 ≤ amount)
+    && decide (amount ≤ k.bal creator asset)
+    && decide (creator ∈ k.accounts)
+    && decide (¬ (∃ r ∈ k.escrows, r.id = id))
+
+/-- The unresolved `EscrowRecord` a create parks — the SAME literal `createEscrowRawAsset` installs
+(`RecordKernel.lean:1525`). Stated here so the term's `setEscrows` leaf is the genuine parked record. -/
+def escrowParked (id : Nat) (creator recipient : CellId) (asset : AssetId) (amount : Int) :
+    EscrowRecord :=
+  { id := id, creator := creator, recipient := recipient,
+    amount := amount, resolved := false, asset := asset }
+
+/-- **The createEscrow effect as an IR term: gate, then the TWO component writes.** Unlike
+transfer/mint/burn (one move), the body is `seq (setBal <debit>) (setEscrows <prepend>)`: debit the
+per-asset ledger at `(creator, asset)`, then prepend the unresolved record onto `escrows`. The two
+component-write primitives `setBal`/`setEscrows` (§A) are exactly the shapes a multi-component effect
+assembles — no new constructor needed. -/
+def createEscrowStmt (id : Nat) (actor creator recipient : CellId) (asset : AssetId) (amount : Int) :
+    RecStmt :=
+  RecStmt.seq (RecStmt.guard (createEscrowGuard id actor creator recipient asset amount))
+    (RecStmt.seq
+      (RecStmt.setBal (fun k => recBalCreditCell k.bal creator asset (-amount)))
+      (RecStmt.setEscrows (fun k => escrowParked id creator recipient asset amount :: k.escrows)))
+
+/-- The escrow-create `Bool` gate decodes to `createEscrowKAsset`'s admissibility proposition (the five
+conjuncts, in the SAME order the kernel `if` checks them). -/
+theorem createEscrowGuard_iff (id : Nat) (actor creator recipient : CellId) (asset : AssetId)
+    (amount : Int) (k : RecordKernelState) :
+    createEscrowGuard id actor creator recipient asset amount k = true ↔
+      (authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
+        ∧ 0 ≤ amount ∧ amount ≤ k.bal creator asset ∧ creator ∈ k.accounts
+        ∧ ¬ (∃ r ∈ k.escrows, r.id = id)) := by
+  simp only [createEscrowGuard, Bool.and_eq_true, decide_eq_true_eq]
+  tauto
+
+/-- **The two-component move IS `createEscrowRawAsset`.** Running the body `seq (setBal …)
+(setEscrows …)` on a state `k` produces exactly `createEscrowRawAsset k id creator recipient asset
+amount` — the kernel's commit post-state. This is the SIDE-TABLE analog of `transferCellMap_eq` /
+`creditCellMap_eq`, and the load-bearing step the single-cell effects never had: the `setEscrows`
+prepend reads the intermediate state (post-`setBal`), whose `escrows` is still `k.escrows` (because
+`setBal` writes only `bal`), so the record lands on the original list. -/
+theorem createEscrowBody_eq (id : Nat) (creator recipient : CellId) (asset : AssetId) (amount : Int)
+    (k : RecordKernelState) :
+    interp (RecStmt.seq
+        (RecStmt.setBal (fun k => recBalCreditCell k.bal creator asset (-amount)))
+        (RecStmt.setEscrows (fun k => escrowParked id creator recipient asset amount :: k.escrows))) k
+      = some (createEscrowRawAsset k id creator recipient asset amount) := by
+  simp only [interp, Option.bind, escrowParked, createEscrowRawAsset]
+
+/-- **The cornerstone (side-table).** `interp` of the createEscrow term IS the verified kernel step
+`createEscrowKAsset` — the same partial function, by construction, exactly as the transfer/mint/burn
+cornerstones, now over a TWO-component side-table effect. -/
+theorem interp_createEscrowStmt_eq_createEscrowKAsset (id : Nat) (actor creator recipient : CellId)
+    (asset : AssetId) (amount : Int) (k : RecordKernelState) :
+    interp (createEscrowStmt id actor creator recipient asset amount) k
+      = createEscrowKAsset k id actor creator recipient asset amount := by
+  simp only [createEscrowStmt, interp]
+  unfold createEscrowKAsset
+  by_cases hg : createEscrowGuard id actor creator recipient asset amount k = true
+  · -- ADMIT: the guard's `interp` fires (`some k`), the two-component body reduces (the `setBal` debit
+    -- then the `setEscrows` prepend — whose `escrows` read is still `k.escrows`), giving exactly
+    -- `createEscrowRawAsset`; the RHS `if` opens on the decoded 5-conjunct Prop.
+    rw [if_pos hg, if_pos ((createEscrowGuard_iff id actor creator recipient asset amount k).mp hg)]
+    simp only [Option.bind, escrowParked, createEscrowRawAsset]
+  · -- REJECT: the guard fails ⇒ `none.bind _ = none`; the RHS `if` closes on the (negated) decoded Prop.
+    rw [if_neg hg,
+      if_neg (fun hp => hg ((createEscrowGuard_iff id actor creator recipient asset amount k).mpr hp))]
+    simp only [Option.bind]
+
+#assert_axioms interp_createEscrowStmt_eq_createEscrowKAsset
+
+/-- **Non-vacuity (the side-table write is OBSERVABLE).** Running the createEscrow term on the §C
+two-cell kernel (cell `0` Live, an empty `escrows`) with a `0`-amount lock of a fresh id grows the
+`escrows` store from `[]` to length `1` — the two-component move genuinely touches the list side-table
+(the prepend is real, not a no-op). The `0` amount keeps the gate's availability/non-negativity legs
+trivially satisfied so the commit fires. -/
+theorem createEscrowStmt_parks :
+    (interp (createEscrowStmt 7 0 0 1 0 0) kC).map (fun k => k.escrows.length) = some 1 := by
+  rw [interp_createEscrowStmt_eq_createEscrowKAsset]
+  decide
+
+#assert_axioms createEscrowStmt_parks
+
 end Dregg2.Circuit.Argus
