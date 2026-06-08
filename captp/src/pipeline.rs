@@ -430,16 +430,53 @@ pub struct CrossFedPipelineBridge {
     /// Outbound message queue: wire messages that need to be sent to peers.
     /// The networking layer should drain this after each operation.
     outbox: Vec<(FederationId, PipelineWireMessage)>,
+    /// This bridge's own federation identity. Stamped as the `sender` on every
+    /// outbound pipelined message so the `authorization` carried by a pipelined
+    /// action is bound to a CONCRETE originator — not an anonymous `[0;32]`. When
+    /// unset (`None`), falls back to the zero placeholder for backward compatibility,
+    /// but a deployment should configure it via [`with_local_federation`](Self::with_local_federation)
+    /// so that pipelined sends carry a verifiable sender binding.
+    local_federation: Option<FederationId>,
 }
 
 impl CrossFedPipelineBridge {
-    /// Create a new bridge with no connected peers.
+    /// Create a new bridge with no connected peers and no configured local identity.
+    ///
+    /// Outbound pipelined messages from a bridge created this way carry the zero
+    /// `[0;32]` sender placeholder. Prefer [`with_local_federation`](Self::with_local_federation)
+    /// so the `authorization` on each pipelined send is bound to a real originator.
     pub fn new() -> Self {
         Self {
             peers: HashMap::new(),
             local: PipelineRegistry::new(),
             outbox: Vec::new(),
+            local_federation: None,
         }
+    }
+
+    /// Create a new bridge that stamps `local_federation` as the sender on every
+    /// outbound pipelined message. This CLOSES the `[0;32]` sender placeholder: a
+    /// pipelined send's `authorization` is now bound to a concrete, verifiable
+    /// originator, so a receiver can check the authorization against the named sender.
+    pub fn with_local_federation(local_federation: FederationId) -> Self {
+        Self {
+            peers: HashMap::new(),
+            local: PipelineRegistry::new(),
+            outbox: Vec::new(),
+            local_federation: Some(local_federation),
+        }
+    }
+
+    /// Configure (or re-configure) this bridge's local federation identity. Subsequent
+    /// outbound pipelined messages will carry this as their `sender`.
+    pub fn set_local_federation(&mut self, local_federation: FederationId) {
+        self.local_federation = Some(local_federation);
+    }
+
+    /// The configured local federation identity, used as the `sender` on outbound
+    /// pipelined messages.
+    pub fn local_federation(&self) -> Option<FederationId> {
+        self.local_federation
     }
 
     /// Send a pipelined message to a remote federation's promise.
@@ -464,7 +501,7 @@ impl CrossFedPipelineBridge {
                 promise_id,
                 action,
                 result_promise_id: Some(local_result_promise),
-                sender_federation: self.local_federation_placeholder(),
+                sender_federation: self.outbound_sender(),
             },
         ));
 
@@ -488,7 +525,7 @@ impl CrossFedPipelineBridge {
             return Err(PipelineError::EmptyChain);
         }
 
-        let local_federation = self.local_federation_placeholder();
+        let local_federation = self.outbound_sender();
         let mut current_remote_promise = initial_promise_id;
         let mut final_local_promise = 0;
 
@@ -684,10 +721,13 @@ impl CrossFedPipelineBridge {
         self.peers.get(peer)
     }
 
-    /// Placeholder: in a real deployment, the bridge would be configured with
-    /// the local federation's ID. For now, returns a zero ID.
-    fn local_federation_placeholder(&self) -> FederationId {
-        FederationId([0u8; 32])
+    /// The sender identity to stamp on outbound pipelined messages. Returns the
+    /// configured `local_federation` when set, falling back to the zero `[0;32]`
+    /// placeholder only when this bridge was created without an identity. Binding a
+    /// real sender here is what lets a receiver verify a pipelined send's
+    /// `authorization` against a concrete originator (closing the §C.6 gap).
+    fn outbound_sender(&self) -> FederationId {
+        self.local_federation.unwrap_or(FederationId([0u8; 32]))
     }
 }
 
@@ -1085,6 +1125,158 @@ mod tests {
 
         let result = reg.pipeline_chain(p, vec![], fed_a());
         assert!(matches!(result, Err(PipelineError::EmptyChain)));
+    }
+
+    // ─── Test 16: Authorization carry — a pipelined send's authorization survives
+    //              queue → resolve UNCHANGED (the executable analog of the Lean
+    //              `pipelining_preserves_seam`: resolution delivers, it does not discharge). ──
+
+    #[test]
+    fn authorization_survives_resolution_unchanged() {
+        let mut reg = PipelineRegistry::new();
+        let p = reg.create_promise();
+
+        let auth_bytes = vec![0xAB, 0xCD, 0xEF, 0x01];
+        let msg = PipelinedMessage {
+            target_promise_id: p,
+            action: PipelinedAction {
+                method: "transfer".into(),
+                args: vec![1, 2, 3],
+                authorization: auth_bytes.clone(),
+            },
+            result_promise_id: Some(7),
+            sender: fed_a(),
+        };
+        reg.pipeline_message(msg).unwrap();
+
+        // Resolve — the queued message is DELIVERED, and its authorization is the
+        // SAME bytes it carried at queue time. Resolution does not strip, alter, or
+        // discharge the authorization; the receiver must still validate it.
+        let delivered = reg.resolve_promise(p, cell(0x11));
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(
+            delivered[0].action.authorization, auth_bytes,
+            "pipelining must not alter the authorization the sender carried"
+        );
+        assert_eq!(delivered[0].sender, fed_a(), "the sender binding must survive");
+        assert_eq!(delivered[0].action.method, "transfer");
+    }
+
+    // ─── Test 17: No-amplification — an UNAUTHORIZED pipelined send (empty/forged
+    //              authorization) is delivered with its EMPTY authorization, so the
+    //              receiver's executor re-check can reject it. Pipelining carries the
+    //              authorization the sender holds — it cannot manufacture one. ──
+
+    #[test]
+    fn unauthorized_send_carries_empty_authorization_for_rejection() {
+        let mut reg = PipelineRegistry::new();
+        let p = reg.create_promise();
+
+        // A send with NO authorization (a party asserting a right it cannot prove).
+        let forged = PipelinedMessage {
+            target_promise_id: p,
+            action: PipelinedAction {
+                method: "drain_treasury".into(),
+                args: vec![],
+                authorization: vec![], // empty — no proof of authority
+            },
+            result_promise_id: None,
+            sender: fed_b(),
+        };
+        reg.pipeline_message(forged).unwrap();
+
+        let delivered = reg.resolve_promise(p, cell(0x22));
+        assert_eq!(delivered.len(), 1);
+        // The pipeline delivers the send with its EMPTY authorization intact —
+        // pipelining did NOT fabricate authority. The receiving executor sees an
+        // empty authorization and (per the verified drain) MUST reject it. The
+        // pipeline layer is faithful: it neither adds nor strips authority.
+        assert!(
+            delivered[0].action.authorization.is_empty(),
+            "pipelining must not manufacture authorization for a forged send"
+        );
+    }
+
+    // ─── Test 18: Break cascade — breaking the head of a chain cascades the break to
+    //              EVERY downstream result promise, and NOTHING is delivered (no
+    //              orphaned grant). The executable analog of `break_freezes_state`. ──
+
+    #[test]
+    fn break_cascades_no_delivery_through_chain() {
+        let mut reg = PipelineRegistry::new();
+        let initial = reg.create_promise();
+
+        let steps = vec![
+            make_action("step_1"),
+            make_action("step_2"),
+            make_action("step_3"),
+        ];
+        let final_promise = reg.pipeline_chain(initial, steps, fed_a()).unwrap();
+
+        // Break the INITIAL promise — the whole chain must cascade to broken, and
+        // no step's action is ever delivered for execution.
+        let notifications = reg.break_promise(initial, "remote vat crashed".into());
+        assert!(!notifications.is_empty(), "break must cascade to dependents");
+
+        // Every promise in the chain (including the final result) is now Broken.
+        assert!(matches!(
+            reg.promise_state(final_promise),
+            Some(PipelinePromiseState::Broken { .. })
+        ));
+
+        // Re-resolving the (now broken) initial promise delivers NOTHING — its queue
+        // was drained-into-breakage, so no mutation can be smuggled through after a break.
+        let delivered = reg.resolve_promise(initial, cell(0x33));
+        assert!(
+            delivered.is_empty(),
+            "a broken promise must deliver no queued sends (no orphaned grant)"
+        );
+    }
+
+    // ─── Test 19: Sender binding — a bridge configured with a local federation stamps
+    //              the REAL sender on outbound pipelined messages, not the [0;32]
+    //              placeholder (closes the §C.6 gap so authorization binds to an originator). ──
+
+    #[test]
+    fn configured_bridge_stamps_real_sender() {
+        let me = FederationId([0x11; 32]);
+        let mut bridge = CrossFedPipelineBridge::with_local_federation(me);
+        assert_eq!(bridge.local_federation(), Some(me));
+
+        let _ = bridge.pipeline_to_remote(fed_b(), 42, make_action("get_balance"));
+        let outbox = bridge.drain_outbox();
+        assert_eq!(outbox.len(), 1);
+        match &outbox[0].1 {
+            PipelineWireMessage::PipelineToPromise {
+                sender_federation, ..
+            } => {
+                assert_eq!(
+                    *sender_federation, me,
+                    "configured bridge must stamp its real federation as sender"
+                );
+                assert_ne!(
+                    *sender_federation,
+                    FederationId([0u8; 32]),
+                    "sender must NOT be the anonymous [0;32] placeholder"
+                );
+            }
+            _ => panic!("expected PipelineToPromise"),
+        }
+    }
+
+    #[test]
+    fn unconfigured_bridge_falls_back_to_placeholder() {
+        // Backward-compat: an un-configured bridge still works, with the placeholder.
+        let mut bridge = CrossFedPipelineBridge::new();
+        assert_eq!(bridge.local_federation(), None);
+        let _ = bridge.pipeline_to_remote(fed_b(), 1, make_action("ping"));
+        let outbox = bridge.drain_outbox();
+        match &outbox[0].1 {
+            PipelineWireMessage::PipelineToPromise {
+                sender_federation, ..
+            } => assert_eq!(*sender_federation, FederationId([0u8; 32])),
+            _ => panic!("expected PipelineToPromise"),
+        }
     }
 
     // ─── Test 15: Wire message serialization roundtrip ──
