@@ -4,6 +4,28 @@
 
 = The Unified Fabric <sec-fabric>
 
+== Federation as Secure Scuttlebutt, extended
+
+Dragon's Egg's federation layer is best understood as *Secure Scuttlebutt (SSB) extended*.
+It *inherits* SSB's core: a *strand* is one participant's append-only Ed25519-signed log (the
+SSB feed --- a `creator`'s `seq`-indexed virtual chain), only the owner can extend it, content
+integrity is by hash plus signature, propagation is by offline-first gossip plus
+store-and-forward, and partial replication follows an interest `Subscription` (SSB's
+follow-graph hop limit by another name). It *extends* SSB --- the "on crack" part --- in five
+ways, each now backed by a machine-checked theorem in `dregg2` (@sec-formal): (1) a cross-feed
+*causal DAG* (the blocklace) instead of $N$ independent linear feeds; (2) *verified BFT
+finality* via the $tau$ ordering (`tauOrder_deterministic`, `finalLeaders_one_per_wave`),
+which SSB lacks entirely (SSB is eventual-consistency only); (3) *byzantine-repelling fork
+detection and eviction* (`strand_single_tip`, `forked_strand_not_forkFree`), where SSB leaves
+feed forks as an unsolved client-side nuisance; (4) *object-capabilities* (CapTP sturdy refs,
+handoff, distributed GC) layered over the feeds; (5) *committee identity plus governed
+membership* ($"federation_id" = "BLAKE3"("committee" || "epoch")$, the H-rule). Where SSB
+stores plaintext feeds everywhere, dregg adds a Hosted/Sovereign custody split (federation
+holds full state, or only a 32-byte commitment with client-supplied anti-replay witnesses).
+Honestly flagged open ends: the unified-lace endpoint (`FederationId` $arrow$ `StrandId`) is
+mid-migration, Sybil admission has no stake gate, and partial-replication safety under a
+hop-limited `Subscription` is not yet proved.
+
 == From Four Federations to One
 
 Pre-Lane-D, the codebase carried *four* disjoint "federation" concepts:
@@ -189,12 +211,32 @@ Constitutional auto-eviction at `constitution.rs::auto_evict_equivocator` consum
 
 == Security Properties
 
-*Safety*: $tau_"unified"$ inherits Cordial Miners safety. For a reference group with threshold $t$, safety holds if fewer than $t$ members are Byzantine.
+These properties are no longer asserted by appeal to Cordial Miners; the load-bearing ones
+are *machine-checked in `dregg2`* (@sec-formal), with the proved theorem named for each.
 
-*Liveness*: under partial synchrony, if more than $t$ members are honest and eventually connected, every submitted turn is eventually ordered.
+*Safety*: the $tau$ finalization rule yields a single anchor per wave and a deterministic
+total order (`BlocklaceFinality.finalLeaders_one_per_wave`, `tauOrder_deterministic`), and a
+*resilience pair* separates the safety threshold $t_S$ from the liveness threshold $t_L$ with
+$t_L < t_S$: safety holds below $t_S$ (`Consensus.safety_holds_below_tS`) and a negative
+theorem shows it *can* break above it (`safety_can_break_above_tS`) --- the bound is real, not
+decorative.
 
-*Group isolation*: faults in one reference group cannot affect ordering in another.
+*Liveness*: under partial synchrony with an honest supermajority, post-GST progress holds
+relative to a named delivery model (`Consensus.leaderless_progress` from `PostGSTProgress`).
+This is reduced to a stated assumption rather than proved from raw network behavior, and we
+flag it as such.
 
-*Equivocation detection*: structural---two blocks by the same author at the same round (or same `seq`) with different content constitute irrefutable proof of Byzantine behavior.
+*Equivocation detection*: structural and proved --- every fork is a downstream-checkable
+incomparable pair (`StrandIntegrity`), an equivocator is repelled from approval
+(`Consensus.equivocator_repelled_from_approval`), and honest finalization is unforkable
+(`honest_finalization_unforkable`).
+
+*Convergence*: two replicas that merge the same causally-closed blocks reach the same lace and
+hence the same executed state (`LaceMerge.merge_convergence_to_state`, composing the merge
+join laws with $tau$ determinism) --- SSB's eventual consistency, upgraded to verified
+convergence.
+
+*Reconfiguration safety*: finalized state survives a validator-set change
+(`Consensus.no_conflicting_finalized_state_reconfig`; long-range rewrite rejected).
 
 *Federation-identity binding*: $"federation_id" = "BLAKE3"("committee" || "epoch")$ makes the binding *algebraic*. A receipt mislabeled with the wrong `federation_id` is detected by any verifier that holds the committee key.

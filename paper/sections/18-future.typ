@@ -19,7 +19,7 @@ Deep research finds no public production system explicitly targeting DAG-shaped 
     columns: (auto, auto),
     align: (left, left),
     table.header([*Stage*], [*State*]),
-    [Per-cell Effect VM AIR with $tilde$151 columns], [Operational],
+    [Per-cell Effect VM AIR (descriptor-driven, emitted from the verified Lean executor)], [Operational / ONE-circuit migration in flight],
     [Sequential IVC chains via `build_recursive_ivc_chain`], [Operational],
     [Stage 7-$gamma$.0 shared-PI bundle (per-cell proofs of one turn share PI)], [Landed],
     [Stage 7-$gamma$.2 Phase 1 (PI-only bilateral binding + off-AIR `dregg-verifier bilateral-pair`)], [Landed],

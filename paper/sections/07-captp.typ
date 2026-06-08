@@ -80,7 +80,7 @@ The GC protocol is _conservative_: a capability is only collected when ALL remot
 - The remote re-imports any capabilities it still holds (re-incrementing counts).
 - Capabilities not re-imported within the reconciliation window are considered dropped.
 
-This avoids the "lost decrement" problem where a crash after import but before acknowledgment could leak a reference indefinitely.
+This avoids the "lost decrement" problem where a crash after import but before acknowledgment could leak a reference indefinitely. The GC-safety core is machine-checked in `dregg2` (`Exec/CapTPGCConcrete.lean`, @sec-formal): a reference is reclaimed only at its last drop (`reclaim_only_at_last_ref`), a Byzantine peer cannot drop a victim's reference (`byzantine_cannot_drop_victim_ref`, with wrong-session drops proved no-ops), and leased references are eventually but never prematurely reclaimed (`leased_reclaim_eventual`, `leased_no_premature`). The unavoidable cross-vat cycle leak is named as the price, not papered over (`CapTPGC.captp_cycle_leak_is_the_price`).
 
 == Three-Party Handoff
 
@@ -96,8 +96,14 @@ The handoff protocol enables offline capability transfer to a third party withou
 
 === Handoff Security
 
+These properties are machine-checked in `dregg2` (`Exec/CapTPHandoffSound.lean`, see
+@sec-formal): handoff is non-amplifying (`validateHandoff2_nonAmplifying`, the installed
+authority $subset.eq$ the conferred authority) and unforgeable relative to a named
+signature-kernel assumption (`handoff_unforgeable`, `adversary_cannot_forge_at_n_gt_1`,
+`forged_handoff_installs_nothing`).
+
 - *Non-transferable*: The certificate names a specific recipient. Presenting it with the wrong key fails.
-- *Unforgeable*: Requires Alice's Ed25519 private key. No party can forge a valid certificate.
+- *Unforgeable*: Requires Alice's Ed25519 private key. No party can forge a valid certificate (`handoff_unforgeable`, proved relative to the `SignatureKernel.unforgeable` assumption).
 - *One-time*: Each certificate is consumed on presentation. Replay is detected via `HandoffError::ReplayDetected` against a per-cert nonce-seen ledger, or via `max_uses` decrement at swiss enliven when bounded.
 - *Offline*: Neither Alice nor Bob need be online simultaneously. The certificate is a proof object.
 - *Trust root*: validation requires the introducer's public key to derive from an entry in the receiver's `KnownFederations` registry (the `FederationId` $arrow.r$ public-key registry). Without registry presence, the introducer-signature check fails closed.

@@ -21,13 +21,13 @@ The system is implemented in approximately 400k lines of Rust across $tilde$45 w
     [`blocklace`], [Cordial Miners $tau$ + Constitutional Consensus DAG + equivocation detection], [hints],
     [`commit`], [Poseidon2 Merkle trees, typed `Commitment<T>` framework], [p3-poseidon2],
     [`trace`], [STARK trace generation, AIR evaluation], [commit, p3-fri],
-    [`circuit`], [DSL-only circuits, Effect VM AIR (~151 cols post-$gamma$.2 P1 + sovereign-witness P1), Kimchi backends, plonky3 recursion (`plonky3_recursion_impl` substrate)], [trace, commit, p3-uni-stark, kimchi],
+    [`circuit`], [DSL-only circuits, Effect VM AIR (migrating to descriptor-driven emission from the verified Lean executor; ONE-circuit), Kimchi backends, plonky3 recursion (`plonky3_recursion_impl` substrate)], [trace, commit, p3-uni-stark, kimchi],
     [`federation`], [Unified `Federation` type, `FederationCommittee`, `AttestedRoot` v3, `FederationReceipt`, `ThresholdQC`, real Shamir-over-GF(256)+ChaCha20-Poly1305 `threshold_decrypt`], [blocklace, hints],
     [`audit`], [Security audit trail, policy evaluation], [token],
     [`bridge`], [High-level API bridging proof + token layers, `BridgePresentationProof`, `BridgePredicateProof`], [circuit, token],
     [`wire`], [Network protocol, QUIC transport, hardening, `dfa_router`, `Authorization::CapTpDelivered` routing], [quinn, postcard],
     [`store`], [Persistent state: redb ACID, Blocklace blocks, ledger checkpoints, `KnownFederations` registry], [redb],
-    [`cell`], [Cell state, c-lists, factories, sovereignty, `CellProgram::StateConstraint` (21+ variants), `WitnessedPredicate`, `peer_exchange`, `predicate` module], [types],
+    [`cell`], [Cell state, c-lists, factories, sovereignty, `CellProgram::StateConstraint` (29 variants), `WitnessedPredicate`, `peer_exchange`, `predicate` module], [types],
     [`turn`], [Turn execution, journal, atomicity, v3 canonical signing, `WitnessedReceipt` scope-1/scope-2, `SovereignCellWitness` with sequence + signature + optional `transition_proof`, `EncryptedTurn`], [cell, circuit],
     [`coord`], [2PC atomic coordination, causal DAG], [turn, federation],
     [`types`], [Shared types (`CellId`, `CapabilityRef`, `FederationId`, ...)], [],
@@ -129,7 +129,7 @@ The test suite includes thousands of test functions covering:
 - End-to-end demo scenarios covering delegation, revocation, multi-party turns, intent fulfillment, pipeline execution, cross-federation swaps, cclerk interactions, factory spawning, sovereign cell transitions, `peer_exchange` direct exchange, and `CapTpDelivered` Turn production.
 - DSL code generation tests (all backends produce correct output for a common test suite).
 - Effect VM soundness tests (conservation violation detection, authority bypass attempts, state continuity breaks, sovereign-witness Phase 1 boundary).
-- Consensus correctness tests (Blocklace + Cordial Miners under simulated network conditions).
+- Consensus correctness is now *machine-checked in Lean* (`dregg2`), not only tested: blocklace $tau$ finality, strand integrity, CRDT-merge convergence, and membership safety are proved theorems with Rust `#guard` differentials (see @sec-formal). The Rust simulated-network tests remain as the engineering regression net.
 - Security regression tests for every audit finding.
 - Application integration tests (each app has its own test harness).
 - Cross-federation bridge integration test (`federation/tests/cross_federation_bridge_receipt.rs`).

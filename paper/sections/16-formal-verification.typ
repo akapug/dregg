@@ -4,6 +4,15 @@
 
 = Formal Verification <sec-formal>
 
+Dragon's Egg's assurance story has two layers. The Rust heritage runtime (`dreggrs`)
+provides a typed composition checker and an adversarial test suite (described first). The
+authoritative specification is a machine-checked Lean 4 development (`dregg2`), where the
+turn executor, the verified-by-construction circuit emission, and the distributed-protocol
+and CapTP guarantees are *proved* rather than tested. The Lean layer is the substance of this
+section; the Rust-side checks remain the engineering safety net while the runtime is swapped
+onto the verified executor. Throughout, proofs are treated as *additive attestation* over the
+running system, and every place a guarantee rests on a named assumption is flagged.
+
 == Typed Composition Checker
 
 Dragon's Egg's proof system comprises 30+ circuit descriptors that must compose correctly. A _typed composition checker_ verifies at compile time that composed proofs maintain soundness---that public input/output types align, that witness bindings are consistent, and that trust assumptions compose without contradiction.
@@ -196,12 +205,162 @@ The test suite (4,046 tests) includes:
 - *Property tests*: Proptest-generated random inputs verify conservation, monotonicity, and nullifier properties across 10,000+ random cases.
 - *Regression tests*: Every security audit finding has a regression test that would catch reintroduction.
 
-=== Path to Full Formal Verification
+== The Lean 4 Kernel: `dregg2`
 
-The remaining path beyond compile-time and test-time:
+The compile-time and test-time disciplines above describe the Rust heritage codebase
+(`dreggrs`). Since the May draft, the project's center of gravity has moved: the
+authoritative specification of Dragon's Egg is now a machine-checked Lean 4 development,
+`dregg2` (the `metatheory/Dregg2/` tree). `dregg2` is not a sketch of "future work" --- it
+is the primary artifact, and the Rust runtime is increasingly routed through, or
+differentially checked against, it. The relationship is deliberate:
 
-+ Extract the executor's critical path (turn validation, conservation, nullifier dedup) into verified Rust (Verus or Prusti).
-+ Model the full system in Lean 4: cells, turns, proofs, federation, composition.
-+ Prove that the 11 cryptographic guarantees compose correctly under concurrent execution.
-+ Verify that DFA routing correctly enforces governance rules under all membership transitions.
-+ Machine-check the STARK soundness argument (FRI proximity + AIR degree bound + challenge sampling).
+- *`dregg2` (Lean) is the verified primary.* A purely functional Lean executor
+  (`Dregg2/Exec/TurnExecutorFull.lean`, `FullActionA`) defines the turn semantics for the
+  full effect vocabulary. The drift-guarded ontology catalog
+  (`site/tools/gen-ontology-catalog.js`) is generated *from this Lean source* and reports
+  *56 effects* (across value, authority, state, lifecycle, escrow, privacy, bridge, seal,
+  queue, and swiss families) with a required-authorization facet and a wire codec for every
+  one (`facet 56/56`, `wire 56/56`). The 29-variant predicate vocabulary is checked the same
+  way. The catalog's `--check` mode is byte-stable against the source, so the paper's effect
+  and constraint counts cannot silently drift from the verified model.
+- *`dreggrs` (Rust) is the heritage runtime.* It carries the network stack, the production
+  provers, the live node, the CLI, the extension, and the QUIC consensus. It is being
+  *swapped* onto the verified executor on the commit path rather than trusted on its own
+  say-so; a Rust$arrow.l.r$Lean differential harness drives concrete corpora through both and
+  flags divergence.
+
+The Lean development is axiom-disciplined. The load-bearing distributed-protocol and CapTP
+modules are `#assert_axioms`-clean: they close against only Lean's standard kernel axioms
+(`propext`, `Classical.choice`, `Quot.sound`) with *no* `sorry`, no `:= True` placeholder
+specifications, and no `native_decide` shortcut. Where a property genuinely rests on a
+cryptographic hardness assumption (collision-resistance of a state commitment, signature
+unforgeability), the assumption is *named* as a typeclass hypothesis and the theorem is
+proved relative to it --- it is not silently assumed away. We flag these named-assumption
+seams explicitly below rather than presenting them as unconditional.
+
+== Verified Execution and Circuit Emission
+
+Two results connect the Lean kernel to what the runtime actually does.
+
+*Verified executor.* The Lean executor runs the full effect set as a pure state transition
+over a record-shaped kernel state. Per-effect soundness pins the *whole* post-state (not a
+conservation projection): tampering with an untouched cell, a capability table, or a
+nullifier makes the witnessed transition unsatisfiable (the anti-ghost discipline). Value
+effects conserve; capability effects only attenuate (granted $subset.eq$ held); spending an
+already-spent note is rejected by the nullifier set.
+
+*Verified-by-construction circuit (ONE-circuit emission).* The May draft described several
+hand-written AIRs (A/B/C) and a $tilde$151-column Effect VM trace. That architecture is being
+*collapsed*: rather than maintaining hand-written constraints in parallel with the executor
+(and trusting that they agree), the circuit is *emitted from the verified Lean executor* as a
+single descriptor-driven AIR --- one circuit, derived from the same `FullActionA` semantics
+the catalog is generated from. The migration is in flight (the `EffectVmEmit*` family of
+emitters), and the live gate is a differential harness that proves the descriptor-driven
+prover and the legacy hand-AIR accept exactly the same witnesses before any hand-AIR is
+retired. We therefore do *not* restate a fixed column count here: the present-tense claim is
+the emission discipline (circuit derived from the verified executor, not hand-maintained
+beside it), not a specific trace width. Three production provers (a BabyBear/FRI STARK,
+Plonky3's `p3-uni-stark`, and Kimchi/Pickles over the Pasta cycle) remain available as
+proving backends for the emitted constraints.
+
+== Verified Distributed Protocols
+
+The single largest understatement of the May draft was to describe the distributed layer as
+"consensus correctness tests under simulated network conditions." Those guarantees are now
+*machine-checked theorems* in `dregg2`. Each module follows the same discipline: a faithful,
+*executable* Lean model that mirrors the real Rust protocol line-for-line (cited to
+`file:line`), a proved safety property the node relies on, a connection to the verified
+executor where applicable, and a `#guard` golden-vector *differential* that the corresponding
+Rust test reproduces.
+
+#figure(
+  table(
+    columns: (auto, auto, auto),
+    align: (left, left, left),
+    table.header([*Module*], [*Key theorems*], [*Guarantee*]),
+    [`Distributed/BlocklaceFinality`],
+      [`finalLeaderAt_unique`, `finalLeaders_one_per_wave`, `tauOrder_deterministic`, `tau_drives_verified_run`, `tau_execution_agreement`],
+      [The node's real $tau$ finalization rule (blocklace `ordering.rs::tau`) yields a single anchor per wave and a deterministic total order, and that order drives the verified executor to a deterministic state.],
+    [`Distributed/StrandIntegrity`],
+      [`strand_single_tip`, `insert_preserves_forkFree`, `forkFree_of_honestChain`, `forked_strand_not_forkFree`],
+      [Strand (= SSB feed) integrity: a fork-free strand has exactly one head, the fixed insert preserves fork-freedom, and every fork is a downstream-checkable incomparable pair.],
+    [`Distributed/LaceMerge`],
+      [`merge_comm`, `merge_assoc`, `merge_idem`, `merge_monotone`, `merge_least_upper_bound`, `merge_convergence_to_state`],
+      [CRDT replica convergence: the blocklace merge is a join (commutative, associative, idempotent, monotone); replicas merging the same causally-closed blocks reach the same lace and --- via $tau$ determinism --- the same executed state.],
+    [`Distributed/MembershipSafety`],
+      [`apply_join_threshold`, `apply_leave_threshold`, `h_rule_passing_needs_both`, `passed_needs_quorum_in_past`, `membership_change_reparameterizes_finality`],
+      [Governed membership: a Join/Leave applies only with a supermajority of *distinct current-member* approvals in causal past; the H-rule ($max(T,T')$) caps threshold manipulation, so no minority lowers the bar and no majority locks others out.],
+    [`Distributed/EntangledJoint`],
+      [`jointApplyAll_atomic`, `jointApplyAll_dichotomy`, `jointApplyAll_all_authorized`, `jointApplyAll_conserves`, `tryDebit_table_preserves_ok`, `jointBinding_one_identity`],
+      [Multi-cell entanglement: an $N$-cell joint turn commits all legs or none (atomic), every leg is independently authorized, value is conserved across the joint, and a shared budget never overspends.],
+    [`Distributed/CellMigration`],
+      [`handoff_unique_home`, `accept_refuses_double`, `handoff_conserves_balance`, `handoff_conserves_caps`, `migrated_cannot_reprepare`],
+      [Cross-federation cell handoff (Hosted$arrow.l.r$Sovereign): prepare$arrow$accept$arrow$commit leaves the cell live at exactly one home, conserves balance and capabilities byte-for-byte, and cannot be replayed.],
+    [`Distributed/Consensus`],
+      [`resilience_gap_real`, `safety_holds_below_tS`, `safety_can_break_above_tS`, `equivocation_excluded`, `honest_finalization_unforkable`, `no_conflicting_finalized_state_reconfig`, `blocklace_is_leaderless`],
+      [A *resilience pair* (separate safety threshold $t_S$ and liveness threshold $t_L$, with $t_L < t_S$): safety holds below $t_S$ (and a negative theorem shows it *can* break above it), equivocators are repelled, and finalized state survives reconfiguration.],
+    [`Distributed/Revocation`],
+      [`eventual_bounded_revocation`, `immediate_revocation`, `single_machine_collapse`, `tightness_tooth`, `spec_nonvacuous`],
+      [Topology-parametrized revocation: a credential is honored at most until $tau + "delay"$ and never after; the single-machine instance collapses this to immediate revocation (the dregg4 single-machine principle).],
+    [`Distributed/FinalityGate`],
+      [`gate_admits_iff_verified_finalizes`, `gate_deterministic`, `gate_admit_is_rule_output`],
+      [The wire finalization gate admits exactly what the verified $tau$ rule finalizes, deterministically.],
+  ),
+  caption: [Machine-checked distributed-protocol theorems in `dregg2`. Each module is `#assert_axioms`-clean (only `propext`, `Classical.choice`, `Quot.sound`; no `sorry`/`:= True`) and ships a Rust `#guard` differential.],
+)
+
+== Verified CapTP
+
+The object-capability transport carries its own verified core. These modules pin the
+properties on which cross-vat capability flow depends.
+
+#figure(
+  table(
+    columns: (auto, auto, auto),
+    align: (left, left, left),
+    table.header([*Module*], [*Key theorems*], [*Guarantee*]),
+    [`Exec/CapTPHandoffSound`],
+      [`handoff_installs_exactly`, `validateHandoff2_nonAmplifying`, `validateHandoff2_attenuates`, `handoff_unforgeable`, `adversary_cannot_forge_at_n_gt_1`, `forged_handoff_installs_nothing`],
+      [Three-party handoff is non-amplifying (the installed authority $subset.eq$ the conferred authority) and *unforgeable*: a certificate not signed under the federation's keys installs nothing, even at $n > 1$ vats.],
+    [`Exec/CapTPConcrete`],
+      [`authNarrowerOrEqual_trans`, `grant_none_over_nonnone_amplifies`, `handoff_concrete_attenuation`, `handoff_non_amplifying_concrete`],
+      [The concrete `AuthRequired` attenuation lattice the captp runtime enforces, pinned to Lean and mirrored by a Rust differential test (`handoff_lattice_differential.rs`) across the FFI gap.],
+    [`Exec/CapTPGCConcrete`],
+      [`drop_retains_when_refcount_gt_one`, `reclaim_only_at_last_ref`, `byzantine_cannot_drop_victim_ref`, `wrong_session_no_op`, `leased_reclaim_eventual`, `leased_no_premature`],
+      [Distributed GC safety: a reference is reclaimed only at its last drop, a Byzantine peer cannot drop a victim's reference (wrong-session drops are no-ops), and leased references are eventually but never prematurely reclaimed.],
+    [`Exec/CapTPConfinement`],
+      [`enliven_unreachable_without_swiss`, `enliven_no_authority_without_swiss`, `enliven_confined_strong`, `unguessable_implies_unreachable`, `confinement_under_entropy`],
+      [Swiss-number confinement: no authority is reachable without the (unguessable) swiss number; an adversary with bounded knowledge cannot enliven a reference.],
+    [`Exec/CapTPSettlement`, `Exec/CapTPConsentLace`],
+      [`settle_complete_is_drain`, `settle_atomic_aborts_on_unauthorized`, `settle_conserves`, `forged_approval_does_not_count`, `laceSettle_atomic_aborts_on_unauthorized`, `consent_equivocation_detectable`, `equivocating_party_blocks_settlement`],
+      [Multi-party suspended settlement: a batch settles only when every party's *signed* consent is present in the lace, settlement is atomic (an unauthorized leg aborts the whole batch) and conserving, a forged approval does not count, and an equivocating party is detectable and blocks settlement.],
+  ),
+  caption: [Machine-checked CapTP theorems in `dregg2`. The swiss-table/GC/session surface is executor-trusted in the heritage runtime; these proofs pin the discipline the runtime must honor, and the Rust differentials gate drift across the FFI boundary.],
+)
+
+== Named-Assumption Seams (what is *not* unconditional)
+
+Honesty requires naming where the proofs rest on assumptions rather than discharging them:
+
+- *Cryptographic hardness.* Handoff unforgeability is proved relative to a `SignatureKernel`
+  with a `unforgeable` law (instantiated by a reference kernel for the non-vacuity
+  witnesses); state-commitment soundness rests on a collision-resistance assumption stated as
+  a typeclass. These are standard reductions, but they are assumptions, not theorems about
+  the concrete hash/signature primitives.
+- *Circuit$arrow.l.r$executor gate is in flight.* The ONE-circuit emission is migrating; until
+  every hand-AIR is retired behind the differential harness, the runtime's proving path is a
+  mix of emitted and legacy constraints. We claim the emission *discipline*, not that the
+  collapse is complete.
+- *Liveness residual.* Consensus *safety* is proved below $t_S$; the post-GST *liveness*
+  property is reduced to a named delivery model (`PostGSTProgress`), not proved from raw
+  network assumptions --- this is flagged in the module itself.
+- *The Lean$arrow.l.r$Rust swap is partial.* `dregg2` is the verified primary, but the live
+  node still runs heritage Rust on several paths; the differential harness is how we shrink
+  that gap, and the cutover ledger gates each deletion. The proofs are *additive attestation*
+  over the running system, not a per-step gate that every production turn already passes
+  through.
+
+These modules are individually machine-checked (their compiled artifacts are present in the
+Lean build and they are `#assert_axioms`-clean); two of them are under active edit by
+concurrent verification work at the time of writing and are not yet folded into the single
+default aggregate target. We name this rather than imply a frozen, fully-integrated whole.
