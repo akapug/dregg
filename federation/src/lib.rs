@@ -60,6 +60,12 @@
 //! - [`node`]: Federation node implementation (includes BFT consensus simulation)
 
 pub mod checkpoint;
+/// Differential: the verified Lean `Dregg2.Distributed.CheckpointPrune` model ⟺ this crate's real
+/// checkpoint-prune arc (the `RetentionPolicy::would_prune` predicate transcribed from
+/// `node/src/config.rs`, the prune/recover keyset reconstruction, and the `Checkpoint::verify`
+/// attestation gate driven through genuine Ed25519-signed QCs). Test-only.
+#[cfg(test)]
+mod checkpoint_prune_diff;
 pub mod cross_fed_bundle;
 pub mod epoch;
 /// Differential: the verified Lean `Dregg2.Distributed.EpochReconfig` model ⟺ this crate's real
