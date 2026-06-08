@@ -297,6 +297,291 @@ forged send src={forgedSend.turn.src} → REJECTED"
 
 end NonVacuity
 
+/-! ## §8b — The `PipelineRegistry` STATE MACHINE, pinned to the running Rust.
+
+§1-§7 model the *executable drain* (each delivered send is a verified `exec` turn). But the
+load-bearing object the captp crate actually SHIPS and runs is `pipeline.rs::PipelineRegistry`
+— the promise-state machine that decides, BEFORE any executor, **which** queued messages are
+delivered, **in what order**, and **what a break does to the queue**. That machine was the
+DARK-MIRROR gap: §1-§7 modeled `drainAll` over a `List QueuedSend` but never pinned how the
+real registry *produces* that list (FIFO insertion order), nor the `pending/fulfilled/broken`
+transitions, nor that a break CLEARS the queue (no later delivery). This section closes it with
+a faithful, total mirror of `PipelineRegistry` + a differential corpus the Rust harness replays
+against the REAL `create_promise`/`pipeline_message`/`resolve_promise`/`break_promise`.
+
+The model is `Nat`-keyed (the Rust `u64` promise ids; `FederationId`/`PipelinedAction` payloads
+are irrelevant to the ordering/state-machine semantics, so a `Nat` message label stands for the
+whole `PipelinedMessage`). -/
+
+namespace Registry
+
+/-- `pipeline.rs::PipelinePromiseState`. -/
+inductive PState where
+  | pending
+  | fulfilled (resolvedCell : Nat)
+  | broken (reason : String)
+  deriving Repr, DecidableEq
+
+/-- The faithful mirror of `pipeline.rs::PipelineRegistry`: per-promise FIFO message queues
+(insertion-ordered `List`, head = oldest), per-promise state, and the `next_id` allocator. A
+message is a `Nat` label (its `target_promise_id` is the queue key; `resultId?` mirrors
+`PipelinedMessage.result_promise_id`, the cascade target on break). -/
+structure Reg where
+  /-- queued messages per promise id, in INSERTION ORDER (FIFO; `resolve` returns this `List`). -/
+  queued : List (Nat × List (Nat × Option Nat))
+  /-- promise state per id. -/
+  promises : List (Nat × PState)
+  /-- next promise id to allocate. -/
+  nextId : Nat
+  deriving Repr
+
+/-- `pipeline.rs::PipelineRegistry::new` — empty. -/
+def empty : Reg := { queued := [], promises := [], nextId := 0 }
+
+/-- assoc-list lookup. -/
+def lookup {α} (xs : List (Nat × α)) (k : Nat) : Option α :=
+  (xs.find? (·.1 = k)).map (·.2)
+
+/-- assoc-list upsert (replace if present, else append). -/
+def upsert {α} (xs : List (Nat × α)) (k : Nat) (v : α) : List (Nat × α) :=
+  if xs.any (·.1 = k) then xs.map (fun p => if p.1 = k then (k, v) else p) else xs ++ [(k, v)]
+
+/-- assoc-list remove. -/
+def erase {α} (xs : List (Nat × α)) (k : Nat) : List (Nat × α) := xs.filter (·.1 ≠ k)
+
+/-- `create_promise` — allocate a fresh id, mark it `Pending`, install an empty queue, bump
+`next_id`. Returns the new id and the updated registry. -/
+def createPromise (r : Reg) : Nat × Reg :=
+  let id := r.nextId
+  (id, { queued := r.queued ++ [(id, [])]
+       , promises := r.promises ++ [(id, .pending)]
+       , nextId := r.nextId + 1 })
+
+/-- `pipeline_message` — queue a message on its target promise. Mirrors the four-way match in
+`pipeline.rs:174-198`: unknown ⇒ `Error` (registry unchanged); `Broken` ⇒ `Error` (unchanged);
+`Pending`/`Fulfilled` ⇒ APPEND to the FIFO queue (`Ok`). -/
+def pipelineMessage (r : Reg) (target : Nat) (msg : Nat) (resultId? : Option Nat) :
+    Bool × Reg :=
+  match lookup r.promises target with
+  | none => (false, r)                       -- PromiseNotFound
+  | some (.broken _) => (false, r)           -- PromiseAlreadyBroken
+  | some _ =>                                 -- Pending OR Fulfilled: append (FIFO)
+    let q := (lookup r.queued target).getD []
+    (true, { r with queued := upsert r.queued target (q ++ [(msg, resultId?)]) })
+
+/-- `resolve_promise` — mark `Fulfilled`, RETURN the queued messages in insertion order, and
+REMOVE the queue (so a re-resolve drains nothing). Returns the drained `List` and the new reg. -/
+def resolvePromise (r : Reg) (id : Nat) (resolvedCell : Nat) :
+    List (Nat × Option Nat) × Reg :=
+  let drained := (lookup r.queued id).getD []
+  (drained, { r with promises := upsert r.promises id (.fulfilled resolvedCell)
+                   , queued := erase r.queued id })
+
+/-- `break_promise` — mark `Broken`, drain the queue (delivering NOTHING downstream), and
+cascade: each drained message with a `result_promise_id` present IN this registry recursively
+breaks that result promise. Returns the list of `(brokenPromiseId, reason)` notifications and
+the new reg. Fuel-bounded recursion (the Rust recursion terminates because each cascade targets
+a DISTINCT, smaller-allocated result id; `fuel = promises.length` suffices). -/
+def breakPromise (fuel : Nat) (r : Reg) (id : Nat) (reason : String) :
+    List (Nat × String) × Reg :=
+  match fuel with
+  | 0 => ([], { r with promises := upsert r.promises id (.broken reason), queued := erase r.queued id })
+  | fuel + 1 =>
+    let drained := (lookup r.queued id).getD []
+    let r0 : Reg := { r with promises := upsert r.promises id (.broken reason), queued := erase r.queued id }
+    drained.foldl
+      (fun (acc : List (Nat × String) × Reg) (m : Nat × Option Nat) =>
+        match m.2 with
+        | none => acc
+        | some rid =>
+          let cascadeReason := s!"upstream promise {id} broken: {reason}"
+          let notif := acc.1 ++ [(rid, cascadeReason)]
+          match lookup acc.2.promises rid with
+          | none => (notif, acc.2)                       -- result not local: notify only
+          | some _ =>
+            let (inner, r') := breakPromise fuel acc.2 rid cascadeReason
+            (notif ++ inner, r'))
+      ([], r0)
+
+/-- `queued_count`. -/
+def queuedCount (r : Reg) (id : Nat) : Nat := ((lookup r.queued id).getD []).length
+
+/-- `promise_state`. -/
+def promiseState (r : Reg) (id : Nat) : Option PState := lookup r.promises id
+
+/-! ### §8b.1 — State-machine laws (proved). -/
+
+/-- `lookup` of an APPENDED fresh key (not already present via the `find?` short-circuit) returns
+the appended value when the key is genuinely new. Used for `create`. -/
+theorem lookup_append_new {α} (xs : List (Nat × α)) (k : Nat) (v : α)
+    (h : xs.find? (·.1 = k) = none) : lookup (xs ++ [(k, v)]) k = some v := by
+  simp only [lookup, List.find?_append, h, List.find?_cons]
+  simp
+
+theorem create_then_pending (r : Reg)
+    (hp : r.promises.find? (·.1 = r.nextId) = none)
+    (hq : r.queued.find? (·.1 = r.nextId) = none) :
+    let (id, r') := createPromise r
+    promiseState r' id = some .pending ∧ queuedCount r' id = 0 := by
+  refine ⟨?_, ?_⟩
+  · simp only [createPromise, promiseState]; exact lookup_append_new r.promises r.nextId .pending hp
+  · simp only [createPromise, queuedCount]
+    rw [lookup_append_new r.queued r.nextId [] hq]; rfl
+
+/-- **`broken_target_rejects_queue`** — queueing onto a BROKEN promise is rejected and the
+registry is UNCHANGED (the `pipeline.rs:181` arm: `PromiseAlreadyBroken`, no mutation). -/
+theorem broken_target_rejects_queue (r : Reg) (target msg : Nat) (rid? : Option Nat) (reason : String)
+    (h : lookup r.promises target = some (.broken reason)) :
+    pipelineMessage r target msg rid? = (false, r) := by
+  simp only [pipelineMessage, h]
+
+/-- On a `k`-keyed `map`-replace, `lookup` returns the replaced value WHEN `k` is present. -/
+theorem lookup_map_replace {α} (xs : List (Nat × α)) (k : Nat) (v : α)
+    (h : xs.any (·.1 = k)) :
+    lookup (xs.map (fun p => if p.1 = k then (k, v) else p)) k = some v := by
+  induction xs with
+  | nil => simp at h
+  | cons p ps ih =>
+    simp only [List.map, lookup, List.find?_cons]
+    by_cases hp : p.1 = k
+    · simp [hp]
+    · have hk : ((if p.1 = k then (k, v) else p).1 = k) = (p.1 = k) := by simp [hp]
+      simp only [hp, if_false]
+      simp only [List.any_cons, hp, decide_false, Bool.false_or] at h
+      have := ih h
+      simp only [lookup, decide_eq_true_eq, hp] at this ⊢
+      simpa [hp] using this
+
+/-- `lookup` of a `k`-keyed `upsert` returns the upserted value. -/
+theorem upsert_lookup_self {α} (xs : List (Nat × α)) (k : Nat) (v : α) :
+    lookup (upsert xs k v) k = some v := by
+  simp only [upsert]
+  by_cases hm : xs.any (·.1 = k)
+  · simp only [hm, if_pos]
+    exact lookup_map_replace xs k v hm
+  · simp only [hm, if_neg, Bool.not_eq_true]
+    have hnone : xs.find? (·.1 = k) = none := by
+      rw [List.find?_eq_none]
+      intro x hx
+      have hfalse : ¬ xs.any (·.1 = k) = true := by simpa using hm
+      intro hxk
+      exact hfalse (List.any_eq_true.2 ⟨x, hx, hxk⟩)
+    exact lookup_append_new xs k v hnone
+
+/-- `erase`d key is absent. -/
+theorem erase_lookup_self {α} (xs : List (Nat × α)) (k : Nat) :
+    lookup (erase xs k) k = none := by
+  simp only [lookup, erase]
+  have : (xs.filter (·.1 ≠ k)).find? (·.1 = k) = none := by
+    apply List.find?_eq_none.2
+    intro x hx
+    have hmem := List.mem_of_mem_filter hx
+    have hne : x.1 ≠ k := by
+      have := List.of_mem_filter hx
+      simpa using this
+    simpa using hne
+  rw [this]; rfl
+
+/-- **`resolve_clears_queue`** — after `resolve`, the promise's queue is EMPTY (a re-resolve
+drains nothing) and the promise is `Fulfilled`. The drained list is exactly the FIFO queue. -/
+theorem resolve_clears_queue (r : Reg) (id cell : Nat) :
+    let (drained, r') := resolvePromise r id cell
+    drained = (lookup r.queued id).getD []
+      ∧ queuedCount r' id = 0
+      ∧ promiseState r' id = some (.fulfilled cell) := by
+  refine ⟨rfl, ?_, ?_⟩
+  · simp only [resolvePromise, queuedCount, erase_lookup_self, Option.getD_none, List.length_nil]
+  · simp only [resolvePromise, promiseState, upsert_lookup_self]
+
+/-- **`resolve_preserves_fifo`** — the drained order IS the queue's insertion order: appending
+`m` to a non-broken target then resolving yields the old queue with `m` last. This is the FIFO
+tooth — `resolve` returns messages oldest-first, never reordered. -/
+theorem resolve_preserves_fifo (r : Reg) (target msg cell : Nat) (rid? : Option Nat)
+    (hp : ∃ st, lookup r.promises target = some st ∧ ∀ rs, st ≠ .broken rs) :
+    let (ok, r1) := pipelineMessage r target msg rid?
+    ok = true →
+    (resolvePromise r1 target cell).1 = ((lookup r.queued target).getD []) ++ [(msg, rid?)] := by
+  obtain ⟨st, hst, hnb⟩ := hp
+  simp only [pipelineMessage, hst]
+  cases st with
+  | broken rs => exact absurd rfl (hnb rs)
+  | pending =>
+    intro _; simp only [resolvePromise, upsert_lookup_self, Option.getD_some]
+  | fulfilled c =>
+    intro _; simp only [resolvePromise, upsert_lookup_self, Option.getD_some]
+
+/-! ### §8b.2 — A differential corpus the Rust harness replays against the REAL registry. -/
+
+/-- A registry op the corpus drives (mirrors a `PipelineRegistry` method call). -/
+inductive Op where
+  | create
+  | queue (target msg : Nat) (rid? : Option Nat)
+  | resolve (id cell : Nat)
+  | breakP (id : Nat) (reason : String)
+  deriving Repr
+
+/-- Run one op, projecting the observable the differential checks:
+`(queuedCount-of-arg, promiseState-tag-of-arg, ok-bit)`. The Rust harness drives the SAME op
+on the real `PipelineRegistry` and asserts these three observables agree. -/
+def stepObs (r : Reg) : Op → (Reg × Nat × Nat × Bool)
+  | .create => let (id, r') := createPromise r; (r', queuedCount r' id, 0, true)   -- tag 0 = pending
+  | .queue t m rid? => let (ok, r') := pipelineMessage r t m rid?; (r', queuedCount r' t, stateTag (promiseState r' t), ok)
+  | .resolve id c => let (_, r') := resolvePromise r id c; (r', queuedCount r' id, stateTag (promiseState r' id), true)
+  | .breakP id rs => let (_, r') := breakPromise (r.promises.length + 1) r id rs; (r', queuedCount r' id, stateTag (promiseState r' id), true)
+where
+  /-- 0 = pending/absent, 1 = fulfilled, 2 = broken. -/
+  stateTag : Option PState → Nat
+    | none => 0
+    | some .pending => 0
+    | some (.fulfilled _) => 1
+    | some (.broken _) => 2
+
+/-- Fold a program of ops, collecting the per-step observable triple `(queuedCount, tag, ok)`. -/
+def runProgram (r : Reg) : List Op → List (Nat × Nat × Bool)
+  | [] => []
+  | op :: rest =>
+    let (r', qc, tag, ok) := stepObs r op
+    (qc, tag, ok) :: runProgram r' rest
+
+/-- **The differential corpus.** A program exercising create → FIFO queue ×2 → resolve (drains,
+clears) → re-queue-on-fulfilled → break (clears, marks broken) → queue-on-broken (REJECTED).
+The recorded observable column is what the Rust harness asserts against the REAL registry. -/
+def pipelineDifferentialCorpus : List Op :=
+  [ .create                                   -- id 0 ← Pending, qc 0
+  , .queue 0 100 none                          -- qc 1, pending, ok
+  , .queue 0 101 (some 7)                       -- qc 2 (FIFO append), pending, ok
+  , .resolve 0 42                              -- drains [100,101], qc→0, fulfilled
+  , .queue 0 102 none                          -- queue-on-fulfilled: qc 1, fulfilled, ok
+  , .breakP 0 "remote gone"                    -- clears, qc 0, broken
+  , .queue 0 103 none ]                        -- queue-on-broken: REJECTED, qc 0, broken, !ok
+
+/-- The golden observable column for the corpus, proved by `decide` against the model. The Rust
+differential pins the SAME `(queuedCount, stateTag, ok)` triples against the real
+`PipelineRegistry`. A drift on EITHER side breaks: change the Rust state machine and the runtime
+triples diverge; change the Lean model and this `decide` trips at build. -/
+theorem pipelineDifferentialCorpus_observable :
+    runProgram empty pipelineDifferentialCorpus
+      = [ (0, 0, true)      -- create: id 0, qc 0, pending
+        , (1, 0, true)      -- queue 100: qc 1, pending, ok
+        , (2, 0, true)      -- queue 101: qc 2 (FIFO), pending, ok
+        , (0, 1, true)      -- resolve: drained, qc 0, fulfilled
+        , (1, 1, true)      -- queue-on-fulfilled: qc 1, fulfilled, ok
+        , (0, 2, true)      -- break: cleared, qc 0, broken
+        , (0, 2, false) ] := by   -- queue-on-broken: REJECTED (!ok)
+  decide
+
+/-- The FIFO drain order is observable too: resolving promise 0 after the two queues returns the
+messages OLDEST-FIRST `[100, 101]`, not reordered. The Rust harness asserts the drained `Vec`'s
+`action`/label order equals this. -/
+theorem pipelineDifferentialCorpus_drain_order :
+    let r0 := (createPromise empty).2
+    let r1 := (pipelineMessage r0 0 100 none).2
+    let r2 := (pipelineMessage r1 0 101 (some 7)).2
+    (resolvePromise r2 0 42).1 = [(100, none), (101, some 7)] := by
+  decide
+
+end Registry
+
 /-! ## §9 — Axiom-hygiene tripwires. Every PROVED keystone depends ONLY on the three standard
 kernel axioms (no `sorryAx`). -/
 
@@ -310,5 +595,11 @@ kernel axioms (no `sorryAx`). -/
 #assert_axioms break_preserves_caps
 #assert_axioms drainAll_conserves
 #assert_axioms drain_realizes_seam
+#assert_axioms Registry.create_then_pending
+#assert_axioms Registry.broken_target_rejects_queue
+#assert_axioms Registry.resolve_clears_queue
+#assert_axioms Registry.resolve_preserves_fifo
+#assert_axioms Registry.pipelineDifferentialCorpus_observable
+#assert_axioms Registry.pipelineDifferentialCorpus_drain_order
 
 end Dregg2.Exec.CapTPPipeline
