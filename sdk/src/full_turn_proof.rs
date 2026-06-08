@@ -50,11 +50,16 @@ use dregg_circuit::dsl::revocation::{
     verify_non_revocation_p3,
 };
 use dregg_circuit::dsl::dsl_p3_air::{prove_dsl_p3, verify_dsl_p3};
-use dregg_circuit::effect_vm::{self, CellState, generate_effect_vm_trace};
+use dregg_circuit::effect_vm::{self, CellState, Effect as VmEffectKind, generate_effect_vm_trace};
+use dregg_circuit::effect_vm::columns::sel;
+use dregg_circuit::effect_vm_descriptors::descriptor_for_selector;
 use dregg_circuit::effect_vm_p3_full_air::{
     EffectVmP3Proof, prove_effect_vm_p3, verify_effect_vm_p3,
 };
 use dregg_circuit::field::BabyBear;
+use dregg_circuit::lean_descriptor_air::{
+    parse_vm_descriptor, prove_vm_descriptor, verify_vm_descriptor,
+};
 use dregg_circuit::merkle_air::{
     MembershipP3Proof, membership_public_inputs, prove_membership_p3, verify_membership_p3,
 };
@@ -233,6 +238,105 @@ fn effect_vm_circuit_descriptor() -> CircuitDescriptor {
 }
 
 // ============================================================================
+// Effect-VM prover selection: hand-AIR (default) vs Lean descriptor interpreter.
+// ============================================================================
+//
+// THE CUTOVER FLAG (`DREGG_DESCRIPTOR_PROVER=1`): route the Effect-VM state-transition
+// proof through the verified-by-construction Lean DESCRIPTOR INTERPRETER
+// (`EffectVmDescriptorAir`, fed the byte-exact Lean-emitted descriptor JSON from the
+// `effect_vm_descriptors` registry) instead of the hand-written `EffectVmP3Air`. The
+// proof is the SAME wire type (`BatchProof<DreggStarkConfig>` = `EffectVmP3Proof`), so
+// the composed proof + verifier are unchanged.
+//
+// CONSERVATIVE SCOPE (cutover beachhead): the descriptor path is taken ONLY for a
+// single-effect turn whose effect maps to a descriptor that is VALIDATED cutover-ready
+// — currently `Transfer` (selector 1), the effect the differential harness
+// (`circuit/tests/effect_vm_descriptor_cutover_harness.rs`) proves the interpreter
+// decides IDENTICALLY to the hand-AIR over the real witness (honest accept + anti-ghost
+// reject). Every other shape (multi-effect turns, burn/note/etc.) FALLS BACK to the
+// hand-AIR — burn/note have a known column-mapping divergence (asserted in that
+// harness's `column_divergence_blockers`) and stay on the hand-AIR until the layout is
+// reconciled. So flipping the flag NEVER changes the proven semantics; it only swaps the
+// prover for the one validated effect.
+
+/// Is the descriptor-interpreter cutover prover enabled (`DREGG_DESCRIPTOR_PROVER=1`)?
+fn descriptor_prover_enabled() -> bool {
+    std::env::var("DREGG_DESCRIPTOR_PROVER")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// The selector for a turn that is a SINGLE cutover-ready effect, or `None`. Conservative:
+/// only `Transfer` (selector 1) is validated cutover-ready, so only it qualifies.
+fn cutover_ready_selector(effects: &[VmEffectKind]) -> Option<usize> {
+    if effects.len() != 1 {
+        return None;
+    }
+    match &effects[0] {
+        VmEffectKind::Transfer { .. } => Some(sel::TRANSFER),
+        _ => None,
+    }
+}
+
+/// Prove the Effect-VM state transition, routing through the Lean descriptor interpreter
+/// when the cutover flag is set AND the turn is a validated cutover-ready single effect;
+/// otherwise (default) through the hand-written `EffectVmP3Air`. Returns the SAME wire
+/// proof type either way.
+fn prove_effect_vm_with_cutover(
+    effects: &[VmEffectKind],
+    effect_trace: &[Vec<BabyBear>],
+    effect_pi: &[BabyBear],
+) -> Result<EffectVmP3Proof, SdkError> {
+    if descriptor_prover_enabled() {
+        if let Some(s) = cutover_ready_selector(effects) {
+            if let Some(json) = descriptor_for_selector(s) {
+                let desc = parse_vm_descriptor(json).map_err(|e| {
+                    SdkError::InvalidWitness(format!("cutover descriptor parse failed: {e}"))
+                })?;
+                // The descriptor binds the PI prefix (`public_input_count`); slice the
+                // wider EffectVM PI vector down to it. `prove_vm_descriptor` proves AND
+                // self-verifies through the audited p3 verifier before return.
+                let dpis = &effect_pi[..desc.public_input_count];
+                return prove_vm_descriptor(&desc, effect_trace, dpis).map_err(|e| {
+                    SdkError::InvalidWitness(format!(
+                        "effect-vm DESCRIPTOR-INTERPRETER proof failed: {e}"
+                    ))
+                });
+            }
+        }
+    }
+    // DEFAULT (and fallback for any non-cutover-ready shape): the hand-AIR.
+    prove_effect_vm_p3(effect_trace, effect_pi)
+        .map_err(|e| SdkError::InvalidWitness(format!("effect-vm p3 proof failed: {e}")))
+}
+
+/// Verify an effect-vm sub-proof, cutover-flag-aware. A proof produced by the descriptor
+/// interpreter binds a DIFFERENT AIR (different extended trace width / CommonData) than
+/// the hand-AIR, so the two verifiers are NOT interchangeable. When the cutover flag is
+/// set, try the descriptor verifier (the validated cutover-ready transfer descriptor,
+/// over the PI prefix) first; on any failure (incl. a hand-AIR proof whose width doesn't
+/// match the descriptor AIR), fall back to the hand-AIR verifier. With the flag unset,
+/// only the hand-AIR verifier runs (the default production path is unchanged).
+fn verify_effect_vm_proof_with_cutover(
+    proof: &EffectVmP3Proof,
+    public_inputs: &[BabyBear],
+) -> Result<(), String> {
+    if descriptor_prover_enabled() {
+        if let Some(json) = descriptor_for_selector(sel::TRANSFER) {
+            if let Ok(desc) = parse_vm_descriptor(json) {
+                if public_inputs.len() >= desc.public_input_count {
+                    let dpis = &public_inputs[..desc.public_input_count];
+                    if verify_vm_descriptor(&desc, proof, dpis).is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    verify_effect_vm_p3(proof, public_inputs).map_err(|e| format!("{e}"))
+}
+
+// ============================================================================
 // Proof Generation
 // ============================================================================
 
@@ -264,8 +368,11 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // return, so the post-state commitment is genuinely bound: a forged
     // NEW_COMMIT makes the audited verifier reject (see
     // `effect_vm_p3_full_air` anti-ghost tests).
-    let effect_proof = prove_effect_vm_p3(&effect_trace, &effect_pi)
-        .map_err(|e| SdkError::InvalidWitness(format!("effect-vm p3 proof failed: {e}")))?;
+    // CUTOVER FLAG (`DREGG_DESCRIPTOR_PROVER=1`): for a validated cutover-ready effect
+    // (single Transfer), prove through the verified-by-construction Lean DESCRIPTOR
+    // INTERPRETER; otherwise (default) through the hand-written `EffectVmP3Air`. Same
+    // wire proof type; the differential harness guards equivalence.
+    let effect_proof = prove_effect_vm_with_cutover(&witness.effects, &effect_trace, &effect_pi)?;
     let effect_proof_bytes = postcard::to_allocvec(&effect_proof).map_err(|e| {
         SdkError::InvalidWitness(format!("effect-vm p3 proof serialize failed: {e}"))
     })?;
@@ -508,7 +615,14 @@ pub fn verify_full_turn(
                             reason: format!("effect-vm p3 deserialize: {e}"),
                         }
                     })?;
-                verify_effect_vm_p3(&p3, &attached.sub_public_inputs).map_err(|e| format!("{e}"))
+                // CUTOVER FLAG: the effect-vm sub-proof may have been produced by the
+                // Lean DESCRIPTOR INTERPRETER (different AIR ⇒ different extended trace
+                // width ⇒ different CommonData), so it is NOT interchangeable with the
+                // hand-AIR verifier. When the flag is set, verify through the descriptor
+                // verifier first (the validated cutover-ready transfer descriptor over the
+                // PI prefix); fall back to the hand-AIR verifier for hand-AIR proofs.
+                verify_effect_vm_proof_with_cutover(&p3, &attached.sub_public_inputs)
+                    .map_err(|e| format!("{e}"))
             }
             // AUTHORIZATION / MEMBERSHIP / NON-REVOCATION: all now verified by
             // the AUDITED Plonky3 verifier (`p3-batch-stark`). ZERO `stark::`
