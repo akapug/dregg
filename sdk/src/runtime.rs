@@ -993,6 +993,20 @@ impl SubAgent {
         // Read the current receipt chain head for binding.
         let previous_receipt_hash = *self.last_receipt_hash.lock().unwrap();
 
+        // Seed the FRESH executor's per-agent receipt-chain head from this
+        // worker's last committed receipt. The executor stores the chain head
+        // in-instance (`TurnExecutor::check_previous_receipt_hash` validates the
+        // turn's `previous_receipt_hash` against `self`'s stored head), but we
+        // build a fresh `TurnExecutor` per call, so without seeding the stored
+        // head is always `None` and a worker's SECOND chained turn (which
+        // presents `Some(prev)`) is rejected with `ReceiptChainMismatch`. Seeding
+        // makes the per-worker provenance chain actually hold across turns — a
+        // worker can submit a sequence of chained, tamper-evident turns, which is
+        // exactly what an audit of a sub-agent's work trail needs.
+        if let Some(prev) = previous_receipt_hash {
+            executor.set_last_receipt_hash(self.cell_id, prev);
+        }
+
         // The worker authorizes by PRESENTING its capability credential. No
         // signature is needed: a verified `Authorization::Token` is the complete
         // authorization (the executor's token path returns on success).

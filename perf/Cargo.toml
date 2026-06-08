@@ -21,6 +21,9 @@ publish = false
 [dependencies]
 dregg-circuit = { path = "../circuit" }
 dregg-sdk = { path = "../sdk" }
+dregg-intent = { path = "../intent" }
+dregg-token = { path = "../token" }
+dregg-turn = { path = "../turn" }
 postcard = { version = "1", features = ["use-std"] }
 serde = { version = "1", features = ["derive"] }
 
@@ -42,3 +45,14 @@ path = "src/bin/perf_summary.rs"
 [[bin]]
 name = "perf-report"
 path = "src/bin/perf_report.rs"
+
+# End-to-end multi-agent ORCHESTRATION demo + measurement. Runs the polis loop
+# the product assessment only ASSERTED was unit-tested: a parent agent embodies
+# in a cell, spawns a worker under an attenuated, executor-enforced mandate, the
+# worker's in-scope turn commits and its over-scope turn is REJECTED by the
+# executor itself, a provenance chain links the worker's receipts, and two
+# workers' outputs settle atomically + conservingly through the verified
+# per-asset executor (`settle_ring_verified`). Every leg is wall-clock timed.
+[[bin]]
+name = "orchestration-demo"
+path = "src/bin/orchestration_demo.rs"

@@ -90,6 +90,54 @@ fn subagent_overscope_method_rejected_by_executor() {
 }
 
 #[test]
+fn subagent_chains_multiple_turns_provenance_holds() {
+    // REGRESSION: a worker must be able to submit a SEQUENCE of chained turns.
+    // Before the fix, `SubAgent::execute_method` built a fresh `TurnExecutor`
+    // per call but tracked its receipt-chain head only in-SubAgent, so the
+    // executor's stored head was always `None`; the worker's SECOND turn (which
+    // presents `previous_receipt_hash: Some(prev)`) was rejected with
+    // `ReceiptChainMismatch { expected: None, got: Some(..) }`. The fix seeds the
+    // fresh executor's head from the worker's last receipt, so the per-worker
+    // provenance chain actually holds across turns.
+    //
+    // We use `EmitEvent` as the work effect: unlike `IncrementNonce` it does not
+    // itself advance the cell's actor nonce, so the receipt chain is the sole
+    // provenance link (the audit-relevant shape).
+    use dregg_turn::action::{symbol, Event};
+    let (runtime, root_token) = runtime_with_root();
+    let worker = runtime
+        .spawn_sub_agent_scoped(&Attenuation::default(), &root_token, &["execute"])
+        .expect("spawn worker");
+
+    let work = |job: &str| -> Effect {
+        Effect::EmitEvent {
+            cell: worker.cell_id(),
+            event: Event { topic: symbol(job), data: Vec::new() },
+        }
+    };
+
+    let r1 = worker.execute(vec![work("job-1")]).expect("turn #1 must commit");
+    let r2 = worker
+        .execute(vec![work("job-2")])
+        .expect("turn #2 must commit (chained to #1) — the per-worker provenance chain must hold");
+    let r3 = worker
+        .execute(vec![work("job-3")])
+        .expect("turn #3 must commit (chained to #2)");
+
+    // Each non-genesis turn binds to its predecessor.
+    assert_eq!(
+        r2.previous_receipt_hash,
+        Some(r1.receipt_hash()),
+        "turn #2 must chain to turn #1's receipt"
+    );
+    assert_eq!(
+        r3.previous_receipt_hash,
+        Some(r2.receipt_hash()),
+        "turn #3 must chain to turn #2's receipt"
+    );
+}
+
+#[test]
 fn subagent_multi_method_scope_enforced_per_verb() {
     // A worker scoped to {execute, refresh} is admitted for the granted
     // `refresh` verb. A SEPARATE worker scoped the same way is rejected for a
