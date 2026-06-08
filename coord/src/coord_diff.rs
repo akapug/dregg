@@ -101,6 +101,74 @@ fn lean_ceiling(balance: u64, f: u64) -> u64 {
     ((balance as u128 * (f + 1) as u128) / (2 * f + 1) as u128) as u64
 }
 
+// ── StingrayCertReconcile.lean: the StingrayCounter::rebalance cert-reconciliation model ────────────
+//
+// A `(silo, version, spent, sig_ok)` certificate, mirroring the Lean `Cert`. The Lean `rebalance`
+// returns either a `RebErr` tag or the `(totalSpent, newBalance, newVersion)` outcome.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LeanCert {
+    silo: u8,
+    version: u64,
+    spent: u64,
+    sig_ok: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeanRebOutcome {
+    Ok { total_spent: u64, new_balance: u64, new_version: u64 },
+    IncompleteCertificates,
+    VersionMismatch,
+    DuplicateCertificate,
+    CertExceedsCeiling,
+    MissingSiloPubkey,
+    InvalidSignature,
+}
+
+/// `Dregg2/Coord/StingrayCertReconcile.lean::rebalance` — the faithful gate machine, in EXACT source
+/// order (incomplete-quorum → per-cert {version, dup, ceiling, pubkey, sig} → partial-mode missing
+/// charge → balance clamp → version bump). `n_silos`/`registered` describe the counter's silo set.
+fn lean_rebalance(
+    n_silos: usize,
+    registered: &[u8],
+    version: u64,
+    balance: u64,
+    f: u64,
+    certs: &[LeanCert],
+    require_all: bool,
+) -> LeanRebOutcome {
+    let ceil = lean_ceiling(balance, f);
+    if require_all && certs.len() < n_silos {
+        return LeanRebOutcome::IncompleteCertificates;
+    }
+    let mut seen: Vec<u8> = Vec::new();
+    let mut cert_spent: u64 = 0;
+    for cert in certs {
+        if cert.version != version {
+            return LeanRebOutcome::VersionMismatch;
+        } else if seen.contains(&cert.silo) {
+            return LeanRebOutcome::DuplicateCertificate;
+        } else if cert.spent > ceil {
+            return LeanRebOutcome::CertExceedsCeiling;
+        } else if !registered.contains(&cert.silo) {
+            return LeanRebOutcome::MissingSiloPubkey;
+        } else if !cert.sig_ok {
+            return LeanRebOutcome::InvalidSignature;
+        }
+        seen.push(cert.silo);
+        cert_spent += cert.spent;
+    }
+    // Partial mode: missing registered silos charged full ceiling (conservative).
+    let total = if require_all {
+        cert_spent
+    } else {
+        let missing = (0..n_silos as u8).filter(|s| !seen.contains(s)).count() as u64;
+        cert_spent + missing * ceil
+    };
+    let new_balance = if total > balance { 0 } else { balance - total };
+    LeanRebOutcome::Ok { total_spent: total, new_balance, new_version: version + 1 }
+}
+
 // ═══════════════════════ Differential 1: causal happened-before partial order ═══════════════════
 
 mod causal_order_diff {
@@ -539,5 +607,223 @@ mod shared_budget_diff {
         assert_eq!(real_verdicts, vec![true, true, true]);
         assert_eq!(budget.total_balance, lean_remaining);
         assert_eq!(budget.total_balance, 100);
+    }
+}
+
+// ═══════════════════ Differential 4: StingrayCounter::rebalance cert-reconciliation ═════════════════
+//
+// The CROSS-EPOCH half of Stingray (`budget.rs::StingrayCounter::rebalance`) — the residue named-OPEN
+// in `Proof/Stingray` §9 and now modelled+proved in `Dregg2/Coord/StingrayCertReconcile.lean`. This
+// runs the GENUINE `StingrayCounter` with REAL Ed25519 certificates (so the production signature path
+// is exercised) and asserts its observable rebalance outcomes / error tags AGREE, point for point,
+// with `lean_rebalance` (the Rust transcription of the Lean gate machine).
+
+#[cfg(test)]
+mod stingray_cert_reconcile_diff {
+    use super::*;
+    use crate::budget::{SpendingCertificate, StingrayCounter};
+    use dregg_cell::CellId;
+
+    type SiloId = [u8; 32];
+
+    fn agent() -> CellId {
+        CellId::from_bytes([0xAA; 32])
+    }
+    fn silos(n: usize) -> Vec<SiloId> {
+        (0..n)
+            .map(|i| {
+                let mut id = [0u8; 32];
+                id[0] = i as u8;
+                id
+            })
+            .collect()
+    }
+    fn signing_key(silo: &SiloId) -> [u8; 32] {
+        *blake3::hash(silo).as_bytes()
+    }
+    fn pubkey(sk: &[u8; 32]) -> [u8; 32] {
+        ed25519_dalek::SigningKey::from_bytes(sk).verifying_key().to_bytes()
+    }
+    fn register_all(coord: &mut StingrayCounter) {
+        for silo in coord.silos.clone() {
+            coord.register_silo_pubkey(silo, pubkey(&signing_key(&silo)));
+        }
+    }
+
+    /// Map the real `Result<u64, BudgetError>` onto the Lean `LeanRebOutcome` shape, reading the
+    /// post-state the same way the Lean `Outcome` exposes it.
+    fn real_outcome(
+        res: Result<u64, crate::budget::BudgetError>,
+        coord: &StingrayCounter,
+    ) -> LeanRebOutcome {
+        use crate::budget::BudgetError;
+        match res {
+            Ok(total) => LeanRebOutcome::Ok {
+                total_spent: total,
+                new_balance: coord.total_balance,
+                new_version: coord.version,
+            },
+            Err(e) => match e {
+                BudgetError::IncompleteCertificates { .. } => LeanRebOutcome::IncompleteCertificates,
+                BudgetError::VersionMismatch { .. } => LeanRebOutcome::VersionMismatch,
+                BudgetError::DuplicateCertificate { .. } => LeanRebOutcome::DuplicateCertificate,
+                BudgetError::CertificateExceedsCeiling { .. } => LeanRebOutcome::CertExceedsCeiling,
+                BudgetError::MissingSiloPubkey { .. } => LeanRebOutcome::MissingSiloPubkey,
+                BudgetError::InvalidCertificateSignature { .. } => LeanRebOutcome::InvalidSignature,
+                other => panic!("unexpected budget error in differential: {other:?}"),
+            },
+        }
+    }
+
+    /// Produce a genuine signed certificate for silo `i` claiming `spent` (drives `try_debit` so the
+    /// real `BudgetSlice` produces the Ed25519 signature).
+    fn signed_cert(coord: &StingrayCounter, ss: &[SiloId], i: usize) -> SpendingCertificate {
+        let silo = ss[i];
+        let sk = signing_key(&silo);
+        coord.silo_states[&silo].certificate(silo, &sk)
+    }
+
+    // ── §9(2) PARTIAL-MODE quorum reconstruction (`test_rebalance_partial_mode`) ──
+    #[test]
+    fn rebalance_partial_mode_agrees() {
+        let ss = silos(4);
+        let mut coord = StingrayCounter::new(agent(), 1000, ss.clone(), 1).unwrap();
+        register_all(&mut coord);
+        coord.try_debit(ss[0], 50, *blake3::hash(b"d").as_bytes()).unwrap();
+        let cert_a = signed_cert(&coord, &ss, 0);
+
+        // Lean model: 1 cert (silo 0, spent 50), partial mode, ceiling 666, 3 missing → 50 + 3*666.
+        let lean = lean_rebalance(
+            4, &[0, 1, 2, 3], 0, 1000, 1,
+            &[LeanCert { silo: 0, version: 0, spent: 50, sig_ok: true }],
+            false,
+        );
+        let real = real_outcome(
+            coord.rebalance_partial(&[cert_a]),
+            &coord,
+        );
+        assert_eq!(real, lean);
+        // The Byzantine-conservative reconstruction: 50 + 3*666 = 2048.
+        assert_eq!(lean, LeanRebOutcome::Ok { total_spent: 2048, new_balance: 0, new_version: 1 });
+    }
+
+    // ── §9(2) full-mode quorum completeness gate (`test_rebalance_rejects_incomplete_certificates`) ──
+    #[test]
+    fn rebalance_full_mode_incomplete_agrees() {
+        let ss = silos(4);
+        let mut coord = StingrayCounter::new(agent(), 1000, ss.clone(), 1).unwrap();
+        register_all(&mut coord);
+        coord.try_debit(ss[0], 50, *blake3::hash(b"d").as_bytes()).unwrap();
+        let cert_a = signed_cert(&coord, &ss, 0);
+
+        let lean = lean_rebalance(
+            4, &[0, 1, 2, 3], 0, 1000, 1,
+            &[LeanCert { silo: 0, version: 0, spent: 50, sig_ok: true }],
+            true,
+        );
+        let real = real_outcome(coord.rebalance(&[cert_a]), &coord);
+        assert_eq!(real, lean);
+        assert_eq!(lean, LeanRebOutcome::IncompleteCertificates);
+    }
+
+    // ── §9(3) EPOCH MONOTONICITY / no-replay (`test_rebalance_rejects_wrong_version`) ──
+    #[test]
+    fn rebalance_stale_cert_rejected_agrees() {
+        let ss = silos(4);
+        let mut coord = StingrayCounter::new(agent(), 1000, ss.clone(), 1).unwrap();
+        register_all(&mut coord);
+        coord.try_debit(ss[0], 50, *blake3::hash(b"d").as_bytes()).unwrap();
+        let mut cert = signed_cert(&coord, &ss, 0);
+        cert.version = 99; // stale / wrong epoch
+
+        let lean = lean_rebalance(
+            4, &[0, 1, 2, 3], 0, 1000, 1,
+            &[LeanCert { silo: 0, version: 99, spent: 50, sig_ok: true }],
+            false,
+        );
+        let real = real_outcome(coord.rebalance_partial(&[cert]), &coord);
+        assert_eq!(real, lean);
+        assert_eq!(lean, LeanRebOutcome::VersionMismatch);
+    }
+
+    // ── §9 ceiling gate (`test_rebalance_rejects_overspend_certificate`) — fires BEFORE sig check ──
+    #[test]
+    fn rebalance_over_ceiling_rejected_agrees() {
+        let ss = silos(4);
+        let mut coord = StingrayCounter::new(agent(), 1000, ss.clone(), 1).unwrap();
+        register_all(&mut coord);
+        // A hand-built certificate claiming more than the ceiling (666), forged sig.
+        let cert = SpendingCertificate {
+            silo: ss[0],
+            agent: agent(),
+            version: 0,
+            total_spent: 9999,
+            debits: vec![],
+            signature: [0u8; 64],
+        };
+        let lean = lean_rebalance(
+            4, &[0, 1, 2, 3], 0, 1000, 1,
+            &[LeanCert { silo: 0, version: 0, spent: 9999, sig_ok: false }],
+            false,
+        );
+        let real = real_outcome(coord.rebalance_partial(&[cert]), &coord);
+        assert_eq!(real, lean);
+        assert_eq!(lean, LeanRebOutcome::CertExceedsCeiling);
+    }
+
+    // ── §9(1) forged-signature rejection (`test_rebalance_rejects_forged_certificate_signature`) ──
+    #[test]
+    fn rebalance_forged_sig_rejected_agrees() {
+        let ss = silos(4);
+        let mut coord = StingrayCounter::new(agent(), 1000, ss.clone(), 1).unwrap();
+        register_all(&mut coord);
+        // valid spend (≤ ceiling) but a forged (all-zero) signature.
+        let cert = SpendingCertificate {
+            silo: ss[0],
+            agent: agent(),
+            version: 0,
+            total_spent: 50,
+            debits: vec![],
+            signature: [0u8; 64],
+        };
+        let lean = lean_rebalance(
+            4, &[0, 1, 2, 3], 0, 1000, 1,
+            &[LeanCert { silo: 0, version: 0, spent: 50, sig_ok: false }],
+            false,
+        );
+        let real = real_outcome(coord.rebalance_partial(&[cert]), &coord);
+        assert_eq!(real, lean);
+        assert_eq!(lean, LeanRebOutcome::InvalidSignature);
+    }
+
+    // ── §9(2) full-mode reconstruction = Σ certified spend + epoch bump ──
+    #[test]
+    fn rebalance_full_mode_reconstructs_and_bumps_epoch() {
+        let ss = silos(4);
+        let mut coord = StingrayCounter::new(agent(), 1000, ss.clone(), 1).unwrap();
+        register_all(&mut coord);
+        let mut certs = Vec::new();
+        for i in 0..4 {
+            coord.try_debit(ss[i], 100, *blake3::hash(&[i as u8]).as_bytes()).unwrap();
+            certs.push(signed_cert(&coord, &ss, i));
+        }
+        let lean = lean_rebalance(
+            4, &[0, 1, 2, 3], 0, 1000, 1,
+            &[
+                LeanCert { silo: 0, version: 0, spent: 100, sig_ok: true },
+                LeanCert { silo: 1, version: 0, spent: 100, sig_ok: true },
+                LeanCert { silo: 2, version: 0, spent: 100, sig_ok: true },
+                LeanCert { silo: 3, version: 0, spent: 100, sig_ok: true },
+            ],
+            true,
+        );
+        let real = real_outcome(coord.rebalance(&certs), &coord);
+        assert_eq!(real, lean);
+        // Reconstruction = Σ spend = 400; balance 600; version bumped 0→1 (no-replay boundary).
+        assert_eq!(lean, LeanRebOutcome::Ok { total_spent: 400, new_balance: 600, new_version: 1 });
+        // CONSERVATION (rebalance_conserves_on_exact): new_balance + total = old_balance.
+        if let LeanRebOutcome::Ok { total_spent, new_balance, .. } = lean {
+            assert_eq!(new_balance + total_spent, 1000);
+        }
     }
 }
