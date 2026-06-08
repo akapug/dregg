@@ -7,6 +7,15 @@
 #[path = "marshal.rs"]
 pub mod marshal;
 
+/// The VERIFIED DISTRIBUTED exports (federation strand-admission, etc.) — kept in a module distinct
+/// from the executor-facing marshal/lib plumbing.
+#[path = "distributed_ffi.rs"]
+pub mod distributed_ffi;
+
+pub use distributed_ffi::{
+    decode_tau_order, shadow_strand_admit, shadow_tau_order, strand_admit_available,
+    tau_order_available, verified_admits, verified_tau_order,
+};
 pub use marshal::{TurnStatus, WireState};
 
 /// Decoded Lean gated-forest verdict (T9 output envelope).
