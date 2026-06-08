@@ -38,6 +38,7 @@ use dregg_types::{PublicKey, Signature as Ed25519Signature, SigningKey};
 
 use crate::message::PeerMessage;
 use crate::node::{NodeId, fmt_node_id};
+use crate::peer_score::{Penalty, PeerScoreboard};
 
 /// A topic identifier (32-byte blake3 hash of the topic name).
 pub type TopicId = [u8; 32];
@@ -348,6 +349,9 @@ struct GossipState {
     /// Dandelion++ stem tracking: messages currently in the stem phase.
     /// If a message stays here beyond STEM_TIMEOUT, it is fluffed automatically.
     stem_messages: HashMap<MessageHash, StemEntry>,
+    /// Per-transport-peer reputation, driving eclipse-resistant eager selection
+    /// and Byzantine-peer penalization. See [`crate::peer_score`].
+    scoreboard: PeerScoreboard,
 }
 
 impl GossipState {
@@ -366,6 +370,40 @@ impl GossipState {
         }
         self.message_cache.insert(hash, msg);
         self.message_cache_order.push_back(hash);
+    }
+
+    /// Recompute the eager/lazy split for `topic_id` using the reputation
+    /// scoreboard's **eclipse-resistant** [`PeerScoreboard::select_eager`].
+    ///
+    /// This replaces the old insertion-order eager policy (first `D` peers to
+    /// connect won the spanning tree) with a score-ranked, address-diverse
+    /// selection: graylisted (Byzantine / proven-equivocator) peers are never
+    /// eager, high-reputation peers are preferred, and no single address bucket
+    /// may hold more than `MAX_EAGER_PER_BUCKET` eager slots — so a single-subnet
+    /// adversary cannot capture the relay set. Peers not selected become lazy
+    /// (they still receive IHave and can be re-grafted), so the change never
+    /// drops a peer from the topic — it only rebalances who relays full messages.
+    fn reclassify_eager(&mut self, topic_id: TopicId, eager_degree: usize) {
+        let Some(topic_state) = self.topics.get(&topic_id) else {
+            return;
+        };
+        let candidates = topic_state.all_peers();
+        let eager = self.scoreboard.select_eager(&candidates, eager_degree);
+        let eager_set: HashSet<SocketAddr> = eager.into_iter().collect();
+        if let Some(topic_state) = self.topics.get_mut(&topic_id) {
+            for (addr, st) in topic_state.peer_states.iter_mut() {
+                st.eager = eager_set.contains(addr);
+            }
+        }
+    }
+
+    /// Recompute the eager set for EVERY joined topic (used by the periodic
+    /// reputation maintenance loop after scores decay / peers are penalized).
+    fn reclassify_all(&mut self, eager_degree: usize) {
+        let topic_ids: Vec<TopicId> = self.topics.keys().copied().collect();
+        for tid in topic_ids {
+            self.reclassify_eager(tid, eager_degree);
+        }
     }
 }
 
@@ -680,6 +718,7 @@ impl GossipNetwork {
             message_cache: HashMap::new(),
             message_cache_order: VecDeque::new(),
             stem_messages: HashMap::new(),
+            scoreboard: PeerScoreboard::new(),
         }));
 
         let signing_key = Arc::new(signing_key);
@@ -747,6 +786,14 @@ impl GossipNetwork {
             Self::anti_entropy_loop(ae_state, ae_tx).await;
         });
 
+        // Spawn the reputation maintenance task: decays scores toward neutral
+        // (forgiving transient faults) and re-runs eclipse-resistant eager
+        // selection so the spanning tree tracks live reputation + diversity.
+        let rep_state = state.clone();
+        tokio::spawn(async move {
+            Self::reputation_maintenance_loop(rep_state).await;
+        });
+
         // Spawn the message cache cleanup task
         let cache_state = state.clone();
         tokio::spawn(async move {
@@ -771,6 +818,36 @@ impl GossipNetwork {
         keys.insert(node_id, public_key);
     }
 
+    /// Penalize the transport peer at `addr` for relaying a **proven
+    /// equivocation** (a slashable consensus fault surfaced by the upper layer,
+    /// e.g. `node::blocklace_sync::handle_push`). This is the heaviest penalty:
+    /// it graylists the peer (evicting it from every topic's eager set) and the
+    /// eager sets are immediately recomputed so a Byzantine relay stops carrying
+    /// full messages at once. Lighter integrity faults are penalized inline by
+    /// the receive path; this surfaces the categorical, consensus-level fault.
+    pub async fn penalize_equivocation_relay(&self, addr: SocketAddr) {
+        let mut state = self.state.write().await;
+        state.scoreboard.penalize(addr, Penalty::EquivocationRelay);
+        // Recompute eager relays everywhere so the graylisted peer is demoted now.
+        state.reclassify_all(DEFAULT_EAGER_DEGREE);
+        warn!(
+            "Graylisted gossip peer {} for relaying a proven equivocation \
+             (evicted from eager set across all topics)",
+            addr
+        );
+    }
+
+    /// Snapshot of a peer's current reputation score (for metrics / diagnostics).
+    /// `None` if the peer is unknown to the scoreboard.
+    pub async fn peer_score(&self, addr: &SocketAddr) -> Option<f64> {
+        self.state.read().await.scoreboard.score_of(addr)
+    }
+
+    /// Whether a peer is currently graylisted (Byzantine / sub-threshold).
+    pub async fn is_peer_graylisted(&self, addr: &SocketAddr) -> bool {
+        self.state.read().await.scoreboard.is_graylisted(addr)
+    }
+
     /// Join a gossip topic, connecting to bootstrap peers.
     pub async fn join_topic(
         &self,
@@ -785,6 +862,12 @@ impl GossipNetwork {
             for &addr in bootstrap_peers {
                 topic_state.add_peer(addr);
             }
+            for &addr in bootstrap_peers {
+                state.scoreboard.observe(addr);
+            }
+            // Eclipse-resistant (re)classification: pick eager relays by
+            // reputation + address diversity rather than connect order.
+            state.reclassify_eager(topic_id, DEFAULT_EAGER_DEGREE);
         }
 
         for &addr in bootstrap_peers {
@@ -938,6 +1021,8 @@ impl GossipNetwork {
         if let Some(topic_state) = state.topics.get_mut(&topic.topic_id) {
             topic_state.add_peer(addr);
         }
+        state.scoreboard.observe(addr);
+        state.reclassify_eager(topic.topic_id, DEFAULT_EAGER_DEGREE);
 
         if !state.peers.contains_key(&addr) {
             drop(state);
@@ -1144,6 +1229,11 @@ impl GossipNetwork {
             let mut state_w = state.write().await;
             for addr in &dead_peers {
                 state_w.peers.remove(addr);
+                // A peer whose connection died is penalized (mild — may be a
+                // transient outage) and dropped from the scoreboard so it does
+                // not linger as an eager candidate.
+                state_w.scoreboard.penalize(*addr, Penalty::InvalidMessage);
+                state_w.scoreboard.remove(addr);
                 warn!("Removed dead peer connection: {addr}");
             }
             for topic_state in state_w.topics.values_mut() {
@@ -1151,6 +1241,9 @@ impl GossipNetwork {
                     topic_state.peer_states.remove(addr);
                 }
             }
+            // A dead eager peer just left a hole in the spanning tree — recompute
+            // eager relays so a live, diverse peer is promoted to replace it.
+            state_w.reclassify_all(DEFAULT_EAGER_DEGREE);
         }
     }
 
@@ -1194,6 +1287,8 @@ impl GossipNetwork {
                 {
                     let mut s = state.write().await;
                     s.peers.insert(remote_addr, conn.clone());
+                    // Track the inbound peer for reputation scoring from first contact.
+                    s.scoreboard.observe(remote_addr);
                 }
 
                 // Per-connection stream counter to prevent stream flooding.
@@ -1244,6 +1339,11 @@ impl GossipNetwork {
                                         remote_addr,
                                         &signed.sender[..4]
                                     );
+                                    state
+                                        .write()
+                                        .await
+                                        .scoreboard
+                                        .penalize(remote_addr, Penalty::ProtocolViolation);
                                     return;
                                 }
                             };
@@ -1254,6 +1354,11 @@ impl GossipNetwork {
                                     "Rejecting gossip envelope from {} — invalid Ed25519 signature",
                                     remote_addr
                                 );
+                                state
+                                    .write()
+                                    .await
+                                    .scoreboard
+                                    .penalize(remote_addr, Penalty::ProtocolViolation);
                                 return;
                             }
 
@@ -1303,6 +1408,13 @@ impl GossipNetwork {
                          (claimed {:02x}{:02x}..., computed {:02x}{:02x}...)",
                         remote_addr, msg_hash[0], msg_hash[1], computed_hash[0], computed_hash[1],
                     );
+                    // Reputation: a peer that relays a corrupt/forged payload is
+                    // penalized (repeated offences graylist it out of the eager set).
+                    state
+                        .write()
+                        .await
+                        .scoreboard
+                        .penalize(remote_addr, Penalty::InvalidMessage);
                     return;
                 }
 
@@ -1338,6 +1450,10 @@ impl GossipNetwork {
                     );
 
                     s.pending_ihaves.remove(&(topic_id, msg_hash));
+
+                    // Reputation: this peer delivered a FRESH (first-seen) message
+                    // eagerly — reward it as a useful spanning-tree relay.
+                    s.scoreboard.reward_fresh_delivery(remote_addr);
 
                     let peer_rtt = s.peers.get(&remote_addr).map(|conn| conn.rtt());
 
@@ -1853,6 +1969,22 @@ impl GossipNetwork {
                     target,
                 });
             }
+        }
+    }
+
+    /// Periodically decay reputation toward neutral and recompute the
+    /// eclipse-resistant eager set for every topic. Decay makes the scoreboard
+    /// forgiving of transient faults over time (a peer that misbehaved once but
+    /// recovered regains eager eligibility) while equivocation hard-faults are
+    /// preserved (they are not decayed). Reclassifying keeps the spanning tree
+    /// aligned with current reputation + address diversity.
+    async fn reputation_maintenance_loop(state: Arc<RwLock<GossipState>>) {
+        let mut interval = tokio::time::interval(ANTI_ENTROPY_INTERVAL);
+        loop {
+            interval.tick().await;
+            let mut s = state.write().await;
+            s.scoreboard.decay();
+            s.reclassify_all(DEFAULT_EAGER_DEGREE);
         }
     }
 
@@ -2472,6 +2604,7 @@ mod tests {
             message_cache: HashMap::new(),
             message_cache_order: VecDeque::new(),
             stem_messages: HashMap::new(),
+            scoreboard: PeerScoreboard::new(),
         };
 
         // Add a topic with 5 peers (3 eager, 2 lazy)
@@ -2576,6 +2709,7 @@ mod tests {
             message_cache: HashMap::new(),
             message_cache_order: VecDeque::new(),
             stem_messages: HashMap::new(),
+            scoreboard: PeerScoreboard::new(),
         };
 
         // 3 eager + 2 lazy peers
