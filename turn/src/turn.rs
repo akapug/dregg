@@ -254,7 +254,12 @@ pub struct Turn {
     /// value path. Required when all notes in the turn use Pedersen value commitments.
     /// The proof demonstrates that `sum(input_commitments) - sum(output_commitments)`
     /// is a commitment to zero (values balance without revealing amounts).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // No `skip_serializing_if`: `Turn` is transmitted via postcard (a
+    // non-self-describing format), where omitting a field on serialize but
+    // still reading it on deserialize desynchronizes the byte stream ("Found
+    // an Option discriminant that wasn't 0 or 1"). Every field must always be
+    // written. `#[serde(default)]` keeps JSON tolerant of missing keys.
+    #[serde(default)]
     pub conservation_proof: Option<Vec<u8>>,
     /// Witnesses for sovereign cells targeted by this turn.
     ///
@@ -262,7 +267,7 @@ pub struct Turn {
     /// the full cell state here. The executor verifies that
     /// `witness.state_proof == witness.cell_state.state_commitment()` and that this
     /// matches the stored commitment in the ledger.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(default)]
     pub sovereign_witnesses: HashMap<CellId, SovereignCellWitness>,
     /// Execution proof for proof-carrying sovereign turns (Phase 3).
     ///
@@ -274,15 +279,15 @@ pub struct Turn {
     /// The proof's public inputs layout:
     ///   [old_commitment_bb[0..8], new_commitment_bb[0..8], effects_hash_bb[0..8], cell_id_hash_bb[0..8]]
     /// where each 32-byte value is encoded as 8 BabyBear elements (4 bytes each, LE).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub execution_proof: Option<Vec<u8>>,
     /// The target cell ID for proof-carrying turns. Required when `execution_proof` is Some.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub execution_proof_cell: Option<CellId>,
     /// The new commitment claimed by the execution proof.
     /// The proof's public inputs must include this value. After verification, the
     /// ledger's sovereign commitment is updated to this value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub execution_proof_new_commitment: Option<[u8; 32]>,
     /// Custom program proofs for CellProgram dispatch.
     ///
@@ -295,7 +300,7 @@ pub struct Turn {
     /// 2. For each custom proof entry:
     ///    - hash(proof_bytes) must match the proof_commitment in the PI
     ///    - The program identified by vk_hash must verify the proof
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub custom_program_proofs: Option<Vec<CustomProgramProof>>,
     /// Sidecar full-fidelity binding proofs, one per Effect that has a
     /// schema in `dregg_circuit::effect_action_air`. The verifier
@@ -310,7 +315,7 @@ pub struct Turn {
     /// Turns *with* binding proofs get strong-soundness enforcement.
     ///
     /// See `PROOF-TO-ACTION-BINDING-SWEEP.md` §3.3 + §5.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub effect_binding_proofs: Vec<EffectBindingProof>,
     /// Cross-effect within-turn chain pinnings. Each entry asserts that
     /// the output of one effect equals the input of a later effect
@@ -320,14 +325,14 @@ pub struct Turn {
     /// a different nullifier for the consumer.
     ///
     /// See `PROOF-TO-ACTION-BINDING-SWEEP.md` §3.3.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub cross_effect_dependencies: Vec<EffectDependency>,
     /// Witness-blob → effect indexing. Pins which witness blob each
     /// effect consumes, preventing the executor from shuffling blobs
     /// so an effect requiring witness K reads bytes meant for effect L.
     ///
     /// See `PROOF-TO-ACTION-BINDING-SWEEP.md` §3.2.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub effect_witness_index_map: Vec<EffectWitnessIndex>,
 }
 

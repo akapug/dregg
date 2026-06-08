@@ -29,14 +29,16 @@
 //! the executor can verify post-decryption that the decrypted bytes hash to
 //! the same commitment.
 //!
-//! # Why JSON, not postcard?
+//! # Why JSON here?
 //!
-//! `Turn` carries many `#[serde(default, skip_serializing_if = "…")]` fields.
-//! Self-describing formats (JSON) tolerate field omission via the named-field
-//! map; positional formats (postcard, bincode) read fields one-by-one and
-//! error with "expected more data" when a skipped field is missing on
-//! deserialize. JSON is slightly larger on the wire but is the only format
-//! that round-trips the current `Turn` schema. (See
+//! Historically `Turn` carried `#[serde(skip_serializing_if = "…")]` fields,
+//! which broke positional formats (postcard/bincode): a skipped field is not
+//! written on serialize but still read on deserialize, desyncing the byte
+//! stream ("Found an Option discriminant that wasn't 0 or 1"). Those skips have
+//! since been removed (every `Turn`/`Action` field is now always serialized),
+//! so `Turn` round-trips through postcard. This envelope stays on JSON for
+//! schema stability of the encrypted ciphertext; it could move to postcard now
+//! that the underlying `Turn` schema is positional-safe. (See
 //! `tests::privacy_wiring::encrypted_turn_decrypts_to_original`.)
 
 use dregg_cell::CellId;
