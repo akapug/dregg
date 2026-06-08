@@ -439,14 +439,25 @@ pub fn validate_handoff(
         return Err(HandoffError::Expired);
     }
 
-    // 5. Check and enliven the swiss number. The returned entry IS the
-    //    introducer's HELD authority on the target cell — the rights the
+    // 5. Validate the swiss number READ-ONLY (F-2 fix). The returned entry IS
+    //    the introducer's HELD authority on the target cell — the rights the
     //    target federation recorded when the introducer registered this swiss
     //    number. This is the authoritative `held` for the non-amplification
     //    check below (the certificate's own `permissions` are introducer-
     //    asserted and must not be trusted as an upper bound on themselves).
+    //
+    //    CRITICAL ORDERING (F-2): we use `check` (a NON-mutating validation),
+    //    NOT `enliven` (which bumps `use_count`). The use-consuming `enliven`
+    //    happens ONLY on the success path, AFTER every rejecting check (target
+    //    binding §5b, non-amplification §6) has passed. Previously `enliven` ran
+    //    here — so an attacker presenting an amplifying (rejected-for-
+    //    amplification) cert against a known swiss number still burned a use of
+    //    the introducer's budget, exhausting a one-shot handoff and griefing the
+    //    legitimate recipient (`finding_amplifying_handoff_consumes_a_use_on_rejection`).
+    //    Moving the mutation to the success path closes that DoS: a rejected
+    //    presentation now leaves `use_count` untouched.
     let held = swiss_table
-        .enliven(&cert.swiss, current_height)
+        .check(&cert.swiss, current_height)
         .map_err(|e| match e {
             crate::sturdy::EnlivenError::NotFound => HandoffError::SwissNotFound,
             crate::sturdy::EnlivenError::Expired => HandoffError::Expired,
@@ -497,6 +508,22 @@ pub fn validate_handoff(
     if amplifies_effects {
         return Err(HandoffError::Amplification);
     }
+
+    // 7. SUCCESS PATH — only now consume a use (F-2). Every rejecting check above
+    //    ran against the read-only `check`; the presentation is fully validated,
+    //    so enliven (bumping `use_count`) is correct here. Because all rejecting
+    //    branches returned before this point, a rejected presentation never
+    //    advances the swiss budget. We re-run the swiss admission inside `enliven`
+    //    (it re-checks expiry/use-limit), which under single-threaded validation
+    //    is the same decision `check` just made — but doing it here keeps the
+    //    use-count bump atomic with acceptance.
+    swiss_table
+        .enliven(&cert.swiss, current_height)
+        .map_err(|e| match e {
+            crate::sturdy::EnlivenError::NotFound => HandoffError::SwissNotFound,
+            crate::sturdy::EnlivenError::Expired => HandoffError::Expired,
+            crate::sturdy::EnlivenError::ExhaustedUses => HandoffError::MaxUsesExhausted,
+        })?;
 
     // Generate a routing token for the recipient
     let mut routing_token = [0u8; 32];
