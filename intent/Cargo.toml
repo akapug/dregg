@@ -27,6 +27,17 @@ serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
 globset = { workspace = true }
 x25519-dalek = { workspace = true }
+# Optional: route the LIVE ring settlement through the VERIFIED Lean executor FFI
+# (`dregg_record_kernel_step` over the PROVED `Exec.recKExec`). OFF by default — the
+# heavy Lean runtime (libdregg_lean.a) is opt-in. When ON, `verified_settle` folds each
+# lowered ring leg through the real verified executor (NOT a Rust mirror), so a fulfilled
+# intent IS a verified, conserving, authorized executor turn.
+dregg-lean-ffi = { path = "../dregg-lean-ffi", optional = true }
+
+[features]
+default = []
+# Enable the verified-executor settlement path (links the Lean static archive).
+verified-settle = ["dep:dregg-lean-ffi"]
 
 [dev-dependencies]
 # Arm the `StubVerifier` accept path for plumbing tests only. The feature is

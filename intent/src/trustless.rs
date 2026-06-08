@@ -1617,6 +1617,58 @@ impl TrustlessIntentEngine {
         Ok(output)
     }
 
+    /// **Finalize the batch AND settle the winning solution through the VERIFIED executor.**
+    ///
+    /// This is the load-bearing "an intent fulfilled = a verified, conserving, authorized executor
+    /// turn" entry. It:
+    ///
+    ///   1. Captures the winning solution's settlement rows (the per-asset legs).
+    ///   2. Runs [`Self::finalize`] to lower them to a real [`SettlementOutput`]'s `SealedTurn`.
+    ///   3. Folds the lowered `Effect::Transfer` legs through the verified per-asset executor
+    ///      ([`crate::verified_settle::settle_fulfillment_verified`]) — ALL-OR-NOTHING, asserting
+    ///      conservation per asset. With the `verified-settle` feature on, each leg is settled by
+    ///      the REAL Lean FFI (`@[export] dregg_record_kernel_step` over the PROVED `Exec.recKExec`,
+    ///      per the Lean keystone `Dregg2.Intent.RingFFI.ffi_export_realises_settleRing_leg`), NOT a
+    ///      Rust mirror; off, the in-process verified transition (the proved-equivalent reference)
+    ///      runs.
+    ///
+    /// Returns the `SettlementOutput` AND the verified funded pre-/post-ledgers. A
+    /// [`crate::verified_settle::VerifiedSettleError`] means the lowered fulfillment Turn does NOT
+    /// settle+conserve on the verified executor — the engine REFUSES it rather than ship an
+    /// unverified settlement. (Note: the batch has still advanced via `finalize`; the settlement is
+    /// surfaced as rejected to the caller, who must not treat the turn as committed.)
+    pub fn finalize_verified(
+        &mut self,
+    ) -> Result<
+        (
+            SettlementOutput,
+            crate::verified_settle::VerifiedLedger,
+            crate::verified_settle::VerifiedLedger,
+        ),
+        EngineError,
+    > {
+        // Capture the winning settlements BEFORE `finalize` advances the batch.
+        let settlements: Vec<crate::solver::Settlement> = self
+            .current_batch
+            .winning_solution
+            .as_ref()
+            .ok_or(EngineError::NoWinningSolution)?
+            .solution
+            .iter()
+            .flat_map(|ring| ring.settlements.iter().cloned())
+            .collect();
+
+        let output = self.finalize()?;
+
+        let (k0, k1) =
+            crate::verified_settle::settle_fulfillment_verified(&output.sealed, &settlements)
+                .map_err(|e| EngineError::SettlementFailed {
+                    reason: format!("verified-executor settlement refused the fulfillment: {e}"),
+                })?;
+
+        Ok((output, k0, k1))
+    }
+
     // =========================================================================
     // Height management
     // =========================================================================
