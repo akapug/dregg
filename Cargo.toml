@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit", "trace", "demo", "demo-agent", "demo/sdk-consensus", "federation", "circuit", "audit", "bridge", "wire", "persist", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "node", "intent", "net", "discharge-gateway", "teasting", "discord-bot", "app-framework", "dregg-dsl", "dregg-dsl-runtime", "dregg-dsl-tests", "dregg-dsl-differential", "blocklace", "captp", "cli", "verifier", "protocol-tests", "observability", "storage", "starbridge-apps/nameservice", "dfa", "rbg", "credentials", "directory", "starbridge-apps/identity", "starbridge-apps/subscription", "starbridge-apps/governed-namespace", "starbridge-apps/compartment-workflow-mandate", "starbridge-apps/storage-gateway-mandate", "starbridge-apps/privacy-voting", "starbridge-apps/bounty-board", "starbridge-apps/agent-provenance", "starbridge-apps/tool-access-delegation", "starbridge-apps/sealed-auction", "dregg-storage-templates", "preflight", "dregg-lean-ffi", "lightclient"]
+members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit", "trace", "demo", "demo-agent", "demo/sdk-consensus", "federation", "circuit", "audit", "bridge", "wire", "persist", "cell", "turn", "coord", "tests", "types", "sdk", "wasm", "node", "intent", "net", "discharge-gateway", "teasting", "discord-bot", "app-framework", "dregg-dsl", "dregg-dsl-runtime", "dregg-dsl-tests", "dregg-dsl-differential", "blocklace", "captp", "cli", "verifier", "protocol-tests", "observability", "storage", "starbridge-apps/nameservice", "dfa", "rbg", "credentials", "directory", "starbridge-apps/identity", "starbridge-apps/subscription", "starbridge-apps/governed-namespace", "starbridge-apps/compartment-workflow-mandate", "starbridge-apps/storage-gateway-mandate", "starbridge-apps/privacy-voting", "starbridge-apps/bounty-board", "starbridge-apps/agent-provenance", "starbridge-apps/tool-access-delegation", "starbridge-apps/sealed-auction", "dregg-storage-templates", "preflight", "dregg-lean-ffi", "lightclient", "redteam", "perf"]
 # chain/ and chain/program/ are standalone workspaces with their own root Cargo.toml.
 # chain has a known dep conflict (sp1-core-machine pins generic-array =1.1.0,
 # nova-snark needs >=1.2.0). chain/program is the SP1 guest, edition 2021,
@@ -147,3 +147,20 @@ unexpected_cfgs = "allow"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+
+# Fast dev/test builds with FAST crypto: keep our own crates cheap to compile
+# (opt-level 0, quick iteration) but build all DEPENDENCIES optimized so the
+# crypto primitives (plonky3 p3-*, poseidon2, BLS12-381, FRI) don't run
+# unoptimized in debug — a debug-build STARK verify/prove pins a core for ages
+# otherwise (e.g. dregg-lightclient tests). opt-level 3 deps + opt-level 0 ours
+# = the best of both. Applies to the `test` profile too (it inherits `dev`).
+[profile.dev.package."*"]
+opt-level = 3
+
+# The crypto-heavy WORKSPACE crates also get optimized in dev/test (they hold
+# hot proving/verifying loops that the `*` glob above does not cover for
+# workspace members). Compile cost is amortized by caching; runtime is night/day.
+[profile.dev.package.dregg-circuit]
+opt-level = 3
+[profile.dev.package.dregg-lightclient]
+opt-level = 3
