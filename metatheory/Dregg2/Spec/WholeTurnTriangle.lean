@@ -371,8 +371,8 @@ cell. So a coordinated turn CANNOT silently pass on one cell: it MUST route thro
 bilateral pair path (`execCoordinatedForestG`), where the covenant gates both legs. This is what
 forecloses the dregg1 `authorize.rs:1608` cross-cell hole at the whole-turn level. -/
 theorem coordinated_turn_no_intra_cross_read (c : GatedCaveat) (s : RecChainedState)
-    (hc : c.tier = .coordinated) : c.holds s = false :=
-  coordinated_intra_gate_failclosed c s hc
+    (hc : c.tier = .coordinated) (hno : c.cross = none) : c.holds s = false :=
+  coordinated_intra_gate_failclosed c s hc hno
 
 /-! ## §7 — NON-VACUITY TEETH (`#guard`) at the starbridge production carriers + axiom hygiene.
 

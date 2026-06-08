@@ -68,8 +68,8 @@ def execBilateralCredGated (A B : KernelState) (step : BilateralCredStep) :
 /-! ## §3 — Keystones. -/
 
 theorem coordinated_intra_gate_failclosed (c : GatedCaveat) (s : RecChainedState)
-    (h : c.tier = .coordinated) : c.holds s = false := by
-  unfold GatedCaveat.holds; rw [h]
+    (h : c.tier = .coordinated) (hno : c.cross = none) : c.holds s = false := by
+  unfold GatedCaveat.holds; rw [h, hno]
 
 theorem bilateral_coordinated_sound (step : BilateralStep) {A B A' B' : KernelState}
     (h : execBilateralCoordinated A B step = some (A', B')) :
