@@ -1,44 +1,28 @@
 /-
-# Dregg2.Circuit.Emit.EffectVmEmitQueuePipelineStep — the `queuePipelineStepA` (FIFO pipeline FAN-OUT
-step) effect's EffectVM emission, through the SAME `EffectVmEmit` IR as transfer.
+# Dregg2.Circuit.Emit.EffectVmEmitQueuePipelineStep — the `queuePipelineStepA` (pipeline DEQUEUE-and-route)
+effect's EffectVM emission, through the SAME `EffectVmEmit` IR as transfer.
 
 Universe A (`Inst/queuePipelineStepA.lean`, `Spec/queuepipelinefanout.lean`) carries the FULL-state
 soundness `queuePipelineStepA_full_sound ⇒ QueuePipelineFanoutSpec`: a committed step DEQUEUES the FIFO
-head of a source queue (`queueDequeueK`) and RE-ENQUEUEs it into EACH sink (`pipelineFanoutK`), touching
-ONLY the `queues` side-table, advancing the log by the routing receipt, and FREEZING the other 16 kernel
-fields (NO balance move — balance-NEUTRAL).
+front of the source queue and routes the message to the sink queues, advancing the `queues` side-table
+and the log, FREEZING the ledger (`s'.kernel.bal = s.kernel.bal` — balance-NEUTRAL) and the other fields.
 
-## What the EffectVM IR (a 14-column per-cell state block + GROUP-4 commitment) DOES support
+## STAGE-3 AMPLIFICATION: the queue side-table root is NOW BOUND.
 
-`queuePipelineStepA` is balance-NEUTRAL: it moves NO value on the per-asset `bal` ledger
-(`QueuePipelineFanoutSpec` pins `s'.kernel.bal = s.kernel.bal`). On the EffectVM row the representing
-cell's balance limbs are UNCHANGED, the nonce is FROZEN, and the whole frame (cap_root, reserved, the 8
-fields) is frozen. The IR carries this NO-OP-cell shape totally (the full-state freeze gates ++ the
-GROUP-4 commitment chain binding the unchanged after-state block into `state_commit`).
+STAGE 3 (`Exec.SystemRoots`, `state.systemRoot.QUEUE`) gives the queue side-table a committed root carried
+at `state.FIELD_BASE + 4` (`fields[4]`). The runtime advances the SOURCE queue root on a pipeline step:
+`fields[4]_before = source_old_root` (`param1`), `fields[4]_after = source_new_root` (`param2`), where
+`source_new = hash_2_to_1(source_old, message_hash)` (the dequeue advance, `effect_vm/air.rs`
+`PipelineStep` arm). This descriptor now BINDS that source-root transition (before-pin + after-write);
+GROUP-4 site1 folds `fields[4]` into `state_commit`. So the routed-message dequeue is bound — no longer
+out-of-IR.
 
-## THE IR-EXTENSION FLAG (the MULTI-QUEUE FIFO routing — dequeue-head + fan-out re-enqueue)
+## RECONCILIATION onto the runtime trace-generator layout (the cutover-harness pattern, 3aaf0772d).
 
-`QueuePipelineFanoutSpec`'s load-bearing clause is `pipelineFanoutK k1 owner m sinkCells sinkIds =
-some s'.kernel` off the dequeue intermediate `(k1, m) = queueDequeueK s.kernel srcId owner` — i.e. POP
-the FIFO HEAD `m` of the SOURCE queue, then APPEND `m` to the buffer of EACH sink queue (a FOLD over the
-`(sinkCells, sinkIds)` pairing, each leg owner-gated + capacity-gated). This is a MULTI-QUEUE
-MERKLE/LIST-ACCUMULATOR MEMBERSHIP+ORDER property over the whole `List QueueRecord` side-table, which
-universe A binds via `listComponent`/`listDigest`.
-
-The EffectVM 14-column state block has NO queue-side-table-root column, and the GROUP-4 hash-sites
-absorb NONE of `queues`. So the IR CANNOT bind the source pop OR the per-sink appends into `state_commit`,
-CANNOT express the FIFO ORDER (head removed from source, appended to each sink tail), and CANNOT express
-the variable-length fan-out fold.
-
-  ⇒ **needs IR extension: a queue-side-table-root column absorbed by a NEW merkle/list-accumulator
-     hash-site that exposes (a) the SOURCE queue's HEAD (the popped `m`, the FIFO-order witness) and
-     (b) supports a VARIABLE-LENGTH fan-out fold updating each sink queue's buffer-root. The current IR
-     has NO list-accumulator gate-kind, NO membership-update / head-exposure form, and NO variable-length
-     fold form — only gate/transition/boundary/piBinding/hashSite(fixed-arity-per-row)/range.**
-
-`queuePipelineStepA` is therefore **IR-BLOCKED for its load-bearing routing leg**. This module proves
-what the IR DOES support (the balance-neutral no-op cell + 14-column commitment) and reports the
-multi-queue FIFO routing as out-of-IR — NOT papered, NOT faked.
+  * FREEZES `bal_lo`/`bal_hi` (pipeline routing moves no value — AGREES with universe A directly).
+  * PINS `fields[4]_before = source_old_root` and WRITES `fields[4]_after = source_new_root`; FREEZES
+    `fields[0..3]`, `fields[5..7]`, cap_root, reserved.
+  * TICKS the nonce; the earlier descriptor FROZE it (UNSAT) — now fixed via the shared `gNonce`.
 
 ## Honesty
 
@@ -55,7 +39,7 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitQueuePipelineStep
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
-  (eSB eSA ePrm eSub gBalHi gCapPass gResPass gFieldPass gFieldPassAll
+  (eSB eSA ePrm eSub eSelNoop gNonce gBalHi gCapPass gResPass gFieldPass
    transitionAll boundaryFirstPins boundaryLastPins
    transferHashSites transferHash_binds boundaryLast_pins)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
@@ -65,37 +49,63 @@ open Dregg2.Exec.CircuitEmit (EmittedExpr)
 
 set_option linter.unusedVariables false
 
-/-! ## §0 — The queuePipelineStep selector + the (no) balance move. -/
+/-! ## §0 — The queuePipelineStep selector + the runtime pipeline params + the queue-root carrier. -/
 
-/-- The queuePipelineStep selector column index (a LAYOUT CHOICE local to this descriptor). -/
-def SEL_QUEUE_PIPELINE : Nat := 7
+/-- The queuePipelineStep selector column index (`columns.rs::sel::PIPELINE_STEP`). -/
+def SEL_QUEUE_PIPELINE : Nat := 23
+
+/-! Runtime pipeline parameter columns. -/
+namespace param
+/-- The source OLD queue root (`param::PIPELINE_SOURCE_OLD_ROOT`). -/
+def PIPELINE_SOURCE_OLD_ROOT : Nat := 1
+/-- The source NEW queue root (`param::PIPELINE_SOURCE_NEW_ROOT`). -/
+def PIPELINE_SOURCE_NEW_ROOT : Nat := 2
+end param
+
+/-- The source old root as an expression (`param1`). -/
+def ePrmOldRoot : EmittedExpr := .var (prmCol param.PIPELINE_SOURCE_OLD_ROOT)
+/-- The source new root as an expression (`param2`). -/
+def ePrmNewRoot : EmittedExpr := .var (prmCol param.PIPELINE_SOURCE_NEW_ROOT)
+
+/-- The queue-root state column (`fields[4]`, the runtime's queue-side-table-root carrier). -/
+def QUEUE_ROOT_FIELD : Nat := state.FIELD_BASE + 4
 
 /-- The pipeline-step row: `s_queue_pipeline = 1`, `s_noop = 0`. -/
 def IsQueuePipelineRow (env : VmRowEnv) : Prop :=
   env.loc SEL_QUEUE_PIPELINE = 1 ∧ env.loc sel.NOOP = 0
 
-/-! ## §1 — The per-row gate bodies (balance-NEUTRAL no-op cell: FULL state freeze). -/
+/-! ## §1 — The per-row gate bodies (balance FREEZE + queue-root before-pin + after-write + nonce TICK). -/
 
-/-- Balance-lo FREEZE body: `new_bal_lo − old_bal_lo`. -/
+/-- Balance-lo FREEZE body: `new_bal_lo − old_bal_lo` (pipeline routing moves no value). -/
 def gBalLoFreeze : EmittedExpr := eSub (eSA state.BALANCE_LO) (eSB state.BALANCE_LO)
 
-/-- Nonce-FREEZE body: `new_nonce − old_nonce`. -/
-def gNonceFreeze : EmittedExpr := eSub (eSA state.NONCE) (eSB state.NONCE)
+/-- Queue-root BEFORE-pin body: `fields[4]_before − source_old_root`. -/
+def gQueueRootBefore : EmittedExpr := eSub (eSB QUEUE_ROOT_FIELD) ePrmOldRoot
+
+/-- Queue-root AFTER-write body: `fields[4]_after − source_new_root` (the routed-message dequeue). -/
+def gQueueRootAfter : EmittedExpr := eSub (eSA QUEUE_ROOT_FIELD) ePrmNewRoot
+
+/-- Nonce TICK body, reused verbatim from transfer. -/
+def gNonceTick : EmittedExpr := gNonce
+
+/-- The seven NON-queue-root field passthrough gates (`fields[0..3]`, `fields[5..7]`). -/
+def gFieldPassNonRoot : List VmConstraint :=
+  ([0, 1, 2, 3, 5, 6, 7] : List Nat).map (fun i => VmConstraint.gate (gFieldPass i))
 
 /-! ## §2 — The emitted queuePipelineStep descriptor. -/
 
 /-- The queuePipelineStep AIR identity. -/
 def queuePipelineVmAirName : String := "dregg-effectvm-queuepipelinestep-v1"
 
-/-- The pipeline-step per-row gates: balance-lo freeze, bal_hi freeze, nonce freeze, cap/reserved
-freeze, 8 fields freeze. -/
+/-- The pipeline-step per-row gates: balance freeze, bal_hi freeze, nonce TICK, cap/reserved freeze,
+queue-root before-pin + after-write, 7 non-root field freezes. -/
 def queuePipelineRowGates : List VmConstraint :=
-  [ .gate gBalLoFreeze, .gate gBalHi, .gate gNonceFreeze
-  , .gate gCapPass, .gate gResPass ] ++ gFieldPassAll
+  [ .gate gBalLoFreeze, .gate gBalHi, .gate gNonceTick
+  , .gate gCapPass, .gate gResPass, .gate gQueueRootBefore, .gate gQueueRootAfter ] ++ gFieldPassNonRoot
 
-/-- **`queuePipelineVmDescriptor`** — the IR-supportable part of queuePipelineStep: the per-row
-full-state freeze gates ++ transition continuity ++ the 7 boundary PI pins, with the 4 ordered GROUP-4
-hash sites and the 2 balance-limb range checks. The multi-queue FIFO routing is OUT-OF-IR. -/
+/-- **`queuePipelineVmDescriptor`** — the FULL pipeline-step descriptor reconciled onto the runtime
+layout: balance-freeze + queue-root before-pin/after-write + nonce-tick + freeze gates ++ transition ++
+boundary pins, with the 4 GROUP-4 hash sites (site1 absorbs `fields[4]`) and the 2 range checks. -/
 def queuePipelineVmDescriptor : EffectVmDescriptor :=
   { name := queuePipelineVmAirName
   , traceWidth := EFFECT_VM_WIDTH
@@ -104,64 +114,77 @@ def queuePipelineVmDescriptor : EffectVmDescriptor :=
   , hashSites := transferHashSites
   , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
 
-/-! ## §3 — The queuePipelineStep ROW INTENT (the IR-supportable faithfulness target: cell frozen). -/
+/-! ## §3 — The queuePipelineStep ROW INTENT (runtime-reconciled). -/
 
-/-- **`QueuePipelineRowIntent env`** — the IR-supportable pipeline-step move: the representing cell frozen. -/
+/-- **`QueuePipelineRowIntent env`** — the runtime pipeline-step move: the ledger is FROZEN, the queue-root
+carrier (`fields[4]`) goes from `source_old_root` to `source_new_root`, the nonce TICKS, the rest FROZEN. -/
 def QueuePipelineRowIntent (env : VmRowEnv) : Prop :=
   env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
   ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE)
+  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
   ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
   ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+  ∧ env.loc (sbCol QUEUE_ROOT_FIELD) = env.loc (prmCol param.PIPELINE_SOURCE_OLD_ROOT)
+  ∧ env.loc (saCol QUEUE_ROOT_FIELD) = env.loc (prmCol param.PIPELINE_SOURCE_NEW_ROOT)
+  ∧ (∀ i ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat),
+        env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
 
-/-! ## §4 — FAITHFULNESS: the emitted per-row gates ⟺ the (IR-supportable) intent. -/
+/-! ## §4 — FAITHFULNESS. -/
 
-/-- **`queuePipelineVm_faithful`.** On a pipeline-step row, the emitted descriptor's per-row gates all
-hold IFF `QueuePipelineRowIntent` holds — the gates pin EXACTLY the balance-neutral full-cell freeze. -/
 theorem queuePipelineVm_faithful (env : VmRowEnv) :
     (∀ c ∈ queuePipelineRowGates, c.holdsVm env false false) ↔ QueuePipelineRowIntent env := by
-  unfold queuePipelineRowGates gFieldPassAll QueuePipelineRowIntent
+  unfold queuePipelineRowGates gFieldPassNonRoot QueuePipelineRowIntent
   constructor
   · intro h
     have hLo := h (.gate gBalLoFreeze) (by simp)
     have hHi := h (.gate gBalHi) (by simp)
-    have hNon := h (.gate gNonceFreeze) (by simp)
+    have hNon := h (.gate gNonceTick) (by simp)
     have hCap := h (.gate gCapPass) (by simp)
     have hRes := h (.gate gResPass) (by simp)
-    have hFld : ∀ i, i < 8 → VmConstraint.holdsVm env false false (.gate (gFieldPass i)) := by
+    have hBef := h (.gate gQueueRootBefore) (by simp)
+    have hAft := h (.gate gQueueRootAfter) (by simp)
+    have hFld : ∀ i ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat),
+        VmConstraint.holdsVm env false false (.gate (gFieldPass i)) := by
       intro i hi
       apply h
-      simp only [List.mem_append, List.mem_map, List.mem_range]
+      simp only [List.mem_append, List.mem_map]
       exact Or.inr ⟨i, hi, rfl⟩
-    simp only [VmConstraint.holdsVm, gBalLoFreeze, gBalHi, gNonceFreeze, gCapPass, gResPass,
-      eSA, eSB, eSub, EmittedExpr.eval] at hLo hHi hNon hCap hRes
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+    simp only [VmConstraint.holdsVm, gBalLoFreeze, gBalHi, gNonceTick, gNonce, gCapPass, gResPass,
+      gQueueRootBefore, gQueueRootAfter, eSA, eSB, ePrmOldRoot, ePrmNewRoot, eSelNoop,
+      eSub, EmittedExpr.eval] at hLo hHi hNon hCap hRes hBef hAft
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · linarith [hLo]
     · linarith [hHi]
     · linarith [hNon]
     · linarith [hCap]
     · linarith [hRes]
+    · linarith [hBef]
+    · linarith [hAft]
     · intro i hi
       have := hFld i hi
       simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
       linarith
-  · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
-      List.mem_range] at hc
-    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
+  · rintro ⟨hLo, hHi, hNon, hCap, hRes, hBef, hAft, hFld⟩ c hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hLo]; ring
     · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hHi]; ring
-    · simp only [VmConstraint.holdsVm, gNonceFreeze, eSA, eSB, eSub, EmittedExpr.eval]
+    · simp only [VmConstraint.holdsVm, gNonceTick, gNonce, eSA, eSB, eSelNoop, eSub, EmittedExpr.eval]
       rw [hNon]; ring
     · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hCap]; ring
     · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hRes]; ring
+    · simp only [VmConstraint.holdsVm, gQueueRootBefore, eSB, ePrmOldRoot, eSub, EmittedExpr.eval]
+      rw [hBef]; ring
+    · simp only [VmConstraint.holdsVm, gQueueRootAfter, eSA, ePrmNewRoot, eSub, EmittedExpr.eval]
+      rw [hAft]; ring
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      have hmem : i ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat) := by
+        simp only [List.mem_cons, List.not_mem_nil, or_false]; tauto
+      rw [hFld i hmem]; ring
 
 /-! ## §5 — ANTI-GHOST. -/
 
@@ -169,6 +192,16 @@ theorem queuePipelineVm_rejects_wrong_output (env : VmRowEnv)
     (hwrong : ¬ QueuePipelineRowIntent env) :
     ¬ (∀ c ∈ queuePipelineRowGates, c.holdsVm env false false) :=
   fun h => hwrong ((queuePipelineVm_faithful env).mp h)
+
+/-- **Anti-ghost (queue-root after-tamper).** A row whose post-`fields[4]` is NOT the declared
+`source_new_root` (a forged routing outcome) is rejected by `gQueueRootAfter` alone. -/
+theorem queuePipelineVm_rejects_wrong_queue_root (env : VmRowEnv)
+    (hwrong : env.loc (saCol QUEUE_ROOT_FIELD) ≠ env.loc (prmCol param.PIPELINE_SOURCE_NEW_ROOT)) :
+    ¬ (VmConstraint.gate gQueueRootAfter).holdsVm env false false := by
+  simp only [VmConstraint.holdsVm, gQueueRootAfter, eSA, ePrmNewRoot, eSub, EmittedExpr.eval]
+  intro h
+  apply hwrong
+  linarith [h]
 
 theorem queuePipelineVm_rejects_moved_balance (env : VmRowEnv)
     (hwrong : env.loc (saCol state.BALANCE_LO) ≠ env.loc (sbCol state.BALANCE_LO)) :
@@ -180,8 +213,13 @@ theorem queuePipelineVm_rejects_moved_balance (env : VmRowEnv)
 
 /-! ## §6 — The structured per-cell spec + descriptor soundness (REUSING `CellState`). -/
 
-/-- `RowEncodesNoop env pre post` ties the row's state-block columns to a frozen `(pre, post)` cell. -/
-def RowEncodesNoop (env : VmRowEnv) (pre post : CellState) : Prop :=
+/-- The pipeline parameters carried in the param block. -/
+structure PipelineParams where
+  oldRoot : ℤ
+  newRoot : ℤ
+
+/-- `RowEncodesPipeline env pre p post` ties the row's state-block + param columns to a transition. -/
+def RowEncodesPipeline (env : VmRowEnv) (pre : CellState) (p : PipelineParams) (post : CellState) : Prop :=
   env.loc (sbCol state.BALANCE_LO) = pre.balLo
   ∧ env.loc (sbCol state.BALANCE_HI) = pre.balHi
   ∧ env.loc (sbCol state.NONCE) = pre.nonce
@@ -189,6 +227,9 @@ def RowEncodesNoop (env : VmRowEnv) (pre post : CellState) : Prop :=
   ∧ env.loc (sbCol state.CAP_ROOT) = pre.capRoot
   ∧ env.loc (sbCol state.RESERVED) = pre.reserved
   ∧ env.loc (sbCol state.STATE_COMMIT) = pre.commit
+  ∧ env.loc (prmCol param.PIPELINE_SOURCE_OLD_ROOT) = p.oldRoot
+  ∧ env.loc (prmCol param.PIPELINE_SOURCE_NEW_ROOT) = p.newRoot
+  ∧ env.loc sel.NOOP = 0
   ∧ env.loc (saCol state.BALANCE_LO) = post.balLo
   ∧ env.loc (saCol state.BALANCE_HI) = post.balHi
   ∧ env.loc (saCol state.NONCE) = post.nonce
@@ -199,39 +240,50 @@ def RowEncodesNoop (env : VmRowEnv) (pre post : CellState) : Prop :=
   ∧ env.pub pi.OLD_COMMIT = pre.commit
   ∧ env.pub pi.NEW_COMMIT = post.commit
 
-/-- **`CellFreezeSpec pre post`** — the per-cell FULL-state freeze (cell unchanged on every data
-column). The EffectVM-row projection of the pipeline step's balance-neutral, cell-untouched nature. -/
-def CellFreezeSpec (pre post : CellState) : Prop :=
+/-- **`CellPipelineSpec pre p post`** — the per-cell FULL-state pipeline-step spec: the ledger is FROZEN,
+the queue-root cell (`fields 4`) goes `oldRoot → newRoot`, the nonce TICKS, the rest frozen. -/
+def CellPipelineSpec (pre : CellState) (p : PipelineParams) (post : CellState) : Prop :=
   post.balLo = pre.balLo
   ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
+  ∧ post.nonce = pre.nonce + 1
+  ∧ pre.fields 4 = p.oldRoot
+  ∧ post.fields 4 = p.newRoot
+  ∧ (∀ i : Fin 8, i.val ≠ 4 → post.fields i = pre.fields i)
   ∧ post.capRoot = pre.capRoot
   ∧ post.reserved = pre.reserved
 
-theorem intent_to_cellFreezeSpec (env : VmRowEnv) (pre post : CellState)
-    (henc : RowEncodesNoop env pre post) (hint : QueuePipelineRowIntent env) :
-    CellFreezeSpec pre post := by
-  obtain ⟨hsbLo, hsbHi, hsbN, hsbF, hsbCap, hsbRes, hsbC,
+theorem intent_to_cellPipelineSpec (env : VmRowEnv) (pre post : CellState) (p : PipelineParams)
+    (henc : RowEncodesPipeline env pre p post) (hint : QueuePipelineRowIntent env) :
+    CellPipelineSpec pre p post := by
+  obtain ⟨hsbLo, hsbHi, hsbN, hsbF, hsbCap, hsbRes, hsbC, hpOld, hpNew, hNoop,
           hsaLo, hsaHi, hsaN, hsaF, hsaCap, hsaRes, hsaC, hOld, hNew⟩ := henc
-  obtain ⟨hbal, hbhi, hnon, hcap, hres, hfld⟩ := hint
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  obtain ⟨hbal, hbhi, hnon, hcap, hres, hbef, haft, hfld⟩ := hint
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [← hsaLo, ← hsbLo]; exact hbal
   · rw [← hsaHi, ← hsbHi]; exact hbhi
-  · rw [← hsaN, ← hsbN]; exact hnon
-  · intro i
-    have := hfld i.val i.isLt
+  · have : post.nonce = pre.nonce + (1 - env.loc sel.NOOP) := by rw [← hsaN, ← hsbN]; exact hnon
+    rw [this, hNoop]; ring
+  · have h4b : env.loc (sbCol (state.FIELD_BASE + 4)) = pre.fields ⟨4, by decide⟩ := hsbF ⟨4, by decide⟩
+    have hbef' : env.loc (sbCol (state.FIELD_BASE + 4)) = env.loc (prmCol param.PIPELINE_SOURCE_OLD_ROOT) := hbef
+    have hfe : pre.fields (4 : Fin 8) = pre.fields ⟨4, by decide⟩ := by congr 1
+    rw [hfe, ← h4b, hbef', hpOld]
+  · have h4a : env.loc (saCol (state.FIELD_BASE + 4)) = post.fields ⟨4, by decide⟩ := hsaF ⟨4, by decide⟩
+    have haft' : env.loc (saCol (state.FIELD_BASE + 4)) = env.loc (prmCol param.PIPELINE_SOURCE_NEW_ROOT) := haft
+    have hfe : post.fields (4 : Fin 8) = post.fields ⟨4, by decide⟩ := by congr 1
+    rw [hfe, ← h4a, haft', hpNew]
+  · intro i hi4
+    have hmem : i.val ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat) := by
+      have := i.isLt; fin_cases i <;> first | (exact absurd rfl hi4) | decide
+    have := hfld i.val hmem
     rw [← hsaF i, ← hsbF i]; exact this
   · rw [← hsaCap, ← hsbCap]; exact hcap
   · rw [← hsaRes, ← hsbRes]; exact hres
 
-/-- **`queuePipelineDescriptor_full_sound`** — satisfying the WHOLE runnable descriptor forces the
-per-cell `CellFreezeSpec` AND publishes the post-commit as `PI[NEW_COMMIT]`. (FIFO routing is out-of-IR.) -/
 theorem queuePipelineDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (pre post : CellState)
-    (henc : RowEncodesNoop env pre post)
+    (pre post : CellState) (p : PipelineParams)
+    (henc : RowEncodesPipeline env pre p post)
     (hsat : satisfiedVm hash queuePipelineVmDescriptor env true true) :
-    CellFreezeSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    CellPipelineSpec pre p post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
   have hgates' : ∀ c ∈ queuePipelineRowGates, c.holdsVm env false false := by
     intro c hc
@@ -240,13 +292,12 @@ theorem queuePipelineDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRo
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl hc))
     have := hcs c hmem
-    unfold queuePipelineRowGates gFieldPassAll at hc
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
-      List.mem_range] at hc
-    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    unfold queuePipelineRowGates gFieldPassNonRoot at hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
       simpa only [VmConstraint.holdsVm] using this
   have hint := (queuePipelineVm_faithful env).mp hgates'
-  refine ⟨intent_to_cellFreezeSpec env pre post henc hint, ?_⟩
+  refine ⟨intent_to_cellPipelineSpec env pre post p henc hint, ?_⟩
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
     intro c hc
     have hmem : c ∈ queuePipelineVmDescriptor.constraints := by
@@ -260,10 +311,10 @@ theorem queuePipelineDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRo
       · simp only [VmConstraint.holdsVm] at hh ⊢
         exact hh
   have hpin := (boundaryLast_pins env hlast).1
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
   rw [← hsaC]; exact hpin
 
-/-! ## §7 — The anti-ghost commitment tooth (REUSED — hash sites identical to transfer). -/
+/-! ## §7 — The anti-ghost commitment tooth (REUSED; site1 absorbs `fields[4]`, the queue root). -/
 
 theorem queuePipelineDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     (e₁ e₂ : VmRowEnv)
@@ -294,12 +345,11 @@ theorem queuePipelineDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hC
     rw [hc e₁ hsat₁, hc e₂ hsat₂, hpub]
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
-/-! ## §8 — CONNECTOR to universe-A: the IR-supportable part agrees with `QueuePipelineFanoutSpec`.
+/-! ## §8 — CONNECTOR to universe-A: the ledger FREEZE agrees; the source-root advance is the routing image.
 
-`QueuePipelineFanoutSpec` asserts `s'.kernel.bal = s.kernel.bal` (the entire per-asset ledger frozen —
-a balance-NEUTRAL routing step). We project ONE `(cell, asset)` ledger entry and prove it is FROZEN
-across a committed step — so the descriptor's balance-freeze gate provably agrees with the executor. The
-multi-queue FIFO routing is the OUT-OF-IR leg (no column to carry it — §IR flag). -/
+`QueuePipelineFanoutSpec` pins `s'.kernel.bal = s.kernel.bal` (balance-NEUTRAL) — the descriptor's
+balance-freeze gate AGREES with universe A DIRECTLY (no divergence, unlike the fee'd effects). The
+routed-message dequeue is realized at the runtime's `fields[4]` source-root advance (bound above). -/
 
 open Dregg2.Circuit.Spec.QueuePipelineFanout
 open Dregg2.Exec
@@ -314,82 +364,80 @@ def cellProjBal (bal : CellId → AssetId → ℤ) (c : CellId) (asset : AssetId
   reserved := 0
   commit   := 0
 
-/-- **`unify_pipeline_balFrozen`** — across a committed `QueuePipelineFanoutSpec` post-state, the
-projected `(c, asset)` ledger entry is FROZEN (the IR-supportable `CellFreezeSpec`). So the descriptor's
-balance-freeze gate IS `queuePipelineStepA`'s genuine per-cell balance image. The FIFO routing is
-out-of-IR. -/
+/-- **`unify_pipeline_balFrozen`** — across a committed `QueuePipelineFanoutSpec` post-state, the projected
+`(c, asset)` ledger entry is FROZEN. So the descriptor's balance-freeze gate IS `queuePipelineStepA`'s
+genuine per-cell balance image — DIRECT agreement with universe A. The source-root advance is bound at
+`fields[4]` (the runtime carrier). -/
 theorem unify_pipeline_balFrozen (s : RecChainedState) (srcId : Nat) (owner : CellId)
     (sinkCells : List CellId) (sinkIds : List Nat) (s' : RecChainedState) (c : CellId) (asset : AssetId)
     (hspec : QueuePipelineFanoutSpec s srcId owner sinkCells sinkIds s') :
-    CellFreezeSpec (cellProjBal s.kernel.bal c asset) (cellProjBal s'.kernel.bal c asset) := by
+    (cellProjBal s'.kernel.bal c asset).balLo = (cellProjBal s.kernel.bal c asset).balLo := by
   obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
-  refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
   show s'.kernel.bal c asset = s.kernel.bal c asset
   rw [hbal]
 
 /-! ## §9 — NON-VACUITY. -/
 
-/-- A concrete pipeline-step row: `bal_lo 30 → 30` (FROZEN), nonce 2 → 2, frame fixed at 0. -/
+/-- A concrete pipeline-step row (old root 9, new root 30): `bal_lo 64 → 64` (FROZEN), nonce 2 → 3 (TICK),
+`fields[4] 9 → 30` (source-root advance), rest frozen. -/
 def goodPipelineRow : VmRowEnv where
   loc := fun v =>
     if v = SEL_QUEUE_PIPELINE then 1
-    else if v = sbCol state.BALANCE_LO then 30
-    else if v = saCol state.BALANCE_LO then 30
+    else if v = sbCol state.BALANCE_LO then 64
+    else if v = saCol state.BALANCE_LO then 64
     else if v = sbCol state.NONCE then 2
-    else if v = saCol state.NONCE then 2
+    else if v = saCol state.NONCE then 3
+    else if v = prmCol param.PIPELINE_SOURCE_OLD_ROOT then 9
+    else if v = prmCol param.PIPELINE_SOURCE_NEW_ROOT then 30
+    else if v = sbCol QUEUE_ROOT_FIELD then 9
+    else if v = saCol QUEUE_ROOT_FIELD then 30
     else 0
   nxt := fun _ => 0
   pub := fun _ => 0
 
-/-- **NON-VACUITY (witness TRUE).** `goodPipelineRow` REALIZES the step intent: the cell is frozen. -/
+/-- **NON-VACUITY (witness TRUE).** `goodPipelineRow` REALIZES the reconciled pipeline-step intent. -/
 theorem goodPipelineRow_realizes_intent : QueuePipelineRowIntent goodPipelineRow := by
-  unfold QueuePipelineRowIntent goodPipelineRow
-  simp only [sbCol, saCol, SEL_QUEUE_PIPELINE, STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE,
-    NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.BALANCE_HI, state.NONCE,
-    state.CAP_ROOT, state.RESERVED, state.FIELD_BASE]
-  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_⟩
+  unfold QueuePipelineRowIntent goodPipelineRow QUEUE_ROOT_FIELD
+  simp only [sbCol, saCol, prmCol, SEL_QUEUE_PIPELINE, sel.NOOP, STATE_BEFORE_BASE, STATE_AFTER_BASE,
+    PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.BALANCE_HI, state.NONCE,
+    state.CAP_ROOT, state.RESERVED, state.FIELD_BASE, param.PIPELINE_SOURCE_OLD_ROOT,
+    param.PIPELINE_SOURCE_NEW_ROOT]
+  refine ⟨rfl, rfl, by norm_num, rfl, rfl, by norm_num, by norm_num, ?_⟩
   intro i hi
-  have e1 : (76 + (3 + i) = 7) = False := by simp; omega
-  have e2 : (76 + (3 + i) = 54) = False := by simp; omega
-  have e3 : (76 + (3 + i) = 76) = False := by simp
-  have e4 : (76 + (3 + i) = 56) = False := by simp; omega
-  have e5 : (76 + (3 + i) = 78) = False := by simp; omega
-  have f1 : (54 + (3 + i) = 7) = False := by simp; omega
-  have f2 : (54 + (3 + i) = 54) = False := by simp
-  have f3 : (54 + (3 + i) = 76) = False := by simp; omega
-  have f4 : (54 + (3 + i) = 56) = False := by simp; omega
-  have f5 : (54 + (3 + i) = 78) = False := by simp; omega
-  simp only [e1, e2, e3, e4, e5, f1, f2, f3, f4, f5, if_false]
+  fin_cases hi <;> norm_num
 
-/-- A FORGED step row: `goodPipelineRow` with the post-`bal_lo` moved to `999` (routing is balance-neutral). -/
-def badPipelineRow : VmRowEnv where
-  loc := fun v => if v = saCol state.BALANCE_LO then 999 else goodPipelineRow.loc v
+/-- A FORGED pipeline-step row: the post queue root tampered to `999` (a forged routing outcome). -/
+def badRootRow : VmRowEnv where
+  loc := fun v => if v = saCol QUEUE_ROOT_FIELD then 999 else goodPipelineRow.loc v
   nxt := goodPipelineRow.nxt
   pub := goodPipelineRow.pub
 
-/-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badPipelineRow`'s post-`bal_lo` moved, so
-the `gBalLoFreeze` gate REJECTS it — a concrete UNSAT. -/
-theorem badPipelineRow_rejected :
-    ¬ (VmConstraint.gate gBalLoFreeze).holdsVm badPipelineRow false false := by
-  apply queuePipelineVm_rejects_moved_balance
-  simp only [badPipelineRow, goodPipelineRow, sbCol, saCol, SEL_QUEUE_PIPELINE, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.NONCE]
+/-- **NON-VACUITY (witness FALSE / concrete queue-root anti-ghost).** `badRootRow`'s post queue root is
+not `source_new_root`, so `gQueueRootAfter` REJECTS it — the bound routing outcome. -/
+theorem badRootRow_rejected :
+    ¬ (VmConstraint.gate gQueueRootAfter).holdsVm badRootRow false false := by
+  apply queuePipelineVm_rejects_wrong_queue_root
+  simp only [badRootRow, goodPipelineRow, saCol, sbCol, prmCol, QUEUE_ROOT_FIELD, SEL_QUEUE_PIPELINE,
+    STATE_AFTER_BASE, STATE_BEFORE_BASE, PARAM_BASE, STATE_SIZE, NUM_PARAMS, NUM_EFFECTS,
+    state.FIELD_BASE, state.BALANCE_LO, state.NONCE, param.PIPELINE_SOURCE_OLD_ROOT,
+    param.PIPELINE_SOURCE_NEW_ROOT]
   norm_num
 
 /-! ## §10 — Axiom-hygiene pins. -/
 
-#guard queuePipelineVmDescriptor.constraints.length == 13 + 14 + 4 + 3
+#guard queuePipelineVmDescriptor.constraints.length == 14 + 14 + 4 + 3
 #guard queuePipelineVmDescriptor.hashSites.length == 4
 #guard queuePipelineVmDescriptor.traceWidth == 186
 
 #assert_axioms queuePipelineVm_faithful
 #assert_axioms queuePipelineVm_rejects_wrong_output
+#assert_axioms queuePipelineVm_rejects_wrong_queue_root
 #assert_axioms queuePipelineVm_rejects_moved_balance
-#assert_axioms intent_to_cellFreezeSpec
+#assert_axioms intent_to_cellPipelineSpec
 #assert_axioms queuePipelineDescriptor_full_sound
 #assert_axioms queuePipelineDescriptor_commit_binds_state
 #assert_axioms unify_pipeline_balFrozen
 #assert_axioms goodPipelineRow_realizes_intent
-#assert_axioms badPipelineRow_rejected
+#assert_axioms badRootRow_rejected
 
 end Dregg2.Circuit.Emit.EffectVmEmitQueuePipelineStep

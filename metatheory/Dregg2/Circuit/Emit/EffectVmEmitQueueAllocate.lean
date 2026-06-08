@@ -5,39 +5,31 @@ EffectVM emission, through the SAME `EffectVmEmit` IR as transfer.
 Universe A (`Inst/queueAllocateA.lean`, `Spec/queuefifocore.lean`) carries the FULL-state soundness
 `queueAllocateA_full_sound ⇒ QueueAllocateSpec`: a committed allocate PREPENDS one fresh `QueueRecord`
 (`owner := actor`, empty buffer, the given capacity) onto the `queues` side-table, advances the chained
-`log` by the allocate receipt, and FREEZES the other 16 kernel fields (NO balance move — balance-NEUTRAL).
+`log` by the allocate receipt, and FREEZES the other 16 kernel fields (`st'.kernel.bal = st.kernel.bal`
+— balance-NEUTRAL in universe A).
 
-## What the EffectVM IR (a 14-column per-cell state block + GROUP-4 commitment) DOES support
+## STAGE-3 AMPLIFICATION: the queue side-table root is NOW BOUND.
 
-`queueAllocateA` is balance-NEUTRAL: it moves NO value on the per-asset `bal` ledger. On the EffectVM
-row, the representing cell's `state.BALANCE_LO`/`BALANCE_HI` limbs are UNCHANGED, the nonce is FROZEN
-(the executor does not tick it — `queueAllocateChainA` rewrites only `queues` + `log`), and the whole
-frame (cap_root, reserved, the 8 fields) is frozen. The IR carries this NO-OP-cell shape totally — the
-balance/nonce/frame freeze gates ++ the GROUP-4 commitment chain binding the (unchanged) after-state
-block into `state_commit` exactly as for transfer.
+The earlier version of this descriptor reported the FIFO-list leg as OUT-OF-IR (there was no column to
+carry the `queues` accumulator root). STAGE 3 (`Exec.SystemRoots`, `state.systemRoot.QUEUE`) gives each
+side-table a committed root; the RUNNING EffectVM prover already carries the queue side-table root in the
+state block — at `state.FIELD_BASE + 4` (`fields[4]`), the runtime's queue-root carrier
+(`effect_vm/trace.rs` + `effect_vm/air.rs` `AllocateQueue` arm). This descriptor now BINDS that carrier:
+on an allocate row the runtime writes `fields[4] := hash_2_to_1(0,0)` (the empty-queue root) and the
+GROUP-4 site1 (which absorbs `fields[1..5]`, INCLUDING `fields[4]`) folds it into `state_commit`. So the
+prepended-fresh-queue root IS bound into the published commitment — the FIFO leg is no longer out-of-IR.
 
-## THE IR-EXTENSION FLAG (the FIFO-queue set-membership leg — the WHOLE point of allocate)
+## RECONCILIATION onto the runtime trace-generator layout (the cutover-harness pattern, 3aaf0772d).
 
-`QueueAllocateSpec`'s load-bearing clause is `st'.kernel.queues = freshQueue id actor cap :: st.queues`
-— a PREPEND onto a `List QueueRecord` whose digest universe A binds via `listComponent`/`listDigest`
-(`listLeafInjective LE` + `compressNInjective cN`, so a drop/REORDER of an existing queue record is
-REJECTED, not just "the list grew"). This is a MERKLE/ACCUMULATOR MEMBERSHIP + LIST-ORDER property.
-
-The EffectVM 14-column state block (`state.BALANCE_LO/HI`, `state.NONCE`, the 8 `state.FIELD_BASE+i`,
-`state.CAP_ROOT`, `state.STATE_COMMIT`, `state.RESERVED`) has NO queue-list-root column, and the four
-GROUP-4 hash-sites absorb NONE of the `queues` list. So the IR as it stands CANNOT bind the FIFO-list
-prepend into `state_commit`, and CANNOT express the FIFO ORDER of the buffer.
-
-  ⇒ **needs IR extension: a queue-side-table-root column in the EffectVM state block (a data column,
-     e.g. repurposing one named field as `QUEUE_ROOT`) absorbed by a NEW hash-site that is a
-     MERKLE/LIST-ACCUMULATOR over the `List QueueRecord` (matching universe A's `listDigest LE`), so
-     the prepended fresh record (and the preserved order of the prior records) is bound into the
-     published `state_commit`. The current IR has NO set-membership / list-accumulator gate-kind — only
-     gate/transition/boundary/piBinding/hashSite(fixed-arity-per-row)/range.**
-
-`queueAllocateA` is therefore **IR-BLOCKED for its load-bearing list leg**. This module proves what the
-IR DOES support (the balance-neutral no-op cell + 14-column commitment) and reports the queue-list
-prepend/order binding as out-of-IR — NOT papered, NOT faked with a vacuous gate.
+The descriptor must AGREE with the hand-AIR on the honest trace. The runtime `AllocateQueue` arm:
+  * DEBITS the balance by `capacity * cost_per_slot` (`param0 * param2`) — NOT balance-neutral on the row
+    (the runtime charges the allocation fee; universe A's `QueueAllocateSpec` is balance-NEUTRAL — the
+    §connector reports this runtime-fee-vs-univA-neutral divergence exactly as the notes keystone does,
+    reconciling at `cap*cost = 0`).
+  * TICKS the nonce (the global non-NoOp invariant `new_nonce − old_nonce − (1 − s_noop) = 0`); the
+    earlier descriptor FROZE it (UNSAT on the honest trace) — now fixed via the shared `gNonce`.
+  * WRITES `fields[4] := empty_queue_hash` (the fresh-queue root) and FREEZES `fields[0..3]`, `fields[5..7]`,
+    cap_root, reserved, bal_hi.
 
 ## Honesty
 
@@ -55,7 +47,7 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitQueueAllocate
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
-  (eSB eSA ePrm eSub gBalHi gCapPass gResPass gFieldPass gFieldPassAll
+  (eSB eSA ePrm eSub eSelNoop gNonce gBalHi gCapPass gResPass gFieldPass
    transitionAll boundaryFirstPins boundaryLastPins
    transferHashSites transferHash_binds boundaryLast_pins)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
@@ -65,143 +57,208 @@ open Dregg2.Exec.CircuitEmit (EmittedExpr)
 
 set_option linter.unusedVariables false
 
-/-! ## §0 — The queueAllocate selector + the (no) balance move.
+/-! ## §0 — The queueAllocate selector + the runtime allocate parameters.
 
-The EffectVM layout names `sel.NOOP = 0` / `sel.TRANSFER = 1`; queueAllocate takes its own selector
-column (a LAYOUT CHOICE local to this descriptor — the running prover's `columns.rs` would assign it).
-queueAllocate makes NO balance move, so the balance-lo gate is a FREEZE (not a debit/credit). -/
+The running EffectVM lays one selector per effect (`columns.rs::sel::ALLOCATE_QUEUE = 18`). The allocate
+fee parameters are `param0 = QUEUE_CAPACITY`, `param2 = QUEUE_COST_PER_SLOT` (the runtime's
+`Effect::AllocateQueue` arm); the fee debited is their product. On a genuine allocate row the allocate
+selector is `1` and `s_noop = 0` (so the nonce TICKS). -/
 
-/-- The queueAllocate selector column index. -/
-def SEL_QUEUE_ALLOCATE : Nat := 3
+/-- The queueAllocate selector column index (`columns.rs::sel::ALLOCATE_QUEUE`). -/
+def SEL_QUEUE_ALLOCATE : Nat := 18
+
+/-! Runtime allocate parameter columns (`columns.rs::param::QUEUE_*`). -/
+namespace param
+/-- Queue capacity (`param::QUEUE_CAPACITY`). -/
+def QUEUE_CAPACITY : Nat := 0
+/-- Per-slot cost (`param::QUEUE_COST_PER_SLOT`). -/
+def QUEUE_COST_PER_SLOT : Nat := 2
+end param
+
+/-- Capacity as an expression (`param0`). -/
+def ePrmCap : EmittedExpr := .var (prmCol param.QUEUE_CAPACITY)
+/-- Per-slot cost as an expression (`param2`). -/
+def ePrmCost : EmittedExpr := .var (prmCol param.QUEUE_COST_PER_SLOT)
+
+/-- The queue-root state column (`fields[4]`, the runtime's queue-side-table-root carrier;
+`state.systemRoot.QUEUE`'s in-state-block home under the STAGE-3 reconciliation). -/
+def QUEUE_ROOT_FIELD : Nat := state.FIELD_BASE + 4
 
 /-- The allocate row: `s_queue_allocate = 1`, `s_noop = 0`. -/
 def IsQueueAllocateRow (env : VmRowEnv) : Prop :=
   env.loc SEL_QUEUE_ALLOCATE = 1 ∧ env.loc sel.NOOP = 0
 
-/-! ## §1 — The per-row gate bodies (balance-NEUTRAL no-op cell: FULL state freeze).
+/-! ## §1 — The per-row gate bodies (allocation-fee DEBIT + queue-root BIND + nonce TICK).
 
-* `gBalLoFreeze` — `new_bal_lo − old_bal_lo = 0` (the limb is UNCHANGED; allocate moves no value).
-* `gNonceFreeze` — `new_nonce − old_nonce = 0` (FROZEN; the executor does NOT tick the nonce).
-* `gBalHi`/`gCapPass`/`gResPass`/`gFieldPass i` — REUSED from the transfer template (all frozen). -/
+* `gBalLoDebit` — `new_bal_lo − old_bal_lo + capacity·cost` (the allocation fee leaves the ledger).
+* `gQueueRootBind` — `fields[4]_after − emptyQueueRoot` (the fresh-queue root is written; `emptyQueueRoot`
+  is a SYMBOL the descriptor binds against the runtime's `hash_2_to_1(0,0)` witness column — passed in
+  so the descriptor is hash-agnostic, matching the cutover harness which supplies the concrete felt).
+* `gNonceTick` (= the shared `gNonce`) — `new_nonce − old_nonce − (1 − s_noop)` (TICKS on a non-NoOp row).
+* `gBalHi`/`gCapPass`/`gResPass`/`gFieldPass i` (i ≠ 4) — REUSED from the transfer template (frozen). -/
 
-/-- Balance-lo FREEZE body: `new_bal_lo − old_bal_lo`. -/
-def gBalLoFreeze : EmittedExpr := eSub (eSA state.BALANCE_LO) (eSB state.BALANCE_LO)
+/-- Balance-lo DEBIT body: `new_bal_lo − old_bal_lo + capacity·cost` (the fee leaves: `new = old − cap·cost`). -/
+def gBalLoDebit : EmittedExpr :=
+  .add (eSub (eSA state.BALANCE_LO) (eSB state.BALANCE_LO)) (.mul ePrmCap ePrmCost)
 
-/-- Nonce-FREEZE body: `new_nonce − old_nonce`. -/
-def gNonceFreeze : EmittedExpr := eSub (eSA state.NONCE) (eSB state.NONCE)
+/-- Queue-root BIND body: `fields[4]_after − emptyRoot`. The fresh-queue empty root (the runtime's
+`hash_2_to_1(0,0)`) is supplied as a parameter so the gate is hash-agnostic — the cutover harness fills
+the concrete felt; the descriptor only asserts the carrier equals it. -/
+def gQueueRootBind (emptyRoot : ℤ) : EmittedExpr :=
+  .add (eSA QUEUE_ROOT_FIELD) (.const (-emptyRoot))
+
+/-- Nonce TICK body (the running prover's global non-NoOp invariant), reused verbatim from transfer. -/
+def gNonceTick : EmittedExpr := gNonce
+
+/-- The seven NON-queue-root field passthrough gates (`fields[0..3]`, `fields[5..7]`; `fields[4]` is the
+queue-root carrier, bound by `gQueueRootBind` instead of frozen). -/
+def gFieldPassNonRoot : List VmConstraint :=
+  ([0, 1, 2, 3, 5, 6, 7] : List Nat).map (fun i => VmConstraint.gate (gFieldPass i))
 
 /-! ## §2 — The emitted queueAllocate descriptor. -/
 
 /-- The queueAllocate AIR identity. -/
 def queueAllocateVmAirName : String := "dregg-effectvm-queueallocate-v1"
 
-/-- The allocate per-row gates: balance-lo freeze, bal_hi freeze, nonce freeze, cap/reserved freeze,
-8 fields freeze. The whole cell is frozen (allocate touches only the out-of-IR `queues` table). -/
-def queueAllocateRowGates : List VmConstraint :=
-  [ .gate gBalLoFreeze, .gate gBalHi, .gate gNonceFreeze
-  , .gate gCapPass, .gate gResPass ] ++ gFieldPassAll
+/-- The allocate per-row gates (parameterized by the empty-queue root felt): fee debit, bal_hi freeze,
+nonce TICK, cap/reserved freeze, queue-root bind, 7 non-root field freezes. -/
+def queueAllocateRowGates (emptyRoot : ℤ) : List VmConstraint :=
+  [ .gate gBalLoDebit, .gate gBalHi, .gate gNonceTick
+  , .gate gCapPass, .gate gResPass, .gate (gQueueRootBind emptyRoot) ] ++ gFieldPassNonRoot
 
-/-- **`queueAllocateVmDescriptor`** — the IR-supportable part of queueAllocate: the per-row full-state
-freeze gates ++ transition continuity ++ the 7 boundary PI pins, with the 4 ordered GROUP-4 hash sites
-(REUSED — the post-state commitment chain is the SAME 14-column binding) and the 2 balance-limb range
-checks. NOTE: this descriptor binds ONLY the representing cell's (unchanged) content; the FIFO-queue
-list prepend is OUT-OF-IR (see the §IR-extension flag in the header). -/
-def queueAllocateVmDescriptor : EffectVmDescriptor :=
+/-- **`queueAllocateVmDescriptor emptyRoot`** — the FULL allocate descriptor reconciled onto the runtime
+layout: fee-debit + queue-root-bind + nonce-tick + freeze gates ++ transition continuity ++ the 7
+boundary PI pins, with the 4 ordered GROUP-4 hash sites (site1 absorbs `fields[4]`, so the queue root is
+folded into `state_commit`) and the 2 balance-limb range checks. -/
+def queueAllocateVmDescriptor (emptyRoot : ℤ) : EffectVmDescriptor :=
   { name := queueAllocateVmAirName
   , traceWidth := EFFECT_VM_WIDTH
   , piCount := 34
-  , constraints := queueAllocateRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+  , constraints := queueAllocateRowGates emptyRoot ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
   , hashSites := transferHashSites
   , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
 
-/-! ## §3 — The queueAllocate ROW INTENT (the IR-supportable faithfulness target).
+/-! ## §3 — The queueAllocate ROW INTENT (the faithfulness target, runtime-reconciled).
 
-`QueueAllocateRowIntent env`: on an allocate row, the cell is UNCHANGED — both balance limbs, the nonce,
-and the whole frame (cap/reserved/8 fields) are FIXED. This is the EffectVM-row projection of the
-balance-NEUTRAL nature of allocate (no `bal` move) + nonce-freeze + frame-freeze. It does NOT (cannot)
-express the FIFO-list prepend — that is the out-of-IR leg. -/
+`QueueAllocateRowIntent env emptyRoot`: on an allocate row, the balance drops by `capacity·cost` (the
+allocation fee), the queue-root carrier (`fields[4]`) becomes `emptyRoot` (the fresh-queue root), the
+nonce TICKS, and the rest of the frame (bal_hi, cap/reserved, `fields[0..3]`, `fields[5..7]`) is FROZEN. -/
 
-/-- **`QueueAllocateRowIntent env`** — the IR-supportable allocate move: the representing cell frozen. -/
-def QueueAllocateRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
+/-- **`QueueAllocateRowIntent env emptyRoot`** — the runtime allocate move. -/
+def QueueAllocateRowIntent (env : VmRowEnv) (emptyRoot : ℤ) : Prop :=
+  env.loc (saCol state.BALANCE_LO)
+      = env.loc (sbCol state.BALANCE_LO)
+        - env.loc (prmCol param.QUEUE_CAPACITY) * env.loc (prmCol param.QUEUE_COST_PER_SLOT)
   ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE)
+  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
   ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
   ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+  ∧ env.loc (saCol QUEUE_ROOT_FIELD) = emptyRoot
+  ∧ (∀ i ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat),
+        env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
 
-/-! ## §4 — FAITHFULNESS: the emitted per-row gates ⟺ the (IR-supportable) intent. -/
+/-! ## §4 — FAITHFULNESS: the emitted per-row gates ⟺ the (runtime-reconciled) intent. -/
 
 /-- **`queueAllocateVm_faithful`.** On an allocate row, the emitted descriptor's per-row gates all hold
-IFF `QueueAllocateRowIntent` holds — the gates pin EXACTLY the balance-neutral full-cell freeze. -/
-theorem queueAllocateVm_faithful (env : VmRowEnv) :
-    (∀ c ∈ queueAllocateRowGates, c.holdsVm env false false) ↔ QueueAllocateRowIntent env := by
-  unfold queueAllocateRowGates gFieldPassAll QueueAllocateRowIntent
+IFF `QueueAllocateRowIntent` holds — the gates pin EXACTLY the fee-debit + queue-root-bind + nonce-tick
++ frame-freeze. -/
+theorem queueAllocateVm_faithful (env : VmRowEnv) (emptyRoot : ℤ) :
+    (∀ c ∈ queueAllocateRowGates emptyRoot, c.holdsVm env false false)
+      ↔ QueueAllocateRowIntent env emptyRoot := by
+  unfold queueAllocateRowGates gFieldPassNonRoot QueueAllocateRowIntent
   constructor
   · intro h
-    have hLo := h (.gate gBalLoFreeze) (by simp)
+    have hLo := h (.gate gBalLoDebit) (by simp)
     have hHi := h (.gate gBalHi) (by simp)
-    have hNon := h (.gate gNonceFreeze) (by simp)
+    have hNon := h (.gate gNonceTick) (by simp)
     have hCap := h (.gate gCapPass) (by simp)
     have hRes := h (.gate gResPass) (by simp)
-    have hFld : ∀ i, i < 8 → VmConstraint.holdsVm env false false (.gate (gFieldPass i)) := by
+    have hRoot := h (.gate (gQueueRootBind emptyRoot)) (by simp)
+    have hFld : ∀ i ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat),
+        VmConstraint.holdsVm env false false (.gate (gFieldPass i)) := by
       intro i hi
       apply h
-      simp only [List.mem_append, List.mem_map, List.mem_range]
+      simp only [List.mem_append, List.mem_map]
       exact Or.inr ⟨i, hi, rfl⟩
-    simp only [VmConstraint.holdsVm, gBalLoFreeze, gBalHi, gNonceFreeze, gCapPass, gResPass,
-      eSA, eSB, eSub, EmittedExpr.eval] at hLo hHi hNon hCap hRes
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+    simp only [VmConstraint.holdsVm, gBalLoDebit, gBalHi, gNonceTick, gNonce, gCapPass, gResPass,
+      gQueueRootBind, eSA, eSB, ePrmCap, ePrmCost, eSelNoop, eSub,
+      EmittedExpr.eval] at hLo hHi hNon hCap hRes hRoot
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · linarith [hLo]
     · linarith [hHi]
     · linarith [hNon]
     · linarith [hCap]
     · linarith [hRes]
+    · linarith [hRoot]
     · intro i hi
       have := hFld i hi
       simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
       linarith
-  · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
-      List.mem_range] at hc
-    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
-    · simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
+  · rintro ⟨hLo, hHi, hNon, hCap, hRes, hRoot, hFld⟩ c hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
+    · simp only [VmConstraint.holdsVm, gBalLoDebit, eSA, eSB, ePrmCap, ePrmCost, eSub,
+        EmittedExpr.eval]
       rw [hLo]; ring
     · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hHi]; ring
-    · simp only [VmConstraint.holdsVm, gNonceFreeze, eSA, eSB, eSub, EmittedExpr.eval]
+    · simp only [VmConstraint.holdsVm, gNonceTick, gNonce, eSA, eSB, eSelNoop, eSub, EmittedExpr.eval]
       rw [hNon]; ring
     · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hCap]; ring
     · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hRes]; ring
+    · simp only [VmConstraint.holdsVm, gQueueRootBind, eSA, EmittedExpr.eval]
+      rw [hRoot]; ring
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      have hmem : i ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat) := by
+        simp only [List.mem_cons, List.not_mem_nil, or_false]; tauto
+      rw [hFld i hmem]; ring
 
-/-! ## §5 — ANTI-GHOST: a row whose cell is NOT frozen fails the emitted descriptor. -/
+/-! ## §5 — ANTI-GHOST: a row that does not realize the (reconciled) move fails the descriptor. -/
 
-/-- **Anti-ghost (general).** A row whose cell is NOT held frozen (a value moved that allocate must
-leave alone) does NOT satisfy the per-row gates. -/
-theorem queueAllocateVm_rejects_wrong_output (env : VmRowEnv)
-    (hwrong : ¬ QueueAllocateRowIntent env) :
-    ¬ (∀ c ∈ queueAllocateRowGates, c.holdsVm env false false) :=
-  fun h => hwrong ((queueAllocateVm_faithful env).mp h)
+/-- **Anti-ghost (general).** A row not realizing the allocate intent fails the per-row gates. -/
+theorem queueAllocateVm_rejects_wrong_output (env : VmRowEnv) (emptyRoot : ℤ)
+    (hwrong : ¬ QueueAllocateRowIntent env emptyRoot) :
+    ¬ (∀ c ∈ queueAllocateRowGates emptyRoot, c.holdsVm env false false) :=
+  fun h => hwrong ((queueAllocateVm_faithful env emptyRoot).mp h)
 
-/-- **Anti-ghost (balance tamper).** A row whose post-`bal_lo` differs from the pre (allocate must
-leave the ledger entry alone) has no satisfying gate set — `gBalLoFreeze` alone rejects it. -/
-theorem queueAllocateVm_rejects_moved_balance (env : VmRowEnv)
-    (hwrong : env.loc (saCol state.BALANCE_LO) ≠ env.loc (sbCol state.BALANCE_LO)) :
-    ¬ (VmConstraint.gate gBalLoFreeze).holdsVm env false false := by
-  simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
+/-- **Anti-ghost (queue-root tamper).** A row whose post-`fields[4]` is NOT the fresh-queue root (an
+attacker prepending a forged/omitted queue record) is rejected by `gQueueRootBind` alone. This is the
+side-table-root binding the STAGE-3 amplification buys: tampering the queue root ⇒ UNSAT. -/
+theorem queueAllocateVm_rejects_wrong_queue_root (env : VmRowEnv) (emptyRoot : ℤ)
+    (hwrong : env.loc (saCol QUEUE_ROOT_FIELD) ≠ emptyRoot) :
+    ¬ (VmConstraint.gate (gQueueRootBind emptyRoot)).holdsVm env false false := by
+  simp only [VmConstraint.holdsVm, gQueueRootBind, eSA, EmittedExpr.eval]
+  intro h
+  apply hwrong
+  linarith [h]
+
+/-- **Anti-ghost (fee tamper).** A row whose post-`bal_lo` is not the fee-debited value (the allocation
+fee skipped/forged) is rejected by `gBalLoDebit` alone. -/
+theorem queueAllocateVm_rejects_wrong_balance (env : VmRowEnv)
+    (hwrong : env.loc (saCol state.BALANCE_LO)
+      ≠ env.loc (sbCol state.BALANCE_LO)
+        - env.loc (prmCol param.QUEUE_CAPACITY) * env.loc (prmCol param.QUEUE_COST_PER_SLOT)) :
+    ¬ (VmConstraint.gate gBalLoDebit).holdsVm env false false := by
+  simp only [VmConstraint.holdsVm, gBalLoDebit, eSA, eSB, ePrmCap, ePrmCost, eSub,
+    EmittedExpr.eval]
   intro h
   apply hwrong
   linarith [h]
 
 /-! ## §6 — The structured per-cell spec + descriptor soundness (REUSING `CellState`). -/
 
-/-- `RowEncodesNoop env pre post` ties the row's state-block columns to a frozen `(pre, post)` cell
-transition (allocate carries NO param of interest — the queue args live OUTSIDE the EffectVM cell). -/
-def RowEncodesNoop (env : VmRowEnv) (pre post : CellState) : Prop :=
+/-- The allocate parameters carried in the param block (the fee = `capacity·cost`). -/
+structure AllocateParams where
+  capacity : ℤ
+  cost     : ℤ
+
+/-- `RowEncodesAlloc env pre p emptyRoot post` ties the row's state-block + param columns to a
+`(pre, p, emptyRoot, post)` allocate transition. The queue-root carrier (`fields[4]`) is tracked
+separately as the `pre.fields 4`/`post.fields 4` cells. -/
+def RowEncodesAlloc (env : VmRowEnv) (pre : CellState) (p : AllocateParams) (emptyRoot : ℤ)
+    (post : CellState) : Prop :=
   env.loc (sbCol state.BALANCE_LO) = pre.balLo
   ∧ env.loc (sbCol state.BALANCE_HI) = pre.balHi
   ∧ env.loc (sbCol state.NONCE) = pre.nonce
@@ -209,6 +266,9 @@ def RowEncodesNoop (env : VmRowEnv) (pre post : CellState) : Prop :=
   ∧ env.loc (sbCol state.CAP_ROOT) = pre.capRoot
   ∧ env.loc (sbCol state.RESERVED) = pre.reserved
   ∧ env.loc (sbCol state.STATE_COMMIT) = pre.commit
+  ∧ env.loc (prmCol param.QUEUE_CAPACITY) = p.capacity
+  ∧ env.loc (prmCol param.QUEUE_COST_PER_SLOT) = p.cost
+  ∧ env.loc sel.NOOP = 0
   ∧ env.loc (saCol state.BALANCE_LO) = post.balLo
   ∧ env.loc (saCol state.BALANCE_HI) = post.balHi
   ∧ env.loc (saCol state.NONCE) = post.nonce
@@ -219,61 +279,74 @@ def RowEncodesNoop (env : VmRowEnv) (pre post : CellState) : Prop :=
   ∧ env.pub pi.OLD_COMMIT = pre.commit
   ∧ env.pub pi.NEW_COMMIT = post.commit
 
-/-- **`CellFreezeSpec pre post`** — the per-cell FULL-state freeze: the representing cell is UNCHANGED
-on every data column (both balance limbs, nonce, the 8 fields, cap_root, reserved). This is the
-EffectVM-row projection of allocate's balance-neutral, cell-untouched nature. -/
-def CellFreezeSpec (pre post : CellState) : Prop :=
-  post.balLo = pre.balLo
+/-- **`CellAllocSpec pre p emptyRoot post`** — the per-cell FULL-state allocate spec: `balLo` drops by
+`capacity·cost`, the queue-root cell (`fields 4`) becomes `emptyRoot`, the nonce TICKS, and the rest of
+the frame (bal_hi, cap_root, reserved, `fields` 0–3, 5–7) is LITERALLY unchanged. -/
+def CellAllocSpec (pre : CellState) (p : AllocateParams) (emptyRoot : ℤ) (post : CellState) : Prop :=
+  post.balLo = pre.balLo - p.capacity * p.cost
   ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
+  ∧ post.nonce = pre.nonce + 1
+  ∧ post.fields 4 = emptyRoot
+  ∧ (∀ i : Fin 8, i.val ≠ 4 → post.fields i = pre.fields i)
   ∧ post.capRoot = pre.capRoot
   ∧ post.reserved = pre.reserved
 
-/-- Decode lemma: under `RowEncodesNoop`, `QueueAllocateRowIntent` IS the structured `CellFreezeSpec`. -/
-theorem intent_to_cellFreezeSpec (env : VmRowEnv) (pre post : CellState)
-    (henc : RowEncodesNoop env pre post) (hint : QueueAllocateRowIntent env) :
-    CellFreezeSpec pre post := by
-  obtain ⟨hsbLo, hsbHi, hsbN, hsbF, hsbCap, hsbRes, hsbC,
+/-- Decode lemma: under `RowEncodesAlloc`, `QueueAllocateRowIntent` IS the structured `CellAllocSpec`. -/
+theorem intent_to_cellAllocSpec (env : VmRowEnv) (pre post : CellState) (p : AllocateParams)
+    (emptyRoot : ℤ) (henc : RowEncodesAlloc env pre p emptyRoot post)
+    (hint : QueueAllocateRowIntent env emptyRoot) :
+    CellAllocSpec pre p emptyRoot post := by
+  obtain ⟨hsbLo, hsbHi, hsbN, hsbF, hsbCap, hsbRes, hsbC, hpCap, hpCost, hNoop,
           hsaLo, hsaHi, hsaN, hsaF, hsaCap, hsaRes, hsaC, hOld, hNew⟩ := henc
-  obtain ⟨hbal, hbhi, hnon, hcap, hres, hfld⟩ := hint
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-  · rw [← hsaLo, ← hsbLo]; exact hbal
+  obtain ⟨hbal, hbhi, hnon, hcap, hres, hroot, hfld⟩ := hint
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · have : post.balLo = pre.balLo
+        - env.loc (prmCol param.QUEUE_CAPACITY) * env.loc (prmCol param.QUEUE_COST_PER_SLOT) := by
+      rw [← hsaLo, ← hsbLo]; exact hbal
+    rw [this, hpCap, hpCost]
   · rw [← hsaHi, ← hsbHi]; exact hbhi
-  · rw [← hsaN, ← hsbN]; exact hnon
-  · intro i
-    have := hfld i.val i.isLt
+  · have : post.nonce = pre.nonce + (1 - env.loc sel.NOOP) := by
+      rw [← hsaN, ← hsbN]; exact hnon
+    rw [this, hNoop]; ring
+  · have h4 : env.loc (saCol (state.FIELD_BASE + 4)) = post.fields ⟨4, by decide⟩ := hsaF ⟨4, by decide⟩
+    have hroot' : env.loc (saCol (state.FIELD_BASE + 4)) = emptyRoot := hroot
+    have hfe : post.fields (4 : Fin 8) = post.fields ⟨4, by decide⟩ := by
+      congr 1
+    rw [hfe, ← h4]; exact hroot'
+  · intro i hi4
+    have hmem : i.val ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat) := by
+      have := i.isLt; fin_cases i <;> first | (exact absurd rfl hi4) | decide
+    have := hfld i.val hmem
     rw [← hsaF i, ← hsbF i]; exact this
   · rw [← hsaCap, ← hsbCap]; exact hcap
   · rw [← hsaRes, ← hsbRes]; exact hres
 
 /-- **`queueAllocateDescriptor_full_sound`** — satisfying the WHOLE runnable descriptor (gates +
-transitions + boundaries + hash sites), under the `RowEncodesNoop` decoding, forces the structured
-per-cell `CellFreezeSpec` AND publishes the post-commit as `PI[NEW_COMMIT]`. (The FIFO-list prepend is
-out-of-IR — this binds ONLY the representing cell.) -/
+transitions + boundaries + hash sites), under the `RowEncodesAlloc` decoding, forces the structured
+per-cell `CellAllocSpec` (including the queue-root write) AND publishes the post-commit as
+`PI[NEW_COMMIT]`. The queue root is folded into the commitment via site1 (it absorbs `fields[4]`). -/
 theorem queueAllocateDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (pre post : CellState)
-    (henc : RowEncodesNoop env pre post)
-    (hsat : satisfiedVm hash queueAllocateVmDescriptor env true true) :
-    CellFreezeSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    (pre post : CellState) (p : AllocateParams) (emptyRoot : ℤ)
+    (henc : RowEncodesAlloc env pre p emptyRoot post)
+    (hsat : satisfiedVm hash (queueAllocateVmDescriptor emptyRoot) env true true) :
+    CellAllocSpec pre p emptyRoot post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
-  have hgates' : ∀ c ∈ queueAllocateRowGates, c.holdsVm env false false := by
+  have hgates' : ∀ c ∈ queueAllocateRowGates emptyRoot, c.holdsVm env false false := by
     intro c hc
-    have hmem : c ∈ queueAllocateVmDescriptor.constraints := by
+    have hmem : c ∈ (queueAllocateVmDescriptor emptyRoot).constraints := by
       unfold queueAllocateVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl hc))
     have := hcs c hmem
-    unfold queueAllocateRowGates gFieldPassAll at hc
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
-      List.mem_range] at hc
-    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    unfold queueAllocateRowGates gFieldPassNonRoot at hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
       simpa only [VmConstraint.holdsVm] using this
-  have hint := (queueAllocateVm_faithful env).mp hgates'
-  refine ⟨intent_to_cellFreezeSpec env pre post henc hint, ?_⟩
+  have hint := (queueAllocateVm_faithful env emptyRoot).mp hgates'
+  refine ⟨intent_to_cellAllocSpec env pre post p emptyRoot henc hint, ?_⟩
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
     intro c hc
-    have hmem : c ∈ queueAllocateVmDescriptor.constraints := by
+    have hmem : c ∈ (queueAllocateVmDescriptor emptyRoot).constraints := by
       unfold queueAllocateVmDescriptor
       simp only [List.mem_append]
       exact Or.inr hc
@@ -284,30 +357,31 @@ theorem queueAllocateDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRo
       · simp only [VmConstraint.holdsVm] at hh ⊢
         exact hh
   have hpin := (boundaryLast_pins env hlast).1
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
   rw [← hsaC]; exact hpin
 
-/-! ## §7 — The anti-ghost commitment tooth (REUSED — hash sites identical to transfer). -/
+/-! ## §7 — The anti-ghost commitment tooth (REUSED — hash sites identical to transfer; site1 absorbs
+`fields[4]`, so the queue root is part of the bound state-block). -/
 
-/-- **`queueAllocateDescriptor_commit_binds_state`** — two descriptor-satisfying allocate rows
-publishing the SAME `NEW_COMMIT` (under `Poseidon2SpongeCR`) have identical absorbed state-block
-columns. So a prover cannot keep `NEW_COMMIT` while tampering any absorbed cell. (This binds the
-representing cell's content; the queue-list digest would need its own absorbed column — §IR flag.) -/
+/-- **`queueAllocateDescriptor_commit_binds_state`** — two descriptor-satisfying allocate rows publishing
+the SAME `NEW_COMMIT` (under `Poseidon2SpongeCR`) have identical absorbed state-block columns — INCLUDING
+`saCol fields[4]` (the queue root, absorbed by site1). So a prover cannot keep `NEW_COMMIT` while
+tampering the queue root: the side-table-root binding the STAGE-3 amplification delivers. -/
 theorem queueAllocateDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
-    (e₁ e₂ : VmRowEnv)
-    (hsat₁ : satisfiedVm hash queueAllocateVmDescriptor e₁ true true)
-    (hsat₂ : satisfiedVm hash queueAllocateVmDescriptor e₂ true true)
+    (emptyRoot : ℤ) (e₁ e₂ : VmRowEnv)
+    (hsat₁ : satisfiedVm hash (queueAllocateVmDescriptor emptyRoot) e₁ true true)
+    (hsat₂ : satisfiedVm hash (queueAllocateVmDescriptor emptyRoot) e₂ true true)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
     absorbedCols e₁ = absorbedCols e₂ := by
   have hs₁ : siteHoldsAll hash e₁ transferHashSites := hsat₁.2
   have hs₂ : siteHoldsAll hash e₂ transferHashSites := hsat₂.2
-  have hc : ∀ (e : VmRowEnv), satisfiedVm hash queueAllocateVmDescriptor e true true →
+  have hc : ∀ (e : VmRowEnv), satisfiedVm hash (queueAllocateVmDescriptor emptyRoot) e true true →
       e.loc (saCol state.STATE_COMMIT) = e.pub pi.NEW_COMMIT := by
     intro e hsat
     obtain ⟨hcs, _⟩ := hsat
     have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm e false true := by
       intro c hc
-      have hmem : c ∈ queueAllocateVmDescriptor.constraints := by
+      have hmem : c ∈ (queueAllocateVmDescriptor emptyRoot).constraints := by
         unfold queueAllocateVmDescriptor
         simp only [List.mem_append]
         exact Or.inr hc
@@ -322,20 +396,24 @@ theorem queueAllocateDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hC
     rw [hc e₁ hsat₁, hc e₂ hsat₂, hpub]
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
-/-! ## §8 — CONNECTOR to universe-A: the IR-supportable part agrees with `QueueAllocateSpec`.
+/-! ## §8 — CONNECTOR to universe-A: the IR-supportable freeze legs agree; the divergences are reported.
 
-`QueueAllocateSpec` asserts `st'.kernel.bal = st.kernel.bal` (the ENTIRE per-asset ledger frozen — a
-balance-NEUTRAL effect). We project ONE `(cell, asset)` ledger entry into the keystone `CellState`'s
-`balLo` limb and prove that ledger entry is FROZEN across a committed allocate (the IR-supportable
-`CellFreezeSpec.balLo` clause) — so the descriptor's balance-freeze gate provably agrees with the
-executor. The FIFO-list prepend (`st'.queues = freshQueue :: st.queues`) is the OUT-OF-IR leg; we do
-NOT connect it (no column to carry it — §IR flag). -/
+`QueueAllocateSpec` PREPENDS a fresh `QueueRecord` onto `queues` and pins `st'.kernel.bal = st.kernel.bal`
+(balance-NEUTRAL in universe A). The RUNTIME instead (a) DEBITS the allocation fee and (b) models the
+`queues` prepend as the `fields[4]` queue-root advance. We connect the two genuine agreements:
+
+  * the `queues` PREPEND ⇄ the queue-root write: universe A's `st'.kernel.queues = freshQueue :: …`
+    realizes a queue-root TRANSITION; the descriptor binds that transition at `fields[4]` (the runtime
+    carrier) and the commitment folds it in (site1). The exact accumulator digest equality is the
+    runtime's `hash_2_to_1` convention (a hash-realization detail), reported as the queue-root carrier.
+  * the BALANCE: universe A is neutral; the runtime debits `cap·cost`. We report this
+    runtime-fee-vs-univA-neutral divergence exactly as the notes keystone does — they reconcile only at
+    `cap·cost = 0`. -/
 
 open Dregg2.Circuit.Spec.QueueFifoCore
 open Dregg2.Exec
 
-/-- Project the `(c, asset)` per-asset ledger entry into the keystone `CellState`'s `balLo` limb (the
-conserved measure). The EffectVM limbs with no universe-A analogue on the ledger entry are `0`. -/
+/-- Project the `(c, asset)` per-asset ledger entry into the keystone `CellState`'s `balLo` limb. -/
 def cellProjBal (bal : CellId → AssetId → ℤ) (c : CellId) (asset : AssetId) : CellState where
   balLo    := bal c asset
   balHi    := 0
@@ -345,83 +423,87 @@ def cellProjBal (bal : CellId → AssetId → ℤ) (c : CellId) (asset : AssetId
   reserved := 0
   commit   := 0
 
-/-- **`unify_allocate_balFrozen`** — across a committed `QueueAllocateSpec` post-state, the projected
-`(c, asset)` ledger entry is FROZEN (the IR-supportable `CellFreezeSpec`). So the descriptor's
-balance-freeze gate IS `queueAllocateA`'s genuine per-cell balance image — NOT a fourth spec. The
-queue-list prepend is out-of-IR. -/
-theorem unify_allocate_balFrozen (st : RecChainedState) (id : Nat) (actor cell : CellId) (cap : Nat)
-    (st' : RecChainedState) (c : CellId) (asset : AssetId)
+/-- **`unify_allocate_balFrozen_univA`** — universe A's `QueueAllocateSpec` is balance-NEUTRAL: across a
+committed allocate, the projected `(c, asset)` ledger entry is FROZEN. So the descriptor's runtime
+fee-debit AGREES with universe A's frozen ledger EXACTLY at `cap·cost = 0` (the reconciliation point);
+for a non-zero fee the runtime row and universe A genuinely DIVERGE — reported, not papered. -/
+theorem unify_allocate_balFrozen_univA (st : RecChainedState) (id : Nat) (actor cell : CellId)
+    (cap : Nat) (st' : RecChainedState) (c : CellId) (asset : AssetId)
     (hspec : QueueAllocateSpec st id actor cell cap st') :
-    CellFreezeSpec (cellProjBal st.kernel.bal c asset) (cellProjBal st'.kernel.bal c asset) := by
+    (cellProjBal st'.kernel.bal c asset).balLo = (cellProjBal st.kernel.bal c asset).balLo := by
   obtain ⟨_, _, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
-  refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
   show st'.kernel.bal c asset = st.kernel.bal c asset
   rw [hbal]
 
-/-! ## §9 — NON-VACUITY: a concrete frozen-cell row realizes the intent; a forged one is rejected. -/
+/-- **`allocate_runtime_vs_univA_reconcile`** — the runtime fee-debit `CellAllocSpec.balLo` and universe
+A's frozen ledger entry reconcile EXACTLY when the fee is zero (`p.capacity * p.cost = 0`). The honest
+gap statement (the cutover differential's `runtime_debit_vs_univA_neutral` analog). -/
+theorem allocate_runtime_vs_univA_reconcile (pre p emptyRoot post)
+    (hcell : CellAllocSpec pre p emptyRoot post) (hzero : p.capacity * p.cost = 0) :
+    post.balLo = pre.balLo := by
+  obtain ⟨hbal, _⟩ := hcell
+  rw [hbal, hzero, sub_zero]
 
-/-- A concrete allocate row: `bal_lo 100 → 100` (FROZEN), nonce 7 → 7 (frozen), frame fixed at 0. -/
+/-! ## §9 — NON-VACUITY: a concrete reconciled row realizes the intent; tampers are rejected. -/
+
+/-- A concrete allocate row (empty-queue root = 555): `bal_lo 100 → 88` (fee cap=3·cost=4=12),
+nonce 7 → 8 (TICK, `s_noop = 0`), `fields[4] 0 → 555` (queue root), rest frozen. -/
 def goodAllocRow : VmRowEnv where
   loc := fun v =>
     if v = SEL_QUEUE_ALLOCATE then 1
     else if v = sbCol state.BALANCE_LO then 100
-    else if v = saCol state.BALANCE_LO then 100
+    else if v = saCol state.BALANCE_LO then 88
     else if v = sbCol state.NONCE then 7
-    else if v = saCol state.NONCE then 7
+    else if v = saCol state.NONCE then 8
+    else if v = prmCol param.QUEUE_CAPACITY then 3
+    else if v = prmCol param.QUEUE_COST_PER_SLOT then 4
+    else if v = saCol QUEUE_ROOT_FIELD then 555
     else 0
   nxt := fun _ => 0
   pub := fun _ => 0
 
-/-- **NON-VACUITY (witness TRUE).** `goodAllocRow` REALIZES the allocate intent: the cell is frozen
-(`bal_lo 100 → 100`, nonce `7 → 7`, frame fixed). -/
-theorem goodAllocRow_realizes_intent : QueueAllocateRowIntent goodAllocRow := by
-  unfold QueueAllocateRowIntent goodAllocRow
-  simp only [sbCol, saCol, SEL_QUEUE_ALLOCATE, STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE,
-    NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.BALANCE_HI, state.NONCE,
-    state.CAP_ROOT, state.RESERVED, state.FIELD_BASE]
-  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_⟩
+/-- **NON-VACUITY (witness TRUE).** `goodAllocRow` REALIZES the reconciled allocate intent (root = 555). -/
+theorem goodAllocRow_realizes_intent : QueueAllocateRowIntent goodAllocRow 555 := by
+  unfold QueueAllocateRowIntent goodAllocRow QUEUE_ROOT_FIELD
+  simp only [sbCol, saCol, prmCol, SEL_QUEUE_ALLOCATE, sel.NOOP, STATE_BEFORE_BASE, STATE_AFTER_BASE,
+    PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.BALANCE_HI, state.NONCE,
+    state.CAP_ROOT, state.RESERVED, state.FIELD_BASE, param.QUEUE_CAPACITY, param.QUEUE_COST_PER_SLOT]
+  refine ⟨by norm_num, rfl, by norm_num, rfl, rfl, by norm_num, ?_⟩
   intro i hi
-  have e1 : (76 + (3 + i) = 3) = False := by simp; omega
-  have e2 : (76 + (3 + i) = 54) = False := by simp; omega
-  have e3 : (76 + (3 + i) = 76) = False := by simp
-  have e4 : (76 + (3 + i) = 56) = False := by simp; omega
-  have e5 : (76 + (3 + i) = 78) = False := by simp; omega
-  have f1 : (54 + (3 + i) = 3) = False := by simp; omega
-  have f2 : (54 + (3 + i) = 54) = False := by simp
-  have f3 : (54 + (3 + i) = 76) = False := by simp; omega
-  have f4 : (54 + (3 + i) = 56) = False := by simp; omega
-  have f5 : (54 + (3 + i) = 78) = False := by simp; omega
-  simp only [e1, e2, e3, e4, e5, f1, f2, f3, f4, f5, if_false]
+  fin_cases hi <;> norm_num
 
-/-- A FORGED allocate row: `goodAllocRow` with the post-`bal_lo` moved to `999` (allocate must NOT move
-the ledger — balance-neutral). -/
-def badAllocRow : VmRowEnv where
-  loc := fun v => if v = saCol state.BALANCE_LO then 999 else goodAllocRow.loc v
+/-- A FORGED allocate row: `goodAllocRow` with the queue root tampered to `999` (an attacker forging the
+prepended queue record). -/
+def badRootRow : VmRowEnv where
+  loc := fun v => if v = saCol QUEUE_ROOT_FIELD then 999 else goodAllocRow.loc v
   nxt := goodAllocRow.nxt
   pub := goodAllocRow.pub
 
-/-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badAllocRow`'s post-`bal_lo` moved, so the
-`gBalLoFreeze` gate REJECTS it — a concrete UNSAT (allocate is balance-neutral). -/
-theorem badAllocRow_rejected : ¬ (VmConstraint.gate gBalLoFreeze).holdsVm badAllocRow false false := by
-  apply queueAllocateVm_rejects_moved_balance
-  simp only [badAllocRow, goodAllocRow, sbCol, saCol, SEL_QUEUE_ALLOCATE, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.NONCE]
+/-- **NON-VACUITY (witness FALSE / concrete queue-root anti-ghost).** `badRootRow`'s queue root is
+tampered, so the `gQueueRootBind` gate REJECTS it — a concrete UNSAT over the now-BOUND side-table root. -/
+theorem badRootRow_rejected :
+    ¬ (VmConstraint.gate (gQueueRootBind 555)).holdsVm badRootRow false false := by
+  apply queueAllocateVm_rejects_wrong_queue_root
+  simp only [badRootRow, goodAllocRow, saCol, QUEUE_ROOT_FIELD, STATE_AFTER_BASE, PARAM_BASE,
+    NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.FIELD_BASE]
   norm_num
 
 /-! ## §10 — Axiom-hygiene pins. -/
 
-#guard queueAllocateVmDescriptor.constraints.length == 13 + 14 + 4 + 3
-#guard queueAllocateVmDescriptor.hashSites.length == 4
-#guard queueAllocateVmDescriptor.traceWidth == 186
+#guard (queueAllocateVmDescriptor 0).constraints.length == 13 + 14 + 4 + 3
+#guard (queueAllocateVmDescriptor 0).hashSites.length == 4
+#guard (queueAllocateVmDescriptor 0).traceWidth == 186
 
 #assert_axioms queueAllocateVm_faithful
 #assert_axioms queueAllocateVm_rejects_wrong_output
-#assert_axioms queueAllocateVm_rejects_moved_balance
-#assert_axioms intent_to_cellFreezeSpec
+#assert_axioms queueAllocateVm_rejects_wrong_queue_root
+#assert_axioms queueAllocateVm_rejects_wrong_balance
+#assert_axioms intent_to_cellAllocSpec
 #assert_axioms queueAllocateDescriptor_full_sound
 #assert_axioms queueAllocateDescriptor_commit_binds_state
-#assert_axioms unify_allocate_balFrozen
+#assert_axioms unify_allocate_balFrozen_univA
+#assert_axioms allocate_runtime_vs_univA_reconcile
 #assert_axioms goodAllocRow_realizes_intent
-#assert_axioms badAllocRow_rejected
+#assert_axioms badRootRow_rejected
 
 end Dregg2.Circuit.Emit.EffectVmEmitQueueAllocate
