@@ -181,16 +181,16 @@ echo "$SUBMIT_JSON" | python3 -c '
 import sys, json
 d = json.load(sys.stdin)
 accepted = d.get("accepted", False)
-status = d.get("proof_status", "")
+status = (d.get("proof_status", "") or "").lower()
 if not accepted:
     sys.stderr.write("turn NOT accepted: %s\n" % json.dumps(d))
     sys.exit(2)
 assert d.get("turn_hash"), "accepted turn missing turn_hash"
-# Full-turn proving is ON; an activity turn must be Proved (or NotRequired if the
+# Full-turn proving is ON; an activity turn must be proved (or not_required if the
 # effect produced no provable activity). Both are honest; a generation FAILURE is not.
-assert status in ("Proved","NotRequired"), "unexpected proof_status: %s" % status
-print("accepted=%s  turn_hash=%s..  proof_status=%s" % (
-    accepted, d["turn_hash"][:12], status))
+assert status in ("proved", "not_required"), "unexpected proof_status: %s" % status
+print("accepted=%s  turn_hash=%s..  proof_status=%s  witnesses=%s" % (
+    accepted, d["turn_hash"][:12], status, d.get("witness_count", 0)))
 ' || fail "CLI-submitted turn did not commit cleanly with an honest proof status"
 pass "CLI-submitted turn committed with honest proof status"
 

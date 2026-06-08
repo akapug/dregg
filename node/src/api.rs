@@ -2164,7 +2164,13 @@ async fn post_submit_turn(
     // This closes the historical blocker where the handler built an empty
     // `CallForest` and the executor rejected every turn ("call forest is
     // empty") so no operator turn ever replicated.
-    let federation_id = s.federation_id;
+    //
+    // Sign over the SAME federation id the executor verifies against
+    // (`federation_id_for_executor`): on an unconfigured solo node this is
+    // `blake3(pubkey)`, NOT the raw `s.federation_id`. Signing over the latter
+    // mismatched the executor's verification domain — once a turn cleared the
+    // (fee-sized) budget gate, every action's Ed25519 signature then failed.
+    let federation_id = crate::executor_setup::federation_id_for_executor(&s);
     let mut actions = Vec::with_capacity(req.actions.len());
     for action_spec in req.actions {
         let target = match action_spec.target {
@@ -5417,8 +5423,17 @@ async fn post_faucet(
         to: recipient_cell_id,
         amount: req.amount,
     };
-    let action =
-        faucet_cclerk.make_action(faucet_cell_id, "faucet_transfer", vec![transfer], &s.federation_id);
+    // Sign over the SAME federation id the executor verifies against
+    // (`federation_id_for_executor`: `s.federation_id` when configured, else
+    // `blake3(pubkey)`). Using the raw `s.federation_id` on an unconfigured solo
+    // node mismatched the executor's domain and failed Ed25519 verification.
+    let exec_federation_id = crate::executor_setup::federation_id_for_executor(&s);
+    let action = faucet_cclerk.make_action(
+        faucet_cell_id,
+        "faucet_transfer",
+        vec![transfer],
+        &exec_federation_id,
+    );
     let mut call_forest = CallForest::new();
     call_forest.add_root(action);
     // The executor's budget gate caps computrons at `turn.fee` (`estimated >
