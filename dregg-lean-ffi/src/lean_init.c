@@ -62,6 +62,26 @@ extern lean_object *dregg_exec_handler_turn(lean_object *input);
 #ifdef DREGG_FINALIZE_GATE
 extern lean_object *initialize_Dregg2_Dregg2_Distributed_FinalityGate(uint8_t builtin);
 extern lean_object *dregg_blocklace_finalize(lean_object *input);
+/* The RAW total-order export, co-located in `Dregg2.Distributed.FinalityGate`: returns the verified
+ * `BlocklaceFinality.tauOrder` ITSELF (the ordered BlockId list `"T=<id>,<id>,..."`), proved
+ * order-faithfully equal to `tauOrder` by `tau_order_export_eq`. Same module ⇒ same initializer ⇒
+ * gated on the same DREGG_FINALIZE_GATE define. */
+extern lean_object *dregg_tau_order(lean_object *input);
+#endif
+
+/* The @[export]ed Lean `String -> String` VERIFIED STRAND-ADMISSION GATE
+ * (`Dregg2.Distributed.StrandAdmission.admitGate`): decodes a wire-encoded admission registry +
+ * queried strand (`"N=<vouch-threshold>;m=<min-bond>;S=<seeds>;V=<vouches>;Bo=<bonds>;q=<strand>"`),
+ * runs the VERIFIED hybrid stake-OR-vouch `admitted` predicate, and returns `"1"` (admitted) / `"0"`
+ * (not admitted) / `"ERR"` (fail-closed on a malformed wire). The federation calls this at the
+ * admission point to compute the F-4 Sybil verdict FROM the verified rule itself.
+ *
+ * GATED on DREGG_STRAND_ADMIT: like the finality gate, this export lives in a module OUTSIDE the FFI
+ * module's import closure, so (a) build.rs probes the archive and only `#define`s DREGG_STRAND_ADMIT
+ * when the symbol is present, and (b) `dregg_ffi_init` must ALSO run the module's own initializer. */
+#ifdef DREGG_STRAND_ADMIT
+extern lean_object *initialize_Dregg2_Dregg2_Distributed_StrandAdmission(uint8_t builtin);
+extern lean_object *dregg_strand_admit(lean_object *input);
 #endif
 
 /* Returns 0 on success, 1 if module initialization reported an IO error. */
@@ -85,6 +105,18 @@ int dregg_ffi_init(void) {
         return 1;
     }
     lean_dec_ref(gres);
+#endif
+#ifdef DREGG_STRAND_ADMIT
+    /* The strand-admission module is also OUTSIDE the FFI closure; initialize it explicitly so
+     * `dregg_strand_admit` is callable. Its dependency closure (BlocklaceFinality/StrandIntegrity)
+     * is re-entrant-safe under Lean's init guards (shared with the finality gate above). */
+    lean_object *ares = initialize_Dregg2_Dregg2_Distributed_StrandAdmission(1);
+    if (!lean_io_result_is_ok(ares)) {
+        lean_io_result_show_error(ares);
+        lean_dec_ref(ares);
+        return 1;
+    }
+    lean_dec_ref(ares);
 #endif
     lean_io_mark_end_initialization();
     return 0;
@@ -219,4 +251,49 @@ size_t dregg_blocklace_finalize_str(const char *in_utf8, char *out, size_t out_c
     lean_dec_ref(res);
     return full;
 }
+
+/* dregg_tau_order_str — the C string bridge over the Lean `String -> String` RAW TOTAL-ORDER export.
+ * Identical marshalling discipline as the bridges above; it drives `dregg_tau_order`, whose input
+ * wire is the SAME `"w=<W>;P=<participants>;B=<blocks>"` the finality gate consumes and whose output
+ * is `"T=<id>,<id>,..."` (the verified `BlocklaceFinality.tauOrder` total order as the ordered BlockId
+ * list) or `"ERR"` (fail-closed on a malformed wire). `tau_order_export_eq` proves the output is the
+ * encoding of `tauOrder` order-faithfully. Same return contract (full byte length; (size_t)-1 only on
+ * an unusable buffer). Co-located in the FinalityGate module ⇒ gated on the same DREGG_FINALIZE_GATE. */
+size_t dregg_tau_order_str(const char *in_utf8, char *out, size_t out_cap) {
+    if (out == 0 || out_cap == 0) {
+        return (size_t)-1;
+    }
+    lean_object *in_obj = lean_mk_string(in_utf8);
+    lean_object *res = dregg_tau_order(in_obj);
+    const char *cstr = lean_string_cstr(res);
+    size_t full = strlen(cstr);
+    size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
+    memcpy(out, cstr, copy);
+    out[copy] = '\0';
+    lean_dec_ref(res);
+    return full;
+}
 #endif /* DREGG_FINALIZE_GATE */
+
+/* dregg_strand_admit_str — the C string bridge over the Lean `String -> String` VERIFIED
+ * STRAND-ADMISSION GATE export. Identical marshalling discipline as the bridges above; it drives
+ * `dregg_strand_admit`, whose input wire is
+ * `"N=<vouch-threshold>;m=<min-bond>;S=<seeds>;V=<vouches>;Bo=<bonds>;q=<strand>"` and whose output
+ * is `"1"` (admitted) / `"0"` (not admitted) / `"ERR"` (fail-closed on a malformed wire). Same return
+ * contract (full byte length; (size_t)-1 only on an unusable buffer). */
+#ifdef DREGG_STRAND_ADMIT
+size_t dregg_strand_admit_str(const char *in_utf8, char *out, size_t out_cap) {
+    if (out == 0 || out_cap == 0) {
+        return (size_t)-1;
+    }
+    lean_object *in_obj = lean_mk_string(in_utf8);
+    lean_object *res = dregg_strand_admit(in_obj);
+    const char *cstr = lean_string_cstr(res);
+    size_t full = strlen(cstr);
+    size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
+    memcpy(out, cstr, copy);
+    out[copy] = '\0';
+    lean_dec_ref(res);
+    return full;
+}
+#endif /* DREGG_STRAND_ADMIT */
