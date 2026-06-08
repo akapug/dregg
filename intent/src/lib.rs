@@ -80,6 +80,17 @@ pub mod sse;
 pub mod state_machine;
 pub mod trustless;
 pub mod validation;
+/// Route the LIVE ring settlement through the VERIFIED Lean executor.
+///
+/// A fulfilled intent's lowered `SealedTurn` is folded — leg by leg — through the real
+/// `@[export] dregg_record_kernel_step` (the PROVED `Exec.recKExec`), so "an intent
+/// fulfilled" literally MEANS "a verified, conserving, authorized executor turn executed".
+///
+/// The unconditional [`verified_settle::VerifiedLedger`] / [`verified_settle::settle_ring`]
+/// surface (the verified per-asset transition + atomic fold) is always present; the
+/// `verified-settle` feature additionally arms the REAL FFI ([`verified_settle::ffi`]) that
+/// routes each leg through the linked Lean archive.
+pub mod verified_settle;
 
 use serde::{Deserialize, Serialize};
 

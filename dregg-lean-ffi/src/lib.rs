@@ -69,6 +69,25 @@ pub fn finality_gate_available() -> bool {
     ffi::finality_gate_present() && lean_init_once().is_ok()
 }
 
+/// Run the verified PER-ASSET kernel step `@[export] dregg_record_kernel_step` (the PROVED
+/// `Exec.recKExec`) over a single-column cell state.
+///
+/// The input/output wire is the canonical JSON the export reads:
+///   * in:  `{"cells":[[ID,{"rec":[["balance",{"int":N}],…]}],…],"actor":N,"src":N,"dst":N,"amt":N}`
+///   * out: `{"cells":CELLS,"ok":B}`
+///
+/// This is the verified executor the intent crate's `verified_settle` routes each ring leg
+/// through, ONE call per leg over that leg's asset-projected column (`Dregg2.Intent.RingFFI`'s
+/// `projAsset`). By the Lean keystone `ffi_export_realises_settleRing_leg`, the export's `ok` bit
+/// and the post-state `balance` column ARE the verified per-asset executor's, so folding the legs
+/// through this entry computes EXACTLY `settleRing` — not a Rust mirror.
+///
+/// Requires [`lean_available`]; returns `Err` if the archive was not linked.
+pub fn shadow_record_kernel_step(wire: &str) -> Result<String, String> {
+    ensure_lean_init()?;
+    lean_record_kernel_step(wire)
+}
+
 /// Verified FINALITY GATE — run the verified `BlocklaceFinality.tauOrder` rule over a wire-encoded
 /// `(wavelength, participants, lace)` and return the verified finalized `(creator, seq)` order
 /// (`"F=<c>:<s>,..."`) or `"ERR"` (fail-closed on a malformed wire).
@@ -160,6 +179,11 @@ mod ffi {
             out: *mut c_char,
             out_cap: usize,
         ) -> usize;
+        fn dregg_record_kernel_step_str(
+            in_utf8: *const c_char,
+            out: *mut c_char,
+            out_cap: usize,
+        ) -> usize;
         #[cfg(dregg_handler_present)]
         fn dregg_exec_handler_turn_str(
             in_utf8: *const c_char,
@@ -214,6 +238,10 @@ mod ffi {
         lean_string_bridge(wire, dregg_exec_full_forest_auth_str, "dregg_exec_full_forest_auth_str")
     }
 
+    pub fn lean_record_kernel_step(wire: &str) -> Result<String, String> {
+        lean_string_bridge(wire, dregg_record_kernel_step_str, "dregg_record_kernel_step_str")
+    }
+
     #[cfg(dregg_handler_present)]
     pub fn lean_handler_turn(wire: &str) -> Result<String, String> {
         lean_string_bridge(wire, dregg_exec_handler_turn_str, "dregg_exec_handler_turn_str")
@@ -255,6 +283,10 @@ mod ffi {
         Err("Lean static lib not linked".into())
     }
 
+    pub fn lean_record_kernel_step(_wire: &str) -> Result<String, String> {
+        Err("Lean static lib not linked".into())
+    }
+
     pub fn lean_handler_turn(_wire: &str) -> Result<String, String> {
         Err("Lean static lib not linked".into())
     }
@@ -278,6 +310,10 @@ fn ensure_lean_init() -> Result<(), String> {
 
 fn lean_forest_auth(wire: &str) -> Result<String, String> {
     ffi::lean_forest_auth(wire)
+}
+
+fn lean_record_kernel_step(wire: &str) -> Result<String, String> {
+    ffi::lean_record_kernel_step(wire)
 }
 
 fn lean_handler_turn(wire: &str) -> Result<String, String> {
