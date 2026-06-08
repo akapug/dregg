@@ -39,7 +39,7 @@
 
 use std::collections::HashSet;
 
-use dregg_blocklace::finality::{Block, BlockId, Lace, Payload};
+use dregg_blocklace::finality::{Block, BlockId, Blocklace as Lace, Payload};
 use ed25519_dalek::SigningKey;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,8 +47,15 @@ use ed25519_dalek::SigningKey;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A deterministic keypair for a node, seeded so tests are reproducible.
-fn key(seed: u8) -> SigningKey {
-    SigningKey::from_bytes(&[seed; 32])
+/// The seed is a `u16` so node ids (100..800) and participant ids (10..80) both
+/// fit and stay distinct; it is splayed across the 32 seed bytes little-endian.
+fn key(seed: u16) -> SigningKey {
+    let [lo, hi] = seed.to_le_bytes();
+    let mut bytes = [0u8; 32];
+    for (i, b) in bytes.iter_mut().enumerate() {
+        *b = if i % 2 == 0 { lo } else { hi };
+    }
+    SigningKey::from_bytes(&bytes)
 }
 
 /// A node in the in-process cluster: a real `Lace` plus its identity. The `Lace`
@@ -57,11 +64,11 @@ fn key(seed: u8) -> SigningKey {
 struct Node {
     lace: Lace,
     #[allow(dead_code)]
-    id: u8,
+    id: u16,
 }
 
 impl Node {
-    fn new(id: u8) -> Self {
+    fn new(id: u16) -> Self {
         // quorum_threshold 1: solo-finality semantics, matching the devnet's
         // `federation_mode: solo`. Convergence/equivocation logic is independent
         // of the threshold; the threshold only gates the Attested level.
