@@ -236,3 +236,28 @@ fn producer_mode_setfield_commits_lean_state_matching_rust() {
     );
     run_producer_mode(pre, turn, true, &[a_id, b_id]);
 }
+
+#[test]
+fn producer_mode_cell_unseal_commits_lean_state_matching_rust() {
+    if !dregg_lean_ffi::lean_available() {
+        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
+        return;
+    }
+    // CellUnseal (Sealed->Live) — the LIFECYCLE root-gap CLOSE driven through the node commit
+    // helper. The verified producer flips the lifecycle discriminant back to Live (the payload-free
+    // state), `produce_via_lean` installs `CellLifecycle::Live`, and the committed (Lean-produced)
+    // ledger AGREES with the Rust differential on state + `.root()` (the lifecycle commitment fold).
+    // A self-`node` cap supplies the unseal authority leg; the pre-state cell is SEALED.
+    let mut a = make_open_cell(1, 100);
+    let a_id = a.id();
+    a.capabilities.grant(a_id, AuthRequired::None); // stateAuthB self-edge for the unseal authority
+    a.seal([7u8; 32], 0).expect("seal the pre-state cell");
+    let b = make_open_cell(2, 5);
+    let b_id = b.id();
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+    pre.insert_cell(b).unwrap();
+
+    let turn = single_effect_turn(a_id, a_id, 0, Effect::CellUnseal { target: a_id });
+    run_producer_mode(pre, turn, true, &[a_id, b_id]);
+}
