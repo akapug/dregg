@@ -80,6 +80,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Exec
+open Dregg2.Exec.EffectsState
 open Dregg2.Exec.TurnExecutorFull
 
 set_option linter.unusedVariables false
@@ -417,33 +418,62 @@ theorem permGoodRow_isSetPermsRow : IsSetPermsRow permGoodRow := by
     STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.FIELD_BASE, PERMS_FIELD,
     paramSP.PERMS_NEW]
 
+/-- Evaluate `permGoodRow.loc` at a column given as a LITERAL `Nat` not in the named set
+`{3,57,79,71}` — it returns the `else 0` default. -/
+theorem permGoodRow_loc_default (n : Nat)
+    (h3 : n ≠ 3) (h57 : n ≠ 57) (h79 : n ≠ 79) (h71 : n ≠ 71) :
+    permGoodRow.loc n = 0 := by
+  show (if n = selSP.SET_PERMS then (1:ℤ)
+    else if n = sbCol (state.FIELD_BASE + PERMS_FIELD) then 1
+    else if n = saCol (state.FIELD_BASE + PERMS_FIELD) then 3
+    else if n = prmCol paramSP.PERMS_NEW then 3 else 0) = 0
+  have c1 : (selSP.SET_PERMS : Nat) = 3 := rfl
+  have c2 : sbCol (state.FIELD_BASE + PERMS_FIELD) = 57 := by
+    unfold sbCol STATE_BEFORE_BASE NUM_EFFECTS state.FIELD_BASE PERMS_FIELD; rfl
+  have c3 : saCol (state.FIELD_BASE + PERMS_FIELD) = 79 := by
+    unfold saCol STATE_AFTER_BASE PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE NUM_PARAMS
+      state.FIELD_BASE PERMS_FIELD; rfl
+  have c4 : prmCol paramSP.PERMS_NEW = 71 := by
+    unfold prmCol PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE paramSP.PERMS_NEW; rfl
+  rw [c1, c2, c3, c4, if_neg h3, if_neg h57, if_neg h79, if_neg h71]
+
 /-- **NON-VACUITY (witness TRUE).** `permGoodRow` REALIZES the metadata intent: post `field[0] = 3` = the
 param value, balance/nonce/cap/reserved/field[1..7] frozen at `0`. -/
 theorem permGoodRow_realizes_intent : SetPermsRowIntent permGoodRow := by
-  unfold SetPermsRowIntent permGoodRow
+  have hsa0 : saCol (state.FIELD_BASE + PERMS_FIELD) = 79 := by
+    unfold saCol STATE_AFTER_BASE PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE NUM_PARAMS
+      state.FIELD_BASE PERMS_FIELD; rfl
+  have hprm : prmCol paramSP.PERMS_NEW = 71 := by
+    unfold prmCol PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE paramSP.PERMS_NEW; rfl
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · simp only [saCol, prmCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS,
-      STATE_SIZE, NUM_PARAMS, state.FIELD_BASE, PERMS_FIELD, paramSP.PERMS_NEW]
-  all_goals
-    simp only [saCol, sbCol, prmCol, selSP.SET_PERMS, STATE_AFTER_BASE, STATE_BEFORE_BASE, PARAM_BASE,
-      NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.FIELD_BASE, PERMS_FIELD, state.BALANCE_LO,
-      state.BALANCE_HI, state.NONCE, state.CAP_ROOT, state.RESERVED, paramSP.PERMS_NEW]
-  · norm_num
-  · norm_num
-  · norm_num
-  · norm_num
-  · norm_num
+  · -- post field[0] = perms param: both read column 79 (→3) and 71 (→3)
+    show permGoodRow.loc (saCol (state.FIELD_BASE + PERMS_FIELD)) = permGoodRow.loc (prmCol paramSP.PERMS_NEW)
+    rw [hsa0, hprm]; rfl
+  · show permGoodRow.loc (saCol state.BALANCE_LO) = permGoodRow.loc (sbCol state.BALANCE_LO)
+    rw [permGoodRow_loc_default (saCol state.BALANCE_LO) (by decide) (by decide) (by decide) (by decide),
+        permGoodRow_loc_default (sbCol state.BALANCE_LO) (by decide) (by decide) (by decide) (by decide)]
+  · show permGoodRow.loc (saCol state.BALANCE_HI) = permGoodRow.loc (sbCol state.BALANCE_HI)
+    rw [permGoodRow_loc_default (saCol state.BALANCE_HI) (by decide) (by decide) (by decide) (by decide),
+        permGoodRow_loc_default (sbCol state.BALANCE_HI) (by decide) (by decide) (by decide) (by decide)]
+  · show permGoodRow.loc (saCol state.NONCE) = permGoodRow.loc (sbCol state.NONCE)
+    rw [permGoodRow_loc_default (saCol state.NONCE) (by decide) (by decide) (by decide) (by decide),
+        permGoodRow_loc_default (sbCol state.NONCE) (by decide) (by decide) (by decide) (by decide)]
+  · show permGoodRow.loc (saCol state.CAP_ROOT) = permGoodRow.loc (sbCol state.CAP_ROOT)
+    rw [permGoodRow_loc_default (saCol state.CAP_ROOT) (by decide) (by decide) (by decide) (by decide),
+        permGoodRow_loc_default (sbCol state.CAP_ROOT) (by decide) (by decide) (by decide) (by decide)]
+  · show permGoodRow.loc (saCol state.RESERVED) = permGoodRow.loc (sbCol state.RESERVED)
+    rw [permGoodRow_loc_default (saCol state.RESERVED) (by decide) (by decide) (by decide) (by decide),
+        permGoodRow_loc_default (sbCol state.RESERVED) (by decide) (by decide) (by decide) (by decide)]
   · intro i hi1 hi8
-    -- field[i] (i ≥ 1) after-column (76+3+i) and before-column (54+3+i) miss every named column.
-    have e1 : ¬ (76 + (3 + i) = 3) := by omega
-    have e2 : ¬ (76 + (3 + i) = 57) := by omega
-    have e3 : ¬ (76 + (3 + i) = 79) := by omega
-    have e4 : ¬ (76 + (3 + i) = 69) := by omega
-    have f1 : ¬ (54 + (3 + i) = 3) := by omega
-    have f2 : ¬ (54 + (3 + i) = 57) := by omega
-    have f3 : ¬ (54 + (3 + i) = 79) := by omega
-    have f4 : ¬ (54 + (3 + i) = 69) := by omega
-    simp only [if_neg e1, if_neg e2, if_neg e3, if_neg e4, if_neg f1, if_neg f2, if_neg f3, if_neg f4]
+    show permGoodRow.loc (saCol (state.FIELD_BASE + i)) = permGoodRow.loc (sbCol (state.FIELD_BASE + i))
+    have hsaI : saCol (state.FIELD_BASE + i) = 79 + i := by
+      unfold saCol STATE_AFTER_BASE PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE NUM_PARAMS
+        state.FIELD_BASE; omega
+    have hsbI : sbCol (state.FIELD_BASE + i) = 57 + i := by
+      unfold sbCol STATE_BEFORE_BASE NUM_EFFECTS state.FIELD_BASE; omega
+    rw [hsaI, hsbI,
+        permGoodRow_loc_default (79 + i) (by omega) (by omega) (by omega) (by omega),
+        permGoodRow_loc_default (57 + i) (by omega) (by omega) (by omega) (by omega)]
 
 /-- A forged `setPermissionsA` row: `permGoodRow` with the post-`field[0]` tampered to `999 ≠ 3`. -/
 def permBadRow : VmRowEnv where
@@ -455,22 +485,23 @@ def permBadRow : VmRowEnv where
 value, so the `gPermMove` gate REJECTS it — a concrete UNSAT. -/
 theorem permBadRow_rejected : ¬ (VmConstraint.gate gPermMove).holdsVm permBadRow false false := by
   apply setPermsVm_rejects_wrong_perm
-  show (if saCol (state.FIELD_BASE + PERMS_FIELD) = saCol (state.FIELD_BASE + PERMS_FIELD) then (999:ℤ)
-      else permGoodRow.loc _) ≠ permBadRow.loc (prmCol paramSP.PERMS_NEW)
-  rw [if_pos rfl]
-  show (999:ℤ) ≠ (if prmCol paramSP.PERMS_NEW = saCol (state.FIELD_BASE + PERMS_FIELD) then (999:ℤ)
-    else permGoodRow.loc (prmCol paramSP.PERMS_NEW))
-  have hne : ¬ (prmCol paramSP.PERMS_NEW = saCol (state.FIELD_BASE + PERMS_FIELD)) := by
-    simp only [saCol, prmCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS,
-      STATE_SIZE, NUM_PARAMS, state.FIELD_BASE, PERMS_FIELD, paramSP.PERMS_NEW]
-  rw [if_neg hne]
-  show (999:ℤ) ≠ permGoodRow.loc (prmCol paramSP.PERMS_NEW)
-  show (999:ℤ) ≠ (if prmCol paramSP.PERMS_NEW = selSP.SET_PERMS then (1:ℤ)
-    else if prmCol paramSP.PERMS_NEW = sbCol (state.FIELD_BASE + PERMS_FIELD) then 1
-    else if prmCol paramSP.PERMS_NEW = saCol (state.FIELD_BASE + PERMS_FIELD) then 3
-    else if prmCol paramSP.PERMS_NEW = prmCol paramSP.PERMS_NEW then 3 else 0)
-  norm_num [prmCol, saCol, sbCol, selSP.SET_PERMS, STATE_AFTER_BASE, STATE_BEFORE_BASE, PARAM_BASE,
-    NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.FIELD_BASE, PERMS_FIELD, paramSP.PERMS_NEW]
+  have hsa0 : saCol (state.FIELD_BASE + PERMS_FIELD) = 79 := by
+    unfold saCol STATE_AFTER_BASE PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE NUM_PARAMS
+      state.FIELD_BASE PERMS_FIELD; rfl
+  have hprm : prmCol paramSP.PERMS_NEW = 71 := by
+    unfold prmCol PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE paramSP.PERMS_NEW; rfl
+  -- post field[0] (col 79) is forged to 999; perms param (col 71) reads 3 from goodRow
+  have hbad : permBadRow.loc (saCol (state.FIELD_BASE + PERMS_FIELD)) = 999 := by
+    show (if saCol (state.FIELD_BASE + PERMS_FIELD) = saCol (state.FIELD_BASE + PERMS_FIELD)
+      then (999:ℤ) else permGoodRow.loc (saCol (state.FIELD_BASE + PERMS_FIELD))) = 999
+    rw [if_pos rfl]
+  have hparam : permBadRow.loc (prmCol paramSP.PERMS_NEW) = 3 := by
+    show (if prmCol paramSP.PERMS_NEW = saCol (state.FIELD_BASE + PERMS_FIELD) then (999:ℤ)
+      else permGoodRow.loc (prmCol paramSP.PERMS_NEW)) = 3
+    rw [hsa0, hprm, if_neg (by decide)]
+    show permGoodRow.loc (prmCol paramSP.PERMS_NEW) = 3
+    rw [hprm]; rfl
+  rw [hbad, hparam]; decide
 
 /-! ## §10 — Axiom-hygiene tripwires (the honesty tripwire). -/
 
