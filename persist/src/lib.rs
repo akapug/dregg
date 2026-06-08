@@ -14,6 +14,14 @@
 //! is designed to be crash-safe: `redb` uses write-ahead logging to ensure
 //! atomicity.
 //!
+//! The [`commit_log`] module adds the node's crash-consistent finalized-turn
+//! commit log + secondary index: each applied turn's durable record, the commit
+//! cursor advance, and every index entry (receipt-by-hash, turn-by-hash,
+//! turn-by-(height, creator), cell-by-id) are written in ONE redb transaction,
+//! so recovery converges to a consistent checkpoint with no torn state, no lost
+//! finalized turn, and no double-apply. The index is rebuildable from — and
+//! provably agrees with — the log (`verify_index_agrees_with_log`).
+//!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────┐
 //! │                     PersistentStore                           │
@@ -49,6 +57,7 @@
 pub mod audit;
 pub mod blocklace_store;
 pub mod checkpoint;
+pub mod commit_log;
 pub mod federation;
 pub mod keys;
 pub mod ledger_store;
@@ -67,6 +76,7 @@ use redb::{Database, ReadableTable};
 
 pub use audit::StoredAuditEvent;
 pub use blocklace_store::BlocklaceMeta;
+pub use commit_log::{CommitRecord, IndexAuditReport};
 pub use federation::StoredAttestedRoot;
 pub use ledger_store::LedgerCheckpoint;
 pub use note_tree::{NoteTree, PersistentNullifierSet};
@@ -201,6 +211,12 @@ impl PersistentStore {
             let _ = write_txn.open_table(tables::BLOCKLACE_META)?;
             // Node witness artifact tables.
             let _ = write_txn.open_table(tables::WITNESSED_RECEIPTS)?;
+            // Durable commit log + index tables (crash-consistency).
+            let _ = write_txn.open_table(tables::COMMIT_LOG)?;
+            let _ = write_txn.open_table(tables::IDX_RECEIPT_BY_HASH)?;
+            let _ = write_txn.open_table(tables::IDX_TURN_BY_HASH)?;
+            let _ = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
+            let _ = write_txn.open_table(tables::IDX_CELL_BY_ID)?;
             // Metadata tables.
             let _ = write_txn.open_table(tables::METADATA)?;
             let _ = write_txn.open_table(tables::METADATA_BYTES)?;

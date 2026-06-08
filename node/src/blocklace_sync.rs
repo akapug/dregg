@@ -752,12 +752,32 @@ pub async fn run_blocklace_sync(
         {
             Ok(Some((restored_lace, executed_up_to))) => {
                 let block_count = restored_lace.len();
+                // CRASH-CONSISTENT resume point. `executed_up_to` here comes from
+                // the legacy, separately-written `BLOCKLACE_EXECUTED_UP_TO_KEY`,
+                // which can run AHEAD of the durable ledger across a torn crash
+                // (its write is not atomic with the per-turn ledger commit). The
+                // durable commit log records, atomically with each applied turn,
+                // the block cursor as of that turn (`recovered_block_cursor`). We
+                // resume from the MINIMUM of the two: the durable cursor is the
+                // safe floor below which every turn is provably in the commit log
+                // (so re-processing is idempotent), and we never skip a finalized
+                // turn that the legacy cursor jumped past. When the durable cursor
+                // is 0 (fresh node / pre-upgrade DB) we fall back to the legacy
+                // value unchanged.
+                let durable = s.store.recovered_block_cursor().unwrap_or(0) as usize;
+                let resume = if durable == 0 {
+                    executed_up_to
+                } else {
+                    executed_up_to.min(durable)
+                };
                 info!(
                     blocks = block_count,
-                    executed_up_to = executed_up_to,
-                    "restored blocklace from persistent storage"
+                    legacy_executed_up_to = executed_up_to,
+                    durable_block_cursor = durable,
+                    resume_from = resume,
+                    "restored blocklace from persistent storage (crash-consistent resume)"
                 );
-                (restored_lace, executed_up_to)
+                (restored_lace, resume)
             }
             Ok(None) => {
                 info!("no persisted blocklace found, starting fresh");
@@ -1408,6 +1428,16 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
                 );
             }
 
+            // Block-level resume cursor for crash recovery: `poll_finalized_blocks`
+            // has already advanced `executed_up_to` to the post-batch high-water
+            // mark, so this is the position recovery resumes blocklace processing
+            // from. We persist it inside each turn's atomic commit (see
+            // `execute_finalized_turn`) so the durable block cursor can never run
+            // ahead of the durable ledger. Resuming from the post-batch cursor is
+            // safe: every turn in the batch that durably committed is in the
+            // commit log, and any re-processed turn is idempotent there.
+            let block_executed_up_to = { *handle.executed_up_to.read().await as u64 };
+
             for block in &finalized_blocks {
                 match block {
                     FinalizedBlock::Turn {
@@ -1421,6 +1451,7 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
                             *block_id,
                             data,
                             artifacts.as_ref(),
+                            block_executed_up_to,
                         )
                         .await;
                     }
@@ -1524,6 +1555,7 @@ async fn execute_finalized_turn(
     block_id: BlockId,
     turn_data: &[u8],
     artifacts: Option<&TurnArtifactBundle>,
+    block_executed_up_to: u64,
 ) {
     // Deserialize the signed turn.
     let signed_turn: dregg_sdk::SignedTurn = match postcard::from_bytes(turn_data) {
@@ -1683,7 +1715,11 @@ async fn execute_finalized_turn(
     };
 
     match exec_result {
-        dregg_turn::TurnResult::Committed { receipt, .. } => {
+        dregg_turn::TurnResult::Committed {
+            receipt,
+            ref ledger_delta,
+            ..
+        } => {
             let receipt_hash_hex: String = receipt
                 .turn_hash
                 .iter()
@@ -1874,6 +1910,75 @@ async fn execute_finalized_turn(
                     state.emit(NodeEvent::Revocation {
                         token_id: dregg_types::hex_encode(&cell.0),
                     });
+                }
+            }
+
+            // ── DURABLE, CRASH-CONSISTENT COMMIT (single atomic boundary) ────
+            // Record this finalized turn in the durable commit log + index in ONE
+            // redb transaction (one fsync boundary): the per-turn record, the
+            // commit-cursor advance, the block-level resume cursor, and every
+            // secondary index entry (receipt-by-hash, turn-by-hash,
+            // turn-by-(height,creator), cell-by-id) all land together or not at
+            // all. This is what makes recovery converge to a CONSISTENT
+            // checkpoint with no torn state, no lost finalized turn, and no
+            // double-apply: the cursor is advanced only here, atomically with the
+            // record it counts. See `dregg_persist::commit_log`.
+            //
+            // The touched-cell post-states are read from the just-committed
+            // ledger for exactly the cell ids the executor reported in
+            // `ledger_delta` (created ∪ updated ∪ computron_transfer endpoints) —
+            // the authoritative, complete, bounded set of cells this turn
+            // mutated. The cell-by-id index is therefore the durable
+            // last-writer-wins overlay on top of the periodic full ledger
+            // checkpoint, and recovery reconstructs the finalized ledger from
+            // (checkpoint ⊕ overlay) without re-executing.
+            {
+                let touched_ids = touched_cell_ids(ledger_delta);
+                let mut touched_cells: Vec<dregg_cell::Cell> =
+                    Vec::with_capacity(touched_ids.len());
+                for id in &touched_ids {
+                    if let Some(cell) = s.ledger.get(id) {
+                        touched_cells.push(cell.clone());
+                    }
+                    // A touched id absent post-commit means the cell was
+                    // destroyed this turn; its removal is reflected by the
+                    // checkpoint, and the overlay carries no stale entry.
+                }
+                let commit_record = dregg_persist::CommitRecord {
+                    ordinal: 0, // assigned by the store at the durable cursor
+                    height: new_height,
+                    block_id: block_id.0,
+                    turn_hash: computed_hash,
+                    creator: *signed_turn.turn.agent.as_bytes(),
+                    receipt_hash: receipt.receipt_hash(),
+                    ledger_root: merkle_root,
+                    block_executed_up_to,
+                    touched_cells,
+                };
+                let expected_ordinal = s.store.commit_cursor().unwrap_or(0);
+                match s.store.commit_finalized_turn(expected_ordinal, &commit_record) {
+                    Ok(assigned) => {
+                        debug!(
+                            turn_hash = %turn_hash_hex,
+                            ordinal = assigned,
+                            block_executed_up_to,
+                            "durable commit-log record written (atomic; index updated)"
+                        );
+                    }
+                    Err(e) => {
+                        // A failed durable commit is a serious crash-consistency
+                        // event: the ledger was mutated in RAM but the durable
+                        // record/cursor did not advance. We surface it loudly; on
+                        // the next poll the in-RAM `executed_up_to` is ahead, but
+                        // the durable cursor is NOT, so recovery resumes from the
+                        // durable cursor and re-applies this turn idempotently.
+                        error!(
+                            turn_hash = %turn_hash_hex,
+                            error = %e,
+                            "DURABLE commit-log write FAILED; turn applied in RAM but not durably \
+                             recorded — recovery will re-apply from the durable cursor"
+                        );
+                    }
                 }
             }
 
@@ -3186,7 +3291,34 @@ fn build_federation_receipt(
 /// Folds each cell's id + state-hash into a domain-separated BLAKE3 hash,
 /// sorted lexicographically by cell id for determinism. This is the
 /// `merkle_root` field carried in [`dregg_types::AttestedRoot`].
-fn canonical_ledger_root(ledger: &dregg_cell::Ledger) -> [u8; 32] {
+/// The complete, bounded set of cell ids a committed turn mutated, taken
+/// directly from the executor's authoritative [`dregg_cell::LedgerDelta`]:
+/// every created cell, every updated cell, and both endpoints of every
+/// computron transfer. This is the set whose post-states the durable commit log
+/// snapshots into the cell-by-id index, so recovery reconstructs the finalized
+/// ledger from (checkpoint ⊕ overlay) without re-execution. Deduplicated and
+/// order-stable.
+fn touched_cell_ids(delta: &dregg_cell::LedgerDelta) -> Vec<dregg_cell::CellId> {
+    let mut ids: Vec<dregg_cell::CellId> = Vec::new();
+    fn push(ids: &mut Vec<dregg_cell::CellId>, id: dregg_cell::CellId) {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    for cell in &delta.created {
+        push(&mut ids, cell.id());
+    }
+    for (id, _) in &delta.updated {
+        push(&mut ids, *id);
+    }
+    for (from, to, _) in &delta.computron_transfers {
+        push(&mut ids, *from);
+        push(&mut ids, *to);
+    }
+    ids
+}
+
+pub(crate) fn canonical_ledger_root(ledger: &dregg_cell::Ledger) -> [u8; 32] {
     let mut entries: Vec<(dregg_types::CellId, [u8; 32])> = ledger
         .iter()
         .map(|(id, cell)| {

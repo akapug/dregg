@@ -569,28 +569,86 @@ impl NodeState {
         let used_proof_hashes = store.load_all_proof_hashes().unwrap_or_default();
         let (witnessed_receipts, witnessed_receipt_order) = load_witnessed_receipts(&store);
 
-        // Restore ledger from the latest checkpoint (if one exists).
-        let ledger = match store.load_latest_ledger_checkpoint() {
+        // Restore ledger from the latest checkpoint (if one exists), then apply
+        // the durable commit-log overlay (CRASH-CONSISTENT RECOVERY).
+        //
+        // The periodic full ledger checkpoint lags behind the finalized turn
+        // stream by up to `LEDGER_CHECKPOINT_INTERVAL` turns. The commit log
+        // (written atomically per turn) carries the post-state of every cell
+        // touched since that checkpoint. Overlaying those post-states onto the
+        // checkpoint reconstructs the EXACT finalized ledger up to the durable
+        // commit cursor — without replaying/re-executing any turn (no
+        // double-apply) and without losing any finalized turn that lies in the
+        // gap (no torn state). `Ledger::insert_cell` keys by `cell.id()`, so the
+        // overlay is last-writer-wins, matching the log's ordinal order. This is
+        // LaceMerge convergence applied to recovery: the recovered node reaches
+        // the same finalized state the committing node recorded.
+        let (mut ledger, checkpoint_height) = match store.load_latest_ledger_checkpoint() {
             Ok(Some((height, restored_ledger))) => {
                 tracing::info!(
                     checkpoint_height = height,
                     cells = restored_ledger.len(),
                     "restored ledger from checkpoint"
                 );
-                restored_ledger
+                (restored_ledger, height)
             }
             Ok(None) => {
                 tracing::info!("no ledger checkpoint found, starting with empty ledger");
-                Ledger::new()
+                (Ledger::new(), 0)
             }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
                     "failed to load ledger checkpoint, starting with empty ledger"
                 );
-                Ledger::new()
+                (Ledger::new(), 0)
             }
         };
+        match store.cell_overlay_since(checkpoint_height) {
+            Ok(overlay) if !overlay.is_empty() => {
+                let overlay_len = overlay.len();
+                for cell in overlay {
+                    let _ = ledger.insert_cell(cell);
+                }
+                let recovered_root = crate::blocklace_sync::canonical_ledger_root(&ledger);
+                // Convergence assertion: the reconstructed root MUST equal the
+                // root the committing node durably recorded for the last turn.
+                match store.recovered_ledger_root() {
+                    Ok(Some(expected)) if expected == recovered_root => {
+                        tracing::info!(
+                            overlaid_cells = overlay_len,
+                            commit_cursor = store.commit_cursor().unwrap_or(0),
+                            recovered_root = %dregg_types::hex_encode(&recovered_root),
+                            "applied durable commit-log overlay — recovered ledger CONVERGED to the \
+                             recorded finalized root (crash-consistent)"
+                        );
+                    }
+                    Ok(Some(expected)) => {
+                        // A mismatch means the checkpoint and the commit log are
+                        // from inconsistent eras (e.g. a manually edited DB) — a
+                        // real integrity event, surfaced loudly rather than
+                        // silently serving a wrong ledger.
+                        tracing::error!(
+                            overlaid_cells = overlay_len,
+                            recovered_root = %dregg_types::hex_encode(&recovered_root),
+                            expected_root = %dregg_types::hex_encode(&expected),
+                            "commit-log overlay recovered a ledger root that does NOT match the \
+                             durably recorded finalized root — STORE INTEGRITY EVENT"
+                        );
+                    }
+                    _ => {
+                        tracing::info!(
+                            overlaid_cells = overlay_len,
+                            "applied durable commit-log overlay (no recorded root to compare)"
+                        );
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to apply durable commit-log overlay on recovery");
+            }
+        }
         let (events_tx, _) = broadcast::channel(4096);
 
         // Derive the silo ID from the cipherclerk's public key.
@@ -692,11 +750,17 @@ impl NodeState {
         let cclerk = AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(key_bytes));
         let (witnessed_receipts, witnessed_receipt_order) = load_witnessed_receipts(&store);
 
-        // Restore ledger from the latest checkpoint (if one exists).
-        let ledger = match store.load_latest_ledger_checkpoint() {
-            Ok(Some((_height, restored_ledger))) => restored_ledger,
-            _ => Ledger::new(),
+        // Restore ledger from the latest checkpoint, then apply the durable
+        // commit-log overlay (crash-consistent recovery; see `new_with_key_file`).
+        let (mut ledger, checkpoint_height) = match store.load_latest_ledger_checkpoint() {
+            Ok(Some((height, restored_ledger))) => (restored_ledger, height),
+            _ => (Ledger::new(), 0),
         };
+        if let Ok(overlay) = store.cell_overlay_since(checkpoint_height) {
+            for cell in overlay {
+                let _ = ledger.insert_cell(cell);
+            }
+        }
 
         let (events_tx, _) = broadcast::channel(4096);
 

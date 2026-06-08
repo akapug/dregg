@@ -141,3 +141,64 @@ pub const BLOCKLACE_EXECUTED_UP_TO_KEY: &str = "executed_up_to";
 /// table byte-oriented so it does not depend on `dregg-turn`.
 pub const WITNESSED_RECEIPTS: TableDefinition<&[u8; 32], &[u8]> =
     TableDefinition::new("witnessed_receipts");
+
+// ─── Durable Commit Log + Index (crash-consistency) ─────────────────────────
+//
+// The commit log is the authoritative, append-only record of finalized turns
+// that THIS node has applied to its ledger. It is the recovery anchor: each
+// record is written in the SAME redb transaction that advances the commit
+// cursor (`META_COMMIT_CURSOR`), so the cursor and the per-turn record can
+// never be torn against each other. The index tables below are secondary
+// views derived from this log; every index write happens in that same
+// transaction, so the "index entry exists iff the log has it" invariant holds
+// by construction across crashes.
+
+/// Commit log: commit ordinal (u64, 0-based, == position in the tau-finalized
+/// order this node has applied) -> postcard-serialized `CommitRecord`.
+///
+/// Key: the commit ordinal (a dense, gap-free counter advanced by exactly one
+/// per applied turn; equals the prior `executed_up_to` semantics but is now the
+/// crash-consistent anchor written atomically with the record itself).
+/// Value: postcard-serialized `commit_log::CommitRecord`.
+pub const COMMIT_LOG: TableDefinition<u64, &[u8]> = TableDefinition::new("commit_log");
+
+/// Index — receipt by hash: receipt_hash (32 bytes) -> commit ordinal (u64).
+///
+/// Lets a verifier/explorer resolve a receipt hash to its commit position in
+/// O(1) without scanning. The pointed-to `CommitRecord` carries the full
+/// coordinates (height, creator, turn hash, ledger root).
+pub const IDX_RECEIPT_BY_HASH: TableDefinition<&[u8; 32], u64> =
+    TableDefinition::new("idx_receipt_by_hash");
+
+/// Index — turn by hash: turn_hash (32 bytes) -> commit ordinal (u64).
+pub const IDX_TURN_BY_HASH: TableDefinition<&[u8; 32], u64> =
+    TableDefinition::new("idx_turn_by_hash");
+
+/// Index — turns by (height, creator): composite key -> commit ordinal (u64).
+///
+/// Key layout: 8-byte big-endian height ++ 32-byte creator. Big-endian height
+/// makes redb's lexicographic range scan equal a height-ordered scan, so
+/// "all turns at height H" and "all turns by creator C in height order" are
+/// efficient range queries. A `(height, creator)` pair is unique per commit
+/// because each finalized blocklace block carries exactly one turn and the
+/// node assigns a fresh height per applied turn.
+pub const IDX_TURN_BY_HEIGHT_CREATOR: TableDefinition<&[u8], u64> =
+    TableDefinition::new("idx_turn_by_height_creator");
+
+/// Index — cell by id (durable per-turn snapshot): cell_id (32 bytes) ->
+/// postcard-serialized `dregg_cell::Cell`.
+///
+/// Updated atomically per applied turn from the executor's post-state so a
+/// node can look up the current contents of ANY cell touched since the last
+/// full ledger checkpoint, without replaying. Cells not touched since the last
+/// checkpoint are served from the checkpoint; this table holds the deltas on
+/// top of it. Rebuilt deterministically from the commit log on demand.
+pub const IDX_CELL_BY_ID: TableDefinition<&[u8; 32], &[u8]> =
+    TableDefinition::new("idx_cell_by_id");
+
+/// Key (in METADATA) for the durable commit cursor: the number of turns this
+/// node has committed and indexed = the next free commit ordinal. This is the
+/// crash-consistent replacement for the separately-written
+/// `BLOCKLACE_EXECUTED_UP_TO_KEY`; recovery reads THIS value (advanced inside
+/// the per-turn commit transaction) as the authoritative high-water mark.
+pub const META_COMMIT_CURSOR: &str = "commit_cursor";
