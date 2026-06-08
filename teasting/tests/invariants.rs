@@ -228,7 +228,7 @@ fn test_gc_consistency_basic() {
     assert_gc_consistency(&export_gc, &[session_x.clone(), session_y.clone()], &[]);
 
     // Drop the reference from fed_x to cell_a.
-    export_gc.process_drop(cell_a, fed_x);
+    export_gc.process_drop_with_session(cell_a, fed_x, 0);
 
     // Now cell_a has zero refs. Mark the session import as dead.
     session_x.imports.get_mut(&cell_a).unwrap().live = false;
@@ -248,7 +248,7 @@ fn test_gc_consistency_violation_detected() {
     let fed_x = FederationId(rng.gen_bytes());
 
     export_gc.record_export(cell_a, fed_x, 1);
-    export_gc.process_drop(cell_a, fed_x);
+    export_gc.process_drop_with_session(cell_a, fed_x, 0);
 
     // Session still has live import -- violation!
     let mut session = CapSession::new(fed_x.0);

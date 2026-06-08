@@ -224,7 +224,7 @@ fn apply_action(state: &mut CapState, action: &CapAction, rng: &mut Rng) {
 
             // Process drops for all exports TO this session's peer.
             for cell_id in &exported {
-                state.export_gc.process_drop(*cell_id, fed_id);
+                state.export_gc.process_drop_with_session(*cell_id, fed_id, 0);
                 // Remove from holders tracking.
                 if let Some(holders) = state.export_holders.get_mut(cell_id) {
                     holders.retain(|f| *f != fed_id);
@@ -275,7 +275,7 @@ fn apply_action(state: &mut CapState, action: &CapAction, rng: &mut Rng) {
             state.sessions[*session_idx].release_export(cell_id);
 
             // Process drop in GC.
-            state.export_gc.process_drop(*cell_id, fed_id);
+            state.export_gc.process_drop_with_session(*cell_id, fed_id, 0);
 
             // Update holders tracking.
             if let Some(holders) = state.export_holders.get_mut(cell_id) {
@@ -509,7 +509,7 @@ fn test_captp_valid_operations_succeed() {
         assert_eq!(entry.total_refs, 1, "After export, refs should be 1");
 
         // Drop.
-        let result = export_gc.process_drop(cell_id, fed_id);
+        let result = export_gc.process_drop_with_session(cell_id, fed_id, 0);
         assert_eq!(
             result,
             dregg_captp::DropResult::CanRevoke,
@@ -532,7 +532,7 @@ fn test_captp_invalid_operations_fail() {
     export_gc.record_export(cell_id, fed_a, 1);
 
     // Drop from wrong federation.
-    let result = export_gc.process_drop(cell_id, fed_b);
+    let result = export_gc.process_drop_with_session(cell_id, fed_b, 0);
     assert_eq!(
         result,
         dregg_captp::DropResult::Invalid,
@@ -540,11 +540,11 @@ fn test_captp_invalid_operations_fail() {
     );
 
     // Valid drop.
-    let result = export_gc.process_drop(cell_id, fed_a);
+    let result = export_gc.process_drop_with_session(cell_id, fed_a, 0);
     assert_eq!(result, dregg_captp::DropResult::CanRevoke);
 
     // Double-drop: cell no longer has entry (already at zero, was cleaned).
-    let result = export_gc.process_drop(cell_id, fed_a);
+    let result = export_gc.process_drop_with_session(cell_id, fed_a, 0);
     assert_eq!(
         result,
         dregg_captp::DropResult::Invalid,

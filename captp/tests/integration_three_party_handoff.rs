@@ -291,6 +291,6 @@ fn handoff_followed_by_gc_lifecycle() {
     assert!(bob_import_gc.is_empty());
 
     // Carol's side processes the drop → CanRevoke.
-    let drop_result = alice_export_gc.process_drop(carol_cell, carol_fed);
+    let drop_result = alice_export_gc.process_drop_with_session(carol_cell, carol_fed, 0);
     assert_eq!(drop_result, dregg_captp::DropResult::CanRevoke);
 }

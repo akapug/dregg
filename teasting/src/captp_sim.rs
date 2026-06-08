@@ -281,7 +281,9 @@ impl SimCapTpSession {
             } => {
                 let fed_id = GroupId(*from_strand);
                 let cell = CellId(*cell_id);
-                self.export_gc_a.process_drop(cell, fed_id);
+                // F-11: session mandatory. The sim records exports under session 0
+                // (record_export), so the DropRef is processed on session 0.
+                self.export_gc_a.process_drop_with_session(cell, fed_id, 0);
                 self.session_a.release_export(&cell);
             }
             _ => {

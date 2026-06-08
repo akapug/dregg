@@ -4694,7 +4694,7 @@ fn test_introduction_gc_export_enables_drop_tracking() {
     assert!(entry.holders.contains_key(&bobs_federation));
 
     // Simulate Bob's federation sending a DropRef when done with Carol
-    let drop_result = gc_mgr.process_drop(carol_id, bobs_federation);
+    let drop_result = gc_mgr.process_drop_with_session(carol_id, bobs_federation, 0);
     assert_eq!(
         drop_result,
         dregg_captp::DropResult::CanRevoke,
