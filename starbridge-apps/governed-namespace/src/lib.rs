@@ -162,7 +162,7 @@
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, Authorization, AuthorizedSet, CapTarget, CapTemplate,
     CellId, CellMode, CellProgram, ChildVkStrategy, ConstantsModule, Effect, Event,
-    FactoryDescriptor, FieldConstraint, FieldElement, InputRef, InspectorDescriptor,
+    FactoryDescriptor, FieldElement, InputRef, InspectorDescriptor,
     StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard, WitnessedPredicate,
     WitnessedPredicateKind, field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
@@ -293,10 +293,14 @@ pub fn governance_program() -> CellProgram {
         TransitionCase {
             guard: TransitionGuard::Always,
             constraints: vec![
-                StateConstraint::Immutable {
+                // `WriteOnce` (not `Immutable`): a factory-born governance cell
+                // is empty, so committee + threshold are bound once by the
+                // first `constitute` turn and frozen thereafter — the
+                // birth-compatible form of the constitutional invariant.
+                StateConstraint::WriteOnce {
                     index: GOVERNANCE_COMMITTEE_ROOT_SLOT,
                 },
-                StateConstraint::Immutable {
+                StateConstraint::WriteOnce {
                     index: THRESHOLD_SLOT,
                 },
                 StateConstraint::Monotonic {
@@ -511,29 +515,24 @@ pub fn governance_factory_descriptor() -> FactoryDescriptor {
             max_permissions: AuthRequired::Signature,
             attenuatable: true,
         }],
-        field_constraints: vec![
-            // Committee root must be non-zero (no null-governed cell).
-            FieldConstraint::NonZero {
-                field_index: GOVERNANCE_COMMITTEE_ROOT_SLOT as u32,
-            },
-            // Threshold must be non-zero (no zero-threshold "anyone
-            // can commit" governance).
-            FieldConstraint::NonZero {
-                field_index: THRESHOLD_SLOT as u32,
-            },
-            // Version starts at 0; first commit makes it 1.
-            FieldConstraint::Equality {
-                field_index: VERSION_SLOT as u32,
-                value: 0,
-            },
-        ],
+        // No creation-time `field_constraints`: a freshly-minted governance
+        // cell is born empty (version already 0) and its first `constitute`
+        // turn writes `COMMITTEE_ROOT` + `THRESHOLD` (`WriteOnce`, frozen after).
+        // The birth `NonZero`s validated against `params.initial_fields`,
+        // forcing the seed path to mint placeholders — and a `1`-threshold
+        // placeholder is a genuine soundness hazard ("anyone can commit"
+        // governance). Mirror privacy-voting/bounty-board: drop the birth
+        // constraints, bind committee + threshold with the first turn, frozen
+        // thereafter by `WriteOnce`.
+        field_constraints: vec![],
         state_constraints: vec![
-            // Constitutional invariants: committee + threshold are
-            // immutable; tampering is rejected by the `Always` case.
-            StateConstraint::Immutable {
+            // Constitutional invariants: committee + threshold are bound ONCE
+            // (`WriteOnce`, from zero on the first turn) and frozen thereafter —
+            // the birth-compatible form of the constitutional `Immutable`.
+            StateConstraint::WriteOnce {
                 index: GOVERNANCE_COMMITTEE_ROOT_SLOT,
             },
-            StateConstraint::Immutable {
+            StateConstraint::WriteOnce {
                 index: THRESHOLD_SLOT,
             },
             // Version is monotonic across the cell's lifetime; per
@@ -1313,14 +1312,18 @@ mod tests {
     }
 
     #[test]
-    fn factory_descriptor_bakes_constitutional_immutables() {
+    fn factory_descriptor_bakes_constitutional_write_once() {
+        // `WriteOnce` (not `Immutable`): a factory-born governance cell is empty,
+        // so committee + threshold are bound ONCE by the first `constitute` turn
+        // (from zero) and frozen thereafter — the birth-compatible form of the
+        // constitutional invariant.
         let d = governance_factory_descriptor();
         for slot in [GOVERNANCE_COMMITTEE_ROOT_SLOT, THRESHOLD_SLOT] {
             assert!(
                 d.state_constraints
                     .iter()
-                    .any(|c| matches!(c, StateConstraint::Immutable { index } if *index == slot)),
-                "factory must install Immutable on slot {slot}"
+                    .any(|c| matches!(c, StateConstraint::WriteOnce { index } if *index == slot)),
+                "factory must install WriteOnce on slot {slot} (bound once, frozen after)"
             );
         }
     }
@@ -1339,36 +1342,22 @@ mod tests {
     }
 
     #[test]
-    fn factory_descriptor_initial_version_zero() {
+    fn factory_descriptor_has_no_birth_field_constraints() {
+        // A factory-born governance cell mints empty: version == 0 ALREADY (a born
+        // cell is all-zero), committee/threshold zero until the first `constitute`
+        // turn binds them under `WriteOnce`. The old creation-time constraints
+        // (version `Equality(0)`, committee/threshold `NonZero`) forced the seed
+        // path to mint placeholders — a `1`-threshold placeholder is a genuine
+        // soundness hazard ("anyone can commit" governance). We carry NONE
+        // (mirroring privacy-voting/bounty-board); committee + threshold are bound
+        // by the first turn and frozen thereafter by `WriteOnce`.
         let d = governance_factory_descriptor();
-        let mut found_zero_version = false;
-        for c in &d.field_constraints {
-            if let FieldConstraint::Equality { field_index, value } = c {
-                if *field_index == VERSION_SLOT as u32 && *value == 0 {
-                    found_zero_version = true;
-                }
-            }
-        }
-        assert!(found_zero_version, "factory must init version==0");
-    }
-
-    #[test]
-    fn factory_descriptor_committee_and_threshold_nonzero() {
-        let d = governance_factory_descriptor();
-        let mut committee_nz = false;
-        let mut threshold_nz = false;
-        for c in &d.field_constraints {
-            if let FieldConstraint::NonZero { field_index } = c {
-                if *field_index == GOVERNANCE_COMMITTEE_ROOT_SLOT as u32 {
-                    committee_nz = true;
-                }
-                if *field_index == THRESHOLD_SLOT as u32 {
-                    threshold_nz = true;
-                }
-            }
-        }
-        assert!(committee_nz, "factory must require non-zero committee root");
-        assert!(threshold_nz, "factory must require non-zero threshold");
+        assert!(
+            d.field_constraints.is_empty(),
+            "governance factory must carry NO creation-time field_constraints; \
+             version==0 already holds at birth and committee/threshold are bound \
+             by the first constitute turn under WriteOnce"
+        );
     }
 
     #[test]

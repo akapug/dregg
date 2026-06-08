@@ -20,6 +20,9 @@ publish = false
 
 [dependencies]
 dregg-circuit = { path = "../circuit" }
+dregg-sdk = { path = "../sdk" }
+postcard = { version = "1", features = ["use-std"] }
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -31,3 +34,11 @@ harness = false
 [[bin]]
 name = "perf-summary"
 path = "src/bin/perf_summary.rs"
+
+# Full-system performance report: every prove/verify primitive on the real
+# commit path, the descriptor-interpreter vs hand-AIR cost, the silver/gold
+# aggregation, and a witness-gen-vs-prove split, with proof sizes. The numbers
+# the product/polis usability assessment is grounded on.
+[[bin]]
+name = "perf-report"
+path = "src/bin/perf_report.rs"

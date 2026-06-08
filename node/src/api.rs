@@ -116,6 +116,16 @@ pub struct ProducerStatusResponse {
     /// the Rust producer for that turn. This is the honest "blocks the full
     /// default" list.
     pub uncovered_effects: Vec<String>,
+    /// The SWAP-SAFE subset of `covered_effects`: the producer runs AND its
+    /// reconstituted `.root()` provably EQUALS the Rust executor's (pinned by the
+    /// `lean_state_producer_*` differentials). A turn touching ONLY these has ZERO
+    /// post-state divergence when the verified producer runs.
+    pub root_agreeing_effects: Vec<String>,
+    /// Mapped effects whose Lean-produced `.root()` DIVERGES from Rust (the wire
+    /// model is lossier than the cell commitment, or Rust re-shapes the ledger):
+    /// the producer still runs and installs the verified state, but the divergence
+    /// is logged as a real finding. The CHARACTERIZED residual of THE SWAP.
+    pub root_gap_effects: Vec<String>,
     /// Human-readable summary of the boundary.
     pub summary: String,
 }
@@ -1682,6 +1692,14 @@ async fn get_producer_status(State(state): State<NodeState>) -> Json<ProducerSta
         .iter()
         .map(|k| k.to_string())
         .collect();
+    let root_agreeing: Vec<String> = dregg_turn::lean_shadow::producer_root_agreeing_effects()
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
+    let root_gaps: Vec<String> = dregg_turn::lean_shadow::producer_root_gap_effects()
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
     let total_effect_kinds = dregg_turn::lean_shadow::all_effect_kinds().len();
 
     let state_producer = if lean_producer_enabled { "lean" } else { "rust" }.to_string();
@@ -1689,11 +1707,15 @@ async fn get_producer_status(State(state): State<NodeState>) -> Json<ProducerSta
     let summary = if lean_producer_enabled {
         format!(
             "Verified Lean executor is the authoritative state producer for turns touching only \
-             the {} covered effect kinds; turns touching any of the {} uncovered kinds fall back \
+             the {} mappable effect kinds; turns touching any of the {} uncovered kinds fall back \
              to the Rust producer for that turn (Rust runs as a logged differential cross-check). \
-             Full-turn STARK proving: {}.",
+             Of the mappable kinds, {} are SWAP-SAFE (Lean-produced root provably == Rust) and {} \
+             are characterized root-GAPS (producer runs + installs verified state, divergence \
+             logged). Full-turn STARK proving: {}.",
             covered.len(),
             uncovered.len(),
+            root_agreeing.len(),
+            root_gaps.len(),
             if full_turn_proving { "ON" } else { "off" }
         )
     } else {
@@ -1713,6 +1735,8 @@ async fn get_producer_status(State(state): State<NodeState>) -> Json<ProducerSta
         covered_effects: covered,
         total_effect_kinds,
         uncovered_effects: uncovered,
+        root_agreeing_effects: root_agreeing,
+        root_gap_effects: root_gaps,
         summary,
     })
 }

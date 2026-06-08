@@ -371,12 +371,15 @@ fn committee_root_overwrite_rejected_under_propose() {
     let err = program
         .evaluate_with_meta(&bad_new, Some(&old), None, &propose_meta())
         .expect_err("committee root overwrite must be rejected");
+    // `WriteOnce` (the birth-compatible form of `Immutable`): `base_state` sets the
+    // committee root non-zero (nonce=1), so an overwrite to a different value is the
+    // already-set WriteOnce violation. The constitutional freeze is preserved.
     match err {
         ProgramError::ConstraintViolated {
-            constraint: StateConstraint::Immutable { index },
+            constraint: StateConstraint::WriteOnce { index },
             ..
         } => assert_eq!(index, GOVERNANCE_COMMITTEE_ROOT_SLOT),
-        other => panic!("expected Immutable on committee root, got {other:?}"),
+        other => panic!("expected WriteOnce on committee root, got {other:?}"),
     }
 }
 
@@ -392,12 +395,14 @@ fn committee_root_overwrite_rejected_under_commit() {
     let err = program
         .evaluate_with_meta(&bad_new, Some(&old), None, &commit_meta())
         .expect_err("committee root overwrite on commit must be rejected");
+    // `WriteOnce` (birth-compatible `Immutable`): the committed root is already set
+    // (base_state, nonce=1), so overwriting it is the already-set violation.
     match err {
         ProgramError::ConstraintViolated {
-            constraint: StateConstraint::Immutable { index },
+            constraint: StateConstraint::WriteOnce { index },
             ..
         } => assert_eq!(index, GOVERNANCE_COMMITTEE_ROOT_SLOT),
-        other => panic!("expected Immutable on committee root, got {other:?}"),
+        other => panic!("expected WriteOnce on committee root, got {other:?}"),
     }
 }
 
@@ -412,12 +417,15 @@ fn threshold_overwrite_rejected_under_propose() {
     let err = program
         .evaluate_with_meta(&bad_new, Some(&old), None, &propose_meta())
         .expect_err("threshold overwrite must be rejected");
+    // `WriteOnce` (birth-compatible `Immutable`): threshold is already set (2-of-3,
+    // base_state nonce=1), so weakening it to 1 is the already-set violation — the
+    // "anyone can commit" attack is blocked exactly as before.
     match err {
         ProgramError::ConstraintViolated {
-            constraint: StateConstraint::Immutable { index },
+            constraint: StateConstraint::WriteOnce { index },
             ..
         } => assert_eq!(index, THRESHOLD_SLOT),
-        other => panic!("expected Immutable on threshold, got {other:?}"),
+        other => panic!("expected WriteOnce on threshold, got {other:?}"),
     }
 }
 

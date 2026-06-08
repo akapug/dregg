@@ -1,0 +1,18 @@
+[package]
+name = "dregg-redteam"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Adversarial property-test harness: attacks the running Rust against the Lean-proven invariants (CapTP confinement / handoff non-amplification / GC Byzantine-resistance / blocklace equivocation). A passing attack is a FINDING; a failing attack is EVIDENCE the property holds operationally."
+
+[dependencies]
+dregg-captp = { path = "../captp" }
+dregg-blocklace = { path = "../blocklace" }
+dregg-cell = { path = "../cell" }
+dregg-types = { path = "../types" }
+ed25519-dalek = { version = "2", features = ["std", "zeroize"] }
+getrandom = { workspace = true }
+postcard = { version = "1", features = ["use-std"] }
+blake3 = "1"
+
+[dev-dependencies]

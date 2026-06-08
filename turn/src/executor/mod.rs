@@ -323,6 +323,17 @@ pub fn project_slot_caveat_manifest(
             // in Block-3 first wave; the witness side is checked by the
             // `WitnessedPredicateRegistry` NonMembership verifier.
             | dregg_cell::StateConstraint::Renounced { .. }
+            // Predicate-language extensions (MemberOf/PrefixOf/InRangeTwoSided/
+            // DeltaBounded/AffineLe/AffineEq/Reachable/AllOf) have no SlotCaveat
+            // AIR projection in this first wave — deferred like the others above.
+            | dregg_cell::StateConstraint::MemberOf { .. }
+            | dregg_cell::StateConstraint::PrefixOf { .. }
+            | dregg_cell::StateConstraint::InRangeTwoSided { .. }
+            | dregg_cell::StateConstraint::DeltaBounded { .. }
+            | dregg_cell::StateConstraint::AffineLe { .. }
+            | dregg_cell::StateConstraint::AffineEq { .. }
+            | dregg_cell::StateConstraint::Reachable { .. }
+            | dregg_cell::StateConstraint::AllOf { .. }
             | dregg_cell::StateConstraint::Custom { .. } => None,
         };
         if let Some(e) = entry {

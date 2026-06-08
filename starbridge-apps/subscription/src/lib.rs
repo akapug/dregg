@@ -155,7 +155,7 @@
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellId, CellMode,
     CellProgram, ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor,
-    FieldConstraint, FieldElement, InspectorDescriptor, StarbridgeAppContext, StateConstraint,
+    FieldElement, InspectorDescriptor, StarbridgeAppContext, StateConstraint,
     TransitionCase, TransitionGuard, canonical_program_vk, hex_encode_32, symbol,
 };
 use dregg_cell::program::SimpleStateConstraint;
@@ -277,10 +277,14 @@ pub fn subscription_program() -> CellProgram {
         TransitionCase {
             guard: TransitionGuard::Always,
             constraints: vec![
-                StateConstraint::Immutable {
+                // `WriteOnce` (not `Immutable`): a factory-born subscription is
+                // empty, so capacity + owner are bound once by the first turn
+                // and frozen thereafter — the birth-compatible form of "set at
+                // creation, never changes".
+                StateConstraint::WriteOnce {
                     index: CAPACITY_SLOT,
                 },
-                StateConstraint::Immutable {
+                StateConstraint::WriteOnce {
                     index: OWNER_PK_HASH_SLOT,
                 },
                 StateConstraint::FieldLteField {
@@ -490,34 +494,25 @@ pub fn subscription_factory_descriptor() -> FactoryDescriptor {
                 attenuatable: true,
             },
         ],
-        field_constraints: vec![
-            // Initial state: head == tail == 0 (empty queue).
-            FieldConstraint::Equality {
-                field_index: SEQ_HEAD_SLOT as u32,
-                value: 0,
-            },
-            FieldConstraint::Equality {
-                field_index: SEQ_TAIL_SLOT as u32,
-                value: 0,
-            },
-            // Capacity must be in [1, 1_000_000].
-            FieldConstraint::Range {
-                field_index: CAPACITY_SLOT as u32,
-                min: 1,
-                max: 1_000_000,
-            },
-            // Owner must be non-zero (no null-owned subscription).
-            FieldConstraint::NonZero {
-                field_index: OWNER_PK_HASH_SLOT as u32,
-            },
-        ],
+        // No creation-time `field_constraints`: a freshly-minted subscription
+        // cell is born empty (head == tail == 0 already, capacity/owner zero)
+        // and its first `configure` turn writes `CAPACITY` + `OWNER_PK_HASH`
+        // (`WriteOnce`, frozen after) before any publish/consume. The birth
+        // `Range`/`NonZero` validated against `params.initial_fields`, forcing
+        // the seed path to mint placeholders; an owner placeholder is a real
+        // soundness hazard (a null/`1`-owned subscription). Mirror
+        // privacy-voting/bounty-board: drop the birth constraints, bind the
+        // capacity and owner with the first turn under `WriteOnce`.
+        field_constraints: vec![],
         state_constraints: vec![
             // Lifetime invariants — flattened from the `Always` case.
             // The full operation-scoped shape is in `subscription_program`.
-            StateConstraint::Immutable {
+            // `WriteOnce` (not `Immutable`): a born cell is empty, so capacity
+            // and owner are bound by the FIRST turn from zero, then frozen.
+            StateConstraint::WriteOnce {
                 index: CAPACITY_SLOT,
             },
-            StateConstraint::Immutable {
+            StateConstraint::WriteOnce {
                 index: OWNER_PK_HASH_SLOT,
             },
             StateConstraint::FieldLteField {
@@ -1083,19 +1078,23 @@ mod tests {
     }
 
     #[test]
-    fn factory_descriptor_bakes_invariant_immutables() {
+    fn factory_descriptor_bakes_invariant_write_once() {
+        // `WriteOnce` (not `Immutable`): a factory-born subscription is empty, so
+        // capacity + owner are bound ONCE by the first `configure` turn (from zero)
+        // and frozen thereafter — the birth-compatible form of "set at creation,
+        // never changes".
         let d = subscription_factory_descriptor();
         assert!(
             d.state_constraints.iter().any(
-                |c| matches!(c, StateConstraint::Immutable { index } if *index == CAPACITY_SLOT)
+                |c| matches!(c, StateConstraint::WriteOnce { index } if *index == CAPACITY_SLOT)
             ),
-            "factory must install Immutable on CAPACITY_SLOT"
+            "factory must install WriteOnce on CAPACITY_SLOT (bound once, frozen after)"
         );
         assert!(
             d.state_constraints
                 .iter()
-                .any(|c| matches!(c, StateConstraint::Immutable { index } if *index == OWNER_PK_HASH_SLOT)),
-            "factory must install Immutable on OWNER_PK_HASH_SLOT"
+                .any(|c| matches!(c, StateConstraint::WriteOnce { index } if *index == OWNER_PK_HASH_SLOT)),
+            "factory must install WriteOnce on OWNER_PK_HASH_SLOT (bound once, frozen after)"
         );
     }
 
@@ -1121,22 +1120,22 @@ mod tests {
     }
 
     #[test]
-    fn factory_descriptor_initial_head_tail_zero() {
+    fn factory_descriptor_has_no_birth_field_constraints() {
+        // A factory-born subscription cell mints empty: head == tail == 0 ALREADY
+        // (a born cell is all-zero), capacity/owner zero until the first `configure`
+        // turn binds them under `WriteOnce`. Creation-time `field_constraints`
+        // (the old head==tail==0 `Equality`, capacity `Range`, owner `NonZero`)
+        // forced the seed path to mint placeholders — an owner placeholder is a
+        // real soundness hazard. We carry NONE (mirroring privacy-voting/
+        // bounty-board); the head/tail invariant is the perpetual `FieldLteField`
+        // `state_constraints`, which already hold at the all-zero birth state.
         let d = subscription_factory_descriptor();
-        let mut found_head = false;
-        let mut found_tail = false;
-        for c in &d.field_constraints {
-            if let FieldConstraint::Equality { field_index, value } = c {
-                if *field_index == SEQ_HEAD_SLOT as u32 && *value == 0 {
-                    found_head = true;
-                }
-                if *field_index == SEQ_TAIL_SLOT as u32 && *value == 0 {
-                    found_tail = true;
-                }
-            }
-        }
-        assert!(found_head, "factory must init head==0");
-        assert!(found_tail, "factory must init tail==0");
+        assert!(
+            d.field_constraints.is_empty(),
+            "subscription factory must carry NO creation-time field_constraints; \
+             head==tail==0 already holds at birth and capacity/owner are bound by \
+             the first configure turn under WriteOnce"
+        );
     }
 
     #[test]

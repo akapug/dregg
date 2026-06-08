@@ -65,6 +65,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Inst.refreshDelegationA
 import Dregg2.Exec.SystemRoots
+import Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitRefreshDelegation
 
@@ -540,6 +541,62 @@ theorem delegRoot_same_commits_equal :
     cellCommitS cN restN (fun i => if i = delegIdx then 11 else othersN i)
       = cellCommitS cN restN (fun i => if i = delegIdx then 11 else othersN i) :=
   rfl
+
+
+/-! ## §G — THE GENUINE CLASS-A `refresh` — `cap_root` RECOMPUTED in-row (inherits the shared primitive).
+
+`refresh` is the SAME runnable cap-graph row as `attenuateA`, so it inherits the GENUINE class-A descriptor
+`attenuateVmDescriptorGenuine` (the opaque `param.CAP_DIGEST_NEW` move REPLACED by the FORCED in-row
+recompute `new_cap_root = hash[edge_leaf, old_cap_root]`, `edge_leaf = hash[holder,target,rights,op]`). The
+`refresh`-specific content is the OP tag `capOp.REFRESH` carried in the edge leaf (the delegation-epoch refresh), plus the existing
+connector to universe-A. We re-export the genuine soundness + edge-binding anti-ghost for `refresh`. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
+  (attenuateVmDescriptorGenuine attenuateGenuineRowGates CapCellSpecGenuine attenuateHashSites
+   attenuateGenuine_sound attenuateGenuine_binds_edge CapRowEncodes)
+open Dregg2.Circuit.Emit.EffectVmEmitCapRoot (capRootHolds)
+
+/-- **`refreshVmDescriptorGenuine`** — the GENUINE `refresh` circuit: definitionally the shared genuine
+cap-root-recompute descriptor (the opaque digest param is GONE; `cap_root` is FORCED in-row). -/
+def refreshVmDescriptorGenuine : EffectVmDescriptor := attenuateVmDescriptorGenuine
+
+/-- **`refreshGenuine_sound` — THE CLASS-A THEOREM for `refresh`.** Satisfying the genuine descriptor's
+frame-freeze gates AND the in-row cap-root recompute forces the GENUINE full per-cell post-state:
+`post.capRoot` is the FORCED advance `hash[edge_leaf, pre.capRoot]` (NOT an opaque parameter), every other
+field frozen. Inherited from the shared `attenuateGenuine_sound`. -/
+theorem refreshGenuine_sound (hash : List ℤ → ℤ) (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
+    (pre post : Dregg2.Circuit.Emit.EffectVmEmitTransferSound.CellState) (capDigestNew : ℤ)
+    (henc : CapRowEncodes env pre post capDigestNew)
+    (hgates : ∀ c ∈ attenuateGenuineRowGates, c.holdsVm env false false)
+    (hrec : capRootHolds hash env) :
+    CapCellSpecGenuine hash env pre post :=
+  attenuateGenuine_sound hash env pre post capDigestNew henc hgates hrec
+
+/-- **`refreshGenuine_binds_edge` — the genuine class-A anti-ghost for `refresh`.** Two genuine `refresh` rows
+with EQUAL published `state_commit` share the old `cap_root` AND every bound edge field
+(holder/target/rights/op) — so tampering the cap-edge mutation moves `cap_root`, moves `state_commit` ⇒
+UNSAT. Inherited from the shared `attenuateGenuine_binds_edge`. -/
+theorem refreshGenuine_binds_edge (hash : List ℤ → ℤ)
+    (hCR : Dregg2.Circuit.Poseidon2Binding.Poseidon2SpongeCR hash)
+    (e₁ e₂ : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
+    (hsCommit₁ : Dregg2.Circuit.Emit.EffectVmEmit.siteHoldsAll hash e₁ attenuateHashSites)
+    (hsCommit₂ : Dregg2.Circuit.Emit.EffectVmEmit.siteHoldsAll hash e₂ attenuateHashSites)
+    (hrec₁ : capRootHolds hash e₁) (hrec₂ : capRootHolds hash e₂)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
+    e₁.loc (sbCol state.CAP_ROOT) = e₂.loc (sbCol state.CAP_ROOT)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.HOLDER)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.HOLDER)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.TARGET)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.TARGET)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.RIGHTS)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.RIGHTS)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.OP)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.OP) :=
+  attenuateGenuine_binds_edge hash hCR e₁ e₂ hsCommit₁ hsCommit₂ hrec₁ hrec₂ hcommit
+
+#assert_axioms refreshGenuine_sound
+#assert_axioms refreshGenuine_binds_edge
+
 
 /-! ## §12 — Axiom-hygiene tripwires. -/
 

@@ -19,7 +19,7 @@
 
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
-    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, FieldConstraint,
+    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor,
     InspectorDescriptor, StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard,
     canonical_program_vk, field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
@@ -168,16 +168,20 @@ pub fn cwm_cell_program() -> CellProgram {
         TransitionCase {
             guard: TransitionGuard::Always,
             constraints: vec![
-                StateConstraint::Immutable {
+                // `WriteOnce` (not `Immutable`): a factory-born mandate is empty,
+                // so the charter config slots are bound once by `init_mandate`
+                // (from zero) and frozen thereafter — the birth-compatible form
+                // of "fixed at creation".
+                StateConstraint::WriteOnce {
                     index: COMMITMENT_ANCHOR_SLOT,
                 },
-                StateConstraint::Immutable {
+                StateConstraint::WriteOnce {
                     index: CHARTER_TERMINAL_SLOT,
                 },
-                StateConstraint::Immutable {
+                StateConstraint::WriteOnce {
                     index: CLEARANCE_GRAPH_ROOT_SLOT,
                 },
-                StateConstraint::Immutable {
+                StateConstraint::WriteOnce {
                     index: SPEND_POLICY_SLOT,
                 },
                 StateConstraint::FieldLteField {
@@ -213,20 +217,30 @@ pub fn cwm_factory_descriptor() -> FactoryDescriptor {
             max_permissions: AuthRequired::Signature,
             attenuatable: true,
         }],
-        field_constraints: vec![
-            FieldConstraint::NonZero {
-                field_index: COMMITMENT_ANCHOR_SLOT as u32,
-            },
-            FieldConstraint::NonZero {
-                field_index: CHARTER_TERMINAL_SLOT as u32,
-            },
-        ],
+        // No creation-time `field_constraints`: a factory-born mandate cell is
+        // born empty and its first `init_mandate` turn binds `COMMITMENT_ANCHOR`
+        // + `CHARTER_TERMINAL` (`WriteOnce`, frozen after), THEN `advance_step`
+        // turns drive the cursor. The birth `NonZero`s validated against
+        // `params.initial_fields`, forcing the seed path to mint placeholders.
+        // Mirror privacy-voting/bounty-board.
+        field_constraints: vec![],
         state_constraints: vec![
-            StateConstraint::Immutable {
+            // Compartment tag + charter bound are bound ONCE by `init_mandate`
+            // (from zero) and frozen thereafter.
+            StateConstraint::WriteOnce {
                 index: COMMITMENT_ANCHOR_SLOT,
             },
-            StateConstraint::MonotonicSequence {
-                seq_index: STEP_CURSOR_SLOT,
+            StateConstraint::WriteOnce {
+                index: CHARTER_TERMINAL_SLOT,
+            },
+            // `Monotonic` (not `MonotonicSequence`): the installed flat program
+            // fires on EVERY turn, so the `init_mandate` setup turn (cursor
+            // 0 → 0) must be admitted while the cursor is still anti-rollback.
+            // `MonotonicSequence`'s strict `+1` is enforced on the method-scoped
+            // `advance_step` case of `cwm_cell_program`; the flat invariant here
+            // is the weaker "cursor never decreases".
+            StateConstraint::Monotonic {
+                index: STEP_CURSOR_SLOT,
             },
             StateConstraint::FieldLteField {
                 left_index: STEP_CURSOR_SLOT,

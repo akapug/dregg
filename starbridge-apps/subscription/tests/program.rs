@@ -419,8 +419,10 @@ fn consume_op_does_not_advance_head() {
 
 #[test]
 fn capacity_overwrite_under_publish_rejected() {
-    // Capacity is Immutable in the `Always` invariants case — any
-    // operation that tries to mutate it is rejected.
+    // Capacity is `WriteOnce` in the `Always` invariants case (the birth-compatible
+    // form of `Immutable`): a born cell binds it once, then it is frozen. `base_state`
+    // has capacity already set (8, nonce>0), so any operation trying to mutate it is
+    // the already-set WriteOnce violation.
     let program = program_without_sender_authorized();
     let old = base_state(0, 0);
     let mut bad_new = publish_new(&old, blake3_field(b"hello"));
@@ -431,10 +433,10 @@ fn capacity_overwrite_under_publish_rejected() {
         .expect_err("capacity mutation must be rejected");
     match err {
         ProgramError::ConstraintViolated {
-            constraint: StateConstraint::Immutable { index },
+            constraint: StateConstraint::WriteOnce { index },
             ..
         } => assert_eq!(index, CAPACITY_SLOT),
-        other => panic!("expected Immutable violation on capacity, got {other:?}"),
+        other => panic!("expected WriteOnce violation on capacity, got {other:?}"),
     }
 }
 
@@ -448,12 +450,14 @@ fn owner_overwrite_under_publish_rejected() {
     let err = program
         .evaluate_with_meta(&bad_new, Some(&old), None, &publish_meta())
         .expect_err("owner mutation must be rejected");
+    // `WriteOnce` (birth-compatible `Immutable`): owner is already bound (base_state,
+    // nonce>0), so an attacker overwrite is the already-set violation.
     match err {
         ProgramError::ConstraintViolated {
-            constraint: StateConstraint::Immutable { index },
+            constraint: StateConstraint::WriteOnce { index },
             ..
         } => assert_eq!(index, OWNER_PK_HASH_SLOT),
-        other => panic!("expected Immutable violation on owner, got {other:?}"),
+        other => panic!("expected WriteOnce violation on owner, got {other:?}"),
     }
 }
 

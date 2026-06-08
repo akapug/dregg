@@ -73,7 +73,7 @@
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellId, CellMode,
     CellProgram, ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor,
-    FieldConstraint, FieldElement, InspectorDescriptor, StarbridgeAppContext, StateConstraint,
+    FieldElement, InspectorDescriptor, StarbridgeAppContext, StateConstraint,
     canonical_program_vk, field_from_u64, hex_encode_32, symbol,
 };
 
@@ -177,14 +177,20 @@ pub const ISSUER_FACTORY_VK: [u8; 32] = *b"starbridge-identity-issuer-fact!";
 /// recursion lands and the program becomes a real recursive AIR.
 ///
 /// The constraint set:
-/// - `Immutable(SCHEMA_COMMITMENT_SLOT)` — schema cannot change.
+/// - `WriteOnce(SCHEMA_COMMITMENT_SLOT)` — the schema commitment is written
+///   exactly once (the issuer's first setup turn writes it from zero) and is
+///   frozen thereafter. This is the birth-compatible form of "set at creation,
+///   immutable after": a factory-born issuer cell mints empty and the schema is
+///   bound by its first turn, so the descriptor carries no creation-time
+///   `field_constraints` (which a factory birth cannot satisfy with the real
+///   32-byte commitment).
 /// - `MonotonicSequence(ISSUANCE_COUNTER_SLOT)` — strictly +1 per turn.
 /// - `Monotonic(REVOCATION_ROOT_SLOT)` — revocation set is append-only.
 /// - `SenderAuthorized(PublicRoot { ISSUER_AUTH_ROOT_SLOT })` — only
 ///   authorized issuer pubkeys may submit issuance turns.
 pub fn issuer_program() -> CellProgram {
     CellProgram::always(vec![
-        StateConstraint::Immutable {
+        StateConstraint::WriteOnce {
             index: SCHEMA_COMMITMENT_SLOT as u8,
         },
         StateConstraint::MonotonicSequence {
@@ -258,16 +264,14 @@ pub fn issuer_factory_descriptor() -> FactoryDescriptor {
             max_permissions: AuthRequired::Signature,
             attenuatable: true,
         }],
-        field_constraints: vec![
-            FieldConstraint::NonZero {
-                field_index: SCHEMA_COMMITMENT_SLOT as u32,
-            },
-            FieldConstraint::NonZero {
-                field_index: ISSUER_AUTH_ROOT_SLOT as u32,
-            },
-        ],
+        // No creation-time `field_constraints`: a freshly-minted issuer cell is
+        // born empty and its first setup turn writes `SCHEMA_COMMITMENT`
+        // (`WriteOnce`, frozen after) and `ISSUER_AUTH_ROOT`. The birth
+        // `NonZero`s validated against `params.initial_fields`, forcing the seed
+        // path to mint `1` placeholders. Mirror privacy-voting/bounty-board.
+        field_constraints: vec![],
         state_constraints: vec![
-            StateConstraint::Immutable {
+            StateConstraint::WriteOnce {
                 index: SCHEMA_COMMITMENT_SLOT as u8,
             },
             StateConstraint::MonotonicSequence {
@@ -849,9 +853,11 @@ mod tests {
             other => panic!("expected CellProgram::Cases, got {other:?}"),
         };
         assert_eq!(constraints.len(), 4);
+        // `WriteOnce` (birth-compatible `Immutable`): the schema commitment is bound
+        // once by the issuer's first setup turn (from zero) and frozen thereafter.
         assert!(constraints.iter().any(|c| matches!(
             c,
-            StateConstraint::Immutable { index } if *index == SCHEMA_COMMITMENT_SLOT as u8
+            StateConstraint::WriteOnce { index } if *index == SCHEMA_COMMITMENT_SLOT as u8
         )));
         assert!(constraints.iter().any(|c| matches!(
             c,
@@ -869,21 +875,17 @@ mod tests {
     }
 
     #[test]
-    fn issuer_factory_constrains_creation_time_slots() {
+    fn issuer_factory_has_no_birth_field_constraints() {
+        // A factory-born issuer cell mints empty. Creation-time `field_constraints`
+        // validate against `params.initial_fields`, which a birth cannot carry the
+        // real 32-byte schema commitment / issuer-auth root through — so we carry
+        // NONE (mirroring privacy-voting/bounty-board). The schema is bound by the
+        // first setup turn under the perpetual `WriteOnce` caveat (frozen after).
         let d = issuer_factory_descriptor();
         assert!(
-            d.field_constraints.iter().any(|c| matches!(
-                c,
-                FieldConstraint::NonZero { field_index } if *field_index == SCHEMA_COMMITMENT_SLOT as u32
-            )),
-            "schema commitment must be required at creation"
-        );
-        assert!(
-            d.field_constraints.iter().any(|c| matches!(
-                c,
-                FieldConstraint::NonZero { field_index } if *field_index == ISSUER_AUTH_ROOT_SLOT as u32
-            )),
-            "issuer auth root must be required at creation"
+            d.field_constraints.is_empty(),
+            "issuer factory must carry NO creation-time field_constraints (birth-incompatible); \
+             the schema commitment is bound once by the first turn under WriteOnce"
         );
     }
 
@@ -893,9 +895,9 @@ mod tests {
         assert!(
             d.state_constraints.iter().any(|c| matches!(
                 c,
-                StateConstraint::Immutable { index } if *index == SCHEMA_COMMITMENT_SLOT as u8
+                StateConstraint::WriteOnce { index } if *index == SCHEMA_COMMITMENT_SLOT as u8
             )),
-            "issuer factory must install Immutable on SCHEMA_COMMITMENT_SLOT"
+            "issuer factory must install WriteOnce on SCHEMA_COMMITMENT_SLOT (bound once, frozen after)"
         );
         assert!(
             d.state_constraints.iter().any(|c| matches!(

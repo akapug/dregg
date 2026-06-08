@@ -81,7 +81,7 @@
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellId, CellMode,
     CellProgram, ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor,
-    FieldConstraint, FieldElement, InputRef, InspectorDescriptor, StarbridgeAppContext,
+    FieldElement, InputRef, InspectorDescriptor, StarbridgeAppContext,
     StateConstraint, WitnessedPredicate, WitnessedPredicateKind, canonical_program_vk,
     field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
@@ -246,14 +246,15 @@ pub fn name_factory_descriptor() -> FactoryDescriptor {
             max_permissions: AuthRequired::Signature,
             attenuatable: true,
         }],
-        field_constraints: vec![
-            FieldConstraint::NonZero {
-                field_index: NAME_HASH_SLOT as u32,
-            },
-            FieldConstraint::NonZero {
-                field_index: EXPIRY_SLOT as u32,
-            },
-        ],
+        // No creation-time `field_constraints`: a freshly-minted name cell is
+        // born empty (all slots zero) and its FIRST `register_name` turn writes
+        // the real `NAME_HASH` + `EXPIRY` under the perpetual caveats below.
+        // (`FieldConstraint::NonZero` validated against `params.initial_fields`,
+        // which a factory birth cannot carry the real 32-byte hash through — it
+        // forced the seed path to mint a `1` placeholder. Mirror
+        // privacy-voting/bounty-board: drop the birth NonZero, let `WriteOnce`
+        // admit the first write from zero.)
+        field_constraints: vec![],
         state_constraints: vec![
             StateConstraint::WriteOnce {
                 index: NAME_HASH_SLOT as u8,
@@ -978,19 +979,19 @@ mod tests {
     }
 
     #[test]
-    fn factory_descriptor_constrains_name_hash_slot() {
+    fn factory_descriptor_has_no_birth_field_constraints() {
+        // A factory-born name cell mints empty (all slots zero). Creation-time
+        // `field_constraints` validate against `params.initial_fields`, which a
+        // birth cannot carry the real 32-byte name hash through — so we carry
+        // NONE (mirroring privacy-voting/bounty-board). The NAME_HASH/EXPIRY
+        // gating lives in the perpetual `state_constraints` (WriteOnce/Monotonic),
+        // which admit the first write from zero and bite thereafter. See
+        // `factory_descriptor_bakes_slot_caveats`.
         let d = name_factory_descriptor();
         assert!(
-            d.field_constraints
-                .iter()
-                .any(|c| matches!(c, FieldConstraint::NonZero { field_index } if *field_index == NAME_HASH_SLOT as u32)),
-            "name factory must constrain NAME_HASH_SLOT to be non-zero"
-        );
-        assert!(
-            d.field_constraints
-                .iter()
-                .any(|c| matches!(c, FieldConstraint::NonZero { field_index } if *field_index == EXPIRY_SLOT as u32)),
-            "name factory must constrain EXPIRY_SLOT to be non-zero"
+            d.field_constraints.is_empty(),
+            "name factory must carry NO creation-time field_constraints (birth-incompatible); \
+             the NAME_HASH/EXPIRY gating is the perpetual WriteOnce/Monotonic state_constraints"
         );
     }
 

@@ -433,22 +433,23 @@ fn governance_factory_descriptor_state_constraints_match_documented_invariants()
 
     let d = governance_factory_descriptor();
 
-    // Committee root must be Immutable.
+    // Committee root must be WriteOnce (birth-compatible constitutional freeze:
+    // bound once by the first constitute turn from zero, frozen thereafter).
     assert!(
         d.state_constraints.iter().any(|c| matches!(
             c,
-            StateConstraint::Immutable { index } if *index == GOVERNANCE_COMMITTEE_ROOT_SLOT
+            StateConstraint::WriteOnce { index } if *index == GOVERNANCE_COMMITTEE_ROOT_SLOT
         )),
-        "factory descriptor must declare Immutable on GOVERNANCE_COMMITTEE_ROOT_SLOT"
+        "factory descriptor must declare WriteOnce on GOVERNANCE_COMMITTEE_ROOT_SLOT"
     );
 
-    // Threshold must be Immutable.
+    // Threshold must be WriteOnce (bound once, frozen — no "anyone can commit" downgrade).
     assert!(
         d.state_constraints.iter().any(|c| matches!(
             c,
-            StateConstraint::Immutable { index } if *index == THRESHOLD_SLOT
+            StateConstraint::WriteOnce { index } if *index == THRESHOLD_SLOT
         )),
-        "factory descriptor must declare Immutable on THRESHOLD_SLOT"
+        "factory descriptor must declare WriteOnce on THRESHOLD_SLOT"
     );
 
     // Dispute window must be Monotonic.
