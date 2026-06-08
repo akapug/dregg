@@ -188,7 +188,7 @@ fn session_gc_integration() {
     assert!(drop_msg.is_some());
 
     // A processes the drop
-    let result = export_gc.process_drop(exported_cell, fed(0xBB));
+    let result = export_gc.process_drop_with_session(exported_cell, fed(0xBB), 0);
     assert_eq!(result, DropResult::CanRevoke);
 
     // A releases the session export
@@ -324,19 +324,19 @@ fn multi_federation_gc_independence() {
     assert_eq!(export_gc.get(&shared_cell).unwrap().total_refs, 3);
 
     // Drop from AA
-    let r = export_gc.process_drop(shared_cell, fed(0xAA));
+    let r = export_gc.process_drop_with_session(shared_cell, fed(0xAA), 0);
     assert_eq!(r, DropResult::StillHeld);
 
     // Drop from BB
-    let r = export_gc.process_drop(shared_cell, fed(0xBB));
+    let r = export_gc.process_drop_with_session(shared_cell, fed(0xBB), 0);
     assert_eq!(r, DropResult::StillHeld);
 
     // Drop from CC (last holder)
-    let r = export_gc.process_drop(shared_cell, fed(0xCC));
+    let r = export_gc.process_drop_with_session(shared_cell, fed(0xCC), 0);
     assert_eq!(r, DropResult::CanRevoke);
 
     // Invalid drop (already dropped)
-    let r = export_gc.process_drop(shared_cell, fed(0xAA));
+    let r = export_gc.process_drop_with_session(shared_cell, fed(0xAA), 0);
     assert_eq!(r, DropResult::Invalid);
 }
 

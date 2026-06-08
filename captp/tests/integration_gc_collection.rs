@@ -52,7 +52,7 @@ fn export_import_drop_sweep_stale_ref_fails() {
     assert!(import_gc.is_empty());
 
     // A: process the drop → CanRevoke.
-    let result = export_gc.process_drop(cap, fed_b);
+    let result = export_gc.process_drop_with_session(cap, fed_b, 0);
     assert_eq!(result, DropResult::CanRevoke);
     assert_eq!(export_gc.get(&cap).unwrap().total_refs, 0);
 
@@ -108,20 +108,20 @@ fn multi_holder_last_drop_triggers_can_revoke() {
     assert_eq!(export_gc.get(&cap).unwrap().total_refs, 3);
 
     assert_eq!(
-        export_gc.process_drop(cap, fed(0x01)),
+        export_gc.process_drop_with_session(cap, fed(0x01), 0),
         DropResult::StillHeld
     );
     assert_eq!(
-        export_gc.process_drop(cap, fed(0x02)),
+        export_gc.process_drop_with_session(cap, fed(0x02), 0),
         DropResult::StillHeld
     );
     assert_eq!(
-        export_gc.process_drop(cap, fed(0x03)),
+        export_gc.process_drop_with_session(cap, fed(0x03), 0),
         DropResult::CanRevoke
     );
 
     // Drop from an already-dropped federation → Invalid.
-    assert_eq!(export_gc.process_drop(cap, fed(0x01)), DropResult::Invalid);
+    assert_eq!(export_gc.process_drop_with_session(cap, fed(0x01), 0), DropResult::Invalid);
 }
 
 // =============================================================================
@@ -189,7 +189,7 @@ fn gc_sweep_idempotent() {
     let cap = cell(0xBB);
 
     export_gc.record_export(cap, fed(0x10), 1);
-    export_gc.process_drop(cap, fed(0x10));
+    export_gc.process_drop_with_session(cap, fed(0x10), 0);
 
     let first = export_gc.gc_sweep();
     assert!(first.contains(&cap));

@@ -160,7 +160,7 @@ fn test_gc_drop_ref_decrements_export() {
     assert_eq!(msg.cell_id, cell);
 
     // Fed A processes the drop.
-    let result = gc_a.process_drop(cell, fed_b_id());
+    let result = gc_a.process_drop_with_session(cell, fed_b_id(), 0);
     assert_eq!(result, DropResult::CanRevoke);
     assert_eq!(gc_a.get(&cell).unwrap().total_refs, 0);
 
@@ -433,10 +433,10 @@ fn test_partial_gc_multiple_exports() {
     assert_eq!(gc_a.len(), 3);
 
     // B drops cell_1 and cell_3 but keeps cell_2.
-    let r1 = gc_a.process_drop(cell_1, fed_b_id());
+    let r1 = gc_a.process_drop_with_session(cell_1, fed_b_id(), 0);
     assert_eq!(r1, DropResult::CanRevoke);
 
-    let r3 = gc_a.process_drop(cell_3, fed_b_id());
+    let r3 = gc_a.process_drop_with_session(cell_3, fed_b_id(), 0);
     assert_eq!(r3, DropResult::CanRevoke);
 
     // Sweep dead entries.
