@@ -160,6 +160,30 @@ on the running Rust, not just in Lean.** Crypto is real `ed25519_dalek`
   `finding_enliven_error_taxonomy_is_a_membership_oracle` is **flipped to DEFENDED**:
   it now asserts the BOUNDARY representation a remote sees is IDENTICAL across
   present-but-dead vs absent (no "found"/"expired"/"exhausted" tell).
+- **CAPTP-DEEP-1 (CLOSED — `redteam`-DEFENDED, `captp/src/{sturdy,handoff}.rs` +
+  Lean `Exec/CapTPHandoffSound.lean` §6b):** *Was:* `validate_handoff` carried a
+  cert `nonce` and a `HandoffError::ReplayDetected` variant but consulted **no
+  nonce registry** — so against an unlimited-use ("durable handoff") swiss entry
+  (`max_uses = None`) the SAME presentation re-validated forever; the only replay
+  bound was the swiss `max_uses`, and the cert nonce was decorative. *Fix:* the
+  target `SwissTable` now carries a consumed-nonce registry
+  (`seen_handoff_nonces`, with read-only `handoff_nonce_seen` + `register_handoff_nonce`);
+  `validate_handoff` rejects a presentation whose nonce was already consumed
+  (`ReplayDetected`, §6c — checked BEFORE `enliven` so a replay burns no use) and
+  registers the nonce on the success path (§7b). A cert nonce is therefore
+  **consume-once INDEPENDENTLY of the swiss `max_uses`**. The red-team test
+  `finding_handoff_nonce_replay_is_not_prevented` is **flipped to DEFENDED**: the
+  first present succeeds, the next two replays return `ReplayDetected`, the swiss
+  `use_count` advanced exactly once (replays burned nothing), and a DISTINCT
+  (fresh-nonce) cert for the same swiss still validates. **The Lean blind spot is
+  closed too:** `Exec/CapTPHandoffSound.lean` §6b adds the replay-aware gate
+  `validateHandoff2R` over a seen-nonce set (mirror of the Rust registry) and
+  proves `replay_rejected` (a consumed nonce ⇒ gate returns `false`),
+  `consume_then_replay_rejected` (present-once-then-replay-fails), and
+  `fresh_nonce_still_validates` (the tooth rejects only re-presented nonces, not
+  legitimate fresh handoffs) — non-vacuous on the reference EUF-CMA carrier.
+  `#assert_axioms`-clean, no `sorry`. The pre-fix `validateHandoff2` gate could
+  not even EXPRESS this property; §6b is the proof extension that now catches it.
 
 ### A3 — Byzantine peer / strand
 
@@ -386,6 +410,7 @@ small N (L4).
 | Handoff unforgeability (B2) | no key ⇒ no accept | tamper + interception + untrusted all rejected; real ed25519 | **HOLDS** (evidence) |
 | Handoff non-amplification (B3) | granted ≤ held (vs swiss entry) | both lattice + mask amplifications rejected | **HOLDS** (evidence) |
 | Handoff reject is side-effect-free | pure decision `Prop` | read-only `check`; enliven only on success | **HOLDS — F-2 CLOSED** |
+| Handoff nonce is consume-once (replay) | **`CapTPHandoffSound` §6b `replay_rejected`** (replay-aware gate) | `SwissTable` seen-nonce registry; replay ⇒ `ReplayDetected` (indep. of swiss `max_uses`) | **HOLDS — CAPTP-DEEP-1 CLOSED (+ proof extended)** |
 | GC no-premature-reclaim (B4, lease) | lease only reclaims expired | (lease path proven) | holds for lease path |
 | GC session-Byzantine resistance | wrong session can't drop | session path: rejected | **HOLDS** for session path |
 | GC drop authentication | **refcount-drop path modeled** (`CapTPGCConcrete.processDrop` + `f11_session_free_drop_denied`) | legacy `process_drop` fail-closed (`#[deprecated]`, returns `Invalid`) | **HOLDS — F-11 CLOSED (+ proof extended)** |
@@ -451,55 +476,91 @@ the running Rust against the Lean-proven invariants. **Owned by this workflow**;
 it touches no SWAP/circuit/apps/lightclient code. It depends on the real
 `dregg-captp`, `dregg-blocklace`, `dregg-cell`, `dregg-types` crates (no mocks).
 
-- `tests/captp_attacks.rs` — 8 tests: confinement, permission/mask amplification,
-  forgery, interception-replay, untrusted-introducer (DEFENDED) + F-2 grief +
-  F-3 oracle (FINDINGS asserted reproducible).
-- `tests/gc_attacks.rs` — 5 tests: wrong-session drop, over-drop (DEFENDED) +
-  F-11 legacy session-free bypass (now **DEFENDED** — fail-closed) + F-12 re-export
-  supersede + F-12 new-session over-drop (now **DEFENDED** — per-ref scoping).
-- `tests/blocklace_attacks.rs` — 4 tests: self-fork detection, cross-creator
-  forgery, idempotent replay (DEFENDED) + the malleability-framing PROBE
-  (DEFENDED by dalek-v2 strictness).
+- `tests/captp_attacks.rs` — confinement, permission/mask amplification, forgery,
+  interception-replay, untrusted-introducer (DEFENDED) + F-2 grief + F-3 oracle
+  (now **DEFENDED**).
+- `tests/captp_deep_attacks.rs` — custom-vk lattice corners, revoke/expiry
+  boundaries, recipient-rebind, swiss-swap (DEFENDED) + **CAPTP-DEEP-1 nonce
+  replay (now DEFENDED — `ReplayDetected` consume-once)**.
+- `tests/gc_attacks.rs` + `tests/gc_deep_attacks.rs` — wrong-session drop, over-drop,
+  holder/cross-cell isolation, sweep, no-phantom (DEFENDED) + F-11 legacy
+  session-free bypass (**DEFENDED** — fail-closed) + F-12 re-export supersede +
+  new-session over-drop (**DEFENDED** — per-ref scoping).
+- `tests/blocklace_attacks.rs` + `tests/blocklace_deep_attacks.rs` — self-fork,
+  cross-creator forgery, idempotent replay, fork (seq/order/buried/in-delta),
+  payload+pred tamper (DEFENDED) + the malleability-framing PROBE (DEFENDED by
+  dalek-v2 strictness) + **CHECKPOINT-AUTH (DEEP 5/6 — DEFENDED)**.
+- `tests/net_eclipse_attacks.rs` — **F-5 / L4**: sybil-flood eager capture, anchor
+  flap-starvation, byzantine-anchor pinning (DEFENDED).
+- `tests/pipeline_attacks.rs` — **F-10**: pipeline bridge binds the real sender,
+  no `[0;32]` placeholder (DEFENDED).
+- `tests/multinode_byzantine_chaos.rs` — in-process cluster of real `Blocklace`
+  nodes; chaos arrival orders, partitions, floods, eclipse (CatchupConverges +
+  StrandIntegrity + Byzantine exclusion, DEFENDED).
+- `tests/devnet_adversarial.rs` — live-origin probes incl.
+  `devnet_status_withholds_private_counts_f8` (network-gated).
+- node-side: `node/src/api.rs` `f1_*` (rate-limit) + `f8_*` (`/status`) — 6 tests,
+  DEFENDED (run via `cargo test -p dregg-node --bin dregg-node -- f1_ f8_`).
 - `src/lib.rs` — adversary toolkit (keypair minting, bit-flip tamper,
   `AttackOutcome` taxonomy).
 
-Run: `cargo test -p dregg-redteam -- --nocapture`. A `finding_*` test that goes
-RED in future = the underlying issue was fixed (good) — update the assertion.
+Run: `cargo test -p dregg-redteam -- --nocapture` (**76 tests, 0 failed**). A
+`finding_*` test that goes RED in future = the underlying issue regressed — the
+assertion is a tripwire pinned to the DEFENDED outcome.
 
 ---
 
 ## 6. Real attack output (verbatim, `cargo test -p dregg-redteam`)
 
+**Whole suite: 76 tests, 0 failed.** EVERY `finding_*` tripwire now asserts the
+DEFENDED outcome (the attack fails / the leak is closed). Key DEFENDED lines:
+
 ```
-running 4 tests   (blocklace_attacks)
-test attack_byzantine_self_fork_is_detected_and_evicted ... [BL ATTACK 1] self-fork: DEFENDED (detected + flagged)
-ok
-test attack_forge_block_for_other_creator_is_rejected ... [BL ATTACK 2] cross-creator forgery: DEFENDED (sig rejected)
-ok
-test attack_replay_same_block_is_idempotent_not_equivocation ... [BL ATTACK 4] identical replay: DEFENDED (idempotent)
-ok
-test probe_signature_malleability_framing ... [BL ATTACK 3 / PROBE] malleated-sig verifies=false receive_block=Err(InvalidSignature { creator: [202, 147, ...], seq: 1 }) honest_framed=false
-ok
-test result: ok. 4 passed; 0 failed
+# captp_attacks (the F-2 / F-3 handoff findings — FLIPPED to DEFENDED)
+[ATTACK 4 / DEFENDED] amplifying-cert rejection no longer consumes a use (F-2 closed): DEFENDED
+[ATTACK 5 / DEFENDED] enliven boundary error is opaque present-vs-absent (F-3 closed): DEFENDED
+[ATTACK 1] confinement vs 258 guesses: DEFENDED   [ATTACK 2/2b] amplification: DEFENDED
+[ATTACK 3/3b] tamper + interception: DEFENDED      [ATTACK 6] untrusted introducer: DEFENDED
 
-running 8 tests   (captp_attacks)
-test attack_amplify_effect_mask_is_rejected ... [ATTACK 2b] effect-mask amplification (both forms): DEFENDED
-test attack_amplify_permissions_is_rejected ... [ATTACK 2] permission amplification: DEFENDED
-test attack_confinement_guess_swiss_number_is_rejected ... [ATTACK 1] confinement vs 258 guesses: DEFENDED
-test attack_forge_introducer_signature_is_rejected ... [ATTACK 3] post-sign field tamper: DEFENDED
-test attack_intercept_cert_present_as_wrong_recipient_is_rejected ... [ATTACK 3b] cert-interception replay: DEFENDED
-test attack_untrusted_introducer_is_rejected ... [ATTACK 6] untrusted introducer: DEFENDED
-test finding_amplifying_handoff_consumes_a_use_on_rejection ... [ATTACK 4 / FINDING] amplifying-cert rejection still consumed a use: BROKEN (FINDING)
-test finding_enliven_error_taxonomy_is_a_membership_oracle ... [ATTACK 5 / FINDING] enliven error taxonomy distinguishes present-vs-absent: LEAK (FINDING)
-test result: ok. 8 passed; 0 failed
+# captp_deep_attacks (the CAPTP-DEEP-1 nonce-replay finding — FLIPPED to DEFENDED)
+[CAPTP DEEP 1 / DEFENDED] handoff nonce replay PREVENTED (replay -> ReplayDetected;
+  nonce consume-once independent of swiss max_uses): CAPTP-DEEP-1 closed
+[CAPTP DEEP 2..8] custom-vk / incomparability / revoke / expiry / rebind / swiss-swap: DEFENDED
 
-running 5 tests   (gc_attacks)
-test attack_byzantine_wrong_session_drop_is_noop ... [GC ATTACK 1] wrong-session drop: DEFENDED
-test attack_overdrop_does_not_underflow_or_overrevoke ... [GC ATTACK 4] over-drop: DEFENDED (no underflow)
-test finding_legacy_process_drop_bypasses_session_byzantine_defense ... [GC ATTACK 2 / F-11] legacy session-free process_drop: DEFENDED (denied, fail-closed)
-test finding_reexport_supersedes_session_for_all_existing_refs ... [GC ATTACK 3 / F-12] session is PER-REF; re-export keeps the original session's rights: DEFENDED
-test new_session_cannot_overdrop_into_original_sessions_refs ... [GC ATTACK 3b / F-12] new session cannot over-drop into another session's refs: DEFENDED
-test result: ok. 5 passed; 0 failed
+# gc_attacks + gc_deep_attacks (F-11 / F-12 — FLIPPED to DEFENDED)
+[GC ATTACK 2 / F-11] legacy session-free process_drop: DEFENDED (denied, fail-closed)
+[GC ATTACK 3 / F-12] session is PER-REF; re-export keeps the original session's rights: DEFENDED
+[GC ATTACK 3b / F-12] new session cannot over-drop into another session's refs: DEFENDED
+[GC ATTACK 1] wrong-session drop: DEFENDED   [GC ATTACK 4] over-drop: DEFENDED (no underflow)
+[GC DEEP 1..7] holder/cross-cell isolation, sweep, no-premature-reclaim, no-phantom: DEFENDED
+
+# blocklace_attacks + blocklace_deep_attacks (CHECKPOINT-AUTH — FLIPPED to DEFENDED)
+[BL DEEP 5 / CHECKPOINT-AUTH] from_checkpoint REJECTS forged unsigned blocks: DEFENDED
+[BL DEEP 6 / CHECKPOINT-AUTH] from_checkpoint REJECTS dangling-predecessor checkpoint: DEFENDED
+[BL ATTACK 1] self-fork: DEFENDED   [BL ATTACK 2] cross-creator forgery: DEFENDED
+[BL ATTACK 3 / PROBE] malleated-sig verifies=false receive_block=Err(InvalidSignature) honest_framed=false
+[BL DEEP 1..4,7,8] fork (seq/order/buried/in-delta), payload+pred tamper: DEFENDED
+
+# net_eclipse_attacks (F-5 / L4 — DEFENDED)
+[NET ATTACK 1 / F-5] sybil-flood eager-set capture: DEFENDED (anchor pinned)
+[NET ATTACK 2 / F-5] anchor flap starvation: DEFENDED (retained + pinned)
+[NET ATTACK 3 / F-5] byzantine anchor pinning: DEFENDED (graylisted, not pinned)
+
+# pipeline_attacks (F-10 — DEFENDED)
+[PIPELINE ATTACK / DEFENDED] production bridge binds real sender, no [0;32] placeholder (F-10 closed)
+[PIPELINE ATTACK 2 / DEFENDED] every chain leg binds the real sender (no unbound default)
+```
+
+The node-side findings (F-1 rate-limit, F-8 `/status`) live in `node/src/api.rs`
+(`cargo test -p dregg-node --bin dregg-node -- f1_ f8_`, **6 passed; 0 failed**):
+
+```
+test api::tests::f1_proxied_clients_get_distinct_buckets_defended ... ok
+test api::tests::f1_untrusted_xff_spoof_is_ignored_defended ... ok
+test api::tests::f1_xff_left_prepend_spoof_is_inert_defended ... ok
+test api::tests::f1_real_limiter_isolates_proxied_clients_defended ... ok
+test api::tests::f8_status_does_not_leak_private_counts_defended ... ok
+test api::tests::f8_opt_in_re_exposes_counts_control ... ok
 ```
 
 Live devnet probe (`GET /status`, real response — L1/F-8):
@@ -522,6 +583,7 @@ Live devnet `POST /turn/submit` → **405** (mutation disabled on the deployment
 |----|-------|----------|-------|-------|-----|
 | F-2 | grief / DoS | MED | `captp/src/handoff.rs` enliven-before-amplify | CapTP | **CLOSED** — read-only `check`; enliven only on success (redteam DEFENDED) |
 | F-3 | info leak | LOW | `captp/src/sturdy.rs` EnlivenError taxonomy | CapTP | **CLOSED** — opaque `"denied"` at boundary (redteam DEFENDED) |
+| CAPTP-DEEP-1 | handoff nonce replay | MED | `captp/src/{sturdy,handoff}.rs` no nonce registry | CapTP | **CLOSED** — `SwissTable` seen-nonce registry; `validate_handoff` rejects replayed nonce (`ReplayDetected`) consume-once, independent of swiss `max_uses` + Lean `CapTPHandoffSound` §6b `replay_rejected`/`consume_then_replay_rejected` (proof extended; redteam DEFENDED) |
 | F-11 | premature reclaim | HIGH | `captp/src/gc.rs::process_drop` session-free | CapTP | **CLOSED** — `#[deprecated]` fail-closed + Lean `CapTPGCConcrete.f11_session_free_drop_denied` (refcount-drop path; redteam DEFENDED) |
 | F-12 | GC session granularity | MED | `captp/src/gc.rs` holder-scoped session | CapTP | **CLOSED** — per-ref session buckets + Lean scoping proof (redteam DEFENDED) |
 | F-10 | pipeline sender-binding | MED | `captp/src/pipeline.rs` bridge placeholder | CapTP | **CLOSED** — mandatory `CapTpState::new(fed)` binds real sender (redteam DEFENDED) |
@@ -535,15 +597,37 @@ Live devnet `POST /turn/submit` → **405** (mutation disabled on the deployment
 | F-7 | finalized-equivocator / partial-replication | OPEN | finality | research | slashing + safety proof |
 | L3/L5/L7/L8 | topology / timing / shielding-label | by-design | gossip + cap-graph | research | metadata-privacy pillar |
 
+**Final tally.** Every actively-asserted finding tripwire is now DEFENDED. The
+nine attack-surface findings that gated this ledger — **F-1, F-2, F-3, F-5, F-8,
+F-10, F-11, F-12, CHECKPOINT-AUTH** — are all CLOSED + red-team DEFENDED (the
+attack fails / the leak is closed), and the deep-suite finding **CAPTP-DEEP-1**
+(handoff nonce replay) is closed in the same pass. Two of these (F-11, CAPTP-DEEP-1)
+also closed a **Lean proof blind spot** (the refcount-drop path in
+`CapTPGCConcrete` §2/§4a; the replay tooth in `CapTPHandoffSound` §6b) — the fix
+is not just in the Rust, the proof now catches the finding. The whole redteam
+suite is **76 tests, 0 failed**; the node `f1_*`/`f8_*` tests are **6 passed, 0
+failed**.
+
+**The single genuinely-open, terminal item is F-4 (Sybil admission MECHANISM)** —
+this is an ember design decision (stake / proof-of-personhood / follow-graph
+scoping), not a code bug: a strand is just a keypair and there is no admission
+cost. It cannot be "fixed" by hardening a code path; it requires choosing the
+admission model. The byzantine-repelling tooth catches *equivocation*, not
+*identity inflation*; that gap is by-design until the mechanism is chosen.
+(F-9 recipient-leak and L3/L5/L7/L8 are the by-design metadata-privacy research
+pillar; F-6/F-7 are consensus chaos/finality items needing a running n≥4 net —
+all separately tracked, none a regression of a closed finding.)
+
 **Chaos-phase priorities (ranked):** F-6 (stand up a Byzantine committee — the
 biggest *unverified-operationally* surface), then the metadata-privacy research
-pillar (L1–L8). (F-5 eclipse-at-small-N and the CHECKPOINT-AUTH recovery-path
-bypass are now CLOSED + red-team DEFENDED.)
+pillar (L1–L8).
 
 **What the red team could NOT break (operational evidence the property holds on
 the running system, not just in Lean):** swiss confinement, handoff
-unforgeability, handoff non-amplification, GC session-Byzantine resistance (on the
-session-aware path), GC underflow safety, blocklace self-fork detection,
-cross-creator forgery rejection, replay idempotency, and — beyond what the proof
-covers — honest-creator non-framing via signature malleability (closed by
-`ed25519_dalek` v2 strictness).
+unforgeability, handoff non-amplification, **handoff nonce replay (consume-once,
+independent of swiss `max_uses` — CAPTP-DEEP-1)**, GC session-Byzantine resistance
+(on the session-aware path), GC underflow safety, blocklace self-fork detection,
+cross-creator forgery rejection, replay idempotency, eclipse-at-small-N (anchor
+pinning), checkpoint-load authentication, and — beyond what the proof covers —
+honest-creator non-framing via signature malleability (closed by `ed25519_dalek`
+v2 strictness).
