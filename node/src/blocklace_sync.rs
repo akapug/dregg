@@ -116,6 +116,15 @@ pub struct BlocklaceHandle {
     /// makes catch-up over lossy/out-of-order gossip reconstruct the
     /// causally-closed finalized set. See `crate::catchup`.
     pub orphans: Arc<RwLock<crate::catchup::OrphanBuffer>>,
+    /// Capped exponential backoff for re-requesting missing predecessors. The
+    /// reactive `handle_push` pull always fires on a fresh gap (first miss is
+    /// immediate), but the PERIODIC `catchup_tick` re-request is gated through
+    /// this so a still-missing block is not hammered every sweep — the per-block
+    /// re-request window doubles (capped) until the block arrives, at which point
+    /// the entry is cleared. Bounds request bandwidth against a slow/withholding
+    /// peer while preserving eventual re-request (liveness). See
+    /// `dregg_net::peer_score::RequestBackoff`.
+    pub pull_backoff: Arc<RwLock<dregg_net::peer_score::RequestBackoff<BlockId>>>,
 }
 
 /// A read-only view of one blocklace block, shaped to mirror the wasm
@@ -406,12 +415,24 @@ impl BlocklaceHandle {
             let still_missing: Vec<BlockId> =
                 roots.into_iter().filter(|r| !lace.contains(r)).collect();
             drop(lace);
-            if !still_missing.is_empty() {
+            // BACKOFF GATE: only (re-)request roots whose backoff window has
+            // elapsed. A freshly-missing root requests immediately; a root that
+            // keeps not arriving is requested with a doubling (capped) window so
+            // we do not hammer a slow/withholding peer every sweep. Roots that
+            // arrive get their backoff cleared in `handle_push`.
+            let due: Vec<BlockId> = {
+                let mut bo = self.pull_backoff.write().await;
+                still_missing
+                    .into_iter()
+                    .filter(|r| bo.should_request(*r))
+                    .collect()
+            };
+            if !due.is_empty() {
                 debug!(
-                    roots = still_missing.len(),
-                    buffered, "catch-up: re-requesting missing predecessors"
+                    roots = due.len(),
+                    buffered, "catch-up: re-requesting missing predecessors (backoff-gated)"
                 );
-                self.broadcast_gossip_message(&BlocklaceGossipMessage::Pull(still_missing))
+                self.broadcast_gossip_message(&BlocklaceGossipMessage::Pull(due))
                     .await;
             }
         }
@@ -1016,6 +1037,13 @@ pub async fn run_blocklace_sync(
         auto_approve_joins, // F-CRIT-2: gated by main.rs on --auto-approve-joins CLI flag OR .devnet marker
         checkpoint_interval: blocklace_checkpoint_interval,
         orphans: Arc::new(RwLock::new(crate::catchup::OrphanBuffer::new())),
+        // Missing-block re-request backoff: base 1s, capped at 30s. A fresh gap
+        // re-requests promptly; a persistently-missing predecessor backs off to
+        // a 30s ceiling rather than being hammered every catch-up sweep.
+        pull_backoff: Arc::new(RwLock::new(dregg_net::peer_score::RequestBackoff::new(
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        ))),
     };
 
     info!("blocklace gossip layer initialized, processing messages");
@@ -1206,9 +1234,28 @@ async fn handle_push(
             constitution.auto_evict(proof);
         }
         drop(constitution);
+
+        // GOSSIP-LAYER PENALTY: the transport peer that relayed the equivocation
+        // is graylisted in the gossip reputation scoreboard — it is evicted from
+        // every topic's eclipse-resistant eager set so a Byzantine relay stops
+        // carrying full messages. This is distinct from the CONSENSUS-layer
+        // auto-evict above (which removes the *equivocating creator* from
+        // membership): here we penalize the *relay* at the network layer.
+        // (The block itself is still retained as slashable evidence and continues
+        // to propagate — only this peer's relay privilege is demoted.)
+        handle.gossip.penalize_equivocation_relay(from).await;
     }
 
     let inserted = outcome.inserted.len();
+
+    // Clear pull-backoff for every block that just landed: a later miss of the
+    // same id (after a re-org / GC) should start fresh, not deep in backoff.
+    if !outcome.inserted.is_empty() {
+        let mut bo = handle.pull_backoff.write().await;
+        for b in &outcome.inserted {
+            bo.clear(&b.id());
+        }
+    }
 
     // Persist newly inserted blocks to the store (batch write for efficiency).
     if !outcome.inserted.is_empty() {
