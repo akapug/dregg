@@ -15,11 +15,22 @@
 use dregg_circuit::effect_vm::{CellState, Effect as VmEffect};
 use dregg_circuit::field::BabyBear;
 use dregg_sdk::full_turn_proof::{prove_turn_self_sovereign, verify_full_turn};
+use std::sync::Mutex;
+
+/// Process-global lock that SERIALIZES the env-var-mutating tests in this binary.
+/// `DREGG_DESCRIPTOR_PROVER` is process-global, so two tests racing `set_var` /
+/// `remove_var` across the default multi-threaded runner could make a flag-ON test
+/// prove a descriptor proof and then VERIFY with the flag concurrently flipped OFF
+/// (taking the hand-AIR arm, which rejects the descriptor-shaped proof on width).
+/// Each test holds this guard for its whole set→prove→verify→remove window, so the
+/// flag is stable per test. Poison is irrelevant (we clear the var on entry anyway).
+static FLAG_LOCK: Mutex<()> = Mutex::new(());
 
 /// The flagged production swap: a transfer turn, proven+verified through the descriptor
 /// interpreter, end-to-end.
 #[test]
 fn cutover_flag_routes_transfer_through_descriptor_and_still_verifies() {
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let initial = CellState::new(1000, 0);
     let effects = vec![VmEffect::Transfer { amount: 100, direction: 1 }];
     let turn_hash = [0xABu8; 32];
@@ -57,6 +68,7 @@ fn cutover_flag_routes_transfer_through_descriptor_and_still_verifies() {
 /// `cutover_ready_selector` (Burn = selector 46) and the widened verify arm.
 #[test]
 fn cutover_flag_routes_burn_through_descriptor_and_still_verifies() {
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let initial = CellState::new(1000, 0);
     let effects = vec![VmEffect::Burn {
         target_hash: BabyBear::new(0xB0B),
@@ -91,13 +103,54 @@ fn cutover_flag_routes_burn_through_descriptor_and_still_verifies() {
     verify_result.expect("descriptor-prover burn proof must verify through the descriptor arm");
 }
 
+/// The flagged production swap, GRADUATED FROZEN-FRAME effect: a single `BridgeFinalize` turn,
+/// proven + verified through the descriptor interpreter end-to-end. Exercises the widened
+/// `cutover_ready_selector` (BridgeFinalize = selector 41, nonce-tick-reconciled) and the widened
+/// verify arm. BridgeFinalize is balance-NEUTRAL: the balance is frozen, the nonce ticks.
+#[test]
+fn cutover_flag_routes_bridge_finalize_through_descriptor_and_still_verifies() {
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let initial = CellState::new(1000, 0);
+    let mut finalize_hash = [BabyBear::ZERO; 8];
+    finalize_hash[0] = BabyBear::new(0xF1);
+    let effects = vec![VmEffect::BridgeFinalize { finalize_hash }];
+    let turn_hash = [0xEFu8; 32];
+
+    // SAFETY: own-process test binary; no other thread reads/writes this env var.
+    unsafe {
+        std::env::set_var("DREGG_DESCRIPTOR_PROVER", "1");
+    }
+
+    let proof = prove_turn_self_sovereign(&initial, &effects, turn_hash)
+        .expect("descriptor-prover bridge-finalize proof should generate");
+    assert!(proof.components.has_state_transition);
+
+    let old_commit = initial.state_commitment;
+    let mut expected_final = initial.clone();
+    // balance-frozen (bridge finalize moves no transparent value); nonce ticks (non-NoOp row).
+    expected_final.nonce = 1;
+    expected_final.refresh_commitment();
+    let new_commit = expected_final.state_commitment;
+
+    let verify_result = verify_full_turn(&proof, old_commit, new_commit);
+
+    // SAFETY: own-process test binary.
+    unsafe {
+        std::env::remove_var("DREGG_DESCRIPTOR_PROVER");
+    }
+
+    verify_result
+        .expect("descriptor-prover bridge-finalize proof must verify through the descriptor arm");
+}
+
 /// Control: with the flag UNSET (default), the SAME transfer turn proves through the
 /// hand-AIR and verifies through the hand-AIR arm — the default production path is
 /// unchanged.
 #[test]
 fn default_path_uses_hand_air_and_still_verifies() {
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     // Ensure the flag is not set in this process.
-    // SAFETY: own-process test binary.
+    // SAFETY: own-process test binary; serialized by FLAG_LOCK.
     unsafe {
         std::env::remove_var("DREGG_DESCRIPTOR_PROVER");
     }

@@ -73,8 +73,11 @@ pub const DREGG_EFFECTVM_ATTENUATEA_V1_JSON: &str = include_str!("../descriptors
 pub const DREGG_EFFECTVM_ATTENUATEA_V1_FP: &str = "c9132246c00ed71bc4f297803e631b849fa2e9ee2c481e543d4d4e3a9c5a97e0";
 pub const DREGG_EFFECTVM_BRIDGECANCEL_V1_JSON: &str = include_str!("../descriptors/dregg-effectvm-bridgecancel-v1.json");
 pub const DREGG_EFFECTVM_BRIDGECANCEL_V1_FP: &str = "acfb87fed619fef91f7f0cc3cc03181c2c9e398a3cf18dbfe34ab75bc6b57155";
+// bridgeFinalize GRADUATED into the cutover (nonce-tick reconcile): the Lean emit module
+// `EffectVmEmitBridgeFinalize` ticks the runtime nonce (`gNonce`). The prior JSON body froze the
+// nonce (made the honest trace UNSAT). Name unchanged (`-v1`); body + fingerprint updated.
 pub const DREGG_EFFECTVM_BRIDGEFINALIZE_V1_JSON: &str = include_str!("../descriptors/dregg-effectvm-bridgefinalize-v1.json");
-pub const DREGG_EFFECTVM_BRIDGEFINALIZE_V1_FP: &str = "67facf67fe2bb6c760ff72a397f52e4b6172f611c5d468f83bea77eb04d2f598";
+pub const DREGG_EFFECTVM_BRIDGEFINALIZE_V1_FP: &str = "28dbdb4b3198918a2d69a1f71bb56b9782b4bbf961d994b0dbd46ab4c52f64d6";
 pub const DREGG_EFFECTVM_BRIDGELOCK_V1_JSON: &str = include_str!("../descriptors/dregg-effectvm-bridgelock-v1.json");
 pub const DREGG_EFFECTVM_BRIDGELOCK_V1_FP: &str = "16d0afc4afd206d4c9fd91c1f4d4b84ef688518b5bdee851460f6f1736432b74";
 pub const DREGG_EFFECTVM_BRIDGEMINT_V1_JSON: &str = include_str!("../descriptors/dregg-effectvm-bridgemint-v1.json");
@@ -93,8 +96,12 @@ pub const DREGG_EFFECTVM_CREATECOMMITTEDESCROW_V1_JSON: &str = include_str!("../
 pub const DREGG_EFFECTVM_CREATECOMMITTEDESCROW_V1_FP: &str = "963a4b07617d0d787950183770e1acceac12f502136f1ca2474851eb43c0c66a";
 pub const DREGG_EFFECTVM_CREATEESCROW_V1_JSON: &str = include_str!("../descriptors/dregg-effectvm-createescrow-v1.json");
 pub const DREGG_EFFECTVM_CREATEESCROW_V1_FP: &str = "41198cc4252aa87c0a104722b5aae2299cc4843461ea0d60bb16a1446b4abdd1";
-pub const DREGG_EFFECTVM_CREATESEALPAIR_V1_JSON: &str = include_str!("../descriptors/dregg-effectvm-createsealpair-v1.json");
-pub const DREGG_EFFECTVM_CREATESEALPAIR_V1_FP: &str = "06b4420758d139eda33fd0931477e8ccc9a3b199831fab7efcdfb287b4ee8de0";
+// createSealPair GRADUATED into the cutover (nonce-tick reconcile): the Lean emit module
+// `EffectVmEmitCreateSealPair` ticks the runtime nonce (`gNonce`), renamed to `-v2`. The prior
+// `-v1` JSON froze the nonce (the `exec_nonce_is_frozen_not_ticked` cutover bug) and made the
+// honest trace UNSAT under the descriptor.
+pub const DREGG_EFFECTVM_CREATESEALPAIR_V2_JSON: &str = include_str!("../descriptors/dregg-effectvm-createsealpair-v2.json");
+pub const DREGG_EFFECTVM_CREATESEALPAIR_V2_FP: &str = "9bcd6405fc00862e6a9ac881fd2c82df2a28747aa3c95311e86f8aea1d0f2e28";
 pub const DREGG_EFFECTVM_DROPREFA_V2_JSON: &str = include_str!("../descriptors/dregg-effectvm-dropRefA-v2.json");
 pub const DREGG_EFFECTVM_DROPREFA_V2_FP: &str = "3daa5525aa9a4accef64e8cdbec2a13ed85cb7f7fe2abe9468acb19ce64b8c32";
 pub const DREGG_EFFECTVM_EMITEVENT_V1_JSON: &str = include_str!("../descriptors/dregg-effectvm-emitEvent-v1.json");
@@ -189,7 +196,7 @@ pub const SELECTOR_DESCRIPTORS: &[(usize, &str, &str, &str)] = &[
     (25, "dregg-effectvm-emitEvent-v1", DREGG_EFFECTVM_EMITEVENT_V1_JSON, DREGG_EFFECTVM_EMITEVENT_V1_FP), // EMIT_EVENT: emitEventVmDescriptor
     (26, "dregg-effectvm-setPermissionsA-v1", DREGG_EFFECTVM_SETPERMISSIONSA_V1_JSON, DREGG_EFFECTVM_SETPERMISSIONSA_V1_FP), // SET_PERMISSIONS: setPermsVmDescriptor
     (27, "dregg-effectvm-setVK-v1", DREGG_EFFECTVM_SETVK_V1_JSON, DREGG_EFFECTVM_SETVK_V1_FP), // SET_VERIFICATION_KEY: setVKVmDescriptor
-    (28, "dregg-effectvm-createsealpair-v1", DREGG_EFFECTVM_CREATESEALPAIR_V1_JSON, DREGG_EFFECTVM_CREATESEALPAIR_V1_FP), // CREATE_SEAL_PAIR: createSealPairVmDescriptor
+    (28, "dregg-effectvm-createsealpair-v2", DREGG_EFFECTVM_CREATESEALPAIR_V2_JSON, DREGG_EFFECTVM_CREATESEALPAIR_V2_FP), // CREATE_SEAL_PAIR: createSealPairVmDescriptor (GRADUATED: nonce-tick)
     (29, "dregg-effectvm-refreshDelegation-v1", DREGG_EFFECTVM_REFRESHDELEGATION_V1_JSON, DREGG_EFFECTVM_REFRESHDELEGATION_V1_FP), // REFRESH_DELEGATION: refreshVmDescriptor
     (30, "dregg-effectvm-attenuateA-v1", DREGG_EFFECTVM_ATTENUATEA_V1_JSON, DREGG_EFFECTVM_ATTENUATEA_V1_FP), // REVOKE_DELEGATION: revokeVmDescriptor (cap-root move)
     (31, "dregg-effectvm-createcell-v1", DREGG_EFFECTVM_CREATECELL_V1_JSON, DREGG_EFFECTVM_CREATECELL_V1_FP), // CREATE_CELL: createCellVmDescriptor
@@ -235,7 +242,7 @@ pub const ALL_DESCRIPTORS: &[(&str, &str, &str)] = &[
     ("dregg-effectvm-createcellfromfactory-v1", DREGG_EFFECTVM_CREATECELLFROMFACTORY_V1_JSON, DREGG_EFFECTVM_CREATECELLFROMFACTORY_V1_FP),
     ("dregg-effectvm-createcommittedescrow-v1", DREGG_EFFECTVM_CREATECOMMITTEDESCROW_V1_JSON, DREGG_EFFECTVM_CREATECOMMITTEDESCROW_V1_FP),
     ("dregg-effectvm-createescrow-v1", DREGG_EFFECTVM_CREATEESCROW_V1_JSON, DREGG_EFFECTVM_CREATEESCROW_V1_FP),
-    ("dregg-effectvm-createsealpair-v1", DREGG_EFFECTVM_CREATESEALPAIR_V1_JSON, DREGG_EFFECTVM_CREATESEALPAIR_V1_FP),
+    ("dregg-effectvm-createsealpair-v2", DREGG_EFFECTVM_CREATESEALPAIR_V2_JSON, DREGG_EFFECTVM_CREATESEALPAIR_V2_FP),
     ("dregg-effectvm-dropRefA-v2", DREGG_EFFECTVM_DROPREFA_V2_JSON, DREGG_EFFECTVM_DROPREFA_V2_FP),
     ("dregg-effectvm-emitEvent-v1", DREGG_EFFECTVM_EMITEVENT_V1_JSON, DREGG_EFFECTVM_EMITEVENT_V1_FP),
     ("dregg-effectvm-enlivenRefA-v1", DREGG_EFFECTVM_ENLIVENREFA_V1_JSON, DREGG_EFFECTVM_ENLIVENREFA_V1_FP),
