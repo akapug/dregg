@@ -20,7 +20,11 @@ dregg-turn = { path = "../turn", features = ["lean-shadow"] }
 dregg-lean-ffi = { path = "../dregg-lean-ffi", features = ["lean-lib"] }
 dregg-token = { path = "../token", default-features = false, features = ["macaroon", "biscuit", "rand-deps"] }
 dregg-persist = { path = "../persist" }
-dregg-federation = { path = "../federation" }
+# `lean-admission`: the node routes the F-4 strand-admission gate through the VERIFIED Lean
+# `dregg_strand_admit` export (the node already links the Lean archive via `dregg-lean-ffi` above), so
+# `AdmissionRegistry::admitted` is the verified rule, not a Rust mirror. The Rust gate stays as the
+# differential sibling + fallback.
+dregg-federation = { path = "../federation", features = ["lean-admission"] }
 dregg-sdk = { path = "../sdk" }
 dregg-intent = { path = "../intent" }
 dregg-circuit = { path = "../circuit" }

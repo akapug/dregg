@@ -495,8 +495,31 @@ impl BlocklaceHandle {
     pub async fn poll_finalized_blocks(&self) -> Vec<FinalizedBlock> {
         let lace = self.lace.read().await;
         let constitution = self.constitution.read().await;
-        let participants = constitution.current.participants.clone();
+        let raw_participants = constitution.current.participants.clone();
         drop(constitution);
+
+        // ── VERIFIED FEDERATION-ADMISSION GATE (F-4) ──────────────────────────────────────────────
+        // Filter the participant set through the VERIFIED Lean strand-admission rule
+        // (`Dregg2.Distributed.StrandAdmission.admitted`, the `@[export] dregg_strand_admit` the node
+        // CALLS via `dregg_lean_ffi::verified_admits`): the constitution members are the bootstrap
+        // SEEDS (the trust root, admitted by construction), so a fresh free Sybil keypair that is NOT
+        // a constitutional member and has no vouch/bond standing is DROPPED before it can be a
+        // leader candidate for `tau` — closing F-4 (unlimited free strands) on the live path. The
+        // Lean theorem `strand_admit_eq_admitted` proves the export's verdict IS the verified
+        // `admitted` predicate, so the participant set the node finalizes over is the one the
+        // VERIFIED rule admits. Default ON (`DREGG_STRAND_ADMISSION_GATE`); fail-safe (the gate is
+        // the identity on the constitutional members, and `admitted` falls back to its Rust sibling
+        // when the Lean archive is absent).
+        let participants =
+            crate::strand_admission_gate::admitted_participants(&raw_participants, &raw_participants);
+        if participants.len() != raw_participants.len() {
+            warn!(
+                admitted = participants.len(),
+                proposed = raw_participants.len(),
+                "verified strand-admission gate (F-4) filtered un-admitted strands out of the \
+                 finality participant set"
+            );
+        }
 
         let mut executed_up_to = self.executed_up_to.write().await;
 
