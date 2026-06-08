@@ -29,7 +29,9 @@ pub struct EventualRef {
     /// Federation ID of the turn's origin. None = local federation, Some = remote.
     /// When set, the pipeline executor must wait for the remote federation's receipt
     /// before this reference can be resolved.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Always serialize: postcard is positional, so a skipped field desyncs the
+    // byte stream on deserialize. `#[serde(default)]` keeps JSON tolerant.
+    #[serde(default)]
     pub federation_id: Option<[u8; 32]>,
 }
 

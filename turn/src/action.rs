@@ -106,10 +106,14 @@ pub struct Action {
     /// `Custom` predicate STARK proofs, etc.) are encoded as
     /// [`WitnessBlob`] entries here.
     ///
-    /// Turn::hash v3 covers this field (see [`Action::hash`]); existing
-    /// signatures that signed an empty vec are byte-identical to actions
-    /// that omitted the field (postcard skips empty vecs by default).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Turn::hash v3 covers this field (see [`Action::hash`]). Signatures are
+    /// computed over `Action::hash`, not over the postcard bytes, so always
+    /// serializing this field does not change any signature. It MUST always be
+    /// serialized: `Action` rides inside `Turn` over postcard (a positional
+    /// format) — an omitted field desyncs the byte stream on deserialize
+    /// ("Found an Option discriminant that wasn't 0 or 1" / "expected more
+    /// data"). An empty `Vec` is one length byte; postcard does NOT skip it.
+    #[serde(default)]
     pub witness_blobs: Vec<WitnessBlob>,
 }
 
@@ -427,7 +431,8 @@ pub enum Authorization {
         key_ref: TokenKeyRef,
         /// Optional discharge tokens satisfying third-party caveats
         /// (each itself verifiable against a known gateway pubkey).
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        // Always serialize (postcard positional wire format — see witness_blobs).
+        #[serde(default)]
         discharges: Vec<Vec<u8>>,
     },
 }
@@ -497,7 +502,8 @@ pub struct BearerCapProof {
     /// this mask. This must be a subset of the delegator's `allowed_effects` (if any).
     /// Enforces E-language facet attenuation: a delegated bearer can only restrict,
     /// never amplify, the delegator's facet.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Always serialize (postcard positional wire format — see witness_blobs).
+    #[serde(default)]
     pub allowed_effects: Option<dregg_cell::EffectMask>,
 }
 
@@ -849,7 +855,8 @@ pub enum Effect {
         /// When present, the executor uses the committed conservation path instead
         /// of cleartext value comparison. All notes in a turn must either all have
         /// commitments or all lack them (mixed is rejected).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        // Always serialize (postcard positional wire format — see witness_blobs).
+        #[serde(default)]
         value_commitment: Option<[u8; 32]>,
     },
     /// Create a new note (add commitment to note tree).
@@ -863,11 +870,13 @@ pub enum Effect {
         encrypted_note: Vec<u8>,
         /// Optional Pedersen value commitment (compressed Ristretto point, 32 bytes).
         /// When present, the executor uses the committed conservation path.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        // Always serialize (postcard positional wire format — see witness_blobs).
+        #[serde(default)]
         value_commitment: Option<[u8; 32]>,
         /// Optional range proof attesting the committed value is in [0, 2^64).
         /// Required when value_commitment is present to prevent hidden inflation.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        // Always serialize (postcard positional wire format — see witness_blobs).
+        #[serde(default)]
         range_proof: Option<Vec<u8>>,
     },
     /// Create a new sealer/unsealer pair for partition-tolerant capability transfer.
