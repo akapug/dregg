@@ -35,8 +35,8 @@ carriers in `Dregg2/Crypto/PortalFloor.lean` (the 8 post-cutover §8 TCB portals
 | 1 | ed25519 EUF-CMA | `SignatureKernel.unforgeable` | signature unforgeability (Edwards-curve DLog) | `PortalFloor.lean:47` |
 | 2 | STARK/FRI extractability | `VerifierKernel.extractable` | FRI proximity + Fiat-Shamir soundness | `PortalFloor.lean:77` |
 | 3 | Pedersen/DLog binding | `PedersenKernel.binding` | discrete-log hardness | `PortalFloor.lean:110` |
-| 4 | Poseidon2 CR | `Poseidon2Kernel.collisionHard` | collision-resistance | `PortalFloor.lean:149` |
-| 5 | BLAKE3 CR + preimage | `Blake3Kernel.collisionHard` | collision + preimage resistance | `PortalFloor.lean:182` |
+| 4 | Poseidon2 CR (now stated for ONE permutation call) | `Poseidon2Kernel.collisionHard` / `SpongeReduction.CompressionCR` | collision-resistance of a single `perm` invocation (sponge/2-to-1 list CR is REDUCED to it, §1) | `PortalFloor.lean:149`, `SpongeReduction.lean §1` |
+| 5 | BLAKE3 CR + preimage | `Blake3Kernel.collisionHard` | collision + preimage resistance (the cell-commitment v3/v4 binding REDUCES to it, §1b) | `PortalFloor.lean:182` |
 | 6 | Nullifier unlinkability | `NullifierKernel.unlinkable` | anonymity (determinism is PROVED, free) | `PortalFloor.lean:210` |
 | 7 | AEAD + X25519 authenticity | `SealKernel.authentic` | ChaCha20-Poly1305 / X25519 authenticity | `PortalFloor.lean:236` |
 | 8 | HMAC-SHA256 unforgeability | `MacKernelE.unforgeable` | keyed-hash EUF-CMA | `PortalFloor.lean:270` |
@@ -80,13 +80,41 @@ sponge construction, not an abstract injective hash:
   babyBearD4W16` WITH `spongeCR`, so the named assumption documents EXACTLY which efficient
   Poseidon2 it bridges to — the real fast circuit's sponge, not "some injective sponge".
 
-So `Poseidon2SpongeCR` IS the CR of the real BabyBear-W16 PaddingFreeSponge. Classification:
-**IRREDUCIBLE PRIMITIVE** at the sponge level (= primitive #4, lifted from 2-to-1 compression to the
-list-sponge); the permutation/parameter correspondence to the real AIR is discharged structurally
-(re-derived dims + literal constants).
+So `Poseidon2SpongeCR` IS the CR of the real BabyBear-W16 PaddingFreeSponge. The permutation/parameter
+correspondence to the real AIR is discharged structurally (re-derived dims + literal constants).
 
 The in-circuit witness `Poseidon2Emit.spongeCompressN` is proved FAITHFUL to the emitted `merkle_hash`
 chain by `emit_faithful_poseidon2_compress` (`Poseidon2Binding.lean:18,200`).
+
+### `Poseidon2SpongeCR` is now DISCHARGEABLE to the PERMUTATION CR (extension of #13 — a REAL reduction)
+
+`Dregg2/Crypto/SpongeReduction.lean` (NEW) reclassifies the sponge-level CR from IRREDUCIBLE to
+**DISCHARGEABLE**: it models `circuit/src/poseidon2.rs::hash_many` (`:369`) LINE-FOR-LINE as a
+`SpongeMachine` (`perm`/`init`/`absorb`/`squeeze`/`chunksOf` rate-4) and proves the sponge over that
+construction is CR, reduced to ONE permutation call:
+
+| Carrier | Classification | Discharge |
+|---------|----------------|-----------|
+| `CompressionCR M` (one `perm ∘ absorb` call is CR as a chaining fn) | **IRREDUCIBLE PRIMITIVE** (now #4, restated for a SINGLE permutation call) | named carrier |
+| `SqueezeBindsReachable M` (slot-0 truncation residual) | **IRREDUCIBLE** (the narrow-output bit) | named carrier |
+| `InitStepSeparated M` (length-prefix domain sep ⇒ prefix-free) | STRUCTURAL | proved for the `Reference` machine by construction |
+
+- **HEADLINE `spongeCR_of_reduction`** (`SpongeReduction.lean §3`) — `Poseidon2SpongeCR M.spongeOf`
+  PROVED from the three above. A digest collision ⇒[`SqueezeBindsReachable`] a FINAL-STATE collision
+  ⇒[`foldl_step_eq`, the MD induction peeling one `CompressionCR` per rate-block] equal block lists
+  ⇒[`chunksOf_flatten`, structural] equal inputs. The `init`-vs-`step` boundary that the
+  length-extension argument hinges on is closed by `InitStepSeparated`.
+- `realizedSpongeOfReduction` (`§5`) packages it back as a `Poseidon2Binding.Poseidon2RealizedSponge`,
+  so the `StateCommit` tower's `spongeCR` FIELD is now SUPPLIED BY THE REDUCTION, not assumed at the
+  sponge level.
+- Non-vacuity BOTH ways: `Reference.refMachine` (injective `perm`/`init`/`squeeze`) makes all three
+  carriers HOLD and FIRES the whole reduction (`refSpongeCR`); `Reference.badMachine` (a CONSTANT
+  squeeze) provably FALSIFIES `SqueezeBindsReachable` (`badMachine_not_squeezeBinds`) — the carriers
+  are meaningful, not relabelled `True`.
+
+**Net effect:** the IRREDUCIBLE floor under the sponge SHRINKS from "the unbounded list-hash is
+injective" to "ONE permutation call is CR (`CompressionCR`, the genuine round-function assumption) +
+the slot-0 truncation residual" — a strictly smaller, deeper carrier.
 
 ### The three injectivity portals — ALL DISCHARGED from `Poseidon2SpongeCR`
 
@@ -104,11 +132,16 @@ provably injective — NOT a crypto assumption); the `Reference` section PROVES 
 `Value → ℕ` encoder by mutual structural induction (`encV_inj`/`encFields_inj`, `:328–366`), so the
 bundle fires on a real instance. The sole crypto carrier is the shared `spongeCR`.
 
-### `compressInjective` (2-to-1) — IRREDUCIBLE PRIMITIVE #4
+### `compressInjective` (2-to-1) — now DISCHARGEABLE to the SAME single permutation call
 
 `StateCommit.lean:207` `compressInjective : ∀ a b c d, h a b = h c d → a=c ∧ b=d` — the 2-to-1 node
-CR. Used by `recStateCommit_binds` (`StateCommit.lean:535`) to make the full-state root an injective
-commitment to (live-cell digest, rest hash). Same primitive #4, stated for the 2-input compression.
+CR (`hash_2_to_1` / `hash_4_to_1`, `circuit/src/poseidon2.rs:341,357`). Used by `recStateCommit_binds`
+(`StateCommit.lean:535`) to make the full-state root an injective commitment to (live-cell digest,
+rest hash). `Dregg2/Crypto/CommitmentBinding.lean §1` REDUCES it (`compressInjective_of_compress2`) to
+`Compress1CR` — the SAME single-permutation-call compression (`squeeze ∘ perm ∘ pack₂`) as the sponge
+— peeled once, composed with the structural injectivity of the 2-element rate packing (`pack₂_inj`).
+So the 2-to-1 portal needs NO crypto beyond the one permutation call; non-vacuous (`badCompress1`, a
+constant compression, FALSIFIES `Compress1CR` with NO axioms used).
 
 ### system_roots / listDigest / keyedDigest — DISCHARGEABLE to `compressNInjective` (= #4)
 
@@ -122,7 +155,30 @@ commitment to (live-cell digest, rest hash). Same primitive #4, stated for the 2
   primitive #4 chained.
 
 **Verdict:** the ENTIRE commitment / state-root / system-roots / list-digest tower is DISCHARGEABLE to
-the single IRREDUCIBLE PRIMITIVE #4 (Poseidon2 CR), which is itself pinned to the real circuit AIR.
+the single IRREDUCIBLE PRIMITIVE #4 (Poseidon2 CR), which is itself now reduced to ONE permutation
+call (`SpongeReduction.CompressionCR`, §1 above) and pinned to the real circuit AIR.
+
+### §1b — the BLAKE3 cell-commitment v3/v4 binding — DISCHARGEABLE to primitive #5 (BLAKE3 CR)
+
+`cell/src/commitment.rs::compute_canonical_state_commitment` is a SEPARATE commitment scheme (a
+domain-separated `blake3::Hasher::new_derive_key(CANONICAL_COMMITMENT_CONTEXT)` absorbing a canonical
+byte layout — `cell.id`/`public_key`/mode byte/state/permissions/caps-root/.../`system_roots_digest`,
+the v3→v4 context bumps preventing cross-version collisions). `Dregg2/Crypto/CommitmentBinding.lean §2`
+REDUCES its binding to BLAKE3 CR:
+
+- `Blake3Commitment Cell Digest` bundles a canonical `serialize : Cell → List Nat` (the
+  `hasher.update(...)` byte layout), its STRUCTURAL injectivity `serialize_inj` (prefix-free per
+  field: the `Some/None` tag bytes, the `auth_byte`+`Custom`-vk discipline, fixed-position
+  absorptions), the BLAKE3 CR carrier `Blake3Kernel.collisionHard` (IRREDUCIBLE PRIMITIVE #5), and
+  `factor : commit c = hash (serialize c)`.
+- **`blake3_commitment_binds`** — equal canonical commitments ⇒ equal cells, GIVEN the CR carrier:
+  `hash (ser c) = hash (ser c')` ⇒[#5 `noCollision`] `ser c = ser c'` ⇒[`serialize_inj`] `c = c'`.
+  Depends on NO axioms (the reduction is purely constructive over the named carrier). Non-vacuity:
+  the `PortalFloor.Reference` BLAKE3 instance (CR HOLDS, echo oracle) + an injective serialization
+  fire `refCommitment_binds`.
+
+**Verdict:** the BLAKE3 cell-commitment binding stands on a NAMED primitive (BLAKE3 CR, #5) composed
+with a structural serialization injectivity — not a blanket assumption.
 
 ---
 
