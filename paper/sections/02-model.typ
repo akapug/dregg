@@ -217,7 +217,7 @@ The critical invariant: *everything that crosses a trust boundary is post-quantu
 
 === The Effect VM <sec-effect-vm-intro>
 
-The Effect VM is the primary execution mechanism for cells. It is a domain-specific virtual machine whose instruction set matches Dregg's state transition primitives. Each turn produces a single STARK proof regardless of effect count. The AIR trace---approximately 151 columns after Stage 7-$gamma$.0 + $gamma$.2 Phase 1 + sovereign-witness Phase 1, with public inputs growing per-cell to $tilde$73 felts---encodes:
+The Effect VM is the primary execution mechanism for cells. It is a domain-specific virtual machine whose instruction set matches Dregg's state transition primitives. Each turn produces a single STARK proof regardless of effect count. The AIR is migrating from hand-written constraints to a single descriptor-driven trace *emitted from the verified Lean executor* (see @sec-formal), so its width is derived from the executor semantics rather than hand-maintained; per the migration discipline we do not pin a fixed column count here. The trace encodes:
 
 - Pre-state commitment (Poseidon2 hash of cell state before each effect)
 - Effect opcode and operands

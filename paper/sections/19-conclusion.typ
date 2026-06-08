@@ -16,7 +16,7 @@ The cross-cell algebraic binding (Stage 7-$gamma$.2 Phase 1) ties bilateral effe
 
 The constraint DSL demonstrates that proof system diversity need not fragment the ecosystem. A single specification targets the appropriate proof system; the choice between post-quantum STARKs, Mina-compatible Pickles recursion, EVM-verifiable Groth16, or Midnight-native ZKIR is made at prove-time based on the verification context. EROS-style factories and the Effect VM extend this flexibility to cell construction and turn execution: constrained creation with machine-auditable transparency, and arbitrary-length turns proven in a single STARK regardless of effect count.
 
-The predicate substrate---a 21+ variant `StateConstraint` vocabulary plus a unified `WitnessedPredicate` shape with kind registry---generalizes macaroon-lineage caveats to cover slot-bound, contextual, temporal, conservation, sender-bound, rate-limited, and witness-attached predicates under one substrate. The new `Authorization::Custom { predicate, descriptor }` lets apps define multisig, DAO-quorum, time-locked, capability-conditional, and compute-attested authorization purely through the predicate registry, without kernel changes. Storage primitives become cell-program patterns: CapInbox, ProgrammableQueue, PubSubTopic, BlindedQueue, and RelayOperator are factory-declared compositions of slot caveats and bearer capabilities, enforced by the same executor loop as every other turn.
+The predicate substrate---a 29-variant `StateConstraint` vocabulary plus a unified `WitnessedPredicate` shape with kind registry---generalizes macaroon-lineage caveats to cover slot-bound, contextual, temporal, conservation, sender-bound, rate-limited, and witness-attached predicates under one substrate. The new `Authorization::Custom { predicate, descriptor }` lets apps define multisig, DAO-quorum, time-locked, capability-conditional, and compute-attested authorization purely through the predicate registry, without kernel changes. Storage primitives become cell-program patterns: CapInbox, ProgrammableQueue, PubSubTopic, BlindedQueue, and RelayOperator are factory-declared compositions of slot caveats and bearer capabilities, enforced by the same executor loop as every other turn.
 
 The economic model demonstrates that federated validation is viable without inflation: small purpose-built committees earn directly from fee distribution, with privacy-compatible staking via range proofs and slashing enforced at spend-time through encumbrance.
 
@@ -35,7 +35,7 @@ The Golden Vision---*full distributed-semantics algebraic constraint, a folded D
 The system is operational. What works today:
 
 - All STARK proofs use real Poseidon2 constraints over BabyBear4 (124-bit security)---no vacuous proofs.
-- Effect VM AIR at $tilde$151 columns after Stage 7-$gamma$.0 + $gamma$.2 Phase 1 + sovereign-witness Phase 1.
+- Effect VM AIR emitted from the verified Lean executor (the ONE-circuit migration), gated by a descriptor-vs-hand-AIR differential.
 - Stage 7-$gamma$.0 shared-PI bundle joins per-cell proofs of one turn; Stage 7-$gamma$.2 Phase 1 PI-only bilateral binding via canonical `transfer_id` / `grant_id` / `intro_id`; off-AIR `dregg-verifier bilateral-pair` subcommand.
 - Unified `Federation` type with $"federation_id" = "BLAKE3"("committee_pubkeys" || "epoch")$; `AttestedRoot` v3 binds federation context.
 - `KnownFederations` registry persisted at `<data-dir>/known_federations/<federation_id>.json`; `register-federation` CLI; `CapTpState::sync_known_federations` integration.
@@ -43,7 +43,7 @@ The system is operational. What works today:
 - Sovereign cells via both proof-carrying and witness-injection paths; `peer_exchange` direct-exchange with signature + monotonic sequence + optional STARK `transition_proof`.
 - EROS-style factories with derived VKs, provenance tracking, flash-loan-style atomic spawning.
 - Faceted capabilities (`EffectMask` with monotonic narrowing) and bearer capabilities; sealed cap `allowed_effects` round-trip in the v3 sealed-plaintext format.
-- 21+ variant `StateConstraint` vocabulary; `WitnessedPredicate` unification with kind registry; three surface variants (`StateConstraint::Witnessed`, `Preconditions::witnessed`, `CapabilityCaveat::Witnessed`).
+- 29-variant `StateConstraint` vocabulary; `WitnessedPredicate` unification with kind registry; three surface variants (`StateConstraint::Witnessed`, `Preconditions::witnessed`, `CapabilityCaveat::Witnessed`).
 - `Authorization::Custom { predicate, descriptor }` for app-defined auth modes; CI-guarded carve-out list for `Authorization::Unchecked`.
 - Storage primitives as cell-program patterns: CapInbox, ProgrammableQueue, PubSubTopic, BlindedQueue, RelayOperator.
 - DFA routing as first-class userspace caveat; `RouteTarget::Userspace { kind, payload }` dispatch; governance-bound atomic table swaps.
@@ -75,6 +75,6 @@ What remains:
 - CDT-revocation $arrow.l.r$ revocation-channel link (two disjoint mechanisms today).
 - Equivocation rule unification (seq-based vs round-based).
 
-The remaining work is well-understood. The execution, proof, authorization, sovereignty, federation, interop, predicate, storage, and userspace layers are production-grade. The privacy credential pipeline (unlinkable multi-show), the recursive aggregation layer (`plonky3_recursion_impl` lift or Kimchi/Pickles outer layer), and the full folded-mesh Golden Vision are designed, with the substrate in place.
+The remaining work is well-understood. The execution, proof, authorization, sovereignty, federation, interop, predicate, storage, and userspace layers of the heritage runtime (`dreggrs`) are integration-complete. What changed most since the May draft is the *verification* status: the turn executor, the predicate vocabulary, the circuit emission, and the distributed-protocol and CapTP guarantees are now *machine-checked in Lean* (`dregg2`, @sec-formal) --- consensus finality, strand integrity, CRDT convergence, membership safety, joint-turn atomicity, cell handoff, revocation, and the CapTP handoff/GC/settlement core --- each `#assert_axioms`-clean with a Rust differential. These proofs are additive attestation: the live node still runs heritage Rust on several paths, and the Lean$arrow.l.r$Rust swap and the ONE-circuit collapse are in flight, gated by differential harnesses and a cutover ledger, not yet complete. The privacy credential pipeline (unlinkable multi-show), the recursive aggregation layer (`plonky3_recursion_impl` lift or Kimchi/Pickles outer layer), and the full folded-mesh Golden Vision are designed, with the substrate in place.
 
-Silver landed. Golden is approached.
+Silver landed. The distributed laws are now proved, not asserted. Golden is approached.

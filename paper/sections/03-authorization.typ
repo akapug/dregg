@@ -72,9 +72,9 @@ Both modes evaluate identical rules over identical data. The proof attests to th
 
 == Predicate Substrate <sec-predicate-substrate>
 
-Authorization is one consumer of a broader predicate substrate that spans slot caveats, per-action preconditions, capability caveats, and now `Authorization::Custom`. The substrate is organized in two halves: a 21+ variant `StateConstraint` vocabulary for cleartext or commitment-bearing predicates, and a unified `WitnessedPredicate` shape for predicates that carry a witness/proof against a commitment.
+Authorization is one consumer of a broader predicate substrate that spans slot caveats, per-action preconditions, capability caveats, and now `Authorization::Custom`. The substrate is organized in two halves: a 29-variant `StateConstraint` vocabulary for cleartext or commitment-bearing predicates, and a unified `WitnessedPredicate` shape for predicates that carry a witness/proof against a commitment. The count of 29 is not an estimate: it is the output of the drift-guarded ontology generator (`site/tools/gen-ontology-catalog.js --check`, which parses the canonical `cell/src/program.rs` enums and cross-checks the `wasm/src/bindings.rs` JSON projection); fifteen of the 29 are locally evaluable (checkable by a verifier without the executor) and fourteen require the executor's transition context.
 
-=== `StateConstraint`: 21+ variants
+=== `StateConstraint`: 29 variants
 
 Slot caveats (declared per-cell in the `CellProgram`, enforced by the executor on every state-modifying turn) span the following families:
 
@@ -93,7 +93,7 @@ Slot caveats (declared per-cell in the `CellProgram`, enforced by the executor o
     [Composition], [`AnyOf`, `Custom { ir_hash, descriptor, reads }`],
     [Preimage], [`PreimageGate { commitment_index }`],
   ),
-  caption: [21+ slot caveat variants in `StateConstraint`. The legacy `QueueConstraint` vocabulary in `storage::programmable` is aliased to these post-Lane-G Phase 1; storage primitives become *cell-program patterns* expressed in this vocabulary (see @sec-storage-as-cell-programs).],
+  caption: [The 29 slot-caveat variants of `StateConstraint` (count produced by the drift-guarded ontology generator from `cell/src/program.rs`). The legacy `QueueConstraint` vocabulary in `storage::programmable` is aliased to these post-Lane-G Phase 1; storage primitives become *cell-program patterns* expressed in this vocabulary (see @sec-storage-as-cell-programs).],
 )
 
 === `WitnessedPredicate`: the unification

@@ -490,7 +490,7 @@ The EVM bridge includes a VK registry with governance, an incremental Merkle tre
 
 == Effect VM: The Sovereign Proof Mechanism <sec-effect-vm>
 
-The Effect VM is the primary proof mechanism for sovereign and hosted cells alike. It is a multi-row AIR circuit that proves arbitrary turns---one STARK per cell touched in a turn, regardless of per-cell effect count. The trace is approximately *151 columns* after Stage 7-$gamma$.0 + $gamma$.2 Phase 1 + sovereign-witness Phase 1, with per-cell public inputs growing to $tilde$73 felts plus per-`Custom`-effect entries. The full instruction set spans state mutation, bilateral capability flow, CapTP, queue, and dispatch:
+The Effect VM is the primary proof mechanism for sovereign and hosted cells alike. It is a multi-row AIR circuit that proves arbitrary turns---one STARK per cell touched in a turn, regardless of per-cell effect count. The circuit is migrating from hand-written constraints to a single descriptor-driven AIR *emitted from the verified Lean executor* (the ONE-circuit migration, @sec-formal), gated by a differential harness that proves the emitted prover and the legacy hand-AIR accept exactly the same witnesses before any hand-AIR is retired; we therefore state the emission discipline rather than a fixed column count. The full instruction set spans state mutation, bilateral capability flow, CapTP, queue, and dispatch:
 
 #figure(
   table(
