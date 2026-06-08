@@ -1,4 +1,5 @@
 import Dregg2.Exec.RecordKernel
+import Dregg2.Exec.TurnExecutorFull
 
 /-!
 # Argus — the state-transformer IR (the cornerstone)
@@ -24,6 +25,14 @@ epilogue (fee · nonce · receipt, conservation-modulo-burn) wraps this body.
 namespace Dregg2.Circuit.Argus
 
 open Dregg2.Exec
+-- `Caps` (= `Label → List Cap`) and `Cap` live in `Dregg2.Authority`; we open it so the
+-- side-table write-primitives below can name them. NOTE (the autobind lesson): `Caps` would
+-- otherwise bind as a fresh universe variable in a constructor signature, so we keep this open in
+-- scope rather than leaving the identifier free.
+open Dregg2.Authority (Caps Cap)
+-- The verified SUPPLY executors `recKMint`/`recKBurn` (and their single-cell credit `recCreditCell`)
+-- live in `Dregg2.Exec.TurnExecutorFull`; §M refines the mint/burn IR terms against them verbatim.
+open Dregg2.Exec.TurnExecutorFull (recKMint recKBurn recCreditCell)
 
 /-- The Argus state-transformer IR, effect-body level. Each constructor is a
 primitive whose circuit `compile_sound` case is proved **once**; a per-effect
@@ -35,6 +44,36 @@ inductive RecStmt where
   | setCell  (T : Finset CellId) (leaf : RecordKernelState → CellId → Value)
   | setBal   (b : RecordKernelState → CellId → AssetId → Int)
   | insFresh (n : RecordKernelState → Nat)
+  -- §A — the COMPONENT WRITE-PRIMITIVES (the shapes the 56 effects touch beyond `cell`/`bal`).
+  -- Each names one `RecordKernelState` component; its `interp` clause is the record-update that
+  -- writes exactly that component (and nothing else). Together with `setCell`/`setBal` these let a
+  -- per-effect body be WRITTEN for the whole fullness — the cap graph, every list side-table, and
+  -- the scalar/option per-cell registries.
+  -- The CAP GRAPH (`caps : Label → List Cap`): grant/revoke/attenuate write here.
+  | setCaps        (g : RecordKernelState → Caps)
+  -- The LIST side-tables, each `List X` for a distinct payload `X` (heterogeneous element types ⇒
+  -- per-component constructors, the type-honest choice — a single generic setter would need a sum
+  -- over the payloads, losing each clause's meaning):
+  | setNullifiers  (g : RecordKernelState → List Nat)               -- spent-note nullifier SET
+  | setRevoked     (g : RecordKernelState → List Nat)               -- revocation registry
+  | setCommitments (g : RecordKernelState → List Nat)               -- note-commitment SET
+  | setEscrows     (g : RecordKernelState → List EscrowRecord)      -- off-ledger escrow store
+  | setQueues      (g : RecordKernelState → List QueueRecord)       -- FIFO queue side-table
+  | setSwiss       (g : RecordKernelState → List SwissRecord)       -- CapTP export/GC registry
+  | setFactories   (g : RecordKernelState → List (Nat × FactoryEntry))  -- published factory registry
+  | setSealedBoxes (g : RecordKernelState → List SealedBoxRecord)   -- sealed-box holding store
+  -- The PER-CELL FUNCTION registries (`CellId → …`): lifecycle / death-cert / delegate / per-cell
+  -- caveats / per-cell delegation c-list snapshot.
+  | setLifecycle   (g : RecordKernelState → CellId → Nat)           -- lifecycle discriminant
+  | setDeathCert   (g : RecordKernelState → CellId → Nat)           -- death-certificate binding
+  | setDelegate    (g : RecordKernelState → CellId → Option CellId) -- delegation parent pointer
+  | setSlotCaveats (g : RecordKernelState → CellId → List SlotCaveat)   -- per-cell slot caveats
+  | setDelegations (g : RecordKernelState → CellId → List Cap)      -- per-cell delegated c-list
+  -- §B — the LATTICE/COMPARISON gate (a pure DOMAIN-RESTRICTOR, never mutates): commit iff
+  -- `a k ≤ b k`. This is the in-band foundation of capability NON-AMPLIFICATION
+  -- (`granted.rights ≤ held.rights`): a measured `≤` check, expressed as a guard over two state
+  -- read-outs, that rejects (fails closed) when the ordering is violated.
+  | checkLe        (a b : RecordKernelState → Int)
   | seq      (s t : RecStmt)
 
 /-- **`interp`** — the executable interpretation, i.e. the reference executor.
@@ -46,6 +85,25 @@ def interp : RecStmt → RecordKernelState → Option RecordKernelState
   | .setBal b,       k => some { k with bal := b k }
   | .insFresh n,     k => if n k ∈ k.nullifiers then none
                           else some { k with nullifiers := n k :: k.nullifiers }
+  -- §A — the component writes: each clause overwrites exactly its one component with `g k`, the
+  -- worthwhile semantics of that write (the rest of the state is preserved by record-update).
+  | .setCaps g,        k => some { k with caps := g k }
+  | .setNullifiers g,  k => some { k with nullifiers := g k }
+  | .setRevoked g,     k => some { k with revoked := g k }
+  | .setCommitments g, k => some { k with commitments := g k }
+  | .setEscrows g,     k => some { k with escrows := g k }
+  | .setQueues g,      k => some { k with queues := g k }
+  | .setSwiss g,       k => some { k with swiss := g k }
+  | .setFactories g,   k => some { k with factories := g k }
+  | .setSealedBoxes g, k => some { k with sealedBoxes := g k }
+  | .setLifecycle g,   k => some { k with lifecycle := g k }
+  | .setDeathCert g,   k => some { k with deathCert := g k }
+  | .setDelegate g,    k => some { k with delegate := g k }
+  | .setSlotCaveats g, k => some { k with slotCaveats := g k }
+  | .setDelegations g, k => some { k with delegations := g k }
+  -- §B — the lattice gate: a pure domain-restrictor (returns `k` unchanged on admit, `none` on
+  -- reject). The in-band non-amplification check `granted ≤ held`.
+  | .checkLe a b,      k => if a k ≤ b k then some k else none
   | .seq s t,        k => (interp s k).bind (interp t)
 
 /-- The transfer admissibility gate as a `Bool` — exactly `recKExec`'s `if`. -/
@@ -100,5 +158,194 @@ theorem interp_transferStmt_eq_recKExec (turn : Turn) (k : RecordKernelState) :
     rw [if_neg (fun hp => hg ((transferGuard_iff turn k).mpr hp))]
 
 #assert_axioms interp_transferStmt_eq_recKExec
+
+/-! ## §M — THE PATTERN GENERALIZES: mint and burn as IR terms.
+
+The cornerstone above is proven for ONE effect (transfer). The bet is that the executor-refinement
+pattern is NOT transfer-special: any per-effect term assembled from the primitives has the executor
+as its `interp` meaning. We validate that here for TWO more effects — `mint` and `burn` — reusing
+the verified supply executors `recKMint`/`recKBurn` (`Exec/TurnExecutorFull.lean`) verbatim.
+
+The shape is IDENTICAL to `transferStmt`: a `Bool` admissibility `guard`, then a `setCell` move on
+the affected cell(s). Mint/burn touch ONE cell's `balance` field (`recCreditCell`), so the move is a
+`setCell {cell}` — the SAME `setCell` primitive `transferStmt` uses (no new write-primitive needed).
+That the move is `recCreditCell` is the single-cell analog of `transferCellMap_eq`. -/
+
+/-- The mint admissibility gate as a `Bool` — exactly `recKMint`'s `if` (the privileged supply gate:
+a `node`/`control` cap over `cell`, non-negative amount, live account). -/
+def mintGuard (actor cell : CellId) (amt : Int) (k : RecordKernelState) : Bool :=
+  mintAuthorizedB k.caps actor cell
+    && decide (0 ≤ amt)
+    && decide (cell ∈ k.accounts)
+
+/-- The burn admissibility gate as a `Bool` — exactly `recKBurn`'s `if` (the supply gate PLUS
+availability of `amt` in `cell`'s `balance` field). -/
+def burnGuard (actor cell : CellId) (amt : Int) (k : RecordKernelState) : Bool :=
+  mintAuthorizedB k.caps actor cell
+    && decide (0 ≤ amt)
+    && decide (amt ≤ balOf (k.cell cell))
+    && decide (cell ∈ k.accounts)
+
+/-- The mint effect as an IR term: gate, then CREDIT `cell`'s `balance` by `amt` (a single-cell
+`setCell`). Mirrors `transferStmt` — gate, then move. -/
+def mintStmt (actor cell : CellId) (amt : Int) : RecStmt :=
+  RecStmt.seq (RecStmt.guard (mintGuard actor cell amt))
+    (RecStmt.setCell ({cell} : Finset CellId)
+      (fun k c => setBalance (k.cell c) (balOf (k.cell c) + amt)))
+
+/-- The burn effect as an IR term: gate, then DEBIT `cell`'s `balance` by `amt` (credit `-amt`). The
+post-cell move is `recCreditCell k.cell cell (-amt)`, exactly `recKBurn`'s. -/
+def burnStmt (actor cell : CellId) (amt : Int) : RecStmt :=
+  RecStmt.seq (RecStmt.guard (burnGuard actor cell amt))
+    (RecStmt.setCell ({cell} : Finset CellId)
+      (fun k c => setBalance (k.cell c) (balOf (k.cell c) + (-amt))))
+
+/-- The mint `Bool` gate decodes to `recKMint`'s admissibility proposition. -/
+theorem mintGuard_iff (actor cell : CellId) (amt : Int) (k : RecordKernelState) :
+    mintGuard actor cell amt k = true ↔
+      (mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ cell ∈ k.accounts) := by
+  simp only [mintGuard, Bool.and_eq_true, decide_eq_true_eq]
+  tauto
+
+/-- The burn `Bool` gate decodes to `recKBurn`'s admissibility proposition. -/
+theorem burnGuard_iff (actor cell : CellId) (amt : Int) (k : RecordKernelState) :
+    burnGuard actor cell amt k = true ↔
+      (mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt
+        ∧ amt ≤ balOf (k.cell cell) ∧ cell ∈ k.accounts) := by
+  simp only [burnGuard, Bool.and_eq_true, decide_eq_true_eq]
+  tauto
+
+/-- The `setCell {cell}` credit map is exactly `recCreditCell` (identity off the single cell) — the
+single-cell analog of `transferCellMap_eq`. -/
+theorem creditCellMap_eq (cell : CellId) (amt : Int) (k : RecordKernelState) :
+    (fun c => if c ∈ ({cell} : Finset CellId)
+                then setBalance (k.cell c) (balOf (k.cell c) + amt) else k.cell c)
+      = recCreditCell k.cell cell amt := by
+  funext c
+  unfold recCreditCell
+  by_cases h : c = cell
+  · simp [h]
+  · simp [Finset.mem_singleton, h]
+
+/-- **The pattern generalizes (mint).** `interp` of the mint term IS the verified supply executor
+`recKMint` — the same partial function, by construction, exactly as the transfer cornerstone. -/
+theorem interp_mintStmt_eq_recKMint (actor cell : CellId) (amt : Int) (k : RecordKernelState) :
+    interp (mintStmt actor cell amt) k = recKMint k actor cell amt := by
+  simp only [mintStmt, interp]
+  unfold recKMint
+  by_cases hg : mintGuard actor cell amt k = true
+  · rw [if_pos hg]
+    simp only [Option.bind, creditCellMap_eq]
+    rw [if_pos ((mintGuard_iff actor cell amt k).mp hg)]
+  · rw [if_neg hg]
+    simp only [Option.bind]
+    rw [if_neg (fun hp => hg ((mintGuard_iff actor cell amt k).mpr hp))]
+
+/-- **The pattern generalizes (burn).** `interp` of the burn term IS the verified supply executor
+`recKBurn` — the same partial function, by construction. -/
+theorem interp_burnStmt_eq_recKBurn (actor cell : CellId) (amt : Int) (k : RecordKernelState) :
+    interp (burnStmt actor cell amt) k = recKBurn k actor cell amt := by
+  simp only [burnStmt, interp]
+  unfold recKBurn
+  by_cases hg : burnGuard actor cell amt k = true
+  · rw [if_pos hg]
+    simp only [Option.bind, creditCellMap_eq]
+    rw [if_pos ((burnGuard_iff actor cell amt k).mp hg)]
+  · rw [if_neg hg]
+    simp only [Option.bind]
+    rw [if_neg (fun hp => hg ((burnGuard_iff actor cell amt k).mpr hp))]
+
+#assert_axioms interp_mintStmt_eq_recKMint
+#assert_axioms interp_burnStmt_eq_recKBurn
+
+/-! ## §L — the lattice gate `checkLe` is a pure DOMAIN-RESTRICTOR (the non-amplification foundation).
+
+`checkLe a b` commits IFF `a k ≤ b k`, leaving `k` UNCHANGED on admit. This is the in-band shape of
+the capability non-amplification rule (`granted.rights ≤ held.rights`): a measured `≤` over two state
+read-outs that fails closed when the order is violated, and — crucially — mutates nothing, so it
+composes before any effect body exactly like `guard` (every executor keystone of the body lifts
+through it for free). We pin its meaning + the never-mutates law. -/
+
+/-- **`interp_checkLe` — PROVED.** `checkLe` commits iff `a k ≤ b k` and returns `k` unchanged on
+admit; the foundation of the in-band `granted ≤ held` non-amplification gate. -/
+@[simp] theorem interp_checkLe (a b : RecordKernelState → Int) (k : RecordKernelState) :
+    interp (RecStmt.checkLe a b) k = if a k ≤ b k then some k else none := rfl
+
+/-- **`checkLe_commit_unchanged` — PROVED (never mutates).** When `checkLe` commits, the post-state
+IS the input — a pure domain restrictor (the `granted ≤ held` gate adds an admission side-condition
+and changes nothing). -/
+theorem checkLe_commit_unchanged {a b : RecordKernelState → Int} {k k' : RecordKernelState}
+    (h : interp (RecStmt.checkLe a b) k = some k') : k' = k := by
+  rw [interp_checkLe] at h
+  by_cases hle : a k ≤ b k
+  · rw [if_pos hle] at h; exact (Option.some.injEq _ _ ▸ h).symm
+  · rw [if_neg hle] at h; exact absurd h (by simp)
+
+/-- **`checkLe_admits_iff` — PROVED.** `checkLe` admits (is `some`) IFF the order holds — so it
+genuinely REJECTS (fails closed) when `b k < a k` (amplification): non-vacuous, two-valued. -/
+theorem checkLe_admits_iff (a b : RecordKernelState → Int) (k : RecordKernelState) :
+    (interp (RecStmt.checkLe a b) k).isSome = true ↔ a k ≤ b k := by
+  rw [interp_checkLe]
+  by_cases hle : a k ≤ b k <;> simp [hle]
+
+#assert_axioms interp_checkLe
+#assert_axioms checkLe_commit_unchanged
+#assert_axioms checkLe_admits_iff
+
+/-! ## §C — the component writes do exactly what they say (frame + non-vacuity).
+
+Each `set<Component>` clause writes precisely its one component to `g k` and is a genuine state
+edit — `interp` always commits (`some`), the named component becomes `g k`, and a witnessing
+instance shows the write is observable (not a no-op). We pin the two cap-graph / one
+per-cell-lifecycle representatives + a list-table representative; the rest are definitionally the
+same `{ k with <field> := g k }` shape (`interp` reduces by `rfl`). -/
+
+/-- **`interp_setCaps` — PROVED.** Writing the cap graph overwrites `caps` with `g k` and touches
+nothing else; the write the grant/revoke/attenuate effects assemble. -/
+@[simp] theorem interp_setCaps (g : RecordKernelState → Caps) (k : RecordKernelState) :
+    interp (RecStmt.setCaps g) k = some { k with caps := g k } := rfl
+
+/-- **`interp_setLifecycle` — PROVED.** Writing the lifecycle registry overwrites `lifecycle` with
+`g k` (the Live/Sealed/Destroyed transition write). -/
+@[simp] theorem interp_setLifecycle (g : RecordKernelState → CellId → Nat) (k : RecordKernelState) :
+    interp (RecStmt.setLifecycle g) k = some { k with lifecycle := g k } := rfl
+
+/-- **`interp_setSwiss` — PROVED.** Writing the CapTP swiss-table overwrites `swiss` with `g k` (the
+export/enliven/handoff/GC registry write). -/
+@[simp] theorem interp_setSwiss (g : RecordKernelState → List SwissRecord) (k : RecordKernelState) :
+    interp (RecStmt.setSwiss g) k = some { k with swiss := g k } := rfl
+
+/-- A two-cell kernel for the §C non-vacuity witnesses (cell `0` Live, both live accounts). -/
+def kC : RecordKernelState :=
+  { accounts := {0, 1}, cell := fun _ => .record [("balance", .int 0)], caps := fun _ => [] }
+
+-- The component writes are OBSERVABLE state edits, not no-ops:
+-- setLifecycle to "everything Sealed (1)" genuinely changes cell 0's lifecycle 0 → 1.
+#guard (((interp (RecStmt.setLifecycle (fun _ _ => 1)) kC).map (fun k => k.lifecycle 0)) == some 1)
+#guard (kC.lifecycle 0 == 0)   -- before: Live
+-- setSwiss to a one-entry registry grows the swiss-table from [] to length 1.
+#guard (((interp (RecStmt.setSwiss (fun _ => [⟨7, 0, 0, [], 1, none⟩])) kC).map (fun k => k.swiss.length)) == some 1)
+#guard (kC.swiss.length == 0)  -- before: empty
+
+/-- **`setLifecycle_writes` — PROVED (the write lands, non-vacuously).** Sealing every cell flips
+cell `0`'s lifecycle from Live (`0`) to Sealed (`1`): the component write is a real, observable
+state edit (`interp` commits and the post-component is `g k`). -/
+theorem setLifecycle_writes :
+    (interp (RecStmt.setLifecycle (fun _ _ => 1)) kC).map (fun k => k.lifecycle 0) = some 1 := by
+  rw [interp_setLifecycle]; rfl
+
+/-- **`setCaps_writes` — PROVED.** Granting cell `0` a `node 1` cap lands in the cap graph: after the
+write, cell `0` holds exactly `[Cap.node 1]`, where before it held none. The cap-graph component
+write is observable (not a no-op) — the in-band shape grant/attenuate effects emit. -/
+theorem setCaps_writes :
+    (interp (RecStmt.setCaps (fun k => fun l => if l = 0 then [Cap.node 1] else k.caps l)) kC).map
+        (fun k => k.caps 0) = some [Cap.node 1] := by
+  rw [interp_setCaps]; rfl
+
+#assert_axioms interp_setCaps
+#assert_axioms interp_setLifecycle
+#assert_axioms interp_setSwiss
+#assert_axioms setLifecycle_writes
+#assert_axioms setCaps_writes
 
 end Dregg2.Circuit.Argus
