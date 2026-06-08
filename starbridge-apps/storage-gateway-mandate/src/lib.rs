@@ -16,7 +16,7 @@
 
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
-    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, FieldConstraint,
+    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor,
     InspectorDescriptor, StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard,
     canonical_program_vk, field_from_u64, hex_encode_32, symbol,
 };
@@ -216,16 +216,20 @@ pub fn sgm_cell_program() -> CellProgram {
         TransitionCase {
             guard: TransitionGuard::Always,
             constraints: vec![
-                StateConstraint::Immutable {
+                // `WriteOnce` (not `Immutable`): a factory-born gateway is empty,
+                // so the bucket config slots are bound once by `init_mandate`
+                // (from zero) and frozen thereafter — the birth-compatible form
+                // of "fixed at creation".
+                StateConstraint::WriteOnce {
                     index: COMMITMENT_ANCHOR_SLOT,
                 },
-                StateConstraint::Immutable {
+                StateConstraint::WriteOnce {
                     index: VOLUME_CEILING_SLOT,
                 },
-                StateConstraint::Immutable {
+                StateConstraint::WriteOnce {
                     index: KEY_PREFIX_HASH_SLOT,
                 },
-                StateConstraint::Immutable {
+                StateConstraint::WriteOnce {
                     index: READ_COMPARTMENT_SLOT,
                 },
                 StateConstraint::FieldLteField {
@@ -263,17 +267,22 @@ pub fn sgm_factory_descriptor() -> FactoryDescriptor {
             max_permissions: AuthRequired::Signature,
             attenuatable: true,
         }],
-        field_constraints: vec![
-            FieldConstraint::NonZero {
-                field_index: COMMITMENT_ANCHOR_SLOT as u32,
-            },
-            FieldConstraint::NonZero {
-                field_index: VOLUME_CEILING_SLOT as u32,
-            },
-        ],
+        // No creation-time `field_constraints`: a factory-born gateway cell is
+        // born empty and its first `init_mandate` turn binds `COMMITMENT_ANCHOR`
+        // + `VOLUME_CEILING` (`WriteOnce`, frozen after), THEN `storage_op` turns
+        // debit `VOLUME_SPENT` (Monotonic, bounded by the ceiling). The birth
+        // `NonZero`s validated against `params.initial_fields`, forcing the seed
+        // path to mint placeholders — and a `1`-ceiling placeholder is a real
+        // hazard (a one-byte storage budget). Mirror privacy-voting/bounty-board.
+        field_constraints: vec![],
         state_constraints: vec![
-            StateConstraint::Immutable {
+            // Compartment tag + volume ceiling are bound ONCE by `init_mandate`
+            // (from zero) and frozen thereafter.
+            StateConstraint::WriteOnce {
                 index: COMMITMENT_ANCHOR_SLOT,
+            },
+            StateConstraint::WriteOnce {
+                index: VOLUME_CEILING_SLOT,
             },
             StateConstraint::Monotonic {
                 index: VOLUME_SPENT_SLOT,

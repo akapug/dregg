@@ -13,6 +13,10 @@ description = "Whole-history light client: verify ONE succinct IVC aggregate (Wh
 # The recursion feature is in dregg-circuit's default set (carries ivc_turn_chain +
 # verify_turn_chain_recursive + WholeChainProof).
 dregg-circuit = { path = "../circuit" }
+# The REAL supermajority threshold (`2n/3 + 1`) the node's finality rule uses
+# (`ordering::supermajority_threshold`) — so the finality-cert quorum leg counts against the SAME
+# threshold the blocklace super-ratification rule does, not a copied constant.
+dregg-blocklace = { path = "../blocklace" }
 
 [features]
 # `recursion` forwards to dregg-circuit's recursion feature (which is in its default set) and gates

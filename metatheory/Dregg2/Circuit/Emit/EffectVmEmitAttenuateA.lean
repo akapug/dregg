@@ -62,6 +62,7 @@ the NAMED hypothesis `Poseidon2SpongeCR hash`; the cap-table digest enters ONLY 
 are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
+import Dregg2.Circuit.Emit.EffectVmEmitCapRoot
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Inst.attenuateA
 
@@ -513,11 +514,203 @@ theorem capBadRow_rejected : ¬ (VmConstraint.gate gCapMove).holdsVm capBadRow f
       NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT, paramA.CAP_DIGEST_NEW]
   rw [hsa, hprm]; norm_num
 
+/-! ## §G — THE GENUINE CLASS-A DESCRIPTOR — `cap_root` RECOMPUTED in-row (the opaque-digest KILL).
+
+§1–§9 above bind the `cap_root` COLUMN move (`new_cap_root = param.CAP_DIGEST_NEW`), where the digest is
+an OPAQUE PARAMETER the prover supplies. That is class C: the cap-table mutation is *asserted*, not
+*recomputed* (the ledger's Tier-1 cap-family gap). This section CLOSES that gap, exactly as
+`EffectVmEmitEscrowRoot` closed the escrow side-table gap:
+
+  * DROP the opaque `gCapMove` gate. The `cap_root` move is no longer a free-parameter equality.
+  * ADD the SHARED `EffectVmEmitCapRoot.capRecomputeSites`: two in-row hash-sites that RECOMPUTE
+    `new_cap_root = hash[ edge_leaf, old_cap_root ]` with `edge_leaf = hash[holder,target,rights,op]`.
+    The new root is FORCED by the bound cap-edge mutation + the old root, not chosen.
+  * The new-root carrier IS `saCol state.CAP_ROOT` — already absorbed into `state_commit` by GROUP-4
+    `site2` (it is the 12th `absorbedCols` element). So the recomputed root is bound by the SAME deployed
+    commitment chain, with NO width change (unlike escrow's aux-96 root, which awaits task #91).
+
+The class-A theorem `attenuateGenuine_sound` proves: satisfying the genuine descriptor's gates+recompute
+forces the FULL per-cell post-state — frame frozen AND `post.capRoot` GENUINELY equal to
+`hash[edge_leaf, pre.capRoot]` (the forced advance) — and `attenuateGenuine_binds_edge` anti-ghosts every
+edge field + the old root through the commitment. The opaque additive/parameter step is GONE. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitCapRoot
+  (capRecomputeSites capRootHolds CAP_ROOT_AFTER CAP_ROOT_BEFORE CAP_EDGE_LEAF
+   edgeLeafOf capAdvanceOf capRootAdvance_forced capRoot_binds_edge siteCapEdgeLeaf siteCapRootAdvance)
+open Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp (HOLDER TARGET RIGHTS OP)
+
+/-- The genuine cap-graph per-row gates: the frame freeze (balance/nonce/reserved/8 fields), WITHOUT the
+opaque `gCapMove` — the `cap_root` move is now FORCED by the recompute sites, not a parameter gate. -/
+def attenuateGenuineRowGates : List VmConstraint :=
+  [ .gate gBalLoFix, .gate gBalHiFix, .gate gNonceFix, .gate gResFix ] ++ gFieldFixAll
+
+/-- The genuine GROUP-4 commitment chain, PRECEDED by the two cap-root recompute sites. The recompute
+fires first (`leaf`, then `advance` into `saCol CAP_ROOT`); then GROUP-4 absorbs the recomputed
+`cap_root` into `state_commit` exactly as the transfer keystone absorbs it. -/
+def attenuateGenuineHashSites : List VmHashSite :=
+  capRecomputeSites ++ attenuateHashSites
+
+/-- **`attenuateVmDescriptorGenuine`** — the GENUINE `attenuateA` circuit: the frame-freeze gates ++
+transition continuity ++ boundary pins, with the recompute sites PREPENDED to the GROUP-4 chain. The
+post-`cap_root` is now a FORCED recomputation, not an opaque parameter. -/
+def attenuateVmDescriptorGenuine : EffectVmDescriptor :=
+  { name := attenuateVmAirName ++ "-genuine"
+  , traceWidth := EFFECT_VM_WIDTH
+  , piCount := 34
+  , constraints := attenuateGenuineRowGates ++ transitionAll ++ boundaryFirstPins
+  , hashSites := attenuateGenuineHashSites
+  , ranges := [] }
+
+/-- **`CapCellSpecGenuine hash pre post`** — the GENUINE per-cell cap-graph spec: `post.capRoot` is the
+RECOMPUTED advance `hash[ hash[holder,target,rights,op], pre.capRoot ]` (a function of the bound edge +
+old root — NOT an opaque parameter), the balance limbs / nonce / 8 fields / reserved frozen. The edge
+fields are read off the row's param block. -/
+def CapCellSpecGenuine (hash : List ℤ → ℤ) (env : VmRowEnv) (pre post : CellState) : Prop :=
+  post.capRoot
+      = capAdvanceOf hash
+          (edgeLeafOf hash (env.loc (prmCol HOLDER)) (env.loc (prmCol TARGET))
+            (env.loc (prmCol RIGHTS)) (env.loc (prmCol OP)))
+          pre.capRoot
+  ∧ post.balLo = pre.balLo
+  ∧ post.balHi = pre.balHi
+  ∧ post.nonce = pre.nonce
+  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
+  ∧ post.reserved = pre.reserved
+
+/-- The genuine frame-freeze gates hold IFF the frame is frozen (no `cap_root` clause — the move is in the
+recompute). -/
+theorem attenuateGenuineRowGates_holds_iff (env : VmRowEnv) :
+    (∀ c ∈ attenuateGenuineRowGates, c.holdsVm env false false) ↔
+      ( env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
+      ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE)
+      ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
+      ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i))) ) := by
+  unfold attenuateGenuineRowGates gFieldFixAll
+  constructor
+  · intro h
+    have hLo := h (.gate gBalLoFix) (by simp)
+    have hHi := h (.gate gBalHiFix) (by simp)
+    have hNon := h (.gate gNonceFix) (by simp)
+    have hRes := h (.gate gResFix) (by simp)
+    have hFld : ∀ i, i < 8 → VmConstraint.holdsVm env false false (.gate (gFieldFix i)) := by
+      intro i hi
+      apply h
+      simp only [List.mem_append, List.mem_map, List.mem_range]
+      exact Or.inr ⟨i, hi, rfl⟩
+    simp only [VmConstraint.holdsVm, gBalLoFix, gBalHiFix, gNonceFix, gResFix,
+      eSA, eSB, eSub, EmittedExpr.eval] at hLo hHi hNon hRes
+    refine ⟨by linarith [hLo], by linarith [hHi], by linarith [hNon], by linarith [hRes], ?_⟩
+    intro i hi
+    have := hFld i hi
+    simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval] at this
+    linarith
+  · rintro ⟨hLo, hHi, hNon, hRes, hFld⟩ c hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
+      List.mem_range] at hc
+    rcases hc with (rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
+    · simp only [VmConstraint.holdsVm, gBalLoFix, eSA, eSB, eSub, EmittedExpr.eval]; rw [hLo]; ring
+    · simp only [VmConstraint.holdsVm, gBalHiFix, eSA, eSB, eSub, EmittedExpr.eval]; rw [hHi]; ring
+    · simp only [VmConstraint.holdsVm, gNonceFix, eSA, eSB, eSub, EmittedExpr.eval]; rw [hNon]; ring
+    · simp only [VmConstraint.holdsVm, gResFix, eSA, eSB, eSub, EmittedExpr.eval]; rw [hRes]; ring
+    · simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval]
+      rw [hFld i hi]; ring
+
+/-- **`attenuateGenuine_sound` — THE CLASS-A THEOREM.** Satisfying the genuine descriptor's frame-freeze
+gates AND the cap-root recompute (under the abstract sponge `hash`), with the row decoded by
+`CapRowEncodes`, forces the GENUINE full per-cell post-state: `post.capRoot` is the RECOMPUTED advance
+`hash[edge_leaf, pre.capRoot]` (FORCED, not an opaque parameter), every other field frozen. This is the
+escrow-grade class-A bar applied to the cap family — the opaque digest is GONE. -/
+theorem attenuateGenuine_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (pre post : CellState) (capDigestNew : ℤ)
+    (henc : CapRowEncodes env pre post capDigestNew)
+    (hgates : ∀ c ∈ attenuateGenuineRowGates, c.holdsVm env false false)
+    (hrec : capRootHolds hash env) :
+    CapCellSpecGenuine hash env pre post := by
+  obtain ⟨hsbLo, hsbHi, hsbN, hsbF, hsbCap, hsbRes, hpDig,
+          hsaLo, hsaHi, hsaN, hsaF, hsaCap, hsaRes⟩ := henc
+  obtain ⟨hLo, hHi, hNon, hRes, hFld⟩ := (attenuateGenuineRowGates_holds_iff env).mp hgates
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- post.capRoot = advanceOf hash (leaf) pre.capRoot — the FORCED recompute.
+    have hadv := capRootAdvance_forced hash env hrec
+    -- CAP_ROOT_AFTER = saCol CAP_ROOT = post.capRoot ; CAP_ROOT_BEFORE = sbCol CAP_ROOT = pre.capRoot
+    rw [show CAP_ROOT_AFTER = saCol state.CAP_ROOT from rfl, hsaCap,
+        show CAP_ROOT_BEFORE = sbCol state.CAP_ROOT from rfl, hsbCap] at hadv
+    exact hadv
+  · rw [← hsaLo, ← hsbLo]; exact hLo
+  · rw [← hsaHi, ← hsbHi]; exact hHi
+  · rw [← hsaN, ← hsbN]; exact hNon
+  · intro i; rw [← hsaF i, ← hsbF i]; exact hFld i.val i.isLt
+  · rw [← hsaRes, ← hsbRes]; exact hRes
+
+/-! ### §G.2 — The genuine anti-ghost: tampering ANY edge field / old root moves `cap_root` ⇒ UNSAT.
+
+`capRoot_binds_edge` (the shared primitive) already proves: two recompute-honest rows with EQUAL new
+`cap_root` carriers share the old root AND every edge field. Since `cap_root` IS an absorbed `state_commit`
+column, two rows with equal `state_commit` have equal `cap_root` (the keystone's
+`attenuateDescriptor_commit_binds_state`), hence equal edge content. So a prover CANNOT tamper the
+attenuated cap-edge while keeping the published commitment. -/
+
+/-- **`attenuateGenuine_binds_edge` — the genuine class-A tooth.** Two genuine rows whose recompute holds
+and whose published `state_commit`s are EQUAL share the OLD `cap_root` AND every bound edge field
+(holder/target/rights/op). Chains the commitment binding (`cap_root` is absorbed) with the shared
+`capRoot_binds_edge`. Tampering ANY edge field moves `cap_root`, moves `state_commit` ⇒ UNSAT. -/
+theorem attenuateGenuine_binds_edge (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv)
+    (hsCommit₁ : siteHoldsAll hash e₁ attenuateHashSites)
+    (hsCommit₂ : siteHoldsAll hash e₂ attenuateHashSites)
+    (hrec₁ : capRootHolds hash e₁) (hrec₂ : capRootHolds hash e₂)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
+    e₁.loc (sbCol state.CAP_ROOT) = e₂.loc (sbCol state.CAP_ROOT)
+    ∧ e₁.loc (prmCol HOLDER) = e₂.loc (prmCol HOLDER)
+    ∧ e₁.loc (prmCol TARGET) = e₂.loc (prmCol TARGET)
+    ∧ e₁.loc (prmCol RIGHTS) = e₂.loc (prmCol RIGHTS)
+    ∧ e₁.loc (prmCol OP) = e₂.loc (prmCol OP) := by
+  -- the commitment binds the absorbed `cap_root` column (12th absorbedCol).
+  have hcols := attenuateDescriptor_commit_binds_state hash hCR e₁ e₂ hsCommit₁ hsCommit₂ hcommit
+  have hcap : e₁.loc (saCol state.CAP_ROOT) = e₂.loc (saCol state.CAP_ROOT) := by
+    have := congrArg (fun l => l.getD 11 0) hcols
+    simpa only [absorbedCols, List.getD_cons_succ, List.getD_cons_zero] using this
+  -- the new-root carrier IS saCol CAP_ROOT; feed equality into the shared edge binding.
+  have hroot : e₁.loc CAP_ROOT_AFTER = e₂.loc CAP_ROOT_AFTER := hcap
+  have hedge := capRoot_binds_edge hash hCR e₁ e₂ hrec₁ hrec₂ hroot
+  rw [show CAP_ROOT_BEFORE = sbCol state.CAP_ROOT from rfl] at hedge
+  exact hedge
+
+/-! ### §G.3 — NON-VACUITY for the genuine descriptor (the recompute fires + an op-tamper is refuted). -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitCapRoot (goodCapRow goodCapRow_recomputes tampered_op_moves_root)
+
+/-- **NON-VACUITY (witness TRUE).** `goodCapRow` satisfies the cap-root recompute under the concrete
+sponge — so the genuine descriptor's recompute predicate is INHABITED. -/
+theorem attenuateGenuineGoodRow_recomputes : capRootHolds Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cN goodCapRow :=
+  goodCapRow_recomputes
+
+/-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** The genuine recomputed roots for a delegate
+edge (op=1) vs a revoke edge (op=3) DIFFER — so a tampered op cannot keep the published `cap_root`: a
+concrete UNSAT for the genuine descriptor. -/
+theorem attenuateGenuine_op_tamper_refuted :
+    capAdvanceOf Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cN
+        (edgeLeafOf Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cN 7 13 42 1) 1000
+      ≠ capAdvanceOf Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cN
+        (edgeLeafOf Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cN 7 13 42 3) 1000 :=
+  tampered_op_moves_root
+
 /-! ## §10 — Axiom-hygiene tripwires (the honesty tripwire). -/
 
 #guard attenuateVmDescriptor.constraints.length == 13 + 14 + 4  -- 13 gates + 14 transitions + 4 first
 #guard attenuateVmDescriptor.hashSites.length == 4
 #guard attenuateVmDescriptor.traceWidth == 186
+-- The genuine descriptor: 12 frame gates (no opaque cap-move), 6 hash sites (2 recompute + 4 GROUP-4).
+#guard attenuateVmDescriptorGenuine.constraints.length == 12 + 14 + 4
+#guard attenuateVmDescriptorGenuine.hashSites.length == 6
+#guard attenuateVmDescriptorGenuine.traceWidth == 186
+
+#assert_axioms attenuateGenuineRowGates_holds_iff
+#assert_axioms attenuateGenuine_sound
+#assert_axioms attenuateGenuine_binds_edge
+#assert_axioms attenuateGenuineGoodRow_recomputes
+#assert_axioms attenuateGenuine_op_tamper_refuted
 
 #assert_axioms attenuateRowGates_holds_iff
 #assert_axioms attenuateVm_faithful

@@ -324,18 +324,21 @@ pub fn effect_kind(eff: &Effect) -> &'static str {
     }
 }
 
-/// THE SWAP — honest producer-coverage report.
+/// THE SWAP — the MAPPABLE producer surface: the effect kinds the marshaller PROJECTS to a wire
+/// action (`effect_is_mappable`'s supported set, mirroring the FFI's `effect_to_wire`). A turn whose
+/// every effect is in this set is ELIGIBLE for the VERIFIED Lean producer on the commit path; the
+/// Lean executor produces the committed state and the Rust executor is demoted to a differential
+/// cross-check. A turn with ANY effect outside this set falls back to the Rust producer.
 ///
-/// The effect kinds the marshaller PROJECTS to a wire action (`effect_is_mappable`'s supported
-/// set, mirroring the FFI's `effect_to_wire`). A turn whose every effect is in this set is
-/// eligible for the VERIFIED Lean producer on the commit path; the Lean executor produces the
-/// committed state and the Rust executor is demoted to a differential cross-check. A turn with ANY
-/// effect outside this set falls back to the Rust producer for that turn (honest boundary).
+/// "Mappable" (the producer RUNS) is NOT the same as "root-agreeing" (the Lean-produced `.root()`
+/// EQUALS Rust's). Some mappable effects touch a commitment field the wire model drops or are
+/// structurally re-shaped by Rust, so their reconstituted root DIVERGES — those are the SWAP-GAPS in
+/// [`producer_root_gap_effects`]. The genuinely swap-safe subset (producer runs AND root agrees) is
+/// [`producer_root_agreeing_effects`]. This honest partition (mappable = root-agreeing ∪ root-gap)
+/// is asserted by the `lean_state_producer_coverage` differential — neither list can drift vacuous.
 ///
-/// MUST be kept in sync with [`effect_is_mappable`] (the actual gate). This is the public,
-/// node-surfaced enumeration so a node/CLI can report PRECISELY which effects default to the
-/// verified producer vs. which still block it. Names match [`effect_kind`].
-pub fn producer_covered_effects() -> &'static [&'static str] {
+/// MUST be kept in sync with [`effect_is_mappable`] (the actual gate). Names match [`effect_kind`].
+pub fn producer_mappable_effects() -> &'static [&'static str] {
     &[
         "SetField",
         "Transfer",
@@ -360,10 +363,82 @@ pub fn producer_covered_effects() -> &'static [&'static str] {
     ]
 }
 
-/// Whether the producer covers (defaults to Lean for) a given effect-kind name.
-/// `name` should be an [`effect_kind`] / [`producer_covered_effects`] string.
+/// The SWAP-SAFE subset of the mappable surface: the producer runs AND the Lean-reconstituted
+/// ledger provably AGREES with the legacy Rust executor on full cell state + `cap_root` + `.root()`
+/// (proved by the `lean_state_producer_widen` + `lean_state_producer_coverage` differentials). For a
+/// turn whose effects are ALL in this set, the verified Lean producer can replace the Rust state
+/// producer with ZERO post-state divergence — the true cutover-ready set.
+///
+/// Every entry is pinned by a round-trip differential test; an entry whose test stops agreeing FAILS
+/// the suite, forcing it into [`producer_root_gap_effects`]. NoteSpend/NoteCreate edit the note SET
+/// (a side-table OFF the cell merkle root) and leave cell commitment fields untouched, so they
+/// agree on the cell-ledger `.root()`. QueueAllocate's structural insert is likewise off the cell
+/// root and bal-neutral in the funded case.
+pub fn producer_root_agreeing_effects() -> &'static [&'static str] {
+    &[
+        "SetField",
+        "Transfer",
+        "EmitEvent",
+        "RevokeDelegation",
+        "NoteSpend",
+        "NoteCreate",
+        "IncrementNonce",
+        "RefreshDelegation",
+        "Burn",
+        "RevokeCapability",
+        "QueueAllocate",
+    ]
+}
+
+/// The CHARACTERIZED SWAP-GAPS: mappable effects (the producer RUNS) whose Lean-reconstituted
+/// `.root()` DIVERGES from Rust because the wire model is lossier than the cell commitment, or
+/// because Rust re-shapes the ledger structurally. Each is pinned by a NEGATIVE-tooth differential
+/// (`lean_state_producer_widen` + `lean_state_producer_coverage`) that asserts the SPECIFIC
+/// divergence, so the gap is named, never a silent pass. The honest residual of THE SWAP:
+///   * `CellSeal`/`CellUnseal`/`CellDestroy` — the wire `WState` has no `lifecycle` field, and the
+///     Rust commitment binds the lifecycle PAYLOAD (reason hash, sealed/destroyed-at height, death
+///     cert), which the Lean kernel models only as a discriminant `Nat`. Closing this needs the
+///     Lean kernel to model the lifecycle payload, not just a wire codec field.
+///   * `SetPermissions`/`SetVerificationKey` — the wire carries a COLLAPSED scalar, not the full
+///     `Permissions`/`VerificationKey` struct the commitment binds.
+///   * `GrantCapability` — the wire `caps` model carries `(target[,rights])` per edge; the Rust
+///     `cap_root` binds `(target, slot, permissions, breadstuff, expires_at, allowed_effects)`.
+///   * `MakeSovereign` — Rust REMOVES the cell from `Ledger::cells` (→ a different leaf set); the
+///     wire state model has no sovereign-removal transition, so the reconstitution keeps the cell.
+///   * `Refusal`/`ReceiptArchive` — Rust writes an audit-field / lifecycle-Archived commitment the
+///     wire `refusal`/`rarchive` arms do not reproduce byte-for-byte.
+pub fn producer_root_gap_effects() -> &'static [&'static str] {
+    &[
+        "SetPermissions",
+        "SetVerificationKey",
+        "MakeSovereign",
+        "Refusal",
+        "ReceiptArchive",
+        "CellSeal",
+        "CellUnseal",
+        "CellDestroy",
+        "GrantCapability",
+    ]
+}
+
+/// Back-compat alias for [`producer_mappable_effects`] — the set of effect kinds for which the
+/// verified Lean producer RUNS on the commit path. Prefer [`producer_root_agreeing_effects`] when
+/// you mean "the swap-safe, zero-divergence set" and [`producer_root_gap_effects`] for the residual.
+pub fn producer_covered_effects() -> &'static [&'static str] {
+    producer_mappable_effects()
+}
+
+/// Whether the producer RUNS (defaults to Lean) for a given effect-kind name.
+/// `name` should be an [`effect_kind`] / [`producer_mappable_effects`] string.
 pub fn producer_covers_kind(name: &str) -> bool {
-    producer_covered_effects().contains(&name)
+    producer_mappable_effects().contains(&name)
+}
+
+/// Whether the verified producer's reconstituted `.root()` provably AGREES with Rust for the given
+/// effect kind (the swap-safe set). A `false` for a mappable effect means the producer runs but the
+/// post-state root is a characterized gap (see [`producer_root_gap_effects`]).
+pub fn producer_root_agrees_kind(name: &str) -> bool {
+    producer_root_agreeing_effects().contains(&name)
 }
 
 /// Every on-chain effect KIND name (the full `Effect` enum surface, as named by

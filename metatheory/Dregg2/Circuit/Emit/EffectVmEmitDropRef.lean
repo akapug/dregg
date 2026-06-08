@@ -63,6 +63,7 @@ D` (universe-A's portal). No `sorry`, no `:= True`, no `native_decide`, no `rfl`
 Imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
+import Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Spec.authorityrevocation
 
@@ -452,6 +453,63 @@ theorem dropBadRow_rejected : ¬ (VmConstraint.gate gCapMove).holdsVm dropBadRow
     show dropGoodRow.loc (prmCol paramDR.CAP_DIGEST_NEW) = 77
     rw [hprm]; rfl
   rw [hbad, hparam]; decide
+
+/-! ## §G — THE GENUINE CLASS-A `dropRef` — `cap_root` RECOMPUTED in-row (inherits the shared primitive).
+
+`dropRef` is the SAME runnable cap-graph row as `attenuateA`, so it inherits the GENUINE class-A descriptor
+`attenuateVmDescriptorGenuine` (the opaque `param.CAP_DIGEST_NEW` move REPLACED by the FORCED in-row
+recompute `new_cap_root = hash[edge_leaf, old_cap_root]`, `edge_leaf = hash[holder,target,rights,op]`). The
+`dropRef`-specific content is the OP tag `capOp.DROP_REF = 5` carried in the edge leaf (the ref/cap-table
+set-delete), plus the existing `removeEdgeCaps` connector. We re-export the genuine soundness + edge-binding
+anti-ghost for `dropRef`. `dropRefHashSites = transferHashSites = attenuateHashSites` (defeq), so the shared
+commitment binding applies verbatim. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitCapRoot (capRootHolds)
+
+/-- **`dropRefVmDescriptorGenuine`** — the GENUINE `dropRef` circuit: definitionally the shared genuine
+cap-root-recompute descriptor (the opaque digest param is GONE; `cap_root` is FORCED in-row). -/
+def dropRefVmDescriptorGenuine : EffectVmDescriptor :=
+  Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateVmDescriptorGenuine
+
+/-- **`dropRefGenuine_sound` — THE CLASS-A THEOREM for `dropRef`.** Satisfying the genuine descriptor's
+frame-freeze gates AND the in-row cap-root recompute forces the GENUINE full per-cell post-state:
+`post.capRoot` is the FORCED advance `hash[edge_leaf, pre.capRoot]` (NOT an opaque parameter), every other
+field frozen. Inherited from the shared `attenuateGenuine_sound` (decoded by AttenuateA's `CapRowEncodes`,
+which on a cap row is the same column decoding `dropRef`'s local `CapRowEncodes` uses). -/
+theorem dropRefGenuine_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (pre post : CellState) (capDigestNew : ℤ)
+    (henc : Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.CapRowEncodes env pre post capDigestNew)
+    (hgates : ∀ c ∈ Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateGenuineRowGates,
+        c.holdsVm env false false)
+    (hrec : capRootHolds hash env) :
+    Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.CapCellSpecGenuine hash env pre post :=
+  Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateGenuine_sound
+    hash env pre post capDigestNew henc hgates hrec
+
+/-- **`dropRefGenuine_binds_edge` — the genuine class-A anti-ghost for `dropRef`.** Two genuine `dropRef`
+rows with EQUAL published `state_commit` share the old `cap_root` AND every bound edge field
+(holder/target/rights/op) — so tampering the removed cap-edge moves `cap_root`, moves `state_commit` ⇒
+UNSAT. Inherited from the shared `attenuateGenuine_binds_edge`. -/
+theorem dropRefGenuine_binds_edge (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv)
+    (hsCommit₁ : siteHoldsAll hash e₁ dropRefHashSites)
+    (hsCommit₂ : siteHoldsAll hash e₂ dropRefHashSites)
+    (hrec₁ : capRootHolds hash e₁) (hrec₂ : capRootHolds hash e₂)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
+    e₁.loc (sbCol state.CAP_ROOT) = e₂.loc (sbCol state.CAP_ROOT)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.HOLDER)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.HOLDER)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.TARGET)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.TARGET)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.RIGHTS)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.RIGHTS)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.OP)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.OP) :=
+  Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateGenuine_binds_edge
+    hash hCR e₁ e₂ hsCommit₁ hsCommit₂ hrec₁ hrec₂ hcommit
+
+#assert_axioms dropRefGenuine_sound
+#assert_axioms dropRefGenuine_binds_edge
 
 /-! ## §10 — Axiom-hygiene tripwires (the honesty tripwire). -/
 

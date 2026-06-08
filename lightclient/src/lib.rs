@@ -128,6 +128,192 @@ pub fn fold_and_attest(
     Ok((agg, attested))
 }
 
+// =============================================================================
+// THE THIRD LEG — the finality certificate (quorum / tau).
+//
+// `verify_history` above proves the aggregate-correctness LEGS (1+2): the whole history executed
+// correctly and its `final_root` is the genuine fold. But a *correct-looking* history is not a
+// *finalized* one — an equivocating prover can fold a perfectly valid aggregate over a FORK the
+// network never finalized. A real light client (a wallet, a bridge) must additionally check that the
+// root it is shown is the one a BFT quorum FINALIZED. That is this leg.
+//
+// This is the Rust embodiment of `Dregg2.Distributed.FinalizedLightClient.
+// light_client_accepts_finalized_history`: the client takes `(aggregate, finalized_root, finality
+// cert)` and accepts ONLY when (1) the aggregate verifies, (2) `agg.final_root == finalized_root ==
+// cert.finalized_root` (the root seam), and (3) the finality cert exhibits a super-ratification
+// quorum (a supermajority of DISTINCT participants) over the finalized root.
+// =============================================================================
+
+/// A finality certificate the light client checks WITHOUT the lace or a full node — the compressed
+/// attestation that a BFT quorum finalized `finalized_root`. The node computed super-ratification
+/// (`ordering::tau` / `is_super_ratified`) over the whole blocklace; the light client, which never saw
+/// the lace, instead checks this certificate: the set of DISTINCT participants whose signed votes
+/// ratify the finalized head, counted against the REAL supermajority threshold
+/// (`dregg_blocklace::ordering::supermajority_threshold = 2n/3 + 1`).
+///
+/// The Rust mirror of `FinalizedLightClient.FinalityCert` + `CertValid`: `signers` are the distinct
+/// participants of the ratifying quorum (the cert's evidence payload), `participant_count` is the
+/// group size the supermajority is taken over, and `finalized_root` is the root the quorum certifies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FinalityCert {
+    /// The DISTINCT participant ids whose signed votes ratify the finalized head (the quorum). A
+    /// participant appearing twice is counted ONCE — the node's super-ratification counts distinct
+    /// creators (`ratifyingCreators.dedup`), so the cert's quorum is over distinct signers too.
+    pub signers: Vec<[u8; 32]>,
+    /// The total number of participants in the finalizing group — the `n` the supermajority
+    /// threshold `2n/3 + 1` is computed against.
+    pub participant_count: usize,
+    /// The finalized state root this certificate attests a quorum super-ratified. Must equal the
+    /// aggregate's `final_root` (the root seam) for the cert to bind the proven history.
+    pub finalized_root: BabyBear,
+}
+
+impl FinalityCert {
+    /// The count of DISTINCT signers in the quorum (a doubly-listed participant counts once — the
+    /// node's super-ratification dedups ratifying creators).
+    pub fn distinct_signers(&self) -> usize {
+        let mut seen: Vec<&[u8; 32]> = Vec::with_capacity(self.signers.len());
+        for s in &self.signers {
+            if !seen.iter().any(|t| *t == s) {
+                seen.push(s);
+            }
+        }
+        seen.len()
+    }
+
+    /// **The quorum leg.** True iff a supermajority of DISTINCT participants signed — counted against
+    /// the REAL node threshold `dregg_blocklace::ordering::supermajority_threshold(participant_count)
+    /// = 2*participant_count/3 + 1`. This is the Rust mirror of `FinalizedLightClient.CertQuorum`
+    /// (`isSuperRatified`'s `ratifyingCreators.length ≥ superMajority`).
+    pub fn has_quorum(&self) -> bool {
+        self.distinct_signers()
+            >= dregg_blocklace::ordering::supermajority_threshold(self.participant_count)
+    }
+}
+
+/// Why a finalized-history light-client verification failed (the three-leg surface).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FinalizedError {
+    /// Leg 1+2: the succinct aggregate proof did not verify. (Carries the recursion error.)
+    AggregateInvalid(TurnChainError),
+    /// The root seam broke: the aggregate's proven `final_root` is not the shown `finalized_root`
+    /// (a valid proof of history A cannot be paired with a finality cert for a different root).
+    AggregateRootMismatch {
+        /// The root the aggregate proves.
+        proven: u32,
+        /// The root the client was shown.
+        shown: u32,
+    },
+    /// The root seam broke on the cert side: the certificate finalized a DIFFERENT root than the one
+    /// shown (the cert does not certify this history's endpoint).
+    CertRootMismatch {
+        /// The root the certificate finalized.
+        certified: u32,
+        /// The root the client was shown.
+        shown: u32,
+    },
+    /// Leg 3: the finality certificate did NOT exhibit a super-ratification quorum — fewer than
+    /// `2n/3 + 1` distinct participants signed. The shown root was not finalized; NO attestation.
+    NoQuorum {
+        /// Distinct signers the cert exhibited.
+        distinct_signers: usize,
+        /// The supermajority threshold required (`2n/3 + 1`).
+        threshold: usize,
+    },
+}
+
+impl core::fmt::Display for FinalizedError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            FinalizedError::AggregateInvalid(e) => {
+                write!(f, "finalized light-client: aggregate did not verify: {e}")
+            }
+            FinalizedError::AggregateRootMismatch { proven, shown } => write!(
+                f,
+                "finalized light-client: aggregate proves root {proven} but was shown {shown}"
+            ),
+            FinalizedError::CertRootMismatch { certified, shown } => write!(
+                f,
+                "finalized light-client: cert finalized root {certified} but was shown {shown}"
+            ),
+            FinalizedError::NoQuorum {
+                distinct_signers,
+                threshold,
+            } => write!(
+                f,
+                "finalized light-client: finality cert sub-quorum ({distinct_signers} distinct \
+                 signers < {threshold} required) — root not finalized"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FinalizedError {}
+
+/// The verdict a light client obtains from `(aggregate, finalized_root, finality cert)` when all
+/// three legs hold — the Rust mirror of `FinalizedLightClient.FinalizedHistoryAttested`. It carries
+/// the whole-history attestation PLUS the finality fact: the endpoint root is the one a BFT quorum
+/// finalized. Holding it means: *the root I trust is the genuine fold of a whole history that executed
+/// correctly AND was finalized by a supermajority — and I re-executed nothing and never saw the lace.*
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FinalizedAttestation {
+    /// Legs 1+2: the whole-history attestation (every turn correct, correctly ordered, genuine fold).
+    pub history: AttestedHistory,
+    /// Leg 3: the finalized root the quorum certified (== `history.final_root`, the seam).
+    pub finalized_root: BabyBear,
+    /// The number of DISTINCT participants whose quorum finalized the root (≥ `2n/3 + 1`).
+    pub quorum_signers: usize,
+}
+
+/// **THE FINALIZED LIGHT-CLIENT CHECK** — verify ONE aggregate + ONE finality cert and obtain a
+/// FINALIZED whole-history attestation, re-witnessing nothing and never touching the lace.
+///
+/// Runs exactly: (1) `verify_history` on the aggregate (one recursive STARK verify, cost independent
+/// of history length); (2) the root seam `agg.final_root == finalized_root == cert.finalized_root`;
+/// (3) the quorum check `cert.has_quorum()` (count distinct signers ≥ `2n/3 + 1`). On success returns
+/// `FinalizedAttestation` — the Rust embodiment of `light_client_accepts_finalized_history`'s
+/// conclusion. Additive attestation: the aggregate verify + the quorum count IS the trust in the whole
+/// finalized history.
+pub fn verify_finalized_history(
+    agg: &WholeChainProof,
+    finalized_root: BabyBear,
+    cert: &FinalityCert,
+) -> Result<FinalizedAttestation, FinalizedError> {
+    // Leg 1+2: the succinct aggregate (re-witnessing nothing).
+    let history = verify_history(agg).map_err(|e| match e {
+        LightClientError::AggregateInvalid(te) => FinalizedError::AggregateInvalid(te),
+    })?;
+
+    // Leg 2 (seam, aggregate side): the proven endpoint must be the shown root.
+    if agg.final_root != finalized_root {
+        return Err(FinalizedError::AggregateRootMismatch {
+            proven: agg.final_root.as_u32(),
+            shown: finalized_root.as_u32(),
+        });
+    }
+    // Leg 2 (seam, cert side): the certificate must finalize the shown root.
+    if cert.finalized_root != finalized_root {
+        return Err(FinalizedError::CertRootMismatch {
+            certified: cert.finalized_root.as_u32(),
+            shown: finalized_root.as_u32(),
+        });
+    }
+
+    // Leg 3: the quorum (super-ratification) check — against the REAL node threshold.
+    if !cert.has_quorum() {
+        return Err(FinalizedError::NoQuorum {
+            distinct_signers: cert.distinct_signers(),
+            threshold: dregg_blocklace::ordering::supermajority_threshold(cert.participant_count),
+        });
+    }
+
+    Ok(FinalizedAttestation {
+        history,
+        finalized_root,
+        quorum_signers: cert.distinct_signers(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,6 +391,149 @@ mod tests {
         // additive attestation is idempotent + cheap.
         let attested2 = verify_history(&agg).expect("a second light client must also verify");
         assert_eq!(attested, attested2, "every light client obtains the same whole-history verdict");
+    }
+
+    /// Build a finality cert with `k_signers` DISTINCT participants over `participant_count` total,
+    /// certifying `root`. With `k_signers >= 2*participant_count/3 + 1` this is a genuine quorum.
+    fn make_cert(k_signers: usize, participant_count: usize, root: BabyBear) -> FinalityCert {
+        let signers: Vec<[u8; 32]> = (0..k_signers)
+            .map(|i| {
+                let mut id = [0u8; 32];
+                id[0] = i as u8;
+                id
+            })
+            .collect();
+        FinalityCert {
+            signers,
+            participant_count,
+            finalized_root: root,
+        }
+    }
+
+    /// **THE THREE-LEG HEADLINE (Rust witness).** Fold a real K=4 chain, then verify it AS A FINALIZED
+    /// light client: the aggregate verifies (legs 1+2), the root seam holds, AND a genuine 3-of-4
+    /// super-ratification quorum certifies the final root (leg 3). The client obtains a
+    /// `FinalizedAttestation` whose endpoint is the genuine, QUORUM-finalized root — re-witnessing
+    /// nothing and never seeing the lace. This is `light_client_accepts_finalized_history` on real
+    /// proofs + a real quorum.
+    #[test]
+    fn finalized_light_client_accepts_finalized_history() {
+        let (turns, _genesis, final_root) = make_chain(1000, 0, 7, 4);
+        let (agg, _att) = fold_and_attest(&turns).expect("a continuous 4-turn chain must fold");
+
+        // n=4 ⇒ supermajority threshold = 2*4/3 + 1 = 3. A 3-signer quorum finalizes.
+        let cert = make_cert(3, 4, final_root);
+        assert!(cert.has_quorum(), "3-of-4 must be a supermajority (2*4/3+1 = 3)");
+
+        let attestation = verify_finalized_history(&agg, final_root, &cert)
+            .expect("aggregate + quorum cert + seam must all hold");
+
+        assert_eq!(attestation.history.num_turns, 4, "all four turns attested");
+        assert_eq!(attestation.finalized_root, final_root, "the trusted root is the finalized one");
+        assert_eq!(attestation.quorum_signers, 3, "the quorum is 3 distinct signers");
+    }
+
+    /// **REJECTION TOOTH 1 — tampered aggregate.** Splicing a foreign chain's public final root onto
+    /// the aggregate breaks the root seam: even with a perfectly-valid finality cert, the finalized
+    /// client REJECTS (the proven endpoint no longer matches the shown/finalized root). A valid quorum
+    /// for root B cannot launder a proof of root A.
+    #[test]
+    fn finalized_light_client_rejects_tampered_aggregate() {
+        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (mut agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
+
+        // Tamper: claim a DIFFERENT public final root than the one the aggregate actually proves.
+        let (other_turns, _og, other_final) = make_chain(500, 50, 3, 2);
+        assert_ne!(other_final, final_root, "the foreign root must differ");
+        agg.final_root = other_final;
+
+        // A genuine quorum for the ORIGINAL finalized root — but the aggregate now proves a different
+        // endpoint, so the seam must bite.
+        let cert = make_cert(3, 4, final_root);
+        match verify_finalized_history(&agg, final_root, &cert) {
+            Err(FinalizedError::AggregateRootMismatch { proven, shown }) => {
+                assert_eq!(proven, other_final.as_u32());
+                assert_eq!(shown, final_root.as_u32());
+            }
+            other => panic!("a tampered aggregate root must be rejected at the seam; got {other:?}"),
+        }
+    }
+
+    /// **REJECTION TOOTH 2 — sub-quorum finality cert (FORGED finality).** A cert with only 2 of 4
+    /// distinct signers is BELOW the `2*4/3+1 = 3` supermajority threshold: the root was NOT finalized.
+    /// Even though the aggregate verifies and the seam holds, the finalized client REJECTS with
+    /// `NoQuorum`. You cannot obtain a finalized attestation without a genuine BFT quorum — the
+    /// fork-attack defense. (Rust mirror of `not_final_leader_invalidates` / sub-quorum rejection.)
+    #[test]
+    fn finalized_light_client_rejects_sub_quorum_cert() {
+        let (turns, _g, final_root) = make_chain(1000, 0, 7, 3);
+        let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
+
+        // 2 of 4 signers — below the supermajority threshold of 3. A forged/insufficient finality cert.
+        let weak_cert = make_cert(2, 4, final_root);
+        assert!(!weak_cert.has_quorum(), "2-of-4 must NOT be a supermajority");
+
+        match verify_finalized_history(&agg, final_root, &weak_cert) {
+            Err(FinalizedError::NoQuorum {
+                distinct_signers,
+                threshold,
+            }) => {
+                assert_eq!(distinct_signers, 2);
+                assert_eq!(threshold, 3, "supermajority of 4 is 3");
+            }
+            other => panic!("a sub-quorum finality cert must be rejected; got {other:?}"),
+        }
+    }
+
+    /// **REJECTION TOOTH 3 — cert finalizes the WRONG root.** A valid 3-of-4 quorum that certifies a
+    /// DIFFERENT root than the aggregate's endpoint breaks the cert-side seam: an adversary cannot pair
+    /// a real proof of history A with a real finality cert for history B. The finalized client REJECTS
+    /// with `CertRootMismatch`. (Rust mirror of `root_mismatch_unbinds`.)
+    #[test]
+    fn finalized_light_client_rejects_cert_for_other_root() {
+        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
+
+        // A genuine quorum — but it finalized a DIFFERENT root.
+        let foreign_root = final_root + BabyBear::ONE;
+        assert_ne!(foreign_root, final_root);
+        let cert = make_cert(3, 4, foreign_root);
+        assert!(cert.has_quorum(), "the cert itself carries a real quorum");
+
+        match verify_finalized_history(&agg, final_root, &cert) {
+            Err(FinalizedError::CertRootMismatch { certified, shown }) => {
+                assert_eq!(certified, foreign_root.as_u32());
+                assert_eq!(shown, final_root.as_u32());
+            }
+            other => panic!("a cert finalizing a different root must be rejected; got {other:?}"),
+        }
+    }
+
+    /// **REJECTION TOOTH 4 — duplicate signers cannot fake a quorum.** A cert that lists the SAME
+    /// participant 3 times over a group of 4 has only ONE distinct signer — far below the threshold of
+    /// 3. `distinct_signers` dedups (mirroring the node's `ratifyingCreators.dedup`), so a forged cert
+    /// padded with repeats is rejected as sub-quorum. Sybil-by-repeat does not finalize.
+    #[test]
+    fn finalized_light_client_dedups_repeated_signers() {
+        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
+
+        let mut id = [0u8; 32];
+        id[0] = 7;
+        let padded_cert = FinalityCert {
+            signers: vec![id, id, id], // one distinct signer, listed thrice
+            participant_count: 4,
+            finalized_root: final_root,
+        };
+        assert_eq!(padded_cert.distinct_signers(), 1, "repeats count once");
+        assert!(!padded_cert.has_quorum(), "one distinct signer is not a quorum of 4");
+
+        match verify_finalized_history(&agg, final_root, &padded_cert) {
+            Err(FinalizedError::NoQuorum { distinct_signers, .. }) => {
+                assert_eq!(distinct_signers, 1, "duplicates collapsed to one");
+            }
+            other => panic!("a repeat-padded sub-quorum cert must be rejected; got {other:?}"),
+        }
     }
 
     /// **THE REJECTION TOOTH (Rust witness).** A light client REFUSES a corrupted aggregate: tampering

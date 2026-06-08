@@ -166,6 +166,59 @@ cap-root MOVE gate — a concrete UNSAT for the runnable `delegate` descriptor. 
 theorem delegateBadRow_rejected : ¬ (VmConstraint.gate gCapMove).holdsVm capBadRow false false :=
   capBadRow_rejected
 
+/-! ## §G — THE GENUINE CLASS-A `delegate` — `cap_root` RECOMPUTED in-row (inherits the shared primitive).
+
+`delegate` is the SAME runnable cap-graph row as `attenuateA`, so it inherits the GENUINE class-A descriptor
+`attenuateVmDescriptorGenuine` (the opaque `param.CAP_DIGEST_NEW` move REPLACED by the FORCED in-row
+recompute `new_cap_root = hash[edge_leaf, old_cap_root]`, `edge_leaf = hash[holder,target,rights,op]`). The
+`delegate`-specific content is the OP tag `capOp.DELEGATE = 1` carried in the edge leaf (so the recomputed
+root pins that this is a DELEGATE mutation), and the connector `unify_delegate` to universe-A's
+`recDelegateCaps`. We re-export the genuine soundness + edge-binding anti-ghost for `delegate`. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
+  (attenuateVmDescriptorGenuine attenuateGenuineRowGates CapCellSpecGenuine
+   attenuateGenuine_sound attenuateGenuine_binds_edge)
+open Dregg2.Circuit.Emit.EffectVmEmitCapRoot (capRootHolds capRecomputeSites)
+open Dregg2.Circuit.Emit.EffectVmEmit (saCol sbCol prmCol VmRowEnv VmConstraint siteHoldsAll)
+
+/-- **`delegateVmDescriptorGenuine`** — the GENUINE `delegate` circuit: definitionally the shared genuine
+cap-root-recompute descriptor. The `delegate` content is the OP tag + the `recDelegateCaps` connector. -/
+def delegateVmDescriptorGenuine : EffectVmDescriptor := attenuateVmDescriptorGenuine
+
+/-- **`delegateGenuine_sound` — THE CLASS-A THEOREM for `delegate`.** Satisfying the genuine descriptor's
+frame-freeze gates AND the in-row cap-root recompute forces the GENUINE full per-cell post-state:
+`post.capRoot` is the FORCED advance `hash[edge_leaf, pre.capRoot]` (NOT an opaque parameter), every other
+field frozen. Inherited from the shared `attenuateGenuine_sound`. -/
+theorem delegateGenuine_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (pre post : Dregg2.Circuit.Emit.EffectVmEmitTransferSound.CellState) (capDigestNew : ℤ)
+    (henc : Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.CapRowEncodes env pre post capDigestNew)
+    (hgates : ∀ c ∈ attenuateGenuineRowGates, c.holdsVm env false false)
+    (hrec : capRootHolds hash env) :
+    CapCellSpecGenuine hash env pre post :=
+  attenuateGenuine_sound hash env pre post capDigestNew henc hgates hrec
+
+/-- **`delegateGenuine_binds_edge` — the genuine class-A anti-ghost for `delegate`.** Two genuine `delegate`
+rows with EQUAL published `state_commit` share the old `cap_root` AND every bound edge field
+(holder/target/rights/op) — so tampering the delegated cap-edge moves `cap_root`, moves `state_commit` ⇒
+UNSAT. Inherited from the shared `attenuateGenuine_binds_edge`. -/
+theorem delegateGenuine_binds_edge (hash : List ℤ → ℤ)
+    (hCR : Dregg2.Circuit.Poseidon2Binding.Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv)
+    (hsCommit₁ : siteHoldsAll hash e₁ Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateHashSites)
+    (hsCommit₂ : siteHoldsAll hash e₂ Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateHashSites)
+    (hrec₁ : capRootHolds hash e₁) (hrec₂ : capRootHolds hash e₂)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
+    e₁.loc (sbCol state.CAP_ROOT) = e₂.loc (sbCol state.CAP_ROOT)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.HOLDER)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.HOLDER)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.TARGET)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.TARGET)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.RIGHTS)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.RIGHTS)
+    ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.OP)
+        = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.OP) :=
+  attenuateGenuine_binds_edge hash hCR e₁ e₂ hsCommit₁ hsCommit₂ hrec₁ hrec₂ hcommit
+
 /-! ## §5 — Axiom-hygiene tripwires (the honesty tripwire). -/
 
 #assert_axioms delegateVm_faithful
@@ -175,5 +228,7 @@ theorem delegateBadRow_rejected : ¬ (VmConstraint.gate gCapMove).holdsVm capBad
 #assert_axioms unify_delegate_via_full_sound
 #assert_axioms delegateGoodRow_realizes_intent
 #assert_axioms delegateBadRow_rejected
+#assert_axioms delegateGenuine_sound
+#assert_axioms delegateGenuine_binds_edge
 
 end Dregg2.Circuit.Emit.EffectVmEmitDelegate

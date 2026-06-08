@@ -604,14 +604,48 @@ struct McpToolsListResult {
 #[derive(Serialize)]
 struct McpToolDef {
     name: &'static str,
+    /// MCP `title`: a short human-friendly display name (distinct from the
+    /// programmatic `name`). Injected from [`tool_title`] in the list pass.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<&'static str>,
     description: &'static str,
     #[serde(rename = "inputSchema")]
     input_schema: Value,
+    /// MCP behavioural ANNOTATIONS (`readOnlyHint` / `destructiveHint` /
+    /// `idempotentHint` / `openWorldHint`). These are hints — an agent uses
+    /// them to decide whether a call mutates, can be safely retried, or touches
+    /// the open world (network / other federations). Injected in the list pass.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    annotations: Option<McpToolAnnotations>,
+}
+
+/// MCP tool behavioural annotations. All four are OPTIONAL hints per the spec;
+/// we always populate `readOnlyHint` and `idempotentHint`, and the others when
+/// meaningful. An agent reads these to know e.g. that `dregg_read_cell` is
+/// read-only (safe to probe) while `dregg_revoke_capability` is destructive.
+#[derive(Serialize, Clone, Copy)]
+struct McpToolAnnotations {
+    #[serde(rename = "readOnlyHint")]
+    read_only_hint: bool,
+    #[serde(rename = "destructiveHint", skip_serializing_if = "Option::is_none")]
+    destructive_hint: Option<bool>,
+    #[serde(rename = "idempotentHint")]
+    idempotent_hint: bool,
+    #[serde(rename = "openWorldHint", skip_serializing_if = "Option::is_none")]
+    open_world_hint: Option<bool>,
 }
 
 #[derive(Serialize)]
 struct McpToolResult {
     content: Vec<McpContent>,
+    /// MCP 2025-06-18 STRUCTURED OUTPUT. When a tool's result is structured
+    /// (a receipt, a proof status, a cell state), we surface the raw JSON object
+    /// here in addition to the human-readable `content` text. Clients that
+    /// understand `structuredContent` can consume the typed shape directly;
+    /// older clients still get the pretty-printed text. Always omitted for
+    /// plain-text / error results.
+    #[serde(rename = "structuredContent", skip_serializing_if = "Option::is_none")]
+    structured_content: Option<Value>,
     #[serde(rename = "isError", skip_serializing_if = "Option::is_none")]
     is_error: Option<bool>,
 }
@@ -630,12 +664,22 @@ impl McpToolResult {
                 content_type: "text",
                 text: s.into(),
             }],
+            structured_content: None,
             is_error: None,
         }
     }
 
+    /// Structured success: pretty text for humans + a machine-readable
+    /// `structuredContent` mirror for MCP clients that consume typed output.
     fn json(value: &Value) -> Self {
-        Self::text(serde_json::to_string_pretty(value).unwrap_or_default())
+        Self {
+            content: vec![McpContent {
+                content_type: "text",
+                text: serde_json::to_string_pretty(value).unwrap_or_default(),
+            }],
+            structured_content: Some(value.clone()),
+            is_error: None,
+        }
     }
 
     fn error(s: impl Into<String>) -> Self {
@@ -644,6 +688,29 @@ impl McpToolResult {
                 content_type: "text",
                 text: s.into(),
             }],
+            structured_content: None,
+            is_error: Some(true),
+        }
+    }
+
+    /// Structured ACTIONABLE error: an `isError` result whose message tells the
+    /// agent how to recover, plus a machine-readable `structuredContent` carrying
+    /// `{ error: <msg>, hint: <fix>, ...extra }` so a client can react
+    /// programmatically (e.g. retry with the expected nonce). MCP best practice:
+    /// errors inside a tool result (not JSON-RPC errors) so the agent sees them.
+    fn actionable_error(msg: impl Into<String>, hint: impl Into<String>) -> Self {
+        let msg = msg.into();
+        let hint = hint.into();
+        let text = format!("{msg}\n  → {hint}");
+        Self {
+            content: vec![McpContent {
+                content_type: "text",
+                text,
+            }],
+            structured_content: Some(serde_json::json!({
+                "error": msg,
+                "hint": hint,
+            })),
             is_error: Some(true),
         }
     }
@@ -653,10 +720,216 @@ impl McpToolResult {
 // Tool definitions
 // =============================================================================
 
+/// The legible tool GROUP a tool belongs to. dregg's MCP surface is large
+/// (46 tools); rather than a flat dump, each tool advertises a group so a
+/// client UI / agent can present the toolset as a coherent place. Groups map to
+/// the agent's four modes of inhabiting dregg: orient, act, delegate, verify —
+/// plus the app and privacy surfaces.
+fn tool_group(tool: &str) -> &'static str {
+    match tool {
+        "dregg_get_status"
+        | "dregg_check_capabilities"
+        | "dregg_read_cell"
+        | "dregg_get_receipt_chain"
+        | "dregg_get_blocklace_status"
+        | "dregg_get_constitution"
+        | "dregg_check_resource_budget"
+        | "dregg_list_auctions"
+        | "dregg_verify_provenance" => "orient",
+
+        "dregg_create_agent"
+        | "dregg_authorize"
+        | "dregg_submit_turn"
+        | "dregg_post_intent"
+        | "dregg_fulfill_intent"
+        | "dregg_make_sovereign"
+        | "dregg_bilateral_action"
+        | "dregg_debit_shared_resource"
+        | "dregg_place_bid"
+        | "dregg_captp_deliver" => "act",
+
+        "dregg_grant_capability"
+        | "dregg_revoke_capability"
+        | "dregg_delegate"
+        | "dregg_create_bearer_cap"
+        | "dregg_exercise_bearer_cap"
+        | "dregg_exercise_handoff_cert"
+        | "dregg_propose_membership" => "delegate",
+
+        "dregg_verify_sovereign_proof"
+        | "dregg_prove_sovereign_turn"
+        | "dregg_compose_proofs"
+        | "dregg_prove_predicate"
+        | "dregg_sign_sovereign_witness"
+        | "dregg_peer_exchange"
+        | "dregg_compress_history" => "verify",
+
+        "dregg_seal_data"
+        | "dregg_unseal_data"
+        | "dregg_create_stealth_address"
+        | "dregg_private_transfer"
+        | "dregg_encrypt_intent"
+        | "dregg_bridge_note" => "privacy",
+
+        "dregg_register_name"
+        | "dregg_publish_subscription"
+        | "dregg_issue_credential"
+        | "dregg_register_service"
+        | "dregg_deploy_factory"
+        | "dregg_create_from_factory"
+        | "dregg_create_cell_from_factory_effect" => "apps",
+
+        _ => "other",
+    }
+}
+
+/// A short human-friendly display title for a tool (MCP `title`). The
+/// programmatic `name` stays stable; the title aids legibility in clients.
+fn tool_title(tool: &str) -> &'static str {
+    match tool {
+        "dregg_get_status" => "Node Status",
+        "dregg_create_agent" => "Register Agent Cell",
+        "dregg_authorize" => "Authorize Action (ZK)",
+        "dregg_submit_turn" => "Submit Verified Turn",
+        "dregg_grant_capability" => "Grant Capability",
+        "dregg_revoke_capability" => "Revoke Capability",
+        "dregg_post_intent" => "Post Intent",
+        "dregg_fulfill_intent" => "Fulfill Intent",
+        "dregg_delegate" => "Delegate Sub-Capability",
+        "dregg_check_capabilities" => "List My Capabilities",
+        "dregg_read_cell" => "Read Cell State",
+        "dregg_get_receipt_chain" => "Read Receipt Chain",
+        "dregg_seal_data" => "Seal Data (Encrypt)",
+        "dregg_unseal_data" => "Unseal Data (Decrypt)",
+        "dregg_bridge_note" => "Bridge Note",
+        "dregg_make_sovereign" => "Make Cell Sovereign",
+        "dregg_peer_exchange" => "Sovereign Peer Exchange",
+        "dregg_compress_history" => "IVC-Compress History",
+        "dregg_create_bearer_cap" => "Create Bearer Capability",
+        "dregg_exercise_bearer_cap" => "Exercise Bearer Capability",
+        "dregg_deploy_factory" => "Deploy Factory",
+        "dregg_create_from_factory" => "Create Cell From Factory",
+        "dregg_verify_provenance" => "Verify Cell Provenance",
+        "dregg_prove_sovereign_turn" => "Prove Sovereign Turn (STARK)",
+        "dregg_verify_sovereign_proof" => "Verify Sovereign Proof",
+        "dregg_create_stealth_address" => "Create Stealth Address",
+        "dregg_private_transfer" => "Private Transfer",
+        "dregg_encrypt_intent" => "Post Encrypted Intent",
+        "dregg_prove_predicate" => "Prove Predicate (ZK)",
+        "dregg_compose_proofs" => "Compose Proofs",
+        "dregg_get_blocklace_status" => "Blocklace / Finality Status",
+        "dregg_get_constitution" => "Federation Constitution",
+        "dregg_propose_membership" => "Propose Membership Change",
+        "dregg_check_resource_budget" => "Check Resource Budget",
+        "dregg_debit_shared_resource" => "Debit Shared Resource",
+        "dregg_list_auctions" => "List Auctions",
+        "dregg_place_bid" => "Place Sealed Bid",
+        "dregg_captp_deliver" => "CapTP Deliver",
+        "dregg_exercise_handoff_cert" => "Exercise Handoff Cert",
+        "dregg_sign_sovereign_witness" => "Sign Sovereign Witness",
+        "dregg_bilateral_action" => "Bilateral Action (Both Receipts)",
+        "dregg_register_name" => "Register Name",
+        "dregg_publish_subscription" => "Publish Subscription Update",
+        "dregg_issue_credential" => "Issue Credential",
+        "dregg_register_service" => "Register Service Path",
+        "dregg_create_cell_from_factory_effect" => "Create Cell (Factory Effect)",
+        _ => "dregg Tool",
+    }
+}
+
+/// Behavioural annotations for a tool. Derived from its capability scope and
+/// known semantics: `read` tools are read-only & idempotent; capability
+/// administration is destructive; bridge / federation / captp reach the open
+/// world. An agent reads these to decide whether a call is safe to probe,
+/// retryable, or reaches beyond the local node.
+fn tool_annotations(tool: &str) -> McpToolAnnotations {
+    let scope = tool_required_scope(tool);
+    let read_only = scope == "read";
+
+    // Destructive = irreversibly removes authority / state. Only meaningful for
+    // mutating tools; left None for read-only tools (per spec, destructiveHint
+    // is only relevant when readOnlyHint is false).
+    let destructive_hint = if read_only {
+        None
+    } else {
+        Some(matches!(
+            tool,
+            "dregg_revoke_capability"
+                | "dregg_propose_membership"
+                | "dregg_bridge_note"
+                | "dregg_private_transfer"
+        ))
+    };
+
+    // Idempotent: re-invoking with the same args has no additional effect.
+    // Reads are idempotent; `create_agent` is explicitly idempotent (registers
+    // once); pure proof/verify/seal computations are deterministic functions.
+    let idempotent_hint = read_only
+        || matches!(
+            tool,
+            "dregg_create_agent"
+                | "dregg_make_sovereign"
+                | "dregg_verify_sovereign_proof"
+                | "dregg_prove_predicate"
+                | "dregg_prove_sovereign_turn"
+                | "dregg_create_stealth_address"
+                | "dregg_seal_data"
+                | "dregg_unseal_data"
+                | "dregg_compose_proofs"
+        );
+
+    // Open world: touches state beyond this node (other federations / peers /
+    // capability-transfer protocols / external marketplaces).
+    let open_world_hint = Some(matches!(
+        tool,
+        "dregg_bridge_note"
+            | "dregg_peer_exchange"
+            | "dregg_captp_deliver"
+            | "dregg_exercise_handoff_cert"
+            | "dregg_propose_membership"
+            | "dregg_post_intent"
+            | "dregg_fulfill_intent"
+            | "dregg_encrypt_intent"
+            | "dregg_list_auctions"
+            | "dregg_place_bid"
+    ));
+
+    McpToolAnnotations {
+        read_only_hint: read_only,
+        destructive_hint,
+        idempotent_hint,
+        open_world_hint,
+    }
+}
+
+/// The public tool list: the raw definitions DECORATED with title, behavioural
+/// annotations, and a `group` tag in the input schema's metadata. This is what
+/// `tools/list` serves.
 fn tool_definitions() -> Vec<McpToolDef> {
+    let mut defs = tool_definitions_raw();
+    for d in defs.iter_mut() {
+        d.title = Some(tool_title(d.name));
+        d.annotations = Some(tool_annotations(d.name));
+        // Stamp the legible group + required capability scope into the schema's
+        // top-level metadata so an agent self-orienting from tools/list alone
+        // can see which mode each tool belongs to and what authority it needs.
+        if let Value::Object(map) = &mut d.input_schema {
+            map.insert("x-dregg-group".to_string(), Value::String(tool_group(d.name).to_string()));
+            map.insert(
+                "x-dregg-scope".to_string(),
+                Value::String(tool_required_scope(d.name).to_string()),
+            );
+        }
+    }
+    defs
+}
+
+fn tool_definitions_raw() -> Vec<McpToolDef> {
     vec![
         McpToolDef {
             name: "dregg_get_status",
+            title: None,
+            annotations: None,
             description: "Get node status (height, peers, health)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -666,6 +939,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_create_agent",
+            title: None,
+            annotations: None,
             description: "Register this node's cipherclerk as a cell in the local ledger (idempotent). Returns the content-addressed cell_id.",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -678,6 +953,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_authorize",
+            title: None,
+            annotations: None,
             description: "Prove authorization for an action using ZK proof",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -691,6 +968,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_submit_turn",
+            title: None,
+            annotations: None,
             description: "Submit an atomic turn (set of actions) for execution. Pass an `effects` array to actually perform work (transfers, set_field, etc.); omit it for a no-op turn that just chains a receipt.",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -710,6 +989,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_grant_capability",
+            title: None,
+            annotations: None,
             description: "Grant a capability to another agent",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -723,6 +1004,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_revoke_capability",
+            title: None,
+            annotations: None,
             description: "Revoke a previously granted capability",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -734,6 +1017,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_post_intent",
+            title: None,
+            annotations: None,
             description: "Post an intent to the marketplace (request a capability/service)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -748,6 +1033,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_fulfill_intent",
+            title: None,
+            annotations: None,
             description: "Fulfill a matching intent from the marketplace",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -759,6 +1046,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_delegate",
+            title: None,
+            annotations: None,
             description: "Delegate a bounded sub-capability to another agent",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -773,6 +1062,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_check_capabilities",
+            title: None,
+            annotations: None,
             description: "List all capabilities held by the current agent",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -782,6 +1073,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_read_cell",
+            title: None,
+            annotations: None,
             description: "Read a cell's state (balance, fields, permissions)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -793,6 +1086,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_get_receipt_chain",
+            title: None,
+            annotations: None,
             description: "Get the agent's auditable receipt chain (action history)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -804,6 +1099,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_seal_data",
+            title: None,
+            annotations: None,
             description: "Encrypt data that only a specific agent can decrypt",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -816,6 +1113,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_unseal_data",
+            title: None,
+            annotations: None,
             description: "Decrypt sealed data addressed to this agent",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -827,6 +1126,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_bridge_note",
+            title: None,
+            annotations: None,
             description: "Bridge a note to another federation",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -840,6 +1141,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Sovereign Cells ───────────────────────────────────────────────────────
         McpToolDef {
             name: "dregg_make_sovereign",
+            title: None,
+            annotations: None,
             description: "Transition a cell to sovereign mode (cell stores its own state, federation only holds commitment)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -851,6 +1154,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_peer_exchange",
+            title: None,
+            annotations: None,
             description: "Initiate P2P state exchange with another sovereign cell, producing a STARK proof of the transition",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -864,6 +1169,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_compress_history",
+            title: None,
+            annotations: None,
             description: "IVC-compress a sovereign cell's turn history into a single constant-size proof",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -878,6 +1185,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Bearer Capabilities ───────────────────────────────────────────────────
         McpToolDef {
             name: "dregg_create_bearer_cap",
+            title: None,
+            annotations: None,
             description: "Create a bearer capability proof (immediate grant, no c-list storage required)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -892,6 +1201,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_exercise_bearer_cap",
+            title: None,
+            annotations: None,
             description: "Exercise a bearer capability to perform an action without c-list storage. Pass an `effects` array to actually perform work (e.g. transfer from the target cell).",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -914,6 +1225,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Factories ─────────────────────────────────────────────────────────────
         McpToolDef {
             name: "dregg_deploy_factory",
+            title: None,
+            annotations: None,
             description: "Deploy a factory descriptor to the ProgramRegistry (defines what new cells can be created)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -928,6 +1241,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_create_from_factory",
+            title: None,
+            annotations: None,
             description: "Create a new cell from a deployed factory (with provenance tracking)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -941,6 +1256,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_verify_provenance",
+            title: None,
+            annotations: None,
             description: "Verify a cell's factory provenance (check its creation lineage)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -954,6 +1271,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Effect VM ─────────────────────────────────────────────────────────────
         McpToolDef {
             name: "dregg_prove_sovereign_turn",
+            title: None,
+            annotations: None,
             description: "Generate a STARK proof for a sovereign cell's multi-effect turn via the Effect VM",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -980,6 +1299,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_verify_sovereign_proof",
+            title: None,
+            annotations: None,
             description: "Verify a STARK proof generated by the Effect VM for a sovereign turn",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -997,6 +1318,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Privacy ───────────────────────────────────────────────────────────────
         McpToolDef {
             name: "dregg_create_stealth_address",
+            title: None,
+            annotations: None,
             description: "Generate a one-time stealth address for a recipient (unlinkable receive address)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1009,6 +1332,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_private_transfer",
+            title: None,
+            annotations: None,
             description: "Perform a private value transfer using Pedersen commitments (hides amount)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1023,6 +1348,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_encrypt_intent",
+            title: None,
+            annotations: None,
             description: "Post an SSE-encrypted intent (body hidden, matchable via search tokens)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1036,6 +1363,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_prove_predicate",
+            title: None,
+            annotations: None,
             description: "Prove a predicate over private data (e.g. balance >= threshold) without revealing the value",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1052,6 +1381,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Proof Composition ─────────────────────────────────────────────────────
         McpToolDef {
             name: "dregg_compose_proofs",
+            title: None,
+            annotations: None,
             description: "Compose multiple proofs using logical operators (and/or/chain/aggregate)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1077,6 +1408,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Blocklace ─────────────────────────────────────────────────────────────
         McpToolDef {
             name: "dregg_get_blocklace_status",
+            title: None,
+            annotations: None,
             description: "Get blocklace consensus status (tip, finality level, participants, wave)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1086,6 +1419,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_get_constitution",
+            title: None,
+            annotations: None,
             description: "Get the current federation constitution (membership set, threshold, version)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1095,6 +1430,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_propose_membership",
+            title: None,
+            annotations: None,
             description: "Propose a membership change (join/leave/threshold change) to the federation",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1109,6 +1446,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Shared Resources ──────────────────────────────────────────────────────
         McpToolDef {
             name: "dregg_check_resource_budget",
+            title: None,
+            annotations: None,
             description: "Query remaining budget allowance for a shared resource (bounded-counter coordination)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1120,6 +1459,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_debit_shared_resource",
+            title: None,
+            annotations: None,
             description: "Optimistic debit from a shared resource (Tier 2: consensus-free if within local budget slice)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1134,6 +1475,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Gallery ───────────────────────────────────────────────────────────────
         McpToolDef {
             name: "dregg_list_auctions",
+            title: None,
+            annotations: None,
             description: "List active gallery auctions (commit-reveal sealed-bid)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1145,6 +1488,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_place_bid",
+            title: None,
+            annotations: None,
             description: "Place a sealed bid on a gallery auction (commit phase: bid amount hidden behind commitment)",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1159,6 +1504,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── CapTP Delivery (γ.1 / Seam 3) ─────────────────────────────────────────
         McpToolDef {
             name: "dregg_captp_deliver",
+            title: None,
+            annotations: None,
             description: "Construct and submit a Turn whose root action is authorized by `Authorization::CapTpDelivered` (introducer-signed HandoffCertificate + sender Ed25519 sig over the canonical delivery message). The node cipherclerk plays the recipient/sender; the introducer key is constructed in-process for testing. Returns the turn hash and the cert nonce.",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1182,6 +1529,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── CapTP Handoff Cert Exercise (γ.1 extension) ────────────────────────────
         McpToolDef {
             name: "dregg_exercise_handoff_cert",
+            title: None,
+            annotations: None,
             description: "Exercise a CapTP HandoffCertificate: constructs a Turn authorized by \
                 `Authorization::CapTpDelivered` (mirroring `dregg_captp_deliver`) and attaches a \
                 `Effect::ValidateHandoff { cert_hash, recipient_pk, introducer_pk }` so the \
@@ -1214,6 +1563,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Sovereign Cell Witness (reshaped) ─────────────────────────────────────
         McpToolDef {
             name: "dregg_sign_sovereign_witness",
+            title: None,
+            annotations: None,
             description: "Build a properly-signed `SovereignCellWitness` for a sovereign cell currently in the local ledger. Signs the canonical message (cell_id || old_commitment || new_commitment || effects_hash || timestamp || sequence) with the node cipherclerk's Ed25519 key. Pass `attach_proof=true` to also generate an Effect-VM STARK proof binding the transition. Returns the witness postcard-encoded as hex plus structured fields.",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1235,6 +1586,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── γ.2 bilateral binding receipts ────────────────────────────────────────
         McpToolDef {
             name: "dregg_bilateral_action",
+            title: None,
+            annotations: None,
             description: "Submit a Turn with a single bilateral effect (Transfer / GrantCapability / Introduce) and return the WitnessedReceipts for BOTH cells involved. The executor's bilateral schedule binds the from-side and to-side accumulator roots; this tool surfaces the per-side trace + proof bytes so callers can verify the bilateral identity end-to-end.",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1259,6 +1612,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // the proof.
         McpToolDef {
             name: "dregg_register_name",
+            title: None,
+            annotations: None,
             description: "Register a name in a starbridge-nameservice registry cell via the canonical credential-attested builder. Wraps `starbridge_nameservice::build_register_with_credential_action` (the attested-tier variant). Receipt carries STARK proof binding the three SetField updates (name_hash, owner_hash, expiry).",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1276,6 +1631,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_publish_subscription",
+            title: None,
+            annotations: None,
             description: "Publish a bounty-state notification to a starbridge-subscription cell via the canonical bounty-lifecycle builder. Wraps `starbridge_subscription::build_bounty_state_publish_action`. Receipt carries STARK proof binding the three SetField updates (seq_head, message_root, latest_payload).",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1293,6 +1650,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_issue_credential",
+            title: None,
+            annotations: None,
             description: "Issue a credential and anchor the issuance on a starbridge-identity issuer cell via the canonical builder. Wraps `dregg_credentials::issue` + `starbridge_identity::build_issue_credential_action`. Receipt carries STARK proof binding the two SetField updates (issuance_counter, revocation_root) and the credential id is returned for downstream binding.",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1311,6 +1670,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "dregg_register_service",
+            title: None,
+            annotations: None,
             description: "Register a service entry at a named path on a starbridge-governed-namespace cell via the canonical builder. Wraps `starbridge_governed_namespace::build_register_service_action`. The underlying action is event-only (EmitEvent('service-registered', [path_hash, target])); the EffectVmAir carries a canonical EmitEvent row variant (#110) so the STARK proof binds the actual (topic_hash, payload_hash) of the emitted event into PI[EMIT_EVENT_TOPIC_HASH] / PI[EMIT_EVENT_PAYLOAD_HASH]. No synthesised state mutation is required.",
             input_schema: serde_json::json!({
                 "type": "object",
@@ -1325,6 +1686,8 @@ fn tool_definitions() -> Vec<McpToolDef> {
         // ─── Factory creation via canonical Effect::CreateCellFromFactory ──────────
         McpToolDef {
             name: "dregg_create_cell_from_factory_effect",
+            title: None,
+            annotations: None,
             description: "Emit a canonical `Effect::CreateCellFromFactory` inside a Turn so the new cell is created through the factory descriptor's validate_creation path (instead of the legacy direct insertion). Use this from the wasm/extension surface when a factory has been deployed and you want all child-cell creations to flow through the descriptor's constraints.",
             input_schema: serde_json::json!({
                 "type": "object",

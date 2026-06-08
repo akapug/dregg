@@ -328,6 +328,18 @@ impl AgentRuntime {
         self.executor.set_local_federation_id(id);
     }
 
+    /// Deploy a [`FactoryDescriptor`] into this runtime's executor.
+    ///
+    /// Once deployed, an `Effect::CreateCellFromFactory` referencing the
+    /// descriptor's `factory_vk` is admitted (the executor validates the
+    /// creation params against the descriptor and births the child cell with
+    /// the descriptor's `state_constraints` installed as its `CellProgram`,
+    /// so the factory's slot caveats bite on every subsequent turn). Returns
+    /// the deployed `factory_vk`.
+    pub fn deploy_factory(&mut self, descriptor: dregg_cell::FactoryDescriptor) -> [u8; 32] {
+        self.executor.deploy_factory(descriptor)
+    }
+
     /// THE SWAP — toggle producer mode on this runtime (authority inversion).
     ///
     /// When enabled, [`Self::execute`] / [`Self::execute_turn`] route the committed state through

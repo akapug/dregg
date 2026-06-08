@@ -425,6 +425,19 @@ impl EmbeddedExecutor {
         }
     }
 
+    /// Deploy a [`FactoryDescriptor`] into the embedded runtime's executor.
+    ///
+    /// This is the app-side birth path: after deploying a starbridge-app's
+    /// factory, a `Turn` carrying `Effect::CreateCellFromFactory` (built via
+    /// [`AppCipherclerk::create_from_factory`]) births a child cell whose
+    /// slot caveats (`state_constraints`) are installed as its `CellProgram`
+    /// — so the gating actually bites on every subsequent turn that touches
+    /// the factory-born cell. Returns the deployed `factory_vk`.
+    pub fn deploy_factory(&self, descriptor: dregg_cell::FactoryDescriptor) -> [u8; 32] {
+        let mut rt = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        rt.deploy_factory(descriptor)
+    }
+
     /// Run a closure with mutable access to the embedded ledger.
     ///
     /// Used by integration tests that need to set up a governance cell's

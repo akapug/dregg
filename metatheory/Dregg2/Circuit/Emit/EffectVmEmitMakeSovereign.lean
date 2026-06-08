@@ -41,7 +41,9 @@ was sovereign-committed. The rebind SOUNDNESS lives ONLY in `makeSovereignA_full
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR named hypothesis only. No
 `sorry`/`:= True`/`native_decide`. Read-only imports.
 -/
+import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
+import Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Spec.sovereigncommitment
 
@@ -49,7 +51,7 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitMakeSovereign
 
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
-open Dregg2.Circuit.Emit.EffectVmEmitTransfer (eSA)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (eSA site0 site1 site2)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState RowEncodes)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)

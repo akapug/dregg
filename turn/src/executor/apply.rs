@@ -3197,6 +3197,28 @@ impl TurnExecutor {
             ));
         }
 
+        // Install the factory descriptor's perpetual slot caveats
+        // (`state_constraints`) as the born cell's `CellProgram`. Without this
+        // the descriptor's Lane-G caveats (WriteOnce / Monotonic / …) never
+        // bite: `apply_create_cell_from_factory` previously installed only the
+        // VK *identifier*, leaving `cell.program == CellProgram::None`, so the
+        // executor's per-cell predicate gate (`execute_tree.rs`) skipped the
+        // cell entirely. The state_constraints are exactly the predicate the
+        // factory advertises; installing them here is what makes a
+        // factory-born cell's gating actually enforce on every subsequent turn
+        // that touches it (reject-on-violation / accept-on-conform).
+        {
+            let state_constraints = self
+                .factory_registry
+                .borrow()
+                .get(factory_vk)
+                .map(|d| d.state_constraints.clone())
+                .unwrap_or_default();
+            if !state_constraints.is_empty() {
+                new_cell.program = dregg_cell::CellProgram::Predicate(state_constraints);
+            }
+        }
+
         // Grant initial capabilities.
         for cap_grant in &params.initial_caps {
             let target_id = match &cap_grant.target {

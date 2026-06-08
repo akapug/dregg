@@ -12,6 +12,7 @@
     "shiki": "^4.0"
   },
   "dependencies": {
+    "playwright": "1.60",
     "split.js": "^1.6.5"
   }
 }
