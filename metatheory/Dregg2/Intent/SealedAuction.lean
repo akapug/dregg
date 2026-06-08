@@ -187,14 +187,14 @@ def sealAuction (a : Auction Digest) : Auction Digest :=
   | .commit => { a with phase := .reveal }
   | _       => a
 
+omit [Blake3Kernel Digest] in
 /-- After `commit` in the commit phase, the seal is among the commitments. -/
-omit K in
 theorem commit_mem (a : Auction Digest) (sd : Digest) (h : a.phase = .commit) :
     sd ∈ (commit a sd).commitments := by
   unfold commit; rw [h]; exact List.mem_cons_self ..
 
+omit [Blake3Kernel Digest] in
 /-- `commit` outside the commit phase is a no-op — fail-closed against late commitments. -/
-omit K in
 theorem commit_noop_off_phase (a : Auction Digest) (sd : Digest) (h : a.phase ≠ .commit) :
     commit a sd = a := by
   unfold commit
@@ -334,16 +334,16 @@ def settle (a : Auction Digest) (winner : Bid) (k : RecordKernelState) :
       (fun k' => (k', { a with phase := .settled }))
   | _ => none
 
+omit [Blake3Kernel Digest] in
 /-- **`settle_requires_reveal_phase` — settlement fires ONLY in the reveal phase.** Outside `reveal`
 (still committing, or already settled), `settle` returns `none`: you cannot settle before the commit
 phase closes, nor settle twice. -/
-omit K in
 theorem settle_requires_reveal_phase (a : Auction Digest) (winner : Bid) (k : RecordKernelState)
     (h : a.phase ≠ .reveal) : settle a winner k = none := by
   unfold settle; cases hp : a.phase <;> simp_all
 
+omit [Blake3Kernel Digest] in
 /-- A committed settlement leaves the auction in the `settled` phase. -/
-omit K in
 theorem settle_terminal (a : Auction Digest) (winner : Bid) (k k' : RecordKernelState)
     (a' : Auction Digest) (h : settle a winner k = some (k', a')) : a'.phase = .settled := by
   unfold settle at h
@@ -358,11 +358,11 @@ theorem settle_terminal (a : Auction Digest) (winner : Bid) (k k' : RecordKernel
 
 /-! ## 8. ATOMICITY and CONSERVATION of the award — reusing the Ring keystones. -/
 
+omit [Blake3Kernel Digest] in
 /-- **`settle_atomic` — the award is all-or-nothing.** If the first award leg (the winner's payment)
 fails its executor gate — e.g. the winner does not actually hold `value` of `asset` — the WHOLE award
 aborts: `settle` returns `none`, the ledger untouched. No half-settled award (the winner paying but
 not receiving, or vice-versa). Reuses `Ring.settleRing_atomic`. -/
-omit K in
 theorem settle_atomic (a : Auction Digest) (winner : Bid) (k : RecordKernelState)
     (hphase : a.phase = .reveal)
     (hfail : recKExecAsset k
@@ -375,11 +375,11 @@ theorem settle_atomic (a : Auction Digest) (winner : Bid) (k : RecordKernelState
     exact settleRing_atomic k _ _ hfail
   rw [hring]; rfl
 
+omit [Blake3Kernel Digest] in
 /-- **`settle_conserves` — a settled award is value-neutral.** If the award settles to `k'`, then for
 EVERY asset `b` the total supply is preserved: `recTotalAsset k' b = recTotalAsset k b`. No value is
 minted or burned by the coordination — the winner's payment to the seller and the slot's delivery to
 the winner net to zero in every column. Reuses `Ring.settleRing_conserves`. -/
-omit K in
 theorem settle_conserves (a : Auction Digest) (winner : Bid) (k k' : RecordKernelState)
     (a' : Auction Digest) (h : settle a winner k = some (k', a')) :
     ∀ b : AssetId, recTotalAsset k' b = recTotalAsset k b := by
