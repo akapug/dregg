@@ -55,7 +55,7 @@ executable layer; the Lean model is the truth they are checked against.
 | `dfa` | `Exec/DfaRouting` + `Crypto/Dfa`. |
 | `bridge` | `Crypto/Bridge` + `Exec/JointCharterBridge`. |
 | `storage` | `Exec/{BlindedQueue,QueueCutover,PubSubTopic}` + `Apps/StorageGatewayMandate`. |
-| `directory` | `Distributed/DirectoryLaws` (register/lookup/revoke monotone laws — `revoke_is_final` tombstone, CAS-conflict reject — + §7b `GovDir` governance commit-swap binding). FRINGE-SWEEP moved this OUT of B.2: it is load-bearing for `governed-namespace`, not a pure primitive. Differential `directory/src/directory_diff.rs` (in-flight). |
+| `directory` | `Distributed/DirectoryLaws` (register/lookup/revoke monotone laws — `revoke_is_final` tombstone, CAS-conflict reject — + §7b `GovDir` governance commit-swap binding). FRINGE-SWEEP moved this OUT of B.2: it is load-bearing for `governed-namespace`, not a pure primitive. Differential `directory/src/directory_diff.rs` **DONE** (5 tests drive the REAL `InMemoryDirectory`/`DfaRoutedDirectory`, PASS on persvati — VERIFY+CLOSE sweep 2026-06-08; the earlier "in-flight" was an underclaim). |
 
 ### B.2 Pure infra / crypto-primitive / tooling (no protocol semantics to verify)
 
@@ -104,7 +104,8 @@ load-bearing semantics live only in its Rust. The precise residual:
    load-bearing (consumed by `governed-namespace`). Now `Distributed/DirectoryLaws.lean` models the REAL
    `directory.rs` semantics (`revoke_is_final` tombstone, CAS-conflict reject, version-monotone, exact
    expiry) **+ §7b `GovDir` commit-swap commitment binding**. Differential `directory/src/directory_diff.rs`
-   in-flight.
+   **DONE** (VERIFY+CLOSE 2026-06-08: 5 tests drive the REAL engines, PASS on persvati — "in-flight" was an
+   underclaim).
 5. **`net` Plumtree gossip convergence** — **JUSTIFIED RESIDUAL (infra, other lane), VERIFIED:** the
    causal-ORDER invariant (the lace = the causal DAG) IS dregg-covered — `net/src/causal.rs:13` re-exports
    `dregg_types::CausalDag`, modeled by `Coord/CausalOrder` + `coord_diff.rs`. The raw eager/lazy push-dedup
