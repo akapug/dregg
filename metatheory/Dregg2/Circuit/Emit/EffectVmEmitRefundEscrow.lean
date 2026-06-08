@@ -45,6 +45,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Spec.escrowholdingrefund
+import Dregg2.Exec.SystemRoots
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitRefundEscrow
 
@@ -446,6 +447,264 @@ theorem badRefundRow_rejected : ¬ (VmConstraint.gate gBalLoCredit).holdsVm badR
     state.NONCE, param.AMOUNT]
   norm_num
 
+/-! ## §A — STAGE-3 AMPLIFICATION: bind the `escrows` side-table ROOT into the descriptor.
+
+Record-layer STAGE 3 (`Exec.SystemRoots`) gave each side-table its OWN kernel-owned root column in the
+dedicated `system_roots` sub-block, committed by `systemRootsDigest` into ONE carrier
+(`aux_off_sys.SYSTEM_ROOTS_DIGEST`). For refundEscrow the relevant root is `state.systemRoot.ESCROW`
+(the `escrows` holding-store list digest). BEFORE this stage the escrows resolve `markResolved … id` was
+the §IR-EXTENSION flag — there was no column to bind it. NOW there is. This section AMPLIFIES the
+descriptor to FULL: a per-row root-UPDATE gate binds the `escrows`-resolve step into the row, the
+after-`SYSTEM_ROOTS_DIGEST` carrier is absorbed into `state_commit` by the GROUP-4 extension (site 3's
+previously-spare `.zero` slot), and the anti-ghost tooth is re-proved over the now-bound root, CONNECTED
+to `Exec.SystemRoots.systemRootsDigest_binds_pointwise` (equal commitment ⇒ equal digest ⇒ equal
+`escrows` root). The §1–§10 soundness + universe-A connector are UNCHANGED (strictly additive). -/
+
+open Dregg2.Exec.SystemRoots
+  (SysRoots systemRootsDigest systemRootsDigest_binds_pointwise N_SYSTEM_ROOTS)
+
+/-- The committed `system_roots` digest carrier of the AFTER state (`aux_off_sys.SYSTEM_ROOTS_DIGEST`). -/
+def SYS_DIG_AFTER : Nat := aux_off_sys.SYSTEM_ROOTS_DIGEST
+
+/-- The committed `system_roots` digest carrier of the BEFORE state (one aux past the after-carrier,
+DISTINCT from every claimed aux slot, so it never aliases). -/
+def SYS_DIG_BEFORE : Nat := aux_off_sys.SYSTEM_ROOTS_DIGEST + 1
+
+/-- The `escrows`-accumulator STEP param: the field-element delta the `markResolved … id` resolve
+contributes to the `escrows` side-table digest. The trace generator lays it at `param2`. -/
+def ESCROW_ROOT_STEP_PARAM : Nat := 2
+
+/-- The accumulator-step expression (param column 2). -/
+def ePrmEscrowStep : EmittedExpr := .var (prmCol ESCROW_ROOT_STEP_PARAM)
+
+/-- The kernel index of the `escrows` side-table root (`Exec.SystemRoots.systemRoot.ESCROW = 0`). -/
+def ESCROW_ROOT_INDEX : Fin N_SYSTEM_ROOTS := ⟨Dregg2.Exec.SystemRoots.systemRoot.ESCROW, by decide⟩
+
+/-! ## §B — the root-UPDATE gate + the digest-absorbing GROUP-4 extension site. -/
+
+/-- Root-update gate body: `sa_digest − sb_digest − step` (so `sa_digest = sb_digest + step`). -/
+def gEscrowRootUpdate : EmittedExpr :=
+  eSub (eSub (.var SYS_DIG_AFTER) (.var SYS_DIG_BEFORE)) ePrmEscrowStep
+
+/-- Site 3′: `state_commit = H4(inter1, inter2, inter3, sys_digest_after)` — the GROUP-4 extension that
+absorbs the `system_roots` digest carrier (replacing transfer's spare `.zero`). -/
+def siteEscrowRoot : VmHashSite :=
+  { digestCol := saCol state.STATE_COMMIT
+  , inputs := [ .digest 0, .digest 1, .digest 2, .col SYS_DIG_AFTER ]
+  , arity := 4 }
+
+/-- The amplified GROUP-4 hash sites: transfer's three inner sites + the digest-absorbing site 3′. -/
+def refundEscrowRootHashSites : List VmHashSite :=
+  [ EffectVmEmitTransfer.site0, EffectVmEmitTransfer.site1
+  , EffectVmEmitTransfer.site2, siteEscrowRoot ]
+
+/-- **`refundEscrowRootHash_binds`** — under the amplified sites, the published `state_commit` is the
+genuine 4-level digest of the after-state WITH the `system_roots` digest carrier in the 4th slot. -/
+theorem refundEscrowRootHash_binds (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (h : siteHoldsAll hash env refundEscrowRootHashSites) :
+    env.loc (saCol state.STATE_COMMIT)
+      = hash [ hash [ env.loc (saCol state.BALANCE_LO), env.loc (saCol state.BALANCE_HI)
+                    , env.loc (saCol state.NONCE), env.loc (saCol (state.FIELD_BASE + 0)) ]
+             , hash [ env.loc (saCol (state.FIELD_BASE + 1)), env.loc (saCol (state.FIELD_BASE + 2))
+                    , env.loc (saCol (state.FIELD_BASE + 3)), env.loc (saCol (state.FIELD_BASE + 4)) ]
+             , hash [ env.loc (saCol (state.FIELD_BASE + 5)), env.loc (saCol (state.FIELD_BASE + 6))
+                    , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT) ]
+             , env.loc SYS_DIG_AFTER ] := by
+  unfold siteHoldsAll refundEscrowRootHashSites at h
+  simp only [siteHoldsAll.go, EffectVmEmitTransfer.site0, EffectVmEmitTransfer.site1,
+    EffectVmEmitTransfer.site2, siteEscrowRoot, VmHashSite.resolvedInputs, HashInput.resolve,
+    List.map_cons, List.map_nil, List.getD] at h
+  obtain ⟨_, _, _, h3, _⟩ := h
+  rw [h3]; rfl
+
+/-! ## §C — FAITHFULNESS of the root-update gate + ANTI-GHOST over the bound digest. -/
+
+/-- **`RefundEscrowRootIntent env`** — the intended `escrows`-root move: the `system_roots` digest
+ADVANCES by the `param2` accumulator step (`sa_digest = sb_digest + step`). This is the per-row
+projection of the resolve `escrows := markResolved escrows id` onto its committed digest. -/
+def RefundEscrowRootIntent (env : VmRowEnv) : Prop :=
+  env.loc SYS_DIG_AFTER = env.loc SYS_DIG_BEFORE + env.loc (prmCol ESCROW_ROOT_STEP_PARAM)
+
+/-- **`refundEscrowRoot_gate_faithful`.** The root-update gate holds IFF the digest advances by the step. -/
+theorem refundEscrowRoot_gate_faithful (env : VmRowEnv) :
+    (VmConstraint.gate gEscrowRootUpdate).holdsVm env false false ↔ RefundEscrowRootIntent env := by
+  simp only [VmConstraint.holdsVm, gEscrowRootUpdate, ePrmEscrowStep, eSub, EmittedExpr.eval,
+    RefundEscrowRootIntent]
+  constructor
+  · intro h; linarith
+  · intro h; rw [h]; ring
+
+/-- **Anti-ghost (root tamper).** A row whose after-digest is NOT the advanced accumulator is rejected. -/
+theorem refundEscrowRoot_rejects_wrong_root (env : VmRowEnv)
+    (hwrong : env.loc SYS_DIG_AFTER ≠ env.loc SYS_DIG_BEFORE + env.loc (prmCol ESCROW_ROOT_STEP_PARAM)) :
+    ¬ (VmConstraint.gate gEscrowRootUpdate).holdsVm env false false := by
+  intro h; exact hwrong ((refundEscrowRoot_gate_faithful env).mp h)
+
+/-! ## §D — the AMPLIFIED descriptor + the side-table-root anti-ghost tooth (connected to `SystemRoots`). -/
+
+/-- **`refundEscrowVmDescriptorFull`** — the AMPLIFIED refundEscrow circuit: the §2 per-row gates PLUS
+the `escrows`-root-update gate, with the digest-absorbing GROUP-4 sites. Strictly additive. -/
+def refundEscrowVmDescriptorFull : EffectVmDescriptor :=
+  { name := refundEscrowVmAirName ++ "-rootbound"
+  , traceWidth := EFFECT_VM_WIDTH
+  , piCount := 34
+  , constraints := (refundEscrowRowGates ++ [.gate gEscrowRootUpdate])
+                     ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+  , hashSites := refundEscrowRootHashSites
+  , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
+
+/-- The amplified descriptor STILL forces the §3 row intent (the credit + frame freeze). -/
+theorem refundEscrowFull_forces_intent (env : VmRowEnv) (b1 b2 : Bool)
+    (hgates : ∀ c ∈ refundEscrowVmDescriptorFull.constraints, c.holdsVm env b1 b2) :
+    RefundEscrowRowIntent env := by
+  apply (refundEscrowVm_faithful env).mp
+  intro c hc
+  have hmem : c ∈ refundEscrowVmDescriptorFull.constraints := by
+    unfold refundEscrowVmDescriptorFull
+    simp only [List.mem_append]
+    exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
+  have := hgates c hmem
+  unfold refundEscrowRowGates gFieldPassAll at hc
+  simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
+    List.mem_range] at hc
+  rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    simpa only [VmConstraint.holdsVm] using this
+
+/-- The amplified descriptor forces the `escrows`-ROOT update (the new content STAGE 3 buys). -/
+theorem refundEscrowFull_forces_root (env : VmRowEnv) (b1 b2 : Bool)
+    (hgates : ∀ c ∈ refundEscrowVmDescriptorFull.constraints, c.holdsVm env b1 b2) :
+    RefundEscrowRootIntent env := by
+  apply (refundEscrowRoot_gate_faithful env).mp
+  have hmem : (VmConstraint.gate gEscrowRootUpdate) ∈ refundEscrowVmDescriptorFull.constraints := by
+    unfold refundEscrowVmDescriptorFull
+    simp only [List.mem_append]
+    exact Or.inl (Or.inl (Or.inl (Or.inr (by simp))))
+  have := hgates _ hmem
+  simpa only [VmConstraint.holdsVm] using this
+
+/-- **`refundEscrowFull_commit_binds_sysdigest` — the digest is now bound into `state_commit`.** -/
+theorem refundEscrowFull_commit_binds_sysdigest (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv)
+    (hs₁ : siteHoldsAll hash e₁ refundEscrowRootHashSites)
+    (hs₂ : siteHoldsAll hash e₂ refundEscrowRootHashSites)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
+    e₁.loc SYS_DIG_AFTER = e₂.loc SYS_DIG_AFTER := by
+  rw [refundEscrowRootHash_binds hash e₁ hs₁, refundEscrowRootHash_binds hash e₂ hs₂] at hcommit
+  have houter := hCR _ _ hcommit
+  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at houter
+  exact houter.2.2.2.1
+
+/-- **`refundEscrowFull_binds_escrow_root` — CONNECTED to `Exec.SystemRoots`.** Two amplified rows that
+publish the same `state_commit` AND whose after-digest carrier IS the `systemRootsDigest` of their
+sub-blocks have the SAME `escrows` side-table root. Tampering the `escrows` root (un-resolving the
+record) provably MOVES `state_commit` ⇒ UNSAT. -/
+theorem refundEscrowFull_binds_escrow_root (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
+    (hs₁ : siteHoldsAll hash e₁ refundEscrowRootHashSites)
+    (hs₂ : siteHoldsAll hash e₂ refundEscrowRootHashSites)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT))
+    (hd₁ : e₁.loc SYS_DIG_AFTER = systemRootsDigest hash sr₁)
+    (hd₂ : e₂.loc SYS_DIG_AFTER = systemRootsDigest hash sr₂) :
+    sr₁ ESCROW_ROOT_INDEX = sr₂ ESCROW_ROOT_INDEX := by
+  have hdig : systemRootsDigest hash sr₁ = systemRootsDigest hash sr₂ := by
+    rw [← hd₁, ← hd₂]
+    exact refundEscrowFull_commit_binds_sysdigest hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  exact systemRootsDigest_binds_pointwise hash hCR sr₁ sr₂ hdig ESCROW_ROOT_INDEX
+
+/-- **`refundEscrowFull_sound` — the amplified full soundness.** A row satisfying the AMPLIFIED descriptor,
+under `RowEncodesRefund`, forces the `CellRefundSpec` credit/freeze AND the `escrows`-root advance AND
+publishes the post-commit — the §7 universe-A connector lifted onto the root-bound descriptor. -/
+theorem refundEscrowFull_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (pre post : CellState) (p : RefundParams)
+    (henc : RowEncodesRefund env pre p post)
+    (hsat : satisfiedVm hash refundEscrowVmDescriptorFull env true true) :
+    CellRefundSpec pre p post
+      ∧ RefundEscrowRootIntent env
+      ∧ post.commit = env.pub pi.NEW_COMMIT := by
+  obtain ⟨hcs, hsites⟩ := hsat
+  have hintent := refundEscrowFull_forces_intent env true true hcs
+  have hroot := refundEscrowFull_forces_root env true true hcs
+  refine ⟨intent_to_cellRefundSpec env pre post p henc hintent, hroot, ?_⟩
+  have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
+    intro c hc
+    have hmem : c ∈ refundEscrowVmDescriptorFull.constraints := by
+      unfold refundEscrowVmDescriptorFull
+      simp only [List.mem_append]; exact Or.inr hc
+    have hh := hcs c hmem
+    unfold boundaryLastPins at hc
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+    rcases hc with rfl | rfl | rfl <;>
+      · simp only [VmConstraint.holdsVm] at hh ⊢; exact hh
+  have hpin := (boundaryLast_pins env hlast).1
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
+  rw [← hsaC]; exact hpin
+
+/-! ## §E — RECONCILIATION onto the runtime trace-generator layout (the cutover discipline, `3aaf0772d`).
+
+HONEST cutover status (the runtime hand-AIR + `generate_effect_vm_trace`, `Effect::RefundEscrow` arm):
+
+  * **conserved leg (divergence, reported):** the runtime row is BALANCE-NEUTRAL (`trace.rs` writes only
+    `param0 = escrow_id_hash` and TICKS the nonce; NO balance move). The §1 row gate here reads the
+    universe-A IMAGE (CREDIT the creator cell, nonce FROZEN), the ledger-entry projection of
+    `RefundEscrowSpec`. The runtime moves the creator's balance OUTSIDE this single escrow row; so on the
+    runtime escrow row those columns diverge exactly as the NOTES family's did in `3aaf0772d` (the
+    runtime row is neutral; universe-A's per-cell image moves the ledger). They reconcile only at
+    `amount = 0`. Reported, not papered — the universe-A connector (§9–§10) stays the ledger image.
+
+  * **escrows-root leg (NOW BINDABLE — this section):** the runtime writes the advanced `system_roots`
+    digest carrier (aux 96) for the resolve; once the hand-AIR absorbs it at the commitment's 4th slot
+    (currently `BabyBear::ZERO` in `cell_state.rs::compute_commitment`), `siteEscrowRoot` AGREES and
+    `gEscrowRootUpdate` holds on the honest trace. Lean side FULL+proved; the runtime AIR change (absorb
+    the digest at slot 4) is the one Rust-side step that graduates the cutover — out of this file's scope.
+
+We pin the layout agreement as `#guard`s so a column drift breaks the build. -/
+
+#guard SYS_DIG_AFTER == aux_off_sys.SYSTEM_ROOTS_DIGEST
+#guard SYS_DIG_AFTER == 96
+#guard [auxCol aux_off.STATE_INTER1, auxCol aux_off.STATE_INTER2, auxCol aux_off.STATE_INTER3,
+        SYS_DIG_AFTER, SYS_DIG_BEFORE].dedup.length == 5
+#guard ESCROW_ROOT_STEP_PARAM == 2
+#guard ESCROW_ROOT_STEP_PARAM < NUM_PARAMS
+#guard ESCROW_ROOT_INDEX.val == Dregg2.Exec.SystemRoots.systemRoot.ESCROW
+#guard ESCROW_ROOT_INDEX.val == 0
+#guard refundEscrowVmDescriptorFull.constraints.length == 14 + 14 + 4 + 3
+#guard refundEscrowVmDescriptorFull.hashSites.length == 4
+
+/-! ## §G — NON-VACUITY of the amplification: a concrete root-advancing row + a forged one. -/
+
+/-- A concrete root-update row: `sys_digest 1000 → 1042` (advance by step `42` = the resolve's digest
+contribution). -/
+def goodEscrowRootRow : VmRowEnv where
+  loc := fun v =>
+    if v = SYS_DIG_BEFORE then 1000
+    else if v = SYS_DIG_AFTER then 1042
+    else if v = prmCol ESCROW_ROOT_STEP_PARAM then 42
+    else 0
+  nxt := fun _ => 0
+  pub := fun _ => 0
+
+/-- **NON-VACUITY (witness TRUE).** `goodEscrowRootRow` REALIZES the `escrows`-root advance: `1042 = 1000 + 42`. -/
+theorem goodEscrowRootRow_realizes : RefundEscrowRootIntent goodEscrowRootRow := by
+  unfold RefundEscrowRootIntent goodEscrowRootRow
+  simp only [SYS_DIG_BEFORE, SYS_DIG_AFTER, prmCol, ESCROW_ROOT_STEP_PARAM,
+    aux_off_sys.SYSTEM_ROOTS_DIGEST, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS, STATE_SIZE]
+  norm_num
+
+/-- A FORGED root row: the after-digest is `9999` (NOT the advance `1042`) — an un-resolved `escrows` update. -/
+def badEscrowRootRow : VmRowEnv where
+  loc := fun v => if v = SYS_DIG_AFTER then 9999 else goodEscrowRootRow.loc v
+  nxt := goodEscrowRootRow.nxt
+  pub := goodEscrowRootRow.pub
+
+/-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badEscrowRootRow` is REJECTED by `gEscrowRootUpdate`. -/
+theorem badEscrowRootRow_rejected :
+    ¬ (VmConstraint.gate gEscrowRootUpdate).holdsVm badEscrowRootRow false false := by
+  apply refundEscrowRoot_rejects_wrong_root
+  simp only [badEscrowRootRow, goodEscrowRootRow, SYS_DIG_BEFORE, SYS_DIG_AFTER, prmCol,
+    ESCROW_ROOT_STEP_PARAM, aux_off_sys.SYSTEM_ROOTS_DIGEST, PARAM_BASE, STATE_BEFORE_BASE,
+    NUM_EFFECTS, STATE_SIZE]
+  norm_num
+
 /-! ## §12 — Axiom-hygiene pins. -/
 
 #guard refundEscrowVmDescriptor.constraints.length == 13 + 14 + 4 + 3
@@ -462,5 +721,17 @@ theorem badRefundRow_rejected : ¬ (VmConstraint.gate gBalLoCredit).holdsVm badR
 #assert_axioms descriptor_agrees_with_executor_refund
 #assert_axioms goodRefundRow_realizes_intent
 #assert_axioms badRefundRow_rejected
+
+-- STAGE-3 amplification (the bound `escrows` side-table root):
+#assert_axioms refundEscrowRootHash_binds
+#assert_axioms refundEscrowRoot_gate_faithful
+#assert_axioms refundEscrowRoot_rejects_wrong_root
+#assert_axioms refundEscrowFull_forces_intent
+#assert_axioms refundEscrowFull_forces_root
+#assert_axioms refundEscrowFull_commit_binds_sysdigest
+#assert_axioms refundEscrowFull_binds_escrow_root
+#assert_axioms refundEscrowFull_sound
+#assert_axioms goodEscrowRootRow_realizes
+#assert_axioms badEscrowRootRow_rejected
 
 end Dregg2.Circuit.Emit.EffectVmEmitRefundEscrow
