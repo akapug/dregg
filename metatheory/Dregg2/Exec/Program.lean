@@ -70,6 +70,25 @@ inductive SimpleConstraint where
   | strictMono  (field : FieldName)
   /-- `new[field] = old[field] + delta`. -/
   | fieldDelta  (field : FieldName) (delta : Int)
+  /-- **`memberOf field set`** — value allowlist: `new[field] ∈ set`. The one-sided
+  value-set the pair-table `allowedTransitions` cannot express ("`new[role] ∈ {admin,editor,viewer}`"
+  without enumerating every `(old,new)` pair). Decidable, fail-closed (absent/ill-typed ⇒ `false`). -/
+  | memberOf    (field : FieldName) (set : List Int)
+  /-- **`prefixOf segFields prefix`** — namespace/path prefix containment: the ordered scalar
+  path read from `segFields` (e.g. `["seg0","seg1",…]`) STARTS WITH `prefix : List Int`. The canonical
+  nameservice policy "a subdomain may only be registered under a namespace the actor owns" — a structural
+  prefix over the record substrate (each path segment is a named scalar). Fail-closed: a missing segment
+  shorter than `prefix` ⇒ `false`. Mirrors the Rust datalog `feature_glob` path-prefix
+  (`token/src/datalog_verify.rs:1398`). -/
+  | prefixOf    (segFields : List FieldName) (pre : List Int)
+  /-- **`inRangeTwoSided field lo hi`** — two-sided absolute value band: `lo ≤ new[field] ≤ hi`
+  (the existing `fieldDeltaInRange` is RELATIVE to `old`; this is the ABSOLUTE band). AMM/price-band
+  cells. Fail-closed. -/
+  | inRangeTwoSided (field : FieldName) (lo hi : Int)
+  /-- **`deltaBounded field d`** — REAL two-sided delta: `|new[field] − old[field]| ≤ d`. The
+  catalog's `boundDelta`/`FieldDeltaInRange` are one-sided or relative-range; this is the symmetric
+  absolute bound on change magnitude. Fail-closed on absent old/new. -/
+  | deltaBounded (field : FieldName) (d : Int)
   /-- **Negation** (the Heyting `¬`) — accept iff `inner` rejects. Unboxed inner ⇒ no
   unbounded nesting (`dregg2 §1.5` Heyting fragment). -/
   | not         : SimpleConstraint → SimpleConstraint
@@ -107,6 +126,21 @@ inductive StateConstraint where
   `false`). This is what makes an SGM clearance mandate enforceable INLINE by the executor rather
   than precomputed into an `admitTable`. -/
   | clearanceGe   (g : ClearanceGraph) (actorLabelField : FieldName) (boxLabel : Label)
+  /-- **`affineLe terms c`** — affine inequality `Σ kᵢ·new[fᵢ] ≤ c` over named scalar fields
+  (`terms : List (Int × FieldName)`, each `(kᵢ, fᵢ)`). The general multi-field arithmetic relation the
+  catalog lacked: subsumes `fieldLeField l r` as `[(1,l),(-1,r)] ≤ 0` and gives price-band / `a+b ≤ c`
+  invariants. Maps to a PLONK linear gate. Fail-closed: any absent/ill-typed term field ⇒ `false`. -/
+  | affineLe      (terms : List (Int × FieldName)) (c : Int)
+  /-- **`affineEq terms c`** — affine equation `Σ kᵢ·new[fᵢ] = c`. Subsumes `sumEquals` (all `kᵢ=1`)
+  and re-expresses conservation. Maps to a PLONK linear gate. Fail-closed. -/
+  | affineEq      (terms : List (Int × FieldName)) (c : Int)
+  /-- **`reachable g fromField toLabel`** — DAG-prerequisite / reachability: the label read from
+  `new[fromField]` (as `Label.id`) reaches/dominates `toLabel` in the graph `g` (`dominatesD`). The
+  workflow-prerequisite predicate "this step is admissible only if a prerequisite marker is reached"
+  (CWM advance / SGM admit), reusing the proved-sound `ClearanceGraph.dominatesD`. Distinct from
+  `clearanceGe`: that fixes the box-label and reads the ACTOR's label; `reachable` reads an arbitrary
+  state field as the source. Fail-closed on absent/ill-typed `fromField`. -/
+  | reachable     (g : ClearanceGraph) (fromField : FieldName) (toLabel : Label)
   deriving Repr
 
 /-! ## Evaluation — the executable admissibility check. -/
@@ -114,6 +148,23 @@ inductive StateConstraint where
 /-- A decidable `Int` comparison as a `Bool`. -/
 private def intLe (a b : Int) : Bool := decide (a ≤ b)
 private def intLt (a b : Int) : Bool := decide (a < b)
+
+/-- Read the ordered scalar path from a list of segment field-names (`none` if ANY segment is
+absent/ill-typed — fail-closed, so a path shorter than a queried prefix cannot match). -/
+def readPath (v : Value) (segFields : List FieldName) : Option (List Int) :=
+  segFields.foldr
+    (fun f acc => match v.scalar f, acc with
+                  | some x, some xs => some (x :: xs)
+                  | _,      _       => none)
+    (some [])
+
+/-- `Σ kᵢ·v[fᵢ]` over named scalar fields (`none` if ANY field is absent/ill-typed — fail-closed). -/
+def affineSum (v : Value) (terms : List (Int × FieldName)) : Option Int :=
+  terms.foldr
+    (fun t acc => match acc, v.scalar t.2 with
+                  | some s, some x => some (s + t.1 * x)
+                  | _,      _      => none)
+    (some 0)
 
 /-- Read a named field as a numeric clearance `Label` (`Label.id`), `none` if absent/ill-typed
 (fail-closed: a `clearanceGe` over a missing actor-label field cannot be satisfied). The actor's
@@ -140,6 +191,15 @@ def evalSimple : SimpleConstraint → Value → Value → Bool
                                     | some a, some b => intLt a b | _, _ => false
   | .fieldDelta f d,    old, new => match old.scalar f, new.scalar f with
                                     | some a, some b => b == a + d | _, _ => false
+  | .memberOf f set,    _,   new => match new.scalar f with
+                                    | some x => set.contains x | none => false
+  | .prefixOf segs pre, _,   new => match readPath new segs with
+                                    | some path => pre.isPrefixOf path | none => false
+  | .inRangeTwoSided f lo hi, _, new => match new.scalar f with
+                                    | some x => intLe lo x && intLe x hi | none => false
+  | .deltaBounded f d,  old, new => match old.scalar f, new.scalar f with
+                                    | some a, some b => intLe (-d) (b - a) && intLe (b - a) d
+                                    | _, _ => false
   | .not c,             old, new => !(evalSimple c old new)
 
 /-- **Evaluate a full state constraint** against `(old, new)`. -/
@@ -173,6 +233,16 @@ def evalConstraint : StateConstraint → Value → Value → Bool
       match actorLabelOf new af with
       | some actorLabel => dominatesD g actorLabel box
       | none            => false                 -- absent/ill-typed actor-label field ⇒ fail-closed
+  | .affineLe terms c,      _,   new =>
+      match affineSum new terms with
+      | some s => intLe s c | none => false      -- absent/ill-typed term field ⇒ fail-closed
+  | .affineEq terms c,      _,   new =>
+      match affineSum new terms with
+      | some s => s == c | none => false         -- absent/ill-typed term field ⇒ fail-closed
+  | .reachable g ff toL,    _,   new =>
+      match actorLabelOf new ff with
+      | some fromLabel => dominatesD g fromLabel toL
+      | none           => false                  -- absent/ill-typed source field ⇒ fail-closed
 
 /-! ## RecordProgram + TransitionGuard dispatch + default-deny. -/
 
@@ -307,6 +377,85 @@ theorem evalConstraint_clearanceGe_sound (g : ClearanceGraph) (af : FieldName) (
   obtain ⟨a, ha, hd⟩ := (evalConstraint_clearanceGe_iff g af box o n).mp h
   exact ⟨a, ha, Dregg2.Authority.ClearanceGraph.dominates_of_dominatesD g hd⟩
 
+/-! ## New atom admit-characterizations (the policy-combinator core) — each PROVED. -/
+
+/-- **`memberOf` admit-char — PROVED.** Admits IFF the field is present and its value is in the
+allowlist. Real teeth: a value not in `set` is rejected. -/
+theorem evalSimple_memberOf_iff (f : FieldName) (set : List Int) (o n : Value) :
+    evalSimple (.memberOf f set) o n = true ↔
+      ∃ x, n.scalar f = some x ∧ set.contains x = true := by
+  unfold evalSimple
+  cases h : n.scalar f with
+  | none   => simp
+  | some x => simp
+
+/-- **`prefixOf` admit-char — PROVED.** Admits IFF the path reads (all segments present) AND the
+queried prefix is genuinely a list-prefix of it. The structural nameservice containment. -/
+theorem evalSimple_prefixOf_iff (segs : List FieldName) (pre : List Int) (o n : Value) :
+    evalSimple (.prefixOf segs pre) o n = true ↔
+      ∃ path, readPath n segs = some path ∧ pre.isPrefixOf path = true := by
+  unfold evalSimple
+  cases h : readPath n segs with
+  | none      => simp
+  | some path => simp
+
+/-- **`inRangeTwoSided` admit-char — PROVED.** Admits IFF the field is present and lies in `[lo,hi]`. -/
+theorem evalSimple_inRangeTwoSided_iff (f : FieldName) (lo hi : Int) (o n : Value) :
+    evalSimple (.inRangeTwoSided f lo hi) o n = true ↔
+      ∃ x, n.scalar f = some x ∧ lo ≤ x ∧ x ≤ hi := by
+  unfold evalSimple
+  cases h : n.scalar f with
+  | none   => simp
+  | some x => simp [intLe, decide_eq_true_eq]
+
+/-- **`deltaBounded` admit-char — PROVED (REAL two-sided).** Admits IFF both old and new are present
+and `|new − old| ≤ d` (symmetric: `-d ≤ new−old ≤ d`). -/
+theorem evalSimple_deltaBounded_iff (f : FieldName) (d : Int) (o n : Value) :
+    evalSimple (.deltaBounded f d) o n = true ↔
+      ∃ a b, o.scalar f = some a ∧ n.scalar f = some b ∧ -d ≤ b - a ∧ b - a ≤ d := by
+  unfold evalSimple
+  cases ha : o.scalar f with
+  | none   => simp
+  | some a =>
+    cases hb : n.scalar f with
+    | none   => simp
+    | some b => simp [intLe, decide_eq_true_eq]
+
+/-- **`affineLe` admit-char — PROVED.** Admits IFF every term-field reads AND the affine combination
+`Σ kᵢ·new[fᵢ] ≤ c`. The general arithmetic relation. -/
+theorem evalConstraint_affineLe_iff (terms : List (Int × FieldName)) (c : Int) (o n : Value) :
+    evalConstraint (.affineLe terms c) o n = true ↔
+      ∃ s, affineSum n terms = some s ∧ s ≤ c := by
+  unfold evalConstraint
+  cases h : affineSum n terms with
+  | none   => simp [h]
+  | some s => simp [h, intLe]
+
+/-- **`affineEq` admit-char — PROVED.** Admits IFF every term-field reads AND `Σ kᵢ·new[fᵢ] = c`. -/
+theorem evalConstraint_affineEq_iff (terms : List (Int × FieldName)) (c : Int) (o n : Value) :
+    evalConstraint (.affineEq terms c) o n = true ↔
+      ∃ s, affineSum n terms = some s ∧ s = c := by
+  unfold evalConstraint
+  cases h : affineSum n terms with
+  | none   => simp [h]
+  | some s => simp [h]
+
+/-- **`reachable` ⇒ semantic dominance — PROVED (soundness).** An admitted `reachable` means the
+source-field's label genuinely `dominates`/reaches `toLabel` in `g` (lifting `dominatesD` to the
+`Prop`-level closure via the proved-sound `dominates_of_dominatesD`). The DAG-prerequisite teeth. -/
+theorem evalConstraint_reachable_sound (g : ClearanceGraph) (ff : FieldName) (toL : Label)
+    (o n : Value) (h : evalConstraint (.reachable g ff toL) o n = true) :
+    ∃ fromLabel, actorLabelOf n ff = some fromLabel ∧
+      Dregg2.Authority.ClearanceGraph.dominates g fromLabel toL := by
+  have hiff : evalConstraint (.reachable g ff toL) o n = true ↔
+      ∃ fromLabel, actorLabelOf n ff = some fromLabel ∧ dominatesD g fromLabel toL = true := by
+    unfold evalConstraint
+    cases hf : actorLabelOf n ff with
+    | none          => simp [hf]
+    | some fromLabel => simp [hf]
+  obtain ⟨fromLabel, hf, hd⟩ := hiff.mp h
+  exact ⟨fromLabel, hf, Dregg2.Authority.ClearanceGraph.dominates_of_dominatesD g hd⟩
+
 /-! ## It runs (`#eval`) — real programs admitting / denying real record transitions. -/
 
 /-- A counter cell: one scalar field `count`, program = "count only ever increases". -/
@@ -382,8 +531,79 @@ example : evalConstraint (.clearanceGe clearanceLadder "clearance" (Label.id 2))
 example : evalConstraint (.clearanceGe clearanceLadder "clearance" (Label.id 2))
     (.record [("clearance", .int 2)]) (.record [("clearance", .int 1)]) = false := by decide
 
+/-! ### Policy-combinator atom non-vacuity — each atom ADMITS a real transition AND REJECTS one.
+(The mandatory anti-vacuity pair; all `by decide`, no `native_decide`.) -/
+
+-- memberOf: a role slot admitting only {1 admin, 2 editor, 3 viewer}.
+def roleProgram : RecordProgram := .predicate [.simple (.memberOf "role" [1, 2, 3])]
+#guard (roleProgram.admits 0 (.record [("role", .int 0)]) (.record [("role", .int 2)]))          -- true  (editor ∈ set)
+#guard (roleProgram.admits 0 (.record [("role", .int 0)]) (.record [("role", .int 9)])) == false  -- false (9 ∉ set)
+example : evalSimple (.memberOf "role" [1,2,3]) (.record []) (.record [("role", .int 2)]) = true := by decide
+example : evalSimple (.memberOf "role" [1,2,3]) (.record []) (.record [("role", .int 9)]) = false := by decide
+
+-- prefixOf: a 2-segment path must register UNDER the namespace [10, 20] (owned by the actor).
+def nsProgram : RecordProgram := .predicate [.simple (.prefixOf ["seg0", "seg1", "seg2"] [10, 20])]
+-- ADMIT: path [10,20,7] starts with [10,20].
+#guard (nsProgram.admits 0 (.record []) (.record [("seg0", .int 10), ("seg1", .int 20), ("seg2", .int 7)]))  -- true
+-- REJECT: path [10,99,7] does NOT start with [10,20].
+#guard (nsProgram.admits 0 (.record []) (.record [("seg0", .int 10), ("seg1", .int 99), ("seg2", .int 7)])) == false  -- false
+-- REJECT: a segment missing ⇒ fail-closed.
+#guard (nsProgram.admits 0 (.record []) (.record [("seg0", .int 10), ("seg1", .int 20)])) == false  -- false
+example : evalSimple (.prefixOf ["a","b"] [10]) (.record []) (.record [("a", .int 10), ("b", .int 5)]) = true := by decide
+example : evalSimple (.prefixOf ["a","b"] [10]) (.record []) (.record [("a", .int 11), ("b", .int 5)]) = false := by decide
+
+-- inRangeTwoSided: a price slot constrained to the absolute band [100, 200].
+def priceProgram : RecordProgram := .predicate [.simple (.inRangeTwoSided "price" 100 200)]
+#guard (priceProgram.admits 0 (.record []) (.record [("price", .int 150)]))          -- true
+#guard (priceProgram.admits 0 (.record []) (.record [("price", .int 250)])) == false  -- false (above band)
+example : evalSimple (.inRangeTwoSided "p" 100 200) (.record []) (.record [("p", .int 100)]) = true := by decide
+example : evalSimple (.inRangeTwoSided "p" 100 200) (.record []) (.record [("p", .int 99)])  = false := by decide
+
+-- deltaBounded: a balance may move by at most ±5 per turn (REAL two-sided).
+def jitterProgram : RecordProgram := .predicate [.simple (.deltaBounded "bal" 5)]
+#guard (jitterProgram.admits 0 (.record [("bal", .int 100)]) (.record [("bal", .int 104)]))          -- true  (+4)
+#guard (jitterProgram.admits 0 (.record [("bal", .int 100)]) (.record [("bal", .int 96)]))           -- true  (−4)
+#guard (jitterProgram.admits 0 (.record [("bal", .int 100)]) (.record [("bal", .int 110)])) == false  -- false (+10)
+#guard (jitterProgram.admits 0 (.record [("bal", .int 100)]) (.record [("bal", .int 90)]))  == false  -- false (−10)
+example : evalSimple (.deltaBounded "x" 5) (.record [("x", .int 0)]) (.record [("x", .int 5)])  = true  := by decide
+example : evalSimple (.deltaBounded "x" 5) (.record [("x", .int 0)]) (.record [("x", .int 6)])  = false := by decide
+example : evalSimple (.deltaBounded "x" 5) (.record [("x", .int 0)]) (.record [("x", .int (-6))]) = false := by decide
+
+-- affineLe: a price band `2·bid ≤ ask + 100`, i.e. 2·bid − ask ≤ 100.
+def bandProgram : RecordProgram := .predicate [.affineLe [(2, "bid"), (-1, "ask")] 100]
+#guard (bandProgram.admits 0 (.record []) (.record [("bid", .int 60), ("ask", .int 40)]))           -- true  (120−40=80 ≤ 100)
+#guard (bandProgram.admits 0 (.record []) (.record [("bid", .int 90), ("ask", .int 40)])) == false   -- false (180−40=140 > 100)
+example : evalConstraint (.affineLe [(2,"b"),(-1,"a")] 100) (.record []) (.record [("b", .int 60),("a", .int 40)]) = true := by decide
+example : evalConstraint (.affineLe [(2,"b"),(-1,"a")] 100) (.record []) (.record [("b", .int 90),("a", .int 40)]) = false := by decide
+
+-- affineEq: conservation `in = out0 + out1` re-expressed as `in − out0 − out1 = 0`.
+def consvProgram : RecordProgram := .predicate [.affineEq [(1, "inp"), (-1, "o0"), (-1, "o1")] 0]
+#guard (consvProgram.admits 0 (.record []) (.record [("inp", .int 10), ("o0", .int 6), ("o1", .int 4)]))          -- true  (10−6−4=0)
+#guard (consvProgram.admits 0 (.record []) (.record [("inp", .int 10), ("o0", .int 6), ("o1", .int 3)])) == false  -- false (10−6−3=1)
+example : evalConstraint (.affineEq [(1,"i"),(-1,"o")] 0) (.record []) (.record [("i", .int 7),("o", .int 7)]) = true := by decide
+example : evalConstraint (.affineEq [(1,"i"),(-1,"o")] 0) (.record []) (.record [("i", .int 7),("o", .int 6)]) = false := by decide
+
+-- reachable: a workflow `step` field must reach the prerequisite marker `done` (id 1) in the DAG.
+-- DAG: step-id 2 (review) reaches 1 (drafted); step-id 3 (publish) reaches 2 reaches 1.
+def workflowDag : ClearanceGraph :=
+  { edges := [ (Label.id 3, Label.id 2), (Label.id 2, Label.id 1) ] }
+def workflowProgram : RecordProgram := .predicate [.reachable workflowDag "step" (Label.id 1)]
+-- ADMIT: step 3 (publish) reaches prerequisite 1.
+#guard (workflowProgram.admits 0 (.record []) (.record [("step", .int 3)]))          -- true
+-- REJECT: step 4 is not in the DAG ⇒ cannot reach 1.
+#guard (workflowProgram.admits 0 (.record []) (.record [("step", .int 4)])) == false  -- false
+example : evalConstraint (.reachable workflowDag "step" (Label.id 1)) (.record []) (.record [("step", .int 3)]) = true := by decide
+example : evalConstraint (.reachable workflowDag "step" (Label.id 1)) (.record []) (.record [("step", .int 4)]) = false := by decide
+
 #assert_axioms evalConstraint_boundDelta_fails
 #assert_axioms evalConstraint_clearanceGe_iff
 #assert_axioms evalConstraint_clearanceGe_sound
+#assert_axioms evalSimple_memberOf_iff
+#assert_axioms evalSimple_prefixOf_iff
+#assert_axioms evalSimple_inRangeTwoSided_iff
+#assert_axioms evalSimple_deltaBounded_iff
+#assert_axioms evalConstraint_affineLe_iff
+#assert_axioms evalConstraint_affineEq_iff
+#assert_axioms evalConstraint_reachable_sound
 
 end Dregg2.Exec
