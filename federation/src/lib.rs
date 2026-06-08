@@ -59,6 +59,11 @@
 //! - [`revocation`]: Revocation Merkle tree + non-membership proofs
 //! - [`node`]: Federation node implementation (includes BFT consensus simulation)
 
+/// Strand admission — the HYBRID (stake-OR-vouch) Sybil-admission gate (closes red-team F-4).
+/// The gate IN FRONT of participation/finalization: only admitted strands (seeds, ≥N
+/// distinct-rooted-vouched, or ≥`min_bond` bonded) are finalizable; bonded equivocators are
+/// slashed. Faithful mirror of the verified Lean `Dregg2.Distributed.StrandAdmission`.
+pub mod admission;
 pub mod checkpoint;
 /// Differential: the verified Lean `Dregg2.Distributed.CheckpointPrune` model ⟺ this crate's real
 /// checkpoint-prune arc (the `RetentionPolicy::would_prune` predicate transcribed from
@@ -98,6 +103,9 @@ pub mod transport;
 pub mod types;
 
 // Re-export primary types.
+pub use admission::{
+    AdmissionRegistry, Bond, EquivocationEvidence, StrandId as AdmissionStrandId, Vouch,
+};
 pub use checkpoint::{
     Checkpoint, CheckpointError, DEFAULT_CHECKPOINT_INTERVAL, create_checkpoint,
     finalize_checkpoint, is_checkpoint_height, verify_checkpoint,
