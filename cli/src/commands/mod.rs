@@ -1,9 +1,11 @@
 pub mod cap;
 pub mod cell;
 pub mod cipherclerk;
+pub mod demo;
 pub mod directory;
 pub mod doctor;
 pub mod federation;
+pub mod name;
 pub mod namespace;
 pub mod node;
 pub mod proof;

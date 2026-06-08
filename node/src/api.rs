@@ -499,6 +499,15 @@ pub struct CellDetailResponse {
     pub state_commitment: String,
     /// Quick kind for <dregg-cell-program> and raw views without full program dump.
     pub program_kind: String,
+    /// The cell's `[FieldElement; 8]` state slots, each hex-encoded (64 chars).
+    ///
+    /// Empty when the cell is not found. Slot indices match the on-chain layout
+    /// (`SetField` writes here); userspace apps (e.g. the nameservice) pin a
+    /// fixed slot schema and read named slots out of this vector. Exposing the
+    /// raw fields lets a thin client "resolve" a name by reading its slots back
+    /// rather than only replaying events.
+    #[serde(default)]
+    pub fields: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -2200,9 +2209,25 @@ async fn post_submit_turn(
         forest
     };
 
+    // Nonce auto-fill: the turn nonce is the agent cell's replay counter, which
+    // increments on each committed turn. A thin client that submits several
+    // turns in a row cannot know the live value, so when the request leaves
+    // `nonce` at its default (0) we fill in the agent cell's current nonce. A
+    // caller that needs an explicit nonce (e.g. to pin ordering) passes a
+    // non-zero one and we honor it verbatim. This makes repeated CLI turns
+    // (register → transfer → revoke) work without the caller threading nonces.
+    let effective_nonce = if req.nonce == 0 {
+        s.ledger
+            .get(&agent_cell)
+            .map(|cell| cell.state.nonce())
+            .unwrap_or(0)
+    } else {
+        req.nonce
+    };
+
     let turn = Turn {
         agent: agent_cell,
-        nonce: req.nonce,
+        nonce: effective_nonce,
         fee: req.fee,
         memo: req.memo,
         valid_until: None,
@@ -3055,6 +3080,12 @@ async fn get_cell_detail(
                 dregg_cell::CellProgram::Cases { .. } => "Cases".to_string(),
                 dregg_cell::CellProgram::Circuit { .. } => "Circuit".to_string(),
             },
+            fields: cell
+                .state
+                .fields
+                .iter()
+                .map(|f| hex_encode(f))
+                .collect(),
         })),
         None => Ok(Json(CellDetailResponse {
             id,
@@ -3072,6 +3103,7 @@ async fn get_cell_detail(
             delegation_epoch: 0,
             state_commitment: String::new(),
             program_kind: "None".to_string(),
+            fields: Vec::new(),
         })),
     }
 }
