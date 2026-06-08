@@ -12,8 +12,8 @@ use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
 use commands::{
-    cap, cell, cipherclerk, directory, doctor, federation, namespace, node, proof, route, storage,
-    turn,
+    cap, cell, cipherclerk, demo, directory, doctor, federation, name, namespace, node, proof,
+    route, storage, turn,
 };
 
 /// Dragon's Egg -- sovereign cell-based compute substrate.
@@ -78,6 +78,34 @@ enum Commands {
     Turn {
         #[command(subcommand)]
         command: turn::TurnCommand,
+    },
+
+    /// Nameservice: register / resolve / renew / transfer / revoke names.
+    ///
+    /// The demoable starbridge-app flow — drives the nameservice state machine
+    /// through the verified commit path. See `dregg name <cmd> --help`.
+    Name {
+        #[command(subcommand)]
+        command: name::NameCommand,
+    },
+
+    /// Guided quickstart: run a full nameservice lifecycle against a live node.
+    ///
+    /// Unlocks, faucets the operator cell, then registers → resolves →
+    /// transfers → revokes a name, narrating each verified turn. A newcomer's
+    /// first "do something cool" command.
+    ///
+    ///   dregg demo --passphrase <pass>
+    Demo {
+        /// Name to use for the demo (default: alice.dregg).
+        #[arg(long)]
+        name: Option<String>,
+        /// Cipherclerk passphrase (unlocks turn signing; sets it on a fresh node).
+        #[arg(long)]
+        passphrase: Option<String>,
+        /// Faucet amount to fund the operator cell with.
+        #[arg(long, default_value_t = 5000)]
+        faucet: u64,
     },
 
     /// Capability management (export, enliven, handoff).
@@ -197,6 +225,12 @@ async fn main() {
     let result = match cli.command {
         Commands::Cell { command } => cell::run(command, &cfg, &ctx).await,
         Commands::Turn { command } => turn::run(command, &cfg, &ctx).await,
+        Commands::Name { command } => name::run(command, &cfg, &ctx).await,
+        Commands::Demo {
+            name,
+            passphrase,
+            faucet,
+        } => demo::run(&cfg, &ctx, name, passphrase, faucet).await,
         Commands::Cap { command } => cap::run(command, &cfg, &ctx).await,
         Commands::Cipherclerk { command } => cipherclerk::run(command, &cfg, &ctx).await,
         Commands::Node { command } => node::run(command, &cfg, &ctx).await,
