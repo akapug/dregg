@@ -11,6 +11,45 @@ pub const FIELD_ZERO: FieldElement = [0u8; 32];
 /// Number of user-defined state slots per cell.
 pub const STATE_SLOTS: usize = 8;
 
+/// Number of kernel-owned side-table roots in the dedicated `system_roots`
+/// sub-block (`_RECORD-LAYER-UPGRADE.md` §C, Option C1; record-layer STAGE 3).
+/// One root per side-table; parallel to (and disjoint from) the 8 user
+/// `fields[0..7]` and the `fields_root` map.
+pub const N_SYSTEM_ROOTS: usize = 8;
+
+/// Kernel-owned indices into [`CellState::system_roots`] — the dedicated home
+/// for each side-table's committed root (`_RECORD-LAYER-UPGRADE.md` §C). The
+/// IR-extension originally STOLE the user `fields[1..7]` cells for these roots
+/// (`_IR-EXTENSION-DESIGN.md:138-143`), colliding with app data; STAGE 0–2 freed
+/// the user namespace onto `fields_root`, and STAGE 3 gives the side-table roots
+/// their OWN namespace so they never collide with user fields again. Apps never
+/// address these (no `set_field*` reaches them); only the kernel's escrow/queue/
+/// nullifier/… transitions mutate them.
+///
+/// Mirrors the Lean `Dregg2.Exec.SystemRoots.systemRoot::*` constants.
+pub mod system_root {
+    /// `escrows` list digest (createEscrow / refund / release / bridge-park).
+    pub const ESCROW: usize = 0;
+    /// `queues` table digest (allocate / enqueue / dequeue / resize / pipeline;
+    /// FIFO order intrinsic to the digest).
+    pub const QUEUE: usize = 1;
+    /// refcount table digest (dropRef GC); was the running prover's `fields[3]`.
+    pub const REFCOUNT: usize = 2;
+    /// `swiss` sturdyref table digest (export / enliven / handoff / drop); was
+    /// `fields[4]`.
+    pub const STURDYREF: usize = 3;
+    /// `delegations` keyed-map digest (refresh / revoke delegation epoch).
+    pub const DELEG: usize = 4;
+    /// `nullifiers` accumulator digest (noteSpend append; non-membership via the
+    /// spend-proof PI cross-binding).
+    pub const NULLIFIER: usize = 5;
+    /// `commitments` accumulator digest (noteCreate append).
+    pub const COMMIT: usize = 6;
+    /// `sealedBoxes` store digest (seal / unseal / createSealPair); its OWN home
+    /// now, no longer folded into `cap_root`.
+    pub const SEALED_BOXES: usize = 7;
+}
+
 /// Visibility level for a cell state field.
 ///
 /// Controls progressive disclosure: fields can be fully public, committed (hidden
@@ -112,6 +151,67 @@ pub struct CellState {
     /// map.
     #[serde(default)]
     pub fields_map: BTreeMap<u64, FieldElement>,
+    /// `_RECORD-LAYER-UPGRADE.md` §C (record-layer STAGE 3): the dedicated
+    /// `system_roots` sub-block — each kernel-owned side-table's committed root
+    /// at its OWN fixed index ([`system_root`]). Parallel to (and disjoint from)
+    /// the user `fields[]` and the `fields_root` map: a `set_field*` can NEVER
+    /// reach these, and the kernel's escrow/queue/nullifier/… transitions can
+    /// only touch these (never user fields) — strictly stronger namespace
+    /// separation than today (where the circuit aliased swiss/refcount into
+    /// user-addressable `fields[3]/fields[4]`).
+    ///
+    /// Their committed digest [`compute_system_roots_digest`] is folded into the
+    /// canonical commitment (with a `v3->v4` bump) so a verifier binds the WHOLE
+    /// side-table state. A legacy cell carries the all-zero default — whose
+    /// digest is the cell-INDEPENDENT [`empty_system_roots_digest`] constant — so
+    /// the absorption is a uniform no-op for legacy cells (the STAGE 3
+    /// backward-compat keystone, mirrored in Lean by
+    /// `SystemRoots.legacy_commitS_absorbs_empty_roots`). `#[serde(default)]`
+    /// keeps every existing serialized cell deserializing.
+    #[serde(default = "default_system_roots")]
+    pub system_roots: [FieldElement; N_SYSTEM_ROOTS],
+}
+
+/// The all-empty-tree-sentinel `system_roots` sub-block a LEGACY cell carries:
+/// every side-table empty. Cell-independent, so its digest folds into the
+/// canonical commitment as a uniform no-op.
+pub fn default_system_roots() -> [FieldElement; N_SYSTEM_ROOTS] {
+    [FIELD_ZERO; N_SYSTEM_ROOTS]
+}
+
+/// Domain-separation context for the `system_roots` sub-block digest
+/// ([`compute_system_roots_digest`]). Distinct from the canonical-state-commitment
+/// and `fields_root` contexts so a side-table digest can never be confused with a
+/// full-cell commitment or a user-field-map root.
+pub const SYSTEM_ROOTS_CONTEXT: &str = "dregg-cell:system-roots v1";
+
+/// Compute the committed digest over the dedicated `system_roots` sub-block.
+///
+/// The Rust shadow of the Lean `SystemRoots.systemRootsDigest`
+/// (`ListCommit.listDigest` over the ordered side-table roots): a length-seeded
+/// BLAKE3 sponge over the 8 fixed-order root cells. Order is kernel-fixed (the
+/// [`system_root`] index assignment), so the digest is order-canonical and
+/// injective enough that two distinct sub-blocks cannot share a digest (the
+/// anti-ghost guarantee — a `:= 0` stub is forbidden). The all-zero sub-block
+/// yields the fixed [`empty_system_roots_digest`].
+pub fn compute_system_roots_digest(roots: &[FieldElement; N_SYSTEM_ROOTS]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key(SYSTEM_ROOTS_CONTEXT);
+    // Length prefix (seed): pins the root count (always N_SYSTEM_ROOTS, but the
+    // seed keeps the sponge shape identical to the fields-root accumulator).
+    hasher.update(&(N_SYSTEM_ROOTS as u64).to_le_bytes());
+    for root in roots.iter() {
+        hasher.update(root);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// The digest of the all-empty `system_roots` sub-block — the FIXED constant a
+/// legacy (no-side-table-activity) cell contributes. Cell-independent: folding it
+/// into the canonical commitment is a no-op across legacy cells (the STAGE 3
+/// backward-compat keystone, mirrored in Lean by
+/// `SystemRoots.emptySystemRootsDigest`).
+pub fn empty_system_roots_digest() -> [u8; 32] {
+    compute_system_roots_digest(&default_system_roots())
 }
 
 /// Domain-separation context for the user-field-map keyed digest
@@ -296,7 +396,42 @@ impl CellState {
             // Record-layer Stage 0: empty user-field map.
             fields_root: empty_fields_root(),
             fields_map: BTreeMap::new(),
+            // Record-layer Stage 3: empty (all-sentinel) side-table sub-block.
+            system_roots: default_system_roots(),
         }
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // `_RECORD-LAYER-UPGRADE.md` §C — the dedicated `system_roots` sub-block
+    // (record-layer STAGE 3). Kernel-only accessors: a `set_field*` path NEVER
+    // reaches these, only the escrow/queue/nullifier/… kernel transitions do.
+    // ───────────────────────────────────────────────────────────────────────
+
+    /// Read a kernel-owned side-table root by its [`system_root`] index.
+    /// Returns `None` for an out-of-range index.
+    pub fn system_root(&self, index: usize) -> Option<&FieldElement> {
+        self.system_roots.get(index)
+    }
+
+    /// Write a kernel-owned side-table root by its [`system_root`] index.
+    /// Returns `true` on success, `false` for an out-of-range index. This is the
+    /// ONLY mutator for the sub-block — there is deliberately no `set_field`-style
+    /// path that can reach it, so user fields and system roots are disjoint
+    /// namespaces with disjoint mutators.
+    pub fn set_system_root(&mut self, index: usize, value: FieldElement) -> bool {
+        if index < N_SYSTEM_ROOTS {
+            self.system_roots[index] = value;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The committed digest over the current `system_roots` sub-block — the
+    /// single carrier the circuit absorbs into `state_commit`. Recomputed on
+    /// demand (the sub-block is tiny and kernel-mutated rarely).
+    pub fn system_roots_digest(&self) -> [u8; 32] {
+        compute_system_roots_digest(&self.system_roots)
     }
 
     /// Set a field's visibility level. If transitioning to Committed or

@@ -78,7 +78,58 @@ row the carrier is `0` (the empty-map circuit root), so the legacy `state_commit
 to the pre-STAGE-2 `H4(inter1, inter2, inter3, 0)`. STAGE 2 absorbs THIS cell into `state_commit`
 via GROUP-4 site 3's previously-spare 4th input (`_IR-EXTENSION-DESIGN.md:23,158-162`). -/
 def FIELDS_ROOT : Nat := 13
+
+/-! ### **`system_roots` sub-block (record-layer STAGE 3).** The dedicated, kernel-owned home for the
+8 side-table roots (`_RECORD-LAYER-UPGRADE.md` §C, Option C1; `Exec.SystemRoots`). The IR-extension
+(`_IR-EXTENSION-DESIGN.md:138-143`) originally STOLE the user `fields[1..7]` cells for these roots,
+colliding with app data; STAGE 0–2 FREED the user namespace onto `FIELDS_ROOT`, and STAGE 3 gives the
+side-table roots their OWN namespace so they never collide with user fields again.
+
+These are the column constants the per-effect side-table descriptors (`EffectVmEmitCreateEscrow`,
+`…QueueEnqueue`, `…NoteSpend`, `…Seal`, `…RefreshDelegation`, …) REFERENCE for their root-update
+gate: each writes `saCol (systemRoot.X)`, NEVER a user `fields[j]`. The reconciliation note
+(`_RECORD-LAYER-UPGRADE.md:246-250`) re-targets each emit file's root from `FIELD_BASE+i` onto
+`systemRoot.X` — these are those targets. The 8 roots are committed by `Exec.SystemRoots.systemRootsDigest`
+(one carrier column `SYSTEM_ROOTS_DIGEST`), absorbed into `state_commit` by the same GROUP-4 hash-site
+mechanism `FIELDS_ROOT` uses (anti-ghost tooth: `Exec.SystemRoots.cellCommitS_binds_systemRoots`). -/
+namespace systemRoot
+/-- `escrows` list digest (createEscrow / refund / release / bridge-park). -/
+def ESCROW       : Nat := 0
+/-- `queues` table digest (allocate / enqueue / dequeue / resize / pipeline; FIFO order intrinsic). -/
+def QUEUE        : Nat := 1
+/-- refcount table digest (dropRef GC); was the running prover's `fields[3]` mirror. -/
+def REFCOUNT     : Nat := 2
+/-- `swiss` sturdyref table digest (export / enliven / handoff / drop); was `fields[4]`. -/
+def STURDYREF    : Nat := 3
+/-- `delegations` keyed-map digest (refresh / revoke delegation epoch). -/
+def DELEG        : Nat := 4
+/-- `nullifiers` accumulator digest (noteSpend append; non-membership via spend-proof PI). -/
+def NULLIFIER    : Nat := 5
+/-- `commitments` accumulator digest (noteCreate append). -/
+def COMMIT       : Nat := 6
+/-- `sealedBoxes` store digest (seal / unseal / createSealPair); its OWN home now, no longer folded
+into `cap_root`. -/
+def SEALED_BOXES : Nat := 7
+end systemRoot
+
+/-- Size of the dedicated `system_roots` sub-block (`Exec.SystemRoots.N_SYSTEM_ROOTS = 8`). -/
+def N_SYSTEM_ROOTS : Nat := 8
 end state
+
+/-! Auxiliary column carrying the committed `system_roots` digest (record-layer STAGE 3).
+
+`Exec.SystemRoots.systemRootsDigest` over the 8 side-table roots is carried HERE (one aux column,
+absorbed into `state_commit` by a GROUP-4 extension site, mirroring how `FIELDS_ROOT` is absorbed via
+site3's spare slot). Apps never address it; only the kernel side-table transitions mutate the roots it
+digests. The per-effect descriptors write the individual roots conceptually at `state.systemRoot.X`;
+the prover digests them into this carrier and binds the carrier into the commitment. -/
+namespace aux_off_sys
+/-- The committed `system_roots` digest carrier (`Exec.SystemRoots.systemRootsDigest`). The first aux
+column past the W9-RANGECHECK balance-bit block (`NEW_BAL_HI_BIT_BASE + 30 = 96`); growing aux by one
+is the single minimal width touch (`_IR-EXTENSION-DESIGN.md:158-162` overflow contingency), kept
+DISTINCT from every claimed aux slot so it never aliases a balance bit or sealing witness. -/
+def SYSTEM_ROOTS_DIGEST : Nat := 96
+end aux_off_sys
 
 /-! Selector-column indices (`sel::*`). -/
 namespace sel

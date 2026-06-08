@@ -58,7 +58,7 @@ use crate::state::{CellState, FieldVisibility};
 /// circuit public inputs derive their domain separation transitively from this
 /// context — bumping it cleanly invalidates stale commitments rather than
 /// allowing silent cross-version collisions.
-pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v3";
+pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v4";
 
 /// Domain-separation context for the canonical capability-set root.
 pub const CANONICAL_CAP_ROOT_CONTEXT: &str = "dregg-cell:canonical-capability-root v1";
@@ -279,6 +279,20 @@ fn hash_cell_state_into(hasher: &mut blake3::Hasher, state: &CellState) {
     // bump (above) cleanly invalidates any stale v2 commitment rather than
     // risking a silent cross-version collision.
     hasher.update(&state.fields_root);
+    // Record-layer STAGE 3 (`_RECORD-LAYER-UPGRADE.md` §C): absorb the dedicated
+    // `system_roots` sub-block digest. This folds the 8 kernel-owned side-table
+    // roots (escrow/queue/refcount/sturdyref/deleg/nullifier/commit/sealedBoxes)
+    // into the cell's authority-bearing commitment, so a verifier binds the WHOLE
+    // side-table state — not just the user fields. Absorbed at a FIXED position by
+    // a FIXED constant for legacy cells: a no-side-table cell carries the all-zero
+    // default sub-block, whose digest is `empty_system_roots_digest()` — a
+    // cell-independent constant (proven byte-identical in the Lean keystone
+    // `SystemRoots.legacy_commitS_absorbs_empty_roots` and the Rust
+    // `legacy_cells_share_system_roots_contribution` test). The `v3->v4` context
+    // bump cleanly invalidates any stale v3 commitment. Anti-ghost tooth: a
+    // tampered side-table root flips this digest, flipping the commitment
+    // (`SystemRoots.cellCommitS_binds_systemRoots`).
+    hasher.update(&state.system_roots_digest());
 }
 
 fn hash_permissions_into(hasher: &mut blake3::Hasher, perms: &Permissions) {
@@ -651,6 +665,104 @@ mod tests {
         assert_ne!(after2, tampered, "tampering a map value must move the commitment");
     }
 
+    /// `_RECORD-LAYER-UPGRADE.md` **STAGE 3** (the side-table absorb): the
+    /// dedicated `system_roots` sub-block digest is FOLDED into the canonical
+    /// commitment (v3->v4 bump). The side-table roots are authority-bearing —
+    /// mutating ANY of them MUST move the commitment. This is the anti-ghost
+    /// tooth for ALL 8 side-tables: a `system_roots_digest := 0` stub (or a
+    /// "present but not absorbed" no-op) would make this assertion FAIL, so the
+    /// absorption is genuinely load-bearing. Lean shadow:
+    /// `SystemRoots.cellCommitS_binds_systemRoots`.
+    #[test]
+    fn stage3_system_root_write_moves_commitment() {
+        use crate::state::system_root;
+
+        let mut cell = Cell::new(test_key(7), test_token(11));
+        let before = compute_canonical_state_commitment(&cell);
+
+        // Populate ONE side-table root (escrow) via the kernel-only mutator.
+        assert!(cell.state.set_system_root(system_root::ESCROW, [42u8; 32]));
+        assert_ne!(
+            cell.state.system_roots_digest(),
+            crate::state::empty_system_roots_digest(),
+            "the sub-block must actually be populated (non-vacuous)"
+        );
+
+        let after = compute_canonical_state_commitment(&cell);
+        assert_ne!(
+            before, after,
+            "STAGE 3: the system_roots sub-block is absorbed; a side-table root \
+             write MUST move the canonical commitment (load-bearing, not a stub)"
+        );
+
+        // A DISTINCT side-table root (nullifier) moves it again.
+        let mid = after;
+        assert!(cell.state.set_system_root(system_root::NULLIFIER, [7u8; 32]));
+        let after2 = compute_canonical_state_commitment(&cell);
+        assert_ne!(mid, after2, "a distinct side-table root must move the commitment again");
+
+        // ANTI-GHOST: tampering the SAME side-table root (e.g. an attacker
+        // dropping an escrow → a different root) moves it.
+        assert!(cell.state.set_system_root(system_root::ESCROW, [99u8; 32]));
+        let tampered = compute_canonical_state_commitment(&cell);
+        assert_ne!(after2, tampered, "tampering a side-table root must move the commitment");
+
+        // Every kernel index is distinct and addresses a distinct sub-block cell.
+        let idxs = [
+            system_root::ESCROW, system_root::QUEUE, system_root::REFCOUNT,
+            system_root::STURDYREF, system_root::DELEG, system_root::NULLIFIER,
+            system_root::COMMIT, system_root::SEALED_BOXES,
+        ];
+        let mut sorted = idxs;
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), crate::state::N_SYSTEM_ROOTS, "indices distinct & cover the block");
+    }
+
+    /// `_RECORD-LAYER-UPGRADE.md` **STAGE 3 backward-compat keystone** (the no-op
+    /// fold): a LEGACY cell (all-zero `system_roots`) carries the FIXED
+    /// `empty_system_roots_digest()` constant, cell-INDEPENDENT. So absorbing the
+    /// sub-block digest is a uniform no-op across legacy cells, and a fresh cell, a
+    /// cell whose sub-block was populated then drained, and the explicit
+    /// empty-roots reference all produce the same commitment. Lean shadow:
+    /// `SystemRoots.legacy_commitS_absorbs_empty_roots`.
+    #[test]
+    fn legacy_cells_share_system_roots_contribution() {
+        use crate::state::{empty_system_roots_digest, system_root, FIELD_ZERO};
+
+        // (a) a fresh cell is a legacy cell (all-zero sub-block).
+        let fresh = Cell::new(test_key(7), test_token(11));
+        assert_eq!(fresh.state.system_roots_digest(), empty_system_roots_digest());
+        let c_fresh = compute_canonical_state_commitment(&fresh);
+
+        // (b) a cell whose sub-block was populated then DRAINED back to all-zero:
+        // the digest returns to the same constant, so its commitment is byte-
+        // identical to (a).
+        let mut drained = Cell::new(test_key(7), test_token(11));
+        assert!(drained.state.set_system_root(system_root::QUEUE, [99u8; 32]));
+        assert_ne!(
+            drained.state.system_roots_digest(),
+            empty_system_roots_digest(),
+            "populated: digest differs from empty (non-vacuous)"
+        );
+        assert!(drained.state.set_system_root(system_root::QUEUE, FIELD_ZERO));
+        assert_eq!(drained.state.system_roots_digest(), empty_system_roots_digest());
+        let c_drained = compute_canonical_state_commitment(&drained);
+        assert_eq!(
+            c_fresh, c_drained,
+            "a legacy (empty-sub-block) cell's commitment is independent of sub-block history"
+        );
+
+        // (c) the byte-identical no-op reference (folds BOTH empty-fields-root and
+        // empty-system-roots constants by hand) must reproduce the canonical
+        // commitment exactly for a legacy cell.
+        let c_ref = legacy_reference_commitment(&fresh);
+        assert_eq!(
+            c_fresh, c_ref,
+            "the empty-system-roots absorption is a fixed no-op constant for legacy cells"
+        );
+    }
+
     /// `_RECORD-LAYER-UPGRADE.md` **Stage 1 backward-compat keystone** (the
     /// no-op fold): a LEGACY cell (empty `fields_map`) carries the FIXED
     /// `empty_fields_root()` constant, which is cell-INDEPENDENT. So absorbing
@@ -748,6 +860,9 @@ mod tests {
         hasher.update(&state.refcount_table_root);
         // The no-op fold: the empty-map constant, independent of the cell.
         hasher.update(&empty_fields_root());
+        // STAGE 3 no-op fold: the empty system-roots digest, independent of the
+        // cell (a legacy cell carries the all-zero sub-block).
+        hasher.update(&crate::state::empty_system_roots_digest());
         hash_permissions_into(&mut hasher, &cell.permissions);
         match &cell.verification_key {
             Some(vk) => {
