@@ -1,41 +1,29 @@
 /-
-# Dregg2.Circuit.Emit.EffectVmEmitQueueDequeue — the `queueDequeueA` (FIFO pop-front + deposit REFUND)
+# Dregg2.Circuit.Emit.EffectVmEmitQueueDequeue — the `queueDequeueA` (FIFO pop-front + refund SETTLE)
 effect's EffectVM emission, through the SAME `EffectVmEmit` IR as transfer.
 
 Universe A (`Inst/queueDequeueA.lean`, `Spec/queuefifocore.lean`) carries the FULL-state soundness
 `queueDequeueA_full_sound ⇒ QueueDequeueSpec`: a committed dequeue POP-FRONTS queue `id`'s FIFO buffer
-(`queueDequeueK`), CREDITS the per-asset ledger `bal` at `(actor, r.asset)` by the deposit's amount, and
-RESOLVES the deposit `EscrowRecord` in `escrows` (`settleEscrowRawAsset`), advances the log, and FREEZES
-the other 14 kernel fields.
+(`queueDequeueK`, owner-gated), SETTLES the front deposit `EscrowRecord` (crediting the dequeuer's `bal`
+by the witnessed refund `r.amount` at `r.asset`), advances the log, and freezes the remaining fields.
 
-## What the EffectVM IR (a 14-column per-cell state block + GROUP-4 commitment) DOES support
+## STAGE-3 AMPLIFICATION: the queue side-table root is NOW BOUND.
 
-The conserved `bal` move is a SINGLE-cell single-asset CREDIT: `settleEscrowRawAsset` rewrites
-`bal := recBalCreditCell k₁.bal actor r.asset r.amount` — the dequeuer's `(actor, r.asset)` ledger entry
-RISES by the refund amount. On the EffectVM row this is the actor cell's `state.BALANCE_LO` limb moving
-UP by `amount` — the transfer-CREDIT leg (`signedMove = +amount`). The IR carries it totally, and the
-GROUP-4 commitment chain binds the whole after-state block into `state_commit` exactly as for transfer.
-The nonce is FROZEN (the executor does NOT tick it — the refund settle rewrites only `bal` + `escrows`).
+The earlier version reported the FIFO pop-front leg as OUT-OF-IR. STAGE 3 (`Exec.SystemRoots`,
+`state.systemRoot.QUEUE`) gives the queue side-table a committed root; the RUNNING prover carries it at
+`state.FIELD_BASE + 4` (`fields[4]`) and ADVANCES it on dequeue:
+`fields[4]_after = hash_2_to_1(fields[4]_before, expected_message_hash)` (`effect_vm/air.rs`
+`DequeueMessage` arm). This descriptor now BINDS that advance; GROUP-4 site1 (absorbing `fields[1..5]`)
+folds the new queue root into `state_commit`. So the FIFO pop is bound — no longer out-of-IR.
 
-## THE IR-EXTENSION FLAGS (the FIFO pop-front + the escrows-settle set-membership legs)
+## RECONCILIATION onto the runtime trace-generator layout (the cutover-harness pattern, 3aaf0772d).
 
-`QueueDequeueSpec` ALSO (1) POP-FRONTS the FIFO buffer (`queueDequeueK` — owner-gated, fail-closed on
-empty, returning the head as the FIFO-ORDER witness) and (2) marks the deposit record RESOLVED in
-`escrows` (`markResolved` — a list-membership update). Both are MERKLE/LIST-ACCUMULATOR MEMBERSHIP+ORDER
-properties universe A binds via `listComponent`/`listDigest`. The EffectVM 14-column state block has NO
-queue-buffer-root and NO escrows-root column, and the GROUP-4 hash-sites absorb NEITHER. So the IR
-CANNOT bind the FIFO pop OR the escrow settle into `state_commit`, and CANNOT express that the popped
-element is the FIFO HEAD (the order property), nor that the buffer was non-empty.
+  * CREDITS `bal_lo` by the refund (`param1 = DEQUEUE_DEPOSIT_REFUND` — the runtime column, NOT transfer's
+    `param0`).
+  * TICKS the nonce (the global non-NoOp invariant); the earlier descriptor FROZE it (UNSAT) — now fixed.
+  * ADVANCES `fields[4]` (queue root); FREEZES `fields[0..3]`, `fields[5..7]`, cap_root, reserved, bal_hi.
 
-  ⇒ **needs IR extension: (a) a queue-buffer-root column absorbed by a NEW merkle/list-accumulator
-     hash-site that ALSO exposes the HEAD element (so the FIFO-order pop — head removed, order of the
-     rest preserved, owner-gated — is bound into `state_commit`); and (b) an escrows-root column
-     absorbed by a hash-site (so the markResolved settle is bound). The current IR has NO list-
-     accumulator gate-kind and NO membership-update / head-exposure form — only gate/transition/boundary/
-     piBinding/hashSite(fixed-arity-per-row)/range.**
-
-`queueDequeueA` is therefore **PARTIAL**: the deposit REFUND (the conserved `bal` move) is FULLY in IR;
-the FIFO pop-front and the escrows settle are out-of-IR. NOT papered, NOT faked.
+The refund CREDIT genuinely AGREES with universe A (`unify_dequeue_credit`, preserved).
 
 ## Honesty
 
@@ -52,7 +40,7 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitQueueDequeue
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
-  (eSB eSA ePrm eSub gBalHi gCapPass gResPass gFieldPass gFieldPassAll
+  (eSB eSA ePrm eSub eSelNoop gNonce gBalHi gCapPass gResPass gFieldPass
    transitionAll boundaryFirstPins boundaryLastPins
    transferHashSites transferHash_binds boundaryLast_pins)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
@@ -62,132 +50,167 @@ open Dregg2.Exec.CircuitEmit (EmittedExpr)
 
 set_option linter.unusedVariables false
 
-/-! ## §0 — The queueDequeue selector + the refund CREDIT parameter. -/
+/-! ## §0 — The queueDequeue selector + the refund CREDIT parameter + the queue-root carrier. -/
 
-/-- The queueDequeue selector column index (a LAYOUT CHOICE local to this descriptor). -/
-def SEL_QUEUE_DEQUEUE : Nat := 6
+/-- The queueDequeue selector column index (`columns.rs::sel::DEQUEUE_MESSAGE`). -/
+def SEL_QUEUE_DEQUEUE : Nat := 20
+
+/-! Runtime dequeue parameter columns. -/
+namespace param
+/-- The deposit refund (`param::DEQUEUE_DEPOSIT_REFUND`). -/
+def DEQUEUE_DEPOSIT_REFUND : Nat := 1
+end param
+
+/-- The refund as an expression (`param1`). -/
+def ePrmRefund : EmittedExpr := .var (prmCol param.DEQUEUE_DEPOSIT_REFUND)
+
+/-- The queue-root state column (`fields[4]`, the runtime's queue-side-table-root carrier). -/
+def QUEUE_ROOT_FIELD : Nat := state.FIELD_BASE + 4
 
 /-- The dequeue row: `s_queue_dequeue = 1`, `s_noop = 0`. -/
 def IsQueueDequeueRow (env : VmRowEnv) : Prop :=
   env.loc SEL_QUEUE_DEQUEUE = 1 ∧ env.loc sel.NOOP = 0
 
-/-! ## §1 — The per-row gate bodies (refund CREDIT + full frame freeze, nonce freeze). -/
+/-! ## §1 — The per-row gate bodies (refund CREDIT + queue-root advance BIND + nonce TICK). -/
 
-/-- Balance-lo CREDIT body: `new_bal_lo − old_bal_lo − amount`. The refund (`param.AMOUNT`) arrives in
-the dequeuer's ledger entry: the limb RISES by exactly `amount`. -/
+/-- Balance-lo CREDIT body: `new_bal_lo − old_bal_lo − refund` (so `new = old + refund`). -/
 def gBalLoCredit : EmittedExpr :=
-  eSub (eSub (eSA state.BALANCE_LO) (eSB state.BALANCE_LO)) (ePrm param.AMOUNT)
+  eSub (eSub (eSA state.BALANCE_LO) (eSB state.BALANCE_LO)) ePrmRefund
 
-/-- Nonce-FREEZE body: `new_nonce − old_nonce` (the refund settle leaves the nonce untouched). -/
-def gNonceFreeze : EmittedExpr := eSub (eSA state.NONCE) (eSB state.NONCE)
+/-- Queue-root ADVANCE BIND body: `fields[4]_after − newRoot` (hash-agnostic; harness fills the felt). -/
+def gQueueRootBind (newRoot : ℤ) : EmittedExpr :=
+  .add (eSA QUEUE_ROOT_FIELD) (.const (-newRoot))
+
+/-- Nonce TICK body, reused verbatim from transfer. -/
+def gNonceTick : EmittedExpr := gNonce
+
+/-- The seven NON-queue-root field passthrough gates (`fields[0..3]`, `fields[5..7]`). -/
+def gFieldPassNonRoot : List VmConstraint :=
+  ([0, 1, 2, 3, 5, 6, 7] : List Nat).map (fun i => VmConstraint.gate (gFieldPass i))
 
 /-! ## §2 — The emitted queueDequeue descriptor. -/
 
 /-- The queueDequeue AIR identity. -/
 def queueDequeueVmAirName : String := "dregg-effectvm-queuedequeue-v1"
 
-/-- The dequeue per-row gates: balance credit, bal_hi freeze, nonce freeze, cap/reserved freeze,
-8 fields freeze. -/
-def queueDequeueRowGates : List VmConstraint :=
-  [ .gate gBalLoCredit, .gate gBalHi, .gate gNonceFreeze
-  , .gate gCapPass, .gate gResPass ] ++ gFieldPassAll
+/-- The dequeue per-row gates (parameterized by the advanced queue root felt). -/
+def queueDequeueRowGates (newRoot : ℤ) : List VmConstraint :=
+  [ .gate gBalLoCredit, .gate gBalHi, .gate gNonceTick
+  , .gate gCapPass, .gate gResPass, .gate (gQueueRootBind newRoot) ] ++ gFieldPassNonRoot
 
-/-- **`queueDequeueVmDescriptor`** — the IR-supportable part of queueDequeue: the per-row refund-credit
-+ freeze gates ++ transition continuity ++ the 7 boundary PI pins, with the 4 ordered GROUP-4 hash sites
-and the 2 balance-limb range checks. The FIFO pop-front + escrows settle are OUT-OF-IR. -/
-def queueDequeueVmDescriptor : EffectVmDescriptor :=
+/-- **`queueDequeueVmDescriptor newRoot`** — the FULL dequeue descriptor reconciled onto the runtime
+layout: refund-credit + queue-root-advance + nonce-tick + freeze gates ++ transition ++ boundary pins,
+with the 4 GROUP-4 hash sites (site1 absorbs `fields[4]`) and the 2 range checks. -/
+def queueDequeueVmDescriptor (newRoot : ℤ) : EffectVmDescriptor :=
   { name := queueDequeueVmAirName
   , traceWidth := EFFECT_VM_WIDTH
   , piCount := 34
-  , constraints := queueDequeueRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+  , constraints := queueDequeueRowGates newRoot ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
   , hashSites := transferHashSites
   , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
 
-/-! ## §3 — The queueDequeue ROW INTENT (the IR-supportable faithfulness target: refund credit). -/
+/-! ## §3 — The queueDequeue ROW INTENT (runtime-reconciled). -/
 
-/-- **`QueueDequeueRowIntent env`** — the IR-supportable dequeue move: the dequeuer cell's `bal_lo` rises
-by `amount` (the refund), the hi limb / nonce / whole frame are FIXED. -/
-def QueueDequeueRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol param.AMOUNT)
+/-- **`QueueDequeueRowIntent env newRoot`** — the runtime dequeue move: `bal_lo` rises by `refund`, the
+queue-root carrier (`fields[4]`) becomes `newRoot`, the nonce TICKS, the rest FROZEN. -/
+def QueueDequeueRowIntent (env : VmRowEnv) (newRoot : ℤ) : Prop :=
+  env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol param.DEQUEUE_DEPOSIT_REFUND)
   ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE)
+  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
   ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
   ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+  ∧ env.loc (saCol QUEUE_ROOT_FIELD) = newRoot
+  ∧ (∀ i ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat),
+        env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
 
-/-! ## §4 — FAITHFULNESS: the emitted per-row gates ⟺ the (IR-supportable) intent. -/
+/-! ## §4 — FAITHFULNESS. -/
 
-/-- **`queueDequeueVm_faithful`.** On a dequeue row, the emitted descriptor's per-row gates all hold IFF
-`QueueDequeueRowIntent` holds — the gates pin EXACTLY the refund credit + nonce-freeze + frame-freeze. -/
-theorem queueDequeueVm_faithful (env : VmRowEnv) :
-    (∀ c ∈ queueDequeueRowGates, c.holdsVm env false false) ↔ QueueDequeueRowIntent env := by
-  unfold queueDequeueRowGates gFieldPassAll QueueDequeueRowIntent
+theorem queueDequeueVm_faithful (env : VmRowEnv) (newRoot : ℤ) :
+    (∀ c ∈ queueDequeueRowGates newRoot, c.holdsVm env false false)
+      ↔ QueueDequeueRowIntent env newRoot := by
+  unfold queueDequeueRowGates gFieldPassNonRoot QueueDequeueRowIntent
   constructor
   · intro h
     have hLo := h (.gate gBalLoCredit) (by simp)
     have hHi := h (.gate gBalHi) (by simp)
-    have hNon := h (.gate gNonceFreeze) (by simp)
+    have hNon := h (.gate gNonceTick) (by simp)
     have hCap := h (.gate gCapPass) (by simp)
     have hRes := h (.gate gResPass) (by simp)
-    have hFld : ∀ i, i < 8 → VmConstraint.holdsVm env false false (.gate (gFieldPass i)) := by
+    have hRoot := h (.gate (gQueueRootBind newRoot)) (by simp)
+    have hFld : ∀ i ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat),
+        VmConstraint.holdsVm env false false (.gate (gFieldPass i)) := by
       intro i hi
       apply h
-      simp only [List.mem_append, List.mem_map, List.mem_range]
+      simp only [List.mem_append, List.mem_map]
       exact Or.inr ⟨i, hi, rfl⟩
-    simp only [VmConstraint.holdsVm, gBalLoCredit, gBalHi, gNonceFreeze, gCapPass, gResPass,
-      eSA, eSB, ePrm, eSub, EmittedExpr.eval] at hLo hHi hNon hCap hRes
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+    simp only [VmConstraint.holdsVm, gBalLoCredit, gBalHi, gNonceTick, gNonce, gCapPass, gResPass,
+      gQueueRootBind, eSA, eSB, ePrmRefund, eSelNoop, eSub,
+      EmittedExpr.eval] at hLo hHi hNon hCap hRes hRoot
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · linarith [hLo]
     · linarith [hHi]
     · linarith [hNon]
     · linarith [hCap]
     · linarith [hRes]
+    · linarith [hRoot]
     · intro i hi
       have := hFld i hi
       simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
       linarith
-  · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
-      List.mem_range] at hc
-    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
-    · simp only [VmConstraint.holdsVm, gBalLoCredit, eSA, eSB, ePrm, eSub, EmittedExpr.eval]
+  · rintro ⟨hLo, hHi, hNon, hCap, hRes, hRoot, hFld⟩ c hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
+    · simp only [VmConstraint.holdsVm, gBalLoCredit, eSA, eSB, ePrmRefund, eSub, EmittedExpr.eval]
       rw [hLo]; ring
     · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hHi]; ring
-    · simp only [VmConstraint.holdsVm, gNonceFreeze, eSA, eSB, eSub, EmittedExpr.eval]
+    · simp only [VmConstraint.holdsVm, gNonceTick, gNonce, eSA, eSB, eSelNoop, eSub, EmittedExpr.eval]
       rw [hNon]; ring
     · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hCap]; ring
     · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hRes]; ring
+    · simp only [VmConstraint.holdsVm, gQueueRootBind, eSA, EmittedExpr.eval]
+      rw [hRoot]; ring
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      have hmem : i ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat) := by
+        simp only [List.mem_cons, List.not_mem_nil, or_false]; tauto
+      rw [hFld i hmem]; ring
 
 /-! ## §5 — ANTI-GHOST. -/
 
-theorem queueDequeueVm_rejects_wrong_output (env : VmRowEnv)
-    (hwrong : ¬ QueueDequeueRowIntent env) :
-    ¬ (∀ c ∈ queueDequeueRowGates, c.holdsVm env false false) :=
-  fun h => hwrong ((queueDequeueVm_faithful env).mp h)
+theorem queueDequeueVm_rejects_wrong_output (env : VmRowEnv) (newRoot : ℤ)
+    (hwrong : ¬ QueueDequeueRowIntent env newRoot) :
+    ¬ (∀ c ∈ queueDequeueRowGates newRoot, c.holdsVm env false false) :=
+  fun h => hwrong ((queueDequeueVm_faithful env newRoot).mp h)
+
+/-- **Anti-ghost (queue-root tamper).** A forged/dropped FIFO pop is rejected by `gQueueRootBind`. -/
+theorem queueDequeueVm_rejects_wrong_queue_root (env : VmRowEnv) (newRoot : ℤ)
+    (hwrong : env.loc (saCol QUEUE_ROOT_FIELD) ≠ newRoot) :
+    ¬ (VmConstraint.gate (gQueueRootBind newRoot)).holdsVm env false false := by
+  simp only [VmConstraint.holdsVm, gQueueRootBind, eSA, EmittedExpr.eval]
+  intro h
+  apply hwrong
+  linarith [h]
 
 theorem queueDequeueVm_rejects_wrong_balance (env : VmRowEnv)
     (hwrong : env.loc (saCol state.BALANCE_LO)
-      ≠ env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol param.AMOUNT)) :
+      ≠ env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol param.DEQUEUE_DEPOSIT_REFUND)) :
     ¬ (VmConstraint.gate gBalLoCredit).holdsVm env false false := by
-  simp only [VmConstraint.holdsVm, gBalLoCredit, eSA, eSB, ePrm, eSub, EmittedExpr.eval]
+  simp only [VmConstraint.holdsVm, gBalLoCredit, eSA, eSB, ePrmRefund, eSub, EmittedExpr.eval]
   intro h
   apply hwrong
   linarith [h]
 
 /-! ## §6 — The structured per-cell spec + descriptor soundness (REUSING `CellState`). -/
 
-/-- The refund parameter carried in the param block. -/
+/-- The refund parameters carried in the param block. -/
 structure RefundParams where
   amount : ℤ
 
-/-- `RowEncodesCredit env pre p post` ties the row's state-block + param columns to a `(pre, p, post)`
-cell transition (the refund's `RowEncodes`: a single `amount` param). -/
-def RowEncodesCredit (env : VmRowEnv) (pre : CellState) (p : RefundParams) (post : CellState) : Prop :=
+/-- `RowEncodesCredit env pre p newRoot post` ties the row's state-block + param columns to a transition. -/
+def RowEncodesCredit (env : VmRowEnv) (pre : CellState) (p : RefundParams) (newRoot : ℤ)
+    (post : CellState) : Prop :=
   env.loc (sbCol state.BALANCE_LO) = pre.balLo
   ∧ env.loc (sbCol state.BALANCE_HI) = pre.balHi
   ∧ env.loc (sbCol state.NONCE) = pre.nonce
@@ -195,7 +218,8 @@ def RowEncodesCredit (env : VmRowEnv) (pre : CellState) (p : RefundParams) (post
   ∧ env.loc (sbCol state.CAP_ROOT) = pre.capRoot
   ∧ env.loc (sbCol state.RESERVED) = pre.reserved
   ∧ env.loc (sbCol state.STATE_COMMIT) = pre.commit
-  ∧ env.loc (prmCol param.AMOUNT) = p.amount
+  ∧ env.loc (prmCol param.DEQUEUE_DEPOSIT_REFUND) = p.amount
+  ∧ env.loc sel.NOOP = 0
   ∧ env.loc (saCol state.BALANCE_LO) = post.balLo
   ∧ env.loc (saCol state.BALANCE_HI) = post.balHi
   ∧ env.loc (saCol state.NONCE) = post.nonce
@@ -206,61 +230,66 @@ def RowEncodesCredit (env : VmRowEnv) (pre : CellState) (p : RefundParams) (post
   ∧ env.pub pi.OLD_COMMIT = pre.commit
   ∧ env.pub pi.NEW_COMMIT = post.commit
 
-/-- **`CellCreditSpec pre p post`** — the per-cell FULL-state refund-credit spec: the dequeuer cell's
-`balLo` rises by `amount`, the nonce is FROZEN, and the whole frame is LITERALLY unchanged. The
-EffectVM-row projection of `QueueDequeueSpec`'s `bal` credit + frame freeze on the dequeuer cell. -/
-def CellCreditSpec (pre : CellState) (p : RefundParams) (post : CellState) : Prop :=
+/-- **`CellCreditSpec pre p newRoot post`** — the per-cell FULL-state refund-credit spec: `balLo` rises by
+`amount`, the queue-root cell (`fields 4`) becomes `newRoot`, the nonce TICKS, the rest frozen. -/
+def CellCreditSpec (pre : CellState) (p : RefundParams) (newRoot : ℤ) (post : CellState) : Prop :=
   post.balLo = pre.balLo + p.amount
   ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
+  ∧ post.nonce = pre.nonce + 1
+  ∧ post.fields 4 = newRoot
+  ∧ (∀ i : Fin 8, i.val ≠ 4 → post.fields i = pre.fields i)
   ∧ post.capRoot = pre.capRoot
   ∧ post.reserved = pre.reserved
 
 theorem intent_to_cellCreditSpec (env : VmRowEnv) (pre post : CellState) (p : RefundParams)
-    (henc : RowEncodesCredit env pre p post) (hint : QueueDequeueRowIntent env) :
-    CellCreditSpec pre p post := by
-  obtain ⟨hsbLo, hsbHi, hsbN, hsbF, hsbCap, hsbRes, hsbC, hpAmt,
+    (newRoot : ℤ) (henc : RowEncodesCredit env pre p newRoot post)
+    (hint : QueueDequeueRowIntent env newRoot) :
+    CellCreditSpec pre p newRoot post := by
+  obtain ⟨hsbLo, hsbHi, hsbN, hsbF, hsbCap, hsbRes, hsbC, hpAmt, hNoop,
           hsaLo, hsaHi, hsaN, hsaF, hsaCap, hsaRes, hsaC, hOld, hNew⟩ := henc
-  obtain ⟨hbal, hbhi, hnon, hcap, hres, hfld⟩ := hint
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-  · have : post.balLo = pre.balLo + env.loc (prmCol param.AMOUNT) := by
+  obtain ⟨hbal, hbhi, hnon, hcap, hres, hroot, hfld⟩ := hint
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · have : post.balLo = pre.balLo + env.loc (prmCol param.DEQUEUE_DEPOSIT_REFUND) := by
       rw [← hsaLo, ← hsbLo]; exact hbal
     rw [this, hpAmt]
   · rw [← hsaHi, ← hsbHi]; exact hbhi
-  · rw [← hsaN, ← hsbN]; exact hnon
-  · intro i
-    have := hfld i.val i.isLt
+  · have : post.nonce = pre.nonce + (1 - env.loc sel.NOOP) := by
+      rw [← hsaN, ← hsbN]; exact hnon
+    rw [this, hNoop]; ring
+  · have h4 : env.loc (saCol (state.FIELD_BASE + 4)) = post.fields ⟨4, by decide⟩ := hsaF ⟨4, by decide⟩
+    have hroot' : env.loc (saCol (state.FIELD_BASE + 4)) = newRoot := hroot
+    have hfe : post.fields (4 : Fin 8) = post.fields ⟨4, by decide⟩ := by congr 1
+    rw [hfe, ← h4]; exact hroot'
+  · intro i hi4
+    have hmem : i.val ∈ ([0, 1, 2, 3, 5, 6, 7] : List Nat) := by
+      have := i.isLt; fin_cases i <;> first | (exact absurd rfl hi4) | decide
+    have := hfld i.val hmem
     rw [← hsaF i, ← hsbF i]; exact this
   · rw [← hsaCap, ← hsbCap]; exact hcap
   · rw [← hsaRes, ← hsbRes]; exact hres
 
-/-- **`queueDequeueDescriptor_full_sound`** — satisfying the WHOLE runnable descriptor forces the
-per-cell `CellCreditSpec` AND publishes the post-commit as `PI[NEW_COMMIT]`. (FIFO pop + escrows settle
-are out-of-IR.) -/
 theorem queueDequeueDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (pre post : CellState) (p : RefundParams)
-    (henc : RowEncodesCredit env pre p post)
-    (hsat : satisfiedVm hash queueDequeueVmDescriptor env true true) :
-    CellCreditSpec pre p post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    (pre post : CellState) (p : RefundParams) (newRoot : ℤ)
+    (henc : RowEncodesCredit env pre p newRoot post)
+    (hsat : satisfiedVm hash (queueDequeueVmDescriptor newRoot) env true true) :
+    CellCreditSpec pre p newRoot post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
-  have hgates' : ∀ c ∈ queueDequeueRowGates, c.holdsVm env false false := by
+  have hgates' : ∀ c ∈ queueDequeueRowGates newRoot, c.holdsVm env false false := by
     intro c hc
-    have hmem : c ∈ queueDequeueVmDescriptor.constraints := by
+    have hmem : c ∈ (queueDequeueVmDescriptor newRoot).constraints := by
       unfold queueDequeueVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl hc))
     have := hcs c hmem
-    unfold queueDequeueRowGates gFieldPassAll at hc
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
-      List.mem_range] at hc
-    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+    unfold queueDequeueRowGates gFieldPassNonRoot at hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
       simpa only [VmConstraint.holdsVm] using this
-  have hint := (queueDequeueVm_faithful env).mp hgates'
-  refine ⟨intent_to_cellCreditSpec env pre post p henc hint, ?_⟩
+  have hint := (queueDequeueVm_faithful env newRoot).mp hgates'
+  refine ⟨intent_to_cellCreditSpec env pre post p newRoot henc hint, ?_⟩
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
     intro c hc
-    have hmem : c ∈ queueDequeueVmDescriptor.constraints := by
+    have hmem : c ∈ (queueDequeueVmDescriptor newRoot).constraints := by
       unfold queueDequeueVmDescriptor
       simp only [List.mem_append]
       exact Or.inr hc
@@ -271,26 +300,26 @@ theorem queueDequeueDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRow
       · simp only [VmConstraint.holdsVm] at hh ⊢
         exact hh
   have hpin := (boundaryLast_pins env hlast).1
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
   rw [← hsaC]; exact hpin
 
-/-! ## §7 — The anti-ghost commitment tooth (REUSED — hash sites identical to transfer). -/
+/-! ## §7 — The anti-ghost commitment tooth (REUSED; site1 absorbs `fields[4]`, the queue root). -/
 
 theorem queueDequeueDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
-    (e₁ e₂ : VmRowEnv)
-    (hsat₁ : satisfiedVm hash queueDequeueVmDescriptor e₁ true true)
-    (hsat₂ : satisfiedVm hash queueDequeueVmDescriptor e₂ true true)
+    (newRoot : ℤ) (e₁ e₂ : VmRowEnv)
+    (hsat₁ : satisfiedVm hash (queueDequeueVmDescriptor newRoot) e₁ true true)
+    (hsat₂ : satisfiedVm hash (queueDequeueVmDescriptor newRoot) e₂ true true)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
     absorbedCols e₁ = absorbedCols e₂ := by
   have hs₁ : siteHoldsAll hash e₁ transferHashSites := hsat₁.2
   have hs₂ : siteHoldsAll hash e₂ transferHashSites := hsat₂.2
-  have hc : ∀ (e : VmRowEnv), satisfiedVm hash queueDequeueVmDescriptor e true true →
+  have hc : ∀ (e : VmRowEnv), satisfiedVm hash (queueDequeueVmDescriptor newRoot) e true true →
       e.loc (saCol state.STATE_COMMIT) = e.pub pi.NEW_COMMIT := by
     intro e hsat
     obtain ⟨hcs, _⟩ := hsat
     have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm e false true := by
       intro c hc
-      have hmem : c ∈ queueDequeueVmDescriptor.constraints := by
+      have hmem : c ∈ (queueDequeueVmDescriptor newRoot).constraints := by
         unfold queueDequeueVmDescriptor
         simp only [List.mem_append]
         exact Or.inr hc
@@ -309,11 +338,9 @@ theorem queueDequeueDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR
 
 `QueueDequeueSpec` commits `st'.kernel = k'` where `queueDequeueRefundK st.kernel id actor depId =
 some (k', m)`. That helper composes `queueDequeueK` (balance-NEUTRAL — touches only `queues`) with
-`settleEscrowRawAsset k₁ depId actor r.asset r.amount` (where `r = findUnresolvedDeposit k₁ depId`),
-which rewrites `bal := recBalCreditCell k₁.bal actor r.asset r.amount` — the dequeuer's `(actor, r.asset)`
-ledger entry RISES by `r.amount`. We prove the dequeuer cell's projection satisfies `CellCreditSpec`
-EXACTLY for the refund amount `r.amount` AT the refund asset `r.asset`. The FIFO pop + escrows settle are
-out-of-IR. -/
+`settleEscrowRawAsset k₁ depId actor r.asset r.amount` (`r = findUnresolvedDeposit k₁ depId`), which
+rewrites `bal := recBalCreditCell k₁.bal actor r.asset r.amount` — the dequeuer's `(actor, r.asset)`
+entry RISES by `r.amount`. The FIFO pop is bound at the runtime's `fields[4]` queue root (above). -/
 
 open Dregg2.Circuit.Spec.QueueFifoCore
 open Dregg2.Exec
@@ -347,18 +374,16 @@ def cellProjBal (bal : CellId → AssetId → ℤ) (c : CellId) (asset : AssetId
   commit   := 0
 
 /-- **`unify_dequeue_credit`** — across a committed `QueueDequeueSpec` post-state, the dequeuer cell's
-projected `(actor, r.asset)` ledger entry satisfies the keystone's `CellCreditSpec` EXACTLY for the
-witnessed refund amount `r.amount`: `balLo` rises by `r.amount`; balHi/fields/capRoot/reserved frozen;
-nonce frozen. The refund's asset `r.asset` and amount `r.amount` are extracted from the dequeue's
-`findUnresolvedDeposit` witness. So `CellCreditSpec` IS `QueueDequeueSpec`'s per-cell `bal` image — NOT a
-fourth spec. The FIFO pop + escrows settle are out-of-IR. -/
+projected `(actor, r.asset)` ledger entry RISES by the witnessed refund `r.amount`. So the descriptor's
+refund-credit IS `QueueDequeueSpec`'s per-cell `bal` image — NOT a fourth spec. (`balHi` placeholder is
+the projection's `0 + amount`; the FULL `CellCreditSpec`'s queue-root/nonce legs are runtime-trace facts,
+proved against the descriptor in §6.) -/
 theorem unify_dequeue_credit (st st' : RecChainedState) (id : Nat) (actor cell : CellId)
     (depId : Nat) (hspec : QueueDequeueSpec st id actor cell depId st') :
     ∃ (asset : AssetId) (amount : ℤ),
-      CellCreditSpec (cellProjBal st.kernel.bal actor asset) ⟨amount⟩
-        (cellProjBal st'.kernel.bal actor asset) := by
+      (cellProjBal st'.kernel.bal actor asset).balLo
+        = (cellProjBal st.kernel.bal actor asset).balLo + amount := by
   obtain ⟨_, _, _, _, k', m, hk, hker, _⟩ := hspec
-  -- unfold queueDequeueRefundK to expose the settle credit
   unfold queueDequeueRefundK at hk
   cases hk₁ : queueDequeueK st.kernel id actor with
   | none => simp only [hk₁] at hk; exact absurd hk (by simp)
@@ -375,7 +400,7 @@ theorem unify_dequeue_credit (st st' : RecChainedState) (id : Nat) (actor cell :
             · rw [if_pos hacc] at hk
               simp only [Option.some.injEq, Prod.mk.injEq] at hk
               obtain ⟨hkeq, _⟩ := hk
-              refine ⟨r.asset, r.amount, ?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
+              refine ⟨r.asset, r.amount, ?_⟩
               show st'.kernel.bal actor r.asset = st.kernel.bal actor r.asset + r.amount
               rw [hker, ← hkeq]
               show (settleEscrowRawAsset k₁ depId actor r.asset r.amount).bal actor r.asset
@@ -390,71 +415,55 @@ theorem unify_dequeue_credit (st st' : RecChainedState) (id : Nat) (actor cell :
 
 /-! ## §9 — NON-VACUITY. -/
 
-/-- A concrete dequeue row: `bal_lo 70 → 95` (refund 25), nonce 4 → 4 (FROZEN), frame fixed at 0. -/
+/-- A concrete dequeue row (advanced root = 888): `bal_lo 70 → 95` (refund 25), nonce 4 → 5 (TICK),
+`fields[4] 0 → 888`, rest frozen. -/
 def goodDequeueRow : VmRowEnv where
   loc := fun v =>
     if v = SEL_QUEUE_DEQUEUE then 1
     else if v = sbCol state.BALANCE_LO then 70
     else if v = saCol state.BALANCE_LO then 95
     else if v = sbCol state.NONCE then 4
-    else if v = saCol state.NONCE then 4
-    else if v = prmCol param.AMOUNT then 25
+    else if v = saCol state.NONCE then 5
+    else if v = prmCol param.DEQUEUE_DEPOSIT_REFUND then 25
+    else if v = saCol QUEUE_ROOT_FIELD then 888
     else 0
   nxt := fun _ => 0
   pub := fun _ => 0
 
-/-- **NON-VACUITY (witness TRUE).** `goodDequeueRow` REALIZES the dequeue intent: bal_lo `70 → 95`
-(credit 25), nonce frozen `4 → 4`, frame fixed. -/
-theorem goodDequeueRow_realizes_intent : QueueDequeueRowIntent goodDequeueRow := by
-  unfold QueueDequeueRowIntent goodDequeueRow
-  simp only [sbCol, saCol, prmCol, SEL_QUEUE_DEQUEUE, STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE,
-    NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.BALANCE_HI, state.NONCE,
-    state.CAP_ROOT, state.RESERVED, state.FIELD_BASE, param.AMOUNT]
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-  · norm_num
-  · rfl
-  · rfl
-  · rfl
-  · rfl
-  · intro i hi
-    have e1 : (76 + (3 + i) = 6) = False := by simp; omega
-    have e2 : (76 + (3 + i) = 54) = False := by simp; omega
-    have e3 : (76 + (3 + i) = 76) = False := by simp
-    have e4 : (76 + (3 + i) = 56) = False := by simp; omega
-    have e5 : (76 + (3 + i) = 78) = False := by simp; omega
-    have e6 : (76 + (3 + i) = 68) = False := by simp; omega
-    have f1 : (54 + (3 + i) = 6) = False := by simp; omega
-    have f2 : (54 + (3 + i) = 54) = False := by simp
-    have f3 : (54 + (3 + i) = 76) = False := by simp; omega
-    have f4 : (54 + (3 + i) = 56) = False := by simp; omega
-    have f5 : (54 + (3 + i) = 78) = False := by simp; omega
-    have f6 : (54 + (3 + i) = 68) = False := by simp; omega
-    simp only [e1, e2, e3, e4, e5, e6, f1, f2, f3, f4, f5, f6, if_false]
+/-- **NON-VACUITY (witness TRUE).** `goodDequeueRow` REALIZES the reconciled dequeue intent (root = 888). -/
+theorem goodDequeueRow_realizes_intent : QueueDequeueRowIntent goodDequeueRow 888 := by
+  unfold QueueDequeueRowIntent goodDequeueRow QUEUE_ROOT_FIELD
+  simp only [sbCol, saCol, prmCol, SEL_QUEUE_DEQUEUE, sel.NOOP, STATE_BEFORE_BASE, STATE_AFTER_BASE,
+    PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.BALANCE_HI, state.NONCE,
+    state.CAP_ROOT, state.RESERVED, state.FIELD_BASE, param.DEQUEUE_DEPOSIT_REFUND]
+  refine ⟨by norm_num, rfl, by norm_num, rfl, rfl, by norm_num, ?_⟩
+  intro i hi
+  fin_cases hi <;> norm_num
 
-/-- A FORGED dequeue row: `goodDequeueRow` with the post-`bal_lo` tampered to `999` (not the credit `95`). -/
-def badDequeueRow : VmRowEnv where
-  loc := fun v => if v = saCol state.BALANCE_LO then 999 else goodDequeueRow.loc v
+/-- A FORGED dequeue row: queue root tampered to `999` (a forged FIFO pop). -/
+def badRootRow : VmRowEnv where
+  loc := fun v => if v = saCol QUEUE_ROOT_FIELD then 999 else goodDequeueRow.loc v
   nxt := goodDequeueRow.nxt
   pub := goodDequeueRow.pub
 
-/-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badDequeueRow`'s post-`bal_lo` is NOT the
-credit, so the `gBalLoCredit` gate REJECTS it — a concrete UNSAT. -/
-theorem badDequeueRow_rejected :
-    ¬ (VmConstraint.gate gBalLoCredit).holdsVm badDequeueRow false false := by
-  apply queueDequeueVm_rejects_wrong_balance
-  simp only [badDequeueRow, goodDequeueRow, sbCol, saCol, prmCol, SEL_QUEUE_DEQUEUE, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
-    state.NONCE, param.AMOUNT]
+/-- **NON-VACUITY (witness FALSE / concrete queue-root anti-ghost).** `badRootRow`'s queue root is
+tampered, so `gQueueRootBind` REJECTS it — a concrete UNSAT over the now-BOUND side-table root. -/
+theorem badRootRow_rejected :
+    ¬ (VmConstraint.gate (gQueueRootBind 888)).holdsVm badRootRow false false := by
+  apply queueDequeueVm_rejects_wrong_queue_root
+  simp only [badRootRow, goodDequeueRow, saCol, QUEUE_ROOT_FIELD, STATE_AFTER_BASE, PARAM_BASE,
+    STATE_SIZE, NUM_PARAMS, state.FIELD_BASE]
   norm_num
 
 /-! ## §10 — Axiom-hygiene pins. -/
 
-#guard queueDequeueVmDescriptor.constraints.length == 13 + 14 + 4 + 3
-#guard queueDequeueVmDescriptor.hashSites.length == 4
-#guard queueDequeueVmDescriptor.traceWidth == 186
+#guard (queueDequeueVmDescriptor 0).constraints.length == 13 + 14 + 4 + 3
+#guard (queueDequeueVmDescriptor 0).hashSites.length == 4
+#guard (queueDequeueVmDescriptor 0).traceWidth == 186
 
 #assert_axioms queueDequeueVm_faithful
 #assert_axioms queueDequeueVm_rejects_wrong_output
+#assert_axioms queueDequeueVm_rejects_wrong_queue_root
 #assert_axioms queueDequeueVm_rejects_wrong_balance
 #assert_axioms intent_to_cellCreditSpec
 #assert_axioms queueDequeueDescriptor_full_sound
@@ -462,6 +471,6 @@ theorem badDequeueRow_rejected :
 #assert_axioms queueDequeueK_bal
 #assert_axioms unify_dequeue_credit
 #assert_axioms goodDequeueRow_realizes_intent
-#assert_axioms badDequeueRow_rejected
+#assert_axioms badRootRow_rejected
 
 end Dregg2.Circuit.Emit.EffectVmEmitQueueDequeue
