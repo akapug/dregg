@@ -401,6 +401,51 @@ fn cell_destroy_is_a_lifecycle_swap_gap() {
 }
 
 #[test]
+fn cell_unseal_round_trips() {
+    if skip_no_lean() {
+        return;
+    }
+    // CellUnseal (Sealed→Live) is the LIFECYCLE root-gap CLOSE: the verified `cellUnsealChainA`
+    // flips the discriminant back to `lcLive` (0), and `CellLifecycle::Live` is the ONE lifecycle
+    // state with NO payload. So the wire (a bare discriminant, here dropped because Live=0) carries
+    // everything needed, and `wire_state_to_ledger` reconstitutes `CellLifecycle::Live` byte-exactly
+    // — matching Rust's `Cell::unseal` (which sets `lifecycle = Live`). Both producers commit and the
+    // reconstituted ledger AGREES on state + cap_root + `.root()`. (Its partner transitions CellSeal /
+    // CellDestroy stay gaps: they install a Sealed/Destroyed PAYLOAD the wire does not carry.)
+    let mut a = make_open_cell(1, 100);
+    grant_self_cap(&mut a); // stateAuthB (self-`node` edge) for the unseal authority leg
+    let a_id = a.id();
+    // Pre-state: the cell is SEALED (so unseal has something to reverse). Rust binds a reason payload;
+    // the verified pre-state carries the discriminant `1` (Sealed) — both unseal back to Live.
+    a.seal([7u8; 32], 0).expect("seal the pre-state cell");
+    assert!(
+        matches!(a.lifecycle, CellLifecycle::Sealed { .. }),
+        "pre-state must be Sealed for the unseal round-trip"
+    );
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+
+    // Confirm Rust unseals to Live (so the close is about a real Sealed→Live transition).
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = pre.clone();
+    assert!(
+        executor.execute(
+            &single_effect_turn(a_id, a_id, 0, Effect::CellUnseal { target: a_id }),
+            &mut rust_ledger
+        )
+        .is_committed(),
+        "Rust CellUnseal should commit"
+    );
+    assert!(
+        matches!(rust_ledger.get(&a_id).unwrap().lifecycle, CellLifecycle::Live),
+        "Rust must have unsealed the cell back to Live"
+    );
+
+    let turn = single_effect_turn(a_id, a_id, 0, Effect::CellUnseal { target: a_id });
+    diff(pre, turn, &[a_id]).expect("CellUnseal must round-trip through the verified producer");
+}
+
+#[test]
 fn grant_capability_is_a_cap_fidelity_swap_gap() {
     if skip_no_lean() {
         return;

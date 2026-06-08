@@ -395,6 +395,15 @@ pub fn producer_root_agreeing_effects() -> &'static [&'static str] {
         "Burn",
         "RevokeCapability",
         "QueueAllocate",
+        // CellUnseal (Sealed→Live): the verified `cellUnsealChainA` flips the lifecycle discriminant
+        // back to `lcLive` (0), and `CellLifecycle::Live` is the ONE lifecycle state with NO payload —
+        // so the wire (which carries the discriminant alone) reconstitutes it BYTE-EXACTLY. The
+        // reconstitution (`lean_apply::wire_state_to_ledger`) installs `CellLifecycle::Live`, clearing
+        // the template's Sealed payload, so `compute_canonical_state_commitment`'s `lifecycle` fold
+        // produces the SAME bytes as Rust's `Cell::unseal` (which sets `lifecycle = Live`). The seal
+        // PARTNER (`CellSeal`/`CellDestroy`) carries a `reason_hash`/`sealed_at` /
+        // `death_certificate_hash`/`destroyed_at` PAYLOAD the wire does not carry → still root-gaps.
+        "CellUnseal",
         // §SIDE-TABLE holding-store families — the off-cell-merkle-root escrow/obligation effects.
         // `apply_create_escrow`/`apply_create_obligation` debit ONE cell's `balance` (which the `bal`
         // side-table carries → reconstitutes) and park the value in the off-root `escrows`/
@@ -417,10 +426,12 @@ pub fn producer_root_agreeing_effects() -> &'static [&'static str] {
 /// because Rust re-shapes the ledger structurally. Each is pinned by a NEGATIVE-tooth differential
 /// (`lean_state_producer_widen` + `lean_state_producer_coverage`) that asserts the SPECIFIC
 /// divergence, so the gap is named, never a silent pass. The honest residual of THE SWAP:
-///   * `CellSeal`/`CellUnseal`/`CellDestroy` — the wire `WState` has no `lifecycle` field, and the
-///     Rust commitment binds the lifecycle PAYLOAD (reason hash, sealed/destroyed-at height, death
-///     cert), which the Lean kernel models only as a discriminant `Nat`. Closing this needs the
-///     Lean kernel to model the lifecycle payload, not just a wire codec field.
+///   * `CellSeal`/`CellDestroy` — the wire `WState` carries the lifecycle DISCRIMINANT but not the
+///     Rust commitment's lifecycle PAYLOAD (reason hash + sealed-at height; death-cert hash +
+///     destroyed-at height), which the Lean kernel models only as a discriminant `Nat` (+ a low-64
+///     `deathCert`). Closing these needs the Lean kernel to model the FULL lifecycle payload + carry
+///     it on the wire. (`CellUnseal` is already CLOSED: Sealed→Live is the payload-free transition,
+///     so the discriminant alone reconstitutes byte-exactly — see `producer_root_agreeing_effects`.)
 ///   * `SetPermissions`/`SetVerificationKey` — the wire carries a COLLAPSED scalar, not the full
 ///     `Permissions`/`VerificationKey` struct the commitment binds.
 ///   * `GrantCapability` — the wire `caps` model carries `(target[,rights])` per edge; the Rust
@@ -444,7 +455,11 @@ pub fn producer_root_gap_effects() -> &'static [&'static str] {
         "Refusal",
         "ReceiptArchive",
         "CellSeal",
-        "CellUnseal",
+        // CellUnseal is now root-AGREEING (Sealed→Live, the payload-free lifecycle state — see
+        // `producer_root_agreeing_effects`). Only CellSeal/CellDestroy remain lifecycle root-gaps:
+        // their post-state Sealed/Destroyed binds a `reason_hash`/`sealed_at` /
+        // `death_certificate_hash`/`destroyed_at` payload the wire `lifecycle` table (a bare
+        // discriminant) does not carry, so the reconstitution cannot reproduce the commitment bytes.
         "CellDestroy",
         "GrantCapability",
         "RevokeDelegation",
@@ -686,8 +701,8 @@ pub(crate) fn forest_is_marshallable(turn: &Turn) -> bool {
 ///
 /// This is the STRICTER gate the producer-mode commit path uses to decide whether to INSTALL the
 /// verified post-state. `forest_is_marshallable` (the producer merely RUNS) is a SUPERSET: it admits
-/// the 10 characterized root-GAP effects (SetPermissions / SetVerificationKey / MakeSovereign /
-/// Refusal / ReceiptArchive / CellSeal / CellUnseal / CellDestroy / GrantCapability /
+/// the characterized root-GAP effects (SetPermissions / SetVerificationKey / MakeSovereign /
+/// Refusal / ReceiptArchive / CellSeal / CellDestroy / GrantCapability /
 /// AttenuateCapability) whose Lean-reconstituted root provably DIVERGES from Rust because the wire
 /// model is lossier than the cell commitment. Installing a Lean-produced root for one of those on
 /// the live commit path would commit state that DISAGREES with every other node's Rust root (and the
