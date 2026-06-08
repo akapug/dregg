@@ -1,0 +1,29 @@
+[package]
+name = "starbridge-privacy-voting"
+version = "0.1.0"
+edition = "2024"
+description = "Starbridge userspace privacy-voting app — FactoryDescriptors and turn helpers for poll creation, ballot minting, one-vote-per-cell voting, and monotone tallying."
+
+# Greenfield rebuild of the legacy `apps/privacy-voting/` HTTP app as a
+# dregg-native starbridge-app. Composes dregg primitives only
+# (FactoryDescriptor + Effect::SetField + Effect::EmitEvent +
+# StateConstraint slot caveats) — no domain-specific `Effect::CastVote`.
+#
+# The voting rules are enforced by slot caveats on factory-born cells:
+#   - Ballot cell `VOTE` slot is `WriteOnce`   ⇒ one vote per ballot cell.
+#   - Poll cell tally slots are `Monotonic`    ⇒ tallies only ever increase.
+#   - Poll cell `CLOSED` slot is `WriteOnce`   ⇒ a poll closes exactly once.
+# See `src/lib.rs` for the per-cell field-slot schema.
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

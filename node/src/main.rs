@@ -519,12 +519,15 @@ async fn run_node(
                             );
                         }
                         let federation_id = s.federation_id;
-                        let seed_stats = starbridge_seed::seed_starbridge_factory_cells(
-                            &genesis,
-                            &data_path,
-                            &mut s.ledger,
-                            federation_id,
-                        );
+                        let operator_pubkey = s.cclerk.public_key().0;
+                        let seed_stats =
+                            starbridge_seed::seed_starbridge_factory_cells_with_operator(
+                                &genesis,
+                                &data_path,
+                                &mut s.ledger,
+                                federation_id,
+                                Some(operator_pubkey),
+                            );
                         if seed_stats.total() > 0 {
                             info!(
                                 registered = seed_stats.registered_factories,

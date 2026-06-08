@@ -1,0 +1,32 @@
+[package]
+name = "starbridge-bounty-board"
+version = "0.1.0"
+edition = "2024"
+description = "Starbridge userspace bounty-board app — FactoryDescriptors and turn helpers for posting escrow-backed bounties, claiming them (first-claimer-wins), submitting work, and paying out through a one-way state machine."
+
+# Greenfield rebuild of the legacy `apps/bounty-board/` HTTP app as a
+# dregg-native starbridge-app. Composes dregg primitives only
+# (FactoryDescriptor + Effect::SetField + Effect::EmitEvent +
+# StateConstraint slot caveats) — no domain-specific bounty effects.
+#
+# The bounty lifecycle is enforced by slot caveats on factory-born cells:
+#   - `TITLE_HASH`    is WriteOnce        ⇒ the bounty title is fixed at posting.
+#   - `REWARD`        is Immutable        ⇒ the escrowed reward cannot change.
+#   - `STATE`         is StrictMonotonic  ⇒ OPEN→CLAIMED→SUBMITTED→PAID, no
+#                                            going backward, no re-entering a state.
+#   - `CLAIMANT_HASH` is WriteOnce        ⇒ first claimer wins; a claim cannot
+#                                            be overwritten to steal the bounty.
+# See `src/lib.rs` for the per-cell field-slot schema.
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
