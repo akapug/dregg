@@ -2034,10 +2034,165 @@ async function signTurn(turnSpec: TurnSpec): Promise<SignTurnResult> {
 async function queryBalance(): Promise<{ balance?: number; error?: string }> {
   const cc = await loadState();
   if (cc.locked) return { error: "Cipherclerk is locked" };
-  const pubkeyHex = Array.from(cc.publicKey).map(b => b.toString(16).padStart(2, "0")).join("");
-  const resp = await nodeRequest<{ balance?: number }>(nodeConfig, `/accounts/${pubkeyHex}/balance`);
+  // The node exposes per-cell balance at `/api/cell/{id}` (the explorer read
+  // path), not a `/accounts/{pubkey}/balance` route — that endpoint does not
+  // exist and always 404'd. The client cipherclerk's own cell id is
+  // `derive_raw(public_key, blake3("default"))`. We derive it via the wasm
+  // helper when available, falling back to the node-operator agent cell from
+  // `/api/node/identity` (the cell that JSON turns commit as).
+  const cellId = await clientCellIdHex(cc);
+  if (!cellId) return { error: "Could not derive cell id (wasm unavailable)" };
+  const resp = await nodeRequest<{ balance?: number }>(nodeConfig, `/api/cell/${cellId}`);
   if (!resp.ok) return { error: `Failed to query balance: ${resp.error}` };
   return { balance: resp.data?.balance ?? 0 };
+}
+
+/**
+ * Derive the client cipherclerk's own cell id (`derive_raw(pubkey, H("default"))`)
+ * via the wasm helper if present. Returns null when wasm cannot derive it.
+ */
+async function clientCellIdHex(cc: InternalCipherclerkState): Promise<string | null> {
+  const pubkeyHex = Array.from(cc.publicKey).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const w = wasm as unknown as { cell_id_for_pubkey?: (pkHex: string, domain: string) => string };
+  if (w && typeof w.cell_id_for_pubkey === "function") {
+    try {
+      return w.cell_id_for_pubkey(pubkeyHex, "default");
+    } catch {
+      /* fall through */
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Devnet account view (node-API path; no wasm required)
+//
+// These route through the node's REAL verified executor. JSON turns submitted
+// via POST /api/turns/submit are signed by the NODE OPERATOR's cipherclerk
+// (the node derives the agent from its own pubkey and ignores the body
+// `agent` — confused-deputy hardening, see node/src/api.rs). So the account
+// shown here is the operator's agent cell, the identity whose turns commit.
+// This is the realistic "interact with the devnet node you trust/operate"
+// surface; user-sovereign turns go through the wasm signTurnV3 +
+// /api/turns/submit-signed byte path.
+// ---------------------------------------------------------------------------
+
+interface NodeIdentity {
+  publicKey: string;
+  agentCell: string;
+  unlocked: boolean;
+  agentBalance: number | null;
+  agentNonce: number | null;
+  error?: string;
+}
+
+/** Fetch the node operator's identity (agent cell, balance, nonce, unlocked). */
+async function nodeIdentity(): Promise<NodeIdentity> {
+  const resp = await nodeRequest<{
+    public_key?: string;
+    agent_cell?: string;
+    unlocked?: boolean;
+    agent_balance?: number | null;
+    agent_nonce?: number | null;
+  }>(nodeConfig, "/api/node/identity");
+  if (!resp.ok || !resp.data) {
+    return {
+      publicKey: "",
+      agentCell: "",
+      unlocked: false,
+      agentBalance: null,
+      agentNonce: null,
+      error: resp.ok ? "empty identity response" : resp.error,
+    };
+  }
+  return {
+    publicKey: resp.data.public_key ?? "",
+    agentCell: resp.data.agent_cell ?? "",
+    unlocked: resp.data.unlocked ?? false,
+    agentBalance: resp.data.agent_balance ?? null,
+    agentNonce: resp.data.agent_nonce ?? null,
+  };
+}
+
+/**
+ * Request computrons from the devnet faucet for a cell.
+ *
+ * When `publicKey` is supplied (and derives the cell), the node materializes
+ * the cell with that real Ed25519 key. This is REQUIRED for any cell that
+ * will later submit operator-signed turns: a faucet cell materialized without
+ * a pubkey gets an all-zero key and every later turn fails Ed25519
+ * verification (the cell pubkey, not the signer's, is the verifying key).
+ */
+async function faucetFund(
+  cellId: string,
+  amount: number,
+  publicKey?: string,
+): Promise<{ success: boolean; amount?: number; txHash?: string; error?: string }> {
+  if (!/^[0-9a-fA-F]{64}$/.test(cellId)) {
+    return { success: false, error: "cell id must be 64 hex chars" };
+  }
+  const body: Record<string, unknown> = { recipient: cellId, amount };
+  if (publicKey && /^[0-9a-fA-F]{64}$/.test(publicKey)) body.public_key = publicKey;
+  const resp = await nodeRequest<{ success?: boolean; amount?: number; tx_hash?: string; error?: string }>(
+    nodeConfig,
+    "/api/faucet",
+    { method: "POST", body: JSON.stringify(body) },
+  );
+  if (!resp.ok) return { success: false, error: resp.error };
+  if (!resp.data?.success) return { success: false, error: resp.data?.error || "faucet rejected" };
+  return { success: true, amount: resp.data.amount, txHash: resp.data.tx_hash };
+}
+
+/**
+ * Submit a JSON turn to the node's operator-signed path
+ * (POST /api/turns/submit). The node signs each action with its own
+ * cipherclerk, runs it through the verified executor, and returns the
+ * committed turn hash + proof status. `fee` is the computron budget: it must
+ * cover the effects (e.g. a Transfer costs ~100 + accounting; ~500 is a safe
+ * default for a single transfer). Requires the operator to be unlocked.
+ */
+async function submitJsonTurn(spec: {
+  agent: string;
+  nonce: number;
+  fee: number;
+  memo?: string;
+  effects: Array<Record<string, unknown>>;
+}): Promise<{
+  accepted: boolean;
+  turnHash?: string;
+  proofStatus?: string;
+  witnessCount?: number;
+  error?: string;
+}> {
+  const body = {
+    agent: spec.agent,
+    nonce: spec.nonce,
+    fee: spec.fee,
+    memo: spec.memo,
+    actions: [{ effects: spec.effects }],
+  };
+  const headers: Record<string, string> = {};
+  if (nodeConfig.devnetKey) headers["Authorization"] = `Bearer ${nodeConfig.devnetKey}`;
+  const resp = await nodeRequest<{
+    accepted?: boolean;
+    turn_hash?: string | null;
+    proof_status?: string;
+    witness_count?: number;
+    error?: string | null;
+  }>(nodeConfig, "/api/turns/submit", {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers,
+  });
+  if (!resp.ok) return { accepted: false, error: resp.error };
+  const d = resp.data ?? {};
+  return {
+    accepted: d.accepted ?? false,
+    turnHash: d.turn_hash ?? undefined,
+    proofStatus: d.proof_status,
+    witnessCount: d.witness_count,
+    error: d.error ?? undefined,
+  };
 }
 
 /**
@@ -2292,6 +2447,7 @@ const POPUP_ONLY_METHODS = new Set<MessageType>([
   "dregg:getPrivacyState", "dregg:setCommittedTransferMode", "dregg:getStealthNotes",
   "dregg:getNodeConfig", "dregg:setNodeConfig",
   "dregg:getLiveRefs", "dregg:dropLiveRef",
+  "dregg:nodeIdentity", "dregg:faucetFund", "dregg:submitJsonTurn",
 ]);
 
 async function handleMessage(message: Record<string, unknown>, sender: chrome.runtime.MessageSender): Promise<Record<string, unknown>> {
@@ -2654,6 +2810,34 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
 
     case "dregg:queryBalance":
       return { id: message.id, result: await queryBalance() };
+
+    // Devnet account view (node-API path; routes through the verified executor)
+    case "dregg:nodeIdentity":
+      return { id: message.id, result: await nodeIdentity() };
+
+    case "dregg:faucetFund":
+      return {
+        id: message.id,
+        result: await faucetFund(
+          message.cellId as string,
+          (message.amount as number) ?? 0,
+          message.publicKey as string | undefined,
+        ),
+      };
+
+    case "dregg:submitJsonTurn":
+      return {
+        id: message.id,
+        result: await submitJsonTurn(
+          message.spec as {
+            agent: string;
+            nonce: number;
+            fee: number;
+            memo?: string;
+            effects: Array<Record<string, unknown>>;
+          },
+        ),
+      };
 
     // Node config
     case "dregg:getNodeConfig":

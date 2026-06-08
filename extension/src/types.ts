@@ -146,6 +146,10 @@ export type MessageType =
   // Turn submission
   | "dregg:signTurn"
   | "dregg:queryBalance"
+  // Devnet account view (node-API path)
+  | "dregg:nodeIdentity"
+  | "dregg:faucetFund"
+  | "dregg:submitJsonTurn"
   // Node configuration
   | "dregg:getNodeConfig"
   | "dregg:setNodeConfig"
