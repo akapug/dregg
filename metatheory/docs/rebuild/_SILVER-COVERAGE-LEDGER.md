@@ -45,7 +45,7 @@ Rust** via a differential or FFI (not prose). Anything else is marked GAP honest
 | Crate | LOC | Purpose | Lean? | Runtime | LB | Port priority |
 |---|---:|---|---|---|---|---|
 | `blocklace` | 11789 | **The live consensus engine** — Cordial-Miners DAG + Stingray, `ordering::tau` finalization, `constitution` self-amending membership. | FULL — `Distributed/BlocklaceFinality` (tau differential + executor wire), `MembershipSafety` (constitution rule faithful), `StrandIntegrity` (SSB feed), `Proof/CordialMiners*`/`BFT*`/`Stingray`, `FinalityGate`. | dreggrs (Rust engine; Lean is the verified model+shadow) | YES | done (the richest-covered pillar). |
-| `coord` | 6749 | 3-layer turn coordination: causal chaining, atomic multi-party 2PC, **Stingray bounded-counter / shared-budget** concurrent spend. | FULL — `Distributed/EntangledJoint` (N-cell 2PC + differential `coord/src/entangled_diff.rs`), `Proof/Stingray` (`budget.rs`/`shared_budget.rs` faithful, no-overspend). **Residual:** per-epoch `rebalance` reconciliation (SpendingCertificate quorum) named-open in `Proof/Stingray` §9. | dreggrs | YES | **P2 (this agent's residual)** — rebalance epoch boundary. |
+| `coord` | 6749 | 3-layer turn coordination: causal chaining, atomic multi-party 2PC, **Stingray bounded-counter / shared-budget** concurrent spend. | **FULL** — `Distributed/EntangledJoint` (N-cell 2PC + diff `entangled_diff.rs`), `Proof/Stingray` (within-epoch no-overspend), `Coord/{CausalOrder,TwoPhaseCommit,SharedBudgetDynamics,StingrayCertReconcile}` (diffs in `coord_diff.rs`). **Stingray §9 cross-epoch `rebalance` cert-reconciliation NOW CLOSED** (`StingrayCertReconcile`: epoch-monotonicity/no-replay + quorum reconstruction + f·ceiling Byzantine bound + `CertUnforgeable` portal; REAL-Ed25519 differential). | dreggrs | YES | **done** (was the P2 residual). |
 | `federation` | 8108 | Multi-node federation: BLS threshold sigs (`hints`), **threshold decryption** (Shamir/GF256/Lagrange), checkpoint pruning, epoch transitions, receipts, revocation tree. | PARTIAL → now mostly FULL: **threshold decryption NEW this session** (`Distributed/ThresholdDecrypt` + differential `federation/src/threshold_decrypt_diff.rs`, full 256×256 GF agreement). Membership/epoch threshold rule covered by `MembershipSafety`. Revocation by `Distributed/Revocation`. **Residual GAP:** BLS quorum-cert aggregation (`threshold.rs`/`receipt.rs` over `hints` KZG) + checkpoint-prune safety. | dreggrs | YES | **P2 (this agent)** — threshold decrypt DONE; BLS QC + checkpoint next. |
 
 ## 3. PROTOCOL-level crates — authority / capabilities / tokens
@@ -124,24 +124,42 @@ semantics are SMALL and named precisely:
    detection relative to a named `Blake3Prf`. Differential `federation/src/threshold_decrypt_diff.rs` pins
    the full 256×256 GF table + every t-of-n subset against the real functions. `#assert_axioms`-clean.
 
-2. **`coord` Stingray epoch `rebalance` reconciliation.** Within-epoch concurrent-spend safety is PROVEN
-   (`Proof/Stingray`); the cross-epoch SpendingCertificate quorum reconstruction + epoch monotonicity is the
-   named-open residue (`Proof/Stingray` §9). **P2.**
+2. **✅ DONE this session — `coord` Stingray epoch `rebalance` cert-reconciliation.** The named-OPEN
+   `Proof/Stingray` §9 (signed SpendingCertificates, cross-epoch quorum reconstruction, epoch monotonicity)
+   is now `Dregg2/Coord/StingrayCertReconcile.lean`: a faithful pure model of `budget.rs::rebalance_inner`
+   (`:415-508`, every gate in source order) proving **§9(3)** epoch-monotonicity/no-replay
+   (`rebalance_version_strictly_increases` + `stale_cert_rejected`), **§9(2)** quorum reconstruction = Σ
+   certified spend + the `f·ceiling` Byzantine-undetected bound (`full_rebalance_total_is_cert_sum` +
+   `byzantine_undetected_overspend_le_f_ceiling`), **§9(1)** accepted⇒silo's-own under the named
+   `CertUnforgeable` (Ed25519 EUF-CMA) portal, plus `rebalance_conserves_on_exact`. Differential
+   `coord/src/coord_diff.rs::stingray_cert_reconcile_diff` (6 tests) drives the GENUINE `StingrayCounter`
+   with REAL Ed25519 certificates and asserts every error tag + outcome + post-state agrees.
+   `#assert_axioms`-clean (only `CertUnforgeable` named).
 
 3. **`federation` BLS quorum-certificate aggregation** (`threshold.rs`/`receipt.rs` over `hints` KZG) and
-   **checkpoint-prune safety** (`checkpoint.rs`: a checkpoint below a finalized height is safe to discard).
-   The threshold-*signature* aggregation is the unmodeled crypto; the prune-safety is a finality corollary
-   reachable from `BlocklaceFinality` + `CrashRecovery`. **P2.**
+   **checkpoint-prune safety** (`checkpoint.rs`). **JUSTIFIED RESIDUAL (crypto-primitive).** The
+   threshold-*signature* aggregation reduces to a named crypto hyp (BLS12-381 pairing / KZG — the curve math
+   in `hints`, an imported primitive of the SAME class as the Ed25519/Poseidon floors, NOT dregg protocol
+   semantics). The prune-safety half is a `BlocklaceFinality`+`CrashRecovery` corollary (a checkpoint below a
+   finalized height is discardable) — reachable, low marginal value. **P3.**
 
-4. **`directory` bind/resolve monotone laws** — small, low-LB; a CRDT-flavored key→cap map. **P3 optional.**
+4. **`directory` bind/resolve monotone laws** — **JUSTIFIED RESIDUAL (low-LB primitive).** A CRDT-flavored
+   key→cap map with a monotone per-entry `version` counter (`directory.rs:43`); a lookup primitive over caps
+   ALREADY verified by `Authority/*`. The monotone/last-writer shape is reachable via `Confluence/CRDT`;
+   no directory-specific theorem is load-bearing for system correctness. **P3 optional.**
 
-5. **`net` Plumtree gossip convergence** — the *delivery* layer (eager/lazy push dedup). The causal-ORDER
-   invariant is covered (the lace = the causal DAG); raw gossip convergence is node-infra's lane (`CatchupConverges`
-   covers gap-driven catchup). **P3, infra.**
+5. **`net` Plumtree gossip convergence** — **JUSTIFIED RESIDUAL (infra, other lane).** The *delivery* layer
+   (eager/lazy push dedup) is not protocol truth; the causal-ORDER invariant (lace = causal DAG) IS covered,
+   and the convergence obligation is `Distributed/CatchupConverges` (node-infra's lane). **P3, infra.**
 
 Everything else load-bearing is either (a) already FULL with a differential/FFI, or (b) in another
 workflow's lane (Exec/* SWAP, Circuit/* cutover, Intent/* solver, Authority/* — all actively progressing).
 
-**Silver verdict:** the protocol-semantic surface is ~90% covered with meaningful, connected Lean. The
-residual load-bearing Rust-only semantics are the 5 items above; #1 is now closed. The big remaining
-non-this-agent item is **THE SWAP** (turn/cell executor cutover) — a large rewrite, not a coverage gap.
+**Silver verdict (FINAL):** the genuinely-uncovered load-bearing *protocol* semantics — #1 threshold
+decryption and #2 Stingray cross-epoch reconciliation — are now BOTH CLOSED with meaningful Lean +
+REAL-crypto differentials. Items #3–5 are precisely JUSTIFIED RESIDUALS: a BLS crypto-primitive hyp + a
+finality corollary (#3), a low-LB lookup primitive (#4), and gossip-*delivery* infra whose protocol-truth is
+already covered (#5). **No load-bearing dregg PROTOCOL semantic lives only in Rust.** The remaining true
+Rust-only "source of truth" is the §6 imported primitives (curve/pairing math, key custody) — the justified
+crypto/OS-primitive residual — plus **THE SWAP** (turn/cell executor cutover, a large rewrite tracked by
+#24/#33, not a coverage gap).

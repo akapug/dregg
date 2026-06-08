@@ -44,7 +44,7 @@ executable layer; the Lean model is the truth they are checked against.
 | Crate | Lean model + differential |
 |---|---|
 | `blocklace` | `Distributed/{BlocklaceFinality,MembershipSafety,StrandIntegrity,FinalityGate}` + `Proof/{CordialMiners*,BFT*,Stingray}`. The live Rust consensus engine; Lean is its verified model. `tau` golden differential. |
-| `coord` | `Distributed/EntangledJoint` (differential `coord/src/entangled_diff.rs`) + `Proof/Stingray` (`budget.rs`/`shared_budget.rs`). |
+| `coord` | `Distributed/EntangledJoint` (diff `coord/src/entangled_diff.rs`) + `Proof/Stingray` + `Coord/{CausalOrder,TwoPhaseCommit,SharedBudgetDynamics,StingrayCertReconcile}` (diffs in `coord/src/coord_diff.rs`). **Cross-epoch `rebalance` cert-reconciliation now FULL** (`StingrayCertReconcile`, REAL-Ed25519 differential). |
 | `federation` | `Distributed/ThresholdDecrypt` (**NEW** differential `federation/src/threshold_decrypt_diff.rs`) + `Distributed/{MembershipSafety,Revocation}`. |
 | `macaroon` | `Authority/CaveatChain` (real HMAC fold, relative to `MacUnforgeable`). |
 | `token`, `credentials` | `Authority/{Credential,CredentialAttenuation,Authorization,ClearanceGraph}`. |
@@ -82,20 +82,39 @@ executable layer; the Lean model is the truth they are checked against.
 The migration from "dreggrs B.1 = verified shadow" to "fully dregg" is complete for a crate exactly when NO
 load-bearing semantics live only in its Rust. The precise residual:
 
-1. **✅ `federation` threshold decryption** — DONE this session (`Distributed/ThresholdDecrypt` + differential).
-2. **`coord` Stingray epoch `rebalance`** — SpendingCertificate quorum reconstruction + epoch monotonicity
-   (named-open `Proof/Stingray` §9). Port: model the cross-epoch reconciliation half.
-3. **`federation` BLS quorum-cert aggregation** (`threshold.rs`/`receipt.rs` / `hints` KZG) +
-   **checkpoint-prune safety** (`checkpoint.rs`). Port: BLS-agg reduction (named crypto hyp) + prune-safety
-   as a `BlocklaceFinality`+`CrashRecovery` corollary.
-4. **`directory` bind/resolve monotone laws** — P3 optional, small, low load-bearing.
-5. **`net` Plumtree gossip convergence** — P3 infra (node-infra lane; `CatchupConverges` covers the
-   convergence obligation; raw push-dedup is delivery, not protocol truth).
+1. **✅ `federation` threshold decryption** — DONE (`Distributed/ThresholdDecrypt` + differential).
+2. **✅ `coord` Stingray epoch `rebalance` cert-reconciliation** — DONE THIS SESSION. The named-OPEN
+   `Proof/Stingray` §9 (signed SpendingCertificates, quorum reconstruction of true spend, epoch monotonicity)
+   is now `Dregg2/Coord/StingrayCertReconcile.lean`: a faithful pure model of `budget.rs::rebalance_inner`
+   (`:415-508`, every gate in source order) proving §9(3) epoch-monotonicity/no-replay
+   (`rebalance_version_strictly_increases` + `stale_cert_rejected`), §9(2) quorum reconstruction + Byzantine
+   bound (`full_rebalance_total_is_cert_sum` + `byzantine_undetected_overspend_le_f_ceiling`, ≤ f·ceiling
+   undetected), §9(1) accepted⇒silo's-own under the named `CertUnforgeable` (Ed25519 EUF-CMA) portal, plus
+   `rebalance_conserves_on_exact`. Differential `coord/src/coord_diff.rs::stingray_cert_reconcile_diff` (6
+   tests) drives the GENUINE `StingrayCounter` with REAL Ed25519 certificates. `#assert_axioms`-clean.
+3. **`federation` BLS quorum-cert aggregation** (`threshold.rs`/`receipt.rs` over `hints` KZG) +
+   **checkpoint-prune safety** (`checkpoint.rs`). **JUSTIFIED RESIDUAL (crypto-primitive):** the BLS
+   threshold-*signature* aggregation reduces to a named crypto hyp (BLS12-381 pairing / KZG, the curve math
+   in `hints` — an imported primitive, NOT dregg protocol semantics, like the Ed25519/Poseidon floors).
+   The prune-safety half is a `BlocklaceFinality`+`CrashRecovery` corollary (a checkpoint below a finalized
+   height is discardable) — reachable, low marginal value, P3.
+4. **`directory` bind/resolve monotone laws** — **JUSTIFIED RESIDUAL (low-LB primitive):** a CRDT-flavored
+   key→cap map with a monotone per-entry `version` counter (`directory.rs:43`). It is a lookup primitive
+   over caps that are ALREADY verified by `Authority/*`; the monotone/last-writer shape is reachable via
+   `Confluence/CRDT`. Correctness of the running system does not hinge on a directory-specific theorem.
+5. **`net` Plumtree gossip convergence** — **JUSTIFIED RESIDUAL (infra, other lane):** the causal-ORDER
+   invariant (the lace = the causal DAG) IS dregg-covered; the raw eager/lazy push-dedup is *delivery*, not
+   protocol truth, and its convergence obligation is `Distributed/CatchupConverges` (node-infra lane).
 
 **Non-this-agent, larger:** THE SWAP (`turn`/`cell` executor cutover) — a rewrite tracked by #24/#33, not a
 modeling gap. The Exec/* / Circuit/* / Intent/* / Authority/* lanes are independently progressing.
 
-**Silver "FULLY DONE" definition for this manifest:** items 2–5 above closed (or precisely justified as
-residual), and THE SWAP cut over so `turn`/`cell` move from `both` to pure-dregg. After that, the only
-Rust-only "truth" is the §B.2 primitives (curve math, key custody) — the justified residual, since those are
-imported crypto/OS primitives, not dregg protocol semantics.
+**Silver "FULLY DONE" status for this manifest (FINAL):** items 1–2 (the genuinely-uncovered load-bearing
+*protocol* semantics — threshold decryption + Stingray cross-epoch reconciliation) are CLOSED with meaningful
+Lean + REAL-crypto differentials. Items 3–5 are now precisely JUSTIFIED RESIDUALS: 3 = a BLS crypto-primitive
+hyp (same class as Ed25519/Poseidon — imported, not dregg semantics) + a low-value finality corollary; 4 = a
+low-LB lookup primitive over already-verified caps; 5 = gossip *delivery* infra whose protocol-truth
+(causal order + catchup convergence) is already dregg-covered. The remaining true Rust-only "source of truth"
+is therefore the §B.2 primitives (curve/pairing math, key custody) — the justified crypto/OS-primitive
+residual — plus THE SWAP (`turn`/`cell`, a rewrite not a coverage gap). **No load-bearing dregg PROTOCOL
+semantic lives only in Rust at the end of this campaign.**

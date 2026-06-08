@@ -17,8 +17,28 @@ in Rust.
 | **3a. Per-agent / aggregate non-overspend** (static) | `shared_budget.rs::AgentAllowance::try_debit` | `EntangledJoint.lean` (`tryDebit_invariant`, `totalSpent_le_ceilings`) | `entangled_diff.rs::shared_budget_diff` |
 | **3b. Shared-budget dynamics** (resolve/rebalance/ceiling) | `shared_budget.rs::{resolve_with_ordering, rebalance, compute_allowance_ceiling}` | `Dregg2/Coord/SharedBudgetDynamics.lean` | `coord_diff.rs::shared_budget_diff` |
 | **3c. Stingray slice (within-epoch concurrent spend)** | `budget.rs::StingrayCounter` | `Dregg2/Proof/Stingray.lean` | (Stingray.lean `#guard`s) |
+| **3d. Stingray CROSS-EPOCH cert reconciliation** (`rebalance`) | `budget.rs::StingrayCounter::rebalance` (`:402-508`) | `Dregg2/Coord/StingrayCertReconcile.lean` | `coord_diff.rs::stingray_cert_reconcile_diff` (REAL Ed25519 certs) |
 
 ## What each NEW Lean model proves (the genuinely-uncovered parts this campaign added)
+
+### `Dregg2/Coord/StingrayCertReconcile.lean` — Stingray §9 cross-epoch reconciliation (was the named-OPEN)
+`Proof/Stingray.lean` §9 left the `StingrayCounter::rebalance` half OPEN, naming three obligations.
+This module is a faithful pure model of `rebalance_inner` (`budget.rs:415-508`) — every gate in EXACT
+source order (incomplete-quorum → per-cert {version, dup, ceiling, pubkey, sig} → partial-mode missing
+charge → balance clamp → version bump) — and CLOSES all three:
+* **§9(3) `rebalance_version_strictly_increases` + `stale_cert_rejected`** — EPOCH MONOTONICITY / NO-REPLAY:
+  a successful rebalance strictly increases `version`, and a certificate for the wrong epoch is rejected
+  with `VersionMismatch` ⇒ a spend certified in epoch `v` can never be re-counted in `v+1`.
+* **§9(2) `full_rebalance_total_is_cert_sum` + `byzantine_undetected_overspend_le_f_ceiling`** — QUORUM
+  RECONSTRUCTION + BYZANTINE BOUND: the reconstructed total is exactly `Σ certified spend`, and `f`
+  Byzantine silos (each capped at `ceiling`) can carry at most `f·ceiling` undetected surplus.
+* **§9(1) `accepted_cert_is_silos_own`** — under the named `CertUnforgeable` (Ed25519 EUF-CMA) portal,
+  every certificate passing the gate was produced by the silo it names; a Byzantine coordinator cannot
+  inject a forged honest certificate.
+* Plus `rebalance_conserves_on_exact` (balance + reconstructed = old) and `rebalance_balance_le`.
+The differential (`coord_diff.rs::stingray_cert_reconcile_diff`, 6 tests) drives the GENUINE
+`StingrayCounter` with REAL Ed25519 certificates and asserts every error tag + outcome + post-state
+agrees. `#assert_axioms`-clean (only `CertUnforgeable` named).
 
 ### `Dregg2/Coord/CausalOrder.lean` — Layer-1 happened-before (was UNMODELLED)
 Faithful `Dag` (insertion-ordered entries + dep lists) + `insert` (the `MissingDeps`/`Duplicate`/
