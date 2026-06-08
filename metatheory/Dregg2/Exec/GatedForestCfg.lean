@@ -358,6 +358,218 @@ theorem capAmplifyForestG_rolls_back : execFullForestG fma0 capAmplifyForestG = 
 #assert_axioms capAmplifyForestG_gate_rejects
 #assert_axioms capAmplifyForestG_rolls_back
 
+/-! ### A2 — the AGENT-FACING `Authorization::Token` path (the biscuit credential the Rust
+SubAgent / node-MCP surface constructs), now gating the EXECUTOR on the SAME live `execFullForestG`
+path — both the WHO (biscuit signature) and the WHAT (the token's attenuation caveats) leg.
+
+The Rust `sdk::SubAgent::execute` / `node::mcp::dispatch_tool` surfaces mint a public-key biscuit
+and present it as `Authorization::Token`; the EXECUTOR (`verify_token_for_scope` /
+`verify_token_authorization`), not an out-of-band `cap.verify()`, admits or rejects the turn. This
+section is the Lean mirror: the gated forest's ROOT credential is the `Authorization.token` arm AND
+its cap-authority leg is the REAL `AuthMode.token` (the windowed biscuit's attenuation caveats), NOT
+the `.unchecked` admit-by-construction `mkAuth` pins. So the token gates the executor admission on
+BOTH legs, witnessed non-vacuously each direction:
+
+  * a VALID, in-scope token (genuine biscuit signature ∧ caveat context inside the granted window)
+    is ADMITTED → the forest COMMITS;
+  * a FORGED-signature token (the biscuit signature does not verify) is REJECTED by the WHO leg
+    (`credentialValidG = false`) → `none`, whole-forest rollback;
+  * an OVER-ATTENUATED token (the credential is presented in a context OUTSIDE its granted window —
+    the biscuit's own attenuation caveats narrow it out) is REJECTED by the WHAT leg
+    (`capAuthorityG = false`) → `none`, whole-forest rollback.
+
+The two negatives are ORTHOGONAL (different gate legs), so neither is laundered by the other. This is
+the executable face of "the token gates the executor, not the narration." -/
+
+open Dregg2.Authority (Caveat Token TokenKind)
+
+/-- The agent-facing biscuit credential's WHO arm: an `Authorization.token` whose biscuit signature
+verifies under the reference kernel (`sig` echoes the issuer `key`). The Rust SubAgent presents the
+encoded `eb2_…` biscuit; here the portal arm is `CryptoKernel.verify key sig` (`Crypto.Reference`:
+`decide (key = sig)`), so a genuine credential's signature equals its issuer key. -/
+def goodTokenCred : Authorization Dg Pf := .token 11 11
+
+/-- A FORGED biscuit credential: the signature (`12`) does NOT verify against the issuer key (`11`).
+The §8 portal WHO leg (`credentialValidG`) fail-closes — exactly the executor's `TokenAuthInvalid`. -/
+def forgedTokenCred : Authorization Dg Pf := .token 11 12
+
+/-- The windowed biscuit the agent carries: a root biscuit attenuated to the height window
+`[100, 200]` — the Lean mirror of the SubAgent's biscuit scoped (via its Datalog/caveats) to exactly
+the verbs/window the worker may invoke. Its `admits` is the meet of both caveats over the context's
+`caveatCtx` (height). The starbridge `baseCapCtx.caveatCtx = 150` is INSIDE the window. -/
+def agentToken : Token Cx Gw :=
+  { kind := .biscuit
+  , caveats := [ .local (fun h => decide (100 ≤ h)), .local (fun h => decide (h ≤ 200)) ] }
+
+/-- The cap-context whose `caveatCtx` (height `150`) lands INSIDE the token's `[100,200]` window —
+the in-scope presentation. (Everything else mirrors `baseCapCtx`.) -/
+def tokenCtxInWindow : AuthContext Rq St Wt Label Rt Cx Gw := baseCapCtx
+
+/-- The cap-context whose `caveatCtx` (height `50`) lands OUTSIDE the token's `[100,200]` window —
+the over-attenuated presentation (the biscuit's own caveat narrows it out). -/
+def tokenCtxOutOfWindow : AuthContext Rq St Wt Label Rt Cx Gw := { baseCapCtx with caveatCtx := 50 }
+
+/-- **`mkAuthToken`** — a node-auth on the AGENT-FACING Token path: the WHO leg is the
+`Authorization.token` biscuit credential (portal), and the WHAT leg is the REAL `AuthMode.token`
+windowed biscuit (`agentToken`) — NOT the `.unchecked (Guard.all [])` that `mkAuth` pins. So the
+token's attenuation actually gates the executor admission. The cap-CONTEXT is supplied (in/out of
+window) so the same credential admits in-scope and rejects over-attenuated. -/
+def mkAuthToken (cred : Authorization Dg Pf) (ctx : AuthContext Rq St Wt Label Rt Cx Gw)
+    (caveats : List GatedCaveat) : DNodeAuth :=
+  { cred := cred, rev := Credential.noRevocations
+  , capMode := .token agentToken, capCtx := ctx
+  , caveats := caveats, chain := none, chainCtx := 150, chainDis := fun _ => false }
+
+/-- A VALID agent-token forest: genuine biscuit credential, in-window cap context. Balance-neutral
+`emitEvent`, so the only gate that matters is the credential+attenuation. ADMITS. -/
+def tokenOkForestG : DForest :=
+  ⟨ mkAuthToken goodTokenCred tokenCtxInWindow [trueCaveat], .emitEventA 0 0 0 0, [] ⟩
+
+/-- A FORGED-signature agent-token forest: same in-window context, but the biscuit signature does not
+verify. REJECTED by the WHO leg. -/
+def tokenForgedForestG : DForest :=
+  ⟨ mkAuthToken forgedTokenCred tokenCtxInWindow [trueCaveat], .emitEventA 0 0 0 0, [] ⟩
+
+/-- An OVER-ATTENUATED agent-token forest: genuine biscuit credential, but presented in a context
+OUTSIDE the token's `[100,200]` window — the biscuit's own attenuation caveat narrows it out.
+REJECTED by the WHAT leg (`capAuthorityG`). -/
+def tokenOverAttenForestG : DForest :=
+  ⟨ mkAuthToken goodTokenCred tokenCtxOutOfWindow [trueCaveat], .emitEventA 0 0 0 0, [] ⟩
+
+/-- **WHO leg — the genuine biscuit credential VERIFIES (PROVED).** The `Authorization.token` arm
+routes through the §8 portal (`CryptoKernel.verify 11 11` = `decide (11 = 11)` = `true`). -/
+theorem tokenOkForestG_credential_valid : credentialValidG tokenOkForestG.auth = true := by
+  unfold tokenOkForestG mkAuthToken credentialValidG goodTokenCred
+  decide
+
+/-- **WHO leg — the FORGED biscuit credential FAILS (PROVED, the teeth).** The portal's
+`CryptoKernel.verify 11 12` = `decide (11 = 12)` = `false`: a forged biscuit signature fail-closes
+exactly as the executor's `TokenAuthInvalid`. NON-VACUOUS against the positive above. -/
+theorem tokenForgedForestG_credential_invalid : credentialValidG tokenForgedForestG.auth = false := by
+  unfold tokenForgedForestG mkAuthToken credentialValidG forgedTokenCred
+  decide
+
+/-- **WHAT leg — the in-window token's attenuation ADMITS (PROVED).** `AuthMode.token agentToken`
+admits iff ALL the biscuit's caveats discharge on `caveatCtx = 150`: `100 ≤ 150 ∧ 150 ≤ 200`. This is
+the token's OWN attenuation, gating the executor — not `.unchecked`. -/
+theorem tokenOkForestG_what_admits : capAuthorityG tokenOkForestG.auth = true := by
+  unfold tokenOkForestG mkAuthToken capAuthorityG agentToken tokenCtxInWindow baseCapCtx
+  simp only [AuthModes.authModeAdmits, Dregg2.Authority.Token.admits, Dregg2.Authority.Caveat.ok,
+    List.all_cons, List.all_nil]
+  decide
+
+/-- **WHAT leg — the OVER-ATTENUATED token's attenuation REJECTS (PROVED, the teeth).** Presented at
+`caveatCtx = 50`, the biscuit's `100 ≤ h` caveat is FALSE, so `agentToken.admits = false` ⇒
+`capAuthorityG = false`. The credential's OWN attenuation narrows it out of scope — the executor
+rejects, not an out-of-band check. NON-VACUOUS against the in-window admit. -/
+theorem tokenOverAttenForestG_what_rejects : capAuthorityG tokenOverAttenForestG.auth = false := by
+  unfold tokenOverAttenForestG mkAuthToken capAuthorityG agentToken tokenCtxOutOfWindow baseCapCtx
+  simp only [AuthModes.authModeAdmits, Dregg2.Authority.Token.admits, Dregg2.Authority.Caveat.ok,
+    List.all_cons, List.all_nil]
+  decide
+
+/-- The valid agent-token forest's caveat leg discharges at `fma0` (`trueCaveat`). -/
+theorem tokenOkForestG_caveats_fma0 : caveatsDischarged tokenOkForestG.auth fma0 = true := by
+  unfold tokenOkForestG mkAuthToken caveatsDischarged trueCaveat chainGateG fma0
+  simp only [List.all_cons, List.all_nil, Bool.and_true, GatedCaveat.holds, decide_eq_true_eq]
+  norm_num
+
+/-- The valid agent-token forest is not revoked at `fma0`. -/
+theorem tokenOkForestG_revocation_fma0 : revocationGate tokenOkForestG.auth fma0 = true := by
+  unfold tokenOkForestG mkAuthToken revocationGate fma0
+  simp
+
+/-- **`tokenOkForestG_gateOK` — the VALID agent token is ADMITTED by the full 4-leg gate (PROVED).**
+WHO (biscuit verifies) ∧ WHAT (in-window attenuation admits) ∧ caveats ∧ not-revoked. The agent-facing
+`Authorization::Token` gates the executor admission positively on the live path. -/
+theorem tokenOkForestG_gateOK : gateOK tokenOkForestG.auth fma0 = true := by
+  unfold gateOK
+  simp only [Bool.and_eq_true, tokenOkForestG_credential_valid, tokenOkForestG_what_admits,
+             tokenOkForestG_caveats_fma0, tokenOkForestG_revocation_fma0]
+  trivial
+
+/-- **`tokenForgedForestG_gate_rejects` — the FORGED token is REJECTED by the gate (PROVED).** The WHO
+leg fail-closes the conjunction. -/
+theorem tokenForgedForestG_gate_rejects : gateOK tokenForgedForestG.auth fma0 = false := by
+  unfold gateOK
+  rw [tokenForgedForestG_credential_invalid]
+  simp
+
+/-- **`tokenOverAttenForestG_gate_rejects` — the OVER-ATTENUATED token is REJECTED by the gate
+(PROVED).** The WHAT leg (the token's own attenuation) fail-closes the conjunction — orthogonal to the
+forged case (the credential VERIFIES here; it is the attenuation that narrows it out). -/
+theorem tokenOverAttenForestG_gate_rejects : gateOK tokenOverAttenForestG.auth fma0 = false := by
+  unfold gateOK
+  rw [tokenOverAttenForestG_what_rejects]
+  simp [tokenOverAttenForestG_credential_valid_aux]
+where
+  /-- The over-attenuated forest's credential is the SAME genuine biscuit — it VERIFIES; only the
+  attenuation rejects. (Used to show the rejection is the WHAT leg, not the WHO leg.) -/
+  tokenOverAttenForestG_credential_valid_aux :
+      credentialValidG tokenOverAttenForestG.auth = true := by
+    unfold tokenOverAttenForestG mkAuthToken credentialValidG goodTokenCred
+    decide
+
+/-- **`tokenOkForestG_commits` — the VALID agent token COMMITS on the live `execFullForestG` path
+(PROVED).** Not just `gateOK`: the whole gated forest runs and produces a post-state. This is the
+end-to-end positive: an agent presenting a genuine, in-scope `Authorization::Token` has its turn
+admitted by the verified executor. -/
+theorem tokenOkForestG_commits : (execFullForestG fma0 tokenOkForestG).isSome := by
+  have herase : (execFullForestA fma0 (eraseG tokenOkForestG)).isSome := by decide
+  rcases Option.isSome_iff_exists.mp herase with ⟨s', hs'⟩
+  refine Option.isSome_iff_exists.mpr ⟨s', ?_⟩
+  dsimp [execFullForestG, tokenOkForestG, execFullChildrenG]
+  have hga := (execFullAGated_some_iff fma0 s' (mkAuthToken goodTokenCred tokenCtxInWindow [trueCaveat])
+    (.emitEventA 0 0 0 0)).mpr ⟨tokenOkForestG_gateOK, hs'⟩
+  simpa [hga]
+
+/-- **`tokenForgedForestG_rolls_back` — the FORGED agent token does NOT commit (PROVED).** The gate
+rejects ⇒ `execFullForestG = none` ⇒ whole-forest rollback. -/
+theorem tokenForgedForestG_rolls_back : execFullForestG fma0 tokenForgedForestG = none := by
+  have hgate : gateOK tokenForgedForestG.auth fma0 = false := tokenForgedForestG_gate_rejects
+  unfold tokenForgedForestG at hgate ⊢
+  show (match execFullAGated fma0 (mkAuthToken forgedTokenCred tokenCtxInWindow [trueCaveat])
+            (.emitEventA 0 0 0 0) with
+        | some s' => execFullChildrenG (targetOf (.emitEventA 0 0 0 0)) s' ([] : List DChild)
+        | none    => none) = none
+  rw [execFullAGated]
+  simp only [hgate]
+  rfl
+
+/-- **`tokenOverAttenForestG_rolls_back` — the OVER-ATTENUATED agent token does NOT commit (PROVED).**
+The token's own attenuation narrows it out of scope ⇒ `execFullForestG = none` ⇒ rollback. The
+credential verified; the EXECUTOR ADMISSION still rejects on the attenuation. -/
+theorem tokenOverAttenForestG_rolls_back : execFullForestG fma0 tokenOverAttenForestG = none := by
+  have hgate : gateOK tokenOverAttenForestG.auth fma0 = false := tokenOverAttenForestG_gate_rejects
+  unfold tokenOverAttenForestG at hgate ⊢
+  show (match execFullAGated fma0 (mkAuthToken goodTokenCred tokenCtxOutOfWindow [trueCaveat])
+            (.emitEventA 0 0 0 0) with
+        | some s' => execFullChildrenG (targetOf (.emitEventA 0 0 0 0)) s' ([] : List DChild)
+        | none    => none) = none
+  rw [execFullAGated]
+  simp only [hgate]
+  rfl
+
+-- The agent-facing `Authorization::Token` gates the EXECUTOR on the live path, both legs, both ways:
+#guard (credentialValidG tokenOkForestG.auth)                       --  true  (genuine biscuit verifies)
+#guard (credentialValidG tokenForgedForestG.auth) == false          --  false (forged signature)
+#guard (capAuthorityG tokenOkForestG.auth)                          --  true  (in-window attenuation)
+#guard (capAuthorityG tokenOverAttenForestG.auth) == false          --  false (over-attenuated)
+#guard ((execFullForestG fma0 tokenOkForestG).isSome)               --  true  (VALID token ⇒ COMMITS)
+#guard ((execFullForestG fma0 tokenForgedForestG).isSome) == false  --  false (forged ⇒ rollback)
+#guard ((execFullForestG fma0 tokenOverAttenForestG).isSome) == false --  false (over-attenuated ⇒ rollback)
+
+#assert_axioms tokenOkForestG_credential_valid
+#assert_axioms tokenForgedForestG_credential_invalid
+#assert_axioms tokenOkForestG_what_admits
+#assert_axioms tokenOverAttenForestG_what_rejects
+#assert_axioms tokenOkForestG_gateOK
+#assert_axioms tokenForgedForestG_gate_rejects
+#assert_axioms tokenOverAttenForestG_gate_rejects
+#assert_axioms tokenOkForestG_commits
+#assert_axioms tokenForgedForestG_rolls_back
+#assert_axioms tokenOverAttenForestG_rolls_back
+
 end StarbridgeGated
 
 end Dregg2.Exec
