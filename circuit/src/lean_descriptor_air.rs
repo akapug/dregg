@@ -1610,6 +1610,45 @@ pub fn verify_vm_descriptor(
         .map_err(|e| format!("EffectVmDescriptorAir verification failed: {e:?}"))
 }
 
+/// FRI-free accept/reject decision of the `EffectVmDescriptorAir` (the Lean-emitted
+/// descriptor interpreter) on a BASE EffectVM trace + public inputs, via Plonky3's
+/// canonical `check_all_constraints` — the EXACT predicate the audited p3 verifier
+/// enforces (every constraint vanishing on every wrap-around row), but deterministic
+/// (no random FRI queries). This is the descriptor-side mirror of
+/// [`crate::effect_vm_p3_full_air::p3_air_accepts`], so a cutover differential can
+/// assert the interpreter and the hand-AIR decide accept/reject IDENTICALLY over a
+/// shared witness corpus.
+///
+/// `base_trace` is the `desc.trace_width`-column base trace (the same one
+/// `generate_effect_vm_trace` produces); it is extended with the Poseidon2 site-aux
+/// blocks + range bits exactly as [`prove_vm_descriptor`] does before checking, so
+/// the hash-site / state-commit gadget constraints are exercised on real witness data.
+///
+/// `public_inputs` must have length `desc.public_input_count` (slice the wider
+/// EffectVM PI vector down to the descriptor's prefix first).
+///
+/// Returns `true` iff EVERY constraint of `EffectVmDescriptorAir::eval` vanishes on
+/// every row.
+pub fn descriptor_air_accepts(
+    desc: &EffectVmDescriptor,
+    base_trace: &[Vec<DreggBabyBear>],
+    public_inputs: &[DreggBabyBear],
+) -> bool {
+    if desc.check_bounds().is_err() || base_trace.is_empty() {
+        return false;
+    }
+    if base_trace[0].len() != desc.trace_width
+        || public_inputs.len() != desc.public_input_count
+    {
+        return false;
+    }
+    let air = EffectVmDescriptorAir::new(desc.clone());
+    let full_trace = extend_vm_trace(desc, base_trace);
+    let matrix = vm_to_matrix(&full_trace);
+    let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+    p3_air::check_all_constraints(&air, &matrix, &pis, Some(1)).is_ok()
+}
+
 // ============================================================================
 // Test descriptor: the `transferCircuit` shape (hardcoded mirror of Lean)
 // ============================================================================
