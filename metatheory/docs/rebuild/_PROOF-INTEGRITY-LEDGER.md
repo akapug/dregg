@@ -127,29 +127,63 @@ bar, a doc that names a theorem which does not exist is "vapor," and vapor is br
   asset 1 untouched, AND two fail-closed rejects (over-amount ⇒ `none`, unauthorized actor ⇒
   `none`). Task #14.
 
-### MID-3 — ConsentLace "equivocation repels settlement" is a weaker lookalike
-- **Claims:** `Exec/CapTPConsentLace.lean:333-339` `equivocating_party_blocks_settlement` —
+### MID-3 — ConsentLace "equivocation repels settlement" is a weaker lookalike — **RESOLVED 2026-06-08**
+- **Claims (original):** `Exec/CapTPConsentLace.lean:333-339` `equivocating_party_blocks_settlement` —
   headline "a byzantine consenter is repelled."
-- **Why weak:** the block is driven **entirely** by the hypothesis
-  `hReject : partySignedConsent B p digest = false`; the equivocation premise `hfork` feeds
-  **only** the `Equivocator` detection tag (`:338`), not the block. The witness
-  `fork9approve` (`:466`) discharges `hReject` by setting the approve branch `signed := false`
-  — i.e. only an **unsigned** fork is repelled. A party that signs a *valid* approve AND a
-  conflicting revoke (a genuine **signed** equivocation) has `partySignedConsent = true` and
-  **would settle**. The missing theorem is "signed-equivocation ⇒ consent not counted."
-- **Fix:** prove `consentForks ∧ partySignedConsent ⇒ ¬settle` (the validator must DROP a
-  detected signed equivocator's consent, not merely tag it), then re-witness with a signed
-  fork. Until then the docstring should read "an *unsigned* fork is repelled; signed
-  equivocation is DETECTED (tagged) but its settlement-blocking is the validator's policy
-  hypothesis, not a theorem."
-- **Why MID not FATAL:** the soundness lemma `settle_requires_signed_authorship` it leans on
-  is real, the detection (`consent_equivocation_detectable`) is real, and the property is
-  true as stated *given* `hReject`. It is an overclaimed headline, not a false theorem.
-- **Ownership:** `CapTPConsentLace.lean` — task #61 **completed**; no in-progress task. The
-  doc-narrowing is safe; the new theorem is real proof work. SAFE-TO-FIX-NOW but deferred
-  (proof, not in scope of this path-limited commit).
+- **Why weak (original):** the block was driven **entirely** by the hypothesis
+  `hReject : partySignedConsent B p digest = false`; the equivocation premise `hfork` fed
+  **only** the `Equivocator` detection tag, not the block. The witness `fork9approve` discharged
+  `hReject` by setting the approve branch `signed := false` — i.e. only an **unsigned** fork was
+  repelled. A party that signs a *valid* approve AND a conflicting revoke (a genuine **signed**
+  equivocation) has `partySignedConsent = true` and **would settle**. The missing theorem was
+  "signed-equivocation ⇒ consent not counted."
+- **FIX LANDED** (`Dregg2/Exec/CapTPConsentLace.lean` §7.5 + §9.0): the strengthened settlement
+  validator now DROPS a detected signed equivocator's consent — the exclusion is part of the gate,
+  not a downstream policy hypothesis. New, all `#assert_axioms`-clean (subset
+  `{propext, Classical.choice, Quot.sound}`, no `sorryAx`; axioms verified via `#print axioms`):
+  - `isRevokeFor` / `partySignedRevoke` — the signed-revoke twin of `isApprovalFor`.
+  - `equivocatesSigned B p digest := partySignedConsent && partySignedRevoke` — the DECIDABLE
+    signed-fork detector (`p` signed BOTH a valid approve AND a valid revoke over the same digest;
+    **both** signatures verifying — NOT an unsigned accident).
+  - `consentCounted B p digest := partySignedConsent && !equivocatesSigned` — the REAL per-party
+    gate: a signed equivocator's consent does NOT count. `laceSettleExcl` gates on the n-ary
+    `consentLaceCompleteExcl` over `consentCounted`.
+  - `signed_equivocator_consent_not_counted` — a flagged signed equivocator has `consentCounted = false`.
+  - **`settle_excludes_signed_equivocator`** — THE real keystone: a required party that signed both
+    a valid approve AND a conflicting revoke has `laceSettleExcl = some k` (UNCHANGED, nothing
+    commits). Driven by the equivocation ITSELF (via `signed_equivocator_consent_not_counted`), not
+    by `hReject`. An equivocating party CANNOT cause a settlement to commit with their consent counted.
+  - `equivocatesSigned_sound` — the detector flags a GENUINE fork: two present, signed, self-authored,
+    same-digest blocks acking the conflicting approve/revoke markers (never an arbitrary drop).
+  - `demo_signed_consent_equivocation` / `signedFork_no_precedes` / `demo_signed_fork_detected` —
+    the signed fork is a real `Blocklace.Equivocator` (incomparable pair), so the exclusion rests on
+    the same byzantine-repelling keystone as the unsigned case, now on a **fully-signed** fork.
+- **Non-vacuity witnessed BOTH ways** (§9.0 / §9.0b): an equivocator-EXCLUDED settlement
+  (`demoLaceSignedFork`: 9 signs approve id 102 + conflicting revoke id 105, both valid — the WEAK
+  `laceSettle` is `#guard`'d to settle behind it, the STRENGTHENED `laceSettleExcl` freezes the
+  batch to `some demoState`) AND an honest-settles case (`demoLaceAllSigned`: all three sign clean
+  approves, none equivocate, `laceSettleExcl.isSome = true` — the gate does not over-block, caps
+  preserved). The weaker `equivocating_party_blocks_settlement` is retained as the detection-tagging
+  lemma it always was; the module docstring point 5 now states the real property.
+- **Ownership:** `CapTPConsentLace.lean` — task #61 **completed**; no in-progress task. FIXED here.
 
-### MID-4 — three disjoint state commitments, NO cross-binding theorem
+### MID-4 — three disjoint state commitments, NO cross-binding theorem — **PARTIALLY RESOLVED; EffectVm-subset widening RESIDUAL (owned/MUST-WAIT)**
+- **Status:** the cross-binding theorem itself is now LANDED in
+  `Dregg2/Circuit/CommitmentCrossBind.lean` (built green this wave, 13 `#assert_axioms` tripwires,
+  no `sorry`/`:=True`/`native_decide`): `stateCommit_binds_cellCommit` ("THE CROWN" — equal circuit
+  full-state roots force equal canonical `cellCommit` per touched cell, under a hash-CR portal
+  `LeafIsCellCommit`), its executor-side twin `setFieldCommit_binds_cellCommit`,
+  `crossbind_circuit_exec_same_state` (circuit ⟺ executor agree on the SAME `RecordKernelState`),
+  and `all_three_agree_on_eq_state` (the packaged "ONE object" fact). Non-vacuity witnessed BOTH
+  ways: `chC_is_cellCommit` (a realizable injective Horner/positional cell-commit SATISFIES the
+  leaf-bridge, TRUE) and `chC_bad` (a value-DROPPING leaf `CH c v := 0` FAILS it, FALSE). So the
+  "three disjoint commitments, NO theorem relating any two" finding is addressed: the weld exists,
+  gated honestly on a named hash collision-resistance portal (the §8 crypto seam, witnessed false on
+  a collapsing carrier — not `:=True`).
+- **RESIDUAL (still owned / MUST-WAIT):** widening the EffectVm descriptor `state_commit` subset
+  `{bal_lo,bal_hi,nonce,field[0..7],cap_root}` to the full field set lives in `Circuit/Emit/*`,
+  owned by in-progress tasks #36/#37/#41/#53/#62/#63/#64 and explicitly off-limits to this
+  path-limited commit. That widening is the remaining MID-4 work, for the owning circuit workflow.
 - **Claims:** the crown-jewel triangle implies one authenticated state object.
 - **Why weak:** there are **three** distinct commitments and **no Lean theorem equates any
   two**: `recStateCommit` (`Circuit/StateCommit.lean:196`, `cmb`/`compress`),
@@ -199,12 +233,20 @@ bar, a doc that names a theorem which does not exist is "vapor," and vapor is br
 
 The crown jewels are **SOUND**: ConcreteKernel's refinement squares, the `*_full_sound`
 keystones, and the distributed/CapTP safety teeth are all genuine, non-vacuous, and
-`#assert_axioms`-clean — nothing load-bearing is secretly trivial or false. What is broken
-is **reach, not truth**: two docstrings promised theorems that don't exist (GC `gcDropTotal`
-bridge F1, per-asset concrete square F2 — both now corrected), the per-asset keystone and
-the cell-commitment cross-binding (MID-2, MID-4) are proven abstractly but not refined to
-the running surface, and one distributed headline ("equivocation repels settlement", MID-3)
-is true only for *unsigned* forks. The jewels are real; they just don't yet cover as much
-ground as their prose claims.
+`#assert_axioms`-clean — nothing load-bearing is secretly trivial or false.
 
-( ◕‿◕ ) the proofs hold — it's the captions that overreached.
+**Wave close (2026-06-08): MID-1, MID-2, MID-3 RESOLVED; MID-4 PARTIALLY RESOLVED (residual
+owned).** The GC §1↔§2 bridge is real (MID-1, `bridge_swiss_refcount_eq_holders_sum`); the
+per-asset concrete refinement square carries `recTotalAsset` for EVERY asset down to node grade
+(MID-2, `concreteTransferAsset_conserves_per_asset` — NOT an aggregate scalar standing in); the
+ConsentLace equivocation headline is now the REAL property (MID-3, `settle_excludes_signed_equivocator`
+— a SIGNED equivocator's consent is DROPPED at the gate, witnessed both ways); and the
+state-commitment cross-binding theorem is landed (MID-4, `stateCommit_binds_cellCommit` under a
+named hash-CR portal), with only the EffectVm-subset widening left as the owned-task residual.
+All four wave modules — `ConcreteKernel`, `CapTPGCConcrete`, `CommitmentCrossBind`,
+`CapTPConsentLace` — build green and the new keystones are `#assert_axioms`-clean (subset
+`{propext, Classical.choice, Quot.sound}`, no `sorryAx`; named crypto hypotheses witnessed FALSE).
+
+The jewels are real and now cover the ground their prose claims, save the one owned residual.
+
+( ◕‿◕ ) the captions caught up to the proofs.

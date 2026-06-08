@@ -53,9 +53,16 @@ The security properties, proved over the EXECUTABLE lace-gated settle, at n > 1 
   4. **Atomic settle-or-nothing** (`laceSettle_atomic_aborts_on_unauthorized`): even with complete
      signed consent, one over-authorized mutation aborts the WHOLE settlement to `none` — the
      per-mutation `authorizedB` check still fires; consent GATES, it does not BYPASS.
-  5. **Equivocation repels** (`equivocating_party_blocks_settlement`): a party that signs a
-     conflicting consent fork cannot settle behind it; the fork is a detectable incomparable pair
-     in the consent lace (`consent_equivocation_detectable`).
+  5. **Equivocation repels — the REAL property** (`settle_excludes_signed_equivocator`): a party
+     that signs BOTH a valid approve AND a conflicting revoke over the same batch (a genuine SIGNED
+     equivocation, with both signatures verifying) CANNOT cause a settlement to commit with its
+     consent counted. The strengthened gate `laceSettleExcl` DROPS a detected signed equivocator's
+     consent (`consentCounted = false`, `signed_equivocator_consent_not_counted`), freezing the
+     batch — the block is driven by the equivocation ITSELF, not by an unsigned-approve accident.
+     The detector `equivocatesSigned` is decidable and SOUND (`equivocatesSigned_sound`,
+     `demo_signed_consent_equivocation`: a flagged party authored a real incomparable approve/revoke
+     pair, a `Blocklace.Equivocator`). The weaker `equivocating_party_blocks_settlement` (block via
+     an UNSIGNED fork only) is retained as the detection-tagging lemma it always was.
 
 NOT gated on succinct proofs: settlement re-drains through `exec`, which re-witnesses each
 mutation's authority. The blocklace `signed` bit and content-addressing (`Canonical`) are the §8
@@ -338,6 +345,122 @@ theorem equivocating_party_blocks_settlement (k : KernelState) (B : Lace) (batch
   ⟨(consent_equivocation_detectable hfork).1,
    settle_requires_signed_authorship k B batch digest hp hReject⟩
 
+/-! ## §7.5 — THE REAL EQUIVOCATION-REPELS PROPERTY (the MID-3 fix).
+
+`equivocating_party_blocks_settlement` above is the WEAKER lookalike: its block is driven entirely
+by `hReject : partySignedConsent B p digest = false`, so it only repels an *unsigned* fork (a fork
+where `p`'s approve branch failed the signature check). A party that signs a VALID approve AND a
+conflicting revoke over the same batch — a genuine **signed** equivocation — has
+`partySignedConsent = true`, and `laceSettle` (which gates only on `consentLaceComplete`) WOULD
+settle behind it. The detection (`consent_equivocation_detectable`) merely TAGS such a party; the
+settlement is never actually blocked.
+
+The real property: an equivocating party CANNOT cause a settlement to commit with their consent
+counted. We make the settlement validator DROP a detected signed equivocator's consent — the
+exclusion is part of the gate, not a downstream policy hypothesis.
+
+A party's consent is COUNTED at settlement iff it has a signed self-authored approve AND has NOT
+signed a conflicting revoke over the same batch. The signed-conflict detector `equivocatesSigned`
+is decidable over the lace and SOUND: a party it flags genuinely authored two conflicting signed
+consent blocks over the same digest (`equivocatesSigned_sound` — it implies a real `consentForks`
+under the structural incomparability the canonical lace supplies). -/
+
+/-- **`isRevokeFor b party digest`** — the revoke twin of `isApprovalFor`: does `b` count as
+`party`'s SIGNED REVOKE consent over `digest`? Same three bindings (authorship + signature +
+digest), but the marker is `revokeMark`, not `approveMark`. A party that has BOTH an `isApprovalFor`
+and an `isRevokeFor` block over the same digest has signed a conflicting fork. -/
+def isRevokeFor (b : Block) (party : Label) (digest : Digest) : Bool :=
+  (b.creator == party) && b.signed && (b.seq == digest) && (b.preds.contains revokeMark)
+
+/-- **`partySignedRevoke B party digest`** — has `party` contributed a valid signed REVOKE over
+`digest` to the lace? The revoke face of `partySignedConsent`. -/
+def partySignedRevoke (B : Lace) (party : Label) (digest : Digest) : Bool :=
+  B.any (fun b => isRevokeFor b party digest)
+
+/-- **`equivocatesSigned B p digest`** — the DECIDABLE signed-equivocation detector the settlement
+validator runs: `p` has signed BOTH a valid approve AND a valid revoke over the same batch digest.
+This is the application-level fork — `p` told "approve" to some peers and "revoke" to others over
+the very same batch, with BOTH signatures verifying. Unlike `consentForks` (a `Prop` about
+incomparability), this is a `Bool` the finalizer computes directly from the lace. -/
+def equivocatesSigned (B : Lace) (p : Label) (digest : Digest) : Bool :=
+  partySignedConsent B p digest && partySignedRevoke B p digest
+
+/-- **`consentCounted B p digest`** — the REAL per-party consent gate: `p`'s consent counts at
+settlement iff `p` has a signed self-authored approve AND is NOT a detected signed equivocator. The
+validator DROPS the consent of any party that has signed a conflicting revoke — equivocation is
+EXCLUDED at the gate, not merely tagged downstream. -/
+def consentCounted (B : Lace) (p : Label) (digest : Digest) : Bool :=
+  partySignedConsent B p digest && !equivocatesSigned B p digest
+
+/-- **`consentLaceCompleteExcl B parties digest`** — the n-ary convergence gate over the
+equivocator-EXCLUDING consent: every required party's consent must COUNT (signed AND non-forking).
+A single detected signed equivocator among the required parties holds the whole batch suspended. -/
+def consentLaceCompleteExcl (B : Lace) (parties : List Label) (digest : Digest) : Bool :=
+  parties.all (fun p => consentCounted B p digest)
+
+/-- **`laceSettleExcl k B batch digest`** — the strengthened final settlement: drain the pipelined
+mutations through the verified executor IFF every required party's consent COUNTS (signed AND not a
+detected signed equivocator). A signed equivocator among the required parties cannot ride its
+consent into a commit — its consent is dropped at the gate, freezing the batch. -/
+def laceSettleExcl (k : KernelState) (B : Lace) (batch : SuspendedBatch) (digest : Digest) :
+    Option KernelState :=
+  if consentLaceCompleteExcl B batch.requiredParties digest then
+    drainAll k batch.mutations
+  else
+    some k
+
+/-- **`signed_equivocator_consent_not_counted` (PROVED)** — the heart of the fix: a party flagged
+as a signed equivocator has its consent DROPPED — `consentCounted` is false even though its approve
+is signed and valid. The signed fork does not count. -/
+theorem signed_equivocator_consent_not_counted (B : Lace) (p : Label) (digest : Digest)
+    (hfork : equivocatesSigned B p digest = true) :
+    consentCounted B p digest = false := by
+  unfold consentCounted
+  rw [hfork]; simp
+
+/-- **`settle_excludes_signed_equivocator` (PROVED) — the REAL equivocation-repels keystone.**
+A required party `p` that has signed BOTH a valid approve AND a conflicting revoke over the batch
+digest (`hfork : equivocatesSigned`) has its consent DROPPED by the strengthened settlement
+validator: `laceSettleExcl` returns the UNCHANGED state — nothing commits. The signed equivocator
+CANNOT cause a settlement to commit with its consent counted. This is driven by the equivocation
+itself (via `signed_equivocator_consent_not_counted`), NOT by an unsigned-approve accident — `p`'s
+approve here is fully signed and self-authored, yet settlement is blocked because `p` ALSO signed
+the conflicting revoke. -/
+theorem settle_excludes_signed_equivocator (k : KernelState) (B : Lace) (batch : SuspendedBatch)
+    (digest : Digest) {p : Label} (hp : p ∈ batch.requiredParties)
+    (hfork : equivocatesSigned B p digest = true) :
+    laceSettleExcl k B batch digest = some k := by
+  unfold laceSettleExcl
+  have hincomplete : consentLaceCompleteExcl B batch.requiredParties digest = false := by
+    unfold consentLaceCompleteExcl
+    rw [List.all_eq_false]
+    exact ⟨p, hp, by rw [signed_equivocator_consent_not_counted B p digest hfork]; simp⟩
+  rw [hincomplete]; rfl
+
+/-- **`equivocatesSigned_sound` (PROVED) — the detector flags a GENUINE fork, not a phantom.** A
+party `equivocatesSigned` flags has, present in the lace, an approve block `a` and a revoke block
+`b`, both authored by `p`, both signed, both over `digest`, acking the conflicting markers. So the
+decidable `Bool` detector is backed by two concrete conflicting signed consent blocks — the
+exclusion is justified by real evidence, never an arbitrary drop. (The remaining incomparability
+that lifts this to a `Blocklace.Equivocation`/`consentForks` is supplied structurally by the
+canonical demo lace in §9; this lemma extracts the witnessing pair the canonical lace makes
+incomparable.) -/
+theorem equivocatesSigned_sound (B : Lace) (p : Label) (digest : Digest)
+    (hfork : equivocatesSigned B p digest = true) :
+    ∃ a b : Block, a ∈ B ∧ b ∈ B ∧
+      a.creator = p ∧ b.creator = p ∧ a.signed = true ∧ b.signed = true ∧
+      a.seq = digest ∧ b.seq = digest ∧
+      approveMark ∈ a.preds ∧ revokeMark ∈ b.preds := by
+  unfold equivocatesSigned partySignedConsent partySignedRevoke at hfork
+  rw [Bool.and_eq_true, List.any_eq_true, List.any_eq_true] at hfork
+  obtain ⟨⟨a, ha, hap⟩, ⟨b, hb, hbp⟩⟩ := hfork
+  unfold isApprovalFor at hap
+  unfold isRevokeFor at hbp
+  simp only [Bool.and_eq_true, beq_iff_eq, List.contains_iff_mem] at hap hbp
+  obtain ⟨⟨⟨hac, has⟩, had⟩, ham⟩ := hap
+  obtain ⟨⟨⟨hbc, hbs⟩, hbd⟩, hbm⟩ := hbp
+  exact ⟨a, b, ha, hb, hac, hbc, has, hbs, had, hbd, ham, hbm⟩
+
 /-! ## §8 — Monotone convergence: gossiping more signed consent never un-converges the exchange. -/
 
 /-- **`partySignedConsent_mono` (PROVED)** — consent is monotone under lace growth (CRDT join):
@@ -550,6 +673,128 @@ example :
   equivocating_party_blocks_settlement demoState demoLaceFork demoBatch demoDigest
     (p := 9) (by decide) demo_consent_equivocation (by decide)
 
+/-! ### §9.0 — THE SIGNED-EQUIVOCATION TOOTH (the MID-3 fix, witnessed). Author 9 forks with BOTH
+branches SIGNED and VALID: a signed approve (id 102) AND a conflicting signed revoke (id 105) over
+the SAME digest. Under the WEAK `laceSettle` this party's `partySignedConsent = true`, so the batch
+would settle. The STRENGTHENED `laceSettleExcl` DROPS the consent and freezes the batch — the real
+equivocation-repels property, driven by the equivocation itself, not an unsigned accident. -/
+
+/-- Party 9's SIGNED approve branch (id 102) over the batch — a fully valid, signed, self-authored
+approve. On its own this COUNTS. -/
+def signedFork9approve : Block := consentBlock 9 demoDigest .approve 102
+/-- Party 9's conflicting SIGNED revoke (id 105) over the SAME batch — also fully valid and signed.
+The signed fork: 9 told "approve" and "revoke" over batch 42, both signatures verifying. -/
+def signedFork9revoke : Block := consentBlock 9 demoDigest .revoke 105
+
+/-- The signed-fork lace: parties 7, 8 sign clean approves; party 9 signs a CONFLICTING approve +
+revoke, both valid. -/
+def demoLaceSignedFork : Lace :=
+  [ consentBlock 7 demoDigest .approve 100
+  , consentBlock 8 demoDigest .approve 101
+  , signedFork9approve
+  , signedFork9revoke ]
+
+-- Party 9's signed approve, ON ITS OWN, COUNTS as valid consent (the fork is NOT an unsigned
+-- accident — this is what makes the WEAK `laceSettle` settle behind it).
+#guard partySignedConsent demoLaceSignedFork 9 demoDigest == true
+-- Party 9 ALSO signed a valid revoke over the same digest — the signed fork is detected.
+#guard partySignedRevoke demoLaceSignedFork 9 demoDigest == true
+#guard equivocatesSigned demoLaceSignedFork 9 demoDigest == true
+
+/-- **THE WEAK GATE WOULD SETTLE.** Under `laceSettle`, the signed-fork lace is "complete" — every
+required party (incl. the equivocator 9) has a signed approve — so it DRAINS and COMMITS the
+mutation. This is exactly the MID-3 hole: a SIGNED equivocator rides its approve into a commit. -/
+example : (laceSettle demoState demoLaceSignedFork demoBatch demoDigest).isSome = true := by
+  rw [laceSettle_complete_is_drain demoState demoLaceSignedFork demoBatch demoDigest (by decide)]
+  unfold demoBatch demoMutation drainAll drainStep exec demoState authorizedB
+  decide
+
+/-- **THE STRENGTHENED GATE EXCLUDES THE SIGNED EQUIVOCATOR (PROVED).** Under `laceSettleExcl`,
+party 9's consent is DROPPED (it signed a conflicting revoke), so the n-ary gate does NOT converge
+and settlement returns the UNCHANGED state — nothing commits. The signed equivocator cannot cause a
+settlement to commit with its consent counted. Driven by `settle_excludes_signed_equivocator` on the
+SIGNED fork (9's approve is valid + signed, yet blocked because it ALSO signed the revoke). -/
+example : laceSettleExcl demoState demoLaceSignedFork demoBatch demoDigest = some demoState :=
+  settle_excludes_signed_equivocator demoState demoLaceSignedFork demoBatch demoDigest
+    (p := 9) (by decide) (by decide)
+
+/-- The signed fork is backed by REAL evidence (PROVED, via `equivocatesSigned_sound`): two concrete
+present blocks, both authored by 9, both signed, both over digest 42, acking the conflicting
+approve/revoke markers. The exclusion is justified, not arbitrary. -/
+example : ∃ a b : Block, a ∈ demoLaceSignedFork ∧ b ∈ demoLaceSignedFork ∧
+    a.creator = 9 ∧ b.creator = 9 ∧ a.signed = true ∧ b.signed = true ∧
+    a.seq = demoDigest ∧ b.seq = demoDigest ∧
+    approveMark ∈ a.preds ∧ revokeMark ∈ b.preds :=
+  equivocatesSigned_sound demoLaceSignedFork 9 demoDigest (by decide)
+
+/-- **`signedFork_is_real_consentForks` (PROVED)** — the signed fork is a GENUINE blocklace
+equivocation, not just an application-level conflict: `signedFork9approve` and `signedFork9revoke`
+are incomparable (neither acks the other — each acks only a reserved marker absent from the lace),
+so author 9 is a real `Blocklace.Equivocator` over the batch. The strengthened exclusion is backed
+by the SAME byzantine-repelling keystone as the unsigned case — now on a fully-signed fork. -/
+theorem signedFork_no_precedes (x y : Block) : ¬ precedes demoLaceSignedFork x y := by
+  have noedge : ∀ a b, ¬ pointed demoLaceSignedFork a b := by
+    rintro a b ⟨hmem, hla, hlb⟩
+    have hbmem : b ∈ demoLaceSignedFork := List.mem_of_find?_eq_some hlb
+    have hmarker : a.id = approveMark ∨ a.id = revokeMark := by
+      simp only [demoLaceSignedFork, consentBlock, signedFork9approve, signedFork9revoke,
+        List.mem_cons, List.not_mem_nil, or_false] at hbmem
+      rcases hbmem with rfl | rfl | rfl | rfl <;>
+        · simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
+          first
+            | (left; exact hmem)
+            | (right; exact hmem)
+    rcases hmarker with hA | hB
+    · rw [hA] at hla
+      have hnone : demoLaceSignedFork.lookup approveMark = none := by decide
+      rw [hnone] at hla; exact absurd hla (by simp)
+    · rw [hB] at hla
+      have hnone : demoLaceSignedFork.lookup revokeMark = none := by decide
+      rw [hnone] at hla; exact absurd hla (by simp)
+  intro h
+  induction h with
+  | base hp => exact noedge _ _ hp
+  | trans _ _ ih _ => exact ih
+
+/-- The signed fork IS a `consentForks` (a real incomparable approve/revoke pair authored by 9). -/
+theorem demo_signed_consent_equivocation : consentForks demoLaceSignedFork 9 demoDigest := by
+  refine ⟨signedFork9approve, signedFork9revoke, by decide, by decide, by decide, by decide, ?_⟩
+  refine ⟨by decide, by decide, by decide, by decide, ?_⟩
+  exact ⟨by decide, signedFork_no_precedes _ _, signedFork_no_precedes _ _⟩
+
+/-- **`demo_signed_fork_detected` (PROVED)** — author 9's SIGNED fork is byzantine-repelling
+detectable: 9 is a real `Equivocator` and the incomparable pair is present. So the strengthened
+exclusion rests on a genuine, checkable equivocation. -/
+theorem demo_signed_fork_detected :
+    Equivocator demoLaceSignedFork 9 ∧
+    ∃ a b : Block, a ≠ b ∧ ¬ precedes demoLaceSignedFork a b ∧ ¬ precedes demoLaceSignedFork b a :=
+  consent_equivocation_detectable demo_signed_consent_equivocation
+
+/-! ### §9.0b — THE HONEST-SETTLES CASE (non-vacuity the other way). With every required party
+signing a CLEAN approve and NO conflicting revoke, the strengthened gate `laceSettleExcl` STILL
+settles and commits — the exclusion only bites equivocators, never honest signers. -/
+
+-- No required party has signed a revoke in the all-signed lace, so NONE is a signed equivocator.
+#guard ([7, 8, 9].map (fun p => equivocatesSigned demoLaceAllSigned p demoDigest)) == [false, false, false]
+#guard consentLaceCompleteExcl demoLaceAllSigned [7, 8, 9] demoDigest == true
+
+/-- **THE HONEST CASE COMMITS UNDER THE STRENGTHENED GATE (PROVED).** All three parties signed clean
+approves; none equivocated; so `laceSettleExcl` converges and DRAINS the userspace mutation through
+the verified executor — the strengthened gate does not over-block. -/
+example : (laceSettleExcl demoState demoLaceAllSigned demoBatch demoDigest).isSome = true := by
+  unfold laceSettleExcl
+  rw [if_pos (by decide)]
+  unfold demoBatch demoMutation drainAll drainStep exec demoState authorizedB
+  decide
+
+/-- The honest strengthened settle preserves caps too (rides the same `drainAll` proof). -/
+example : ∀ k', laceSettleExcl demoState demoLaceAllSigned demoBatch demoDigest = some k' →
+    k'.caps = demoState.caps := by
+  intro k' h
+  unfold laceSettleExcl at h
+  rw [if_pos (by decide)] at h
+  exact drainAll_preserves_caps demoState k' demoBatch.mutations h
+
 #guard (s!"consent-lace settlement: n={demoBatch.requiredParties.length} parties \
 {demoBatch.requiredParties} must each SIGN consent over digest {demoDigest}; suspended until all \
 signed, then atomic commit through the verified executor; an equivocating signer is detected + blocked"
@@ -608,6 +853,12 @@ kernel axioms (no `sorryAx`). -/
 #assert_axioms laceSettle_conserves
 #assert_axioms consent_equivocation_detectable
 #assert_axioms equivocating_party_blocks_settlement
+#assert_axioms signed_equivocator_consent_not_counted
+#assert_axioms settle_excludes_signed_equivocator
+#assert_axioms equivocatesSigned_sound
+#assert_axioms signedFork_no_precedes
+#assert_axioms demo_signed_consent_equivocation
+#assert_axioms demo_signed_fork_detected
 #assert_axioms partySignedConsent_mono
 #assert_axioms consentLaceComplete_mono
 #assert_axioms demo_consent_equivocation
