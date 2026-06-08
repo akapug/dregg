@@ -55,6 +55,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitRefusal
 import Dregg2.Circuit.Emit.EffectVmEmitReleaseEscrow
 import Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
 import Dregg2.Circuit.Emit.EffectVmEmitSeal
+import Dregg2.Circuit.Emit.EffectVmEmitSetField
 import Dregg2.Circuit.Emit.EffectVmEmitSetPermissions
 import Dregg2.Circuit.Emit.EffectVmEmitSetVK
 import Dregg2.Circuit.Emit.EffectVmEmitSpawn
