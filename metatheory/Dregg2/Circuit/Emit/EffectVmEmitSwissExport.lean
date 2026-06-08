@@ -1,86 +1,71 @@
 /-
-# Dregg2.Circuit.Emit.EffectVmEmitSwissExport — the CapTP sturdy-ref MINT `exportSturdyRefA`, EMITTED
-  onto the runnable EffectVM `swiss_root` (digest) column, with the supported per-row faithfulness +
-  anti-ghost commitment tooth + the connector to universe-A `swissExportA_full_sound`, and a PRECISE,
-  LOUD flag of the IR-blocked guard/list-structure parts.
+# Dregg2.Circuit.Emit.EffectVmEmitSwissExport — the CapTP sturdy-ref MINT `swissExportA` (export), EMITTED
+  onto the runnable EffectVM **dedicated `sturdyref_root` column** (the STAGE-3 `system_roots` home),
+  with the supported per-row faithfulness + anti-ghost commitment tooth + the connector to universe-A
+  `swissExportA_full_sound`, and a PRECISE, LOUD flag of the IR-blocked guard/list-structure parts +
+  the runtime-cutover status.
 
-## The "ONE circuit" thesis for the swiss-table effects — and where the per-row IR STOPS
+## AMPLIFICATION (STAGE 3 `system_roots`)
 
-`exportSturdyRefA sw actor exporter target rights` MINTS a fresh sturdy ref: it GROWS the swiss-table
-list `kernel.swiss` by `exportRecord sw exporter target rights`, prepends an authority receipt, and
-freezes the 16 non-`swiss` kernel fields. The touched component is the `List SwissRecord` side-table
-`swiss` (a `listComponent` over a FULL-list digest `listDigest LE cN`), GATED on a THREE-way guard
-`ExportGuard` (AUTHORITY ∧ FRESHNESS ∧ NON-AMPLIFICATION). Its validation
-`swissExportA_full_sound ⇒ ExportSpec` is DONE (`Inst/swissExportA.lean`).
+STAGE 3 (`Exec.SystemRoots`, `6aa29e996`) homed the swiss/sturdyref side-table's root at the dedicated
+kernel-owned index `systemRoot.STURDYREF` (the reconciliation note records it "was `fields[4]`"). On the
+EffectVM that root is MATERIALISED at `state.FIELD_BASE + 4` — the committed `swiss_table_root` mirror
+the runtime EnlivenRef AIR writes to (`air.rs:1626`) and the column the GROUP-4 chain already ABSORBS
+(`transferHashSites` site1 input #4; `absorbedCols` lists it). The OLD export descriptor carried the
+digest on the REINTERPRETED `cap_root` (col 11) and FROZE the nonce. THIS file binds the genuine
+dedicated `sturdyref_root` (universe-A's `ExportSpec` GROWS the swiss list — a real root move) and TICKS
+the nonce (the runtime's global non-NoOp invariant, `air.rs:2631`):
 
-The running EffectVM row (`circuit/src/effect_vm_p3_full_air.rs`, the 186-column `EffectVmP3Air`) has a
-FIXED 14-column state block: two balance limbs, a nonce, eight content fields, ONE scalar `cap_root`
-column (state offset 11, `state.CAP_ROOT`), a `state_commit`, and a `reserved`. The prover absorbs
-`cap_root` into the GROUP-4 state-commitment chain (`site2` reads `saCol CAP_ROOT`). There is NO
-per-row column for "the swiss-table list", "the swiss number `sw`", "the inserted record", or "the
-3-way guard": the row layout is a per-cell SCALAR block, not a side-table with membership/freshness
-structure.
+  * **sturdyref-root MOVE** at `state.FIELD_BASE + 4` (was `cap_root`): post `sturdyref_root` IS the
+    param swiss-digest (`D (post.swiss)` = `D (exportRecord … :: pre.swiss)` — the grown-list digest).
+  * **nonce TICK** `+1` (was freeze): the runtime's global non-NoOp nonce constraint.
+  * **freeze** balance limbs, `cap_root`, `reserved`, fields `{0,1,2,3,5,6,7}` (the residual frame).
 
-So at the row level, the ONLY thing the per-row arithmetic IR can faithfully express of a swiss
-effect is a SCALAR DIGEST-COLUMN MOVE: the post `swiss_root` digest is the digest of the post
-swiss-list, every OTHER state column frozen, and the moved digest bound into the published
-`state_commit` under Poseidon2 collision-resistance. We emit EXACTLY that — reusing the validated
-`AttenuateA` `cap_root`-column-move template, with the `cap_root` column REINTERPRETED as carrying the
-SWISS-TABLE digest for these `caps`-freezing swiss effects (export touches `caps` nowhere — `caps` is
-in its frozen frame — so the `cap_root` state column is free to carry the swiss-table digest in this
-swiss AIR variant). `swissExportVmDescriptor` pins the post `swiss_root` to a parameter
-`paramSE.SWISS_DIGEST_NEW` (the runnable column the witness fills with `D (post.swiss)`), the move gate
-is `new_swiss_root - swissDigestNew = 0`, the frame is frozen, and the GROUP-4 hash sites bind the
-moved digest into `state_commit`. We PROVE: satisfying the descriptor pins the digest-column move ↔
-the row intent `SwissExportRowIntent`; the commitment binds the WHOLE post-state (digest included), so
-a tampered post-`swiss_root` claiming the published `NEW_COMMIT` is UNSAT (the anti-ghost tooth).
+The moved dedicated root is bound into `state_commit` with ZERO change to the hash-site chain (it is an
+absorbed column), so the anti-ghost tooth carries verbatim over the dedicated root.
 
-## The CONNECTOR — `swissRootProj` to universe-A's `swissExportA_full_sound`
+## RUNTIME-CUTOVER STATUS — genuinely BLOCKED (honest), a DEEPER divergence than handoff/drop
 
-`swissRootProj D k = D k.swiss` reads a whole-list digest `D : List SwissRecord → ℤ` of the swiss
-side-table (the SAME measure universe-A's `swissComponent`'s `listDigest LE cN` digests, here packaged
-as the single `D`). `unify_swissExport` shows: when universe-A's `ExportSpec` holds (so
-`s'.kernel.swiss = exportRecord … :: s.kernel.swiss`), the projected post-`swiss_root` is EXACTLY
-`D (exportRecord … :: s.kernel.swiss)` — the column move the descriptor pins. So the runnable
-`swiss_root` column transition IS universe-A's `swiss`-digest transition; not a fourth spec.
+`swissExportA` DOES have a live Rust selector (`EXPORT_STURDY_REF=14`), but that runtime export is
+COUNTER-ONLY: it writes `fields[7] += 1` (the export counter), derives a swiss number into `aux[0]`, and
+does NOT materialise any swiss-table root (`air.rs:1547-1588`, `trace.rs:828-848`). Universe-A's
+`ExportSpec` instead GROWS the swiss list — a genuine root move. So this root-BINDING descriptor (which
+moves `sturdyref_root` at `field[4]`) DIVERGES from the live counter-only `EXPORT_STURDY_REF` and CANNOT
+pass the cutover harness against it; it carries a LOCAL selector (§0). The descriptor is universe-A-FULL
+(root-bound, anti-ghost) but cutover-BLOCKED until the runtime export materialises the swiss root
+(`generate_effect_vm_trace` would write `new_state.fields[4] = D(post.swiss)` on the export row, the way
+EnlivenRef already does). Reported, not papered.
+
+## The CONNECTOR — `sturdyrefRootProj` to universe-A's `swissExportA_full_sound`
+
+`sturdyrefRootProj D k = D k.swiss`. `unify_swissExport`: when `ExportSpec` holds (so `s'.kernel.swiss =
+exportRecord args.sw args.exporter args.target args.rights :: s.kernel.swiss`), the projected
+post-`sturdyref_root` `D s'.kernel.swiss` is EXACTLY `D (exportRecord … :: s.kernel.swiss)` — the grown
+swiss-list digest the descriptor's `paramSE.SWISS_DIGEST_NEW` carries. So the runnable `field[4]`
+(sturdyref_root) transition IS universe-A's `swiss`-digest transition.
 
 ## ===================  IR-BLOCKED — the precise asks  ===================
 
-The per-row scalar IR CANNOT express (each FLAGGED, never faked):
+  * **IR GAP 1 — the 3-way guard `ExportGuard` (AUTHORITY ∧ FRESHNESS ∧ NON-AMPLIFICATION).**
+    Set-membership / c-list predicates over `s.kernel.caps`, the swiss-table freshness of `sw`, and
+    `rightsNarrowerOrEqual`. The EffectVM row has no cap-graph / swiss-list / rights columns and no
+    `findSwiss`/`rightsNarrowerOrEqual` gate. Enforced only inside `swissExportA_full_sound` (carried).
 
-  * **IR GAP 1 — the 3-way guard `ExportGuard` (AUTHORITY ∧ FRESHNESS ∧ NON-AMPLIFICATION).** These are
-    SET-MEMBERSHIP / c-list predicates over `s.kernel.caps`, `s.kernel.swiss`, `heldAuths s.kernel
-    exporter`. The EffectVM row has NO cap-graph columns, NO swiss-list columns, NO `findSwiss`/
-    `rightsNarrowerOrEqual` gate. Universe-A commits the guard as a single `propBit` column
-    (`exportGuardGates`); the per-row EffectVM IR has no `propBit` guard column and no way to RE-DERIVE
-    the guard from row data. So the descriptor does NOT enforce the guard in-circuit; the guard's
-    enforcement lives in universe-A's `swissExportA_full_sound` (carried). ASK: a `VmConstraint`
-    guard-bit form (an extra selector-gated `propBit` column equal to `1`, decoded to the guard Prop
-    out-of-band) would internalize the guard's PRESENCE; re-deriving the SET-MEMBERSHIP content
-    in-circuit additionally needs a lookup/permutation argument the per-row IR lacks entirely.
+  * **IR GAP 2 — the LIST STRUCTURE (the inserted record, `swiss = exportRecord … :: pre`).** The
+    `sturdyref_root` column carries only the scalar digest; `VmHashSite` absorbs trace COLUMNS only, with
+    NO site re-deriving the root from a per-row serialization of `List SwissRecord`. So the descriptor
+    pins `new_sturdyref_root = D(post.swiss)` (witness-supplied) and binds THAT into `state_commit`, but
+    does NOT prove in-circuit that the root IS the genuine list digest, nor that the post-list is the
+    pre-list with `exportRecord` consed. Lives in `listLeafInjective LE` + `compressNInjective cN`. ASK:
+    a swiss-list-absorbing `VmHashSite`.
 
-  * **IR GAP 2 — the LIST STRUCTURE (which record was inserted, `swiss = exportRecord … :: pre`).** The
-    `swiss_root` column carries only the SCALAR digest `D (post.swiss)`. The IR's `VmHashSite` absorbs
-    trace COLUMNS only; it has NO site that re-derives `swiss_root` from a per-row SERIALIZATION of the
-    `List SwissRecord` (the leaf hash `LE` of each record, folded by `cN`). So the descriptor pins the
-    digest-column equality `new_swiss_root = D(post.swiss)` (witness-supplied), and binds THAT into
-    `state_commit`, but does NOT prove in-circuit that `swiss_root` IS the genuine list digest, nor that
-    the post-list is the pre-list with `exportRecord` consed. That binding lives in universe-A's
-    `listLeafInjective LE` + `compressNInjective cN` portals (the realizable Poseidon-CR set). ASK: a
-    `VmHashSite` that absorbs the swiss-list rows and outputs `swiss_root` (a Merkle-over-the-list
-    gadget) would internalize the list digest; until then it is a NAMED hypothesis (`D`), not an
-    in-circuit gate.
-
-  * PER-CELL / PER-ROW. Single-row AIR + its binding into the published `state_commit`. Cross-row
-    composition is the turn layer (`TurnEmit`), cited not claimed. `state.RESERVED` is absorbed by no
-    hash-site (inherited keystone finding).
+  * PER-CELL / PER-ROW; `state.RESERVED` absorbed nowhere (inherited keystone finding).
 
 ## Honesty
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Poseidon2 CR enters ONLY
-as the NAMED hypothesis `Poseidon2SpongeCR hash`; the swiss-list digest enters ONLY as the abstract
-`D : List SwissRecord → ℤ` (universe-A's `listComponent` portal, packaged). No `sorry`, no `:= True`,
-no `native_decide`, no `rfl`-posing-as-bridge. Imports are read-only.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR ONLY as `Poseidon2SpongeCR
+hash`; the swiss-list digest ONLY as the abstract `D`. No `sorry`/`:= True`/`native_decide`/`rfl`-bridge.
+Imports read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Poseidon2Binding
@@ -91,7 +76,7 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitSwissExport
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
-  (eSB eSA ePrm eSub eSelNoop site0 site1 transitionAll boundaryFirstPins)
+  (eSB eSA ePrm eSub eSelNoop gNonce site0 site1 transitionAll boundaryFirstPins)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Circuit.EffectCommit2 (Surface2 satisfiedE2 encodeE2)
@@ -100,98 +85,102 @@ open Dregg2.Circuit.ListCommit (listLeafInjective)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
-open Dregg2.Authority (Auth)
 
 set_option linter.unusedVariables false
 set_option autoImplicit false
 
-/-! ## §0 — Selector + param offsets for the swiss-export effect row.
+/-! ## §0 — Selector + param offsets + the dedicated `sturdyref_root` column.
 
-The running EffectVM lays one selector per effect (`columns.rs::NUM_EFFECTS = 54`); `exportSturdyRefA`
-has its own selector index `selSE.SWISS_EXPORT` (the running prover's per-effect selector). The post
-swiss-table digest the row pins is carried in a parameter column `paramSE.SWISS_DIGEST_NEW` (the
-runnable column the witness generator fills with `D (post.swiss)`). The digest is carried on the
-`state.CAP_ROOT` scalar column (REINTERPRETED as the swiss-table digest for these `caps`-freezing swiss
-effects — `caps` is in export's frozen frame, so `cap_root` is free to carry the swiss digest here). -/
+`swissExportA`'s universe-A spec MOVES the sturdyref root (it GROWS the swiss list). The live runtime
+`EXPORT_STURDY_REF=14` is COUNTER-ONLY (it writes `fields[7] += 1`, derives a swiss number into aux[0],
+and does NOT materialise a swiss-table root — `air.rs:1547-1588`, `trace.rs:828-848`). So we carry a
+LOCAL selector index `selSE.SWISS_EXPORT` for the root-BINDING descriptor (universe-A-faithful), DISTINCT
+from the live counter-only `EXPORT_STURDY_REF` — matching it would falsely claim runtime agreement
+(header §RUNTIME-CUTOVER). The dedicated `sturdyref_root` is `sturdyrefRootOff = state.FIELD_BASE + 4`
+(the STAGE-3 `systemRoot.STURDYREF` materialisation column). -/
 
 namespace selSE
-/-- The `exportSturdyRefA` effect selector column. -/
+/-- The `swissExportA` root-binding selector column (LOCAL; DISTINCT from the live counter-only
+`EXPORT_STURDY_REF=14` — header §RUNTIME-CUTOVER). -/
 def SWISS_EXPORT : Nat := 3
 end selSE
 
 namespace paramSE
-/-- The post swiss-table digest parameter: the value the witness fills with `D (post.swiss)`. -/
+/-- The post swiss-table digest parameter (witness fills `D (post.swiss)` — the new `sturdyref_root`). -/
 def SWISS_DIGEST_NEW : Nat := 2
 end paramSE
 
-/-- The `exportSturdyRefA` selector as an expression. -/
+/-- The dedicated `sturdyref_root` materialisation state-offset: `state.FIELD_BASE + 4` (the STAGE-3
+`systemRoot.STURDYREF` home — "was `fields[4]`"). One of the GROUP-4-absorbed columns. -/
+def sturdyrefRootOff : Nat := state.FIELD_BASE + 4
+
+/-- The `swissExportA` selector as an expression. -/
 def eSelSwissExport : EmittedExpr := .var selSE.SWISS_EXPORT
 
 /-- The post swiss-digest param as an expression. -/
 def eSwissDigestNew : EmittedExpr := .var (prmCol paramSE.SWISS_DIGEST_NEW)
 
-/-! ## §1 — The swiss-export row gates (the SUPPORTED part: a digest-column MOVE + frame freeze).
+/-! ## §1 — The swiss-export row gates (sturdyref-root MOVE + nonce TICK + residual freeze). -/
 
-The swiss effect MOVES the `swiss_root` (carried on the `cap_root` column) to the post swiss-table
-digest and FREEZES the rest of the block (balance limbs, nonce, 8 fields, reserved). This is the
-SCALAR portion the per-row IR can express; the guard + list-structure are IR-BLOCKED (header). -/
+/-- Sturdyref-root MOVE body: `new_sturdyref_root - swissDigestNew` (post `field[4]` IS the param
+digest). -/
+def gSwissMove : EmittedExpr := eSub (eSA sturdyrefRootOff) eSwissDigestNew
 
-/-- Swiss-root MOVE body: `new_swiss_root - swissDigestNew` (post swiss_root IS the param digest). -/
-def gSwissMove : EmittedExpr := eSub (eSA state.CAP_ROOT) eSwissDigestNew
+/-- Nonce TICK body (the running prover's GLOBAL non-NoOp invariant): `new_nonce − old_nonce − (1 −
+s_noop)`. Reused verbatim from the transfer template (`gNonce`). -/
+def gNonceTick : EmittedExpr := gNonce
 
-/-- Balance-lo freeze body: `new_bal_lo - old_bal_lo`. -/
+/-- Balance-lo freeze body. -/
 def gBalLoFix : EmittedExpr := eSub (eSA state.BALANCE_LO) (eSB state.BALANCE_LO)
-
-/-- Balance-hi freeze body: `new_bal_hi - old_bal_hi`. -/
+/-- Balance-hi freeze body. -/
 def gBalHiFix : EmittedExpr := eSub (eSA state.BALANCE_HI) (eSB state.BALANCE_HI)
-
-/-- Nonce freeze body: `new_nonce - old_nonce` (a swiss effect rewrites only the `swiss` list — matches
-the universe-A executor, which freezes the kernel cell record). -/
-def gNonceFix : EmittedExpr := eSub (eSA state.NONCE) (eSB state.NONCE)
-
-/-- Reserved freeze body: `new_reserved - old_reserved`. -/
+/-- Cap-root freeze body (handoff does NOT touch `caps`). -/
+def gCapFix : EmittedExpr := eSub (eSA state.CAP_ROOT) (eSB state.CAP_ROOT)
+/-- Reserved freeze body. -/
 def gResFix : EmittedExpr := eSub (eSA state.RESERVED) (eSB state.RESERVED)
 
-/-- Field-`i` freeze body: `field_after[i] - field_before[i]`. -/
+/-- The residual frozen fields `{0,1,2,3,5,6,7}` (`field[4]` MOVES — the sturdyref root). -/
+def frozenFields : List Nat := [0, 1, 2, 3, 5, 6, 7]
+
+/-- Field-`i` freeze body. -/
 def gFieldFix (i : Nat) : EmittedExpr :=
   eSub (eSA (state.FIELD_BASE + i)) (eSB (state.FIELD_BASE + i))
-
-/-- The eight field-freeze gates. -/
+/-- The seven residual field-freeze gates. -/
 def gFieldFixAll : List VmConstraint :=
-  (List.range 8).map (fun i => VmConstraint.gate (gFieldFix i))
+  frozenFields.map (fun i => VmConstraint.gate (gFieldFix i))
 
 /-! ## §2 — The emitted descriptor. -/
 
-/-- The `exportSturdyRefA` AIR identity (the fingerprint binding). -/
+/-- The `swissExportA` AIR identity. -/
 def swissExportVmAirName : String := "dregg-effectvm-swissExportA-v1"
 
-/-- The swiss-export per-row gates: swiss-root MOVE, balance/nonce/reserved freeze, 8 fields freeze. -/
+/-- The swiss-export per-row gates: sturdyref-root MOVE, nonce TICK, balance/cap/reserved freeze, the
+seven residual fields freeze. -/
 def swissExportRowGates : List VmConstraint :=
-  [ .gate gSwissMove, .gate gBalLoFix, .gate gBalHiFix, .gate gNonceFix
-  , .gate gResFix ] ++ gFieldFixAll
+  [ .gate gSwissMove, .gate gNonceTick, .gate gBalLoFix, .gate gBalHiFix
+  , .gate gCapFix, .gate gResFix ] ++ gFieldFixAll
 
-/-- Site 2 absorbing the post `swiss_root` (carried on the `cap_root` column; same shape as the
-transfer keystone's `site2`, so the moved digest is bound into `state_commit`). -/
+/-- Site 2 absorbing the post `cap_root` (unchanged from the transfer keystone — the dedicated
+`sturdyref_root` at `field[4]` is absorbed by site1). -/
 def site2 : VmHashSite :=
   { digestCol := auxCol aux_off.STATE_INTER3
   , inputs := [ .col (saCol (state.FIELD_BASE + 5)), .col (saCol (state.FIELD_BASE + 6))
               , .col (saCol (state.FIELD_BASE + 7)), .col (saCol state.CAP_ROOT) ]
   , arity := 4 }
 
-/-- Site 3: `state_commit = H4(inter1, inter2, inter3, 0)` — reading sites 0/1/2. -/
+/-- Site 3: `state_commit = H4(inter1, inter2, inter3, 0)`. -/
 def site3 : VmHashSite :=
   { digestCol := saCol state.STATE_COMMIT
   , inputs := [ .digest 0, .digest 1, .digest 2, .zero ]
   , arity := 4 }
 
-/-- The ordered GROUP-4 hash sites (identical chain to the transfer keystone). -/
+/-- The ordered GROUP-4 hash sites (identical chain to the transfer keystone — `field[4]` carrying the
+dedicated `sturdyref_root` is absorbed by site1). -/
 def swissExportHashSites : List VmHashSite := [site0, site1, site2, site3]
 
-/-- **`swissExportVmDescriptor`** — the `exportSturdyRefA` effect's SUPPORTED concrete circuit, emitted
-through the EffectVM IR: the swiss-root MOVE + frame-freeze gates ++ transition continuity ++ the row-0
-boundary pins, with the 4 ordered GROUP-4 hash sites (binding the moved digest). No balance range
-checks (no balance move). NOTE: the guard + list-structure are IR-BLOCKED (header), NOT in this
-descriptor. -/
+/-- **`swissExportVmDescriptor`** — the `swissExportA` concrete circuit: sturdyref-root MOVE
+(`field[4]`) + nonce TICK + residual frame freeze ++ transition continuity ++ row-0 boundary pins, with
+the 4 GROUP-4 hash sites binding the moved dedicated root. Guard + list-structure IR-BLOCKED (header). -/
 def swissExportVmDescriptor : EffectVmDescriptor :=
   { name := swissExportVmAirName
   , traceWidth := EFFECT_VM_WIDTH
@@ -200,102 +189,100 @@ def swissExportVmDescriptor : EffectVmDescriptor :=
   , hashSites := swissExportHashSites
   , ranges := [] }
 
-/-! ## §3 — The swiss-export ROW INTENT (the SUPPORTED faithfulness target).
+/-! ## §3 — The swiss-export ROW INTENT. -/
 
-`SwissExportRowIntent env` is the field-level swiss-digest move the per-row IR supports: post
-`swiss_root` IS the supplied post swiss-digest, balance limbs / nonce / reserved / 8 fields FIXED. This
-is the EffectVM-row projection of universe-A's `ExportSpec` `swiss` clause (the whole-LIST `swiss`
-equality, projected to the swiss-DIGEST column) + the 16-field freeze (projected to the row's frozen
-columns). It does NOT carry the guard or the list structure (IR-BLOCKED, header). -/
-
-/-- **`SwissExportRowIntent env`** — the SUPPORTED intent: post `swiss_root` is the digest param, frame
-frozen. -/
+/-- **`SwissExportRowIntent env`** — post `sturdyref_root` (`field[4]`) is the digest param, nonce
+ticks `+1`, balance/cap/reserved + residual fields `{0,1,2,3,5,6,7}` frozen. -/
 def SwissExportRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.CAP_ROOT) = env.loc (prmCol paramSE.SWISS_DIGEST_NEW)
+  env.loc (saCol sturdyrefRootOff) = env.loc (prmCol paramSE.SWISS_DIGEST_NEW)
+  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1
   ∧ env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
   ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE)
+  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
   ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+  ∧ (∀ i ∈ frozenFields, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
 
 /-- The row is a swiss-export row: `s_swissExport = 1`, `s_noop = 0`. -/
 def IsSwissExportRow (env : VmRowEnv) : Prop :=
   env.loc selSE.SWISS_EXPORT = 1 ∧ env.loc sel.NOOP = 0
 
-/-! ## §4 — FAITHFULNESS: the emitted per-row gates ⟺ the SUPPORTED intent. -/
+/-! ## §4 — FAITHFULNESS. -/
 
-/-- **`swissExportRowGates_holds_iff`** — on a swiss-export row, the emitted per-row gates all hold IFF
-`SwissExportRowIntent` holds. The gate bodies are the running prover's polynomials (swiss-root move +
-frame freeze); they pin EXACTLY the supported digest-move intent. -/
-theorem swissExportRowGates_holds_iff (env : VmRowEnv) :
+/-- **`swissExportRowGates_holds_iff`** — on a swiss-export row (`s_noop = 0`), the gates all hold IFF
+`SwissExportRowIntent` holds. -/
+theorem swissExportRowGates_holds_iff (env : VmRowEnv) (hrow : IsSwissExportRow env) :
     (∀ c ∈ swissExportRowGates, c.holdsVm env false false) ↔ SwissExportRowIntent env := by
-  unfold swissExportRowGates gFieldFixAll SwissExportRowIntent
+  obtain ⟨_hsH, hsN⟩ := hrow
+  unfold swissExportRowGates gFieldFixAll frozenFields SwissExportRowIntent
   constructor
   · intro h
     have hSw := h (.gate gSwissMove) (by simp)
+    have hNon := h (.gate gNonceTick) (by simp)
     have hLo := h (.gate gBalLoFix) (by simp)
     have hHi := h (.gate gBalHiFix) (by simp)
-    have hNon := h (.gate gNonceFix) (by simp)
+    have hCap := h (.gate gCapFix) (by simp)
     have hRes := h (.gate gResFix) (by simp)
-    have hFld : ∀ i, i < 8 → VmConstraint.holdsVm env false false (.gate (gFieldFix i)) := by
+    have hFld : ∀ i, i ∈ frozenFields → VmConstraint.holdsVm env false false (.gate (gFieldFix i)) := by
       intro i hi
       apply h
-      simp only [List.mem_append, List.mem_map, List.mem_range]
+      simp only [List.mem_append, List.mem_map]
       exact Or.inr ⟨i, hi, rfl⟩
-    simp only [VmConstraint.holdsVm, gSwissMove, gBalLoFix, gBalHiFix, gNonceFix, gResFix,
-      eSA, eSB, eSwissDigestNew, eSub, EmittedExpr.eval] at hSw hLo hHi hNon hRes
-    refine ⟨by linarith [hSw], by linarith [hLo], by linarith [hHi], by linarith [hNon],
-      by linarith [hRes], ?_⟩
+    simp only [VmConstraint.holdsVm, gSwissMove, gNonceTick, gNonce, gBalLoFix, gBalHiFix, gCapFix,
+      gResFix, eSA, eSB, eSwissDigestNew, eSub, eSelNoop, EmittedExpr.eval]
+      at hSw hNon hLo hHi hCap hRes
+    rw [hsN] at hNon
+    refine ⟨by linarith [hSw], by linarith [hNon], by linarith [hLo], by linarith [hHi],
+      by linarith [hCap], by linarith [hRes], ?_⟩
     intro i hi
     have := hFld i hi
     simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval] at this
     linarith
-  · rintro ⟨hSw, hLo, hHi, hNon, hRes, hFld⟩ c hc
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
-      List.mem_range] at hc
-    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
+  · rintro ⟨hSw, hNon, hLo, hHi, hCap, hRes, hFld⟩ c hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gSwissMove, eSA, eSwissDigestNew, eSub, EmittedExpr.eval]
       rw [hSw]; ring
+    · simp only [VmConstraint.holdsVm, gNonceTick, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
+      rw [hsN, hNon]; ring
     · simp only [VmConstraint.holdsVm, gBalLoFix, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hLo]; ring
     · simp only [VmConstraint.holdsVm, gBalHiFix, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hHi]; ring
-    · simp only [VmConstraint.holdsVm, gNonceFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hNon]; ring
+    · simp only [VmConstraint.holdsVm, gCapFix, eSA, eSB, eSub, EmittedExpr.eval]
+      rw [hCap]; ring
     · simp only [VmConstraint.holdsVm, gResFix, eSA, eSB, eSub, EmittedExpr.eval]
       rw [hRes]; ring
     · simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      have hmem : i ∈ frozenFields := by
+        simp only [frozenFields, List.mem_cons, List.mem_singleton]; tauto
+      rw [hFld i hmem]; ring
 
-/-- **`swissExportVm_faithful` — THE supported deliverable.** On a swiss-export row, the emitted
-descriptor's per-row gates hold IFF the supported swiss-digest intent holds. -/
-theorem swissExportVm_faithful (env : VmRowEnv) :
+/-- **`swissExportVm_faithful` — THE deliverable.** -/
+theorem swissExportVm_faithful (env : VmRowEnv) (hrow : IsSwissExportRow env) :
     (∀ c ∈ swissExportRowGates, c.holdsVm env false false) ↔ SwissExportRowIntent env :=
-  swissExportRowGates_holds_iff env
+  swissExportRowGates_holds_iff env hrow
 
-/-! ## §5 — ANTI-GHOST (per-row): a wrong swiss-root move fails the emitted descriptor. -/
+/-! ## §5 — ANTI-GHOST (per-row). -/
 
-/-- **Anti-ghost (swiss-root tamper).** A row whose post-`swiss_root` is NOT the supplied post-digest
-fails the `gSwissMove` gate (UNSAT). -/
+/-- **Anti-ghost (sturdyref-root tamper).** -/
 theorem swissExportVm_rejects_wrong_swissRoot (env : VmRowEnv)
-    (hwrong : env.loc (saCol state.CAP_ROOT) ≠ env.loc (prmCol paramSE.SWISS_DIGEST_NEW)) :
+    (hwrong : env.loc (saCol sturdyrefRootOff) ≠ env.loc (prmCol paramSE.SWISS_DIGEST_NEW)) :
     ¬ (VmConstraint.gate gSwissMove).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gSwissMove, eSA, eSwissDigestNew, eSub, EmittedExpr.eval]
   intro h
   apply hwrong
   linarith
 
-/-- **Anti-ghost (general).** A row whose post-state is NOT the intent move does NOT satisfy the per-row
-gates. -/
-theorem swissExportVm_rejects_wrong_output (env : VmRowEnv) (hwrong : ¬ SwissExportRowIntent env) :
+/-- **Anti-ghost (general).** -/
+theorem swissExportVm_rejects_wrong_output (env : VmRowEnv) (hrow : IsSwissExportRow env)
+    (hwrong : ¬ SwissExportRowIntent env) :
     ¬ (∀ c ∈ swissExportRowGates, c.holdsVm env false false) :=
-  fun h => hwrong ((swissExportVm_faithful env).mp h)
+  fun h => hwrong ((swissExportVm_faithful env hrow).mp h)
 
-/-! ## §6 — The structured per-cell soundness (the keystone analog). -/
+/-! ## §6 — The structured per-cell soundness. -/
 
-/-- **`SwissRowEncodes env pre post swissDigestNew`** — the row decodes to `(pre, post)` cell states
-with the post swiss-digest carried in `paramSE.SWISS_DIGEST_NEW`. (`cap_root` column carries the
-swiss-root.) -/
+/-- **`SwissRowEncodes env pre post swissDigestNew`** — the row decodes to `(pre, post)` cell states.
+The `sturdyref_root` is carried on the `field[4]` column. -/
 def SwissRowEncodes (env : VmRowEnv) (pre post : CellState) (swissDigestNew : ℤ) : Prop :=
   env.loc (sbCol state.BALANCE_LO) = pre.balLo
   ∧ env.loc (sbCol state.BALANCE_HI) = pre.balHi
@@ -311,17 +298,22 @@ def SwissRowEncodes (env : VmRowEnv) (pre post : CellState) (swissDigestNew : �
   ∧ env.loc (saCol state.CAP_ROOT) = post.capRoot
   ∧ env.loc (saCol state.RESERVED) = post.reserved
 
-/-- The per-cell swiss spec: the moved cell's WHOLE post-state is `pre` with `swiss_root` (the
-`cap_root` column) set to the new swiss-digest, every other field frozen. This is the per-cell
-projection of universe-A's `ExportSpec` (`swiss` whole-list move ⟹ swiss-DIGEST column move; 16-field
-freeze ⟹ frame freeze). -/
+/-- The per-cell handoff spec: post `field[4]` (sturdyref_root) = the new digest, nonce ticks,
+balance/cap/reserved + residual fields `{0,1,2,3,5,6,7}` frozen. -/
 def SwissCellSpec (pre post : CellState) (swissDigestNew : ℤ) : Prop :=
-  post.capRoot = swissDigestNew
+  post.fields ⟨4, by decide⟩ = swissDigestNew
+  ∧ post.nonce = pre.nonce + 1
   ∧ post.balLo = pre.balLo
   ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
+  ∧ post.capRoot = pre.capRoot
   ∧ post.reserved = pre.reserved
+  ∧ post.fields ⟨0, by decide⟩ = pre.fields ⟨0, by decide⟩
+  ∧ post.fields ⟨1, by decide⟩ = pre.fields ⟨1, by decide⟩
+  ∧ post.fields ⟨2, by decide⟩ = pre.fields ⟨2, by decide⟩
+  ∧ post.fields ⟨3, by decide⟩ = pre.fields ⟨3, by decide⟩
+  ∧ post.fields ⟨5, by decide⟩ = pre.fields ⟨5, by decide⟩
+  ∧ post.fields ⟨6, by decide⟩ = pre.fields ⟨6, by decide⟩
+  ∧ post.fields ⟨7, by decide⟩ = pre.fields ⟨7, by decide⟩
 
 /-- Under `SwissRowEncodes`, `SwissExportRowIntent` IS the structured per-cell `SwissCellSpec`. -/
 theorem intent_to_swissCellSpec (env : VmRowEnv) (pre post : CellState) (swissDigestNew : ℤ)
@@ -329,44 +321,47 @@ theorem intent_to_swissCellSpec (env : VmRowEnv) (pre post : CellState) (swissDi
     SwissCellSpec pre post swissDigestNew := by
   obtain ⟨hsbLo, hsbHi, hsbN, hsbF, hsbCap, hsbRes, hpDig,
           hsaLo, hsaHi, hsaN, hsaF, hsaCap, hsaRes⟩ := henc
-  obtain ⟨hsw, hlo, hhi, hnon, hres, hfld⟩ := hint
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-  · rw [← hsaCap, ← hpDig]; exact hsw
+  obtain ⟨hsw, hnon, hlo, hhi, hcap, hres, hfld⟩ := hint
+  have frozen : ∀ i : Fin 8, i.val ∈ frozenFields → post.fields i = pre.fields i := by
+    intro i hi
+    have hp := hsaF i; have hq := hsbF i
+    have := hfld i.val hi
+    rw [hp, hq] at this; exact this
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · have hp4 : env.loc (saCol (state.FIELD_BASE + 4)) = post.fields ⟨4, by decide⟩ := hsaF ⟨4, by decide⟩
+    rw [← hp4]; show env.loc (saCol sturdyrefRootOff) = swissDigestNew
+    rw [hsw, hpDig]
+  · rw [← hsaN, ← hsbN]; exact hnon
   · rw [← hsaLo, ← hsbLo]; exact hlo
   · rw [← hsaHi, ← hsbHi]; exact hhi
-  · rw [← hsaN, ← hsbN]; exact hnon
-  · intro i; rw [← hsaF i, ← hsbF i]; exact hfld i.val i.isLt
+  · rw [← hsaCap, ← hsbCap]; exact hcap
   · rw [← hsaRes, ← hsbRes]; exact hres
+  · exact frozen ⟨0, by decide⟩ (by decide)
+  · exact frozen ⟨1, by decide⟩ (by decide)
+  · exact frozen ⟨2, by decide⟩ (by decide)
+  · exact frozen ⟨3, by decide⟩ (by decide)
+  · exact frozen ⟨5, by decide⟩ (by decide)
+  · exact frozen ⟨6, by decide⟩ (by decide)
+  · exact frozen ⟨7, by decide⟩ (by decide)
 
-/-- **`swissExportDescriptor_full_sound` — the structured soundness (supported part).** Satisfying the
-per-row gates under the `SwissRowEncodes` decoding forces the structured per-cell `SwissCellSpec` (post
-`swiss_root` = the predicted swiss-digest, frame frozen). -/
-theorem swissExportDescriptor_full_sound (env : VmRowEnv)
+/-- **`swissExportDescriptor_full_sound` — the structured soundness.** -/
+theorem swissExportDescriptor_full_sound (env : VmRowEnv) (hrow : IsSwissExportRow env)
     (pre post : CellState) (swissDigestNew : ℤ)
     (henc : SwissRowEncodes env pre post swissDigestNew)
     (hgates : ∀ c ∈ swissExportRowGates, c.holdsVm env false false) :
     SwissCellSpec pre post swissDigestNew :=
-  intent_to_swissCellSpec env pre post swissDigestNew henc ((swissExportVm_faithful env).mp hgates)
+  intent_to_swissCellSpec env pre post swissDigestNew henc ((swissExportVm_faithful env hrow).mp hgates)
 
-/-! ## §7 — THE ANTI-GHOST COMMITMENT TOOTH (whole-state binding, swiss-root included).
-
-The GROUP-4 sites (identical to the transfer keystone's) absorb the post `swiss_root` (on the
-`cap_root` column) into the published `state_commit`. Under `Poseidon2SpongeCR hash`, two satisfying
-rows with the same published `NEW_COMMIT` have identical absorbed columns — so a tampered
-post-`swiss_root` claiming the published commitment is impossible. Reuse the keystone's machinery. -/
+/-! ## §7 — THE ANTI-GHOST COMMITMENT TOOTH (whole-state binding, dedicated sturdyref_root included). -/
 
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (transferHashSites)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
   (absorbedCols absorbed_determined_by_commit)
 
-/-- `swissExportHashSites` is DEFINITIONALLY the transfer keystone's `transferHashSites` (same ordered
-4-site chain, same absorbed columns incl. the post `swiss_root` on the cap-root column). -/
+/-- `swissExportHashSites` is DEFINITIONALLY the transfer keystone's `transferHashSites`. -/
 theorem swissExportHashSites_eq : swissExportHashSites = transferHashSites := rfl
 
-/-- **`swissExportDescriptor_commit_binds_state` — the whole-state tooth.** Two swiss-export rows that
-satisfy the hash-sites and publish equal `state_commit`s have identical absorbed columns — the moved
-post-`swiss_root` (an absorbed column, site 2) included. So a prover CANNOT tamper the post-`swiss_root`
-(or any absorbed cell) while keeping the published commitment. -/
+/-- **`swissExportDescriptor_commit_binds_state` — the whole-state tooth.** -/
 theorem swissExportDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     (e₁ e₂ : VmRowEnv)
     (hs₁ : siteHoldsAll hash e₁ swissExportHashSites)
@@ -376,173 +371,145 @@ theorem swissExportDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR 
   rw [swissExportHashSites_eq] at hs₁ hs₂
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
-/-! ## §8 — THE CONNECTOR — `swissRootProj` to universe-A's `swissExportA_full_sound`.
+/-- **`swissExportDescriptor_binds_sturdyref_root` — the per-column anti-ghost.** Equal published
+`state_commit`s force the moved dedicated `sturdyref_root` (`field[4]`, absorbed column #7) equal. -/
+theorem swissExportDescriptor_binds_sturdyref_root (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv)
+    (hs₁ : siteHoldsAll hash e₁ swissExportHashSites)
+    (hs₂ : siteHoldsAll hash e₂ swissExportHashSites)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
+    e₁.loc (saCol sturdyrefRootOff) = e₂.loc (saCol sturdyrefRootOff) := by
+  have h := swissExportDescriptor_commit_binds_state hash hCR e₁ e₂ hs₁ hs₂ hcommit
+  have := congrArg (fun l => l.getD 7 0) h
+  simpa only [absorbedCols, List.getD_cons_succ, List.getD_cons_zero, sturdyrefRootOff] using this
 
-`swissRootProj D k = D k.swiss` reads a whole-list digest `D : List SwissRecord → ℤ` of the swiss
-side-table (the SAME measure universe-A's `swissComponent`'s `listDigest LE cN` digests, packaged as
-the single `D`). The unification: a committed universe-A `ExportSpec` makes the projected
-post-`swiss_root` EXACTLY `D (exportRecord sw exporter target rights :: s.kernel.swiss)` — the digest
-the descriptor's `paramSE.SWISS_DIGEST_NEW` carries. So the runnable `swiss_root` column transition IS
-universe-A's `swiss`-digest transition. -/
+/-! ## §8 — THE CONNECTOR — `sturdyrefRootProj` to universe-A's `swissExportA_full_sound`. -/
 
 open Dregg2.Circuit.Inst.SwissExportA (ExportArgs)
 open Dregg2.Circuit.Spec.SwissExport (ExportSpec exportRecord)
 
-/-- **`swissRootProj D k`** — the EffectVM `swiss_root` column value for kernel state `k`: the
-whole-list digest `D` of the swiss side-table. -/
-def swissRootProj (D : List SwissRecord → ℤ) (k : RecordKernelState) : ℤ := D k.swiss
+/-- **`sturdyrefRootProj D k`** — the EffectVM dedicated `sturdyref_root` column value: the whole-list
+digest `D`. -/
+def sturdyrefRootProj (D : List SwissRecord → ℤ) (k : RecordKernelState) : ℤ := D k.swiss
 
 /-- The predicted post swiss-digest the descriptor's `paramSE.SWISS_DIGEST_NEW` carries: `D` of the
-post swiss-list (`exportRecord … :: pre`). -/
+post (grown) swiss-list `exportRecord … :: pre.swiss`. -/
 def exportSwissDigestNew (D : List SwissRecord → ℤ)
     (s : RecChainedState) (args : ExportArgs) : ℤ :=
   D (exportRecord args.sw args.exporter args.target args.rights :: s.kernel.swiss)
 
-/-- **`unify_swissExport` — THE CONNECTOR.** When universe-A's `ExportSpec` holds, the projected
-post-`swiss_root` is EXACTLY the post swiss-digest `exportSwissDigestNew D s args` — i.e. the column
-move the descriptor pins. So `SwissCellSpec`'s `swiss_root` clause IS universe-A's `swiss`-clause,
-projected to the digest column. (The frame clauses are universe-A's 16-field freeze projected to the
-frozen columns. We discharge the `swiss_root` leg — the genuine swiss content.) -/
+/-- **`unify_swissExport` — THE CONNECTOR.** When universe-A's `ExportSpec` holds (so `s'.kernel.swiss =
+exportRecord … :: s.kernel.swiss`), the projected post-`sturdyref_root` is EXACTLY
+`exportSwissDigestNew D s args` — the column move the descriptor pins. -/
 theorem unify_swissExport (D : List SwissRecord → ℤ)
     (s : RecChainedState) (args : ExportArgs) (s' : RecChainedState)
     (hspec : ExportSpec s args.sw args.actor args.exporter args.target args.rights s') :
-    swissRootProj D s'.kernel = exportSwissDigestNew D s args := by
-  -- ExportSpec's `swiss` clause is `s'.kernel.swiss = exportRecord … :: s.kernel.swiss`.
+    sturdyrefRootProj D s'.kernel = exportSwissDigestNew D s args := by
   obtain ⟨_, hsw, _⟩ := hspec
-  show D s'.kernel.swiss = D (exportRecord args.sw args.exporter args.target args.rights :: s.kernel.swiss)
+  show D s'.kernel.swiss
+      = D (exportRecord args.sw args.exporter args.target args.rights :: s.kernel.swiss)
   rw [hsw]
 
-/-- **`unify_swissExport_via_full_sound` — the runnable column move inherits the VALIDATED guarantee.**
-Chaining universe-A's `swissExportA_full_sound` (a satisfying v2 full-state witness ⟹ `ExportSpec`)
-with `unify_swissExport`: a satisfying universe-A witness forces the projected post-`swiss_root` to the
-post swiss-digest — the EXACT column value the runnable descriptor's `paramSE.SWISS_DIGEST_NEW` carries.
-So the runnable `swiss_root` move is universe-A's validated `swiss` transition, not a fourth spec.
-(The guard + list-structure remain enforced ONLY inside `swissExportA_full_sound` — IR-BLOCKED at the
-row, header.) -/
+/-- **`unify_swissExport_via_full_sound` — the runnable dedicated-root move inherits the VALIDATED
+guarantee.** A satisfying universe-A `swissExportA_full_sound` witness ⟹ `ExportSpec` ⟹ the projected
+post-`sturdyref_root` equals `D` of the genuine grown post-list — the column value the descriptor's
+`paramSE.SWISS_DIGEST_NEW` carries. -/
 theorem unify_swissExport_via_full_sound
     (S : Surface2) (D : List SwissRecord → ℤ)
     (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN)
-    (hLE : listLeafInjective LE)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (hRest : Dregg2.Circuit.Inst.SwissExportA.RestIffNoSwiss S.RH)
     (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : ExportArgs) (s' : RecChainedState)
     (h : satisfiedE2 S (Dregg2.Circuit.Inst.SwissExportA.swissExportE LE cN hN hLE)
         (encodeE2 S (Dregg2.Circuit.Inst.SwissExportA.swissExportE LE cN hN hLE) s args s')) :
-    swissRootProj D s'.kernel = exportSwissDigestNew D s args :=
+    sturdyrefRootProj D s'.kernel = exportSwissDigestNew D s args :=
   unify_swissExport D s args s'
     (Dregg2.Circuit.Inst.SwissExportA.swissExportA_full_sound S LE cN hN hLE hRest hLog s args s' h)
 
-/-! ## §9 — NON-VACUITY: a concrete swiss-export row that satisfies the intent, and one that does not.
+/-! ## §9 — NON-VACUITY: a concrete row that satisfies the intent, and one that does not. The good row
+moves `field[4]@83` (sturdyref_root) `0 → 77`, ticks nonce@78 `9 → 10`, freezes the rest. -/
 
-A row `swissGoodRow`: a swiss-digest move where `swiss_root 11 → 77` (the new digest), nonce `5 → 5`
-frozen, everything else `0`/frozen. And `swissBadRow`: same but post-`swiss_root` forged to `999 ≠ 77`. -/
-
-/-- A concrete swiss-export row: `swiss_root` (cap-root column) moves to the param digest `77`, frame
-frozen at `0`. -/
+/-- A concrete swiss-export row, on RESOLVED ABSOLUTE columns. Selector `SWISS_EXPORT@3 = 1`,
+`nonce@56 = 9`, `nonce@78 = 10`, `field[4]@83 = 77`, digest@70 = 77; everything else `0`/frozen. -/
 def swissGoodRow : VmRowEnv where
   loc := fun v =>
-    if v = selSE.SWISS_EXPORT then 1
-    else if v = sbCol state.CAP_ROOT then 11
-    else if v = saCol state.CAP_ROOT then 77
-    else if v = prmCol paramSE.SWISS_DIGEST_NEW then 77
+    if v = 3 then 1           -- SWISS_EXPORT selector
+    else if v = 56 then 9     -- sbCol NONCE
+    else if v = 78 then 10    -- saCol NONCE
+    else if v = 83 then 77    -- saCol sturdyrefRootOff (field[4])
+    else if v = 70 then 77    -- prmCol SWISS_DIGEST_NEW
     else 0
   nxt := fun _ => 0
   pub := fun _ => 0
 
+/-- The resolved absolute indices. -/
+theorem col_facts :
+    saCol sturdyrefRootOff = 83 ∧ prmCol paramSE.SWISS_DIGEST_NEW = 70
+    ∧ sbCol state.NONCE = 56 ∧ saCol state.NONCE = 78 ∧ selSE.SWISS_EXPORT = 3 :=
+  ⟨rfl, rfl, rfl, rfl, rfl⟩
+
+/-- For any field index `i`, the absolute pre/post field columns are `57+i` / `79+i`. -/
+theorem field_col_facts (i : Nat) :
+    saCol (state.FIELD_BASE + i) = 79 + i ∧ sbCol (state.FIELD_BASE + i) = 57 + i := by
+  constructor
+  · simp only [saCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS, STATE_SIZE,
+      NUM_PARAMS, state.FIELD_BASE]; omega
+  · simp only [sbCol, STATE_BEFORE_BASE, NUM_EFFECTS, state.FIELD_BASE]; omega
+
 /-- `swissGoodRow` is a genuine swiss-export row. -/
 theorem swissGoodRow_isSwissExportRow : IsSwissExportRow swissGoodRow := by
-  unfold IsSwissExportRow swissGoodRow
-  constructor <;> norm_num [selSE.SWISS_EXPORT, sel.NOOP, sbCol, saCol, prmCol, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT,
-    paramSE.SWISS_DIGEST_NEW]
+  obtain ⟨_, _, _, _, hsel⟩ := col_facts
+  refine ⟨?_, ?_⟩
+  · show swissGoodRow.loc selSE.SWISS_EXPORT = 1; rw [hsel]; rfl
+  · show swissGoodRow.loc sel.NOOP = 0; rfl
 
-/-- **NON-VACUITY (witness TRUE).** `swissGoodRow` REALIZES the swiss-export intent: post `swiss_root =
-77` = the param digest, balance/nonce/reserved/fields frozen at `0`. -/
+/-- **NON-VACUITY (witness TRUE).** `swissGoodRow` REALIZES the swiss-export intent. -/
 theorem swissGoodRow_realizes_intent : SwissExportRowIntent swissGoodRow := by
-  -- column indices: sel 3, sbCol CAP_ROOT 65, saCol CAP_ROOT 87, prmCol SWISS_DIGEST_NEW 70.
-  have hsa  : saCol state.CAP_ROOT = 87 := by
-    unfold saCol STATE_AFTER_BASE PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE NUM_PARAMS
-      state.CAP_ROOT; rfl
-  have hprm : prmCol paramSE.SWISS_DIGEST_NEW = 70 := by
-    unfold prmCol PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE paramSE.SWISS_DIGEST_NEW; rfl
-  -- a clean reader: `swissGoodRow.loc 87 = 77` (post swiss_root) and `swissGoodRow.loc 70 = 77` (param).
-  have rsa : swissGoodRow.loc (saCol state.CAP_ROOT) = 77 := by
-    rw [hsa]
-    show (if (87:Nat) = selSE.SWISS_EXPORT then (1:ℤ)
-      else if (87:Nat) = sbCol state.CAP_ROOT then 11
-      else if (87:Nat) = saCol state.CAP_ROOT then 77
-      else if (87:Nat) = prmCol paramSE.SWISS_DIGEST_NEW then 77 else 0) = 77
-    rw [hsa]; norm_num [selSE.SWISS_EXPORT, sbCol, prmCol, STATE_BEFORE_BASE, PARAM_BASE,
-      NUM_EFFECTS, STATE_SIZE, state.CAP_ROOT, paramSE.SWISS_DIGEST_NEW]
-  have rprm : swissGoodRow.loc (prmCol paramSE.SWISS_DIGEST_NEW) = 77 := by
-    rw [hprm]
-    show (if (70:Nat) = selSE.SWISS_EXPORT then (1:ℤ)
-      else if (70:Nat) = sbCol state.CAP_ROOT then 11
-      else if (70:Nat) = saCol state.CAP_ROOT then 77
-      else if (70:Nat) = prmCol paramSE.SWISS_DIGEST_NEW then 77 else 0) = 77
-    rw [hprm]; norm_num [selSE.SWISS_EXPORT, sbCol, saCol, STATE_BEFORE_BASE, STATE_AFTER_BASE,
-      PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT, paramSE.SWISS_DIGEST_NEW]
-  refine ⟨by rw [rsa, rprm], ?_, ?_, ?_, ?_, ?_⟩
-  -- the four scalar freezes: post columns (bal_lo 76, bal_hi 77, nonce 78, reserved 89) and the
-  -- pre columns are all unnamed in `swissGoodRow` ⇒ both sides `else 0`.
-  all_goals
-    simp only [saCol, sbCol, prmCol, selSE.SWISS_EXPORT, STATE_AFTER_BASE, STATE_BEFORE_BASE,
-      PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT, state.BALANCE_LO,
-      state.BALANCE_HI, state.NONCE, state.RESERVED, state.FIELD_BASE, paramSE.SWISS_DIGEST_NEW,
-      swissGoodRow]
-  · norm_num
-  · norm_num
-  · norm_num
-  · norm_num
+  obtain ⟨hsa, hprm, hsbN, hsaN, _hsel⟩ := col_facts
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hsa, hprm]; rfl
+  · rw [hsaN, hsbN]; rfl
+  · rfl
+  · rfl
+  · rfl
+  · rfl
   · intro i hi
-    have e1 : ¬ (76 + (3 + i) = 3) := by omega
-    have e2 : ¬ (76 + (3 + i) = 65) := by omega
-    have e3 : ¬ (76 + (3 + i) = 87) := by omega
-    have e4 : ¬ (76 + (3 + i) = 70) := by omega
-    have f1 : ¬ (54 + (3 + i) = 3) := by omega
-    have f2 : ¬ (54 + (3 + i) = 65) := by omega
-    have f3 : ¬ (54 + (3 + i) = 87) := by omega
-    have f4 : ¬ (54 + (3 + i) = 70) := by omega
-    simp only [if_neg e1, if_neg e2, if_neg e3, if_neg e4, if_neg f1, if_neg f2, if_neg f3, if_neg f4]
+    obtain ⟨hfa, hfb⟩ := field_col_facts i
+    rw [hfa, hfb]
+    simp only [frozenFields, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at hi
+    have lhs0 : swissGoodRow.loc (79 + i) = 0 := by
+      show (if (79 + i) = 3 then (1:ℤ) else if (79+i) = 56 then 9 else if (79+i) = 78 then 10
+        else if (79+i) = 83 then 77 else if (79+i) = 70 then 77 else 0) = 0
+      rcases hi with h|h|h|h|h|h|h <;> subst h <;> rfl
+    have rhs0 : swissGoodRow.loc (57 + i) = 0 := by
+      show (if (57 + i) = 3 then (1:ℤ) else if (57+i) = 56 then 9 else if (57+i) = 78 then 10
+        else if (57+i) = 83 then 77 else if (57+i) = 70 then 77 else 0) = 0
+      rcases hi with h|h|h|h|h|h|h <;> subst h <;> rfl
+    rw [lhs0, rhs0]
 
-/-- A forged swiss-export row: `swissGoodRow` with the post-`swiss_root` tampered to `999 ≠ 77`. -/
+/-- A forged swiss-export row: post-`sturdyref_root` (`field[4]`@83) tampered to `999 ≠ 77`. -/
 def swissBadRow : VmRowEnv where
-  loc := fun v => if v = saCol state.CAP_ROOT then 999 else swissGoodRow.loc v
+  loc := fun v => if v = 83 then 999 else swissGoodRow.loc v
   nxt := swissGoodRow.nxt
   pub := swissGoodRow.pub
 
-/-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `swissBadRow`'s post-`swiss_root` is NOT the
-param digest, so the `gSwissMove` gate REJECTS it — a concrete UNSAT. -/
+/-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** -/
 theorem swissBadRow_rejected : ¬ (VmConstraint.gate gSwissMove).holdsVm swissBadRow false false := by
   apply swissExportVm_rejects_wrong_swissRoot
-  -- post `swiss_root` = 999 (overwrite), param digest = 77; 999 ≠ 77.
-  have hsa  : saCol state.CAP_ROOT = 87 := by
-    unfold saCol STATE_AFTER_BASE PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE NUM_PARAMS
-      state.CAP_ROOT; rfl
-  have hprm : prmCol paramSE.SWISS_DIGEST_NEW = 70 := by
-    unfold prmCol PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE paramSE.SWISS_DIGEST_NEW; rfl
-  have rsa : swissBadRow.loc (saCol state.CAP_ROOT) = 999 := by
-    show (if saCol state.CAP_ROOT = saCol state.CAP_ROOT then (999:ℤ) else swissGoodRow.loc (saCol state.CAP_ROOT)) = 999
-    rw [if_pos rfl]
-  have rprm : swissBadRow.loc (prmCol paramSE.SWISS_DIGEST_NEW) = 77 := by
-    show (if prmCol paramSE.SWISS_DIGEST_NEW = saCol state.CAP_ROOT then (999:ℤ)
-      else swissGoodRow.loc (prmCol paramSE.SWISS_DIGEST_NEW)) = 77
-    have hne : ¬ (prmCol paramSE.SWISS_DIGEST_NEW = saCol state.CAP_ROOT) := by rw [hsa, hprm]; decide
-    rw [if_neg hne, hprm]
-    show (if (70:Nat) = selSE.SWISS_EXPORT then (1:ℤ)
-      else if (70:Nat) = sbCol state.CAP_ROOT then 11
-      else if (70:Nat) = saCol state.CAP_ROOT then 77
-      else if (70:Nat) = prmCol paramSE.SWISS_DIGEST_NEW then 77 else 0) = 77
-    rw [hprm]; norm_num [selSE.SWISS_EXPORT, sbCol, saCol, STATE_BEFORE_BASE, STATE_AFTER_BASE,
-      PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT, paramSE.SWISS_DIGEST_NEW]
-  rw [rsa, rprm]; decide
+  obtain ⟨hsa, hprm, _, _, _⟩ := col_facts
+  have rRoot : swissBadRow.loc (saCol sturdyrefRootOff) = 999 := by
+    rw [hsa]; show (if (83:Nat) = 83 then (999:ℤ) else swissGoodRow.loc 83) = 999; rfl
+  have rPrm : swissBadRow.loc (prmCol paramSE.SWISS_DIGEST_NEW) = 77 := by
+    rw [hprm]; show (if (70:Nat) = 83 then (999:ℤ) else swissGoodRow.loc 70) = 77; rfl
+  rw [rRoot, rPrm]; decide
 
-/-! ## §10 — Axiom-hygiene tripwires (the honesty tripwire). -/
+/-! ## §10 — Axiom-hygiene tripwires. -/
 
-#guard swissExportVmDescriptor.constraints.length == 13 + 14 + 4  -- 13 gates + 14 transitions + 4 first
+#guard swissExportVmDescriptor.constraints.length == 13 + 14 + 4  -- 13 gates (move/tick + 5 freeze + 7 fields)
 #guard swissExportVmDescriptor.hashSites.length == 4
 #guard swissExportVmDescriptor.traceWidth == 186
+#guard swissExportRowGates.length == 13
 
 #assert_axioms swissExportRowGates_holds_iff
 #assert_axioms swissExportVm_faithful
@@ -551,6 +518,7 @@ theorem swissBadRow_rejected : ¬ (VmConstraint.gate gSwissMove).holdsVm swissBa
 #assert_axioms intent_to_swissCellSpec
 #assert_axioms swissExportDescriptor_full_sound
 #assert_axioms swissExportDescriptor_commit_binds_state
+#assert_axioms swissExportDescriptor_binds_sturdyref_root
 #assert_axioms unify_swissExport
 #assert_axioms unify_swissExport_via_full_sound
 #assert_axioms swissGoodRow_realizes_intent
