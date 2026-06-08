@@ -8,6 +8,7 @@
 
 mod api;
 mod blocklace_sync;
+mod catchup;
 mod finality_gate;
 pub mod config;
 // The old `bridge` module is removed. Cross-group communication now happens
