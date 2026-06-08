@@ -388,6 +388,187 @@ theorem demo_forged_box_inert (p : Plain) :
   apply forged_box_rejected
   rfl
 
+/-! ## §9b — The `MessageRelay` ACCOUNTING STATE MACHINE, pinned to the running Rust.
+
+§5-§8 model the relay as a flat `List Box` and prove the SECURITY shape (delay-permutes,
+drop-shrinks, no-read, no-forge). But the object the captp crate SHIPS and runs —
+`store_forward.rs::MessageRelay` — is a DoS-bounded accounting machine: per-destination FIFO
+`VecDeque`s, a `total_messages` counter, and `enqueue` REJECTIONS (TTL=0, total cap exhausted,
+per-destination depth cap). That accounting state machine was the DARK-MIRROR gap: nothing
+pinned that the real `enqueue` rejects an over-cap / zero-TTL message, that `drain` returns FIFO
+and decrements `total`, or that `expire` removes empty queues and decrements `total`. This
+section closes it with a faithful, total mirror of `MessageRelay` + a differential corpus the
+Rust harness replays against the REAL `enqueue`/`drain`/`expire`/`total_stored`.
+
+A message is `(label, queuedAt, ttl)` (a `Nat × Nat × Nat`); the destination is a `Nat`. This
+projects `QueuedMessage` to exactly the fields the accounting/TTL/FIFO machine reads. -/
+
+namespace Mr
+
+/-- A queued message: `(label, queuedAt, ttl)` — the fields `MessageRelay` accounting reads. -/
+abbrev Msg := Nat × Nat × Nat
+
+/-- The faithful mirror of `store_forward.rs::MessageRelay`: per-destination FIFO queues (head =
+oldest, `push_back`), the storage caps, and the running total counter. -/
+structure Relay where
+  /-- per-destination queues, insertion-ordered (FIFO). -/
+  queues : List (Nat × List Msg)
+  maxDepth : Nat
+  maxTotal : Nat
+  total : Nat
+  deriving Repr
+
+/-- `MessageRelay::new(max_queue_depth, max_total_messages)`. -/
+def mk (maxDepth maxTotal : Nat) : Relay :=
+  { queues := [], maxDepth := maxDepth, maxTotal := maxTotal, total := 0 }
+
+def qOf (R : Relay) (d : Nat) : List Msg := ((R.queues.find? (·.1 = d)).map (·.2)).getD []
+
+def upsertQ (R : Relay) (d : Nat) (q : List Msg) : List (Nat × List Msg) :=
+  if R.queues.any (·.1 = d) then R.queues.map (fun p => if p.1 = d then (d, q) else p)
+  else R.queues ++ [(d, q)]
+
+/-- `enqueue` — mirrors `store_forward.rs:383-407` clause-for-clause: reject `ttl=0`
+(`InvalidTtl`); reject `total ≥ maxTotal` (`StorageFull`); reject per-dest `len ≥ maxDepth`
+(`QueueFull`); else `push_back` (FIFO append) and `total += 1`. Returns `(ok, R')`. -/
+def enqueue (R : Relay) (d : Nat) (m : Msg) : Bool × Relay :=
+  if m.2.2 = 0 then (false, R)
+  else if R.total ≥ R.maxTotal then (false, R)
+  else
+    let q := qOf R d
+    if q.length ≥ R.maxDepth then (false, R)
+    else (true, { R with queues := upsertQ R d (q ++ [m]), total := R.total + 1 })
+
+/-- `drain` — remove the destination's queue, return its messages in FIFO order, decrement
+`total` by the count (`store_forward.rs:413-422`). -/
+def drain (R : Relay) (d : Nat) : List Msg × Relay :=
+  let q := qOf R d
+  (q, { R with queues := R.queues.filter (·.1 ≠ d), total := R.total - q.length })
+
+/-- `expire now` — retain a message IFF `now - queuedAt < ttl`; remove now-empty queues;
+decrement `total` by the number expired (`store_forward.rs:428-449`). -/
+def expire (R : Relay) (now : Nat) : Nat × Relay :=
+  let kept := R.queues.map (fun p => (p.1, p.2.filter (fun m => now - m.2.1 < m.2.2)))
+  let expired := R.queues.foldl (fun acc p => acc + (p.2.filter (fun m => ¬ now - m.2.1 < m.2.2)).length) 0
+  (expired, { R with queues := kept.filter (·.2 ≠ []), total := R.total - expired })
+
+def pendingCount (R : Relay) (d : Nat) : Nat := (qOf R d).length
+
+/-! ### §9b.1 — Accounting laws (proved). -/
+
+/-- `enqueue` with `ttl = 0` is rejected, registry unchanged (`InvalidTtl`). -/
+theorem enqueue_zero_ttl_rejected (R : Relay) (d label qa : Nat) :
+    enqueue R d (label, qa, 0) = (false, R) := by
+  simp [enqueue]
+
+/-- `enqueue` when the relay is at total capacity is rejected, unchanged (`StorageFull`). -/
+theorem enqueue_full_total_rejected (R : Relay) (d : Nat) (m : Msg)
+    (htotal : R.total ≥ R.maxTotal) (httl : m.2.2 ≠ 0) :
+    enqueue R d m = (false, R) := by
+  simp only [enqueue, if_neg httl, htotal, if_pos]
+
+/-- `enqueue` when the per-destination queue is at depth cap is rejected, unchanged
+(`QueueFull`). -/
+theorem enqueue_full_depth_rejected (R : Relay) (d : Nat) (m : Msg)
+    (httl : m.2.2 ≠ 0) (hroom : ¬ R.total ≥ R.maxTotal)
+    (hdepth : (qOf R d).length ≥ R.maxDepth) :
+    enqueue R d m = (false, R) := by
+  simp only [enqueue, if_neg httl, if_neg hroom, hdepth, if_pos]
+
+/-- A successful `enqueue` bumps `total` by exactly one. -/
+theorem enqueue_total_increment (R : Relay) (d : Nat) (m : Msg) (R' : Relay)
+    (h : enqueue R d m = (true, R')) : R'.total = R.total + 1 := by
+  simp only [enqueue] at h
+  by_cases httl : m.2.2 = 0
+  · simp [httl] at h
+  · by_cases htot : R.total ≥ R.maxTotal
+    · simp [httl, htot] at h
+    · by_cases hd : (qOf R d).length ≥ R.maxDepth
+      · simp [httl, htot, hd] at h
+      · simp only [if_neg httl, if_neg htot, if_neg hd, Prod.mk.injEq] at h
+        rw [← h.2]
+
+/-- `drain` clears the destination's queue (a re-drain delivers nothing) and the drained list is
+the FIFO queue. -/
+theorem drain_clears (R : Relay) (d : Nat) :
+    (drain R d).1 = qOf R d ∧ pendingCount (drain R d).2 d = 0 := by
+  refine ⟨rfl, ?_⟩
+  simp only [drain, pendingCount, qOf]
+  have : (R.queues.filter (·.1 ≠ d)).find? (·.1 = d) = none := by
+    apply List.find?_eq_none.2
+    intro x hx
+    have := List.of_mem_filter hx
+    simpa using this
+  rw [this]; rfl
+
+/-! ### §9b.2 — The differential corpus the Rust harness replays against the REAL relay. -/
+
+/-- A relay op the corpus drives. -/
+inductive Op where
+  | enq (d label qa ttl : Nat)
+  | drn (d : Nat)
+  | exp (now : Nat)
+  deriving Repr
+
+/-- Run one op, projecting the observable the differential checks:
+`(ok-or-count, total_stored, pending_count-of-the-op's-dest)`. For `enq`, field 1 is the ok-bit
+(1/0); for `drn` it is the drained count; for `exp` it is the expired count. The Rust harness
+drives the SAME op on the real `MessageRelay` and asserts these three observables agree. -/
+def stepObs (R : Relay) : Op → (Relay × Nat × Nat × Nat)
+  | .enq d l qa ttl =>
+    let (ok, R') := enqueue R d (l, qa, ttl)
+    (R', (if ok then 1 else 0), R'.total, pendingCount R' d)
+  | .drn d =>
+    let (ms, R') := drain R d
+    (R', ms.length, R'.total, pendingCount R' d)
+  | .exp now =>
+    let (n, R') := expire R now
+    (R', n, R'.total, R'.queues.length)   -- field 3 = active destinations after expiry
+
+def runProgram (R : Relay) : List Op → List (Nat × Nat × Nat)
+  | [] => []
+  | op :: rest =>
+    let (R', a, b, c) := stepObs R op
+    (a, b, c) :: runProgram R' rest
+
+/-- **The differential corpus.** A relay `mk depth=2 total=3`, exercising: two enqueues to d0
+(FIFO, total→2), a third to d0 REJECTED by depth cap (2), an enqueue to d1 (total→3), a fourth
+REJECTED by total cap, a zero-TTL enqueue REJECTED, a drain of d0 (2 msgs, total→1), and an
+expire at height 100 that drops d1's now-stale message. -/
+def relayDifferentialCorpus : List Op :=
+  [ .enq 0 10 0 5      -- ok, total 1, pending(0)=1
+  , .enq 0 11 0 5      -- ok, total 2, pending(0)=2
+  , .enq 0 12 0 5      -- REJECT (depth cap 2): ok=0, total 2, pending(0)=2
+  , .enq 1 20 0 3      -- ok, total 3, pending(1)=1
+  , .enq 1 21 0 3      -- REJECT (total cap 3): ok=0, total 3, pending(1)=1
+  , .enq 0 13 0 0      -- REJECT (ttl=0): ok=0, total 3, pending(0)=2
+  , .drn 0             -- drain d0: 2 msgs, total 1, pending(0)=0
+  , .exp 100 ]         -- expire @100: d1 msg (qa 0, ttl 3 ⇒ 100-0≥3) drops; expired 1, total 0, active 0
+
+/-- The golden observable column, proved by `decide`. The Rust differential pins the SAME
+`(field1, total, field3)` triples against the real `MessageRelay`. A drift on EITHER side
+breaks. -/
+theorem relayDifferentialCorpus_observable :
+    runProgram (mk 2 3) relayDifferentialCorpus
+      = [ (1, 1, 1)    -- enq d0: ok, total 1, pending 1
+        , (1, 2, 2)    -- enq d0: ok, total 2, pending 2 (FIFO)
+        , (0, 2, 2)    -- enq d0: REJECT depth, total 2, pending 2
+        , (1, 3, 1)    -- enq d1: ok, total 3, pending 1
+        , (0, 3, 1)    -- enq d1: REJECT total cap, total 3, pending 1
+        , (0, 3, 2)    -- enq d0 ttl=0: REJECT, total 3, pending(0) still 2
+        , (2, 1, 0)    -- drain d0: 2 msgs, total 1, pending 0
+        , (1, 0, 0) ] := by   -- expire @100: 1 expired, total 0, active 0
+  decide
+
+/-- The drain FIFO order is observable: the drained labels are oldest-first `[10, 11]`. -/
+theorem relayDifferentialCorpus_drain_fifo :
+    let r0 := (enqueue (mk 2 3) 0 (10, 0, 5)).2
+    let r1 := (enqueue r0 0 (11, 0, 5)).2
+    (drain r1 0).1.map (·.1) = [10, 11] := by
+  decide
+
+end Mr
+
 /-! ## §10 — Axiom-hygiene pins (subset {propext, Classical.choice, Quot.sound}; NO sorry). -/
 
 -- Tooth 1 — the relay cannot read.
@@ -415,5 +596,13 @@ theorem demo_forged_box_inert (p : Plain) :
 #assert_axioms demo_d1_cannot_read
 #assert_axioms demo_readdress_breaks
 #assert_axioms demo_forged_box_inert
+-- §9b — the MessageRelay accounting state machine, pinned to the running Rust.
+#assert_axioms Mr.enqueue_zero_ttl_rejected
+#assert_axioms Mr.enqueue_full_total_rejected
+#assert_axioms Mr.enqueue_full_depth_rejected
+#assert_axioms Mr.enqueue_total_increment
+#assert_axioms Mr.drain_clears
+#assert_axioms Mr.relayDifferentialCorpus_observable
+#assert_axioms Mr.relayDifferentialCorpus_drain_fifo
 
 end Dregg2.Exec.CapTPStoreForward
