@@ -198,15 +198,17 @@ fn attack_intercept_cert_present_as_wrong_recipient_is_rejected() {
 }
 
 // ===========================================================================
-// ATTACK 4 — FINDING: validate_handoff enlivens (consumes a use / advances
-// state) BEFORE the non-amplification check. An attacker who can present
-// amplifying certs against a known swiss number can EXHAUST the introducer's
-// max_uses budget without ever succeeding — a resource-griefing / DoS vector.
+// ATTACK 4 — DEFENDED (F-2 CLOSED): validate_handoff now validates the swiss
+// number READ-ONLY (`SwissTable::check`) and consumes a use (`enliven`) ONLY on
+// the success path, AFTER every rejecting check (amplification, target binding)
+// has passed. So an attacker presenting an amplifying cert against a known swiss
+// number is rejected WITHOUT burning a use of the introducer's budget — the
+// resource-griefing / DoS vector is closed.
 //
-// This is NOT a confinement or amplification break (those hold). It is an
-// operational gap: the Lean spec models a pure accept/reject decision; the Rust
-// has a SIDE EFFECT on reject. We assert the bad behavior precisely so it is
-// logged, not hidden.
+// This test was the F-2 FINDING (asserting the griefed-out state). It is now
+// FLIPPED to assert the DEFENDED outcome: after the rejected amplifying
+// presentation, the one-shot swiss entry is UNTOUCHED, and the legitimate
+// recipient's later valid handoff SUCCEEDS.
 // ===========================================================================
 
 #[test]
@@ -228,8 +230,9 @@ fn finding_amplifying_handoff_consumes_a_use_on_rejection() {
         Some(1), // <-- one-shot
     );
 
-    // Attacker presents an AMPLIFYING cert (will be rejected for amplification),
-    // but the rejection path already enlivened the swiss entry (use_count -> 1).
+    // Attacker presents an AMPLIFYING cert. It is rejected for amplification, and
+    // (F-2 fix) the read-only `check` path does NOT enliven, so the swiss entry's
+    // use_count stays at 0.
     let bad_cert = HandoffCertificate::create(
         &intro_sk, intro_fed, target_fed, target_cell, recip_pk.0,
         AuthRequired::None, // amplifies
@@ -239,9 +242,16 @@ fn finding_amplifying_handoff_consumes_a_use_on_rejection() {
     let bad = validate_handoff(&bad_pres, &intro_pk, &mut table, &[intro_fed], 100);
     assert_eq!(bad.err(), Some(HandoffError::Amplification));
 
+    // EVIDENCE the use was NOT consumed: peek the entry — use_count is still 0.
+    assert_eq!(
+        table.peek(&swiss).expect("swiss entry must survive a rejected presentation").use_count,
+        0,
+        "a rejected (amplifying) presentation must NOT advance the swiss use budget"
+    );
+
     // Now the LEGITIMATE recipient presents a valid (non-amplifying) cert.
-    // Because the attacker already burned the single use, the honest handoff
-    // fails with MaxUsesExhausted: the cap was griefed.
+    // Because the rejected attacker did NOT burn the single use, the honest
+    // handoff SUCCEEDS — the cap is no longer griefable on the reject path.
     let good_cert = HandoffCertificate::create(
         &intro_sk, intro_fed, target_fed, target_cell, recip_pk.0,
         AuthRequired::Signature, // legitimate, non-amplifying
@@ -250,24 +260,34 @@ fn finding_amplifying_handoff_consumes_a_use_on_rejection() {
     let good_pres = HandoffPresentation::create(good_cert, &recip_sk);
     let good = validate_handoff(&good_pres, &intro_pk, &mut table, &[intro_fed], 100);
 
-    // FINDING: the honest handoff is denied because the attacker consumed the use.
+    // DEFENDED: the honest handoff is accepted; the griefing attack failed.
+    let acceptance = good.expect("honest one-shot handoff must succeed after a rejected amplifying attempt");
+    assert_eq!(acceptance.cell_id, target_cell);
+    assert_eq!(acceptance.permissions, AuthRequired::Signature);
+
+    // And NOW the single use is spent (the success path enlivened).
     assert_eq!(
-        good.err(),
-        Some(HandoffError::MaxUsesExhausted),
-        "expected the griefed-out state; if this changed, the ordering was fixed"
+        table.peek(&swiss).expect("entry present").use_count,
+        1,
+        "the success path must consume exactly the one legitimate use"
     );
     eprintln!(
-        "[ATTACK 4 / FINDING] amplifying-cert rejection still consumed a use: {}",
-        AttackOutcome::Broken
+        "[ATTACK 4 / DEFENDED] amplifying-cert rejection no longer consumes a use (F-2 closed): {}",
+        AttackOutcome::Defended
     );
 }
 
 // ===========================================================================
-// ATTACK 5 — FINDING (metadata leak): SwissTable::peek and the EnlivenError
-// taxonomy are an ORACLE. enliven distinguishes NotFound vs Expired vs
-// ExhaustedUses, so a prober learns whether a guessed swiss number EXISTS
-// (Expired/Exhausted) vs is absent (NotFound) — a membership/metadata oracle
-// on the secret-keyed table, weaker than full confinement but a real leak.
+// ATTACK 5 — DEFENDED (F-3 CLOSED): the EnlivenError taxonomy was a membership
+// ORACLE — enliven distinguishes NotFound (absent) from Expired/ExhaustedUses
+// (present-but-dead), so a prober could learn whether a guessed 32-byte value is
+// a known-but-dead swiss number vs truly unknown.
+//
+// FIX: the network boundary now collapses every enliven rejection to a single
+// opaque message (`EnlivenError::opaque_message()` == "denied"). The rich
+// taxonomy survives ONLY for local diagnostics that never cross the wire. This
+// test now attacks the BOUNDARY representation a remote caller actually sees and
+// asserts it is INDISTINGUISHABLE across present-but-dead vs absent.
 // ===========================================================================
 
 #[test]
@@ -277,19 +297,26 @@ fn finding_enliven_error_taxonomy_is_a_membership_oracle() {
     let present_expired = table.export(CellId([7; 32]), AuthRequired::Signature, 10, Some(20));
     let absent = [0x55u8; 32];
 
-    let on_present = table.enliven(&present_expired, 999).unwrap_err(); // Expired
-    let on_absent = table.enliven(&absent, 999).unwrap_err(); // NotFound
+    let on_present = table.enliven(&present_expired, 999).unwrap_err(); // Expired (locally)
+    let on_absent = table.enliven(&absent, 999).unwrap_err(); // NotFound (locally)
 
-    // The two distinct errors let an attacker DISTINGUISH "this 32-byte value is
-    // a (dead) swiss number we know" from "unknown". With 256-bit secrets this
-    // is not a practical confinement break, but it IS an information leak that a
-    // constant "EnlivenError::Denied" would not give.
-    assert_eq!(on_present, EnlivenError::Expired);
-    assert_eq!(on_absent, EnlivenError::NotFound);
-    assert_ne!(on_present, on_absent);
+    // The LOCAL taxonomy still differs — that is fine, it never leaves the node.
+    // What the ATTACKER sees is the BOUNDARY message, which both map to. That is
+    // the surface F-3 closes: the two cases are now indistinguishable on the wire.
+    let boundary_present = on_present.to_boundary_message();
+    let boundary_absent = on_absent.to_boundary_message();
+
+    // DEFENDED: the boundary representation is IDENTICAL — no membership oracle.
+    assert_eq!(boundary_present, boundary_absent);
+    assert_eq!(boundary_present, EnlivenError::opaque_message());
+    assert_eq!(boundary_present, "denied");
+    // And it does NOT echo which arm fired (no "found"/"expired"/"exhausted" tell).
+    assert!(!boundary_present.contains("found"));
+    assert!(!boundary_present.contains("expired"));
+    assert!(!boundary_present.contains("exhausted"));
     eprintln!(
-        "[ATTACK 5 / FINDING] enliven error taxonomy distinguishes present-vs-absent: {}",
-        AttackOutcome::Leak
+        "[ATTACK 5 / DEFENDED] enliven boundary error is opaque present-vs-absent (F-3 closed): {}",
+        AttackOutcome::Defended
     );
 }
 

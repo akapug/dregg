@@ -35,6 +35,34 @@ impl std::fmt::Display for EnlivenError {
     }
 }
 
+impl EnlivenError {
+    /// The single opaque message exposed at the NETWORK boundary (F-3).
+    ///
+    /// The [`Display`](std::fmt::Display) taxonomy above distinguishes
+    /// `NotFound` (the swiss number is *absent* from the table) from `Expired` /
+    /// `ExhaustedUses` (the swiss number is *present but dead*). That distinction
+    /// is a **membership oracle** on the secret-keyed table: a prober who guesses
+    /// a 32-byte value learns whether it is a known-but-dead swiss number versus
+    /// truly unknown (`finding_enliven_error_taxonomy_is_a_membership_oracle`).
+    ///
+    /// Any externally-visible enliven rejection MUST use this constant instead of
+    /// `to_string()`, so every failure mode is indistinguishable to a remote
+    /// caller. The rich taxonomy is retained ONLY for local diagnostics/logs that
+    /// never cross the wire.
+    pub const fn opaque_message() -> &'static str {
+        "denied"
+    }
+
+    /// Map this (locally-diagnostic) error to the opaque boundary message.
+    ///
+    /// Convenience wrapper around [`opaque_message`](Self::opaque_message) so a
+    /// `Result<_, EnlivenError>` can be collapsed at the wire layer without
+    /// leaking which arm fired.
+    pub const fn to_boundary_message(self) -> &'static str {
+        Self::opaque_message()
+    }
+}
+
 impl std::error::Error for EnlivenError {}
 
 /// An entry in the swiss number table, representing an exported sturdy reference.
@@ -210,6 +238,38 @@ impl SwissTable {
     /// use-count checks.
     pub fn peek(&self, swiss: &[u8; 32]) -> Option<&SwissEntry> {
         self.entries.get(swiss)
+    }
+
+    /// Read-only validation: check the swiss number exists, is not expired, and
+    /// has uses remaining — WITHOUT consuming a use (no `use_count` bump).
+    ///
+    /// This is the non-mutating twin of [`enliven`](Self::enliven). It runs the
+    /// exact same admission checks (`NotFound` / `Expired` / `ExhaustedUses`) and
+    /// returns a clone of the entry, but leaves the table untouched. Callers that
+    /// must run further (possibly REJECTING) checks against the held authority —
+    /// e.g. handoff non-amplification (F-2) — peek-validate first and only call
+    /// [`enliven`](Self::enliven) on the success path, so a rejected presentation
+    /// never burns a use of the introducer's swiss budget.
+    pub fn check(
+        &self,
+        swiss: &[u8; 32],
+        current_height: u64,
+    ) -> Result<SwissEntry, EnlivenError> {
+        let entry = self.entries.get(swiss).ok_or(EnlivenError::NotFound)?;
+
+        if let Some(exp) = entry.expires_at {
+            if current_height > exp {
+                return Err(EnlivenError::Expired);
+            }
+        }
+
+        if let Some(max) = entry.max_uses {
+            if entry.use_count >= max {
+                return Err(EnlivenError::ExhaustedUses);
+            }
+        }
+
+        Ok(entry.clone())
     }
 }
 
