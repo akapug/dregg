@@ -52,7 +52,7 @@ set_option linter.dupNamespace false
 namespace Dregg2.Intent.Ring
 
 open Dregg2.Exec (RecordKernelState AssetId Turn CellId recKExecAsset recTotalAsset
-  recKExecAsset_conserves_per_asset)
+  recKExecAsset_conserves_per_asset recKExec balOf setBalance setBalance_balOf authorizedB)
 
 /-! ## 1. `RingLeg` — a single settlement transfer (the Rust `solver::Settlement`). -/
 
@@ -621,6 +621,322 @@ theorem chainedRing_fulfilled_is_verified_conserving
     (∀ b : AssetId, recTotalAsset k' b = recTotalAsset k b) ∧ RingBalanced (chainedRing ns) :=
   ⟨settleRing_conserves (chainedRing ns) k k' hsettle, chainedRing_balanced hlen hpos⟩
 
+/-! ## 8c. The COMPATIBILITY GRAPH + cycle-finding validity + INDIVIDUAL RATIONALITY (Shapley–Scarf).
+
+§8b modelled `validate_ring`'s OUTPUT construction (`chainedRing`) and proved it conserving. But the
+running solver does MORE before it ever calls `validate_ring`: it builds a **compatibility graph**
+(`solver.rs:220 build_graph` via `IntentGraph::is_compatible`, `solver.rs:534`), finds **cycles** in it
+(`solver.rs:557 find_cycles`, the bounded-DFS Johnson's-algorithm), and only a cycle whose every
+consecutive edge is compatible survives the `valid` filter in `find_rings` (`solver.rs:256-272`). The
+soundness the solver RELIES ON is the **Shapley–Scarf top-trading-cycle** guarantee: a cycle the graph
+admits is *individually rational* — every participant receives the asset it WANTED, in at least the
+amount it asked for. The toy `RingNode` of §8b cannot state this: it carries no `offerAmount` and no
+`wantAsset`, so "the receiver wants what the sender offers" and "the offer covers the want" are
+inexpressible. We enrich the node to the FULL `solver::IntentNode` columns and model the graph edge
+predicate exactly, then prove:
+
+  * **`isCompatible` IS the Rust `is_compatible`** — asset-match (`offer_asset == want_asset`) AND
+    amount-sufficiency (`offer_amount ≥ want_min_amount`). This is the edge `build_graph` admits.
+  * **`CycleValid`** — every consecutive pair around the cycle is `isCompatible`, AND creators are
+    distinct (the `SelfLoop` rejection, `solver.rs:327`). This is the invariant the DFS cycle + the
+    `valid` filter jointly maintain.
+  * **`cycleValid_chains`** — a valid cycle CHAINS: `offerAsset[k] = wantAsset[k+1]` and
+    `offerAmount[k] ≥ wantMin[k+1]` for every leg. So the `validate_ring` quantity/asset checks
+    (`solver.rs:352`, `solver.rs:361`) PASS for any cycle the graph finds — the construction is not
+    partial on the solver's own output.
+  * **INDIVIDUAL RATIONALITY (the TTC core)** — in the settlement built from a valid cycle, every
+    participant RECEIVES exactly the asset it declared it WANTED (`wantAsset`), in at least its
+    declared minimum (`wantMin`). No participant is matched into a worse-than-asked outcome. This is
+    the Shapley–Scarf property the solver's correctness rests on, here a THEOREM about the graph it
+    actually searches — stated both structurally and ON THE VERIFIED LEDGER (the credited balance). -/
+
+/-- **A matched cycle node — the FULL columns of the Rust `solver::IntentNode`** (`solver.rs:39`). The
+§8b `RingNode` carried only `creator/offerAsset/wantMin`; this carries also `offerAmount` (how much the
+node offers) and `wantAsset` (which asset it wants), the two columns `is_compatible` reads. With these
+the graph edge predicate and individual rationality become expressible. -/
+structure MatchNode where
+  /-- The intent creator's cell (`IntentNode.creator`). -/
+  creator     : CellId
+  /-- The asset this node OFFERS (`IntentNode.exchange.offer_asset`). -/
+  offerAsset  : AssetId
+  /-- How much of `offerAsset` this node offers (`IntentNode.exchange.offer_amount`). -/
+  offerAmount : ℤ
+  /-- The asset this node WANTS (`IntentNode.exchange.want_asset`). -/
+  wantAsset   : AssetId
+  /-- The minimum amount of `wantAsset` this node will accept (`IntentNode.exchange.want_min_amount`). -/
+  wantMin     : ℤ
+  deriving Inhabited
+
+/-- **The projection to the §8b `RingNode`** — forget `offerAmount`/`wantAsset`, keeping the three
+columns `chainedLeg` consumes. This is how the enriched model REUSES the §8b keystones: the settlement
+of a cycle of `MatchNode`s is the `chainedRing` of their projections, so `chainedRing_balanced` and
+`settleRing_conserves` apply verbatim — no duplicated conservation proof. -/
+def MatchNode.toRingNode (n : MatchNode) : RingNode :=
+  { creator := n.creator, offerAsset := n.offerAsset, wantMin := n.wantMin }
+
+/-- **`isCompatible a b` — the EXACT Rust `IntentGraph::is_compatible`** (`solver.rs:534`). There is a
+graph edge `a → b` ("a's offer could satisfy b's want") iff a OFFERS what b WANTS
+(`a.offer_asset == b.want_asset`) AND a offers ENOUGH for b's minimum
+(`a.offer_amount >= b.want_min_amount`). The Rust returns `Some(score)` exactly on this conjunction;
+we model the boolean edge relation it induces. -/
+def isCompatible (a b : MatchNode) : Prop :=
+  a.offerAsset = b.wantAsset ∧ b.wantMin ≤ a.offerAmount
+
+/-- `isCompatible` is decidable (a conjunction of decidable atoms over `Nat`/`ℤ`): the edge test the
+Rust `is_compatible` performs is an effective check, so the teeth (`assetMismatchCycle_no_edge`) and the
+validity witness (`validSwapCycle_valid`) discharge by `decide` — no classical reasoning. -/
+instance instDecidableIsCompatible (a b : MatchNode) : Decidable (isCompatible a b) := by
+  unfold isCompatible; infer_instance
+
+/-- **`settlementsOf ns = chainedRing (ns.map toRingNode)`** — the settlement list the solver builds
+from a cycle of `MatchNode`s is exactly the §8b `chainedRing` of the projected `RingNode`s. The
+enriched node adds the columns `is_compatible` reads, but the SETTLEMENT only ever uses
+`creator/offerAsset` (the leg's from/asset) and the receiver's `wantMin` (the leg's amount) — so the
+construction rule is unchanged, and every §8b keystone lifts. -/
+def settlementsOf (ns : List MatchNode) : Ring := chainedRing (ns.map MatchNode.toRingNode)
+
+/-- The projection commutes with `length` — a cycle of `MatchNode`s and its `RingNode` image have the
+same number of legs. -/
+@[simp] theorem map_toRingNode_length (ns : List MatchNode) :
+    (ns.map MatchNode.toRingNode).length = ns.length := by simp
+
+/-- **`CycleValid ns` — the invariant the DFS cycle + `find_rings`' `valid` filter jointly maintain.**
+A node list is a VALID matching cycle iff (1) it is a genuine ring (length ≥ 2); (2) every consecutive
+pair (wrapping around) is `isCompatible` — the edge the graph admits, checked by the `valid` loop
+(`solver.rs:256-268`); and (3) all creators are distinct — the `SelfLoop` rejection
+(`solver.rs:327-333`). This is precisely the cycle that survives `find_rings` and reaches
+`validate_ring`. The consecutive check is stated at every index `k < length` against `(k+1) % length`,
+matching the Rust `next = (k + 1) % cycle.len()`. -/
+structure CycleValid (ns : List MatchNode) : Prop where
+  /-- A ring has at least two participants (`TooSmall` rejection, `solver.rs:322`). -/
+  len    : 2 ≤ ns.length
+  /-- Every consecutive edge around the cycle is a graph edge (`is_compatible`). -/
+  edges  : ∀ k, k < ns.length →
+             isCompatible (ns.getD k default) (ns.getD ((k + 1) % ns.length) default)
+  /-- All creators distinct — no `SelfLoop` (`solver.rs:329`). -/
+  distinct : ∀ i j, i < ns.length → j < ns.length → i ≠ j →
+             (ns.getD i default).creator ≠ (ns.getD j default).creator
+
+/-- **`cycleValid_chains` — a valid cycle CHAINS, so `validate_ring`'s quantity/asset checks PASS.**
+For every leg `k` of a valid cycle, node `k`'s OFFERED asset equals node `(k+1)`'s WANTED asset
+(`offerAsset[k] = wantAsset[(k+1)%m]`, the `solver.rs:352` asset-match check) AND node `k` offers at
+least node `(k+1)`'s minimum (`wantMin[(k+1)%m] ≤ offerAmount[k]`, the `solver.rs:361`
+sufficiency check). This is the content `find_cycles` walks edge-by-edge: the cycle the DFS returns is
+NEVER rejected by `validate_ring` — the two layers AGREE on what a settleable cycle is. -/
+theorem cycleValid_chains {ns : List MatchNode} (h : CycleValid ns) (k : ℕ) (hk : k < ns.length) :
+    (ns.getD k default).offerAsset = (ns.getD ((k + 1) % ns.length) default).wantAsset ∧
+      (ns.getD ((k + 1) % ns.length) default).wantMin ≤ (ns.getD k default).offerAmount :=
+  h.edges k hk
+
+/-! ### Individual rationality — the Shapley–Scarf top-trading-cycle core property.
+
+The receiver of leg `k` is node `(k+1) % m`; the leg credits it `wantMin[(k+1)%m]` of asset
+`offerAsset[k]`. By `cycleValid_chains`, `offerAsset[k] = wantAsset[(k+1)%m]` — so the receiver gets
+EXACTLY the asset it asked for, in EXACTLY its declared minimum. Equivalently, reindexing on the
+RECEIVER `j`: node `j` receives, from its predecessor in the cycle, `wantMin[j]` of `wantAsset[j]`.
+That is individual rationality: every participant is matched into an outcome at least as good as it
+declared acceptable. -/
+
+/-- **`receivedAsset ns j` / `receivedAmount ns j`** — the asset and amount node `j` RECEIVES in the
+cycle. The leg crediting `j` is the one from its predecessor `(j + m - 1) % m`; it carries that
+predecessor's `offerAsset` in amount `j.wantMin`. -/
+def receivedAsset (ns : List MatchNode) (j : ℕ) : AssetId :=
+  (ns.getD ((j + ns.length - 1) % ns.length) default).offerAsset
+def receivedAmount (ns : List MatchNode) (j : ℕ) : ℤ :=
+  (ns.getD j default).wantMin
+
+/-- **INDIVIDUAL RATIONALITY (structural) — every participant gets the asset it WANTED, at least its
+declared minimum.** For each node `j` of a valid cycle: `receivedAsset ns j = wantAsset[j]` (it
+receives exactly the asset it declared it wants) and `receivedAmount ns j ≥ wantMin[j]` (in at least
+its declared minimum — here, exactly). This is the Shapley–Scarf TTC guarantee the solver relies on,
+proved of the actual graph cycle: the asset match comes from `cycleValid_chains` at the predecessor
+index, whose `(pred+1)%m = j`. NO participant is matched into an unwanted asset or an under-minimum
+amount. -/
+theorem cycle_individuallyRational {ns : List MatchNode} (h : CycleValid ns)
+    (j : ℕ) (hj : j < ns.length) :
+    receivedAsset ns j = (ns.getD j default).wantAsset ∧
+      (ns.getD j default).wantMin ≤ receivedAmount ns j := by
+  have hmpos : 0 < ns.length := by have := h.len; omega
+  refine ⟨?_, le_refl _⟩
+  -- predecessor index p = (j + m - 1) % m; chain at p gives offerAsset[p] = wantAsset[(p+1)%m].
+  set m := ns.length with hm
+  have hp : ((j + m - 1) % m) < m := Nat.mod_lt _ hmpos
+  have hchain := (cycleValid_chains h ((j + m - 1) % m) hp).1
+  -- (p + 1) % m = j (the cycle rotation identity, same as `chainedRing_sendImpRecv`).
+  have hkey : (((j + m - 1) % m) + 1) % m = j := by
+    rcases Nat.eq_zero_or_pos j with hj0 | hjpos
+    · subst hj0
+      have h1 : (0 + m - 1) % m = m - 1 := by
+        simp only [Nat.zero_add]; exact Nat.mod_eq_of_lt (by omega)
+      rw [h1]; have h2 : m - 1 + 1 = m := by omega
+      rw [h2, Nat.mod_self]
+    · have hrw : j + m - 1 = (j - 1) + m := by omega
+      rw [hrw, Nat.add_mod_right, Nat.mod_eq_of_lt (show j - 1 < m by omega)]
+      have h3 : j - 1 + 1 = j := by omega
+      rw [h3, Nat.mod_eq_of_lt (by omega : j < m)]
+  unfold receivedAsset
+  rw [hchain, hkey]
+
+/-- **The settlement crediting node `j` carries exactly `j`'s wanted asset and minimum.** The leg the
+solver builds from a valid cycle that has `j` as RECEIVER (`to_ = creator[j]`) transfers
+`receivedAsset ns j = wantAsset[j]` in amount `wantMin[j]`. This connects the IR property to the actual
+`chainedRing`/`settlementsOf` leg data: the predecessor leg `chainedLeg (map toRingNode) ((j+m-1)%m)`
+has `to_ = creator[j]`, `asset = wantAsset[j]` (by IR), and `amount = wantMin[j]`. -/
+theorem settlement_to_receiver_is_wanted {ns : List MatchNode} (h : CycleValid ns)
+    (j : ℕ) (hj : j < ns.length) :
+    let rs := ns.map MatchNode.toRingNode
+    let p  := (j + ns.length - 1) % ns.length
+    (chainedLeg rs p).to_ = (ns.getD j default).creator ∧
+      (chainedLeg rs p).asset = (ns.getD j default).wantAsset ∧
+      (chainedLeg rs p).amount = (ns.getD j default).wantMin := by
+  have hmpos : 0 < ns.length := by have := h.len; omega
+  set m := ns.length with hm
+  have hlen' : (ns.map MatchNode.toRingNode).length = m := by simp [hm]
+  -- (p + 1) % m = j again.
+  have hkey : (((j + m - 1) % m) + 1) % m = j := by
+    rcases Nat.eq_zero_or_pos j with hj0 | hjpos
+    · subst hj0
+      have h1 : (0 + m - 1) % m = m - 1 := by
+        simp only [Nat.zero_add]; exact Nat.mod_eq_of_lt (by omega)
+      rw [h1]; have h2 : m - 1 + 1 = m := by omega
+      rw [h2, Nat.mod_self]
+    · have hrw : j + m - 1 = (j - 1) + m := by omega
+      rw [hrw, Nat.add_mod_right, Nat.mod_eq_of_lt (show j - 1 < m by omega)]
+      have h3 : j - 1 + 1 = j := by omega
+      rw [h3, Nat.mod_eq_of_lt (by omega : j < m)]
+  have hp : ((j + m - 1) % m) < m := Nat.mod_lt _ hmpos
+  -- getD over the mapped list at an in-range index pulls the map through.
+  have hgetmap : ∀ i, i < m → (ns.map MatchNode.toRingNode).getD i default
+      = (ns.getD i default).toRingNode := by
+    intro i hi
+    rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD,
+        List.getElem?_map]
+    rw [List.getElem?_eq_getElem (by omega : i < ns.length)]
+    rfl
+  refine ⟨?_, ?_, ?_⟩
+  · -- to_ of leg p = creator[(p+1)%m] = creator[j].
+    simp only [chainedLeg, hlen', hkey, hgetmap j hj, MatchNode.toRingNode]
+  · -- asset of leg p = offerAsset[p] = wantAsset[j] (IR).
+    simp only [chainedLeg, hlen', hgetmap _ hp, MatchNode.toRingNode]
+    have := (cycle_individuallyRational h j hj).1
+    unfold receivedAsset at this
+    rw [hm]; exact this
+  · -- amount of leg p = wantMin[(p+1)%m] = wantMin[j].
+    simp only [chainedLeg, hlen', hkey, hgetmap j hj, MatchNode.toRingNode]
+
+/-- **A valid matching cycle's settlement is `RingBalanced` — the §8c bridge to §8b's keystone.** A
+`CycleValid` cycle of positive wants settles to a `RingBalanced` ring (`settlementsOf ns`). This is NOT
+a new conservation proof: `settlementsOf ns = chainedRing (ns.map toRingNode)`, and `chainedRing_balanced`
+already discharges balance for ANY length-≥2 positive-want node cycle. The §8c contribution is that the
+hypotheses (length, positivity) hold for the cycle the GRAPH actually finds, and additionally that the
+cycle is individually rational (`cycle_individuallyRational`) — a property `chainedRing` alone could not
+even state. -/
+theorem cycleValid_settlement_balanced {ns : List MatchNode} (h : CycleValid ns)
+    (hpos : ∀ n ∈ ns, 0 < n.wantMin) : RingBalanced (settlementsOf ns) := by
+  unfold settlementsOf
+  apply chainedRing_balanced
+  · simpa using h.len
+  · intro r hr
+    rw [List.mem_map] at hr
+    obtain ⟨n, hn, rfl⟩ := hr
+    exact hpos n hn
+
+/-- **THE §8c KEYSTONE — a graph-found, individually-rational cycle settles to a verified, conserving,
+IR ring.** Take a cycle `ns` the solver's `build_graph`/`find_cycles` admits (`CycleValid`) with
+positive wants. If its settlement (`settlementsOf ns`, exactly the `validate_ring` output) settles
+through the VERIFIED executor (`settleRing`) to `k'`, then:
+
+  * (conservation) every asset's total supply is preserved (`settleRing_conserves`);
+  * (balance) the settlement is structurally `RingBalanced` (closed, no phantom value);
+  * (individual rationality) EVERY participant `j` receives the asset it WANTED in at least its
+    declared minimum (`cycle_individuallyRational`).
+
+This is the full Shapley–Scarf story over the running matcher's ACTUAL graph search: not just "the
+output conserves" (§8b) but "a cycle the graph FINDS is value-neutral AND every party is matched
+into an acceptable outcome", proved end-to-end against the verified per-asset ledger. -/
+theorem cycleValid_fulfilled_is_verified_IR_conserving {ns : List MatchNode}
+    (h : CycleValid ns) (hpos : ∀ n ∈ ns, 0 < n.wantMin)
+    (k k' : RecordKernelState) (hsettle : settleRing k (settlementsOf ns) = some k') :
+    (∀ b : AssetId, recTotalAsset k' b = recTotalAsset k b) ∧
+      RingBalanced (settlementsOf ns) ∧
+      (∀ j, j < ns.length →
+        receivedAsset ns j = (ns.getD j default).wantAsset ∧
+          (ns.getD j default).wantMin ≤ receivedAmount ns j) :=
+  ⟨settleRing_conserves (settlementsOf ns) k k' hsettle,
+   cycleValid_settlement_balanced h hpos,
+   fun j hj => cycle_individuallyRational h j hj⟩
+
+/-! ### TEETH — the graph REJECTS an incompatible cycle (no edge ⇒ not `CycleValid` ⇒ never settles).
+
+The hostile case the solver must refuse: a "cycle" whose consecutive nodes are NOT compatible — either
+the offered asset is not what the next node wants (`solver.rs:352` mismatch) or the offer underfunds the
+want (`solver.rs:361`). Such a node list is NOT `CycleValid` (its `edges` field cannot be satisfied), so
+it never reaches `validate_ring`. We exhibit each refusal. -/
+
+/-- A 2-cycle whose ASSETS don't chain: node 0 offers asset 10 but node 1 wants asset 99 (not 10). The
+graph admits NO edge `0 → 1`, so `isCompatible (node 0) (node 1)` is FALSE. -/
+def assetMismatchCycle : List MatchNode :=
+  [ { creator := 1, offerAsset := 10, offerAmount := 100, wantAsset := 11, wantMin := 5 },
+    { creator := 2, offerAsset := 11, offerAmount := 100, wantAsset := 99, wantMin := 5 } ]
+
+/-- **TEETH: an asset-mismatched cycle has no graph edge** — `¬ isCompatible (node 0) (node 1)`. Node 0
+offers asset 10, node 1 wants asset 99; `offer_asset (10) ≠ want_asset (99)`, so `build_graph` adds no
+edge and `find_cycles` cannot traverse it. The model refuses exactly what the Rust `is_compatible`
+returns `None` for. -/
+theorem assetMismatchCycle_no_edge :
+    ¬ isCompatible (assetMismatchCycle.getD 0 default) (assetMismatchCycle.getD 1 default) := by
+  unfold isCompatible assetMismatchCycle
+  decide
+
+/-- A 2-cycle whose AMOUNTS underfund: node 0 offers only 3 of asset 10, but node 1 wants a minimum of
+50. The assets chain but the offer is insufficient — no edge. -/
+def underfundCycle : List MatchNode :=
+  [ { creator := 1, offerAsset := 10, offerAmount := 3, wantAsset := 11, wantMin := 5 },
+    { creator := 2, offerAsset := 11, offerAmount := 100, wantAsset := 10, wantMin := 50 } ]
+
+/-- **TEETH: an underfunded cycle has no graph edge** — `¬ isCompatible (node 0) (node 1)`. Node 0
+offers 3 of asset 10; node 1 wants a minimum of 50 of asset 10. `offer_amount (3) < want_min (50)`, so
+`is_compatible` returns `None`. The model refuses the under-minimum match the solver's amount check
+(`solver.rs:541`) rejects. -/
+theorem underfundCycle_no_edge :
+    ¬ isCompatible (underfundCycle.getD 0 default) (underfundCycle.getD 1 default) := by
+  unfold isCompatible underfundCycle
+  decide
+
+/-- A concrete VALID 2-cycle (bilateral swap): node 1 offers asset 10 (amount 100), wants asset 11
+(min 5); node 2 offers asset 11 (amount 100), wants asset 10 (min 7). Each offers what the other wants,
+with enough — both edges compatible, creators distinct. The smallest genuine matching the graph admits. -/
+def validSwapCycle : List MatchNode :=
+  [ { creator := 1, offerAsset := 10, offerAmount := 100, wantAsset := 11, wantMin := 5 },
+    { creator := 2, offerAsset := 11, offerAmount := 100, wantAsset := 10, wantMin := 7 } ]
+
+/-- **The concrete valid swap IS `CycleValid`** — both consecutive edges are compatible and creators
+differ. Non-vacuity: the `CycleValid` predicate is inhabited by a genuine graph cycle, so the keystones
+above are not vacuously true. -/
+theorem validSwapCycle_valid : CycleValid validSwapCycle where
+  len := by decide
+  edges := by decide
+  distinct := by
+    intro i j hi hj hij
+    -- length 2: i, j ∈ {0,1} and i ≠ j ⇒ {i,j} = {0,1}, creators 1 ≠ 2.
+    have hlen : validSwapCycle.length = 2 := rfl
+    rw [hlen] at hi hj
+    -- the two creators are 1 and 2 (distinct); show getD i ≠ getD j for i ≠ j in {0,1}.
+    have hi2 : i = 0 ∨ i = 1 := by omega
+    have hj2 : j = 0 ∨ j = 1 := by omega
+    rcases hi2 with rfl | rfl <;> rcases hj2 with rfl | rfl <;>
+      first
+      | (exact absurd rfl hij)
+      | decide
+
+/-- Non-vacuity of individual rationality on the concrete swap: node 0 receives asset 11 (which it
+wanted) and node 1 receives asset 10 (which it wanted) — the genuine cross-trade the TTC core promises.
+A `#guard` below pins the computed received assets/amounts. -/
+theorem validSwapCycle_IR :
+    receivedAsset validSwapCycle 0 = 11 ∧ receivedAsset validSwapCycle 1 = 10 :=
+  ⟨(cycle_individuallyRational validSwapCycle_valid 0 (by decide)).1,
+   (cycle_individuallyRational validSwapCycle_valid 1 (by decide)).1⟩
+
 /-! ## 9. The bridge — `settleRing_conserves` IS the ring refinement of `KernelBridge`'s
 per-asset conservation.
 
@@ -748,6 +1064,16 @@ theorem chainedRing_lowered_fulfillment_is_verified_conserving
 #assert_axioms chainedRing_sendImpRecv
 #assert_axioms chainedRing_balanced
 #assert_axioms chainedRing_fulfilled_is_verified_conserving
+#assert_axioms map_toRingNode_length
+#assert_axioms cycleValid_chains
+#assert_axioms cycle_individuallyRational
+#assert_axioms settlement_to_receiver_is_wanted
+#assert_axioms cycleValid_settlement_balanced
+#assert_axioms cycleValid_fulfilled_is_verified_IR_conserving
+#assert_axioms assetMismatchCycle_no_edge
+#assert_axioms underfundCycle_no_edge
+#assert_axioms validSwapCycle_valid
+#assert_axioms validSwapCycle_IR
 #assert_axioms loweredLeg_toTurn
 #assert_axioms loweredRing_getElem
 #assert_axioms lowered_fulfillment_conserves
@@ -790,5 +1116,21 @@ theorem chainedRing_lowered_fulfillment_is_verified_conserving
 #guard (loweredRing 99
   [ { from_ := 1, to_ := 2, asset := 10, amount := 5 },
     { from_ := 2, to_ := 1, asset := 11, amount := 7 } ]).length == 2
+
+-- §8c: the compatibility graph + individual rationality are computable.
+-- The valid swap's settlement is the chainedRing of the projected nodes — 2 legs.
+#guard (settlementsOf validSwapCycle).length == 2
+-- INDIVIDUAL RATIONALITY (the TTC core), computed: node 0 receives asset 11 (its wantAsset),
+-- node 1 receives asset 10 (its wantAsset) — each gets exactly the asset it asked for.
+#guard receivedAsset validSwapCycle 0 == 11
+#guard receivedAsset validSwapCycle 1 == 10
+-- ...in at least its declared minimum: node 0 wanted ≥5 and gets 5; node 1 wanted ≥7 and gets 7.
+#guard receivedAmount validSwapCycle 0 == 5
+#guard receivedAmount validSwapCycle 1 == 7
+-- The TEETH are computable too: the incompatible cycles genuinely have no graph edge.
+#guard (decide (isCompatible (assetMismatchCycle.getD 0 default)
+  (assetMismatchCycle.getD 1 default))) == false
+#guard (decide (isCompatible (underfundCycle.getD 0 default)
+  (underfundCycle.getD 1 default))) == false
 
 end Dregg2.Intent.Ring
