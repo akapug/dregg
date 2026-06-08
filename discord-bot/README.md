@@ -23,14 +23,21 @@ cclerk = AppCipherclerk::new(agent, federation_id)
 ```
 
 The old in-crate `DerivedWallet` (BLAKE3-only "public key", bespoke
-cell-id domain) is gone. See `src/cipherclerk.rs` module docs for the one
-remaining transition gap: the legacy devnet wire format still expects
-a BLAKE3-MAC `signature` field on the `/api/turns/submit`,
-`/api/gallery/auctions/<id>/bid`, and `/api/identity/credentials/issue`
-endpoints. Until those endpoints accept canonical signed `Action`s,
-`UserCipherclerk::legacy_secret` and `cclerk::sign_legacy` provide the
-BLAKE3-MAC path; the rest of the bot uses the canonical `AppCipherclerk`
-surface (`make_action`, `sign_action`, `make_turn`).
+cell-id domain) is gone. `/send` and `/tip` submit a canonical
+Ed25519-signed `SignedTurn` to `POST /api/turns/submit-signed` (postcard
+body) — verified end-to-end against a live node (see
+`examples/devnet_transfer_smoke.rs`). The `UserCipherclerk::legacy_secret`
+/ `sign_legacy` BLAKE3-MAC path remains only for pre-canonical deployments.
+
+**Federation-id signing domain.** Action signatures are bound to the bot's
+configured `FEDERATION_ID`, and the node verifies each action against the
+target cell's public key under the executor's federation id. On a **solo**
+devnet that id is `blake3(node_operator_pubkey)`; on a **full** federated
+devnet it is the configured federation id. The operator MUST set the bot's
+`FEDERATION_ID` to match the node's, or every transfer is rejected with
+"Ed25519 signature verification failed". A faucet-materialized cell also
+needs its real public key (`/api/faucet` with `public_key`), which
+`/cipherclerk create` already supplies.
 
 ## Slash commands
 

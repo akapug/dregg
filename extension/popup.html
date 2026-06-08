@@ -126,6 +126,7 @@
   <!-- Tab navigation -->
   <div class="tabs">
     <button class="tab-btn active" data-tab="cipherclerk">Cipherclerk</button>
+    <button class="tab-btn" data-tab="account">Account</button>
     <button class="tab-btn" data-tab="capabilities">Caps</button>
     <button class="tab-btn" data-tab="directory">Directory</button>
     <button class="tab-btn" data-tab="storage">Storage</button>
@@ -181,6 +182,42 @@
     <button id="managePermsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Manage Permissions</button>
     <button id="settingsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Node Settings</button>
     <button id="recoverBtn">Recover Cipherclerk</button>
+  </div>
+
+  <!-- Account / Devnet tab -->
+  <div class="tab-content" id="tab-account">
+    <div class="section">
+      <div class="section-title">Node</div>
+      <div class="stat">
+        <span>Endpoint</span>
+        <span class="stat-value" id="acctNodeUrl" style="font-size:10px;word-break:break-all;">--</span>
+      </div>
+      <div class="stat">
+        <span>Operator</span>
+        <span class="stat-value" id="acctUnlocked">--</span>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Agent Cell</div>
+      <div class="ref-cell" id="acctCell" style="font-size:10px;word-break:break-all;">--</div>
+      <div class="stat" style="margin-top:6px;">
+        <span>Balance</span>
+        <span class="stat-value" id="acctBalance">--</span>
+      </div>
+      <div class="stat">
+        <span>Nonce</span>
+        <span class="stat-value" id="acctNonce">--</span>
+      </div>
+      <button id="acctRefreshBtn" style="background:#16213e;color:#e0e0e0;border:1px solid #374151;margin-top:6px;">Refresh</button>
+      <button id="acctFaucetBtn" style="background:#065f46;color:#6ee7b7;margin-top:6px;">Faucet: fund 1000 DEC</button>
+    </div>
+    <div class="section">
+      <div class="section-title">Send Transfer</div>
+      <input type="text" id="acctSendTo" class="accept-input" placeholder="Recipient cell ID (64-char hex)">
+      <input type="number" id="acctSendAmount" class="accept-input" placeholder="Amount (DEC)" min="1">
+      <button id="acctSendBtn" style="background:#a78bfa;color:#1a1a2e;margin-top:6px;">Send</button>
+      <div id="acctResult" style="display:none;margin-top:8px;font-size:11px;"></div>
+    </div>
   </div>
 
   <!-- Capabilities tab -->

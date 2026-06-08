@@ -350,10 +350,145 @@ tabButtons.forEach(btn => {
     btn.classList.add("active");
     document.getElementById(`tab-${tabId}`)?.classList.add("active");
 
+    if (tabId === "account") loadAccount();
     if (tabId === "capabilities") loadLiveRefs();
     if (tabId === "directory") loadDirectory();
     if (tabId === "storage") loadStorageQuota();
   });
+});
+
+// ---------------------------------------------------------------------------
+// Account / Devnet tab
+//
+// Routes through the node's REAL verified executor via the background
+// node-API handlers. JSON turns submitted here are signed by the node
+// operator's cipherclerk (the node ignores the body agent — confused-deputy
+// hardening), so this surfaces the operator's agent cell: the identity whose
+// turns actually commit on the devnet node the extension is pointed at.
+// ---------------------------------------------------------------------------
+
+const acctNodeUrl = document.getElementById("acctNodeUrl")!;
+const acctUnlocked = document.getElementById("acctUnlocked")!;
+const acctCell = document.getElementById("acctCell")!;
+const acctBalance = document.getElementById("acctBalance")!;
+const acctNonce = document.getElementById("acctNonce")!;
+const acctRefreshBtn = document.getElementById("acctRefreshBtn") as HTMLButtonElement;
+const acctFaucetBtn = document.getElementById("acctFaucetBtn") as HTMLButtonElement;
+const acctSendTo = document.getElementById("acctSendTo") as HTMLInputElement;
+const acctSendAmount = document.getElementById("acctSendAmount") as HTMLInputElement;
+const acctSendBtn = document.getElementById("acctSendBtn") as HTMLButtonElement;
+const acctResult = document.getElementById("acctResult") as HTMLElement;
+
+interface NodeIdentity {
+  publicKey: string;
+  agentCell: string;
+  unlocked: boolean;
+  agentBalance: number | null;
+  agentNonce: number | null;
+  error?: string;
+}
+
+let cachedIdentity: NodeIdentity | null = null;
+
+function showAcctResult(html: string, color: string): void {
+  acctResult.innerHTML = html;
+  acctResult.style.color = color;
+  acctResult.style.display = "block";
+}
+
+async function loadAccount(): Promise<void> {
+  const cfg = await sendMessage<{ nodeUrl?: string }>("dregg:getNodeConfig");
+  acctNodeUrl.textContent = cfg?.nodeUrl || "(unset)";
+
+  const id = await sendMessage<NodeIdentity>("dregg:nodeIdentity");
+  cachedIdentity = id ?? null;
+  if (!id || id.error || !id.agentCell) {
+    acctUnlocked.textContent = "offline";
+    acctCell.textContent = id?.error ? `Node unreachable: ${id.error}` : "--";
+    acctBalance.textContent = "--";
+    acctNonce.textContent = "--";
+    return;
+  }
+  acctUnlocked.textContent = id.unlocked ? "unlocked" : "locked (set passphrase on node)";
+  acctCell.textContent = id.agentCell;
+  acctBalance.textContent = id.agentBalance == null ? "0 (cell not materialized)" : String(id.agentBalance);
+  acctNonce.textContent = id.agentNonce == null ? "0" : String(id.agentNonce);
+}
+
+acctRefreshBtn.addEventListener("click", loadAccount);
+
+acctFaucetBtn.addEventListener("click", async () => {
+  if (!cachedIdentity?.agentCell) {
+    showAcctResult("Load the account first (node unreachable).", "#f87171");
+    return;
+  }
+  acctFaucetBtn.disabled = true;
+  acctFaucetBtn.textContent = "Funding...";
+  // Pass the operator pubkey so the cell is materialized with a real key —
+  // otherwise later operator-signed turns fail Ed25519 verification.
+  const result = await sendMessage<{ success: boolean; amount?: number; error?: string }>("dregg:faucetFund", {
+    cellId: cachedIdentity.agentCell,
+    amount: 1000,
+    publicKey: cachedIdentity.publicKey,
+  });
+  acctFaucetBtn.disabled = false;
+  acctFaucetBtn.textContent = "Faucet: fund 1000 DEC";
+  if (result?.success) {
+    showAcctResult(`Funded ${result.amount ?? 0} DEC.`, "#6ee7b7");
+    setTimeout(loadAccount, 1500);
+  } else {
+    showAcctResult(`Faucet failed: ${escapeHtml(result?.error || "unknown")}`, "#f87171");
+  }
+});
+
+acctSendBtn.addEventListener("click", async () => {
+  if (!cachedIdentity?.agentCell) {
+    showAcctResult("Load the account first (node unreachable).", "#f87171");
+    return;
+  }
+  const to = acctSendTo.value.trim();
+  const amount = parseInt(acctSendAmount.value, 10);
+  if (!/^[0-9a-fA-F]{64}$/.test(to)) {
+    showAcctResult("Recipient must be a 64-char hex cell ID.", "#f87171");
+    return;
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    showAcctResult("Amount must be a positive integer.", "#f87171");
+    return;
+  }
+  acctSendBtn.disabled = true;
+  acctSendBtn.textContent = "Submitting...";
+  // fee is the computron budget; a single transfer needs ~300, use 500 headroom.
+  const nonce = cachedIdentity.agentNonce == null ? 0 : cachedIdentity.agentNonce;
+  const result = await sendMessage<{
+    accepted: boolean;
+    turnHash?: string;
+    proofStatus?: string;
+    witnessCount?: number;
+    error?: string;
+  }>("dregg:submitJsonTurn", {
+    spec: {
+      agent: cachedIdentity.agentCell,
+      nonce,
+      fee: 500,
+      memo: "extension transfer",
+      effects: [{ kind: "transfer", to, amount }],
+    },
+  });
+  acctSendBtn.disabled = false;
+  acctSendBtn.textContent = "Send";
+  if (result?.accepted && result.turnHash) {
+    const short = result.turnHash.slice(0, 16);
+    showAcctResult(
+      `Committed turn <code>${escapeHtml(short)}...</code> (${escapeHtml(result.proofStatus || "?")}, ${result.witnessCount ?? 0} witness).`,
+      "#6ee7b7",
+    );
+    acctSendTo.value = "";
+    acctSendAmount.value = "";
+    setTimeout(loadAccount, 1500);
+  } else {
+    showAcctResult(`Rejected: ${escapeHtml(result?.error || "unknown error")}`, "#f87171");
+  }
 });
 
 // ---------------------------------------------------------------------------

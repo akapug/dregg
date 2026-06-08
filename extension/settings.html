@@ -83,9 +83,12 @@
 
   <div class="section">
     <div class="section-title">Authentication</div>
-    <label for="devnetKey">X-Devnet-Key</label>
-    <input type="password" id="devnetKey" placeholder="Enter your devnet API key">
-    <div class="help">Included as the X-Devnet-Key header on all node requests. Required for devnet access.</div>
+    <label for="devnetKey">Node API key / bearer token</label>
+    <input type="password" id="devnetKey" placeholder="Enter the node's bearer token">
+    <div class="help">Sent as <code>X-Devnet-Key</code> on read requests and as
+      <code>Authorization: Bearer</code> on protected turn submissions. This is the
+      bearer token the node returns from <code>/cipherclerk/unlock</code> (or your
+      operator's API key). Required to submit turns from the Account tab.</div>
   </div>
 
   <div>
