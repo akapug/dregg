@@ -831,3 +831,78 @@ fn round_of_returns_dag_depth() {
     let r2 = lace.round_of(&block2.id()).expect("round for block2");
     assert_eq!(r2, 3);
 }
+
+// ─── DIFFERENTIAL: merge is a PURE JOIN on the keyset (Lean LaceMerge) ──────────
+//
+// Differential against the Lean executable model `Dregg2/Distributed/LaceMerge.lean`,
+// which proves `merge` is a join on the content-addressed keyset (`laceIds`):
+//   * `laceIds_mergeLace` : keyset(merge B Δ) = keyset(B) ∪ keyset(Δ)
+//   * `merge_comm` / `merge_assoc` / `merge_idem` / `merge_absorb`
+//   * `merge_monotone`
+// proved `#assert_axioms`-clean at n>1 over a Byzantine-forked block set
+// (`LaceMerge.{b0, fork1, fork2}` / `replica1..replica3`). This test reproduces THAT
+// witness shape against the REAL `finality.rs::merge`: a genesis `b0` from an honest
+// creator plus a FORK (two seq-1 blocks from a Byzantine creator, each acking b0 but
+// NOT each other — `LaceMerge`'s `f1 ∥ f2`), merged in three different orders/groupings
+// across three replicas. The Lean theorem says all three converge to the SAME keyset
+// regardless of arrival order, THROUGH the fork; this asserts the node's `merge` agrees.
+#[test]
+fn merge_join_order_independent_with_fork_differential() {
+    let key_honest = random_key(); // creator `7` in LaceMerge
+    let key_byz = random_key(); // creator `9` in LaceMerge (the equivocator)
+
+    // The three causally-closed blocks (LaceMerge §8: b0, fork1, fork2).
+    // b0: honest genesis (no preds).
+    let b0 = Block::new(&key_honest, 0, Payload::Data(b"b0".to_vec()), vec![]);
+    // fork1, fork2: two seq-1 byz blocks, each acking b0 but NOT each other (incomparable).
+    let fork1 = Block::new(&key_byz, 1, Payload::Data(b"fork1".to_vec()), vec![b0.id()]);
+    let fork2 = Block::new(&key_byz, 1, Payload::Data(b"fork2".to_vec()), vec![b0.id()]);
+
+    // The shared content-addressed keyset every replica must converge to.
+    let expected: HashSet<_> = [b0.id(), fork1.id(), fork2.id()].into_iter().collect();
+
+    // Each delta must be causally closed (the `merge` precondition, modelled in Lean as
+    // the `WellFormedDelta` hypothesis). The three replicas vary the ORDER/GROUPING of
+    // closed deltas — which is exactly what order-independence is about.
+    //
+    // Replica R1 — first the genesis delta [b0], then the fork delta [fork1, fork2]
+    // (b0 already present ⇒ the fork delta is closed). LaceMerge `replica1`.
+    let mut r1 = Blocklace::new_simple(random_key());
+    r1.merge(vec![b0.clone()]).unwrap();
+    r1.merge(vec![fork1.clone(), fork2.clone()]).unwrap();
+
+    // Replica R2 — same two closed deltas but the fork delta REVERSED internally
+    // [fork2, fork1] (intra-delta order flipped). LaceMerge `replica2` shape.
+    let mut r2 = Blocklace::new_simple(random_key());
+    r2.merge(vec![b0.clone()]).unwrap();
+    r2.merge(vec![fork2.clone(), fork1.clone()]).unwrap();
+
+    // Replica R3 — everything as ONE closed delta onto empty (a fresh joiner), with b0
+    // listed AFTER the fork blocks (topological_sort reorders for insertion). `replica3`.
+    let mut r3 = Blocklace::new_simple(random_key());
+    r3.merge(vec![fork2.clone(), fork1.clone(), b0.clone()]).unwrap();
+
+    let ids = |b: &Blocklace| -> HashSet<_> { b.iter().map(|(id, _)| *id).collect() };
+
+    // ORDER-INDEPENDENCE at n>1 THROUGH a Byzantine fork: all three converge to the
+    // SAME keyset = laceIds B ∪ laceIds Δ  (Lean `laceIds_mergeLace` + `merge_comm`/`_assoc`).
+    assert_eq!(ids(&r1), expected, "R1 keyset must be the join {{b0,fork1,fork2}}");
+    assert_eq!(ids(&r1), ids(&r2), "merge_comm: R1 and R2 converge (opposite order)");
+    assert_eq!(ids(&r2), ids(&r3), "merge_assoc: R3 (single delta) agrees");
+
+    // IDEMPOTENCE / ABSORPTION (Lean `merge_idem` / `merge_absorb`): re-merging
+    // already-present blocks is inert on the keyset.
+    r1.merge(vec![fork1.clone(), fork2.clone()]).unwrap();
+    assert_eq!(ids(&r1), expected, "merge_idem: re-merging the fork delta is inert");
+
+    // MONOTONICITY (Lean `merge_monotone`): the honest genesis survives the fork-merge —
+    // merging never drops a block.
+    assert!(ids(&r1).contains(&b0.id()), "merge_monotone: b0 retained through fork");
+
+    // The fork IS detected (the equivocation view is a deterministic function of the
+    // converged keyset — the same on every replica, per LaceMerge's §1 note).
+    let byz_creator = key_byz.verifying_key().to_bytes();
+    assert!(r1.is_equivocator(&byz_creator));
+    assert!(r2.is_equivocator(&byz_creator));
+    assert!(r3.is_equivocator(&byz_creator));
+}
