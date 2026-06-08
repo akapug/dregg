@@ -36,9 +36,16 @@ that the F1 finding flagged as vapor, now real (subset `{propext, Classical.choi
 key-uniqueness `NoDupFeds` carried honestly as the `gc.rs` `HashMap` invariant). See
 `docs/rebuild/_PROOF-INTEGRITY-LEDGER.md` MID-1 (RESOLVED). Both halves bite, and they bite TOGETHER.
 
-The Rust differential corpus (`gcDifferentialCorpus`) mirrors the four `gc.rs` session tests:
-`export_drop_rejected_from_wrong_session`, `export_session_superseded_by_reexport`,
-`byzantine_node_different_session_cannot_drop_others_refs`, and the legacy session-0 path.
+The Rust differential corpus (`gcDifferentialCorpus`) mirrors the `gc.rs` / redteam session tests
+after the F-11/F-12 fix: `byzantine_node_different_session_cannot_drop_others_refs`,
+`export_reexport_does_not_steal_original_session_drop_rights`,
+`export_new_session_cannot_drop_other_sessions_refs`, and the F-11 denied session-free path.
+
+F-11 / F-12 (closed): session validation is MANDATORY and PER-REF. `§2`'s `processDrop` is a
+`Session`-taking function (no `Option`, no session-free door) over per-session buckets, so the proof
+now bites on the refcount-drop path the lease-only model was blind to: `f11_session_free_drop_denied`
+(a session that minted nothing reclaims nothing) and `f12_*` (a re-export keeps the original
+session's drop rights; each session drops only the refs it minted).
 
 Crypto note: session IDs here are MODELLED as opaque `Nat` tokens whose unforgeability is an
 EXTERNAL assumption (a session id is minted by `CapHello` and is unguessable to a Byzantine peer).
@@ -127,11 +134,13 @@ theorem reclaim_only_at_last_ref (s s' : RecChainedState) (sw : Nat)
 /-! ## §2 — The session-id Byzantine tooth (a faithful executable model of `gc.rs`).
 
 `gc.rs`'s `ExportGcManager` keeps, per exported `cell`, a map `federation ↦ RefCount` where each
-`RefCount` carries a `session_id`. A `DropRef` is processed by `process_drop_inner` (`gc.rs:170`):
-look up the cell, then the holder; reject if absent or `count == 0`; **reject if the presented
-session id ≠ the holder's stored session id**; else decrement that holder's count and the cell's
-`total_refs`. We model the per-cell holder table (the inner `HashMap<FederationId, RefCount>`)
-faithfully as an association list and reproduce `process_drop_inner` EXACTLY. -/
+`RefCount` carries PER-SESSION buckets (`sessions : HashMap<SessionId, u64>`, the F-12 fix). A
+`DropRef` is processed by `process_drop_inner` (`gc.rs:172`): look up the cell, then the holder;
+**reject if the presented session's bucket is empty** (`sessions.get(&session)` absent or 0) — this
+is BOTH the wrong-session reject AND the F-11 unauthenticated-drop reject; else decrement that
+session's bucket, the holder's count, and the cell's `total_refs`. We model the per-cell holder
+table (the inner `HashMap<FederationId, RefCount>`) faithfully as an association list, with each
+holder's per-session buckets as a nested assoc list, and reproduce `process_drop_inner` EXACTLY. -/
 
 /-- A federation/holder id (the `gc.rs` `FederationId`, modelled as a `Nat`). -/
 abbrev Fed := Nat
@@ -139,14 +148,22 @@ abbrev Fed := Nat
 /-- A session id (the `gc.rs` `SessionId = u64`, an opaque unguessable token; see crypto note). -/
 abbrev Session := Nat
 
-/-- The per-holder reference count with its session binding — the `gc.rs` `RefCount`
-(`gc.rs:39`), minus the `last_activity` field (that drives the *lease* half, already in
-`CapTPGC`; here we model the *session/refcount* half). -/
+/-- The per-holder reference count with its PER-SESSION buckets — the `gc.rs` `RefCount`
+(`gc.rs:39`) AFTER the F-12 fix, minus the `last_activity` field (that drives the *lease* half,
+already in `CapTPGC`; here we model the *session/refcount* half).
+
+`sessions` is the `gc.rs` `HashMap<SessionId, u64>`: each session that minted a ref maps to the
+number of refs it minted. `count` is the maintained SUM of all buckets (the `gc.rs`
+`RefCount.count`), so existing readers and the `total_refs = Σ count` invariant are unchanged.
+
+The F-12 fix lives HERE: there is NO single per-holder `session` scalar to overwrite. A re-export
+under a new session adds (or grows) THAT session's bucket and leaves every other session's bucket
+untouched, so each session retains the right to drop exactly the refs it minted. -/
 structure HolderRef where
-  /-- how many references this holder has (`RefCount.count`). -/
-  count   : Nat
-  /-- the session under which this holder's ref was created (`RefCount.session_id`). -/
-  session : Session
+  /-- how many references this holder has in total (`RefCount.count` = sum of `sessions`). -/
+  count    : Nat
+  /-- per-session ref counts (`RefCount.sessions : HashMap<SessionId,u64>`), as an assoc list. -/
+  sessions : List (Session × Nat)
 deriving DecidableEq, Repr
 
 /-- The per-cell export entry's holder table — the `gc.rs` `ExportEntry.holders`
@@ -156,6 +173,17 @@ abbrev HolderTable := List (Fed × HolderRef)
 /-- Look up a holder's `RefCount` (first match), `none` if absent — `holders.get(&fed)`. -/
 def findHolder (t : HolderTable) (fed : Fed) : Option HolderRef :=
   (t.find? (fun p => p.1 == fed)).map (·.2)
+
+/-- The ref count a holder minted under `sess` — `RefCount.sessions.get(&sess).unwrap_or(0)`. -/
+def sessionCount (rc : HolderRef) (sess : Session) : Nat :=
+  ((rc.sessions.find? (fun p => p.1 == sess)).map (·.2)).getD 0
+
+/-- Decrement a session's bucket by 1, removing the bucket entirely at 0 (the `gc.rs`
+`*bucket -= 1; if *bucket == 0 { sessions.remove(&session) }`). Other sessions untouched. -/
+def decSession (buckets : List (Session × Nat)) (sess : Session) : List (Session × Nat) :=
+  (buckets.map (fun p =>
+      if p.1 == sess then (p.1, p.2 - 1) else p)).filter
+    (fun p => !(p.1 == sess && p.2 == 0))
 
 /-- The drop verdict — the `gc.rs` `DropResult` (`gc.rs:65`). -/
 inductive DropResult where
@@ -171,108 +199,111 @@ incrementally there; we DEFINE it as the sum so the model's invariant is checkab
 def totalRefs (t : HolderTable) : Nat :=
   (t.map (fun p => p.2.count)).sum
 
-/-- Decrement a holder's count by 1, dropping the holder entirely when it hits 0 (the `gc.rs`
-`if ref_count.count == 0 { holders.remove(&fed) }`, `gc.rs:203`). Other holders untouched. -/
-def decHolder (t : HolderTable) (fed : Fed) : HolderTable :=
+/-- Decrement a holder's `sess` bucket (and its total `count`) by 1, dropping the holder entirely
+when its total `count` hits 0 (the `gc.rs` `if ref_count.count == 0 { holders.remove(&fed) }`,
+`gc.rs:203`). The bucket decrement is the F-12 core: only `sess`'s refs are touched. Other holders
+and other sessions are untouched. -/
+def decHolderSession (t : HolderTable) (fed : Fed) (sess : Session) : HolderTable :=
   (t.map (fun p =>
-      if p.1 == fed then (p.1, { p.2 with count := p.2.count - 1 }) else p)).filter
+      if p.1 == fed then
+        (p.1, { count := p.2.count - 1, sessions := decSession p.2.sessions sess })
+      else p)).filter
     (fun p => !(p.1 == fed && p.2.count == 0))
 
-/-- **`processDrop t fed expected`** — a FAITHFUL executable model of `gc.rs`'s
-`process_drop_inner` (`gc.rs:170`). Returns the verdict AND the post-table. The session check is
-EXACT: `expected = some sess` and the holder's stored session ≠ `sess` ⇒ `(invalid, t)` (NO
-mutation). `expected = none` is the legacy session-unaware `process_drop` path (`gc.rs:0`). -/
-def processDrop (t : HolderTable) (fed : Fed) (expected : Option Session) : DropResult × HolderTable :=
+/-- **`processDrop t fed sess`** — a FAITHFUL executable model of `gc.rs`'s
+`process_drop_inner` (`gc.rs:172`) AFTER the F-11/F-12 fix. Session validation is MANDATORY (a
+`Session`, not an `Option`): the legacy session-free path is GONE. Returns the verdict AND the
+post-table:
+
+  * unknown holder ⇒ `(invalid, t)` (no change);
+  * the session `sess` minted no refs on this holder (`sessionCount rc sess = 0`) ⇒ `(invalid, t)`
+    (no change) — this is BOTH the Byzantine wrong-session reject AND the F-11 unauthenticated /
+    forged / absent-session reject (a session that minted nothing decrements nothing);
+  * else decrement `sess`'s bucket (and the holder's total) by exactly one — only the refs THIS
+    session minted are dropped (F-12). -/
+def processDrop (t : HolderTable) (fed : Fed) (sess : Session) : DropResult × HolderTable :=
   match findHolder t fed with
-  | none    => (invalid, t)                        -- unknown holder ⇒ Invalid, no change
+  | none    => (invalid, t)                          -- unknown holder ⇒ Invalid, no change
   | some rc =>
-      if rc.count = 0 then (invalid, t)            -- over-decrement guard ⇒ Invalid, no change
+      if sessionCount rc sess = 0 then (invalid, t)  -- no refs under this session ⇒ Invalid, no change
       else
-        match expected with
-        | some sess =>
-            if rc.session ≠ sess then (invalid, t) -- SESSION MISMATCH ⇒ Invalid, NO MUTATION
-            else
-              let t' := decHolder t fed
-              (if totalRefs t' = 0 then canRevoke else stillHeld, t')
-        | none =>
-            let t' := decHolder t fed
-            (if totalRefs t' = 0 then canRevoke else stillHeld, t')
+        let t' := decHolderSession t fed sess
+        (if totalRefs t' = 0 then canRevoke else stillHeld, t')
 
-/-! ### §2a — the session check is a NO-OP on a mismatch (the core invariant). -/
+/-! ### §2a — the session check is a NO-OP when the session minted nothing (the core invariant). -/
 
-/-- **`wrong_session_no_op` (PROVED) — a wrong-session drop does NOT touch the table.** If the
-holder `fed` exists with a positive count under session `s`, and a `DropRef` is presented with
-`expected = some s'` for `s' ≠ s`, then `processDrop` returns `(invalid, t)` — the table is
-RETURNED UNCHANGED. This is the exact `gc.rs:194` `if ref_count.session_id != expected { return
-Invalid }` short-circuit, BEFORE any decrement. The Byzantine-resistance primitive. -/
+/-- **`wrong_session_no_op` (PROVED) — a drop on a session that minted no ref here does NOT touch the
+table.** If the holder `fed` exists but the presented session `s'` has an EMPTY bucket on it
+(`sessionCount rc s' = 0`), `processDrop` returns `(invalid, t)` — the table is RETURNED UNCHANGED.
+This is the exact `gc.rs` per-session guard (`match sessions.get_mut(&session) { Some(b) if *b > 0
+=> …, _ => return Invalid }`), BEFORE any decrement. The Byzantine-resistance primitive AND the F-11
+unauthenticated-drop reject in one: a session bucket of 0 (wrong session, forged session, or no
+session) authorizes nothing. -/
 theorem wrong_session_no_op (t : HolderTable) (fed : Fed) (rc : HolderRef)
-    (hf : findHolder t fed = some rc) (hpos : 0 < rc.count)
-    (s' : Session) (hne : rc.session ≠ s') :
-    processDrop t fed (some s') = (invalid, t) := by
+    (hf : findHolder t fed = some rc)
+    (s' : Session) (hzero : sessionCount rc s' = 0) :
+    processDrop t fed s' = (invalid, t) := by
   unfold processDrop
   rw [hf]
-  have hz : ¬ rc.count = 0 := by omega
-  simp only [if_neg hz, if_pos hne]
+  simp only [if_pos hzero]
 
-/-- **`wrong_session_preserves_total` (PROVED) — `total_refs` is UNCHANGED by a wrong-session drop.**
+/-- **`wrong_session_preserves_total` (PROVED) — `total_refs` is UNCHANGED by a no-bucket drop.**
 The corollary the Rust test `byzantine_node_different_session_cannot_drop_others_refs` asserts: a
-wrong-session drop leaves `totalRefs` exactly as it was. Follows from `wrong_session_no_op` (the
-whole table is unchanged, so its sum is). -/
+wrong-session drop leaves `totalRefs` exactly as it was. Follows from `wrong_session_no_op`. -/
 theorem wrong_session_preserves_total (t : HolderTable) (fed : Fed) (rc : HolderRef)
-    (hf : findHolder t fed = some rc) (hpos : 0 < rc.count)
-    (s' : Session) (hne : rc.session ≠ s') :
-    totalRefs (processDrop t fed (some s')).2 = totalRefs t := by
-  rw [wrong_session_no_op t fed rc hf hpos s' hne]
+    (hf : findHolder t fed = some rc)
+    (s' : Session) (hzero : sessionCount rc s' = 0) :
+    totalRefs (processDrop t fed s').2 = totalRefs t := by
+  rw [wrong_session_no_op t fed rc hf s' hzero]
 
 /-! ### §2b — the named (honest) unforgeability hypothesis.
 
-The security claim is conditional on the adversary being UNABLE to present the victim holder's
-session id. `gc.rs` mints session ids in `CapHello`; we do NOT model the handshake. `SessionUnforgeable`
-names that assumption: a Byzantine federation `byz`, acting on a victim holder `victim`'s ref, can
-only present sessions DISTINCT from the victim's stored session. This is the honest crypto boundary
-— the theorem is sound MODULO this hypothesis, which we state, never fake. -/
+The security claim is conditional on the adversary being UNABLE to present a session under which the
+victim minted a ref. `gc.rs` mints session ids in `CapHello`; we do NOT model the handshake.
+`SessionUnforgeable` names that assumption: a Byzantine federation, acting on a victim holder's ref,
+can only present sessions whose bucket on the victim is EMPTY (it never minted a ref under them).
+This is the honest crypto boundary — the theorem is sound MODULO this hypothesis, which we state,
+never fake. -/
 
 /-- **`SessionUnforgeable t victim byzSession`** — the byzantine peer's presented session
-`byzSession` is NOT the victim holder's stored session. (In the real system this holds because the
-victim's session id is an unguessable `CapHello`-minted token; here it is an explicit hypothesis.) -/
+`byzSession` minted NO ref on the victim holder (its bucket is empty). (In the real system this
+holds because a session id is an unguessable `CapHello`-minted token, so the adversary can only
+present sessions it owns — under which the victim minted nothing.) -/
 def SessionUnforgeable (t : HolderTable) (victim : Fed) (byzSession : Session) : Prop :=
-  ∀ rc : HolderRef, findHolder t victim = some rc → rc.session ≠ byzSession
+  ∀ rc : HolderRef, findHolder t victim = some rc → sessionCount rc byzSession = 0
 
 /-- **`byzantine_cannot_drop_victim_ref` (PROVED, n>1) — the headline Byzantine theorem.**
 THE security property modelled from `gc.rs:670`'s
-`byzantine_node_different_session_cannot_drop_others_refs`, at `n = 2` holders (a victim and the
-byzantine peer both hold refs to the same cell). GIVEN the byzantine peer cannot forge the victim's
-session (`SessionUnforgeable`), a `DropRef` it submits against the VICTIM's holder slot
-(`from_federation = victim`, but carrying the byzantine peer's own session) is REJECTED as
-`invalid` AND leaves `total_refs` untouched — the victim's ref survives. The drop touched neither
-the victim's count nor anyone else's. -/
+`byzantine_node_different_session_cannot_drop_others_refs`, at `n = 2` holders. GIVEN the byzantine
+peer cannot forge a session under which the victim minted a ref (`SessionUnforgeable`), a `DropRef`
+it submits against the VICTIM's holder slot (carrying the byzantine peer's own session) is REJECTED
+as `invalid` AND leaves `total_refs` untouched — the victim's ref survives. -/
 theorem byzantine_cannot_drop_victim_ref
     (t : HolderTable) (victim : Fed) (rc : HolderRef)
-    (hf : findHolder t victim = some rc) (hpos : 0 < rc.count)
+    (hf : findHolder t victim = some rc)
     (byzSession : Session) (hunf : SessionUnforgeable t victim byzSession) :
-    processDrop t victim (some byzSession) = (invalid, t)
-    ∧ totalRefs (processDrop t victim (some byzSession)).2 = totalRefs t := by
-  have hne : rc.session ≠ byzSession := hunf rc hf
-  exact ⟨wrong_session_no_op t victim rc hf hpos byzSession hne,
-         wrong_session_preserves_total t victim rc hf hpos byzSession hne⟩
+    processDrop t victim byzSession = (invalid, t)
+    ∧ totalRefs (processDrop t victim byzSession).2 = totalRefs t := by
+  have hzero : sessionCount rc byzSession = 0 := hunf rc hf
+  exact ⟨wrong_session_no_op t victim rc hf byzSession hzero,
+         wrong_session_preserves_total t victim rc hf byzSession hzero⟩
 
 /-! ### §2c — the HONEST side still works (the model is not vacuously fail-closed).
 
 A fail-closed model that rejected EVERYTHING would trivially satisfy §2b. We prove the dual: the
-honest holder, presenting its CORRECT session, CAN decrement its own ref — so the rejection in §2b
-is genuinely SESSION-SCOPED, not a blanket refusal. This is the de-vacuity tooth for the tool. -/
+honest holder, presenting a session under which it DID mint a ref, CAN decrement that ref — so the
+rejection in §2b is genuinely SESSION-SCOPED, not a blanket refusal. -/
 
-/-- **`right_session_decrements` (PROVED) — the honest holder drops its OWN ref.** With the matching
-session, a `count = 1` holder's drop succeeds: the verdict reflects the post-table and the holder's
-own count went to 0 (so it is removed from the table). Witnesses that `processDrop` is NOT vacuously
-fail-closed — the session gate ADMITS the right session. -/
+/-- **`right_session_decrements` (PROVED) — the honest holder drops its OWN ref.** With a session
+whose bucket is non-empty (`0 < sessionCount rc sess`), the drop succeeds and the post-table is
+exactly `decHolderSession t fed sess`. Witnesses that `processDrop` is NOT vacuously fail-closed. -/
 theorem right_session_decrements (t : HolderTable) (fed : Fed) (rc : HolderRef)
-    (hf : findHolder t fed = some rc) (hpos : 0 < rc.count) :
-    (processDrop t fed (some rc.session)).2 = decHolder t fed := by
+    (hf : findHolder t fed = some rc) (sess : Session) (hpos : 0 < sessionCount rc sess) :
+    (processDrop t fed sess).2 = decHolderSession t fed sess := by
   unfold processDrop
   rw [hf]
-  have hz : ¬ rc.count = 0 := by omega
-  simp only [if_neg hz, ne_eq, not_true_eq_false, if_false]
+  have hz : ¬ sessionCount rc sess = 0 := by omega
+  simp only [if_neg hz]
 
 /-! ## §2.5 — THE BRIDGE: §2's per-holder SUM IS §1's swiss-entry `refcount` (MID-1 / F1).
 
@@ -310,11 +341,12 @@ theorem forall_key_ne (t : HolderTable) (fed : Fed)
   rw [List.mem_map]
   exact ⟨p, hp, h⟩
 
-/-- The `map` half of `decHolder` is the identity on a table with no `fed` key (helper for the
+/-- The `map` half of `decHolderSession` is the identity on a table with no `fed` key (helper for the
 unit-exact decrement: a non-matching tail is untouched by the count-decrement map). -/
-theorem decHolderMap_not_mem (t : HolderTable) (fed : Fed)
+theorem decHolderMap_not_mem (t : HolderTable) (fed : Fed) (sess : Session)
     (hnm : fed ∉ t.map Prod.fst) :
-    t.map (fun p => if p.1 == fed then (p.1, { p.2 with count := p.2.count - 1 }) else p) = t := by
+    t.map (fun p => if p.1 == fed then
+        (p.1, { count := p.2.count - 1, sessions := decSession p.2.sessions sess }) else p) = t := by
   have hkey := forall_key_ne t fed hnm
   clear hnm
   induction t with
@@ -326,7 +358,7 @@ theorem decHolderMap_not_mem (t : HolderTable) (fed : Fed)
       congr 1
       exact ih (fun p hp => hkey p (by simp [hp]))
 
-/-- The `filter` half of `decHolder` keeps every entry of a table with no `fed` key (its guard
+/-- The `filter` half of `decHolderSession` keeps every entry of a table with no `fed` key (its guard
 `p.1 == fed && …` never fires). -/
 theorem decHolderFilter_not_mem (t : HolderTable) (fed : Fed)
     (hnm : fed ∉ t.map Prod.fst) :
@@ -339,11 +371,12 @@ theorem decHolderFilter_not_mem (t : HolderTable) (fed : Fed)
   intro hpe
   exact absurd (by simpa using hpe) hpf
 
-/-- A `fed` absent from the key set leaves `decHolder` a NO-OP (map + filter both pass through). -/
-theorem decHolder_not_mem (t : HolderTable) (fed : Fed)
-    (hnm : fed ∉ t.map Prod.fst) : decHolder t fed = t := by
-  unfold decHolder
-  rw [decHolderMap_not_mem t fed hnm, decHolderFilter_not_mem t fed hnm]
+/-- A `fed` absent from the key set leaves `decHolderSession` a NO-OP (map + filter both pass
+through). -/
+theorem decHolder_not_mem (t : HolderTable) (fed : Fed) (sess : Session)
+    (hnm : fed ∉ t.map Prod.fst) : decHolderSession t fed sess = t := by
+  unfold decHolderSession
+  rw [decHolderMap_not_mem t fed sess hnm, decHolderFilter_not_mem t fed hnm]
 
 /-- **`totalRefs_pos_of_findHolder` (PROVED)** — a present holder with positive count makes the SUM
 positive. The arithmetic that proves the tail recursion of the unit-exact decrement does not
@@ -365,11 +398,13 @@ theorem totalRefs_pos_of_findHolder (t : HolderTable) (fed : Fed) (rc : HolderRe
       rw [htot]; omega
 
 /-- **`decHolder_pred_total` (PROVED) — the per-holder decrement is UNIT-exact.** Given key-uniqueness
-(`NoDupFeds`), if `fed` is present with positive count, `decHolder` lowers `totalRefs` by EXACTLY one.
-This is the arithmetic heart of the bridge: §2's structured decrement matches §1's scalar `- 1`. -/
-theorem decHolder_pred_total (t : HolderTable) (fed : Fed) (rc : HolderRef)
+(`NoDupFeds`), if `fed` is present with positive count, `decHolderSession t fed sess` lowers
+`totalRefs` by EXACTLY one. The per-session bucket detail is invisible to `totalRefs` (which sums the
+holder `count`s), so the arithmetic is the same unit-exact decrement as before the F-12 refactor —
+this is the heart of the bridge: §2's structured drop matches §1's scalar `- 1`. -/
+theorem decHolder_pred_total (t : HolderTable) (fed : Fed) (rc : HolderRef) (sess : Session)
     (hnd : NoDupFeds t) (hf : findHolder t fed = some rc) (hpos : 0 < rc.count) :
-    totalRefs (decHolder t fed) = totalRefs t - 1 := by
+    totalRefs (decHolderSession t fed sess) = totalRefs t - 1 := by
   unfold NoDupFeds at hnd
   induction t with
   | nil => exact absurd hf (by simp [findHolder])
@@ -385,29 +420,28 @@ theorem decHolder_pred_total (t : HolderTable) (fed : Fed) (rc : HolderRef)
       subst hf
       have hfedeq : hd.1 = fed := by simpa using hhd
       have hnmtl : fed ∉ tl.map Prod.fst := by rw [← hfedeq]; exact hdnotin
-      have hmaptl := decHolderMap_not_mem tl fed hnmtl
+      have hmaptl := decHolderMap_not_mem tl fed sess hnmtl
       have hfilttl := decHolderFilter_not_mem tl fed hnmtl
-      have hexpand : decHolder (hd :: tl) fed =
+      have hexpand : decHolderSession (hd :: tl) fed sess =
           List.filter (fun p => !(p.1 == fed && p.2.count == 0))
-            ((hd.1, { hd.2 with count := hd.2.count - 1 }) :: tl) := by
-        unfold decHolder
+            ((hd.1, ({ count := hd.2.count - 1, sessions := decSession hd.2.sessions sess } : HolderRef)) :: tl) := by
+        unfold decHolderSession
         simp only [List.map_cons, hhd, if_true, hmaptl]
       rw [hexpand, List.filter_cons]
       by_cases hc1 : hd.2.count - 1 = 0
       · -- count was exactly 1 → head's decremented count is 0 → filtered out.
-        have hcount1 : hd.2.count = 1 := by omega
-        have hguard : (!((hd.1, { hd.2 with count := hd.2.count - 1 }).1 == fed &&
-            (hd.1, { hd.2 with count := hd.2.count - 1 }).2.count == 0)) = false := by
+        have hguard : (!((hd.1, ({ count := hd.2.count - 1, sessions := decSession hd.2.sessions sess } : HolderRef)).1 == fed &&
+            (hd.1, ({ count := hd.2.count - 1, sessions := decSession hd.2.sessions sess } : HolderRef)).2.count == 0)) = false := by
           simp only [hhd, hc1, beq_self_eq_true, Bool.and_self, Bool.not_true]
         rw [if_neg (by simp [hguard]), hfilttl, htot]
         omega
       · -- count > 1 → head kept with decremented count.
-        have hguard : (!((hd.1, { hd.2 with count := hd.2.count - 1 }).1 == fed &&
-            (hd.1, { hd.2 with count := hd.2.count - 1 }).2.count == 0)) = true := by
+        have hguard : (!((hd.1, ({ count := hd.2.count - 1, sessions := decSession hd.2.sessions sess } : HolderRef)).1 == fed &&
+            (hd.1, ({ count := hd.2.count - 1, sessions := decSession hd.2.sessions sess } : HolderRef)).2.count == 0)) = true := by
           simp only [Bool.not_eq_true', Bool.and_eq_false_imp]
           intro _; simpa using hc1
         rw [if_pos (by simp [hguard]), hfilttl]
-        have hcons : totalRefs ((hd.1, { hd.2 with count := hd.2.count - 1 }) :: tl)
+        have hcons : totalRefs ((hd.1, ({ count := hd.2.count - 1, sessions := decSession hd.2.sessions sess } : HolderRef)) :: tl)
             = (hd.2.count - 1) + totalRefs tl := by
           simp only [totalRefs, List.map_cons, List.sum_cons]
         rw [hcons, htot]
@@ -415,17 +449,18 @@ theorem decHolder_pred_total (t : HolderTable) (fed : Fed) (rc : HolderRef)
     · -- head does not match; `fed` lives in the tail. Recurse.
       simp only [hhd, Bool.false_eq_true, if_false] at hf
       have hffull : findHolder tl fed = some rc := by simp only [findHolder]; exact hf
-      have hrec : totalRefs (decHolder tl fed) = totalRefs tl - 1 := ih hndtl hffull
+      have hrec : totalRefs (decHolderSession tl fed sess) = totalRefs tl - 1 := ih hndtl hffull
       have hfedne : ¬ hd.1 = fed := by simpa using hhd
-      have hexpand : decHolder (hd :: tl) fed = hd :: decHolder tl fed := by
-        unfold decHolder
+      have hexpand : decHolderSession (hd :: tl) fed sess = hd :: decHolderSession tl fed sess := by
+        unfold decHolderSession
         simp only [List.map_cons, hhd, Bool.false_eq_true, if_false, List.filter_cons]
         have hguard : (!(hd.1 == fed && hd.2.count == 0)) = true := by
           simp only [hhd, Bool.false_and, Bool.not_false]
         rw [if_pos (by simp [hguard])]
       have htlpos : 1 ≤ totalRefs tl := totalRefs_pos_of_findHolder tl fed rc hffull hpos
       rw [hexpand]
-      have h2 : totalRefs (hd :: decHolder tl fed) = hd.2.count + totalRefs (decHolder tl fed) := by
+      have h2 : totalRefs (hd :: decHolderSession tl fed sess)
+          = hd.2.count + totalRefs (decHolderSession tl fed sess) := by
         simp only [totalRefs, List.map_cons, List.sum_cons]
       rw [h2, hrec, htot]
       omega
@@ -444,11 +479,11 @@ DECREMENTED scalar `refc - 1` still equals `totalRefs (decHolder t fed)`. The sc
 §1's `swissDropK` writes is EXACTLY the per-holder sum after the holder drop — the two models move in
 lockstep, no longer two disconnected halves. -/
 theorem bridge_accept_preserves_coherence (refc : Nat) (t : HolderTable) (fed : Fed) (rc : HolderRef)
-    (hnd : NoDupFeds t) (hf : findHolder t fed = some rc) (hpos : 0 < rc.count)
+    (sess : Session) (hnd : NoDupFeds t) (hf : findHolder t fed = some rc) (hpos : 0 < rc.count)
     (hco : SwissHoldersCoherent refc t) :
-    SwissHoldersCoherent (refc - 1) (decHolder t fed) := by
+    SwissHoldersCoherent (refc - 1) (decHolderSession t fed sess) := by
   unfold SwissHoldersCoherent at hco ⊢
-  rw [hco, decHolder_pred_total t fed rc hnd hf hpos]
+  rw [hco, decHolder_pred_total t fed rc sess hnd hf hpos]
 
 /-- **`bridge_last_ref_iff` (PROVED) — the GC boundary agrees across the two models.** Under
 coherence and an accepting drop, §2's per-holder sum hits `0` (the `canRevoke` verdict's
@@ -456,11 +491,11 @@ coherence and an accepting drop, §2's per-holder sum hits `0` (the `canRevoke` 
 remove branch condition `e.refcount - 1 = 0`). So §2's `canRevoke` and §1's GC-at-zero reclaim
 EXACTLY together — neither reclaims while the other still holds a ref. -/
 theorem bridge_last_ref_iff (refc : Nat) (t : HolderTable) (fed : Fed) (rc : HolderRef)
-    (hnd : NoDupFeds t) (hf : findHolder t fed = some rc) (hpos : 0 < rc.count)
+    (sess : Session) (hnd : NoDupFeds t) (hf : findHolder t fed = some rc) (hpos : 0 < rc.count)
     (hco : SwissHoldersCoherent refc t) :
-    totalRefs (decHolder t fed) = 0 ↔ refc - 1 = 0 := by
+    totalRefs (decHolderSession t fed sess) = 0 ↔ refc - 1 = 0 := by
   unfold SwissHoldersCoherent at hco
-  rw [decHolder_pred_total t fed rc hnd hf hpos, hco]
+  rw [decHolder_pred_total t fed rc sess hnd hf hpos, hco]
 
 /-! ### §2.5a — welding §2's `processDrop` ACCEPT path to §1's `swissDropK`.
 
@@ -469,26 +504,25 @@ that `decHolder` IS the table `processDrop` returns on its accept path, and that
 `refcount > 1` entry writes exactly the scalar `- 1` — so the bridge holds over the ACTUAL `gc.rs`
 verdict function (§2) and the ACTUAL verified swiss-drop arm (§1), not just their decompositions. -/
 
-/-- **`processDrop_accept_table` (PROVED) — the accept path returns `decHolder`.** When the session
-matches (`expected = some rc.session`) and the holder is present with positive count, `processDrop`'s
-post-table is exactly `decHolder t fed`. This pins the bridge's `decHolder` to the real `gc.rs`
-verdict function's output. -/
-theorem processDrop_accept_table (t : HolderTable) (fed : Fed) (rc : HolderRef)
-    (hf : findHolder t fed = some rc) (hpos : 0 < rc.count) :
-    (processDrop t fed (some rc.session)).2 = decHolder t fed :=
-  right_session_decrements t fed rc hf hpos
+/-- **`processDrop_accept_table` (PROVED) — the accept path returns `decHolderSession`.** When the
+session `sess` has a non-empty bucket on a present holder, `processDrop`'s post-table is exactly
+`decHolderSession t fed sess`. This pins the bridge's structured drop to the real `gc.rs` verdict
+function's output. -/
+theorem processDrop_accept_table (t : HolderTable) (fed : Fed) (rc : HolderRef) (sess : Session)
+    (hf : findHolder t fed = some rc) (hpos : 0 < sessionCount rc sess) :
+    (processDrop t fed sess).2 = decHolderSession t fed sess :=
+  right_session_decrements t fed rc hf sess hpos
 
 /-- **`bridge_processDrop_tracks_refcount` (PROVED) — THE bridge over the real functions.** Given
-coherence (`refc = totalRefs t`), key-uniqueness, and a present positive holder on the matching
-session, §2's `processDrop` accept-path post-table has `totalRefs` equal to the DECREMENTED §1 scalar
-`refc - 1`. This is `gcDropTotal` made real: the §2 per-holder model's drop and the §1 scalar
-`swissDropK`'s `refcount - 1` track each other, welding the two halves the F1 docstring only claimed
-in prose. -/
+coherence (`refc = totalRefs t`), key-uniqueness, a present holder with positive total `count`, and a
+session whose bucket on it is non-empty, §2's `processDrop` accept-path post-table has `totalRefs`
+equal to the DECREMENTED §1 scalar `refc - 1`. This is `gcDropTotal` made real: the §2 per-holder
+model's drop and the §1 scalar `swissDropK`'s `refcount - 1` track each other. -/
 theorem bridge_processDrop_tracks_refcount (refc : Nat) (t : HolderTable) (fed : Fed) (rc : HolderRef)
-    (hnd : NoDupFeds t) (hf : findHolder t fed = some rc) (hpos : 0 < rc.count)
-    (hco : SwissHoldersCoherent refc t) :
-    totalRefs (processDrop t fed (some rc.session)).2 = refc - 1 := by
-  rw [processDrop_accept_table t fed rc hf hpos, decHolder_pred_total t fed rc hnd hf hpos]
+    (sess : Session) (hnd : NoDupFeds t) (hf : findHolder t fed = some rc) (hpos : 0 < rc.count)
+    (hsess : 0 < sessionCount rc sess) (hco : SwissHoldersCoherent refc t) :
+    totalRefs (processDrop t fed sess).2 = refc - 1 := by
+  rw [processDrop_accept_table t fed rc sess hf hsess, decHolder_pred_total t fed rc sess hnd hf hpos]
   unfold SwissHoldersCoherent at hco; omega
 
 /-- **`swissDropK_writes_scalar_pred` (PROVED) — §1 writes exactly `refcount - 1`.** On a `refcount > 1`
@@ -510,13 +544,15 @@ welding theorem: §1's swiss-table `refcount` field and §2's `gc.rs`-faithful p
 before AND after the drop. -/
 theorem bridge_swiss_refcount_eq_holders_sum
     (k : RecordKernelState) (sw : Nat) (e : SwissRecord) (t : HolderTable) (fed : Fed) (rc : HolderRef)
+    (sess : Session)
     (hf : findSwiss k.swiss sw = some e) (hgt : 1 < e.refcount)
     (hnd : NoDupFeds t) (hfh : findHolder t fed = some rc) (hpos : 0 < rc.count)
+    (hsess : 0 < sessionCount rc sess)
     (hco : SwissHoldersCoherent e.refcount t)
     (k' : RecordKernelState)
     (hk : swissDropK k sw = some k') :
     ∃ e', findSwiss k'.swiss sw = some e' ∧
-      SwissHoldersCoherent e'.refcount (processDrop t fed (some rc.session)).2 := by
+      SwissHoldersCoherent e'.refcount (processDrop t fed sess).2 := by
   -- §1: swissDropK writes refcount-1 into the entry.
   have hkw := swissDropK_writes_scalar_pred k sw e hf hgt
   have hkeq : k' = { k with swiss := replaceSwiss k.swiss sw { e with refcount := e.refcount - 1 } } :=
@@ -528,7 +564,7 @@ theorem bridge_swiss_refcount_eq_holders_sum
   refine ⟨{ e with refcount := e.refcount - 1 }, hpost, ?_⟩
   -- §2: processDrop accept-path sum is e.refcount - 1, which equals the post entry's refcount.
   unfold SwissHoldersCoherent at hco ⊢
-  rw [processDrop_accept_table t fed rc hfh hpos, decHolder_pred_total t fed rc hnd hfh hpos, hco]
+  rw [processDrop_accept_table t fed rc sess hfh hsess, decHolder_pred_total t fed rc sess hnd hfh hpos, hco]
 
 /-! ## §3 — the lease-liveness half is RE-EXPORTED, not re-proved.
 
@@ -558,51 +594,61 @@ FALSE (drop rejected) outcome — and a corpus the Rust `gc.rs` tests mirror one
 
 section Differential
 
-/-- A two-holder export table: federation `10` holds 1 ref on session `42`; federation `20` holds
-1 ref on session `99`. `total_refs = 2` (matches the `gc.rs` byzantine test's setup). -/
-def demoTable : HolderTable := [(10, { count := 1, session := 42 }), (20, { count := 1, session := 99 })]
+/-- A two-holder export table: federation `10` holds 1 ref minted under session `42`; federation
+`20` holds 1 ref minted under session `99`. `total_refs = 2` (matches the `gc.rs` byzantine test). -/
+def demoTable : HolderTable :=
+  [(10, { count := 1, sessions := [(42, 1)] }), (20, { count := 1, sessions := [(99, 1)] })]
 
 #guard totalRefs demoTable == 2
 
--- BYZANTINE: federation 20's session (99) presented against federation 10's slot ⇒ REJECTED, total unchanged.
-#guard (processDrop demoTable 10 (some 99)).1 == DropResult.invalid
-#guard totalRefs (processDrop demoTable 10 (some 99)).2 == 2
+-- BYZANTINE: session 99 presented against federation 10's slot ⇒ REJECTED (no bucket), total unchanged.
+#guard (processDrop demoTable 10 99).1 == DropResult.invalid
+#guard totalRefs (processDrop demoTable 10 99).2 == 2
 
--- HONEST: federation 10 drops with its CORRECT session 42 ⇒ accepted, total falls to 1 (still held by 20).
-#guard (processDrop demoTable 10 (some 42)).1 == DropResult.stillHeld
-#guard totalRefs (processDrop demoTable 10 (some 42)).2 == 1
+-- HONEST: federation 10 drops on its CORRECT session 42 ⇒ accepted, total falls to 1 (still held by 20).
+#guard (processDrop demoTable 10 42).1 == DropResult.stillHeld
+#guard totalRefs (processDrop demoTable 10 42).2 == 1
 
--- WRONG-SESSION SUPERSEDED: a re-export bumps the session; the OLD session no longer drops.
--- (Federation 10 re-exported on session 7 supersedes its session-42 binding.)
-def supersededTable : HolderTable := [(10, { count := 2, session := 7 })]
-#guard (processDrop supersededTable 10 (some 1)).1 == DropResult.invalid   -- old session 1 fails
-#guard totalRefs (processDrop supersededTable 10 (some 1)).2 == 2
-#guard (processDrop supersededTable 10 (some 7)).1 == DropResult.stillHeld -- current session 7 works (2→1)
-#guard totalRefs (processDrop supersededTable 10 (some 7)).2 == 1
+-- F-11: a drop on session 0 (no ref minted under it) is REJECTED — the legacy session-free path
+-- is gone; presenting a session under which nothing was minted decrements nothing.
+#guard (processDrop demoTable 10 0).1 == DropResult.invalid
+#guard totalRefs (processDrop demoTable 10 0).2 == 2
 
--- LEGACY session-0 path (`expected = none`): no session check, drop proceeds.
-#guard (processDrop demoTable 10 none).1 == DropResult.stillHeld
-#guard totalRefs (processDrop demoTable 10 none).2 == 1
+-- F-12: a holder with TWO sessions' refs. fed 10 minted 2 refs under session 7 and 1 under session 99
+-- (e.g. a re-export / reconnect). Per-ref scoping: each session drops only the refs IT minted.
+def reexportTable : HolderTable :=
+  [(10, { count := 3, sessions := [(7, 2), (99, 1)] })]
+#guard totalRefs reexportTable == 3
+-- Session 7 (the ORIGINAL) KEEPS its rights: it can drop the two refs it minted (3→2, 2→1).
+#guard (processDrop reexportTable 10 7).1 == DropResult.stillHeld
+#guard totalRefs (processDrop reexportTable 10 7).2 == 2
+-- Session 99 (the NEW one) can drop ONLY its own ref — the last ref reclaims (3→2 here, single drop).
+#guard (processDrop reexportTable 10 99).1 == DropResult.stillHeld
+#guard totalRefs (processDrop reexportTable 10 99).2 == 2
+-- After session 99 spends its only ref, session 99 can no longer drop (its bucket is gone): Invalid.
+#guard (processDrop (decHolderSession reexportTable 10 99) 10 99).1 == DropResult.invalid
 
 -- ABSENT holder ⇒ Invalid, no change.
-#guard (processDrop demoTable 99 (some 1)).1 == DropResult.invalid
+#guard (processDrop demoTable 99 1).1 == DropResult.invalid
 
-/-- **The Rust differential corpus.** Each row is `(table, fed, expectedSession, verdict, postTotal)`
-mirroring a `gc.rs` test. A Rust harness replays `process_drop_with_session` on the same inputs and
-checks the `DropResult` + `ExportEntry.total_refs` agree. -/
-def gcDifferentialCorpus : List (HolderTable × Fed × Option Session × DropResult × Nat) :=
-  [ -- byzantine_node_different_session_cannot_drop_others_refs (gc.rs:670)
-    (demoTable, 10, some 99, DropResult.invalid, 2)
+/-- **The Rust differential corpus.** Each row is `(table, fed, session, verdict, postTotal)`
+mirroring a `gc.rs` / redteam test. A Rust harness replays `process_drop_with_session` on the same
+inputs and checks the `DropResult` + `ExportEntry.total_refs` agree. Session is now MANDATORY
+(F-11): there is no session-free row. The F-12 rows pin the per-ref scoping (a re-export keeps the
+original session's drop rights, and each session drops only what it minted). -/
+def gcDifferentialCorpus : List (HolderTable × Fed × Session × DropResult × Nat) :=
+  [ -- byzantine_node_different_session_cannot_drop_others_refs: session 99 vs fed 10's slot
+    (demoTable, 10, 99, DropResult.invalid, 2)
   , -- honest drop on correct session (still held by peer)
-    (demoTable, 10, some 42, DropResult.stillHeld, 1)
-  , -- export_drop_rejected_from_wrong_session (gc.rs:~470): re-export superseded the session
-    (supersededTable, 10, some 1, DropResult.invalid, 2)
-  , -- correct (current) session succeeds
-    (supersededTable, 10, some 7, DropResult.stillHeld, 1)
-  , -- legacy process_drop (session-unaware) path (gc.rs:~510)
-    (demoTable, 10, none, DropResult.stillHeld, 1)
+    (demoTable, 10, 42, DropResult.stillHeld, 1)
+  , -- F-11: a session-0 drop (no ref minted under it) is rejected — the session-free door is shut
+    (demoTable, 10, 0, DropResult.invalid, 2)
+  , -- F-12: the ORIGINAL session 7 keeps its drop rights after a re-export under session 99 (3→2)
+    (reexportTable, 10, 7, DropResult.stillHeld, 2)
+  , -- F-12: the NEW session 99 may drop only the ONE ref it minted (3→2)
+    (reexportTable, 10, 99, DropResult.stillHeld, 2)
   , -- unknown federation ⇒ Invalid
-    (demoTable, 99, some 1, DropResult.invalid, 2) ]
+    (demoTable, 99, 1, DropResult.invalid, 2) ]
 
 /-- The corpus is self-consistent: every row's recorded `(verdict, postTotal)` is exactly what
 `processDrop` produces. (A Rust mirror checks `process_drop_with_session` matches these rows.) -/
@@ -612,12 +658,56 @@ theorem gcDifferentialCorpus_faithful :
       ∧ totalRefs (processDrop row.1 row.2.1 row.2.2.1).2 = row.2.2.2.2 := by
   decide
 
-/-! ### §4a — the bridge predicate is NON-VACUOUS (witnessed TRUE and FALSE).
+/-! ### §4a — the F-11 / F-12 headline laws (the closed findings, as theorems).
+
+These are the proof teeth that would CATCH a regression of either finding: F-11 (a session-free /
+unauthenticated drop must not reclaim) and F-12 (a re-export must not transfer the original session's
+drop rights, and a session must not drop refs another session minted). They live over `processDrop`,
+the faithful model of the fixed `gc.rs` — exactly the refcount-drop path the lease-only proof was
+blind to. -/
+
+/-- **`f11_session_free_drop_denied` (PROVED) — F-11 closed.** A session under which the holder
+minted NO ref (`sessionCount rc sess = 0`) — a forged, stale, or "session 0 / no session" credential
+— cannot reclaim: the drop is `invalid` and `total_refs` is unchanged. This is the headline F-11
+law: the session-free reclaim door is shut at the model level, so a blind lease proof can no longer
+hide the gap. -/
+theorem f11_session_free_drop_denied (t : HolderTable) (fed : Fed) (rc : HolderRef) (sess : Session)
+    (hf : findHolder t fed = some rc) (hzero : sessionCount rc sess = 0) :
+    (processDrop t fed sess).1 = invalid ∧ totalRefs (processDrop t fed sess).2 = totalRefs t := by
+  refine ⟨?_, wrong_session_preserves_total t fed rc hf sess hzero⟩
+  rw [wrong_session_no_op t fed rc hf sess hzero]
+
+/-- **`f12_reexport_preserves_original_session_rights` (PROVED) — F-12 closed (half 1).** A
+re-export under a NEW session does not strip the ORIGINAL session's bucket: if the original session
+`s₀` had a positive bucket, it STILL has the same positive bucket after the new session `s₁ ≠ s₀`
+mints a ref. So the original session retains the right to drop the refs it minted. (Modelled as: the
+holder's `s₀` bucket is unchanged when its `sessions` grows a distinct `s₁` entry.) -/
+theorem f12_reexport_preserves_original_session_rights
+    (rc : HolderRef) (s₀ s₁ : Session) (k : Nat)
+    (hne : s₁ ≠ s₀)
+    (hrc' : HolderRef)
+    (hadd : hrc'.sessions = (s₁, k) :: rc.sessions) :
+    sessionCount hrc' s₀ = sessionCount rc s₀ := by
+  unfold sessionCount
+  rw [hadd]
+  simp only [List.find?_cons]
+  have : (s₁ == s₀) = false := by simpa using hne
+  rw [this]
+
+/-- **`f12_session_drops_only_its_own` (PROVED) — F-12 closed (half 2).** A drop on a holder with two
+session buckets touches ONLY the named session: the OTHER session's bucket is left intact, so the new
+session can never reclaim a ref the original session minted, and vice-versa. We witness this on the
+concrete `reexportTable`: dropping session 99 leaves federation 10's session-7 bucket = 2 untouched. -/
+theorem f12_session_drops_only_its_own :
+    (findHolder (decHolderSession reexportTable 10 99) 10).map (fun rc => sessionCount rc 7)
+      = some 2 := by
+  decide
+
+/-! ### §4b — the bridge predicate is NON-VACUOUS (witnessed TRUE and FALSE).
 
 `SwissHoldersCoherent` and `NoDupFeds` are real predicates: each is satisfied by a concrete table and
-REFUTED by another. Coherence is TRUE when the scalar matches the holder sum (`2` over `demoTable`)
-and FALSE when it does not (`3 ≠ 2`); `NoDupFeds` admits `demoTable` and REJECTS a duplicate-key
-table. So the bridge theorems are not vacuously discharged by an unsatisfiable hypothesis. -/
+REFUTED by another. So the bridge theorems are not vacuously discharged by an unsatisfiable
+hypothesis. -/
 
 /-- Coherence holds when the scalar `refcount` equals the per-holder sum (`demoTable` sums to `2`). -/
 theorem coherent_demo : SwissHoldersCoherent 2 demoTable := by
@@ -630,7 +720,7 @@ theorem not_coherent_demo : ¬ SwissHoldersCoherent 3 demoTable := by
 
 /-- After an accepting drop on `demoTable` (holder `10`, its session `42`), coherence to scalar `1`
 holds — the per-holder sum fell from `2` to `1` in lockstep with the §1 scalar `2 - 1`. -/
-theorem coherent_after_drop : SwissHoldersCoherent 1 (decHolder demoTable 10) := by
+theorem coherent_after_drop : SwissHoldersCoherent 1 (decHolderSession demoTable 10 42) := by
   unfold SwissHoldersCoherent; decide
 
 /-- `NoDupFeds` admits the well-formed two-holder table. -/
@@ -638,15 +728,16 @@ theorem nodup_demo : NoDupFeds demoTable := by unfold NoDupFeds; decide
 
 /-- `NoDupFeds` REJECTS a duplicate-key table — the key-uniqueness invariant rules something out, so
 the unit-exactness it underwrites is not vacuous. -/
-theorem not_nodup_dup : ¬ NoDupFeds [(10, { count := 1, session := 1 }), (10, { count := 1, session := 2 })] := by
+theorem not_nodup_dup :
+    ¬ NoDupFeds [(10, { count := 1, sessions := [(1, 1)] }), (10, { count := 1, sessions := [(2, 1)] })] := by
   unfold NoDupFeds; decide
 
 /-- End-to-end concrete witness of `bridge_processDrop_tracks_refcount`: starting coherent at scalar
-`2`, the §2 accept-path post-table sums to `1 = 2 - 1`. -/
+`2`, the §2 accept-path post-table (drop holder `10` on its session `42`) sums to `1 = 2 - 1`. -/
 theorem bridge_tracks_demo :
-    totalRefs (processDrop demoTable 10 (some 42)).2 = 2 - 1 :=
-  bridge_processDrop_tracks_refcount 2 demoTable 10 { count := 1, session := 42 }
-    nodup_demo (by decide) (by decide) coherent_demo
+    totalRefs (processDrop demoTable 10 42).2 = 2 - 1 :=
+  bridge_processDrop_tracks_refcount 2 demoTable 10 { count := 1, sessions := [(42, 1)] } 42
+    nodup_demo (by decide) (by decide) (by decide) coherent_demo
 
 end Differential
 
@@ -659,6 +750,9 @@ end Differential
 #assert_axioms wrong_session_preserves_total
 #assert_axioms byzantine_cannot_drop_victim_ref
 #assert_axioms right_session_decrements
+#assert_axioms f11_session_free_drop_denied
+#assert_axioms f12_reexport_preserves_original_session_rights
+#assert_axioms f12_session_drops_only_its_own
 #assert_axioms decHolderMap_not_mem
 #assert_axioms decHolderFilter_not_mem
 #assert_axioms decHolder_not_mem
