@@ -813,6 +813,59 @@ pub enum StateConstraint {
         set: RenouncedSet,
     },
 
+    // ─── Policy-combinator core (the orthogonal atom set mirrored from
+    //     the Lean `Exec.Program` algebra, `metatheory/Dregg2/Exec/Program.lean`).
+    //     These close the value-set / structure / arithmetic / DAG gaps the
+    //     legacy catalog could not express; fields read as big-endian u64. ───
+    /// **Value allowlist:** `new[index]` must be one of `set` (the one-sided
+    /// value membership the pair-table `AllowedTransitions` cannot express).
+    /// Mirrors Lean `SimpleConstraint.memberOf`. Fields compared as big-endian u64.
+    MemberOf { index: u8, set: Vec<u64> },
+
+    /// **Namespace / path prefix containment:** the ordered scalar path read from
+    /// `seg_indices` (each a slot read as big-endian u64) must START WITH `prefix`.
+    /// The canonical nameservice "register a subdomain only under an owned
+    /// namespace" policy. Mirrors Lean `SimpleConstraint.prefixOf`. Fail-closed:
+    /// a path shorter than `prefix` is rejected.
+    PrefixOf { seg_indices: Vec<u8>, prefix: Vec<u64> },
+
+    /// **Two-sided absolute band:** `lo <= new[index] <= hi` (the ABSOLUTE
+    /// counterpart to the RELATIVE `FieldDeltaInRange`). Mirrors Lean
+    /// `SimpleConstraint.inRangeTwoSided`. Fields compared as big-endian u64.
+    InRangeTwoSided { index: u8, lo: u64, hi: u64 },
+
+    /// **Real two-sided delta:** `|new[index] - old[index]| <= d` (symmetric;
+    /// the legacy delta variants are one-sided or relative-range). Mirrors Lean
+    /// `SimpleConstraint.deltaBounded`. Requires old state (transition predicate).
+    DeltaBounded { index: u8, d: u64 },
+
+    /// **Affine inequality:** `Σ kᵢ·new[fᵢ] <= c` over named slots
+    /// (`terms : Vec<(i64 coefficient, u8 slot)>`). The general multi-field
+    /// arithmetic relation; subsumes `FieldLteField` and gives price-band /
+    /// `a+b <= c` invariants. Mirrors Lean `StateConstraint.affineLe`. Maps to a
+    /// PLONK linear gate. Slots read as big-endian u64, lifted to i128 for the sum.
+    AffineLe { terms: Vec<(i64, u8)>, c: i64 },
+
+    /// **Affine equation:** `Σ kᵢ·new[fᵢ] = c`. Subsumes `SumEquals` and
+    /// re-expresses conservation. Mirrors Lean `StateConstraint.affineEq`.
+    AffineEq { terms: Vec<(i64, u8)>, c: i64 },
+
+    /// **DAG reachability / prerequisite:** the label read from `new[from_index]`
+    /// must reach `to_label` in the reachability `edges` (reflexive-transitive
+    /// closure). The workflow-prerequisite predicate (CWM advance / SGM admit).
+    /// Mirrors Lean `StateConstraint.reachable` (the `ClearanceGraph.dominatesD`
+    /// fuel-bounded search). `edges : Vec<(u64, u64)>` are `(dominator, dominated)`.
+    Reachable {
+        from_index: u8,
+        to_label: u64,
+        edges: Vec<(u64, u64)>,
+    },
+
+    /// **n-ary conjunction** over `SimpleStateConstraint`s — the `allOf` the
+    /// legacy 2-level grammar lacked (it had only single-level `AnyOf`). Mirrors
+    /// the Lean `Pred.allOf` Boolean layer. Empty `AllOf` admits (vacuous AND).
+    AllOf { variants: Vec<SimpleStateConstraint> },
+
     // ─── Escape hatch ───
     /// DSL-authored predicate. The executor evaluates by hash lookup in
     /// the dregg-dsl runtime expression table. Per eval §5.4 the variant
@@ -1983,6 +2036,112 @@ fn evaluate_constraint_full(
             )
         }
 
+        // ─── Policy-combinator core (mirrors Lean `Exec.Program`) ───
+        StateConstraint::MemberOf { index, set } => {
+            let idx = check_index(*index)?;
+            let v = field_to_u64(&new_state.fields[idx]);
+            if !set.contains(&v) {
+                return violated(constraint, format!("field[{idx}] = {v} not in allowlist"));
+            }
+            Ok(())
+        }
+
+        StateConstraint::PrefixOf {
+            seg_indices,
+            prefix,
+        } => {
+            // Fail-closed: a path shorter than the queried prefix cannot match.
+            if prefix.len() > seg_indices.len() {
+                return violated(constraint, "path shorter than prefix".into());
+            }
+            for (k, want) in prefix.iter().enumerate() {
+                let idx = check_index(seg_indices[k])?;
+                let got = field_to_u64(&new_state.fields[idx]);
+                if got != *want {
+                    return violated(
+                        constraint,
+                        format!("path segment {k} = {got}, prefix wants {want}"),
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        StateConstraint::InRangeTwoSided { index, lo, hi } => {
+            let idx = check_index(*index)?;
+            let v = field_to_u64(&new_state.fields[idx]);
+            if !(v >= *lo && v <= *hi) {
+                return violated(
+                    constraint,
+                    format!("field[{idx}] = {v} outside [{lo}, {hi}]"),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::DeltaBounded { index, d } => {
+            let idx = check_index(*index)?;
+            match old_state {
+                Some(old) => {
+                    let delta = field_delta_i128(&old.fields[idx], &new_state.fields[idx]);
+                    if delta.unsigned_abs() > (*d as u128) {
+                        return violated(
+                            constraint,
+                            format!("|field[{idx}] delta| = {} > {d}", delta.unsigned_abs()),
+                        );
+                    }
+                }
+                None => {
+                    if new_state.nonce != 0 {
+                        return Err(ProgramError::TransitionCheckRequiresOldState {
+                            constraint: constraint.clone(),
+                            index: *index,
+                        });
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        StateConstraint::AffineLe { terms, c } => {
+            let sum = affine_sum(terms, new_state)?;
+            if sum > (*c as i128) {
+                return violated(constraint, format!("affine sum {sum} > {c}"));
+            }
+            Ok(())
+        }
+
+        StateConstraint::AffineEq { terms, c } => {
+            let sum = affine_sum(terms, new_state)?;
+            if sum != (*c as i128) {
+                return violated(constraint, format!("affine sum {sum} != {c}"));
+            }
+            Ok(())
+        }
+
+        StateConstraint::Reachable {
+            from_index,
+            to_label,
+            edges,
+        } => {
+            let idx = check_index(*from_index)?;
+            let from = field_to_u64(&new_state.fields[idx]);
+            if !reachable_closure(edges, from, *to_label) {
+                return violated(
+                    constraint,
+                    format!("label {from} does not reach {to_label} in DAG"),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::AllOf { variants } => {
+            for v in variants {
+                evaluate_simple_constraint(v, new_state, old_state, ctx, witnesses)?;
+            }
+            Ok(())
+        }
+
         StateConstraint::Witnessed { wp } => {
             let kind_name: &'static str = match wp.kind {
                 crate::predicate::WitnessedPredicateKind::Dfa => "Dfa",
@@ -2301,6 +2460,36 @@ pub fn bound_delta_pair_matches(
         DeltaRelation::Equal => local_delta == peer_delta,
         DeltaRelation::EqualAndOpposite => local_delta + peer_delta == 0,
     })
+}
+
+/// `Σ kᵢ·new[fᵢ]` over named slots (big-endian u64 lifted to i128). Fail-closed on a
+/// bad slot index. Mirrors Lean `Exec.affineSum`.
+fn affine_sum(terms: &[(i64, u8)], state: &CellState) -> Result<i128, ProgramError> {
+    let mut sum: i128 = 0;
+    for (k, idx) in terms {
+        let i = check_index(*idx)?;
+        let x = field_to_u64(&state.fields[i]) as i128;
+        sum += (*k as i128) * x;
+    }
+    Ok(sum)
+}
+
+/// Fuel-bounded reflexive-transitive reachability over `(dominator, dominated)` edges
+/// (`a` reaches `b`). Mirrors Lean `ClearanceGraph.dominatesFuel`/`dominatesD`: fuel =
+/// `edges.len() + 1` bounds the search depth on a finite graph.
+fn reachable_closure(edges: &[(u64, u64)], a: u64, b: u64) -> bool {
+    fn go(edges: &[(u64, u64)], a: u64, b: u64, fuel: usize) -> bool {
+        if fuel == 0 {
+            return false;
+        }
+        if a == b {
+            return true;
+        }
+        edges
+            .iter()
+            .any(|(src, mid)| *src == a && go(edges, *mid, b, fuel - 1))
+    }
+    go(edges, a, b, edges.len() + 1)
 }
 
 /// Compare two field elements as unsigned big-endian: a >= b.
