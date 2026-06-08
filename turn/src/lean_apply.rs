@@ -250,6 +250,26 @@ pub fn wire_state_to_ledger(
         caps_by_holder.insert(*holder, edges);
     }
 
+    // The produced LIFECYCLE side-table, keyed by cell Nat (the wire `lifecycle` carries the
+    // post-state discriminant 0=Live / 1=Sealed / 3=Destroyed; a Live cell carries NO entry — the
+    // kernel's `cellNatsOfFun` drops zero, so "absent ⇒ Live"). `compute_canonical_state_commitment`
+    // folds the cell's `lifecycle` in, so for the Lean-produced `.root()` to equal Rust's we must
+    // install the produced discriminant onto the reconstituted cell.
+    //
+    // BYTE-FIDELITY (the honest boundary): only `CellLifecycle::Live` has NO payload, so it is the
+    // ONLY discriminant we can reconstitute BYTE-EXACTLY from the wire (which carries the discriminant
+    // alone, not `reason_hash`/`sealed_at`/`destroyed_at`). A produced `Live` therefore round-trips
+    // and AGREES on `.root()` — this is what makes `CellUnseal` (Sealed→Live) root-AGREEING. A
+    // produced Sealed(1)/Destroyed(3) carries a payload the wire does NOT (yet) carry, so we CANNOT
+    // reproduce the Rust commitment bytes; those cells keep the TEMPLATE lifecycle and the divergence
+    // is exact and detectable (`CellSeal`/`CellDestroy` stay characterized root-gaps, kept off the
+    // install gate by `forest_is_root_agreeing`). We install Live (clearing a stale template Sealed);
+    // we do NOT fabricate a Sealed/Destroyed payload we cannot bind.
+    let mut lifecycle_disc_by_nat: HashMap<u64, u64> = HashMap::new();
+    for (cell_nat, disc) in &ws.lifecycle {
+        lifecycle_disc_by_nat.insert(*cell_nat, *disc);
+    }
+
     for (nat, value) in &ws.cells {
         let cell_id = *inv_id_map
             .get(nat)
@@ -289,6 +309,20 @@ pub fn wire_state_to_ledger(
         let empty: Vec<Cap> = Vec::new();
         let edges = caps_by_holder.get(nat).copied().unwrap_or(&empty);
         cell.capabilities = rebuild_capabilities(edges, inv_id_map)?;
+
+        // Install the produced LIFECYCLE discriminant (→ the cell commitment's `lifecycle` fold).
+        // The wire carries the discriminant ONLY; `CellLifecycle::Live` (absent ⇒ disc 0) is the
+        // single payload-free state, so we reconstitute it byte-exactly — this closes `CellUnseal`
+        // (Sealed→Live) to root-AGREEING. A produced Sealed(1)/Destroyed(3) carries a
+        // `reason_hash`/`sealed_at` / `death_certificate_hash`/`destroyed_at` payload the wire does
+        // NOT carry, so we leave the TEMPLATE lifecycle (the exact, detectable divergence that keeps
+        // `CellSeal`/`CellDestroy` characterized root-gaps); we never fabricate an unbound payload.
+        match lifecycle_disc_by_nat.get(nat).copied() {
+            None | Some(0) => {
+                cell.lifecycle = dregg_cell::lifecycle::CellLifecycle::Live;
+            }
+            Some(_) => { /* Sealed/Destroyed payload not wire-carried — keep template (gap). */ }
+        }
 
         out_cells.insert(cell_id, cell);
     }
