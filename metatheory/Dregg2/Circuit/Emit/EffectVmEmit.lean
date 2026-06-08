@@ -67,6 +67,17 @@ def FIELD_BASE : Nat := 3
 def CAP_ROOT   : Nat := 11
 def STATE_COMMIT : Nat := 12
 def RESERVED   : Nat := 13
+
+/-- **`FIELDS_ROOT` (record-layer STAGE 2).** The committed user-field-MAP root
+(`_RECORD-LAYER-UPGRADE.md` §B.5, `Exec.FieldsMap.fieldsRoot`) carried in the EffectVM state block.
+It is width-neutral: it reuses the single state column GROUP-4 currently leaves UNABSORBED — the
+`RESERVED` cell (col 13) — as the carrier (the transfer-keystone `reserved_not_bound_by_commitment`
+finding identified `RESERVED` as the lone un-hashed state cell, so binding it costs no new column).
+On a record / map-write row the runtime writes the row's `fields_root` felt here; on every legacy
+row the carrier is `0` (the empty-map circuit root), so the legacy `state_commit` is byte-identical
+to the pre-STAGE-2 `H4(inter1, inter2, inter3, 0)`. STAGE 2 absorbs THIS cell into `state_commit`
+via GROUP-4 site 3's previously-spare 4th input (`_IR-EXTENSION-DESIGN.md:23,158-162`). -/
+def FIELDS_ROOT : Nat := 13
 end state
 
 /-! Selector-column indices (`sel::*`). -/

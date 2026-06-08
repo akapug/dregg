@@ -20,12 +20,13 @@
 //!
 //! ## Coverage (HONEST)
 //!
-//! 44 UNIQUE descriptors are registered (the Lean emit produces 48 entries; the
+//! 45 UNIQUE descriptors are registered (the Lean emit produces 49 entries; the
 //! `attenuateA` cap-root-move object is SHARED by 5 emit entries —
 //! attenuate / delegate / delegateAtten / introduce / revoke — collapsing to one
-//! JSON, so 48 → 44 distinct bodies. Of those 5, four bind a Rust selector
+//! JSON, so 49 → 45 distinct bodies. Of those 5, four bind a Rust selector
 //! (ATTENUATE_CAPABILITY=48, REVOKE_DELEGATION=30, INTRODUCE=35, GRANT_CAP=3 via
-//! delegate); delegateAtten has no distinct selector.).
+//! delegate); delegateAtten has no distinct selector. The 45th is the RECORD-LAYER
+//! STAGE 2 `record` descriptor — transfer + `fields_root`-absorbing GROUP-4, name-only.).
 //!
 //!   * `SELECTOR_DESCRIPTORS`: 44 of the 54 EffectVM selectors carry a descriptor
 //!     (the 10 others — NOOP, SET_FIELD, the obligation family, CUSTOM, SLASH,
@@ -38,6 +39,9 @@
 //!     `swissHandoffA`) whose effect has NO dedicated Rust selector in the current
 //!     `sel::` enum — they are real, registered by name, but not yet selectable by
 //!     index (the cutover step that adds their selectors will move them up).
+//!     (The RECORD-LAYER STAGE 2 `record` descriptor is registered in
+//!     `ALL_DESCRIPTORS` directly — it is the transfer descriptor's `fields_root`-
+//!     binding variant, selected by name on a map-write row, not a new selector.)
 //!
 //! ## PARTIAL / IR-BLOCKED descriptors (registered honestly)
 //!
@@ -149,6 +153,14 @@ pub const DREGG_EFFECTVM_SWISSHANDOFFA_V1_JSON: &str = include_str!("../descript
 pub const DREGG_EFFECTVM_SWISSHANDOFFA_V1_FP: &str = "6703274e8ef64e24afbf67093175472cb8bc1266ee6f5a7678848fecc4e45b34";
 pub const DREGG_EFFECTVM_TRANSFER_V1_JSON: &str = include_str!("../descriptors/dregg-effectvm-transfer-v1.json");
 pub const DREGG_EFFECTVM_TRANSFER_V1_FP: &str = "5825427a34cf86919694a630df94c01e9f98cb2d11531f1d98a7e339394df700";
+// RECORD-LAYER STAGE 2 (`_RECORD-LAYER-UPGRADE.md` §B.5/§E Stage 2): the transfer descriptor with
+// GROUP-4 site 3's previously-spare 4th input ({"t":"zero"}) replaced by the `fields_root` carrier
+// cell (col 89 = state_after.FIELDS_ROOT = the RESERVED slot), absorbing the user-field-map root into
+// `state_commit`. Width-neutral (186); constraints/ranges/sites 0..2 byte-identical to transfer.
+// Verified by construction in `Dregg2.Circuit.Emit.EffectVmEmitRecordRoot` (anti-ghost:
+// `recordDescriptor_commit_binds_fieldsRoot`).
+pub const DREGG_EFFECTVM_RECORD_V1_JSON: &str = include_str!("../descriptors/dregg-effectvm-record-v1.json");
+pub const DREGG_EFFECTVM_RECORD_V1_FP: &str = "295c53af8da86b299aeb507e76796c2711202175a0086250b8185b88bf2793da";
 pub const DREGG_EFFECTVM_UNSEAL_V1_JSON: &str = include_str!("../descriptors/dregg-effectvm-unseal-v1.json");
 pub const DREGG_EFFECTVM_UNSEAL_V1_FP: &str = "f7ce0ac00c4721a0c8940cb45dd0744878e6fabaaa11c7d894cc5c6cd4fce11f";
 pub const DREGG_EFFECTVM_VALIDATEHANDOFFA_V2_JSON: &str = include_str!("../descriptors/dregg-effectvm-validateHandoffA-v2.json");
@@ -255,6 +267,7 @@ pub const ALL_DESCRIPTORS: &[(&str, &str, &str)] = &[
     ("dregg-effectvm-transfer-v1", DREGG_EFFECTVM_TRANSFER_V1_JSON, DREGG_EFFECTVM_TRANSFER_V1_FP),
     ("dregg-effectvm-unseal-v1", DREGG_EFFECTVM_UNSEAL_V1_JSON, DREGG_EFFECTVM_UNSEAL_V1_FP),
     ("dregg-effectvm-validateHandoffA-v2", DREGG_EFFECTVM_VALIDATEHANDOFFA_V2_JSON, DREGG_EFFECTVM_VALIDATEHANDOFFA_V2_FP),
+    ("dregg-effectvm-record-v1", DREGG_EFFECTVM_RECORD_V1_JSON, DREGG_EFFECTVM_RECORD_V1_FP),
 ];
 
 /// Look up the EffectVM descriptor JSON bound to a running-prover **selector index**
@@ -404,7 +417,7 @@ mod tests {
     /// stale committed JSON, fails here.
     #[test]
     fn all_descriptors_parse_and_match_fingerprint() {
-        assert_eq!(ALL_DESCRIPTORS.len(), 44, "expected 44 unique descriptors");
+        assert_eq!(ALL_DESCRIPTORS.len(), 45, "expected 45 unique descriptors");
         for (name, json, fp) in ALL_DESCRIPTORS {
             // (a) fingerprint binding
             let got = sha256_hex(json.as_bytes());

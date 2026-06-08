@@ -63,6 +63,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitSwissExport
 import Dregg2.Circuit.Emit.EffectVmEmitSwissHandoff
 import Dregg2.Circuit.Emit.EffectVmEmitUnseal
 import Dregg2.Circuit.Emit.EffectVmEmitValidateHandoff
+import Dregg2.Circuit.Emit.EffectVmEmitRecordRoot
 
 open Dregg2.Circuit.Emit.EffectVmEmit
 
@@ -123,7 +124,12 @@ def allEntries : List Entry :=
   , ⟨"swissExportVmDescriptor",         EffectVmEmitSwissExport.swissExportVmDescriptor⟩
   , ⟨"swissHandoffVmDescriptor",        EffectVmEmitSwissHandoff.swissHandoffVmDescriptor⟩
   , ⟨"unsealVmDescriptor",              EffectVmEmitUnseal.unsealVmDescriptor⟩
-  , ⟨"validateHandoffVmDescriptor",     EffectVmEmitValidateHandoff.validateHandoffVmDescriptor⟩ ]
+  , ⟨"validateHandoffVmDescriptor",     EffectVmEmitValidateHandoff.validateHandoffVmDescriptor⟩
+    -- RECORD-LAYER STAGE 2: transfer descriptor + `fields_root`-absorbing GROUP-4 (site 3's
+    -- spare 4th input now binds the user-field-map root cell into `state_commit`). Width-neutral
+    -- (186): the carrier is the existing `state.FIELDS_ROOT` (= RESERVED, col 89) within the base
+    -- layout, so the generic descriptor interpreter runs it with no width change.
+  , ⟨"recordVmDescriptor",              EffectVmEmitRecordRoot.recordVmDescriptor⟩ ]
 
 def main : IO Unit := do
   for e in allEntries do

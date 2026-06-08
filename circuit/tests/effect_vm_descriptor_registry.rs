@@ -23,7 +23,7 @@ use dregg_circuit::lean_descriptor_air::parse_vm_descriptor;
 /// EffectVM interpreter, and the parsed `name` round-trips the registry key.
 #[test]
 fn every_registered_descriptor_parses() {
-    assert_eq!(ALL_DESCRIPTORS.len(), 44, "expected 44 unique descriptors");
+    assert_eq!(ALL_DESCRIPTORS.len(), 45, "expected 45 unique descriptors");
     for (name, json, fp) in ALL_DESCRIPTORS {
         let by_name = descriptor_for_name(name).expect("name must resolve");
         assert_eq!(*json, by_name, "{name}: descriptor_for_name mismatch");
