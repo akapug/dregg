@@ -844,6 +844,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(lean_lib_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_handler_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_finalize_gate_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_strand_admit_present)");
 
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
@@ -945,6 +946,24 @@ fn main() {
         );
     }
 
+    // The verified STRAND-ADMISSION GATE export (`dregg_strand_admit`) lives in
+    // `Dregg2.Distributed.StrandAdmission`, also OUTSIDE the FFI module's import closure. Same
+    // splice/probe discipline as the finality gate: once the module is `lake build`-t its object is
+    // spliced in (the self-linking closure follows the C shim's `initialize_…_StrandAdmission` ref)
+    // and this symbol appears; until then we compile the bridge out and the federation falls back to
+    // the Rust admission gate.
+    let strand_admit_present = archive_exports(&lean_archive, "dregg_strand_admit");
+    if strand_admit_present {
+        println!("cargo:rustc-cfg=dregg_strand_admit_present");
+    } else {
+        println!(
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a lacks `dregg_strand_admit` — \
+             the verified strand-admission bridge is compiled out (federation falls back to the \
+             Rust gate). Rebuild the archive (it splices Dregg2.Distributed.StrandAdmission) to \
+             enable the Lean-backed F-4 admission gate."
+        );
+    }
+
     // Compile the C init shim (it uses the `static inline` runtime helpers from
     // <lean/lean.h>, which have no linkable symbol and so must be used from C).
     //
@@ -963,6 +982,9 @@ fn main() {
     }
     if finalize_gate_present {
         shim.define("DREGG_FINALIZE_GATE", None);
+    }
+    if strand_admit_present {
+        shim.define("DREGG_STRAND_ADMIT", None);
     }
     // We drive the link with `rustc-link-lib` / `rustc-link-search` directives, NOT
     // `rustc-link-arg`. WHY: with the package's `links = "dregg_lean"` key, build-script

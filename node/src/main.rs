@@ -24,6 +24,7 @@ mod routing_table;
 mod executor_setup;
 mod starbridge_seed;
 mod state;
+mod strand_admission_gate;
 mod turn_proving;
 mod ws;
 
