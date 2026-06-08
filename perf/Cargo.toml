@@ -1,0 +1,33 @@
+[package]
+name = "dregg-perf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+# Performance harnesses for the dregg PRODUCTION turn-proof path.
+#
+# This crate exists to put real, reproducible numbers on the question the
+# product/polis assessment asks: how long does a real turn take to prove and
+# verify, and how big is the proof? It benchmarks `prove_effect_vm_p3` /
+# `verify_effect_vm_p3` — the AUDITED Plonky3 prover the SDK's
+# `full_turn_proof` routes a turn's Effect-VM state transition through — over
+# honest Effect-VM traces produced by the same `generate_effect_vm_trace`
+# generator the executor witness path uses. No estimates; we time the code that
+# actually runs.
+
+[dependencies]
+dregg-circuit = { path = "../circuit" }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "turn_proof"
+harness = false
+
+[[bin]]
+name = "perf-summary"
+path = "src/bin/perf_summary.rs"
