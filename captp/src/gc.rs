@@ -35,15 +35,41 @@ use crate::{FederationId, StrandId};
 pub type SessionId = u64;
 
 /// Per-holder reference count with activity tracking.
+///
+/// # Per-ref (per-session) session scoping — F-12 fix
+///
+/// References are tracked **per session**, not collapsed onto a single
+/// `session_id` for the whole holder. `sessions` maps each session id that has
+/// minted a reference to the number of refs minted under THAT session. The
+/// holder's total `count` is the sum of these per-session buckets.
+///
+/// This is what makes session validation honest under re-export: a re-export to
+/// the same federation on a NEW session adds a bucket for the new session and
+/// leaves every existing session's bucket (and its drop rights) untouched. The
+/// original session keeps the right to drop exactly the refs IT minted, and the
+/// new session can only drop refs it minted — neither can drop the other's.
+/// (Before this fix a single per-holder `session_id` was overwritten by the most
+/// recent export, so a re-export silently transferred drop rights for ALL of the
+/// holder's refs to the new session — the F-12 finding.)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RefCount {
-    /// How many references this holder has to the capability.
+    /// How many references this holder has to the capability (the sum over
+    /// `sessions`). Kept as a maintained field so existing readers (and the
+    /// `total_refs == Σ count` invariant) are unchanged.
     pub count: u64,
     /// The block height at which this holder last acquired a reference.
     pub last_activity: u64,
-    /// The session ID under which this reference was created.
-    /// DropRef messages must carry a matching session ID to be accepted.
-    pub session_id: SessionId,
+    /// Per-session reference counts: `session_id -> refs minted under it`.
+    /// A DropRef carrying `session_id = s` may only decrement `sessions[s]`.
+    /// The sum of all buckets is `count`.
+    pub sessions: HashMap<SessionId, u64>,
+}
+
+impl RefCount {
+    /// The session bucket of this holder, if it minted any refs under `session`.
+    pub fn session_count(&self, session: SessionId) -> u64 {
+        self.sessions.get(&session).copied().unwrap_or(0)
+    }
 }
 
 /// Export table entry: tracks who holds references to one of our capabilities.
@@ -129,14 +155,15 @@ impl ExportGcManager {
             .or_insert_with(|| RefCount {
                 count: 0,
                 last_activity: current_height,
-                session_id,
+                sessions: HashMap::new(),
             });
 
         ref_count.count += 1;
         ref_count.last_activity = current_height;
-        // Update session_id to the most recent session (re-export to same federation
-        // on a new session supersedes the old session_id).
-        ref_count.session_id = session_id;
+        // F-12: mint the ref into THIS session's bucket. A re-export under a new
+        // session adds to (or creates) that session's bucket and never touches the
+        // buckets of other sessions, so the original session keeps its drop rights.
+        *ref_count.sessions.entry(session_id).or_insert(0) += 1;
         entry.total_refs += 1;
     }
 
@@ -147,11 +174,23 @@ impl ExportGcManager {
     /// cleaned up. Returns `DropResult::Invalid` if the federation doesn't hold
     /// a reference or the cell isn't exported.
     ///
-    /// This variant does NOT perform session validation and is retained for
-    /// backward compatibility with code that doesn't track session IDs.
-    /// Prefer [`process_drop_with_session`] for session-aware callers.
-    pub fn process_drop(&mut self, cell_id: CellId, from_federation: FederationId) -> DropResult {
-        self.process_drop_inner(cell_id, from_federation, None)
+    /// **DENIED (F-11): the session-free drop path is closed.**
+    ///
+    /// A DropRef with no session credential can never be authenticated as coming
+    /// from the holder that minted the ref, so accepting it is a premature-reclaim
+    /// hole: any caller who knew `(cell_id, victim_federation)` could decrement the
+    /// victim's refcount and, at zero, force a `CanRevoke` of a still-wanted
+    /// capability. This is exactly the F-11 finding. The method is retained only so
+    /// legacy call sites compile; it now **fails closed** — it performs NO mutation
+    /// and always returns [`DropResult::Invalid`]. Callers MUST present a session via
+    /// [`process_drop_with_session`] (or [`process_drop_by_strand`]).
+    #[deprecated(
+        since = "0.2.0",
+        note = "session-free drops are denied (F-11 premature-reclaim); use process_drop_with_session"
+    )]
+    pub fn process_drop(&mut self, _cell_id: CellId, _from_federation: FederationId) -> DropResult {
+        // Fail-closed: no session ⇒ no authority to drop. Never mutates state.
+        DropResult::Invalid
     }
 
     /// Process a `DropRef` with session-level validation.
@@ -165,15 +204,32 @@ impl ExportGcManager {
         from_federation: FederationId,
         session_id: SessionId,
     ) -> DropResult {
-        self.process_drop_inner(cell_id, from_federation, Some(session_id))
+        self.process_drop_inner(cell_id, from_federation, session_id)
     }
 
-    /// Internal: process a drop with optional session validation.
+    /// Internal: process a drop with **mandatory** per-session validation (F-11/F-12).
+    ///
+    /// `session` identifies which session is requesting the drop. The decrement is
+    /// applied to that session's bucket ONLY (`RefCount.sessions[session]`):
+    ///
+    /// * unknown cell / unknown holder ⇒ `Invalid` (no mutation);
+    /// * the session minted no refs on this holder (`sessions[session]` absent or 0)
+    ///   ⇒ `Invalid` (no mutation) — this is the Byzantine / wrong-session reject
+    ///   AND the F-11 unauthenticated-drop reject (a forged/absent session decrements
+    ///   nothing);
+    /// * otherwise decrement `sessions[session]` and the holder's `count` and the
+    ///   cell's `total_refs` by exactly one, removing emptied buckets / holders /
+    ///   exports at zero.
+    ///
+    /// Because the decrement is scoped to the requesting session's own bucket, the
+    /// original session keeps the right to drop the refs it minted even after a
+    /// re-export under a different session, and a session can never drop refs another
+    /// session minted (F-12).
     fn process_drop_inner(
         &mut self,
         cell_id: CellId,
         from_federation: FederationId,
-        expected_session: Option<SessionId>,
+        session: SessionId,
     ) -> DropResult {
         let entry = match self.exports.get_mut(&cell_id) {
             Some(e) => e,
@@ -185,17 +241,17 @@ impl ExportGcManager {
             None => return DropResult::Invalid,
         };
 
-        if ref_count.count == 0 {
-            return DropResult::Invalid;
-        }
+        // F-11/F-12: the requesting session may only drop refs IT minted. A wrong,
+        // forged, or absent session bucket (count 0) authorizes nothing.
+        let bucket = match ref_count.sessions.get_mut(&session) {
+            Some(b) if *b > 0 => b,
+            _ => return DropResult::Invalid,
+        };
 
-        // Session-level validation: reject drops from non-matching sessions.
-        if let Some(expected) = expected_session {
-            if ref_count.session_id != expected {
-                return DropResult::Invalid;
-            }
+        *bucket -= 1;
+        if *bucket == 0 {
+            ref_count.sessions.remove(&session);
         }
-
         ref_count.count -= 1;
         entry.total_refs -= 1;
 
@@ -446,7 +502,8 @@ mod tests {
         mgr.record_export(cell, fed, 100);
         assert_eq!(mgr.get(&cell).unwrap().total_refs, 1);
 
-        let result = mgr.process_drop(cell, fed);
+        // record_export mints under session 0; drop on session 0 reclaims.
+        let result = mgr.process_drop_with_session(cell, fed, 0);
         assert_eq!(result, DropResult::CanRevoke);
         assert_eq!(mgr.get(&cell).unwrap().total_refs, 0);
     }
@@ -460,13 +517,13 @@ mod tests {
         mgr.record_export(cell, fed_b(), 101);
         assert_eq!(mgr.get(&cell).unwrap().total_refs, 2);
 
-        // Drop from A: B still holds it
-        let result = mgr.process_drop(cell, fed_a());
+        // Drop from A (session 0): B still holds it
+        let result = mgr.process_drop_with_session(cell, fed_a(), 0);
         assert_eq!(result, DropResult::StillHeld);
         assert_eq!(mgr.get(&cell).unwrap().total_refs, 1);
 
-        // Drop from B: now can revoke
-        let result = mgr.process_drop(cell, fed_b());
+        // Drop from B (session 0): now can revoke
+        let result = mgr.process_drop_with_session(cell, fed_b(), 0);
         assert_eq!(result, DropResult::CanRevoke);
     }
 
@@ -482,12 +539,12 @@ mod tests {
         assert_eq!(mgr.get(&cell).unwrap().total_refs, 2);
         assert_eq!(mgr.get(&cell).unwrap().holders[&fed].count, 2);
 
-        // First drop: still held
-        let result = mgr.process_drop(cell, fed);
+        // First drop (session 0): still held
+        let result = mgr.process_drop_with_session(cell, fed, 0);
         assert_eq!(result, DropResult::StillHeld);
 
-        // Second drop: can revoke
-        let result = mgr.process_drop(cell, fed);
+        // Second drop (session 0): can revoke
+        let result = mgr.process_drop_with_session(cell, fed, 0);
         assert_eq!(result, DropResult::CanRevoke);
     }
 
@@ -499,7 +556,7 @@ mod tests {
         mgr.record_export(cell, fed_a(), 100);
 
         // C never held this
-        let result = mgr.process_drop(cell, fed_c());
+        let result = mgr.process_drop_with_session(cell, fed_c(), 0);
         assert_eq!(result, DropResult::Invalid);
     }
 
@@ -507,7 +564,7 @@ mod tests {
     fn export_drop_invalid_unknown_cell() {
         let mut mgr = ExportGcManager::new();
 
-        let result = mgr.process_drop(cell_1(), fed_a());
+        let result = mgr.process_drop_with_session(cell_1(), fed_a(), 0);
         assert_eq!(result, DropResult::Invalid);
     }
 
@@ -540,8 +597,8 @@ mod tests {
         mgr.record_export(cell, fed_a(), 100);
         mgr.record_export(cell2, fed_b(), 100);
 
-        // Drop cell's only ref
-        mgr.process_drop(cell, fed_a());
+        // Drop cell's only ref (session 0)
+        mgr.process_drop_with_session(cell, fed_a(), 0);
 
         // Sweep: should remove cell (0 refs) but keep cell2 (1 ref)
         let swept = mgr.gc_sweep();
@@ -627,43 +684,109 @@ mod tests {
         assert_eq!(result, DropResult::CanRevoke);
     }
 
+    /// F-11: the legacy session-free `process_drop` is now DENIED (fail-closed).
+    /// It can never reclaim — a session credential is mandatory.
     #[test]
-    fn export_drop_session_zero_accepted_by_legacy_process_drop() {
+    #[allow(deprecated)]
+    fn export_legacy_process_drop_is_denied_fail_closed() {
         let mut mgr = ExportGcManager::new();
         let cell = cell_1();
         let fed = fed_a();
 
-        // Legacy record_export uses session_id 0
+        // record_export mints under session 0; the holder really exists.
         mgr.record_export(cell, fed, 100);
+        assert_eq!(mgr.get(&cell).unwrap().total_refs, 1);
 
-        // Legacy process_drop (no session check) still works
+        // The session-free path is denied and performs NO mutation.
         let result = mgr.process_drop(cell, fed);
+        assert_eq!(result, DropResult::Invalid);
+        assert_eq!(
+            mgr.get(&cell).unwrap().total_refs,
+            1,
+            "denied legacy drop must not mutate the refcount"
+        );
+
+        // The session-aware path (session 0, the one record_export minted under) works.
+        let result = mgr.process_drop_with_session(cell, fed, 0);
         assert_eq!(result, DropResult::CanRevoke);
     }
 
+    /// F-12: a re-export under a NEW session does NOT supersede the existing
+    /// session's drop rights. Each session can drop exactly the refs it minted,
+    /// and only those — sessions are tracked per-ref, not collapsed per-holder.
     #[test]
-    fn export_session_superseded_by_reexport() {
+    fn export_reexport_does_not_steal_original_session_drop_rights() {
         let mut mgr = ExportGcManager::new();
         let cell = cell_1();
         let fed = fed_a();
 
-        // First export on session 1
+        // Two refs minted under session 1.
         mgr.record_export_with_session(cell, fed, 100, 1);
+        mgr.record_export_with_session(cell, fed, 100, 1);
+        // A re-export under session 2 (a reconnect): adds a THIRD ref in session 2's
+        // bucket; it does NOT touch session 1's two refs.
+        mgr.record_export_with_session(cell, fed, 200, 2);
+        assert_eq!(mgr.get(&cell).unwrap().total_refs, 3);
+        assert_eq!(mgr.get(&cell).unwrap().holders[&fed].session_count(1), 2);
+        assert_eq!(mgr.get(&cell).unwrap().holders[&fed].session_count(2), 1);
 
-        // Re-export on session 2 (supersedes session 1)
+        // The ORIGINAL session 1 KEEPS its drop rights — it can still drop the two
+        // refs it minted (this was the F-12 bug: previously rejected as Invalid).
+        assert_eq!(
+            mgr.process_drop_with_session(cell, fed, 1),
+            DropResult::StillHeld
+        );
+        assert_eq!(
+            mgr.process_drop_with_session(cell, fed, 1),
+            DropResult::StillHeld
+        );
+        // Session 1's bucket is now empty; a further session-1 drop is rejected
+        // (it cannot reach into session 2's ref).
+        assert_eq!(
+            mgr.process_drop_with_session(cell, fed, 1),
+            DropResult::Invalid
+        );
+        assert_eq!(mgr.get(&cell).unwrap().total_refs, 1);
+
+        // Session 2 can drop ONLY the ref it minted; the last ref reclaims.
+        assert_eq!(
+            mgr.process_drop_with_session(cell, fed, 2),
+            DropResult::CanRevoke
+        );
+    }
+
+    /// F-12: the NEW session cannot drop refs the ORIGINAL session minted.
+    #[test]
+    fn export_new_session_cannot_drop_other_sessions_refs() {
+        let mut mgr = ExportGcManager::new();
+        let cell = cell_1();
+        let fed = fed_a();
+
+        // One ref under session 1, then one re-export under session 2.
+        mgr.record_export_with_session(cell, fed, 100, 1);
         mgr.record_export_with_session(cell, fed, 200, 2);
         assert_eq!(mgr.get(&cell).unwrap().total_refs, 2);
 
-        // Drop with old session 1 fails (session was superseded to 2)
-        let result = mgr.process_drop_with_session(cell, fed, 1);
-        assert_eq!(result, DropResult::Invalid);
-
-        // Drop with current session 2 works
-        let result = mgr.process_drop_with_session(cell, fed, 2);
-        assert_eq!(result, DropResult::StillHeld);
-
-        let result = mgr.process_drop_with_session(cell, fed, 2);
-        assert_eq!(result, DropResult::CanRevoke);
+        // Session 2 drops its own ref → still held (session 1's ref remains).
+        assert_eq!(
+            mgr.process_drop_with_session(cell, fed, 2),
+            DropResult::StillHeld
+        );
+        // Session 2 has nothing left to drop; it CANNOT reach session 1's ref.
+        assert_eq!(
+            mgr.process_drop_with_session(cell, fed, 2),
+            DropResult::Invalid
+        );
+        assert_eq!(
+            mgr.get(&cell).unwrap().total_refs,
+            1,
+            "session 1's ref must survive an over-drop attempt by session 2"
+        );
+        // Only session 1 can drop its own ref.
+        assert_eq!(
+            mgr.process_drop_with_session(cell, fed, 1),
+            DropResult::CanRevoke
+        );
     }
 
     #[test]

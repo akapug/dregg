@@ -312,9 +312,13 @@ mod tests {
     }
 
     #[test]
-    fn session_epoch_prevents_stale_message_processing() {
-        // Simulate: session 1 (epoch=1) is torn down, session 2 (epoch=2) established.
-        // A DropRef from epoch 1 arriving after session 2 is active should be rejected.
+    fn session_epoch_scopes_drop_rights_per_session() {
+        // F-12: session/epoch ids scope drop rights PER REF. A re-export under a new
+        // epoch does NOT transfer drop rights for the old epoch's refs; each epoch may
+        // drop exactly the refs it minted, and only those. (Before the F-12 fix, the
+        // most-recent re-export overwrote the whole holder's session id, stealing the
+        // original epoch's drop rights — and handing the new epoch the power to reclaim
+        // refs it never minted.)
         use crate::FederationId;
         use crate::gc::{DropResult, ExportGcManager};
 
@@ -322,23 +326,29 @@ mod tests {
         let cell = CellId([0x55; 32]);
         let fed = FederationId([0x66; 32]);
 
-        // Export was created during session epoch 1
+        // A ref was minted during epoch 1.
         gc.record_export_with_session(cell, fed, 100, 1);
-
-        // Session 1 is torn down, session 2 established (epoch=2).
-        // Re-export the same cell on session 2.
+        // Epoch 1 torn down, epoch 2 established; a re-export adds a SECOND ref under
+        // epoch 2 — epoch 1's ref is untouched.
         gc.record_export_with_session(cell, fed, 200, 2);
         assert_eq!(gc.get(&cell).unwrap().total_refs, 2);
 
-        // Stale drop from old epoch 1: session_id is now 2, so epoch 1 fails.
-        let result = gc.process_drop_with_session(cell, fed, 1);
-        assert_eq!(result, DropResult::Invalid);
+        // A DropRef from epoch 2 may only drop epoch 2's ref (still held by epoch 1).
+        assert_eq!(
+            gc.process_drop_with_session(cell, fed, 2),
+            DropResult::StillHeld
+        );
+        // Epoch 2 cannot then reach into epoch 1's surviving ref — rejected.
+        assert_eq!(
+            gc.process_drop_with_session(cell, fed, 2),
+            DropResult::Invalid
+        );
+        assert_eq!(gc.get(&cell).unwrap().total_refs, 1);
 
-        // Current epoch 2 works
-        let result = gc.process_drop_with_session(cell, fed, 2);
-        assert_eq!(result, DropResult::StillHeld);
-
-        let result = gc.process_drop_with_session(cell, fed, 2);
-        assert_eq!(result, DropResult::CanRevoke);
+        // Epoch 1 retains the right to drop the ref IT minted — the last ref reclaims.
+        assert_eq!(
+            gc.process_drop_with_session(cell, fed, 1),
+            DropResult::CanRevoke
+        );
     }
 }

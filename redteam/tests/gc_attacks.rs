@@ -41,15 +41,16 @@ fn attack_byzantine_wrong_session_drop_is_noop() {
 }
 
 // ===========================================================================
-// ATTACK 2 — FINDING: the LEGACY unauthenticated `process_drop` path bypasses
-// the session check entirely. Any caller who knows (cell_id, victim_federation)
-// can decrement the victim's ref and, at count 0, force CanRevoke — a premature
-// reclaim of a still-wanted capability. The session-Byzantine theorem only
-// holds for callers that go through `process_drop_with_session`; the legacy
-// entry point is an open door.
+// ATTACK 2 — DEFENDED (F-11 CLOSED): the legacy unauthenticated `process_drop`
+// path is now DENIED (fail-closed). It can no longer reclaim a victim's ref: a
+// DropRef with no session credential authorizes nothing. The attacker who knows
+// (cell_id, victim_federation) but holds no session can no longer decrement the
+// victim's refcount. (Was: BROKEN — the session-free path accepted the drop and
+// forced CanRevoke, a premature reclaim out from under the holder.)
 // ===========================================================================
 
 #[test]
+#[allow(deprecated)]
 fn finding_legacy_process_drop_bypasses_session_byzantine_defense() {
     let mut mgr = ExportGcManager::new();
     // Honest A holds ONE ref under session 10. A still wants it.
@@ -57,30 +58,42 @@ fn finding_legacy_process_drop_bypasses_session_byzantine_defense() {
     assert_eq!(mgr.get(&cell()).unwrap().total_refs, 1);
 
     // Attacker who never held the ref calls the SESSION-FREE drop with A's id.
-    // No session is presented, so the Byzantine check cannot fire.
+    // No session is presented — the F-11 fix denies this path outright.
     let r = mgr.process_drop(cell(), fed_a());
 
-    // FINDING: the drop is accepted and the export is reclaimed out from under A.
+    // DEFENDED: the drop is rejected; A's capability is NOT reclaimed.
     assert_eq!(
         r,
-        DropResult::CanRevoke,
-        "if this is now Invalid, the legacy bypass was closed"
+        DropResult::Invalid,
+        "F-11 regressed: the session-free legacy drop was accepted again"
     );
-    assert!(
-        mgr.get(&cell()).is_none() || mgr.get(&cell()).unwrap().total_refs == 0,
-        "victim's capability was prematurely reclaimed"
+    assert_eq!(
+        mgr.get(&cell()).unwrap().total_refs,
+        1,
+        "F-11 regressed: the victim's ref was prematurely reclaimed by a session-free drop"
     );
-    eprintln!("[GC ATTACK 2 / FINDING] legacy process_drop bypasses session defense: BROKEN");
+
+    // And the attacker cannot reclaim by guessing a session either: only the
+    // session that minted the ref (10) may drop it.
+    assert_eq!(
+        mgr.process_drop_with_session(cell(), fed_a(), 999),
+        DropResult::Invalid,
+        "a guessed session must not authorize a drop"
+    );
+    assert_eq!(mgr.get(&cell()).unwrap().total_refs, 1);
+
+    eprintln!("[GC ATTACK 2 / F-11] legacy session-free process_drop: DEFENDED (denied, fail-closed)");
 }
 
 // ===========================================================================
-// ATTACK 3 — FINDING (subtle): session id is per-(cell, federation), NOT
-// per-ref. A re-export to the same federation on a NEW session SUPERSEDES the
-// session id of ALL that federation's existing refs (gc.rs:139). So if an
-// adversary can induce a re-export under a session id they know (or if a holder
-// reconnects), a subsequent wrong-original-session protection is lost: the
-// "old session can no longer drop" while "new session can drop everything,
-// including refs minted under the old session." We demonstrate the supersede.
+// ATTACK 3 — DEFENDED (F-12 CLOSED): session id is now tracked PER-REF (per
+// session bucket), not collapsed per-(cell, federation). A re-export under a new
+// session adds a bucket for the new session and leaves every existing session's
+// refs (and their drop rights) intact. So: the ORIGINAL session keeps the right
+// to drop exactly the refs IT minted, and the NEW session can drop ONLY the refs
+// it minted — neither can reach the other's. (Was: BROKEN-ish — a re-export
+// overwrote the whole holder's session id, transferring drop rights for ALL refs
+// to the most recent session.)
 // ===========================================================================
 
 #[test]
@@ -91,27 +104,73 @@ fn finding_reexport_supersedes_session_for_all_existing_refs() {
     mgr.record_export_with_session(cell(), fed_a(), 100, 10);
     assert_eq!(mgr.get(&cell()).unwrap().total_refs, 2);
 
-    // A re-exports / reconnects under a DIFFERENT session 99. This bumps count
-    // to 3 AND rewrites session_id := 99 for the whole holder entry.
+    // A re-exports / reconnects under a DIFFERENT session 99. This adds a THIRD
+    // ref in session 99's bucket; session 10's two refs are UNTOUCHED.
     mgr.record_export_with_session(cell(), fed_a(), 101, 99);
     assert_eq!(mgr.get(&cell()).unwrap().total_refs, 3);
 
-    // The ORIGINAL session (10) can now no longer drop ANY of A's refs — even
-    // the two that were minted under session 10. Their session was overwritten.
-    let r_old = mgr.process_drop_with_session(cell(), fed_a(), 10);
+    // DEFENDED: the ORIGINAL session (10) KEEPS its drop rights — it can drop the
+    // two refs IT minted (previously this was wrongly rejected as Invalid).
     assert_eq!(
-        r_old,
+        mgr.process_drop_with_session(cell(), fed_a(), 10),
+        DropResult::StillHeld,
+        "F-12 regressed: a re-export stole the original session's drop rights"
+    );
+    assert_eq!(
+        mgr.process_drop_with_session(cell(), fed_a(), 10),
+        DropResult::StillHeld
+    );
+    // Session 10 has now spent its two refs; it CANNOT reach session 99's ref.
+    assert_eq!(
+        mgr.process_drop_with_session(cell(), fed_a(), 10),
         DropResult::Invalid,
-        "session 10 drop rejected because re-export rewrote the holder session to 99"
+        "F-12 regressed: session 10 reached a ref it never minted"
     );
+    assert_eq!(mgr.get(&cell()).unwrap().total_refs, 1);
 
-    // Conversely, the NEW session can drop refs it never legitimately minted
-    // (the two pre-existing ones), because session is holder-scoped not ref-scoped.
-    let r_new = mgr.process_drop_with_session(cell(), fed_a(), 99);
-    assert_eq!(r_new, DropResult::StillHeld);
-    eprintln!(
-        "[GC ATTACK 3 / FINDING] session is holder-scoped, not ref-scoped; re-export rewrites it: BROKEN-ish"
+    // DEFENDED (the dual): the NEW session 99 can drop ONLY the one ref it minted.
+    assert_eq!(
+        mgr.process_drop_with_session(cell(), fed_a(), 99),
+        DropResult::CanRevoke
     );
+    eprintln!(
+        "[GC ATTACK 3 / F-12] session is PER-REF; re-export keeps the original session's rights: DEFENDED"
+    );
+}
+
+// ===========================================================================
+// ATTACK 3b — DEFENDED (F-12 dual): the NEW session cannot drop refs the
+// ORIGINAL session minted. The mirror image of ATTACK 3: a Byzantine reconnect
+// that mints a single ref under a fresh session must not let that session reclaim
+// the victim's pre-existing refs.
+// ===========================================================================
+
+#[test]
+fn new_session_cannot_overdrop_into_original_sessions_refs() {
+    let mut mgr = ExportGcManager::new();
+    // Victim minted 2 refs under session 10.
+    mgr.record_export_with_session(cell(), fed_a(), 100, 10);
+    mgr.record_export_with_session(cell(), fed_a(), 100, 10);
+    // Byzantine reconnect mints 1 ref under session 99.
+    mgr.record_export_with_session(cell(), fed_a(), 101, 99);
+    assert_eq!(mgr.get(&cell()).unwrap().total_refs, 3);
+
+    // Session 99 drops its own (only) ref → still held by session 10's two.
+    assert_eq!(
+        mgr.process_drop_with_session(cell(), fed_a(), 99),
+        DropResult::StillHeld
+    );
+    // Session 99 has nothing left; it CANNOT reclaim session 10's refs.
+    assert_eq!(
+        mgr.process_drop_with_session(cell(), fed_a(), 99),
+        DropResult::Invalid
+    );
+    assert_eq!(
+        mgr.get(&cell()).unwrap().total_refs,
+        2,
+        "F-12 regressed: session 99 reclaimed the victim's session-10 refs"
+    );
+    eprintln!("[GC ATTACK 3b / F-12] new session cannot over-drop into another session's refs: DEFENDED");
 }
 
 // ===========================================================================
