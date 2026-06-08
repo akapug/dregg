@@ -181,10 +181,12 @@ theorem recordKernelView_jointApplyRec {kA kB kA' kB' : RecordKernelState} {bt :
 
 /-! ## §6 — Keystones (intra fail-closed, bilateral refinement, charter bridge). -/
 
-/-- Re-export: `.coordinated` tier fail-closes on a single `RecChainedState` (unchanged). -/
+/-- Re-export: a `.coordinated` tier with NO companion-cell view (`cross = none`) fail-closes on a
+single `RecChainedState` — a cross-cell read cannot be faked without a companion view. (With a
+companion view supplied, the welded equalizer `GatedCaveat.holds` discharges it on the same snapshot.) -/
 theorem coordinated_intra_gate_failclosed (c : GatedCaveat) (s : RecChainedState)
-    (h : c.tier = .coordinated) : c.holds s = false :=
-  CoordinatedForestGate.coordinated_intra_gate_failclosed c s h
+    (h : c.tier = .coordinated) (hno : c.cross = none) : c.holds s = false :=
+  CoordinatedForestGate.coordinated_intra_gate_failclosed c s h hno
 
 /-- **`coordinated_forest_refines_bilateral`** — every committed coordinated-forest step is ALSO a
 committed `execBilateralCoordinated` on the projected kernel views. -/

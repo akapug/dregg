@@ -570,6 +570,155 @@ theorem tokenOverAttenForestG_rolls_back : execFullForestG fma0 tokenOverAttenFo
 #assert_axioms tokenForgedForestG_rolls_back
 #assert_axioms tokenOverAttenForestG_rolls_back
 
+/-! ### A3 — the TIER-3 COORDINATED caveat, WELDED into the production gate (executed end-to-end).
+
+`GatedCaveat.holds` on `.coordinated` was a dead fail-closed branch (`FullForestAuth.lean`): a
+cross-cell read could never discharge on a single-cell node, so a tier-3 caveat HARD-REJECTED on the
+production `caveatsDischarged`/`gateOK`/`execFullForestG` path — the positive coordinated discharge
+lived only in the parallel `execCoordinatedForestG` executor. The `cross` field welds the proved
+atomic-snapshot equalizer (`CoordinatedCaveat.dischargeCoordinated` / `CrossCaveat.jointApplyCaveated`)
+INLINE: on a single machine the companion cell lives in the SAME `RecChainedState`, so the cross-cell
+condition is read on the SAME snapshot `s` the node commits against (`gateOK na s` reads exactly the
+`s` `execFullA` runs on — `gatedNode_check_eq_use` — so time-of-check = time-of-use, no TOCTOU). The
+two forests below share EVERYTHING (same genuine credential, same balance-neutral `emitEvent`, same
+companion cell `1`) and differ ONLY in the cross-cell THRESHOLD:
+
+  * the SATISFIED covenant (companion cell `1` holds ≥ `5` of asset `0`, and at `fma0` it holds
+    exactly `5`) ⇒ the coordinated caveat DISCHARGES ⇒ `caveatsDischarged = true` ⇒ the gate ADMITS ⇒
+    the forest COMMITS;
+  * the VIOLATED covenant (companion cell `1` would need ≥ `10`, but holds only `5`) ⇒ the coordinated
+    caveat FAILS ⇒ `caveatsDischarged = false` ⇒ the gate REJECTS ⇒ `execFullForestG = none`, rollback.
+
+So the tier-3 cross-cell caveat is EXECUTED end-to-end on the SAME live entry as tier-1/tier-2 — no
+longer hard-rejected, no longer out-of-band. Non-vacuous each direction (witnessed true AND false). -/
+
+/-- A SATISFIED tier-3 coordinated caveat: the cross-cell condition reads the COMPANION cell `1` out of
+the same atomic snapshot and gates on it (`companion holds ≥ 5 of asset 0`). At `fma0` cell `1` holds
+exactly `5`, so the welded equalizer DISCHARGES. -/
+def coordCaveatSat : GatedCaveat :=
+  { tier := .coordinated, check := fun _ => false
+  , cross := some (fun s => decide (5 ≤ s.kernel.bal 1 0)) }
+
+/-- A VIOLATED tier-3 coordinated caveat: same companion-cell read, but the threshold (`≥ 10`) is NOT
+met (cell `1` holds only `5`). The welded equalizer FAIL-CLOSES — the cross-cell covenant genuinely
+gates. -/
+def coordCaveatViolated : GatedCaveat :=
+  { tier := .coordinated, check := fun _ => false
+  , cross := some (fun s => decide (10 ≤ s.kernel.bal 1 0)) }
+
+/-- A coordinated caveat with NO companion view (`cross = none`) — the dregg1 posture: a cross-cell
+read cannot be faked, so it fail-closes. -/
+def coordCaveatNoView : GatedCaveat :=
+  { tier := .coordinated, check := fun _ => true }
+
+/-- The SATISFIED-coordinated forest: genuine credential, balance-neutral emit, tier-3 caveat whose
+cross-cell condition HOLDS at `fma0`. ADMITS. -/
+def coordOkForestG : DForest :=
+  ⟨ mkAuth goodCred [coordCaveatSat], .emitEventA 0 0 0 0, [] ⟩
+
+/-- The VIOLATED-coordinated forest: identical except the tier-3 caveat's cross-cell condition FAILS at
+`fma0`. REJECTED by the caveat leg. -/
+def coordViolatedForestG : DForest :=
+  ⟨ mkAuth goodCred [coordCaveatViolated], .emitEventA 0 0 0 0, [] ⟩
+
+/-- **`coordCaveatSat_holds` — the welded equalizer DISCHARGES (PROVED).** The tier-3 caveat's
+cross-cell condition (companion cell `1` ≥ 5 of asset 0) holds on the `fma0` snapshot. This is the
+positive coordinated discharge routed through `GatedCaveat.holds`'s `.coordinated`/`cross` arm — the
+atomic-snapshot read, no longer the dead `false` branch. -/
+theorem coordCaveatSat_holds : coordCaveatSat.holds fma0 = true := by
+  unfold coordCaveatSat GatedCaveat.holds fma0
+  decide
+
+/-- **`coordCaveatViolated_fails` — the welded equalizer FAIL-CLOSES on a violated covenant (PROVED,
+the teeth).** The cross-cell threshold (≥ 10) is not met at `fma0` (cell 1 holds 5), so the coordinated
+caveat is rejected — the cross-cell read genuinely gates, non-vacuously against the satisfied case. -/
+theorem coordCaveatViolated_fails : coordCaveatViolated.holds fma0 = false := by
+  unfold coordCaveatViolated GatedCaveat.holds fma0
+  decide
+
+/-- **`coordCaveatNoView_fails` — no companion view ⇒ fail-closed (PROVED, the dregg1 posture).** A
+`.coordinated` caveat with `cross = none` cannot discharge on a single node — exactly the old behavior,
+recovered as the `none` case. -/
+theorem coordCaveatNoView_fails : coordCaveatNoView.holds fma0 = false := by
+  unfold coordCaveatNoView GatedCaveat.holds
+  rfl
+
+/-- The satisfied-coordinated forest's caveat leg DISCHARGES at `fma0` (the welded tier-3 equalizer). -/
+theorem coordOkForestG_caveats_fma0 : caveatsDischarged coordOkForestG.auth fma0 = true := by
+  unfold coordOkForestG mkAuth caveatsDischarged chainGateG
+  simp only [List.all_cons, List.all_nil, Bool.and_true, coordCaveatSat_holds]
+
+/-- The satisfied-coordinated forest passes the full 4-leg gate at `fma0`. -/
+theorem coordOkForestG_gateOK : gateOK coordOkForestG.auth fma0 = true := by
+  have hcred : credentialValidG coordOkForestG.auth = true := by
+    unfold coordOkForestG mkAuth credentialValidG goodCred; decide
+  have hcap : capAuthorityG coordOkForestG.auth = true := by
+    unfold coordOkForestG mkAuth capAuthorityG
+    exact unchecked_unconstrained_admits (Guard.all []) baseCapCtx (fun _ _ => by simp)
+  have hrev : revocationGate coordOkForestG.auth fma0 = true := by
+    unfold coordOkForestG mkAuth revocationGate fma0; simp
+  unfold gateOK
+  simp only [Bool.and_eq_true, hcred, hcap, coordOkForestG_caveats_fma0, hrev]
+  trivial
+
+/-- **`coordOkForestG_commits` — the SATISFIED tier-3 coordinated caveat COMMITS end-to-end on the live
+`execFullForestG` path (PROVED).** The whole gated forest runs and produces a post-state — the cross-
+cell coordinated condition is DISCHARGED inline by the welded equalizer, on the SAME production entry
+as tier-1/tier-2. This is the end-to-end positive the task demands: a tier-3 cross-cell caveat whose
+condition holds is admitted, not hard-rejected. -/
+theorem coordOkForestG_commits : (execFullForestG fma0 coordOkForestG).isSome := by
+  have herase : (execFullForestA fma0 (eraseG coordOkForestG)).isSome := by decide
+  rcases Option.isSome_iff_exists.mp herase with ⟨s', hs'⟩
+  refine Option.isSome_iff_exists.mpr ⟨s', ?_⟩
+  dsimp [execFullForestG, coordOkForestG, execFullChildrenG]
+  have hga := (execFullAGated_some_iff fma0 s' (mkAuth goodCred [coordCaveatSat])
+    (.emitEventA 0 0 0 0)).mpr ⟨coordOkForestG_gateOK, hs'⟩
+  simpa [hga]
+
+/-- The violated-coordinated forest's caveat leg FAIL-CLOSES at `fma0`. -/
+theorem coordViolatedForestG_caveats_fma0 : caveatsDischarged coordViolatedForestG.auth fma0 = false := by
+  unfold coordViolatedForestG mkAuth caveatsDischarged chainGateG
+  simp only [List.all_cons, List.all_nil, Bool.and_true, coordCaveatViolated_fails]
+
+/-- The violated-coordinated forest is REJECTED by the full gate (the caveat leg fail-closes). -/
+theorem coordViolatedForestG_gate_rejects : gateOK coordViolatedForestG.auth fma0 = false := by
+  unfold gateOK
+  rw [coordViolatedForestG_caveats_fma0]
+  simp
+
+/-- **`coordViolatedForestG_rolls_back` — the VIOLATED tier-3 coordinated caveat does NOT commit
+(PROVED, the teeth).** The cross-cell covenant fails ⇒ `execFullForestG = none` ⇒ whole-forest
+rollback. The cross-cell read genuinely gates the EXECUTOR ADMISSION, non-vacuously against
+`coordOkForestG_commits`. -/
+theorem coordViolatedForestG_rolls_back : execFullForestG fma0 coordViolatedForestG = none := by
+  have hgate : gateOK coordViolatedForestG.auth fma0 = false := coordViolatedForestG_gate_rejects
+  unfold coordViolatedForestG at hgate ⊢
+  show (match execFullAGated fma0 (mkAuth goodCred [coordCaveatViolated]) (.emitEventA 0 0 0 0) with
+        | some s' => execFullChildrenG (targetOf (.emitEventA 0 0 0 0)) s' ([] : List DChild)
+        | none    => none) = none
+  rw [execFullAGated]
+  simp only [hgate]
+  rfl
+
+-- The tier-3 coordinated caveat is EXECUTED end-to-end on the live gate, both ways:
+#guard (coordCaveatSat.holds fma0)                              --  true  (companion cell discharges)
+#guard (coordCaveatViolated.holds fma0) == false               --  false (cross-cell covenant violated)
+#guard (coordCaveatNoView.holds fma0) == false                 --  false (no companion view ⇒ fail-closed)
+#guard (caveatsDischarged coordOkForestG.auth fma0)            --  true  (welded equalizer discharges)
+#guard (caveatsDischarged coordViolatedForestG.auth fma0) == false  --  false
+#guard ((execFullForestG fma0 coordOkForestG).isSome)               --  true  (tier-3 COMMITS)
+#guard ((execFullForestG fma0 coordViolatedForestG).isSome) == false --  false (tier-3 violated ⇒ rollback)
+
+#assert_axioms coordCaveatSat_holds
+#assert_axioms coordCaveatViolated_fails
+#assert_axioms coordCaveatNoView_fails
+#assert_axioms coordOkForestG_caveats_fma0
+#assert_axioms coordOkForestG_gateOK
+#assert_axioms coordOkForestG_commits
+#assert_axioms coordViolatedForestG_caveats_fma0
+#assert_axioms coordViolatedForestG_gate_rejects
+#assert_axioms coordViolatedForestG_rolls_back
+
 end StarbridgeGated
 
 end Dregg2.Exec

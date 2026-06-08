@@ -213,25 +213,49 @@ ungated `FullForest` theorem is re-used. The whole gated tree is parametric over
 (crypto `Digest`/`Proof`, the AuthModes `Request/Stmt/Wit/CellId/Rights/Ctx/Gateway`, the chain
 `Key/Bytes/Tag`); the Demo instantiates them concretely for `#eval`. -/
 
-/-- **A within-cell, state-reading TIERED caveat.** Carries its `DriftStable.DriftTier` tag (the
-COMPUTABLE dispatch tag the executor reads) and a `check : RecChainedState → Bool` reading the node's
-PRE-state (the node's OWN target cell — strictly INTRA-cell). A `.coordinated` caveat (one that would
-read ANOTHER cell — the cross-cell TOCTOU axis) is ROUTED OUT (it fail-closes here, deferred to
-`CrossCaveat.jointApplyCaveated`), foreclosing the dregg1 `authorize.rs:1608` cross-cell hole. -/
+/-- **A state-reading TIERED caveat.** Carries its `DriftStable.DriftTier` tag (the COMPUTABLE
+dispatch tag the executor reads), a `check : RecChainedState → Bool` reading the node's PRE-state (the
+node's OWN target cell — strictly INTRA-cell for the drift-stable tiers), and — for the `.coordinated`
+(tier-3) cross-cell axis — an OPTIONAL `cross : Option (RecChainedState → Bool)` discharge predicate.
+
+The `.coordinated` tier is the genuinely non-monotone, no-rep case (`DriftWitness .coordinated =
+PUnit` — no drift-stability proof). dregg1 fail-closed it (`authorize.rs:1608`) because a live read of
+another cell to authorize this one is a TOCTOU hole — UNLESS the read and the use are ONE atomic
+snapshot. On a single machine BOTH cells live in the SAME `RecChainedState`, so the companion-cell
+read IS that atomic snapshot (ember's single-machine principle: forming the joint view over `{A, B}` is
+free). `cross` is the proved-equalizer discharge welded inline (`CoordinatedCaveat.dischargeCoordinated`
+/ `CrossCaveat.jointApplyCaveated`): the cross-cell condition is checked on the SAME `s` the node then
+commits against — time-of-check = time-of-use, no window for a concurrent turn to invalidate it
+(`gateOK na s` reads exactly the `s` `execFullA` runs on; `gatedNode_check_eq_use`). `cross = none` ⇒
+the old fail-closed behavior (no companion view supplied ⇒ a coordinated caveat genuinely cannot
+discharge on this node). -/
 structure GatedCaveat where
   /-- The computable drift-tier tag (`monotone`/`reservation`/`locked`/`coordinated`) the executor
   reads to dispatch — the verify-not-find seam (`DriftStable.DriftTier`). -/
   tier  : Dregg2.Confluence.DriftStable.DriftTier
   /-- The within-cell state-reading predicate, evaluated on the node's PRE-state (its own target cell). -/
   check : RecChainedState → Bool
+  /-- **The `.coordinated` (tier-3) cross-cell discharge predicate** — the welded equalizer. Reads the
+  COMPANION cell out of the SAME atomic snapshot `s` (single-machine: both cells local). `none` ⇒ no
+  companion view ⇒ the coordinated caveat fail-closes (the dregg1 posture). Ignored for the
+  drift-stable tiers. DEFAULTS `none` (the additive extension — every pre-existing caveat literal that
+  omits it keeps its exact behavior). -/
+  cross : Option (RecChainedState → Bool) := none
 
-/-- **`GatedCaveat.holds`** — discharge the caveat on the pre-state `s`. The `.coordinated` tier is the
-cross-cell axis: it fail-closes here (routed to `CrossCaveat`), so an intra-cell node carrying a
-coordinated caveat is rejected — it cannot silently pass nor be live-read across cells. All other
-(drift-stable) tiers read their `check` on `s`. -/
+/-- **`GatedCaveat.holds`** — discharge the caveat on the pre-state `s`. The drift-stable tiers
+(`monotone`/`reservation`/`locked`) read their within-cell `check` on `s`. The `.coordinated` (tier-3)
+cross-cell axis is DISCHARGED by the welded equalizer `cross`: when a companion-cell discharge
+predicate is supplied (single-machine: the companion cell lives in the SAME `s`), it is read on the
+SAME atomic snapshot `s` the node commits against (no TOCTOU). When `cross = none`, no companion view
+is available, so the coordinated caveat fail-closes (the dregg1 `authorize.rs:1608` posture, recovered
+exactly). So a tier-3 cross-cell caveat whose condition HOLDS is admitted, one whose condition FAILS
+(or which has no companion view) is rejected — non-vacuously, on the same live gate. -/
 def GatedCaveat.holds (c : GatedCaveat) (s : RecChainedState) : Bool :=
   match c.tier with
-  | .coordinated => false               -- routed to CrossCaveat (intra-cell gate fail-closes)
+  | .coordinated =>
+      match c.cross with
+      | some φ => φ s                   -- welded equalizer: companion-cell read on the SAME snapshot s
+      | none   => false                 -- no companion view ⇒ fail-closed (dregg1 posture)
   | _            => c.check s            -- within-cell, drift-stable tier ⇒ read the pre-state
 
 section Gated
