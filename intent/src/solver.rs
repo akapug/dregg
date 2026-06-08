@@ -1290,4 +1290,112 @@ mod tests {
         // Node 1 offers BB, Node 0 wants BB -> edge 1->0
         assert_eq!(graph.edge_count(), 2);
     }
+
+    // =========================================================================
+    // INDIVIDUAL RATIONALITY (Shapley-Scarf top-trading-cycle core property).
+    //
+    // This is the running-matcher anchor for the verified Lean theorem
+    // `Dregg2.Intent.Ring.cycle_individuallyRational`
+    // (metatheory/Dregg2/Intent/Ring.lean §8c): a cycle the compatibility graph
+    // admits settles so that EVERY participant receives the asset it WANTED, in
+    // at least its declared `want_min_amount`. The Lean models the construction
+    // rule (`chainedRing`/`settlementsOf`) and the graph edge predicate
+    // (`isCompatible`) abstractly and proves IR holds for every valid cycle; this
+    // test confirms the concrete `validate_ring` output satisfies the SAME
+    // invariant on a genuine multi-party ring, so the two are about one matcher.
+    //
+    // Leg `k` is { from: node[k].creator, to: node[k+1].creator,
+    //              asset: node[k].offer_asset, amount: node[k+1].want_min_amount }.
+    // So participant j = (k+1) RECEIVES node[k].offer_asset in amount
+    // node[j].want_min_amount. IR demands that received asset == node[j].want_asset
+    // and the amount >= node[j].want_min_amount.
+    // =========================================================================
+    #[test]
+    fn test_individual_rationality_three_party_ring() {
+        // A→B→C→A, three distinct assets, each offer covers the next want.
+        // A: offers AA(100), wants BB(min 50)
+        // B: offers BB(80),  wants CC(min 30)
+        // C: offers CC(60),  wants AA(min 40)
+        // Ring order [A, B, C] chains: A.offer(AA) is C's want, so the cycle the
+        // graph finds is A→C→B→A; build that ordered ring directly.
+        let a = make_node(1, 0xAA, 100, 0xBB, 50, 0x01, 9999);
+        let b = make_node(2, 0xBB, 80, 0xCC, 30, 0x02, 9999);
+        let c = make_node(3, 0xCC, 60, 0xAA, 40, 0x03, 9999);
+        // Ordered so each node's offer == next node's want:
+        //   A offers AA == C wants AA; C offers CC == B wants CC; B offers BB == A wants BB.
+        let ring = vec![a.clone(), c.clone(), b.clone()];
+
+        let solver = RingSolver::new(5);
+        let trade = solver
+            .validate_ring(&ring, 100)
+            .expect("a compatible chained cycle must validate");
+
+        // INDIVIDUAL RATIONALITY: for each participant, find the leg crediting it
+        // (to == its creator) and assert it receives its WANTED asset in >= want_min.
+        for (j, node) in ring.iter().enumerate() {
+            let credit = trade
+                .settlements
+                .iter()
+                .find(|s| s.to == node.creator)
+                .expect("every participant in a ring is credited by exactly one leg");
+            assert_eq!(
+                credit.asset, node.exchange.want_asset,
+                "participant {j} must receive the asset it WANTED (IR asset-match)"
+            );
+            assert!(
+                credit.amount >= node.exchange.want_min_amount,
+                "participant {j} must receive at least its declared minimum (IR amount), \
+                 got {} want_min {}",
+                credit.amount,
+                node.exchange.want_min_amount
+            );
+        }
+
+        // And the dual: every participant SENDS exactly one leg (cycle closure),
+        // sending the asset it OFFERED. Together with the above this is the closed
+        // TTC cycle the Lean `RingBalanced` (cycle closure + per-asset balance)
+        // models and `settleRing_conserves` proves value-neutral.
+        for node in ring.iter() {
+            let debit = trade
+                .settlements
+                .iter()
+                .find(|s| s.from == node.creator)
+                .expect("every participant sends exactly one leg (cycle closure)");
+            assert_eq!(
+                debit.asset, node.exchange.offer_asset,
+                "a participant sends the asset it OFFERED"
+            );
+        }
+    }
+
+    #[test]
+    fn test_individual_rationality_overfunded_still_settles_at_want_min() {
+        // A grossly over-offers; IR is about a LOWER bound (>= want_min), and the
+        // settled amount is exactly the receiver's want_min. The receiver is not
+        // forced to over-receive; the surplus stays with the offerer. This pins the
+        // Lean `receivedAmount = wantMin` exact-amount fact (the leg amount is the
+        // receiver's want_min, not the offerer's full offer).
+        let ring = vec![
+            make_node(1, 0xAA, 1_000_000, 0xBB, 5, 0x01, 9999), // A offers a mountain of AA
+            make_node(2, 0xBB, 1_000_000, 0xAA, 7, 0x02, 9999), // B offers a mountain of BB
+        ];
+        let solver = RingSolver::new(5);
+        let trade = solver.validate_ring(&ring, 100).expect("validates");
+        // Leg to B (creator 0x02) carries A's offer asset AA, amount = B's want_min = 7.
+        let to_b = trade
+            .settlements
+            .iter()
+            .find(|s| s.to == CommitmentId([0x02; 32]))
+            .unwrap();
+        assert_eq!(to_b.asset, asset(0xAA));
+        assert_eq!(to_b.amount, 7, "settled at receiver's want_min, not offerer's offer");
+        // Leg to A carries B's offer asset BB, amount = A's want_min = 5.
+        let to_a = trade
+            .settlements
+            .iter()
+            .find(|s| s.to == CommitmentId([0x01; 32]))
+            .unwrap();
+        assert_eq!(to_a.asset, asset(0xBB));
+        assert_eq!(to_a.amount, 5);
+    }
 }
