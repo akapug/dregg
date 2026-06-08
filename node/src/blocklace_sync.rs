@@ -386,8 +386,25 @@ impl BlocklaceHandle {
     /// Run the tau ordering function and return newly finalized blocks.
     ///
     /// This is the core consensus function: it computes the deterministic total
-    /// order from the blocklace DAG using the Cordial Miners tau function,
-    /// then returns any blocks that have been newly ordered since the last call.
+    /// order from the blocklace DAG using the Cordial Miners tau function
+    /// (`dregg_blocklace::ordering::tau`), then returns any blocks that have been
+    /// newly ordered since the last call.
+    ///
+    /// CONSENSUS PILLAR — VERIFIED MODEL.
+    /// `ordering::tau` (the finalization rule this slices to feed `execute_finalized_turn`)
+    /// is modeled faithfully and executably in Lean at
+    /// `metatheory/Dregg2/Distributed/BlocklaceFinality.lean` (`computeRounds` /
+    /// `findAllFinalLeaders` / `tauOrder` over `Lace`). That module proves the safety
+    /// properties THIS path relies on — a wave anchors AT MOST ONE final leader
+    /// (`finalLeaders_one_per_wave`), an equivocating leader anchors nothing
+    /// (`finalLeaderAt_needs_unique_candidate`), and the order is a deterministic function of
+    /// `(lace, participants, wavelength)` (`tauOrder_deterministic`) — and WIRES the computed
+    /// order into the verified executor (`executeTau` folds `tauOrder` through
+    /// `Exec.ConsensusExec.executeFinalized` = `recCexec`; `tau_drives_verified_run`,
+    /// `tau_execution_agreement`: same lace ⇒ same executed state). The Rust↔Lean agreement on a
+    /// real trace is checked by `ordering::tests::test_tau_differential_against_lean_model` (the
+    /// finalized `(creator, seq)` order reproduces the Lean `tauGolden` golden vector) and
+    /// `test_tau_differential_equivocator_excluded`.
     ///
     /// Returns all actionable finalized blocks (turns, membership votes, checkpoints).
     /// Ack and Data payloads are skipped as they need no consensus-level processing.

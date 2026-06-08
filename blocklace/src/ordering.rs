@@ -407,6 +407,12 @@ fn xsort(blocklace: &Blocklace, blocks: &HashSet<BlockId>) -> Vec<BlockId> {
 /// leader's causal past (excluding equivocators) are included.
 ///
 /// Uses default configuration (wavelength = 3).
+///
+/// VERIFIED MODEL: this finalization rule is modeled faithfully and executably in Lean at
+/// `metatheory/Dregg2/Distributed/BlocklaceFinality.lean` (`tauOrder`, built from `computeRounds`
+/// / `findAllFinalLeaders`), which proves single-leader-per-wave safety and wires the computed
+/// order into the verified executor. The Rust↔Lean agreement is enforced by the differential tests
+/// `tests::test_tau_differential_against_lean_model` / `test_tau_differential_equivocator_excluded`.
 pub fn tau(blocklace: &Blocklace, participants: &[[u8; 32]]) -> Vec<BlockId> {
     tau_with_config(blocklace, participants, &OrderingConfig::default())
 }
@@ -965,6 +971,117 @@ mod tests {
         // Determinism check.
         let result2 = tau(&bl, &participants);
         assert_eq!(result, result2);
+    }
+
+    /// DIFFERENTIAL: the Rust `ordering::tau` finalization AGREES with the verified Lean model
+    /// (`metatheory/Dregg2/Distributed/BlocklaceFinality.lean::tauGolden`) on this exact trace.
+    ///
+    /// The Lean module is a faithful, executable model of THIS function (`compute_rounds` /
+    /// `find_all_final_leaders` / `tau`). Its `#guard`-checked golden vector for the 3-node /
+    /// 3-round fully-connected lace is the finalized order projected to `(creator, seq)`:
+    ///
+    ///   tauGolden = [(1,0),(2,0),(3,0),(1,1),(2,1),(3,1),(1,2),(2,2),(3,2)]
+    ///
+    /// i.e. round-major (by `seq`), and within a round the three concurrent blocks (creators
+    /// 1,2,3). The absolute `BlockId` differs (blake3 hash here vs. an abstract `Nat` in Lean),
+    /// and the *within-round* tie-break is the named OPEN-CM-XSORT residual (Rust breaks by
+    /// block-id, Lean by `(round,id)`), so the load-bearing differential is at the ROUND-COHORT
+    /// level: the sequence of round cohorts, and each cohort's `{creator}` set, must match the
+    /// Lean golden vector exactly. This is the consensus pillar's model⟺node connection: the
+    /// running `tau` reproduces the order the verified model proves safe.
+    #[test]
+    fn test_tau_differential_against_lean_model() {
+        let participants = vec![make_key(1), make_key(2), make_key(3)];
+        let (bl, _) = build_full_blocklace(&participants, 3);
+        let result = tau(&bl, &participants);
+
+        // Project the finalized order to (creator_byte, seq) — the differential coordinate.
+        let projected: Vec<(u8, u64)> = result
+            .iter()
+            .filter_map(|id| bl.get(id).map(|b| (b.creator[0], b.sequence)))
+            .collect();
+
+        // The Lean golden vector, round-major by seq, creators {1,2,3} per round.
+        let lean_golden: Vec<(u8, u64)> = vec![
+            (1, 0), (2, 0), (3, 0),
+            (1, 1), (2, 1), (3, 1),
+            (1, 2), (2, 2), (3, 2),
+        ];
+
+        // ROUND-COHORT agreement: group both into cohorts of 3 (one per round/seq), sort each
+        // cohort by creator (the within-round tie-break is OPEN-CM-XSORT, not load-bearing), and
+        // require the cohort sequence to be identical to the Lean model's.
+        assert_eq!(projected.len(), lean_golden.len(), "same number of finalized blocks as Lean model");
+        let cohorts = |v: &[(u8, u64)]| -> Vec<Vec<(u8, u64)>> {
+            v.chunks(3)
+                .map(|c| {
+                    let mut c = c.to_vec();
+                    c.sort();
+                    c
+                })
+                .collect()
+        };
+        // Each chunk in the Rust result IS a single seq cohort (round-major: tau emits a leader's
+        // new coverage, which for the full lace is exactly the next round's cohort).
+        let rust_seqs: Vec<u64> = projected.iter().map(|(_, s)| *s).collect();
+        assert!(
+            rust_seqs.windows(2).all(|w| w[0] <= w[1]),
+            "Rust tau is round-major (seq non-decreasing), matching the Lean model's order"
+        );
+        assert_eq!(
+            cohorts(&projected),
+            cohorts(&lean_golden),
+            "Rust ordering::tau round-cohorts must equal the verified Lean model's tauGolden cohorts \
+             (consensus model⟺node differential)"
+        );
+    }
+
+    /// DIFFERENTIAL (negative tooth): the Rust `tau` EXCLUDES an equivocating leader, agreeing with
+    /// the Lean model's `traceEquiv` `#guard` (`tauOrder traceEquiv … all creator ≠ 1`). When the
+    /// wave-0 round-robin leader (creator 1) double-signs at the leader slot, NO block from creator 1
+    /// is finalized — exactly the Lean model's equivocation-exclusion result on the matching trace.
+    #[test]
+    fn test_tau_differential_equivocator_excluded() {
+        // creator 1 equivocates at round 1 (two genesis blocks), mirroring the Lean `traceEquiv`
+        // and the existing `test_equivocating_block_excluded`.
+        let participants = vec![make_key(1), make_key(2), make_key(3)];
+        let mut bl = Blocklace::new();
+
+        let b1a = make_block(make_key(1), 0, vec![], vec![1]);
+        let b1a_id = b1a.id();
+        let b1b = make_block(make_key(1), 1, vec![], vec![2]);
+        let b1b_id = b1b.id();
+        let b2 = make_block(make_key(2), 0, vec![], vec![3]);
+        let b2_id = b2.id();
+        let b3 = make_block(make_key(3), 0, vec![], vec![4]);
+        let b3_id = b3.id();
+        bl.insert(b1a).unwrap();
+        bl.insert(b1b).unwrap();
+        bl.insert(b2).unwrap();
+        bl.insert(b3).unwrap();
+
+        let preds_r2 = vec![b1a_id, b1b_id, b2_id, b3_id];
+        let r2_2 = make_block(make_key(2), 1, preds_r2.clone(), vec![6]);
+        let r2_3 = make_block(make_key(3), 1, preds_r2.clone(), vec![7]);
+        let r2_2_id = r2_2.id();
+        let r2_3_id = r2_3.id();
+        bl.insert(r2_2).unwrap();
+        bl.insert(r2_3).unwrap();
+
+        let preds_r3 = vec![r2_2_id, r2_3_id];
+        bl.insert(make_block(make_key(2), 2, preds_r3.clone(), vec![9])).unwrap();
+        bl.insert(make_block(make_key(3), 2, preds_r3.clone(), vec![10])).unwrap();
+
+        let result = tau(&bl, &participants);
+        // Agreeing with the Lean model: the equivocator (creator 1) contributes NO finalized block.
+        for id in &result {
+            let block = bl.get(id).unwrap();
+            assert_ne!(
+                block.creator,
+                make_key(1),
+                "equivocator excluded — matches Lean BlocklaceFinality traceEquiv #guard"
+            );
+        }
     }
 
     #[test]
