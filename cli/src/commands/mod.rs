@@ -1,3 +1,4 @@
+pub mod bounty;
 pub mod cap;
 pub mod cell;
 pub mod cipherclerk;
@@ -12,6 +13,7 @@ pub mod proof;
 pub mod route;
 pub mod storage;
 pub mod turn;
+pub mod voting;
 
 use crate::config::Config;
 

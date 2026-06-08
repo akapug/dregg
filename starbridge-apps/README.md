@@ -56,13 +56,12 @@ starbridge-apps/
 
 ## App inventory (honest status)
 
-Six apps are **real, fully-implemented** — each is a Rust crate
+Eight apps are **real, fully-implemented** — each is a Rust crate
 (`src/lib.rs` with `FactoryDescriptor`s + signed turn-builders), a
-`pages/` web surface (inspectors + turn-builders + an `index.html`
-fragment), a README, and a passing test suite. Their core flows run
-end-to-end in-process against the framework's `EmbeddedExecutor` (the
-canonical `TurnExecutor`), with the capability/mandate/slot-caveat gates
-firing:
+README, and a passing test suite (the six oldest also ship a `pages/`
+web surface). Their core flows run end-to-end in-process against the
+framework's `EmbeddedExecutor` (the canonical `TurnExecutor`), with the
+capability/mandate/slot-caveat gates firing:
 
 | App | Core flow (all gated, all tested) |
 |---|---|
@@ -72,15 +71,26 @@ firing:
 | `governed-namespace` | propose table update → vote (threshold) → commit → register service |
 | `compartment-workflow-mandate` | init mandate → advance step (clearance-graph + spend-policy admission) |
 | `storage-gateway-mandate` | init gateway → GET / PUT / LIST (volume-ceiling mandate) |
+| `privacy-voting` | open poll → record tally (Monotonic) → close (WriteOnce); per-voter ballot cells one-vote-per-cell (WriteOnce) |
+| `bounty-board` | post → claim → submit → payout, a StrictMonotonic state machine; first-claimer-wins (claimant WriteOnce) |
 
-Four entries are **roadmap stubs**, not apps: `bounty-board`,
-`compute-exchange`, `gallery`, `privacy-voting`. Each is a single
-`manifest.json` with `"status": "unported"` and `"runtime_mode":
-"legacy-http"`, pointing at its still-running legacy implementation under
-`../apps/<name>/` (its `porting_target` is the starbridge-app to build).
-They are deliberately *not* faked into half-working crates — porting one
-follows the nameservice exemplar (the documented paint-by-numbers
-template) and is tracked work, not shipped work.
+Both `privacy-voting` and `bounty-board` are factory-born: their poll /
+ballot / bounty cells are minted from `FactoryDescriptor`s (via
+`CreateCellFromFactory`) so the slot caveats are installed as the born
+cell's `CellProgram` and bite on every subsequent turn. The devnet node
+seeds one of each at genesis (`node/src/starbridge_seed.rs`), and the CLI
+drives them live: `dregg voting open|tally|close|show` and
+`dregg bounty post|claim|submit|payout|show` (a rejected second claim or
+a shrinking tally is the caveat biting on the verified commit path).
+
+Two entries remain **roadmap stubs**, not apps: `compute-exchange` and
+`gallery`. Each is a single `manifest.json` with `"status": "unported"`
+and `"runtime_mode": "legacy-http"`, pointing at its still-running legacy
+implementation under `../apps/<name>/` (its `porting_target` is the
+starbridge-app to build). They are deliberately *not* faked into
+half-working crates — porting one follows the nameservice exemplar (the
+documented paint-by-numbers template) and is tracked work, not shipped
+work.
 
 ### Anti-drift: generated JS constants
 

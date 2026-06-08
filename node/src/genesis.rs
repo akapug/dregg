@@ -9,10 +9,12 @@
 use std::path::Path;
 
 use serde::Serialize;
+use starbridge_bounty_board::BOUNTY_FACTORY_VK;
 use starbridge_compartment_workflow_mandate::CWM_FACTORY_VK;
 use starbridge_governed_namespace::GOVERNANCE_FACTORY_VK;
 use starbridge_identity::ISSUER_FACTORY_VK;
 use starbridge_nameservice::NAME_FACTORY_VK;
+use starbridge_privacy_voting::{BALLOT_FACTORY_VK, POLL_FACTORY_VK};
 use starbridge_storage_gateway_mandate::SGM_FACTORY_VK;
 use starbridge_subscription::SUBSCRIPTION_FACTORY_VK;
 
@@ -302,6 +304,24 @@ pub fn default_starbridge_genesis_cells() -> Vec<StarbridgeGenesisCell> {
             owner_agent: "alice".into(),
             uri_hint: "gateway-default".into(),
         },
+        StarbridgeGenesisCell {
+            label: "privacy-voting-poll".into(),
+            factory_vk_hex: hex_encode(&POLL_FACTORY_VK),
+            owner_agent: "alice".into(),
+            uri_hint: "poll-default".into(),
+        },
+        StarbridgeGenesisCell {
+            label: "privacy-voting-ballot".into(),
+            factory_vk_hex: hex_encode(&BALLOT_FACTORY_VK),
+            owner_agent: "alice".into(),
+            uri_hint: "ballot-default".into(),
+        },
+        StarbridgeGenesisCell {
+            label: "bounty-board-bounty".into(),
+            factory_vk_hex: hex_encode(&BOUNTY_FACTORY_VK),
+            owner_agent: "alice".into(),
+            uri_hint: "bounty-default".into(),
+        },
     ]
 }
 
@@ -348,7 +368,11 @@ mod tests {
     #[test]
     fn default_starbridge_genesis_cells_has_six_apps_with_alice_owner() {
         let cells = default_starbridge_genesis_cells();
-        assert_eq!(cells.len(), 6, "devnet genesis must seed all six starbridge apps");
+        assert_eq!(
+            cells.len(),
+            9,
+            "devnet genesis must seed all starbridge app cells"
+        );
 
         let labels: Vec<&str> = cells.iter().map(|c| c.label.as_str()).collect();
         assert!(labels.contains(&"nameservice-registry"));
@@ -357,6 +381,9 @@ mod tests {
         assert!(labels.contains(&"governed-namespace-root"));
         assert!(labels.contains(&"cwm-mandate"));
         assert!(labels.contains(&"sgm-gateway"));
+        assert!(labels.contains(&"privacy-voting-poll"));
+        assert!(labels.contains(&"privacy-voting-ballot"));
+        assert!(labels.contains(&"bounty-board-bounty"));
 
         for cell in &cells {
             assert_eq!(cell.owner_agent, "alice");
@@ -392,7 +419,7 @@ mod tests {
         let starbridge = json["starbridge_cells"]
             .as_array()
             .expect("starbridge_cells array present");
-        assert_eq!(starbridge.len(), 6);
+        assert_eq!(starbridge.len(), 9);
         assert_eq!(starbridge[0]["label"], "nameservice-registry");
         assert_eq!(starbridge[0]["owner_agent"], "alice");
         assert_eq!(starbridge[0]["uri_hint"], "registry-default");

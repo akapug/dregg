@@ -12,8 +12,8 @@ use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
 use commands::{
-    cap, cell, cipherclerk, demo, directory, doctor, federation, name, namespace, node, proof,
-    route, storage, turn,
+    bounty, cap, cell, cipherclerk, demo, directory, doctor, federation, name, namespace, node,
+    proof, route, storage, turn, voting,
 };
 
 /// Dragon's Egg -- sovereign cell-based compute substrate.
@@ -87,6 +87,28 @@ enum Commands {
     Name {
         #[command(subcommand)]
         command: name::NameCommand,
+    },
+
+    /// Privacy-voting: open / tally / close / show factory-born poll cells.
+    ///
+    /// The demoable starbridge-app flow — drives a factory-born poll cell whose
+    /// slot caveats (question WriteOnce, tallies Monotonic, closed WriteOnce)
+    /// are enforced by the substrate. See `dregg voting <cmd> --help`.
+    Voting {
+        #[command(subcommand)]
+        command: voting::VotingCommand,
+    },
+
+    /// Bounty-board: post / claim / submit / payout / show factory-born bounty
+    /// cells.
+    ///
+    /// The demoable starbridge-app flow — drives a factory-born bounty cell
+    /// whose lifecycle (OPEN → CLAIMED → SUBMITTED → PAID) is a substrate-
+    /// enforced state machine (state StrictMonotonic, claimant WriteOnce →
+    /// first-claimer-wins). See `dregg bounty <cmd> --help`.
+    Bounty {
+        #[command(subcommand)]
+        command: bounty::BountyCommand,
     },
 
     /// Guided quickstart: run a full nameservice lifecycle against a live node.
@@ -226,6 +248,8 @@ async fn main() {
         Commands::Cell { command } => cell::run(command, &cfg, &ctx).await,
         Commands::Turn { command } => turn::run(command, &cfg, &ctx).await,
         Commands::Name { command } => name::run(command, &cfg, &ctx).await,
+        Commands::Voting { command } => voting::run(command, &cfg, &ctx).await,
+        Commands::Bounty { command } => bounty::run(command, &cfg, &ctx).await,
         Commands::Demo {
             name,
             passphrase,

@@ -1,21 +1,21 @@
 {
   "id": "bounty-board",
   "name": "Bounty Board",
-  "description": "Legacy bounty workflow app retained for porting; not yet a Starbridge userspace app.",
-  "version": "0.0.0",
-  "status": "unported",
-  "legacy_path": "apps/bounty-board",
-  "runtime_mode": "legacy-http",
-  "legacy_listen": "bounty-board:3030",
+  "description": "Dregg-native bounties: factory-born bounty cells whose lifecycle (OPEN -> CLAIMED -> SUBMITTED -> PAID) is a substrate-enforced state machine. Title is write-once, reward is immutable, state is strictly monotone, and the claimant slot is write-once (first-claimer-wins). The workflow rules are enforced by slot caveats, not app bookkeeping.",
+  "version": "0.1.0",
+  "status": "starbridge",
+  "crate": "starbridge-bounty-board",
+  "runtime_mode": "starbridge-native",
   "caddy_prefix": "/bounty",
-  "listen_port": 3030,
-  "factory_vks": [],
+  "factory_vks": [
+    "737461726272696467652d626f756e74792d626f6172642d666163746f727921"
+  ],
   "page": null,
-  "inspectors": [],
-  "turn_builders": [],
-  "required_apis": [],
+  "inspectors": ["bounty"],
+  "turn_builders": ["post_bounty", "claim_bounty", "submit_work", "payout_bounty"],
+  "required_apis": ["/turn/submit", "/cells/create-from-factory", "/api/cell/{id}"],
   "manifest_health": {
-    "status": "legacy-http",
-    "porting_target": "starbridge-apps/bounty-board"
+    "status": "starbridge-native",
+    "ported_from": "apps/bounty-board"
   }
 }

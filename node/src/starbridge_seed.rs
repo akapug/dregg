@@ -54,6 +54,32 @@ pub fn seed_starbridge_factory_cells(
     ledger: &mut Ledger,
     federation_id: [u8; 32],
 ) -> StarbridgeSeedStats {
+    seed_starbridge_factory_cells_with_operator(genesis, data_dir, ledger, federation_id, None)
+}
+
+/// Like [`seed_starbridge_factory_cells`], but additionally grants `operator`
+/// (the node's own agent cell) an owner capability over every cell created in
+/// this pass and opens that cell's `set_state` permission to `AuthRequired::None`.
+///
+/// This is what makes the factory-born cells *demoable from the live node's
+/// `/turn/submit` ingress*, which acts as the operator. Without the cap +
+/// permission, the operator could not author cross-cell `SetField` turns against
+/// a cell owned by a different agent (`alice`), so the slot-caveat gating could
+/// never be exercised over HTTP. The caveats (`WriteOnce` / `Monotonic` /
+/// `StrictMonotonic`) still bite — opening `set_state` only authorizes *who may
+/// attempt* a write; the cell program decides whether the write is *legal*.
+pub fn seed_starbridge_factory_cells_with_operator(
+    genesis: &serde_json::Value,
+    data_dir: &Path,
+    ledger: &mut Ledger,
+    federation_id: [u8; 32],
+    operator: Option<[u8; 32]>,
+) -> StarbridgeSeedStats {
+    // Derive the operator's agent cell id the same way `api.rs` (the
+    // `/turn/submit` path) and `executor_setup::local_agent_cell` do, so the cap
+    // we grant lands on the cell the live ingress actually acts as.
+    let operator_cell = operator
+        .map(|pk| CellId::derive_raw(&pk, blake3::hash(b"default").as_bytes()));
     let entries = match parse_starbridge_cells(genesis) {
         Some(entries) if !entries.is_empty() => entries,
         _ => return StarbridgeSeedStats::default(),
@@ -75,6 +101,11 @@ pub fn seed_starbridge_factory_cells(
     }
 
     let mut marker = load_seed_marker(data_dir);
+    // Per-issuer receipt-chain head. Each issuer (owner agent) accumulates a
+    // receipt chain across its seed turns; the next turn must link to the prior
+    // one via `previous_receipt_hash`, or the executor rejects it with
+    // `ReceiptChainMismatch`. We thread the last committed receipt hash here.
+    let mut receipt_heads: BTreeMap<CellId, [u8; 32]> = BTreeMap::new();
 
     for entry in entries {
         match seed_one_cell(
@@ -85,10 +116,17 @@ pub fn seed_starbridge_factory_cells(
             &factory_descriptors,
             &mut turn_executor,
             &mut marker,
+            &mut receipt_heads,
         ) {
             SeedOutcome::Created { cell_id } => {
                 stats.created += 1;
                 marker.insert(entry.label.clone(), hex_encode(&cell_id.0));
+                // Grant the node operator owner-reach over the freshly-born cell
+                // and open its `set_state` so the live `/turn/submit` ingress (which
+                // acts as the operator) can drive caveat-gated turns against it.
+                if let (Some(op_cell), Some(op_pk)) = (operator_cell, operator) {
+                    grant_operator_reach(ledger, op_cell, op_pk, cell_id);
+                }
                 info!(
                     label = %entry.label,
                     cell_id = %hex_encode(&cell_id.0),
@@ -138,6 +176,7 @@ enum SeedOutcome {
     Failed(String),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn seed_one_cell(
     entry: &StarbridgeGenesisCell,
     data_dir: &Path,
@@ -146,6 +185,7 @@ fn seed_one_cell(
     descriptors: &[FactoryDescriptor],
     turn_executor: &mut TurnExecutor,
     marker: &mut BTreeMap<String, String>,
+    receipt_heads: &mut BTreeMap<CellId, [u8; 32]>,
 ) -> SeedOutcome {
     let factory_vk = match hex_decode_32(&entry.factory_vk_hex) {
         Some(vk) => vk,
@@ -207,37 +247,125 @@ fn seed_one_cell(
     let owner_cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(owner_key));
     let app_cclerk = AppCipherclerk::new(owner_cclerk, federation_id);
 
-    if ledger.get(&app_cclerk.cell_id()).is_none() {
+    // The issuer is the owner agent's genesis-materialized cell. `materialize_
+    // genesis_cells` inserts `Cell::with_balance(pubkey, [0u8;32], _)` (the
+    // default `[0u8;32]` token domain), NOT the `blake3("default")` token the
+    // `AppCipherclerk::cell_id()` accessor derives. Issuing from the wrong id
+    // is why every starbridge cell historically seeded as "owner cell not
+    // present" — derive the issuer the same way genesis does so the seed turn
+    // actually finds (and is authorized by) the funded owner cell.
+    let issuer_cell = CellId::derive_raw(&owner_pubkey, &[0u8; 32]);
+
+    if ledger.get(&issuer_cell).is_none() {
         return SeedOutcome::Skipped(format!(
             "owner agent '{}' cell not present in ledger; run genesis initial_cells first",
             entry.owner_agent
         ));
     }
 
+    // Synthesize the minimal `initial_fields` that satisfy the descriptor's
+    // creation-time `field_constraints` (NonZero/Range/Equality). Without this
+    // every descriptor that declares such a constraint fails birth with
+    // "field N constraint violated" — the cell is born empty and the
+    // constraint validates against `params.initial_fields`. Seeding a satisfying
+    // placeholder (the app's first real turn then writes the true value, gated
+    // by the perpetual `state_constraints`) is what lets the genesis cells
+    // materialize at all.
+    let initial_fields = synth_initial_fields(&descriptor.field_constraints);
+
     let params = FactoryCreationParams {
         mode: descriptor.default_mode.clone(),
         program_vk: program_vk_for_descriptor(descriptor),
-        initial_fields: vec![],
+        initial_fields,
         initial_caps: vec![],
         owner_pubkey,
     };
 
-    let mut turn = app_cclerk.create_from_factory(factory_vk, owner_pubkey, token_id, params);
-    turn.fee = 10_000;
-    turn.nonce = 0;
+    let mut turn = app_cclerk.shared_cipherclerk().read().unwrap().create_from_factory(
+        issuer_cell,
+        factory_vk,
+        owner_pubkey,
+        token_id,
+        params,
+        &federation_id,
+    );
+    turn.fee = 2_000;
+    turn.nonce = ledger.get(&issuer_cell).map(|c| c.state.nonce()).unwrap_or(0);
+    // Link to the issuer's prior seed receipt (if any) so the executor's
+    // per-agent receipt chain validates. The first turn from this issuer carries
+    // `None` (genesis chain head); each subsequent one links to the last commit.
+    turn.previous_receipt_hash = receipt_heads.get(&issuer_cell).copied();
 
     match turn_executor.execute(&turn, ledger) {
-        TurnResult::Committed { .. } => SeedOutcome::Created {
-            cell_id: expected_cell_id,
-        },
+        TurnResult::Committed { receipt, .. } => {
+            receipt_heads.insert(issuer_cell, receipt.receipt_hash());
+            SeedOutcome::Created {
+                cell_id: expected_cell_id,
+            }
+        }
         TurnResult::Rejected { reason, .. } => SeedOutcome::Failed(reason.to_string()),
         TurnResult::Expired => SeedOutcome::Failed("turn expired".into()),
         TurnResult::Pending => SeedOutcome::Failed("turn pending".into()),
     }
 }
 
-/// Register all six starbridge-apps on an ephemeral
-/// [`StarbridgeAppContext`] and return the deployed descriptors.
+/// Synthesize the minimal `(field_index, value)` initial-field list that
+/// satisfies a descriptor's creation-time `field_constraints`:
+/// `NonZero` → 1, `Range { min, .. }` → max(min, 1), `Equality { value, .. }`
+/// → the required value. The value chosen for `NonZero` is just a non-zero
+/// placeholder; the app's first turn overwrites it with the real (hashed)
+/// value under the cell program's perpetual caveats.
+fn synth_initial_fields(
+    constraints: &[dregg_cell::FieldConstraint],
+) -> Vec<(u32, u64)> {
+    use dregg_cell::FieldConstraint;
+    let mut fields: BTreeMap<u32, u64> = BTreeMap::new();
+    for c in constraints {
+        match c {
+            FieldConstraint::NonZero { field_index } => {
+                fields.entry(*field_index).or_insert(1);
+            }
+            FieldConstraint::Range { field_index, min, .. } => {
+                fields.insert(*field_index, (*min).max(1));
+            }
+            FieldConstraint::Equality { field_index, value } => {
+                fields.insert(*field_index, *value);
+            }
+        }
+    }
+    fields.into_iter().collect()
+}
+
+/// Grant `operator` an owner capability over `target` and open `target`'s
+/// `set_state` permission so the operator may author cross-cell `SetField`
+/// turns against it. The cell's `CellProgram` slot caveats still gate whether
+/// each write is *legal*.
+fn grant_operator_reach(
+    ledger: &mut Ledger,
+    operator: CellId,
+    operator_pubkey: [u8; 32],
+    target: CellId,
+) {
+    if let Some(cell) = ledger.get_mut(&target) {
+        cell.permissions.set_state = dregg_cell::AuthRequired::None;
+    }
+    // The operator agent cell is materialized lazily (on its first faucet/turn),
+    // so at boot it may not yet exist. Insert it (zero balance — the operator
+    // funds it via the faucet before driving turns) so the cap grant lands.
+    if ledger.get(&operator).is_none() {
+        let default_token = *blake3::hash(b"default").as_bytes();
+        let op_cell = dregg_cell::Cell::with_balance(operator_pubkey, default_token, 0);
+        let _ = ledger.insert_cell(op_cell);
+    }
+    if let Some(op_cell) = ledger.get_mut(&operator) {
+        op_cell
+            .capabilities
+            .grant(target, dregg_cell::AuthRequired::None);
+    }
+}
+
+/// Register all starbridge-apps on an ephemeral [`StarbridgeAppContext`] and
+/// return the deployed descriptors.
 fn register_starbridge_factory_descriptors() -> Vec<FactoryDescriptor> {
     let bootstrap = AgentCipherclerk::new();
     let app_cclerk = AppCipherclerk::new(bootstrap, [0u8; 32]);
@@ -250,6 +378,8 @@ fn register_starbridge_factory_descriptors() -> Vec<FactoryDescriptor> {
     starbridge_governed_namespace::register(&ctx);
     starbridge_compartment_workflow_mandate::register(&ctx);
     starbridge_storage_gateway_mandate::register(&ctx);
+    starbridge_privacy_voting::register(&ctx);
+    starbridge_bounty_board::register(&ctx);
 
     ctx.factory_registry().descriptors()
 }
@@ -338,13 +468,15 @@ mod tests {
         let cells = default_starbridge_genesis_cells();
         let genesis = serde_json::json!({ "starbridge_cells": cells });
         let parsed = parse_starbridge_cells(&genesis).expect("parse cells");
-        assert_eq!(parsed.len(), 6);
+        assert_eq!(parsed.len(), 9);
         assert_eq!(parsed[0].label, "nameservice-registry");
     }
 
     #[test]
-    fn register_starbridge_factory_descriptors_covers_six_apps() {
+    fn register_starbridge_factory_descriptors_covers_all_apps() {
+        // Six single-factory apps + privacy-voting (poll + ballot = 2) +
+        // bounty-board (1) = 9 factory descriptors.
         let descriptors = register_starbridge_factory_descriptors();
-        assert_eq!(descriptors.len(), 6);
+        assert_eq!(descriptors.len(), 9);
     }
 }

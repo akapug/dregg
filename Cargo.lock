@@ -2350,10 +2350,12 @@ dependencies = [
  "rustls 0.23.40",
  "serde",
  "serde_json",
+ "starbridge-bounty-board",
  "starbridge-compartment-workflow-mandate",
  "starbridge-governed-namespace",
  "starbridge-identity",
  "starbridge-nameservice",
+ "starbridge-privacy-voting",
  "starbridge-storage-gateway-mandate",
  "starbridge-subscription",
  "subtle",
@@ -6848,6 +6850,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "starbridge-bounty-board"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "starbridge-compartment-workflow-mandate"
 version = "0.1.0"
 dependencies = [
@@ -6890,6 +6905,19 @@ dependencies = [
 
 [[package]]
 name = "starbridge-nameservice"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-privacy-voting"
 version = "0.1.0"
 dependencies = [
  "blake3",
