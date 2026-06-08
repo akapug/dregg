@@ -719,6 +719,140 @@ theorem coordViolatedForestG_rolls_back : execFullForestG fma0 coordViolatedFore
 #assert_axioms coordViolatedForestG_gate_rejects
 #assert_axioms coordViolatedForestG_rolls_back
 
+/-! ### A4 — the MACAROON CAVEAT-CHAIN operator, EXECUTED on the live gate (HMAC tail-binding teeth).
+
+Tiers 1-3 (within-cell / cap-authority / coordinated) are witnessed above; the FOURTH authority
+operator — the macaroon HMAC caveat-CHAIN (`NodeAuth.chain`) — was, until here, only ever pinned
+`chain := none` on the live `execFullForestG` path, so its `chainGateG` leg ran only in its no-op
+ABSENT arm. The chain LAWS are proved in `Authority/CaveatChain.lean` (`removal_breaks_tail` /
+`chain_unforgeable` consuming `MacKernel.unforgeable`), but a guarantee that never fires on the live
+gate is narrated, not executed. This section welds a REAL macaroon chain onto a live gated forest's
+root `NodeAuth.chain` and witnesses it BOTH ways on the SAME `execFullForestG` entry:
+
+  * a GENUINE, in-window chain (`CaveatChain.Demo.windowed` — a `seed` then two honest `append`s,
+    verifying by `honest_chain_verifies`, admitting at height `150 ∈ [100,200]`) ⇒ `chainGateG = true`
+    ⇒ `caveatsDischarged = true` ⇒ the gate ADMITS ⇒ the forest COMMITS;
+  * a FORGED chain (`CaveatChain.Demo.forgedDropped` — `windowed`'s tail kept but the last caveat
+    DROPPED without re-signing, the `test_removed_caveat_fails` attack) ⇒ `Chain.verify = false`
+    (`removal_breaks_tail` is why: the dropped HMAC step is no no-op under a sound `mac`) ⇒
+    `chainGateG = false` ⇒ `caveatsDischarged = false` ⇒ the gate REJECTS ⇒ `execFullForestG = none`,
+    rollback.
+
+So the HMAC tail-binding is EXECUTED end-to-end on the live gate — caveat-removal is caught at the
+executor admission, not in a side theorem. Non-vacuous each direction (verify-true admits AND
+verify-false rejects), on the same production entry as tiers 1-3. The macaroon `MacKernel` here is the
+honest reference kernel (`CaveatChain.honestMacKernel`), whose `unforgeable` carrier is PROVED
+(`honest_unforgeable`) and is provably FALSE for the collapsing kernel (`collapse_not_unforgeable`) —
+so the integrity is load-bearing, not a `True` no-op. -/
+
+open Dregg2.Authority.CaveatChain (Chain)
+open Dregg2.Authority.CaveatChain.Demo (windowed forgedDropped)
+
+/-- A node-auth carrying a REAL macaroon caveat-chain in `NodeAuth.chain` (the fourth authority
+operator, live). The credential (WHO) and cap-authority (WHAT) are the same genuine/`.unchecked` legs
+`mkAuth` pins; only `chain` is the load-bearing macaroon. `chainCtx := 150` lands inside the chain's
+`[100,200]` window, and `chainDis` supplies no third-party discharges (the chain has none). -/
+def mkAuthChain (cred : Authorization Dg Pf) (caveats : List GatedCaveat)
+    (chain : Chain Cx Gw (Nat) Bt Tg) : DNodeAuth :=
+  { cred := cred, rev := Credential.noRevocations
+  , capMode := .unchecked (Guard.all []), capCtx := baseCapCtx
+  , caveats := caveats, chain := some chain, chainCtx := 150, chainDis := fun _ => false }
+
+/-- A live gated forest whose root carries the GENUINE in-window macaroon chain. Balance-neutral
+`emitEvent`, so the only authority that matters is the chain's verify+admit. ADMITS. -/
+def chainOkForestG : DForest :=
+  ⟨ mkAuthChain goodCred [trueCaveat] windowed, .emitEventA 0 0 0 0, [] ⟩
+
+/-- A live gated forest whose root carries the FORGED (caveat-dropped) macaroon chain. Identical
+except the chain fails `verify`. REJECTED by the chain leg. -/
+def chainForgedForestG : DForest :=
+  ⟨ mkAuthChain goodCred [trueCaveat] forgedDropped, .emitEventA 0 0 0 0, [] ⟩
+
+/-- **`chainOkForestG_chainGate` — the genuine chain's HMAC gate PASSES (PROVED).** `chainGateG`
+unfolds to `windowed.verify && windowed.admits 150 _`; the honest chain verifies and admits in-window. -/
+theorem chainOkForestG_chainGate : chainGateG chainOkForestG.auth = true := by
+  unfold chainOkForestG mkAuthChain chainGateG
+  decide
+
+/-- **`chainForgedForestG_chainGate` — the forged chain's HMAC gate FAILS (PROVED, the teeth).**
+`forgedDropped.verify = false` (the dropped caveat broke the tail — `removal_breaks_tail`), so the
+`&&` short-circuits to `false`. NON-VACUOUS against the genuine chain above. -/
+theorem chainForgedForestG_chainGate : chainGateG chainForgedForestG.auth = false := by
+  unfold chainForgedForestG mkAuthChain chainGateG
+  decide
+
+/-- The genuine-chain forest's caveat leg discharges at `fma0` (`trueCaveat` ∧ the verifying chain). -/
+theorem chainOkForestG_caveats_fma0 : caveatsDischarged chainOkForestG.auth fma0 = true := by
+  unfold chainOkForestG mkAuthChain caveatsDischarged trueCaveat chainGateG fma0
+  decide
+
+/-- The genuine-chain forest passes the full 4-leg gate at `fma0`. -/
+theorem chainOkForestG_gateOK : gateOK chainOkForestG.auth fma0 = true := by
+  have hcred : credentialValidG chainOkForestG.auth = true := by
+    unfold chainOkForestG mkAuthChain credentialValidG goodCred; decide
+  have hcap : capAuthorityG chainOkForestG.auth = true := by
+    unfold chainOkForestG mkAuthChain capAuthorityG
+    exact unchecked_unconstrained_admits (Guard.all []) baseCapCtx (fun _ _ => by simp)
+  have hrev : revocationGate chainOkForestG.auth fma0 = true := by
+    unfold chainOkForestG mkAuthChain revocationGate fma0; simp
+  unfold gateOK
+  simp only [Bool.and_eq_true, hcred, hcap, chainOkForestG_caveats_fma0, hrev]
+  trivial
+
+/-- **`chainOkForestG_commits` — the GENUINE macaroon chain COMMITS end-to-end on the live
+`execFullForestG` path (PROVED).** The whole gated forest runs and produces a post-state — the HMAC
+chain is verified+admitted inline by `chainGateG`, on the SAME production entry as tiers 1-3. -/
+theorem chainOkForestG_commits : (execFullForestG fma0 chainOkForestG).isSome := by
+  have herase : (execFullForestA fma0 (eraseG chainOkForestG)).isSome := by decide
+  rcases Option.isSome_iff_exists.mp herase with ⟨s', hs'⟩
+  refine Option.isSome_iff_exists.mpr ⟨s', ?_⟩
+  dsimp [execFullForestG, chainOkForestG, execFullChildrenG]
+  have hga := (execFullAGated_some_iff fma0 s' (mkAuthChain goodCred [trueCaveat] windowed)
+    (.emitEventA 0 0 0 0)).mpr ⟨chainOkForestG_gateOK, hs'⟩
+  simpa [hga]
+
+/-- The forged-chain forest's caveat leg FAIL-CLOSES at `fma0` (the chain leg breaks the meet). -/
+theorem chainForgedForestG_caveats_fma0 : caveatsDischarged chainForgedForestG.auth fma0 = false := by
+  unfold chainForgedForestG mkAuthChain caveatsDischarged trueCaveat chainGateG fma0
+  decide
+
+/-- The forged-chain forest is REJECTED by the full gate (the chain leg fail-closes the conjunction). -/
+theorem chainForgedForestG_gate_rejects : gateOK chainForgedForestG.auth fma0 = false := by
+  unfold gateOK
+  rw [chainForgedForestG_caveats_fma0]
+  simp
+
+/-- **`chainForgedForestG_rolls_back` — the FORGED macaroon chain does NOT commit (PROVED, the
+teeth).** The dropped caveat broke the HMAC tail ⇒ `execFullForestG = none` ⇒ whole-forest rollback.
+Caveat-removal is caught at the EXECUTOR ADMISSION, non-vacuously against `chainOkForestG_commits`. -/
+theorem chainForgedForestG_rolls_back : execFullForestG fma0 chainForgedForestG = none := by
+  have hgate : gateOK chainForgedForestG.auth fma0 = false := chainForgedForestG_gate_rejects
+  unfold chainForgedForestG at hgate ⊢
+  show (match execFullAGated fma0 (mkAuthChain goodCred [trueCaveat] forgedDropped)
+            (.emitEventA 0 0 0 0) with
+        | some s' => execFullChildrenG (targetOf (.emitEventA 0 0 0 0)) s' ([] : List DChild)
+        | none    => none) = none
+  rw [execFullAGated]
+  simp only [hgate]
+  rfl
+
+-- The macaroon caveat-chain operator is EXECUTED end-to-end on the live gate, both ways:
+#guard (chainGateG chainOkForestG.auth)                          --  true  (honest chain verifies+admits)
+#guard (chainGateG chainForgedForestG.auth) == false             --  false (forged: dropped caveat)
+#guard (caveatsDischarged chainOkForestG.auth fma0)              --  true
+#guard (caveatsDischarged chainForgedForestG.auth fma0) == false --  false
+#guard ((execFullForestG fma0 chainOkForestG).isSome)               --  true  (chain COMMITS)
+#guard ((execFullForestG fma0 chainForgedForestG).isSome) == false  --  false (forged chain ⇒ rollback)
+
+#assert_axioms chainOkForestG_chainGate
+#assert_axioms chainForgedForestG_chainGate
+#assert_axioms chainOkForestG_caveats_fma0
+#assert_axioms chainOkForestG_gateOK
+#assert_axioms chainOkForestG_commits
+#assert_axioms chainForgedForestG_caveats_fma0
+#assert_axioms chainForgedForestG_gate_rejects
+#assert_axioms chainForgedForestG_rolls_back
+
 end StarbridgeGated
 
 end Dregg2.Exec
