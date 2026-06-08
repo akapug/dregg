@@ -22,19 +22,23 @@
 //!
 //! ## What this validated (real Plonky3 output)
 //!
-//! * **transfer** (both directions, selector 1) is FULLY CUTOVER-READY: the descriptor
-//!   interpreter and the hand-AIR both prove+verify the honest witness, agree on accept,
-//!   and both reject the forged-balance + forged-state-commit tampers. The mechanism
-//!   WORKS end-to-end for transfer.
+//! * **GRADUATED (7 selectors AGREE + prove+verify+anti-ghost):** `transfer` (1, the beachhead),
+//!   the FULL-ECONOMIC effects `note_spend` (4), `note_create` (5), `bridge_mint` (40), `burn` (46)
+//!   (reconciled onto the runtime balance-column + nonce-tick convention), and the FROZEN-FRAME
+//!   nonce-tick effects `create_seal_pair` (28) and `bridge_finalize` (41) (their Lean emit modules
+//!   tick the runtime nonce via `gNonce`; the committed descriptor JSON was re-emitted to match).
+//!   Each: descriptor interpreter AND hand-AIR both prove+verify the honest witness, agree on accept,
+//!   and both reject the forged-balance + forged-state-commit tampers.
 //!
-//! * **burn / note_create / note_spend** are NOT yet cutover-ready over the CURRENT Rust
-//!   trace layout — a real, precise COLUMN-MAPPING DIVERGENCE between the Lean-emitted
-//!   descriptor and the `generate_effect_vm_trace` param convention (see
-//!   [`column_divergence_blockers`] for the documented, asserted blocker). The descriptor
-//!   is internally consistent + verified-by-construction; it reads a DIFFERENT param/state
-//!   column than the trace generator writes. The harness CATCHES this (it is the value of
-//!   the differential), and the cutover for these effects is gated on reconciling the
-//!   layouts (re-emit the descriptor onto the Rust param convention, or vice-versa).
+//! * **The remaining selectors DIVERGE / are unconstructible.** `enumerate_all_descriptor_divergences`
+//!   maps the full set; `pinpoint_divergence_per_selector` reports the FIRST failing constraint per
+//!   diverging selector; `classify_divergence_nonce_only_vs_deeper` splits the divergences into
+//!   NONCE-TICK-ONLY (the descriptor freezes the nonce where the runtime ticks — column-reconcilable
+//!   like the graduated set) vs DEEPER (cell move/zero, param-column mismatch, or an off-trace
+//!   side-table the per-row IR cannot re-derive). `nonce_tick_patch_graduates_the_13` is the
+//!   proof-of-concept that an in-memory nonce-tick patch graduates the clean candidates AND surfaces
+//!   the anti-ghost-WEAK ones (frozen-frame descriptors MISSING the last-row balance PI binding —
+//!   their forged-balance tooth does not bite until that binding is emitted).
 
 use dregg_circuit::effect_vm::columns::{STATE_AFTER_BASE, state};
 use dregg_circuit::effect_vm::{CellState, Effect, generate_effect_vm_trace, pi};
@@ -44,7 +48,8 @@ use dregg_circuit::effect_vm_descriptors::{
 use dregg_circuit::effect_vm_p3_full_air::{p3_air_accepts, prove_effect_vm_p3, verify_effect_vm_p3};
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::{
-    descriptor_air_accepts, parse_vm_descriptor, prove_vm_descriptor, verify_vm_descriptor,
+    LeanExpr, VmConstraint, descriptor_air_accepts, parse_vm_descriptor, prove_vm_descriptor,
+    verify_vm_descriptor,
 };
 
 /// A representative HONEST effect for a registered selector, or `None` if the selector
@@ -487,6 +492,118 @@ fn economic_effects_graduated_into_cutover() {
     assert_eq!(graduated, 4, "all four economic effects must graduate");
 }
 
+/// GRADUATED FROZEN-FRAME EFFECTS: createSealPair / bridgeFinalize reconciled onto the runtime
+/// nonce-TICK convention (the Lean emit modules now tick the global nonce via `gNonce`; the committed
+/// descriptor JSON was re-emitted to match). Each is a FROZEN-balance, TICKED-nonce effect: every
+/// economic-data column is frozen, the nonce ticks by one (the runtime ticks every non-NoOp row), and
+/// the post-state is bound into `state_commit` (GROUP-4) with the full last-row balance PI pins. Each
+/// now proves+verifies through BOTH the descriptor interpreter and the hand-AIR over the SAME honest
+/// witness, AGREES on accept, and BOTH reject the forged-balance + forged-state-commit tampers —
+/// exactly the beachhead gauntlet. This advances the cutover beyond the economic effects to the
+/// nonce-tick-reconciled frozen-frame effects.
+#[test]
+fn bridge_finalize_and_seal_pair_graduated_into_cutover() {
+    use dregg_circuit::effect_vm::columns::sel;
+    struct Case {
+        label: &'static str,
+        sel: usize,
+        st: CellState,
+        effects: Vec<Effect>,
+    }
+    let cases = vec![
+        Case {
+            label: "create_seal_pair",
+            sel: sel::CREATE_SEAL_PAIR,
+            st: CellState::new(100_000, 0),
+            effects: vec![Effect::CreateSealPair { pair_hash: {
+                let mut a = [BabyBear::ZERO; 8];
+                a[0] = BabyBear::new(0xA1);
+                a
+            } }],
+        },
+        Case {
+            label: "bridge_finalize",
+            sel: sel::BRIDGE_FINALIZE,
+            st: CellState::new(100_000, 0),
+            effects: vec![Effect::BridgeFinalize { finalize_hash: {
+                let mut a = [BabyBear::ZERO; 8];
+                a[0] = BabyBear::new(0xF1);
+                a
+            } }],
+        },
+    ];
+
+    let mut graduated = 0usize;
+    for c in cases {
+        let (base_trace, pis) = generate_effect_vm_trace(&c.st, &c.effects);
+        assert_eq!(base_trace[0].len(), 186, "[{}] canonical 186-col layout", c.label);
+        let json = descriptor_for_selector(c.sel)
+            .unwrap_or_else(|| panic!("[{}] selector {} has no descriptor", c.label, c.sel));
+        let name = descriptor_name_for_selector(c.sel).unwrap();
+        let desc = parse_vm_descriptor(json).expect("descriptor parses");
+        let dpis = &pis[..desc.public_input_count];
+
+        // (1) DESCRIPTOR INTERPRETER — prove + independent verify, real Plonky3.
+        let desc_proof = prove_vm_descriptor(&desc, &base_trace, dpis).unwrap_or_else(|e| {
+            panic!("[{}] descriptor `{name}` failed to PROVE the honest witness: {e}", c.label)
+        });
+        verify_vm_descriptor(&desc, &desc_proof, dpis)
+            .unwrap_or_else(|e| panic!("[{}] descriptor proof failed independent verify: {e}", c.label));
+
+        // (2) HAND-AIR — prove + independent verify, same witness.
+        let hand_proof = prove_effect_vm_p3(&base_trace, &pis)
+            .unwrap_or_else(|e| panic!("[{}] hand-AIR failed to prove honest witness: {e:?}", c.label));
+        verify_effect_vm_p3(&hand_proof, &pis)
+            .unwrap_or_else(|e| panic!("[{}] hand-AIR proof failed verify: {e:?}", c.label));
+
+        // (3) THE DIFFERENTIAL — both accept the SAME honest witness.
+        let hand_accepts = p3_air_accepts(&base_trace, &pis);
+        let desc_accepts = descriptor_air_accepts(&desc, &base_trace, dpis);
+        assert!(hand_accepts, "[{}] hand-AIR rejected a witness it just PROVED", c.label);
+        assert!(desc_accepts, "[{}] descriptor rejected a witness it just PROVED", c.label);
+        assert_eq!(hand_accepts, desc_accepts, "[{}] DIFFERENTIAL DISAGREEMENT", c.label);
+
+        // (4a) ANTI-GHOST — forged FINAL_BAL_LO is UNSAT for BOTH.
+        {
+            let mut forged = pis.clone();
+            forged[pi::FINAL_BAL_LO] = forged[pi::FINAL_BAL_LO] + BabyBear::new(123);
+            let fdpis = &forged[..desc.public_input_count];
+            assert!(!p3_air_accepts(&base_trace, &forged), "[{}] hand-AIR took forged bal", c.label);
+            assert!(
+                !descriptor_air_accepts(&desc, &base_trace, fdpis),
+                "[{}] descriptor MORE PERMISSIVE on forged FINAL_BAL_LO", c.label
+            );
+            assert!(
+                prove_vm_descriptor(&desc, &base_trace, fdpis).is_err(),
+                "[{}] descriptor PROVED a forged FINAL_BAL_LO", c.label
+            );
+        }
+        // (4b) ANTI-GHOST — mutated last-row state-commit cell is UNSAT.
+        {
+            let mut t = base_trace.clone();
+            let last = t.len() - 1;
+            t[last][STATE_AFTER_BASE + state::STATE_COMMIT] =
+                t[last][STATE_AFTER_BASE + state::STATE_COMMIT] + BabyBear::new(1);
+            assert!(
+                !descriptor_air_accepts(&desc, &t, dpis),
+                "[{}] descriptor took a forged last-row state-commit cell", c.label
+            );
+            assert!(
+                prove_vm_descriptor(&desc, &t, dpis).is_err(),
+                "[{}] descriptor PROVED a forged state-commit cell", c.label
+            );
+        }
+
+        eprintln!(
+            "[{}] GRADUATED: descriptor `{name}` + hand-AIR both prove+verify the honest witness, agree \
+             on accept, and both reject the forged-balance + forged-state-commit tampers.",
+            c.label
+        );
+        graduated += 1;
+    }
+    assert_eq!(graduated, 2, "both frozen-frame effects must graduate");
+}
+
 /// HONEST CUTOVER CATALOG — the economic effects that remain BLOCKED, and WHY. This documents the
 /// precise residual divergences the differential surfaces (a real, valuable finding, not a hidden
 /// failure). There are NO column-fixable economic blockers left among the selector-bound full-economic
@@ -542,5 +659,291 @@ fn remaining_economic_blockers_are_documented() {
              Lean descriptor `{}` does not (reads param0 + freezes nonce; trace uses param1 + ticks).",
             desc.name
         );
+    }
+}
+
+// ============================================================================
+// DIAGNOSTIC: pinpoint the failing constraint(s) per diverging selector.
+// ============================================================================
+
+/// Modular BabyBear field constant (the prime p = 2^31 - 2^27 + 1).
+const BB_P: i128 = ((1i128 << 31) - (1i128 << 27)) + 1;
+
+/// Evaluate a `LeanExpr` over a concrete trace row, returning the canonical
+/// field value as an `i128` in `[0, p)`. This is the exact arithmetic the AIR's
+/// `eval_expr` performs (Var → column, Const → reduced field const, Add/Mul →
+/// field ops), so a non-zero result here is exactly a violated gate.
+fn eval_lean_expr(e: &LeanExpr, row: &[BabyBear]) -> i128 {
+    match e {
+        LeanExpr::Var(i) => row[*i].0 as i128 % BB_P,
+        LeanExpr::Const(c) => (((*c as i128) % BB_P) + BB_P) % BB_P,
+        LeanExpr::Add(a, b) => (eval_lean_expr(a, row) + eval_lean_expr(b, row)) % BB_P,
+        LeanExpr::Mul(a, b) => (eval_lean_expr(a, row) * eval_lean_expr(b, row)) % BB_P,
+    }
+}
+
+// State-layout mirror (descriptor's notion; equals the runtime's).
+const SBB: usize = 54; // STATE_BEFORE_BASE
+const SAB: usize = 76; // STATE_AFTER_BASE
+
+/// THE PRECISE DIVERGENCE PROBE. For every diverging selector, walk each
+/// constraint on the real honest trace and report the FIRST failing constraint
+/// (gate body ≠ 0 on a transition row; transition continuity mismatch; or a PI
+/// binding mismatch on the bound row). This converts "DIVERGE" into an actionable
+/// "constraint #k of kind K fails: reads col X = v, expects W" — the exact data
+/// needed to decide column-reconcile vs IR-extension. REPORT ONLY (never fails).
+#[test]
+fn pinpoint_divergence_per_selector() {
+    use dregg_circuit::effect_vm::columns::sel;
+    let _ = (SBB, SAB);
+    for (sel, name, _json, _fp) in SELECTOR_DESCRIPTORS {
+        if *sel == sel::TRANSFER {
+            continue;
+        }
+        let Some((st, effects)) = honest_case_for_selector(*sel) else { continue };
+        let generated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            generate_effect_vm_trace(&st, &effects)
+        }));
+        let (base_trace, pis) = match generated {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let desc = parse_vm_descriptor(descriptor_for_selector(*sel).unwrap()).unwrap();
+        let dpis = &pis[..desc.public_input_count];
+        if descriptor_air_accepts(&desc, &base_trace, dpis) {
+            continue; // agrees — not a divergence
+        }
+        if !p3_air_accepts(&base_trace, &pis) {
+            continue; // fixture not representative
+        }
+        let n = base_trace.len();
+        let mut fails: Vec<String> = Vec::new();
+        for (ci, c) in desc.constraints.iter().enumerate() {
+            match c {
+                VmConstraint::Gate(body) => {
+                    // Transition domain: rows 0..n-2.
+                    for r in 0..n.saturating_sub(1) {
+                        let v = eval_lean_expr(body, &base_trace[r]);
+                        if v != 0 {
+                            fails.push(format!("gate#{ci} row{r} body={v}"));
+                            break;
+                        }
+                    }
+                }
+                VmConstraint::Transition { hi, lo } => {
+                    for r in 0..n.saturating_sub(1) {
+                        let nv = base_trace[r + 1][SBB + hi].0;
+                        let lv = base_trace[r][SAB + lo].0;
+                        if nv != lv {
+                            fails.push(format!(
+                                "transition#{ci} row{r} next.before[{hi}]={nv} != this.after[{lo}]={lv}"
+                            ));
+                            break;
+                        }
+                    }
+                }
+                VmConstraint::PiBinding { row, col, pi_index } => {
+                    use dregg_circuit::lean_descriptor_air::VmRow;
+                    let r = match row {
+                        VmRow::First => 0,
+                        VmRow::Last => n - 1,
+                    };
+                    let cv = base_trace[r][*col].0;
+                    let pv = dpis[*pi_index].0;
+                    if cv != pv {
+                        fails.push(format!(
+                            "pi#{ci} {:?} col{col}={cv} != pi[{pi_index}]={pv}",
+                            row
+                        ));
+                    }
+                }
+            }
+            if fails.len() >= 4 {
+                break;
+            }
+        }
+        eprintln!(
+            "[sel {sel:>2} {name}] DIVERGE — first failing: {}",
+            if fails.is_empty() { "(none found at row granularity — likely range/hash-site)".into() } else { fails.join("; ") }
+        );
+    }
+}
+
+/// CLASSIFIER: for each diverging selector, determine whether the descriptor would
+/// ACCEPT the honest trace if the nonce were the ONLY discrepancy — i.e. patch the
+/// trace so `after.NONCE == before.NONCE` (undo the runtime tick) and re-check. If
+/// the patched trace is accepted, the divergence is NONCE-TICK-ONLY (the same
+/// column-reconcile that graduated the economic effects, doable by re-emitting the
+/// descriptor with the tick). Otherwise it is a DEEPER divergence (cell move/zero,
+/// param-column mismatch, or off-trace side-table). REPORT ONLY.
+#[test]
+fn classify_divergence_nonce_only_vs_deeper() {
+    use dregg_circuit::effect_vm::columns::sel;
+    let mut nonce_only: Vec<(usize, &str)> = Vec::new();
+    let mut deeper: Vec<(usize, &str)> = Vec::new();
+    for (s, name, _json, _fp) in SELECTOR_DESCRIPTORS {
+        if *s == sel::TRANSFER {
+            continue;
+        }
+        let Some((st, effects)) = honest_case_for_selector(*s) else { continue };
+        let generated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            generate_effect_vm_trace(&st, &effects)
+        }));
+        let (base_trace, pis) = match generated {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let desc = parse_vm_descriptor(descriptor_for_selector(*s).unwrap()).unwrap();
+        let dpis = &pis[..desc.public_input_count];
+        if descriptor_air_accepts(&desc, &base_trace, dpis) {
+            continue;
+        }
+        if !p3_air_accepts(&base_trace, &pis) {
+            continue;
+        }
+        // Patch: set every row's after.NONCE := before.NONCE (undo the tick), so a
+        // nonce-freeze gate would now hold. NOTE this also breaks state_commit, so
+        // we ALSO recompute nothing — instead we only test the NON-commit gates by
+        // patching BOTH nonce cells AND leaving the GROUP-4 commit out of scope:
+        // we patch after.NONCE to before.NONCE on each row; if the only failing
+        // gates were the nonce gate (col78==col56) the patched trace accepts. The
+        // state_commit GROUP-4 hash site reads after.NONCE, so a nonce patch shifts
+        // the expected commit too — but the runtime's state_commit was computed over
+        // the TICKED nonce, so this would now mismatch. To isolate, we patch nonce
+        // AND the published commit is checked via the hash site over the patched
+        // cells, which the harness recomputes. Since we cannot recompute Poseidon2
+        // here, we instead classify by the pinpoint result: nonce-only ⟺ the ONLY
+        // failing gates are the freeze gate(s) `after.NONCE - before.NONCE`.
+        let n = base_trace.len();
+        let mut only_nonce = true;
+        let mut any_fail = false;
+        for c in desc.constraints.iter() {
+            if let VmConstraint::Gate(body) = c {
+                for r in 0..n.saturating_sub(1) {
+                    if eval_lean_expr(body, &base_trace[r]) != 0 {
+                        any_fail = true;
+                        // Is this gate exactly `after.NONCE - before.NONCE`
+                        // (col 78 minus col 56)? Check by patching nonce and
+                        // re-evaluating: if it then vanishes, it's the nonce gate.
+                        let mut patched = base_trace[r].clone();
+                        patched[SAB + 2] = patched[SBB + 2]; // after.NONCE := before.NONCE
+                        if eval_lean_expr(body, &patched) != 0 {
+                            only_nonce = false;
+                        }
+                        break;
+                    }
+                }
+            }
+            if !only_nonce {
+                break;
+            }
+        }
+        if any_fail && only_nonce {
+            nonce_only.push((*s, name));
+        } else {
+            deeper.push((*s, name));
+        }
+    }
+    eprintln!("\n==== DIVERGENCE CLASSIFICATION ====");
+    eprintln!("NONCE-TICK-ONLY (gate-level; graduate via descriptor nonce-tick re-emit) ({}):", nonce_only.len());
+    for (s, n) in &nonce_only {
+        eprintln!("  sel {s:>2}  {n}");
+    }
+    eprintln!("DEEPER (cell move/zero / param-col / off-trace side-table) ({}):", deeper.len());
+    for (s, n) in &deeper {
+        eprintln!("  sel {s:>2}  {n}");
+    }
+}
+
+/// PROOF-OF-CONCEPT: for each NONCE-TICK-ONLY selector, patch the parsed descriptor
+/// IN MEMORY — replace the nonce-freeze gate (`after.NONCE - before.NONCE`) with the
+/// runtime nonce-TICK gate (`(after.NONCE - before.NONCE) - (1 - sel.NOOP)`) — and
+/// confirm the patched descriptor (a) ACCEPTS the honest trace and (b) still REJECTS
+/// the forged-balance and forged-state-commit tampers. This validates that re-emitting
+/// these 13 descriptors with the nonce tick graduates them, BEFORE doing the Lean work.
+#[test]
+fn nonce_tick_patch_graduates_the_13() {
+    use dregg_circuit::effect_vm::columns::sel;
+    // The nonce-freeze gate body: after.NONCE - before.NONCE  (cols 78, 56).
+    let is_nonce_freeze = |body: &LeanExpr| -> bool {
+        matches!(body,
+            LeanExpr::Add(a, b)
+                if matches!(**a, LeanExpr::Var(78))
+                && matches!(**b, LeanExpr::Mul(ref m, ref v)
+                    if matches!(**m, LeanExpr::Const(-1)) && matches!(**v, LeanExpr::Var(56))))
+    };
+    // The nonce-TICK gate body: (after.NONCE - before.NONCE) - (1 - sel.NOOP).
+    let tick_body = || -> LeanExpr {
+        let after_minus_before = LeanExpr::Add(
+            Box::new(LeanExpr::Var(78)),
+            Box::new(LeanExpr::Mul(Box::new(LeanExpr::Const(-1)), Box::new(LeanExpr::Var(56)))),
+        );
+        let one_minus_noop = LeanExpr::Add(
+            Box::new(LeanExpr::Const(1)),
+            Box::new(LeanExpr::Mul(Box::new(LeanExpr::Const(-1)), Box::new(LeanExpr::Var(0)))),
+        );
+        LeanExpr::Add(
+            Box::new(after_minus_before),
+            Box::new(LeanExpr::Mul(Box::new(LeanExpr::Const(-1)), Box::new(one_minus_noop))),
+        )
+    };
+
+    let candidates: &[usize] = &[26, 27, 28, 29, 30, 34, 35, 36, 41, 47, 49, 52, 53];
+    let mut graduated = Vec::new();
+    let mut still_blocked = Vec::new();
+    for &s in candidates {
+        let Some((st, effects)) = honest_case_for_selector(s) else {
+            still_blocked.push((s, "unconstructible".to_string()));
+            continue;
+        };
+        let g = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            generate_effect_vm_trace(&st, &effects)
+        }));
+        let (base_trace, pis) = match g {
+            Ok(v) => v,
+            Err(_) => { still_blocked.push((s, "fixture panics".into())); continue }
+        };
+        let mut desc = parse_vm_descriptor(descriptor_for_selector(s).unwrap()).unwrap();
+        // Patch every nonce-freeze gate → nonce-tick. incrementNonce (53) binds nonce
+        // to param2 instead of a freeze; handle it specially below.
+        let mut patched = 0;
+        for c in desc.constraints.iter_mut() {
+            if let VmConstraint::Gate(body) = c {
+                if is_nonce_freeze(body) {
+                    *body = tick_body();
+                    patched += 1;
+                }
+            }
+        }
+        let dpis = &pis[..desc.public_input_count];
+        let accepts = descriptor_air_accepts(&desc, &base_trace, dpis);
+        if !accepts {
+            still_blocked.push((s, format!("patched {patched} nonce gate(s); still rejects (deeper than nonce)")));
+            continue;
+        }
+        // Anti-ghost: forged balance + forged state-commit must still UNSAT.
+        let mut forged = pis.clone();
+        forged[pi::FINAL_BAL_LO] = forged[pi::FINAL_BAL_LO] + BabyBear::new(123);
+        let fdpis = &forged[..desc.public_input_count];
+        let bal_ghost_ok = !descriptor_air_accepts(&desc, &base_trace, fdpis);
+        let mut t = base_trace.clone();
+        let last = t.len() - 1;
+        t[last][STATE_AFTER_BASE + state::STATE_COMMIT] =
+            t[last][STATE_AFTER_BASE + state::STATE_COMMIT] + BabyBear::new(1);
+        let commit_ghost_ok = !descriptor_air_accepts(&desc, &t, dpis);
+        if bal_ghost_ok && commit_ghost_ok {
+            graduated.push(s);
+        } else {
+            still_blocked.push((s, format!(
+                "accepts honest but anti-ghost WEAK (bal_ghost={bal_ghost_ok} commit_ghost={commit_ghost_ok})"
+            )));
+        }
+    }
+    let _ = sel::TRANSFER;
+    eprintln!("\n==== NONCE-TICK PATCH PoC ====");
+    eprintln!("GRADUATED by nonce-tick patch ({}): {:?}", graduated.len(), graduated);
+    eprintln!("STILL BLOCKED ({}):", still_blocked.len());
+    for (s, why) in &still_blocked {
+        eprintln!("  sel {s:>2}  {why}");
     }
 }

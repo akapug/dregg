@@ -254,10 +254,12 @@ fn effect_vm_circuit_descriptor() -> CircuitDescriptor {
 // (`circuit/tests/effect_vm_descriptor_cutover_harness.rs`), which proves the interpreter
 // decides IDENTICALLY to the hand-AIR over the real witness (honest accept + anti-ghost
 // reject). The validated set is now `Transfer` (1) PLUS the reconciled FULL-ECONOMIC
-// effects `Burn` (46), `NoteCreate` (5), `NoteSpend` (4), `BridgeMint` (40) — all graduated
-// by `economic_effects_graduated_into_cutover`. Every other shape (multi-effect turns, the
-// IR-blocked side-table effects) FALLS BACK to the hand-AIR. So flipping the flag NEVER
-// changes the proven semantics; it only swaps the prover for the validated effects.
+// effects `Burn` (46), `NoteCreate` (5), `NoteSpend` (4), `BridgeMint` (40) — graduated by
+// `economic_effects_graduated_into_cutover` — PLUS the nonce-tick-reconciled frozen-frame
+// effects `CreateSealPair` (28) and `BridgeFinalize` (41), graduated by
+// `bridge_finalize_and_seal_pair_graduated_into_cutover`. Every other shape (multi-effect
+// turns, the IR-blocked side-table effects) FALLS BACK to the hand-AIR. So flipping the flag
+// NEVER changes the proven semantics; it only swaps the prover for the validated effects.
 
 /// Is the descriptor-interpreter cutover prover enabled (`DREGG_DESCRIPTOR_PROVER=1`)?
 fn descriptor_prover_enabled() -> bool {
@@ -269,7 +271,8 @@ fn descriptor_prover_enabled() -> bool {
 /// The selector for a turn that is a SINGLE cutover-ready effect, or `None`. Validated
 /// cutover-ready (descriptor ⟺ hand-AIR proven IDENTICAL on the real witness + anti-ghost):
 /// `Transfer` (1) plus the reconciled full-economic effects `NoteSpend` (4), `NoteCreate`
-/// (5), `BridgeMint` (40), `Burn` (46).
+/// (5), `BridgeMint` (40), `Burn` (46), plus the nonce-tick-reconciled frozen-frame effects
+/// `CreateSealPair` (28) and `BridgeFinalize` (41).
 fn cutover_ready_selector(effects: &[VmEffectKind]) -> Option<usize> {
     if effects.len() != 1 {
         return None;
@@ -280,15 +283,40 @@ fn cutover_ready_selector(effects: &[VmEffectKind]) -> Option<usize> {
         VmEffectKind::NoteCreate { .. } => Some(sel::NOTE_CREATE),
         VmEffectKind::BridgeMint { .. } => Some(sel::BRIDGE_MINT),
         VmEffectKind::Burn { .. } => Some(sel::BURN),
+        // GRADUATED (nonce-tick reconcile): frozen-balance + ticked-nonce effects whose Lean
+        // descriptors now tick the runtime nonce (`gNonce`) AND carry the full last-row balance
+        // PI bindings, so the descriptor decides IDENTICALLY to the hand-AIR on the real witness
+        // (honest accept + forged-balance/forged-state-commit reject) — validated by
+        // `bridge_finalize_and_seal_pair_graduated_into_cutover`.
+        VmEffectKind::CreateSealPair { .. } => Some(sel::CREATE_SEAL_PAIR),
+        VmEffectKind::BridgeFinalize { .. } => Some(sel::BRIDGE_FINALIZE),
         _ => None,
     }
 }
 
 /// All selectors a cutover-ready descriptor proof may bind, for the verify path (which does
-/// not carry the effect kind). The structurally-distinct descriptor gates mean a proof made
-/// under one selector's descriptor will not verify under another's, so trying each is sound.
-const CUTOVER_READY_SELECTORS: &[usize] =
-    &[sel::TRANSFER, sel::NOTE_SPEND, sel::NOTE_CREATE, sel::BRIDGE_MINT, sel::BURN];
+/// not carry the effect kind). The verifier tries each in turn and accepts on the first that
+/// verifies the proof.
+///
+/// SOUNDNESS NOTE (empirically observed; `circuit/tests/effect_vm_descriptor_cutover_harness.rs`
+/// `repro`-class probes): these descriptors share the SAME extended-AIR width / FRI shape, and a
+/// proof produced under one is NOT guaranteed to be rejected by the others' verifiers — a
+/// frozen-frame / economic proof can verify under several of these AIRs. That does NOT break the
+/// cutover's load-bearing binding: the post-state commitment is pinned by the GROUP-4 state-commit
+/// hash sites (shared across these descriptors) AND re-checked directly against the caller's
+/// `expected_new_commit` in `verify_full_turn` (the OLD_COMMIT/NEW_COMMIT PI equality), so a proof
+/// accepted "under the wrong selector" still attests the SAME committed post-state. The cross-AIR
+/// distinctness needed for full descriptor-identity binding is the open per-effect PI-binding work
+/// (see the harness anti-ghost classification); it is not relied upon here.
+const CUTOVER_READY_SELECTORS: &[usize] = &[
+    sel::TRANSFER,
+    sel::NOTE_SPEND,
+    sel::NOTE_CREATE,
+    sel::BRIDGE_MINT,
+    sel::BURN,
+    sel::CREATE_SEAL_PAIR,
+    sel::BRIDGE_FINALIZE,
+];
 
 /// Prove the Effect-VM state transition, routing through the Lean descriptor interpreter
 /// when the cutover flag is set AND the turn is a validated cutover-ready single effect;
