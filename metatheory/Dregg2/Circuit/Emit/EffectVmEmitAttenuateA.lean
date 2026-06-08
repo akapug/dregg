@@ -1,0 +1,534 @@
+/-
+# Dregg2.Circuit.Emit.EffectVmEmitAttenuateA — the AUTHORITY-ATTENUATION effect `attenuateA`, EMITTED
+  onto the runnable EffectVM `cap_root` column, with its full-state soundness and the connector to the
+  validated universe-A `attenuateA_full_sound`.
+
+## The "ONE circuit" thesis for the cap-graph effects (this is the LOCAL TEMPLATE)
+
+`attenuateA` is the cleanest cap-touching universe-A instance (`Inst/attenuateA.lean`): it touches the
+`caps` table AS A WHOLE-FUNCTION injective digest (`funcComponent (·.caps) D hD` with the predicted post
+value `attenuateSlotF caps actor idx keep`), freezes the other 16 kernel fields, and has the TRIVIAL
+`True` guard (attenuation always commits). Its validation `attenuateA_full_sound ⇒ AttenuateSpec` is
+DONE; this module emits the SAME effect onto the running EffectVM row layout and welds the two.
+
+The EffectVM state block carries ONE scalar `cap_root` column (state offset 11, `state.CAP_ROOT`). The
+running prover absorbs it into the GROUP-4 state-commitment chain (`site2` reads `saCol CAP_ROOT`). So at
+the row level a cap-graph effect is a `cap_root` COLUMN MOVE: the post-`cap_root` is the digest of the
+post cap-table, every OTHER state column frozen, and the post-state (incl. the moved `cap_root`) bound
+into the published `state_commit` under Poseidon2 collision-resistance.
+
+`attenuateVmDescriptor` emits exactly that. The post-`cap_root` is pinned to a parameter
+`param.CAP_DIGEST_NEW` (the runnable column the witness generator fills with `D (attenuateSlotF …)`),
+the move gate is `new_cap_root - capDigestNew = 0`, and the frame (balance limbs / nonce / 8 fields /
+reserved) is frozen. We PROVE: satisfying the descriptor pins the full per-cell post-state (`cap_root`
+moved to the expected digest, frame frozen) `↔` the row intent `AttenRowIntent`; and the GROUP-4 hash
+sites bind the WHOLE post-state (the moved `cap_root` included) into `state_commit` — so a tampered
+post-`cap_root` that still claims the published `NEW_COMMIT` is UNSAT (the anti-ghost tooth).
+
+## The CONNECTOR — `cellProj` to universe-A's `attenuateA_full_sound`
+
+`capRootProj D k = D k.caps` reads the SAME whole-function digest `D : Caps → ℤ` that universe-A's
+`AttenuateA.capsComponent D hD` uses. `unify_attenuate` shows: when universe-A's `AttenuateSpec` holds
+(so `k'.caps = attenuateSlotF k.caps actor idx keep`), the projected post-`cap_root` is EXACTLY
+`D (attenuateSlotF k.caps actor idx keep)` — i.e. the column move the descriptor pins. So the runnable
+`cap_root` column transition IS universe-A's `caps`-digest transition; not a fourth spec.
+
+## HONEST BOUNDARY (precise — do NOT over-read) — the IR GAP, flagged loudly
+
+  * **IR GAP — needs IR extension: cap-root hash-site.** The `cap_root` column carries the SCALAR digest
+    `D caps` of the cap-table FUNCTION `Caps = Label → List Cap`. The EffectVM IR's `VmHashSite` can only
+    absorb trace COLUMNS (`HashInput.col`) and earlier digests; it has NO site that re-derives `cap_root`
+    *inside the circuit* from the cap-table's per-row serialization. So the descriptor PINS the cap_root
+    column transition `new_cap_root = D(post.caps)` (as a column equality, the witness supplying the
+    digest), and binds that column into `state_commit` — but it does NOT prove *in-circuit* that
+    `cap_root` IS the genuine Merkle digest of the cap-table. That binding lives in universe-A's
+    `Function.Injective D` portal (carried, realizable — a Poseidon Merkle over the cap table), the SAME
+    bar `attenuateA_full_sound` uses. We connect to it through `capRootProj`; we do NOT claim a
+    cap-table-hash-site the IR cannot express. FLAG: a future IR extension (a `VmHashSite` that absorbs
+    the cap-table rows and outputs `cap_root`) would internalize this; until then the cap-table digest is
+    a NAMED hypothesis, not an in-circuit gate.
+
+  * PER-CELL / PER-ROW. Single-row AIR: one cap-graph transition + its binding into the published
+    `state_commit`. Cross-row composition is the turn layer (`TurnEmit`), cited not claimed.
+
+  * `state.RESERVED` is NOT absorbed by any hash-site (inherited finding from the transfer keystone);
+    it is pinned only by its per-row passthrough gate.
+
+## Honesty
+
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Poseidon2 CR enters ONLY as
+the NAMED hypothesis `Poseidon2SpongeCR hash`; the cap-table digest enters ONLY as `Function.Injective D`
+(universe-A's portal). No `sorry`, no `:= True`, no `native_decide`, no `rfl`-posing-as-bridge. Imports
+are read-only.
+-/
+import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
+import Dregg2.Circuit.Poseidon2Binding
+import Dregg2.Circuit.Inst.attenuateA
+
+namespace Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
+
+open Dregg2.Circuit
+open Dregg2.Circuit.Emit.EffectVmEmit
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer
+  (eSB eSA ePrm eSub eSelNoop site0 site1 transitionAll boundaryFirstPins)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
+open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+open Dregg2.Exec.CircuitEmit (EmittedExpr)
+open Dregg2.Exec
+open Dregg2.Exec.TurnExecutorFull
+open Dregg2.Authority (Caps Cap Auth Label)
+
+set_option linter.unusedVariables false
+set_option autoImplicit false
+
+/-! ## §0 — Selector + param offsets for the cap-graph effect row.
+
+The running EffectVM lays one selector per effect (`columns.rs::NUM_EFFECTS = 54`); `attenuateA` has its
+own selector index. We name it `sel.ATTENUATE` abstractly (the exact index is the running prover's; we
+keep the SAME gating discipline as transfer: on a genuine `attenuateA` row that selector is `1` and
+`s_noop = 0`). The post cap-digest the row pins is carried in a parameter column `param.CAP_DIGEST_NEW`
+(an effect parameter, the runnable column the witness generator fills with `D (attenuateSlotF …)`). -/
+
+namespace selA
+/-- The `attenuateA` effect selector column (the running prover's per-effect selector). -/
+def ATTENUATE : Nat := 2
+end selA
+
+namespace paramA
+/-- The post cap-table digest parameter: the value the witness fills with `D (post.caps)`. -/
+def CAP_DIGEST_NEW : Nat := 2
+end paramA
+
+/-- The `attenuateA` selector as an expression. -/
+def eSelAtten : EmittedExpr := .var selA.ATTENUATE
+
+/-- The post-cap-digest param as an expression. -/
+def eCapDigestNew : EmittedExpr := .var (prmCol paramA.CAP_DIGEST_NEW)
+
+/-! ## §1 — The cap-graph row gates (term-for-term the running prover's, specialized to the row).
+
+The cap-graph effect MOVES `cap_root` to the post cap-table digest and FREEZES the rest of the block.
+Mirror of the transfer gate set, with the `cap_root` passthrough REPLACED by a `cap_root` MOVE and the
+balance/nonce passthrough swapped in (a cap effect freezes the balance limbs and the nonce). -/
+
+/-- Cap-root MOVE body: `new_cap_root - capDigestNew` (the post cap_root IS the param digest). -/
+def gCapMove : EmittedExpr := eSub (eSA state.CAP_ROOT) eCapDigestNew
+
+/-- Balance-lo freeze body: `new_bal_lo - old_bal_lo`. -/
+def gBalLoFix : EmittedExpr := eSub (eSA state.BALANCE_LO) (eSB state.BALANCE_LO)
+
+/-- Balance-hi freeze body: `new_bal_hi - old_bal_hi`. -/
+def gBalHiFix : EmittedExpr := eSub (eSA state.BALANCE_HI) (eSB state.BALANCE_HI)
+
+/-- Nonce freeze body: `new_nonce - old_nonce` (a cap effect does NOT tick the cell nonce — matches the
+universe-A executor, which rewrites only the `caps` field). -/
+def gNonceFix : EmittedExpr := eSub (eSA state.NONCE) (eSB state.NONCE)
+
+/-- Reserved freeze body: `new_reserved - old_reserved`. -/
+def gResFix : EmittedExpr := eSub (eSA state.RESERVED) (eSB state.RESERVED)
+
+/-- Field-`i` freeze body: `field_after[i] - field_before[i]`. -/
+def gFieldFix (i : Nat) : EmittedExpr :=
+  eSub (eSA (state.FIELD_BASE + i)) (eSB (state.FIELD_BASE + i))
+
+/-- The eight field-freeze gates. -/
+def gFieldFixAll : List VmConstraint :=
+  (List.range 8).map (fun i => VmConstraint.gate (gFieldFix i))
+
+/-! ## §2 — The emitted descriptor. -/
+
+/-- The `attenuateA` AIR identity (the fingerprint binding). -/
+def attenuateVmAirName : String := "dregg-effectvm-attenuateA-v1"
+
+/-- The cap-graph per-row gates: cap-root MOVE, balance/nonce/reserved freeze, 8 fields freeze. -/
+def attenuateRowGates : List VmConstraint :=
+  [ .gate gCapMove, .gate gBalLoFix, .gate gBalHiFix, .gate gNonceFix
+  , .gate gResFix ] ++ gFieldFixAll
+
+/-- Site 2 with the post `cap_root` absorbed (same shape as the transfer keystone's `site2`). -/
+def site2 : VmHashSite :=
+  { digestCol := auxCol aux_off.STATE_INTER3
+  , inputs := [ .col (saCol (state.FIELD_BASE + 5)), .col (saCol (state.FIELD_BASE + 6))
+              , .col (saCol (state.FIELD_BASE + 7)), .col (saCol state.CAP_ROOT) ]
+  , arity := 4 }
+
+/-- Site 3: `state_commit = H4(inter1, inter2, inter3, 0)` — reading sites 0/1/2. -/
+def site3 : VmHashSite :=
+  { digestCol := saCol state.STATE_COMMIT
+  , inputs := [ .digest 0, .digest 1, .digest 2, .zero ]
+  , arity := 4 }
+
+/-- The ordered GROUP-4 hash sites (identical chain to the transfer keystone, so the moved `cap_root`
+is bound into `state_commit` exactly as transfer binds the frozen one). -/
+def attenuateHashSites : List VmHashSite :=
+  [site0, site1, site2, site3]
+
+/-- **`attenuateVmDescriptor`** — the `attenuateA` effect's concrete circuit, emitted through the
+EffectVM IR: the cap-root MOVE + frame-freeze gates ++ transition continuity ++ the row-0 boundary pins,
+with the 4 ordered GROUP-4 hash sites (binding the moved post-state). No balance range checks (no balance
+move). -/
+def attenuateVmDescriptor : EffectVmDescriptor :=
+  { name := attenuateVmAirName
+  , traceWidth := EFFECT_VM_WIDTH
+  , piCount := 34
+  , constraints := attenuateRowGates ++ transitionAll ++ boundaryFirstPins
+  , hashSites := attenuateHashSites
+  , ranges := [] }
+
+/-! ## §3 — The cap-graph ROW INTENT (the independent faithfulness target).
+
+`AttenRowIntent env d` is the field-level cap-graph move: the post `cap_root` IS the supplied post
+cap-digest `d`, and the balance limbs / nonce / reserved / 8 fields are FIXED. This is the EffectVM-row
+projection of universe-A's `AttenuateSpec` `caps` clause (the whole-function `caps` equality, projected
+to the cap-DIGEST column) + the 16-field freeze (projected to the row's frozen columns). -/
+
+/-- **`AttenRowIntent env`** — the intended cap-graph move on the row `env.loc`: post `cap_root` is the
+post-cap-digest param, frame frozen. -/
+def AttenRowIntent (env : VmRowEnv) : Prop :=
+  env.loc (saCol state.CAP_ROOT) = env.loc (prmCol paramA.CAP_DIGEST_NEW)
+  ∧ env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
+  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
+  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE)
+  ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+
+/-- The row is an `attenuateA` row: `s_attenuate = 1`, `s_noop = 0`. -/
+def IsAttenRow (env : VmRowEnv) : Prop :=
+  env.loc selA.ATTENUATE = 1 ∧ env.loc sel.NOOP = 0
+
+/-! ## §4 — FAITHFULNESS: the emitted per-row gates ⟺ the intent. -/
+
+/-- **`attenuateRowGates_holds_iff`** — on an `attenuateA` row, the emitted per-row gates all hold IFF
+`AttenRowIntent` holds. The gate bodies are the running prover's polynomials (cap-root move + frame
+freeze); they pin EXACTLY the intent move. -/
+theorem attenuateRowGates_holds_iff (env : VmRowEnv) :
+    (∀ c ∈ attenuateRowGates, c.holdsVm env false false) ↔ AttenRowIntent env := by
+  unfold attenuateRowGates gFieldFixAll AttenRowIntent
+  constructor
+  · intro h
+    have hCap := h (.gate gCapMove) (by simp)
+    have hLo := h (.gate gBalLoFix) (by simp)
+    have hHi := h (.gate gBalHiFix) (by simp)
+    have hNon := h (.gate gNonceFix) (by simp)
+    have hRes := h (.gate gResFix) (by simp)
+    have hFld : ∀ i, i < 8 → VmConstraint.holdsVm env false false (.gate (gFieldFix i)) := by
+      intro i hi
+      apply h
+      simp only [List.mem_append, List.mem_map, List.mem_range]
+      exact Or.inr ⟨i, hi, rfl⟩
+    simp only [VmConstraint.holdsVm, gCapMove, gBalLoFix, gBalHiFix, gNonceFix, gResFix,
+      eSA, eSB, eCapDigestNew, eSub, EmittedExpr.eval] at hCap hLo hHi hNon hRes
+    refine ⟨by linarith [hCap], by linarith [hLo], by linarith [hHi], by linarith [hNon],
+      by linarith [hRes], ?_⟩
+    intro i hi
+    have := hFld i hi
+    simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval] at this
+    linarith
+  · rintro ⟨hCap, hLo, hHi, hNon, hRes, hFld⟩ c hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
+      List.mem_range] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
+    · simp only [VmConstraint.holdsVm, gCapMove, eSA, eCapDigestNew, eSub, EmittedExpr.eval]
+      rw [hCap]; ring
+    · simp only [VmConstraint.holdsVm, gBalLoFix, eSA, eSB, eSub, EmittedExpr.eval]
+      rw [hLo]; ring
+    · simp only [VmConstraint.holdsVm, gBalHiFix, eSA, eSB, eSub, EmittedExpr.eval]
+      rw [hHi]; ring
+    · simp only [VmConstraint.holdsVm, gNonceFix, eSA, eSB, eSub, EmittedExpr.eval]
+      rw [hNon]; ring
+    · simp only [VmConstraint.holdsVm, gResFix, eSA, eSB, eSub, EmittedExpr.eval]
+      rw [hRes]; ring
+    · simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval]
+      rw [hFld i hi]; ring
+
+/-- **`attenuateVm_faithful` — THE deliverable.** On an `attenuateA` row, the emitted descriptor's
+per-row gates hold IFF the cap-graph intent holds. -/
+theorem attenuateVm_faithful (env : VmRowEnv) :
+    (∀ c ∈ attenuateRowGates, c.holdsVm env false false) ↔ AttenRowIntent env :=
+  attenuateRowGates_holds_iff env
+
+/-! ## §5 — ANTI-GHOST (per-row): a wrong cap-root move fails the emitted descriptor. -/
+
+/-- **Anti-ghost (cap-root tamper).** A row whose post-`cap_root` is NOT the supplied post-cap-digest
+fails the `gCapMove` gate (UNSAT). -/
+theorem attenuateVm_rejects_wrong_capRoot (env : VmRowEnv)
+    (hwrong : env.loc (saCol state.CAP_ROOT) ≠ env.loc (prmCol paramA.CAP_DIGEST_NEW)) :
+    ¬ (VmConstraint.gate gCapMove).holdsVm env false false := by
+  simp only [VmConstraint.holdsVm, gCapMove, eSA, eCapDigestNew, eSub, EmittedExpr.eval]
+  intro h
+  apply hwrong
+  linarith
+
+/-- **Anti-ghost (general).** A row whose post-state is NOT the intent move does NOT satisfy the per-row
+gates. -/
+theorem attenuateVm_rejects_wrong_output (env : VmRowEnv) (hwrong : ¬ AttenRowIntent env) :
+    ¬ (∀ c ∈ attenuateRowGates, c.holdsVm env false false) :=
+  fun h => hwrong ((attenuateVm_faithful env).mp h)
+
+/-! ## §6 — The structured per-cell soundness (the keystone analog).
+
+Decode the row into a concrete `(pre, post)` `CellState` via a cap-graph `RowEncodes`. The descriptor's
+satisfaction forces the post-state's `cap_root` = the post cap-digest, every other column frozen. -/
+
+/-- **`CapRowEncodes env pre post capDigestNew`** — the row decodes to `(pre, post)` cell states with
+the post cap-digest carried in `param.CAP_DIGEST_NEW`. (Same shape as the transfer keystone's
+`RowEncodes`, minus the transfer params.) -/
+def CapRowEncodes (env : VmRowEnv) (pre post : CellState) (capDigestNew : ℤ) : Prop :=
+  env.loc (sbCol state.BALANCE_LO) = pre.balLo
+  ∧ env.loc (sbCol state.BALANCE_HI) = pre.balHi
+  ∧ env.loc (sbCol state.NONCE) = pre.nonce
+  ∧ (∀ i : Fin 8, env.loc (sbCol (state.FIELD_BASE + i.val)) = pre.fields i)
+  ∧ env.loc (sbCol state.CAP_ROOT) = pre.capRoot
+  ∧ env.loc (sbCol state.RESERVED) = pre.reserved
+  ∧ env.loc (prmCol paramA.CAP_DIGEST_NEW) = capDigestNew
+  ∧ env.loc (saCol state.BALANCE_LO) = post.balLo
+  ∧ env.loc (saCol state.BALANCE_HI) = post.balHi
+  ∧ env.loc (saCol state.NONCE) = post.nonce
+  ∧ (∀ i : Fin 8, env.loc (saCol (state.FIELD_BASE + i.val)) = post.fields i)
+  ∧ env.loc (saCol state.CAP_ROOT) = post.capRoot
+  ∧ env.loc (saCol state.RESERVED) = post.reserved
+
+/-- The per-cell cap-graph spec: the moved cell's WHOLE post-state is `pre` with `cap_root` set to the
+new cap-digest, every other field frozen. This is the per-cell projection of universe-A's `AttenuateSpec`
+(`caps` whole-function move ⟹ cap-DIGEST column move; 16-field freeze ⟹ frame freeze). -/
+def CapCellSpec (pre post : CellState) (capDigestNew : ℤ) : Prop :=
+  post.capRoot = capDigestNew
+  ∧ post.balLo = pre.balLo
+  ∧ post.balHi = pre.balHi
+  ∧ post.nonce = pre.nonce
+  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
+  ∧ post.reserved = pre.reserved
+
+/-- Under `CapRowEncodes`, `AttenRowIntent` IS the structured per-cell `CapCellSpec`. -/
+theorem intent_to_capCellSpec (env : VmRowEnv) (pre post : CellState) (capDigestNew : ℤ)
+    (henc : CapRowEncodes env pre post capDigestNew) (hint : AttenRowIntent env) :
+    CapCellSpec pre post capDigestNew := by
+  obtain ⟨hsbLo, hsbHi, hsbN, hsbF, hsbCap, hsbRes, hpDig,
+          hsaLo, hsaHi, hsaN, hsaF, hsaCap, hsaRes⟩ := henc
+  obtain ⟨hcap, hlo, hhi, hnon, hres, hfld⟩ := hint
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [← hsaCap, ← hpDig]; exact hcap
+  · rw [← hsaLo, ← hsbLo]; exact hlo
+  · rw [← hsaHi, ← hsbHi]; exact hhi
+  · rw [← hsaN, ← hsbN]; exact hnon
+  · intro i; rw [← hsaF i, ← hsbF i]; exact hfld i.val i.isLt
+  · rw [← hsaRes, ← hsbRes]; exact hres
+
+/-- **`attenuateDescriptor_full_sound` — the structured soundness.** Satisfying the per-row gates under
+the `CapRowEncodes` decoding forces the structured per-cell `CapCellSpec` (post `cap_root` = the
+predicted cap-digest, frame frozen). -/
+theorem attenuateDescriptor_full_sound (env : VmRowEnv)
+    (pre post : CellState) (capDigestNew : ℤ)
+    (henc : CapRowEncodes env pre post capDigestNew)
+    (hgates : ∀ c ∈ attenuateRowGates, c.holdsVm env false false) :
+    CapCellSpec pre post capDigestNew :=
+  intent_to_capCellSpec env pre post capDigestNew henc ((attenuateVm_faithful env).mp hgates)
+
+/-! ## §7 — THE ANTI-GHOST COMMITMENT TOOTH (whole-state binding, cap-root included).
+
+The GROUP-4 sites (identical to the transfer keystone's) absorb the post `cap_root` into the published
+`state_commit`. Under `Poseidon2SpongeCR hash`, two satisfying rows with the same published `NEW_COMMIT`
+have identical absorbed columns — so a tampered post-`cap_root` that claims the published commitment is
+impossible. We reuse the keystone's `absorbedCols`/`commit_eq_commitOf` machinery (the hash chain IS the
+transfer keystone's, only the `cap_root` column now MOVES). -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (transferHashSites)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
+  (absorbedCols commitOf commit_eq_commitOf absorbed_determined_by_commit)
+
+/-- `attenuateHashSites` is DEFINITIONALLY the transfer keystone's `transferHashSites` (same ordered
+4-site chain, same absorbed columns incl. the post `cap_root`). So all the keystone's commitment-binding
+lemmas apply verbatim. -/
+theorem attenuateHashSites_eq : attenuateHashSites = transferHashSites := rfl
+
+/-- **`attenuateDescriptor_commit_binds_state` — the whole-state tooth.** Two `attenuateA` rows that
+satisfy the hash-sites and publish equal `state_commit`s have identical absorbed columns — the moved
+post-`cap_root` (an absorbed column, site 2) included. So a prover CANNOT tamper the post-`cap_root` (or
+any absorbed cell) while keeping the published commitment. -/
+theorem attenuateDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv)
+    (hs₁ : siteHoldsAll hash e₁ attenuateHashSites)
+    (hs₂ : siteHoldsAll hash e₂ attenuateHashSites)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
+    absorbedCols e₁ = absorbedCols e₂ := by
+  rw [attenuateHashSites_eq] at hs₁ hs₂
+  exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
+
+/-! ## §8 — THE CONNECTOR — `capRootProj` to universe-A's `attenuateA_full_sound`.
+
+`capRootProj D k = D k.caps` reads the SAME whole-function digest `D : Caps → ℤ` that
+`AttenuateA.capsComponent D hD` uses. The unification: a committed universe-A `AttenuateSpec` makes the
+projected post-`cap_root` EXACTLY `D (attenuateSlotF k.caps actor idx keep)` — the cap-digest the
+descriptor's `param.CAP_DIGEST_NEW` carries. So the runnable `cap_root` column transition IS universe-A's
+`caps`-digest transition. -/
+
+open Dregg2.Circuit.Inst.AttenuateA (AttenuateArgs)
+open Dregg2.Circuit.Spec.AuthorityAttenuation (AttenuateSpec)
+open Dregg2.Circuit.EffectCommit2 (Surface2 satisfiedE2 encodeE2)
+open Dregg2.Circuit.StateCommit (logHashInjective)
+
+/-- **`capRootProj D k`** — the EffectVM `cap_root` column value for kernel state `k`: the whole-function
+digest `D` of the cap-table (the SAME `D` universe-A's `capsComponent D hD` digests). -/
+def capRootProj (D : Caps → ℤ) (k : RecordKernelState) : ℤ := D k.caps
+
+/-- The predicted post cap-digest the descriptor's `param.CAP_DIGEST_NEW` carries: `D` of the attenuated
+cap-table. -/
+def attenCapDigestNew (D : Caps → ℤ)
+    (s : RecChainedState) (args : AttenuateArgs) : ℤ :=
+  D (attenuateSlotF s.kernel.caps args.actor args.idx args.keep)
+
+/-- **`unify_attenuate` — THE CONNECTOR.** When universe-A's `AttenuateSpec` holds, the projected
+post-`cap_root` is EXACTLY the attenuated cap-digest `attenCapDigestNew D s args` — i.e. the column move
+the descriptor pins. So `CapCellSpec`'s `cap_root` clause IS universe-A's `caps`-clause, projected to the
+digest column. (The frame clauses are universe-A's 16-field freeze projected to the frozen columns;
+`balLo`/`balHi`/`nonce`/`reserved`/`fields` are `0`-valued in the projection of a `caps`-only effect, so
+they freeze trivially. We discharge the `cap_root` leg — the genuine cap-graph content.) -/
+theorem unify_attenuate (D : Caps → ℤ)
+    (s : RecChainedState) (args : AttenuateArgs)
+    (s' : RecChainedState)
+    (hspec : AttenuateSpec s args.actor args.idx args.keep s') :
+    capRootProj D s'.kernel = attenCapDigestNew D s args := by
+  -- AttenuateSpec's first clause is `s'.kernel.caps = attenuateSlotF s.kernel.caps actor idx keep`.
+  obtain ⟨hcaps, _⟩ := hspec
+  show D s'.kernel.caps = D (attenuateSlotF s.kernel.caps args.actor args.idx args.keep)
+  rw [hcaps]
+
+/-- **`unify_attenuate_via_full_sound` — the runnable column move inherits the VALIDATED guarantee.**
+Chaining universe-A's `attenuateA_full_sound` (a satisfying v2 full-state witness ⟹ `AttenuateSpec`)
+with `unify_attenuate`: a satisfying universe-A witness forces the projected post-`cap_root` to the
+attenuated cap-digest — the EXACT column value the runnable descriptor's `param.CAP_DIGEST_NEW` carries.
+So the runnable `cap_root` move is universe-A's validated `caps` transition, not a fourth spec. -/
+theorem unify_attenuate_via_full_sound
+    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (hRest : Dregg2.Circuit.Inst.AttenuateA.RestIffNoCaps S.RH)
+    (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : AttenuateArgs)
+    (s' : RecChainedState)
+    (h : satisfiedE2 S (Dregg2.Circuit.Inst.AttenuateA.attenuateE D hD)
+        (encodeE2 S (Dregg2.Circuit.Inst.AttenuateA.attenuateE D hD) s args s')) :
+    capRootProj D s'.kernel = attenCapDigestNew D s args :=
+  unify_attenuate D s args s'
+    (Dregg2.Circuit.Inst.AttenuateA.attenuateA_full_sound S D hD hRest hLog s args s' h)
+
+/-! ## §9 — NON-VACUITY: a concrete cap-graph row that satisfies the intent, and one that does not.
+
+A row `capGoodRow`: a cap-graph move where `cap_root 11 → 77` (the new digest), nonce `5 → 5` frozen,
+everything else `0`/frozen. And `capBadRow`: same but post-`cap_root` forged to `999 ≠ 77`. -/
+
+/-- A concrete `attenuateA` row: `cap_root` moves to the param digest `77`, frame frozen at `0`. -/
+def capGoodRow : VmRowEnv where
+  loc := fun v =>
+    if v = selA.ATTENUATE then 1
+    else if v = sbCol state.CAP_ROOT then 11
+    else if v = saCol state.CAP_ROOT then 77
+    else if v = prmCol paramA.CAP_DIGEST_NEW then 77
+    else 0
+  nxt := fun _ => 0
+  pub := fun _ => 0
+
+/-- `capGoodRow` is a genuine `attenuateA` row. -/
+theorem capGoodRow_isAttenRow : IsAttenRow capGoodRow := by
+  unfold IsAttenRow capGoodRow
+  constructor <;> norm_num [selA.ATTENUATE, sel.NOOP, sbCol, saCol, prmCol, STATE_BEFORE_BASE,
+    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT,
+    paramA.CAP_DIGEST_NEW]
+
+/-- **NON-VACUITY (witness TRUE).** `capGoodRow` REALIZES the cap-graph intent: post `cap_root = 77` =
+the param digest, balance/nonce/reserved/fields frozen at `0`. -/
+theorem capGoodRow_realizes_intent : AttenRowIntent capGoodRow := by
+  unfold AttenRowIntent capGoodRow
+  -- the named cap columns vs the frozen-frame else-0 columns are distinct; discharge by simp+omega.
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- both `saCol CAP_ROOT` (col 87) and `prmCol CAP_DIGEST_NEW` (col 56) read 77, via distinct branches.
+    have hsa : capGoodRow.loc (saCol state.CAP_ROOT) = 77 := by
+      show (if saCol state.CAP_ROOT = selA.ATTENUATE then (1:ℤ)
+        else if saCol state.CAP_ROOT = sbCol state.CAP_ROOT then 11
+        else if saCol state.CAP_ROOT = saCol state.CAP_ROOT then 77
+        else if saCol state.CAP_ROOT = prmCol paramA.CAP_DIGEST_NEW then 77 else 0) = 77
+      rw [if_neg (by simp only [saCol, selA.ATTENUATE, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE,
+        NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT]; omega),
+        if_neg (by simp only [saCol, sbCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE,
+          NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT]; omega), if_pos rfl]
+    have hprm : capGoodRow.loc (prmCol paramA.CAP_DIGEST_NEW) = 77 := by
+      show (if prmCol paramA.CAP_DIGEST_NEW = selA.ATTENUATE then (1:ℤ)
+        else if prmCol paramA.CAP_DIGEST_NEW = sbCol state.CAP_ROOT then 11
+        else if prmCol paramA.CAP_DIGEST_NEW = saCol state.CAP_ROOT then 77
+        else if prmCol paramA.CAP_DIGEST_NEW = prmCol paramA.CAP_DIGEST_NEW then 77 else 0) = 77
+      rw [if_neg (by simp only [prmCol, selA.ATTENUATE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS,
+        STATE_SIZE, paramA.CAP_DIGEST_NEW]; omega),
+        if_neg (by simp only [prmCol, sbCol, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS, STATE_SIZE,
+          state.CAP_ROOT, paramA.CAP_DIGEST_NEW]; omega),
+        if_neg (by simp only [prmCol, saCol, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE,
+          NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT, paramA.CAP_DIGEST_NEW]; omega),
+        if_pos rfl]
+    show capGoodRow.loc (saCol state.CAP_ROOT) = capGoodRow.loc (prmCol paramA.CAP_DIGEST_NEW)
+    rw [hsa, hprm]
+  all_goals
+    simp only [saCol, sbCol, prmCol, selA.ATTENUATE, STATE_AFTER_BASE, STATE_BEFORE_BASE, PARAM_BASE,
+      NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT, state.BALANCE_LO, state.BALANCE_HI,
+      state.NONCE, state.RESERVED, state.FIELD_BASE, paramA.CAP_DIGEST_NEW]
+  · norm_num
+  · norm_num
+  · norm_num
+  · norm_num
+  · intro i hi
+    have e1 : ¬ (76 + (3 + i) = 2) := by omega
+    have e2 : ¬ (76 + (3 + i) = 65) := by omega
+    have e3 : ¬ (76 + (3 + i) = 87) := by omega
+    have e4 : ¬ (76 + (3 + i) = 70) := by omega
+    have f1 : ¬ (54 + (3 + i) = 2) := by omega
+    have f2 : ¬ (54 + (3 + i) = 65) := by omega
+    have f3 : ¬ (54 + (3 + i) = 87) := by omega
+    have f4 : ¬ (54 + (3 + i) = 70) := by omega
+    simp only [if_neg e1, if_neg e2, if_neg e3, if_neg e4, if_neg f1, if_neg f2, if_neg f3, if_neg f4]
+
+/-- A forged `attenuateA` row: `capGoodRow` with the post-`cap_root` tampered to `999 ≠ 77`. -/
+def capBadRow : VmRowEnv where
+  loc := fun v => if v = saCol state.CAP_ROOT then 999 else capGoodRow.loc v
+  nxt := capGoodRow.nxt
+  pub := capGoodRow.pub
+
+/-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `capBadRow`'s post-`cap_root` is NOT the
+param digest, so the `gCapMove` gate REJECTS it — a concrete UNSAT. -/
+theorem capBadRow_rejected : ¬ (VmConstraint.gate gCapMove).holdsVm capBadRow false false := by
+  apply attenuateVm_rejects_wrong_capRoot
+  -- the post-cap-root column is forged to 999; the param digest column is 77.
+  have hsa : capBadRow.loc (saCol state.CAP_ROOT) = 999 := by
+    show (if saCol state.CAP_ROOT = saCol state.CAP_ROOT then (999:ℤ)
+      else capGoodRow.loc (saCol state.CAP_ROOT)) = 999
+    rw [if_pos rfl]
+  have hne1 : ¬ (saCol state.CAP_ROOT = prmCol paramA.CAP_DIGEST_NEW) := by
+    simp only [saCol, prmCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS,
+      STATE_SIZE, NUM_PARAMS, state.CAP_ROOT, paramA.CAP_DIGEST_NEW]
+    omega
+  have hprm : capBadRow.loc (prmCol paramA.CAP_DIGEST_NEW) = 77 := by
+    show (if prmCol paramA.CAP_DIGEST_NEW = saCol state.CAP_ROOT then (999:ℤ)
+      else capGoodRow.loc (prmCol paramA.CAP_DIGEST_NEW)) = 77
+    rw [if_neg (fun h => hne1 h.symm)]
+    show (if prmCol paramA.CAP_DIGEST_NEW = selA.ATTENUATE then (1:ℤ)
+      else if prmCol paramA.CAP_DIGEST_NEW = sbCol state.CAP_ROOT then 11
+      else if prmCol paramA.CAP_DIGEST_NEW = saCol state.CAP_ROOT then 77
+      else if prmCol paramA.CAP_DIGEST_NEW = prmCol paramA.CAP_DIGEST_NEW then 77 else 0) = 77
+    norm_num [prmCol, saCol, sbCol, selA.ATTENUATE, STATE_AFTER_BASE, STATE_BEFORE_BASE, PARAM_BASE,
+      NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT, paramA.CAP_DIGEST_NEW]
+  rw [hsa, hprm]; norm_num
+
+/-! ## §10 — Axiom-hygiene tripwires (the honesty tripwire). -/
+
+#guard attenuateVmDescriptor.constraints.length == 13 + 14 + 4  -- 13 gates + 14 transitions + 4 first
+#guard attenuateVmDescriptor.hashSites.length == 4
+#guard attenuateVmDescriptor.traceWidth == 186
+
+#assert_axioms attenuateRowGates_holds_iff
+#assert_axioms attenuateVm_faithful
+#assert_axioms attenuateVm_rejects_wrong_capRoot
+#assert_axioms attenuateVm_rejects_wrong_output
+#assert_axioms intent_to_capCellSpec
+#assert_axioms attenuateDescriptor_full_sound
+#assert_axioms attenuateDescriptor_commit_binds_state
+#assert_axioms unify_attenuate
+#assert_axioms unify_attenuate_via_full_sound
+#assert_axioms capGoodRow_realizes_intent
+#assert_axioms capBadRow_rejected
+
+end Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
