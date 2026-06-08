@@ -58,6 +58,7 @@ import Dregg2.Circuit.Argus.Stmt
 import Dregg2.Circuit.Emit.EffectVmEmitTransferUnify
 import Dregg2.Circuit.Emit.EffectVmEmitMint
 import Dregg2.Circuit.Emit.EffectVmEmitBurn
+import Dregg2.Circuit.Emit.EffectVmEmitCreateEscrow
 
 namespace Dregg2.Circuit.Argus
 
@@ -228,6 +229,7 @@ inductive ArgusEffect where
   | transfer
   | mint
   | burn
+  | createEscrow
   | other
 
 /-- **`compileE`** — the EFFECT-keyed circuit interpretation (the honest generalization of `compile`
@@ -235,10 +237,11 @@ past the transfer beachhead). Each tag maps to its audited runnable descriptor; 
 `skipDescriptor` placeholder. Unlike the structural `compile`, this separates the three same-shaped
 supply/transfer effects (which a `RecStmt`-structural match provably cannot — see §M header). -/
 def compileE : ArgusEffect → EffectVmDescriptor
-  | .transfer => transferVmDescriptor
-  | .mint     => mintVmDescriptor
-  | .burn     => burnVmDescriptor
-  | .other    => skipDescriptor
+  | .transfer     => transferVmDescriptor
+  | .mint         => mintVmDescriptor
+  | .burn         => burnVmDescriptor
+  | .createEscrow => Dregg2.Circuit.Emit.EffectVmEmitCreateEscrow.createEscrowVmDescriptorGenuine
+  | .other        => skipDescriptor
 
 /-- **`compile_mintStmt` — `compileE .mint` IS the audited runnable mint descriptor.** Definitional: the
 mint tag maps to `mintVmDescriptor`, the descriptor the Rust prover runs for the supply-mint effect (the
@@ -463,5 +466,186 @@ theorem compile_collapses_mint_burn_to_transfer (actor cell : CellId) (amt : ℤ
   ⟨rfl, rfl⟩
 
 #assert_axioms compile_collapses_mint_burn_to_transfer
+
+/-! ## §E — THE SIDE-TABLE WELD: createEscrow (the LAST de-risk before the per-effect farm).
+
+§3 and §M validated the weld template on FOUR single-component effects (transfer/mint/burn, each one
+`setCell`/`setBal` move). `createEscrow` is the genuinely different shape — the kernel step
+`createEscrowKAsset` touches **two** `RecordKernelState` components (a per-asset `bal` debit AND an
+`escrows` list prepend) and the descriptor binds a **side-table root**. This section welds it.
+
+The executor side is the §E cornerstone `interp_createEscrowStmt_eq_createEscrowKAsset` (`Stmt.lean`):
+`interp (createEscrowStmt …)` IS the verified kernel step `createEscrowKAsset` (a two-component move).
+
+The circuit side is the AUDITED CLASS-A `createEscrowVmDescriptorGenuine` + `createEscrowGenuine_sound`
+(`EffectVmEmitCreateEscrow`), which on a satisfying row forces (a) the per-cell `CellCreateSpec` (the
+`balLo` debit by `amount`, every other limb frozen), (b) the GENUINE in-row escrow-root RECOMPUTE
+(`SYS_DIG_AFTER = hash[hash[record], SYS_DIG_BEFORE]`, the side-table digest FORCED — not a free step),
+and (c) the published `state_commit`. So the side-table prepend is bound, not papered.
+
+### HONEST SURFACE — what the weld DOES and does NOT pin (do not over-read).
+
+This is the SAME per-cell honest surface transfer/mint/burn live on (the descriptor is a single-row AIR;
+its conserved leg is ONE cell's projection `cellProjCreate …bal creator asset`), PLUS the genuine
+side-table-root recompute the §H class-A promotion buys. Precisely, the weld concludes:
+
+  * **conserved leg (per-cell):** the circuit's pinned post-`balLo` equals the executor's debited
+    `bal creator asset` (= pre − amount), with the frozen frame (balHi/fields/capRoot/reserved) agreeing.
+    `cellProjCreate` projects ONLY the `(creator, asset)` ledger entry into `balLo` (the other limbs are
+    `0`, FROZEN) — so this binds the DEBITED CELL, exactly as transfer binds the SRC cell. The cross-cell
+    combined per-asset conservation (debit ⊕ off-ledger park) is the executor's keystone
+    (`escrow_create_conserves_combined_per_asset`), cited there — NOT re-claimed here.
+  * **side-table leg (the escrow record):** the circuit FORCES the new escrow-list root to be the genuine
+    recompute of the bound parked-record content + the old root (`createEscrowGenuine_sound`'s clause (b)),
+    and that root is absorbed into `state_commit`, so under `Poseidon2SpongeCR` the parked record
+    (id/creator/recipient/amount/asset/resolved) is bound — a dropped/forged escrow MOVES the commitment
+    (`createEscrowGenuine_binds_record`, cited). The weld EXPOSES this genuine-recompute clause as a
+    conjunct so the side-table binding is part of the welded statement, not a side remark.
+
+What this does NOT claim: it does not assert the circuit row's `escrows`-list state EQUALS the executor's
+`escrows := parkedRecord :: k.escrows` as a LIST (the EffectVM row carries a DIGEST, not the list — they
+agree only up to the side-table root, the `SystemRoots` digest connector). The executor produces the real
+list (the `Stmt.lean` cornerstone + `escrowParked`); the circuit produces the genuine root of it. That is
+the faithful boundary, stated, not hidden. -/
+
+open Dregg2.Exec (createEscrowKAsset createEscrowRawAsset recBalCreditCell)
+open Dregg2.Circuit.Emit.EffectVmEmitCreateEscrow
+  (createEscrowVmDescriptorGenuine createEscrowGenuine_sound cellProjCreate CreateParams CellCreateSpec
+   RowEncodesCreate)
+
+/-- **`compileE_createEscrow` — `compileE .createEscrow` IS the audited class-A genuine descriptor.**
+Definitional: the createEscrow tag maps to `createEscrowVmDescriptorGenuine`, the genuine-root-recompute
+descriptor (the `compileE` analog of `compile_mintStmt`). -/
+theorem compileE_createEscrow :
+    compileE .createEscrow = createEscrowVmDescriptorGenuine := rfl
+
+#assert_axioms compileE_createEscrow
+
+/-! ### §E.1 — the EXECUTOR-side per-cell projection of the kernel step `createEscrowKAsset`.
+
+The `createEscrow` cornerstone (`Stmt.lean`) refines the IR term to `createEscrowKAsset` (the
+`RecordKernelState → Option RecordKernelState` kernel step). We need its per-cell projection onto
+`cellProjCreate …bal creator asset` — the `createEscrowKAsset` analog of `recKMint_proj_balLo`: a
+committed create DEBITS the projected `balLo` by exactly `amount` (`cellProjCreate.balLo` reads the
+`(creator, asset)` ledger entry, the measure `recBalCreditCell … (-amount)` moves). The frozen frame
+(balHi/nonce/fields/capRoot/reserved) is `0 = 0` on both projections (definitional). -/
+
+/-- **`createEscrowKAsset_proj_balLo`.** A committed kernel create debits the creator cell's projected
+`(creator, asset)` ledger entry by exactly `amount` (the value parked off-ledger). The per-cell conserved
+leg the weld pins. -/
+theorem createEscrowKAsset_proj_balLo {k k' : RecordKernelState} {id : Nat}
+    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
+    (h : createEscrowKAsset k id actor creator recipient asset amount = some k') :
+    (cellProjCreate k'.bal creator asset).balLo
+      = (cellProjCreate k.bal creator asset).balLo - amount := by
+  unfold createEscrowKAsset at h
+  by_cases hg : authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ k.bal creator asset ∧ creator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
+  · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
+    -- `cellProjCreate (createEscrowRawAsset …).bal creator asset).balLo = recBalCreditCell … creator asset`
+    show recBalCreditCell k.bal creator asset (-amount) creator asset = k.bal creator asset - amount
+    unfold recBalCreditCell; rw [if_pos ⟨rfl, rfl⟩]; ring
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+#assert_axioms createEscrowKAsset_proj_balLo
+
+/-! ### §E.2 — THE WELD: a satisfying witness of `compileE .createEscrow` agrees, per cell, with the
+post-state the IR term's executor interpretation produces — AND forces the genuine side-table root. -/
+
+/-- **`createEscrow_compile_sound` — the welded soundness (createEscrow slice, the side-table effect).**
+
+Suppose, for the Argus createEscrow term `createEscrowStmt id actor creator recipient asset amount`:
+  * the circuit `compileE .createEscrow` (= the audited class-A `createEscrowVmDescriptorGenuine`) is
+    SATISFIED by `(env, true, true)` under the abstract Poseidon carrier `hash`, and its `RowEncodesCreate`
+    decoding NAMES the post-state record `post` over the creator cell's projection
+    `cellProjCreate k.bal creator asset` with the `⟨amount⟩` param block (`henc`);
+  * the IR term's EXECUTOR interpretation COMMITS:
+    `interp (createEscrowStmt …) k = some k'` (`hexec`).
+
+Then:
+  * **conserved leg (per-cell):** the circuit's pinned post-state `post` AGREES with the executor's
+    debited creator-cell projection `cellProjCreate k'.bal creator asset` — the conserved `balLo`
+    (debited by `amount`) AND the whole frozen frame (balHi/fields/capRoot/reserved). createEscrow has NO
+    nonce-tick divergence (the descriptor FREEZES the cell nonce, matching the executor — `cellProjCreate`
+    sends `nonce` to `0` on both sides).
+  * **side-table leg:** the circuit FORCES the new escrow-list root carrier to be the genuine in-row
+    recompute `hash[ hash[id,creator,recipient,amount,asset,resolved], old_root ]` of the bound parked
+    record + old root — the digest the executor's `escrows := parkedRecord :: k.escrows` prepend commits to
+    (absorbed into `state_commit`, so the parked record is bound; see `createEscrowGenuine_binds_record`).
+
+So the class-A circuit the prover runs for createEscrow pins the per-cell debited state the IR term's
+executor produces AND genuinely recomputes the bound `escrows` side-table root — the template generalizes
+to a TWO-component side-table effect. -/
+theorem createEscrow_compile_sound
+    (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (k k' : RecordKernelState) (id : Nat) (actor creator recipient : CellId)
+    (asset : AssetId) (amount : ℤ)
+    (post : Dregg2.Circuit.Emit.EffectVmEmitTransferSound.CellState)
+    (henc : RowEncodesCreate env (cellProjCreate k.bal creator asset) ⟨amount⟩ post)
+    (hsat : satisfiedVm hash (compileE .createEscrow) env true true)
+    (hexec : interp (createEscrowStmt id actor creator recipient asset amount) k = some k') :
+    -- conserved leg: the debited cell's projection agrees on balLo + the whole frozen frame …
+    ( post.balLo = (cellProjCreate k'.bal creator asset).balLo
+      ∧ post.balHi = (cellProjCreate k'.bal creator asset).balHi
+      ∧ (∀ i, post.fields i = (cellProjCreate k'.bal creator asset).fields i)
+      ∧ post.capRoot = (cellProjCreate k'.bal creator asset).capRoot
+      ∧ post.reserved = (cellProjCreate k'.bal creator asset).reserved
+      ∧ post.nonce = (cellProjCreate k'.bal creator asset).nonce )
+    -- … and the SIDE-TABLE leg: the circuit FORCES the genuine escrow-list-root recompute (the bound
+    -- parked record + old root), absorbed into `state_commit`.
+    ∧ ( env.loc Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.SYS_DIG_AFTER
+          = Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.advanceOf hash
+              (Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.leafOf hash
+                (env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.ep.ID))
+                (env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.ep.CREATOR))
+                (env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.ep.RECIPIENT))
+                (env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.AMOUNT))
+                (env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.ep.ASSET))
+                (env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.ep.RESOLVED)))
+              (env.loc Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.SYS_DIG_BEFORE) ) := by
+  -- circuit side: `compileE .createEscrow` IS the genuine descriptor; the audited class-A soundness forces
+  -- the per-cell `CellCreateSpec` + the genuine root recompute.
+  rw [compileE_createEscrow] at hsat
+  obtain ⟨hcs, hroot, _hcommit⟩ :=
+    createEscrowGenuine_sound hash env (cellProjCreate k.bal creator asset) post ⟨amount⟩ henc hsat
+  obtain ⟨hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ := hcs
+  -- executor side: the §E cornerstone turns the IR term's `interp` into the verified kernel step
+  -- `createEscrowKAsset`; its per-cell projection gives the debited balLo (the frozen limbs are `0=0`).
+  rw [interp_createEscrowStmt_eq_createEscrowKAsset] at hexec
+  have heLo := createEscrowKAsset_proj_balLo hexec
+  refine ⟨⟨?_, hcHi.trans rfl, fun i => (hcF i).trans rfl, hcCap.trans rfl, hcRes.trans rfl, hcN.trans rfl⟩, hroot⟩
+  -- balLo: circuit pins post = pre − amount; executor debits the projected entry by amount.
+  rw [hcLo, heLo]
+
+#assert_axioms createEscrow_compile_sound
+
+/-! ### §E.3 — NON-VACUITY: `compileE .createEscrow` is the genuine class-A descriptor, not the placeholder.
+
+As with transfer/mint/burn, the weld would be worthless if `compileE .createEscrow` were the inert
+`skipDescriptor`. It is not: it is the class-A `createEscrowVmDescriptorGenuine`, carrying the 34 per-row
+gates (debit + frame freeze) + transition/boundary constraints AND the 6 hash-sites (2 genuine
+escrow-root-recompute sites + 4 commitment sites), none of which `skipDescriptor` has. So
+`createEscrow_compile_sound` is a statement about a REAL class-A circuit with a genuinely-recomputed
+side-table root. -/
+
+/-- The compiled createEscrow circuit is the NON-trivial class-A genuine descriptor, not the empty
+placeholder: it carries the 34 createEscrow constraints / 6 hash-sites (2 escrow-recompute + 4 commitment)
+/ 2 range checks (`skipDescriptor` has 0 / 0 / 0), and its constraint list differs from the placeholder's.
+So `createEscrow_compile_sound` is about a genuine side-table-binding circuit. -/
+theorem compileE_createEscrow_nontrivial :
+    (compileE .createEscrow).constraints.length = 34
+    ∧ (compileE .createEscrow).hashSites.length = 6
+    ∧ (compileE .createEscrow).ranges.length = 2
+    ∧ (compileE .createEscrow).constraints ≠ skipDescriptor.constraints := by
+  rw [compileE_createEscrow]
+  refine ⟨by decide, by decide, by decide, ?_⟩
+  intro h
+  have : (createEscrowVmDescriptorGenuine.constraints).length = (skipDescriptor.constraints).length := by
+    rw [h]
+  simp only [skipDescriptor, List.length_nil] at this
+  exact absurd this (by decide)
+
+#assert_axioms compileE_createEscrow_nontrivial
 
 end Dregg2.Circuit.Argus
