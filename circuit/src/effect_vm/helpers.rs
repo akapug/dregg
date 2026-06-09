@@ -550,6 +550,9 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             Effect::AttenuateCapability {
                 cap_slot_hash,
                 narrower_commitment,
+                // Phase-B witness is NOT part of the public effects_hash binding;
+                // the two 8-limb commitments are the canonical commitment.
+                phase_b: _,
             } => {
                 hasher_inputs.push(BabyBear::new(48));
                 hasher_inputs.extend_from_slice(cap_slot_hash);

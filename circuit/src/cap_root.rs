@@ -265,6 +265,108 @@ impl CanonicalCapTree {
             .filter(|l| l.slot_hash != SENTINEL_MIN && l.slot_hash != SENTINEL_MAX)
             .count()
     }
+
+    /// The tree depth.
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// All level vectors, bottom-up (`levels[0]` = padded leaf digests,
+    /// `levels[depth] = [root]`). Exposed for Phase-B membership witnessing.
+    pub fn levels(&self) -> &[Vec<BabyBear>] {
+        &self.levels
+    }
+
+    /// The leaf-array position (0-based, in the padded bottom level) of the
+    /// leaf whose `slot_hash == key`, or `None` if no such (non-padding) leaf
+    /// exists. The sorted-tree placement is by `slot_hash` ordering, so this
+    /// is the canonical position the membership path opens.
+    pub fn position_of(&self, key: BabyBear) -> Option<usize> {
+        self.sorted_leaves
+            .iter()
+            .position(|l| l.slot_hash == key)
+    }
+
+    /// Generate a Merkle **membership** path for the leaf at the given padded
+    /// position: `(siblings, directions)` where `directions[i] == 0` if the
+    /// current node is the LEFT child at level `i` (sibling on the right), `1`
+    /// otherwise. Mirrors [`crate::dsl::revocation::DslRevocationTree::prove_membership`].
+    pub fn prove_membership(&self, position: usize) -> Option<(Vec<BabyBear>, Vec<u8>)> {
+        let capacity = 1usize << self.depth;
+        if position >= capacity {
+            return None;
+        }
+        let mut siblings = Vec::with_capacity(self.depth);
+        let mut directions = Vec::with_capacity(self.depth);
+        let mut idx = position;
+        for level in 0..self.depth {
+            let sibling_idx = idx ^ 1;
+            siblings.push(self.levels[level][sibling_idx]);
+            directions.push((idx & 1) as u8);
+            idx >>= 1;
+        }
+        Some((siblings, directions))
+    }
+}
+
+/// A Phase-B capability membership + leaf-replacement witness for the
+/// AttenuateCapability AIR row. It authenticates the HELD leaf against the old
+/// `cap_root` (the seeded sorted tree) AND carries the narrowed GRANTED leaf so
+/// the AIR can recompute `new_cap_root` over the SAME sibling path — a genuine
+/// sorted-tree leaf-update, not a pinned digest.
+///
+/// Because the tree is sorted by `slot_hash` and the slot is held FIXED across
+/// an attenuation (only the rights narrow), the held and granted leaves occupy
+/// the SAME position and share the SAME sibling path; the only difference is the
+/// leaf digest. So one set of siblings authenticates both roots.
+#[derive(Clone, Debug)]
+pub struct CapAttenuationWitness {
+    /// The HELD (pre-attenuation) leaf — the real committed rights.
+    pub held: CapLeaf,
+    /// The GRANTED (post-attenuation, narrowed) leaf — same slot/target/breadstuff,
+    /// narrowed auth_tag/mask/expiry.
+    pub granted: CapLeaf,
+    /// Sibling digests along the path from the leaf to the root (bottom-up).
+    pub siblings: Vec<BabyBear>,
+    /// Direction bits along the path (0 = current is left child, 1 = right).
+    pub directions: Vec<u8>,
+    /// The authenticated old root (= the held leaf's path top).
+    pub old_root: BabyBear,
+    /// The recomputed new root (= the granted leaf's path top, same siblings).
+    pub new_root: BabyBear,
+}
+
+impl CanonicalCapTree {
+    /// Build a [`CapAttenuationWitness`] that narrows the leaf at `held.slot_hash`
+    /// to the `granted` leaf. Returns `None` if no leaf with that slot is present
+    /// (a fabricated held leaf has no authenticated position). The returned
+    /// `old_root` equals this tree's root; `new_root` is the root after the
+    /// single-leaf replacement (recomputed over the shared sibling path).
+    pub fn attenuation_witness(&self, granted: CapLeaf) -> Option<CapAttenuationWitness> {
+        let pos = self.position_of(granted.slot_hash)?;
+        let held = self.sorted_leaves[pos];
+        let (siblings, directions) = self.prove_membership(pos)?;
+
+        // Recompute the new root over the SAME siblings with the granted leaf
+        // digest swapped in at the leaf position.
+        let mut cur = granted.digest();
+        for level in 0..self.depth {
+            let sib = siblings[level];
+            cur = if directions[level] == 0 {
+                hash_fact(cur, &[sib])
+            } else {
+                hash_fact(sib, &[cur])
+            };
+        }
+        Some(CapAttenuationWitness {
+            held,
+            granted,
+            siblings,
+            directions,
+            old_root: self.root(),
+            new_root: cur,
+        })
+    }
 }
 
 /// Compute the canonical capability root over a set of leaves at the canonical

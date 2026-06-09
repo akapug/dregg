@@ -297,10 +297,12 @@ fn attenuate_capability_widened_components_bind_full_32_bytes() {
     let (lo_a, _) = compute_effects_hash(&[VmEffect::AttenuateCapability {
         cap_slot_hash: bytes32_to_8_limbs(&a),
         narrower_commitment: bytes32_to_8_limbs(&narrower),
+        phase_b: None,
     }]);
     let (lo_b, _) = compute_effects_hash(&[VmEffect::AttenuateCapability {
         cap_slot_hash: bytes32_to_8_limbs(&b),
         narrower_commitment: bytes32_to_8_limbs(&narrower),
+        phase_b: None,
     }]);
     assert_ne!(
         lo_a, lo_b,

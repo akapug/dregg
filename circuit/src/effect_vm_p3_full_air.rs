@@ -61,6 +61,7 @@ use p3_batch_stark::{BatchProof, ProverData, StarkInstance, prove_batch, verify_
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_matrix::dense::RowMajorMatrix;
 
+use crate::cap_root::CAP_TREE_DEPTH;
 use crate::effect_vm::{
     AUX_BASE, BAL_LIMB_BITS, EFFECT_VM_WIDTH, NUM_EFFECTS, PARAM_BASE, STATE_AFTER_BASE,
     STATE_BEFORE_BASE, aux_off, param, pi, sel, state,
@@ -329,21 +330,14 @@ fn hash_sites() -> Vec<HashSite> {
         ],
         arity: 2,
     });
-    // ---- AttenuateCapability: leaf = H2(slot_hash, narrower) (29),
-    //      expected = H2(old_cap_root, leaf) (30) ----
-    v.push(HashSite {
-        inputs: [
-            Col(PARAM_BASE + param::ATTN_CAP_SLOT_HASH),
-            Col(PARAM_BASE + param::ATTN_NARROWER_COMMITMENT),
-            Zero,
-            Zero,
-        ],
-        arity: 2,
-    });
-    v.push(HashSite {
-        inputs: [Col(STATE_BEFORE_BASE + state::CAP_ROOT), Digest(29), Zero, Zero],
-        arity: 2,
-    });
+    // ---- AttenuateCapability ----
+    // Phase B: the cap_root advance is NO LONGER a pinned 2-of-2 digest fold.
+    // It is a GENUINE sorted-tree membership-open (held leaf authenticated
+    // against old_cap_root) + leaf-update (granted leaf folded up the SAME path
+    // to new_cap_root), emitted in a DEDICATED block of Poseidon2 sites laid out
+    // after the generic sites (see [`attn`] + [`emit_attenuate_hashes`]). The
+    // generic site list therefore ends at PipelineStep (site 28); Attenuate adds
+    // no generic sites.
 
     v
 }
@@ -369,7 +363,6 @@ mod hs {
     pub const DEQUEUE_NEW_ROOT: usize = 25;
     pub const ATOMIC_BINDING: usize = 27;
     pub const PIPELINE_SOURCE_NEW: usize = 28;
-    pub const ATTN_EXPECTED_CAP: usize = 30;
 }
 
 /// Number of hash sites (= number of Poseidon2 aux blocks per row).
@@ -377,9 +370,648 @@ fn num_hash_sites() -> usize {
     hash_sites().len()
 }
 
-/// FULL p3 trace width = base EffectVM width + one Poseidon2 aux block per site.
+// ============================================================================
+// AttenuateCapability — Phase B in-circuit non-amplification (the reference)
+// ============================================================================
+//
+// A verifying AttenuateCapability proof IMPLIES `granted ⊑ held` (no
+// amplification on EITHER lattice + monotone expiry), with `held` AUTHENTICATED
+// against `old_cap_root` (the seeded openable sorted-Poseidon2 capability tree,
+// `cap_root.rs`). Five teeth, all gated by `sel::ATTENUATE_CAPABILITY`:
+//
+//   1. MEMBERSHIP-OPEN: the held leaf
+//        H_many[slot_hash, target, held_auth_tag, held_mask_lo, held_mask_hi,
+//               held_expiry, breadstuff]
+//      is opened (depth-`CAP_TREE_DEPTH` `hash_fact` path) against
+//      `state_before.cap_root`. A sorted tree has exactly one leaf per slot, so
+//      this authenticates the held rights — they are the real committed ones,
+//      not adversary-chosen. (Forgery 3.)
+//   2. LEAF-UPDATE + ROOT RECOMPUTE: the granted (narrowed) leaf — same
+//      slot_hash/target/breadstuff, narrowed rights — is folded up the SAME
+//      sibling path to `state_after.cap_root`. This REPLACES the pinned-digest
+//      advance: the circuit forces the canonical sorted-tree root move.
+//   3. SUBMASK (EffectMask facet order): `granted_mask & held_mask == granted_mask`
+//      on the 16+16 bit-decomposed mask limbs. (Forgery 1.)
+//   4. AUTHREQUIRED LATTICE (the partial order, NOT a numeric ≤): an
+//      admissible-(granted_tag, held_tag) selector table over the 6 tier bytes
+//      encoding EXACTLY `AuthRequired::is_narrower_or_equal` — it rejects
+//      strict-superset AND INCOMPARABLE pairs ({Signature} vs {Proof}). A
+//      vk-equality sub-gate fires when both tags are `Custom`. (Forgeries 2, 4.)
+//   5. EXPIRY-MONOTONE: `granted_expiry ⊑ held_expiry` over the encoded-expiry
+//      lattice (`None`=⊤ broadest; finite shrink-only). (Matches
+//      `attenuate_in_place`.)
+//
+// All other selectors keep FREEZING cap_root (their own constraints, unchanged).
+pub mod attn {
+    use super::POSEIDON2_PERM_AUX_COLS;
+    use super::{EFFECT_VM_WIDTH, num_hash_sites};
+    use crate::cap_root::CAP_TREE_DEPTH;
+
+    /// Number of bits decomposing each 16-bit mask limb (lo / hi).
+    pub const MASK_LIMB_BITS: usize = 16;
+    /// Range-check bit-width for the expiry-monotone GTE gadget. BabyBear
+    /// `(p-1)/2 < 2^30`, so a 30-bit reconstruction of `(p-1)/2 - diff` proves
+    /// `diff ≤ (p-1)/2`, i.e. the canonical ordering, exactly as the revocation
+    /// tree's `ORDERING_BITS` does.
+    pub const EXPIRY_DIFF_BITS: usize = 30;
+    /// Number of dedicated Poseidon2 hash sites for the Attenuate membership +
+    /// leaf-update + expiry-binding:
+    ///   2 (held leaf, `hash_many`-7 = 2 perms) + 2 (granted leaf)
+    ///   + `CAP_TREE_DEPTH` (held path) + `CAP_TREE_DEPTH` (new path)
+    ///   + 2 (held / granted raw-height `encode_expiry` folds, `hash_many`-2 =
+    ///        1 perm each — bind the RAW heights to the leaf's encoded-expiry felt
+    ///        so the monotone GTE runs on RAW heights, not the non-monotone fold).
+    pub const NUM_ATTN_HASH_SITES: usize = 6 + 2 * CAP_TREE_DEPTH;
+
+    // ---- Scalar witness column offsets, relative to ATTN_SCALAR_BASE ----
+    /// Shared leaf sort key (held == granted: the slot is fixed across an
+    /// attenuation).
+    pub const SLOT_HASH: usize = 0;
+    /// Shared target cell-id felt (held == granted).
+    pub const TARGET: usize = 1;
+    /// Shared breadstuff felt (held == granted).
+    pub const BREADSTUFF: usize = 2;
+    /// Held auth tier tag (None=0…Custom=5; Custom absorbs vk → a felt).
+    pub const HELD_AUTH_TAG: usize = 3;
+    /// Held mask low-16.
+    pub const HELD_MASK_LO: usize = 4;
+    /// Held mask high-16.
+    pub const HELD_MASK_HI: usize = 5;
+    /// Held encoded expiry (`None`-sentinel or finite-height fold).
+    pub const HELD_EXPIRY: usize = 6;
+    /// Granted (narrowed) auth tier tag.
+    pub const GRANTED_AUTH_TAG: usize = 7;
+    /// Granted mask low-16.
+    pub const GRANTED_MASK_LO: usize = 8;
+    /// Granted mask high-16.
+    pub const GRANTED_MASK_HI: usize = 9;
+    /// Granted encoded expiry.
+    pub const GRANTED_EXPIRY: usize = 10;
+    /// 32 held-mask bits (16 lo then 16 hi) for the submask gate.
+    pub const HELD_MASK_BITS_BASE: usize = 11;
+    /// 32 granted-mask bits (16 lo then 16 hi): recompose the granted limbs AND
+    /// (with the held bits) enforce the bitwise-subset submask gate.
+    pub const GRANTED_MASK_BITS_BASE: usize = HELD_MASK_BITS_BASE + 2 * MASK_LIMB_BITS; // 43
+    /// `CAP_TREE_DEPTH` path direction bits (0 = current is left child).
+    pub const DIR_BITS_BASE: usize = GRANTED_MASK_BITS_BASE + 2 * MASK_LIMB_BITS; // 75
+    /// `CAP_TREE_DEPTH` sibling digests along the path.
+    pub const SIBLINGS_BASE: usize = DIR_BITS_BASE + CAP_TREE_DEPTH; // 91
+    // ---- AuthRequired lattice witness ----
+    /// The granted auth TIER byte (0=None…5=Custom) — the small ordinal, as
+    /// distinct from [`GRANTED_AUTH_TAG`] (the leaf felt, which for `Custom`
+    /// absorbs the vk_hash). Bound to the tag for built-in tiers; for `Custom`
+    /// the tag is the vk-absorbed felt and only the tier is the ordinal 5.
+    pub const GRANTED_TIER: usize = SIBLINGS_BASE + CAP_TREE_DEPTH; // 107
+    /// The held auth TIER byte.
+    pub const HELD_TIER: usize = GRANTED_TIER + 1; // 108
+    /// One admissibility selector per ordered (granted_tier, held_tier) pair the
+    /// tier partial order ACCEPTS (see [`admissible_tier_pairs`], which INCLUDES
+    /// the mixed `(4,5)`/`(5,0)` Custom rows and EXCLUDES `(5,5)` — the vk path).
+    /// The witness sets the one selector matching the row's tiers (built-in or
+    /// mixed), or NONE for the `(5,5)` vk path; the AIR forces "exactly one
+    /// table selector OR the vk path", each selector to a listed admissible
+    /// pair, and the selected tiers to match.
+    pub const LATTICE_SEL_BASE: usize = HELD_TIER + 1; // 109
+    /// Number of admissible (granted,held) tier pairs (see [`admissible_tier_pairs`]).
+    pub const NUM_LATTICE_PAIRS: usize = 16;
+    /// Boolean: this row takes the Custom-vs-Custom vk path (`(5,5)`), admitted
+    /// only by vk-equality. Mutually exclusive with the table-selector path.
+    pub const VK_PATH: usize = LATTICE_SEL_BASE + NUM_LATTICE_PAIRS; // 125
+    /// Inverse witness used to pin the tier↔tag consistency for built-in tiers
+    /// (drives `(tag - tier)` to zero only when the tier is built-in).
+    pub const CUSTOM_VK_EQ_INV: usize = VK_PATH + 1; // 126
+    // ---- Expiry-monotone GTE witness ----
+    /// `held_is_none` indicator: held_expiry == NONE_SENTINEL (⊤, any granted ok).
+    pub const HELD_EXPIRY_IS_NONE: usize = CUSTOM_VK_EQ_INV + 1; // 127
+    /// `granted_is_none` indicator: granted_expiry == NONE_SENTINEL.
+    pub const GRANTED_EXPIRY_IS_NONE: usize = HELD_EXPIRY_IS_NONE + 1; // 128
+    /// `diff = HALF_P_MINUS_1 - (held_expiry - granted_expiry)` carrier for the
+    /// finite/finite shrink-only range check.
+    pub const EXPIRY_DIFF: usize = GRANTED_EXPIRY_IS_NONE + 1; // 129
+    /// 30 range bits reconstructing `held_height - granted_height ≤ (p-1)/2` on
+    /// the RAW heights (NOT the non-monotone encoded-expiry fold).
+    pub const EXPIRY_DIFF_BITS_BASE: usize = EXPIRY_DIFF + 1; // 130
+    /// Held RAW expiry HEIGHT (the integer, < 2^30) used by the monotone GTE.
+    /// Bound to [`HELD_EXPIRY`] (the encoded felt) by re-folding
+    /// `encode_expiry(raw)` in-circuit when the held expiry is finite.
+    pub const HELD_EXPIRY_RAW: usize = EXPIRY_DIFF_BITS_BASE + EXPIRY_DIFF_BITS; // 160
+    /// Granted RAW expiry HEIGHT.
+    pub const GRANTED_EXPIRY_RAW: usize = HELD_EXPIRY_RAW + 1; // 161
+    /// Total scalar witness columns in the Attenuate block.
+    pub const ATTN_SCALAR_COLS: usize = GRANTED_EXPIRY_RAW + 1; // 162
+
+    /// Hash-site index of the held raw-height `encode_expiry` fold.
+    pub const HS_HELD_EXPIRY_FOLD: usize = 4 + 2 * CAP_TREE_DEPTH;
+    /// Hash-site index of the granted raw-height `encode_expiry` fold.
+    pub const HS_GRANTED_EXPIRY_FOLD: usize = 4 + 2 * CAP_TREE_DEPTH + 1;
+
+    /// Absolute column where the Attenuate scalar witness block begins (after
+    /// the generic hash-site blocks).
+    pub fn attn_scalar_base() -> usize {
+        EFFECT_VM_WIDTH + num_hash_sites() * POSEIDON2_PERM_AUX_COLS
+    }
+    /// Absolute column where the Attenuate dedicated Poseidon2 hash blocks begin.
+    pub fn attn_hash_base() -> usize {
+        attn_scalar_base() + ATTN_SCALAR_COLS
+    }
+    /// Absolute base of Attenuate hash site `i`'s 352-col aux block.
+    pub fn attn_hash_block(i: usize) -> usize {
+        attn_hash_base() + i * POSEIDON2_PERM_AUX_COLS
+    }
+    /// Hash-site index of the held-leaf digest (the second of its two perms,
+    /// whose output[0] is the leaf digest).
+    pub const HS_HELD_LEAF_1: usize = 1;
+    /// Hash-site index of the granted-leaf digest (second perm).
+    pub const HS_GRANTED_LEAF_1: usize = 3;
+    /// Hash-site index of the held path's TOP node (== old_cap_root).
+    pub const HS_HELD_PATH_TOP: usize = 4 + CAP_TREE_DEPTH - 1;
+    /// Hash-site index of the new path's TOP node (== new_cap_root).
+    pub const HS_NEW_PATH_TOP: usize = 4 + 2 * CAP_TREE_DEPTH - 1;
+
+    /// The admissible ordered (granted_tier, held_tier) pairs over the BUILT-IN
+    /// `AuthRequired` tiers (None=0, Signature=1, Proof=2, Either=3,
+    /// Impossible=4), encoding EXACTLY `AuthRequired::is_narrower_or_equal`
+    /// (`cell/src/permissions.rs`). This is the partial order, NOT a numeric ≤:
+    ///
+    ///   * `Impossible (4)` ⊑ EVERYTHING (it is the bottom).
+    ///   * EVERYTHING ⊑ `None (0)` (it is the top).
+    ///   * `Signature (1)` ⊑ `Either (3)`, `Proof (2)` ⊑ `Either (3)`.
+    ///   * reflexivity `t ⊑ t`.
+    ///   * `{Signature}` and `{Proof}` are INCOMPARABLE — the (1,2) and (2,1)
+    ///     pairs are ABSENT, so a GTE/≤ that would admit one of them is rejected.
+    ///
+    /// The Custom-vs-Custom case `(5,5)` is DELIBERATELY ABSENT: it is admitted
+    /// only by the vk-equality sub-gate (both Custom AND vk-equal). The
+    /// (Impossible⊑Custom) `(4,5)` and (Custom⊑None) `(5,0)` rows ARE listed —
+    /// those are decided by the tier order alone. A row whose (granted,held)
+    /// tier pair is none of these and is not the `(5,5)` vk path has NO
+    /// satisfying admissibility selector ⇒ UNSAT.
+    pub const fn admissible_tier_pairs() -> [(u32, u32); NUM_LATTICE_PAIRS] {
+        [
+            // reflexivity for the 5 built-in tiers (granted tier == held tier)
+            (0, 0),
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            // Impossible (4) is narrower-or-equal to EVERY held tier (bottom).
+            (4, 0),
+            (4, 1),
+            (4, 2),
+            (4, 3),
+            (4, 5), // Impossible ⊑ Custom
+            // EVERY granted tier is narrower-or-equal to None (0) (None = top).
+            (1, 0),
+            (2, 0),
+            (3, 0),
+            (5, 0), // Custom ⊑ None
+            // Signature / Proof are strictly narrower than Either.
+            (1, 3),
+            (2, 3),
+        ]
+    }
+}
+
+/// FULL p3 trace width = base EffectVM width + generic hash blocks + the
+/// dedicated Attenuate scalar-witness block + the Attenuate hash blocks.
 pub fn effect_vm_p3_width() -> usize {
-    EFFECT_VM_WIDTH + num_hash_sites() * POSEIDON2_PERM_AUX_COLS
+    EFFECT_VM_WIDTH
+        + num_hash_sites() * POSEIDON2_PERM_AUX_COLS
+        + attn::ATTN_SCALAR_COLS
+        + attn::NUM_ATTN_HASH_SITES * POSEIDON2_PERM_AUX_COLS
+}
+
+// ============================================================================
+// Attenuate dedicated Poseidon2 chain — symbolic (eval) + concrete (witness).
+// Both walk the SAME 36-permutation ordering (see [`attn`]). The held/granted
+// leaf digests are `hash_many` of the 7 CapLeaf fields (a 2-permutation rate-4
+// sponge); the path nodes are `hash_fact(l,[r])`. The emitted DIGESTS are the
+// held-leaf digest, the granted-leaf digest, the held-path top (= old_cap_root),
+// and the new-path top (= new_cap_root), which the eval gates pin.
+// ============================================================================
+
+/// `hash_fact`'s leaf-domain capacity markers (`poseidon2::hash_fact`): the
+/// sorted-tree node hash sets `state[5] = 0xFACF`, `state[6] = 1`.
+const FACT_MARKER: u64 = 0xFACF;
+
+/// The output state (all `POSEIDON2_WIDTH` felts) of the permutation whose aux
+/// block begins at `block_base`: the LAST round's state, the final
+/// `POSEIDON2_WIDTH` columns of the 352-col block.
+fn perm_out_state_expr<AB: AirBuilder>(local: &[AB::Var], block_base: usize) -> [AB::Expr; POSEIDON2_WIDTH] {
+    let off = block_base + POSEIDON2_PERM_AUX_COLS - POSEIDON2_WIDTH;
+    core::array::from_fn(|j| local[off + j].into())
+}
+
+/// Concrete sibling of [`perm_out_state_expr`].
+fn perm_out_state_concrete(row: &[BabyBear], block_base: usize) -> [BabyBear; POSEIDON2_WIDTH] {
+    let off = block_base + POSEIDON2_PERM_AUX_COLS - POSEIDON2_WIDTH;
+    core::array::from_fn(|j| row[off + j])
+}
+
+/// Symbolically emit the Attenuate membership + leaf-update Poseidon2 chain and
+/// return `(held_leaf_digest, granted_leaf_digest, old_root, new_root)` as
+/// `AB::Expr`. The round-by-round permutation constraints are emitted on EVERY
+/// row (like the generic sites); the gates that USE these digests are
+/// selector-gated in `eval`, so non-Attenuate rows carry a (vacuously
+/// satisfiable, witness-filled) chain that constrains nothing downstream.
+fn emit_attenuate_hashes<AB: AirBuilder>(
+    builder: &mut AB,
+    local: &[AB::Var],
+) -> AttnDigests<AB::Expr>
+where
+    AB::F: PrimeField32,
+{
+    use attn::*;
+    let s = attn_scalar_base();
+    let sc = |off: usize| -> AB::Expr { local[s + off].into() };
+    let hb = |i: usize| attn_hash_block(i);
+    let block_aux = |i: usize| -> Vec<AB::Var> {
+        local[hb(i)..hb(i) + POSEIDON2_PERM_AUX_COLS].to_vec()
+    };
+    let zero = AB::Expr::ZERO;
+    let seven = AB::Expr::from_u64(7);
+    let fact = AB::Expr::from_u64(FACT_MARKER);
+    let one = AB::Expr::ONE;
+
+    // ---- Held leaf digest = hash_many[slot,target,held_tag,held_mlo,held_mhi,held_exp,bread] ----
+    // Perm 0: absorb chunk0 into a fresh state (state[4] = len = 7).
+    let h0_in: [AB::Expr; POSEIDON2_WIDTH] = {
+        let mut st: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|_| zero.clone());
+        st[0] = sc(SLOT_HASH);
+        st[1] = sc(TARGET);
+        st[2] = sc(HELD_AUTH_TAG);
+        st[3] = sc(HELD_MASK_LO);
+        st[4] = seven.clone();
+        st
+    };
+    let _ = poseidon2_permute_expr::<AB>(builder, h0_in, &block_aux(0));
+    // Perm 1: absorb chunk1 (3 elems added to positions 0..3 of perm0's output).
+    let h0_out = perm_out_state_expr::<AB>(local, hb(0));
+    let h1_in: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|j| match j {
+        0 => h0_out[0].clone() + sc(HELD_MASK_HI),
+        1 => h0_out[1].clone() + sc(HELD_EXPIRY),
+        2 => h0_out[2].clone() + sc(BREADSTUFF),
+        _ => h0_out[j].clone(),
+    });
+    let held_leaf = poseidon2_permute_expr::<AB>(builder, h1_in, &block_aux(1));
+
+    // ---- Granted leaf digest (same shape, narrowed rights) ----
+    let g0_in: [AB::Expr; POSEIDON2_WIDTH] = {
+        let mut st: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|_| zero.clone());
+        st[0] = sc(SLOT_HASH);
+        st[1] = sc(TARGET);
+        st[2] = sc(GRANTED_AUTH_TAG);
+        st[3] = sc(GRANTED_MASK_LO);
+        st[4] = seven.clone();
+        st
+    };
+    let _ = poseidon2_permute_expr::<AB>(builder, g0_in, &block_aux(2));
+    let g0_out = perm_out_state_expr::<AB>(local, hb(2));
+    let g1_in: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|j| match j {
+        0 => g0_out[0].clone() + sc(GRANTED_MASK_HI),
+        1 => g0_out[1].clone() + sc(GRANTED_EXPIRY),
+        2 => g0_out[2].clone() + sc(BREADSTUFF),
+        _ => g0_out[j].clone(),
+    });
+    let granted_leaf = poseidon2_permute_expr::<AB>(builder, g1_in, &block_aux(3));
+
+    // ---- Held path (depth nodes) from held leaf up to old_cap_root ----
+    // node_in = hash_fact(left, [right]); dir=0 ⇒ current is LEFT child.
+    // left  = dir==0 ? cur : sib;  right = dir==0 ? sib : cur.
+    let mut held_cur = held_leaf.clone();
+    let mut new_cur = granted_leaf.clone();
+    for level in 0..CAP_TREE_DEPTH {
+        let dir = sc(DIR_BITS_BASE + level);
+        let sib = sc(SIBLINGS_BASE + level);
+        // left = cur + dir*(sib - cur); right = sib + dir*(cur - sib).
+        let held_left = held_cur.clone() + dir.clone() * (sib.clone() - held_cur.clone());
+        let held_right = sib.clone() + dir.clone() * (held_cur.clone() - sib.clone());
+        let held_node_in: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|j| match j {
+            0 => held_left.clone(),
+            1 => held_right.clone(),
+            5 => fact.clone(),
+            6 => one.clone(),
+            _ => zero.clone(),
+        });
+        held_cur = poseidon2_permute_expr::<AB>(builder, held_node_in, &block_aux(4 + level));
+
+        let new_left = new_cur.clone() + dir.clone() * (sib.clone() - new_cur.clone());
+        let new_right = sib.clone() + dir.clone() * (new_cur.clone() - sib.clone());
+        let new_node_in: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|j| match j {
+            0 => new_left.clone(),
+            1 => new_right.clone(),
+            5 => fact.clone(),
+            6 => one.clone(),
+            _ => zero.clone(),
+        });
+        new_cur = poseidon2_permute_expr::<AB>(builder, new_node_in, &block_aux(4 + CAP_TREE_DEPTH + level));
+    }
+
+    // ---- Raw-height encode_expiry folds: hash_many([raw, 0]) (state[4]=len=2).
+    //      These bind the RAW height columns to the leaf's encoded-expiry felt
+    //      (gated finite in GATE 5), so the monotone GTE runs on raw heights. ----
+    let two = AB::Expr::from_u64(2);
+    let held_exp_in: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|j| match j {
+        0 => sc(HELD_EXPIRY_RAW),
+        4 => two.clone(),
+        _ => zero.clone(),
+    });
+    let held_exp_fold =
+        poseidon2_permute_expr::<AB>(builder, held_exp_in, &block_aux(HS_HELD_EXPIRY_FOLD));
+    let granted_exp_in: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|j| match j {
+        0 => sc(GRANTED_EXPIRY_RAW),
+        4 => two.clone(),
+        _ => zero.clone(),
+    });
+    let granted_exp_fold =
+        poseidon2_permute_expr::<AB>(builder, granted_exp_in, &block_aux(HS_GRANTED_EXPIRY_FOLD));
+
+    AttnDigests {
+        held_leaf,
+        granted_leaf,
+        old_root: held_cur,
+        new_root: new_cur,
+        held_exp_fold,
+        granted_exp_fold,
+    }
+}
+
+/// The named digests emitted by [`emit_attenuate_hashes`].
+struct AttnDigests<E> {
+    held_leaf: E,
+    granted_leaf: E,
+    old_root: E,
+    new_root: E,
+    held_exp_fold: E,
+    granted_exp_fold: E,
+}
+
+/// Concrete witness for the Attenuate hash chain: returns the `Vec<BabyBear>` of
+/// all `NUM_ATTN_HASH_SITES * POSEIDON2_PERM_AUX_COLS` aux columns, in the SAME
+/// order [`emit_attenuate_hashes`] consumes them. Driven by the already-filled
+/// scalar witness columns in `row` (slots, leaf fields, siblings, dir bits).
+fn attenuate_hash_witness(row: &[BabyBear]) -> Vec<BabyBear> {
+    use attn::*;
+    let s = attn_scalar_base();
+    let sc = |off: usize| row[s + off];
+    let mut out: Vec<BabyBear> = Vec::with_capacity(NUM_ATTN_HASH_SITES * POSEIDON2_PERM_AUX_COLS);
+
+    // Held leaf: hash_many over 7 fields (2 perms).
+    let mut h0 = [BabyBear::ZERO; POSEIDON2_WIDTH];
+    h0[0] = sc(SLOT_HASH);
+    h0[1] = sc(TARGET);
+    h0[2] = sc(HELD_AUTH_TAG);
+    h0[3] = sc(HELD_MASK_LO);
+    h0[4] = BabyBear::new(7);
+    let h0_aux = poseidon2_permute_aux_witness(h0);
+    let h0_out = last_state(&h0_aux);
+    out.extend(h0_aux);
+    let mut h1 = h0_out;
+    h1[0] += sc(HELD_MASK_HI);
+    h1[1] += sc(HELD_EXPIRY);
+    h1[2] += sc(BREADSTUFF);
+    let h1_aux = poseidon2_permute_aux_witness(h1);
+    let held_leaf = last_state(&h1_aux)[0];
+    out.extend(h1_aux);
+
+    // Granted leaf.
+    let mut g0 = [BabyBear::ZERO; POSEIDON2_WIDTH];
+    g0[0] = sc(SLOT_HASH);
+    g0[1] = sc(TARGET);
+    g0[2] = sc(GRANTED_AUTH_TAG);
+    g0[3] = sc(GRANTED_MASK_LO);
+    g0[4] = BabyBear::new(7);
+    let g0_aux = poseidon2_permute_aux_witness(g0);
+    let g0_out = last_state(&g0_aux);
+    out.extend(g0_aux);
+    let mut g1 = g0_out;
+    g1[0] += sc(GRANTED_MASK_HI);
+    g1[1] += sc(GRANTED_EXPIRY);
+    g1[2] += sc(BREADSTUFF);
+    let g1_aux = poseidon2_permute_aux_witness(g1);
+    let granted_leaf = last_state(&g1_aux)[0];
+    out.extend(g1_aux);
+
+    // Held path + new path (shared siblings / directions).
+    let mut held_cur = held_leaf;
+    let mut new_cur = granted_leaf;
+    let mut held_blocks: Vec<BabyBear> = Vec::new();
+    let mut new_blocks: Vec<BabyBear> = Vec::new();
+    for level in 0..CAP_TREE_DEPTH {
+        let dir = sc(DIR_BITS_BASE + level).as_u32();
+        let sib = sc(SIBLINGS_BASE + level);
+        let (hl, hr) = if dir == 0 { (held_cur, sib) } else { (sib, held_cur) };
+        let mut hin = [BabyBear::ZERO; POSEIDON2_WIDTH];
+        hin[0] = hl;
+        hin[1] = hr;
+        hin[5] = BabyBear::new(FACT_MARKER as u32);
+        hin[6] = BabyBear::ONE;
+        let haux = poseidon2_permute_aux_witness(hin);
+        held_cur = last_state(&haux)[0];
+        held_blocks.extend(haux);
+
+        let (nl, nr) = if dir == 0 { (new_cur, sib) } else { (sib, new_cur) };
+        let mut nin = [BabyBear::ZERO; POSEIDON2_WIDTH];
+        nin[0] = nl;
+        nin[1] = nr;
+        nin[5] = BabyBear::new(FACT_MARKER as u32);
+        nin[6] = BabyBear::ONE;
+        let naux = poseidon2_permute_aux_witness(nin);
+        new_cur = last_state(&naux)[0];
+        new_blocks.extend(naux);
+    }
+    out.extend(held_blocks);
+    out.extend(new_blocks);
+
+    // Raw-height encode_expiry folds: hash_many([raw, 0]) (state[4] = len = 2).
+    let mut he = [BabyBear::ZERO; POSEIDON2_WIDTH];
+    he[0] = sc(HELD_EXPIRY_RAW);
+    he[4] = BabyBear::new(2);
+    out.extend(poseidon2_permute_aux_witness(he));
+    let mut ge = [BabyBear::ZERO; POSEIDON2_WIDTH];
+    ge[0] = sc(GRANTED_EXPIRY_RAW);
+    ge[4] = BabyBear::new(2);
+    out.extend(poseidon2_permute_aux_witness(ge));
+
+    debug_assert_eq!(out.len(), NUM_ATTN_HASH_SITES * POSEIDON2_PERM_AUX_COLS);
+    out
+}
+
+/// The final permutation state (last `POSEIDON2_WIDTH` felts of a 352-col aux
+/// block produced by [`poseidon2_permute_aux_witness`]).
+fn last_state(aux: &[BabyBear]) -> [BabyBear; POSEIDON2_WIDTH] {
+    let off = aux.len() - POSEIDON2_WIDTH;
+    core::array::from_fn(|j| aux[off + j])
+}
+
+// ============================================================================
+// Attenuate Phase-B scalar-witness builder + proving / accept entry points.
+// ============================================================================
+
+/// Build the Phase-B scalar-witness block for ONE Attenuate row from its
+/// [`AttenuateWitness`]. Fills the slot/target/breadstuff felts, the held +
+/// granted rights felts, the 16+16 mask bit-decompositions, the path siblings
+/// + direction bits, the AuthRequired tier ordinals + admissibility selector
+/// (or vk-path flag), and the expiry-monotone GTE witness. The returned block
+/// has length [`attn::ATTN_SCALAR_COLS`].
+///
+/// This is a PURE function of the witness; the AIR's gates re-derive every
+/// relation from these columns, so a block that does not encode a genuine
+/// narrowing yields an UNSAT trace.
+pub fn attenuate_scalar_block(w: &crate::effect_vm::AttenuateWitness) -> Vec<BabyBear> {
+    use attn::*;
+    let mut b = vec![BabyBear::ZERO; ATTN_SCALAR_COLS];
+    let held = &w.held;
+    let granted = &w.granted;
+
+    b[SLOT_HASH] = held.slot_hash;
+    b[TARGET] = held.target;
+    b[BREADSTUFF] = held.breadstuff;
+    b[HELD_AUTH_TAG] = held.auth_tag;
+    b[HELD_MASK_LO] = held.mask_lo;
+    b[HELD_MASK_HI] = held.mask_hi;
+    b[HELD_EXPIRY] = held.expiry;
+    b[GRANTED_AUTH_TAG] = granted.auth_tag;
+    b[GRANTED_MASK_LO] = granted.mask_lo;
+    b[GRANTED_MASK_HI] = granted.mask_hi;
+    b[GRANTED_EXPIRY] = granted.expiry;
+
+    // Mask bit-decompositions (16 lo then 16 hi, for held and granted).
+    let bits = |v: u32, base: usize, b: &mut [BabyBear]| {
+        for i in 0..MASK_LIMB_BITS {
+            b[base + i] = BabyBear::new((v >> i) & 1);
+        }
+    };
+    bits(held.mask_lo.as_u32(), HELD_MASK_BITS_BASE, &mut b);
+    bits(held.mask_hi.as_u32(), HELD_MASK_BITS_BASE + MASK_LIMB_BITS, &mut b);
+    bits(granted.mask_lo.as_u32(), GRANTED_MASK_BITS_BASE, &mut b);
+    bits(granted.mask_hi.as_u32(), GRANTED_MASK_BITS_BASE + MASK_LIMB_BITS, &mut b);
+
+    // Path siblings + directions.
+    for (i, &sib) in w.siblings.iter().enumerate() {
+        b[SIBLINGS_BASE + i] = sib;
+    }
+    for (i, &dir) in w.directions.iter().enumerate() {
+        b[DIR_BITS_BASE + i] = BabyBear::new(dir as u32);
+    }
+
+    // AuthRequired tier ordinals + admissibility selector / vk path.
+    b[GRANTED_TIER] = BabyBear::new(w.granted_tier as u32);
+    b[HELD_TIER] = BabyBear::new(w.held_tier as u32);
+    if w.granted_tier == 5 && w.held_tier == 5 {
+        // Custom-vs-Custom: vk path (admitted only if the vk-absorbed tags match).
+        b[VK_PATH] = BabyBear::ONE;
+    } else {
+        let pairs = admissible_tier_pairs();
+        if let Some(k) = pairs
+            .iter()
+            .position(|&(pg, ph)| pg == w.granted_tier as u32 && ph == w.held_tier as u32)
+        {
+            b[LATTICE_SEL_BASE + k] = BabyBear::ONE;
+        }
+        // If no admissible pair matches (an amplifying / incomparable tier pair),
+        // NO selector is set ⇒ the AIR's "exactly one path active" gate is UNSAT.
+    }
+
+    // Expiry-monotone GTE witness — on the RAW heights (bound to the encoded
+    // leaf felts via the in-circuit encode_expiry fold).
+    let none_sent = crate::cap_root::SENTINEL_MAX;
+    let h_none = w.held_expiry_height.is_none();
+    let g_none = w.granted_expiry_height.is_none();
+    // Sanity: the raw-None state matches the encoded-felt sentinel.
+    debug_assert_eq!(h_none, held.expiry == none_sent);
+    debug_assert_eq!(g_none, granted.expiry == none_sent);
+    b[HELD_EXPIRY_IS_NONE] = BabyBear::new(h_none as u32);
+    b[GRANTED_EXPIRY_IS_NONE] = BabyBear::new(g_none as u32);
+    let held_raw = w.held_expiry_height.unwrap_or(0);
+    let granted_raw = w.granted_expiry_height.unwrap_or(0);
+    // Raw heights as single felts (heights < 2^30 fit one limb; the in-circuit
+    // fold uses hash_many([raw, 0]) = encode_expiry for h_hi == 0).
+    b[HELD_EXPIRY_RAW] = BabyBear::new(held_raw as u32);
+    b[GRANTED_EXPIRY_RAW] = BabyBear::new(granted_raw as u32);
+    if !h_none && !g_none {
+        // 30-bit reconstruction of (p-1)/2 - (held_raw - granted_raw). For an
+        // honest shrink (granted ≤ held) this is in [0, 2^30); a widening wraps
+        // past (p-1)/2 ⇒ no 30-bit witness ⇒ the AIR rejects.
+        let half = crate::dsl::revocation::HALF_P_MINUS_1;
+        let field_diff =
+            (BabyBear::new(held_raw as u32) - BabyBear::new(granted_raw as u32)).as_u32();
+        let check = half.wrapping_sub(field_diff);
+        for i in 0..EXPIRY_DIFF_BITS {
+            b[EXPIRY_DIFF_BITS_BASE + i] = BabyBear::new((check >> i) & 1);
+        }
+        b[EXPIRY_DIFF] = BabyBear::new(check);
+    }
+    b
+}
+
+/// Build the per-row Attenuate scalar blocks for an effect sequence: the
+/// all-zero block for every non-Attenuate row, and [`attenuate_scalar_block`]
+/// for each `AttenuateCapability { phase_b: Some(_), .. }` row. The result is
+/// row-aligned to [`generate_effect_vm_trace`]'s output (one row per effect,
+/// then NoOp padding to the power-of-two height), so it is consumed by
+/// [`extend_trace_with_attenuation`].
+pub fn attenuate_scalar_blocks_for(
+    effects: &[crate::effect_vm::Effect],
+    trace_height: usize,
+) -> Vec<Vec<BabyBear>> {
+    use crate::effect_vm::Effect;
+    let mut blocks: Vec<Vec<BabyBear>> = Vec::with_capacity(trace_height);
+    for eff in effects {
+        match eff {
+            Effect::AttenuateCapability { phase_b: Some(w), .. } => {
+                blocks.push(attenuate_scalar_block(w));
+            }
+            _ => blocks.push(vec![BabyBear::ZERO; attn::ATTN_SCALAR_COLS]),
+        }
+    }
+    while blocks.len() < trace_height {
+        blocks.push(vec![BabyBear::ZERO; attn::ATTN_SCALAR_COLS]);
+    }
+    blocks
+}
+
+/// Prove an Attenuate (or any) effect turn through the AUDITED p3 prover with
+/// the Phase-B scalar witness threaded in. `base_trace` is the 186-col trace
+/// from [`generate_effect_vm_trace`]; `effects` is the SAME sequence (used to
+/// recover the per-row Phase-B witness). The proof self-verifies before return.
+pub fn prove_effect_vm_p3_attenuation(
+    base_trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+    effects: &[crate::effect_vm::Effect],
+) -> Result<EffectVmP3Proof, EffectVmP3Error> {
+    let air = EffectVmP3Air;
+    let config = create_config();
+    let scalar_blocks = attenuate_scalar_blocks_for(effects, base_trace.len());
+    let full_trace = extend_trace_with_attenuation(base_trace, &scalar_blocks);
+    let matrix = to_matrix(&full_trace);
+    let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+    let instances = vec![StarkInstance { air: &air, trace: &matrix, public_values: pis.clone() }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+    let airs = vec![air];
+    let pvs = vec![pis];
+    verify_batch(&config, &airs, &proof, &pvs, common)
+        .map_err(|e| EffectVmP3Error::VerificationFailed(format!("{e:?}")))?;
+    Ok(proof)
+}
+
+/// FRI-free accept/reject decision (the exact predicate the audited verifier
+/// enforces) for an Attenuate turn carrying the Phase-B scalar witness. Mirrors
+/// [`p3_air_accepts`] but threads the witness through
+/// [`extend_trace_with_attenuation`].
+pub fn p3_air_accepts_attenuation(
+    base_trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+    effects: &[crate::effect_vm::Effect],
+) -> bool {
+    let air = EffectVmP3Air;
+    let scalar_blocks = attenuate_scalar_blocks_for(effects, base_trace.len());
+    let full_trace = extend_trace_with_attenuation(base_trace, &scalar_blocks);
+    let matrix = to_matrix(&full_trace);
+    let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+    p3_air::check_all_constraints(&air, &matrix, &pis, Some(1)).is_ok()
 }
 
 // ============================================================================
@@ -467,6 +1099,12 @@ where
             let d = poseidon2_permute_expr::<AB>(builder, input, &aux);
             digests.push(d);
         }
+
+        // -- AttenuateCapability dedicated Poseidon2 chain (membership + leaf-update
+        //    + expiry-folds). Emitted on every row (round constraints
+        //    unconditional, like the generic sites); the digests feed the
+        //    selector-gated gates below. --
+        let attn_d = emit_attenuate_hashes(builder, &local);
 
         // All Effect VM constraints hold on the transition domain (rows 0..n-2):
         // the bespoke prover divides the whole constraint polynomial by Z_T.
@@ -1246,20 +1884,231 @@ where
             );
         }
 
-        // -- AttenuateCapability (hash sites 29,30) --
+        // -- AttenuateCapability: PHASE B in-circuit non-amplification (gates 1-5).
+        //    A verifying row IMPLIES granted ⊑ held on BOTH lattices + monotone
+        //    expiry, with held AUTHENTICATED against old_cap_root. See [`attn`]. --
         let s_attn_cap = lc(sel::ATTENUATE_CAPABILITY);
         {
-            tb.assert_zero(
-                s_attn_cap.clone() * (new_cap_root.clone() - digests[hs::ATTN_EXPECTED_CAP].clone()),
-            );
-            tb.assert_zero(s_attn_cap.clone() * (new_bal_lo.clone() - old_bal_lo.clone()));
-            tb.assert_zero(s_attn_cap.clone() * (new_bal_hi.clone() - old_bal_hi.clone()));
+            use attn::*;
+            let sbase = attn_scalar_base();
+            let w = |off: usize| -> AB::Expr { local[sbase + off].into() };
+            let s = s_attn_cap.clone();
+
+            // -- State frame: balance / fields / reserved unchanged. --
+            tb.assert_zero(s.clone() * (new_bal_lo.clone() - old_bal_lo.clone()));
+            tb.assert_zero(s.clone() * (new_bal_hi.clone() - old_bal_hi.clone()));
             for i in 0..8 {
-                tb.assert_zero(s_attn_cap.clone() * (fld_a(i) - fld_b(i)));
+                tb.assert_zero(s.clone() * (fld_a(i) - fld_b(i)));
             }
+            tb.assert_zero(s.clone() * (sa(state::RESERVED) - sb(state::RESERVED)));
+
+            // ===== GATE 1: MEMBERSHIP-OPEN — held leaf authenticated vs old_cap_root.
+            // The held-path top (folded from the held leaf digest up the witnessed
+            // sibling path) MUST equal state_before.cap_root. The sorted tree has
+            // exactly one leaf per slot, so this pins the held rights to the real
+            // committed leaf (Forgery 3: a fabricated held leaf has no path to the
+            // real root ⇒ this fails).
+            tb.assert_zero(s.clone() * (attn_d.old_root.clone() - old_cap_root.clone()));
+            // Also bind the param-anchored slot hash to the witnessed slot, so the
+            // public AttenuateCapability params (params[0]) identify the same slot
+            // the membership opens (no swapping the proven slot for another).
+            tb.assert_zero(s.clone() * (prm(param::ATTN_CAP_SLOT_HASH) - w(SLOT_HASH)));
+
+            // ===== GATE 2: LEAF-UPDATE — new_cap_root forced by the canonical move.
+            // The granted (narrowed) leaf folded up the SAME sibling path MUST
+            // equal state_after.cap_root. This REPLACES the pinned-digest advance:
+            // the circuit forces the sorted-tree root move, not the executor.
+            tb.assert_zero(s.clone() * (attn_d.new_root.clone() - new_cap_root.clone()));
+            // The narrower-commitment param (params[1]) is bound to the granted
+            // leaf digest, so the public attestation commits to exactly the leaf
+            // whose narrowed rights the gates check.
             tb.assert_zero(
-                s_attn_cap.clone() * (sa(state::RESERVED) - sb(state::RESERVED)),
+                s.clone() * (prm(param::ATTN_NARROWER_COMMITMENT) - attn_d.granted_leaf.clone()),
             );
+
+            // ===== GATE 3: SUBMASK (EffectMask facet order) — granted ⊆ held bitwise.
+            // Decompose held + granted mask limbs into 16+16 bits each; recompose
+            // (binds the witnessed limbs to the leaf fields); then enforce
+            // granted_bit ⇒ held_bit (granted_bit * (1 - held_bit) == 0) for all 32
+            // bits. (Forgery 1: a granted bit absent from held ⇒ this fails.)
+            {
+                let mut held_lo = AB::Expr::ZERO;
+                let mut held_hi = AB::Expr::ZERO;
+                let mut grant_lo = AB::Expr::ZERO;
+                let mut grant_hi = AB::Expr::ZERO;
+                for i in 0..MASK_LIMB_BITS {
+                    let hb = w(HELD_MASK_BITS_BASE + i);
+                    let hbh = w(HELD_MASK_BITS_BASE + MASK_LIMB_BITS + i);
+                    let gb = w(GRANTED_MASK_BITS_BASE + i);
+                    let gbh = w(GRANTED_MASK_BITS_BASE + MASK_LIMB_BITS + i);
+                    // booleanity (gated).
+                    tb.assert_zero(s.clone() * hb.clone() * (hb.clone() - one.clone()));
+                    tb.assert_zero(s.clone() * hbh.clone() * (hbh.clone() - one.clone()));
+                    tb.assert_zero(s.clone() * gb.clone() * (gb.clone() - one.clone()));
+                    tb.assert_zero(s.clone() * gbh.clone() * (gbh.clone() - one.clone()));
+                    let w_i = AB::Expr::from_u64(1u64 << i);
+                    held_lo = held_lo + hb.clone() * w_i.clone();
+                    held_hi = held_hi + hbh.clone() * w_i.clone();
+                    grant_lo = grant_lo + gb.clone() * w_i.clone();
+                    grant_hi = grant_hi + gbh.clone() * w_i.clone();
+                    // subset: granted bit set ⇒ held bit set, on BOTH limbs.
+                    tb.assert_zero(s.clone() * gb.clone() * (one.clone() - hb.clone()));
+                    tb.assert_zero(s.clone() * gbh.clone() * (one.clone() - hbh.clone()));
+                }
+                // recomposition binds the bit columns to the witnessed mask limbs…
+                tb.assert_zero(s.clone() * (held_lo - w(HELD_MASK_LO)));
+                tb.assert_zero(s.clone() * (held_hi - w(HELD_MASK_HI)));
+                tb.assert_zero(s.clone() * (grant_lo - w(GRANTED_MASK_LO)));
+                tb.assert_zero(s.clone() * (grant_hi - w(GRANTED_MASK_HI)));
+            }
+
+            // ===== GATE 4: AUTHREQUIRED LATTICE — the PARTIAL order, not a ≤.
+            // Tier bytes 0..5 = None,Signature,Proof,Either,Impossible,Custom.
+            // An admissibility selector table over (granted_tier, held_tier)
+            // encodes EXACTLY `is_narrower_or_equal` (incl. mixed Custom rows
+            // (4,5)/(5,0), EXCLUDING (5,5) which is the vk path). The witness sets
+            // ONE table selector OR the vk-path flag; the AIR forces:
+            //   (a) each selector + vk_path boolean,
+            //   (b) exactly one of {table selectors, vk_path} active,
+            //   (c) the active selector's pair to match (granted_tier, held_tier),
+            //   (d) tier↔tag consistency for built-in tiers (tag == tier for 0..4),
+            //   (e) vk path ⇒ both tiers Custom (5) AND granted_tag == held_tag.
+            // {Signature}(1) vs {Proof}(2) are INCOMPARABLE: (1,2)/(2,1) are NOT in
+            // the table and are not the vk path ⇒ UNSAT (Forgery 2). Two distinct
+            // Customs fail (e) (Forgery 4).
+            {
+                let gt = w(GRANTED_TIER);
+                let ht = w(HELD_TIER);
+                let vk = w(VK_PATH);
+                tb.assert_zero(s.clone() * vk.clone() * (vk.clone() - one.clone()));
+
+                let pairs = admissible_tier_pairs();
+                let mut sel_sum = vk.clone();
+                // For each table selector: boolean, and when active force the pair.
+                for (k, (pg, ph)) in pairs.iter().enumerate() {
+                    let selk = w(LATTICE_SEL_BASE + k);
+                    tb.assert_zero(s.clone() * selk.clone() * (selk.clone() - one.clone()));
+                    // active ⇒ granted_tier == pg AND held_tier == ph.
+                    tb.assert_zero(
+                        s.clone() * selk.clone() * (gt.clone() - AB::Expr::from_u64(*pg as u64)),
+                    );
+                    tb.assert_zero(
+                        s.clone() * selk.clone() * (ht.clone() - AB::Expr::from_u64(*ph as u64)),
+                    );
+                    sel_sum = sel_sum + selk;
+                }
+                // (b) exactly one path active.
+                tb.assert_zero(s.clone() * (sel_sum - one.clone()));
+
+                // (d) tier↔tag consistency for BUILT-IN tiers. For tiers 0..4 the
+                // leaf auth_tag IS the tier byte; for tier 5 (Custom) the tag is the
+                // vk-absorbed felt (left free here, pinned by (e)). We force:
+                //   (tag - tier) * (5 - tier == 0 ? 0 : 1) ... encoded as: when the
+                // row is NOT on the vk path, granted/held tiers are < 5 (the table
+                // pairs only list tier 5 in the mixed Custom rows, where the tag is
+                // checked equal to tier 5's vk felt only via (e)). To keep this a
+                // low-degree gate we bind tag==tier whenever the tier selector that
+                // is active lists a BUILT-IN tier (≤4). Concretely: for each table
+                // selector whose pair tier is ≤4, force tag==tier.
+                for (k, (pg, ph)) in pairs.iter().enumerate() {
+                    let selk = w(LATTICE_SEL_BASE + k);
+                    if *pg <= 4 {
+                        tb.assert_zero(
+                            s.clone()
+                                * selk.clone()
+                                * (w(GRANTED_AUTH_TAG) - AB::Expr::from_u64(*pg as u64)),
+                        );
+                    }
+                    if *ph <= 4 {
+                        tb.assert_zero(
+                            s.clone()
+                                * selk.clone()
+                                * (w(HELD_AUTH_TAG) - AB::Expr::from_u64(*ph as u64)),
+                        );
+                    }
+                }
+                // (e) vk path ⇒ both tiers Custom(5) AND granted_tag == held_tag.
+                tb.assert_zero(s.clone() * vk.clone() * (gt.clone() - AB::Expr::from_u64(5)));
+                tb.assert_zero(s.clone() * vk.clone() * (ht.clone() - AB::Expr::from_u64(5)));
+                tb.assert_zero(
+                    s.clone() * vk.clone() * (w(GRANTED_AUTH_TAG) - w(HELD_AUTH_TAG)),
+                );
+
+                // (f) tier↔tag AIRTIGHT binding (belt-and-suspenders): for EITHER
+                // side, the claimed tier is either Custom(5) OR the (built-in) tag
+                // equals the tier — `(tier - 5) * (auth_tag - tier) == 0`. This
+                // forbids claiming a built-in tier whose authenticated tag differs
+                // (a prover cannot relabel an Either(3) leaf as Signature(1)) and
+                // forbids a built-in tag masquerading under a mismatched ordinal.
+                // Combined with (c)/(d)/(e) the lattice decides on the GENUINE
+                // authenticated tags, closing any free-tier loophole.
+                let five = AB::Expr::from_u64(5);
+                tb.assert_zero(
+                    s.clone() * (gt.clone() - five.clone()) * (w(GRANTED_AUTH_TAG) - gt.clone()),
+                );
+                tb.assert_zero(
+                    s.clone() * (ht.clone() - five.clone()) * (w(HELD_AUTH_TAG) - ht.clone()),
+                );
+            }
+
+            // ===== GATE 5: EXPIRY-MONOTONE — granted_expiry ⊑ held_expiry.
+            // The encoded-expiry leaf felt (encode_expiry) is NONE_SENTINEL for
+            // "no bound" (⊤) or a Poseidon2 FOLD of the height for a finite bound
+            // — and the fold is NOT order-preserving, so a felt-≤ would be wrong.
+            // We instead range-check the RAW heights, binding each raw height to
+            // its authenticated leaf felt via the in-circuit encode_expiry fold:
+            //   * h_none / g_none booleans, each ⇒ the leaf expiry == NONE_SENTINEL;
+            //   * NOT-None ⇒ leaf expiry == encode_expiry(raw_height) (the fold
+            //     site), pinning raw_height to the genuine committed height
+            //     (Poseidon2 injective);
+            //   * granted None ⇒ held None (can't widen a finite bound to ∞);
+            //   * both finite ⇒ granted_raw ≤ held_raw via a 30-bit reconstruction
+            //     of (p-1)/2 - (held_raw - granted_raw) (heights < 2^30 < (p-1)/2,
+            //     so the field difference equals the integer difference iff
+            //     granted ≤ held; a widening wraps past (p-1)/2 ⇒ no 30-bit
+            //     witness ⇒ UNSAT — the revocation tree's ORDERING_BITS soundness).
+            {
+                let none_sent = lift::<AB>(crate::cap_root::SENTINEL_MAX);
+                let g_none = w(GRANTED_EXPIRY_IS_NONE);
+                let h_none = w(HELD_EXPIRY_IS_NONE);
+                tb.assert_zero(s.clone() * g_none.clone() * (g_none.clone() - one.clone()));
+                tb.assert_zero(s.clone() * h_none.clone() * (h_none.clone() - one.clone()));
+                // None ⇒ leaf expiry == NONE_SENTINEL.
+                tb.assert_zero(s.clone() * g_none.clone() * (w(GRANTED_EXPIRY) - none_sent.clone()));
+                tb.assert_zero(s.clone() * h_none.clone() * (w(HELD_EXPIRY) - none_sent.clone()));
+                // NOT-None ⇒ leaf expiry == encode_expiry(raw) = the fold digest.
+                // (1 - none) * (leaf_expiry - fold) == 0.
+                tb.assert_zero(
+                    s.clone()
+                        * (one.clone() - h_none.clone())
+                        * (w(HELD_EXPIRY) - attn_d.held_exp_fold.clone()),
+                );
+                tb.assert_zero(
+                    s.clone()
+                        * (one.clone() - g_none.clone())
+                        * (w(GRANTED_EXPIRY) - attn_d.granted_exp_fold.clone()),
+                );
+                // granted None ⇒ held None (else widening a finite bound to ∞).
+                tb.assert_zero(s.clone() * g_none.clone() * (one.clone() - h_none.clone()));
+
+                // Both finite ⇒ granted_raw ≤ held_raw (30-bit reconstruction).
+                let both_finite = (one.clone() - g_none.clone()) * (one.clone() - h_none.clone());
+                let half_p = AB::Expr::from_u64(crate::dsl::revocation::HALF_P_MINUS_1 as u64);
+                let mut recomposed = AB::Expr::ZERO;
+                for i in 0..EXPIRY_DIFF_BITS {
+                    let b = w(EXPIRY_DIFF_BITS_BASE + i);
+                    tb.assert_zero(s.clone() * b.clone() * (b.clone() - one.clone()));
+                    recomposed = recomposed + b * AB::Expr::from_u64(1u64 << i);
+                }
+                // recomposed + (held_raw - granted_raw) - (p-1)/2 == 0 (both finite).
+                tb.assert_zero(
+                    s.clone()
+                        * both_finite
+                        * (recomposed + w(HELD_EXPIRY_RAW) - w(GRANTED_EXPIRY_RAW) - half_p),
+                );
+            }
+
+            let _ = (attn_d.held_leaf.clone(), w(CUSTOM_VK_EQ_INV));
         }
 
         // -- CellSeal --
@@ -1475,27 +2324,65 @@ fn lift<AB: AirBuilder>(v: BabyBear) -> AB::Expr {
 // Witness extension (concrete Poseidon2 aux blocks, in hash-site order)
 // ============================================================================
 
-/// Extend each base-width (`EFFECT_VM_WIDTH`) trace row with one Poseidon2 aux
-/// block per hash site, in [`hash_sites`] order — the same order `eval`
-/// consumes them. Nested sites read earlier sites' digests, matching the
-/// symbolic `digests` chain exactly.
+/// Extend each base-width (`EFFECT_VM_WIDTH`) trace row to the full p3 width,
+/// with the Attenuate scalar-witness block filled with ZEROS (no Phase-B
+/// witness). Non-Attenuate rows are unaffected (their gates don't fire); a bare
+/// Attenuate row with a zeroed witness will (correctly) FAIL the Phase-B gates.
+/// An honest witnessed Attenuate turn goes through
+/// [`extend_trace_with_attenuation`] instead.
 pub fn extend_trace_with_hashes(trace: &[Vec<BabyBear>]) -> Vec<Vec<BabyBear>> {
+    extend_trace_inner(trace, None)
+}
+
+/// Extend a base trace where row `r` carries the Phase-B Attenuate scalar
+/// witness `scalar_blocks[r]` (length [`attn::ATTN_SCALAR_COLS`]; the all-zero
+/// block for non-Attenuate rows). Produces the full p3-width trace whose
+/// Attenuate gates can be SATISFIED on the witnessed Attenuate rows.
+pub fn extend_trace_with_attenuation(
+    trace: &[Vec<BabyBear>],
+    scalar_blocks: &[Vec<BabyBear>],
+) -> Vec<Vec<BabyBear>> {
+    assert_eq!(trace.len(), scalar_blocks.len(), "one scalar block per row");
+    extend_trace_inner(trace, Some(scalar_blocks))
+}
+
+fn extend_trace_inner(
+    trace: &[Vec<BabyBear>],
+    scalar_blocks: Option<&[Vec<BabyBear>]>,
+) -> Vec<Vec<BabyBear>> {
     let sites = hash_sites();
+    let generic_end = EFFECT_VM_WIDTH + sites.len() * POSEIDON2_PERM_AUX_COLS;
+    let scalar_end = attn::attn_hash_base(); // generic_end + ATTN_SCALAR_COLS
+    let full_width = effect_vm_p3_width();
     trace
         .iter()
-        .map(|row| {
-            let mut full = row.clone();
+        .enumerate()
+        .map(|(r, row)| {
+            // (1) base 186 columns.
+            let mut full = row[..EFFECT_VM_WIDTH].to_vec();
+            // (2) generic hash-site blocks, computed from the base portion.
             let mut digests: Vec<BabyBear> = Vec::with_capacity(sites.len());
             for site in &sites {
                 let input = site_input_state_concrete(site, row, &digests);
                 let auxw = poseidon2_permute_aux_witness(input);
-                // The digest the gadget binds is the LAST round's state[0]:
-                // poseidon2_permute_aux_witness returns rounds 0..=TOTAL_ROUNDS,
-                // each WIDTH wide; the final block's [0] is the permutation output.
                 let digest = auxw[auxw.len() - POSEIDON2_WIDTH];
                 digests.push(digest);
                 full.extend(auxw);
             }
+            debug_assert_eq!(full.len(), generic_end);
+            // (3) Attenuate scalar block: from the supplied witness, else zeros.
+            match scalar_blocks {
+                Some(blocks) => {
+                    debug_assert_eq!(blocks[r].len(), attn::ATTN_SCALAR_COLS);
+                    full.extend_from_slice(&blocks[r]);
+                }
+                None => full.extend(std::iter::repeat(BabyBear::ZERO).take(attn::ATTN_SCALAR_COLS)),
+            }
+            debug_assert_eq!(full.len(), scalar_end);
+            // (4) Attenuate Poseidon2 hash blocks, computed from the scalar block.
+            let attn_aux = attenuate_hash_witness(&full);
+            full.extend(attn_aux);
+            debug_assert_eq!(full.len(), full_width);
             full
         })
         .collect()

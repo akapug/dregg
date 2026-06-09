@@ -4398,6 +4398,7 @@ fn test_attenuate_capability_happy_path() {
     let effect = Effect::AttenuateCapability {
         cap_slot_hash: w8(0x510),
         narrower_commitment: w8(0xA110),
+        phase_b: None,
     };
     let (trace, _public_inputs, _air) =
         assert_single_effect_roundtrip(&state, effect, "AttenuateCapability happy path");
@@ -4440,6 +4441,7 @@ fn test_attenuate_capability_forged_cap_root_rejected() {
     let effects = vec![Effect::AttenuateCapability {
         cap_slot_hash: w8(0x510),
         narrower_commitment: w8(0xA110),
+        phase_b: None,
     }];
     let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
     let attn_row = trace

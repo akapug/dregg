@@ -5,7 +5,7 @@
 //! slot-caveat manifests, and per-effect commitment witnesses.
 
 use crate::field::BabyBear;
-use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
+use crate::poseidon2::{hash_2_to_1, hash_4_to_1, hash_fact};
 
 use super::{
     AUX_BASE, CellState, EFFECT_VM_WIDTH, Effect, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE,
@@ -1201,24 +1201,44 @@ pub fn generate_effect_vm_trace_ext(
             Effect::AttenuateCapability {
                 cap_slot_hash,
                 narrower_commitment,
+                phase_b,
             } => {
-                // Cap_root advances via a 2-of-2 leaf:
-                //   new_cap_root == hash_2_to_1(old_cap_root,
-                //                    hash_2_to_1(cap_slot_hash,
-                //                                narrower_commitment))
-                // This is algebraically distinct from RevokeCapability's
-                // single-hash advance: a RevokeCapability row carrying
-                // attn_hash as its slot_hash cannot satisfy this
-                // constraint without also carrying both attenuation
-                // components in params[0..2].
-                // 32-byte widening: the cap_root advance and the AIR both use
-                // limb[0] of each param (params[0]/params[1]); all 8 limbs of
-                // both bind via compute_effects_hash.
                 row[PARAM_BASE + param::ATTN_CAP_SLOT_HASH] = cap_slot_hash[0];
                 row[PARAM_BASE + param::ATTN_NARROWER_COMMITMENT] = narrower_commitment[0];
 
-                let leaf = hash_2_to_1(cap_slot_hash[0], narrower_commitment[0]);
-                new_state.capability_root = hash_2_to_1(new_state.capability_root, leaf);
+                match phase_b {
+                    // ---- Phase B: GENUINE sorted-tree leaf-update ----
+                    // The cap_root advances from the held leaf's authenticated
+                    // position to the narrowed leaf, recomputed over the real
+                    // Merkle path. `state_before.cap_root` MUST already equal the
+                    // witness's `old_root` (the caller seeds the actor's tree
+                    // root), and `state_after.cap_root` becomes the recomputed
+                    // `new_root`. The p3 AIR's Phase-B gates (membership-open +
+                    // submask + AuthRequired lattice + expiry) prove
+                    // granted ⊑ held over THIS move. The params[1] narrower
+                    // commitment is pinned in-circuit to the granted leaf digest.
+                    Some(w) => {
+                        // Recompute the new root over the witnessed sibling path.
+                        let mut cur = w.granted.digest();
+                        for level in 0..w.siblings.len() {
+                            let sib = w.siblings[level];
+                            cur = if w.directions[level] == 0 {
+                                hash_fact(cur, &[sib])
+                            } else {
+                                hash_fact(sib, &[cur])
+                            };
+                        }
+                        new_state.capability_root = cur;
+                    }
+                    // ---- Legacy (pre-Phase-B): opaque 2-of-2 fold ----
+                    // Algebraically distinct from RevokeCapability's single-hash
+                    // advance, but NOT a genuine sorted-tree update and NOT
+                    // provable through the audited p3 Phase-B gates.
+                    None => {
+                        let leaf = hash_2_to_1(cap_slot_hash[0], narrower_commitment[0]);
+                        new_state.capability_root = hash_2_to_1(new_state.capability_root, leaf);
+                    }
+                }
                 new_state.nonce += 1;
             }
 
