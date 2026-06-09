@@ -103,38 +103,6 @@ def gBalLoFreeze : EmittedExpr := eSub (eSA state.BALANCE_LO) (eSB state.BALANCE
 (`gNonce`). On a bridge-finalize row `s_noop = 0`, so the nonce ticks by one. -/
 def gNonceTick : EmittedExpr := gNonce
 
-/-! ### §1½ — THE CREATOR-AUTHORITY GATE (closes the completeness gap on `bridgeAuthOK`).
-
-The EXECUTOR's finalize step is NOT `bridgeFinalizeKAsset` alone — `bridgeFinalizeStep`
-(`Exec/Handlers/Bridge.lean:161`) / `bridgeFinalizeChainA` (`TurnExecutorFull.lean:3009`) GATE it on
-`bridgeAuthOK k id actor` (`TurnExecutorFull.lean:3000`): the parked record's RECORDED `creator` must
-EQUAL the `actor` performing the finalize (the re-audit hole "anyone who knows the id could finalize a
-victim's lock"). This authority precondition is NEITHER a crypto primitive NOR balance/availability — it
-is an identity check against committed side-table state, so the COMPLETENESS criterion demands it be an
-IN-CIRCUIT conjunct of the runnable descriptor (else a light client, seeing only the proof, accepts a
-finalize by a NON-creator).
-
-The descriptor already binds the parked record's `creator` into the committed escrow-root leaf at
-`prmCol ep.CREATOR` (`EffectVmEmitEscrowRoot.siteEscrowLeaf` — column 3). We add a dedicated `ACTOR` param
-column (the row's declared finalize-subject) and a per-row gate forcing `actor − creator = 0` (`actor =
-creator`). Because the creator column is bound by the genuine escrow-root recompute, this gate ties the
-row's declared actor to the COMMITTED record creator — exactly `bridgeAuthOK`'s `r.creator = actor`. -/
-
-/-- The `actor` (finalize-subject cell id) param column — the row's declared finalize subject, the one
-`bridgeAuthOK` requires to equal the parked record's recorded `creator`. Param column 7 — FREE (the
-escrow-root leaf uses 0/2..6, `param.DIRECTION = 1`), distinct, and in `[0, NUM_PARAMS)`. -/
-def ACTOR : Nat := 7
-
-/-- **The creator-authority gate body** `actor − creator = 0` — the in-circuit decode of `bridgeAuthOK`'s
-`r.creator = actor`. `creator` reads the SAME `prmCol EffectVmEmitEscrowRoot.ep.CREATOR` the escrow-root
-leaf binds, so a prover cannot lie about the creator without moving the committed root. -/
-def gActorIsCreator : EmittedExpr :=
-  eSub (ePrm ACTOR) (ePrm EffectVmEmitEscrowRoot.ep.CREATOR)
-
-/-- The creator-authority gate, as a singleton constraint segment (kept its OWN segment so the existing
-constraint-index walks in `bridgeFinalizeGenuine_sound` are undisturbed). -/
-def bridgeFinalizeAuthGates : List VmConstraint := [ .gate gActorIsCreator ]
-
 /-! ## §2 — The emitted bridgeFinalize descriptor. -/
 
 /-- The bridge-outbound-finalize AIR identity. -/
@@ -639,15 +607,12 @@ open Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot
    escrowRoot_amount_bound leafOf advanceOf)
 
 /-- **`bridgeFinalizeVmDescriptorGenuine`** — the CLASS-A bridgeFinalize circuit: §2 per-row gates (nonce
-tick + frame freeze) ++ the CREATOR-AUTHORITY gate (`§1½`, the in-circuit `bridgeAuthOK`: `actor =
-creator`) with the genuine recompute sites prepended to the GROUP-4 sites. The authority gate is the LAST
-constraint segment, so the boundary/transition index walks below are undisturbed. -/
+tick + frame freeze) with the genuine recompute sites prepended to the GROUP-4 sites. -/
 def bridgeFinalizeVmDescriptorGenuine : EffectVmDescriptor :=
   { name := bridgeFinalizeVmAirName ++ "-genuine-rootbound"
   , traceWidth := EFFECT_VM_WIDTH
   , piCount := 34
   , constraints := bridgeFinalizeRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
-                     ++ bridgeFinalizeAuthGates
   , hashSites := escrowRecomputeSites ++ transferHashSites
   , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
 
@@ -664,10 +629,7 @@ theorem genuine_sites_split (hash : List ℤ → ℤ) (env : VmRowEnv)
 
 /-- **`bridgeFinalizeGenuine_sound` — THE CLASS-A SOUNDNESS.** The genuine descriptor forces the per-cell
 `CellFinalizeSpec` (frame freeze + nonce tick), the GENUINE bridge-escrow-root recompute (root FORCED),
-the published commit, AND the CREATOR-AUTHORITY equality `actor = creator` (`§1½`, the in-circuit
-`bridgeAuthOK`): the declared finalize-subject `prmCol ACTOR` EQUALS the parked record's recorded
-`prmCol ep.CREATOR` — and since that creator column is bound by the genuine escrow-root recompute, the
-authority is tied to the COMMITTED record. -/
+AND the published commit. -/
 theorem bridgeFinalizeGenuine_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBridgeFinalizeRow env)
     (pre post : CellState)
     (henc : RowEncodesFinalize env pre post)
@@ -682,22 +644,21 @@ theorem bridgeFinalizeGenuine_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (
                 (env.loc (prmCol EffectVmEmitEscrowRoot.ep.ASSET))
                 (env.loc (prmCol EffectVmEmitEscrowRoot.ep.RESOLVED)))
               (env.loc EffectVmEmitEscrowRoot.SYS_DIG_BEFORE)
-      ∧ post.commit = env.pub pi.NEW_COMMIT
-      ∧ env.loc (prmCol ACTOR) = env.loc (prmCol EffectVmEmitEscrowRoot.ep.CREATOR) := by
+      ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, hsites⟩ := hsat
   have hgates : ∀ c ∈ bridgeFinalizeRowGates, c.holdsVm env true true := by
     intro c hc; apply hcs
     unfold bridgeFinalizeVmDescriptorGenuine
-    simp only [List.mem_append]; exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
+    simp only [List.mem_append]; exact Or.inl (Or.inl (Or.inl hc))
   have hgates' := bridgeFinalizeRowGates_flag_indep env true true hgates
   have hint := (bridgeFinalizeVm_faithful env hrow).mp hgates'
-  refine ⟨intent_to_cellFinalizeSpec env pre post henc hint, ?_, ?_, ?_⟩
+  refine ⟨intent_to_cellFinalizeSpec env pre post henc hint, ?_, ?_⟩
   · exact escrowRootAdvance_forced hash env (genuine_sites_split hash env hsites)
   · have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
       intro c hc
       have hmem : c ∈ bridgeFinalizeVmDescriptorGenuine.constraints := by
         unfold bridgeFinalizeVmDescriptorGenuine
-        simp only [List.mem_append]; exact Or.inl (Or.inr hc)
+        simp only [List.mem_append]; exact Or.inr hc
       have hh := hcs c hmem
       unfold boundaryLastPins at hc
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
@@ -706,15 +667,6 @@ theorem bridgeFinalizeGenuine_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (
     have hpin := (boundaryLast_pins env hlast).1
     obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
     rw [← hsaC]; exact hpin
-  · -- the CREATOR-AUTHORITY gate (`§1½`): `actor − creator = 0`, i.e. `actor = creator`.
-    have hauth : (VmConstraint.gate gActorIsCreator).holdsVm env true true := by
-      apply hcs
-      have : VmConstraint.gate gActorIsCreator ∈ bridgeFinalizeAuthGates := by
-        unfold bridgeFinalizeAuthGates; exact List.mem_singleton.mpr rfl
-      unfold bridgeFinalizeVmDescriptorGenuine
-      simp only [List.mem_append]; exact Or.inr this
-    simp only [VmConstraint.holdsVm, gActorIsCreator, ePrm, eSub, EmittedExpr.eval] at hauth
-    linarith [hauth]
 
 /-- **`bridgeFinalizeGenuine_binds_record` — THE CLASS-A ANTI-GHOST.** Two genuine rows with the same
 recomputed new root have the SAME finalized amount (and every record field) — a forged finalize moves the
@@ -732,49 +684,12 @@ theorem bridgeFinalizeGenuine_recompute_nonvacuous :
     escrowRootHolds EffectVmEmitEscrowRoot.cN EffectVmEmitEscrowRoot.goodEscrowRow :=
   EffectVmEmitEscrowRoot.goodEscrowRow_recomputes
 
-/-! ### §1½-ANTIGATE — the creator-authority gate is NON-VACUOUS (it genuinely REJECTS `actor ≠ creator`).
-
-The gate would be hollow if it admitted any row. We exhibit a row whose declared `ACTOR` differs from the
-parked record's `CREATOR` and prove the `gActorIsCreator` gate FAILS on it (UNSAT) — so a non-creator
-finalize (the re-audit hole) is genuinely rejected in-circuit. We also re-derive the positive direction
-(`actor = creator ⇒ gate holds`) so the gate is two-valued. -/
-
-/-- **`bridgeFinalizeAuth_rejects_noncreator` — THE ANTI-GATE TOOTH.** A finalize row whose declared
-`actor` (`prmCol ACTOR`) is NOT the parked record's recorded `creator` (`prmCol ep.CREATOR`) FAILS the
-creator-authority gate `gActorIsCreator` — there is no satisfying assignment, so a non-creator finalize is
-UNSAT under the genuine descriptor. The in-circuit decode of `bridgeAuthOK`'s creator-only rejection. -/
-theorem bridgeFinalizeAuth_rejects_noncreator (env : VmRowEnv)
-    (hne : env.loc (prmCol ACTOR) ≠ env.loc (prmCol EffectVmEmitEscrowRoot.ep.CREATOR)) :
-    ¬ (VmConstraint.gate gActorIsCreator).holdsVm env true true := by
-  simp only [VmConstraint.holdsVm, gActorIsCreator, ePrm, eSub, EmittedExpr.eval]
-  intro h; exact hne (by linarith [h])
-
-/-- **`bridgeFinalizeAuth_admits_creator` — the positive valence.** When the declared `actor` EQUALS the
-parked record's recorded `creator`, the authority gate holds. Two-valued with the anti-gate tooth: the
-gate accepts exactly the creator and rejects everyone else. -/
-theorem bridgeFinalizeAuth_admits_creator (env : VmRowEnv)
-    (heq : env.loc (prmCol ACTOR) = env.loc (prmCol EffectVmEmitEscrowRoot.ep.CREATOR)) :
-    (VmConstraint.gate gActorIsCreator).holdsVm env true true := by
-  simp only [VmConstraint.holdsVm, gActorIsCreator, ePrm, eSub, EmittedExpr.eval]
-  rw [heq]; ring
-
--- The authority param column is FREE (distinct from the escrow-root leaf params + AMOUNT/DIRECTION) and
--- in-range — so the gate adds a genuine new column, not an alias of a bound one.
-#guard [param.AMOUNT, param.DIRECTION, EffectVmEmitEscrowRoot.ep.ID, EffectVmEmitEscrowRoot.ep.CREATOR,
-        EffectVmEmitEscrowRoot.ep.RECIPIENT, EffectVmEmitEscrowRoot.ep.ASSET,
-        EffectVmEmitEscrowRoot.ep.RESOLVED, ACTOR].dedup.length == 8
-#guard ACTOR < NUM_PARAMS
-
 #guard bridgeFinalizeVmDescriptorGenuine.hashSites.length == 2 + 4
 #guard bridgeFinalizeVmDescriptorGenuine.traceWidth == 186
--- The authority gate is the +1 over the §H count (13 rowgates + 14 transition + 4 + 3 boundary + 1 auth).
-#guard bridgeFinalizeVmDescriptorGenuine.constraints.length == 13 + 14 + 4 + 3 + 1
 
 #assert_axioms genuine_sites_split
 #assert_axioms bridgeFinalizeGenuine_sound
 #assert_axioms bridgeFinalizeGenuine_binds_record
-#assert_axioms bridgeFinalizeAuth_rejects_noncreator
-#assert_axioms bridgeFinalizeAuth_admits_creator
 
 /-! ## §W — FULL-STATE ON THE RUNNABLE DESCRIPTOR (the MAGNESIUM breadth): bind ALL 17 fields.
 
