@@ -187,7 +187,7 @@ pub use columns::{
 
 // ---- Re-export types ----
 pub use cell_state::CellState;
-pub use effect::Effect;
+pub use effect::{AttenuateWitness, Effect};
 
 // ---- Re-export helpers ----
 pub use helpers::{

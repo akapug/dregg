@@ -1071,6 +1071,11 @@ pub(super) fn convert_turn_effects_to_vm(
                     vm_effects.push(VmEffect::AttenuateCapability {
                         cap_slot_hash,
                         narrower_commitment,
+                        // The runtime→VM bridge keeps the legacy opaque projection
+                        // (no in-circuit Phase-B non-amp witness here); the
+                        // executor enforces narrowing off-circuit. A Phase-B
+                        // witnessed projection is a follow-up bridge change.
+                        phase_b: None,
                     });
                 }
 

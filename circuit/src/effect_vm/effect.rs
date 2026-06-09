@@ -7,6 +7,41 @@
 
 use crate::field::BabyBear;
 
+/// **Phase B** witness for an [`Effect::AttenuateCapability`]: the structured
+/// held + granted capability leaves and the sorted-tree Merkle path that
+/// authenticates the held leaf against the actor's `cap_root` and recomputes the
+/// narrowed `cap_root`. Built from the actor's [`crate::cap_root::CanonicalCapTree`]
+/// via [`crate::cap_root::CanonicalCapTree::attenuation_witness`].
+///
+/// The held and granted leaves share `slot_hash` / `target` / `breadstuff` (the
+/// slot is fixed across an attenuation; only the rights narrow), so one sibling
+/// path authenticates both the old and the recomputed root.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AttenuateWitness {
+    /// The HELD (pre-attenuation) leaf — the real committed rights, authenticated
+    /// against the old `cap_root` by [`Self::siblings`] / [`Self::directions`].
+    pub held: crate::cap_root::CapLeaf,
+    /// The GRANTED (post-attenuation, narrowed) leaf.
+    pub granted: crate::cap_root::CapLeaf,
+    /// Sibling digests along the leaf→root path (bottom-up, len `CAP_TREE_DEPTH`).
+    pub siblings: Vec<BabyBear>,
+    /// Direction bits along the path (0 = current is left child, 1 = right).
+    pub directions: Vec<u8>,
+    /// The held tier ordinal (None=0…Custom=5) — the lattice ordinal distinct
+    /// from the leaf's `auth_tag` felt (which for `Custom` absorbs the vk_hash).
+    pub held_tier: u8,
+    /// The granted tier ordinal.
+    pub granted_tier: u8,
+    /// The RAW held expiry HEIGHT (`None` = no bound) — the integer the
+    /// monotone-expiry GTE gate range-checks. Bound in-circuit to the held
+    /// leaf's encoded-expiry felt via the `encode_expiry` fold site. Must be the
+    /// genuine height behind `held.expiry`; heights are assumed `< 2^30` (the
+    /// in-circuit range-check bound), as for balances.
+    pub held_expiry_height: Option<u64>,
+    /// The RAW granted expiry HEIGHT (`None` = no bound).
+    pub granted_expiry_height: Option<u64>,
+}
+
 /// An effect to be proven in the VM.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
@@ -509,6 +544,18 @@ pub enum Effect {
         /// Full 32 bytes projected into 8 BabyBear limbs; AIR uses limb[0]
         /// (params[1]) in the cap_root advance.
         narrower_commitment: [BabyBear; 8],
+        /// **Phase B** in-circuit non-amplification witness. When present, the
+        /// trace generator emits the GENUINE sorted-tree leaf-update (the
+        /// `cap_root` advances from the held leaf's authenticated position to the
+        /// narrowed leaf, recomputed over the real Merkle path) and fills the
+        /// AIR's non-amp gate witness (membership-open + submask + AuthRequired
+        /// lattice + expiry). When `None` (legacy callers), the row keeps the
+        /// pre-Phase-B opaque 2-of-2 cap-root fold and does NOT satisfy the
+        /// Phase-B gates — only a witnessed Attenuate turn is provable through
+        /// the audited p3 path. Boxed to keep the enum small; excluded from
+        /// `compute_effects_hash` (the public binding is still the two 8-limb
+        /// commitments).
+        phase_b: Option<Box<super::AttenuateWitness>>,
     },
     /// CellSeal: transition a cell lifecycle to `Sealed`. The AIR enforces
     /// state passthrough (balance/fields/cap_root unchanged; only the
