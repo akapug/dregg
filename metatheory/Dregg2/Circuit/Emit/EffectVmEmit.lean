@@ -131,6 +131,43 @@ DISTINCT from every claimed aux slot so it never aliases a balance bit or sealin
 def SYSTEM_ROOTS_DIGEST : Nat := 96
 end aux_off_sys
 
+/-! ## §0½ — THE WIDENED `system_roots` COLUMN (magnesium STAGE 4: the deployed gap closed).
+
+The honest finding the per-effect files PROVE (`*_root_not_in_descriptor_commit`,
+`docs/rebuild/_CIRCUIT-ASSURANCE-PER-EFFECT.md:52-56`): the side-table `system_roots` digest is
+`Exec.SystemRoots.systemRootsDigest`-bound at the RECORD layer (`cellCommitS`), but `auxCol
+aux_off_sys.SYSTEM_ROOTS_DIGEST = AUX_BASE + 96 = 186` is **PAST `EFFECT_VM_WIDTH = 186`** — the
+deployed EffectVM row carries **no such column**, so the running descriptor's `state_commit` does NOT
+absorb it. THIS section closes that, ADDITIVELY (the binding constraint: `EFFECT_VM_WIDTH = 186` is
+load-bearing in ~50 unowned `#guard …traceWidth == 186` sites — it MUST stay; the widening is a NEW
+width + a NEW dedicated column block past 186, opted into by a v2 descriptor shape).
+
+The two dedicated carriers are placed at the FIRST TWO absolute columns past the old width (`186`,
+`187`), so they are DISTINCT from every column the 186-wide layout claims (every aux slot is
+`< AUX_BASE + 96 = 186`). Unlike the early cohort's `SYS_DIG_AFTER := aux_off_sys.SYSTEM_ROOTS_DIGEST`
+(= the raw `96`, which lands inside the aux block at abs col `96` = `auxCol 6`, aliasing a balance
+bit — benign for those effects but not a CLEAN home), these are a genuinely-dedicated, non-aliasing
+sub-block. `sysRootsDigestSiteWidth_clean` proves the disjointness by `decide`. -/
+
+/-- **`EFFECT_VM_WIDTH_SYSROOTS`** — the WIDENED trace width that carries the dedicated `system_roots`
+digest sub-block: the old `EFFECT_VM_WIDTH = 186` PLUS two carrier columns (after-state digest +
+before-state digest). Strictly additive: every 186-wide descriptor is unaffected (it simply does not
+populate cols `186`/`187`); a v2 descriptor declares THIS width and absorbs col `186` into its
+`state_commit`. -/
+def EFFECT_VM_WIDTH_SYSROOTS : Nat := EFFECT_VM_WIDTH + 2
+
+/-- **`sysRootsDigestCol`** — the dedicated absolute column carrying the AFTER-state committed
+`system_roots` digest (`Exec.SystemRoots.systemRootsDigest` over the 8 side-table roots). The first
+column past the old width — NEVER aliases a 186-layout column. THIS is the carrier a v2 descriptor's
+GROUP-4 extension site absorbs into `state_commit`, making every side-table root descriptor-bound. -/
+def sysRootsDigestCol : Nat := EFFECT_VM_WIDTH
+
+/-- **`sysRootsDigestColBefore`** — the dedicated absolute column carrying the BEFORE-state
+`system_roots` digest (the pre-image of the per-effect root-update accumulator step). One past the
+after-carrier; the per-effect root-update gate reads `sysRootsDigestColBefore` and writes
+`sysRootsDigestCol`. -/
+def sysRootsDigestColBefore : Nat := EFFECT_VM_WIDTH + 1
+
 /-! Selector-column indices (`sel::*`). -/
 namespace sel
 def NOOP     : Nat := 0
@@ -347,6 +384,41 @@ def satisfiedVm (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     (env : VmRowEnv) (isFirst isLast : Bool) : Prop :=
   (∀ c ∈ d.constraints, c.holdsVm env isFirst isLast) ∧ siteHoldsAll hash env d.hashSites
 
+/-! ## §6¾ — THE `system_roots`-ABSORBING GROUP-4 EXTENSION SITE (magnesium STAGE 4).
+
+The deployed transfer commitment (`EffectVmEmitTransfer.site3`) absorbs `[inter1, inter2, inter3, 0]`
+— the FOURTH slot is the spare literal `.zero`. A v2 descriptor REPLACES that spare slot with the
+dedicated `sysRootsDigestCol` carrier, so the published `state_commit` now absorbs the side-table
+`system_roots` digest. `sysRootsAbsorbSite` is the generic builder (it reads sites 0/1/2's digests
+exactly as `site3` does, then absorbs the after-state digest column); a v2 descriptor's `hashSites`
+is `[site0, site1, site2, sysRootsAbsorbSite]`. The deterministic site order is preserved (site 3
+reads digests `[0..2]`), so the running prover's `hash_sites()` ordering contract is honoured. -/
+
+/-- **`sysRootsAbsorbSite`** — the GROUP-4 extension site: `state_commit = H4(inter1, inter2, inter3,
+sysRootsDigestCol)`. Replaces transfer's spare `.zero` 4th input with the dedicated `system_roots`
+digest carrier, so the published commitment absorbs every side-table root. The inner digests
+`[0..2]` are read by INDEX (`.digest 0/1/2`) — the site is placed 4th in the ordered list, exactly
+where transfer's `site3` sits, so those references resolve to sites 0/1/2's digests identically; only
+the `state_commit` result column is a parameter. -/
+def sysRootsAbsorbSite (stateCommitCol : Nat) : VmHashSite :=
+  { digestCol := stateCommitCol
+  , inputs := [ .digest 0, .digest 1, .digest 2, .col sysRootsDigestCol ]
+  , arity := 4 }
+
+/-- The two dedicated `system_roots` carriers are DISTINCT from each other, from the old width
+boundary, and (being `≥ EFFECT_VM_WIDTH = 186`) from every column the 186-wide layout claims (each
+of which is `< 186`). So the widening is a clean, non-aliasing sub-block — unlike the early cohort's
+`SYS_DIG_AFTER = 96` (which lands at `auxCol 6`, inside the balance-bit block). -/
+theorem sysRootsDigest_cols_clean :
+    sysRootsDigestCol = 186
+    ∧ sysRootsDigestColBefore = 187
+    ∧ sysRootsDigestCol ≠ sysRootsDigestColBefore
+    ∧ EFFECT_VM_WIDTH ≤ sysRootsDigestCol
+    ∧ EFFECT_VM_WIDTH ≤ sysRootsDigestColBefore
+    ∧ sysRootsDigestCol < EFFECT_VM_WIDTH_SYSROOTS
+    ∧ sysRootsDigestColBefore < EFFECT_VM_WIDTH_SYSROOTS := by
+  refine ⟨rfl, rfl, by decide, by decide, by decide, by decide, by decide⟩
+
 /-! ## §6½ — The SELECTOR-BINDING tooth (`selectorGate`).
 
 The cutover verify path (`sdk/full_turn_proof.rs`) verifies an effect-vm descriptor sub-proof
@@ -489,5 +561,24 @@ def emitVmJson (d : EffectVmDescriptor) : String :=
   ",\"constraints\":" ++ constraintsToJson d.constraints ++
   ",\"hash_sites\":" ++ hashSitesToJson d.hashSites ++
   ",\"ranges\":" ++ rangesToJson d.ranges ++ "}"
+
+/-! ## §8 — IR-widening tripwires (the additive `system_roots` column, verified backward-compatible). -/
+
+-- BACKWARD-COMPAT: the old width is UNCHANGED (the ~50 unowned `#guard …traceWidth == 186` still hold).
+#guard EFFECT_VM_WIDTH == 186
+-- The widened width is exactly two dedicated carriers past the old boundary.
+#guard EFFECT_VM_WIDTH_SYSROOTS == 188
+#guard sysRootsDigestCol == 186
+#guard sysRootsDigestColBefore == 187
+-- The dedicated carriers do NOT alias each other or any 186-layout column (every aux slot is < 186).
+#guard [sysRootsDigestCol, sysRootsDigestColBefore].dedup.length == 2
+#guard decide (EFFECT_VM_WIDTH ≤ sysRootsDigestCol ∧ sysRootsDigestColBefore < EFFECT_VM_WIDTH_SYSROOTS)
+-- The absorbing site replaces transfer's spare `.zero` 4th input with the `system_roots` carrier,
+-- keeping the inner-digest references `[0..2]` (the GROUP-4 ordering contract).
+#guard (sysRootsAbsorbSite (saCol state.STATE_COMMIT)).inputs
+        == [HashInput.digest 0, HashInput.digest 1, HashInput.digest 2, HashInput.col sysRootsDigestCol]
+#guard (sysRootsAbsorbSite (saCol state.STATE_COMMIT)).arity == 4
+
+#assert_axioms sysRootsDigest_cols_clean
 
 end Dregg2.Circuit.Emit.EffectVmEmit
