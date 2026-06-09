@@ -95,6 +95,7 @@ This crown binds the three commitments **through their shared `CH`/`RH`/`cmb` su
 -/
 import Dregg2.Circuit.SetFieldCommit
 import Dregg2.Exec.RecordCommit
+import Dregg2.Circuit.Emit.EffectVmFullStateRunnable
 
 namespace Dregg2.Circuit.CommitmentCrossBind
 
@@ -396,6 +397,51 @@ theorem setFieldCommit_binds_cellCommit
     cellCommit_determined compressN compress2 (restLimbs cell) htouched⟩
 
 end Crown
+
+/-! ## §4½ — THE RUNNABLE WELD: the side-table state is now bound BY THE CIRCUIT THE PROVER RUNS.
+
+The §4 crown binds the three ABSTRACT commitments (`recStateCommit` / `recSetFieldCommit` /
+`cellCommit`) to ONE `RecordKernelState` through their shared `CH`/`RH`/`cmb` surface. Residual R1 (the
+header) named the OPEN part: the RUNNABLE EffectVm descriptor commits a SUBSET of fields, so binding
+the side-table `system_roots` state to the circuit the prover actually runs was OUT OF SCOPE.
+
+`Dregg2.Circuit.Emit.EffectVmFullStateRunnable` (the magnesium STAGE-4 widening) closes R1 for the
+side-table roots: the WIDE runnable descriptor's `state_commit` absorbs the `system_roots` digest
+column (`sysRootsDigestCol`), and `wide_binds_systemRoots` proves a satisfying RUNNABLE witness binds
+every side-table root — through the SAME `Exec.SystemRoots.systemRootsDigest` carrier whose
+`cellCommitS` the abstract record-layer commitment uses. So the "ONE object" thesis now spans the
+abstract AND the runnable surface: the same 8 side-table roots are pinned by `cellCommitS`
+(record-layer) AND by `state_commit` (the circuit the prover runs). We re-export the runnable binding
+here, beside the abstract crown, so the cross-surface weld reads in one place. -/
+
+section RunnableWeld
+
+open Dregg2.Circuit.Emit.EffectVmEmit
+open Dregg2.Circuit.Emit.EffectVmFullStateRunnable (wideHashSites wide_binds_systemRoots)
+open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest N_SYSTEM_ROOTS)
+
+/-- **`runnable_binds_same_system_roots` (PROVED — R1 closed for the side-table state).** Two rows of
+the WIDE runnable descriptor that publish the SAME `state_commit`, whose `sysRootsDigestCol` carriers
+ARE the `systemRootsDigest` of their `system_roots` sub-blocks, agree on EVERY side-table root. This
+is `cellCommitS_binds_roots_pointwise` (the record-layer binding) realized on the CIRCUIT THE PROVER
+RUNS: the runnable `state_commit` now binds the same 8 roots the abstract `cellCommitS` does — the
+abstract three-commitment crown and the runnable descriptor pin ONE side-table state object. -/
+theorem runnable_binds_same_system_roots
+    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (e₁ e₂ : VmRowEnv) (sr₁ sr₂ : SysRoots)
+    (hs₁ : siteHoldsAll hash e₁ wideHashSites)
+    (hs₂ : siteHoldsAll hash e₂ wideHashSites)
+    (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT))
+    (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
+    (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
+    (i : Fin N_SYSTEM_ROOTS) :
+    sr₁ i = sr₂ i :=
+  wide_binds_systemRoots hash hCR e₁ e₂ sr₁ sr₂ hs₁ hs₂ hcommit hd₁ hd₂ i
+
+#assert_axioms runnable_binds_same_system_roots
+
+end RunnableWeld
 
 /-! ## §5 — NON-VACUITY: every portal witnessed BOTH ways (no carried hypothesis is secretly `True`).
 
