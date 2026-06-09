@@ -4895,10 +4895,15 @@ impl AgentCipherclerk {
         }
 
         // 5. Generate the STARK proof using EffectVmAir (DSL cutover).
+        // Seed the circuit `cap_root` from the cell's REAL canonical capability
+        // root (the openable sorted-Poseidon2 felt), not ZERO (cap Phase A): a
+        // turn over a cell that holds capabilities now binds the SAME cap_root
+        // the cell commits to in `state_commitment()` above.
         let vm_effects = Self::convert_effects_to_vm(cell_id, &effects);
-        let initial_vm_state = dregg_circuit::CellState::new(
+        let initial_vm_state = dregg_circuit::CellState::with_capability_root(
             cell_state.state.balance(),
             cell_state.state.nonce() as u32,
+            dregg_cell::compute_canonical_capability_root_felt(&cell_state.capabilities),
         );
         let (_shape_trace, shape_public_inputs) =
             dregg_circuit::generate_effect_vm_trace(&initial_vm_state, &vm_effects);

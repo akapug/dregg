@@ -207,6 +207,11 @@ pub fn prove_and_verify_finalized_turn(
 
     // 2. Build the actor cell's pre-execution Effect-VM state. The old
     //    commitment the proof binds to is this state's commitment.
+    //    `CellState::new` seeds `cap_root` with the EMPTY c-list root (cap
+    //    Phase A) — the real canonical capability root for the cap-less actor
+    //    cells this self-sovereign agent path serves. (A cell that holds
+    //    capabilities is proven via the sdk's sovereign path, which seeds the
+    //    real root through `CellState::with_capability_root`.)
     let initial_vm_state = CellState::new(pre_balance, pre_nonce as u32);
     let old_commit = initial_vm_state.state_commitment;
 

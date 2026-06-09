@@ -377,14 +377,11 @@ impl CapabilitySet {
         cap.expires_at = new_expiry;
 
         // Commit to the narrowed cap so callers can update c-list audit
-        // indices. Uses the same canonical capability-ref hashing as
-        // compute_canonical_capability_root (single-element path).
-        let mut hasher =
-            blake3::Hasher::new_derive_key(crate::commitment::CANONICAL_CAP_ROOT_CONTEXT);
-        let one: u64 = 1;
-        hasher.update(&one.to_le_bytes());
-        crate::commitment::hash_capability_ref_canonical(&mut hasher, cap);
-        Some(*hasher.finalize().as_bytes())
+        // indices. This is the 32-byte encoding of the narrowed cap's openable
+        // leaf-digest felt — the SAME 7-field leaf the canonical
+        // sorted-Poseidon2 capability root hashes (cap Phase A), so the
+        // single-cap commitment is consistent with the c-list root.
+        Some(crate::commitment::capability_ref_leaf_commitment(cap))
     }
 
     /// Insert an attenuated capability into this set, assigning the next available slot.

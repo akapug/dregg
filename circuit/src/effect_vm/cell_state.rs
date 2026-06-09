@@ -29,10 +29,25 @@ pub struct CellState {
 }
 
 impl CellState {
-    /// Create a new cell state with default values.
+    /// Create a new cell state with default values. The `capability_root` is
+    /// seeded with the EMPTY c-list root ([`crate::cap_root::empty_capability_root`])
+    /// — the openable sorted-Poseidon2 root of a cell holding no capabilities —
+    /// NOT `BabyBear::ZERO`. This is the cap Phase A seed: a fresh actor cell's
+    /// circuit `cap_root` now equals its cell-side
+    /// `compute_canonical_capability_root`, instead of the disjoint ZERO that
+    /// tied the circuit to nothing. For a cell that already holds capabilities,
+    /// the prover seeds the real root via [`CellState::with_capability_root`].
     pub fn new(balance: u64, nonce: u32) -> Self {
+        Self::with_capability_root(balance, nonce, crate::cap_root::empty_capability_root())
+    }
+
+    /// Create a new cell state seeding `capability_root` from a caller-supplied
+    /// value — the cell's real canonical capability root
+    /// (`dregg_cell::compute_canonical_capability_root_felt`). The node /
+    /// cipherclerk prover paths use this so a turn over a cell that holds
+    /// capabilities binds the SAME `cap_root` the cell commits to (cap Phase A).
+    pub fn with_capability_root(balance: u64, nonce: u32, capability_root: BabyBear) -> Self {
         let fields = [BabyBear::ZERO; 8];
-        let capability_root = BabyBear::ZERO;
         // Initial state commitment is hash of all state elements.
         let state_commitment = Self::compute_commitment(balance, nonce, &fields, capability_root);
         Self {

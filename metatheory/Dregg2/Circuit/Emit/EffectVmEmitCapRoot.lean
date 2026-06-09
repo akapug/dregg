@@ -68,6 +68,35 @@ Under the two hash-sites, the new `cap_root` is UNIQUELY `hash[ hash[holder,targ
 This is what the opaque digest could never give: the root is now a genuine recomputation of the cap-table
 digest advance, FORCED by the bound edge-mutation content.
 
+## The cap Phase A VALUE model (what `cap_root` IS now)
+
+cap Phase A made the `cap_root` VALUE an OPENABLE sorted-Poseidon2 binary Merkle root over the
+c-list (`circuit/src/cap_root.rs`'s `CanonicalCapTree`, mirroring the proven `DslRevocationTree`:
+sorted, sentinel-bracketed, `hash_fact` nodes, depth 16; leaf = `Poseidon2(slot_hash, target,
+auth_tag, mask_lo, mask_hi, expiry, breadstuff)`), computed BYTE-IDENTICALLY in the cell
+(`dregg_cell::compute_canonical_capability_root_felt`) and the circuit (the EffectVM `cap_root`
+column is SEEDED from that same value, no longer from `BabyBear::ZERO`). The cell≡circuit
+differential `circuit/tests/cap_root_cell_circuit_differential.rs` is the gate.
+
+This module is UNAFFECTED by that value change, and that is exactly the point of the Phase-A
+staging boundary:
+
+  * **Frozen-carry effects** (the cutover's AGREE set) pin `cap_root_after = cap_root_before` on
+    WHATEVER value the column carries — the value is abstract (any `ℤ`), so a non-zero sorted-tree
+    root flows through `state_before → state_after → state_commit` transparently. The descriptors
+    stay coherent with the new runtime: nothing here assumes `cap_root = 0` (the concrete witness
+    `goodCapRow` uses an arbitrary `old_cap_root = 1000`, NOT 0).
+  * **The per-effect ADVANCE this module models stays PINNED-AS-DIGEST for Phase A**: the circuit
+    pins the executor's computed new root (the `hash[edge_leaf, old_root]` prepend-accumulator
+    advance proven below), and does NOT yet recompute the sorted-TREE update in-row. The genuine
+    in-row sorted-tree-update recompute (membership-open + sorted-key range-checks, mirroring the
+    revocation circuit's C6/C7/C10/C11) is **Phase E**, out of scope here. Phase B adds the
+    in-circuit non-amplification / authority gates that OPEN this root.
+
+So every theorem below holds for any `cap_root` value, including the new sorted-Poseidon2 root: the
+prepend-accumulator advance + its anti-ghost (`capRoot_binds_edge`) are the Phase-A digest pin; the
+openable-tree VALUE the digest carries is the cell≡circuit sorted root.
+
 ## Honesty
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY as the named

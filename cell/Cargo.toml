@@ -12,7 +12,12 @@ description = "Agent cell model — capability-secure isolated execution context
 [features]
 default = ["crypto"]
 crypto = ["dep:bulletproofs", "dep:chacha20poly1305", "dep:curve25519-dalek", "dep:ed25519-dalek", "dep:getrandom", "dep:merlin", "dep:x25519-dalek", "dep:zeroize"]
-zkvm = ["dep:dregg-circuit", "dep:dregg-commit", "dep:dregg-dsl-runtime"]
+# `dregg-circuit` is now an always-present dependency (the canonical
+# capability-root scheme `dregg_circuit::cap_root` is load-bearing in the
+# always-on `compute_canonical_state_commitment`, so it must not be
+# feature-gated). `zkvm` additionally pulls in the proof-carrying helpers
+# (`dregg-commit` / `dregg-dsl-runtime`).
+zkvm = ["dep:dregg-commit", "dep:dregg-dsl-runtime"]
 # SOUNDNESS GATE — DO NOT ENABLE IN PRODUCTION.
 #
 # `test-stubs` arms the *accept* path of `StubVerifier` (predicate.rs), which
@@ -33,7 +38,14 @@ ed25519-dalek = { version = "2", features = ["hazmat"], optional = true }
 getrandom = { workspace = true, optional = true }
 merlin = { version = "3", optional = true }
 postcard = { version = "1", features = ["alloc"] }
-dregg-circuit = { path = "../circuit", optional = true }
+# Required (always present) for the canonical capability-root scheme in
+# `compute_canonical_capability_root` (`dregg_circuit::cap_root`). Default
+# features, matching every other workspace consumer of circuit (node/sdk/turn,
+# and wasm via `dregg-commit`) — Cargo feature unification already builds
+# circuit full-featured everywhere, so this adds no new feature surface.
+# NOTE: circuit's dependency on cell is dev-only, so this (cell → circuit)
+# direction is acyclic.
+dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit", optional = true }
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime", optional = true }
 dregg-types = { path = "../types" }
