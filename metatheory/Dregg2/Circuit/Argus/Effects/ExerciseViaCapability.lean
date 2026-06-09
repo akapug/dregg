@@ -98,7 +98,9 @@ open Dregg2.Exec
 -- `exerciseA` arm routes to) + `RecChainedState` live in `TurnExecutorFull`; opened so §3's chained-arm
 -- lift can name them. `execInnerA`/`innerFacetsAdmittedA` are the inner-fold helpers the arm threads.
 open Dregg2.Exec.TurnExecutorFull
-  (execFullA exerciseStepA execInnerA innerFacetsAdmittedA acceptsEffects authReceipt)
+  (execFullA exerciseStepA execInnerA innerFacetsAdmittedA innerFacetAdmittedA acceptsEffects
+   authReceipt requiredFacetA capFacetMaskA FullActionA)
+-- `heldCapTo` lives in `Dregg2.Exec` (the `AuthTurn` module), already opened above.
 open Dregg2.Circuit.Argus (RecStmt interp)
 open Dregg2.Exec (RecordKernelState RecChainedState CellId confersEdgeTo)
 open Dregg2.Authority (Cap)
@@ -448,13 +450,336 @@ theorem exercise_runnable_full_state_weld
 
 #assert_axioms exercise_runnable_full_state_weld
 
+/-! ## §FACET — THE COMPLETENESS FIX: the R4 facet-mask as an IN-CIRCUIT CONJUNCT (not a free hypothesis).
+
+THE GAP this section closes (a SEVERE completeness hole, found by auditing the executor⟺circuit
+preconditions). The verified executor's RUNNABLE exercise arm `execFullA s (.exerciseA actor target
+inner)` (`TurnExecutorFull.lean:3811`) fires on the CONJUNCTION of TWO gates:
+
+    if innerFacetsAdmittedA s actor target inner = true then         -- (R4) the FACET-MASK gate
+      (match exerciseStepA s actor target with some s' => …)         -- the HOLD-GATE
+    else none
+
+The §1–§MAGNESIUM weld pins ONLY the hold-gate (the `inner = []` layer, where the facet-mask is
+vacuously `true`). The R4 facet-mask — "the exercised cap's `allowed_effects` mask ADMITS every inner
+effect's required facet" (dregg1 `apply_exercise_via_capability`) — is NOWHERE an in-circuit conjunct: in
+the composite circuit-refinement chain it is carried as the FREE HYPOTHESIS `hfacet :
+innerFacetsAdmittedA … = true` of `EffectRefinement.exercise_composite_circuit_refines_spec` /
+`Inst.exerciseA.exercise_circuit_refines_spec` (line `⟨hfacet, hguard, …⟩`), and the `exerciseE`
+`EffectSpec`'s `guardProp` is the hold-gate ONLY (`Inst/exerciseA.lean:14`, "R4 facet-mask deferred").
+A light client verifying ONLY the exercise step's circuit would therefore see the hold-gate satisfied and
+the frame frozen, but get NO in-circuit guarantee that the cap's facet mask admits each inner effect — so
+a witness exercising a `read`-only cap to run a `grant`/`control`-facet inner effect (the R4 over-reach)
+would NOT be rejected by the circuit: a "proof over bad data".
+
+This section makes the facet-mask an IN-BAND, IN-CIRCUIT conjunct of the exercise term, decoded by a real
+gate (NOT carried by hypothesis):
+
+  1. `exerciseFacetGuardB actor target inner` — the R4 facet-mask as a `Bool` over the KERNEL, PROVED
+     equal to the executor's `innerFacetsAdmittedA` (it reads only `s.kernel.caps`, so it factors through
+     the kernel — `exerciseFacetGuardB_eq_exec`).
+  2. `exerciseStmtFull actor target inner` — the STRENGTHENED IR term: `RecStmt.seq` of the hold-gate
+     `guard` AND the facet-mask `guard`. Its `interp` commits iff BOTH gates hold (the FULL executor gate,
+     kernel frozen) — so the term itself REJECTS an over-reaching inner forest.
+  3. `interp_exerciseStmtFull_eq_kernel` — the strengthened cornerstone: `interp` of the full term IS the
+     kernel projection of the FULL executor gate `innerFacetsAdmittedA s … ∧ exerciseGuard`, kernel frozen.
+  4. The IN-CIRCUIT `propBit` facet gate (`facetGateGates`/`facetGuardDecodes`) — the SAME established
+     guard mechanism (`Inst/exerciseA.lean §0`), but for the facet-mask: a satisfying facet gate FORCES
+     `innerFacetsAdmittedA = true`.
+  5. `exercise_compile_sound_facet` — the strengthened weld: the facet-mask is an IN-CIRCUIT CONJUNCT
+     decoded by the gate (NOT a free hypothesis), AND it is the EXECUTOR's `innerFacetsAdmittedA` gate.
+  6. Anti-gate teeth (`exerciseStmtFull_rejects_overreach`, `facetGate_rejects_overreach`) — the R4
+     over-reach (`control` under a `read`-only cap) makes BOTH the term AND the gate UNSAT.
+
+The `inner = []` weld above is unchanged and remains valid (the bare hold-layer); this section ADDS the
+facet-mask coverage that closes the completeness gap for `inner ≠ []`. -/
+
+open Dregg2.Authority (Auth)
+
+/-- **`exerciseFacetGuardB actor target inner` — the R4 facet-mask as a `Bool` over the KERNEL.** EVERY
+inner effect's `requiredFacetA` must lie in the held cap's `allowed_effects` mask (`capFacetMaskA` of the
+`heldCapTo` lookup). This is the executor's `innerFacetsAdmittedA` rewritten as a kernel predicate (it
+reads only `caps`), so it fits the `RecStmt.guard` (kernel→Bool) primitive. Fail-closed: a `null` held
+cap (no edge) has an empty mask ⇒ admits nothing. -/
+def exerciseFacetGuardB (actor target : CellId) (inner : List FullActionA) (k : RecordKernelState) : Bool :=
+  inner.all (fun fa => (capFacetMaskA (heldCapTo k.caps actor target)).contains (requiredFacetA fa))
+
+/-- **`exerciseFacetGuardB_eq_exec` — the kernel facet-gate IS the executor's `innerFacetsAdmittedA`.**
+`innerFacetsAdmittedA s actor target inner` reads only `s.kernel.caps` (via `heldCapTo s.kernel.caps`),
+so it equals `exerciseFacetGuardB actor target inner s.kernel`. The bridge that makes the in-band facet
+guard DEFINITIONALLY the executor's R4 gate (not a re-modelled approximation). -/
+theorem exerciseFacetGuardB_eq_exec (s : RecChainedState) (actor target : CellId)
+    (inner : List FullActionA) :
+    exerciseFacetGuardB actor target inner s.kernel = innerFacetsAdmittedA s actor target inner := by
+  rfl
+
+/-- **The STRENGTHENED exercise term: gate on the hold-edge AND the R4 facet-mask, kernel frozen.** Unlike
+`exerciseStmt` (the bare hold-gate, `inner = []`) this is the FULL executor gate for `.exerciseA actor
+target inner`: a `seq` of the hold-gate `guard` and the facet-mask `guard`. `interp` commits (kernel
+UNCHANGED) iff BOTH gates hold; it REJECTS (`none`) if the actor lacks the edge OR any inner facet
+over-reaches the cap's mask — exactly the executor's two-gate `if`. The kernel is still frozen (the
+cap-exercise reads the c-list); the inner fold + receipt are the chained layer (§3, §DEFER). -/
+def exerciseStmtFull (actor target : CellId) (inner : List FullActionA) : RecStmt :=
+  RecStmt.seq (RecStmt.guard (exerciseGuardB actor target))
+    (RecStmt.guard (exerciseFacetGuardB actor target inner))
+
+/-- **The strengthened cornerstone (hold-gate AND R4 facet-mask, kernel-frozen).** `interp` of the full
+exercise term commits to the kernel UNCHANGED iff the actor holds the cap-edge AND every inner facet lies
+in the held cap's mask (`innerFacetsAdmittedA`), and rejects otherwise — the kernel projection of the FULL
+executor gate `execFullA … (.exerciseA actor target inner)` checks before recursing. This is the
+in-circuit decoding of BOTH executor preconditions (the hold-gate from §2, PLUS the R4 facet-mask the §2
+weld omitted), via the in-band `RecStmt.seq`-of-two-`guard`s shape. -/
+theorem interp_exerciseStmtFull_eq_kernel (s : RecChainedState) (actor target : CellId)
+    (inner : List FullActionA) :
+    interp (exerciseStmtFull actor target inner) s.kernel
+      = (if (s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true
+            ∧ innerFacetsAdmittedA s actor target inner = true
+          then some s.kernel else none) := by
+  simp only [exerciseStmtFull, interp, exerciseGuardB, exerciseFacetGuardB_eq_exec]
+  by_cases hg : (s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true
+  · by_cases hf : innerFacetsAdmittedA s actor target inner = true
+    · rw [if_pos hg]
+      simp only [Option.bind]
+      rw [if_pos hf, if_pos ⟨hg, hf⟩]
+    · rw [if_pos hg]
+      simp only [Option.bind]
+      rw [if_neg hf, if_neg (fun h => hf h.2)]
+  · rw [if_neg hg]
+    simp only [Option.bind]
+    rw [if_neg (fun h => hg h.1)]
+
+#assert_axioms exerciseFacetGuardB_eq_exec
+#assert_axioms interp_exerciseStmtFull_eq_kernel
+
+/-! ### §FACET-b — the strengthened term lifts to the runnable `exerciseA` arm (the FULL two-gate arm). -/
+
+/-- **`execFullA_exercise_full` — the full term's KERNEL gate IS the runnable `exerciseA` arm's two-gate
+`if`.** When the strengthened cornerstone commits (`interp (exerciseStmtFull actor target inner) s.kernel
+= some k'`), the runnable executor `execFullA s (.exerciseA actor target inner)` commits — its facet-mask
+gate `innerFacetsAdmittedA` AND its hold-gate `exerciseStepA` both fire (the SAME two gates the term
+decoded), `k' = s.kernel` (frozen), and the post is the inner fold from the hold post-state. This pins the
+strengthened weld to the ACTUAL runnable arm with BOTH gates, not just the hold layer. -/
+theorem execFullA_exercise_full (s : RecChainedState) (actor target : CellId)
+    (inner : List FullActionA) (k' : RecordKernelState)
+    (hexec : interp (exerciseStmtFull actor target inner) s.kernel = some k') :
+    k' = s.kernel
+    ∧ innerFacetsAdmittedA s actor target inner = true
+    ∧ exerciseStepA s actor target = some (exerciseHoldState s actor)
+    ∧ execFullA s (.exerciseA actor target inner)
+        = execInnerA (exerciseHoldState s actor) inner := by
+  rw [interp_exerciseStmtFull_eq_kernel] at hexec
+  by_cases hgf : (s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true
+                  ∧ innerFacetsAdmittedA s actor target inner = true
+  · obtain ⟨hg, hf⟩ := hgf
+    rw [if_pos ⟨hg, hf⟩] at hexec
+    simp only [Option.some.injEq] at hexec
+    -- the hold-step commits (its `if` is `hg`), freezing the kernel + prepending the receipt.
+    have hstep : exerciseStepA s actor target = some (exerciseHoldState s actor) := by
+      unfold exerciseStepA exerciseHoldState; rw [if_pos hg]
+    refine ⟨hexec.symm, hf, hstep, ?_⟩
+    -- the runnable arm: facet gate `hf` fires, then the hold-step `hstep` gives the inner-fold start.
+    show (if innerFacetsAdmittedA s actor target inner = true then
+            match exerciseStepA s actor target with
+            | some s' => execInnerA s' inner
+            | none    => none
+          else none) = execInnerA (exerciseHoldState s actor) inner
+    rw [if_pos hf, hstep]
+  · rw [if_neg hgf] at hexec; exact absurd hexec (by simp)
+
+#assert_axioms execFullA_exercise_full
+
+/-! ### §FACET-c — the IN-CIRCUIT `propBit` facet gate (the established guard mechanism, R4 flavour).
+
+The §2/§MAGNESIUM weld leaves the facet-mask as the FREE HYPOTHESIS `hfacet`. Here we arithmetize it as a
+real in-circuit gate — the SAME single-`propBit`-column mechanism `Inst/exerciseA.lean` uses for the
+hold-gate (`Circuit.propBit p = if p then 1 else 0`; the gate `bit = 1`; `propBit p = 1 ↔ p`). A
+satisfying facet gate FORCES `innerFacetsAdmittedA = true` (the soundness direction), so the facet-mask is
+no longer carried by hypothesis: it is DECODED by the gate. -/
+
+/-- The R4 facet-mask as a decidable `Prop` (the gate's `guardProp`): the executor's `innerFacetsAdmittedA`
+as a proposition. -/
+def FacetAdmits (s : RecChainedState) (actor target : CellId) (inner : List FullActionA) : Prop :=
+  innerFacetsAdmittedA s actor target inner = true
+
+instance (s : RecChainedState) (actor target : CellId) (inner : List FullActionA) :
+    Decidable (FacetAdmits s actor target inner) := by
+  unfold FacetAdmits; exact inferInstanceAs (Decidable (_ = _))
+
+/-- The single-bit facet gate's witness value: `propBit` of the R4 facet-mask predicate. The prover lays
+this column from the genuine facet-mask, exactly as `exerciseGuardEncode` lays the hold-gate bit. -/
+def facetBitEncode (s : RecChainedState) (actor target : CellId) (inner : List FullActionA) : ℤ :=
+  Dregg2.Circuit.propBit (FacetAdmits s actor target inner)
+
+/-- **`facetGuardDecodes` — the in-circuit facet gate FORCES the R4 mask.** If the facet bit (laid as
+`facetBitEncode`) satisfies the gate `bit = 1`, then `innerFacetsAdmittedA = true`. This is the SOUNDNESS
+direction (`propBit p = 1 → p`): the facet-mask is DECODED by the gate, NOT carried by hypothesis — the
+exact mechanism `Inst/exerciseA.lean`'s `exerciseGuardDecodes` uses for the hold-gate, now for R4. -/
+theorem facetGuardDecodes (s : RecChainedState) (actor target : CellId) (inner : List FullActionA)
+    (hbit : facetBitEncode s actor target inner = 1) :
+    innerFacetsAdmittedA s actor target inner = true := by
+  have : FacetAdmits s actor target inner := by
+    unfold facetBitEncode at hbit
+    unfold Dregg2.Circuit.propBit at hbit
+    by_cases hp : FacetAdmits s actor target inner
+    · exact hp
+    · rw [if_neg hp] at hbit; exact absurd hbit (by norm_num)
+  exact this
+
+/-- **`facetGuardEncodes` — the R4 mask ENCODES to a satisfied facet gate** (completeness). If
+`innerFacetsAdmittedA = true`, the laid facet bit IS `1`. The `←` companion of `facetGuardDecodes`, so the
+gate is two-valued (non-vacuous). -/
+theorem facetGuardEncodes (s : RecChainedState) (actor target : CellId) (inner : List FullActionA)
+    (hadm : innerFacetsAdmittedA s actor target inner = true) :
+    facetBitEncode s actor target inner = 1 := by
+  unfold facetBitEncode Dregg2.Circuit.propBit
+  rw [if_pos hadm]
+
+#assert_axioms facetGuardDecodes
+#assert_axioms facetGuardEncodes
+
+/-! ### §FACET-d — THE STRENGTHENED WELD: the facet-mask is an IN-CIRCUIT CONJUNCT (not a free hypothesis).
+
+`exercise_compile_sound` (§4) carries ONLY the hold-gate (the `inner = []` weld). This strengthened weld
+carries the R4 facet-mask too — and CRUCIALLY decodes it FROM the in-circuit facet gate (`hfacetBit`,
+`facetGuardDecodes`), so the facet-mask is no longer a free `hfacet` assumption but an in-circuit conjunct.
+It ALSO confirms the decoded mask IS the EXECUTOR's `innerFacetsAdmittedA` gate, and re-exposes the §4
+per-cell frozen-frame + nonce-tick legs. -/
+
+/-- **`exercise_compile_sound_facet` — the welded soundness WITH the R4 facet-mask as an in-circuit
+conjunct (the completeness fix).**
+
+Suppose, for the strengthened Argus exercise term `exerciseStmtFull actor target inner`:
+  * the §4 circuit hypotheses on the per-cell descriptor (`hnoop`, `hpreBal`, `henc`, `hsat`) — the
+    audited runnable `exerciseVmDescriptor` is satisfied, pinning the per-cell frozen frame + nonce tick;
+  * the IN-CIRCUIT FACET GATE is satisfied: `facetBitEncode s actor target inner = 1` (`hfacetBit`) — the
+    prover laid the R4 facet-mask column and it passes the `bit = 1` gate;
+  * the IR term's KERNEL executor COMMITS: `interp (exerciseStmtFull actor target inner) s.kernel = some
+    k'` (`hexec`) — the actor genuinely holds the edge AND every inner facet is admitted.
+
+Then, in addition to the §4 legs (frozen economic frame + agreement on the conserved balance + the
+explicit nonce-tick divergence):
+  * **the R4 facet-mask is DECODED by the in-circuit gate:** `innerFacetsAdmittedA s actor target inner =
+    true` (from `hfacetBit` via `facetGuardDecodes`) — NOT carried by hypothesis;
+  * **and it IS the executor's gate:** the runnable arm `execFullA s (.exerciseA actor target inner)`
+    fires its facet-mask gate on exactly this `innerFacetsAdmittedA`, with the kernel frozen (`k' =
+    s.kernel`). So a witness whose inner forest over-reaches the cap's facet mask CANNOT satisfy the gate
+    (`facetGate_rejects_overreach`) — closing the "proof over bad data" hole for `inner ≠ []`. -/
+theorem exercise_compile_sound_facet
+    (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (s : RecChainedState) (actor target c : CellId) (inner : List FullActionA) (k' : RecordKernelState)
+    (pre post : CellState)
+    (hnoop : env.loc Dregg2.Circuit.Emit.EffectVmEmit.sel.NOOP = 0)
+    (hpreBal : env.loc (Dregg2.Circuit.Emit.EffectVmEmit.sbCol
+                 Dregg2.Circuit.Emit.EffectVmEmit.state.BALANCE_LO) = balProj s.kernel c)
+    (henc : RowEncodesExercise env pre post)
+    (hsat : satisfiedVm hash compileExercise env true true)
+    (hfacetBit : facetBitEncode s actor target inner = 1)
+    (hexec : interp (exerciseStmtFull actor target inner) s.kernel = some k') :
+    -- §4 frozen-frame leg (per-cell): the whole economic block is frozen at the hold layer …
+    ( ExerciseCellSpec pre post )
+    -- … the §4 nonce-tick divergence (explicit) …
+    ∧ ( post.nonce = pre.nonce + 1 )
+    -- … THE FIX: the R4 facet-mask is DECODED by the in-circuit gate (not a free hypothesis) …
+    ∧ ( innerFacetsAdmittedA s actor target inner = true )
+    -- … and it IS the executor's gate, with the kernel frozen (k' = s.kernel).
+    ∧ ( k' = s.kernel
+        ∧ execFullA s (.exerciseA actor target inner)
+            = execInnerA (exerciseHoldState s actor) inner ) := by
+  -- circuit side (§4): the audited descriptor soundness forces the per-cell frame freeze + nonce tick.
+  rw [compileExercise_eq] at hsat
+  obtain ⟨hcs, _hcommit⟩ := exerciseDescriptor_full_sound hash env pre post hnoop henc hsat
+  -- THE FIX: decode the facet-mask FROM the in-circuit facet gate (not from hypothesis).
+  have hfacet : innerFacetsAdmittedA s actor target inner = true :=
+    facetGuardDecodes s actor target inner hfacetBit
+  -- the strengthened cornerstone lifts to the runnable two-gate arm (kernel frozen + inner-fold start).
+  obtain ⟨hk', _hf, _hstep, harm⟩ := execFullA_exercise_full s actor target inner k' hexec
+  exact ⟨hcs, hcs.2.2.1, hfacet, hk', harm⟩
+
+#assert_axioms exercise_compile_sound_facet
+
+/-! ### §FACET-e — NON-VACUITY / ANTI-GATE: the R4 over-reach is REJECTED by BOTH the term AND the gate.
+
+The fix would be hollow if the facet guard admitted everything. These teeth exhibit the R4 over-reach (a
+`control`/`grant`-facet inner effect under a `read`/`write`-only endpoint cap) being REJECTED — the term
+returns `none` and the in-circuit gate is UNSAT — AND the in-mask case being admitted. -/
+
+/-- A two-account kernel where holder `0` holds a NARROWED `endpoint 7 [write, read]` cap (an edge to
+target `7`, but a facet mask EXCLUDING `grant`/`control`). Cell `0` Live, accounts `{0,1}`. -/
+def kExFacet : RecordKernelState :=
+  { accounts := {0, 1}, cell := fun _ => .record [("balance", .int 0)]
+    caps := fun l => if l = 0 then [Cap.endpoint 7 [Auth.write, Auth.read]] else [] }
+
+/-- A chained pre-state over `kExFacet` for the executor-side teeth (empty log). -/
+def stExFacet : RecChainedState := { kernel := kExFacet, log := [] }
+
+/-- An inner effect requiring the `grant` facet (a `delegate`) — OUTSIDE the `[write, read]` mask. -/
+def innerGrant : FullActionA := .delegate 0 1 7
+
+/-- An inner effect requiring the `write` facet (a `setField`) — WITHIN the `[write, read]` mask. -/
+def innerWriteFacet : FullActionA := .setFieldA 0 7 0 (.int 1)
+
+/-- **`exerciseStmtFull_rejects_overreach` — the STRENGTHENED TERM rejects the R4 over-reach.** Holder `0`
+exercising its `[write, read]` endpoint cap to target `7` to run a `grant`-facet inner effect (`delegate`)
+is REJECTED: `interp` returns `none` (the facet-mask `guard` fails — `grant ∉ [write, read]`), even though
+the HOLD-gate passes (the cap confers an edge to `7`). This is the over-reach the §1–§MAGNESIUM hold-only
+weld could NOT reject. -/
+theorem exerciseStmtFull_rejects_overreach :
+    interp (exerciseStmtFull 0 7 [innerGrant]) kExFacet = none := by
+  show interp (exerciseStmtFull 0 7 [innerGrant]) stExFacet.kernel = none
+  rw [interp_exerciseStmtFull_eq_kernel]
+  rw [if_neg]
+  rintro ⟨_, hf⟩
+  revert hf
+  decide
+
+/-- **`exerciseStmtFull_admits_inmask` — the STRENGTHENED TERM admits an in-mask inner effect.** The SAME
+cap exercising a `write`-facet inner effect (`setField`, WITHIN `[write, read]`) COMMITS, kernel frozen
+(`some kExFacet`) — the admitting half of the two-valued facet gate. -/
+theorem exerciseStmtFull_admits_inmask :
+    interp (exerciseStmtFull 0 7 [innerWriteFacet]) kExFacet = some kExFacet := by
+  show interp (exerciseStmtFull 0 7 [innerWriteFacet]) stExFacet.kernel = some stExFacet.kernel
+  rw [interp_exerciseStmtFull_eq_kernel]
+  rw [if_pos]
+  exact ⟨by decide, by decide⟩
+
+/-- **`facetGate_rejects_overreach` — the IN-CIRCUIT FACET GATE is UNSAT on the R4 over-reach.** For the
+over-reaching forest (`grant` under a `[write, read]` cap) the laid facet bit is `0`, NOT `1` — so the
+`bit = 1` gate CANNOT be satisfied. The in-circuit anti-ghost: a prover cannot forge a satisfying facet
+gate for an inner forest that over-reaches the cap's mask. -/
+theorem facetGate_rejects_overreach :
+    facetBitEncode stExFacet 0 7 [innerGrant] ≠ 1 := by
+  unfold facetBitEncode Dregg2.Circuit.propBit FacetAdmits
+  rw [if_neg]
+  · norm_num
+  · decide
+
+/-- **`facetGate_admits_inmask` — the IN-CIRCUIT FACET GATE is SAT on an in-mask forest.** For the in-mask
+forest (`write` under `[write, read]`) the laid facet bit IS `1` — the gate is satisfiable. The
+two-valued companion of `facetGate_rejects_overreach` (the gate is non-vacuous: it admits AND rejects). -/
+theorem facetGate_admits_inmask :
+    facetBitEncode stExFacet 0 7 [innerWriteFacet] = 1 := by
+  apply facetGuardEncodes
+  decide
+
+#assert_axioms exerciseStmtFull_rejects_overreach
+#assert_axioms exerciseStmtFull_admits_inmask
+#assert_axioms facetGate_rejects_overreach
+#assert_axioms facetGate_admits_inmask
+
 /-! ## §DEFER — honest scope of this weld (documented, NOT a silent gap).
 
-  * **The INNER sub-forest is OUT of this per-effect weld.** This module pins the OUTER hold-gate layer
-    (the bare cap-exercise, `inner = []`) — exactly the layer the audited descriptor connector speaks
-    about. The R4 facet-mask + the `execInnerA` fold over `inner` is the TURN-COMPOSITION layer: each
-    inner effect is its OWN per-row descriptor, composed through `TurnEmit`, and the summed-delta
-    conservation is the algebra twin `Handlers.Exercise.exercise_conserves` — cited, not re-claimed here.
+  * **The R4 facet-mask is now an IN-CIRCUIT CONJUNCT (§FACET) — NO LONGER a free hypothesis.** The
+    completeness gap (the executor's `innerFacetsAdmittedA` gate carried by `hfacet` rather than decoded)
+    is CLOSED: `exercise_compile_sound_facet` decodes it from the in-circuit `propBit` facet gate, and the
+    anti-gate teeth (`facetGate_rejects_overreach`, `exerciseStmtFull_rejects_overreach`) show the R4
+    over-reach is UNSAT. The `inner = []` hold-layer weld (§1–§MAGNESIUM) is unchanged and remains valid.
+
+  * **The INNER sub-forest BODIES are OUT of this per-effect weld.** §FACET pins that the cap's facet mask
+    ADMITS every inner effect (the R4 GATE), kernel frozen, AND that the runnable arm runs `execInnerA`
+    from the hold post-state. The per-effect SOUNDNESS of each inner effect's own state move (the
+    `execInnerA` fold's value/side-table transitions) is each inner effect's OWN per-row descriptor,
+    composed through `TurnEmit`, and the summed-delta conservation is the algebra twin
+    `Handlers.Exercise.exercise_conserves` — cited, not re-claimed here.
 
   * **The NONCE-TICK divergence is carried, not closed.** The executor hold-step FREEZES the kernel; the
     runtime EffectVM row TICKS the cell nonce. `exercise_compile_sound` exposes `post.nonce = pre.nonce +

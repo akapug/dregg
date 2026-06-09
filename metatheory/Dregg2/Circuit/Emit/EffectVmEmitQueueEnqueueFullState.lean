@@ -376,6 +376,122 @@ theorem enqueue_clause_rejects_root_drop :
 #assert_axioms queueSysRoot_gate_faithful
 #assert_axioms queueSysRoot_rejects_wrong_root
 
+/-! ## §4½ — THE EXECUTOR-PRECONDITION AUDIT (overnight DOER-audit lane): which `queueEnqueueDepositK`
+admissibility conjuncts are IN-CIRCUIT conjuncts of THIS runnable descriptor, and which are GAPS.
+
+The COMPLETENESS half of the circuit acceptance criterion (the "pale ghost" threat): a precondition the
+EXECUTOR enforces but the RUNNABLE descriptor (what a light client sees a proof OVER) omits ⇒ the light
+client accepts "a proof over bad data". The executor `queueEnqueueChainA → queueEnqueueDepositK`
+(`Exec/TurnExecutorFull.lean:2234` / `Exec/RecordKernel.lean:2295`) admits a committed enqueue IFF the
+EIGHT conjuncts hold:
+
+  (E1) `stateAuthB caps actor cell`               — writer-ACL / authority
+  (E2) `acceptsEffects cell` (`lifecycle = Live`) — lifecycle-liveness
+  (E3) `findQueue queues id = some q`             — the queue EXISTS
+  (E4) `q.buffer.length < q.capacity`             — the FIFO CAPACITY BOUND (no overflow)
+  (E5) `0 ≤ deposit`                              — NON-NEGATIVE deposit
+  (E6) `deposit ≤ k₁.bal actor dAsset`            — deposit AVAILABILITY (no balance UNDERFLOW)
+  (E7) `actor ∈ k₁.accounts`                      — sender is a LIVE account
+  (E8) `¬ ∃ r ∈ k₁.escrows, r.id = depId`         — deposit-record id FRESHNESS
+
+`runnable_full_sound`'s `fullClause` (`QueueEnqueueFullClause` = `CellEnqueueSpec` ∧ the QUEUE-root
+transition) and the per-row gates (`queueEnqueueRowGates`, ⟺ `QueueEnqueueRowIntent`) carry ONLY the
+POST-STATE TRANSITION (`post.balLo = pre.balLo − deposit`, nonce tick, the queue-root advance, the frame
+freeze). NOT ONE of E1–E8 is decoded by a gate of this descriptor:
+
+  * E5/E6 are INEQUALITIES; a `VmConstraint.gate` is an EQUALITY (`body.eval = 0`) and `satisfiedVm`
+    DROPS the `ranges` field entirely (`EffectVmEmit.satisfiedVm` conjoins only `constraints` +
+    `siteHoldsAll`; `d.ranges` is never read — it is dead weight in the denotation), so the no-underflow
+    / non-negativity preconditions are UNEXPRESSIBLE on this surface. The `≤`-bearing `RangeSpec.holds`
+    primitive lives on the OTHER (`RangedDescriptor`/`satisfiedRanged`) layer, NOT on `EffectVmDescriptor`.
+  * E3/E4 read `q.buffer.length`/`q.capacity` — the descriptor models the WHOLE `queues` table only as a
+    single opaque `queueRootAfter` felt; there is NO row column for a buffer length / capacity.
+  * E7/E8 read the `accounts` SET / the `escrows` side-table — `accounts` is the explicitly TURN-LAYER
+    cross-cell fact (`EffectVmFullStateRunnable` §0 census), `escrows` is the opaque `ESCROW`-root digest.
+  * E1/E2 read the cap-graph / `lifecycle`, bound only as the opaque `cap_root` column / `restLimbs`.
+
+NONE of E1–E8 reduces to a NAMED crypto primitive (the ONLY acceptable not-in-circuit precondition), so
+ALL EIGHT are genuine COMPLETENESS GAPS on this runnable surface. They are NOT closeable in THIS file:
+E5/E6 need `satisfiedVm` to consume `ranges` (shared `EffectVmEmit.lean`); E3/E4 need new buffer/capacity
+columns (shared layout); E7/E8/E1/E2 are the cross-cell / side-table / cap-graph facts the §0 census
+hands to the TURN-COMPOSITION layer. (The Argus weld `Argus/Effects/QueueEnqueue.lean
+queueEnqueue_compile_sound` DOES carry E1–E8 — it welds the circuit against the EXECUTOR spec
+`QueueEnqueueSpec`, whose body lists exactly these eight; but the STANDALONE `runnable_full_sound` here
+does not.) The burn/mint runnable siblings record the SAME boundary
+(`EffectVmEmitBurnRunnable`/`…MintRunnable` headers: "executor-side preconditions NOT in-circuit
+conjuncts … the named, deferred systematic audit wave").
+
+Rather than leave that as prose, §4½ PROVES the two sharpest gaps are REAL with machine-checked
+ACCEPT-but-execute-REJECT witnesses: a `(pre, post)` the runnable `fullClause` ADMITS while E6 (no
+underflow) / E5 (non-negativity) is VIOLATED. These pin the gap from the live side (the clause genuinely
+fails to entail the precondition), the dual of §4's `_clause_not_trivial`/`_rejects_root_drop` teeth. -/
+
+/-- An UNDER-FUNDED enqueue post-state: `pre.balLo = 5`, a `deposit = 20` (`> 5`), the genuine transition
+image `post.balLo = 5 − 20 = −15` (NEGATIVE), queue root advanced to `777`, frame frozen. -/
+def underfundedPre : CellState where
+  balLo := 5; balHi := 0; nonce := 9; fields := fun _ => 0; capRoot := 0; reserved := 0; commit := 0
+
+/-- The genuine `CellEnqueueSpec` image of `underfundedPre` under `deposit = 20`: `balLo = −15`. -/
+def underfundedPost : CellState where
+  balLo := -15; balHi := 0; nonce := 10
+  fields := fun i => if i = (4 : Fin 8) then 777 else 0
+  capRoot := 0; reserved := 0; commit := 0
+
+/-- The over-deposit params (`deposit = 20`, exceeding `underfundedPre.balLo = 5`). -/
+def underfundedParams : DepositParams := ⟨20⟩
+
+/-- **`enqueue_clause_admits_underflow` — GAP E6 IS REAL (no-underflow precondition NOT in-circuit).**
+The runnable crown's `fullClause` (the EXACT `QueueEnqueueFullClause` `queueEnqueue_runnable_full_sound`
+pins) is SATISFIED by `(underfundedPre, underfundedPost)` — yet the deposit `20` EXCEEDS the pre-balance
+`5`, the executor's E6 (`deposit ≤ bal`) is FALSE, and the resulting `post.balLo = −15` is NEGATIVE.
+So a satisfying RUNNABLE proof can pin a post-state whose enqueue the executor would have REFUSED
+(`queueEnqueueDepositK` returns `none` when `deposit ≤ k₁.bal …` fails): the light client accepts a proof
+that CONJURES value (a negative balance / over-spend). The no-underflow precondition is NOT a gate of this
+descriptor — a genuine completeness gap (closeable only by making `satisfiedVm` consume `ranges`, in the
+shared `EffectVmEmit.lean`). -/
+theorem enqueue_clause_admits_underflow :
+    (queueEnqueueRunnableSpec 777 underfundedParams goodPreRoots 777).fullClause
+        underfundedPre underfundedPost (Function.update goodPreRoots QUEUE_ROOT_INDEX 777)
+      ∧ ¬ (underfundedParams.deposit ≤ underfundedPre.balLo)   -- E6 (no-underflow) VIOLATED
+      ∧ underfundedPost.balLo < 0 := by                        -- the conjured NEGATIVE balance
+  refine ⟨⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, rfl⟩, ?_, ?_⟩
+  · decide          -- balLo: -15 = 5 - 20 (the genuine CellEnqueueSpec image — the gate `gBalLoDebit`)
+  · rfl             -- balHi frozen
+  · decide          -- nonce: 10 = 9 + 1 (the tick)
+  · simp [underfundedPost]   -- fields 4 = 777
+  · intro i hi
+    have hne : i ≠ (4 : Fin 8) := fun h => hi (by rw [h]; rfl)
+    simp only [underfundedPost, underfundedPre, if_neg hne]
+  · rfl             -- capRoot frozen
+  · rfl             -- reserved frozen
+  · decide          -- ¬ (20 ≤ 5): E6 is FALSE, yet the clause above HOLDS
+  · decide          -- -15 < 0: value conjured
+
+/-- **`enqueue_clause_admits_negative_deposit` — GAP E5 IS REAL (non-negativity NOT in-circuit).** A
+`(pre, post)` whose `deposit = −7` is NEGATIVE (the executor's E5 `0 ≤ deposit` is FALSE) STILL satisfies
+the runnable `fullClause` — the gate `gBalLoDebit` only pins `post.balLo = pre.balLo − deposit`
+(here `100 − (−7) = 107`, an unexplained CREDIT to the sender on an "enqueue"), with no sign constraint.
+So a prover can MINT into the sender's balance via a negative-deposit enqueue the executor would reject.
+The non-negativity precondition is NOT a gate of this descriptor. -/
+theorem enqueue_clause_admits_negative_deposit :
+    (queueEnqueueRunnableSpec 777 (⟨-7⟩ : DepositParams) goodPreRoots 777).fullClause
+        goodPre { goodPost with balLo := 207 } (Function.update goodPreRoots QUEUE_ROOT_INDEX 777)
+      ∧ ¬ (0 ≤ (⟨-7⟩ : DepositParams).deposit) := by    -- E5 (non-negativity) VIOLATED
+  refine ⟨⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, rfl⟩, ?_⟩
+  · decide          -- balLo: 207 = 200 - (-7) (the genuine image — an unexplained credit)
+  · rfl             -- balHi frozen
+  · decide          -- nonce: 10 = 9 + 1
+  · simp [goodPost]   -- fields 4 = 777
+  · intro i hi
+    have hne : i ≠ (4 : Fin 8) := fun h => hi (by rw [h]; rfl)
+    simp only [goodPost, goodPre, if_neg hne]
+  · rfl             -- capRoot frozen
+  · rfl             -- reserved frozen
+  · decide          -- ¬ (0 ≤ -7): E5 is FALSE, yet the clause HOLDS
+
+#assert_axioms enqueue_clause_admits_underflow
+#assert_axioms enqueue_clause_admits_negative_deposit
+
 /-! ## §5 — width/shape pins (the additive widening is exactly +1 gate, +2 columns, wide sites). -/
 
 #guard (queueEnqueueVmDescriptorWide 0).traceWidth == 188
