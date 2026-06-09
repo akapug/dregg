@@ -14,50 +14,47 @@ open Dregg2.Exec.FFI.Wide
 open Dregg2.Exec.TurnExecutorFull (QueueTxOpA)
 
 /-! ## §14 — the WIDE STATE record (`parseWState`) roundtrip — THE STATE DECODER (the differential's
-core). The 9-field `do`-block assembling every side-table proved above: cells (§12), caps (§13),
-bal (§10), escrows (§11), nullifiers/commitments/revoked (§9), queues (§11b), swiss (§11c). Strict on
-field ORDER + the closing `}`. Carries one `Wf` hypothesis (`WfCells w.cells`, the §1 value boundary on
-the cell payloads); every other field is a total-codec side-table. Fuel-adequate whenever the outer fuel
-exceeds the encoded width (the `parseWWire` caller passes the whole-input length). -/
+core). The 11-field `do`-block assembling every side-table proved above: cells (§12), caps (§13),
+bal (§10), escrows (§11), nullifiers/commitments/revoked (§9), queues (§11b), swiss (§11c), and the
+per-cell-commitment side-tables lifecycle/deathCert (§10b). Strict on field ORDER + the closing `}`.
+Carries one `Wf` hypothesis (`WfCells w.cells`, the §1 value boundary on the cell payloads); every other
+field is a total-codec side-table. Fuel-adequate whenever the outer fuel exceeds the encoded width (the
+`parseWWire` caller passes the whole-input length). -/
+
+/-- `some a >>= f = f a` by `rfl` — a PURE rewrite (no `whnf` on the bind scrutinee), so cascading it
+with `lit_append` reduces a long `do`-chain by repeated beta rather than by `match`-reduction on the
+whole term. Keeps the 11-field `parseWState` decode well under the heartbeat budget. -/
+private theorem some_bind {α β : Type} (a : α) (f : α → Option β) : (some a) >>= f = f a := rfl
 
 set_option maxHeartbeats 2000000 in
 /-- **FILL J production (the STATE DECODER): the WIDE STATE record roundtrip**
 (`parseWState ∘ encodeWState = id`) — the post-state object the differential re-decodes. Composes the
-nine side-table roundtrips through the `do`-block: each `lit ",\"field\":"` is a clean literal consume;
+eleven side-table roundtrips through the `do`-block: each `lit ",\"field\":"` is a clean literal consume;
 each field arm is its proved leaf; the cells loop's outer fuel is met by the width hypothesis. This
 removes the STATE codec — the heart of the wholesale-swap differential — from the Lean-side TCB. -/
 theorem parseWState_encode (w : WState) (rest : PState) (hwf : WfCells w.cells) (fuel : Nat)
     (hf : ((encodeWState w).toList ++ rest).length ≤ fuel) :
     parseWState fuel ((encodeWState w).toList ++ rest) = some (w, rest) := by
-  obtain ⟨cells, caps, bal, escrows, nullifiers, commitments, queues, swiss, revoked⟩ := w
+  obtain ⟨cells, caps, bal, escrows, nullifiers, commitments, queues, swiss, revoked, lifecycle, deathCert⟩ := w
   unfold parseWState
   -- unfold `encodeWState` in BOTH `hf` and the goal (so the width hypothesis expands to the SAME
   -- field-length sum the per-field fuel obligations reference; `unfold` alone misses `hf`).
   simp only [encodeWState, String.toList_append, List.append_assoc] at hf ⊢
-  -- open `{"cells":`, then the cells store (outer fuel ≥ width)
-  rw [lit_append]
-  simp only [Option.bind_eq_bind, Option.bind]
-  rw [parseCellsW_encode cells _ hwf fuel (by
-    simp only [List.length_append] at hf ⊢; omega)]
-  simp only [Option.bind_eq_bind, Option.bind]
-  -- the remaining 8 fields: each a clean `lit ",\"field\":"` then its proved leaf
-  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [parseCapsEntries_encode caps _]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [parseBal_encode bal _]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [parseEscrows_encode escrows _]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [parseNats_encode nullifiers _]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [parseNats_encode commitments _]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [parseQueues_encode queues _]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [parseSwissTable_encode swiss _]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [lit_append]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [parseNats_encode revoked _]; simp only [Option.bind_eq_bind, Option.bind]
-  rw [lit_append]
+  -- open `{"cells":`, then the cells store (the ONLY fuel-dependent leaf; outer fuel ≥ width).
+  rw [lit_append, some_bind, parseCellsW_encode cells _ hwf fuel (by
+    -- the cells-leaf width is `hf`'s sum MINUS the leading `{"cells":` literal, so it follows by
+    -- `G ≤ k + G ≤ fuel` — a pure `Nat.le_add_left`/`le_trans` (NO `omega`: omega would try to
+    -- whnf-evaluate the ~11 concrete `,"field":` string literals' `.toList.length`, which blows the
+    -- heartbeat budget on the 11-field sum).
+    simp only [List.length_append] at hf ⊢
+    exact Nat.le_trans (Nat.le_add_left _ _) hf)]
+  -- the remaining 10 fields are each an unconditional `,"field":` literal + its proved total-codec
+  -- leaf; cascade `lit_append` (each literal → `some tail`) with `some_bind` (the PURE `some _ >>= f`
+  -- beta — no `whnf` on the whole chain) and every leaf in ONE simp fixpoint. The reconstructed
+  -- record is the destructured `w` definitionally, so the final `some (·, rest)` closes by `rfl`.
+  simp only [some_bind, lit_append,
+    parseCapsEntries_encode, parseBal_encode, parseEscrows_encode, parseNats_encode,
+    parseQueues_encode, parseSwissTable_encode, parseCellNats_encode]
 
 /-! ## §16 — the complete-turn ENVELOPE (`parseWTurn`/`parseWWire`) roundtrip — the OUTER WIRE
 (the last FILL-J leaf). The Turn envelope `{"agent":N,"nonce":N,"fee":Z,"valid_until":N,"prev":"H64",
@@ -288,10 +285,13 @@ theorem parseWWire_encode (w : WWire) (hcells : WfCells w.state.cells) (hturn : 
 envelope + every state field are real). -/
 
 /-- A real multi-node turn: the root credential bears a delegation EDGE (`keep`/`cap`/`sub`), so the wire
-exercises the §15 children recursion, not just a leaf root; wrapped in a populated wide state. -/
+exercises the §15 children recursion, not just a leaf root; wrapped in a populated wide state — including
+NON-EMPTY `lifecycle`/`deathCert` per-cell tables (cell 0 Destroyed `=3` with a death-cert hash), so the
+§10b arms are exercised on real data, not their `[]` defaults. -/
 private def wireWitness : WWire :=
   { state := { cells := [(0, .record [("balance", .int 100)])], caps := [(9, [.node 0])], bal := [(0, 0, 100)],
-               escrows := [], nullifiers := [], commitments := [], queues := [], swiss := [] }
+               escrows := [], nullifiers := [], commitments := [], queues := [], swiss := [],
+               lifecycle := [(0, 3)], deathCert := [(0, 42)] }
     turn  := { agent := 0, nonce := 1, fee := 2, validUntil := 9, prevHash := 7
                root := ⟨ .signature 3 3, [{ tier := 0, cell := 0, asset := 0, min := 1 }],
                          .balanceA { actor := 0, src := 0, dst := 1, amt := 10 } 0,
@@ -313,8 +313,16 @@ private theorem wireWitness_turn_wf : WfTurn wireWitness.turn := by
   exact ⟨show (3:Nat) < 2^256 by norm_num, ⟨by unfold WfCaveat; decide, trivial⟩, trivial,
     ⟨⟨trivial, trivial, trivial, trivial⟩, trivial⟩⟩
 
--- The WHOLE wire — populated state + a delegation-bearing tree — round-trips through `parseWWire`:
+-- The WHOLE wire — populated state + a delegation-bearing tree + NON-EMPTY lifecycle/deathCert tables
+-- — round-trips through `parseWWire`:
 example : parseWWire (encodeWWire wireWitness) = some wireWitness :=
   parseWWire_encode wireWitness wireWitness_cells_wf wireWitness_turn_wf rfl
+
+-- NON-VACUITY for the §10b leaf: a MULTI-entry per-cell-Nat table (a Sealed cell `1` and a Destroyed
+-- cell `3`) round-trips with a trailing `rest` — so `parseCellNats_encode` genuinely inverts the
+-- `lifecycle`/`deathCert` codec on populated data, not just `[]`.
+example : parseCellNats ((encodeCellNats [(0, 1), (7, 3)]).toList ++ "Z".toList)
+    = some ([(0, 1), (7, 3)], "Z".toList) :=
+  parseCellNats_encode [(0, 1), (7, 3)] "Z".toList
 
 end Dregg2.Exec.CodecRoundtrip
