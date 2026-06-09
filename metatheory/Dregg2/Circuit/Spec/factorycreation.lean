@@ -63,7 +63,9 @@ private theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
     (hslotCaveats : k.slotCaveats = k'.slotCaveats) (hfactories : k.factories = k'.factories)
     (hlifecycle : k.lifecycle = k'.lifecycle) (hdeathCert : k.deathCert = k'.deathCert)
     (hdelegate : k.delegate = k'.delegate) (hdelegations : k.delegations = k'.delegations)
-    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes) : k = k' := by
+    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes)
+    (hdelegationEpoch : k.delegationEpoch = k'.delegationEpoch)
+    (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt) : k = k' := by
   cases k; cases k'; simp_all
 
 /-! ## §1 — the admissibility guard, lifted from the CODE.
@@ -195,6 +197,8 @@ def CreateFromFactorySpec (st : RecChainedState) (actor newCell : CellId) (vk : 
     ∧ st'.kernel.swiss = st.kernel.swiss
     ∧ st'.kernel.factories = st.kernel.factories
     ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+    ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+    ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-! ### The post-state the executor actually produces, pinned field-by-field.
 
@@ -227,7 +231,9 @@ theorem createCellFromFactoryChainA_components {s s' : RecChainedState} {actor n
       ∧ s'.kernel.queues = s.kernel.queues
       ∧ s'.kernel.swiss = s.kernel.swiss
       ∧ s'.kernel.factories = s.kernel.factories
-      ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes := by
+      ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+      ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+      ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt := by
   obtain ⟨e, s1, hfind, hconf, hc, hs'⟩ := createCellFromFactoryChainA_factors h
   -- recover the underlying createCell gate conjuncts + the s1 shape:
   obtain ⟨hauth, hfresh, hs1⟩ := createCellChainA_factors hc
@@ -239,7 +245,7 @@ theorem createCellFromFactoryChainA_components {s s' : RecChainedState} {actor n
   refine ⟨e, ⟨hvk, hfind, hconf, hauth, hfresh⟩, ?_⟩
   -- substitute s' = factory-install over s1, and s1 = createCellChainA's output over s.
   subst hs' hs1
-  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   · funext l; by_cases hl : l = newCell <;> simp [hl, createCellIntoAsset, bornEmptyCellSlots]
   · funext c; by_cases hc' : c = newCell <;> simp [hc', createCellIntoAsset, bornEmptyCellSlots]
   · funext c; by_cases hc' : c = newCell <;> simp [hc', createCellIntoAsset, bornEmptyCellSlots]
@@ -264,7 +270,7 @@ theorem createCellFromFactoryChainA_iff_spec (st : RecChainedState) (actor newCe
     -- explicit committed output, then prove that output equals `st'` from the 18 spec equations.
     rintro ⟨e, ⟨hvk, hfind, hconf, hauth, hfresh⟩,
             hacc, hbal, hcell, hcav, hlog,
-            hcaps, hlc, hdc, hdel, hdn, hesc, hnull, hrev, hcom, hq, hsw, hfac, hsb⟩
+            hcaps, hlc, hdc, hdel, hdn, hesc, hnull, hrev, hcom, hq, hsw, hfac, hsb, hde, hdea⟩
     -- the underlying createCell commits (its gate is the last two guard conjuncts):
     have hc : createCellChainA st actor newCell = some
         { kernel := createCellIntoAsset st.kernel newCell
@@ -291,9 +297,9 @@ theorem createCellFromFactoryChainA_iff_spec (st : RecChainedState) (actor newCe
     -- after substituting `hcell`/`hcav` closes those.
     rw [hex]
     obtain ⟨k', lg'⟩ := st'
-    obtain ⟨acc, cl, cp, es, nl, rv, cm, bl, qs, sw, sc, fc, lc, dc, dl, dn, sb⟩ := k'
-    simp only at hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hesc hnull hrev hcom hq hsw hfac hsb
-    subst hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hesc hnull hrev hcom hq hsw hfac hsb
+    obtain ⟨acc, cl, cp, es, nl, rv, cm, bl, qs, sw, sc, fc, lc, dc, dl, dn, sb, dge, dgea⟩ := k'
+    simp only at hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hesc hnull hrev hcom hq hsw hfac hsb hde hdea
+    subst hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hesc hnull hrev hcom hq hsw hfac hsb hde hdea
     rfl
 
 /-- **`execCreateFromFactoryA_iff_spec` — THE DELIVERABLE: `execFullA`-LEVEL EXECUTOR ⟺ SPEC (FULL

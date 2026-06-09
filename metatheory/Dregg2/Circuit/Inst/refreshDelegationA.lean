@@ -37,7 +37,9 @@ def RestIffNoDelegations (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
-      ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
 structure RefreshDelegationArgs where
   actor : CellId
@@ -86,7 +88,9 @@ def refreshDelegationE (D : (CellId → List Cap) → ℤ) (hD : Function.Inject
       ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
-      ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := refreshDelegationGuardGates
   guardProp    := refreshDelegationGuardProp
   guardWidth   := 1

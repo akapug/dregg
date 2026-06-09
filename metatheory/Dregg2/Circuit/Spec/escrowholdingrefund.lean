@@ -167,6 +167,8 @@ def RefundEscrowSpec (st : RecChainedState) (id : Nat) (actor : CellId) (st' : R
     ∧ st'.kernel.delegate = st.kernel.delegate
     ∧ st'.kernel.delegations = st.kernel.delegations
     ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+    ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+    ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-- **`refundEscrowChainA_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The chained
 refund executor commits into `st'` IFF `st'` is EXACTLY the spec'd full post-state. The `→` VALIDATES
@@ -199,11 +201,11 @@ theorem refundEscrowChainA_iff_spec (st : RecChainedState) (id : Nat) (actor : C
       · have hknone := refundEscrowKAsset_none_of_not_live st.kernel id r hfind hg
         rw [hknone] at hk; cases hk
   · intro ⟨r, ⟨hfind, hcre, hlive, hauth⟩, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12,
-           h13, h14, h15⟩
+           h13, h14, h15, h16, h17⟩
     obtain ⟨k', l'⟩ := st'
-    obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-    simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-    subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+    obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+    simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+    subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
     have hfind' : findUnresolvedEscrow st.kernel id = some r := by
       simpa [findUnresolvedEscrow_matchPred] using hfind
     have hk := refundEscrowKAsset_some st.kernel id r hfind' ⟨hcre, hlive⟩

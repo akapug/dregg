@@ -203,6 +203,8 @@ def EnlivenSpecFull (s : RecChainedState) (sw : Nat) (actor exporter : CellId) (
   ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
   ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
   ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-- **`execFullA_enliven_iff_specFull` — EXECUTOR ⟺ the STRENGTHENED full-state spec.** -/
 theorem execFullA_enliven_iff_specFull (s : RecChainedState) (sw : Nat) (actor exporter : CellId)
@@ -221,15 +223,16 @@ theorem execFullA_enliven_iff_specFull (s : RecChainedState) (sw : Nat) (actor e
     subst hs'
     refine ⟨⟨hauth, e, hf, hr⟩, ⟨e, hf, hr, ?_⟩, rfl, ?_⟩
     · rw [hkeq]
-    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+        rfl, rfl⟩
   · rintro ⟨hg, ⟨e, hf, hr, hsw⟩, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13,
-      h14, h15, h16⟩
+      h14, h15, h16, h17, h18⟩
     refine ⟨hg, ⟨{ s.kernel with swiss := enlivenSwissPost s.kernel.swiss sw e }, ?_, ?_⟩⟩
     · exact (enlivenSwissUpdate_eq_k s.kernel sw claimed _).mp (enlivenSwissUpdate_some s.kernel.swiss sw claimed e hf hr)
     · obtain ⟨k', lg'⟩ := s'
-      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       have hke : k' = { s.kernel with swiss := enlivenSwissPost s.kernel.swiss sw e } :=
-        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 hsw h10 h11 h12 h13 h14 h15 h16
+        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 hsw h10 h11 h12 h13 h14 h15 h16 h17 h18
       subst hke hlog; rfl
 
 /-- **The strengthening is REAL (EnlivenSpec ≡ EnlivenSpecFull).** -/
@@ -252,7 +255,7 @@ theorem enlivenSpecFull_rejects_sealedBoxes_tamper (s s' : RecChainedState) (sw 
     ¬ EnlivenSpecFull s sw actor exporter claimed
         { s' with kernel := { s'.kernel with sealedBoxes := badBoxes } } := by
   -- the strong spec's `sealedBoxes` frame conjunct (`= s.kernel.sealedBoxes`) contradicts `badBoxes`.
-  rintro ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hboxes⟩
+  rintro ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hboxes, _, _⟩
   exact hne hboxes
 
 #assert_axioms enlivenRecord_correct

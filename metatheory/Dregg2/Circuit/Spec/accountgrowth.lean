@@ -76,7 +76,9 @@ private theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
     (hslotCaveats : k.slotCaveats = k'.slotCaveats) (hfactories : k.factories = k'.factories)
     (hlifecycle : k.lifecycle = k'.lifecycle) (hdeathCert : k.deathCert = k'.deathCert)
     (hdelegate : k.delegate = k'.delegate) (hdelegations : k.delegations = k'.delegations)
-    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes) : k = k' := by
+    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes)
+    (hdelegationEpoch : k.delegationEpoch = k'.delegationEpoch)
+    (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt) : k = k' := by
   cases k; cases k'; simp_all
 
 /-! ## §1 — the admissibility guards, lifted from the CODE. -/
@@ -186,6 +188,8 @@ def CreateCellSpec (st : RecChainedState) (actor newCell : CellId) (st' : RecCha
   ∧ st'.kernel.swiss = st.kernel.swiss
   ∧ st'.kernel.factories = st.kernel.factories
   ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+  ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+  ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-- **`createCellChainA_iff_spec` — CHAINED EXECUTOR ⟺ SPEC (FULL state, both directions).** The
 chained record kernel commits a `createCellA` into `st'` IFF `st'` is EXACTLY the spec'd full
@@ -204,17 +208,17 @@ theorem createCellChainA_iff_spec (st : RecChainedState) (actor newCell : CellId
     · intro h
       simp only [Option.some.injEq] at h
       subst h
-      refine ⟨hg, rfl, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+      refine ⟨hg, rfl, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       · dsimp only [bornEmptyAt]
         refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       · simp only [createReceipt]
-    · rintro ⟨_, hacc, hborn, hlog, h1, h2, h3, h4, h5, h6, h7, h8⟩
+    · rintro ⟨_, hacc, hborn, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10⟩
       obtain ⟨k', lg'⟩ := st'
-      obtain ⟨acc, cl, cp, es, nl, rv, cm, bl, qs, sw, sc, fc, lc, dc, dl, dn, sb⟩ := k'
+      obtain ⟨acc, cl, cp, es, nl, rv, cm, bl, qs, sw, sc, fc, lc, dc, dl, dn, sb, dge, dgea⟩ := k'
       dsimp only [bornEmptyAt] at hborn
       obtain ⟨hcl, hcp, hdel, hdgs, hsc, hlif, hdc, hbal⟩ := hborn
-      simp only at hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8
-      subst hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8
+      simp only at hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10
+      subst hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10
       rfl
   · rw [if_neg hg]
     constructor
@@ -389,6 +393,8 @@ def SpawnSpec (st : RecChainedState) (actor child target : CellId) (st' : RecCha
   ∧ st'.kernel.swiss = st.kernel.swiss
   ∧ st'.kernel.factories = st.kernel.factories
   ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+  ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+  ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-- **`spawnChainA_iff_spec` — CHAINED EXECUTOR ⟺ SPEC (FULL state, both directions) for spawn.** The
 chained record kernel commits a `spawnA` into `st'` IFF `st'` is EXACTLY the spec'd full post-state.
@@ -411,7 +417,7 @@ theorem spawnChainA_iff_spec (st : RecChainedState) (actor child target : CellId
         simp only [Option.some.injEq] at h
         subst h
         refine ⟨⟨hg.1, hg.2, hc⟩, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl,
-               rfl, rfl, rfl⟩
+               rfl, rfl, rfl, rfl, rfl⟩
         · funext c; by_cases hc' : c = child <;> simp [hc']
         · funext c; by_cases hc' : c = child <;> simp [hc']
         · funext c; by_cases hc' : c = child <;> simp [hc']
@@ -422,12 +428,12 @@ theorem spawnChainA_iff_spec (st : RecChainedState) (actor child target : CellId
         · funext c; by_cases hc' : c = child <;> simp [hc', spawnDelegationsMap]
         · simp only [createReceipt]
       · rintro ⟨⟨he, ht, hca⟩, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h1, h2,
-                h3, h4, h5, h6, h7, h8⟩
+                h3, h4, h5, h6, h7, h8, hde, hdea⟩
         simp only [Option.some.injEq]
         obtain ⟨k', lg'⟩ := st'
-        obtain ⟨acc, cl, cp, es, nl, rv, cm, bl, qs, sw, sc, fc, lc, dc, dl, dn, sb⟩ := k'
-        simp only at hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8
-        subst hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8
+        obtain ⟨acc, cl, cp, es, nl, rv, cm, bl, qs, sw, sc, fc, lc, dc, dl, dn, sb, dge, dgea⟩ := k'
+        simp only at hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 hde hdea
+        subst hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 hde hdea
         rfl
     · rw [if_neg hc]
       constructor

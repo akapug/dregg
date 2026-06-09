@@ -30,7 +30,9 @@ def RefreshDelegationGuard (s : RecChainedState) (actor child : CellId) : Prop :
 def refreshDelegationsMap (k : RecordKernelState) (child : CellId) : CellId → List Cap :=
   fun c => if c = child then parentClist k child else k.delegations c
 
-/-- **The full-state declarative spec of a committed `refreshDelegationA`.** -/
+/-- **The full-state declarative spec of a committed `refreshDelegationA`.** (The freshness-RESTORE
+epoch re-stamp `delegationEpochAt` is a SCOPED follow-up — refresh leaves it frozen for now; see
+`refreshDelegationChainA` in `TurnExecutorFull`.) -/
 def RefreshDelegationSpec (s : RecChainedState) (actor child : CellId) (s' : RecChainedState) : Prop :=
   RefreshDelegationGuard s actor child
   ∧ s'.kernel.delegations = refreshDelegationsMap s.kernel child
@@ -43,6 +45,8 @@ def RefreshDelegationSpec (s : RecChainedState) (actor child : CellId) (s' : Rec
   ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats ∧ s'.kernel.factories = s.kernel.factories
   ∧ s'.kernel.lifecycle = s.kernel.lifecycle ∧ s'.kernel.deathCert = s.kernel.deathCert
   ∧ s'.kernel.delegate = s.kernel.delegate ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-! ## §2 — executor ⟺ spec. -/
 
@@ -59,12 +63,12 @@ theorem refreshDelegation_iff_spec (s : RecChainedState) (actor child : CellId) 
       simp only [Option.some.injEq] at h
       subst h
       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl⟩
-    · rintro ⟨_, hdgs, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+        rfl, rfl, rfl⟩
+    · rintro ⟨_, hdgs, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
       obtain ⟨k', lg'⟩ := s'
-      obtain ⟨acc, cellm, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-      simp only at hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      subst hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      obtain ⟨acc, cellm, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+      simp only at hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      subst hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       rfl
   · rw [if_neg hg]
     constructor

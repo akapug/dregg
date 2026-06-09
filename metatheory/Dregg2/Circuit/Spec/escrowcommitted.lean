@@ -160,6 +160,8 @@ def CommittedEscrowCreateSpec (st : RecChainedState) (id : Nat) (actor creator r
   ∧ st'.kernel.delegate = st.kernel.delegate
   ∧ st'.kernel.delegations = st.kernel.delegations
   ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+  ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+  ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-- **`createCommittedEscrowChainA_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions)** on the
 chained committed-escrow-create step. `createCommittedEscrowChainA` commits a lock into `st'` IFF `st'`
@@ -187,12 +189,13 @@ theorem createCommittedEscrowChainA_iff_spec (st : RecChainedState) (id : Nat)
         simp only [Option.some.injEq] at h
         subst h
         exact ⟨⟨hp, hg⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-               rfl, rfl, rfl⟩
-      · rintro ⟨_, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15⟩
+               rfl, rfl, rfl, rfl, rfl⟩
+      · rintro ⟨_, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15,
+          h16, h17⟩
         obtain ⟨k', l'⟩ := st'
-        obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-        simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-        subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+        obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+        simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+        subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
         rfl
     · rw [if_neg hg]
       constructor
@@ -308,6 +311,8 @@ def CommittedEscrowSettleSpec (st : RecChainedState) (id : Nat) (actor : CellId)
     ∧ st'.kernel.delegate = st.kernel.delegate
     ∧ st'.kernel.delegations = st.kernel.delegations
     ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+    ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+    ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-- **`execFullA_releaseCommittedEscrowA_iff_spec` — EXECUTOR ⟺ SPEC (release).** `execFullA` dispatches
 `.releaseCommittedEscrowA id actor` to `releaseEscrowChainA`, which credits the FOUND record's

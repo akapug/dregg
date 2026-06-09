@@ -145,6 +145,8 @@ def QueueAllocateSpec (st : RecChainedState) (id : Nat) (actor cell : CellId) (c
   ∧ st'.kernel.delegate = st.kernel.delegate
   ∧ st'.kernel.delegations = st.kernel.delegations
   ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+  ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+  ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-- **`queueAllocateChainA_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions)** on the chained
 allocate step. `queueAllocateChainA` commits a fresh queue into `st'` IFF `st'` is EXACTLY the spec'd
@@ -172,12 +174,12 @@ theorem queueAllocateChainA_iff_spec (st : RecChainedState) (id : Nat) (actor ce
           simp only [Option.some.injEq] at h
           subst h
           exact ⟨⟨hauth, trivial⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-                 rfl, rfl, rfl, rfl, rfl⟩
-        · rintro ⟨_, hq, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+                 rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+        · rintro ⟨_, hq, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
           obtain ⟨k', l'⟩ := st'
-          obtain ⟨acc, cell0, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-          simp only at hq hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-          subst hq hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+          obtain ⟨acc, cell0, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+          simp only at hq hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+          subst hq hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
           rfl
   · rw [if_neg hauth]
     constructor
@@ -307,6 +309,8 @@ def QueueResizeSpec (st : RecChainedState) (id newCap : Nat) (actor cell : CellI
   ∧ st'.kernel.delegate = st.kernel.delegate
   ∧ st'.kernel.delegations = st.kernel.delegations
   ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+  ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+  ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-- **`queueResizeChainA_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions)** on the chained
 resize step. The `→` VALIDATES `queueResizeChainA` against the independent spec — all 17 kernel
@@ -333,14 +337,14 @@ theorem queueResizeChainA_iff_spec (st : RecChainedState) (id newCap : Nat) (act
             simp only [Option.some.injEq] at h
             subst h
             refine ⟨⟨hauth, hacc, q, rfl, hcap⟩, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-                    rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+                    rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
             intro q' hq'; simp only [Option.some.injEq] at hq'; subst hq'; rfl
-          · rintro ⟨_, hq, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+          · rintro ⟨_, hq, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
             have hqeq := hq q rfl
             obtain ⟨k', l'⟩ := st'
-            obtain ⟨acc, cell0, caps, esc, nul, rev, com, bal, qs, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-            simp only at hqeq hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-            subst hqeq hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+            obtain ⟨acc, cell0, caps, esc, nul, rev, com, bal, qs, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+            simp only at hqeq hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+            subst hqeq hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
             rfl
         · simp only [if_neg hcap]
           constructor

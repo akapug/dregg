@@ -261,10 +261,10 @@ theorem queueDequeueRefundK_rebuild {k k' : RecordKernelState} {id : Nat} {actor
              escrows := markResolved k.escrows depId,
              queues := dequeuePoppedQueues k id } = k' := by
   obtain ⟨hbal, hesc, hq⟩ := queueDequeueRefundK_fields h
-  obtain ⟨hAcc, hCell, hCaps, hNul, hRev, hCom, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩ :=
+  obtain ⟨hAcc, hCell, hCaps, hNul, hRev, hCom, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB, hDE, hDEA⟩ :=
     Dregg2.Circuit.Inst.QueueDequeueA.queueDequeueRefundK_preserves_frame h
-  -- all 17 fields agree: bal/escrows/queues are the direct projections (= `k'`'s by `queueDequeueRefundK
-  -- _fields`), the other 14 are `k`'s = `k'`'s by the frame fact (used symmetrically).
+  -- all 19 fields agree: bal/escrows/queues are the direct projections (= `k'`'s by `queueDequeueRefundK
+  -- _fields`), the other 16 are `k`'s = `k'`'s by the frame fact (used symmetrically).
   apply Dregg2.Circuit.Inst.QueueDequeueA.recordKernel_eq_of_fields
   · exact hAcc.symm
   · exact hCell.symm
@@ -283,6 +283,8 @@ theorem queueDequeueRefundK_rebuild {k k' : RecordKernelState} {id : Nat} {actor
   · exact hDel.symm
   · exact hDgs.symm
   · exact hSB.symm
+  · exact hDE.symm
+  · exact hDEA.symm
 
 /-- **The kernel step of `queueDequeueChainA`** — gate on the 4-conjunct chain gate, then the kernel of
 `queueDequeueRefundK` (FIFO pop + refund). `none` when the gate rejects OR `queueDequeueRefundK`

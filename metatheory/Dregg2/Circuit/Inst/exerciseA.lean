@@ -158,7 +158,9 @@ theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
     (hslotCaveats : k.slotCaveats = k'.slotCaveats) (hfactories : k.factories = k'.factories)
     (hlifecycle : k.lifecycle = k'.lifecycle) (hdeathCert : k.deathCert = k'.deathCert)
     (hdelegate : k.delegate = k'.delegate) (hdelegations : k.delegations = k'.delegations)
-    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes) : k = k' := by
+    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes)
+    (hdelegationEpoch : k.delegationEpoch = k'.delegationEpoch)
+    (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt) : k = k' := by
   cases k; cases k'; simp_all
 
 /-- Chained-state extensionality from kernel + log agreement. -/
@@ -183,10 +185,10 @@ theorem apex_iff_exerciseHoldSpec (s : RecChainedState) (args : ExerciseHoldArgs
   unfold ExerciseHoldSpec exerciseGuardProp exerciseGuard exerciseHoldState kernelFrame
   constructor
   · rintro ⟨hguard, hcell, hlog, hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
-      hDC, hDel, hDgs, hSB⟩
+      hDC, hDel, hDgs, hSB, hDE, hDEA⟩
     have hker : s'.kernel = s.kernel :=
       recordKernel_eq_of_fields hAcc hcell hCaps hEsc hNul hRev hCom hBal hQ hSw hSC hFac hLif hDC hDel
-        hDgs hSB
+        hDgs hSB hDE hDEA
     refine ⟨hguard, ?_⟩
     exact recChainedState_eq_of_fields hker hlog
   · rintro ⟨hguard, hhold⟩

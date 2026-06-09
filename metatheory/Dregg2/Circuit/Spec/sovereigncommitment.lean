@@ -135,6 +135,8 @@ def MakeSovereignSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChain
   ∧ s'.kernel.delegate = s.kernel.delegate
   ∧ s'.kernel.delegations = s.kernel.delegations
   ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-! ## §4 — executor ⟺ spec (FULL state, both directions). -/
 
@@ -177,16 +179,16 @@ theorem execFullA_makeSovereignA_iff_spec
   constructor
   · rintro ⟨hg, hs'⟩
     subst hs'
-    refine ⟨hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    refine ⟨hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · exact (sovereignRebind_eq_makeSovereignKernel s.kernel cell).symm
     all_goals rfl
-  · rintro ⟨hg, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+  · rintro ⟨hg, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
     refine ⟨hg, ?_⟩
     -- rebuild s' field-by-field: the touched cell map, the log, and the 16 frame fields, then η.
     obtain ⟨k', lg'⟩ := s'
-    obtain ⟨acc, cl, cps, esc, nul, rev, cmt, bl, qs, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-    simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-    subst hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+    obtain ⟨acc, cl, cps, esc, nul, rev, cmt, bl, qs, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+    simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+    subst hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
     -- the touched cell map: rewrite the declarative map to the executor's makeSovereignKernel form.
     rw [sovereignRebind_eq_makeSovereignKernel] at hcell
     subst hcell

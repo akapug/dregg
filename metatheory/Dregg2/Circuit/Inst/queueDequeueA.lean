@@ -48,7 +48,9 @@ def RestIffNoQueuesBalEscrows (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
       ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
-      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
 /-! ## §2 — the `queueDequeueE` triple instance (`queues` + `bal` + `escrows`). -/
 
@@ -141,7 +143,9 @@ def queueDequeueE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Inje
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
       ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
-      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := dequeueGuardGates
   guardProp    := dequeueGuardProp
   guardWidth   := 1
@@ -194,7 +198,9 @@ theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
     (hslotCaveats : k.slotCaveats = k'.slotCaveats) (hfactories : k.factories = k'.factories)
     (hlifecycle : k.lifecycle = k'.lifecycle) (hdeathCert : k.deathCert = k'.deathCert)
     (hdelegate : k.delegate = k'.delegate) (hdelegations : k.delegations = k'.delegations)
-    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes) : k = k' := by
+    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes)
+    (hdelegationEpoch : k.delegationEpoch = k'.delegationEpoch)
+    (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt) : k = k' := by
   cases k; cases k'; simp_all
 
 /-! ### §2c — post-shape helpers (`queueDequeueRefundK` composed kernel fields). -/
@@ -220,7 +226,9 @@ theorem queueDequeueK_preserves_frame {k k' : RecordKernelState} {id : Nat} {act
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
       ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
-      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes := by
+      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt := by
   unfold queueDequeueK at h
   cases hf : findQueue k.queues id with
   | none   => simp only [hf] at h; exact absurd h (by simp)
@@ -234,7 +242,7 @@ theorem queueDequeueK_preserves_frame {k k' : RecordKernelState} {id : Nat} {act
             obtain ⟨hm, rest⟩ := hr
             rw [hd] at h; simp only [Option.some.injEq, Prod.mk.injEq] at h
             obtain ⟨hk, _⟩ := h; subst hk
-            exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+            exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       · rw [if_neg ho] at h; exact absurd h (by simp)
 
 theorem settleEscrowRawAsset_preserves_frame (k₁ : RecordKernelState) (id : Nat) (target : CellId)
@@ -253,9 +261,11 @@ theorem settleEscrowRawAsset_preserves_frame (k₁ : RecordKernelState) (id : Na
       ∧ (settleEscrowRawAsset k₁ id target asset amount).deathCert = k₁.deathCert
       ∧ (settleEscrowRawAsset k₁ id target asset amount).delegate = k₁.delegate
       ∧ (settleEscrowRawAsset k₁ id target asset amount).delegations = k₁.delegations
-      ∧ (settleEscrowRawAsset k₁ id target asset amount).sealedBoxes = k₁.sealedBoxes := by
+      ∧ (settleEscrowRawAsset k₁ id target asset amount).sealedBoxes = k₁.sealedBoxes
+      ∧ (settleEscrowRawAsset k₁ id target asset amount).delegationEpoch = k₁.delegationEpoch
+      ∧ (settleEscrowRawAsset k₁ id target asset amount).delegationEpochAt = k₁.delegationEpochAt := by
   dsimp [settleEscrowRawAsset]
-  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem queueDequeueRefundK_preserves_frame {k k' : RecordKernelState} {id : Nat} {actor : CellId}
     {depId m : Nat} (h : queueDequeueRefundK k id actor depId = some (k', m)) :
@@ -263,7 +273,9 @@ theorem queueDequeueRefundK_preserves_frame {k k' : RecordKernelState} {id : Nat
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
       ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
-      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes := by
+      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt := by
   unfold queueDequeueRefundK at h
   cases hk₁ : queueDequeueK k id actor with
   | none => simp only [hk₁] at h; exact absurd h (by simp)
@@ -279,12 +291,13 @@ theorem queueDequeueRefundK_preserves_frame {k k' : RecordKernelState} {id : Nat
             · simp only [Option.some.injEq, Prod.mk.injEq] at h
               obtain ⟨hk', _⟩ := h; subst hk'
               rcases settleEscrowRawAsset_preserves_frame k₁ depId actor r.asset r.amount with
-                ⟨hAcc, hCell, hCaps, hQ, hNul, hRev, hCom, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
+                ⟨hAcc, hCell, hCaps, hQ, hNul, hRev, hCom, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB, hDE, hDEA⟩
               rcases queueDequeueK_preserves_frame hk₁ with
-                ⟨hAcc₁, hCell₁, hCaps₁, hNul₁, hRev₁, hCom₁, hSw₁, hSC₁, hFac₁, hLif₁, hDC₁, hDel₁, hDgs₁, hSB₁⟩
+                ⟨hAcc₁, hCell₁, hCaps₁, hNul₁, hRev₁, hCom₁, hSw₁, hSC₁, hFac₁, hLif₁, hDC₁, hDel₁, hDgs₁, hSB₁, hDE₁, hDEA₁⟩
               exact ⟨hAcc.trans hAcc₁, hCell.trans hCell₁, hCaps.trans hCaps₁, hNul.trans hNul₁,
                 hRev.trans hRev₁, hCom.trans hCom₁, hSw.trans hSw₁, hSC.trans hSC₁, hFac.trans hFac₁,
-                hLif.trans hLif₁, hDC.trans hDC₁, hDel.trans hDel₁, hDgs.trans hDgs₁, hSB.trans hSB₁⟩
+                hLif.trans hLif₁, hDC.trans hDC₁, hDel.trans hDel₁, hDgs.trans hDgs₁, hSB.trans hSB₁,
+                hDE.trans hDE₁, hDEA.trans hDEA₁⟩
             · exact absurd h (by simp)
       · exact absurd h (by simp)
 
@@ -307,14 +320,16 @@ theorem kernel_eq_of_components
     (hDC : s'.kernel.deathCert = s.kernel.deathCert)
     (hDel : s'.kernel.delegate = s.kernel.delegate)
     (hDgs : s'.kernel.delegations = s.kernel.delegations)
-    (hSB : s'.kernel.sealedBoxes = s.kernel.sealedBoxes) :
+    (hSB : s'.kernel.sealedBoxes = s.kernel.sealedBoxes)
+    (hDE : s'.kernel.delegationEpoch = s.kernel.delegationEpoch)
+    (hDEA : s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt) :
     s'.kernel = k' := by
   have hkq := dequeuePostQueues_some s args k' m hk
   have hbal' := dequeuePostBal_some s args k' m hk
   have hesc' := dequeuePostEscrows_some s args k' m hk
   have hframe := queueDequeueRefundK_preserves_frame (k := s.kernel) hk
   rcases hframe with
-    ⟨hAccF, hCellF, hCapsF, hNulF, hRevF, hComF, hSwF, hSCF, hFacF, hLifF, hDCF, hDelF, hDgsF, hSBF⟩
+    ⟨hAccF, hCellF, hCapsF, hNulF, hRevF, hComF, hSwF, hSCF, hFacF, hLifF, hDCF, hDelF, hDgsF, hSBF, hDEF, hDEAF⟩
   apply recordKernel_eq_of_fields
   · exact hAcc.trans hAccF.symm
   · exact hCell.trans hCellF.symm
@@ -333,6 +348,8 @@ theorem kernel_eq_of_components
   · exact hDel.trans hDelF.symm
   · exact hDgs.trans hDgsF.symm
   · exact hSB.trans hSBF.symm
+  · exact hDE.trans hDEF.symm
+  · exact hDEA.trans hDEAF.symm
 
 /-! ### §2c — apex ↔ `QueueDequeueSpec`. -/
 
@@ -345,7 +362,7 @@ theorem apex_iff_queueDequeueSpec (D : (CellId → AssetId → ℤ) → ℤ) (hD
       QueueDequeueSpec s args.id args.actor args.cell args.depId s' := by
   constructor
   · rintro ⟨hg, hq, hbal, hesc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hSw, hSC, hFac, hLif,
-      hDC, hDel, hDgs, hSB⟩
+      hDC, hDel, hDgs, hSB, hDE, hDEA⟩
     obtain ⟨hauth, hacc, hbind, hhead, hgok⟩ := hg
     cases hk : queueDequeueRefundK s.kernel args.id args.actor args.depId with
     | none => exact absurd hgok (by simp [hk])
@@ -353,7 +370,7 @@ theorem apex_iff_queueDequeueSpec (D : (CellId → AssetId → ℤ) → ℤ) (hD
         obtain ⟨k', m⟩ := kr
         refine ⟨hauth, hacc, hbind, hhead, k', m, hk, ?_, hlog⟩
         exact kernel_eq_of_components s s' args k' m hk hq hbal hesc
-          hAcc hCell hCaps hNul hRev hCom hSw hSC hFac hLif hDC hDel hDgs hSB
+          hAcc hCell hCaps hNul hRev hCom hSw hSC hFac hLif hDC hDel hDgs hSB hDE hDEA
   · rintro ⟨hauth, hacc, hbind, hhead, k', m, hk, hker, hlog⟩
     have hg : dequeueGuardProp s args := ⟨hauth, hacc, hbind, hhead, by simp [dequeueGuardProp, hk]⟩
     have hkq := dequeuePostQueues_some s args k' m hk
@@ -361,8 +378,8 @@ theorem apex_iff_queueDequeueSpec (D : (CellId → AssetId → ℤ) → ℤ) (hD
     have hesc' := dequeuePostEscrows_some s args k' m hk
     have hframe := queueDequeueRefundK_preserves_frame (k := s.kernel) hk
     rcases hframe with
-      ⟨hAccF, hCellF, hCapsF, hNulF, hRevF, hComF, hSwF, hSCF, hFacF, hLifF, hDCF, hDelF, hDgsF, hSBF⟩
-    refine ⟨hg, ?_, ?_, ?_, hlog, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      ⟨hAccF, hCellF, hCapsF, hNulF, hRevF, hComF, hSwF, hSCF, hFacF, hLifF, hDCF, hDelF, hDgsF, hSBF, hDEF, hDEAF⟩
+    refine ⟨hg, ?_, ?_, ?_, hlog, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · show s'.kernel.queues = dequeuePostQueues s args
       exact (congrArg (fun k => k.queues) hker).trans hkq.symm
     · show s'.kernel.bal = dequeuePostBal s args
@@ -383,6 +400,8 @@ theorem apex_iff_queueDequeueSpec (D : (CellId → AssetId → ℤ) → ℤ) (hD
     · exact (congrArg (fun k => k.delegate) hker).trans hDelF
     · exact (congrArg (fun k => k.delegations) hker).trans hDgsF
     · exact (congrArg (fun k => k.sealedBoxes) hker).trans hSBF
+    · exact (congrArg (fun k => k.delegationEpoch) hker).trans hDEF
+    · exact (congrArg (fun k => k.delegationEpochAt) hker).trans hDEAF
 
 /-! ### §2d — THE VALIDATION: `queueDequeueA_full_sound ⇒ QueueDequeueSpec`. -/
 

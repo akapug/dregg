@@ -144,6 +144,8 @@ def ExportSpec (s : RecChainedState) (sw : Nat) (actor exporter target : CellId)
   ∧ s'.kernel.delegate = s.kernel.delegate
   ∧ s'.kernel.delegations = s.kernel.delegations
   ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-- **`export_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The full executor
 `execFullA` commits an `exportSturdyRefA sw actor exporter target rights` into `s'` IFF `s'` is
@@ -175,13 +177,13 @@ theorem export_iff_spec (s : RecChainedState) (sw : Nat) (actor exporter target 
         · intro h
           simp only [Option.some.injEq] at h
           subst h
-          refine ⟨⟨hauth, hf, hr⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-        · rintro ⟨_, hsw, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+          refine ⟨⟨hauth, hf, hr⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+        · rintro ⟨_, hsw, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
           -- reconstruct `s'` from its (kernel field-by-field) + log spec.
           obtain ⟨k', log'⟩ := s'
-          obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw', sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-          simp only [exportRecord, exportReceipt] at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-          subst hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+          obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw', sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+          simp only [exportRecord, exportReceipt] at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+          subst hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
           rfl
       · -- non-amplification fails ⇒ `none`.
         rw [if_neg hr]

@@ -152,6 +152,126 @@ theorem recKRevokeTarget_frame (k : RecordKernelState) (holder t : Label) :
   -- `recKRevokeTarget` edits only `caps`; `recTotal`/`accounts`/`cell` are untouched.
   refine ⟨rfl, rfl, rfl⟩
 
+/-! ### §3.EPOCH — the delegation-revocation EPOCH semantics (the faithful `apply_revoke_delegation`).
+
+`recKRevokeTarget` is the SHARED cap-edge `removeEdge` that ALL THREE revocation arms perform
+(`revoke` / `dropRefA` / `revokeDelegationA`). But dregg1's `apply_revoke_delegation`
+(`turn/src/executor/apply.rs:3044-3082`) does MORE than the bare edge removal — and CRUCIALLY, the
+plain `revoke` (`apply_revoke_capability`, `apply.rs:673`) and `dropRef` (`apply_drop_ref`,
+`apply.rs:4056`) do NOT. So the epoch semantics live in a DEDICATED step composed ONLY onto the
+delegation arm — modelling the bump inside the shared `recKRevokeTarget` would be UNFAITHFUL to
+`revoke`/`dropRef` (the "wrong-cell pale ghost" the audit warns against).
+
+dregg1's `apply_revoke_delegation(action_target = PARENT, child)` does, beyond the edge removal:
+  * (2) `parent.state.bump_delegation_epoch()` (`apply.rs:3069`) — bumps the PARENT cell's
+    `delegation_epoch` by `+1` (folded into the canonical state commitment, `commitment.rs:263`);
+  * (3) `child.delegation = None` (`apply.rs:3080`) — clears the CHILD cell's `DelegatedRef` snapshot.
+
+In the Lean `revokeDelegationA holder t` arm, `holder` is the PARENT (the cap-edge holder that drops
+the child's edge, `TurnExecutorFull.lean:5419`) and `t` is the CHILD. So the faithful map is:
+bump `delegationEpoch holder` (the parent), clear `delegations t` and its stamp `delegationEpochAt t`
+(the child's snapshot). -/
+
+/-- **`recKRevokeDelegationEpoch k parent child`** — the delegation-revocation EXTRAS dregg1's
+`apply_revoke_delegation` performs beyond the shared cap-edge removal: bump the PARENT's
+`delegationEpoch` (+1, `apply.rs:3069`) and CLEAR the CHILD's snapshot `delegations` + its epoch stamp
+`delegationEpochAt` (`apply.rs:3080`). Edits ONLY the three epoch/snapshot registries — balance-NEUTRAL
+(`recTotal`/`accounts`/`cell`/`caps` untouched). NOT applied by `revoke`/`dropRef` (those carry no epoch
+semantics in dregg1). -/
+def recKRevokeDelegationEpoch (k : RecordKernelState) (parent child : Label) : RecordKernelState :=
+  { k with
+    delegationEpoch   := fun c => if c = parent then k.delegationEpoch c + 1 else k.delegationEpoch c
+    delegations       := fun c => if c = child then [] else k.delegations c
+    delegationEpochAt := fun c => if c = child then 0 else k.delegationEpochAt c }
+
+/-- **`recKRevokeDelegationFull k parent child`** — the FAITHFUL full kernel step for dregg1's
+`apply_revoke_delegation`: the shared cap-edge `removeEdge` (`recKRevokeTarget`, leg (1)) COMPOSED with
+the epoch bump + child-snapshot clear (`recKRevokeDelegationEpoch`, legs (2)+(3)). This is the kernel
+step that models ALL THREE things `apply_revoke_delegation` does. The cap-edge holder `parent` is the
+revoking parent; `child` is the revoked child. -/
+def recKRevokeDelegationFull (k : RecordKernelState) (parent child : Label) : RecordKernelState :=
+  recKRevokeDelegationEpoch (recKRevokeTarget k parent child) parent child
+
+/-- **`delegationStale k child`** — the FRESHNESS check a light client runs (dregg1's acceptor-side
+epoch test, `delegation.rs:53`/`apply.rs`): the child's delegation snapshot is STALE iff its recorded
+stamp `delegationEpochAt child` is STRICTLY BELOW the child's parent's CURRENT `delegationEpoch`. A
+parent revoke bumps the parent's epoch, so every outstanding child snapshot stamped under the old epoch
+falls behind ⇒ STALE ⇒ a revoked delegation cannot be replayed. A child with no parent is never stale. -/
+def delegationStale (k : RecordKernelState) (child : Label) : Bool :=
+  match k.delegate child with
+  | some parent => decide (k.delegationEpochAt child < k.delegationEpoch parent)
+  | none        => false
+
+/-- **`recKRevokeDelegationFull_frame` — the full delegation-revoke is balance-NEUTRAL (PROVED).** Like
+the bare `recKRevokeTarget`, the faithful full step (cap-edge removal + epoch bump + snapshot clear)
+edits only `caps`/`delegationEpoch`/`delegations`/`delegationEpochAt` — so `recTotal`, `accounts`, and
+`cell` are untouched. Revocation moves no value, even with the epoch semantics modelled. -/
+theorem recKRevokeDelegationFull_frame (k : RecordKernelState) (parent child : Label) :
+    recTotal (recKRevokeDelegationFull k parent child) = recTotal k ∧
+      (recKRevokeDelegationFull k parent child).accounts = k.accounts ∧
+      (recKRevokeDelegationFull k parent child).cell = k.cell := by
+  -- `recKRevokeDelegationEpoch` edits only the epoch/snapshot registries; `recKRevokeTarget` only `caps`.
+  -- `recTotal` reads `accounts`+`cell`, both untouched by either leg.
+  refine ⟨rfl, rfl, rfl⟩
+
+/-- **`recKRevokeDelegationFull_caps` — the full step's cap-edge IS the shared `removeEdge` (PROVED).**
+The faithful step's `caps` post-state equals the bare `recKRevokeTarget`'s — the epoch/snapshot legs
+touch no `caps`. So the cap-graph soundness (`recKRevokeTarget_execGraph`, the connector `unify_revoke`)
+carries verbatim onto the full step. -/
+theorem recKRevokeDelegationFull_caps (k : RecordKernelState) (parent child : Label) :
+    (recKRevokeDelegationFull k parent child).caps = (recKRevokeTarget k parent child).caps := rfl
+
+/-- **`recKRevokeDelegationFull_bumps_parent_epoch` — leg (2), PROVED.** The faithful full step bumps
+the PARENT's `delegationEpoch` by EXACTLY `+1` (dregg1's `bump_delegation_epoch`, `apply.rs:3069`). The
+kernel now MODELS the epoch advance — it is no longer a frozen under-model. -/
+theorem recKRevokeDelegationFull_bumps_parent_epoch (k : RecordKernelState) (parent child : Label) :
+    (recKRevokeDelegationFull k parent child).delegationEpoch parent = k.delegationEpoch parent + 1 := by
+  show (if parent = parent then k.delegationEpoch parent + 1 else k.delegationEpoch parent)
+      = k.delegationEpoch parent + 1
+  rw [if_pos rfl]
+
+/-- **`recKRevokeDelegationFull_clears_child_snapshot` — leg (3), PROVED.** The faithful full step CLEARS
+the CHILD's snapshot (`delegations child = []`) and resets its epoch stamp (`delegationEpochAt child =
+0`), exactly dregg1's `child.delegation = None` (`apply.rs:3080`). The kernel now MODELS the snapshot
+clear. -/
+theorem recKRevokeDelegationFull_clears_child_snapshot (k : RecordKernelState) (parent child : Label) :
+    (recKRevokeDelegationFull k parent child).delegations child = []
+    ∧ (recKRevokeDelegationFull k parent child).delegationEpochAt child = 0 := by
+  refine ⟨?_, ?_⟩
+  · show (if child = child then [] else k.delegations child) = []
+    rw [if_pos rfl]
+  · show (if child = child then 0 else k.delegationEpochAt child) = 0
+    rw [if_pos rfl]
+
+/-- **`recKRevokeDelegationFull_makes_child_stale` — THE FRESHNESS TOOTH (PROVED).** After a faithful
+delegation revoke, IF the revoked `child`'s parent pointer still points at the revoking `parent` (the
+`apply_revoke_delegation` precondition `child.delegate == Some(action_target)`, `apply.rs:3055`) and the
+parent's pre-epoch was at least the child's stamp (the snapshot was fresh before), then the child's
+snapshot is now STALE: its stamp (reset to `0` ≤, and strictly below the bumped `parent` epoch). A light
+client checking `delegationStale` would now REJECT the revoked delegation — it cannot be replayed. This
+is the unfoolability the epoch buys. -/
+theorem recKRevokeDelegationFull_makes_child_stale (k : RecordKernelState) (parent child : Label)
+    (hp : (recKRevokeDelegationFull k parent child).delegate child = some parent)
+    (hpos : 0 < k.delegationEpoch parent + 1) :
+    delegationStale (recKRevokeDelegationFull k parent child) child = true := by
+  -- the child's stamp is reset to `0`; the parent's epoch is bumped to `k.delegationEpoch parent + 1 > 0`.
+  have hstamp : (recKRevokeDelegationFull k parent child).delegationEpochAt child = 0 :=
+    (recKRevokeDelegationFull_clears_child_snapshot k parent child).2
+  have hpar : (recKRevokeDelegationFull k parent child).delegationEpoch parent
+      = k.delegationEpoch parent + 1 :=
+    recKRevokeDelegationFull_bumps_parent_epoch k parent child
+  unfold delegationStale
+  rw [hp]
+  -- reduce the `match some parent` arm, then the stamp `< parent epoch` test is `0 < (… + 1)`.
+  simp only [hstamp, hpar]
+  exact decide_eq_true (by omega)
+
+#assert_axioms recKRevokeDelegationFull_frame
+#assert_axioms recKRevokeDelegationFull_caps
+#assert_axioms recKRevokeDelegationFull_bumps_parent_epoch
+#assert_axioms recKRevokeDelegationFull_clears_child_snapshot
+#assert_axioms recKRevokeDelegationFull_makes_child_stale
+
 /-- A single cap confers an edge to at most one target: if `cap` confers edges to both `a` and `t`
 then `a = t`. Used to show the revoke filter removes precisely the edge to `t`. -/
 theorem confersEdgeTo_unique (cap : Cap) (a t : Label)

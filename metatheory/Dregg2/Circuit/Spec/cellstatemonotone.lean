@@ -131,6 +131,8 @@ def IncrementNonceSpec (s : RecChainedState) (actor cell : CellId) (n : Int)
   ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
   ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
   ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-- **`stateStep_iff_spec` — the GENERIC `stateStep` characterization (executor⟺spec, full state).**
 The bare `stateStep` (the shared engine of the whole cell-state-monotone family —
@@ -156,7 +158,9 @@ theorem stateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell : C
         ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
         ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
         ∧ s'.kernel.delegations = s.kernel.delegations
-        ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes ) := by
+        ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+        ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+        ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt ) := by
   unfold stateStep
   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ cell ∈ s.kernel.accounts
       ∧ cellLive s.kernel cell = true
@@ -165,12 +169,12 @@ theorem stateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell : C
     · intro h
       simp only [Option.some.injEq] at h; subst h
       refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl, rfl⟩
-    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+        rfl, rfl, rfl, rfl⟩
+    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
       obtain ⟨k', l'⟩ := s'
-      obtain ⟨a, ce, ca, es, nu, re, co, ba, qu, sw, sl, fa, li, dc, de, dg, sb⟩ := k'
-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      obtain ⟨a, ce, ca, es, nu, re, co, ba, qu, sw, sl, fa, li, dc, de, dg, sb, dge, dgea⟩ := k'
+      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       rfl
   · rw [if_neg hg]
     constructor

@@ -86,7 +86,9 @@ private theorem queueEnqueueK_preserves_rest {k k' : RecordKernelState} {id m : 
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
       ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
-      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes := by
+      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt := by
   unfold queueEnqueueK at h
   cases hf : findQueue k.queues id with
   | none   => simp only [hf] at h; exact absurd h (by simp)
@@ -94,7 +96,7 @@ private theorem queueEnqueueK_preserves_rest {k k' : RecordKernelState} {id m : 
       simp only [hf] at h
       by_cases hc : q.buffer.length < q.capacity
       · rw [if_pos hc] at h; simp only [Option.some.injEq] at h; subst h
-        exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+        exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       · rw [if_neg hc] at h; exact absurd h (by simp)
 
 private theorem createEscrowRawAssetQueue_preserves_rest (k₁ : RecordKernelState) (depId : Nat)
@@ -112,9 +114,11 @@ private theorem createEscrowRawAssetQueue_preserves_rest (k₁ : RecordKernelSta
       ∧ (createEscrowRawAssetQueue k₁ depId actor cell dAsset deposit id m).deathCert = k₁.deathCert
       ∧ (createEscrowRawAssetQueue k₁ depId actor cell dAsset deposit id m).delegate = k₁.delegate
       ∧ (createEscrowRawAssetQueue k₁ depId actor cell dAsset deposit id m).delegations = k₁.delegations
-      ∧ (createEscrowRawAssetQueue k₁ depId actor cell dAsset deposit id m).sealedBoxes = k₁.sealedBoxes := by
+      ∧ (createEscrowRawAssetQueue k₁ depId actor cell dAsset deposit id m).sealedBoxes = k₁.sealedBoxes
+      ∧ (createEscrowRawAssetQueue k₁ depId actor cell dAsset deposit id m).delegationEpoch = k₁.delegationEpoch
+      ∧ (createEscrowRawAssetQueue k₁ depId actor cell dAsset deposit id m).delegationEpochAt = k₁.delegationEpochAt := by
   dsimp [createEscrowRawAssetQueue]
-  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 private theorem settleEscrowRawAsset_preserves_rest (k₁ : RecordKernelState) (id : Nat) (target : CellId)
     (asset : AssetId) (amount : ℤ) :
@@ -131,9 +135,11 @@ private theorem settleEscrowRawAsset_preserves_rest (k₁ : RecordKernelState) (
       ∧ (settleEscrowRawAsset k₁ id target asset amount).deathCert = k₁.deathCert
       ∧ (settleEscrowRawAsset k₁ id target asset amount).delegate = k₁.delegate
       ∧ (settleEscrowRawAsset k₁ id target asset amount).delegations = k₁.delegations
-      ∧ (settleEscrowRawAsset k₁ id target asset amount).sealedBoxes = k₁.sealedBoxes := by
+      ∧ (settleEscrowRawAsset k₁ id target asset amount).sealedBoxes = k₁.sealedBoxes
+      ∧ (settleEscrowRawAsset k₁ id target asset amount).delegationEpoch = k₁.delegationEpoch
+      ∧ (settleEscrowRawAsset k₁ id target asset amount).delegationEpochAt = k₁.delegationEpochAt := by
   dsimp [settleEscrowRawAsset]
-  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 private theorem queueDequeueK_preserves_rest {k k' : RecordKernelState} {id : Nat} {actor : CellId} {m : Nat}
     (h : queueDequeueK k id actor = some (k', m)) :
@@ -141,7 +147,9 @@ private theorem queueDequeueK_preserves_rest {k k' : RecordKernelState} {id : Na
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
       ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
-      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes := by
+      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt := by
   unfold queueDequeueK at h
   cases hf : findQueue k.queues id with
   | none   => simp only [hf] at h; exact absurd h (by simp)
@@ -155,7 +163,7 @@ private theorem queueDequeueK_preserves_rest {k k' : RecordKernelState} {id : Na
             obtain ⟨hm, rest⟩ := hr
             rw [hd] at h; simp only [Option.some.injEq, Prod.mk.injEq] at h
             obtain ⟨hk, _⟩ := h; subst hk
-            exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+            exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       · rw [if_neg ho] at h; exact absurd h (by simp)
 
 private theorem queueDequeueRefundK_preserves_rest {k k' : RecordKernelState} {id : Nat} {actor : CellId}
@@ -164,7 +172,9 @@ private theorem queueDequeueRefundK_preserves_rest {k k' : RecordKernelState} {i
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
       ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
-      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes := by
+      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt := by
   unfold queueDequeueRefundK at h
   cases hk₁ : queueDequeueK k id actor with
   | none => simp only [hk₁] at h; exact absurd h (by simp)
@@ -180,12 +190,13 @@ private theorem queueDequeueRefundK_preserves_rest {k k' : RecordKernelState} {i
             · simp only [Option.some.injEq, Prod.mk.injEq] at h
               obtain ⟨hk', _⟩ := h; subst hk'
               rcases settleEscrowRawAsset_preserves_rest k₁ depId actor r.asset r.amount with
-                ⟨hAcc, hCell, hCaps, hNul, hRev, hCom, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
+                ⟨hAcc, hCell, hCaps, hNul, hRev, hCom, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB, hDE, hDEA⟩
               rcases queueDequeueK_preserves_rest hk₁ with
-                ⟨hAcc₁, hCell₁, hCaps₁, hNul₁, hRev₁, hCom₁, hSw₁, hSC₁, hFac₁, hLif₁, hDC₁, hDel₁, hDgs₁, hSB₁⟩
+                ⟨hAcc₁, hCell₁, hCaps₁, hNul₁, hRev₁, hCom₁, hSw₁, hSC₁, hFac₁, hLif₁, hDC₁, hDel₁, hDgs₁, hSB₁, hDE₁, hDEA₁⟩
               exact ⟨hAcc.trans hAcc₁, hCell.trans hCell₁, hCaps.trans hCaps₁, hNul.trans hNul₁,
                 hRev.trans hRev₁, hCom.trans hCom₁, hSw.trans hSw₁, hSC.trans hSC₁, hFac.trans hFac₁,
-                hLif.trans hLif₁, hDC.trans hDC₁, hDel.trans hDel₁, hDgs.trans hDgs₁, hSB.trans hSB₁⟩
+                hLif.trans hLif₁, hDC.trans hDC₁, hDel.trans hDel₁, hDgs.trans hDgs₁, hSB.trans hSB₁,
+                hDE.trans hDE₁, hDEA.trans hDEA₁⟩
             · exact absurd h (by simp)
       · exact absurd h (by simp)
 
@@ -198,20 +209,23 @@ theorem queueTxOpStepA_preserves_rest {s s' : RecChainedState} {op : QueueTxOpA}
       ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
       ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
       ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
-      ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes := by
+      ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+      ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+      ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt := by
   cases op with
   | enqueue id m actor cell depId dAsset deposit =>
       simp only [queueTxOpStepA] at h
       rcases queueEnqueueChainA_iff_spec s id m actor cell depId dAsset deposit s' |>.mp h with
         ⟨k₁, _, _, hk₁, _, _, _, _, hker, _⟩
       rcases createEscrowRawAssetQueue_preserves_rest k₁ depId actor cell dAsset deposit id m with
-        ⟨hAcc₂, hCell₂, hCaps₂, hNul₂, hRev₂, hCom₂, hSw₂, hSC₂, hFac₂, hLif₂, hDC₂, hDel₂, hDgs₂, hSB₂⟩
+        ⟨hAcc₂, hCell₂, hCaps₂, hNul₂, hRev₂, hCom₂, hSw₂, hSC₂, hFac₂, hLif₂, hDC₂, hDel₂, hDgs₂, hSB₂, hDE₂, hDEA₂⟩
       rcases queueEnqueueK_preserves_rest hk₁ with
-        ⟨hAcc₁, hCell₁, hCaps₁, hNul₁, hRev₁, hCom₁, hSw₁, hSC₁, hFac₁, hLif₁, hDC₁, hDel₁, hDgs₁, hSB₁⟩
+        ⟨hAcc₁, hCell₁, hCaps₁, hNul₁, hRev₁, hCom₁, hSw₁, hSC₁, hFac₁, hLif₁, hDC₁, hDel₁, hDgs₁, hSB₁, hDE₁, hDEA₁⟩
       simpa [hker] using
         ⟨hAcc₂.trans hAcc₁, hCell₂.trans hCell₁, hCaps₂.trans hCaps₁, hNul₂.trans hNul₁,
           hRev₂.trans hRev₁, hCom₂.trans hCom₁, hSw₂.trans hSw₁, hSC₂.trans hSC₁, hFac₂.trans hFac₁,
-          hLif₂.trans hLif₁, hDC₂.trans hDC₁, hDel₂.trans hDel₁, hDgs₂.trans hDgs₁, hSB₂.trans hSB₁⟩
+          hLif₂.trans hLif₁, hDC₂.trans hDC₁, hDel₂.trans hDel₁, hDgs₂.trans hDgs₁, hSB₂.trans hSB₁,
+          hDE₂.trans hDE₁, hDEA₂.trans hDEA₁⟩
   | dequeue id actor cell depId =>
       simp only [queueTxOpStepA] at h
       rcases queueDequeueChainA_iff_spec s id actor cell depId s' |>.mp h with
@@ -227,11 +241,13 @@ theorem queueAtomicTxChainA_preserves_rest {s s' : RecChainedState} {ops : List 
       ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
       ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
       ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
-      ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes := by
+      ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+      ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+      ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt := by
   induction ops generalizing s with
   | nil =>
       simp only [queueAtomicTxChainA, Option.some.injEq] at h; subst h
-      exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+      exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   | cons op rest ih =>
       simp only [queueAtomicTxChainA] at h
       cases hop : queueTxOpStepA s op with
@@ -239,12 +255,13 @@ theorem queueAtomicTxChainA_preserves_rest {s s' : RecChainedState} {ops : List 
       | some s1 =>
           rw [hop] at h
           rcases queueTxOpStepA_preserves_rest hop with
-            ⟨hAcc1, hCell1, hCaps1, hNul1, hRev1, hCom1, hSw1, hSC1, hFac1, hLif1, hDC1, hDel1, hDgs1, hSB1⟩
+            ⟨hAcc1, hCell1, hCaps1, hNul1, hRev1, hCom1, hSw1, hSC1, hFac1, hLif1, hDC1, hDel1, hDgs1, hSB1, hDE1, hDEA1⟩
           rcases ih h with
-            ⟨hAcc2, hCell2, hCaps2, hNul2, hRev2, hCom2, hSw2, hSC2, hFac2, hLif2, hDC2, hDel2, hDgs2, hSB2⟩
+            ⟨hAcc2, hCell2, hCaps2, hNul2, hRev2, hCom2, hSw2, hSC2, hFac2, hLif2, hDC2, hDel2, hDgs2, hSB2, hDE2, hDEA2⟩
           exact ⟨hAcc2.trans hAcc1, hCell2.trans hCell1, hCaps2.trans hCaps1, hNul2.trans hNul1,
             hRev2.trans hRev1, hCom2.trans hCom1, hSw2.trans hSw1, hSC2.trans hSC1, hFac2.trans hFac1,
-            hLif2.trans hLif1, hDC2.trans hDC1, hDel2.trans hDel1, hDgs2.trans hDgs1, hSB2.trans hSB1⟩
+            hLif2.trans hLif1, hDC2.trans hDC1, hDel2.trans hDel1, hDgs2.trans hDgs1, hSB2.trans hSB1,
+            hDE2.trans hDE1, hDEA2.trans hDEA1⟩
 
 /-! ## §4 — non-vacuity (atomic rollback). -/
 

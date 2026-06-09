@@ -189,7 +189,9 @@ theorem stateCommit_binds_cells_and_rest
           ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
           ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
           ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-          ∧ k'.sealedBoxes = k.sealedBoxes) := by
+          ∧ k'.sealedBoxes = k.sealedBoxes
+          ∧ k'.delegationEpoch = k.delegationEpoch
+          ∧ k'.delegationEpochAt = k.delegationEpochAt) := by
   -- root split: cellDigest equal ∧ RH equal.
   obtain ⟨hcd, hRHeq⟩ := recStateCommit_binds CH RH cmb compress compressN hCmb k k' t hroot
   -- the 16 non-cell fields (needed FIRST: the accounts-frame makes the two cellDigest carriers match).
@@ -229,7 +231,9 @@ theorem setFieldCommit_binds_all
           ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
           ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
           ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-          ∧ k'.sealedBoxes = k.sealedBoxes)
+          ∧ k'.sealedBoxes = k.sealedBoxes
+          ∧ k'.delegationEpoch = k.delegationEpoch
+          ∧ k'.delegationEpochAt = k.delegationEpochAt)
       ∧ log = log' := by
   unfold recSetFieldCommit at hroot
   -- outer cmb split: cell-side equal ∧ (rest⊕log)-side equal.
@@ -280,7 +284,9 @@ theorem crossbind_rest_agree (hRest : RestHashIffFrame RH)
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes :=
+      ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt :=
   (hRest k k').mp hPI
 
 /-- **`crossbind_cells_agree` (PROVED).** If the circuit root's frame child and the executor root's
@@ -312,7 +318,9 @@ theorem crossbind_circuit_exec_same_state
           ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
           ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
           ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-          ∧ k'.sealedBoxes = k.sealedBoxes) :=
+          ∧ k'.sealedBoxes = k.sealedBoxes
+          ∧ k'.delegationEpoch = k.delegationEpoch
+          ∧ k'.delegationEpochAt = k.delegationEpochAt) :=
   ⟨crossbind_cells_agree CH compressN hCompressN hLeaf k k' S hFramePI,
    crossbind_rest_agree RH hRest k k' hRestPI⟩
 

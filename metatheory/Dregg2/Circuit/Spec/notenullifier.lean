@@ -93,11 +93,12 @@ theorem recKernel_ext {k k' : RecordKernelState}
     (h10 : k'.swiss = k.swiss) (h11 : k'.slotCaveats = k.slotCaveats)
     (h12 : k'.factories = k.factories) (h13 : k'.lifecycle = k.lifecycle)
     (h14 : k'.deathCert = k.deathCert) (h15 : k'.delegate = k.delegate)
-    (h16 : k'.delegations = k.delegations) (h17 : k'.sealedBoxes = k.sealedBoxes) :
+    (h16 : k'.delegations = k.delegations) (h17 : k'.sealedBoxes = k.sealedBoxes)
+    (h18 : k'.delegationEpoch = k.delegationEpoch) (h19 : k'.delegationEpochAt = k.delegationEpochAt) :
     k' = k := by
   cases k; cases k'
-  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
-  subst h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
+  subst h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
   rfl
 
 /-! ## §4 — `noteSpendChainA_correct` — the post-state helper validated DECLARATIVELY.
@@ -127,10 +128,12 @@ theorem noteSpendChainA_correct (st : RecChainedState) (nf : Nat) (actor : CellI
       ∧ st'.kernel.deathCert = st.kernel.deathCert
       ∧ st'.kernel.delegate = st.kernel.delegate
       ∧ st'.kernel.delegations = st.kernel.delegations
-      ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes := by
+      ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+      ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+      ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt := by
   refine ⟨{ kernel := { st.kernel with nullifiers := nf :: st.kernel.nullifiers },
             log := noteSpendReceipt actor :: st.log }, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
-            ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+            ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp only [noteSpendChainA, noteSpendNullifier, noteSpendReceipt, if_true,
       if_neg hfresh]
   all_goals rfl
@@ -167,6 +170,8 @@ def NoteSpendSpec (st : RecChainedState) (nf : Nat) (actor : CellId) (spendProof
   ∧ st'.kernel.delegate = st.kernel.delegate
   ∧ st'.kernel.delegations = st.kernel.delegations
   ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+  ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+  ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-! ## §6 — `execFullA_noteSpend_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions). -/
 
@@ -199,10 +204,10 @@ theorem execFullA_noteSpend_iff_spec (st : RecChainedState) (nf : Nat) (actor : 
         simp only [Option.some.injEq] at h
         subst h
         exact ⟨⟨hproof, hfresh⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-          rfl, rfl, rfl, rfl⟩
+          rfl, rfl, rfl, rfl, rfl, rfl⟩
       · rintro ⟨_, hnull, hlog, h1, h2, h3, h4, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-          h17⟩
-        -- rebuild `st'` from the nullifier post-image + log post-image + the 16 frame equalities.
+          h17, h18, h19⟩
+        -- rebuild `st'` from the nullifier post-image + log post-image + the 18 frame equalities.
         have hk : st'.kernel = { st.kernel with nullifiers := nf :: st.kernel.nullifiers } := by
           apply recKernel_ext
           · simpa using h1
@@ -222,6 +227,8 @@ theorem execFullA_noteSpend_iff_spec (st : RecChainedState) (nf : Nat) (actor : 
           · simpa using h15
           · simpa using h16
           · simpa using h17
+          · simpa using h18
+          · simpa using h19
         cases st' with
         | mk k' lg' =>
           simp only at hk hlog

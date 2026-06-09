@@ -177,6 +177,8 @@ def HandoffSpecFull (s : RecChainedState) (sw certHash : Nat) (introducer export
   ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
   ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
   ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-- **`execFullA_handoff_iff_specFull` — EXECUTOR ⟺ the STRENGTHENED full-state spec.** -/
 theorem execFullA_handoff_iff_specFull (s : RecChainedState) (sw certHash : Nat)
@@ -197,15 +199,16 @@ theorem execFullA_handoff_iff_specFull (s : RecChainedState) (sw certHash : Nat)
     subst hs'
     refine ⟨⟨hauth, hsome⟩, ⟨e, hf, ?_⟩, rfl, ?_⟩
     · rw [hkeq]
-    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+        rfl, rfl⟩
   · rintro ⟨hg, ⟨e, hf, hsw⟩, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13,
-      h14, h15, h16⟩
+      h14, h15, h16, h17, h18⟩
     refine ⟨hg, ⟨{ s.kernel with swiss := handoffSwissPost s.kernel.swiss sw e certHash }, ?_, ?_⟩⟩
     · exact (handoffSwissUpdate_eq_k s.kernel sw certHash _).mp (handoffSwissUpdate_some s.kernel.swiss sw certHash e hf)
     · obtain ⟨k', lg'⟩ := s'
-      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       have hke : k' = { s.kernel with swiss := handoffSwissPost s.kernel.swiss sw e certHash } :=
-        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 hsw h10 h11 h12 h13 h14 h15 h16
+        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 hsw h10 h11 h12 h13 h14 h15 h16 h17 h18
       subst hke hlog; rfl
 
 /-- **The strengthening is REAL (HandoffSpec ≡ HandoffSpecFull).** -/

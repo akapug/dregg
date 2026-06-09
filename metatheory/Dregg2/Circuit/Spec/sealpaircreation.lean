@@ -149,6 +149,8 @@ def CreateSealPairSpec (s : RecChainedState) (pid : Nat) (actor sealerHolder uns
   ∧ s'.kernel.delegate = s.kernel.delegate
   ∧ s'.kernel.delegations = s.kernel.delegations
   ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-- **`createSealPair_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The full executor
 `execFullA` commits a `createSealPairA pid actor sealerHolder unsealerHolder` into `s'` IFF `s'` is
@@ -168,13 +170,13 @@ theorem createSealPair_iff_spec (s : RecChainedState) (pid : Nat)
     · intro h
       simp only [Option.some.injEq] at h
       subst h
-      exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    · rintro ⟨_, hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+      exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨_, hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
       -- reconstruct `s'` from its (kernel field-by-field) + log spec.
       obtain ⟨k', log'⟩ := s'
-      obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       rfl
   · rw [if_neg hg]
     constructor
@@ -234,7 +236,9 @@ theorem createSealPair_spec_balance_neutral (s : RecChainedState) (pid : Nat)
     (h : execFullA s (.createSealPairA pid actor sealerHolder unsealerHolder) = some s') :
     s'.kernel.bal = s.kernel.bal
     ∧ s'.kernel.accounts = s.kernel.accounts
-    ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes := by
+    ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+    ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+    ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt := by
   have hspec := (createSealPair_iff_spec s pid actor sealerHolder unsealerHolder s').mp h
   exact ⟨hspec.2.2.2.2.2.2.2.2.2.1, hspec.2.2.2.1,
          hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2⟩

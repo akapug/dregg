@@ -575,6 +575,28 @@ structure RecordKernelState where
   The AEAD ciphertext is the §8 portal; the which-cap binding + c-list grant are REAL. Boxes hold
   capabilities, NOT balance — balance-NEUTRAL. DEFAULTS EMPTY. -/
   sealedBoxes : List SealedBoxRecord := []
+  /-- **The PER-CELL DELEGATION EPOCH** (Wave-9 kernel-widen; dregg1's `CellState.delegation_epoch :
+  u64`, `cell/src/state.rs:110`). The monotone revocation counter a cell carries AS A PARENT: dregg1's
+  `apply_revoke_delegation` (`apply.rs:3067-3069`) bumps the PARENT cell's (`action_target`'s) epoch by
+  `+1` via `bump_delegation_epoch` (`state.rs:630`), which is folded into the canonical state commitment
+  (`commitment.rs:263` hashes `state.delegation_epoch`). EVERY child snapshot taken under an OLDER parent
+  epoch (`delegationEpochAt child < delegationEpoch parent`) is thereby rendered STALE — this is the
+  freshness mechanism a light client checks so a revoked delegation cannot be replayed (the "pale ghost"
+  foil). `spawnWithDelegation`/`refreshDelegation` STAMP the child's snapshot with the parent's epoch AT
+  SNAPSHOT TIME (`apply.rs:2963`/`:3024`, `delegation_epoch = parent.state.delegation_epoch()`); a revoke
+  bumps the parent's, so the stamp falls behind. Epochs touch NO balance — balance-NEUTRAL. DEFAULTS `0`
+  (the additive extension, exactly as `escrows`/`nullifiers`/`commitments`/`delegate`/`delegations` were
+  added — every existing construction/proof that ignores it is unaffected by the `0` default). -/
+  delegationEpoch   : CellId → Nat := fun _ => 0
+  /-- **The PER-CHILD SNAPSHOT-EPOCH STAMP** (Wave-9 kernel-widen; dregg1's `DelegatedRef.delegation_epoch
+  : u64`, `cell/src/delegation.rs:65`). When a child takes/refreshes its delegation snapshot, dregg1
+  records the PARENT's CURRENT `delegation_epoch` into the child's `DelegatedRef` (`apply.rs:2977`/`:3035`,
+  signed over by the parent, `delegation.rs:53`). `delegationEpochAt child` is that recorded stamp. The
+  child's snapshot is FRESH iff its stamp is `≥` the parent's CURRENT `delegationEpoch` — a parent revoke
+  (which bumps the parent epoch) leaves the stamp behind, marking the snapshot STALE (`delegationStale`).
+  Refresh re-stamps it to the parent's current epoch. Epochs touch NO balance — balance-NEUTRAL. DEFAULTS
+  `0` (the additive extension). -/
+  delegationEpochAt : CellId → Nat := fun _ => 0
 
 /-- **The `balance`-domain measure** over the record cell-state: the total `balance` field across
 the live accounts. This is the conserved quantity — a domain measure over the named `balance`
