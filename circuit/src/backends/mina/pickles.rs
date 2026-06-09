@@ -247,6 +247,37 @@ pub struct PicklesStateTransition {
     pub post_state_hash: [u8; 32],
 }
 
+/// Fixed circuit length (number of gate rows, before Kimchi's own zk-row / domain
+/// padding) for every recursive IVC step, base case and recursive case alike.
+///
+/// ## Why this must be constant across the chain
+///
+/// The IPA accumulator carried between steps is a `RecursionChallenge { chals, comm }`.
+/// The number of challenges is `chals.len() = ceil_log2(srs.g.len())`, and the SRS is
+/// sized to the *circuit's evaluation domain* (`SRS::create(domain.d1.size())`). The
+/// accumulator's challenge polynomial `b(X)` therefore has degree `2^chals.len() - 1 =
+/// domain.d1.size() - 1`.
+///
+/// When step `N+1` verifies, `RecursionChallenge::evals` (kimchi) recombines `b(X)` in
+/// chunks of `verifier_index.max_poly_size`, which equals step `N+1`'s `srs.g.len()` =
+/// step `N+1`'s domain size. If step `N`'s domain differs from step `N+1`'s domain, then
+/// `b_len (= step N domain) != max_poly_size (= step N+1 domain)`, so `evals` returns a
+/// *chunked* (2-entry) evaluation while the carried `comm` has only 1 chunk — the batched
+/// polynomial opening then pairs mismatched chunk counts and verification fails.
+///
+/// The base step naturally compiles to 17 gates (domain 32) and the recursive step to 30
+/// gates (domain 64); the size jump across the very first `step1 -> step2` boundary broke
+/// 2-step verification (and only 2-step: steps >= 2 are all domain 64, so the existing
+/// 3-step test never exercised the bug). Pinning every step to a single gate count makes
+/// every step share one domain (and thus one `max_poly_size`), so the carried accumulator
+/// is always verifiable at the next step. This also mirrors real Pickles, where the
+/// step/wrap circuits have a fixed shape independent of position in the chain.
+///
+/// The value is chosen to (a) exceed the largest natural step (the 30-gate recursive case)
+/// and (b) keep `next_pow2(PICKLES_STEP_ROWS + zk_rows)` at a single domain (64) for every
+/// step. With `zk_rows = 3` and `45 + 3 = 48 <= 64`, both cases land on domain 64.
+pub(crate) const PICKLES_STEP_ROWS: usize = 45;
+
 /// Build the Kimchi circuit for a single recursive IVC step.
 ///
 /// The circuit proves:
@@ -268,6 +299,9 @@ pub struct PicklesStateTransition {
 /// handled by the Kimchi verifier at batch-verify time, not in-circuit.
 /// For the standalone in-circuit IPA verifier (which would require ~2000
 /// rows of EndoMul + CompleteAdd gates), see `standalone.rs`.
+///
+/// Every step is padded to [`PICKLES_STEP_ROWS`] gate rows so the whole chain shares one
+/// evaluation domain — see that constant for why this is required for soundness.
 pub(crate) fn build_recursive_step_circuit(has_previous: bool) -> (Vec<CircuitGate<Fp>>, usize) {
     let mut gates = Vec::new();
 
@@ -342,6 +376,25 @@ pub(crate) fn build_recursive_step_circuit(has_previous: bool) -> (Vec<CircuitGa
         vec![Fp::zero(); COLUMNS],
     ));
 
+    // Pad to a fixed length so every step (base and recursive) shares one evaluation
+    // domain — and hence one `max_poly_size` — keeping the carried IPA accumulator
+    // verifiable at the next step. See `PICKLES_STEP_ROWS` for the full rationale.
+    // The natural sizes (base = 17, recursive = 30) both sit below PICKLES_STEP_ROWS.
+    debug_assert!(
+        gates.len() <= PICKLES_STEP_ROWS,
+        "recursive step circuit ({} gates) exceeds PICKLES_STEP_ROWS ({})",
+        gates.len(),
+        PICKLES_STEP_ROWS
+    );
+    while gates.len() < PICKLES_STEP_ROWS {
+        let row = gates.len();
+        gates.push(CircuitGate::new(
+            GateType::Generic,
+            Wire::for_row(row),
+            vec![Fp::zero(); COLUMNS],
+        ));
+    }
+
     (gates, public_count)
 }
 
@@ -369,7 +422,20 @@ pub(crate) fn generate_recursive_step_witness(
     } else {
         0
     };
-    let total_rows = public_count + poseidon_gadget_rows + recursive_extra + 1;
+    // The active rows (public inputs + poseidon gadget(s) + final check). The circuit is
+    // then padded to PICKLES_STEP_ROWS with trivially-satisfied zero Generic gates so that
+    // every step shares one evaluation domain (see `build_recursive_step_circuit`). The
+    // witness must have exactly PICKLES_STEP_ROWS rows to match the padded circuit; the
+    // padding rows carry zeros.
+    let active_rows = public_count + poseidon_gadget_rows + recursive_extra + 1;
+    let final_row = active_rows - 1;
+    let total_rows = PICKLES_STEP_ROWS;
+    debug_assert!(
+        active_rows <= total_rows,
+        "active rows ({}) exceed PICKLES_STEP_ROWS ({})",
+        active_rows,
+        total_rows
+    );
 
     let mut witness: [Vec<Fp>; COLUMNS] = std::array::from_fn(|_| vec![Fp::zero(); total_rows]);
 
@@ -423,7 +489,6 @@ pub(crate) fn generate_recursive_step_witness(
     }
 
     // --- Final check row ---
-    let final_row = total_rows - 1;
     witness[0][final_row] = new_accumulated;
 
     witness
