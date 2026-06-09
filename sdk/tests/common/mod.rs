@@ -43,6 +43,7 @@ pub fn mock_receipt(agent: CellId, pre_state: [u8; 32], post_state: [u8; 32]) ->
         finality: Default::default(),
         was_encrypted: false,
         was_burn: false,
+        consumed_capabilities: vec![],
     }
 }
 

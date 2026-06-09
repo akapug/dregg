@@ -412,7 +412,12 @@ fn hash_program_into(hasher: &mut blake3::Hasher, program: &crate::program::Cell
 /// construction of the 7-field leaf the circuit hashes; because both sides go
 /// through `dregg_circuit::cap_root`, the leaf — and therefore the root — is
 /// byte-identical wherever it is computed.
-fn cap_ref_to_leaf(cap: &crate::capability::CapabilityRef) -> dregg_circuit::cap_root::CapLeaf {
+///
+/// Public (cap Phase C): the executor's authorization site builds the SAME
+/// leaf for the capability it CONSUMES, so the membership witness threaded
+/// into `TurnReceipt.consumed_capabilities` opens against the canonical
+/// pre-state `capability_root` with no parallel leaf encoding.
+pub fn cap_ref_to_leaf(cap: &crate::capability::CapabilityRef) -> dregg_circuit::cap_root::CapLeaf {
     use dregg_circuit::cap_root;
     let (mask_lo, mask_hi) = cap_root::split_effect_mask(
         // `None` ⇒ unrestricted ⇒ EFFECT_ALL (so the mask limbs are the full

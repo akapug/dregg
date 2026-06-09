@@ -95,6 +95,10 @@ pub(super) fn convert_turn_effects_to_vm(
                     let cap_hash = blake3::hash(&cap.slot.to_le_bytes());
                     vm_effects.push(VmEffect::GrantCapability {
                         cap_entry: hash_to_8(cap_hash.as_bytes()),
+                        // Legacy direction-0 recipient-install row (this arm
+                        // matches `to == cell_id`); the Phase-B2 granter-side
+                        // delegation row (`Some`) is built at the prover site.
+                        phase_b: None,
                     });
                 }
                 Effect::NoteSpend {

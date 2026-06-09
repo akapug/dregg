@@ -142,6 +142,7 @@ fn receipt_for(agent: CellId, home_fed: [u8; 32]) -> TurnReceipt {
         finality: Default::default(),
         was_encrypted: false,
         was_burn: false,
+        consumed_capabilities: vec![],
     }
 }
 

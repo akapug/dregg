@@ -597,6 +597,15 @@ pub struct TurnExecutor {
     /// Absent: the executor uses the existing program-registry path
     /// (legacy DSL-authored cells).
     pub custom_effect_registry: Option<dregg_cell::CustomEffectRegistry>,
+    /// Per-turn buffer of CONSUMED-capability witnesses captured at the
+    /// authorization sites (cap Phase C — `authorize.rs`
+    /// `record_consumed_cap_witness`). Cleared at the start of each turn
+    /// (`execute_without_shadow` / `execute_mixed_atomic`) and drained into
+    /// `TurnReceipt::consumed_capabilities` at finalize
+    /// (`take_consumed_cap_witnesses`). `Mutex` for the same interior-
+    /// mutability reason as the other executor side-tables (`&self`
+    /// execution path).
+    pub consumed_cap_witnesses: Mutex<Vec<crate::turn::ConsumedCapWitness>>,
 }
 
 impl TurnExecutor {
@@ -635,6 +644,7 @@ impl TurnExecutor {
             turn_decryption_keypair: None,
             witnessed_registry: Some(dregg_cell::WitnessedPredicateRegistry::default_builtins()),
             custom_effect_registry: None,
+            consumed_cap_witnesses: Mutex::new(Vec::new()),
         }
     }
 
@@ -677,6 +687,7 @@ impl TurnExecutor {
             turn_decryption_keypair: None,
             witnessed_registry: Some(dregg_cell::WitnessedPredicateRegistry::default_builtins()),
             custom_effect_registry: None,
+            consumed_cap_witnesses: Mutex::new(Vec::new()),
         }
     }
 
@@ -715,6 +726,7 @@ impl TurnExecutor {
             turn_decryption_keypair: None,
             witnessed_registry: Some(dregg_cell::WitnessedPredicateRegistry::default_builtins()),
             custom_effect_registry: None,
+            consumed_cap_witnesses: Mutex::new(Vec::new()),
         }
     }
 

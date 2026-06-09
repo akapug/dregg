@@ -1791,8 +1791,10 @@ mod producer_coverage_tests {
             assert!(seen.insert(*name), "duplicate effect in coverage list: {name}");
             assert!(producer_covers_kind(name), "producer_covers_kind disagrees for {name}");
         }
-        // Twenty-one effect kinds are projected to the wire today (mirrors effect_is_mappable).
-        assert_eq!(covered.len(), 21, "producer coverage count changed — update the report and confirm effect_is_mappable agrees");
+        // Twenty-five effect kinds are projected to the wire today (mirrors effect_is_mappable:
+        // the §SIDE-TABLE holding-store batch added CreateEscrow/ReleaseEscrow/RefundEscrow/
+        // CreateObligation — all four have effect_is_mappable arms).
+        assert_eq!(covered.len(), 25, "producer coverage count changed — update the report and confirm effect_is_mappable agrees");
     }
 
     /// Every covered effect must appear in the full enumeration, and the

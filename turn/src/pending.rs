@@ -468,6 +468,7 @@ mod tests {
             finality: Default::default(),
             was_encrypted: false,
             was_burn: false,
+            consumed_capabilities: vec![],
         }
     }
 
