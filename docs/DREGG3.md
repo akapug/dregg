@@ -56,7 +56,7 @@ and the algebra for all four already exists in-tree, complete and dormant:
 | Substance | Discipline | The law | The algebra (built, in-tree) |
 |---|---|---|---|
 | **Value** | linear — moves, never copies or vanishes | Σδ = 0, exact | ℕ-sum camera; `Excl` (`excl_no_dup` proven) — `Resource.lean` |
-| **Authority** | affine — weakens (attenuate/drop), never strengthens | granted ⊑ held | `Auth` camera; `ConfinesAuthority := Fpu` (*"one law"* — `Resource.lean:319`) |
+| **Authority** | **non-forgeable production** — GROWS (introduction, sealer/unsealer amplification, mint/powerbox, endowment) but only by *authorized, receipt-disclosed* construction from held connectivity; narrows freely (attenuation governs ONE edge, not the system) | Miller: *only connectivity begets connectivity* (`CONSTRUCTIVE-KNOWLEDGE.md §3`; `Metatheory.no_forge_step`) | the `Auth` camera is the FAITHFUL model — ● may move the total under authorization, ◯ fragments cannot self-amplify; `ConfinesAuthority := Fpu` (`Resource.lean:319`). ⚠ v1 of this row said "affine/weakening-only" — that is the monotone-descent error §3 explicitly forbids (it forbids the patterns that give capabilities their power) |
 | **Evidence** | monotone — once known, never unknown | grow-only | the nullifier/commitment/epoch ledgers (persistent fragment) |
 | **State** | guarded-mutable — changes only under Pred, only by its owner | the frame | cells + programs; `StepCamera.lean` for the step-indexed tier |
 
@@ -66,9 +66,28 @@ monotonicity stop being three gate-families and become one theorem schema.
 *(This is the skeleton's load-bearing claim. It is NOT yet proven — it is
 probe **R1** in §6, and the construction order starts there.)*
 
+**The doctrine already has a trunk: `Metatheory/*` (the candidate-independent
+logic of constructive knowledge — `CONSTRUCTIVE-KNOWLEDGE.md`).** The skeleton
+above is not a new foundation; it is the *dynamics* layer of that logic, and
+must be grown INTO it, not beside it. What the metatheory adds that this
+section's v1 missed: (a) the **verify/find asymmetry** as the organizing
+principle (checking cheap+trusted, search undecidable+untrusted — `Knower` =
+`Verifiable` + opaque `Searchable`); (b) authority dynamics are
+**production, not descent** (§3 — see the corrected Authority row); (c) a
+step is judged by THREE orthogonal logics — linear (conservation), modal
+(finality tiers as common-knowledge ascent), and the **I-confluence lattice**
+(which inferences commute — the metatheory of the `merge` reading and of
+sharding, absent from v1); (d) soundness is the ▶-guarded *life* of the
+knower (`knowledge_does_not_drift`) — so connecting StepCamera's
+step-indexing to `Boundary.Later` (currently the identity placeholder) is
+discharging the metatheory's own §2, not a nicety; (e) Φ, the named-lossy
+vat-crossing functor: *permission survives, authority does not* — the loss is
+load-bearing (forwarded caps become revocable BY CONSTRUCTION).
+
 The structural rules ARE the verb set: `move` is exchange for the linear
-substance; `grant` is cut+weakening for the affine one; `shield`/nullifiers
-are evidence-monotonicity; `write` is heap update under the frame. A turn is
+substance; `grant` is authorized production for the Auth-governed one;
+`shield`/nullifiers are evidence-monotonicity; `write` is heap update under
+the frame. A turn is
 a proof term; the circuit is the logic's proof checker; a receipt is a
 judgment; the chain is one growing proof object. The frame rule, proven once,
 is simultaneously: sovereignty (your cell, untouchable), joint turns
