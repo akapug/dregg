@@ -38,6 +38,7 @@ fn base_receipt() -> TurnReceipt {
         finality: Finality::Final,
         was_encrypted: false,
         was_burn: false,
+        consumed_capabilities: vec![],
     }
 }
 

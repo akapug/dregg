@@ -215,6 +215,8 @@ fn wrong_effects_hash_rejected() {
         3_000,
         &[Effect::GrantCapability {
             cap_entry: [BabyBear::new(0xCAFE); 8],
+            // Legacy direction-0 recipient-install row (cap Phase B2 added the witness field).
+            phase_b: None,
         }],
     );
     pi[pi::EFFECTS_HASH_LO] ^= 0xFFFF_FFFF;
@@ -331,6 +333,8 @@ fn multi_effect_pi_tamper_battery() {
             },
             Effect::GrantCapability {
                 cap_entry: [BabyBear::new(0xABCD); 8],
+                // Legacy direction-0 recipient-install row (cap Phase B2 added the witness field).
+                phase_b: None,
             },
         ],
     );

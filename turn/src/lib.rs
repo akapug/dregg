@@ -186,7 +186,8 @@ pub use queue_programs::{
 };
 pub use routing::{IntroductionExport, RoutingDirective};
 pub use turn::{
-    CustomProgramProof, EmittedEvent, Finality, SovereignCellWitness, Turn, TurnReceipt, TurnResult,
+    ConsumedCapAuthPath, ConsumedCapWitness, CustomProgramProof, EmittedEvent, Finality,
+    SovereignCellWitness, Turn, TurnReceipt, TurnResult,
 };
 pub use verify::{
     VerifyError, sign_receipt, verify_receipt_chain, verify_receipt_chain_head,

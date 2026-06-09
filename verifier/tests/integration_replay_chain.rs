@@ -47,6 +47,7 @@ fn zero_receipt() -> dregg_turn::TurnReceipt {
         finality: Default::default(),
         was_encrypted: false,
         was_burn: false,
+        consumed_capabilities: vec![],
     }
 }
 

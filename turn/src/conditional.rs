@@ -796,6 +796,7 @@ mod tests {
             finality: Default::default(),
             was_encrypted: false,
             was_burn: false,
+            consumed_capabilities: vec![],
         };
         // Sign the receipt hash with the executor key.
         let receipt_hash = receipt.receipt_hash();
@@ -842,6 +843,7 @@ mod tests {
             finality: Default::default(),
             was_encrypted: false,
             was_burn: false,
+            consumed_capabilities: vec![],
         };
         let proof = ConditionProof::Receipt(receipt);
         let mut n = nullifiers();
@@ -884,6 +886,7 @@ mod tests {
             finality: Default::default(),
             was_encrypted: false,
             was_burn: false,
+            consumed_capabilities: vec![],
         };
         let proof = ConditionProof::Receipt(receipt);
         let mut n = nullifiers();

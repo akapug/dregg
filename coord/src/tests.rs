@@ -1068,6 +1068,7 @@ mod participant_tests {
                 finality: Default::default(),
                 was_encrypted: false,
                 was_burn: false,
+                consumed_capabilities: vec![],
             },
             signatures: vec![(node_id(1), sig_1), (node_id(2), sig_2)],
         };
@@ -1120,6 +1121,7 @@ mod participant_tests {
                 finality: Default::default(),
                 was_encrypted: false,
                 was_burn: false,
+                consumed_capabilities: vec![],
             },
             signatures: vec![(node_id(1), sig_1), (node_id(2), sig_2)],
         };

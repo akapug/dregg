@@ -290,6 +290,7 @@ fn bilateral_demo_receipt(agent: CellId) -> TurnReceipt {
         finality: Default::default(),
         was_encrypted: false,
         was_burn: false,
+        consumed_capabilities: vec![],
     }
 }
 

@@ -884,6 +884,24 @@ impl TurnExecutor {
         }
     }
 
+    /// Drain the CONSUMED-capability witnesses captured at the authorization
+    /// sites during THIS turn (cap Phase C). The CONSUMED sibling of
+    /// [`Self::collect_derivation_records`], which records capabilities the
+    /// turn *creates* (Grant/Introduce/Spawn/Unseal); this drains the
+    /// witnesses for the capabilities the turn *consumed* to be authorized
+    /// (breadstuff / bearer-delegation — see
+    /// `authorize.rs::record_consumed_cap_witness`). Self-sovereign turns
+    /// (owner-signature authority) consume no capability and yield an empty
+    /// vec.
+    pub(super) fn take_consumed_cap_witnesses(&self) -> Vec<crate::turn::ConsumedCapWitness> {
+        std::mem::take(
+            &mut *self
+                .consumed_cap_witnesses
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        )
+    }
+
     /// Collect all capability derivation records from the call forest.
     ///
     /// Scans the forest for effects that create derivation edges:

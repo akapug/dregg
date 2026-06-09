@@ -202,6 +202,8 @@ fn test_verify_multi_effect_turn_accepted() {
             },
             Effect::GrantCapability {
                 cap_entry: [BabyBear::new(0xCAFE); 8],
+                // Legacy direction-0 recipient-install row (cap Phase B2 added the witness field).
+                phase_b: None,
             },
         ],
     );

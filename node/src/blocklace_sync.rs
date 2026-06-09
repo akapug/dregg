@@ -2544,6 +2544,7 @@ mod tests {
             finality: dregg_turn::Finality::Final,
             was_encrypted: false,
             was_burn: false,
+            consumed_capabilities: vec![],
         }
     }
 

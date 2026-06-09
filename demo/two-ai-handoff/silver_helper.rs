@@ -699,6 +699,7 @@ fn cmd_make_captp_delivered_chain(state_dir: &PathBuf) {
         finality: Default::default(),
         was_encrypted: false,
         was_burn: false,
+        consumed_capabilities: vec![],
     };
 
     let wr = WitnessedReceipt::from_components_with_compression(
@@ -1256,6 +1257,7 @@ fn cmd_make_introduce(
         // carries no Effect::Burn; the lifecycle flag must be false so
         // receipt_hash matches the canonical no-burn binding.
         was_burn: false,
+        consumed_capabilities: vec![],
     };
 
     let intro_wr =
@@ -1442,6 +1444,7 @@ fn cmd_make_recursive_witness(state_dir: &PathBuf, turn_nonce: u64) {
         was_encrypted: false,
         // Recursive-witness fabrication turn carries no Burn.
         was_burn: false,
+        consumed_capabilities: vec![],
     };
 
     // Step 1: best-effort compression. Should attach a recursive proof.
@@ -1598,6 +1601,7 @@ fn cmd_make_bilateral_bundle(
         was_encrypted: false,
         // Bilateral-pair demo turn has only a Transfer; no Burn.
         was_burn: false,
+        consumed_capabilities: vec![],
     };
 
     let alice_wr = fabricate_witnessed_receipt(&turn, &alice_cell, dummy_receipt(alice_cell));

@@ -235,6 +235,14 @@ impl TurnExecutor {
     }
 
     fn execute_without_shadow(&self, turn: &Turn, ledger: &mut Ledger) -> TurnResult {
+        // cap Phase C: a fresh turn starts with an empty consumed-capability
+        // buffer (a prior REJECTED turn may have captured witnesses at its
+        // auth sites before failing; they must not leak into this receipt).
+        self.consumed_cap_witnesses
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+
         // Phase 0: basic validation.
         if turn.call_forest.is_empty() {
             return TurnResult::Rejected {
@@ -510,6 +518,9 @@ impl TurnExecutor {
                         // entered via an EncryptedTurn wrapper.
                         was_encrypted: false,
                         was_burn: Self::forest_carries_burn(&turn.call_forest),
+                        // cap Phase C: drain any consumed-capability witnesses
+                        // captured before this proof-carrying early-commit.
+                        consumed_capabilities: self.take_consumed_cap_witnesses(),
                     };
                     // R-4: sign the receipt over its canonical hash if the
                     // executor has been configured with a signing key.
@@ -1103,6 +1114,10 @@ impl TurnExecutor {
             // executor cannot strip the non-conservation disclosure
             // (Silver-Vision lifecycle plan).
             was_burn: Self::forest_carries_burn(&turn.call_forest),
+            // cap Phase C: the capabilities CONSUMED to authorize this turn,
+            // witnessed against the pre-state capability_root at the auth
+            // sites. Empty for self-sovereign turns.
+            consumed_capabilities: self.take_consumed_cap_witnesses(),
         };
         // R-4: sign the receipt over its canonical hash if the executor has
         // been configured with a signing key (`with_executor_signing_key`).

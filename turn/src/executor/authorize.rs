@@ -1010,6 +1010,86 @@ impl TurnExecutor {
         }
     }
 
+    /// Capture the CONSUMED-capability witness at the authorization site
+    /// (cap Phase C — the executor half of production-authority binding).
+    ///
+    /// Called only AFTER the authorization check for `cap` fully passed.
+    /// Builds the canonical sorted-Poseidon2 capability tree
+    /// ([`dregg_circuit::cap_root`]) over the HOLDER's c-list as it is in
+    /// scope at auth time (authorization runs before the action's effects
+    /// apply, so this is the pre-state c-list for this action) and records
+    /// the full 7-field leaf preimage + membership path against that root.
+    /// The buffer is drained into `TurnReceipt::consumed_capabilities` at
+    /// finalize (`take_consumed_cap_witnesses`).
+    ///
+    /// Recording is fail-open by design: authorization already succeeded, so
+    /// a missing witness degrades Phase-D *provability* (loudly), never
+    /// authorization soundness. With `cap` taken from `holder_caps` by the
+    /// caller, the leaf is present in the tree by construction.
+    pub(super) fn record_consumed_cap_witness(
+        &self,
+        holder: CellId,
+        holder_caps: &dregg_cell::CapabilitySet,
+        cap: &dregg_cell::CapabilityRef,
+        path: &[usize],
+        auth_path: crate::turn::ConsumedCapAuthPath,
+    ) {
+        use dregg_circuit::cap_root::{CAP_TREE_DEPTH, CanonicalCapTree};
+
+        let leaf = dregg_cell::cap_ref_to_leaf(cap);
+        let mut buf = self
+            .consumed_cap_witnesses
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Dedup: one action's authorization may be checked once per required
+        // permission (`determine_required_permissions` loop), each pass
+        // resolving the SAME capability. Record it once per (holder, slot,
+        // action, surface).
+        if buf.iter().any(|w| {
+            w.holder == holder
+                && w.slot == cap.slot
+                && w.action_path == path
+                && w.auth_path == auth_path
+        }) {
+            return;
+        }
+
+        let leaves: Vec<_> = holder_caps.iter().map(dregg_cell::cap_ref_to_leaf).collect();
+        let tree = CanonicalCapTree::new(leaves, CAP_TREE_DEPTH);
+        let Some(pos) = tree.position_of(leaf.slot_hash) else {
+            tracing::warn!(
+                holder = %holder,
+                slot = cap.slot,
+                "consumed-cap witness: authorized leaf not found in holder's canonical tree"
+            );
+            return;
+        };
+        let Some((siblings, directions)) = tree.prove_membership(pos) else {
+            tracing::warn!(
+                holder = %holder,
+                slot = cap.slot,
+                "consumed-cap witness: membership path unavailable"
+            );
+            return;
+        };
+        buf.push(crate::turn::ConsumedCapWitness {
+            holder,
+            slot: cap.slot,
+            action_path: path.to_vec(),
+            auth_path,
+            leaf_slot_hash: leaf.slot_hash.as_u32(),
+            leaf_target: leaf.target.as_u32(),
+            leaf_auth_tag: leaf.auth_tag.as_u32(),
+            leaf_mask_lo: leaf.mask_lo.as_u32(),
+            leaf_mask_hi: leaf.mask_hi.as_u32(),
+            leaf_expiry: leaf.expiry.as_u32(),
+            leaf_breadstuff: leaf.breadstuff.as_u32(),
+            siblings: siblings.into_iter().map(|s| s.as_u32()).collect(),
+            directions,
+            cap_root: tree.root().as_u32(),
+        });
+    }
+
     /// Check breadstuff (capability token) authorization.
     ///
     /// The breadstuff token must be held in the ACTOR's (parent cell's) capability
@@ -1114,6 +1194,16 @@ impl TurnExecutor {
                 }
             }
         }
+
+        // Authorization passed — record the CONSUMED-capability witness
+        // against the actor's pre-state c-list (cap Phase C).
+        self.record_consumed_cap_witness(
+            *actor_cell_id,
+            &actor_cell.capabilities,
+            cap,
+            path,
+            crate::turn::ConsumedCapAuthPath::Breadstuff,
+        );
 
         Ok(())
     }
@@ -1266,6 +1356,19 @@ impl TurnExecutor {
                             // OR delegator_cap.allowed_effects.
                         }
                     }
+
+                    // Authorization passed — the DELEGATOR's c-list capability
+                    // is the consumed authority (the bearer proof derives from
+                    // it; non-amplification was just checked against it).
+                    // Record its witness against the delegator's pre-state
+                    // c-list (cap Phase C).
+                    self.record_consumed_cap_witness(
+                        delegator_cell.id(),
+                        &delegator_cell.capabilities,
+                        cap,
+                        path,
+                        crate::turn::ConsumedCapAuthPath::BearerSignedDelegation,
+                    );
                 }
                 Ok(())
             }

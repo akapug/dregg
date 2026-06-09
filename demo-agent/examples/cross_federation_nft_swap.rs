@@ -381,6 +381,7 @@ fn main() {
         finality: Default::default(),
         was_encrypted: false,
         was_burn: false,
+        consumed_capabilities: vec![],
     };
 
     // Use resolve_condition to demonstrate the timeout logic
@@ -444,6 +445,7 @@ fn main() {
         finality: Default::default(),
         was_encrypted: false,
         was_burn: false,
+        consumed_capabilities: vec![],
     };
 
     // Fresh conditional for this test

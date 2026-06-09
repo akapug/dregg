@@ -344,6 +344,7 @@ impl TurnExecutor {
         vk_hash: Option<[u8; 32]>,
         balance_delta: i64,
         was_burn: bool,
+        consumed_capabilities: Vec<crate::turn::ConsumedCapWitness>,
     ) -> TurnReceipt {
         let prev = self
             .last_receipt_hash
@@ -382,6 +383,7 @@ impl TurnExecutor {
             // wrapper will flip this bit before re-signing.
             was_encrypted: false,
             was_burn,
+            consumed_capabilities,
         };
         receipt.executor_signature = self.maybe_sign_receipt(&receipt);
         self.record_receipt_hash(cell_id, receipt.receipt_hash());
@@ -661,6 +663,9 @@ impl TurnExecutor {
                 // (Sovereign cells may implement burn-semantics inside their
                 // STARK; that disclosure rides in the proof's PI, not here.)
                 false,
+                // Sovereign entries authorize via STARK proof, not via a
+                // hosted-side capability — no consumed-cap witness.
+                vec![],
             );
             receipts.push(receipt);
         }
@@ -694,6 +699,13 @@ impl TurnExecutor {
         if mixed_turn.sovereign_entries.is_empty() && mixed_turn.hosted_actions.is_empty() {
             return Err(AtomicTurnError::EmptyProofs);
         }
+
+        // cap Phase C: fresh consumed-capability buffer for this turn (the
+        // hosted side runs `verify_authorization`, which captures witnesses).
+        self.consumed_cap_witnesses
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
 
         let agent_cell = ledger
             .get(&mixed_turn.agent)
@@ -1086,6 +1098,11 @@ impl TurnExecutor {
         // Emit one TurnReceipt per cell touched: sovereign entries first
         // (in declared order), then hosted actions (in declared order).
         let turn_hash = Self::mixed_atomic_turn_hash(mixed_turn);
+        // cap Phase C: drain the consumed-cap witnesses captured by the
+        // hosted-side `verify_authorization` calls above; each hosted action
+        // ran with `path = vec![idx]`, so `action_path[0]` attributes a
+        // witness to its hosted receipt.
+        let consumed = self.take_consumed_cap_witnesses();
         let mut receipts = Vec::with_capacity(new_commitments.len() + hosted_receipt_inputs.len());
         for (idx, (cell_id, new_commitment)) in new_commitments.iter().enumerate() {
             let (old_commitment, vk_hash) = sovereign_receipt_inputs[idx];
@@ -1099,6 +1116,9 @@ impl TurnExecutor {
                 // Sovereign-side Burn rides in the cell's STARK proof, not
                 // visible to the executor as a runtime Effect::Burn.
                 false,
+                // Sovereign entries authorize via STARK proof — no consumed
+                // hosted-side capability.
+                vec![],
             );
             receipts.push(receipt);
         }
@@ -1113,6 +1133,11 @@ impl TurnExecutor {
                 *vk_hash,
                 hosted_deltas[idx],
                 *was_burn,
+                consumed
+                    .iter()
+                    .filter(|w| w.action_path.first() == Some(&idx))
+                    .cloned()
+                    .collect(),
             );
             receipts.push(receipt);
         }

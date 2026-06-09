@@ -597,6 +597,168 @@ impl Default for Finality {
     }
 }
 
+/// Which authorization surface CONSUMED the capability a
+/// [`ConsumedCapWitness`] records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConsumedCapAuthPath {
+    /// `Authorization::Breadstuff(token)`: the ACTOR presented a breadstuff
+    /// token matching a capability in its own c-list (the consumed authority
+    /// is the actor's capability).
+    Breadstuff,
+    /// `Authorization::Bearer` with `DelegationProofData::SignedDelegation`:
+    /// the DELEGATOR's c-list capability is the consumed authority (the
+    /// bearer proof derives from it; non-amplification was checked against
+    /// it).
+    BearerSignedDelegation,
+}
+
+/// The capability CONSUMED to authorize an action, witnessed against the
+/// holder's PRE-state `capability_root` (cap Phase C).
+///
+/// `collect_derivation_records` records capabilities a turn *creates*
+/// (Grant/Introduce/Spawn/Unseal); this is the missing other half — the
+/// capability the turn *consumed* to be authorized at all. Without it the
+/// authorization leg of a full-turn proof cannot be reconstructed post-hoc
+/// (the prodadmis blocker documented at `node/src/turn_proving.rs`), so
+/// production AUTHORITY binding (Phase D) is unbuildable.
+///
+/// The witness carries the FULL 7-field leaf preimage of the canonical
+/// openable capability tree (`dregg_circuit::cap_root::CapLeaf` — the
+/// sorted-Poseidon2 Merkle scheme Phase A made `capability_root`) plus the
+/// sorted-Merkle membership path against the holder's c-list root AS IT WAS
+/// IN SCOPE AT AUTHORIZATION TIME (authorization runs before the action's
+/// effects apply, so for the first action that consumes a capability this is
+/// the turn's pre-state root). All felts are canonical BabyBear values
+/// stored as `u32` (the same low-4-byte encoding
+/// `dregg_cell::felt_to_bytes32` pins).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsumedCapWitness {
+    /// The cell whose c-list HELD the consumed capability (the actor for the
+    /// breadstuff path; the delegator for the bearer path).
+    pub holder: CellId,
+    /// The c-list slot of the consumed capability.
+    pub slot: u32,
+    /// The call-forest path of the action this capability authorized.
+    pub action_path: Vec<usize>,
+    /// Which authorization surface consumed it.
+    pub auth_path: ConsumedCapAuthPath,
+    /// Leaf field 1: the sort key, `cap_root::slot_hash(slot)`.
+    pub leaf_slot_hash: u32,
+    /// Leaf field 2: the target cell id folded to one felt.
+    pub leaf_target: u32,
+    /// Leaf field 3: the `AuthRequired` tier tag (+ vk_hash for Custom).
+    pub leaf_auth_tag: u32,
+    /// Leaf field 4: `EffectMask` low 16 bits.
+    pub leaf_mask_lo: u32,
+    /// Leaf field 5: `EffectMask` high 16 bits.
+    pub leaf_mask_hi: u32,
+    /// Leaf field 6: optional expiry height encoding.
+    pub leaf_expiry: u32,
+    /// Leaf field 7: optional breadstuff hash folded to one felt.
+    pub leaf_breadstuff: u32,
+    /// Sibling digests along the membership path, bottom-up
+    /// (`CAP_TREE_DEPTH` entries).
+    pub siblings: Vec<u32>,
+    /// Direction bits along the path: 0 = current node is the LEFT child
+    /// (sibling on the right), 1 = right.
+    pub directions: Vec<u8>,
+    /// The canonical capability root (felt) the path opens against — the
+    /// holder's PRE-state `capability_root`.
+    pub cap_root: u32,
+}
+
+impl ConsumedCapWitness {
+    /// Reconstruct the canonical 7-field [`dregg_circuit::cap_root::CapLeaf`].
+    pub fn cap_leaf(&self) -> dregg_circuit::cap_root::CapLeaf {
+        use dregg_circuit::field::BabyBear;
+        dregg_circuit::cap_root::CapLeaf {
+            slot_hash: BabyBear::new(self.leaf_slot_hash),
+            target: BabyBear::new(self.leaf_target),
+            auth_tag: BabyBear::new(self.leaf_auth_tag),
+            mask_lo: BabyBear::new(self.leaf_mask_lo),
+            mask_hi: BabyBear::new(self.leaf_mask_hi),
+            expiry: BabyBear::new(self.leaf_expiry),
+            breadstuff: BabyBear::new(self.leaf_breadstuff),
+        }
+    }
+
+    /// Recompute the Merkle root implied by the leaf preimage + path.
+    /// `None` if the witness is malformed (wrong path length / direction
+    /// bits outside {0,1}).
+    pub fn recompute_root(&self) -> Option<u32> {
+        use dregg_circuit::cap_root::CAP_TREE_DEPTH;
+        use dregg_circuit::field::BabyBear;
+        use dregg_circuit::poseidon2::hash_fact;
+        if self.siblings.len() != CAP_TREE_DEPTH || self.directions.len() != CAP_TREE_DEPTH {
+            return None;
+        }
+        let mut cur = self.cap_leaf().digest();
+        for (sib, dir) in self.siblings.iter().zip(self.directions.iter()) {
+            let sib = BabyBear::new(*sib);
+            cur = match dir {
+                0 => hash_fact(cur, &[sib]),
+                1 => hash_fact(sib, &[cur]),
+                _ => return None,
+            };
+        }
+        Some(cur.as_u32())
+    }
+
+    /// Verify the membership path: the recorded leaf preimage opens to the
+    /// recorded `cap_root`. NON-vacuous — a tampered leaf field, sibling,
+    /// direction bit, or root makes this false.
+    pub fn verify(&self) -> bool {
+        self.recompute_root() == Some(self.cap_root)
+    }
+
+    /// The 32-byte encoding of `cap_root`, byte-identical to
+    /// `dregg_cell::compute_canonical_capability_root` over the holder's
+    /// pre-state c-list (`felt_to_bytes32`: low 4 little-endian bytes, rest
+    /// zero).
+    pub fn cap_root_bytes32(&self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[0..4].copy_from_slice(&self.cap_root.to_le_bytes());
+        out
+    }
+
+    /// Domain-separated BLAKE3 digest of every field; folded into
+    /// `TurnReceipt::receipt_hash` (v3) so an executor cannot strip or
+    /// tamper the consumed-capability disclosure.
+    pub fn hash(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"dregg-consumed-cap-v1");
+        hasher.update(self.holder.as_bytes());
+        hasher.update(&self.slot.to_le_bytes());
+        hasher.update(&(self.action_path.len() as u64).to_le_bytes());
+        for p in &self.action_path {
+            hasher.update(&(*p as u64).to_le_bytes());
+        }
+        hasher.update(&[match self.auth_path {
+            ConsumedCapAuthPath::Breadstuff => 1u8,
+            ConsumedCapAuthPath::BearerSignedDelegation => 2u8,
+        }]);
+        for felt in [
+            self.leaf_slot_hash,
+            self.leaf_target,
+            self.leaf_auth_tag,
+            self.leaf_mask_lo,
+            self.leaf_mask_hi,
+            self.leaf_expiry,
+            self.leaf_breadstuff,
+        ] {
+            hasher.update(&felt.to_le_bytes());
+        }
+        hasher.update(&(self.siblings.len() as u64).to_le_bytes());
+        for s in &self.siblings {
+            hasher.update(&s.to_le_bytes());
+        }
+        hasher.update(&(self.directions.len() as u64).to_le_bytes());
+        hasher.update(&self.directions);
+        hasher.update(&self.cap_root.to_le_bytes());
+        *hasher.finalize().as_bytes()
+    }
+}
+
 /// A receipt produced when a turn is committed, providing cryptographic evidence.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TurnReceipt {
@@ -661,6 +823,16 @@ pub struct TurnReceipt {
     /// Analogous to `was_encrypted` per the Silver-Vision lifecycle plan.
     #[serde(default)]
     pub was_burn: bool,
+    /// The capabilities CONSUMED to authorize this turn's actions, each with
+    /// a full leaf preimage + sorted-Merkle membership path against the
+    /// holder's PRE-state `capability_root` (cap Phase C — the executor half
+    /// of production-authority binding). The CONSUMED sibling of
+    /// `derivation_records` (which records capabilities the turn CREATES).
+    /// Self-sovereign turns (owner-signature authority, no capability
+    /// consumed) carry an empty vec. Bound into `receipt_hash` (v3) so the
+    /// executor cannot strip or forge the disclosure.
+    #[serde(default)]
+    pub consumed_capabilities: Vec<ConsumedCapWitness>,
 }
 
 impl TurnReceipt {
@@ -668,8 +840,9 @@ impl TurnReceipt {
     /// Note: executor_signature is NOT included (it signs the hash, not vice versa).
     pub fn receipt_hash(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
-        // Version-bumped to v2 when federation_id binding was added.
-        hasher.update(b"dregg-receipt-v2");
+        // Version-bumped to v2 when federation_id binding was added; to v3
+        // when consumed_capabilities binding was added (cap Phase C).
+        hasher.update(b"dregg-receipt-v3");
         hasher.update(&self.turn_hash);
         hasher.update(&self.forest_hash);
         hasher.update(&self.pre_state_hash);
@@ -738,6 +911,13 @@ impl TurnReceipt {
         // `Effect::Burn`? Bound so an executor cannot strip the non-
         // conservation disclosure. Silver-Vision lifecycle extension.
         hasher.update(&[if self.was_burn { 0x01 } else { 0x00 }]);
+        // Consumed-capability binding (v3, cap Phase C): the witnesses for
+        // the capabilities this turn CONSUMED to authorize its actions. Bound
+        // so an executor cannot strip / tamper the authority disclosure.
+        hasher.update(&(self.consumed_capabilities.len() as u64).to_le_bytes());
+        for cw in &self.consumed_capabilities {
+            hasher.update(&cw.hash());
+        }
         *hasher.finalize().as_bytes()
     }
 

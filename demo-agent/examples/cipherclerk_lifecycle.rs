@@ -71,6 +71,7 @@ fn simulate_turn_execution(agent: CellId, turn_number: u64, pre_state: [u8; 32])
         finality: Default::default(),
         was_encrypted: false,
         was_burn: false,
+        consumed_capabilities: vec![],
     }
 }
 

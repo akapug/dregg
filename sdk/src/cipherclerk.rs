@@ -4818,6 +4818,7 @@ impl AgentCipherclerk {
             finality: Default::default(),
             was_encrypted: false,
             was_burn: false,
+            consumed_capabilities: vec![],
         };
 
         let witnessed = WitnessedReceipt::from_components(
@@ -5123,6 +5124,7 @@ impl AgentCipherclerk {
                     let cap_hash = blake3::hash(&cap.slot.to_le_bytes());
                     vm_effects.push(VmEffect::GrantCapability {
                         cap_entry: hash_to_8(cap_hash.as_bytes()),
+                        phase_b: None,
                     });
                 }
                 Effect::NoteSpend {
@@ -6837,6 +6839,7 @@ mod tests {
             finality: Default::default(),
             was_encrypted: false,
             was_burn: false,
+            consumed_capabilities: vec![],
         }
     }
 
