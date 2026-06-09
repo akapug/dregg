@@ -302,7 +302,8 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitBridgeFinalize
   (bridgeFinalizeVmDescriptorGenuine bridgeFinalizeGenuine_sound IsBridgeFinalizeRow
-   RowEncodesFinalize CellFinalizeSpec cellProjFinalize)
+   RowEncodesFinalize CellFinalizeSpec cellProjFinalize ACTOR
+   bridgeFinalizeAuth_rejects_noncreator bridgeFinalizeAuth_admits_creator)
 
 /-! ### §4.0 — `compileBridgeFinalize` — the effect-keyed circuit interpretation of the term.
 
@@ -415,11 +416,18 @@ theorem bridgeFinalize_compile_sound
                 (env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.AMOUNT))
                 (env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.ep.ASSET))
                 (env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.ep.RESOLVED)))
-              (env.loc Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.SYS_DIG_BEFORE) ) := by
+              (env.loc Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.SYS_DIG_BEFORE) )
+    -- … and the CREATOR-AUTHORITY leg (the completeness fix, `§1½`): the circuit FORCES the row's declared
+    -- finalize-subject `prmCol ACTOR` to EQUAL the parked record's recorded `prmCol ep.CREATOR` — the
+    -- in-circuit `bridgeAuthOK`. Since `ep.CREATOR` is bound by the escrow-root recompute above, this ties
+    -- the authority to the COMMITTED record. `bridgeAuthOK_iff_found_creator` shows this IS the executor's
+    -- authority precondition.
+    ∧ env.loc (prmCol ACTOR)
+        = env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.ep.CREATOR) := by
   -- circuit side: `compileBridgeFinalize` IS the genuine descriptor; the audited class-A soundness forces
-  -- the per-cell `CellFinalizeSpec` (frame freeze + nonce tick) + the genuine root recompute.
+  -- the per-cell `CellFinalizeSpec` (frame freeze + nonce tick) + the genuine root recompute + authority.
   rw [compileBridgeFinalize_eq] at hsat
-  obtain ⟨hcs, hroot, _hcommit⟩ :=
+  obtain ⟨hcs, hroot, _hcommit, hauth⟩ :=
     bridgeFinalizeGenuine_sound hash env hrow (cellProjFinalize k.bal c cellAsset) post henc hsat
   obtain ⟨hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ := hcs
   -- executor side: the §2 cornerstone turns the IR term's `interp` into the verified kernel step
@@ -429,7 +437,7 @@ theorem bridgeFinalize_compile_sound
   -- the descriptor tick `hcN` (post = pre.nonce + 1) + the executor freeze (`rfl`: `cellProjFinalize`
   -- zeroes both nonces) ARE `NonceReconciled`'s two clauses.
   refine ⟨⟨?_, hcHi.trans rfl, fun i => (hcF i).trans rfl, hcCap.trans rfl, hcRes.trans rfl⟩,
-    ⟨hcN, rfl⟩, hroot⟩
+    ⟨hcN, rfl⟩, hroot, hauth⟩
   -- balLo: circuit pins post = pre (FROZEN); executor freezes the projected entry ⇒ post = k'-projection.
   · rw [hcLo, heFrozen]
 
@@ -471,23 +479,79 @@ theorem bridgeFinalize_compile_sound_nonce_is_turn_tick
 /-! ### §4.3 — NON-VACUITY: `compileBridgeFinalize` is the genuine class-A descriptor, not a placeholder.
 
 The weld would be worthless if `compileBridgeFinalize` were an inert/empty descriptor. It is the class-A
-`bridgeFinalizeVmDescriptorGenuine`, carrying the 13+14+4+3 = 34 per-row gates (balance freeze + frame
-freeze + nonce tick + boundary/transition) AND the 2+4 = 6 hash-sites (2 genuine escrow-root-recompute
-sites + 4 commitment sites). So `bridgeFinalize_compile_sound` is a statement about a REAL class-A
-circuit with a genuinely-recomputed side-table root (the same counts the release/refund genuine
-descriptors carry). -/
+`bridgeFinalizeVmDescriptorGenuine`, carrying the 13+14+4+3+1 = 35 per-row gates (balance freeze + frame
+freeze + nonce tick + boundary/transition + the `§1½` CREATOR-AUTHORITY gate) AND the 2+4 = 6 hash-sites
+(2 genuine escrow-root-recompute sites + 4 commitment sites). So `bridgeFinalize_compile_sound` is a
+statement about a REAL class-A circuit with a genuinely-recomputed side-table root + an in-circuit
+authority gate. -/
 
 /-- The compiled bridgeFinalize circuit is the NON-trivial class-A genuine descriptor: it carries the
-13+14+4+3 = 34 constraints / 2+4 = 6 hash-sites / 2 range checks of the audited
-`bridgeFinalizeVmDescriptorGenuine` (an empty placeholder would have 0/0/0). So
-`bridgeFinalize_compile_sound` is about a genuine side-table-binding circuit. -/
+13+14+4+3+1 = 35 constraints (the +1 is the `§1½` creator-authority gate) / 2+4 = 6 hash-sites / 2 range
+checks of the audited `bridgeFinalizeVmDescriptorGenuine` (an empty placeholder would have 0/0/0). So
+`bridgeFinalize_compile_sound` is about a genuine side-table-binding circuit with an in-circuit
+authority gate. -/
 theorem compileBridgeFinalize_nontrivial :
-    compileBridgeFinalize.constraints.length = 34
+    compileBridgeFinalize.constraints.length = 35
     ∧ compileBridgeFinalize.hashSites.length = 6
     ∧ compileBridgeFinalize.ranges.length = 2 := by
   rw [compileBridgeFinalize_eq]
   refine ⟨by decide, by decide, by decide⟩
 
 #assert_axioms compileBridgeFinalize_nontrivial
+
+/-! ## §5 — THE COMPLETENESS FIX, NAMED: the in-circuit authority gate DECODES the executor's `bridgeAuthOK`.
+
+The gap this module closes: the executor's finalize step is `bridgeFinalizeStep`
+(`Exec/Handlers/Bridge.lean:161`) / `bridgeFinalizeChainA` (`TurnExecutorFull.lean:3009`), which GATES the
+kernel `bridgeFinalizeKAsset` on `bridgeAuthOK k id actor` — the parked record's recorded `creator` must
+EQUAL the `actor`. The Argus cornerstone (`§2`) refines the IR term only to the KERNEL SUB-step (which
+DROPS that gate), and the PRIOR descriptor had no conjunct forcing it — so a light client, seeing only the
+proof, would accept a NON-creator finalize. `§4` now exposes the in-circuit conjunct `actor = creator`
+(`bridgeFinalize_compile_sound`'s authority leg). HERE we prove that in-circuit conjunct IS the executor's
+authority precondition: `bridgeAuthOK k id actor = true ↔` (the unresolved record found by `id` is bridge-
+tagged with `creator = actor`) — so the circuit gate `prmCol ACTOR = prmCol ep.CREATOR` (over the
+committed creator) decodes EXACTLY `bridgeAuthOK`. The precondition is now an in-circuit conjunct, not
+out-of-band. -/
+
+/-- **`bridgeAuthOK_iff_found_creator` — the executor authority gate, decoded.** `bridgeAuthOK k id actor`
+holds IFF the FIRST unresolved record carrying `id` exists, is BRIDGE-tagged, and its recorded `creator`
+EQUALS `actor`. This is the executor precondition the in-circuit gate `prmCol ACTOR = prmCol ep.CREATOR`
+(over the escrow-root-bound creator column) decodes: the circuit forces the row's declared actor to equal
+the committed record creator, exactly `bridgeAuthOK`'s `r.creator = actor`. -/
+theorem bridgeAuthOK_iff_found_creator (k : RecordKernelState) (id : Nat) (actor : CellId) :
+    Dregg2.Exec.TurnExecutorFull.bridgeAuthOK k id actor = true
+      ↔ ∃ r, k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r
+              ∧ r.bridge = true ∧ r.creator = actor := by
+  unfold Dregg2.Exec.TurnExecutorFull.bridgeAuthOK
+  cases hf : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | none => simp
+  | some r =>
+    simp only [Bool.and_eq_true, beq_iff_eq]
+    constructor
+    · rintro ⟨hbr, hcr⟩; exact ⟨r, rfl, hbr, hcr⟩
+    · rintro ⟨r', hf', hbr', hcr'⟩
+      have hr : r' = r := Option.some.inj (hf'.symm.trans hf)
+      subst hr; exact ⟨hbr', hcr'⟩
+
+#assert_axioms bridgeAuthOK_iff_found_creator
+
+/-- **`bridgeFinalize_authority_in_circuit` — THE GAP CLOSED (combined statement).** On a satisfying
+genuine bridgeFinalize row, the circuit FORCES `prmCol ACTOR = prmCol ep.CREATOR` (the in-circuit decode of
+the executor's `bridgeAuthOK` creator-only gate, `bridgeAuthOK_iff_found_creator`); and a row whose
+declared actor differs from the parked record's creator is UNSAT (`bridgeFinalizeAuth_rejects_noncreator`,
+re-exported). So the creator-authority precondition the executor enforces is now an in-circuit conjunct of
+the runnable descriptor — a NON-creator finalize cannot produce a satisfying proof. -/
+theorem bridgeFinalize_authority_in_circuit
+    (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBridgeFinalizeRow env)
+    (k k' : RecordKernelState) (id : Nat) (asset : AssetId) (amount : ℤ)
+    (c : CellId) (cellAsset : AssetId) (post : CellState)
+    (henc : RowEncodesFinalize env (cellProjFinalize k.bal c cellAsset) post)
+    (hsat : satisfiedVm hash compileBridgeFinalize env true true)
+    (hexec : interp (bridgeFinalizeStmt id asset amount) k = some k') :
+    env.loc (prmCol ACTOR)
+      = env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot.ep.CREATOR) :=
+  (bridgeFinalize_compile_sound hash env hrow k k' id asset amount c cellAsset post henc hsat hexec).2.2.2
+
+#assert_axioms bridgeFinalize_authority_in_circuit
 
 end Dregg2.Circuit.Argus.Effects.BridgeFinalize

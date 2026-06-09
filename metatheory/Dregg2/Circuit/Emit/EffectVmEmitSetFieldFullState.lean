@@ -23,6 +23,7 @@ No `sorry`/`:= True`/`native_decide`. `fullClause` NON-VACUOUS. Read-only import
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitSetField
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable
+import Dregg2.Circuit.Emit.EffectVmEmitLifecycleGuard
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitSetFieldFullState
 
@@ -35,6 +36,9 @@ open Dregg2.Circuit.Emit.EffectVmEmitSetField
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
   (RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
    wideHashSites)
+open Dregg2.Circuit.Emit.EffectVmEmitLifecycleGuard
+  (EFFECT_VM_WIDTH_GUARD guardBitCol gAdmit gAdmitBody BitEncodes gAdmit_pred_sound gAdmit_holds_iff
+   gAdmit_rejects_zero gAdmit_iff_pred)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
@@ -202,11 +206,159 @@ theorem setField_clause_rejects_root_drop :
   simp only [setFieldPreRoots, emptySystemRoots] at h0
   norm_num at h0
 
+/-! ## §8 — THE GUARD-GATED RUNNABLE DESCRIPTOR: the executor's 4-conjunct admissibility guard
+(caveat ∧ authority ∧ membership ∧ liveness) is now an IN-CIRCUIT CONJUNCT.
+
+`EffectVmEmitSetField.setField_guard_is_offrow` honestly NAMED the executor's `SetFieldGuard` as an
+off-row leg the runnable descriptor did NOT carry — a SEVERE completeness hole (a light client would
+accept a field write by an UNAUTHORIZED actor, into a SEALED cell, violating a CLEARANCE caveat). This
+section CLOSES it: the wide descriptor is extended with FOUR admissibility-bit gates
+(`gAdmit (guardBitCol 0..3)`, the runnable-EffectVM analog of `SetFieldCommit.cSF{Caveat,Auth,Mem,Live}`),
+the decode ties each bit column to the corresponding `SetFieldGuard` conjunct (`BitEncodes`, the honest
+`encodeSF` discipline), and `fullClause` now CARRIES the four conjuncts — so a satisfying runnable
+witness PROVES the executor's guard held. A row encoding a transition whose guard is false has a `0` bit
+column, which the gate REJECTS (UNSAT). -/
+
+/-- **`setFieldVmDescriptorWideGuarded slot`** — the WIDE setField descriptor EXTENDED with the four
+admissibility-bit gates. `traceWidth := EFFECT_VM_WIDTH_GUARD` (the dedicated guard-bit block past 188);
+`hashSites := wideHashSites` UNCHANGED (the guard bits are an admissibility side-condition, not committed
+post-state — the commitment is byte-identical, exactly as `SetFieldCommit`'s guard bits are not in the
+root). The four appended gates force the four bit columns `188..191` to `1`. -/
+def setFieldVmDescriptorWideGuarded (slot : Fin 8) : EffectVmDescriptor :=
+  { setFieldVmDescriptorWide slot with
+    name := (setFieldVmDescriptorWide slot).name ++ "-guard"
+    traceWidth := EFFECT_VM_WIDTH_GUARD
+    constraints := (setFieldVmDescriptorWide slot).constraints
+      ++ [gAdmit (guardBitCol 0), gAdmit (guardBitCol 1), gAdmit (guardBitCol 2), gAdmit (guardBitCol 3)] }
+
+theorem setFieldGuarded_usesWideSites (slot : Fin 8) :
+    (setFieldVmDescriptorWideGuarded slot).hashSites = wideHashSites := rfl
+
+/-- **`SetFieldGuardedFullClause slot`** — the FULL post-state of a guard-gated setField: the per-cell
+field-write block (`CellSetFieldSpec`), the frozen `system_roots`, AND the four admissibility conjuncts
+`gCaveat ∧ gAuth ∧ gMem ∧ gLive` (instantiated, by the deliverable, at the `SetFieldGuard` conjuncts).
+So the runnable clause now pins BOTH the state transition AND that it was admissible. -/
+def SetFieldGuardedFullClause (slot : Fin 8) (preRoots : SysRoots)
+    (gCaveat gAuth gMem gLive : Prop)
+    (pre post : CellState) (postRoots : SysRoots) : Prop :=
+  CellSetFieldSpec slot pre (post.fields slot) post ∧ postRoots = preRoots
+    ∧ gCaveat ∧ gAuth ∧ gMem ∧ gLive
+
+/-- **`setFieldRunnableSpecGuarded`** — the guard-gated FULL-state RUNNABLE instance. The four
+admissibility conjuncts are PARAMETERS (the deliverable instantiates them at the four `SetFieldGuard`
+conjuncts of the real `(s, actor, cell, f, v)`); `decodeAfter` extends with the four `BitEncodes` ties
+(the prover lays each conjunct's verdict on its bit column); `fullClause` extends with the conjunction;
+`decodeFull` projects BOTH the per-cell gates (to `setFieldGates_give_cellSpec`) AND the four new
+admissibility gates (to `gAdmit_pred_sound`). -/
+def setFieldRunnableSpecGuarded (slot : Fin 8) (preRoots : SysRoots)
+    (gCaveat gAuth gMem gLive : Prop)
+    [Decidable gCaveat] [Decidable gAuth] [Decidable gMem] [Decidable gLive] :
+    RunnableFullStateSpec CellState where
+  descriptor    := setFieldVmDescriptorWideGuarded slot
+  usesWideSites := setFieldGuarded_usesWideSites slot
+  isRow         := IsSetFieldRow
+  decodeAfter   := fun env pre post postRoots =>
+    RowEncodesSF slot env pre post ∧ postRoots = preRoots
+      ∧ BitEncodes (guardBitCol 0) gCaveat env ∧ BitEncodes (guardBitCol 1) gAuth env
+      ∧ BitEncodes (guardBitCol 2) gMem env ∧ BitEncodes (guardBitCol 3) gLive env
+  fullClause    := SetFieldGuardedFullClause slot preRoots gCaveat gAuth gMem gLive
+  decodeFull    := by
+    intro env pre post postRoots hrow hdec hgates
+    obtain ⟨henc, hroots, hb0, hb1, hb2, hb3⟩ := hdec
+    -- the four NEW guard gates are members of the appended list; each forces its conjunct (via the
+    -- honest `BitEncodes` decode + `gAdmit_pred_sound`).
+    have hmemAppend : ∀ g ∈ [gAdmit (guardBitCol 0), gAdmit (guardBitCol 1), gAdmit (guardBitCol 2),
+        gAdmit (guardBitCol 3)], g ∈ (setFieldVmDescriptorWideGuarded slot).constraints := by
+      intro g hg; exact List.mem_append.mpr (Or.inr hg)
+    have hgC : gCaveat := gAdmit_pred_sound (guardBitCol 0) gCaveat env true true hb0
+      (hgates _ (hmemAppend _ (by simp)))
+    have hgA : gAuth := gAdmit_pred_sound (guardBitCol 1) gAuth env true true hb1
+      (hgates _ (hmemAppend _ (by simp)))
+    have hgM : gMem := gAdmit_pred_sound (guardBitCol 2) gMem env true true hb2
+      (hgates _ (hmemAppend _ (by simp)))
+    have hgL : gLive := gAdmit_pred_sound (guardBitCol 3) gLive env true true hb3
+      (hgates _ (hmemAppend _ (by simp)))
+    -- the per-cell gates are the wide descriptor's (a prefix of the appended list); project them.
+    have hcellGates : ∀ c ∈ (setFieldVmDescriptor slot).constraints, c.holdsVm env true true := by
+      intro c hc
+      exact hgates c (List.mem_append.mpr (Or.inl (by
+        rw [setFieldWide_constraints_eq]; exact hc)))
+    exact ⟨setFieldGates_give_cellSpec slot env pre post henc hcellGates, hroots, hgC, hgA, hgM, hgL⟩
+
+/-- **`setField_runnable_full_sound_guarded` — THE GAP-CLOSING DELIVERABLE.** A row satisfying the
+GUARD-GATED wide RUNNABLE setField descriptor, decoded by `RowEncodesSF` + the frozen-roots witness +
+the four `BitEncodes` ties at the four `SetFieldGuard` conjuncts of a real chained `(s, actor, cell, f,
+v)`, pins the FULL post-state AND PROVES `SetFieldGuard s actor cell f v`. So the runnable circuit the
+prover RUNS now enforces the executor's admissibility guard: a light client checking the proof KNOWS the
+actor was authorized over the cell, the cell was a live account, the cell's lifecycle admitted effects,
+AND every slot caveat (incl. an SGM `clearanceGe`) admitted the write. The "off-row guard" hole closed. -/
+theorem setField_runnable_full_sound_guarded (slot : Fin 8) (hash : List ℤ → ℤ) (preRoots : SysRoots)
+    (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
+    (s : Dregg2.Exec.RecChainedState) (actor cell : Dregg2.Exec.CellId) (f : Dregg2.Exec.FieldName)
+    (v : Int)
+    (hrow : IsSetFieldRow env)
+    (henc : RowEncodesSF slot env pre post) (hroots : postRoots = preRoots)
+    (hb0 : BitEncodes (guardBitCol 0) (Dregg2.Exec.EffectsState.caveatsAdmit s.kernel f actor cell v = true) env)
+    (hb1 : BitEncodes (guardBitCol 1) (Dregg2.Exec.EffectsState.stateAuthB s.kernel.caps actor cell = true) env)
+    (hb2 : BitEncodes (guardBitCol 2) (cell ∈ s.kernel.accounts) env)
+    (hb3 : BitEncodes (guardBitCol 3) (Dregg2.Exec.EffectsState.cellLive s.kernel cell = true) env)
+    (hsat : satisfiedVm hash (setFieldVmDescriptorWideGuarded slot) env true true) :
+    (CellSetFieldSpec slot pre (post.fields slot) post ∧ postRoots = preRoots)
+      ∧ Dregg2.Circuit.Spec.CellStateField.SetFieldGuard s actor cell f v := by
+  have h := runnable_full_sound
+    (setFieldRunnableSpecGuarded slot preRoots
+      (Dregg2.Exec.EffectsState.caveatsAdmit s.kernel f actor cell v = true)
+      (Dregg2.Exec.EffectsState.stateAuthB s.kernel.caps actor cell = true)
+      (cell ∈ s.kernel.accounts)
+      (Dregg2.Exec.EffectsState.cellLive s.kernel cell = true))
+    hash env pre post postRoots hrow ⟨henc, hroots, hb0, hb1, hb2, hb3⟩ hsat
+  obtain ⟨hcell, hr, hC, hA, hM, hL⟩ := h
+  exact ⟨⟨hcell, hr⟩, hC, hA, hM, hL⟩
+
+/-! ### §8.1 — the ANTI-GATE tooth: a row with a `0` admissibility bit is UNSAT.
+
+The contrapositive: a row whose authority bit (`guardBitCol 1`) is `0` (the actor is NOT authorized)
+cannot satisfy the guarded descriptor — the authority gate `var 189 − 1 = 0` is violated. The guard
+conjunct genuinely bites; an unauthorized field write is rejected by the runnable circuit. -/
+
+theorem setFieldGuarded_rejects_unauth (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (hzero : env.loc (guardBitCol 1) = 0) :
+    ¬ satisfiedVm hash (setFieldVmDescriptorWideGuarded slot) env true true := by
+  rintro ⟨hgates, _⟩
+  have hmem : gAdmit (guardBitCol 1) ∈ (setFieldVmDescriptorWideGuarded slot).constraints :=
+    List.mem_append.mpr (Or.inr (by simp))
+  exact gAdmit_rejects_zero (guardBitCol 1) env true true hzero (hgates _ hmem)
+
+/-! ### §8.2 — NON-VACUITY of the guard-gated clause (both bit values genuinely separated). -/
+
+/-- **NON-VACUITY (witness TRUE).** The guarded clause (slot 0, all four conjuncts `True`) is inhabited:
+the real field write of §6 + the four admitted conjuncts. -/
+theorem goodSetFieldGuarded_realizes :
+    (setFieldRunnableSpecGuarded 0 setFieldPreRoots True True True True).fullClause
+      setFieldPre setFieldPost setFieldPreRoots := by
+  refine ⟨⟨?_, rfl, rfl, rfl, rfl, rfl, ?_⟩, rfl, trivial, trivial, trivial, trivial⟩
+  · show setFieldPost.fields 0 = setFieldPost.fields 0; rfl
+  · intro i hi
+    show setFieldPost.fields i = setFieldPre.fields i
+    simp only [setFieldPost, setFieldPre, if_neg hi]
+
+/-- **NON-VACUITY (witness FALSE — a denied conjunct refutes the clause).** With the authority conjunct
+`False`, the guarded clause is UNINHABITABLE — so the guard conjunct is genuinely load-bearing in the
+clause (a transition where authority fails cannot satisfy it). -/
+theorem setFieldGuarded_clause_needs_auth :
+    ¬ (setFieldRunnableSpecGuarded 0 setFieldPreRoots True False True True).fullClause
+        setFieldPre setFieldPost setFieldPreRoots := by
+  rintro ⟨_, _, _, hAuth, _, _⟩
+  exact hAuth
+
 /-! ## §7 — layout + axiom-hygiene tripwires. -/
 
 #guard (setFieldVmDescriptorWide 0).traceWidth == 188
 #guard (setFieldVmDescriptorWide 0).hashSites.length == 4
 #guard (setFieldVmDescriptorWide 0).constraints.length == (setFieldVmDescriptor 0).constraints.length
+#guard (setFieldVmDescriptorWideGuarded 0).traceWidth == 192
+#guard (setFieldVmDescriptorWideGuarded 0).constraints.length
+        == (setFieldVmDescriptorWide 0).constraints.length + 4
 
 #assert_axioms setFieldGates_give_cellSpec
 #assert_axioms setField_runnable_full_sound
