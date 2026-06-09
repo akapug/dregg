@@ -354,6 +354,140 @@ theorem parseBal_encode (es : List (CellId × AssetId × Int)) (rest : PState) :
       apply parseBal_loop_works as a rest
       simp only [List.length_append, List.length_cons]; omega
 
+/-! ## §10b — the per-cell `Nat` side-table (`parseCellNats`) roundtrip — the `lifecycle`/`deathCert`
+`WState` fields (added with the per-cell-commitment side-tables). Length-fuel loop (§10 template); the
+element is the self-delimiting `[cell,val]` PAIR (`parseCellNatEntry`, structurally simpler than §10's
+`[c,a,amt]` triple — two `Nat`s, no `Int`). So it round-trips for ANY tail, with NO non-digit post-byte
+condition. A `lifecycle`/`deathCert` codec bug is now caught (the cell-commitment side-tables that bind
+`compute_canonical_state_commitment`'s `lifecycle`/`deathCert` are out of the Lean-side TCB). -/
+
+/-- One `[cell,val]` per-cell-Nat entry (matching `encodeCellNats`'s local `one`). -/
+private def cellNatOne (p : CellId × Nat) : String :=
+  "[" ++ toString p.1 ++ "," ++ toString p.2 ++ "]"
+
+private def encodeCellNatsTail (es : List (CellId × Nat)) : String :=
+  es.foldl (fun acc p => acc ++ "," ++ cellNatOne p) ""
+
+/-- One entry round-trips for ANY tail (self-delimiting; mirrors §10's `parseBalEntry_one`). -/
+private theorem parseCellNatEntry_one (e : CellId × Nat) (rest : PState) :
+    parseCellNatEntry ((cellNatOne e).toList ++ rest) = some (e, rest) := by
+  obtain ⟨c, v⟩ := e
+  unfold parseCellNatEntry cellNatOne
+  rw [show (("[" ++ toString c ++ "," ++ toString v ++ "]"):String).toList ++ rest
+        = '[' :: ((toString c).toList ++ (',' :: ((toString v).toList ++ (']' :: rest)))) by
+        simp only [String.toList_append, show ("]":String).toList = [']'] from rfl,
+            show ("[":String).toList = ['['] from rfl, show (",":String).toList = [','] from rfl]
+        simp [List.append_assoc]]
+  rw [show ('[' :: ((toString c).toList ++ (',' :: ((toString v).toList ++ (']' :: rest)))))
+        = ("[":String).toList ++ ((toString c).toList ++ (',' :: ((toString v).toList ++ (']' :: rest))))
+        from rfl]
+  rw [lit_append]; simp only []
+  rw [parseNat_toString c _ (nd_comma _)]; simp only []
+  rw [show (',' :: ((toString v).toList ++ (']' :: rest)))
+        = (",":String).toList ++ ((toString v).toList ++ (']' :: rest)) from rfl]
+  rw [lit_append]; simp only []
+  rw [parseNat_toString v _ (nd_brack rest)]; simp only []
+  rw [show lit "]" (']' :: rest) = some rest from by
+        rw [show (']'::rest) = ("]":String).toList ++ rest from rfl, lit_append]]
+  simp
+
+/-- A `[cell,val]` entry opens with `'['` (so the list body is `[[…`, making `lit "[]"` fail). -/
+private theorem cellNatOne_head (a : CellId × Nat) : ∃ t, (cellNatOne a).toList = '[' :: t := by
+  refine ⟨((toString a.1 ++ "," ++ toString a.2 ++ "]" : String)).toList, ?_⟩
+  unfold cellNatOne
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl, List.cons_append,
+    List.nil_append, List.append_assoc]
+
+private theorem foldl_cellNatsTail (es : List (CellId × Nat)) : ∀ (acc : String),
+    es.foldl (fun s p => s ++ "," ++ cellNatOne p) acc
+      = acc ++ es.foldl (fun s p => s ++ "," ++ cellNatOne p) "" := by
+  induction es with
+  | nil => intro acc; apply String.toList_inj.mp; simp
+  | cons b bs ih =>
+      intro acc; simp only [List.foldl_cons]
+      rw [ih (acc ++ "," ++ cellNatOne b), ih ("" ++ "," ++ cellNatOne b)]
+      apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
+
+private theorem encCellNatsTail_cons_shape (b : CellId × Nat) (bs : List (CellId × Nat))
+    (rest : PState) :
+    (encodeCellNatsTail (b :: bs)).toList ++ rest
+      = ',' :: ((cellNatOne b).toList ++ ((encodeCellNatsTail bs).toList ++ rest)) := by
+  conv_lhs => rw [show encodeCellNatsTail (b :: bs) = ("" ++ "," ++ cellNatOne b) ++ encodeCellNatsTail bs from by
+      show (b :: bs).foldl (fun s p => s ++ "," ++ cellNatOne p) "" = _
+      rw [List.foldl_cons]; exact foldl_cellNatsTail bs ("" ++ "," ++ cellNatOne b)]
+  simp only [String.toList_append, show ("":String).toList = [] from rfl,
+    show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
+
+private theorem encodeCellNats_cons_shape (a : CellId × Nat) (as : List (CellId × Nat)) (rest : PState) :
+    (encodeCellNats (a :: as)).toList ++ rest
+      = '[' :: ((cellNatOne a).toList ++ ((encodeCellNatsTail as).toList ++ (']' :: rest))) := by
+  rw [show encodeCellNats (a :: as) = "[" ++ cellNatOne a ++ encodeCellNatsTail as ++ "]" from rfl]
+  simp only [String.toList_append, show ("[":String).toList = ['['] from rfl,
+    show ("]":String).toList = [']'] from rfl]
+  simp [List.append_assoc]
+
+private theorem parseCellNats_loop_works : ∀ (as : List (CellId × Nat)) (a : CellId × Nat)
+    (rest : PState) (fuel : Nat),
+    ((cellNatOne a).toList ++ ((encodeCellNatsTail as).toList ++ (']' :: rest))).length < fuel →
+    parseCellNats.loop fuel ((cellNatOne a).toList ++ ((encodeCellNatsTail as).toList ++ (']' :: rest)))
+      = some (a :: as, rest) := by
+  intro as
+  induction as with
+  | nil =>
+      intro a rest fuel hf
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
+      rw [show (encodeCellNatsTail ([] : List (CellId × Nat))).toList = [] from rfl, List.nil_append]
+      unfold parseCellNats.loop
+      rw [parseCellNatEntry_one a (']' :: rest)]
+      simp only []
+      rw [show lit "," (']' :: rest) = none from by
+            rw [show (']' :: rest) = ("]":String).toList ++ rest from rfl]
+            exact lit_ne_pre "," "]" rest (by decide) (by decide)]
+      simp only []
+      rw [lit_brack]
+  | cons a2 as2 ih =>
+      intro a rest fuel hf
+      rw [encCellNatsTail_cons_shape a2 as2 (']' :: rest)] at hf ⊢
+      obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by
+        simp only [List.length_append, List.length_cons] at hf; omega⟩
+      unfold parseCellNats.loop
+      rw [parseCellNatEntry_one a _]
+      simp only []
+      rw [lit_commaC]
+      simp only []
+      have hrec : ((cellNatOne a2).toList ++ ((encodeCellNatsTail as2).toList ++ (']' :: rest))).length < f := by
+        simp only [List.length_append, List.length_cons] at hf ⊢; omega
+      rw [ih a2 rest f hrec]
+
+/-- **FILL J production (f'): the per-cell `Nat` side-table roundtrip** (`parseCellNats ∘ encodeCellNats
+= id`) — the `lifecycle`/`deathCert` `WState` fields the cell COMMITMENT folds in
+(`compute_canonical_state_commitment` binds `lifecycle`/`deathCert`). Self-delimiting `[cell,val]`
+element, so the cleanest length-fuel instance after §10 (no post-byte condition). -/
+theorem parseCellNats_encode (es : List (CellId × Nat)) (rest : PState) :
+    parseCellNats ((encodeCellNats es).toList ++ rest) = some (es, rest) := by
+  cases es with
+  | nil =>
+      unfold parseCellNats
+      rw [show (encodeCellNats ([] : List (CellId × Nat))) = "[]" from rfl]
+      rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
+  | cons a as =>
+      unfold parseCellNats
+      rw [encodeCellNats_cons_shape a as rest]
+      have hempty : lit "[]"
+          ('[' :: ((cellNatOne a).toList ++ ((encodeCellNatsTail as).toList ++ (']' :: rest)))) = none := by
+        obtain ⟨t, ht⟩ := cellNatOne_head a
+        rw [ht, List.cons_append]
+        unfold lit
+        rw [show ("[]":String).toList = ['[', ']'] from by decide]
+        rw [litGo_cons_match, litGo_ne_head ']' [] '[' _ (by decide)]
+      rw [hempty]; simp only []
+      rw [show ('[' :: ((cellNatOne a).toList ++ ((encodeCellNatsTail as).toList ++ (']' :: rest))))
+            = ("[":String).toList ++ ((cellNatOne a).toList ++ ((encodeCellNatsTail as).toList ++ (']' :: rest)))
+            from rfl, lit_append]
+      simp only []
+      apply parseCellNats_loop_works as a rest
+      simp only [List.length_append, List.length_cons]; omega
+
 /-! ## §11 — the `ESCROWS` side-table (`parseEscrows`) roundtrip. Length-fuel loop (§10 template), but
 the element `parseEscrow` is a 7-field `do`-block with two 0/1 FLAGS (`parseFlag_bool`, §0f). The first
 side-table whose element itself needs a `do`-block roundtrip proof. -/

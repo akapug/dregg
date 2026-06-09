@@ -18,12 +18,13 @@ only these theorems, pinning the decoder as the genuine left-inverse of the enco
   * §5–§6 — recursive `Value`/`FIELDS` tree and the security-critical `Authorization` decoder
     (all 10 variants + recursive `oneOf`, by strong induction on fuel);
   * §7 — the `FullActionA` decoder, complete at all 46 arms;
-  * §8–§11c — every wide-state side-table list (AUTHS, Nat-list, BAL-list, ESCROWS, QUEUES, SWISS);
+  * §8–§11c — every wide-state side-table list (AUTHS, Nat-list, BAL-list, per-cell-Nat list
+    [lifecycle/deathCert, §10b], ESCROWS, QUEUES, SWISS);
   * §11d — the per-node `CAVEATS` array (`parseCaveatsW`, the soundness-fix discharge leg, `tier ≤ 3`);
   * §12–§13 — the wide `CELLS` store (recursive `Value` payload) and the `CAPS` table (3-arm cap sum);
   * §15 — the RECURSIVE action-TREE (`parseForestW`/`parseChildrenW`: the call-forest + delegation
     edges, by strong induction on fuel — credential §6, caveats §11d, action §7, sub-trees recursive);
-  * §14 — the WIDE STATE record (`parseWState`, the 9-field state decoder = the differential's core);
+  * §14 — the WIDE STATE record (`parseWState`, the 11-field state decoder = the differential's core);
   * §16 — the complete-turn ENVELOPE + WHOLE wire (`parseWTurn`/`parseWWire`, whole-input-consumed).
     The wire codec is now FULLY out of the Lean-side TCB.
 
@@ -85,6 +86,7 @@ Quot.sound}`. -/
 #assert_axioms parseAuths_encode
 #assert_axioms parseNats_encode
 #assert_axioms parseBal_encode
+#assert_axioms parseCellNats_encode
 #assert_axioms parseEscrow_encode
 #assert_axioms parseEscrows_encode
 #assert_axioms parseQueue_encode
