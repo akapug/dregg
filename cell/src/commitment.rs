@@ -58,10 +58,23 @@ use crate::state::{CellState, FieldVisibility};
 /// circuit public inputs derive their domain separation transitively from this
 /// context — bumping it cleanly invalidates stale commitments rather than
 /// allowing silent cross-version collisions.
-pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v4";
+///
+/// `v4 → v5` (cap Phase A): the absorbed `capability_root` is now the openable
+/// sorted-Poseidon2 Merkle root (a BabyBear felt's 4 LE bytes), computed
+/// identically to the EffectVM circuit's `cap_root`, replacing the old
+/// disjoint BLAKE3 XOR-fold. The bump cleanly invalidates any stale v4
+/// commitment rather than risking a silent cross-version collision.
+pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v5";
 
 /// Domain-separation context for the canonical capability-set root.
-pub const CANONICAL_CAP_ROOT_CONTEXT: &str = "dregg-cell:canonical-capability-root v1";
+///
+/// `v1 → v2` (cap Phase A): the capability root is no longer a BLAKE3 XOR-fold
+/// over per-cap leaf hashes — it is the openable sorted-Poseidon2 binary Merkle
+/// root ([`dregg_circuit::cap_root`]), shared byte-identically with the EffectVM
+/// circuit. The single-cap commitment returned by
+/// [`crate::capability::CapabilitySet::attenuate_in_place`] is now the 32-byte
+/// encoding of that cap's leaf-digest felt under this context.
+pub const CANONICAL_CAP_ROOT_CONTEXT: &str = "dregg-cell:canonical-capability-root v2";
 
 /// Compute the canonical tier-byte for a single `AuthRequired` value.
 ///
@@ -153,6 +166,9 @@ pub fn compute_canonical_state_commitment(cell: &Cell) -> [u8; 32] {
     }
 
     // ---- Capabilities (full canonical root) ----
+    // The openable sorted-Poseidon2 capability root (cap Phase A), absorbed as
+    // its canonical 32-byte felt encoding so the cell's full-state commitment
+    // binds the SAME `cap_root` value the EffectVM circuit carries.
     let cap_root = compute_canonical_capability_root(&cell.capabilities);
     hasher.update(&cap_root);
 
@@ -325,18 +341,11 @@ fn hash_delegation_into(hasher: &mut blake3::Hasher, deleg: &DelegatedRef) {
     }
 }
 
-/// Public-within-crate alias for the canonical capability-ref hashing
-/// used by [`compute_canonical_capability_root`]. Exposed for the
-/// in-place attenuation primitive in [`crate::capability`], which
-/// returns a 32-byte commitment to the *narrowed* cap so callers can
-/// update c-list audit indices without re-hashing the whole c-list.
-pub(crate) fn hash_capability_ref_canonical(
-    hasher: &mut blake3::Hasher,
-    cap: &crate::capability::CapabilityRef,
-) {
-    hash_capability_ref_into(hasher, cap);
-}
-
+/// Hash a single `CapabilityRef` into the blake3 DELEGATION-SNAPSHOT hasher
+/// (used only by [`hash_delegation_into`] / the legacy-commitment reference).
+/// This is the snapshot commitment for a delegated c-list, NOT the openable
+/// capability root — the root is the sorted-Poseidon2 felt
+/// ([`compute_canonical_capability_root_felt`]).
 fn hash_capability_ref_into(hasher: &mut blake3::Hasher, cap: &crate::capability::CapabilityRef) {
     hasher.update(cap.target.as_bytes());
     hasher.update(&cap.slot.to_le_bytes());
@@ -398,19 +407,95 @@ fn hash_program_into(hasher: &mut blake3::Hasher, program: &crate::program::Cell
     }
 }
 
-/// Compute the canonical 32-byte root of a `CapabilitySet`.
-///
-/// This is what the circuit's `capability_root` BabyBear element *should* be
-/// derived from (audit P0-3 — currently uncomputed in the cell crate). All
-/// authority-relevant fields of every `CapabilityRef` are included.
-pub fn compute_canonical_capability_root(caps: &CapabilitySet) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new_derive_key(CANONICAL_CAP_ROOT_CONTEXT);
-    let cap_count = caps.len() as u64;
-    hasher.update(&cap_count.to_le_bytes());
-    for cap in caps.iter() {
-        hash_capability_ref_into(&mut hasher, cap);
+/// The canonical capability `CapLeaf` for one `CapabilityRef`, in the shared
+/// [`dregg_circuit::cap_root`] field encoding. This is the cell-side
+/// construction of the 7-field leaf the circuit hashes; because both sides go
+/// through `dregg_circuit::cap_root`, the leaf — and therefore the root — is
+/// byte-identical wherever it is computed.
+fn cap_ref_to_leaf(cap: &crate::capability::CapabilityRef) -> dregg_circuit::cap_root::CapLeaf {
+    use dregg_circuit::cap_root;
+    let (mask_lo, mask_hi) = cap_root::split_effect_mask(
+        // `None` ⇒ unrestricted ⇒ EFFECT_ALL (so the mask limbs are the full
+        // 32-bit all-ones, matching the executor's `allowed_effects = None`
+        // ⇒ `EFFECT_ALL` interpretation in `capability.rs`).
+        cap.allowed_effects.unwrap_or(crate::facet::EFFECT_ALL),
+    );
+    cap_root::CapLeaf {
+        slot_hash: cap_root::slot_hash(cap.slot),
+        target: cap_root::fold_bytes32(cap.target.as_bytes()),
+        auth_tag: auth_required_to_tag(&cap.permissions),
+        mask_lo,
+        mask_hi,
+        expiry: cap_root::encode_expiry(cap.expires_at),
+        breadstuff: cap_root::encode_breadstuff(cap.breadstuff.as_ref()),
     }
-    *hasher.finalize().as_bytes()
+}
+
+/// Encode an `AuthRequired` into the single `auth_tag` felt: the tier byte
+/// (None=0…Custom=5) for the built-in variants, and for `Custom { vk_hash }`
+/// the tier byte WITH the 8 vk_hash limbs absorbed via Poseidon2 — mirroring
+/// the cell's `hash_auth_required_into` so two `Custom`s with distinct
+/// vk_hashes yield distinct tags (and therefore distinct leaves).
+fn auth_required_to_tag(auth: &AuthRequired) -> dregg_circuit::field::BabyBear {
+    use dregg_circuit::field::BabyBear;
+    use dregg_circuit::poseidon2::hash_many;
+    let tier = BabyBear::new(auth_byte(auth) as u32);
+    match auth {
+        AuthRequired::Custom { vk_hash } => {
+            // Absorb [tier, vk_limb0..7] so the 8 vk_hash limbs bind the tag.
+            let mut inputs = Vec::with_capacity(9);
+            inputs.push(tier);
+            inputs.extend_from_slice(&BabyBear::encode_hash(vk_hash));
+            hash_many(&inputs)
+        }
+        _ => tier,
+    }
+}
+
+/// Compute the canonical capability root **felt** of a `CapabilitySet`: the
+/// openable sorted-Poseidon2 binary Merkle root over the c-list
+/// ([`dregg_circuit::cap_root`]). This IS the value the EffectVM circuit's
+/// `cap_root` column carries — the cell and circuit compute it through the
+/// SAME implementation, so they agree byte-identically (the A2 differential
+/// guards it).
+pub fn compute_canonical_capability_root_felt(
+    caps: &CapabilitySet,
+) -> dregg_circuit::field::BabyBear {
+    let leaves: Vec<dregg_circuit::cap_root::CapLeaf> =
+        caps.iter().map(cap_ref_to_leaf).collect();
+    dregg_circuit::cap_root::compute_capability_root(leaves)
+}
+
+/// Compute the canonical 32-byte capability root of a `CapabilitySet`.
+///
+/// This is the 32-byte ENCODING of [`compute_canonical_capability_root_felt`]
+/// (the openable sorted-Poseidon2 Merkle root) — see [`felt_to_bytes32`]. It
+/// is what `compute_canonical_state_commitment` absorbs and what the executor's
+/// CapabilityUniqueness program binds in a 32-byte cap-set-root state slot
+/// (`turn::executor::execute_tree`). The empty c-list root is NON-zero (the
+/// sentinels hash into a real value), so the executor's "root slot must be
+/// non-zero" check is preserved.
+pub fn compute_canonical_capability_root(caps: &CapabilitySet) -> [u8; 32] {
+    felt_to_bytes32(compute_canonical_capability_root_felt(caps))
+}
+
+/// The canonical 32-byte encoding of a capability-root felt: the felt's 4
+/// little-endian bytes in the low 4 positions, the rest zero. Deterministic
+/// and injective on canonical BabyBear values (< p), so distinct roots encode
+/// to distinct byte strings.
+pub fn felt_to_bytes32(felt: dregg_circuit::field::BabyBear) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[0..4].copy_from_slice(&felt.as_u32().to_le_bytes());
+    out
+}
+
+/// The 32-byte commitment to a SINGLE capability's openable leaf: the encoding
+/// ([`felt_to_bytes32`]) of the cap's 7-field [`dregg_circuit::cap_root::CapLeaf`]
+/// digest. Used by [`crate::capability::CapabilitySet::attenuate_in_place`] so a
+/// caller can update c-list audit indices with a value consistent with the
+/// canonical sorted-tree root.
+pub fn capability_ref_leaf_commitment(cap: &crate::capability::CapabilityRef) -> [u8; 32] {
+    felt_to_bytes32(cap_ref_to_leaf(cap).digest())
 }
 
 /// Convert a 32-byte canonical commitment into 8 BabyBear-shaped felts
@@ -713,7 +798,12 @@ mod tests {
             system_root::STURDYREF, system_root::DELEG, system_root::NULLIFIER,
             system_root::COMMIT, system_root::SEALED_BOXES,
         ];
-        let mut sorted = idxs;
+        // `dedup` is a `Vec` method (not available on a fixed-size array), so
+        // collect into a `Vec` first. (This test module only began compiling
+        // once `dregg-circuit` became a non-optional dependency of the cell
+        // crate — cap Phase A — which surfaced this latent `[usize; 8].dedup()`
+        // error that no prior build exercised.)
+        let mut sorted = idxs.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), crate::state::N_SYSTEM_ROOTS, "indices distinct & cover the block");
