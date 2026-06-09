@@ -22,20 +22,23 @@
 //!
 //! ## What this validated (real Plonky3 output)
 //!
-//! * **GRADUATED (20 selectors AGREE + prove+verify+anti-ghost):** `transfer` (1, the beachhead),
+//! * **GRADUATED (21 selectors AGREE + prove+verify+anti-ghost):** `transfer` (1, the beachhead),
 //!   the FULL-ECONOMIC effects `note_spend` (4), `note_create` (5), `bridge_mint` (40), `burn` (46)
 //!   (reconciled onto the runtime balance-column + nonce-tick convention), the FROZEN-FRAME nonce-tick
 //!   effects `create_seal_pair` (28) and `bridge_finalize` (41), and — via the NONCE-TICK-PATCH
-//!   graduation (`frozen_frame_nonce_tick_effects_graduated_into_cutover`) — the 13 reconciled
+//!   graduation (`frozen_frame_nonce_tick_effects_graduated_into_cutover`) — the 12 reconciled
 //!   passthrough+tick effects `set_permissions` (26), `set_verification_key` (27), `refresh_delegation`
 //!   (29), `revoke_delegation` (30), `exercise_via_capability` (34), `introduce` (35), `pipelined_send`
-//!   (36), `cell_destroy` (47), `cell_seal` (49), `refusal` (52), `increment_nonce` (53) (their Lean
-//!   emit modules now tick the runtime nonce via `gNonce` AND carry the `boundaryLastPins` last-row
-//!   balance PI binding; the committed descriptor JSON was re-emitted to match). Each: descriptor
-//!   interpreter AND hand-AIR both prove+verify the honest witness, agree on accept, and both reject the
-//!   forged-balance + forged-state-commit tampers. (revoke/introduce were re-pointed off the `attenuateA`
-//!   cap-root-MOVE descriptor — wrong for them since the runtime FREEZES `cap_root` — onto their own
-//!   frozen-frame+tick descriptor; the cap-table move is bound OFF-row via the universe-A connector.)
+//!   (36), `cell_destroy` (47), `cell_seal` (49), `refusal` (52), `increment_nonce` (53), and
+//!   `emit_event` (25) (their Lean emit modules now tick the runtime nonce via `gNonce` AND carry the
+//!   `boundaryLastPins` last-row balance PI binding; the committed descriptor JSON was re-emitted to
+//!   match). Each: descriptor interpreter AND hand-AIR both prove+verify the honest witness, agree on
+//!   accept, and both reject the forged-balance + forged-state-commit tampers. (revoke/introduce were
+//!   re-pointed off the `attenuateA` cap-root-MOVE descriptor — wrong for them since the runtime FREEZES
+//!   `cap_root` — onto their own frozen-frame+tick descriptor; the cap-table move is bound OFF-row via the
+//!   universe-A connector. `emit_event` is the pure observation-LOG no-state-move row: economic block
+//!   FROZEN, nonce TICKS; its FREEZE-ALL primitives are preserved for the no-op-style reuse, and the
+//!   Argus full-state crown + §6 weld were reconciled to the tick.)
 //!
 //! * **The remaining selectors DIVERGE / are unconstructible.** `enumerate_all_descriptor_divergences`
 //!   maps the full set; `pinpoint_divergence_per_selector` reports the FIRST failing constraint per
@@ -46,6 +49,52 @@
 //!   proof-of-concept that an in-memory nonce-tick patch graduates the clean candidates AND surfaces
 //!   the anti-ghost-WEAK ones (frozen-frame descriptors MISSING the last-row balance PI binding —
 //!   their forged-balance tooth does not bite until that binding is emitted).
+//!
+//! ## THE EXECUTOR-VS-RUNTIME DIVERGENCE (why the remaining 20 are DEEPER, not mechanical)
+//!
+//! The remaining DIVERGE effects are NOT graduate-by-matching-the-runtime: making their 186-wide
+//! descriptor `descriptor_air_accepts` the honest trace would require GUTTING the verified executor's
+//! on-trace state move, silently dropping a real guarantee (the pale-ghost trap). The honest split (the
+//! per-effect Lean emit-module headers cite the verified universe-A `*Spec` each carries):
+//!
+//!   * **escrow/bridge value-MOVE family — `create_escrow` (37), `bridge_lock` (38),
+//!     `create_committed_escrow` (39), `release_escrow` (42), `refund_escrow` (43), `bridge_cancel`
+//!     (33).** The verified executor MOVES the per-asset ledger ON-trace (release/refund/cancel CREDIT,
+//!     create/lock DEBIT — `recBalCreditCell ±amount`, proven in each module's `unify_*`/`*_refund`),
+//!     so each Lean descriptor pins an on-row `gBalLo{Credit,Debit}`. But the RUNTIME hand-AIR
+//!     (`trace.rs:656-686`, `air.rs:983` passthrough batch / `air.rs:1192` debit arm) runs 39/42/43/33 as
+//!     state-PASSTHROUGH (balance FROZEN, value rides the committed-escrow SIDE-TABLE root off-row) and
+//!     reads `param0` as the escrow-id hash, NOT an amount. Reconciling needs the off-row escrow-root
+//!     binding (the 188-wide `*Wide` system-roots site) — the per-row 186 IR cannot re-derive it.
+//!     (37/38 additionally read `param0` for the debit where the trace uses `param1`.)
+//!   * **lifecycle/birth family — `create_cell` (31), `spawn_with_delegation` (32),
+//!     `create_cell_from_factory` (13).** The Lean descriptor pins the BORN-EMPTY CHILD cell (all-zero
+//!     block, `balOf default = 0`); the runtime EffectVM row is the ACTING cell's PASSTHROUGH+tick
+//!     (`air.rs:983`/`1522`). Different cells — the row's `state_after` is the actor's (100000 bal, ticked
+//!     nonce), not the child's `0`. Reconciling needs deciding which cell the row models + binding the
+//!     other off-row.
+//!   * **lifecycle-SET / sovereign-ZERO — `receipt_archive` (51), `make_sovereign` (12).** The verified
+//!     executor SETS `field[1] := 1` (the lifecycle record-slot, `receipt_archive`) / ZEROES the balance
+//!     behind the sovereign commitment (`make_sovereign`, `balOf sovereignRebind = 0`) ON-trace; the
+//!     runtime FREEZES field[1] (lifecycle off-row, `air.rs:2513`) / freezes balance + moves only
+//!     `reserved += 256` (the mode flag, `air.rs:1493`). The on-trace SET/ZERO vs runtime off-row is the
+//!     conflict.
+//!   * **queue family — `allocate_queue` (18), `enqueue_message` (19), `dequeue_message` (20),
+//!     `resize_queue` (21).** Divergence in BOTH directions PLUS an off-row queue-root: the RUNTIME
+//!     CHARGES the allocation/deposit FEE on-row (`air.rs:1864`/`1917` balance debit) while the verified
+//!     `QueueAllocateSpec` is balance-NEUTRAL (`unify_allocate_balFrozen_univA`); and the queue ROOT
+//!     (`field[4]`) is a hash-chain the per-row IR cannot re-derive (off-trace side-table).
+//!   * **swiss-table digest family — `export_sturdy_ref` (14), `enliven_ref` (15).** A scalar
+//!     `swiss_root` digest MOVE the per-row IR cannot unfold (off-trace swiss-table).
+//!   * **cap-reshape family — `grant_cap` (3), `attenuate_capability` (48).** RESERVED for a separate
+//!     cap-commitment reshape (the `cap_root` is a scalar digest of the cap-table FUNCTION the IR can't
+//!     unfold). Out of scope here.
+//!
+//! In every DEEPER case the right reconcile is an ember-level decision about WHICH LAYER holds the
+//! canonical move (push the runtime on-row, or extend the descriptor to bind the verified move via the
+//! 188-wide side-table root), NOT a mechanical descriptor patch. `emit_event` was the LAST genuinely
+//! mechanical straggler — a pure no-state-move row mismodeled as FREEZE-ALL (frozen nonce) that the
+//! executor AND runtime AGREE freezes economically + ticks the actor nonce.
 
 use dregg_circuit::effect_vm::columns::{STATE_AFTER_BASE, state};
 use dregg_circuit::effect_vm::{CellState, Effect, generate_effect_vm_trace, pi};
@@ -993,6 +1042,13 @@ fn frozen_frame_nonce_tick_effects_graduated_into_cutover() {
         sel::CELL_SEAL,               // 49
         sel::REFUSAL,                 // 52
         sel::INCREMENT_NONCE,         // 53
+        // emitEvent (25) graduated: the OBSERVATION-LOG effect is the pure no-state-move row — the
+        // economic block FREEZES, the actor turn-sequence nonce TICKS (the runtime's global non-NoOp
+        // nonce gate), the log receipt rides off-row. Its Lean emit module was reconciled from the
+        // pre-v1 FREEZE-ALL (nonce frozen + state_commit frozen, UNSAT on the honest ticked trace) onto
+        // the passthrough+tick template (setPermissions shape + selectorGates 25). The Argus full-state
+        // crown (`EffectVmEmitEmitEventWide`) + the §6 runnable weld were reconciled to the tick.
+        sel::EMIT_EVENT,              // 25
     ];
 
     let mut graduated = 0usize;
@@ -1064,7 +1120,7 @@ fn frozen_frame_nonce_tick_effects_graduated_into_cutover() {
         );
         graduated += 1;
     }
-    assert_eq!(graduated, 11, "all 11 frozen-frame nonce-tick effects must graduate");
+    assert_eq!(graduated, 12, "all 12 frozen-frame nonce-tick effects must graduate (incl. emitEvent)");
 }
 
 /// THE SELECTOR-BINDING TOOTH (closes the `sdk/full_turn_proof.rs` SOUNDNESS NOTE). Each cutover
