@@ -505,12 +505,15 @@ removal rides OFF-row via `unify_revoke`). Its WIDE descriptor widens `revokeVmD
 FROZEN, and the full clause is the per-cell `RevokeCellSpec` (frame frozen, nonce ticked) AND `postRoots =
 preRoots`.
 
-⚑ REPORTED RESIDUAL (the `delegation_epoch` / `DELEG` advance — a SEPARATE kernel-widen wave, NOT closed
-here): dregg1's revokeDelegation ALSO bumps the per-child revocation epoch (the `DELEG` system-root). The
-verified KERNEL step `recKRevokeTarget` carries no such epoch field on `RecordKernelState`, so the kernel
-(and therefore THIS lift) FREEZES `DELEG` rather than advancing it. The full-state binding here is
-faithful to the kernel-model-as-is (all 8 roots bound, frozen); closing the epoch is a kernel-state
-widening tracked separately (`revoke_DELEG_epoch_residual` documents the boundary). -/
+⚑ SCOPED CIRCUIT FOLLOW-UP (the `delegation_epoch` / `DELEG` advance — kernel CLOSED, circuit-binding
+PENDING): dregg1's revokeDelegation bumps the parent's `delegation_epoch` + clears the child's snapshot.
+The KERNEL now MODELS this faithfully via the dedicated step `recKRevokeDelegationFull` (`AuthTurn.lean
+§3.EPOCH`, proved in `revokeKernel_models_runtime_epoch`). What remains is purely a CIRCUIT-binding step:
+THIS lift's descriptor binds the shared cap-edge leg `recKRevokeTarget` (which frames the epoch), so on
+that descriptor the `DELEG`/epoch sub-root is FROZEN. Routing the RUNNING RevokeDelegation descriptor onto
+`recKRevokeDelegationFull` (so `state_commit` absorbs the advanced epoch) is the scoped follow-up;
+`revoke_DELEG_epoch_residual` pins the precise boundary (kernel models it; this descriptor's cap-root leg
+is epoch-independent), a checked fact, not a buried assumption. -/
 
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
   (wideHashSites RunnableFullStateSpec runnable_full_sound wide_rejects_root_tamper)
@@ -621,19 +624,31 @@ theorem revokeWide_clause_not_trivial :
   rintro ⟨_, _, hnon, _⟩
   exact absurd hnon (by decide)
 
-/-- **`revoke_DELEG_epoch_residual` — the reported `DELEG`-epoch boundary, as a checked theorem.** The
-verified kernel step `recKRevokeTarget` reads/writes ONLY `caps`; it is INDEPENDENT of the `delegations`
-side-table (the `DELEG` root). Concretely: two kernel states with IDENTICAL `caps` (hence identical
-EffectVM-row `cap_root`) can DIFFER on `delegations` (hence on the `DELEG` root). So this lift's
-frozen-`DELEG` clause is faithful to the kernel-as-is; advancing the per-child revocation epoch is a
-SEPARATE kernel-state widening (add a `delegations`/epoch transition to the `revokeDelegationA` arm), out
-of scope here — pinned so the residual is a checked fact, not a buried assumption. -/
+/-- **`revoke_DELEG_epoch_residual` — the precise boundary, as a checked theorem (kernel CLOSED;
+circuit-binding scoped).** Two facts, both PROVED:
+
+  (a) **the KERNEL models the epoch** — the faithful full delegation-revoke step
+      `recKRevokeDelegationFull k parent child` ADVANCES the parent's `delegationEpoch` by EXACTLY `+1`
+      (`revokeKernel_models_runtime_epoch`); the divergence is CLOSED at the kernel layer;
+
+  (b) **this lift's cap-root leg is epoch-INDEPENDENT** — the shared cap-edge `recKRevokeTarget` (which
+      THIS descriptor binds) reads/writes ONLY `caps`, so the EffectVM-row `cap_root` digest `capRootProj
+      D` is unchanged by the `delegations`/epoch sub-table: two states with identical `caps` but DIFFERENT
+      `delegations` share a `cap_root` yet differ on the `DELEG` root.
+
+So binding the (kernel-modeled) epoch advance into the RUNNING descriptor requires routing it onto
+`recKRevokeDelegationFull` + carrying the `DELEG` sub-root through `state_commit` — the scoped circuit
+follow-up. Pinned so neither the close (a) nor the remaining binding (b) is a buried assumption. -/
 theorem revoke_DELEG_epoch_residual (D : Caps → ℤ)
-    (k : RecordKernelState) (g₁ g₂ : CellId → List Cap) (hne : D g₁ ≠ D g₂) :
-    capRootProj D { k with delegations := g₁ } = capRootProj D { k with delegations := g₂ }
+    (k : RecordKernelState) (parent child : CellId)
+    (g₁ g₂ : CellId → List Cap) (hne : D g₁ ≠ D g₂) :
+    -- (a) the kernel CLOSES the epoch: the faithful full step advances the parent epoch by +1.
+    (recKRevokeDelegationFull k parent child).delegationEpoch parent = k.delegationEpoch parent + 1
+    -- (b) this descriptor's cap-root leg is epoch/`DELEG`-independent (the scoped circuit-binding boundary).
+    ∧ capRootProj D { k with delegations := g₁ } = capRootProj D { k with delegations := g₂ }
     ∧ D ({ k with delegations := g₁ } : RecordKernelState).delegations
         ≠ D ({ k with delegations := g₂ } : RecordKernelState).delegations := by
-  refine ⟨?_, hne⟩
+  refine ⟨recKRevokeDelegationFull_bumps_parent_epoch k parent child, ?_, hne⟩
   show D ({ k with delegations := g₁ } : RecordKernelState).caps
       = D ({ k with delegations := g₂ } : RecordKernelState).caps
   rfl

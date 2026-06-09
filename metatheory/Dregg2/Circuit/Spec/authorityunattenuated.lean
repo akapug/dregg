@@ -128,6 +128,8 @@ def DelegateSpec (s : RecChainedState) (del rec t : CellId) (s' : RecChainedStat
   ∧ s'.kernel.delegate = s.kernel.delegate
   ∧ s'.kernel.delegations = s.kernel.delegations
   ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-! ## §4 — EXECUTOR ⟺ SPEC (FULL state, both directions).
 
@@ -148,13 +150,13 @@ theorem recCDelegate_iff_spec (s : RecChainedState) (del rec t : CellId) (s' : R
     · intro h
       simp only [Option.some.injEq] at h
       subst h
-      exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    · rintro ⟨hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+      exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
       -- reconstruct `s'` from its 18 components.
       obtain ⟨k', log'⟩ := s'
-      obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb⟩ := k'
-      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       rfl
   · rw [if_neg hg]
     constructor

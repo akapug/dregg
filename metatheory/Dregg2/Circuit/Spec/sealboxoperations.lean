@@ -192,6 +192,8 @@ def SealSpec (st : RecChainedState) (pid : Nat) (actor : CellId) (payload : Cap)
   ∧ st'.kernel.deathCert = st.kernel.deathCert
   ∧ st'.kernel.delegate = st.kernel.delegate
   ∧ st'.kernel.delegations = st.kernel.delegations
+  ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+  ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-- **The full-state declarative spec of a committed `unsealA`** — the INDEPENDENT reference
 semantics over `RecChainedState`. The unseal guard holds (against the found `box`); `caps` is the
@@ -219,6 +221,8 @@ def UnsealSpec (st : RecChainedState) (pid : Nat) (actor recipient : CellId) (bo
   ∧ st'.kernel.delegate = st.kernel.delegate
   ∧ st'.kernel.delegations = st.kernel.delegations
   ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+  ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+  ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-! ## §4 — The executor ⟺ spec equivalences (FULL state, both directions). -/
 
@@ -239,13 +243,14 @@ theorem sealChainA_iff_spec (st : RecChainedState) (pid : Nat) (actor : CellId) 
     · intro h
       simp only [Option.some.injEq] at h; subst h
       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-             rfl⟩
+             rfl, rfl, rfl⟩
     · rintro ⟨_, hsb, hlog, hacc, hcell, hcaps, hesc, hnull, hrev, hcom, hbal, hq, hsw, hsc, hfac,
-             hlif, hdc, hdel, hdels⟩
+             hlif, hdc, hdel, hdels, hde, hdea⟩
       obtain ⟨k', log'⟩ := st'
       obtain ⟨acc', cell', caps', esc', null', rev', com', bal', q', sw', sc', fac', lif', dc', del',
-              dels', sb'⟩ := k'
+              dels', sb', de', dea'⟩ := k'
       subst hacc hcell hcaps hesc hnull hrev hcom hbal hq hsw hsc hfac hlif hdc hdel hdels hsb hlog
+        hde hdea
       rfl
   · rw [if_neg hg]
     constructor
@@ -270,15 +275,16 @@ theorem unsealChainA_iff_spec (st : RecChainedState) (pid : Nat) (actor recipien
       -- `rw […, hbox]` above already rewrote the goal's `findSealedBox … = some box` to `some box =
       -- some box`, so the unsealAdmitGuard's box conjunct is discharged by `rfl`.
       refine ⟨⟨hg, rfl⟩, (grantedCaps_eq_grant _ _ _).symm, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-             rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+             rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
     · rintro ⟨⟨_, _⟩, hcaps, hlog, hacc, hcell, hesc, hnull, hrev, hcom, hbal, hq, hsw, hsc, hfac,
-             hlif, hdc, hdel, hdels, hsb⟩
+             hlif, hdc, hdel, hdels, hsb, hde, hdea⟩
       obtain ⟨k', log'⟩ := st'
       obtain ⟨acc', cell', caps', esc', null', rev', com', bal', q', sw', sc', fac', lif', dc', del',
-              dels', sb'⟩ := k'
+              dels', sb', de', dea'⟩ := k'
       -- the spec's `caps` post is `grantedCaps`; rewrite it to the executor's `grant` form.
       rw [grantedCaps_eq_grant] at hcaps
       subst hacc hcell hcaps hesc hnull hrev hcom hbal hq hsw hsc hfac hlif hdc hdel hdels hsb hlog
+        hde hdea
       rfl
   · rw [if_neg hg]
     constructor
@@ -363,7 +369,7 @@ theorem unseal_preserves_box_store (st : RecChainedState) (pid : Nat) (actor rec
     (box : SealedBoxRecord) (st' : RecChainedState)
     (h : UnsealSpec st pid actor recipient box st') :
     st'.kernel.sealedBoxes = st.kernel.sealedBoxes := by
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hsb⟩ := h
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hsb, _, _⟩ := h
   exact hsb
 
 /-- **`unseal_preserves_other_holders` — PROVED.** Any holder `l ≠ recipient` keeps its cap-list

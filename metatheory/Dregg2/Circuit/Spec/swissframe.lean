@@ -21,11 +21,12 @@ theorem recKernel_ext {k k' : RecordKernelState}
     (h10 : k'.swiss = k.swiss) (h11 : k'.slotCaveats = k.slotCaveats)
     (h12 : k'.factories = k.factories) (h13 : k'.lifecycle = k.lifecycle)
     (h14 : k'.deathCert = k.deathCert) (h15 : k'.delegate = k.delegate)
-    (h16 : k'.delegations = k.delegations) (h17 : k'.sealedBoxes = k.sealedBoxes) :
+    (h16 : k'.delegations = k.delegations) (h17 : k'.sealedBoxes = k.sealedBoxes)
+    (h18 : k'.delegationEpoch = k.delegationEpoch) (h19 : k'.delegationEpochAt = k.delegationEpochAt) :
     k' = k := by
   cases k; cases k'
-  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
-  subst h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
+  subst h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
   rfl
 
 theorem withSwiss_preserves_rest (k : RecordKernelState) (ss : List SwissRecord) :
@@ -35,15 +36,17 @@ theorem withSwiss_preserves_rest (k : RecordKernelState) (ss : List SwissRecord)
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes := by
+      ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt := by
   dsimp
-  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem withSwiss_bal_accounts (k : RecordKernelState) (ss : List SwissRecord) :
     ({ k with swiss := ss }).bal = k.bal ∧
     ({ k with swiss := ss }).accounts = k.accounts := by
   rcases withSwiss_preserves_rest k ss with
-    ⟨hAcc, _, _, _, _, _, _, hBal, _, _, _, _, _, _, _, _⟩
+    ⟨hAcc, _, _, _, _, _, _, hBal, _, _, _, _, _, _, _, _, _, _⟩
   exact ⟨hBal, hAcc⟩
 
 theorem kernel_swiss_update_bal_accounts {k kw : RecordKernelState}
@@ -58,7 +61,9 @@ theorem restFrame_of_withSwiss {k k' : RecordKernelState} {ss : List SwissRecord
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes := by
+      ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt := by
   rw [h]
   exact withSwiss_preserves_rest k ss
 

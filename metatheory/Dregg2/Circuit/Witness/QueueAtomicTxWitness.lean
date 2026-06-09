@@ -81,7 +81,9 @@ def queueAtomicTxEConcrete : EffectSpec2Triple RecChainedState AtomicTxArgs wher
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
       ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
-      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := atomicTxGuardGates
   guardProp    := atomicTxGuardProp
   guardWidth   := 1

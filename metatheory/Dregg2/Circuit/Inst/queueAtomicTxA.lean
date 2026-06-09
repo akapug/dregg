@@ -46,7 +46,9 @@ def RestIffNoQueuesBalEscrows (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
       ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
-      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
 /-! ## §2 — the `queueAtomicTxE` triple instance (`queues` + `bal` + `escrows`). -/
 
@@ -136,7 +138,9 @@ def queueAtomicTxE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Inj
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.swiss = k.swiss ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
       ∧ k'.lifecycle = k.lifecycle ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
-      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := atomicTxGuardGates
   guardProp    := atomicTxGuardProp
   guardWidth   := 1
@@ -198,7 +202,9 @@ theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
     (hslotCaveats : k.slotCaveats = k'.slotCaveats) (hfactories : k.factories = k'.factories)
     (hlifecycle : k.lifecycle = k'.lifecycle) (hdeathCert : k.deathCert = k'.deathCert)
     (hdelegate : k.delegate = k'.delegate) (hdelegations : k.delegations = k'.delegations)
-    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes) : k = k' := by
+    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes)
+    (hdelegationEpoch : k.delegationEpoch = k'.delegationEpoch)
+    (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt) : k = k' := by
   cases k; cases k'; simp_all
 
 /-! ### §2d — post-shape helpers + batch frame preservation. -/
@@ -237,13 +243,15 @@ theorem kernel_eq_batch_of_components
     (hDC : s'.kernel.deathCert = s.kernel.deathCert)
     (hDel : s'.kernel.delegate = s.kernel.delegate)
     (hDgs : s'.kernel.delegations = s.kernel.delegations)
-    (hSB : s'.kernel.sealedBoxes = s.kernel.sealedBoxes) :
+    (hSB : s'.kernel.sealedBoxes = s.kernel.sealedBoxes)
+    (hDE : s'.kernel.delegationEpoch = s.kernel.delegationEpoch)
+    (hDEA : s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt) :
     s'.kernel = s1.kernel := by
   have hkq := atomicTxPostQueues_some s args s1 hf
   have hbal' := atomicTxPostBal_some s args s1 hf
   have hesc' := atomicTxPostEscrows_some s args s1 hf
   rcases queueAtomicTxChainA_preserves_rest hf with
-    ⟨hAccF, hCellF, hCapsF, hNulF, hRevF, hComF, hSwF, hSCF, hFacF, hLifF, hDCF, hDelF, hDgsF, hSBF⟩
+    ⟨hAccF, hCellF, hCapsF, hNulF, hRevF, hComF, hSwF, hSCF, hFacF, hLifF, hDCF, hDelF, hDgsF, hSBF, hDEF, hDEAF⟩
   apply recordKernel_eq_of_fields
   · exact hAcc.trans hAccF.symm
   · exact hCell.trans hCellF.symm
@@ -262,6 +270,8 @@ theorem kernel_eq_batch_of_components
   · exact hDel.trans hDelF.symm
   · exact hDgs.trans hDgsF.symm
   · exact hSB.trans hSBF.symm
+  · exact hDE.trans hDEF.symm
+  · exact hDEA.trans hDEAF.symm
 
 /-! ### §2e — apex ↔ `QueueAtomicTxSpec`. -/
 
@@ -275,11 +285,11 @@ theorem apex_iff_queueAtomicTxSpec (D : (CellId → AssetId → ℤ) → ℤ) (h
   unfold QueueAtomicTxSpec queueAtomicTxE EffectSpec2Triple.apex EffectSpec2Triple.postLog
   constructor
   · rintro ⟨hg, hq, hbal, hesc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hSw, hSC, hFac, hLif,
-      hDC, hDel, hDgs, hSB⟩
+      hDC, hDel, hDgs, hSB, hDE, hDEA⟩
     rcases atomicTxGuardProp_iff_atomicTxGuard s args |>.mp hg with ⟨s1, hf⟩
     refine ⟨s1, hf, ?_, ?_⟩
     · exact kernel_eq_batch_of_components s s' args s1 hf hq hbal hesc
-        hAcc hCell hCaps hNul hRev hCom hSw hSC hFac hLif hDC hDel hDgs hSB
+        hAcc hCell hCaps hNul hRev hCom hSw hSC hFac hLif hDC hDel hDgs hSB hDE hDEA
     · simp only [hf, queueAtomicTxE] at hlog ⊢
       exact hlog
   · rintro ⟨s1, hf, hker, hlog⟩
@@ -289,8 +299,8 @@ theorem apex_iff_queueAtomicTxSpec (D : (CellId → AssetId → ℤ) → ℤ) (h
     have hbal' := atomicTxPostBal_some s args s1 hf
     have hesc' := atomicTxPostEscrows_some s args s1 hf
     rcases queueAtomicTxChainA_preserves_rest hf with
-      ⟨hAccF, hCellF, hCapsF, hNulF, hRevF, hComF, hSwF, hSCF, hFacF, hLifF, hDCF, hDelF, hDgsF, hSBF⟩
-    refine ⟨hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      ⟨hAccF, hCellF, hCapsF, hNulF, hRevF, hComF, hSwF, hSCF, hFacF, hLifF, hDCF, hDelF, hDgsF, hSBF, hDEF, hDEAF⟩
+    refine ⟨hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · show s'.kernel.queues = atomicTxPostQueues s args
       exact (congrArg (fun k => k.queues) hker).trans hkq.symm
     · show s'.kernel.bal = atomicTxPostBal s args
@@ -315,6 +325,8 @@ theorem apex_iff_queueAtomicTxSpec (D : (CellId → AssetId → ℤ) → ℤ) (h
     · exact (congrArg (fun k => k.delegate) hker).trans hDelF
     · exact (congrArg (fun k => k.delegations) hker).trans hDgsF
     · exact (congrArg (fun k => k.sealedBoxes) hker).trans hSBF
+    · exact (congrArg (fun k => k.delegationEpoch) hker).trans hDEF
+    · exact (congrArg (fun k => k.delegationEpochAt) hker).trans hDEAF
 
 /-! ### §2f — THE VALIDATION: `queueAtomicTxA_full_sound ⇒ QueueAtomicTxSpec`. -/
 

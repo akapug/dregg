@@ -47,7 +47,9 @@ def RestIffNoAccountsBalBorn (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
-      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
 /-! ## §2 — the `createCellE` triple instance (`accounts` + `bal` + born-empty side). -/
 
@@ -113,7 +115,9 @@ def createCellE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
   restFrame    := fun k k' =>
     (k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
-      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := createCellGuardGates
   guardProp    := createCellGuardProp
   guardWidth   := 1

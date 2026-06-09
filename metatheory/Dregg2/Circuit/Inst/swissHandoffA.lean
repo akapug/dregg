@@ -51,7 +51,9 @@ def RestIffNoSwiss (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
 /-! ## §2 — the `swissHandoffA` instance (touched component = `swiss`). -/
 
@@ -109,7 +111,9 @@ def swissHandoffE (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := handoffGuardGates
   guardProp    := handoffGuardProp
   guardWidth   := 1
@@ -159,13 +163,13 @@ theorem apex_iff_handoffSpec (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
   unfold HandoffSpec handoffGuardProp handoffSwissPostClause swissHandoffE
   constructor
   · rintro ⟨hg, hsw, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
-      hDC, hDel, hDgs, hSB⟩
+      hDC, hDel, hDgs, hSB, hDE, hDEA⟩
     cases s' with | mk kernel log =>
     cases hf : findSwiss s.kernel.swiss args.sw with
     | none => exact absurd hg.2 (by simp [hf, Option.isSome])
     | some e =>
       have hK : kernel = { s.kernel with swiss := kernel.swiss } :=
-        recKernel_ext hAcc hCell hCaps hEsc hNul hRev hCom hBal hQ rfl hSC hFac hLif hDC hDel hDgs hSB
+        recKernel_ext hAcc hCell hCaps hEsc hNul hRev hCom hBal hQ rfl hSC hFac hLif hDC hDel hDgs hSB hDE hDEA
       have hupd := handoffSwissUpdate_some s.kernel.swiss args.sw args.certHash e hf
       have hcl : handoffSwissPostClause s args = handoffSwissPost s.kernel.swiss args.sw e args.certHash := by
         simp [handoffSwissPostClause, hupd]
@@ -180,7 +184,7 @@ theorem apex_iff_handoffSpec (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
       simpa using hlog
   · rintro ⟨hg, ⟨k', hk, hs'⟩⟩
     rcases withSwiss_preserves_rest s.kernel k'.swiss with
-      ⟨hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
+      ⟨hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif, hDC, hDel, hDgs, hSB, hDE, hDEA⟩
     cases hf : findSwiss s.kernel.swiss args.sw with
     | none => exact absurd hg.2 (by simp [hf, Option.isSome])
     | some e =>

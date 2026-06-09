@@ -83,7 +83,9 @@ def RestIffNoCaps (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.bal = k.bal ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
 /-! ## §2 — the `validateHandoffE` instance (touched component = `caps`).
 
@@ -151,7 +153,9 @@ def validateHandoffE (D : Caps → ℤ) (hD : Function.Injective D) :
       ∧ k'.bal = k.bal ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := handoffGuardGates
   guardProp    := handoffGuardProp
   guardWidth   := 1

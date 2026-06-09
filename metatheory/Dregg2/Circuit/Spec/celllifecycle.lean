@@ -21,7 +21,7 @@ open Dregg2.Exec.TurnExecutorFull
 def cellLifecycleReceipt (actor cell : CellId) : Turn :=
   { actor := actor, src := cell, dst := cell, amt := 0 }
 
-/-- Rebuild a `RecordKernelState` from 17 per-field equalities (the `←` reconstruction helper). -/
+/-- Rebuild a `RecordKernelState` from 19 per-field equalities (the `←` reconstruction helper). -/
 theorem recKernel_ext {k k' : RecordKernelState}
     (h1 : k'.accounts = k.accounts) (h2 : k'.cell = k.cell) (h3 : k'.caps = k.caps)
     (h4 : k'.escrows = k.escrows) (h5 : k'.nullifiers = k.nullifiers) (h6 : k'.revoked = k.revoked)
@@ -29,11 +29,12 @@ theorem recKernel_ext {k k' : RecordKernelState}
     (h10 : k'.swiss = k.swiss) (h11 : k'.slotCaveats = k.slotCaveats)
     (h12 : k'.factories = k.factories) (h13 : k'.lifecycle = k.lifecycle)
     (h14 : k'.deathCert = k.deathCert) (h15 : k'.delegate = k.delegate)
-    (h16 : k'.delegations = k.delegations) (h17 : k'.sealedBoxes = k.sealedBoxes) :
+    (h16 : k'.delegations = k.delegations) (h17 : k'.sealedBoxes = k.sealedBoxes)
+    (h18 : k'.delegationEpoch = k.delegationEpoch) (h19 : k'.delegationEpochAt = k.delegationEpochAt) :
     k' = k := by
   cases k; cases k'
-  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
-  subst h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
+  subst h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
   rfl
 
 /-! ## §1 — `cellSealA`: Live → Sealed. -/
@@ -60,6 +61,8 @@ def CellSealSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedSta
   ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats ∧ s'.kernel.factories = s.kernel.factories
   ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
   ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-- **`cellSeal_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** -/
 theorem cellSeal_iff_spec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedState) :
@@ -73,12 +76,12 @@ theorem cellSeal_iff_spec (s : RecChainedState) (actor cell : CellId) (s' : RecC
       simp only [Option.some.injEq] at h
       subst h
       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl⟩
-    · rintro ⟨_, hlif, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+        rfl, rfl, rfl⟩
+    · rintro ⟨_, hlif, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
       obtain ⟨k', lg'⟩ := s'
-      obtain ⟨acc, cellm, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-      simp only at hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      subst hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      obtain ⟨acc, cellm, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+      simp only at hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      subst hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       rfl
   · rw [if_neg hg]
     constructor
@@ -108,6 +111,8 @@ def CellUnsealSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedS
   ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats ∧ s'.kernel.factories = s.kernel.factories
   ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
   ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-- **`cellUnseal_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** -/
 theorem cellUnseal_iff_spec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedState) :
@@ -121,12 +126,12 @@ theorem cellUnseal_iff_spec (s : RecChainedState) (actor cell : CellId) (s' : Re
       simp only [Option.some.injEq] at h
       subst h
       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl⟩
-    · rintro ⟨_, hlif, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+        rfl, rfl, rfl⟩
+    · rintro ⟨_, hlif, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
       obtain ⟨k', lg'⟩ := s'
-      obtain ⟨acc, cellm, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-      simp only at hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      subst hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      obtain ⟨acc, cellm, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+      simp only at hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      subst hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       rfl
   · rw [if_neg hg]
     constructor
@@ -163,6 +168,8 @@ def CellDestroySpec (s : RecChainedState) (actor cell : CellId) (certHash : Nat)
   ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats ∧ s'.kernel.factories = s.kernel.factories
   ∧ s'.kernel.delegate = s.kernel.delegate ∧ s'.kernel.delegations = s.kernel.delegations
   ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-- **`cellDestroy_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** -/
 theorem cellDestroy_iff_spec (s : RecChainedState) (actor cell : CellId) (certHash : Nat)
@@ -178,12 +185,13 @@ theorem cellDestroy_iff_spec (s : RecChainedState) (actor cell : CellId) (certHa
       simp only [Option.some.injEq] at h
       subst h
       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl⟩
-    · rintro ⟨_, hlif, hdc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15⟩
+        rfl, rfl, rfl⟩
+    · rintro ⟨_, hlif, hdc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15,
+        h16, h17⟩
       obtain ⟨k', lg'⟩ := s'
-      obtain ⟨acc, cellm, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-      simp only at hlif hdc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-      subst hlif hdc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+      obtain ⟨acc, cellm, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+      simp only at hlif hdc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+      subst hlif hdc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
       rfl
   · rw [if_neg hg]
     constructor

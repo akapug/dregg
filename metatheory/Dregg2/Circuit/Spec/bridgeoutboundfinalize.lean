@@ -159,6 +159,8 @@ def BridgeFinalizeSpec (s : RecChainedState) (id : Nat) (actor : CellId) (asset 
     ∧ s'.kernel.delegate = s.kernel.delegate
     ∧ s'.kernel.delegations = s.kernel.delegations
     ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+    ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+    ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-! ## §4 — EXECUTOR ⟺ SPEC (FULL state, both directions).
 
@@ -203,17 +205,17 @@ theorem bridgeFinalizeChainA_iff_spec (s : RecChainedState) (id : Nat) (actor : 
           simp only [Option.some.injEq] at h
           subst h
           exact ⟨r, ⟨rfl, hbr, hcreator, hasset, hamt⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-                 rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+                 rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
         · rintro ⟨r', ⟨hfind', _, _, _, _⟩, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11,
-                 h12, h13, h14, h15, h16⟩
+                 h12, h13, h14, h15, h16, h17, h18⟩
           -- the found record is unique: `find? = some r` and `= some r'`.
           simp only [Option.some.injEq] at hfind'
           subst hfind'
           -- reconstruct `s'` from its 18 components.
           obtain ⟨k', log'⟩ := s'
-          obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb⟩ := k'
-          simp only at hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-          subst hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+          obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+          simp only at hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+          subst hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
           dsimp only [bridgeFinalizeRawAsset]
       · rw [if_neg hmatch]
         constructor
@@ -247,7 +249,7 @@ theorem bridgeFinalizeChainA_iff_guard (s : RecChainedState) (id : Nat) (actor :
     -- rebuild the committed post-state from the guard via the iff.
     refine ⟨{ kernel := bridgeFinalizeRawAsset s.kernel id, log := escrowReceiptA actor :: s.log }, ?_⟩
     rw [bridgeFinalizeChainA_iff_spec]
-    exact ⟨r, hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    exact ⟨r, hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-! ## §5 — EXECUTOR ⟺ SPEC, lifted to `execFullA`.
 

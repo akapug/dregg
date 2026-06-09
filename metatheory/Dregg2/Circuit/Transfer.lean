@@ -366,10 +366,11 @@ def TransferSpec (k : RecordKernelState) (t : Turn) (k' : RecordKernelState) : P
   ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
   ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
   ∧ k'.sealedBoxes = k.sealedBoxes
+  ∧ k'.delegationEpoch = k.delegationEpoch ∧ k'.delegationEpochAt = k.delegationEpochAt
 
 /-- **`recKExec_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The executable record
 kernel commits a transfer into `k'` IFF `k'` is EXACTLY the spec'd full post-state. The `→`
-direction VALIDATES `recKExec` against the independent spec — all 17 components are checked, so had
+direction VALIDATES `recKExec` against the independent spec — all 19 components are checked, so had
 the executor silently mutated `bal`/`nullifiers`/`caps`/… the frame clauses would make this proof
 FAIL; the `←` reconstructs the committed state from the spec. This is the executor corner of the
 spec⟺executor⟺circuit triangle. -/
@@ -382,10 +383,12 @@ theorem recKExec_iff_spec (k : RecordKernelState) (t : Turn) (k' : RecordKernelS
     constructor
     · intro h
       simp only [Option.some.injEq] at h; subst h
-      exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    · rintro ⟨_, hcell, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+      exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+        rfl, rfl⟩
+    · rintro ⟨_, hcell, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+        h17, h18⟩
       cases k'
-      subst hcell h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      subst hcell h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       rfl
   · rw [if_neg hg]
     constructor

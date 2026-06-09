@@ -79,7 +79,9 @@ def noteCreateEConcrete : EffectSpec2 RecChainedState NoteCreateArgs where
       ∧ k'.bal = k.bal ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := noteCreateGuardGates
   guardProp    := noteCreateGuardProp
   guardWidth   := 1

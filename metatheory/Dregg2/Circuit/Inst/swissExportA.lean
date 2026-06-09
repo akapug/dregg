@@ -90,7 +90,9 @@ def RestIffNoSwiss (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
 /-! ## §2 — the `swissExportA` instance (touched component = `swiss`). -/
 
@@ -155,7 +157,9 @@ def swissExportE (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := exportGuardGates
   guardProp    := exportGuardProp
   guardWidth   := 1

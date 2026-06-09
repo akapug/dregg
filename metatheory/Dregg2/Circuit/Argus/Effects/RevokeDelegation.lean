@@ -62,18 +62,20 @@ This weld lives on the cap family's HONEST boundary, which has THREE layers that
     cap-table root, the `Function.Injective D` connector. That is the faithful digest-not-function
     boundary, stated, not hidden.
 
-  * **THE REPORTED DIVERGENCE — kernel step vs full Rust RUNTIME (the memory-flagged `delegation_epoch`
-    root-gap).** The Rust runtime's `RevokeDelegation` action does MORE than the Lean kernel step models:
-    it additionally (a) bumps the PARENT cell's `delegation_epoch` by `+1` and (b) clears the CHILD cell's
-    `delegation` snapshot. The Lean kernel step `recKRevokeTarget` does NEITHER — it performs only the
-    `caps` edge removal (and `RecordKernelState` has no `delegation_epoch` field at all; `delegate` /
-    `delegations` are frozen). So on this effect **the Lean kernel step is a STRICT UNDER-MODEL of the
-    Rust runtime**: a parent's epoch bump and a child's snapshot clear are runtime state transitions the
-    verified kernel (and hence this weld) does not cover. This is reported, not papered, as
-    `revokeKernel_undermodels_runtime_epoch` (a documentation theorem pinning the frozen `delegate` /
-    `delegations` registries the kernel leaves untouched), so the gap cannot silently regress. Closing it
-    is a kernel-model widening (add `delegationEpoch`/snapshot-clear to `recKRevokeTarget` + re-derive the
-    descriptor), out of scope for the weld.
+  * **THE CLOSED DIVERGENCE — kernel step vs full Rust RUNTIME (the memory-flagged `delegation_epoch`
+    root-gap, NOW CLOSED at the kernel layer).** The Rust runtime's `apply_revoke_delegation(parent,
+    child)` does THREE things: (1) remove the cap edge; (2) bump the PARENT's `delegation_epoch` by `+1`
+    (`apply.rs:3069`); (3) clear the CHILD's `delegation` snapshot (`apply.rs:3080`). The kernel widening
+    landed: `RecordKernelState` now carries `delegationEpoch`/`delegationEpochAt`, and the DEDICATED
+    faithful step `recKRevokeDelegationFull = recKRevokeDelegationEpoch ∘ recKRevokeTarget`
+    (`AuthTurn.lean §3.EPOCH`) performs ALL THREE balance-neutrally — proved in `revokeKernel_models_
+    runtime_epoch` (§5), with the freshness tooth `revokeKernel_stales_child_delegation` (a light client
+    REJECTS the revoked delegation via `delegationStale`). The epoch step is composed ONLY onto the
+    delegation arm — NOT the shared `recKRevokeTarget`, because plain `revoke`/`dropRef`
+    (`apply_revoke_capability`/`apply_drop_ref`) carry NO epoch semantics (mis-bumping them would be the
+    wrong-cell pale ghost). THIS WELD's descriptor still binds the shared cap-edge leg (`recKRevokeTarget`,
+    which frames the registries); routing the running RevokeDelegation descriptor onto the full step (so
+    the circuit BINDS the epoch advance) is the scoped circuit follow-up (`revoke_DELEG_epoch_residual`).
 
 ## Honesty
 
@@ -248,10 +250,11 @@ So the class-A circuit the prover runs for revokeDelegation pins the per-cell fr
 recomputes the bound cap-graph edge-mutation root that the IR term's executor (`recKRevokeTarget`)
 produces — the template generalizes to the CAP-GRAPH family.
 
-NOTE (the reported kernel-vs-runtime divergence): both sides above pertain to the verified KERNEL step,
-which performs ONLY the `caps` edge removal. The full Rust RUNTIME additionally bumps the parent's
-`delegation_epoch` and clears the child's `delegation` snapshot — state the kernel (hence this weld) does
-not model; see `revokeKernel_undermodels_runtime_epoch` (§5) and the module header. -/
+NOTE (the kernel-vs-runtime epoch, now CLOSED at the kernel layer): THIS weld's descriptor binds the
+shared cap-edge leg `recKRevokeTarget` (the `caps` edge removal). The full Rust RUNTIME's epoch bump +
+child-snapshot clear are NOW MODELED by the dedicated faithful kernel step `recKRevokeDelegationFull`
+(`revokeKernel_models_runtime_epoch`, §5); binding that epoch advance into the RUNNING RevokeDelegation
+circuit descriptor is the scoped follow-up `revoke_DELEG_epoch_residual`. -/
 theorem revokeDelegation_compile_sound
     (hash : List ℤ → ℤ) (env : VmRowEnv)
     (k k' : RecordKernelState) (holder t : CellId)
@@ -312,55 +315,66 @@ theorem compileRevoke_nontrivial :
 
 #assert_axioms compileRevoke_nontrivial
 
-/-! ## §5 — THE REPORTED DIVERGENCE: the Lean kernel step UNDER-MODELS the Rust runtime's
-`delegation_epoch` bump + child-snapshot clear (the memory-flagged cap-revocation root-gap).
+/-! ## §5 — THE CLOSED DIVERGENCE: the Lean kernel now FAITHFULLY MODELS the Rust runtime's
+`delegation_epoch` bump + child-snapshot clear (the memory-flagged cap-revocation root-gap, CLOSED).
 
-The full Rust runtime's `RevokeDelegation` does THREE things: (1) remove the cap edge, (2) bump the
-PARENT cell's `delegation_epoch` by `+1`, (3) clear the CHILD cell's `delegation` snapshot. The Lean
-kernel step `recKRevokeTarget` does ONLY (1). There is no `delegation_epoch` field on `RecordKernelState`
-at all; the per-cell `delegate` (parent pointer) and `delegations` (delegated c-list snapshot) registries
-that would carry (3) are LEFT UNTOUCHED — they are in `RevokeSpec`'s frozen frame.
+The full Rust runtime's `apply_revoke_delegation(parent = action_target, child)`
+(`turn/src/executor/apply.rs:3044-3082`) does THREE things: (1) remove the cap edge; (2) bump the PARENT
+cell's `delegation_epoch` by `+1` (`apply.rs:3069`, `bump_delegation_epoch`); (3) clear the CHILD cell's
+`delegation` snapshot (`apply.rs:3080`, `child.delegation = None`). CRUCIALLY, the plain `revoke`
+(`apply_revoke_capability`) and `dropRef` (`apply_drop_ref`) do NOT carry (2)/(3) — so the epoch
+semantics live in a DEDICATED kernel step `recKRevokeDelegationFull` (`AuthTurn.lean §3.EPOCH`) composed
+ONLY onto the delegation arm, NOT in the shared cap-edge `recKRevokeTarget` (that would mis-bump
+`revoke`/`dropRef` — the wrong-cell pale ghost). The kernel widening landed: `RecordKernelState` now
+carries `delegationEpoch`/`delegationEpochAt`, and `recKRevokeDelegationFull = recKRevokeDelegationEpoch
+∘ recKRevokeTarget` performs ALL THREE, balance-neutrally.
 
-We pin (1) ⟹ ¬(3) as a DOCUMENTATION THEOREM so the under-model cannot silently regress: a committed
-kernel revoke FREEZES `delegate` and `delegations` (the registries a faithful (2)/(3) would mutate). This
-makes the divergence a checked fact of the model, not a buried assumption. Closing it is a kernel-model
-WIDENING (add a `delegationEpoch` registry + snapshot-clear to `recKRevokeTarget`, then re-derive the
-descriptor), explicitly OUT OF SCOPE for this weld. -/
+These theorems now PROVE the faithful behavior (no longer "the kernel does NOT model the epoch" — they
+assert it DOES): the full delegation-revoke step bumps the parent's epoch (+1), clears the child's
+snapshot, and renders the child's delegation STALE under the light-client freshness check
+`delegationStale` (so a revoked delegation cannot be replayed — the unfoolability the epoch buys). The
+shared cap-edge `recKRevokeTarget` (the leg THIS weld's descriptor binds) still freezes the registries;
+the faithful full step is the composite. -/
 
-/-- **`revokeKernel_undermodels_runtime_epoch` — the reported divergence, as a checked theorem.** The
-verified kernel step `recKRevokeTarget` FREEZES the per-cell delegation registries `delegate` (parent
-pointer) and `delegations` (delegated c-list snapshot): it performs ONLY the `caps` edge removal. The
-Rust RUNTIME, by contrast, additionally bumps the parent's `delegation_epoch` (+1) and clears the child's
-`delegation` snapshot — neither modeled here (`RecordKernelState` has no `delegation_epoch` field; the
-snapshot registries are frozen). So the kernel step is a STRICT UNDER-MODEL of the runtime on this effect;
-this theorem pins the frozen registries so the gap is a checked fact, not a buried assumption. -/
-theorem revokeKernel_undermodels_runtime_epoch (k : RecordKernelState) (holder t : CellId) :
-    (recKRevokeTarget k holder t).delegate = k.delegate
-    ∧ (recKRevokeTarget k holder t).delegations = k.delegations := by
-  -- `recKRevokeTarget` edits ONLY `caps` (`AuthTurn.lean:107`); `delegate`/`delegations` are unchanged.
-  refine ⟨rfl, rfl⟩
+/-- **`revokeKernel_models_runtime_epoch` — THE CLOSED DIVERGENCE (was `..._undermodels_...`).** The
+faithful full delegation-revoke kernel step `recKRevokeDelegationFull k parent child` MODELS the Rust
+runtime's epoch semantics: it (2) bumps the PARENT's `delegationEpoch` by EXACTLY `+1` (`apply.rs:3069`)
+AND (3) clears the CHILD's `delegations` snapshot to `[]` plus resets its epoch stamp `delegationEpochAt`
+to `0` (`apply.rs:3080`). No longer an under-model — the three runtime effects (cap edge + epoch bump +
+snapshot clear) are all modeled. The cap-edge leg is unchanged (`recKRevokeDelegationFull_caps`). -/
+theorem revokeKernel_models_runtime_epoch (k : RecordKernelState) (parent child : CellId) :
+    (recKRevokeDelegationFull k parent child).delegationEpoch parent = k.delegationEpoch parent + 1
+    ∧ (recKRevokeDelegationFull k parent child).delegations child = []
+    ∧ (recKRevokeDelegationFull k parent child).delegationEpochAt child = 0 := by
+  refine ⟨recKRevokeDelegationFull_bumps_parent_epoch k parent child, ?_, ?_⟩
+  · exact (recKRevokeDelegationFull_clears_child_snapshot k parent child).1
+  · exact (recKRevokeDelegationFull_clears_child_snapshot k parent child).2
 
-/-- **Non-vacuity of the divergence (witness that the runtime WOULD differ).** A concrete kernel where
-holder `0` has a `delegations` snapshot `[node 7]` and a `delegate` pointer `some 9`: after the kernel
-revoke, BOTH are LEFT verbatim (`[node 7]` / `some 9`) — whereas a faithful runtime would clear the
-child's snapshot to `[]` and bump an epoch. So the under-model is OBSERVABLE: the kernel post-state is
-distinguishable from the runtime's intended post-state on these registries. -/
+/-- A concrete kernel where child `7`'s delegation snapshot is `[node 9]`, stamped at epoch `0`, with
+parent `0` at `delegationEpoch 0`. -/
 def kDeleg : RecordKernelState :=
-  { accounts := {0, 1}, cell := fun _ => .record [("balance", .int 0)]
+  { accounts := {0, 7}, cell := fun _ => .record [("balance", .int 0)]
     caps := fun l => if l = 0 then [Cap.node 7] else []
-    delegations := fun c => if c = 0 then [Cap.node 7] else []
-    delegate := fun c => if c = 0 then some 9 else none }
+    delegations := fun c => if c = 7 then [Cap.node 9] else []
+    delegate := fun c => if c = 7 then some 0 else none
+    delegationEpoch := fun _ => 0
+    delegationEpochAt := fun _ => 0 }
 
-/-- **`revokeKernel_leaves_child_snapshot` — the under-model is OBSERVABLE.** The kernel revoke leaves
-holder `0`'s `delegations` snapshot at `[node 7]` (a faithful runtime clears it to `[]`) and its
-`delegate` pointer at `some 9` — so the verified kernel post-state genuinely differs from the runtime's
-intended post-state on the delegation registries. The divergence is real, not a labeling artifact. -/
-theorem revokeKernel_leaves_child_snapshot :
-    (recKRevokeTarget kDeleg 0 7).delegations 0 = [Cap.node 7]
-    ∧ (recKRevokeTarget kDeleg 0 7).delegate 0 = some 9 := by
-  refine ⟨?_, ?_⟩ <;> decide
+/-- **`revokeKernel_stales_child_delegation` — THE FRESHNESS TOOTH (the close is OBSERVABLE).** After the
+faithful delegation revoke (parent `0` revokes child `7`), the child's snapshot is CLEARED (`[]`) and the
+freshness check `delegationStale` now returns `true` for child `7` — a light client would REJECT the
+(revoked) delegation, exactly the unfoolability the epoch buys. A flag-flip / under-model could not
+witness this: the parent epoch genuinely advanced past the child's stamp. -/
+theorem revokeKernel_stales_child_delegation :
+    (recKRevokeDelegationFull kDeleg 0 7).delegations 7 = []
+    ∧ delegationStale (recKRevokeDelegationFull kDeleg 0 7) 7 = true := by
+  refine ⟨?_, ?_⟩
+  · exact (recKRevokeDelegationFull_clears_child_snapshot kDeleg 0 7).1
+  · apply recKRevokeDelegationFull_makes_child_stale
+    · decide
+    · decide
 
-#assert_axioms revokeKernel_undermodels_runtime_epoch
-#assert_axioms revokeKernel_leaves_child_snapshot
+#assert_axioms revokeKernel_models_runtime_epoch
+#assert_axioms revokeKernel_stales_child_delegation
 
 end Dregg2.Circuit.Argus.Effects.RevokeDelegation

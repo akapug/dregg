@@ -154,6 +154,8 @@ def ReleaseEscrowSpec (s : RecChainedState) (id : Nat) (actor : CellId) (s' : Re
     ∧ s'.kernel.delegate = s.kernel.delegate
     ∧ s'.kernel.delegations = s.kernel.delegations
     ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+    ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+    ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
 /-! ## §4 — EXECUTOR ⟺ SPEC (FULL state, both directions).
 
@@ -190,11 +192,11 @@ theorem releaseEscrowChainA_iff_spec (s : RecChainedState) (id : Nat) (actor : C
       · have hknone := releaseEscrowKAsset_none_of_not_live s.kernel id r hfind hg
         rw [hknone] at hk; cases hk
   · intro ⟨r, ⟨hfind, hrec, hlive, hauth⟩, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11,
-           h12, h13, h14, h15⟩
+           h12, h13, h14, h15, h16, h17⟩
     obtain ⟨k', log'⟩ := s'
-    obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb⟩ := k'
-    simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-    subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+    obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+    simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+    subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
     have hfind' : findUnresolvedEscrow s.kernel id = some r := by
       simpa [findUnresolvedEscrow_matchesId] using hfind
     have hk := releaseEscrowKAsset_some s.kernel id r hfind' ⟨hrec, hlive⟩

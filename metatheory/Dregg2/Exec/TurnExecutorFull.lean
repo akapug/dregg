@@ -1757,7 +1757,16 @@ def parentClist (k : RecordKernelState) (child : CellId) : List Cap :=
 self-authority gate (`stateAuthB actor child`, dregg1's self-only `action_target == child`), AND the
 child genuinely having a parent (`delegate child ≠ none` — dregg1's `delegate.ok_or_else`,
 `apply.rs:3004`). On commit, OVERWRITE `delegations child` with a FRESH snapshot of the parent's CURRENT
-`caps` (`parentClist`) and extend the chain. bal-NEUTRAL. -/
+`caps` (`parentClist`) and extend the chain. bal-NEUTRAL.
+
+⚑ SCOPED RESIDUAL (the freshness-RESTORE epoch re-stamp): dregg1's refresh ALSO re-stamps the child's
+`DelegatedRef.delegation_epoch` with the parent's current `delegationEpoch` (`apply.rs:3024`). The Lean
+kernel now CARRIES `delegationEpochAt`, and the REVOKE path models the epoch bump + freshness (see
+`AuthTurn.lean §3.EPOCH`); the refresh-side re-stamp is a SEPARATE follow-up because the
+`refreshDelegationA`/`spawnA` CIRCUIT instances (`Inst/refreshDelegationA.lean`, `Inst/spawnA.lean`) are
+single/quint-component `funcComponent` descriptors that would need a 6th component to BIND the
+`delegationEpochAt` move. Refresh therefore leaves `delegationEpochAt` frozen for now (a still-authorized
+child re-syncs by re-snapshotting `delegations`; the epoch-tag refresh is the deferred binding). -/
 def refreshDelegationChainA (s : RecChainedState) (actor child : CellId) : Option RecChainedState :=
   if stateAuthB s.kernel.caps actor child = true ∧ (s.kernel.delegate child).isSome = true then
     some { kernel := { s.kernel with

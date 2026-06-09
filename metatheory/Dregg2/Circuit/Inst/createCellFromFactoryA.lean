@@ -49,7 +49,9 @@ def RestIffNoFactoryTouched (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
-      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
 /-! ## §2 — the `createFromFactoryE` quint instance. -/
 
@@ -168,7 +170,9 @@ def createFromFactoryE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
   restFrame    := fun k k' =>
     (k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
-      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes)
+      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegationEpoch = k.delegationEpoch
+      ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := createFromFactoryGuardGates
   guardProp    := createFromFactoryGuardProp
   guardWidth   := 1
@@ -253,6 +257,8 @@ def CreateFromFactoryCircuitSpec (st : RecChainedState) (actor newCell : CellId)
     ∧ st'.kernel.swiss = st.kernel.swiss
     ∧ st'.kernel.factories = st.kernel.factories
     ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+    ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+    ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 theorem CreateFromFactorySpec_implies_circuitSpec (st : RecChainedState) (actor newCell : CellId)
     (vk : Int) (st' : RecChainedState) (h : CreateFromFactorySpec st actor newCell vk st') :

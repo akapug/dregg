@@ -161,6 +161,8 @@ def BridgeOutboundCancelSpec (st : RecChainedState) (id : Nat) (actor : CellId)
     ∧ st'.kernel.delegate = st.kernel.delegate
     ∧ st'.kernel.delegations = st.kernel.delegations
     ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
+    ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+    ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
 /-! ### §3a — a `bridgeAuthOK` characterization (the recorded-creator gate, on the found record). -/
 
@@ -221,15 +223,15 @@ theorem bridgeCancelChainA_iff_spec (st : RecChainedState) (id : Nat) (actor : C
             refine ⟨rfl, rfl, rfl, ?_⟩            -- bal, escrows, log
             refine ⟨rfl, rfl, rfl, rfl, rfl, ?_⟩  -- accounts cell caps nullifiers revoked
             refine ⟨rfl, rfl, rfl, rfl, rfl, ?_⟩  -- commitments queues swiss slotCaveats factories
-            exact ⟨rfl, rfl, rfl, rfl, rfl⟩       -- lifecycle deathCert delegate delegations sealedBoxes
+            exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩  -- lifecycle deathCert delegate delegations sealedBoxes delegationEpoch delegationEpochAt
           · rintro ⟨r', ⟨hr', _, _, _, _⟩, hbal, hesc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9,
-              h10, h11, h12, h13, h14, h15⟩
+              h10, h11, h12, h13, h14, h15, h16, h17⟩
             -- the found record is unique: r' = r
             obtain rfl : r' = r := (Option.some.inj hr').symm
             obtain ⟨k', l'⟩ := st'
-            obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb⟩ := k'
-            simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-            subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+            obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+            simp only at hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+            subst hbal hesc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
             rfl
         · -- match-gate fails (creator non-member or non-live) ⇒ none, and no spec record can hold
           rw [if_neg hmatch]
