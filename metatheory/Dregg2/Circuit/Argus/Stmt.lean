@@ -83,6 +83,20 @@ inductive RecStmt where
   -- rejects (fails closed) BOTH a strict superset AND an incomparable pair, the thing `checkLe`'s
   -- cardinality scalar could never express (`checkLe_card_necessary_not_sufficient`).
   | checkSubset    (a b : RecordKernelState → ExecAuth)
+  -- §A′ — THE STRUCTURAL ACCOUNT-ALLOCATION PRIMITIVE (the missing constructor `CreateCell` needs).
+  -- Every §A component setter overwrites ONE existing component; NONE writes the `accounts : Finset
+  -- CellId` index set, so a `RecStmt` term was structurally INCAPABLE of account growth (the PROVEN
+  -- obstruction `no_argus_term_captures_createCell`). `allocCell n` is that growth primitive: it ALLOCATES
+  -- a fresh cell at id `n k` by GROWING `accounts := insert (n k) k.accounts` AND resetting every per-cell
+  -- indexed slot at `n k` to born-empty defaults — i.e. it IS the verified kernel allocator
+  -- `createCellIntoAsset k (n k)` (`Exec/RecordKernel.lean:880`: `cell`/`caps`/`delegate`/`delegations`/
+  -- `slotCaveats`/`lifecycle`/`deathCert`/`bal` reset at the fresh id, `accounts` grown). It is
+  -- UNCONDITIONAL (always commits, exactly as `createCellIntoAsset` is unconditional); the freshness +
+  -- privileged-creation gate (`mintAuthorizedB ∧ n k ∉ accounts`) is supplied by a preceding `guard`,
+  -- the SAME `seq (guard …) (move)` shape every other effect term uses. This RESOLVES the CreateCell
+  -- obstruction: the IR can now grow `accounts`, so `createCellChainA`/`createCellFromFactoryChainA`
+  -- become expressible as faithful terms (`Effects/CreateCell.lean`, `Effects/CreateCellFromFactory.lean`).
+  | allocCell      (n : RecordKernelState → CellId)
   | seq      (s t : RecStmt)
 
 /-- **`interp`** — the executable interpretation, i.e. the reference executor.
@@ -117,6 +131,11 @@ def interp : RecStmt → RecordKernelState → Option RecordKernelState
   -- `Finset Auth` `⊆` (= `≤`) partial order. Commits (returns `k` unchanged) iff `a k ⊆ b k`; rejects
   -- (`none`) on a strict superset OR an incomparable pair. The FULL in-band non-amplification check.
   | .checkSubset a b,  k => if a k ≤ b k then some k else none
+  -- §A′ — the structural allocator: ALWAYS commits, producing exactly the verified kernel allocator
+  -- `createCellIntoAsset k (n k)` (grow `accounts` by the fresh id `n k` + reset its born-empty per-cell
+  -- slots). This is the ONLY `interp` clause that changes `accounts` — the primitive that lifts the
+  -- frozen-`accounts` obstruction. Unconditional, like `createCellIntoAsset`; the gate is a `guard`.
+  | .allocCell n,      k => some (createCellIntoAsset k (n k))
   | .seq s t,        k => (interp s k).bind (interp t)
 
 /-- The transfer admissibility gate as a `Bool` — exactly `recKExec`'s `if`. -/
