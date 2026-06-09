@@ -30,6 +30,7 @@ import Dregg2.Circuit.Argus.Effects.CellDestroy
 import Dregg2.Circuit.Argus.Effects.CellSeal
 import Dregg2.Circuit.Argus.Effects.CellUnseal
 import Dregg2.Circuit.Argus.Effects.CreateCell
+import Dregg2.Circuit.Argus.Effects.CreateCellFromFactory
 import Dregg2.Circuit.Argus.Effects.CreateCommittedEscrow
 import Dregg2.Circuit.Argus.Effects.CreateObligation
 import Dregg2.Circuit.Argus.Effects.CreateSealPair
