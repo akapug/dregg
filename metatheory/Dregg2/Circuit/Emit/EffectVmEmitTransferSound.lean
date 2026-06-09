@@ -524,6 +524,45 @@ theorem goodSpec_holds : CellTransferSpec goodPre goodParams goodPost := by
   refine ⟨Or.inr rfl, ?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
   unfold signedMove goodParams goodPre goodPost; norm_num
 
+/-! ## §8¾ — AVAILABILITY / NON-NEG: the admissibility tooth `satisfiedVm` now ENFORCES.
+
+With `satisfiedVm` evaluating `d.ranges` (commit 0f08a7dd3), the post-balance limb tooth
+`⟨saCol BALANCE_LO, 30⟩` — `0 ≤ bal_lo` — is LIVE in the denotation (it was inert). So the running
+circuit's algebraic statement enforces, with NO executor trust, that the post-balance never
+underflows; and on a DEBIT row (`direction = 1`, `post = pre − amount`) that the amount cannot
+exceed the pre-balance. This is exactly the AVAILABILITY precondition (`amt ≤ pre`) — a verifying
+witness cannot move more value than the sender holds. The argument is immediate over ℤ (the
+denotation's value ring, where there is no field-wraparound) from the balance-update gate `gBalLo`
+together with the now-live range tooth. (The Rust↔ℤ_p faithfulness — that no field witness escapes
+this by wrapping `amount` past the modulus — is the interpreter-edge's job: the descriptor's range
+teeth bound the operands so the prime-field gate realizes this ℤ statement.) -/
+theorem transferVm_enforces_availability (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (hsat : satisfiedVm hash transferVmDescriptor env true true) :
+    -- (non-neg) the post-balance limb is non-negative — no underflow disguised as a small balance
+    0 ≤ env.loc (saCol state.BALANCE_LO)
+    -- (balance-move) the gate forces the signed move
+    ∧ env.loc (saCol state.BALANCE_LO)
+        = env.loc (sbCol state.BALANCE_LO)
+          + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION))
+    -- (AVAILABILITY) on a debit row, the amount cannot exceed the pre-balance
+    ∧ (env.loc (prmCol param.DIRECTION) = 1
+        → env.loc (prmCol param.AMOUNT) ≤ env.loc (sbCol state.BALANCE_LO)) := by
+  have hbal := hsat.1 (.gate gBalLo) (by simp [transferVmDescriptor, transferRowGates])
+  have hrng := hsat.2.2 (⟨saCol state.BALANCE_LO, 30⟩) (by simp [transferVmDescriptor])
+  simp only [VmConstraint.holdsVm, gBalLo, eSA, eSB, ePrm, eSub,
+    Dregg2.Exec.CircuitEmit.EmittedExpr.eval] at hbal
+  have hnn : 0 ≤ env.loc (saCol state.BALANCE_LO) := hrng.1
+  have hmove : env.loc (saCol state.BALANCE_LO)
+      = env.loc (sbCol state.BALANCE_LO)
+        + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION)) := by
+    linear_combination hbal
+  refine ⟨hnn, hmove, ?_⟩
+  intro hdir
+  have hdebit : env.loc (saCol state.BALANCE_LO)
+      = env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.AMOUNT) := by
+    rw [hmove, hdir]; ring
+  linarith [hdebit, hnn]
+
 /-! ## §9 — Axiom-hygiene tripwires (the honesty tripwire). -/
 
 #assert_axioms intent_to_cellSpec
@@ -536,5 +575,6 @@ theorem goodSpec_holds : CellTransferSpec goodPre goodParams goodPost := by
 #assert_axioms tampered_rejected
 #assert_axioms reserved_not_bound_by_commitment
 #assert_axioms goodSpec_holds
+#assert_axioms transferVm_enforces_availability
 
 end Dregg2.Circuit.Emit.EffectVmEmitTransferSound
