@@ -288,6 +288,40 @@ theorem recKBurnAsset_breaks_exact {k k' : RecordKernelState} {actor cell : Cell
   unfold recTotalAssetWithEscrow at h0 h1
   omega
 
+/-! ## §3.5 — the WHOLE-DISPATCH closure: every zero-delta executor arm preserves the law.
+
+`execFullA_ledger_per_asset` (the combined per-asset conservation VECTOR) already pins every
+committed `FullActionA` to its disclosed delta. A quantity moved by zero is a zero preserved — so
+EVERY arm of the full executor dispatch whose disclosed per-asset delta vanishes (transfer,
+authority ×6, state ×5, escrow/obligation/committed-escrow, notes, queues, swiss, lifecycle,
+createCell/factory/spawn, exercise-recursion, …) preserves `ExactConservation`, in one corollary.
+The ONLY nonzero-delta arms are `mintA`/`burnA`/`bridgeMintA` — exactly the legacy supply laws
+whose issuer-move replacements (§1–2) and break-teeth (§3) this module provides. -/
+
+open Dregg2.Exec.TurnExecutorFull (FullActionA execFullA ledgerDeltaAsset
+  execFullA_ledger_per_asset execFullTurnA turnLedgerDeltaAsset execFullTurnA_ledger_per_asset) in
+/-- **Every zero-delta dispatch arm preserves the value law** (instantiates
+`execFullA_ledger_per_asset`). -/
+theorem execFullA_preserves_exact {s s' : RecChainedState} {fa : FullActionA}
+    (h : execFullA s fa = some s') (hzero : ∀ b, ledgerDeltaAsset fa b = 0)
+    (hex : ExactConservation s.kernel) : ExactConservation s'.kernel := fun b => by
+  rw [execFullA_ledger_per_asset s s' fa b h, hzero b, add_zero]
+  exact hex b
+
+open Dregg2.Exec.TurnExecutorFull (FullActionA execFullTurnA turnLedgerDeltaAsset
+  execFullTurnA_ledger_per_asset) in
+/-- **A committed zero-net full transaction preserves the value law** (instantiates
+`execFullTurnA_ledger_per_asset`): the all-or-nothing per-asset turn keeps `ExactConservation`
+whenever its disclosed net delta vanishes at every asset. -/
+theorem execFullTurnA_preserves_exact {s s' : RecChainedState} {tt : List FullActionA}
+    (h : execFullTurnA s tt = some s') (hzero : ∀ b, turnLedgerDeltaAsset tt b = 0)
+    (hex : ExactConservation s.kernel) : ExactConservation s'.kernel := fun b => by
+  rw [execFullTurnA_ledger_per_asset s s' tt b h, hzero b, add_zero]
+  exact hex b
+
+#assert_axioms execFullA_preserves_exact
+#assert_axioms execFullTurnA_preserves_exact
+
 /-! ## §4 — the REAL-step commuting relation (legacy ⟷ issuer-move, both actual step functions). -/
 
 /-- **`issuerMint_pointwise_vs_credit` (PROVED).** Run the LEGACY mint and the W1 issuer-mint from
