@@ -14,7 +14,6 @@ import Dregg2.Circuit.Emit.EffectVmEmitNoteSpend
 import Dregg2.Circuit.Emit.EffectVmEmitNoteCreate
 import Dregg2.Circuit.Emit.EffectVmEmitBridgeMint
 import Dregg2.Circuit.Emit.EffectVmEmitCreateSealPair
-import Dregg2.Circuit.Emit.EffectVmEmitBridgeFinalize
 import Dregg2.Circuit.Emit.EffectVmEmitCellSeal
 import Dregg2.Circuit.Emit.EffectVmEmitCellDestroy
 import Dregg2.Circuit.Emit.EffectVmEmitRefusal
@@ -38,7 +37,6 @@ def main : IO Unit := do
   emit "noteCreateVmDescriptor" Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.noteCreateVmDescriptor
   emit "bridgeMintVmDescriptor" Dregg2.Circuit.Emit.EffectVmEmitBridgeMint.bridgeMintVmDescriptor
   emit "createSealPairVmDescriptor" Dregg2.Circuit.Emit.EffectVmEmitCreateSealPair.createSealPairVmDescriptor
-  emit "bridgeFinalizeVmDescriptor" Dregg2.Circuit.Emit.EffectVmEmitBridgeFinalize.bridgeFinalizeVmDescriptor
   emit "cellSealVmDescriptor" Dregg2.Circuit.Emit.EffectVmEmitCellSeal.cellSealVmDescriptor
   emit "cellDestroyVmDescriptor" Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor
   emit "refusalVmDescriptor" Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor

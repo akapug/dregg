@@ -25,9 +25,6 @@ import Dregg2.Circuit.Inst.setPermissionsA
 import Dregg2.Circuit.Inst.setVKA
 import Dregg2.Circuit.Inst.delegateAttenA
 import Dregg2.Circuit.Inst.createCellFromFactoryA
-import Dregg2.Circuit.Inst.createCommittedEscrowA
-import Dregg2.Circuit.Inst.bridgeFinalizeA
-import Dregg2.Circuit.Inst.bridgeCancelA
 import Dregg2.Circuit.Inst.unsealA
 import Dregg2.Circuit.Inst.createSealPairA
 import Dregg2.Circuit.Inst.makeSovereignA
@@ -80,9 +77,7 @@ open Dregg2.Circuit.EffectEmittedRefinement
 open Dregg2.Circuit.TurnEffectRefinement
   (fullActionCircuitStep fullActionCircuitStepInst fullAction_circuit_refines_spec hole_circuit_step)
 open Dregg2.Circuit.Inst.SealA (SealArgs)
-open Dregg2.Circuit.Inst.BridgeLockA (BridgeLockArgs)
 open Dregg2.Circuit.Inst.QueueEnqueueA (EnqueueArgs)
-open Dregg2.Circuit.Inst.CreateEscrowA (CreateEscrowArgs)
 open Dregg2.Circuit.Inst.NoteSpendA (NoteSpendArgs)
 open Dregg2.Circuit.Inst.NoteCreateA (NoteCreateArgs)
 open Dregg2.Circuit.Inst.CreateCellA (CreateCellArgs)
@@ -91,22 +86,16 @@ open Dregg2.Circuit.Inst.MintA (MintArgs)
 open Dregg2.Circuit.Inst.BurnA (BurnArgs)
 open Dregg2.Circuit.Inst.Delegate (DelegateArgs)
 open Dregg2.Circuit.Inst.Revoke (RevokeArgs)
-open Dregg2.Circuit.Inst.ReleaseEscrowA (ReleaseArgs)
-open Dregg2.Circuit.Inst.RefundEscrowA (RefundEscrowArgs)
 open Dregg2.Circuit.Inst.BalanceA (BalanceArgs balanceAE)
 open Dregg2.Circuit.Inst.MintA (mintE)
 open Dregg2.Circuit.Inst.BurnA (burnE)
 open Dregg2.Circuit.Inst.Delegate (delegateE)
 open Dregg2.Circuit.Inst.CreateCellA (createCellE)
 open Dregg2.Circuit.Inst.SpawnA (spawnE)
-open Dregg2.Circuit.Inst.CreateEscrowA (createEscrowE)
 open Dregg2.Circuit.Inst.NoteSpendA (noteSpendE)
 open Dregg2.Circuit.Inst.NoteCreateA (noteCreateE)
-open Dregg2.Circuit.Inst.ReleaseEscrowA (releaseEscrowE)
-open Dregg2.Circuit.Inst.RefundEscrowA (refundEscrowE)
 open Dregg2.Circuit.Inst.Revoke (revokeE)
 open Dregg2.Circuit.Inst.SealA (sealE)
-open Dregg2.Circuit.Inst.BridgeLockA (bridgeLockE)
 open Dregg2.Circuit.Inst.QueueEnqueueA (queueEnqueueE)
 open Dregg2.Circuit.StateCommit
   (logHashInjective compressNInjective RestHashIffFrame AccountsWF cellLeafInjective)
@@ -129,9 +118,6 @@ open Dregg2.Circuit.Inst.SetVKA (setVKE setVKAAirName SetVKArgs)
 open Dregg2.Circuit.Inst.DelegateAttenA (delegateAttenE DelegateAttenArgs)
 open Dregg2.Circuit.Inst.CreateCellFromFactoryA
   (createFromFactoryE createCellFromFactoryAAirName CreateFromFactoryArgs RestIffNoFactoryTouched)
-open Dregg2.Circuit.Inst.CreateCommittedEscrowA (createCommittedEscrowE CreateCommittedEscrowArgs)
-open Dregg2.Circuit.Inst.BridgeFinalizeA (bridgeFinalizeE BridgeFinalizeArgs RestIffNoEscrows)
-open Dregg2.Circuit.Inst.BridgeCancelA (bridgeCancelE BridgeCancelArgs)
 open Dregg2.Circuit.Inst.UnsealA (unsealE UnsealArgs)
 open Dregg2.Circuit.Inst.CreateSealPairA (createSealPairE CreateSealPairArgs)
 open Dregg2.Circuit.Inst.MakeSovereignA (makeSovereignE makeSovereignAAirName MakeSovereignArgs)
@@ -258,9 +244,8 @@ theorem turn_emitted_refines_turnSpec
 
 HONEST CAVEAT: this is parametric in a per-step refinement hypothesis `hstep`. When `hstep` is
 discharged via `step_emitted_refines_fullActionStep`, BOTH of that lemma's conditionalities flow
-through here: (1) it is sorry-bearing (four effect arms — `exerciseA`, `createObligationA`,
-`releaseCommittedEscrowA`, `refundCommittedEscrowA` — are open holes, so the composed result is
-NOT `#assert_axioms`-pinned), and (2) it establishes only honest-encoded-trace soundness, NOT
+through here: (1) it is sorry-bearing where per-effect arms are open holes, so the composed
+result is NOT `#assert_axioms`-pinned, and (2) it establishes only honest-encoded-trace soundness, NOT
 adversarial-trace soundness (the encoder-agreement hypothesis is dead in the per-step proof). Do
 not read this as whole-turn adversarial soundness of the executor bridge. -/
 theorem turn_emitted_refines_exec
@@ -382,28 +367,12 @@ def stepEmittedEncodeAgrees
           ⟨actor, child, target⟩ st'
   | .bridgeMintA actor cell a value =>
       assignmentOf sw.assignment = encodeE2 S (mintE D_bal hD_bal) st ⟨actor, cell, a, value⟩ st'
-  | .createEscrowA id actor creator recipient asset amount =>
-      assignmentOf sw.assignment =
-        encodeE2Dual S (createEscrowE D_bal hD_bal LE_escrow cN hN hLE_escrow) st
-          ⟨id, actor, creator, recipient, asset, amount⟩ st'
   | .noteSpendA nf actor spendProof =>
       assignmentOf sw.assignment =
         encodeE2 S (noteSpendE LE_null cN hN hLE_null) st ⟨nf, actor, spendProof⟩ st'
   | .noteCreateA cm actor =>
       assignmentOf sw.assignment =
         encodeE2 S (noteCreateE LE_null cN hN hLE_null) st ⟨cm, actor⟩ st'
-  | .releaseEscrowA id actor =>
-      assignmentOf sw.assignment =
-        encodeE2Dual S (releaseEscrowE D_bal hD_bal LE_escrow cN hN hLE_escrow) st ⟨id, actor⟩ st'
-  | .refundEscrowA id actor =>
-      assignmentOf sw.assignment =
-        encodeE2Dual S (refundEscrowE D_bal hD_bal LE_escrow cN hN hLE_escrow) st ⟨id, actor⟩ st'
-  | .fulfillObligationA id actor =>
-      assignmentOf sw.assignment =
-        encodeE2Dual S (refundEscrowE D_bal hD_bal LE_escrow cN hN hLE_escrow) st ⟨id, actor⟩ st'
-  | .slashObligationA id actor =>
-      assignmentOf sw.assignment =
-        encodeE2Dual S (releaseEscrowE D_bal hD_bal LE_escrow cN hN hLE_escrow) st ⟨id, actor⟩ st'
   | .revoke holder t =>
       assignmentOf sw.assignment = encodeE2 S (revokeE D_caps hD_caps) st ⟨holder, t⟩ st'
   | .dropRefA holder t =>
@@ -413,10 +382,6 @@ def stepEmittedEncodeAgrees
   | .sealA pid actor payload =>
       assignmentOf sw.assignment =
         encodeE2 S (sealE LE_sealed cN hN hLE_sealed) st { pid, actor, payload } st'
-  | .bridgeLockA id actor originator destination asset amount =>
-      assignmentOf sw.assignment =
-        encodeE2Dual S (bridgeLockE D_bal hD_bal LE_escrow cN hN hLE_escrow) st
-          { id, actor, originator, destination, asset, amount } st'
   | .queueEnqueueA id m actor cell depId dAsset deposit =>
       assignmentOf sw.assignment =
         encodeE2Triple S (queueEnqueueE D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow) st
@@ -440,16 +405,6 @@ def stepEmittedEncodeAgrees
       assignmentOf sw.assignment =
         encodeE2Quint S (createFromFactoryE LE_cell cN hN hLE_cell DBal hDBal DCell hDCell DSC hDSC DAuth hDAuth)
           st ⟨actor, newCell, vk⟩ st'
-  | .createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      assignmentOf sw.assignment =
-        encodeE2Dual S (createCommittedEscrowE D_bal hD_bal LE_escrow cN hN hLE_escrow) st
-          ⟨id, actor, creator, recipient, asset, amount, hidingProof⟩ st'
-  | .bridgeFinalizeA id actor asset amount =>
-      assignmentOf sw.assignment =
-        encodeE2 S (bridgeFinalizeE LE_escrow cN hN hLE_escrow) st ⟨id, actor, asset, amount⟩ st'
-  | .bridgeCancelA id actor =>
-      assignmentOf sw.assignment =
-        encodeE2Dual S (bridgeCancelE D_bal hD_bal LE_escrow cN hN hLE_escrow) st ⟨id, actor⟩ st'
   | .unsealA pid actor recipient =>
       match findSealedBox st.kernel.sealedBoxes pid with
       | none => False
@@ -514,10 +469,10 @@ the circuit dispatch (`fullAction_circuit_refines_spec`).
 
 HONEST CAVEAT (this is NOT whole-turn adversarial soundness):
 
-1. **All arms CLOSED.** The four arms that were once open holes — `exerciseA`,
-   `createObligationA`, `releaseCommittedEscrowA`, `refundCommittedEscrowA` — now discharge through
-   `fullAction_circuit_refines_spec` (the `exerciseA` inner-turn fold is a REAL
-   composite circuit step).
+1. **All arms CLOSED.** The `exerciseA` arm discharges through
+   `fullAction_circuit_refines_spec` (its inner-turn fold is a REAL composite circuit step);
+   the dregg3-F1a-doomed escrow/obligation/bridge-L/F/C arms carry the declarative
+   `fullActionStep` fallback (their Inst emissions were deleted; constructors die in F1b).
 
 2. **Honest-trace only (dead `hEnc`).** The `hEnc` hypothesis (`stepEmittedEncodeAgrees`)
    is carried in the signature but is NEVER used in the proof body. Consequently this proves
@@ -556,7 +511,7 @@ theorem step_emitted_refines_fullActionStep
     (hRestCommitments : RestIffNoCommitments S.RH) (hRestSealed : RestIffNoSealedBoxes S.RH)
     (hRestQueues : RestIffNoQueuesBalEscrows S.RH)
     (hRestQueuesOnly : RestIffNoQueues S.RH)
-    (hRestFactory : RestIffNoFactoryTouched S.RH) (hRestEscrowsOnly : RestIffNoEscrows S.RH)
+    (hRestFactory : RestIffNoFactoryTouched S.RH)
     (hRestSwiss : RestIffNoSwiss S.RH) (hRestLifecycle : RestIffNoLifecycle S.RH)
     (hRestLifecycleDeathCert : RestIffNoLifecycleDeathCert S.RH)
     (hRestDelegations : RestIffNoDelegations S.RH)
@@ -615,12 +570,6 @@ theorem step_emitted_refines_fullActionStep
       simp only [fullActionStep]
       exact mint_emitted_refines_spec S D_bal hD_bal hRestBal hLog st ⟨actor, cell, a, value⟩ st'
         ((mint_emitted_equiv_circuit S D_bal hD_bal st ⟨actor, cell, a, value⟩ st').mpr hcircuit)
-  | .createEscrowA id actor creator recipient asset amount =>
-      simp only [fullActionStep]
-      exact createEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog st
-        ⟨id, actor, creator, recipient, asset, amount⟩ st'
-        ((createEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st
-            ⟨id, actor, creator, recipient, asset, amount⟩ st').mpr hcircuit)
   | .noteSpendA nf actor spendProof =>
       simp only [fullActionStep]
       exact noteSpend_emitted_refines_spec S LE_null cN hN hLE_null hRestNull hLog st ⟨nf, actor, spendProof⟩ st'
@@ -649,36 +598,6 @@ theorem step_emitted_refines_fullActionStep
       exact revoke_emitted_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps) hLog
         st ⟨holder, t⟩ st'
         ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mpr hcircuit)
-  | .releaseEscrowA id actor =>
-      simp only [fullActionStep]
-      exact releaseEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
-        st ⟨id, actor⟩ st'
-        ((releaseEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mpr
-          hcircuit)
-  | .refundEscrowA id actor =>
-      simp only [fullActionStep]
-      exact refundEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
-        st ⟨id, actor⟩ st'
-        ((refundEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mpr
-          hcircuit)
-  | .fulfillObligationA id actor =>
-      simp only [fullActionStep]
-      exact refundEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
-        st ⟨id, actor⟩ st'
-        ((refundEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mpr
-          hcircuit)
-  | .slashObligationA id actor =>
-      simp only [fullActionStep]
-      exact releaseEscrow_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog
-        st ⟨id, actor⟩ st'
-        ((releaseEscrow_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mpr
-          hcircuit)
-  | .bridgeLockA id actor originator destination asset amount =>
-      simp only [fullActionStep]
-      exact bridgeLock_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog st
-        ⟨id, actor, originator, destination, asset, amount⟩ st'
-        ((bridgeLock_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st
-            ⟨id, actor, originator, destination, asset, amount⟩ st').mpr hcircuit)
   | .sealA pid actor payload =>
       simp only [fullActionStep]
       exact seal_emitted_refines_spec S LE_sealed cN hN hLE_sealed hRestSealed hLog st { pid, actor, payload } st'
@@ -731,7 +650,7 @@ theorem step_emitted_refines_fullActionStep
         LE_sealed cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame
         hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife
         DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull
-        hRestEscrow hRestCommitments hRestSealed hRestQueues hRestQueuesOnly hRestFactory hRestEscrowsOnly
+        hRestEscrow hRestCommitments hRestSealed hRestQueues hRestQueuesOnly hRestFactory
         hRestSwiss hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog st (.exerciseA actor target inner)
         st' hcircuit
   | .createCellFromFactoryA actor newCell vk =>
@@ -741,52 +660,6 @@ theorem step_emitted_refines_fullActionStep
         ((effect2quint_emitted_equiv_circuit_local S
             (createFromFactoryE LE_cell cN hN hLE_cell DBal hDBal DCell hDCell DSC hDSC DAuth hDAuth)
             createCellFromFactoryAAirName st ⟨actor, newCell, vk⟩ st').mpr hcircuit)
-  | .createObligationA id actor obligor beneficiary asset stake =>
-      -- CLOSED: dispatch-aliased to the escrow-create circuit step in `fullActionCircuitStep`;
-      -- `fullAction_circuit_refines_spec` discharges it from `hcircuit`.
-      exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow
-        LE_sealed cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame
-        hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife
-        DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull
-        hRestEscrow hRestCommitments hRestSealed hRestQueues hRestQueuesOnly hRestFactory hRestEscrowsOnly
-        hRestSwiss hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog st
-        (.createObligationA id actor obligor beneficiary asset stake) st' hcircuit
-  | .createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      simp only [fullActionStep]
-      exact createCommittedEscrowA_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow
-        hLog st ⟨id, actor, creator, recipient, asset, amount, hidingProof⟩ st'
-        ((createCommittedEscrowA_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st
-            ⟨id, actor, creator, recipient, asset, amount, hidingProof⟩ st').mpr hcircuit)
-  | .releaseCommittedEscrowA id actor =>
-      -- CLOSED: dispatch-aliased to the dual release circuit step;
-      -- `fullAction_circuit_refines_spec` discharges it from `hcircuit`.
-      exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow
-        LE_sealed cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame
-        hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife
-        DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull
-        hRestEscrow hRestCommitments hRestSealed hRestQueues hRestQueuesOnly hRestFactory hRestEscrowsOnly
-        hRestSwiss hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog st
-        (.releaseCommittedEscrowA id actor) st' hcircuit
-  | .refundCommittedEscrowA id actor =>
-      -- CLOSED: dispatch-aliased to the dual refund circuit step;
-      -- `fullAction_circuit_refines_spec` discharges it from `hcircuit`.
-      exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow
-        LE_sealed cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame
-        hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife
-        DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull
-        hRestEscrow hRestCommitments hRestSealed hRestQueues hRestQueuesOnly hRestFactory hRestEscrowsOnly
-        hRestSwiss hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog st
-        (.refundCommittedEscrowA id actor) st' hcircuit
-  | .bridgeFinalizeA id actor asset amount =>
-      simp only [fullActionStep]
-      exact bridgeFinalizeA_emitted_refines_spec S LE_escrow cN hN hLE_escrow hRestEscrowsOnly hLog st
-        ⟨id, actor, asset, amount⟩ st'
-        ((bridgeFinalizeA_emitted_equiv_circuit S LE_escrow cN hN hLE_escrow st ⟨id, actor, asset, amount⟩ st').mpr hcircuit)
-  | .bridgeCancelA id actor =>
-      simp only [fullActionStep]
-      exact bridgeCancelA_emitted_refines_spec S D_bal hD_bal LE_escrow cN hN hLE_escrow hRestEscrow hLog st
-        ⟨id, actor⟩ st'
-        ((bridgeCancelA_emitted_equiv_circuit S D_bal hD_bal LE_escrow cN hN hLE_escrow st ⟨id, actor⟩ st').mpr hcircuit)
   | .unsealA pid actor recipient =>
       simp only [fullActionStep, fullActionCircuitStep]
       cases hbox : findSealedBox st.kernel.sealedBoxes pid with
@@ -888,6 +761,20 @@ theorem step_emitted_refines_fullActionStep
       simp only [fullActionStep]
       exact refreshDelegationA_emitted_refines_spec S DDgs hDDgs hRestDelegations hLog st ⟨actor, child⟩ st'
         ((refreshDelegationA_emitted_equiv_circuit S DDgs hDDgs st ⟨actor, child⟩ st').mpr hcircuit)
+  -- dregg3 F1a doomed-family arms: their Inst emissions were DELETED; the circuit dispatch
+  -- falls back to the declarative `fullActionStep`, so `hcircuit` IS the conclusion.
+  | .createEscrowA _ _ _ _ _ _ => exact hcircuit
+  | .releaseEscrowA _ _ => exact hcircuit
+  | .refundEscrowA _ _ => exact hcircuit
+  | .createObligationA _ _ _ _ _ _ => exact hcircuit
+  | .fulfillObligationA _ _ => exact hcircuit
+  | .slashObligationA _ _ => exact hcircuit
+  | .createCommittedEscrowA _ _ _ _ _ _ _ => exact hcircuit
+  | .releaseCommittedEscrowA _ _ => exact hcircuit
+  | .refundCommittedEscrowA _ _ => exact hcircuit
+  | .bridgeLockA _ _ _ _ _ _ => exact hcircuit
+  | .bridgeFinalizeA _ _ _ _ => exact hcircuit
+  | .bridgeCancelA _ _ => exact hcircuit
 
 /-! ## §5c — REPRESENTATIVE adversarial-witness EXTRACTION (mint), killing the dead `hEnc`.
 
@@ -1064,7 +951,7 @@ theorem turn_emitted_demo_mint_burn :
 #guard (defaultDescriptorLookup releaseCommittedEscrowAHoleName == none)
 #guard (defaultDescriptorLookup refundCommittedEscrowAHoleName == none)
 #guard (∀ name ∈ holeAirNames, defaultDescriptorLookup name == none)
-#guard registryCoverage == 53
+#guard registryCoverage == 46
 
 #assert_axioms descriptorLookup_of_actionAirName
 #assert_axioms turn_emitted_demo_mint_burn

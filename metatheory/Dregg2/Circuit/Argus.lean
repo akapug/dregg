@@ -21,12 +21,11 @@ import Dregg2.Circuit.Argus.Joint
 import Dregg2.Circuit.Argus.Disclose
 import Dregg2.Circuit.Argus.Aggregate
 
--- The per-effect welds (~45 effects: interp = executor, compile = circuit, welded).
+-- The per-effect welds (~40 effects: interp = executor, compile = circuit, welded).
+-- The escrow/obligation/bridge-Lock/Finalize/Cancel welds were REMOVED with their
+-- kernel effects (dregg3 F1a — they re-land as factory cell-programs in Apps/).
 import Dregg2.Circuit.Argus.Effects.Attenuate
 import Dregg2.Circuit.Argus.Effects.BalanceA
-import Dregg2.Circuit.Argus.Effects.BridgeCancel
-import Dregg2.Circuit.Argus.Effects.BridgeFinalize
-import Dregg2.Circuit.Argus.Effects.BridgeLock
 import Dregg2.Circuit.Argus.Effects.BridgeMint
 import Dregg2.Circuit.Argus.Effects.Burn
 import Dregg2.Circuit.Argus.Effects.CellDestroy
@@ -34,15 +33,12 @@ import Dregg2.Circuit.Argus.Effects.CellSeal
 import Dregg2.Circuit.Argus.Effects.CellUnseal
 import Dregg2.Circuit.Argus.Effects.CreateCell
 import Dregg2.Circuit.Argus.Effects.CreateCellFromFactory
-import Dregg2.Circuit.Argus.Effects.CreateCommittedEscrow
-import Dregg2.Circuit.Argus.Effects.CreateObligation
 import Dregg2.Circuit.Argus.Effects.CreateSealPair
 import Dregg2.Circuit.Argus.Effects.Delegate
 import Dregg2.Circuit.Argus.Effects.DelegateAtten
 import Dregg2.Circuit.Argus.Effects.DropRef
 import Dregg2.Circuit.Argus.Effects.EmitEvent
 import Dregg2.Circuit.Argus.Effects.ExerciseViaCapability
-import Dregg2.Circuit.Argus.Effects.FulfillObligation
 import Dregg2.Circuit.Argus.Effects.IncrementNonce
 import Dregg2.Circuit.Argus.Effects.Introduce
 import Dregg2.Circuit.Argus.Effects.MakeSovereign
@@ -56,15 +52,12 @@ import Dregg2.Circuit.Argus.Effects.QueueDequeue
 import Dregg2.Circuit.Argus.Effects.QueueEnqueue
 import Dregg2.Circuit.Argus.Effects.ReceiptArchive
 import Dregg2.Circuit.Argus.Effects.RefreshDelegation
-import Dregg2.Circuit.Argus.Effects.RefundEscrow
 import Dregg2.Circuit.Argus.Effects.Refusal
-import Dregg2.Circuit.Argus.Effects.ReleaseEscrow
 import Dregg2.Circuit.Argus.Effects.RevokeDelegation
 import Dregg2.Circuit.Argus.Effects.Seal
 import Dregg2.Circuit.Argus.Effects.SetField
 import Dregg2.Circuit.Argus.Effects.SetPermissions
 import Dregg2.Circuit.Argus.Effects.SetVerificationKey
-import Dregg2.Circuit.Argus.Effects.SlashObligation
 import Dregg2.Circuit.Argus.Effects.SwissDrop
 import Dregg2.Circuit.Argus.Effects.SwissEnliven
 import Dregg2.Circuit.Argus.Effects.SwissExport
@@ -88,11 +81,15 @@ to a light client: `Q` = receipt = `cellCommit`, the disclosure dial is a projec
 of `Q`, and the strand/aggregate carry the faithful `Q`.
 
 What stands here (all `#assert_axioms`-clean, every gap a named hypothesis — never
-papered): the foundation, ~45 effects welded across every shape, the policy
+papered): the foundation, ~40 effects welded across every shape, the policy
 enforcement, the three crowns (capability non-amplification as the full lattice gate
 in-band · double-spend non-membership · installed-assertion enforcement), and the five
 protocol layers (Receipt/Coeffect/Joint/Disclose/Aggregate). The named residuals are
 the honest floor: the §8 crypto portals, the shape-AIR-vs-real-AIR interpreter edge,
 the structural-alloc primitive (CreateCell, obstruction *proven*), and a short
-divergence burn-down (delegation-epoch, dropRef refcount, bridgeCancel credit).
+divergence burn-down (delegation-epoch, dropRef refcount). The escrow / obligation /
+bridge-Lock/Finalize/Cancel effect families left the kernel circuit strata (dregg3
+F1a) — they re-land as verified factory cell-programs
+(`Dregg2/Apps/{EscrowFactory,ObligationFactory,BridgeCell}.lean`); BridgeMint (the
+shield verb) survives.
 -/

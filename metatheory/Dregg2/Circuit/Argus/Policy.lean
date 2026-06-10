@@ -2,8 +2,8 @@
 # Dregg2.Circuit.Argus.Policy — the Argus POLICY-ENFORCEMENT layer: a cell's INSTALLED program
 gates the effect, AND Bucket-B's `witnessed` arm gets a REAL circuit gate.
 
-The per-effect Argus welds (`Argus/Stmt.lean §M/§E`, `Argus/Compile.lean`) enforce each effect's
-STATE TRANSITION (transfer/mint/burn/createEscrow's commit IS the verified executor / the audited
+The per-effect Argus welds (`Argus/Stmt.lean §M`, `Argus/Compile.lean`) enforce each effect's
+STATE TRANSITION (transfer/mint/burn's commit IS the verified executor / the audited
 descriptor). What they do NOT yet enforce is the *target cell's INSTALLED policy*: dregg's rich
 installed-policy machinery is UNDER-ENFORCED —
 

@@ -22,15 +22,11 @@ import Dregg2.Circuit.Inst.transfer
 import Dregg2.Circuit.Inst.balanceA
 import Dregg2.Circuit.Inst.delegate
 import Dregg2.Circuit.Inst.noteSpendA
-import Dregg2.Circuit.Inst.createEscrowA
 import Dregg2.Circuit.Inst.createCellA
 import Dregg2.Circuit.Inst.spawnA
 import Dregg2.Circuit.Inst.noteCreateA
-import Dregg2.Circuit.Inst.releaseEscrowA
-import Dregg2.Circuit.Inst.refundEscrowA
 import Dregg2.Circuit.Inst.revoke
 import Dregg2.Circuit.Inst.sealA
-import Dregg2.Circuit.Inst.bridgeLockA
 import Dregg2.Circuit.Inst.queueEnqueueA
 import Dregg2.Circuit.Inst.exerciseA
 import Dregg2.Circuit.Inst.attenuateA
@@ -43,9 +39,6 @@ import Dregg2.Circuit.Inst.introduceA
 import Dregg2.Circuit.Inst.validateHandoffA
 import Dregg2.Circuit.Inst.revokeDelegationA
 import Dregg2.Circuit.Inst.createCellFromFactoryA
-import Dregg2.Circuit.Inst.createCommittedEscrowA
-import Dregg2.Circuit.Inst.bridgeFinalizeA
-import Dregg2.Circuit.Inst.bridgeCancelA
 import Dregg2.Circuit.Inst.unsealA
 import Dregg2.Circuit.Inst.createSealPairA
 import Dregg2.Circuit.Inst.makeSovereignA
@@ -92,15 +85,11 @@ open Dregg2.Circuit.Inst.MintA
 open Dregg2.Circuit.Inst.BurnA
 open Dregg2.Circuit.Inst.Delegate
 open Dregg2.Circuit.Inst.NoteSpendA
-open Dregg2.Circuit.Inst.CreateEscrowA
 open Dregg2.Circuit.Inst.CreateCellA
 open Dregg2.Circuit.Inst.SpawnA
 open Dregg2.Circuit.Inst.NoteCreateA
-open Dregg2.Circuit.Inst.ReleaseEscrowA
-open Dregg2.Circuit.Inst.RefundEscrowA
 open Dregg2.Circuit.Inst.Revoke
 open Dregg2.Circuit.Inst.SealA
-open Dregg2.Circuit.Inst.BridgeLockA
 open Dregg2.Circuit.Inst.QueueEnqueueA
 open Dregg2.Circuit.Inst.ExerciseA
 open Dregg2.Exec.CircuitEmit (satisfiedEmitted)
@@ -467,35 +456,6 @@ theorem noteSpend_emitted_refines_spec (S : Surface2) (LE : Nat → ℤ) (cN : L
     (noteSpend_circuit_refines_spec S LE cN hN hLE hRest hLog)
     (fun pre args post => noteSpend_emitted_equiv_circuit S LE cN hN hLE pre args post) s args s' h
 
-/-! ## §9 — CreateEscrowA (v2-dual). -/
-
-def createEscrowEmittedStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : CreateEscrowArgs) (s' : RecChainedState) : Prop :=
-  effect2dualEmittedStepLocal S (createEscrowE D hD LE cN hN hLE) createEscrowAAirName s args s'
-
-theorem createEscrow_emitted_equiv_circuit (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : CreateEscrowArgs) (s' : RecChainedState) :
-    createEscrowEmittedStep S D hD LE cN hN hLE s args s' ↔
-      createEscrowCircuitStep S D hD LE cN hN hLE s args s' :=
-  effect2dual_emitted_equiv_circuit_local S (createEscrowE D hD LE cN hN hLE) createEscrowAAirName
-    s args s'
-
-theorem createEscrow_emitted_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : CreateEscrowArgs) (s' : RecChainedState)
-    (h : createEscrowEmittedStep S D hD LE cN hN hLE s args s') :
-    createEscrowSpecStep s args s' :=
-  effect2dual_emitted_refines_bespoke_spec S (createEscrowE D hD LE cN hN hLE) createEscrowAAirName
-    (createEscrowCircuitStep S D hD LE cN hN hLE) createEscrowSpecStep
-    (createEscrow_circuit_refines_spec S D hD LE cN hN hLE hRest hLog)
-    (fun pre args post => createEscrow_emitted_equiv_circuit S D hD LE cN hN hLE pre args post)
-    s args s' h
-
 /-! ## §10 — NoteCreateA. -/
 
 def noteCreateEmittedStep (S : Surface2) (LE : Nat → ℤ) (cN : List ℤ → ℤ)
@@ -520,62 +480,6 @@ theorem noteCreate_emitted_refines_spec (S : Surface2) (LE : Nat → ℤ) (cN : 
     (noteCreateCircuitStep S LE cN hN hLE) noteCreateSpecStep
     (noteCreate_circuit_refines_spec S LE cN hN hLE hRest hLog)
     (fun pre args post => noteCreate_emitted_equiv_circuit S LE cN hN hLE pre args post) s args s' h
-
-/-! ## §11 — ReleaseEscrowA + RefundEscrowA (v2-dual). -/
-
-def releaseEscrowEmittedStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : ReleaseArgs) (s' : RecChainedState) : Prop :=
-  effect2dualEmittedStepLocal S (releaseEscrowE D hD LE cN hN hLE) releaseEscrowAAirName s args s'
-
-theorem releaseEscrow_emitted_equiv_circuit (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : ReleaseArgs) (s' : RecChainedState) :
-    releaseEscrowEmittedStep S D hD LE cN hN hLE s args s' ↔
-      releaseEscrowCircuitStep S D hD LE cN hN hLE s args s' :=
-  effect2dual_emitted_equiv_circuit_local S (releaseEscrowE D hD LE cN hN hLE) releaseEscrowAAirName
-    s args s'
-
-theorem releaseEscrow_emitted_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : ReleaseArgs) (s' : RecChainedState)
-    (h : releaseEscrowEmittedStep S D hD LE cN hN hLE s args s') :
-    releaseEscrowSpecStep s args s' :=
-  effect2dual_emitted_refines_bespoke_spec S (releaseEscrowE D hD LE cN hN hLE) releaseEscrowAAirName
-    (releaseEscrowCircuitStep S D hD LE cN hN hLE) releaseEscrowSpecStep
-    (releaseEscrow_circuit_refines_spec S D hD LE cN hN hLE hRest hLog)
-    (fun pre args post => releaseEscrow_emitted_equiv_circuit S D hD LE cN hN hLE pre args post)
-    s args s' h
-
-def refundEscrowEmittedStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : RefundEscrowArgs) (s' : RecChainedState) : Prop :=
-  effect2dualEmittedStepLocal S (refundEscrowE D hD LE cN hN hLE) refundEscrowAAirName s args s'
-
-theorem refundEscrow_emitted_equiv_circuit (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : RefundEscrowArgs) (s' : RecChainedState) :
-    refundEscrowEmittedStep S D hD LE cN hN hLE s args s' ↔
-      refundEscrowCircuitStep S D hD LE cN hN hLE s args s' :=
-  effect2dual_emitted_equiv_circuit_local S (refundEscrowE D hD LE cN hN hLE) refundEscrowAAirName
-    s args s'
-
-theorem refundEscrow_emitted_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : RefundEscrowArgs) (s' : RecChainedState)
-    (h : refundEscrowEmittedStep S D hD LE cN hN hLE s args s') :
-    refundEscrowSpecStep s args s' :=
-  effect2dual_emitted_refines_bespoke_spec S (refundEscrowE D hD LE cN hN hLE) refundEscrowAAirName
-    (refundEscrowCircuitStep S D hD LE cN hN hLE) refundEscrowSpecStep
-    (refundEscrow_circuit_refines_spec S D hD LE cN hN hLE hRest hLog)
-    (fun pre args post => refundEscrow_emitted_equiv_circuit S D hD LE cN hN hLE pre args post)
-    s args s' h
 
 /-! ## §12 — Revoke. -/
 
@@ -619,35 +523,6 @@ theorem seal_emitted_refines_spec (S : Surface2) (LE : SealedBoxRecord → ℤ) 
   effect2_emitted_refines_bespoke_spec S (sealE LE cN hN hLE) sealAAirName
     (sealCircuitStep S LE cN hN hLE) sealSpecStep (seal_circuit_refines_spec S LE cN hN hLE hRest hLog)
     (fun pre args post => seal_emitted_equiv_circuit S LE cN hN hLE pre args post) s args s' h
-
-/-! ## §14 — BridgeLockA (v2-dual). -/
-
-def bridgeLockEmittedStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : BridgeLockArgs) (s' : RecChainedState) : Prop :=
-  effect2dualEmittedStepLocal S (bridgeLockE D hD LE cN hN hLE) bridgeLockAAirName s args s'
-
-theorem bridgeLock_emitted_equiv_circuit (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : BridgeLockArgs) (s' : RecChainedState) :
-    bridgeLockEmittedStep S D hD LE cN hN hLE s args s' ↔
-      bridgeLockCircuitStep S D hD LE cN hN hLE s args s' :=
-  effect2dual_emitted_equiv_circuit_local S (bridgeLockE D hD LE cN hN hLE) bridgeLockAAirName
-    s args s'
-
-theorem bridgeLock_emitted_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : BridgeLockArgs) (s' : RecChainedState)
-    (h : bridgeLockEmittedStep S D hD LE cN hN hLE s args s') :
-    bridgeLockSpecStep s args s' :=
-  effect2dual_emitted_refines_bespoke_spec S (bridgeLockE D hD LE cN hN hLE) bridgeLockAAirName
-    (bridgeLockCircuitStep S D hD LE cN hN hLE) bridgeLockSpecStep
-    (bridgeLock_circuit_refines_spec S D hD LE cN hN hLE hRest hLog)
-    (fun pre args post => bridgeLock_emitted_equiv_circuit S D hD LE cN hN hLE pre args post)
-    s args s' h
 
 /-! ## §15 — QueueEnqueueA (v2-triple). -/
 
@@ -750,13 +625,6 @@ open Dregg2.Circuit.Inst.RevokeDelegationA
 open Dregg2.Circuit.Inst.CreateCellFromFactoryA
   (createFromFactoryE createCellFromFactoryAAirName CreateFromFactoryArgs
     createCellFromFactoryA_full_sound CreateFromFactoryCircuitSpec)
-open Dregg2.Circuit.Inst.CreateCommittedEscrowA
-  (createCommittedEscrowE createCommittedEscrowAAirName CreateCommittedEscrowArgs
-    createCommittedEscrowA_full_sound)
-open Dregg2.Circuit.Inst.BridgeFinalizeA
-  (bridgeFinalizeE bridgeFinalizeAAirName BridgeFinalizeArgs bridgeFinalizeA_full_sound)
-open Dregg2.Circuit.Inst.BridgeCancelA
-  (bridgeCancelE bridgeCancelAAirName BridgeCancelArgs bridgeCancelA_full_sound)
 open Dregg2.Circuit.Inst.UnsealA (unsealE unsealAAirName UnsealArgs unsealA_full_sound)
 open Dregg2.Circuit.Inst.CreateSealPairA
   (createSealPairE createSealPairAAirName CreateSealPairArgs createSealPairA_full_sound)
@@ -801,10 +669,6 @@ open Dregg2.Circuit.Spec.CellStateVK (SetVKSpec)
 open Dregg2.Circuit.Spec.AuthorityUnattenuated (DelegateSpec)
 open Dregg2.Circuit.Spec.AuthorityRevocation (RevokeSpec)
 open Dregg2.Circuit.Spec.FactoryCreation (CreateFromFactorySpec)
-open Dregg2.Circuit.Spec.EscrowCommitted (CommittedEscrowCreateSpec CommittedEscrowSettleSpec)
-open Dregg2.Exec.TurnExecutorFull (releaseSettleAuthB refundSettleAuthB)
-open Dregg2.Circuit.Spec.BridgeOutboundFinalize (BridgeFinalizeSpec)
-open Dregg2.Circuit.Spec.BridgeOutboundCancel (BridgeOutboundCancelSpec)
 open Dregg2.Circuit.Spec.SealBoxOperations (UnsealSpec)
 open Dregg2.Circuit.Spec.SealPairCreation (CreateSealPairSpec)
 open Dregg2.Circuit.Spec.SovereignCommitment (MakeSovereignSpec)
@@ -1038,106 +902,6 @@ theorem createCellFromFactoryA_emitted_refines_spec (S : Surface2) (LE : CellId 
     (bornEmptyAuthority_post_iff s.kernel args.newCell s'.kernel).mp hauth
   exact ⟨e, hadmit, hacc, hbal, hcell, hsc, hlog, hcaps, hlif, hdc, hdel, hdgs, hEsc, hNull, hRev, hCom,
     hQ, hSw, hFac, hSB⟩
-
-def createCommittedEscrowAEmittedStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN)
-    (hLE : listLeafInjective LE) (s : RecChainedState) (args : CreateCommittedEscrowArgs)
-    (s' : RecChainedState) : Prop :=
-  effect2dualEmittedStepLocal S (createCommittedEscrowE D hD LE cN hN hLE) createCommittedEscrowAAirName
-    s args s'
-
-theorem createCommittedEscrowA_emitted_equiv_circuit (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN)
-    (hLE : listLeafInjective LE) (s : RecChainedState) (args : CreateCommittedEscrowArgs)
-    (s' : RecChainedState) :
-    createCommittedEscrowAEmittedStep S D hD LE cN hN hLE s args s' ↔
-      satisfiedE2Dual S (createCommittedEscrowE D hD LE cN hN hLE)
-        (encodeE2Dual S (createCommittedEscrowE D hD LE cN hN hLE) s args s') :=
-  effect2dual_emitted_equiv_circuit_local S (createCommittedEscrowE D hD LE cN hN hLE)
-    createCommittedEscrowAAirName s args s'
-
-theorem createCommittedEscrowA_emitted_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN)
-    (hLE : listLeafInjective LE) (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : CreateCommittedEscrowArgs) (s' : RecChainedState)
-    (h : createCommittedEscrowAEmittedStep S D hD LE cN hN hLE s args s') :
-    CommittedEscrowCreateSpec s args.id args.actor args.creator args.recipient args.asset args.amount
-      args.hidingProof s' :=
-  effect2dual_emitted_refines_bespoke_spec S (createCommittedEscrowE D hD LE cN hN hLE)
-    createCommittedEscrowAAirName
-    (fun pre args post =>
-      satisfiedE2Dual S (createCommittedEscrowE D hD LE cN hN hLE)
-        (encodeE2Dual S (createCommittedEscrowE D hD LE cN hN hLE) pre args post))
-    (fun pre args post =>
-      CommittedEscrowCreateSpec pre args.id args.actor args.creator args.recipient args.asset
-        args.amount args.hidingProof post)
-    (fun pre args post hc =>
-      createCommittedEscrowA_full_sound S D hD LE cN hN hLE hRest hLog pre args post hc)
-    (fun pre args post =>
-      createCommittedEscrowA_emitted_equiv_circuit S D hD LE cN hN hLE pre args post)
-    s args s' h
-
-/-! `releaseCommittedEscrowA` / `refundCommittedEscrowA` have no Inst emission yet
-    (`releaseCommittedEscrowAHoleName` / `refundCommittedEscrowAHoleName`); their open fronts are
-    tracked declaratively in `CircuitOpenFronts.openFronts`
-    (`releaseCommittedEscrowA_circuit` / `refundCommittedEscrowA_circuit`). No false-as-stated
-    `*_emitted_refines_spec` placeholder is carried here. -/
-
-def bridgeFinalizeAEmittedStep (S : Surface2) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : BridgeFinalizeArgs) (s' : RecChainedState) : Prop :=
-  effect2EmittedStepLocal S (bridgeFinalizeE LE cN hN hLE) bridgeFinalizeAAirName s args s'
-
-theorem bridgeFinalizeA_emitted_equiv_circuit (S : Surface2) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : BridgeFinalizeArgs) (s' : RecChainedState) :
-    bridgeFinalizeAEmittedStep S LE cN hN hLE s args s' ↔
-      effect2CircuitStep S (bridgeFinalizeE LE cN hN hLE) s args s' :=
-  effect2_emitted_equiv_circuit_local S (bridgeFinalizeE LE cN hN hLE) bridgeFinalizeAAirName s args s'
-
-theorem bridgeFinalizeA_emitted_refines_spec (S : Surface2) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.BridgeFinalizeA.RestIffNoEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : BridgeFinalizeArgs) (s' : RecChainedState)
-    (h : bridgeFinalizeAEmittedStep S LE cN hN hLE s args s') :
-    BridgeFinalizeSpec s args.id args.actor args.asset args.amount s' :=
-  effect2_emitted_refines_bespoke_spec S (bridgeFinalizeE LE cN hN hLE) bridgeFinalizeAAirName
-    (fun pre args post =>
-      satisfiedE2 S (bridgeFinalizeE LE cN hN hLE)
-        (encodeE2 S (bridgeFinalizeE LE cN hN hLE) pre args post))
-    (fun pre args post => BridgeFinalizeSpec pre args.id args.actor args.asset args.amount post)
-    (fun pre args post hc => bridgeFinalizeA_full_sound S LE cN hN hLE hRest hLog pre args post hc)
-    (fun pre args post => bridgeFinalizeA_emitted_equiv_circuit S LE cN hN hLE pre args post)
-    s args s' h
-
-def bridgeCancelAEmittedStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : BridgeCancelArgs) (s' : RecChainedState) : Prop :=
-  effect2dualEmittedStepLocal S (bridgeCancelE D hD LE cN hN hLE) bridgeCancelAAirName s args s'
-
-theorem bridgeCancelA_emitted_equiv_circuit (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN)
-    (hLE : listLeafInjective LE) (s : RecChainedState) (args : BridgeCancelArgs) (s' : RecChainedState) :
-    bridgeCancelAEmittedStep S D hD LE cN hN hLE s args s' ↔
-      satisfiedE2Dual S (bridgeCancelE D hD LE cN hN hLE)
-        (encodeE2Dual S (bridgeCancelE D hD LE cN hN hLE) s args s') :=
-  effect2dual_emitted_equiv_circuit_local S (bridgeCancelE D hD LE cN hN hLE) bridgeCancelAAirName s args s'
-
-theorem bridgeCancelA_emitted_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN)
-    (hLE : listLeafInjective LE) (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : BridgeCancelArgs) (s' : RecChainedState)
-    (h : bridgeCancelAEmittedStep S D hD LE cN hN hLE s args s') :
-    BridgeOutboundCancelSpec s args.id args.actor s' :=
-  effect2dual_emitted_refines_bespoke_spec S (bridgeCancelE D hD LE cN hN hLE) bridgeCancelAAirName
-    (fun pre args post =>
-      satisfiedE2Dual S (bridgeCancelE D hD LE cN hN hLE)
-        (encodeE2Dual S (bridgeCancelE D hD LE cN hN hLE) pre args post))
-    (fun pre args post => BridgeOutboundCancelSpec pre args.id args.actor post)
-    (fun pre args post hc =>
-      bridgeCancelA_full_sound S D hD LE cN hN hLE hRest hLog pre args post hc)
-    (fun pre args post => bridgeCancelA_emitted_equiv_circuit S D hD LE cN hN hLE pre args post)
-    s args s' h
 
 def unsealAEmittedStep (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
     (s : RecChainedState) (args : UnsealArgs) (s' : RecChainedState) : Prop :=
@@ -1640,13 +1404,9 @@ theorem refreshDelegationA_emitted_refines_spec (S : Surface2) (DDel : (CellId �
 #assert_axioms balanceA_emitted_refines_spec
 #assert_axioms delegate_emitted_refines_spec
 #assert_axioms noteSpend_emitted_refines_spec
-#assert_axioms createEscrow_emitted_refines_spec
 #assert_axioms noteCreate_emitted_refines_spec
-#assert_axioms releaseEscrow_emitted_refines_spec
-#assert_axioms refundEscrow_emitted_refines_spec
 #assert_axioms revoke_emitted_refines_spec
 #assert_axioms seal_emitted_refines_spec
-#assert_axioms bridgeLock_emitted_refines_spec
 #assert_axioms queueEnqueue_emitted_refines_spec
 #assert_axioms setField_emitted_refines_spec
 #assert_axioms exerciseHold_emitted_refines_spec

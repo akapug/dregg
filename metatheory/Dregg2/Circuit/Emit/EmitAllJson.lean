@@ -17,17 +17,12 @@ name → JSON, to capture this many-to-one fan-out.
 import Dregg2.Circuit.Emit.EffectVmEmit
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
-import Dregg2.Circuit.Emit.EffectVmEmitBridgeCancel
-import Dregg2.Circuit.Emit.EffectVmEmitBridgeFinalize
-import Dregg2.Circuit.Emit.EffectVmEmitBridgeLockA
 import Dregg2.Circuit.Emit.EffectVmEmitBridgeMint
 import Dregg2.Circuit.Emit.EffectVmEmitBurn
 import Dregg2.Circuit.Emit.EffectVmEmitCellDestroy
 import Dregg2.Circuit.Emit.EffectVmEmitCellSeal
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCell
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactory
-import Dregg2.Circuit.Emit.EffectVmEmitCreateCommittedEscrow
-import Dregg2.Circuit.Emit.EffectVmEmitCreateEscrow
 import Dregg2.Circuit.Emit.EffectVmEmitCreateSealPair
 import Dregg2.Circuit.Emit.EffectVmEmitDelegate
 import Dregg2.Circuit.Emit.EffectVmEmitDelegateAtten
@@ -50,9 +45,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitQueuePipelineStep
 import Dregg2.Circuit.Emit.EffectVmEmitQueueResize
 import Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive
 import Dregg2.Circuit.Emit.EffectVmEmitRefreshDelegation
-import Dregg2.Circuit.Emit.EffectVmEmitRefundEscrow
 import Dregg2.Circuit.Emit.EffectVmEmitRefusal
-import Dregg2.Circuit.Emit.EffectVmEmitReleaseEscrow
 import Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
 import Dregg2.Circuit.Emit.EffectVmEmitSeal
 import Dregg2.Circuit.Emit.EffectVmEmitSetField
@@ -80,17 +73,12 @@ are listed explicitly so the line count equals the distinct (selector-bearing) e
 def allEntries : List Entry :=
   [ ⟨"transferVmDescriptor",            EffectVmEmitTransfer.transferVmDescriptor⟩
   , ⟨"attenuateVmDescriptor",           EffectVmEmitAttenuateA.attenuateVmDescriptor⟩
-  , ⟨"bridgeCancelVmDescriptor",        EffectVmEmitBridgeCancel.bridgeCancelVmDescriptor⟩
-  , ⟨"bridgeFinalizeVmDescriptor",      EffectVmEmitBridgeFinalize.bridgeFinalizeVmDescriptor⟩
-  , ⟨"bridgeLockVmDescriptor",          EffectVmEmitBridgeLockA.bridgeLockVmDescriptor⟩
   , ⟨"bridgeMintVmDescriptor",          EffectVmEmitBridgeMint.bridgeMintVmDescriptor⟩
   , ⟨"burnVmDescriptor",                EffectVmEmitBurn.burnVmDescriptor⟩
   , ⟨"cellDestroyVmDescriptor",         EffectVmEmitCellDestroy.cellDestroyVmDescriptor⟩
   , ⟨"cellSealVmDescriptor",            EffectVmEmitCellSeal.cellSealVmDescriptor⟩
   , ⟨"createCellVmDescriptor",          EffectVmEmitCreateCell.createCellVmDescriptor⟩
   , ⟨"factoryVmDescriptor",             EffectVmEmitCreateCellFromFactory.factoryVmDescriptor⟩
-  , ⟨"escrowCreateVmDescriptor",        EffectVmEmitCreateCommittedEscrow.escrowCreateVmDescriptor⟩
-  , ⟨"createEscrowVmDescriptor",        EffectVmEmitCreateEscrow.createEscrowVmDescriptor⟩
   , ⟨"createSealPairVmDescriptor",      EffectVmEmitCreateSealPair.createSealPairVmDescriptor⟩
   , ⟨"delegateVmDescriptor",            EffectVmEmitDelegate.delegateVmDescriptor⟩
   , ⟨"delegateAttenVmDescriptor",       EffectVmEmitDelegateAtten.delegateAttenVmDescriptor⟩
@@ -118,9 +106,7 @@ def allEntries : List Entry :=
   , ⟨"queueResizeVmDescriptor",         EffectVmEmitQueueResize.queueResizeVmDescriptor 0⟩
   , ⟨"receiptArchiveVmDescriptor",      EffectVmEmitReceiptArchive.receiptArchiveVmDescriptor⟩
   , ⟨"refreshVmDescriptor",             EffectVmEmitRefreshDelegation.refreshVmDescriptor⟩
-  , ⟨"refundEscrowVmDescriptor",        EffectVmEmitRefundEscrow.refundEscrowVmDescriptor⟩
   , ⟨"refusalVmDescriptor",             EffectVmEmitRefusal.refusalVmDescriptor⟩
-  , ⟨"releaseEscrowVmDescriptor",       EffectVmEmitReleaseEscrow.releaseEscrowVmDescriptor⟩
   , ⟨"revokeVmDescriptor",              EffectVmEmitRevokeDelegation.revokeVmDescriptor⟩
   , ⟨"sealVmDescriptor",                EffectVmEmitSeal.sealVmDescriptor⟩
   , ⟨"setPermsVmDescriptor",            EffectVmEmitSetPermissions.setPermsVmDescriptor⟩

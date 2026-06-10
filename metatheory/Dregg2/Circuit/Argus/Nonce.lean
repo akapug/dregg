@@ -10,7 +10,7 @@ EffectVM weld theorems (`Argus/Compile.lean`, `Argus/Effects/Bridge*.lean`) have
 
 ## THE DIVERGENCE (honest, and — until here — unclosed)
 
-Across the EffectVM welds (transfer, burn, bridgeMint, bridgeLock, bridgeFinalize, bridgeCancel) the
+Across the EffectVM welds (transfer, burn, bridgeMint) the
 per-effect circuit DESCRIPTOR ticks the cell nonce (`post.nonce = pre.nonce + 1`, the legacy hand-AIR
 `EffectVmEmit*` row carries a per-row sequence-counter increment), while the per-effect EXECUTOR
 (`Stmt.interp`, = `recKExec`/`recKMint`/… by the cornerstones) FREEZES it (`RecStmt` has NO nonce
