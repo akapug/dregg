@@ -173,6 +173,10 @@ theorem conservation_guarantee
 #assert_axioms Dregg2.Spec.conservation_over_monoid
 #assert_axioms Dregg2.Spec.committed_iff_cleartext
 #assert_axioms Dregg2.Conserve.sum_transfer_conserve
+-- the shared `Conserve` library lemmas the per-asset sums rest on:
+#assert_axioms Dregg2.Conserve.sum_indicator
+#assert_axioms Dregg2.Conserve.sum_pointUpdate
+#assert_axioms Dregg2.Conserve.sum_conserve_of_deltas_zero
 
 /-! ===========================================================================
 ## Guarantee C — INTEGRITY
@@ -267,6 +271,8 @@ theorem freshness_guarantee {nf : Nat} {k k' : RecordKernelState}
 #assert_axioms Dregg2.Crypto.NonMembership.nonmembership_sound
 #assert_axioms Dregg2.Crypto.NonMembership.nonmembership_complete
 #assert_axioms Dregg2.Liveness.revocation_needs_consensus
+-- the negative-lifecycle teeth: liveness/death is not decidable (consensus-bound, like revocation):
+#assert_axioms Dregg2.Liveness.dead_undecidable
 
 /-! ===========================================================================
 ## Guarantee E — UNFOOLABILITY
@@ -318,5 +324,29 @@ theorem unfoolability_guarantee : True := trivial
 #assert_axioms Dregg2.Circuit.Argus.Aggregate.argus_strand_light_client
 #assert_axioms Dregg2.Circuit.Argus.Aggregate.argus_strand_conserves
 #assert_axioms Dregg2.Circuit.Argus.Aggregate.tampered_argus_strand_rejected
+
+/-! ===========================================================================
+## Axiom-hygiene coverage note
+
+This file is the *reading* artifact: it pins the FIVE guarantee apexes and the keystones
+that directly discharge them, organized BY GUARANTEE. It deliberately imports only the
+specific keystone modules each guarantee references (not the root `Dregg2`, which would be a
+circular import since the root imports this file), so it is NOT — and is not intended to be —
+the corpus-wide axiom-hygiene net.
+
+The comprehensive corpus-wide `#assert_axioms` net (every keystone the corpus advertises,
+re-pinned transitively through the root `Dregg2`) lives in `Dregg2.Claims`, which imports the
+root and therefore can pin keystones in modules this file does not import. `Dregg2.Claims` is
+RETIRED as a chronological journal (it is no longer the assurance artifact — this file is) but
+RETAINED as that whole-corpus CI pin-net: its ~190 pins are the unique location of those
+per-keystone kernel-clean certifications. Retiring it to a doc-only stub would silently drop
+that coverage, so it is kept as a pure pin-ledger and re-headed to point here.
+
+Division of labor:
+  * **This file (`AssuranceCase`)** — the load-bearing assurance APEX, by guarantee. The five
+    guarantee aggregations + their direct-DAG keystones, kernel-triple clean.
+  * **`Claims`** — the comprehensive per-keystone CI net (corpus-wide), subordinate to this file.
+  * **`scripts/no-sorry-metatheory.sh`** — the textual whole-corpus zero-`sorry` grep.
+=========================================================================== -/
 
 end Dregg2.AssuranceCase
