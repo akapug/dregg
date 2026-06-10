@@ -144,18 +144,18 @@ lemma routes every cap-writing effect — grant/attenuate/revoke — under `U`; 
 `.forever` then gives *"caps stay confined by `U` at every index, every schedule"* — capability safety,
 forever, the seL4 shape. -/
 
-/-- **`confinement% U`** — the authority-confinement shape: expands to `(control ∈ U ∧ grant ∈ U ∧
-reply ∈ U) → CellContract`, the contract being the COMBINED `KConfined U ·.kernel` (caps + the Wave-3
-sealed-box payloads) carried by `cellNextA_kconfine`. The three membership hypotheses are surfaced
-explicitly (the de-shadowed seal cluster genuinely needs `grant`/`reply` ⊆ `U` for its pair caps, and
-the carry needs `control` for the connectivity grants). Apply to a proof to get a real `CellContract`. -/
+/-- **`confinement% U`** — the authority-confinement shape: expands to `(control ∈ U) →
+CellContract`, the contract being `KConfined U ·.kernel` carried by `cellNextA_kconfine`. F3
+STRENGTHENING: the sealed-box channel is DISSOLVED (caps-in-slots, `Apps/CapSlotFactory.lean`), so
+the ceiling needs ONLY `control` — the old `grant`/`reply` hypotheses (the seal-pair caps) are GONE
+and the contract is strictly stronger. Apply to a proof to get a real `CellContract`. -/
 syntax (name := confinementStx) "confinement% " term:max : term
 
 macro_rules
   | `(confinement% $U:term) =>
-    `((fun (h : Auth.control ∈ $U ∧ Auth.grant ∈ $U ∧ Auth.reply ∈ $U) =>
+    `((fun (h : Auth.control ∈ $U) =>
         ({  Inv := fun s => KConfined $U s.kernel
-            step_ob := fun a cf hf => cellNextA_kconfine h.1 h.2.1 h.2.2 a cf hf
+            step_ob := fun a cf hf => cellNextA_kconfine h a cf hf
             shape := .other } : KernelForest.Contract)))
 
 /-! ## §4 — `automaton_inv% a b` — a field-RELATIONAL invariant (linear field algebra).
@@ -244,9 +244,9 @@ full authority ceiling (which contains `control`, supplied by `by decide`). -/
 noncomputable def gateConfined : Production.Contract :=
   liftFromKernelForest ((confinement% fullAuthCeiling) (by decide))
 
-/-- **GATE (3, payoff) — `confinement%` reproduces `CellConfine.livingCellA_confinement`.** The COMBINED
-`KConfined` (caps + the Wave-3 sealed-box payloads) stays confined by the ceiling at every index of every
-adversarial trajectory — capability safety (with the de-shadowed seal cap-movement), forever. -/
+/-- **GATE (3, payoff) — `confinement%` reproduces `CellConfine.livingCellA_confinement`.** `KConfined`
+(the c-list ceiling — F3: the ONLY kernel cap surface) stays confined at every index of every
+adversarial trajectory — capability safety, forever, under the `control`-only ceiling (STRONGER). -/
 example (s : RecChainedState) (hinit : KConfined fullAuthCeiling s.kernel) (sched : SchedA) :
     ∀ n, KConfined fullAuthCeiling (trajA s sched n).kernel :=
   ((confinement% fullAuthCeiling) (by decide)).forever hinit sched

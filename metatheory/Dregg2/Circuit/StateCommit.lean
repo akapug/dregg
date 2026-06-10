@@ -5,7 +5,7 @@
 `transferCircuit` witness pins `admitGuard` + the debit/credit of the source/dest `balance` field.
 But that is a PROJECTION — it says NOTHING about the other 15 fields of the moved cells, the
 balance of any THIRD cell, or any of the 16 non-`cell` state components (`accounts caps bal escrows
-nullifiers revoked commitments queues swiss slotCaveats factories lifecycle deathCert delegate
+nullifiers revoked commitments slotCaveats factories lifecycle deathCert delegate
 delegations sealedBoxes`). A forged post-state that keeps the two moved balances honest but mints a
 third cell, or silently rewrites `nullifiers`, satisfies `transferCircuit`. THAT is the "pale ghost".
 
@@ -230,10 +230,9 @@ def RestHashIffFrame : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.accounts = k.accounts ∧ k'.caps = k.caps ∧ k'.bal = k.bal
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.swiss = k.swiss
+      ∧ k'.commitments = k.commitments
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
@@ -482,8 +481,8 @@ theorem transfer_circuit_full_sound
   -- rest hash equal ⇒ 16 non-cell fields equal (RestHashIffFrame.→).
   have hRHeq : RH k = RH k' := (srestframe_iff CH RH cmb compress compressN k t k').mp hrestgate
   have hframe16 := (hRest k k').mp hRHeq
-  obtain ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs,
-    hSB⟩ := hframe16
+  obtain ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel, hDgs,
+    hDE, hDEA⟩ := hframe16
   -- frame digests equal ⇒ untouched cells equal (PROVED FrameDigestBindsCells).
   have hfdeq : frameDigest CH compressN k (frameCarrier k t)
       = frameDigest CH compressN k' (frameCarrier k t) :=
@@ -519,7 +518,7 @@ theorem transfer_circuit_full_sound
           exact (hwf c hcacc).symm
   -- assemble TransferSpec (admitGuard ∧ cell map ∧ the 16 frame clauses).
   exact ⟨⟨hauth, hnn, hav, hne, hsrc, hdst⟩, hcellmap,
-    hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
+    hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel, hDgs, hDE, hDEA⟩
 
 #assert_axioms transfer_circuit_full_sound
 
@@ -556,8 +555,8 @@ theorem transfer_circuit_full_complete
     (hspec : TransferSpec k t k') :
     satisfiedS cmb compress (encodeS CH RH cmb compress compressN k t k') := by
   have hexec : recKExec k t = some k' := (recKExec_iff_spec k t k').mpr hspec
-  obtain ⟨hg, hcell, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel,
-    hDgs, hSB⟩ := hspec
+  obtain ⟨hg, hcell, hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel,
+    hDgs, hDE, hDEA⟩ := hspec
   obtain ⟨_, _, _, hne, hsrc, hdst⟩ := hg
   -- the 9 transfer gates hold under encodeT (Transfer's completeness), transport to encodeS.
   have htsat : satisfied transferCircuit (encodeT k t k') := transfer_circuit_complete hexec
@@ -574,7 +573,7 @@ theorem transfer_circuit_full_complete
   have e10 := encodeS_agrees_encodeT CH RH cmb compress compressN k t k' vTDstLive  (by decide)
   -- frame-gate facts.
   have hRHeq : RH k = RH k' := (hRest k k').mpr
-    ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
+    ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel, hDgs, hDE, hDEA⟩
   have hcellc : ∀ c ∈ frameCarrier k t, CH c (k.cell c) = CH c (k'.cell c) := by
     intro c hc
     unfold frameCarrier at hc

@@ -23,7 +23,6 @@ import Dregg2.Circuit.Inst.createCellA
 import Dregg2.Circuit.Inst.spawnA
 import Dregg2.Circuit.Inst.noteCreateA
 import Dregg2.Circuit.Inst.revoke
-import Dregg2.Circuit.Inst.sealA
 import Dregg2.Circuit.EffectCommit
 import Dregg2.Circuit.EffectInstances
 import Dregg2.Circuit.Inst.exerciseA
@@ -49,7 +48,6 @@ open Dregg2.Circuit.Inst.CreateCellA
 open Dregg2.Circuit.Inst.SpawnA
 open Dregg2.Circuit.Inst.NoteCreateA
 open Dregg2.Circuit.Inst.Revoke
-open Dregg2.Circuit.Inst.SealA
 open Dregg2.Circuit.EffectCommit
 open Dregg2.Circuit.EffectInstances
 open Dregg2.Circuit.Inst.ExerciseA
@@ -63,7 +61,6 @@ open Dregg2.Circuit.Spec.AuthorityUnattenuated
 open Dregg2.Circuit.Spec.NoteNullifier
 open Dregg2.Circuit.Spec.NoteCommitment
 open Dregg2.Circuit.Spec.AuthorityRevocation
-open Dregg2.Circuit.Spec.SealBoxOperations
 open Dregg2.Circuit.Spec.CellStateField
 open Dregg2.Exec
 open Dregg2.Exec.CircuitEmit
@@ -719,62 +716,11 @@ theorem revoke_circuit_refines_exec (S : Surface2) (D : Caps → ℤ) (hD : Func
 #assert_axioms revoke_spec_refines_circuit
 #assert_axioms revoke_circuit_refines_exec
 
-/-! ## §15 — SealA diamond (circuit ⟺ SealSpec ⟺ execFullA). -/
-
-def sealExecStep (s : RecChainedState) (args : SealArgs) (s' : RecChainedState) : Prop :=
-  execFullA s (.sealA args.pid args.actor args.payload) = some s'
-
-def sealSpecStep (s : RecChainedState) (args : SealArgs) (s' : RecChainedState) : Prop :=
-  SealSpec s args.pid args.actor args.payload s'
-
-def sealCircuitStep (S : Surface2) (LE : SealedBoxRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : SealArgs) (s' : RecChainedState) : Prop :=
-  effect2CircuitStep S (sealE LE cN hN hLE) s args s'
-
-theorem sealRestFrameEncodes (S : Surface2) (LE : SealedBoxRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE) (hRest : RestIffNoSealedBoxes S.RH) :
-    RestFrameEncodes2 S (sealE LE cN hN hLE) :=
-  fun k k' hframe => (hRest k k').mpr hframe
-
-theorem seal_exec_equiv_spec (s : RecChainedState) (args : SealArgs) (s' : RecChainedState) :
-    sealExecStep s args s' ↔ sealSpecStep s args s' :=
-  execFullA_seal_iff_spec s args.pid args.actor args.payload s'
-
-theorem seal_circuit_refines_spec (S : Surface2) (LE : SealedBoxRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoSealedBoxes S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : SealArgs) (s' : RecChainedState)
-    (h : sealCircuitStep S LE cN hN hLE s args s') :
-    sealSpecStep s args s' :=
-  sealA_full_sound S LE cN hN hLE hRest hLog s args s' h
-
-theorem seal_spec_refines_circuit (S : Surface2) (LE : SealedBoxRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoSealedBoxes S.RH)
-    (s : RecChainedState) (args : SealArgs) (s' : RecChainedState)
-    (h : sealSpecStep s args s') :
-    sealCircuitStep S LE cN hN hLE s args s' :=
-  effect2_apex_refines_circuit S (sealE LE cN hN hLE)
-    (sealRestFrameEncodes S LE cN hN hLE hRest) (sealGuardEncodes LE cN hN hLE) s args s'
-    ((apex_iff_sealSpec LE cN hN hLE s args s').mpr h)
-
-theorem seal_circuit_refines_exec (S : Surface2) (LE : SealedBoxRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoSealedBoxes S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : SealArgs) (s' : RecChainedState)
-    (h : sealCircuitStep S LE cN hN hLE s args s') :
-    sealExecStep s args s' :=
-  (seal_exec_equiv_spec s args s').mpr
-    (seal_circuit_refines_spec S LE cN hN hLE hRest hLog s args s' h)
-
-#assert_axioms seal_exec_equiv_spec
-#assert_axioms seal_circuit_refines_spec
-#assert_axioms seal_spec_refines_circuit
-#assert_axioms seal_circuit_refines_exec
-
 -- (F2a) §17 QueueEnqueueA diamond DELETED with the queue effect family (VerbRegistry:
 -- `.factory .queue`; the FIFO behavior is the verified `Dregg2/Apps/QueueFactory`).
+-- (F3) §15 SealA diamond DELETED with the seal/swiss/sturdyref family (VerbRegistry:
+-- `.factory .capsInSlots`; stored-cap behavior is the verified `Dregg2/Apps/CapSlotFactory`,
+-- R7 epoch-at-retrieval).
 
 /-! ## §18 — SetFieldA diamond (v1 circuit ⟺ SetFieldSpec ⟺ execFullA). -/
 

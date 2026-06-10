@@ -157,14 +157,14 @@ theorem apex_iff_ReceiptArchiveSpec (s : RecChainedState) (args : ReceiptArchive
   unfold ReceiptArchiveSpec receiptArchiveGuardProp auditGuard kernelFrame
   constructor
   · -- kernelFrame order: accounts caps bal escrows nullifiers revoked commitments queues swiss …
-    rintro ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    rintro ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
     -- ReceiptArchiveSpec order: accounts caps escrows nullifiers revoked commitments bal queues swiss …
-    exact ⟨hg, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §1c — THE VALIDATION: `receiptArchiveA_full_sound` through the framework. -/

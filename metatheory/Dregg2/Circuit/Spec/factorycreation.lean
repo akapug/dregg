@@ -59,11 +59,10 @@ private theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
     (haccounts : k.accounts = k'.accounts) (hcell : k.cell = k'.cell) (hcaps : k.caps = k'.caps)
     (hnullifiers : k.nullifiers = k'.nullifiers)
     (hrevoked : k.revoked = k'.revoked) (hcommitments : k.commitments = k'.commitments)
-    (hbal : k.bal = k'.bal) (hswiss : k.swiss = k'.swiss)
+    (hbal : k.bal = k'.bal)
     (hslotCaveats : k.slotCaveats = k'.slotCaveats) (hfactories : k.factories = k'.factories)
     (hlifecycle : k.lifecycle = k'.lifecycle) (hdeathCert : k.deathCert = k'.deathCert)
     (hdelegate : k.delegate = k'.delegate) (hdelegations : k.delegations = k'.delegations)
-    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes)
     (hdelegationEpoch : k.delegationEpoch = k'.delegationEpoch)
     (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt) : k = k' := by
   cases k; cases k'; simp_all
@@ -192,9 +191,7 @@ def CreateFromFactorySpec (st : RecChainedState) (actor newCell : CellId) (vk : 
     ∧ st'.kernel.nullifiers = st.kernel.nullifiers
     ∧ st'.kernel.revoked = st.kernel.revoked
     ∧ st'.kernel.commitments = st.kernel.commitments
-    ∧ st'.kernel.swiss = st.kernel.swiss
     ∧ st'.kernel.factories = st.kernel.factories
-    ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
     ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
     ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
@@ -225,9 +222,7 @@ theorem createCellFromFactoryChainA_components {s s' : RecChainedState} {actor n
       ∧ s'.kernel.nullifiers = s.kernel.nullifiers
       ∧ s'.kernel.revoked = s.kernel.revoked
       ∧ s'.kernel.commitments = s.kernel.commitments
-      ∧ s'.kernel.swiss = s.kernel.swiss
       ∧ s'.kernel.factories = s.kernel.factories
-      ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
       ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
       ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt := by
   obtain ⟨e, s1, hfind, hconf, hc, hs'⟩ := createCellFromFactoryChainA_factors h
@@ -241,7 +236,7 @@ theorem createCellFromFactoryChainA_components {s s' : RecChainedState} {actor n
   refine ⟨e, ⟨hvk, hfind, hconf, hauth, hfresh⟩, ?_⟩
   -- substitute s' = factory-install over s1, and s1 = createCellChainA's output over s.
   subst hs' hs1
-  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl⟩
   · funext l; by_cases hl : l = newCell <;> simp [hl, createCellIntoAsset, bornEmptyCellSlots]
   · funext c; by_cases hc' : c = newCell <;> simp [hc', createCellIntoAsset, bornEmptyCellSlots]
   · funext c; by_cases hc' : c = newCell <;> simp [hc', createCellIntoAsset, bornEmptyCellSlots]
@@ -266,7 +261,7 @@ theorem createCellFromFactoryChainA_iff_spec (st : RecChainedState) (actor newCe
     -- explicit committed output, then prove that output equals `st'` from the 18 spec equations.
     rintro ⟨e, ⟨hvk, hfind, hconf, hauth, hfresh⟩,
             hacc, hbal, hcell, hcav, hlog,
-            hcaps, hlc, hdc, hdel, hdn, hnull, hrev, hcom, hsw, hfac, hsb, hde, hdea⟩
+            hcaps, hlc, hdc, hdel, hdn, hnull, hrev, hcom, hfac, hde, hdea⟩
     -- the underlying createCell commits (its gate is the last two guard conjuncts):
     have hc : createCellChainA st actor newCell = some
         { kernel := createCellIntoAsset st.kernel newCell
@@ -293,9 +288,9 @@ theorem createCellFromFactoryChainA_iff_spec (st : RecChainedState) (actor newCe
     -- after substituting `hcell`/`hcav` closes those.
     rw [hex]
     obtain ⟨k', lg'⟩ := st'
-    obtain ⟨acc, cl, cp, nl, rv, cm, bl, sw, sc, fc, lc, dc, dl, dn, sb, dge, dgea⟩ := k'
-    simp only at hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hnull hrev hcom hsw hfac hsb hde hdea
-    subst hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hnull hrev hcom hsw hfac hsb hde hdea
+    obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea⟩ := k'
+    simp only at hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hnull hrev hcom hfac hde hdea
+    subst hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hnull hrev hcom hfac hde hdea
     rfl
 
 /-- **`execCreateFromFactoryA_iff_spec` — THE DELIVERABLE: `execFullA`-LEVEL EXECUTOR ⟺ SPEC (FULL

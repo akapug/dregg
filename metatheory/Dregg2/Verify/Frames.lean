@@ -206,10 +206,6 @@ attribute [aesop safe apply (rule_sets := [Dregg2])]
   recKDelegate_commitments
   recKDelegateAtten_commitments
   noteSpendNullifier_commitments
-  swissExportK_commitments
-  swissEnlivenK_commitments
-  swissHandoffK_commitments
-  swissDropK_commitments
 
 attribute [aesop safe apply (rule_sets := [Dregg2])]
   -- the reflexivity-shaped frames (proved by `rfl`; `safe apply` lets aesop close the "= k" subgoal)

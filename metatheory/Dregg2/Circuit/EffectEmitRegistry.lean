@@ -14,12 +14,9 @@ import Dregg2.Circuit.Inst.cellSealA
 import Dregg2.Circuit.Inst.cellUnsealA
 import Dregg2.Circuit.Inst.createCellA
 import Dregg2.Circuit.Inst.createCellFromFactoryA
-import Dregg2.Circuit.Inst.createSealPairA
 import Dregg2.Circuit.Inst.delegate
 import Dregg2.Circuit.Inst.delegateAttenA
-import Dregg2.Circuit.Inst.dropRefA
 import Dregg2.Circuit.Inst.emitEventA
-import Dregg2.Circuit.Inst.enlivenRefA
 import Dregg2.Circuit.Inst.exerciseA
 import Dregg2.Circuit.Inst.incrementNonceA
 import Dregg2.Circuit.Inst.introduceA
@@ -33,16 +30,10 @@ import Dregg2.Circuit.Inst.refreshDelegationA
 import Dregg2.Circuit.Inst.refusalA
 import Dregg2.Circuit.Inst.revoke
 import Dregg2.Circuit.Inst.revokeDelegationA
-import Dregg2.Circuit.Inst.sealA
 import Dregg2.Circuit.Inst.setPermissionsA
 import Dregg2.Circuit.Inst.setVKA
 import Dregg2.Circuit.Inst.spawnA
-import Dregg2.Circuit.Inst.swissDropA
-import Dregg2.Circuit.Inst.swissExportA
-import Dregg2.Circuit.Inst.swissHandoffA
 import Dregg2.Circuit.Inst.transfer
-import Dregg2.Circuit.Inst.unsealA
-import Dregg2.Circuit.Inst.validateHandoffA
 import Dregg2.Circuit.Poseidon2Emit
 
 namespace Dregg2.Circuit.EffectEmitRegistry
@@ -93,7 +84,8 @@ def holeAirNames : List String :=
 /-- Map each `FullActionA` constructor to its Inst / commit AIR identity — TOTAL: all 38
 surviving constructors are MAPPED (F2b: the queue-family constructors and their fail-closed
 HOLE arms are GONE; the F1a escrow/obligation/bridge-L/F/C HOLEs lost their constructors in
-F1b). -/
+F1b; F3: the seal/swiss/sturdyref constructors are GONE — caps-in-slots,
+`Apps/CapSlotFactory.lean`). -/
 def actionAirName : FullActionA → String
   | .balanceA _ _ => Dregg2.Circuit.Inst.BalanceA.balanceAAirName
   | .delegate _ _ _ => Dregg2.Circuit.Inst.Delegate.delegateAirName
@@ -108,9 +100,7 @@ def actionAirName : FullActionA → String
   | .introduceA _ _ _ => Dregg2.Circuit.Inst.IntroduceA.introduceAAirName
   | .delegateAttenA _ _ _ _ => Dregg2.Circuit.Inst.DelegateAttenA.delegateAttenAAirName
   | .attenuateA _ _ _ => Dregg2.Circuit.Inst.AttenuateA.attenuateAAirName
-  | .dropRefA _ _ => Dregg2.Circuit.Inst.DropRefA.dropRefAAirName
   | .revokeDelegationA _ _ => Dregg2.Circuit.Inst.RevokeDelegationA.revokeDelegationAAirName
-  | .validateHandoffA _ _ _ => Dregg2.Circuit.Inst.ValidateHandoffA.validateHandoffAAirName
   | .exerciseA _ _ _ => Dregg2.Circuit.Inst.ExerciseA.exerciseAAirName
   | .createCellA _ _ => Dregg2.Circuit.Inst.CreateCellA.createCellAAirName
   | .createCellFromFactoryA _ _ _ => Dregg2.Circuit.Inst.CreateCellFromFactoryA.createCellFromFactoryAAirName
@@ -118,29 +108,23 @@ def actionAirName : FullActionA → String
   | .bridgeMintA _ _ _ _ => Dregg2.Circuit.Inst.MintA.mintAirName
   | .noteSpendA _ _ _ => Dregg2.Circuit.Inst.NoteSpendA.noteSpendAAirName
   | .noteCreateA _ _ => Dregg2.Circuit.Inst.NoteCreateA.noteCreateAAirName
-  | .sealA _ _ _ => Dregg2.Circuit.Inst.SealA.sealAAirName
-  | .unsealA _ _ _ => Dregg2.Circuit.Inst.UnsealA.unsealAAirName
-  | .createSealPairA _ _ _ _ => Dregg2.Circuit.Inst.CreateSealPairA.createSealPairAAirName
   | .makeSovereignA _ _ => Dregg2.Circuit.Inst.MakeSovereignA.makeSovereignAAirName
   | .refusalA _ _ => Dregg2.Circuit.Inst.RefusalA.refusalAAirName
   | .receiptArchiveA _ _ => Dregg2.Circuit.Inst.ReceiptArchiveA.receiptArchiveAAirName
   | .pipelinedSendA _ => Dregg2.Circuit.Inst.PipelinedSendA.pipelinedSendAAirName
-  | .exportSturdyRefA _ _ _ _ _ => Dregg2.Circuit.Inst.SwissExportA.swissExportAAirName
-  | .enlivenRefA _ _ _ _ => Dregg2.Circuit.Inst.EnlivenRefA.enlivenRefAAirName
-  | .swissHandoffA _ _ _ _ => Dregg2.Circuit.Inst.SwissHandoffA.swissHandoffAAirName
-  | .swissDropA _ _ _ => Dregg2.Circuit.Inst.SwissDropA.swissDropAAirName
   | .cellSealA _ _ => Dregg2.Circuit.Inst.CellSealA.cellSealAAirName
   | .cellUnsealA _ _ => Dregg2.Circuit.Inst.CellUnsealA.cellUnsealAAirName
   | .cellDestroyA _ _ _ => Dregg2.Circuit.Inst.CellDestroyA.cellDestroyAAirName
   | .refreshDelegationA _ _ => Dregg2.Circuit.Inst.RefreshDelegationA.refreshDelegationAAirName
 
-/-- Total `FullActionA` constructors `actionAirName` covers (all 38 MAPPED — no HOLE arms left). -/
-def actionAirNameCoverage : Nat := 38
+/-- Total `FullActionA` constructors `actionAirName` covers (all 29 MAPPED — no HOLE arms left;
+F3: the seal/swiss/sturdyref constructors died with the caps-in-slots dissolution). -/
+def actionAirNameCoverage : Nat := 29
 
 def effectEmitRegistry : DescriptorLookup := fun name =>
-  if name == Dregg2.Circuit.Transfer.transferAirName then some Dregg2.Circuit.Transfer.emittedTransfer else if name == Dregg2.Circuit.SetFieldCommit.setFieldAirName then some Dregg2.Circuit.SetFieldCommit.emittedSetField else if name == Dregg2.Circuit.CoordinatedTurnEmit.coordinatedTurnAirName then some Dregg2.Circuit.CoordinatedTurnEmit.emittedCoordinatedTurn else if name == Dregg2.Circuit.Inst.AttenuateA.attenuateAAirName then some Dregg2.Circuit.Inst.AttenuateA.attenuateAEmitted else if name == Dregg2.Circuit.Inst.BalanceA.balanceAAirName then some Dregg2.Circuit.Inst.BalanceA.balanceAEmitted else if name == Dregg2.Circuit.Inst.BurnA.burnAirName then some Dregg2.Circuit.Inst.BurnA.burnEmitted else if name == Dregg2.Circuit.Inst.CellDestroyA.cellDestroyAAirName then some Dregg2.Circuit.Inst.CellDestroyA.cellDestroyAEmitted else if name == Dregg2.Circuit.Inst.CellSealA.cellSealAAirName then some Dregg2.Circuit.Inst.CellSealA.cellSealAEmitted else if name == Dregg2.Circuit.Inst.CellUnsealA.cellUnsealAAirName then some Dregg2.Circuit.Inst.CellUnsealA.cellUnsealAEmitted else if name == Dregg2.Circuit.Inst.CreateCellA.createCellAAirName then some Dregg2.Circuit.Inst.CreateCellA.createCellAEmitted else if name == Dregg2.Circuit.Inst.CreateCellFromFactoryA.createCellFromFactoryAAirName then some Dregg2.Circuit.Inst.CreateCellFromFactoryA.createCellFromFactoryAEmitted else if name == Dregg2.Circuit.Inst.CreateSealPairA.createSealPairAAirName then some Dregg2.Circuit.Inst.CreateSealPairA.createSealPairAEmitted else if name == Dregg2.Circuit.Inst.Delegate.delegateAirName then some Dregg2.Circuit.Inst.Delegate.delegateEmitted else if name == Dregg2.Circuit.Inst.DelegateAttenA.delegateAttenAAirName then some Dregg2.Circuit.Inst.DelegateAttenA.delegateAttenAEmitted else if name == Dregg2.Circuit.Inst.DropRefA.dropRefAAirName then some Dregg2.Circuit.Inst.DropRefA.dropRefAEmitted else if name == Dregg2.Circuit.Inst.EmitEventA.emitEventAAirName then some Dregg2.Circuit.Inst.EmitEventA.emitEventAEmitted else if name == Dregg2.Circuit.Inst.EnlivenRefA.enlivenRefAAirName then some Dregg2.Circuit.Inst.EnlivenRefA.enlivenRefAEmitted else if name == Dregg2.Circuit.Inst.ExerciseA.exerciseAAirName then some Dregg2.Circuit.Inst.ExerciseA.exerciseAEmitted else if name == Dregg2.Circuit.Inst.IncrementNonceA.incrementNonceAAirName then some Dregg2.Circuit.Inst.IncrementNonceA.incrementNonceAEmitted else if name == Dregg2.Circuit.Inst.IntroduceA.introduceAAirName then some Dregg2.Circuit.Inst.IntroduceA.introduceAEmitted else if name == Dregg2.Circuit.Inst.MakeSovereignA.makeSovereignAAirName then some Dregg2.Circuit.Inst.MakeSovereignA.makeSovereignAEmitted else if name == Dregg2.Circuit.Inst.MintA.mintAirName then some Dregg2.Circuit.Inst.MintA.mintEmitted else if name == Dregg2.Circuit.Inst.NoteCreateA.noteCreateAAirName then some Dregg2.Circuit.Inst.NoteCreateA.noteCreateAEmitted else if name == Dregg2.Circuit.Inst.NoteSpendA.noteSpendAAirName then some Dregg2.Circuit.Inst.NoteSpendA.noteSpendAEmitted else if name == Dregg2.Circuit.Inst.PipelinedSendA.pipelinedSendAAirName then some Dregg2.Circuit.Inst.PipelinedSendA.pipelinedSendAEmitted else if name == Dregg2.Circuit.Inst.ReceiptArchiveA.receiptArchiveAAirName then some Dregg2.Circuit.Inst.ReceiptArchiveA.receiptArchiveAEmitted else if name == Dregg2.Circuit.Inst.RefreshDelegationA.refreshDelegationAAirName then some Dregg2.Circuit.Inst.RefreshDelegationA.refreshDelegationAEmitted else if name == Dregg2.Circuit.Inst.RefusalA.refusalAAirName then some Dregg2.Circuit.Inst.RefusalA.refusalAEmitted else if name == Dregg2.Circuit.Inst.Revoke.revokeAirName then some Dregg2.Circuit.Inst.Revoke.revokeEmitted else if name == Dregg2.Circuit.Inst.RevokeDelegationA.revokeDelegationAAirName then some Dregg2.Circuit.Inst.RevokeDelegationA.revokeDelegationAEmitted else if name == Dregg2.Circuit.Inst.SealA.sealAAirName then some Dregg2.Circuit.Inst.SealA.sealAEmitted else if name == Dregg2.Circuit.Inst.SetPermissionsA.setPermissionsAAirName then some Dregg2.Circuit.Inst.SetPermissionsA.setPermissionsAEmitted else if name == Dregg2.Circuit.Inst.SetVKA.setVKAAirName then some Dregg2.Circuit.Inst.SetVKA.setVKAEmitted else if name == Dregg2.Circuit.Inst.SpawnA.spawnAAirName then some Dregg2.Circuit.Inst.SpawnA.spawnAEmitted else if name == Dregg2.Circuit.Inst.SwissDropA.swissDropAAirName then some Dregg2.Circuit.Inst.SwissDropA.swissDropAEmitted else if name == Dregg2.Circuit.Inst.SwissExportA.swissExportAAirName then some Dregg2.Circuit.Inst.SwissExportA.swissExportAEmitted else if name == Dregg2.Circuit.Inst.SwissHandoffA.swissHandoffAAirName then some Dregg2.Circuit.Inst.SwissHandoffA.swissHandoffAEmitted else if name == Dregg2.Circuit.Inst.Transfer.transferAirName then some Dregg2.Circuit.Inst.Transfer.transferEmitted else if name == Dregg2.Circuit.Inst.UnsealA.unsealAAirName then some Dregg2.Circuit.Inst.UnsealA.unsealAEmitted else if name == Dregg2.Circuit.Inst.ValidateHandoffA.validateHandoffAAirName then some Dregg2.Circuit.Inst.ValidateHandoffA.validateHandoffAEmitted else none
+  if name == Dregg2.Circuit.Transfer.transferAirName then some Dregg2.Circuit.Transfer.emittedTransfer else if name == Dregg2.Circuit.SetFieldCommit.setFieldAirName then some Dregg2.Circuit.SetFieldCommit.emittedSetField else if name == Dregg2.Circuit.CoordinatedTurnEmit.coordinatedTurnAirName then some Dregg2.Circuit.CoordinatedTurnEmit.emittedCoordinatedTurn else if name == Dregg2.Circuit.Inst.AttenuateA.attenuateAAirName then some Dregg2.Circuit.Inst.AttenuateA.attenuateAEmitted else if name == Dregg2.Circuit.Inst.BalanceA.balanceAAirName then some Dregg2.Circuit.Inst.BalanceA.balanceAEmitted else if name == Dregg2.Circuit.Inst.BurnA.burnAirName then some Dregg2.Circuit.Inst.BurnA.burnEmitted else if name == Dregg2.Circuit.Inst.CellDestroyA.cellDestroyAAirName then some Dregg2.Circuit.Inst.CellDestroyA.cellDestroyAEmitted else if name == Dregg2.Circuit.Inst.CellSealA.cellSealAAirName then some Dregg2.Circuit.Inst.CellSealA.cellSealAEmitted else if name == Dregg2.Circuit.Inst.CellUnsealA.cellUnsealAAirName then some Dregg2.Circuit.Inst.CellUnsealA.cellUnsealAEmitted else if name == Dregg2.Circuit.Inst.CreateCellA.createCellAAirName then some Dregg2.Circuit.Inst.CreateCellA.createCellAEmitted else if name == Dregg2.Circuit.Inst.CreateCellFromFactoryA.createCellFromFactoryAAirName then some Dregg2.Circuit.Inst.CreateCellFromFactoryA.createCellFromFactoryAEmitted else if name == Dregg2.Circuit.Inst.Delegate.delegateAirName then some Dregg2.Circuit.Inst.Delegate.delegateEmitted else if name == Dregg2.Circuit.Inst.DelegateAttenA.delegateAttenAAirName then some Dregg2.Circuit.Inst.DelegateAttenA.delegateAttenAEmitted else if name == Dregg2.Circuit.Inst.EmitEventA.emitEventAAirName then some Dregg2.Circuit.Inst.EmitEventA.emitEventAEmitted else if name == Dregg2.Circuit.Inst.ExerciseA.exerciseAAirName then some Dregg2.Circuit.Inst.ExerciseA.exerciseAEmitted else if name == Dregg2.Circuit.Inst.IncrementNonceA.incrementNonceAAirName then some Dregg2.Circuit.Inst.IncrementNonceA.incrementNonceAEmitted else if name == Dregg2.Circuit.Inst.IntroduceA.introduceAAirName then some Dregg2.Circuit.Inst.IntroduceA.introduceAEmitted else if name == Dregg2.Circuit.Inst.MakeSovereignA.makeSovereignAAirName then some Dregg2.Circuit.Inst.MakeSovereignA.makeSovereignAEmitted else if name == Dregg2.Circuit.Inst.MintA.mintAirName then some Dregg2.Circuit.Inst.MintA.mintEmitted else if name == Dregg2.Circuit.Inst.NoteCreateA.noteCreateAAirName then some Dregg2.Circuit.Inst.NoteCreateA.noteCreateAEmitted else if name == Dregg2.Circuit.Inst.NoteSpendA.noteSpendAAirName then some Dregg2.Circuit.Inst.NoteSpendA.noteSpendAEmitted else if name == Dregg2.Circuit.Inst.PipelinedSendA.pipelinedSendAAirName then some Dregg2.Circuit.Inst.PipelinedSendA.pipelinedSendAEmitted else if name == Dregg2.Circuit.Inst.ReceiptArchiveA.receiptArchiveAAirName then some Dregg2.Circuit.Inst.ReceiptArchiveA.receiptArchiveAEmitted else if name == Dregg2.Circuit.Inst.RefreshDelegationA.refreshDelegationAAirName then some Dregg2.Circuit.Inst.RefreshDelegationA.refreshDelegationAEmitted else if name == Dregg2.Circuit.Inst.RefusalA.refusalAAirName then some Dregg2.Circuit.Inst.RefusalA.refusalAEmitted else if name == Dregg2.Circuit.Inst.Revoke.revokeAirName then some Dregg2.Circuit.Inst.Revoke.revokeEmitted else if name == Dregg2.Circuit.Inst.RevokeDelegationA.revokeDelegationAAirName then some Dregg2.Circuit.Inst.RevokeDelegationA.revokeDelegationAEmitted else if name == Dregg2.Circuit.Inst.SetPermissionsA.setPermissionsAAirName then some Dregg2.Circuit.Inst.SetPermissionsA.setPermissionsAEmitted else if name == Dregg2.Circuit.Inst.SetVKA.setVKAAirName then some Dregg2.Circuit.Inst.SetVKA.setVKAEmitted else if name == Dregg2.Circuit.Inst.SpawnA.spawnAAirName then some Dregg2.Circuit.Inst.SpawnA.spawnAEmitted else if name == Dregg2.Circuit.Inst.Transfer.transferAirName then some Dregg2.Circuit.Inst.Transfer.transferEmitted else none
 
-def registryCoverage : Nat := 40
+def registryCoverage : Nat := 31
 #guard (effectEmitRegistry createObligationAHoleName == none)
 #guard (effectEmitRegistry releaseCommittedEscrowAHoleName == none)
 #guard (effectEmitRegistry refundCommittedEscrowAHoleName == none)

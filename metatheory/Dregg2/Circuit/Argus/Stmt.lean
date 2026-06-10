@@ -59,9 +59,7 @@ inductive RecStmt where
   | setCommitments (g : RecordKernelState → List Nat)               -- note-commitment SET
   -- (F2a) `setQueues` DELETED with the queue effect family (VerbRegistry: `.factory .queue`;
   -- the queue side-table write re-lands as factory-cell field writes, `Apps/QueueFactory`).
-  | setSwiss       (g : RecordKernelState → List SwissRecord)       -- CapTP export/GC registry
   | setFactories   (g : RecordKernelState → List (Nat × FactoryEntry))  -- published factory registry
-  | setSealedBoxes (g : RecordKernelState → List SealedBoxRecord)   -- sealed-box holding store
   -- The PER-CELL FUNCTION registries (`CellId → …`): lifecycle / death-cert / delegate / per-cell
   -- caveats / per-cell delegation c-list snapshot.
   | setLifecycle   (g : RecordKernelState → CellId → Nat)           -- lifecycle discriminant
@@ -114,9 +112,7 @@ def interp : RecStmt → RecordKernelState → Option RecordKernelState
   | .setNullifiers g,  k => some { k with nullifiers := g k }
   | .setRevoked g,     k => some { k with revoked := g k }
   | .setCommitments g, k => some { k with commitments := g k }
-  | .setSwiss g,       k => some { k with swiss := g k }
   | .setFactories g,   k => some { k with factories := g k }
-  | .setSealedBoxes g, k => some { k with sealedBoxes := g k }
   | .setLifecycle g,   k => some { k with lifecycle := g k }
   | .setDeathCert g,   k => some { k with deathCert := g k }
   | .setDelegate g,    k => some { k with delegate := g k }
@@ -418,11 +414,6 @@ nothing else; the write the grant/revoke/attenuate effects assemble. -/
 @[simp] theorem interp_setLifecycle (g : RecordKernelState → CellId → Nat) (k : RecordKernelState) :
     interp (RecStmt.setLifecycle g) k = some { k with lifecycle := g k } := rfl
 
-/-- **`interp_setSwiss` — PROVED.** Writing the CapTP swiss-table overwrites `swiss` with `g k` (the
-export/enliven/handoff/GC registry write). -/
-@[simp] theorem interp_setSwiss (g : RecordKernelState → List SwissRecord) (k : RecordKernelState) :
-    interp (RecStmt.setSwiss g) k = some { k with swiss := g k } := rfl
-
 /-- A two-cell kernel for the §C non-vacuity witnesses (cell `0` Live, both live accounts). -/
 def kC : RecordKernelState :=
   { accounts := {0, 1}, cell := fun _ => .record [("balance", .int 0)], caps := fun _ => [] }
@@ -431,9 +422,6 @@ def kC : RecordKernelState :=
 -- setLifecycle to "everything Sealed (1)" genuinely changes cell 0's lifecycle 0 → 1.
 #guard (((interp (RecStmt.setLifecycle (fun _ _ => 1)) kC).map (fun k => k.lifecycle 0)) == some 1)
 #guard (kC.lifecycle 0 == 0)   -- before: Live
--- setSwiss to a one-entry registry grows the swiss-table from [] to length 1.
-#guard (((interp (RecStmt.setSwiss (fun _ => [⟨7, 0, 0, [], 1, none⟩])) kC).map (fun k => k.swiss.length)) == some 1)
-#guard (kC.swiss.length == 0)  -- before: empty
 
 /-- **`setLifecycle_writes` — PROVED (the write lands, non-vacuously).** Sealing every cell flips
 cell `0`'s lifecycle from Live (`0`) to Sealed (`1`): the component write is a real, observable
@@ -452,7 +440,6 @@ theorem setCaps_writes :
 
 #assert_axioms interp_setCaps
 #assert_axioms interp_setLifecycle
-#assert_axioms interp_setSwiss
 #assert_axioms setLifecycle_writes
 #assert_axioms setCaps_writes
 end Dregg2.Circuit.Argus

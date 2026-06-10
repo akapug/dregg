@@ -36,9 +36,9 @@ def RestIffNoLifecycleDeathCert (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
+      ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
-      ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
@@ -93,9 +93,9 @@ def cellDestroyE (DLif : (CellId → Nat) → ℤ) (hDLif : Function.Injective D
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
+      ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories
-      ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := cellDestroyGuardGates
@@ -144,13 +144,13 @@ theorem apex_iff_cellDestroySpec (DLif : (CellId → Nat) → ℤ) (hDLif : Func
        ↔ CellDestroySpec s args.actor args.cell args.certHash s'
   unfold CellDestroySpec cellDestroyGuardProp cellDestroyE
   constructor
-  · rintro ⟨hg, hlif, hdc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+  · rintro ⟨hg, hlif, hdc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
       hDel, hDgs, hSB⟩
-    exact ⟨hg, hlif, hdc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+    exact ⟨hg, hlif, hdc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
       hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hlif, hdc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+  · rintro ⟨hg, hlif, hdc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
       hDel, hDgs, hSB⟩
-    exact ⟨hg, hlif, hdc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+    exact ⟨hg, hlif, hdc, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
       hDel, hDgs, hSB⟩
 
 theorem cellDestroyA_full_sound

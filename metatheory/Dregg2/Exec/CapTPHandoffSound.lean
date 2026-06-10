@@ -274,11 +274,11 @@ theorem handoff_installs_exactly
           , log := authReceipt c.introducer :: s.log }, ?_, ?_, ?_, ?_⟩
   · -- the executor commits exactly this state, via the verified iff.
     rw [execFullA_validateHandoff_iff_spec]
-    exact ⟨hconn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-      rfl, rfl⟩
+    exact ⟨hconn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+      rfl⟩
   · -- the full-state spec holds (same witness).
-    exact ⟨hconn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-      rfl, rfl⟩
+    exact ⟨hconn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+      rfl⟩
   · -- B's slot gains exactly A's held cap.
     show heldCapTo s.kernel.caps c.introducer c.targetCell
         ∈ (recDelegateCaps s.kernel.caps c.introducer c.recipient c.targetCell) c.recipient

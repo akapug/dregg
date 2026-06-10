@@ -48,8 +48,8 @@ theorem propBit_eq_one {p : Prop} [Decidable p] : Circuit.propBit p = 1 ↔ p :=
 def RestIffNoFactoryTouched (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.swiss = k.swiss
-      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.commitments = k.commitments
+      ∧ k'.factories = k.factories
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
@@ -169,8 +169,8 @@ def createFromFactoryE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
   logUpdate    := some (fun s args => factoryReceipt args.actor args.newCell :: s.log)
   restFrame    := fun k k' =>
     (k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.swiss = k.swiss
-      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.commitments = k.commitments
+      ∧ k'.factories = k.factories
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := createFromFactoryGuardGates
@@ -252,9 +252,7 @@ def CreateFromFactoryCircuitSpec (st : RecChainedState) (actor newCell : CellId)
     ∧ st'.kernel.nullifiers = st.kernel.nullifiers
     ∧ st'.kernel.revoked = st.kernel.revoked
     ∧ st'.kernel.commitments = st.kernel.commitments
-    ∧ st'.kernel.swiss = st.kernel.swiss
     ∧ st'.kernel.factories = st.kernel.factories
-    ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
     ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
     ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
@@ -262,8 +260,8 @@ theorem CreateFromFactorySpec_implies_circuitSpec (st : RecChainedState) (actor 
     (vk : Int) (st' : RecChainedState) (h : CreateFromFactorySpec st actor newCell vk st') :
     CreateFromFactoryCircuitSpec st actor newCell vk st' := by
   obtain ⟨e, hadmit, hacc, hbal, hcell, hsc, hlog, hcaps, hlif, hdc, hdel, hdgs, hNull, hRev,
-      hCom, hQ, hSw, hFac, hSB⟩ := h
-  refine ⟨e, hadmit, hacc, hbal, hcell, hsc, ?_, hlog, hNull, hRev, hCom, hQ, hSw, hFac, hSB⟩
+      hCom, hQ, hFac, hSB⟩ := h
+  refine ⟨e, hadmit, hacc, hbal, hcell, hsc, ?_, hlog, hNull, hRev, hCom, hQ, hFac, hSB⟩
   exact (bornEmptyAuthority_post_iff st.kernel newCell st'.kernel).mpr
     ⟨hcaps, hlif, hdc, hdel, hdgs⟩
 
@@ -282,14 +280,14 @@ theorem apex_iff_createFromFactoryCircuitSpec (LE : CellId → ℤ) (cN : List �
     factoryAdmit, expectedAccounts, expectedBal, expectedCell, expectedSlotCaveats,
     readBornEmptyAuthority, expectedBornEmptyAuthority]
   constructor
-  · rintro ⟨hex, hacc, hbal, hcell, hsc, hauth, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+  · rintro ⟨hex, hacc, hbal, hcell, hsc, hauth, hlog, hNul, hRev, hCom, hQ, hFac, hSB⟩
     obtain ⟨e, hadmit⟩ := hex
-    refine ⟨e, hadmit, hacc, hbal, ?_, ?_, hauth, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+    refine ⟨e, hadmit, hacc, hbal, ?_, ?_, hauth, hlog, hNul, hRev, hCom, hQ, hFac, hSB⟩
     · simpa [expectedCell, hadmit.2.1] using hcell
     · simpa [expectedSlotCaveats, hadmit.2.1] using hsc
-  · rintro ⟨e, hadmit, hacc, hbal, hcell, hsc, hauth, hlog, hNul, hRev, hCom, hQ, hSw, hFac,
+  · rintro ⟨e, hadmit, hacc, hbal, hcell, hsc, hauth, hlog, hNul, hRev, hCom, hQ, hFac,
       hSB⟩
-    refine ⟨⟨e, hadmit⟩, hacc, hbal, ?_, ?_, hauth, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+    refine ⟨⟨e, hadmit⟩, hacc, hbal, ?_, ?_, hauth, hlog, hNul, hRev, hCom, hQ, hFac, hSB⟩
     · simpa [expectedCell, hadmit.2.1] using hcell
     · simpa [expectedSlotCaveats, hadmit.2.1] using hsc
 

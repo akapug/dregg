@@ -144,11 +144,10 @@ theorem auditStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cel
         ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
         ∧ s'.kernel.nullifiers = s.kernel.nullifiers
         ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
-        ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
+        ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
         ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
         ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
         ∧ s'.kernel.delegations = s.kernel.delegations
-        ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
         ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
         ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt ) := by
   unfold stateStep
@@ -158,12 +157,12 @@ theorem auditStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cel
     constructor
     · intro h
       simp only [Option.some.injEq] at h; subst h
-      refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+      refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14⟩
       obtain ⟨k', l'⟩ := s'
-      obtain ⟨a, ce, ca, nu, re, co, ba, sw, sl, fa, li, dc, de, dg, sb, dge, dgea⟩ := k'
-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea⟩ := k'
+      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14
+      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14
       rfl
   · rw [if_neg hg]
     constructor
@@ -192,10 +191,10 @@ def RefusalSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedStat
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
-  ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
+  ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
   ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
   ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
-  ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegations = s.kernel.delegations
   ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
   ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
@@ -236,10 +235,10 @@ def ReceiptArchiveSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChai
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
-  ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
+  ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
   ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
   ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
-  ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegations = s.kernel.delegations
   ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
   ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
@@ -300,7 +299,7 @@ collision hides no frame interaction. -/
 theorem receiptArchiveA_lifecycleSideTableFrame {s s' : RecChainedState} {actor cell : CellId}
     (h : execFullA s (.receiptArchiveA actor cell) = some s') :
     s'.kernel.lifecycle = s.kernel.lifecycle :=
-  ((execFullA_receiptArchiveA_iff_spec s actor cell s').mp h).2.2.2.2.2.2.2.2.2.2.2.2.1
+  ((execFullA_receiptArchiveA_iff_spec s actor cell s').mp h).2.2.2.2.2.2.2.2.2.2.2.1
 
 /-- **`refusalA_otherCellsFrame` — every OTHER cell's whole record untouched.** -/
 theorem refusalA_otherCellsFrame {s s' : RecChainedState} {actor cell : CellId}

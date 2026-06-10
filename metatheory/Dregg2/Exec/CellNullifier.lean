@@ -36,39 +36,6 @@ to named `private` frame lemmas (proven by the same nested `split` + `rfl`-proje
 them from the dispatch, keeping every arm uniform. (F2b: the queue-family helpers died with the
 queue verb family.) -/
 
-/-- `swissEnlivenK` commits to `{ k with swiss := … }` — `nullifiers` untouched. -/
-private theorem swissEnlivenK_nullifiers (k : RecordKernelState) (sw : Nat) (claimed : List Auth)
-    (k' : RecordKernelState) (h : swissEnlivenK k sw claimed = some k') :
-    k'.nullifiers = k.nullifiers := by
-  unfold swissEnlivenK at h
-  split at h
-  · exact absurd h (by simp)
-  · split at h
-    · injection h with h; subst h; rfl
-    · exact absurd h (by simp)
-
-/-- `swissHandoffK` commits to `{ k with swiss := … }` — `nullifiers` untouched. -/
-private theorem swissHandoffK_nullifiers (k : RecordKernelState) (sw certHash : Nat)
-    (k' : RecordKernelState) (h : swissHandoffK k sw certHash = some k') :
-    k'.nullifiers = k.nullifiers := by
-  unfold swissHandoffK at h
-  split at h
-  · exact absurd h (by simp)
-  · injection h with h; subst h; rfl
-
-/-- `swissDropK` commits to `{ k with swiss := … }` (remove or decrement) — `nullifiers` untouched. -/
-private theorem swissDropK_nullifiers (k : RecordKernelState) (sw : Nat)
-    (k' : RecordKernelState) (h : swissDropK k sw = some k') :
-    k'.nullifiers = k.nullifiers := by
-  unfold swissDropK at h
-  split at h
-  · exact absurd h (by simp)
-  · split at h
-    · exact absurd h (by simp)
-    · split at h
-      · injection h with h; subst h; rfl
-      · injection h with h; subst h; rfl
-
 /-! ## Step 1 — `execFullA_nullifiers_grow`: the per-effect REGISTRY FRAME (the 46-arm dispatch).
 
 Mirrors `execFullA_ledger_per_asset`'s `cases fa with` walk. For the spent-set the bookkeeping is
@@ -189,24 +156,9 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
   | attenuateA actor idx keep =>
       simp only [execFullA, attenuateStepA] at h
       obtain ⟨rfl⟩ := h; exact List.Subset.refl _
-  | dropRefA holder t =>
-      simp only [execFullA, recCRevoke] at h
-      obtain ⟨rfl⟩ := h; exact List.Subset.refl _
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevoke] at h
       obtain ⟨rfl⟩ := h; exact List.Subset.refl _
-  | validateHandoffA intro rec t =>
-      simp only [execFullA, recCDelegate] at h
-      cases hk : recKDelegate s.kernel intro rec t with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold recKDelegate at hk; split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
   | exerciseA actor t inner =>
       simp only [execFullA] at h
       by_cases hf : innerFacetsAdmittedA s actor t inner = true
@@ -274,15 +226,6 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       show s.kernel.nullifiers ⊆ (noteCreateCommitment s.kernel cm).nullifiers
       unfold noteCreateCommitment
       exact List.Subset.refl _
-  | sealA pid actor payload =>
-      simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; exact List.Subset.refl _
-  | unsealA pid actor recipient =>
-      simp only [execFullA] at h
-      obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'; exact List.Subset.refl _
-  | createSealPairA pid actor sealerHolder unsealerHolder =>
-      simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'; exact List.Subset.refl _
   | makeSovereignA actor cell =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := makeSovereignStep_factors h; subst hs'; exact List.Subset.refl _
@@ -311,58 +254,6 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       simp only [execFullA, Option.some.injEq] at h; subst h; exact List.Subset.refl _
   -- §swiss — four CapTP swiss-table effects, each `if stateAuthB … then match swissK … | some k' => …`
   -- (kernel updates `swiss`, never `nullifiers`). Gate-peel the outer `if`, then cases the kernel op.
-  | exportSturdyRefA sw actor exporter target rights =>
-      simp only [execFullA, swissExportChainA] at h
-      split at h
-      · cases hk : swissExportK s.kernel sw exporter target rights with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show s.kernel.nullifiers ⊆ k'.nullifiers
-            have hn : k'.nullifiers = s.kernel.nullifiers := by
-              unfold swissExportK at hk; split at hk
-              · exact absurd hk (by simp)
-              · split at hk
-                · injection hk with hk; subst hk; rfl
-                · exact absurd hk (by simp)
-            exact hn ▸ List.Subset.refl _
-      · exact absurd h (by simp)
-  | enlivenRefA sw actor exporter claimed =>
-      simp only [execFullA, swissEnlivenChainA] at h
-      split at h
-      · cases hk : swissEnlivenK s.kernel sw claimed with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show s.kernel.nullifiers ⊆ k'.nullifiers
-            have hn : k'.nullifiers = s.kernel.nullifiers :=
-              swissEnlivenK_nullifiers s.kernel sw claimed k' hk
-            exact hn ▸ List.Subset.refl _
-      · exact absurd h (by simp)
-  | swissHandoffA sw certHash introducer exporter =>
-      simp only [execFullA, swissHandoffChainA] at h
-      split at h
-      · cases hk : swissHandoffK s.kernel sw certHash with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show s.kernel.nullifiers ⊆ k'.nullifiers
-            have hn : k'.nullifiers = s.kernel.nullifiers :=
-              swissHandoffK_nullifiers s.kernel sw certHash k' hk
-            exact hn ▸ List.Subset.refl _
-      · exact absurd h (by simp)
-  | swissDropA sw actor exporter =>
-      simp only [execFullA, swissDropChainA] at h
-      split at h
-      · cases hk : swissDropK s.kernel sw with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show s.kernel.nullifiers ⊆ k'.nullifiers
-            have hn : k'.nullifiers = s.kernel.nullifiers :=
-              swissDropK_nullifiers s.kernel sw k' hk
-            exact hn ▸ List.Subset.refl _
-      · exact absurd h (by simp)
 
 /-- **`execInnerA_nullifiers_grow`** — the inner-effect fold an `exerciseA` recurses through never
 shrinks the nullifier set. Mutual with `execFullA_nullifiers_grow`; chains `List.Subset.trans`. -/

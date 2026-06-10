@@ -310,23 +310,24 @@ theorem pipelinedSendDescriptor_commit_binds_state (hash : List ℤ → ℤ)
 open Dregg2.Circuit.Inst.PipelinedSendA (PipelinedSendArgs)
 open Dregg2.Circuit.Spec.QueuePipelinedSend (PipelinedSendSpec)
 
-/-- **`swissRootProj D k`** — the EffectVM `swiss_root` column value: the whole-list digest `D`. -/
-def swissRootProj (D : List SwissRecord → ℤ) (k : RecordKernelState) : ℤ := D k.swiss
+/-- **`swissRootProj D k`** — the frozen side-table column value (F3: the swiss table is GONE —
+the connector projects the REVOKED registry, the surviving list side-table column). -/
+def swissRootProj (D : List Nat → ℤ) (k : RecordKernelState) : ℤ := D k.revoked
 
-/-- **`unify_pipelinedSend` — THE CONNECTOR (swiss leg).** When universe-A's `PipelinedSendSpec` holds,
-`s'.kernel.swiss = s.kernel.swiss` (the swiss-freeze clause), so the projected `swiss_root` is FROZEN.
-The runnable row's freeze IS universe-A's whole-kernel freeze, projected to the swiss-digest column. -/
-theorem unify_pipelinedSend (D : List SwissRecord → ℤ)
+/-- **`unify_pipelinedSend` — THE CONNECTOR (side-table leg).** When universe-A's `PipelinedSendSpec`
+holds, `s'.kernel.revoked = s.kernel.revoked` (the freeze clause), so the projected side-table root is
+FROZEN. The runnable row's freeze IS universe-A's whole-kernel freeze, projected to the digest column. -/
+theorem unify_pipelinedSend (D : List Nat → ℤ)
     (s : RecChainedState) (actor : CellId) (s' : RecChainedState)
     (hspec : PipelinedSendSpec s actor s') :
     swissRootProj D s'.kernel = swissRootProj D s.kernel := by
-  obtain ⟨_, _, _, _, _, _, _, _, hSw, _⟩ := hspec
-  show D s'.kernel.swiss = D s.kernel.swiss
-  rw [hSw]
+  obtain ⟨_, _, _, _, _, hRev, _⟩ := hspec
+  show D s'.kernel.revoked = D s.kernel.revoked
+  rw [hRev]
 
 /-- **`unify_pipelinedSend_via_full_sound` — the runnable freeze inherits the VALIDATED guarantee.** -/
 theorem unify_pipelinedSend_via_full_sound
-    (S : CommitSurface) (D : List SwissRecord → ℤ)
+    (S : CommitSurface) (D : List Nat → ℤ)
     (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
     (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : PipelinedSendArgs) (s' : RecChainedState)

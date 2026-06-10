@@ -39,7 +39,6 @@ open Dregg2.Circuit.EffectRefinement
    noteSpendCircuitStep noteSpend_circuit_refines_spec
    noteCreateCircuitStep noteCreate_circuit_refines_spec
    revokeCircuitStep revoke_circuit_refines_spec
-   sealCircuitStep seal_circuit_refines_spec
    setFieldCircuitStep setField_circuit_refines_spec)
 open Dregg2.Circuit.EffectRefinementBatch2
 open Dregg2.Circuit.Inst.EmitEventA (EmitEventArgs)
@@ -49,22 +48,15 @@ open Dregg2.Circuit.Inst.SetVKA (SetVKArgs)
 open Dregg2.Circuit.Inst.DelegateAttenA (DelegateAttenArgs)
 open Dregg2.Circuit.Inst.AttenuateA (AttenuateArgs)
 open Dregg2.Circuit.Inst.CreateCellFromFactoryA (CreateFromFactoryArgs)
-open Dregg2.Circuit.Inst.UnsealA (UnsealArgs)
-open Dregg2.Circuit.Inst.CreateSealPairA (CreateSealPairArgs)
 open Dregg2.Circuit.Inst.MakeSovereignA (MakeSovereignArgs)
 open Dregg2.Circuit.Inst.RefusalA (RefusalArgs)
 open Dregg2.Circuit.Inst.ReceiptArchiveA (ReceiptArchiveArgs)
 open Dregg2.Circuit.Inst.PipelinedSendA (PipelinedSendArgs)
-open Dregg2.Circuit.Inst.SwissExportA (ExportArgs)
-open Dregg2.Circuit.Inst.EnlivenRefA (EnlivenArgs)
-open Dregg2.Circuit.Inst.SwissHandoffA (HandoffArgs)
-open Dregg2.Circuit.Inst.SwissDropA (DropArgs)
 open Dregg2.Circuit.Inst.CellSealA (CellSealArgs)
 open Dregg2.Circuit.Inst.CellUnsealA (CellUnsealArgs)
 open Dregg2.Circuit.Inst.CellDestroyA (CellDestroyArgs)
 open Dregg2.Circuit.Inst.RefreshDelegationA (RefreshDelegationArgs)
 open Dregg2.Circuit.Inst.CreateCellFromFactoryA (RestIffNoFactoryTouched)
-open Dregg2.Circuit.Inst.SwissExportA (RestIffNoSwiss)
 open Dregg2.Circuit.Inst.CellSealA (RestIffNoLifecycle)
 open Dregg2.Circuit.Inst.CellDestroyA (RestIffNoLifecycleDeathCert)
 open Dregg2.Circuit.Inst.RefreshDelegationA (RestIffNoDelegations)
@@ -80,7 +72,6 @@ open Dregg2.Circuit.Inst.CreateCellA (RestIffNoAccountsBalBorn)
 open Dregg2.Circuit.Inst.SpawnA (RestIffNoSpawnTouched)
 open Dregg2.Circuit.Inst.NoteCreateA (NoteCreateArgs RestIffNoCommitments)
 open Dregg2.Circuit.Inst.Revoke (RevokeArgs)
-open Dregg2.Circuit.Inst.SealA (SealArgs RestIffNoSealedBoxes)
 open Dregg2.Circuit.Inst.MintA (MintArgs)
 open Dregg2.Circuit.Inst.BurnA (BurnArgs)
 open Dregg2.Circuit.Inst.BalanceA (BalanceArgs)
@@ -133,41 +124,11 @@ private theorem restIffNoCaps_delegate_to_attenuate (RH : RecordKernelState → 
   dsimp [Dregg2.Circuit.Inst.Delegate.RestIffNoCaps, Dregg2.Circuit.Inst.AttenuateA.RestIffNoCaps]
   exact h
 
-private theorem restIffNoCaps_delegate_to_unseal (RH : RecordKernelState → ℤ)
-    (h : Dregg2.Circuit.Inst.Delegate.RestIffNoCaps RH) :
-    Dregg2.Circuit.Inst.UnsealA.RestIffNoCaps RH := by
-  dsimp [Dregg2.Circuit.Inst.Delegate.RestIffNoCaps, Dregg2.Circuit.Inst.UnsealA.RestIffNoCaps]
-  exact h
-
-private theorem restIffNoCaps_delegate_to_createSealPair (RH : RecordKernelState → ℤ)
-    (h : Dregg2.Circuit.Inst.Delegate.RestIffNoCaps RH) :
-    Dregg2.Circuit.Inst.CreateSealPairA.RestIffNoCaps RH := by
-  dsimp [Dregg2.Circuit.Inst.Delegate.RestIffNoCaps, Dregg2.Circuit.Inst.CreateSealPairA.RestIffNoCaps]
-  exact h
-
 private theorem restIffNoLifecycle_seal_to_unseal (RH : RecordKernelState → ℤ)
     (h : Dregg2.Circuit.Inst.CellSealA.RestIffNoLifecycle RH) :
     Dregg2.Circuit.Inst.CellUnsealA.RestIffNoLifecycle RH := by
   dsimp [Dregg2.Circuit.Inst.CellSealA.RestIffNoLifecycle,
     Dregg2.Circuit.Inst.CellUnsealA.RestIffNoLifecycle]
-  exact h
-
-private theorem restIffNoSwiss_export_to_enliven (RH : RecordKernelState → ℤ)
-    (h : Dregg2.Circuit.Inst.SwissExportA.RestIffNoSwiss RH) :
-    Dregg2.Circuit.Inst.EnlivenRefA.RestIffNoSwiss RH := by
-  dsimp [Dregg2.Circuit.Inst.SwissExportA.RestIffNoSwiss, Dregg2.Circuit.Inst.EnlivenRefA.RestIffNoSwiss]
-  exact h
-
-private theorem restIffNoSwiss_export_to_handoff (RH : RecordKernelState → ℤ)
-    (h : Dregg2.Circuit.Inst.SwissExportA.RestIffNoSwiss RH) :
-    Dregg2.Circuit.Inst.SwissHandoffA.RestIffNoSwiss RH := by
-  dsimp [Dregg2.Circuit.Inst.SwissExportA.RestIffNoSwiss, Dregg2.Circuit.Inst.SwissHandoffA.RestIffNoSwiss]
-  exact h
-
-private theorem restIffNoSwiss_export_to_drop (RH : RecordKernelState → ℤ)
-    (h : Dregg2.Circuit.Inst.SwissExportA.RestIffNoSwiss RH) :
-    Dregg2.Circuit.Inst.SwissDropA.RestIffNoSwiss RH := by
-  dsimp [Dregg2.Circuit.Inst.SwissExportA.RestIffNoSwiss, Dregg2.Circuit.Inst.SwissDropA.RestIffNoSwiss]
   exact h
 
 /-- **`fullActionCircuitStep`** — dispatches each `FullActionA` constructor to its v2 effect
@@ -177,10 +138,9 @@ def fullActionCircuitStep
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
     (D_caps : Caps → ℤ) (hD_caps : Function.Injective D_caps)
-    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)  (LE_sealed : SealedBoxRecord → ℤ)
+    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)
     (cN : List ℤ → ℤ) (hN : compressNInjective cN)
     (hLE_cell : listLeafInjective LE_cell) (hLE_null : listLeafInjective LE_null)
-     (hLE_sealed : listLeafInjective LE_sealed)
     (CS : CommitSurface)
     (DBal : (CellId → AssetId → ℤ) → ℤ) (hDBal : Function.Injective DBal)
     (DSide : BornEmptySideTables → ℤ) (hDSide : Function.Injective DSide)
@@ -188,7 +148,6 @@ def fullActionCircuitStep
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
     (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
-    (LS : SwissRecord → ℤ) (hLS : listLeafInjective LS)
     (DLife : (CellId → Nat) → ℤ) (hDLife : Function.Injective DLife)
     (DDC : (CellId → Nat) → ℤ) (hDDC : Function.Injective DDC)
     (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
@@ -206,8 +165,6 @@ def fullActionCircuitStep
       burnCircuitStep S D_bal hD_bal st ⟨actor, cell, a, amt⟩ st'
   | .introduceA intro rec t =>
       delegateCircuitStep S D_caps hD_caps st ⟨intro, rec, t⟩ st'
-  | .validateHandoffA intro rec t =>
-      delegateCircuitStep S D_caps hD_caps st ⟨intro, rec, t⟩ st'
   | .createCellA actor newCell =>
       createCellCircuitStep S LE_cell cN hN hLE_cell DBal hDBal DSide hDSide st ⟨actor, newCell⟩ st'
   | .spawnA actor child target =>
@@ -221,12 +178,8 @@ def fullActionCircuitStep
       noteCreateCircuitStep S LE_null cN hN hLE_null st ⟨cm, actor⟩ st'
   | .revoke holder t =>
       revokeCircuitStep S D_caps hD_caps st ⟨holder, t⟩ st'
-  | .dropRefA holder t =>
-      revokeCircuitStep S D_caps hD_caps st ⟨holder, t⟩ st'
   | .revokeDelegationA holder t =>
       revokeCircuitStep S D_caps hD_caps st ⟨holder, t⟩ st'
-  | .sealA pid actor payload =>
-      sealCircuitStep S LE_sealed cN hN hLE_sealed st ⟨pid, actor, payload⟩ st'
   | .setFieldA actor cell f v =>
       AccountsWF st.kernel ∧ AccountsWF st'.kernel ∧
       setFieldCircuitStep CS st ⟨actor, cell, f, v⟩ st'
@@ -249,13 +202,6 @@ def fullActionCircuitStep
   | .createCellFromFactoryA actor newCell vk =>
       createCellFromFactoryCircuitStep S LE_cell cN hN hLE_cell DBal hDBal DCell hDCell DSC hDSC DAuth hDAuth
         st ⟨actor, newCell, vk⟩ st'
-  | .unsealA pid actor recipient =>
-      match findSealedBox st.kernel.sealedBoxes pid with
-      | none => False
-      | some box =>
-          unsealCircuitStep S D_caps hD_caps st ⟨pid, actor, recipient, box⟩ st'
-  | .createSealPairA pid actor sealerHolder unsealerHolder =>
-      createSealPairCircuitStep S D_caps hD_caps st ⟨pid, actor, sealerHolder, unsealerHolder⟩ st'
   | .makeSovereignA actor cell =>
       AccountsWF st.kernel ∧ AccountsWF st'.kernel ∧
       makeSovereignCircuitStep CS st ⟨actor, cell⟩ st'
@@ -268,14 +214,6 @@ def fullActionCircuitStep
   | .pipelinedSendA actor =>
       AccountsWF st.kernel ∧ AccountsWF st'.kernel ∧
       pipelinedSendCircuitStep CS st ⟨actor⟩ st'
-  | .exportSturdyRefA sw actor exporter target rights =>
-      swissExportCircuitStep S LS cN hN hLS st ⟨sw, actor, exporter, target, rights⟩ st'
-  | .enlivenRefA sw actor exporter claimed =>
-      enlivenCircuitStep S LS cN hN hLS st ⟨sw, actor, exporter, claimed⟩ st'
-  | .swissHandoffA sw certHash introducer exporter =>
-      swissHandoffCircuitStep S LS cN hN hLS st ⟨sw, certHash, introducer, exporter⟩ st'
-  | .swissDropA sw actor exporter =>
-      swissDropCircuitStep S LS cN hN hLS st ⟨sw, actor, exporter⟩ st'
   | .cellSealA actor cell =>
       cellSealCircuitStep S DLife hDLife st ⟨actor, cell⟩ st'
   | .cellUnsealA actor cell =>
@@ -301,9 +239,9 @@ where
   exerciseInnerFold (s : RecChainedState) : List FullActionA → RecChainedState → Prop
     | [], s' => s = s'
     | a :: rest, s' =>
-        ∃ s1, fullActionCircuitStep S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed
-                cN hN hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide hDSide
-                DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell
+        ∃ s1, fullActionCircuitStep S D_bal hD_bal D_caps hD_caps LE_cell LE_null
+                cN hN hLE_cell hLE_null CS DBal hDBal DSide hDSide
+                DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell
                 DSC hDSC DAuth hDAuth s a s1 ∧ exerciseInnerFold s1 rest s'
 
 /-- Encoder-instantiated circuit step (abbrev keeps turn-level statement types small). -/
@@ -311,10 +249,9 @@ abbrev fullActionCircuitStepInst
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
     (D_caps : Caps → ℤ) (hD_caps : Function.Injective D_caps)
-    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)  (LE_sealed : SealedBoxRecord → ℤ)
+    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)
     (cN : List ℤ → ℤ) (hN : compressNInjective cN)
     (hLE_cell : listLeafInjective LE_cell) (hLE_null : listLeafInjective LE_null)
-     (hLE_sealed : listLeafInjective LE_sealed)
     (CS : CommitSurface)
     (DBal : (CellId → AssetId → ℤ) → ℤ) (hDBal : Function.Injective DBal)
     (DSide : BornEmptySideTables → ℤ) (hDSide : Function.Injective DSide)
@@ -322,16 +259,15 @@ abbrev fullActionCircuitStepInst
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
     (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
-    (LS : SwissRecord → ℤ) (hLS : listLeafInjective LS)
     (DLife : (CellId → Nat) → ℤ) (hDLife : Function.Injective DLife)
     (DDC : (CellId → Nat) → ℤ) (hDDC : Function.Injective DDC)
     (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
     (DSC : (CellId → List SlotCaveat) → ℤ) (hDSC : Function.Injective DSC)
     (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth) :
     StepRel RecChainedState FullActionA RecChainedState :=
-  fullActionCircuitStep S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN
-    hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide hDSide DLeg hDLeg
-    DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth
+  fullActionCircuitStep S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN
+    hLE_cell hLE_null CS DBal hDBal DSide hDSide DLeg hDLeg
+    DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth
 
 /-! **`fullAction_circuit_refines_spec`** + **`exerciseInnerFold_refines_turnSpec`** — per-action
 SOUNDNESS (circuit ⊑ `fullActionStep`) together with the exerciseA inner-turn fold's soundness
@@ -349,10 +285,9 @@ theorem fullAction_circuit_refines_spec
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
     (D_caps : Caps → ℤ) (hD_caps : Function.Injective D_caps)
-    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)  (LE_sealed : SealedBoxRecord → ℤ)
+    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)
     (cN : List ℤ → ℤ) (hN : compressNInjective cN)
     (hLE_cell : listLeafInjective LE_cell) (hLE_null : listLeafInjective LE_null)
-     (hLE_sealed : listLeafInjective LE_sealed)
     (CS : CommitSurface)
     (hCSN : compressNInjective CS.compressN) (hCSL : cellLeafInjective CS.CH)
     (hRestFrame : RestHashIffFrame CS.RH) (hLogCS : logHashInjective CS.LH)
@@ -362,7 +297,6 @@ theorem fullAction_circuit_refines_spec
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
     (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
-    (LS : SwissRecord → ℤ) (hLS : listLeafInjective LS)
     (DLife : (CellId → Nat) → ℤ) (hDLife : Function.Injective DLife)
     (DDC : (CellId → Nat) → ℤ) (hDDC : Function.Injective DDC)
     (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
@@ -370,15 +304,15 @@ theorem fullAction_circuit_refines_spec
     (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth)
     (hRestBal : RestIffNoBal S.RH) (hRestAccounts : RestIffNoAccountsBalBorn S.RH)
     (hRestSpawn : RestIffNoSpawnTouched S.RH) (hRestCaps : RestIffNoCaps S.RH)
-    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH) (hRestSealed : RestIffNoSealedBoxes S.RH)
+    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH)
     (hRestFactory : RestIffNoFactoryTouched S.RH)
-    (hRestSwiss : RestIffNoSwiss S.RH) (hRestLifecycle : RestIffNoLifecycle S.RH)
+    (hRestLifecycle : RestIffNoLifecycle S.RH)
     (hRestLifecycleDeathCert : RestIffNoLifecycleDeathCert S.RH)
     (hRestDelegations : RestIffNoDelegations S.RH)
     (hLog : logHashInjective S.LH) :
-    Refines (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed
-      cN hN hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide hDSide DLeg hDLeg
-      DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
+    Refines (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null
+      cN hN hLE_cell hLE_null CS DBal hDBal DSide hDSide DLeg hDLeg
+      DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
       fullActionStep := by
   intro st fa st' h
   unfold fullActionCircuitStepInst fullActionCircuitStep at h
@@ -396,9 +330,6 @@ theorem fullAction_circuit_refines_spec
       simp only [fullActionStep]
       exact burn_circuit_refines_spec S D_bal hD_bal hRestBal hLog st _ st' h
   | .introduceA intro rec t =>
-      simp only [fullActionStep]
-      exact delegate_circuit_refines_spec S D_caps hD_caps hRestCaps hLog st _ st' h
-  | .validateHandoffA intro rec t =>
       simp only [fullActionStep]
       exact delegate_circuit_refines_spec S D_caps hD_caps hRestCaps hLog st _ st' h
   | .createCellA actor newCell =>
@@ -450,10 +381,6 @@ theorem fullAction_circuit_refines_spec
       simp only [fullActionStep]
       exact attenuate_circuit_refines_spec S D_caps hD_caps
         (restIffNoCaps_delegate_to_attenuate S.RH hRestCaps) hLog st _ st' h
-  | .dropRefA holder t =>
-      simp only [fullActionStep]
-      exact revoke_circuit_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps)
-        hLog st _ st' h
   | .revokeDelegationA holder t =>
       simp only [fullActionStep]
       exact revoke_circuit_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps)
@@ -466,41 +393,23 @@ theorem fullAction_circuit_refines_spec
       -- the enclosing `.exerciseA`). No spec-fallback.
       simp only [fullActionStep]
       have hexpand : innerFacetsAdmittedA st actor target inner = true ∧ exerciseGuard st actor target ∧
-          fullActionCircuitStep.exerciseInnerFold S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide
-            hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell
+          fullActionCircuitStep.exerciseInnerFold S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN hLE_cell hLE_null CS DBal hDBal DSide
+            hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell
             DSC hDSC DAuth hDAuth (exerciseHoldState st actor) inner st' := h
       obtain ⟨hfacet, hg, hfold⟩ := hexpand
       refine ⟨hfacet, hg, ?_⟩
       -- The inner CIRCUIT fold ⊑ `turnSpec` by the MUTUAL helper on `inner` (a structural child of
       -- `.exerciseA actor target inner`); the helper in turn calls THIS theorem per inner action.
-      exact exerciseInnerFold_refines_turnSpec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN hLE_cell hLE_null hLE_sealed CS hCSN hCSL hRestFrame
-        hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife
+      exact exerciseInnerFold_refines_turnSpec S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN hLE_cell hLE_null CS hCSN hCSL hRestFrame
+        hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife
         DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull
-        hRestCommitments hRestSealed hRestFactory
-        hRestSwiss hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog (exerciseHoldState st actor)
+        hRestCommitments hRestFactory
+        hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog (exerciseHoldState st actor)
         inner st' hfold
   | .createCellFromFactoryA actor newCell vk =>
       simp only [fullActionStep]
       exact createCellFromFactory_circuit_refines_spec S LE_cell cN hN hLE_cell DBal hDBal DCell hDCell DSC hDSC
         DAuth hDAuth hRestFactory hLog st _ st' h
-  | .sealA pid actor payload =>
-      simp only [fullActionStep]
-      exact seal_circuit_refines_spec S LE_sealed cN hN hLE_sealed hRestSealed hLog st _ st' h
-  | .unsealA pid actor recipient =>
-      simp only [fullActionStep]
-      cases hbox : findSealedBox st.kernel.sealedBoxes pid with
-      | some box =>
-          have hc : unsealCircuitStep S D_caps hD_caps st ⟨pid, actor, recipient, box⟩ st' :=
-            by simpa [fullActionCircuitStep, hbox] using h
-          exact unseal_circuit_refines_spec S D_caps hD_caps
-            (restIffNoCaps_delegate_to_unseal S.RH hRestCaps) hLog st ⟨pid, actor, recipient, box⟩ st' hc
-      | none =>
-          have hf : False := by simpa [fullActionCircuitStep, hbox] using h
-          exact absurd hf id
-  | .createSealPairA pid actor sealerHolder unsealerHolder =>
-      simp only [fullActionStep]
-      exact createSealPair_circuit_refines_spec S D_caps hD_caps
-        (restIffNoCaps_delegate_to_createSealPair S.RH hRestCaps) hLog st _ st' h
   | .makeSovereignA actor cell =>
       simp only [fullActionStep]
       rcases h with ⟨hwf, hwf', hc⟩
@@ -520,21 +429,6 @@ theorem fullAction_circuit_refines_spec
       simp only [fullActionStep]
       rcases h with ⟨hwf, hwf', hc⟩
       exact pipelinedSend_circuit_refines_spec CS hCSN hCSL hRestFrame hLogCS st _ st' hwf hwf' hc
-  | .exportSturdyRefA sw actor exporter target rights =>
-      simp only [fullActionStep]
-      exact swissExport_circuit_refines_spec S LS cN hN hLS hRestSwiss hLog st _ st' h
-  | .enlivenRefA sw actor exporter claimed =>
-      simp only [fullActionStep]
-      exact enliven_circuit_refines_spec S LS cN hN hLS
-        (restIffNoSwiss_export_to_enliven S.RH hRestSwiss) hLog st _ st' h
-  | .swissHandoffA sw certHash introducer exporter =>
-      simp only [fullActionStep]
-      exact swissHandoff_circuit_refines_spec S LS cN hN hLS
-        (restIffNoSwiss_export_to_handoff S.RH hRestSwiss) hLog st _ st' h
-  | .swissDropA sw actor exporter =>
-      simp only [fullActionStep]
-      exact swissDrop_circuit_refines_spec S LS cN hN hLS
-        (restIffNoSwiss_export_to_drop S.RH hRestSwiss) hLog st _ st' h
   | .cellSealA actor cell =>
       simp only [fullActionStep]
       exact cellSeal_circuit_refines_spec S DLife hDLife hRestLifecycle hLog st _ st' h
@@ -557,10 +451,9 @@ theorem exerciseInnerFold_refines_turnSpec
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
     (D_caps : Caps → ℤ) (hD_caps : Function.Injective D_caps)
-    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)  (LE_sealed : SealedBoxRecord → ℤ)
+    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)
     (cN : List ℤ → ℤ) (hN : compressNInjective cN)
     (hLE_cell : listLeafInjective LE_cell) (hLE_null : listLeafInjective LE_null)
-     (hLE_sealed : listLeafInjective LE_sealed)
     (CS : CommitSurface)
     (hCSN : compressNInjective CS.compressN) (hCSL : cellLeafInjective CS.CH)
     (hRestFrame : RestHashIffFrame CS.RH) (hLogCS : logHashInjective CS.LH)
@@ -570,7 +463,6 @@ theorem exerciseInnerFold_refines_turnSpec
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
     (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
-    (LS : SwissRecord → ℤ) (hLS : listLeafInjective LS)
     (DLife : (CellId → Nat) → ℤ) (hDLife : Function.Injective DLife)
     (DDC : (CellId → Nat) → ℤ) (hDDC : Function.Injective DDC)
     (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
@@ -578,15 +470,15 @@ theorem exerciseInnerFold_refines_turnSpec
     (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth)
     (hRestBal : RestIffNoBal S.RH) (hRestAccounts : RestIffNoAccountsBalBorn S.RH)
     (hRestSpawn : RestIffNoSpawnTouched S.RH) (hRestCaps : RestIffNoCaps S.RH)
-    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH) (hRestSealed : RestIffNoSealedBoxes S.RH)
+    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH)
     (hRestFactory : RestIffNoFactoryTouched S.RH)
-    (hRestSwiss : RestIffNoSwiss S.RH) (hRestLifecycle : RestIffNoLifecycle S.RH)
+    (hRestLifecycle : RestIffNoLifecycle S.RH)
     (hRestLifecycleDeathCert : RestIffNoLifecycleDeathCert S.RH)
     (hRestDelegations : RestIffNoDelegations S.RH)
     (hLog : logHashInjective S.LH)
     (s : RecChainedState) (inner : List FullActionA) (s' : RecChainedState)
-    (h : fullActionCircuitStep.exerciseInnerFold S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide hDSide
-        DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC
+    (h : fullActionCircuitStep.exerciseInnerFold S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN hLE_cell hLE_null CS DBal hDBal DSide hDSide
+        DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC
         DAuth hDAuth s inner s') :
     turnSpec s inner s' := by
   match inner with
@@ -595,31 +487,31 @@ theorem exerciseInnerFold_refines_turnSpec
       simp only [turnSpec, h]
   | a :: rest =>
       rw [show fullActionCircuitStep.exerciseInnerFold S D_bal hD_bal D_caps hD_caps LE_cell LE_null
-            LE_sealed cN hN hLE_cell hLE_null hLE_sealed CS DBal
-            hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC
+            cN hN hLE_cell hLE_null CS DBal
+            hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC
             hDDC DCell hDCell DSC hDSC DAuth hDAuth s (a :: rest) s'
-          = (∃ s1, fullActionCircuitStep S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide
-              hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell
+          = (∃ s1, fullActionCircuitStep S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN hLE_cell hLE_null CS DBal hDBal DSide
+              hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell
               hDCell DSC hDSC DAuth hDAuth s a s1 ∧
               fullActionCircuitStep.exerciseInnerFold S D_bal hD_bal D_caps hD_caps LE_cell LE_null
-                LE_sealed cN hN hLE_cell hLE_null hLE_sealed CS DBal
-                hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC
+                cN hN hLE_cell hLE_null CS DBal
+                hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC
                 hDDC DCell hDCell DSC hDSC DAuth hDAuth s1 rest s') from rfl] at h
       obtain ⟨s1, hstep, htail⟩ := h
       -- per-step: the head circuit step ⊑ `fullActionStep` (mutual call on the structural child `a`).
       have hhead : fullActionStep s a s1 :=
-        fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed
-          cN hN hLE_cell hLE_null hLE_sealed CS hCSN hCSL hRestFrame hLogCS DBal
-          hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC
+        fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null
+          cN hN hLE_cell hLE_null CS hCSN hCSL hRestFrame hLogCS DBal
+          hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC
           DCell hDCell DSC hDSC DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull
-          hRestCommitments hRestSealed hRestFactory
-          hRestSwiss hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog s a s1 hstep
+          hRestCommitments hRestFactory
+          hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog s a s1 hstep
       have htailSpec : turnSpec s1 rest s' :=
-        exerciseInnerFold_refines_turnSpec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN hLE_cell hLE_null hLE_sealed CS hCSN hCSL hRestFrame
-          hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife
+        exerciseInnerFold_refines_turnSpec S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN hLE_cell hLE_null CS hCSN hCSL hRestFrame
+          hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife
           DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull
-          hRestCommitments hRestSealed hRestFactory
-          hRestSwiss hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog s1 rest s' htail
+          hRestCommitments hRestFactory
+          hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog s1 rest s' htail
       exact ⟨s1, hhead, htailSpec⟩
 end
 
@@ -634,10 +526,9 @@ theorem fullAction_turn_circuit_refines_spec
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
     (D_caps : Caps → ℤ) (hD_caps : Function.Injective D_caps)
-    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)  (LE_sealed : SealedBoxRecord → ℤ)
+    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)
     (cN : List ℤ → ℤ) (hN : compressNInjective cN)
     (hLE_cell : listLeafInjective LE_cell) (hLE_null : listLeafInjective LE_null)
-     (hLE_sealed : listLeafInjective LE_sealed)
     (CS : CommitSurface)
     (hCSN : compressNInjective CS.compressN) (hCSL : cellLeafInjective CS.CH)
     (hRestFrame : RestHashIffFrame CS.RH) (hLogCS : logHashInjective CS.LH)
@@ -647,7 +538,6 @@ theorem fullAction_turn_circuit_refines_spec
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
     (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
-    (LS : SwissRecord → ℤ) (hLS : listLeafInjective LS)
     (DLife : (CellId → Nat) → ℤ) (hDLife : Function.Injective DLife)
     (DDC : (CellId → Nat) → ℤ) (hDDC : Function.Injective DDC)
     (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
@@ -655,27 +545,27 @@ theorem fullAction_turn_circuit_refines_spec
     (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth)
     (hRestBal : RestIffNoBal S.RH) (hRestAccounts : RestIffNoAccountsBalBorn S.RH)
     (hRestSpawn : RestIffNoSpawnTouched S.RH) (hRestCaps : RestIffNoCaps S.RH)
-    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH) (hRestSealed : RestIffNoSealedBoxes S.RH)
+    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH)
     (hRestFactory : RestIffNoFactoryTouched S.RH)
-    (hRestSwiss : RestIffNoSwiss S.RH) (hRestLifecycle : RestIffNoLifecycle S.RH)
+    (hRestLifecycle : RestIffNoLifecycle S.RH)
     (hRestLifecycleDeathCert : RestIffNoLifecycleDeathCert S.RH)
     (hRestDelegations : RestIffNoDelegations S.RH)
     (hLog : logHashInjective S.LH)
     (s s' : RecChainedState) (acts : List FullActionA)
-    (hc : turnCircuitStep (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide hDSide DLeg
-      hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
+    (hc : turnCircuitStep (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN hLE_cell hLE_null CS DBal hDBal DSide hDSide DLeg
+      hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
       s acts s') :
     Spec.Turn.turnSpec fullActionStep s acts s' :=
   turn_circuit_refines_spec_of_steps
-    (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN
-      hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps
-      DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
+    (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN
+      hLE_cell hLE_null CS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps
+      DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
     fullActionStep
-    (fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN
-      hLE_cell hLE_null hLE_sealed CS hCSN hCSL hRestFrame hLogCS DBal hDBal DSide
-      hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC
-      DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull hRestCommitments hRestSealed
-      hRestFactory hRestSwiss hRestLifecycle hRestLifecycleDeathCert
+    (fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN
+      hLE_cell hLE_null CS hCSN hCSL hRestFrame hLogCS DBal hDBal DSide
+      hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC
+      DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull hRestCommitments
+      hRestFactory hRestLifecycle hRestLifecycleDeathCert
       hRestDelegations hLog)
     s acts s' hc
 
@@ -688,10 +578,9 @@ theorem fullAction_turn_circuit_refines_exec
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
     (D_caps : Caps → ℤ) (hD_caps : Function.Injective D_caps)
-    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)  (LE_sealed : SealedBoxRecord → ℤ)
+    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)
     (cN : List ℤ → ℤ) (hN : compressNInjective cN)
     (hLE_cell : listLeafInjective LE_cell) (hLE_null : listLeafInjective LE_null)
-     (hLE_sealed : listLeafInjective LE_sealed)
     (CS : CommitSurface)
     (hCSN : compressNInjective CS.compressN) (hCSL : cellLeafInjective CS.CH)
     (hRestFrame : RestHashIffFrame CS.RH) (hLogCS : logHashInjective CS.LH)
@@ -701,7 +590,6 @@ theorem fullAction_turn_circuit_refines_exec
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
     (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
-    (LS : SwissRecord → ℤ) (hLS : listLeafInjective LS)
     (DLife : (CellId → Nat) → ℤ) (hDLife : Function.Injective DLife)
     (DDC : (CellId → Nat) → ℤ) (hDDC : Function.Injective DDC)
     (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
@@ -709,27 +597,27 @@ theorem fullAction_turn_circuit_refines_exec
     (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth)
     (hRestBal : RestIffNoBal S.RH) (hRestAccounts : RestIffNoAccountsBalBorn S.RH)
     (hRestSpawn : RestIffNoSpawnTouched S.RH) (hRestCaps : RestIffNoCaps S.RH)
-    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH) (hRestSealed : RestIffNoSealedBoxes S.RH)
+    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH)
     (hRestFactory : RestIffNoFactoryTouched S.RH)
-    (hRestSwiss : RestIffNoSwiss S.RH) (hRestLifecycle : RestIffNoLifecycle S.RH)
+    (hRestLifecycle : RestIffNoLifecycle S.RH)
     (hRestLifecycleDeathCert : RestIffNoLifecycleDeathCert S.RH)
     (hRestDelegations : RestIffNoDelegations S.RH)
     (hLog : logHashInjective S.LH)
     (s s' : RecChainedState) (acts : List FullActionA)
-    (hc : turnCircuitStep (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide hDSide DLeg
-      hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
+    (hc : turnCircuitStep (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN hLE_cell hLE_null CS DBal hDBal DSide hDSide DLeg
+      hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
       s acts s') :
     execFullTurnA s acts = some s' :=
   turn_circuit_refines_exec_of_steps
-    (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN
-      hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps
-      DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
+    (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN
+      hLE_cell hLE_null CS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps
+      DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
     fullActionStep
-    (fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN
-      hLE_cell hLE_null hLE_sealed CS hCSN hCSL hRestFrame hLogCS DBal hDBal DSide
-      hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC
-      DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull hRestCommitments hRestSealed
-      hRestFactory hRestSwiss hRestLifecycle hRestLifecycleDeathCert
+    (fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN
+      hLE_cell hLE_null CS hCSN hCSL hRestFrame hLogCS DBal hDBal DSide
+      hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC
+      DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull hRestCommitments
+      hRestFactory hRestLifecycle hRestLifecycleDeathCert
       hRestDelegations hLog)
     (fun s a s' => fullActionStep_exec_iff s s' a) s acts s' hc
 
@@ -738,10 +626,9 @@ theorem fullAction_turn_conservation_descends
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
     (D_caps : Caps → ℤ) (hD_caps : Function.Injective D_caps)
-    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)  (LE_sealed : SealedBoxRecord → ℤ)
+    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)
     (cN : List ℤ → ℤ) (hN : compressNInjective cN)
     (hLE_cell : listLeafInjective LE_cell) (hLE_null : listLeafInjective LE_null)
-     (hLE_sealed : listLeafInjective LE_sealed)
     (CS : CommitSurface)
     (hCSN : compressNInjective CS.compressN) (hCSL : cellLeafInjective CS.CH)
     (hRestFrame : RestHashIffFrame CS.RH) (hLogCS : logHashInjective CS.LH)
@@ -751,7 +638,6 @@ theorem fullAction_turn_conservation_descends
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
     (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
-    (LS : SwissRecord → ℤ) (hLS : listLeafInjective LS)
     (DLife : (CellId → Nat) → ℤ) (hDLife : Function.Injective DLife)
     (DDC : (CellId → Nat) → ℤ) (hDDC : Function.Injective DDC)
     (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
@@ -759,25 +645,25 @@ theorem fullAction_turn_conservation_descends
     (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth)
     (hRestBal : RestIffNoBal S.RH) (hRestAccounts : RestIffNoAccountsBalBorn S.RH)
     (hRestSpawn : RestIffNoSpawnTouched S.RH) (hRestCaps : RestIffNoCaps S.RH)
-    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH) (hRestSealed : RestIffNoSealedBoxes S.RH)
+    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH)
     (hRestFactory : RestIffNoFactoryTouched S.RH)
-    (hRestSwiss : RestIffNoSwiss S.RH) (hRestLifecycle : RestIffNoLifecycle S.RH)
+    (hRestLifecycle : RestIffNoLifecycle S.RH)
     (hRestLifecycleDeathCert : RestIffNoLifecycleDeathCert S.RH)
     (hRestDelegations : RestIffNoDelegations S.RH)
     (hLog : logHashInjective S.LH)
     (s s' : RecChainedState) (acts : List FullActionA) (b : AssetId)
-    (hc : turnCircuitStep (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN hLE_cell hLE_null hLE_sealed CS DBal hDBal DSide hDSide DLeg
-      hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
+    (hc : turnCircuitStep (fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN hLE_cell hLE_null CS DBal hDBal DSide hDSide DLeg
+      hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth)
       s acts s')
     (hzero : turnLedgerDeltaAsset acts b = 0) :
     recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   turn_conservation_descends fullActionStep (fun s a s' => fullActionStep_exec_iff s s' a)
     s s' acts b
-    (fullAction_turn_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed
-      cN hN hLE_cell hLE_null hLE_sealed CS hCSN hCSL hRestFrame hLogCS DBal hDBal
-      DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC
+    (fullAction_turn_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null
+      cN hN hLE_cell hLE_null CS hCSN hCSL hRestFrame hLogCS DBal hDBal
+      DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC
       hDSC DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull hRestCommitments
-      hRestSealed hRestFactory hRestSwiss hRestLifecycle
+      hRestFactory hRestLifecycle
       hRestLifecycleDeathCert hRestDelegations hLog s s' acts hc)
     hzero
 

@@ -314,23 +314,9 @@ theorem execFullA_progLive_preserved (s s' : RecChainedState) (fa : FullActionA)
   | attenuateA actor idx keep =>
       simp only [execFullA, attenuateStepA] at h
       obtain ⟨rfl⟩ := h; exact ⟨hlive, hprog⟩
-  | dropRefA holder t =>
-      simp only [execFullA, recCRevoke] at h
-      obtain ⟨rfl⟩ := h; exact ⟨hlive, hprog⟩
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevoke] at h
       obtain ⟨rfl⟩ := h; exact ⟨hlive, hprog⟩
-  | validateHandoffA intro rec t =>
-      simp only [execFullA, recCDelegate] at h
-      cases hk : recKDelegate s.kernel intro rec t with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          have hn : k' = { s.kernel with caps := k'.caps } := by
-            unfold recKDelegate at hk; split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          rw [hn]; exact ⟨hlive, hprog⟩
   | exerciseA actor t inner =>
       simp only [execFullA] at h
       by_cases hf : innerFacetsAdmittedA s actor t inner = true
@@ -398,15 +384,6 @@ theorem execFullA_progLive_preserved (s s' : RecChainedState) (fa : FullActionA)
       option_inj at h; subst h
       show c ∈ (noteCreateCommitment s.kernel cm).accounts ∧ (noteCreateCommitment s.kernel cm).slotCaveats c = cav
       unfold noteCreateCommitment; exact ⟨hlive, hprog⟩
-  | sealA pid actor payload =>
-      simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; exact ⟨hlive, hprog⟩
-  | unsealA pid actor recipient =>
-      simp only [execFullA] at h
-      obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'; exact ⟨hlive, hprog⟩
-  | createSealPairA pid actor sealerHolder unsealerHolder =>
-      simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'; exact ⟨hlive, hprog⟩
   | makeSovereignA actor cell =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := makeSovereignStep_factors h; subst hs'; exact ⟨hlive, hprog⟩
@@ -440,66 +417,6 @@ theorem execFullA_progLive_preserved (s s' : RecChainedState) (fa : FullActionA)
       exact ⟨hlive, hprog⟩
   | pipelinedSendA actor =>
       simp only [execFullA, Option.some.injEq] at h; subst h; exact ⟨hlive, hprog⟩
-  | exportSturdyRefA sw actor exporter target rights =>
-      simp only [execFullA, swissExportChainA] at h
-      split at h
-      · cases hk : swissExportK s.kernel sw exporter target rights with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            have hn : k' = { s.kernel with swiss := k'.swiss } := by
-              unfold swissExportK at hk; split at hk
-              · exact absurd hk (by simp)
-              · split at hk
-                · injection hk with hk; subst hk; rfl
-                · exact absurd hk (by simp)
-            rw [hn]; exact ⟨hlive, hprog⟩
-      · exact absurd h (by simp)
-  | enlivenRefA sw actor exporter claimed =>
-      simp only [execFullA, swissEnlivenChainA] at h
-      split at h
-      · cases hk : swissEnlivenK s.kernel sw claimed with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            have hn : k' = { s.kernel with swiss := k'.swiss, caps := k'.caps } := by
-              unfold swissEnlivenK at hk; split at hk
-              · exact absurd hk (by simp)
-              · split at hk
-                · injection hk with hk; subst hk; rfl
-                · exact absurd hk (by simp)
-            rw [hn]; exact ⟨hlive, hprog⟩
-      · exact absurd h (by simp)
-  | swissHandoffA sw certHash introducer exporter =>
-      simp only [execFullA, swissHandoffChainA] at h
-      split at h
-      · cases hk : swissHandoffK s.kernel sw certHash with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            have hn : k' = { s.kernel with swiss := k'.swiss } := by
-              unfold swissHandoffK at hk; split at hk
-              · exact absurd hk (by simp)
-              · injection hk with hk; subst hk; rfl
-            rw [hn]; exact ⟨hlive, hprog⟩
-      · exact absurd h (by simp)
-  | swissDropA sw actor exporter =>
-      simp only [execFullA, swissDropChainA] at h
-      split at h
-      · cases hk : swissDropK s.kernel sw with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            have hn : k' = { s.kernel with swiss := k'.swiss } := by
-              unfold swissDropK at hk; split at hk
-              · exact absurd hk (by simp)
-              · split at hk
-                · exact absurd hk (by simp)
-                · split at hk
-                  · injection hk with hk; subst hk; rfl
-                  · injection hk with hk; subst hk; rfl
-            rw [hn]; exact ⟨hlive, hprog⟩
-      · exact absurd h (by simp)
 
 
 /-- **`execInnerA_progLive_preserved`** — the inner-effect fold an `exerciseA` recurses through keeps a
@@ -751,21 +668,8 @@ theorem execFullA_anchorVal_preserved (s s' : RecChainedState) (fa : FullActionA
           rw [hn]
   | attenuateA actor idx keep =>
       simp only [execFullA, attenuateStepA] at h; obtain ⟨rfl⟩ := h; rfl
-  | dropRefA holder t =>
-      simp only [execFullA, recCRevoke] at h; obtain ⟨rfl⟩ := h; rfl
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevoke] at h; obtain ⟨rfl⟩ := h; rfl
-  | validateHandoffA intro rec t =>
-      simp only [execFullA, recCDelegate] at h
-      cases hk : recKDelegate s.kernel intro rec t with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          have hn : k' = { s.kernel with caps := k'.caps } := by
-            unfold recKDelegate at hk; split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          rw [hn]
   | exerciseA actor t inner =>
       simp only [execFullA] at h
       by_cases hf : innerFacetsAdmittedA s actor t inner = true
@@ -836,15 +740,6 @@ theorem execFullA_anchorVal_preserved (s s' : RecChainedState) (fa : FullActionA
       show fieldOf commitmentAnchorSlot ((noteCreateCommitment s.kernel cm).cell c)
             = fieldOf commitmentAnchorSlot (s.kernel.cell c)
       unfold noteCreateCommitment; rfl
-  | sealA pid actor payload =>
-      simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; rfl
-  | unsealA pid actor recipient =>
-      simp only [execFullA] at h
-      obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'; rfl
-  | createSealPairA pid actor sealerHolder unsealerHolder =>
-      simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'; rfl
   | makeSovereignA actor cell =>
       -- THE EXCLUDED ARM: `anchorActionOK c (.makeSovereignA actor cell) = (cell ≠ c)`.
       simp only [execFullA] at h
@@ -889,66 +784,6 @@ theorem execFullA_anchorVal_preserved (s s' : RecChainedState) (fa : FullActionA
       obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; rfl
   | pipelinedSendA actor =>
       simp only [execFullA, Option.some.injEq] at h; subst h; rfl
-  | exportSturdyRefA sw actor exporter target rights =>
-      simp only [execFullA, swissExportChainA] at h
-      split at h
-      · cases hk : swissExportK s.kernel sw exporter target rights with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            have hn : k' = { s.kernel with swiss := k'.swiss } := by
-              unfold swissExportK at hk; split at hk
-              · exact absurd hk (by simp)
-              · split at hk
-                · injection hk with hk; subst hk; rfl
-                · exact absurd hk (by simp)
-            rw [hn]
-      · exact absurd h (by simp)
-  | enlivenRefA sw actor exporter claimed =>
-      simp only [execFullA, swissEnlivenChainA] at h
-      split at h
-      · cases hk : swissEnlivenK s.kernel sw claimed with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            have hn : k' = { s.kernel with swiss := k'.swiss, caps := k'.caps } := by
-              unfold swissEnlivenK at hk; split at hk
-              · exact absurd hk (by simp)
-              · split at hk
-                · injection hk with hk; subst hk; rfl
-                · exact absurd hk (by simp)
-            rw [hn]
-      · exact absurd h (by simp)
-  | swissHandoffA sw certHash introducer exporter =>
-      simp only [execFullA, swissHandoffChainA] at h
-      split at h
-      · cases hk : swissHandoffK s.kernel sw certHash with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            have hn : k' = { s.kernel with swiss := k'.swiss } := by
-              unfold swissHandoffK at hk; split at hk
-              · exact absurd hk (by simp)
-              · injection hk with hk; subst hk; rfl
-            rw [hn]
-      · exact absurd h (by simp)
-  | swissDropA sw actor exporter =>
-      simp only [execFullA, swissDropChainA] at h
-      split at h
-      · cases hk : swissDropK s.kernel sw with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            have hn : k' = { s.kernel with swiss := k'.swiss } := by
-              unfold swissDropK at hk; split at hk
-              · exact absurd hk (by simp)
-              · split at hk
-                · exact absurd hk (by simp)
-                · split at hk
-                  · injection hk with hk; subst hk; rfl
-                  · injection hk with hk; subst hk; rfl
-            rw [hn]
-      · exact absurd h (by simp)
 
 /-- **`execInnerA_anchorVal_preserved`** — the inner-effect fold preserves `c`'s anchor scalar when
 every inner action is anchor-safe for `c`. Mutual with `execFullA_anchorVal_preserved`. -/

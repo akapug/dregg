@@ -162,7 +162,6 @@ import Dregg2.Exec.FullForest          -- FullActionA call-forest (wholesale-swa
 import Dregg2.Exec.Handler             -- ★ the EFFECT-HANDLER ALGEBRA scaffold (swap-grade executor foundation, DESIGN-EFFECT-HANDLER-ALGEBRA.md): EffectHandler bundles step/delta/auth/admission/trace + FORCED obligation proofs (auth_gated/admission_gated/conserves) so a handler can't register without its gates (R1-closure is a TYPING condition); Registry=List PackedHandler coproduct replaces the closed FullActionA; turn_conserves = ONE generic foldlM induction (the 56-arm ledger matrix collapses). 3-effect proof-of-approach slice; the 56-effect migration is the staged batches below
 import Dregg2.Exec.Handlers.StateSupply -- migration batch 1: mint/burn handlers (the delta≠0 path — turn_conserves sums non-zero deltas) + createCell/factory/spawn (account-growth neutral) + state/write handlers; CLOSES R1/R6 (acceptsEffects Live-gate wrap the bare kernel ops lack)
 import Dregg2.Exec.Handlers.Escrow      -- migration batch 1: createEscrow/release/refund/obligation/note handlers; CLOSES R2 (releaseSettleAuthB/refundSettleAuthB = authorizedB over recipient/creator — the bare releaseEscrowKAsset takes only id, no actor); double-spend gate; conserves via the proved escrow combined-conservation lemmas
-import Dregg2.Exec.Handlers.Seal        -- migration batch 2: seal/unseal/createSealPair/swiss-ref handlers; CLOSES R3 (pidFresh admission conjunct the bare createSealPairChainA lacks) + export amplification carried; delta=0 cap-routing frame
 import Dregg2.Exec.Handlers.Authority   -- migration batch 2: delegate/introduce/validateHandoff/attenuate/revoke/dropRef handlers; KEY FIX — delegation re-routed from rights-BLIND recKDelegate to ATTENUATED recKDelegateAtten (granted⊆held, non-amplifying); revoke/attenuate = total self-limiting (post caps ⊆ pre); delta=0
 import Dregg2.Exec.Handlers.Bridge      -- migration batch 2: bridgeLock/finalize/cancel/pipelinedSend handlers; CLOSES R12 (bridgeFinalize.delta = -amount, the disclosed cross-chain OUTFLOW correctly accounted, NOT falsely Conservative) + creator-authority wrap (bridgeAuthOK; the bare op has no actor arg)
 import Dregg2.Exec.Handlers.Exercise    -- the LAST handler: exerciseA recursive sub-effect forest; CLOSES R4 (facet-mask — inner effects run under the cap allowed_effects, not the inner-actor's full authority); fuel-bounded structural recursion (NO heartbeat pathology), conserves via subTurn_conserves (the turn_conserves twin); closedToSub drops the proved scaffold handlers into the inner forest. All 56 effects are now sound handlers
@@ -239,10 +238,8 @@ import Dregg2.Circuit.Inst.attenuateA        -- D5 v2 breadth: attenuateA_full_s
 import Dregg2.Circuit.Inst.balanceA         -- D5 v2 breadth: balanceA_full_sound ⇒ BalanceMovementSpec (bal funcComponent)
 import Dregg2.Circuit.Inst.bridgeMintA     -- D5 v2 breadth: bridgeMintA_full_sound ⇒ InboundMintSpec (bal credit)
 import Dregg2.Circuit.Inst.burnA           -- D5 v2 breadth: burnA_full_sound ⇒ BurnSpec (bal debit)
-import Dregg2.Circuit.Inst.createSealPairA -- D5 v2 breadth: createSealPairA_full_sound ⇒ CreateSealPairSpec (sealedBoxes list)
 import Dregg2.Circuit.Inst.delegate        -- D5 v2 breadth: delegate_full_sound ⇒ DelegateSpec (caps)
 import Dregg2.Circuit.Inst.delegateAttenA  -- D5 v2 breadth: delegateAttenA_full_sound ⇒ DelegateAttenSpec (caps)
-import Dregg2.Circuit.Inst.dropRefA        -- D5 v2 breadth: dropRefA_full_sound ⇒ RevokeSpec (caps)
 import Dregg2.Circuit.Inst.introduceA      -- D5 v2 breadth: introduceA_full_sound ⇒ DelegateSpec (caps)
 import Dregg2.Circuit.Inst.mintA           -- D5 v2 breadth: mintA_full_sound ⇒ MintASpec (bal credit)
 import Dregg2.Circuit.EffectRefinement     -- D5 v2 diamond tower: generic effect2CircuitStep ⟺ apex + emitted ⟺ circuit; mint/burn instances (emitted ⟺ circuit ⟺ spec ⟺ execFullA); mint_supply_delta_descends (l4v payoff)
@@ -274,14 +271,7 @@ import Dregg2.Circuit.Inst.noteSpendA      -- D5 v2 breadth: noteSpendA_full_sou
 import Dregg2.Circuit.Inst.pipelinedSendA   -- D5 v1 breadth: pipelinedSendA_full_sound ⇒ PipelinedSendSpec (log-only)
 import Dregg2.Circuit.Inst.revoke          -- D5 v2 breadth: revoke_full_sound ⇒ RevokeSpec (caps)
 import Dregg2.Circuit.Inst.revokeDelegationA -- D5 v2 breadth: revokeDelegationA_full_sound ⇒ RevokeSpec (caps)
-import Dregg2.Circuit.Inst.sealA           -- D5 v2 breadth: sealA_full_sound ⇒ SealSpec (sealedBoxes list)
-import Dregg2.Circuit.Inst.swissExportA    -- D5 v2 breadth: swissExportA_full_sound ⇒ ExportSpec (swiss list)
-import Dregg2.Circuit.Inst.enlivenRefA     -- D5 v2 breadth: enlivenRefA_full_sound ⇒ EnlivenSpec (swiss list)
-import Dregg2.Circuit.Inst.swissHandoffA   -- D5 v2 breadth: swissHandoffA_full_sound ⇒ HandoffSpec (swiss list)
-import Dregg2.Circuit.Inst.swissDropA      -- D5 v2 breadth: swissDropA_full_sound ⇒ DropSpec (swiss list)
 import Dregg2.Circuit.Inst.transfer        -- D5 v2 breadth: transfer_full_sound ⇒ BalanceMovementSpec (bal funcComponent)
-import Dregg2.Circuit.Inst.unsealA        -- D5 v2 breadth: unsealA_full_sound ⇒ UnsealSpec (sealedBoxes list)
-import Dregg2.Circuit.Inst.validateHandoffA -- D5 v2 breadth: validateHandoffA_full_sound ⇒ DelegateSpec (caps)
 import Dregg2.Circuit.Inst.emitEventA      -- D5 v1 breadth: emitEventA_full_sound ⇒ EmitEventSpec (log-only, touched=∅)
 import Dregg2.Circuit.Inst.incrementNonceA -- D5 v1 breadth: incrementNonceA_full_sound ⇒ IncrementNonceSpec (cell)
 import Dregg2.Circuit.Inst.makeSovereignA -- D5 v1 breadth: makeSovereignA_full_sound ⇒ MakeSovereignSpec (cell rebind)
@@ -304,7 +294,6 @@ import Dregg2.Circuit.Emit.EffectVmEmitTransfer  -- TRANSFER concrete circuit EM
 import Dregg2.Circuit.Emit.EffectVmEmitNoteSpendCompose  -- TURN-LEVEL COMPOSITION for the genuinely-NOT-per-row noteSpend: per-row root-bound descriptor (binds the nullifier-set INSERT into state_commit, anti-ghost) ⊗ turn-level NON-MEMBERSHIP gadget (sorted-tree Merkle, dsl/revocation.rs, the `non-revocation` turn sub-proof — supplies FRESHNESS nf∉nullifiers) ⊗ turn-level §8 proof gadget ⟹ FULL NoteSpendSpec (all 17 fields). compose_perRow_and_turnGadget_suffices (sufficiency) + stale_nullifier_does_not_commit (turn gadget LOAD-BEARING, fail-closed) + compose_commits_iff_turn_gadgets_accept (IFF). #assert_axioms clean. The honest layering: every leg graduates at the per-row OR the turn/accumulator layer with a named gadget.
 import Dregg2.Circuit.Witness.DelegateWitness  -- B2 v2 WITNESS BEACHHEAD (delegate): delegateWitnessVec runs recCDelegate + lays the v2 full-state witness (width 72), digest cols from a concrete computable surface (capsDigConcrete/rhConcrete/lhConcrete); execute_produces_satisfying_witness + satisfying_witness_proves_full_state reuse delegate_full_sound/effect2_circuit_full_complete (CR portals carried). Concrete #guard: executor-derived witness SATISFIES; the REAL forged post (recipient steals node 9) yields a witness the circuit REJECTS (component-bind gate 68≠69 = real UNSAT). The v2 witness TEMPLATE.
 import Dregg2.Circuit.Witness.CellSealWitness  -- B2 v2 WITNESS (cellSealA/cellUnsealA lifecycle): seal/unsealWitnessVec run execFullA + lifeDigConcrete; executor-derived witness SATISFIES; forged 3rd-cell lifecycle flip REJECTED (component-bind 68≠69). Reuses cellSeal/UnsealA_full_sound.
-import Dregg2.Circuit.Witness.CreateSealPairWitness  -- B2 v2 WITNESS (createSealPairA caps): createSealPairWitnessVec runs execFullA + capsDigConcrete; executor-derived witness SATISFIES; forged 3rd-holder stolen cap REJECTED (component-bind 68≠69). Reuses createSealPairA_full_sound.
 import Dregg2.Circuit.Witness.CreateCellWitness  -- B2 v2-triple WITNESS (createCellA accounts+bal+born-empty): executor-derived witness SATISFIES; forged 3rd-cell bal mint REJECTED (comp2-bal gate 70≠71). Reuses createCellA_full_sound.
 import Dregg2.Circuit.Witness.CreateCellFromFactoryWitness  -- B2 v2-quint WITNESS (createCellFromFactoryA accounts+bal+cell+slotCaveats+born-empty-authority): executor-derived witness (facS fixture) SATISFIES; forged bystander bal mint REJECTED (comp2-bal gate 70≠71). Reuses createCellFromFactoryA_full_sound.
 import Dregg2.Circuit.Witness.RefusalWitness          -- B3 v1 WITNESS (refusalA audit-slot write): refusalWitnessVec runs execFullA + lays the v1 full-state witness (width 74) via Common.layoutE/SConc; executor-derived witness SATISFIES; forged 3rd-cell mint (50→999) REJECTED (frame-reuse gate 68≠69). Rust lean_executor_derived_refusal proves+verifies / rejects. Reuses refusalA_full_sound.
@@ -320,25 +309,17 @@ import Dregg2.Circuit.Witness.IncrementNonceWitness   -- B3 v1 WITNESS (incremen
 import Dregg2.Circuit.Witness.MakeSovereignWitness    -- B3 v1 WITNESS (makeSovereignA commitment rebind touched={cell}): the rebind MOVES the balance so touched-bind gate (70/71) is meaningful — wrong-rebound (70≠71) + bystander mint (68≠69) REJECTED. Rust lean_executor_derived_make_sovereign. Reuses makeSovereignA_full_sound.
 import Dregg2.Circuit.Witness.ExerciseWitness         -- B3 v1 WITNESS (exerciseA composite hold-gate, log-only outer layer): exerciseWitnessVec runs exerciseStepA (kernel frozen + auth receipt); forged auth receipt (log 72≠73) + bystander mint (frame 68≠69) REJECTED. Rust lean_executor_derived_exercise. Reuses exerciseA_full_sound.
 import Dregg2.Circuit.Witness.DelegateAttenWitness    -- B3 v2 WITNESS (delegateAttenA gated attenuated caps grant): delegateAttenWitnessVec runs execFullA (recCDelegateAtten); forged stolen-cap REJECTED (component-bind 68≠69). Rust lean_executor_derived_delegate_atten. Reuses delegateAttenA_full_sound.
-import Dregg2.Circuit.Witness.DropRefWitness          -- B3 v2 WITNESS (dropRefA CapTP GC removeEdge caps): dropRefWitnessVec runs recCRevoke; forged un-revoked caps REJECTED (component-bind 68≠69). Rust lean_executor_derived_drop_ref. Reuses dropRefA_full_sound.
 import Dregg2.Circuit.Witness.IntroduceWitness        -- B3 v2 WITNESS (introduceA authority-introduce caps grant): introduceWitnessVec runs execFullA (recCDelegate); forged stolen-cap REJECTED (component-bind 68≠69). Rust lean_executor_derived_introduce. Reuses introduceA_full_sound.
-import Dregg2.Circuit.Witness.EnlivenWitness          -- B3 v2 WITNESS (enlivenRefA swiss-listComponent refcount bump): enlivenWitnessVec runs execFullA (swiss-enliven chain); forged un-enlivened swiss list (refcount not bumped) REJECTED (component-bind 68≠69). Rust lean_executor_derived_enliven. Reuses enlivenRefA_full_sound.
 import Dregg2.Circuit.Witness.balanceAWitness        -- B1 v2 WITNESS (balanceA bal funcComponent): balanceWitnessVec runs recCexecAsset + balDigestC; executor-derived witness SATISFIES; forged bystander bal mint (50→999) REJECTED (component-bind 68≠69). Rust lean_executor_derived_balance_a. Reuses balanceA_full_sound.
 import Dregg2.Circuit.Witness.burnAWitness           -- B1 v2 WITNESS (burnA bal funcComponent, debit): burnWitnessVec runs recCBurnAsset; forged bystander bal mint REJECTED (component-bind 68≠69). Rust lean_executor_derived_burn_a. Reuses burnA_full_sound.
 import Dregg2.Circuit.Witness.bridgeMintAWitness     -- B1 v2 WITNESS (bridgeMintA bal funcComponent, credit): bridgeMintWitnessVec runs recCMintAsset; forged bystander bal mint REJECTED (component-bind 68≠69). Rust lean_executor_derived_bridge_mint_a. Reuses bridgeMintA_full_sound.
 import Dregg2.Circuit.Witness.attenuateAWitness      -- B1 v2 WITNESS (attenuateA caps funcComponent, TOTAL): attenuateWitnessVec runs attenuateStepA; forged bystander stolen-cap (privilege escalation) REJECTED (component-bind 68≠69). Rust lean_executor_derived_attenuate_a. Reuses attenuateA_full_sound.
 import Dregg2.Circuit.Witness.cellDestroyAWitness    -- B1 v2-dual WITNESS (cellDestroyA lifecycle+deathCert): cellDestroyWitnessVec runs cellDestroyChainA (width 74); forged bystander collateral-kill REJECTED (lifecycle comp-1 gate 68≠69). Rust lean_executor_derived_cell_destroy_a. Reuses cellDestroyA_full_sound.
 -- B2/B1 v2 WITNESS (tail): the remaining executor-derived witness modules (CI-coverage; each forges a 3rd-party tamper that the component-bind gate rejects):
-import Dregg2.Circuit.Witness.SealWitness            -- sealA witness
-import Dregg2.Circuit.Witness.UnsealWitness          -- unsealA witness
 import Dregg2.Circuit.Witness.SetPermissionsWitness  -- setPermissionsA witness
 import Dregg2.Circuit.Witness.SetVKWitness           -- setVKA witness
 import Dregg2.Circuit.Witness.SpawnWitness           -- spawnA witness
 import Dregg2.Circuit.Witness.RevokeDelegationWitness -- revokeDelegationA witness
-import Dregg2.Circuit.Witness.SwissDropWitness       -- swissDropA witness
-import Dregg2.Circuit.Witness.SwissExportWitness     -- swissExportA witness
-import Dregg2.Circuit.Witness.SwissHandoffWitness    -- swissHandoffA witness
-import Dregg2.Circuit.Witness.ValidateHandoffWitness -- validateHandoffA witness
 -- D5 executor⟺spec wave (independent declarative full-state spec + executor⟺spec per effect family; each #assert_axioms-clean):
 import Dregg2.Circuit.Spec.balancemovement       -- balanceA: recCexecAsset_iff_spec + debit/credit/other-untouched + rejects unauthorized/overdraft/self
 import Dregg2.Circuit.Spec.supplycreation        -- mintA: per-asset supply mint spec (supply Δ = +amt at one asset, frame elsewhere)
@@ -357,12 +338,9 @@ import Dregg2.Circuit.Spec.authorityrevocation   -- revoke/dropRefA/revokeDelega
 import Dregg2.Circuit.Spec.notenullifier         -- noteSpendA: nullifier-set insert spec (anti-replay, balance-neutral)
 import Dregg2.Circuit.Spec.notecommitment        -- noteCreateA: commitment-set grow-only spec
 import Dregg2.Circuit.Spec.bridgeinboundmint     -- bridgeMintA: §8 portal inflow spec (disclosed +value at one asset)
-import Dregg2.Circuit.Spec.sealpaircreation      -- createSealPairA: two c-list grants spec (sealer/unsealer caps)
-import Dregg2.Circuit.Spec.sealboxoperations     -- sealA/unsealA: capability box bind/move spec
 import Dregg2.Circuit.Spec.queuepipelinedsend    -- pipelinedSendA: apply-time-neutral clock-row spec (log-only, full 17-field frame) — SURVIVOR (pipelinedSend ≠ the dissolved queuePipelineStep)
 -- D5 executor⟺spec wave-2 (repaired harder families — root cause was a missing `open Dregg2.Exec.EffectsState (stateAuthB)` that cascaded into leaked sorryAx; gate-verified green + #assert_axioms-clean):
 import Dregg2.Circuit.Spec.cellstatelog          -- emitEventA: event/log-append spec + full frame (balance-neutral, no authority gate beyond cell-existence)
-import Dregg2.Circuit.Spec.swissexport           -- exportSturdyRefA: CapTP sturdy-ref mint spec (swissExportK; non-amplifying rights ⊆ held, no-dup, balance-neutral)
 import Dregg2.Circuit.Spec.celllifecycle       -- cellSealA/cellUnsealA/cellDestroyA: Live↔Sealed↔Destroyed lifecycle spec
 import Dregg2.Circuit.Spec.refreshdelegation     -- refreshDelegationA: parent c-list snapshot into delegations
 import Dregg2.DSLEffect                -- `dregg_effect <name> : <Class>` effects eDSL → Spec.Conservation LinearityClass coloring + inherited obligation; #assert_namespace_axioms-clean
@@ -492,6 +470,7 @@ import Dregg2.Authority.CausalGuard      -- §8 axis 2: installable causal guard
 import Dregg2.Authority.CausalGuardKinds  -- §8 axis 2 ergonomics: NAMED constructors for the two causal atoms (stable causalAfterVk/monotoneForkVk + install builders) at the custom-vk extension point WITHOUT editing the shared WitnessedKind enum; wrappers PROVED to denote the CausalGuard semantics
 import Dregg2.Apps.CommitRevealApp        -- §8 axis 2 demo: a real front-running-resistant commit-reveal app whose reveal admits iff it causally-FOLLOWS its commit (causallyAfter(commit) installed by name); contract = honest-reveal-admitted + frontrun-rejected (∀ chain, unforgeable) + value-conserved; #guard non-vacuity on the demo lace
 import Dregg2.Apps.QueueFactory          -- W2: bounded queue as a factory-born cell (FieldLteOther capacity/underflow + sender-auth + conservation) — the 6-verb QueueAllocate/Enqueue/Dequeue/Resize/AtomicTx/PipelineStep replacement
+import Dregg2.Apps.CapSlotFactory        -- F3/W2: CAPS-IN-SLOTS + R7 retrieval-epoch freshness — the 7-verb CreateSealPair/Seal/Unseal/ExportSturdyRef/EnlivenRef/DropRef/ValidateHandoff replacement. storeCap (held-gated, epoch-stamped) + retrieveCap (refused iff stored_epoch < current_epoch(grantor), then the survivor grant). Keystones: stored_cap_only_fresh_if_epoch_unrevoked + no_forge_from_storage + revoke_stales_stored_cap (a stored/sealed cap can no longer outlive its grantor's revocation — the R7 security FIX, live in dregg1)
 import Dregg2.Apps.InboxFactory          -- W2: value-less inbox = queue minus conservation (sequenced deliver/consume, owner-only consume) — strictly-easier sibling
 import Dregg2.Apps.PubsubFactory         -- W2: pubsub = shared head_seq + per-subscriber cursor (reader_cursor ≤ head via per-reader FieldLteOther), publisher-authorized append, reader isolation
 import Dregg2.Apps.ObligationFactory     -- W2: the obligation family as a factory-born cell-program (bond in own bal column, escrow-shaped, no new atom)

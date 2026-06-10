@@ -373,10 +373,15 @@ pub fn producer_mappable_effects() -> &'static [&'static str] {
         "AttenuateCapability",
         "Introduce",
         // §FACTORY-DISSOLVED families (escrow/obligation; F2b: + the queue family
-        // QueueAllocate/QueueEnqueue/QueueDequeue/QueueResize/QueueAtomicTx/QueuePipelineStep):
+        // QueueAllocate/QueueEnqueue/QueueDequeue/QueueResize/QueueAtomicTx/QueuePipelineStep;
+        // F3: + the seal/swiss/sturdyref family CreateSealPair/Seal/Unseal/ExportSturdyRef/
+        // EnlivenRef/DropRef/ValidateHandoff — caps-in-slots, R7 epoch-at-retrieval):
         // the verified kernel no longer parses their wire actions — their semantics live in
         // factory-born cells (cell::blueprint + sdk::factories, the Lean contracts in
-        // Dregg2/Apps/{EscrowFactory,ObligationFactory,QueueFactory,InboxFactory,PubsubFactory}).
+        // Dregg2/Apps/{EscrowFactory,ObligationFactory,QueueFactory,InboxFactory,PubsubFactory,
+        // CapSlotFactory}). A stored capability is a slot value gated on retrieval-epoch freshness
+        // (Dregg2/Apps/CapSlotFactory.lean: stored_cap_only_fresh_if_epoch_unrevoked +
+        // no_forge_from_storage; the runtime gate is apply.rs's R7 stored_epoch re-check).
         // A turn carrying one falls back to the Rust executor LOUDLY (malformed-wire sentinel)
         // during the transitional window; the Effect variants die wholesale in the verb lockstep.
     ]

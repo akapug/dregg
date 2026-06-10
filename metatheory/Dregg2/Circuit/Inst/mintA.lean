@@ -113,10 +113,9 @@ def mintE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.swiss = k.swiss
+      ∧ k'.commitments = k.commitments
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := mintGuardGates
@@ -171,13 +170,13 @@ theorem apex_iff_mintASpec (D : (CellId → AssetId → ℤ) → ℤ) (hD : Func
         ∧ ((mintE D hD).restFrame s.kernel s'.kernel)) ↔ MintASpec s args.actor args.cell args.a args.amt s'
   unfold MintASpec mintGuardProp mintE
   constructor
-  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §1c — THE VALIDATION: `mintA_full_sound ⇒ MintASpec` through the framework. -/

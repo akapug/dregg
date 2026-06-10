@@ -65,15 +65,9 @@ import Dregg2.Circuit.Spec.notecommitment
 import Dregg2.Circuit.Spec.notenullifier
 import Dregg2.Circuit.Spec.queuepipelinedsend
 import Dregg2.Circuit.Spec.refreshdelegation
-import Dregg2.Circuit.Spec.sealboxoperations
-import Dregg2.Circuit.Spec.sealpaircreation
 import Dregg2.Circuit.Spec.sovereigncommitment
 import Dregg2.Circuit.Spec.supplycreation
 import Dregg2.Circuit.Spec.supplydestruction
-import Dregg2.Circuit.Spec.swissdrop
-import Dregg2.Circuit.Spec.swissexport
-import Dregg2.Circuit.Spec.swissenliven
-import Dregg2.Circuit.Spec.swisshandoff
 import Dregg2.Circuit.Spec.Turn
 import Dregg2.Exec.TurnExecutorFull
 
@@ -97,15 +91,9 @@ open Dregg2.Circuit.Spec.FactoryCreation
 open Dregg2.Circuit.Spec.NoteCommitment
 open Dregg2.Circuit.Spec.NoteNullifier
 open Dregg2.Circuit.Spec.BridgeInboundMint
-open Dregg2.Circuit.Spec.SealBoxOperations
-open Dregg2.Circuit.Spec.SealPairCreation
 open Dregg2.Circuit.Spec.SovereignCommitment
 open Dregg2.Circuit.Spec.CellStateAudit
 open Dregg2.Circuit.Spec.QueuePipelinedSend
-open Dregg2.Circuit.Spec.SwissExport
-open Dregg2.Circuit.Spec.SwissEnliven
-open Dregg2.Circuit.Spec.SwissHandoff
-open Dregg2.Circuit.Spec.SwissDrop
 open Dregg2.Circuit.Spec.CellLifecycle
 open Dregg2.Circuit.Spec.RefreshDelegation
 
@@ -126,9 +114,7 @@ def actionTag : FullActionA → Nat
   | .introduceA _ _ _ => 10
   | .delegateAttenA _ _ _ _ => 11
   | .attenuateA _ _ _ => 12
-  | .dropRefA _ _ => 13
   | .revokeDelegationA _ _ => 14
-  | .validateHandoffA _ _ _ => 15
   | .exerciseA _ _ _ => 16
   | .createCellA _ _ => 17
   | .createCellFromFactoryA _ _ _ => 18
@@ -136,17 +122,10 @@ def actionTag : FullActionA → Nat
   | .bridgeMintA _ _ _ _ => 20
   | .noteSpendA _ _ _ => 27
   | .noteCreateA _ _ => 28
-  | .sealA _ _ _ => 35
-  | .unsealA _ _ _ => 36
-  | .createSealPairA _ _ _ _ => 37
   | .makeSovereignA _ _ => 38
   | .refusalA _ _ => 39
   | .receiptArchiveA _ _ => 40
   | .pipelinedSendA _ => 47
-  | .exportSturdyRefA _ _ _ _ _ => 48
-  | .enlivenRefA _ _ _ _ => 49
-  | .swissHandoffA _ _ _ _ => 50
-  | .swissDropA _ _ _ => 51
   | .cellSealA _ _ => 52
   | .cellUnsealA _ _ => 53
   | .cellDestroyA _ _ _ => 54
@@ -209,12 +188,8 @@ mutual
         DelegateAttenSpec st del rec t keep st'
     | .attenuateA actor idx keep =>
         AttenuateSpec st actor idx keep st'
-    | .dropRefA holder t =>
-        RevokeSpec st holder t st'
     | .revokeDelegationA holder t =>
         RevokeSpec st holder t st'
-    | .validateHandoffA intro rec t =>
-        DelegateSpec st intro rec t st'
     | .exerciseA actor target inner =>
         innerFacetsAdmittedA st actor target inner = true ∧
         exerciseGuard st actor target ∧
@@ -231,14 +206,6 @@ mutual
         NoteSpendSpec st nf actor spendProof st'
     | .noteCreateA cm actor =>
         NoteCreateASpec st cm actor st'
-    | .sealA pid actor payload =>
-        SealSpec st pid actor payload st'
-    | .unsealA pid actor recipient =>
-        match findSealedBox st.kernel.sealedBoxes pid with
-        | none => False
-        | some box => UnsealSpec st pid actor recipient box st'
-    | .createSealPairA pid actor sealerHolder unsealerHolder =>
-        CreateSealPairSpec st pid actor sealerHolder unsealerHolder st'
     | .makeSovereignA actor cell =>
         MakeSovereignSpec st actor cell st'
     | .refusalA actor cell =>
@@ -249,14 +216,6 @@ mutual
     -- `Dregg2/Apps/QueueFactory` et al — the factory story).
     | .pipelinedSendA actor =>
         PipelinedSendSpec st actor st'
-    | .exportSturdyRefA sw actor exporter target rights =>
-        ExportSpec st sw actor exporter target rights st'
-    | .enlivenRefA sw actor exporter claimed =>
-        EnlivenSpec st sw actor exporter claimed st'
-    | .swissHandoffA sw certHash introducer exporter =>
-        HandoffSpec st sw certHash introducer exporter st'
-    | .swissDropA sw actor exporter =>
-        DropSpec st sw actor exporter st'
     | .cellSealA actor cell =>
         CellSealSpec st actor cell st'
     | .cellUnsealA actor cell =>
@@ -400,15 +359,9 @@ mutual
     | .attenuateA actor idx keep => by
       simp only [fullActionStep, execFullA]
       exact attenuate_iff_spec st actor idx keep st'
-    | .dropRefA holder t => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_dropRef_iff_spec st holder t st'
     | .revokeDelegationA holder t => by
       simp only [fullActionStep, execFullA]
       exact execFullA_revokeDelegation_iff_spec st holder t st'
-    | .validateHandoffA intro rec t => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_validateHandoff_iff_spec st intro rec t st'
     | .exerciseA actor target inner => by
       simp only [fullActionStep, ExerciseSpec, execFullA]
       constructor
@@ -454,24 +407,6 @@ mutual
     | .noteCreateA cm actor => by
       simp only [fullActionStep, execFullA]
       exact execNoteCreateA_iff_spec st cm actor st'
-    | .sealA pid actor payload => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_seal_iff_spec st pid actor payload st'
-    | .unsealA pid actor recipient => by
-      cases hbox : findSealedBox st.kernel.sealedBoxes pid with
-      | none =>
-          simp only [fullActionStep, execFullA, hbox]
-          constructor
-          · intro h
-            have hnone := unsealChainA_noBox_rejects st pid actor recipient hbox
-            simpa [hnone] using h
-          · intro h; cases h
-      | some box =>
-          simp only [fullActionStep, execFullA, hbox]
-          exact execFullA_unseal_iff_spec st pid actor recipient box st' hbox
-    | .createSealPairA pid actor sealerHolder unsealerHolder => by
-      simp only [fullActionStep, execFullA]
-      exact createSealPair_iff_spec st pid actor sealerHolder unsealerHolder st'
     | .makeSovereignA actor cell => by
       simp only [fullActionStep, execFullA]
       exact execFullA_makeSovereignA_iff_spec st actor cell st'
@@ -484,18 +419,6 @@ mutual
     | .pipelinedSendA actor => by
       simp only [fullActionStep, execFullA]
       exact execFullA_pipelinedSend_iff_spec st actor st'
-    | .exportSturdyRefA sw actor exporter target rights => by
-      simp only [fullActionStep, execFullA]
-      exact export_iff_spec st sw actor exporter target rights st'
-    | .enlivenRefA sw actor exporter claimed => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_enliven_iff_spec st sw actor exporter claimed st'
-    | .swissHandoffA sw certHash introducer exporter => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_handoff_iff_spec st sw certHash introducer exporter st'
-    | .swissDropA sw actor exporter => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_drop_iff_spec st sw actor exporter st'
     | .cellSealA actor cell => by
       simp only [fullActionStep, execFullA]
       exact cellSeal_iff_spec st actor cell st'

@@ -35,9 +35,9 @@ def RestIffNoDelegations (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
+      ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
-      ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
@@ -86,9 +86,9 @@ def refreshDelegationE (D : (CellId → List Cap) → ℤ) (hD : Function.Inject
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
+      ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
-      ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := refreshDelegationGuardGates
@@ -132,13 +132,13 @@ theorem apex_iff_refreshDelegationSpec (D : (CellId → List Cap) → ℤ) (hD :
        ↔ RefreshDelegationSpec s args.actor args.child s'
   unfold RefreshDelegationSpec refreshDelegationGuardProp refreshDelegationE
   constructor
-  · rintro ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+  · rintro ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
       hLif, hDC, hDel, hSB⟩
-    exact ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+    exact ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
       hLif, hDC, hDel, hSB⟩
-  · rintro ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+  · rintro ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
       hLif, hDC, hDel, hSB⟩
-    exact ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+    exact ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
       hLif, hDC, hDel, hSB⟩
 
 theorem refreshDelegationA_full_sound

@@ -48,8 +48,8 @@ theorem propBit_eq_one {p : Prop} [Decidable p] : Circuit.propBit p = 1 ↔ p :=
 def RestIffNoSpawnTouched (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.swiss = k.swiss
-      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.commitments = k.commitments
+      ∧ k'.factories = k.factories
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
@@ -132,8 +132,8 @@ def spawnE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
   logUpdate    := some (fun s args => createReceipt args.actor args.child :: s.log)
   restFrame    := fun k k' =>
     (k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.swiss = k.swiss
-      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.commitments = k.commitments
+      ∧ k'.factories = k.factories
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := spawnGuardGates
@@ -210,9 +210,7 @@ def SpawnCircuitSpec (st : RecChainedState) (actor child target : CellId) (st' :
   ∧ st'.kernel.nullifiers = st.kernel.nullifiers
   ∧ st'.kernel.revoked = st.kernel.revoked
   ∧ st'.kernel.commitments = st.kernel.commitments
-  ∧ st'.kernel.swiss = st.kernel.swiss
   ∧ st'.kernel.factories = st.kernel.factories
-  ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
   ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
   ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
@@ -220,8 +218,8 @@ theorem SpawnSpec_implies_circuitSpec (st : RecChainedState) (actor child target
     (st' : RecChainedState) (h : SpawnSpec st actor child target st') :
     SpawnCircuitSpec st actor child target st' := by
   obtain ⟨hadmit, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h1, h2, h3, h4, h5,
-      h6, h7, h8⟩ := h
-  refine ⟨hadmit, hacc, ?_, hcaps, hdel, hdgs, hlog, h1, h2, h3, h4, h5, h6, h7, h8⟩
+      h6⟩ := h
+  refine ⟨hadmit, hacc, ?_, hcaps, hdel, hdgs, hlog, h1, h2, h3, h4, h5, h6⟩
   have hmeta := (bornEmptyCellMeta_post_iff st.kernel child st'.kernel).mpr ⟨hcell, hsc, hlif, hdc⟩
   exact (spawnCreateLeg_post_iff st.kernel child st'.kernel).mpr ⟨hbal, hmeta⟩
 
@@ -239,10 +237,10 @@ theorem apex_iff_spawnCircuitSpec (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     SpawnCircuitSpec, spawnGuardProp, spawnAdmit, expectedAccounts, readSpawnCreateLeg,
     expectedSpawnCreateLeg, spawnCapsMap, spawnDelegateMap, spawnDelegationsMap]
   constructor
-  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
-    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
-  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
-    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
+    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
+  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
+    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
 
 /-! ### §2c — apex ↔ FULL `SpawnSpec` (executor semantics). -/
 
@@ -260,16 +258,16 @@ theorem apex_iff_spawnSpec (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     spawnGuardProp, spawnAdmit, expectedAccounts, readSpawnCreateLeg, expectedSpawnCreateLeg,
     spawnCapsMap, spawnDelegateMap, spawnDelegationsMap]
   constructor
-  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
     obtain ⟨hbal, hmeta⟩ :=
       (spawnCreateLeg_post_iff s.kernel args.child s'.kernel).mp hleg
     obtain ⟨hcell, hsc, hlif, hdc⟩ :=
       (bornEmptyCellMeta_post_iff s.kernel args.child s'.kernel).mp hmeta
-    exact ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ,
-      hSw, hFac, hSB⟩
-  · rintro ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ,
-      hSw, hFac, hSB⟩
-    refine ⟨hg, hacc, ?_, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+    exact ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom,
+      hFac, hDE, hDEA⟩
+  · rintro ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom,
+      hFac, hDE, hDEA⟩
+    refine ⟨hg, hacc, ?_, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
     exact (spawnCreateLeg_post_iff s.kernel args.child s'.kernel).mpr
       ⟨hbal, (bornEmptyCellMeta_post_iff s.kernel args.child s'.kernel).mpr ⟨hcell, hsc, hlif, hdc⟩⟩
 

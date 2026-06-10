@@ -132,10 +132,10 @@ def SetPermissionsSpec (s : RecChainedState) (actor cell : CellId) (p : Int)
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
-  ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
+  ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
   ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
   ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
-  ∧ s'.kernel.delegations = s.kernel.delegations ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
+  ∧ s'.kernel.delegations = s.kernel.delegations
   ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
   ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
@@ -158,11 +158,10 @@ theorem stateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell : C
         ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
         ∧ s'.kernel.nullifiers = s.kernel.nullifiers
         ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
-        ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
+        ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
         ∧ s'.kernel.factories = s.kernel.factories ∧ s'.kernel.lifecycle = s.kernel.lifecycle
         ∧ s'.kernel.deathCert = s.kernel.deathCert ∧ s'.kernel.delegate = s.kernel.delegate
         ∧ s'.kernel.delegations = s.kernel.delegations
-        ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
         ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
         ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt ) := by
   unfold stateStep
@@ -172,12 +171,12 @@ theorem stateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell : C
     constructor
     · intro h
       simp only [Option.some.injEq] at h; subst h
-      refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+      refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14⟩
       obtain ⟨k', l'⟩ := s'
-      obtain ⟨a, ce, ca, nu, re, co, ba, sw, sl, fa, li, dc, de, dg, sb, dge, dgea⟩ := k'
-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea⟩ := k'
+      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14
+      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14
       rfl
   · rw [if_neg hg]
     constructor

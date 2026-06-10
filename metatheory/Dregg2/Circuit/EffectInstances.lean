@@ -354,14 +354,14 @@ theorem apex_iff_setFieldSpec (s : RecChainedState) (a : SetFieldArgs) (s' : Rec
   unfold SetFieldSpec kernelFrame
   constructor
   · -- kernelFrame order: accounts caps bal nullifiers revoked commitments queues swiss …
-    rintro ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    rintro ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
     -- SetFieldSpec order: accounts caps nullifiers revoked commitments bal queues swiss …
-    exact ⟨hg, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §2c — THE VALIDATION: `setFieldE_full_sound` through the framework.

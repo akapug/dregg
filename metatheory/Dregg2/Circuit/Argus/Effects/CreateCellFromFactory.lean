@@ -157,11 +157,10 @@ theorem recordKernelState_ext {k k' : RecordKernelState}
     (haccounts : k.accounts = k'.accounts) (hcell : k.cell = k'.cell) (hcaps : k.caps = k'.caps)
     (hnullifiers : k.nullifiers = k'.nullifiers)
     (hrevoked : k.revoked = k'.revoked) (hcommitments : k.commitments = k'.commitments)
-    (hbal : k.bal = k'.bal) (hswiss : k.swiss = k'.swiss)
+    (hbal : k.bal = k'.bal)
     (hslotCaveats : k.slotCaveats = k'.slotCaveats) (hfactories : k.factories = k'.factories)
     (hlifecycle : k.lifecycle = k'.lifecycle) (hdeathCert : k.deathCert = k'.deathCert)
     (hdelegate : k.delegate = k'.delegate) (hdelegations : k.delegations = k'.delegations)
-    (hsealedBoxes : k.sealedBoxes = k'.sealedBoxes)
     (hdelegationEpoch : k.delegationEpoch = k'.delegationEpoch)
     (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt) : k = k' := by
   cases k; cases k'; simp_all
@@ -395,12 +394,12 @@ converse of `Inst.CreateCellFromFactoryA.CreateFromFactorySpec_implies_circuitSp
 theorem circuitSpec_implies_spec (st : RecChainedState) (actor newCell : CellId) (vk : Int)
     (st' : RecChainedState) (h : CreateFromFactoryCircuitSpec st actor newCell vk st') :
     CreateFromFactorySpec st actor newCell vk st' := by
-  obtain ⟨e, hadmit, hacc, hbal, hcell, hsc, hauth, hlog, hEsc, hNull, hRev, hCom, hQ, hSw, hFac, hSB⟩ := h
+  obtain ⟨e, hadmit, hacc, hbal, hcell, hsc, hauth, hlog, hNull, hRev, hCom, hFac, hDE, hDEA⟩ := h
   -- decode the bundled born-empty authority digest into the five explicit per-cell slot equalities.
   obtain ⟨hcaps, hlif, hdc, hdel, hdgs⟩ :=
     (bornEmptyAuthority_post_iff st.kernel newCell st'.kernel).mp hauth
   exact ⟨e, hadmit, hacc, hbal, hcell, hsc, hlog, hcaps, hlif, hdc, hdel, hdgs,
-    hEsc, hNull, hRev, hCom, hQ, hSw, hFac, hSB⟩
+    hNull, hRev, hCom, hFac, hDE, hDEA⟩
 
 /-- **`factorySpec_unique` — the spec pins a UNIQUE post-state.** Two chained states that BOTH satisfy
 `CreateFromFactorySpec st actor newCell vk ·` are equal. Rather than re-derive field-by-field, we route

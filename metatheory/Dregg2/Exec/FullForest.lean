@@ -136,9 +136,7 @@ def targetOf : FullActionA → CellId
   | .introduceA intro _ _   => intro
   | .delegateAttenA del _ _ _ => del
   | .attenuateA actor _ _   => actor
-  | .dropRefA holder _      => holder
   | .revokeDelegationA holder _ => holder
-  | .validateHandoffA intro _ _ => intro
   | .exerciseA actor _ _    => actor
   -- §MA-supply: createCell/spawn/factory act on the fresh cell they mint; bridgeMint on the credited cell.
   | .createCellA _ newCell  => newCell
@@ -152,9 +150,6 @@ def targetOf : FullActionA → CellId
   -- §MA-seal (Wave-3 DE-SHADOW): seal acts on the sealing `actor` (the box-storing node); unseal on the
   -- `recipient` (the cap's new holder); createSealPair on the `sealerHolder`. makeSovereign/refusal/
   -- receiptArchive act on the WRITTEN cell.
-  | .sealA _ actor _                        => actor
-  | .unsealA _ _ recipient                  => recipient
-  | .createSealPairA _ _ sealerHolder _     => sealerHolder
   | .makeSovereignA _ cell                  => cell
   | .refusalA _ cell                        => cell
   | .receiptArchiveA _ cell                 => cell
@@ -162,10 +157,6 @@ def targetOf : FullActionA → CellId
   | .pipelinedSendA actor                   => actor
   -- §MA-swiss: the 4 CapTP swiss-table effects act on the exporting/holding `exporter` cell (the
   -- `stateAuthB`-gated node the chained step touches).
-  | .exportSturdyRefA _ _ exporter _ _      => exporter
-  | .enlivenRefA _ _ exporter _             => exporter
-  | .swissHandoffA _ _ _ exporter           => exporter
-  | .swissDropA _ _ exporter                => exporter
   -- §MA-lifecycle (Wave-3): seal/unseal/destroy act on the `cell` (the lifecycle-transitioned node);
   -- refresh on the `child` (the self-refreshed delegate). The `stateAuthB`-gated nodes the steps touch.
   | .cellSealA _ cell                       => cell

@@ -130,14 +130,12 @@ def RevokeSpec (st : RecChainedState) (holder t : CellId) (st' : RecChainedState
   ∧ st'.kernel.revoked = st.kernel.revoked
   ∧ st'.kernel.commitments = st.kernel.commitments
   ∧ st'.kernel.bal = st.kernel.bal
-  ∧ st'.kernel.swiss = st.kernel.swiss
   ∧ st'.kernel.slotCaveats = st.kernel.slotCaveats
   ∧ st'.kernel.factories = st.kernel.factories
   ∧ st'.kernel.lifecycle = st.kernel.lifecycle
   ∧ st'.kernel.deathCert = st.kernel.deathCert
   ∧ st'.kernel.delegate = st.kernel.delegate
   ∧ st'.kernel.delegations = st.kernel.delegations
-  ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
   ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
   ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
@@ -154,19 +152,19 @@ theorem recCRevoke_iff_spec (st : RecChainedState) (holder t : CellId) (st' : Re
   unfold RevokeSpec
   constructor
   · intro h; subst h
-    refine ⟨trivial, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    refine ⟨trivial, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
     exact removeEdgeCaps_correct st.kernel holder t
-  · rintro ⟨_, hcaps, hlog, hacc, hcell, hnull, hrev, hcom, hbal, hsw, hsc, hfac, hlif,
-           hdc, hdel, hdels, hsb, hde, hdea⟩
+  · rintro ⟨_, hcaps, hlog, hacc, hcell, hnull, hrev, hcom, hbal, hsc, hfac, hlif,
+           hdc, hdel, hdels, hde, hdea⟩
     -- `st'` is the spec'd full post-state: rebuild the committed `RecChainedState` field-by-field.
     -- The `caps` post (`removeEdgeCaps`) is the executor's `recKRevokeTarget` post (§1), so
     -- `recCRevoke st holder t` has EXACTLY `st'`'s fields. Destructure `st'` so each spec field hyp
     -- has a fresh field VAR to `subst`.
     obtain ⟨k', log'⟩ := st'
-    obtain ⟨acc', cell', caps', null', rev', com', bal', sw', sc', fac', lif', dc', del',
-            dels', sb', de', dea'⟩ := k'
+    obtain ⟨acc', cell', caps', null', rev', com', bal', sc', fac', lif', dc', del',
+            dels', de', dea'⟩ := k'
     rw [← removeEdgeCaps_correct st.kernel holder t] at hcaps
-    subst hacc hcell hcaps hnull hrev hcom hbal hsw hsc hfac hlif hdc hdel hdels hsb hlog
+    subst hacc hcell hcaps hnull hrev hcom hbal hsc hfac hlif hdc hdel hdels hlog
       hde hdea
     rfl
 
@@ -180,15 +178,6 @@ theorem execFullA_revoke_iff_spec (st : RecChainedState) (holder t : CellId)
       Option.some.injEq]
   exact recCRevoke_iff_spec st holder t st'
 
-/-- **`execFullA_dropRef_iff_spec` — EXECUTOR ⟺ SPEC for the `dropRefA` arm.** The CapTP GC
-decrement (`apply_drop_ref`) routes to the SAME `recCRevoke`; the spec is identical. -/
-theorem execFullA_dropRef_iff_spec (st : RecChainedState) (holder t : CellId)
-    (st' : RecChainedState) :
-    execFullA st (.dropRefA holder t) = some st' ↔ RevokeSpec st holder t st' := by
-  rw [show execFullA st (.dropRefA holder t) = some (recCRevoke st holder t) from rfl,
-      Option.some.injEq]
-  exact recCRevoke_iff_spec st holder t st'
-
 /-- **`execFullA_revokeDelegation_iff_spec` — EXECUTOR ⟺ SPEC for the `revokeDelegationA` arm.** The
 parent-revocation (`apply_revoke_delegation`) routes to the SAME `recCRevoke`; the spec is
 identical. (Distinct dregg1 op from `DropRef`, same graph move, hence same full-state transition.) -/
@@ -198,14 +187,6 @@ theorem execFullA_revokeDelegation_iff_spec (st : RecChainedState) (holder t : C
   rw [show execFullA st (.revokeDelegationA holder t) = some (recCRevoke st holder t) from rfl,
       Option.some.injEq]
   exact recCRevoke_iff_spec st holder t st'
-
-/-- **The three arms are DEFINITIONALLY the same transition.** `revoke`, `dropRefA`, and
-`revokeDelegationA` produce IDENTICAL post-states — they are three protocol-distinct entry points
-onto one cap-graph `removeEdge`. This is why ONE `RevokeSpec` certifies all three. -/
-theorem revoke_arms_agree (st : RecChainedState) (holder t : CellId) :
-    execFullA st (.revoke holder t) = execFullA st (.dropRefA holder t)
-    ∧ execFullA st (.dropRefA holder t) = execFullA st (.revokeDelegationA holder t) :=
-  ⟨rfl, rfl⟩
 
 /-! ## §4 — Non-vacuity: the spec is a GENUINE `removeEdge`, not a rubber stamp.
 
@@ -261,7 +242,6 @@ def kR0 : RecordKernelState :=
 
 -- The revoke executor always commits (unconditional — no fail-closed guard):
 #guard (execFullA { kernel := kR0, log := [] } (.revoke 0 7)).isSome  -- true
-#guard (execFullA { kernel := kR0, log := [] } (.dropRefA 0 7)).isSome  -- true
 #guard (execFullA { kernel := kR0, log := [] } (.revokeDelegationA 0 7)).isSome  -- true
 
 /-! ## §6 — Axiom-hygiene tripwires.
@@ -273,9 +253,7 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`ad
 #assert_axioms recKRevokeTarget_correct
 #assert_axioms recCRevoke_iff_spec
 #assert_axioms execFullA_revoke_iff_spec
-#assert_axioms execFullA_dropRef_iff_spec
 #assert_axioms execFullA_revokeDelegation_iff_spec
-#assert_axioms revoke_arms_agree
 #assert_axioms revoke_drops_holder_edges
 #assert_axioms revoke_preserves_other_holders
 #assert_axioms revoke_preserves_balances

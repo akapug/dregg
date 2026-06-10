@@ -23,12 +23,9 @@ import Dregg2.Circuit.Emit.EffectVmEmitCellDestroy
 import Dregg2.Circuit.Emit.EffectVmEmitCellSeal
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCell
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactory
-import Dregg2.Circuit.Emit.EffectVmEmitCreateSealPair
 import Dregg2.Circuit.Emit.EffectVmEmitDelegate
 import Dregg2.Circuit.Emit.EffectVmEmitDelegateAtten
-import Dregg2.Circuit.Emit.EffectVmEmitDropRef
 import Dregg2.Circuit.Emit.EffectVmEmitEmitEvent
-import Dregg2.Circuit.Emit.EffectVmEmitEnliven
 import Dregg2.Circuit.Emit.EffectVmEmitExercise
 import Dregg2.Circuit.Emit.EffectVmEmitIncrementNonce
 import Dregg2.Circuit.Emit.EffectVmEmitIntroduce
@@ -41,16 +38,10 @@ import Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive
 import Dregg2.Circuit.Emit.EffectVmEmitRefreshDelegation
 import Dregg2.Circuit.Emit.EffectVmEmitRefusal
 import Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
-import Dregg2.Circuit.Emit.EffectVmEmitSeal
 import Dregg2.Circuit.Emit.EffectVmEmitSetField
 import Dregg2.Circuit.Emit.EffectVmEmitSetPermissions
 import Dregg2.Circuit.Emit.EffectVmEmitSetVK
 import Dregg2.Circuit.Emit.EffectVmEmitSpawn
-import Dregg2.Circuit.Emit.EffectVmEmitSwissDrop
-import Dregg2.Circuit.Emit.EffectVmEmitSwissExport
-import Dregg2.Circuit.Emit.EffectVmEmitSwissHandoff
-import Dregg2.Circuit.Emit.EffectVmEmitUnseal
-import Dregg2.Circuit.Emit.EffectVmEmitValidateHandoff
 import Dregg2.Circuit.Emit.EffectVmEmitRecordRoot
 
 open Dregg2.Circuit.Emit.EffectVmEmit
@@ -73,12 +64,9 @@ def allEntries : List Entry :=
   , ⟨"cellSealVmDescriptor",            EffectVmEmitCellSeal.cellSealVmDescriptor⟩
   , ⟨"createCellVmDescriptor",          EffectVmEmitCreateCell.createCellVmDescriptor⟩
   , ⟨"factoryVmDescriptor",             EffectVmEmitCreateCellFromFactory.factoryVmDescriptor⟩
-  , ⟨"createSealPairVmDescriptor",      EffectVmEmitCreateSealPair.createSealPairVmDescriptor⟩
   , ⟨"delegateVmDescriptor",            EffectVmEmitDelegate.delegateVmDescriptor⟩
   , ⟨"delegateAttenVmDescriptor",       EffectVmEmitDelegateAtten.delegateAttenVmDescriptor⟩
-  , ⟨"dropRefVmDescriptor",             EffectVmEmitDropRef.dropRefVmDescriptor⟩
   , ⟨"emitEventVmDescriptor",           EffectVmEmitEmitEvent.emitEventVmDescriptor⟩
-  , ⟨"enlivenVmDescriptor",             EffectVmEmitEnliven.enlivenVmDescriptor⟩
   , ⟨"exerciseVmDescriptor",            EffectVmEmitExercise.exerciseVmDescriptor⟩
   , ⟨"incrementNonceVmDescriptor",      EffectVmEmitIncrementNonce.incrementNonceVmDescriptor⟩
   , ⟨"introduceVmDescriptor",           EffectVmEmitIntroduce.introduceVmDescriptor⟩
@@ -93,15 +81,9 @@ def allEntries : List Entry :=
   , ⟨"refreshVmDescriptor",             EffectVmEmitRefreshDelegation.refreshVmDescriptor⟩
   , ⟨"refusalVmDescriptor",             EffectVmEmitRefusal.refusalVmDescriptor⟩
   , ⟨"revokeVmDescriptor",              EffectVmEmitRevokeDelegation.revokeVmDescriptor⟩
-  , ⟨"sealVmDescriptor",                EffectVmEmitSeal.sealVmDescriptor⟩
   , ⟨"setPermsVmDescriptor",            EffectVmEmitSetPermissions.setPermsVmDescriptor⟩
   , ⟨"setVKVmDescriptor",               EffectVmEmitSetVK.setVKVmDescriptor⟩
   , ⟨"spawnVmDescriptor",               EffectVmEmitSpawn.spawnVmDescriptor⟩
-  , ⟨"swissDropVmDescriptor",           EffectVmEmitSwissDrop.swissDropVmDescriptor⟩
-  , ⟨"swissExportVmDescriptor",         EffectVmEmitSwissExport.swissExportVmDescriptor⟩
-  , ⟨"swissHandoffVmDescriptor",        EffectVmEmitSwissHandoff.swissHandoffVmDescriptor⟩
-  , ⟨"unsealVmDescriptor",              EffectVmEmitUnseal.unsealVmDescriptor⟩
-  , ⟨"validateHandoffVmDescriptor",     EffectVmEmitValidateHandoff.validateHandoffVmDescriptor⟩
     -- RECORD-LAYER STAGE 2: transfer descriptor + `fields_root`-absorbing GROUP-4 (site 3's
     -- spare 4th input now binds the user-field-map root cell into `state_commit`). Width-neutral
     -- (186): the carrier is the existing `state.FIELDS_ROOT` (= RESERVED, col 89) within the base

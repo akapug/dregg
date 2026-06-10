@@ -33,19 +33,12 @@ conferred authority, never exceeded. The state predicate whose coinductive carry
 def CapsConfined (U : List Auth) (caps : Caps) : Prop :=
   ∀ (l : Label) (c : Cap) (a : Auth), c ∈ caps l → a ∈ capAuthConferred c → a ∈ U
 
-/-- **`BoxesConfined U boxes`** (Wave-3 DE-SHADOW) — every SEALED-BOX payload confers only authorities in
-`U`. A `seal` stores a HELD cap (confined by `CapsConfined`), an `unseal` grants the box payload back; so
-a confined kernel keeps confined boxes, and `unseal` cannot leak authority past the `U` ceiling. The dual
-of `CapsConfined` over the sealed-box holding-store. -/
-def BoxesConfined (U : List Auth) (boxes : List SealedBoxRecord) : Prop :=
-  ∀ box ∈ boxes, ∀ a ∈ capAuthConferred box.payload, a ∈ U
-
-/-- **`KConfined U k`** (Wave-3) — the COMBINED confinement invariant: the c-list AND the sealed-box
-holding-store both stay within the authority ceiling `U`. This is the invariant the de-shadowed seal
-cluster preserves (a flag model needed only `CapsConfined`, but a real cap-moving box needs its payloads
-bounded too). The state predicate whose coinductive carry is confinement, over the FULL cap surface. -/
+/-- **`KConfined U k`** — the kernel confinement invariant. F3 STRENGTHENING: with the sealed-box
+holding-store DISSOLVED (stored caps are caps-in-slots factory values, `Apps/CapSlotFactory.lean`),
+the c-list is the ONLY kernel cap surface — `KConfined` IS `CapsConfined`, and the old box-payload
+conjunct (plus its `grant`/`reply` ceiling hypotheses) is gone with the channel it bounded. -/
 def KConfined (U : List Auth) (k : RecordKernelState) : Prop :=
-  CapsConfined U k.caps ∧ BoxesConfined U k.sealedBoxes
+  CapsConfined U k.caps
 
 /-- **`CapsConfined.of_caps_eq` — the frame closure.** If `caps' = caps`, confinement transfers verbatim. -/
 theorem CapsConfined.of_caps_eq {U : List Auth} {caps caps' : Caps}
@@ -204,279 +197,6 @@ theorem noteSpendNullifier_caps {k k' : RecordKernelState} {nf : Nat}
   · exact absurd h (by simp)
   · option_inj at h; rcases h with ⟨rfl⟩; rfl
 
-theorem swissExportK_caps {k k' : RecordKernelState} {sw : Nat} {exporter target : CellId}
-    {rights : List Auth} (h : swissExportK k sw exporter target rights = some k') :
-    k'.caps = k.caps := by
-  unfold swissExportK at h; split at h
-  · exact absurd h (by simp)
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; rfl
-    · exact absurd h (by simp)
-
-theorem swissEnlivenK_caps {k k' : RecordKernelState} {sw : Nat} {claimed : List Auth}
-    (h : swissEnlivenK k sw claimed = some k') : k'.caps = k.caps := by
-  unfold swissEnlivenK at h; split at h
-  · exact absurd h (by simp)
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; rfl
-    · exact absurd h (by simp)
-
-theorem swissHandoffK_caps {k k' : RecordKernelState} {sw certHash : Nat}
-    (h : swissHandoffK k sw certHash = some k') : k'.caps = k.caps := by
-  unfold swissHandoffK at h; split at h
-  · exact absurd h (by simp)
-  · option_inj at h; rcases h with ⟨rfl⟩; rfl
-
-theorem swissDropK_caps {k k' : RecordKernelState} {sw : Nat}
-    (h : swissDropK k sw = some k') : k'.caps = k.caps := by
-  unfold swissDropK at h; split at h
-  · exact absurd h (by simp)
-  · split at h
-    · exact absurd h (by simp)
-    · split at h
-      · option_inj at h; rcases h with ⟨rfl⟩; rfl
-      · option_inj at h; rcases h with ⟨rfl⟩; rfl
-
-/-! ### Wave-3 — the `_sealedBoxes` frame lemmas (the dual of the `_caps` block: every kernel op that
-preserves `caps` ALSO preserves the new `sealedBoxes` side-table — same `rfl`-grade proofs). -/
-
-theorem recKExecAsset_sealedBoxes {k k' : RecordKernelState} {t : Turn} {a : AssetId}
-    (h : recKExecAsset k t a = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold recKExecAsset at h; split at h
-  · option_inj at h; rcases h with ⟨rfl⟩; rfl
-  · exact absurd h (by simp)
-
-theorem recKMintAsset_sealedBoxes {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId} {amt : ℤ}
-    (h : recKMintAsset k actor cell a amt = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold recKMintAsset at h; split at h
-  · option_inj at h; rcases h with ⟨rfl⟩; rfl
-  · exact absurd h (by simp)
-
-theorem recKBurnAsset_sealedBoxes {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId} {amt : ℤ}
-    (h : recKBurnAsset k actor cell a amt = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold recKBurnAsset at h; split at h
-  · option_inj at h; rcases h with ⟨rfl⟩; rfl
-  · exact absurd h (by simp)
-
-theorem noteSpendNullifier_sealedBoxes {k k' : RecordKernelState} {nf : Nat}
-    (h : noteSpendNullifier k nf = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold noteSpendNullifier at h; split at h
-  · exact absurd h (by simp)
-  · option_inj at h; rcases h with ⟨rfl⟩; rfl
-
-theorem swissExportK_sealedBoxes {k k' : RecordKernelState} {sw : Nat} {exporter target : CellId}
-    {rights : List Auth} (h : swissExportK k sw exporter target rights = some k') :
-    k'.sealedBoxes = k.sealedBoxes := by
-  unfold swissExportK at h; split at h
-  · exact absurd h (by simp)
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; rfl
-    · exact absurd h (by simp)
-
-theorem swissEnlivenK_sealedBoxes {k k' : RecordKernelState} {sw : Nat} {claimed : List Auth}
-    (h : swissEnlivenK k sw claimed = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold swissEnlivenK at h; split at h
-  · exact absurd h (by simp)
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; rfl
-    · exact absurd h (by simp)
-
-theorem swissHandoffK_sealedBoxes {k k' : RecordKernelState} {sw certHash : Nat}
-    (h : swissHandoffK k sw certHash = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold swissHandoffK at h; split at h
-  · exact absurd h (by simp)
-  · option_inj at h; rcases h with ⟨rfl⟩; rfl
-
-theorem swissDropK_sealedBoxes {k k' : RecordKernelState} {sw : Nat}
-    (h : swissDropK k sw = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold swissDropK at h; split at h
-  · exact absurd h (by simp)
-  · split at h
-    · exact absurd h (by simp)
-    · split at h
-      · option_inj at h; rcases h with ⟨rfl⟩; rfl
-      · option_inj at h; rcases h with ⟨rfl⟩; rfl
-
-/-- **`execFullA_sealedBoxes_frame` (Wave-3)** — every NON-`seal` committed `FullActionA` FRAMES the
-sealed-box store (`seal` is the SOLE writer). The chain ops all build `{k with <other-field> := …}`, so
-the `sealedBoxes` projection of the committed post-state reduces back to `s.kernel.sealedBoxes`. -/
-theorem execFullA_sealedBoxes_frame (s s' : RecChainedState) (fa : FullActionA)
-    (h : execFullA s fa = some s')
-    (hne : ∀ pid actor payload, fa ≠ .sealA pid actor payload)
-    (hnex : ∀ a t inner, fa ≠ .exerciseA a t inner) :
-    s'.kernel.sealedBoxes = s.kernel.sealedBoxes := by
-  cases fa with
-  | balanceA t a =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := recCexecAsset_factors t a (by simpa only [execFullA] using h)
-      subst hs'
-      unfold recKExecAsset at hk; split at hk <;> [skip; exact absurd hk (by simp)]
-      option_inj at hk; rcases hk with ⟨rfl⟩; rfl
-  | mintA actor cell a amt =>
-      simp only [execFullA, recCMintAsset] at h
-      cases hx : recKMintAsset s.kernel actor cell a amt with
-      | none => rw [hx] at h; exact absurd h (by simp)
-      | some k' => rw [hx] at h; option_inj at h; rcases h with ⟨rfl⟩
-                   unfold recKMintAsset at hx; split at hx <;> [skip; exact absurd hx (by simp)]
-                   option_inj at hx; rcases hx with ⟨rfl⟩; rfl
-  | burnA actor cell a amt =>
-      simp only [execFullA, recCBurnAsset] at h
-      cases hx : recKBurnAsset s.kernel actor cell a amt with
-      | none => rw [hx] at h; exact absurd h (by simp)
-      | some k' => rw [hx] at h; option_inj at h; rcases h with ⟨rfl⟩
-                   unfold recKBurnAsset at hx; split at hx <;> [skip; exact absurd hx (by simp)]
-                   option_inj at hx; rcases hx with ⟨rfl⟩; rfl
-  | bridgeMintA actor cell a value =>
-      simp only [execFullA, recCMintAsset] at h
-      cases hx : recKMintAsset s.kernel actor cell a value with
-      | none => rw [hx] at h; exact absurd h (by simp)
-      | some k' => rw [hx] at h; option_inj at h; rcases h with ⟨rfl⟩
-                   unfold recKMintAsset at hx; split at hx <;> [skip; exact absurd hx (by simp)]
-                   option_inj at hx; rcases hx with ⟨rfl⟩; rfl
-  | setFieldA actor cell f v =>
-      obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq (by simpa only [execFullA] using h))
-      subst hs'; rfl
-  | emitEventA actor cell topic data =>
-      simp only [execFullA] at h
-      by_cases hlive : cell ∈ s.kernel.accounts
-      · rw [if_pos hlive] at h
-        simp only [Option.some.injEq] at h
-        subst h
-        rfl
-      · rw [if_neg hlive] at h
-        exact absurd h (by simp)
-  | incrementNonceA actor cell n =>
-      obtain ⟨_, hs'⟩ := stateStep_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | setPermissionsA actor cell p =>
-      obtain ⟨_, hs'⟩ := stateStep_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | setVKA actor cell vk =>
-      obtain ⟨_, hs'⟩ := stateStep_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | introduceA intro rec t =>
-      simp only [execFullA, recCDelegate] at h
-      cases hd : recKDelegate s.kernel intro rec t with
-      | none => rw [hd] at h; exact absurd h (by simp)
-      | some k' => rw [hd] at h; option_inj at h; rcases h with ⟨rfl⟩
-                   unfold recKDelegate at hd; split at hd <;> [skip; exact absurd hd (by simp)]
-                   simp only [Option.some.injEq] at hd; subst hd; rfl
-  | delegate del rec t =>
-      simp only [execFullA, recCDelegate] at h
-      cases hd : recKDelegate s.kernel del rec t with
-      | none => rw [hd] at h; exact absurd h (by simp)
-      | some k' => rw [hd] at h; option_inj at h; rcases h with ⟨rfl⟩
-                   unfold recKDelegate at hd; split at hd <;> [skip; exact absurd hd (by simp)]
-                   simp only [Option.some.injEq] at hd; subst hd; rfl
-  | validateHandoffA intro rec t =>
-      simp only [execFullA, recCDelegate] at h
-      cases hd : recKDelegate s.kernel intro rec t with
-      | none => rw [hd] at h; exact absurd h (by simp)
-      | some k' => rw [hd] at h; option_inj at h; rcases h with ⟨rfl⟩
-                   unfold recKDelegate at hd; split at hd <;> [skip; exact absurd hd (by simp)]
-                   simp only [Option.some.injEq] at hd; subst hd; rfl
-  | delegateAttenA del rec t keep =>
-      simp only [execFullA, recCDelegateAtten] at h
-      cases hd : recKDelegateAtten s.kernel del rec t keep with
-      | none => rw [hd] at h; exact absurd h (by simp)
-      | some k' => rw [hd] at h; option_inj at h; rcases h with ⟨rfl⟩
-                   unfold recKDelegateAtten at hd; split at hd <;> [skip; exact absurd hd (by simp)]
-                   simp only [Option.some.injEq] at hd; subst hd; rfl
-  | attenuateA actor idx keep =>
-      simp only [execFullA, attenuateStepA, Option.some.injEq] at h; subst h; rfl
-  | dropRefA holder t =>
-      simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h; rfl
-  | revokeDelegationA holder t =>
-      simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h; rfl
-  | revoke holder t =>
-      simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h; rfl
-  | exerciseA actor t inner => exact absurd rfl (hnex actor t inner)
-  | createCellA actor newCell =>
-      obtain ⟨_, _, hs'⟩ := createCellChainA_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | createCellFromFactoryA actor newCell vk =>
-      obtain ⟨e, s1, _, _, hc, hs'⟩ := createCellFromFactoryChainA_factors (by simpa only [execFullA] using h)
-      subst hs'
-      -- post = `{s1 with kernel := {s1.kernel with cell/slotCaveats}}`; `sealedBoxes` framed off `s1`, off `s`.
-      obtain ⟨_, _, hc'⟩ := createCellChainA_factors hc; subst hc'; rfl
-  | spawnA actor child target =>
-      obtain ⟨s1, _, hc, rfl⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
-      obtain ⟨_, _, hc'⟩ := createCellChainA_factors hc; subst hc'; rfl
-  | noteSpendA nf actor spendProof =>
-      simp only [execFullA, noteSpendChainA] at h
-      by_cases hp : spendProof = true
-      · rw [if_pos hp] at h
-        cases hk : noteSpendNullifier s.kernel nf with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
-                     unfold noteSpendNullifier at hk; split at hk <;> [exact absurd hk (by simp); skip]
-                     simp only [Option.some.injEq] at hk; subst hk; rfl
-      · rw [if_neg hp] at h; exact absurd h (by simp)
-  | noteCreateA cm actor =>
-      simp only [execFullA, noteCreateChainA, noteCreateCommitment, Option.some.injEq] at h; subst h; rfl
-  | sealA pid actor payload => exact absurd rfl (hne pid actor payload)
-  | unsealA pid actor recipient =>
-      obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | createSealPairA pid actor sealerHolder unsealerHolder =>
-      obtain ⟨_, hs'⟩ := createSealPairChainA_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | makeSovereignA actor cell =>
-      obtain ⟨_, hs'⟩ := makeSovereignStep_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | refusalA actor cell =>
-      obtain ⟨_, hs'⟩ := stateStep_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | receiptArchiveA actor cell =>
-      obtain ⟨_, hs'⟩ := stateStep_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | pipelinedSendA actor =>
-      simp only [execFullA, Option.some.injEq] at h; subst h; rfl
-  | exportSturdyRefA sw actor exporter target rights =>
-      simp only [execFullA, swissExportChainA] at h; split at h
-      · cases hk : swissExportK s.kernel sw exporter target rights with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact swissExportK_sealedBoxes hk
-      · exact absurd h (by simp)
-  | enlivenRefA sw actor exporter claimed =>
-      simp only [execFullA, swissEnlivenChainA] at h; split at h
-      · cases hk : swissEnlivenK s.kernel sw claimed with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact swissEnlivenK_sealedBoxes hk
-      · exact absurd h (by simp)
-  | swissHandoffA sw certHash introducer exporter =>
-      simp only [execFullA, swissHandoffChainA] at h; split at h
-      · cases hk : swissHandoffK s.kernel sw certHash with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact swissHandoffK_sealedBoxes hk
-      · exact absurd h (by simp)
-  | swissDropA sw actor exporter =>
-      simp only [execFullA, swissDropChainA] at h; split at h
-      · cases hk : swissDropK s.kernel sw with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact swissDropK_sealedBoxes hk
-      · exact absurd h (by simp)
-  | cellSealA actor cell =>
-      obtain ⟨_, hs'⟩ := cellSealChainA_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | cellUnsealA actor cell =>
-      obtain ⟨_, hs'⟩ := cellUnsealChainA_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | cellDestroyA actor cell ch =>
-      obtain ⟨_, hs'⟩ := cellDestroyChainA_factors (by simpa only [execFullA] using h); subst hs'; rfl
-  | refreshDelegationA actor child =>
-      obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors (by simpa only [execFullA] using h); subst hs'; rfl
-
-/-- **`execFullA_sealedBoxes_frame_or_sealCons` (Wave-3)** — the sealed-box store is written by EXACTLY
-ONE effect (`seal`); every other committed `FullActionA` FRAMES it. So a committed step either leaves
-`sealedBoxes` unchanged, OR it is a `seal` that conses a box binding a HELD `payload` (`payload ∈ caps
-actor`). This is the structural fact the `BoxesConfined` carry rests on (the held payload is confined). -/
-theorem execFullA_sealedBoxes_frame_or_sealCons (s s' : RecChainedState) (fa : FullActionA)
-    (h : execFullA s fa = some s')
-    (hnex : ∀ a t inner, fa ≠ .exerciseA a t inner) :
-    s'.kernel.sealedBoxes = s.kernel.sealedBoxes ∨
-      ∃ pid actor payload, fa = .sealA pid actor payload ∧
-        s'.kernel.sealedBoxes
-          = { pairId := pid, sealer := actor, payload := payload } :: s.kernel.sealedBoxes ∧
-        payload ∈ s.kernel.caps actor := by
-  -- `seal` is the SOLE writer (`exerciseA` is excluded — it RECURSES, handled in `boxesConfine` directly);
-  -- for `seal` we read the held payload off `sealChainA_factors`. For every other NON-exercise arm
-  -- `s'.kernel` shares `s.kernel`'s `sealedBoxes` (`execFullA_sealedBoxes_frame`).
-  by_cases hseal : ∃ pid actor payload, fa = .sealA pid actor payload
-  · obtain ⟨pid, actor, payload, rfl⟩ := hseal
-    obtain ⟨⟨_, hheld⟩, hs'⟩ := sealChainA_factors (by simpa only [execFullA] using h)
-    exact Or.inr ⟨pid, actor, payload, rfl, by rw [hs'], hheld⟩
-  · exact Or.inl (execFullA_sealedBoxes_frame s s' fa h
-      (by rintro pid actor payload rfl; exact hseal ⟨pid, actor, payload, rfl⟩) hnex)
-
 /-! ## Step 3 — `execFullA_confine`: one full-action step preserves confinement (the CORE case split). -/
 
 mutual
@@ -489,13 +209,8 @@ narrows in place (`attenuateSlot`); `delegate`/`introduce`/`validateHandoff` cop
 ceiling. `exerciseA` RECURSES (mutual `execInnerA_confine`, same ceiling). This is `confinement_preserved` discharged on the
 executor, per effect. -/
 theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
-    (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U)
     (s s' : RecChainedState) (fa : FullActionA)
-    (h : execFullA s fa = some s') (hpre : CapsConfined U s.kernel.caps)
-    -- Wave-3 DE-SHADOW: a confined kernel holds only CONFINED sealed-box payloads, so `unseal`'s grant of
-    -- the recovered payload stays within `U` (the box was sealed from a held=confined cap). The seal-pair
-    -- caps confer `[grant]`/`[reply]` ⊆ `U` (`hgrant`/`hreply`). These extend `hctrl` for the seal cluster.
-    (hboxes : ∀ box ∈ s.kernel.sealedBoxes, ∀ a ∈ capAuthConferred box.payload, a ∈ U) :
+    (h : execFullA s fa = some s') (hpre : CapsConfined U s.kernel.caps) :
     CapsConfined U s'.kernel.caps := by
   cases fa with
   -- ===== balance / supply / state / swiss / note / bridge: FRAME `caps`. =====
@@ -568,20 +283,6 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
             refine CapsConfined.grant (fun a ha => ?_) hpre
             exact hpre del (heldCapTo s.kernel.caps del t) a (heldCapTo_mem s.kernel.caps del t hg).1 ha
           · rw [if_neg hg] at hd; exact absurd hd (by simp)
-  | validateHandoffA intro rec t =>
-      simp only [execFullA, recCDelegate] at h
-      cases hd : recKDelegate s.kernel intro rec t with
-      | none => rw [hd] at h; exact absurd h (by simp)
-      | some k' =>
-          rw [hd] at h; option_inj at h; rcases h with ⟨rfl⟩
-          show CapsConfined U k'.caps
-          unfold recKDelegate at hd
-          by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
-          · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-            show CapsConfined U (Dregg2.Exec.grant s.kernel.caps rec (heldCapTo s.kernel.caps intro t))
-            refine CapsConfined.grant (fun a ha => ?_) hpre
-            exact hpre intro (heldCapTo s.kernel.caps intro t) a (heldCapTo_mem s.kernel.caps intro t hg).1 ha
-          · rw [if_neg hg] at hd; exact absurd hd (by simp)
   | delegateAttenA del rec t keep =>
       -- grants `attenuate keep (heldCapTo s.kernel.caps del t)`; conferred ⊆ the held parent cap ⊆ U.
       simp only [execFullA, recCDelegateAtten] at h
@@ -605,9 +306,6 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
   | attenuateA actor idx keep =>
       simp only [execFullA, attenuateStepA] at h; option_inj at h; rcases h with ⟨rfl⟩
       exact CapsConfined.attenuateSlot hpre
-  | dropRefA holder t =>
-      simp only [execFullA] at h; option_inj at h; rcases h with ⟨rfl⟩
-      exact recCRevoke_confine hpre
   | revokeDelegationA holder t =>
       simp only [execFullA] at h; option_inj at h; rcases h with ⟨rfl⟩
       exact recCRevoke_confine hpre
@@ -627,10 +325,7 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
             obtain ⟨_, hs1⟩ := exerciseStepA_factors hg
             have hpre1 : CapsConfined U s1.kernel.caps :=
               CapsConfined.of_caps_eq (by rw [hs1]) hpre
-            -- exercise reads the c-list + appends a receipt; `sealedBoxes` is framed (`s1.kernel = {s with log}`).
-            have hbox1 : ∀ box ∈ s1.kernel.sealedBoxes, ∀ a ∈ capAuthConferred box.payload, a ∈ U := by
-              rw [hs1]; exact hboxes
-            exact execInnerA_confine hctrl hgrant hreply s1 s' inner h hpre1 hbox1
+            exact execInnerA_confine hctrl s1 s' inner h hpre1
       · rw [if_neg hf] at h; exact absurd h (by simp)
   -- ===== supply: createCell FRAMEs caps; spawn copies a held parent cap plus metadata. =====
   | createCellA actor newCell =>
@@ -671,24 +366,6 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
   | noteCreateA cm actor =>
       refine CapsConfined.of_caps_eq ?_ hpre
       simp only [execFullA, noteCreateChainA] at h; option_inj at h; rcases h with ⟨rfl⟩; rfl
-  | sealA pid actor payload =>
-      obtain ⟨_, hs'⟩ := sealChainA_factors (by simpa only [execFullA] using h)
-      subst hs'; exact hpre   -- `caps` literally unchanged (edits `sealedBoxes`)
-  | unsealA pid actor recipient =>
-      obtain ⟨box, hbox, _, hs'⟩ := unsealChainA_factors (by simpa only [execFullA] using h)
-      subst hs'
-      -- grants `box.payload` to `recipient`: confined because `box ∈ sealedBoxes` is a confined payload.
-      refine CapsConfined.grant (fun a ha => ?_) hpre
-      exact hboxes box (List.mem_of_find?_eq_some hbox) a ha
-  | createSealPairA pid actor sealerHolder unsealerHolder =>
-      obtain ⟨_, hs'⟩ := createSealPairChainA_factors (by simpa only [execFullA] using h)
-      subst hs'
-      -- two nested grants: `sealerCap pid = endpoint pid [grant]`, `unsealerCap pid = endpoint pid [reply]`.
-      refine CapsConfined.grant (fun a ha => ?_) (CapsConfined.grant (fun a ha => ?_) hpre)
-      · -- unsealer cap confers `[reply]`.
-        simp only [unsealerCap, capAuthConferred, List.mem_singleton] at ha; subst ha; exact hreply
-      · -- sealer cap confers `[grant]`.
-        simp only [sealerCap, capAuthConferred, List.mem_singleton] at ha; subst ha; exact hgrant
   | makeSovereignA actor cell =>
       refine CapsConfined.of_caps_eq ?_ hpre
       obtain ⟨_, hs'⟩ := makeSovereignStep_factors (by simpa only [execFullA] using h)
@@ -701,38 +378,6 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
       refine CapsConfined.of_caps_eq ?_ hpre
       simp only [execFullA, Option.some.injEq] at h; subst h; rfl
   -- ===== swiss: FRAME caps (gated by `if stateAuthB …`; peel + kernel caps lemma). =====
-  | exportSturdyRefA sw actor exporter target rights =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, swissExportChainA] at h
-      split at h
-      · cases hk : swissExportK s.kernel sw exporter target rights with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact swissExportK_caps hk
-      · exact absurd h (by simp)
-  | enlivenRefA sw actor exporter claimed =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, swissEnlivenChainA] at h
-      split at h
-      · cases hk : swissEnlivenK s.kernel sw claimed with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact swissEnlivenK_caps hk
-      · exact absurd h (by simp)
-  | swissHandoffA sw certHash introducer exporter =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, swissHandoffChainA] at h
-      split at h
-      · cases hk : swissHandoffK s.kernel sw certHash with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact swissHandoffK_caps hk
-      · exact absurd h (by simp)
-  | swissDropA sw actor exporter =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, swissDropChainA] at h
-      split at h
-      · cases hk : swissDropK s.kernel sw with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact swissDropK_caps hk
-      · exact absurd h (by simp)
   -- ===== lifecycle (Wave-3): seal/unseal/destroy edit `lifecycle`/`deathCert`; refresh edits
   -- `delegations` — all FRAME `caps`. =====
   | cellSealA actor cell =>
@@ -754,10 +399,8 @@ seal cluster). Mutual with `execFullA_confine`; induction on the inner list, thr
 confinement AND the box-confinement carry (each step preserves `BoxesConfined`, via the dedicated
 `execFullA_boxesConfine` below). -/
 theorem execInnerA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
-    (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U)
     (s s' : RecChainedState) (inner : List FullActionA)
-    (h : execInnerA s inner = some s') (hpre : CapsConfined U s.kernel.caps)
-    (hboxes : ∀ box ∈ s.kernel.sealedBoxes, ∀ a ∈ capAuthConferred box.payload, a ∈ U) :
+    (h : execInnerA s inner = some s') (hpre : CapsConfined U s.kernel.caps) :
     CapsConfined U s'.kernel.caps := by
   cases inner with
   | nil => simp only [execInnerA, Option.some.injEq] at h; subst h; exact hpre
@@ -767,67 +410,9 @@ theorem execInnerA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
       | none => rw [ha] at h; exact absurd h (by simp)
       | some s1 =>
           rw [ha] at h
-          exact execInnerA_confine hctrl hgrant hreply s1 s' rest h
-            (execFullA_confine hctrl hgrant hreply s s1 a ha hpre hboxes)
-            (execFullA_boxesConfine hctrl hgrant hreply s s1 a ha hpre hboxes)
+          exact execInnerA_confine hctrl s1 s' rest h
+            (execFullA_confine hctrl s s1 a ha hpre)
 
-/-- **`execFullA_boxesConfine` (Wave-3)** — a committed `FullActionA` preserves `BoxesConfined`: every arm
-FRAMES the sealed-box holding-store EXCEPT `seal`, which adds a box binding a HELD cap (confined by `hpre :
-CapsConfined`). `exerciseA` recurses (its inner seals each add a held=confined box). The dual of
-`execFullA_confine` over the sealed-box store; together they carry `KConfined` forever. -/
-theorem execFullA_boxesConfine {U : List Auth} (hctrl : Auth.control ∈ U)
-    (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U)
-    (s s' : RecChainedState) (fa : FullActionA)
-    (h : execFullA s fa = some s') (hpre : CapsConfined U s.kernel.caps)
-    (hboxes : ∀ box ∈ s.kernel.sealedBoxes, ∀ a ∈ capAuthConferred box.payload, a ∈ U) :
-    ∀ box ∈ s'.kernel.sealedBoxes, ∀ a ∈ capAuthConferred box.payload, a ∈ U := by
-  -- `exerciseA` RECURSES (its inner seals each add a held=confined box) — handled via the mutual inner
-  -- fold; every other arm's `sealedBoxes` is either UNCHANGED (frame) or `seal`'s held-confined cons.
-  by_cases hex : ∃ a t inner, fa = .exerciseA a t inner
-  · obtain ⟨actor, t, inner, rfl⟩ := hex
-    simp only [execFullA] at h
-    by_cases hf : innerFacetsAdmittedA s actor t inner = true
-    · rw [if_pos hf] at h
-      cases hg : exerciseStepA s actor t with
-      | none => rw [hg] at h; exact absurd h (by simp)
-      | some s1 =>
-          rw [hg] at h
-          obtain ⟨_, hs1⟩ := exerciseStepA_factors hg
-          -- exercise reads the c-list (caps + boxes framed); then the inner fold preserves box-confinement.
-          have hpre1 : CapsConfined U s1.kernel.caps := CapsConfined.of_caps_eq (by rw [hs1]) hpre
-          have hbox1 : ∀ box ∈ s1.kernel.sealedBoxes, ∀ a ∈ capAuthConferred box.payload, a ∈ U := by
-            rw [hs1]; exact hboxes
-          exact execInnerA_boxesConfine hctrl hgrant hreply s1 s' inner h hpre1 hbox1
-    · rw [if_neg hf] at h; exact absurd h (by simp)
-  · rcases execFullA_sealedBoxes_frame_or_sealCons s s' fa h
-        (by rintro a t inner rfl; exact hex ⟨a, t, inner, rfl⟩)
-      with hframe | ⟨pid, actor, payload, hfa, hbox, hheld⟩
-    · rw [hframe]; exact hboxes
-    · rw [hbox]; intro box hmem a ha
-      rcases List.mem_cons.mp hmem with hb | hb
-      · -- the freshly-sealed box: its payload is the HELD cap `hheld`, confined by `hpre`.
-        subst hb; simp only at ha; exact hpre actor payload a hheld ha
-      · exact hboxes box hb a ha
-
-/-- **`execInnerA_boxesConfine` (Wave-3)** — the inner fold preserves `BoxesConfined`, threading the
-caps-confinement carry (needed for the inner `seal`s). Mutual with `execFullA_boxesConfine`. -/
-theorem execInnerA_boxesConfine {U : List Auth} (hctrl : Auth.control ∈ U)
-    (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U)
-    (s s' : RecChainedState) (inner : List FullActionA)
-    (h : execInnerA s inner = some s') (hpre : CapsConfined U s.kernel.caps)
-    (hboxes : ∀ box ∈ s.kernel.sealedBoxes, ∀ a ∈ capAuthConferred box.payload, a ∈ U) :
-    ∀ box ∈ s'.kernel.sealedBoxes, ∀ a ∈ capAuthConferred box.payload, a ∈ U := by
-  cases inner with
-  | nil => simp only [execInnerA, Option.some.injEq] at h; subst h; exact hboxes
-  | cons a rest =>
-      simp only [execInnerA] at h
-      cases ha : execFullA s a with
-      | none => rw [ha] at h; exact absurd h (by simp)
-      | some s1 =>
-          rw [ha] at h
-          exact execInnerA_boxesConfine hctrl hgrant hreply s1 s' rest h
-            (execFullA_confine hctrl hgrant hreply s s1 a ha hpre hboxes)
-            (execFullA_boxesConfine hctrl hgrant hreply s s1 a ha hpre hboxes)
 end
 
 /-! ## Step 4 — lift to the forest turn, then the full forest (the executed cell step). -/
@@ -835,8 +420,7 @@ end
 /-- **`execFullTurnA_kconfine` (Wave-3)** — a committed full turn preserves the COMBINED invariant
 `KConfined U` (caps AND sealed-box payloads): induction on the action list, chaining both halves
 (`execFullA_confine` + `execFullA_boxesConfine`). -/
-theorem execFullTurnA_kconfine {U : List Auth} (hctrl : Auth.control ∈ U)
-    (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U) :
+theorem execFullTurnA_kconfine {U : List Auth} (hctrl : Auth.control ∈ U) :
     ∀ (s s' : RecChainedState) (tt : List FullActionA),
       execFullTurnA s tt = some s' → KConfined U s.kernel → KConfined U s'.kernel
   | s, s', [], h, hpre => by
@@ -847,39 +431,34 @@ theorem execFullTurnA_kconfine {U : List Auth} (hctrl : Auth.control ∈ U)
       | none => rw [ha] at h; exact absurd h (by simp)
       | some s1 =>
           rw [ha] at h
-          obtain ⟨hc, hb⟩ := hpre
-          exact execFullTurnA_kconfine hctrl hgrant hreply s1 s' rest h
-            ⟨execFullA_confine hctrl hgrant hreply s s1 a ha hc hb,
-             execFullA_boxesConfine hctrl hgrant hreply s s1 a ha hc hb⟩
+          exact execFullTurnA_kconfine hctrl s1 s' rest h
+            (execFullA_confine hctrl s s1 a ha hpre)
 
 /-- **`execFullTurnA_confine`** — the caps-half corollary (the headline confinement crown): a committed
 full turn preserves `CapsConfined U`, given the initial kernel is fully `KConfined` (caps + boxes). -/
 theorem execFullTurnA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
-    (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U)
     (s s' : RecChainedState) (tt : List FullActionA)
     (h : execFullTurnA s tt = some s') (hpre : KConfined U s.kernel) :
     CapsConfined U s'.kernel.caps :=
-  (execFullTurnA_kconfine hctrl hgrant hreply s s' tt h hpre).1
+  execFullTurnA_kconfine hctrl s s' tt h hpre
 
 /-- **`execFullForestA_kconfine`** — a committed full forest preserves `KConfined U`. Routes through
 the pre-order bridge `execFullForestA_eq_execFullTurnA` into `execFullTurnA_kconfine`. -/
 theorem execFullForestA_kconfine {U : List Auth} (hctrl : Auth.control ∈ U)
-    (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U)
     (s s' : RecChainedState) (f : FullForestA)
     (h : execFullForestA s f = some s') (hpre : KConfined U s.kernel) :
     KConfined U s'.kernel := by
   rw [execFullForestA_eq_execFullTurnA] at h
-  exact execFullTurnA_kconfine hctrl hgrant hreply s s' (lowerForestA f) h hpre
+  exact execFullTurnA_kconfine hctrl s s' (lowerForestA f) h hpre
 
 /-- **`cellNextA_kconfine` — the one-step obligation.** A single living-cell step preserves `KConfined U`:
 on a commit the forest confinement lemma applies; on a reject the state is unchanged. -/
 theorem cellNextA_kconfine {U : List Auth} (hctrl : Auth.control ∈ U)
-    (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U)
     (s : RecChainedState) (cf : ConservingForest) (hpre : KConfined U s.kernel) :
     KConfined U (cellNextA s cf).kernel := by
   unfold cellNextA
   cases hc : execFullForestA s cf.1 with
-  | some s' => simp only [Option.getD_some]; exact execFullForestA_kconfine hctrl hgrant hreply s s' cf.1 hc hpre
+  | some s' => simp only [Option.getD_some]; exact execFullForestA_kconfine hctrl s s' cf.1 hc hpre
   | none    => simp only [Option.getD_none]; exact hpre
 
 /-! ## Step 5 — `livingCellA_confinement`: confinement carried FOREVER. -/
@@ -897,12 +476,12 @@ fresh seal caps never push conferred authority past the fixed ceiling, for all t
 `cellNextA_confine` is the one-step obligation; `livingCellA_carries` carries it over the entire
 adversarial future. -/
 theorem livingCellA_confinement {U : List Auth} (hctrl : Auth.control ∈ U)
-    (hgrant : Auth.grant ∈ U) (hreply : Auth.reply ∈ U)
     (s : RecChainedState) (hinit : KConfined U s.kernel) (sched : SchedA) :
     ∀ n, CapsConfined U (trajA s sched n).kernel.caps :=
-  -- carry the COMBINED `KConfined` (caps + sealed-box payloads) FOREVER, then project the caps half.
-  fun n => (livingCellA_carries (fun s' => KConfined U s'.kernel)
-    (fun a cf h => cellNextA_kconfine hctrl hgrant hreply a cf h) s hinit sched n).1
+  -- F3 STRENGTHENING: the ceiling needs ONLY `control` — the seal-cluster `grant`/`reply`
+  -- hypotheses died with the sealed-box channel. Carry `KConfined` forever.
+  fun n => livingCellA_carries (fun s' => KConfined U s'.kernel)
+    (fun a cf h => cellNextA_kconfine hctrl a cf h) s hinit sched n
 
 /-! ## It runs (`#eval`) — confinement is non-vacuous on a real grant + a real ceiling.
 
@@ -925,7 +504,6 @@ def fullAuthCeiling : List Auth :=
 #assert_axioms CapsConfined.grant
 #assert_axioms CapsConfined.attenuateSlot
 #assert_axioms execFullA_confine
-#assert_axioms execFullA_boxesConfine
 #assert_axioms execFullForestA_kconfine
 #assert_axioms cellNextA_kconfine
 #assert_axioms livingCellA_confinement
