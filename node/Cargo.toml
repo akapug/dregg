@@ -26,11 +26,16 @@ dregg-persist = { path = "../persist" }
 # differential sibling + fallback.
 dregg-federation = { path = "../federation", features = ["lean-admission"] }
 dregg-sdk = { path = "../sdk" }
-dregg-intent = { path = "../intent" }
+# `verified-settle`: route live ring settlement through the VERIFIED Lean executor FFI
+# (`dregg_record_kernel_step` over the proved `Exec.recKExec`) — a fulfilled intent IS a
+# verified, conserving, authorized executor turn. The node links the archive anyway.
+dregg-intent = { path = "../intent", features = ["verified-settle"] }
 dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit" }
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
-dregg-coord = { path = "../coord" }
+# `lean-gate`: 2PC / causal-order / shared-budget verdicts decided BY the verified Lean rule
+# (the native Rust runs as the differential sibling). The node links the archive anyway.
+dregg-coord = { path = "../coord", features = ["lean-gate"] }
 dregg-net = { path = "../net" }
 dregg-blocklace = { path = "../blocklace" }
 dregg-storage = { path = "../storage" }
