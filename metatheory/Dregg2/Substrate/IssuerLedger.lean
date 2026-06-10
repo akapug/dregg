@@ -316,25 +316,18 @@ private theorem boundUnshield_shape {k k' : RecordKernelState} {nf : Nat} {spent
   | none => rw [hns] at h; exact absurd h (by simp)
   | some k₁ =>
       rw [hns] at h
-      refine ⟨k₁, rfl, ?_, ?_⟩
-      · -- peel the transfer gate, substitute amt = spent.value.
-        unfold recKExecAsset at h
-        by_cases hg : authorizedB k₁.caps
-            { actor := poolOf spent.asset, src := poolOf spent.asset, dst := dst, amt := amt } = true
-            ∧ 0 ≤ amt ∧ amt ≤ k₁.bal (poolOf spent.asset) spent.asset
-            ∧ poolOf spent.asset ≠ dst ∧ poolOf spent.asset ∈ k₁.accounts ∧ dst ∈ k₁.accounts
-        · rw [if_pos hg] at h
-          simp only [Option.some.injEq] at h
-          rw [← h, hamt]
-        · rw [if_neg hg] at h; exact absurd h (by simp)
-      · -- the gate carries `src ≠ dst`.
-        unfold recKExecAsset at h
-        by_cases hg : authorizedB k₁.caps
-            { actor := poolOf spent.asset, src := poolOf spent.asset, dst := dst, amt := amt } = true
-            ∧ 0 ≤ amt ∧ amt ≤ k₁.bal (poolOf spent.asset) spent.asset
-            ∧ poolOf spent.asset ≠ dst ∧ poolOf spent.asset ∈ k₁.accounts ∧ dst ∈ k₁.accounts
-        · exact hg.2.2.2.1
-        · rw [if_neg hg] at h; exact absurd h (by simp)
+      -- peel the transfer gate ONCE; both result fields come from the positive branch.
+      simp only at h
+      unfold recKExecAsset at h
+      by_cases hg : authorizedB k₁.caps
+          { actor := poolOf spent.asset, src := poolOf spent.asset, dst := dst, amt := amt } = true
+          ∧ 0 ≤ amt ∧ amt ≤ k₁.bal (poolOf spent.asset) spent.asset
+          ∧ poolOf spent.asset ≠ dst ∧ poolOf spent.asset ∈ k₁.accounts ∧ dst ∈ k₁.accounts
+      · rw [if_pos hg] at h
+        simp only [Option.some.injEq] at h
+        refine ⟨k₁, rfl, ?_, hg.2.2.2.1⟩
+        rw [← h, hamt]
+      · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- The pool cell's OWN balance after a bound-unshield: down by exactly `spent.value` at
 `spent.asset`. (The pool is the `src` of the transfer, and `poolOf spent.asset ≠ dst`, so the
@@ -385,7 +378,7 @@ theorem boundUnshield_preserves_pool_consistency {k k' : RecordKernelState} {nf 
   intro a
   rcases eq_or_ne a spent.asset with rfl | ha
   · -- the spent asset: pool debited by spent.value, unspent dropped by spent.value.
-    rw [boundUnshield_pool_debit poolOf h, hrem a, if_pos rfl, hpre a]
+    rw [boundUnshield_pool_debit poolOf h, hrem spent.asset, if_pos rfl, hpre spent.asset]
   · -- another asset: both sides untouched.
     rw [hother a ha, hrem a, if_neg ha, sub_zero, hpre a]
 
@@ -396,7 +389,7 @@ PRESERVES `PoolConsistent`: the pool of `nt.asset` is credited by `nt.value` and
 side — both sides keep the pool-balance ↔ unspent-value equation. -/
 theorem boundShield_preserves_pool_consistency {vc : ValueCommitment} {k k' : RecordKernelState}
     {actor src : CellId} {nt : AssetBoundNote} {notes notes' : List AssetBoundNote}
-    (h : boundShieldK poolOf vc k actor src nt = some k')
+    (_h : boundShieldK poolOf vc k actor src nt = some k')
     (hpre : PoolConsistent poolOf k notes)
     -- appending `nt` raises its asset's unspent value by `nt.value`, others unchanged.
     (hadd : ∀ a : AssetId, unspentValue notes' a
@@ -407,7 +400,7 @@ theorem boundShield_preserves_pool_consistency {vc : ValueCommitment} {k k' : Re
     PoolConsistent poolOf k' notes' := by
   intro a
   rcases eq_or_ne a nt.asset with rfl | ha
-  · rw [hcredit, hadd a, if_pos rfl, hpre a]
+  · rw [hcredit, hadd nt.asset, if_pos rfl, hpre nt.asset]
   · rw [hother a ha, hadd a, if_neg ha, add_zero, hpre a]
 
 end Pool
@@ -577,5 +570,3 @@ probe named, here turned into a concrete edit):
   the executor/circuit/wire — at which point every theorem here becomes a live guarantee. -/
 
 end Dregg2.Substrate.IssuerLedger
-</content>
-</invoke>
