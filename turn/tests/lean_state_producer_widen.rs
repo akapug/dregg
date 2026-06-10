@@ -12,15 +12,18 @@
 //!
 //! `cell::Ledger::root()` hashes, per cell, `compute_canonical_state_commitment` =
 //! `(balance, nonce, fields, permissions, verification_key, cap_root, lifecycle, program)`. A
-//! family ROUND-TRIPS iff its post-state touches only commitment fields the `WireState` carries
-//! (balance via `bal`; nonce/fields via the cell record; cap_root via the `caps` side-table when
-//! the caps are bare `node`-shaped edges). A family is a SWAP-GAP iff its Rust post-state touches a
-//! commitment field the wire drops (lifecycle; the full `Permissions`/`VK` struct; the per-cap
-//! slot/breadstuff/facet detail behind `cap_root`).
+//! family ROUND-TRIPS iff its post-state is reconstructible: either the `WireState` carries the
+//! touched field (balance via `bal`; nonce/fields via the cell record), or the dropped value is
+//! TURN/HOST data replayed deterministically onto the template pre-state, gated by the verified
+//! kernel's commit bit (the `lean_apply::CapOp`/`StateOp` lever — cap leaves, lifecycle payloads,
+//! the full `Permissions`/`VK` structs). A family is a SWAP-GAP iff its Rust post-state touches a
+//! commitment field neither carried nor turn-replayable (the audit-field/archive commitments).
 //!
 //! Each ROUND-TRIP test ASSERTS agreement (state + `.root()`). Each SWAP-GAP test ASSERTS the
 //! SPECIFIC divergence (a negative tooth) so the gap is characterized, never silently passing — a
-//! genuine finding surfaced precisely, per the SWAP discipline.
+//! genuine finding surfaced precisely, per the SWAP discipline. Each CLOSED family also carries a
+//! REJECTION tooth: the unauthorized mutation is rejected by BOTH executors and the field does not
+//! move (the replay never fabricates a payload the kernel did not authorize).
 //!
 //! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
 
@@ -238,8 +241,8 @@ fn revoke_on_empty_clist_round_trips() {
     // RevokeCapability of a non-existent slot on an EMPTY c-list is a no-op in Rust (the cap_root
     // stays the empty-set root). The verified `recCRevoke` is TOTAL (always commits, edits the
     // revocation registry, not the cell c-list). So both commit and the cell c-list / cap_root are
-    // unchanged on both sides — the reconstituted ledger agrees. (A revoke that actually drops a
-    // held cap is exercised — and shown to be a gap — by `grant_capability_is_a_swap_gap`.)
+    // unchanged on both sides — the reconstituted ledger agrees. (A c-list that actually carries a
+    // held cap is exercised by `grant_capability_round_trips_cap_fidelity_closed`.)
     let a = make_open_cell(1, 100);
     let a_id = a.id();
     let mut pre = Ledger::new();
@@ -303,21 +306,22 @@ fn two_effect_forest_round_trips() {
 }
 
 // =====================================================================================
-// SWAP-GAP FAMILIES — the wire model is LOSSIER than the cell commitment, so the
-// reconstituted `.root()` CANNOT match Rust. Each asserts the SPECIFIC divergence
-// (a negative tooth): a real finding, characterized, not papered over.
+// LIFECYCLE FAMILY — the seal/destroy payload close (turn+host replay) + the unseal
+// discriminant close, each with its unauthorized-rejection tooth.
 // =====================================================================================
 
 #[test]
-fn cell_seal_is_a_lifecycle_swap_gap() {
+fn cell_seal_round_trips_lifecycle_closed() {
     if skip_no_lean() {
         return;
     }
-    // CellSeal transitions the cell's `lifecycle` Live → Sealed in Rust → the canonical state
-    // commitment (which binds lifecycle) changes → `.root()` changes. The verified `WireState` has
-    // NO lifecycle field, so the reconstitution carries the template `Live` lifecycle forward
-    // unchanged. The two ledgers therefore diverge on `.root()` (Rust=Sealed-commitment,
-    // Lean=Live-commitment). We ASSERT that exact root divergence so the gap is pinned.
+    // LIFECYCLE ROOT-GAP CLOSE. CellSeal transitions Live → `Sealed { reason_hash, sealed_at }` —
+    // a commitment-bound PAYLOAD the wire's bare lifecycle discriminant cannot carry. But the
+    // payload is TURN data (`reason`) + HOST data (`block_height` stamps `sealed_at`): the verified
+    // `cellSealA` decides the commit, and the commit-gated replay (`lean_apply::apply_state_ops`)
+    // runs the SAME `Cell::seal(reason, block_height)` as `apply_cell_seal`. With a NON-zero
+    // `reason` the round-trip is non-vacuous: a discriminant-only reconstitution (the old gap)
+    // would diverge on the payload bytes the commitment's lifecycle fold binds.
     let a = make_open_cell(1, 100);
     let a_id = a.id();
     let mut pre = Ledger::new();
@@ -326,39 +330,79 @@ fn cell_seal_is_a_lifecycle_swap_gap() {
     let turn =
         single_effect_turn(a_id, a_id, 0, Effect::CellSeal { target: a_id, reason: [9u8; 32] });
 
-    // Confirm Rust really did change the lifecycle (so the gap is about lifecycle, not a no-commit).
+    // Confirm Rust really sealed with the full payload (so the close is about the payload bytes).
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut rust_ledger = pre.clone();
     assert!(executor.execute(&turn, &mut rust_ledger).is_committed(), "Rust CellSeal should commit");
     assert!(
-        matches!(rust_ledger.get(&a_id).unwrap().lifecycle, CellLifecycle::Sealed { .. }),
-        "Rust must have sealed the cell"
+        matches!(
+            rust_ledger.get(&a_id).unwrap().lifecycle,
+            CellLifecycle::Sealed { reason_hash, .. } if reason_hash == [9u8; 32]
+        ),
+        "Rust must have sealed the cell with the turn's reason hash"
     );
 
-    match diff(pre, turn, &[a_id]) {
-        Ok(()) => panic!(
-            "CellSeal unexpectedly round-tripped — the lifecycle swap-gap may have closed; \
-             update this characterization (the wire would now carry lifecycle)"
-        ),
-        Err(why) => {
-            assert!(
-                why.contains("ROOT divergence"),
-                "CellSeal swap-gap should manifest as a ROOT divergence (lifecycle dropped by the \
-                 wire), but the divergence was: {why}"
-            );
-        }
-    }
+    diff(pre, turn, &[a_id])
+        .expect("CellSeal must round-trip (lifecycle root-gap closed via the seal-payload replay)");
 }
 
 #[test]
-fn cell_destroy_is_a_lifecycle_swap_gap() {
+fn unauthorized_cross_cell_seal_rejected_by_both() {
     if skip_no_lean() {
         return;
     }
-    // CellDestroy transitions lifecycle → Destroyed (binding the death-cert hash) in Rust → root
-    // changes; the wire drops lifecycle → reconstitution keeps Live → root diverges. Same gap class
-    // as CellSeal, asserted on a distinct lifecycle target so a future lifecycle-carrying wire would
-    // need to close BOTH.
+    // NON-VACUOUS TOOTH for the lifecycle close: a CROSS-CELL seal (effect target ≠ action target)
+    // is rejected by Rust (`apply_cell_seal`'s structural `target == action_target` guard) AND by
+    // the verified gate (`cellSealA`: `stateAuthB actor cell` fails — the actor holds no edge to
+    // the foreign cell). The collector does not even gather a replay op for it (the structural
+    // guard is mirrored), so the lifecycle does not move on EITHER side and the reconstituted
+    // ledger equals the Rust rollback — no fabricated Sealed payload.
+    let a = make_open_cell(1, 100);
+    let a_id = a.id();
+    let b = make_open_cell(2, 5);
+    let b_id = b.id();
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+    pre.insert_cell(b).unwrap();
+
+    // Action targets A, but the seal aims at B — the unauthorized cross-cell mutation.
+    let turn =
+        single_effect_turn(a_id, a_id, 0, Effect::CellSeal { target: b_id, reason: [9u8; 32] });
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = pre.clone();
+    assert!(
+        !executor.execute(&turn, &mut rust_ledger).is_committed(),
+        "Rust must REJECT a cross-cell seal"
+    );
+    assert!(
+        matches!(rust_ledger.get(&b_id).unwrap().lifecycle, CellLifecycle::Live),
+        "the rejected seal must not move B's lifecycle"
+    );
+
+    let host = ShadowHostCtx::diag();
+    let (mut lean_ledger, lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert!(!lean_committed, "the verified gate must also REJECT the cross-cell seal");
+    assert!(
+        matches!(lean_ledger.get(&b_id).unwrap().lifecycle, CellLifecycle::Live),
+        "the reconstituted ledger must not carry a fabricated Sealed payload"
+    );
+    ledgers_agree(&mut rust_ledger, &mut lean_ledger, &[a_id, b_id])
+        .expect("a rejected seal leaves both ledgers at the (rolled-back) pre-state");
+}
+
+#[test]
+fn cell_destroy_round_trips_lifecycle_closed() {
+    if skip_no_lean() {
+        return;
+    }
+    // LIFECYCLE ROOT-GAP CLOSE for the terminal transition. CellDestroy installs
+    // `Destroyed { death_certificate_hash, destroyed_at }` — BOTH derived from the turn's FULL
+    // `DeathCertificate` (`certificate_hash()` over all five fields / `destroyed_at_height`). The
+    // wire `death_cert` table carries only the LOW 64 BITS of the hash, so this round-trip is the
+    // proof the replay uses the full turn-supplied certificate, not the lossy wire value: the
+    // commitment's lifecycle fold binds all 32 hash bytes, and `.root()` equality is asserted.
     let a = make_open_cell(1, 100);
     let a_id = a.id();
     let mut pre = Ledger::new();
@@ -366,11 +410,12 @@ fn cell_destroy_is_a_lifecycle_swap_gap() {
 
     let cert = DeathCertificate {
         cell_id: a_id,
-        last_receipt_hash: [0u8; 32],
-        final_state_commitment: [0u8; 32],
-        destroyed_at_height: 0,
+        last_receipt_hash: [3u8; 32],
+        final_state_commitment: [5u8; 32],
+        destroyed_at_height: 42,
         reason: DeathReason::Voluntary,
     };
+    let expected_hash = cert.certificate_hash();
     let turn = single_effect_turn(
         a_id,
         a_id,
@@ -385,19 +430,69 @@ fn cell_destroy_is_a_lifecycle_swap_gap() {
         "Rust CellDestroy should commit"
     );
     assert!(
-        matches!(rust_ledger.get(&a_id).unwrap().lifecycle, CellLifecycle::Destroyed { .. }),
-        "Rust must have destroyed the cell"
+        matches!(
+            rust_ledger.get(&a_id).unwrap().lifecycle,
+            CellLifecycle::Destroyed { death_certificate_hash, destroyed_at: 42 }
+                if death_certificate_hash == expected_hash
+        ),
+        "Rust must have destroyed the cell binding the FULL certificate hash + height"
     );
 
-    match diff(pre, turn, &[a_id]) {
-        Ok(()) => panic!(
-            "CellDestroy unexpectedly round-tripped — the lifecycle swap-gap may have closed"
-        ),
-        Err(why) => assert!(
-            why.contains("ROOT divergence"),
-            "CellDestroy swap-gap should be a ROOT divergence (lifecycle dropped), got: {why}"
-        ),
+    diff(pre, turn, &[a_id]).expect(
+        "CellDestroy must round-trip (lifecycle root-gap closed via the full-certificate replay)",
+    );
+}
+
+#[test]
+fn unauthorized_cross_cell_destroy_rejected_by_both() {
+    if skip_no_lean() {
+        return;
     }
+    // NON-VACUOUS TOOTH for the destroy close: a CROSS-CELL destroy is rejected by Rust
+    // (`apply_cell_destroy`'s structural guard) and by the verified `cellDestroyA` gate
+    // (`stateAuthB` fails for the foreign cell). No replay op is collected; the target stays Live
+    // on both sides and the reconstitution equals the Rust rollback — a forged destroy cannot
+    // fabricate a Destroyed commitment.
+    let a = make_open_cell(1, 100);
+    let a_id = a.id();
+    let b = make_open_cell(2, 5);
+    let b_id = b.id();
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+    pre.insert_cell(b).unwrap();
+
+    let cert = DeathCertificate {
+        cell_id: b_id,
+        last_receipt_hash: [0u8; 32],
+        final_state_commitment: [0u8; 32],
+        destroyed_at_height: 0,
+        reason: DeathReason::Forced,
+    };
+    // Action targets A; the destroy aims at B.
+    let turn = single_effect_turn(
+        a_id,
+        a_id,
+        0,
+        Effect::CellDestroy { target: b_id, certificate: cert },
+    );
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = pre.clone();
+    assert!(
+        !executor.execute(&turn, &mut rust_ledger).is_committed(),
+        "Rust must REJECT a cross-cell destroy"
+    );
+
+    let host = ShadowHostCtx::diag();
+    let (mut lean_ledger, lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert!(!lean_committed, "the verified gate must also REJECT the cross-cell destroy");
+    assert!(
+        matches!(lean_ledger.get(&b_id).unwrap().lifecycle, CellLifecycle::Live),
+        "the reconstituted ledger must not carry a fabricated Destroyed commitment"
+    );
+    ledgers_agree(&mut rust_ledger, &mut lean_ledger, &[a_id, b_id])
+        .expect("a rejected destroy leaves both ledgers at the (rolled-back) pre-state");
 }
 
 #[test]

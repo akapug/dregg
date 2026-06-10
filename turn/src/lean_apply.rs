@@ -42,17 +42,30 @@
 //!   * `nonce`, `fields[0..8]` (the cell record) — SetField / IncrementNonce;
 //!   * `cap_root` (via the `caps` side-table → [`rebuild_capabilities`]) — best-effort, lossy.
 //!
-//! The `WireState` does NOT carry, and the reconstitution therefore CANNOT reproduce against a
-//! mutated Rust post-state (these are genuine SWAP-GAPS, surfaced by the differential, NOT hidden):
-//!   * **`lifecycle`** — the wire cell record has no lifecycle field. CellSeal / CellUnseal /
-//!     CellDestroy mutate `lifecycle` in Rust → `.root()` diverges. The reconstitution carries the
-//!     template lifecycle FORWARD (unchanged), so the divergence is exact and detectable.
-//!   * **`permissions`** — the wire `setperms` arm carries a collapsed scalar; the produced
-//!     `WireState` does not echo the full `Permissions` struct, so SetPermissions diverges.
-//!   * **`verification_key`** — likewise, `setvk` carries a collapsed scalar.
+//! The `WireState` does NOT carry several commitment-bound payloads — but for the SURVIVOR effects
+//! whose payload comes from the TURN or the HOST (not from kernel state), the reconstitution
+//! replays the exact deterministic mutation onto the template pre-state, GATED by the verified
+//! kernel's commit decision (the same lever for all of them, see [`CapOp`] and [`StateOp`]):
+//!   * **`lifecycle`** — the wire `lifecycle` table carries the DISCRIMINANT only; the Rust
+//!     commitment binds the Sealed/Destroyed PAYLOAD (`reason_hash`/`sealed_at`,
+//!     `death_certificate_hash`/`destroyed_at`). Those payloads are turn (`CellSeal { reason }`,
+//!     the `CellDestroy` certificate) + host (`block_height`) data, so [`apply_state_ops`] replays
+//!     `Cell::seal`/`Cell::unseal`/`Cell::destroy` byte-for-byte → CLOSED.
+//!   * **`permissions`** / **`verification_key`** — the wire `setperms`/`setvk` arms carry a
+//!     collapsed scalar; the full struct is turn-supplied, so the replay installs it exactly
+//!     (`apply_set_permissions` / `apply_set_verification_key` mirrors) → CLOSED.
+//!   * **MakeSovereign** — the verified `sovereignRebind` re-emits the cell as a commitment-only
+//!     record (no readable scalars); Rust REMOVES the cell from `Ledger::cells`. The replay calls
+//!     `Ledger::make_sovereign` on the reconstituted ledger (the same structural removal +
+//!     `sovereign_commitments` insert) → CLOSED.
+//!   * **RevokeDelegation** — a committing revoke bumps the PARENT's `delegation_epoch` and clears
+//!     the CHILD's `delegation` snapshot (both commitment-bound); neither crosses the wire, but the
+//!     mutation is fully deterministic from the turn (`bump_delegation_epoch` + `delegation = None`)
+//!     → CLOSED.
 //!   * **cap fidelity** — the wire `caps` model is `(target[, rights])` per edge; the Rust
-//!     `cap_root` hashes `(target, slot, permissions, breadstuff, expires_at, allowed_effects)`, so
-//!     a real GrantCapability's `cap_root` diverges (see [`rebuild_capabilities`]).
+//!     `cap_root` hashes `(target, slot, permissions, breadstuff, expires_at, allowed_effects)`. A
+//!     GrantCapability/Introduce/AttenuateCapability leaf is reconstructed exactly by
+//!     [`apply_cap_ops`] (see [`rebuild_capabilities`] for the lossy edge-only fallback).
 //!
 //! Off-cell-commitment side-tables — escrows, queues, swiss, nullifiers, commitments — do NOT feed
 //! `cell::Ledger::root()` at all (the Rust `TurnExecutor` keeps them OUTSIDE the `Ledger`), so an
@@ -64,8 +77,9 @@
 use std::collections::HashMap;
 
 use dregg_cell::capability::CapabilityRef;
+use dregg_cell::lifecycle::DeathCertificate;
 use dregg_cell::permissions::AuthRequired;
-use dregg_cell::{Cell, CellId, Ledger};
+use dregg_cell::{Cell, CellId, Ledger, Permissions, VerificationKey};
 use dregg_lean_ffi::marshal::{Cap, WireState, WireValue};
 
 use crate::action::Effect;
@@ -183,6 +197,138 @@ fn collect_cap_ops(turn: &Turn, intro_expiry: u64) -> Vec<CapOp> {
     let mut out = Vec::new();
     for r in &turn.call_forest.roots {
         walk(r, intro_expiry, &mut out);
+    }
+    out
+}
+
+/// A deterministic non-cap commitment-field mutation a committed turn applies to a cell — the
+/// SURVIVOR-effect root-gap close (the same lever as [`CapOp`], extended to four more families).
+///
+/// # The lever
+///
+/// For each of these effects the value the wire model DROPS is not kernel state — it comes from
+/// the TURN (`CellSeal { reason }`, the `CellDestroy` certificate, the full `Permissions` /
+/// `VerificationKey` structs) or the HOST (`block_height` stamps `sealed_at`), or it is a fully
+/// deterministic structural move (`MakeSovereign`'s removal, `RevokeDelegation`'s epoch bump).
+/// The verified kernel DECIDES the commit bit; when it committed, we replay the exact mutation the
+/// Rust arm performs onto the template (pre-state) cell, byte-for-byte with `executor::apply`:
+///
+///   * `Seal`    → `Cell::seal(reason_hash, sealed_at)`        (apply.rs `apply_cell_seal`)
+///   * `Unseal`  → `Cell::unseal()`                            (apply.rs `apply_cell_unseal`;
+///     collected so a seal→unseal SEQUENCE within one turn replays in forest order)
+///   * `Destroy` → `Cell::destroy(&certificate)`               (apply.rs `apply_cell_destroy`;
+///     the FULL turn-supplied certificate — the wire `death_cert` table carries only the low 64
+///     bits of the hash, which the replay deliberately does NOT use)
+///   * `SetPermissions`     → `cell.permissions = new_permissions` (apply.rs `apply_set_permissions`)
+///   * `SetVerificationKey` → `cell.verification_key = new_vk`     (apply.rs
+///     `apply_set_verification_key`, including its blake3 integrity refusal)
+///   * `MakeSovereign`      → `Ledger::make_sovereign(cell)`       (apply.rs `apply_make_sovereign`;
+///     replayed at ledger-build time — the removal is structural, not per-cell)
+///   * `RevokeDelegation`   → parent `bump_delegation_epoch()` + child `delegation = None`
+///     (apply.rs `apply_revoke_delegation`)
+///
+/// Only applied when the kernel COMMITTED — a rejected turn leaves every field at its pre-state
+/// (matching the Rust rollback), which is the non-vacuous tooth: an unauthorized seal/destroy/
+/// setperm is rejected by BOTH executors and the field does not move.
+#[derive(Debug, Clone)]
+pub enum StateOp {
+    /// `CellSeal { target, reason }` — Live/Archived → `Sealed { reason_hash, sealed_at }`.
+    /// `reason_hash` is the turn's `reason`; `sealed_at` is the HOST block height (the value
+    /// `apply_cell_seal` stamps via `self.block_height`).
+    Seal { target: CellId, reason_hash: [u8; 32], sealed_at: u64 },
+    /// `CellUnseal { target }` — Sealed → Live (payload-free; collected so lifecycle sequences
+    /// replay in the executor's forest order).
+    Unseal { target: CellId },
+    /// `CellDestroy { target, certificate }` — any non-terminal → `Destroyed { hash, at }`, both
+    /// derived from the FULL turn-supplied certificate (`certificate_hash()` /
+    /// `destroyed_at_height`), never the lossy low-64 wire value.
+    Destroy { target: CellId, certificate: DeathCertificate },
+    /// `SetPermissions { cell, new_permissions }` — install the full turn-supplied 8-field struct.
+    SetPermissions { cell: CellId, new_permissions: Permissions },
+    /// `SetVerificationKey { cell, new_vk }` — install the turn-supplied VK (or clear it).
+    SetVerificationKey { cell: CellId, new_vk: Option<VerificationKey> },
+    /// `MakeSovereign { cell }` — remove the cell from `Ledger::cells` and park its state
+    /// commitment in `sovereign_commitments` (the structural ledger move).
+    MakeSovereign { cell: CellId },
+    /// `RevokeDelegation { child }` — bump the PARENT (= the action target) `delegation_epoch`
+    /// and clear the child's `delegation` snapshot.
+    RevokeDelegation { parent: CellId, child: CellId },
+}
+
+impl StateOp {
+    /// The cells whose commitment fields this op edits (both parent and child for a revoke).
+    fn touched(&self) -> Vec<CellId> {
+        match self {
+            StateOp::Seal { target, .. }
+            | StateOp::Unseal { target }
+            | StateOp::Destroy { target, .. } => vec![*target],
+            StateOp::SetPermissions { cell, .. }
+            | StateOp::SetVerificationKey { cell, .. }
+            | StateOp::MakeSovereign { cell } => vec![*cell],
+            StateOp::RevokeDelegation { parent, child } => vec![*parent, *child],
+        }
+    }
+}
+
+/// Collect the deterministic non-cap commitment-field mutations every SURVIVOR effect in `turn`
+/// performs (see [`StateOp`]). `seal_height` is the host block height (`ShadowHostCtx.block_height`
+/// = the executor's `self.block_height`), the value `apply_cell_seal` stamps as `sealed_at`.
+///
+/// Walked in forest order so the replay matches the executor's left-to-right effect order (a
+/// seal→unseal sequence is order-sensitive). The lifecycle/sovereign arms in `executor::apply`
+/// carry a STRUCTURAL guard (`target == action_target` — a cross-cell lifecycle/sovereign mutation
+/// is rejected before any state moves), so an effect violating it is NOT collected: Rust rolls the
+/// turn back, and if the verified kernel nevertheless commits, the commit-bit mismatch surfaces as
+/// a `CoveredDivergence` (conservative, keeps Rust) rather than a fabricated replay.
+fn collect_state_ops(turn: &Turn, seal_height: u64) -> Vec<StateOp> {
+    fn walk(tree: &CallTree, seal_height: u64, out: &mut Vec<StateOp>) {
+        let action_target = tree.action.target;
+        for eff in &tree.action.effects {
+            match eff {
+                Effect::CellSeal { target, reason } if *target == action_target => {
+                    out.push(StateOp::Seal {
+                        target: *target,
+                        reason_hash: *reason,
+                        sealed_at: seal_height,
+                    });
+                }
+                Effect::CellUnseal { target } if *target == action_target => {
+                    out.push(StateOp::Unseal { target: *target });
+                }
+                Effect::CellDestroy { target, certificate } if *target == action_target => {
+                    out.push(StateOp::Destroy {
+                        target: *target,
+                        certificate: certificate.clone(),
+                    });
+                }
+                Effect::SetPermissions { cell, new_permissions } => {
+                    out.push(StateOp::SetPermissions {
+                        cell: *cell,
+                        new_permissions: new_permissions.clone(),
+                    });
+                }
+                Effect::SetVerificationKey { cell, new_vk } => {
+                    out.push(StateOp::SetVerificationKey {
+                        cell: *cell,
+                        new_vk: new_vk.clone(),
+                    });
+                }
+                Effect::MakeSovereign { cell } if *cell == action_target => {
+                    out.push(StateOp::MakeSovereign { cell: *cell });
+                }
+                Effect::RevokeDelegation { child } => {
+                    out.push(StateOp::RevokeDelegation { parent: action_target, child: *child });
+                }
+                _ => {}
+            }
+        }
+        for c in &tree.children {
+            walk(c, seal_height, out);
+        }
+    }
+    let mut out = Vec::new();
+    for r in &turn.call_forest.roots {
+        walk(r, seal_height, &mut out);
     }
     out
 }
@@ -414,6 +560,131 @@ fn apply_cap_ops(
     Ok(())
 }
 
+/// Replay the committed turn's non-cap commitment-field mutations onto the reconstituted ledger
+/// (the SURVIVOR-effect root-gap close, see [`StateOp`]). The per-cell half of the lever:
+/// lifecycle (seal/unseal/destroy), permissions, verification key, and the revoke epoch bump are
+/// replayed here; the structural `MakeSovereign` removal is replayed at ledger-build time by
+/// [`wire_state_to_ledger`] (it edits the cell SET, not a cell).
+///
+/// Like [`apply_cap_ops`], each touched cell's working state is seeded from the already-produced
+/// cell (so balances/nonces/fields the verified executor produced survive) or the template, and its
+/// c-list is RESET to the exact template (pre-state) c-list: none of these Rust arms edits the
+/// c-list, but the verified kernel may (`revokeDelegationA` is the cap-graph `removeEdge`) and the
+/// wire-edge rebuild is lossy — the template carries the true bytes. Runs BEFORE [`apply_cap_ops`]
+/// so a same-turn cap mutation still lands on top.
+///
+/// Applied ONLY when `committed`; mutations whose Rust arm would REFUSE (seal on a terminal cell,
+/// a mis-bound VK, a revoke of a non-delegated child, an epoch overflow) are skipped rather than
+/// fabricated — Rust rolled the turn back, so the commit bits differ and the divergence surfaces
+/// as a `CoveredDivergence` (conservative, keeps Rust), never a silently-installed forgery.
+fn apply_state_ops(
+    out_cells: &mut HashMap<CellId, Cell>,
+    template: &Ledger,
+    state_ops: &[StateOp],
+    committed: bool,
+) -> Result<(), ExtractError> {
+    if !committed || state_ops.is_empty() {
+        return Ok(());
+    }
+    // Seed each touched cell's working state; reset its c-list to the EXACT pre-state (see above).
+    let mut touched: std::collections::HashSet<CellId> = std::collections::HashSet::new();
+    for op in state_ops {
+        for cell_id in op.touched() {
+            if touched.insert(cell_id) {
+                if !out_cells.contains_key(&cell_id) {
+                    let cell = template
+                        .get(&cell_id)
+                        .cloned()
+                        .ok_or(ExtractError::NoTemplateCell { nat: u64::MAX, cell: cell_id })?;
+                    out_cells.insert(cell_id, cell);
+                }
+                let template_caps = template
+                    .get(&cell_id)
+                    .map(|c| c.capabilities.clone())
+                    .unwrap_or_default();
+                if let Some(cell) = out_cells.get_mut(&cell_id) {
+                    cell.capabilities = template_caps;
+                }
+            }
+        }
+    }
+    // Replay the mutations in forest order, mirroring the `executor::apply` arms byte-for-byte.
+    for op in state_ops {
+        match op {
+            StateOp::Seal { target, reason_hash, sealed_at } => {
+                if let Some(cell) = out_cells.get_mut(target) {
+                    // `apply_cell_seal` → `c.seal(reason, self.block_height)`; a refused
+                    // transition (already sealed / terminal) made Rust roll back — skip.
+                    let _ = cell.seal(*reason_hash, *sealed_at);
+                }
+            }
+            StateOp::Unseal { target } => {
+                if let Some(cell) = out_cells.get_mut(target) {
+                    // `apply_cell_unseal` → `c.unseal()`; refused (not sealed) ⇒ Rust rolled back.
+                    let _ = cell.unseal();
+                }
+            }
+            StateOp::Destroy { target, certificate } => {
+                if let Some(cell) = out_cells.get_mut(target) {
+                    // `apply_cell_destroy` → `c.destroy(certificate)`. `Cell::destroy` itself
+                    // checks `certificate.cell_id == self.id` and binds the FULL
+                    // `certificate_hash()` + `destroyed_at_height` — the same code path Rust runs.
+                    let _ = cell.destroy(certificate);
+                }
+            }
+            StateOp::SetPermissions { cell, new_permissions } => {
+                if let Some(c) = out_cells.get_mut(cell) {
+                    // `apply_set_permissions` → `c.permissions = new_permissions.clone()`. The
+                    // cross-cell authority legs (`check_cross_cell_permission`) are commit-bit
+                    // legs: the verified `stateAuthB` gate decides; a Rust-only refusal surfaces
+                    // as a commit-bit divergence, never a replayed write.
+                    c.permissions = new_permissions.clone();
+                }
+            }
+            StateOp::SetVerificationKey { cell, new_vk } => {
+                // `apply_set_verification_key` REJECTS a VK whose declared `hash` is not
+                // `blake3(data)` (audit P0 #69) — mirror the refusal: never install a mis-bound
+                // VK into the reconstituted ledger (Rust rolled back; commit bits diverge).
+                if let Some(vk) = new_vk {
+                    if *blake3::hash(&vk.data).as_bytes() != vk.hash {
+                        continue;
+                    }
+                }
+                if let Some(c) = out_cells.get_mut(cell) {
+                    c.verification_key = new_vk.clone();
+                }
+            }
+            // Structural — replayed at ledger-build time (`wire_state_to_ledger`).
+            StateOp::MakeSovereign { .. } => {}
+            StateOp::RevokeDelegation { parent, child } => {
+                // `apply_revoke_delegation`: gate on the PRE-STATE delegation edge
+                // (`child.delegate == Some(parent)`), then bump the parent's `delegation_epoch`
+                // (refusing on overflow — Rust returns NonceOverflow and rolls back) and clear
+                // the child's `delegation` snapshot. The parent's `delegate` pointer and the
+                // child's `delegate` pointer are NOT touched (Rust leaves both).
+                let edge_held = template
+                    .get(child)
+                    .map(|c| c.delegate == Some(*parent))
+                    .unwrap_or(false);
+                if !edge_held {
+                    continue; // Rust rejects (DelegationDenied) — no field moves.
+                }
+                let bumped = out_cells
+                    .get_mut(parent)
+                    .map(|p| p.state.bump_delegation_epoch())
+                    .unwrap_or(false);
+                if !bumped {
+                    continue; // epoch overflow — Rust rejects (NonceOverflow), rolls back.
+                }
+                if let Some(c) = out_cells.get_mut(child) {
+                    c.delegation = None;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// THE EXTRACTOR. Reconstitute a `cell::Ledger` from a verified-executor-produced `WireState`.
 ///
 /// `inv_id_map` inverts the pre-state Nat labelling; `template` is the pre-state ledger whose cells
@@ -424,7 +695,9 @@ fn apply_cap_ops(
 /// `cap_ops` are the deterministic cap mutations the committed turn performs (see [`CapOp`]); when
 /// `committed`, [`apply_cap_ops`] replays them onto the touched holders' EXACT pre-state c-lists so
 /// `cap_root` is byte-exact (the cap-fidelity root-gap close), overriding the lossy wire-edge
-/// rebuild for those holders.
+/// rebuild for those holders. `state_ops` are the non-cap commitment-field mutations (see
+/// [`StateOp`]): lifecycle/permissions/vk/revoke-epoch replay per-cell ([`apply_state_ops`]);
+/// the `MakeSovereign` structural removal replays here at ledger-build time.
 ///
 /// Cells present in the template but ABSENT from the produced state (the verified executor left
 /// them out of its output cell list) are carried forward UNCHANGED — the kernel's `cellsOfState`
@@ -434,10 +707,28 @@ pub fn wire_state_to_ledger(
     inv_id_map: &HashMap<u64, CellId>,
     template: &Ledger,
     cap_ops: &[CapOp],
+    state_ops: &[StateOp],
     committed: bool,
 ) -> Result<Ledger, ExtractError> {
     let mut produced_ids = std::collections::HashSet::new();
     let mut out_cells: HashMap<CellId, Cell> = HashMap::new();
+
+    // The cells a COMMITTED MakeSovereign rebinds. The verified `sovereignRebind` re-emits the
+    // target as a commitment-ONLY record (`[(commitmentField, .dig …)]` — no readable
+    // `balance`/`nonce` Ints), so the cells loop below must SKIP its record rather than fail-close
+    // on the missing scalars; the cell is removed from the ledger at build time anyway (the
+    // `Ledger::make_sovereign` replay), exactly as `apply_make_sovereign` removes it.
+    let sovereign_removed: std::collections::HashSet<CellId> = if committed {
+        state_ops
+            .iter()
+            .filter_map(|op| match op {
+                StateOp::MakeSovereign { cell } => Some(*cell),
+                _ => None,
+            })
+            .collect()
+    } else {
+        Default::default()
+    };
 
     // The CANONICAL asset-0 balance lives in the per-asset `bal` side-table, NOT the cell record's
     // `balance` field — the verified Transfer (`bal` action) mutates `recKExecAsset`'s `bal` map and
@@ -466,15 +757,15 @@ pub fn wire_state_to_ledger(
     // folds the cell's `lifecycle` in, so for the Lean-produced `.root()` to equal Rust's we must
     // install the produced discriminant onto the reconstituted cell.
     //
-    // BYTE-FIDELITY (the honest boundary): only `CellLifecycle::Live` has NO payload, so it is the
-    // ONLY discriminant we can reconstitute BYTE-EXACTLY from the wire (which carries the discriminant
-    // alone, not `reason_hash`/`sealed_at`/`destroyed_at`). A produced `Live` therefore round-trips
-    // and AGREES on `.root()` — this is what makes `CellUnseal` (Sealed→Live) root-AGREEING. A
-    // produced Sealed(1)/Destroyed(3) carries a payload the wire does NOT (yet) carry, so we CANNOT
-    // reproduce the Rust commitment bytes; those cells keep the TEMPLATE lifecycle and the divergence
-    // is exact and detectable (`CellSeal`/`CellDestroy` stay characterized root-gaps, kept off the
-    // install gate by `forest_is_root_agreeing`). We install Live (clearing a stale template Sealed);
-    // we do NOT fabricate a Sealed/Destroyed payload we cannot bind.
+    // BYTE-FIDELITY: only `CellLifecycle::Live` has NO payload, so it is the only discriminant the
+    // WIRE alone reconstitutes byte-exactly (it carries the discriminant, not
+    // `reason_hash`/`sealed_at`/`destroyed_at`). A produced `Live` is installed directly. A
+    // produced Sealed(1)/Destroyed(3) keeps the TEMPLATE lifecycle HERE — its full payload is then
+    // replayed from the TURN+HOST data by [`apply_state_ops`] (the lifecycle root-gap close:
+    // `Cell::seal(reason, block_height)` / `Cell::destroy(certificate)` on the kernel's committed
+    // decision), so the commitment bytes match Rust's without fabricating an unbound payload. A
+    // non-zero disc with NO collected lifecycle op (a pre-state Sealed/Destroyed cell the turn did
+    // not transition) correctly keeps the template payload.
     let mut lifecycle_disc_by_nat: HashMap<u64, u64> = HashMap::new();
     for (cell_nat, disc) in &ws.lifecycle {
         lifecycle_disc_by_nat.insert(*cell_nat, *disc);
@@ -484,6 +775,11 @@ pub fn wire_state_to_ledger(
         let cell_id = *inv_id_map
             .get(nat)
             .ok_or(ExtractError::UnknownCellNat(*nat))?;
+        // A committed-MakeSovereign target's record is the commitment-only rebind (no readable
+        // scalars) — skip it; the `make_sovereign` replay below removes the cell structurally.
+        if sovereign_removed.contains(&cell_id) {
+            continue;
+        }
         produced_ids.insert(cell_id);
 
         // Start from the pre-state template so identity/permissions/c-list/program survive.
@@ -522,16 +818,15 @@ pub fn wire_state_to_ledger(
 
         // Install the produced LIFECYCLE discriminant (→ the cell commitment's `lifecycle` fold).
         // The wire carries the discriminant ONLY; `CellLifecycle::Live` (absent ⇒ disc 0) is the
-        // single payload-free state, so we reconstitute it byte-exactly — this closes `CellUnseal`
-        // (Sealed→Live) to root-AGREEING. A produced Sealed(1)/Destroyed(3) carries a
-        // `reason_hash`/`sealed_at` / `death_certificate_hash`/`destroyed_at` payload the wire does
-        // NOT carry, so we leave the TEMPLATE lifecycle (the exact, detectable divergence that keeps
-        // `CellSeal`/`CellDestroy` characterized root-gaps); we never fabricate an unbound payload.
+        // single payload-free state, so we reconstitute it byte-exactly (CellUnseal: Sealed→Live).
+        // A produced Sealed(1)/Destroyed(3) keeps the TEMPLATE lifecycle here; the full payload —
+        // turn `reason`/certificate + host `block_height` — is replayed by `apply_state_ops`
+        // below (the CellSeal/CellDestroy root-gap close), never fabricated from the bare disc.
         match lifecycle_disc_by_nat.get(nat).copied() {
             None | Some(0) => {
                 cell.lifecycle = dregg_cell::lifecycle::CellLifecycle::Live;
             }
-            Some(_) => { /* Sealed/Destroyed payload not wire-carried — keep template (gap). */ }
+            Some(_) => { /* payload not wire-carried — template now, state-op replay below. */ }
         }
 
         out_cells.insert(cell_id, cell);
@@ -559,6 +854,11 @@ pub fn wire_state_to_ledger(
         out_cells.insert(cell_id, cell);
     }
 
+    // SURVIVOR-EFFECT ROOT-GAP CLOSE: replay the committed turn's lifecycle/permissions/vk/
+    // revoke-epoch mutations onto the touched cells' template pre-state. Runs BEFORE the cap
+    // replay so a same-turn cap mutation still lands on top of the state-op's c-list reset.
+    apply_state_ops(&mut out_cells, template, state_ops, committed)?;
+
     // CAP-FIDELITY ROOT-GAP CLOSE: replay the committed turn's Grant/Introduce/Attenuate mutations
     // onto the touched holders' EXACT pre-state c-lists, overriding the lossy wire-edge rebuild so
     // each touched cell's `cap_root` is byte-exact with the Rust producer's.
@@ -567,21 +867,36 @@ pub fn wire_state_to_ledger(
         produced_ids.insert(op.holder());
     }
 
-    // Reconstitute the ledger: produced cells (edited) + template cells the executor did not list
-    // (carried unchanged, since the kernel only re-emits the cells it was handed).
-    let mut ledger = Ledger::new();
-    for (id, cell) in template.iter() {
-        if let Some(produced) = out_cells.get(id) {
-            let _ = ledger.insert_cell(produced.clone());
+    // Reconstitute the ledger: start from a CLONE of the template (so off-merkle-root ledger state
+    // — `sovereign_commitments`, witness sequences, registrations — survives the swap, exactly as
+    // the in-place Rust producer preserves it) and overwrite the produced/replayed cells. Template
+    // cells the executor did not list are thereby carried unchanged (the kernel's `cellsOfState`
+    // only re-emits the cells it was given — an unlisted cell is unedited, not deleted).
+    let mut ledger = template.clone();
+    for (id, cell) in &out_cells {
+        if let Some(slot) = ledger.get_mut(id) {
+            *slot = cell.clone();
         } else {
+            // A produced cell NOT in the template (should be impossible given UnknownCellNat
+            // guards the Nat, but defend against a fresh template-absent id).
             let _ = ledger.insert_cell(cell.clone());
         }
     }
-    // Any produced cell NOT in the template (should be impossible given UnknownCellNat guards the
-    // Nat, but defend against a fresh template-absent id) is inserted directly.
-    for (id, cell) in &out_cells {
-        if template.get(id).is_none() {
-            let _ = ledger.insert_cell(cell.clone());
+
+    // MAKE-SOVEREIGN STRUCTURAL REPLAY (the root-gap close for the cell-SET move): mirror
+    // `apply_make_sovereign` → `Ledger::make_sovereign(cell)` — remove the cell from
+    // `Ledger::cells` (its merkle leaf disappears, exactly as Rust's post-root drops it) and park
+    // its state commitment in `sovereign_commitments`. A missing cell (already removed / never
+    // present) made Rust roll back; the commit-bit divergence surfaces, so the failed replay is
+    // ignored rather than fabricated. RESIDUAL (off-root, characterized): for a COMPOSITE turn
+    // that mutates the cell and THEN makes it sovereign, the parked commitment is computed from
+    // the template-seeded working cell (the rebound wire record is unreadable), so the
+    // `sovereign_commitments` VALUE — never the merkle root — can lag the Rust one.
+    if committed {
+        for op in state_ops {
+            if let StateOp::MakeSovereign { cell } = op {
+                let _ = ledger.make_sovereign(cell);
+            }
         }
     }
 
@@ -613,7 +928,18 @@ pub fn execute_via_lean(
     // matching `apply_introduce`. Applied ONLY when the kernel COMMITTED (`wire_state_to_ledger`).
     let intro_expiry = host.block_height.saturating_add(host.intro_lifetime);
     let cap_ops = collect_cap_ops(turn, intro_expiry);
-    let ledger = wire_state_to_ledger(&shadow_state.state, &inv, pre_ledger, &cap_ops, committed)?;
+    // The deterministic non-cap commitment-field mutations (lifecycle/permissions/vk/sovereign/
+    // revoke-epoch — the SURVIVOR-effect root-gap close). A `CellSeal` stamps
+    // `sealed_at = block_height` (the host clock), matching `apply_cell_seal`.
+    let state_ops = collect_state_ops(turn, host.block_height);
+    let ledger = wire_state_to_ledger(
+        &shadow_state.state,
+        &inv,
+        pre_ledger,
+        &cap_ops,
+        &state_ops,
+        committed,
+    )?;
     Ok((ledger, committed))
 }
 
@@ -684,7 +1010,7 @@ impl ProducerOutcome {
 /// turn in the COVERED set — [`lean_shadow::forest_is_root_agreeing`], i.e. marshallable AND every
 /// effect is in the swap-safe `producer_root_agreeing_effects` set, where the Lean-reconstituted
 /// `.root()` provably EQUALS Rust's (pinned by the `lean_state_producer_*` differentials). A turn
-/// touching ANY characterized root-GAP effect (SetPermissions / MakeSovereign / cap-fidelity / …) or
+/// touching ANY characterized root-GAP effect (Refusal / ReceiptArchive / escrow-settle / …) or
 /// any unmappable effect falls back to the Rust producer with [`ProducerOutcome::Fallback`] and a
 /// precise reason — so the live commit path NEVER installs a Lean root known to disagree with the
 /// rest of the chain. This is what makes the default-on flip safe: "Lean produces, Rust verifies,
