@@ -147,14 +147,14 @@ theorem apex_iff_pipelinedSendSpec (s : RecChainedState) (args : PipelinedSendAr
   unfold PipelinedSendSpec pipelinedSendGuardProp kernelFrame
   constructor
   · -- kernelFrame order: accounts caps bal escrows nullifiers revoked commitments queues swiss …
-    rintro ⟨_, hcell, hlog, hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    rintro ⟨_, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
     -- PipelinedSendSpec order: log accounts cell caps escrows nullifiers revoked commitments bal queues …
-    exact ⟨hlog, hAcc, hcell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hlog, hAcc, hcell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hlog, hAcc, hcell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hlog, hAcc, hcell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨trivial, hcell, hlog, hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨trivial, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §1c — THE VALIDATION: `pipelinedSendA_full_sound` through the framework. -/

@@ -322,68 +322,24 @@ private theorem queueDequeueK_subWF {k k' : RecordKernelState} {id : Nat} {actor
             omega
       · rw [if_neg ho] at hk; exact absurd hk (by simp)
 
-/-- `queueEnqueueDepositK` preserves `subWF`: it commits via `queueEnqueueK` (the `subWF`-mover) then
-`createEscrowRawAsset` (a `bal`/`escrows`-only update — `queues` UNCHANGED). -/
-private theorem queueEnqueueDepositK_subWF {k k' : RecordKernelState} {id m : Nat}
-    {sender owner : CellId} {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
-    (hh : queueEnqueueDepositK k id m sender owner depId dAsset deposit = some k') (h : subWF k) :
-    subWF k' := by
-  unfold queueEnqueueDepositK at hh
-  cases hq : queueEnqueueK k id m with
-  | none    => simp only [hq] at hh; exact absurd hh (by simp)
-  | some k₁ =>
-      simp only [hq] at hh
-      by_cases hg : 0 ≤ deposit ∧ deposit ≤ k₁.bal sender dAsset ∧ sender ∈ k₁.accounts
-          ∧ ¬ (∃ r ∈ k₁.escrows, r.id = depId)
-      · rw [if_pos hg] at hh; simp only [Option.some.injEq] at hh; subst hh
-        -- `k' = createEscrowRawAsset k₁ … = { k₁ with bal := …, escrows := … }` ⇒ `queues` = `k₁.queues`.
-        refine subWF_of_queues_eq (k := k₁) ?_ (queueEnqueueK_subWF hq h)
-        rfl
-      · rw [if_neg hg] at hh; exact absurd hh (by simp)
-
-/-- `queueDequeueRefundK` preserves `subWF`: it commits via `queueDequeueK` (the `subWF`-mover) then
-`settleEscrowRawAsset` (a `bal`/`escrows`-only update — `queues` UNCHANGED). -/
-private theorem queueDequeueRefundK_subWF {k k' : RecordKernelState} {id : Nat} {actor : CellId}
-    {depId : Nat} {mh : Nat}
-    (hh : queueDequeueRefundK k id actor depId = some (k', mh)) (h : subWF k) : subWF k' := by
-  unfold queueDequeueRefundK at hh
-  cases hq : queueDequeueK k id actor with
-  | none          => rw [hq] at hh; exact absurd hh (by simp)
-  | some kp =>
-      obtain ⟨k₁, mh₁⟩ := kp
-      rw [hq] at hh; simp only [] at hh
-      by_cases hbind : dequeueMsgBindB k₁ actor depId id mh₁
-      · rw [if_pos hbind] at hh
-        cases hfind : findUnresolvedDeposit k₁ depId with
-        | none => simp only [hfind] at hh; exact absurd hh (by simp)
-        | some r =>
-            simp only [hfind] at hh
-            by_cases ha : actor ∈ k₁.accounts
-            · rw [if_pos ha, Option.some.injEq, Prod.mk.injEq] at hh
-              obtain ⟨hhk, _⟩ := hh; subst hhk
-              refine subWF_of_queues_eq (k := k₁) ?_ (queueDequeueK_subWF hq h)
-              rfl
-            · rw [if_neg ha] at hh; exact absurd hh (by simp)
-      · rw [if_neg hbind] at hh; exact absurd hh (by simp)
-
 /-- WAVE 4: one atomic-batch sub-op preserves `subWF` (the deposit-enqueue / refund-dequeue movers). -/
 private theorem queueTxOpStepA_subWF {s s' : RecChainedState} {op : QueueTxOpA}
     (hh : queueTxOpStepA s op = some s') (h : subWF s.kernel) : subWF s'.kernel := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
+  | enqueue id m actor cell =>
       simp only [queueTxOpStepA, queueEnqueueChainA] at hh; split at hh
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at hh; exact absurd hh (by simp)
         | some k' => rw [hk] at hh; simp only [Option.some.injEq] at hh; subst hh
-                     exact queueEnqueueDepositK_subWF hk h
+                     exact queueEnqueueK_subWF hk h
       · exact absurd hh (by simp)
-  | dequeue id actor cell depId =>
+  | dequeue id actor cell =>
       simp only [queueTxOpStepA, queueDequeueChainA] at hh; split at hh
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at hh; exact absurd hh (by simp)
         | some p => obtain ⟨k', mh⟩ := p
                     rw [hk] at hh; simp only [Option.some.injEq] at hh; subst hh
-                    exact queueDequeueRefundK_subWF hk h
+                    exact queueDequeueK_subWF hk h
       · exact absurd hh (by simp)
 
 /-- WAVE 4: the ALL-OR-NOTHING atomic batch preserves `subWF` (induction over the sub-ops). -/
@@ -576,69 +532,6 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
           unfold recKMintAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
-  -- §escrow/obligation/committed — chained holding-store steps (kernel updates bal/escrows, never queues).
-  | createEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-          unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-  | releaseEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-      unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  | refundEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-      unfold refundEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  | createObligationA id actor obligor beneficiary asset stake =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-          unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-  -- fulfill/slash route to refund/release (escrow SETTLE) — `queues` literally unchanged (frame).
-  | fulfillObligationA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-      unfold refundEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  | slashObligationA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-      unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  -- §note — spend grows `nullifiers`, create grows `commitments` — `queues` untouched in both.
   | noteSpendA nf actor spendProof =>
       simp only [execFullA, noteSpendChainA] at h
       by_cases hp : spendProof = true
@@ -656,80 +549,6 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
       simp only [execFullA, noteCreateChainA] at h
       option_inj at h; subst h
       exact hwf
-  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
-      · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-            unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-      · exact absurd h (by simp)
-  | releaseCommittedEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-      unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  | refundCommittedEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-      unfold refundEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  -- §bridge — lock/finalize/cancel over the SHARED escrow holding-store (bal/escrows, never queues).
-  | bridgeLockA id actor originator destination asset amount =>
-      simp only [execFullA, bridgeLockChainA] at h
-      cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-          unfold bridgeLockKAsset createBridgeRawAsset at hk; split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-  | bridgeFinalizeA id actor asset amount =>
-      simp only [execFullA, bridgeFinalizeChainA] at h
-      split at h
-      · cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-            unfold bridgeFinalizeKAsset bridgeFinalizeRawAsset at hk
-            split at hk
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            · exact absurd hk (by simp)
-      · exact absurd h (by simp)
-  | bridgeCancelA id actor =>
-      simp only [execFullA, bridgeCancelChainA] at h
-      split at h
-      · cases hk : bridgeCancelKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            refine subWF_of_queues_eq (k := s.kernel) ?_ hwf
-            unfold bridgeCancelKAsset settleEscrowRawAsset at hk
-            split at hk
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            · exact absurd hk (by simp)
-      · exact absurd h (by simp)
-  -- §seal — the DE-SHADOWED seal/unseal/createSealPair edit `caps`/`sealedBoxes`; makeSovereign/refusal/
-  -- receiptArchive write the cell record — none touch `queues` (frame: `subWF` preserved).
   | sealA pid actor payload =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; exact hwf
@@ -780,25 +599,25 @@ theorem execFullA_subWF_preserved (s s' : RecChainedState) (fa : FullActionA)
               show subWF { s.kernel with queues := _ :: s.kernel.queues }
               exact subWF_cons _ (by simp) hwf
       · exact absurd h (by simp)
-  | queueEnqueueA id m actor cell depId dAsset deposit =>
+  | queueEnqueueA id m actor cell =>
       simp only [execFullA, queueEnqueueChainA] at h
       split at h
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
             commit_subst h hk
-            exact queueEnqueueDepositK_subWF hk hwf
+            exact queueEnqueueK_subWF hk hwf
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId =>
+  | queueDequeueA id actor cell =>
       simp only [execFullA, queueDequeueChainA] at h
       split at h
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some kp =>
-            rw [hk] at h
             obtain ⟨k', mhd⟩ := kp
+            rw [hk] at h
             obtain ⟨rfl⟩ := h
-            exact queueDequeueRefundK_subWF hk hwf
+            exact queueDequeueK_subWF hk hwf
       · exact absurd h (by simp)
   | queueResizeA id newCap actor cell =>
       simp only [execFullA, queueResizeChainA] at h
@@ -988,12 +807,12 @@ def sub0 : SubState := { head := 2, tail := 1, capacity := 8 }
 /-! ### §B `#eval` — the REAL living cell. -/
 
 /-- A real subscription program: actor 0 ALLOCATES a queue (id 7, capacity 2, on cell 0), then
-PUBLISHES (enqueues message hash 111, no deposit). A 2-node forest on `fma0` (actor 0 owns cell 0 by
+PUBLISHES (enqueues message hash 111). A 2-node forest on `fma0` (actor 0 owns cell 0 by
 ownership — empty caps). The post-state's queue holds `[111]`, within capacity 2. -/
 def subForest : FullForestA :=
   ⟨ .queueAllocateA 7 0 0 2
   , [ { holder := 0, keep := [Auth.read], parentCap := .endpoint 0 [Auth.read, Auth.write]
-      , sub := ⟨ .queueEnqueueA 7 111 0 0 9 0 0, [] ⟩ } ] ⟩
+      , sub := ⟨ .queueEnqueueA 7 111 0 0, [] ⟩ } ] ⟩
 
 -- The subscription program COMMITS (allocate + publish run, gated handoff passes — cell 0 holds the cap):
 #guard (execFullForestA fmaDeleg subForest).isSome                      -- true (the subscription commits)

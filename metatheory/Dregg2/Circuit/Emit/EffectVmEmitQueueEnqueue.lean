@@ -344,12 +344,14 @@ theorem queueEnqueueDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR
     rw [hc e₁ hsat₁, hc e₂ hsat₂, hpub]
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
-/-! ## §8 — CONNECTOR to universe-A: the deposit DEBIT IS `QueueEnqueueSpec`'s per-cell `bal` image.
+/-! ## §8 — CONNECTOR to universe-A: F1b DEPOSIT-FREE — `QueueEnqueueSpec` freezes the `bal` ledger.
 
-`QueueEnqueueSpec` commits `st'.kernel = createEscrowRawAssetQueue k₁ depId actor cell dAsset deposit
-id m` off the FIFO-appended `k₁` (`queueEnqueueK st.kernel id m = some k₁`, balance-NEUTRAL). The helper
-rewrites `bal := recBalCreditCell k₁.bal actor dAsset (-deposit)` — the `(actor, dAsset)` entry drops by
-`deposit`. The FIFO append is realized at the runtime's `fields[4]` queue-root advance (bound above). -/
+F1b: the escrow-deposit leg died with the escrow family (a value-bearing enqueue is a factory-cell
+pattern), so `QueueEnqueueSpec st id m actor cell st'` is balance-NEUTRAL: the FIFO append touches
+ONLY `queues` (+ the receipt log); EVERY per-cell `bal` entry is FROZEN. The runtime descriptor still
+carries the `ENQUEUE_DEPOSIT` param column; the deposit-free kernel pins it to `0` (the agreement
+below instantiates `p = ⟨0⟩`). The FIFO append is realized at the runtime's `fields[4]` queue-root
+advance (bound above). -/
 
 open Dregg2.Circuit.Spec.QueueFifoCore
 open Dregg2.Exec
@@ -376,44 +378,39 @@ def cellProjBal (bal : CellId → AssetId → ℤ) (c : CellId) (asset : AssetId
   reserved := 0
   commit   := 0
 
-/-- **`unify_enqueue_debit`** — across a committed `QueueEnqueueSpec` post-state, the actor cell's
-projected ledger entry drops by `deposit` EXACTLY: the descriptor's deposit-debit IS `QueueEnqueueSpec`'s
-per-cell `bal` image. -/
-theorem unify_enqueue_debit (st st' : RecChainedState) (id m : Nat) (actor cell : CellId)
-    (depId : Nat) (dAsset : AssetId) (deposit : ℤ)
-    (hspec : QueueEnqueueSpec st id m actor cell depId dAsset deposit st') :
-    (cellProjBal st'.kernel.bal actor dAsset).balLo
-      = (cellProjBal st.kernel.bal actor dAsset).balLo - deposit := by
-  obtain ⟨k₁, _, _, hk₁, _, _, _, _, hker, _⟩ := hspec
-  show st'.kernel.bal actor dAsset = st.kernel.bal actor dAsset - deposit
-  rw [hker]
-  show (createEscrowRawAssetQueue k₁ depId actor cell dAsset deposit id m).bal actor dAsset
-      = st.kernel.bal actor dAsset - deposit
-  have hbalfn : (createEscrowRawAssetQueue k₁ depId actor cell dAsset deposit id m).bal
-      = recBalCreditCell k₁.bal actor dAsset (-deposit) := rfl
-  rw [hbalfn]
-  unfold recBalCreditCell
-  rw [if_pos (And.intro rfl rfl), queueEnqueueK_bal hk₁]
-  ring
+/-- **`unify_enqueue_debit`** — F1b (deposit-free): across a committed `QueueEnqueueSpec` post-state,
+EVERY cell's projected ledger entry is FROZEN (`bal' = bal`) — the descriptor's zero-deposit debit IS
+`QueueEnqueueSpec`'s per-cell `bal` image. -/
+theorem unify_enqueue_debit (st st' : RecChainedState) (id m : Nat) (actor cell c : CellId)
+    (asset : AssetId)
+    (hspec : QueueEnqueueSpec st id m actor cell st') :
+    (cellProjBal st'.kernel.bal c asset).balLo = (cellProjBal st.kernel.bal c asset).balLo := by
+  show st'.kernel.bal c asset = st.kernel.bal c asset
+  -- QueueEnqueueSpec: guard ∧ queues-image ∧ log ∧ accounts ∧ cell ∧ caps ∧ nullifiers ∧ revoked ∧
+  --                   commitments ∧ bal ∧ … — `bal` is the 10th conjunct.
+  obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
+  rw [hbal]
 
 /-! ## §9 — THE per-cell circuit⟺executor AGREEMENT (the payoff). -/
 
 /-- **`descriptor_agrees_with_executor_enqueue`** — a satisfying run of the runnable descriptor encoding
-the actor cell of a committed enqueue agrees with the executor's per-cell debited `bal actor dAsset`. The
-FIFO append is bound at the runtime's `fields[4]` queue root (no longer out-of-IR). -/
+the actor cell of a committed (F1b deposit-free) enqueue — the `ENQUEUE_DEPOSIT` param pinned to `0` —
+agrees with the executor's FROZEN per-cell `bal actor asset`. The FIFO append is bound at the runtime's
+`fields[4]` queue root (no longer out-of-IR). -/
 theorem descriptor_agrees_with_executor_enqueue
     (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (st st' : RecChainedState) (id m : Nat) (actor cell : CellId) (depId : Nat)
-    (dAsset : AssetId) (deposit : ℤ) (newRoot : ℤ) (post : CellState)
-    (henc : RowEncodesEnqueue env (cellProjBal st.kernel.bal actor dAsset) ⟨deposit⟩ newRoot post)
+    (st st' : RecChainedState) (id m : Nat) (actor cell : CellId)
+    (asset : AssetId) (newRoot : ℤ) (post : CellState)
+    (henc : RowEncodesEnqueue env (cellProjBal st.kernel.bal actor asset) ⟨0⟩ newRoot post)
     (hsat : satisfiedVm hash (queueEnqueueVmDescriptor newRoot) env true true)
-    (hspec : QueueEnqueueSpec st id m actor cell depId dAsset deposit st') :
-    post.balLo = (cellProjBal st'.kernel.bal actor dAsset).balLo := by
+    (hspec : QueueEnqueueSpec st id m actor cell st') :
+    post.balLo = (cellProjBal st'.kernel.bal actor asset).balLo := by
   obtain ⟨hcirc, _⟩ := queueEnqueueDescriptor_full_sound hash env
-    (cellProjBal st.kernel.bal actor dAsset) post ⟨deposit⟩ newRoot henc hsat
+    (cellProjBal st.kernel.bal actor asset) post ⟨0⟩ newRoot henc hsat
   obtain ⟨hcLo, _⟩ := hcirc
-  have heLo := unify_enqueue_debit st st' id m actor cell depId dAsset deposit hspec
+  have heLo := unify_enqueue_debit st st' id m actor cell actor asset hspec
   rw [hcLo, heLo]
+  exact sub_zero _
 
 /-! ## §10 — NON-VACUITY. -/
 

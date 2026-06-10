@@ -776,68 +776,58 @@ theorem seal_circuit_refines_exec (S : Surface2) (LE : SealedBoxRecord → ℤ) 
 #assert_axioms seal_spec_refines_circuit
 #assert_axioms seal_circuit_refines_exec
 
-/-! ## §17 — QueueEnqueueA diamond (triple circuit ⟺ QueueEnqueueSpec ⟺ execFullA). -/
+/-! ## §17 — QueueEnqueueA diamond (circuit ⟺ QueueEnqueueSpec ⟺ execFullA).
+
+F1b: the enqueue is DEPOSIT-FREE (the escrow-deposit leg died with the escrow family — a
+value-bearing enqueue is now a factory-cell pattern), so the diamond collapses from the
+bal⊕queues⊕escrows triple to the single `queues`-component `EffectSpec2`. -/
 
 def queueEnqueueExecStep (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState) : Prop :=
-  execFullA s (.queueEnqueueA args.id args.m args.actor args.cell args.depId args.dAsset args.deposit) =
-    some s'
+  execFullA s (.queueEnqueueA args.id args.m args.actor args.cell) = some s'
 
 def queueEnqueueSpecStep (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState) : Prop :=
-  QueueEnqueueSpec s args.id args.m args.actor args.cell args.depId args.dAsset args.deposit s'
+  QueueEnqueueSpec s args.id args.m args.actor args.cell s'
 
-def queueEnqueueCircuitStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+def queueEnqueueCircuitStep (S : Surface2)
     (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ) (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
-    (LE : EscrowRecord → ℤ) (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
     (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState) : Prop :=
-  satisfiedE2Triple S (queueEnqueueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
-    (encodeE2Triple S (queueEnqueueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) s args s')
-
-theorem queueEnqueueRestFrameEncodes (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoQueuesBalEscrows S.RH) :
-    RestFrameEncodes2Triple S (queueEnqueueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) :=
-  fun k k' hframe => (hRest k k').mpr hframe
+  satisfiedE2 S (queueEnqueueE LQ cNQ hNQ hLQ)
+    (encodeE2 S (queueEnqueueE LQ cNQ hNQ hLQ) s args s')
 
 theorem queueEnqueue_exec_equiv_spec (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState) :
     queueEnqueueExecStep s args s' ↔ queueEnqueueSpecStep s args s' :=
-  execFullA_queueEnqueueA_iff_spec s args.id args.m args.actor args.cell args.depId args.dAsset
-    args.deposit s'
+  execFullA_queueEnqueueA_iff_spec s args.id args.m args.actor args.cell s'
 
-theorem queueEnqueue_circuit_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueEnqueue_circuit_refines_spec (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (hRest : RestIffNoQueuesBalEscrows S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState)
-    (h : queueEnqueueCircuitStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s') :
+    (h : queueEnqueueCircuitStep S LQ cNQ hNQ hLQ s args s') :
     queueEnqueueSpecStep s args s' :=
-  queueEnqueueA_full_sound S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog s args s' h
+  queueEnqueueA_full_sound S LQ cNQ hNQ hLQ hRest hLog s args s' h
 
-theorem queueEnqueue_spec_refines_circuit (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueEnqueue_spec_refines_circuit (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (hRest : RestIffNoQueuesBalEscrows S.RH)
     (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState)
     (h : queueEnqueueSpecStep s args s') :
-    queueEnqueueCircuitStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s' :=
-  effect2triple_circuit_full_complete S (queueEnqueueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
-    (queueEnqueueRestFrameEncodes S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest)
-    (enqueueGuardEncodes D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) s args s'
-    ((apex_iff_queueEnqueueSpec D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s').mpr h)
+    queueEnqueueCircuitStep S LQ cNQ hNQ hLQ s args s' :=
+  effect2_circuit_full_complete S (queueEnqueueE LQ cNQ hNQ hLQ)
+    (fun k k' hframe => (hRest k k').mpr hframe)
+    (enqueueGuardEncodes LQ cNQ hNQ hLQ) s args s'
+    ((apex_iff_queueEnqueueSpec LQ cNQ hNQ hLQ s args s').mpr h)
 
-theorem queueEnqueue_circuit_refines_exec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueEnqueue_circuit_refines_exec (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (hRest : RestIffNoQueuesBalEscrows S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState)
-    (h : queueEnqueueCircuitStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s') :
+    (h : queueEnqueueCircuitStep S LQ cNQ hNQ hLQ s args s') :
     queueEnqueueExecStep s args s' :=
   (queueEnqueue_exec_equiv_spec s args s').mpr
-    (queueEnqueue_circuit_refines_spec S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog s args s' h)
+    (queueEnqueue_circuit_refines_spec S LQ cNQ hNQ hLQ hRest hLog s args s' h)
 
 #assert_axioms queueEnqueue_exec_equiv_spec
 #assert_axioms queueEnqueue_circuit_refines_spec

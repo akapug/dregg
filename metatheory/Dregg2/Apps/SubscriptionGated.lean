@@ -124,7 +124,7 @@ theorem subNode_delta_zero (cred : Authorization Dg Pf) (value : Int) (b : Asset
 /-- **`sub_op_conserves` — PROVED (THEOREM 3).** A committed consume preserves every asset's supply. -/
 theorem sub_op_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (value : Int) (b : AssetId)
     (h : execFullForestG s (subNode cred value) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (subNode cred value) b h (subNode_delta_zero cred value b)
 
 /-! ## §4b — Hatchery bridge: queue well-formedness forever on `trajG`. -/

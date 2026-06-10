@@ -111,7 +111,7 @@ def burnE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
   logUpdate    := some (fun s args => burnReceipt args.actor args.cell args.amt :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -170,13 +170,13 @@ theorem apex_iff_burnSpec (D : (CellId → AssetId → ℤ) → ℤ) (hD : Funct
         ∧ ((burnE D hD).restFrame s.kernel s'.kernel)) ↔ BurnSpec s args.actor args.cell args.a args.amt s'
   unfold BurnSpec burnGuardProp burnE
   constructor
-  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §1c — THE VALIDATION: `burnA_full_sound ⇒ BurnSpec` through the framework. -/

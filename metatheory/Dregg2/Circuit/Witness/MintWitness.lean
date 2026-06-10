@@ -79,7 +79,7 @@ the side-tables) — unchanged by a pure ledger forgery, so the BIND gate (not t
 wrong-ledger forgery; a side-table forgery bites the rest gate. -/
 def rhConcrete : RecordKernelState → ℤ :=
   fun k => (k.accounts.card : ℤ) + (k.nullifiers.length : ℤ) * 7
-            + (k.commitments.length : ℤ) * 11 + (k.escrows.length : ℤ) * 13
+            + (k.commitments.length : ℤ) * 11
 
 /-- Concrete log hash: the REAL `turnLogDigest` (`refP2` over the FULL `encTurnRec`, binding
 `actor`/`src`/`dst` which the OLD `amt`-only fold DROPPED). CR-grounded on the real `babyBearD4W16`
@@ -112,7 +112,7 @@ def mintEConcrete : EffectSpec2 RecChainedState MintArgs where
   logUpdate    := some (fun s args => mintReceipt args.actor args.cell args.amt :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations

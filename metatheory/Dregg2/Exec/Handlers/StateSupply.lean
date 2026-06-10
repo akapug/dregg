@@ -14,8 +14,8 @@ Two faces:
     legitimately move the conserved per-asset measure — and they exercise the path the algebra's global
     `turn_conserves` was built for: it SUMS NON-ZERO per-effect deltas. `mintH.delta a b = if b = a.asset
     then a.amt else 0` (a per-asset inflow), discharged by COMPOSING the proved `recKMintAsset_delta`
-    (over the bare `bal` ledger) with a holding-store-fixed bridge (`mintStep_escrowHeld_fixed`) to the
-    COMBINED measure `recTotalAssetWithEscrow`. `burnH` is the `-amt` dual (`recKBurnAsset_delta`).
+    (over the bare `bal` ledger) to the
+    COMBINED measure `recTotalAsset`. `burnH` is the `-amt` dual (`recKBurnAsset_delta`).
     `bridgeMintH` ALIASES the mint kernel step (`recKMintAsset` — `bridgeMint` reuses the per-asset mint,
     `TurnExecutorFull:4610`), `delta = +value`. `createCellH`/`createCellFromFactoryH`/`spawnH` are
     ACCOUNT-GROWTH: a fresh cell born EMPTY, so the COMBINED measure is unchanged (`delta = 0`) even
@@ -57,7 +57,7 @@ open scoped BigOperators
 (leaving `cell`/`escrows`/`lifecycle` fixed) under the `mintAuthorizedB` gate (a `node`/`control` cap —
 a cell cannot coin its own supply). Their `*_delta` lemmas state the BARE-LEDGER move
 (`recTotalAsset k' b = recTotalAsset k b + (if b = a then ±amt else 0)`). We bridge to the COMBINED
-measure `recTotalAssetWithEscrow` exactly as the `transferH` slice did: a `bal`-only edit leaves the
+measure `recTotalAsset` exactly as the `transferH` slice did: a `bal`-only edit leaves the
 holding-store fixed, so the combined measure follows the bare-ledger move. We WRAP each step in
 `acceptsEffects` on the minted/burned cell — a supply move into a non-Live cell is REJECTED. -/
 
@@ -80,22 +80,8 @@ structure SupplyArgs where
 def mintStep (k : RecordKernelState) (a : SupplyArgs) : Option RecordKernelState :=
   if acceptsEffects k a.cell then recKMintAsset k a.actor a.cell a.asset a.amt else none
 
-/-- `recKMintAsset` keeps `escrows` (and every non-`bal` field) fixed, so its post-state's holding-store
-is literally unchanged — the combined measure follows the bare-ledger measure. -/
-theorem mintStep_escrowHeld_fixed (k k' : RecordKernelState) (a : SupplyArgs)
-    (h : mintStep k a = some k') (b : AssetId) :
-    escrowHeldAsset k' b = escrowHeldAsset k b := by
-  unfold mintStep at h
-  by_cases hadm : acceptsEffects k a.cell
-  · rw [if_pos hadm] at h
-    unfold recKMintAsset at h
-    by_cases hg : mintAuthorizedB k.caps a.actor a.cell = true ∧ 0 ≤ a.amt ∧ a.cell ∈ k.accounts
-    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h; rfl
-    · rw [if_neg hg] at h; exact absurd h (by simp)
-  · rw [if_neg hadm] at h; exact absurd h (by simp)
-
 /-- **`mintH` — the registered per-asset MINT handler (`delta ≠ 0`).** `conserves` composes the proved
-`recKMintAsset_delta` (bare ledger) with `mintStep_escrowHeld_fixed` (holding-store fixed) to the COMBINED
+`recKMintAsset_delta` (bare ledger) to the
 measure: the combined measure rises by `+amt` AT the minted asset, by `0` elsewhere. `auth_gated` from
 `recKMintAsset_authorized` (the privileged `mintAuthorizedB` gate). `admission_gated` from the
 Live-cell wrapper. This is the supply face the global `turn_conserves` SUMS. -/
@@ -125,9 +111,7 @@ def mintH : EffectHandler SupplyArgs where
       by_cases hadm : acceptsEffects s a.cell
       · rw [if_pos hadm] at h; exact recKMintAsset_delta s s' a.actor a.cell a.asset a.amt h b
       · rw [if_neg hadm] at h; exact absurd h (by simp)
-    have hheld : escrowHeldAsset s' b = escrowHeldAsset s b := mintStep_escrowHeld_fixed s s' a h b
-    unfold recTotalAssetWithEscrow
-    rw [hbare, hheld]; ring
+    exact hbare
 
 /-! ### §1.2 — `burnH`: the per-asset burn, gated on cell liveness. `delta = -amt` at the asset. -/
 
@@ -135,20 +119,6 @@ def mintH : EffectHandler SupplyArgs where
 the proved `recKBurnAsset` (which itself also gates on availability + authority). -/
 def burnStep (k : RecordKernelState) (a : SupplyArgs) : Option RecordKernelState :=
   if acceptsEffects k a.cell then recKBurnAsset k a.actor a.cell a.asset a.amt else none
-
-/-- `recKBurnAsset` keeps `escrows` fixed (a `bal`-only edit), so the holding-store is unchanged. -/
-theorem burnStep_escrowHeld_fixed (k k' : RecordKernelState) (a : SupplyArgs)
-    (h : burnStep k a = some k') (b : AssetId) :
-    escrowHeldAsset k' b = escrowHeldAsset k b := by
-  unfold burnStep at h
-  by_cases hadm : acceptsEffects k a.cell
-  · rw [if_pos hadm] at h
-    unfold recKBurnAsset at h
-    by_cases hg : mintAuthorizedB k.caps a.actor a.cell = true ∧ 0 ≤ a.amt ∧ a.amt ≤ k.bal a.cell a.asset
-        ∧ a.cell ∈ k.accounts
-    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h; rfl
-    · rw [if_neg hg] at h; exact absurd h (by simp)
-  · rw [if_neg hadm] at h; exact absurd h (by simp)
 
 /-- **`burnH` — the registered per-asset BURN handler (`delta ≠ 0`).** The annihilative dual of `mintH`:
 `conserves` composes `recKBurnAsset_delta` (the `-amt` move) with the held-fixed bridge; `auth_gated`
@@ -178,9 +148,7 @@ def burnH : EffectHandler SupplyArgs where
       by_cases hadm : acceptsEffects s a.cell
       · rw [if_pos hadm] at h; exact recKBurnAsset_delta s s' a.actor a.cell a.asset a.amt h b
       · rw [if_neg hadm] at h; exact absurd h (by simp)
-    have hheld : escrowHeldAsset s' b = escrowHeldAsset s b := burnStep_escrowHeld_fixed s s' a h b
-    unfold recTotalAssetWithEscrow
-    rw [hbare, hheld]; ring
+    exact hbare
 
 /-! ### §1.3 — `bridgeMintH`: `BridgeMint` ALIASES the per-asset mint kernel step.
 
@@ -250,12 +218,8 @@ def createCellH : EffectHandler CreateArgs where
     by_cases hg : mintAuthorizedB s.caps a.actor a.newCell && decide (a.newCell ∉ s.accounts)
     · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
       simp only [Bool.and_eq_true, decide_eq_true_eq] at hg
-      -- combined = bare + held; bare neutral by `recTotalAsset_insert_fresh`, held untouched.
-      unfold recTotalAssetWithEscrow
-      rw [recTotalAsset_insert_fresh s a.newCell b hg.2]
-      have hheld : escrowHeldAsset (createCellIntoAsset s a.newCell) b = escrowHeldAsset s b := by
-        unfold escrowHeldAsset createCellIntoAsset; rfl
-      rw [hheld]; ring
+      -- bare neutral by `recTotalAsset_insert_fresh` (born empty).
+      rw [recTotalAsset_insert_fresh s a.newCell b hg.2]; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **`createCellFromFactoryH` — `CreateCellFromFactory` as the createCell alias.** A factory-minted cell
@@ -312,12 +276,6 @@ def stateWriteStep (k : RecordKernelState) (a : StateWriteArgs) : Option RecordK
     some (writeField k a.field a.target (.int a.value))
   else none
 
-/-- `writeField` edits ONLY `cell`, so a state write leaves the holding-store `escrows` literally
-unchanged. -/
-theorem stateWrite_escrowHeld_fixed (k : RecordKernelState) (a : StateWriteArgs) (b : AssetId) :
-    escrowHeldAsset (writeField k a.field a.target (.int a.value)) b = escrowHeldAsset k b := by
-  unfold escrowHeldAsset writeField; rfl
-
 /-- `writeField` edits ONLY `cell`, so a state write leaves the per-asset `bal` ledger literally
 unchanged. -/
 theorem stateWrite_recTotalAsset_fixed (k : RecordKernelState) (a : StateWriteArgs) (b : AssetId) :
@@ -355,8 +313,7 @@ def stateWriteH : EffectHandler StateWriteArgs where
     by_cases hg : acceptsEffects s a.target
         && authorizedB s.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
     · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
-      unfold recTotalAssetWithEscrow
-      rw [stateWrite_recTotalAsset_fixed s a b, stateWrite_escrowHeld_fixed s a b]; ring
+      rw [stateWrite_recTotalAsset_fixed s a b]; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-! ### §2.1 — The seven STATE effects as the generic write at a fixed field name.
@@ -489,10 +446,7 @@ def makeSovereignH : EffectHandler MakeSovereignArgs where
     by_cases hg : acceptsEffects s a.target
         && authorizedB s.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
     · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
-      unfold recTotalAssetWithEscrow
-      rw [Dregg2.Exec.TurnExecutorFull.makeSovereignKernel_recTotalAsset s a.target b,
-          show escrowHeldAsset (Dregg2.Exec.TurnExecutorFull.makeSovereignKernel s a.target) b
-            = escrowHeldAsset s b from rfl]; ring
+      rw [Dregg2.Exec.TurnExecutorFull.makeSovereignKernel_recTotalAsset s a.target b]; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- `MakeSovereign` — the commitment-rebind closed effect (tag `6`, the state family slot). DROPS
@@ -535,20 +489,20 @@ def hs0Destroyed : RecordKernelState :=
 -- §TEETH-1 (the `delta ≠ 0` MILESTONE): a mint of 25 of asset 0 into LIVE cell 0 RAISES the combined
 -- per-asset measure from 100 to 125 (`delta = +25`, NON-ZERO — the path `turn_conserves` sums).
 #guard ((execEffect (mintEffect 0 0 0 25) hs0).map
-        (fun k => (recTotalAssetWithEscrow hs0 0, recTotalAssetWithEscrow k 0))) == some (100, 125)  --  some (100, 125)
+        (fun k => (recTotalAsset hs0 0, recTotalAsset k 0))) == some (100, 125)  --  some (100, 125)
 -- §TEETH-2 (R6 CLOSED): a mint into the SEALED cell 0 is REJECTED — the live-cell admission gate bites.
 #guard ((execEffect (mintEffect 0 0 0 25) hs0Sealed).isSome) == false  --  false
 -- §TEETH-3 (R6 CLOSED): a mint into the DESTROYED cell 0 is REJECTED too.
 #guard ((execEffect (mintEffect 0 0 0 25) hs0Destroyed).isSome) == false  --  false
 -- §TEETH-4: a burn of 40 of asset 0 from LIVE cell 0 LOWERS the combined measure to 60 (`delta = -40`).
 #guard ((execEffect (burnEffect 0 0 0 40) hs0).map
-        (fun k => recTotalAssetWithEscrow k 0)) == some 60  --  some 60
+        (fun k => recTotalAsset k 0)) == some 60  --  some 60
 -- §TEETH-5: an UNAUTHORIZED mint (actor 1 holds NO node cap on cell 0) is REJECTED even into a Live cell.
 #guard ((execEffect (mintEffect 1 0 0 25) hs0).isSome) == false  --  false
 -- §TEETH-6 (account-growth, neutral): createCell of fresh cell 2 (by privileged actor 0) SUCCEEDS and
 -- leaves the combined measure UNCHANGED (born empty), while genuinely growing `accounts`.
 #guard ((execEffect (createCellEffect 0 2) hs0).map
-        (fun k => (recTotalAssetWithEscrow k 0, decide (2 ∈ k.accounts)))) == some (100, true)  --  some (100, true)
+        (fun k => (recTotalAsset k 0, decide (2 ∈ k.accounts)))) == some (100, true)  --  some (100, true)
 -- §TEETH-7: createCell of a STALE id (cell 0 already exists) is REJECTED (the freshness gate bites —
 -- this is the supply-amplification guard: a re-inserted credited id cannot manufacture supply).
 #guard ((execEffect (createCellEffect 0 0) hs0).isSome) == false  --  false
@@ -556,11 +510,11 @@ def hs0Destroyed : RecordKernelState :=
 #guard ((execEffect (incrementNonceEffect 0 0 7) hs0Sealed).isSome) == false  --  false
 -- §TEETH-9: the SAME nonce write into a LIVE cell 0 SUCCEEDS and writes the field, measure unchanged.
 #guard ((execEffect (incrementNonceEffect 0 0 7) hs0).map
-        (fun k => (fieldOf nonceField (k.cell 0), recTotalAssetWithEscrow k 0))) == some (7, 100)  --  some (7, 100)
+        (fun k => (fieldOf nonceField (k.cell 0), recTotalAsset k 0))) == some (7, 100)  --  some (7, 100)
 -- §TEETH-10: a turn = [mint 25; burn 10; setPermissions] runs through the registry foldlM and the
 -- combined measure lands at 100 + 25 - 10 = 115 (the SUM of NON-ZERO deltas — the headline law).
 #guard ((execTurn [mintEffect 0 0 0 25, burnEffect 0 0 0 10, setPermissionsEffect 0 0 3] hs0).map
-        (fun k => recTotalAssetWithEscrow k 0)) == some 115  --  some 115
+        (fun k => recTotalAsset k 0)) == some 115  --  some 115
 -- §TEETH-11: makeSovereign/refusal/receiptArchive into a SEALED cell are all REJECTED (R6 for all arms).
 #guard ((execEffect (makeSovereignEffect 0 0) hs0Sealed).isSome) == false  --  false
 #guard ((execEffect (refusalEffect 0 0) hs0Sealed).isSome) == false  --  false
@@ -598,9 +552,6 @@ triple — a `sorryAx` anywhere in the composed lemmas would fail the pin (and t
 #assert_axioms spawnH
 #assert_axioms stateWriteH
 #assert_axioms makeSovereignH
-#assert_axioms mintStep_escrowHeld_fixed
-#assert_axioms burnStep_escrowHeld_fixed
 #assert_axioms stateWrite_recTotalAsset_fixed
-#assert_axioms stateWrite_escrowHeld_fixed
 
 end Dregg2.Exec.Handlers.StateSupply

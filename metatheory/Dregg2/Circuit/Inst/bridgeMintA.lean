@@ -104,7 +104,7 @@ def bridgeMintE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Inject
   logUpdate    := some (fun s args => inboundMintReceipt args.actor args.cell args.value :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -167,13 +167,13 @@ theorem apex_iff_inboundMintSpec (D : (CellId → AssetId → ℤ) → ℤ) (hD 
        ↔ InboundMintSpec s args.actor args.cell args.a args.value s'
   unfold InboundMintSpec bridgeMintGuardProp bridgeMintE
   constructor
-  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §1c — THE DELIVERABLE: `bridgeMintA_full_sound ⇒ InboundMintSpec` through the framework. -/

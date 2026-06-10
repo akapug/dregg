@@ -38,7 +38,7 @@ def RefreshDelegationSpec (s : RecChainedState) (actor child : CellId) (s' : Rec
   ∧ s'.kernel.delegations = refreshDelegationsMap s.kernel child
   ∧ s'.log = refreshDelegationReceipt actor child :: s.log
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.cell = s.kernel.cell
-  ∧ s'.kernel.caps = s.kernel.caps ∧ s'.kernel.escrows = s.kernel.escrows
+  ∧ s'.kernel.caps = s.kernel.caps
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments ∧ s'.kernel.bal = s.kernel.bal
   ∧ s'.kernel.queues = s.kernel.queues ∧ s'.kernel.swiss = s.kernel.swiss
@@ -63,12 +63,12 @@ theorem refreshDelegation_iff_spec (s : RecChainedState) (actor child : CellId) 
       simp only [Option.some.injEq] at h
       subst h
       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl, rfl, rfl⟩
-    · rintro ⟨_, hdgs, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+        rfl, rfl⟩
+    · rintro ⟨_, hdgs, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
       obtain ⟨k', lg'⟩ := s'
-      obtain ⟨acc, cellm, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
-      simp only at hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-      subst hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      obtain ⟨acc, cellm, caps, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+      simp only at hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+      subst hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
       rfl
   · rw [if_neg hg]
     constructor

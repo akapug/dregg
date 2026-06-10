@@ -218,7 +218,7 @@ def DropSpecFull (s : RecChainedState) (sw : Nat) (actor exporter : CellId)
   ∧ s'.log = dropReceipt actor exporter :: s.log
   -- THE FRAME: every one of the 16 non-`swiss` kernel fields LITERALLY unchanged.
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.cell = s.kernel.cell
-  ∧ s'.kernel.caps = s.kernel.caps ∧ s'.kernel.escrows = s.kernel.escrows
+  ∧ s'.kernel.caps = s.kernel.caps
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments ∧ s'.kernel.bal = s.kernel.bal
   ∧ s'.kernel.queues = s.kernel.queues ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
@@ -251,16 +251,16 @@ theorem execFullA_drop_iff_specFull (s : RecChainedState) (sw : Nat) (actor expo
     subst hs'
     refine ⟨⟨hauth, e, hf, hpos⟩, ⟨e, hf, hpos, ?_⟩, rfl, ?_⟩
     · rw [hkeq]
-    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
         rfl, rfl⟩
   · rintro ⟨hg, ⟨e, hf, hpos, hsw⟩, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13,
-      h14, h15, h16, h17, h18⟩
+      h14, h15, h16, h17⟩
     refine ⟨hg, ⟨{ s.kernel with swiss := dropSwissPost s.kernel.swiss sw e }, ?_, ?_⟩⟩
     · exact (dropSwissUpdate_eq_k s.kernel sw _).mp (dropSwissPost_eq_update s.kernel.swiss sw e hf hpos)
     · obtain ⟨k', lg'⟩ := s'
-      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
       have hke : k' = { s.kernel with swiss := dropSwissPost s.kernel.swiss sw e } :=
-        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 (h9.trans rfl) hsw h10 h11 h12 h13 h14 h15 h16 h17 h18
+        recKernel_ext h1 h2 h3 h4 h5 h6 h7 (h8.trans rfl) hsw h9 h10 h11 h12 h13 h14 h15 h16 h17
       subst hke hlog; rfl
 
 /-- **The strengthening is REAL (DropSpec ≡ DropSpecFull).** The weak executor-delegating spec and the

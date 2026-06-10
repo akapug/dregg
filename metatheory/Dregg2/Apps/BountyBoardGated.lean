@@ -8,7 +8,7 @@ off-ledger escrow VERB family (`createEscrowA`/`releaseEscrowA`/`refundEscrowA` 
 side-table) onto the FACTORY-BORN escrow CELL: the locked reward is held in the escrow cell's OWN
 per-asset `bal` column, the lifecycle lives in a SLOT governed by the factory's installed state machine
 `admitTable [(open,released),(open,refunded)]`, and conservation is the ORDINARY per-asset move law —
-NO side-table, NO bespoke `recTotalAssetWithEscrow`. (`Dregg2.Apps.EscrowFactory` is the factory; this
+NO side-table, NO bespoke `recTotalAsset`. (`Dregg2.Apps.EscrowFactory` is the factory; this
 app instantiates it.) The witness that the factory replaces the verbs with NO loss of guarantee:
 
   * the CREDENTIAL/REVOCATION gate teeth are preserved VERBATIM (a forged or revoked credential rejects

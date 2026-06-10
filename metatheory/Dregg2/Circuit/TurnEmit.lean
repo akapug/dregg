@@ -101,7 +101,6 @@ open Dregg2.Circuit.StateCommit
   (logHashInjective compressNInjective RestHashIffFrame AccountsWF cellLeafInjective)
 open Dregg2.Circuit.EffectCommit (CommitSurface)
 open Dregg2.Circuit.EffectCommit2 (Surface2 RestIffNoBal RestIffNoNullifiers)
-open Dregg2.Circuit.EffectCommit2Dual (RestIffNoBalEscrows)
 open Dregg2.Circuit.ListCommit (listLeafInjective)
 open Dregg2.Circuit.BornEmptyCommit
 open Dregg2.Circuit.Inst.Delegate (RestIffNoCaps)
@@ -323,11 +322,10 @@ def stepEmittedEncodeAgrees
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
     (D_caps : Caps → ℤ) (hD_caps : Function.Injective D_caps)
-    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ) (LE_escrow : EscrowRecord → ℤ)
-    (LE_sealed : SealedBoxRecord → ℤ)
+    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)  (LE_sealed : SealedBoxRecord → ℤ)
     (cN : List ℤ → ℤ) (hN : compressNInjective cN)
     (hLE_cell : listLeafInjective LE_cell) (hLE_null : listLeafInjective LE_null)
-    (hLE_escrow : listLeafInjective LE_escrow) (hLE_sealed : listLeafInjective LE_sealed)
+     (hLE_sealed : listLeafInjective LE_sealed)
     (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
     (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (CS : CommitSurface)
@@ -382,10 +380,9 @@ def stepEmittedEncodeAgrees
   | .sealA pid actor payload =>
       assignmentOf sw.assignment =
         encodeE2 S (sealE LE_sealed cN hN hLE_sealed) st { pid, actor, payload } st'
-  | .queueEnqueueA id m actor cell depId dAsset deposit =>
+  | .queueEnqueueA id m actor cell =>
       assignmentOf sw.assignment =
-        encodeE2Triple S (queueEnqueueE D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow) st
-          { id, m, actor, cell, depId, dAsset, deposit } st'
+        encodeE2 S (queueEnqueueE LQ cNQ hNQ hLQ) st { id, m, actor, cell } st'
   | .setFieldA actor cell f v =>
       assignmentOf sw.assignment = encodeE CS setFieldE st { actor, cell, f, v } st'
   | .emitEventA actor cell topic data =>
@@ -422,17 +419,15 @@ def stepEmittedEncodeAgrees
   | .queueAllocateA id actor cell cap =>
       assignmentOf sw.assignment =
         encodeE2 S (queueAllocateE LQ cN hN hLQ) st ⟨id, actor, cell, cap⟩ st'
-  | .queueDequeueA id actor cell depId =>
+  | .queueDequeueA id actor cell =>
       assignmentOf sw.assignment =
-        encodeE2Triple S (queueDequeueE D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow) st
-          ⟨id, actor, cell, depId⟩ st'
+        encodeE2 S (queueDequeueE LQ cNQ hNQ hLQ) st ⟨id, actor, cell⟩ st'
   | .queueResizeA id newCap actor cell =>
       assignmentOf sw.assignment =
         encodeE2 S (queueResizeE LQ cN hN hLQ) st ⟨id, newCap, actor, cell⟩ st'
   | .queueAtomicTxA actor ops =>
       assignmentOf sw.assignment =
-        encodeE2Triple S (queueAtomicTxE D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow) st
-          ⟨actor, ops⟩ st'
+        encodeE2 S (queueAtomicTxE LQ cNQ hNQ hLQ) st ⟨actor, ops⟩ st'
   | .queuePipelineStepA srcId owner sinkCells sinkIds =>
       assignmentOf sw.assignment =
         encodeE2 S (queuePipelineStepE LQ cN hN hLQ) st ⟨srcId, owner, sinkCells, sinkIds⟩ st'
@@ -470,9 +465,9 @@ the circuit dispatch (`fullAction_circuit_refines_spec`).
 HONEST CAVEAT (this is NOT whole-turn adversarial soundness):
 
 1. **All arms CLOSED.** The `exerciseA` arm discharges through
-   `fullAction_circuit_refines_spec` (its inner-turn fold is a REAL composite circuit step);
-   the dregg3-F1a-doomed escrow/obligation/bridge-L/F/C arms carry the declarative
-   `fullActionStep` fallback (their Inst emissions were deleted; constructors die in F1b).
+   `fullAction_circuit_refines_spec` (its inner-turn fold is a REAL composite circuit step).
+   F1b: the escrow/obligation/bridge-L/F/C constructors are GONE, so every surviving arm has a
+   real emitted (or circuit-dispatch) discharge — no declarative fallback remains.
 
 2. **Honest-trace only (dead `hEnc`).** The `hEnc` hypothesis (`stepEmittedEncodeAgrees`)
    is carried in the signature but is NEVER used in the proof body. Consequently this proves
@@ -483,11 +478,10 @@ theorem step_emitted_refines_fullActionStep
     (S : Surface2)
     (D_bal : (CellId → AssetId → ℤ) → ℤ) (hD_bal : Function.Injective D_bal)
     (D_caps : Caps → ℤ) (hD_caps : Function.Injective D_caps)
-    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ) (LE_escrow : EscrowRecord → ℤ)
-    (LE_sealed : SealedBoxRecord → ℤ)
+    (LE_cell : CellId → ℤ) (LE_null : Nat → ℤ)  (LE_sealed : SealedBoxRecord → ℤ)
     (cN : List ℤ → ℤ) (hN : compressNInjective cN)
     (hLE_cell : listLeafInjective LE_cell) (hLE_null : listLeafInjective LE_null)
-    (hLE_escrow : listLeafInjective LE_escrow) (hLE_sealed : listLeafInjective LE_sealed)
+     (hLE_sealed : listLeafInjective LE_sealed)
     (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
     (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (CS : CommitSurface)
@@ -507,8 +501,7 @@ theorem step_emitted_refines_fullActionStep
     (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth)
     (hRestBal : RestIffNoBal S.RH) (hRestAccounts : RestIffNoAccountsBalBorn S.RH)
     (hRestSpawn : RestIffNoSpawnTouched S.RH) (hRestCaps : RestIffNoCaps S.RH)
-    (hRestNull : RestIffNoNullifiers S.RH) (hRestEscrow : RestIffNoBalEscrows S.RH)
-    (hRestCommitments : RestIffNoCommitments S.RH) (hRestSealed : RestIffNoSealedBoxes S.RH)
+    (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH) (hRestSealed : RestIffNoSealedBoxes S.RH)
     (hRestQueues : RestIffNoQueuesBalEscrows S.RH)
     (hRestQueuesOnly : RestIffNoQueues S.RH)
     (hRestFactory : RestIffNoFactoryTouched S.RH)
@@ -518,13 +511,13 @@ theorem step_emitted_refines_fullActionStep
     (hLog : logHashInjective S.LH)
     (sw : StepWitness) (st st' : RecChainedState) (fa : FullActionA)
     (h : stepEmittedSat defaultDescriptorLookup sw st st' fa)
-    (hEnc : stepEmittedEncodeAgrees S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow LE_sealed
-      cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS DBal hDBal DSide hDSide DLeg hDLeg
+    (hEnc : stepEmittedEncodeAgrees S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed
+      cN hN hLE_cell hLE_null hLE_sealed LQ cNQ hNQ hLQ CS DBal hDBal DSide hDSide DLeg hDLeg
       DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth
       sw st st' fa)
     (hcircuit :
-      fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow LE_sealed cN hN
-        hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS DBal hDBal DSide hDSide DLeg hDLeg
+      fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN
+        hLE_cell hLE_null hLE_sealed LQ cNQ hNQ hLQ CS DBal hDBal DSide hDSide DLeg hDLeg
         DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth
         st fa st') :
     fullActionStep st fa st' := by
@@ -602,12 +595,11 @@ theorem step_emitted_refines_fullActionStep
       simp only [fullActionStep]
       exact seal_emitted_refines_spec S LE_sealed cN hN hLE_sealed hRestSealed hLog st { pid, actor, payload } st'
         ((seal_emitted_equiv_circuit S LE_sealed cN hN hLE_sealed st { pid, actor, payload } st').mpr hcircuit)
-  | .queueEnqueueA id m actor cell depId dAsset deposit =>
+  | .queueEnqueueA id m actor cell =>
       simp only [fullActionStep]
-      exact queueEnqueue_emitted_refines_spec S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow
-        hRestQueues hLog st { id, m, actor, cell, depId, dAsset, deposit } st'
-        ((queueEnqueue_emitted_equiv_circuit S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow st
-            { id, m, actor, cell, depId, dAsset, deposit } st').mpr hcircuit)
+      exact queueEnqueue_emitted_refines_spec S LQ cNQ hNQ hLQ hRestQueues hLog st
+        { id, m, actor, cell } st'
+        ((queueEnqueue_emitted_equiv_circuit S LQ cNQ hNQ hLQ st { id, m, actor, cell } st').mpr hcircuit)
   | .emitEventA actor cell topic data =>
       simp only [fullActionStep]
       rcases hcircuit with ⟨hwf, hwf', hc⟩
@@ -646,11 +638,10 @@ theorem step_emitted_refines_fullActionStep
       -- CLOSED: the `fullActionCircuitStep` exerciseA arm is now a REAL composite (hold-gate ∘ inner
       -- CIRCUIT fold); `fullAction_circuit_refines_spec` discharges circuit ⊑ spec, and
       -- `hcircuit` is exactly that circuit acceptance.
-      exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_escrow
-        LE_sealed cN hN hLE_cell hLE_null hLE_escrow hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame
+      exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null LE_sealed cN hN hLE_cell hLE_null hLE_sealed LQ cNQ hNQ hLQ CS hCSN hCSL hRestFrame
         hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs LS hLS DLife hDLife
         DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull
-        hRestEscrow hRestCommitments hRestSealed hRestQueues hRestQueuesOnly hRestFactory
+        hRestCommitments hRestSealed hRestQueues hRestQueuesOnly hRestFactory
         hRestSwiss hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog st (.exerciseA actor target inner)
         st' hcircuit
   | .createCellFromFactoryA actor newCell vk =>
@@ -697,22 +688,19 @@ theorem step_emitted_refines_fullActionStep
       exact queueAllocateA_emitted_refines_spec S LQ cN hN hLQ hRestQueuesOnly hLog st
         ⟨id, actor, cell, capacity⟩ st'
         ((queueAllocateA_emitted_equiv_circuit S LQ cN hN hLQ st ⟨id, actor, cell, capacity⟩ st').mpr hcircuit)
-  | .queueDequeueA id actor cell depId =>
+  | .queueDequeueA id actor cell =>
       simp only [fullActionStep]
-      exact queueDequeueA_emitted_refines_spec S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow hRestQueues
-        hLog st ⟨id, actor, cell, depId⟩ st'
-        ((queueDequeueA_emitted_equiv_circuit S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow st
-            ⟨id, actor, cell, depId⟩ st').mpr hcircuit)
+      exact queueDequeueA_emitted_refines_spec S LQ cNQ hNQ hLQ hRestQueues hLog st
+        ⟨id, actor, cell⟩ st'
+        ((queueDequeueA_emitted_equiv_circuit S LQ cNQ hNQ hLQ st ⟨id, actor, cell⟩ st').mpr hcircuit)
   | .queueResizeA id newCap actor cell =>
       simp only [fullActionStep]
       exact queueResizeA_emitted_refines_spec S LQ cN hN hLQ hRestQueuesOnly hLog st ⟨id, newCap, actor, cell⟩ st'
         ((queueResizeA_emitted_equiv_circuit S LQ cN hN hLQ st ⟨id, newCap, actor, cell⟩ st').mpr hcircuit)
   | .queueAtomicTxA actor ops =>
       simp only [fullActionStep]
-      exact queueAtomicTxA_emitted_refines_spec S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow
-        hRestQueues hLog st ⟨actor, ops⟩ st'
-        ((queueAtomicTxA_emitted_equiv_circuit S D_bal hD_bal LQ cNQ hNQ hLQ LE_escrow cN hN hLE_escrow st
-            ⟨actor, ops⟩ st').mpr hcircuit)
+      exact queueAtomicTxA_emitted_refines_spec S LQ cNQ hNQ hLQ hRestQueues hLog st ⟨actor, ops⟩ st'
+        ((queueAtomicTxA_emitted_equiv_circuit S LQ cNQ hNQ hLQ st ⟨actor, ops⟩ st').mpr hcircuit)
   | .queuePipelineStepA srcId owner sinkCells sinkIds =>
       simp only [fullActionStep]
       exact queuePipelineStepA_emitted_refines_spec S LQ cN hN hLQ hRestQueuesOnly hLog st
@@ -761,20 +749,6 @@ theorem step_emitted_refines_fullActionStep
       simp only [fullActionStep]
       exact refreshDelegationA_emitted_refines_spec S DDgs hDDgs hRestDelegations hLog st ⟨actor, child⟩ st'
         ((refreshDelegationA_emitted_equiv_circuit S DDgs hDDgs st ⟨actor, child⟩ st').mpr hcircuit)
-  -- dregg3 F1a doomed-family arms: their Inst emissions were DELETED; the circuit dispatch
-  -- falls back to the declarative `fullActionStep`, so `hcircuit` IS the conclusion.
-  | .createEscrowA _ _ _ _ _ _ => exact hcircuit
-  | .releaseEscrowA _ _ => exact hcircuit
-  | .refundEscrowA _ _ => exact hcircuit
-  | .createObligationA _ _ _ _ _ _ => exact hcircuit
-  | .fulfillObligationA _ _ => exact hcircuit
-  | .slashObligationA _ _ => exact hcircuit
-  | .createCommittedEscrowA _ _ _ _ _ _ _ => exact hcircuit
-  | .releaseCommittedEscrowA _ _ => exact hcircuit
-  | .refundCommittedEscrowA _ _ => exact hcircuit
-  | .bridgeLockA _ _ _ _ _ _ => exact hcircuit
-  | .bridgeFinalizeA _ _ _ _ => exact hcircuit
-  | .bridgeCancelA _ _ => exact hcircuit
 
 /-! ## §5c — REPRESENTATIVE adversarial-witness EXTRACTION (mint), killing the dead `hEnc`.
 

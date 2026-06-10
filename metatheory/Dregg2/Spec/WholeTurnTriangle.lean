@@ -253,8 +253,8 @@ theorem execFullForestG_whole_turn_conserves (s s' : RecChainedState)
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
       (Bytes := Bytes) (Tag := Tag)) (b : AssetId)
     (h : execFullForestG s f = some s') :
-    recTotalAssetWithEscrow s'.kernel b
-      = recTotalAssetWithEscrow s.kernel b
+    recTotalAsset s'.kernel b
+      = recTotalAsset s.kernel b
         + turnLedgerDeltaAsset ((lowerForestG f).map Prod.snd) b :=
   turnSpec_ledger_per_asset s s' ((lowerForestG f).map Prod.snd) b
     (execFullForestG_post_is_intent_fold s s' f h)

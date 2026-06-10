@@ -3,7 +3,7 @@
 charted, with the conservation law badged.
 
 This leaf widget renders the per-asset conserved quantity of the dregg record kernel — the very
-`cellObsA s b = recTotalAssetWithEscrow s.kernel b` the living-cell bisimulation observes
+`cellObsA s b = recTotalAsset s.kernel b` the living-cell bisimulation observes
 (`Dregg2/Exec/CellReal.lean:30`, `RecordKernel.lean:1136`) — *before* and *after* running the genuine
 46-effect, auth-gated executor `execFullForestA` over a genuine conserving forest. It is the
 quantitative companion to `Widget/DreggForest.lean`'s structural call-tree: that widget answers "what
@@ -18,7 +18,7 @@ THE "NO PLACEHOLDERS" DISCIPLINE — every number on the chart is computed from 
     asset-1 supply 7).
   * The "after" column is `(execFullForestA fma0 transferCF.1).getD fma0` — the ACTUAL committed kernel
     state the executor produces (the forest commits: `execFullForestA fma0 transferCF.1` is `some`). The
-    per-asset totals (`recTotalAssetWithEscrow`) and the per-cell `bal` entries are then read straight off
+    per-asset totals (`recTotalAsset`) and the per-cell `bal` entries are then read straight off
     that state. There is no hand-entered "after" — swap the forest or the start state and every bar moves.
   * The chart series are the per-asset conserved totals (asset 0 and asset 1) BEFORE vs AFTER. Because the
     transfer is internal to asset 0 and touches neither asset's supply, both series land on the same value
@@ -74,7 +74,7 @@ def chartedAssets : List AssetId := [0, 1]
 /-- The cells the per-cell breakdown covers — the live `accounts` of `fma0` (cells 0 and 1). -/
 def chartedCells : List CellId := [0, 1]
 
-/-! ## §2 — The charted quantity: the per-asset CONSERVED total (`recTotalAssetWithEscrow`).
+/-! ## §2 — The charted quantity: the per-asset CONSERVED total (`recTotalAsset`).
 
 This is precisely `cellObsA`'s observation — the per-asset vector the living-cell bisimulation tracks and
 that `recKExecAsset_conserves_per_asset` proves invariant on committed transfers. A scalar aggregate would
@@ -83,7 +83,7 @@ law predicts (and the kernel proves) that each entry is unchanged across a commi
 
 /-- The per-asset conserved total of asset `b` in kernel state `k`: `recTotalAsset k b` plus off-ledger
 escrow held at `b` (here escrow is empty, so it is the ledger supply). The exact `cellObsA` observation. -/
-def conservedTotal (k : RecordKernelState) (b : AssetId) : ℤ := recTotalAssetWithEscrow k b
+def conservedTotal (k : RecordKernelState) (b : AssetId) : ℤ := recTotalAsset k b
 
 /-- One chart datum per asset: `{ asset, before, after }`, each value the REAL conserved total read off
 the corresponding kernel state. Fed directly to Recharts `LineChart.data`. -/
@@ -167,7 +167,7 @@ def conservationLedgerPanel : Html :=
       {.text "dregg conservation ledger · transferCF over fma0 (committed)"}
     </div>
     <div style={json% {fontSize: "11px", color: $keyColor, marginBottom: "10px"}}>
-      {.text "per-asset conserved total (recTotalAssetWithEscrow = cellObsA) before vs after a REAL execFullForestA commit · grey = before, green = after"}
+      {.text "per-asset conserved total (recTotalAsset = cellObsA) before vs after a REAL execFullForestA commit · grey = before, green = after"}
     </div>
     {ledgerChart}
     <div style={json% {marginTop: "10px"}}>
@@ -184,7 +184,7 @@ def conservationLedgerPanel : Html :=
 /-! ## §5 — Force the render over the REAL value (`#html`), then BADGE the conservation guarantee.
 
 `#html conservationLedgerPanel` elaborates the whole derivation — `execFullForestA fma0 transferCF.1`,
-`recTotalAssetWithEscrow` on both states, the per-cell `bal` reads — and saves the widget, so the verify
+`recTotalAsset` on both states, the per-cell `bal` reads — and saves the widget, so the verify
 step genuinely exercises the chart's render path over the executor's real output. The `#dregg_badge`
 anchors the conservation keystone: its colour is the proof term's verdict (green = kernel-clean). -/
 

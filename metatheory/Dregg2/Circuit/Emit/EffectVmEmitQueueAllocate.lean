@@ -431,7 +431,7 @@ theorem unify_allocate_balFrozen_univA (st : RecChainedState) (id : Nat) (actor 
     (cap : Nat) (st' : RecChainedState) (c : CellId) (asset : AssetId)
     (hspec : QueueAllocateSpec st id actor cell cap st') :
     (cellProjBal st'.kernel.bal c asset).balLo = (cellProjBal st.kernel.bal c asset).balLo := by
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
+  obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
   show st'.kernel.bal c asset = st.kernel.bal c asset
   rw [hbal]
 

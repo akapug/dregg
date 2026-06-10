@@ -53,7 +53,6 @@ def isSimpleArm : TurnExecutorFull.FullActionA → Bool
   | .sealA ..     => false   -- carries a `Cap` PAYLOAD field (not a flat `N`/`I`/`A`); see `parseActionW_seal`.
   -- WAVE-4 non-simple arms: a `0`/`1` BOOL flag (parsed under an `if hp ≤ 1` gate), and the two
   -- LIST-bearing batch arms (a `QueueTxOpA` array / two `Nat` arrays) — closed separately below.
-  | .createCommittedEscrowA .. => false  -- carries the `hidingProof` flag; see `parseActionW_committedescrow`.
   | .noteSpendA ..             => false  -- carries the §8 `spendProof` flag; see `parseActionW_notespend`.
   | .queueAtomicTxA ..         => false  -- carries the `OPS` `QueueTxOpA` array; see `parseActionW_qatomic`.
   | .queuePipelineStepA ..     => false  -- carries two `NATSW` arrays; see `parseActionW_qpipe`.
@@ -141,54 +140,9 @@ theorem parseActionW_seal (pid : Nat) (actor : CellId) (payload : Authority.Cap)
     parseCap_encode payload (("]}":String).toList ++ rest), lit_append,
     Option.bind_eq_bind, Option.bind]
 
-/-! ### §7-WAVE4 — the WAVE-4 non-simple arms: the `createCommittedEscrowA` HIDING-FLAG arm and the two
+/-! ### §7-WAVE4 — the WAVE-4 non-simple arms: the `noteSpendA` PROOF-FLAG arm and the two
 LIST-bearing batch arms (`queueAtomicTxA` / `queuePipelineStepA`). The flag arm carries a `0`/`1` `Bool`
-parsed under an `if hp ≤ 1` gate; the batch arms carry a `QueueTxOpA`/`Nat` array. -/
-
-set_option maxHeartbeats 1000000 in
-/-- **The WAVE-4 `createCommittedEscrowA` arm** — proved SEPARATELY because its 7th field is the
-`hidingProof` BOOL, encoded as a `0`/`1` flag and parsed under the `if hp ≤ 1` gate (which the generic
-`action_arm` `simp` cannot reduce). We case-split on `hidingProof`: `true` encodes `1` (`1 ≤ 1`, `1 == 1`),
-`false` encodes `0` (`0 ≤ 1`, `0 == 1 = false`), each recovering the flag exactly. -/
-theorem parseActionW_committedescrow (id : Nat) (actor creator recipient : CellId) (a : AssetId)
-    (amount : Int) (hidingProof : Bool) (rest : PState) :
-    parseActionW ((encodeActionW (.createCommittedEscrowA id actor creator recipient a amount hidingProof)).toList ++ rest)
-      = some (.createCommittedEscrowA id actor creator recipient a amount hidingProof, rest) := by
-  unfold parseActionW parseActionWFuel
-  -- the flag is encoded as `","` ++ ("1"/"0"); split it into a plain `","` literal so `cN_step` applies.
-  cases hidingProof with
-  | true =>
-      -- `simp` reduces the encoder's `if (true:Bool) then "1" else "0"` flag literal to `"1"`; we rewrite
-      -- it to `toString (1:Nat)` so the closing `cN_step` reads it (closer `]}`), then `simp` evaluates the
-      -- parser's `if 1 ≤ 1`/`(1 == 1) = true` gate to recover `true`.
-      simp only [encodeActionW, if_true]
-      rw [show ("1":String) = toString (1:Nat) from by decide]
-      simp only [String.toList_append, List.append_assoc]
-      skip_to_arm
-      simp only [lit_append, parseNat_toString _ _ (nd_litComma _),
-        cN_step _ _ (nd_litComma _), cN_step _ _ (nd_litClose _),
-        cI_step _ _ (nd_litComma _), Option.bind_eq_bind, Option.bind,
-        show ((1:Nat) ≤ 1) = True from by simp, if_true, beq_self_eq_true]
-  | false =>
-      -- `simp` reduces `if (false:Bool) then "1" else "0"` to `"0"` (the `false = true` decidable prop is
-      -- `False`); rewrite to `toString (0:Nat)`, then `simp` evaluates `0 ≤ 1`/`(0 == 1) = false`.
-      simp only [encodeActionW, Bool.false_eq_true, if_false]
-      rw [show ("0":String) = toString (0:Nat) from by decide]
-      simp only [String.toList_append, List.append_assoc]
-      skip_to_arm
-      simp only [lit_append, parseNat_toString _ _ (nd_litComma _),
-        cN_step _ _ (nd_litComma _), cN_step _ _ (nd_litClose _),
-        cI_step _ _ (nd_litComma _), Option.bind_eq_bind, Option.bind,
-        show ((0:Nat) ≤ 1) = True from by simp, if_true, show ((0:Nat) == 1) = false from by decide]
-
--- A committed-escrow effect (privacy escrow, the `hidingProof = true` portal-discharged variant) round-trips:
-example : parseActionW ((encodeActionW (.createCommittedEscrowA 1 2 3 4 5 9 true)).toList ++ ['x'])
-            = some (.createCommittedEscrowA 1 2 3 4 5 9 true, ['x']) :=
-  parseActionW_committedescrow 1 2 3 4 5 9 true ['x']
--- ...and the `hidingProof = false` variant too (the flag is REAL, not erased):
-example : parseActionW ((encodeActionW (.createCommittedEscrowA 1 2 3 4 5 9 false)).toList ++ ['x'])
-            = some (.createCommittedEscrowA 1 2 3 4 5 9 false, ['x']) :=
-  parseActionW_committedescrow 1 2 3 4 5 9 false ['x']
+parsed under an `if sp ≤ 1` gate; the batch arms carry a `QueueTxOpA`/`Nat` array. -/
 
 set_option maxHeartbeats 1000000 in
 /-- **The WAVE-NOTESPEND `noteSpendA` arm** — proved SEPARATELY because its 3rd field is the §8
@@ -332,14 +286,14 @@ condition). Dispatch on the `enq`/`deq` tag; each is a flat `N`/`I` do-block (§
 theorem parseQueueTxOp_encode (op : QueueTxOpA) (rest : PState) :
     parseQueueTxOp ((encodeQueueTxOp op).toList ++ rest) = some (op, rest) := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
+  | enqueue id m actor cell =>
       unfold parseQueueTxOp
       simp only [encodeQueueTxOp, String.toList_append, List.append_assoc]
       rw [lit_append]
       simp only [parseNat_toString _ _ (nd_litComma _),
         cN_step _ _ (nd_litComma _), cN_step _ _ (nd_litClose _),
-        cI_step _ _ (nd_litClose _), lit_append, Option.bind_eq_bind, Option.bind]
-  | dequeue id actor cell depId =>
+        lit_append, Option.bind_eq_bind, Option.bind]
+  | dequeue id actor cell =>
       unfold parseQueueTxOp
       simp only [encodeQueueTxOp, String.toList_append, List.append_assoc]
       -- the `enq` tag fails first (the `deq` shape is `{"deq":…`), then the `deq` arm fires.
@@ -357,16 +311,15 @@ private def encodeQueueTxOpsTail (ops : List QueueTxOpA) : String :=
 /-- Every `OP` opens with `'{'` (so the `OPS` body is `[{…`, making `lit "[]"` fail). -/
 private theorem encodeQueueTxOp_head (op : QueueTxOpA) : ∃ t, (encodeQueueTxOp op).toList = '{' :: t := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
+  | enqueue id m actor cell =>
       refine ⟨("\"enq\":[" ++ toString id ++ "," ++ toString m ++ "," ++ toString actor ++ ","
-        ++ toString cell ++ "," ++ toString depId ++ "," ++ toString dAsset ++ ","
-        ++ toString deposit ++ "]}" : String).toList, ?_⟩
+        ++ toString cell ++ "]}" : String).toList, ?_⟩
       unfold encodeQueueTxOp
       simp only [String.toList_append, show ("{\"enq\":[":String).toList = '{' :: "\"enq\":[".toList from by decide,
         List.cons_append, List.nil_append, List.append_assoc]
-  | dequeue id actor cell depId =>
-      refine ⟨("\"deq\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString cell ++ ","
-        ++ toString depId ++ "]}" : String).toList, ?_⟩
+  | dequeue id actor cell =>
+      refine ⟨("\"deq\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString cell
+        ++ "]}" : String).toList, ?_⟩
       unfold encodeQueueTxOp
       simp only [String.toList_append, show ("{\"deq\":[":String).toList = '{' :: "\"deq\":[".toList from by decide,
         List.cons_append, List.nil_append, List.append_assoc]
@@ -478,11 +431,11 @@ theorem parseActionW_qatomic (actor : CellId) (ops : List QueueTxOpA) (rest : PS
   rw [lit_append]
 
 -- An atomic batch (one enqueue + one dequeue sub-op) round-trips (the WHAT decoder covers the batch arm):
-example : parseActionW ((encodeActionW (.queueAtomicTxA 1 [QueueTxOpA.enqueue 2 3 4 5 6 7 8,
-            QueueTxOpA.dequeue 9 10 11 12])).toList ++ ['x'])
-            = some (.queueAtomicTxA 1 [QueueTxOpA.enqueue 2 3 4 5 6 7 8,
-                QueueTxOpA.dequeue 9 10 11 12], ['x']) :=
-  parseActionW_qatomic 1 [QueueTxOpA.enqueue 2 3 4 5 6 7 8, QueueTxOpA.dequeue 9 10 11 12] ['x']
+example : parseActionW ((encodeActionW (.queueAtomicTxA 1 [QueueTxOpA.enqueue 2 3 4 5,
+            QueueTxOpA.dequeue 9 10 11])).toList ++ ['x'])
+            = some (.queueAtomicTxA 1 [QueueTxOpA.enqueue 2 3 4 5,
+                QueueTxOpA.dequeue 9 10 11], ['x']) :=
+  parseActionW_qatomic 1 [QueueTxOpA.enqueue 2 3 4 5, QueueTxOpA.dequeue 9 10 11] ['x']
 
 set_option maxHeartbeats 1000000 in
 /-- **The WAVE-4 `queuePipelineStepA` arm** — `{"qpipe":[srcId,owner,SINKCELLS,SINKIDS]}`: read `srcId`
@@ -571,9 +524,7 @@ theorem parseActionW_any (act : TurnExecutorFull.FullActionA) (rest : PState) (h
       -- `WfActionW` pins `inner = []` (the codec boundary); the empty-inner arm round-trips.
       simp only [WfActionW] at hwf; subst hwf
       exact parseActionW_exercise_nil actor target rest
-  -- WAVE-4 non-simple arms (the `hidingProof` flag + the two list-bearing batch arms):
-  | createCommittedEscrowA id actor creator recipient a amount hp =>
-      exact parseActionW_committedescrow id actor creator recipient a amount hp rest
+  -- WAVE-4 non-simple arms (the §8 proof flag + the two list-bearing batch arms):
   | noteSpendA nf actor spendProof =>     -- WAVE-NOTESPEND: the §8 `spendProof` flag arm.
       exact parseActionW_notespend nf actor spendProof rest
   | queueAtomicTxA actor ops => exact parseActionW_qatomic actor ops rest

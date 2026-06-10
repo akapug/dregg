@@ -152,7 +152,7 @@ theorem exerciseHoldState_accountsWF (st : RecChainedState) (actor : CellId)
 /-- Kernel extensionality on all 17 fields (the `cell` clause is separate in the v1 apex). -/
 theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
     (haccounts : k.accounts = k'.accounts) (hcell : k.cell = k'.cell) (hcaps : k.caps = k'.caps)
-    (hescrows : k.escrows = k'.escrows) (hnullifiers : k.nullifiers = k'.nullifiers)
+    (hnullifiers : k.nullifiers = k'.nullifiers)
     (hrevoked : k.revoked = k'.revoked) (hcommitments : k.commitments = k'.commitments)
     (hbal : k.bal = k'.bal) (hqueues : k.queues = k'.queues) (hswiss : k.swiss = k'.swiss)
     (hslotCaveats : k.slotCaveats = k'.slotCaveats) (hfactories : k.factories = k'.factories)
@@ -184,10 +184,10 @@ theorem apex_iff_exerciseHoldSpec (s : RecChainedState) (args : ExerciseHoldArgs
   rw [exercise_touchedCellMap_eq]
   unfold ExerciseHoldSpec exerciseGuardProp exerciseGuard exerciseHoldState kernelFrame
   constructor
-  · rintro ⟨hguard, hcell, hlog, hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hguard, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB, hDE, hDEA⟩
     have hker : s'.kernel = s.kernel :=
-      recordKernel_eq_of_fields hAcc hcell hCaps hEsc hNul hRev hCom hBal hQ hSw hSC hFac hLif hDC hDel
+      recordKernel_eq_of_fields hAcc hcell hCaps hNul hRev hCom hBal hQ hSw hSC hFac hLif hDC hDel
         hDgs hSB hDE hDEA
     refine ⟨hguard, ?_⟩
     exact recChainedState_eq_of_fields hker hlog

@@ -114,7 +114,6 @@ def DelegateSpec (s : RecChainedState) (del rec t : CellId) (s' : RecChainedStat
   -- the 16 framed kernel fields (every RecordKernelState component except `caps`):
   ∧ s'.kernel.accounts = s.kernel.accounts
   ∧ s'.kernel.cell = s.kernel.cell
-  ∧ s'.kernel.escrows = s.kernel.escrows
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments
@@ -150,13 +149,13 @@ theorem recCDelegate_iff_spec (s : RecChainedState) (del rec t : CellId) (s' : R
     · intro h
       simp only [Option.some.injEq] at h
       subst h
-      exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    · rintro ⟨hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+      exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
       -- reconstruct `s'` from its 18 components.
       obtain ⟨k', log'⟩ := s'
-      obtain ⟨acc, cl, cp, esc, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
-      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      obtain ⟨acc, cl, cp, nul, rev, com, bl, qs, sw, slc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
       rfl
   · rw [if_neg hg]
     constructor
@@ -241,7 +240,7 @@ turn is conservation-NEUTRAL by the spec's frame, INDEPENDENT of any executor co
 theorem delegate_balance_neutral (s : RecChainedState) (del rec t : CellId) (s' : RecChainedState)
     (h : DelegateSpec s del rec t s') :
     s'.kernel.bal = s.kernel.bal ∧ s'.kernel.cell = s.kernel.cell := by
-  obtain ⟨_, _, _, _, hcell, _, _, _, _, hbal, _⟩ := h
+  obtain ⟨_, _, _, _, hcell, _, _, _, hbal, _⟩ := h
   exact ⟨hbal, hcell⟩
 
 /-- **`delegate_rejects_unconnected` — NEGATIVE teeth.** A delegator that holds NO `t`-conferring cap

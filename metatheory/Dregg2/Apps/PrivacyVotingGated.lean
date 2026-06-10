@@ -395,14 +395,14 @@ theorem castNode_delta_zero (cred : Authorization Dg Pf) (voterSlot : FieldName)
   simp [castNode, lowerForestG, lowerChildrenG, turnLedgerDeltaAsset, ledgerDeltaAsset]
 
 /-- **`pv_cast_conserves` — PROVED (END-USER THEOREM 4).** A COMMITTED cast-vote preserves EVERY asset's
-total supply: `recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b`, for every asset
+total supply: `recTotalAsset s'.kernel b = recTotalAsset s.kernel b`, for every asset
 `b`. The ballot write touches the tally/nullifier metadata, never balance — so a vote moves no money. A
 one-liner off `execFullForestG_conserves_per_asset` with the `SetField`-is-balance-neutral hypothesis
 discharged by `castNode_delta_zero`. -/
 theorem pv_cast_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf)
     (voterSlot : FieldName) (mark : Int) (b : AssetId)
     (h : execFullForestG s (castNode cred voterSlot mark) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (castNode cred voterSlot mark) b h
     (castNode_delta_zero cred voterSlot mark b)
 

@@ -137,20 +137,8 @@ def actionTag : FullActionA → Nat
   | .createCellFromFactoryA _ _ _ => 18
   | .spawnA _ _ _ => 19
   | .bridgeMintA _ _ _ _ => 20
-  | .createEscrowA _ _ _ _ _ _ => 21
-  | .releaseEscrowA _ _ => 22
-  | .refundEscrowA _ _ => 23
-  | .createObligationA _ _ _ _ _ _ => 24
-  | .fulfillObligationA _ _ => 25
-  | .slashObligationA _ _ => 26
   | .noteSpendA _ _ _ => 27
   | .noteCreateA _ _ => 28
-  | .createCommittedEscrowA _ _ _ _ _ _ _ => 29
-  | .releaseCommittedEscrowA _ _ => 30
-  | .refundCommittedEscrowA _ _ => 31
-  | .bridgeLockA _ _ _ _ _ _ => 32
-  | .bridgeFinalizeA _ _ _ _ => 33
-  | .bridgeCancelA _ _ => 34
   | .sealA _ _ _ => 35
   | .unsealA _ _ _ => 36
   | .createSealPairA _ _ _ _ => 37
@@ -158,8 +146,8 @@ def actionTag : FullActionA → Nat
   | .refusalA _ _ => 39
   | .receiptArchiveA _ _ => 40
   | .queueAllocateA _ _ _ _ => 41
-  | .queueEnqueueA _ _ _ _ _ _ _ => 42
-  | .queueDequeueA _ _ _ _ => 43
+  | .queueEnqueueA _ _ _ _ => 42
+  | .queueDequeueA _ _ _ => 43
   | .queueResizeA _ _ _ _ => 44
   | .queueAtomicTxA _ _ => 45
   | .queuePipelineStepA _ _ _ _ => 46
@@ -268,10 +256,10 @@ mutual
         ReceiptArchiveSpec st actor cell st'
     | .queueAllocateA id actor cell cap =>
         QueueAllocateSpec st id actor cell cap st'
-    | .queueEnqueueA id m actor cell depId dAsset deposit =>
-        QueueEnqueueSpec st id m actor cell depId dAsset deposit st'
-    | .queueDequeueA id actor cell depId =>
-        QueueDequeueSpec st id actor cell depId st'
+    | .queueEnqueueA id m actor cell =>
+        QueueEnqueueSpec st id m actor cell st'
+    | .queueDequeueA id actor cell =>
+        QueueDequeueSpec st id actor cell st'
     | .queueResizeA id newCap actor cell =>
         QueueResizeSpec st id newCap actor cell st'
     | .queueAtomicTxA actor ops =>
@@ -296,14 +284,6 @@ mutual
         CellDestroySpec st actor cell certHash st'
     | .refreshDelegationA actor child =>
         RefreshDelegationSpec st actor child st'
-    -- dregg3 F1a: the escrow / obligation / bridge-Lock/Finalize/Cancel families LOST their
-    -- declarative spec layer (deleted with the per-effect circuit strata; they re-land as
-    -- verified factory cell-programs in `Dregg2/Apps/`). Until F1b removes their
-    -- `FullActionA` constructors, this wildcard carries the executor equation VERBATIM for
-    -- exactly those 12 arms (every surviving effect is matched explicitly above) — an
-    -- honest "no independent spec" marker, not a triangle claim.
-    | fa =>
-        execFullA st fa = some st'
 
   /-- **Declarative inner-turn fold** — left-to-right, all-or-nothing, matching `execInnerA`. -/
   def turnSpec : RecChainedState → List FullActionA → RecChainedState → Prop
@@ -487,26 +467,12 @@ mutual
     | .bridgeMintA actor cell a value => by
       simp only [fullActionStep, execFullA]
       exact Dregg2.Circuit.Spec.SupplyCreation.execBridgeMintA_iff_spec st actor cell a value st'
-    -- dregg3 F1a: the doomed-family arms carry the executor equation verbatim (see
-    -- `fullActionStep`); the iff is definitional until F1b deletes the constructors.
-    | .createEscrowA _ _ _ _ _ _ => Iff.rfl
-    | .releaseEscrowA _ _ => Iff.rfl
-    | .refundEscrowA _ _ => Iff.rfl
-    | .createObligationA _ _ _ _ _ _ => Iff.rfl
-    | .fulfillObligationA _ _ => Iff.rfl
-    | .slashObligationA _ _ => Iff.rfl
     | .noteSpendA nf actor spendProof => by
       simp only [fullActionStep, execFullA]
       exact execFullA_noteSpend_iff_spec st nf actor spendProof st'
     | .noteCreateA cm actor => by
       simp only [fullActionStep, execFullA]
       exact execNoteCreateA_iff_spec st cm actor st'
-    | .createCommittedEscrowA _ _ _ _ _ _ _ => Iff.rfl
-    | .releaseCommittedEscrowA _ _ => Iff.rfl
-    | .refundCommittedEscrowA _ _ => Iff.rfl
-    | .bridgeLockA _ _ _ _ _ _ => Iff.rfl
-    | .bridgeFinalizeA _ _ _ _ => Iff.rfl
-    | .bridgeCancelA _ _ => Iff.rfl
     | .sealA pid actor payload => by
       simp only [fullActionStep, execFullA]
       exact execFullA_seal_iff_spec st pid actor payload st'
@@ -537,12 +503,12 @@ mutual
     | .queueAllocateA id actor cell cap => by
       simp only [fullActionStep, execFullA]
       exact execFullA_queueAllocateA_iff_spec st id actor cell cap st'
-    | .queueEnqueueA id m actor cell depId dAsset deposit => by
+    | .queueEnqueueA id m actor cell => by
       simp only [fullActionStep, execFullA]
-      exact execFullA_queueEnqueueA_iff_spec st id m actor cell depId dAsset deposit st'
-    | .queueDequeueA id actor cell depId => by
+      exact execFullA_queueEnqueueA_iff_spec st id m actor cell st'
+    | .queueDequeueA id actor cell => by
       simp only [fullActionStep, execFullA]
-      exact execFullA_queueDequeueA_iff_spec st id actor cell depId st'
+      exact execFullA_queueDequeueA_iff_spec st id actor cell st'
     | .queueResizeA id newCap actor cell => by
       simp only [fullActionStep, execFullA]
       exact execFullA_queueResizeA_iff_spec st id newCap actor cell st'
@@ -626,15 +592,15 @@ measure by exactly the net inner delta.** Reads off the proved `execInnerA_ledge
 the spec bridge. -/
 theorem turnSpec_ledger_per_asset (st st' : RecChainedState) (inner : List FullActionA) (b : AssetId)
     (h : turnSpec st inner st') :
-    recTotalAssetWithEscrow st'.kernel b = recTotalAssetWithEscrow st.kernel b + turnLedgerDeltaAsset inner b :=
+    recTotalAsset st'.kernel b = recTotalAsset st.kernel b + turnLedgerDeltaAsset inner b :=
   execInnerA_ledger_per_asset st st' inner b ((execInnerA_iff_turnSpec st st' inner).mpr h)
 
 /-- **`exerciseSpec_ledger_per_asset` — exercise conservation: the hold-gate is kernel-neutral, so
 the net move is the SUM of the inner per-action deltas.** -/
 theorem exerciseSpec_ledger_per_asset (st st' : RecChainedState) (actor target : CellId)
     (inner : List FullActionA) (b : AssetId) (h : ExerciseSpec st actor target inner st') :
-    recTotalAssetWithEscrow st'.kernel b =
-      recTotalAssetWithEscrow st.kernel b + turnLedgerDeltaAsset inner b := by
+    recTotalAsset st'.kernel b =
+      recTotalAsset st.kernel b + turnLedgerDeltaAsset inner b := by
   rcases h with ⟨_, _, hinner⟩
   have hledger :=
     turnSpec_ledger_per_asset (exerciseHoldState st actor) st' inner b hinner

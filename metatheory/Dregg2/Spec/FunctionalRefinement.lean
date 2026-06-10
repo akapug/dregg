@@ -98,189 +98,13 @@ theorem intentCredit_eq_credit (bal : CellId → AssetId → ℤ) (c : CellId) (
   · simp only [if_pos h]
   · simp only [if_neg h]
 
-/-! ## §1 — ESCROW CREATE: the reference triangle.
+/-! ## §1–§2 — (F1b) the ESCROW reference triangles are GONE with the kernel escrow holding-store.
 
-### The independent declarative spec (intent).
-
-A `createEscrow` of `(id, creator, recipient, asset, amount)` MEANS, declaratively:
-  * the creator's asset-`asset` balance goes DOWN by `amount` (`intentDebit`),
-  * a FRESH unresolved record `{id, creator, recipient, amount, resolved := false, asset}` is parked
-    at the FRONT of the holding store,
-  * EVERYTHING ELSE (accounts, caps, nullifiers, queues, …) is untouched.
-We write this as a whole-state function `escrowCreateSpec`, derived from the protocol meaning, NOT
-from `createEscrowRawAsset`. -/
-
-/-- The fresh record the intent parks (named from the create's arguments). -/
-def escrowCreateRecord (a : CreateEscrowArgs) : EscrowRecord :=
-  { id := a.id, creator := a.creator, recipient := a.recipient,
-    amount := a.amount, resolved := false, asset := a.asset }
-
-/-- **`escrowCreateSpec` — the INDEPENDENT declarative post-state of a create.** The creator's
-asset balance drops by `amount`; the fresh unresolved record is prepended; all else fixed. This is
-intent, written field-by-field — it is what a correct executor MUST produce, and the triangle proves
-`createEscrowStep` produces exactly this. -/
-def escrowCreateSpec (k : RecordKernelState) (a : CreateEscrowArgs) : RecordKernelState :=
-  { k with bal := intentDebit k.bal a.creator a.asset a.amount
-           escrows := escrowCreateRecord a :: k.escrows }
-
-/-- The create gate (intent-level precondition), re-expressed as the conjunction the executor checks.
-Written here so the triangle's `←` direction (liveness) reads cleanly. -/
-def escrowCreateGate (k : RecordKernelState) (a : CreateEscrowArgs) : Prop :=
-  acceptsEffects k a.creator = true ∧
-  authorizedB k.caps (createEscrowTurn a) = true ∧
-  0 ≤ a.amount ∧ a.amount ≤ k.bal a.creator a.asset ∧ a.creator ∈ k.accounts ∧
-  ¬ (∃ r ∈ k.escrows, r.id = a.id)
-
-/-- The executor's `createEscrowRawAsset` realizes the INTENT post-state `escrowCreateSpec`.
-A genuine equality of two independently-written functions: the executor debits via
-`recBalCreditCell creator asset (-amount)` and prepends its record literal; the spec debits via
-`intentDebit creator asset amount` and prepends `escrowCreateRecord`. They are EQUAL — proving the
-executor's op realizes the intended ledger+store move (it would be FALSE if the executor debited the
-recipient, or parked a resolved record, or wrote the wrong asset). -/
-theorem createEscrowRawAsset_eq_spec (k : RecordKernelState) (a : CreateEscrowArgs) :
-    createEscrowRawAsset k a.id a.creator a.recipient a.asset a.amount = escrowCreateSpec k a := by
-  unfold createEscrowRawAsset escrowCreateSpec escrowCreateRecord
-  rw [intentDebit_eq_credit]
-
-/-- **THE ESCROW-CREATE TRIANGLE (PROVED, FULL BICONDITIONAL).** The actor-gated executor commits
-EXACTLY the independently-specified output: `createEscrowStep k a = some k'` IFF the create gate holds
-AND `k' = escrowCreateSpec k a`. The `→` is output-uniqueness (a commit pins the unique spec output —
-strictly stronger than `admits`); the `←` is completeness (the gate suffices for the spec output to
-commit). -/
-theorem escrowCreate_triangle (k k' : RecordKernelState) (a : CreateEscrowArgs) :
-    createEscrowStep k a = some k' ↔ (escrowCreateGate k a ∧ k' = escrowCreateSpec k a) := by
-  unfold createEscrowStep createEscrowKAsset escrowCreateGate createEscrowTurn
-  constructor
-  · intro h
-    by_cases hadm : acceptsEffects k a.creator = true
-    · rw [if_pos hadm] at h
-      by_cases hg : authorizedB k.caps { actor := a.actor, src := a.creator, dst := a.recipient, amt := a.amount } = true
-          ∧ 0 ≤ a.amount ∧ a.amount ≤ k.bal a.creator a.asset ∧ a.creator ∈ k.accounts
-          ∧ ¬ (∃ r ∈ k.escrows, r.id = a.id)
-      · rw [if_pos hg] at h
-        simp only [Option.some.injEq] at h
-        obtain ⟨hauth, hamt, havail, hacc, hfresh⟩ := hg
-        refine ⟨⟨hadm, hauth, hamt, havail, hacc, hfresh⟩, ?_⟩
-        rw [← h, createEscrowRawAsset_eq_spec]
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-    · rw [if_neg hadm] at h; exact absurd h (by simp)
-  · rintro ⟨⟨hadm, hauth, hamt, havail, hacc, hfresh⟩, hk⟩
-    rw [if_pos hadm, if_pos ⟨hauth, hamt, havail, hacc, hfresh⟩]
-    rw [hk, createEscrowRawAsset_eq_spec]
-
-/-- **ANTI-GHOST TOOTH (escrow create, PROVED).** Any candidate `k'' ≠ escrowCreateSpec k a` is
-REJECTED: the executor never commits a ghost output. The refinement pins the UNIQUE correct
-post-state — a tampered next-state (wrong balance, wrong/missing record, an extra field touched)
-cannot come out of `createEscrowStep`. -/
-theorem escrowCreate_antighost (k k'' : RecordKernelState) (a : CreateEscrowArgs)
-    (hne : k'' ≠ escrowCreateSpec k a) : createEscrowStep k a ≠ some k'' := by
-  intro h
-  obtain ⟨_, hk⟩ := (escrowCreate_triangle k k'' a).mp h
-  exact hne hk
-
-/-! ## §2 — ESCROW SETTLE (release / refund): the triangle on the side-table.
-
-The settle spec is intent over the FOUND record `r` (looked up by id, unresolved): credit the
-settlement target (`recipient` for release, `creator` for refund) at `r.asset` by `r.amount`, and mark
-`r` resolved. The gate adds the actor-authority (R2) + the settle-liveness (`target ∈ accounts ∧ Live`)
-the kernel checks. We parametrize the spec by the target-selector so release/refund share one proof. -/
-
-/-- **`escrowSettleSpec` — the INDEPENDENT declarative post-state of a settle to `target`.** Over the
-found unresolved record `r`: `target`'s asset-`r.asset` balance rises by `r.amount` (`intentCredit`), and
-the record is marked resolved (`markResolved` by id). All else fixed. (`markResolved` is the
-intent-level "mark THIS record done"; it is the kernel's own list primitive, reused — the asset/ledger
-move is the part the executor could get wrong, and that is `intentCredit`, written from intent.) -/
-def escrowSettleSpec (k : RecordKernelState) (target : CellId) (r : EscrowRecord) (id : Nat) :
-    RecordKernelState :=
-  { k with bal := intentCredit k.bal target r.asset r.amount
-           escrows := markResolved k.escrows id }
-
-/-- The executor's `settleEscrowRawAsset` realizes the INTENT settle post-state. Independent-function
-equality: the executor credits via `recBalCreditCell target asset amount`; the spec credits via
-`intentCredit target asset amount`. EQUAL — the credit lands on the intended target/asset. -/
-theorem settleEscrowRawAsset_eq_spec (k : RecordKernelState) (target : CellId) (r : EscrowRecord)
-    (id : Nat) :
-    settleEscrowRawAsset k id target r.asset r.amount = escrowSettleSpec k target r id := by
-  unfold settleEscrowRawAsset escrowSettleSpec
-  rw [intentCredit_eq_credit]
-
-/-- **THE ESCROW-RELEASE TRIANGLE (PROVED, FULL BICONDITIONAL).** `releaseStep k a = some k'` IFF
-there is a found unresolved record `r` (named by `a.id`) whose RECIPIENT the actor is authorized over
-and who is a live account, AND `k'` is EXACTLY `escrowSettleSpec` crediting that recipient. The output
-is the unique intent post-state; release credits the RECIPIENT (not the creator) — a fact the triangle
-pins. -/
-theorem escrowRelease_triangle (k k' : RecordKernelState) (a : SettleArgs) :
-    releaseStep k a = some k' ↔
-      (∃ r, findUnresolved k a.id = some r ∧
-            authorizedB k.caps { actor := a.actor, src := r.recipient, dst := r.recipient, amt := 0 } = true ∧
-            r.recipient ∈ k.accounts ∧ cellLifecycleLive k r.recipient = true ∧
-            k' = escrowSettleSpec k r.recipient r a.id) := by
-  unfold releaseStep releaseSettleAuthB releaseEscrowKAsset findUnresolved
-  constructor
-  · intro h
-    cases hf : k.escrows.find? (fun r => decide (r.id = a.id ∧ r.resolved = false)) with
-    | none => rw [hf] at h; exact absurd h (by simp)
-    | some r =>
-        rw [hf] at h; simp only at h
-        by_cases hauth : authorizedB k.caps { actor := a.actor, src := r.recipient, dst := r.recipient, amt := 0 } = true
-        · rw [if_pos hauth] at h
-          by_cases hlive : r.recipient ∈ k.accounts ∧ cellLifecycleLive k r.recipient = true
-          · rw [if_pos hlive] at h; simp only [Option.some.injEq] at h
-            refine ⟨r, rfl, hauth, hlive.1, hlive.2, ?_⟩
-            rw [← h, settleEscrowRawAsset_eq_spec]
-          · rw [if_neg hlive] at h; exact absurd h (by simp)
-        · rw [if_neg hauth] at h; exact absurd h (by simp)
-  · rintro ⟨r, hf, hauth, hacc, hlive, hk⟩
-    rw [hf]; simp only
-    rw [if_pos hauth, if_pos ⟨hacc, hlive⟩, hk, settleEscrowRawAsset_eq_spec]
-
-/-- **ANTI-GHOST TOOTH (escrow release, PROVED).** Once the found record `r` is fixed, any candidate
-`k'' ≠ escrowSettleSpec k r.recipient r a.id` is REJECTED. The release output is the unique intent
-post-state crediting the recipient. -/
-theorem escrowRelease_antighost (k k'' : RecordKernelState) (a : SettleArgs) (r : EscrowRecord)
-    (hf : findUnresolved k a.id = some r) (hne : k'' ≠ escrowSettleSpec k r.recipient r a.id) :
-    releaseStep k a ≠ some k'' := by
-  intro h
-  obtain ⟨r', hf', _, _, _, hk⟩ := (escrowRelease_triangle k k'' a).mp h
-  rw [hf] at hf'; simp only [Option.some.injEq] at hf'; subst hf'
-  exact hne hk
-
-/-- **THE ESCROW-REFUND TRIANGLE (PROVED, FULL BICONDITIONAL).** Symmetric to release, but the credit
-lands on the CREATOR (refund target). The output is the unique intent post-state crediting the creator —
-the triangle pins release↔recipient vs refund↔creator. -/
-theorem escrowRefund_triangle (k k' : RecordKernelState) (a : SettleArgs) :
-    refundStep k a = some k' ↔
-      (∃ r, findUnresolved k a.id = some r ∧
-            authorizedB k.caps { actor := a.actor, src := r.creator, dst := r.creator, amt := 0 } = true ∧
-            r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true ∧
-            k' = escrowSettleSpec k r.creator r a.id) := by
-  unfold refundStep refundSettleAuthB refundEscrowKAsset findUnresolved
-  constructor
-  · intro h
-    cases hf : k.escrows.find? (fun r => decide (r.id = a.id ∧ r.resolved = false)) with
-    | none => rw [hf] at h; exact absurd h (by simp)
-    | some r =>
-        rw [hf] at h; simp only at h
-        by_cases hauth : authorizedB k.caps { actor := a.actor, src := r.creator, dst := r.creator, amt := 0 } = true
-        · rw [if_pos hauth] at h
-          by_cases hlive : r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true
-          · rw [if_pos hlive] at h; simp only [Option.some.injEq] at h
-            refine ⟨r, rfl, hauth, hlive.1, hlive.2, ?_⟩
-            rw [← h, settleEscrowRawAsset_eq_spec]
-          · rw [if_neg hlive] at h; exact absurd h (by simp)
-        · rw [if_neg hauth] at h; exact absurd h (by simp)
-  · rintro ⟨r, hf, hauth, hacc, hlive, hk⟩
-    rw [hf]; simp only
-    rw [if_pos hauth, if_pos ⟨hacc, hlive⟩, hk, settleEscrowRawAsset_eq_spec]
-
-/-- **ANTI-GHOST TOOTH (escrow refund, PROVED).** -/
-theorem escrowRefund_antighost (k k'' : RecordKernelState) (a : SettleArgs) (r : EscrowRecord)
-    (hf : findUnresolved k a.id = some r) (hne : k'' ≠ escrowSettleSpec k r.creator r a.id) :
-    refundStep k a ≠ some k'' := by
-  intro h
-  obtain ⟨r', hf', _, _, _, hk⟩ := (escrowRefund_triangle k k'' a).mp h
-  rw [hf] at hf'; simp only [Option.some.injEq] at hf'; subst hf'
-  exact hne hk
+The escrow create/release/refund triangles (`escrowCreateSpec`/`escrowSettleSpec` + anti-ghost)
+rode on `createEscrowRawAsset`/`settleEscrowRawAsset` and the `escrows` side-table; F1b deleted
+them — the escrow functional story lives in the factory contract (`Apps/EscrowFactory.lean`),
+whose deposit/release/refund are ordinary `bal` moves with their own proved keystones. The
+reference PATTERN below (independent spec + triangle + anti-ghost) survives on every other family. -/
 
 /-! ## §3 — SECOND FAMILY: QUEUE FIFO (allocate / enqueue / dequeue) — the same triangle.
 
@@ -420,35 +244,10 @@ def fx : RecordKernelState :=
     caps := fun _ => []
     bal := fun c a => if c = 0 ∧ a = 0 then 100 else 0 }
 
-/-- The create arguments: lock 40 of asset 0, creator 0, recipient 1, id 9. -/
-def caCreate : CreateEscrowArgs := { id := 9, actor := 0, creator := 0, recipient := 1, asset := 0, amount := 40 }
-
-/-- The locked fixture (cell 0 has parked 40 into escrow id 9). -/
-def fxLocked : RecordKernelState := escrowCreateSpec fx caCreate
-
 -- Since `RecordKernelState` carries function fields it has no `BEq`; we witness the triangles via
 -- DECIDABLE OBSERVATIONS (balances, buffer order, isSome) — `RecordKernelState`-equality itself is
 -- proved/refuted by the triangle theorems + anti-ghost teeth above, which is the real content.
-
--- CREATE commits (the gate holds) and the debit is REAL: creator balance dropped 100 → 60.
-#guard (createEscrowStep fx caCreate).isSome
-#guard (((createEscrowStep fx caCreate).map (fun k => k.bal 0 0)) == some 60)
--- ...and the committed output's escrow head IS the intent's fresh unresolved record (asset 0, amt 40).
-#guard (((createEscrowStep fx caCreate).bind (fun k => k.escrows.head?)).map
-          (fun r => (r.id, r.creator, r.recipient, r.amount, r.resolved, r.asset))
-        == some (9, 0, 1, 40, false, 0))
--- CREATE anti-ghost (CONCRETE): a ghost candidate with the creator's balance LEFT UNTOUCHED differs
--- OBSERVABLY from the spec output (bal 0 0 is 100 in the ghost `fx`, 60 in the spec) — so by
--- `escrowCreate_antighost` the executor refuses it. The observable witness of `ghost ≠ spec`:
-#guard ((fx.bal 0 0, (escrowCreateSpec fx caCreate).bal 0 0) == (100, 60))
-
--- RELEASE credits the RECIPIENT (cell 1: 0 → 40); REFUND credits the CREATOR (cell 0: 60 → 100).
--- Distinct outputs ⇒ the triangle genuinely pins release↔recipient vs refund↔creator.
-#guard ((releaseStep fxLocked { actor := 1, id := 9 }).map (fun k => k.bal 1 0)) == some 40
-#guard ((refundStep  fxLocked { actor := 0, id := 9 }).map (fun k => k.bal 0 0)) == some 100
--- and the settled record is marked resolved (the side-table move is real).
-#guard (((releaseStep fxLocked { actor := 1, id := 9 }).bind (fun k => k.escrows.head?)).map
-          (·.resolved) == some true)
+-- (F1b: the escrow create/settle teeth left with the kernel escrow store — see `Apps/EscrowFactory`.)
 
 -- QUEUE allocate commits a fresh empty queue (id 7, owner 0, cap 2).
 #guard (queueAllocateK fx 7 0 2).isSome
@@ -473,14 +272,6 @@ def fxLocked : RecordKernelState := escrowCreateSpec fx caCreate
 
 #assert_axioms intentDebit_eq_credit
 #assert_axioms intentCredit_eq_credit
-#assert_axioms createEscrowRawAsset_eq_spec
-#assert_axioms escrowCreate_triangle
-#assert_axioms escrowCreate_antighost
-#assert_axioms settleEscrowRawAsset_eq_spec
-#assert_axioms escrowRelease_triangle
-#assert_axioms escrowRelease_antighost
-#assert_axioms escrowRefund_triangle
-#assert_axioms escrowRefund_antighost
 #assert_axioms queueAllocate_triangle
 #assert_axioms queueAllocate_antighost
 #assert_axioms queueEnqueue_triangle
@@ -1406,189 +1197,12 @@ def sfx : RecordKernelState :=
 #assert_axioms spawn_triangle
 #assert_axioms spawn_antighost
 
-/-! ## §17 — TENTH FAMILY: BRIDGE (bridgeLock / bridgeFinalize / bridgeCancel) — the cross-chain triangle.
+/-! ## §17 — (F1b) the BRIDGE lock/finalize/cancel triangles are GONE with the kernel holding-store.
 
-The cross-chain bridge legs (`Handlers.Bridge.bridgeLockStep`/`bridgeFinalizeStep`/`bridgeCancelStep`) move
-the `bal` ledger + the SHARED off-ledger holding-store (the `bridge := true`-tagged escrow records). The
-FOREIGN-chain finality is a NAMED carrier (the §8 confirmation-receipt portal — a `Prop`-carrier at the
-theorem layer, NOT modelled here); the spec is about the LOCAL state effect:
-
-  * **lock** PARKS value (debit originator + insert a fresh unresolved bridge-tagged record),
-  * **finalize** MINTS-OUT against the finality witness (no-credit resolve: the value LEFT for the other
-    chain — `markResolved`, a disclosed OUTFLOW),
-  * **cancel** REFUNDS the originator (credit + resolve — the escrow-refund shape).
-
-Each spec is TRANSPARENT (the EXACT bal+holding-store change, from intent), proven equal to the executor's
-op where a raw construction exists, with a full triangle + anti-ghost tooth. -/
-
-open Dregg2.Exec.Handlers.Bridge
-  (BridgeLockArgs bridgeLockStep bridgeLockTurn BridgeFinalizeArgs bridgeFinalizeStep
-   BridgeCancelArgs bridgeCancelStep)
-open Dregg2.Exec.TurnExecutorFull (bridgeAuthOK)
-
-/-- The fresh bridge-tagged record a lock parks (named from the lock's arguments — the creator is the
-ORIGINATOR, the refund target on cancel; `bridge := true` distinguishes it from an ordinary escrow). -/
-def bridgeLockRecord (a : BridgeLockArgs) : EscrowRecord :=
-  { id := a.id, creator := a.originator, recipient := a.destination,
-    amount := a.amount, resolved := false, asset := a.asset, bridge := true }
-
-/-- **`bridgeLockSpec` — the INDEPENDENT declarative post-state of a bridge lock (TRANSPARENT).** The
-originator's asset-`a.asset` column DROPS by `a.amount` (`intentDebit`); the fresh unresolved bridge-tagged
-record is PREPENDED to the holding-store; EVERYTHING ELSE (caps, accounts, queues, other ledger columns)
-untouched. Written field-by-field from intent ("park `amount` of `asset` out of `originator` into a
-bridge-locked record bound for `destination`"), NOT from `createBridgeRawAsset`. -/
-def bridgeLockSpec (k : RecordKernelState) (a : BridgeLockArgs) : RecordKernelState :=
-  { k with bal := intentDebit k.bal a.originator a.asset a.amount
-           escrows := bridgeLockRecord a :: k.escrows }
-
-/-- The bridge-lock gate (intent precondition), re-expressed as the conjunction the executor checks. -/
-def bridgeLockGate (k : RecordKernelState) (a : BridgeLockArgs) : Prop :=
-  acceptsEffects k a.originator = true ∧
-  authorizedB k.caps (bridgeLockTurn a) = true ∧
-  0 ≤ a.amount ∧ a.amount ≤ k.bal a.originator a.asset ∧ a.originator ∈ k.accounts ∧
-  cellLifecycleLive k a.originator = true ∧ ¬ (∃ r ∈ k.escrows, r.id = a.id)
-
-/-- The executor's `createBridgeRawAsset` realizes the TRANSPARENT lock post-state — PROVED. Independent
-equality: the executor debits via `recBalCreditCell originator asset (-amount)` and prepends its bridge
-record literal; the spec debits via `intentDebit originator asset amount` and prepends `bridgeLockRecord`.
-EQUAL — proving the lock debits EXACTLY the originator and parks EXACTLY the bridge-tagged record. -/
-theorem createBridgeRawAsset_eq_spec (k : RecordKernelState) (a : BridgeLockArgs) :
-    createBridgeRawAsset k a.id a.originator a.destination a.asset a.amount = bridgeLockSpec k a := by
-  unfold createBridgeRawAsset bridgeLockSpec bridgeLockRecord
-  rw [intentDebit_eq_credit]
-
-/-- **THE BRIDGE-LOCK TRIANGLE (PROVED, FULL BICONDITIONAL).** `bridgeLockStep k a = some k'` IFF the lock
-gate holds AND `k' = bridgeLockSpec k a`. The `→` pins the unique TRANSPARENT post-state (EXACTLY the
-originator debit + bridge-record park); the `←` is completeness. -/
-theorem bridgeLock_triangle (k k' : RecordKernelState) (a : BridgeLockArgs) :
-    bridgeLockStep k a = some k' ↔ (bridgeLockGate k a ∧ k' = bridgeLockSpec k a) := by
-  unfold bridgeLockStep bridgeLockGate bridgeLockKAsset bridgeLockTurn
-  constructor
-  · intro h
-    by_cases hadm : acceptsEffects k a.originator = true
-    · rw [if_pos hadm] at h
-      by_cases hg : authorizedB k.caps { actor := a.actor, src := a.originator, dst := a.destination, amt := a.amount } = true
-          ∧ 0 ≤ a.amount ∧ a.amount ≤ k.bal a.originator a.asset ∧ a.originator ∈ k.accounts
-          ∧ cellLifecycleLive k a.originator = true ∧ ¬ (∃ r ∈ k.escrows, r.id = a.id)
-      · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
-        obtain ⟨hauth, hamt, havail, hacc, hlive, hfresh⟩ := hg
-        refine ⟨⟨hadm, hauth, hamt, havail, hacc, hlive, hfresh⟩, ?_⟩
-        rw [← h, createBridgeRawAsset_eq_spec]
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-    · rw [if_neg hadm] at h; exact absurd h (by simp)
-  · rintro ⟨⟨hadm, hauth, hamt, havail, hacc, hlive, hfresh⟩, hk⟩
-    rw [if_pos hadm, if_pos ⟨hauth, hamt, havail, hacc, hlive, hfresh⟩, hk, createBridgeRawAsset_eq_spec]
-
-/-- **ANTI-GHOST TOOTH (bridge lock, PROVED).** Any candidate `k'' ≠ bridgeLockSpec k a` is REJECTED — a
-lock that debited the wrong cell, parked a non-bridge or resolved record, or moved a 2nd field is excluded. -/
-theorem bridgeLock_antighost (k k'' : RecordKernelState) (a : BridgeLockArgs)
-    (hne : k'' ≠ bridgeLockSpec k a) : bridgeLockStep k a ≠ some k'' := by
-  intro h
-  exact hne ((bridgeLock_triangle k k'' a).mp h).2
-
-/-- **`bridgeFinalizeSpec` — the INDEPENDENT declarative post-state of a bridge finalize (TRANSPARENT).**
-A no-credit resolve: the found unresolved record (by `id`) is marked resolved (`markResolved`); the `bal`
-ledger is LEFT UNTOUCHED (the value already left at lock and now leaves for the other chain — the disclosed
-OUTFLOW). EVERYTHING ELSE untouched. Written from intent ("retire the bridge lock without a refund — the
-value crossed"). The finalize is GATED on the recorded creator (`bridgeAuthOK`) AND the disclosed
-`(asset, amount)` matching the parked record (anti-forgery against the receipt). -/
-def bridgeFinalizeSpec (k : RecordKernelState) (a : BridgeFinalizeArgs) : RecordKernelState :=
-  { k with escrows := markResolved k.escrows a.id }
-
-/-- **THE BRIDGE-FINALIZE TRIANGLE (PROVED, FULL BICONDITIONAL).** `bridgeFinalizeStep k a = some k'` IFF
-the actor is the recorded creator (`bridgeAuthOK`), a found unresolved record `r` exists whose `bridge`
-flag is set and whose `(asset, amount)` MATCH the disclosed `(a.asset, a.amount)`, AND `k' =
-bridgeFinalizeSpec k a`. The `→` pins the unique TRANSPARENT post-state (the no-credit resolve — bal
-untouched, record marked done) AND surfaces the creator + receipt-match gates; the `←` is completeness. -/
-theorem bridgeFinalize_triangle (k k' : RecordKernelState) (a : BridgeFinalizeArgs) :
-    bridgeFinalizeStep k a = some k' ↔
-      (bridgeAuthOK k a.id a.actor = true ∧
-       ∃ r, k.escrows.find? (fun r => decide (r.id = a.id ∧ r.resolved = false)) = some r ∧
-            r.bridge = true ∧ r.asset = a.asset ∧ r.amount = a.amount ∧
-            k' = bridgeFinalizeSpec k a) := by
-  unfold bridgeFinalizeStep bridgeFinalizeKAsset bridgeFinalizeSpec bridgeFinalizeRawAsset
-  constructor
-  · intro h
-    by_cases hg : bridgeAuthOK k a.id a.actor = true
-    · rw [if_pos hg] at h
-      cases hf : k.escrows.find? (fun r => decide (r.id = a.id ∧ r.resolved = false)) with
-      | none => rw [hf] at h; exact absurd h (by simp)
-      | some r =>
-          rw [hf] at h; simp only at h
-          by_cases hm : r.bridge = true ∧ r.asset = a.asset ∧ r.amount = a.amount
-          · rw [if_pos hm] at h; simp only [Option.some.injEq] at h
-            exact ⟨hg, r, rfl, hm.1, hm.2.1, hm.2.2, h.symm⟩
-          · rw [if_neg hm] at h; exact absurd h (by simp)
-    · rw [if_neg hg] at h; exact absurd h (by simp)
-  · rintro ⟨hg, r, hf, hbr, hasset, hamt, hk⟩
-    rw [if_pos hg, hf]; simp only
-    rw [if_pos ⟨hbr, hasset, hamt⟩, hk]
-
-/-- **ANTI-GHOST TOOTH (bridge finalize, PROVED).** Any candidate `k'' ≠ bridgeFinalizeSpec k a` is
-REJECTED — a finalize that CREDITED the ledger (hiding the outflow), resolved the wrong record, or moved a
-2nd field is excluded. The post-state is the unique no-credit resolve. -/
-theorem bridgeFinalize_antighost (k k'' : RecordKernelState) (a : BridgeFinalizeArgs)
-    (hne : k'' ≠ bridgeFinalizeSpec k a) : bridgeFinalizeStep k a ≠ some k'' := by
-  intro h
-  obtain ⟨_, _, _, _, _, _, hk⟩ := (bridgeFinalize_triangle k k'' a).mp h
-  exact hne hk
-
-/-- **`bridgeCancelSpec` — the INDEPENDENT declarative post-state of a bridge cancel (TRANSPARENT).** The
-refund SHAPE (escrow-refund): over the found unresolved bridge record `r`, the ORIGINATOR (`r.creator`,
-the refund target) is credited at `r.asset` by `r.amount` (`intentCredit`), and the record is marked
-resolved (`markResolved`). EVERYTHING ELSE untouched. Written from intent ("the timeout passed — refund the
-locked value to the originator"). -/
-def bridgeCancelSpec (k : RecordKernelState) (r : EscrowRecord) (id : Nat) : RecordKernelState :=
-  { k with bal := intentCredit k.bal r.creator r.asset r.amount
-           escrows := markResolved k.escrows id }
-
-/-- The executor's `settleEscrowRawAsset` (the cancel body) realizes the TRANSPARENT refund — PROVED. The
-SAME independent equality as escrow-settle, instantiated at the originator (`r.creator`). -/
-theorem bridgeCancel_settle_eq_spec (k : RecordKernelState) (r : EscrowRecord) (id : Nat) :
-    settleEscrowRawAsset k id r.creator r.asset r.amount = bridgeCancelSpec k r id := by
-  unfold settleEscrowRawAsset bridgeCancelSpec
-  rw [intentCredit_eq_credit]
-
-/-- **THE BRIDGE-CANCEL TRIANGLE (PROVED, FULL BICONDITIONAL).** `bridgeCancelStep k a = some k'` IFF the
-actor is the recorded creator (`bridgeAuthOK`), a found unresolved record `r` exists that is bridge-tagged
-with a LIVE originator account, AND `k' = bridgeCancelSpec k r a.id` (the originator-credit refund). The
-`→` pins the unique TRANSPARENT post-state (credit the ORIGINATOR, not the destination); the `←` is
-completeness. -/
-theorem bridgeCancel_triangle (k k' : RecordKernelState) (a : BridgeCancelArgs) :
-    bridgeCancelStep k a = some k' ↔
-      (bridgeAuthOK k a.id a.actor = true ∧
-       ∃ r, k.escrows.find? (fun r => decide (r.id = a.id ∧ r.resolved = false)) = some r ∧
-            r.bridge = true ∧ r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true ∧
-            k' = bridgeCancelSpec k r a.id) := by
-  unfold bridgeCancelStep bridgeCancelKAsset
-  constructor
-  · intro h
-    by_cases hg : bridgeAuthOK k a.id a.actor = true
-    · rw [if_pos hg] at h
-      cases hf : k.escrows.find? (fun r => decide (r.id = a.id ∧ r.resolved = false)) with
-      | none => rw [hf] at h; exact absurd h (by simp)
-      | some r =>
-          rw [hf] at h; simp only at h
-          by_cases hm : r.bridge = true ∧ r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true
-          · rw [if_pos hm] at h; simp only [Option.some.injEq] at h
-            refine ⟨hg, r, rfl, hm.1, hm.2.1, hm.2.2, ?_⟩
-            rw [← h, bridgeCancel_settle_eq_spec]
-          · rw [if_neg hm] at h; exact absurd h (by simp)
-    · rw [if_neg hg] at h; exact absurd h (by simp)
-  · rintro ⟨hg, r, hf, hbr, hacc, hlive, hk⟩
-    rw [if_pos hg, hf]; simp only
-    rw [if_pos ⟨hbr, hacc, hlive⟩, hk, bridgeCancel_settle_eq_spec]
-
-/-- **ANTI-GHOST TOOTH (bridge cancel, PROVED).** Once the found record `r` is fixed, any candidate
-`k'' ≠ bridgeCancelSpec k r a.id` is REJECTED — a cancel that credited the DESTINATION (not the
-originator), refunded the wrong amount, or left the record unresolved is excluded. -/
-theorem bridgeCancel_antighost (k k'' : RecordKernelState) (a : BridgeCancelArgs) (r : EscrowRecord)
-    (hf : k.escrows.find? (fun r => decide (r.id = a.id ∧ r.resolved = false)) = some r)
-    (hne : k'' ≠ bridgeCancelSpec k r a.id) : bridgeCancelStep k a ≠ some k'' := by
-  intro h
-  obtain ⟨_, r', hf', _, _, _, hk⟩ := (bridgeCancel_triangle k k'' a).mp h
-  rw [hf] at hf'; simp only [Option.some.injEq] at hf'; subst hf'
-  exact hne hk
+The bridge-LFC triangles (`bridgeLockSpec`/`bridgeFinalizeSpec`/`bridgeCancelSpec` + anti-ghost)
+rode on `createBridgeRawAsset`/`settleEscrowRawAsset` and the bridge-tagged `escrows` records; F1b
+deleted them — the bridge functional story lives in the bridge-cell contract
+(`Apps/BridgeCell.lean`). The inbound `bridgeMint` triangle survives in §6. -/
 
 /-! ## §18 — ELEVENTH FAMILY: SWISS / HANDOFF (export / enliven / handoff / drop) + CapTP graph moves
 (introduce / validateHandoff / dropRef) — the sturdy-ref table + cap-graph triangle.
@@ -2010,39 +1624,7 @@ theorem exercise_antighost (k k'' : RecordKernelState) (a : ExerciseArgs)
 
 /-! ## §22 — NON-VACUITY TEETH (`#guard`) for the four Part-B families: witness TRUE and ghost REJECTED. -/
 
-/-- Bridge fixture: cells 0,1 accounts; cell 0 holds 100 of asset 1 + a `node 1` self-cap; both Live. -/
-def bfx : RecordKernelState :=
-  { accounts := {0, 1}
-    cell := fun _ => .record [("balance", .int 0)]
-    caps := fun l => if l = 0 then [Dregg2.Authority.Cap.node 1] else []
-    bal := fun c a => if c = 0 ∧ a = 1 then 100 else 0 }
-
-/-- The bridge-lock args: cell 0 locks 30 of asset 1 (id 9), destination cell 1. -/
-def bLock : BridgeLockArgs := { id := 9, actor := 0, originator := 0, destination := 1, asset := 1, amount := 30 }
-
--- BRIDGE LOCK commits and the originator is DEBITED: bal 0 1 drops 100 → 70 (the spec's `intentDebit`).
-#guard (bridgeLockStep bfx bLock).isSome
-#guard ((bridgeLockStep bfx bLock).map (fun k => k.bal 0 1)) == some 70
--- ...and the parked head is the fresh UNRESOLVED BRIDGE-tagged record (id 9, asset 1, amt 30).
-#guard (((bridgeLockStep bfx bLock).bind (fun k => k.escrows.head?)).map
-          (fun r => (r.id, r.creator, r.recipient, r.amount, r.resolved, r.asset, r.bridge))
-        == some (9, 0, 1, 30, false, 1, true))
--- LOCK anti-ghost (CONCRETE): the spec debits the originator (70) — a ghost leaving bal at 100 differs.
-#guard ((bfx.bal 0 1, (bridgeLockSpec bfx bLock).bal 0 1) == (100, 70))
--- FINALIZE (creator-gated, no-credit resolve): the value LEFT — bal 0 1 STAYS 70, record marked resolved.
-#guard ((bridgeLockStep bfx bLock).bind (fun k => bridgeFinalizeStep k { id := 9, actor := 0, asset := 1, amount := 30 })).isSome
-#guard (((bridgeLockStep bfx bLock).bind (fun k => bridgeFinalizeStep k { id := 9, actor := 0, asset := 1, amount := 30 })).map
-          (fun k => k.bal 0 1)) == some 70  -- NO credit — disclosed outflow
-#guard (((bridgeLockStep bfx bLock).bind (fun k => bridgeFinalizeStep k { id := 9, actor := 0, asset := 1, amount := 30 })).bind
-          (fun k => k.escrows.head?)).map (·.resolved) == some true
--- a NON-creator (cell 5) finalize is REJECTED (`bridgeAuthOK` gate); a MISMATCHED amount (99) is REJECTED.
-#guard (((bridgeLockStep bfx bLock).bind (fun k => bridgeFinalizeStep k { id := 9, actor := 5, asset := 1, amount := 30 })).isSome) == false
-#guard (((bridgeLockStep bfx bLock).bind (fun k => bridgeFinalizeStep k { id := 9, actor := 0, asset := 1, amount := 99 })).isSome) == false
--- CANCEL (creator-gated refund): the originator is REFUNDED — bal 0 1 back to 100 (the `intentCredit`).
-#guard (((bridgeLockStep bfx bLock).bind (fun k => bridgeCancelStep k { actor := 0, id := 9 })).map
-          (fun k => k.bal 0 1)) == some 100
--- a NON-creator (cell 5) cancel is REJECTED.
-#guard (((bridgeLockStep bfx bLock).bind (fun k => bridgeCancelStep k { actor := 5, id := 9 })).isSome) == false
+-- (F1b: the bridge lock/finalize/cancel teeth left with the kernel holding-store — see `Apps/BridgeCell`.)
 
 /-- Swiss fixture: cell 0 holds a `node 7` cap (so `heldAuths 0 = [control]`), and the swiss table holds
 one entry: swiss 5, exporter 0, target 7, rights `[control]`, refcount 2. -/
@@ -2132,14 +1714,6 @@ def efx : RecordKernelState :=
 
 /-! ## §21 — Axiom-hygiene pins for the FOUR new Part-B families (bridge / swiss / queue-extras / exercise). -/
 
-#assert_axioms createBridgeRawAsset_eq_spec
-#assert_axioms bridgeLock_triangle
-#assert_axioms bridgeLock_antighost
-#assert_axioms bridgeFinalize_triangle
-#assert_axioms bridgeFinalize_antighost
-#assert_axioms bridgeCancel_settle_eq_spec
-#assert_axioms bridgeCancel_triangle
-#assert_axioms bridgeCancel_antighost
 #assert_axioms swissExport_triangle
 #assert_axioms swissExport_antighost
 #assert_axioms swissEnliven_triangle

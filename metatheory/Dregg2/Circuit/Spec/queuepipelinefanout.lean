@@ -61,7 +61,7 @@ not constrained here.) -/
 theorem queueDequeueK_frame {k k' : RecordKernelState} {id : Nat} {actor : CellId} {m : Nat}
     (h : queueDequeueK k id actor = some (k', m)) :
     k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-    ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+    ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
     ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
     ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
     ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -81,7 +81,7 @@ theorem queueDequeueK_frame {k k' : RecordKernelState} {id : Nat} {actor : CellI
             obtain ⟨mh, rest⟩ := hr
             rw [hd] at h; simp only [Option.some.injEq, Prod.mk.injEq] at h
             obtain ⟨hk, _⟩ := h; subst hk
-            exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+            exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       · rw [if_neg ho] at h; exact absurd h (by simp)
 
 /-! ## §2 — FRAME for one enqueue (`queueEnqueueK`) and the fan-out fold (`pipelineFanoutK`).
@@ -94,7 +94,7 @@ induction on the sink list, the `recTransfer_correct` analog for the fold. -/
 theorem queueEnqueueK_frame {k k' : RecordKernelState} {id m : Nat}
     (h : queueEnqueueK k id m = some k') :
     k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-    ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+    ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
     ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
     ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
     ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -108,7 +108,7 @@ theorem queueEnqueueK_frame {k k' : RecordKernelState} {id m : Nat}
       simp only [hf] at h
       by_cases hc : q.buffer.length < q.capacity
       · rw [if_pos hc] at h; simp only [Option.some.injEq] at h; subst h
-        exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+        exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       · rw [if_neg hc] at h; exact absurd h (by simp)
 
 /-- **`pipelineFanoutK_frame` — DECLARATIVE validation of the FAN-OUT fold's post-state.** The fan-out
@@ -119,7 +119,7 @@ theorem pipelineFanoutK_frame {k k' : RecordKernelState} {actor : CellId} {m : N
     {sinks : List CellId} {sids : List Nat}
     (h : pipelineFanoutK k actor m sinks sids = some k') :
     k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-    ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+    ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
     ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
     ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
     ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -130,7 +130,7 @@ theorem pipelineFanoutK_frame {k k' : RecordKernelState} {actor : CellId} {m : N
   | nil =>
       cases sids <;>
         (simp only [pipelineFanoutK, Option.some.injEq] at h; subst h;
-         exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩)
+         exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩)
   | cons sink rest ih =>
       cases sids with
       | nil => simp only [pipelineFanoutK] at h; exact absurd h (by simp)
@@ -143,15 +143,15 @@ theorem pipelineFanoutK_frame {k k' : RecordKernelState} {actor : CellId} {m : N
             | some k1 =>
                 rw [hq] at h
                 -- one enqueue frames each of the 16 fields …
-                obtain ⟨e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12, e13, e14, e15, e16, e17,
-                  e18⟩ := queueEnqueueK_frame hq
+                obtain ⟨e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12, e13, e14, e15, e16,
+                  e17⟩ := queueEnqueueK_frame hq
                 -- … then the tail of the fold frames them too; chain by transitivity.
-                obtain ⟨t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17,
-                  t18⟩ := ih h
+                obtain ⟨t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16,
+                  t17⟩ := ih h
                 exact ⟨t1.trans e1, t2.trans e2, t3.trans e3, t4.trans e4, t5.trans e5, t6.trans e6,
                        t7.trans e7, t8.trans e8, t9.trans e9, t10.trans e10, t11.trans e11,
                        t12.trans e12, t13.trans e13, t14.trans e14, t15.trans e15, t16.trans e16,
-                       t17.trans e17, t18.trans e18⟩
+                       t17.trans e17⟩
           · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-! ## §3 — the routing receipt row + the admissibility guard. -/
@@ -188,7 +188,7 @@ def QueuePipelineFanoutSpec (s : RecChainedState) (srcId : Nat) (owner : CellId)
   ∧ s'.log = routingRow owner :: s.log
   -- (C) THE FRAME — every non-`queues` kernel field LITERALLY unchanged (no executor helper here).
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.cell = s.kernel.cell
-  ∧ s'.kernel.caps = s.kernel.caps ∧ s'.kernel.escrows = s.kernel.escrows
+  ∧ s'.kernel.caps = s.kernel.caps
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments ∧ s'.kernel.bal = s.kernel.bal
   ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
@@ -225,14 +225,13 @@ theorem queuePipelineStepA_iff_spec (s : RecChainedState) (srcId : Nat) (owner :
             -- the touched-component witness: dequeue = (k1,m), fanout = some k2 = s'.kernel.
             refine ⟨⟨k1, m, rfl, hf⟩, rfl, ?_⟩
             -- the frame: chain the dequeue frame with the fan-out frame for each of the 16 fields.
-            obtain ⟨d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15, d16, d17, d18⟩ :=
+            obtain ⟨d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15, d16, d17⟩ :=
               queueDequeueK_frame hd
-            obtain ⟨f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18⟩ :=
+            obtain ⟨f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17⟩ :=
               pipelineFanoutK_frame hf
             exact ⟨f1.trans d1, f2.trans d2, f3.trans d3, f4.trans d4, f5.trans d5, f6.trans d6,
                    f7.trans d7, f8.trans d8, f9.trans d9, f10.trans d10, f11.trans d11, f12.trans d12,
-                   f13.trans d13, f14.trans d14, f15.trans d15, f16.trans d16, f17.trans d17,
-                   f18.trans d18⟩
+                   f13.trans d13, f14.trans d14, f15.trans d15, f16.trans d16, f17.trans d17⟩
   · -- ← : the spec reconstructs the committed step (the touched-component witness IS the executor run).
     rintro ⟨⟨k1, m, hd, hf⟩, hlog, _⟩
     -- the committed post-state is `{ kernel := s'.kernel, log := routingRow :: s.log }`; the spec's

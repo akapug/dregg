@@ -142,7 +142,7 @@ theorem auditStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cel
                                      else s.kernel.cell c)
         ∧ s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log
         ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
-        ∧ s'.kernel.escrows = s.kernel.escrows ∧ s'.kernel.nullifiers = s.kernel.nullifiers
+        ∧ s'.kernel.nullifiers = s.kernel.nullifiers
         ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
         ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.queues = s.kernel.queues
         ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
@@ -159,13 +159,12 @@ theorem auditStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cel
     constructor
     · intro h
       simp only [Option.some.injEq] at h; subst h
-      refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl, rfl, rfl, rfl⟩
-    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+      refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
       obtain ⟨k', l'⟩ := s'
-      obtain ⟨a, ce, ca, es, nu, re, co, ba, qu, sw, sl, fa, li, dc, de, dg, sb, dge, dgea⟩ := k'
-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      obtain ⟨a, ce, ca, nu, re, co, ba, qu, sw, sl, fa, li, dc, de, dg, sb, dge, dgea⟩ := k'
+      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
       rfl
   · rw [if_neg hg]
     constructor
@@ -192,7 +191,7 @@ def RefusalSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedStat
   ∧ s'.kernel.cell = auditCellMap s.kernel cell refusalField
   ∧ s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
-  ∧ s'.kernel.escrows = s.kernel.escrows ∧ s'.kernel.nullifiers = s.kernel.nullifiers
+  ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
   ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.queues = s.kernel.queues
   ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
@@ -237,7 +236,7 @@ def ReceiptArchiveSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChai
   ∧ s'.kernel.cell = auditCellMap s.kernel cell lifecycleField
   ∧ s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
-  ∧ s'.kernel.escrows = s.kernel.escrows ∧ s'.kernel.nullifiers = s.kernel.nullifiers
+  ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
   ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.queues = s.kernel.queues
   ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
@@ -289,7 +288,7 @@ theorem receiptArchiveA_slotWritten {s s' : RecChainedState} {actor cell : CellI
 theorem refusalA_balFrame {s s' : RecChainedState} {actor cell : CellId}
     (h : execFullA s (.refusalA actor cell) = some s') :
     s'.kernel.bal = s.kernel.bal :=
-  ((execFullA_refusalA_iff_spec s actor cell s').mp h).2.2.2.2.2.2.2.2.2.1
+  ((execFullA_refusalA_iff_spec s actor cell s').mp h).2.2.2.2.2.2.2.2.1
 
 /-- **`refusalA_capFrame` — CAP-GRAPH untouched (no authority amplification).** -/
 theorem refusalA_capFrame {s s' : RecChainedState} {actor cell : CellId}
@@ -304,7 +303,7 @@ collision hides no frame interaction. -/
 theorem receiptArchiveA_lifecycleSideTableFrame {s s' : RecChainedState} {actor cell : CellId}
     (h : execFullA s (.receiptArchiveA actor cell) = some s') :
     s'.kernel.lifecycle = s.kernel.lifecycle :=
-  ((execFullA_receiptArchiveA_iff_spec s actor cell s').mp h).2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  ((execFullA_receiptArchiveA_iff_spec s actor cell s').mp h).2.2.2.2.2.2.2.2.2.2.2.2.2.1
 
 /-- **`refusalA_otherCellsFrame` — every OTHER cell's whole record untouched.** -/
 theorem refusalA_otherCellsFrame {s s' : RecChainedState} {actor cell : CellId}

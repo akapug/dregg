@@ -185,7 +185,7 @@ theorem stateCommit_binds_cells_and_rest
     (∀ c ∈ frameCarrier k t, k.cell c = k'.cell c)
       ∧ (k.cell t.src = k'.cell t.src ∧ k.cell t.dst = k'.cell t.dst)
       ∧ (k'.accounts = k.accounts ∧ k'.caps = k.caps ∧ k'.bal = k.bal
-          ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+          ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
           ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
           ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
           ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -227,7 +227,7 @@ theorem setFieldCommit_binds_all
     (∀ c ∈ sfFrameCarrier k cell, k.cell c = k'.cell c)
       ∧ k.cell cell = k'.cell cell
       ∧ (k'.accounts = k.accounts ∧ k'.caps = k.caps ∧ k'.bal = k.bal
-          ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+          ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
           ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
           ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
           ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -280,7 +280,7 @@ on ALL 16 non-cell components. A circuit proof (pinning `recStateCommit k`) and 
 theorem crossbind_rest_agree (hRest : RestHashIffFrame RH)
     (k k' : RecordKernelState) (hPI : RH k = RH k') :
     k'.accounts = k.accounts ∧ k'.caps = k.caps ∧ k'.bal = k.bal
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -314,7 +314,7 @@ theorem crossbind_circuit_exec_same_state
     (hFramePI : frameDigest CH compressN k S = frameDigest CH compressN k' S) :
     (∀ c ∈ S, k.cell c = k'.cell c)
       ∧ (k'.accounts = k.accounts ∧ k'.caps = k.caps ∧ k'.bal = k.bal
-          ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+          ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
           ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
           ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
           ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations

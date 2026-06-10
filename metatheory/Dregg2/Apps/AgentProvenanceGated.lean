@@ -301,7 +301,7 @@ neutral hypothesis discharged by `provNode_delta_zero`. -/
 theorem prov_append_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf)
     (slot : FieldName) (value : Int) (b : AssetId)
     (h : execFullForestG s (provNode cred slot value) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (provNode cred slot value) b h
     (provNode_delta_zero cred slot value b)
 

@@ -119,76 +119,12 @@ theorem noteSpendNullifier_commitments {k k' : RecordKernelState} {nf : Nat}
   · exact absurd h (by simp)
   · obtain ⟨rfl⟩ := h; rfl
 
-/-- Escrow create leaves `commitments` unchanged (edits only `bal`/`escrows`). -/
-theorem createEscrowKAsset_commitments {k k' : RecordKernelState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
-    (h : createEscrowKAsset k id actor creator recipient asset amount = some k') :
-    k'.commitments = k.commitments := by
-  unfold createEscrowKAsset at h; split at h
-  · obtain ⟨rfl⟩ := h; rfl
-  · exact absurd h (by simp)
-
-/-- Escrow release leaves `commitments` unchanged (edits only `bal`/`escrows`). -/
-theorem releaseEscrowKAsset_commitments {k k' : RecordKernelState} {id : Nat}
-    (h : releaseEscrowKAsset k id = some k') : k'.commitments = k.commitments := by
-  unfold releaseEscrowKAsset at h; split at h
-  · split at h
-    · obtain ⟨rfl⟩ := h; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
-
-/-- Escrow refund leaves `commitments` unchanged (edits only `bal`/`escrows`). -/
-theorem refundEscrowKAsset_commitments {k k' : RecordKernelState} {id : Nat}
-    (h : refundEscrowKAsset k id = some k') : k'.commitments = k.commitments := by
-  unfold refundEscrowKAsset at h; split at h
-  · split at h
-    · obtain ⟨rfl⟩ := h; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
-
-/-- Bridge lock leaves `commitments` unchanged (edits only `bal`/`escrows`). -/
-theorem bridgeLockKAsset_commitments {k k' : RecordKernelState} {id : Nat}
-    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
-    (h : bridgeLockKAsset k id actor originator destination asset amount = some k') :
-    k'.commitments = k.commitments := by
-  unfold bridgeLockKAsset at h; split at h
-  · obtain ⟨rfl⟩ := h; rfl
-  · exact absurd h (by simp)
-
-/-- Bridge finalize leaves `commitments` unchanged (edits only `escrows`). -/
-theorem bridgeFinalizeKAsset_commitments {k k' : RecordKernelState} {id : Nat} {asset : AssetId} {amount : ℤ}
-    (h : bridgeFinalizeKAsset k id asset amount = some k') : k'.commitments = k.commitments := by
-  unfold bridgeFinalizeKAsset at h; split at h
-  · split at h
-    · obtain ⟨rfl⟩ := h; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
-
-/-- Bridge cancel leaves `commitments` unchanged (edits only `bal`/`escrows`). -/
-theorem bridgeCancelKAsset_commitments {k k' : RecordKernelState} {id : Nat}
-    (h : bridgeCancelKAsset k id = some k') : k'.commitments = k.commitments := by
-  unfold bridgeCancelKAsset at h; split at h
-  · split at h
-    · obtain ⟨rfl⟩ := h; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
-
 /-- Queue allocate leaves `commitments` unchanged (edits only `queues`). -/
 theorem queueAllocateK_commitments {k k' : RecordKernelState} {id : Nat} {owner : CellId} {capacity : Nat}
     (h : queueAllocateK k id owner capacity = some k') : k'.commitments = k.commitments := by
   unfold queueAllocateK at h; split at h
   · exact absurd h (by simp)
   · obtain ⟨rfl⟩ := h; rfl
-
-/-- The raw escrow-create body leaves `commitments` unchanged (edits only `bal`/`escrows`). -/
-theorem createEscrowRawAsset_commitments (k : RecordKernelState) (id creator recipient : CellId)
-    (asset : AssetId) (amount : ℤ) :
-    (createEscrowRawAsset k id creator recipient asset amount).commitments = k.commitments := rfl
-
-/-- The raw escrow-settle body leaves `commitments` unchanged (edits only `bal`/`escrows`). -/
-theorem settleEscrowRawAsset_commitments (k : RecordKernelState) (id target : CellId)
-    (asset : AssetId) (amount : ℤ) :
-    (settleEscrowRawAsset k id target asset amount).commitments = k.commitments := rfl
 
 /-- Bare queue enqueue leaves `commitments` unchanged (edits only `queues`). -/
 theorem queueEnqueueK_commitments {k k' : RecordKernelState} {id m : Nat}
@@ -210,51 +146,6 @@ theorem queueDequeueK_commitments {k k' : RecordKernelState} {id : Nat} {actor :
       · simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨he, _⟩ := h; subst he; rfl
     · exact absurd h (by simp)
 
-/-- Queue enqueue (with deposit) leaves `commitments` unchanged: the FIFO append frames it
-(`queueEnqueueK_commitments`) and the deposit PARK is a raw escrow-create (`createEscrowRawAsset`,
-commitments-neutral by rfl). -/
-theorem queueEnqueueDepositK_commitments {k k' : RecordKernelState} {id m : Nat}
-    {sender owner : CellId} {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
-    (h : queueEnqueueDepositK k id m sender owner depId dAsset deposit = some k') :
-    k'.commitments = k.commitments := by
-  unfold queueEnqueueDepositK at h
-  cases hq : queueEnqueueK k id m with
-  | none => rw [hq] at h; exact absurd h (by simp)
-  | some k₁ =>
-      rw [hq] at h; simp only at h
-      by_cases hg : 0 ≤ deposit ∧ deposit ≤ k₁.bal sender dAsset ∧ sender ∈ k₁.accounts
-          ∧ ¬ (∃ r ∈ k₁.escrows, r.id = depId)
-      · rw [if_pos hg, Option.some.injEq] at h; subst h
-        rw [show (createEscrowRawAssetQueue k₁ depId sender owner dAsset deposit id m).commitments = k₁.commitments from rfl]
-        exact queueEnqueueK_commitments hq
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-
-/-- Queue dequeue (with refund) leaves `commitments` unchanged: the FIFO pop frames it
-(`queueDequeueK_commitments`) and the deposit REFUND is a raw escrow-settle (`settleEscrowRawAsset`,
-commitments-neutral by rfl). -/
-theorem queueDequeueRefundK_commitments {k : RecordKernelState} {id : Nat} {actor : CellId} {depId : Nat}
-    {k' : RecordKernelState} {mh : Nat}
-    (h : queueDequeueRefundK k id actor depId = some (k', mh)) : k'.commitments = k.commitments := by
-  unfold queueDequeueRefundK at h
-  cases hq : queueDequeueK k id actor with
-  | none => rw [hq] at h; exact absurd h (by simp)
-  | some p =>
-      obtain ⟨k₁, m1⟩ := p
-      rw [hq] at h; simp only at h
-      have hq1 : k₁.commitments = k.commitments := queueDequeueK_commitments hq
-      by_cases hbind : dequeueMsgBindB k₁ actor depId id m1
-      · rw [if_pos hbind] at h
-        cases hfind : findUnresolvedDeposit k₁ depId with
-        | none => simp only [hfind] at h; exact absurd h (by simp)
-        | some r =>
-            simp only [hfind] at h
-            by_cases ha : actor ∈ k₁.accounts
-            · rw [if_pos ha, Option.some.injEq, Prod.mk.injEq] at h
-              obtain ⟨he, _⟩ := h; subst he
-              rw [settleEscrowRawAsset_commitments]; exact hq1
-            · rw [if_neg ha] at h; exact absurd h (by simp)
-      · rw [if_neg hbind] at h; exact absurd h (by simp)
-
 /-- Queue resize leaves `commitments` unchanged (edits only `queues`). -/
 theorem queueResizeK_commitments {k k' : RecordKernelState} {id newCap : Nat}
     (h : queueResizeK k id newCap = some k') : k'.commitments = k.commitments := by
@@ -269,18 +160,21 @@ escrow-create / settle bodies; the FIFO move via the queue bodies). -/
 theorem queueTxOpStepA_commitments {s s' : RecChainedState} {op : QueueTxOpA}
     (h : queueTxOpStepA s op = some s') : s'.kernel.commitments = s.kernel.commitments := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
+  | enqueue id m actor cell =>
       simp only [queueTxOpStepA, queueEnqueueChainA] at h; split at h
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => commit_subst h hk; exact queueEnqueueDepositK_commitments hk
+        | some k' => commit_subst h hk; exact queueEnqueueK_commitments hk
       · exact absurd h (by simp)
-  | dequeue id actor cell depId =>
+  | dequeue id actor cell =>
       simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some p => obtain ⟨k', mh⟩ := p
-                    commit_subst h hk; exact queueDequeueRefundK_commitments hk
+                    rw [hk] at h
+                    simp only [Option.some.injEq] at h
+                    subst h
+                    exact queueDequeueK_commitments hk
       · exact absurd h (by simp)
 
 /-- WAVE 4: the ALL-OR-NOTHING atomic batch leaves `commitments` unchanged (induction over the sub-ops). -/
@@ -463,29 +357,6 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       cases hk : recKMintAsset s.kernel actor cell a value with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' => commit_subst h hk; exact subset_of_commitments_eq (recKMintAsset_commitments hk)
-  | createEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => commit_subst h hk; exact subset_of_commitments_eq (createEscrowKAsset_commitments hk)
-  | releaseEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'; exact subset_of_commitments_eq (releaseEscrowKAsset_commitments hk)
-  | refundEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'; exact subset_of_commitments_eq (refundEscrowKAsset_commitments hk)
-  | createObligationA id actor obligor beneficiary asset stake =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => commit_subst h hk; exact subset_of_commitments_eq (createEscrowKAsset_commitments hk)
-  -- fulfill/slash route to refund/release (escrow SETTLE) — `commitments` literally unchanged.
-  | fulfillObligationA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'; exact subset_of_commitments_eq (refundEscrowKAsset_commitments hk)
-  | slashObligationA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'; exact subset_of_commitments_eq (releaseEscrowKAsset_commitments hk)
   | noteSpendA nf actor spendProof =>
       simp only [execFullA, noteSpendChainA] at h
       by_cases hp : spendProof = true
@@ -500,39 +371,6 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       show s.kernel.commitments ⊆ (noteCreateCommitment s.kernel cm).commitments
       unfold noteCreateCommitment
       exact List.subset_cons_self cm s.kernel.commitments
-  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
-      · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => commit_subst h hk; exact subset_of_commitments_eq (createEscrowKAsset_commitments hk)
-      · exact absurd h (by simp)
-  | releaseCommittedEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'; exact subset_of_commitments_eq (releaseEscrowKAsset_commitments hk)
-  | refundCommittedEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'; exact subset_of_commitments_eq (refundEscrowKAsset_commitments hk)
-  | bridgeLockA id actor originator destination asset amount =>
-      simp only [execFullA, bridgeLockChainA] at h
-      cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => commit_subst h hk; exact subset_of_commitments_eq (bridgeLockKAsset_commitments hk)
-  | bridgeFinalizeA id actor asset amount =>
-      simp only [execFullA, bridgeFinalizeChainA] at h; split at h
-      · cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => commit_subst h hk
-                     exact subset_of_commitments_eq (bridgeFinalizeKAsset_commitments hk)
-      · exact absurd h (by simp)
-  | bridgeCancelA id actor =>
-      simp only [execFullA, bridgeCancelChainA] at h; split at h
-      · cases hk : bridgeCancelKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => commit_subst h hk
-                     exact subset_of_commitments_eq (bridgeCancelKAsset_commitments hk)
-      · exact absurd h (by simp)
-  -- §seal (Wave-3 DE-SHADOW) — seal/unseal/createSealPair edit `caps`/`sealedBoxes`, never `commitments`
-  -- (frame: `rfl`); makeSovereign/refusal/receiptArchive write the cell record.
   | sealA pid actor payload =>
       simp only [execFullA] at h; obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'
       exact subset_of_commitments_eq rfl
@@ -557,18 +395,20 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => commit_subst h hk; exact subset_of_commitments_eq (queueAllocateK_commitments hk)
       · exact absurd h (by simp)
-  | queueEnqueueA id m actor cell depId dAsset deposit =>
+  | queueEnqueueA id m actor cell =>
       simp only [execFullA, queueEnqueueChainA] at h; split at h
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => commit_subst h hk; exact subset_of_commitments_eq (queueEnqueueDepositK_commitments hk)
+        | some k' => commit_subst h hk; exact subset_of_commitments_eq (queueEnqueueK_commitments hk)
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId =>
+  | queueDequeueA id actor cell =>
       simp only [execFullA, queueDequeueChainA] at h; split at h
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some p => obtain ⟨k', mh⟩ := p
-                    commit_subst h hk; exact subset_of_commitments_eq (queueDequeueRefundK_commitments hk)
+                    rw [hk] at h
+                    obtain ⟨rfl⟩ := h
+                    exact subset_of_commitments_eq (queueDequeueK_commitments hk)
       · exact absurd h (by simp)
   | queueResizeA id newCap actor cell =>
       simp only [execFullA, queueResizeChainA] at h; split at h

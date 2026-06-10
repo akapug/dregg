@@ -240,14 +240,14 @@ theorem spendNode_delta_zero (cred : Authorization Dg Pf) (nf : Nat) (spendProof
 asset's total supply: the commitment-tree insert touches no balance. -/
 theorem sp_deposit_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (cm : Nat)
     (b : AssetId) (h : execFullForestG s (depositNode cred cm) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (depositNode cred cm) b h (depositNode_delta_zero cred cm b)
 
 /-- **`sp_spend_conserves` — PROVED (END-USER THEOREM 6b).** A COMMITTED note spend preserves EVERY
 asset's total supply: the nullifier-set insert touches no balance. -/
 theorem sp_spend_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (nf : Nat)
     (spendProof : Bool) (b : AssetId) (h : execFullForestG s (spendNode cred nf spendProof) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (spendNode cred nf spendProof) b h
     (spendNode_delta_zero cred nf spendProof b)
 
@@ -278,13 +278,13 @@ def sp0 : RecChainedState :=
 -- (i) a DEPOSIT commits (inserts a fresh note commitment 5 into the tree):
 #guard ((execFullForestG sp0 (depositNode goodCred 5)).isSome)                        --  true (deposited!)
 -- ...and CONSERVES asset 0 (commitment insert is balance-neutral):
-#guard ((execFullForestG sp0 (depositNode goodCred 5)).map (fun s => recTotalAssetWithEscrow s.kernel 0)) == some 100  --  some 100
+#guard ((execFullForestG sp0 (depositNode goodCred 5)).map (fun s => recTotalAsset s.kernel 0)) == some 100  --  some 100
 
 -- (ii) a PROOF-BACKED FRESH spend (nf = 9, spendProof = true) commits and RECORDS the nullifier:
 #guard ((execFullForestG sp0 (spendNode goodCred 9 true)).isSome)                     --  true (spent!)
 #guard ((execFullForestG sp0 (spendNode goodCred 9 true)).map (fun s => s.kernel.nullifiers.contains 9)) == some true  --  recorded
 -- ...and CONSERVES asset 0 (nullifier insert is balance-neutral):
-#guard ((execFullForestG sp0 (spendNode goodCred 9 true)).map (fun s => recTotalAssetWithEscrow s.kernel 0)) == some 100  --  some 100
+#guard ((execFullForestG sp0 (spendNode goodCred 9 true)).map (fun s => recTotalAsset s.kernel 0)) == some 100  --  some 100
 
 -- (iii) NO DOUBLE-SPEND: re-spending note 77 (already in the spent set) ⇒ none, EVEN with a valid proof:
 #guard (sp0.kernel.nullifiers.contains 77)                                            --  true (77 already spent)

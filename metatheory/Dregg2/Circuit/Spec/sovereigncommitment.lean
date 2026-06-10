@@ -121,7 +121,6 @@ def MakeSovereignSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChain
   -- THE FRAME: all 16 non-`cell` kernel fields, literally unchanged.
   ∧ s'.kernel.accounts = s.kernel.accounts
   ∧ s'.kernel.caps = s.kernel.caps
-  ∧ s'.kernel.escrows = s.kernel.escrows
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments
@@ -179,16 +178,16 @@ theorem execFullA_makeSovereignA_iff_spec
   constructor
   · rintro ⟨hg, hs'⟩
     subst hs'
-    refine ⟨hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    refine ⟨hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · exact (sovereignRebind_eq_makeSovereignKernel s.kernel cell).symm
     all_goals rfl
-  · rintro ⟨hg, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+  · rintro ⟨hg, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
     refine ⟨hg, ?_⟩
     -- rebuild s' field-by-field: the touched cell map, the log, and the 16 frame fields, then η.
     obtain ⟨k', lg'⟩ := s'
-    obtain ⟨acc, cl, cps, esc, nul, rev, cmt, bl, qs, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
-    simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-    subst hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+    obtain ⟨acc, cl, cps, nul, rev, cmt, bl, qs, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+    simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+    subst hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
     -- the touched cell map: rewrite the declarative map to the executor's makeSovereignKernel form.
     rw [sovereignRebind_eq_makeSovereignKernel] at hcell
     subst hcell
@@ -242,7 +241,7 @@ conservation-relevant frame fact). -/
 theorem makeSovereignSpec_bal_frame
     {s s' : RecChainedState} {actor cell : CellId}
     (h : MakeSovereignSpec s actor cell s') :
-    s'.kernel.bal = s.kernel.bal := h.2.2.2.2.2.2.2.2.2.1
+    s'.kernel.bal = s.kernel.bal := h.2.2.2.2.2.2.2.2.1
 
 /-- **The caps frame.** Off the spec: a `makeSovereignA` never edits the cap table (authority Δ = 0;
 the regime invariant — sovereignty is a representation move, not a capability grant). -/

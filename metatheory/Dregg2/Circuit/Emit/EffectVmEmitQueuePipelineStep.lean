@@ -372,7 +372,7 @@ theorem unify_pipeline_balFrozen (s : RecChainedState) (srcId : Nat) (owner : Ce
     (sinkCells : List CellId) (sinkIds : List Nat) (s' : RecChainedState) (c : CellId) (asset : AssetId)
     (hspec : QueuePipelineFanoutSpec s srcId owner sinkCells sinkIds s') :
     (cellProjBal s'.kernel.bal c asset).balLo = (cellProjBal s.kernel.bal c asset).balLo := by
-  obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
+  obtain ⟨_, _, _, _, _, _, _, _, hbal, _⟩ := hspec
   show s'.kernel.bal c asset = s.kernel.bal c asset
   rw [hbal]
 

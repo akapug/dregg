@@ -84,7 +84,7 @@ The receipt/audit log is **APPEND-ONLY** — it never shrinks. This is the canon
 "the log is the truth, never rewritten" safety, the auditability / non-repudiation invariant — and it
 is a NON-conservation property: its proof reads the executor's **ChainLink/ObsAdvance** structure (the
 log grows by exactly one `fullReceiptA` row each committed step), NEVER the per-asset conservation
-measure `recTotalAssetWithEscrow`. It is THE TEMPLATE for userspace verification on this cell. -/
+measure `recTotalAsset`. It is THE TEMPLATE for userspace verification on this cell. -/
 
 /-- **The turn-level log-monotone lemma (PROVED).** A committed per-asset full-turn never SHRINKS the
 receipt log: `s.log.length ≤ s'.log.length`. Proved by induction on the action list — each committed

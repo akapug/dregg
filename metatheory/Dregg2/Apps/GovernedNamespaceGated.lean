@@ -321,14 +321,14 @@ theorem gnNode_delta_zero (cred : Authorization Dg Pf) (slot : FieldName) (value
   simp [gnNode, lowerForestG, lowerChildrenG, turnLedgerDeltaAsset, ledgerDeltaAsset]
 
 /-- **`gn_commit_conserves` — PROVED (END-USER THEOREM 8).** A COMMITTED governed table swap preserves
-EVERY asset's total supply: `recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b`,
+EVERY asset's total supply: `recTotalAsset s'.kernel b = recTotalAsset s.kernel b`,
 for every asset `b`. The route-table commitment write touches metadata, never balance — so a governance
 swap moves no money. A one-liner off `execFullForestG_conserves_per_asset` with the
 `SetField`-is-balance-neutral hypothesis discharged by `gnNode_delta_zero`. Stated for the commit
 (root) swap; identical for every op (same shape). -/
 theorem gn_commit_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (newRoot : Int)
     (b : AssetId) (h : execFullForestG s (commitRootNode cred newRoot) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (commitRootNode cred newRoot) b h
     (gnNode_delta_zero cred routeTableRootSlot newRoot b)
 
@@ -336,7 +336,7 @@ theorem gn_commit_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf
 theorem gn_op_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf)
     (slot : FieldName) (value : Int) (b : AssetId)
     (h : execFullForestG s (gnNode cred slot value) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (gnNode cred slot value) b h
     (gnNode_delta_zero cred slot value b)
 

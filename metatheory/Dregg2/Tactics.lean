@@ -157,7 +157,7 @@ macro "gate_peel" hk:ident " with " fin:tactic : tactic =>
      · exact absurd $hk:ident (by simp)))
 
 -- NOTE: the balance-NEUTRAL finisher `bal_neutral` (the fourth combinator) lives in
--- `Dregg2/Exec/RecordKernel.lean`, next to the per-asset measure (`recTotalAssetWithEscrow`)
+-- `Dregg2/Exec/RecordKernel.lean`, next to the per-asset measure (`recTotalAsset`)
 -- it unfolds — a tactic-macro must reference user globals from a site where they are in
 -- scope (macro hygiene resolves the simp-lemma names at the DEFINITION site, not the use
 -- site), so a domain-specific finisher belongs with its domain, not in this generic file.

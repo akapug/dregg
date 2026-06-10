@@ -84,18 +84,16 @@ def issuerBurnK (k : RecordKernelState) (actor : CellId) (a : AssetId) (src : Ce
 
 /-- The shared conservation core: a committed `recTransferBal` write between two live, distinct
 cells preserves `ExactConservation` — the moved column's debit/credit cancel
-(`recTransferBal_sum_conserve_moved`), every other column is untouched (`recTransferBal_untouched`),
-and the escrow store never moves on a `bal` write. NO availability premise. -/
+(`recTransferBal_sum_conserve_moved`), every other column is untouched (`recTransferBal_untouched`).
+NO availability premise. -/
 private theorem transferBal_write_preserves_exact (k : RecordKernelState) {src dst : CellId}
     {a : AssetId} (amt : ℤ) (hsrc : src ∈ k.accounts) (hdst : dst ∈ k.accounts) (hne : src ≠ dst)
     (hex : ExactConservation k) :
     ExactConservation { k with bal := recTransferBal k.bal src dst a amt } := by
   intro b
-  unfold recTotalAssetWithEscrow
-  have hesc : escrowHeldAsset { k with bal := recTransferBal k.bal src dst a amt } b
-      = escrowHeldAsset k b := rfl
   have hbal : recTotalAsset { k with bal := recTransferBal k.bal src dst a amt } b
       = recTotalAsset k b := by
+    unfold recTotalAsset
     rcases eq_or_ne b a with rfl | hb
     · show (∑ c ∈ k.accounts, recTransferBal k.bal src dst b amt c b)
           = ∑ c ∈ k.accounts, k.bal c b
@@ -104,7 +102,7 @@ private theorem transferBal_write_preserves_exact (k : RecordKernelState) {src d
           = ∑ c ∈ k.accounts, k.bal c b
       exact Finset.sum_congr rfl
         (fun c _ => recTransferBal_untouched k.bal src dst a b amt hb c)
-  rw [hbal, hesc]
+  rw [hbal]
   exact hex b
 
 /-- **MINT-AS-ISSUER-MOVE preserves the value law (PROVED).** The reformed mint is a transfer, so
@@ -266,11 +264,8 @@ theorem recKMintAsset_breaks_exact {k k' : RecordKernelState} {actor cell : Cell
   intro hex'
   have hd := recKMintAsset_delta k k' actor cell a amt h a
   rw [if_pos rfl] at hd
-  have hesc : escrowHeldAsset k' a = escrowHeldAsset k a := by
-    rw [recKMintAsset_shape h]; rfl
   have h0 := hex a
   have h1 := hex' a
-  unfold recTotalAssetWithEscrow at h0 h1
   omega
 
 /-- **NON-VACUITY TOOTH: the LEGACY burn provably BREAKS the value law** (the dual: bare supply
@@ -281,11 +276,8 @@ theorem recKBurnAsset_breaks_exact {k k' : RecordKernelState} {actor cell : Cell
   intro hex'
   have hd := recKBurnAsset_delta k k' actor cell a amt h a
   rw [if_pos rfl] at hd
-  have hesc : escrowHeldAsset k' a = escrowHeldAsset k a := by
-    rw [recKBurnAsset_shape h]; rfl
   have h0 := hex a
   have h1 := hex' a
-  unfold recTotalAssetWithEscrow at h0 h1
   omega
 
 /-! ## §3.5 — the WHOLE-DISPATCH closure: every zero-delta executor arm preserves the law.
@@ -416,13 +408,13 @@ def kGen : RecordKernelState :=
 -- BOOTSTRAP: genesis is exact, the W1 mint commits, and the post-state shows the NEGATIVE-CAPABLE
 -- WELL: issuer 0 at −5, recipient 2 at +5, sum EXACTLY 0 — with NO availability gate consulted
 -- (the issuer's well went below zero from a zero start).
-#guard (recTotalAssetWithEscrow kGen 0 == 0)
+#guard (recTotalAsset kGen 0 == 0)
 #guard ((recKMintAssetIssuer kGen 9 2 0 5).isSome)
 #guard ((recKMintAssetIssuer kGen 9 2 0 5).map (fun k' => (k'.bal 0 0, k'.bal 2 0)))
         == some (-5, 5)
-#guard ((recKMintAssetIssuer kGen 9 2 0 5).map (fun k' => recTotalAssetWithEscrow k' 0)) == some 0
+#guard ((recKMintAssetIssuer kGen 9 2 0 5).map (fun k' => recTotalAsset k' 0)) == some 0
 -- other assets untouched:
-#guard ((recKMintAssetIssuer kGen 9 2 0 5).map (fun k' => recTotalAssetWithEscrow k' 1)) == some 0
+#guard ((recKMintAssetIssuer kGen 9 2 0 5).map (fun k' => recTotalAsset k' 1)) == some 0
 -- GENESIS-ORDER TOOTH (fail-closed): with the issuer NOT a live account, the mint REFUSES.
 #guard ((recKMintAssetIssuer { kGen with accounts := {2} } 9 2 0 5).isNone)
 -- AUTHORITY IS OVER THE ISSUER: an actor holding `node 2` (the RECIPIENT — the legacy gate's
@@ -434,7 +426,7 @@ def kGen : RecordKernelState :=
 -- (issuer −5 → −2, holder 5 → 2, sum stays 0); over-burning 6 > 2 is REFUSED (holder availability).
 #guard (((recKMintAssetIssuer kGen 9 2 0 5).bind
           (fun k' => recKBurnAssetIssuer k' 9 2 0 3)).map
-            (fun k'' => (k''.bal 0 0, k''.bal 2 0, recTotalAssetWithEscrow k'' 0)))
+            (fun k'' => (k''.bal 0 0, k''.bal 2 0, recTotalAsset k'' 0)))
         == some (-2, 2, 0)
 #guard (((recKMintAssetIssuer kGen 9 2 0 5).bind
           (fun k' => recKBurnAssetIssuer k' 9 2 0 6)).isNone)
@@ -448,8 +440,8 @@ def kGenLegacy : RecordKernelState :=
 -- to 5 ≠ 0 — the conserved state is taken OUT of the law (the executable face of
 -- `recKMintAsset_breaks_exact`).
 #guard ((recKMintAsset kGenLegacy 9 2 0 5).isSome)
-#guard ((recKMintAsset kGenLegacy 9 2 0 5).map (fun k' => recTotalAssetWithEscrow k' 0)) == some 5
+#guard ((recKMintAsset kGenLegacy 9 2 0 5).map (fun k' => recTotalAsset k' 0)) == some 5
 #guard (((recKMintAsset kGenLegacy 9 2 0 5).map
-          (fun k' => recTotalAssetWithEscrow k' 0 == 0)) == some false)
+          (fun k' => recTotalAsset k' 0 == 0)) == some false)
 
 end Dregg2.Exec.IssuerMove

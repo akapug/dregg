@@ -171,13 +171,12 @@ theorem created_set_grows (vc : ValueCommitment) (k : RecordKernelState) (nt : B
   exact List.mem_cons_of_mem _ h
 
 /-- **`noteCreateBound_recTotalAsset` (PROVED) — bal-NEUTRALITY survives the weld.** The welded create
-still leaves the on-ledger `recTotalAsset`/`escrowHeldAsset` UNCHANGED for every asset: shielded value
+still leaves the on-ledger `recTotalAsset` UNCHANGED for every asset: shielded value
 lives in the off-ledger commitment set, never the transparent `bal` ledger (so it cannot double-count
 against transparent balances). -/
 theorem noteCreateBound_recTotalAsset (vc : ValueCommitment) (k : RecordKernelState) (nt : BoundNote)
     (b : AssetId) :
-    recTotalAsset (noteCreateBound vc k nt) b = recTotalAsset k b
-      ∧ escrowHeldAsset (noteCreateBound vc k nt) b = escrowHeldAsset k b :=
+    recTotalAsset (noteCreateBound vc k nt) b = recTotalAsset k b :=
   noteCreate_recTotalAsset k _ b
 
 #assert_axioms noteCreateBound_binds
@@ -703,6 +702,6 @@ def sShielded : Option ShieldedState := shieldK poolDemo refVC sShield0 2 2 0 no
 #guard ((sShielded.bind (fun s => shieldK poolDemo refVC s 2 2 0 note3 99)).isNone)
 -- the value law rides the whole roundtrip: every committed state sums to the genesis supply.
 #guard ((sShielded.bind (fun s => unshieldK poolDemo s 99 2)).map
-          (fun s => recTotalAssetWithEscrow s.kernel 0)) == some 4
+          (fun s => recTotalAsset s.kernel 0)) == some 4
 
 end Dregg2.Exec.ShieldedValue

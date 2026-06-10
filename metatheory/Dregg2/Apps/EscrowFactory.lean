@@ -16,7 +16,7 @@ proved escrow-as-cell-program is sound; THIS module makes it the LIVE path:
   * the locked VALUE lives in the minted cell's own per-asset `bal` column (a `deposit` is an ordinary
     `move` IN; a `release`/`refund` is an ordinary `move` OUT — the probe's `escrowSettle`), so escrow
     inherits the kernel's per-asset move conservation law VERBATIM, with NO `escrows` side-table and NO
-    bespoke `recTotalAssetWithEscrow` quantity.
+    bespoke `recTotalAsset` quantity.
 
 The four release-safety keystones (conservation / no-double-resolve / release-only-on-condition /
 value-not-stranded) are RE-ESTABLISHED on the FACTORY-BORN cell here — i.e. on the cell whose caveats
@@ -342,7 +342,7 @@ the live escrow path (this module shipped + every escrow app re-pointed), W2 DEL
         (`RecordKernel.lean:~483/542`) — DISSOLVED into the minted cell's own `bal` column.
     (3) `escrowHeldAsset` (the off-ledger held-value measure) and `EscrowRecord`'s escrow-specific
         fields (`creator`/`recipient`/`amount`/`resolved`) where used ONLY by escrow.
-    (4) the E3 TRANSITIONAL term from W1: `recTotalAssetWithEscrow`'s escrow summand
+    (4) the E3 TRANSITIONAL term from W1: `recTotalAsset`'s escrow summand
         (`recTotalAsset + escrowHeldAsset`) COLLAPSES back to plain `recTotalAsset` — the bespoke
         combined conserved quantity and its accounting theory (`escrow_settle_conserves_combined`,
         `heldSum_markResolved_found`, the `…WithEscrow` neutrality lemmas) all DIE, because escrow

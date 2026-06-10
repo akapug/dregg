@@ -152,32 +152,18 @@ def affectedOf : FullActionA → List CellId
   | .cellUnsealA _ cell        => [cell]
   | .cellDestroyA _ cell _     => [cell]
   | .refreshDelegationA _ child => [child]
-  -- escrow / obligation / committed-escrow: BOTH creator/obligor AND recipient/beneficiary (the
-  -- holding-store moves value between them — conservatively include all named cells).
-  | .createEscrowA _ actor creator recipient _ _ => [actor, creator, recipient]
-  | .releaseEscrowA _ actor    => [actor]
-  | .refundEscrowA _ actor     => [actor]
-  | .createObligationA _ actor obligor beneficiary _ _ => [actor, obligor, beneficiary]
-  | .fulfillObligationA _ actor => [actor]
-  | .slashObligationA _ actor  => [actor]
-  | .createCommittedEscrowA _ actor creator recipient _ _ _ => [actor, creator, recipient]
-  | .releaseCommittedEscrowA _ actor => [actor]
-  | .refundCommittedEscrowA _ actor => [actor]
-  -- notes (nullifier / commitment SETS): the spending/creating `actor`.
+  -- notes (nullifier / commitment SETS): the spending/creating `actor`. (F1b: the escrow/
+  -- obligation/committed-escrow/bridge-LFC arms are GONE with the kernel holding-store.)
   | .noteSpendA _ actor _      => [actor]
   | .noteCreateA _ actor       => [actor]
-  -- bridge lock/finalize/cancel.
-  | .bridgeLockA _ actor originator destination _ _ => [actor, originator, destination]
-  | .bridgeFinalizeA _ actor _ _ => [actor]
-  | .bridgeCancelA _ actor      => [actor]
   -- seal pair (cap movement through a box).
   | .sealA _ actor _           => [actor]
   | .unsealA _ actor recipient => [actor, recipient]
   | .createSealPairA _ actor sealerHolder unsealerHolder => [actor, sealerHolder, unsealerHolder]
   -- queues (the FIFO side-table cell).
   | .queueAllocateA _ actor cell _ => [actor, cell]
-  | .queueEnqueueA _ _ actor cell _ _ _ => [actor, cell]
-  | .queueDequeueA _ actor cell _ => [actor, cell]
+  | .queueEnqueueA _ _ actor cell => [actor, cell]
+  | .queueDequeueA _ actor cell => [actor, cell]
   | .queueResizeA _ _ actor cell => [actor, cell]
   | .queueAtomicTxA actor _     => [actor]
   | .queuePipelineStepA _ owner sinkCells _ => owner :: sinkCells

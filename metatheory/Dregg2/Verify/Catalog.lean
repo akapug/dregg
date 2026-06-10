@@ -107,7 +107,7 @@ macro_rules
 /-! ## §2 — `conservation% a` — "asset `a`'s supply never drifts from its starting value".
 
 The per-asset conservation shape (`HATCHERY.md §136, §146`): over a `ConservingForest` (per-asset net
-delta `0` in every asset) the combined per-asset measure `cellObsA · a = recTotalAssetWithEscrow ·
+delta `0` in every asset) the combined per-asset measure `cellObsA · a = recTotalAsset ·
 .kernel a` is INVARIANT. `conservation% a` is parametric in a baseline state `s0`: it expands to the
 contract `Inv s := cellObsA s a = cellObsA s0 a` (`shape := .constant`). The `step_ob` is the proved
 one-step `cellObsA_next` (commit conserves EVERY asset — `execFullForestA_conserves_per_asset`

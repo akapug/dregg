@@ -13,7 +13,7 @@ by one of the theorems below.
 ## What the theorems mean
 
 Every theorem is a real, non-vacuous fact about the concrete run —
-  * conservation: per-asset `recTotalAssetWithEscrow` vector over the actual forest (a scalar aggregate
+  * conservation: per-asset `recTotalAsset` vector over the actual forest (a scalar aggregate
     could not state it);
   * fail-closed: a real proved `execFullForestA … = none` for the concrete bad worker turn, not an `#eval`;
   * non-amplification: `capAuthConferred (attenuate keep c) ⊆ capAuthConferred c` (`derive_no_amplify`),
@@ -117,12 +117,12 @@ theorem workForest_delta1 : turnLedgerDeltaAsset (lowerForestA workForest) 1 = 0
     capTarget, orchestratorCap]
 
 /-- **`workForest_conserves` — ② conservation.** A committed work forest preserves every asset's total
-supply (`recTotalAssetWithEscrow … b` for every `b`): the per-asset conservation vector across the whole
+supply (`recTotalAsset … b` for every `b`): the per-asset conservation vector across the whole
 tree. This is `execFullForestA_conserves_per_asset`, discharged by `workForest_delta0`/`_delta1`.
 Non-vacuous: a scalar aggregate could not even state it. -/
 theorem workForest_conserves (s' : RecChainedState) (b : AssetId)
     (h : execFullForestA world workForest = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow world.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset world.kernel b := by
   -- Per-asset net is 0 in each asset (the two assets the ledger carries; others trivially 0).
   have hzero : turnLedgerDeltaAsset (lowerForestA workForest) b = 0 := by
     -- `balanceA` transfers have `ledgerDeltaAsset = 0` at EVERY asset, so the turn delta is 0 for any b.
@@ -165,26 +165,24 @@ theorem recKExecAsset_fail_closed_reused (turn : Turn) (a : AssetId)
     recKExecAsset world.kernel turn a = none :=
   recKExecAsset_unauthorized_fails world.kernel turn a h
 
-/-! ## §4 — Escrow: atomic value-move between two agents + combined-conservation.
+/-! ## §4 — Value move: atomic transfer between two agents + per-asset conservation.
 
-The orchestrator locks 5 of asset 1 into escrow (bare ledger drops, holding-store rises). The combined
-per-asset measure `recTotalAssetWithEscrow` (= ledger + holding-store) is conserved across the lock —
-value is parked, never created or destroyed. This is `execFullA_ledger_per_asset` with
-`ledgerDeltaAsset = 0` on the escrow leg. -/
+(F1b: the kernel escrow verbs are GONE — escrow demos live on the factory contract,
+`Apps/EscrowFactory.lean`.) The orchestrator moves 5 of asset 1 to the counterparty; the per-asset
+measure `recTotalAsset` is conserved across the move — value moves, never created or destroyed.
+This is `execFullA_ledger_per_asset` with `ledgerDeltaAsset = 0` on the transfer leg. -/
 
-/-- The escrow lock: orchestrator (actor `minter`, authorized over cell 0) locks 5 of asset 1 from the
-orchestrator cell to the counterparty, escrow id 1. -/
+/-- The value move: orchestrator (self-authorized over cell 0) moves 5 of asset 1 from the
+orchestrator cell to the counterparty. -/
 def escrowLock : FullActionA :=
-  .createEscrowA 1 minter orchestrator counterparty 1 5
+  .balanceA { actor := orchestrator, src := orchestrator, dst := counterparty, amt := 5 } 1
 
-/-- **`escrowLock_combined_conserves` — ④ escrow combined-conservation.** A committed escrow lock
-preserves the combined per-asset measure `recTotalAssetWithEscrow b` at every asset: the bare ledger
-debit at asset 1 is offset by the holding-store rise. `execFullA_ledger_per_asset` with the escrow
-leg's `ledgerDeltaAsset = 0`. Non-vacuous: the bare ledger genuinely drops at the locked asset while
-the combined measure holds. -/
+/-- **`escrowLock_combined_conserves` — ④ value-move conservation.** A committed transfer
+preserves the per-asset measure `recTotalAsset b` at every asset.
+`execFullA_ledger_per_asset` with the transfer leg's `ledgerDeltaAsset = 0`. -/
 theorem escrowLock_combined_conserves (s' : RecChainedState) (b : AssetId)
     (h : execFullA world escrowLock = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow world.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset world.kernel b := by
   have hdelta : ledgerDeltaAsset escrowLock b = 0 := by
     simp only [escrowLock, ledgerDeltaAsset]
   rw [execFullA_ledger_per_asset world s' escrowLock b h, hdelta, add_zero]
@@ -263,11 +261,11 @@ def orchestration : FullForestA :=
                    , sub := ⟨ .burnA minter orchestrator 1 50, [] ⟩ } ] ⟩ } ] ⟩
 
 /-- **`orchestration_conserves` — ⑥a the whole run conserves every asset.** For every asset `b`, the
-committed orchestration preserves `recTotalAssetWithEscrow … b`. The mint and burn net to `0` in asset 1;
+committed orchestration preserves `recTotalAsset … b`. The mint and burn net to `0` in asset 1;
 the transfer is internal. `execFullForestA_conserves_per_asset` on the concrete run. -/
 theorem orchestration_conserves (s' : RecChainedState) (b : AssetId)
     (h : execFullForestA world orchestration = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow world.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset world.kernel b := by
   have hzero : turnLedgerDeltaAsset (lowerForestA orchestration) b = 0 := by
     -- asset 1: +50 (mint) − 50 (burn) = 0; asset 0: 0; every other asset: 0.
     simp only [orchestration, lowerForestA, lowerChildrenA, capTarget, orchestratorCap,
@@ -361,7 +359,7 @@ def supplyStr (s : RecChainedState) : String :=
 
 /-- The COMBINED per-asset measure pair of a post-state, as a string. -/
 def combinedStr (s : RecChainedState) : String :=
-  s!"(asset0={recTotalAssetWithEscrow s.kernel 0}, asset1={recTotalAssetWithEscrow s.kernel 1})"
+  s!"(asset0={recTotalAsset s.kernel 0}, asset1={recTotalAsset s.kernel 1})"
 
 def main : IO Unit := do
   IO.println ""
@@ -404,16 +402,15 @@ def main : IO Unit := do
   certifies "badWorkerForest_fails_closed (execFullForestA … = none, PROVED)"
   certifies "unauthorized_mint_rejected + recKExecAsset_unauthorized_fails (the kernel fail-closed law)"
 
-  -- ④ ESCROW — atomic value-move
-  scene "④" "ESCROW — atomic value-move between two agents"
+  -- ④ VALUE MOVE — atomic transfer
+  scene "④" "VALUE MOVE — atomic transfer between two agents"
   match execFullA world escrowLock with
   | some s =>
-      yellow s!"orchestrator LOCKS 5·a1 into escrow id 1 → counterparty"
-      detail s!"bare per-asset supply {supplyStr s}   held(a1)={escrowHeldAsset s.kernel 1}  (value PARKED)"
-      detail s!"COMBINED measure {combinedStr s}   (pre {combinedStr world})"
-      ok "combined per-asset measure conserved across the lock — value parked, not created/destroyed"
-  | none => denied "escrow lock unexpectedly rejected"
-  certifies "escrowLock_combined_conserves (= execFullA_ledger_per_asset, escrow leg δ=0)"
+      yellow s!"orchestrator MOVES 5·a1 → counterparty"
+      detail s!"per-asset supply {supplyStr s}   (pre {combinedStr world})"
+      ok "per-asset measure conserved across the move — value moves, not created/destroyed"
+  | none => denied "value move unexpectedly rejected"
+  certifies "escrowLock_combined_conserves (= execFullA_ledger_per_asset, transfer leg δ=0)"
 
   -- ⑤ AUTH GATE — credential + caveat
   scene "⑤" "AUTH GATE — credential + caveat (META-FILL D)"

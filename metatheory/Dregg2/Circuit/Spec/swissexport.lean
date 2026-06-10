@@ -131,7 +131,6 @@ def ExportSpec (s : RecChainedState) (sw : Nat) (actor exporter target : CellId)
   ∧ s'.kernel.accounts = s.kernel.accounts
   ∧ s'.kernel.cell = s.kernel.cell
   ∧ s'.kernel.caps = s.kernel.caps
-  ∧ s'.kernel.escrows = s.kernel.escrows
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments
@@ -177,13 +176,13 @@ theorem export_iff_spec (s : RecChainedState) (sw : Nat) (actor exporter target 
         · intro h
           simp only [Option.some.injEq] at h
           subst h
-          refine ⟨⟨hauth, hf, hr⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-        · rintro ⟨_, hsw, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+          refine ⟨⟨hauth, hf, hr⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+        · rintro ⟨_, hsw, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
           -- reconstruct `s'` from its (kernel field-by-field) + log spec.
           obtain ⟨k', log'⟩ := s'
-          obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw', sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
-          simp only [exportRecord, exportReceipt] at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-          subst hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+          obtain ⟨acc, cell, caps, nul, rev, com, bal, q, sw', sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+          simp only [exportRecord, exportReceipt] at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+          subst hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
           rfl
       · -- non-amplification fails ⇒ `none`.
         rw [if_neg hr]
@@ -232,7 +231,7 @@ theorem export_spec_balance_neutral (s : RecChainedState) (sw : Nat) (actor expo
     (h : execFullA s (.exportSturdyRefA sw actor exporter target rights) = some s') :
     s'.kernel.bal = s.kernel.bal ∧ s'.kernel.accounts = s.kernel.accounts := by
   have hspec := (export_iff_spec s sw actor exporter target rights s').mp h
-  exact ⟨hspec.2.2.2.2.2.2.2.2.2.2.1, hspec.2.2.2.1⟩
+  exact ⟨hspec.2.2.2.2.2.2.2.2.2.1, hspec.2.2.2.1⟩
 
 /-- **`export_spec_authorized`** — from a committed `exportSturdyRefA`, the actor held authority over
 the exporting cell. Read off the spec's guard (the executor-side `swissExportChainA_authorized`

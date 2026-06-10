@@ -234,21 +234,21 @@ theorem galNode_delta_zero (cred : Authorization Dg Pf) (slot : FieldName) (valu
   simp [galNode, lowerForestG, lowerChildrenG, turnLedgerDeltaAsset, ledgerDeltaAsset]
 
 /-- **`gallery_conserves` — PROVED (END-USER THEOREM 4).** A COMMITTED gallery turn preserves EVERY
-asset's total supply: `recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b`, for
+asset's total supply: `recTotalAsset s'.kernel b = recTotalAsset s.kernel b`, for
 every asset `b`. The artwork write touches metadata, never balance — so a mint/transfer/edit moves no
 money. A one-liner off `execFullForestG_conserves_per_asset` with the `SetField`-is-balance-neutral
 hypothesis discharged by `galNode_delta_zero`. Holds for EVERY op (same shape). -/
 theorem gallery_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf)
     (slot : FieldName) (value : Int) (b : AssetId)
     (h : execFullForestG s (galNode cred slot value) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (galNode cred slot value) b h
     (galNode_delta_zero cred slot value b)
 
 /-- The conservation theorem specialized to `mint` (the headline op). -/
 theorem gallery_mint_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (itemVal : Int)
     (b : AssetId) (h : execFullForestG s (mintNode cred itemVal) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   gallery_conserves s s' cred itemSlot itemVal b h
 
 /-! ## §9 — NON-VACUITY: a concrete artwork-cell state with the real slot caveat + `#guard` witnesses.

@@ -198,59 +198,11 @@ theorem recKBurnAsset_caps {k k' : RecordKernelState} {actor cell : CellId} {a :
   · option_inj at h; rcases h with ⟨rfl⟩; rfl
   · exact absurd h (by simp)
 
-theorem createEscrowKAsset_caps {k k' : RecordKernelState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
-    (h : createEscrowKAsset k id actor creator recipient asset amount = some k') :
-    k'.caps = k.caps := by
-  unfold createEscrowKAsset at h; split at h
-  · option_inj at h; rcases h with ⟨rfl⟩; unfold createEscrowRawAsset; rfl
-  · exact absurd h (by simp)
-
-theorem releaseEscrowKAsset_caps {k k' : RecordKernelState} {id : Nat}
-    (h : releaseEscrowKAsset k id = some k') : k'.caps = k.caps := by
-  unfold releaseEscrowKAsset at h; split at h
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; unfold settleEscrowRawAsset; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
-
-theorem refundEscrowKAsset_caps {k k' : RecordKernelState} {id : Nat}
-    (h : refundEscrowKAsset k id = some k') : k'.caps = k.caps := by
-  unfold refundEscrowKAsset at h; split at h
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; unfold settleEscrowRawAsset; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
-
 theorem noteSpendNullifier_caps {k k' : RecordKernelState} {nf : Nat}
     (h : noteSpendNullifier k nf = some k') : k'.caps = k.caps := by
   unfold noteSpendNullifier at h; split at h
   · exact absurd h (by simp)
   · option_inj at h; rcases h with ⟨rfl⟩; rfl
-
-theorem bridgeLockKAsset_caps {k k' : RecordKernelState} {id : Nat}
-    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
-    (h : bridgeLockKAsset k id actor originator destination asset amount = some k') :
-    k'.caps = k.caps := by
-  unfold bridgeLockKAsset at h; split at h
-  · option_inj at h; rcases h with ⟨rfl⟩; unfold createBridgeRawAsset; rfl
-  · exact absurd h (by simp)
-
-theorem bridgeFinalizeKAsset_caps {k k' : RecordKernelState} {id : Nat} {asset : AssetId} {amount : ℤ}
-    (h : bridgeFinalizeKAsset k id asset amount = some k') : k'.caps = k.caps := by
-  unfold bridgeFinalizeKAsset at h; split at h
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; unfold bridgeFinalizeRawAsset; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
-
-theorem bridgeCancelKAsset_caps {k k' : RecordKernelState} {id : Nat}
-    (h : bridgeCancelKAsset k id = some k') : k'.caps = k.caps := by
-  unfold bridgeCancelKAsset at h; split at h
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; unfold settleEscrowRawAsset; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
 
 theorem queueAllocateK_caps {k k' : RecordKernelState} {id : Nat} {owner : CellId} {capacity : Nat}
     (h : queueAllocateK k id owner capacity = some k') : k'.caps = k.caps := by
@@ -283,49 +235,6 @@ theorem queueResizeK_caps {k k' : RecordKernelState} {id newCap : Nat}
   · split at h
     · option_inj at h; rcases h with ⟨rfl⟩; rfl
     · exact absurd h (by simp)
-
-theorem queueEnqueueDepositK_caps {k k' : RecordKernelState} {id m : Nat} {sender owner : CellId}
-    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
-    (h : queueEnqueueDepositK k id m sender owner depId dAsset deposit = some k') :
-    k'.caps = k.caps := by
-  unfold queueEnqueueDepositK at h
-  -- `queueEnqueueDepositK` = `queueEnqueueK k id m` then (on success) `createEscrowRawAssetQueue`-park.
-  cases hq : queueEnqueueK k id m with
-  | none => simp [hq] at h
-  | some k₁ =>
-      simp only [hq] at h
-      have hc1 : k₁.caps = k.caps := queueEnqueueK_caps hq
-      split at h
-      · option_inj at h; rcases h with ⟨rfl⟩
-        show (createEscrowRawAssetQueue k₁ depId sender owner dAsset deposit id m).caps = k.caps
-        exact hc1
-      · simp at h
-
-theorem queueDequeueRefundK_caps {k : RecordKernelState} {id : Nat} {actor : CellId} {depId : Nat}
-    {p : RecordKernelState × Nat} (h : queueDequeueRefundK k id actor depId = some p) :
-    p.1.caps = k.caps := by
-  unfold queueDequeueRefundK at h
-  -- `queueDequeueRefundK` = `queueDequeueK` then `dequeueMsgBindB` then `settleEscrowRawAsset`-refund.
-  cases hq : queueDequeueK k id actor with
-  | none => simp [hq] at h
-  | some pr =>
-      obtain ⟨k₁, mh⟩ := pr
-      simp only [hq] at h
-      have hc1 : k₁.caps = k.caps := by
-        have := queueDequeueK_caps hq; simpa using this
-      by_cases hbind : dequeueMsgBindB k₁ actor depId id mh
-      · rw [if_pos hbind] at h
-        cases hfind : findUnresolvedDeposit k₁ depId with
-        | none => simp only [hfind] at h; exact absurd h (by simp)
-        | some r =>
-            simp only [hfind] at h
-            by_cases ha : actor ∈ k₁.accounts
-            · rw [if_pos ha, Option.some.injEq, Prod.mk.injEq] at h
-              obtain ⟨he, _⟩ := h
-              rw [← he]
-              exact hc1
-            · rw [if_neg ha] at h; exact absurd h (by simp)
-      · rw [if_neg hbind] at h; exact absurd h (by simp)
 
 theorem swissExportK_caps {k k' : RecordKernelState} {sw : Nat} {exporter target : CellId}
     {rights : List Auth} (h : swissExportK k sw exporter target rights = some k') :
@@ -381,59 +290,11 @@ theorem recKBurnAsset_sealedBoxes {k k' : RecordKernelState} {actor cell : CellI
   · option_inj at h; rcases h with ⟨rfl⟩; rfl
   · exact absurd h (by simp)
 
-theorem createEscrowKAsset_sealedBoxes {k k' : RecordKernelState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
-    (h : createEscrowKAsset k id actor creator recipient asset amount = some k') :
-    k'.sealedBoxes = k.sealedBoxes := by
-  unfold createEscrowKAsset at h; split at h
-  · option_inj at h; rcases h with ⟨rfl⟩; unfold createEscrowRawAsset; rfl
-  · exact absurd h (by simp)
-
-theorem releaseEscrowKAsset_sealedBoxes {k k' : RecordKernelState} {id : Nat}
-    (h : releaseEscrowKAsset k id = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold releaseEscrowKAsset at h; split at h
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; unfold settleEscrowRawAsset; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
-
-theorem refundEscrowKAsset_sealedBoxes {k k' : RecordKernelState} {id : Nat}
-    (h : refundEscrowKAsset k id = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold refundEscrowKAsset at h; split at h
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; unfold settleEscrowRawAsset; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
-
 theorem noteSpendNullifier_sealedBoxes {k k' : RecordKernelState} {nf : Nat}
     (h : noteSpendNullifier k nf = some k') : k'.sealedBoxes = k.sealedBoxes := by
   unfold noteSpendNullifier at h; split at h
   · exact absurd h (by simp)
   · option_inj at h; rcases h with ⟨rfl⟩; rfl
-
-theorem bridgeLockKAsset_sealedBoxes {k k' : RecordKernelState} {id : Nat}
-    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
-    (h : bridgeLockKAsset k id actor originator destination asset amount = some k') :
-    k'.sealedBoxes = k.sealedBoxes := by
-  unfold bridgeLockKAsset at h; split at h
-  · option_inj at h; rcases h with ⟨rfl⟩; unfold createBridgeRawAsset; rfl
-  · exact absurd h (by simp)
-
-theorem bridgeFinalizeKAsset_sealedBoxes {k k' : RecordKernelState} {id : Nat} {asset : AssetId} {amount : ℤ}
-    (h : bridgeFinalizeKAsset k id asset amount = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold bridgeFinalizeKAsset at h; split at h
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; unfold bridgeFinalizeRawAsset; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
-
-theorem bridgeCancelKAsset_sealedBoxes {k k' : RecordKernelState} {id : Nat}
-    (h : bridgeCancelKAsset k id = some k') : k'.sealedBoxes = k.sealedBoxes := by
-  unfold bridgeCancelKAsset at h; split at h
-  · split at h
-    · option_inj at h; rcases h with ⟨rfl⟩; unfold settleEscrowRawAsset; rfl
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
 
 theorem queueAllocateK_sealedBoxes {k k' : RecordKernelState} {id : Nat} {owner : CellId} {capacity : Nat}
     (h : queueAllocateK k id owner capacity = some k') : k'.sealedBoxes = k.sealedBoxes := by
@@ -467,49 +328,6 @@ theorem queueResizeK_sealedBoxes {k k' : RecordKernelState} {id newCap : Nat}
     · option_inj at h; rcases h with ⟨rfl⟩; rfl
     · exact absurd h (by simp)
 
-theorem queueEnqueueDepositK_sealedBoxes {k k' : RecordKernelState} {id m : Nat} {sender owner : CellId}
-    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
-    (h : queueEnqueueDepositK k id m sender owner depId dAsset deposit = some k') :
-    k'.sealedBoxes = k.sealedBoxes := by
-  unfold queueEnqueueDepositK at h
-  -- `queueEnqueueDepositK` = `queueEnqueueK k id m` then (on success) `createEscrowRawAssetQueue`-park.
-  cases hq : queueEnqueueK k id m with
-  | none => simp [hq] at h
-  | some k₁ =>
-      simp only [hq] at h
-      have hc1 : k₁.sealedBoxes = k.sealedBoxes := queueEnqueueK_sealedBoxes hq
-      split at h
-      · option_inj at h; rcases h with ⟨rfl⟩
-        show (createEscrowRawAssetQueue k₁ depId sender owner dAsset deposit id m).sealedBoxes = k.sealedBoxes
-        exact hc1
-      · simp at h
-
-theorem queueDequeueRefundK_sealedBoxes {k : RecordKernelState} {id : Nat} {actor : CellId} {depId : Nat}
-    {p : RecordKernelState × Nat} (h : queueDequeueRefundK k id actor depId = some p) :
-    p.1.sealedBoxes = k.sealedBoxes := by
-  unfold queueDequeueRefundK at h
-  -- `queueDequeueRefundK` = `queueDequeueK` then `dequeueMsgBindB` then `settleEscrowRawAsset`-refund.
-  cases hq : queueDequeueK k id actor with
-  | none => simp [hq] at h
-  | some pr =>
-      obtain ⟨k₁, mh⟩ := pr
-      simp only [hq] at h
-      have hc1 : k₁.sealedBoxes = k.sealedBoxes := by
-        have := queueDequeueK_sealedBoxes hq; simpa using this
-      by_cases hbind : dequeueMsgBindB k₁ actor depId id mh
-      · rw [if_pos hbind] at h
-        cases hfind : findUnresolvedDeposit k₁ depId with
-        | none => simp only [hfind] at h; exact absurd h (by simp)
-        | some r =>
-            simp only [hfind] at h
-            by_cases ha : actor ∈ k₁.accounts
-            · rw [if_pos ha, Option.some.injEq, Prod.mk.injEq] at h
-              obtain ⟨he, _⟩ := h
-              rw [← he]
-              exact hc1
-            · rw [if_neg ha] at h; exact absurd h (by simp)
-      · rw [if_neg hbind] at h; exact absurd h (by simp)
-
 /-! ### WAVE 4 — the new queue-batch / pipeline-step / pipelined-send chained-step `caps` + `sealedBoxes`
 frame helpers (the atomic batch + fan-out edit only `queues`/`escrows`/`bal`, never `caps`/`sealedBoxes`;
 pipelinedSend edits NOTHING). -/
@@ -517,19 +335,19 @@ pipelinedSend edits NOTHING). -/
 theorem queueTxOpStepA_caps {s s' : RecChainedState} {op : QueueTxOpA}
     (h : queueTxOpStepA s op = some s') : s'.kernel.caps = s.kernel.caps := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
+  | enqueue id m actor cell =>
       simp only [queueTxOpStepA, queueEnqueueChainA] at h; split at h
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueDepositK_caps hk
+        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueK_caps hk
       · exact absurd h (by simp)
-  | dequeue id actor cell depId =>
+  | dequeue id actor cell =>
       simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some p => obtain ⟨k', mh⟩ := p
                     rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
-                    exact queueDequeueRefundK_caps hk
+                    exact queueDequeueK_caps (p := (k', mh)) hk
       · exact absurd h (by simp)
 
 theorem queueAtomicTxChainA_caps {s s' : RecChainedState} {ops : List QueueTxOpA}
@@ -560,19 +378,19 @@ theorem pipelineFanoutK_caps {k k' : RecordKernelState} {actor : CellId} {m : Na
 theorem queueTxOpStepA_sealedBoxes {s s' : RecChainedState} {op : QueueTxOpA}
     (h : queueTxOpStepA s op = some s') : s'.kernel.sealedBoxes = s.kernel.sealedBoxes := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
+  | enqueue id m actor cell =>
       simp only [queueTxOpStepA, queueEnqueueChainA] at h; split at h
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueDepositK_sealedBoxes hk
+        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueK_sealedBoxes hk
       · exact absurd h (by simp)
-  | dequeue id actor cell depId =>
+  | dequeue id actor cell =>
       simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some p => obtain ⟨k', mh⟩ := p
                     rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
-                    exact queueDequeueRefundK_sealedBoxes (p := (k', mh)) hk
+                    exact queueDequeueK_sealedBoxes (p := (k', mh)) hk
       · exact absurd h (by simp)
 
 theorem queueAtomicTxChainA_sealedBoxes {s s' : RecChainedState} {ops : List QueueTxOpA}
@@ -733,34 +551,6 @@ theorem execFullA_sealedBoxes_frame (s s' : RecChainedState) (fa : FullActionA)
   | spawnA actor child target =>
       obtain ⟨s1, _, hc, rfl⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
       obtain ⟨_, _, hc'⟩ := createCellChainA_factors hc; subst hc'; rfl
-  | createEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
-                   exact createEscrowKAsset_sealedBoxes hk
-  | releaseEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact releaseEscrowKAsset_sealedBoxes hk
-  | refundEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact refundEscrowKAsset_sealedBoxes hk
-  | createObligationA id actor obligor beneficiary asset stake =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
-                   exact createEscrowKAsset_sealedBoxes hk
-  | fulfillObligationA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact refundEscrowKAsset_sealedBoxes hk
-  | slashObligationA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact releaseEscrowKAsset_sealedBoxes hk
   | noteSpendA nf actor spendProof =>
       simp only [execFullA, noteSpendChainA] at h
       by_cases hp : spendProof = true
@@ -773,43 +563,6 @@ theorem execFullA_sealedBoxes_frame (s s' : RecChainedState) (fa : FullActionA)
       · rw [if_neg hp] at h; exact absurd h (by simp)
   | noteCreateA cm actor =>
       simp only [execFullA, noteCreateChainA, noteCreateCommitment, Option.some.injEq] at h; subst h; rfl
-  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
-      · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
-                     exact createEscrowKAsset_sealedBoxes hk
-      · exact absurd h (by simp)
-  | releaseCommittedEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact releaseEscrowKAsset_sealedBoxes hk
-  | refundCommittedEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact refundEscrowKAsset_sealedBoxes hk
-  | bridgeLockA id actor originator destination asset amount =>
-      simp only [execFullA, bridgeLockChainA] at h
-      cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
-                   exact bridgeLockKAsset_sealedBoxes hk
-  | bridgeFinalizeA id actor asset amount =>
-      simp only [execFullA, bridgeFinalizeChainA] at h
-      split at h
-      · cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
-                     exact bridgeFinalizeKAsset_sealedBoxes hk
-      · exact absurd h (by simp)
-  | bridgeCancelA id actor =>
-      simp only [execFullA, bridgeCancelChainA] at h
-      split at h
-      · cases hk : bridgeCancelKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
-                     exact bridgeCancelKAsset_sealedBoxes hk
-      · exact absurd h (by simp)
   | sealA pid actor payload => exact absurd rfl (hne pid actor payload)
   | unsealA pid actor recipient =>
       obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors (by simpa only [execFullA] using h); subst hs'; rfl
@@ -827,18 +580,18 @@ theorem execFullA_sealedBoxes_frame (s s' : RecChainedState) (fa : FullActionA)
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueAllocateK_sealedBoxes hk
       · exact absurd h (by simp)
-  | queueEnqueueA id m actor cell depId dAsset deposit =>
+  | queueEnqueueA id m actor cell =>
       simp only [execFullA, queueEnqueueChainA] at h; split at h
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueDepositK_sealedBoxes hk
+        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueK_sealedBoxes hk
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId =>
+  | queueDequeueA id actor cell =>
       simp only [execFullA, queueDequeueChainA] at h; split at h
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some p => obtain ⟨k', mh⟩ := p; rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
-                    exact queueDequeueRefundK_sealedBoxes hk
+                    exact queueDequeueK_sealedBoxes (p := (k', mh)) hk
       · exact absurd h (by simp)
   | queueResizeA id newCap actor cell =>
       simp only [execFullA, queueResizeChainA] at h; split at h
@@ -1096,40 +849,6 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
       | none => rw [hm] at h; exact absurd h (by simp)
       | some k' => rw [hm] at h; option_inj at h; rcases h with ⟨rfl⟩
                    exact recKMintAsset_caps hm
-  -- ===== escrow / obligation / committed-escrow: FRAME caps (kernel touches `bal`/`escrows`). =====
-  | createEscrowA id actor creator recipient asset amount =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact createEscrowKAsset_caps hk
-  | releaseEscrowA id actor =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact releaseEscrowKAsset_caps hk
-  | refundEscrowA id actor =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact refundEscrowKAsset_caps hk
-  | createObligationA id actor obligor beneficiary asset stake =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact createEscrowKAsset_caps hk
-  -- fulfill/slash route to refund/release (escrow SETTLE) — `caps` literally unchanged (frame).
-  | fulfillObligationA id actor =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact refundEscrowKAsset_caps hk
-  | slashObligationA id actor =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact releaseEscrowKAsset_caps hk
   | noteSpendA nf actor spendProof =>
       refine CapsConfined.of_caps_eq ?_ hpre
       simp only [execFullA, noteSpendChainA] at h
@@ -1142,50 +861,6 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
   | noteCreateA cm actor =>
       refine CapsConfined.of_caps_eq ?_ hpre
       simp only [execFullA, noteCreateChainA] at h; option_inj at h; rcases h with ⟨rfl⟩; rfl
-  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
-      · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact createEscrowKAsset_caps hk
-      · exact absurd h (by simp)
-  | releaseCommittedEscrowA id actor =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact releaseEscrowKAsset_caps hk
-  | refundCommittedEscrowA id actor =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      exact refundEscrowKAsset_caps hk
-  -- ===== bridge OUTBOUND legs: FRAME caps (kernel touches `bal`/`escrows`). =====
-  | bridgeLockA id actor originator destination asset amount =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, bridgeLockChainA] at h
-      cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact bridgeLockKAsset_caps hk
-  | bridgeFinalizeA id actor asset amount =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, bridgeFinalizeChainA] at h
-      -- `bridgeFinalizeChainA` is gated by `if bridgeAuthOK …`; peel the gate, then the kernel caps lemma.
-      split at h
-      · cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact bridgeFinalizeKAsset_caps hk
-      · exact absurd h (by simp)
-  | bridgeCancelA id actor =>
-      refine CapsConfined.of_caps_eq ?_ hpre
-      simp only [execFullA, bridgeCancelChainA] at h
-      split at h
-      · cases hk : bridgeCancelKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact bridgeCancelKAsset_caps hk
-      · exact absurd h (by simp)
-  -- ===== seal cluster (Wave-3 DE-SHADOW): seal FRAMES caps (edits `sealedBoxes`); createSealPair GRANTS
-  -- two confined seal-pair caps (`[grant]`/`[reply]` ⊆ `U`); unseal GRANTS the box payload (confined by
-  -- `hboxes`). sovereign/refusal/archive FRAME caps. =====
   | sealA pid actor payload =>
       obtain ⟨_, hs'⟩ := sealChainA_factors (by simpa only [execFullA] using h)
       subst hs'; exact hpre   -- `caps` literally unchanged (edits `sealedBoxes`)
@@ -1221,21 +896,22 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueAllocateK_caps hk
       · exact absurd h (by simp)
-  | queueEnqueueA id m actor cell depId dAsset deposit =>
+  | queueEnqueueA id m actor cell =>
       refine CapsConfined.of_caps_eq ?_ hpre
       simp only [execFullA, queueEnqueueChainA] at h
       split at h
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueDepositK_caps hk
+        | some k' => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueEnqueueK_caps hk
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId =>
+  | queueDequeueA id actor cell =>
       refine CapsConfined.of_caps_eq ?_ hpre
       simp only [execFullA, queueDequeueChainA] at h
       split at h
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at h; exact absurd h (by simp)
-        | some p => rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩; exact queueDequeueRefundK_caps hk
+        | some p => obtain ⟨k', mh⟩ := p; rw [hk] at h; option_inj at h; rcases h with ⟨rfl⟩
+                    exact queueDequeueK_caps (p := (k', mh)) hk
       · exact absurd h (by simp)
   | queueResizeA id newCap actor cell =>
       refine CapsConfined.of_caps_eq ?_ hpre

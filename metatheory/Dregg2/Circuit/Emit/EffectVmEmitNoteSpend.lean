@@ -382,9 +382,9 @@ theorem univA_spend_is_balance_neutral (st st' : RecChainedState) (nf : Nat) (ac
     (asset : AssetId) (spendProof : Bool) (hspec : NoteSpendSpec st nf actor spendProof st') :
     (cellProjSpend st'.kernel.bal c asset).balLo = (cellProjSpend st.kernel.bal c asset).balLo := by
   show st'.kernel.bal c asset = st.kernel.bal c asset
-  -- NoteSpendSpec: guard ∧ nullifiers ∧ log ∧ accounts ∧ cell ∧ caps ∧ escrows ∧ revoked ∧
-  --               commitments ∧ bal ∧ … — `bal` is the 10th conjunct.
-  obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
+  -- NoteSpendSpec: guard ∧ nullifiers ∧ log ∧ accounts ∧ cell ∧ caps ∧ revoked ∧
+  --               commitments ∧ bal ∧ … — `bal` is the 9th conjunct.
+  obtain ⟨_, _, _, _, _, _, _, _, hbal, _⟩ := hspec
   rw [hbal]
 
 /-! ## §10 — THE DEEPER DIVERGENCE (reported, NOT papered): runtime CREDIT vs universe-A balance-NEUTRAL.

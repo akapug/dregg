@@ -77,7 +77,7 @@ canonical serialization of the named fields), never an axiom. -/
 `caps` (the touched field of `attenuateA`). -/
 def RestIffNoCaps (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
-    (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.escrows = k.escrows
+    (k'.accounts = k.accounts ∧ k'.cell = k.cell
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.bal = k.bal ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
@@ -142,7 +142,7 @@ def attenuateE (D : Caps → ℤ) (hD : Function.Injective D) :
   active       := capsComponent D hD
   logUpdate    := some (fun s args => authReceipt args.actor :: s.log)
   restFrame    := fun k k' =>
-    (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.escrows = k.escrows
+    (k'.accounts = k.accounts ∧ k'.cell = k.cell
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked ∧ k'.commitments = k.commitments
       ∧ k'.bal = k.bal ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
@@ -211,13 +211,13 @@ theorem apex_iff_attenuateSpec (D : Caps → ℤ) (hD : Function.Injective D)
        ↔ AttenuateSpec s args.actor args.idx args.keep s'
   unfold AttenuateSpec attenuateGuardProp attenuateE
   constructor
-  · rintro ⟨_, hcaps, hlog, hAcc, hCell, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨_, hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hcaps, hlog, hAcc, hCell, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hcaps, hlog, hAcc, hCell, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨trivial, hcaps, hlog, hAcc, hCell, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨trivial, hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §2c — THE VALIDATION: `attenuateA_full_sound ⇒ AttenuateSpec` through the framework. -/

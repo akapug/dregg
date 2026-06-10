@@ -145,7 +145,7 @@ post-cell ∧ log ∧ frame. Each instance proves its bespoke spec ↔ this apex
 `RestHashIffFrame`, written in the `k → k'` order the apex uses). -/
 def kernelFrame (k k' : RecordKernelState) : Prop :=
   k'.accounts = k.accounts ∧ k'.caps = k.caps ∧ k'.bal = k.bal
-    ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+    ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
     ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
     ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
     ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -535,7 +535,7 @@ theorem effectCircuit_rejects_field_tamper (hRest : RestHashIffFrame S.RH)
   have hrest : cERest.holds (encodeE S E pre args post) := h cERest (by simp [effectCircuit])
   have hkf := (hRest (E.view.toKernel pre) (E.view.toKernel post)).mp
     ((erest_iff S E pre args post).mp hrest)
-  exact htamper hkf.2.2.2.2.1
+  exact htamper hkf.2.2.2.1
 
 /-- **third-cell tamper REJECTED:** a live bystander cell (`c₀ ∈ accounts`, `c₀ ∉ T`) whose post value
 differs from pre cannot satisfy — `cEFrame` + `FrameDigestBindsCells`. -/

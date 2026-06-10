@@ -384,7 +384,7 @@ theorem unify_resize_balFrozen_univA (st : RecChainedState) (id newCap : Nat) (a
     (st' : RecChainedState) (c : CellId) (asset : AssetId)
     (hspec : QueueResizeSpec st id newCap actor cell st') :
     (cellProjBal st'.kernel.bal c asset).balLo = (cellProjBal st.kernel.bal c asset).balLo := by
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
+  obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
   show st'.kernel.bal c asset = st.kernel.bal c asset
   rw [hbal]
 

@@ -77,7 +77,7 @@ axiom. -/
 def RestIffNoSealedBoxes (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -141,7 +141,7 @@ def sealE (LE : SealedBoxRecord → ℤ) (cN : List ℤ → ℤ)
   logUpdate    := some (fun s args => sealReceipt args.actor :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -208,13 +208,13 @@ theorem apex_iff_sealSpec (LE : SealedBoxRecord → ℤ) (cN : List ℤ → ℤ)
        ↔ SealSpec s args.pid args.actor args.payload s'
   unfold SealSpec sealGuardProp sealE
   constructor
-  · rintro ⟨hg, hsb, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+  · rintro ⟨hg, hsb, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
       hLif, hDC, hDel, hDgs⟩
-    exact ⟨hg, hsb, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+    exact ⟨hg, hsb, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
       hLif, hDC, hDel, hDgs⟩
-  · rintro ⟨hg, hsb, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+  · rintro ⟨hg, hsb, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
       hLif, hDC, hDel, hDgs⟩
-    exact ⟨hg, hsb, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
+    exact ⟨hg, hsb, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac,
       hLif, hDC, hDel, hDgs⟩
 
 /-! ### §2c — THE VALIDATION: `sealA_full_sound ⇒ SealSpec` through the framework. -/

@@ -524,39 +524,33 @@ theorem seal_emitted_refines_spec (S : Surface2) (LE : SealedBoxRecord → ℤ) 
     (sealCircuitStep S LE cN hN hLE) sealSpecStep (seal_circuit_refines_spec S LE cN hN hLE hRest hLog)
     (fun pre args post => seal_emitted_equiv_circuit S LE cN hN hLE pre args post) s args s' h
 
-/-! ## §15 — QueueEnqueueA (v2-triple). -/
+/-! ## §15 — QueueEnqueueA (F1b deposit-free: single `queues`-component v2). -/
 
-def queueEnqueueEmittedStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+def queueEnqueueEmittedStep (S : Surface2)
     (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ) (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
-    (LE : EscrowRecord → ℤ) (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
     (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState) : Prop :=
-  effect2tripleEmittedStepLocal S
-    (queueEnqueueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) queueEnqueueAAirName s args s'
+  effect2EmittedStepLocal S (queueEnqueueE LQ cNQ hNQ hLQ) queueEnqueueAAirName s args s'
 
-theorem queueEnqueue_emitted_equiv_circuit (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueEnqueue_emitted_equiv_circuit (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState) :
-    queueEnqueueEmittedStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s' ↔
-      queueEnqueueCircuitStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s' :=
-  effect2triple_emitted_equiv_circuit_local S
-    (queueEnqueueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) queueEnqueueAAirName s args s'
+    queueEnqueueEmittedStep S LQ cNQ hNQ hLQ s args s' ↔
+      queueEnqueueCircuitStep S LQ cNQ hNQ hLQ s args s' :=
+  effect2_emitted_equiv_circuit_local S (queueEnqueueE LQ cNQ hNQ hLQ) queueEnqueueAAirName s args s'
 
-theorem queueEnqueue_emitted_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueEnqueue_emitted_refines_spec (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (hRest : RestIffNoQueuesBalEscrows S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : EnqueueArgs) (s' : RecChainedState)
-    (h : queueEnqueueEmittedStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s') :
+    (h : queueEnqueueEmittedStep S LQ cNQ hNQ hLQ s args s') :
     queueEnqueueSpecStep s args s' :=
-  effect2triple_emitted_refines_bespoke_spec S
-    (queueEnqueueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) queueEnqueueAAirName
-    (queueEnqueueCircuitStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) queueEnqueueSpecStep
-    (queueEnqueue_circuit_refines_spec S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog)
+  effect2_emitted_refines_bespoke_spec S (queueEnqueueE LQ cNQ hNQ hLQ) queueEnqueueAAirName
+    (queueEnqueueCircuitStep S LQ cNQ hNQ hLQ) queueEnqueueSpecStep
+    (queueEnqueue_circuit_refines_spec S LQ cNQ hNQ hLQ hRest hLog)
     (fun pre args post =>
-      queueEnqueue_emitted_equiv_circuit S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE pre args post)
+      queueEnqueue_emitted_equiv_circuit S LQ cNQ hNQ hLQ pre args post)
     s args s' h
 
 /-! ## §16 — SetFieldA (v1 EffectCommit). -/
@@ -896,11 +890,11 @@ theorem createCellFromFactoryA_emitted_refines_spec (S : Surface2) (LE : CellId 
     createCellFromFactoryA_full_sound S LE cN hN hLE DBal hDBal DCell hDCell DSC hDSC DAuth hDAuth
       hRest hLog s args s' hsat
   -- reverse born-empty-authority bridge (apex circuit spec ⟹ declarative spec).
-  obtain ⟨e, hadmit, hacc, hbal, hcell, hsc, hauth, hlog, hEsc, hNull, hRev, hCom, hQ, hSw, hFac, hSB⟩ :=
+  obtain ⟨e, hadmit, hacc, hbal, hcell, hsc, hauth, hlog, hNull, hRev, hCom, hQ, hSw, hFac, hSB⟩ :=
     hapex
   obtain ⟨hcaps, hlif, hdc, hdel, hdgs⟩ :=
     (bornEmptyAuthority_post_iff s.kernel args.newCell s'.kernel).mp hauth
-  exact ⟨e, hadmit, hacc, hbal, hcell, hsc, hlog, hcaps, hlif, hdc, hdel, hdgs, hEsc, hNull, hRev, hCom,
+  exact ⟨e, hadmit, hacc, hbal, hcell, hsc, hlog, hcaps, hlif, hdc, hdel, hdgs, hNull, hRev, hCom,
     hQ, hSw, hFac, hSB⟩
 
 def unsealAEmittedStep (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
@@ -1017,43 +1011,37 @@ theorem queueAllocateA_emitted_refines_spec (S : Surface2) (LE : QueueRecord →
     (fun pre args post => queueAllocateA_emitted_equiv_circuit S LE cN hN hLE pre args post)
     s args s' h
 
-def queueDequeueAEmittedStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+def queueDequeueAEmittedStep (S : Surface2)
     (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ) (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
-    (LE : EscrowRecord → ℤ) (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
     (s : RecChainedState) (args : DequeueArgs) (s' : RecChainedState) : Prop :=
-  effect2tripleEmittedStepLocal S
-    (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) queueDequeueAAirName s args s'
+  effect2EmittedStepLocal S (queueDequeueE LQ cNQ hNQ hLQ) queueDequeueAAirName s args s'
 
-theorem queueDequeueA_emitted_equiv_circuit (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueDequeueA_emitted_equiv_circuit (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (s : RecChainedState) (args : DequeueArgs) (s' : RecChainedState) :
-    queueDequeueAEmittedStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s' ↔
-      satisfiedE2Triple S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
-        (encodeE2Triple S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) s args s') :=
-  effect2triple_emitted_equiv_circuit_local S
-    (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) queueDequeueAAirName s args s'
+    queueDequeueAEmittedStep S LQ cNQ hNQ hLQ s args s' ↔
+      satisfiedE2 S (queueDequeueE LQ cNQ hNQ hLQ)
+        (encodeE2 S (queueDequeueE LQ cNQ hNQ hLQ) s args s') :=
+  effect2_emitted_equiv_circuit_local S (queueDequeueE LQ cNQ hNQ hLQ) queueDequeueAAirName s args s'
 
-theorem queueDequeueA_emitted_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueDequeueA_emitted_refines_spec (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (hRest : RestIffNoQueuesBalEscrows S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : DequeueArgs) (s' : RecChainedState)
-    (h : queueDequeueAEmittedStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s') :
-    QueueDequeueSpec s args.id args.actor args.cell args.depId s' :=
-  effect2triple_emitted_refines_bespoke_spec S
-    (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) queueDequeueAAirName
+    (h : queueDequeueAEmittedStep S LQ cNQ hNQ hLQ s args s') :
+    QueueDequeueSpec s args.id args.actor args.cell s' :=
+  effect2_emitted_refines_bespoke_spec S (queueDequeueE LQ cNQ hNQ hLQ) queueDequeueAAirName
     (fun pre args post =>
-      satisfiedE2Triple S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
-        (encodeE2Triple S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) pre args post))
+      satisfiedE2 S (queueDequeueE LQ cNQ hNQ hLQ)
+        (encodeE2 S (queueDequeueE LQ cNQ hNQ hLQ) pre args post))
     (fun pre args post =>
-      QueueDequeueSpec pre args.id args.actor args.cell args.depId post)
+      QueueDequeueSpec pre args.id args.actor args.cell post)
     (fun pre args post hc =>
-      queueDequeueA_full_sound S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog pre args post hc)
+      queueDequeueA_full_sound S LQ cNQ hNQ hLQ hRest hLog pre args post hc)
     (fun pre args post =>
-      queueDequeueA_emitted_equiv_circuit S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE pre args post)
+      queueDequeueA_emitted_equiv_circuit S LQ cNQ hNQ hLQ pre args post)
     s args s' h
 
 def queueResizeAEmittedStep (S : Surface2) (LE : QueueRecord → ℤ) (cN : List ℤ → ℤ)
@@ -1083,42 +1071,36 @@ theorem queueResizeA_emitted_refines_spec (S : Surface2) (LE : QueueRecord → �
     (fun pre args post => queueResizeA_emitted_equiv_circuit S LE cN hN hLE pre args post)
     s args s' h
 
-def queueAtomicTxAEmittedStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+def queueAtomicTxAEmittedStep (S : Surface2)
     (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ) (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
-    (LE : EscrowRecord → ℤ) (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
     (s : RecChainedState) (args : AtomicTxArgs) (s' : RecChainedState) : Prop :=
-  effect2tripleEmittedStepLocal S
-    (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) queueAtomicTxAAirName s args s'
+  effect2EmittedStepLocal S (queueAtomicTxE LQ cNQ hNQ hLQ) queueAtomicTxAAirName s args s'
 
-theorem queueAtomicTxA_emitted_equiv_circuit (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueAtomicTxA_emitted_equiv_circuit (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (s : RecChainedState) (args : AtomicTxArgs) (s' : RecChainedState) :
-    queueAtomicTxAEmittedStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s' ↔
-      satisfiedE2Triple S (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
-        (encodeE2Triple S (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) s args s') :=
-  effect2triple_emitted_equiv_circuit_local S
-    (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) queueAtomicTxAAirName s args s'
+    queueAtomicTxAEmittedStep S LQ cNQ hNQ hLQ s args s' ↔
+      satisfiedE2 S (queueAtomicTxE LQ cNQ hNQ hLQ)
+        (encodeE2 S (queueAtomicTxE LQ cNQ hNQ hLQ) s args s') :=
+  effect2_emitted_equiv_circuit_local S (queueAtomicTxE LQ cNQ hNQ hLQ) queueAtomicTxAAirName s args s'
 
-theorem queueAtomicTxA_emitted_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueAtomicTxA_emitted_refines_spec (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (hRest : RestIffNoQueuesBalEscrows S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : AtomicTxArgs) (s' : RecChainedState)
-    (h : queueAtomicTxAEmittedStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s') :
+    (h : queueAtomicTxAEmittedStep S LQ cNQ hNQ hLQ s args s') :
     QueueAtomicTxSpec s args.actor args.ops s' :=
-  effect2triple_emitted_refines_bespoke_spec S
-    (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) queueAtomicTxAAirName
+  effect2_emitted_refines_bespoke_spec S (queueAtomicTxE LQ cNQ hNQ hLQ) queueAtomicTxAAirName
     (fun pre args post =>
-      satisfiedE2Triple S (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
-        (encodeE2Triple S (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) pre args post))
+      satisfiedE2 S (queueAtomicTxE LQ cNQ hNQ hLQ)
+        (encodeE2 S (queueAtomicTxE LQ cNQ hNQ hLQ) pre args post))
     (fun pre args post => QueueAtomicTxSpec pre args.actor args.ops post)
     (fun pre args post hc =>
-      queueAtomicTxA_full_sound S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog pre args post hc)
+      queueAtomicTxA_full_sound S LQ cNQ hNQ hLQ hRest hLog pre args post hc)
     (fun pre args post =>
-      queueAtomicTxA_emitted_equiv_circuit S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE pre args post)
+      queueAtomicTxA_emitted_equiv_circuit S LQ cNQ hNQ hLQ pre args post)
     s args s' h
 
 def queuePipelineStepAEmittedStep (S : Surface2) (LE : QueueRecord → ℤ) (cN : List ℤ → ℤ)
@@ -1136,7 +1118,7 @@ theorem queuePipelineStepA_emitted_equiv_circuit (S : Surface2) (LE : QueueRecor
 
 theorem queuePipelineStepA_emitted_refines_spec (S : Surface2) (LE : QueueRecord → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoQueues S.RH) (hLog : logHashInjective S.LH)
+    (hRest : Dregg2.Circuit.Inst.QueuePipelineStepA.RestIffNoQueues S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : PipelineArgs) (s' : RecChainedState)
     (h : queuePipelineStepAEmittedStep S LE cN hN hLE s args s') :
     QueuePipelineFanoutSpec s args.srcId args.owner args.sinkCells args.sinkIds s' :=

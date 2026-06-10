@@ -245,13 +245,13 @@ theorem nsNode_delta_zero (cred : Authorization Dg Pf) (slot : FieldName) (value
   simp [nsNode, lowerForestG, lowerChildrenG, turnLedgerDeltaAsset, ledgerDeltaAsset]
 
 /-- **`ns_register_conserves` — PROVED (END-USER THEOREM 5).** A COMMITTED nameservice turn preserves
-EVERY asset's total supply: `recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b`,
+EVERY asset's total supply: `recTotalAsset s'.kernel b = recTotalAsset s.kernel b`,
 for every asset `b`. The registry write touches metadata, never balance — so a name registration moves
 no money. A one-liner off `execFullForestG_conserves_per_asset` with the `SetField`-is-balance-neutral
 hypothesis discharged by `nsNode_delta_zero`. Stated for `register`; identical for every op (same shape). -/
 theorem ns_register_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (nameVal : Int)
     (b : AssetId) (h : execFullForestG s (registerNode cred nameVal) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (registerNode cred nameVal) b h
     (nsNode_delta_zero cred nameSlot nameVal b)
 
@@ -259,7 +259,7 @@ theorem ns_register_conserves (s s' : RecChainedState) (cred : Authorization Dg 
 theorem ns_op_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf)
     (slot : FieldName) (value : Int) (b : AssetId)
     (h : execFullForestG s (nsNode cred slot value) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (nsNode cred slot value) b h
     (nsNode_delta_zero cred slot value b)
 

@@ -175,13 +175,13 @@ theorem sgmEmitNode_delta_zero (cred : Authorization Dg Pf) (blobHash : Int) (b 
 
 theorem sgm_op_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (key : Int) (b : AssetId)
     (h : execFullForestG s (sgmSetKeyNode cred key) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (sgmSetKeyNode cred key) b h
     (sgmSetKeyNode_delta_zero cred key b)
 
 theorem sgm_emit_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (blobHash : Int) (b : AssetId)
     (h : execFullForestG s (sgmEmitNode cred blobHash) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (sgmEmitNode cred blobHash) b h
     (sgmEmitNode_delta_zero cred blobHash b)
 
@@ -344,7 +344,7 @@ def sgmGPutEmit : Option RecChainedState :=
 #guard (sgmGPutEmit.isSome)
 #guard (sgmVolumeBound sgmG0.kernel)
 #guard (sgmAnchorIs sgmG0.kernel (demoMandate.anchor : Int))
-#guard ((sgmGPutEmit.map (fun s => recTotalAssetWithEscrow s.kernel payAsset)).getD 0) == 100
+#guard ((sgmGPutEmit.map (fun s => recTotalAsset s.kernel payAsset)).getD 0) == 100
 
 -- COMMIT-IFF-ADMIT negative tooth: a guest lacking GET clearance cannot record a GET op — the
 -- EXECUTOR rejects the `last_op := 0` write (where no prior caveat could express clearance).
