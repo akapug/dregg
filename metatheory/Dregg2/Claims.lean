@@ -1,5 +1,21 @@
 /-
-# Dregg2.Claims — the consolidated axiom-hygiene ledger.
+# Dregg2.Claims — RETIRED as the assurance journal; KEPT as the corpus-wide CI pin-net.
+
+⚑ RETIREMENT NOTICE (W5). This file is no longer the assurance artifact. The current
+assurance case — the FIVE top-level guarantees (Authority / Conservation / Integrity /
+Freshness / Unfoolability) organized BY GUARANTEE, the right shape for *reading* the case —
+is `Dregg2.AssuranceCase` (imported by the root anchor; see also DREGG3 §4). Read THAT to
+answer "why should I trust a Q-chain?".
+
+This file was the OLD chronological axiom-hygiene journal (sections by campaign date). That
+narrative role is retired. It is RETAINED, unchanged in function, for the one thing
+`AssuranceCase` structurally cannot be: the comprehensive, corpus-wide `#assert_axioms` net.
+Because this file imports the root `Dregg2` (transitively every module), it can re-pin every
+keystone the corpus advertises — including the ~190 in modules `AssuranceCase` does not (and,
+to avoid a circular import with the root, cannot) import. Those ~190 pins are the UNIQUE
+location of those per-keystone kernel-clean certifications; deleting them would silently drop
+axiom-hygiene coverage, so the ledger stays. `AssuranceCase` is the apex; this is the net
+beneath it.
 
 The machine-checked half of `metatheory/CLAIMS.md`. Imports the root `Dregg2` (which
 transitively pulls in every module) and re-pins every keystone the corpus advertises as
@@ -444,7 +460,7 @@ exactly as the §8-resting keystones are (correctly) omitted from this ledger. -
 #assert_axioms Dregg2.Verify.commitments_persist_via_auto
 #assert_axioms Dregg2.Verify.logMono_handback_demo
 #assert_axioms Dregg2.Verify.CellContract.forever
-#assert_axioms Dregg2.Verify.CellContract.always
+#assert_axioms Dregg2.Verify.KernelForest.always
 #assert_axioms Dregg2.Verify.logAppendOnly
 #assert_axioms Dregg2.Verify.conserved
 #assert_axioms Dregg2.Verify.revokedPersists
