@@ -133,6 +133,25 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
       target: discharge-gateway
+    # The binary REQUIRES a key (it exits(1) without --key-hex/--config) and
+    # defaults to :8421 while this stack (EXPOSE + Caddyfile) speaks :8080 —
+    # without this command block the service crash-looped on boot. The key is
+    # the 32-byte shared secret embedded in 3P caveats that name this gateway.
+    # The default below is a PUBLIC devnet key (same trust posture as the
+    # committed devnet-config/node-*.key files): anyone can mint discharges
+    # under it, so override DISCHARGE_GATEWAY_KEY in docker/.env for any
+    # deployment that matters. `--rate-limit` enables ONLY rate_limit-type
+    # conditions (per-client budget); no --allow-all, so anything else is
+    # fail-closed denied.
+    command:
+      [
+        "--bind",
+        "0.0.0.0:8080",
+        "--key-hex",
+        "${DISCHARGE_GATEWAY_KEY:-d15c4a26e9a7e51b03a9c8d4f2b06e7a8c1d3f5a7b9c0d2e4f6a8b0c1d3e5f70}",
+        "--rate-limit",
+        "60",
+      ]
     ports:
       - "8480:8080"
     environment:
