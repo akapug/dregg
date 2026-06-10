@@ -9,15 +9,21 @@
 //! [`verify_turn_chain_recursive`] (whose cost is independent of N) and, on success, reads off the
 //! public commitments the aggregate binds.
 //!
-//! This is the executable embodiment of the Lean theorem
-//! `Dregg2.Circuit.RecursiveAggregation.light_client_verifies_whole_history`: under the named,
-//! realizable recursion-soundness hypotheses (`EngineSound` — the plonky3 FRI obligation `recursive_
-//! sound`, the EffectVm circuit⟺executor obligation `leaf_sound`, the `TurnChainBindingAir` obligation
-//! `binding_sound`), verifying `agg.root` genuinely yields `AggregateAttests`: every folded turn
-//! executed correctly, the chain is correctly ordered (no reorder/drop/insert — the temporal tooth
-//! `new_root[i] == old_root[i+1]`), and the final root is the genuine fold of the whole history.
-//! Here [`AttestedHistory`] is exactly that `AggregateAttests` verdict, and [`verify_history`] is the
-//! light-client check.
+//! This is the executable counterpart of the Lean theorem
+//! `Dregg2.Circuit.RecursiveAggregation.light_client_verifies_whole_history`, with ONE of its three
+//! named hypotheses NOT yet discharged by this artifact. Under `EngineSound` — the plonky3 FRI
+//! obligation `recursive_sound`, the EffectVm circuit⟺executor obligation `leaf_sound`, the
+//! `TurnChainBindingAir` obligation `binding_sound` — verifying `agg.root` yields `AggregateAttests`.
+//! What the CURRENT fold discharges in-circuit: `recursive_sound` (the real recursion engine) and
+//! `binding_sound` (ordering — no reorder/drop/insert, the temporal tooth `new_root[i] ==
+//! old_root[i+1]` — and the final root as the genuine fold). What it does NOT yet discharge:
+//! `leaf_sound` — the folded leaves are `EffectVmShapeAir` stubs (`circuit/src/ivc_turn_chain.rs::
+//! prove_turn_leaf`); the REAL whole-turn proofs are verified host-side at prove time
+//! (`prove_turn_chain_recursive` step 3), so per-turn execution soundness currently rests on the
+//! PROVER having run that gate — an honest trusted-prover assumption until the leaves wrap the
+//! descriptor proofs in-circuit (the `DescriptorParticipant` admission seam exists; task #94).
+//! [`AttestedHistory`] is the `AggregateAttests` verdict under that caveat, and [`verify_history`]
+//! is the light-client check.
 //!
 //! ## Proofs are ADDITIVE ATTESTATION — and that is the POINT.
 //!
