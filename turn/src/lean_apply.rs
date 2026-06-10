@@ -63,14 +63,129 @@
 
 use std::collections::HashMap;
 
+use dregg_cell::capability::CapabilityRef;
 use dregg_cell::permissions::AuthRequired;
 use dregg_cell::{Cell, CellId, Ledger};
 use dregg_lean_ffi::marshal::{Cap, WireState, WireValue};
 
+use crate::action::Effect;
 use crate::executor::TurnExecutor;
+use crate::forest::CallTree;
 use crate::lean_shadow::{self, ShadowHostCtx};
 use crate::turn::Turn;
 use crate::TurnResult;
+
+/// A deterministic capability-set mutation a committed turn applies to ONE holder cell's c-list.
+///
+/// # The cap-fidelity lever (root-gap close)
+///
+/// The verified Lean kernel models a cell's c-list as an EDGE SET (`caps : holder → List Cap`,
+/// each `Cap::Node(target)` an authority edge). Its verified gates DECIDE the commit bit — the
+/// delegator must HOLD the edge (`recKDelegate`), the attenuation must be a monotone narrowing,
+/// the introducer must hold the recipient + target edges. But the EDGE model does not carry the
+/// full 7-field leaf the cell's `cap_root` (= `compute_canonical_capability_root`) binds:
+/// `(slot, target, permissions, breadstuff, expires_at, allowed_effects)`.
+///
+/// The leaf-field VALUES of a grant/attenuate/introduce are not kernel state — they are fully
+/// determined by the TURN (the `GrantCapability { cap }` parameters, the `AttenuateCapability`
+/// narrowing, the `Introduce` permissions + host expiry) and the grantee's deterministic next
+/// slot. So we reconstruct the EXACT post-state c-list by replaying the turn's cap mutation onto
+/// the pre-state c-list — GATED by the kernel's verified commit decision. The kernel proves the
+/// mutation was AUTHORIZED (non-amplification / production-authority); we apply the authorized,
+/// deterministic leaf write that mirrors `executor::apply` byte-for-byte. The reconstituted
+/// `cap_root` therefore EQUALS the Rust producer's, closing the cap-fidelity root-gap.
+///
+/// Only applied when the kernel COMMITTED — a rejected cap turn leaves the c-list untouched (the
+/// non-vacuous tooth: a cross-cell grant the delegator cannot back, or a non-monotone attenuation,
+/// is rejected by BOTH executors and the c-list does not move).
+#[derive(Debug, Clone)]
+pub enum CapOp {
+    /// `GrantCapability { from, to, cap }` — install `cap` into `to`'s c-list at its next slot
+    /// (mirrors `apply_grant_capability`'s `to_cell.capabilities.grant_ref(cap)`).
+    Grant { to: CellId, cap: CapabilityRef },
+    /// `Introduce { recipient, target, permissions }` — install a cap over `target` into
+    /// `recipient`'s c-list at its next slot with the host-derived `expires_at` (mirrors
+    /// `apply_introduce`'s `grant_with_expiry(target, permissions, block_height + lifetime)`).
+    Introduce {
+        recipient: CellId,
+        target: CellId,
+        permissions: AuthRequired,
+        expires_at: u64,
+    },
+    /// `AttenuateCapability { cell, slot, … }` — narrow `cell`'s `slot` in place (mirrors
+    /// `apply_attenuate_capability`'s `attenuate_in_place`).
+    Attenuate {
+        cell: CellId,
+        slot: u32,
+        narrower_permissions: AuthRequired,
+        narrower_effects: Option<dregg_cell::EffectMask>,
+        narrower_expiry: Option<u64>,
+    },
+}
+
+impl CapOp {
+    /// The holder cell whose c-list this op edits — the cell whose `cap_root` moves.
+    fn holder(&self) -> CellId {
+        match self {
+            CapOp::Grant { to, .. } => *to,
+            CapOp::Introduce { recipient, .. } => *recipient,
+            CapOp::Attenuate { cell, .. } => *cell,
+        }
+    }
+}
+
+/// Collect the deterministic c-list mutations every cap effect in `turn` performs, resolving the
+/// host-derived `expires_at` for `Introduce` from `intro_expiry` (= `block_height +
+/// max_introduction_lifetime`, the value `apply_introduce` stamps). Walked in forest order so the
+/// replay matches the executor's left-to-right effect order (slot assignment is order-sensitive).
+fn collect_cap_ops(turn: &Turn, intro_expiry: u64) -> Vec<CapOp> {
+    fn walk(tree: &CallTree, intro_expiry: u64, out: &mut Vec<CapOp>) {
+        for eff in &tree.action.effects {
+            match eff {
+                Effect::GrantCapability { to, cap, .. } => {
+                    out.push(CapOp::Grant { to: *to, cap: cap.clone() });
+                }
+                Effect::Introduce {
+                    recipient,
+                    target,
+                    permissions,
+                    ..
+                } => {
+                    out.push(CapOp::Introduce {
+                        recipient: *recipient,
+                        target: *target,
+                        permissions: permissions.clone(),
+                        expires_at: intro_expiry,
+                    });
+                }
+                Effect::AttenuateCapability {
+                    cell,
+                    slot,
+                    narrower_permissions,
+                    narrower_effects,
+                    narrower_expiry,
+                } => {
+                    out.push(CapOp::Attenuate {
+                        cell: *cell,
+                        slot: *slot,
+                        narrower_permissions: narrower_permissions.clone(),
+                        narrower_effects: *narrower_effects,
+                        narrower_expiry: *narrower_expiry,
+                    });
+                }
+                _ => {}
+            }
+        }
+        for c in &tree.children {
+            walk(c, intro_expiry, out);
+        }
+    }
+    let mut out = Vec::new();
+    for r in &turn.call_forest.roots {
+        walk(r, intro_expiry, &mut out);
+    }
+    out
+}
 
 /// Why a `WireState` could not be fully reconstituted into a `Ledger`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,11 +299,12 @@ fn invert_id_map(id_map: &HashMap<CellId, u64>) -> HashMap<u64, CellId> {
 /// `breadstuff`, `expires_at`, and `allowed_effects`. So a rebuilt cap set canonically hashes to
 /// the SAME `cap_root` as the Rust one ONLY when the Rust caps are all bare `node`-shaped edges
 /// with `AuthRequired::None`, no breadstuff/expiry/facet, AND the slot numbering coincides
-/// (slot = insertion order). For a real `GrantCapability` (which grants `cap.permissions` at a
-/// FRESH slot, possibly with a breadstuff) the rebuilt `cap_root` DIVERGES — a genuine swap-gap
-/// (the wire cap model is lossier than the cell commitment), surfaced by the differential, never
-/// hidden. `node`/`endpoint` rights both map to `AuthRequired::None` (full authority); the wire
-/// `Auth` rights list does not map onto the `AuthRequired` lattice (another characterised gap).
+/// (slot = insertion order). For the cap effects whose post-state leaf the wire EDGE model cannot
+/// carry — `GrantCapability` / `Introduce` / `AttenuateCapability` — the exact leaf is reconstructed
+/// instead by [`apply_cap_ops`] (the cap-fidelity lever, see [`CapOp`]): the wire-edge rebuild is
+/// the FALLBACK for holders no committed cap-op touched (e.g. a `RevokeDelegation`'s edge set).
+/// `node`/`endpoint` rights both map to `AuthRequired::None` (full authority); the wire `Auth`
+/// rights list does not map onto the `AuthRequired` lattice (a residual for the edge-only path).
 ///
 /// An edge whose `target` wire Nat has no inverse (an above-snapshot fresh id) is reported.
 fn rebuild_capabilities(
@@ -211,12 +327,104 @@ fn rebuild_capabilities(
     Ok(set)
 }
 
+/// Replay the committed turn's capability mutations onto the reconstituted ledger so each touched
+/// holder cell's c-list — and therefore its `cap_root` — is EXACT (the cap-fidelity root-gap close).
+///
+/// For every holder a `CapOp` touches we recompute its c-list from the TEMPLATE (pre-state) c-list
+/// plus the deterministic, turn-specified mutation, mirroring `executor::apply` byte-for-byte:
+///   * `Grant`     → `grant_ref(cap)`            (apply_grant_capability's faithful install)
+///   * `Introduce` → `grant_with_expiry(target, permissions, expires_at)`
+///   * `Attenuate` → `attenuate_in_place(slot, …)`
+/// Ops replay in forest order (slot assignment is order-sensitive) and against the WORKING c-list
+/// (so two grants onto the same holder land at consecutive slots, as the executor assigns them).
+///
+/// Applied ONLY when `committed` — a rejected cap turn leaves c-lists at their pre-state (matching
+/// the Rust producer's rollback). The verified kernel decides `committed`; we apply the authorized,
+/// deterministic leaf write. The result OVERRIDES the lossy wire-edge rebuild for these holders.
+fn apply_cap_ops(
+    out_cells: &mut HashMap<CellId, Cell>,
+    template: &Ledger,
+    cap_ops: &[CapOp],
+    committed: bool,
+) -> Result<(), ExtractError> {
+    if !committed || cap_ops.is_empty() {
+        return Ok(());
+    }
+    // Seed each touched holder's working c-list from the TEMPLATE (the exact pre-state c-list with
+    // its real slots/permissions/breadstuff/expiry/mask) — not from the lossy wire edges.
+    let mut touched: std::collections::HashSet<CellId> = std::collections::HashSet::new();
+    for op in cap_ops {
+        let holder = op.holder();
+        if touched.insert(holder) {
+            // Establish the holder's working cell: prefer an already-produced cell (so balance/
+            // nonce/fields the verified executor produced survive), else the template cell.
+            if !out_cells.contains_key(&holder) {
+                let cell = template
+                    .get(&holder)
+                    .cloned()
+                    .ok_or(ExtractError::NoTemplateCell { nat: u64::MAX, cell: holder })?;
+                out_cells.insert(holder, cell);
+            }
+            // Reset the working c-list to the EXACT pre-state (the template carries the real
+            // pre-state caps; the wire-edge rebuild above may have lossily overwritten it).
+            let template_caps = template
+                .get(&holder)
+                .map(|c| c.capabilities.clone())
+                .unwrap_or_default();
+            if let Some(cell) = out_cells.get_mut(&holder) {
+                cell.capabilities = template_caps;
+            }
+        }
+    }
+    // Replay the mutations in forest order against the working c-lists.
+    for op in cap_ops {
+        let holder = op.holder();
+        let cell = out_cells
+            .get_mut(&holder)
+            .ok_or(ExtractError::NoTemplateCell { nat: u64::MAX, cell: holder })?;
+        match op {
+            CapOp::Grant { cap, .. } => {
+                cell.capabilities.grant_ref(cap);
+            }
+            CapOp::Introduce {
+                target,
+                permissions,
+                expires_at,
+                ..
+            } => {
+                cell.capabilities
+                    .grant_with_expiry(*target, permissions.clone(), *expires_at);
+            }
+            CapOp::Attenuate {
+                slot,
+                narrower_permissions,
+                narrower_effects,
+                narrower_expiry,
+                ..
+            } => {
+                cell.capabilities.attenuate_in_place(
+                    *slot,
+                    narrower_permissions.clone(),
+                    *narrower_effects,
+                    *narrower_expiry,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// THE EXTRACTOR. Reconstitute a `cell::Ledger` from a verified-executor-produced `WireState`.
 ///
 /// `inv_id_map` inverts the pre-state Nat labelling; `template` is the pre-state ledger whose cells
 /// carry the identity/permission/capability fields the wire does not (pk, token_id, permissions,
 /// c-list, program). For each produced cell we clone its template and overwrite the
 /// balance/nonce/state-fields the verified executor produced.
+///
+/// `cap_ops` are the deterministic cap mutations the committed turn performs (see [`CapOp`]); when
+/// `committed`, [`apply_cap_ops`] replays them onto the touched holders' EXACT pre-state c-lists so
+/// `cap_root` is byte-exact (the cap-fidelity root-gap close), overriding the lossy wire-edge
+/// rebuild for those holders.
 ///
 /// Cells present in the template but ABSENT from the produced state (the verified executor left
 /// them out of its output cell list) are carried forward UNCHANGED — the kernel's `cellsOfState`
@@ -225,6 +433,8 @@ pub fn wire_state_to_ledger(
     ws: &WireState,
     inv_id_map: &HashMap<u64, CellId>,
     template: &Ledger,
+    cap_ops: &[CapOp],
+    committed: bool,
 ) -> Result<Ledger, ExtractError> {
     let mut produced_ids = std::collections::HashSet::new();
     let mut out_cells: HashMap<CellId, Cell> = HashMap::new();
@@ -349,6 +559,14 @@ pub fn wire_state_to_ledger(
         out_cells.insert(cell_id, cell);
     }
 
+    // CAP-FIDELITY ROOT-GAP CLOSE: replay the committed turn's Grant/Introduce/Attenuate mutations
+    // onto the touched holders' EXACT pre-state c-lists, overriding the lossy wire-edge rebuild so
+    // each touched cell's `cap_root` is byte-exact with the Rust producer's.
+    apply_cap_ops(&mut out_cells, template, cap_ops, committed)?;
+    for op in cap_ops {
+        produced_ids.insert(op.holder());
+    }
+
     // Reconstitute the ledger: produced cells (edited) + template cells the executor did not list
     // (carried unchanged, since the kernel only re-emits the cells it was handed).
     let mut ledger = Ledger::new();
@@ -389,8 +607,14 @@ pub fn execute_via_lean(
     let shadow_state =
         lean_shadow::run_shadow_state(turn, &pre, host).map_err(ExtractError::Ffi)?;
     let inv = invert_id_map(&pre.id_map);
-    let ledger = wire_state_to_ledger(&shadow_state.state, &inv, pre_ledger)?;
-    Ok((ledger, shadow_state.verdict.committed))
+    let committed = shadow_state.verdict.committed;
+    // The deterministic cap mutations this turn performs (Grant/Introduce/Attenuate). An
+    // `Introduce` stamps `expires_at = block_height + max_introduction_lifetime` (the host fields),
+    // matching `apply_introduce`. Applied ONLY when the kernel COMMITTED (`wire_state_to_ledger`).
+    let intro_expiry = host.block_height.saturating_add(host.intro_lifetime);
+    let cap_ops = collect_cap_ops(turn, intro_expiry);
+    let ledger = wire_state_to_ledger(&shadow_state.state, &inv, pre_ledger, &cap_ops, committed)?;
+    Ok((ledger, committed))
 }
 
 /// Which executor produced the committed state, plus the verified-vs-Rust differential, for one

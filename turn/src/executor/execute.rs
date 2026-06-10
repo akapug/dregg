@@ -231,6 +231,7 @@ impl TurnExecutor {
             frozen,
             stored_head,
             budget,
+            intro_lifetime: self.max_introduction_lifetime,
         }
     }
 

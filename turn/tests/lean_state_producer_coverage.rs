@@ -341,7 +341,9 @@ fn note_create_root_agrees() {
 // =====================================================================================
 // ROOT-GAP FAMILIES — the producer RUNS but the reconstituted `.root()` DIVERGES. Each
 // asserts the SPECIFIC divergence (a negative tooth) so the gap is characterized, not a
-// silent pass. (CellSeal/CellDestroy/GrantCapability are pinned in the widen file too.)
+// silent pass. (CellSeal/CellDestroy are pinned in the widen file too; the cap-fidelity
+// effects GrantCapability/AttenuateCapability/Introduce are now root-AGREEING, see the
+// `*_round_trips_cap_fidelity_closed` tests.)
 // =====================================================================================
 
 #[test]
@@ -491,18 +493,16 @@ fn refusal_is_an_audit_field_swap_gap() {
 }
 
 #[test]
-fn attenuate_capability_is_a_cap_fidelity_swap_gap() {
+fn attenuate_capability_round_trips_cap_fidelity_closed() {
     if skip_no_lean() {
         return;
     }
-    // AttenuateCapability narrows a HELD c-list slot in place: dregg1's `apply.rs` rewrites the
-    // held `CapabilityRef`'s `permissions` (`AuthRequired`) to a strictly narrower value (and may
-    // bind a finite expiry), changing that cell's `cap_root` → `.root()`. The wire `caps` model
-    // carries only bare `Cap::Node(target)` edges (no per-cap `AuthRequired`/expiry), and the
-    // verified `attenuate` is a NO-OP on a `node` cap (it only filters `.endpoint` rights). So the
-    // Lean-reconstituted c-list keeps the unchanged `node` edge (`AuthRequired::None`), hashing to a
-    // DIFFERENT `cap_root` than Rust's narrowed cap. Same cap-fidelity gap class as GrantCapability;
-    // asserted as a SPECIFIC divergence (a negative tooth), characterized, never a silent pass.
+    // CAP-FIDELITY ROOT-GAP CLOSE. AttenuateCapability narrows a HELD c-list slot in place: dregg1's
+    // `apply.rs` rewrites the held `CapabilityRef`'s `permissions` (`AuthRequired`) to a strictly
+    // narrower value, changing that cell's `cap_root` → `.root()`. The verified kernel decides the
+    // commit; the commit-gated turn-driven replay (`lean_apply::apply_cap_ops`) mirrors
+    // `attenuate_in_place` byte-for-byte, so the narrowed leaf's `cap_root` AGREES with Rust. We
+    // narrow None → Signature (a leaf that genuinely moves), so the round-trip is non-vacuous.
     let mut a = make_open_cell(1, 100);
     let a_id = a.id();
     // Seed a HELD cap on A over a target cell B with the WIDEST permission (`None`), so an in-place
@@ -550,19 +550,9 @@ fn attenuate_capability_is_a_cap_fidelity_swap_gap() {
         );
     }
 
-    match diff(pre, turn, &[a_id, b_id]) {
-        Ok(()) => panic!(
-            "AttenuateCapability unexpectedly round-tripped — the cap-fidelity swap-gap may have \
-             closed (the wire caps model would now carry per-cap AuthRequired/expiry)"
-        ),
-        Err(why) => assert!(
-            why.contains("cap_root divergence")
-                || why.contains("ROOT divergence")
-                || why.contains("commit-bit divergence"),
-            "AttenuateCapability swap-gap should be a cap_root/root/commit-bit divergence, got: {why}"
-        ),
-    }
-    assert!(lean_shadow::producer_root_gap_effects().contains(&"AttenuateCapability"));
+    diff(pre, turn, &[a_id, b_id])
+        .expect("AttenuateCapability must round-trip (cap-fidelity root-gap closed)");
+    assert!(lean_shadow::producer_root_agreeing_effects().contains(&"AttenuateCapability"));
 }
 
 // =====================================================================================
