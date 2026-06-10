@@ -273,3 +273,122 @@
   font-size: 0.85rem;
   margin: 0;
 }
+
+/* ============================================================
+   Living-docs catalog embeds — rendered at build time from the
+   generated catalogs (see build.js CATALOG_VIEWS). The facts
+   inside these blocks are drift-checked against the verified
+   sources; the styles here only dress them.
+   ============================================================ */
+
+.catalog-embed {
+  margin: var(--s5) 0;
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r2);
+  background: var(--bg-inset);
+  padding: var(--s4) var(--s5);
+  overflow-x: auto;
+}
+
+.catalog-embed figcaption {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+  line-height: 1.6;
+}
+
+.catalog-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.catalog-table th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+  padding: var(--s2) var(--s3) var(--s2) 0;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.catalog-table td {
+  padding: var(--s2) var(--s3) var(--s2) 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-dim);
+  line-height: 1.55;
+  vertical-align: top;
+}
+
+.catalog-table tr:last-child td { border-bottom: none; }
+
+.catalog-tag {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+  border-radius: var(--r1);
+  padding: 1px 5px;
+  margin-left: var(--s1);
+  vertical-align: middle;
+}
+
+.catalog-guarantee {
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.catalog-guarantee:last-of-type { border-bottom: none; }
+
+.catalog-guarantee__head {
+  font-family: var(--font-display);
+  color: var(--chalk);
+  margin-bottom: var(--s1);
+}
+
+.catalog-guarantee__letter {
+  display: inline-block;
+  font-family: var(--font-mono);
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+  border-radius: var(--r1);
+  padding: 0 7px;
+  margin-right: var(--s2);
+}
+
+.catalog-guarantee__stmt {
+  color: var(--fg-dim);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin-bottom: var(--s1);
+}
+
+.catalog-guarantee__apex,
+.catalog-guarantee__floor {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  margin-bottom: 2px;
+  line-height: 1.6;
+}
+
+.catalog-floor {
+  padding-left: var(--s5);
+  margin: 0;
+}
+
+.catalog-floor li {
+  list-style: decimal;
+  color: var(--fg-dim);
+  font-size: 0.88rem;
+  padding: var(--s1) 0;
+  line-height: 1.6;
+}

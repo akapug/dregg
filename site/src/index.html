@@ -1,21 +1,22 @@
 <layout src="_layouts/default.html">
-<title>dregg — Capability-Secure Distributed Runtime</title>
+<title>dregg — a verified distributed object-capability substrate</title>
 
 <!-- ==================== HERO ==================== -->
 <header class="hero">
   <div class="hero__inner">
-    <p class="hero__eyebrow">A capability-secure distributed runtime, verified in Lean.</p>
-    <h1>Cells, turns, proofs. <em>Every state transition is checked.</em></h1>
+    <p class="hero__eyebrow">A verified distributed object-capability substrate.</p>
+    <h1>The proof witnesses the protocol's <em>correct evolution</em>.</h1>
     <p class="hero__sub">
-      <code>dregg</code> runs applications as confined <strong>cells</strong> that change state
-      only through atomic <strong>turns</strong>. The rules a turn must obey — who may write a slot,
-      which values are legal, how capabilities attenuate — are enforced by the runtime, and the
-      runtime's state-transition core is <strong>specified and machine-checked in Lean 4</strong>.
-      The same verified core can emit a STARK proof per turn.
+      In <code>dregg</code>, a <strong>turn</strong> is the exercise of an attenuable,
+      proof-carrying token over owned state, leaving a verifiable receipt. State lives in
+      <strong>cells</strong>; authority is a <strong>capability</strong> you can exhibit, never
+      merely assert; every rule that binds a turn is a predicate the executor enforces and the
+      proof commits to. The semantics are a Lean 4 kernel — the same kernel the node executes —
+      and a light client verifies an entire history by checking one root, re-executing nothing.
     </p>
     <div class="hero__cta">
-      <a class="btn btn--primary" href="/usecases.html">Walk the use cases</a>
-      <a class="btn btn--secondary" href="/learn/ontology.html">Verified guarantees</a>
+      <a class="btn btn--primary" href="/docs.html">Read the protocol</a>
+      <a class="btn btn--secondary" href="/studio.html">Open the Studio</a>
       <a class="btn btn--secondary" href="/paper.html">Read the paper</a>
     </div>
     <p class="hero__note">
@@ -31,154 +32,107 @@
 <!-- ==================== WHAT IT IS ==================== -->
 <section class="section wrap">
   <span class="section__label">What <code>dregg</code> is</span>
-  <h2 class="section__title">Three primitives, one shared fabric</h2>
+  <h2 class="section__title">Four substances, eight verbs, one gate</h2>
   <p class="section__intro">
-    There is no app-specific bytecode and no privileged "system" code. An application is just a
-    set of cells, the constraints minted onto them, and the capabilities that authorize turns
-    against them. Everything below is composed from the same dregg-native primitives.
+    The kernel governs four substances, each under its own law: <strong>value</strong> is
+    linear (moves, never copies or vanishes), <strong>authority</strong> is produced under
+    non-forgeability (it grows — but only by authorized, receipt-disclosed construction from
+    connectivity already held), <strong>evidence</strong> is monotone (once known, never
+    unknown), and <strong>state</strong> is guarded (changes only under its cell's program,
+    only by its owner). The kernel signature is eight verbs — each the structural rule of one
+    substance's discipline, and minimality is a theorem
+    (<code>VerbRegistry.each_verb_irreplaceable</code>). Everything else — escrows, queues,
+    councils, namespaces — is a cell program minted by a factory and enforced by the same
+    executor.
   </p>
   <div class="flow">
     <div class="flow__step">
       <span class="flow__n">01 / Cells</span>
-      <p class="flow__name">Confined objects with a capability list</p>
-      <p class="flow__desc">A cell holds a slot record, a balance, a nonce, and an optional <em>CellProgram</em> — a set of state constraints minted at birth. A cell can only touch what is in its c-list; it cannot reach state it was never handed.</p>
+      <p class="flow__name">The four substances, gathered behind one identity</p>
+      <p class="flow__desc">A cell holds balances, a capability list, slots, and a program — a predicate over its own transitions. Nothing is ownerless; every object is a cell or lives in one. A cell can only touch what it has been handed.</p>
     </div>
     <div class="flow__step">
       <span class="flow__n">02 / Turns</span>
-      <p class="flow__name">Atomic, authorized state transitions</p>
-      <p class="flow__desc">A turn is a call forest executed depth-first across one or more cells. Every leg is authorized by a capability; if any action is rejected, the whole turn rolls back. Multi-party turns compose without a coordinator.</p>
+      <p class="flow__name">Authorized inference, atomically</p>
+      <p class="flow__desc">Each action demands a predicate and supplies a witness; admissibility is verification, never trust. A turn commits whole or not at all, and a forged credential or undischarged caveat on any leg rejects the entire forest.</p>
     </div>
     <div class="flow__step">
-      <span class="flow__n">03 / Proofs</span>
-      <p class="flow__name">A verified core, optionally a STARK</p>
-      <p class="flow__desc">The state-transition function is specified in Lean and the executor refines that spec. The same core emits a per-turn STARK (Plonky3, BabyBear + FRI) when you want a transferable proof instead of re-execution.</p>
+      <span class="flow__n">03 / Receipts</span>
+      <p class="flow__name">History you can hand to a stranger</p>
+      <p class="flow__desc">A committed turn leaves Q — a receipt binding the whole post-state. Receipts chain; proofs fold; one verification of one root attests every turn that ever happened, correctly ordered, with nothing re-executed.</p>
     </div>
   </div>
 </section>
 
-<!-- ==================== VERIFIED GUARANTEES ==================== -->
+<!-- ==================== GUARANTEES ==================== -->
 <section class="section wrap section--feature">
-  <span class="section__label">Verified guarantees</span>
-  <h2 class="section__title">What is actually proven — and what is not</h2>
+  <span class="section__label">The assurance case</span>
+  <h2 class="section__title">What is proven — and what it rests on</h2>
   <p class="section__intro">
-    We try hard not to overclaim. Here is the honest boundary. The numbers below come from the
-    repository's own drift-guarded catalogs and the node's verified-execution status endpoint, not
-    from a slide.
+    The system's guarantees are organized as an assurance case in
+    <code>Dregg2/AssuranceCase.lean</code>: each guarantee names an apex theorem and the
+    keystones that discharge it, every name machine-pinned to the Lean kernel's three axioms.
+    The cards below are embedded at build time from the catalog generated out of that file —
+    this page cannot say more than the proofs do.
   </p>
-  <div class="guarantee-grid">
-    <div class="guarantee">
-      <p class="guarantee__num">56</p>
-      <p class="guarantee__label">effect kinds in the verified ontology</p>
-      <p class="guarantee__desc">Each effect (Transfer, SetField, GrantCapability, NoteSpend, …) has a Lean semantics and a wire codec. The <a href="/learn/ontology.html">ontology catalog</a> is generated directly from the Lean source; a CI drift check fails if it goes stale.</p>
-    </div>
-    <div class="guarantee">
-      <p class="guarantee__num">20</p>
-      <p class="guarantee__label">effects on the verified producer path</p>
-      <p class="guarantee__desc">When the Lean producer is enabled, turns touching only these 20 effect kinds are produced by the machine-checked executor; the rest fall back to the Rust producer (cross-checked as a logged differential). The node reports this split live at <code>/api/node/producer</code>.</p>
-    </div>
-    <div class="guarantee">
-      <p class="guarantee__num">8</p>
-      <p class="guarantee__label">real applications, all gated &amp; tested</p>
-      <p class="guarantee__desc">Eight starbridge-apps run end-to-end against the canonical executor with the capability, mandate, and slot-caveat gates firing. Their rules are <em>substrate-enforced</em>, not app bookkeeping. <a href="/usecases.html">Walk them →</a></p>
-    </div>
-  </div>
+  <catalog view="guarantees">
   <p class="guarantee-foot">
-    <strong>Not yet claimed:</strong> a fully recursive succinct proof tree, a complete
-    formal model of the consensus layer, and circuit⟺protocol soundness for every one of the
-    56 effects. Those are in progress and tracked in the repo, not finished. The verified core is
-    the state-transition function and a growing set of per-effect circuit obligations.
+    The full delimitation — the eight-carrier assumption floor, the named Rust components
+    inside the trust base, and the present limitations, stated plainly — is
+    <a href="/learn/concepts/trust-boundary.html">rung 7 of the protocol docs</a>.
   </p>
 </section>
 
-<!-- ==================== REAL USE CASES ==================== -->
+<!-- ==================== THREE DOORS ==================== -->
 <section class="section wrap">
-  <span class="section__label">Built on the runtime</span>
-  <h2 class="section__title">Six use cases you can walk</h2>
+  <span class="section__label">Three doors</span>
+  <h2 class="section__title">Use it · build on it · verify it</h2>
+  <div class="flow">
+    <div class="flow__step">
+      <span class="flow__n">Use it</span>
+      <p class="flow__name">A clerk that cannot lie to you</p>
+      <p class="flow__desc">The cipherclerk holds your keys and tokens, attenuates before it delegates, and discloses by projection — what a counterparty's proof does not need, it does not see. Drive it from the <a href="/learn/users/cli.html">CLI</a>, the <a href="/learn/users/quickstart.html">quickstart</a>, or the <a href="/usecases.html">apps</a>.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">Build on it</span>
+      <p class="flow__name">Rules the substrate enforces for you</p>
+      <p class="flow__desc">Publish a factory descriptor — a slot layout plus predicate constraints — and every cell minted from it carries its rules in the executor, not in your code. Your app inherits theorems by consuming receipts. Start with the <a href="/learn/developers/building-apps.html">developer guide</a> and the <a href="/studio.html">Studio</a>.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">Verify it</span>
+      <p class="flow__name">Check, don't trust</p>
+      <p class="flow__desc">A light client checks one root and learns the whole history (<code>light_client_verifies_whole_history</code>). The semantics, the guarantees, and their axiom hygiene are open Lean you can build yourself: <code>metatheory/</code> in the repo, explained in <a href="/docs.html">the protocol docs</a>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== THE LADDER ==================== -->
+<section class="section wrap">
+  <span class="section__label">Understand it</span>
+  <h2 class="section__title">The protocol, in seven rungs</h2>
   <p class="section__intro">
-    Each of these is a real crate with a passing test suite. None of them adds a domain-specific
-    effect — every rule is a generic <em>StateConstraint</em> (WriteOnce, Monotonic, FieldLteField, …)
-    minted onto a factory-born cell. The <a href="/usecases.html">use-case explorer</a> shows you the
-    exact slots, caveats, and turns for each, and lets you try them against a node.
+    The docs are a ladder, one sentence unfolding outward: the
+    <a href="/learn/concepts/turn.html">turn</a>, the
+    <a href="/learn/concepts/substances.html">four substances and eight verbs</a>,
+    <a href="/learn/concepts/guards.html">guards</a> (one predicate algebra with a
+    coordination dial and a disclosure dial),
+    <a href="/learn/concepts/receipts.html">receipts</a>,
+    <a href="/learn/concepts/light-client.html">the light client</a>,
+    <a href="/learn/concepts/userspace.html">userspace and the polis</a>, and
+    <a href="/learn/concepts/trust-boundary.html">the trust boundary</a>. Each rung is prose,
+    then the grounding theorems, then a live surface to touch:
+    the <a href="/explorer/">explorer</a>, the <a href="/playground/">playground</a>, the
+    <a href="/studio.html">Studio</a>.
   </p>
-  <div class="usecases">
-    <a class="usecase usecase--link" href="/usecases.html#nameservice">
-      <p class="usecase__icon">nameservice</p>
-      <p class="usecase__title">Nameservice</p>
-      <p class="usecase__desc">A federation name directory. <code>register → set-target → renew → transfer → revoke</code>. The name hash is WriteOnce; expiry is Monotonic; once revoked, it stays revoked.</p>
-    </a>
-    <a class="usecase usecase--link" href="/usecases.html#identity">
-      <p class="usecase__icon">identity</p>
-      <p class="usecase__title">Identity &amp; credentials</p>
-      <p class="usecase__desc">Issue a credential, present it with selective disclosure, verify, revoke. The schema commitment is immutable; issuance is a monotone sequence; only the authorized issuer may write.</p>
-    </a>
-    <a class="usecase usecase--link" href="/usecases.html#subscription">
-      <p class="usecase__icon">subscription</p>
-      <p class="usecase__title">Subscription / pub-sub</p>
-      <p class="usecase__desc">A bounded ring buffer. Publishers and consumers are capability-gated; the tail can never pass the head; head and tail each advance only as a monotone sequence.</p>
-    </a>
-    <a class="usecase usecase--link" href="/usecases.html#privacy-voting">
-      <p class="usecase__icon">voting</p>
-      <p class="usecase__title">Privacy voting</p>
-      <p class="usecase__desc">Factory-born poll and ballot cells. Tallies are Monotonic (votes can't be erased); each ballot's vote slot is WriteOnce — one vote per ballot, enforced by the executor, not the app.</p>
-    </a>
-    <a class="usecase usecase--link" href="/usecases.html#bounty-board">
-      <p class="usecase__icon">bounty</p>
-      <p class="usecase__title">Bounty board</p>
-      <p class="usecase__desc"><code>OPEN → CLAIMED → SUBMITTED → PAID</code> as a StrictMonotonic state machine. First-claimer-wins (claimant hash is WriteOnce); a paid bounty cannot be re-opened.</p>
-    </a>
-    <a class="usecase usecase--link" href="/usecases.html#governed-namespace">
-      <p class="usecase__icon">namespace</p>
-      <p class="usecase__title">Governed namespace</p>
-      <p class="usecase__desc">A DAO-controlled route table. Propose → vote (threshold) → commit → register service. The committee root and threshold are immutable; the table version is a monotone sequence.</p>
-    </a>
-  </div>
-  <p style="margin-top: var(--s5); text-align: center;">
-    <a href="/usecases.html" class="btn btn--secondary">Open the use-case explorer &rarr;</a>
-  </p>
-</section>
-
-<!-- ==================== ARCHITECTURE ==================== -->
-<section class="section wrap">
-  <span class="section__label">Architecture</span>
-  <h2 class="section__title">How a turn travels the stack</h2>
-  <div class="arch">
-    <pre><code>Applications     8 starbridge-apps — nameservice · identity · subscription · voting
-                 bounty-board · governed-namespace · workflow-mandate · storage-mandate
-  ──────────────────────────────────────────────────────────────────────────
-Surfaces         CLI (dregg ...) · SDK (AgentCipherclerk) · browser wasm node · MCP tools
-  ──────────────────────────────────────────────────────────────────────────
-CapTP            Sessions · sturdy refs · 3-party handoff certs · distributed GC
-                 store-and-forward (X25519 → HKDF-SHA256 → ChaCha20-Poly1305)
-  ──────────────────────────────────────────────────────────────────────────
-Intent engine    Gossip broadcast · local Datalog match (never leaves cipherclerk)
-                 commit-reveal · ring trades settle multi-party cycles atomically
-  ──────────────────────────────────────────────────────────────────────────
-Execution        Cells (sovereign | delegated | replicated) · atomic turns
-                 Effect VM — 56 effect kinds · CellPrograms · factories
-                 ┌─ verified core: Lean-specified state-transition function
-                 └─ 20 effects produced by the machine-checked executor (toggle)
-  ──────────────────────────────────────────────────────────────────────────
-Proof            Per-turn STARK (Plonky3 · BabyBear · FRI) · authenticated state root
-                 per-effect circuit obligations (growing) · recursion (in progress)
-  ──────────────────────────────────────────────────────────────────────────
-Fabric           Blocklace (shared signed DAG) · emergent reference groups
-                 equivocation-detecting insert · finality gated on the verified rule
-  ──────────────────────────────────────────────────────────────────────────
-Commitment       4-ary Merkle (BLAKE3 fast path / Poseidon2 ZK path) · fold deltas</code></pre>
-  </div>
-  <p class="arch__caption">
-    <strong>The shape of the claim:</strong> the ordering fabric stores nullifiers and attested
-    roots; agents carry their own state as proof chains. Between known parties it is just signed
-    proofs exchanged directly — no ordering service, no storage footprint, no permission required.
-    Your phone is a node; a cloud cluster is a node; you move between sovereign and replicated
-    operation without a migration ceremony.
+  <p style="text-align: center;">
+    <a href="/docs.html" class="btn btn--secondary">Start the ladder &rarr;</a>
   </p>
 </section>
 
 <!-- ==================== TRY IT ==================== -->
 <section class="section wrap" id="quickstart">
   <span class="section__label">Try it</span>
-  <h2 class="section__title">From clone to a proven turn</h2>
+  <h2 class="section__title">From clone to a verified turn</h2>
   <div class="quickstart">
     <div class="quickstart__steps">
       <div class="quickstart__step">
@@ -193,33 +147,30 @@ cargo run -p dregg-node -- run</code></pre>
       <div class="quickstart__step">
         <span class="quickstart__n">2</span>
         <div>
-          <p>Drive a real app from the CLI — a rejected second claim is the caveat biting on the verified commit path:</p>
+          <p>Drive a real app from the CLI — the rejected second claim below is a cell program biting on the commit path, not app bookkeeping:</p>
           <pre><code class="language-bash">dregg bounty post   --title "port the gallery app" --reward 500
 dregg bounty claim  --bounty &lt;id&gt;
+dregg bounty claim  --bounty &lt;id&gt;   # rejected: claimant slot is WriteOnce
 dregg bounty submit --bounty &lt;id&gt; --uri ipfs://...
-dregg bounty payout --bounty &lt;id&gt;
-dregg voting open|tally|close|show     # the privacy-voting app, live</code></pre>
+dregg bounty payout --bounty &lt;id&gt;</code></pre>
         </div>
       </div>
       <div class="quickstart__step">
         <span class="quickstart__n">3</span>
         <div>
-          <p>Ask the node which producer is on the commit path and which effects it covers:</p>
-          <pre><code class="language-bash">curl localhost:8420/api/node/producer | jq
-# { "state_producer": "lean" | "rust",
-#   "covered_effects": [ ... 20 ... ],
-#   "uncovered_effects": [ ... ],
-#   "full_turn_proving": true|false }</code></pre>
+          <p>Ask the node which semantics produced what — the producer split is reported live, because the trust boundary is a fact, not a footnote:</p>
+          <pre><code class="language-bash">curl localhost:8420/api/node/producer | jq</code></pre>
         </div>
       </div>
       <div class="quickstart__step">
         <span class="quickstart__n">4</span>
         <div>
-          <p>Or skip the build — walk the apps in the browser and try them against a node:</p>
+          <p>Or skip the build — everything has a browser surface:</p>
           <p style="margin-top: var(--s2);">
             <a href="/usecases.html">Use-case explorer</a> &middot;
-            <a href="/explorer/">Live chain explorer</a> &middot;
-            <a href="/playground/">Browser playground</a> &middot;
+            <a href="/explorer/">Chain explorer</a> &middot;
+            <a href="/playground/">Playground</a> &middot;
+            <a href="/studio.html">Studio</a> &middot;
             <a href="/learn/developers/tutorial-first-app.html">First-app tutorial</a>
           </p>
         </div>

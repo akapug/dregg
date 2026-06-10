@@ -172,6 +172,153 @@ function processLayouts(content, currentFile) {
     .replace('{{ content }}', innerWithoutTitle.trim());
 }
 
+// ---------------------------------------------------------------------------
+// Living-docs catalog views.
+//
+// Where a docs page states a checkable fact (the verb roster, the guarantee
+// list, the assumption floor, the constraint kinds), it embeds the fact from
+// the generated catalogs in src/_includes/studio/*.generated.json instead of
+// hand-copying it. Pages write `<catalog view="NAME">`; the build replaces the
+// tag with HTML rendered from the catalog at build time. The catalogs are
+// themselves drift-checked against the Lean/Rust sources (checkCatalogDrift),
+// so the prose around these blocks can age but the facts inside them cannot.
+// ---------------------------------------------------------------------------
+
+const CATALOG_DIR = path.join(SRC, '_includes', 'studio');
+const catalogCache = new Map();
+
+function loadCatalog(name) {
+  if (!catalogCache.has(name)) {
+    catalogCache.set(name, JSON.parse(fs.readFileSync(path.join(CATALOG_DIR, name), 'utf-8')));
+  }
+  return catalogCache.get(name);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Escape, then render `backtick spans` as <code>. */
+function inlineProse(s) {
+  return escapeHtml(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+const CATALOG_VIEWS = {
+  // The eight kernel verbs: name, the substance whose structural rule it is,
+  // its polarity, and the registry doc-comment. From verb-catalog (VerbRegistry.lean).
+  verbs() {
+    const v = loadCatalog('verb-catalog.generated.json');
+    const rows = v.verbs.map((verb) =>
+      `<tr><td><code>${escapeHtml(verb.name)}</code></td>` +
+      `<td><code>${escapeHtml(verb.substance)}</code> / ${escapeHtml(verb.polarity)}</td>` +
+      `<td>${inlineProse(verb.doc)}</td></tr>`
+    ).join('\n');
+    return `<figure class="catalog-embed" data-catalog="verbs">
+<table class="catalog-table">
+<thead><tr><th>verb</th><th>substance / polarity</th><th>what it is the rule of</th></tr></thead>
+<tbody>
+${rows}
+</tbody>
+</table>
+<figcaption>${v.verb_constructor_count} verb constructors (${v.verb_direction_count} directions —
+shield and unshield count separately), generated from
+<code>Dregg2/Substrate/VerbRegistry.lean</code>. Minimality and completeness are theorems there:
+${v.minimality_theorems.concat(v.completeness_theorems).map((t) => `<code>${escapeHtml(t)}</code>`).join(' · ')}.</figcaption>
+</figure>`;
+  },
+
+  // The factory patterns the non-verb wire families dissolve into, with their
+  // in-tree proof modules. From verb-catalog (classify + FactoryPattern.module).
+  'factory-patterns'() {
+    const v = loadCatalog('verb-catalog.generated.json');
+    const rows = v.factory_patterns.map((f) =>
+      `<tr><td><code>${escapeHtml(f.pattern)}</code></td>` +
+      `<td>${inlineProse(f.doc)}</td>` +
+      `<td><code>${escapeHtml(f.module || '—')}</code></td></tr>`
+    ).join('\n');
+    return `<figure class="catalog-embed" data-catalog="factory-patterns">
+<table class="catalog-table">
+<thead><tr><th>pattern</th><th>what it provides</th><th>proved in</th></tr></thead>
+<tbody>
+${rows}
+</tbody>
+</table>
+<figcaption>The factory patterns, generated from <code>VerbRegistry.lean</code>. Every
+factory-classified wire effect is built from surviving verbs only
+(<code>factory_builtFrom_are_survivors</code>).</figcaption>
+</figure>`;
+  },
+
+  // The guarantee cards: letter, title, statement, apex theorem, floor.
+  // From assurance-catalog (AssuranceCase.lean).
+  guarantees() {
+    const a = loadCatalog('assurance-catalog.generated.json');
+    const cards = a.guarantees.map((g) =>
+      `<div class="catalog-guarantee">
+  <p class="catalog-guarantee__head"><span class="catalog-guarantee__letter">${escapeHtml(g.letter)}</span> ${escapeHtml(g.title)}</p>
+  <p class="catalog-guarantee__stmt">${inlineProse(g.statement)}</p>
+  ${g.apex_theorem ? `<p class="catalog-guarantee__apex">apex: <code>${escapeHtml(g.apex_theorem)}</code> · ${g.pins.length} axiom pins</p>` : ''}
+  ${g.floor ? `<p class="catalog-guarantee__floor">floor: ${inlineProse(g.floor)}</p>` : ''}
+</div>`
+    ).join('\n');
+    return `<figure class="catalog-embed" data-catalog="guarantees">
+${cards}
+<figcaption>${a.guarantee_count} guarantees, ${a.coverage.total_pins} <code>#assert_axioms</code> pins,
+generated from <code>Dregg2/AssuranceCase.lean</code>. Every pinned theorem rests on the Lean kernel
+triple <code>{${a.kernel_axiom_triple.map(escapeHtml).join(', ')}}</code> and nothing else.</figcaption>
+</figure>`;
+  },
+
+  // The assumption floor: the only out-of-kernel carriers any guarantee rests on.
+  'assumption-floor'() {
+    const a = loadCatalog('assurance-catalog.generated.json');
+    const items = a.assumption_floor.map((f) =>
+      `<li><strong>${escapeHtml(f.name)}</strong> — ${inlineProse(f.detail)}</li>`
+    ).join('\n');
+    return `<figure class="catalog-embed" data-catalog="assumption-floor">
+<ol class="catalog-floor">
+${items}
+</ol>
+<figcaption>The assumption floor (${a.assumption_floor.length} carriers), generated from
+<code>Dregg2/AssuranceCase.lean</code>. These enter as <code>Prop</code>-portals (typeclass fields /
+hypotheses), never as axioms; no other assumption is load-bearing anywhere in the case.</figcaption>
+</figure>`;
+  },
+
+  // The constraint kinds of the cell-program grammar. From predicate-catalog
+  // (cell/src/program.rs StateConstraint).
+  'constraint-kinds'() {
+    const p = loadCatalog('predicate-catalog.generated.json');
+    const rows = p.constraints.map((c) =>
+      `<tr><td><code>${escapeHtml(c.name)}</code>${c.simple ? ' <span class="catalog-tag" title="may nest inside AnyOf / Implies / Not">simple</span>' : ''}</td>` +
+      `<td>${c.fields.map((f) => `<code>${escapeHtml(f.name)}: ${escapeHtml(f.type)}</code>`).join(', ') || '—'}</td>` +
+      `<td>${inlineProse(c.semantics)}</td></tr>`
+    ).join('\n');
+    return `<figure class="catalog-embed" data-catalog="constraint-kinds">
+<table class="catalog-table">
+<thead><tr><th>constraint</th><th>fields</th><th>semantics</th></tr></thead>
+<tbody>
+${rows}
+</tbody>
+</table>
+<figcaption>${p.constraint_count} constraint kinds, generated from
+<code>cell/src/program.rs</code> (the doc-commented canonical enum), cross-checked against the
+JSON projection the studio renders.</figcaption>
+</figure>`;
+  },
+};
+
+function processCatalogViews(content, currentFile) {
+  return content.replace(/<catalog\s+view="([^"]+)"\s*\/?>(?:<\/catalog>)?/g, (_, view) => {
+    const render = CATALOG_VIEWS[view];
+    if (!render) {
+      throw new Error(`unknown catalog view "${view}" in ${currentFile} ` +
+        `(known: ${Object.keys(CATALOG_VIEWS).join(', ')})`);
+    }
+    return render();
+  });
+}
+
 function highlightCode(content) {
   return content.replace(/<pre><code\s+class="language-([a-z0-9+-]+)">([\s\S]*?)<\/code><\/pre>/g, (_, lang, code) => {
     const trimmed = code
@@ -201,6 +348,7 @@ function processHtml(file) {
   let content = readSrc(file);
   content = processLayouts(content, file);
   content = processIncludes(content, file);
+  content = processCatalogViews(content, file);
   content = highlightCode(content);
   content = highlightInlineCode(content);
   content = applyBasePath(content);
