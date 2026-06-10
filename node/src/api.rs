@@ -1309,13 +1309,35 @@ async fn require_auth(
     // F-CRIT-1: prior code allowed *any* caller through here; on `--bind 0.0.0.0`
     // a network attacker could reach this branch before the operator and set the
     // passphrase themselves.
+    //
+    // PROXY HARDENING: behind a local reverse proxy (the devnet's Caddy on the
+    // same host), EVERY external request arrives from a loopback socket, so a
+    // raw `is_loopback()` check would hold this door open to the whole internet
+    // during the pre-passphrase window. When `DREGG_TRUSTED_PROXIES` names the
+    // proxy, we resolve the REAL client IP through `X-Forwarded-For` (same F-1
+    // logic as the rate limiters) and require THAT to be loopback. With no
+    // trusted proxies configured the resolution is the socket IP verbatim
+    // (unchanged local-dev behavior).
     let Some(ref bearer_seed) = s.bearer_seed else {
         drop(s);
         // Pull ConnectInfo if present; if no ConnectInfo we play safe (deny).
         let connect_info: Option<&axum::extract::ConnectInfo<std::net::SocketAddr>> =
             req.extensions().get();
         return match connect_info {
-            Some(ci) if ci.0.ip().is_loopback() => Ok(next.run(req).await),
+            Some(ci) => {
+                static TRUSTED: std::sync::OnceLock<TrustedProxies> = std::sync::OnceLock::new();
+                let trusted = TRUSTED.get_or_init(TrustedProxies::from_env);
+                let xff = req
+                    .headers()
+                    .get("x-forwarded-for")
+                    .and_then(|v| v.to_str().ok());
+                let client_ip = resolve_client_ip(ci.0.ip(), xff, trusted);
+                if client_ip.is_loopback() {
+                    Ok(next.run(req).await)
+                } else {
+                    Err(StatusCode::FORBIDDEN)
+                }
+            }
             _ => Err(StatusCode::FORBIDDEN),
         };
     };
@@ -1554,7 +1576,14 @@ pub fn router_with_cors(
         )
         .route("/api/intents", get(get_intents))
         .route("/api/conditionals", get(get_pending_conditionals))
-        .route("/api/discharge", post(post_discharge))
+        .route("/api/discharge", {
+            // Public + does real crypto + takes the global state-write lock:
+            // give it its own per-IP budget so a flood cannot contend the lock.
+            let limiter = RateLimiter::new(30, 60);
+            post(move |connect_info, headers, state, body| {
+                post_discharge(connect_info, headers, state, body, limiter)
+            })
+        })
         .route("/api/events", get(get_events))
         .route("/observability/stream", get(observability_stream))
         .route("/checkpoint/latest", get(get_checkpoint_latest))
@@ -1586,9 +1615,22 @@ pub fn router_with_cors(
     // Faucet endpoint (only available in devnet mode).
     if enable_faucet {
         let faucet_limiter = FaucetRateLimiter::new();
+        // Per-IP faucet budget (proxy-aware): bounds drain + zero-amount cell
+        // materialization per real client. 10/min is generous for a human or a
+        // demo script and miserly for a flood.
+        let faucet_ip_limiter = RateLimiter::new(10, 60);
         public_routes = public_routes.route(
             "/api/faucet",
-            post(move |state, body| post_faucet(state, body, faucet_limiter)),
+            post(move |connect_info, headers, state, body| {
+                post_faucet(
+                    connect_info,
+                    headers,
+                    state,
+                    body,
+                    faucet_limiter,
+                    faucet_ip_limiter,
+                )
+            }),
         );
     }
 
@@ -5673,9 +5715,22 @@ struct FaucetRateLimiter {
 
 impl FaucetRateLimiter {
     fn new() -> Self {
-        Self {
+        let limiter = Self {
             state: Arc::new(Mutex::new(HashMap::new())),
-        }
+        };
+        // Prune stale entries periodically so a flood of unique recipient ids
+        // cannot grow this map without bound (same discipline as `RateLimiter`).
+        let prune_state = limiter.state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(120));
+            loop {
+                interval.tick().await;
+                let mut map = prune_state.lock().await;
+                let now = Instant::now();
+                map.retain(|_, last| now.duration_since(*last).as_secs() < 60);
+            }
+        });
+        limiter
     }
 
     /// Returns true if the request should be allowed.
@@ -5694,15 +5749,31 @@ impl FaucetRateLimiter {
 
 /// POST /api/faucet — transfer computrons from the faucet cell to a recipient.
 ///
-/// Only enabled when `--enable-faucet` is set. Rate limited: 1 request per
-/// recipient cell per minute. Maximum 10000 computrons per request.
+/// Only enabled when `--enable-faucet` is set. Rate limited TWICE:
+/// * per recipient cell (1/min) — the original anti-drain bucket; and
+/// * per client IP (proxy-aware, F-1) — covering BOTH the funded and the
+///   `amount == 0` materialization paths. Without the per-IP gate, an attacker
+///   minting a fresh recipient id per request gets a fresh per-cell bucket every
+///   time (unbounded faucet drain), and the zero-amount path inserted unbounded
+///   stub cells into the ledger with NO limit at all.
+///
+/// Maximum 10000 computrons per request.
 async fn post_faucet(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     State(state): State<NodeState>,
     Json(req): Json<FaucetRequest>,
     limiter: FaucetRateLimiter,
+    ip_limiter: RateLimiter,
 ) -> Result<Json<FaucetResponse>, StatusCode> {
+    // Per-IP gate first: bounds total faucet traffic (including zero-amount
+    // cell materialization) per real client, before any state is touched.
+    if !ip_limiter.check_request(addr.ip(), &headers).await {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
     // Validate amount. A zero amount is allowed as a devnet materialization
-    // path for hosted cells; it does not consume faucet rate limit.
+    // path for hosted cells; it does not consume the per-cell faucet limit.
     if req.amount > 10_000 {
         return Ok(Json(FaucetResponse {
             success: false,
@@ -5977,9 +6048,18 @@ pub struct NodeDischargeResponse {
 /// The shared key is derived from the cipherclerk's signing key using BLAKE3 KDF
 /// with domain "dregg-discharge-gateway-v1".
 async fn post_discharge(
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     State(state): State<NodeState>,
     Json(req): Json<NodeDischargeRequest>,
+    limiter: RateLimiter,
 ) -> Result<Json<NodeDischargeResponse>, StatusCode> {
+    // Per-IP rate limit (proxy-aware, F-1): this endpoint is public and its
+    // body takes the global state-write lock, so it must not be free to flood.
+    if !limiter.check_request(addr.ip(), &headers).await {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
     use base64::Engine;
     let engine = base64::engine::general_purpose::STANDARD;
 

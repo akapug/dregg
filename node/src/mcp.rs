@@ -2057,6 +2057,22 @@ struct McpCapContext {
     issuer_pubkey: [u8; 32],
     authority_cell: dregg_cell::Cell,
     federation_id: [u8; 32],
+    /// The CURRENT attested blocklace height. Token verification binds temporal
+    /// caveats to `now = block_height` (`token_auth_request`), so the verifying
+    /// executor MUST carry the live height: a fresh executor defaults to height
+    /// 0, under which every height-bound expiry caveat trivially passes — i.e.
+    /// an expired stored cap would verify FOREVER (the R7 stored-caps-survive
+    /// failure mode, temporal leg). Snapshotting the real height closes that
+    /// leg: a `tools/call` presenting a cap is re-checked against the CURRENT
+    /// consensus height on every call.
+    ///
+    /// HONEST RESIDUAL (R7, revocation leg): there is no biscuit-revocation
+    /// registry consulted on this path — the node has no live store of revoked
+    /// biscuit ids wired in (`store.is_revoked` exists but nothing node-side
+    /// populates it for MCP-issued caps). A cap can today only die by expiry
+    /// caveat, never by explicit revocation. Until a revocation feed exists,
+    /// mint MCP caps WITH height-bound expiry caveats.
+    block_height: u64,
 }
 
 impl McpCapContext {
@@ -2069,6 +2085,7 @@ impl McpCapContext {
             issuer_pubkey,
             authority_cell: mcp_authority_cell(&node_pk, &issuer_pubkey),
             federation_id: s.federation_id,
+            block_height: crate::executor_setup::attested_block_height(&s),
         }
     }
 
@@ -2089,6 +2106,10 @@ impl McpCapContext {
         let scope_action = dregg_turn::action::symbol(scope);
         let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
         executor.set_local_federation_id(self.federation_id);
+        // Bind temporal caveats to the CURRENT consensus height (see the
+        // `block_height` field doc): without this the fresh executor verifies
+        // at height 0 and an expired cap passes forever.
+        executor.set_block_height(self.block_height);
         executor
             .verify_token_for_scope(credential, &self.authority_cell, scope_action)
             .map_err(|e| {
@@ -8822,6 +8843,61 @@ mod tests {
             err.contains("does not cover"),
             "expected an executor trust-anchor/cover rejection, got: {err}"
         );
+    }
+
+    /// R7 (temporal leg): a stored cap with a HEIGHT-BOUND expiry caveat must
+    /// die when consensus passes the bound. The gate's verifying executor used
+    /// to sit at its default `block_height = 0`, under which `time($t), $t < N`
+    /// trivially holds forever — an expired cap verified FOREVER. The fix
+    /// snapshots the CURRENT attested height into `McpCapContext` and binds the
+    /// executor to it; this test pins both directions (admits inside the
+    /// window, rejects past it).
+    #[tokio::test]
+    async fn mcp_height_expired_cap_rejected_at_current_height() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        {
+            state.write().await.mcp_cap_enforce = true;
+        }
+        // Mint a read-scoped cap under the node's REAL MCP issuer key, with an
+        // expiry caveat: valid only while the consensus height is < 5.
+        let encoded = {
+            let s = state.read().await;
+            use dregg_token::traits::AuthToken;
+            let kp = mcp_cap_issuer_keypair(&s.cclerk);
+            let node_pk = s.cclerk.public_key().0;
+            let authority_cell_id = dregg_cell::CellId::derive_raw(&node_pk, &[0u8; 32]);
+            let svc = hex_encode(authority_cell_id.as_bytes());
+            let action = hex_encode(dregg_turn::action::symbol("read").as_slice());
+            let mut code = dregg_token::dregg::authority_datalog(
+                &[],
+                &[(svc, action)],
+                &[],
+                &[],
+                &[],
+                None,
+            )
+            .unwrap();
+            code.push_str("check if time($t), $t < 5;\n");
+            dregg_token::BiscuitToken::mint(&kp, &code)
+                .unwrap()
+                .to_encoded()
+                .unwrap()
+        };
+        let args = serde_json::json!({ "_cap": { "biscuit": encoded } });
+
+        let mut ctx = McpCapContext::snapshot(&state).await;
+        let cred =
+            parse_presented_cap(&args, &ctx.issuer_pubkey).expect("cap argument parses");
+
+        // Inside the expiry window (fresh devnet, height 0 < 5): admitted.
+        ctx.block_height = 0;
+        ctx.cap_covers_tool(&cred, "dregg_get_status")
+            .expect("an unexpired cap must cover the read tool inside its window");
+
+        // Past the expiry bound (height 10 ≥ 5): the SAME stored cap is dead.
+        ctx.block_height = 10;
+        ctx.cap_covers_tool(&cred, "dregg_get_status")
+            .expect_err("a height-expired cap MUST be rejected at the current height");
     }
 
     #[tokio::test]

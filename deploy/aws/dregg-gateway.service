@@ -2,6 +2,12 @@
 Description=Dregg Gateway Node
 After=network-online.target
 Wants=network-online.target
+# Restart-storm brake: a hard crash loop (>20 restarts in 10 min, i.e. faster
+# than one every ~30s with RestartSec=5) stops the unit instead of pegging the
+# box forever. A healthy node never trips this; `systemctl reset-failed
+# dregg-gateway` re-arms it after a fix.
+StartLimitIntervalSec=600
+StartLimitBurst=20
 
 [Service]
 Type=simple
@@ -24,6 +30,12 @@ Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
 Environment=DREGG_GATEWAY=true
+# The node sits behind the host-local Caddy reverse proxy: every external
+# request arrives from loopback. Trusting loopback as a proxy makes the
+# per-client rate limiters (turn submit / faucet / passphrase / discharge) and
+# the pre-passphrase loopback gate key on the REAL client IP from
+# X-Forwarded-For (F-1) instead of collapsing into one shared 127.0.0.1 bucket.
+Environment=DREGG_TRUSTED_PROXIES=127.0.0.1,::1
 
 # Security hardening
 NoNewPrivileges=true
@@ -38,6 +50,12 @@ ProtectControlGroups=true
 # Resource limits
 LimitNOFILE=65536
 LimitNPROC=4096
+# Memory bounds for the 8 GB t4g.large: throttle/reclaim at 5 GB, hard-kill at
+# 6 GB (systemd restarts it) instead of wedging the whole box — the node shares
+# the instance with Caddy, the Discord bot, and the occasional cargo build.
+MemoryHigh=5G
+MemoryMax=6G
+TasksMax=2048
 
 [Install]
 WantedBy=multi-user.target
