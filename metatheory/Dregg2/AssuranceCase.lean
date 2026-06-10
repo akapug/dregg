@@ -55,6 +55,14 @@ post-state left uncommitted (see guarantee C).
      history while re-witnessing nothing; a tampered aggregate cannot bind.
 -/
 import Dregg2
+-- The integrity / freshness / unfoolability keystones live under the `Circuit.Argus` IR
+-- umbrella + `CommitmentCrossBind`, which the root `Dregg2` does NOT transitively import.
+-- These are the SPECIFIC keystone modules this assurance case references; they are not
+-- shared mod-files (importing them into THIS new file is swarm-safe).
+import Dregg2.Circuit.CommitmentCrossBind
+import Dregg2.Circuit.Argus.Receipt
+import Dregg2.Circuit.Argus.Aggregate
+import Dregg2.Circuit.Argus.Effects.NoteSpend
 
 namespace Dregg2.AssuranceCase
 
@@ -143,10 +151,11 @@ real multi-asset ledger, in one statement: a transfer of asset `a` from `src` to
 other asset `b` pointwise untouched. Σ=0 per asset, no cross-asset leakage. -/
 theorem conservation_guarantee
     (acc : Finset CellId) (bal : CellId → AssetId → ℤ)
-    (src dst : CellId) (a : AssetId) (amt : ℤ) (hne : src ≠ dst) :
+    (src dst : CellId) (a : AssetId) (amt : ℤ)
+    (hsrc : src ∈ acc) (hdst : dst ∈ acc) (hne : src ≠ dst) :
     (∑ c ∈ acc, recTransferBal bal src dst a amt c a) = (∑ c ∈ acc, bal c a)
       ∧ ∀ (b : AssetId), b ≠ a → ∀ c, recTransferBal bal src dst a amt c b = bal c b :=
-  ⟨recTransferBal_sum_conserve_moved acc bal src dst a amt hne,
+  ⟨recTransferBal_sum_conserve_moved acc bal src dst a amt hsrc hdst hne,
    fun b hb c => recTransferBal_untouched bal src dst a b amt hb c⟩
 
 #assert_axioms conservation_guarantee
