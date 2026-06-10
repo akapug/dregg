@@ -475,7 +475,7 @@ private theorem unspentValueIn_spend (notes : List NoteRecord) (nulls : List Nat
       obtain ⟨hhead, htail⟩ := List.pairwise_cons.mp hdist
       by_cases hm : (m.nf == nf) = true
       · -- the head IS the spent note.
-        rw [List.find?_cons_of_pos hm] at hfind
+        rw [List.find?_cons_of_pos (p := fun x => x.nf == nf) (a := m) (l := rest) hm] at hfind
         injection hfind with hmn
         rw [← hmn]
         have hmnf : m.nf = nf := by simpa using hm
@@ -493,7 +493,7 @@ private theorem unspentValueIn_spend (notes : List NoteRecord) (nulls : List Nat
         · rw [if_neg (fun hp => hb hp.1), if_neg hb]
           ring
       · -- the head is NOT the spent note: its membership is identical on both sides; recurse.
-        rw [List.find?_cons_of_neg hm] at hfind
+        rw [List.find?_cons_of_neg (p := fun x => x.nf == nf) (a := m) (l := rest) hm] at hfind
         have hmnf : m.nf ≠ nf := by simpa using hm
         have hiff : (m.asset = b ∧ m.nf ∉ nf :: nulls) ↔ (m.asset = b ∧ m.nf ∉ nulls) := by
           constructor
