@@ -32,10 +32,12 @@ DISCIPLINE: keystones `#assert_axioms`'d kernel-clean. Non-vacuity:
 -/
 import Dregg2.Resource
 import Dregg2.Authority.Positional
+import Dregg2.Tactics
 import Metatheory.Dynamics.Substance
 import Metatheory.Dynamics.VerbSignature
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Lattice.Basic
+import Mathlib.Data.Finset.Lattice.Lemmas
 import Mathlib.Order.Basic
 
 namespace Metatheory.Dynamics
@@ -50,8 +52,13 @@ universe u
 Production GROWS the authoritative element of an `Auth M` camera by an *authorized*
 increment. "Authorized" = the increment is connectivity already covered by the held
 authority — Miller's *"only connectivity begets connectivity."* We state it over an
-arbitrary `AddCommMonoid M` with its extension order `fits` (the monoid's own `≼`), so the
-law is candidate-independent (any rights/knowledge monoid instantiates it). -/
+arbitrary **idempotent** `AddCommMonoid M` (`hidem : ∀ x, x + x = x`) — the shape of every
+*knowledge/rights* monoid (∪: holding the same right twice is holding it once). Idempotency
+is exactly what distinguishes the GENERATIVE substances (authority, evidence — where
+production grows the graph and re-confirming knowledge is idempotent) from the LINEAR
+substance (value — where `+` counts and re-adding doubles). So the law is
+candidate-independent over knowledge monoids, and correctly does NOT apply to the linear
+value substance (which uses conservation/exact-swap, not production — `Substance.value_no_free_copy`). -/
 
 variable {M : Type u} [AddCommMonoid M]
 
@@ -66,21 +73,44 @@ held connectivity* — the non-amplification discipline, not a monotone descent.
 def AuthorizedProduction (held produced : M) : Prop :=
   fits produced held
 
-/-- **`production_step_fpu_genesis` — the production law at the genesis frame, PROVED,
-kernel-clean.** The cleanest, hypothesis-free statement of authorized production as an
-`Fpu`: producing a fragment `produced` that EXACTLY exhausts the held authority `held =
-produced + g` against the complementary held frame `g` is frame-preserving. This is the
-non-forgeable production step in its canonical form — the held authority is fully and
-disjointly distributed (`produced ⊕ g = held`), no authority appears ex nihilo. -/
-theorem production_step_fpu_genesis (produced g : M) :
-    Fpu (R := Auth M) (.mk (some (produced + g)) 0) (.mk (some (produced + g)) produced) := by
+/-- **`production_step_fpu` — authorized production is a frame-preserving update over a
+knowledge (idempotent) monoid, PROVED, kernel-clean.** Producing the authorized fragment
+`produced` (`AuthorizedProduction held produced`, i.e. `produced ≼ held`) under the fixed
+held bound `● held` — the fragment moving `0 → produced` — is `Fpu` in `Auth M` whenever
+`M` is idempotent. The generative act preserves every third party's holding: *authority
+grows, but only by authorized, non-forgeable construction from held connectivity.*
+
+The idempotency hypothesis is what makes it sound and is exactly the knowledge-monoid
+shape: re-confirming a held right/fact is a no-op (∪). For a competing frame `g'` already
+covered by `held`, the produced fragment plus the frame is STILL covered, because
+`produced ≼ held` and idempotency collapse the overlap. -/
+theorem production_step_fpu (hidem : ∀ x : M, x + x = x) (held produced : M)
+    (h : AuthorizedProduction held produced) :
+    Fpu (R := Auth M) (.mk (some held) 0) (.mk (some held) produced) := by
   apply conservation_is_fpu
   intro g' hg'
   rw [zero_add] at hg'
-  -- hg' : fits g' (produced + g); show fits (produced + g') (produced + g).
-  -- We use that the canonical compatible frame is `g`, giving the exact swap.
+  -- h : held = produced + d ; hg' : held = g' + c. Show fits (produced + g') held.
+  obtain ⟨d, hd⟩ := h
   obtain ⟨c, hc⟩ := hg'
-  exact ⟨c, by rw [hc]; ac_rfl⟩
+  -- Absorption: anything ≼ held, unioned onto held, gives held (idempotent monoid).
+  have hpa : produced + held = held := by
+    conv_lhs => rw [hd]; rw [← add_assoc, hidem, ← hd]
+  have hga : g' + held = held := by
+    conv_lhs => rw [hc]; rw [← add_assoc, hidem, ← hc]
+  refine ⟨held, ?_⟩
+  -- held = (produced + g') + held
+  rw [add_assoc, hga, hpa]
+
+/-- **`production_step_fpu_genesis` — the production law at the genesis frame, PROVED,
+kernel-clean.** The canonical hypothesis-light form over a knowledge monoid: producing a
+fragment `produced` covered by the held authority `produced + g` (the complementary held
+frame `g`) is frame-preserving. The held authority is distributed (`produced` plus its
+complement `g`), no authority appears ex nihilo. A corollary of `production_step_fpu` at
+`held := produced + g` (where `produced ≼ produced + g` by `genesis_production_authorized`). -/
+theorem production_step_fpu_genesis (hidem : ∀ x : M, x + x = x) (produced g : M) :
+    Fpu (R := Auth M) (.mk (some (produced + g)) 0) (.mk (some (produced + g)) produced) :=
+  production_step_fpu hidem (produced + g) produced ⟨g, rfl⟩
 
 /-- **The genesis production IS authorized** — the produced fragment fits within the held
 authority (`produced ≼ produced + g`): no right appears ex nihilo. This connects
@@ -90,6 +120,7 @@ theorem genesis_production_authorized (produced g : M) :
     AuthorizedProduction (produced + g) produced :=
   ⟨g, rfl⟩
 
+#assert_axioms production_step_fpu
 #assert_axioms production_step_fpu_genesis
 #assert_axioms genesis_production_authorized
 
@@ -132,6 +163,13 @@ instance : AddCommMonoid (USet α) where
 
 theorem set_inj {a b : USet α} : a = b ↔ a.set = b.set :=
   ⟨congrArg USet.set, fun h => by cases a; cases b; simpa using h⟩
+
+/-- **`USet` is idempotent**: `x + x = x` (∪ is idempotent — holding a right twice is
+holding it once). This is the knowledge-monoid shape `production_step_fpu` requires. -/
+theorem add_idem (x : USet α) : x + x = x := by
+  refine USet.set_inj.mpr ?_
+  show x.set ∪ x.set = x.set
+  exact Finset.union_self x.set
 
 /-- The monoid extension order on `USet` is LITERALLY `⊆` — the rights/knowledge inclusion
 (mirrored from `FpuProbe.USet.fits_iff`). -/
@@ -211,7 +249,7 @@ of `R`). This is `Metatheory.no_forge_step` cashed at the substance/camera tier.
 theorem rights_production_no_forge (produced g : USet Rights) :
     Fpu (R := Auth (USet Rights))
       (.mk (some (produced + g)) 0) (.mk (some (produced + g)) produced) :=
-  production_step_fpu_genesis produced g
+  production_step_fpu_genesis USet.add_idem produced g
 
 #assert_axioms rights_production_no_forge
 

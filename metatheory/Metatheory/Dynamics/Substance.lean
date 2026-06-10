@@ -34,6 +34,7 @@ non-vacuity guard `authority_evidence_share_camera` exhibits the unification *as
 theorem*, and `value_no_free_copy` shows the value camera genuinely bites.
 -/
 import Dregg2.Resource
+import Dregg2.Tactics
 import Mathlib.Algebra.Group.Defs
 
 namespace Metatheory.Dynamics

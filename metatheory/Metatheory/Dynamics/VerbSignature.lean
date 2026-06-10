@@ -34,6 +34,7 @@ preserve product validity — the meta-law is not trivially true.
 -/
 import Dregg2.Resource
 import Dregg2.Laws
+import Dregg2.Tactics
 import Metatheory.Dynamics.Substance
 
 namespace Metatheory.Dynamics
@@ -91,7 +92,7 @@ variable [ResourceAlgebra V] [ResourceAlgebra A] [ResourceAlgebra E] [ResourceAl
 The verb is **valid at a state** when (a) the actor supplied a witness that `Admits` and
 (b) the footprint update is `Fpu`. The kernel meta-law (`§3`) is that these two together
 preserve product validity. -/
-structure Verb (P : Type u) (V : Type u') (A : Type v) (E : Type w) (S : Type x)
+structure Verb (P : Type u) (V : Type u) (A : Type v) (E : Type w) (S : Type x)
     [ResourceAlgebra V] [ResourceAlgebra A] [ResourceAlgebra E] [ResourceAlgebra S] where
   /-- The admission demand — the epistemic gate (the `Pred` the actor must discharge). -/
   admission : Admission P
