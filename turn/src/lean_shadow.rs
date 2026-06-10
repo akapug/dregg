@@ -72,13 +72,24 @@ pub struct ShadowHostCtx {
     /// The Stingray silo budget slice the fee must fit (`self.budget_gate.remaining()`). The
     /// verified `admissible` Budget leg rejects `fee > budget`.
     pub budget: u64,
+    /// The executor's `max_introduction_lifetime` (`self.max_introduction_lifetime`). An
+    /// `Introduce` stamps the granted cap's `expires_at = block_height + max_introduction_lifetime`;
+    /// the cap-fidelity reconstitution (`lean_apply::collect_cap_ops`) needs the SAME value to
+    /// rebuild the introduced cap's leaf byte-exactly. Defaults to the executor default (1000).
+    pub intro_lifetime: u64,
 }
 
 impl ShadowHostCtx {
     /// The DIAGNOSTIC host context — never spuriously rejects. The PRODUCTION executor MUST
     /// override every field from its own state (that override is what makes bug-1 real).
     pub fn diag() -> Self {
-        ShadowHostCtx { block_height: 0, frozen: vec![], stored_head: None, budget: 1_000_000_000 }
+        ShadowHostCtx {
+            block_height: 0,
+            frozen: vec![],
+            stored_head: None,
+            budget: 1_000_000_000,
+            intro_lifetime: 1000,
+        }
     }
 }
 
@@ -361,6 +372,7 @@ pub fn producer_mappable_effects() -> &'static [&'static str] {
         "QueueAllocate",
         "GrantCapability",
         "AttenuateCapability",
+        "Introduce",
         // §SIDE-TABLE families: the off-cell-merkle-root holding-store effects. Create debits a
         // `bal` (reconstitutes) + parks an off-root record; the cell commitment is otherwise
         // untouched, so these are root-AGREEING (see `producer_root_agreeing_effects`). The settle
@@ -395,6 +407,22 @@ pub fn producer_root_agreeing_effects() -> &'static [&'static str] {
         "Burn",
         "RevokeCapability",
         "QueueAllocate",
+        // CAP-FIDELITY ROOT-GAP CLOSE (the cap-reshape lever). GrantCapability / Introduce /
+        // AttenuateCapability are now root-AGREEING: the verified kernel DECIDES the commit bit (the
+        // delegator/introducer must hold the edge; the attenuation must be a monotone narrowing —
+        // the non-amplification / production-authority gate), and `lean_apply::apply_cap_ops` replays
+        // the turn's deterministic, turn-specified cap mutation onto the EXACT pre-state c-list
+        // (`grant_ref` / `grant_with_expiry` / `attenuate_in_place`, mirroring `executor::apply`
+        // byte-for-byte). So the reconstituted `cap_root` (= `compute_canonical_capability_root` over
+        // the rebuilt 7-field leaves) EQUALS the Rust producer's. The leaf-field VALUES are not
+        // kernel state — they come from the turn — so carrying them on the wire is unnecessary; the
+        // kernel's verified authority decision is the load-bearing leg, and the commit-gated replay
+        // is the faithful, deterministic install. Pinned by the `lean_state_producer_capfidelity`
+        // differential (Lean root == Rust differential == canonical cap-root; a forged/over-amplified
+        // grant is REJECTED so the c-list does not move).
+        "GrantCapability",
+        "Introduce",
+        "AttenuateCapability",
         // CellUnseal (Sealed→Live): the verified `cellUnsealChainA` flips the lifecycle discriminant
         // back to `lcLive` (0), and `CellLifecycle::Live` is the ONE lifecycle state with NO payload —
         // so the wire (which carries the discriminant alone) reconstitutes it BYTE-EXACTLY. The
@@ -461,13 +489,11 @@ pub fn producer_root_gap_effects() -> &'static [&'static str] {
         // `death_certificate_hash`/`destroyed_at` payload the wire `lifecycle` table (a bare
         // discriminant) does not carry, so the reconstitution cannot reproduce the commitment bytes.
         "CellDestroy",
-        "GrantCapability",
         "RevokeDelegation",
-        // AttenuateCapability narrows a held `CapabilityRef`'s `AuthRequired`/expiry in Rust (→
-        // `cap_root` changes); the wire `caps` model carries only `Cap::Node` edges and Lean's
-        // `attenuate` is a no-op on a `node` cap, so the reconstruction keeps the edge unchanged →
-        // `cap_root` diverges. Same cap-fidelity gap class as GrantCapability.
-        "AttenuateCapability",
+        // NOTE: GrantCapability / Introduce / AttenuateCapability are NO LONGER cap-fidelity
+        // root-gaps — they are now root-AGREEING (see `producer_root_agreeing_effects`). The
+        // commit-gated turn-driven replay (`lean_apply::apply_cap_ops`) reconstructs the EXACT
+        // post-state c-list (full 7-field leaf), so the reconstituted `cap_root` equals Rust's.
         // §SIDE-TABLE settle effects: the producer RUNS but the COMMIT-BIT diverges. Rust gates
         // `ReleaseEscrow` on a satisfied condition (ZK proof / all-signers / predicate) and
         // `RefundEscrow` on a PAST timeout (`block_height > timeout_height`); the verified
@@ -790,6 +816,19 @@ fn effect_is_mappable(eff: &Effect, id_map: &HashMap<CellId, u64>) -> bool {
         // GrantCapability: dregg1 `del`. The granter `from`, grantee `to`, and the cap target
         // must all be in the id map (the wire `del` carries delegator + recipient + target Nats).
         Effect::GrantCapability { from, to, cap } => has(from) && has(to) && has(&cap.target),
+        // Introduce: dregg1 three-party introduction. The wire `introduce` arm carries
+        // (introducer, recipient, target) Nats; all three must be in the id map. The verified
+        // `introduceA` routes to `recCDelegate introducer recipient target`, gated on the
+        // introducer holding an edge to `target` (the production-authority leg). The granted leaf
+        // (target, permissions, host-derived expiry) is reconstructed EXACTLY by the commit-gated
+        // turn-driven replay (`lean_apply::apply_cap_ops`), so the cap_root agrees. RESIDUAL: the
+        // verified gate is the edge-existence leg only — Rust ALSO requires introducer↦recipient
+        // access + monotone-attenuation + target consent. For a turn where those diverge the
+        // commit bits differ and the differential's `CoveredDivergence` keeps the Rust state (safe,
+        // surfaced, never a silent commit).
+        Effect::Introduce { introducer, recipient, target, .. } => {
+            has(introducer) && has(recipient) && has(target)
+        }
         // ─── §SIDE-TABLE families (the holding-store batch — MUST mirror effect_to_wire) ────────
         // ESCROW (root-AGREEING). `apply_create_escrow` debits the creator's `balance` and parks the
         // value in the off-cell-merkle-root `escrows` store; the verified `createEscrowKAsset` does
@@ -1161,6 +1200,16 @@ fn effect_to_wire(
             delegator: id(from)?,
             recipient: id(to)?,
             t: id(&cap.target)?,
+        },
+        // Introduce: dregg1 three-party introduction. `.introduce introducer recipient target`
+        // routes to `recCDelegate introducer recipient target` (the SAME generative delegation as
+        // `del`), gated on the introducer holding an edge to `target`. The granted cap's leaf
+        // (target + permissions + host-derived expiry) is not kernel state — it is reconstructed
+        // EXACTLY by `lean_apply::apply_cap_ops` (`grant_with_expiry`), so cap_root agrees.
+        Effect::Introduce { introducer, recipient, target, .. } => WireAction::Introduce {
+            introducer: id(introducer)?,
+            recipient: id(recipient)?,
+            target: id(target)?,
         },
         // ─── §SIDE-TABLE families (the holding-store batch) ────────────────────────────────
         //

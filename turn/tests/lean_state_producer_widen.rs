@@ -446,17 +446,17 @@ fn cell_unseal_round_trips() {
 }
 
 #[test]
-fn grant_capability_is_a_cap_fidelity_swap_gap() {
+fn grant_capability_round_trips_cap_fidelity_closed() {
     if skip_no_lean() {
         return;
     }
-    // A self-GrantCapability inserts into the grantee's c-list a FULL `CapabilityRef`
-    // (target, fresh slot, the granted permissions, breadstuff, ...). The wire `caps` model only
-    // carries `Cap::Node(target)` (no slot/perms/breadstuff/facet detail), so the reconstituted
-    // c-list — rebuilt as a bare `node` edge at slot 0 with `AuthRequired::None` — hashes to a
-    // DIFFERENT `cap_root` than the Rust grant (which used a non-`None` permission). The divergence
-    // surfaces as either a cap_root or a root divergence: the wire cap model is lossier than the
-    // cell commitment. We ASSERT the divergence so the gap is pinned.
+    // CAP-FIDELITY ROOT-GAP CLOSE. A self-GrantCapability inserts into the grantee's c-list a FULL
+    // `CapabilityRef` (target, fresh slot, the granted permissions, breadstuff, ...). The verified
+    // kernel DECIDES the commit (the delegator must hold an edge to `target` — here a held
+    // self-cap), and the commit-gated turn-driven replay (`lean_apply::apply_cap_ops`) reconstructs
+    // the EXACT leaf via `grant_ref`, so the reconstituted `cap_root` == the Rust producer's. We
+    // grant a NON-None permission so a lossy bare-`node` reconstitution would HAVE diverged — the
+    // round-trip is therefore a genuine, non-vacuous test that the full leaf is reconstructed.
     let mut a = make_open_cell(1, 100);
     grant_self_cap(&mut a); // the delegator must HOLD an edge for the verified `recCDelegate` gate.
     let a_id = a.id();
@@ -466,41 +466,186 @@ fn grant_capability_is_a_cap_fidelity_swap_gap() {
     pre.insert_cell(a).unwrap();
     pre.insert_cell(b).unwrap();
 
-    // Grant B a capability over A, with a NON-None permission so the Rust cap_root cannot coincide
-    // with the wire's bare-`node` (`AuthRequired::None`) reconstitution.
     let cap = CapabilityRef {
         target: a_id,
         slot: 0,
         permissions: AuthRequired::Signature,
+        breadstuff: Some([7u8; 32]),
+        expires_at: None,
+        allowed_effects: None,
+        stored_epoch: None,
+    };
+    let turn = single_effect_turn(
+        a_id,
+        a_id,
+        0,
+        Effect::GrantCapability { from: a_id, to: b_id, cap: cap.clone() },
+    );
+
+    // Confirm Rust granted the FULL (non-None, breadstuff'd) cap to B (so the round-trip is
+    // genuinely about cap fidelity, not a vacuous None-vs-None coincidence).
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = pre.clone();
+    assert!(executor.execute(&turn, &mut rust_ledger).is_committed());
+    let b_caps = &rust_ledger.get(&b_id).unwrap().capabilities;
+    assert!(
+        b_caps.iter().any(|c| c.target == a_id
+            && c.permissions == AuthRequired::Signature
+            && c.breadstuff == Some([7u8; 32])),
+        "Rust must have granted B a Signature-perm, breadstuff'd cap over A"
+    );
+
+    // THE CLOSE: the Lean producer's reconstituted cap_root == the Rust differential cap_root ==
+    // the canonical cap-root over the full 7-field leaf. `diff` asserts cap_root AND `.root()`.
+    diff(pre, turn, &[a_id, b_id])
+        .expect("GrantCapability must round-trip (cap-fidelity root-gap closed)");
+}
+
+#[test]
+fn grant_capability_amplification_does_not_install_divergent_state() {
+    if skip_no_lean() {
+        return;
+    }
+    // NON-VACUOUS TOOTH: a CROSS-CELL grant where the delegator does NOT hold an edge to the
+    // target is REJECTED by both the verified gate (`recCDelegate` requires the edge) and Rust
+    // (`apply_grant_capability`'s `lookup_by_target`). Neither c-list moves — the commit-gated
+    // replay does not fire (committed=false) — so the reconstituted ledger equals the pre-state and
+    // agrees with the Rust rollback. A forged grant cannot fabricate a cap_root.
+    let a = make_open_cell(1, 100); // A holds NO edge to C.
+    let a_id = a.id();
+    let b = make_open_cell(2, 5);
+    let b_id = b.id();
+    let c = make_open_cell(3, 5);
+    let c_id = c.id();
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+    pre.insert_cell(b).unwrap();
+    pre.insert_cell(c).unwrap();
+
+    let cap = CapabilityRef {
+        target: c_id, // A does not hold a cap to C — the grant must be rejected.
+        slot: 0,
+        permissions: AuthRequired::None,
         breadstuff: None,
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
     };
-    let turn =
-        single_effect_turn(a_id, a_id, 0, Effect::GrantCapability { from: a_id, to: b_id, cap });
+    let turn = single_effect_turn(a_id, a_id, 0, Effect::GrantCapability { from: a_id, to: b_id, cap });
 
-    // Confirm Rust granted a NON-None cap to B (so the gap is genuinely about cap fidelity).
+    // Rust rejects (A holds no cap to C). The Lean producer reconstitutes the unchanged pre-state.
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = pre.clone();
+    let committed = executor.execute(&turn, &mut rust_ledger).is_committed();
+    assert!(!committed, "cross-cell grant without a held edge must be REJECTED by Rust");
+
+    let host = ShadowHostCtx::diag();
+    let (mut lean_ledger, lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert!(!lean_committed, "the verified gate must also REJECT the forged grant");
+    // Both rolled back: the reconstituted ledger == the Rust (rolled-back) ledger, cap_root intact.
+    ledgers_agree(&mut rust_ledger, &mut lean_ledger, &[a_id, b_id, c_id])
+        .expect("a rejected grant leaves all c-lists at their pre-state (no fabricated cap_root)");
+}
+
+#[test]
+fn attenuate_capability_round_trips_cap_fidelity_closed() {
+    if skip_no_lean() {
+        return;
+    }
+    // CAP-FIDELITY ROOT-GAP CLOSE for AttenuateCapability. A narrows its OWN held slot in place
+    // (permissions ⊤ → Signature). The verified kernel decides the commit; the commit-gated replay
+    // mirrors `attenuate_in_place` exactly, so the narrowed leaf's `cap_root` agrees with Rust.
+    let mut a = make_open_cell(1, 100);
+    let a_id = a.id();
+    let b = make_open_cell(2, 5);
+    let b_id = b.id();
+    // A holds a full-authority (None) cap over B at slot 0; the attenuation narrows it.
+    a.capabilities.grant(b_id, AuthRequired::None);
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+    pre.insert_cell(b).unwrap();
+
+    let turn = single_effect_turn(
+        a_id,
+        a_id,
+        0,
+        Effect::AttenuateCapability {
+            cell: a_id,
+            slot: 0,
+            narrower_permissions: AuthRequired::Signature,
+            narrower_effects: None,
+            narrower_expiry: Some(500),
+        },
+    );
+
+    // Confirm Rust narrowed slot 0 (non-vacuous: the leaf actually moved).
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = pre.clone();
+    assert!(executor.execute(&turn, &mut rust_ledger).is_committed());
+    let a_cap = rust_ledger
+        .get(&a_id)
+        .unwrap()
+        .capabilities
+        .iter()
+        .find(|c| c.slot == 0)
+        .cloned()
+        .expect("slot 0 present");
+    assert_eq!(a_cap.permissions, AuthRequired::Signature);
+    assert_eq!(a_cap.expires_at, Some(500));
+
+    diff(pre, turn, &[a_id, b_id])
+        .expect("AttenuateCapability must round-trip (cap-fidelity root-gap closed)");
+}
+
+#[test]
+fn introduce_round_trips_cap_fidelity_closed() {
+    if skip_no_lean() {
+        return;
+    }
+    // CAP-FIDELITY ROOT-GAP CLOSE for Introduce. The introducer A holds an edge to the target T
+    // (so the verified `recCDelegate` gate commits) AND access to the recipient R (Rust's extra
+    // legs). The introduced cap lands in R's c-list with `expires_at = block_height +
+    // max_introduction_lifetime`; the commit-gated replay (`grant_with_expiry`) stamps the SAME
+    // host-derived expiry, so cap_root agrees.
+    let mut a = make_open_cell(1, 100);
+    let a_id = a.id();
+    let r = make_open_cell(2, 5);
+    let r_id = r.id();
+    let t = make_open_cell(3, 5);
+    let t_id = t.id();
+    // A holds edges to BOTH R (recipient access) and T (target authority).
+    a.capabilities.grant(r_id, AuthRequired::None);
+    a.capabilities.grant(t_id, AuthRequired::None);
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+    pre.insert_cell(r).unwrap();
+    pre.insert_cell(t).unwrap();
+
+    let turn = single_effect_turn(
+        a_id,
+        a_id,
+        0,
+        Effect::Introduce {
+            introducer: a_id,
+            recipient: r_id,
+            target: t_id,
+            permissions: AuthRequired::None,
+        },
+    );
+
+    // Rust commits and installs a cap over T into R's c-list with a host-derived expiry.
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut rust_ledger = pre.clone();
     if executor.execute(&turn, &mut rust_ledger).is_committed() {
-        let b_caps = &rust_ledger.get(&b_id).unwrap().capabilities;
+        let r_caps = &rust_ledger.get(&r_id).unwrap().capabilities;
         assert!(
-            b_caps.iter().any(|c| c.target == a_id && c.permissions == AuthRequired::Signature),
-            "Rust must have granted B a Signature-perm cap over A"
+            r_caps.iter().any(|c| c.target == t_id && c.expires_at.is_some()),
+            "Rust must have introduced a (host-expiry) cap over T into R"
         );
-    }
-
-    match diff(pre, turn, &[a_id, b_id]) {
-        Ok(()) => panic!(
-            "GrantCapability unexpectedly round-tripped — the cap-fidelity swap-gap may have \
-             closed (the wire caps model would now carry per-cap permissions/slot)"
-        ),
-        Err(why) => assert!(
-            why.contains("cap_root divergence")
-                || why.contains("ROOT divergence")
-                || why.contains("commit-bit divergence"),
-            "GrantCapability swap-gap should be a cap_root/root/commit-bit divergence, got: {why}"
-        ),
+        // Only assert the round-trip when Rust ALSO commits (the verified gate is the
+        // edge-existence leg; this fixture satisfies Rust's stricter legs too).
+        diff(pre, turn, &[a_id, r_id, t_id])
+            .expect("Introduce must round-trip (cap-fidelity root-gap closed)");
     }
 }
