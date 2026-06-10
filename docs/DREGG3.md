@@ -300,3 +300,90 @@ is designed to be able to FAIL.
 6. **Identity**: "dregg2 in shape" vs the dregg3 name on a clean commitment
    epoch. (The ship gets rebuilt plank by plank either way; the question is
    what we paint on the hull.)
+
+---
+
+## §8. The guard-algebra uplift (what FieldLteOther taught us)
+
+The queue probe (W2) returned PARTIAL on one point: `head − tail ≤ capacity` is a
+relation between TWO slots, and the live caveat evaluator
+(`SlotCaveat.eval : … → CellId → Int → Int → Bool`) sees only ONE slot's
+old/new. FieldLteOther is not a missing atom — it is a **symptom**. The disease,
+and the uplift:
+
+**The diagnosis (categorical).** Cell state is a product `∏ᵢ slotᵢ`. Today's
+guard language offers only predicates that factor through a single projection
+`πᵢ` — the axis-aligned rectangles. `head ≤ tail + cap` is a *diagonal* (a
+half-plane), it factors through no single projection. So the guard language is
+a tiny sublattice — the projection-generated one — of the natural object: the
+**full algebra of decidable relations on the state**. We hand app authors graph
+paper and let them draw only horizontal and vertical lines. ⚠ The circuit was
+NEVER the bottleneck — the EffectVM constrains arbitrary columns together, so a
+relational guard is just more polynomial constraints on the same row, free
+structurally. The per-slot narrowing was an artifact of the *evaluator
+interface* that ossified into ontology — the same fragment-mistaken-for-algebra
+disease the whole census found, in miniature.
+
+**Two axes of impoverishment:**
+
+- **Axis 1 — relational arity (spatial).** Per-slot → full relational over the
+  post-state. The fix is not "add FieldLteOther"; it is **offer the closure** —
+  a record-level predicate combinator (`Pred` reading the whole post-record),
+  so `head≤tail+cap`, `Σ slots = const`, `a∧b→c`, any decidable relation, all
+  simply ARE `Pred`, no new atom per shape. The "ONE Pred" thesis sharpened:
+  Pred = the internal predicate logic of the state object, bounded only by
+  decidability + circuit-expressibility (which it already has).
+
+- **Axis 2 — causality (temporal) — the "causal braid."** Every guard today
+  sees `(old, new)` — ONE transition, blind to history. It cannot say:
+  commit-reveal ("reveal admissible only if causally-after its commit"), causal
+  handoff ("B's spend only after A's grant" — a two-strand braid),
+  rate-over-trace (the honest version of today's side-table `RateLimit`),
+  monotone-over-forks (the CRDT/I-confluence shape), or the braid proper (a
+  JointTurn whose N cells must interleave in a specified partial order). We have
+  every piece, stratified WRONG: `Time/Causal.lean` has `precedes`,
+  `Time/Frame.lean` already models a temporal predicate as a
+  `WitnessedPredicate`, `Proof/{Temporal,CTL,MuCalculus,Fairness}` are full
+  modal logics, the receipt chain IS the trace, the witness bundle IS its
+  content. The gap is purely that those modalities live in the PROOF layer
+  (things we prove ABOUT the system) not the OBJECT layer (things an author can
+  INSTALL). A causal guard is structurally a `witnessed(vk)` atom whose verifier
+  is "this event causally precedes that one in the lace."
+
+**The uplift (one sentence — a candidate load-bearing statement).** The cell is
+a coalgebra unfolding over the causal poset (a presheaf on happened-before —
+EpistemicConsensus's simplicial model); the guard language should be the
+**internal predicate logic of that** — closed under the relational connectives
+(spatial) and the causal/temporal modalities (sheaf-logic "◇ in the past"). And
+the gem, not the feature: **the language you can ENFORCE should equal the
+language you can PROVE.** Today `enforce ⊊ prove` — a wall between "what you can
+install on a cell" and "what you can state about the system." Collapsing that
+wall IS maximal programmability — the same move as "a witnessed guard and a
+circuit obligation are one mechanism," one notch further: *an installable guard
+and a provable property are the same predicate.* (Comonadic dress, per the
+dregg4 note: the guard's domain is the comonadic context — a `Store`/`Traced`
+comonad indexed by how far into the causal past it observes; per-slot caveat =
+the depth-0, single-coordinate context.)
+
+**The duality (and the honest tax).** Programmability and minimality are dual:
+the guard language should be as BIG as the circuit can express; the dependency
+surface as SMALL as the use touches (the dregg-auth wedge slimming is the same
+principle in reverse). The seeming-unification taxes: (a) **cost** — "any
+decidable relation" is not free; each compiles to constraints and a causal
+guard needs the relevant trace slice in the witness, so the offered closure is
+the *efficiently-circuit-expressible* fragment, with `witnessed(vk)` as the
+escape hatch for the rest. (b) **the confluence dual — load-bearing, and an
+asset** — a history-dependent guard may break I-confluence (two concurrent
+turns reading the past can't always merge coordination-free). So the causal
+guard language and the I-confluence lattice (the THIRD logic of
+CONSTRUCTIVE-KNOWLEDGE §4, landing here on its own terms) are two sides of one
+coin: **a confluence-stable guard runs coordination-free; one that isn't forces
+ordering (consensus).** That is not a bug — it is the system telling the author
+the true cost of the braid they asked for; the lattice CLASSIFIES which braids
+are cheap.
+
+**The probe that must tax it (before any commitment):** does the
+relational+causal closure compile to BOUNDED circuit obligations, and exactly
+which fragment stays I-confluent? — the falsifiable question whose answer is the
+real shape of the maximally-programmable guard language. FieldLteOther is the
+first crack in the wall; the uplift is to take the wall down.
