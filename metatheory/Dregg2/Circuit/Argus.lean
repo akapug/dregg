@@ -2,6 +2,7 @@
 -- the nonce reconciliation, the policy enforcement.
 import Dregg2.Circuit.Argus.Stmt
 import Dregg2.Circuit.Argus.Compile
+import Dregg2.Circuit.Argus.CompileFold
 import Dregg2.Circuit.Argus.Guard
 import Dregg2.Circuit.Argus.Turn
 import Dregg2.Circuit.Argus.Nonce
