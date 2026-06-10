@@ -9,10 +9,19 @@ authors = { workspace = true }
 license = { workspace = true }
 
 [features]
-biscuit = ["biscuit-auth"]
-macaroon = ["dep:dregg-macaroon", "dregg-macaroon/crypto"]
+# The biscuit offline-verify path. Pulls `base64` (its `eb2_` wire codec) but
+# NONE of the heavy circuit/datalog stack — this is the lightweight wedge
+# `dregg-auth` builds on. Crucially it does NOT drag in `dregg-commit`
+# (→ `dregg-circuit`/plonky3), which lives behind `macaroon` only.
+biscuit = ["dep:biscuit-auth", "dep:base64"]
+# The macaroon / Datalog-commitment path. This is the ONLY edge that pulls
+# `dregg-commit` (and transitively `dregg-circuit`/plonky3), via the
+# `factset`/`datalog_verify` modules which are themselves `macaroon`-gated.
+macaroon = ["dep:dregg-macaroon", "dregg-macaroon/crypto", "dep:dregg-commit"]
 default = ["biscuit", "macaroon", "rand-deps"]
-rand-deps = ["dep:getrandom", "dep:rand", "dep:scalable_cuckoo_filter", "dep:base64", "dep:ed25519-dalek"]
+# Revocation registry + RNG. base64 moved OUT of here (it belongs to `biscuit`'s
+# wire codec) so the biscuit encode/decode path no longer requires `rand-deps`.
+rand-deps = ["dep:getrandom", "dep:rand", "dep:scalable_cuckoo_filter", "dep:ed25519-dalek"]
 zkvm = ["dep:dregg-macaroon", "dregg-macaroon/zkvm"]
 
 [dependencies]
@@ -22,7 +31,7 @@ blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"], optional = true }
 dregg-macaroon = { workspace = true, optional = true }
 dregg-trace = { path = "../trace" }
-dregg-commit = { path = "../commit" }
+dregg-commit = { path = "../commit", optional = true }
 getrandom = { workspace = true, optional = true }
 globset = { workspace = true }
 rand = { version = "0.9", optional = true }

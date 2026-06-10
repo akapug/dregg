@@ -11,18 +11,15 @@ description = "Scoped, time-boxed, delegatable, revocable, OFFLINE-verifiable ag
 
 # The adoption-quotient commitment (DREGG3-MARATHON W4): L1 is STANDALONE.
 # Offline verification, no node/turn/circuit. The dependency set is deliberately
-# TIGHT — `dregg-token` is brought in WITHOUT macaroon HMAC and WITHOUT the
-# default node-adjacent surface. `biscuit-auth` is pulled directly only for the
-# key types (KeyPair/PrivateKey/PublicKey/Algorithm) the offline path needs.
-#
-# NOTE: the token crate's biscuit backend uses base64 for its `eb2_` wire
-# encoding, but base64 is declared under token's `rand-deps` feature — so the
-# biscuit `to_encoded`/`from_encoded` path only links with `rand-deps` enabled.
-# We enable {biscuit, rand-deps} and explicitly NOT `macaroon`. `rand-deps` is a
-# compile-surface dependency here (it also carries a revocation registry L1 does
-# not use); the macaroon HMAC stack and the full default feature set stay out.
+# TIGHT — `dregg-token` is brought in with JUST the `biscuit` feature: no
+# macaroon HMAC stack, no `rand-deps` revocation registry, and crucially NO
+# `dregg-commit` (which would drag in `dregg-circuit`/plonky3). The biscuit
+# `eb2_` wire codec's `base64` dep now lives under `biscuit` itself, so the
+# `to_encoded`/`from_encoded` path links without any heavy feature. The result:
+# `cargo tree -i dregg-circuit -p dregg-auth` shows NO path — the wedge is
+# genuinely lightweight (key types + Datalog offline verify, nothing else).
 [dependencies]
-dregg-token = { path = "../token", default-features = false, features = ["biscuit", "rand-deps"] }
+dregg-token = { path = "../token", default-features = false, features = ["biscuit"] }
 biscuit-auth = { version = "6.0.0" }
 serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
