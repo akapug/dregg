@@ -119,6 +119,7 @@ pub mod mnemonic;
 pub mod names;
 pub mod privacy;
 pub mod runtime;
+pub mod explain;
 pub mod verify;
 pub mod witness_artifact;
 pub mod wordlist;
