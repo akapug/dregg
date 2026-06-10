@@ -68,6 +68,7 @@ import Dregg2.Circuit.CommitmentCrossBind
 import Dregg2.Circuit.Argus.Receipt
 import Dregg2.Circuit.Argus.Aggregate
 import Dregg2.Circuit.Argus.Effects.NoteSpend
+import Dregg2.Exec.FullForestAuth          -- the RUNNING ENTRY: execFullForestG (the dregg_exec_full_forest_auth FFI)
 
 namespace Dregg2.AssuranceCase
 
@@ -324,6 +325,85 @@ theorem unfoolability_guarantee : True := trivial
 #assert_axioms Dregg2.Circuit.Argus.Aggregate.argus_strand_light_client
 #assert_axioms Dregg2.Circuit.Argus.Aggregate.argus_strand_conserves
 #assert_axioms Dregg2.Circuit.Argus.Aggregate.tampered_argus_strand_rejected
+
+/-! ===========================================================================
+## Guarantee R — THE RUNNING ENTRY (A∧B∧C hold over what the node actually runs)
+
+The five guarantees above are stated over the abstract kernel: the `List Auth` attenuation
+lattice (A), the multi-asset ledger `recTransferBal` (B), the Argus term IR (C/D), the
+aggregation fold (E). The honest question ember keeps pressing is: *do those guarantees hold
+over the executor the deployed node INVOKES* — `execFullForestG`, the body behind the
+`dregg_exec_full_forest_auth` FFI export (`Exec.FFI`), the one `produce_via_lean` /
+`lean_shadow` call? They do, and this section proves it in ONE statement rather than leaving
+it as a reader's inference.
+
+`execFullForestG` is the credential-and-caveat-GATED whole-forest step. The gate is NOT a new
+trust premise: it is discharged by `gateOK` (credential-valid ∧ cap-authority ∧
+caveats-discharged), and the linear guarantees ride the `eraseG` bridge
+(`execFullForestG_erases`) onto the EXISTING ungated `FullForest` theorems — so the gate ADDS
+teeth (a forged credential / unauthorized cap / false caveat ⇒ `none`, the whole forest
+rejects) without WEAKENING conservation or non-amplification. Floor: unchanged from A–C.
+=========================================================================== -/
+
+section RunningEntry
+open Dregg2.Exec.FullForestAuth
+open Dregg2.Exec.FullForest
+open Dregg2.Exec.TurnExecutorFull (turnLedgerDeltaAsset)
+open Dregg2.Authority
+
+variable {Digest Proof : Type}
+variable {Request Stmt Wit CellId Rights Ctx Gateway : Type}
+variable [DecidableEq CellId] [SemilatticeInf Rights] [OrderTop Rights] [DecidableLE Rights]
+variable {Bytes Tag : Type}
+variable [Dregg2.Laws.Verifiable Stmt Wit]
+variable [DecidableEq Tag] [CaveatChain.MacKernel (CaveatChain.Key Tag) Bytes Tag]
+variable [AuthPortal (Authorization Digest Proof) Ctx]
+
+/-- **`running_entry_sound` (NEW aggregation, over the RUNNING entry).** For the gated
+whole-forest step `execFullForestG` — the body behind the `dregg_exec_full_forest_auth` FFI
+the node invokes — a single committed run discharges, in one statement, the three local
+guarantees over the THING THAT RUNS:
+
+  * **B (conservation):** an asset `b` whose per-asset net is `0` has its total supply
+    (`recTotalAssetWithEscrow`) exactly preserved across the gated forest — conservation
+    survives the credential+caveat gate.
+  * **A (no amplification):** EVERY delegation edge of the forest is non-amplifying
+    (`capAuthConferred (attenuate ·) ⊆ capAuthConferred ·`) — Granovetter survives the gate.
+  * **C (per-node attestation):** every node, at every nesting depth, attests
+    `gatedActionInvG` — credential passed the §8 oracle ∧ caveats discharged on its pre-state
+    ∧ cap-authority ∧ the per-asset/chain/kind obligation. Credential-blindness eliminated.
+
+The body is exactly the three `execFullForestG_*` keystones conjoined — no new mathematics,
+the POINT is the subject: this is A/B/C over `execFullForestG`, not over the abstract kernel.
+The fail-closed teeth (`execFullForestG_unauthorized_fails`: ANY failing gate leg ⇒ `none`)
+are pinned below — the gate is two-valued, the attestation non-vacuous. -/
+theorem running_entry_sound
+    (s s' : RecChainedState)
+    (f : FullForestG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
+      (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
+      (Bytes := Bytes) (Tag := Tag))
+    (b : AssetId)
+    (h : execFullForestG s f = some s')
+    (hzero : turnLedgerDeltaAsset ((lowerForestG f).map Prod.snd) b = 0) :
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b
+      ∧ (∀ e ∈ forestEdgesG f, capAuthConferred (attenuate e.1 e.2) ⊆ capAuthConferred e.2)
+      ∧ (∀ p ∈ lowerForestG f, ∃ sa sa',
+          execFullAGated sa p.1 p.2 = some sa' ∧ gatedActionInvG sa p.1 p.2 sa') :=
+  ⟨execFullForestG_conserves_per_asset s s' f b h hzero,
+   execFullForestG_no_amplify f,
+   execFullForestG_each_attests s s' f h⟩
+
+#assert_axioms running_entry_sound
+-- the underlying keystones over the RUNNING entry, re-pinned:
+#assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_conserves_per_asset
+#assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_ledger_per_asset
+#assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_no_amplify
+#assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_each_attests
+#assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_root_attests
+-- the fail-closed teeth (the gate is genuinely two-valued):
+#assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_unauthorized_fails
+
+end RunningEntry
 
 /-! ===========================================================================
 ## Axiom-hygiene coverage note
