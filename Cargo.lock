@@ -2556,6 +2556,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "starbridge-polis",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6989,6 +6990,15 @@ dependencies = [
  "dregg-types",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "starbridge-polis"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "postcard",
 ]
 
 [[package]]

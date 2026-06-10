@@ -2,11 +2,13 @@
 //!
 //! `lean_shadow::producer_mappable_effects()` enumerates the effect kinds whose forest crosses the
 //! wire so the VERIFIED Lean executor RUNS as the state producer (`produce_via_lean`). But "the
-//! producer runs" is NOT the same as "the Lean-produced `.root()` EQUALS the Rust `.root()`": some
-//! mappable effects touch a commitment field the wire model drops (lifecycle; the full
-//! `Permissions`/`VK` struct; the per-cap slot/perm detail behind `cap_root`) or are structurally
-//! re-shaped by Rust (MakeSovereign REMOVES the cell from the ledger), so their reconstituted root
-//! DIVERGES. Those are real SWAP-GAPS, not silent passes.
+//! producer runs" is NOT the same as "the Lean-produced `.root()` EQUALS the Rust `.root()`": a
+//! mappable effect may touch a commitment field the wire model drops. For the SURVIVOR effects
+//! whose dropped value is TURN or HOST data (the lifecycle payloads, the full `Permissions`/`VK`
+//! structs, the cap leaves, the sovereign removal, the revoke epoch bump) the commit-gated replay
+//! (`lean_apply::{CapOp,StateOp}`) CLOSES the gap — pinned here by *_closed round-trips plus a
+//! rejection tooth each. What remains (audit-field/archive commitments; the escrow settle
+//! commit-bit legs) are real SWAP-GAPS, asserted to diverge, never silent passes.
 //!
 //! This file is the EMPIRICAL yardstick that keeps the two coverage lists HONEST:
 //!   * [`producer_root_agreeing_effects`] — the producer runs AND the reconstituted ledger agrees
@@ -254,35 +256,36 @@ fn emit_event_root_agrees() {
 }
 
 #[test]
-fn revoke_delegation_is_an_epoch_swap_gap() {
+fn revoke_delegation_round_trips_epoch_closed() {
     if skip_no_lean() {
         return;
     }
-    // A COMMITTING RevokeDelegation bumps the PARENT cell's `delegation_epoch` (apply.rs
-    // `apply_revoke_delegation` → `bump_delegation_epoch`), and `delegation_epoch` is folded into
-    // `compute_canonical_state_commitment` (commitment.rs hashes `state.delegation_epoch`). The wire
-    // `WState` cell record carries NO `delegation_epoch` field, and the verified `revokeDelegationA`
-    // edits only the `caps` edge set (no epoch counter), so the Lean reconstitution keeps the
-    // parent's pre-state epoch → `.root()` diverges. A characterized swap-gap (the delegation-epoch
-    // commitment field is not carried on the wire), asserted as a SPECIFIC divergence, never a
-    // silent pass.
+    // DELEGATION-EPOCH ROOT-GAP CLOSE. A COMMITTING RevokeDelegation bumps the PARENT cell's
+    // `delegation_epoch` and clears the CHILD's `delegation` snapshot (apply.rs
+    // `apply_revoke_delegation`), both folded into `compute_canonical_state_commitment`. Neither
+    // crosses the wire — but the mutation is fully DETERMINISTIC from the turn (parent = the
+    // action target, child = the effect operand), so the commit-gated replay
+    // (`lean_apply::apply_state_ops`) performs the same `bump_delegation_epoch()` +
+    // `delegation = None`, gated on the same pre-state `child.delegate == Some(parent)` edge.
+    // The non-zero starting epoch (3 → 4) makes the round-trip non-vacuous: a
+    // template-carried-forward reconstitution (the old gap) would bind epoch 3 → root divergence.
     //
-    // Set up a real parent(A)→child(B) delegation so the revoke COMMITS in Rust (a self-revoke with
-    // no delegation present is `DelegationDenied`, which has no commit to diff).
+    // Set up a real parent(A)→child(B) delegation so the revoke COMMITS in Rust (a self-revoke
+    // with no delegation present is `DelegationDenied` — exercised by the rejection tooth below).
     let mut a = make_open_cell(1, 100);
     let a_id = a.id();
     let mut b = make_open_cell(2, 5);
     let b_id = b.id();
     // B is delegated to A: set B.delegate = A so `apply_revoke_delegation` finds the edge to remove.
     b.delegate = Some(a_id);
-    // Give A a non-zero starting epoch so the bump is observable (not strictly required).
+    // Give A a non-zero starting epoch so the bump is observable in the commitment.
     a.state.set_delegation_epoch(3);
     let mut pre = Ledger::new();
     pre.insert_cell(a).unwrap();
     pre.insert_cell(b).unwrap();
 
-    // Confirm Rust really commits AND bumps A's delegation_epoch (so the gap is genuinely about the
-    // epoch commitment field).
+    // Confirm Rust really commits AND bumps A's delegation_epoch (so the close is genuinely about
+    // the epoch commitment field).
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut rust_ledger = pre.clone();
     let res = executor.execute(
@@ -296,20 +299,102 @@ fn revoke_delegation_is_an_epoch_swap_gap() {
         "Rust must have bumped the parent's delegation_epoch (3 -> 4)"
     );
 
+    // The reconstituted ledger must carry the replayed bump + cleared snapshot, not the template's.
     let turn = single_effect_turn(a_id, a_id, 0, Effect::RevokeDelegation { child: b_id });
-    match diff(pre, turn, &[a_id, b_id]) {
-        Ok(()) => panic!(
-            "RevokeDelegation unexpectedly round-tripped — the delegation-epoch swap-gap may have \
-             closed (the wire WState would now carry the per-cell delegation_epoch and Lean would \
-             model the epoch bump); re-classify into producer_root_agreeing_effects"
-        ),
-        Err(why) => assert!(
-            why.contains("ROOT divergence") || why.contains("commit-bit divergence"),
-            "RevokeDelegation swap-gap should be a ROOT/commit-bit divergence (the parent's bumped \
-             delegation_epoch is absent from the wire), got: {why}"
+    let host = ShadowHostCtx::diag();
+    let (lean_ledger, lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert!(lean_committed, "the verified revoke commits on a real parent→child edge");
+    assert_eq!(
+        lean_ledger.get(&a_id).unwrap().state.delegation_epoch(),
+        4,
+        "the replay must bump the parent's delegation_epoch exactly as apply_revoke_delegation"
+    );
+    assert!(
+        lean_ledger.get(&b_id).unwrap().delegation.is_none(),
+        "the replay must clear the child's delegation snapshot"
+    );
+
+    diff(pre, turn, &[a_id, b_id]).expect(
+        "RevokeDelegation must round-trip (delegation-epoch root-gap closed via the turn replay)",
+    );
+    assert!(lean_shadow::producer_root_agreeing_effects().contains(&"RevokeDelegation"));
+}
+
+#[test]
+fn revoke_of_non_delegated_child_rejected_by_rust_surfaced_not_replayed() {
+    if skip_no_lean() {
+        return;
+    }
+    // NON-VACUOUS TOOTH for the revoke close, pinning the CHARACTERIZED RESIDUAL named in
+    // `producer_root_agreeing_effects`: Rust REJECTS a revoke of a non-delegated child
+    // (`DelegationDenied` — the pre-state `child.delegate == Some(parent)` gate fails), while the
+    // verified revoke guard is `True` (revocation is unconditional in the kernel). The replay's
+    // OWN edge gate (`lean_apply::apply_state_ops`) mirrors the Rust pre-state check, so NO field
+    // moves on the reconstituted side either — no fabricated epoch bump, no cleared snapshot; the
+    // reconstituted ledger equals the Rust rollback (roots agree). If the commit bits diverge
+    // (Lean committed, Rust rolled back), the producer path surfaces it as a CoveredDivergence
+    // and KEEPS the Rust state — surfaced loudly, never silently committed.
+    use dregg_turn::lean_apply::{ProducerOutcome, produce_via_lean};
+
+    let mut a = make_open_cell(1, 100);
+    let a_id = a.id();
+    let b = make_open_cell(2, 5);
+    let b_id = b.id();
+    // NO delegation edge: B.delegate stays None.
+    a.state.set_delegation_epoch(3);
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+    pre.insert_cell(b).unwrap();
+
+    let turn = single_effect_turn(a_id, a_id, 0, Effect::RevokeDelegation { child: b_id });
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = pre.clone();
+    assert!(
+        !executor.execute(&turn, &mut rust_ledger).is_committed(),
+        "Rust must REJECT a revoke of a non-delegated child (DelegationDenied)"
+    );
+
+    // The reconstituted side never fabricates the mutation, whatever the verified commit bit says.
+    let host = ShadowHostCtx::diag();
+    let (mut lean_ledger, _lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert_eq!(
+        lean_ledger.get(&a_id).unwrap().state.delegation_epoch(),
+        3,
+        "the replay's edge gate must refuse to bump the epoch without a pre-state edge"
+    );
+    assert!(
+        lean_ledger.get(&b_id).unwrap().delegation.is_none()
+            && lean_ledger.get(&b_id).unwrap().delegate.is_none(),
+        "the child must be untouched"
+    );
+    ledgers_agree(&mut rust_ledger, &mut lean_ledger, &[a_id, b_id])
+        .expect("a rejected revoke leaves both ledgers at the (rolled-back) pre-state");
+
+    // Producer mode: whatever the verified commit bit, the COMMITTED ledger must be the Rust
+    // (rolled-back) state, and a commit-bit divergence must surface as CoveredDivergence.
+    let executor2 = TurnExecutor::new(ComputronCosts::zero());
+    let mut ledger = pre.clone();
+    let (result, outcome) = produce_via_lean(&executor2, &turn, &mut ledger);
+    assert!(!result.is_committed(), "producer-mode result must match the Rust rejection");
+    assert_eq!(
+        ledger.root(),
+        rust_ledger.root(),
+        "the committed ledger must be the Rust rollback, never a fabricated revoke"
+    );
+    match outcome {
+        // The verified gate also rejected → full agreement on the rollback.
+        ProducerOutcome::LeanProduced { committed: false, agree: true, .. } => {}
+        // The characterized residual: the kernel's unconditional revoke committed where Rust
+        // rejected — surfaced as a divergence, Rust state kept.
+        ProducerOutcome::CoveredDivergence { lean_committed: true, rust_committed: false, .. } => {}
+        other => panic!(
+            "a rejected revoke must either agree on the rollback or surface the commit-bit \
+             residual as CoveredDivergence, got {other:?}"
         ),
     }
-    assert!(lean_shadow::producer_root_gap_effects().contains(&"RevokeDelegation"));
 }
 
 #[test]
@@ -347,14 +432,17 @@ fn note_create_root_agrees() {
 // =====================================================================================
 
 #[test]
-fn set_permissions_is_a_perm_struct_swap_gap() {
+fn set_permissions_round_trips_perm_struct_closed() {
     if skip_no_lean() {
         return;
     }
-    // SetPermissions rewrites the cell's full `Permissions` struct (a commitment field). The wire
-    // `setperms` arm carries a COLLAPSED scalar, and the reconstitution does not reinstall the full
-    // struct — so the Rust post-state (new permissions) and the Lean reconstitution (template
-    // permissions carried forward) bind DIFFERENT commitments → root diverges.
+    // PERM-STRUCT ROOT-GAP CLOSE. SetPermissions rewrites the cell's full 8-field `Permissions`
+    // struct (a commitment field) and the wire `setperms` arm carries only a collapsed scalar —
+    // but the struct is entirely TURN-supplied, so the commit-gated replay
+    // (`lean_apply::apply_state_ops`) installs the exact struct `apply_set_permissions` writes.
+    // We change ONE field (set_state: None → Signature), so a template-carried-forward
+    // reconstitution (the old gap) would bind a different permissions fold → the round-trip is
+    // non-vacuous.
     let (pre, a_id) = one_open_cell();
     let mut new_perms = open_permissions();
     new_perms.set_state = AuthRequired::Signature; // a real permission change.
@@ -362,90 +450,232 @@ fn set_permissions_is_a_perm_struct_swap_gap() {
         a_id,
         a_id,
         0,
-        Effect::SetPermissions { cell: a_id, new_permissions: new_perms },
+        Effect::SetPermissions { cell: a_id, new_permissions: new_perms.clone() },
     );
-    match diff(pre, turn, &[a_id]) {
-        Ok(()) => panic!(
-            "SetPermissions unexpectedly round-tripped — the permissions-struct swap-gap may have \
-             closed; re-classify (the wire would now carry the full Permissions struct)"
-        ),
-        Err(why) => assert!(
-            why.contains("ROOT divergence") || why.contains("commit-bit divergence"),
-            "SetPermissions swap-gap should be a ROOT/commit-bit divergence, got: {why}"
-        ),
-    }
-    assert!(lean_shadow::producer_root_gap_effects().contains(&"SetPermissions"));
+
+    // The reconstituted ledger must carry the turn's full struct, not the template's.
+    let host = ShadowHostCtx::diag();
+    let (lean_ledger, lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert!(lean_committed, "the verified setPermissionsA gate commits the self-targeted change");
+    assert_eq!(
+        lean_ledger.get(&a_id).unwrap().permissions,
+        new_perms,
+        "the replay must install the exact turn-supplied Permissions struct"
+    );
+
+    diff(pre, turn, &[a_id])
+        .expect("SetPermissions must round-trip (perm-struct root-gap closed via the turn replay)");
+    assert!(lean_shadow::producer_root_agreeing_effects().contains(&"SetPermissions"));
 }
 
 #[test]
-fn set_verification_key_is_a_vk_struct_swap_gap() {
+fn unauthorized_cross_cell_set_permissions_rejected_by_both() {
     if skip_no_lean() {
         return;
     }
-    // SetVerificationKey installs a full `VerificationKey { hash, data }` (a commitment field). The
-    // wire `setvk` arm carries only the low-64-bit collapse of the vk hash; the reconstitution does
-    // not reinstall the struct → root diverges.
+    // NON-VACUOUS TOOTH for the perm-struct close: a CROSS-CELL SetPermissions by an actor holding
+    // NO capability over the target is rejected by Rust (`check_cross_cell_permission` →
+    // CapabilityNotHeld) AND by the verified gate (`stateAuthB actor cell` has no edge). The
+    // commit-gated replay does not fire, so neither side's permissions move — a forged permission
+    // rewrite cannot fabricate a commitment.
+    let a = make_open_cell(1, 100);
+    let a_id = a.id();
+    let b = make_open_cell(2, 5);
+    let b_id = b.id();
+    let b_perms = b.permissions.clone();
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+    pre.insert_cell(b).unwrap();
+
+    let mut new_perms = open_permissions();
+    new_perms.set_state = AuthRequired::Impossible; // the would-be hostile rewrite.
+    let turn = single_effect_turn(
+        a_id,
+        a_id,
+        0,
+        Effect::SetPermissions { cell: b_id, new_permissions: new_perms },
+    );
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = pre.clone();
+    assert!(
+        !executor.execute(&turn, &mut rust_ledger).is_committed(),
+        "Rust must REJECT a cross-cell SetPermissions without a held capability"
+    );
+
+    let host = ShadowHostCtx::diag();
+    let (mut lean_ledger, lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert!(!lean_committed, "the verified gate must also REJECT the unauthorized rewrite");
+    assert_eq!(
+        lean_ledger.get(&b_id).unwrap().permissions,
+        b_perms,
+        "the rejected rewrite must leave B's permissions at the pre-state"
+    );
+    ledgers_agree(&mut rust_ledger, &mut lean_ledger, &[a_id, b_id])
+        .expect("a rejected SetPermissions leaves both ledgers at the (rolled-back) pre-state");
+}
+
+#[test]
+fn set_verification_key_round_trips_vk_struct_closed() {
+    if skip_no_lean() {
+        return;
+    }
+    // VK-STRUCT ROOT-GAP CLOSE. SetVerificationKey installs a full `VerificationKey { hash, data }`
+    // (the commitment binds `vk.hash`); the wire `setvk` arm carries only the low-64-bit collapse.
+    // The struct is TURN-supplied, so the commit-gated replay installs the exact VK
+    // `apply_set_verification_key` writes (the apply path — both producers' — enforces
+    // `vk.hash == blake3(vk.data)`, so only an integrity-bound VK can ever land).
     let (pre, a_id) = one_open_cell();
     #[allow(deprecated)]
     let vk = VerificationKey::new(vec![1, 2, 3, 4]);
+    let expected_hash = vk.hash;
     let turn = single_effect_turn(
         a_id,
         a_id,
         0,
         Effect::SetVerificationKey { cell: a_id, new_vk: Some(vk) },
     );
-    match diff(pre, turn, &[a_id]) {
-        Ok(()) => panic!(
-            "SetVerificationKey unexpectedly round-tripped — the vk-struct swap-gap may have closed"
-        ),
-        Err(why) => assert!(
-            why.contains("ROOT divergence") || why.contains("commit-bit divergence"),
-            "SetVerificationKey swap-gap should be a ROOT/commit-bit divergence, got: {why}"
-        ),
-    }
-    assert!(lean_shadow::producer_root_gap_effects().contains(&"SetVerificationKey"));
+
+    let host = ShadowHostCtx::diag();
+    let (lean_ledger, lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert!(lean_committed, "the verified setVKA gate commits the self-targeted change");
+    assert_eq!(
+        lean_ledger.get(&a_id).unwrap().verification_key.as_ref().map(|v| v.hash),
+        Some(expected_hash),
+        "the replay must install the exact turn-supplied VerificationKey"
+    );
+
+    diff(pre, turn, &[a_id])
+        .expect("SetVerificationKey must round-trip (vk-struct root-gap closed via the turn replay)");
+    assert!(lean_shadow::producer_root_agreeing_effects().contains(&"SetVerificationKey"));
 }
 
 #[test]
-fn make_sovereign_is_a_structural_swap_gap() {
+fn unauthorized_cross_cell_set_verification_key_rejected_by_both() {
     if skip_no_lean() {
         return;
     }
-    // MakeSovereign REMOVES the cell from `Ledger::cells` (it moves to `sovereign_commitments`,
-    // which does NOT feed `Ledger::root()`), so the Rust post-root drops that leaf. The verified
-    // `WireState` echoes the cell still present, so the reconstitution KEEPS it → a presence/root
-    // divergence. A structural swap-gap (the wire state model has no "cell removed to sovereign"
-    // transition), characterized here, never silently passed.
+    // NON-VACUOUS TOOTH for the vk-struct close: a CROSS-CELL SetVerificationKey by an actor with
+    // no held capability is rejected by Rust (CapabilityNotHeld) and by the verified `stateAuthB`
+    // gate. The VK does not move on either side — a forged program-identity rewrite cannot
+    // fabricate a commitment.
+    let a = make_open_cell(1, 100);
+    let a_id = a.id();
+    let b = make_open_cell(2, 5);
+    let b_id = b.id();
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+    pre.insert_cell(b).unwrap();
+
+    #[allow(deprecated)]
+    let vk = VerificationKey::new(vec![9, 9, 9]);
+    let turn = single_effect_turn(
+        a_id,
+        a_id,
+        0,
+        Effect::SetVerificationKey { cell: b_id, new_vk: Some(vk) },
+    );
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = pre.clone();
+    assert!(
+        !executor.execute(&turn, &mut rust_ledger).is_committed(),
+        "Rust must REJECT a cross-cell SetVerificationKey without a held capability"
+    );
+
+    let host = ShadowHostCtx::diag();
+    let (mut lean_ledger, lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert!(!lean_committed, "the verified gate must also REJECT the unauthorized vk rewrite");
+    assert!(
+        lean_ledger.get(&b_id).unwrap().verification_key.is_none(),
+        "the rejected rewrite must leave B's verification key unset"
+    );
+    ledgers_agree(&mut rust_ledger, &mut lean_ledger, &[a_id, b_id])
+        .expect("a rejected SetVerificationKey leaves both ledgers at the (rolled-back) pre-state");
+}
+
+#[test]
+fn make_sovereign_round_trips_structural_closed() {
+    if skip_no_lean() {
+        return;
+    }
+    // STRUCTURAL ROOT-GAP CLOSE. MakeSovereign REMOVES the cell from `Ledger::cells` (its merkle
+    // leaf disappears; the state commitment parks in the off-root `sovereign_commitments`). The
+    // verified `sovereignRebind` performs the same regime move (the readable record is dropped
+    // behind a commitment-only re-emit), and the commit-gated replay calls
+    // `Ledger::make_sovereign` at ledger-build time — the SAME structural move
+    // `apply_make_sovereign` performs — so the reconstituted leaf SET, and therefore `.root()`,
+    // equals Rust's. The extractor SKIPS the rebound commitment-only wire record rather than
+    // fail-closing on its missing scalars.
     let (pre, a_id) = one_open_cell();
     let turn = single_effect_turn(a_id, a_id, 0, Effect::MakeSovereign { cell: a_id });
 
-    // Confirm Rust really removed the cell (so the gap is structural, not a no-commit).
+    // Confirm Rust really removed the cell (so the close is structural, not a no-commit).
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut rust_ledger = pre.clone();
     assert!(executor.execute(&turn, &mut rust_ledger).is_committed(), "Rust MakeSovereign commits");
     assert!(rust_ledger.get(&a_id).is_none(), "Rust must have removed the now-sovereign cell");
 
-    match diff(pre, turn, &[a_id]) {
-        Ok(()) => panic!(
-            "MakeSovereign unexpectedly round-tripped — the structural swap-gap may have closed \
-             (the wire state would now model the sovereign-removal transition)"
-        ),
-        // The gap surfaces one of three ways depending on how the verified kernel re-emits the
-        // now-sovereign cell: a presence/root divergence (the reconstitution keeps the cell Rust
-        // removed), OR a reconstitution ERROR (`sov` emits a cell record without a proper Int
-        // `nonce`/`balance`, so the extractor fail-closes rather than coerce — the honest "the wire
-        // model cannot reproduce the sovereign transition" outcome). All three are the SAME gap:
-        // the wire state model has no "cell removed to sovereign" transition.
-        Err(why) => assert!(
-            why.contains("presence divergence")
-                || why.contains("ROOT divergence")
-                || why.contains("non-Int")
-                || why.contains("state-producer path errored"),
-            "MakeSovereign swap-gap should be a presence/root divergence or a reconstitution error \
-             (the sovereign-removal transition is unmodelled on the wire), got: {why}"
-        ),
+    // The reconstituted ledger must have removed the cell too (presence agreement — the leaf SET).
+    let host = ShadowHostCtx::diag();
+    let (lean_ledger, lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert!(lean_committed, "the verified makeSovereign gate commits the self-targeted rebind");
+    assert!(
+        lean_ledger.get(&a_id).is_none(),
+        "the replay must remove the now-sovereign cell from the reconstituted ledger"
+    );
+
+    diff(pre, turn, &[a_id]).expect(
+        "MakeSovereign must round-trip (structural root-gap closed via the make_sovereign replay)",
+    );
+    assert!(lean_shadow::producer_root_agreeing_effects().contains(&"MakeSovereign"));
+}
+
+#[test]
+fn cross_cell_make_sovereign_rejected_by_both() {
+    if skip_no_lean() {
+        return;
     }
-    assert!(lean_shadow::producer_root_gap_effects().contains(&"MakeSovereign"));
+    // NON-VACUOUS TOOTH for the sovereign close: a CROSS-CELL MakeSovereign (effect cell ≠ action
+    // target — "only the cell itself can make itself sovereign") is rejected by Rust
+    // (`apply_make_sovereign`'s structural guard) and the collector mirrors that guard
+    // (`collect_state_ops` only gathers a self-targeted rebind), so NO removal is replayed: the
+    // foreign cell stays present on both sides and the reconstitution equals the Rust rollback —
+    // a hostile turn cannot evict someone else's cell from the ledger.
+    let a = make_open_cell(1, 100);
+    let a_id = a.id();
+    let b = make_open_cell(2, 5);
+    let b_id = b.id();
+    let mut pre = Ledger::new();
+    pre.insert_cell(a).unwrap();
+    pre.insert_cell(b).unwrap();
+
+    // Action targets A; the rebind aims at B.
+    let turn = single_effect_turn(a_id, a_id, 0, Effect::MakeSovereign { cell: b_id });
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = pre.clone();
+    assert!(
+        !executor.execute(&turn, &mut rust_ledger).is_committed(),
+        "Rust must REJECT a cross-cell MakeSovereign"
+    );
+    assert!(rust_ledger.get(&b_id).is_some(), "the rejected rebind must not remove B");
+
+    let host = ShadowHostCtx::diag();
+    let (mut lean_ledger, lean_committed) =
+        execute_via_lean(&turn, &pre, &host).expect("producer path must run");
+    assert!(!lean_committed, "the verified gate must also REJECT the cross-cell rebind");
+    assert!(
+        lean_ledger.get(&b_id).is_some(),
+        "the reconstituted ledger must keep the foreign cell — no fabricated removal"
+    );
+    ledgers_agree(&mut rust_ledger, &mut lean_ledger, &[a_id, b_id])
+        .expect("a rejected MakeSovereign leaves both ledgers at the (rolled-back) pre-state");
 }
 
 #[test]
@@ -566,7 +796,7 @@ fn attenuate_capability_round_trips_cap_fidelity_closed() {
 /// The covered-set predicate is purely a Rust decision (no Lean link needed): a Transfer turn is
 /// covered (root-agreeing), a SetPermissions turn is NOT (a characterized root-gap).
 #[test]
-fn forest_is_root_agreeing_covers_transfer_not_setpermissions() {
+fn forest_is_root_agreeing_covers_transfer_not_refusal() {
     let a = make_open_cell(1, 100);
     let a_id = a.id();
     let b = make_open_cell(2, 0);
@@ -584,21 +814,28 @@ fn forest_is_root_agreeing_covers_transfer_not_setpermissions() {
     );
     assert!(lean_shadow::first_root_gap_kind(&transfer).is_none());
 
-    let mut new_perms = open_permissions();
-    new_perms.set_state = AuthRequired::Signature;
-    let setperms = single_effect_turn(
+    // Refusal is one of the REMAINING characterized root-gaps (the audit-field commitment is not
+    // wire-carried and not turn-replayable — apply.rs derives field[4] from a hash scheme the
+    // reconstitution does not reproduce); SetPermissions/MakeSovereign/the lifecycle pair are now
+    // CLOSED (see their *_closed tests above), so the gap exemplar here must be a real one.
+    let refusal = single_effect_turn(
         a_id,
         a_id,
         0,
-        Effect::SetPermissions { cell: a_id, new_permissions: new_perms },
+        Effect::Refusal {
+            cell: a_id,
+            offered_action_commitment: [3u8; 32],
+            refusal_reason: RefusalReason::Declined,
+            proof_witness_index: 0,
+        },
     );
     assert!(
-        !lean_shadow::forest_is_root_agreeing(&setperms),
-        "a SetPermissions turn touches a root-gap effect — must NOT be covered"
+        !lean_shadow::forest_is_root_agreeing(&refusal),
+        "a Refusal turn touches a root-gap effect — must NOT be covered"
     );
     assert_eq!(
-        lean_shadow::first_root_gap_kind(&setperms),
-        Some("SetPermissions"),
+        lean_shadow::first_root_gap_kind(&refusal),
+        Some("Refusal"),
         "the fallback reason must name the offending root-gap kind"
     );
 }
@@ -653,12 +890,12 @@ fn produce_via_lean_installs_verified_state_on_covered_transfer() {
     assert_eq!(ledger.get(&b_id).unwrap().state.balance(), 10);
 }
 
-/// On a ROOT-GAP turn (SetPermissions), `produce_via_lean` falls back to the Rust producer for that
-/// turn: the outcome is `Fallback { RootGap }`, the committed ledger is the RUST post-state (the new
-/// permissions are applied), and NO divergent Lean root is committed. This is the "no silent
-/// divergence" guarantee that makes the default-on flip safe.
+/// On a ROOT-GAP turn (Refusal — a REMAINING gap; the former exemplar SetPermissions is now
+/// CLOSED), `produce_via_lean` falls back to the Rust producer for that turn: the outcome is
+/// `Fallback { RootGap }`, the committed ledger is the RUST post-state, and NO divergent Lean root
+/// is committed. This is the "no silent divergence" guarantee that makes the default-on flip safe.
 #[test]
-fn produce_via_lean_falls_back_on_root_gap_setpermissions() {
+fn produce_via_lean_falls_back_on_root_gap_refusal() {
     if skip_no_lean() {
         return;
     }
@@ -669,13 +906,16 @@ fn produce_via_lean_falls_back_on_root_gap_setpermissions() {
     let mut pre = Ledger::new();
     pre.insert_cell(a).unwrap();
 
-    let mut new_perms = open_permissions();
-    new_perms.set_state = AuthRequired::Signature;
     let turn = single_effect_turn(
         a_id,
         a_id,
         0,
-        Effect::SetPermissions { cell: a_id, new_permissions: new_perms },
+        Effect::Refusal {
+            cell: a_id,
+            offered_action_commitment: [3u8; 32],
+            refusal_reason: RefusalReason::Declined,
+            proof_witness_index: 0,
+        },
     );
 
     // Expected Rust post-state.
@@ -691,20 +931,13 @@ fn produce_via_lean_falls_back_on_root_gap_setpermissions() {
 
     match outcome {
         ProducerOutcome::Fallback { reason: ExtractError::RootGap { kind } } => {
-            assert_eq!(kind, "SetPermissions", "fallback must name the root-gap kind");
+            assert_eq!(kind, "Refusal", "fallback must name the root-gap kind");
         }
         other => panic!("a root-gap turn must fall back with RootGap, got {other:?}"),
     }
 
     // The committed ledger is the RUST post-state (no divergent Lean root committed).
     assert_eq!(ledger.root(), expected_root, "root-gap turn must commit the Rust post-state");
-    if rust_committed {
-        assert_eq!(
-            ledger.get(&a_id).unwrap().permissions.set_state,
-            AuthRequired::Signature,
-            "the Rust producer's new permissions must be the committed state"
-        );
-    }
 }
 
 // =====================================================================================
@@ -726,17 +959,14 @@ fn two_open_cells() -> (Ledger, CellId, CellId) {
 }
 
 #[test]
-fn create_escrow_root_agrees() {
+fn create_escrow_falls_back_factory_dissolved() {
     if skip_no_lean() {
         return;
     }
-    // `apply_create_escrow` debits the creator (A)'s `balance` by `amount` and parks an unresolved
-    // `EscrowRecord` in the off-cell-merkle-root `escrows` store. The verified `createEscrowKAsset`
-    // does the SAME single-cell `bal` debit (`recDebit`) + record insert, gated on the same
-    // `authorizedB` transfer-authority leg + `0≤amount≤bal A` + `A∈accounts` + id-uniqueness. Only
-    // the `bal` (which the wire `bal` side-table carries → reconstitutes) changes on the cell
-    // commitment; the escrow record never feeds `cell::Ledger::root()`. So both producers commit and
-    // the reconstituted ledger AGREES on full cell state + cap_root + `.root()`.
+    // FACTORY-DISSOLVED: the verified kernel no longer parses escrow actions — their semantics
+    // live in factory-born cells (cell::blueprint / sdk::factories; contracts in
+    // Dregg2/Apps/EscrowFactory). The producer must refuse LOUDLY at the wire (malformed-wire
+    // sentinel), never silently install state; the effect is out of every producer list.
     let (pre, a_id, b_id) = two_open_cells();
     let turn = single_effect_turn(
         a_id,
@@ -751,20 +981,26 @@ fn create_escrow_root_agrees() {
             escrow_id: [7u8; 32],
         },
     );
-    diff(pre, turn, &[a_id, b_id])
-        .expect("CreateEscrow must round-trip (bal debit reconstitutes; record is off-root)");
-    assert!(lean_shadow::producer_root_agreeing_effects().contains(&"CreateEscrow"));
+    match diff(pre, turn, &[a_id, b_id]) {
+        Ok(()) => panic!(
+            "CreateEscrow unexpectedly round-tripped — factory dissolution means the verified \
+             kernel must not parse it"
+        ),
+        Err(why) => assert!(
+            why.contains("malformed-wire") || why.contains("decode failed"),
+            "CreateEscrow must refuse loudly at the wire (factory-dissolved), got: {why}"
+        ),
+    }
+    assert!(!lean_shadow::producer_mappable_effects().contains(&"CreateEscrow"));
+    assert!(!lean_shadow::producer_root_agreeing_effects().contains(&"CreateEscrow"));
 }
 
 #[test]
-fn create_obligation_root_agrees() {
+fn create_obligation_falls_back_factory_dissolved() {
     if skip_no_lean() {
         return;
     }
-    // `apply_create_obligation` debits the obligor (= action target A)'s `balance` by `stake_amount`
-    // and parks an off-root `ObligationRecord`. The verified `createObligationA` dispatch-aliases to
-    // `createEscrowChainA` (the SAME single-cell debit + record insert). Only the `bal` changes on
-    // the cell commitment; the obligation record is off-root. So the reconstituted ledger AGREES.
+    // FACTORY-DISSOLVED, as CreateEscrow above (contracts in Dregg2/Apps/ObligationFactory).
     let (pre, a_id, b_id) = two_open_cells();
     let turn = single_effect_turn(
         a_id,
@@ -778,23 +1014,28 @@ fn create_obligation_root_agrees() {
             stake_amount: 20,
         },
     );
-    diff(pre, turn, &[a_id, b_id])
-        .expect("CreateObligation must round-trip (stake debit reconstitutes; record off-root)");
-    assert!(lean_shadow::producer_root_agreeing_effects().contains(&"CreateObligation"));
+    match diff(pre, turn, &[a_id, b_id]) {
+        Ok(()) => panic!(
+            "CreateObligation unexpectedly round-tripped — factory dissolution means the \
+             verified kernel must not parse it"
+        ),
+        Err(why) => assert!(
+            why.contains("malformed-wire") || why.contains("decode failed"),
+            "CreateObligation must refuse loudly at the wire (factory-dissolved), got: {why}"
+        ),
+    }
+    assert!(!lean_shadow::producer_mappable_effects().contains(&"CreateObligation"));
+    assert!(!lean_shadow::producer_root_agreeing_effects().contains(&"CreateObligation"));
 }
 
 #[test]
-fn release_escrow_is_a_condition_gate_gap() {
+fn release_escrow_falls_back_factory_dissolved() {
     if skip_no_lean() {
         return;
     }
-    // A standalone `ReleaseEscrow` references a record absent from both fresh executors' stores, so
-    // Rust REJECTS (escrow not found) while the verified `releaseEscrowChainA` ALSO finds no record
-    // and rejects — but the differential's `diff` requires BOTH to COMMIT, so this surfaces as a
-    // commit-bit gap (the settle's record-lookup + condition-proof legs are not exercisable as a
-    // standalone covered turn). Pinned as a characterized commit-bit gap: the producer RUNS, the
-    // divergence (Rust did not commit) is NAMED, never a silent pass. Closing this needs the
-    // condition-proof leg modelled so a create+release can be covered as one verified turn.
+    // FACTORY-DISSOLVED: release's condition gate is a factory-cell program leg now
+    // (release_requires_condition in Dregg2/Apps/EscrowFactory); the verified kernel does not
+    // parse the action. Loud wire refusal, out of every producer list.
     let (pre, a_id, _b_id) = two_open_cells();
     let turn = single_effect_turn(
         a_id,
@@ -803,41 +1044,35 @@ fn release_escrow_is_a_condition_gate_gap() {
         Effect::ReleaseEscrow { escrow_id: [7u8; 32], proof: None },
     );
     match diff(pre, turn, &[a_id]) {
-        Ok(()) => panic!(
-            "ReleaseEscrow unexpectedly round-tripped — the condition-gate gap may have closed; \
-             re-classify into producer_root_agreeing_effects"
-        ),
+        Ok(()) => panic!("ReleaseEscrow unexpectedly round-tripped (factory-dissolved)"),
         Err(why) => assert!(
-            why.contains("did not commit") || why.contains("commit-bit divergence"),
-            "ReleaseEscrow gap should be a commit-bit/no-commit divergence (no record / condition \
-             proof), got: {why}"
+            why.contains("malformed-wire") || why.contains("decode failed")
+                || why.contains("did not commit"),
+            "ReleaseEscrow must refuse loudly (factory-dissolved), got: {why}"
         ),
     }
-    assert!(lean_shadow::producer_root_gap_effects().contains(&"ReleaseEscrow"));
+    assert!(!lean_shadow::producer_mappable_effects().contains(&"ReleaseEscrow"));
+    assert!(!lean_shadow::producer_root_gap_effects().contains(&"ReleaseEscrow"));
 }
 
 #[test]
-fn refund_escrow_is_a_timeout_gate_gap() {
+fn refund_escrow_falls_back_factory_dissolved() {
     if skip_no_lean() {
         return;
     }
-    // A standalone `RefundEscrow` references no record (fresh stores) AND Rust gates refund on a PAST
-    // timeout (`block_height > timeout_height`, impossible at the genesis block height the create
-    // demanded be in the future). Both legs make Rust reject; the differential requires BOTH commit,
-    // so this is a characterized commit-bit gap (the past-timeout clock leg is not modelled in the
-    // verified settle gate). Producer RUNS, divergence NAMED.
+    // FACTORY-DISSOLVED: refund's timeout gate is a factory-cell TemporalGate now; the verified
+    // kernel does not parse the action. Loud wire refusal, out of every producer list.
     let (pre, a_id, _b_id) = two_open_cells();
     let turn =
         single_effect_turn(a_id, a_id, 0, Effect::RefundEscrow { escrow_id: [7u8; 32] });
     match diff(pre, turn, &[a_id]) {
-        Ok(()) => panic!(
-            "RefundEscrow unexpectedly round-tripped — the timeout-gate gap may have closed"
-        ),
+        Ok(()) => panic!("RefundEscrow unexpectedly round-tripped (factory-dissolved)"),
         Err(why) => assert!(
-            why.contains("did not commit") || why.contains("commit-bit divergence"),
-            "RefundEscrow gap should be a commit-bit/no-commit divergence (no record / past-timeout \
-             clock leg), got: {why}"
+            why.contains("malformed-wire") || why.contains("decode failed")
+                || why.contains("did not commit"),
+            "RefundEscrow must refuse loudly (factory-dissolved), got: {why}"
         ),
     }
-    assert!(lean_shadow::producer_root_gap_effects().contains(&"RefundEscrow"));
+    assert!(!lean_shadow::producer_mappable_effects().contains(&"RefundEscrow"));
+    assert!(!lean_shadow::producer_root_gap_effects().contains(&"RefundEscrow"));
 }

@@ -373,14 +373,11 @@ pub fn producer_mappable_effects() -> &'static [&'static str] {
         "GrantCapability",
         "AttenuateCapability",
         "Introduce",
-        // §SIDE-TABLE families: the off-cell-merkle-root holding-store effects. Create debits a
-        // `bal` (reconstitutes) + parks an off-root record; the cell commitment is otherwise
-        // untouched, so these are root-AGREEING (see `producer_root_agreeing_effects`). The settle
-        // effects reference an existing record (exercised via a create+settle forest).
-        "CreateEscrow",
-        "ReleaseEscrow",
-        "RefundEscrow",
-        "CreateObligation",
+        // §FACTORY-DISSOLVED families (escrow/obligation): the verified kernel no longer parses
+        // their wire actions — their semantics live in factory-born cells (cell::blueprint +
+        // sdk::factories, the Lean contracts in Dregg2/Apps/{EscrowFactory,ObligationFactory}).
+        // A turn carrying one falls back to the Rust executor LOUDLY (malformed-wire sentinel)
+        // during the transitional window; the Effect variants die wholesale in the verb lockstep.
     ]
 }
 
@@ -428,10 +425,51 @@ pub fn producer_root_agreeing_effects() -> &'static [&'static str] {
         // so the wire (which carries the discriminant alone) reconstitutes it BYTE-EXACTLY. The
         // reconstitution (`lean_apply::wire_state_to_ledger`) installs `CellLifecycle::Live`, clearing
         // the template's Sealed payload, so `compute_canonical_state_commitment`'s `lifecycle` fold
-        // produces the SAME bytes as Rust's `Cell::unseal` (which sets `lifecycle = Live`). The seal
-        // PARTNER (`CellSeal`/`CellDestroy`) carries a `reason_hash`/`sealed_at` /
-        // `death_certificate_hash`/`destroyed_at` PAYLOAD the wire does not carry → still root-gaps.
+        // produces the SAME bytes as Rust's `Cell::unseal` (which sets `lifecycle = Live`).
         "CellUnseal",
+        // LIFECYCLE ROOT-GAP CLOSE (the SURVIVOR-effect lever, same shape as the cap-fidelity
+        // close). CellSeal/CellDestroy install a lifecycle PAYLOAD the wire's bare discriminant
+        // cannot carry — but the payload is TURN + HOST data, not kernel state: `Sealed
+        // { reason_hash, sealed_at }` = the turn's `CellSeal { reason }` + the host block height;
+        // `Destroyed { death_certificate_hash, destroyed_at }` = the turn's FULL DeathCertificate
+        // (`certificate_hash()` / `destroyed_at_height` — never the lossy low-64 wire `death_cert`
+        // value). The verified kernel DECIDES the commit (`cellSealA`/`cellDestroyA`:
+        // `stateAuthB ∧ acceptsEffects` / `≠ Destroyed`), and `lean_apply::apply_state_ops` replays
+        // `Cell::seal`/`Cell::destroy` — the SAME cell-side primitives `apply_cell_seal`/
+        // `apply_cell_destroy` call — onto the template pre-state, so the commitment's lifecycle
+        // fold is byte-exact. An unauthorized/terminal transition is rejected by BOTH executors
+        // and the lifecycle does not move (the non-vacuous tooth, pinned in the widen tests).
+        "CellSeal",
+        "CellDestroy",
+        // PERM/VK-STRUCT ROOT-GAP CLOSE. The wire `setperms`/`setvk` arms carry a collapsed scalar,
+        // but the full 8-field `Permissions` struct / `VerificationKey { hash, data }` is entirely
+        // TURN-supplied. The verified `setPermissionsA`/`setVKA` gates (`stateAuthB`-routed
+        // stateStep) decide the commit; `lean_apply::apply_state_ops` installs the turn's exact
+        // struct (mirroring `apply_set_permissions`/`apply_set_verification_key`, including the
+        // blake3 vk-integrity refusal), so the commitment's permissions/vk folds are byte-exact.
+        "SetPermissions",
+        "SetVerificationKey",
+        // STRUCTURAL ROOT-GAP CLOSE for MakeSovereign. Rust REMOVES the cell from `Ledger::cells`
+        // (→ its merkle leaf disappears) and parks `state_commitment()` in `sovereign_commitments`
+        // (off-root); the verified `makeSovereignStep` performs the SAME regime move
+        // (`sovereignRebind`: the readable record is dropped behind a commitment), gated on
+        // `stateAuthB`. The reconstitution replays `Ledger::make_sovereign` at build time, so the
+        // reconstituted leaf SET — and therefore `.root()` — equals Rust's. (The rebound wire
+        // record is commitment-only, so the extractor skips it rather than fail-closing.)
+        "MakeSovereign",
+        // DELEGATION-EPOCH ROOT-GAP CLOSE for RevokeDelegation. A committing revoke bumps the
+        // PARENT's `delegation_epoch` and clears the CHILD's `delegation` snapshot (both folded
+        // into `compute_canonical_state_commitment`); neither crosses the wire, but the mutation
+        // is fully deterministic from the turn (`bump_delegation_epoch()` + `delegation = None`,
+        // mirrored from `apply_revoke_delegation` including its pre-state
+        // `child.delegate == Some(parent)` gate). The replay also restores the parent's template
+        // c-list (Rust's revoke arm never edits the c-list; the verified `revokeDelegationA` is
+        // the cap-graph `removeEdge`, whose lossy wire echo must not leak into `cap_root`).
+        // RESIDUAL (characterized): the verified guard is `True` (revocation is unconditional)
+        // while Rust rejects a revoke of a non-delegated child — for such a turn the commit bits
+        // differ and the differential's `CoveredDivergence` keeps the Rust state (surfaced, never
+        // a silent commit; the replay's edge gate leaves every field at its pre-state).
+        "RevokeDelegation",
         // §SIDE-TABLE holding-store families — the off-cell-merkle-root escrow/obligation effects.
         // `apply_create_escrow`/`apply_create_obligation` debit ONE cell's `balance` (which the `bal`
         // side-table carries → reconstitutes) and park the value in the off-root `escrows`/
@@ -440,71 +478,35 @@ pub fn producer_root_agreeing_effects() -> &'static [&'static str] {
         // transfer-authority + balance + account + id-uniqueness legs. Only the CREATE effects are
         // root-AGREEING here: the side-table records never feed `cell::Ledger::root()`, so the
         // reconstituted `.root()` AGREES with Rust (only the `bal` debit changes, and it
-        // reconstitutes). The SETTLE effects (release/refund) are characterized root/commit-bit gaps:
-        // Rust gates release on a condition PROOF and refund on a PAST timeout, neither expressible
-        // within a single create+settle forest at one block height, and the verified settle-auth gate
-        // differs — see `producer_root_gap_effects`.
-        "CreateEscrow",
-        "CreateObligation",
+        // reconstitutes). NOTE the escrow/obligation family is FACTORY-DISSOLVED (see
+        // `producer_mappable_effects`): the verified kernel does not parse those actions, so they
+        // are no longer in the producer surface at all.
     ]
 }
 
 /// The CHARACTERIZED SWAP-GAPS: mappable effects (the producer RUNS) whose Lean-reconstituted
-/// `.root()` DIVERGES from Rust because the wire model is lossier than the cell commitment, or
-/// because Rust re-shapes the ledger structurally. Each is pinned by a NEGATIVE-tooth differential
+/// `.root()` (or commit bit) DIVERGES from Rust. Each is pinned by a NEGATIVE-tooth differential
 /// (`lean_state_producer_widen` + `lean_state_producer_coverage`) that asserts the SPECIFIC
 /// divergence, so the gap is named, never a silent pass. The honest residual of THE SWAP:
-///   * `CellSeal`/`CellDestroy` — the wire `WState` carries the lifecycle DISCRIMINANT but not the
-///     Rust commitment's lifecycle PAYLOAD (reason hash + sealed-at height; death-cert hash +
-///     destroyed-at height), which the Lean kernel models only as a discriminant `Nat` (+ a low-64
-///     `deathCert`). Closing these needs the Lean kernel to model the FULL lifecycle payload + carry
-///     it on the wire. (`CellUnseal` is already CLOSED: Sealed→Live is the payload-free transition,
-///     so the discriminant alone reconstitutes byte-exactly — see `producer_root_agreeing_effects`.)
-///   * `SetPermissions`/`SetVerificationKey` — the wire carries a COLLAPSED scalar, not the full
-///     `Permissions`/`VerificationKey` struct the commitment binds.
-///   * `GrantCapability` — the wire `caps` model carries `(target[,rights])` per edge; the Rust
-///     `cap_root` binds `(target, slot, permissions, breadstuff, expires_at, allowed_effects)`.
-///   * `MakeSovereign` — Rust REMOVES the cell from `Ledger::cells` (→ a different leaf set); the
-///     wire state model has no sovereign-removal transition, so the reconstitution keeps the cell.
 ///   * `Refusal`/`ReceiptArchive` — Rust writes an audit-field / lifecycle-Archived commitment the
 ///     wire `refusal`/`rarchive` arms do not reproduce byte-for-byte.
-///   * `RevokeDelegation` — a COMMITTING revoke bumps the PARENT cell's `delegation_epoch`, which is
-///     folded into `compute_canonical_state_commitment` (commitment.rs hashes `state.delegation_epoch`).
-///     The wire `WState` cell record carries no `delegation_epoch` field, and the verified
-///     `revokeDelegationA` edits only the `caps` edge set (no epoch counter), so the reconstitution
-///     keeps the parent's pre-state epoch → `.root()` diverges. (The no-op self-revoke that Rust
-///     REJECTS trivially agrees, but a real commit diverges — so the effect is a gap.) Closing this
-///     needs the Lean kernel to model the per-cell delegation epoch and carry it on the wire.
+///   * `ReleaseEscrow`/`RefundEscrow` — commit-bit gaps (condition-proof / past-timeout legs), see
+///     below. (Effect family slated for kernel deletion in the dregg3 reduction.)
+///
+/// NO LONGER GAPS (each closed by the commit-gated turn/host-replay lever, the values the wire
+/// drops being turn/host data rather than kernel state — see `producer_root_agreeing_effects`):
+/// the cap-fidelity trio (GrantCapability/Introduce/AttenuateCapability via `apply_cap_ops`), the
+/// lifecycle pair (CellSeal/CellDestroy via `apply_state_ops`' `Cell::seal`/`Cell::destroy`
+/// replay), the struct pair (SetPermissions/SetVerificationKey — full turn-supplied structs), the
+/// structural MakeSovereign (`Ledger::make_sovereign` replay), and RevokeDelegation (the
+/// deterministic parent-epoch bump + child-snapshot clear).
 pub fn producer_root_gap_effects() -> &'static [&'static str] {
     &[
-        "SetPermissions",
-        "SetVerificationKey",
-        "MakeSovereign",
         "Refusal",
         "ReceiptArchive",
-        "CellSeal",
-        // CellUnseal is now root-AGREEING (Sealed→Live, the payload-free lifecycle state — see
-        // `producer_root_agreeing_effects`). Only CellSeal/CellDestroy remain lifecycle root-gaps:
-        // their post-state Sealed/Destroyed binds a `reason_hash`/`sealed_at` /
-        // `death_certificate_hash`/`destroyed_at` payload the wire `lifecycle` table (a bare
-        // discriminant) does not carry, so the reconstitution cannot reproduce the commitment bytes.
-        "CellDestroy",
-        "RevokeDelegation",
-        // NOTE: GrantCapability / Introduce / AttenuateCapability are NO LONGER cap-fidelity
-        // root-gaps — they are now root-AGREEING (see `producer_root_agreeing_effects`). The
-        // commit-gated turn-driven replay (`lean_apply::apply_cap_ops`) reconstructs the EXACT
-        // post-state c-list (full 7-field leaf), so the reconstituted `cap_root` equals Rust's.
-        // §SIDE-TABLE settle effects: the producer RUNS but the COMMIT-BIT diverges. Rust gates
-        // `ReleaseEscrow` on a satisfied condition (ZK proof / all-signers / predicate) and
-        // `RefundEscrow` on a PAST timeout (`block_height > timeout_height`); the verified
-        // `releaseEscrowChainA`/`refundEscrowChainA` gate only on settle-actor authority over the
-        // recipient/creator + record-present-and-unresolved. With no condition proof / before the
-        // timeout the two executors disagree on whether the settle commits — a characterized
-        // commit-bit gap (the condition/timeout crypto-&-clock legs are the §8 portal the wire model
-        // does not carry), surfaced by the differential, never a silent pass. Closing this needs the
-        // condition-proof / timeout legs modelled in the verified settle gate.
-        "ReleaseEscrow",
-        "RefundEscrow",
+        // (The escrow/obligation settle effects are FACTORY-DISSOLVED — out of the producer
+        // surface entirely; see `producer_mappable_effects`. Their condition/timeout gates are
+        // enforced by the factory cell programs now.)
     ]
 }
 
@@ -727,9 +729,8 @@ pub(crate) fn forest_is_marshallable(turn: &Turn) -> bool {
 ///
 /// This is the STRICTER gate the producer-mode commit path uses to decide whether to INSTALL the
 /// verified post-state. `forest_is_marshallable` (the producer merely RUNS) is a SUPERSET: it admits
-/// the characterized root-GAP effects (SetPermissions / SetVerificationKey / MakeSovereign /
-/// Refusal / ReceiptArchive / CellSeal / CellDestroy / GrantCapability /
-/// AttenuateCapability) whose Lean-reconstituted root provably DIVERGES from Rust because the wire
+/// the characterized root-GAP effects (Refusal / ReceiptArchive / the escrow-settle pair) whose
+/// Lean-reconstituted root (or commit bit) provably DIVERGES from Rust because the wire
 /// model is lossier than the cell commitment. Installing a Lean-produced root for one of those on
 /// the live commit path would commit state that DISAGREES with every other node's Rust root (and the
 /// proving machinery) — a silent divergence. So the default-on producer covers ONLY the root-agreeing
@@ -804,10 +805,8 @@ fn effect_is_mappable(eff: &Effect, id_map: &HashMap<CellId, u64>) -> bool {
         // `cell == actor`). The verified `attenuateStepA actor idx keep` narrows the actor's own
         // `idx`-th held cap (a TOTAL self-narrowing — always commits, `List.modify` is a no-op for an
         // out-of-range slot). The action target is the actor's own cell; we require it in the id map.
-        // NOTE: this is a cap-fidelity ROOT-GAP (the wire `caps` model carries `Cap::Node` edges, so
-        // Lean's `attenuate` — which only filters `.endpoint` rights — is a no-op, while Rust narrows
-        // the held `CapabilityRef`'s `AuthRequired`/expiry → `cap_root` diverges). Mappable (producer
-        // RUNS) but characterized as a gap by the coverage differential, never a silent pass.
+        // Root-AGREEING via the cap-fidelity lever: the narrowed leaf is reconstructed exactly by
+        // the commit-gated turn-driven replay (`lean_apply::apply_cap_ops` → `attenuate_in_place`).
         Effect::AttenuateCapability { cell, .. } => has(cell),
         // ─── GAP-shrink batch (the swap surface, MUST mirror effect_to_wire) ─────────────
         // QueueAllocate: the action target IS the gate cell (always in the map). The fresh
@@ -1147,10 +1146,9 @@ fn effect_to_wire(
         // Rust `narrower_permissions: AuthRequired` (the `AuthRequired` lattice does not map onto the
         // wire `Auth` rights list), AND the marshalled c-list edges are bare `Cap::Node` (which Lean's
         // `attenuate` leaves UNCHANGED — it only filters `.endpoint` rights). So we carry `keep = []`:
-        // the Lean post-state is the unchanged Node cap regardless. This makes AttenuateCapability a
-        // characterized cap-fidelity ROOT-GAP (Rust narrows the held `CapabilityRef` → `cap_root`
-        // changes; the Lean reconstruction keeps the Node edge → `cap_root` diverges), pinned by the
-        // coverage differential's negative tooth — the producer RUNS, the divergence is named.
+        // the Lean post-state is the unchanged Node cap regardless. The EXACT narrowed leaf is
+        // reconstructed instead by the commit-gated turn-driven replay (`lean_apply::apply_cap_ops`
+        // → `attenuate_in_place`), which is what makes AttenuateCapability root-AGREEING.
         Effect::AttenuateCapability { cell, slot, .. } => WireAction::Attenuate {
             actor: id(cell)?,
             idx: *slot as u64,
