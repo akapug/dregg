@@ -362,9 +362,9 @@ theorem unify_unseal_balance_neutral (st st' : RecChainedState) (pid : Nat) (act
     (box : SealedBoxRecord) (asset : AssetId) (hspec : UnsealSpec st pid actor recipient box st') :
     (cellProjUnseal st'.kernel.bal c asset).balLo = (cellProjUnseal st.kernel.bal c asset).balLo := by
   show st'.kernel.bal c asset = st.kernel.bal c asset
-  -- UnsealSpec: guard ∧ caps ∧ log ∧ accounts ∧ cell ∧ escrows ∧ nullifiers ∧ revoked ∧
-  --             commitments ∧ bal ∧ … — `bal` is the 10th conjunct.
-  obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
+  -- UnsealSpec (F1b escrow-free): guard ∧ caps ∧ log ∧ accounts ∧ cell ∧ nullifiers ∧ revoked ∧
+  --             commitments ∧ bal ∧ … — `bal` is the 9th conjunct.
+  obtain ⟨_, _, _, _, _, _, _, _, hbal, _⟩ := hspec
   rw [hbal]
 
 /-! ## §10 — THE per-cell circuit⟺executor balance AGREEMENT (the payoff). -/

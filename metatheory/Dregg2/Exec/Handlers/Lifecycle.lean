@@ -78,7 +78,7 @@ def emitEventStep (k : RecordKernelState) (a : EmitEventArgs) : Option RecordKer
 
 theorem cellSealStep_balNeutral {k k' : RecordKernelState} {a : CellLifecycleArgs}
     (h : cellSealStep k a = some k') (b : AssetId) :
-    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold cellSealStep at h
   by_cases hg : stateAuthB k.caps a.actor a.cell && acceptsEffects k a.cell
   · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
@@ -87,7 +87,7 @@ theorem cellSealStep_balNeutral {k k' : RecordKernelState} {a : CellLifecycleArg
 
 theorem cellUnsealStep_balNeutral {k k' : RecordKernelState} {a : CellLifecycleArgs}
     (h : cellUnsealStep k a = some k') (b : AssetId) :
-    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold cellUnsealStep at h
   by_cases hg : stateAuthB k.caps a.actor a.cell && (k.lifecycle a.cell == lcSealed)
   · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
@@ -96,25 +96,25 @@ theorem cellUnsealStep_balNeutral {k k' : RecordKernelState} {a : CellLifecycleA
 
 theorem cellDestroyStep_balNeutral {k k' : RecordKernelState} {a : CellDestroyArgs}
     (h : cellDestroyStep k a = some k') (b : AssetId) :
-    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold cellDestroyStep at h
   by_cases hg : stateAuthB k.caps a.actor a.cell && (k.lifecycle a.cell != lcDestroyed)
   · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
-    unfold recTotalAssetWithEscrow recTotalAsset escrowHeldAsset setLifecycle; rfl
+    unfold recTotalAsset setLifecycle; rfl
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem refreshDelegationStep_balNeutral {k k' : RecordKernelState} {a : RefreshDelegationArgs}
     (h : refreshDelegationStep k a = some k') (b : AssetId) :
-    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold refreshDelegationStep at h
   by_cases hg : stateAuthB k.caps a.actor a.child && (k.delegate a.child).isSome
   · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
-    unfold recTotalAssetWithEscrow recTotalAsset escrowHeldAsset parentClist; rfl
+    unfold recTotalAsset parentClist; rfl
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem emitEventStep_balNeutral {k k' : RecordKernelState} {a : EmitEventArgs}
     (h : emitEventStep k a = some k') (b : AssetId) :
-    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold emitEventStep at h
   by_cases hmem : a.cell ∈ k.accounts
   · rw [if_pos hmem] at h; simp only [Option.some.injEq] at h; subst h; rfl

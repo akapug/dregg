@@ -134,7 +134,7 @@ def noteSpendE (LE : Nat → ℤ) (cN : List ℤ → ℤ)
   logUpdate    := some (fun s args => noteSpendReceipt args.actor :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.escrows = k.escrows ∧ k'.bal = k.bal ∧ k'.revoked = k.revoked
+      ∧ k'.bal = k.bal ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -203,13 +203,13 @@ theorem apex_iff_noteSpendSpec (LE : Nat → ℤ) (cN : List ℤ → ℤ)
        ↔ NoteSpendSpec s args.nf args.actor args.spendProof s'
   unfold NoteSpendSpec noteSpendGuardProp noteSpendE
   constructor
-  · rintro ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hEsc, hBal, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hBal, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hEsc, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hEsc, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hEsc, hBal, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hBal, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §1c — THE VALIDATION: `noteSpendA_full_sound ⇒ NoteSpendSpec` through the framework. -/

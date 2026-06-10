@@ -45,23 +45,7 @@ private theorem queueEnqueueK_nullifiers (k : RecordKernelState) (id m : Nat) (k
     · injection hq with hq; subst hq; rfl
     · exact absurd hq (by simp)
 
-private theorem queueEnqueueDepositK_nullifiers (k : RecordKernelState) (id m : Nat)
-    (sender owner : CellId) (depId : Nat) (dAsset : AssetId) (deposit : ℤ) (k' : RecordKernelState)
-    (h : queueEnqueueDepositK k id m sender owner depId dAsset deposit = some k') :
-    k'.nullifiers = k.nullifiers := by
-  -- queueEnqueueDepositK = `match queueEnqueueK | none => none | some k₁ => if … then some (rawk₁) else none`.
-  unfold queueEnqueueDepositK at h
-  split at h
-  · exact absurd h (by simp)                                 -- queueEnqueueK = none
-  · rename_i k₁ hq                                            -- queueEnqueueK = some k₁
-    split at h
-    · obtain ⟨rfl⟩ := h                               -- deposit gate true ⇒ k' = createEscrowRawAsset k₁ …
-      show k₁.nullifiers = k.nullifiers
-      exact queueEnqueueK_nullifiers k id m k₁ hq
-    · exact absurd h (by simp)                               -- deposit gate false
-
-/-- `queueDequeueRefundK` commits via `queueDequeueK` (queues-only) then `settleEscrowRawAsset`
-(bal/escrows-only) — `nullifiers` untouched. -/
+/-- `queueDequeueK` is queues-only — `nullifiers` untouched. -/
 private theorem queueDequeueK_nullifiers (k : RecordKernelState) (id : Nat) (actor : CellId)
     (k₁ : RecordKernelState) (mh : Nat) (hq : queueDequeueK k id actor = some (k₁, mh)) :
     k₁.nullifiers = k.nullifiers := by
@@ -73,49 +57,26 @@ private theorem queueDequeueK_nullifiers (k : RecordKernelState) (id : Nat) (act
       · option_inj at hq; obtain ⟨hq, _⟩ := hq; subst hq; rfl
     · exact absurd hq (by simp)
 
-private theorem queueDequeueRefundK_nullifiers (k : RecordKernelState) (id : Nat) (actor : CellId)
-    (depId : Nat) (k' : RecordKernelState) (mh : Nat)
-    (h : queueDequeueRefundK k id actor depId = some (k', mh)) :
-    k'.nullifiers = k.nullifiers := by
-  -- queueDequeueRefundK = `match queueDequeueK | none => none | some (k₁,_) =>
-  --   match find? | some r => if actor∈accounts then some (settleEscrowRawAsset k₁ …, mh) else none | none => none`.
-  unfold queueDequeueRefundK at h
-  cases hq : queueDequeueK k id actor with
-  | none => rw [hq] at h; exact absurd h (by simp)
-  | some kp =>
-      obtain ⟨k₁, mh₁⟩ := kp
-      rw [hq] at h; simp only [] at h
-      by_cases hbind : dequeueMsgBindB k₁ actor depId id mh₁
-      · rw [if_pos hbind] at h
-        cases hfind : findUnresolvedDeposit k₁ depId with
-        | none => simp only [hfind] at h; exact absurd h (by simp)
-        | some r =>
-            simp only [hfind] at h
-            by_cases ha : actor ∈ k₁.accounts
-            · rw [if_pos ha, Option.some.injEq, Prod.mk.injEq] at h
-              obtain ⟨he, _⟩ := h; subst he
-              exact queueDequeueK_nullifiers k id actor k₁ mh₁ hq
-            · rw [if_neg ha] at h; exact absurd h (by simp)
-      · rw [if_neg hbind] at h; exact absurd h (by simp)
-
 /-- WAVE 4: one atomic-batch sub-op leaves `nullifiers` untouched (the deposit-park / FIFO frame). -/
 private theorem queueTxOpStepA_nullifiers (s s' : RecChainedState) (op : QueueTxOpA)
     (h : queueTxOpStepA s op = some s') : s'.kernel.nullifiers = s.kernel.nullifiers := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
+  | enqueue id m actor cell =>
       simp only [queueTxOpStepA, queueEnqueueChainA] at h; split at h
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' => commit_subst h hk
-                     exact queueEnqueueDepositK_nullifiers s.kernel id m actor cell depId dAsset deposit k' hk
+                     exact queueEnqueueK_nullifiers s.kernel id m k' hk
       · exact absurd h (by simp)
-  | dequeue id actor cell depId =>
+  | dequeue id actor cell =>
       simp only [queueTxOpStepA, queueDequeueChainA] at h; split at h
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some kp => obtain ⟨k', mhd⟩ := kp
-                     commit_subst h hk
-                     exact queueDequeueRefundK_nullifiers s.kernel id actor depId k' mhd hk
+                     rw [hk] at h
+                     simp only [Option.some.injEq] at h
+                     subst h
+                     exact queueDequeueK_nullifiers s.kernel id actor k' mhd hk
       · exact absurd h (by simp)
 
 /-- WAVE 4: the ALL-OR-NOTHING atomic batch leaves `nullifiers` untouched (induction over the sub-ops). -/
@@ -360,84 +321,6 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
             · injection hk with hk; subst hk; rfl
             · exact absurd hk (by simp)
           exact hn ▸ List.Subset.refl _
-  -- §escrow / obligation / committed — the chained holding-store steps (kernel updates bal/escrows,
-  -- never `nullifiers`). create/obligation/committed-create share createEscrowKAsset; release/refund
-  -- share releaseEscrowKAsset/refundEscrowKAsset.
-  | createEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
-  | releaseEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      show s.kernel.nullifiers ⊆ k'.nullifiers
-      have hn : k'.nullifiers = s.kernel.nullifiers := by
-        unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-        split at hk
-        · split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-        · exact absurd hk (by simp)
-      exact hn ▸ List.Subset.refl _
-  | refundEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      show s.kernel.nullifiers ⊆ k'.nullifiers
-      have hn : k'.nullifiers = s.kernel.nullifiers := by
-        unfold refundEscrowKAsset settleEscrowRawAsset at hk
-        split at hk
-        · split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-        · exact absurd hk (by simp)
-      exact hn ▸ List.Subset.refl _
-  | createObligationA id actor obligor beneficiary asset stake =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
-  -- fulfill/slash route to refund/release (escrow SETTLE) — `nullifiers` literally unchanged.
-  | fulfillObligationA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      show s.kernel.nullifiers ⊆ k'.nullifiers
-      have hn : k'.nullifiers = s.kernel.nullifiers := by
-        unfold refundEscrowKAsset settleEscrowRawAsset at hk
-        split at hk
-        · split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-        · exact absurd hk (by simp)
-      exact hn ▸ List.Subset.refl _
-  | slashObligationA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      show s.kernel.nullifiers ⊆ k'.nullifiers
-      have hn : k'.nullifiers = s.kernel.nullifiers := by
-        unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-        split at hk
-        · split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-        · exact absurd hk (by simp)
-      exact hn ▸ List.Subset.refl _
-  -- §NOTE-SPEND — THE GROWER. `noteSpendNullifier` conses `nf` onto `nullifiers`, so the OLD set is a
-  -- subset of the new (`List.subset_cons_self`). This is the ONE arm that moves the measured set.
   | noteSpendA nf actor spendProof =>
       simp only [execFullA, noteSpendChainA] at h
       by_cases hp : spendProof = true
@@ -461,93 +344,6 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       show s.kernel.nullifiers ⊆ (noteCreateCommitment s.kernel cm).nullifiers
       unfold noteCreateCommitment
       exact List.Subset.refl _
-  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA] at h; split at h
-      · cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show s.kernel.nullifiers ⊆ k'.nullifiers
-            have hn : k'.nullifiers = s.kernel.nullifiers := by
-              unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            exact hn ▸ List.Subset.refl _
-      · exact absurd h (by simp)
-  | releaseCommittedEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      show s.kernel.nullifiers ⊆ k'.nullifiers
-      have hn : k'.nullifiers = s.kernel.nullifiers := by
-        unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-        split at hk
-        · split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-        · exact absurd hk (by simp)
-      exact hn ▸ List.Subset.refl _
-  | refundCommittedEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, h'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst h'
-      show s.kernel.nullifiers ⊆ k'.nullifiers
-      have hn : k'.nullifiers = s.kernel.nullifiers := by
-        unfold refundEscrowKAsset settleEscrowRawAsset at hk
-        split at hk
-        · split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-        · exact absurd hk (by simp)
-      exact hn ▸ List.Subset.refl _
-  -- §bridge — lock/finalize/cancel over the SHARED escrow holding-store (kernel updates bal/escrows).
-  | bridgeLockA id actor originator destination asset amount =>
-      simp only [execFullA, bridgeLockChainA] at h
-      cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          show s.kernel.nullifiers ⊆ k'.nullifiers
-          have hn : k'.nullifiers = s.kernel.nullifiers := by
-            unfold bridgeLockKAsset createBridgeRawAsset at hk; split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-          exact hn ▸ List.Subset.refl _
-  | bridgeFinalizeA id actor asset amount =>
-      simp only [execFullA, bridgeFinalizeChainA] at h
-      -- OUTER `if bridgeAuthOK` gate, THEN the kernel-op match.
-      split at h
-      · cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show s.kernel.nullifiers ⊆ k'.nullifiers
-            have hn : k'.nullifiers = s.kernel.nullifiers := by
-              unfold bridgeFinalizeKAsset bridgeFinalizeRawAsset at hk
-              split at hk
-              · split at hk
-                · injection hk with hk; subst hk; rfl
-                · exact absurd hk (by simp)
-              · exact absurd hk (by simp)
-            exact hn ▸ List.Subset.refl _
-      · exact absurd h (by simp)
-  | bridgeCancelA id actor =>
-      simp only [execFullA, bridgeCancelChainA] at h
-      split at h
-      · cases hk : bridgeCancelKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show s.kernel.nullifiers ⊆ k'.nullifiers
-            have hn : k'.nullifiers = s.kernel.nullifiers := by
-              unfold bridgeCancelKAsset settleEscrowRawAsset at hk
-              split at hk
-              · split at hk
-                · injection hk with hk; subst hk; rfl
-                · exact absurd hk (by simp)
-              · exact absurd hk (by simp)
-            exact hn ▸ List.Subset.refl _
-      · exact absurd h (by simp)
-  -- §seal — the DE-SHADOWED seal/unseal/createSealPair move capabilities (edit `caps`/`sealedBoxes`),
-  -- makeSovereign/refusal/receiptArchive write the cell record — none touch `nullifiers` (frame: `rfl`).
   | sealA pid actor payload =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; exact List.Subset.refl _
@@ -597,31 +393,30 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
               · injection hk with hk; subst hk; rfl
             exact hn ▸ List.Subset.refl _
       · exact absurd h (by simp)
-  | queueEnqueueA id m actor cell depId dAsset deposit =>
+  | queueEnqueueA id m actor cell =>
       simp only [execFullA, queueEnqueueChainA] at h
       split at h
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
             commit_subst h hk
             show s.kernel.nullifiers ⊆ k'.nullifiers
-            -- queueEnqueueDepositK moves bal/queues/escrows only — read its frame on `nullifiers`.
             have hn : k'.nullifiers = s.kernel.nullifiers :=
-              queueEnqueueDepositK_nullifiers s.kernel id m actor cell depId dAsset deposit k' hk
+              queueEnqueueK_nullifiers s.kernel id m k' hk
             exact hn ▸ List.Subset.refl _
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId =>
+  | queueDequeueA id actor cell =>
       simp only [execFullA, queueDequeueChainA] at h
       split at h
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some kp =>
-            rw [hk] at h
             obtain ⟨k', mhd⟩ := kp
+            rw [hk] at h
             obtain ⟨rfl⟩ := h
             show s.kernel.nullifiers ⊆ k'.nullifiers
             have hn : k'.nullifiers = s.kernel.nullifiers :=
-              queueDequeueRefundK_nullifiers s.kernel id actor depId k' mhd hk
+              queueDequeueK_nullifiers s.kernel id actor k' mhd hk
             exact hn ▸ List.Subset.refl _
       · exact absurd h (by simp)
   | queueResizeA id newCap actor cell =>

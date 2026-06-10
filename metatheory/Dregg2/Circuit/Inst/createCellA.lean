@@ -45,7 +45,7 @@ theorem propBit_eq_one {p : Prop} [Decidable p] : Circuit.propBit p = 1 ↔ p :=
 are digest-bound; only global side-tables ride the rest hash. -/
 def RestIffNoAccountsBalBorn (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
-    (k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+    (k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
       ∧ k'.delegationEpoch = k.delegationEpoch
@@ -113,7 +113,7 @@ def createCellE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
   active3      := bornEmptyComp DSide hDSide
   logUpdate    := some (fun s args => createReceipt args.actor args.newCell :: s.log)
   restFrame    := fun k k' =>
-    (k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+    (k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
       ∧ k'.delegationEpoch = k.delegationEpoch
@@ -184,12 +184,12 @@ theorem apex_iff_createCellSpec (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     createCellGuardProp, createCellAdmit, expectedAccounts, expectedBal, readBornEmptySide,
     expectedBornEmptySide]
   constructor
-  · rintro ⟨hg, hacc, hbal, hside, hlog, hEsc, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
-    refine ⟨hg, hacc, ?_, hlog, hEsc, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+  · rintro ⟨hg, hacc, hbal, hside, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+    refine ⟨hg, hacc, ?_, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
     exact (bornEmptyAt_iff_side_and_bal s.kernel args.newCell s'.kernel).mpr ⟨hside, hbal⟩
-  · rintro ⟨hg, hacc, hborn, hlog, hEsc, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+  · rintro ⟨hg, hacc, hborn, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
     obtain ⟨hside, hbal⟩ := (bornEmptyAt_iff_side_and_bal s.kernel args.newCell s'.kernel).mp hborn
-    exact ⟨hg, hacc, hbal, hside, hlog, hEsc, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+    exact ⟨hg, hacc, hbal, hside, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
 
 /-! ### §2c — THE VALIDATION: `createCellA_full_sound ⇒ CreateCellSpec`. -/
 

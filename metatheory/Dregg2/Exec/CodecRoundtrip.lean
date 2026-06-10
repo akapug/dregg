@@ -77,7 +77,6 @@ Quot.sound}`. -/
 #assert_axioms parseAuthListW_roundtrip
 #assert_axioms parseActionW_roundtrip
 #assert_axioms parseActionW_setfield
-#assert_axioms parseActionW_committedescrow
 #assert_axioms parseNatsW_encode
 #assert_axioms parseQueueTxOp_encode
 #assert_axioms parseQueueTxOps_encode

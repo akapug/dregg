@@ -114,7 +114,7 @@ theorem idNode_delta_zero (cred : Authorization Dg Pf) (slot : FieldName) (value
 theorem id_op_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf)
     (slot : FieldName) (value : Int) (b : AssetId)
     (h : execFullForestG s (idNode cred slot value) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (idNode cred slot value) b h
     (idNode_delta_zero cred slot value b)
 

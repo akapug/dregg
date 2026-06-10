@@ -1611,20 +1611,8 @@ field names as JSON strings, the swiss `rights`/`held` as the narrow `AUTHS` arr
       | {"createcellfactory":[actor,newCell,vk]} -- createCellFromFactoryA
       | {"spawn":[actor,child,target]}           -- spawnA
       | {"bmint":[actor,cell,asset,value]}       -- bridgeMintA
-      | {"cesc":[id,actor,creator,recipient,asset,amount]}      -- createEscrowA
-      | {"resc":[id,actor]}                      -- releaseEscrowA
-      | {"fesc":[id,actor]}                      -- refundEscrowA
-      | {"cobl":[id,actor,obligor,beneficiary,asset,stake]}     -- createObligationA
-      | {"fobl":[id,actor]}                      -- fulfillObligationA
-      | {"sobl":[id,actor]}                      -- slashObligationA
       | {"nspend":[nf,actor]}                    -- noteSpendA
       | {"ncreate":[cm,actor]}                   -- noteCreateA
-      | {"ccesc":[id,actor,creator,recipient,asset,amount,hidingProof]}  -- createCommittedEscrowA (hidingProof = 0/1 flag)
-      | {"rccesc":[id,actor]}                    -- releaseCommittedEscrowA
-      | {"fccesc":[id,actor]}                    -- refundCommittedEscrowA
-      | {"block":[id,actor,originator,destination,asset,amount]}  -- bridgeLockA
-      | {"bfin":[id,actor,asset,amount]}         -- bridgeFinalizeA
-      | {"bcancel":[id,actor]}                   -- bridgeCancelA
       | {"seal":[actor,cell]}                    -- sealA
       | {"unseal":[actor,cell]}                  -- unsealA
       | {"csp":[actor,sealerHolder,unsealerHolder]}   -- createSealPairA
@@ -1632,8 +1620,8 @@ field names as JSON strings, the swiss `rights`/`held` as the narrow `AUTHS` arr
       | {"refusal":[actor,cell]}                 -- refusalA
       | {"rarchive":[actor,cell]}                -- receiptArchiveA
       | {"qalloc":[id,actor,cell,capacity]}      -- queueAllocateA
-      | {"qenq":[id,m,actor,cell,depId,dAsset,deposit]}  -- queueEnqueueA
-      | {"qdeq":[id,actor,cell,depId]}           -- queueDequeueA (refund amount = record's own amount)
+      | {"qenq":[id,m,actor,cell]}               -- queueEnqueueA (F1b: deposit-free)
+      | {"qdeq":[id,actor,cell]}                 -- queueDequeueA (F1b: refund-free)
       | {"qresize":[id,newCap,actor,cell]}       -- queueResizeA
       | {"export":[sw,actor,exporter,target,AUTHS]}  -- exportSturdyRefA(rights); held read from committed caps
       | {"enliven":[sw,actor,exporter,AUTHS]}    -- enlivenRefA(claimed)
@@ -1644,8 +1632,8 @@ field names as JSON strings, the swiss `rights`/`held` as the narrow `AUTHS` arr
       | {"psend":[actor]}                        -- pipelinedSendA
 
 The QueueTxOpA sub-op array `OPS := [] | [OP(,OP)*]` with
-      OP := {"enq":[id,m,actor,cell,depId,dAsset,deposit]}   -- QueueTxOpA.enqueue
-          | {"deq":[id,actor,cell,depId]}                    -- QueueTxOpA.dequeue
+      OP := {"enq":[id,m,actor,cell]}                        -- QueueTxOpA.enqueue
+          | {"deq":[id,actor,cell]}                          -- QueueTxOpA.dequeue
 and `NATSW := [] | [N(,N)*]` a plain `Nat` array.
 
 Every id/asset/idx/capacity/newNonce/nf/cm/sw/certHash is a `Nat`; every amt/value/amount/stake/
@@ -1670,16 +1658,14 @@ def encodeNatsW : List Nat → String
   | []      => "[]"
   | n :: ns => "[" ++ toString n ++ (ns.foldl (fun acc x => acc ++ "," ++ toString x) "") ++ "]"
 
-/-- Encode ONE `QueueTxOpA` sub-op to its tagged wire form. `enqueue` carries the full deposit-park
-shape (matching `queueEnqueueA`); `dequeue` carries the refund shape (matching `queueDequeueA`). -/
+/-- Encode ONE `QueueTxOpA` sub-op to its tagged wire form (F1b: deposit-free shapes, matching
+`queueEnqueueA`/`queueDequeueA`). -/
 def encodeQueueTxOp : QueueTxOpA → String
-  | QueueTxOpA.enqueue id m actor cell depId dAsset deposit =>
+  | QueueTxOpA.enqueue id m actor cell =>
       "{\"enq\":[" ++ toString id ++ "," ++ toString m ++ "," ++ toString actor ++ ","
-        ++ toString cell ++ "," ++ toString depId ++ "," ++ toString dAsset ++ ","
-        ++ toString deposit ++ "]}"
-  | QueueTxOpA.dequeue id actor cell depId =>
-      "{\"deq\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString cell ++ ","
-        ++ toString depId ++ "]}"
+        ++ toString cell ++ "]}"
+  | QueueTxOpA.dequeue id actor cell =>
+      "{\"deq\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString cell ++ "]}"
 
 /-- Encode a `List QueueTxOpA` as the `OPS` array `[OP(,OP)*]` (or `[]`) — the atomic-batch body. -/
 def encodeQueueTxOps : List QueueTxOpA → String
@@ -1728,31 +1714,9 @@ def encodeActionW : FullActionA → String
                                     ++ toString target ++ "]}"
   | .bridgeMintA actor cell a value => "{\"bmint\":[" ++ toString actor ++ "," ++ toString cell ++ ","
                                          ++ toString a ++ "," ++ toString value ++ "]}"
-  | .createEscrowA id actor creator recipient a amount =>
-      "{\"cesc\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString creator ++ ","
-        ++ toString recipient ++ "," ++ toString a ++ "," ++ toString amount ++ "]}"
-  | .releaseEscrowA id actor => "{\"resc\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
-  | .refundEscrowA id actor => "{\"fesc\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
-  | .createObligationA id actor obligor beneficiary a stake =>
-      "{\"cobl\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString obligor ++ ","
-        ++ toString beneficiary ++ "," ++ toString a ++ "," ++ toString stake ++ "]}"
-  | .fulfillObligationA id actor => "{\"fobl\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
-  | .slashObligationA id actor => "{\"sobl\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
   | .noteSpendA nf actor spendProof => "{\"nspend\":[" ++ toString nf ++ "," ++ toString actor ++ ","
                                           ++ (if spendProof then "1" else "0") ++ "]}"
   | .noteCreateA cm actor => "{\"ncreate\":[" ++ toString cm ++ "," ++ toString actor ++ "]}"
-  | .createCommittedEscrowA id actor creator recipient a amount hidingProof =>
-      "{\"ccesc\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString creator ++ ","
-        ++ toString recipient ++ "," ++ toString a ++ "," ++ toString amount ++ ","
-        ++ (if hidingProof then "1" else "0") ++ "]}"
-  | .releaseCommittedEscrowA id actor => "{\"rccesc\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
-  | .refundCommittedEscrowA id actor => "{\"fccesc\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
-  | .bridgeLockA id actor originator destination a amount =>
-      "{\"block\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString originator ++ ","
-        ++ toString destination ++ "," ++ toString a ++ "," ++ toString amount ++ "]}"
-  | .bridgeFinalizeA id actor a amount => "{\"bfin\":[" ++ toString id ++ "," ++ toString actor ++ ","
-                                            ++ toString a ++ "," ++ toString amount ++ "]}"
-  | .bridgeCancelA id actor => "{\"bcancel\":[" ++ toString id ++ "," ++ toString actor ++ "]}"
   | .sealA pid actor payload => "{\"seal\":[" ++ toString pid ++ "," ++ toString actor ++ ","
                                   ++ encodeCap payload ++ "]}"
   | .unsealA pid actor recipient => "{\"unseal\":[" ++ toString pid ++ "," ++ toString actor ++ ","
@@ -1764,12 +1728,11 @@ def encodeActionW : FullActionA → String
   | .receiptArchiveA actor cell => "{\"rarchive\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
   | .queueAllocateA id actor cell cap => "{\"qalloc\":[" ++ toString id ++ "," ++ toString actor ++ ","
                                            ++ toString cell ++ "," ++ toString cap ++ "]}"
-  | .queueEnqueueA id m actor cell depId dAsset deposit =>
-      "{\"qenq\":[" ++ toString id ++ "," ++ toString m ++ "," ++ toString actor ++ "," ++ toString cell
-        ++ "," ++ toString depId ++ "," ++ toString dAsset ++ "," ++ toString deposit ++ "]}"
-  | .queueDequeueA id actor cell depId =>
-      "{\"qdeq\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString cell ++ ","
-        ++ toString depId ++ "]}"
+  | .queueEnqueueA id m actor cell =>
+      "{\"qenq\":[" ++ toString id ++ "," ++ toString m ++ "," ++ toString actor ++ ","
+        ++ toString cell ++ "]}"
+  | .queueDequeueA id actor cell =>
+      "{\"qdeq\":[" ++ toString id ++ "," ++ toString actor ++ "," ++ toString cell ++ "]}"
   | .queueResizeA id newCap actor cell => "{\"qresize\":[" ++ toString id ++ "," ++ toString newCap ++ ","
                                             ++ toString actor ++ "," ++ toString cell ++ "]}"
   | .exportSturdyRefA sw actor exporter target rights =>
@@ -1856,15 +1819,14 @@ def parseQueueTxOp (cs : PState) : Option (QueueTxOpA × PState) :=
   match lit "{\"enq\":[" cs with
   | some r0 => do
       let (id, r1) ← parseNat r0; let (m, r2) ← cN r1; let (actor, r3) ← cN r2
-      let (cell, r4) ← cN r3; let (depId, r5) ← cN r4; let (dAsset, r6) ← cN r5
-      let (deposit, r7) ← cI r6; let r8 ← lit "]}" r7
-      some (QueueTxOpA.enqueue id m actor cell depId dAsset deposit, r8)
+      let (cell, r4) ← cN r3; let r5 ← lit "]}" r4
+      some (QueueTxOpA.enqueue id m actor cell, r5)
   | none =>
   match lit "{\"deq\":[" cs with
   | some r0 => do
       let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (cell, r3) ← cN r2
-      let (depId, r4) ← cN r3; let r5 ← lit "]}" r4
-      some (QueueTxOpA.dequeue id actor cell depId, r5)
+      let r4 ← lit "]}" r3
+      some (QueueTxOpA.dequeue id actor cell, r4)
   | none => none
 
 /-- Parse an `OPS` array `[OP(,OP)*]` (or `[]`) — the atomic-batch body, fail-closed. -/
@@ -2015,38 +1977,6 @@ def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState)
       let (value, r4) ← cI r3; let r5 ← lit "]}" r4
       some (.bridgeMintA actor cell a value, r5)
   | none =>
-  match lit "{\"cesc\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (creator, r3) ← cN r2
-      let (recipient, r4) ← cN r3; let (a, r5) ← cN r4; let (amount, r6) ← cI r5; let r7 ← lit "]}" r6
-      some (.createEscrowA id actor creator recipient a amount, r7)
-  | none =>
-  match lit "{\"resc\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.releaseEscrowA id actor, r3)
-  | none =>
-  match lit "{\"fesc\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.refundEscrowA id actor, r3)
-  | none =>
-  match lit "{\"cobl\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (obligor, r3) ← cN r2
-      let (beneficiary, r4) ← cN r3; let (a, r5) ← cN r4; let (stake, r6) ← cI r5; let r7 ← lit "]}" r6
-      some (.createObligationA id actor obligor beneficiary a stake, r7)
-  | none =>
-  match lit "{\"fobl\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.fulfillObligationA id actor, r3)
-  | none =>
-  match lit "{\"sobl\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.slashObligationA id actor, r3)
-  | none =>
   match lit "{\"nspend\":[" cs with
   | some r0 => do
       let (nf, r1) ← parseNat r0; let (actor, r2) ← cN r1
@@ -2059,42 +1989,6 @@ def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState)
   | some r0 => do
       let (cm, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
       some (.noteCreateA cm actor, r3)
-  | none =>
-  match lit "{\"ccesc\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (creator, r3) ← cN r2
-      let (recipient, r4) ← cN r3; let (a, r5) ← cN r4; let (amount, r6) ← cI r5
-      -- the 7th field: the §8 hiding-portal witness, a strict `0`/`1` flag (≤ 1 ⇒ fail-closed).
-      let (hp, r7) ← cN r6; let r8 ← lit "]}" r7
-      if hp ≤ 1 then some (.createCommittedEscrowA id actor creator recipient a amount (hp == 1), r8)
-      else none
-  | none =>
-  match lit "{\"rccesc\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.releaseCommittedEscrowA id actor, r3)
-  | none =>
-  match lit "{\"fccesc\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.refundCommittedEscrowA id actor, r3)
-  | none =>
-  match lit "{\"block\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (originator, r3) ← cN r2
-      let (destination, r4) ← cN r3; let (a, r5) ← cN r4; let (amount, r6) ← cI r5; let r7 ← lit "]}" r6
-      some (.bridgeLockA id actor originator destination a amount, r7)
-  | none =>
-  match lit "{\"bfin\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (a, r3) ← cN r2
-      let (amount, r4) ← cI r3; let r5 ← lit "]}" r4
-      some (.bridgeFinalizeA id actor a amount, r5)
-  | none =>
-  match lit "{\"bcancel\":[" cs with
-  | some r0 => do
-      let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.bridgeCancelA id actor, r3)
   | none =>
   match lit "{\"seal\":[" cs with
   | some r0 => do
@@ -2137,14 +2031,14 @@ def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState)
   match lit "{\"qenq\":[" cs with
   | some r0 => do
       let (id, r1) ← parseNat r0; let (m, r2) ← cN r1; let (actor, r3) ← cN r2; let (cell, r4) ← cN r3
-      let (depId, r5) ← cN r4; let (dAsset, r6) ← cN r5; let (deposit, r7) ← cI r6; let r8 ← lit "]}" r7
-      some (.queueEnqueueA id m actor cell depId dAsset deposit, r8)
+      let r5 ← lit "]}" r4
+      some (.queueEnqueueA id m actor cell, r5)
   | none =>
   match lit "{\"qdeq\":[" cs with
   | some r0 => do
       let (id, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (cell, r3) ← cN r2
-      let (depId, r4) ← cN r3; let r5 ← lit "]}" r4
-      some (.queueDequeueA id actor cell depId, r5)
+      let r4 ← lit "]}" r3
+      some (.queueDequeueA id actor cell, r4)
   | none =>
   match lit "{\"qresize\":[" cs with
   | some r0 => do
@@ -2276,20 +2170,8 @@ def allActions : List FullActionA :=
   , .createCellFromFactoryA 250 251 (-252)
   , .spawnA 51 52 53
   , .bridgeMintA 54 55 56 (-57)
-  , .createEscrowA 58 59 60 61 62 (-63)
-  , .releaseEscrowA 64 65
-  , .refundEscrowA 66 67
-  , .createObligationA 68 69 70 71 72 (-73)
-  , .fulfillObligationA 200 201
-  , .slashObligationA 202 203
   , .noteSpendA 74 75 true
   , .noteCreateA 76 77
-  , .createCommittedEscrowA 78 79 80 81 82 (-83) true
-  , .releaseCommittedEscrowA 84 85
-  , .refundCommittedEscrowA 86 87
-  , .bridgeLockA 88 89 90 91 92 (-93)
-  , .bridgeFinalizeA 94 95 96 (-97)
-  , .bridgeCancelA 98 99
   , .sealA 100 101 (Cap.endpoint 150 [.read, .write])
   , .unsealA 102 103 104
   , .createSealPairA 105 106 107 108
@@ -2297,8 +2179,8 @@ def allActions : List FullActionA :=
   , .refusalA 111 112
   , .receiptArchiveA 113 114
   , .queueAllocateA 115 116 117 118
-  , .queueEnqueueA 119 120 121 122 123 124 (-125)
-  , .queueDequeueA 126 127 128 129
+  , .queueEnqueueA 119 120 121 122
+  , .queueDequeueA 126 127 128
   , .queueResizeA 131 132 133 134
   , .exportSturdyRefA 135 136 137 138 [.read]
   , .enlivenRefA 139 140 141 [.call]
@@ -2310,15 +2192,15 @@ def allActions : List FullActionA :=
   , .refreshDelegationA 156 157
     -- §MA-queue-batch (WAVE 4): a non-empty atomic batch (one enqueue + one dequeue sub-op), a
     -- pipeline fan-out with two distinct sinks, and a promise-pipelined send.
-  , .queueAtomicTxA 158 [ QueueTxOpA.enqueue 159 160 161 162 163 164 (-165),
-                          QueueTxOpA.dequeue 166 167 168 169 ]
+  , .queueAtomicTxA 158 [ QueueTxOpA.enqueue 159 160 161 162,
+                          QueueTxOpA.dequeue 166 167 168 ]
   , .queuePipelineStepA 171 172 [173, 174] [175, 176]
   , .pipelinedSendA 177 ]
 
 /-- EVERY representative round-trips (the 56-arm non-vacuity guard). -/
 def allActionsRoundtrip : Bool := allActions.all actionRoundtrips
 
-#guard (allActions.length) == 56  --  56 (one per FullActionA arm)
+#guard (allActions.length) == 44  --  44 (one per FullActionA arm; F1b: the escrow/obligation/committed/bridge-LFC arms are GONE)
 #guard (allActionsRoundtrip)  --  true (every arm round-trips)
 -- HARD CI check (fails the build if ANY arm — incl. the Wave-3 seal/lifecycle arms — stops round-tripping):
 #guard allActionsRoundtrip
@@ -2921,7 +2803,7 @@ def stateOfWState (w : WState) : RecordKernelState :=
                      | none   => .record [(Exec.balanceField, .int 0)]
     caps := capsOfEntries w.caps
     bal := balOfEntries w.bal
-    escrows := w.escrows
+    -- F1b: the kernel escrow holding-store is GONE; `w.escrows` is wire-compat ballast (DROPPED here).
     nullifiers := w.nullifiers
     commitments := w.commitments
     queues := w.queues
@@ -2983,7 +2865,8 @@ def wstateOfState (cellIds : List CellId) (capLabels : List CellId)
   { cells := cellIds.map (fun c => (c, k.cell c))
     caps := capLabels.map (fun l => (l, k.caps l))
     bal := balKeys.map (fun p => (p.1, p.2, k.bal p.1 p.2))
-    escrows := k.escrows
+    -- F1b: the kernel escrow holding-store is GONE; emit the empty list (byte-identical wire shape).
+    escrows := []
     nullifiers := k.nullifiers
     commitments := k.commitments
     queues := k.queues

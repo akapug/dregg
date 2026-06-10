@@ -57,7 +57,6 @@ inductive RecStmt where
   | setNullifiers  (g : RecordKernelState → List Nat)               -- spent-note nullifier SET
   | setRevoked     (g : RecordKernelState → List Nat)               -- revocation registry
   | setCommitments (g : RecordKernelState → List Nat)               -- note-commitment SET
-  | setEscrows     (g : RecordKernelState → List EscrowRecord)      -- off-ledger escrow store
   | setQueues      (g : RecordKernelState → List QueueRecord)       -- FIFO queue side-table
   | setSwiss       (g : RecordKernelState → List SwissRecord)       -- CapTP export/GC registry
   | setFactories   (g : RecordKernelState → List (Nat × FactoryEntry))  -- published factory registry
@@ -114,7 +113,6 @@ def interp : RecStmt → RecordKernelState → Option RecordKernelState
   | .setNullifiers g,  k => some { k with nullifiers := g k }
   | .setRevoked g,     k => some { k with revoked := g k }
   | .setCommitments g, k => some { k with commitments := g k }
-  | .setEscrows g,     k => some { k with escrows := g k }
   | .setQueues g,      k => some { k with queues := g k }
   | .setSwiss g,       k => some { k with swiss := g k }
   | .setFactories g,   k => some { k with factories := g k }

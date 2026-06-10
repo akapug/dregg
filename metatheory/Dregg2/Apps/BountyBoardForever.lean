@@ -7,10 +7,10 @@ guarantees onto the PLAIN `recTotalAsset` measure, for the FACTORY-BORN bounty b
 escrow cell: the locked reward now lives in the minted cell's OWN per-asset `bal` column, NOT in the
 side-table. Its per-op release-safety contract (`bb_post_*_conserves` / `bb_claim_conserves` /
 `bb_cancel_conserves`) is consequently re-proved on the ORDINARY plain `recTotalAsset` move law — NO
-`recTotalAssetWithEscrow`. That migration set ASIDE the §9 Hatchery "forever" crowns the verb-era file
+`recTotalAsset`. That migration set ASIDE the §9 Hatchery "forever" crowns the verb-era file
 carried (`bb_asset_conserved_forever`, `bb_board0_*_conserved_forever`, `bb_safety_forever`), because
-those were stated on the OLD combined `recTotalAssetWithEscrow` measure (`cellObsA`, the production
-`assetConserved` badge = `recTotalAsset + escrowHeldAsset`).
+those were stated on the OLD combined `recTotalAsset` measure (`cellObsA`, the production
+`assetConserved` badge = the plain `recTotalAsset`; F1b deleted the side-table summand).
 
 THIS file RECOVERS the lifetime guarantee on the plain measure. It re-proves, via the `Verify/Contract`
 toolkit's `CellContract.forever` machinery, that conservation holds along the WHOLE production trajectory
@@ -20,7 +20,7 @@ off the plain `recTotalAsset` ledger.
 ## The honest re-lift (and why it is the RIGHT statement)
 
 The Hatchery's parametric forever carry (`assetConserved`/`cellObsA`, the production conservation
-contract) is invariant for the COMBINED per-asset quantity `recTotalAssetWithEscrow k a =
+contract) is invariant for the COMBINED per-asset quantity `recTotalAsset k a =
 recTotalAsset k a + escrowHeldAsset k a` (`RecordKernel.lean:1429`). This is the quantity that is
 preserved by EVERY committed conserving gated forest step — including a step that parks value into the
 legacy side-table (where `recTotalAsset` drops and `escrowHeldAsset` rises by the same amount). The bare
@@ -39,7 +39,7 @@ For the FACTORY-BORN board (`board0` from `BountyBoardGated`, whose `escrows` si
 never populated by post/claim/cancel — they move the cell's own `bal`), the side-table summand is `0`
 throughout: `cellObsA board0 = recTotalAsset board0.kernel` exactly. The §3 non-vacuity witnesses pin
 this — so on the factory board's own trajectory the combined crown IS the plain-measure crown, with no
-residual. Post W2's verb deletion, `escrowHeldAsset` is removed and `recTotalAssetWithEscrow` COLLAPSES
+residual. Post W2's verb deletion, `escrowHeldAsset` is removed and `recTotalAsset` COLLAPSES
 to plain `recTotalAsset` (`EscrowFactory.lean §DELETION (4)`), at which point the two crowns coincide
 unconditionally.
 
@@ -64,7 +64,7 @@ abbrev rewardAsset : AssetId := 0
 
 /-- The bounty board's conservation contract on the production executor, at the reward asset. This is
 the SHIPPED Hatchery `assetConserved` contract (`Verify/Contract.lean:269`): its `Inv` carries the
-combined per-asset quantity `cellObsA · rewardAsset = recTotalAssetWithEscrow · rewardAsset` constant,
+combined per-asset quantity `cellObsA · rewardAsset = recTotalAsset · rewardAsset` constant,
 and its `step_ob` is the proved `cellObsA_next`. Naming it here makes the bounty board's lifetime crown
 a `.forever` method call on a named object — the Tier-3 promise. -/
 noncomputable def bbRewardConserved (s0 : RecChainedState) : Dregg2.Verify.Production.Contract :=
@@ -72,90 +72,56 @@ noncomputable def bbRewardConserved (s0 : RecChainedState) : Dregg2.Verify.Produ
 
 /-! ## §2 — The lifetime ("forever") crowns on the PLAIN `recTotalAsset` measure.
 
-`recTotalAssetWithEscrow k b` is DEFINITIONALLY `recTotalAsset k b + escrowHeldAsset k b`
-(`RecordKernel.lean:1429`), and `cellObsA s b = recTotalAssetWithEscrow s.kernel b`
-(`CellReal.lean:30`). So the production `assetConserved` forever carry, read at the reward asset, IS the
-statement that `recTotalAsset + escrowHeldAsset` never drifts along the whole `trajG` trajectory. -/
+F1b COLLAPSED the transitional decomposition: the kernel escrow side-table (`escrows` +
+`escrowHeldAsset`) is GONE, so `cellObsA s b = recTotalAsset s.kernel b` IS the plain per-asset
+cell-sum — no off-ledger summand, no quiet hypotheses. The production `assetConserved` forever carry,
+read at the reward asset, is DIRECTLY the plain-ledger lifetime crown the verb-era
+`bb_asset_conserved_forever` carried. -/
 
-/-- **`bbf_plain_plus_held_conserved_forever` — THE LIFETIME CROWN (universal).** From any baseline
-`s0`, along EVERY adversarial production schedule, the bounty board's reward supply on the PLAIN ledger
-PLUS the legacy side-table held-value never drifts — at every index of the unbounded trajectory. This is
-the `CellContract.forever` crown for the factory-born board, recovered on the plain-ledger decomposition.
-(The combined quantity is the one preserved by every committed gated step; the plain summand is isolated
-in §`bbf_plain_conserved_forever_of_side_table_quiet`.) -/
-theorem bbf_plain_plus_held_conserved_forever (s0 : RecChainedState) (sched : SchedG) :
+/-- **`bbf_plain_conserved_forever` — THE LIFETIME CROWN (universal, F1b-collapsed).** From any
+baseline `s0`, along EVERY adversarial production schedule, the bounty board's reward supply on the
+PLAIN ledger never drifts — at every index of the unbounded trajectory. (The verb-era transitional
+form carried a `+ escrowHeldAsset` summand and a side-table-quiet hypothesis; F1b deleted the
+side-table, so the plain measure is the conserved measure OUTRIGHT.) -/
+theorem bbf_plain_conserved_forever (s0 : RecChainedState) (sched : SchedG) :
     ∀ n, recTotalAsset (trajG s0 sched n).kernel rewardAsset
-           + escrowHeldAsset (trajG s0 sched n).kernel rewardAsset
-         = recTotalAsset s0.kernel rewardAsset + escrowHeldAsset s0.kernel rewardAsset :=
+         = recTotalAsset s0.kernel rewardAsset :=
   asset_conserved_forever_production s0 rewardAsset sched
 
-/-- **`bbf_plain_conserved_forever_of_side_table_quiet` — THE PLAIN-MEASURE LIFETIME CROWN.** From a
-baseline whose reward side-table is quiet, then at every trajectory index where the side-table stays
-quiet (`escrowHeldAsset = 0`), the PLAIN `recTotalAsset` reward supply is FIXED at its baseline value.
-This is the guarantee the escrow-factory migration set aside (the verb-era `bb_asset_conserved_forever`
-on `recTotalAssetWithEscrow`), now recovered on the plain measure — discharged from the universal
-combined crown by cancelling the (zero) side-table summand. The factory-born board's `post`/`claim`/
-`cancel` never populate the side-table, so the quiet hypotheses are its lived reality (§3 witnesses). -/
-theorem bbf_plain_conserved_forever_of_side_table_quiet (s0 : RecChainedState) (sched : SchedG)
-    (hbase : escrowHeldAsset s0.kernel rewardAsset = 0) :
-    ∀ n, escrowHeldAsset (trajG s0 sched n).kernel rewardAsset = 0 →
-         recTotalAsset (trajG s0 sched n).kernel rewardAsset = recTotalAsset s0.kernel rewardAsset := by
-  intro n hquiet
-  have h := bbf_plain_plus_held_conserved_forever s0 sched n
-  rw [hquiet, hbase, add_zero, add_zero] at h
-  exact h
-
-/-- **`bbf_board0_plain_plus_held_conserved_forever` — the canonical funded-board lifetime witness.** The
-shipped factory-born `board0` carries the combined-measure forever crown along every gated schedule. -/
-theorem bbf_board0_plain_plus_held_conserved_forever (sched : SchedG) :
-    ∀ n, recTotalAsset (trajG board0 sched n).kernel rewardAsset
-           + escrowHeldAsset (trajG board0 sched n).kernel rewardAsset
-         = recTotalAsset board0.kernel rewardAsset + escrowHeldAsset board0.kernel rewardAsset :=
-  bbf_plain_plus_held_conserved_forever board0 sched
-
-/-- **`bbf_board0_plain_conserved_forever` — the canonical funded-board PLAIN lifetime witness.** `board0`'s
-reward side-table starts empty (`escrows = []` ⇒ `escrowHeldAsset = 0`, `rfl`-discharged), so wherever it
-stays quiet, `board0`'s plain reward supply (`105` of asset `0`) is fixed at every trajectory index. -/
+/-- **`bbf_board0_plain_conserved_forever` — the canonical funded-board PLAIN lifetime witness.**
+`board0`'s plain reward supply (`105` of asset `0`) is fixed at every trajectory index, along every
+gated schedule — UNCONDITIONALLY (no quiet hypothesis; the side-table no longer exists). -/
 theorem bbf_board0_plain_conserved_forever (sched : SchedG) :
-    ∀ n, escrowHeldAsset (trajG board0 sched n).kernel rewardAsset = 0 →
-         recTotalAsset (trajG board0 sched n).kernel rewardAsset = recTotalAsset board0.kernel rewardAsset :=
-  bbf_plain_conserved_forever_of_side_table_quiet board0 sched rfl
+    ∀ n, recTotalAsset (trajG board0 sched n).kernel rewardAsset
+         = recTotalAsset board0.kernel rewardAsset :=
+  bbf_plain_conserved_forever board0 sched
 
-/-! ## §3 — NON-VACUITY: the factory board's side-table is quiet, so the plain crown bites.
+/-! ## §3 — NON-VACUITY: the plain crown bites on a genuine, non-trivial supply.
 
-`board0`'s `escrows` field is empty (`BountyBoardGated.board0` sets no `escrows`), so its reward
-side-table held-value is `0` and the combined measure coincides with the plain ledger from index 0.
-The plain reward supply is a genuine, non-trivial `105` (poster's `100` + claimant's `5` of asset `0`),
-not a vacuous `x = x` — and the `post`/`claim`/`cancel` ops move it within the `bal` ledger, leaving the
-side-table summand at `0`, so the §2 quiet hypotheses fire on real states. -/
+The plain reward supply is a genuine `105` (poster's `100` + claimant's `5` of asset `0`),
+not a vacuous `x = x` — and the `post`/`claim`/`cancel` ops move it within the `bal` ledger. -/
 
--- the factory board's reward side-table is empty ⇒ held-value 0 (the quiet baseline, `rfl`):
-#guard (escrowHeldAsset board0.kernel rewardAsset == 0)                                   --  0
--- ...so the combined badge IS the plain ledger at the baseline — a genuine, non-trivial 105:
+-- the combined badge IS the plain ledger (F1b: definitionally — no off-ledger summand exists):
 #guard (cellObsA board0 rewardAsset == recTotalAsset board0.kernel rewardAsset)           --  true (coincide)
 #guard (recTotalAsset board0.kernel rewardAsset == 105)                                   --  105 (poster 100 + claimant 5)
 #guard (cellObsA board0 rewardAsset == 105)                                               --  105
 
 /-- The forever crown's n=0 face is non-vacuous on the factory board: at index `0` of EVERY gated
-schedule, the trajectory is `board0` itself (`trajG _ _ 0 = s`), the side-table held-value is `0`, so
-the plain crown's quiet hypothesis fires and the plain reward supply is the genuine, non-trivial `105`. -/
+schedule, the trajectory is `board0` itself (`trajG _ _ 0 = s`) and the plain reward supply is the
+genuine, non-trivial `105`. -/
 example (sched : SchedG) :
-    escrowHeldAsset (trajG board0 sched 0).kernel rewardAsset = 0 ∧
-    recTotalAsset (trajG board0 sched 0).kernel rewardAsset = 105 :=
-  ⟨rfl, rfl⟩
+    recTotalAsset (trajG board0 sched 0).kernel rewardAsset = 105 := rfl
 
 /-- ...and the plain crown's conclusion at index `0` is exactly the baseline `recTotalAsset` (`105`),
 discharged through the actual `bbf_board0_plain_conserved_forever` keystone — not re-asserted. -/
 example (sched : SchedG) :
     recTotalAsset (trajG board0 sched 0).kernel rewardAsset = recTotalAsset board0.kernel rewardAsset :=
-  bbf_board0_plain_conserved_forever sched 0 rfl
+  bbf_board0_plain_conserved_forever sched 0
 
 /-! ## §4 — Axiom hygiene — every lifetime crown depends ONLY on `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms bbRewardConserved
-#assert_axioms bbf_plain_plus_held_conserved_forever
-#assert_axioms bbf_plain_conserved_forever_of_side_table_quiet
-#assert_axioms bbf_board0_plain_plus_held_conserved_forever
+#assert_axioms bbf_plain_conserved_forever
 #assert_axioms bbf_board0_plain_conserved_forever
 
 end Dregg2.Apps.BountyBoardForever

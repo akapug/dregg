@@ -486,7 +486,7 @@ corollary describing the deployed wrapper until the W1 VK rotation swaps the exe
 section ValueUnify
 
 open Dregg2.Exec (CellId AssetId RecChainedState recBalCreditCell recBalCreditCell_recTotalAsset
-  recTotalAssetWithEscrow recTotalAsset escrowHeldAsset ExactConservation)
+  recTotalAsset ExactConservation)
 open Dregg2.Exec.Admission (isFrozen admissionClock)
 
 /-- Credit `amt` of asset `fa` to cell `c` on the PER-ASSET ledger (`recBalCreditCell`); negative
@@ -572,21 +572,15 @@ theorem creditBalV_bal_frame (s : RecChainedState) (c : CellId) (fa : AssetId) (
   unfold recBalCreditCell
   rw [if_neg h]
 
-/-- The aggregate law: a live-cell credit moves the combined per-asset measure by `amt` at the
-credited asset only (instantiates `recBalCreditCell_recTotalAsset`; escrows untouched). -/
+/-- The aggregate law: a live-cell credit moves the per-asset measure by `amt` at the
+credited asset only (instantiates `recBalCreditCell_recTotalAsset`). -/
 theorem creditBalV_measure (s : RecChainedState) (c : CellId) (fa : AssetId) (amt : Int)
     (hc : c ∈ s.kernel.accounts) (b : AssetId) :
-    recTotalAssetWithEscrow (creditBalV s c fa amt).kernel b
-      = recTotalAssetWithEscrow s.kernel b + (if b = fa then amt else 0) := by
-  unfold Dregg2.Exec.recTotalAssetWithEscrow
-  have hesc : escrowHeldAsset (creditBalV s c fa amt).kernel b
-      = escrowHeldAsset s.kernel b := rfl
-  have hbal : recTotalAsset (creditBalV s c fa amt).kernel b
+    recTotalAsset (creditBalV s c fa amt).kernel b
       = recTotalAsset s.kernel b + (if b = fa then amt else 0) := by
-    show (∑ x ∈ s.kernel.accounts, recBalCreditCell s.kernel.bal c fa amt x b) = _
-    exact recBalCreditCell_recTotalAsset s.kernel.accounts s.kernel.bal c fa amt hc b
-  rw [hbal, hesc]
-  ring
+  unfold Dregg2.Exec.recTotalAsset
+  show (∑ x ∈ s.kernel.accounts, recBalCreditCell s.kernel.bal c fa amt x b) = _
+  exact recBalCreditCell_recTotalAsset s.kernel.accounts s.kernel.bal c fa amt hc b
 
 /-- The W1 prologue ticks the nonce by exactly one (the anti-replay tick — `creditBalV` never
 touches the cell record, `commitPrologue` at fee `0` never touches the balance). -/
@@ -616,13 +610,13 @@ theorem commitPrologueV_bal_frame (s : RecChainedState) (agent : CellId) (fa : A
 /-- The W1 prologue's aggregate law: the combined measure drops by the fee at the fee asset only. -/
 theorem commitPrologueV_measure (s : RecChainedState) (agent : CellId) (fa : AssetId) (fee : Int)
     (hagent : agent ∈ s.kernel.accounts) (b : AssetId) :
-    recTotalAssetWithEscrow (commitPrologueV s agent fa fee).kernel b
-      = recTotalAssetWithEscrow s.kernel b - (if b = fa then fee else 0) := by
+    recTotalAsset (commitPrologueV s agent fa fee).kernel b
+      = recTotalAsset s.kernel b - (if b = fa then fee else 0) := by
   unfold commitPrologueV
   rw [creditBalV_measure _ _ _ _ (show agent ∈ (commitPrologue s agent 0).kernel.accounts
         from hagent) b]
-  have hpro : recTotalAssetWithEscrow (commitPrologue s agent 0).kernel b
-      = recTotalAssetWithEscrow s.kernel b := rfl
+  have hpro : recTotalAsset (commitPrologue s agent 0).kernel b
+      = recTotalAsset s.kernel b := rfl
   rw [hpro]
   by_cases hb : b = fa
   · rw [if_pos hb, if_pos hb]; ring
@@ -636,8 +630,8 @@ theorem distributeFeeV_measure (ctx : AdmCtx) (s : RecChainedState) (fa : AssetI
     (hp : ctx.proposer = some p) (ht : ctx.treasury = some t) (hpot : ctx.burnPot = some pot)
     (hpm : p ∈ s.kernel.accounts) (htm : t ∈ s.kernel.accounts)
     (hpotm : pot ∈ s.kernel.accounts) (b : AssetId) :
-    recTotalAssetWithEscrow (distributeFeeV ctx s fa fee).kernel b
-      = recTotalAssetWithEscrow s.kernel b + (if b = fa then fee else 0) := by
+    recTotalAsset (distributeFeeV ctx s fa fee).kernel b
+      = recTotalAsset s.kernel b + (if b = fa then fee else 0) := by
   unfold distributeFeeV creditBalOptV
   rw [hp, ht, hpot]
   rw [creditBalV_measure _ _ _ _ (show pot ∈ (creditBalV (creditBalV s p fa (proposerShare fee))
@@ -820,8 +814,8 @@ theorem runTurnV_preserves_exact (ctx : AdmCtx) (h : TurnHdr) (st : RecStmt)
     (hpm : p ∈ s'.kernel.accounts) (htm : t ∈ s'.kernel.accounts)
     (hpotm : pot ∈ s'.kernel.accounts)
     -- the body preserved the combined per-asset measure (what every welded kernel verb proves):
-    (hbodyCons : ∀ b, recTotalAssetWithEscrow s'.kernel b
-        = recTotalAssetWithEscrow (commitPrologueV s h.agent fa h.fee).kernel b)
+    (hbodyCons : ∀ b, recTotalAsset s'.kernel b
+        = recTotalAsset (commitPrologueV s h.agent fa h.fee).kernel b)
     (hex : ExactConservation s.kernel) :
     ∃ so, runTurnV ctx h st s fa = TurnOutcome.bodyCommitted so ∧ ExactConservation so.kernel := by
   refine ⟨distributeFeeV ctx s' fa h.fee, runTurnV_body_committed ctx h st s s' fa hadm hbody, ?_⟩
@@ -904,8 +898,8 @@ def esVX : Dregg2.Exec.RecChainedState :=
       accounts := {1, 7, 20, 30, 40},
       bal := fun c a => if c = 7 ∧ a = 0 then 100 else if c = 1 ∧ a = 0 then -100 else 0 } }
 
-#guard (Dregg2.Exec.recTotalAssetWithEscrow esVX.kernel 0 == 0)  -- exact BEFORE
+#guard (Dregg2.Exec.recTotalAsset esVX.kernel 0 == 0)  -- exact BEFORE
 #guard ((runTurnV ecV0 eh0 bodyOK esVX 0).state?.map
-        (fun sf => Dregg2.Exec.recTotalAssetWithEscrow sf.kernel 0)) == some 0  -- exact AFTER
+        (fun sf => Dregg2.Exec.recTotalAsset sf.kernel 0)) == some 0  -- exact AFTER
 
 end Dregg2.Circuit.Argus

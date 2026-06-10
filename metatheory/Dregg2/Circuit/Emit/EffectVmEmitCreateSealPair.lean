@@ -355,9 +355,9 @@ theorem unify_pair_frozen_frame (s s' : RecChainedState) (pid : Nat)
     ∧ (cellProjPair s'.kernel.bal c asset).reserved = (cellProjPair s.kernel.bal c asset).reserved := by
   refine ⟨?_, rfl, fun _ => rfl, rfl, rfl⟩
   show s'.kernel.bal c asset = s.kernel.bal c asset
-  -- CreateSealPairSpec: guard ∧ caps ∧ log ∧ accounts ∧ cell ∧ escrows ∧ nullifiers ∧ revoked ∧
-  --                     commitments ∧ bal ∧ … — `bal` is the 10th conjunct.
-  obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
+  -- CreateSealPairSpec (F1b escrow-free): guard ∧ caps ∧ log ∧ accounts ∧ cell ∧ nullifiers ∧
+  --                     revoked ∧ commitments ∧ bal ∧ … — `bal` is the 9th conjunct.
+  obtain ⟨_, _, _, _, _, _, _, _, hbal, _⟩ := hspec
   rw [hbal]
 
 /-! ## §10 — THE per-cell circuit⟺executor AGREEMENT (the payoff, frozen frame). -/

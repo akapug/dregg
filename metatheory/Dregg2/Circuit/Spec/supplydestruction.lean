@@ -132,7 +132,6 @@ def BurnSpec (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : �
   ∧ s'.kernel.accounts = s.kernel.accounts
   ∧ s'.kernel.cell = s.kernel.cell
   ∧ s'.kernel.caps = s.kernel.caps
-  ∧ s'.kernel.escrows = s.kernel.escrows
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments
@@ -168,13 +167,13 @@ theorem recCBurnAsset_iff_spec (s : RecChainedState) (actor cell : CellId) (a : 
     · intro h
       simp only [Option.some.injEq] at h
       subst h
-      exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    · rintro ⟨_, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+      exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨_, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
       -- rebuild `s'` field-by-field from the spec; destruct both records to expose components
       obtain ⟨k', log'⟩ := s'
-      obtain ⟨acc, cl, cps, esc, nul, rev, com, bl, qs, sw, sc, fac, lc, dc, dlg, dlgs, sb, dge, dgea⟩ := k'
-      simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-      subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      obtain ⟨acc, cl, cps, nul, rev, com, bl, qs, sw, sc, fac, lc, dc, dlg, dlgs, sb, dge, dgea⟩ := k'
+      simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+      subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
       rfl
   · rw [if_neg hg]
     simp only [BurnGuard]

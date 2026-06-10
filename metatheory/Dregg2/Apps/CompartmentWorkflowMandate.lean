@@ -192,15 +192,15 @@ theorem cwmExecAdvance_delta_zero (actor : CellId) (target : Int) (b : AssetId) 
 
 theorem cwm_advance_conserves {s s' : RecChainedState} (actor : CellId) (target : Int) (b : AssetId)
     (h : execFullForestA s (cwmExecAdvance actor target) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestA_conserves_per_asset s s' (cwmExecAdvance actor target) b h
     (cwmExecAdvance_delta_zero actor target b)
 
 /-- **`cwm_pay_supply_forever` (PROVED) — APP SEMANTICS (ungated crown).** Along EVERY adversarial
 schedule on the real living cell, payment asset combined supply never drifts. -/
 theorem cwm_pay_supply_forever (s0 : RecChainedState) (sched : SchedA) :
-    ∀ n, recTotalAssetWithEscrow (trajA s0 sched n).kernel payAsset =
-          recTotalAssetWithEscrow s0.kernel payAsset := by
+    ∀ n, recTotalAsset (trajA s0 sched n).kernel payAsset =
+          recTotalAsset s0.kernel payAsset := by
   intro n
   simpa [cellObsA] using congrFun (livingCellA_obs_invariant' s0 sched n) payAsset
 
@@ -393,7 +393,7 @@ def cwmSigned : Option RecChainedState :=
           (fun s' => s'.tryDebit charterMandate3.spendPolicy)).bind
          (fun s'' => s''.tryDebit charterMandate3.spendPolicy)).isSome == false  --  false
 
-#guard ((cwmSigned.map (fun s => recTotalAssetWithEscrow s.kernel payAsset)).getD 0) == 100  --  100
+#guard ((cwmSigned.map (fun s => recTotalAsset s.kernel payAsset)).getD 0) == 100  --  100
 
 -- NON-VACUITY of the carried invariant: the program-live invariant HOLDS at genesis (mandate cell live
 -- + caveat program installed), so the safety crown is non-trivially applicable.

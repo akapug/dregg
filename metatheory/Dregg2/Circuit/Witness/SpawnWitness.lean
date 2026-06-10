@@ -113,7 +113,7 @@ def delegationsDigC : RecordKernelState → ℤ :=
 
 def rhConcrete : RecordKernelState → ℤ :=
   fun k => (k.nullifiers.length : ℤ) + (k.commitments.length : ℤ) * 7
-           + (k.swiss.length : ℤ) * 13 + (k.escrows.length : ℤ) * 17
+           + (k.swiss.length : ℤ) * 13
 
 /-- The log hash: the REAL `turnLogDigest` (binds `src`/`dst`/`amt` the OLD `actor % 2000003` fold dropped
 and field-reduced). -/

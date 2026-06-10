@@ -11,7 +11,7 @@ no amount), not a refutation. This module PROMOTES that verdict from "probe over
 to "the canonical value model", and closes the E4 gap:
 
   * **§1 — the canonical conserved invariant** (`ConservedLedger := ExactLedger`): the per-asset
-    exact law `∀ a, recTotalAssetWithEscrow k a = 0` is THE conservation invariant of the forward
+    exact law `∀ a, recTotalAsset k a = 0` is THE conservation invariant of the forward
     model. Every committed kernel step preserves it, each by INSTANTIATING a probe theorem (never
     re-proved): transfer / escrow create-release-refund / bridge lock-cancel / genesis / fresh-cell
     creation / the reformed `issuerMoveK` mint. Packaged as `step_preserves_ledger` (the canonical
@@ -263,16 +263,15 @@ theorem boundShieldK_preserves_exact {vc : ValueCommitment} {k k' : RecordKernel
   obtain ⟨k₁, hk₁, hk'⟩ := h
   subst hk'
   intro b
-  -- the value-bound create is bal/escrow-neutral for every asset.
+  -- the value-bound create is bal-neutral for every asset.
   have hneutral := ShieldedValue.noteCreateBound_recTotalAsset vc k₁ nt.toBoundNote b
-  unfold recTotalAssetWithEscrow
-  rw [hneutral.1, hneutral.2]
+  rw [hneutral]
   exact transfer_preserves_exact hk₁ hc b
 
 /-- A nullifier insert is invisible to the combined per-asset measure (touches only `nullifiers`). -/
 private theorem noteSpend_measures {k k' : RecordKernelState} {nf : Nat}
     (h : noteSpendNullifier k nf = some k') (b : AssetId) :
-    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold noteSpendNullifier at h
   by_cases hin : nf ∈ k.nullifiers
   · rw [if_pos hin] at h; exact absurd h (by simp)
@@ -539,7 +538,7 @@ probe named, here turned into a concrete edit):
 
   **E3 — the transitional escrow term dies at S3.** `ConservedLedger` carries `+ escrowHeldAsset`
   until the storage-as-cell-programs migration makes escrows pot-CELLS. At S3 the term is deleted and
-  the law collapses to the pure `∀ a, Σ_c bal c a = 0`. TOUCHES: `recTotalAssetWithEscrow` →
+  the law collapses to the pure `∀ a, Σ_c bal c a = 0`. TOUCHES: `recTotalAsset` →
   `recTotalAsset`, the escrow verbs → settle-to-escrow-pot (the same pot pattern as bridge/fee). No
   new proof: `escrow*_preserves` already preserve the combined measure, and the pot settle theorem
   (`bridgeFinalizeToPot_preserves_exact`) is the template.

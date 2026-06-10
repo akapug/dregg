@@ -63,7 +63,7 @@ theorem castVote_delta_zero (voterSlot : FieldName) (mark : Int) (b : AssetId) :
 
 theorem pv_cast_conserves (s s' : RecChainedState) (voterSlot : FieldName) (mark : Int) (b : AssetId)
     (h : execFullForestA s (castVote voterSlot mark) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestA_conserves_per_asset s s' (castVote voterSlot mark) b h
     (castVote_delta_zero voterSlot mark b)
 

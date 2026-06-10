@@ -47,7 +47,7 @@ theorem propBit_eq_one {p : Prop} [Decidable p] : Circuit.propBit p = 1 ↔ p :=
 (per-cell born-empty slots are executor-pinned in full `SpawnSpec`). -/
 def RestIffNoSpawnTouched (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
-    (k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+    (k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
       ∧ k'.delegationEpoch = k.delegationEpoch
@@ -131,7 +131,7 @@ def spawnE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
   active5      := delegationsComp DDgs hDDgs
   logUpdate    := some (fun s args => createReceipt args.actor args.child :: s.log)
   restFrame    := fun k k' =>
-    (k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+    (k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
       ∧ k'.delegationEpoch = k.delegationEpoch
@@ -207,7 +207,6 @@ def SpawnCircuitSpec (st : RecChainedState) (actor child target : CellId) (st' :
   ∧ st'.kernel.delegate = spawnDelegateMap st.kernel actor child
   ∧ st'.kernel.delegations = spawnDelegationsMap st.kernel actor child
   ∧ st'.log = createReceipt actor child :: st.log
-  ∧ st'.kernel.escrows = st.kernel.escrows
   ∧ st'.kernel.nullifiers = st.kernel.nullifiers
   ∧ st'.kernel.revoked = st.kernel.revoked
   ∧ st'.kernel.commitments = st.kernel.commitments
@@ -241,10 +240,10 @@ theorem apex_iff_spawnCircuitSpec (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     SpawnCircuitSpec, spawnGuardProp, spawnAdmit, expectedAccounts, readSpawnCreateLeg,
     expectedSpawnCreateLeg, spawnCapsMap, spawnDelegateMap, spawnDelegationsMap]
   constructor
-  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hEsc, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
-    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hEsc, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
-  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hEsc, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
-    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hEsc, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
 
 /-! ### §2c — apex ↔ FULL `SpawnSpec` (executor semantics). -/
 
@@ -262,16 +261,16 @@ theorem apex_iff_spawnSpec (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     spawnGuardProp, spawnAdmit, expectedAccounts, readSpawnCreateLeg, expectedSpawnCreateLeg,
     spawnCapsMap, spawnDelegateMap, spawnDelegationsMap]
   constructor
-  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hEsc, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
     obtain ⟨hbal, hmeta⟩ :=
       (spawnCreateLeg_post_iff s.kernel args.child s'.kernel).mp hleg
     obtain ⟨hcell, hsc, hlif, hdc⟩ :=
       (bornEmptyCellMeta_post_iff s.kernel args.child s'.kernel).mp hmeta
-    exact ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, hEsc, hNul, hRev, hCom, hQ,
+    exact ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ,
       hSw, hFac, hSB⟩
-  · rintro ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, hEsc, hNul, hRev, hCom, hQ,
+  · rintro ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ,
       hSw, hFac, hSB⟩
-    refine ⟨hg, hacc, ?_, hcaps, hdel, hdgs, hlog, hEsc, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+    refine ⟨hg, hacc, ?_, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
     exact (spawnCreateLeg_post_iff s.kernel args.child s'.kernel).mpr
       ⟨hbal, (bornEmptyCellMeta_post_iff s.kernel args.child s'.kernel).mpr ⟨hcell, hsc, hlif, hdc⟩⟩
 

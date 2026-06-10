@@ -14,7 +14,7 @@ enforce today — an honest PARTIAL (some constraint not expressible) is as valu
 dregg1/dregg2 escrow today lives in an OFF-LEDGER side-table `k.escrows`
 (`RecordKernel.lean:483`): `createEscrowKAsset` does a SINGLE-cell *debit* and parks an
 `EscrowRecord`; settle does a SINGLE-cell *credit* and marks the record resolved. The price
-of that design is a BESPOKE conserved quantity `recTotalAssetWithEscrow = recTotalAsset +
+of that design is a BESPOKE conserved quantity `recTotalAsset = recTotalAsset +
 escrowHeldAsset` and a whole family of bespoke side-table conservation theorems
 (`escrow_settle_conserves_combined`, `heldSum_markResolved_found`, …).
 
@@ -230,7 +230,7 @@ def escrowRefund (k : RecordKernelState) (e depositor : CellId) (asset : AssetId
 
 The payoff of the side-table-free design: an escrow settle is an ordinary per-asset `move`, so
 the EXISTING kernel value law `recKExecAsset_conserves_per_asset` applies VERBATIM — with NO
-bespoke `recTotalAssetWithEscrow` quantity. What's deposited is exactly what's released-or-
+bespoke `recTotalAsset` quantity. What's deposited is exactly what's released-or-
 refunded: every asset's TOTAL supply over the live accounts is FIXED. The `write` of the state
 slot does not touch `bal`, so it is invisible to `recTotalAsset`. -/
 
@@ -603,7 +603,7 @@ theorem gated_release_requires_discharge (g : Int → Int → Bool) (k : RecordK
 /-! ## §VERDICT (DREGG3 §6 R3) — PASS.
 
 ESCROW IS FULLY CAPTURED as a factory-born cell program + a release-safety contract, with NO
-`escrows` side-table and NO bespoke `recTotalAssetWithEscrow` quantity:
+`escrows` side-table and NO bespoke `recTotalAsset` quantity:
 
   * FACTORY (`escrowFactory`): six deal-term slots + the state-machine `admitTable [(0,1),(0,2)]`
     — `escrowFactory_conforms` PROVED. The escrow `program` is drawn entirely from the EXISTING
@@ -639,7 +639,7 @@ ESCROW IS FULLY CAPTURED as a factory-born cell program + a release-safety contr
     escrow and identifies queue as the family that may keep a verb (or get a new caveat).
 
   W2 CONSEQUENCE: the escrow verb family (`createEscrow`/`releaseEscrow`/`refundEscrow` + the
-  `escrows` side-table + `escrowHeldAsset` + `recTotalAssetWithEscrow` + the whole
+  `escrows` side-table + `escrowHeldAsset` + `recTotalAsset` + the whole
   `heldSum_markResolved_found` accounting) can be DELETED once this lands as a real factory +
   the BountyBoardGated app is re-pointed at `escrowFactory` instead of the verbs. The verified
   surface GROWS (the app inherits the kernel value theorem; the bespoke side-table theory dies).

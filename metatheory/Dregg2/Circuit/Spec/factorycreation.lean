@@ -57,7 +57,7 @@ open Dregg2.Authority
 
 private theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
     (haccounts : k.accounts = k'.accounts) (hcell : k.cell = k'.cell) (hcaps : k.caps = k'.caps)
-    (hescrows : k.escrows = k'.escrows) (hnullifiers : k.nullifiers = k'.nullifiers)
+    (hnullifiers : k.nullifiers = k'.nullifiers)
     (hrevoked : k.revoked = k'.revoked) (hcommitments : k.commitments = k'.commitments)
     (hbal : k.bal = k'.bal) (hqueues : k.queues = k'.queues) (hswiss : k.swiss = k'.swiss)
     (hslotCaveats : k.slotCaveats = k'.slotCaveats) (hfactories : k.factories = k'.factories)
@@ -189,7 +189,6 @@ def CreateFromFactorySpec (st : RecChainedState) (actor newCell : CellId) (vk : 
     ∧ (st'.kernel.delegate = fun c => if c = newCell then none else st.kernel.delegate c)
     ∧ (st'.kernel.delegations = fun c => if c = newCell then [] else st.kernel.delegations c)
     -- THE FRAME: global side-tables literally unchanged.
-    ∧ st'.kernel.escrows = st.kernel.escrows
     ∧ st'.kernel.nullifiers = st.kernel.nullifiers
     ∧ st'.kernel.revoked = st.kernel.revoked
     ∧ st'.kernel.commitments = st.kernel.commitments
@@ -224,7 +223,6 @@ theorem createCellFromFactoryChainA_components {s s' : RecChainedState} {actor n
       ∧ (s'.kernel.deathCert = fun c => if c = newCell then 0 else s.kernel.deathCert c)
       ∧ (s'.kernel.delegate = fun c => if c = newCell then none else s.kernel.delegate c)
       ∧ (s'.kernel.delegations = fun c => if c = newCell then [] else s.kernel.delegations c)
-      ∧ s'.kernel.escrows = s.kernel.escrows
       ∧ s'.kernel.nullifiers = s.kernel.nullifiers
       ∧ s'.kernel.revoked = s.kernel.revoked
       ∧ s'.kernel.commitments = s.kernel.commitments
@@ -245,7 +243,7 @@ theorem createCellFromFactoryChainA_components {s s' : RecChainedState} {actor n
   refine ⟨e, ⟨hvk, hfind, hconf, hauth, hfresh⟩, ?_⟩
   -- substitute s' = factory-install over s1, and s1 = createCellChainA's output over s.
   subst hs' hs1
-  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   · funext l; by_cases hl : l = newCell <;> simp [hl, createCellIntoAsset, bornEmptyCellSlots]
   · funext c; by_cases hc' : c = newCell <;> simp [hc', createCellIntoAsset, bornEmptyCellSlots]
   · funext c; by_cases hc' : c = newCell <;> simp [hc', createCellIntoAsset, bornEmptyCellSlots]
@@ -270,7 +268,7 @@ theorem createCellFromFactoryChainA_iff_spec (st : RecChainedState) (actor newCe
     -- explicit committed output, then prove that output equals `st'` from the 18 spec equations.
     rintro ⟨e, ⟨hvk, hfind, hconf, hauth, hfresh⟩,
             hacc, hbal, hcell, hcav, hlog,
-            hcaps, hlc, hdc, hdel, hdn, hesc, hnull, hrev, hcom, hq, hsw, hfac, hsb, hde, hdea⟩
+            hcaps, hlc, hdc, hdel, hdn, hnull, hrev, hcom, hq, hsw, hfac, hsb, hde, hdea⟩
     -- the underlying createCell commits (its gate is the last two guard conjuncts):
     have hc : createCellChainA st actor newCell = some
         { kernel := createCellIntoAsset st.kernel newCell
@@ -297,9 +295,9 @@ theorem createCellFromFactoryChainA_iff_spec (st : RecChainedState) (actor newCe
     -- after substituting `hcell`/`hcav` closes those.
     rw [hex]
     obtain ⟨k', lg'⟩ := st'
-    obtain ⟨acc, cl, cp, es, nl, rv, cm, bl, qs, sw, sc, fc, lc, dc, dl, dn, sb, dge, dgea⟩ := k'
-    simp only at hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hesc hnull hrev hcom hq hsw hfac hsb hde hdea
-    subst hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hesc hnull hrev hcom hq hsw hfac hsb hde hdea
+    obtain ⟨acc, cl, cp, nl, rv, cm, bl, qs, sw, sc, fc, lc, dc, dl, dn, sb, dge, dgea⟩ := k'
+    simp only at hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hnull hrev hcom hq hsw hfac hsb hde hdea
+    subst hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hnull hrev hcom hq hsw hfac hsb hde hdea
     rfl
 
 /-- **`execCreateFromFactoryA_iff_spec` — THE DELIVERABLE: `execFullA`-LEVEL EXECUTOR ⟺ SPEC (FULL

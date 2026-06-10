@@ -108,7 +108,7 @@ theorem setFieldCellMap_eq_writeField (k : RecordKernelState) (target : CellId) 
 the post-state's `cell` map is the declarative field write (`setFieldCellMap` — other cells whole-
 preserved, see `writeFieldCellMap_correct`); the receipt chain grows by exactly the one self-targeted
 row; and EVERY OTHER state component is LITERALLY unchanged — all 16 non-`cell` kernel fields
-(`accounts caps escrows nullifiers revoked commitments bal queues swiss slotCaveats factories
+(`accounts caps nullifiers revoked commitments bal queues swiss slotCaveats factories
 lifecycle deathCert delegate delegations sealedBoxes`). No frame clause mentions the executor. -/
 def SetFieldSpec (s : RecChainedState) (actor cell : CellId) (f : FieldName) (v : Int)
     (s' : RecChainedState) : Prop :=
@@ -119,7 +119,6 @@ def SetFieldSpec (s : RecChainedState) (actor cell : CellId) (f : FieldName) (v 
   -- THE FRAME: all 16 non-`cell` kernel fields, literally unchanged.
   ∧ s'.kernel.accounts = s.kernel.accounts
   ∧ s'.kernel.caps = s.kernel.caps
-  ∧ s'.kernel.escrows = s.kernel.escrows
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments
@@ -187,16 +186,16 @@ theorem execFullA_setFieldA_iff_spec
   constructor
   · rintro ⟨hg, hs'⟩
     subst hs'
-    refine ⟨hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    refine ⟨hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · exact (setFieldCellMap_eq_writeField s.kernel cell f v).symm
     all_goals rfl
-  · rintro ⟨hg, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+  · rintro ⟨hg, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
     refine ⟨hg, ?_⟩
     -- rebuild s' field-by-field: the touched cell map, the log, and the 16 frame fields, then η.
     obtain ⟨k', lg'⟩ := s'
-    obtain ⟨acc, cl, cps, esc, nul, rev, cmt, bl, qs, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
-    simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-    subst hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+    obtain ⟨acc, cl, cps, nul, rev, cmt, bl, qs, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+    simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+    subst hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
     -- the touched cell map: rewrite the declarative map to the executor's writeField form.
     rw [setFieldCellMap_eq_writeField] at hcell
     subst hcell
@@ -241,7 +240,7 @@ theorem setFieldSpec_caveats
 theorem setFieldSpec_bal_frame
     {s s' : RecChainedState} {actor cell : CellId} {f : FieldName} {v : Int}
     (h : SetFieldSpec s actor cell f v s') :
-    s'.kernel.bal = s.kernel.bal := h.2.2.2.2.2.2.2.2.2.1
+    s'.kernel.bal = s.kernel.bal := h.2.2.2.2.2.2.2.2.1
 
 /-- **The caps frame.** Off the spec: a `setFieldA` never edits the cap table (authority Δ = 0). -/
 theorem setFieldSpec_caps_frame

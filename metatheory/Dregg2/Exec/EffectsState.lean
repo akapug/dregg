@@ -327,7 +327,7 @@ theorem state_conserves {s s' : RecChainedState} {f : FieldName} {actor target :
 /-- **`stateStep_preserves_exact` — the metadata regime preserves the W1 value law (PROVED).** A
 committed Neutral/Monotonic/Terminal field write leaves `ExactConservation` (the per-asset exact law,
 `RecordKernel §VALUE-UNIFY`) intact: `writeField` edits only the `cell` record map, never the
-per-asset `bal` ledger nor the `escrows` holding-store, so `recTotalAssetWithEscrow` is definitionally
+per-asset `bal` ledger nor the `escrows` holding-store, so `recTotalAsset` is definitionally
 unchanged at every asset. -/
 theorem stateStep_preserves_exact {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
     {v : Value} (h : stateStep s f actor target v = some s')

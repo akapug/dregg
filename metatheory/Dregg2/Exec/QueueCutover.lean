@@ -6,6 +6,10 @@ fold `queueAtomicTxChainA` (in `TurnExecutorFull`). When the per-op chained gate
 of the fold, the two folds agree on the resulting kernel — discharging the `hchain` hypothesis in
 `handler_refines_execFullA_queueAtomicTx`.
 
+F1b: the deposit/refund legs (and the P0-1 binding gates) are GONE with the kernel escrow
+holding-store — both folds are over the bare bal-NEUTRAL FIFO ops now, so the projection drops only
+the receipt-side `cell` slot.
+
 Standalone: `lake build Dregg2.Exec.QueueCutover`.
 -/
 import Dregg2.Exec.Handlers.Queue
@@ -24,35 +28,28 @@ open Dregg2.Exec.EffectsState (stateAuthB)
 
 /-! ## §1 — `txOpToK`: project chained atomic sub-ops onto the bare-kernel discriminant.
 
-The chained `QueueTxOpA` carries the queue-owner `cell` slot; the handler batch reuses the bare-kernel
-enqueue/dequeue steps. Enqueue projection sets `owner := actor` (the honest park-for-self path in the
-batch); dequeue drops the receipt-only `deposit`/`cell` metadata. -/
+The chained `QueueTxOpA` carries the actor + the queue's representing `cell` (the gate target); the
+handler batch reuses the bare-kernel enqueue/dequeue steps, which carry only the FIFO payload (the
+owner gate for dequeue lives in `queueDequeueK` itself). -/
 
 /-- Project an executor `QueueTxOpA` onto the handler's bare-kernel `QueueTxOpK` sub-op. -/
 def txOpToK : QueueTxOpA → QueueTxOpK
-  | .enqueue id m actor _cell depId dAsset deposit =>
-      .enqueue id m actor actor depId dAsset deposit
-  | .dequeue id actor _cell depId =>
-      .dequeue id actor depId
+  | .enqueue id m _actor _cell => .enqueue id m
+  | .dequeue id actor _cell    => .dequeue id actor
 
 /-- Project a chained atomic-batch op list onto the bare-kernel list (the `toClosedEffect` image). -/
 def txOpsToK (ops : List QueueTxOpA) : List QueueTxOpK := ops.map txOpToK
 
-/-! ## §2 — Per-op chain gate bundle (the authority/liveness/binding conjuncts `queueTxOpStepA` checks). -/
+/-! ## §2 — Per-op chain gate bundle (the authority/liveness conjuncts `queueTxOpStepA` checks). -/
 
 /-- The chained executor's per-op gate bundle at state `s` (the conjuncts in `queueEnqueueChainA` /
-`queueDequeueChainA`). For enqueue, `actor = cell` aligns the `txOpToK` owner projection with the
-chained kernel op. -/
+`queueDequeueChainA`). -/
 def queueTxOpA_chainGate (s : RecChainedState) (op : QueueTxOpA) : Prop :=
   match op with
-  | .enqueue id m actor cell depId dAsset deposit =>
-      actor = cell ∧
-      (stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true)
-  | .dequeue id actor cell depId =>
-      stateAuthB s.kernel.caps actor cell = true ∧
-      acceptsEffects s.kernel cell = true ∧
-      dequeueBindB s.kernel actor depId = true ∧
-      queueDequeueHeadB s.kernel id actor depId = true
+  | .enqueue _id _m actor cell =>
+      stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
+  | .dequeue _id actor cell =>
+      stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
 
 /-- An inductive witness that the chained gate bundle holds at EVERY step of an atomic batch fold that
 commits via `queueTxOpStepA`. -/
@@ -73,27 +70,25 @@ theorem queueTxOpStepK_kernel_eq_of_chainGate {s s' : RecChainedState} {op : Que
     (hA : queueTxOpStepA s op = some s') :
     queueTxOpStepK s.kernel (txOpToK op) = some s'.kernel := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
-      obtain ⟨hac, ⟨hauth, hlive⟩⟩ := hg
+  | enqueue id m actor cell =>
+      obtain ⟨hauth, hlive⟩ := hg
       simp only [queueTxOpStepA, queueEnqueueChainA] at hA
       rw [if_pos ⟨hauth, hlive⟩] at hA
-      cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      cases hk : queueEnqueueK s.kernel id m with
       | none => simp [hk] at hA
       | some k' =>
           simp only [hk, Option.some.injEq] at hA; subst hA
-          simpa [queueTxOpStepK, txOpToK, enqueueStep,
-            if_pos (by simpa [hac] using And.intro hauth hlive), hac] using hk
-  | dequeue id actor cell depId =>
-      obtain ⟨hauth, hlive, hbind, hhead⟩ := hg
+          simpa [queueTxOpStepK, txOpToK] using hk
+  | dequeue id actor cell =>
+      obtain ⟨hauth, hlive⟩ := hg
       simp only [queueTxOpStepA, queueDequeueChainA] at hA
-      rw [if_pos ⟨hauth, hlive, hbind, hhead⟩] at hA
-      cases hk : queueDequeueRefundK s.kernel id actor depId with
+      rw [if_pos ⟨hauth, hlive⟩] at hA
+      cases hk : queueDequeueK s.kernel id actor with
       | none => simp [hk] at hA
       | some pr =>
-          simp only [hk, Option.some.injEq] at hA
-          obtain ⟨k', mh⟩ := pr; subst hA
-          simp only [queueTxOpStepK, txOpToK, dequeueBindStep]
-          rw [if_pos ⟨hbind, hhead⟩, hk, Option.map_some]
+          obtain ⟨k', mh⟩ := pr
+          simp only [hk, Option.some.injEq] at hA; subst hA
+          simp only [queueTxOpStepK, txOpToK, hk, Option.map_some]
 
 /-- **`queueTxOpStepA_of_chainGate_and_K`** — converse: when the gate bundle holds and the bare-kernel
 sub-op on `txOpToK op` commits, the chained sub-op commits with the SAME kernel. -/
@@ -102,35 +97,28 @@ theorem queueTxOpStepA_of_chainGate_and_K {s : RecChainedState} {op : QueueTxOpA
     (hK : queueTxOpStepK s.kernel (txOpToK op) = some k') :
     ∃ s₁, queueTxOpStepA s op = some s₁ ∧ s₁.kernel = k' := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
-      obtain ⟨hac, ⟨hauth, hlive⟩⟩ := hg
-      have hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit = some k' := by
-        simpa [hac, queueTxOpStepK, txOpToK, enqueueStep,
-          if_pos (by simpa [hac] using And.intro hauth hlive)] using hK
+  | enqueue id m actor cell =>
+      obtain ⟨hauth, hlive⟩ := hg
+      have hk : queueEnqueueK s.kernel id m = some k' := by
+        simpa [queueTxOpStepK, txOpToK] using hK
       refine ⟨{ kernel := k',
-                log := { actor := actor, src := actor, dst := cell, amt := deposit } :: s.log },
+                log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log },
               ?_, rfl⟩
-      simp only [queueTxOpStepA, queueEnqueueChainA,
-        if_pos (And.intro hauth hlive), hk]
-  | dequeue id actor cell depId =>
-      obtain ⟨hauth, hlive, hbind, hhead⟩ := hg
-      have hgate : Dregg2.Exec.Handlers.Queue.dequeueBindB s.kernel { id := id, actor := actor, depId := depId } = true ∧
-          queueDequeueHeadB s.kernel id actor depId = true := by
-        dsimp [Dregg2.Exec.Handlers.Queue.dequeueBindB]; exact And.intro hbind hhead
-      cases hk : queueDequeueRefundK s.kernel id actor depId with
+      simp only [queueTxOpStepA, queueEnqueueChainA, if_pos (And.intro hauth hlive), hk]
+  | dequeue id actor cell =>
+      obtain ⟨hauth, hlive⟩ := hg
+      cases hk : queueDequeueK s.kernel id actor with
       | none =>
-          simp [queueTxOpStepK, txOpToK, dequeueBindStep, if_pos hgate, hk, Option.map_none] at hK
+          simp [queueTxOpStepK, txOpToK, hk, Option.map_none] at hK
       | some pr =>
           obtain ⟨k₁, mh⟩ := pr
           have hEq : k₁ = k' := by
-            simpa [queueTxOpStepK, txOpToK, dequeueBindStep, if_pos hgate, hk, Option.map_some] using hK
+            simpa [queueTxOpStepK, txOpToK, hk, Option.map_some] using hK
           subst hEq
           refine ⟨{ kernel := k₁,
-                    log := { actor := actor, src := cell, dst := actor,
-                             amt := dequeueRefundAmount s.kernel depId } :: s.log },
+                    log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log },
                   ?_, rfl⟩
-          simp only [queueTxOpStepA, queueDequeueChainA,
-            if_pos (And.intro hauth (And.intro hlive (And.intro hbind hhead))), hk]
+          simp only [queueTxOpStepA, queueDequeueChainA, if_pos (And.intro hauth hlive), hk]
 
 /-! ## §4 — Batch-fold kernel agreement (the `queueAtomicTxChainK` ↔ `queueAtomicTxChainA` bridge). -/
 

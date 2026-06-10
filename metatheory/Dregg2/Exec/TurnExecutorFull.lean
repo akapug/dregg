@@ -1091,21 +1091,6 @@ theorem createCellFromFactoryChainA_neutral {s s' : RecChainedState} {actor newC
   rw [factoryInstall_recTotalAsset s1.kernel newCell _ _ b]
   exact createCellChainA_neutral b hc
 
-/-- The factory creation install leaves `escrows` UNCHANGED (a creation never touches the holding-store),
-hence the COMBINED measure moves exactly as `recTotalAsset` (PROVED). -/
-theorem createCellFromFactoryChainA_neutralWithEscrow {s s' : RecChainedState} {actor newCell : CellId}
-    {vk : Int} (b : AssetId) (h : createCellFromFactoryChainA s actor newCell vk = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
-  obtain ⟨e, s1, _, _, hc, hs'⟩ := createCellFromFactoryChainA_factors h
-  -- the field/caveat install leaves `escrows` UNTOUCHED (it edits only `cell`/`slotCaveats`), and the
-  -- underlying createCell leaves `escrows` fixed too — so `escrowHeldAsset` is unchanged end to end.
-  have hesc' : escrowHeldAsset s'.kernel b = escrowHeldAsset s.kernel b := by
-    obtain ⟨_, _, hs1⟩ := createCellChainA_factors hc
-    subst hs' hs1; rfl
-  simp only [recTotalAssetWithEscrow]
-  rw [hesc', show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
-        createCellFromFactoryChainA_neutral b h]
-
 /-- **`createCellFromFactoryChainA_authorized` — PROVED (fail-closed integrity).** A committed factory
 creation implies the creator held privileged creation authority over the new cell (`mintAuthorizedB`). -/
 theorem createCellFromFactoryChainA_authorized {s s' : RecChainedState} {actor newCell : CellId}
@@ -1181,17 +1166,17 @@ theorem createCellFromFactoryChainA_chainlink {s s' : RecChainedState} {actor ne
   exact createCellChainA_chainlink hc
 
 /-- **`createCellFromFactoryChainA_sideTables` — PROVED.** A committed factory creation leaves the
-SET-shaped side-tables (`commitments`, `nullifiers`, `revoked`, `escrows`) UNTOUCHED: `createCell`
+SET-shaped side-tables (`commitments`, `nullifiers`, `revoked`) UNTOUCHED: `createCell`
 edits only `accounts`/`bal`, and the field/caveat install edits only `cell`/`slotCaveats`. The frame
 the carried-forever crowns (`CellCommit`/`CellNullifier`/`CellConfine`) reuse for the new effect. -/
 theorem createCellFromFactoryChainA_sideTables {s s' : RecChainedState} {actor newCell : CellId}
     {vk : Int} (h : createCellFromFactoryChainA s actor newCell vk = some s') :
     s'.kernel.commitments = s.kernel.commitments ∧ s'.kernel.nullifiers = s.kernel.nullifiers ∧
-      s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.escrows = s.kernel.escrows := by
+      s'.kernel.revoked = s.kernel.revoked := by
   obtain ⟨_, s1, _, _, hc, hs'⟩ := createCellFromFactoryChainA_factors h
   obtain ⟨_, _, hs1⟩ := createCellChainA_factors hc
   subst hs' hs1
-  exact ⟨rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl⟩
 
 /-- **`createCellFromFactoryChainA_caps_eq` — PROVED.** A committed factory creation leaves the cap
 table UNTOUCHED: `createCell` edits `accounts`/`bal`, and the field/caveat install edits `cell`/
@@ -1261,18 +1246,16 @@ theorem stateStep_recTotalAsset {s s' : RecChainedState} {f : FieldName} {actor 
 /-- **Balance-NEUTRALITY of a committed CAVEAT-GATED write over the COMBINED per-asset measure —
 PROVED.** The slot-caveat gate (`EffectsState.stateStepGuarded`) commits EXACTLY the underlying
 `stateStep` post-state (`stateStepGuarded_eq`), which writes a named record field and never the
-`bal` ledger / `escrows` holding-store — so `recTotalAssetWithEscrow b` is UNCHANGED for EVERY asset.
+`bal` ledger / `escrows` holding-store — so `recTotalAsset b` is UNCHANGED for EVERY asset.
 The per-asset analog the `setFieldA` conservation arm reuses now that `setFieldA` routes through the
 caveat gate (dregg1 `apply_set_field` → `RecordProgram::evaluate`). -/
-theorem stateStepGuarded_recTotalAssetWithEscrow {s s' : RecChainedState} {f : FieldName}
+theorem stateStepGuarded_recTotalAsset {s s' : RecChainedState} {f : FieldName}
     {actor target : CellId} {n : Int} (h : stateStepGuarded s f actor target n = some s')
     (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq h)
   subst hs'
-  simp only [recTotalAssetWithEscrow]
-  rw [writeField_recTotalAsset s.kernel f target (.int n) b,
-      show escrowHeldAsset (writeField s.kernel f target (.int n)) b = escrowHeldAsset s.kernel b from rfl]
+  exact writeField_recTotalAsset s.kernel f target (.int n) b
 
 /-- **The `EmitEvent` raw chained step — log-only, authority-FREE (dregg1 `apply_emit_event` ~:703).**
 Unlike the field-writing effects, `EmitEvent` runs NO authority/cross-cell check (in dregg1 the only
@@ -1382,7 +1365,7 @@ pre-state value and `stateCommitment` is the deterministic §8 hash (`cell.state
 host-readable scalar fields (`balance`, `nonce`, …) become `none` (no longer directly readable — the
 teeth, `makeSovereignStep_balance_unreadable`), while the commitment IS present and binds the preimage
 (`makeSovereignStep_commitment_present`/`_binds_preimage`). It stays bal-NEUTRAL **on the per-asset
-ledger**: `recTotalAsset`/`recTotalAssetWithEscrow` read `k.bal`/`k.escrows`, which are independent of
+ledger**: `recTotalAsset`/`recTotalAsset` read `k.bal`/`k.escrows`, which are independent of
 `k.cell` — so a value-rebind that touches ONLY `k.cell` cannot move any asset's supply (the SAME
 `rfl`-grade conservation `writeField_recTotalAsset` enjoys, since it too touches only `k.cell`). The
 commitment binding (collision-resistance of `state_commitment`) is the §8 chain-layer portal — NOT
@@ -1681,9 +1664,9 @@ def cellDestroyChainA (s : RecChainedState) (actor cell : CellId) (certHash : Na
   else none
 
 /-- **`setLifecycle` is balance-NEUTRAL — PROVED (`rfl`-grade).** Editing the `lifecycle` side-table
-leaves `bal`/`accounts`/`escrows` fixed, so `recTotalAssetWithEscrow` is unchanged for EVERY asset. -/
+leaves `bal`/`accounts`/`escrows` fixed, so `recTotalAsset` is unchanged for EVERY asset. -/
 theorem setLifecycle_balNeutral (k : RecordKernelState) (cell : CellId) (lc : Nat) (b : AssetId) :
-    recTotalAssetWithEscrow (setLifecycle k cell lc) b = recTotalAssetWithEscrow k b := rfl
+    recTotalAsset (setLifecycle k cell lc) b = recTotalAsset k b := rfl
 
 /-- **`cellSealChainA` factors — PROVED.** A committed seal was authorized over a LIVE cell and produced
 exactly the Sealed-flip post-state + a one-row chain extension. -/
@@ -1965,81 +1948,35 @@ theorem unsealChainA_noBox_rejects (s : RecChainedState) (pid : Nat) (actor reci
 theorem createSealPairChainA_balNeutral {s s' : RecChainedState} {pid : Nat}
     {actor sealerHolder unsealerHolder : CellId}
     (h : createSealPairChainA s pid actor sealerHolder unsealerHolder = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'; rfl
 
 theorem sealChainA_balNeutral {s s' : RecChainedState} {pid : Nat} {actor : CellId} {payload : Cap}
     (h : sealChainA s pid actor payload = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; rfl
 
 theorem unsealChainA_balNeutral {s s' : RecChainedState} {pid : Nat} {actor recipient : CellId}
     (h : unsealChainA s pid actor recipient = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'; rfl
 
 theorem refreshDelegationChainA_balNeutral {s s' : RecChainedState} {actor child : CellId}
     (h : refreshDelegationChainA s actor child = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; rfl
 
-/-! ### §MA-escrow — the COMBINED PER-ASSET holding-store on the executed dispatch (`META-FILL C`).
+/-! ### §MA-meta — the zero-amount metadata receipt row.
 
-dregg1's escrow/obligation/committed-escrow are NOT balance-conserving two-cell transfers: they DEBIT
-ONE cell and park the value in an off-ledger side-table, conserving only the COMBINED total across the
-create+settle PAIR (`RecordKernel §ESCROW`). On the per-asset `bal` ledger this is
-`RecordKernel.createEscrowKAsset`/`releaseEscrowKAsset`/`refundEscrowKAsset`, which conserve the
-COMBINED per-asset measure `recTotalAssetWithEscrow`. We re-found their CHAINED wrappers HERE (mirroring
-`attenuateStepA`/`exerciseStepA`, since `EffectsPaired` sits parallel and is not imported), and wire
-them into the executed `execFullA` dispatch. The escrow legs move the BARE `recTotalAsset` by ∓amount at
-the locked asset (`ledgerDeltaAsset`), but conserve the COMBINED measure (`combinedDeltaAsset = 0`).
-Note effects move SETS (nullifier/commitment), not `bal`, so both deltas are `0`. -/
+F1b: the chained escrow/obligation/committed-escrow wrappers (`createEscrowChainA`/
+`releaseEscrowChainA`/`refundEscrowChainA` + the settle-auth gates) are GONE with the kernel
+holding-store — escrow/obligation semantics live in the proven factory contracts
+(`Apps/{EscrowFactory,ObligationFactory}.lean`). The note SET effects below survive. -/
 
-/-- The escrow receipt (a self-`Turn` on the actor, amount `0` — the metadata clock row; the parked
-amount/asset live in the off-ledger record, not the receipt). -/
+/-- The zero-amount METADATA receipt (a self-`Turn` on the actor, amount `0` — the clock row the
+SET-moving and apply-time-neutral effects append). Historical name: the escrow family appended it
+first; the family is gone (F1b), the row shape stays (it is pinned by the deployed circuit specs). -/
 def escrowReceiptA (actor : CellId) : Turn := { actor := actor, src := actor, dst := actor, amt := 0 }
-
-/-- **Chained per-asset escrow create.** Run `RecordKernel.createEscrowKAsset` (single-cell, single-asset
-debit at `asset` + park the asset-typed record), and on success extend the receipt chain. -/
-def createEscrowChainA (s : RecChainedState) (id : Nat) (actor creator recipient : CellId)
-    (asset : AssetId) (amount : ℤ) : Option RecChainedState :=
-  match createEscrowKAsset s.kernel id actor creator recipient asset amount with
-  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
-  | none    => none
-
-/-- Find an unresolved escrow record by `id` (the kernel's own `find?` predicate). -/
-def findUnresolvedEscrow (k : RecordKernelState) (id : Nat) : Option EscrowRecord :=
-  k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false))
-
-/-- **The RELEASE settle-actor gate (R2).** The actor must be authorized over the recipient. -/
-def releaseSettleAuthB (k : RecordKernelState) (id : Nat) (actor : CellId) : Bool :=
-  match findUnresolvedEscrow k id with
-  | some r => authorizedB k.caps { actor := actor, src := r.recipient, dst := r.recipient, amt := 0 }
-  | none => false
-
-/-- **The REFUND settle-actor gate (R2).** The actor must be authorized over the creator. -/
-def refundSettleAuthB (k : RecordKernelState) (id : Nat) (actor : CellId) : Bool :=
-  match findUnresolvedEscrow k id with
-  | some r => authorizedB k.caps { actor := actor, src := r.creator, dst := r.creator, amt := 0 }
-  | none => false
-
-/-- **Chained per-asset escrow release** (single-cell credit to the recipient at the record's asset).
-R2-closed: the settling actor must be authorized over the recipient. -/
-def releaseEscrowChainA (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
-  if releaseSettleAuthB s.kernel id actor then
-    match releaseEscrowKAsset s.kernel id with
-    | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
-    | none    => none
-  else none
-
-/-- **Chained per-asset escrow refund** (single-cell credit back to the creator at the record's asset).
-R2-closed: the settling actor must be authorized over the creator. -/
-def refundEscrowChainA (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
-  if refundSettleAuthB s.kernel id actor then
-    match refundEscrowKAsset s.kernel id with
-    | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
-    | none    => none
-  else none
 
 /-- **`recCexecAsset_factors` — PROVED.** A committed per-asset transfer passed `acceptsEffects` at
 `dst` and factors through `recKExecAsset`. -/
@@ -2055,111 +1992,6 @@ theorem recCexecAsset_factors {s s' : RecChainedState} (t : Turn) (a : AssetId)
     · rw [hr] at h; simp at h
       exact ⟨hadm, ⟨k'', rfl, h.symm⟩⟩
   · rw [if_neg hadm] at h; exact absurd h (by simp)
-
-/-- **`releaseEscrowChainA_factors` — PROVED.** A committed release passed settle-actor auth. -/
-theorem releaseEscrowChainA_factors {s s' : RecChainedState} (id : Nat) (actor : CellId)
-    (h : releaseEscrowChainA s id actor = some s') :
-    releaseSettleAuthB s.kernel id actor ∧
-    ∃ k', releaseEscrowKAsset s.kernel id = some k' ∧
-      s' = { kernel := k', log := escrowReceiptA actor :: s.log } := by
-  simp only [releaseEscrowChainA] at h
-  by_cases hg : releaseSettleAuthB s.kernel id actor
-  · rw [if_pos hg] at h
-    rcases hr : releaseEscrowKAsset s.kernel id with ⟨⟩ | ⟨k''⟩
-    · rw [hr] at h; exact absurd h (by simp)
-    · rw [hr] at h; simp at h
-      exact ⟨hg, ⟨k'', rfl, h.symm⟩⟩
-  · rw [if_neg hg] at h; exact absurd h (by simp)
-
-/-- **`refundEscrowChainA_factors` — PROVED.** A committed refund passed settle-actor auth. -/
-theorem refundEscrowChainA_factors {s s' : RecChainedState} (id : Nat) (actor : CellId)
-    (h : refundEscrowChainA s id actor = some s') :
-    refundSettleAuthB s.kernel id actor ∧
-    ∃ k', refundEscrowKAsset s.kernel id = some k' ∧
-      s' = { kernel := k', log := escrowReceiptA actor :: s.log } := by
-  simp only [refundEscrowChainA] at h
-  by_cases hg : refundSettleAuthB s.kernel id actor
-  · rw [if_pos hg] at h
-    rcases hr : refundEscrowKAsset s.kernel id with ⟨⟩ | ⟨k''⟩
-    · rw [hr] at h; exact absurd h (by simp)
-    · rw [hr] at h; simp at h
-      exact ⟨hg, ⟨k'', rfl, h.symm⟩⟩
-  · rw [if_neg hg] at h; exact absurd h (by simp)
-
-/-- No unresolved record ⇒ the release settle-actor gate is false (R2 fail-closed). -/
-theorem releaseSettleAuthB_false_of_none (k : RecordKernelState) (id : Nat) (actor : CellId)
-    (h : findUnresolvedEscrow k id = none) : releaseSettleAuthB k id actor = false := by
-  unfold releaseSettleAuthB; simp [h]
-
-/-- No unresolved record ⇒ the refund settle-actor gate is false (R2 fail-closed). -/
-theorem refundSettleAuthB_false_of_none (k : RecordKernelState) (id : Nat) (actor : CellId)
-    (h : findUnresolvedEscrow k id = none) : refundSettleAuthB k id actor = false := by
-  unfold refundSettleAuthB; simp [h]
-
-/-- `findUnresolvedEscrow` is the inline `escrows.find?` predicate (definitional bridge). -/
-theorem findUnresolvedEscrow_eq (k : RecordKernelState) (id : Nat) :
-    findUnresolvedEscrow k id =
-      k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) := rfl
-
-/-- After kernel unfolding, the unresolved-record `decide` predicate splits on `resolved : Bool`. -/
-theorem decide_escrow_unresolved (r : EscrowRecord) (id : Nat) :
-    decide (r.id = id ∧ r.resolved = false) = (decide (r.id = id) && !r.resolved) := by
-  rcases r with ⟨_i, _c, _rec, _a, res, _as⟩
-  cases res <;> simp
-
-/-- The two `find?` predicates for unresolved escrows are definitionally aligned after `decide` reduction. -/
-theorem escrow_findPred_eq (id : Nat) :
-    (fun r : EscrowRecord => decide (r.id = id ∧ r.resolved = false)) =
-    (fun r : EscrowRecord => decide (r.id = id) && !r.resolved) := by
-  funext r; exact decide_escrow_unresolved r id
-
-/-- A live unresolved record ⇒ `releaseEscrowKAsset` settles to the raw post-kernel. -/
-theorem releaseEscrowKAsset_some (k : RecordKernelState) (id : Nat) (r : EscrowRecord)
-    (hfind : findUnresolvedEscrow k id = some r)
-    (hlive : r.recipient ∈ k.accounts ∧ cellLifecycleLive k r.recipient = true) :
-    releaseEscrowKAsset k id = some (settleEscrowRawAsset k id r.recipient r.asset r.amount) := by
-  have hfind' :
-      k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r := by
-    simpa [findUnresolvedEscrow] using hfind
-  unfold releaseEscrowKAsset
-  rw [hfind']
-  simp [hlive]
-
-/-- A dead/non-account recipient ⇒ `releaseEscrowKAsset` fail-closes. -/
-theorem releaseEscrowKAsset_none_of_not_live (k : RecordKernelState) (id : Nat) (r : EscrowRecord)
-    (hfind : findUnresolvedEscrow k id = some r)
-    (hbad : ¬ (r.recipient ∈ k.accounts ∧ cellLifecycleLive k r.recipient = true)) :
-    releaseEscrowKAsset k id = none := by
-  have hfind' :
-      k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r := by
-    simpa [findUnresolvedEscrow] using hfind
-  unfold releaseEscrowKAsset
-  rw [hfind']
-  simp [hbad]
-
-/-- A live unresolved record ⇒ `refundEscrowKAsset` settles to the raw post-kernel. -/
-theorem refundEscrowKAsset_some (k : RecordKernelState) (id : Nat) (r : EscrowRecord)
-    (hfind : findUnresolvedEscrow k id = some r)
-    (hlive : r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true) :
-    refundEscrowKAsset k id = some (settleEscrowRawAsset k id r.creator r.asset r.amount) := by
-  have hfind' :
-      k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r := by
-    simpa [findUnresolvedEscrow] using hfind
-  unfold refundEscrowKAsset
-  rw [hfind']
-  simp [hlive]
-
-/-- A dead/non-account creator ⇒ `refundEscrowKAsset` fail-closes. -/
-theorem refundEscrowKAsset_none_of_not_live (k : RecordKernelState) (id : Nat) (r : EscrowRecord)
-    (hfind : findUnresolvedEscrow k id = some r)
-    (hbad : ¬ (r.creator ∈ k.accounts ∧ cellLifecycleLive k r.creator = true)) :
-    refundEscrowKAsset k id = none := by
-  have hfind' :
-      k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r := by
-    simpa [findUnresolvedEscrow] using hfind
-  unfold refundEscrowKAsset
-  rw [hfind']
-  simp [hbad]
 
 /-- **Chained note-create** — grow the commitment SET (the §8 range-proof portal is the THEOREM-level
 hypothesis, like bridgeMint's foreign finality; the ledger move is the grow-only insert). Always
@@ -2182,8 +2014,7 @@ gates, in dregg1's order (`apply_note_spend`, `apply.rs:889,941`):
 2. `noteSpendNullifier` — the ledger-side double-spend gate (fail-closed on a repeated nullifier).
 
 The two gates compose: a spend commits ONLY when BOTH the spending proof verified AND the nullifier is
-fresh. This mirrors the committed-escrow `hidingProof` pattern (`createCommittedEscrowChainA`) — an
-executable §8-portal witness, fail-closed, with a rejection tooth. -/
+fresh. An executable §8-portal witness, fail-closed, with a rejection tooth. -/
 def noteSpendChainA (s : RecChainedState) (nf : Nat) (actor : CellId)
     (spendProof : Bool) : Option RecChainedState :=
   if spendProof = true then
@@ -2234,33 +2065,28 @@ def queueAllocateChainA (s : RecChainedState) (id : Nat) (actor cell : CellId) (
   else none
 
 /-- **Chained queue enqueue** — gate on `stateAuthB actor cell` (the writer-ACL gate, `apply.rs:3334`)
-AND run `queueEnqueueDepositK` (APPEND to the tail; fail-closed if absent OR FULL, `apply.rs:3348`; AND
-PARK the refundable anti-spam `deposit` of asset `dAsset` from the `actor` sender into the holding-store
-keyed by `depId`, fail-closed on `InsufficientBalance`, `apply.rs:3361`). The deposit move is
-COMBINED-CONSERVING (the bare ledger DROPS, the holding-store rises) — Wave-8 closed the residual: it is
-NO LONGER bal-neutral but combined-conserving, EXACTLY like a transfer. The receipt records the deposit
-move (`amt := deposit`, `src := actor` sender, `dst := cell` queue owner). -/
-def queueEnqueueChainA (s : RecChainedState) (id : Nat) (m : Nat) (actor cell : CellId)
-    (depId : Nat) (dAsset : AssetId) (deposit : ℤ) : Option RecChainedState :=
+AND run `queueEnqueueK` (APPEND to the tail; fail-closed if absent OR FULL, `apply.rs:3348`). F1b: the
+Wave-8 refundable anti-spam deposit-park is GONE with the kernel escrow holding-store it parked into
+(anti-spam deposits are a FACTORY concern in the F2 queue migration) — the enqueue is bal-NEUTRAL
+again, the FIFO automaton unchanged. The receipt is the zero-amount queue metadata row. -/
+def queueEnqueueChainA (s : RecChainedState) (id : Nat) (m : Nat) (actor cell : CellId) :
+    Option RecChainedState :=
   if stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true then
-    match queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
-    | some k' => some { kernel := k', log := { actor := actor, src := actor, dst := cell, amt := deposit } :: s.log }
+    match queueEnqueueK s.kernel id m with
+    | some k' => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }
     | none    => none
   else none
 
 /-- **Chained queue dequeue** — gate on `stateAuthB actor cell` (the c-list read) AND run
-`queueDequeueRefundK` with `actor` as the dequeuer (REMOVE-FROM-FRONT in FIFO order; fail-closed if
-absent, NOT the owner `apply.rs:3433`, OR EMPTY `apply.rs:3444`; AND REFUND the deposit record `depId`
-to the dequeuer, `apply.rs:3483`). The refund is COMBINED-CONSERVING (the bare ledger of the dequeuer
-RISES, the holding-store DROPS). The dequeued head message is dropped from the chained wrapper (it
-surfaces in the kernel transition's `Nat`); the receipt records the deposit refund move. -/
-def queueDequeueChainA (s : RecChainedState) (id : Nat) (actor cell : CellId) (depId : Nat) :
+`queueDequeueK` with `actor` as the dequeuer (REMOVE-FROM-FRONT in FIFO order; fail-closed if absent,
+NOT the owner `apply.rs:3433`, OR EMPTY `apply.rs:3444`). F1b: the deposit refund is GONE with the
+deposit park — bal-NEUTRAL. The dequeued head message surfaces in the kernel transition's `Nat`; the
+receipt is the zero-amount queue metadata row. -/
+def queueDequeueChainA (s : RecChainedState) (id : Nat) (actor cell : CellId) :
     Option RecChainedState :=
-  if stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
-      ∧ dequeueBindB s.kernel actor depId = true
-      ∧ queueDequeueHeadB s.kernel id actor depId = true then
-    match queueDequeueRefundK s.kernel id actor depId with
-    | some (k', _) => some { kernel := k', log := { actor := actor, src := cell, dst := actor, amt := dequeueRefundAmount s.kernel depId } :: s.log }
+  if stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true then
+    match queueDequeueK s.kernel id actor with
+    | some (k', _) => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }
     | none         => none
   else none
 
@@ -2278,8 +2104,7 @@ def queueResizeChainA (s : RecChainedState) (id : Nat) (newCap : Nat) (actor cel
 implies the actor was authorized over the queue cell AND the kernel transition committed. The bridge the
 authority + bal-neutrality keystones reuse. Stated generically over the kernel `Option` result. -/
 theorem queueEnqueueChainA_authorized {s s' : RecChainedState} {id m : Nat} {actor cell : CellId}
-    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
-    (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') :
+    (h : queueEnqueueChainA s id m actor cell = some s') :
     stateAuthB s.kernel.caps actor cell = true := by
   unfold queueEnqueueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
@@ -2287,12 +2112,10 @@ theorem queueEnqueueChainA_authorized {s s' : RecChainedState} {id m : Nat} {act
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueDequeueChainA_authorized {s s' : RecChainedState} {id : Nat} {actor cell : CellId}
-    {depId : Nat}
-    (h : queueDequeueChainA s id actor cell depId = some s') :
+    (h : queueDequeueChainA s id actor cell = some s') :
     stateAuthB s.kernel.caps actor cell = true := by
   unfold queueDequeueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
-      ∧ dequeueBindB s.kernel actor depId = true ∧ queueDequeueHeadB s.kernel id actor depId = true
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
@@ -2312,44 +2135,38 @@ theorem queueResizeChainA_authorized {s s' : RecChainedState} {id newCap : Nat} 
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- **`queueEnqueueChainA_balNeutral` — PROVED (Wave-8: now COMBINED-CONSERVING, not bal-neutral).** A
-committed enqueue leaves the COMBINED per-asset measure UNCHANGED ∀ asset — but NO LONGER because it is
-bal-neutral: the refundable deposit GENUINELY moves the bare `recTotalAsset` (parked off-ledger), and
-the COMBINED measure is conserved because the parked value is counted in the holding-store. Reuses
-`queueEnqueueDepositK_conserves_combined` (the residual close). -/
+/-- **`queueEnqueueChainA_balNeutral` — PROVED.** A committed enqueue leaves the per-asset measure
+UNCHANGED ∀ asset (the FIFO append touches only `queues`; F1b removed the deposit park). -/
 theorem queueEnqueueChainA_balNeutral {s s' : RecChainedState} {id m : Nat} {actor cell : CellId}
-    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
-    (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    (h : queueEnqueueChainA s id m actor cell = some s') (b : AssetId) :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   unfold queueEnqueueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hg] at h
-    cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+    cases hk : queueEnqueueK s.kernel id m with
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' =>
         rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-        exact queueEnqueueDepositK_conserves_combined hk b
+        exact queueEnqueueK_balNeutral hk b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueDequeueChainA_balNeutral {s s' : RecChainedState} {id : Nat} {actor cell : CellId}
-    {depId : Nat}
-    (h : queueDequeueChainA s id actor cell depId = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    (h : queueDequeueChainA s id actor cell = some s') (b : AssetId) :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   unfold queueDequeueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
-      ∧ dequeueBindB s.kernel actor depId = true ∧ queueDequeueHeadB s.kernel id actor depId = true
   · rw [if_pos hg] at h
-    cases hk : queueDequeueRefundK s.kernel id actor depId with
+    cases hk : queueDequeueK s.kernel id actor with
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some kr =>
         obtain ⟨k', m⟩ := kr
         rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-        exact queueDequeueRefundK_conserves_combined hk b
+        exact queueDequeueK_balNeutral hk b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueAllocateChainA_balNeutral {s s' : RecChainedState} {id : Nat} {actor cell : CellId} {cap : Nat}
     (h : queueAllocateChainA s id actor cell cap = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   unfold queueAllocateChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true
   · rw [if_pos hg] at h
@@ -2357,13 +2174,12 @@ theorem queueAllocateChainA_balNeutral {s s' : RecChainedState} {id : Nat} {acto
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' =>
         rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-        obtain ⟨hr, he⟩ := queueAllocateK_balNeutral hk b
-        simp only [recTotalAssetWithEscrow, hr, he]
+        exact queueAllocateK_balNeutral hk b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueResizeChainA_balNeutral {s s' : RecChainedState} {id newCap : Nat} {actor cell : CellId}
     (h : queueResizeChainA s id newCap actor cell = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   unfold queueResizeChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hg] at h
@@ -2371,33 +2187,29 @@ theorem queueResizeChainA_balNeutral {s s' : RecChainedState} {id newCap : Nat} 
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' =>
         rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-        obtain ⟨hr, he⟩ := queueResizeK_balNeutral hk b
-        simp only [recTotalAssetWithEscrow, hr, he]
+        exact queueResizeK_balNeutral hk b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **`queueEnqueueChainA_chainlink` — PROVED.** A committed enqueue appends EXACTLY one receipt row
-(the deposit move `actor →(deposit)→ cell`). -/
+(the zero-amount queue metadata row). -/
 theorem queueEnqueueChainA_chainlink {s s' : RecChainedState} {id m : Nat} {actor cell : CellId}
-    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
-    (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') :
-    s'.log = { actor := actor, src := actor, dst := cell, amt := deposit } :: s.log := by
+    (h : queueEnqueueChainA s id m actor cell = some s') :
+    s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log := by
   unfold queueEnqueueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hg] at h
-    cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+    cases hk : queueEnqueueK s.kernel id m with
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem queueDequeueChainA_chainlink {s s' : RecChainedState} {id : Nat} {actor cell : CellId}
-    {depId : Nat}
-    (h : queueDequeueChainA s id actor cell depId = some s') :
-    s'.log = { actor := actor, src := cell, dst := actor, amt := dequeueRefundAmount s.kernel depId } :: s.log := by
+    (h : queueDequeueChainA s id actor cell = some s') :
+    s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log := by
   unfold queueDequeueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
-      ∧ dequeueBindB s.kernel actor depId = true ∧ queueDequeueHeadB s.kernel id actor depId = true
   · rw [if_pos hg] at h
-    cases hk : queueDequeueRefundK s.kernel id actor depId with
+    cases hk : queueDequeueK s.kernel id actor with
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some kr => obtain ⟨k', m⟩ := kr; rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
   · rw [if_neg hg] at h; exact absurd h (by simp)
@@ -2436,8 +2248,7 @@ FAILS CLOSED. The atomic batch inherits it (each sub-op routes through the gated
 /-- **`queueEnqueueChainA_lifecycle_live` — PROVED.** A committed enqueue's owning cell was lifecycle-live
 (`acceptsEffects`, the D3 queue gate). -/
 theorem queueEnqueueChainA_lifecycle_live {s s' : RecChainedState} {id m : Nat} {actor cell : CellId}
-    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
-    (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') :
+    (h : queueEnqueueChainA s id m actor cell = some s') :
     acceptsEffects s.kernel cell = true := by
   unfold queueEnqueueChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
@@ -2448,8 +2259,8 @@ theorem queueEnqueueChainA_lifecycle_live {s s' : RecChainedState} {id m : Nat} 
 onto a queue whose owning cell is NOT lifecycle-live (Sealed/Destroyed) does NOT commit — even with c-list
 authority. A frozen cell's queue rejects new messages/deposits. -/
 theorem queueEnqueueChainA_nonlive_fails (s : RecChainedState) (id m : Nat) (actor cell : CellId)
-    (depId : Nat) (dAsset : AssetId) (deposit : ℤ) (h : acceptsEffects s.kernel cell = false) :
-    queueEnqueueChainA s id m actor cell depId dAsset deposit = none := by
+    (h : acceptsEffects s.kernel cell = false) :
+    queueEnqueueChainA s id m actor cell = none := by
   unfold queueEnqueueChainA
   rw [if_neg]; intro hg; rw [h] at hg; exact absurd hg.2 (by simp)
 
@@ -2457,8 +2268,8 @@ theorem queueEnqueueChainA_nonlive_fails (s : RecChainedState) (id m : Nat) (act
 from a queue whose owning cell is NOT lifecycle-live does NOT commit (the refund-credit cannot land on a
 frozen cell's queue). -/
 theorem queueDequeueChainA_nonlive_fails (s : RecChainedState) (id : Nat) (actor cell : CellId)
-    (depId : Nat) (h : acceptsEffects s.kernel cell = false) :
-    queueDequeueChainA s id actor cell depId = none := by
+    (h : acceptsEffects s.kernel cell = false) :
+    queueDequeueChainA s id actor cell = none := by
   unfold queueDequeueChainA
   rw [if_neg]; intro hg; rw [h] at hg; exact absurd hg.2 (by simp)
 
@@ -2481,44 +2292,37 @@ of `QueueTxOp::{Enqueue,Dequeue}` ALL-OR-NOTHING against one or more queues (dre
 discipline, `apply.rs:3592` "On any failure, the journal handles rollback for the entire action"); the
 pipeline step DEQUEUES the FIFO head from a source queue (owner-only) and RE-ENQUEUES it into each sink
 (ACL-checked — `apply.rs:3812` BUG#114 sink-auth gate). Both ride the SAME proven chained queue kernel
-ops (`queueEnqueueDepositK`/`queueDequeueRefundK`/`queueDequeueK`/`queueEnqueueK`), so the FIFO order,
-capacity bound, owner gate, and per-asset combined-conservation are INHERITED — NOT re-modelled. -/
+ops (`queueDequeueK`/`queueEnqueueK`), so the FIFO order, capacity bound, owner gate, and per-asset
+bal-neutrality are INHERITED — NOT re-modelled. -/
 
-/-- **A single atomic-batch sub-op** (dregg1 `QueueTxOp`, `action.rs:1447`). `enqueue` PARKS a
-refundable deposit (the writer-ACL path); `dequeue` REFUNDS it (the owner path). Each is exactly the
+/-- **A single atomic-batch sub-op** (dregg1 `QueueTxOp`, `action.rs:1447`). Each is exactly the
 chained queue step it routes to (`queueEnqueueChainA`/`queueDequeueChainA`), so the batch is a
-SEQUENCING of proven steps, never a new automaton. -/
+SEQUENCING of proven steps, never a new automaton. F1b: the deposit/refund legs are GONE with the
+kernel escrow holding-store (anti-spam deposits re-land as a factory concern in F2). -/
 inductive QueueTxOpA where
-  /-- `QueueTxOp::Enqueue { queue, message_hash, deposit }` (`action.rs:1449`): append `m` to queue `id`
-  + park the refundable `deposit` of `dAsset` from `actor`/`cell`, writer-ACL gated. -/
-  | enqueue (id m : Nat) (actor cell : CellId) (depId : Nat) (dAsset : AssetId) (deposit : ℤ)
-  /-- `QueueTxOp::Dequeue { queue }` (`action.rs:1456`): remove-from-front of queue `id` + refund the
-  deposit `depId` to the dequeuer `actor`, owner gated. The refunded amount is the named record's own
-  `amount` (not a caller field). -/
-  | dequeue (id : Nat) (actor cell : CellId) (depId : Nat)
+  /-- `QueueTxOp::Enqueue { queue, message_hash }` (`action.rs:1449`): append `m` to queue `id`,
+  writer-ACL gated. -/
+  | enqueue (id m : Nat) (actor cell : CellId)
+  /-- `QueueTxOp::Dequeue { queue }` (`action.rs:1456`): remove-from-front of queue `id`, owner gated. -/
+  | dequeue (id : Nat) (actor cell : CellId)
   deriving Repr, DecidableEq
 
-/-- **Run ONE atomic-batch sub-op** — route to the already-proven authority-gated chained queue step
-(`queueEnqueueChainA` for the deposit-park, `queueDequeueChainA` for the refund). The sub-op's OWN
-fail-closed gate (writer-ACL / owner / FULL / EMPTY / insufficient deposit) lives in the chained step;
+/-- **Run ONE atomic-batch sub-op** — route to the already-proven authority-gated chained queue step.
+The sub-op's OWN fail-closed gate (writer-ACL / owner / FULL / EMPTY) lives in the chained step;
 this is just the discriminant. -/
 def queueTxOpStepA (s : RecChainedState) : QueueTxOpA → Option RecChainedState
-  | .enqueue id m actor cell depId dAsset deposit =>
-      queueEnqueueChainA s id m actor cell depId dAsset deposit
-  | .dequeue id actor cell depId =>
-      queueDequeueChainA s id actor cell depId
+  | .enqueue id m actor cell => queueEnqueueChainA s id m actor cell
+  | .dequeue id actor cell   => queueDequeueChainA s id actor cell
 
 /-- **`queueTxOpStepA_balNeutral` — PROVED.** Each atomic sub-op is COMBINED-conserving per asset (the
 deposit park / refund moves the bare ledger but the combined measure is fixed) — read off the chained
 queue step's `balNeutral`. -/
 theorem queueTxOpStepA_balNeutral {s s' : RecChainedState} {op : QueueTxOpA}
     (h : queueTxOpStepA s op = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
-      exact queueEnqueueChainA_balNeutral h b
-  | dequeue id actor cell depId =>
-      exact queueDequeueChainA_balNeutral h b
+  | enqueue id m actor cell => exact queueEnqueueChainA_balNeutral h b
+  | dequeue id actor cell   => exact queueDequeueChainA_balNeutral h b
 
 /-- **The ALL-OR-NOTHING atomic batch** (dregg1 `apply_queue_atomic_tx`, `apply.rs:3586`). Fold the
 sub-ops left-to-right through the chained-state `Option` monad: the batch COMMITS iff EVERY sub-op
@@ -2533,11 +2337,11 @@ def queueAtomicTxChainA (s : RecChainedState) : List QueueTxOpA → Option RecCh
       | none    => none
 
 /-- **`queueAtomicTxChainA_balNeutral` — PROVED (the atomic batch is COMBINED-conserving per asset).**
-A committed batch preserves `recTotalAssetWithEscrow` at EVERY asset: each sub-op is combined-neutral,
+A committed batch preserves `recTotalAsset` at EVERY asset: each sub-op is combined-neutral,
 and the fold composes them. By induction on the op list. -/
 theorem queueAtomicTxChainA_balNeutral {s s' : RecChainedState} {ops : List QueueTxOpA}
     (h : queueAtomicTxChainA s ops = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   induction ops generalizing s with
   | nil => simp only [queueAtomicTxChainA, Option.some.injEq] at h; subst h; rfl
   | cons op rest ih =>
@@ -2562,28 +2366,26 @@ theorem queueAtomicTxChainA_head_fails {s : RecChainedState} {op : QueueTxOpA} {
 sub-op (enqueue/dequeue) whose touched queue's owning `cell` is NOT lifecycle-live does NOT commit — the
 batch sub-op inherits the D3 queue gate. -/
 theorem queueTxOpStepA_nonlive_fails (s : RecChainedState) (op : QueueTxOpA)
-    (hcell : ∀ id m actor cell depId dAsset deposit,
-              op = .enqueue id m actor cell depId dAsset deposit → acceptsEffects s.kernel cell = false)
-    (hcell2 : ∀ id actor cell depId,
-              op = .dequeue id actor cell depId → acceptsEffects s.kernel cell = false) :
+    (hcell : ∀ id m actor cell,
+              op = .enqueue id m actor cell → acceptsEffects s.kernel cell = false)
+    (hcell2 : ∀ id actor cell,
+              op = .dequeue id actor cell → acceptsEffects s.kernel cell = false) :
     queueTxOpStepA s op = none := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
-      exact queueEnqueueChainA_nonlive_fails s id m actor cell depId dAsset deposit
-        (hcell id m actor cell depId dAsset deposit rfl)
-  | dequeue id actor cell depId =>
-      exact queueDequeueChainA_nonlive_fails s id actor cell depId
-        (hcell2 id actor cell depId rfl)
+  | enqueue id m actor cell =>
+      exact queueEnqueueChainA_nonlive_fails s id m actor cell (hcell id m actor cell rfl)
+  | dequeue id actor cell =>
+      exact queueDequeueChainA_nonlive_fails s id actor cell (hcell2 id actor cell rfl)
 
 /-- **`queueAtomicTxChainA_nonlive_head_fails` — PROVED (the D3 atomic-batch teeth).** An atomic batch
 whose HEAD sub-op enqueues onto a queue with a non-live owning cell ROLLS BACK ENTIRELY (`none`) — the
 all-or-nothing discipline cascades the D3 liveness gate to the whole transaction. -/
 theorem queueAtomicTxChainA_nonlive_head_fails (s : RecChainedState)
-    (id m : Nat) (actor cell : CellId) (depId : Nat) (dAsset : AssetId) (deposit : ℤ)
+    (id m : Nat) (actor cell : CellId)
     (rest : List QueueTxOpA) (h : acceptsEffects s.kernel cell = false) :
-    queueAtomicTxChainA s (.enqueue id m actor cell depId dAsset deposit :: rest) = none :=
+    queueAtomicTxChainA s (.enqueue id m actor cell :: rest) = none :=
   queueAtomicTxChainA_head_fails (s := s)
-    (queueEnqueueChainA_nonlive_fails s id m actor cell depId dAsset deposit h)
+    (queueEnqueueChainA_nonlive_fails s id m actor cell h)
 
 #assert_axioms queueTxOpStepA_nonlive_fails
 #assert_axioms queueAtomicTxChainA_nonlive_head_fails
@@ -2615,13 +2417,13 @@ def queueAtomicTxA (s : RecChainedState) (actor : CellId) (ops : List QueueTxOpA
 asset (the batch fold is, and the receipt row is bal-neutral). -/
 theorem queueAtomicTxA_balNeutral {s s' : RecChainedState} {actor : CellId} {ops : List QueueTxOpA}
     (h : queueAtomicTxA s actor ops = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   unfold queueAtomicTxA at h
   cases hf : queueAtomicTxChainA s ops with
   | none    => rw [hf] at h; exact absurd h (by simp)
   | some s1 =>
       rw [hf] at h; simp only [Option.some.injEq] at h; subst h
-      show recTotalAssetWithEscrow s1.kernel b = _
+      show recTotalAsset s1.kernel b = _
       exact queueAtomicTxChainA_balNeutral hf b
 
 /-- **`queueAtomicTxA_chainlink` — PROVED.** A committed atomic-tx appends the batch-commit row on the
@@ -2638,9 +2440,9 @@ theorem queueAtomicTxChainA_log_suffix {s s' : RecChainedState} {ops : List Queu
           rw [hop] at h
           have hstep : s.log <:+ s1.log := by
             cases op with
-            | enqueue id m actor cell depId dAsset deposit =>
+            | enqueue id m actor cell =>
                 rw [queueEnqueueChainA_chainlink hop]; exact List.suffix_cons _ _
-            | dequeue id actor cell depId =>
+            | dequeue id actor cell =>
                 rw [queueDequeueChainA_chainlink hop]; exact List.suffix_cons _ _
           exact hstep.trans (ih h)
 
@@ -2686,13 +2488,13 @@ def pipelineFanoutK (k : RecordKernelState) (actor : CellId) (m : Nat) :
   | _ :: _, [] => none
 
 /-- **`pipelineFanoutK_balNeutral` — PROVED.** The fan-out enqueue fold is balance-NEUTRAL (each
-`queueEnqueueK` touches only `queues`) — `recTotalAsset`/`escrowHeldAsset` fixed ∀ asset. -/
+`queueEnqueueK` touches only `queues`) — `recTotalAsset` fixed ∀ asset. -/
 theorem pipelineFanoutK_balNeutral {k k' : RecordKernelState} {actor : CellId} {m : Nat}
     {sinks : List CellId} {sids : List Nat}
     (h : pipelineFanoutK k actor m sinks sids = some k') (b : AssetId) :
-    recTotalAsset k' b = recTotalAsset k b ∧ escrowHeldAsset k' b = escrowHeldAsset k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   induction sinks generalizing k sids with
-  | nil => cases sids <;> (simp only [pipelineFanoutK, Option.some.injEq] at h; subst h; exact ⟨rfl, rfl⟩)
+  | nil => cases sids <;> (simp only [pipelineFanoutK, Option.some.injEq] at h; subst h; rfl)
   | cons sink rest ih =>
       cases sids with
       | nil => simp only [pipelineFanoutK] at h; exact absurd h (by simp)
@@ -2704,9 +2506,7 @@ theorem pipelineFanoutK_balNeutral {k k' : RecordKernelState} {actor : CellId} {
             | none    => rw [hq] at h; exact absurd h (by simp)
             | some k1 =>
                 rw [hq] at h
-                obtain ⟨hb1, he1⟩ := queueEnqueueK_balNeutral hq b
-                obtain ⟨hb2, he2⟩ := ih h
-                exact ⟨by rw [hb2, hb1], by rw [he2, he1]⟩
+                rw [ih h, queueEnqueueK_balNeutral hq b]
           · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **The chained PIPELINE-STEP** (dregg1 `apply_queue_pipeline_step`, `apply.rs:3747`). DEQUEUE the
@@ -2730,7 +2530,7 @@ the source dequeue is bal-neutral and the sink fan-out is bal-neutral, so the co
 theorem queuePipelineStepA_balNeutral {s s' : RecChainedState} {srcId : Nat} {owner : CellId}
     {sinkCells : List CellId} {sinkIds : List Nat}
     (h : queuePipelineStepA s srcId owner sinkCells sinkIds = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   unfold queuePipelineStepA at h
   cases hd : queueDequeueK s.kernel srcId owner with
   | none    => simp only [hd] at h; exact absurd h (by simp)
@@ -2741,10 +2541,8 @@ theorem queuePipelineStepA_balNeutral {s s' : RecChainedState} {srcId : Nat} {ow
       | none    => simp only [hf] at h; exact absurd h (by simp)
       | some k2 =>
           simp only [hf, Option.some.injEq] at h; subst h
-          obtain ⟨hbd, hed⟩ := queueDequeueK_balNeutral hd b
-          obtain ⟨hbf, hef⟩ := pipelineFanoutK_balNeutral hf b
-          show recTotalAssetWithEscrow k2 b = recTotalAssetWithEscrow s.kernel b
-          simp only [recTotalAssetWithEscrow, hbf, hef, hbd, hed]
+          show recTotalAsset k2 b = recTotalAsset s.kernel b
+          rw [pipelineFanoutK_balNeutral hf b, queueDequeueK_balNeutral hd b]
 
 /-- **`queuePipelineStepA_chainlink` — PROVED.** A committed pipeline step appends EXACTLY one routing
 row on the `owner` (the source dequeuer). -/
@@ -2884,7 +2682,7 @@ theorem swissDropChainA_authorized {s s' : RecChainedState} {sw : Nat} {actor ex
 balance, so the COMBINED per-asset measure is UNCHANGED ∀ asset. Reuses the kernel `*K_balNeutral`. -/
 theorem swissExportChainA_balNeutral {s s' : RecChainedState} {sw : Nat} {actor exporter target : CellId}
     {rights : List Auth} (h : swissExportChainA s sw actor exporter target rights = some s')
-    (b : AssetId) : recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    (b : AssetId) : recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   unfold swissExportChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor exporter = true
   · rw [if_pos hg] at h
@@ -2892,13 +2690,12 @@ theorem swissExportChainA_balNeutral {s s' : RecChainedState} {sw : Nat} {actor 
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' =>
         rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-        obtain ⟨hr, he⟩ := swissExportK_balNeutral hk b
-        simp only [recTotalAssetWithEscrow, hr, he]
+        exact swissExportK_balNeutral hk b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem swissEnlivenChainA_balNeutral {s s' : RecChainedState} {sw : Nat} {actor exporter : CellId}
     {claimed : List Auth} (h : swissEnlivenChainA s sw actor exporter claimed = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   unfold swissEnlivenChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor exporter = true
   · rw [if_pos hg] at h
@@ -2906,13 +2703,12 @@ theorem swissEnlivenChainA_balNeutral {s s' : RecChainedState} {sw : Nat} {actor
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' =>
         rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-        obtain ⟨hr, he⟩ := swissEnlivenK_balNeutral hk b
-        simp only [recTotalAssetWithEscrow, hr, he]
+        exact swissEnlivenK_balNeutral hk b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem swissHandoffChainA_balNeutral {s s' : RecChainedState} {sw certHash : Nat} {introducer exporter : CellId}
     (h : swissHandoffChainA s sw certHash introducer exporter = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   unfold swissHandoffChainA at h
   by_cases hg : stateAuthB s.kernel.caps introducer exporter = true
   · rw [if_pos hg] at h
@@ -2920,13 +2716,12 @@ theorem swissHandoffChainA_balNeutral {s s' : RecChainedState} {sw certHash : Na
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' =>
         rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-        obtain ⟨hr, he⟩ := swissHandoffK_balNeutral hk b
-        simp only [recTotalAssetWithEscrow, hr, he]
+        exact swissHandoffK_balNeutral hk b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 theorem swissDropChainA_balNeutral {s s' : RecChainedState} {sw : Nat} {actor exporter : CellId}
     (h : swissDropChainA s sw actor exporter = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   unfold swissDropChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor exporter = true
   · rw [if_pos hg] at h
@@ -2934,8 +2729,7 @@ theorem swissDropChainA_balNeutral {s s' : RecChainedState} {sw : Nat} {actor ex
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' =>
         rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-        obtain ⟨hr, he⟩ := swissDropK_balNeutral hk b
-        simp only [recTotalAssetWithEscrow, hr, he]
+        exact swissDropK_balNeutral hk b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **The 4 swiss chained steps each append EXACTLY one receipt row — PROVED (the chainlink).** -/
@@ -2982,272 +2776,6 @@ theorem swissDropChainA_chainlink {s s' : RecChainedState} {sw : Nat} {actor exp
     | none    => rw [hk] at h; exact absurd h (by simp)
     | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
   · rw [if_neg hg] at h; exact absurd h (by simp)
-
-/-! ### §MA-bridge — the cross-chain bridge lock/finalize/cancel on the SHARED escrow holding-store
-(Wave-5 `PHASE-BRIDGE`). The chained wrappers over `RecordKernel`'s `bridgeLockKAsset` (≈ escrow-create,
-combined-conserving), `bridgeFinalizeKAsset` (a no-credit resolve — the value LEFT for the other chain,
-COMBINED DROPS by the bridged amount, a disclosed OUTFLOW like burn) and `bridgeCancelKAsset` (≈
-escrow-refund, combined-conserving). bridgeMint (the inbound side) was already wired (reuses
-`recCMintAsset`). The §8 confirmation receipt (the destination signature) is the THEOREM-level portal,
-exactly as bridgeMint's foreign finality. -/
-
-/-- **Chained per-asset bridge LOCK.** Run `RecordKernel.bridgeLockKAsset` (single-cell, single-asset
-debit at `asset` + park the bridge-tagged record), and on success extend the receipt chain. -/
-def bridgeLockChainA (s : RecChainedState) (id : Nat) (actor originator destination : CellId)
-    (asset : AssetId) (amount : ℤ) : Option RecChainedState :=
-  match bridgeLockKAsset s.kernel id actor originator destination asset amount with
-  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
-  | none    => none
-
-/-- **`bridgeAuthOK` — the bridge finalize/cancel AUTHORITY gate (the missing one the re-audit flagged:
-"anyone can finalize/cancel any victim's lock by id").** Only a BRIDGE-tagged lock's RECORDED `creator`
-(the originator, read from the committed side-table — adversary-UNCONTROLLABLE state) may finalize or
-cancel it; a stranger who merely knows the `id` is fail-closed REJECTED. Ordinary escrow rows in the
-shared holding-store are not bridge-authorizable. (A relayer-finalize-with-foreign-receipt is the §8
-receipt portal, deferred to META-FILL E; creator-only is the sound CORE — the creator can always
-finalize/cancel their own lock.) -/
-def bridgeAuthOK (k : RecordKernelState) (id : Nat) (actor : CellId) : Bool :=
-  match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | some r => r.bridge == true && r.creator == actor
-  | none   => false
-
-/-- **Chained per-asset bridge FINALIZE** (the §8 confirmation arrived — the no-credit resolve; the
-value LEFT for the other chain, COMBINED measure DROPS by the DISCLOSED bridged `(asset, amount)`).
-FAIL-CLOSED on the AUTHORITY gate `bridgeAuthOK` (only the recorded creator) THEN the parked record
-matching. -/
-def bridgeFinalizeChainA (s : RecChainedState) (id : Nat) (actor : CellId) (asset : AssetId) (amount : ℤ) :
-    Option RecChainedState :=
-  if bridgeAuthOK s.kernel id actor then
-    match bridgeFinalizeKAsset s.kernel id asset amount with
-    | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
-    | none    => none
-  else none
-
-/-- **Chained per-asset bridge CANCEL** (timeout/failure — single-cell credit back to the originator at
-the record's asset; combined CONSERVED). FAIL-CLOSED on the AUTHORITY gate (only the recorded creator). -/
-def bridgeCancelChainA (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
-  if bridgeAuthOK s.kernel id actor then
-    match bridgeCancelKAsset s.kernel id with
-    | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
-    | none    => none
-  else none
-
-/-- **`bridgeLockChainA_combined_neutral` — PROVED.** A committed bridge lock conserves the COMBINED
-per-asset measure at EVERY asset `b` (the bal debit at `asset` is offset by the holding-store rise).
-Reads off `RecordKernel.bridge_lock_conserves_combined_per_asset`. -/
-theorem bridgeLockChainA_combined_neutral {s s' : RecChainedState} {id : Nat}
-    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
-    (h : bridgeLockChainA s id actor originator destination asset amount = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
-  unfold bridgeLockChainA at h
-  cases hc : bridgeLockKAsset s.kernel id actor originator destination asset amount with
-  | none => rw [hc] at h; exact absurd h (by simp)
-  | some k' =>
-      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
-      exact bridge_lock_conserves_combined_per_asset b hc
-
-/-- **`bridgeLockChainA_bal_debits` — PROVED.** A committed bridge lock DROPS the BARE per-asset ledger
-`recTotalAsset asset` by `amount` (a real per-asset debit — the value is now INACCESSIBLE in the lock,
-awaiting the other chain). -/
-theorem bridgeLockChainA_bal_debits {s s' : RecChainedState} {id : Nat}
-    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
-    (h : bridgeLockChainA s id actor originator destination asset amount = some s') :
-    recTotalAsset s'.kernel asset = recTotalAsset s.kernel asset - amount := by
-  unfold bridgeLockChainA at h
-  cases hc : bridgeLockKAsset s.kernel id actor originator destination asset amount with
-  | none => rw [hc] at h; exact absurd h (by simp)
-  | some k' =>
-      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
-      exact (bridge_lock_debits_per_asset hc).1
-
-/-- **`bridgeFinalizeChainA_burns_combined` — THE BRIDGE HEADLINE (PROVED).** A committed bridge finalize
-MOVES the COMBINED per-asset measure DOWN by EXACTLY the DISCLOSED `amount` at the disclosed `asset`
-(`b = asset`), leaving every OTHER asset LITERALLY FIXED — the value genuinely LEFT for the other chain.
-Reads off `RecordKernel.bridgeFinalizeKAsset_moves_combined_per_asset`. NON-VACUOUS: the drop is a
-per-asset DISCLOSED OUTFLOW guarded by `b = asset` (no cross-asset laundering at the bridge boundary). -/
-theorem bridgeFinalizeChainA_burns_combined {s s' : RecChainedState} {id : Nat} {actor : CellId}
-    {asset : AssetId} {amount : ℤ} (b : AssetId)
-    (h : bridgeFinalizeChainA s id actor asset amount = some s') :
-    recTotalAssetWithEscrow s'.kernel b
-      = recTotalAssetWithEscrow s.kernel b - (if b = asset then amount else 0) := by
-  unfold bridgeFinalizeChainA at h
-  by_cases hg : bridgeAuthOK s.kernel id actor = true
-  · rw [if_pos hg] at h
-    cases hc : bridgeFinalizeKAsset s.kernel id asset amount with
-    | none => rw [hc] at h; exact absurd h (by simp)
-    | some k' =>
-        rw [hc] at h; simp only [Option.some.injEq] at h; subst h
-        exact bridgeFinalizeKAsset_moves_combined_per_asset b hc
-  · rw [if_neg hg] at h; exact absurd h (by simp)
-
-/-- **`bridgeCancelChainA_combined_neutral` — PROVED (the refund round-trip).** A committed bridge cancel
-conserves the COMBINED per-asset measure at EVERY asset (value returns to the LIVE, gate-checked
-originator). Reads off `RecordKernel.bridge_cancel_conserves_combined_per_asset`. -/
-theorem bridgeCancelChainA_combined_neutral {s s' : RecChainedState} {id : Nat} {actor : CellId}
-    (b : AssetId) (h : bridgeCancelChainA s id actor = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
-  unfold bridgeCancelChainA at h
-  by_cases hg : bridgeAuthOK s.kernel id actor = true
-  · rw [if_pos hg] at h
-    cases hc : bridgeCancelKAsset s.kernel id with
-    | none => rw [hc] at h; exact absurd h (by simp)
-    | some k' =>
-        rw [hc] at h; simp only [Option.some.injEq] at h; subst h
-        exact bridge_cancel_conserves_combined_per_asset b hc
-  · rw [if_neg hg] at h; exact absurd h (by simp)
-
-/-- **`bridgeFinalizeChainA_nonCreator_rejects` — THE BRIDGE AUTHORITY TEETH (PROVED).** The §8 finalize
-is FAIL-CLOSED on `bridgeAuthOK`: if the parked record matching `id` was created by someone OTHER than
-the caller (`r.creator ≠ actor` — the RECORDED owner, read off the COMMITTED `s.kernel.escrows`
-side-table, NOT a caller-supplied parameter), the whole leg returns `none`: no `amount` moves and no
-receipt is appended. Closes the re-audit's HIGH hole #4 ("anyone can finalize any victim's bridge lock
-by id"). NON-VACUOUS: the rejection is keyed on adversary-uncontrollable state. -/
-theorem bridgeFinalizeChainA_nonCreator_rejects {s : RecChainedState} {id : Nat}
-    {actor : CellId} {asset : AssetId} {amount : ℤ} {r : EscrowRecord}
-    (hfind : s.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r)
-    (hne : (r.creator == actor) = false) :
-    bridgeFinalizeChainA s id actor asset amount = none := by
-  have hgate : bridgeAuthOK s.kernel id actor = false := by
-    unfold bridgeAuthOK
-    rw [hfind]
-    cases r.bridge <;> simp [hne]
-  unfold bridgeFinalizeChainA
-  rw [if_neg (by simp [hgate])]
-
-/-- **`bridgeCancelChainA_nonCreator_rejects` — PROVED (the cancel-side teeth).** Same fail-closed gate
-on the refund path: a non-creator cannot trigger the refund-to-originator of a victim's parked lock. -/
-theorem bridgeCancelChainA_nonCreator_rejects {s : RecChainedState} {id : Nat}
-    {actor : CellId} {r : EscrowRecord}
-    (hfind : s.kernel.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) = some r)
-    (hne : (r.creator == actor) = false) :
-    bridgeCancelChainA s id actor = none := by
-  have hgate : bridgeAuthOK s.kernel id actor = false := by
-    unfold bridgeAuthOK
-    rw [hfind]
-    cases r.bridge <;> simp [hne]
-  unfold bridgeCancelChainA
-  rw [if_neg (by simp [hgate])]
-
-/-- **`bridgeLockChainA_authorized` — PROVED.** A committed bridge lock required the actor to be
-authorized over the debited originator cell (the SAME `authorizedB` gate as `transfer`). -/
-theorem bridgeLockChainA_authorized {s s' : RecChainedState} {id : Nat}
-    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
-    (h : bridgeLockChainA s id actor originator destination asset amount = some s') :
-    authorizedB s.kernel.caps { actor := actor, src := originator, dst := destination, amt := amount } = true := by
-  unfold bridgeLockChainA at h
-  cases hc : bridgeLockKAsset s.kernel id actor originator destination asset amount with
-  | none => rw [hc] at h; exact absurd h (by simp)
-  | some k' => exact bridgeLockKAsset_authorized hc
-
-/-- **`createEscrowChainA_combined_neutral` — PROVED.** A committed per-asset escrow create conserves
-the COMBINED per-asset measure at EVERY asset `b` (the bal debit at `asset` is offset by the
-holding-store rise). Reads off `RecordKernel.escrow_create_conserves_combined_per_asset`. -/
-theorem createEscrowChainA_combined_neutral {s s' : RecChainedState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
-    (h : createEscrowChainA s id actor creator recipient asset amount = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
-  unfold createEscrowChainA at h
-  cases hc : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-  | none => rw [hc] at h; exact absurd h (by simp)
-  | some k' =>
-      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
-      exact escrow_create_conserves_combined_per_asset b hc
-
-/-! ### §MA-committed-escrow-HONESTY — WAVE 4: make the committed (PRIVACY) escrow HONESTLY DISTINCT
-from plain escrow (`#121` follow-up). TODAY `createCommittedEscrowA` was SILENTLY `createEscrowChainA` —
-byte-identical to plain escrow, the Pedersen-commitment HIDING neither modelled nor disclosed. We make
-it HONEST: the create carries an EXECUTABLE §8 hiding-portal witness `hidingProof : Bool` (the boolean
-shadow of "the Pedersen range/opening proof verified", `apply_create_committed_escrow`'s
-`verifier.verify(range_proof, "committed-escrow-range", …)`, dregg1 `apply.rs:2125`). The state move
-commits ONLY when `hidingProof = true` — so the committed variant FAIL-CLOSED REQUIRES a hiding
-obligation the plain escrow does NOT (a reader sees a DIFFERENT gate; a `#eval` shows
-committed-with-false-portal REJECTS while plain commits). Under the discharged portal the lock automaton
-is still the per-asset escrow (combined-conserving) — the privacy gate changes the DISCLOSURE, not the
-conservation. -/
-
-/-- **Chained COMMITTED-escrow create — the HONEST §8 hiding-portal gate.** `hidingProof` is the
-executable boolean witness of the Pedersen range/opening proof (dregg1 `apply.rs:2125`). FAIL-CLOSED if
-the portal does NOT hold (`hidingProof = false`) — the privacy boundary the plain escrow lacks. Under
-the discharged portal the state move is the per-asset escrow lock (`createEscrowChainA`), so it INHERITS
-combined-conservation. -/
-def createCommittedEscrowChainA (s : RecChainedState) (id : Nat) (actor creator recipient : CellId)
-    (asset : AssetId) (amount : ℤ) (hidingProof : Bool) : Option RecChainedState :=
-  if hidingProof = true then
-    createEscrowChainA s id actor creator recipient asset amount
-  else none
-
-/-- **`createCommittedEscrowChainA_fails_without_hiding` — PROVED (THE PRIVACY-BOUNDARY TEETH).** No
-committed-escrow create commits without the §8 hiding portal (`hidingProof = false` ⇒ `none`). This is
-the gate plain escrow does NOT have — the committed variant is NOT silently identical. -/
-theorem createCommittedEscrowChainA_fails_without_hiding {s : RecChainedState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
-    (hp : hidingProof = false) :
-    createCommittedEscrowChainA s id actor creator recipient asset amount hidingProof = none := by
-  simp only [createCommittedEscrowChainA, hp, if_neg (by decide : ¬ (false = true))]
-
-/-- **`createCommittedEscrowChainA_combined_neutral` — PROVED.** Under the discharged hiding portal the
-committed-escrow create CONSERVES the COMBINED per-asset total at EVERY asset (the holding-store park,
-exactly as plain escrow) — the privacy gate does not change the conservation, only the disclosure. -/
-theorem createCommittedEscrowChainA_combined_neutral {s s' : RecChainedState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ} {hidingProof : Bool} (b : AssetId)
-    (h : createCommittedEscrowChainA s id actor creator recipient asset amount hidingProof = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
-  unfold createCommittedEscrowChainA at h
-  by_cases hp : hidingProof = true
-  · rw [if_pos hp] at h; exact createEscrowChainA_combined_neutral b h
-  · rw [if_neg hp] at h; exact absurd h (by simp)
-
-/-- **`createCommittedEscrowChainA_authorized` — PROVED.** A committed committed-escrow create implies
-BOTH the §8 hiding portal held AND the creator was authorized over the debited cell — the conjunction
-the plain escrow lacks its first (hiding) half of. -/
-theorem createCommittedEscrowChainA_authorized {s s' : RecChainedState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ} {hidingProof : Bool}
-    (h : createCommittedEscrowChainA s id actor creator recipient asset amount hidingProof = some s') :
-    hidingProof = true ∧
-    authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true := by
-  unfold createCommittedEscrowChainA createEscrowChainA at h
-  by_cases hp : hidingProof = true
-  · rw [if_pos hp] at h
-    cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-    | none => rw [hk] at h; exact absurd h (by simp)
-    | some k' => exact ⟨hp, createEscrowKAsset_authorized hk⟩
-  · rw [if_neg hp] at h; exact absurd h (by simp)
-
-/-- **`createEscrowChainA_bal_debits` — PROVED.** A committed per-asset escrow create DROPS the BARE
-per-asset ledger `recTotalAsset asset` by `amount` (a real per-asset debit) — the bare-bal delta the
-`ledgerDeltaAsset` arm discloses (combined-conserving, bare-debiting). -/
-theorem createEscrowChainA_bal_debits {s s' : RecChainedState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
-    (h : createEscrowChainA s id actor creator recipient asset amount = some s') :
-    recTotalAsset s'.kernel asset = recTotalAsset s.kernel asset - amount := by
-  unfold createEscrowChainA at h
-  cases hc : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-  | none => rw [hc] at h; exact absurd h (by simp)
-  | some k' =>
-      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
-      exact (escrow_create_debits_per_asset hc).1
-
-/-- The bare-bal per-asset delta of a committed escrow create, for an arbitrary asset `b`: `−amount` at
-`asset`, `0` elsewhere. (The other-asset legs of `createEscrowKAsset` are frame-untouched.) PROVED. -/
-theorem createEscrowChainA_bal_delta {s s' : RecChainedState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
-    (h : createEscrowChainA s id actor creator recipient asset amount = some s') :
-    recTotalAsset s'.kernel b = recTotalAsset s.kernel b + (if b = asset then (-amount) else 0) := by
-  unfold createEscrowChainA at h
-  cases hc : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-  | none => rw [hc] at h; exact absurd h (by simp)
-  | some k' =>
-      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
-      unfold createEscrowKAsset at hc
-      by_cases hg : authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
-          ∧ 0 ≤ amount ∧ amount ≤ s.kernel.bal creator asset ∧ creator ∈ s.kernel.accounts
-          ∧ ¬ (∃ r ∈ s.kernel.escrows, r.id = id)
-      · rw [if_pos hg] at hc; simp only [Option.some.injEq] at hc; subst hc
-        obtain ⟨_, _, _, hlive, _⟩ := hg
-        show (∑ x ∈ s.kernel.accounts, recBalCreditCell s.kernel.bal creator asset (-amount) x b) = _
-        have := recBalCreditCell_recTotalAsset s.kernel.accounts s.kernel.bal creator asset (-amount) hlive b
-        simpa [recTotalAsset] using this
-      · rw [if_neg hg] at hc; exact absurd hc (by simp)
 
 /-- The FULL per-asset op-set, as one sum (`META-FILL A`/`B`/`C`). The asset-typed analog of
 `FullAction`. -/
@@ -3351,45 +2879,11 @@ inductive FullActionA where
   so foreign finality is the §8 `Prop` carrier (off this executable layer); the LOCAL credit reuses the
   per-asset mint `recCMintAsset` verbatim. -/
   | bridgeMintA     (actor cell : CellId) (asset : AssetId) (value : ℤ)
-  -- §MA-escrow: the off-ledger holding-store + commitment/nullifier SET effects (`META-FILL C`,
-  -- closing `#121`). escrow/obligation/committed-escrow DEBIT one cell at one asset and PARK the value
-  -- (combined per-asset conserving, bare-bal debiting); notes move the nullifier/commitment SET (not
-  -- `bal`). The §8 crypto (committed-escrow opening, note range/spending proofs) is the THEOREM-level
-  -- portal (off this executable layer, exactly as bridgeMint's foreign finality).
-  /-- `CreateEscrow { id, creator, recipient, asset, amount }` (dregg1 `apply_create_escrow`): lock
-  `amount` of `asset` from `creator` into the off-ledger holding-store (single-cell debit + parked
-  record). Combined per-asset conserving; bare per-asset ledger DEBITED at `asset`. -/
-  | createEscrowA   (id : Nat) (actor creator recipient : CellId) (asset : AssetId) (amount : ℤ)
-  /-- `ReleaseEscrow { id }` (dregg1 `apply_release_escrow`): credit the recipient at the record's asset
-  + mark resolved. Combined per-asset conserving. -/
-  | releaseEscrowA  (id : Nat) (actor : CellId)
-  /-- `RefundEscrow { id }` (dregg1 `apply_refund_escrow`): credit the creator (refund target) + mark
-  resolved. Combined per-asset conserving. -/
-  | refundEscrowA   (id : Nat) (actor : CellId)
-  /-- `CreateObligation { id, obligor, beneficiary, stake }` (dregg1 `apply_create_obligation`): the
-  SAME holding-store as escrow (single-cell stake debit + parked record). Dispatch-ALIASED to
-  `createEscrowA` (obligor=creator, beneficiary=recipient, stake=amount). -/
-  | createObligationA (id : Nat) (actor obligor beneficiary : CellId) (asset : AssetId) (stake : ℤ)
-  /-- `FulfillObligation { obligation_id, proof }` (dregg1 `apply_fulfill_obligation`, `apply.rs:1483`):
-  the obligor met the condition (the §8 proof carrier, `apply.rs:1547` `verifier.verify`) — RETURN the
-  staked amount to the obligor from the holding-store and mark resolved (`apply.rs:1574-1594`). Only the
-  obligor may fulfill (`apply.rs:1525` `action_target != record.obligor`) and only BEFORE the deadline
-  (`apply.rs:1534`); those gates are carried at the §8/theorem layer (block-height + obligor identity).
-  Since the parked obligation record IS an `EscrowRecord` (`creator = obligor`, `recipient = beneficiary`,
-  `amount = stake`), the stake-return-to-obligor leg is EXACTLY the per-asset escrow REFUND (credit the
-  `creator`/obligor at the record's asset + mark resolved) — combined per-asset CONSERVING. Routes to
-  `refundEscrowChainA`. DISTINCT from `refundEscrowA` by the obligor-only fulfill gate (vs. escrow's
-  by-creator refund). -/
-  | fulfillObligationA (id : Nat) (actor : CellId)
-  /-- `SlashObligation { obligation_id }` (dregg1 `apply_slash_obligation`, `apply.rs:1599`): the
-  deadline passed without fulfillment (`apply.rs:1637` `block_height <= deadline_height` rejects) — the
-  stake is TRANSFERRED from the holding-store to the BENEFICIARY and the record marked resolved
-  (`apply.rs:1645-1667`). The deadline gate is carried at the §8/theorem layer (block-height). Since the
-  parked record IS an `EscrowRecord` (`recipient = beneficiary`, `amount = stake`), the stake-to-
-  beneficiary leg is EXACTLY the per-asset escrow RELEASE (credit the `recipient`/beneficiary at the
-  record's asset + mark resolved) — combined per-asset CONSERVING. Routes to `releaseEscrowChainA`.
-  DISTINCT from `releaseEscrowA` by the post-deadline slash gate (vs. escrow's condition-met release). -/
-  | slashObligationA  (id : Nat) (actor : CellId)
+  -- §MA-note: the commitment/nullifier SET effects. Notes move the nullifier/commitment SET (not
+  -- `bal`). The §8 crypto (note range/spending proofs) is the THEOREM-level portal (off this
+  -- executable layer, exactly as bridgeMint's foreign finality). F1b: the escrow/obligation/
+  -- committed-escrow/bridge-LFC constructors are GONE — those families live in factory cells
+  -- (`Apps/{EscrowFactory,ObligationFactory,BridgeCell}.lean`); `bridgeMintA` (inbound, above) survives.
   /-- `NoteSpend { nullifier, spending_proof }` (dregg1 `apply_note_spend`): the nullifier-SET insert
   with double-spend rejection (the ledger anti-replay gate), GATED on the §8 STARK spending proof. The
   `spendProof : Bool` is the EXECUTABLE boolean shadow of `verifier.verify(spending_proof, "note-spend",
@@ -3400,45 +2894,6 @@ inductive FullActionA where
   /-- `NoteCreate { commitment }` (dregg1 `apply_note_create`): the grow-only commitment-SET insert (the
   dual of noteSpend). The §8 range proof is the THEOREM-level portal. bal-NEUTRAL. -/
   | noteCreateA     (cm : Nat) (actor : CellId)
-  /-- `CreateCommittedEscrow { id, …, value_commitment, range_proof, amount }` (`#121` + WAVE 4
-  HONESTY): a PRIVACY escrow whose amount is hidden behind a Pedersen commitment (the record `id` is the
-  commitment key). **NO LONGER silently identical to plain escrow** — it carries an EXPLICIT §8
-  hiding-portal witness `hidingProof : Bool` (the executable boolean shadow of the Pedersen range/opening
-  proof, dregg1 `apply_create_committed_escrow`'s `verifier.verify(range_proof, …)`, `apply.rs:2125`).
-  FAIL-CLOSED if the portal does NOT hold (`hidingProof = false`): the committed variant REQUIRES a
-  hiding obligation the plain `createEscrowA` does not. Under the discharged portal the lock automaton is
-  the per-asset escrow, so it inherits the combined-conservation. -/
-  | createCommittedEscrowA (id : Nat) (actor creator recipient : CellId) (asset : AssetId) (amount : ℤ)
-      (hidingProof : Bool)
-  /-- `ReleaseCommittedEscrow { id }` (`#121`): portal-gated release of a committed escrow. -/
-  | releaseCommittedEscrowA (id : Nat) (actor : CellId)
-  /-- `RefundCommittedEscrow { id }` (`#121`): portal-gated refund of a committed escrow. -/
-  | refundCommittedEscrowA  (id : Nat) (actor : CellId)
-  -- §MA-bridge: the cross-chain two-phase bridge (Wave-5 `PHASE-BRIDGE`) on the SHARED escrow
-  -- holding-store (a `bridge := true`-tagged record). bridgeMint (the INBOUND side) is already done
-  -- (`bridgeMintA`, above — reuses `recCMintAsset`). These are the OUTBOUND legs:
-  /-- `BridgeLock { nullifier, destination, value, asset_type, timeout_height, spending_proof }`
-  (dregg1 `apply_bridge_lock`, `cell/src/note_bridge.rs::initiate_bridge`): lock `amount` of `asset`
-  from `originator` into the off-ledger holding-store — value INACCESSIBLE, AWAITING the other-chain
-  confirmation (single-cell debit + parked bridge-tagged record). Combined per-asset CONSERVING; bare
-  per-asset ledger DEBITED at `asset` (≈ escrow create). The §8 spending proof is the THEOREM-level
-  portal. -/
-  | bridgeLockA     (id : Nat) (actor originator destination : CellId) (asset : AssetId) (amount : ℤ)
-  /-- `BridgeFinalize { nullifier, receipt }` (dregg1 `apply_bridge_finalize`,
-  `cell/src/note_bridge.rs::finalize_bridge`): the §8 confirmation receipt arrived (the
-  destination-federation signature — `verify_bridge_receipt`, the §8 portal); the lock RESOLVES and the
-  value LEAVES for the other chain — a BURN on this side (no credit). COMBINED per-asset measure DROPS by
-  the bridged amount (a disclosed OUTFLOW). The ONE holding-store resolution that does NOT conserve, and
-  honestly so. The receipt DISCLOSES the bridged `(asset, amount)` — carried on the action so the
-  per-asset conservation VECTOR can state the `-amount` move at `asset`; the executor gates on the parked
-  record's `(asset, amount)` MATCHING the disclosed pair (fail-closed otherwise, exactly as dregg1's
-  finalize checks the receipt against the pending bridge). -/
-  | bridgeFinalizeA (id : Nat) (actor : CellId) (asset : AssetId) (amount : ℤ)
-  /-- `BridgeCancel { nullifier }` (dregg1 `apply_bridge_cancel`,
-  `cell/src/note_bridge.rs::cancel_bridge`): the timeout was reached without a receipt; the note is
-  UNLOCKED and the value REFUNDED to the originator (single-cell credit + resolve). COMBINED per-asset
-  CONSERVING (≈ escrow refund). The timeout gate is carried at the theorem layer. -/
-  | bridgeCancelA   (id : Nat) (actor : CellId)
   -- §MA-seal: the 6 SIMPLE bal-NEUTRAL effects (Wave 6). Each writes a cell flag/metadata field or
   -- records a refusal — and NEVER touches the `bal` ledger, so `ledgerDeltaAsset = 0` for EVERY asset.
   -- The §8 crypto (AEAD for seal/unseal, the commitment for makeSovereign) is the CHAIN-LAYER portal.
@@ -3485,24 +2940,18 @@ inductive FullActionA where
   fresh queue (id `id`, owner = `cell`'s actor) with `capacity` and an EMPTY buffer. Authority: `actor`
   holds authority over the queue's representing `cell` (`stateAuthB`). Generative. bal-NEUTRAL. -/
   | queueAllocateA  (id : Nat) (actor cell : CellId) (capacity : Nat)
-  /-- `QueueEnqueue { queue, message_hash, deposit }` (dregg1 `apply_queue_enqueue`, `apply.rs:3310`):
-  APPEND message hash `m` to the TAIL of queue `id`'s FIFO buffer AND PARK a REFUNDABLE anti-spam
-  `deposit` of asset `dAsset` from the `actor` sender into the holding-store keyed by `depId`. Fail-closed
-  if the queue is absent OR FULL (`apply.rs:3348`), OR the sender lacks the deposit (`InsufficientBalance`,
-  `apply.rs:3361`). Authority: `actor` holds authority over the queue `cell` (the writer-ACL gate,
-  `apply.rs:3334`). **Wave-8 residual close**: the deposit is NO LONGER unmodeled — it GENUINELY moves
-  the bare `recTotalAsset` (parked off-ledger) while the COMBINED measure is CONSERVED (a refundable
-  transfer-like move). Conservative, combined-conserving. -/
-  | queueEnqueueA   (id : Nat) (m : Nat) (actor cell : CellId) (depId : Nat) (dAsset : AssetId) (deposit : ℤ)
+  /-- `QueueEnqueue { queue, message_hash }` (dregg1 `apply_queue_enqueue`, `apply.rs:3310`):
+  APPEND message hash `m` to the TAIL of queue `id`'s FIFO buffer. Fail-closed if the queue is absent
+  OR FULL (`apply.rs:3348`). Authority: `actor` holds authority over the queue `cell` (the writer-ACL
+  gate, `apply.rs:3334`). F1b: the Wave-8 refundable anti-spam deposit-park is GONE with the kernel
+  escrow holding-store (a factory concern in the F2 queue migration) — bal-NEUTRAL. -/
+  | queueEnqueueA   (id : Nat) (m : Nat) (actor cell : CellId)
   /-- `QueueDequeue { queue }` (dregg1 `apply_queue_dequeue`, `apply.rs:3420`): REMOVE-FROM-FRONT of
-  queue `id`'s FIFO buffer (the OLDEST waiting message) AND REFUND the deposit record `depId` to the
-  dequeuer (`apply.rs:3483`). Fail-closed if absent, the actor is NOT the queue owner (`apply.rs:3433`),
-  the buffer is EMPTY (`apply.rs:3444`), OR the deposit record is absent. Authority: `actor` holds
-  authority over the queue `cell` AND is the kernel-level owner. **Wave-8**: the refund RETURNS the
-  deposit to the dequeuer's ledger (combined-conserving). Conservative. The refunded amount is NOT a
-  caller field — it is the named deposit record's `amount` (`dequeueRefundAmount`), so the receipt
-  cannot misreport the moved value. -/
-  | queueDequeueA   (id : Nat) (actor cell : CellId) (depId : Nat)
+  queue `id`'s FIFO buffer (the OLDEST waiting message). Fail-closed if absent, the actor is NOT the
+  queue owner (`apply.rs:3433`), OR the buffer is EMPTY (`apply.rs:3444`). Authority: `actor` holds
+  authority over the queue `cell` AND is the kernel-level owner. F1b: the deposit refund is GONE with
+  the deposit park — bal-NEUTRAL. -/
+  | queueDequeueA   (id : Nat) (actor cell : CellId)
   /-- `QueueResize { queue, new_capacity }` (dregg1 `apply_queue_resize`, `apply.rs:3507`): change queue
   `id`'s capacity to `newCap`. Fail-closed if absent OR shrinking below the current occupancy
   (`apply.rs:3534`, "can't shrink below current occupancy"). Authority: `actor` holds authority over the
@@ -3587,14 +3036,12 @@ inductive FullActionA where
   | refreshDelegationA (actor child : CellId)
 
 /-- **The per-asset COMBINED ledger delta of a `FullActionA`, indexed by asset `b`** — the move of the
-COMBINED measure `recTotalAssetWithEscrow` (= `bal`-ledger + per-asset holding-store). Transfer and
+COMBINED measure `recTotalAsset` (= `bal`-ledger + per-asset holding-store). Transfer and
 authority are conservation-trivial (`0` for every asset); `mintA a` adds `amt` to asset `a` only;
 `burnA a` subtracts from asset `a` only. The 5 PURE-STATE effects write the `cell` record / the LOG,
-never `bal` — so `0`. The escrow/obligation/committed-escrow legs DEBIT the bare `bal` ledger by
-∓amount at the locked asset BUT park exactly that into the per-asset holding-store, so their COMBINED
-delta is `0` (combined-conserving, even though the bare ledger genuinely moves — that bare debit is
-witnessed by `createEscrowChainA_bal_debits`). Notes move the nullifier/commitment SET, not `bal`, so
-`0`. A FAMILY indexed by `AssetId` — never one aggregate scalar. -/
+never `bal` — so `0`. Notes move the nullifier/commitment SET, not `bal`, so `0`. A FAMILY indexed
+by `AssetId` — never one aggregate scalar. (F1b: the escrow/obligation/bridge-LFC arms are GONE with
+the kernel holding-store.) -/
 def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .balanceA _ _,        _ => 0
   | .delegate _ _ _,      _ => 0
@@ -3625,28 +3072,9 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .createCellFromFactoryA _ _ _, _ => 0
   | .spawnA _ _ _,        _ => 0
   | .bridgeMintA _ _ a value, b => if b = a then value else 0
-  -- §MA-escrow: escrow/obligation/committed-escrow are COMBINED-conserving (bal debit offset by the
-  -- holding-store park), so their COMBINED delta is `0`; notes move SETs, not `bal`, so `0`.
-  | .createEscrowA _ _ _ _ _ _,   _ => 0
-  | .releaseEscrowA _ _,          _ => 0
-  | .refundEscrowA _ _,           _ => 0
-  | .createObligationA _ _ _ _ _ _, _ => 0
-  -- fulfill returns the stake to the obligor (≈ escrow refund) / slash transfers it to the beneficiary
-  -- (≈ escrow release): both SETTLE the parked record back onto the ledger, COMBINED per-asset conserving.
-  | .fulfillObligationA _ _,      _ => 0
-  | .slashObligationA _ _,        _ => 0
+  -- §MA-note: notes move SETs (nullifier/commitment), not `bal`, so `0`.
   | .noteSpendA _ _ _,            _ => 0
   | .noteCreateA _ _,             _ => 0
-  | .createCommittedEscrowA _ _ _ _ _ _ _, _ => 0
-  | .releaseCommittedEscrowA _ _, _ => 0
-  | .refundCommittedEscrowA _ _,  _ => 0
-  -- §MA-bridge: LOCK is COMBINED-conserving (bal debit offset by the holding-store park), so its COMBINED
-  -- delta is `0`; CANCEL refunds the originator (combined fixed), so `0`; FINALIZE is the ONE disclosed
-  -- OUTFLOW — the value LEFT for the other chain, so the COMBINED measure DROPS by the DISCLOSED `amount`
-  -- at the disclosed `asset` ONLY (like burn, `-amount`), every other asset fixed.
-  | .bridgeLockA _ _ _ _ _ _,     _ => 0
-  | .bridgeFinalizeA _ _ a amount, b => if b = a then (-amount) else 0
-  | .bridgeCancelA _ _,           _ => 0
   -- §MA-seal: the DE-SHADOWED seal/unseal/createSealPair MOVE capabilities (edit `caps`/`sealedBoxes`),
   -- NEVER `bal` — so `0` for EVERY asset (balance-NEUTRAL). makeSovereign/refusal/receiptArchive write
   -- the `cell` record / lifecycle field, also `0`. The §8 crypto is the chain-layer portal, off the ledger.
@@ -3657,10 +3085,10 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .refusalA _ _,                _ => 0
   | .receiptArchiveA _ _,         _ => 0
   -- §MA-queue: the 4 queue effects touch ONLY the `queues` side-table (messages, not balance), NEVER
-  -- `bal`/`escrows` — so `0` for EVERY asset (balance-NEUTRAL; `recTotalAssetWithEscrow` UNCHANGED).
+  -- `bal`/`escrows` — so `0` for EVERY asset (balance-NEUTRAL; `recTotalAsset` UNCHANGED).
   | .queueAllocateA _ _ _ _,      _ => 0
-  | .queueEnqueueA _ _ _ _ _ _ _, _ => 0
-  | .queueDequeueA _ _ _ _,       _ => 0
+  | .queueEnqueueA _ _ _ _,       _ => 0
+  | .queueDequeueA _ _ _,         _ => 0
   | .queueResizeA _ _ _ _,        _ => 0
   -- §MA-queue-batch (WAVE 4): the atomic batch sequences combined-conserving sub-ops (each `0`), so its
   -- combined delta is `0`; the pipeline step moves a MESSAGE source→sinks (no balance) ⇒ `0`; the
@@ -3709,20 +3137,8 @@ def requiredFacetA : FullActionA → Authority.Auth
   | .createCellFromFactoryA _ _ _ => Authority.Auth.write
   | .spawnA _ _ _            => Authority.Auth.write
   | .bridgeMintA _ _ _ _     => Authority.Auth.write
-  | .createEscrowA _ _ _ _ _ _ => Authority.Auth.write
-  | .releaseEscrowA _ _      => Authority.Auth.write
-  | .refundEscrowA _ _       => Authority.Auth.write
-  | .createObligationA _ _ _ _ _ _ => Authority.Auth.write
-  | .fulfillObligationA _ _  => Authority.Auth.write
-  | .slashObligationA _ _    => Authority.Auth.write
   | .noteSpendA _ _ _        => Authority.Auth.write
   | .noteCreateA _ _         => Authority.Auth.write
-  | .createCommittedEscrowA _ _ _ _ _ _ _ => Authority.Auth.write
-  | .releaseCommittedEscrowA _ _ => Authority.Auth.write
-  | .refundCommittedEscrowA _ _  => Authority.Auth.write
-  | .bridgeLockA _ _ _ _ _ _ => Authority.Auth.write
-  | .bridgeFinalizeA _ _ _ _ => Authority.Auth.write
-  | .bridgeCancelA _ _       => Authority.Auth.write
   | .sealA _ _ _             => Authority.Auth.write
   | .unsealA _ _ _           => Authority.Auth.write
   | .createSealPairA _ _ _ _ => Authority.Auth.write
@@ -3730,8 +3146,8 @@ def requiredFacetA : FullActionA → Authority.Auth
   | .refusalA _ _            => Authority.Auth.write
   | .receiptArchiveA _ _     => Authority.Auth.write
   | .queueAllocateA _ _ _ _  => Authority.Auth.write
-  | .queueEnqueueA _ _ _ _ _ _ _ => Authority.Auth.write
-  | .queueDequeueA _ _ _ _   => Authority.Auth.write
+  | .queueEnqueueA _ _ _ _   => Authority.Auth.write
+  | .queueDequeueA _ _ _     => Authority.Auth.write
   | .queueResizeA _ _ _ _    => Authority.Auth.write
   | .queueAtomicTxA _ _      => Authority.Auth.write
   | .queuePipelineStepA _ _ _ _ => Authority.Auth.write
@@ -3834,38 +3250,9 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   | .createCellFromFactoryA actor newCell vk => createCellFromFactoryChainA s actor newCell vk
   | .spawnA actor child target       => spawnChainA s actor child target
   | .bridgeMintA actor cell a value  => recCMintAsset s actor cell a value
-  -- §MA-escrow: escrow/obligation/committed route to the chained per-asset holding-store steps;
-  -- obligation/committed are dispatch-ALIASED to the escrow steps (same automaton, §8 portal at the
-  -- theorem layer). Notes route to the SET-insert steps.
-  | .createEscrowA id actor creator recipient asset amount =>
-      createEscrowChainA s id actor creator recipient asset amount
-  | .releaseEscrowA id actor          => releaseEscrowChainA s id actor
-  | .refundEscrowA id actor           => refundEscrowChainA s id actor
-  | .createObligationA id actor obligor beneficiary asset stake =>
-      createEscrowChainA s id actor obligor beneficiary asset stake
-  -- fulfill: the obligor met the condition — RETURN the stake to the obligor (= the record's
-  -- `creator`), exactly the per-asset escrow REFUND (`apply.rs:1574` credits `record.obligor`). The
-  -- obligor-only + before-deadline gates are §8/theorem-layer carriers.
-  | .fulfillObligationA id actor      => refundEscrowChainA s id actor
-  -- slash: the deadline passed — TRANSFER the stake to the BENEFICIARY (= the record's `recipient`),
-  -- exactly the per-asset escrow RELEASE (`apply.rs:1656` credits `record.beneficiary`). The
-  -- post-deadline gate is the §8/theorem-layer carrier.
-  | .slashObligationA id actor        => releaseEscrowChainA s id actor
+  -- §MA-note: notes route to the SET-insert steps.
   | .noteSpendA nf actor spendProof   => noteSpendChainA s nf actor spendProof
   | .noteCreateA cm actor             => some (noteCreateChainA s cm actor)
-  -- WAVE 4 HONESTY: committed-escrow create routes to the §8 hiding-portal-GATED chained step — NOT
-  -- silently `createEscrowChainA`. FAIL-CLOSED if `hidingProof = false` (the privacy boundary plain
-  -- escrow lacks). Under the discharged portal it inherits the per-asset escrow lock.
-  | .createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      createCommittedEscrowChainA s id actor creator recipient asset amount hidingProof
-  | .releaseCommittedEscrowA id actor => releaseEscrowChainA s id actor
-  | .refundCommittedEscrowA id actor  => refundEscrowChainA s id actor
-  -- §MA-bridge: lock/finalize/cancel route to the chained per-asset bridge steps over the SHARED escrow
-  -- holding-store. bridgeMint (the inbound side) routes to `recCMintAsset` (already done, above).
-  | .bridgeLockA id actor originator destination asset amount =>
-      bridgeLockChainA s id actor originator destination asset amount
-  | .bridgeFinalizeA id actor asset amount => bridgeFinalizeChainA s id actor asset amount
-  | .bridgeCancelA id actor                => bridgeCancelChainA s id actor
   -- §MA-seal: the 6 simple bal-neutral effects route to the ALREADY-PROVEN authority-gated field write
   -- (`stateStep`), each into its named record field. The §8 crypto (AEAD ciphertext / commitment) is
   -- the chain-layer portal — the STATE move is the field write recorded here, NOT the crypto verify.
@@ -3883,8 +3270,8 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   -- §MA-queue: the 4 queue effects route to the chained ring-buffer FIFO steps (authority-gated +
   -- the kernel-level capacity/owner/emptiness gates). The REAL FIFO automaton, NOT a flag.
   | .queueAllocateA id actor cell cap   => queueAllocateChainA s id actor cell cap
-  | .queueEnqueueA id m actor cell depId dAsset deposit => queueEnqueueChainA s id m actor cell depId dAsset deposit
-  | .queueDequeueA id actor cell depId                  => queueDequeueChainA s id actor cell depId
+  | .queueEnqueueA id m actor cell => queueEnqueueChainA s id m actor cell
+  | .queueDequeueA id actor cell   => queueDequeueChainA s id actor cell
   | .queueResizeA id newCap actor cell  => queueResizeChainA s id newCap actor cell
   -- §MA-queue-batch (WAVE 4): the atomic batch folds its sub-ops ALL-OR-NOTHING; the pipeline step
   -- dequeues source→fan-out sinks; pipelinedSend's apply-time effect is NEUTRAL (a clock row, the
@@ -3920,21 +3307,18 @@ end
 
 mutual
 /-- **`execFullA_ledger_per_asset` — PROVED (the COMBINED per-asset conservation VECTOR).** Every
-committed `FullActionA` moves the COMBINED per-asset measure `recTotalAssetWithEscrow b` (= `bal`-ledger
+committed `FullActionA` moves the COMBINED per-asset measure `recTotalAsset b` (= `bal`-ledger
 + per-asset holding-store) by EXACTLY `ledgerDeltaAsset fa b`, for EVERY asset `b` independently: `0`
-for transfer/authority (the moved asset cancels; authority/notes leave `bal` AND `escrows` fixed), `±amt`
-at the targeted asset for mint/burn/bridge (escrows fixed ⇒ combined = bare-bal), and `0` for the
-escrow/obligation/committed-escrow legs — they DEBIT the bare `bal` by ∓amount but PARK exactly that into
-the per-asset holding-store, so the COMBINED measure is fixed (combined-conserving). THIS is the law a
-SCALAR kernel cannot state — it would let a mint of asset B net against a burn of asset A, or an escrow
-of asset A launder into asset B. The per-asset COMBINED family forbids both. -/
+for transfer/authority (the moved asset cancels; authority/notes leave `bal` fixed) and `±amt`
+at the targeted asset for mint/burn/bridgeMint. THIS is the law a SCALAR kernel cannot state — it
+would let a mint of asset B net against a burn of asset A. The per-asset family forbids it.
+(F1b: the escrow/obligation/bridge-LFC holding-store legs are GONE — value parks in factory cells'
+own `bal` columns, covered by the SAME sum.) -/
 theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (b : AssetId)
     (h : execFullA s fa = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b + ledgerDeltaAsset fa b := by
-  -- For the NON-holding-store kinds, the post-state leaves `escrows` fixed, so `escrowHeldAsset` is
-  -- unchanged and the combined move equals the bare-`bal` move; for the escrow/note legs we read the
-  -- combined-conservation off the per-asset holding-store lemmas (combined delta `0`). `exerciseA`
-  -- recurses through the mutual `execInnerA_ledger_per_asset` (its combined delta SUMS the inner deltas).
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b + ledgerDeltaAsset fa b := by
+  -- Each arm reads its per-asset move off the chained step's delta/neutrality lemma. `exerciseA`
+  -- recurses through the mutual `execInnerA_ledger_per_asset` (its delta SUMS the inner deltas).
   cases fa with
   | balanceA t a =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
@@ -3945,13 +3329,8 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
         | none => rw [hx] at h; exact absurd h (by simp)
         | some k' =>
             rw [hx] at h; simp only [Option.some.injEq] at h; subst h
-            show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
-            rw [show escrowHeldAsset k' b = escrowHeldAsset s.kernel b from by
-                  rw [show k' = { s.kernel with bal := recTransferBal s.kernel.bal t.src t.dst a t.amt } from by
-                        unfold recKExecAsset at hx; split at hx
-                        · simpa only [Option.some.injEq] using hx.symm
-                        · exact absurd hx (by simp)]; rfl,
-                recKExecAsset_conserves_per_asset s.kernel k' t a hx b]; ring
+            show recTotalAsset k' b = recTotalAsset s.kernel b + 0
+            rw [recKExecAsset_conserves_per_asset s.kernel k' t a hx b]; ring
       · rw [if_neg hadm] at h; exact absurd h (by simp)
   | delegate del rec t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
@@ -3963,12 +3342,12 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
           unfold recKDelegate at hd
           by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
           · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-            simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
+            simp only [recTotalAsset]; ring
           · rw [if_neg hg] at hd; exact absurd hd (by simp)
   | revoke holder t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [recCRevoke, Option.some.injEq] at h; subst h
-      simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset, recKRevokeTarget]; ring
+      simp only [recTotalAsset, recKRevokeTarget]; ring
   | mintA actor cell a amt =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCMintAsset at h
@@ -3976,13 +3355,8 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | none => rw [hm] at h; exact absurd h (by simp)
       | some k' =>
           rw [hm] at h; simp only [Option.some.injEq] at h; subst h
-          show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + _
-          rw [show escrowHeldAsset k' b = escrowHeldAsset s.kernel b from by
-                rw [show k' = { s.kernel with bal := recBalCredit s.kernel.bal cell a amt } from by
-                      unfold recKMintAsset at hm; split at hm
-                      · simpa only [Option.some.injEq] using hm.symm
-                      · exact absurd hm (by simp)]; rfl,
-              recKMintAsset_delta s.kernel k' actor cell a amt hm b]; ring
+          show recTotalAsset k' b = recTotalAsset s.kernel b + _
+          rw [recKMintAsset_delta s.kernel k' actor cell a amt hm b]
   | burnA actor cell a amt =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCBurnAsset at h
@@ -3990,49 +3364,38 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | none => rw [hb] at h; exact absurd h (by simp)
       | some k' =>
           rw [hb] at h; simp only [Option.some.injEq] at h; subst h
-          show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + _
-          rw [show escrowHeldAsset k' b = escrowHeldAsset s.kernel b from by
-                rw [show k' = { s.kernel with bal := recBalCredit s.kernel.bal cell a (-amt) } from by
-                      unfold recKBurnAsset at hb; split at hb
-                      · simpa only [Option.some.injEq] using hb.symm
-                      · exact absurd hb (by simp)]; rfl,
-              recKBurnAsset_delta s.kernel k' actor cell a amt hb b]; ring
+          show recTotalAsset k' b = recTotalAsset s.kernel b + _
+          rw [recKBurnAsset_delta s.kernel k' actor cell a amt hb b]
   | setFieldA actor cell f v =>
       -- §SLOT-CAVEAT: `setFieldA` now routes through the caveat-gated write `stateStepGuarded`. A
       -- committed guarded write commits exactly `stateStep`'s post-state (a named-field write), so it
       -- leaves the COMBINED per-asset measure UNCHANGED — `ledgerDeltaAsset (.setFieldA …) = 0`.
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [stateStepGuarded_recTotalAssetWithEscrow h b]; ring
+      rw [stateStepGuarded_recTotalAsset h b]; ring
   | emitEventA actor cell topic data =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       by_cases hlive : cell ∈ s.kernel.accounts
       · rw [if_pos hlive] at h
         simp only [Option.some.injEq] at h
         subst h
-        simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset, emitStep]; ring
+        simp only [recTotalAsset, emitStep]; ring
       · rw [if_neg hlive] at h
         exact absurd h (by simp)
   | incrementNonceA actor cell n =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
-      show recTotalAsset (writeField s.kernel nonceField cell (.int n)) b + escrowHeldAsset (writeField s.kernel nonceField cell (.int n)) b
-         = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
-      rw [writeField_recTotalAsset s.kernel nonceField cell (.int n) b,
-          show escrowHeldAsset (writeField s.kernel nonceField cell (.int n)) b = escrowHeldAsset s.kernel b from rfl]; ring
+      show recTotalAsset (writeField s.kernel nonceField cell (.int n)) b = recTotalAsset s.kernel b + 0
+      rw [writeField_recTotalAsset s.kernel nonceField cell (.int n) b]; ring
   | setPermissionsA actor cell p =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
-      show recTotalAsset (writeField s.kernel permsField cell (.int p)) b + escrowHeldAsset (writeField s.kernel permsField cell (.int p)) b
-         = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
-      rw [writeField_recTotalAsset s.kernel permsField cell (.int p) b,
-          show escrowHeldAsset (writeField s.kernel permsField cell (.int p)) b = escrowHeldAsset s.kernel b from rfl]; ring
+      show recTotalAsset (writeField s.kernel permsField cell (.int p)) b = recTotalAsset s.kernel b + 0
+      rw [writeField_recTotalAsset s.kernel permsField cell (.int p) b]; ring
   | setVKA actor cell vk =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
-      show recTotalAsset (writeField s.kernel vkField cell (.int vk)) b + escrowHeldAsset (writeField s.kernel vkField cell (.int vk)) b
-         = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
-      rw [writeField_recTotalAsset s.kernel vkField cell (.int vk) b,
-          show escrowHeldAsset (writeField s.kernel vkField cell (.int vk)) b = escrowHeldAsset s.kernel b from rfl]; ring
+      show recTotalAsset (writeField s.kernel vkField cell (.int vk)) b = recTotalAsset s.kernel b + 0
+      rw [writeField_recTotalAsset s.kernel vkField cell (.int vk) b]; ring
   | introduceA intro rec t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCDelegate at h
@@ -4043,7 +3406,7 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
           unfold recKDelegate at hd
           by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
           · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-            simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
+            simp only [recTotalAsset]; ring
           · rw [if_neg hg] at hd; exact absurd hd (by simp)
   | delegateAttenA del rec t keep =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
@@ -4057,15 +3420,15 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
   | attenuateA actor idx keep =>
       simp only [execFullA, ledgerDeltaAsset, Option.some.injEq] at h ⊢
       subst h
-      simp only [attenuateStepA, recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
+      simp only [attenuateStepA, recTotalAsset]; ring
   | dropRefA holder t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [recCRevoke, Option.some.injEq] at h; subst h
-      simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset, recKRevokeTarget]; ring
+      simp only [recTotalAsset, recKRevokeTarget]; ring
   | revokeDelegationA holder t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [recCRevoke, Option.some.injEq] at h; subst h
-      simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset, recKRevokeTarget]; ring
+      simp only [recTotalAsset, recKRevokeTarget]; ring
   | validateHandoffA intro rec t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCDelegate at h
@@ -4076,7 +3439,7 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
           unfold recKDelegate at hd
           by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
           · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-            simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
+            simp only [recTotalAsset]; ring
           · rw [if_neg hg] at hd; exact absurd hd (by simp)
   | exerciseA actor t inner =>
       -- R4 facet gate first, then the hold-gate is bal-neutral (the c-list is read, not edited); the move
@@ -4095,24 +3458,14 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       · rw [if_neg hf] at h; exact absurd h (by simp)
   | createCellA actor newCell =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      -- combined = recTotalAsset (escrows unchanged by the fresh-cell insert) + neutral recTotalAsset.
-      have hesc : escrowHeldAsset s'.kernel b = escrowHeldAsset s.kernel b := by
-        obtain ⟨_, _, hs'⟩ := createCellChainA_factors (by simpa only [execFullA] using h)
-        subst hs'; rfl
-      unfold recTotalAssetWithEscrow
-      rw [hesc, createCellChainA_neutral b (by simpa only [execFullA] using h)]; ring
+      rw [createCellChainA_neutral b (by simpa only [execFullA] using h)]; ring
   | createCellFromFactoryA actor newCell vk =>
       -- §MA-factory: born-EMPTY cell + balance-orthogonal field/caveat install ⇒ COMBINED measure fixed.
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [createCellFromFactoryChainA_neutralWithEscrow b (by simpa only [execFullA] using h)]; ring
+      rw [createCellFromFactoryChainA_neutral b (by simpa only [execFullA] using h)]; ring
   | spawnA actor child target =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      have hesc : escrowHeldAsset s'.kernel b = escrowHeldAsset s.kernel b := by
-        obtain ⟨s1, _, hc, hs'⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
-        subst hs'
-        obtain ⟨_, _, hc'⟩ := createCellChainA_factors hc; subst hc'; rfl
-      unfold recTotalAssetWithEscrow
-      rw [hesc, spawnChainA_neutral b (by simpa only [execFullA] using h)]; ring
+      rw [spawnChainA_neutral b (by simpa only [execFullA] using h)]; ring
   | bridgeMintA actor cell a value =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCMintAsset at h
@@ -4120,70 +3473,9 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | none => rw [hm] at h; exact absurd h (by simp)
       | some k' =>
           rw [hm] at h; simp only [Option.some.injEq] at h; subst h
-          show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + _
-          rw [show escrowHeldAsset k' b = escrowHeldAsset s.kernel b from by
-                rw [show k' = { s.kernel with bal := recBalCredit s.kernel.bal cell a value } from by
-                      unfold recKMintAsset at hm; split at hm
-                      · simpa only [Option.some.injEq] using hm.symm
-                      · exact absurd hm (by simp)]; rfl,
-              recKMintAsset_delta s.kernel k' actor cell a value hm b]; ring
-  -- §MA-escrow: the holding-store legs are COMBINED-conserving (combined delta `0`); notes are bal-NEUTRAL.
-  | createEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [createEscrowChainA_combined_neutral b h, add_zero]
-  | releaseEscrowA id actor =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      simp only [releaseEscrowChainA] at h
-      by_cases hg : releaseSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : releaseEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-            show recTotalAssetWithEscrow k' b = _ + 0
-            rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  | refundEscrowA id actor =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      simp only [refundEscrowChainA] at h
-      by_cases hg : refundSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : refundEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-            show recTotalAssetWithEscrow k' b = _ + 0
-            rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  | createObligationA id actor obligor beneficiary asset stake =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [createEscrowChainA_combined_neutral b h, add_zero]
-  -- fulfill = the per-asset escrow REFUND (stake → obligor/creator): combined-conserving.
-  | fulfillObligationA id actor =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      simp only [refundEscrowChainA] at h
-      by_cases hg : refundSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : refundEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-            show recTotalAssetWithEscrow k' b = _ + 0
-            rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  -- slash = the per-asset escrow RELEASE (stake → beneficiary/recipient): combined-conserving.
-  | slashObligationA id actor =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      simp only [releaseEscrowChainA] at h
-      by_cases hg : releaseSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : releaseEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-            show recTotalAssetWithEscrow k' b = _ + 0
-            rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
-      · rw [if_neg hg] at h; exact absurd h (by simp)
+          show recTotalAsset k' b = recTotalAsset s.kernel b + _
+          rw [recKMintAsset_delta s.kernel k' actor cell a value hm b]
+  -- §MA-note: notes move SETs (nullifier/commitment), never `bal` — bal-NEUTRAL.
   | noteSpendA nf actor spendProof =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [noteSpendChainA] at h
@@ -4194,181 +3486,134 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
         | some k' =>
             rw [hk] at h; simp only [Option.some.injEq] at h; subst h
             -- noteSpend grows ONLY `nullifiers` — `bal` and `escrows` fixed.
-            show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
+            show recTotalAsset k' b = recTotalAsset s.kernel b + 0
             rw [show k' = { s.kernel with nullifiers := nf :: s.kernel.nullifiers } from by
                   unfold noteSpendNullifier at hk; split at hk
                   · exact absurd hk (by simp)
                   · simpa only [Option.some.injEq] using hk.symm]
-            simp only [recTotalAsset, escrowHeldAsset]; ring
+            simp only [recTotalAsset]; ring
       · rw [if_neg hp] at h; exact absurd h (by simp)
   | noteCreateA cm actor =>
       simp only [execFullA, ledgerDeltaAsset, Option.some.injEq] at h ⊢
       subst h
       -- noteCreate grows ONLY `commitments` — `bal` and `escrows` fixed.
-      simp only [noteCreateChainA, noteCreateCommitment, recTotalAssetWithEscrow, recTotalAsset,
-                 escrowHeldAsset]; ring
-  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      -- WAVE 4 HONESTY: under the §8 hiding portal the lock is the per-asset escrow (combined `0`).
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [createCommittedEscrowChainA_combined_neutral b h, add_zero]
-  | releaseCommittedEscrowA id actor =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      simp only [releaseEscrowChainA] at h
-      by_cases hg : releaseSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : releaseEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-            show recTotalAssetWithEscrow k' b = _ + 0
-            rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  | refundCommittedEscrowA id actor =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      simp only [refundEscrowChainA] at h
-      by_cases hg : refundSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : refundEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            rw [hk] at h; simp only [Option.some.injEq] at h; subst h
-            show recTotalAssetWithEscrow k' b = _ + 0
-            rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  -- §MA-bridge: lock/cancel are COMBINED-conserving (combined delta `0`); finalize is the disclosed
-  -- OUTFLOW (combined DROPS by `-amount` at the disclosed asset — the value LEFT for the other chain).
-  | bridgeLockA id actor originator destination asset amount =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [bridgeLockChainA_combined_neutral b h, add_zero]
-  | bridgeFinalizeA id actor asset amount =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [bridgeFinalizeChainA_burns_combined b h]
-      by_cases hba : b = asset <;> simp only [hba, if_true, if_false] <;> ring
-  | bridgeCancelA id actor =>
-      simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [bridgeCancelChainA_combined_neutral b h, add_zero]
+      simp only [noteCreateChainA, noteCreateCommitment, recTotalAsset]; ring
   -- §MA-seal (Wave-3 DE-SHADOW): seal/unseal/createSealPair MOVE capabilities (edit `caps`/`sealedBoxes`)
   -- — `bal` AND `escrows` fixed, so the COMBINED measure is UNCHANGED for EVERY asset (balance-NEUTRAL),
   -- read off the chained balNeutral lemmas (exactly as the swiss/queue arms).
   | sealA pid actor payload =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             sealChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   | unsealA pid actor recipient =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             unsealChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   | createSealPairA pid actor sealerHolder unsealerHolder =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             createSealPairChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   | makeSovereignA actor cell =>
       -- FILL #133: the value-REBIND (whole-record drop) is bal-NEUTRAL on the per-asset ledger —
-      -- `recTotalAsset`/`escrowHeldAsset` read `bal`/`escrows`, both fixed by the `cell`-only rebind.
+      -- `recTotalAsset` reads `bal`, fixed by the `cell`-only rebind.
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       obtain ⟨_, hs'⟩ := makeSovereignStep_factors h; subst hs'
-      show recTotalAsset (makeSovereignKernel s.kernel cell) b + escrowHeldAsset (makeSovereignKernel s.kernel cell) b
-         = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
-      rw [makeSovereignKernel_recTotalAsset s.kernel cell b,
-          show escrowHeldAsset (makeSovereignKernel s.kernel cell) b = escrowHeldAsset s.kernel b from rfl]; ring
+      show recTotalAsset (makeSovereignKernel s.kernel cell) b = recTotalAsset s.kernel b + 0
+      rw [makeSovereignKernel_recTotalAsset s.kernel cell b]; ring
   | refusalA actor cell =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
-      show recTotalAsset (writeField s.kernel refusalField cell (.int 1)) b + escrowHeldAsset (writeField s.kernel refusalField cell (.int 1)) b
-         = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
-      rw [writeField_recTotalAsset s.kernel refusalField cell (.int 1) b,
-          show escrowHeldAsset (writeField s.kernel refusalField cell (.int 1)) b = escrowHeldAsset s.kernel b from rfl]; ring
+      show recTotalAsset (writeField s.kernel refusalField cell (.int 1)) b = recTotalAsset s.kernel b + 0
+      rw [writeField_recTotalAsset s.kernel refusalField cell (.int 1) b]; ring
   | receiptArchiveA actor cell =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
-      show recTotalAsset (writeField s.kernel lifecycleField cell (.int 1)) b + escrowHeldAsset (writeField s.kernel lifecycleField cell (.int 1)) b
-         = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
-      rw [writeField_recTotalAsset s.kernel lifecycleField cell (.int 1) b,
-          show escrowHeldAsset (writeField s.kernel lifecycleField cell (.int 1)) b = escrowHeldAsset s.kernel b from rfl]; ring
+      show recTotalAsset (writeField s.kernel lifecycleField cell (.int 1)) b = recTotalAsset s.kernel b + 0
+      rw [writeField_recTotalAsset s.kernel lifecycleField cell (.int 1) b]; ring
   -- §MA-queue: each queue effect is balance-NEUTRAL — read the COMBINED measure off the chained
-  -- balNeutral lemma (`recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b`), and
+  -- balNeutral lemma (`recTotalAsset s'.kernel b = recTotalAsset s.kernel b`), and
   -- `ledgerDeltaAsset = 0`. The FIFO/capacity/owner gates live in the kernel transition; here the move
   -- is `+0` at every asset (queues hold messages, not balance).
   | queueAllocateA id actor cell cap =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             queueAllocateChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
-  | queueEnqueueA id m actor cell depId dAsset deposit =>
+      simp only [recTotalAsset]; ring
+  | queueEnqueueA id m actor cell =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             queueEnqueueChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
-  | queueDequeueA id actor cell depId =>
+      simp only [recTotalAsset]; ring
+  | queueDequeueA id actor cell =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             queueDequeueChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   | queueResizeA id newCap actor cell =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             queueResizeChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   -- §MA-queue-batch (WAVE 4): the atomic batch / pipeline step / pipelined-send are all combined-NEUTRAL
   -- (read off `queueAtomicTxA_balNeutral` / `queuePipelineStepA_balNeutral`; pipelinedSend leaves the
   -- kernel UNCHANGED — only a clock row), and `ledgerDeltaAsset = 0`.
   | queueAtomicTxA actor ops =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             queueAtomicTxA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   | queuePipelineStepA srcId owner sinkCells sinkIds =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             queuePipelineStepA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   | pipelinedSendA actor =>
       simp only [execFullA, ledgerDeltaAsset, Option.some.injEq] at h ⊢
-      subst h; simp only [recTotalAssetWithEscrow]; ring
+      subst h; simp only [recTotalAsset]; ring
   -- §MA-swiss: each swiss-table effect is balance-NEUTRAL (moves references, not balance) ⇒ `+0`.
   | exportSturdyRefA sw actor exporter target rights =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             swissExportChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   | enlivenRefA sw actor exporter claimed =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             swissEnlivenChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   | swissHandoffA sw certHash introducer exporter =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             swissHandoffChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   | swissDropA sw actor exporter =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             swissDropChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
   -- §MA-lifecycle (Wave-3): each lifecycle/refresh effect is balance-NEUTRAL (edits a side-table, not
   -- `bal`/`escrows`) — read the COMBINED measure off the chained balNeutral lemma, `ledgerDeltaAsset = 0`.
   | cellSealA actor cell =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from by
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from by
             obtain ⟨_, hs'⟩ := cellSealChainA_factors h; subst hs'; rfl]; ring
   | cellUnsealA actor cell =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from by
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from by
             obtain ⟨_, hs'⟩ := cellUnsealChainA_factors h; subst hs'; rfl]; ring
   | cellDestroyA actor cell ch =>
       -- destroy sets `lifecycle` AND `deathCert`; both side-tables ⇒ `bal`/`escrows` fixed ⇒ rfl-neutral.
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from by
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from by
             obtain ⟨_, hs'⟩ := cellDestroyChainA_factors h; subst hs'; rfl]; ring
   | refreshDelegationA actor child =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [show recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b from
+      rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             refreshDelegationChainA_balNeutral h b]
-      simp only [recTotalAssetWithEscrow]; ring
+      simp only [recTotalAsset]; ring
 
 /-- **`execInnerA_ledger_per_asset` — the inner-fold conservation an `exerciseA` reads (PROVED).** A
 committed `execInnerA` (the inner-effect fold an exercise recurses through) moves the COMBINED per-asset
@@ -4377,8 +3622,8 @@ measure by exactly the SUM of the inner effects' deltas — the per-asset analog
 arm above can close (each inner element's per-action delta comes from the mutual `execFullA` case). -/
 theorem execInnerA_ledger_per_asset (s s' : RecChainedState) (inner : List FullActionA) (b : AssetId)
     (h : execInnerA s inner = some s') :
-    recTotalAssetWithEscrow s'.kernel b
-      = recTotalAssetWithEscrow s.kernel b + (inner.map (fun fa => ledgerDeltaAsset fa b)).sum := by
+    recTotalAsset s'.kernel b
+      = recTotalAsset s.kernel b + (inner.map (fun fa => ledgerDeltaAsset fa b)).sum := by
   cases inner with
   | nil =>
       simp only [execInnerA, Option.some.injEq] at h; subst h; simp
@@ -4407,12 +3652,12 @@ def turnLedgerDeltaAsset (tt : List FullActionA) (b : AssetId) : ℤ :=
   (tt.map (fun fa => ledgerDeltaAsset fa b)).sum
 
 /-- **`execFullTurnA_ledger_per_asset` — PROVED (the transaction COMBINED conservation vector).** A
-committed per-asset full-turn moves the COMBINED measure `recTotalAssetWithEscrow b` by exactly the net
+committed per-asset full-turn moves the COMBINED measure `recTotalAsset b` by exactly the net
 of all per-action deltas in asset `b`, for EVERY asset `b`. Proved by induction on the turn, reusing
 `execFullA_ledger_per_asset`. The asset-indexed analog of `execFullTurn_ledger`. -/
 theorem execFullTurnA_ledger_per_asset :
     ∀ (s s' : RecChainedState) (tt : List FullActionA) (b : AssetId), execFullTurnA s tt = some s' →
-      recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b + turnLedgerDeltaAsset tt b
+      recTotalAsset s'.kernel b = recTotalAsset s.kernel b + turnLedgerDeltaAsset tt b
   | s, s', [], b, h => by
       simp only [execFullTurnA, Option.some.injEq] at h; subst h; simp [turnLedgerDeltaAsset]
   | s, s', a :: rest, b, h => by
@@ -4421,9 +3666,9 @@ theorem execFullTurnA_ledger_per_asset :
       | none => rw [ha] at h; exact absurd h (by simp)
       | some s1 =>
           rw [ha] at h
-          have hhead : recTotalAssetWithEscrow s1.kernel b = recTotalAssetWithEscrow s.kernel b + ledgerDeltaAsset a b :=
+          have hhead : recTotalAsset s1.kernel b = recTotalAsset s.kernel b + ledgerDeltaAsset a b :=
             execFullA_ledger_per_asset s s1 a b ha
-          have htail : recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s1.kernel b + turnLedgerDeltaAsset rest b :=
+          have htail : recTotalAsset s'.kernel b = recTotalAsset s1.kernel b + turnLedgerDeltaAsset rest b :=
             execFullTurnA_ledger_per_asset s1 s' rest b h
           rw [htail, hhead]
           simp only [turnLedgerDeltaAsset, List.map_cons, List.sum_cons]; ring
@@ -4435,7 +3680,7 @@ mint/burn nets out in EACH asset) conserves EVERY asset class. The `CONSERVATION
 transaction level. -/
 theorem execFullTurnA_conserves_per_asset (s s' : RecChainedState) (tt : List FullActionA) (b : AssetId)
     (h : execFullTurnA s tt = some s') (hzero : turnLedgerDeltaAsset tt b = 0) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   rw [execFullTurnA_ledger_per_asset s s' tt b h, hzero, add_zero]
 
 /-! ## §MB — `execFullTurnA_append` + the per-asset PER-NODE attestation carrier.
@@ -4481,10 +3726,8 @@ theorem execFullTurnA_append (s : RecChainedState) (xs ys : List FullActionA) :
 `turn`; authority appends its `authReceipt`; mint/burn append a self-`Turn` carrying the disclosed
 per-asset supply delta. The per-asset analog of `fullReceipt`.
 
-**State-dependent for `queueDequeueA`:** the dequeue refund amount is NOT a caller field — it is the
-named deposit record's own `amount` (`dequeueRefundAmount s.kernel depId`), read off the PRE-state `s`.
-Threading `s` here is what makes the receipt amount UNFORGEABLE (a caller cannot misreport the value it
-reclaims). Every other arm ignores `s` (the receipt is a pure function of the action's own fields). -/
+(The pre-state `s` binder is retained for signature stability across the F2 queue migration; since
+F1b removed the deposit-refund receipt, every arm is a pure function of the action's own fields.) -/
 def fullReceiptA (s : RecChainedState) : FullActionA → Turn
   | .balanceA t _          => t
   | .delegate del _ _      => authReceipt del
@@ -4512,24 +3755,10 @@ def fullReceiptA (s : RecChainedState) : FullActionA → Turn
   | .createCellFromFactoryA actor newCell _ => { actor := actor, src := newCell, dst := newCell, amt := 0 }
   | .spawnA actor child _       => { actor := actor, src := child, dst := child, amt := 0 }
   | .bridgeMintA actor cell _ value => { actor := actor, src := cell, dst := cell, amt := value }
-  -- §MA-escrow: every escrow/obligation/committed/note effect appends a self-`Turn` on the `actor`
-  -- (the metadata clock row; the parked amount/asset live in the off-ledger record/SET, not the receipt).
-  | .createEscrowA _ actor _ _ _ _   => escrowReceiptA actor
-  | .releaseEscrowA _ actor          => escrowReceiptA actor
-  | .refundEscrowA _ actor           => escrowReceiptA actor
-  | .createObligationA _ actor _ _ _ _ => escrowReceiptA actor
-  | .fulfillObligationA _ actor      => escrowReceiptA actor
-  | .slashObligationA _ actor        => escrowReceiptA actor
+  -- §MA-note: each note effect appends a self-`Turn` on the `actor`
+  -- (the metadata clock row; the moved SET entry lives off-receipt).
   | .noteSpendA _ actor _            => escrowReceiptA actor
   | .noteCreateA _ actor             => escrowReceiptA actor
-  | .createCommittedEscrowA _ actor _ _ _ _ _ => escrowReceiptA actor
-  | .releaseCommittedEscrowA _ actor => escrowReceiptA actor
-  | .refundCommittedEscrowA _ actor  => escrowReceiptA actor
-  -- §MA-bridge: each bridge leg appends a self-`Turn` on the `actor` (the metadata clock row; the
-  -- bridged amount/asset live in the off-ledger record / the disclosed action params, not the receipt).
-  | .bridgeLockA _ actor _ _ _ _     => escrowReceiptA actor
-  | .bridgeFinalizeA _ actor _ _     => escrowReceiptA actor
-  | .bridgeCancelA _ actor           => escrowReceiptA actor
   -- §MA-seal (Wave-3 DE-SHADOW): seal appends a self-`Turn` on the sealing `actor`; unseal on the
   -- `recipient` (the cap's new holder); createSealPair on the `sealerHolder` — matching the chained-step
   -- receipts. The §8 crypto / box live in the portal/side-table, not the receipt.
@@ -4539,13 +3768,11 @@ def fullReceiptA (s : RecChainedState) : FullActionA → Turn
   | .makeSovereignA actor cell       => { actor := actor, src := cell, dst := cell, amt := 0 }
   | .refusalA actor cell             => { actor := actor, src := cell, dst := cell, amt := 0 }
   | .receiptArchiveA actor cell      => { actor := actor, src := cell, dst := cell, amt := 0 }
-  -- §MA-queue: allocate/resize append a balance-`0` self-`Turn` on the queue `cell`; enqueue/dequeue
-  -- append the REFUNDABLE DEPOSIT move (Wave-8): enqueue is `actor →(deposit)→ cell` (the deposit
-  -- parked from the sender into the queue), dequeue is `cell →(deposit)→ actor` (the refund to the
-  -- dequeuer). The message lives in the off-ledger FIFO buffer, not the receipt.
+  -- §MA-queue: each queue effect appends a balance-`0` self-`Turn` on the queue `cell` (F1b: the
+  -- deposit/refund receipt rows died with the deposit park). The message lives in the FIFO buffer.
   | .queueAllocateA _ actor cell _   => { actor := actor, src := cell, dst := cell, amt := 0 }
-  | .queueEnqueueA _ _ actor cell _ _ deposit => { actor := actor, src := actor, dst := cell, amt := deposit }
-  | .queueDequeueA _ actor cell depId         => { actor := actor, src := cell, dst := actor, amt := dequeueRefundAmount s.kernel depId }
+  | .queueEnqueueA _ _ actor cell    => { actor := actor, src := cell, dst := cell, amt := 0 }
+  | .queueDequeueA _ actor cell      => { actor := actor, src := cell, dst := cell, amt := 0 }
   | .queueResizeA _ _ actor cell     => { actor := actor, src := cell, dst := cell, amt := 0 }
   -- §MA-queue-batch (WAVE 4): the atomic batch appends a batch-commit row on the `actor` (the per-op
   -- rows landed inside the fold); the pipeline step a routing row on the `owner` (the source dequeuer);
@@ -4668,49 +3895,7 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
       cases hm : recKMintAsset s.kernel actor cell a value with
       | none => rw [hm] at h; exact absurd h (by simp)
       | some k' => rw [hm] at h; simp only [Option.some.injEq] at h; subst h; rfl
-  -- §MA-escrow: each escrow/note effect appends exactly its `escrowReceiptA` (the metadata clock row).
-  | createEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, createEscrowChainA, fullReceiptA] at h ⊢
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-  | releaseEscrowA id actor =>
-      simp only [execFullA, releaseEscrowChainA, fullReceiptA] at h ⊢
-      by_cases hg : releaseSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : releaseEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  | refundEscrowA id actor =>
-      simp only [execFullA, refundEscrowChainA, fullReceiptA] at h ⊢
-      by_cases hg : refundSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : refundEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  | createObligationA id actor obligor beneficiary asset stake =>
-      simp only [execFullA, createEscrowChainA, fullReceiptA] at h ⊢
-      cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-  | fulfillObligationA id actor =>
-      simp only [execFullA, refundEscrowChainA, fullReceiptA] at h ⊢
-      by_cases hg : refundSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : refundEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  | slashObligationA id actor =>
-      simp only [execFullA, releaseEscrowChainA, fullReceiptA] at h ⊢
-      by_cases hg : releaseSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : releaseEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-      · rw [if_neg hg] at h; exact absurd h (by simp)
+  -- §MA-note: each note effect appends exactly its `escrowReceiptA` (the metadata clock row).
   | noteSpendA nf actor spendProof =>
       simp only [execFullA, noteSpendChainA, fullReceiptA] at h ⊢
       by_cases hp : spendProof = true
@@ -4722,53 +3907,6 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
   | noteCreateA cm actor =>
       simp only [execFullA, noteCreateChainA, fullReceiptA, Option.some.injEq] at h ⊢
       subst h; rfl
-  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      -- WAVE 4 HONESTY: through the §8 hiding-portal gate, then the per-asset escrow lock.
-      simp only [execFullA, createCommittedEscrowChainA, createEscrowChainA, fullReceiptA] at h ⊢
-      by_cases hp : hidingProof = true
-      · rw [if_pos hp] at h
-        cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-      · rw [if_neg hp] at h; exact absurd h (by simp)
-  | releaseCommittedEscrowA id actor =>
-      simp only [execFullA, releaseEscrowChainA, fullReceiptA] at h ⊢
-      by_cases hg : releaseSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : releaseEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  | refundCommittedEscrowA id actor =>
-      simp only [execFullA, refundEscrowChainA, fullReceiptA] at h ⊢
-      by_cases hg : refundSettleAuthB s.kernel id actor
-      · rw [if_pos hg] at h
-        cases hk : refundEscrowKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  -- §MA-bridge: each bridge leg appends exactly its `escrowReceiptA` (the metadata clock row).
-  | bridgeLockA id actor originator destination asset amount =>
-      simp only [execFullA, bridgeLockChainA, fullReceiptA] at h ⊢
-      cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-  | bridgeFinalizeA id actor asset amount =>
-      simp only [execFullA, bridgeFinalizeChainA, fullReceiptA] at h ⊢
-      by_cases hg : bridgeAuthOK s.kernel id actor = true
-      · rw [if_pos hg] at h
-        cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-      · rw [if_neg hg] at h; exact absurd h (by simp)
-  | bridgeCancelA id actor =>
-      simp only [execFullA, bridgeCancelChainA, fullReceiptA] at h ⊢
-      by_cases hg : bridgeAuthOK s.kernel id actor = true
-      · rw [if_pos hg] at h
-        cases hk : bridgeCancelKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
-      · rw [if_neg hg] at h; exact absurd h (by simp)
   -- §MA-seal (Wave-3 DE-SHADOW): each de-shadowed seal step appends exactly its metadata clock row
   -- (read off the chained-step factoring lemma, which gives the full post-state incl. the log).
   | sealA pid actor payload =>
@@ -4793,9 +3931,9 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
   -- §MA-queue: each queue chained step appends EXACTLY its `fullReceiptA` row (the chainlink lemma).
   | queueAllocateA id actor cell cap =>
       simp only [execFullA, fullReceiptA] at h ⊢; exact queueAllocateChainA_chainlink h
-  | queueEnqueueA id m actor cell depId dAsset deposit =>
+  | queueEnqueueA id m actor cell =>
       simp only [execFullA, fullReceiptA] at h ⊢; exact queueEnqueueChainA_chainlink h
-  | queueDequeueA id actor cell depId =>
+  | queueDequeueA id actor cell =>
       simp only [execFullA, fullReceiptA] at h ⊢; exact queueDequeueChainA_chainlink h
   | queueResizeA id newCap actor cell =>
       simp only [execFullA, fullReceiptA] at h ⊢; exact queueResizeChainA_chainlink h
@@ -4959,25 +4097,6 @@ theorem execFullA_balance_dst_live (s s' : RecChainedState) (t : Turn) (a : Asse
   · exact hadm
   · rw [if_neg hadm] at h; exact absurd h (by simp)
 
-/-- **Escrow release settle-actor authorized — PROVED (R2).** A committed release proves the actor
-passed `releaseSettleAuthB` (authorized over the recipient). -/
-theorem execFullA_releaseEscrowA_authorized (s s' : RecChainedState) (id : Nat) (actor : CellId)
-    (h : execFullA s (.releaseEscrowA id actor) = some s') :
-    releaseSettleAuthB s.kernel id actor = true := by
-  simp only [execFullA, releaseEscrowChainA] at h
-  by_cases hg : releaseSettleAuthB s.kernel id actor
-  · exact hg
-  · rw [if_neg hg] at h; exact absurd h (by simp)
-
-/-- **Escrow refund settle-actor authorized — PROVED (R2).** A committed refund proves the actor
-passed `refundSettleAuthB` (authorized over the creator). -/
-theorem execFullA_refundEscrowA_authorized (s s' : RecChainedState) (id : Nat) (actor : CellId)
-    (h : execFullA s (.refundEscrowA id actor) = some s') :
-    refundSettleAuthB s.kernel id actor = true := by
-  simp only [execFullA, refundEscrowChainA] at h
-  by_cases hg : refundSettleAuthB s.kernel id actor
-  · exact hg
-  · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **Per-asset delegation grounds — PROVED.** A committed per-asset-turn delegation HOLDS the
 Granovetter source edge `delegator ⟶ ⟨t,()⟩` on `execGraph` (REUSES the same `recCDelegate`/
@@ -5235,16 +4354,14 @@ theorem execFullA_queueAllocateA_authorized (s s' : RecChainedState) (id : Nat) 
 /-- **`queueEnqueueA` authorized — PROVED.** A committed enqueue implies the actor held authority over
 the queue `cell` (dregg1's writer-ACL gate). -/
 theorem execFullA_queueEnqueueA_authorized (s s' : RecChainedState) (id m : Nat) (actor cell : CellId)
-    (depId : Nat) (dAsset : AssetId) (deposit : ℤ)
-    (h : execFullA s (.queueEnqueueA id m actor cell depId dAsset deposit) = some s') :
+    (h : execFullA s (.queueEnqueueA id m actor cell) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
   queueEnqueueChainA_authorized (by simpa only [execFullA] using h)
 
 /-- **`queueDequeueA` authorized — PROVED.** A committed dequeue implies the actor held authority over
 the queue `cell` (AND was the kernel-level owner — the `queueDequeueK` `actor = owner` gate). -/
 theorem execFullA_queueDequeueA_authorized (s s' : RecChainedState) (id : Nat) (actor cell : CellId)
-    (depId : Nat)
-    (h : execFullA s (.queueDequeueA id actor cell depId) = some s') :
+    (h : execFullA s (.queueDequeueA id actor cell) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
   queueDequeueChainA_authorized (by simpa only [execFullA] using h)
 
@@ -5553,29 +4670,9 @@ theorem execFullA_exerciseA_recurses (s s' : RecChainedState) (actor t : CellId)
     | some s1 => rw [hg] at h; exact ⟨s1, rfl, h⟩
   · rw [if_neg hf] at h; exact absurd h (by simp)
 
-/-! ### §MA-escrow authority/membership obligations — the create-side carries the REAL `authorizedB`
-creator gate (over the debited cell); noteSpend/noteCreate carry the genuine SET-membership witness. -/
+/-! ### §MA-note membership obligations — noteSpend/noteCreate carry the genuine SET-membership
+witness (the escrow/obligation create/settle obligations died with the kernel holding-store, F1b). -/
 
-/-- **`execFullA_createEscrowA_authorized` — PROVED.** A committed escrow create required the actor to be
-authorized over the debited `creator` cell (the SAME `authorizedB` gate as `transfer`). -/
-theorem execFullA_createEscrowA_authorized (s s' : RecChainedState) (id : Nat)
-    (actor creator recipient : CellId) (asset : AssetId) (amount : ℤ)
-    (h : execFullA s (.createEscrowA id actor creator recipient asset amount) = some s') :
-    authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true := by
-  simp only [execFullA, createEscrowChainA] at h
-  cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-  | none => rw [hk] at h; exact absurd h (by simp)
-  | some k' => exact createEscrowKAsset_authorized hk
-
-/-- **`execFullA_createObligationA_authorized` — PROVED** (the obligation alias of the create gate). -/
-theorem execFullA_createObligationA_authorized (s s' : RecChainedState) (id : Nat)
-    (actor obligor beneficiary : CellId) (asset : AssetId) (stake : ℤ)
-    (h : execFullA s (.createObligationA id actor obligor beneficiary asset stake) = some s') :
-    authorizedB s.kernel.caps { actor := actor, src := obligor, dst := beneficiary, amt := stake } = true := by
-  simp only [execFullA, createEscrowChainA] at h
-  cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
-  | none => rw [hk] at h; exact absurd h (by simp)
-  | some k' => exact createEscrowKAsset_authorized hk
 
 /-- **`execFullA_noteSpendA_inserts` — PROVED.** A committed noteSpend inserts `nf` into the nullifier
 SET (so a subsequent spend of `nf` fails-closed — the anti-replay teeth). -/
@@ -5599,50 +4696,6 @@ theorem execFullA_noteCreateA_inserts (s s' : RecChainedState) (cm : Nat) (actor
   simp only [execFullA, noteCreateChainA, Option.some.injEq] at h
   subst h; exact noteCreate_inserts s.kernel cm
 
-/-! ### §MA-bridge authority/portal obligations (Wave-5). The bridge LOCK carries the REAL `authorizedB`
-originator gate (over the debited cell — the §8 spending proof is the THEOREM-level portal); FINALIZE
-carries the disclosed OUTFLOW witness (combined DROPS by the disclosed `-amount` — the §8 confirmation
-receipt is the THEOREM-level portal, a genuine portal on a REACHABLE path, exactly as bridgeMint's foreign
-finality); CANCEL carries the refund-conservation witness. -/
-
-/-- **`execFullA_bridgeLockA_authorized` — PROVED.** A committed bridge lock required the actor to be
-authorized over the debited originator cell (the SAME `authorizedB` gate as `transfer`/escrow-create). The
-LOCAL gate independent of the §8 spending-proof portal (carried at the theorem layer). -/
-theorem execFullA_bridgeLockA_authorized (s s' : RecChainedState) (id : Nat)
-    (actor originator destination : CellId) (asset : AssetId) (amount : ℤ)
-    (h : execFullA s (.bridgeLockA id actor originator destination asset amount) = some s') :
-    authorizedB s.kernel.caps { actor := actor, src := originator, dst := destination, amt := amount } = true := by
-  simp only [execFullA] at h
-  exact bridgeLockChainA_authorized h
-
-/-- **`execFullA_bridgeLockA_unauthorized_fails` — PROVED (fail-closed).** Without authority over the
-originator, no bridge lock commits (regardless of the §8 spending proof). The confinement core: the value
-cannot be locked-and-bridged out of a cell the actor does not control. -/
-theorem execFullA_bridgeLockA_unauthorized_fails (s : RecChainedState) (id : Nat)
-    (actor originator destination : CellId) (asset : AssetId) (amount : ℤ)
-    (h : authorizedB s.kernel.caps { actor := actor, src := originator, dst := destination, amt := amount } = false) :
-    execFullA s (.bridgeLockA id actor originator destination asset amount) = none := by
-  simp only [execFullA, bridgeLockChainA, bridgeLockKAsset]
-  rw [if_neg (by rintro ⟨ha, _⟩; rw [h] at ha; exact absurd ha (by simp))]
-
-/-- **`execFullA_bridgeFinalizeA_burns_per_asset` — THE BRIDGE OUTFLOW WITNESS (PROVED).** A committed
-bridge finalize DROPS the COMBINED per-asset measure by EXACTLY the disclosed `amount` at the disclosed
-`asset` and leaves EVERY OTHER asset literally fixed — the value genuinely LEFT for the other chain (a
-disclosed OUTFLOW, NOT a conservation claim). The §8 confirmation receipt is the THEOREM-level portal. -/
-theorem execFullA_bridgeFinalizeA_burns_per_asset (s s' : RecChainedState) (id : Nat) (actor : CellId)
-    (asset : AssetId) (amount : ℤ) (b : AssetId)
-    (h : execFullA s (.bridgeFinalizeA id actor asset amount) = some s') :
-    recTotalAssetWithEscrow s'.kernel b
-      = recTotalAssetWithEscrow s.kernel b - (if b = asset then amount else 0) :=
-  bridgeFinalizeChainA_burns_combined b (by simpa only [execFullA] using h)
-
-/-- **`execFullA_bridgeCancelA_conserves_per_asset` — PROVED (the refund round-trip).** A committed bridge
-cancel conserves the COMBINED per-asset measure at EVERY asset (the value returns to the LIVE, gate-checked
-originator). The timeout gate is carried at the theorem layer. -/
-theorem execFullA_bridgeCancelA_conserves_per_asset (s s' : RecChainedState) (id : Nat) (actor : CellId)
-    (b : AssetId) (h : execFullA s (.bridgeCancelA id actor) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
-  bridgeCancelChainA_combined_neutral b (by simpa only [execFullA] using h)
 
 /-- **The per-`FullActionA` `StepInv`** — the per-asset analog of `fullActionInv`, true of every
 committed per-asset action across all kinds. Its **Ledger** conjunct is the full per-asset VECTOR (a
@@ -5656,10 +4709,10 @@ committed per-asset action across all kinds. Its **Ledger** conjunct is the full
     `removeEdge`; mintA/burnA ⇒ `mintAuthorizedB` AND the Generative/Annihilative disclosure. -/
 def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedState) : Prop :=
   -- Ledger: the per-asset COMBINED conservation VECTOR (∀ b — never one aggregate scalar). The UNIFORM
-  -- measure across ALL kinds is `recTotalAssetWithEscrow` (= `bal`-ledger + per-asset holding-store);
+  -- measure across ALL kinds is `recTotalAsset` (= `bal`-ledger + per-asset holding-store);
   -- non-escrow kinds leave `escrows` fixed so their combined delta = bare-`bal` delta, escrow/note legs
   -- are combined-conserving (combined delta `0`) — the FILL-1/META-FILL-C no-laundering carrier.
-  (∀ b, recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b + ledgerDeltaAsset fa b) ∧
+  (∀ b, recTotalAsset s'.kernel b = recTotalAsset s.kernel b + ledgerDeltaAsset fa b) ∧
   -- ChainLink: the pre-log is a SUFFIX of the post-log (append-only) AND the kind's own receipt is
   -- recorded in the post-log. For every NON-recursive kind this is the exact one-row extension
   -- `fullReceiptA fa :: s.log`; for `exerciseA` (which RECURSES through `inner`) the kind's own
@@ -5790,65 +4843,13 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .bridgeMintA actor cell _ _ =>
        mintAuthorizedB s.kernel.caps actor cell = true ∧
        (effectLinearity mintEffect).is_disclosed_non_conservation = true
-   -- §MA-escrow: create-side obligations carry the REAL `authorizedB` creator gate (over the debited
-   -- cell) ∧ the `Conservative` coloring; the settle-side and notes carry the genuine SET/store
-   -- membership witness — every conjunct has teeth (NOT `True`).
-   | .createEscrowA _ actor creator recipient _ amount =>
-       authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true ∧
-       effectLinearity .createEscrow = LinearityClass.Conservative
-   | .releaseEscrowA id actor =>
-       releaseSettleAuthB s.kernel id actor = true ∧
-       effectLinearity .releaseEscrow = LinearityClass.Conservative
-   | .refundEscrowA id actor =>
-       refundSettleAuthB s.kernel id actor = true ∧
-       effectLinearity .refundEscrow = LinearityClass.Conservative
-   | .createObligationA _ actor obligor beneficiary _ stake =>
-       authorizedB s.kernel.caps { actor := actor, src := obligor, dst := beneficiary, amt := stake } = true ∧
-       effectLinearity .createObligation = LinearityClass.Conservative
-   -- fulfill/slash SETTLE the parked obligation record back onto the ledger (combined-conserving): the
-   -- `Conservative` coloring. The obligor-only (fulfill) / post-deadline (slash) gates are the
-   -- §8/theorem-layer carriers (block-height + obligor identity), off this executable layer.
-   | .fulfillObligationA id actor =>
-       refundSettleAuthB s.kernel id actor = true ∧
-       effectLinearity .fulfillObligation = LinearityClass.Conservative
-   | .slashObligationA id actor =>
-       releaseSettleAuthB s.kernel id actor = true ∧
-       effectLinearity .slashObligation = LinearityClass.Conservative
+   -- §MA-note: notes carry the genuine SET membership witness — teeth, NOT `True`.
    | .noteSpendA nf _ _ =>
        -- anti-replay: the spent nullifier is now IN the set (a subsequent spend fails-closed).
        nf ∈ s'.kernel.nullifiers ∧ effectLinearity .noteSpend = LinearityClass.Conservative
    | .noteCreateA cm _ =>
        -- the fresh commitment is now IN the grow-only commitment set.
        cm ∈ s'.kernel.commitments ∧ effectLinearity .noteCreate = LinearityClass.Conservative
-   | .createCommittedEscrowA _ actor creator recipient _ amount hidingProof =>
-       -- WAVE 4 HONESTY: the committed variant carries the §8 HIDING-PORTAL obligation `hidingProof =
-       -- true` that plain escrow does NOT — the privacy boundary made EXPLICIT (NOT silently identical)
-       -- ∧ the REAL `authorizedB` creator gate ∧ the `Conservative` coloring.
-       hidingProof = true ∧
-       authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true ∧
-       effectLinearity .createCommittedEscrow = LinearityClass.Conservative
-   | .releaseCommittedEscrowA id actor =>
-       releaseSettleAuthB s.kernel id actor = true ∧
-       effectLinearity .releaseCommittedEscrow = LinearityClass.Conservative
-   | .refundCommittedEscrowA id actor =>
-       refundSettleAuthB s.kernel id actor = true ∧
-       effectLinearity .refundCommittedEscrow = LinearityClass.Conservative
-   -- §MA-bridge: LOCK carries the REAL `authorizedB` originator gate (over the debited cell) ∧ the
-   -- `Conservative` coloring (combined-conserving lock). FINALIZE carries the genuine DISCLOSED-OUTFLOW
-   -- witness — the COMBINED measure MOVED DOWN by the disclosed `-amount` at the disclosed `asset`
-   -- (`∀ b`, the §8 confirmation portal having fired; NOT a `True`, the move has teeth) ∧ the
-   -- `Annihilative` coloring (the value left for the other chain — a disclosed burn, NOT conserved).
-   -- CANCEL carries the refund-CONSERVATION witness (combined fixed `∀ b`) ∧ the coloring. Teeth.
-   | .bridgeLockA _ actor originator destination _ amount =>
-       authorizedB s.kernel.caps { actor := actor, src := originator, dst := destination, amt := amount } = true ∧
-       effectLinearity .bridgeLock = LinearityClass.Conservative
-   | .bridgeFinalizeA _ _ asset amount =>
-       (∀ b, recTotalAssetWithEscrow s'.kernel b
-          = recTotalAssetWithEscrow s.kernel b - (if b = asset then amount else 0)) ∧
-       effectLinearity .bridgeFinalize = LinearityClass.Annihilative
-   | .bridgeCancelA _ _ =>
-       (∀ b, recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b) ∧
-       effectLinearity .bridgeCancel = LinearityClass.Conservative
    -- §MA-seal (Wave-3 DE-SHADOW): seal/unseal carry their REAL c-list HOLD gate (the actor genuinely
    -- HOLDS the sealer/unsealer cap for `pid` — `lookup_by_target`, `apply.rs:2756`/`:2891`), createSealPair
    -- its `stateAuthB actor sealerHolder` writer gate ∧ their catalog COLORING (all Generative). The §8 AEAD
@@ -5880,10 +4881,10 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .queueAllocateA _ actor cell _ =>
        stateAuthB s.kernel.caps actor cell = true ∧
        effectLinearity .queueAllocate = LinearityClass.Generative
-   | .queueEnqueueA _ _ actor cell _ _ _ =>
+   | .queueEnqueueA _ _ actor cell =>
        stateAuthB s.kernel.caps actor cell = true ∧
        effectLinearity .queueEnqueue = LinearityClass.Conservative
-   | .queueDequeueA _ actor cell _ =>
+   | .queueDequeueA _ actor cell =>
        stateAuthB s.kernel.caps actor cell = true ∧
        effectLinearity .queueDequeue = LinearityClass.Conservative
    | .queueResizeA _ _ actor cell =>
@@ -6019,39 +5020,9 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
                Dregg2.CatalogEffects.g_spawnWithDelegation⟩
   | bridgeMintA actor cell a value =>
       exact ⟨execFullA_bridgeMintA_authorized s s' actor cell a value h, mint_discloses⟩
-  -- §MA-escrow: discharge the create-side `authorizedB` gate + Conservative coloring, the settle-side
-  -- coloring, and the noteSpend/noteCreate SET-membership witness.
-  | createEscrowA id actor creator recipient asset amount =>
-      exact ⟨execFullA_createEscrowA_authorized s s' id actor creator recipient asset amount h, rfl⟩
-  | releaseEscrowA id actor =>
-      exact ⟨execFullA_releaseEscrowA_authorized s s' id actor h, rfl⟩
-  | refundEscrowA id actor =>
-      exact ⟨execFullA_refundEscrowA_authorized s s' id actor h, rfl⟩
-  | createObligationA id actor obligor beneficiary asset stake =>
-      exact ⟨execFullA_createObligationA_authorized s s' id actor obligor beneficiary asset stake h, rfl⟩
-  | fulfillObligationA id actor =>
-      exact ⟨execFullA_refundEscrowA_authorized s s' id actor h, rfl⟩
-  | slashObligationA id actor =>
-      exact ⟨execFullA_releaseEscrowA_authorized s s' id actor h, rfl⟩
+  -- §MA-note: discharge the noteSpend/noteCreate SET-membership witness.
   | noteSpendA nf actor spendProof => exact ⟨execFullA_noteSpendA_inserts s s' nf actor spendProof h, rfl⟩
   | noteCreateA cm actor => exact ⟨execFullA_noteCreateA_inserts s s' cm actor h, rfl⟩
-  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      -- WAVE 4 HONESTY: discharge the §8 hiding-portal witness ∧ the `authorizedB` creator gate ∧ coloring.
-      simp only [execFullA] at h
-      obtain ⟨hhide, hauth⟩ := createCommittedEscrowChainA_authorized h
-      exact ⟨hhide, hauth, rfl⟩
-  | releaseCommittedEscrowA id actor =>
-      exact ⟨execFullA_releaseEscrowA_authorized s s' id actor h, rfl⟩
-  | refundCommittedEscrowA id actor =>
-      exact ⟨execFullA_refundEscrowA_authorized s s' id actor h, rfl⟩
-  -- §MA-bridge: discharge LOCK's (authority ∧ Conservative coloring), FINALIZE's (disclosed-OUTFLOW
-  -- move ∧ coloring), CANCEL's (refund-conservation ∧ coloring).
-  | bridgeLockA id actor originator destination asset amount =>
-      exact ⟨execFullA_bridgeLockA_authorized s s' id actor originator destination asset amount h, rfl⟩
-  | bridgeFinalizeA id actor asset amount =>
-      exact ⟨fun b => execFullA_bridgeFinalizeA_burns_per_asset s s' id actor asset amount b h, rfl⟩
-  | bridgeCancelA id actor =>
-      exact ⟨fun b => execFullA_bridgeCancelA_conserves_per_asset s s' id actor b h, rfl⟩
   -- §MA-seal (Wave-3 DE-SHADOW): discharge seal/unseal's REAL c-list HOLD gate, createSealPair's writer
   -- gate ∧ each catalog coloring.
   | sealA pid actor payload => exact ⟨execFullA_sealA_authorized s s' pid actor payload h, rfl⟩
@@ -6064,10 +5035,10 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   -- §MA-queue: discharge each queue effect's (REAL `stateAuthB` authority gate ∧ the catalog coloring).
   | queueAllocateA id actor cell cap =>
       exact ⟨execFullA_queueAllocateA_authorized s s' id actor cell cap h, rfl⟩
-  | queueEnqueueA id m actor cell depId dAsset deposit =>
-      exact ⟨execFullA_queueEnqueueA_authorized s s' id m actor cell depId dAsset deposit h, rfl⟩
-  | queueDequeueA id actor cell depId =>
-      exact ⟨execFullA_queueDequeueA_authorized s s' id actor cell depId h, rfl⟩
+  | queueEnqueueA id m actor cell =>
+      exact ⟨execFullA_queueEnqueueA_authorized s s' id m actor cell h, rfl⟩
+  | queueDequeueA id actor cell =>
+      exact ⟨execFullA_queueDequeueA_authorized s s' id actor cell h, rfl⟩
   | queueResizeA id newCap actor cell =>
       exact ⟨execFullA_queueResizeA_authorized s s' id newCap actor cell h, rfl⟩
   -- §MA-queue-batch (WAVE 4): discharge the atomic batch's ATOMICITY witness ∧ coloring; the pipeline
@@ -6173,7 +5144,7 @@ theorem execFullTurnA_each_attests :
 #assert_axioms execFullA_setVKA_authorized
 
 -- §MA-seal (Wave 6): the 6 SIMPLE bal-neutral effects (seal/unseal/createSealPair/makeSovereign/
--- refusal/receiptArchive) — each a `stateStep` field write, balance-NEUTRAL (`recTotalAssetWithEscrow`
+-- refusal/receiptArchive) — each a `stateStep` field write, balance-NEUTRAL (`recTotalAsset`
 -- UNCHANGED ∀ asset), authority-gated (`stateAuthB` over the written cell). The §8 crypto (AEAD /
 -- commitment) is the chain-layer portal, honestly NOT proved sound. The keystone
 -- `execFullA_attests_per_asset` (re-extended above) carries ALL into the forest by construction
@@ -6210,9 +5181,8 @@ theorem execFullTurnA_each_attests :
 #assert_axioms queueEnqueueChainA_balNeutral
 #assert_axioms queueDequeueChainA_balNeutral
 #assert_axioms queueEnqueueChainA_chainlink
--- WAVE 4: the ATOMIC batch (all-or-nothing fold) + the PIPELINE fan-out step + the committed-escrow
--- HONESTY (the §8 hiding portal making it DISTINCT from plain escrow). The atomicity, combined-
--- conservation, routing-witness, and fail-closed-without-hiding keystones pinned kernel-clean.
+-- WAVE 4: the ATOMIC batch (all-or-nothing fold) + the PIPELINE fan-out step. The atomicity,
+-- bal-neutrality, and routing-witness keystones pinned kernel-clean.
 #assert_axioms queueAtomicTxChainA_balNeutral
 #assert_axioms queueAtomicTxChainA_commits_iff_all
 #assert_axioms queueAtomicTxChainA_head_fails
@@ -6221,15 +5191,6 @@ theorem execFullTurnA_each_attests :
 #assert_axioms pipelineFanoutK_balNeutral
 #assert_axioms queuePipelineStepA_balNeutral
 #assert_axioms queuePipelineStepA_routing_witness
-#assert_axioms createCommittedEscrowChainA_fails_without_hiding
-#assert_axioms createCommittedEscrowChainA_combined_neutral
-#assert_axioms createCommittedEscrowChainA_authorized
--- Wave-8 residual close: the REFUNDABLE anti-spam DEPOSIT on queue enqueue/dequeue. The deposit
--- GENUINELY moves the bare `recTotalAsset` (parked off-ledger) while the COMBINED measure is
--- CONSERVED (a refundable transfer-like move, NOT bal-neutral) — the wave-7 residual, closed.
-#assert_axioms queueEnqueueDepositK_conserves_combined
-#assert_axioms queueEnqueueDepositK_debits
-#assert_axioms queueDequeueRefundK_conserves_combined
 -- Wave-8 §MA-swiss: the 4 REAL CapTP swiss-table effects (export/enliven/handoff/drop) on the per-asset
 -- dispatch. Each carries its REAL `stateAuthB actor exporter` authority gate over the exporting cell ∧
 -- the catalog coloring; the membership / non-amplification / refcount-GC are PROVED in `RecordKernel`
@@ -6291,7 +5252,7 @@ theorem execFullTurnA_each_attests :
 #assert_axioms createCellChainA_chainlink
 -- §MA-factory: the `CreateCellFromFactory` keystones (validation + program-install + frames).
 #assert_axioms createCellFromFactoryChainA_factors
-#assert_axioms createCellFromFactoryChainA_neutralWithEscrow
+#assert_axioms createCellFromFactoryChainA_neutral
 #assert_axioms createCellFromFactoryChainA_authorized
 #assert_axioms createCellFromFactoryChainA_grows_accounts
 #assert_axioms createCellFromFactoryChainA_installs_program
@@ -6313,37 +5274,9 @@ theorem execFullTurnA_each_attests :
 #assert_axioms execFullA_createCellA_grows_accounts
 #assert_axioms execFullA_spawnA_neutral_per_asset
 #assert_axioms execFullA_bridgeMintA_discloses_per_asset
--- META-FILL C: the COMBINED per-asset escrow/note chained wrappers + the executed-dispatch obligations.
-#assert_axioms createEscrowChainA_combined_neutral
-#assert_axioms createEscrowChainA_bal_debits
-#assert_axioms createEscrowChainA_bal_delta
-#assert_axioms execFullA_createEscrowA_authorized
-#assert_axioms execFullA_createObligationA_authorized
+-- META-FILL C: the note chained wrappers + the executed-dispatch obligations.
 #assert_axioms execFullA_noteSpendA_inserts
 #assert_axioms execFullA_noteCreateA_inserts
--- Wave-5 PHASE-BRIDGE: the cross-chain bridge lock/finalize/cancel on the SHARED escrow holding-store.
--- LOCK is COMBINED-conserving (bal debit offset by the holding-store park); FINALIZE is the disclosed
--- OUTFLOW (COMBINED DROPS by the disclosed -amount at the bridged asset — the value LEFT for the other
--- chain, like burn); CANCEL refunds the originator (combined conserved). The §8 confirmation receipt is
--- the THEOREM-level portal. The keystone `execFullA_attests_per_asset` (re-extended above) carries ALL of
--- these into the forest by construction (FullForestA spine UNCHANGED — only `targetOf` gains arms).
-#assert_axioms bridge_lock_conserves_combined_per_asset
-#assert_axioms bridge_lock_debits_per_asset
-#assert_axioms bridgeLockKAsset_authorized
-#assert_axioms bridge_finalize_moves_combined_per_asset
-#assert_axioms bridgeFinalizeKAsset_moves_combined_per_asset
-#assert_axioms bridge_cancel_conserves_combined_per_asset
-#assert_axioms bridgeLockChainA_combined_neutral
-#assert_axioms bridgeLockChainA_bal_debits
-#assert_axioms bridgeFinalizeChainA_burns_combined
-#assert_axioms bridgeCancelChainA_combined_neutral
-#assert_axioms bridgeFinalizeChainA_nonCreator_rejects
-#assert_axioms bridgeCancelChainA_nonCreator_rejects
-#assert_axioms bridgeLockChainA_authorized
-#assert_axioms execFullA_bridgeLockA_authorized
-#assert_axioms execFullA_bridgeLockA_unauthorized_fails
-#assert_axioms execFullA_bridgeFinalizeA_burns_per_asset
-#assert_axioms execFullA_bridgeCancelA_conserves_per_asset
 -- §MA-lifecycle (Wave-3) keystones: the lifecycle state machine + the de-shadowed seal cap-movement.
 #assert_axioms cellSealChainA_nonlive_rejects
 #assert_axioms cellDestroyChainA_terminal_rejects
@@ -6729,105 +5662,6 @@ def supplyMixedTurn : List FullActionA :=
 #guard ((execFullTurnA fmaSup supplyMixedTurn).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 47)  --  some (105, 47)
 
-/-! ### §MA-escrow #eval — the COMBINED per-asset holding-store on the executed dispatch (`META-FILL C`,
-closing `#121`): a committed-escrow lock+settle conserves `recTotalAssetWithEscrow` per-asset (with the
-held value genuinely non-zero at the locked asset, the OTHER asset untouched); noteCreate→noteSpend
-round-trip; double-spend fail-closed. -/
-
--- ★ COMMITTED-ESCROW LOCK of 5 of ASSET 1 from cell 0 (holds 7 of asset 1) → recipient 1 (id 9),
---   actor 9 authorized over 0, §8 HIDING PORTAL HELD (hidingProof = true): bare ledger DROPS at asset 1
---   (7→2), held RISES to 5, COMBINED FIXED at 7.
-#guard ((execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5 true)).isSome)  --  true
-#guard ((execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5 true)).map
-        (fun s => (recTotalAsset s.kernel 1, escrowHeldAsset s.kernel 1))) == some (2, 5)  --  some (2, 5) — bare DOWN, held UP at asset 1
--- ...the COMBINED per-asset measure is CONSERVED at asset 1 AND asset 0 (no cross-asset laundering):
-#guard ((execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5 true)).map
-        (fun s => (recTotalAssetWithEscrow s.kernel 1, recTotalAssetWithEscrow s.kernel 0))) == some (7, 105)  --  some (7, 105) — CONSERVED both
--- ...the COMBINED ledgerDeltaAsset is 0 at every asset (combined-conserving, NOT bare-bal-conserving):
-#guard ((ledgerDeltaAsset (.createCommittedEscrowA 9 9 0 1 1 5 true) 0,
-       ledgerDeltaAsset (.createCommittedEscrowA 9 9 0 1 1 5 true) 1)) == (0, 0)  --  (0, 0)
--- ★ SETTLE (release to recipient 1, live): COMBINED stays (105, 7), held returns to 0.
-#guard (((execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5 true)).bind
-        (fun s => execFullA s (.releaseCommittedEscrowA 9 9))).map
-        (fun s => (recTotalAssetWithEscrow s.kernel 1, recTotalAssetWithEscrow s.kernel 0,
-                   escrowHeldAsset s.kernel 1))) == some (7, 105, 0)  --  some (7, 105, 0) — round-trip CONSERVED
--- ...the held value at asset 1 is GENUINELY non-zero mid-flight while asset 0 is untouched (guard):
-#guard ((execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5 true)).map
-        (fun s => (escrowHeldAsset s.kernel 1, escrowHeldAsset s.kernel 0))) == some (5, 0)  --  some (5, 0)
--- ★★ WAVE 4 HONESTY TEETH — the committed escrow is DISTINGUISHABLE from plain escrow: WITHOUT the §8
---   hiding portal (hidingProof = FALSE) the committed create is REJECTED (the privacy boundary plain
---   escrow LACKS), even though the IDENTICAL plain escrow with the same params COMMITS:
-#guard ((execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5 false)).isSome) == false  --  false — HIDING PORTAL fail-closed
-#guard ((execFullA fmaSup (.createEscrowA 9 9 0 1 1 5)).isSome)  --  true — plain escrow has NO hiding gate
--- ...so committed (no portal) and plain are NOT silently identical — exactly the WAVE 4 obligation:
-#guard (((execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5 false)).isSome,
-       (execFullA fmaSup (.createEscrowA 9 9 0 1 1 5)).isSome)) == (false, true)  --  (false, true) — DISTINGUISHED
--- ★ NOTE CREATE→SPEND round-trip: create grows commitments (42), spend grows nullifiers (77) — distinct sets;
---   the executed dispatch is bal-NEUTRAL (combined fixed):
-#guard (((execFullA fmaSup (.noteCreateA 42 9)).bind (fun s => execFullA s (.noteSpendA 77 9 true))).map
-        (fun s => (s.kernel.commitments.contains 42, s.kernel.nullifiers.contains 77,
-                   recTotalAssetWithEscrow s.kernel 0, recTotalAssetWithEscrow s.kernel 1))) == some (true, true, 105, 7)  --  some (true, true, 105, 7)
--- ★ DOUBLE-SPEND fail-closed: spending nullifier 77 twice (valid proof) on the executed dispatch REJECTS:
-#guard (((execFullA fmaSup (.noteSpendA 77 9 true)).bind (fun s => execFullA s (.noteSpendA 77 9 true))).isSome) == false  --  false
--- ★ NOTE-PROOF TEETH: a single spend with an INVALID spending proof (`spendProof = false`) REJECTS
---   (the `apply.rs:929` "spending proof verification failed" rejection now CAPTURED in the executor),
---   while the SAME spend with a valid proof COMMITS — the gate is load-bearing, not vacuous:
-#guard ((execFullA fmaSup (.noteSpendA 77 9 false)).isSome) == false  --  false (invalid proof REJECTED)
-#guard ((execFullA fmaSup (.noteSpendA 77 9 true)).isSome) == true    --  true  (valid proof COMMITS)
-
-/-! ### §MA-bridge #eval (Wave-5 PHASE-BRIDGE) — the cross-chain bridge lock/finalize/cancel on the
-executed dispatch over the SHARED escrow holding-store. LOCK conserves the COMBINED measure (debit + park
-the bridge-tagged record); FINALIZE BURNS it (the value LEFT for the other chain — COMBINED DROPS by the
-disclosed amount at the bridged asset, the OTHER asset fixed); CANCEL refunds (combined conserved);
-unauthorized/double-finalize fail-closed. `fmaSup`: cell 0 holds 100 of asset 0 + 7 of asset 1; actor 9
-holds `node 0` (authority over cell 0). -/
-
--- ★ BRIDGE LOCK of 30 of ASSET 1 from cell 0 → destination 1 (bridge id 7), actor 9 authorized over 0:
---   bare ledger DROPS at asset 1 (7→ wait: cell0 has 7 of asset1, lock 5), held RISES, COMBINED FIXED.
-#guard ((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).isSome)  --  true
-#guard ((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).map
-        (fun s => (recTotalAsset s.kernel 1, escrowHeldAsset s.kernel 1))) == some (2, 5)  --  some (2, 5) — bare DOWN, held UP at asset 1
--- ...the COMBINED per-asset measure is CONSERVED at asset 1 AND asset 0 (the lock is combined-neutral):
-#guard ((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).map
-        (fun s => (recTotalAssetWithEscrow s.kernel 1, recTotalAssetWithEscrow s.kernel 0))) == some (7, 105)  --  some (7, 105) — CONSERVED both
--- ...the parked record carries the BRIDGE tag (it is in the SHARED escrow store, tagged true):
-#guard ((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).map
-        (fun s => s.kernel.escrows.map (fun r => (r.id, r.amount, r.asset, r.bridge)))) == some [(7, 5, 1, true)]  --  some [(7, 5, 1, true)]
--- ...the LOCK's COMBINED ledgerDeltaAsset is 0 at every asset (combined-conserving):
-#guard ((ledgerDeltaAsset (.bridgeLockA 7 9 0 1 1 5) 0, ledgerDeltaAsset (.bridgeLockA 7 9 0 1 1 5) 1)) == (0, 0)  --  (0, 0)
--- ★ LOCK then CANCEL (refund to originator 0, live): COMBINED stays (105, 7); held returns to 0; the
---   bare bal at asset 1 returns to 7 (the value came BACK):
-#guard (((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).bind
-        (fun s => execFullA s (.bridgeCancelA 7 0))).map
-        (fun s => (recTotalAssetWithEscrow s.kernel 1, recTotalAssetWithEscrow s.kernel 0,
-                   escrowHeldAsset s.kernel 1, recTotalAsset s.kernel 1))) == some (7, 105, 0, 7)  --  some (7, 105, 0, 7) — cancel by the recorded CREATOR (originator 0): held→0, bare bal→7 (value came back)
--- ★ LOCK then FINALIZE (the §8 confirmation arrived — the value LEFT for the other chain): COMBINED
---   DROPS by exactly 5 at asset 1 (7→2), asset 0 FIXED at 105; held drops to 0; bare bal stays at 2:
-#guard (((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).bind
-        (fun s => execFullA s (.bridgeFinalizeA 7 0 1 5))).map
-        (fun s => (recTotalAssetWithEscrow s.kernel 1, recTotalAssetWithEscrow s.kernel 0,
-                   escrowHeldAsset s.kernel 1, recTotalAsset s.kernel 1))) == some (2, 105, 0, 2)  --  some (2, 105, 0, 2) — finalize by the CREATOR (originator 0): combined −5 at asset 1 (disclosed outflow)
--- ...the FINALIZE's disclosed delta is -5 at asset 1, 0 at asset 0 (the disclosed OUTFLOW, no laundering):
-#guard ((ledgerDeltaAsset (.bridgeFinalizeA 7 9 1 5) 0, ledgerDeltaAsset (.bridgeFinalizeA 7 9 1 5) 1)) == (0, -5)  --  (0, -5)
--- DOUBLE-FINALIZE fail-closed (the record is already resolved):
-#guard ((((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).bind
-        (fun s => execFullA s (.bridgeFinalizeA 7 0 1 5))).bind
-        (fun s => execFullA s (.bridgeFinalizeA 7 0 1 5))).isSome) == false  --  false (record already resolved ⇒ bridgeAuthOK finds no unresolved row)
--- MISMATCHED-amount finalize fail-closed (disclosed 99 ≠ parked 5 — the receipt-vs-pending check):
-#guard (((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).bind
-        (fun s => execFullA s (.bridgeFinalizeA 7 0 1 99))).isSome) == false  --  false (disclosed 99 ≠ parked 5 — receipt-vs-pending check, even for the creator)
--- UNAUTHORIZED lock fail-closed (actor 0 holds no authority over... actually owns itself; use actor 5):
-#guard ((execFullA fmaSup (.bridgeLockA 7 5 0 1 1 5)).isSome) == false  --  false (actor 5 unauthorized over cell 0)
--- A MIXED bridge turn: lock 5 of asset 1 then finalize it → asset 1 net -5 (7→2), asset 0 conserved:
-def bridgeMixedTurn : List FullActionA :=
-  [ .bridgeLockA 7 9 0 1 1 5      -- relayer 9 locks originator 0's 5 of asset 1
-  , .bridgeFinalizeA 7 0 1 5 ]    -- the recorded creator (originator 0) finalizes
-
-#guard ((execFullTurnA fmaSup bridgeMixedTurn).isSome)  --  true (lock by relayer 9, finalize by creator 0 — both commit)
-#guard ((turnLedgerDeltaAsset bridgeMixedTurn 0, turnLedgerDeltaAsset bridgeMixedTurn 1)) == (0, -5)  --  (0, -5)
-#guard ((execFullTurnA fmaSup bridgeMixedTurn).map
-        (fun s => (recTotalAssetWithEscrow s.kernel 0, recTotalAssetWithEscrow s.kernel 1))) == some (105, 2)  --  some (105, 2) (asset 0 conserved; asset 1 combined −5 via the disclosed finalize outflow)
-
 /-! ## §13-seal (Wave 6) — Non-vacuity for the 6 SIMPLE bal-neutral effects: the cell flag/metadata/
 refusal record MOVES (a flag genuinely flips), yet `recTotalAsset` is UNCHANGED in EVERY asset
 (balance-NEUTRALITY witnessed by an `#eval`); authority is REAL (an unauthorized actor fails-closed);
@@ -6975,29 +5809,6 @@ def sealMixedTurn : List FullActionA :=
 -- the cap genuinely moved: recipient 1 holds Cap.node 42 after the turn:
 #guard ((execFullTurnA fmaW3 sealMixedTurn).map (fun s => (s.kernel.caps 1).contains (Cap.node 42))) == some true  --  some true (recipient holds the cap)
 
-/-! ## §13-obligation (WAVE 1) — Non-vacuity for the OBLIGATION LIFECYCLE. createObligation LOCKS the
-stake off-ledger (obligor's `bal` debited, combined measure conserved); FULFILL returns the stake to the
-OBLIGOR (combined conserved, distinct from escrow refund only by the obligor-only gate); SLASH transfers
-it to the BENEFICIARY (combined conserved, distinct from escrow release only by the deadline gate). The
-obligor=creator=0 (fmaS, self-authorized over its own cell), beneficiary=1, stake=20 of asset 0. -/
-
--- CREATE the obligation (id 700): the obligor's bare `bal` at asset 0 DROPS by 20 (100→80), but the
--- COMBINED per-asset measure (`recTotalAssetWithEscrow`) is CONSERVED (the 20 is parked off-ledger).
-#guard ((execFullA fmaS (.createObligationA 700 0 0 1 0 20)).isSome)  --  true
-#guard ((execFullA fmaS (.createObligationA 700 0 0 1 0 20)).map
-        (fun s => (recTotalAsset s.kernel 0, recTotalAssetWithEscrow s.kernel 0))) == some (85, 105)  --  some (85, 105): bare DROPPED, combined CONSERVED
--- FULFILL: from the post-create state, the stake RETURNS to the obligor (cell 0) — bare bal back to 105.
-#guard (((execFullA fmaS (.createObligationA 700 0 0 1 0 20)).bind
-        (fun s => execFullA s (.fulfillObligationA 700 0))).map
-        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7): STAKE RETURNED to obligor
--- SLASH: from the post-create state, the stake TRANSFERS to the BENEFICIARY (cell 1) — cell 1's asset 0
--- bal RISES by 20 (5→25), obligor stays debited; the bare per-asset total returns to 105 (settled).
-#guard (((execFullA fmaS (.createObligationA 700 0 0 1 0 20)).bind
-        (fun s => execFullA s (.slashObligationA 700 0))).map
-        (fun s => (s.kernel.bal 1 0, recTotalAsset s.kernel 0))) == some (25, 105)  --  some (25, 105): STAKE MOVED to beneficiary
--- the obligation per-asset deltas are 0 (combined-conserving) — like escrow create/settle:
-#guard ((ledgerDeltaAsset (.fulfillObligationA 700 0) 0, ledgerDeltaAsset (.slashObligationA 700 0) 0)) == (0, 0)  --  (0, 0)
-
 /-! ## §MA-factory NON-VACUITY — `createCellFromFactoryA` validates + installs the program, end-to-end.
 
 A `subscription` factory (vk 42) publishes: `head` is `Monotonic` (the subscription head only advances),
@@ -7086,31 +5897,28 @@ def fmaQ : RecChainedState :=
         cell := fun _ => .record [("balance", .int 0)]
         caps := fun l => if l = 0 then [Cap.node 0, Cap.node 1, Cap.node 2] else []
         bal := fun c a => if c = 0 ∧ a = 0 then 50 else 0
-        escrows :=
-          [ { id := 9, creator := 0, recipient := 0, amount := 0, resolved := false,
-              queueDep := some 10, queueMsg := some 111 } ]
         queues :=
           [ { id := 10, owner := 0, capacity := 3, buffer := [111] }
           , { id := 11, owner := 0, capacity := 3, buffer := [] }
           , { id := 12, owner := 0, capacity := 3, buffer := [] } ] }
     log := [] }
 
--- ★ ATOMIC BATCH — ALL SUCCEED: enqueue 222 into q=10 (deposit 0) THEN dequeue from q=10 (refund 0).
+-- ★ ATOMIC BATCH — ALL SUCCEED: enqueue 222 into q=10 THEN dequeue from q=10.
 --   Both sub-ops commit ⇒ the batch COMMITS. (The 222 enqueues to the tail, then the head 111 dequeues.)
 #guard ((queueAtomicTxA fmaQ 0
-        [ .enqueue 10 222 0 0 0 0 0, .dequeue 10 0 0 9 ]).isSome)  --  true — all-or-nothing COMMITS
+        [ .enqueue 10 222 0 0, .dequeue 10 0 0 ]).isSome)  --  true — all-or-nothing COMMITS
 
 -- ★★ ATOMICITY TEETH — ONE FAILING SUB-OP ROLLS BACK ALL: the SAME first enqueue, but the second sub-op
 --   dequeues from a NON-EXISTENT queue id 99 (fail-closed). The WHOLE batch is `none` — the first
 --   enqueue is ROLLED BACK (no partial commit), exactly dregg1's journal-rollback for the entire action:
 #guard ((queueAtomicTxA fmaQ 0
-        [ .enqueue 10 222 0 0 0 0 0, .dequeue 99 0 0 0 ]).isSome) == false  --  false — ATOMIC ROLLBACK
+        [ .enqueue 10 222 0 0, .dequeue 99 0 0 ]).isSome) == false  --  false — ATOMIC ROLLBACK
 -- ...and a failing sub-op FIRST also collapses the batch (the second never runs — the fold short-circuits):
 #guard ((queueAtomicTxA fmaQ 0
-        [ .dequeue 99 0 0 0, .enqueue 10 222 0 0 0 0 0 ]).isSome) == false  --  false — head failure aborts
+        [ .dequeue 99 0 0, .enqueue 10 222 0 0 ]).isSome) == false  --  false — head failure aborts
 -- ...the all-or-nothing is balance-neutral when it commits (the COMBINED measure is FIXED ∀ asset):
-#guard ((queueAtomicTxA fmaQ 0 [ .enqueue 10 222 0 0 0 0 0, .dequeue 10 0 0 9 ]).map
-        (fun s => (recTotalAssetWithEscrow s.kernel 0, recTotalAssetWithEscrow s.kernel 1))) == some (50, 0)  --  some (50, 0) — CONSERVED
+#guard ((queueAtomicTxA fmaQ 0 [ .enqueue 10 222 0 0, .dequeue 10 0 0 ]).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (50, 0)  --  some (50, 0) — CONSERVED
 
 -- ★ PIPELINE STEP — MOVE SOURCE→SINKS: dequeue the head 111 from source q=10 and fan it out into sinks
 --   q=11 and q=12. The source LOSES the message (buffer [111] → []); EACH sink GAINS it (buffer [] → [111]):
@@ -7121,7 +5929,7 @@ def fmaQ : RecChainedState :=
                    (findQueue s.kernel.queues 12).map (·.buffer)))) == some (some [], some [111], some [111])  --  some (some [], some [111], some [111]) — MOVED source→sinks
 -- ...the pipeline step is balance-NEUTRAL (the COMBINED measure is FIXED ∀ asset — moves a MESSAGE, not balance):
 #guard ((queuePipelineStepA fmaQ 10 0 [1, 2] [11, 12]).map
-        (fun s => (recTotalAssetWithEscrow s.kernel 0, recTotalAssetWithEscrow s.kernel 1))) == some (50, 0)  --  some (50, 0) — CONSERVED
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (50, 0)  --  some (50, 0) — CONSERVED
 
 -- ★★ PIPELINE TEETH — source EMPTY rejects (the FIFO emptiness gate): route from q=11 (empty) ⇒ `none`:
 #guard ((queuePipelineStepA fmaQ 11 0 [2] [12]).isSome) == false  --  false — empty source rejected
@@ -7135,6 +5943,6 @@ def fmaQ : RecChainedState :=
 --   batch; AT apply the resolved action already ran, so this is a balance-neutral clock row that COMMITS):
 #guard ((execFullA fmaQ (.pipelinedSendA 0)).isSome)  --  true — apply-time neutral commits
 #guard ((execFullA fmaQ (.pipelinedSendA 0)).map
-        (fun s => (recTotalAssetWithEscrow s.kernel 0, s.log.length))) == some (50, 1)  --  some (50, 1) — NEUTRAL + one clock row
+        (fun s => (recTotalAsset s.kernel 0, s.log.length))) == some (50, 1)  --  some (50, 1) — NEUTRAL + one clock row
 
 end Dregg2.Exec.TurnExecutorFull

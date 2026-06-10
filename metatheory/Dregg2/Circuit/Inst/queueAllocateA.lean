@@ -73,7 +73,7 @@ omitting `queues` (the touched field of `queueAllocateA`). -/
 def RestIffNoQueues (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -140,7 +140,7 @@ def queueAllocateE (LE : QueueRecord → ℤ) (cN : List ℤ → ℤ)
   logUpdate    := some (fun s args => allocateReceipt args.actor args.cell :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -207,13 +207,13 @@ theorem apex_iff_queueAllocateSpec (LE : QueueRecord → ℤ) (cN : List ℤ →
        ↔ QueueAllocateSpec s args.id args.actor args.cell args.cap s'
   unfold QueueAllocateSpec allocateGuardProp queueAllocateE
   constructor
-  · rintro ⟨hg, hq, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hq, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hq, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hq, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hq, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hq, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hq, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hq, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §2c — THE VALIDATION: `queueAllocateA_full_sound ⇒ QueueAllocateSpec` through the framework. -/

@@ -229,7 +229,7 @@ injectivity, stated as the iff. -/
 def RestHashIffFrame : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.accounts = k.accounts ∧ k'.caps = k.caps ∧ k'.bal = k.bal
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.queues = k.queues ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -482,7 +482,7 @@ theorem transfer_circuit_full_sound
   -- rest hash equal ⇒ 16 non-cell fields equal (RestHashIffFrame.→).
   have hRHeq : RH k = RH k' := (srestframe_iff CH RH cmb compress compressN k t k').mp hrestgate
   have hframe16 := (hRest k k').mp hRHeq
-  obtain ⟨hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs,
+  obtain ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs,
     hSB⟩ := hframe16
   -- frame digests equal ⇒ untouched cells equal (PROVED FrameDigestBindsCells).
   have hfdeq : frameDigest CH compressN k (frameCarrier k t)
@@ -519,7 +519,7 @@ theorem transfer_circuit_full_sound
           exact (hwf c hcacc).symm
   -- assemble TransferSpec (admitGuard ∧ cell map ∧ the 16 frame clauses).
   exact ⟨⟨hauth, hnn, hav, hne, hsrc, hdst⟩, hcellmap,
-    hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
+    hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
 
 #assert_axioms transfer_circuit_full_sound
 
@@ -556,7 +556,7 @@ theorem transfer_circuit_full_complete
     (hspec : TransferSpec k t k') :
     satisfiedS cmb compress (encodeS CH RH cmb compress compressN k t k') := by
   have hexec : recKExec k t = some k' := (recKExec_iff_spec k t k').mpr hspec
-  obtain ⟨hg, hcell, hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel,
+  obtain ⟨hg, hcell, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel,
     hDgs, hSB⟩ := hspec
   obtain ⟨_, _, _, hne, hsrc, hdst⟩ := hg
   -- the 9 transfer gates hold under encodeT (Transfer's completeness), transport to encodeS.
@@ -574,7 +574,7 @@ theorem transfer_circuit_full_complete
   have e10 := encodeS_agrees_encodeT CH RH cmb compress compressN k t k' vTDstLive  (by decide)
   -- frame-gate facts.
   have hRHeq : RH k = RH k' := (hRest k k').mpr
-    ⟨hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
+    ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
   have hcellc : ∀ c ∈ frameCarrier k t, CH c (k.cell c) = CH c (k'.cell c) := by
     intro c hc
     unfold frameCarrier at hc
@@ -643,7 +643,7 @@ theorem stateCircuit_rejects_field_tamper
     hsat cSRestFrame (by unfold stateCircuit; simp)
   have hRHeq : RH k = RH k' := (srestframe_iff CH RH cmb compress compressN k t k').mp hrestgate
   have hframe16 := (hRest k k').mp hRHeq
-  obtain ⟨_, _, _, _, hNul, _⟩ := hframe16
+  obtain ⟨_, _, _, hNul, _⟩ := hframe16
   exact hfield hNul
 
 #assert_axioms stateCircuit_rejects_field_tamper

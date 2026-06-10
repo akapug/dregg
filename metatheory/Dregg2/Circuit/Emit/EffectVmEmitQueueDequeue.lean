@@ -334,13 +334,13 @@ theorem queueDequeueDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR
     rw [hc e₁ hsat₁, hc e₂ hsat₂, hpub]
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
-/-! ## §8 — CONNECTOR to universe-A: the refund CREDIT IS `QueueDequeueSpec`'s per-cell `bal` image.
+/-! ## §8 — CONNECTOR to universe-A: F1b DEPOSIT-FREE — `QueueDequeueSpec` freezes the `bal` ledger.
 
-`QueueDequeueSpec` commits `st'.kernel = k'` where `queueDequeueRefundK st.kernel id actor depId =
-some (k', m)`. That helper composes `queueDequeueK` (balance-NEUTRAL — touches only `queues`) with
-`settleEscrowRawAsset k₁ depId actor r.asset r.amount` (`r = findUnresolvedDeposit k₁ depId`), which
-rewrites `bal := recBalCreditCell k₁.bal actor r.asset r.amount` — the dequeuer's `(actor, r.asset)`
-entry RISES by `r.amount`. The FIFO pop is bound at the runtime's `fields[4]` queue root (above). -/
+F1b: the deposit-refund leg died with the escrow family, so `QueueDequeueSpec st id actor cell st'`
+is balance-NEUTRAL: the FIFO pop touches ONLY `queues` (+ the receipt log); EVERY per-cell `bal`
+entry is FROZEN. The runtime descriptor still carries the `DEQUEUE_DEPOSIT_REFUND` param column; the
+deposit-free kernel pins it to `0`. The FIFO pop is bound at the runtime's `fields[4]` queue root
+(above). -/
 
 open Dregg2.Circuit.Spec.QueueFifoCore
 open Dregg2.Exec
@@ -373,45 +373,17 @@ def cellProjBal (bal : CellId → AssetId → ℤ) (c : CellId) (asset : AssetId
   reserved := 0
   commit   := 0
 
-/-- **`unify_dequeue_credit`** — across a committed `QueueDequeueSpec` post-state, the dequeuer cell's
-projected `(actor, r.asset)` ledger entry RISES by the witnessed refund `r.amount`. So the descriptor's
-refund-credit IS `QueueDequeueSpec`'s per-cell `bal` image — NOT a fourth spec. (`balHi` placeholder is
-the projection's `0 + amount`; the FULL `CellCreditSpec`'s queue-root/nonce legs are runtime-trace facts,
-proved against the descriptor in §6.) -/
-theorem unify_dequeue_credit (st st' : RecChainedState) (id : Nat) (actor cell : CellId)
-    (depId : Nat) (hspec : QueueDequeueSpec st id actor cell depId st') :
-    ∃ (asset : AssetId) (amount : ℤ),
-      (cellProjBal st'.kernel.bal actor asset).balLo
-        = (cellProjBal st.kernel.bal actor asset).balLo + amount := by
-  obtain ⟨_, _, _, _, k', m, hk, hker, _⟩ := hspec
-  unfold queueDequeueRefundK at hk
-  cases hk₁ : queueDequeueK st.kernel id actor with
-  | none => simp only [hk₁] at hk; exact absurd hk (by simp)
-  | some kr =>
-      obtain ⟨k₁, mh⟩ := kr
-      simp only [hk₁] at hk
-      by_cases hbind : dequeueMsgBindB k₁ actor depId id mh = true
-      · rw [if_pos hbind] at hk
-        cases hfind : findUnresolvedDeposit k₁ depId with
-        | none => simp only [hfind] at hk; exact absurd hk (by simp)
-        | some r =>
-            simp only [hfind] at hk
-            by_cases hacc : actor ∈ k₁.accounts
-            · rw [if_pos hacc] at hk
-              simp only [Option.some.injEq, Prod.mk.injEq] at hk
-              obtain ⟨hkeq, _⟩ := hk
-              refine ⟨r.asset, r.amount, ?_⟩
-              show st'.kernel.bal actor r.asset = st.kernel.bal actor r.asset + r.amount
-              rw [hker, ← hkeq]
-              show (settleEscrowRawAsset k₁ depId actor r.asset r.amount).bal actor r.asset
-                  = st.kernel.bal actor r.asset + r.amount
-              have hbalfn : (settleEscrowRawAsset k₁ depId actor r.asset r.amount).bal
-                  = recBalCreditCell k₁.bal actor r.asset r.amount := rfl
-              rw [hbalfn]
-              unfold recBalCreditCell
-              rw [if_pos (And.intro rfl rfl), queueDequeueK_bal hk₁]
-            · rw [if_neg hacc] at hk; exact absurd hk (by simp)
-      · rw [if_neg hbind] at hk; exact absurd hk (by simp)
+/-- **`unify_dequeue_credit`** — F1b (deposit-free): across a committed `QueueDequeueSpec` post-state,
+EVERY cell's projected ledger entry is FROZEN (`bal' = bal`) — the descriptor's zero-refund credit IS
+`QueueDequeueSpec`'s per-cell `bal` image. -/
+theorem unify_dequeue_credit (st st' : RecChainedState) (id : Nat) (actor cell c : CellId)
+    (asset : AssetId) (hspec : QueueDequeueSpec st id actor cell st') :
+    (cellProjBal st'.kernel.bal c asset).balLo = (cellProjBal st.kernel.bal c asset).balLo := by
+  show st'.kernel.bal c asset = st.kernel.bal c asset
+  -- QueueDequeueSpec: guard ∧ queues-image ∧ log ∧ accounts ∧ cell ∧ caps ∧ nullifiers ∧ revoked ∧
+  --                   commitments ∧ bal ∧ … — `bal` is the 10th conjunct.
+  obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
+  rw [hbal]
 
 /-! ## §9 — NON-VACUITY. -/
 

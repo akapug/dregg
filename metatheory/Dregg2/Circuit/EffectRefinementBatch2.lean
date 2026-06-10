@@ -105,10 +105,10 @@ theorem CreateFromFactoryCircuitSpec_implies_CreateFromFactorySpec (st : RecChai
     (actor newCell : CellId) (vk : Int) (st' : RecChainedState)
     (h : CreateFromFactoryCircuitSpec st actor newCell vk st') :
     CreateFromFactorySpec st actor newCell vk st' := by
-  obtain ⟨e, hadmit, hacc, hbal, hcell, hsc, hauth, hlog, hEsc, hNull, hRev, hCom, hQ, hSw, hFac, hSB⟩ := h
+  obtain ⟨e, hadmit, hacc, hbal, hcell, hsc, hauth, hlog, hNull, hRev, hCom, hQ, hSw, hFac, hSB⟩ := h
   have ⟨hcaps, hlif, hdc, hdel, hdgs⟩ :=
     (bornEmptyAuthority_post_iff st.kernel newCell st'.kernel).mp hauth
-  exact ⟨e, hadmit, hacc, hbal, hcell, hsc, hlog, hcaps, hlif, hdc, hdel, hdgs, hEsc, hNull, hRev, hCom,
+  exact ⟨e, hadmit, hacc, hbal, hcell, hsc, hlog, hcaps, hlif, hdc, hdel, hdgs, hNull, hRev, hCom,
     hQ, hSw, hFac, hSB⟩
 
 /-! ## §1 — v1 CommitSurface effects. -/
@@ -424,41 +424,37 @@ theorem cellDestroy_circuit_refines_spec (S : Surface2) (DLife : (CellId → Nat
 
 /-! ## §4 — triple-component effects. -/
 
-def queueDequeueCircuitStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+def queueDequeueCircuitStep (S : Surface2)
     (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ) (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
-    (LE : EscrowRecord → ℤ) (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
     (s : RecChainedState) (args : DequeueArgs) (s' : RecChainedState) : Prop :=
-  satisfiedE2Triple S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
-    (encodeE2Triple S (queueDequeueE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) s args s')
+  satisfiedE2 S (queueDequeueE LQ cNQ hNQ hLQ)
+    (encodeE2 S (queueDequeueE LQ cNQ hNQ hLQ) s args s')
 
-theorem queueDequeue_circuit_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueDequeue_circuit_refines_spec (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (hRest : Dregg2.Circuit.Inst.QueueEnqueueA.RestIffNoQueuesBalEscrows S.RH)
     (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : DequeueArgs) (s' : RecChainedState)
-    (h : queueDequeueCircuitStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s') :
-    QueueDequeueSpec s args.id args.actor args.cell args.depId s' :=
-  queueDequeueA_full_sound S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog s args s' h
+    (h : queueDequeueCircuitStep S LQ cNQ hNQ hLQ s args s') :
+    QueueDequeueSpec s args.id args.actor args.cell s' :=
+  queueDequeueA_full_sound S LQ cNQ hNQ hLQ hRest hLog s args s' h
 
-def queueAtomicTxCircuitStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+def queueAtomicTxCircuitStep (S : Surface2)
     (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ) (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
-    (LE : EscrowRecord → ℤ) (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
     (s : RecChainedState) (args : AtomicTxArgs) (s' : RecChainedState) : Prop :=
-  satisfiedE2Triple S (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE)
-    (encodeE2Triple S (queueAtomicTxE D hD LQ cNQ hNQ hLQ LE cNE hNE hLE) s args s')
+  satisfiedE2 S (queueAtomicTxE LQ cNQ hNQ hLQ)
+    (encodeE2 S (queueAtomicTxE LQ cNQ hNQ hLQ) s args s')
 
-theorem queueAtomicTx_circuit_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
-    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ) (LE : EscrowRecord → ℤ)
-    (cNE : List ℤ → ℤ) (hNE : compressNInjective cNE) (hLE : listLeafInjective LE)
+theorem queueAtomicTx_circuit_refines_spec (S : Surface2)
+    (LQ : QueueRecord → ℤ) (cNQ : List ℤ → ℤ)
+    (hNQ : compressNInjective cNQ) (hLQ : listLeafInjective LQ)
     (hRest : Dregg2.Circuit.Inst.QueueEnqueueA.RestIffNoQueuesBalEscrows S.RH)
     (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : AtomicTxArgs) (s' : RecChainedState)
-    (h : queueAtomicTxCircuitStep S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE s args s') :
+    (h : queueAtomicTxCircuitStep S LQ cNQ hNQ hLQ s args s') :
     QueueAtomicTxSpec s args.actor args.ops s' :=
-  queueAtomicTxA_full_sound S D hD LQ cNQ hNQ hLQ LE cNE hNE hLE hRest hLog s args s' h
+  queueAtomicTxA_full_sound S LQ cNQ hNQ hLQ hRest hLog s args s' h
 
 /-! ## §5 — quint-component effect (factory create). -/
 

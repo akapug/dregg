@@ -389,7 +389,7 @@ theorem univA_note_is_balance_neutral (st st' : RecChainedState) (cm : Nat) (act
     (asset : AssetId) (hspec : NoteCreateASpec st cm actor st') :
     (cellProjNote st'.kernel.bal c asset).balLo = (cellProjNote st.kernel.bal c asset).balLo := by
   show st'.kernel.bal c asset = st.kernel.bal c asset
-  obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
+  obtain ⟨_, _, _, _, _, _, _, _, hbal, _⟩ := hspec
   rw [hbal]
 
 /-- **`noteCreate_balance_neutral_matches_univA` — THE CLOSED DIVERGENCE, now AGREEMENT.** A

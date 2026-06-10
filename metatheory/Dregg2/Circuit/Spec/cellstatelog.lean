@@ -90,17 +90,17 @@ both records — the structure eta is what makes "17 fields equal ⇒ records eq
 substitutions. -/
 theorem recKernel_ext {k k' : RecordKernelState}
     (h1 : k'.accounts = k.accounts) (h2 : k'.cell = k.cell) (h3 : k'.caps = k.caps)
-    (h4 : k'.escrows = k.escrows) (h5 : k'.nullifiers = k.nullifiers) (h6 : k'.revoked = k.revoked)
-    (h7 : k'.commitments = k.commitments) (h8 : k'.bal = k.bal) (h9 : k'.queues = k.queues)
-    (h10 : k'.swiss = k.swiss) (h11 : k'.slotCaveats = k.slotCaveats)
-    (h12 : k'.factories = k.factories) (h13 : k'.lifecycle = k.lifecycle)
-    (h14 : k'.deathCert = k.deathCert) (h15 : k'.delegate = k.delegate)
-    (h16 : k'.delegations = k.delegations) (h17 : k'.sealedBoxes = k.sealedBoxes)
-    (h18 : k'.delegationEpoch = k.delegationEpoch) (h19 : k'.delegationEpochAt = k.delegationEpochAt) :
+    (h4 : k'.nullifiers = k.nullifiers) (h5 : k'.revoked = k.revoked)
+    (h6 : k'.commitments = k.commitments) (h7 : k'.bal = k.bal) (h8 : k'.queues = k.queues)
+    (h9 : k'.swiss = k.swiss) (h10 : k'.slotCaveats = k.slotCaveats)
+    (h11 : k'.factories = k.factories) (h12 : k'.lifecycle = k.lifecycle)
+    (h13 : k'.deathCert = k.deathCert) (h14 : k'.delegate = k.delegate)
+    (h15 : k'.delegations = k.delegations) (h16 : k'.sealedBoxes = k.sealedBoxes)
+    (h17 : k'.delegationEpoch = k.delegationEpoch) (h18 : k'.delegationEpochAt = k.delegationEpochAt) :
     k' = k := by
   cases k; cases k'
-  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
-  subst h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
+  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+  subst h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
   rfl
 
 /-! ## §4 — the FULL-STATE declarative spec of a committed `emitEventA` (the INDEPENDENT reference).
@@ -118,7 +118,6 @@ def EmitEventSpec (st : RecChainedState) (actor cell : CellId) (topic data : Int
   ∧ st'.kernel.accounts = st.kernel.accounts
   ∧ st'.kernel.cell = st.kernel.cell
   ∧ st'.kernel.caps = st.kernel.caps
-  ∧ st'.kernel.escrows = st.kernel.escrows
   ∧ st'.kernel.nullifiers = st.kernel.nullifiers
   ∧ st'.kernel.revoked = st.kernel.revoked
   ∧ st'.kernel.commitments = st.kernel.commitments
@@ -156,14 +155,13 @@ theorem execFullA_emitEvent_iff_spec (st : RecChainedState) (actor cell : CellId
       simp only [Option.some.injEq] at h
       subst h
       -- the committed post-state is `emitStep …`; read its log + every kernel field off `emitStep`.
-      refine ⟨hlive, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl, rfl, rfl, rfl⟩
+      refine ⟨hlive, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       simp only [emitStep, emitReceipt]
     · rintro ⟨_, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17,
-        h18, h19⟩
+ h18⟩
       -- rebuild `st'` from the log post-image + the 19 kernel-field equalities.
       have hk : st'.kernel = st.kernel :=
-        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
+        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       cases st' with
       | mk k' lg' =>
         simp only at hk hlog
@@ -194,8 +192,8 @@ theorem execFullA_emitEvent_kernel {st st' : RecChainedState} {actor cell : Cell
     (h : execFullA st (.emitEventA actor cell topic data) = some st') :
     st'.kernel = st.kernel := by
   obtain ⟨_, _, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17,
-    h18, h19⟩ := (execFullA_emitEvent_iff_spec st actor cell topic data st').mp h
-  exact recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
+ h18⟩ := (execFullA_emitEvent_iff_spec st actor cell topic data st').mp h
+  exact recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
 
 /-- The executor COMMITS an `emitEventA` IFF the cell is live (the guard projection of the spec ↔). -/
 theorem execFullA_emitEvent_commits_iff (st : RecChainedState) (actor cell : CellId)

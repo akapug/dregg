@@ -48,7 +48,7 @@ omitting `queues` (the touched field of `queuePipelineStepA`). -/
 def RestIffNoQueues (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -134,7 +134,7 @@ pre-kernel, the post-kernel IS the fan-out result. -/
 theorem kernel_eq_of_queues_frame {kPre kFan kPost : RecordKernelState}
     (hq : kPost.queues = kFan.queues)
     (hAcc : kPost.accounts = kPre.accounts) (hCell : kPost.cell = kPre.cell)
-    (hCaps : kPost.caps = kPre.caps) (hEsc : kPost.escrows = kPre.escrows)
+    (hCaps : kPost.caps = kPre.caps)
     (hNul : kPost.nullifiers = kPre.nullifiers) (hRev : kPost.revoked = kPre.revoked)
     (hCom : kPost.commitments = kPre.commitments) (hBal : kPost.bal = kPre.bal)
     (hSw : kPost.swiss = kPre.swiss) (hSC : kPost.slotCaveats = kPre.slotCaveats)
@@ -144,7 +144,7 @@ theorem kernel_eq_of_queues_frame {kPre kFan kPost : RecordKernelState}
     (hDE : kPost.delegationEpoch = kPre.delegationEpoch)
     (hDEA : kPost.delegationEpochAt = kPre.delegationEpochAt)
     (hf1 : kFan.accounts = kPre.accounts) (hf2 : kFan.cell = kPre.cell)
-    (hf3 : kFan.caps = kPre.caps) (hf4 : kFan.escrows = kPre.escrows)
+    (hf3 : kFan.caps = kPre.caps)
     (hf5 : kFan.nullifiers = kPre.nullifiers) (hf6 : kFan.revoked = kPre.revoked)
     (hf7 : kFan.commitments = kPre.commitments) (hf8 : kFan.bal = kPre.bal)
     (hf9 : kFan.swiss = kPre.swiss) (hf10 : kFan.slotCaveats = kPre.slotCaveats)
@@ -155,7 +155,7 @@ theorem kernel_eq_of_queues_frame {kPre kFan kPost : RecordKernelState}
     (hf18 : kFan.delegationEpochAt = kPre.delegationEpochAt) :
     kPost = kFan :=
   recKernel_ext
-    (hAcc.trans hf1.symm) (hCell.trans hf2.symm) (hCaps.trans hf3.symm) (hEsc.trans hf4.symm)
+    (hAcc.trans hf1.symm) (hCell.trans hf2.symm) (hCaps.trans hf3.symm)
     (hNul.trans hf5.symm) (hRev.trans hf6.symm) (hCom.trans hf7.symm) (hBal.trans hf8.symm) hq
     (hSw.trans hf9.symm) (hSC.trans hf10.symm) (hFac.trans hf11.symm) (hLif.trans hf12.symm)
     (hDC.trans hf13.symm) (hDel.trans hf14.symm) (hDgs.trans hf15.symm) (hSB.trans hf16.symm)
@@ -174,7 +174,7 @@ def queuePipelineStepE (LE : QueueRecord → ℤ) (cN : List ℤ → ℤ)
   logUpdate    := some (fun s args => routingRow args.owner :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
-      ∧ k'.escrows = k.escrows ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
+      ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
       ∧ k'.commitments = k.commitments ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
@@ -229,7 +229,7 @@ theorem apex_iff_queuePipelineFanoutSpec (LE : QueueRecord → ℤ) (cN : List �
        ↔ QueuePipelineFanoutSpec s args.srcId args.owner args.sinkCells args.sinkIds s'
   unfold QueuePipelineFanoutSpec pipelineGuardProp admitGuard queuePipelineStepE
   constructor
-  · rintro ⟨hg, hq, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hq, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB, hDE, hDEA⟩
     obtain ⟨k1, m, hd, hsome⟩ := hg
     match hf : pipelineFanoutK k1 args.owner m args.sinkCells args.sinkIds with
@@ -239,23 +239,23 @@ theorem apex_iff_queuePipelineFanoutSpec (LE : QueueRecord → ℤ) (cN : List �
     | some k2 =>
       have hfan : pipelineFanoutK k1 args.owner m args.sinkCells args.sinkIds = some s'.kernel := by
         have hq' : s'.kernel.queues = k2.queues := by rw [hq, pipelinePostQueues_eq hd hf]
-        obtain ⟨d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15, d16, d17, d18⟩ :=
+        obtain ⟨d1, d2, d3, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15, d16, d17, d18⟩ :=
           queueDequeueK_frame hd
-        obtain ⟨f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18⟩ :=
+        obtain ⟨f1, f2, f3, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18⟩ :=
           pipelineFanoutK_frame hf
         have hk : s'.kernel = k2 :=
           kernel_eq_of_queues_frame hq'
-            hAcc hCell hCaps hEsc hNul hRev hCom hBal hSw hSC hFac hLif hDC hDel hDgs hSB hDE hDEA
-            (f1.trans d1) (f2.trans d2) (f3.trans d3) (f4.trans d4) (f5.trans d5) (f6.trans d6)
+            hAcc hCell hCaps hNul hRev hCom hBal hSw hSC hFac hLif hDC hDel hDgs hSB hDE hDEA
+            (f1.trans d1) (f2.trans d2) (f3.trans d3) (f5.trans d5) (f6.trans d6)
             (f7.trans d7) (f8.trans d8) (f9.trans d9) (f10.trans d10) (f11.trans d11) (f12.trans d12)
             (f13.trans d13) (f14.trans d14) (f15.trans d15) (f16.trans d16) (f17.trans d17)
             (f18.trans d18)
         rw [hk, hf]
-      exact ⟨⟨k1, m, hd, hfan⟩, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hSw, hSC,
+      exact ⟨⟨k1, m, hd, hfan⟩, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSw, hSC,
         hFac, hLif, hDC, hDel, hDgs, hSB, hDE, hDEA⟩
-  · rintro ⟨⟨k1, m, hd, hf⟩, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hSw, hSC, hFac,
+  · rintro ⟨⟨k1, m, hd, hf⟩, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSw, hSC, hFac,
       hLif, hDC, hDel, hDgs, hSB, hDE, hDEA⟩
-    refine ⟨⟨k1, m, hd, ?_⟩, ?_, hlog, hAcc, hCell, hCaps, hEsc, hNul, hRev, hCom, hBal, hSw, hSC,
+    refine ⟨⟨k1, m, hd, ?_⟩, ?_, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSw, hSC,
       hFac, hLif, hDC, hDel, hDgs, hSB, hDE, hDEA⟩
     · simp [hf]
     · exact (pipelinePostQueues_eq hd hf).symm

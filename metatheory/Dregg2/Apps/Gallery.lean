@@ -70,13 +70,13 @@ theorem galOp_delta_zero (slot : FieldName) (value : Int) (b : AssetId) :
 
 theorem gallery_conserves (s s' : RecChainedState) (slot : FieldName) (value : Int) (b : AssetId)
     (h : execFullForestA s (galOp slot value) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestA_conserves_per_asset s s' (galOp slot value) b h
     (galOp_delta_zero slot value b)
 
 theorem gallery_mint_conserves (s s' : RecChainedState) (itemVal : Int) (b : AssetId)
     (h : execFullForestA s (mint itemVal) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   gallery_conserves s s' itemSlot itemVal b h
 
 /-! ## §5 — NON-VACUITY: `gal0`/`galFresh` + `#guard` witnesses (mirrors `GalleryGated`). -/

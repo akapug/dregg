@@ -34,7 +34,7 @@ The kernel `queueDequeueRefundK k id actor depId` credits a CALLER-SUPPLIED depo
 looked up in the GLOBAL `escrows` table, to the dequeuer `actor` — with NO binding between the named
 record and the message being dequeued (or even the queue). So a dequeuer can name an UNRELATED unresolved
 deposit (one parked FOR someone else, by someone else) and have its `amount` of its `asset` CREDITED to
-itself — draining a deposit that was never destined to them. (`recTotalAssetWithEscrow` stays conserved
+itself — draining a deposit that was never destined to them. (`recTotalAsset` stays conserved
 because it is a settle, so the conservation keystone does NOT catch it — this is a pure AUTHORITY hole.)
 
 The fix is a WRAP: `dequeueBindStep` resolves the deposit record by `depId` and admits the refund ONLY
@@ -119,147 +119,118 @@ def queueAllocateA : EffectHandler AllocateArgs where
     unfold allocateStep at h
     by_cases hg : stateAuthB s.caps a.actor a.gateCell && acceptsEffects s a.gateCell
     · rw [if_pos hg] at h
-      obtain ⟨hbal, hheld⟩ := queueAllocateK_balNeutral h b
-      unfold recTotalAssetWithEscrow; rw [hbal, hheld]; ring
+      rw [queueAllocateK_balNeutral h b]; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-! ## §2 — `queueEnqueueA`: FIFO append + PARK the refundable deposit. COMBINED-conserving (`delta = 0`).
+/-! ## §2 — `queueEnqueueA`: the bare FIFO append. bal-NEUTRAL (`delta = 0`).
 
-`queueEnqueueDepositK` APPENDS `m` to the FIFO tail AND PARKS the refundable anti-spam `deposit` of asset
-`dAsset` from `sender` into the shared holding-store (record `depId`, `creator := sender` refund target,
-`recipient := owner`). The bare `bal` ledger of `dAsset` DROPS by `deposit` (a REAL per-asset debit), the
-holding-store RISES — the COMBINED per-asset measure is unchanged (`delta = 0`). We WRAP it with the
-queue-cell authority gate (`stateAuthB sender sender` — the sender authorizes its own ledger debit, the
-dregg1 chained writer-ACL). `conserves` cites the proved `queueEnqueueDepositK_conserves_combined`. -/
+F1b: the Wave-8 refundable anti-spam deposit-park (`queueEnqueueDepositK`) is GONE with the kernel
+escrow holding-store it parked into (anti-spam deposits are a FACTORY concern in the F2 queue
+migration). The enqueue is the bare `queueEnqueueK` FIFO append again — it touches ONLY `queues`,
+never `bal`. We WRAP it with the writer-ACL authority gate (`stateAuthB actor cell`, the dregg1
+chained-step gate) and the cell-Live admission gate; `conserves` cites `queueEnqueueK_balNeutral`. -/
 
-/-- Queue-enqueue (deposit-park) arguments: the queue `id`, the message `m`, the `sender` (debited) and
-queue `owner`, the deposit record id `depId`, the deposit `asset`, and the `deposit` amount. -/
+/-- Queue-enqueue arguments (deposit-free, aligned to `execFullA`'s `queueEnqueueChainA`). -/
 structure EnqueueArgs where
   /-- The queue id to enqueue into. -/
   id : Nat
   /-- The message hash appended to the FIFO tail. -/
   m : Nat
-  /-- The sender whose `dAsset` ledger is debited by the deposit. -/
-  sender : CellId
-  /-- The queue owner (the deposit record's `recipient`). -/
-  owner : CellId
-  /-- The deposit record id (fresh; rejected if already in use). -/
-  depId : Nat
-  /-- The deposit asset class. -/
-  dAsset : AssetId
-  /-- The (non-negative) refundable deposit amount. -/
-  deposit : Int
+  /-- The actor performing the enqueue (the writer-ACL subject). -/
+  actor : CellId
+  /-- The queue's representing cell (the authority + admission gate target). -/
+  cell : CellId
 
-/-- The authority-gated enqueue-with-deposit step: the sender must hold authority over its own ledger
-(`stateAuthB sender sender`) AND be Live, then run the proved `queueEnqueueDepositK` (which itself
-fail-closes on FULL / insufficient deposit / non-account / duplicate deposit id). -/
+/-- The authority-gated enqueue step: writer-ACL + Live cell, then the proved `queueEnqueueK`
+(fail-closed if absent OR FULL). -/
 def enqueueStep (k : RecordKernelState) (a : EnqueueArgs) : Option RecordKernelState :=
-  if stateAuthB k.caps a.sender a.sender && acceptsEffects k a.sender then
-    queueEnqueueDepositK k a.id a.m a.sender a.owner a.depId a.dAsset a.deposit
+  if stateAuthB k.caps a.actor a.cell && acceptsEffects k a.cell then
+    queueEnqueueK k a.id a.m
   else none
 
-/-- **`queueEnqueueA` — the registered queue-enqueue (deposit-park) handler.** `delta = 0` (COMBINED
-measure conserved — the deposit moves ledger↔holding-store). `conserves` cites the proved
-`queueEnqueueDepositK_conserves_combined`. `auth_gated`/`admission_gated` from the wrapping gate. -/
+/-- **`queueEnqueueA` — the registered queue-enqueue handler.** `delta = 0` (touches only `queues`).
+`conserves` from `queueEnqueueK_balNeutral`. `auth_gated`/`admission_gated` from the wrapping gate. -/
 def queueEnqueueA : EffectHandler EnqueueArgs where
   step := enqueueStep
   delta := fun _ _ => 0
-  auth := fun k a => stateAuthB k.caps a.sender a.sender
-  admission := fun k a => acceptsEffects k a.sender
-  trace := fun a => { actor := a.sender, src := a.sender, dst := a.owner, amt := a.deposit }
+  auth := fun k a => stateAuthB k.caps a.actor a.cell
+  admission := fun k a => acceptsEffects k a.cell
+  trace := fun a => { actor := a.actor, src := a.cell, dst := a.cell, amt := 0 }
   auth_gated := by
     intro s a s' h
     unfold enqueueStep at h
-    by_cases hg : stateAuthB s.caps a.sender a.sender && acceptsEffects s a.sender
+    by_cases hg : stateAuthB s.caps a.actor a.cell && acceptsEffects s a.cell
     · simp only [Bool.and_eq_true] at hg; exact hg.1
     · rw [if_neg hg] at h; exact absurd h (by simp)
   admission_gated := by
     intro s a s' h
     unfold enqueueStep at h
-    by_cases hg : stateAuthB s.caps a.sender a.sender && acceptsEffects s a.sender
+    by_cases hg : stateAuthB s.caps a.actor a.cell && acceptsEffects s a.cell
     · simp only [Bool.and_eq_true] at hg; exact hg.2
     · rw [if_neg hg] at h; exact absurd h (by simp)
   conserves := by
     intro s a s' h b
     unfold enqueueStep at h
-    by_cases hg : stateAuthB s.caps a.sender a.sender && acceptsEffects s a.sender
+    by_cases hg : stateAuthB s.caps a.actor a.cell && acceptsEffects s a.cell
     · rw [if_pos hg] at h
-      have := queueEnqueueDepositK_conserves_combined (k := s) (k' := s') h b
-      rw [this]; ring
+      rw [queueEnqueueK_balNeutral h b]; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-! ## §3 — `queueDequeueA`: FIFO remove + REFUND the deposit, BINDING-GATED (closes P0-1).
+/-! ## §3 — `queueDequeueA`: the bare owner-gated FIFO pop. bal-NEUTRAL (`delta = 0`).
 
-`queueDequeueRefundK k id actor depId` REMOVES the FIFO head (owner-gated) AND REFUNDS the caller-supplied
-deposit record `depId` (looked up in the GLOBAL `escrows` table) to the dequeuer `actor` — with NO binding
-between the record and the dequeuer. The P0-1 HOLE: a dequeuer can name an UNRELATED unresolved deposit
-(parked FOR someone else) and drain its value to themselves.
+F1b: the deposit refund (`queueDequeueRefundK`) and the P0-1 binding gate are GONE with the deposit
+park — the dequeue is the bare `queueDequeueK` REMOVE-FROM-FRONT again (owner-only, fail-closed on
+absent/EMPTY). It touches ONLY `queues`. We WRAP it with the c-list authority gate + Live cell;
+`conserves` cites `queueDequeueK_balNeutral`. -/
 
-THE FIX (a WRAP): `dequeueBindStep` admits the refund ONLY when the named record's `recipient = actor` —
-the deposit must be DESTINED to the dequeuer. Honest flow: enqueue parks with `recipient := owner`, and
-dequeue requires `actor = owner` (kernel gate), so the bound deposit's recipient IS the dequeuer. An
-unrelated deposit (recipient ≠ actor) is REJECTED. `auth_gated` forces the binding (a typing obligation).
-The kernel op returns `(state, head)`; we project the state (the head surfaces in the kernel transition's
-`Nat`). `conserves` cites the proved `queueDequeueRefundK_conserves_combined`; `delta = 0`. -/
-
-/-- Queue-dequeue (deposit-refund) arguments: the queue `id`, the dequeuer `actor`, and the deposit
-record id `depId` to refund. -/
+/-- Queue-dequeue arguments (deposit-free, aligned to `execFullA`'s `queueDequeueChainA`). -/
 structure DequeueArgs where
   /-- The queue id to dequeue from. -/
   id : Nat
-  /-- The dequeuer (must be the queue owner — the kernel gate — AND the deposit's recipient — the P0-1 gate). -/
+  /-- The dequeuer (must be the queue owner — the kernel gate). -/
   actor : CellId
-  /-- The deposit record id to refund (BINDING-GATED: its `recipient` must equal `actor`). -/
-  depId : Nat
+  /-- The queue's representing cell (the authority + admission gate target). -/
+  cell : CellId
 
-/-- **The P0-1 BINDING gate** (reuses `RecordKernel.dequeueBindB`). -/
-def dequeueBindB (k : RecordKernelState) (a : DequeueArgs) : Bool :=
-  Dregg2.Exec.dequeueBindB k a.actor a.depId
-
-/-- **The P0-1-closing dequeue-refund step.** Commit the kernel `queueDequeueRefundK` (projecting out the
-post-state, dropping the dequeued head) ONLY when the binding gate holds (the named deposit's `recipient`
-is the dequeuer). The bare kernel op (anyone-names-any-deposit) is otherwise unchanged. -/
+/-- The authority-gated dequeue step: c-list gate + Live cell, then the proved `queueDequeueK`
+(owner-only, FIFO order; the dequeued head surfaces in the kernel transition's `Nat`). -/
 def dequeueBindStep (k : RecordKernelState) (a : DequeueArgs) : Option RecordKernelState :=
-  if dequeueBindB k a ∧ queueDequeueHeadB k a.id a.actor a.depId then
-    (queueDequeueRefundK k a.id a.actor a.depId).map Prod.fst
+  if stateAuthB k.caps a.actor a.cell && acceptsEffects k a.cell then
+    (queueDequeueK k a.id a.actor).map Prod.fst
   else none
 
-/-- **`queueDequeueA` — the P0-1-closing dequeue-refund handler.** `auth_gated` BITES: a committed dequeue
-proves the binding gate held (the refunded deposit's `recipient` is the dequeuer). `conserves` cites the
-unconditional `queueDequeueRefundK_conserves_combined` (`delta = 0`); `admission` reports the same binding
-witness (the deposit must exist + be destined to the actor — the admission analogue of the auth gate). -/
+/-- **`queueDequeueA` — the registered queue-dequeue handler.** `delta = 0` (touches only `queues`).
+`conserves` from `queueDequeueK_balNeutral`. `auth_gated`/`admission_gated` from the wrapping gate;
+the OWNER gate lives in `queueDequeueK` itself. -/
 def queueDequeueA : EffectHandler DequeueArgs where
   step := dequeueBindStep
   delta := fun _ _ => 0
-  auth := dequeueBindB
-  admission := fun k a => dequeueBindB k a && queueDequeueHeadB k a.id a.actor a.depId
-  trace := fun a => { actor := a.actor, src := a.actor, dst := a.actor, amt := 0 }
+  auth := fun k a => stateAuthB k.caps a.actor a.cell
+  admission := fun k a => acceptsEffects k a.cell
+  trace := fun a => { actor := a.actor, src := a.cell, dst := a.cell, amt := 0 }
   auth_gated := by
     intro s a s' h
     unfold dequeueBindStep at h
-    by_cases hg : dequeueBindB s a ∧ queueDequeueHeadB s a.id a.actor a.depId
-    · exact hg.1
+    by_cases hg : stateAuthB s.caps a.actor a.cell && acceptsEffects s a.cell
+    · simp only [Bool.and_eq_true] at hg; exact hg.1
     · rw [if_neg hg] at h; exact absurd h (by simp)
   admission_gated := by
     intro s a s' h
     unfold dequeueBindStep at h
-    by_cases hg : dequeueBindB s a ∧ queueDequeueHeadB s a.id a.actor a.depId
-    · simpa using hg
+    by_cases hg : stateAuthB s.caps a.actor a.cell && acceptsEffects s a.cell
+    · simp only [Bool.and_eq_true] at hg; exact hg.2
     · rw [if_neg hg] at h; exact absurd h (by simp)
   conserves := by
     intro s a s' h b
     unfold dequeueBindStep at h
-    by_cases hg : dequeueBindB s a ∧ queueDequeueHeadB s a.id a.actor a.depId
+    by_cases hg : stateAuthB s.caps a.actor a.cell && acceptsEffects s a.cell
     · rw [if_pos hg] at h
-      -- the kernel op committed to `some (k1, mh)`; recover the pair and cite the conservation lemma.
-      cases hk : queueDequeueRefundK s a.id a.actor a.depId with
-      | none => rw [hk] at h; simp only [Option.map_none] at h; exact absurd h (by simp)
+      cases hk : queueDequeueK s a.id a.actor with
+      | none => rw [hk] at h; exact absurd h (by simp)
       | some pr =>
           obtain ⟨k1, mh⟩ := pr
-          rw [hk] at h; simp only [Option.map_some] at h
-          simp only [Option.some.injEq] at h; subst h
-          have := queueDequeueRefundK_conserves_combined (k := s) (k' := k1) (mh := mh) hk b
-          rw [this]; ring
+          rw [hk] at h; simp only [Option.map_some, Option.some.injEq] at h; subst h
+          rw [queueDequeueK_balNeutral hk b]; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-! ## §4 — `queueResizeA`: change the queue capacity. bal-NEUTRAL (`delta = 0`).
@@ -312,54 +283,45 @@ def queueResizeA : EffectHandler ResizeArgs where
     unfold resizeStep at h
     by_cases hg : stateAuthB s.caps a.actor a.owner && acceptsEffects s a.owner
     · rw [if_pos hg] at h
-      obtain ⟨hbal, hheld⟩ := queueResizeK_balNeutral h b
-      unfold recTotalAssetWithEscrow; rw [hbal, hheld]; ring
+      rw [queueResizeK_balNeutral h b]; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-! ## §5 — `queueAtomicTxA`: the ALL-OR-NOTHING deposit-op batch. COMBINED-conserving (`delta = 0`).
+/-! ## §5 — `queueAtomicTxA`: the ALL-OR-NOTHING queue-op batch. bal-NEUTRAL (`delta = 0`).
 
-dregg1's `apply_queue_atomic_tx` folds a list of queue deposit sub-ops (enqueue-with-deposit /
-dequeue-refund) all-or-nothing: the batch COMMITS iff EVERY sub-op commits (each against the prior's
-result); ANY failure rolls back the whole batch (`Option`-monad fold). We model the sub-op at the BARE
-kernel layer (`QueueTxOpK`: enqueue-deposit or BINDING-GATED dequeue-refund — the P0-1 fix carries into
-the batch), and the fold is COMBINED-conserving by induction reusing each sub-op's per-asset conservation
-(`queueEnqueueDepositK_conserves_combined` / the binding-dequeue's `conserves`). `delta = 0`. -/
+dregg1's `apply_queue_atomic_tx` folds a list of queue sub-ops (enqueue / dequeue) all-or-nothing: the
+batch COMMITS iff EVERY sub-op commits (each against the prior's result); ANY failure rolls back the
+whole batch (`Option`-monad fold). F1b: the deposit/refund legs are GONE with the kernel escrow
+holding-store — each sub-op is the bare bal-NEUTRAL FIFO op, so the fold is bal-NEUTRAL by induction. -/
 
-/-- One atomic-batch sub-op at the bare kernel layer: a deposit-park enqueue OR a binding-gated
-deposit-refund dequeue (the P0-1 fix carries into the batch). -/
+/-- One atomic-batch sub-op at the bare kernel layer (F1b: deposit-free). -/
 inductive QueueTxOpK where
-  /-- `Enqueue { queue, message, deposit }` — append `m` + park the deposit (combined-conserving). -/
-  | enqueue (id m : Nat) (sender owner : CellId) (depId : Nat) (dAsset : AssetId) (deposit : Int)
-  /-- `Dequeue { queue }` — remove the FIFO head + refund the BOUND deposit (`recipient = actor`). -/
-  | dequeue (id : Nat) (actor : CellId) (depId : Nat)
+  /-- `Enqueue { queue, message }` — append `m` to queue `id` (fail-closed if absent/FULL). -/
+  | enqueue (id m : Nat)
+  /-- `Dequeue { queue }` — remove the FIFO head of queue `id` (owner-gated, fail-closed on EMPTY). -/
+  | dequeue (id : Nat) (actor : CellId)
   deriving Repr
 
-/-- Run one atomic sub-op at the bare kernel layer (reusing the proved kernel deposit ops + the P0-1
-binding-gated dequeue from §3). -/
+/-- Run one atomic sub-op at the bare kernel layer (the proved kernel FIFO ops). -/
 def queueTxOpStepK (k : RecordKernelState) : QueueTxOpK → Option RecordKernelState
-  | .enqueue id m sender owner depId dAsset deposit =>
-      queueEnqueueDepositK k id m sender owner depId dAsset deposit
-  | .dequeue id actor depId =>
-      dequeueBindStep k { id := id, actor := actor, depId := depId }
+  | .enqueue id m => queueEnqueueK k id m
+  | .dequeue id actor => (queueDequeueK k id actor).map Prod.fst
 
-/-- **`queueTxOpStepK_conserves` — PROVED.** Each atomic sub-op is COMBINED-conserving per asset (the
-deposit park / bound refund moves the bare ledger but the combined measure is fixed) — read off the
-kernel deposit ops' proved combined-conservation. -/
+/-- **`queueTxOpStepK_conserves` — PROVED.** Each atomic sub-op is bal-NEUTRAL per asset — read off
+the kernel FIFO ops' proved bal-neutrality. -/
 theorem queueTxOpStepK_conserves {k k' : RecordKernelState} {op : QueueTxOpK}
     (h : queueTxOpStepK k op = some k') (b : AssetId) :
-    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   cases op with
-  | enqueue id m sender owner depId dAsset deposit =>
-      exact queueEnqueueDepositK_conserves_combined (k := k) (k' := k') h b
-  | dequeue id actor depId =>
-      -- the §3 binding-gated dequeue step is combined-conserving — reuse the registered handler's own
-      -- `conserves` obligation (`queueTxOpStepK k (.dequeue …)` is definitionally `queueDequeueA.step`;
-      -- its `delta` is `0`, so the `+ delta` summand drops).
-      have hc := queueDequeueA.conserves k { id := id, actor := actor, depId := depId } k' h b
-      -- `queueDequeueA.delta _ b = 0` definitionally; drop the trivial summand.
-      rw [show queueDequeueA.delta { id := id, actor := actor, depId := depId } b = 0 from rfl,
-          add_zero] at hc
-      exact hc
+  | enqueue id m =>
+      exact queueEnqueueK_balNeutral (k := k) (k' := k') h b
+  | dequeue id actor =>
+      simp only [queueTxOpStepK] at h
+      cases hk : queueDequeueK k id actor with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some pr =>
+          obtain ⟨k1, mh⟩ := pr
+          rw [hk] at h; simp only [Option.map_some, Option.some.injEq] at h; subst h
+          exact queueDequeueK_balNeutral hk b
 
 /-- **The all-or-nothing atomic batch fold** (dregg1 `apply_queue_atomic_tx`). Thread the sub-ops
 left-to-right through the `Option` monad: COMMIT iff EVERY sub-op commits; ANY failure ⇒ `none` (the
@@ -371,12 +333,12 @@ def queueAtomicTxChainK (k : RecordKernelState) : List QueueTxOpK → Option Rec
       | some k' => queueAtomicTxChainK k' ops
       | none    => none
 
-/-- **`queueAtomicTxChainK_conserves` — PROVED (the atomic batch is COMBINED-conserving per asset).** A
-committed batch preserves `recTotalAssetWithEscrow` at EVERY asset: each sub-op is combined-conserving,
+/-- **`queueAtomicTxChainK_conserves` — PROVED (the atomic batch is bal-NEUTRAL per asset).** A
+committed batch preserves `recTotalAsset` at EVERY asset: each sub-op is bal-neutral,
 and the fold composes them. By induction on the op list. -/
 theorem queueAtomicTxChainK_conserves {k k' : RecordKernelState} {ops : List QueueTxOpK}
     (h : queueAtomicTxChainK k ops = some k') (b : AssetId) :
-    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   induction ops generalizing k with
   | nil => simp only [queueAtomicTxChainK, Option.some.injEq] at h; subst h; rfl
   | cons op rest ih =>
@@ -391,7 +353,7 @@ theorem queueAtomicTxChainK_conserves {k k' : RecordKernelState} {ops : List Que
 structure AtomicTxArgs where
   /-- The actor performing the atomic batch (the metadata/receipt subject). -/
   actor : CellId
-  /-- The all-or-nothing list of deposit sub-ops. -/
+  /-- The all-or-nothing list of queue sub-ops. -/
   ops : List QueueTxOpK
 
 /-- The atomic-tx step: run the all-or-nothing batch fold over the bare kernel (the receipt-chain
@@ -399,11 +361,9 @@ metadata row lives in the chained executor; here the conservation content is the
 def atomicTxStep (k : RecordKernelState) (a : AtomicTxArgs) : Option RecordKernelState :=
   queueAtomicTxChainK k a.ops
 
-/-- **`queueAtomicTxA` — the registered atomic-tx handler (`delta = 0`, COMBINED-conserving).**
-`conserves` from `queueAtomicTxChainK_conserves` (the per-op conservation summed over the fold).
-`auth`/`admission` default-true here (each sub-op carries its OWN fail-closed gate IN the fold — the
-sender writer-ACL on each enqueue, the owner + P0-1 binding gate on each dequeue; the batch-level
-authority is the conjunction enforced sub-op by sub-op). -/
+/-- **`queueAtomicTxA` — the registered atomic-tx handler (`delta = 0`, bal-NEUTRAL).**
+`conserves` from `queueAtomicTxChainK_conserves` (the per-op neutrality summed over the fold).
+`auth`/`admission` default-true here (each sub-op carries its OWN fail-closed gate IN the fold). -/
 def queueAtomicTxA : EffectHandler AtomicTxArgs where
   step := atomicTxStep
   delta := fun _ _ => 0
@@ -468,10 +428,7 @@ def queuePipelineStepA : EffectHandler PipelineArgs where
     | some pr =>
         obtain ⟨k1, m⟩ := pr
         rw [hd] at h
-        obtain ⟨hbd, hed⟩ := queueDequeueK_balNeutral hd b
-        obtain ⟨hbf, hef⟩ := pipelineFanoutK_balNeutral h b
-        unfold recTotalAssetWithEscrow
-        rw [hbf, hef, hbd, hed]; ring
+        rw [pipelineFanoutK_balNeutral h b, queueDequeueK_balNeutral hd b]; ring
 
 /-! ## §7 — The batch registry: the queue cluster as coproduct entries.
 
@@ -493,16 +450,14 @@ def allocateEffect (actor : CellId) (id : Nat) (gateCell : CellId) (capacity : N
   { tag := 0, Args := AllocateArgs,
     args := { actor := actor, id := id, gateCell := gateCell, capacity := capacity }, handler := queueAllocateA }
 
-/-- Build a closed queue-enqueue (deposit-park) effect (tag `1`). -/
-def enqueueEffect (id m : Nat) (sender owner : CellId) (depId : Nat) (dAsset : AssetId) (deposit : Int) :
-    ClosedEffect :=
+/-- Build a closed queue-enqueue effect (tag `1`; F1b deposit-free). -/
+def enqueueEffect (id m : Nat) (actor cell : CellId) : ClosedEffect :=
   { tag := 1, Args := EnqueueArgs,
-    args := { id := id, m := m, sender := sender, owner := owner, depId := depId,
-              dAsset := dAsset, deposit := deposit }, handler := queueEnqueueA }
+    args := { id := id, m := m, actor := actor, cell := cell }, handler := queueEnqueueA }
 
-/-- Build a closed queue-dequeue (deposit-refund) effect (tag `2`). -/
-def dequeueEffect (id : Nat) (actor : CellId) (depId : Nat) : ClosedEffect :=
-  { tag := 2, Args := DequeueArgs, args := { id := id, actor := actor, depId := depId },
+/-- Build a closed queue-dequeue effect (tag `2`; F1b deposit-free). -/
+def dequeueEffect (id : Nat) (actor cell : CellId) : ClosedEffect :=
+  { tag := 2, Args := DequeueArgs, args := { id := id, actor := actor, cell := cell },
     handler := queueDequeueA }
 
 /-- Build a closed queue-resize effect (tag `3`). -/
@@ -521,13 +476,12 @@ def pipelineEffect (srcId : Nat) (owner : CellId) (sinkCells : List CellId) (sin
     args := { srcId := srcId, owner := owner, sinkCells := sinkCells, sinkIds := sinkIds },
     handler := queuePipelineStepA }
 
-/-! ## §8 — TEETH: the P0-1 binding attack + the order/deposit/atomic behaviour, evaluated.
+/-! ## §8 — TEETH: the FIFO order/allocate/resize/atomic/pipeline behaviour, evaluated.
 
-The methodology that matters: the P0-1 ATTACK (a dequeuer refunding an UNRELATED deposit, recipient ≠
-actor) is REJECTED, and the honest bound refund succeeds + conserves. A handler whose step skipped the
-binding gate would have FAILED `auth_gated` at type-check time. -/
+(F1b: the P0-1 deposit-binding attack fixtures left with the kernel deposit park — anti-spam deposits
+are a factory concern in the F2 queue migration.) -/
 
-/-- A fixture: cells 0 (queue owner), 5 (sender), 8 (a STRANGER) are live accounts; sender 5 holds 100
+/-- A fixture: cells 0 (queue owner), 5 (sender), 8 are live accounts; cell 5 holds 100
 of asset 0; one queue (id 7, owner 0, cap 3, empty). Self-authority (every cell authorizes its own
 ledger). All cells Live. -/
 def qh0 : RecordKernelState :=
@@ -537,74 +491,54 @@ def qh0 : RecordKernelState :=
     bal := fun c a => if c = 5 ∧ a = 0 then 100 else 0
     queues := [{ id := 7, owner := 0, capacity := 3, buffer := [] }] }
 
-/-- The fixture after sender 5 enqueues message 111 with a deposit of 30 (record id 9, recipient = owner
-0). The deposit is parked FOR owner 0; the bare ledger of asset 0 dropped 100 → 70 (combined 100). -/
+/-- The fixture after actor 0 enqueues message 111 into queue 7 (writer-ACL self-gate). -/
 def qhEnq : Option RecordKernelState :=
-  enqueueStep qh0 { id := 7, m := 111, sender := 5, owner := 0, depId := 9, dAsset := 0, deposit := 30 }
+  enqueueStep qh0 { id := 7, m := 111, actor := 0, cell := 0 }
 
-/-- The fixture additionally carrying an UNRELATED deposit (record id 99) parked FOR cell 8 (the
-stranger) by sender 5 — destined to 8, NOT to the queue owner 0. The P0-1 attack tries to drain THIS. -/
-def qhEnqUnrelated : Option RecordKernelState :=
-  qhEnq.bind (fun k =>
-    -- park a second deposit (id 99) recipient := 8 (stranger), by enqueuing another message
-    enqueueStep k { id := 7, m := 222, sender := 5, owner := 8, depId := 99, dAsset := 0, deposit := 20 })
-
--- §TEETH-1 (P0-1 ATTACK): owner 0 dequeues but names the UNRELATED deposit 99 (recipient 8 ≠ actor 0) ⇒
--- REJECTED. The binding gate bites: a deposit destined to someone else cannot be drained.
-#guard ((qhEnqUnrelated.bind (fun k => execEffect (dequeueEffect 7 0 99) k)).isSome) == false  --  false
--- §TEETH-2 (HONEST): owner 0 dequeues and names its OWN bound deposit 9 (recipient 0 = actor 0) ⇒ SUCCEEDS.
-#guard ((qhEnqUnrelated.bind (fun k => execEffect (dequeueEffect 7 0 9) k)).isSome)  --  true
--- §TEETH-2b (P0-1-MSG): two deposits for the SAME owner but DIFFERENT messages — dequeuing the FIFO
--- head (111) while naming the deposit bound to message 222 (id 99) ⇒ REJECTED.
-def qhEnqTwoMsgs : Option RecordKernelState :=
-  qhEnq.bind (fun k =>
-    enqueueStep k { id := 7, m := 222, sender := 5, owner := 0, depId := 99, dAsset := 0, deposit := 20 })
-#guard ((qhEnqTwoMsgs.bind (fun k => execEffect (dequeueEffect 7 0 99) k)).isSome) == false  --  false
-#guard ((qhEnqTwoMsgs.bind (fun k => execEffect (dequeueEffect 7 0 9) k)).isSome)  --  true (head-bound dep)
--- §TEETH-3 (CONSERVATION): the honest bound refund conserves the combined per-asset measure.
-#guard ((qhEnq.bind (fun k => execEffect (dequeueEffect 7 0 9) k)).map
-        (fun k => recTotalAssetWithEscrow k 0)) == some 100  --  some 100
--- §TEETH-4 (DEPOSIT MOVES the bare ledger): enqueue debits the sender's ledger (100 → 70), combined held.
-#guard (qhEnq.map (fun k => (recTotalAsset k 0, recTotalAssetWithEscrow k 0))) == some (70, 100)  --  some (70, 100)
+-- §TEETH-1 (HONEST dequeue): the owner (0) dequeues the head ⇒ SUCCEEDS, bal-NEUTRAL.
+#guard ((qhEnq.bind (fun k => execEffect (dequeueEffect 7 0 0) k)).isSome)  --  true
+-- §TEETH-2 (NON-OWNER dequeue REJECTED): actor 5 (not the owner) ⇒ none (the kernel owner gate).
+#guard ((qhEnq.bind (fun k => execEffect (dequeueEffect 7 5 5) k)).isSome) == false  --  false
+-- §TEETH-3 (CONSERVATION): the dequeue conserves the per-asset measure.
+#guard ((qhEnq.bind (fun k => execEffect (dequeueEffect 7 0 0) k)).map
+        (fun k => recTotalAsset k 0)) == some 100  --  some 100
+-- §TEETH-4 (ENQUEUE bal-NEUTRAL): enqueue moves NO value (the deposit is F1b-GONE).
+#guard (qhEnq.map (fun k => recTotalAsset k 0)) == some 100  --  some 100
 -- §TEETH-5 (FIFO order): after enqueue the message is in the buffer.
 #guard (qhEnq.bind (fun k => (findQueue k.queues 7).map (·.buffer))) == some [111]  --  some [111]
--- §TEETH-6 (ALLOCATE): actor 0 allocates a fresh queue id 12 (owner 0) ⇒ SUCCEEDS, combined unchanged.
+-- §TEETH-6 (ALLOCATE): actor 0 allocates a fresh queue id 12 (owner 0) ⇒ SUCCEEDS, measure unchanged.
 #guard ((execEffect (allocateEffect 0 12 0 4) qh0).map
-        (fun k => (recTotalAssetWithEscrow k 0, ((findQueue k.queues 12).map (·.capacity))))) == some (100, some 4)  -- TODO(triage): comment claimed `some (0, some 4)`; code yields `some (100, some 4)` — the combined asset-0 measure of fixture qh0 is 100, not 0 (stale fixture value; allocate is correctly balance-neutral and capacity 4 is right).
+        (fun k => (recTotalAsset k 0, ((findQueue k.queues 12).map (·.capacity))))) == some (100, some 4)  --  some (100, some 4)
 -- §TEETH-7 (ALLOCATE duplicate id REJECTED): re-allocating the existing queue 7 ⇒ none.
 #guard ((execEffect (allocateEffect 0 7 0 4) qh0).isSome) == false  --  false
 -- §TEETH-8 (RESIZE): grow queue 7's capacity to 5 ⇒ SUCCEEDS; shrink below occupancy is rejected (see kernel).
 #guard ((execEffect (resizeEffect 0 7 5 0) qh0).map
         (fun k => (findQueue k.queues 7).map (·.capacity))) == some (some 5)  --  some (some 5)
--- §TEETH-9 (ENQUEUE deposit gate): a deposit of 200 (> sender's 100) is REJECTED.
-#guard ((execEffect (enqueueEffect 7 111 5 0 9 0 200) qh0).isSome) == false  --  false
--- §TEETH-10 (ATOMIC-TX all-or-nothing + conserve): a batch [enqueue dep30; dequeue-refund bound 9] runs
--- the fold and conserves the combined measure (deposit parked then refunded back).
+-- §TEETH-9 (ENQUEUE FULL gate): filling the queue past capacity 3 is REJECTED.
 #guard ((execEffect (atomicTxEffect 0
-        [ QueueTxOpK.enqueue 7 111 5 0 9 0 30, QueueTxOpK.dequeue 7 0 9 ]) qh0).map
-        (fun k => recTotalAssetWithEscrow k 0)) == some 100  --  some 100
--- §TEETH-11 (ATOMIC-TX P0-1 binding carries into the batch): a batch whose dequeue names an UNRELATED
--- deposit (recipient ≠ actor) ROLLS BACK the whole batch (the binding gate bites inside the fold).
+        [ QueueTxOpK.enqueue 7 1, QueueTxOpK.enqueue 7 2, QueueTxOpK.enqueue 7 3,
+          QueueTxOpK.enqueue 7 4 ]) qh0).isSome) == false  --  false (the 4th overflows ⇒ batch rolls back)
+-- §TEETH-10 (ATOMIC-TX all-or-nothing + neutral): a batch [enqueue; dequeue-by-owner] runs the fold
+-- and conserves the measure.
 #guard ((execEffect (atomicTxEffect 0
-        [ QueueTxOpK.enqueue 7 111 5 0 9 0 30, QueueTxOpK.enqueue 7 222 5 8 99 0 20,
-          QueueTxOpK.dequeue 7 0 99 ]) qh0).isSome) == false  --  false
+        [ QueueTxOpK.enqueue 7 111, QueueTxOpK.dequeue 7 0 ]) qh0).map
+        (fun k => recTotalAsset k 0)) == some 100  --  some 100
+-- §TEETH-11 (ATOMIC-TX rollback): a batch whose dequeue is by a NON-owner ROLLS BACK the whole batch.
+#guard ((execEffect (atomicTxEffect 0
+        [ QueueTxOpK.enqueue 7 111, QueueTxOpK.dequeue 7 5 ]) qh0).isSome) == false  --  false
 -- §TEETH-12 (PIPELINE fan-out): allocate a sink queue (id 13, owner 0), enqueue a message into source 7,
--- then pipeline the head from 7 into sink 13 ⇒ SUCCEEDS; the message LANDED in the sink and the combined
--- measure is UNCHANGED (the fixture's asset-0 measure 100 stays 100 — messages move, not value).
+-- then pipeline the head from 7 into sink 13 ⇒ SUCCEEDS; the message LANDED in the sink and the
+-- measure is UNCHANGED (messages move, not value).
 #guard (((queueAllocateK qh0 13 0 3).bind (fun k => queueEnqueueK k 7 111)).bind
         (fun k => execEffect (pipelineEffect 7 0 [0] [13]) k) |>.map
-        (fun k => ((findQueue k.queues 13).map (·.buffer), recTotalAssetWithEscrow k 0))) == some (some [111], 100)  --  some (some [111], 100)
+        (fun k => ((findQueue k.queues 13).map (·.buffer), recTotalAsset k 0))) == some (some [111], 100)  --  some (some [111], 100)
 -- §TEETH-13 (PIPELINE source-empty REJECTED): pipelining an EMPTY source queue ⇒ none.
 #guard ((execEffect (pipelineEffect 7 0 [0] [13]) qh0).isSome) == false  --  false
 
-/-! ## §9 — turn_conserves cross-check: a registry turn of queue effects conserves the combined measure.
-
-The §8-TEETH-10 atomic batch's combined per-asset delta is `0` (deposit parked then refunded) — the SUM
-the algebra's `turn_conserves` holds the measure to. A whole TURN of queue effects (allocate; enqueue;
-bound dequeue) runs through the generic `execTurn` foldlM and conserves. -/
-#guard (turnDelta [allocateEffect 0 12 0 4, enqueueEffect 7 111 5 0 9 0 30, dequeueEffect 7 0 9] 0) == 0  --  0
-#guard ((execTurn [enqueueEffect 7 111 5 0 9 0 30, dequeueEffect 7 0 9] qh0).map
-        (fun k => recTotalAssetWithEscrow k 0)) == some 100  --  some 100
+/-! ## §9 — turn_conserves cross-check: a registry turn of queue effects conserves the measure. -/
+#guard (turnDelta [allocateEffect 0 12 0 4, enqueueEffect 7 111 0 0, dequeueEffect 7 0 0] 0) == 0  --  0
+#guard ((execTurn [enqueueEffect 7 111 0 0, dequeueEffect 7 0 0] qh0).map
+        (fun k => recTotalAsset k 0)) == some 100  --  some 100
 
 /-! ## §10 — Axiom-hygiene pins (every handler keystone rests only on the three kernel axioms).
 
@@ -624,9 +558,9 @@ fold/conservation helper is pinned directly. A `sorryAx` anywhere fails the pin 
 
 Deliberately OUT of this batch (documented, NOT a silent gap):
 
-  * **Per-MESSAGE deposit binding (P0-1-full).** CLOSED in `RecordKernel`: queue deposits carry
-    `(queueDep, queueMsg)` on the `EscrowRecord`; `dequeueMsgBindB` requires the named `depId` to match
-    the dequeued FIFO head. `dequeueRecipientBindB` remains the pre-dequeue admission analogue.
+  * **Anti-spam deposits (F1b).** The Wave-8 refundable deposit-park/refund + the P0-1 binding gates
+    are GONE with the kernel escrow holding-store; they re-land as a FACTORY concern in the F2 queue
+    migration (a deposit is then an ordinary `bal` move into a factory-born deposit cell).
 
   * **The receipt-chain metadata rows.** `queueAtomicTxA`/`queuePipelineStepA` register the bare-kernel
     CONSERVATION content (the all-or-nothing fold / the source-dequeue-then-fan-out). The chained

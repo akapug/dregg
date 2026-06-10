@@ -7,7 +7,7 @@ The THIRD batch of `EffectHandler` instances (after the `transfer`/`escrow`/`sta
 op-set: the seal/unseal/seal-pair box machinery (`apply_seal`/`apply_unseal`/`apply_create_seal_pair`)
 and the CapTP swiss-table export/enliven/handoff/GC effects. EVERY handler here is balance-NEUTRAL
 (`delta = 0`): these ops move CAPABILITIES (edit `caps`/`sealedBoxes`/`swiss`), never the `bal` ledger
-NOR the `escrows` holding-store — so the COMBINED per-asset measure `recTotalAssetWithEscrow` is left
+NOR the `escrows` holding-store — so the COMBINED per-asset measure `recTotalAsset` is left
 LITERALLY fixed and `conserves` is the `rfl`-grade frame (a `{ k with caps/sealedBoxes/swiss := … }`
 update keeps `bal`/`accounts`/`escrows` definitionally equal).
 
@@ -131,7 +131,7 @@ def createSealPairA : EffectHandler CreateSealPairArgs where
     unfold createSealPairStep at h
     by_cases hg : stateAuthB s.caps a.actor a.sealerHolder = true ∧ pidFresh s a.pid = true
     · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
-      unfold recTotalAssetWithEscrow recTotalAsset escrowHeldAsset; ring
+      unfold recTotalAsset; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-! ### §1.2 — `sealA`: insert a box binding a HELD payload cap (fail-closed on cap-not-held). -/
@@ -184,7 +184,7 @@ def sealA : EffectHandler SealArgs where
     unfold sealStep at h
     by_cases hg : sealGate s a
     · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
-      unfold recTotalAssetWithEscrow recTotalAsset escrowHeldAsset; ring
+      unfold recTotalAsset; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-! ### §1.3 — `unsealA`: open a box, GRANT the recovered cap to the recipient (fail-closed on no-box). -/
@@ -251,7 +251,7 @@ def unsealA : EffectHandler UnsealArgs where
       | none     => rw [hfind] at h; exact absurd h (by simp)
       | some box =>
           rw [hfind] at h; simp only [Option.some.injEq] at h; subst h
-          unfold recTotalAssetWithEscrow recTotalAsset escrowHeldAsset; ring
+          unfold recTotalAsset; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-! ## §2 — SWISS: the CapTP export/enliven/handoff/GC swiss-table effects (Wave-8 de-THIN).
@@ -291,7 +291,7 @@ def exportStep (k : RecordKernelState) (a : ExportArgs) : Option RecordKernelSta
 /-- `swissExportK` touches only `swiss`, so the combined measure is fixed whenever it commits. -/
 theorem exportStep_measure_fixed (k k' : RecordKernelState) (a : ExportArgs)
     (h : exportStep k a = some k') (b : AssetId) :
-    recTotalAsset k' b = recTotalAsset k b ∧ escrowHeldAsset k' b = escrowHeldAsset k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold exportStep at h
   by_cases hg : stateAuthB k.caps a.actor a.exporter = true
   · rw [if_pos hg] at h; exact swissExportK_balNeutral h b
@@ -321,9 +321,7 @@ def exportSturdyRefA : EffectHandler ExportArgs where
     · rw [if_neg hg] at h; exact absurd h (by simp)
   conserves := by
     intro s a s' h b
-    obtain ⟨hbal, hheld⟩ := exportStep_measure_fixed s s' a h b
-    unfold recTotalAssetWithEscrow
-    rw [hbal, hheld]; ring
+    rw [exportStep_measure_fixed s s' a h b]; ring
 
 /-! ### §2.2 — `enlivenRefA` (= `swissEnlivenK`): grant a live ref, non-amplification carried. -/
 
@@ -349,7 +347,7 @@ def enlivenStep (k : RecordKernelState) (a : EnlivenArgs) : Option RecordKernelS
 /-- `swissEnlivenK` touches only `swiss`, so the combined measure is fixed whenever it commits. -/
 theorem enlivenStep_measure_fixed (k k' : RecordKernelState) (a : EnlivenArgs)
     (h : enlivenStep k a = some k') (b : AssetId) :
-    recTotalAsset k' b = recTotalAsset k b ∧ escrowHeldAsset k' b = escrowHeldAsset k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold enlivenStep at h
   by_cases hg : stateAuthB k.caps a.actor a.exporter = true
   · rw [if_pos hg] at h; exact swissEnlivenK_balNeutral h b
@@ -378,9 +376,7 @@ def enlivenRefA : EffectHandler EnlivenArgs where
     · rw [if_neg hg] at h; exact absurd h (by simp)
   conserves := by
     intro s a s' h b
-    obtain ⟨hbal, hheld⟩ := enlivenStep_measure_fixed s s' a h b
-    unfold recTotalAssetWithEscrow
-    rw [hbal, hheld]; ring
+    rw [enlivenStep_measure_fixed s s' a h b]; ring
 
 /-! ### §2.3 — `swissHandoffA` (= `swissHandoffK`): bind a 3-vat introduce cert, refcount bump. -/
 
@@ -405,7 +401,7 @@ def handoffStep (k : RecordKernelState) (a : HandoffArgs) : Option RecordKernelS
 /-- `swissHandoffK` touches only `swiss`, so the combined measure is fixed whenever it commits. -/
 theorem handoffStep_measure_fixed (k k' : RecordKernelState) (a : HandoffArgs)
     (h : handoffStep k a = some k') (b : AssetId) :
-    recTotalAsset k' b = recTotalAsset k b ∧ escrowHeldAsset k' b = escrowHeldAsset k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold handoffStep at h
   by_cases hg : stateAuthB k.caps a.introducer a.exporter = true
   · rw [if_pos hg] at h; exact swissHandoffK_balNeutral h b
@@ -434,9 +430,7 @@ def swissHandoffA : EffectHandler HandoffArgs where
     · rw [if_neg hg] at h; exact absurd h (by simp)
   conserves := by
     intro s a s' h b
-    obtain ⟨hbal, hheld⟩ := handoffStep_measure_fixed s s' a h b
-    unfold recTotalAssetWithEscrow
-    rw [hbal, hheld]; ring
+    rw [handoffStep_measure_fixed s s' a h b]; ring
 
 /-! ### §2.4 — `swissDropA` (= `swissDropK`): GC a reference (refcount decrement, remove at 0). -/
 
@@ -459,7 +453,7 @@ def dropStep (k : RecordKernelState) (a : DropArgs) : Option RecordKernelState :
 /-- `swissDropK` touches only `swiss`, so the combined measure is fixed whenever it commits. -/
 theorem dropStep_measure_fixed (k k' : RecordKernelState) (a : DropArgs)
     (h : dropStep k a = some k') (b : AssetId) :
-    recTotalAsset k' b = recTotalAsset k b ∧ escrowHeldAsset k' b = escrowHeldAsset k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold dropStep at h
   by_cases hg : stateAuthB k.caps a.actor a.exporter = true
   · rw [if_pos hg] at h; exact swissDropK_balNeutral h b
@@ -487,9 +481,7 @@ def swissDropA : EffectHandler DropArgs where
     · rw [if_neg hg] at h; exact absurd h (by simp)
   conserves := by
     intro s a s' h b
-    obtain ⟨hbal, hheld⟩ := dropStep_measure_fixed s s' a h b
-    unfold recTotalAssetWithEscrow
-    rw [hbal, hheld]; ring
+    rw [dropStep_measure_fixed s s' a h b]; ring
 
 /-! ## §3 — The SEAL+SWISS registry coproduct and the `ClosedEffect` builders.
 
@@ -595,7 +587,7 @@ def skSealed : Option RecordKernelState :=
 #guard ((execEffect (exportSturdyRefEffect 42 0 0 1 [Auth.read]) sk0).isSome)  --  true
 -- §TEETH-9 (export conserves): a committed export leaves the combined per-asset measure UNCHANGED.
 #guard ((execEffect (exportSturdyRefEffect 42 0 0 1 [Auth.read]) sk0).map
-        (fun k => (recTotalAssetWithEscrow sk0 0, recTotalAssetWithEscrow k 0))) == some (100, 100)  --  some (100, 100)
+        (fun k => (recTotalAsset sk0 0, recTotalAsset k 0))) == some (100, 100)  --  some (100, 100)
 -- §TEETH-10 (export UNAUTHORIZED): cell 1 holds no authority over exporter 0 ⇒ none.
 #guard ((execEffect (exportSturdyRefEffect 42 1 0 1 [Auth.read]) sk0).isSome) == false  --  false
 -- §TEETH-11 (enliven/handoff/drop fail-closed on an absent swiss number).
@@ -608,7 +600,7 @@ def skSealed : Option RecordKernelState :=
         (fun k => (findSwiss k.swiss 42).isNone)) == some true  --  some true
 -- §TEETH-13 (turn conserves): a turn [export; enliven] runs the foldlM and conserves the measure.
 #guard ((execTurn [exportSturdyRefEffect 42 0 0 1 [Auth.read], enlivenRefEffect 42 0 0 [Auth.read]] sk0).map
-        (fun k => recTotalAssetWithEscrow k 0)) == some 100  --  some 100
+        (fun k => recTotalAsset k 0)) == some 100  --  some 100
 
 /-! ## §5 — Axiom-hygiene pins (every handler keystone rests only on the three kernel axioms).
 

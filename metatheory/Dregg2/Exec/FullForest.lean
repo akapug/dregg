@@ -145,24 +145,10 @@ def targetOf : FullActionA → CellId
   | .createCellFromFactoryA _ newCell _ => newCell
   | .spawnA _ child _       => child
   | .bridgeMintA _ cell _ _ => cell
-  -- §MA-escrow: escrow/obligation/committed act on the debited `creator`/`obligor` cell; notes act on
-  -- the `actor` (the SET-touching node). The `targetOf` discriminant `sameTargetForest` reads.
-  | .createEscrowA _ _ creator _ _ _        => creator
-  | .releaseEscrowA _ actor                 => actor
-  | .refundEscrowA _ actor                  => actor
-  | .createObligationA _ _ obligor _ _ _    => obligor
-  | .fulfillObligationA _ actor             => actor
-  | .slashObligationA _ actor               => actor
+  -- §MA-note: notes act on the `actor` (the SET-touching node). (F1b: the escrow/obligation/
+  -- committed-escrow/bridge-LFC arms are GONE with the kernel holding-store — factory cells own them.)
   | .noteSpendA _ actor _                   => actor
   | .noteCreateA _ actor                    => actor
-  | .createCommittedEscrowA _ _ creator _ _ _ _ => creator
-  | .releaseCommittedEscrowA _ actor        => actor
-  | .refundCommittedEscrowA _ actor         => actor
-  -- §MA-bridge: the bridge LOCK acts on the debited `originator` cell; finalize/cancel act on the
-  -- `actor` (the holding-store-touching node, like the escrow settle / notes).
-  | .bridgeLockA _ _ originator _ _ _       => originator
-  | .bridgeFinalizeA _ actor _ _            => actor
-  | .bridgeCancelA _ actor                  => actor
   -- §MA-seal (Wave-3 DE-SHADOW): seal acts on the sealing `actor` (the box-storing node); unseal on the
   -- `recipient` (the cap's new holder); createSealPair on the `sealerHolder`. makeSovereign/refusal/
   -- receiptArchive act on the WRITTEN cell.
@@ -175,8 +161,8 @@ def targetOf : FullActionA → CellId
   -- §MA-queue: the 4 ring-buffer FIFO queue effects act on the queue's representing `cell` (the
   -- `stateAuthB`-gated node the chained step touches).
   | .queueAllocateA _ _ cell _              => cell
-  | .queueEnqueueA _ _ _ cell _ _ _         => cell
-  | .queueDequeueA _ _ cell _             => cell
+  | .queueEnqueueA _ _ _ cell               => cell
+  | .queueDequeueA _ _ cell                 => cell
   | .queueResizeA _ _ _ cell                => cell
   -- §MA-queue-batch (WAVE 4): the atomic batch + pipelinedSend act on the `actor` (the batch-commit /
   -- apply-time node); the pipeline step on the source-queue `owner` (the dequeuer the routing roots at).
@@ -374,7 +360,7 @@ pre-order lowering, for EVERY asset `b` independently. The tree generalization o
 could not state it (it would let a mint of asset B net against a burn of asset A). -/
 theorem execFullForestA_ledger_per_asset (s s' : RecChainedState) (f : FullForestA) (b : AssetId)
     (h : execFullForestA s f = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b + turnLedgerDeltaAsset (lowerForestA f) b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b + turnLedgerDeltaAsset (lowerForestA f) b := by
   rw [execFullForestA_eq_execFullTurnA] at h
   exact execFullTurnA_ledger_per_asset s s' (lowerForestA f) b h
 
@@ -385,7 +371,7 @@ whose per-asset mint/burn nets out in EACH asset, conserves EVERY asset class. T
 `CONSERVATION_VECTOR` at the forest level. -/
 theorem execFullForestA_conserves_per_asset (s s' : RecChainedState) (f : FullForestA) (b : AssetId)
     (h : execFullForestA s f = some s') (hzero : turnLedgerDeltaAsset (lowerForestA f) b = 0) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   rw [execFullForestA_ledger_per_asset s s' f b h, hzero, add_zero]
 
 /-! ## §6 — `execFullForestA_no_amplify`: delegated caps NEVER amplify (Granovetter across the forest).

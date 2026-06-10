@@ -365,7 +365,7 @@ the node invokes — a single committed run discharges, in one statement, the th
 guarantees over the THING THAT RUNS:
 
   * **B (conservation):** an asset `b` whose per-asset net is `0` has its total supply
-    (`recTotalAssetWithEscrow`) exactly preserved across the gated forest — conservation
+    (`recTotalAsset`) exactly preserved across the gated forest — conservation
     survives the credential+caveat gate.
   * **A (no amplification):** EVERY delegation edge of the forest is non-amplifying
     (`capAuthConferred (attenuate ·) ⊆ capAuthConferred ·`) — Granovetter survives the gate.
@@ -385,7 +385,7 @@ theorem running_entry_sound
     (b : AssetId)
     (h : execFullForestG s f = some s')
     (hzero : turnLedgerDeltaAsset ((lowerForestG f).map Prod.snd) b = 0) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b
       ∧ (∀ e ∈ forestEdgesG f, capAuthConferred (attenuate e.1 e.2) ⊆ capAuthConferred e.2)
       ∧ (∀ p ∈ lowerForestG f, ∃ sa sa',
           execFullAGated sa p.1 p.2 = some sa' ∧ gatedActionInvG sa p.1 p.2 sa') :=

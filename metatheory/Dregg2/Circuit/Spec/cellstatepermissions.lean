@@ -130,7 +130,7 @@ def SetPermissionsSpec (s : RecChainedState) (actor cell : CellId) (p : Int)
   ∧ s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log
   -- THE FRAME: every one of the 16 OTHER kernel components literally unchanged
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
-  ∧ s'.kernel.escrows = s.kernel.escrows ∧ s'.kernel.nullifiers = s.kernel.nullifiers
+  ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
   ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.queues = s.kernel.queues
   ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
@@ -157,7 +157,7 @@ theorem stateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell : C
                                      else s.kernel.cell c)
         ∧ s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log
         ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
-        ∧ s'.kernel.escrows = s.kernel.escrows ∧ s'.kernel.nullifiers = s.kernel.nullifiers
+        ∧ s'.kernel.nullifiers = s.kernel.nullifiers
         ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
         ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.queues = s.kernel.queues
         ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
@@ -174,13 +174,12 @@ theorem stateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell : C
     constructor
     · intro h
       simp only [Option.some.injEq] at h; subst h
-      refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl, rfl, rfl, rfl⟩
-    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+      refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
       obtain ⟨k', l'⟩ := s'
-      obtain ⟨a, ce, ca, es, nu, re, co, ba, qu, sw, sl, fa, li, dc, de, dg, sb, dge, dgea⟩ := k'
-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      obtain ⟨a, ce, ca, nu, re, co, ba, qu, sw, sl, fa, li, dc, de, dg, sb, dge, dgea⟩ := k'
+      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
       rfl
   · rw [if_neg hg]
     constructor
@@ -224,7 +223,7 @@ per-asset `bal` ledger is literally unchanged: a permissions write moves NO valu
 theorem execFullA_setPermissions_balFrame {s s' : RecChainedState} {actor cell : CellId}
     {p : Int} (h : execFullA s (.setPermissionsA actor cell p) = some s') :
     s'.kernel.bal = s.kernel.bal :=
-  ((execFullA_setPermissions_iff_spec s actor cell p s').mp h).2.2.2.2.2.2.2.2.2.1
+  ((execFullA_setPermissions_iff_spec s actor cell p s').mp h).2.2.2.2.2.2.2.2.1
 
 /-- **`execFullA_setPermissions_capFrame` — CAP-GRAPH untouched (no authority amplification).** The
 `caps` table is literally unchanged: a permissions write edits NO capability. (Note: this is a

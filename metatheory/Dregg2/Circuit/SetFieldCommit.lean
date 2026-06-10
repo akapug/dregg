@@ -446,7 +446,7 @@ theorem setfield_circuit_full_sound
   have hRHeq : RH s.kernel = RH s'.kernel :=
     (sfrest_iff CH RH cmb compressN LH s actor cell f v s').mp hrestgate
   have hframe16 := (hRest s.kernel s'.kernel).mp hRHeq
-  obtain ⟨hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs,
+  obtain ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs,
     hSB⟩ := hframe16
   -- frame digests equal ⇒ untouched cells equal (PROVED FrameDigestBindsCells, REUSED).
   have hfdeq : StateCommit.frameDigest CH compressN s.kernel (sfFrameCarrier s.kernel cell)
@@ -485,7 +485,7 @@ theorem setfield_circuit_full_sound
         exact (hwf c hcacc).symm
   -- assemble SetFieldSpec (guard ∧ cell map ∧ log ∧ the 16 frame clauses).
   exact ⟨hguard, hcellmap, hlogspec,
-    hAcc, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
+    hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
 
 #assert_axioms setfield_circuit_full_sound
 
@@ -520,12 +520,12 @@ theorem setfield_circuit_full_complete
     (s : RecChainedState) (actor cell : CellId) (f : FieldName) (v : Int) (s' : RecChainedState)
     (hspec : SetFieldSpec s actor cell f v s') :
     satisfiedSF cmb (encodeSF CH RH cmb compressN LH s actor cell f v s') := by
-  obtain ⟨hguard, hcell, hlog, hAcc, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+  obtain ⟨hguard, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
     hDC, hDel, hDgs, hSB⟩ := hspec
   obtain ⟨hcav, hauth, hmem, hlive⟩ := hguard
   -- frame-gate facts.
   have hRHeq : RH s.kernel = RH s'.kernel := (hRest s.kernel s'.kernel).mpr
-    ⟨hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
+    ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif, hDC, hDel, hDgs, hSB⟩
   -- every untouched leaf agrees (the cell map is `setFieldCellMap`, which only touches `cell`).
   have hcellc : ∀ c ∈ sfFrameCarrier s.kernel cell, CH c (s.kernel.cell c) = CH c (s'.kernel.cell c) := by
     intro c hc
@@ -589,7 +589,7 @@ theorem setFieldCircuit_rejects_field_tamper
   have hRHeq : RH s.kernel = RH s'.kernel :=
     (sfrest_iff CH RH cmb compressN LH s actor cell f v s').mp hrestgate
   have hframe16 := (hRest s.kernel s'.kernel).mp hRHeq
-  obtain ⟨_, _, _, _, hNul, _⟩ := hframe16
+  obtain ⟨_, _, _, hNul, _⟩ := hframe16
   exact hfield hNul
 
 #assert_axioms setFieldCircuit_rejects_field_tamper

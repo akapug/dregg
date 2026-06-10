@@ -10,7 +10,7 @@ their frame/non-amplification lemmas) and `Dregg2.Exec.Caps`.
 
 Every effect of this batch is balance-NEUTRAL: it edits the `caps` cap-graph (or merely the actor's
 own c-list) and NEVER the `bal` ledger or the `escrows` holding-store, so the COMBINED per-asset
-measure `recTotalAssetWithEscrow` is UNCHANGED at every asset — `delta = 0`, and `conserves` is the
+measure `recTotalAsset` is UNCHANGED at every asset — `delta = 0`, and `conserves` is the
 trivial `caps`-only frame (`recTotalAsset` reads `bal`+`accounts`, `escrowHeldAsset` reads `escrows`;
 neither touches `caps`, so both reduce on the post-state by `ring`).
 
@@ -62,17 +62,16 @@ open scoped BigOperators
 /-! ## §0 — The `caps`-only frame: an authority edit conserves the combined per-asset measure.
 
 Every step of this batch produces a post-state of the form `{ k with caps := … }` (or merely re-binds
-`caps`). `recTotalAssetWithEscrow k b = recTotalAsset k b + escrowHeldAsset k b` reads `bal`+`accounts`
+`caps`). `recTotalAsset k b = recTotalAsset k b + escrowHeldAsset k b` reads `bal`+`accounts`
 (via `recTotalAsset`) and `escrows` (via `escrowHeldAsset`) — NEVER `caps`. So a `caps`-only edit leaves
 the combined measure UNCHANGED at every asset. This single frame lemma discharges `conserves` for the
 whole cluster (composed with each step's `caps`-only post-state shape). -/
 
 /-- A `caps`-only re-binding leaves the combined per-asset measure fixed at every asset. The shared
-`conserves` engine for the whole authority cluster: `recTotalAsset` (= `∑ bal`) and `escrowHeldAsset`
-(= `∑` over `escrows`) both ignore `caps`. -/
-theorem capsOnly_recTotalAssetWithEscrow_fixed (k : RecordKernelState) (f : Caps) (b : AssetId) :
-    recTotalAssetWithEscrow { k with caps := f } b = recTotalAssetWithEscrow k b := by
-  simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]
+`conserves` engine for the whole authority cluster: `recTotalAsset` (= `∑ bal`) ignores `caps`. -/
+theorem capsOnly_recTotalAsset_fixed (k : RecordKernelState) (f : Caps) (b : AssetId) :
+    recTotalAsset { k with caps := f } b = recTotalAsset k b := by
+  simp only [recTotalAsset]
 
 /-! ## §1 — DELEGATIONS: the attenuated Granovetter grant (the KEY FIX).
 
@@ -143,7 +142,7 @@ def delegateAttenH : EffectHandler DelegateArgs where
     unfold delegateAttenStep recKDelegateAtten at h
     by_cases hg : (s.caps a.delegator).any (fun cap => confersEdgeTo a.target cap) = true
     · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
-      rw [capsOnly_recTotalAssetWithEscrow_fixed]; ring
+      rw [capsOnly_recTotalAsset_fixed]; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **`delegateAttenH` is NON-AMPLIFYING (the headline, PROVED).** The cap the delegation grants the
@@ -209,7 +208,7 @@ def revokeH : EffectHandler RevokeArgs where
     simp only [Option.some.injEq] at h; subst h
     -- `recKRevokeTarget` produces `{ s with caps := … }` — a caps-only edit.
     unfold recKRevokeTarget
-    rw [capsOnly_recTotalAssetWithEscrow_fixed]; ring
+    rw [capsOnly_recTotalAsset_fixed]; ring
 
 /-- **`revokeH` is SELF-LIMITING (PROVED).** After the revoke, the holder's surviving caps are a SUBLIST
 of its pre-state caps at EVERY slot (`recKRevokeTarget` only filters), so authority strictly shrinks —
@@ -262,7 +261,7 @@ def attenuateH : EffectHandler AttenuateArgs where
     intro s a s' h b
     unfold attenuateStep at h
     simp only [Option.some.injEq] at h; subst h
-    rw [capsOnly_recTotalAssetWithEscrow_fixed]; ring
+    rw [capsOnly_recTotalAsset_fixed]; ring
 
 /-- **`attenuateH` is NON-AMPLIFYING (PROVED).** The narrowed cap confers a genuine `List Auth` SUBSET
 of the original: `capAuthConferred (attenuate keep c) ⊆ capAuthConferred c` (`attenuate_subset`). The
@@ -430,13 +429,13 @@ def readOnlyCert : Dregg2.Exec.CapTP.HandoffCert CellId (List Auth) :=
 
 -- §TEETH-8 (CONSERVATION): a within-rights delegation leaves the combined per-asset measure UNCHANGED.
 #guard ((execEffect (delegateEffect 0 1 7) as0).map
-        (fun k => (recTotalAssetWithEscrow as0 0, recTotalAssetWithEscrow k 0))) == some (100, 100)  --  some (100, 100)
+        (fun k => (recTotalAsset as0 0, recTotalAsset k 0))) == some (100, 100)  --  some (100, 100)
 -- §TEETH-9 (CONSERVATION): a revoke leaves the combined per-asset measure UNCHANGED.
-#guard ((execEffect (revokeEffect 0 7) as0).map (fun k => recTotalAssetWithEscrow k 0)) == some 100  --  some 100
+#guard ((execEffect (revokeEffect 0 7) as0).map (fun k => recTotalAsset k 0)) == some 100  --  some 100
 -- §TEETH-10 (turn conserves): a turn = [delegate; attenuate; revoke] runs through the registry foldlM
 -- and the combined measure is unchanged (every authority effect has `delta = 0`).
 #guard ((execTurn [delegateEffect 0 1 7, attenuateEffect 0 1 [], revokeEffect 1 7] as0).map
-        (fun k => recTotalAssetWithEscrow k 0)) == some 100  --  some 100
+        (fun k => recTotalAsset k 0)) == some 100  --  some 100
 
 /-! ## §5 — turnDelta cross-check: the authority turn moves the measure by exactly 0. -/
 #guard (turnDelta [delegateEffect 0 1 7, attenuateEffect 0 1 [], revokeEffect 1 7] 0) == 0  --  0
@@ -448,7 +447,7 @@ proofs), so these pins certify that delegation/revocation soundness rests only o
 a `sorryAx` anywhere in the composed lemmas would fail the pin (and the build). The non-amplification /
 self-limiting keystones are pinned directly. -/
 
-#assert_axioms capsOnly_recTotalAssetWithEscrow_fixed
+#assert_axioms capsOnly_recTotalAsset_fixed
 #assert_axioms delegateAttenH
 #assert_axioms delegateH
 #assert_axioms introduceH

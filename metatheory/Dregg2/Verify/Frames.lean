@@ -206,17 +206,9 @@ attribute [aesop safe apply (rule_sets := [Dregg2])]
   recKDelegate_commitments
   recKDelegateAtten_commitments
   noteSpendNullifier_commitments
-  createEscrowKAsset_commitments
-  releaseEscrowKAsset_commitments
-  refundEscrowKAsset_commitments
-  bridgeLockKAsset_commitments
-  bridgeFinalizeKAsset_commitments
-  bridgeCancelKAsset_commitments
   queueAllocateK_commitments
   queueEnqueueK_commitments
   queueDequeueK_commitments
-  queueEnqueueDepositK_commitments
-  queueDequeueRefundK_commitments
   queueResizeK_commitments
   swissExportK_commitments
   swissEnlivenK_commitments
@@ -229,8 +221,6 @@ attribute [aesop safe apply (rule_sets := [Dregg2])]
   writeField_commitments
   makeSovereignKernel_commitments
   createCellIntoAsset_commitments
-  createEscrowRawAsset_commitments
-  settleEscrowRawAsset_commitments
 
 attribute [aesop safe apply (rule_sets := [Dregg2])]
   -- the FOREST-level grow lifts — the reusable public entry points the crowns stand on.

@@ -11,7 +11,7 @@ admitted.
 
 This module is a SMALL, STANDALONE proof-of-approach for the cure — NOT a cutover. It does not touch
 `TurnExecutorFull`; it reuses its already-proved kernel palette (`recKExecAsset_conserves_per_asset`,
-`escrow_create_conserves_combined_per_asset`, `authorizedB`, `acceptsEffects`) and shows that:
+`authorizedB`, `acceptsEffects`) and shows that:
 
   1. An **`EffectHandler`** bundles the effect's DATA (`step`/`delta`/`auth`/`admission`/`trace`) WITH
      its OBLIGATION PROOFS (`auth_gated`/`admission_gated`/`conserves`) in ONE structure. The structure
@@ -25,7 +25,8 @@ This module is a SMALL, STANDALONE proof-of-approach for the cure — NOT a cuto
      induction that consumes each handler's `conserves` field — the per-effect deltas SUM. This is the
      proof-matrix killer: the invariant is proved at the algebra level, never re-stated per effect.
 
-  4. THREE real handlers are registered (`transferH`, `escrowH`, `stateH`), discharging every obligation
+  4. TWO real handlers are registered (`transferH`, `stateH` — F1b: `escrowH` left with the kernel
+     escrow holding-store; the factory contract owns escrow), discharging every obligation
      by COMPOSING the proved kernel lemmas (never re-deriving conservation). `transferH`'s `admission`
      gate is `acceptsEffects` on the destination cell — wrapping the step so a transfer into a
      non-Live (Sealed/Destroyed) cell is REJECTED. **That closes the R1 hole for this slice**, and
@@ -63,7 +64,7 @@ are discharged against `step`:
   * `auth_gated`      — every commit was authorized (no state change without authority);
   * `admission_gated` — every commit passed the lifecycle gate (no effect into a non-Live cell — the
                         R1 hole, here a TYPING obligation);
-  * `conserves`       — every commit moves the COMBINED per-asset measure `recTotalAssetWithEscrow` by
+  * `conserves`       — every commit moves the COMBINED per-asset measure `recTotalAsset` by
                         EXACTLY `delta` (per asset). This is the per-effect contribution the global
                         `turn_conserves` will SUM. -/
 structure EffectHandler (Args : Type) where
@@ -83,7 +84,7 @@ structure EffectHandler (Args : Type) where
   admission_gated : ∀ s a s', step s a = some s' → admission s a = true
   /-- OBLIGATION: every commit moves the combined per-asset measure by EXACTLY `delta`, per asset. -/
   conserves : ∀ s a s', step s a = some s' →
-    ∀ b, recTotalAssetWithEscrow s' b = recTotalAssetWithEscrow s b + delta a b
+    ∀ b, recTotalAsset s' b = recTotalAsset s b + delta a b
 
 /-! ## §2 — The registry coproduct and LOOKUP-based dispatch.
 
@@ -160,7 +161,7 @@ per-asset measure by EXACTLY its `effectDelta`. Pure projection of the handler's
 — the algebra-level statement every registered handler satisfies BY TYPING. -/
 theorem execEffect_conserves (e : ClosedEffect) (s s' : RecordKernelState)
     (h : execEffect e s = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s' b = recTotalAssetWithEscrow s b + effectDelta e b :=
+    recTotalAsset s' b = recTotalAsset s b + effectDelta e b :=
   e.handler.conserves s e.args s' h b
 
 /-- **`turn_conserves` — THE HEADLINE (PROVED, ONE generic induction).** For ANY list of closed effects
@@ -170,7 +171,7 @@ the per-effect deltas, at EVERY asset `b`. Proved by `List.foldlM` induction reu
 killer: O(1) global theorem over an O(n) registry. -/
 theorem turn_conserves :
     ∀ (es : List ClosedEffect) (s s' : RecordKernelState),
-      execTurn es s = some s' → ∀ b, recTotalAssetWithEscrow s' b = recTotalAssetWithEscrow s b + turnDelta es b := by
+      execTurn es s = some s' → ∀ b, recTotalAsset s' b = recTotalAsset s b + turnDelta es b := by
   intro es
   induction es with
   | nil =>
@@ -218,8 +219,7 @@ theorem turn_head_admitted (e : ClosedEffect) (rest : List ClosedEffect)
 /-! ## §4 — THE 3-EFFECT SLICE: real handlers, obligations discharged by the kernel palette.
 
 Each handler's obligations are closed by COMPOSING the already-proved `RecordKernel` lemmas. We never
-re-derive conservation — we cite `recKExecAsset_conserves_per_asset` /
-`escrow_create_conserves_combined_per_asset` and bridge them to the combined measure. -/
+re-derive conservation — we cite `recKExecAsset_conserves_per_asset` and friends directly. -/
 
 /-! ### §4.1 — `transferH`: per-asset transfer, gated on destination liveness (CLOSES R1).
 
@@ -242,25 +242,9 @@ structure TransferArgs where
 def transferStep (k : RecordKernelState) (a : TransferArgs) : Option RecordKernelState :=
   if acceptsEffects k a.turn.dst then recKExecAsset k a.turn a.asset else none
 
-/-- `recKExecAsset` keeps `escrows` (and every non-`bal` field) fixed, so its post-state's holding-store
-is literally unchanged — the combined measure follows the bare-ledger measure. -/
-theorem transferStep_escrowHeld_fixed (k k' : RecordKernelState) (a : TransferArgs)
-    (h : transferStep k a = some k') (b : AssetId) :
-    escrowHeldAsset k' b = escrowHeldAsset k b := by
-  unfold transferStep at h
-  by_cases hadm : acceptsEffects k a.turn.dst
-  · rw [if_pos hadm] at h
-    -- post-state of recKExecAsset is `{ k with bal := … }` whenever it commits; escrows untouched.
-    unfold recKExecAsset at h
-    by_cases hg : authorizedB k.caps a.turn = true ∧ 0 ≤ a.turn.amt ∧ a.turn.amt ≤ k.bal a.turn.src a.asset
-        ∧ a.turn.src ≠ a.turn.dst ∧ a.turn.src ∈ k.accounts ∧ a.turn.dst ∈ k.accounts
-    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h; rfl
-    · rw [if_neg hg] at h; exact absurd h (by simp)
-  · rw [if_neg hadm] at h; exact absurd h (by simp)
-
 /-- **`transferH` — the registered transfer handler.** All three obligations discharged by composing
-the proved kernel lemmas: `conserves` from `recKExecAsset_conserves_per_asset` (bare ledger) bridged
-through `transferStep_escrowHeld_fixed` (holding-store fixed) to the COMBINED measure; `auth_gated` from
+the proved kernel lemmas: `conserves` from `recKExecAsset_conserves_per_asset` (the per-asset
+cell-sum IS the conserved measure — F1b: the kernel holding-store is GONE); `auth_gated` from
 `recKExecAsset_authorized`; `admission_gated` from the wrapping `if`. -/
 def transferH : EffectHandler TransferArgs where
   step := transferStep
@@ -282,90 +266,18 @@ def transferH : EffectHandler TransferArgs where
     · rw [if_neg hadm] at h; exact absurd h (by simp)
   conserves := by
     intro s a s' h b
-    -- combined = bare + held; bare conserved by the keystone, held fixed by the wrapper.
     have hbare : recTotalAsset s' b = recTotalAsset s b := by
       unfold transferStep at h
       by_cases hadm : acceptsEffects s a.turn.dst
       · rw [if_pos hadm] at h; exact recKExecAsset_conserves_per_asset s s' a.turn a.asset h b
       · rw [if_neg hadm] at h; exact absurd h (by simp)
-    have hheld : escrowHeldAsset s' b = escrowHeldAsset s b := transferStep_escrowHeld_fixed s s' a h b
-    unfold recTotalAssetWithEscrow
-    rw [hbare, hheld]; ring
+    rw [hbare]; ring
 
-/-! ### §4.2 — `escrowH`: per-asset escrow create, combined-conserving.
+/-! ### §4.2 — (F1b) `escrowH` is GONE with the kernel escrow holding-store.
 
-`createEscrowKAsset` debits the bare ledger by `amount` and parks the same `amount` in the holding-store,
-so the COMBINED per-asset measure is unchanged — `delta = 0`. `conserves` cites the proved
-`escrow_create_conserves_combined_per_asset` directly. `auth_gated` is extracted from `createEscrowKAsset`'s
-own fail-closed gate (the same `authorizedB` over the synthesized create-turn). Escrow create has no
-destination-cell lifecycle gate in the proved kernel (it debits the creator, parks off-ledger), so the
-admission gate here is `acceptsEffects` on the CREATOR cell — the actor must be Live to act. -/
-
-/-- Escrow-create arguments (the executable `createEscrowKAsset` signature). -/
-structure EscrowArgs where
-  /-- The escrow record id. -/
-  id : Nat
-  /-- The actor performing the create (authority subject). -/
-  actor : CellId
-  /-- The creator whose `asset` column is debited. -/
-  creator : CellId
-  /-- The recipient the escrow will eventually settle to. -/
-  recipient : CellId
-  /-- The locked asset. -/
-  asset : AssetId
-  /-- The locked amount. -/
-  amount : Int
-
-/-- The synthesized authority turn `createEscrowKAsset` checks (`actor` moves `amount` creator⇒recipient). -/
-def escrowTurn (a : EscrowArgs) : Turn :=
-  { actor := a.actor, src := a.creator, dst := a.recipient, amt := a.amount }
-
-/-- The lifecycle-gated escrow create: the CREATOR must be Live, then run the proved create. -/
-def escrowStep (k : RecordKernelState) (a : EscrowArgs) : Option RecordKernelState :=
-  if acceptsEffects k a.creator then
-    createEscrowKAsset k a.id a.actor a.creator a.recipient a.asset a.amount
-  else none
-
-/-- Authority extracted from `createEscrowKAsset`'s fail-closed gate. -/
-theorem escrowStep_authorized (k k' : RecordKernelState) (a : EscrowArgs)
-    (h : escrowStep k a = some k') : authorizedB k.caps (escrowTurn a) = true := by
-  unfold escrowStep at h
-  by_cases hadm : acceptsEffects k a.creator
-  · rw [if_pos hadm] at h
-    unfold createEscrowKAsset escrowTurn at *
-    by_cases hg : authorizedB k.caps { actor := a.actor, src := a.creator, dst := a.recipient, amt := a.amount } = true
-        ∧ 0 ≤ a.amount ∧ a.amount ≤ k.bal a.creator a.asset ∧ a.creator ∈ k.accounts
-        ∧ ¬ (∃ r ∈ k.escrows, r.id = a.id)
-    · exact hg.1
-    · rw [if_neg hg] at h; exact absurd h (by simp)
-  · rw [if_neg hadm] at h; exact absurd h (by simp)
-
-/-- **`escrowH` — the registered escrow-create handler.** `conserves` cites the proved combined-conservation
-keystone (`delta = 0`); `auth_gated` via `escrowStep_authorized`; `admission_gated` from the creator-Live
-wrapper. -/
-def escrowH : EffectHandler EscrowArgs where
-  step := escrowStep
-  delta := fun _ _ => 0           -- debit ledger / park in store ⇒ combined measure fixed
-  auth := fun k a => authorizedB k.caps (escrowTurn a)
-  admission := fun k a => acceptsEffects k a.creator
-  trace := escrowTurn
-  auth_gated := by intro s a s' h; exact escrowStep_authorized s s' a h
-  admission_gated := by
-    intro s a s' h
-    unfold escrowStep at h
-    by_cases hadm : acceptsEffects s a.creator
-    · exact hadm
-    · rw [if_neg hadm] at h; exact absurd h (by simp)
-  conserves := by
-    intro s a s' h b
-    unfold escrowStep at h
-    by_cases hadm : acceptsEffects s a.creator
-    · rw [if_pos hadm] at h
-      have := escrow_create_conserves_combined_per_asset (k := s) (k' := s') (id := a.id)
-        (actor := a.actor) (creator := a.creator) (recipient := a.recipient)
-        (asset := a.asset) (amount := a.amount) b h
-      rw [this]; ring
-    · rw [if_neg hadm] at h; exact absurd h (by simp)
+The escrow-create handler rode on `createEscrowKAsset` + the `escrows` side-table; F1b deleted both.
+Escrow semantics (deposit/release/refund + conservation/no-double-resolve/condition keystones) live in
+the proven factory contract (`Apps/EscrowFactory.lean`) over factory-born cells' OWN `bal` columns. -/
 
 /-! ### §4.3 — `stateH`: a balance-NEUTRAL lifecycle/field write, gated on cell liveness.
 
@@ -419,35 +331,24 @@ def stateH : EffectHandler StateArgs where
     unfold stateStep at h
     by_cases hadm : acceptsEffects s a.cell
     · rw [if_pos hadm] at h; simp only [Option.some.injEq] at h; subst h
-      unfold recTotalAssetWithEscrow
-      rw [setLifecycle_recTotalAsset]
-      -- escrows untouched by setLifecycle ⇒ escrowHeldAsset unchanged
-      have hheld : escrowHeldAsset (setLifecycle s a.cell lcLive) b = escrowHeldAsset s b := by
-        unfold escrowHeldAsset setLifecycle; rfl
-      rw [hheld]; ring
+      rw [setLifecycle_recTotalAsset]; ring
     · rw [if_neg hadm] at h; exact absurd h (by simp)
 
-/-! ### §4.4 — The registry: the three handlers as the coproduct menu. -/
+/-! ### §4.4 — The registry: the slice handlers as the coproduct menu. -/
 
-/-- The registry (coproduct) of the v1 slice: transfer, escrow-create, state-write. Adding an effect is
-adding one well-typed `PackedHandler` — the obligation proofs are a TYPING condition on entry. -/
+/-- The registry (coproduct) of the v1 slice: transfer, state-write (F1b: the escrow-create handler is
+GONE with the kernel holding-store — the factory contract owns escrow). Adding an effect is adding one
+well-typed `PackedHandler` — the obligation proofs are a TYPING condition on entry. -/
 def slice3Registry : Registry :=
-  [ ⟨TransferArgs, transferH⟩, ⟨EscrowArgs, escrowH⟩, ⟨StateArgs, stateH⟩ ]
+  [ ⟨TransferArgs, transferH⟩, ⟨StateArgs, stateH⟩ ]
 
 /-- Build a closed transfer effect (tag `0`). -/
 def transferEffect (t : Turn) (asset : AssetId) : ClosedEffect :=
   { tag := 0, Args := TransferArgs, args := { turn := t, asset := asset }, handler := transferH }
 
-/-- Build a closed escrow-create effect (tag `1`). -/
-def escrowEffect (id : Nat) (actor creator recipient : CellId) (asset : AssetId) (amount : Int) :
-    ClosedEffect :=
-  { tag := 1, Args := EscrowArgs,
-    args := { id := id, actor := actor, creator := creator, recipient := recipient,
-              asset := asset, amount := amount }, handler := escrowH }
-
-/-- Build a closed state-write effect (tag `2`). -/
+/-- Build a closed state-write effect (tag `1`). -/
 def stateEffect (cell : CellId) : ClosedEffect :=
-  { tag := 2, Args := StateArgs, args := { cell := cell }, handler := stateH }
+  { tag := 1, Args := StateArgs, args := { cell := cell }, handler := stateH }
 
 /-! ## §5 — TEETH: the R1 attack, evaluated.
 
@@ -476,15 +377,12 @@ def goodTransfer : ClosedEffect := transferEffect { actor := 0, src := 0, dst :=
 #guard ((execEffect goodTransfer hs0).isSome)  --  true   (honest path admitted)
 -- §TEETH-3: conservation — the combined per-asset measure is UNCHANGED by the honest transfer (delta 0).
 #guard ((execEffect goodTransfer hs0).map
-        (fun k => (recTotalAssetWithEscrow k 0, recTotalAssetWithEscrow hs0 0))) == some (100, 100)  --  some (100, 100)
+        (fun k => (recTotalAsset k 0, recTotalAsset hs0 0))) == some (100, 100)  --  some (100, 100)
 -- §TEETH-4: a turn = [transfer; state-write on cell 1] runs through the registry foldlM and conserves.
 #guard ((execTurn [goodTransfer, stateEffect 1] hs0).map
-        (fun k => recTotalAssetWithEscrow k 0)) == some 100  --  some 100
+        (fun k => recTotalAsset k 0)) == some 100  --  some 100
 -- §TEETH-5: a state-write into the SEALED cell 1 is REJECTED (admission bites for stateH too).
 #guard ((execEffect (stateEffect 1) hs0Sealed).isSome) == false  --  false
--- §TEETH-6: escrow-create from the LIVE owner cell 0 succeeds and conserves the combined measure.
-#guard ((execEffect (escrowEffect 7 0 0 1 0 40) hs0).map
-        (fun k => (recTotalAssetWithEscrow k 0, recTotalAsset k 0, escrowHeldAsset k 0))) == some (100, 60, 40)  --  some (100, 60, 40)
 -- §TEETH-7: an UNAUTHORIZED transfer (actor 5 owns nothing, holds no cap) is REJECTED even into a Live cell.
 #guard ((execEffect (transferEffect { actor := 5, src := 0, dst := 1, amt := 30 } 0) hs0).isSome) == false  --  false
 
@@ -496,8 +394,6 @@ def goodTransfer : ClosedEffect := transferEffect { actor := 0, src := 0, dst :=
 #assert_axioms execEffect_conserves
 -- the per-handler obligation discharges (pinning the structure projections is enough: the literal
 -- carries the proofs, so pinning the handlers pins their obligation fields transitively):
-#assert_axioms transferStep_escrowHeld_fixed
-#assert_axioms escrowStep_authorized
 #assert_axioms setLifecycle_recTotalAsset
 
 /-! ## §DEFER — honest scope of this v1 slice.

@@ -863,7 +863,7 @@ through `lowerForestG_actions_eq_eraseG`. The auth gate is ORTHOGONAL to conserv
 teeth SURVIVE (a per-asset nonzero delta in each asset is still CAUGHT). -/
 
 /-- **`execFullForestG_ledger_per_asset` — PROVED (the per-asset VECTOR survives the gate).** A
-committed gated full-forest moves `recTotalAssetWithEscrow b` by EXACTLY the net per-asset ledger delta
+committed gated full-forest moves `recTotalAsset b` by EXACTLY the net per-asset ledger delta
 of its action-projection, for EVERY asset `b`. The CONSERVATION VECTOR end-to-end across the gated
 tree — read off the EXISTING `execFullForestA_ledger_per_asset` applied to `eraseG f`. -/
 theorem execFullForestG_ledger_per_asset (s s' : RecChainedState)
@@ -871,8 +871,8 @@ theorem execFullForestG_ledger_per_asset (s s' : RecChainedState)
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
       (Bytes := Bytes) (Tag := Tag)) (b : AssetId)
     (h : execFullForestG s f = some s') :
-    recTotalAssetWithEscrow s'.kernel b
-      = recTotalAssetWithEscrow s.kernel b
+    recTotalAsset s'.kernel b
+      = recTotalAsset s.kernel b
         + turnLedgerDeltaAsset ((lowerForestG f).map Prod.snd) b := by
   rw [lowerForestG_actions_eq_eraseG]
   exact FullForest.execFullForestA_ledger_per_asset s s' (eraseG f) b (execFullForestG_erases s s' f h)
@@ -888,7 +888,7 @@ theorem execFullForestG_conserves_per_asset (s s' : RecChainedState)
       (Bytes := Bytes) (Tag := Tag)) (b : AssetId)
     (h : execFullForestG s f = some s')
     (hzero : turnLedgerDeltaAsset ((lowerForestG f).map Prod.snd) b = 0) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   rw [execFullForestG_ledger_per_asset s s' f b h, hzero, add_zero]
 
 /-- **`execFullForestG_no_amplify` — PROVED (Granovetter survives the gate).** EVERY delegation edge

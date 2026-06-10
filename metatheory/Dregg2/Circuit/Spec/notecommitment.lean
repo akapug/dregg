@@ -116,7 +116,6 @@ def NoteCreateASpec (st : RecChainedState) (cm : Nat) (actor : CellId)
   ∧ st'.kernel.accounts = st.kernel.accounts
   ∧ st'.kernel.cell = st.kernel.cell
   ∧ st'.kernel.caps = st.kernel.caps
-  ∧ st'.kernel.escrows = st.kernel.escrows
   ∧ st'.kernel.nullifiers = st.kernel.nullifiers
   ∧ st'.kernel.revoked = st.kernel.revoked
   ∧ st'.kernel.bal = st.kernel.bal
@@ -146,13 +145,13 @@ theorem noteCreateChainA_iff_spec (st : RecChainedState) (cm : Nat) (actor : Cel
   · intro h
     simp only [Option.some.injEq] at h
     subst h
-    exact ⟨trivial, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-  · rintro ⟨_, hcm, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+    exact ⟨trivial, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  · rintro ⟨_, hcm, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
     -- reconstruct st' from the spec: split both records and substitute every field.
     obtain ⟨k', lg'⟩ := st'
-    obtain ⟨acc, cl, cp, es, nl, rv, cm', bl, qs, sw, sc, fc, lc, dc, dl, dn, sb, dge, dgea⟩ := k'
-    simp only at hcm hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-    subst hcm hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+    obtain ⟨acc, cl, cp, nl, rv, cm', bl, qs, sw, sc, fc, lc, dc, dl, dn, sb, dge, dgea⟩ := k'
+    simp only at hcm hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+    subst hcm hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
     rfl
 
 /-- **`execNoteCreateA_iff_spec` — THE DELIVERABLE: `execFullA`-LEVEL EXECUTOR ⟺ SPEC (FULL state,
@@ -195,7 +194,7 @@ value. -/
 theorem noteCreateA_bal_neutral (st : RecChainedState) (cm : Nat) (actor : CellId)
     (st' : RecChainedState) (h : execFullA st (.noteCreateA cm actor) = some st') :
     st'.kernel.bal = st.kernel.bal :=
-  ((execNoteCreateA_iff_spec st cm actor st').mp h).2.2.2.2.2.2.2.2.2.1
+  ((execNoteCreateA_iff_spec st cm actor st').mp h).2.2.2.2.2.2.2.2.1
 
 /-- **`noteCreateA_total` — THE DISTINGUISHING THEOREM: a note-create ALWAYS COMMITS.** Unlike
 `noteSpendA` (fail-closed on a repeated nullifier), `noteCreateA` is UNCONDITIONAL — there is ALWAYS a

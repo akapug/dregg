@@ -374,9 +374,9 @@ theorem unify_seal_balance_neutral (st st' : RecChainedState) (pid : Nat) (actor
     (payload : Cap) (asset : AssetId) (hspec : SealSpec st pid actor payload st') :
     (cellProjSeal st'.kernel.bal c asset).balLo = (cellProjSeal st.kernel.bal c asset).balLo := by
   show st'.kernel.bal c asset = st.kernel.bal c asset
-  -- SealSpec: guard ∧ sealedBoxes ∧ log ∧ accounts ∧ cell ∧ caps ∧ escrows ∧ nullifiers ∧ revoked ∧
-  --           commitments ∧ bal ∧ … — `bal` is the 11th conjunct.
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
+  -- SealSpec (F1b escrow-free): guard ∧ sealedBoxes ∧ log ∧ accounts ∧ cell ∧ caps ∧ nullifiers ∧
+  --           revoked ∧ commitments ∧ bal ∧ … — `bal` is the 10th conjunct.
+  obtain ⟨_, _, _, _, _, _, _, _, _, hbal, _⟩ := hspec
   rw [hbal]
 
 /-! ## §10 — THE per-cell circuit⟺executor balance AGREEMENT (the payoff). -/

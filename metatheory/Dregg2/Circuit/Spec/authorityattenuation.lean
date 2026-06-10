@@ -92,7 +92,6 @@ def DelegateAttenSpec (s : RecChainedState) (del rec t : CellId) (keep : List Au
   -- THE FRAME: the sixteen non-`caps` kernel fields, all LITERALLY unchanged.
   ∧ s'.kernel.accounts = s.kernel.accounts
   ∧ s'.kernel.cell = s.kernel.cell
-  ∧ s'.kernel.escrows = s.kernel.escrows
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments
@@ -127,14 +126,14 @@ theorem delegateAtten_iff_spec (s : RecChainedState) (del rec t : CellId) (keep 
       simp only [Option.some.injEq] at h
       subst h
       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl, rfl⟩
+        rfl⟩
     · rintro ⟨_, hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-        h17, h18⟩
+ h17⟩
       -- reconstruct `s'` from its (kernel field-by-field) + log spec.
       obtain ⟨k', log'⟩ := s'
-      obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
-      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      obtain ⟨acc, cell, caps, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
       rfl
   · rw [if_neg hg]
     constructor
@@ -175,7 +174,6 @@ def AttenuateSpec (s : RecChainedState) (actor : CellId) (idx : Nat) (keep : Lis
   -- THE FRAME: the sixteen non-`caps` kernel fields, all LITERALLY unchanged.
   ∧ s'.kernel.accounts = s.kernel.accounts
   ∧ s'.kernel.cell = s.kernel.cell
-  ∧ s'.kernel.escrows = s.kernel.escrows
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments
@@ -207,13 +205,13 @@ theorem attenuate_iff_spec (s : RecChainedState) (actor : CellId) (idx : Nat) (k
   · intro h
     subst h
     exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-      rfl, rfl⟩
+      rfl⟩
   · rintro ⟨hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-      h17, h18⟩
+ h17⟩
     obtain ⟨k', log'⟩ := s'
-    obtain ⟨acc, cell, caps, esc, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
-    simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-    subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+    obtain ⟨acc, cell, caps, nul, rev, com, bal, q, sw, sc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
+    simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+    subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
     rfl
 
 /-! ## §3 — corollaries: the headline NON-AMPLIFICATION facts read off the spec.
@@ -245,7 +243,7 @@ theorem delegateAtten_spec_balance_neutral (s : RecChainedState) (del rec t : Ce
     (h : execFullA s (.delegateAttenA del rec t keep) = some s') :
     s'.kernel.bal = s.kernel.bal ∧ s'.kernel.accounts = s.kernel.accounts := by
   have hspec := (delegateAtten_iff_spec s del rec t keep s').mp h
-  exact ⟨hspec.2.2.2.2.2.2.2.2.2.1, hspec.2.2.2.1⟩
+  exact ⟨hspec.2.2.2.2.2.2.2.2.1, hspec.2.2.2.1⟩
 
 /-- **`attenuate_spec_balance_neutral`** — the TOTAL `attenuateA` is likewise `caps`-only: `bal` and
 `accounts` are UNCHANGED. -/
@@ -254,7 +252,7 @@ theorem attenuate_spec_balance_neutral (s : RecChainedState) (actor : CellId) (i
     (h : execFullA s (.attenuateA actor idx keep) = some s') :
     s'.kernel.bal = s.kernel.bal ∧ s'.kernel.accounts = s.kernel.accounts := by
   have hspec := (attenuate_iff_spec s actor idx keep s').mp h
-  exact ⟨hspec.2.2.2.2.2.2.2.2.1, hspec.2.2.1⟩
+  exact ⟨hspec.2.2.2.2.2.2.2.1, hspec.2.2.1⟩
 
 /-! ## §4 — non-vacuity: the gate is REAL (a forged delegation is REJECTED).
 

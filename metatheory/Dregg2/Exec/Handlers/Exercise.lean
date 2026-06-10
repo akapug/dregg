@@ -89,7 +89,7 @@ structure SubEffect where
   delta : AssetId → Int
   /-- OBLIGATION (carried): every commit moves the combined per-asset measure by EXACTLY `delta`. -/
   conserves : ∀ s s', step s = some s' →
-    ∀ b, recTotalAssetWithEscrow s' b = recTotalAssetWithEscrow s b + delta b
+    ∀ b, recTotalAsset s' b = recTotalAsset s b + delta b
 
 /-- **Run a `SubEffect` list as an all-or-nothing transaction** (the registry `foldlM`, `SubEffect`
 flavour — the definitional twin of the scaffold's `execTurn`). -/
@@ -115,7 +115,7 @@ consuming each `SubEffect.conserves` field — never a per-effect restatement. T
 exercise's `conserves` folds onto. -/
 theorem subTurn_conserves :
     ∀ (es : List SubEffect) (s s' : RecordKernelState),
-      subTurn es s = some s' → ∀ b, recTotalAssetWithEscrow s' b = recTotalAssetWithEscrow s b + subTurnDelta es b := by
+      subTurn es s = some s' → ∀ b, recTotalAsset s' b = recTotalAsset s b + subTurnDelta es b := by
   intro es
   induction es with
   | nil =>
@@ -348,8 +348,8 @@ conservation folded onto `subTurn_conserves`, with NO new induction. This is the
 the GLOBAL `turn_conserves` sums when an exercise sits inside a larger turn. -/
 theorem exercise_conserves (s s' : RecordKernelState) (a : ExerciseArgs)
     (h : exerciseStep s a = some s') (b : AssetId) :
-    recTotalAssetWithEscrow s' b
-      = recTotalAssetWithEscrow s b + subTurnDelta (innerEffects a.inner) b :=
+    recTotalAsset s' b
+      = recTotalAsset s b + subTurnDelta (innerEffects a.inner) b :=
   exerciseH.conserves s a s' h b
 
 /-! ## §8 — TEETH: R4 evaluated. The facet-mask, the hold-gate, the summed sub-forest conservation.
@@ -415,7 +415,7 @@ def exerciseFuelZero : ExerciseArgs :=
 -- §TEETH-5 (SUB-FOREST CONSERVES): exercise of a balance-neutral inner forest leaves the combined
 -- per-asset measure UNCHANGED (delta = sum of inner deltas = 0).
 #guard ((exerciseStep ex0 exerciseWriteUnderWrite).map
-        (fun k => (recTotalAssetWithEscrow ex0 0, recTotalAssetWithEscrow k 0))) == some (100, 100)  --  some (100, 100)
+        (fun k => (recTotalAsset ex0 0, recTotalAsset k 0))) == some (100, 100)  --  some (100, 100)
 -- §TEETH-6 (SUMMED delta): the sub-forest delta is the SUM of inner deltas (here 0 ⇒ unchanged).
 #guard (subTurnDelta (innerEffects exerciseWriteUnderWrite.inner) 0) == 0  --  0
 -- §TEETH-7 (FLAT NESTING): an exercise whose inner forest CONTAINS another exercise (cell 0 exercises
@@ -426,7 +426,7 @@ def exerciseFuelZero : ExerciseArgs :=
 #guard ((exerciseStep ex0 exerciseFuelZero).isSome)  --  true
 -- §TEETH-9 (a turn = [exercise] runs through the SCAFFOLD registry foldlM and conserves).
 #guard ((execTurn [exerciseEffect 0 1 [innerWrite]] ex0).map
-        (fun k => recTotalAssetWithEscrow k 0)) == some 100  --  some 100
+        (fun k => recTotalAsset k 0)) == some 100  --  some 100
 
 /-! ## §9 — Axiom-hygiene pins (every keystone rests only on the three kernel axioms).
 

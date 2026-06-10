@@ -129,7 +129,7 @@ def SetVKSpec (s : RecChainedState) (actor cell : CellId) (vk : Int)
   ∧ s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log
   -- THE FRAME: every one of the 16 OTHER kernel components literally unchanged
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
-  ∧ s'.kernel.escrows = s.kernel.escrows ∧ s'.kernel.nullifiers = s.kernel.nullifiers
+  ∧ s'.kernel.nullifiers = s.kernel.nullifiers
   ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
   ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.queues = s.kernel.queues
   ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
@@ -156,7 +156,7 @@ theorem vkStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell :
                                      else s.kernel.cell c)
         ∧ s'.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log
         ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.caps = s.kernel.caps
-        ∧ s'.kernel.escrows = s.kernel.escrows ∧ s'.kernel.nullifiers = s.kernel.nullifiers
+        ∧ s'.kernel.nullifiers = s.kernel.nullifiers
         ∧ s'.kernel.revoked = s.kernel.revoked ∧ s'.kernel.commitments = s.kernel.commitments
         ∧ s'.kernel.bal = s.kernel.bal ∧ s'.kernel.queues = s.kernel.queues
         ∧ s'.kernel.swiss = s.kernel.swiss ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
@@ -173,13 +173,12 @@ theorem vkStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell :
     constructor
     · intro h
       simp only [Option.some.injEq] at h; subst h
-      refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl, rfl, rfl, rfl⟩
-    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+      refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
       obtain ⟨k', l'⟩ := s'
-      obtain ⟨a, ce, ca, es, nu, re, co, ba, qu, sw, sl, fa, li, dc, de, dg, sb, dge, dgea⟩ := k'
-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      obtain ⟨a, ce, ca, nu, re, co, ba, qu, sw, sl, fa, li, dc, de, dg, sb, dge, dgea⟩ := k'
+      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
       rfl
   · rw [if_neg hg]
     constructor
@@ -226,7 +225,7 @@ theorem execFullA_setVK_vkWritten {s s' : RecChainedState} {actor cell : CellId}
 theorem execFullA_setVK_balFrame {s s' : RecChainedState} {actor cell : CellId}
     {vk : Int} (h : execFullA s (.setVKA actor cell vk) = some s') :
     s'.kernel.bal = s.kernel.bal :=
-  ((execFullA_setVK_iff_spec s actor cell vk s').mp h).2.2.2.2.2.2.2.2.2.1
+  ((execFullA_setVK_iff_spec s actor cell vk s').mp h).2.2.2.2.2.2.2.2.1
 
 /-- **`execFullA_setVK_capFrame` — CAP-GRAPH untouched (no authority amplification).** The `caps`
 table is literally unchanged: a VK write edits NO capability. -/

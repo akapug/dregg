@@ -126,7 +126,6 @@ def RevokeSpec (st : RecChainedState) (holder t : CellId) (st' : RecChainedState
   ∧ st'.log = authReceipt holder :: st.log
   ∧ st'.kernel.accounts = st.kernel.accounts
   ∧ st'.kernel.cell = st.kernel.cell
-  ∧ st'.kernel.escrows = st.kernel.escrows
   ∧ st'.kernel.nullifiers = st.kernel.nullifiers
   ∧ st'.kernel.revoked = st.kernel.revoked
   ∧ st'.kernel.commitments = st.kernel.commitments
@@ -157,19 +156,19 @@ theorem recCRevoke_iff_spec (st : RecChainedState) (holder t : CellId) (st' : Re
   constructor
   · intro h; subst h
     refine ⟨trivial, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-           rfl, rfl, rfl, rfl⟩
+           rfl, rfl, rfl⟩
     exact removeEdgeCaps_correct st.kernel holder t
-  · rintro ⟨_, hcaps, hlog, hacc, hcell, hesc, hnull, hrev, hcom, hbal, hq, hsw, hsc, hfac, hlif,
+  · rintro ⟨_, hcaps, hlog, hacc, hcell, hnull, hrev, hcom, hbal, hq, hsw, hsc, hfac, hlif,
            hdc, hdel, hdels, hsb, hde, hdea⟩
     -- `st'` is the spec'd full post-state: rebuild the committed `RecChainedState` field-by-field.
     -- The `caps` post (`removeEdgeCaps`) is the executor's `recKRevokeTarget` post (§1), so
     -- `recCRevoke st holder t` has EXACTLY `st'`'s fields. Destructure `st'` so each spec field hyp
     -- has a fresh field VAR to `subst`.
     obtain ⟨k', log'⟩ := st'
-    obtain ⟨acc', cell', caps', esc', null', rev', com', bal', q', sw', sc', fac', lif', dc', del',
+    obtain ⟨acc', cell', caps', null', rev', com', bal', q', sw', sc', fac', lif', dc', del',
             dels', sb', de', dea'⟩ := k'
     rw [← removeEdgeCaps_correct st.kernel holder t] at hcaps
-    subst hacc hcell hcaps hesc hnull hrev hcom hbal hq hsw hsc hfac hlif hdc hdel hdels hsb hlog
+    subst hacc hcell hcaps hnull hrev hcom hbal hq hsw hsc hfac hlif hdc hdel hdels hsb hlog
       hde hdea
     rfl
 

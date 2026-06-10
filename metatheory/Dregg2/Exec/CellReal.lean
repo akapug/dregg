@@ -3,7 +3,7 @@
 
 `livingCellA_sound`: the per-asset executor (`execFullForestA`, 46-effect auth-gated tree) — on its
 conserving turns — is bisimilar to its per-asset conservation oracle from every state, over unbounded
-coinductive time. The observation is the per-asset vector `recTotalAssetWithEscrow` (not a scalar: a
+coinductive time. The observation is the per-asset vector `recTotalAsset` (not a scalar: a
 scalar would let a mint of asset B net a burn of asset A). `cellA_h_step` is discharged by the proved
 `execFullForestA_conserves_per_asset`. `livingCellA_obs_invariant` carries the badge invariant along
 the entire unbounded adversarial schedule.
@@ -25,9 +25,9 @@ open Dregg2.Authority
 
 /-! ## Step 1 — the real per-asset living cell as a coalgebra. -/
 
-/-- The per-asset observation (the badge): the conserved per-asset vector `recTotalAssetWithEscrow`
+/-- The per-asset observation (the badge): the conserved per-asset vector `recTotalAsset`
 (balance + escrow held, per asset class). A scalar total would miss cross-asset laundering. -/
-def cellObsA (s : RecChainedState) : AssetId → ℤ := fun b => recTotalAssetWithEscrow s.kernel b
+def cellObsA (s : RecChainedState) : AssetId → ℤ := fun b => recTotalAsset s.kernel b
 
 /-- A conserving forest: per-asset net delta `0` in every asset (transfers / delegations /
 escrow-neutral). The supply generators (mint/burn/bridgeMint) are the disclosed boundary, excluded;
@@ -70,7 +70,7 @@ the stay-put self-loop trivially conserves. -/
 theorem cellObsA_next (s : RecChainedState) (cf : ConservingForest) :
     cellObsA (cellNextA s cf) = cellObsA s := by
   funext b
-  show recTotalAssetWithEscrow (cellNextA s cf).kernel b = recTotalAssetWithEscrow s.kernel b
+  show recTotalAsset (cellNextA s cf).kernel b = recTotalAsset s.kernel b
   unfold cellNextA
   cases h : execFullForestA s cf.1 with
   | some s' => simp only [Option.getD_some]

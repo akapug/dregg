@@ -77,7 +77,7 @@ theorem turn_conservation_descends (step : ActionStep)
     (hstep : ∀ s a s', execFullA s a = some s' ↔ step s a s')
     (s s' : RecChainedState) (acts : List FullActionA) (b : AssetId)
     (h : Spec.Turn.turnSpec step s acts s') (hzero : turnLedgerDeltaAsset acts b = 0) :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   have hexec : execFullTurnA s acts = some s' :=
     (execFullTurnA_iff_turnSpec step hstep s acts s').mpr h
   exact execFullTurnA_conserves_per_asset s s' acts b hexec hzero

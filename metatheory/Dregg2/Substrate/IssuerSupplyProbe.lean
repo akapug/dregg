@@ -16,7 +16,7 @@ ledger §7). Concretely:
     issuer-move mint — PRESERVES the exact invariant, each proved by INSTANTIATING an existing
     conservation theorem (never re-proved). The TRANSITIONAL invariant (before the
     storage-as-cell-programs migration, while `escrows : List EscrowRecord` parks value OFF-ledger)
-    reads `∀ a, recTotalAssetWithEscrow k a = 0` — the cell-sum ALONE is genuinely ≠ 0 while value
+    reads `∀ a, recTotalAsset k a = 0` — the cell-sum ALONE is genuinely ≠ 0 while value
     is parked (`escrow_create_debits_per_asset` witnesses the debit), so the holding-store term is
     load-bearing until S3 turns escrows into pot-cells.
   * **Mint**: PASS, with the equivalence PROVED as a commuting square (`mint_is_issuer_move`):
@@ -70,18 +70,18 @@ to the pure `∀ a, Σ_{c ∈ accounts} bal c a = 0`. Until then the holding-sto
 
 `issuerView` is the issuer-supply ADJUSTED ledger over the EXISTING state: the issuer of `a`
 carries −(circulating supply of `a`), where circulating = cell-ledger + escrow-parked
-(`recTotalAssetWithEscrow`, the EXISTING combined conserved quantity). -/
+(`recTotalAsset`, the EXISTING combined conserved quantity). -/
 
 /-- **The R2 exact value law (transitional form).** Per asset: cell-ledger sum + escrow-parked
 value = 0. The escrow term is the OFF-LEDGER holding-store (`escrows : List EscrowRecord`) — value
 parked outside any cell until the S3 migration makes escrows pot-cells. -/
 def ExactLedger (k : RecordKernelState) : Prop :=
-  ∀ a : AssetId, recTotalAssetWithEscrow k a = 0
+  ∀ a : AssetId, recTotalAsset k a = 0
 
 /-- **Circulating supply of `a`** in the CURRENT model: everything the existing conservation
-theorems conserve — the cell-ledger total plus the escrow-parked total (`recTotalAssetWithEscrow`,
+theorems conserve — the cell-ledger total plus the escrow-parked total (`recTotalAsset`,
 `Dregg2/Exec/RecordKernel.lean`). This is exactly what the issuer's well must carry NEGATIVELY. -/
-def circulating (k : RecordKernelState) (a : AssetId) : ℤ := recTotalAssetWithEscrow k a
+def circulating (k : RecordKernelState) (a : AssetId) : ℤ := recTotalAsset k a
 
 section View
 
@@ -112,12 +112,9 @@ combined ledger sums to ZERO at `a` — `∀ a, Σ_c bal c a (+ escrow) = 0` hol
 the issuer-supply view. The R2 claim's exactness is not an extra invariant to carry; it is what
 the view MEANS, provided the issuer exists. -/
 theorem issuerView_exact (k : RecordKernelState) (a : AssetId) (ha : issuerOf a ∈ k.accounts) :
-    recTotalAssetWithEscrow (issuerView issuerOf k) a = 0 := by
-  unfold recTotalAssetWithEscrow
+    recTotalAsset (issuerView issuerOf k) a = 0 := by
   rw [issuerView_total issuerOf k a ha]
-  have hesc : escrowHeldAsset (issuerView issuerOf k) a = escrowHeldAsset k a := rfl
-  rw [hesc]
-  unfold circulating recTotalAssetWithEscrow
+  unfold circulating
   ring
 
 /-- With the issuer of `a` ABSENT from the live accounts, the adjusted combined sum equals the FULL
@@ -125,8 +122,7 @@ circulating supply (the issuer-debit never lands in the sum). The genesis-order 
 exact. -/
 theorem issuerView_missing_issuer (k : RecordKernelState) (a : AssetId)
     (hno : issuerOf a ∉ k.accounts) :
-    recTotalAssetWithEscrow (issuerView issuerOf k) a = circulating k a := by
-  unfold recTotalAssetWithEscrow
+    recTotalAsset (issuerView issuerOf k) a = circulating k a := by
   have hbal : recTotalAsset (issuerView issuerOf k) a = recTotalAsset k a := by
     show (∑ c ∈ k.accounts, issuerBal issuerOf k c a) = ∑ c ∈ k.accounts, k.bal c a
     refine Finset.sum_congr rfl (fun c hc => ?_)
@@ -134,8 +130,7 @@ theorem issuerView_missing_issuer (k : RecordKernelState) (a : AssetId)
     unfold issuerBal
     rw [if_neg hcne]
     ring
-  have hesc : escrowHeldAsset (issuerView issuerOf k) a = escrowHeldAsset k a := rfl
-  rw [hbal, hesc]
+  rw [hbal]
   rfl
 
 /-- **GENESIS REQUIRES THE ISSUER (the tooth).** If anything of `a` circulates while `a`'s issuer
@@ -144,7 +139,7 @@ the bootstrap order is a THEOREM-level necessity, not a convention. (`issuerMove
 it fail-closed: minting gates on `issuerOf a ∈ accounts`.) -/
 theorem genesis_requires_issuer (k : RecordKernelState) (a : AssetId)
     (hno : issuerOf a ∉ k.accounts) (hcirc : circulating k a ≠ 0) :
-    recTotalAssetWithEscrow (issuerView issuerOf k) a ≠ 0 := by
+    recTotalAsset (issuerView issuerOf k) a ≠ 0 := by
   rw [issuerView_missing_issuer issuerOf k a hno]
   exact hcirc
 
@@ -153,7 +148,7 @@ end View
 /-! ## §2 — Step preservation: every committed step preserves `ExactLedger`, by INSTANTIATION.
 
 Each theorem here is an existing conservation theorem consumed, never re-proved: the existing
-spine already proves every step preserves `recTotalAssetWithEscrow`, and a quantity preserved is a
+spine already proves every step preserves `recTotalAsset`, and a quantity preserved is a
 ZERO preserved. The probe's content is that NOTHING extra is needed — exactness rides the existing
 combined-conservation theorems unchanged. -/
 
@@ -176,59 +171,15 @@ private theorem recKExecAsset_shape {k k' : RecordKernelState} {t : Turn} {a : A
 theorem transfer_preserves_exact {k k' : RecordKernelState} {t : Turn} {a : AssetId}
     (h : recKExecAsset k t a = some k') (hex : ExactLedger k) : ExactLedger k' := by
   intro b
-  have hbal := recKExecAsset_conserves_per_asset k k' t a h b
-  have hesc : escrowHeldAsset k' b = escrowHeldAsset k b := by
-    rw [recKExecAsset_shape h]; rfl
-  unfold recTotalAssetWithEscrow
-  rw [hbal, hesc]
+  rw [recKExecAsset_conserves_per_asset k k' t a h b]
   exact hex b
 
-/-- **ESCROW CREATE preserves exact conservation** — instantiates
-`escrow_create_conserves_combined_per_asset`. -/
-theorem escrowCreate_preserves_exact {k k' : RecordKernelState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
-    (h : createEscrowKAsset k id actor creator recipient asset amount = some k')
-    (hex : ExactLedger k) : ExactLedger k' := fun b => by
-  rw [escrow_create_conserves_combined_per_asset b h]
-  exact hex b
-
-/-- **ESCROW RELEASE preserves exact conservation** — instantiates
-`releaseEscrowKAsset_conserves_combined_per_asset`. -/
-theorem escrowRelease_preserves_exact {k k' : RecordKernelState} {id : Nat}
-    (h : releaseEscrowKAsset k id = some k') (hex : ExactLedger k) : ExactLedger k' := fun b => by
-  rw [releaseEscrowKAsset_conserves_combined_per_asset b h]
-  exact hex b
-
-/-- **ESCROW REFUND preserves exact conservation** — instantiates
-`refundEscrowKAsset_conserves_combined_per_asset`. -/
-theorem escrowRefund_preserves_exact {k k' : RecordKernelState} {id : Nat}
-    (h : refundEscrowKAsset k id = some k') (hex : ExactLedger k) : ExactLedger k' := fun b => by
-  rw [refundEscrowKAsset_conserves_combined_per_asset b h]
-  exact hex b
-
-/-- **BRIDGE LOCK preserves exact conservation** — instantiates
-`bridge_lock_conserves_combined_per_asset`. -/
-theorem bridgeLock_preserves_exact {k k' : RecordKernelState} {id : Nat}
-    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
-    (h : bridgeLockKAsset k id actor originator destination asset amount = some k')
-    (hex : ExactLedger k) : ExactLedger k' := fun b => by
-  rw [bridge_lock_conserves_combined_per_asset b h]
-  exact hex b
-
-/-- **BRIDGE CANCEL preserves exact conservation** — instantiates
-`bridge_cancel_conserves_combined_per_asset`. -/
-theorem bridgeCancel_preserves_exact {k k' : RecordKernelState} {id : Nat}
-    (h : bridgeCancelKAsset k id = some k') (hex : ExactLedger k) : ExactLedger k' := fun b => by
-  rw [bridge_cancel_conserves_combined_per_asset b h]
-  exact hex b
-
-/-- **GENESIS is exact.** Any state with the empty `bal` ledger and no parked escrows satisfies
+/-- **GENESIS is exact.** Any state with the empty `bal` ledger satisfies
 `ExactLedger` — `Σ 0 = 0` at every asset. (Live accounts may already exist; only value must not.) -/
-theorem genesis_exact (k : RecordKernelState) (hbal : k.bal = fun _ _ => 0)
-    (hesc : k.escrows = []) : ExactLedger k := by
+theorem genesis_exact (k : RecordKernelState) (hbal : k.bal = fun _ _ => 0) : ExactLedger k := by
   intro a
-  unfold recTotalAssetWithEscrow recTotalAsset escrowHeldAsset
-  rw [hbal, hesc]
+  unfold recTotalAsset
+  rw [hbal]
   simp
 
 /-- **(genesis) FRESH-CELL CREATION preserves exact conservation** — instantiates
@@ -238,10 +189,7 @@ theorem createCell_preserves_exact (k : RecordKernelState) (newCell : CellId)
     (hfresh : newCell ∉ k.accounts) (hex : ExactLedger k) :
     ExactLedger (createCellIntoAsset k newCell) := by
   intro b
-  unfold recTotalAssetWithEscrow
   rw [recTotalAsset_insert_fresh k newCell b hfresh]
-  have hesc : escrowHeldAsset (createCellIntoAsset k newCell) b = escrowHeldAsset k b := rfl
-  rw [hesc]
   exact hex b
 
 /-! ## §3 — MINT: the current law breaks exactness; the issuer-move law preserves it; they are the
@@ -269,11 +217,8 @@ theorem mint_breaks_exact {k k' : RecordKernelState} {actor cell : CellId} {a : 
   intro hex'
   have hd := recKMintAsset_delta k k' actor cell a amt h a
   rw [if_pos rfl] at hd
-  have hesc : escrowHeldAsset k' a = escrowHeldAsset k a := by
-    rw [(recKMintAsset_shape h).1]; rfl
   have h0 := hex a
   have h1 := hex' a
-  unfold recTotalAssetWithEscrow at h0 h1
   omega
 
 section IssuerMove
@@ -308,9 +253,6 @@ theorem issuerMoveK_preserves_exact {k k' : RecordKernelState} {actor : CellId} 
     subst h
     obtain ⟨-, -, hiss, hdst, hne⟩ := hg
     intro b
-    unfold recTotalAssetWithEscrow
-    have hesc : escrowHeldAsset { k with bal := recTransferBal k.bal (issuerOf a) dst a amt } b
-        = escrowHeldAsset k b := rfl
     have hbal : recTotalAsset { k with bal := recTransferBal k.bal (issuerOf a) dst a amt } b
         = recTotalAsset k b := by
       rcases eq_or_ne b a with rfl | hb
@@ -322,7 +264,7 @@ theorem issuerMoveK_preserves_exact {k k' : RecordKernelState} {actor : CellId} 
             = ∑ c ∈ k.accounts, k.bal c b
         exact Finset.sum_congr rfl
           (fun c _ => recTransferBal_untouched k.bal (issuerOf a) dst a b amt hb c)
-    rw [hbal, hesc]
+    rw [hbal]
     exact hex b
   · rw [if_neg hg] at h
     exact absurd h (by simp)
@@ -334,16 +276,8 @@ private theorem circulating_credit (k : RecordKernelState) (cell : CellId) (a : 
     (hcell : cell ∈ k.accounts) (b : AssetId) :
     circulating { k with bal := recBalCredit k.bal cell a amt } b
       = circulating k b + (if b = a then amt else 0) := by
-  unfold circulating recTotalAssetWithEscrow
-  have hb : recTotalAsset { k with bal := recBalCredit k.bal cell a amt } b
-      = recTotalAsset k b + (if b = a then amt else 0) := by
-    show (∑ c ∈ k.accounts, recBalCredit k.bal cell a amt c b)
-        = (∑ c ∈ k.accounts, k.bal c b) + (if b = a then amt else 0)
-    exact recBalCredit_recTotalAsset k.accounts k.bal cell a amt hcell b
-  have he : escrowHeldAsset { k with bal := recBalCredit k.bal cell a amt } b
-      = escrowHeldAsset k b := rfl
-  rw [hb, he]
-  ring
+  unfold circulating
+  exact recBalCredit_recTotalAsset k.accounts k.bal cell a amt hcell b
 
 /-- **THE COMMUTING SQUARE (the (b) equivalence, PROVED pointwise).** Take a CURRENT-law mint
 (`recBalCredit`: recipient +amt, supply +amt) and pass it through the issuer-supply VIEW: the
@@ -415,16 +349,16 @@ theorem mint_to_issuer_is_noop (k : RecordKernelState) (cell : CellId) (a : Asse
     rw [if_neg hccand, if_neg hba, add_zero]
 
 /-- **The executable corollary**: a committed `recKMintAsset` to a non-issuer recipient, seen
-through the view, IS the issuer-move ledger (and accounts/escrows are untouched). The reformed
+through the view, IS the issuer-move ledger (and accounts are untouched). The reformed
 state equals the current state plus the reform — no information is created or lost by the cutover. -/
 theorem recKMintAsset_view_is_transfer {k k' : RecordKernelState} {actor cell : CellId}
     {a : AssetId} {amt : ℤ} (h : recKMintAsset k actor cell a amt = some k')
     (hne : cell ≠ issuerOf a) :
     issuerBal issuerOf k' = recTransferBal (issuerBal issuerOf k) (issuerOf a) cell a amt
-      ∧ k'.accounts = k.accounts ∧ k'.escrows = k.escrows := by
+      ∧ k'.accounts = k.accounts := by
   obtain ⟨hk', hcell⟩ := recKMintAsset_shape h
   subst hk'
-  exact ⟨mint_is_issuer_move issuerOf k cell a amt hcell hne, rfl, rfl⟩
+  exact ⟨mint_is_issuer_move issuerOf k cell a amt hcell hne, rfl⟩
 
 end IssuerMove
 
@@ -578,7 +512,7 @@ def unshieldK (k : RecordKernelState) (nf : Nat) (a : AssetId) (dst : CellId) (a
 /-- A nullifier insert is invisible to the combined measure (it touches only `nullifiers`). -/
 private theorem noteSpend_measures {k k' : RecordKernelState} {nf : Nat}
     (h : noteSpendNullifier k nf = some k') (b : AssetId) :
-    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold noteSpendNullifier at h
   by_cases hin : nf ∈ k.nullifiers
   · rw [if_pos hin] at h
@@ -599,8 +533,8 @@ theorem shieldK_preserves_exact {k k' : RecordKernelState} {actor src : CellId} 
   obtain ⟨k₁, hk₁, hk'⟩ := h
   subst hk'
   intro b
-  have hneutral : recTotalAssetWithEscrow (noteCreateCommitment k₁ cm) b
-      = recTotalAssetWithEscrow k₁ b := rfl
+  have hneutral : recTotalAsset (noteCreateCommitment k₁ cm) b
+      = recTotalAsset k₁ b := rfl
   rw [hneutral]
   exact transfer_preserves_exact hk₁ hex b
 
@@ -626,55 +560,12 @@ theorem unshieldK_preserves_exact {k k' : RecordKernelState} {nf : Nat} {a : Ass
 
 end Shield
 
-/-! ## §6 — BRIDGE: the one non-conserving verb dies the same pot-cell death as fee-burn. -/
+/-! ## §6 — (F1b) the BRIDGE outflow probe is GONE with the kernel holding-store.
 
-/-- **NON-VACUITY TOOTH: the CURRENT bridge finalize provably BREAKS exact conservation** (the
-disclosed outflow — `bridge_finalize_moves_combined_per_asset`'s honest drop, instantiated against
-exactness). -/
-theorem bridgeFinalize_breaks_exact {k k' : RecordKernelState} {id : Nat} {asset : AssetId}
-    {amount : ℤ} (h : bridgeFinalizeKAsset k id asset amount = some k') (hnz : amount ≠ 0)
-    (hex : ExactLedger k) : ¬ ExactLedger k' := by
-  intro hex'
-  have hd := bridgeFinalizeKAsset_moves_combined_per_asset asset h
-  rw [if_pos rfl] at hd
-  have h0 := hex asset
-  have h1 := hex' asset
-  omega
-
-/-- **The bridge-pot repair**: finalize SETTLES the locked value to a bridge-pot cell (the foreign
-chain's custody, modelled as a cell) instead of dropping it off-ledger. Same fail-closed gates as
-the existing finalize, plus pot liveness (the settle-liveness discipline). -/
-def bridgeFinalizeToPotK (pot : CellId) (k : RecordKernelState) (id : Nat) :
-    Option RecordKernelState :=
-  match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | some r =>
-      if r.bridge = true ∧ pot ∈ k.accounts ∧ cellLifecycleLive k pot = true then
-        some (settleEscrowRawAsset k id pot r.asset r.amount)
-      else none
-  | none => none
-
-/-- **BRIDGE FINALIZE-TO-POT preserves exact conservation (PROVED)** — instantiates
-`escrow_settle_conserves_combined_per_asset` with the pot as settle target. With fee-burn and
-bridge-outflow both potted, NO kernel verb needs a conservation exemption. -/
-theorem bridgeFinalizeToPot_preserves_exact {pot : CellId} {k k' : RecordKernelState} {id : Nat}
-    (h : bridgeFinalizeToPotK pot k id = some k') (hex : ExactLedger k) : ExactLedger k' := by
-  unfold bridgeFinalizeToPotK at h
-  cases hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
-  | none =>
-      rw [hfind] at h
-      exact absurd h (by simp)
-  | some r =>
-      rw [hfind] at h
-      simp only at h
-      by_cases hg : r.bridge = true ∧ pot ∈ k.accounts ∧ cellLifecycleLive k pot = true
-      · rw [if_pos hg] at h
-        simp only [Option.some.injEq] at h
-        subst h
-        intro b
-        rw [escrow_settle_conserves_combined_per_asset k id pot r b hg.2.1 hfind]
-        exact hex b
-      · rw [if_neg hg] at h
-        exact absurd h (by simp)
+`bridgeFinalizeKAsset` (the one non-conserving verb) and the `bridgeFinalizeToPotK` pot-cell repair
+both rode the bridge-tagged `escrows` records; F1b deleted them — the bridge-cell contract
+(`Apps/BridgeCell.lean`) holds locked value in a CELL from the start, so the pot-cell repair is the
+DEFAULT there and no kernel verb needs a conservation exemption. -/
 
 /-! ## §7 — Axiom hygiene. -/
 
@@ -683,11 +574,6 @@ theorem bridgeFinalizeToPot_preserves_exact {pot : CellId} {k k' : RecordKernelS
 #assert_axioms issuerView_missing_issuer
 #assert_axioms genesis_requires_issuer
 #assert_axioms transfer_preserves_exact
-#assert_axioms escrowCreate_preserves_exact
-#assert_axioms escrowRelease_preserves_exact
-#assert_axioms escrowRefund_preserves_exact
-#assert_axioms bridgeLock_preserves_exact
-#assert_axioms bridgeCancel_preserves_exact
 #assert_axioms genesis_exact
 #assert_axioms createCell_preserves_exact
 #assert_axioms mint_breaks_exact
@@ -699,8 +585,6 @@ theorem bridgeFinalizeToPot_preserves_exact {pot : CellId} {k k' : RecordKernelS
 #assert_axioms turn_exact_with_burn_pot
 #assert_axioms shieldK_preserves_exact
 #assert_axioms unshieldK_preserves_exact
-#assert_axioms bridgeFinalize_breaks_exact
-#assert_axioms bridgeFinalizeToPot_preserves_exact
 
 /-! ## §8 — Non-vacuity witnesses (`#guard`). -/
 
@@ -717,13 +601,13 @@ def kGen : RecordKernelState :=
 -- BOOTSTRAP: genesis is exact, the issuer-move mint commits, and the post-state shows the
 -- NEGATIVE-CAPABLE WELL: issuer 1 at −5, recipient 2 at +5, sum EXACTLY 0 — with NO availability
 -- gate consulted (the issuer's well went below zero from a zero start).
-#guard (recTotalAssetWithEscrow kGen 0 == 0)
+#guard (recTotalAsset kGen 0 == 0)
 #guard ((issuerMoveK issDemo kGen 9 0 2 5).isSome)
 #guard ((issuerMoveK issDemo kGen 9 0 2 5).map (fun k' => (k'.bal 1 0, k'.bal 2 0)))
         == some (-5, 5)
-#guard ((issuerMoveK issDemo kGen 9 0 2 5).map (fun k' => recTotalAssetWithEscrow k' 0)) == some 0
+#guard ((issuerMoveK issDemo kGen 9 0 2 5).map (fun k' => recTotalAsset k' 0)) == some 0
 -- other assets untouched:
-#guard ((issuerMoveK issDemo kGen 9 0 2 5).map (fun k' => recTotalAssetWithEscrow k' 1)) == some 0
+#guard ((issuerMoveK issDemo kGen 9 0 2 5).map (fun k' => recTotalAsset k' 1)) == some 0
 -- GENESIS-ORDER TOOTH (fail-closed): with the issuer NOT a live account, the mint REFUSES.
 #guard ((issuerMoveK issDemo { kGen with accounts := {2} } 9 0 2 5).isNone)
 
@@ -736,10 +620,10 @@ def kCur : RecordKernelState :=
 
 -- THE VIEW IS EXACT on a current-law state (issuer 1 live): adjusted issuer column −7, sum 0.
 #guard (issuerBal issDemo kCur 1 0 == -7)
-#guard (recTotalAssetWithEscrow (issuerView issDemo kCur) 0 == 0)
+#guard (recTotalAsset (issuerView issDemo kCur) 0 == 0)
 -- ...and with the issuer ABSENT, the view-sum equals the full circulating 7 ≠ 0 (the genesis tooth):
-#guard (recTotalAssetWithEscrow (issuerView issDemo { kCur with accounts := {2} }) 0 == 7)
-#guard ((recTotalAssetWithEscrow (issuerView issDemo { kCur with accounts := {2} }) 0 == 0)
+#guard (recTotalAsset (issuerView issDemo { kCur with accounts := {2} }) 0 == 7)
+#guard ((recTotalAsset (issuerView issDemo { kCur with accounts := {2} }) 0 == 0)
         == false)
 
 /-- Demo pool map: asset `_ ↦ cell 3`. -/
@@ -762,7 +646,7 @@ def kPool : RecordKernelState :=
 #guard ((unshieldK poolDemo kPool 99 0 2 4).map (fun k' => (k'.bal 3 0, k'.bal 2 0)))
         == some (6, 4)
 #guard ((unshieldK poolDemo kPool 99 0 2 4).map
-          (fun k' => recTotalAssetWithEscrow k' 0 == recTotalAssetWithEscrow kPool 0))
+          (fun k' => recTotalAsset k' 0 == recTotalAsset kPool 0))
         == some true
 -- the nullifier discipline DOES carry: the same nullifier cannot be unshielded twice.
 #guard (((unshieldK poolDemo kPool 99 0 2 4).bind

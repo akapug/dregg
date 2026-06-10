@@ -53,20 +53,6 @@ private theorem queueEnqueueK_revoked (k : RecordKernelState) (id m : Nat) (k₁
     · injection hq with hq; subst hq; rfl
     · exact absurd hq (by simp)
 
-private theorem queueEnqueueDepositK_revoked (k : RecordKernelState) (id m : Nat)
-    (sender owner : CellId) (depId : Nat) (dAsset : AssetId) (deposit : ℤ) (k' : RecordKernelState)
-    (h : queueEnqueueDepositK k id m sender owner depId dAsset deposit = some k') :
-    k'.revoked = k.revoked := by
-  unfold queueEnqueueDepositK at h
-  split at h
-  · exact absurd h (by simp)                                 -- queueEnqueueK = none
-  · rename_i k₁ hq                                            -- queueEnqueueK = some k₁
-    split at h
-    · obtain ⟨rfl⟩ := h                                        -- deposit gate true ⇒ k' = createEscrowRawAsset k₁ …
-      show k₁.revoked = k.revoked
-      exact queueEnqueueK_revoked k id m k₁ hq
-    · exact absurd h (by simp)                               -- deposit gate false
-
 /-- `queueDequeueK` commits to `{ k with queues := … }` — `revoked` untouched. -/
 private theorem queueDequeueK_revoked (k : RecordKernelState) (id : Nat) (actor : CellId)
     (k₁ : RecordKernelState) (mh : Nat) (hq : queueDequeueK k id actor = some (k₁, mh)) :
@@ -78,29 +64,6 @@ private theorem queueDequeueK_revoked (k : RecordKernelState) (id : Nat) (actor 
       · exact absurd hq (by simp)
       · option_inj at hq; obtain ⟨hq, _⟩ := hq; subst hq; rfl
     · exact absurd hq (by simp)
-
-private theorem queueDequeueRefundK_revoked (k : RecordKernelState) (id : Nat) (actor : CellId)
-    (depId : Nat) (k' : RecordKernelState) (mh : Nat)
-    (h : queueDequeueRefundK k id actor depId = some (k', mh)) :
-    k'.revoked = k.revoked := by
-  unfold queueDequeueRefundK at h
-  cases hq : queueDequeueK k id actor with
-  | none => rw [hq] at h; exact absurd h (by simp)
-  | some kp =>
-      obtain ⟨k₁, mh₁⟩ := kp
-      rw [hq] at h; simp only [] at h
-      by_cases hbind : dequeueMsgBindB k₁ actor depId id mh₁
-      · rw [if_pos hbind] at h
-        cases hfind : findUnresolvedDeposit k₁ depId with
-        | none => simp only [hfind] at h; exact absurd h (by simp)
-        | some r =>
-            simp only [hfind] at h
-            by_cases ha : actor ∈ k₁.accounts
-            · rw [if_pos ha, Option.some.injEq, Prod.mk.injEq] at h
-              obtain ⟨he, _⟩ := h; subst he
-              exact queueDequeueK_revoked k id actor k₁ mh₁ hq
-            · rw [if_neg ha] at h; exact absurd h (by simp)
-      · rw [if_neg hbind] at h; exact absurd h (by simp)
 
 /-- `swissEnlivenK` commits to `{ k with swiss := … }` — `revoked` untouched. -/
 private theorem swissEnlivenK_revoked (k : RecordKernelState) (sw : Nat) (claimed : List Auth)
@@ -142,34 +105,35 @@ private theorem swissDropK_revoked (k : RecordKernelState) (sw : Nat)
 enqueue fold. Every kernel write is to `queues` — `revoked` is a DISTINCT side-table, untouched. We hoist
 the `_revoked` frame for each so the new dispatch arms below close by `Eq.refl` after the chain. -/
 
-/-- `queueEnqueueChainA` commits through `queueEnqueueDepositK` (a `queues`-only write) — `revoked`
+/-- `queueEnqueueChainA` commits through `queueEnqueueK` (a `queues`-only write) — `revoked`
 untouched (the chained-state wrapper re-uses the same kernel, so `s'.kernel = k'`). -/
 private theorem queueEnqueueChainA_revoked {s s' : RecChainedState} {id m : Nat} {actor cell : CellId}
-    {depId : Nat} {dAsset : AssetId} {deposit : ℤ}
-    (h : queueEnqueueChainA s id m actor cell depId dAsset deposit = some s') :
+    (h : queueEnqueueChainA s id m actor cell = some s') :
     s'.kernel.revoked = s.kernel.revoked := by
   unfold queueEnqueueChainA at h
   split at h
-  · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+  · cases hk : queueEnqueueK s.kernel id m with
     | none => rw [hk] at h; exact absurd h (by simp)
     | some k' =>
         commit_subst h hk
-        exact queueEnqueueDepositK_revoked s.kernel id m actor cell depId dAsset deposit k' hk
+        exact queueEnqueueK_revoked s.kernel id m k' hk
   · exact absurd h (by simp)
 
-/-- `queueDequeueChainA` commits through `queueDequeueRefundK` (a `queues`-only write) — `revoked`
+/-- `queueDequeueChainA` commits through `queueDequeueK` (a `queues`-only write) — `revoked`
 untouched. -/
 private theorem queueDequeueChainA_revoked {s s' : RecChainedState} {id : Nat} {actor cell : CellId}
-    {depId : Nat}
-    (h : queueDequeueChainA s id actor cell depId = some s') :
+    (h : queueDequeueChainA s id actor cell = some s') :
     s'.kernel.revoked = s.kernel.revoked := by
   unfold queueDequeueChainA at h
   split at h
-  · cases hk : queueDequeueRefundK s.kernel id actor depId with
+  · cases hk : queueDequeueK s.kernel id actor with
     | none => rw [hk] at h; exact absurd h (by simp)
     | some kp =>
-        obtain ⟨k', mhd⟩ := kp; commit_subst h hk
-        exact queueDequeueRefundK_revoked s.kernel id actor depId k' mhd hk
+        obtain ⟨k', mhd⟩ := kp
+        rw [hk] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        exact queueDequeueK_revoked s.kernel id actor k' mhd hk
   · exact absurd h (by simp)
 
 /-- A single atomic-batch sub-op (`queueTxOpStepA`) routes to the enqueue/dequeue chain — `revoked`
@@ -177,9 +141,9 @@ untouched either way. -/
 private theorem queueTxOpStepA_revoked {s s' : RecChainedState} {op : QueueTxOpA}
     (h : queueTxOpStepA s op = some s') : s'.kernel.revoked = s.kernel.revoked := by
   cases op with
-  | enqueue id m actor cell depId dAsset deposit =>
+  | enqueue id m actor cell =>
       exact queueEnqueueChainA_revoked (s := s) (s' := s') h
-  | dequeue id actor cell depId =>
+  | dequeue id actor cell =>
       exact queueDequeueChainA_revoked (s := s) (s' := s') h
 
 /-- The all-or-nothing atomic batch `queueAtomicTxChainA` leaves `revoked` UNCHANGED — by induction over
@@ -387,72 +351,6 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
           unfold recKMintAsset at hk; split at hk
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
-  -- §escrow / obligation / committed — chained holding-store steps (kernel updates bal/escrows, never
-  -- `revoked`). create/obligation/committed-create share createEscrowKAsset; release/refund share
-  -- releaseEscrowKAsset/refundEscrowKAsset.
-  | createEscrowA id actor creator recipient asset amount =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          show k'.revoked = s.kernel.revoked
-          unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-  | releaseEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      show k'.revoked = s.kernel.revoked
-      unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  | refundEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      show k'.revoked = s.kernel.revoked
-      unfold refundEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  | createObligationA id actor obligor beneficiary asset stake =>
-      simp only [execFullA, createEscrowChainA] at h
-      cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          show k'.revoked = s.kernel.revoked
-          unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-  -- fulfill/slash route to refund/release (escrow SETTLE) — `revoked` literally unchanged (frame).
-  | fulfillObligationA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      show k'.revoked = s.kernel.revoked
-      unfold refundEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  | slashObligationA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      show k'.revoked = s.kernel.revoked
-      unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  -- §NOTE-SPEND — grows `nullifiers` (a DIFFERENT registry), `revoked` UNTOUCHED. This is the arm that
-  -- moves the nullifier set in `CellNullifier`; here it frames the credential-revocation registry.
   | noteSpendA nf actor spendProof =>
       simp only [execFullA, noteSpendChainA] at h
       by_cases hp : spendProof = true
@@ -469,85 +367,6 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
   -- §NOTE-CREATE — grows `commitments` (a DIFFERENT set), `revoked` untouched (always-commit).
   | noteCreateA cm actor =>
       simp only [execFullA, noteCreateChainA, noteCreateCommitment, Option.some.injEq] at h; subst h; rfl
-  -- §committed-escrow (WAVE 4) — the §8 hiding-portal create. Under the discharged portal it routes to
-  -- the SAME escrow holding-store (`createEscrowKAsset`, a `bal`/`escrows` write), `revoked` untouched;
-  -- under a failed portal (`hidingProof = false`) the chain is `none` (the `else` branch absurds `h`).
-  | createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-      simp only [execFullA, createCommittedEscrowChainA] at h
-      split at h
-      · simp only [createEscrowChainA] at h
-        cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show k'.revoked = s.kernel.revoked
-            unfold createEscrowKAsset createEscrowRawAsset at hk; split at hk
-            · injection hk with hk; subst hk; rfl
-            · exact absurd hk (by simp)
-      · exact absurd h (by simp)
-  | releaseCommittedEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := releaseEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      show k'.revoked = s.kernel.revoked
-      unfold releaseEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  | refundCommittedEscrowA id actor =>
-      obtain ⟨_, ⟨k', hk, hs'⟩⟩ := refundEscrowChainA_factors id actor (by simpa only [execFullA] using h)
-      subst hs'
-      show k'.revoked = s.kernel.revoked
-      unfold refundEscrowKAsset settleEscrowRawAsset at hk
-      split at hk
-      · split at hk
-        · injection hk with hk; subst hk; rfl
-        · exact absurd hk (by simp)
-      · exact absurd hk (by simp)
-  -- §bridge — lock/finalize/cancel over the SHARED escrow holding-store (kernel updates bal/escrows).
-  | bridgeLockA id actor originator destination asset amount =>
-      simp only [execFullA, bridgeLockChainA] at h
-      cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          show k'.revoked = s.kernel.revoked
-          unfold bridgeLockKAsset createBridgeRawAsset at hk; split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
-  | bridgeFinalizeA id actor asset amount =>
-      simp only [execFullA, bridgeFinalizeChainA] at h
-      split at h
-      · cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show k'.revoked = s.kernel.revoked
-            unfold bridgeFinalizeKAsset bridgeFinalizeRawAsset at hk
-            split at hk
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            · exact absurd hk (by simp)
-      · exact absurd h (by simp)
-  | bridgeCancelA id actor =>
-      simp only [execFullA, bridgeCancelChainA] at h
-      split at h
-      · cases hk : bridgeCancelKAsset s.kernel id with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show k'.revoked = s.kernel.revoked
-            unfold bridgeCancelKAsset settleEscrowRawAsset at hk
-            split at hk
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-            · exact absurd hk (by simp)
-      · exact absurd h (by simp)
-  -- §seal — the DE-SHADOWED seal/unseal/createSealPair edit `caps`/`sealedBoxes`; makeSovereign/refusal/
-  -- receiptArchive write the cell record — none touch `revoked` (frame: `rfl`).
   | sealA pid actor payload =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; rfl
@@ -580,27 +399,27 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
             · exact absurd hk (by simp)
             · injection hk with hk; subst hk; rfl
       · exact absurd h (by simp)
-  | queueEnqueueA id m actor cell depId dAsset deposit =>
+  | queueEnqueueA id m actor cell =>
       simp only [execFullA, queueEnqueueChainA] at h
       split at h
-      · cases hk : queueEnqueueDepositK s.kernel id m actor cell depId dAsset deposit with
+      · cases hk : queueEnqueueK s.kernel id m with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some k' =>
             commit_subst h hk
             show k'.revoked = s.kernel.revoked
-            exact queueEnqueueDepositK_revoked s.kernel id m actor cell depId dAsset deposit k' hk
+            exact queueEnqueueK_revoked s.kernel id m k' hk
       · exact absurd h (by simp)
-  | queueDequeueA id actor cell depId =>
+  | queueDequeueA id actor cell =>
       simp only [execFullA, queueDequeueChainA] at h
       split at h
-      · cases hk : queueDequeueRefundK s.kernel id actor depId with
+      · cases hk : queueDequeueK s.kernel id actor with
         | none => rw [hk] at h; exact absurd h (by simp)
         | some kp =>
-            rw [hk] at h
             obtain ⟨k', mhd⟩ := kp
+            rw [hk] at h
             obtain ⟨rfl⟩ := h
             show k'.revoked = s.kernel.revoked
-            exact queueDequeueRefundK_revoked s.kernel id actor depId k' mhd hk
+            exact queueDequeueK_revoked s.kernel id actor k' mhd hk
       · exact absurd h (by simp)
   | queueResizeA id newCap actor cell =>
       simp only [execFullA, queueResizeChainA] at h

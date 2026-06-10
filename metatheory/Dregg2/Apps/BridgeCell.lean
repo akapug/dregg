@@ -16,7 +16,7 @@ dregg1/dregg2 bridge today parks a `bridge := true`-tagged `EscrowRecord` in the
 store `k.escrows`: a LOCK single-cell DEBITs the originator and parks the record; a FINALIZE marks it
 resolved WITHOUT a credit — the value LEFT for the foreign chain, a disclosed OUTFLOW that BREAKS the
 plain per-asset conservation (`bridgeFinalize_breaks_exact`), bought back only by the bespoke
-`recTotalAssetWithEscrow` combined measure; a CANCEL credits the originator back (conserved).
+`recTotalAsset` combined measure; a CANCEL credits the originator back (conserved).
 
 The cell-program rebuild does the OPPOSITE move — the SAME move escrow made: **the bridge cell HOLDS
 the locked value in its own per-asset `bal` column.** A LOCK is an ordinary `move` IN
@@ -374,26 +374,15 @@ pot CELL instead of an off-ledger drop). We re-export the probe's pot law here s
 the verb-era pot law sit side by side: BOTH say "settle the finalized value to the pot cell and the
 per-asset ledger stays EXACT", and the cell-program path gets it from the ORDINARY move law
 (`finalize_conserves`) with NO bespoke combined measure. (`ExactLedger` = the per-asset exact
-conservation invariant `∀ a, recTotalAssetWithEscrow k a = 0`, the W1 forward-model value law.) -/
+conservation invariant `∀ a, recTotalAsset k a = 0`, the W1 forward-model value law.) -/
 
 open Dregg2.Substrate.IssuerSupplyProbe (ExactLedger)
 
-/-- **`potted_finalize_is_exact` — the verb-era W1 bridge-pot law, re-exported.** The W1 result that the
-verb-era `bridgeFinalizeToPotK` settles to a pot cell preserving the EXACT per-asset ledger. The
-cell-program `finalize_conserves` above is the SAME guarantee on the factory-born cell, inherited from
-the plain move law instead of the combined-measure pot theorem. -/
-theorem potted_finalize_is_exact {pot : CellId} {k k' : RecordKernelState} {id : Nat}
-    (h : Dregg2.Substrate.IssuerSupplyProbe.bridgeFinalizeToPotK pot k id = some k')
-    (hex : ExactLedger k) : ExactLedger k' :=
-  Dregg2.Substrate.IssuerSupplyProbe.bridgeFinalizeToPot_preserves_exact h hex
-
-/-- **`verb_finalize_breaks_exact` — the NON-VACUITY contrast (re-exported W1 tooth).** The verb-era
-`bridgeFinalizeKAsset` (the disclosed outflow, NOT settled to a pot) provably BREAKS the exact ledger —
-so the bridge-pot / bridge-cell settle is a genuine REPAIR, not a relabeling. -/
-theorem verb_finalize_breaks_exact {k k' : RecordKernelState} {id : Nat} {asset : AssetId}
-    {amount : ℤ} (h : Dregg2.Exec.bridgeFinalizeKAsset k id asset amount = some k') (hnz : amount ≠ 0)
-    (hex : ExactLedger k) : ¬ ExactLedger k' :=
-  Dregg2.Substrate.IssuerSupplyProbe.bridgeFinalize_breaks_exact h hnz hex
+/-! (F1b) The verb-era re-exports `potted_finalize_is_exact` / `verb_finalize_breaks_exact` are GONE
+with `bridgeFinalizeToPotK` / `bridgeFinalizeKAsset` (deleted with the kernel escrow holding-store).
+Their content lives on ABOVE: `finalize_conserves` IS the potted-settle exactness on the factory-born
+cell (inherited from the plain move law), and the disclosed-outflow contrast is now a non-theorem —
+no kernel verb can drop value off-ledger at all. -/
 
 /-! ## §7 — Axiom hygiene. -/
 
@@ -414,8 +403,6 @@ theorem verb_finalize_breaks_exact {k k' : RecordKernelState} {id : Nat} {asset 
 #assert_axioms locked_cancellable
 #assert_axioms finalize_requires_live_pot
 #assert_axioms cancel_requires_live_originator
-#assert_axioms potted_finalize_is_exact
-#assert_axioms verb_finalize_breaks_exact
 
 /-! ## §DELETION — the bridge-verb deletion-readiness list (land-before-kill).
 

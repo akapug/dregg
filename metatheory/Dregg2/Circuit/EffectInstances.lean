@@ -339,7 +339,7 @@ theorem setField_touchedCellMap_eq (base : CellId → Value) (cell : CellId) (f 
 /-- **`apex_iff_setFieldSpec`** — the framework's derived `apex` for `setFieldE` is EXACTLY
 `SetFieldSpec`. The guard conjunct coincides (`SetFieldGuard`); the post-cell clause is the
 `touchedCellMap` collapsed to `setFieldCellMap`; the log clause is the one-row chain extension; the
-16-field `kernelFrame` REASSOCIATES to `SetFieldSpec`'s 16 frame clauses (whose `bal` sits four slots
+frame `kernelFrame` REASSOCIATES to `SetFieldSpec`'s frame clauses (whose `bal` sits slots
 later than `kernelFrame` lists it — hence a genuine reassoc, not a defeq). -/
 theorem apex_iff_setFieldSpec (s : RecChainedState) (a : SetFieldArgs) (s' : RecChainedState) :
     setFieldE.apex s a s' ↔ SetFieldSpec s a.actor a.cell a.f a.v s' := by
@@ -353,15 +353,15 @@ theorem apex_iff_setFieldSpec (s : RecChainedState) (a : SetFieldArgs) (s' : Rec
   rw [setField_touchedCellMap_eq]
   unfold SetFieldSpec kernelFrame
   constructor
-  · -- kernelFrame order: accounts caps bal escrows nullifiers revoked commitments queues swiss …
-    rintro ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · -- kernelFrame order: accounts caps bal nullifiers revoked commitments queues swiss …
+    rintro ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    -- SetFieldSpec order: accounts caps escrows nullifiers revoked commitments bal queues swiss …
-    exact ⟨hg, hcell, hlog, hAcc, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+    -- SetFieldSpec order: accounts caps nullifiers revoked commitments bal queues swiss …
+    exact ⟨hg, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hcell, hlog, hAcc, hCaps, hEsc, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hcell, hlog, hAcc, hCaps, hNul, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hEsc, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hcell, hlog, hAcc, hCaps, hBal, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §2c — THE VALIDATION: `setFieldE_full_sound` through the framework.

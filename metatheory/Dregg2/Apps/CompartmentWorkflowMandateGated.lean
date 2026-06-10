@@ -231,7 +231,7 @@ theorem cwmRefreshNode_delta_zero (cred : Authorization Dg Pf) (b : AssetId) :
 
 theorem cwm_refresh_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (b : AssetId)
     (h : execFullForestG s (cwmRefreshNode cred) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (cwmRefreshNode cred) b h
     (cwmRefreshNode_delta_zero cred b)
 
@@ -245,13 +245,13 @@ theorem cwmEmitNode_delta_zero (cred : Authorization Dg Pf) (data : Int) (b : As
 
 theorem cwm_op_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (target : Int) (b : AssetId)
     (h : execFullForestG s (cwmAdvanceNode cred target) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (cwmAdvanceNode cred target) b h
     (cwmAdvanceNode_delta_zero cred target b)
 
 theorem cwm_emit_conserves (s s' : RecChainedState) (cred : Authorization Dg Pf) (data : Int) (b : AssetId)
     (h : execFullForestG s (cwmEmitNode cred data) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestG_conserves_per_asset s s' (cwmEmitNode cred data) b h
     (cwmEmitNode_delta_zero cred data b)
 
@@ -410,7 +410,7 @@ def cwmGSigned : Option RecChainedState :=
 #guard (cwmGRedacted.map (fun s => fieldOf stepCursorSlot (s.kernel.cell mandateCell))) == some 2
 #guard (cwmGSigned.map (fun s => fieldOf stepCursorSlot (s.kernel.cell mandateCell))) == some 3
 #guard (cwmGSigned.map (fun s => fieldOf commitmentAnchorSlot (s.kernel.cell mandateCell))) == some cwmCompartmentTag
-#guard ((cwmGSigned.map (fun s => recTotalAssetWithEscrow s.kernel payAsset)).getD 0) == 100
+#guard ((cwmGSigned.map (fun s => recTotalAsset s.kernel payAsset)).getD 0) == 100
 #guard (cwmClearanceOK cwmG0.kernel)
 #guard (cwmWFStrong cwmG0.kernel)
 #guard (cwmInCompartmentStrong cwmG0.kernel cwmCompartmentTag)

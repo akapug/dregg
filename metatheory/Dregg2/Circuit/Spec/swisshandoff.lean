@@ -170,7 +170,7 @@ def HandoffSpecFull (s : RecChainedState) (sw certHash : Nat) (introducer export
        ∧ s'.kernel.swiss = handoffSwissPost s.kernel.swiss sw e certHash)
   ∧ s'.log = handoffReceipt introducer exporter :: s.log
   ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.cell = s.kernel.cell
-  ∧ s'.kernel.caps = s.kernel.caps ∧ s'.kernel.escrows = s.kernel.escrows
+  ∧ s'.kernel.caps = s.kernel.caps
   ∧ s'.kernel.nullifiers = s.kernel.nullifiers ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments ∧ s'.kernel.bal = s.kernel.bal
   ∧ s'.kernel.queues = s.kernel.queues ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
@@ -199,16 +199,16 @@ theorem execFullA_handoff_iff_specFull (s : RecChainedState) (sw certHash : Nat)
     subst hs'
     refine ⟨⟨hauth, hsome⟩, ⟨e, hf, ?_⟩, rfl, ?_⟩
     · rw [hkeq]
-    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+    · rw [hkeq]; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
         rfl, rfl⟩
   · rintro ⟨hg, ⟨e, hf, hsw⟩, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13,
-      h14, h15, h16, h17, h18⟩
+      h14, h15, h16, h17⟩
     refine ⟨hg, ⟨{ s.kernel with swiss := handoffSwissPost s.kernel.swiss sw e certHash }, ?_, ?_⟩⟩
     · exact (handoffSwissUpdate_eq_k s.kernel sw certHash _).mp (handoffSwissUpdate_some s.kernel.swiss sw certHash e hf)
     · obtain ⟨k', lg'⟩ := s'
-      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      simp only at hsw hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
       have hke : k' = { s.kernel with swiss := handoffSwissPost s.kernel.swiss sw e certHash } :=
-        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 h9 hsw h10 h11 h12 h13 h14 h15 h16 h17 h18
+        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h8 hsw h9 h10 h11 h12 h13 h14 h15 h16 h17
       subst hke hlog; rfl
 
 /-- **The strengthening is REAL (HandoffSpec ≡ HandoffSpecFull).** -/
@@ -231,7 +231,7 @@ theorem handoffSpecFull_rejects_delegate_tamper (s s' : RecChainedState) (sw cer
     ¬ HandoffSpecFull s sw certHash introducer exporter
         { s' with kernel := { s'.kernel with delegate := badDelegate } } := by
   -- the strong spec's `delegate` frame conjunct (`= s.kernel.delegate`) contradicts `badDelegate`.
-  rintro ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hdel, _⟩
+  rintro ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hdel, _⟩
   exact hne hdel
 
 #assert_axioms handoffRecord_correct

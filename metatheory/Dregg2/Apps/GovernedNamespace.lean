@@ -103,13 +103,13 @@ theorem gnOp_delta_zero (slot : FieldName) (value : Int) (b : AssetId) :
 
 theorem gn_commit_conserves (s s' : RecChainedState) (newRoot : Int) (b : AssetId)
     (h : execFullForestA s (commitRoot newRoot) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestA_conserves_per_asset s s' (commitRoot newRoot) b h
     (gnOp_delta_zero routeTableRootSlot newRoot b)
 
 theorem gn_op_conserves (s s' : RecChainedState) (slot : FieldName) (value : Int) (b : AssetId)
     (h : execFullForestA s (gnOp slot value) = some s') :
-    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   execFullForestA_conserves_per_asset s s' (gnOp slot value) b h
     (gnOp_delta_zero slot value b)
 
