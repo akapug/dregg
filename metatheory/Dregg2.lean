@@ -233,16 +233,9 @@ import Dregg2.Circuit.BornEmptyCommit -- D5 born-empty side-table digest bundles
 import Dregg2.Circuit.EffectCommit3   -- D5 v2-triple GENERIC core (THREE non-cell components): queueEnqueue/Dequeue (queues+bal+escrows). #assert_axioms-clean
 import Dregg2.Circuit.EffectCommit4    -- D5 v2-quad GENERIC core (FOUR non-cell components): createCellFromFactoryA. #assert_axioms-clean
 import Dregg2.Circuit.EffectCommit5    -- D5 v2-quint GENERIC core (FIVE non-cell components): spawnA. #assert_axioms-clean
-import Dregg2.Circuit.Inst.createEscrowA   -- D5 v2-dual: createEscrowA_full_sound ⇒ EscrowHoldingCreateSpec
-import Dregg2.Circuit.Inst.createCommittedEscrowA -- D5 v2-dual: createCommittedEscrowA_full_sound ⇒ CommittedEscrowCreateSpec (§8 portal)
 import Dregg2.Circuit.Inst.createCellA       -- D5 v2-triple: createCellA_full_sound ⇒ CreateCellSpec (accounts+bal+born-empty side)
 import Dregg2.Circuit.Inst.createCellFromFactoryA -- D5 v2-quad: createCellFromFactoryA_full_sound ⇒ CreateFromFactorySpec
 import Dregg2.Circuit.Inst.spawnA           -- D5 v2-quint: spawnA_full_sound ⇒ SpawnSpec
-import Dregg2.Circuit.Inst.releaseEscrowA -- D5 v2-dual: releaseEscrowA_full_sound ⇒ ReleaseEscrowSpec
-import Dregg2.Circuit.Inst.refundEscrowA  -- D5 v2-dual: refundEscrowA_full_sound ⇒ RefundEscrowSpec
-import Dregg2.Circuit.Inst.bridgeLockA    -- D5 v2-dual: bridgeLockA_full_sound ⇒ BridgeOutboundLockSpec
-import Dregg2.Circuit.Inst.bridgeFinalizeA -- D5 v2 breadth: bridgeFinalizeA_full_sound ⇒ BridgeFinalizeSpec (escrows listComponent; bal framed)
-import Dregg2.Circuit.Inst.bridgeCancelA -- D5 v2-dual VALIDATION: bridgeCancelA_full_sound ⇒ BridgeOutboundCancelSpec (bal funcComponent + escrows listComponent) through EffectCommit2Dual
 import Dregg2.Circuit.Inst.attenuateA        -- D5 v2 breadth: attenuateA_full_sound ⇒ AttenuateSpec (caps funcComponent)
 import Dregg2.Circuit.Inst.balanceA         -- D5 v2 breadth: balanceA_full_sound ⇒ BalanceMovementSpec (bal funcComponent)
 import Dregg2.Circuit.Inst.bridgeMintA     -- D5 v2 breadth: bridgeMintA_full_sound ⇒ InboundMintSpec (bal credit)
@@ -315,15 +308,11 @@ import Dregg2.Circuit.Emit.EffectVmEmitNoteSpendCompose  -- TURN-LEVEL COMPOSITI
 import Dregg2.Circuit.Witness.DelegateWitness  -- B2 v2 WITNESS BEACHHEAD (delegate): delegateWitnessVec runs recCDelegate + lays the v2 full-state witness (width 72), digest cols from a concrete computable surface (capsDigConcrete/rhConcrete/lhConcrete); execute_produces_satisfying_witness + satisfying_witness_proves_full_state reuse delegate_full_sound/effect2_circuit_full_complete (CR portals carried). Concrete #guard: executor-derived witness SATISFIES; the REAL forged post (recipient steals node 9) yields a witness the circuit REJECTS (component-bind gate 68≠69 = real UNSAT). The v2 witness TEMPLATE.
 import Dregg2.Circuit.Witness.CellSealWitness  -- B2 v2 WITNESS (cellSealA/cellUnsealA lifecycle): seal/unsealWitnessVec run execFullA + lifeDigConcrete; executor-derived witness SATISFIES; forged 3rd-cell lifecycle flip REJECTED (component-bind 68≠69). Reuses cellSeal/UnsealA_full_sound.
 import Dregg2.Circuit.Witness.CreateSealPairWitness  -- B2 v2 WITNESS (createSealPairA caps): createSealPairWitnessVec runs execFullA + capsDigConcrete; executor-derived witness SATISFIES; forged 3rd-holder stolen cap REJECTED (component-bind 68≠69). Reuses createSealPairA_full_sound.
-import Dregg2.Circuit.Witness.CreateEscrowWitness  -- B2 v2-dual WITNESS (createEscrowA bal+escrows): createEscrowWitnessVec runs execFullA + balDigConcrete/escDigConcrete; executor-derived witness SATISFIES; forged 3rd-cell bal mint REJECTED (comp1-bal gate 68≠69). Reuses createEscrowA_full_sound.
-import Dregg2.Circuit.Witness.CreateCommittedEscrowWitness  -- B2 v2-dual WITNESS (createCommittedEscrowA bal+escrows, hidingProof gate): executor-derived witness SATISFIES; forged 3rd-cell bal mint REJECTED (comp1-bal gate 68≠69). Reuses createCommittedEscrowA_full_sound.
 import Dregg2.Circuit.Witness.CreateCellWitness  -- B2 v2-triple WITNESS (createCellA accounts+bal+born-empty): executor-derived witness SATISFIES; forged 3rd-cell bal mint REJECTED (comp2-bal gate 70≠71). Reuses createCellA_full_sound.
 import Dregg2.Circuit.Witness.CreateCellFromFactoryWitness  -- B2 v2-quint WITNESS (createCellFromFactoryA accounts+bal+cell+slotCaveats+born-empty-authority): executor-derived witness (facS fixture) SATISFIES; forged bystander bal mint REJECTED (comp2-bal gate 70≠71). Reuses createCellFromFactoryA_full_sound.
 import Dregg2.Circuit.Witness.RefusalWitness          -- B3 v1 WITNESS (refusalA audit-slot write): refusalWitnessVec runs execFullA + lays the v1 full-state witness (width 74) via Common.layoutE/SConc; executor-derived witness SATISFIES; forged 3rd-cell mint (50→999) REJECTED (frame-reuse gate 68≠69). Rust lean_executor_derived_refusal proves+verifies / rejects. Reuses refusalA_full_sound.
 import Dregg2.Circuit.Witness.ReceiptArchiveWitness   -- B3 v1 WITNESS (receiptArchiveA lifecycle-slot write): same shape as refusalA; forged 3rd-cell mint REJECTED (frame-reuse 68≠69). Rust lean_executor_derived_receipt_archive. Reuses receiptArchiveA_full_sound.
 import Dregg2.Circuit.Witness.RefreshDelegationWitness -- B3 v2 WITNESS (refreshDelegationA delegations funcComponent): refreshWitnessVec runs execFullA + delegationsDigConcrete; executor-derived witness SATISFIES; forged stolen delegation cap REJECTED (component-bind 68≠69). Rust lean_executor_derived_refresh_delegation. Reuses refreshDelegationA_full_sound.
-import Dregg2.Circuit.Witness.ReleaseEscrowWitness    -- B3 v2-dual WITNESS (releaseEscrowA bal+escrows): releaseWitnessVec runs execFullA + balDigConcrete/escrowsDigConcrete; executor-derived witness SATISFIES; forged minted recipient credit REJECTED (comp1-bal gate 68≠69). Rust lean_executor_derived_release_escrow. Reuses releaseEscrowA_full_sound.
-import Dregg2.Circuit.Witness.RefundEscrowWitness     -- B3 v2-dual WITNESS (refundEscrowA bal+escrows, creator credit): forged minted creator credit REJECTED (comp1-bal gate 68≠69). Rust lean_executor_derived_refund_escrow. Reuses refundEscrowA_full_sound.
 import Dregg2.Circuit.Witness.QueueResizeWitness      -- B3 v2 WITNESS (queueResizeA queues listComponent): resizeWitnessVec runs execFullA + queuesDigConcrete (post_queues_eq_resizePostQueues derives the apex from the conditional spec); forged buffer-tamper REJECTED (component-bind 68≠69). Rust lean_executor_derived_queue_resize. Reuses queueResizeA_full_sound.
 import Dregg2.Circuit.Witness.QueuePipelineStepWitness -- B3 v2 WITNESS (queuePipelineStepA queues listComponent, message routing): pipelineWitnessVec runs execFullA + queuesDigConcrete; forged dropped-routing-message REJECTED (component-bind 68≠69). Rust lean_executor_derived_queue_pipeline_step. Reuses queuePipelineStepA_full_sound.
 import Dregg2.Circuit.Witness.MintWitness            -- B4 v2 WITNESS (mintA bal funcComponent): mintWitnessVec runs execFullA + balDigConcrete; executor-derived witness SATISFIES; forged 3rd-ledger mint (50→999) REJECTED (component-bind 68≠69). Rust b4_executor_derived_mint. Reuses mintA_full_sound.
@@ -346,11 +335,8 @@ import Dregg2.Circuit.Witness.EnlivenWitness          -- B3 v2 WITNESS (enlivenR
 import Dregg2.Circuit.Witness.balanceAWitness        -- B1 v2 WITNESS (balanceA bal funcComponent): balanceWitnessVec runs recCexecAsset + balDigestC; executor-derived witness SATISFIES; forged bystander bal mint (50→999) REJECTED (component-bind 68≠69). Rust lean_executor_derived_balance_a. Reuses balanceA_full_sound.
 import Dregg2.Circuit.Witness.burnAWitness           -- B1 v2 WITNESS (burnA bal funcComponent, debit): burnWitnessVec runs recCBurnAsset; forged bystander bal mint REJECTED (component-bind 68≠69). Rust lean_executor_derived_burn_a. Reuses burnA_full_sound.
 import Dregg2.Circuit.Witness.bridgeMintAWitness     -- B1 v2 WITNESS (bridgeMintA bal funcComponent, credit): bridgeMintWitnessVec runs recCMintAsset; forged bystander bal mint REJECTED (component-bind 68≠69). Rust lean_executor_derived_bridge_mint_a. Reuses bridgeMintA_full_sound.
-import Dregg2.Circuit.Witness.bridgeFinalizeAWitness -- B1 v2 WITNESS (bridgeFinalizeA escrows listComponent): bridgeFinalizeWitnessVec runs bridgeFinalizeChainA; forged un-resolved record (double-finalize laundering) REJECTED (component-bind 68≠69). Rust lean_executor_derived_bridge_finalize_a. Reuses bridgeFinalizeA_full_sound.
 import Dregg2.Circuit.Witness.attenuateAWitness      -- B1 v2 WITNESS (attenuateA caps funcComponent, TOTAL): attenuateWitnessVec runs attenuateStepA; forged bystander stolen-cap (privilege escalation) REJECTED (component-bind 68≠69). Rust lean_executor_derived_attenuate_a. Reuses attenuateA_full_sound.
 import Dregg2.Circuit.Witness.cellDestroyAWitness    -- B1 v2-dual WITNESS (cellDestroyA lifecycle+deathCert): cellDestroyWitnessVec runs cellDestroyChainA (width 74); forged bystander collateral-kill REJECTED (lifecycle comp-1 gate 68≠69). Rust lean_executor_derived_cell_destroy_a. Reuses cellDestroyA_full_sound.
-import Dregg2.Circuit.Witness.bridgeLockAWitness     -- B1 v2-dual WITNESS (bridgeLockA bal+escrows): bridgeLockWitnessVec runs bridgeLockChainA (width 74); forged bystander bal mint REJECTED (bal comp-1 gate 68≠69). Rust lean_executor_derived_bridge_lock_a. Reuses bridgeLockA_full_sound.
-import Dregg2.Circuit.Witness.bridgeCancelAWitness   -- B1 v2-dual WITNESS (bridgeCancelA bal+escrows, refund): bridgeCancelWitnessVec runs bridgeCancelChainA (width 74); forged bystander bal mint REJECTED (bal comp-1 gate 68≠69). Rust lean_executor_derived_bridge_cancel_a. Reuses bridgeCancelA_full_sound.
 -- B2/B1 v2 WITNESS (tail): the remaining executor-derived witness modules (CI-coverage; each forges a 3rd-party tamper that the component-bind gate rejects):
 import Dregg2.Circuit.Witness.SealWitness            -- sealA witness
 import Dregg2.Circuit.Witness.UnsealWitness          -- unsealA witness
@@ -379,13 +365,7 @@ import Dregg2.Circuit.Spec.authorityattenuation  -- attenuateA/delegateAttenA: a
 import Dregg2.Circuit.Spec.authorityrevocation   -- revoke/dropRefA/revokeDelegationA: edge-removal spec (authority shrinks)
 import Dregg2.Circuit.Spec.notenullifier         -- noteSpendA: nullifier-set insert spec (anti-replay, balance-neutral)
 import Dregg2.Circuit.Spec.notecommitment        -- noteCreateA: commitment-set grow-only spec
-import Dregg2.Circuit.Spec.escrowholdingcreate   -- createEscrowA: lock spec (single-cell debit + parked, combined-conserving)
-import Dregg2.Circuit.Spec.escrowholdingrelease  -- releaseEscrowA: release-to-recipient spec
-import Dregg2.Circuit.Spec.escrowholdingrefund   -- refundEscrowA: refund-to-creator spec
-import Dregg2.Circuit.Spec.escrowcommitted       -- createCommittedEscrowA: hiding-portal-gated escrow spec
 import Dregg2.Circuit.Spec.bridgeinboundmint     -- bridgeMintA: §8 portal inflow spec (disclosed +value at one asset)
-import Dregg2.Circuit.Spec.bridgeoutboundlock    -- bridgeLockA: outbound lock spec (debit + parked bridge record)
-import Dregg2.Circuit.Spec.bridgeoutboundfinalize -- bridgeFinalizeA: outbound burn spec (combined measure drops, disclosed outflow)
 import Dregg2.Circuit.Spec.sealpaircreation      -- createSealPairA: two c-list grants spec (sealer/unsealer caps)
 import Dregg2.Circuit.Spec.sealboxoperations     -- sealA/unsealA: capability box bind/move spec
 import Dregg2.Circuit.Spec.queuepipelinedsend    -- queueEnqueueA + deposit: FIFO append + parked deposit spec (combined-conserving)
@@ -394,7 +374,6 @@ import Dregg2.Circuit.Spec.cellstatelog          -- emitEventA: event/log-append
 import Dregg2.Circuit.Spec.swissexport           -- exportSturdyRefA: CapTP sturdy-ref mint spec (swissExportK; non-amplifying rights ⊆ held, no-dup, balance-neutral)
 import Dregg2.Circuit.Spec.queuefifocore         -- queueAllocate/Resize/Enqueue/DequeueA: the 4 FIFO ring-buffer ops (insert-fresh / no-id-reuse / no-shrink-below-occupancy / dead-cell-rejection, balance-neutral)
 import Dregg2.Circuit.Spec.queuepipelinefanout   -- queuePipelineStepA: atomic dequeue→fanout-enqueue pipeline step spec
-import Dregg2.Circuit.Spec.bridgeoutboundcancel  -- bridgeCancelA: timeout-refund spec (credit originator + resolve, combined-conserving)
 import Dregg2.Circuit.Spec.celllifecycle       -- cellSealA/cellUnsealA/cellDestroyA: Live↔Sealed↔Destroyed lifecycle spec
 import Dregg2.Circuit.Spec.refreshdelegation     -- refreshDelegationA: parent c-list snapshot into delegations
 import Dregg2.DSLEffect                -- `dregg_effect <name> : <Class>` effects eDSL → Spec.Conservation LinearityClass coloring + inherited obligation; #assert_namespace_axioms-clean

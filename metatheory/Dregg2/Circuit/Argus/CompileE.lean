@@ -156,7 +156,7 @@ theorem compileE_collapse_to_generators {α : Type} (alg : StmtEAlgebra α) (f g
 THIS is the section that closes the §Coda residual. Unlike `CompileFold.compileAlgebra` (whose
 leaves are ALL `skipDescriptor` — the opaque-closure residual), `compileEAlgebra`'s `leafOp` is the
 EFFECT-keyed `compileE` itself: each leaf tag emits its audited runnable descriptor
-(`transferVmDescriptor`/`mintVmDescriptor`/`burnVmDescriptor`/the class-A createEscrow descriptor),
+(`transferVmDescriptor`/`mintVmDescriptor`/`burnVmDescriptor`),
 and `seqOp := seqDescr` conjoins (the proven-associative composite from `CompileFold`). The fold's
 leaves are now RICH. -/
 

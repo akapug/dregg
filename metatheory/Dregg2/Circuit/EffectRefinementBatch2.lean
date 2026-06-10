@@ -15,9 +15,6 @@ import Dregg2.Circuit.Inst.setVKA
 import Dregg2.Circuit.Inst.delegateAttenA
 import Dregg2.Circuit.Inst.attenuateA
 import Dregg2.Circuit.Inst.createCellFromFactoryA
-import Dregg2.Circuit.Inst.createCommittedEscrowA
-import Dregg2.Circuit.Inst.bridgeFinalizeA
-import Dregg2.Circuit.Inst.bridgeCancelA
 import Dregg2.Circuit.Inst.unsealA
 import Dregg2.Circuit.Inst.createSealPairA
 import Dregg2.Circuit.Inst.makeSovereignA
@@ -61,9 +58,6 @@ open Dregg2.Circuit.Inst.SetVKA
 open Dregg2.Circuit.Inst.DelegateAttenA
 open Dregg2.Circuit.Inst.AttenuateA
 open Dregg2.Circuit.Inst.CreateCellFromFactoryA
-open Dregg2.Circuit.Inst.CreateCommittedEscrowA
-open Dregg2.Circuit.Inst.BridgeFinalizeA
-open Dregg2.Circuit.Inst.BridgeCancelA
 open Dregg2.Circuit.Inst.UnsealA
 open Dregg2.Circuit.Inst.CreateSealPairA
 open Dregg2.Circuit.Inst.MakeSovereignA
@@ -89,9 +83,6 @@ open Dregg2.Circuit.Spec.CellStatePermissions (SetPermissionsSpec)
 open Dregg2.Circuit.Spec.CellStateVK (SetVKSpec)
 open Dregg2.Circuit.Spec.AuthorityAttenuation (AttenuateSpec DelegateAttenSpec)
 open Dregg2.Circuit.Spec.FactoryCreation (CreateFromFactorySpec)
-open Dregg2.Circuit.Spec.EscrowCommitted (CommittedEscrowCreateSpec)
-open Dregg2.Circuit.Spec.BridgeOutboundFinalize (BridgeFinalizeSpec)
-open Dregg2.Circuit.Spec.BridgeOutboundCancel (BridgeOutboundCancelSpec)
 open Dregg2.Circuit.Spec.SealBoxOperations (UnsealSpec)
 open Dregg2.Circuit.Spec.SealPairCreation (CreateSealPairSpec)
 open Dregg2.Circuit.Spec.SovereignCommitment (MakeSovereignSpec)
@@ -287,19 +278,6 @@ theorem unseal_circuit_refines_fullActionStep (S : Surface2) (D : Caps → ℤ) 
       subst hbox'
       simpa [hfind] using hspec
 
-def bridgeFinalizeCircuitStep (S : Surface2) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : BridgeFinalizeArgs) (s' : RecChainedState) : Prop :=
-  effect2CircuitStep S (bridgeFinalizeE LE cN hN hLE) s args s'
-
-theorem bridgeFinalize_circuit_refines_spec (S : Surface2) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : BridgeFinalizeArgs) (s' : RecChainedState)
-    (h : bridgeFinalizeCircuitStep S LE cN hN hLE s args s') :
-    BridgeFinalizeSpec s args.id args.actor args.asset args.amount s' :=
-  bridgeFinalizeA_full_sound S LE cN hN hLE hRest hLog s args s' h
-
 def queueAllocateCircuitStep (S : Surface2) (LQ : QueueRecord → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLQ : listLeafInjective LQ)
     (s : RecChainedState) (args : AllocateArgs) (s' : RecChainedState) : Prop :=
@@ -429,40 +407,6 @@ theorem refreshDelegation_circuit_refines_spec (S : Surface2) (DDgs : (CellId �
   refreshDelegationA_full_sound S DDgs hDDgs hRest hLog s args s' h
 
 /-! ## §3 — dual-component effects. -/
-
-def createCommittedEscrowCircuitStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : CreateCommittedEscrowArgs) (s' : RecChainedState) : Prop :=
-  satisfiedE2Dual S (createCommittedEscrowE D hD LE cN hN hLE)
-    (encodeE2Dual S (createCommittedEscrowE D hD LE cN hN hLE) s args s')
-
-theorem createCommittedEscrow_circuit_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.EffectCommit2Dual.RestIffNoBalEscrows S.RH)
-    (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : CreateCommittedEscrowArgs) (s' : RecChainedState)
-    (h : createCommittedEscrowCircuitStep S D hD LE cN hN hLE s args s') :
-    CommittedEscrowCreateSpec s args.id args.actor args.creator args.recipient args.asset args.amount
-      args.hidingProof s' :=
-  createCommittedEscrowA_full_sound S D hD LE cN hN hLE hRest hLog s args s' h
-
-def bridgeCancelCircuitStep (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ) (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (s : RecChainedState) (args : BridgeCancelArgs) (s' : RecChainedState) : Prop :=
-  satisfiedE2Dual S (bridgeCancelE D hD LE cN hN hLE)
-    (encodeE2Dual S (bridgeCancelE D hD LE cN hN hLE) s args s')
-
-theorem bridgeCancel_circuit_refines_spec (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
-    (hD : Function.Injective D) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.EffectCommit2Dual.RestIffNoBalEscrows S.RH)
-    (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : BridgeCancelArgs) (s' : RecChainedState)
-    (h : bridgeCancelCircuitStep S D hD LE cN hN hLE s args s') :
-    BridgeOutboundCancelSpec s args.id args.actor s' :=
-  bridgeCancelA_full_sound S D hD LE cN hN hLE hRest hLog s args s' h
 
 def cellDestroyCircuitStep (S : Surface2) (DLife : (CellId → Nat) → ℤ) (hDLife : Function.Injective DLife)
     (DDC : (CellId → Nat) → ℤ) (hDDC : Function.Injective DDC)

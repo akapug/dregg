@@ -2,22 +2,22 @@
 # Dregg2.Spec.CircuitSpecTriangle — THE CROWN-JEWEL CORNER: circuit⟺(intent-)spec.
 
 This module closes corner **(b)** of the three-corner soundness triangle for the reference effect
-families (transfer · mint · escrow-create), connecting the ZK circuit's algebraic statement to the
+families (transfer · mint), connecting the ZK circuit's algebraic statement to the
 INDEPENDENT, intent-derived functional spec.
 
 ## The three corners
 
 For each effect there is an independent declarative spec, against which we prove BOTH:
   * **(a) executor ⟺ spec** — `Dregg2/Spec/FunctionalRefinement.lean`: the intent functional specs
-    (`mintSpec`, `escrowCreateSpec`, …) written field-by-field from protocol intent, with full
-    biconditional triangles (`mint_triangle`, `escrowCreate_triangle`) + anti-ghost teeth.
+    (`mintSpec`, …) written field-by-field from protocol intent, with full
+    biconditional triangles (`mint_triangle`, …) + anti-ghost teeth.
   * **(b) circuit ⟺ spec** — THIS module: a verifying ZK witness pins the SPEC-correct post-state.
 
 ## What corner (b) already had — and the gap it left
 
-The per-effect circuit-soundness theorems (`mintA_full_sound`, `transfer_full_sound`,
-`createEscrowA_full_sound`) prove a satisfying full-state witness yields a *circuit-side* declarative
-spec (`MintASpec`, `BalanceMovementSpec`, `EscrowHoldingCreateSpec`). Those circuit-side specs pin
+The per-effect circuit-soundness theorems (`mintA_full_sound`, `transfer_full_sound`)
+prove a satisfying full-state witness yields a *circuit-side* declarative
+spec (`MintASpec`, `BalanceMovementSpec`). Those circuit-side specs pin
 the post-state in terms of the EXECUTOR'S OWN ledger helpers (`recBalCredit`, `recTransferBal`,
 `recBalCreditCell … (-amount)`). That is genuine full-state soundness over the state commitment, but
 it leaves one question unanswered: **does the circuit enforce the EXACT function the protocol INTENDS
@@ -28,12 +28,12 @@ executor happens to call"?** A reader who does not trust `recBalCredit`'s NAME i
 
 For each reference family we prove the circuit's algebraic statement is SUFFICIENT to enforce the
 INTENT ledger move, written from protocol intent in `FunctionalRefinement` (`intentCredit`,
-`intentDebit`, `escrowCreateRecord`) — NOT from any executor helper:
+`intentDebit`) — NOT from any executor helper:
 
   * **SOUNDNESS** `*_circuit_pins_intent`: a verifying witness ⇒ the post-`bal` ledger is EXACTLY the
-    intent move (`intentCredit`/`intentDebit`/`intentTransfer`), and (escrow) the parked record is
-    EXACTLY the intent record. The bridge is the proved independent-function equalities
-    `intentCredit_eq_balCredit` / `intentDebit_eq_credit` / `intentTransfer_eq_recTransferBal`
+    intent move (`intentCredit`/`intentDebit`/`intentTransfer`). The bridge is the proved
+    independent-function equalities
+    `intentCredit_eq_balCredit` / `intentDebit_eq_balCredit` / `intentTransfer_eq_recTransferBal`
     (§FunctionalRefinement §0 + §2 here): the executor helper and the intent oracle are EQUAL
     functions, so the circuit pins the intent.
 
@@ -67,12 +67,6 @@ import Dregg2.Circuit.Inst.transfer
 import Dregg2.Circuit.Inst.mintA
 import Dregg2.Circuit.Inst.burnA
 import Dregg2.Circuit.Inst.bridgeMintA
-import Dregg2.Circuit.Inst.createEscrowA
-import Dregg2.Circuit.Inst.createCommittedEscrowA
-import Dregg2.Circuit.Inst.bridgeLockA
-import Dregg2.Circuit.Inst.refundEscrowA
-import Dregg2.Circuit.Inst.bridgeCancelA
-import Dregg2.Circuit.Inst.releaseEscrowA
 import Dregg2.Circuit.Inst.delegate
 import Dregg2.Circuit.Inst.delegateAttenA
 import Dregg2.Circuit.Inst.attenuateA
@@ -94,7 +88,6 @@ import Dregg2.Circuit.Inst.revokeDelegationA
 import Dregg2.Circuit.Inst.introduceA
 import Dregg2.Circuit.Inst.validateHandoffA
 import Dregg2.Circuit.Inst.refreshDelegationA
-import Dregg2.Circuit.Inst.bridgeFinalizeA
 import Dregg2.Circuit.Inst.makeSovereignA
 import Dregg2.Circuit.Inst.receiptArchiveA
 import Dregg2.Circuit.Inst.refusalA
@@ -131,7 +124,7 @@ open Dregg2.Circuit.EffectCommit3
 open Dregg2.Circuit.EffectCommit5
 open Dregg2.Circuit.ListCommit (listLeafInjective)
 open Dregg2.Spec.FunctionalRefinement (intentCredit intentDebit intentCredit_eq_balCredit
-  intentDebit_eq_balCredit intentDebit_eq_credit intentCredit_eq_credit escrowCreateRecord)
+  intentDebit_eq_balCredit)
 
 /-! ## §0 — the AMPLIFICATION TEMPLATE.
 
@@ -302,132 +295,17 @@ theorem transfer_intent_is_circuit_acceptable
   have hne : args.t.src ≠ args.t.dst := hspec.1.2.2.2.1
   exact ⟨hspec, pin_intent_of_bridge hspec.2.1 (intentTransfer_eq_recTransferBal _ _ _ _ _ hne).symm⟩
 
-/-! ## §3 — ESCROW CREATE: the circuit pins the INTENT debit AND the INTENT parked record.
-
-`Inst.createEscrowA.createEscrowA_full_sound` gives `EscrowHoldingCreateSpec`, whose `bal` clause is
-`recBalCreditCell s.kernel.bal creator asset (-amount)` and whose `escrows` clause is
-`parkedRecord id creator recipient asset amount :: s.kernel.escrows`. The intent move
-(`FunctionalRefinement`'s `escrowCreateSpec`) debits the creator via `intentDebit` and parks
-`escrowCreateRecord`. `intentDebit_eq_credit` bridges the ledger; `parkedRecord = escrowCreateRecord`
-(a definitional field-for-field identity) bridges the record. So a verifying create witness pins the
-EXACT intent debit AND the EXACT intent parked record. -/
-
-open Dregg2.Circuit.Inst.CreateEscrowA (createEscrowE createEscrowA_full_sound)
-open Dregg2.Circuit.Spec.EscrowHoldingCreate (EscrowHoldingCreateSpec parkedRecord
-  createEscrowChainA_iff_spec)
-
-/-- **`parkedRecord_eq_escrowCreateRecord` (PROVED — definitional record identity).** The circuit
-spec's parked `EscrowRecord` (`parkedRecord`) is FIELD-FOR-FIELD the intent record
-(`escrowCreateRecord` from `FunctionalRefinement`): same `id`, `creator`, `recipient`, `amount`,
-`resolved := false`, `asset`. So the circuit's `escrows`-prepend pins the EXACT intent record (it would
-be FALSE if the executor parked a RESOLVED record, or swapped creator/recipient). -/
-theorem parkedRecord_eq_escrowCreateRecord
-    (a : Dregg2.Exec.Handlers.Escrow.CreateEscrowArgs) :
-    parkedRecord a.id a.creator a.recipient a.asset a.amount = escrowCreateRecord a := by
-  unfold parkedRecord escrowCreateRecord
-  rfl
-
-/-- **THEOREM (escrow-create SOUNDNESS — circuit pins the intent debit + intent record).** A verifying
-full-state witness for `createEscrowE` forces (1) the post-`bal` ledger to be EXACTLY the intent debit
-`intentDebit … creator asset amount` (creator's asset-`asset` column down by `amount`, every other
-entry fixed), AND (2) the post-`escrows` head to be EXACTLY the intent parked record
-`escrowCreateRecord` prepended — both written from protocol intent, NOT from the executor. The
-circuit's algebraic statement enforces the EXACT intended escrow-lock function (ledger move + record). -/
-theorem escrowCreate_circuit_pins_intent
-    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.CreateEscrowA.CreateEscrowArgs)
-    (s' : RecChainedState)
-    (h : satisfiedE2Dual S (createEscrowE D hD LE cN hN hLE)
-        (encodeE2Dual S (createEscrowE D hD LE cN hN hLE) s args s')) :
-    s'.kernel.bal = intentDebit s.kernel.bal args.creator args.asset args.amount
-    ∧ s'.kernel.escrows
-        = { id := args.id, creator := args.creator, recipient := args.recipient,
-            amount := args.amount, resolved := false, asset := args.asset }
-          :: s.kernel.escrows := by
-  have hspec : EscrowHoldingCreateSpec s args.id args.actor args.creator args.recipient args.asset
-      args.amount s' := createEscrowA_full_sound S D hD LE cN hN hLE hRest hLog s args s' h
-  refine ⟨?_, ?_⟩
-  · -- the ledger clause: post = recBalCreditCell … (-amount); bridge to intentDebit.
-    have hsound : s'.kernel.bal = recBalCreditCell s.kernel.bal args.creator args.asset (-args.amount) :=
-      hspec.2.1
-    exact pin_intent_of_bridge hsound (intentDebit_eq_credit _ _ _ _).symm
-  · -- the escrows clause: post = parkedRecord … :: …; parkedRecord IS the intent record literal.
-    have hsound : s'.kernel.escrows
-        = parkedRecord args.id args.creator args.recipient args.asset args.amount :: s.kernel.escrows :=
-      hspec.2.2.1
-    -- parkedRecord unfolds to the field-for-field intent record.
-    have : parkedRecord args.id args.creator args.recipient args.asset args.amount
-        = { id := args.id, creator := args.creator, recipient := args.recipient,
-            amount := args.amount, resolved := false, asset := args.asset } := rfl
-    rw [hsound, this]
-
-/-- **THEOREM (escrow-create ANTI-GHOST at the circuit level).** A witness whose post-`bal` is NOT the
-intent debit does NOT verify — the contrapositive of the ledger half of soundness. Tampering the
-ledger away from the single-cell creator debit (e.g. debiting the recipient, the wrong asset, or
-leaving the balance untouched) ⇒ `satisfiedE2Dual` is UNSATISFIABLE for that post-state. -/
-theorem escrowCreate_circuit_rejects_wrong_ledger
-    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.CreateEscrowA.CreateEscrowArgs)
-    (s' : RecChainedState)
-    (hwrong : s'.kernel.bal ≠ intentDebit s.kernel.bal args.creator args.asset args.amount) :
-    ¬ satisfiedE2Dual S (createEscrowE D hD LE cN hN hLE)
-        (encodeE2Dual S (createEscrowE D hD LE cN hN hLE) s args s') := by
-  intro h
-  exact hwrong (escrowCreate_circuit_pins_intent S D hD LE cN hN hLE hRest hLog s args s' h).1
-
-/-- **THEOREM (escrow-create ANTI-GHOST — wrong parked record).** A witness whose post-`escrows` head
-is NOT the intent parked record does NOT verify — a create that parked a RESOLVED record, swapped
-creator/recipient, or wrote the wrong asset/amount has no verifying witness. -/
-theorem escrowCreate_circuit_rejects_wrong_record
-    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.CreateEscrowA.CreateEscrowArgs)
-    (s' : RecChainedState)
-    (hwrong : s'.kernel.escrows
-        ≠ { id := args.id, creator := args.creator, recipient := args.recipient,
-            amount := args.amount, resolved := false, asset := args.asset } :: s.kernel.escrows) :
-    ¬ satisfiedE2Dual S (createEscrowE D hD LE cN hN hLE)
-        (encodeE2Dual S (createEscrowE D hD LE cN hN hLE) s args s') := by
-  intro h
-  exact hwrong (escrowCreate_circuit_pins_intent S D hD LE cN hN hLE hRest hLog s args s' h).2
-
-/-- **THEOREM (escrow-create COMPLETENESS — the honest intent-realizing step IS circuit-acceptable).**
-A committed `createEscrowChainA` step BOTH satisfies the circuit-side spec `EscrowHoldingCreateSpec`
-the honest prover commits — so a verifying witness exists — AND REALIZES the intent debit
-(`intentDebit … creator asset amount`). So the honest prover's reachable circuit target IS the intent
-escrow-lock move. -/
-theorem escrowCreate_intent_is_circuit_acceptable
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.CreateEscrowA.CreateEscrowArgs)
-    (s' : RecChainedState)
-    (hcommit : createEscrowChainA s args.id args.actor args.creator args.recipient
-        args.asset args.amount = some s') :
-    EscrowHoldingCreateSpec s args.id args.actor args.creator args.recipient args.asset
-      args.amount s'
-    ∧ s'.kernel.bal = intentDebit s.kernel.bal args.creator args.asset args.amount := by
-  have hspec : EscrowHoldingCreateSpec s args.id args.actor args.creator args.recipient args.asset
-      args.amount s' :=
-    (createEscrowChainA_iff_spec s args.id args.actor args.creator args.recipient args.asset
-      args.amount s').mp hcommit
-  exact ⟨hspec, pin_intent_of_bridge hspec.2.1 (intentDebit_eq_credit _ _ _ _).symm⟩
-
 /-! ## §5 — THE REST OF THE VALUE/LEDGER FAMILY: comprehensive intent-pinning.
 
 The financially-load-bearing effects ALL move the per-asset `bal` ledger, and ALL pin to one of the
-SAME three intent oracles (`intentCredit`/`intentDebit`) the reference families use — so the
+SAME intent oracles (`intentCredit`/`intentDebit`) the reference families use — so the
 crown-jewel "circuit enforces the EXACT intended ledger function (not a trusted helper name)" covers
-the WHOLE value family, not just the 3 references. Each effect's circuit-side `*Spec` `bal` clause is
-one of `recBalCredit … (±amt)` / `recBalCreditCell … (±amt)`, bridged by the proved independent
-equalities `intentCredit_eq_balCredit` / `intentDebit_eq_balCredit` / `intentCredit_eq_credit` /
-`intentDebit_eq_credit`. We instantiate the §0 template once per effect (soundness + circuit-level
-anti-ghost), so all 10 ledger effects are intent-pinned. -/
+the WHOLE value family, not just the references. (The escrow/obligation/bridge-lock families left the
+kernel in the dregg3 reduction — re-provided as verified factories in `Dregg2/Apps/` — so the kernel
+ledger family is burn + bridge-mint, alongside §1 mint and §2 transfer.) Each effect's circuit-side
+`*Spec` `bal` clause is `recBalCredit … (±amt)`, bridged by the proved independent equalities
+`intentCredit_eq_balCredit` / `intentDebit_eq_balCredit`. We instantiate the §0 template once per
+effect (soundness + circuit-level anti-ghost). -/
 
 /-! ### §5a — BURN (supply destruction): `recBalCredit … (-amt)` ⇒ `intentDebit`. -/
 
@@ -480,144 +358,6 @@ theorem bridgeMint_circuit_rejects_wrong_ledger
     (hwrong : s'.kernel.bal ≠ intentCredit s.kernel.bal args.cell args.a args.value) :
     ¬ satisfiedE2 S (bridgeMintE D hD) (encodeE2 S (bridgeMintE D hD) s args s') :=
   fun h => hwrong (bridgeMint_circuit_pins_intent S D hD hRest hLog s args s' h)
-
-/-! ### §5c — COMMITTED-ESCROW CREATE: `recBalCreditCell … (-amount)` ⇒ `intentDebit` (dual fw). -/
-
-open Dregg2.Circuit.Inst.CreateCommittedEscrowA (createCommittedEscrowE createCommittedEscrowA_full_sound)
-open Dregg2.Circuit.Spec.EscrowCommitted (CommittedEscrowCreateSpec)
-
-/-- **COMMITTED-ESCROW-CREATE circuit pins the intent debit.** A verifying witness forces the
-post-`bal` to be EXACTLY `intentDebit … creator asset amount` (the creator's hiding-committed lock). -/
-theorem committedEscrow_circuit_pins_intent
-    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState)
-    (args : Dregg2.Circuit.Inst.CreateCommittedEscrowA.CreateCommittedEscrowArgs)
-    (s' : RecChainedState)
-    (h : satisfiedE2Dual S (createCommittedEscrowE D hD LE cN hN hLE)
-        (encodeE2Dual S (createCommittedEscrowE D hD LE cN hN hLE) s args s')) :
-    s'.kernel.bal = intentDebit s.kernel.bal args.creator args.asset args.amount := by
-  have hspec : CommittedEscrowCreateSpec s args.id args.actor args.creator args.recipient
-      args.asset args.amount args.hidingProof s' :=
-    createCommittedEscrowA_full_sound S D hD LE cN hN hLE hRest hLog s args s' h
-  exact pin_intent_of_bridge hspec.2.1 (intentDebit_eq_credit _ _ _ _).symm
-
-/-- **COMMITTED-ESCROW-CREATE circuit anti-ghost.** -/
-theorem committedEscrow_circuit_rejects_wrong_ledger
-    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState)
-    (args : Dregg2.Circuit.Inst.CreateCommittedEscrowA.CreateCommittedEscrowArgs)
-    (s' : RecChainedState)
-    (hwrong : s'.kernel.bal ≠ intentDebit s.kernel.bal args.creator args.asset args.amount) :
-    ¬ satisfiedE2Dual S (createCommittedEscrowE D hD LE cN hN hLE)
-        (encodeE2Dual S (createCommittedEscrowE D hD LE cN hN hLE) s args s') :=
-  fun h => hwrong (committedEscrow_circuit_pins_intent S D hD LE cN hN hLE hRest hLog s args s' h)
-
-/-! ### §5d — BRIDGE-LOCK (outbound): `recBalCreditCell … (-amount)` ⇒ `intentDebit` (dual fw). -/
-
-open Dregg2.Circuit.Inst.BridgeLockA (bridgeLockE bridgeLockA_full_sound)
-open Dregg2.Circuit.Spec.BridgeOutboundLock (BridgeOutboundLockSpec)
-
-/-- **BRIDGE-LOCK circuit pins the intent debit.** A verifying witness forces the post-`bal` to be
-EXACTLY `intentDebit … originator asset amount` (the outbound-bridge lock of the originator). -/
-theorem bridgeLock_circuit_pins_intent
-    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.BridgeLockA.BridgeLockArgs)
-    (s' : RecChainedState)
-    (h : satisfiedE2Dual S (bridgeLockE D hD LE cN hN hLE)
-        (encodeE2Dual S (bridgeLockE D hD LE cN hN hLE) s args s')) :
-    s'.kernel.bal = intentDebit s.kernel.bal args.originator args.asset args.amount := by
-  have hspec : BridgeOutboundLockSpec s args.id args.actor args.originator args.destination
-      args.asset args.amount s' :=
-    bridgeLockA_full_sound S D hD LE cN hN hLE hRest hLog s args s' h
-  exact pin_intent_of_bridge hspec.2.1 (intentDebit_eq_credit _ _ _ _).symm
-
-/-- **BRIDGE-LOCK circuit anti-ghost.** -/
-theorem bridgeLock_circuit_rejects_wrong_ledger
-    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.BridgeLockA.BridgeLockArgs)
-    (s' : RecChainedState)
-    (hwrong : s'.kernel.bal ≠ intentDebit s.kernel.bal args.originator args.asset args.amount) :
-    ¬ satisfiedE2Dual S (bridgeLockE D hD LE cN hN hLE)
-        (encodeE2Dual S (bridgeLockE D hD LE cN hN hLE) s args s') :=
-  fun h => hwrong (bridgeLock_circuit_pins_intent S D hD LE cN hN hLE hRest hLog s args s' h)
-
-/-! ### §5e — THE SETTLE FAMILY (refund / bridge-cancel / release): `recBalCreditCell … amount`
-(a POSITIVE credit to the found record's target) ⇒ `intentCredit`. These specs are existentially
-quantified over the found unresolved record `r`; the pin holds for that found `r`. -/
-
-open Dregg2.Circuit.Inst.RefundEscrowA (refundEscrowE refundEscrowA_full_sound)
-open Dregg2.Circuit.Spec.EscrowHoldingRefund (RefundEscrowSpec)
-
-/-- **REFUND circuit pins the intent credit to the CREATOR.** A verifying `refundEscrowE` witness
-forces, for the found unresolved record `r`, the post-`bal` to be EXACTLY `intentCredit … r.creator
-r.asset r.amount` (refund settles to the CREATOR — the triangle pins refund↔creator at the circuit
-level). -/
-theorem refund_circuit_pins_intent
-    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.RefundEscrowA.RefundEscrowArgs)
-    (s' : RecChainedState)
-    (h : satisfiedE2Dual S (refundEscrowE D hD LE cN hN hLE)
-        (encodeE2Dual S (refundEscrowE D hD LE cN hN hLE) s args s')) :
-    ∃ r : EscrowRecord,
-      s'.kernel.bal = intentCredit s.kernel.bal r.creator r.asset r.amount := by
-  obtain ⟨r, _, hbal, _⟩ := refundEscrowA_full_sound S D hD LE cN hN hLE hRest hLog s args s' h
-  exact ⟨r, pin_intent_of_bridge hbal (intentCredit_eq_credit _ _ _ _).symm⟩
-
-open Dregg2.Circuit.Inst.BridgeCancelA (bridgeCancelE bridgeCancelA_full_sound)
-open Dregg2.Circuit.Spec.BridgeOutboundCancel (BridgeOutboundCancelSpec)
-
-/-- **BRIDGE-CANCEL circuit pins the intent credit to the locked originator.** Symmetric to refund:
-a verifying witness forces, for the found record `r`, the post-`bal` to be EXACTLY `intentCredit …
-r.creator r.asset r.amount` (the outbound lock is returned to its originator). -/
-theorem bridgeCancel_circuit_pins_intent
-    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.BridgeCancelA.BridgeCancelArgs)
-    (s' : RecChainedState)
-    (h : satisfiedE2Dual S (bridgeCancelE D hD LE cN hN hLE)
-        (encodeE2Dual S (bridgeCancelE D hD LE cN hN hLE) s args s')) :
-    ∃ r : EscrowRecord,
-      s'.kernel.bal = intentCredit s.kernel.bal r.creator r.asset r.amount := by
-  obtain ⟨r, _, hbal, _⟩ := bridgeCancelA_full_sound S D hD LE cN hN hLE hRest hLog s args s' h
-  exact ⟨r, pin_intent_of_bridge hbal (intentCredit_eq_credit _ _ _ _).symm⟩
-
-open Dregg2.Circuit.Inst.ReleaseEscrowA (releaseEscrowE releaseEscrowA_full_sound)
-open Dregg2.Circuit.Spec.EscrowHoldingRelease (ReleaseEscrowSpec)
-
-/-- **RELEASE circuit pins the intent credit to the RECIPIENT.** A verifying `releaseEscrowE` witness
-forces, for the found record `r`, the post-`bal` to be EXACTLY `intentCredit … r.recipient r.asset
-r.amount` (release settles to the RECIPIENT — the triangle pins release↔recipient at the circuit
-level, distinct from refund↔creator). -/
-theorem release_circuit_pins_intent
-    (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
-    (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : RestIffNoBalEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.ReleaseEscrowA.ReleaseArgs)
-    (s' : RecChainedState)
-    (h : satisfiedE2Dual S (releaseEscrowE D hD LE cN hN hLE)
-        (encodeE2Dual S (releaseEscrowE D hD LE cN hN hLE) s args s')) :
-    ∃ r : EscrowRecord,
-      s'.kernel.bal = intentCredit s.kernel.bal r.recipient r.asset r.amount := by
-  obtain ⟨r, _, hbal, _⟩ := releaseEscrowA_full_sound S D hD LE cN hN hLE hRest hLog s args s' h
-  exact ⟨r, pin_intent_of_bridge hbal (intentCredit_eq_credit _ _ _ _).symm⟩
 
 /-! ## §6 — THE AUTHORITY (caps) FAMILY: the circuit pins the INTENT cap-graph move.
 
@@ -1254,7 +994,7 @@ theorem unseal_circuit_rejects_wrong_caps
     ¬ satisfiedE2 S (unsealE D hD) (encodeE2 S (unsealE D hD) s args s') :=
   fun h => hwrong (unseal_circuit_pins_intent S D hD hRest hLog s args s' h)
 
-/-! ## §15 — CELL-UNSEAL (lifecycle) / REFRESH-DELEGATION (delegations) / BRIDGE-FINALIZE (escrows). -/
+/-! ## §15 — CELL-UNSEAL (lifecycle) / REFRESH-DELEGATION (delegations). -/
 
 open Dregg2.Circuit.Inst.CellUnsealA (CellUnsealArgs cellUnsealE cellUnsealA_full_sound)
 open Dregg2.Circuit.Spec.CellLifecycle (CellUnsealSpec unsealLifecycleMap)
@@ -1308,42 +1048,6 @@ theorem refreshDelegation_circuit_rejects_wrong_delegations
     (hwrong : s'.kernel.delegations ≠ refreshDelegationsMap s.kernel args.child) :
     ¬ satisfiedE2 S (refreshDelegationE D hD) (encodeE2 S (refreshDelegationE D hD) s args s') :=
   fun h => hwrong (refreshDelegation_circuit_pins_intent S D hD hRest hLog s args s' h)
-
-open Dregg2.Circuit.Inst.BridgeFinalizeA (BridgeFinalizeArgs bridgeFinalizeE bridgeFinalizeA_full_sound)
-open Dregg2.Circuit.Spec.BridgeOutboundFinalize (BridgeFinalizeSpec)
-
-/-- **`intentMarkResolved escrows id`** — the INTENT escrows-table of a settlement: the record with the
-given `id` is marked resolved (`markResolved`); every other record untouched. The SAME `markResolved`
-the circuit's `BridgeFinalizeSpec` pins — re-exposed as the intent ("settle THIS escrow id"). -/
-def intentMarkResolved (escrows : List EscrowRecord) (id : Nat) : List EscrowRecord :=
-  markResolved escrows id
-
-/-- **BRIDGE-FINALIZE circuit pins the intent settle (mark-resolved).** A verifying `bridgeFinalizeE`
-witness forces the post-`escrows` to be EXACTLY `intentMarkResolved … id` (the outbound bridge escrow
-`id` settled). -/
-theorem bridgeFinalize_circuit_pins_intent
-    (S : Surface2) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.BridgeFinalizeA.RestIffNoEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : BridgeFinalizeArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (bridgeFinalizeE LE cN hN hLE)
-        (encodeE2 S (bridgeFinalizeE LE cN hN hLE) s args s')) :
-    s'.kernel.escrows = intentMarkResolved s.kernel.escrows args.id := by
-  have hspec : BridgeFinalizeSpec s args.id args.actor args.asset args.amount s' :=
-    bridgeFinalizeA_full_sound S LE cN hN hLE hRest hLog s args s' h
-  obtain ⟨_r, _, hesc, _⟩ := hspec
-  exact hesc
-
-/-- **BRIDGE-FINALIZE circuit anti-ghost.** -/
-theorem bridgeFinalize_circuit_rejects_wrong_escrows
-    (S : Surface2) (LE : EscrowRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.BridgeFinalizeA.RestIffNoEscrows S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : BridgeFinalizeArgs) (s' : RecChainedState)
-    (hwrong : s'.kernel.escrows ≠ intentMarkResolved s.kernel.escrows args.id) :
-    ¬ satisfiedE2 S (bridgeFinalizeE LE cN hN hLE)
-        (encodeE2 S (bridgeFinalizeE LE cN hN hLE) s args s') :=
-  fun h => hwrong (bridgeFinalize_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h)
 
 /-! ## §16 — THE CELL-AUDIT / SOVEREIGN / EMIT-EVENT FAMILY (v1 commit framework).
 
@@ -1954,22 +1658,10 @@ the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 #assert_axioms transfer_circuit_pins_intent
 #assert_axioms transfer_circuit_rejects_wrong_ledger
 #assert_axioms transfer_intent_is_circuit_acceptable
-#assert_axioms parkedRecord_eq_escrowCreateRecord
-#assert_axioms escrowCreate_circuit_pins_intent
-#assert_axioms escrowCreate_circuit_rejects_wrong_ledger
-#assert_axioms escrowCreate_circuit_rejects_wrong_record
-#assert_axioms escrowCreate_intent_is_circuit_acceptable
 #assert_axioms burn_circuit_pins_intent
 #assert_axioms burn_circuit_rejects_wrong_ledger
 #assert_axioms bridgeMint_circuit_pins_intent
 #assert_axioms bridgeMint_circuit_rejects_wrong_ledger
-#assert_axioms committedEscrow_circuit_pins_intent
-#assert_axioms committedEscrow_circuit_rejects_wrong_ledger
-#assert_axioms bridgeLock_circuit_pins_intent
-#assert_axioms bridgeLock_circuit_rejects_wrong_ledger
-#assert_axioms refund_circuit_pins_intent
-#assert_axioms bridgeCancel_circuit_pins_intent
-#assert_axioms release_circuit_pins_intent
 #assert_axioms delegateAtten_circuit_pins_intent
 #assert_axioms delegateAtten_circuit_rejects_wrong_caps
 #assert_axioms attenuate_circuit_pins_intent
@@ -2017,8 +1709,6 @@ the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 #assert_axioms cellUnseal_circuit_rejects_wrong_lifecycle
 #assert_axioms refreshDelegation_circuit_pins_intent
 #assert_axioms refreshDelegation_circuit_rejects_wrong_delegations
-#assert_axioms bridgeFinalize_circuit_pins_intent
-#assert_axioms bridgeFinalize_circuit_rejects_wrong_escrows
 
 #assert_axioms auditCellMap_eq_intent
 #assert_axioms receiptArchive_circuit_pins_intent

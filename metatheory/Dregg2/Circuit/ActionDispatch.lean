@@ -2,8 +2,11 @@
 # Dregg2.Circuit.ActionDispatch — the `FullActionA` apex dispatcher (Wave 1).
 
 `fullActionStep` case-splits every `FullActionA` constructor to the existing per-family apex specs
-(the 31 leaf `Circuit/Spec/*` modules). `fullActionStep_exec_iff` proves each arm ⟺ its
+(the leaf `Circuit/Spec/*` modules). `fullActionStep_exec_iff` proves each arm ⟺ its
 `execFullA_*_iff_spec` keystone — the spine `TurnWitness` and `Spec.exercise` build on.
+dregg3 F1a: the escrow / obligation / bridge-Lock/Finalize/Cancel families lost their spec
+modules (deleted; they re-land as verified factory cell-programs in `Dregg2/Apps/`); their
+arms carry the executor equation verbatim until F1b removes the kernel constructors.
 
 ## Executor shape (`TurnExecutorFull.lean:3665`)
 
@@ -47,9 +50,6 @@ import Dregg2.Circuit.Spec.authorityrevocation
 import Dregg2.Circuit.Spec.authorityunattenuated
 import Dregg2.Circuit.Spec.balancemovement
 import Dregg2.Circuit.Spec.bridgeinboundmint
-import Dregg2.Circuit.Spec.bridgeoutboundcancel
-import Dregg2.Circuit.Spec.bridgeoutboundfinalize
-import Dregg2.Circuit.Spec.bridgeoutboundlock
 import Dregg2.Circuit.Spec.celllifecycle
 import Dregg2.Circuit.Spec.cellstateaudit
 import Dregg2.Circuit.Spec.cellstatefield
@@ -57,10 +57,6 @@ import Dregg2.Circuit.Spec.cellstatelog
 import Dregg2.Circuit.Spec.cellstatemonotone
 import Dregg2.Circuit.Spec.cellstatepermissions
 import Dregg2.Circuit.Spec.cellstatevk
-import Dregg2.Circuit.Spec.escrowcommitted
-import Dregg2.Circuit.Spec.escrowholdingcreate
-import Dregg2.Circuit.Spec.escrowholdingrefund
-import Dregg2.Circuit.Spec.escrowholdingrelease
 import Dregg2.Circuit.Spec.factorycreation
 import Dregg2.Circuit.Spec.notecommitment
 import Dregg2.Circuit.Spec.notenullifier
@@ -100,14 +96,7 @@ open Dregg2.Circuit.Spec.AccountGrowth
 open Dregg2.Circuit.Spec.FactoryCreation
 open Dregg2.Circuit.Spec.NoteCommitment
 open Dregg2.Circuit.Spec.NoteNullifier
-open Dregg2.Circuit.Spec.EscrowHoldingCreate
-open Dregg2.Circuit.Spec.EscrowHoldingRelease
-open Dregg2.Circuit.Spec.EscrowHoldingRefund
-open Dregg2.Circuit.Spec.EscrowCommitted
 open Dregg2.Circuit.Spec.BridgeInboundMint
-open Dregg2.Circuit.Spec.BridgeOutboundLock
-open Dregg2.Circuit.Spec.BridgeOutboundFinalize
-open Dregg2.Circuit.Spec.BridgeOutboundCancel
 open Dregg2.Circuit.Spec.SealBoxOperations
 open Dregg2.Circuit.Spec.SealPairCreation
 open Dregg2.Circuit.Spec.SovereignCommitment
@@ -259,34 +248,10 @@ mutual
         SpawnSpec st actor child target st'
     | .bridgeMintA actor cell a value =>
         MintASpec st actor cell a value st'
-    | .createEscrowA id actor creator recipient asset amount =>
-        EscrowHoldingCreateSpec st id actor creator recipient asset amount st'
-    | .releaseEscrowA id actor =>
-        ReleaseEscrowSpec st id actor st'
-    | .refundEscrowA id actor =>
-        RefundEscrowSpec st id actor st'
-    | .createObligationA id actor obligor beneficiary asset stake =>
-        EscrowHoldingCreateSpec st id actor obligor beneficiary asset stake st'
-    | .fulfillObligationA id actor =>
-        RefundEscrowSpec st id actor st'
-    | .slashObligationA id actor =>
-        ReleaseEscrowSpec st id actor st'
     | .noteSpendA nf actor spendProof =>
         NoteSpendSpec st nf actor spendProof st'
     | .noteCreateA cm actor =>
         NoteCreateASpec st cm actor st'
-    | .createCommittedEscrowA id actor creator recipient asset amount hidingProof =>
-        CommittedEscrowCreateSpec st id actor creator recipient asset amount hidingProof st'
-    | .releaseCommittedEscrowA id actor =>
-        CommittedEscrowSettleSpec st id actor (fun r => r.recipient) releaseSettleAuthB st'
-    | .refundCommittedEscrowA id actor =>
-        CommittedEscrowSettleSpec st id actor (fun r => r.creator) refundSettleAuthB st'
-    | .bridgeLockA id actor originator destination asset amount =>
-        BridgeOutboundLockSpec st id actor originator destination asset amount st'
-    | .bridgeFinalizeA id actor asset amount =>
-        BridgeFinalizeSpec st id actor asset amount st'
-    | .bridgeCancelA id actor =>
-        BridgeOutboundCancelSpec st id actor st'
     | .sealA pid actor payload =>
         SealSpec st pid actor payload st'
     | .unsealA pid actor recipient =>
@@ -331,6 +296,14 @@ mutual
         CellDestroySpec st actor cell certHash st'
     | .refreshDelegationA actor child =>
         RefreshDelegationSpec st actor child st'
+    -- dregg3 F1a: the escrow / obligation / bridge-Lock/Finalize/Cancel families LOST their
+    -- declarative spec layer (deleted with the per-effect circuit strata; they re-land as
+    -- verified factory cell-programs in `Dregg2/Apps/`). Until F1b removes their
+    -- `FullActionA` constructors, this wildcard carries the executor equation VERBATIM for
+    -- exactly those 12 arms (every surviving effect is matched explicitly above) — an
+    -- honest "no independent spec" marker, not a triangle claim.
+    | fa =>
+        execFullA st fa = some st'
 
   /-- **Declarative inner-turn fold** — left-to-right, all-or-nothing, matching `execInnerA`. -/
   def turnSpec : RecChainedState → List FullActionA → RecChainedState → Prop
@@ -514,48 +487,26 @@ mutual
     | .bridgeMintA actor cell a value => by
       simp only [fullActionStep, execFullA]
       exact Dregg2.Circuit.Spec.SupplyCreation.execBridgeMintA_iff_spec st actor cell a value st'
-    | .createEscrowA id actor creator recipient asset amount => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_createEscrowA_iff_spec st id actor creator recipient asset amount st'
-    | .releaseEscrowA id actor => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_releaseEscrow_iff_spec st id actor st'
-    | .refundEscrowA id actor => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_refundEscrowA_iff_spec st id actor st'
-    | .createObligationA id actor obligor beneficiary asset stake => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_createObligationA_iff_spec st id actor obligor beneficiary asset stake st'
-    | .fulfillObligationA id actor => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_fulfillObligationA_iff_spec st id actor st'
-    | .slashObligationA id actor => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_slashObligation_iff_spec st id actor st'
+    -- dregg3 F1a: the doomed-family arms carry the executor equation verbatim (see
+    -- `fullActionStep`); the iff is definitional until F1b deletes the constructors.
+    | .createEscrowA _ _ _ _ _ _ => Iff.rfl
+    | .releaseEscrowA _ _ => Iff.rfl
+    | .refundEscrowA _ _ => Iff.rfl
+    | .createObligationA _ _ _ _ _ _ => Iff.rfl
+    | .fulfillObligationA _ _ => Iff.rfl
+    | .slashObligationA _ _ => Iff.rfl
     | .noteSpendA nf actor spendProof => by
       simp only [fullActionStep, execFullA]
       exact execFullA_noteSpend_iff_spec st nf actor spendProof st'
     | .noteCreateA cm actor => by
       simp only [fullActionStep, execFullA]
       exact execNoteCreateA_iff_spec st cm actor st'
-    | .createCommittedEscrowA id actor creator recipient asset amount hidingProof => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_createCommittedEscrowA_iff_spec st id actor creator recipient asset amount hidingProof st'
-    | .releaseCommittedEscrowA id actor => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_releaseCommittedEscrowA_iff_spec st id actor st'
-    | .refundCommittedEscrowA id actor => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_refundCommittedEscrowA_iff_spec st id actor st'
-    | .bridgeLockA id actor originator destination asset amount => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_bridgeLockA_iff_spec st id actor originator destination asset amount st'
-    | .bridgeFinalizeA id actor asset amount => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_bridgeFinalize_iff_spec st id actor asset amount st'
-    | .bridgeCancelA id actor => by
-      simp only [fullActionStep, execFullA]
-      exact execFullA_bridgeCancelA_iff_spec st id actor st'
+    | .createCommittedEscrowA _ _ _ _ _ _ _ => Iff.rfl
+    | .releaseCommittedEscrowA _ _ => Iff.rfl
+    | .refundCommittedEscrowA _ _ => Iff.rfl
+    | .bridgeLockA _ _ _ _ _ _ => Iff.rfl
+    | .bridgeFinalizeA _ _ _ _ => Iff.rfl
+    | .bridgeCancelA _ _ => Iff.rfl
     | .sealA pid actor payload => by
       simp only [fullActionStep, execFullA]
       exact execFullA_seal_iff_spec st pid actor payload st'
