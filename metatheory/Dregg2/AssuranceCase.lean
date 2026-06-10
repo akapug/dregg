@@ -54,11 +54,16 @@ post-state left uncommitted (see guarantee C).
   E. **Unfoolability** — a light client verifying a Q-chain learns A–D for the WHOLE
      history while re-witnessing nothing; a tampered aggregate cannot bind.
 -/
-import Dregg2
--- The integrity / freshness / unfoolability keystones live under the `Circuit.Argus` IR
--- umbrella + `CommitmentCrossBind`, which the root `Dregg2` does NOT transitively import.
--- These are the SPECIFIC keystone modules this assurance case references; they are not
--- shared mod-files (importing them into THIS new file is swarm-safe).
+-- The SPECIFIC keystone modules this assurance case references (NOT the root `Dregg2`
+-- aggregator — that would be a circular import, since `Dregg2` imports this file).
+import Dregg2.Conserve                       -- conservation: the shared sum_transfer_conserve library lemma
+import Dregg2.Exec.RecordKernel              -- conservation (ExactConservation) + freshness (nullifiers/epochs)
+import Dregg2.Exec.EffectsAuthority          -- authority: the per-effect non-amplification theorems
+import Dregg2.Exec.AuthModes                 -- authority: the credential-gate admission modes
+import Dregg2.Circuit.RecursiveAggregation   -- unfoolability: light_client_verifies_whole_history
+import Dregg2.Distributed.HistoryAggregation -- unfoolability: the strand/history aggregation surface
+import Dregg2.Crypto.NonMembership           -- freshness: nonmembership_sound/complete (no double-spend)
+import Dregg2.Liveness                       -- freshness: revocation_needs_consensus
 import Dregg2.Circuit.CommitmentCrossBind
 import Dregg2.Circuit.Argus.Receipt
 import Dregg2.Circuit.Argus.Aggregate
