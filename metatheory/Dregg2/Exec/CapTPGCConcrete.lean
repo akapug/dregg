@@ -1,22 +1,20 @@
 /-
-# Dregg2.Exec.CapTPGCConcrete — CapTP distributed-GC SAFETY over the verified swiss refcount table.
+# Dregg2.Exec.CapTPGCConcrete — CapTP distributed-GC SAFETY (the `gc.rs` per-session model).
 
 `Exec.CapTPGC` closed the distributed-GC *liveness* OPEN by lease-based reclaim (a handle whose
 lease has lapsed is reclaimable; a current lease is never reclaimed; cross-vat cycles leak only
 until lease expiry). That is the **eventual-reclamation** half. This module supplies the dual
-**no-premature-reclaim / Byzantine-resistance** half — over the *actually-verified* state, the
-`RecordKernel` swiss refcount table that `execFullA`'s `swissDropA` / `enlivenRefA` arms mutate —
+**no-premature-reclaim / Byzantine-resistance** half over the per-holder session table, the model
+of `captp/src/gc.rs` that `DistributedExports.dregg_captp_process_drop` runs verbatim —
 and we DO NOT re-prove the lease-liveness half (we re-export it from `CapTPGC` for the headline).
 
-Two safety teeth, both at `n > 1` (multiple holders / multiple sessions; `n = 1` is the
-scales-to-zero special case, NOT the target):
+F3 NOTE: the old §1 (refcount laws over the KERNEL swiss side-table) died with the
+seal/swiss/sturdyref verb family — stored-capability semantics live in the caps-in-slots factory
+(`Apps/CapSlotFactory.lean`, R7 epoch-at-retrieval). The `gc.rs` per-session protocol model below
+is the SURVIVOR: it is the transport-layer GC the captp runtime actually runs.
 
-  **§1 — refcount-positivity (no premature reclaim over the swiss table).** Over the verified
-  `swissDropK` / `swissDropA` GC-at-zero arm: an entry with `refcount > 1` STAYS in the swiss
-  table under a drop (the entry is found by `findSwiss` after the drop — it is NOT reclaimed); a
-  drop on a `refcount = 0` entry is REJECTED (fail-closed); the entry is removed ONLY at the
-  `refcount = 1 → 0` boundary (`swissDropK_gc_at_one`, reused). This is the swiss-table mirror of
-  the Rust `ExportEntry.total_refs > 0 ⇒ entry retained` invariant (`gc.rs:207`).
+The safety tooth, at `n > 1` (multiple holders / multiple sessions; `n = 1` is the
+scales-to-zero special case, NOT the target):
 
   **§2 — the session-id Byzantine tooth.** A faithful EXECUTABLE Lean model of
   `ExportGcManager::process_drop_inner` (`gc.rs:170`) — a per-`(cell, federation)` refcount table
@@ -26,15 +24,11 @@ scales-to-zero special case, NOT the target):
   holders: a Byzantine node presenting the WRONG session for a victim holder's ref leaves
   `total_refs` UNCHANGED, while the honest holder on the correct session CAN decrement its own ref.
 
-The connection to the verified executor: §1 is stated directly over `execFullA … (.swissDropA …)`
-and `swissDropK`. §2's table MODELS the *per-holder* session refcounts of `gc.rs`. §2.5 now BRIDGES
-the two: `SwissHoldersCoherent refc t := refc = totalRefs t` pins §1's swiss-entry `refcount` scalar
-to §2's per-holder SUM, and `bridge_processDrop_tracks_refcount` / `bridge_swiss_refcount_eq_holders_sum`
-prove that §2's `processDrop` accept-path decrement TRACKS §1's `swissDropK` scalar `- 1` in lockstep
-(and `bridge_last_ref_iff` aligns §2's `canRevoke` with §1's GC-at-zero). This is the `gcDropTotal`
-that the F1 finding flagged as vapor, now real (subset `{propext, Classical.choice, Quot.sound}`,
-key-uniqueness `NoDupFeds` carried honestly as the `gc.rs` `HashMap` invariant). See
-`docs/rebuild/_PROOF-INTEGRITY-LEDGER.md` MID-1 (RESOLVED). Both halves bite, and they bite TOGETHER.
+§2.5 keeps the SCALAR-coherence laws (`SwissHoldersCoherent refc t := refc = totalRefs t` over a
+plain `Nat` scalar — the `ExportEntry.total_refs == Σ holders` invariant, `gc.rs:198–201`):
+`bridge_processDrop_tracks_refcount` proves the accept-path decrement is unit-exact and
+`bridge_last_ref_iff` aligns `canRevoke` with GC-at-zero (subset `{propext, Classical.choice,
+Quot.sound}`, key-uniqueness `NoDupFeds` carried honestly as the `gc.rs` `HashMap` invariant).
 
 The Rust differential corpus (`gcDifferentialCorpus`) mirrors the `gc.rs` / redteam session tests
 after the F-11/F-12 fix: `byzantine_node_different_session_cannot_drop_others_refs`,
@@ -54,82 +48,12 @@ session id, it cannot drop the victim's ref" — `SessionUnforgeable` names that
 -/
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Exec.CapTPGC
-import Dregg2.Circuit.Spec.swissdrop
 import Dregg2.Tactics
 
 namespace Dregg2.Exec.CapTPGCConcrete
 
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
-open Dregg2.Circuit.Spec.SwissDrop (DropSpec execFullA_drop_iff_spec dropReceipt)
-
-/-! ## §1 — Refcount-positivity safety over the VERIFIED swiss table.
-
-The runtime invariant we want is: *while a sturdy-ref export still has live references
-(`refcount > 0`), the swiss-table entry is RETAINED — it is never GC-reclaimed prematurely.* The
-swiss entry's `refcount` field IS the `gc.rs` `ExportEntry.total_refs` (the SUM of per-holder
-counts). `swissDropK` (the verified GC arm `swissDropA` runs) decrements it and removes the entry
-EXACTLY at the `1 → 0` boundary. So: a drop on a `> 1` entry leaves it FINDABLE (retained), a drop
-on a `= 0` entry is REJECTED, and only the last-ref drop reclaims. -/
-
-/-- **`drop_retains_when_refcount_gt_one` (PROVED) — a multi-ref entry STAYS in the swiss table.**
-If the swiss entry for `sw` has `refcount > 1` and a `swissDropA` commits into `s'`, the entry is
-STILL present after the drop (`findSwiss s'.kernel.swiss sw = some …` with the decremented count) —
-it is NOT reclaimed. This is the no-premature-reclaim guarantee at the verified-state level:
-`total_refs > 1` (more than one outstanding holder) ⇒ the export entry is retained. -/
-theorem drop_retains_when_refcount_gt_one (s s' : RecChainedState) (sw : Nat)
-    (actor exporter : CellId) (e : SwissRecord)
-    (hf : findSwiss s.kernel.swiss sw = some e) (hgt : 1 < e.refcount)
-    (h : execFullA s (.swissDropA sw actor exporter) = some s') :
-    findSwiss s'.kernel.swiss sw = some { e with refcount := e.refcount - 1 } := by
-  -- recover the kernel post-state from the executor⟺spec characterization.
-  rcases (execFullA_drop_iff_spec s sw actor exporter s').mp h with ⟨_, ⟨k', hk, hs'⟩⟩
-  have hker : s'.kernel = k' := congr_arg RecChainedState.kernel hs'
-  -- `swissDropK` on a `> 1` entry takes the DECREMENT (replace) branch, not the GC (remove) branch.
-  have hz : ¬ e.refcount = 0 := by omega
-  have hone : ¬ e.refcount - 1 = 0 := by omega
-  have hk2 : swissDropK s.kernel sw =
-      some { s.kernel with swiss := replaceSwiss s.kernel.swiss sw { e with refcount := e.refcount - 1 } } := by
-    simp only [swissDropK, hf, if_neg hz, if_neg hone]
-  rw [hker]
-  have hkeq : k' = { s.kernel with swiss := replaceSwiss s.kernel.swiss sw { e with refcount := e.refcount - 1 } } :=
-    Option.some.inj (hk.symm.trans hk2)
-  rw [hkeq]
-  -- after replacing with the decremented record, looking `sw` up returns exactly that record.
-  exact findSwiss_replaceSwiss_self s.kernel.swiss sw e { e with refcount := e.refcount - 1 } hf
-    (by show e.swiss = sw; exact findSwiss_swiss_eq hf)
-
-/-- **`drop_rejected_when_refcount_zero` (PROVED) — fail-closed at zero.** A drop on an entry whose
-`refcount` is already `0` is REJECTED by `execFullA` (the GC gate never under-flows). The verified
-mirror of `process_drop_inner`'s `if ref_count.count == 0 { return Invalid }` (`gc.rs:186`). -/
-theorem drop_rejected_when_refcount_zero (s : RecChainedState) (sw : Nat)
-    (actor exporter : CellId) (e : SwissRecord)
-    (hf : findSwiss s.kernel.swiss sw = some e) (hz : e.refcount = 0) :
-    execFullA s (.swissDropA sw actor exporter) = none :=
-  Dregg2.Circuit.Spec.SwissDrop.drop_rejects_zero_refcount s sw actor exporter e hf hz
-
-/-- **`reclaim_only_at_last_ref` (PROVED) — the entry is reclaimed ONLY when its last ref drops.**
-The contrapositive packaging of the two laws above: if a `swissDropA` reclaims the entry (makes it
-absent: `findSwiss s'.kernel.swiss sw = none`), then the PRE-drop refcount was exactly `1` — i.e.
-reclamation happens at, and only at, the `1 → 0` boundary, never while `refcount > 1`. So
-`total_refs > 0` after the would-be decrement is impossible to have been reclaimed: a `> 1` entry is
-retained (`drop_retains_when_refcount_gt_one`), a `0` entry is rejected outright. -/
-theorem reclaim_only_at_last_ref (s s' : RecChainedState) (sw : Nat)
-    (actor exporter : CellId) (e : SwissRecord)
-    (hf : findSwiss s.kernel.swiss sw = some e)
-    (h : execFullA s (.swissDropA sw actor exporter) = some s')
-    (hgone : findSwiss s'.kernel.swiss sw = none) :
-    e.refcount = 1 := by
-  -- positivity comes from the guard (a committed drop requires `0 < refcount`).
-  rcases (execFullA_drop_iff_spec s sw actor exporter s').mp h with ⟨⟨_, e', hf', hpos'⟩, _⟩
-  have hee : e' = e := Option.some.inj (hf'.symm.trans hf)
-  rw [hee] at hpos'
-  -- if `refcount > 1`, the entry would still be present — contradicting `hgone`.
-  rcases Nat.lt_or_ge 1 e.refcount with hgt | hle
-  · have := drop_retains_when_refcount_gt_one s s' sw actor exporter e hf hgt h
-    rw [this] at hgone; exact absurd hgone (by simp)
-  · -- `0 < refcount ≤ 1` forces `refcount = 1`.
-    omega
 
 /-! ## §2 — The session-id Byzantine tooth (a faithful executable model of `gc.rs`).
 
@@ -321,10 +245,10 @@ lived only in prose (the `gcDropTotal` phantom, F1). Here it is a THEOREM:
     by EXACTLY one (the per-holder model's decrement is unit-exact; the `HashMap` key-uniqueness
     invariant `NoDupFeds` rules out a single `fed` being double-counted).
   * **`bridge_drop_tracks`** — the WELD: when §2's `processDrop` accepts (correct session, positive
-    count) AND §1's `swissDropK` commits the `refcount > 1` decrement branch, coherence is PRESERVED
+    count) AND the kernel-scalar side commits the `refcount > 1` decrement branch, coherence is PRESERVED
     across the joint step (`e'.refcount = totalRefs t'`). The two halves now move in lockstep.
   * **`bridge_last_ref_reclaims`** — the boundary: when the LAST holder drops (`totalRefs t' = 0`),
-    §1 reclaims the swiss entry (`swissDropK` takes the remove branch) — §2's `canRevoke` verdict and
+    the scalar hits the GC boundary (the remove branch) — §2's `canRevoke` verdict and
     §1's GC-at-zero agree. -/
 
 /-- **`NoDupFeds t`** — the `gc.rs` `HashMap<FederationId, RefCount>` key-uniqueness invariant: no
@@ -467,7 +391,7 @@ theorem decHolder_pred_total (t : HolderTable) (fed : Fed) (rc : HolderRef) (ses
 
 /-- **`SwissHoldersCoherent refc t`** — THE bridge predicate: §1's scalar `refcount` IS §2's
 per-holder SUM. Stated over the scalar `refc` (the `SwissRecord.refcount` field) so it composes with
-§1's `swissDropK`, which writes exactly `e.refcount - 1`. Not an aggregate standing in for a
+the scalar GC decrement, which writes exactly `refc - 1`. Not an aggregate standing in for a
 per-holder fact — a FULL equality the joint-step lemma below PRESERVES under a synchronized drop. -/
 def SwissHoldersCoherent (refc : Nat) (t : HolderTable) : Prop :=
   refc = totalRefs t
@@ -476,7 +400,7 @@ def SwissHoldersCoherent (refc : Nat) (t : HolderTable) : Prop :=
 scalar refcount and the per-holder sum is PRESERVED across an accepting drop: if `refc = totalRefs t`
 and `fed` is a present, positive holder under a key-unique table, then after §2's `decHolder` the
 DECREMENTED scalar `refc - 1` still equals `totalRefs (decHolder t fed)`. The scalar `-1` that
-§1's `swissDropK` writes is EXACTLY the per-holder sum after the holder drop — the two models move in
+the scalar decrement writes is EXACTLY the per-holder sum after the holder drop — the two models move in
 lockstep, no longer two disconnected halves. -/
 theorem bridge_accept_preserves_coherence (refc : Nat) (t : HolderTable) (fed : Fed) (rc : HolderRef)
     (sess : Session) (hnd : NoDupFeds t) (hf : findHolder t fed = some rc) (hpos : 0 < rc.count)
@@ -487,7 +411,7 @@ theorem bridge_accept_preserves_coherence (refc : Nat) (t : HolderTable) (fed : 
 
 /-- **`bridge_last_ref_iff` (PROVED) — the GC boundary agrees across the two models.** Under
 coherence and an accepting drop, §2's per-holder sum hits `0` (the `canRevoke` verdict's
-`totalRefs t' = 0` condition, `gc.rs:201`) IF AND ONLY IF §1's scalar hits `0` (`swissDropK`'s
+`totalRefs t' = 0` condition, `gc.rs:201`) IF AND ONLY IF the scalar hits `0` (the GC boundary's
 remove branch condition `e.refcount - 1 = 0`). So §2's `canRevoke` and §1's GC-at-zero reclaim
 EXACTLY together — neither reclaims while the other still holds a ref. -/
 theorem bridge_last_ref_iff (refc : Nat) (t : HolderTable) (fed : Fed) (rc : HolderRef)
@@ -497,12 +421,11 @@ theorem bridge_last_ref_iff (refc : Nat) (t : HolderTable) (fed : Fed) (rc : Hol
   unfold SwissHoldersCoherent at hco
   rw [decHolder_pred_total t fed rc sess hnd hf hpos, hco]
 
-/-! ### §2.5a — welding §2's `processDrop` ACCEPT path to §1's `swissDropK`.
+/-! ### §2.5a — welding §2's `processDrop` ACCEPT path to the scalar decrement.
 
 The lemmas above are stated over `decHolder` (the structured drop) and the scalar `- 1`. We now pin
-that `decHolder` IS the table `processDrop` returns on its accept path, and that `swissDropK` on a
-`refcount > 1` entry writes exactly the scalar `- 1` — so the bridge holds over the ACTUAL `gc.rs`
-verdict function (§2) and the ACTUAL verified swiss-drop arm (§1), not just their decompositions. -/
+that `decHolder` IS the table `processDrop` returns on its accept path — so the bridge holds over
+the ACTUAL `gc.rs` verdict function (§2), not just its decomposition. -/
 
 /-- **`processDrop_accept_table` (PROVED) — the accept path returns `decHolderSession`.** When the
 session `sess` has a non-empty bucket on a present holder, `processDrop`'s post-table is exactly
@@ -517,54 +440,13 @@ theorem processDrop_accept_table (t : HolderTable) (fed : Fed) (rc : HolderRef) 
 coherence (`refc = totalRefs t`), key-uniqueness, a present holder with positive total `count`, and a
 session whose bucket on it is non-empty, §2's `processDrop` accept-path post-table has `totalRefs`
 equal to the DECREMENTED §1 scalar `refc - 1`. This is `gcDropTotal` made real: the §2 per-holder
-model's drop and the §1 scalar `swissDropK`'s `refcount - 1` track each other. -/
+model's drop and the scalar `refc - 1` track each other. -/
 theorem bridge_processDrop_tracks_refcount (refc : Nat) (t : HolderTable) (fed : Fed) (rc : HolderRef)
     (sess : Session) (hnd : NoDupFeds t) (hf : findHolder t fed = some rc) (hpos : 0 < rc.count)
     (hsess : 0 < sessionCount rc sess) (hco : SwissHoldersCoherent refc t) :
     totalRefs (processDrop t fed sess).2 = refc - 1 := by
   rw [processDrop_accept_table t fed rc sess hf hsess, decHolder_pred_total t fed rc sess hnd hf hpos]
   unfold SwissHoldersCoherent at hco; omega
-
-/-- **`swissDropK_writes_scalar_pred` (PROVED) — §1 writes exactly `refcount - 1`.** On a `refcount > 1`
-entry, the verified GC arm `swissDropK` commits a post-state whose swiss entry has `refcount` lowered
-by EXACTLY one — the scalar side of the lockstep. (At `refcount = 1` it removes the entry; at `0` it
-rejects — the boundaries `bridge_last_ref_iff` aligns with §2's `canRevoke`.) -/
-theorem swissDropK_writes_scalar_pred (k : RecordKernelState) (sw : Nat) (e : SwissRecord)
-    (hf : findSwiss k.swiss sw = some e) (hgt : 1 < e.refcount) :
-    swissDropK k sw = some { k with swiss := replaceSwiss k.swiss sw { e with refcount := e.refcount - 1 } } := by
-  have hz : ¬ e.refcount = 0 := by omega
-  have hone : ¬ e.refcount - 1 = 0 := by omega
-  simp only [swissDropK, hf, if_neg hz, if_neg hone]
-
-/-- **`bridge_swiss_refcount_eq_holders_sum` (PROVED) — the headline coherence over the swiss entry.**
-The swiss-entry scalar `e.refcount` (§1) equals the per-holder sum `totalRefs t` (§2) under the
-coherence hypothesis — and after a synchronized accepting drop, the POST swiss entry's `refcount`
-(what `swissDropK` writes on the `> 1` branch) equals the POST holder-table sum. The end-to-end
-welding theorem: §1's swiss-table `refcount` field and §2's `gc.rs`-faithful per-holder map agree
-before AND after the drop. -/
-theorem bridge_swiss_refcount_eq_holders_sum
-    (k : RecordKernelState) (sw : Nat) (e : SwissRecord) (t : HolderTable) (fed : Fed) (rc : HolderRef)
-    (sess : Session)
-    (hf : findSwiss k.swiss sw = some e) (hgt : 1 < e.refcount)
-    (hnd : NoDupFeds t) (hfh : findHolder t fed = some rc) (hpos : 0 < rc.count)
-    (hsess : 0 < sessionCount rc sess)
-    (hco : SwissHoldersCoherent e.refcount t)
-    (k' : RecordKernelState)
-    (hk : swissDropK k sw = some k') :
-    ∃ e', findSwiss k'.swiss sw = some e' ∧
-      SwissHoldersCoherent e'.refcount (processDrop t fed sess).2 := by
-  -- §1: swissDropK writes refcount-1 into the entry.
-  have hkw := swissDropK_writes_scalar_pred k sw e hf hgt
-  have hkeq : k' = { k with swiss := replaceSwiss k.swiss sw { e with refcount := e.refcount - 1 } } :=
-    Option.some.inj (hk.symm.trans hkw)
-  have hpost : findSwiss k'.swiss sw = some { e with refcount := e.refcount - 1 } := by
-    rw [hkeq]
-    exact findSwiss_replaceSwiss_self k.swiss sw e { e with refcount := e.refcount - 1 } hf
-      (by show e.swiss = sw; exact findSwiss_swiss_eq hf)
-  refine ⟨{ e with refcount := e.refcount - 1 }, hpost, ?_⟩
-  -- §2: processDrop accept-path sum is e.refcount - 1, which equals the post entry's refcount.
-  unfold SwissHoldersCoherent at hco ⊢
-  rw [processDrop_accept_table t fed rc sess hfh hsess, decHolder_pred_total t fed rc sess hnd hfh hpos, hco]
 
 /-! ## §3 — the lease-liveness half is RE-EXPORTED, not re-proved.
 
@@ -743,9 +625,6 @@ end Differential
 
 /-! ## §5 — axiom-hygiene tripwires. -/
 
-#assert_axioms drop_retains_when_refcount_gt_one
-#assert_axioms drop_rejected_when_refcount_zero
-#assert_axioms reclaim_only_at_last_ref
 #assert_axioms wrong_session_no_op
 #assert_axioms wrong_session_preserves_total
 #assert_axioms byzantine_cannot_drop_victim_ref
@@ -762,8 +641,6 @@ end Differential
 #assert_axioms bridge_last_ref_iff
 #assert_axioms processDrop_accept_table
 #assert_axioms bridge_processDrop_tracks_refcount
-#assert_axioms swissDropK_writes_scalar_pred
-#assert_axioms bridge_swiss_refcount_eq_holders_sum
 #assert_axioms leased_reclaim_eventual
 #assert_axioms leased_no_premature
 #assert_axioms gcDifferentialCorpus_faithful

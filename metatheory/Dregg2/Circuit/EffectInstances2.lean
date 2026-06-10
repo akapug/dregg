@@ -117,10 +117,9 @@ def mintE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.swiss = k.swiss
+      ∧ k'.commitments = k.commitments
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := mintGuardGates
@@ -173,13 +172,13 @@ theorem apex_iff_mintASpec (D : (CellId → AssetId → ℤ) → ℤ) (hD : Func
         ∧ ((mintE D hD).restFrame s.kernel s'.kernel)) ↔ MintASpec s args.actor args.cell args.a args.amt s'
   unfold MintASpec mintGuardProp mintE
   constructor
-  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hbal, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §1c — THE VALIDATION: `mintE_full_sound ⇒ MintASpec` through the framework. -/
@@ -298,10 +297,9 @@ def noteSpendE (LE : Nat → ℤ) (cN : List ℤ → ℤ)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.bal = k.bal ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.swiss = k.swiss
+      ∧ k'.commitments = k.commitments
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := noteSpendGuardGates
@@ -358,14 +356,14 @@ theorem apex_iff_noteSpendSpec (LE : Nat → ℤ) (cN : List ℤ → ℤ)
        ↔ NoteSpendSpec s args.nf args.actor true s'
   unfold NoteSpendSpec noteSpendGuardProp noteSpendE
   constructor
-  · rintro ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hBal, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hBal, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
     -- NoteSpendSpec order: accounts cell caps escrows revoked commitments bal queues swiss …
-    exact ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hRev, hCom, hBal, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hBal, hRev, hCom, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hnull, hlog, hAcc, hCell, hCaps, hBal, hRev, hCom, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §2c — THE VALIDATION: `noteSpendE_full_sound ⇒ NoteSpendSpec` through the framework. -/

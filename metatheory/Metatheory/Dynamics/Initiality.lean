@@ -116,9 +116,7 @@ structure StmtAlgebra (α : Type) where
   setNullifiersOp  : (RecordKernelState → List Nat) → α
   setRevokedOp     : (RecordKernelState → List Nat) → α
   setCommitmentsOp : (RecordKernelState → List Nat) → α
-  setSwissOp       : (RecordKernelState → List SwissRecord) → α
   setFactoriesOp   : (RecordKernelState → List (Nat × FactoryEntry)) → α
-  setSealedBoxesOp : (RecordKernelState → List SealedBoxRecord) → α
   setLifecycleOp   : (RecordKernelState → CellId → Nat) → α
   setDeathCertOp   : (RecordKernelState → CellId → Nat) → α
   setDelegateOp    : (RecordKernelState → CellId → Option CellId) → α
@@ -148,9 +146,7 @@ def foldStmt {α : Type} (alg : StmtAlgebra α) : RecStmt → α
   | .setNullifiers g   => alg.setNullifiersOp g
   | .setRevoked g      => alg.setRevokedOp g
   | .setCommitments g  => alg.setCommitmentsOp g
-  | .setSwiss g        => alg.setSwissOp g
   | .setFactories g    => alg.setFactoriesOp g
-  | .setSealedBoxes g  => alg.setSealedBoxesOp g
   | .setLifecycle g    => alg.setLifecycleOp g
   | .setDeathCert g    => alg.setDeathCertOp g
   | .setDelegate g     => alg.setDelegateOp g
@@ -187,9 +183,7 @@ def interpAlgebra : StmtAlgebra StateK where
   setNullifiersOp  := fun g k => some { k with nullifiers := g k }
   setRevokedOp     := fun g k => some { k with revoked := g k }
   setCommitmentsOp := fun g k => some { k with commitments := g k }
-  setSwissOp       := fun g k => some { k with swiss := g k }
   setFactoriesOp   := fun g k => some { k with factories := g k }
-  setSealedBoxesOp := fun g k => some { k with sealedBoxes := g k }
   setLifecycleOp   := fun g k => some { k with lifecycle := g k }
   setDeathCertOp   := fun g k => some { k with deathCert := g k }
   setDelegateOp    := fun g k => some { k with delegate := g k }
@@ -234,9 +228,7 @@ structure IsFoldHom {α : Type} (alg : StmtAlgebra α) (f : RecStmt → α) : Pr
   onSetNullifiers  : ∀ g, f (.setNullifiers g) = alg.setNullifiersOp g
   onSetRevoked     : ∀ g, f (.setRevoked g) = alg.setRevokedOp g
   onSetCommitments : ∀ g, f (.setCommitments g) = alg.setCommitmentsOp g
-  onSetSwiss       : ∀ g, f (.setSwiss g) = alg.setSwissOp g
   onSetFactories   : ∀ g, f (.setFactories g) = alg.setFactoriesOp g
-  onSetSealedBoxes : ∀ g, f (.setSealedBoxes g) = alg.setSealedBoxesOp g
   onSetLifecycle   : ∀ g, f (.setLifecycle g) = alg.setLifecycleOp g
   onSetDeathCert   : ∀ g, f (.setDeathCert g) = alg.setDeathCertOp g
   onSetDelegate    : ∀ g, f (.setDelegate g) = alg.setDelegateOp g
@@ -258,9 +250,7 @@ theorem foldStmt_isHom {α : Type} (alg : StmtAlgebra α) : IsFoldHom alg (foldS
   onSetNullifiers _ := rfl
   onSetRevoked _ := rfl
   onSetCommitments _ := rfl
-  onSetSwiss _ := rfl
   onSetFactories _ := rfl
-  onSetSealedBoxes _ := rfl
   onSetLifecycle _ := rfl
   onSetDeathCert _ := rfl
   onSetDelegate _ := rfl
@@ -288,9 +278,7 @@ theorem fold_unique {α : Type} (alg : StmtAlgebra α) (f : RecStmt → α) (hf 
   | setNullifiers g => exact hf.onSetNullifiers g
   | setRevoked g => exact hf.onSetRevoked g
   | setCommitments g => exact hf.onSetCommitments g
-  | setSwiss g => exact hf.onSetSwiss g
   | setFactories g => exact hf.onSetFactories g
-  | setSealedBoxes g => exact hf.onSetSealedBoxes g
   | setLifecycle g => exact hf.onSetLifecycle g
   | setDeathCert g => exact hf.onSetDeathCert g
   | setDelegate g => exact hf.onSetDelegate g

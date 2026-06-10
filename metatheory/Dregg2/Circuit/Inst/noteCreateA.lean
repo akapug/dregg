@@ -75,10 +75,9 @@ def RestIffNoCommitments (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
+      ∧ k'.bal = k.bal
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
@@ -139,10 +138,9 @@ def noteCreateE (LE : Nat → ℤ) (cN : List ℤ → ℤ)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.bal = k.bal ∧ k'.swiss = k.swiss
+      ∧ k'.bal = k.bal
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
-      ∧ k'.sealedBoxes = k.sealedBoxes
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := noteCreateGuardGates
@@ -204,13 +202,13 @@ theorem apex_iff_noteCreateASpec (LE : Nat → ℤ) (cN : List ℤ → ℤ)
        ↔ NoteCreateASpec s args.cm args.actor s'
   unfold NoteCreateASpec noteCreateGuardProp noteCreateE
   constructor
-  · rintro ⟨hg, hcom, hlog, hAcc, hCell, hCaps, hNul, hRev, hBal, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hcom, hlog, hAcc, hCell, hCaps, hNul, hRev, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hcom, hlog, hAcc, hCell, hCaps, hNul, hRev, hBal, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hcom, hlog, hAcc, hCell, hCaps, hNul, hRev, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hg, hcom, hlog, hAcc, hCell, hCaps, hNul, hRev, hBal, hQ, hSw, hSC, hFac, hLif,
+  · rintro ⟨hg, hcom, hlog, hAcc, hCell, hCaps, hNul, hRev, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hg, hcom, hlog, hAcc, hCell, hCaps, hNul, hRev, hBal, hQ, hSw, hSC, hFac, hLif,
+    exact ⟨hg, hcom, hlog, hAcc, hCell, hCaps, hNul, hRev, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §2c — THE DELIVERABLE: `noteCreateA_full_sound ⇒ NoteCreateASpec` through the framework. -/

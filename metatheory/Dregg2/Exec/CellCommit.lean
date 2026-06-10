@@ -121,43 +121,6 @@ theorem noteSpendNullifier_commitments {k k' : RecordKernelState} {nf : Nat}
 
 -- (F2b: the queue-family `_commitments` frame helpers died with the queue verb family.)
 
-/-- Swiss export leaves `commitments` unchanged (edits only `swiss`). -/
-theorem swissExportK_commitments {k k' : RecordKernelState} {sw : Nat} {exporter target : CellId}
-    {rights : List Auth} (h : swissExportK k sw exporter target rights = some k') :
-    k'.commitments = k.commitments := by
-  unfold swissExportK at h; split at h
-  · exact absurd h (by simp)
-  · split at h
-    · obtain ⟨rfl⟩ := h; rfl
-    · exact absurd h (by simp)
-
-/-- Swiss enliven leaves `commitments` unchanged (edits only `swiss`). -/
-theorem swissEnlivenK_commitments {k k' : RecordKernelState} {sw : Nat} {claimed : List Auth}
-    (h : swissEnlivenK k sw claimed = some k') : k'.commitments = k.commitments := by
-  unfold swissEnlivenK at h; split at h
-  · exact absurd h (by simp)
-  · split at h
-    · obtain ⟨rfl⟩ := h; rfl
-    · exact absurd h (by simp)
-
-/-- Swiss handoff leaves `commitments` unchanged (edits only `swiss`). -/
-theorem swissHandoffK_commitments {k k' : RecordKernelState} {sw certHash : Nat}
-    (h : swissHandoffK k sw certHash = some k') : k'.commitments = k.commitments := by
-  unfold swissHandoffK at h; split at h
-  · exact absurd h (by simp)
-  · obtain ⟨rfl⟩ := h; rfl
-
-/-- Swiss drop leaves `commitments` unchanged (edits only `swiss`). -/
-theorem swissDropK_commitments {k k' : RecordKernelState} {sw : Nat}
-    (h : swissDropK k sw = some k') : k'.commitments = k.commitments := by
-  unfold swissDropK at h; split at h
-  · exact absurd h (by simp)
-  · split at h
-    · exact absurd h (by simp)
-    · split at h
-      · obtain ⟨rfl⟩ := h; rfl
-      · obtain ⟨rfl⟩ := h; rfl
-
 /-! ## Step 1 — `execFullA_commitments_grow`: the PER-STEP registry frame (grow-only across one step). -/
 
 mutual
@@ -231,17 +194,9 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
   | attenuateA actor idx keep =>
       simp only [execFullA, attenuateStepA, Option.some.injEq] at h; subst h
       exact List.Subset.refl _
-  | dropRefA holder t =>
-      simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h
-      exact subset_of_commitments_eq (recKRevokeTarget_commitments _ _ _)
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h
       exact subset_of_commitments_eq (recKRevokeTarget_commitments _ _ _)
-  | validateHandoffA intro rec t =>
-      simp only [execFullA, recCDelegate] at h
-      cases hk : recKDelegate s.kernel intro rec t with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' => commit_subst h hk; exact subset_of_commitments_eq (recKDelegate_commitments hk)
   | exerciseA actor t inner =>
       simp only [execFullA] at h
       by_cases hf : innerFacetsAdmittedA s actor t inner = true
@@ -288,15 +243,6 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       show s.kernel.commitments ⊆ (noteCreateCommitment s.kernel cm).commitments
       unfold noteCreateCommitment
       exact List.subset_cons_self cm s.kernel.commitments
-  | sealA pid actor payload =>
-      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'
-      exact subset_of_commitments_eq rfl
-  | unsealA pid actor recipient =>
-      simp only [execFullA] at h; obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'
-      exact subset_of_commitments_eq rfl
-  | createSealPairA pid actor sealerHolder x =>
-      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'
-      exact subset_of_commitments_eq rfl
   | makeSovereignA actor cell =>
       simp only [execFullA] at h; obtain ⟨_, hs'⟩ := makeSovereignStep_factors h; subst hs'
       exact subset_of_commitments_eq (makeSovereignKernel_commitments _ _)
@@ -308,30 +254,6 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       exact subset_of_commitments_eq (writeField_commitments _ _ _ _)
   | pipelinedSendA actor =>
       simp only [execFullA, Option.some.injEq] at h; subst h; exact subset_of_commitments_eq rfl
-  | exportSturdyRefA sw actor exporter target rights =>
-      simp only [execFullA, swissExportChainA] at h; split at h
-      · cases hk : swissExportK s.kernel sw exporter target rights with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => commit_subst h hk; exact subset_of_commitments_eq (swissExportK_commitments hk)
-      · exact absurd h (by simp)
-  | enlivenRefA sw actor exporter claimed =>
-      simp only [execFullA, swissEnlivenChainA] at h; split at h
-      · cases hk : swissEnlivenK s.kernel sw claimed with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => commit_subst h hk; exact subset_of_commitments_eq (swissEnlivenK_commitments hk)
-      · exact absurd h (by simp)
-  | swissHandoffA sw certHash introducer exporter =>
-      simp only [execFullA, swissHandoffChainA] at h; split at h
-      · cases hk : swissHandoffK s.kernel sw certHash with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => commit_subst h hk; exact subset_of_commitments_eq (swissHandoffK_commitments hk)
-      · exact absurd h (by simp)
-  | swissDropA sw actor exporter =>
-      simp only [execFullA, swissDropChainA] at h; split at h
-      · cases hk : swissDropK s.kernel sw with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' => commit_subst h hk; exact subset_of_commitments_eq (swissDropK_commitments hk)
-      · exact absurd h (by simp)
   -- §lifecycle (Wave-3) — seal/unseal/destroy edit `lifecycle`/`deathCert`; refresh edits `delegations`
   -- — none touch `commitments` (frame: `rfl`).
   | cellSealA actor cell =>

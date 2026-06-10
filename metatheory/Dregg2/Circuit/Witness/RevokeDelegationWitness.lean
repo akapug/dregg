@@ -116,7 +116,7 @@ def capsDigConcrete : Caps → ℤ :=
 the COMPONENT-bind gate bites, not the rest gate). -/
 def rhConcrete : RecordKernelState → ℤ :=
   fun k => (k.accounts.card : ℤ) + (k.nullifiers.length : ℤ) * 7
-           + (k.commitments.length : ℤ) * 13 + (k.swiss.length : ℤ) * 17
+           + (k.commitments.length : ℤ) * 13 + (k.revoked.length : ℤ) * 17
 
 /-- Concrete log hash: the REAL `turnLogDigest` (binds `src`/`dst`/`amt` the OLD `actor % 2000003` fold
 DROPPED and field-reduced). -/

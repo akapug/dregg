@@ -89,16 +89,15 @@ after the substitutions. (The `nullifiers` field is supplied its post-spend valu
 theorem recKernel_ext {k k' : RecordKernelState}
     (h1 : k'.accounts = k.accounts) (h2 : k'.cell = k.cell) (h3 : k'.caps = k.caps)
     (h4 : k'.nullifiers = k.nullifiers) (h5 : k'.revoked = k.revoked)
-    (h6 : k'.commitments = k.commitments) (h7 : k'.bal = k.bal) 
-    (h9 : k'.swiss = k.swiss) (h10 : k'.slotCaveats = k.slotCaveats)
+    (h6 : k'.commitments = k.commitments) (h7 : k'.bal = k.bal) (h10 : k'.slotCaveats = k.slotCaveats)
     (h11 : k'.factories = k.factories) (h12 : k'.lifecycle = k.lifecycle)
     (h13 : k'.deathCert = k.deathCert) (h14 : k'.delegate = k.delegate)
-    (h15 : k'.delegations = k.delegations) (h16 : k'.sealedBoxes = k.sealedBoxes)
+    (h15 : k'.delegations = k.delegations)
     (h17 : k'.delegationEpoch = k.delegationEpoch) (h18 : k'.delegationEpochAt = k.delegationEpochAt) :
     k' = k := by
   cases k; cases k'
-  simp only at h1 h2 h3 h4 h5 h6 h7 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
-  subst h1 h2 h3 h4 h5 h6 h7 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+  simp only at h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18
+  subst h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18
   rfl
 
 /-! ## §4 — `noteSpendChainA_correct` — the post-state helper validated DECLARATIVELY.
@@ -119,17 +118,15 @@ theorem noteSpendChainA_correct (st : RecChainedState) (nf : Nat) (actor : CellI
       ∧ st'.kernel.revoked = st.kernel.revoked
       ∧ st'.kernel.commitments = st.kernel.commitments
       ∧ st'.kernel.bal = st.kernel.bal
-      ∧ st'.kernel.swiss = st.kernel.swiss
       ∧ st'.kernel.slotCaveats = st.kernel.slotCaveats
       ∧ st'.kernel.factories = st.kernel.factories
       ∧ st'.kernel.lifecycle = st.kernel.lifecycle
       ∧ st'.kernel.deathCert = st.kernel.deathCert
       ∧ st'.kernel.delegate = st.kernel.delegate
       ∧ st'.kernel.delegations = st.kernel.delegations
-      ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
       ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
       ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt := by
-  refine ⟨{ kernel := { st.kernel with nullifiers := nf :: st.kernel.nullifiers }, log := noteSpendReceipt actor :: st.log }, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨{ kernel := { st.kernel with nullifiers := nf :: st.kernel.nullifiers }, log := noteSpendReceipt actor :: st.log }, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp only [noteSpendChainA, noteSpendNullifier, noteSpendReceipt, if_true,
       if_neg hfresh]
   all_goals rfl
@@ -156,14 +153,12 @@ def NoteSpendSpec (st : RecChainedState) (nf : Nat) (actor : CellId) (spendProof
   ∧ st'.kernel.revoked = st.kernel.revoked
   ∧ st'.kernel.commitments = st.kernel.commitments
   ∧ st'.kernel.bal = st.kernel.bal
-  ∧ st'.kernel.swiss = st.kernel.swiss
   ∧ st'.kernel.slotCaveats = st.kernel.slotCaveats
   ∧ st'.kernel.factories = st.kernel.factories
   ∧ st'.kernel.lifecycle = st.kernel.lifecycle
   ∧ st'.kernel.deathCert = st.kernel.deathCert
   ∧ st'.kernel.delegate = st.kernel.delegate
   ∧ st'.kernel.delegations = st.kernel.delegations
-  ∧ st'.kernel.sealedBoxes = st.kernel.sealedBoxes
   ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
   ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
 
@@ -198,9 +193,9 @@ theorem execFullA_noteSpend_iff_spec (st : RecChainedState) (nf : Nat) (actor : 
         simp only [Option.some.injEq] at h
         subst h
         exact ⟨⟨hproof, hfresh⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-          rfl, rfl, rfl, rfl, rfl⟩
-      · rintro ⟨_, hnull, hlog, h1, h2, h3, h6, h7, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19⟩
-        -- rebuild `st'` from the nullifier post-image + log post-image + the 18 frame equalities.
+          rfl, rfl, rfl⟩
+      · rintro ⟨_, hnull, hlog, h1, h2, h3, h6, h7, h9, h10, h11, h12, h13, h14, h15, h17, h18⟩
+        -- rebuild `st'` from the nullifier post-image + log post-image + the 14 frame equalities.
         have hk : st'.kernel = { st.kernel with nullifiers := nf :: st.kernel.nullifiers } := by
           apply recKernel_ext
           · simpa using h1
@@ -216,10 +211,8 @@ theorem execFullA_noteSpend_iff_spec (st : RecChainedState) (nf : Nat) (actor : 
           · simpa using h13
           · simpa using h14
           · simpa using h15
-          · simpa using h16
           · simpa using h17
           · simpa using h18
-          · simpa using h19
         cases st' with
         | mk k' lg' =>
           simp only at hk hlog

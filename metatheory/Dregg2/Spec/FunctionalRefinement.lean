@@ -45,7 +45,6 @@ as the validated REFERENCE PATTERN, and pushes it across the surviving families.
 import Dregg2.Exec.Handlers.Escrow
 import Dregg2.Exec.Handlers.StateSupply
 import Dregg2.Exec.Handlers.Authority
-import Dregg2.Exec.Handlers.Seal
 import Dregg2.Exec.Handlers.Lifecycle
 import Dregg2.Exec.Handlers.Bridge
 import Dregg2.Exec.Handlers.Exercise
@@ -551,7 +550,7 @@ open Dregg2.Exec.Handlers.StateSupply
 open Dregg2.Exec.EffectsState (writeField stateAuthB)
 open Dregg2.Exec.TurnExecutorFull
   (setLifecycle makeSovereignKernel sovereignRebind stateCommitment commitmentField parentClist
-   sealerCap unsealerCap holdsSealCapFor lcSealed lcLive lcDestroyed)
+   lcSealed lcLive lcDestroyed)
 
 /-- **`stateWriteSpec` — the INDEPENDENT declarative post-state of a named-field write.** EXACTLY field
 `a.field` of EXACTLY cell `a.target` becomes `.int a.value` (`writeField` applied at that field/cell);
@@ -602,7 +601,7 @@ theorem stateWrite_antighost (k k'' : RecordKernelState) (a : StateWriteArgs)
 its post-state is FULLY transparent on `k.cell`. Reading the code, it REPLACES exactly `target`'s cell
 record with the commitment-only literal `.record [(commitmentField, .dig (stateCommitment (k.cell
 target)))]`, leaving EVERY OTHER cell's record and ALL other `RecordKernelState` fields
-(`bal`/`accounts`/`caps`/`swiss`/`commitments`/`nullifiers`/lifecycle/…) literally
+(`bal`/`accounts`/`caps`/`commitments`/`nullifiers`/lifecycle/…) literally
 untouched. The ONLY genuinely-irreducible carrier inside is the SCALAR digest `stateCommitment (k.cell
 target)` (the §8 commitment hash of the old record — a structural Nat fold). So we write the spec
 TRANSPARENTLY as an explicit `{ k with cell := <commitment-only stub at target, prior cells elsewhere> }`
@@ -619,7 +618,7 @@ def sovereignStub (k : RecordKernelState) (target : CellId) : Value :=
 /-- **`makeSovereignSpec` — the INDEPENDENT declarative post-state of a make-sovereign (TRANSPARENT).**
 EXACTLY `target`'s cell record becomes the commitment-only `sovereignStub` (its readable record dropped
 behind the §8 state commitment); EVERY OTHER cell's record AND every other field
-(bal/caps/accounts/swiss/commitments/nullifiers/lifecycle) untouched. Written field-by-field
+(bal/caps/accounts/commitments/nullifiers/lifecycle) untouched. Written field-by-field
 from intent ("THIS cell's readable record is replaced by a commitment-only stub; nothing else moves"),
 NOT as `makeSovereignKernel`. -/
 def makeSovereignSpec (k : RecordKernelState) (a : MakeSovereignArgs) : RecordKernelState :=
@@ -755,125 +754,12 @@ theorem refreshDelegation_antighost (k k'' : RecordKernelState) (a : RefreshDele
   intro h
   exact hne ((refreshDelegation_triangle k k'' a).mp h).2
 
-/-! ## §13 — EIGHTH FAMILY: SEAL/SOVEREIGN (createSealPair / seal / unseal) — the sealed-box triangle.
+/-! ## §13 — (F3) the SEAL/SOVEREIGN sealed-box triangles are GONE with the seal verb family.
 
-The seal ops (`Handlers.Seal.createSealPairStep`/`sealStep`/`unsealStep`) move the `caps` c-lists +
-`sealedBoxes` holding-store. We give each an INDEPENDENT intent spec and prove the triangle + anti-ghost
-tooth. createSealPair GRANTS the two seal caps (R3-gated on pid freshness); seal INSERTS a box binding a
-genuinely-held payload; unseal OPENS a found box and GRANTS the recovered cap. -/
-
-open Dregg2.Exec.Handlers.Seal
-  (CreateSealPairArgs createSealPairStep pidFresh SealArgs sealStep sealGate
-   UnsealArgs unsealStep unsealGate)
-
-/-- **`createSealPairSpec` — the INDEPENDENT declarative post-state of a seal-pair create.** The
-sealer-holder's c-list GAINS the sealer cap for `pid` AND the unsealer-holder's c-list GAINS the unsealer
-cap for `pid` (two `grant`s); EVERYTHING ELSE (bal, escrows, sealedBoxes, other cells' caps) untouched.
-Written from intent ("hand out the matched sealer/unsealer cap pair for this fresh pid"). -/
-def createSealPairSpec (k : RecordKernelState) (a : CreateSealPairArgs) : RecordKernelState :=
-  { k with caps := grant (grant k.caps a.sealerHolder (sealerCap a.pid))
-                         a.unsealerHolder (unsealerCap a.pid) }
-
-/-- The create-seal-pair gate: the actor holds authority over `sealerHolder` AND `pid` is FRESH (no box
-already bound under it — the R3 conjunct). -/
-def createSealPairGate (k : RecordKernelState) (a : CreateSealPairArgs) : Prop :=
-  stateAuthB k.caps a.actor a.sealerHolder = true ∧ pidFresh k a.pid = true
-
-/-- **THE CREATE-SEAL-PAIR TRIANGLE (PROVED, FULL BICONDITIONAL).** `createSealPairStep k a = some k'`
-IFF the gate (authority + pid freshness) holds AND `k' = createSealPairSpec k a`. The `→` pins the
-unique intent post-state (EXACTLY the matched sealer/unsealer grants to the two named holders); the `←`
-is completeness. The freshness conjunct is the R3 no-pid-reuse discipline. -/
-theorem createSealPair_triangle (k k' : RecordKernelState) (a : CreateSealPairArgs) :
-    createSealPairStep k a = some k' ↔ (createSealPairGate k a ∧ k' = createSealPairSpec k a) := by
-  unfold createSealPairStep createSealPairGate createSealPairSpec
-  constructor
-  · intro h
-    by_cases hg : stateAuthB k.caps a.actor a.sealerHolder = true ∧ pidFresh k a.pid = true
-    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
-      exact ⟨hg, h.symm⟩
-    · rw [if_neg hg] at h; exact absurd h (by simp)
-  · rintro ⟨hg, hk⟩; rw [if_pos hg, hk]
-
-/-- **ANTI-GHOST TOOTH (create-seal-pair, PROVED).** Any candidate `k'' ≠ createSealPairSpec k a` is
-REJECTED — the create commits EXACTLY the two matched grants; a ghost that granted the WRONG cap, to the
-WRONG holder, or reused an OCCUPIED pid cannot come out of `createSealPairStep`. -/
-theorem createSealPair_antighost (k k'' : RecordKernelState) (a : CreateSealPairArgs)
-    (hne : k'' ≠ createSealPairSpec k a) : createSealPairStep k a ≠ some k'' := by
-  intro h
-  exact hne ((createSealPair_triangle k k'' a).mp h).2
-
-/-- **`sealSpec` — the INDEPENDENT declarative post-state of a seal.** A box binding the held `payload`
-cap, keyed by `pid` and tagged by the sealer, is PREPENDED to the `sealedBoxes` holding-store;
-EVERYTHING ELSE untouched. Written from intent ("park this held cap into a box under this pid"). -/
-def sealSpec (k : RecordKernelState) (a : SealArgs) : RecordKernelState :=
-  { k with sealedBoxes := { pairId := a.pid, sealer := a.actor, payload := a.payload }
-                          :: k.sealedBoxes }
-
-/-- **THE SEAL TRIANGLE (PROVED, FULL BICONDITIONAL).** `sealStep k a = some k'` IFF the seal gate
-(`sealGate` — the actor genuinely HOLDS the sealer cap for `pid` AND HOLDS the `payload` cap) holds AND
-`k' = sealSpec k a`. The `→` pins the unique intent post-state (EXACTLY the box insert of the held
-payload); the `←` is completeness. The gate is the confinement discipline: you cannot seal a cap you do
-not hold. -/
-theorem seal_triangle (k k' : RecordKernelState) (a : SealArgs) :
-    sealStep k a = some k' ↔ (sealGate k a = true ∧ k' = sealSpec k a) := by
-  unfold sealStep sealSpec
-  constructor
-  · intro h
-    by_cases hg : sealGate k a
-    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
-      exact ⟨hg, h.symm⟩
-    · rw [if_neg hg] at h; exact absurd h (by simp)
-  · rintro ⟨hg, hk⟩; rw [if_pos hg, hk]
-
-/-- **ANTI-GHOST TOOTH (seal, PROVED).** Any candidate `k'' ≠ sealSpec k a` is REJECTED — the seal
-commits EXACTLY the box insert of the held payload; a ghost that sealed a cap NOT held, under the WRONG
-pid, or moved a 2nd component cannot come out of `sealStep`. -/
-theorem seal_antighost (k k'' : RecordKernelState) (a : SealArgs)
-    (hne : k'' ≠ sealSpec k a) : sealStep k a ≠ some k'' := by
-  intro h
-  exact hne ((seal_triangle k k'' a).mp h).2
-
-/-- **`unsealSpec` — the INDEPENDENT declarative post-state of an unseal of found box `box`.** The
-recovered `box.payload` cap is GRANTED into the recipient's c-list (`grant`); EVERYTHING ELSE (including
-the box itself — dregg1 leaves the box in place) untouched. Written from intent ("open the box, hand the
-recovered cap to the recipient"). -/
-def unsealSpec (k : RecordKernelState) (a : UnsealArgs) (box : SealedBoxRecord) : RecordKernelState :=
-  { k with caps := grant k.caps a.recipient box.payload }
-
-/-- **THE UNSEAL TRIANGLE (PROVED, FULL BICONDITIONAL).** `unsealStep k a = some k'` IFF the actor holds
-the unsealer cap for `pid` (`unsealGate`), a box `box` is bound under `pid` (`findSealedBox = some box` —
-fail-closed when absent), AND `k' = unsealSpec k a box`. The `→` pins the unique intent post-state
-(EXACTLY the recovered payload granted to the recipient); the `←` is completeness. Unsealing an ABSENT
-box is fail-closed (no `box` witness). -/
-theorem unseal_triangle (k k' : RecordKernelState) (a : UnsealArgs) :
-    unsealStep k a = some k' ↔
-      (unsealGate k a = true ∧ ∃ box, findSealedBox k.sealedBoxes a.pid = some box ∧
-        k' = unsealSpec k a box) := by
-  unfold unsealStep unsealSpec
-  constructor
-  · intro h
-    by_cases hg : unsealGate k a
-    · rw [if_pos hg] at h
-      cases hfind : findSealedBox k.sealedBoxes a.pid with
-      | none     => rw [hfind] at h; exact absurd h (by simp)
-      | some box =>
-          rw [hfind] at h; simp only [Option.some.injEq] at h
-          exact ⟨hg, box, rfl, h.symm⟩
-    · rw [if_neg hg] at h; exact absurd h (by simp)
-  · rintro ⟨hg, box, hfind, hk⟩
-    rw [if_pos hg, hfind, hk]
-
-/-- **ANTI-GHOST TOOTH (unseal, PROVED).** Once the found box `box` is fixed, any candidate
-`k'' ≠ unsealSpec k a box` is REJECTED — the unseal commits EXACTLY the recovered-payload grant to the
-recipient; a ghost that granted the WRONG cap, to the WRONG recipient, or opened a box under the WRONG
-pid cannot come out of `unsealStep`. -/
-theorem unseal_antighost (k k'' : RecordKernelState) (a : UnsealArgs) (box : SealedBoxRecord)
-    (hfind : findSealedBox k.sealedBoxes a.pid = some box) (hne : k'' ≠ unsealSpec k a box) :
-    unsealStep k a ≠ some k'' := by
-  intro h
-  obtain ⟨_, box', hfind', hk⟩ := (unseal_triangle k k'' a).mp h
-  rw [hfind] at hfind'; simp only [Option.some.injEq] at hfind'; subst hfind'
-  exact hne hk
+The createSealPair/seal/unseal triangles rode on `Handlers.Seal` and the kernel `sealedBoxes`
+holding-store; F3 deleted them — a stored capability is a CAPS-IN-SLOTS factory value
+(`Apps/CapSlotFactory.lean`): store = held-gated epoch-stamped slot write, retrieve = the R7
+freshness-gated survivor `grant` (`stored_cap_only_fresh_if_epoch_unrevoked` + `no_forge_from_storage`). -/
 
 /-! ## §14 — NINTH FAMILY: SUPPLY/SPAWN (createCell / createCellFromFactory / spawn) — the growth triangle.
 
@@ -940,23 +826,22 @@ theorem spawn_antighost (k k'' : RecordKernelState) (a : CreateArgs)
 
 /-! ## §15 — NON-VACUITY TEETH (`#guard`) for the four new families: witness TRUE and ghost REJECTED. -/
 
-/-- State/lifecycle/seal/supply fixture: cells 0,1 are accounts; cell 0 holds a `node 0` cap (self-auth
+/-- State/lifecycle/supply fixture: cells 0,1 are accounts; cell 0 holds a `node 0` cap (self-auth
 + privileged-create over fresh ids) and a `node 1` cap; cell 1 is SEALED, cell 0 Live; cell 1 has parent
-cell 0; a sealed box is bound under pid 5. -/
+cell 0. -/
 def sfx : RecordKernelState :=
   { accounts := {0, 1}
     cell := fun _ => .record [("balance", .int 0), ("nonce", .int 7)]
     -- cell 0 holds: node 0/1 (self+edge auth), node 5/6 (privileged create over fresh ids 5,6),
-    -- and an endpoint cap for pid 5 (the unsealer cap for the box bound under pid 5).
+    -- and an endpoint cap (a generic held endpoint, F3: the seal-cap fixture became generic).
     caps := fun c => if c = 0 then
                        [Dregg2.Authority.Cap.node 0, Dregg2.Authority.Cap.node 1,
                         Dregg2.Authority.Cap.node 5, Dregg2.Authority.Cap.node 6,
-                        unsealerCap 5]
+                        Dregg2.Authority.Cap.endpoint 5 [Auth.reply]]
                      else []
     bal := fun c a => if c = 0 ∧ a = 0 then 100 else 0
     lifecycle := fun c => if c = 1 then lcSealed else lcLive
-    delegate := fun c => if c = 1 then some 0 else none
-    sealedBoxes := [{ pairId := 5, sealer := 0, payload := Dregg2.Authority.Cap.node 9 }] }
+    delegate := fun c => if c = 1 then some 0 else none }
 
 -- PURE-STATE WRITE: setField "nonce" of Live cell 0 to 42 commits; reading nonce back = 42.
 #guard (stateWriteStep sfx { actor := 0, target := 0, field := "nonce", value := 42 }).isSome
@@ -999,28 +884,10 @@ def sfx : RecordKernelState :=
 #guard (refreshDelegationStep sfx { actor := 0, child := 1 }).isSome
 #guard ((refreshDelegationStep sfx { actor := 0, child := 1 }).map (fun k => k.delegations 1))
         == some [Dregg2.Authority.Cap.node 0, Dregg2.Authority.Cap.node 1,
-                 Dregg2.Authority.Cap.node 5, Dregg2.Authority.Cap.node 6, unsealerCap 5]
+                 Dregg2.Authority.Cap.node 5, Dregg2.Authority.Cap.node 6,
+                 Dregg2.Authority.Cap.endpoint 5 [Auth.reply]]
 -- a cell WITHOUT a parent (cell 0) cannot refresh ⇒ REJECTED.
 #guard ((refreshDelegationStep sfx { actor := 0, child := 0 }).isSome) == false
-
--- CREATE-SEAL-PAIR: a FRESH pid 8 commits and grants the two seal caps to holders 0 and 1.
-#guard (createSealPairStep sfx { pid := 8, actor := 0, sealerHolder := 0, unsealerHolder := 1 }).isSome
-#guard ((createSealPairStep sfx { pid := 8, actor := 0, sealerHolder := 0, unsealerHolder := 1 }).map
-          (fun k => k.caps 1)) == some [unsealerCap 8]
--- a REUSED pid 5 (already binds a box) is REJECTED (R3 freshness gate bites).
-#guard ((createSealPairStep sfx { pid := 5, actor := 0, sealerHolder := 0, unsealerHolder := 1 }).isSome) == false
-
--- SEAL: actor 0 holds the sealer cap for pid 7 + the payload ⇒ box inserted; a NON-held payload ⇒ REJECTED.
-#guard (match createSealPairStep sfx { pid := 7, actor := 0, sealerHolder := 0, unsealerHolder := 1 } with
-        | some k1 => (sealStep k1 { pid := 7, actor := 0, payload := sealerCap 7 }).isSome
-        | none => false)
--- UNSEAL: actor 0 holds an endpoint-5 cap and a box is bound under 5 ⇒ the payload (node 9) lands in recipient 1.
-#guard (match createSealPairStep sfx { pid := 5, actor := 0, sealerHolder := 0, unsealerHolder := 0 } with
-        | some _ => true | none => true)  -- (pid 5 reuse refused above; unseal tested on the live box directly)
-#guard ((unsealStep sfx { pid := 5, actor := 0, recipient := 1 }).map (fun k => k.caps 1))
-        == some [Dregg2.Authority.Cap.node 9]
--- unseal of an ABSENT box (pid 99) is fail-closed ⇒ REJECTED (even if actor held the cap shape).
-#guard ((unsealStep sfx { pid := 99, actor := 0, recipient := 1 }).isSome) == false
 
 -- CREATE-CELL: a privileged creator (node 0) mints a FRESH id 5 (∉ accounts) born EMPTY (bal 5 0 = 0).
 #guard (createCellStep sfx { actor := 0, newCell := 5 }).isSome
@@ -1042,12 +909,6 @@ def sfx : RecordKernelState :=
 #assert_axioms cellDestroy_antighost
 #assert_axioms refreshDelegation_triangle
 #assert_axioms refreshDelegation_antighost
-#assert_axioms createSealPair_triangle
-#assert_axioms createSealPair_antighost
-#assert_axioms seal_triangle
-#assert_axioms seal_antighost
-#assert_axioms unseal_triangle
-#assert_axioms unseal_antighost
 #assert_axioms createCell_triangle
 #assert_axioms createCell_antighost
 #assert_axioms spawn_triangle
@@ -1060,197 +921,21 @@ rode on `createBridgeRawAsset`/`settleEscrowRawAsset` and the bridge-tagged `esc
 deleted them — the bridge functional story lives in the bridge-cell contract
 (`Apps/BridgeCell.lean`). The inbound `bridgeMint` triangle survives in §6. -/
 
-/-! ## §18 — ELEVENTH FAMILY: SWISS / HANDOFF (export / enliven / handoff / drop) + CapTP graph moves
-(introduce / validateHandoff / dropRef) — the sturdy-ref table + cap-graph triangle.
+/-! ## §18 — ELEVENTH FAMILY: CapTP graph moves (introduce = `recKDelegate`, reach-drop =
+`recKRevokeTarget`) — the cap-graph triangle.
 
-The swiss-table ops (`swissExportK`/`swissEnlivenK`/`swissHandoffK`/`swissDropK`) move the `swiss`
-sturdy-ref side-table (dregg1's 32-byte unguessable swiss numbers, the CapTP `ExportSturdyRef`/`Enliven`/
-`ValidateHandoff`/`DropRef` GC machinery); the CapTP graph moves (`introduce`/`validateHandoff` =
-`recKDelegate`, `dropRef` = `recKRevokeTarget`) move the `caps` c-list. Each gets a TRANSPARENT spec (the
-EXACT swiss/caps table change, from intent) + a full triangle + anti-ghost tooth. Every swiss op is
-balance-NEUTRAL (touches only `swiss`); the foreign-vat 3-party introduce CERT is a NAMED carrier (we model
-the LOCAL `cert := some certHash` bind, the signature-validation portal deferred to §8). -/
+(F3: the SWISS sturdy-ref table triangles — export/enliven/handoff/drop over the kernel `swiss`
+side-table — are GONE with the seal/swiss/sturdyref verb family; a sturdy ref is a caps-in-slots
+factory value, `Apps/CapSlotFactory.lean`, R7 epoch-at-retrieval. The kernel cap-graph primitives
+below SURVIVE: `recKDelegate` is `introduceA`'s arm, `recKRevokeTarget` is the shared revocation
+`removeEdge` that `revoke`/`revokeDelegationA` run.)
 
-/-- **`swissExportSpec` — the INDEPENDENT post-state of a sturdy-ref export (TRANSPARENT).** A fresh swiss
-entry `{ swiss := sw, exporter, target, rights, refcount := 1, cert := none }` is PREPENDED to the
-`swiss` table; EVERYTHING ELSE untouched. Written from intent ("mint a sturdy ref to `target` carrying
-`rights`, born with one live reference"). The export is GATED on swiss freshness (no duplicate) AND the
-exported `rights` being `⊆` the exporter's GENUINELY-HELD rights (`rightsNarrowerOrEqual rights (heldAuths
-k exporter)` — the no-amplification gate; a bare actor cannot mint a ref carrying rights it never held). -/
-def swissExportSpec (k : RecordKernelState) (sw : Nat) (exporter target : CellId) (rights : List Auth) :
-    RecordKernelState :=
-  { k with swiss := { swiss := sw, exporter := exporter, target := target,
-                      rights := rights, refcount := 1, cert := none } :: k.swiss }
-
-/-- **THE SWISS-EXPORT TRIANGLE (PROVED, FULL BICONDITIONAL).** `swissExportK k sw exporter target rights
-= some k'` IFF the swiss number is FRESH (`findSwiss = none`) AND the exported `rights ⊆ heldAuths k
-exporter` (no amplification) AND `k' = swissExportSpec …`. The `→` pins the unique TRANSPARENT post-state
-(the fresh refcount-1 entry); the `←` is completeness. -/
-theorem swissExport_triangle (k k' : RecordKernelState) (sw : Nat) (exporter target : CellId)
-    (rights : List Auth) :
-    swissExportK k sw exporter target rights = some k' ↔
-      (findSwiss k.swiss sw = none ∧ rightsNarrowerOrEqual rights (heldAuths k exporter) = true ∧
-       k' = swissExportSpec k sw exporter target rights) := by
-  unfold swissExportK swissExportSpec
-  constructor
-  · intro h
-    cases hf : findSwiss k.swiss sw with
-    | some _ => rw [hf] at h; exact absurd h (by simp)
-    | none =>
-        rw [hf] at h; simp only at h
-        by_cases hr : rightsNarrowerOrEqual rights (heldAuths k exporter) = true
-        · rw [if_pos hr] at h; simp only [Option.some.injEq] at h; exact ⟨rfl, hr, h.symm⟩
-        · rw [if_neg hr] at h; exact absurd h (by simp)
-  · rintro ⟨hf, hr, hk⟩; rw [hf, if_pos hr, hk]
-
-/-- **ANTI-GHOST TOOTH (swiss export, PROVED).** Any candidate `k'' ≠ swissExportSpec …` is REJECTED — an
-export that minted the WRONG rights, a non-1 refcount, a pre-bound cert, or reused a swiss number is
-excluded. -/
-theorem swissExport_antighost (k k'' : RecordKernelState) (sw : Nat) (exporter target : CellId)
-    (rights : List Auth) (hne : k'' ≠ swissExportSpec k sw exporter target rights) :
-    swissExportK k sw exporter target rights ≠ some k'' := by
-  intro h
-  exact hne ((swissExport_triangle k k'' sw exporter target rights).mp h).2.2
-
-/-- **`swissEnlivenSpec` — the INDEPENDENT post-state of an enliven over found entry `e` (TRANSPARENT).**
-The entry's `refcount` is BUMPED by one (a new live reference), the entry replaced in place
-(`replaceSwiss`); EVERYTHING ELSE untouched. Written from intent ("grant a live reference — one more
-holder"). The enliven is GATED on the bearer's `claimed` rights being `⊆` the entry's exported `rights`
-(`rightsNarrowerOrEqual claimed e.rights` — the CapTP non-amplification gate). -/
-def swissEnlivenSpec (k : RecordKernelState) (sw : Nat) (e : SwissRecord) : RecordKernelState :=
-  { k with swiss := replaceSwiss k.swiss sw { e with refcount := e.refcount + 1 } }
-
-/-- **THE SWISS-ENLIVEN TRIANGLE (PROVED, FULL BICONDITIONAL).** `swissEnlivenK k sw claimed = some k'`
-IFF a found entry `e` exists (`findSwiss = some e`) whose exported rights DOMINATE the `claimed` rights AND
-`k' = swissEnlivenSpec k sw e`. The `→` pins the unique TRANSPARENT post-state (the refcount bump in place)
-AND surfaces the non-amplification gate; the `←` is completeness. -/
-theorem swissEnliven_triangle (k k' : RecordKernelState) (sw : Nat) (claimed : List Auth) :
-    swissEnlivenK k sw claimed = some k' ↔
-      (∃ e, findSwiss k.swiss sw = some e ∧ rightsNarrowerOrEqual claimed e.rights = true ∧
-            k' = swissEnlivenSpec k sw e) := by
-  unfold swissEnlivenK swissEnlivenSpec
-  constructor
-  · intro h
-    cases hf : findSwiss k.swiss sw with
-    | none => rw [hf] at h; exact absurd h (by simp)
-    | some e =>
-        rw [hf] at h; simp only at h
-        by_cases hr : rightsNarrowerOrEqual claimed e.rights = true
-        · rw [if_pos hr] at h; simp only [Option.some.injEq] at h; exact ⟨e, rfl, hr, h.symm⟩
-        · rw [if_neg hr] at h; exact absurd h (by simp)
-  · rintro ⟨e, hf, hr, hk⟩; rw [hf]; simp only; rw [if_pos hr, hk]
-
-/-- **ANTI-GHOST TOOTH (swiss enliven, PROVED).** Once the found entry `e` is fixed, any candidate
-`k'' ≠ swissEnlivenSpec k sw e` is REJECTED — an enliven that bumped the WRONG entry, granted amplified
-rights, or failed to bump the refcount is excluded. -/
-theorem swissEnliven_antighost (k k'' : RecordKernelState) (sw : Nat) (claimed : List Auth)
-    (e : SwissRecord) (hf : findSwiss k.swiss sw = some e) (hne : k'' ≠ swissEnlivenSpec k sw e) :
-    swissEnlivenK k sw claimed ≠ some k'' := by
-  intro h
-  obtain ⟨e', hf', _, hk⟩ := (swissEnliven_triangle k k'' sw claimed).mp h
-  rw [hf] at hf'; simp only [Option.some.injEq] at hf'; subst hf'
-  exact hne hk
-
-/-- **`swissHandoffSpec` — the INDEPENDENT post-state of a 3-vat handoff over found entry `e`
-(TRANSPARENT).** The entry's `cert` is BOUND to `some certHash` AND its `refcount` BUMPED (the recipient's
-new live ref), the entry replaced in place; EVERYTHING ELSE untouched. Written from intent ("bind the
-3-vat introduce cert and grant the recipient a live reference"). The signature-validation of the cert is
-the §8 portal carrier — here we model the LOCAL bind. TOTAL once the entry is found (no rights gate — the
-handoff is the recipient's own introduce-cert path). -/
-def swissHandoffSpec (k : RecordKernelState) (sw certHash : Nat) (e : SwissRecord) : RecordKernelState :=
-  { k with swiss := replaceSwiss k.swiss sw { e with cert := some certHash, refcount := e.refcount + 1 } }
-
-/-- **THE SWISS-HANDOFF TRIANGLE (PROVED, FULL BICONDITIONAL).** `swissHandoffK k sw certHash = some k'`
-IFF a found entry `e` exists AND `k' = swissHandoffSpec k sw certHash e`. The `→` pins the unique
-TRANSPARENT post-state (cert bind + refcount bump in place); the `←` is completeness (fail-closed only when
-the entry is ABSENT). -/
-theorem swissHandoff_triangle (k k' : RecordKernelState) (sw certHash : Nat) :
-    swissHandoffK k sw certHash = some k' ↔
-      (∃ e, findSwiss k.swiss sw = some e ∧ k' = swissHandoffSpec k sw certHash e) := by
-  unfold swissHandoffK swissHandoffSpec
-  constructor
-  · intro h
-    cases hf : findSwiss k.swiss sw with
-    | none => rw [hf] at h; exact absurd h (by simp)
-    | some e => rw [hf] at h; simp only [Option.some.injEq] at h; exact ⟨e, rfl, h.symm⟩
-  · rintro ⟨e, hf, hk⟩; rw [hf, hk]
-
-/-- **ANTI-GHOST TOOTH (swiss handoff, PROVED).** Once the found entry `e` is fixed, any candidate
-`k'' ≠ swissHandoffSpec k sw certHash e` is REJECTED — a handoff that bound the WRONG cert, skipped the
-refcount bump, or touched another entry is excluded. -/
-theorem swissHandoff_antighost (k k'' : RecordKernelState) (sw certHash : Nat) (e : SwissRecord)
-    (hf : findSwiss k.swiss sw = some e) (hne : k'' ≠ swissHandoffSpec k sw certHash e) :
-    swissHandoffK k sw certHash ≠ some k'' := by
-  intro h
-  obtain ⟨e', hf', hk⟩ := (swissHandoff_triangle k k'' sw certHash).mp h
-  rw [hf] at hf'; simp only [Option.some.injEq] at hf'; subst hf'
-  exact hne hk
-
-/-- **`swissDropRemoveSpec` — the INDEPENDENT post-state of a GC-drop that EMPTIES the entry (TRANSPARENT).**
-When the decremented refcount hits 0, the entry is REMOVED from the table (`removeSwiss`); all else fixed.
-Written from intent ("the last reference dropped — GC the entry"). -/
-def swissDropRemoveSpec (k : RecordKernelState) (sw : Nat) : RecordKernelState :=
-  { k with swiss := removeSwiss k.swiss sw }
-
-/-- **`swissDropDecrSpec` — the INDEPENDENT post-state of a GC-drop that KEEPS the entry (TRANSPARENT).**
-When the decremented refcount stays positive, the entry's `refcount` is decremented in place
-(`replaceSwiss`); all else fixed. Written from intent ("one reference dropped — entry survives"). -/
-def swissDropDecrSpec (k : RecordKernelState) (sw : Nat) (e : SwissRecord) : RecordKernelState :=
-  { k with swiss := replaceSwiss k.swiss sw { e with refcount := e.refcount - 1 } }
-
-/-- **THE SWISS-DROP TRIANGLE (PROVED, FULL BICONDITIONAL).** `swissDropK k sw = some k'` IFF a found
-entry `e` exists with a POSITIVE refcount, AND `k'` is the GC-remove post-state (if `e.refcount - 1 = 0`)
-or the decrement post-state (otherwise). The `→` pins the unique TRANSPARENT post-state in BOTH branches
-AND surfaces the refcount-positive gate (no underflow — a drop on a 0-refcount entry is fail-closed); the
-`←` is completeness. The two-branch codomain (remove vs decrement) is the GC threshold the triangle pins. -/
-theorem swissDrop_triangle (k k' : RecordKernelState) (sw : Nat) :
-    swissDropK k sw = some k' ↔
-      (∃ e, findSwiss k.swiss sw = some e ∧ e.refcount ≠ 0 ∧
-            ((e.refcount - 1 = 0 ∧ k' = swissDropRemoveSpec k sw) ∨
-             (e.refcount - 1 ≠ 0 ∧ k' = swissDropDecrSpec k sw e))) := by
-  unfold swissDropK swissDropRemoveSpec swissDropDecrSpec
-  constructor
-  · intro h
-    cases hf : findSwiss k.swiss sw with
-    | none => rw [hf] at h; exact absurd h (by simp)
-    | some e =>
-        rw [hf] at h; simp only at h
-        by_cases hz : e.refcount = 0
-        · rw [if_pos hz] at h; exact absurd h (by simp)
-        · rw [if_neg hz] at h
-          by_cases hd : e.refcount - 1 = 0
-          · rw [if_pos hd] at h; simp only [Option.some.injEq] at h
-            exact ⟨e, rfl, hz, Or.inl ⟨hd, h.symm⟩⟩
-          · rw [if_neg hd] at h; simp only [Option.some.injEq] at h
-            exact ⟨e, rfl, hz, Or.inr ⟨hd, h.symm⟩⟩
-  · rintro ⟨e, hf, hz, hbranch⟩
-    rw [hf]; simp only; rw [if_neg hz]
-    rcases hbranch with ⟨hd, hk⟩ | ⟨hd, hk⟩
-    · rw [if_pos hd, hk]
-    · rw [if_neg hd, hk]
-
-/-- **ANTI-GHOST TOOTH (swiss drop, PROVED).** Once the found entry `e` is fixed, any candidate that is
-NEITHER the GC-remove NOR the decrement post-state is REJECTED — a drop that removed the WRONG entry, kept
-a 0-refcount entry alive, or removed an entry that should have survived is excluded. -/
-theorem swissDrop_antighost (k k'' : RecordKernelState) (sw : Nat) (e : SwissRecord)
-    (hf : findSwiss k.swiss sw = some e)
-    (hne : k'' ≠ swissDropRemoveSpec k sw ∧ k'' ≠ swissDropDecrSpec k sw e) :
-    swissDropK k sw ≠ some k'' := by
-  intro h
-  obtain ⟨e', hf', _, hbranch⟩ := (swissDrop_triangle k k'' sw).mp h
-  rw [hf] at hf'; simp only [Option.some.injEq] at hf'; subst hf'
-  rcases hbranch with ⟨_, hk⟩ | ⟨_, hk⟩
-  · exact hne.1 hk
-  · exact hne.2 hk
-
-/-! ### CapTP graph moves: introduce / validateHandoff (= `recKDelegate`) and dropRef (= `recKRevokeTarget`).
-
-dregg1's `apply_introduce`/`apply_validate_handoff` both route to the Granovetter delegation
-`recKDelegate` (copy the delegator's held witness cap to the recipient — `apply.rs:2455`); `apply_drop_ref`
-routes to `recKRevokeTarget` (the holder loses its reach to `target`). The kernel post-states are
-TRANSPARENT cap-graph edits. We give the introduce/validateHandoff move its OWN spec (the UNATTENUATED
-held-cap copy — distinct from the §7 `delegateSpec`, which is the ATTENUATED `recKDelegateAtten`), and reuse
-the §7 `revokeSpec` shape for dropRef. -/
+dregg1's `apply_introduce` routes to the Granovetter delegation `recKDelegate` (copy the
+delegator's held witness cap to the recipient — `apply.rs:2455`); the reach-drop routes to
+`recKRevokeTarget` (the holder loses its reach to `target`). The kernel post-states are
+TRANSPARENT cap-graph edits. We give the introduce move its OWN spec (the UNATTENUATED
+held-cap copy — distinct from the §7 `delegateSpec`, which is the ATTENUATED `recKDelegateAtten`), and
+reuse the §7 `revokeSpec` shape for the reach-drop. -/
 
 /-- **`introduceSpec` — the INDEPENDENT post-state of a CapTP introduce/validateHandoff (TRANSPARENT).**
 The recipient's slot GAINS the delegator's held cap to `target` UNATTENUATED (`grant … (heldCapTo …)`);
@@ -1368,77 +1053,8 @@ theorem exercise_antighost (k k'' : RecordKernelState) (a : ExerciseArgs)
 
 -- (F1b: the bridge lock/finalize/cancel teeth left with the kernel holding-store — see `Apps/BridgeCell`.)
 
-/-- Swiss fixture: cell 0 holds a `node 7` cap (so `heldAuths 0 = [control]`), and the swiss table holds
-one entry: swiss 5, exporter 0, target 7, rights `[control]`, refcount 2. -/
-def swfx : RecordKernelState :=
-  { accounts := {0, 1}
-    cell := fun _ => .record [("balance", .int 0)]
-    caps := fun c => if c = 0 then [Dregg2.Authority.Cap.node 7] else []
-    bal := fun _ _ => 0
-    swiss := [{ swiss := 5, exporter := 0, target := 7, rights := [Auth.control], refcount := 2, cert := none }] }
+/-! ## §21 — Axiom-hygiene pins for the Part-B families (introduce / reach-drop / exercise). -/
 
--- SWISS EXPORT: a FRESH swiss 8 (rights [control] ⊆ node-7's conferred [control]) commits, refcount-1 entry.
-#guard (swissExportK swfx 8 0 7 [Auth.control]).isSome
-#guard (((swissExportK swfx 8 0 7 [Auth.control]).bind (fun k => findSwiss k.swiss 8)).map
-          (fun e => (e.exporter, e.target, e.rights, e.refcount))) == some (0, 7, [Auth.control], 1)
--- a DUPLICATE swiss 5 is REJECTED (no re-export); an AMPLIFYING export (rights ⊄ held) is REJECTED.
-#guard ((swissExportK swfx 5 0 7 [Auth.control]).isSome) == false
-#guard ((swissExportK { swfx with caps := fun c => if c = 0 then [Dregg2.Authority.Cap.endpoint 7 [Auth.read]] else [] }
-          8 0 7 [Auth.write]).isSome) == false  -- read-only held ⇒ cannot export write (amplification denied)
--- SWISS ENLIVEN: claimed [control] ⊆ entry [control] ⇒ refcount BUMPS 2 → 3; an amplifying claim is REJECTED.
-#guard (((swissEnlivenK swfx 5 [Auth.control]).bind (fun k => findSwiss k.swiss 5)).map (·.refcount)) == some 3
-#guard ((swissEnlivenK swfx 5 [Auth.grant]).isSome) == false  -- grant ∉ [control]
--- SWISS HANDOFF: binds cert 99 + bumps refcount 2 → 3 on entry 5.
-#guard (((swissHandoffK swfx 5 99).bind (fun k => findSwiss k.swiss 5)).map (fun e => (e.cert, e.refcount)))
-        == some (some 99, 3)
--- SWISS DROP: refcount 2 → 1 (entry SURVIVES, decrement branch); a missing swiss (99) is REJECTED.
-#guard (((swissDropK swfx 5).bind (fun k => findSwiss k.swiss 5)).map (·.refcount)) == some 1
-#guard ((swissDropK swfx 99).isSome) == false
--- SWISS DROP to ZERO (refcount-1 entry GC'd): a refcount-1 entry drops to removal.
-#guard ((swissDropK { swfx with swiss := [{ swiss := 5, exporter := 0, target := 7, rights := [Auth.control], refcount := 1, cert := none }] } 5).map
-          (fun k => (findSwiss k.swiss 5).isNone)) == some true  -- GC'd (removed)
-
-/-- CapTP graph fixture: cell 0 holds a `node 7` cap (edge to 7); cell 1 holds nothing. -/
-def cfx : RecordKernelState :=
-  { accounts := {0, 1}
-    cell := fun _ => .record [("balance", .int 0)]
-    caps := fun c => if c = 0 then [Dregg2.Authority.Cap.node 7] else []
-    bal := fun _ _ => 0 }
-
--- INTRODUCE: delegator 0 (holds edge to 7) introduces recipient 1 ⇒ 1 GAINS the held `node 7` cap.
-#guard (recKDelegate cfx 0 1 7).isSome
-#guard ((recKDelegate cfx 0 1 7).map (fun k => k.caps 1)) == some [Dregg2.Authority.Cap.node 7]
--- a delegator WITHOUT the edge (cell 1) is REJECTED (Granovetter premise).
-#guard ((recKDelegate cfx 1 0 7).isSome) == false
--- DROPREF (total): cell 0 drops its reach to 7 ⇒ the `node 7` cap filtered out (cell 0's slot now empty).
-#guard ((recKRevokeTarget cfx 0 7).caps 0) == ([] : List Dregg2.Authority.Cap)
--- dropRef leaves OTHER slots (cell 1) untouched.
-#guard ((recKRevokeTarget cfx 0 7).caps 1) == ([] : List Dregg2.Authority.Cap)
-
-/-- Exercise fixture: cells 0,1,2 accounts; cell 0 holds a `node 2` full-facet cap to target 2; all Live. -/
-def efx : RecordKernelState :=
-  { accounts := {0, 1, 2}
-    cell := fun _ => .record [("balance", .int 0)]
-    caps := fun c => if c = 0 then [Dregg2.Authority.Cap.node 2] else []
-    bal := fun _ _ => 0 }
-
--- EXERCISE: a bare exercise (empty inner forest) of cell 0's node-2 cap commits to the IDENTITY (the
--- transparent `subTurn []` fold = `some k`); the `= exerciseSpec` equality is the PROVED
--- `exercise_triangle` (no BEq on RecordKernelState — the theorem is the content).
-#guard (exerciseStep efx { actor := 0, target := 2, inner := [] }).isSome
--- an exercise by an actor WITHOUT an edge to the target (cell 1 holds nothing) is REJECTED (hold-gate).
-#guard ((exerciseStep efx { actor := 1, target := 2, inner := [] }).isSome) == false
-
-/-! ## §21 — Axiom-hygiene pins for the Part-B families (swiss / introduce-dropRef / exercise). -/
-
-#assert_axioms swissExport_triangle
-#assert_axioms swissExport_antighost
-#assert_axioms swissEnliven_triangle
-#assert_axioms swissEnliven_antighost
-#assert_axioms swissHandoff_triangle
-#assert_axioms swissHandoff_antighost
-#assert_axioms swissDrop_triangle
-#assert_axioms swissDrop_antighost
 #assert_axioms introduce_triangle
 #assert_axioms introduce_antighost
 #assert_axioms dropRef_triangle

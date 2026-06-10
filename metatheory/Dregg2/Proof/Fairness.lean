@@ -127,9 +127,7 @@ def affectedOf : FullActionA → List CellId
   | .introduceA intro rec t    => [intro, rec, t]
   | .delegateAttenA del rec t _ => [del, rec, t]
   | .attenuateA actor _ _      => [actor]
-  | .dropRefA holder t         => [holder, t]
   | .revokeDelegationA holder t => [holder, t]
-  | .validateHandoffA intro rec t => [intro, rec, t]
   -- exercise: the actor + the exercised target. (The inner effects also run against `target`; we
   -- over-approximate them by `target` itself — every inner effect's `targetOf` is bounded by the
   -- exercised `t` in the `DelegationMode::None` default, so `[actor, t]` is a sound superset for the
@@ -157,15 +155,8 @@ def affectedOf : FullActionA → List CellId
   | .noteSpendA _ actor _      => [actor]
   | .noteCreateA _ actor       => [actor]
   -- seal pair (cap movement through a box).
-  | .sealA _ actor _           => [actor]
-  | .unsealA _ actor recipient => [actor, recipient]
-  | .createSealPairA _ actor sealerHolder unsealerHolder => [actor, sealerHolder, unsealerHolder]
   | .pipelinedSendA actor       => [actor]
   -- swiss-table (CapTP export/handoff/GC).
-  | .exportSturdyRefA _ actor exporter target _ => [actor, exporter, target]
-  | .enlivenRefA _ actor exporter _ => [actor, exporter]
-  | .swissHandoffA _ _ introducer exporter => [introducer, exporter]
-  | .swissDropA _ actor exporter => [actor, exporter]
 
 /-- **`npcA cf` — the NECESSARY-PARTICIPANT cells of a forest** ([Survey] §13): the root actor's
 `targetOf` ∪ the `targetOf` of every node of the pre-order lowering (`lowerForestA`). A cell in

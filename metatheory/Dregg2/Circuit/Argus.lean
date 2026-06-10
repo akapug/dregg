@@ -33,10 +33,8 @@ import Dregg2.Circuit.Argus.Effects.CellSeal
 import Dregg2.Circuit.Argus.Effects.CellUnseal
 import Dregg2.Circuit.Argus.Effects.CreateCell
 import Dregg2.Circuit.Argus.Effects.CreateCellFromFactory
-import Dregg2.Circuit.Argus.Effects.CreateSealPair
 import Dregg2.Circuit.Argus.Effects.Delegate
 import Dregg2.Circuit.Argus.Effects.DelegateAtten
-import Dregg2.Circuit.Argus.Effects.DropRef
 import Dregg2.Circuit.Argus.Effects.EmitEvent
 import Dregg2.Circuit.Argus.Effects.ExerciseViaCapability
 import Dregg2.Circuit.Argus.Effects.IncrementNonce
@@ -54,16 +52,9 @@ import Dregg2.Circuit.Argus.Effects.ReceiptArchive
 import Dregg2.Circuit.Argus.Effects.RefreshDelegation
 import Dregg2.Circuit.Argus.Effects.Refusal
 import Dregg2.Circuit.Argus.Effects.RevokeDelegation
-import Dregg2.Circuit.Argus.Effects.Seal
 import Dregg2.Circuit.Argus.Effects.SetField
 import Dregg2.Circuit.Argus.Effects.SetPermissions
 import Dregg2.Circuit.Argus.Effects.SetVerificationKey
-import Dregg2.Circuit.Argus.Effects.SwissDrop
-import Dregg2.Circuit.Argus.Effects.SwissEnliven
-import Dregg2.Circuit.Argus.Effects.SwissExport
-import Dregg2.Circuit.Argus.Effects.SwissHandoff
-import Dregg2.Circuit.Argus.Effects.SwissReconcile
-import Dregg2.Circuit.Argus.Effects.Unseal
 
 /-!
 # Argus — the faithful witness chain (the coherence anchor)

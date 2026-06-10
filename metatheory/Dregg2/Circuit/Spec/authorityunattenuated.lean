@@ -1,6 +1,6 @@
 /-
 # Dregg2.Circuit.Spec.authorityunattenuated — INDEPENDENT full-state spec + executor⟺spec for the
-  AUTHORITY-UNATTENUATED effect family (`delegate` · `introduceA` · `validateHandoffA`).
+  AUTHORITY-UNATTENUATED effect family (`delegate` · `introduceA`).
 
 This is the AUTHORITY-side analogue of `Dregg2/Circuit/Transfer.lean`'s `TransferSpec` /
 `recKExec_iff_spec` / `recTransfer_correct`, written from scratch as an INDEPENDENT declarative
@@ -8,17 +8,17 @@ reference and proved EXACTLY met by the real executor, both ways.
 
 ## The family
 
-The full executor `execFullA` (`TurnExecutorFull.lean:3479`) dispatches THREE constructors to the
+The full executor `execFullA` (`TurnExecutorFull.lean`) dispatches BOTH constructors to the
 SAME chained authority primitive `recCDelegate`:
 
     execFullA s (.delegate         del rec t) = recCDelegate s del rec t
     execFullA s (.introduceA      intro rec t) = recCDelegate s intro rec t
-    execFullA s (.validateHandoffA intro rec t) = recCDelegate s intro rec t
 
-So the three are DEFINITIONALLY the same transition (the unattenuated held-cap copy — the Granovetter
+So the two are DEFINITIONALLY the same transition (the unattenuated held-cap copy — the Granovetter
 `Introduce` skeleton). We give ONE full-state spec `DelegateSpec` (the representative) and derive the
-other two as COROLLARIES via the executor-arm definitional equalities (`execFullA_introduceA_eq` /
-`execFullA_validateHandoff_eq`).
+other as a COROLLARY via the executor-arm definitional equality (`execFullA_introduceA_eq`).
+(F3: `validateHandoffA` died with the seal/swiss/sturdyref verb family — the handoff is the
+caps-in-slots factory pattern, `Apps/CapSlotFactory.lean`.)
 
 ## The executor primitive, unfolded (read off the CODE, `AuthTurn.lean:80` + `TurnExecutorFull.lean:229`)
 
@@ -118,14 +118,12 @@ def DelegateSpec (s : RecChainedState) (del rec t : CellId) (s' : RecChainedStat
   ∧ s'.kernel.revoked = s.kernel.revoked
   ∧ s'.kernel.commitments = s.kernel.commitments
   ∧ s'.kernel.bal = s.kernel.bal
-  ∧ s'.kernel.swiss = s.kernel.swiss
   ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats
   ∧ s'.kernel.factories = s.kernel.factories
   ∧ s'.kernel.lifecycle = s.kernel.lifecycle
   ∧ s'.kernel.deathCert = s.kernel.deathCert
   ∧ s'.kernel.delegate = s.kernel.delegate
   ∧ s'.kernel.delegations = s.kernel.delegations
-  ∧ s'.kernel.sealedBoxes = s.kernel.sealedBoxes
   ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
   ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
 
@@ -148,13 +146,13 @@ theorem recCDelegate_iff_spec (s : RecChainedState) (del rec t : CellId) (s' : R
     · intro h
       simp only [Option.some.injEq] at h
       subst h
-      exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    · rintro ⟨hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩
+      exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14⟩
       -- reconstruct `s'` from its 18 components.
       obtain ⟨k', log'⟩ := s'
-      obtain ⟨acc, cl, cp, nul, rev, com, bl, sw, slc, fac, lc, dc, dg, dgs, sb, dge, dgea⟩ := k'
-      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
-      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+      obtain ⟨acc, cl, cp, nul, rev, com, bl, slc, fac, lc, dc, dg, dgs, dge, dgea⟩ := k'
+      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14
+      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14
       rfl
   · rw [if_neg hg]
     constructor
@@ -176,11 +174,11 @@ theorem recCDelegate_iff_guard (s : RecChainedState) (del rec t : CellId) :
     · rintro ⟨s', h⟩; exact absurd h (by simp)
     · intro h; exact absurd h hg
 
-/-! ## §5 — EXECUTOR ⟺ SPEC, lifted to `execFullA` for ALL THREE family constructors.
+/-! ## §5 — EXECUTOR ⟺ SPEC, lifted to `execFullA` for BOTH family constructors.
 
-The three constructors `delegate` / `introduceA` / `validateHandoffA` are DEFINITIONALLY the same
-transition `recCDelegate` (the executor arms below are `rfl`). So `recCDelegate_iff_spec` lifts to
-each verbatim — the family shares ONE spec. -/
+The constructors `delegate` / `introduceA` are DEFINITIONALLY the same transition `recCDelegate`
+(the executor arms below are `rfl`). So `recCDelegate_iff_spec` lifts to each verbatim — the family
+shares ONE spec. -/
 
 /-- The executor arm for `delegate` is `recCDelegate` (definitional). -/
 theorem execFullA_delegate_eq (s : RecChainedState) (del rec t : CellId) :
@@ -190,11 +188,6 @@ theorem execFullA_delegate_eq (s : RecChainedState) (del rec t : CellId) :
 copy is the Granovetter introduce skeleton). -/
 theorem execFullA_introduceA_eq (s : RecChainedState) (intro rec t : CellId) :
     execFullA s (.introduceA intro rec t) = recCDelegate s intro rec t := rfl
-
-/-- The executor arm for `validateHandoffA` is `recCDelegate` (definitional — its executable content
-is the introduce skeleton). -/
-theorem execFullA_validateHandoff_eq (s : RecChainedState) (intro rec t : CellId) :
-    execFullA s (.validateHandoffA intro rec t) = recCDelegate s intro rec t := rfl
 
 /-- **`execFullA_delegate_iff_spec` — FULL executor ⟺ SPEC for `.delegate`.** -/
 theorem execFullA_delegate_iff_spec (s : RecChainedState) (del rec t : CellId)
@@ -207,13 +200,6 @@ theorem execFullA_introduceA_iff_spec (s : RecChainedState) (intro rec t : CellI
     (s' : RecChainedState) :
     execFullA s (.introduceA intro rec t) = some s' ↔ DelegateSpec s intro rec t s' := by
   rw [execFullA_introduceA_eq]; exact recCDelegate_iff_spec s intro rec t s'
-
-/-- **`execFullA_validateHandoff_iff_spec` — FULL executor ⟺ SPEC for `.validateHandoffA`** (same
-spec). -/
-theorem execFullA_validateHandoff_iff_spec (s : RecChainedState) (intro rec t : CellId)
-    (s' : RecChainedState) :
-    execFullA s (.validateHandoffA intro rec t) = some s' ↔ DelegateSpec s intro rec t s' := by
-  rw [execFullA_validateHandoff_eq]; exact recCDelegate_iff_spec s intro rec t s'
 
 /-! ## §6 — Soundness teeth (the spec is NOT vacuous).
 
@@ -269,10 +255,8 @@ def sD0 : RecChainedState :=
 #guard (execFullA sD0 (.delegate 0 1 7)).isSome  --  true
 -- ...and the recipient 1's slot GAINS the held `node 7` cap (the genuine grant):
 #guard ((execFullA sD0 (.delegate 0 1 7)).map (fun s' => s'.kernel.caps 1)).getD [] == [Cap.node 7]
--- ...and `introduceA` / `validateHandoffA` produce the SAME recipient slot (same primitive):
+-- ...and `introduceA` produces the SAME recipient slot (same primitive):
 #guard ((execFullA sD0 (.introduceA 0 1 7)).map (fun s' => s'.kernel.caps 1)).getD [] == [Cap.node 7]
-#guard ((execFullA sD0 (.validateHandoffA 0 1 7)).map (fun s' => s'.kernel.caps 1)).getD []
-          == [Cap.node 7]
 
 -- An UNCONNECTED delegator (9 holds nothing) is REJECTED (fail-closed):
 #guard (execFullA sD0 (.delegate 9 1 7)).isNone  --  true
@@ -289,10 +273,8 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`ad
 #assert_axioms recCDelegate_iff_guard
 #assert_axioms execFullA_delegate_eq
 #assert_axioms execFullA_introduceA_eq
-#assert_axioms execFullA_validateHandoff_eq
 #assert_axioms execFullA_delegate_iff_spec
 #assert_axioms execFullA_introduceA_iff_spec
-#assert_axioms execFullA_validateHandoff_iff_spec
 #assert_axioms delegate_grants_recipient
 #assert_axioms delegate_balance_neutral
 #assert_axioms delegate_rejects_unconnected

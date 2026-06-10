@@ -78,22 +78,13 @@ import Dregg2.Circuit.Inst.noteCreateA
 import Dregg2.Circuit.Inst.noteSpendA
 import Dregg2.Circuit.Inst.cellSealA
 import Dregg2.Circuit.Inst.cellUnsealA
-import Dregg2.Circuit.Inst.swissExportA
-import Dregg2.Circuit.Inst.sealA
-import Dregg2.Circuit.Inst.unsealA
-import Dregg2.Circuit.Inst.createSealPairA
-import Dregg2.Circuit.Inst.dropRefA
 import Dregg2.Circuit.Inst.revokeDelegationA
 import Dregg2.Circuit.Inst.introduceA
-import Dregg2.Circuit.Inst.validateHandoffA
 import Dregg2.Circuit.Inst.refreshDelegationA
 import Dregg2.Circuit.Inst.makeSovereignA
 import Dregg2.Circuit.Inst.receiptArchiveA
 import Dregg2.Circuit.Inst.refusalA
 import Dregg2.Circuit.Inst.emitEventA
-import Dregg2.Circuit.Inst.enlivenRefA
-import Dregg2.Circuit.Inst.swissDropA
-import Dregg2.Circuit.Inst.swissHandoffA
 import Dregg2.Circuit.Inst.createCellA
 import Dregg2.Circuit.Inst.spawnA
 import Dregg2.Circuit.Inst.createCellFromFactoryA
@@ -700,110 +691,17 @@ theorem cellSeal_circuit_rejects_wrong_lifecycle
     ¬ satisfiedE2 S (cellSealE D hD) (encodeE2 S (cellSealE D hD) s args s') :=
   fun h => hwrong (cellSeal_circuit_pins_intent S D hD hRest hLog s args s' h)
 
-/-! ## §11 — THE SWISS-EXPORT FAMILY: a NEW intent functional spec + circuit pinning.
-
-`swissExport` PREPENDS a fresh sturdy-ref export record onto `swiss`. We build the intent oracle
-`intentSwissExport` (prepend the export record; touch nothing else) and pin the circuit to it. -/
-
-open Dregg2.Circuit.Inst.SwissExportA (ExportArgs swissExportE swissExportA_full_sound)
-open Dregg2.Circuit.Spec.SwissExport (ExportSpec exportRecord)
-
-/-- **`intentSwissExport swiss sw exporter target rights`** — the INTENT swiss-table of an export: the
-fresh export record (`exportRecord`, validated by `exportRecord_correct`) is PREPENDED; the rest
-preserved. -/
-def intentSwissExport (swiss : List SwissRecord) (sw : Nat) (exporter target : CellId)
-    (rights : List Auth) : List SwissRecord :=
-  exportRecord sw exporter target rights :: swiss
-
-/-- **SWISS-EXPORT circuit pins the intent export-prepend.** A verifying `swissExportE` witness forces
-the post-`swiss` to be EXACTLY `intentSwissExport … sw exporter target rights`. -/
-theorem swissExport_circuit_pins_intent
-    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.SwissExportA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : ExportArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (swissExportE LE cN hN hLE) (encodeE2 S (swissExportE LE cN hN hLE) s args s')) :
-    s'.kernel.swiss = intentSwissExport s.kernel.swiss args.sw args.exporter args.target args.rights := by
-  have hspec : ExportSpec s args.sw args.actor args.exporter args.target args.rights s' :=
-    swissExportA_full_sound S LE cN hN hLE hRest hLog s args s' h
-  exact hspec.2.1
-
-/-- **SWISS-EXPORT circuit anti-ghost.** -/
-theorem swissExport_circuit_rejects_wrong_swiss
-    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.SwissExportA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : ExportArgs) (s' : RecChainedState)
-    (hwrong : s'.kernel.swiss ≠ intentSwissExport s.kernel.swiss args.sw args.exporter args.target args.rights) :
-    ¬ satisfiedE2 S (swissExportE LE cN hN hLE) (encodeE2 S (swissExportE LE cN hN hLE) s args s') :=
-  fun h => hwrong (swissExport_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h)
-
-/-! ## §12 — THE SEAL (sealedBoxes) FAMILY: a NEW intent functional spec + circuit pinning.
-
-`seal` PREPENDS a sealed-box record (holding a sealed `payload` cap) onto `sealedBoxes`. We pin the
-circuit to the validated `sealedBoxPrepend` (the intent "seal THIS payload into a fresh box, touch
-nothing else"). -/
-
-open Dregg2.Circuit.Inst.SealA (SealArgs sealE sealA_full_sound)
-open Dregg2.Circuit.Spec.SealBoxOperations (SealSpec sealedBoxPrepend)
-
-/-- **SEAL circuit pins the intent sealed-box prepend.** A verifying `sealE` witness forces the
-post-`sealedBoxes` to be EXACTLY `sealedBoxPrepend … pid actor payload` (the fresh sealed box
-prepended, the rest preserved). -/
-theorem seal_circuit_pins_intent
-    (S : Surface2) (LE : SealedBoxRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.SealA.RestIffNoSealedBoxes S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : SealArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (sealE LE cN hN hLE) (encodeE2 S (sealE LE cN hN hLE) s args s')) :
-    s'.kernel.sealedBoxes = sealedBoxPrepend s.kernel.sealedBoxes args.pid args.actor args.payload := by
-  have hspec : SealSpec s args.pid args.actor args.payload s' :=
-    sealA_full_sound S LE cN hN hLE hRest hLog s args s' h
-  exact hspec.2.1
-
-/-- **SEAL circuit anti-ghost.** -/
-theorem seal_circuit_rejects_wrong_sealedBoxes
-    (S : Surface2) (LE : SealedBoxRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.SealA.RestIffNoSealedBoxes S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : SealArgs) (s' : RecChainedState)
-    (hwrong : s'.kernel.sealedBoxes ≠ sealedBoxPrepend s.kernel.sealedBoxes args.pid args.actor args.payload) :
-    ¬ satisfiedE2 S (sealE LE cN hN hLE) (encodeE2 S (sealE LE cN hN hLE) s args s') :=
-  fun h => hwrong (seal_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h)
-
 /-! ## §13 — MORE CAP-GRAPH EFFECTS: drop-ref / revoke-delegation (revocation) and
 introduce / validate-handoff (unattenuated delegation) — circuit pins the INTENT cap move.
 
-`dropRef`/`revokeDelegation` both commit a `RevokeSpec` (the holder loses its reach to `t`), so they
-reuse `intentRevokeCaps` (§6c). `introduce`/`validateHandoff` both commit a `DelegateSpec` — an
+`revokeDelegation` commits a `RevokeSpec` (the holder loses its reach to `t`), so it
+reuses `intentRevokeCaps` (§6c). `introduce` commits a `DelegateSpec` — an
 UNATTENUATED Granovetter introduction (the recipient gains the delegator's WHOLE held cap to `t`); we
-build `intentIntroduceCaps` for that. -/
+build `intentIntroduceCaps` for that. (F3: dropRef/validateHandoff died with the
+seal/swiss/sturdyref family — caps-in-slots, `Apps/CapSlotFactory.lean`.) -/
 
-open Dregg2.Circuit.Inst.DropRefA (DropRefArgs dropRefE dropRefA_full_sound)
 open Dregg2.Circuit.Inst.RevokeDelegationA (revokeDelegationE revokeDelegationA_full_sound)
 open Dregg2.Circuit.Spec.AuthorityRevocation (RevokeSpec)
-
-/-- **DROP-REF circuit pins the intent revocation.** A verifying `dropRefE` witness forces the
-post-`caps` to be EXACTLY `intentRevokeCaps … holder t` (the dropped ref removes the holder's reach to
-`t`). Same intent move as `revoke`. -/
-theorem dropRef_circuit_pins_intent
-    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
-    (hRest : Dregg2.Circuit.Inst.DropRefA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : DropRefArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (dropRefE D hD) (encodeE2 S (dropRefE D hD) s args s')) :
-    s'.kernel.caps = intentRevokeCaps s.kernel.caps args.holder args.t := by
-  have hspec : RevokeSpec s args.holder args.t s' :=
-    dropRefA_full_sound S D hD hRest hLog s args s' h
-  rw [intentRevokeCaps_eq_removeEdgeCaps]; exact hspec.2.1
-
-/-- **DROP-REF circuit anti-ghost.** -/
-theorem dropRef_circuit_rejects_wrong_caps
-    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
-    (hRest : Dregg2.Circuit.Inst.DropRefA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : DropRefArgs) (s' : RecChainedState)
-    (hwrong : s'.kernel.caps ≠ intentRevokeCaps s.kernel.caps args.holder args.t) :
-    ¬ satisfiedE2 S (dropRefE D hD) (encodeE2 S (dropRefE D hD) s args s') :=
-  fun h => hwrong (dropRef_circuit_pins_intent S D hD hRest hLog s args s' h)
 
 /-- **REVOKE-DELEGATION circuit pins the intent revocation.** A verifying `revokeDelegationE` witness
 forces the post-`caps` to be EXACTLY `intentRevokeCaps … holder t`. -/
@@ -827,7 +725,6 @@ theorem revokeDelegation_circuit_rejects_wrong_caps
   fun h => hwrong (revokeDelegation_circuit_pins_intent S D hD hRest hLog s args s' h)
 
 open Dregg2.Circuit.Inst.IntroduceA (IntroduceArgs introduceE introduceA_full_sound)
-open Dregg2.Circuit.Inst.ValidateHandoffA (validateHandoffE validateHandoffA_full_sound)
 open Dregg2.Circuit.Spec.AuthorityUnattenuated (DelegateSpec recDelegateCaps)
 
 /-- **`intentIntroduceCaps caps del rec t`** — the INTENT cap function of an UNATTENUATED Granovetter
@@ -861,91 +758,6 @@ theorem introduce_circuit_rejects_wrong_caps
     (hwrong : s'.kernel.caps ≠ intentIntroduceCaps s.kernel.caps args.intro args.recip args.t) :
     ¬ satisfiedE2 S (introduceE D hD) (encodeE2 S (introduceE D hD) s args s') :=
   fun h => hwrong (introduce_circuit_pins_intent S D hD hRest hLog s args s' h)
-
-/-- **VALIDATE-HANDOFF circuit pins the intent unattenuated introduction.** A verifying
-`validateHandoffE` witness (a validated CapTP handoff completes a delegation) forces the post-`caps` to
-be EXACTLY `intentIntroduceCaps … intro recip tgt`. -/
-theorem validateHandoff_circuit_pins_intent
-    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
-    (hRest : Dregg2.Circuit.Inst.ValidateHandoffA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.ValidateHandoffA.HandoffArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (validateHandoffE D hD) (encodeE2 S (validateHandoffE D hD) s args s')) :
-    s'.kernel.caps = intentIntroduceCaps s.kernel.caps args.intro args.recip args.tgt := by
-  have hspec : DelegateSpec s args.intro args.recip args.tgt s' :=
-    validateHandoffA_full_sound S D hD hRest hLog s args s' h
-  rw [intentIntroduceCaps_eq_recDelegateCaps]; exact hspec.2.1
-
-/-- **VALIDATE-HANDOFF circuit anti-ghost.** -/
-theorem validateHandoff_circuit_rejects_wrong_caps
-    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
-    (hRest : Dregg2.Circuit.Inst.ValidateHandoffA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : Dregg2.Circuit.Inst.ValidateHandoffA.HandoffArgs) (s' : RecChainedState)
-    (hwrong : s'.kernel.caps ≠ intentIntroduceCaps s.kernel.caps args.intro args.recip args.tgt) :
-    ¬ satisfiedE2 S (validateHandoffE D hD) (encodeE2 S (validateHandoffE D hD) s args s') :=
-  fun h => hwrong (validateHandoff_circuit_pins_intent S D hD hRest hLog s args s' h)
-
-/-! ## §14 — SEAL-PAIR / UNSEAL (sealedBoxes ⊕ caps) — circuit pins the intent cap install.
-
-`createSealPair` installs a sealer/unsealer cap pair; `unseal` grants the recovered payload cap. We
-pin each to its validated cap helper (the intent cap install) + anti-ghost. -/
-
-open Dregg2.Circuit.Inst.CreateSealPairA (CreateSealPairArgs createSealPairE createSealPairA_full_sound)
-open Dregg2.Circuit.Spec.SealPairCreation (CreateSealPairSpec createSealPairCaps)
-open Dregg2.Circuit.Inst.UnsealA (UnsealArgs unsealE unsealA_full_sound)
-open Dregg2.Circuit.Spec.SealBoxOperations (UnsealSpec grantedCaps)
-
-/-- **CREATE-SEAL-PAIR circuit pins the intent cap-pair install.** A verifying `createSealPairE`
-witness forces the post-`caps` to be EXACTLY `createSealPairCaps … pid sealerHolder unsealerHolder`. -/
-theorem createSealPair_circuit_pins_intent
-    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
-    (hRest : Dregg2.Circuit.Inst.CreateSealPairA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : CreateSealPairArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (createSealPairE D hD) (encodeE2 S (createSealPairE D hD) s args s')) :
-    s'.kernel.caps = createSealPairCaps s.kernel.caps args.pid args.sealerHolder args.unsealerHolder := by
-  have hspec : CreateSealPairSpec s args.pid args.actor args.sealerHolder args.unsealerHolder s' :=
-    createSealPairA_full_sound S D hD hRest hLog s args s' h
-  exact hspec.2.1
-
-/-- **CREATE-SEAL-PAIR circuit anti-ghost.** -/
-theorem createSealPair_circuit_rejects_wrong_caps
-    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
-    (hRest : Dregg2.Circuit.Inst.CreateSealPairA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : CreateSealPairArgs) (s' : RecChainedState)
-    (hwrong : s'.kernel.caps ≠ createSealPairCaps s.kernel.caps args.pid args.sealerHolder args.unsealerHolder) :
-    ¬ satisfiedE2 S (createSealPairE D hD) (encodeE2 S (createSealPairE D hD) s args s') :=
-  fun h => hwrong (createSealPair_circuit_pins_intent S D hD hRest hLog s args s' h)
-
-/-- **`intentUnsealGrant caps recipient payload`** — the INTENT cap function of an unseal: the
-recovered `payload` cap is PREPENDED to `recipient`'s slot, every other holder untouched. Written from
-intent ("hand the unsealed payload to the recipient"); the SAME `grantedCaps` the circuit installs. -/
-def intentUnsealGrant (caps : Caps) (recipient : CellId) (payload : Dregg2.Authority.Cap) : Caps :=
-  fun l => if l = recipient then payload :: caps l else caps l
-
-/-- **`intentUnsealGrant_eq_grantedCaps` (PROVED).** -/
-theorem intentUnsealGrant_eq_grantedCaps (caps : Caps) (recipient : CellId) (payload : Dregg2.Authority.Cap) :
-    intentUnsealGrant caps recipient payload = grantedCaps caps recipient payload := rfl
-
-/-- **UNSEAL circuit pins the intent payload-grant.** A verifying `unsealE` witness forces the
-post-`caps` to be EXACTLY `intentUnsealGrant … recipient box.payload` (the unsealed payload cap handed
-to the recipient). -/
-theorem unseal_circuit_pins_intent
-    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
-    (hRest : Dregg2.Circuit.Inst.UnsealA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : UnsealArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (unsealE D hD) (encodeE2 S (unsealE D hD) s args s')) :
-    s'.kernel.caps = intentUnsealGrant s.kernel.caps args.recipient args.box.payload := by
-  have hspec : UnsealSpec s args.pid args.actor args.recipient args.box s' :=
-    unsealA_full_sound S D hD hRest hLog s args s' h
-  rw [intentUnsealGrant_eq_grantedCaps]; exact hspec.2.1
-
-/-- **UNSEAL circuit anti-ghost.** -/
-theorem unseal_circuit_rejects_wrong_caps
-    (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
-    (hRest : Dregg2.Circuit.Inst.UnsealA.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : UnsealArgs) (s' : RecChainedState)
-    (hwrong : s'.kernel.caps ≠ intentUnsealGrant s.kernel.caps args.recipient args.box.payload) :
-    ¬ satisfiedE2 S (unsealE D hD) (encodeE2 S (unsealE D hD) s args s') :=
-  fun h => hwrong (unseal_circuit_pins_intent S D hD hRest hLog s args s' h)
 
 /-! ## §15 — CELL-UNSEAL (lifecycle) / REFRESH-DELEGATION (delegations). -/
 
@@ -1125,122 +937,6 @@ theorem emitEvent_circuit_rejects_wrong_log
     (hwrong : s'.log ≠ emitReceipt args.actor args.cell :: s.log) :
     ¬ satisfiedE S emitEventE (encodeE S emitEventE s args s') :=
   fun h => hwrong (emitEvent_circuit_pins_intent S hN hL hRest hLog s args s' hwf hwf' h)
-
-/-! ## §17 — THE SWISS STURDY-REF FAMILY (enliven / drop / handoff): circuit pins the INTENT
-swiss-table image over the FOUND record.
-
-These effects mutate the `swiss` sturdy-ref table over the record found by `sw`. The circuit
-soundness gives the op-delegated `*Spec` (`s' = { kernel := swissOpK …, log := … }`); we connect it,
-THROUGH the executor⟺`*SpecFull` biconditionals (`execFullA_*_iff_spec` then `_iff_specFull`), to the
-INDEPENDENT swiss clause `∃ e, s'.kernel.swiss = <op>SwissPost s.kernel.swiss sw e` — the declarative
-refcount/cert image over the found record `e`, with NO `swissOpK` in the conclusion. So a verifying
-witness pins the EXACT intended swiss-table transformation. -/
-
-open Dregg2.Circuit.Inst.EnlivenRefA (EnlivenArgs enlivenE enlivenRefA_full_sound)
-open Dregg2.Circuit.Spec.SwissEnliven
-  (EnlivenSpec EnlivenSpecFull enlivenSwissPost execFullA_enliven_iff_spec execFullA_enliven_iff_specFull)
-
-/-- **ENLIVEN circuit pins the intent swiss refcount-bump image.** A verifying `enlivenE` witness
-forces, for the found sturdy-ref record `e`, the post-`swiss` to be EXACTLY `enlivenSwissPost …
-s.kernel.swiss sw e` (the refcount-bumped image — NO `swissEnlivenK` in the conclusion). -/
-theorem enliven_circuit_pins_intent
-    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.EnlivenRefA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : EnlivenArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (enlivenE LE cN hN hLE) (encodeE2 S (enlivenE LE cN hN hLE) s args s')) :
-    ∃ e : SwissRecord, s'.kernel.swiss = enlivenSwissPost s.kernel.swiss args.sw e := by
-  have hspec : EnlivenSpec s args.sw args.actor args.exporter args.claimed s' :=
-    enlivenRefA_full_sound S LE cN hN hLE hRest hLog s args s' h
-  -- circuit-spec ⇒ executor commit ⇒ the STRENGTHENED full spec ⇒ the swiss clause.
-  have hexec : execFullA s (.enlivenRefA args.sw args.actor args.exporter args.claimed) = some s' :=
-    (execFullA_enliven_iff_spec s args.sw args.actor args.exporter args.claimed s').mpr hspec
-  have hfull : EnlivenSpecFull s args.sw args.actor args.exporter args.claimed s' :=
-    (execFullA_enliven_iff_specFull s args.sw args.actor args.exporter args.claimed s').mp hexec
-  obtain ⟨_, ⟨e, _, _, hsw⟩, _⟩ := hfull
-  exact ⟨e, hsw⟩
-
-/-- **ENLIVEN circuit anti-ghost.** A post-`swiss` matching NO found-record refcount-bump image does
-not verify. -/
-theorem enliven_circuit_rejects_wrong_swiss
-    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.EnlivenRefA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : EnlivenArgs) (s' : RecChainedState)
-    (hwrong : ∀ e : SwissRecord, s'.kernel.swiss ≠ enlivenSwissPost s.kernel.swiss args.sw e) :
-    ¬ satisfiedE2 S (enlivenE LE cN hN hLE) (encodeE2 S (enlivenE LE cN hN hLE) s args s') := by
-  intro h
-  obtain ⟨e, he⟩ := enliven_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h
-  exact hwrong e he
-
-open Dregg2.Circuit.Inst.SwissDropA (DropArgs swissDropE swissDropA_full_sound)
-open Dregg2.Circuit.Spec.SwissDrop
-  (DropSpec DropSpecFull dropSwissPost execFullA_drop_iff_spec execFullA_drop_iff_specFull)
-
-/-- **DROP circuit pins the intent swiss refcount-decrement image.** A verifying `swissDropE` witness
-forces, for the found record `e`, the post-`swiss` to be EXACTLY `dropSwissPost … sw e`. -/
-theorem swissDrop_circuit_pins_intent
-    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.SwissDropA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : DropArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (swissDropE LE cN hN hLE) (encodeE2 S (swissDropE LE cN hN hLE) s args s')) :
-    ∃ e : SwissRecord, s'.kernel.swiss = dropSwissPost s.kernel.swiss args.sw e := by
-  have hspec : DropSpec s args.sw args.actor args.exporter s' :=
-    swissDropA_full_sound S LE cN hN hLE hRest hLog s args s' h
-  have hexec : execFullA s (.swissDropA args.sw args.actor args.exporter) = some s' :=
-    (execFullA_drop_iff_spec s args.sw args.actor args.exporter s').mpr hspec
-  have hfull : DropSpecFull s args.sw args.actor args.exporter s' :=
-    (execFullA_drop_iff_specFull s args.sw args.actor args.exporter s').mp hexec
-  obtain ⟨_, ⟨e, _, _, hsw⟩, _⟩ := hfull
-  exact ⟨e, hsw⟩
-
-/-- **DROP circuit anti-ghost.** -/
-theorem swissDrop_circuit_rejects_wrong_swiss
-    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.SwissDropA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : DropArgs) (s' : RecChainedState)
-    (hwrong : ∀ e : SwissRecord, s'.kernel.swiss ≠ dropSwissPost s.kernel.swiss args.sw e) :
-    ¬ satisfiedE2 S (swissDropE LE cN hN hLE) (encodeE2 S (swissDropE LE cN hN hLE) s args s') := by
-  intro h
-  obtain ⟨e, he⟩ := swissDrop_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h
-  exact hwrong e he
-
-open Dregg2.Circuit.Inst.SwissHandoffA (HandoffArgs swissHandoffE swissHandoffA_full_sound)
-open Dregg2.Circuit.Spec.SwissHandoff
-  (HandoffSpec HandoffSpecFull handoffSwissPost execFullA_handoff_iff_spec execFullA_handoff_iff_specFull)
-
-/-- **HANDOFF circuit pins the intent swiss cert-binding image.** A verifying `swissHandoffE` witness
-forces, for the found record `e`, the post-`swiss` to be EXACTLY `handoffSwissPost … sw e certHash`
-(the cert-bound image). -/
-theorem swissHandoff_circuit_pins_intent
-    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.SwissHandoffA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : HandoffArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (swissHandoffE LE cN hN hLE) (encodeE2 S (swissHandoffE LE cN hN hLE) s args s')) :
-    ∃ e : SwissRecord, s'.kernel.swiss = handoffSwissPost s.kernel.swiss args.sw e args.certHash := by
-  have hspec : HandoffSpec s args.sw args.certHash args.introducer args.exporter s' :=
-    swissHandoffA_full_sound S LE cN hN hLE hRest hLog s args s' h
-  have hexec : execFullA s (.swissHandoffA args.sw args.certHash args.introducer args.exporter) = some s' :=
-    (execFullA_handoff_iff_spec s args.sw args.certHash args.introducer args.exporter s').mpr hspec
-  have hfull : HandoffSpecFull s args.sw args.certHash args.introducer args.exporter s' :=
-    (execFullA_handoff_iff_specFull s args.sw args.certHash args.introducer args.exporter s').mp hexec
-  obtain ⟨_, ⟨e, _, hsw⟩, _⟩ := hfull
-  exact ⟨e, hsw⟩
-
-/-- **HANDOFF circuit anti-ghost.** -/
-theorem swissHandoff_circuit_rejects_wrong_swiss
-    (S : Surface2) (LE : SwissRecord → ℤ) (cN : List ℤ → ℤ)
-    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
-    (hRest : Dregg2.Circuit.Inst.SwissHandoffA.RestIffNoSwiss S.RH) (hLog : logHashInjective S.LH)
-    (s : RecChainedState) (args : HandoffArgs) (s' : RecChainedState)
-    (hwrong : ∀ e : SwissRecord, s'.kernel.swiss ≠ handoffSwissPost s.kernel.swiss args.sw e args.certHash) :
-    ¬ satisfiedE2 S (swissHandoffE LE cN hN hLE) (encodeE2 S (swissHandoffE LE cN hN hLE) s args s') := by
-  intro h
-  obtain ⟨e, he⟩ := swissHandoff_circuit_pins_intent S LE cN hN hLE hRest hLog s args s' h
-  exact hwrong e he
 
 /-! ## §18 — THE CELL-CREATION FAMILY (createCell / spawn / createCellFromFactory) and CELL-DESTROY:
 circuit pins the INTENT account-set growth / lifecycle-and-deathCert image.
@@ -1521,24 +1217,11 @@ the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 #assert_axioms noteSpend_circuit_rejects_wrong_nullifiers
 #assert_axioms cellSeal_circuit_pins_intent
 #assert_axioms cellSeal_circuit_rejects_wrong_lifecycle
-#assert_axioms swissExport_circuit_pins_intent
-#assert_axioms swissExport_circuit_rejects_wrong_swiss
-#assert_axioms seal_circuit_pins_intent
-#assert_axioms seal_circuit_rejects_wrong_sealedBoxes
-#assert_axioms dropRef_circuit_pins_intent
-#assert_axioms dropRef_circuit_rejects_wrong_caps
 #assert_axioms revokeDelegation_circuit_pins_intent
 #assert_axioms revokeDelegation_circuit_rejects_wrong_caps
 #assert_axioms intentIntroduceCaps_eq_recDelegateCaps
 #assert_axioms introduce_circuit_pins_intent
 #assert_axioms introduce_circuit_rejects_wrong_caps
-#assert_axioms validateHandoff_circuit_pins_intent
-#assert_axioms validateHandoff_circuit_rejects_wrong_caps
-#assert_axioms createSealPair_circuit_pins_intent
-#assert_axioms createSealPair_circuit_rejects_wrong_caps
-#assert_axioms intentUnsealGrant_eq_grantedCaps
-#assert_axioms unseal_circuit_pins_intent
-#assert_axioms unseal_circuit_rejects_wrong_caps
 #assert_axioms cellUnseal_circuit_pins_intent
 #assert_axioms cellUnseal_circuit_rejects_wrong_lifecycle
 #assert_axioms refreshDelegation_circuit_pins_intent
@@ -1554,12 +1237,6 @@ the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
 #assert_axioms emitEvent_circuit_pins_intent
 #assert_axioms emitEvent_circuit_rejects_wrong_log
 
-#assert_axioms enliven_circuit_pins_intent
-#assert_axioms enliven_circuit_rejects_wrong_swiss
-#assert_axioms swissDrop_circuit_pins_intent
-#assert_axioms swissDrop_circuit_rejects_wrong_swiss
-#assert_axioms swissHandoff_circuit_pins_intent
-#assert_axioms swissHandoff_circuit_rejects_wrong_swiss
 
 #assert_axioms createCell_circuit_pins_intent
 #assert_axioms createCell_circuit_rejects_wrong_accounts

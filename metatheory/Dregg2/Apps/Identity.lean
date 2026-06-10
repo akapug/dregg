@@ -44,39 +44,6 @@ These kernel ops touch only `swiss` — never `revoked` — so a committed step 
 unchanged. Hoisted as `private` frame lemmas, the dual of `CellNullifier`'s `_nullifiers` helpers.
 (F2b: the queue-family frame lemmas died with the queue verb family.) -/
 
-/-- `swissEnlivenK` commits to `{ k with swiss := … }` — `revoked` untouched. -/
-private theorem swissEnlivenK_revoked (k : RecordKernelState) (sw : Nat) (claimed : List Auth)
-    (k' : RecordKernelState) (h : swissEnlivenK k sw claimed = some k') :
-    k'.revoked = k.revoked := by
-  unfold swissEnlivenK at h
-  split at h
-  · exact absurd h (by simp)
-  · split at h
-    · injection h with h; subst h; rfl
-    · exact absurd h (by simp)
-
-/-- `swissHandoffK` commits to `{ k with swiss := … }` — `revoked` untouched. -/
-private theorem swissHandoffK_revoked (k : RecordKernelState) (sw certHash : Nat)
-    (k' : RecordKernelState) (h : swissHandoffK k sw certHash = some k') :
-    k'.revoked = k.revoked := by
-  unfold swissHandoffK at h
-  split at h
-  · exact absurd h (by simp)
-  · injection h with h; subst h; rfl
-
-/-- `swissDropK` commits to `{ k with swiss := … }` (remove or decrement) — `revoked` untouched. -/
-private theorem swissDropK_revoked (k : RecordKernelState) (sw : Nat)
-    (k' : RecordKernelState) (h : swissDropK k sw = some k') :
-    k'.revoked = k.revoked := by
-  unfold swissDropK at h
-  split at h
-  · exact absurd h (by simp)
-  · split at h
-    · exact absurd h (by simp)
-    · split at h
-      · injection h with h; subst h; rfl
-      · injection h with h; subst h; rfl
-
 /-! ## Step 1 — `execFullA_revoked_eq`: the per-effect registry frame (the full dispatch).
 
 Every arm leaves `revoked` unchanged: no current effect grows the credential-revocation registry
@@ -179,20 +146,8 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
           · exact absurd hk (by simp)
   | attenuateA actor idx keep =>
       simp only [execFullA, attenuateStepA, Option.some.injEq] at h; subst h; rfl
-  | dropRefA holder t =>
-      simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h; rfl
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h; rfl
-  | validateHandoffA intro rec t =>
-      simp only [execFullA, recCDelegate] at h
-      cases hk : recKDelegate s.kernel intro rec t with
-      | none => rw [hk] at h; exact absurd h (by simp)
-      | some k' =>
-          commit_subst h hk
-          show k'.revoked = s.kernel.revoked
-          unfold recKDelegate at hk; split at hk
-          · injection hk with hk; subst hk; rfl
-          · exact absurd hk (by simp)
   | exerciseA actor t inner =>
       simp only [execFullA] at h
       by_cases hf : innerFacetsAdmittedA s actor t inner = true
@@ -247,15 +202,6 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
   -- §NOTE-CREATE — grows `commitments` (a DIFFERENT set), `revoked` untouched (always-commit).
   | noteCreateA cm actor =>
       simp only [execFullA, noteCreateChainA, noteCreateCommitment, Option.some.injEq] at h; subst h; rfl
-  | sealA pid actor payload =>
-      simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := sealChainA_factors h; subst hs'; rfl
-  | unsealA pid actor recipient =>
-      simp only [execFullA] at h
-      obtain ⟨_, _, _, hs'⟩ := unsealChainA_factors h; subst hs'; rfl
-  | createSealPairA pid actor sealerHolder unsealerHolder =>
-      simp only [execFullA] at h
-      obtain ⟨_, hs'⟩ := createSealPairChainA_factors h; subst hs'; rfl
   | makeSovereignA actor cell =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := makeSovereignStep_factors h; subst hs'; rfl
@@ -267,50 +213,6 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
   -- §swiss — four CapTP swiss-table effects, each `if stateAuthB … then match swissK … | some k' => …`
   -- (kernel updates `swiss`, never `revoked`). Gate-peel the outer `if`, then cases the kernel op.
-  | exportSturdyRefA sw actor exporter target rights =>
-      simp only [execFullA, swissExportChainA] at h
-      split at h
-      · cases hk : swissExportK s.kernel sw exporter target rights with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show k'.revoked = s.kernel.revoked
-            unfold swissExportK at hk; split at hk
-            · exact absurd hk (by simp)
-            · split at hk
-              · injection hk with hk; subst hk; rfl
-              · exact absurd hk (by simp)
-      · exact absurd h (by simp)
-  | enlivenRefA sw actor exporter claimed =>
-      simp only [execFullA, swissEnlivenChainA] at h
-      split at h
-      · cases hk : swissEnlivenK s.kernel sw claimed with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show k'.revoked = s.kernel.revoked
-            exact swissEnlivenK_revoked s.kernel sw claimed k' hk
-      · exact absurd h (by simp)
-  | swissHandoffA sw certHash introducer exporter =>
-      simp only [execFullA, swissHandoffChainA] at h
-      split at h
-      · cases hk : swissHandoffK s.kernel sw certHash with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show k'.revoked = s.kernel.revoked
-            exact swissHandoffK_revoked s.kernel sw certHash k' hk
-      · exact absurd h (by simp)
-  | swissDropA sw actor exporter =>
-      simp only [execFullA, swissDropChainA] at h
-      split at h
-      · cases hk : swissDropK s.kernel sw with
-        | none => rw [hk] at h; exact absurd h (by simp)
-        | some k' =>
-            commit_subst h hk
-            show k'.revoked = s.kernel.revoked
-            exact swissDropK_revoked s.kernel sw k' hk
-      · exact absurd h (by simp)
   -- §lifecycle (Wave-3) — seal/unseal/destroy edit `lifecycle`/`deathCert`; refresh edits `delegations`
   -- — none touch `revoked` (frame: `rfl`).
   | cellSealA actor cell =>

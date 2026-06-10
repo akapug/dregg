@@ -164,10 +164,6 @@ def delegateH : EffectHandler DelegateArgs := delegateAttenH
 /-- `introduceA` — the 3-party Granovetter introduce, attenuated path. Same handler as `delegateH`. -/
 def introduceH : EffectHandler DelegateArgs := delegateAttenH
 
-/-- `validateHandoffA` — the graph-level consequence of an accepted two-signature CapTP handoff,
-attenuated path. Same handler as `delegateH`. -/
-def validateHandoffH : EffectHandler DelegateArgs := delegateAttenH
-
 /-! ## §2 — REVOCATIONS: genuinely TOTAL, SELF-LIMITING authority shrinkage.
 
 `revokeA`/`dropRefA`/`revokeDelegationA` filter out the holder's `t`-conferring caps
@@ -219,10 +215,6 @@ theorem revokeH_self_limiting (k : RecordKernelState) (a : RevokeArgs) (l : Labe
   by_cases hl : l = a.holder
   · subst hl; simp only [if_pos]; intro d hd; exact List.mem_of_mem_filter hd
   · simp only [if_neg hl]; exact fun d hd => hd
-
-/-- `dropRefA` — the CapTP GC decrement (the holder drops its edge to the target). Same total
-self-limiting revocation handler as `revokeH` (distinct dregg1 op, same `removeEdge` graph move). -/
-def dropRefH : EffectHandler RevokeArgs := revokeH
 
 /-- `revokeDelegationA` — a parent revokes a child's delegation (the child's edge is removed). Same
 total self-limiting revocation handler as `revokeH` (distinct dregg1 op, same `removeEdge` move). -/
@@ -278,10 +270,10 @@ over the registry). -/
 
 /-- The authority/delegation batch registry (the coproduct menu for this cluster). -/
 def authorityRegistry : Registry :=
-  [ ⟨DelegateArgs, delegateH⟩, ⟨DelegateArgs, introduceH⟩, ⟨DelegateArgs, validateHandoffH⟩,
+  [ ⟨DelegateArgs, delegateH⟩, ⟨DelegateArgs, introduceH⟩,
     ⟨DelegateArgs, delegateAttenH⟩,
     ⟨AttenuateArgs, attenuateH⟩,
-    ⟨RevokeArgs, revokeDelegationH⟩, ⟨RevokeArgs, dropRefH⟩, ⟨RevokeArgs, revokeH⟩ ]
+    ⟨RevokeArgs, revokeDelegationH⟩, ⟨RevokeArgs, revokeH⟩ ]
 
 /-- Build a closed delegate effect (tag `0`; full-authority attenuated delegation, `keep := allAuths`). -/
 def delegateEffect (delegator recipient target : CellId) : ClosedEffect :=
@@ -294,12 +286,6 @@ def introduceEffect (introducer recipient target : CellId) : ClosedEffect :=
   { tag := 1, Args := DelegateArgs,
     args := { delegator := introducer, recipient := recipient, target := target, keep := allAuths },
     handler := introduceH }
-
-/-- Build a closed validate-handoff effect (tag `2`; full-authority attenuated handoff). -/
-def validateHandoffEffect (introducer recipient target : CellId) : ClosedEffect :=
-  { tag := 2, Args := DelegateArgs,
-    args := { delegator := introducer, recipient := recipient, target := target, keep := allAuths },
-    handler := validateHandoffH }
 
 /-! ### §CERT — the REAL CapTP certificate attenuation (no longer `keep := allAuths`).
 
@@ -326,7 +312,7 @@ def validateHandoffCertEffect (cert : Dregg2.Exec.CapTP.HandoffCert CellId (List
   { tag := 2, Args := DelegateArgs,
     args := { delegator := cert.introducer, recipient := cert.recipient, target := target,
               keep := certMask cert },
-    handler := validateHandoffH }
+    handler := delegateAttenH }
 
 /-- **`validateHandoffCert_non_amplifying` — PROVED.** A cert-attenuated handoff confers the recipient
 REAL rights `⊆` the introducer's held cap to `target`: the cert mask cannot amplify (`granted ⊆ held`,
@@ -352,10 +338,6 @@ def attenuateEffect (actor : CellId) (idx : Nat) (keep : List Auth) : ClosedEffe
 def revokeDelegationEffect (holder target : CellId) : ClosedEffect :=
   { tag := 5, Args := RevokeArgs, args := { holder := holder, target := target },
     handler := revokeDelegationH }
-
-/-- Build a closed drop-ref effect (tag `6`). -/
-def dropRefEffect (holder target : CellId) : ClosedEffect :=
-  { tag := 6, Args := RevokeArgs, args := { holder := holder, target := target }, handler := dropRefH }
 
 /-- Build a closed revoke effect (tag `7`). -/
 def revokeEffect (holder target : CellId) : ClosedEffect :=
@@ -394,8 +376,6 @@ def as0 : RecordKernelState :=
 -- §TEETH-5 (revoke is TOTAL): cell 0 revokes its connectivity to target 7 — ALWAYS succeeds, and the
 -- `node 7` cap is filtered out of its slot (only the endpoint-9 cap survives).
 #guard ((execEffect (revokeEffect 0 7) as0).map (fun k => k.caps 0)) == some [Cap.endpoint 9 [Auth.write]]  -- some [Cap.endpoint 9 [Auth.write]]   (the `node 7` cap is gone)
--- §TEETH-6 (dropRef is TOTAL + self-limiting): dropRef always commits; cell 0's reach only shrinks.
-#guard ((execEffect (dropRefEffect 0 9) as0).map (fun k => k.caps 0)) == some [Cap.node 7]  -- some [Cap.node 7]   (the endpoint-9 cap dropped)
 -- §TEETH-7 (attenuate is TOTAL + self-limiting): cell 0 narrows its OWN idx-1 cap (endpoint 9) to `[]`
 -- — always commits; the actor's own authority shrinks (write dropped).
 #guard ((execEffect (attenuateEffect 0 1 []) as0).map (fun k => k.caps 0)) == some [Cap.node 7, Cap.endpoint 9 []]  -- some [Cap.node 7, Cap.endpoint 9 []]   (idx-1 narrowed in place)
@@ -420,9 +400,9 @@ def readOnlyCert : Dregg2.Exec.CapTP.HandoffCert CellId (List Auth) :=
 -- CapTP `permissions`, strictly narrower than the held `[read,write]` and than the old `allAuths` path:
 #guard ((execEffect (validateHandoffCertEffect readOnlyCert 9) asCert).map (fun k => k.caps 1))
         == some [Cap.endpoint 9 [Auth.read]]  -- write DROPPED by the cert mask (granted ⊊ held)
--- ...whereas the OLD `keep := allAuths` path would have conferred the FULL held `[read,write]` — the
+-- ...whereas a blanket `keep := allAuths` introduce confers the FULL held `[read,write]` — the
 -- cert mask is what makes the handoff faithfully narrowing:
-#guard ((execEffect (validateHandoffEffect 0 1 9) asCert).map (fun k => k.caps 1))
+#guard ((execEffect (introduceEffect 0 1 9) asCert).map (fun k => k.caps 1))
         == some [Cap.endpoint 9 [Auth.read, Auth.write]]  -- allAuths = identity-on-rights (the looser path)
 -- the cert handoff is still authority-gated: an introducer holding NO edge to the target is REJECTED.
 #guard ((execEffect (validateHandoffCertEffect { readOnlyCert with introducer := 1 } 9) asCert).isSome) == false
@@ -451,11 +431,9 @@ self-limiting keystones are pinned directly. -/
 #assert_axioms delegateAttenH
 #assert_axioms delegateH
 #assert_axioms introduceH
-#assert_axioms validateHandoffH
 #assert_axioms delegateAttenH_non_amplifying
 #assert_axioms validateHandoffCert_non_amplifying
 #assert_axioms revokeH
-#assert_axioms dropRefH
 #assert_axioms revokeDelegationH
 #assert_axioms revokeH_self_limiting
 #assert_axioms attenuateH

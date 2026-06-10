@@ -46,8 +46,8 @@ are digest-bound; only global side-tables ride the rest hash. -/
 def RestIffNoAccountsBalBorn (RH : RecordKernelState → ℤ) : Prop :=
   ∀ k k' : RecordKernelState, RH k = RH k' ↔
     (k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.swiss = k.swiss
-      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.commitments = k.commitments
+      ∧ k'.factories = k.factories
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
 
@@ -114,8 +114,8 @@ def createCellE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
   logUpdate    := some (fun s args => createReceipt args.actor args.newCell :: s.log)
   restFrame    := fun k k' =>
     (k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
-      ∧ k'.commitments = k.commitments ∧ k'.swiss = k.swiss
-      ∧ k'.factories = k.factories ∧ k'.sealedBoxes = k.sealedBoxes
+      ∧ k'.commitments = k.commitments
+      ∧ k'.factories = k.factories
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt)
   guardGates   := createCellGuardGates
@@ -184,12 +184,12 @@ theorem apex_iff_createCellSpec (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     createCellGuardProp, createCellAdmit, expectedAccounts, expectedBal, readBornEmptySide,
     expectedBornEmptySide]
   constructor
-  · rintro ⟨hg, hacc, hbal, hside, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
-    refine ⟨hg, hacc, ?_, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+  · rintro ⟨hg, hacc, hbal, hside, hlog, hNul, hRev, hCom, hQ, hFac, hSB⟩
+    refine ⟨hg, hacc, ?_, hlog, hNul, hRev, hCom, hQ, hFac, hSB⟩
     exact (bornEmptyAt_iff_side_and_bal s.kernel args.newCell s'.kernel).mpr ⟨hside, hbal⟩
-  · rintro ⟨hg, hacc, hborn, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+  · rintro ⟨hg, hacc, hborn, hlog, hNul, hRev, hCom, hQ, hFac, hSB⟩
     obtain ⟨hside, hbal⟩ := (bornEmptyAt_iff_side_and_bal s.kernel args.newCell s'.kernel).mp hborn
-    exact ⟨hg, hacc, hbal, hside, hlog, hNul, hRev, hCom, hQ, hSw, hFac, hSB⟩
+    exact ⟨hg, hacc, hbal, hside, hlog, hNul, hRev, hCom, hQ, hFac, hSB⟩
 
 /-! ### §2c — THE VALIDATION: `createCellA_full_sound ⇒ CreateCellSpec`. -/
 

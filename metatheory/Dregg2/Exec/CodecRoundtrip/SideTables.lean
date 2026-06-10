@@ -497,7 +497,7 @@ theorem lit_lbrack (rest : PState) : lit "[" ('[' :: rest) = some rest := by
   unfold lit; rw [show ("[":String).toList = ['['] from by decide, litGo_cons_match]; rfl
 
 /-- **The optional-`Nat` leaf** (`parseOptNat ∘ encodeOptNat = id`). Shared by `EscrowRecord` queue
-bindings and `SwissRecord.cert`. -/
+bindings and `WireSwissRecord.cert`. -/
 theorem parseOptNat_encode (o : Option Nat) (rest : PState) :
     parseOptNat ((encodeOptNat o).toList ++ rest) = some (o, rest) := by
   cases o with
@@ -764,18 +764,18 @@ where `rights` is an AUTHS array discharged by §7's `cA_step` (→ §8) and `ce
 discharged by `parseOptNat_encode`. The three leading `Nat`s walk via `parseNat_toString`/`cN_step`
 (post-byte `,`); the `,` before `cert` and the closing `]` are plain `lit_append`s (`parseOptNat`
 leaves its argument `rest`, so the outer `]` is a clean literal consume). Self-delimiting. -/
-theorem parseSwiss_encode (e : SwissRecord) (rest : PState) :
+theorem parseSwiss_encode (e : WireSwissRecord) (rest : PState) :
     parseSwiss ((encodeSwiss e).toList ++ rest) = some (e, rest) := by
   unfold parseSwiss encodeSwiss
   simp only [String.toList_append, List.append_assoc]
   simp only [lit_append, parseNat_toString _ _ (nd_litComma _), cN_step _ _ (nd_litComma _),
     cA_step _ _, parseOptNat_encode, Option.bind_eq_bind, Option.bind]
 
-private def encodeSwissTail (es : List SwissRecord) : String :=
+private def encodeSwissTail (es : List WireSwissRecord) : String :=
   es.foldl (fun acc x => acc ++ "," ++ encodeSwiss x) ""
 
 /-- A `SW` entry opens with `'['` (so the list body is `[[…`, making `lit "[]"` fail). -/
-private theorem encodeSwiss_head (e : SwissRecord) : ∃ t, (encodeSwiss e).toList = '[' :: t := by
+private theorem encodeSwiss_head (e : WireSwissRecord) : ∃ t, (encodeSwiss e).toList = '[' :: t := by
   refine ⟨(toString e.swiss ++ "," ++ toString e.exporter ++ "," ++ toString e.target ++ ","
     ++ encodeAuthsW e.rights ++ "," ++ toString e.refcount ++ "," ++ encodeOptNat e.cert ++ "]"
     : String).toList, ?_⟩
@@ -783,7 +783,7 @@ private theorem encodeSwiss_head (e : SwissRecord) : ∃ t, (encodeSwiss e).toLi
   simp only [String.toList_append, show ("[":String).toList = ['['] from rfl, List.cons_append,
     List.nil_append, List.append_assoc]
 
-private theorem foldl_swissTail (es : List SwissRecord) : ∀ (acc : String),
+private theorem foldl_swissTail (es : List WireSwissRecord) : ∀ (acc : String),
     es.foldl (fun s x => s ++ "," ++ encodeSwiss x) acc
       = acc ++ es.foldl (fun s x => s ++ "," ++ encodeSwiss x) "" := by
   induction es with
@@ -793,7 +793,7 @@ private theorem foldl_swissTail (es : List SwissRecord) : ∀ (acc : String),
       rw [ih (acc ++ "," ++ encodeSwiss b), ih ("" ++ "," ++ encodeSwiss b)]
       apply String.toList_inj.mp; simp [String.toList_append, List.append_assoc]
 
-private theorem encSwissTail_cons_shape (b : SwissRecord) (bs : List SwissRecord) (rest : PState) :
+private theorem encSwissTail_cons_shape (b : WireSwissRecord) (bs : List WireSwissRecord) (rest : PState) :
     (encodeSwissTail (b :: bs)).toList ++ rest
       = ',' :: ((encodeSwiss b).toList ++ ((encodeSwissTail bs).toList ++ rest)) := by
   conv_lhs => rw [show encodeSwissTail (b :: bs) = ("" ++ "," ++ encodeSwiss b) ++ encodeSwissTail bs from by
@@ -802,7 +802,7 @@ private theorem encSwissTail_cons_shape (b : SwissRecord) (bs : List SwissRecord
   simp only [String.toList_append, show ("":String).toList = [] from rfl,
     show (",":String).toList = [','] from rfl, List.nil_append, List.cons_append, List.append_assoc]
 
-private theorem encodeSwissTable_cons_shape (a : SwissRecord) (as : List SwissRecord) (rest : PState) :
+private theorem encodeSwissTable_cons_shape (a : WireSwissRecord) (as : List WireSwissRecord) (rest : PState) :
     (encodeSwissTable (a :: as)).toList ++ rest
       = '[' :: ((encodeSwiss a).toList ++ ((encodeSwissTail as).toList ++ (']' :: rest))) := by
   rw [show encodeSwissTable (a :: as) = "[" ++ encodeSwiss a ++ encodeSwissTail as ++ "]" from rfl]
@@ -811,7 +811,7 @@ private theorem encodeSwissTable_cons_shape (a : SwissRecord) (as : List SwissRe
   simp [List.append_assoc]
 
 set_option maxHeartbeats 1000000 in
-private theorem parseSwissTable_loop_works : ∀ (as : List SwissRecord) (a : SwissRecord)
+private theorem parseSwissTable_loop_works : ∀ (as : List WireSwissRecord) (a : WireSwissRecord)
     (rest : PState) (fuel : Nat),
     ((encodeSwiss a).toList ++ ((encodeSwissTail as).toList ++ (']' :: rest))).length < fuel →
     parseSwissTable.loop fuel ((encodeSwiss a).toList ++ ((encodeSwissTail as).toList ++ (']' :: rest)))
@@ -821,7 +821,7 @@ private theorem parseSwissTable_loop_works : ∀ (as : List SwissRecord) (a : Sw
   | nil =>
       intro a rest fuel hf
       obtain ⟨f, rfl⟩ : ∃ k, fuel = k + 1 := ⟨fuel - 1, by omega⟩
-      rw [show (encodeSwissTail ([] : List SwissRecord)).toList = [] from rfl, List.nil_append]
+      rw [show (encodeSwissTail ([] : List WireSwissRecord)).toList = [] from rfl, List.nil_append]
       unfold parseSwissTable.loop
       rw [parseSwiss_encode a (']' :: rest)]
       simp only []
@@ -848,12 +848,12 @@ set_option maxHeartbeats 1000000 in
 /-- **FILL J production (i): the `SWISS` side-table roundtrip** (`parseSwissTable ∘ encodeSwissTable =
 id`) — the CapTP swiss-table side-table whose element carries an AUTHS rights array (closed via §8) and
 an optional handoff `cert` (closed via `parseOptNat_encode`). -/
-theorem parseSwissTable_encode (ss : List SwissRecord) (rest : PState) :
+theorem parseSwissTable_encode (ss : List WireSwissRecord) (rest : PState) :
     parseSwissTable ((encodeSwissTable ss).toList ++ rest) = some (ss, rest) := by
   cases ss with
   | nil =>
       unfold parseSwissTable
-      rw [show (encodeSwissTable ([] : List SwissRecord)) = "[]" from rfl]
+      rw [show (encodeSwissTable ([] : List WireSwissRecord)) = "[]" from rfl]
       rw [show (("[]":String).toList ++ rest) = ("[]":String).toList ++ rest from rfl, lit_append]
   | cons a as =>
       unfold parseSwissTable

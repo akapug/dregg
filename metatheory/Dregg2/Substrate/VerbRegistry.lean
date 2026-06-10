@@ -171,7 +171,7 @@ def FactoryPattern.module : FactoryPattern → String
   | .inbox       => "Dregg2.Apps.InboxFactory"
   | .pubsub      => "Dregg2.Apps.PubsubFactory"
   | .bridge      => "Dregg2.Apps.BridgeCell"
-  | .capsInSlots => "Dregg2.Authority.Cap (caps-in-slots; seal/swiss/handoff, R7 epoch-at-retrieval)"
+  | .capsInSlots => "Dregg2.Apps.CapSlotFactory (caps-in-slots, R7 epoch-at-retrieval LANDED)"
 
 /-! ## §5 — The registry classification (the three buckets). -/
 

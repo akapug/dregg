@@ -1603,9 +1603,7 @@ field names as JSON strings, the swiss `rights`/`held` as the narrow `AUTHS` arr
       | {"introduce":[introducer,recipient,target]}  -- introduceA
       | {"delatten":[delegator,recipient,target,AUTHS]} -- delegateAttenA (rights-carrying)
       | {"atten":[actor,idx,AUTHS]}              -- attenuateA
-      | {"dropref":[holder,target]}              -- dropRefA
       | {"revdel":[holder,target]}               -- revokeDelegationA
-      | {"vhandoff":[introducer,recipient,target]}   -- validateHandoffA graph consequence
       | {"exercise":[actor,target,[INNER;…]]}    -- exerciseA (INNER = nested `;`-joined action array)
       | {"createcell":[actor,newCell]}           -- createCellA
       | {"createcellfactory":[actor,newCell,vk]} -- createCellFromFactoryA
@@ -1613,23 +1611,19 @@ field names as JSON strings, the swiss `rights`/`held` as the narrow `AUTHS` arr
       | {"bmint":[actor,cell,asset,value]}       -- bridgeMintA
       | {"nspend":[nf,actor]}                    -- noteSpendA
       | {"ncreate":[cm,actor]}                   -- noteCreateA
-      | {"seal":[actor,cell]}                    -- sealA
-      | {"unseal":[actor,cell]}                  -- unsealA
-      | {"csp":[actor,sealerHolder,unsealerHolder]}   -- createSealPairA
       | {"sov":[actor,cell]}                     -- makeSovereignA
       | {"refusal":[actor,cell]}                 -- refusalA
       | {"rarchive":[actor,cell]}                -- receiptArchiveA
-      | {"export":[sw,actor,exporter,target,AUTHS]}  -- exportSturdyRefA(rights); held read from committed caps
-      | {"enliven":[sw,actor,exporter,AUTHS]}    -- enlivenRefA(claimed)
-      | {"shandoff":[sw,certHash,introducer,exporter]}     -- swissHandoffA
-      | {"sdrop":[sw,actor,exporter]}            -- swissDropA
       | {"psend":[actor]}                        -- pipelinedSendA
 
 `NATSW := [] | [N(,N)*]` is a plain `Nat` array (the host-context codec reuses it).
 
 F2b: the queue wire arms (`qalloc`/`qenq`/`qdeq`/`qresize`/`qatomic`/`qpipe` and the `OPS`
-sub-op array) are GONE with the queue verb family — a turn carrying one FAILS TO PARSE
-(fail-closed), so the transitional Rust window falls back LOUDLY instead of silently executing
+sub-op array) are GONE with the queue verb family. F3: the seal/swiss/sturdyref wire arms
+(`dropref`/`vhandoff`/`seal`/`unseal`/`csp`/`export`/`enliven`/`shandoff`/`sdrop`) are GONE with
+the caps-in-slots dissolution (`Apps/CapSlotFactory.lean`, R7 epoch-at-retrieval) — a turn
+carrying one FAILS TO PARSE (fail-closed), so the transitional Rust window falls back LOUDLY
+instead of silently executing
 an unverified queue effect. Queue behavior is the factory story
 (`Apps/{QueueFactory,InboxFactory,PubsubFactory}.lean`).
 
@@ -1682,9 +1676,7 @@ def encodeActionW : FullActionA → String
                                         ++ toString t ++ "," ++ encodeAuthsW keep ++ "]}"
   | .attenuateA actor idx keep => "{\"atten\":[" ++ toString actor ++ "," ++ toString idx ++ ","
                                     ++ encodeAuthsW keep ++ "]}"
-  | .dropRefA holder target => "{\"dropref\":[" ++ toString holder ++ "," ++ toString target ++ "]}"
   | .revokeDelegationA holder target => "{\"revdel\":[" ++ toString holder ++ "," ++ toString target ++ "]}"
-  | .validateHandoffA i r t => "{\"vhandoff\":[" ++ toString i ++ "," ++ toString r ++ "," ++ toString t ++ "]}"
   | .exerciseA actor target inner => "{\"exercise\":[" ++ toString actor ++ "," ++ toString target
                                        ++ ",[" ++ encodeActionsW inner ++ "]]}"
   | .createCellA actor newCell => "{\"createcell\":[" ++ toString actor ++ "," ++ toString newCell ++ "]}"
@@ -1697,26 +1689,9 @@ def encodeActionW : FullActionA → String
   | .noteSpendA nf actor spendProof => "{\"nspend\":[" ++ toString nf ++ "," ++ toString actor ++ ","
                                           ++ (if spendProof then "1" else "0") ++ "]}"
   | .noteCreateA cm actor => "{\"ncreate\":[" ++ toString cm ++ "," ++ toString actor ++ "]}"
-  | .sealA pid actor payload => "{\"seal\":[" ++ toString pid ++ "," ++ toString actor ++ ","
-                                  ++ encodeCap payload ++ "]}"
-  | .unsealA pid actor recipient => "{\"unseal\":[" ++ toString pid ++ "," ++ toString actor ++ ","
-                                      ++ toString recipient ++ "]}"
-  | .createSealPairA pid actor sh uh => "{\"csp\":[" ++ toString pid ++ "," ++ toString actor ++ ","
-                                          ++ toString sh ++ "," ++ toString uh ++ "]}"
   | .makeSovereignA actor cell => "{\"sov\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
   | .refusalA actor cell => "{\"refusal\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
   | .receiptArchiveA actor cell => "{\"rarchive\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
-  | .exportSturdyRefA sw actor exporter target rights =>
-      "{\"export\":[" ++ toString sw ++ "," ++ toString actor ++ "," ++ toString exporter ++ ","
-        ++ toString target ++ "," ++ encodeAuthsW rights ++ "]}"
-  | .enlivenRefA sw actor exporter claimed =>
-      "{\"enliven\":[" ++ toString sw ++ "," ++ toString actor ++ "," ++ toString exporter ++ ","
-        ++ encodeAuthsW claimed ++ "]}"
-  | .swissHandoffA sw certHash introducer exporter =>
-      "{\"shandoff\":[" ++ toString sw ++ "," ++ toString certHash ++ "," ++ toString introducer ++ ","
-        ++ toString exporter ++ "]}"
-  | .swissDropA sw actor exporter => "{\"sdrop\":[" ++ toString sw ++ "," ++ toString actor ++ ","
-                                       ++ toString exporter ++ "]}"
   | .cellSealA actor cell => "{\"cseal\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
   | .cellUnsealA actor cell => "{\"cunseal\":[" ++ toString actor ++ "," ++ toString cell ++ "]}"
   | .cellDestroyA actor cell ch => "{\"cdestroy\":[" ++ toString actor ++ "," ++ toString cell ++ ","
@@ -1855,22 +1830,12 @@ def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState)
       let (actor, r1) ← parseNat r0; let (idx, r2) ← cN r1; let (keep, r3) ← cA r2; let r4 ← lit "]}" r3
       some (.attenuateA actor idx keep, r4)
   | none =>
-  match lit "{\"dropref\":[" cs with
-  | some r0 => do
-      let (holder, r1) ← parseNat r0; let (target, r2) ← cN r1; let r3 ← lit "]}" r2
-      some (.dropRefA holder target, r3)
-  | none =>
-  match lit "{\"revdel\":[" cs with
+    match lit "{\"revdel\":[" cs with
   | some r0 => do
       let (holder, r1) ← parseNat r0; let (target, r2) ← cN r1; let r3 ← lit "]}" r2
       some (.revokeDelegationA holder target, r3)
   | none =>
-  match lit "{\"vhandoff\":[" cs with
-  | some r0 => do
-      let (i, r1) ← parseNat r0; let (r, r2) ← cN r1; let (t, r3) ← cN r2; let r4 ← lit "]}" r3
-      some (.validateHandoffA i r t, r4)
-  | none =>
-  match lit "{\"exercise\":[" cs with
+    match lit "{\"exercise\":[" cs with
   | some r0 => do
       let (actor, r1) ← parseNat r0; let (target, r2) ← cN r1
       -- parse the nested inner-effect array `,[ … ]` (the de-shadowed inner effects).
@@ -1915,24 +1880,7 @@ def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState)
       let (cm, r1) ← parseNat r0; let (actor, r2) ← cN r1; let r3 ← lit "]}" r2
       some (.noteCreateA cm actor, r3)
   | none =>
-  match lit "{\"seal\":[" cs with
-  | some r0 => do
-      let (pid, r1) ← parseNat r0; let (actor, r2) ← cN r1
-      let r2c ← lit "," r2; let (payload, r3) ← parseCap r2c; let r4 ← lit "]}" r3
-      some (.sealA pid actor payload, r4)
-  | none =>
-  match lit "{\"unseal\":[" cs with
-  | some r0 => do
-      let (pid, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (recipient, r3) ← cN r2; let r4 ← lit "]}" r3
-      some (.unsealA pid actor recipient, r4)
-  | none =>
-  match lit "{\"csp\":[" cs with
-  | some r0 => do
-      let (pid, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (sh, r3) ← cN r2; let (uh, r4) ← cN r3
-      let r5 ← lit "]}" r4
-      some (.createSealPairA pid actor sh uh, r5)
-  | none =>
-  match lit "{\"sov\":[" cs with
+        match lit "{\"sov\":[" cs with
   | some r0 => do
       let (actor, r1) ← parseNat r0; let (cell, r2) ← cN r1; let r3 ← lit "]}" r2
       some (.makeSovereignA actor cell, r3)
@@ -1949,30 +1897,7 @@ def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState)
   | none =>
   -- F2b: the queue wire arms are GONE — a turn carrying `qalloc`/`qenq`/`qdeq`/`qresize`/
   -- `qatomic`/`qpipe` FAILS TO PARSE (fail-closed; the loud Rust fallback in the transitional window).
-  match lit "{\"export\":[" cs with
-  | some r0 => do
-      let (sw, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (exporter, r3) ← cN r2
-      let (target, r4) ← cN r3; let (rights, r5) ← cA r4; let r6 ← lit "]}" r5
-      some (.exportSturdyRefA sw actor exporter target rights, r6)
-  | none =>
-  match lit "{\"enliven\":[" cs with
-  | some r0 => do
-      let (sw, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (exporter, r3) ← cN r2
-      let (claimed, r4) ← cA r3; let r5 ← lit "]}" r4
-      some (.enlivenRefA sw actor exporter claimed, r5)
-  | none =>
-  match lit "{\"shandoff\":[" cs with
-  | some r0 => do
-      let (sw, r1) ← parseNat r0; let (certHash, r2) ← cN r1; let (introducer, r3) ← cN r2
-      let (exporter, r4) ← cN r3; let r5 ← lit "]}" r4
-      some (.swissHandoffA sw certHash introducer exporter, r5)
-  | none =>
-  match lit "{\"sdrop\":[" cs with
-  | some r0 => do
-      let (sw, r1) ← parseNat r0; let (actor, r2) ← cN r1; let (exporter, r3) ← cN r2; let r4 ← lit "]}" r3
-      some (.swissDropA sw actor exporter, r4)
-  | none =>
-  match lit "{\"cseal\":[" cs with
+          match lit "{\"cseal\":[" cs with
   | some r0 => do
       let (actor, r1) ← parseNat r0; let (cell, r2) ← cN r1; let r3 ← lit "]}" r2
       some (.cellSealA actor cell, r3)
@@ -2037,7 +1962,7 @@ def actionRoundtrips (a : FullActionA) : Bool :=
   | some (a', []) => encodeActionW a' == encodeActionW a
   | _             => false
 
-/-- ONE representative of each of the 38 `FullActionA` arms (distinct args per field). -/
+/-- ONE representative of each of the 29 `FullActionA` arms (distinct args per field). -/
 def allActions : List FullActionA :=
   [ .balanceA { actor := 1, src := 2, dst := 3, amt := -4 } 5
   , .delegate 6 7 8
@@ -2052,9 +1977,7 @@ def allActions : List FullActionA :=
   , .introduceA 35 36 37
   , .delegateAttenA 35 36 37 [.read, .write]
   , .attenuateA 38 39 [.read, .write]
-  , .dropRefA 40 41
   , .revokeDelegationA 42 43
-  , .validateHandoffA 44 45 46
   , .exerciseA 47 48 [.emitEventA 200 201 (-202) 203, .setFieldA 204 205 "balance" (-206)]
   , .createCellA 49 50
   , .createCellFromFactoryA 250 251 (-252)
@@ -2062,16 +1985,9 @@ def allActions : List FullActionA :=
   , .bridgeMintA 54 55 56 (-57)
   , .noteSpendA 74 75 true
   , .noteCreateA 76 77
-  , .sealA 100 101 (Cap.endpoint 150 [.read, .write])
-  , .unsealA 102 103 104
-  , .createSealPairA 105 106 107 108
   , .makeSovereignA 109 110
   , .refusalA 111 112
   , .receiptArchiveA 113 114
-  , .exportSturdyRefA 135 136 137 138 [.read]
-  , .enlivenRefA 139 140 141 [.call]
-  , .swissHandoffA 142 143 144 145
-  , .swissDropA 146 147 148
   , .cellSealA 149 150
   , .cellUnsealA 151 152
   , .cellDestroyA 153 154 155
@@ -2082,15 +1998,17 @@ def allActions : List FullActionA :=
 /-- EVERY representative round-trips (the all-arms non-vacuity guard). -/
 def allActionsRoundtrip : Bool := allActions.all actionRoundtrips
 
-#guard (allActions.length) == 38  --  38 (one per FullActionA arm; F1b: the escrow/obligation/committed/bridge-LFC arms are GONE; F2b: the queue arms are GONE)
+#guard (allActions.length) == 29  --  29 (one per FullActionA arm; F1b: escrow/obligation/committed/bridge-LFC GONE; F2b: queues GONE; F3: seal/swiss/sturdyref GONE — caps-in-slots)
 #guard (allActionsRoundtrip)  --  true (every arm round-trips)
 -- HARD CI check (fails the build if ANY arm — incl. the Wave-3 seal/lifecycle arms — stops round-tripping):
 #guard allActionsRoundtrip
 -- a couple of spot checks of the actual wire bytes:
 #guard (encodeActionW (.balanceA { actor := 1, src := 2, dst := 3, amt := -4 } 5) ==
   "{\"bal\":[1,2,3,-4,5]}")
-#guard (encodeActionW (.exportSturdyRefA 133 134 135 136 [.read]) ==
-  "{\"export\":[133,134,135,136,[0]]}")
+-- F3 REFUSAL TOOTH: a doomed seal/swiss wire form FAILS TO PARSE (fail-closed, loud).
+#guard ((parseActionW "{\"export\":[133,134,135,136,[0]]}".toList).isNone)  --  true (sturdyref DISSOLVED)
+#guard ((parseActionW "{\"seal\":[5,0,{\"ep\":[150,[0,1]]}]}".toList).isNone)  --  true (seal DISSOLVED)
+#guard ((parseActionW "{\"dropref\":[40,41]}".toList).isNone)  --  true (dropRef DISSOLVED)
 -- fail-closed on an unknown tag:
 #guard ((parseActionW "{\"bogus\":[1]}".toList).isNone)  --  true
 -- fail-closed on a wrong-arity bal (missing asset):
@@ -2597,20 +2515,35 @@ def parseQueues (cs : PState) : Option (List QueueRecord × PState) :=
                       | none => none
       loop (cs.length + 1) r0
 
-/-! ### SwissRecord codec (with the optional `cert`). -/
+/-! ### Swiss wire codec (with the optional `cert`).
+
+F3: the kernel `SwissRecord`/`swiss` side-table is GONE (caps-in-slots, `Apps/CapSlotFactory.lean`);
+the wire keeps the `"swiss"` field BYTE-IDENTICAL through the transitional window via this
+WIRE-ONLY record: encode always emits `[]`, parse still accepts the full grammar and the value is
+DROPPED on reconstruction (the escrow/queue precedent). -/
+
+/-- WIRE-ONLY swiss entry (the old `SwissRecord` wire shape, kept for byte-compat). -/
+structure WireSwissRecord where
+  swiss    : Nat
+  exporter : CellId
+  target   : CellId
+  rights   : List Auth
+  refcount : Nat
+  cert     : Option Nat := none
+deriving DecidableEq, Repr
 
 /-- Encode one `SwissRecord` `[swiss,exporter,target,AUTHS,refcount,CERT]`. -/
-def encodeSwiss (e : SwissRecord) : String :=
+def encodeSwiss (e : WireSwissRecord) : String :=
   "[" ++ toString e.swiss ++ "," ++ toString e.exporter ++ "," ++ toString e.target ++ ","
     ++ encodeAuthsW e.rights ++ "," ++ toString e.refcount ++ "," ++ encodeOptNat e.cert ++ "]"
 
 /-- Encode the `SWISS` array. -/
-def encodeSwissTable : List SwissRecord → String
+def encodeSwissTable : List WireSwissRecord → String
   | []      => "[]"
   | e :: es => "[" ++ encodeSwiss e ++ (es.foldl (fun acc x => acc ++ "," ++ encodeSwiss x) "") ++ "]"
 
 /-- Parse one `SW` `[swiss,exporter,target,AUTHS,refcount,CERT]`. -/
-def parseSwiss (cs : PState) : Option (SwissRecord × PState) := do
+def parseSwiss (cs : PState) : Option (WireSwissRecord × PState) := do
   let r0 ← lit "[" cs
   let (swiss, r1) ← parseNat r0
   let (exporter, r2) ← cN r1
@@ -2624,14 +2557,14 @@ def parseSwiss (cs : PState) : Option (SwissRecord × PState) := do
           refcount := refcount, cert := cert }, r7)
 
 /-- Parse the `SWISS` array. -/
-def parseSwissTable (cs : PState) : Option (List SwissRecord × PState) :=
+def parseSwissTable (cs : PState) : Option (List WireSwissRecord × PState) :=
   match lit "[]" cs with
   | some rest => some ([], rest)
   | none =>
     match lit "[" cs with
     | none => none
     | some r0 =>
-      let rec loop (fuel : Nat) (cs : PState) : Option (List SwissRecord × PState) :=
+      let rec loop (fuel : Nat) (cs : PState) : Option (List WireSwissRecord × PState) :=
         match fuel with
         | 0 => none
         | fuel + 1 =>
@@ -2659,7 +2592,7 @@ structure WState where
   nullifiers  : List Nat
   commitments : List Nat
   queues      : List QueueRecord
-  swiss       : List SwissRecord
+  swiss       : List WireSwissRecord
   /-- The kernel-state REVOCATION REGISTRY (hole #3 / `#139`): the committed revoked-credential
   nullifier set the gate reads. Last on the wire (additive); DEFAULTS EMPTY. -/
   revoked     : List Nat := []
@@ -2687,9 +2620,9 @@ def stateOfWState (w : WState) : RecordKernelState :=
     bal := balOfEntries w.bal
     -- F1b: the kernel escrow holding-store is GONE; `w.escrows` is wire-compat ballast (DROPPED here).
     -- F2b: the kernel queue side-table is GONE; `w.queues` is wire-compat ballast (DROPPED here).
+    -- F3: the kernel swiss side-table is GONE; `w.swiss` is wire-compat ballast (DROPPED here).
     nullifiers := w.nullifiers
     commitments := w.commitments
-    swiss := w.swiss
     revoked := w.revoked
     lifecycle := funOfCellNats w.lifecycle
     deathCert := funOfCellNats w.deathCert }
@@ -2753,7 +2686,8 @@ def wstateOfState (cellIds : List CellId) (capLabels : List CellId)
     commitments := k.commitments
     -- F2b: the kernel queue side-table is GONE; emit the empty list (byte-identical wire shape).
     queues := []
-    swiss := k.swiss
+    -- F3: the kernel swiss side-table is GONE; emit the empty list (byte-identical wire shape).
+    swiss := []
     revoked := k.revoked
     lifecycle := cellNatsOfFun cellIds k.lifecycle
     deathCert := cellNatsOfFun cellIds k.deathCert }
