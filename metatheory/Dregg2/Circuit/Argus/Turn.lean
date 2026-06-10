@@ -485,7 +485,7 @@ corollary describing the deployed wrapper until the W1 VK rotation swaps the exe
 
 section ValueUnify
 
-open Dregg2.Exec (AssetId RecChainedState recBalCreditCell recBalCreditCell_recTotalAsset
+open Dregg2.Exec (CellId AssetId RecChainedState recBalCreditCell recBalCreditCell_recTotalAsset
   recTotalAssetWithEscrow recTotalAsset escrowHeldAsset ExactConservation)
 open Dregg2.Exec.Admission (isFrozen admissionClock)
 
