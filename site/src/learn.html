@@ -5,13 +5,26 @@
   <div class="page-header">
     <h1>Learn</h1>
     <p>
-      <code>dregg</code> is a big system, but you don't need to understand all of it to be productive.
-      Pick the path that matches what you're trying to do.
+      Two ways in. If you want to understand what dregg <em>is</em>, read
+      <a href="/docs.html">the protocol in seven rungs</a> — the living explanation, from one
+      sentence outward, with every checkable fact embedded from the verified sources. If you
+      have a task in hand, pick your role below.
     </p>
   </div>
 
   <section>
     <div class="learn-grid">
+      <a class="learn-card" href="/docs.html">
+        <span class="learn-card__label">I want to understand it</span>
+        <span class="learn-card__title">The Protocol</span>
+        <span class="learn-card__desc">
+          The concept ladder: turns, the four substances and eight verbs, guards, receipts,
+          the light client, userspace, the trust boundary. Prose, then theorems, then a place
+          to touch each idea.
+        </span>
+        <span class="learn-card__link">Climb the ladder &rarr;</span>
+      </a>
+
       <a class="learn-card" href="/learn/users/quickstart.html">
         <span class="learn-card__label">I want to use it</span>
         <span class="learn-card__title">Users</span>
@@ -26,8 +39,8 @@
         <span class="learn-card__label">I want to build on it</span>
         <span class="learn-card__title">Developers</span>
         <span class="learn-card__desc">
-          Use the SDK, build an AppServer, register in the nameservice,
-          accept CapTP connections, and deploy programmable queues.
+          Use the SDK, mint factory cells with verified programs, accept CapTP
+          connections, and prove your app's contract against the kernel's guarantees.
         </span>
         <span class="learn-card__link">Build apps &rarr;</span>
       </a>
@@ -41,30 +54,12 @@
         </span>
         <span class="learn-card__link">Node setup &rarr;</span>
       </a>
-
-      <a class="learn-card" href="/learn/architecture/overview.html">
-        <span class="learn-card__label">I want to understand it</span>
-        <span class="learn-card__title">Architecture</span>
-        <span class="learn-card__desc">
-          Deep dive into the blocklace, Effect VM, CapTP, proof system,
-          privacy stack, and trust model.
-        </span>
-        <span class="learn-card__link">Deep dive &rarr;</span>
-      </a>
     </div>
   </section>
 
   <section class="section section--compact">
     <h2 class="section__title">Quick links</h2>
     <div class="link-cards">
-      <a class="link-card" href="/learn/users/cli.html">
-        <span class="link-card__title">CLI Reference</span>
-        <span class="link-card__desc">Full dregg command: cell, turn, cap, cclerk, node, namespace, storage, proof.</span>
-      </a>
-      <a class="link-card" href="/learn/developers/sdk.html">
-        <span class="link-card__title">SDK Reference</span>
-        <span class="link-card__desc">Rust API: AgentCipherclerk, AgentRuntime, turns, proofs, privacy modes.</span>
-      </a>
       <a class="link-card" href="/learn/ontology.html">
         <span class="link-card__title">Effect &amp; Predicate Ontology</span>
         <span class="link-card__desc">Every effect variant + the full predicate language, generated from the verified source. Searchable; compose &amp; test predicates live.</span>
@@ -73,21 +68,29 @@
         <span class="link-card__title">Studio (authoring IDE)</span>
         <span class="link-card__desc">Compose a turn from the catalog with guided forms, validate &amp; simulate locally, then submit a real turn to a node.</span>
       </a>
+      <a class="link-card" href="/explorer/">
+        <span class="link-card__title">Explorer</span>
+        <span class="link-card__desc">Walk the live chain: cells, turns, witnesses, proof tiers, time-travel.</span>
+      </a>
+      <a class="link-card" href="/learn/users/cli.html">
+        <span class="link-card__title">CLI Reference</span>
+        <span class="link-card__desc">Full dregg command: cell, turn, cap, cclerk, node, namespace, storage, proof.</span>
+      </a>
+      <a class="link-card" href="/learn/developers/sdk.html">
+        <span class="link-card__title">SDK Reference</span>
+        <span class="link-card__desc">Rust API: AgentCipherclerk, AgentRuntime, turns, proofs, privacy modes.</span>
+      </a>
       <a class="link-card" href="/learn/users/captp.html">
         <span class="link-card__title">CapTP Sessions</span>
         <span class="link-card__desc">Sturdy refs, handoff certificates, distributed GC, offline delegation.</span>
-      </a>
-      <a class="link-card" href="/learn/developers/bridges.html">
-        <span class="link-card__title">Bridges</span>
-        <span class="link-card__desc">Mina (Pickles), EVM (SP1/Groth16), Midnight (ZKIR v3).</span>
       </a>
       <a class="link-card" href="/learn/developers/storage.html">
         <span class="link-card__title">Storage</span>
         <span class="link-card__desc">Programmable queues, inboxes, relay operators, erasure coding.</span>
       </a>
       <a class="link-card" href="/paper.html">
-        <span class="link-card__title">Whitepaper</span>
-        <span class="link-card__desc">The formal specification: 39 pages, design rationale, security analysis.</span>
+        <span class="link-card__title">Paper</span>
+        <span class="link-card__desc">The formal treatment: the model, the authority logic, the guard algebra, the assurance case.</span>
       </a>
     </div>
   </section>
