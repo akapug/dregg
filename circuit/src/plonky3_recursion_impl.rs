@@ -234,7 +234,17 @@ pub mod recursive {
     /// Create the recursion-compatible STARK config.
     ///
     /// Uses Poseidon2 width-16 for all hash operations and the Duplex challenger.
-    /// FRI parameters: log_blowup=3 (for degree-7 AIR), max_log_arity=1, 2 queries, no PoW.
+    /// FRI parameters: log_blowup=3 (for degree-7 AIR), max_log_arity=1,
+    /// 38 queries + 14 query-PoW bits.
+    ///
+    /// Security: conjectured (ethSTARK capacity bound) soundness is
+    /// `log_blowup * num_queries + query_pow_bits = 3*38 + 14 = 128 bits` —
+    /// the same bar the per-turn production config (`create_config`: q=50,
+    /// pow=16, ~166 bits) clears, applied to the artifact a light client
+    /// actually keeps. Every proof in the recursion tree — leaf wraps,
+    /// aggregation layers, and the ROOT — runs at this strength, and the
+    /// in-circuit FRI verifier re-verifies all 38 queries (plus the PoW
+    /// witness, via `check_pow_witness`) of every wrapped child.
     pub fn create_recursion_config() -> DreggRecursionConfig {
         let perm = default_babybear_poseidon2_16();
         let hash = MyHash::new(perm.clone());
@@ -251,9 +261,9 @@ pub mod recursive {
             log_blowup: 3,
             log_final_poly_len: 0,
             max_log_arity: 1,
-            num_queries: 2,
+            num_queries: 38,
             commit_proof_of_work_bits: 0,
-            query_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 14,
             mmcs: challenge_mmcs,
         };
         let pcs = MyPcs::new(Dft::default(), val_mmcs, fri_params);
@@ -264,8 +274,8 @@ pub mod recursive {
         let fri_verifier_params = FriVerifierParams::with_mmcs(
             3, // log_blowup (match prover)
             0, // log_final_poly_len
-            0, // commit_pow_bits
-            0, // query_pow_bits
+            0,  // commit_pow_bits (match prover)
+            14, // query_pow_bits (match prover)
             PermConfig::poseidon2(Poseidon2Config::BABY_BEAR_D4_W16),
         );
 
