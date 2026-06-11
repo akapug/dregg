@@ -62,8 +62,6 @@
 //! recompute the `*_FP` SHA-256s, and regenerate this block. The drift test will
 //! reject any inconsistency.
 
-use crate::lean_descriptor_air::parse_vm_descriptor;
-
 // ==== include_str! consts + sha256 fingerprints (auto-generated; do not hand-edit) ====
 pub const DREGG_EFFECTVM_ATTENUATEA_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-attenuateA-v1.json");
@@ -531,6 +529,7 @@ pub fn fingerprint_for_name(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lean_descriptor_air::parse_vm_descriptor;
 
     /// Self-contained SHA-256 (FIPS 180-4), no external dep, so the drift
     /// fingerprints are reproducible from this file alone. Returns the lowercase
