@@ -38,8 +38,10 @@ def actionWriteSet : FullActionA → List CellId
   | .balanceA t _       => [t.src, t.dst]
   | .delegate _ rec _   => [rec]
   | .revoke holder _     => [holder]
-  | .mintA _ cell _ _    => [cell]
-  | .burnA _ cell _ _    => [cell]
+  -- W1: mint/burn are issuer-moves — the issuer WELL (`a`, the asset's own cell id) is written
+  -- alongside the recipient/holder.
+  | .mintA _ cell a _    => [a, cell]
+  | .burnA _ cell a _    => [cell, a]
   | .setFieldA _ cell _ _ => [cell]
   | .emitEventA _ _ _ _  => []
   | .incrementNonceA _ cell _ => [cell]
@@ -54,7 +56,7 @@ def actionWriteSet : FullActionA → List CellId
   | .createCellA _ newCell => [newCell]
   | .createCellFromFactoryA _ newCell _ => [newCell]
   | .spawnA _ child _     => [child]
-  | .bridgeMintA _ cell _ _ => [cell]
+  | .bridgeMintA _ cell a _ => [a, cell]   -- W1: the bridge well is written too
   | .noteSpendA _ actor _ => [actor]
   | .noteCreateA _ actor  => [actor]
   | .makeSovereignA _ cell => [cell]

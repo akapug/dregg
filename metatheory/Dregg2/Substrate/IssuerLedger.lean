@@ -41,19 +41,21 @@ to "the canonical value model", and closes the E4 gap:
     Together: ledger-exactness (probe) AND custody-soundness (E4) — the two halves the probe
     separated, now both proved, the shielded pool no longer drainable beyond its notes.
 
-  * **§3 — the fee/bridge pot laws, canonical.** Re-export `turn_exact_with_burn_pot` /
-    `fee_exact_with_burn_pot` / `bridgeFinalizeToPot_preserves_exact` as the forward model's
-    fee/bridge theorems (`canonical_fee_law` / `canonical_bridge_law`), retiring the modulo-burn /
-    bridge-outflow exemptions. `mint_breaks_exact` / `bridgeFinalize_breaks_exact` carry as the
-    non-vacuity teeth.
+  * **§3 — the fee pot law, canonical.** Re-export `turn_exact_with_burn_pot` /
+    `fee_exact_with_burn_pot` as the forward model's fee theorem (`canonical_fee_law`), retiring
+    the modulo-burn exemption. `mint_breaks_exact` carries as the non-vacuity tooth. (F1b: the
+    bridge outflow died with the kernel holding-store — the W1 inbound bridge-mint is the
+    BRIDGE-issuer move, conservation exact, nothing to retire.)
 
   * **§4 — THE MIGRATION TOUCH-LIST** (a doc block): the precise, mechanical list of what the
     eventual live VK rotation mutates (E1 issuer-well availability waiver · E2 mint-cap retarget ·
     E3 transitional escrow term dies at S3 · E5 fee legs onto the per-asset ledger · E6 pot
     genesis), so the rotation step is bookkeeping, not design.
 
-Standalone: NOT imported by the anchor until the coordinated W1 rotation. `#assert_axioms` on every
-new theorem; no sorry. Builds on the probe + `Exec.ShieldedValue` (both axiom-clean in tree).
+Standalone (not in the anchor): the KERNEL rotation has LANDED (see §6 STATUS — `AssetId :=
+CellId`, issuer-move verbs live, `reachable_total_zero`); this module remains the forward model for
+the E4/E5/E6 remainders. `#assert_axioms` on every new theorem; no sorry. Builds on the probe +
+`Exec.ShieldedValue` (both axiom-clean in tree).
 -/
 import Dregg2.Substrate.IssuerSupplyProbe
 import Dregg2.Exec.ShieldedValue
@@ -76,19 +78,18 @@ We promote `ExactLedger` to the canonical name `ConservedLedger` and package the
 forward model's state space is exactly the `ConservedLedger` states, and every kernel verb keeps
 you inside it. -/
 
-/-- **THE CANONICAL CONSERVATION INVARIANT (verbatim).** Per asset, the cell-ledger sum PLUS the
-transitional off-ledger escrow holding-store equals ZERO. This IS the R2 value law — the
-issuer-supply formulation makes it hold BY CONSTRUCTION wherever issuers are live accounts
-(`issuerView_exact`), and it is preserved by every committed step (§1 below). After the S3
-storage-as-cell-programs migration the escrow term dies (E3) and the law collapses to the pure
-`∀ a, Σ_{c ∈ accounts} bal c a = 0`. -/
+/-- **THE CANONICAL CONSERVATION INVARIANT (verbatim).** Per asset, the cell-ledger sum equals
+ZERO — the PURE form (F1b deleted the kernel escrow holding-store, so there is no transitional
+term). This IS the R2 value law — the issuer-supply formulation makes it hold BY CONSTRUCTION
+wherever issuers are live accounts (`issuerView_exact`), and it is preserved by every committed
+step (§1 below): `∀ a, Σ_{c ∈ accounts} bal c a = 0`. -/
 abbrev ConservedLedger (k : RecordKernelState) : Prop := ExactLedger k
 
-/-- Genesis (empty ledger, no parked escrows) starts conserved. The forward model's initial states
-are conserved — `genesis_exact` lifted. -/
-theorem genesis_starts_conserved (k : RecordKernelState) (hbal : k.bal = fun _ _ => 0)
-    (hesc : k.escrows = []) : ConservedLedger k :=
-  genesis_exact k hbal hesc
+/-- Genesis (empty ledger) starts conserved. The forward model's initial states are conserved —
+`genesis_exact` lifted. (F1b: the kernel escrow store is GONE; the law is the pure cell-sum.) -/
+theorem genesis_starts_conserved (k : RecordKernelState) (hbal : k.bal = fun _ _ => 0) :
+    ConservedLedger k :=
+  genesis_exact k hbal
 
 /-- **CANONICAL: transfer preserves conservation** — `transfer_preserves_exact`. -/
 theorem transfer_preserves {k k' : RecordKernelState} {t : Turn} {a : AssetId}
@@ -110,40 +111,17 @@ theorem createCell_preserves (k : RecordKernelState) (newCell : CellId)
     ConservedLedger (createCellIntoAsset k newCell) :=
   createCell_preserves_exact k newCell hfresh hc
 
-/-- **CANONICAL: escrow create preserves conservation** — `escrowCreate_preserves_exact`. -/
-theorem escrowCreate_preserves {k k' : RecordKernelState} {id : Nat}
-    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
-    (h : createEscrowKAsset k id actor creator recipient asset amount = some k')
-    (hc : ConservedLedger k) : ConservedLedger k' :=
-  escrowCreate_preserves_exact h hc
+/-! (F1b/F2b: the kernel escrow / bridge-lock holding-store verbs are GONE — escrow and bridge
+value parks in factory cells' OWN `bal` columns (`Apps/{EscrowFactory,BridgeCell}.lean`), covered
+by the SAME per-asset sum; their conservation is the factories' proved keystones, not re-stated
+here.) -/
 
-/-- **CANONICAL: escrow release preserves conservation** — `escrowRelease_preserves_exact`. -/
-theorem escrowRelease_preserves {k k' : RecordKernelState} {id : Nat}
-    (h : releaseEscrowKAsset k id = some k') (hc : ConservedLedger k) : ConservedLedger k' :=
-  escrowRelease_preserves_exact h hc
-
-/-- **CANONICAL: escrow refund preserves conservation** — `escrowRefund_preserves_exact`. -/
-theorem escrowRefund_preserves {k k' : RecordKernelState} {id : Nat}
-    (h : refundEscrowKAsset k id = some k') (hc : ConservedLedger k) : ConservedLedger k' :=
-  escrowRefund_preserves_exact h hc
-
-/-- **CANONICAL: bridge lock preserves conservation** — `bridgeLock_preserves_exact`. -/
-theorem bridgeLock_preserves {k k' : RecordKernelState} {id : Nat}
-    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
-    (h : bridgeLockKAsset k id actor originator destination asset amount = some k')
-    (hc : ConservedLedger k) : ConservedLedger k' :=
-  bridgeLock_preserves_exact h hc
-
-/-- **CANONICAL: bridge cancel preserves conservation** — `bridgeCancel_preserves_exact`. -/
-theorem bridgeCancel_preserves {k k' : RecordKernelState} {id : Nat}
-    (h : bridgeCancelKAsset k id = some k') (hc : ConservedLedger k) : ConservedLedger k' :=
-  bridgeCancel_preserves_exact h hc
-
-/-- **THE NON-VACUITY TOOTH (canonical): the OLD supply-increment mint BREAKS conservation.** A
-committed `recKMintAsset` of a positive amount on a conserved state yields a NON-conserved state —
-so the issuer-move reformulation is a genuine REPAIR. (`mint_breaks_exact`.) -/
+/-- **THE NON-VACUITY TOOTH (canonical): the LEGACY supply-increment mint BREAKS conservation.** A
+committed `recKMintAssetLegacy` of a positive amount on a conserved state yields a NON-conserved
+state — so the issuer-move reformulation is a genuine REPAIR. (`mint_breaks_exact`.) The LIVE
+`recKMintAsset` IS the issuer-move (the W1 rotation landed — `Exec/IssuerMove.lean`). -/
 theorem oldMint_breaks_conservation {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId}
-    {amt : ℤ} (h : Dregg2.Exec.TurnExecutorFull.recKMintAsset k actor cell a amt = some k')
+    {amt : ℤ} (h : Dregg2.Exec.TurnExecutorFull.recKMintAssetLegacy k actor cell a amt = some k')
     (hpos : 0 < amt) (hc : ConservedLedger k) : ¬ ConservedLedger k' :=
   mint_breaks_exact h hpos hc
 
@@ -435,20 +413,10 @@ theorem canonical_fee_law (ctx : AdmCtx) (h : TurnHdr) (st : RecStmt)
   turn_exact_with_burn_pot ctx h st s s' p t pot hadm hbody hp ht hap hat hpt hpa hpp hptt
     hbA hbP hbT hbPot
 
-/-- **CANONICAL BRIDGE LAW (via `bridgeFinalizeToPot_preserves_exact`).** Bridge finalize
-SETTLES the locked value to a bridge-pot cell (the foreign chain's custody as a cell) instead of
-dropping it off-ledger — preserving the canonical conserved ledger. The bridge-outflow exemption
-(`bridgeFinalize_breaks_exact`, carried as the non-vacuity tooth) is retired. -/
-theorem canonical_bridge_law {pot : CellId} {k k' : RecordKernelState} {id : Nat}
-    (h : bridgeFinalizeToPotK pot k id = some k') (hc : ConservedLedger k) : ConservedLedger k' :=
-  bridgeFinalizeToPot_preserves_exact h hc
-
-/-- **The bridge non-vacuity tooth (canonical): the OLD finalize BREAKS conservation** — the
-disclosed outflow. (`bridgeFinalize_breaks_exact`.) -/
-theorem oldBridge_breaks_conservation {k k' : RecordKernelState} {id : Nat} {asset : AssetId}
-    {amount : ℤ} (h : bridgeFinalizeKAsset k id asset amount = some k') (hnz : amount ≠ 0)
-    (hc : ConservedLedger k) : ¬ ConservedLedger k' :=
-  bridgeFinalize_breaks_exact h hnz hc
+/-! (F1b: the bridge finalize/outflow verbs died with the kernel holding-store — the bridge-cell
+contract (`Apps/BridgeCell.lean`) holds locked value in a CELL from the start, and the W1 inbound
+bridge-mint is the BRIDGE-issuer move (`Circuit/Spec/bridgeinboundmint.lean`): the bridge well
+carries −(outstanding bridged supply), conservation exact, no exemption to retire.) -/
 
 /-! ## §4 — Axiom hygiene. -/
 
@@ -456,11 +424,6 @@ theorem oldBridge_breaks_conservation {k k' : RecordKernelState} {id : Nat} {ass
 #assert_axioms transfer_preserves
 #assert_axioms mint_preserves
 #assert_axioms createCell_preserves
-#assert_axioms escrowCreate_preserves
-#assert_axioms escrowRelease_preserves
-#assert_axioms escrowRefund_preserves
-#assert_axioms bridgeLock_preserves
-#assert_axioms bridgeCancel_preserves
 #assert_axioms oldMint_breaks_conservation
 #assert_axioms boundUnshield_amount_bound
 #assert_axioms boundUnshield_wrong_amount_rejected
@@ -469,8 +432,6 @@ theorem oldBridge_breaks_conservation {k k' : RecordKernelState} {id : Nat} {ass
 #assert_axioms boundUnshield_preserves_pool_consistency
 #assert_axioms boundShield_preserves_pool_consistency
 #assert_axioms canonical_fee_law
-#assert_axioms canonical_bridge_law
-#assert_axioms oldBridge_breaks_conservation
 
 /-! ## §5 — Non-vacuity witnesses (`#guard`).
 
@@ -564,8 +525,15 @@ probe named, here turned into a concrete edit):
   config (allocate the pot cells), the same discipline as issuer-cell genesis
   (`genesis_requires_issuer`).
 
-  **The VK + cell-commitment bump** rides E2/E4/E5 (the gate/wire shape changes). Sequencing: this
-  module is groundwork; the rotation is the coordinated step that imports it into the anchor and flips
-  the executor/circuit/wire — at which point every theorem here becomes a live guarantee. -/
+  **The VK + cell-commitment bump** rides E2/E4/E5 (the gate/wire shape changes).
+
+  **STATUS (2026-06-10): the KERNEL rotation has LANDED** — `AssetId := CellId`, the live
+  `recKMintAsset`/`recKBurnAsset` are issuer-moves (`Exec/IssuerMove.lean`), `ledgerDeltaAsset ≡ 0`,
+  `reachable_total_zero` (`Exec/ReachableConservation.lean`), the circuit weld regenerated, and
+  Guarantee B upgraded to identically-zero (`AssuranceCase.lean`). E1/E2 are live guarantees. E3 is
+  MOOT (F1b deleted the kernel escrow store). REMAINING: E4 (the asset-typed bound-note executor
+  wiring — the theorems here stay the forward model), E5 (the live `distributeFee` still burns the
+  scalar residue; `canonical_fee_law` is the proven target), E6 (pot genesis), and the Rust
+  value-model mirror (the signed issuer well + genesis issuer cell). -/
 
 end Dregg2.Substrate.IssuerLedger

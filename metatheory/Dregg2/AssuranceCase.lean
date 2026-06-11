@@ -69,6 +69,8 @@ import Dregg2.Circuit.Argus.Receipt
 import Dregg2.Circuit.Argus.Aggregate
 import Dregg2.Circuit.Argus.Effects.NoteSpend
 import Dregg2.Exec.FullForestAuth          -- the RUNNING ENTRY: execFullForestG (the dregg_exec_full_forest_auth FFI)
+import Dregg2.Exec.ReachableConservation   -- conservation (W1): Σ=0 as a reachability invariant
+import Dregg2.Exec.IssuerMove              -- conservation (W1): the issuer-move mechanism + the legacy-break tooth
 
 namespace Dregg2.AssuranceCase
 
@@ -132,30 +134,58 @@ theorem authority_guarantee
 /-! ===========================================================================
 ## Guarantee B — CONSERVATION
 
-*Per asset, the resource sum is exactly zero across a turn (and a run).*
+*Per asset, the resource sum is IDENTICALLY ZERO — on every reachable state, always.*
+
+W1 (DREGG3 §2.2 — the value unification): `AssetId := CellId`. Every asset IS its issuer
+cell; the issuer's own balance row (the WELL) carries −supply, mint/burn/bridgeMint are
+ordinary moves against the negative-capable well, and NO verb in the kernel moves any
+asset's sum (`ledgerDeltaAsset_eq_zero` — the delta family vanishes identically). So the
+guarantee is no longer "the sum is invariant across a step": it is `∀ a, Σ_c bal c a = 0`
+on every state reachable from a value-empty genesis — exactness, unconditionally, with NO
+zero-net side condition and NO disclosed-non-conservation exemption (no modulo-burn, no
+bridge-outflow, no supply-increment mint).
 
 DAG:
-  • `RecordKernel.recTransferBal_sum_conserve_moved` — over the GENUINE multi-asset ledger
-    `CellId → AssetId → ℤ`: a transfer of asset `a` leaves `∑_c bal c a` invariant (the
-    moved asset's total supply is exactly conserved).
-  • `RecordKernel.recTransferBal_untouched` — an UNtouched asset `b ≠ a` is pointwise
-    unchanged (no cross-asset leakage: the per-asset sums are independent).
-  • `RecordKernel.recKExec_conserves` — the executor step conserves the balance sum.
-  • `Spec.turnConserves_balance` / `Spec.conservation_over_monoid` — the value-monoid
-    -parametric whole-turn conservation (committed = cleartext value).
+  • `Exec.ReachableConservation.reachable_total_zero` — THE APEX: every reachable state
+    satisfies `ExactConservation` (`∀ a, recTotalAsset k a = 0`).
+  • `TurnExecutorFull.ledgerDeltaAsset_eq_zero` — the per-verb delta family vanishes:
+    there is NO non-conserving verb (mint/burn/bridgeMint became issuer-moves).
+  • `TurnExecutorFull.execFullA_conserves_exact` / `execFullTurnA_conserves_exact` — every
+    committed action/transaction conserves EVERY asset exactly (unconditional).
+  • `TurnExecutorFull.recKMintAsset_delta` / `recKBurnAsset_delta` — the reshaped supply
+    verbs conserve (the issuer-debit and recipient-credit cancel inside the sum); their
+    authority gate targets the ISSUER (`recKMintAsset_authorized` — the production law E2);
+    `IssuerMove.recKMintAsset_breaks_exact` is the non-vacuity tooth (the LEGACY
+    supply-increment law provably breaks the value law — the reshape is a repair).
+  • `RecordKernel.recTransferBal_sum_conserve_moved` / `recTransferBal_untouched` — the
+    transfer keystones every move (ordinary or issuer) instantiates: the moved column's
+    debit/credit cancel; untouched assets are pointwise unchanged (no cross-asset leakage).
   • `Conserve.sum_transfer_conserve` — the shared library lemma the above rest on; with the
-    honesty rail `Conserve.sum_transfer_conserve` requiring `src ≠ dst`.
+    honesty rail requiring `src ≠ dst`.
 
 Floor: NONE beyond integer arithmetic. Conservation is a kernel theorem; the only crypto
 that touches it is Pedersen (DLog) IF values are committed rather than cleartext, and the
 case proves committed = cleartext via `Spec.committed_iff_cleartext`.
 =========================================================================== -/
 
-/-- **`conservation_guarantee` (NEW aggregation).** Per-asset exact conservation over the
-real multi-asset ledger, in one statement: a transfer of asset `a` from `src` to `dst`
-(`src ≠ dst`) (1) leaves the total supply of `a` exactly invariant AND (2) leaves every
-other asset `b` pointwise untouched. Σ=0 per asset, no cross-asset leakage. -/
+open Dregg2.Exec.ReachableConservation (Reachable reachable_total_zero) in
+/-- **`conservation_guarantee` (W1: the sum is identically ZERO).** On every state reachable
+from a value-empty genesis, EVERY asset's total — the issuer wells included — sums to
+exactly `0`. Not invariant: zero. The issuer of each asset carries −(circulating supply) in
+its own row, so the books close by construction and every committed transaction keeps them
+closed (`execFullTurnA_conserves_exact`, no zero-net hypothesis — the delta family vanishes
+identically). -/
 theorem conservation_guarantee
+    (s : Dregg2.Exec.RecChainedState) (h : Reachable s) :
+    ∀ a : AssetId, recTotalAsset s.kernel a = 0 :=
+  reachable_total_zero s h
+
+/-- **`conservation_guarantee_step` (the per-move face).** A transfer of asset `a` from `src`
+to `dst` (`src ≠ dst`) (1) leaves the total supply of `a` exactly invariant AND (2) leaves
+every other asset `b` pointwise untouched. Σ unchanged per asset, no cross-asset leakage —
+the keystone every move (ordinary transfer, mint-as-issuer-move, burn-as-return-to-well)
+instantiates. -/
+theorem conservation_guarantee_step
     (acc : Finset CellId) (bal : CellId → AssetId → ℤ)
     (src dst : CellId) (a : AssetId) (amt : ℤ)
     (hsrc : src ∈ acc) (hdst : dst ∈ acc) (hne : src ≠ dst) :
@@ -165,6 +195,20 @@ theorem conservation_guarantee
    fun b hb c => recTransferBal_untouched bal src dst a b amt hb c⟩
 
 #assert_axioms conservation_guarantee
+#assert_axioms conservation_guarantee_step
+-- the W1 keystones, re-pinned under Conservation:
+#assert_axioms Dregg2.Exec.ReachableConservation.reachable_total_zero
+#assert_axioms Dregg2.Exec.TurnExecutorFull.ledgerDeltaAsset_eq_zero
+#assert_axioms Dregg2.Exec.TurnExecutorFull.execFullA_conserves_exact
+#assert_axioms Dregg2.Exec.TurnExecutorFull.execFullTurnA_conserves_exact
+#assert_axioms Dregg2.Exec.TurnExecutorFull.recKMintAsset_delta
+#assert_axioms Dregg2.Exec.TurnExecutorFull.recKBurnAsset_delta
+#assert_axioms Dregg2.Exec.TurnExecutorFull.recKMintAsset_authorized
+#assert_axioms Dregg2.Exec.TurnExecutorFull.recKMintAsset_requires_live_issuer
+-- the non-vacuity tooth: the LEGACY supply-increment mint provably BREAKS the value law
+-- (so the issuer-move reshape is a repair, not a relabeling):
+#assert_axioms Dregg2.Exec.IssuerMove.recKMintAsset_breaks_exact
+#assert_axioms Dregg2.Exec.IssuerMove.recKBurnAsset_breaks_exact
 -- the underlying keystones, re-pinned under Conservation:
 #assert_axioms Dregg2.Exec.recTransferBal_sum_conserve_moved
 #assert_axioms Dregg2.Exec.recTransferBal_untouched
@@ -364,9 +408,10 @@ whole-forest step `execFullForestG` — the body behind the `dregg_exec_full_for
 the node invokes — a single committed run discharges, in one statement, the three local
 guarantees over the THING THAT RUNS:
 
-  * **B (conservation):** an asset `b` whose per-asset net is `0` has its total supply
-    (`recTotalAsset`) exactly preserved across the gated forest — conservation
-    survives the credential+caveat gate.
+  * **B (conservation, W1-strengthened):** EVERY asset's total supply (`recTotalAsset`) is
+    exactly preserved across the gated forest — UNCONDITIONALLY (no zero-net hypothesis:
+    the per-verb delta family vanishes identically; mint/burn/bridgeMint are issuer-moves).
+    Conservation survives the credential+caveat gate, full stop.
   * **A (no amplification):** EVERY delegation edge of the forest is non-amplifying
     (`capAuthConferred (attenuate ·) ⊆ capAuthConferred ·`) — Granovetter survives the gate.
   * **C (per-node attestation):** every node, at every nesting depth, attests
@@ -383,19 +428,19 @@ theorem running_entry_sound
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
       (Bytes := Bytes) (Tag := Tag))
     (b : AssetId)
-    (h : execFullForestG s f = some s')
-    (hzero : turnLedgerDeltaAsset ((lowerForestG f).map Prod.snd) b = 0) :
+    (h : execFullForestG s f = some s') :
     recTotalAsset s'.kernel b = recTotalAsset s.kernel b
       ∧ (∀ e ∈ forestEdgesG f, capAuthConferred (attenuate e.1 e.2) ⊆ capAuthConferred e.2)
       ∧ (∀ p ∈ lowerForestG f, ∃ sa sa',
           execFullAGated sa p.1 p.2 = some sa' ∧ gatedActionInvG sa p.1 p.2 sa') :=
-  ⟨execFullForestG_conserves_per_asset s s' f b h hzero,
+  ⟨execFullForestG_conserves_exact s s' f b h,
    execFullForestG_no_amplify f,
    execFullForestG_each_attests s s' f h⟩
 
 #assert_axioms running_entry_sound
 -- the underlying keystones over the RUNNING entry, re-pinned:
 #assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_conserves_per_asset
+#assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_conserves_exact
 #assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_ledger_per_asset
 #assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_no_amplify
 #assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_each_attests

@@ -1086,15 +1086,19 @@ fn effect_to_wire(
             cell: id(target)?,
             cert_hash: bytes32_to_nat(&certificate.certificate_hash()),
         },
-        // Burn: dregg1 reduces a cell's balance with no destination credit (provable supply
-        // reduction). `.burnA` routes to the PRIVILEGED `recKBurnAsset` (`mintAuthorizedB ∧
-        // 0≤amt ∧ amt≤bal ∧ cell∈accounts`). Only the canonical balance slot (`slot == 0`) is
-        // modelled (Silver-Vision rejects other slots); a non-zero slot is left UNMAPPED so the
-        // turn is skipped rather than mis-encoded. NOTE: the verified kernel requires an explicit
-        // mint/burn CAP (`node`/`control`-endpoint) on the cell — bare ownership does NOT suffice
-        // — so a cell whose marshalled c-list lacks that cap correctly FAILS the Lean gate (the
-        // genuine, non-vacuous authority test). This is a real model difference from apply.rs
-        // (ownership-suffices) for cells without the cap; it is recorded by the ledger, not hidden.
+        // Burn: dregg1 reduces a cell's balance with no destination credit (scalar supply
+        // destruction). W1 (issuer-supply, DREGG3 §2.2): the verified `.burnA` is a
+        // RETURN-TO-WELL move — `recKBurnAsset` transfers the amount from the holder back to
+        // the asset's ISSUER cell (`AssetId := CellId`), gated on the issuer capability
+        // (`mintAuthorizedB actor asset` ∧ holder availability ∧ `cell ≠ asset`), conserving
+        // `Σ_c bal c a` EXACTLY. The Rust scalar burn has NO conserving image on this wire
+        // (asset 0's "issuer" is whatever cell the snapshot numbered 0), so the verified
+        // executor REFUSES these turns — a characterised SAFE-direction divergence (Lean
+        // stricter; recorded by the ledger, vetoed under strict mode). Agreement returns when
+        // the staged Rust value-model migration gives the native asset a genesis issuer well
+        // (signed well balance) and apply.rs's burn becomes the well move. Only the canonical
+        // balance slot (`slot == 0`) is modelled; a non-zero slot is left UNMAPPED so the turn
+        // is skipped rather than mis-encoded.
         Effect::Burn { target, slot: 0, amount } => WireAction::Burn {
             actor,
             cell: id(target)?,

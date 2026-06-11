@@ -359,7 +359,7 @@ theorem handler_refines_execFullA_mint (s s' : RecChainedState) (actor cell : Ce
   by_cases hadm : acceptsEffects s.kernel cell
   · rw [if_pos hadm] at hstep
     refine ⟨{ kernel := s'.kernel,
-              log := { actor := actor, src := cell, dst := cell, amt := amt } :: s.log }, ?_, rfl⟩
+              log := { actor := actor, src := a, dst := cell, amt := amt } :: s.log }, ?_, rfl⟩
     show Dregg2.Exec.TurnExecutorFull.recCMintAsset s actor cell a amt = _
     unfold Dregg2.Exec.TurnExecutorFull.recCMintAsset
     rw [hstep]
@@ -377,7 +377,7 @@ theorem handler_refines_execFullA_burn (s s' : RecChainedState) (actor cell : Ce
   by_cases hadm : acceptsEffects s.kernel cell
   · rw [if_pos hadm] at hstep
     refine ⟨{ kernel := s'.kernel,
-              log := { actor := actor, src := cell, dst := cell, amt := -amt } :: s.log }, ?_, rfl⟩
+              log := { actor := actor, src := cell, dst := a, amt := amt } :: s.log }, ?_, rfl⟩
     show Dregg2.Exec.TurnExecutorFull.recCBurnAsset s actor cell a amt = _
     unfold Dregg2.Exec.TurnExecutorFull.recCBurnAsset
     rw [hstep]
@@ -395,7 +395,7 @@ theorem handler_refines_execFullA_bridgeMint (s s' : RecChainedState) (actor cel
   by_cases hadm : acceptsEffects s.kernel cell
   · rw [if_pos hadm] at hstep
     refine ⟨{ kernel := s'.kernel,
-              log := { actor := actor, src := cell, dst := cell, amt := value } :: s.log }, ?_, rfl⟩
+              log := { actor := actor, src := a, dst := cell, amt := value } :: s.log }, ?_, rfl⟩
     show Dregg2.Exec.TurnExecutorFull.recCMintAsset s actor cell a value = _
     unfold Dregg2.Exec.TurnExecutorFull.recCMintAsset
     rw [hstep]

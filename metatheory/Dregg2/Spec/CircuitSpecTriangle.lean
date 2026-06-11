@@ -109,7 +109,7 @@ open Dregg2.Circuit.EffectCommit3
 open Dregg2.Circuit.EffectCommit5
 open Dregg2.Circuit.ListCommit (listLeafInjective)
 open Dregg2.Spec.FunctionalRefinement (intentCredit intentDebit intentCredit_eq_balCredit
-  intentDebit_eq_balCredit)
+  intentDebit_eq_balCredit intentMove_eq_transferBal)
 
 /-! ## §0 — the AMPLIFICATION TEMPLATE.
 
@@ -129,12 +129,14 @@ theorem pin_intent_of_bridge {α : Type} {post : α} {executorHelper intentMove 
     (hsound : post = executorHelper) (hbridge : executorHelper = intentMove) :
     post = intentMove := hsound.trans hbridge
 
-/-! ## §1 — MINT: the circuit pins the INTENT credit.
+/-! ## §1 — MINT: the circuit pins the INTENT issuer-move (W1).
 
-`Inst.mintA.mintA_full_sound` gives `MintASpec`, whose `bal` clause is
-`s'.kernel.bal = recBalCredit s.kernel.bal cell a amt`. The intent move (`FunctionalRefinement`'s
-`mintSpec`) credits the SAME column via `intentCredit … cell a amt`. `intentCredit_eq_balCredit`
-proves the two are EQUAL functions, so a verifying mint witness pins the EXACT intent credit. -/
+`Inst.mintA.mintA_full_sound` gives `MintASpec`, whose `bal` clause is the issuer-move write
+`s'.kernel.bal = recTransferBal s.kernel.bal a cell a amt` (well debited, recipient credited). The
+intent move (`FunctionalRefinement`'s `mintSpec`) composes the SAME two columns via
+`intentCredit (intentDebit … a a amt) cell a amt`. `intentMove_eq_transferBal` proves the two are
+EQUAL functions (for `a ≠ cell`, which the committed guard supplies), so a verifying mint witness
+pins the EXACT intent issuer-move. -/
 
 open Dregg2.Circuit.Inst.MintA (MintArgs mintE mintA_full_sound)
 open Dregg2.Circuit.Spec.SupplyCreation (MintASpec recCMintAsset_iff_spec)
@@ -149,13 +151,17 @@ theorem mint_circuit_pins_intent
     (hRest : RestIffNoBal S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : MintArgs) (s' : RecChainedState)
     (h : satisfiedE2 S (mintE D hD) (encodeE2 S (mintE D hD) s args s')) :
-    s'.kernel.bal = intentCredit s.kernel.bal args.cell args.a args.amt := by
+    s'.kernel.bal
+      = intentCredit (intentDebit s.kernel.bal args.a args.a args.amt) args.cell args.a args.amt := by
   have hspec : MintASpec s args.actor args.cell args.a args.amt s' :=
     mintA_full_sound S D hD hRest hLog s args s' h
-  -- the circuit-side spec's bal clause: post = recBalCredit pre.
-  have hsound : s'.kernel.bal = recBalCredit s.kernel.bal args.cell args.a args.amt := hspec.2.1
-  -- the INDEPENDENT bridge: recBalCredit = intentCredit (an equality of two functions).
-  exact pin_intent_of_bridge hsound (intentCredit_eq_balCredit _ _ _ _).symm
+  -- the circuit-side spec's bal clause: post = the issuer-move write.
+  have hsound : s'.kernel.bal = recTransferBal s.kernel.bal args.a args.cell args.a args.amt :=
+    hspec.2.1
+  -- the INDEPENDENT bridge: intent-composition = recTransferBal (an equality of two functions).
+  exact pin_intent_of_bridge hsound
+    (intentMove_eq_transferBal s.kernel.bal args.a args.cell args.a args.amt
+      hspec.1.2.2.2.2).symm
 
 /-- **THEOREM (mint ANTI-GHOST at the circuit level).** A witness whose post-`bal` is NOT the intent
 credit does NOT verify — the contrapositive of soundness. Tampering ANY ledger entry away from the
@@ -165,7 +171,8 @@ theorem mint_circuit_rejects_wrong_ledger
     (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
     (hRest : RestIffNoBal S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : MintArgs) (s' : RecChainedState)
-    (hwrong : s'.kernel.bal ≠ intentCredit s.kernel.bal args.cell args.a args.amt) :
+    (hwrong : s'.kernel.bal
+      ≠ intentCredit (intentDebit s.kernel.bal args.a args.a args.amt) args.cell args.a args.amt) :
     ¬ satisfiedE2 S (mintE D hD) (encodeE2 S (mintE D hD) s args s') := by
   intro h
   exact hwrong (mint_circuit_pins_intent S D hD hRest hLog s args s' h)
@@ -182,10 +189,13 @@ theorem mint_intent_is_circuit_acceptable
     (s : RecChainedState) (args : MintArgs) (s' : RecChainedState)
     (hcommit : recCMintAsset s args.actor args.cell args.a args.amt = some s') :
     MintASpec s args.actor args.cell args.a args.amt s'
-    ∧ s'.kernel.bal = intentCredit s.kernel.bal args.cell args.a args.amt := by
+    ∧ s'.kernel.bal
+      = intentCredit (intentDebit s.kernel.bal args.a args.a args.amt) args.cell args.a args.amt := by
   have hspec : MintASpec s args.actor args.cell args.a args.amt s' :=
     (recCMintAsset_iff_spec s args.actor args.cell args.a args.amt s').mp hcommit
-  exact ⟨hspec, pin_intent_of_bridge hspec.2.1 (intentCredit_eq_balCredit _ _ _ _).symm⟩
+  exact ⟨hspec, pin_intent_of_bridge hspec.2.1
+    (intentMove_eq_transferBal s.kernel.bal args.a args.cell args.a args.amt
+      hspec.1.2.2.2.2).symm⟩
 
 /-! ## §2 — TRANSFER (balance-movement): the circuit pins the INTENT debit+credit.
 
@@ -292,55 +302,65 @@ ledger family is burn + bridge-mint, alongside §1 mint and §2 transfer.) Each 
 `intentCredit_eq_balCredit` / `intentDebit_eq_balCredit`. We instantiate the §0 template once per
 effect (soundness + circuit-level anti-ghost). -/
 
-/-! ### §5a — BURN (supply destruction): `recBalCredit … (-amt)` ⇒ `intentDebit`. -/
+/-! ### §5a — BURN (supply destruction, W1): the return-to-well ⇒ the two-column intent move. -/
 
 open Dregg2.Circuit.Inst.BurnA (BurnArgs burnE burnA_full_sound)
 open Dregg2.Circuit.Spec.SupplyDestruction (BurnSpec)
 
-/-- **BURN circuit pins the intent debit.** A verifying `burnE` witness forces the post-`bal` to be
-EXACTLY `intentDebit … cell a amt` (cell `cell`'s asset-`a` column DOWN by `amt`, all else fixed). -/
+/-- **BURN circuit pins the intent return-to-well (W1).** A verifying `burnE` witness forces the
+post-`bal` to be EXACTLY the two-column intent move `intentCredit (intentDebit … cell a amt) a a amt`
+(holder DOWN by `amt`, the issuer's well UP by `amt`, all else fixed). -/
 theorem burn_circuit_pins_intent
     (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
     (hRest : RestIffNoBal S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : BurnArgs) (s' : RecChainedState)
     (h : satisfiedE2 S (burnE D hD) (encodeE2 S (burnE D hD) s args s')) :
-    s'.kernel.bal = intentDebit s.kernel.bal args.cell args.a args.amt := by
+    s'.kernel.bal
+      = intentCredit (intentDebit s.kernel.bal args.cell args.a args.amt) args.a args.a args.amt := by
   have hspec : BurnSpec s args.actor args.cell args.a args.amt s' :=
     burnA_full_sound S D hD hRest hLog s args s' h
-  exact pin_intent_of_bridge hspec.2.1 (intentDebit_eq_balCredit _ _ _ _).symm
+  exact pin_intent_of_bridge hspec.2.1
+    (intentMove_eq_transferBal s.kernel.bal args.cell args.a args.a args.amt
+      hspec.1.2.2.2.2.2).symm
 
-/-- **BURN circuit anti-ghost: a non-intent-debit post-`bal` does NOT verify.** -/
+/-- **BURN circuit anti-ghost: a non-intent-move post-`bal` does NOT verify.** -/
 theorem burn_circuit_rejects_wrong_ledger
     (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
     (hRest : RestIffNoBal S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : BurnArgs) (s' : RecChainedState)
-    (hwrong : s'.kernel.bal ≠ intentDebit s.kernel.bal args.cell args.a args.amt) :
+    (hwrong : s'.kernel.bal
+      ≠ intentCredit (intentDebit s.kernel.bal args.cell args.a args.amt) args.a args.a args.amt) :
     ¬ satisfiedE2 S (burnE D hD) (encodeE2 S (burnE D hD) s args s') :=
   fun h => hwrong (burn_circuit_pins_intent S D hD hRest hLog s args s' h)
 
-/-! ### §5b — BRIDGE-MINT (inbound): `recBalCredit … value` ⇒ `intentCredit`. -/
+/-! ### §5b — BRIDGE-MINT (inbound, W1): the bridge-issuer move ⇒ the two-column intent move. -/
 
 open Dregg2.Circuit.Inst.BridgeMintA (BridgeMintArgs bridgeMintE bridgeMintA_full_sound)
 open Dregg2.Circuit.Spec.BridgeInboundMint (InboundMintSpec)
 
-/-- **BRIDGE-MINT circuit pins the intent credit.** A verifying `bridgeMintE` witness forces the
-post-`bal` to be EXACTLY `intentCredit … cell a value` (the inbound-bridge credit). -/
+/-- **BRIDGE-MINT circuit pins the intent issuer-move (W1: the BRIDGE cell is the issuer).** A
+verifying `bridgeMintE` witness forces the post-`bal` to be EXACTLY the two-column intent move
+`intentCredit (intentDebit … a a value) cell a value` (the bridge well DOWN, the recipient UP). -/
 theorem bridgeMint_circuit_pins_intent
     (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
     (hRest : RestIffNoBal S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : BridgeMintArgs) (s' : RecChainedState)
     (h : satisfiedE2 S (bridgeMintE D hD) (encodeE2 S (bridgeMintE D hD) s args s')) :
-    s'.kernel.bal = intentCredit s.kernel.bal args.cell args.a args.value := by
+    s'.kernel.bal
+      = intentCredit (intentDebit s.kernel.bal args.a args.a args.value) args.cell args.a args.value := by
   have hspec : InboundMintSpec s args.actor args.cell args.a args.value s' :=
     bridgeMintA_full_sound S D hD hRest hLog s args s' h
-  exact pin_intent_of_bridge hspec.2.1 (intentCredit_eq_balCredit _ _ _ _).symm
+  exact pin_intent_of_bridge hspec.2.1
+    (intentMove_eq_transferBal s.kernel.bal args.a args.cell args.a args.value
+      hspec.1.2.2.2.2).symm
 
 /-- **BRIDGE-MINT circuit anti-ghost.** -/
 theorem bridgeMint_circuit_rejects_wrong_ledger
     (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
     (hRest : RestIffNoBal S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : BridgeMintArgs) (s' : RecChainedState)
-    (hwrong : s'.kernel.bal ≠ intentCredit s.kernel.bal args.cell args.a args.value) :
+    (hwrong : s'.kernel.bal
+      ≠ intentCredit (intentDebit s.kernel.bal args.a args.a args.value) args.cell args.a args.value) :
     ¬ satisfiedE2 S (bridgeMintE D hD) (encodeE2 S (bridgeMintE D hD) s args s') :=
   fun h => hwrong (bridgeMint_circuit_pins_intent S D hD hRest hLog s args s' h)
 

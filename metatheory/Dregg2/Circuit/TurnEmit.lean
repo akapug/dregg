@@ -610,14 +610,15 @@ theorem mintA_extract_emitted
     (effect2_extract_emitted S (mintE D hD) (mintRestFrameDecodes S D hD hRest) hLog
       (mintGuardDecodes D hD) mintAirName s args s' a hsat hPI)
 
-/-- **`mintA_extract_rejects_wrong_supply`** — ANTI-GHOST tooth: a claimed mint post `s'` whose ledger
-does NOT credit `recBalCredit … amt` (a forged supply) has NO satisfying PI-bound witness. The extractor
-REJECTS supply forgery — the bind gate + injective `bal` digest make it UNSAT. -/
+/-- **`mintA_extract_rejects_wrong_supply`** — ANTI-GHOST tooth (W1): a claimed mint post `s'`
+whose ledger is NOT the issuer-move write `recTransferBal … a cell a amt` (a forged supply — e.g. a
+credit that skipped the well-debit, the pre-W1 inflation) has NO satisfying PI-bound witness. The
+extractor REJECTS supply forgery — the bind gate + injective `bal` digest make it UNSAT. -/
 theorem mintA_extract_rejects_wrong_supply
     (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
     (s : RecChainedState) (args : MintArgs) (s' : RecChainedState) (a : Assignment)
     (hPI : PIBindsDigests S (mintE D hD) s args s' a)
-    (htamper : s'.kernel.bal ≠ recBalCredit s.kernel.bal args.cell args.a args.amt) :
+    (htamper : s'.kernel.bal ≠ recTransferBal s.kernel.bal args.a args.cell args.a args.amt) :
     ¬ satisfiedE2 S (mintE D hD) a :=
   effect2_extract_rejects_wrong_component S (mintE D hD) s args s' a hPI htamper
 

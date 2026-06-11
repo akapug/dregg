@@ -44,6 +44,18 @@ exactly its sound obligations, with conservation tracked EXACTLY — `0` for bal
 for mint/burn — via the `ledgerDelta` book-keeping, the executable shadow of dregg1's per-domain
 `excess`.)
 
+**W1 (DREGG3 §2.2 — the value unification), LANDED ON THE PER-ASSET LAYER.** The narration above
+describes the SCALAR `FullAction` spine (kept as the heritage layer, `±amt` disclosure intact).
+The LIVE per-asset layer (`FullActionA`/`execFullA`, §MA below) is post-W1: `AssetId := CellId`
+(the asset IS its issuer cell), `recKMintAsset`/`recKBurnAsset` are ISSUER-MOVES (mint = the
+issuer's negative-capable well → recipient; burn = holder → well; authority over the ISSUER, E2),
+`bridgeMintA` is the BRIDGE-issuer move, and the per-asset delta family vanishes identically
+(`ledgerDeltaAsset_eq_zero`) — every committed action/transaction/forest conserves EVERY asset
+EXACTLY (`execFullA_conserves_exact`/`execFullTurnA_conserves_exact`), making `∀ a, Σ_c bal c a = 0`
+a reachability invariant (`Exec/ReachableConservation.lean`). The pre-W1 supply-increment laws
+survive only as `recKMintAssetLegacy`/`recKBurnAssetLegacy` — the non-vacuity teeth
+(`Exec/IssuerMove.lean`).
+
 Pure, computable, `#eval`-able. Reuses `TurnExecutor`/`AuthTurn`/`Generators`/
 `CatalogEffects`/`RecordKernel`; edits none. Verified standalone:
 `lake env lean Dregg2/Exec/TurnExecutorFull.lean`.
@@ -681,31 +693,106 @@ theorem recBalCredit_recTotalAsset (acc : Finset CellId) (bal : CellId → Asset
     refine Finset.sum_congr rfl (fun c _ => ?_)
     unfold recBalCredit; rw [if_neg (by rintro ⟨_, h⟩; exact hb h)]
 
-/-- **The privileged per-asset MINT** over the `bal` ledger. Same `mintAuthorizedB` gate as the
-scalar mint (a `node`/`control` cap, not ownership); credits cell `cell`'s asset `a` by `amt`. -/
-def recKMintAsset (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
+/-- **The LEGACY per-asset mint (supply-increment credit)** — the pre-W1 law, retained ONLY as the
+non-vacuity tooth (`Exec/IssuerMove.lean recKMintAsset_breaks_exact` / the R2 probe): it provably
+BREAKS `ExactConservation`. The LIVE mint is `recKMintAsset` below (the issuer-move). -/
+def recKMintAssetLegacy (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
     Option RecordKernelState :=
   if mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ cell ∈ k.accounts then
     some { k with bal := recBalCredit k.bal cell a amt }
   else
     none
 
-/-- **The privileged per-asset BURN** over the `bal` ledger. Debits cell `cell`'s asset `a` by `amt`
-(a credit of `-amt`), gated on availability *in that asset* + mint authority. -/
-def recKBurnAsset (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
+/-- **The LEGACY per-asset burn (supply-decrement debit)** — pre-W1, retained as the dual
+non-vacuity tooth. The LIVE burn is `recKBurnAsset` below. -/
+def recKBurnAssetLegacy (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
     Option RecordKernelState :=
   if mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a ∧ cell ∈ k.accounts then
     some { k with bal := recBalCredit k.bal cell a (-amt) }
   else
     none
 
-/-- **Per-asset mint inflow.** A committed per-asset mint raises asset `a`'s supply by
-`amt` and leaves EVERY OTHER asset untouched: `recTotalAsset k' b = recTotalAsset k b + (if b = a
-then amt else 0)`. The per-asset refinement of `recKMint_delta` (which moved one scalar). -/
+/-- **THE per-asset MINT (W1, DREGG3 §2.2 Asset): the ISSUER-MOVE.** `AssetId := CellId` — the
+asset IS its issuer cell. Minting `amt` of asset `a` to `cell` is an ORDINARY per-asset transfer
+`a → cell`: the issuer's own row in its asset (the WELL) goes negative by the minted amount, the
+recipient goes positive, and `Σ_c bal c a` is UNCHANGED — exactly zero stays exactly zero. Gates:
+  * `mintAuthorizedB actor a` — mint authority is control of the **ISSUER** cell (E2: the
+    production law — authority to mint IS the issuer capability);
+  * `0 ≤ amt`, issuer + recipient live, `a ≠ cell` (self-mint is a no-move);
+  * deliberately **NO availability gate at the well** (E1: the well is negative-capable — its
+    balance IS −supply; issuance policy lives in the issuer cell's program, the kernel keeps
+    conservation only). -/
+def recKMintAsset (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
+    Option RecordKernelState :=
+  if mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt
+      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell then
+    some { k with bal := recTransferBal k.bal a cell a amt }
+  else none
+
+/-- **THE per-asset BURN (W1): the issuer-move with direction swapped.** Burning `amt` of asset `a`
+held by `cell` RETURNS it to the issuer's well (`cell → a`): the well's balance rises toward zero —
+supply shrinks, `Σ_c bal c a` unchanged. Gated on mint authority over the **ISSUER** + availability
+at the HOLDER (`amt ≤ bal cell a` — an ordinary cell can only burn what it holds; only the issuer
+WELL waives availability) + liveness + distinctness. -/
+def recKBurnAsset (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
+    Option RecordKernelState :=
+  if mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a then
+    some { k with bal := recTransferBal k.bal cell a a amt }
+  else none
+
+/-- **Per-asset mint CONSERVES (the W1 strengthening).** A committed mint leaves the total supply
+of EVERY asset untouched: `recTotalAsset k' b = recTotalAsset k b` — the issuer-debit and the
+recipient-credit cancel inside the sum (`recTransferBal_sum_conserve_moved`), every other asset's
+column is pointwise unchanged (`recTransferBal_untouched`). The pre-W1 statement (`+amt` at the
+minted asset) is the LEGACY law's delta (`recKMintAssetLegacy_delta`). -/
 theorem recKMintAsset_delta (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (h : recKMintAsset k actor cell a amt = some k') (b : AssetId) :
-    recTotalAsset k' b = recTotalAsset k b + (if b = a then amt else 0) := by
+    recTotalAsset k' b = recTotalAsset k b := by
   unfold recKMintAsset at h
+  by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt
+      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨-, -, hiss, hcell, hne⟩ := hg
+    rcases eq_or_ne b a with rfl | hb
+    · show (∑ c ∈ k.accounts, recTransferBal k.bal b cell b amt c b)
+          = ∑ c ∈ k.accounts, k.bal c b
+      exact recTransferBal_sum_conserve_moved k.accounts k.bal b cell b amt hiss hcell hne
+    · show (∑ c ∈ k.accounts, recTransferBal k.bal a cell a amt c b)
+          = ∑ c ∈ k.accounts, k.bal c b
+      exact Finset.sum_congr rfl
+        (fun c _ => recTransferBal_untouched k.bal a cell a b amt hb c)
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **Per-asset burn CONSERVES (the W1 strengthening).** Symmetric to `recKMintAsset_delta`: the
+holder-debit and the well-credit cancel. -/
+theorem recKBurnAsset_delta (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
+    (h : recKBurnAsset k actor cell a amt = some k') (b : AssetId) :
+    recTotalAsset k' b = recTotalAsset k b := by
+  unfold recKBurnAsset at h
+  by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨-, -, -, hcell, hiss, hne⟩ := hg
+    rcases eq_or_ne b a with rfl | hb
+    · show (∑ c ∈ k.accounts, recTransferBal k.bal cell b b amt c b)
+          = ∑ c ∈ k.accounts, k.bal c b
+      exact recTransferBal_sum_conserve_moved k.accounts k.bal cell b b amt hcell hiss hne
+    · show (∑ c ∈ k.accounts, recTransferBal k.bal cell a a amt c b)
+          = ∑ c ∈ k.accounts, k.bal c b
+      exact Finset.sum_congr rfl
+        (fun c _ => recTransferBal_untouched k.bal cell a a b amt hb c)
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **The LEGACY mint's delta** (the supply-increment law — the tooth's instantiation surface). -/
+theorem recKMintAssetLegacy_delta (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (h : recKMintAssetLegacy k actor cell a amt = some k') (b : AssetId) :
+    recTotalAsset k' b = recTotalAsset k b + (if b = a then amt else 0) := by
+  unfold recKMintAssetLegacy at h
   by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ cell ∈ k.accounts
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
@@ -716,13 +803,11 @@ theorem recKMintAsset_delta (k k' : RecordKernelState) (actor cell : CellId) (a 
     exact recBalCredit_recTotalAsset k.accounts k.bal cell a amt hcell b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- **Per-asset burn outflow.** A committed per-asset burn lowers asset `a`'s supply by
-`amt` and leaves EVERY OTHER asset untouched: `recTotalAsset k' b = recTotalAsset k b + (if b = a
-then -amt else 0)`. -/
-theorem recKBurnAsset_delta (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
-    (h : recKBurnAsset k actor cell a amt = some k') (b : AssetId) :
+/-- **The LEGACY burn's delta** (the supply-decrement law). -/
+theorem recKBurnAssetLegacy_delta (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (h : recKBurnAssetLegacy k actor cell a amt = some k') (b : AssetId) :
     recTotalAsset k' b = recTotalAsset k b + (if b = a then (-amt) else 0) := by
-  unfold recKBurnAsset at h
+  unfold recKBurnAssetLegacy at h
   by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
       ∧ cell ∈ k.accounts
   · rw [if_pos hg] at h
@@ -734,13 +819,42 @@ theorem recKBurnAsset_delta (k k' : RecordKernelState) (actor cell : CellId) (a 
     exact recBalCredit_recTotalAsset k.accounts k.bal cell a (-amt) hcell b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- No per-asset mint without authority. -/
+/-- No per-asset mint without authority **over the ISSUER** (E2: the gate target is the asset's
+issuer cell `a`, NOT the recipient — the production law in executable form). -/
 theorem recKMintAsset_authorized (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : recKMintAsset k actor cell a amt = some k') :
-    mintAuthorizedB k.caps actor cell = true := by
+    mintAuthorizedB k.caps actor a = true := by
   unfold recKMintAsset at h
-  by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ cell ∈ k.accounts
+  by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt
+      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell
   · exact hg.1
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **GENESIS ORDER, fail-closed.** Minting an asset whose issuer cell is not LIVE refuses — the
+bootstrap order (create the issuer cell, then mint) is a GATE, not a convention. -/
+theorem recKMintAsset_requires_live_issuer (k : RecordKernelState) (actor cell : CellId)
+    (a : AssetId) (amt : ℤ) (hno : a ∉ k.accounts) :
+    recKMintAsset k actor cell a amt = none := by
+  unfold recKMintAsset
+  rw [if_neg (by rintro ⟨-, -, hiss, -, -⟩; exact hno hiss)]
+
+/-- A committed mint witnesses its issuer well LIVE (the positive face of the genesis-order
+gate). -/
+theorem recKMintAsset_issuer_live (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (h : recKMintAsset k actor cell a amt = some k') : a ∈ k.accounts := by
+  unfold recKMintAsset at h
+  by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt
+      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell
+  · exact hg.2.2.1
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- A committed burn witnesses its issuer well LIVE. -/
+theorem recKBurnAsset_issuer_live (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (h : recKBurnAsset k actor cell a amt = some k') : a ∈ k.accounts := by
+  unfold recKBurnAsset at h
+  by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
+  · exact hg.2.2.2.2.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- The three lifecycle discriminants (full §MA-lifecycle commentary below). -/
@@ -762,18 +876,19 @@ def recCexecAsset (s : RecChainedState) (t : Turn) (a : AssetId) : Option RecCha
     | none    => none
   else none
 
-/-- Chained per-asset mint. -/
+/-- Chained per-asset mint (W1: the receipt is the TRUTHFUL issuer-move row — the issuer well `a`
+is the `src`, the recipient the `dst`; no self-credit fiction). -/
 def recCMintAsset (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
     Option RecChainedState :=
   match recKMintAsset s.kernel actor cell a amt with
-  | some k' => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := amt } :: s.log }
+  | some k' => some { kernel := k', log := { actor := actor, src := a, dst := cell, amt := amt } :: s.log }
   | none    => none
 
-/-- Chained per-asset burn (the receipt discloses `-amt`). -/
+/-- Chained per-asset burn (W1: the truthful return-to-well row — holder `src`, issuer well `dst`). -/
 def recCBurnAsset (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
     Option RecChainedState :=
   match recKBurnAsset s.kernel actor cell a amt with
-  | some k' => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := -amt } :: s.log }
+  | some k' => some { kernel := k', log := { actor := actor, src := cell, dst := a, amt := amt } :: s.log }
   | none    => none
 
 /-! ### §MA-supply — ACCOUNT-GROWTH on the per-asset dispatch: `createCell` (born EMPTY) + `spawn`.
@@ -2038,18 +2153,21 @@ inductive FullActionA where
   | refreshDelegationA (actor child : CellId)
 
 /-- **The per-asset COMBINED ledger delta of a `FullActionA`, indexed by asset `b`** — the move of the
-COMBINED measure `recTotalAsset` (= `bal`-ledger + per-asset holding-store). Transfer and
-authority are conservation-trivial (`0` for every asset); `mintA a` adds `amt` to asset `a` only;
-`burnA a` subtracts from asset `a` only. The 5 PURE-STATE effects write the `cell` record / the LOG,
-never `bal` — so `0`. Notes move the nullifier/commitment SET, not `bal`, so `0`. A FAMILY indexed
-by `AssetId` — never one aggregate scalar. (F1b: the escrow/obligation/bridge-LFC arms are GONE with
-the kernel holding-store.) -/
+COMBINED measure `recTotalAsset` (= `bal`-ledger + per-asset holding-store). W1 (DREGG3 §2.2): this
+is IDENTICALLY ZERO — every verb conserves every asset exactly. `mintA`/`burnA`/`bridgeMintA` are
+issuer-moves (ordinary transfers against the issuer's negative-capable well), so the pre-W1 `±amt`
+disclosures are GONE: `ledgerDeltaAsset_eq_zero` below proves the whole family vanishes, and the
+per-arm conservation vector (`execFullA_ledger_per_asset`) becomes unconditional exactness. The
+function is RETAINED (rather than inlined to `0`) as the API the forest/turn aggregators sum over —
+its vanishing IS the theorem. A FAMILY indexed by `AssetId` — never one aggregate scalar. (F1b: the
+escrow/obligation/bridge-LFC arms are GONE with the kernel holding-store.) -/
 def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .balanceA _ _,        _ => 0
   | .delegate _ _ _,      _ => 0
   | .revoke _ _,          _ => 0
-  | .mintA _ _ a amt,     b => if b = a then amt else 0
-  | .burnA _ _ a amt,     b => if b = a then (-amt) else 0
+  -- W1: mint/burn are issuer-moves — ordinary transfers, conservation-trivial like `balanceA`.
+  | .mintA _ _ _ _,       _ => 0
+  | .burnA _ _ _ _,       _ => 0
   | .setFieldA _ _ _ _,   _ => 0
   | .emitEventA _ _ _ _,  _ => 0
   | .incrementNonceA _ _ _, _ => 0
@@ -2068,7 +2186,10 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   -- the COMBINED measure is unmoved for EVERY asset (account-growth-with-program NEUTRALITY).
   | .createCellFromFactoryA _ _ _, _ => 0
   | .spawnA _ _ _,        _ => 0
-  | .bridgeMintA _ _ a value, b => if b = a then value else 0
+  -- W1: bridgeMint = the issuer-move whose issuer is the BRIDGE cell (asset := bridge CellId) — the
+  -- bridge well carries −(outstanding bridged supply); the §8 foreign-finality portal gates WHEN the
+  -- bridge may move, conservation holds regardless.
+  | .bridgeMintA _ _ _ _, _ => 0
   -- §MA-note: notes move SETs (nullifier/commitment), not `bal`, so `0`.
   | .noteSpendA _ _ _,            _ => 0
   | .noteCreateA _ _,             _ => 0
@@ -2084,6 +2205,56 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .cellUnsealA _ _,              _ => 0
   | .cellDestroyA _ _ _,           _ => 0
   | .refreshDelegationA _ _,       _ => 0
+
+mutual
+/-- **W1 KEYSTONE: the disclosed delta family vanishes IDENTICALLY.** Every `FullActionA`'s
+per-asset combined delta is `0` at every asset — there is NO non-conserving verb left in the
+kernel. With `execFullA_ledger_per_asset` this makes every committed step an EXACT conservation
+step (`execFullA_conserves_exact` below), and `ExactConservation` an unconditional reachability
+invariant (`Exec/ReachableConservation.lean`). -/
+theorem ledgerDeltaAsset_eq_zero : ∀ (fa : FullActionA) (b : AssetId), ledgerDeltaAsset fa b = 0
+  | .balanceA _ _,        _ => by simp only [ledgerDeltaAsset]
+  | .delegate _ _ _,      _ => by simp only [ledgerDeltaAsset]
+  | .revoke _ _,          _ => by simp only [ledgerDeltaAsset]
+  | .mintA _ _ _ _,       _ => by simp only [ledgerDeltaAsset]
+  | .burnA _ _ _ _,       _ => by simp only [ledgerDeltaAsset]
+  | .setFieldA _ _ _ _,   _ => by simp only [ledgerDeltaAsset]
+  | .emitEventA _ _ _ _,  _ => by simp only [ledgerDeltaAsset]
+  | .incrementNonceA _ _ _, _ => by simp only [ledgerDeltaAsset]
+  | .setPermissionsA _ _ _, _ => by simp only [ledgerDeltaAsset]
+  | .setVKA _ _ _,        _ => by simp only [ledgerDeltaAsset]
+  | .introduceA _ _ _,    _ => by simp only [ledgerDeltaAsset]
+  | .delegateAttenA _ _ _ _, _ => by simp only [ledgerDeltaAsset]
+  | .attenuateA _ _ _,    _ => by simp only [ledgerDeltaAsset]
+  | .revokeDelegationA _ _, _ => by simp only [ledgerDeltaAsset]
+  | .exerciseA _ _ inner, b => by
+      simp only [ledgerDeltaAsset]
+      exact innerLedgerDeltaAsset_eq_zero inner b
+  | .createCellA _ _,     _ => by simp only [ledgerDeltaAsset]
+  | .createCellFromFactoryA _ _ _, _ => by simp only [ledgerDeltaAsset]
+  | .spawnA _ _ _,        _ => by simp only [ledgerDeltaAsset]
+  | .bridgeMintA _ _ _ _, _ => by simp only [ledgerDeltaAsset]
+  | .noteSpendA _ _ _,    _ => by simp only [ledgerDeltaAsset]
+  | .noteCreateA _ _,     _ => by simp only [ledgerDeltaAsset]
+  | .makeSovereignA _ _,  _ => by simp only [ledgerDeltaAsset]
+  | .refusalA _ _,        _ => by simp only [ledgerDeltaAsset]
+  | .receiptArchiveA _ _, _ => by simp only [ledgerDeltaAsset]
+  | .pipelinedSendA _,    _ => by simp only [ledgerDeltaAsset]
+  | .cellSealA _ _,       _ => by simp only [ledgerDeltaAsset]
+  | .cellUnsealA _ _,     _ => by simp only [ledgerDeltaAsset]
+  | .cellDestroyA _ _ _,  _ => by simp only [ledgerDeltaAsset]
+  | .refreshDelegationA _ _, _ => by simp only [ledgerDeltaAsset]
+
+/-- The inner-fold delta of an `exerciseA` vanishes too (mutual with the per-action vanishing —
+each summand is a structural subterm). -/
+theorem innerLedgerDeltaAsset_eq_zero :
+    ∀ (inner : List FullActionA) (b : AssetId),
+      (inner.map (fun fa => ledgerDeltaAsset fa b)).sum = 0
+  | [], _ => rfl
+  | fa :: rest, b => by
+      rw [List.map_cons, List.sum_cons, ledgerDeltaAsset_eq_zero fa b, zero_add]
+      exact innerLedgerDeltaAsset_eq_zero rest b
+end
 
 /-! ### §R4 — the EXECUTABLE facet classifier + cap-mask gate for `exerciseA`.
 
@@ -2283,6 +2454,7 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       simp only [recCRevoke, Option.some.injEq] at h; subst h
       simp only [recTotalAsset, recKRevokeTarget]; ring
   | mintA actor cell a amt =>
+      -- W1: the mint is an issuer-move — EXACT conservation, delta 0.
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCMintAsset at h
       cases hm : recKMintAsset s.kernel actor cell a amt with
@@ -2290,8 +2462,9 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | some k' =>
           rw [hm] at h; simp only [Option.some.injEq] at h; subst h
           show recTotalAsset k' b = recTotalAsset s.kernel b + _
-          rw [recKMintAsset_delta s.kernel k' actor cell a amt hm b]
+          rw [recKMintAsset_delta s.kernel k' actor cell a amt hm b]; ring
   | burnA actor cell a amt =>
+      -- W1: the burn returns value to the issuer's well — EXACT conservation, delta 0.
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCBurnAsset at h
       cases hb : recKBurnAsset s.kernel actor cell a amt with
@@ -2299,7 +2472,7 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | some k' =>
           rw [hb] at h; simp only [Option.some.injEq] at h; subst h
           show recTotalAsset k' b = recTotalAsset s.kernel b + _
-          rw [recKBurnAsset_delta s.kernel k' actor cell a amt hb b]
+          rw [recKBurnAsset_delta s.kernel k' actor cell a amt hb b]; ring
   | setFieldA actor cell f v =>
       -- §SLOT-CAVEAT: `setFieldA` now routes through the caveat-gated write `stateStepGuarded`. A
       -- committed guarded write commits exactly `stateStep`'s post-state (a named-field write), so it
@@ -2385,6 +2558,7 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       rw [spawnChainA_neutral b (by simpa only [execFullA] using h)]; ring
   | bridgeMintA actor cell a value =>
+      -- W1: the bridge-mint is the issuer-move whose issuer is the BRIDGE cell — EXACT conservation.
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCMintAsset at h
       cases hm : recKMintAsset s.kernel actor cell a value with
@@ -2392,7 +2566,7 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | some k' =>
           rw [hm] at h; simp only [Option.some.injEq] at h; subst h
           show recTotalAsset k' b = recTotalAsset s.kernel b + _
-          rw [recKMintAsset_delta s.kernel k' actor cell a value hm b]
+          rw [recKMintAsset_delta s.kernel k' actor cell a value hm b]; ring
   -- §MA-note: notes move SETs (nullifier/commitment), never `bal` — bal-NEUTRAL.
   | noteSpendA nf actor spendProof =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
@@ -2526,6 +2700,28 @@ theorem execFullTurnA_conserves_per_asset (s s' : RecChainedState) (tt : List Fu
     recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   rw [execFullTurnA_ledger_per_asset s s' tt b h, hzero, add_zero]
 
+/-- The turn-level delta family vanishes identically (W1) — every turn's net per-asset delta is
+`0` at every asset, because every ACTION's is (`ledgerDeltaAsset_eq_zero`). -/
+theorem turnLedgerDeltaAsset_eq_zero (tt : List FullActionA) (b : AssetId) :
+    turnLedgerDeltaAsset tt b = 0 :=
+  innerLedgerDeltaAsset_eq_zero tt b
+
+/-- **`execFullA_conserves_exact` (W1 KEYSTONE, unconditional).** EVERY committed per-asset action
+— transfer, authority, state, supply (now issuer-moves), notes, lifecycle, exercise-recursion —
+conserves EVERY asset's total supply EXACTLY. No zero-delta hypothesis: the delta family vanishes
+identically (`ledgerDeltaAsset_eq_zero`). `Σ_c bal c a` is a step invariant of the kernel. -/
+theorem execFullA_conserves_exact (s s' : RecChainedState) (fa : FullActionA) (b : AssetId)
+    (h : execFullA s fa = some s') :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
+  rw [execFullA_ledger_per_asset s s' fa b h, ledgerDeltaAsset_eq_zero fa b, add_zero]
+
+/-- **`execFullTurnA_conserves_exact` (W1, unconditional, transaction level).** EVERY committed
+per-asset transaction conserves EVERY asset exactly. -/
+theorem execFullTurnA_conserves_exact (s s' : RecChainedState) (tt : List FullActionA) (b : AssetId)
+    (h : execFullTurnA s tt = some s') :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
+  execFullTurnA_conserves_per_asset s s' tt b h (turnLedgerDeltaAsset_eq_zero tt b)
+
 /-! ## §MB — `execFullTurnA_append` + the per-asset PER-NODE attestation carrier.
 
 The forest lift in `Exec/FullForest.lean` rests on the same `execTurn_append` shape `TurnForest.lean`
@@ -2575,8 +2771,9 @@ def fullReceiptA (s : RecChainedState) : FullActionA → Turn
   | .balanceA t _          => t
   | .delegate del _ _      => authReceipt del
   | .revoke holder _       => authReceipt holder
-  | .mintA actor cell _ amt  => { actor := actor, src := cell, dst := cell, amt := amt }
-  | .burnA actor cell _ amt  => { actor := actor, src := cell, dst := cell, amt := -amt }
+  -- W1: the truthful issuer-move rows (mint: well → recipient; burn: holder → well).
+  | .mintA actor cell a amt  => { actor := actor, src := a, dst := cell, amt := amt }
+  | .burnA actor cell a amt  => { actor := actor, src := cell, dst := a, amt := amt }
   -- §MA-state: every pure-state effect appends a balance-`0` self-`Turn` on the target `cell` (the
   -- metadata clock row that `stateStep`/`emitStep` thread; no balance delta).
   | .setFieldA actor cell _ _   => { actor := actor, src := cell, dst := cell, amt := 0 }
@@ -2595,7 +2792,7 @@ def fullReceiptA (s : RecChainedState) : FullActionA → Turn
   | .createCellA actor newCell  => { actor := actor, src := newCell, dst := newCell, amt := 0 }
   | .createCellFromFactoryA actor newCell _ => { actor := actor, src := newCell, dst := newCell, amt := 0 }
   | .spawnA actor child _       => { actor := actor, src := child, dst := child, amt := 0 }
-  | .bridgeMintA actor cell _ value => { actor := actor, src := cell, dst := cell, amt := value }
+  | .bridgeMintA actor cell a value => { actor := actor, src := a, dst := cell, amt := value }
   -- §MA-note: each note effect appends a self-`Turn` on the `actor`
   -- (the metadata clock row; the moved SET entry lives off-receipt).
   | .noteSpendA _ actor _            => escrowReceiptA actor
@@ -2913,36 +3110,63 @@ theorem execFullA_revoke_removeEdge (s s' : RecChainedState) (holder t : CellId)
   simp only [Option.some.injEq] at h; subst h
   exact recKRevokeTarget_execGraph s.kernel.caps holder t
 
-/-- **Per-asset mint authorized.** A committed per-asset mint implies the privileged mint
-authority (`recKMintAsset_authorized`). -/
+/-- **Per-asset mint authorized over the ISSUER (W1/E2).** A committed per-asset mint implies the
+privileged mint authority over the asset's ISSUER cell `a` (`recKMintAsset_authorized`) — the
+production law: authority to mint IS the issuer capability, never a recipient-shaped grant. -/
 theorem execFullA_mintA_authorized (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : execFullA s (.mintA actor cell a amt) = some s') :
-    mintAuthorizedB s.kernel.caps actor cell = true := by
+    mintAuthorizedB s.kernel.caps actor a = true := by
   simp only [execFullA, recCMintAsset] at h
   cases hm : recKMintAsset s.kernel actor cell a amt with
   | none => rw [hm] at h; exact absurd h (by simp)
   | some k' => exact recKMintAsset_authorized s.kernel k' actor cell a amt hm
 
 /-- **`recKBurnAsset_authorized`.** A committed per-asset burn implies the privileged mint
-authority (the per-asset analog of `recKBurn_authorized`). -/
+authority over the ISSUER (W1/E2). -/
 theorem recKBurnAsset_authorized (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : recKBurnAsset k actor cell a amt = some k') :
-    mintAuthorizedB k.caps actor cell = true := by
+    mintAuthorizedB k.caps actor a = true := by
   unfold recKBurnAsset at h
-  by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
-      ∧ cell ∈ k.accounts
+  by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- **Per-asset burn authorized.** A committed per-asset burn implies the privileged mint
-authority over `cell`. -/
+/-- **Per-asset burn authorized over the ISSUER.** -/
 theorem execFullA_burnA_authorized (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : execFullA s (.burnA actor cell a amt) = some s') :
-    mintAuthorizedB s.kernel.caps actor cell = true := by
+    mintAuthorizedB s.kernel.caps actor a = true := by
   simp only [execFullA, recCBurnAsset] at h
   cases hb : recKBurnAsset s.kernel actor cell a amt with
   | none => rw [hb] at h; exact absurd h (by simp)
   | some k' => exact recKBurnAsset_authorized s.kernel k' actor cell a amt hb
+
+/-- A committed `mintA` witnesses its issuer well LIVE (the chain-level genesis-order witness). -/
+theorem execFullA_mintA_issuer_live (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (h : execFullA s (.mintA actor cell a amt) = some s') :
+    a ∈ s.kernel.accounts := by
+  simp only [execFullA, recCMintAsset] at h
+  cases hm : recKMintAsset s.kernel actor cell a amt with
+  | none => rw [hm] at h; exact absurd h (by simp)
+  | some k' => exact recKMintAsset_issuer_live s.kernel k' actor cell a amt hm
+
+/-- A committed `burnA` witnesses its issuer well LIVE. -/
+theorem execFullA_burnA_issuer_live (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (h : execFullA s (.burnA actor cell a amt) = some s') :
+    a ∈ s.kernel.accounts := by
+  simp only [execFullA, recCBurnAsset] at h
+  cases hb : recKBurnAsset s.kernel actor cell a amt with
+  | none => rw [hb] at h; exact absurd h (by simp)
+  | some k' => exact recKBurnAsset_issuer_live s.kernel k' actor cell a amt hb
+
+/-- A committed `bridgeMintA` witnesses its issuer — the BRIDGE cell — LIVE. -/
+theorem execFullA_bridgeMintA_issuer_live (s s' : RecChainedState) (actor cell : CellId)
+    (a : AssetId) (value : ℤ) (h : execFullA s (.bridgeMintA actor cell a value) = some s') :
+    a ∈ s.kernel.accounts := by
+  simp only [execFullA, recCMintAsset] at h
+  cases hm : recKMintAsset s.kernel actor cell a value with
+  | none => rw [hm] at h; exact absurd h (by simp)
+  | some k' => exact recKMintAsset_issuer_live s.kernel k' actor cell a value hm
 
 /-! ### §MA-supply authority obligations — `bridgeMint` is PRIVILEGED supply (`mintAuthorizedB`), the
 LOCAL gate independent of the §8 foreign-finality portal; `createCell`/`spawn` carry their privileged
@@ -2950,20 +3174,22 @@ creation authority + the freshness gate (proved earlier as `createCellChainA_aut
 `spawnChainA_authorized`). -/
 
 /-- **`execFullA_bridgeMintA_authorized`.** A committed per-asset bridge-mint implies the
-privileged mint authority over `cell` (the LOCAL gate — the foreign finality is the §8 portal,
-discharged outside Lean). REUSES `recKMintAsset_authorized`. -/
+privileged mint authority over the bridged asset's ISSUER — the BRIDGE cell `a` itself (W1: the
+bridge cell IS the issuer of the bridged asset; its well carries −(outstanding bridged supply)).
+The foreign finality is the §8 portal, discharged outside Lean. REUSES `recKMintAsset_authorized`. -/
 theorem execFullA_bridgeMintA_authorized (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
     (value : ℤ) (h : execFullA s (.bridgeMintA actor cell a value) = some s') :
-    mintAuthorizedB s.kernel.caps actor cell = true := by
+    mintAuthorizedB s.kernel.caps actor a = true := by
   simp only [execFullA, recCMintAsset] at h
   cases hm : recKMintAsset s.kernel actor cell a value with
   | none => rw [hm] at h; exact absurd h (by simp)
   | some k' => exact recKMintAsset_authorized s.kernel k' actor cell a value hm
 
-/-- **`execFullA_bridgeMintA_unauthorized_fails` (fail-closed).** Without mint authority, no
-bridge-mint commits (regardless of foreign finality). The confinement core. -/
+/-- **`execFullA_bridgeMintA_unauthorized_fails` (fail-closed).** Without mint authority over the
+bridge cell (the issuer), no bridge-mint commits (regardless of foreign finality). The confinement
+core. -/
 theorem execFullA_bridgeMintA_unauthorized_fails (s : RecChainedState) (actor cell : CellId)
-    (a : AssetId) (value : ℤ) (h : mintAuthorizedB s.kernel.caps actor cell = false) :
+    (a : AssetId) (value : ℤ) (h : mintAuthorizedB s.kernel.caps actor a = false) :
     execFullA s (.bridgeMintA actor cell a value) = none := by
   simp only [execFullA, recCMintAsset, recKMintAsset]
   rw [if_neg]; rintro ⟨ha, _⟩; rw [h] at ha; exact absurd ha (by simp)
@@ -2994,15 +3220,15 @@ theorem execFullA_spawnA_neutral_per_asset (s s' : RecChainedState) (actor child
     recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   spawnChainA_neutral b (by simpa only [execFullA] using h)
 
-/-- **`execFullA_bridgeMintA_discloses_per_asset` (the §8 portal disclosed delta).** A committed
-`bridgeMintA actor cell a value` raises asset `a`'s supply by EXACTLY the disclosed `value` and leaves
-EVERY OTHER asset literally UNCHANGED: `recTotalAsset s'.kernel b = recTotalAsset s.kernel b + (if b = a
-then value else 0)`. The disclosed generative inflow (NOT a conservation claim) — the per-asset
-no-cross-asset-laundering content at the bridge boundary. -/
+/-- **`execFullA_bridgeMintA_discloses_per_asset` (W1: the bridge CONSERVES).** A committed
+`bridgeMintA actor cell a value` leaves EVERY asset's supply literally UNCHANGED: the bridged
+credit is the BRIDGE-issuer's well moving (`a` is the bridge cell; its well carries −(outstanding
+bridged supply)), so the pre-W1 "disclosed generative inflow" is now an exact conservation
+statement — the strongest possible no-cross-asset-laundering content at the bridge boundary. -/
 theorem execFullA_bridgeMintA_discloses_per_asset (s s' : RecChainedState) (actor cell : CellId)
     (a : AssetId) (value : ℤ) (b : AssetId)
     (h : execFullA s (.bridgeMintA actor cell a value) = some s') :
-    recTotalAsset s'.kernel b = recTotalAsset s.kernel b + (if b = a then value else 0) := by
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   -- bridgeMint reuses the per-asset mint kernel step (`recKMintAsset_delta`) over the BARE `bal` ledger.
   simp only [execFullA, recCMintAsset] at h
   cases hm : recKMintAsset s.kernel actor cell a value with
@@ -3340,12 +3566,16 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .revoke holder t    =>
        Dregg2.Spec.execGraph s'.kernel.caps
          = Dregg2.Spec.removeEdge (Dregg2.Spec.execGraph s.kernel.caps) holder ⟨t, ()⟩
-   | .mintA actor cell _ _  =>
-       mintAuthorizedB s.kernel.caps actor cell = true ∧
-       (effectLinearity mintEffect).is_disclosed_non_conservation = true
-   | .burnA actor cell _ _  =>
-       mintAuthorizedB s.kernel.caps actor cell = true ∧
-       (effectLinearity burnEffect).is_disclosed_non_conservation = true
+   -- W1 (DREGG3 §2.2): mint/burn are ISSUER-MOVES. The obligation is the issuer gate (E2: mint
+   -- authority over the asset's ISSUER cell `a`, never the recipient) ∧ the live issuer well (the
+   -- genesis-order tooth). The pre-W1 disclosure leg is GONE — the Ledger conjunct above now pins
+   -- EXACT conservation (`ledgerDeltaAsset = 0`), strictly stronger than a disclosed non-zero.
+   | .mintA actor _ a _  =>
+       mintAuthorizedB s.kernel.caps actor a = true ∧
+       a ∈ s.kernel.accounts
+   | .burnA actor _ a _  =>
+       mintAuthorizedB s.kernel.caps actor a = true ∧
+       a ∈ s.kernel.accounts
    -- §MA-state: the field-writing pure-state effects carry their REAL authority gate
    -- (`stateAuthB` over the cell) ∧ their `Neutral`/`Monotonic` linearity coloring (the
    -- faithful-mirror tripwire). `emitEventA` is authority-FREE (dregg1 runs no cap check), but it
@@ -3433,9 +3663,11 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
        s'.kernel.delegate child = some actor ∧
        s'.kernel.delegations child = s.kernel.caps actor ∧
        (effectLinearity .spawnWithDelegation).is_disclosed_non_conservation = true
-   | .bridgeMintA actor cell _ _ =>
-       mintAuthorizedB s.kernel.caps actor cell = true ∧
-       (effectLinearity mintEffect).is_disclosed_non_conservation = true
+   -- W1: the bridge cell IS the issuer of the bridged asset — the obligation is the issuer gate
+   -- over the BRIDGE cell `a` + its live well (the §8 foreign-finality portal stays out-of-band).
+   | .bridgeMintA actor _ a _ =>
+       mintAuthorizedB s.kernel.caps actor a = true ∧
+       a ∈ s.kernel.accounts
    -- §MA-note: notes carry the genuine SET membership witness — teeth, NOT `True`.
    | .noteSpendA nf _ _ =>
        -- anti-replay: the spent nullifier is now IN the set (a subsequent spend fails-closed).
@@ -3487,8 +3719,14 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   | delegate del rec t =>
       exact ⟨execFullA_delegate_grounds s s' del rec t h, execFullA_delegate_addEdge s s' del rec t h⟩
   | revoke holder t => exact execFullA_revoke_removeEdge s s' holder t h
-  | mintA actor cell a amt => exact ⟨execFullA_mintA_authorized s s' actor cell a amt h, mint_discloses⟩
-  | burnA actor cell a amt => exact ⟨execFullA_burnA_authorized s s' actor cell a amt h, burn_discloses⟩
+  -- W1: mint/burn discharge the ISSUER gate + the live-well witness (the disclosure leg died with
+  -- the supply-increment law — the Ledger conjunct is now exact conservation).
+  | mintA actor cell a amt =>
+      exact ⟨execFullA_mintA_authorized s s' actor cell a amt h,
+             execFullA_mintA_issuer_live s s' actor cell a amt h⟩
+  | burnA actor cell a amt =>
+      exact ⟨execFullA_burnA_authorized s s' actor cell a amt h,
+             execFullA_burnA_issuer_live s s' actor cell a amt h⟩
   -- §MA-state: discharge the field-writing effects' (authority ∧ coloring) obligation; emitEvent's
   -- live-cell ∧ coloring obligation (authority-free, but not ghost-cell-free).
   | setFieldA actor cell f v => exact ⟨execFullA_setFieldA_authorized s s' actor cell f v h, rfl⟩
@@ -3545,7 +3783,8 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
              Dregg2.CatalogEffects.generative_discloses .spawnWithDelegation
                Dregg2.CatalogEffects.g_spawnWithDelegation⟩
   | bridgeMintA actor cell a value =>
-      exact ⟨execFullA_bridgeMintA_authorized s s' actor cell a value h, mint_discloses⟩
+      exact ⟨execFullA_bridgeMintA_authorized s s' actor cell a value h,
+             execFullA_bridgeMintA_issuer_live s s' actor cell a value h⟩
   -- §MA-note: discharge the noteSpend/noteCreate SET-membership witness.
   | noteSpendA nf actor spendProof => exact ⟨execFullA_noteSpendA_inserts s s' nf actor spendProof h, rfl⟩
   | noteCreateA cm actor => exact ⟨execFullA_noteCreateA_inserts s s' cm actor h, rfl⟩
@@ -3810,12 +4049,13 @@ def badMixedTurn : List FullAction :=
 /-! ## §13 — Non-vacuity for the PER-ASSET executor: conservation holds, laundering is CAUGHT. -/
 
 /-- A chained state with a genuine 2-asset `bal` ledger: cell 0 holds 100 of asset 0 and 7 of asset
-1; cell 1 holds 5 of asset 0. Actor 9 holds the privileged `node 0` mint cap over cell 0. -/
+1; cell 1 holds 5 of asset 0. Actor 9 holds the privileged `node 0`/`node 1` mint caps over BOTH
+issuer cells (W1: asset `a`'s issuer IS cell `a` — mint authority is control of the issuer). -/
 def fma0 : RecChainedState :=
   { kernel :=
       { accounts := {0, 1}
         cell := fun _ => .record [("balance", .int 0)]
-        caps := fun l => if l = 9 then [Cap.node 0] else []
+        caps := fun l => if l = 9 then [Cap.node 0, Cap.node 1] else []
         bal := fun c a => if c = 0 then (if a = 0 then 100 else if a = 1 then 7 else 0)
                           else if c = 1 then (if a = 0 then 5 else 0) else 0 }
     log := [] }
@@ -3826,19 +4066,33 @@ def fma0 : RecChainedState :=
 #guard ((execFullTurnA fma0 [.balanceA ⟨0, 0, 1, 30⟩ 0]).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7)
 
-/-- The scalar-LAUNDERING turn a single-aggregate kernel would WRONGLY accept as conserving: mint 50
-of asset 1 while burning 50 of asset 0 (cell 0). Aggregate scalar delta = -50 + 50 = 0 ("conserved"
-— the BUG). The per-asset VECTOR delta is nonzero in EACH asset, so it cannot be passed off as a
-conservative turn. -/
+/-- The pre-W1 scalar-LAUNDERING turn (mint 50 of asset 1 to cell 0 while burning 50 of asset 0
+from cell 1's holding): under the supply-increment law the aggregate scalar hid a (−50, +50)
+cross-asset move. W1 KILLS the whole channel: mint/burn are issuer-moves, so BOTH actions conserve
+BOTH assets EXACTLY — the per-asset vector is identically (0, 0) and the post-state sums are
+UNCHANGED. The swap is visible in the ROWS (the issuer wells moved), never in the sums. -/
 def launderTurn : List FullActionA :=
-  [ .mintA 9 0 1 50      -- +50 of asset 1
-  , .burnA 9 0 0 50 ]    -- -50 of asset 0
+  [ .mintA 9 0 1 50      -- mint 50 of asset 1 (issuer = cell 1) into cell 0: well 1 → −50
+  , .burnA 9 1 0 5 ]     -- burn cell 1's 5 of asset 0 back into well 0
 
-#guard (turnLedgerDeltaAsset launderTurn 0) == -50  --  -50 (NOT 0 — a scalar aggregate would hide this)
-#guard (turnLedgerDeltaAsset launderTurn 1) == 50  --  50  (NOT 0)
--- the per-asset ledger AFTER the launder turn: asset 0 fell to 55, asset 1 rose to 57 (CAUGHT):
+#guard (turnLedgerDeltaAsset launderTurn 0) == 0  --  0 (W1: burn = return-to-well, conserving)
+#guard (turnLedgerDeltaAsset launderTurn 1) == 0  --  0 (W1: mint = issuer-move, conserving)
+-- the per-asset ledger AFTER the turn: BOTH supplies unchanged (the W1 exactness, executable):
 #guard ((execFullTurnA fma0 launderTurn).map
-        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (55, 57)  --  some (55, 57)
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7)
+-- ...and the ROWS show the actual moves: cell 1's well in asset 1 went NEGATIVE-CAPABLE (0 → −50,
+-- the well IS −supply-delta), cell 0 gained 50 of asset 1; cell 1's asset-0 holding returned to
+-- well 0 (5 → 0, well 100 → 105):
+#guard ((execFullTurnA fma0 launderTurn).map
+        (fun s => (s.kernel.bal 1 1, s.kernel.bal 0 1, s.kernel.bal 1 0, s.kernel.bal 0 0)))
+        == some (-50, 57, 0, 105)
+-- the ISSUER gate has teeth: an actor holding only `node 0` (NOT the issuer of asset 1) cannot
+-- mint asset 1 (the legacy recipient-shaped gate would have accepted this):
+#guard ((execFullA { fma0 with kernel := { fma0.kernel with
+          caps := fun l => if l = 9 then [Cap.node 0] else [] } }
+          (.mintA 9 0 1 50)).isNone)
+-- self-mint into the issuer's own well is a no-move (rejected by the `a ≠ cell` gate):
+#guard ((execFullA fma0 (.mintA 9 1 1 50)).isNone)
 
 /-! ## §13-state — Non-vacuity for the 5 PURE-STATE effects: the cell record/log moves, but
 `recTotalAsset` is UNCHANGED in EVERY asset (balance-NEUTRALITY witnessed); authority is REAL
@@ -4072,29 +4326,32 @@ def fmaSup : RecChainedState :=
 #guard (((execFullA fmaSup (.spawnA 9 2 1)).bind
         (fun s => execFullA s (.refreshDelegationA 2 2))).isSome)  --  true (spawn initialized parent)
 
--- ★ THE BRIDGE-MINT DISCLOSURE WITNESS: actor 9 (holds `node 0`) bridge-mints +40 of ASSET 1 into the
---   live cell 0 — COMMITS, asset 1 RISES by exactly 40 (7 → 47) while asset 0 is LEFT FIXED (105):
+-- ★ THE BRIDGE-MINT WITNESS (W1): actor 9 (holds `node 1` — the BRIDGE cell 1 is the issuer of
+--   bridged asset 1) bridge-mints 40 of asset 1 into the live cell 0 — COMMITS, and BOTH supplies
+--   are UNCHANGED: the bridge well 1 went −40 (it owes the foreign chain 40) while cell 0 gained 40:
 #guard ((execFullA fmaSup (.bridgeMintA 9 0 1 40)).isSome)  --  true
 #guard ((execFullA fmaSup (.bridgeMintA 9 0 1 40)).map
-        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 47)  --  some (105, 47) (+40 at asset 1 ONLY)
--- ...the disclosed delta is `+40` at asset 1, `0` everywhere else (no cross-asset laundering):
-#guard ((ledgerDeltaAsset (.bridgeMintA 9 0 1 40) 0, ledgerDeltaAsset (.bridgeMintA 9 0 1 40) 1)) == (0, 40)  --  (0, 40)
--- ...and the bridge receipt discloses the +40 inflow:
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7) (EXACT)
+#guard ((execFullA fmaSup (.bridgeMintA 9 0 1 40)).map
+        (fun s => (s.kernel.bal 1 1, s.kernel.bal 0 1))) == some (-40, 47)  --  the bridge well IS −outstanding
+-- ...the delta family vanishes (W1: NO non-conserving verb is left):
+#guard ((ledgerDeltaAsset (.bridgeMintA 9 0 1 40) 0, ledgerDeltaAsset (.bridgeMintA 9 0 1 40) 1)) == (0, 0)  --  (0, 0)
+-- ...and the bridge receipt records the truthful well → recipient move of 40:
 #guard (((execFullA fmaSup (.bridgeMintA 9 0 1 40)).map (fun s => s.log.headD ⟨0,0,0,0⟩ |>.amt)).getD 0) == 40  --  40
--- An UNAUTHORIZED bridge-mint (actor 0, no mint cap) is REJECTED (the LOCAL gate, independent of the
---   §8 foreign-finality portal):
+-- An UNAUTHORIZED bridge-mint (actor 0, no mint cap over the bridge cell) is REJECTED (the LOCAL
+--   gate, independent of the §8 foreign-finality portal):
 #guard ((execFullA fmaSup (.bridgeMintA 0 0 1 40)).isSome) == false  --  false
 
--- A MIXED supply turn: createCell 2 (neutral growth) + bridgeMint +40 of asset 1 into cell 0
---   (disclosed) → asset 0 conserved (105), asset 1 rises by exactly 40 (7 → 47):
+-- A MIXED supply turn: createCell 2 (neutral growth) + bridgeMint 40 of asset 1 into cell 0
+--   (issuer-move) → BOTH assets conserved exactly:
 def supplyMixedTurn : List FullActionA :=
   [ .createCellA 9 2
   , .bridgeMintA 9 0 1 40 ]
 
 #guard ((execFullTurnA fmaSup supplyMixedTurn).isSome)  --  true (all commit)
-#guard ((turnLedgerDeltaAsset supplyMixedTurn 0, turnLedgerDeltaAsset supplyMixedTurn 1)) == (0, 40)  --  (0, 40)
+#guard ((turnLedgerDeltaAsset supplyMixedTurn 0, turnLedgerDeltaAsset supplyMixedTurn 1)) == (0, 0)  --  (0, 0)
 #guard ((execFullTurnA fmaSup supplyMixedTurn).map
-        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 47)  --  some (105, 47)
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7)
 
 /-! ## §13-seal (Wave 6) — Non-vacuity for the 6 SIMPLE bal-neutral effects: the cell flag/metadata/
 refusal record MOVES (a flag flips), yet `recTotalAsset` is UNCHANGED in EVERY asset

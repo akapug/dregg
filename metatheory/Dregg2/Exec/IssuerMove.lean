@@ -34,11 +34,12 @@ ANCHOR, over the REAL kernel state and the REAL step functions:
     `(cell, asset)`. The probe proved this through the issuer-supply VIEW; here it is the two
     ACTUAL step functions side by side.
 
-The legacy `recKMintAsset`/`recKBurnAsset` (and the circuit weld stack over them —
-`Circuit/Spec/supplycreation.lean`, `Circuit/Argus/Effects/BridgeMint.lean`, the `Witness/*` and
-`Emit/EffectVm*` mint/burn files) stay in-tree describing the DEPLOYED circuits until the W1 VK
-rotation regenerates them against these verbs. The dispatch-arm cutover + that sweep is the
-rotation's executor-mirror worklist.
+**THE ROTATION HAS LANDED**: `TurnExecutorFull.recKMintAsset`/`recKBurnAsset` (what the `execFullA`
+`.mintA`/`.burnA`/`.bridgeMintA` arms run) ARE the issuer-moves now — `recKMintAsset_is_issuerMove` /
+`recKBurnAsset_is_issuerBurn` below are the `rfl` receipts. The pre-W1 supply-increment laws survive
+ONLY as `recKMintAssetLegacy`/`recKBurnAssetLegacy`, the non-vacuity teeth this module breaks
+against the value law. The circuit weld (`Circuit/Spec/supplycreation.lean` etc.) is regenerated
+against the issuer-moves in the same rotation.
 
 `#assert_axioms` on every keystone; no sorry; `#guard` non-vacuity witnesses (the negative well,
 the genesis-order fail-close, the legacy break).
@@ -50,7 +51,7 @@ namespace Dregg2.Exec.IssuerMove
 open Dregg2.Exec
 open Dregg2.Authority
 open Dregg2.Exec.TurnExecutorFull (recKMintAsset recKBurnAsset recBalCredit
-  recKMintAsset_delta recKBurnAsset_delta)
+  recKMintAssetLegacy recKBurnAssetLegacy recKMintAssetLegacy_delta recKBurnAssetLegacy_delta)
 
 /-! ## §1 — the mechanism: mint = the issuer moving from its own (negative-capable) well. -/
 
@@ -189,14 +190,14 @@ choice, not load-bearing; the executor wrappers instantiate it because it is the
 def issuerSelf : AssetId → CellId := fun a => a
 
 /-- **`recKMintAssetIssuer` — the W1 mint, executor-shaped.** The SAME `(k, actor, cell, a, amt)`
-signature as the legacy `recKMintAsset` (so the `execFullA` `.mintA`/`.bridgeMintA` arms swap onto
-it 1:1 at the rotation), defined as a THIN WRAPPER over the issuer-move at the identity registry. -/
+signature as the executor's `recKMintAsset`, defined as a THIN WRAPPER over the issuer-move at the
+identity registry. -/
 def recKMintAssetIssuer (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
     Option RecordKernelState :=
   issuerMoveK issuerSelf k actor a cell amt
 
 /-- **`recKBurnAssetIssuer` — the W1 burn, executor-shaped.** Thin wrapper over `issuerBurnK` at
-the identity registry; same signature as the legacy `recKBurnAsset`. -/
+the identity registry; same signature as the executor's `recKBurnAsset`. -/
 def recKBurnAssetIssuer (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
     Option RecordKernelState :=
   issuerBurnK issuerSelf k actor a cell amt
@@ -211,6 +212,18 @@ theorem recKMintAssetIssuer_eq_issuerMove (k : RecordKernelState) (actor cell : 
 theorem recKBurnAssetIssuer_eq_issuerBurn (k : RecordKernelState) (actor cell : CellId)
     (a : AssetId) (amt : ℤ) :
     recKBurnAssetIssuer k actor cell a amt = issuerBurnK issuerSelf k actor a cell amt := rfl
+
+/-- **THE CUTOVER, CLOSED.** The LIVE executor mint (`TurnExecutorFull.recKMintAsset` — what the
+`execFullA` `.mintA`/`.bridgeMintA` arms run) IS the issuer-move at the identity registry,
+definitionally. The rotation this module was groundwork for has LANDED; this `rfl` is the receipt. -/
+theorem recKMintAsset_is_issuerMove (k : RecordKernelState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) :
+    recKMintAsset k actor cell a amt = issuerMoveK issuerSelf k actor a cell amt := rfl
+
+/-- Burn's cutover receipt: the LIVE executor burn IS the issuer-burn. -/
+theorem recKBurnAsset_is_issuerBurn (k : RecordKernelState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) :
+    recKBurnAsset k actor cell a amt = issuerBurnK issuerSelf k actor a cell amt := rfl
 
 /-- The W1 mint preserves the value law (the wrapper inherits the mechanism's preservation). -/
 theorem recKMintAssetIssuer_preserves_exact {k k' : RecordKernelState} {actor cell : CellId}
@@ -231,10 +244,10 @@ What makes the issuer-move a REPAIR: the deployed `recKMintAsset` (supply-increm
 supply-inflating step is provably rejected by `ExactConservation`. -/
 
 /-- Shape of a committed legacy mint (gate-peeled): the post-state is the `recBalCredit` write. -/
-private theorem recKMintAsset_shape {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId}
-    {amt : ℤ} (h : recKMintAsset k actor cell a amt = some k') :
+private theorem recKMintAssetLegacy_shape {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId}
+    {amt : ℤ} (h : recKMintAssetLegacy k actor cell a amt = some k') :
     k' = { k with bal := recBalCredit k.bal cell a amt } := by
-  unfold recKMintAsset at h
+  unfold recKMintAssetLegacy at h
   by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ cell ∈ k.accounts
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
@@ -243,10 +256,10 @@ private theorem recKMintAsset_shape {k k' : RecordKernelState} {actor cell : Cel
     exact absurd h (by simp)
 
 /-- Shape of a committed legacy burn. -/
-private theorem recKBurnAsset_shape {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId}
-    {amt : ℤ} (h : recKBurnAsset k actor cell a amt = some k') :
+private theorem recKBurnAssetLegacy_shape {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId}
+    {amt : ℤ} (h : recKBurnAssetLegacy k actor cell a amt = some k') :
     k' = { k with bal := recBalCredit k.bal cell a (-amt) } := by
-  unfold recKBurnAsset at h
+  unfold recKBurnAssetLegacy at h
   by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
       ∧ cell ∈ k.accounts
   · rw [if_pos hg] at h
@@ -259,10 +272,10 @@ private theorem recKBurnAsset_shape {k k' : RecordKernelState} {actor cell : Cel
 `recKMintAsset` of a positive amount on a conserved state yields a NON-conserved state — supply
 inflation is provably not conservation-preserving (instantiates `recKMintAsset_delta`). -/
 theorem recKMintAsset_breaks_exact {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId}
-    {amt : ℤ} (h : recKMintAsset k actor cell a amt = some k') (hpos : 0 < amt)
+    {amt : ℤ} (h : recKMintAssetLegacy k actor cell a amt = some k') (hpos : 0 < amt)
     (hex : ExactConservation k) : ¬ ExactConservation k' := by
   intro hex'
-  have hd := recKMintAsset_delta k k' actor cell a amt h a
+  have hd := recKMintAssetLegacy_delta k k' actor cell a amt h a
   rw [if_pos rfl] at hd
   have h0 := hex a
   have h1 := hex' a
@@ -271,10 +284,10 @@ theorem recKMintAsset_breaks_exact {k k' : RecordKernelState} {actor cell : Cell
 /-- **NON-VACUITY TOOTH: the LEGACY burn provably BREAKS the value law** (the dual: bare supply
 destruction is just as non-conserving as bare creation). -/
 theorem recKBurnAsset_breaks_exact {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId}
-    {amt : ℤ} (h : recKBurnAsset k actor cell a amt = some k') (hpos : 0 < amt)
+    {amt : ℤ} (h : recKBurnAssetLegacy k actor cell a amt = some k') (hpos : 0 < amt)
     (hex : ExactConservation k) : ¬ ExactConservation k' := by
   intro hex'
-  have hd := recKBurnAsset_delta k k' actor cell a amt h a
+  have hd := recKBurnAssetLegacy_delta k k' actor cell a amt h a
   rw [if_pos rfl] at hd
   have h0 := hex a
   have h1 := hex' a
@@ -325,12 +338,12 @@ NOTHING about the recipient's credit, it only makes the supply increment land ON
 well) instead of off it. -/
 theorem issuerMint_pointwise_vs_credit {k kL kI : RecordKernelState} {actor cell : CellId}
     {a : AssetId} {amt : ℤ}
-    (hL : recKMintAsset k actor cell a amt = some kL)
+    (hL : recKMintAssetLegacy k actor cell a amt = some kL)
     (hI : recKMintAssetIssuer k actor cell a amt = some kI) :
     ∀ c b, kI.bal c b
       = kL.bal c b - (if c = issuerSelf a ∧ b = a then amt else 0) := by
   -- peel both committed writes.
-  have hLs := recKMintAsset_shape hL
+  have hLs := recKMintAssetLegacy_shape hL
   have hIs : kI = { k with bal := recTransferBal k.bal (issuerSelf a) cell a amt } := by
     unfold recKMintAssetIssuer issuerMoveK at hI
     by_cases hg : mintAuthorizedB k.caps actor (issuerSelf a) = true ∧ 0 ≤ amt
@@ -439,9 +452,9 @@ def kGenLegacy : RecordKernelState :=
 -- THE LEGACY BREAK, witnessed: the deployed credit-mint commits and the supply at asset 0 INFLATES
 -- to 5 ≠ 0 — the conserved state is taken OUT of the law (the executable face of
 -- `recKMintAsset_breaks_exact`).
-#guard ((recKMintAsset kGenLegacy 9 2 0 5).isSome)
-#guard ((recKMintAsset kGenLegacy 9 2 0 5).map (fun k' => recTotalAsset k' 0)) == some 5
-#guard (((recKMintAsset kGenLegacy 9 2 0 5).map
+#guard ((recKMintAssetLegacy kGenLegacy 9 2 0 5).isSome)
+#guard ((recKMintAssetLegacy kGenLegacy 9 2 0 5).map (fun k' => recTotalAsset k' 0)) == some 5
+#guard (((recKMintAssetLegacy kGenLegacy 9 2 0 5).map
           (fun k' => recTotalAsset k' 0 == 0)) == some false)
 
 end Dregg2.Exec.IssuerMove

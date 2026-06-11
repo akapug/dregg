@@ -97,9 +97,9 @@ equality, is what `mintA_full_sound` consumes abstractly; the gate VALUES the `#
 only on the digest value, identical between the two carriers.) -/
 def mintActiveConcrete : ActiveComponent RecChainedState MintArgs where
   digest    := fun k => balDigConcrete k.bal
-  expected  := fun s args => balDigConcrete (recBalCredit s.kernel.bal args.cell args.a args.amt)
+  expected  := fun s args => balDigConcrete (recTransferBal s.kernel.bal args.a args.cell args.a args.amt)
   postClause := fun s args post =>
-    balDigConcrete post.bal = balDigConcrete (recBalCredit s.kernel.bal args.cell args.a args.amt)
+    balDigConcrete post.bal = balDigConcrete (recTransferBal s.kernel.bal args.a args.cell args.a args.amt)
   binds     := fun _ _ _ h => h
   encodes   := fun _ _ _ h => h
 
@@ -109,7 +109,7 @@ decidable `#guard`s. The guard sub-system, log update and rest frame are mint's 
 def mintEConcrete : EffectSpec2 RecChainedState MintArgs where
   view         := chainView
   active       := mintActiveConcrete
-  logUpdate    := some (fun s args => mintReceipt args.actor args.cell args.amt :: s.log)
+  logUpdate    := some (fun s args => mintReceipt args.actor args.cell args.a args.amt :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
@@ -214,8 +214,9 @@ def kM0 : RecordKernelState :=
 /-- The concrete pre chained state (empty receipt log). -/
 def sM0 : RecChainedState := { kernel := kM0, log := [] }
 
-/-- The good mint args: actor 0 mints 30 of asset 0 into cell 0. -/
-def goodMintArgs : MintArgs := { actor := 0, cell := 0, a := 0, amt := 30 }
+/-- The good mint args (W1): actor 0 (holding the `node 0` ISSUER cap) mints 30 of asset 0 into
+cell 1 — the issuer-move: well 0 falls 100 → 70, recipient 1 rises 5 → 35, Σ unchanged. -/
+def goodMintArgs : MintArgs := { actor := 0, cell := 1, a := 0, amt := 30 }
 
 /-- The honest post-state (the executor's committed result of the mint). -/
 def goodMintPost : RecChainedState :=

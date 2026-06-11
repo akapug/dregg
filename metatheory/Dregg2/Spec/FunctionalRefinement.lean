@@ -136,17 +136,17 @@ def fx : RecordKernelState :=
 
 /-! ## §6 — THIRD FAMILY: VALUE SUPPLY (mint / burn) — the per-asset supply triangle.
 
-The supply ops (`Handlers.StateSupply.mintStep`/`burnStep`) move the ONE quantity that legitimately
-changes the conserved per-asset measure. We give each an INDEPENDENT intent spec over the `bal`
-ledger (the asset-`a` column of cell `c` rises/falls by `amt`, every OTHER (cell, asset) pair
-literally untouched — `intentCredit`/`intentDebit`, the SAME intent oracles §0 wrote from protocol
-intent) and prove the triangle + anti-ghost tooth. A wrong amount / wrong asset / wrong holder is
+W1 (DREGG3 §2.2): the supply ops (`Handlers.StateSupply.mintStep`/`burnStep`) are ISSUER-MOVES —
+they CONSERVE the per-asset measure exactly (the issuer's negative-capable well absorbs every
+mint and receives every burn). We give each an INDEPENDENT intent spec over the `bal` ledger (the
+well and the holder columns move in lockstep by `amt`, every OTHER (cell, asset) pair literally
+untouched — composed from §0's `intentCredit`/`intentDebit` oracles) and prove the triangle +
+anti-ghost tooth. A wrong amount / wrong asset / wrong holder / a third touched column is
 REJECTED — the supply move is pinned to the unique intent post-state.
 
-The executor commits via the kernel op `recBalCredit cell a (±amt)`; our spec commits via the
-independent `intentCredit`/`intentDebit cell a amt`. They are EQUAL (`intentCredit_eq_balCredit`),
-proving the executor moves the INTENDED column — it would be FALSE if it credited the wrong cell,
-the wrong asset, or the wrong sign. -/
+The executor commits via the kernel op `recTransferBal` (well ↔ holder); our spec commits via the
+independent intent composition. They are EQUAL (`intentMove_eq_transferBal`), proving the executor
+moves the INTENDED columns — it would be FALSE if it spilled either leg anywhere else. -/
 
 open Dregg2.Exec.Handlers.StateSupply (SupplyArgs mintStep burnStep)
 
@@ -171,37 +171,66 @@ theorem intentDebit_eq_balCredit (bal : CellId → AssetId → ℤ) (c : CellId)
   · simp only [if_pos h]; ring
   · simp only [if_neg h]
 
-/-- **`mintSpec` — the INDEPENDENT declarative post-state of a per-asset mint.** Cell `a.cell`'s
-asset-`a.asset` column rises by `a.amt` (`intentCredit`); EVERYTHING ELSE (accounts, caps, escrows,
-nullifiers, every other (cell, asset) column) untouched. Written from supply intent ("coin `amt`
-of `asset` into `cell`"), NOT from `recKMintAsset`. -/
-def mintSpec (k : RecordKernelState) (a : SupplyArgs) : RecordKernelState :=
-  { k with bal := intentCredit k.bal a.cell a.asset a.amt }
+/-- **`intentMove_eq_transferBal` — the two-column intent bridge (W1).** The intent composition
+"debit `src`'s `a`-column by `amt`, then credit `dst`'s" coincides pointwise with the kernel's
+`recTransferBal` write (for `src ≠ dst` — the committed case). The SPEC (intent) and the EXECUTOR
+(kernel op) provably agree on the issuer-move; it would be FALSE if the executor spilled either leg
+onto another column. -/
+theorem intentMove_eq_transferBal (bal : CellId → AssetId → ℤ) (src dst : CellId) (a : AssetId)
+    (amt : ℤ) (hne : src ≠ dst) :
+    intentCredit (intentDebit bal src a amt) dst a amt = recTransferBal bal src dst a amt := by
+  funext x b
+  unfold intentCredit intentDebit recTransferBal
+  rcases eq_or_ne b a with hb | hb
+  · rcases eq_or_ne x src with hx | hx
+    · have hxd : ¬ (x = dst ∧ b = a) := fun hp => hne (hx.symm.trans hp.1)
+      rw [if_neg hxd, if_pos ⟨hx, hb⟩, if_pos hb, if_pos hx]
+    · rcases eq_or_ne x dst with hxd | hxd
+      · have hxs : ¬ (x = src ∧ b = a) := fun hp => hx hp.1
+        rw [if_pos ⟨hxd, hb⟩, if_neg hxs, if_pos hb, if_neg hx, if_pos hxd]
+      · have h1 : ¬ (x = dst ∧ b = a) := fun hp => hxd hp.1
+        have h2 : ¬ (x = src ∧ b = a) := fun hp => hx hp.1
+        rw [if_neg h1, if_neg h2, if_pos hb, if_neg hx, if_neg hxd]
+  · have h1 : ¬ (x = dst ∧ b = a) := fun hp => hb hp.2
+    have h2 : ¬ (x = src ∧ b = a) := fun hp => hb hp.2
+    rw [if_neg h1, if_neg h2, if_neg hb]
 
-/-- **`burnSpec` — the INDEPENDENT declarative post-state of a per-asset burn.** The dual: cell
-`a.cell`'s asset-`a.asset` column FALLS by `a.amt` (`intentDebit`); all else fixed. Written from
-intent ("annihilate `amt` of `asset` from `cell`"). -/
+/-- **`mintSpec` — the INDEPENDENT declarative post-state of a per-asset mint (W1: the
+ISSUER-MOVE).** The issuer's well — row `a.asset` of column `a.asset` (`AssetId := CellId`: the
+asset IS its issuer cell) — FALLS by `a.amt` while the recipient `a.cell`'s column RISES by
+`a.amt`; EVERYTHING ELSE (accounts, caps, nullifiers, every other (cell, asset) column) untouched.
+Written from supply intent ("the issuer releases `amt` of its asset into `cell`; the well carries
+−supply"), NOT from `recKMintAsset`. -/
+def mintSpec (k : RecordKernelState) (a : SupplyArgs) : RecordKernelState :=
+  { k with bal := intentCredit (intentDebit k.bal a.asset a.asset a.amt) a.cell a.asset a.amt }
+
+/-- **`burnSpec` — the INDEPENDENT declarative post-state of a per-asset burn (W1: the
+RETURN-TO-WELL).** The dual: holder `a.cell`'s column FALLS by `a.amt` while the issuer's well
+RISES by `a.amt` (toward zero — supply shrinks); all else fixed. Written from intent ("return
+`amt` of `asset` from `cell` to its issuer's well"). -/
 def burnSpec (k : RecordKernelState) (a : SupplyArgs) : RecordKernelState :=
-  { k with bal := intentDebit k.bal a.cell a.asset a.amt }
+  { k with bal := intentCredit (intentDebit k.bal a.cell a.asset a.amt) a.asset a.asset a.amt }
 
 /-- The mint gate (intent-level precondition), re-expressed as the conjunction the executor checks:
-the target cell is Live (`acceptsEffects`), the actor holds PRIVILEGED mint authority (a `node`/
-`control` cap — not bare ownership), the amount is non-negative, and the cell is a live account. -/
+the recipient is Live (`acceptsEffects`), the actor holds PRIVILEGED mint authority over the
+**ISSUER** `a.asset` (W1/E2 — a `node`/`control` cap on the issuer cell, never the recipient), the
+amount is non-negative, the issuer well + recipient are live accounts, and issuer ≠ recipient. -/
 def mintGate (k : RecordKernelState) (a : SupplyArgs) : Prop :=
   acceptsEffects k a.cell = true ∧
-  mintAuthorizedB k.caps a.actor a.cell = true ∧ 0 ≤ a.amt ∧ a.cell ∈ k.accounts
+  mintAuthorizedB k.caps a.actor a.asset = true ∧ 0 ≤ a.amt
+    ∧ a.asset ∈ k.accounts ∧ a.cell ∈ k.accounts ∧ a.asset ≠ a.cell
 
-/-- The burn gate: the mint gate PLUS availability in the burned asset's column (you cannot burn
-more than the cell holds). -/
+/-- The burn gate: issuer authority PLUS availability at the HOLDER (you cannot burn more than the
+holder holds; only the issuer WELL is negative-capable) + liveness + distinctness. -/
 def burnGate (k : RecordKernelState) (a : SupplyArgs) : Prop :=
   acceptsEffects k a.cell = true ∧
-  mintAuthorizedB k.caps a.actor a.cell = true ∧ 0 ≤ a.amt ∧ a.amt ≤ k.bal a.cell a.asset ∧
-  a.cell ∈ k.accounts
+  mintAuthorizedB k.caps a.actor a.asset = true ∧ 0 ≤ a.amt ∧ a.amt ≤ k.bal a.cell a.asset ∧
+  a.cell ∈ k.accounts ∧ a.asset ∈ k.accounts ∧ a.cell ≠ a.asset
 
 /-- **THE MINT TRIANGLE (FULL BICONDITIONAL).** `mintStep k a = some k'` IFF the mint gate
 holds AND `k' = mintSpec k a`. The `→` is output-uniqueness (a commit pins the unique intent
-post-state — the credit lands on EXACTLY cell `a.cell`'s asset `a.asset` column, by EXACTLY `+a.amt`,
-strictly stronger than `recTotalAsset += amt`); the `←` is completeness (the gate suffices). -/
+post-state — the well debits AND the recipient credits, by EXACTLY `a.amt`, with no third column
+touched — strictly stronger than the Σ-statement); the `←` is completeness (the gate suffices). -/
 theorem mint_triangle (k k' : RecordKernelState) (a : SupplyArgs) :
     mintStep k a = some k' ↔ (mintGate k a ∧ k' = mintSpec k a) := by
   unfold mintStep recKMintAsset mintGate mintSpec
@@ -209,15 +238,17 @@ theorem mint_triangle (k k' : RecordKernelState) (a : SupplyArgs) :
   · intro h
     by_cases hadm : acceptsEffects k a.cell = true
     · rw [if_pos hadm] at h
-      by_cases hg : mintAuthorizedB k.caps a.actor a.cell = true ∧ 0 ≤ a.amt ∧ a.cell ∈ k.accounts
+      by_cases hg : mintAuthorizedB k.caps a.actor a.asset = true ∧ 0 ≤ a.amt
+          ∧ a.asset ∈ k.accounts ∧ a.cell ∈ k.accounts ∧ a.asset ≠ a.cell
       · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
-        obtain ⟨hauth, hamt, hacc⟩ := hg
-        refine ⟨⟨hadm, hauth, hamt, hacc⟩, ?_⟩
-        rw [← h, intentCredit_eq_balCredit]
+        obtain ⟨hauth, hamt, hiss, hacc, hne⟩ := hg
+        refine ⟨⟨hadm, hauth, hamt, hiss, hacc, hne⟩, ?_⟩
+        rw [← h, intentMove_eq_transferBal k.bal a.asset a.cell a.asset a.amt hne]
       · rw [if_neg hg] at h; exact absurd h (by simp)
     · rw [if_neg hadm] at h; exact absurd h (by simp)
-  · rintro ⟨⟨hadm, hauth, hamt, hacc⟩, hk⟩
-    rw [if_pos hadm, if_pos ⟨hauth, hamt, hacc⟩, hk, intentCredit_eq_balCredit]
+  · rintro ⟨⟨hadm, hauth, hamt, hiss, hacc, hne⟩, hk⟩
+    rw [if_pos hadm, if_pos ⟨hauth, hamt, hiss, hacc, hne⟩, hk,
+        intentMove_eq_transferBal k.bal a.asset a.cell a.asset a.amt hne]
 
 /-- **ANTI-GHOST TOOTH (mint).** Any candidate `k'' ≠ mintSpec k a` is REJECTED — a mint
 that credited a WRONG amount, the WRONG asset, the WRONG cell, or touched a 2nd column cannot come
@@ -228,9 +259,9 @@ theorem mint_antighost (k k'' : RecordKernelState) (a : SupplyArgs)
   exact hne ((mint_triangle k k'' a).mp h).2
 
 /-- **THE BURN TRIANGLE (FULL BICONDITIONAL).** `burnStep k a = some k'` IFF the burn gate
-(incl. availability in the burned asset) holds AND `k' = burnSpec k a`. The `→` pins the unique
-intent post-state (the DEBIT lands on EXACTLY cell `a.cell`'s asset `a.asset` column, by EXACTLY
-`-a.amt`); the `←` is completeness. -/
+(incl. availability at the HOLDER) holds AND `k' = burnSpec k a`. The `→` pins the unique
+intent post-state (the holder's debit lands in the issuer's WELL, by EXACTLY `a.amt`, no third
+column touched); the `←` is completeness. -/
 theorem burn_triangle (k k' : RecordKernelState) (a : SupplyArgs) :
     burnStep k a = some k' ↔ (burnGate k a ∧ k' = burnSpec k a) := by
   unfold burnStep recKBurnAsset burnGate burnSpec
@@ -238,16 +269,18 @@ theorem burn_triangle (k k' : RecordKernelState) (a : SupplyArgs) :
   · intro h
     by_cases hadm : acceptsEffects k a.cell = true
     · rw [if_pos hadm] at h
-      by_cases hg : mintAuthorizedB k.caps a.actor a.cell = true ∧ 0 ≤ a.amt
-          ∧ a.amt ≤ k.bal a.cell a.asset ∧ a.cell ∈ k.accounts
+      by_cases hg : mintAuthorizedB k.caps a.actor a.asset = true ∧ 0 ≤ a.amt
+          ∧ a.amt ≤ k.bal a.cell a.asset ∧ a.cell ∈ k.accounts ∧ a.asset ∈ k.accounts
+          ∧ a.cell ≠ a.asset
       · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
-        obtain ⟨hauth, hamt, havail, hacc⟩ := hg
-        refine ⟨⟨hadm, hauth, hamt, havail, hacc⟩, ?_⟩
-        rw [← h, intentDebit_eq_balCredit]
+        obtain ⟨hauth, hamt, havail, hacc, hiss, hne⟩ := hg
+        refine ⟨⟨hadm, hauth, hamt, havail, hacc, hiss, hne⟩, ?_⟩
+        rw [← h, intentMove_eq_transferBal k.bal a.cell a.asset a.asset a.amt hne]
       · rw [if_neg hg] at h; exact absurd h (by simp)
     · rw [if_neg hadm] at h; exact absurd h (by simp)
-  · rintro ⟨⟨hadm, hauth, hamt, havail, hacc⟩, hk⟩
-    rw [if_pos hadm, if_pos ⟨hauth, hamt, havail, hacc⟩, hk, intentDebit_eq_balCredit]
+  · rintro ⟨⟨hadm, hauth, hamt, havail, hacc, hiss, hne⟩, hk⟩
+    rw [if_pos hadm, if_pos ⟨hauth, hamt, havail, hacc, hiss, hne⟩, hk,
+        intentMove_eq_transferBal k.bal a.cell a.asset a.asset a.amt hne]
 
 /-- **ANTI-GHOST TOOTH (burn).** Any candidate `k'' ≠ burnSpec k a` is REJECTED. -/
 theorem burn_antighost (k k'' : RecordKernelState) (a : SupplyArgs)
@@ -448,32 +481,36 @@ theorem noteSpend_double_spend_rejected (k k'' : RecordKernelState) (nf : Nat)
 
 /-! ## §9 — NON-VACUITY TEETH (`#guard`) for the three new families. -/
 
-/-- Value/note fixture: cells 0,1 are accounts; cell 0 holds 100 of asset 0; cell 0 holds the
-PRIVILEGED `node 0` mint cap; all Live. -/
+/-- Value/note fixture (W1): cells 0 (the ISSUER of asset 0) and 1 are accounts; the well holds
+100 and cell 1 holds 50 of asset 0; cell 0 holds the PRIVILEGED `node 0` issuer cap; all Live. -/
 def vfx : RecordKernelState :=
   { accounts := {0, 1}
     cell := fun _ => .record [("balance", .int 0)]
     caps := fun c => if c = 0 then [Dregg2.Authority.Cap.node 0] else []
-    bal := fun c a => if c = 0 ∧ a = 0 then 100 else 0 }
+    bal := fun c a => if c = 0 ∧ a = 0 then 100 else if c = 1 ∧ a = 0 then 50 else 0 }
 
-/-- A mint of 25 of asset 0 into cell 0 (privileged actor 0). -/
-def aMint : SupplyArgs := { actor := 0, cell := 0, asset := 0, amt := 25 }
-/-- A burn of 40 of asset 0 from cell 0. -/
-def aBurn : SupplyArgs := { actor := 0, cell := 0, asset := 0, amt := 40 }
+/-- A mint of 25 of asset 0 (issuer = cell 0) into cell 1 (privileged actor 0). -/
+def aMint : SupplyArgs := { actor := 0, cell := 1, asset := 0, amt := 25 }
+/-- A burn of 40 of asset 0 from holder cell 1 (back to the well). -/
+def aBurn : SupplyArgs := { actor := 0, cell := 1, asset := 0, amt := 40 }
 
--- MINT commits and the supply MOVED: asset-0 column of cell 0 rises 100 → 125 (the spec's credit).
+-- MINT commits as the ISSUER-MOVE: the well falls 100 → 75 while the recipient rises 50 → 75
+-- (Σ unchanged at 150 — the W1 exactness, observable).
 #guard (mintStep vfx aMint).isSome
-#guard ((mintStep vfx aMint).map (fun k => k.bal 0 0)) == some 125
+#guard ((mintStep vfx aMint).map (fun k => (k.bal 0 0, k.bal 1 0))) == some (75, 75)
 -- ...and asset 1 (a DIFFERENT asset) is UNTOUCHED (the per-asset discipline the spec pins).
 #guard ((mintStep vfx aMint).map (fun k => k.bal 0 1)) == some 0
--- MINT anti-ghost (CONCRETE): the spec output's bal 0 0 (125) differs OBSERVABLY from a ghost that
--- left the column at 100 — so by `mint_antighost` such a ghost is refused.
-#guard ((vfx.bal 0 0, (mintSpec vfx aMint).bal 0 0) == (100, 125))
--- UNAUTHORIZED mint (actor 1 holds no node cap) is REJECTED (the privileged gate bites).
+-- MINT anti-ghost (CONCRETE): the spec output's rows (75, 75) differ OBSERVABLY from a ghost that
+-- credited the recipient WITHOUT debiting the well — so by `mint_antighost` such a ghost is refused.
+#guard (((mintSpec vfx aMint).bal 0 0, (mintSpec vfx aMint).bal 1 0) == (75, 75))
+-- UNAUTHORIZED mint (actor 1 holds no issuer cap) is REJECTED (the privileged gate bites).
 #guard ((mintStep vfx { aMint with actor := 1 }).isSome) == false
--- BURN commits and the supply FELL: 100 → 60.
-#guard ((burnStep vfx aBurn).map (fun k => k.bal 0 0)) == some 60
--- BURN over-spend (burn 200 > 100 held) is REJECTED (availability gate).
+-- SELF-mint into the issuer's own well is REJECTED (`asset ≠ cell`).
+#guard ((mintStep vfx { aMint with cell := 0 }).isSome) == false
+-- BURN commits as the RETURN-TO-WELL: holder 50 → 10, well 100 → 140 (Σ unchanged at 150).
+#guard ((burnStep vfx aBurn).map (fun k => (k.bal 1 0, k.bal 0 0))) == some (10, 140)
+-- BURN over-spend (burn 200 > 50 held) is REJECTED (holder availability; only the WELL is
+-- negative-capable).
 #guard ((burnStep vfx { aBurn with amt := 200 }).isSome) == false
 
 /-- Authority fixture: cell 0 holds a `node 7` cap (edge to 7) + `endpoint 9 [write]`; cell 1 holds
@@ -515,6 +552,7 @@ def aDel : DelegateArgs := { delegator := 0, recipient := 1, target := 7, keep :
 
 #assert_axioms intentCredit_eq_balCredit
 #assert_axioms intentDebit_eq_balCredit
+#assert_axioms intentMove_eq_transferBal
 #assert_axioms mint_triangle
 #assert_axioms mint_antighost
 #assert_axioms burn_triangle

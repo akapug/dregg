@@ -74,7 +74,7 @@ def burnGuardProp (s : RecChainedState) (args : BurnArgs) : Prop :=
   BurnGuard s.kernel args.actor args.cell args.a args.amt
 
 instance (s : RecChainedState) (args : BurnArgs) : Decidable (burnGuardProp s args) := by
-  unfold burnGuardProp BurnGuard; exact inferInstanceAs (Decidable (_ ∧ _ ∧ _ ∧ _))
+  unfold burnGuardProp BurnGuard; exact inferInstanceAs (Decidable (_ ∧ _ ∧ _ ∧ _ ∧ _ ∧ _))
 
 /-- The burn guard's witness generator: lay the single `propBit` column at wire `0`. -/
 def burnGuardEncode (s : RecChainedState) (args : BurnArgs) (_s' : RecChainedState) : Assignment :=
@@ -95,20 +95,20 @@ theorem burnGuardLocal (a b : Assignment) (hab : ∀ w, w < 1 → a w = b w) :
       simp only [Constraint.holds, cBitGuard, vBitGuard, Expr.eval, h0] at hcc ⊢
       exact hcc
 
-/-- The `bal` component digest: an injective whole-function hash (carried `Function.Injective D`). The
-spec-predicted value is the DEBIT `recBalCredit … (-amt)` (the SOLE difference from `mintE`, which
-predicts the credit `… amt`). -/
+/-- The `bal` component digest: an injective whole-function hash (carried `Function.Injective D`).
+W1: the spec-predicted value is the RETURN-TO-WELL write `recTransferBal … cell a a amt` — the
+holder debited, the issuer's well credited, in ONE pinned ledger function. -/
 def balComponent (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D) :
     ActiveComponent RecChainedState BurnArgs :=
   funcComponent (β := CellId → AssetId → ℤ) (·.bal) D hD
-    (fun s args => recBalCredit s.kernel.bal args.cell args.a (-args.amt))
+    (fun s args => recTransferBal s.kernel.bal args.cell args.a args.a args.amt)
 
 /-- **`burnE`** — the `EffectSpec2` for `burnA`, supplied to the v2 framework. -/
 def burnE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D) :
     EffectSpec2 RecChainedState BurnArgs where
   view         := chainView
   active       := balComponent D hD
-  logUpdate    := some (fun s args => burnReceipt args.actor args.cell args.amt :: s.log)
+  logUpdate    := some (fun s args => burnReceipt args.actor args.cell args.a args.amt :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
@@ -164,8 +164,8 @@ theorem apex_iff_burnSpec (D : (CellId → AssetId → ℤ) → ℤ) (hD : Funct
     (burnE D hD).apex s args s' ↔ BurnSpec s args.actor args.cell args.a args.amt s' := by
   -- unfold the apex's four conjuncts to the bare components.
   show (burnGuardProp s args
-        ∧ s'.kernel.bal = recBalCredit s.kernel.bal args.cell args.a (-args.amt)
-        ∧ s'.log = burnReceipt args.actor args.cell args.amt :: s.log
+        ∧ s'.kernel.bal = recTransferBal s.kernel.bal args.cell args.a args.a args.amt
+        ∧ s'.log = burnReceipt args.actor args.cell args.a args.amt :: s.log
         ∧ ((burnE D hD).restFrame s.kernel s'.kernel)) ↔ BurnSpec s args.actor args.cell args.a args.amt s'
   unfold BurnSpec burnGuardProp burnE
   constructor

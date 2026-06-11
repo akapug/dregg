@@ -198,14 +198,17 @@ fn skip_no_lean() -> bool {
 // =====================================================================================
 
 #[test]
-fn burn_round_trips() {
+fn burn_refused_under_issuer_supply() {
     if skip_no_lean() {
         return;
     }
-    // Burn is mint/burn-PRIVILEGED in the verified kernel (`mintAuthorizedB actor cell`), so the
-    // actor must hold a self-`node` cap for the Lean gate to commit (bare ownership suffices for
-    // Rust). With the self-cap both producers commit; the burn only debits asset-0 balance, which
-    // the `bal` side-table carries — so the reconstituted ledger agrees on balance, cap_root, root.
+    // W1 (issuer-supply, DREGG3 §2.2): the verified `.burnA` is a RETURN-TO-WELL move — value
+    // flows from the holder back to the asset's ISSUER cell, conserving `Σ_c bal c a` exactly.
+    // The Rust scalar `Effect::Burn` (destroy balance, no destination) has NO conserving image:
+    // on the 1-cell wire numbering it marshals to the self-burn of the well (`cell = asset`),
+    // which the verified kernel refuses outright — cap or no cap. So the verified producer must
+    // REFUSE this turn (the pre-W1 round-trip expectation is retired); agreement returns when the
+    // staged Rust value-model migration makes apply.rs's burn the well move.
     let mut a = make_open_cell(1, 100);
     grant_self_cap(&mut a);
     let a_id = a.id();
@@ -213,7 +216,11 @@ fn burn_round_trips() {
     pre.insert_cell(a).unwrap();
 
     let turn = single_effect_turn(a_id, a_id, 0, Effect::Burn { target: a_id, slot: 0, amount: 40 });
-    diff(pre, turn, &[a_id]).expect("Burn must round-trip through the verified producer");
+    assert!(
+        diff(pre, turn, &[a_id]).is_err(),
+        "W1 regression: the verified producer COMMITTED a supply-destroying scalar burn — under \
+         issuer-supply the burn must be refused until the Rust well migration lands"
+    );
 }
 
 #[test]

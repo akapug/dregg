@@ -55,16 +55,16 @@ def burnSurfaceC : Surface2 := { RH := rhConcrete2, LH := lhConcrete }
 
 def balComponentC (cell : CellId) : ActiveComponent RecChainedState BurnArgs where
   digest    := fun k => balDigestC cell k.bal
-  expected  := fun s args => balDigestC cell (recBalCredit s.kernel.bal args.cell args.a (-args.amt))
+  expected  := fun s args => balDigestC cell (recTransferBal s.kernel.bal args.cell args.a args.a args.amt)
   postClause := fun s args post =>
-    balDigestC cell post.bal = balDigestC cell (recBalCredit s.kernel.bal args.cell args.a (-args.amt))
+    balDigestC cell post.bal = balDigestC cell (recTransferBal s.kernel.bal args.cell args.a args.a args.amt)
   binds     := fun _ _ _ h => h
   encodes   := fun _ _ _ h => h
 
 def burnEC (cell : CellId) : EffectSpec2 RecChainedState BurnArgs where
   view         := chainView
   active       := balComponentC cell
-  logUpdate    := some (fun s args => burnReceipt args.actor args.cell args.amt :: s.log)
+  logUpdate    := some (fun s args => burnReceipt args.actor args.cell args.a args.amt :: s.log)
   restFrame    := fun k k' => True
   guardGates   := burnGuardGates
   guardProp    := burnGuardProp
@@ -108,44 +108,46 @@ def sC0 : RecChainedState :=
         bal := fun c a => if a = 0 then (if c = 0 then 100 else if c = 1 then 5 else if c = 2 then 50 else 0) else 0 }
     log := [] }
 
-/-- Burn 30 of asset 0 out of cell 0 (actor 0). -/
-def goodArgsC : BurnArgs := { actor := 0, cell := 0, a := 0, amt := 30 }
+/-- Burn 5 of asset 0 from holder cell 1 back to the issuer's well 0 (W1: actor 0 holds the
+`node 0` ISSUER cap; holder 1 has exactly 5; the well rises 100 → 105). -/
+def goodArgsC : BurnArgs := { actor := 0, cell := 1, a := 0, amt := 5 }
 
-def goodPostC : RecChainedState := (recCBurnAsset sC0 0 0 0 30).getD sC0
+def goodPostC : RecChainedState := (recCBurnAsset sC0 0 1 0 5).getD sC0
 
-/-- THE FORGERY: cell 0 debited (70), but bystander cell 2 minted 50 → 999. -/
+/-- THE FORGERY: the burn legs honest (holder 1 → 0, well 0 → 105), but bystander cell 2 minted
+50 → 999. -/
 def forgedBalC : CellId → AssetId → ℤ :=
-  fun c a => if a = 0 then (if c = 0 then 70 else if c = 1 then 5 else if c = 2 then 999 else 0) else 0
+  fun c a => if a = 0 then (if c = 0 then 105 else if c = 1 then 0 else if c = 2 then 999 else 0) else 0
 
 def forgedPostC : RecChainedState :=
   { kernel := { goodPostC.kernel with bal := forgedBalC }, log := goodPostC.log }
 
 def honestWitness : List Int := burnWitnessVec sC0 goodArgsC
-def forgedWitness : List Int := witnessOf 0 sC0 goodArgsC forgedPostC
+def forgedWitness : List Int := witnessOf 1 sC0 goodArgsC forgedPostC
 
 #guard honestWitness.length == 72
 #guard forgedWitness.length == 72
 
 -- (2) EXECUTE→PROVE: the executor-derived witness SATISFIES the circuit.
-#guard decide (satisfied (effectCircuit2 (burnEC 0))
-  (encodeE2 burnSurfaceC (burnEC 0) sC0 goodArgsC goodPostC))
+#guard decide (satisfied (effectCircuit2 (burnEC 1))
+  (encodeE2 burnSurfaceC (burnEC 1) sC0 goodArgsC goodPostC))
 #guard honestWitness.getD 66 0 == honestWitness.getD 67 0
 #guard honestWitness.getD 68 0 == honestWitness.getD 69 0
 #guard honestWitness.getD 70 0 == honestWitness.getD 71 0
 
 -- (3) ANTI-GHOST: the forged bystander-mint post-state FAILS the component-bind gate (68 ≠ 69).
-#guard decide (satisfied (effectCircuit2 (burnEC 0))
-  (encodeE2 burnSurfaceC (burnEC 0) sC0 goodArgsC forgedPostC)) == false
+#guard decide (satisfied (effectCircuit2 (burnEC 1))
+  (encodeE2 burnSurfaceC (burnEC 1) sC0 goodArgsC forgedPostC)) == false
 #guard !(forgedWitness.getD 68 0 == forgedWitness.getD 69 0)
 
 /-- HIGH-field anti-ghost tooth: bystander cell 2 forged ABOVE 10⁶ (the OLD `% 10⁶` fold collided here;
 `refP2` does NOT). The `bal` bind gate `68 ≠ 69` still rejects. -/
 def forgedBalHighC : CellId → AssetId → ℤ :=
-  fun c a => if a = 0 then (if c = 0 then 70 else if c = 1 then 5 else if c = 2 then 50 + 1000000 else 0) else 0
+  fun c a => if a = 0 then (if c = 0 then 105 else if c = 1 then 0 else if c = 2 then 50 + 1000000 else 0) else 0
 def forgedPostHighC : RecChainedState :=
   { kernel := { goodPostC.kernel with bal := forgedBalHighC }, log := goodPostC.log }
-#guard decide (satisfied (effectCircuit2 (burnEC 0))
-  (encodeE2 burnSurfaceC (burnEC 0) sC0 goodArgsC forgedPostHighC)) == false
+#guard decide (satisfied (effectCircuit2 (burnEC 1))
+  (encodeE2 burnSurfaceC (burnEC 1) sC0 goodArgsC forgedPostHighC)) == false
 
 /-! ## §5 — JSON export. -/
 

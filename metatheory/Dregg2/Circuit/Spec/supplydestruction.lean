@@ -1,6 +1,6 @@
 /-
 # Dregg2.Circuit.Spec.supplydestruction — INDEPENDENT full-state spec ⟺ executor for the
-**supply-destruction** effect family (variant: `burnA`).
+**supply-destruction** effect family (variant: `burnA` — W1: the RETURN-TO-WELL move).
 
 This is a LEAF module copying the proven reference pattern of `Dregg2/Circuit/Transfer.lean`
 (`TransferSpec` + `recKExec_iff_spec` + `recTransfer_correct`), but applied to the per-asset SUPPLY
@@ -8,54 +8,39 @@ BURN — the only `supply-destruction` constructor of `FullActionA`. It does NOT
 Transfer.lean; it stands on its own over the SAME real executor (`Exec.execFullA` →
 `Exec.recCBurnAsset` → `Exec.recKBurnAsset`, `TurnExecutorFull.lean`).
 
-## What the executor ACTUALLY does (read from CODE, `TurnExecutorFull.lean`)
+## What the executor ACTUALLY does (read from CODE, `TurnExecutorFull.lean` — W1)
 
-The dispatch arm (`execFullA`, line 3484) is
+The dispatch arm (`execFullA`) is
 
     | .burnA actor cell a amt   => recCBurnAsset s actor cell a amt
 
-and the chained burn (`recCBurnAsset`, line 762) runs the kernel burn and, on success, prepends a
-DISCLOSING receipt `{ actor := actor, src := cell, dst := cell, amt := -amt }` to the log:
+and the chained burn (`recCBurnAsset`) runs the kernel burn and, on success, prepends the TRUTHFUL
+return-to-well receipt `{ actor := actor, src := cell, dst := a, amt := amt }` to the log.
 
-    def recCBurnAsset (s) (actor cell) (a) (amt) : Option RecChainedState :=
-      match recKBurnAsset s.kernel actor cell a amt with
-      | some k' => some { kernel := k', log := { actor, src:=cell, dst:=cell, amt:=-amt } :: s.log }
-      | none    => none
-
-The kernel burn (`recKBurnAsset`, line 696) is the GATED debit of cell `cell`'s asset `a` on the
-PER-ASSET ledger `bal` (a credit of `-amt`):
+The kernel burn (`recKBurnAsset`) is the W1 ISSUER-MOVE with direction swapped — an ordinary
+per-asset transfer `cell → a` (holder → issuer well) on the PER-ASSET ledger `bal`:
 
     def recKBurnAsset (k) (actor cell) (a) (amt) : Option RecordKernelState :=
-      if mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a ∧ cell ∈ k.accounts
-      then some { k with bal := recBalCredit k.bal cell a (-amt) }
+      if mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+          ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
+      then some { k with bal := recTransferBal k.bal cell a a amt }
       else none
 
-## ⚑ DISCREPANCY with the task brief (REPORTED, not silently fixed)
-
-The brief stated the guard as `supplyAuthB s.kernel.caps actor cell ∧ amt ≤ balOf(kernel.cell cell)
-at asset a`, rewriting `kernel.bal (cell debited -amt at asset a)`. The REAL code (which this spec is
-faithful to) differs on two points:
-
-  1. **Authority predicate** = `mintAuthorizedB` (a `node`/`control` privileged-supply cap — the SAME
-     gate the mint uses), NOT a separate `supplyAuthB` (no such symbol exists in the executor).
-  2. **Availability slice** = `amt ≤ k.bal cell a` (the PER-ASSET ledger `bal`), NOT
-     `balOf (k.cell cell)` (the legacy scalar `balance` FIELD of the cell record). The brief's
-     "at asset a" is the ledger read; "balOf(kernel.cell cell)" is the wrong component — the burn
-     touches `bal`, never the `cell` record.
-  3. Guard also carries `0 ≤ amt` (non-negativity, no negative-burn inflation) — present in code,
-     absent from the brief.
-
-These are documentation drift in the brief, not executor bugs. The spec below is bound to the CODE.
+W1 (DREGG3 §2.2): `AssetId := CellId` — the asset IS its issuer cell; burning RETURNS value to the
+issuer's negative-capable well (the well's balance rises toward zero — supply shrinks), so
+`Σ_c bal c a` is EXACTLY unchanged. The authority gate targets the **ISSUER** `a` (E2); the HOLDER
+keeps the ordinary availability gate (`amt ≤ bal cell a` — you can only burn what you hold; only
+the issuer WELL waives availability).
 
 ## The spec ⟺ executor theorem (BOTH directions — the crown-jewel shape)
 
 `BurnSpec s t s'` is the INDEPENDENT declarative full-state post-condition: the guard holds, the
-post-ledger is EXACTLY `recBalCredit s.kernel.bal cell a (-amt)`, the log gets the disclosing receipt
-prepended, and EVERY OTHER kernel field (the 16 non-`bal` components) is LITERALLY unchanged (the
+post-ledger is EXACTLY `recTransferBal s.kernel.bal cell a a amt` (the return-to-well write), the
+log gets the truthful receipt prepended, and EVERY OTHER kernel field is LITERALLY unchanged (the
 FRAME). No frame clause mentions the executor. `recCBurnAsset_iff_spec` proves the executor meets it
 EXACTLY, both ways — the `→` VALIDATES the executor against the spec (a silently-mutated field would
 make the proof FAIL), the `←` reconstructs the committed state. `recBurn_ledger_correct` validates
-the `recBalCredit` post-ledger helper declaratively (the analog of `recTransfer_correct`).
+the post-ledger helper declaratively (the analog of `recTransfer_correct`).
 -/
 import Dregg2.Exec.TurnExecutorFull
 
@@ -67,67 +52,77 @@ open Dregg2.Exec.TurnExecutorFull
 /-! ## §1 — The full admissibility guard the executor checks (the `recKBurnAsset` `if`).
 
 Extracted as a `Prop` so the spec ⟺ executor proof is a clean re-assembly. This is the EXACT
-conjunction in `recKBurnAsset` (`TurnExecutorFull.lean:698`): privileged-supply authority over the
-burned cell, non-negativity (no negative-burn value inflation), per-asset availability (no
-over-burn / supply cannot go below what the cell holds in that asset), and cell-liveness. -/
+conjunction in `recKBurnAsset` (W1): privileged-supply authority over the **ISSUER** `a` (E2 — the
+production law's destruction face), non-negativity (no negative-burn value inflation), per-asset
+availability at the HOLDER (no over-burn), holder + issuer-well liveness, and holder ≠ well. -/
 def BurnGuard (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) : Prop :=
-  mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a ∧ cell ∈ k.accounts
+  mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+    ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
 
-/-- The disclosing burn receipt the chained executor prepends to the log (`recCBurnAsset`,
-`TurnExecutorFull.lean:765`): a self-loop turn `cell→cell` disclosing the NEGATIVE moved amount. -/
-def burnReceipt (actor cell : CellId) (amt : ℤ) : Turn :=
-  { actor := actor, src := cell, dst := cell, amt := -amt }
+/-- The truthful burn receipt the chained executor prepends to the log: the return-to-well row
+`holder cell → well a` of the burned `amt` (W1: an ordinary move, no negative-disclosure fiction). -/
+def burnReceipt (actor cell : CellId) (a : AssetId) (amt : ℤ) : Turn :=
+  { actor := actor, src := cell, dst := a, amt := amt }
 
 /-! ## §2 — `recKBurnAsset` commits IFF its guard holds (the kernel side, both directions). -/
 
 /-- The kernel burn commits IFF its admissibility guard holds; and the committed post-kernel is then
-the `recBalCredit … (-amt)` debit (other kernel fields preserved by the record update `{ k with … }`).
-This pins the kernel arm so the chained spec is a clean lift. -/
+the `recTransferBal … cell a a amt` return-to-well write (other kernel fields preserved by the
+record update `{ k with … }`). This pins the kernel arm so the chained spec is a clean lift. -/
 theorem recKBurnAsset_iff_guard (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
     (∃ k', recKBurnAsset k actor cell a amt = some k') ↔ BurnGuard k actor cell a amt := by
   unfold recKBurnAsset BurnGuard
   constructor
   · rintro ⟨k', h⟩
-    by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
-        ∧ cell ∈ k.accounts
+    by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+        ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
     · exact hg
     · rw [if_neg hg] at h; exact absurd h (by simp)
   · intro hg; exact ⟨_, by rw [if_pos hg]⟩
 
-/-! ## §3 — DECLARATIVE validation of the post-ledger helper `recBalCredit` (the `recTransfer_correct`
-analog).
+/-! ## §3 — DECLARATIVE validation of the post-ledger helper (the `recTransfer_correct` analog).
 
-`recBalCredit bal cell a (-amt)` is the ONLY component the burn rewrites. We validate it DECLARATIVELY
-(not trusting the helper blindly): a burn lowers cell `cell`'s asset `a` by exactly `amt`, and leaves
-EVERY OTHER `(cell, asset)` ledger entry literally untouched. So the spec's
-`s'.kernel.bal = recBalCredit …` clause encodes debit ∧ ledger-frame. -/
-theorem recBurn_ledger_correct (bal : CellId → AssetId → ℤ) (cell : CellId) (a : AssetId) (amt : ℤ) :
-    recBalCredit bal cell a (-amt) cell a = bal cell a - amt
-    ∧ (∀ c b, ¬ (c = cell ∧ b = a) → recBalCredit bal cell a (-amt) c b = bal c b) := by
-  refine ⟨?_, ?_⟩
-  · simp only [recBalCredit, and_self, if_true]; ring
-  · intro c b hcb; simp only [recBalCredit, if_neg hcb]
+`recTransferBal bal cell a a amt` (the return-to-well write) is the ONLY component the burn
+rewrites. We validate it DECLARATIVELY: the holder's `(cell, a)` entry falls by exactly `amt`, the
+issuer's well `(a, a)` rises by exactly `amt` (toward zero — supply shrinks), and EVERY OTHER
+`(cell, asset)` ledger entry is literally untouched. Debit ∧ well-credit ∧ ledger-frame. -/
+theorem recBurn_ledger_correct (bal : CellId → AssetId → ℤ) (cell : CellId) (a : AssetId) (amt : ℤ)
+    (hne : cell ≠ a) :
+    recTransferBal bal cell a a amt cell a = bal cell a - amt
+    ∧ recTransferBal bal cell a a amt a a = bal a a + amt
+    ∧ (∀ c b, ¬ (c = cell ∧ b = a) → ¬ (c = a ∧ b = a)
+        → recTransferBal bal cell a a amt c b = bal c b) := by
+  refine ⟨?_, ?_, ?_⟩
+  · unfold recTransferBal
+    rw [if_pos rfl, if_pos rfl]
+  · unfold recTransferBal
+    rw [if_pos rfl, if_neg (Ne.symm hne), if_pos rfl]
+  · intro c b hnc hni
+    unfold recTransferBal
+    rcases eq_or_ne b a with hb | hb
+    · have hcc : c ≠ cell := fun h => hnc ⟨h, hb⟩
+      have hci : c ≠ a := fun h => hni ⟨h, hb⟩
+      rw [if_pos hb, if_neg hcc, if_neg hci]
+    · rw [if_neg hb]
 
 /-! ## §4 — FULL-STATE SEMANTIC SPEC (the INDEPENDENT reference) + executor ⟺ spec.
 
 `BurnSpec` is the COMPLETE declarative state transition of a committed `burnA`, written INDEPENDENTLY
 of the executor (no `recKBurnAsset`/`recCBurnAsset` term in any frame clause). It enumerates:
   * the guard `BurnGuard` (admissibility),
-  * the post-ledger `bal` (the SOLE rewritten component): exactly `recBalCredit … (-amt)`,
-  * the log: the disclosing receipt prepended (the ONLY other rewritten component, in `RecChainedState`),
-  * EVERY OTHER of the 16 non-`bal` kernel fields LITERALLY unchanged (the FRAME) —
-    `accounts cell caps escrows nullifiers revoked commitments queues swiss slotCaveats factories
-     lifecycle deathCert delegate delegations sealedBoxes`.
+  * the post-ledger `bal` (the SOLE rewritten component): exactly the return-to-well write,
+  * the log: the truthful receipt prepended (the ONLY other rewritten component),
+  * EVERY OTHER non-`bal` kernel field LITERALLY unchanged (the FRAME).
 
 Missing ANY field reintroduces a ghost; all 17 kernel components (16 frozen + `bal` rewritten) plus
 the `log` are enumerated. -/
 def BurnSpec (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (s' : RecChainedState) : Prop :=
   BurnGuard s.kernel actor cell a amt
-  -- the SOLE rewritten kernel component: the per-asset ledger is debited at (cell, a)
-  ∧ s'.kernel.bal = recBalCredit s.kernel.bal cell a (-amt)
-  -- the SOLE rewritten chained component: the disclosing receipt is prepended (newest-first)
-  ∧ s'.log = burnReceipt actor cell amt :: s.log
+  -- the SOLE rewritten kernel component: the per-asset ledger moves holder → well
+  ∧ s'.kernel.bal = recTransferBal s.kernel.bal cell a a amt
+  -- the SOLE rewritten chained component: the truthful receipt is prepended (newest-first)
+  ∧ s'.log = burnReceipt actor cell a amt :: s.log
   -- the FRAME: all 16 OTHER kernel fields LITERALLY unchanged
   ∧ s'.kernel.accounts = s.kernel.accounts
   ∧ s'.kernel.cell = s.kernel.cell
@@ -147,7 +142,7 @@ def BurnSpec (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : �
 /-- **`recCBurnAsset_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The chained record
 executor commits a per-asset burn into `s'` IFF `s'` is EXACTLY the spec'd full post-state. The `→`
 direction VALIDATES `recCBurnAsset` against the independent spec — all 17 kernel components + the log
-are checked, so had the executor silently mutated `caps`/`nullifiers`/`escrows`/any frozen field the
+are checked, so had the executor silently mutated `caps`/`nullifiers`/any frozen field the
 frame clauses would make this proof FAIL; the `←` reconstructs the committed state from the spec.
 This is the executor corner of the spec ⟺ executor ⟺ circuit triangle for `supply-destruction`. -/
 theorem recCBurnAsset_iff_spec (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
@@ -156,8 +151,8 @@ theorem recCBurnAsset_iff_spec (s : RecChainedState) (actor cell : CellId) (a : 
   unfold recCBurnAsset BurnSpec
   -- expose the inner kernel burn `if`
   unfold recKBurnAsset
-  by_cases hg : mintAuthorizedB s.kernel.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ s.kernel.bal cell a
-      ∧ cell ∈ s.kernel.accounts
+  by_cases hg : mintAuthorizedB s.kernel.caps actor a = true ∧ 0 ≤ amt
+      ∧ amt ≤ s.kernel.bal cell a ∧ cell ∈ s.kernel.accounts ∧ a ∈ s.kernel.accounts ∧ cell ≠ a
   · rw [if_pos hg]
     simp only [BurnGuard]
     constructor
@@ -191,50 +186,70 @@ theorem recCBurnAsset_commits_iff_guard (s : RecChainedState) (actor cell : Cell
     obtain ⟨k', hk⟩ := (recKBurnAsset_iff_guard s.kernel actor cell a amt).mpr hg
     exact ⟨_, by unfold recCBurnAsset; rw [hk]⟩
 
-/-- **`recCBurnAsset_debits`** — a committed burn debits cell `cell`'s asset `a` by exactly `amt`,
-read off the full spec + the declarative ledger-helper validation. The conserved-slice projection
-(supply of `a` falls by `amt`). -/
+/-- **`recCBurnAsset_debits`** — a committed burn debits the holder's `(cell, a)` entry by exactly
+`amt` AND credits the issuer's well `(a, a)` by exactly `amt` (W1: the value RETURNS to the well —
+supply shrinks, the sum never moves). Read off the full spec + the declarative ledger validation. -/
 theorem recCBurnAsset_debits {s s' : RecChainedState} {actor cell : CellId} {a : AssetId} {amt : ℤ}
     (h : recCBurnAsset s actor cell a amt = some s') :
-    s'.kernel.bal cell a = s.kernel.bal cell a - amt := by
+    s'.kernel.bal cell a = s.kernel.bal cell a - amt
+    ∧ s'.kernel.bal a a = s.kernel.bal a a + amt := by
   have hspec := (recCBurnAsset_iff_spec s actor cell a amt s').mp h
+  have hne : cell ≠ a := hspec.1.2.2.2.2.2
+  obtain ⟨hdeb, hwell, _⟩ := recBurn_ledger_correct s.kernel.bal cell a amt hne
   rw [hspec.2.1]
-  exact (recBurn_ledger_correct s.kernel.bal cell a amt).1
+  exact ⟨hdeb, hwell⟩
 
-/-- **`recCBurnAsset_other_ledger_untouched`** — a committed burn leaves EVERY OTHER `(cell, asset)`
-ledger entry untouched (the ledger-frame projection: only the burned slot moves). -/
+/-- **`recCBurnAsset_other_ledger_untouched`** — a committed burn leaves EVERY ledger entry other
+than the holder's and the well's untouched (the ledger-frame projection). -/
 theorem recCBurnAsset_other_ledger_untouched {s s' : RecChainedState} {actor cell : CellId}
     {a : AssetId} {amt : ℤ} (h : recCBurnAsset s actor cell a amt = some s')
-    (c : CellId) (b : AssetId) (hcb : ¬ (c = cell ∧ b = a)) :
+    (c : CellId) (b : AssetId) (hcb : ¬ (c = cell ∧ b = a)) (hci : ¬ (c = a ∧ b = a)) :
     s'.kernel.bal c b = s.kernel.bal c b := by
   have hspec := (recCBurnAsset_iff_spec s actor cell a amt s').mp h
+  have hne : cell ≠ a := hspec.1.2.2.2.2.2
   rw [hspec.2.1]
-  exact (recBurn_ledger_correct s.kernel.bal cell a amt).2 c b hcb
+  exact (recBurn_ledger_correct s.kernel.bal cell a amt hne).2.2 c b hcb hci
 
 /-- **`recCBurnAsset_no_negative_burn`** — fail-closed: a committed burn carries `0 ≤ amt`. So no
-"negative burn" can inflate the supply through this arm (it would be a mint in disguise). -/
+"negative burn" can inflate the holder through this arm (it would be a mint in disguise). -/
 theorem recCBurnAsset_no_negative_burn {s s' : RecChainedState} {actor cell : CellId} {a : AssetId}
     {amt : ℤ} (h : recCBurnAsset s actor cell a amt = some s') : 0 ≤ amt :=
   ((recCBurnAsset_iff_spec s actor cell a amt s').mp h).1.2.1
 
 /-- **`recCBurnAsset_no_overburn`** — fail-closed: a committed burn carries `amt ≤ bal cell a`. So the
-cell's asset-`a` holding cannot be driven negative by a burn (no over-destruction). -/
+holder's asset-`a` entry cannot be driven negative by a burn (only the issuer WELL is
+negative-capable; ordinary holders keep the availability gate). -/
 theorem recCBurnAsset_no_overburn {s s' : RecChainedState} {actor cell : CellId} {a : AssetId}
     {amt : ℤ} (h : recCBurnAsset s actor cell a amt = some s') : amt ≤ s.kernel.bal cell a :=
   ((recCBurnAsset_iff_spec s actor cell a amt s').mp h).1.2.2.1
 
 /-- **`recCBurnAsset_authorized`** — fail-closed: a committed burn carries privileged-supply
-(`mintAuthorizedB`) authority over the burned cell. An unauthorized actor cannot destroy supply. -/
+(`mintAuthorizedB`) authority over the **ISSUER** `a` (W1/E2). An actor without the issuer
+capability cannot destroy supply. -/
 theorem recCBurnAsset_authorized {s s' : RecChainedState} {actor cell : CellId} {a : AssetId}
     {amt : ℤ} (h : recCBurnAsset s actor cell a amt = some s') :
-    mintAuthorizedB s.kernel.caps actor cell = true :=
+    mintAuthorizedB s.kernel.caps actor a = true :=
   ((recCBurnAsset_iff_spec s actor cell a amt s').mp h).1.1
+
+/-- **`recCBurnAsset_conserves` (the W1 punchline).** A committed burn leaves EVERY asset's total
+supply EXACTLY unchanged — the holder's debit lands in the well (`recKBurnAsset_delta`). -/
+theorem recCBurnAsset_conserves {s s' : RecChainedState} {actor cell : CellId} {a : AssetId}
+    {amt : ℤ} (h : recCBurnAsset s actor cell a amt = some s') (b : AssetId) :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
+  unfold recCBurnAsset at h
+  cases hk : recKBurnAsset s.kernel actor cell a amt with
+  | none => rw [hk] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hk] at h; simp only [Option.some.injEq] at h
+      have : s'.kernel = k' := by rw [← h]
+      rw [this]
+      exact recKBurnAsset_delta s.kernel k' actor cell a amt hk b
 
 /-! ## §6 — executor-dispatch form: the SAME truths through `execFullA (.burnA …)`.
 
-`execFullA s (.burnA actor cell a amt) = recCBurnAsset s actor cell a amt` definitionally
-(`TurnExecutorFull.lean:3484`), so the full spec ⟺ holds through the top-level dispatch unchanged —
-this is the `supply-destruction` arm of `execFullA` validated against its independent spec. -/
+`execFullA s (.burnA actor cell a amt) = recCBurnAsset s actor cell a amt` definitionally, so the
+full spec ⟺ holds through the top-level dispatch unchanged — this is the `supply-destruction` arm
+of `execFullA` validated against its independent spec. -/
 
 /-- **`execFullA_burnA_iff_spec` — the dispatch-level spec ⟺ executor.** Through the top-level
 `execFullA` dispatch on `.burnA`, committing the turn into `s'` is EXACTLY `BurnSpec`. -/
@@ -258,6 +273,7 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`ad
 #assert_axioms recCBurnAsset_no_negative_burn
 #assert_axioms recCBurnAsset_no_overburn
 #assert_axioms recCBurnAsset_authorized
+#assert_axioms recCBurnAsset_conserves
 #assert_axioms execFullA_burnA_iff_spec
 
 end Dregg2.Circuit.Spec.SupplyDestruction

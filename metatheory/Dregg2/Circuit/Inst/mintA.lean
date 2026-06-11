@@ -70,12 +70,13 @@ structure MintArgs where
 def chainView : StateView RecChainedState :=
   { toKernel := (·.kernel), getLog := (·.log) }
 
-/-- The mint guard as a `Prop` (the spec's `mintAdmit`). -/
+/-- The mint guard as a `Prop` (the spec's `mintAdmit` — W1: the ISSUER gate + genesis-order +
+recipient liveness + distinctness). -/
 def mintGuardProp (s : RecChainedState) (args : MintArgs) : Prop :=
-  mintAdmit s.kernel args.actor args.cell args.amt
+  mintAdmit s.kernel args.actor args.cell args.a args.amt
 
 instance (s : RecChainedState) (args : MintArgs) : Decidable (mintGuardProp s args) := by
-  unfold mintGuardProp mintAdmit; exact inferInstanceAs (Decidable (_ ∧ _ ∧ _))
+  unfold mintGuardProp mintAdmit; exact inferInstanceAs (Decidable (_ ∧ _ ∧ _ ∧ _ ∧ _))
 
 /-- The mint guard's witness generator: lay the single `propBit` column at wire `0`. -/
 def mintGuardEncode (s : RecChainedState) (args : MintArgs) (_s' : RecChainedState) : Assignment :=
@@ -96,20 +97,20 @@ theorem mintGuardLocal (a b : Assignment) (hab : ∀ w, w < 1 → a w = b w) :
       simp only [Constraint.holds, cBitGuard, vBitGuard, Expr.eval, h0] at hcc ⊢
       exact hcc
 
-/-- The `bal` component digest: an injective whole-function hash (carried `Function.Injective D`). The
-spec-predicted value is the CREDIT `recBalCredit … amt` (the SOLE difference from `burnE`, which
-predicts the debit `… (-amt)`). -/
+/-- The `bal` component digest: an injective whole-function hash (carried `Function.Injective D`).
+W1: the spec-predicted value is the ISSUER-MOVE write `recTransferBal … a cell a amt` — the well
+debited, the recipient credited, in ONE pinned ledger function. -/
 def balComponent (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D) :
     ActiveComponent RecChainedState MintArgs :=
   funcComponent (β := CellId → AssetId → ℤ) (·.bal) D hD
-    (fun s args => recBalCredit s.kernel.bal args.cell args.a args.amt)
+    (fun s args => recTransferBal s.kernel.bal args.a args.cell args.a args.amt)
 
 /-- **`mintE`** — the `EffectSpec2` for `mintA`, supplied to the v2 framework. -/
 def mintE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D) :
     EffectSpec2 RecChainedState MintArgs where
   view         := chainView
   active       := balComponent D hD
-  logUpdate    := some (fun s args => mintReceipt args.actor args.cell args.amt :: s.log)
+  logUpdate    := some (fun s args => mintReceipt args.actor args.cell args.a args.amt :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
@@ -165,8 +166,8 @@ theorem apex_iff_mintASpec (D : (CellId → AssetId → ℤ) → ℤ) (hD : Func
     (mintE D hD).apex s args s' ↔ MintASpec s args.actor args.cell args.a args.amt s' := by
   -- unfold the apex's four conjuncts to the bare components.
   show (mintGuardProp s args
-        ∧ s'.kernel.bal = recBalCredit s.kernel.bal args.cell args.a args.amt
-        ∧ s'.log = mintReceipt args.actor args.cell args.amt :: s.log
+        ∧ s'.kernel.bal = recTransferBal s.kernel.bal args.a args.cell args.a args.amt
+        ∧ s'.log = mintReceipt args.actor args.cell args.a args.amt :: s.log
         ∧ ((mintE D hD).restFrame s.kernel s'.kernel)) ↔ MintASpec s args.actor args.cell args.a args.amt s'
   unfold MintASpec mintGuardProp mintE
   constructor

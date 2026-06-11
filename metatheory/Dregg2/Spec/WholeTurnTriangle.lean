@@ -395,10 +395,12 @@ open Dregg2.Exec.StarbridgeGated
 #guard ((execFullForestG fmaDeleg forgedCredForestG).isSome) == false
 -- A FALSE-caveat forest is REJECTED (the caveat conjunct of `gateOK` fails on the running pre-state).
 #guard ((execFullForestG fmaDeleg falseCaveatForestG).isSome) == false
--- A LAUNDERING forest (per-asset net nonzero) still COMMITS but its post-state is the intent fold:
--- a NONZERO per-asset delta — the conservation VECTOR catches it (a scalar measure could not).
-#guard (turnLedgerDeltaAsset ((lowerForestG launderFullForestG).map Prod.snd) 0) == -50
-#guard (turnLedgerDeltaAsset ((lowerForestG launderFullForestG).map Prod.snd) 1) == 50
+-- W1: the pre-W1 LAUNDERING forest's delta family VANISHES (mint/burn are issuer-moves — there is
+-- no non-conserving verb left to launder with), and the forest itself REJECTS fail-closed (its
+-- burn child self-burns the issuer's well).
+#guard (turnLedgerDeltaAsset ((lowerForestG launderFullForestG).map Prod.snd) 0) == 0
+#guard (turnLedgerDeltaAsset ((lowerForestG launderFullForestG).map Prod.snd) 1) == 0
+#guard ((execFullForestG fmaDeleg launderFullForestG).isNone)
 -- A transfer forest commits; its single-effect intent fold is balance-neutral (asset 0).
 #guard ((execFullForestG fma0 transferForestG).isSome)
 #guard (turnLedgerDeltaAsset ((lowerForestG transferForestG).map Prod.snd) 0) == 0
