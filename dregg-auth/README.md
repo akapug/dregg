@@ -1,136 +1,134 @@
 # dregg-auth
 
-**Prove your agent cannot exceed the grant.**
+**Capability tokens with machine-checked attenuation semantics.**
 
-Agents are being handed unscoped API keys today — MCP servers ship them straight
-into environment variables, sub-agents inherit everything their parent can do, CI
-bots run with the keys to the kingdom. dregg-auth is the aspirin: **scoped,
-time-boxed, delegatable, revocable, auditable** agent access as a one-liner — and
-the permission check is **verified offline, with nothing but a public key.**
+A credential is a small signed object that names exactly what it permits, as a
+list of *caveats*. Holding one is the authority; narrowing one is appending a
+caveat; verifying one is checking a signature chain and evaluating the caveats
+against the request — offline, deterministically, with nothing but the
+issuer's public key. The semantics of every operation — *attenuation only ever
+narrows*, *verification is the fail-closed meet of all caveats*, *an unbound
+third-party discharge is rejected*, *a discharge bound to one credential
+cannot be replayed against another* — are the ones proven in the Lean
+development under `metatheory/Dregg2/`, and each API surface names its Lean
+counterpart in its doc comment. The same tokens settle on dregg if you ever
+want a ledger; nothing here requires one.
 
-No node. No wallet. No blockchain. No ontology. The whole point of L1 is that a
-stranger can drop it in front of an agent in 60 seconds and *prove* the blast
-radius is bounded.
+## The credential core (`dregg_auth::credential`)
 
-## 60-second quickstart
+```rust
+use dregg_auth::credential::{Caveat, Context, Credential, Pred, RootKey};
+
+let root = RootKey::generate();          // ed25519; publish root.public()
+
+// Mint: may use the `read` tool, until clock 2_000.
+let cred = root.mint([
+    Caveat::FirstParty(Pred::AttrEq { key: "tool".into(), value: "read".into() }),
+    Caveat::FirstParty(Pred::NotAfter { at: 2_000 }),
+]);
+
+// Hand a sub-agent strictly less: attenuate appends caveats — the ONLY
+// mutation there is. No API removes one; the signature chain + the
+// proof-of-possession check make removal unforgeable on the wire.
+let narrowed = cred.attenuate([Caveat::FirstParty(Pred::NotAfter { at: 1_500 })]);
+
+// `dga1_…` — compact postcard bytes, base64url, header-safe, versioned by prefix.
+let encoded = narrowed.encode();
+
+// Verify OFFLINE: public key + caller-supplied request facts. Same context,
+// same verdict — the clock is an explicit input, never wall-time.
+let presented = Credential::decode(&encoded).unwrap();
+let ctx = Context::new().at(1_400).attr("tool", "read");
+assert!(presented.verify(&root.public(), &ctx).is_ok());
+
+// Refusals carry their terms:
+let late = Context::new().at(1_600).attr("tool", "read");
+println!("{}", presented.verify(&root.public(), &late).unwrap_err());
+// refused: block 1 requires not after clock 1500 (expiry gate)
+
+// Tokens explain themselves:
+println!("{}", presented.explain());
+// credential (2 block(s))
+//   block 0 (root grant): requires attribute `tool` = `read`; requires not after clock 2000 (expiry gate)
+//   block 1 (attenuation): requires not after clock 1500 (expiry gate)
+//   [tail 9f2c…]
+```
+
+### The caveat language
+
+Every shape is a proven one; doc comments cite the Lean names. The composition
+layer is a real Boolean algebra (`Dregg2.Exec.PredAlgebra.Pred`), fail-closed:
+`AnyOf([])` refuses, and a caveat that mentions data the context does not bind
+is a refusal — never `false`, so `Not` can never turn missing data into
+authority.
+
+| caveat | meaning | Lean counterpart |
+|---|---|---|
+| `Pred::AttrEq` | attribute equals value | `SimpleConstraint.fieldEquals` (Exec/Program.lean) |
+| `Pred::AttrPrefix` | attribute starts with prefix | `SimpleConstraint.prefixOf` |
+| `Pred::NotBefore` | vesting gate (upward-closed) | `TemporalAtom.afterHeight` (Authority/TemporalAlgebra.lean) |
+| `Pred::NotAfter` | expiry gate (downward-closed) | `TemporalAtom.beforeHeight` |
+| `Pred::Within` | validity window = meet of the two | `TemporalAtom.withinWindow` |
+| `Pred::AllOf` / `AnyOf` / `Not` / `True` / `False` | Boolean composition | `Pred.allOf`/`anyOf`/`not`/`tt`/`ff` (Exec/PredAlgebra.lean) |
+| `Caveat::FirstParty` | a local predicate | `Caveat.local` (Authority/Caveat.lean) |
+| `Caveat::ThirdParty` | requires a gateway's discharge | `Caveat.thirdParty` + Authority/MacaroonDischarge.lean |
+
+### Third-party caveats
+
+A `Caveat::ThirdParty` names a gateway's public key and a caveat id; the
+credential then only admits when the context presents a [`Discharge`] — the
+gateway's own signed object, carrying its own conditions (an expiry on the
+approval, say) and **bound** to the exact credential it discharges (the BLAKE3
+hash of the credential's tail). The binding discipline is the proven macaroon
+one: an unbound discharge is rejected unconditionally
+(`unbound_discharge_rejected`), and a discharge bound to one credential is
+rejected against any other (`binding_not_replayable_to_other_root`) — so
+"strip the caveats, reuse the old approval" is not an attack, it's a refusal.
+
+```rust,ignore
+let d = gateway.discharge(caveat_id, credential.tail(), [Pred::NotAfter { at: 600 }]);
+let ctx = Context::new().at(500).attr("tool", "read").discharge(d);
+credential.verify(&root.public(), &ctx)?;
+```
+
+### Wire format
+
+Postcard (compact, canonical for the fixed schema) under a version prefix,
+base64url with no padding: credentials are `dga1_…`, discharges `dgd1_…`. An
+unknown prefix is an error, never a fallback. The encoded credential is a
+**bearer** object: it carries the tail key (the right to present *and* to
+attenuate further) — transmit it like the capability it is. Bindings
+(sdk-py/sdk-ts) wrap these exact bytes; golden vectors live in `tests/`.
+
+### Dependency surface
+
+`ed25519-dalek`, `blake3`, `postcard`, `base64`, `serde`, `getrandom`. The
+credential core touches no cell, turn, node, or circuit code.
+
+## The agent-grant surface (`Root`/`Grant`/`Token`, CLI, MCP gate)
+
+The crate also ships the agent-pointed wedge over the biscuit/Datalog token
+layer: `Grant::new("ci-bot").tools(["read"]).until(t)` issued by a `Root`,
+verified by `verify_offline`, with the `dregg-auth` CLI (`init`/`grant`/
+`verify`/`attenuate`/`gate`) and the `mcp::OfflineGate` middleware for tool
+calls. Same guarantees at the rim — offline, public-key-only, no-amplify —
+expressed as Datalog checks rather than the proven caveat algebra.
 
 ```console
-# 1. Create a root authority. Keep the private half; publish the public half.
-$ dregg-auth init
-root key written to ~/.dregg-auth/root.key
-public key (publish this):
-ed25519/8f3a...c1
-
-# 2. Grant an agent exactly two tools, expiring in a week, at 30 calls/hour.
-$ dregg-auth grant ci-bot --tools read,pr-create --until +7d --rate 30/h
-eb2_CoYBCh0...   # a printable token — hand this to the agent
-
-# 3. The gateway holds ONLY the public key. Verify a call — offline.
-$ dregg-auth verify eb2_CoYBCh0... --tool pr-create
-allowed (matched policy_0)
-$ echo $?
-0
-
-# 4. A tool that was never granted is refused — with a reason.
+$ dregg-auth grant ci-bot --tools read,pr-create --until +7d
+eb2_CoYBCh0...
 $ dregg-auth verify eb2_CoYBCh0... --tool delete-repo
 denied: tool `delete-repo` (action `use`) is outside this grant, or the grant has expired
-$ echo $?
-1
 ```
 
-## Attenuation never amplifies
+## Honest residuals
 
-Hand a sub-agent strictly less than you hold. A token narrowed to `read` can
-**never** regain `pr-create` — that's a structural property of the underlying
-biscuit chain, not a policy you have to trust us to enforce.
-
-```console
-$ dregg-auth attenuate eb2_CoYBCh0... --tools read
-eb2_CoYB...narrowed...
-
-$ dregg-auth verify eb2_CoYBCh0...narrowed... --tool pr-create
-denied: tool `pr-create` (action `use`) is outside this grant, or the grant has expired
-```
-
-## The MCP gateway profile
-
-`gate` is the middleware shape: verify-or-deny each incoming tool call and emit a
-receipt line (the audit seed). It depends on **nothing but this crate** — the
-node's MCP layer can later implement the `ToolGate` trait to slot it in.
-
-```console
-$ dregg-auth gate eb2_CoYBCh0... --tool pr-create --args repo=acme/widgets
-ALLOW subject=ci-bot tool=pr-create [repo=acme/widgets] :: allowed (matched policy_0)
-```
-
-```rust
-use dregg_auth::mcp::{OfflineGate, ToolCall, ToolGate};
-
-let gate = OfflineGate::new(public_key_hex);            // public key only
-let gated = gate.admit(&agent_token, &ToolCall::new("pr-create").arg("repo", "acme/widgets"));
-if gated.admitted() {
-    dispatch_tool();
-}
-log::info!("{}", gated.receipt.line());                // or .json() for structured ingest
-```
-
-## Library API
-
-```rust
-use dregg_auth::{Root, Grant, Request, verify_offline};
-
-let root = Root::generate();                            // an ed25519 issuer
-let token = root.issue(
-    &Grant::new("ci-bot").tools(["read", "pr-create"]).until(1_900_000_000),
-)?;
-let encoded = token.encode()?;                          // printable `eb2_...`
-
-// Anyone holding ONLY the public key decides — offline:
-let decision = verify_offline(&encoded, &root.public_key_hex(),
-                              &Request::tool("read"));
-assert!(decision.allowed());
-# Ok::<(), dregg_auth::AuthError>(())
-```
-
-| Verb         | What it does                                                        |
-| ------------ | ------------------------------------------------------------------- |
-| `Root`       | the issuing ed25519 authority (`generate`, `from_private_hex`)      |
-| `Grant`      | the fluent permission builder (`tools`, `until`, `rate`, `actions`) |
-| `Root::issue`| sign a grant into a printable `Token`                               |
-| `Token::attenuate` | narrow a token — never amplify                                |
-| `verify_offline` | public-key-only allow/deny + a human reason                    |
-| `mcp::OfflineGate` | the standalone MCP gateway profile + receipts                |
-
-## The adoption-quotient commitment
-
-L1 is **standalone, forever**. The dependency surface is `dregg-token` (its
-biscuit / ed25519 / Datalog feature only) plus `biscuit-auth`. No `dregg-node`,
-no `dregg-turn`, no `dregg-circuit`. The polis is **pull, never toll**: when
-you're ready for receipts-as-a-chain, light-client verification, and proofs, the
-upgrade path is there — but you never pay for it to start.
-
-## Honest residuals (v0)
-
-- **Rate limiting is advisory at L1.** L1 is stateless and offline, so it cannot
-  itself count requests; the rate rides into the token as metadata and is
-  surfaced in receipts for a stateful L2 gate to enforce.
-- **Revocation is not yet wired** into the CLI. The token layer has a revocation
-  registry (`dregg-token`'s `rand-deps` feature); L1 deliberately omits it to keep
-  the offline path pure. Short expiries are the L1 revocation story; explicit
-  revocation is an L2 concern.
-- **`--until` accepts unix timestamps and `+<n><unit>` offsets** (`+7d`, `+24h`).
-  Named dates ("friday") are a future ergonomic.
-- **The compile-time dependency surface is fatter than the adoption-quotient
-  target — for now.** The *runtime* path is genuinely standalone: verification is
-  pure, offline, and touches no node/network/circuit code. But `dregg-auth`
-  builds on `dregg-token`, and `dregg-token` *unconditionally* depends on
-  `dregg-commit → dregg-circuit` (a transitive edge baked into the token crate
-  today, not gated behind a feature). So a `cargo tree` shows the plonky3 circuit
-  crates compiling, even though none of them run. **The clean fix is a one-line
-  refactor in the token crate**: make `dregg-token`'s `dregg-commit`/`dregg-circuit`
-  edge feature-gated (it is only needed by the macaroon zkvm + selective-
-  disclosure paths, never by the biscuit offline path). Until that lands,
-  dregg-auth keeps the *guarantee* (offline, public-key-only, no-amplify) while
-  carrying a heavier build than the two-dependency promise. Tracked as the W4
-  follow-up; deliberately not done here to keep this lane new-files-only and
-  collision-free with other marathon lanes.
+- **Rate limiting is advisory** in the grant surface: verification is
+  stateless and offline, so it cannot count requests; the rate rides into the
+  token as metadata for a stateful gate to enforce.
+- **Revocation** is expiry-shaped here: short windows + re-issue. (Third-party
+  caveats give online revocation when you want it: a gateway that stops
+  discharging has revoked.)
+- **The biscuit surface and the credential core are two codecs** (`eb2_` /
+  `dga1_`). The credential core is the proven one; the grant surface remains
+  for the CLI/MCP wedge until it is re-based on the core.
