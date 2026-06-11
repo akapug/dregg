@@ -4,29 +4,52 @@
 
 use super::*;
 
-/// Common helper for fee share distribution (50% proposer, 30% treasury, 20% burned).
-/// Extracted to eliminate duplication between proof-carrying sovereign fast path
-/// and normal forest path (excellence item from conservation followup).
-/// Ensures consistent credit timing and logic for post_state_hash / receipt / delta / AR consumers.
+/// Common helper for fee share distribution (50% proposer / 30% treasury /
+/// 20% fee well). Extracted to eliminate duplication between proof-carrying
+/// sovereign fast path and normal forest path (excellence item from
+/// conservation followup). Ensures consistent credit timing and logic for
+/// post_state_hash / receipt / delta / AR consumers.
+///
+/// THE EPOCH §5 ("fees as moves"): the agent's full fee debit is matched by
+/// credits — proposer share + treasury share + EVERYTHING ELSE (the 20%
+/// remainder, integer-division dust, and any share whose recipient is
+/// unconfigured or missing) moves to the FEE WELL when one is configured, so
+/// the turn's total value delta is exactly zero (`reachable_total_zero`'s
+/// hypotheses hold on the deployed chain, where genesis always configures
+/// the well). With no fee well configured the undelivered remainder is
+/// burned — the legacy pre-epoch semantics, kept only for well-less tests.
 fn distribute_fee_shares(
     ledger: &mut Ledger,
     proposer: Option<&CellId>,
     treasury: Option<&CellId>,
+    fee_well: Option<&CellId>,
     fee: u64,
 ) {
     let proposer_share = fee / 2;
     let treasury_share = fee * 3 / 10;
+    let mut delivered: u64 = 0;
     if let Some(pid) = proposer {
         if let Some(p) = ledger.get_mut(pid) {
-            p.state.set_balance(p.state.balance() + proposer_share);
+            if p.state.credit_balance(proposer_share) {
+                delivered += proposer_share;
+            }
         }
-        // missing cell => burned (documented)
+        // missing cell / overflow => share falls through to the fee well
     }
     if let Some(tid) = treasury {
         if let Some(t) = ledger.get_mut(tid) {
-            t.state.set_balance(t.state.balance() + treasury_share);
+            if t.state.credit_balance(treasury_share) {
+                delivered += treasury_share;
+            }
         }
-        // missing cell => burned
+        // missing cell / overflow => share falls through to the fee well
+    }
+    // The move that closes the books: whatever was not delivered above goes
+    // to the fee well (fee - delivered ≥ fee*2/10 by construction).
+    if let Some(wid) = fee_well {
+        if let Some(w) = ledger.get_mut(wid) {
+            let _ = w.state.credit_balance(fee - delivered);
+        }
     }
 }
 
@@ -284,7 +307,11 @@ impl TurnExecutor {
         }
 
         // Check fee coverage (agent must have enough balance for the fee).
-        if agent_cell.state.balance() < turn.fee {
+        // SIGNED balances (THE EPOCH §5): the agent is an ordinary cell, so
+        // any negative reading or a balance below the fee refuses.
+        if agent_cell.state.balance() < 0
+            || (agent_cell.state.balance() as u64) < turn.fee
+        {
             return TurnResult::Rejected {
                 reason: TurnError::InsufficientBalance {
                     cell: turn.agent,
@@ -373,7 +400,19 @@ impl TurnExecutor {
         // =====================================================================
         {
             let agent = ledger.get_mut(&turn.agent).unwrap();
-            agent.state.set_balance(agent.state.balance() - turn.fee);
+            // Ordinary debit (fee-coverage was checked above; a false return
+            // here means a TOCTOU bug, so refuse loudly rather than going
+            // negative).
+            if !agent.state.debit_balance(turn.fee) {
+                return TurnResult::Rejected {
+                    reason: TurnError::InsufficientBalance {
+                        cell: turn.agent,
+                        required: turn.fee,
+                        available: agent.state.balance(),
+                    },
+                    at_action: vec![],
+                };
+            }
             if !agent.state.increment_nonce() {
                 return TurnResult::Rejected {
                     reason: TurnError::NonceOverflow { cell: turn.agent },
@@ -436,6 +475,7 @@ impl TurnExecutor {
                         ledger,
                         self.proposer_cell.as_ref(),
                         self.treasury_cell.as_ref(),
+                        self.fee_well_cell.as_ref(),
                         turn.fee,
                     );
 
@@ -534,15 +574,25 @@ impl TurnExecutor {
                     // proposer/treasury cells + fee). This makes the returned
                     // delta (and thus AR / cross-fed consumers) reflect the
                     // full value movement.
+                    let mut fee_delivered: u64 = 0;
                     if let Some(proposer_id) = &self.proposer_cell {
                         let mut d = dregg_cell::CellStateDelta::empty();
                         d.balance_change = (turn.fee / 2) as i64;
+                        fee_delivered += turn.fee / 2;
                         delta.updated.push((*proposer_id, d));
                     }
                     if let Some(treasury_id) = &self.treasury_cell {
                         let mut d = dregg_cell::CellStateDelta::empty();
                         d.balance_change = (turn.fee * 3 / 10) as i64;
+                        fee_delivered += turn.fee * 3 / 10;
                         delta.updated.push((*treasury_id, d));
+                    }
+                    // THE EPOCH §5 ("fees as moves"): the remainder moves to
+                    // the fee well, closing the delta to exactly zero.
+                    if let Some(well_id) = &self.fee_well_cell {
+                        let mut d = dregg_cell::CellStateDelta::empty();
+                        d.balance_change = (turn.fee - fee_delivered) as i64;
+                        delta.updated.push((*well_id, d));
                     }
 
                     // P0-3: record the new chain-head for this agent.
@@ -1000,6 +1050,7 @@ impl TurnExecutor {
             ledger,
             self.proposer_cell.as_ref(),
             self.treasury_cell.as_ref(),
+            self.fee_well_cell.as_ref(),
             turn.fee,
         );
 
@@ -1021,6 +1072,7 @@ impl TurnExecutor {
             turn.fee,
             self.proposer_cell.as_ref(),
             self.treasury_cell.as_ref(),
+            self.fee_well_cell.as_ref(),
         );
 
         let mut receipt = TurnReceipt {
@@ -1151,7 +1203,7 @@ impl TurnExecutor {
             });
         }
 
-        if agent_cell.state.balance() < turn.fee {
+        if agent_cell.state.balance() < 0 || (agent_cell.state.balance() as u64) < turn.fee {
             return Err(TurnError::InsufficientBalance {
                 cell: turn.agent,
                 required: turn.fee,

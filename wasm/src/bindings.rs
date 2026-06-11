@@ -135,7 +135,8 @@ pub fn get_cell_state(handle: usize, cell_id_hex: &str) -> Result<JsValue, JsErr
         struct CellStateView {
             cell_id: String,
             public_key: String,
-            balance: u64,
+            // THE EPOCH: balances are SIGNED (i64) — wells carry −supply.
+            balance: i64,
             nonce: u64,
             fields: Vec<String>,
             num_capabilities: usize,
@@ -192,7 +193,8 @@ pub fn get_all_cells(handle: usize) -> Result<JsValue, JsError> {
         #[derive(Serialize)]
         struct CellSummary {
             cell_id: String,
-            balance: u64,
+            // THE EPOCH: balances are SIGNED (i64) — wells carry −supply.
+            balance: i64,
             nonce: u64,
             num_capabilities: usize,
         }

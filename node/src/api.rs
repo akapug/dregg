@@ -156,7 +156,8 @@ pub struct NodeIdentityResponse {
     /// Whether the operator's cipherclerk is unlocked (turns can be signed).
     pub unlocked: bool,
     /// Current balance of the agent cell, if it exists in the ledger.
-    pub agent_balance: Option<u64>,
+    /// THE EPOCH: SIGNED (i64) — issuer wells carry −supply.
+    pub agent_balance: Option<i64>,
     /// Current nonce of the agent cell, if it exists.
     pub agent_nonce: Option<u64>,
 }
@@ -463,7 +464,8 @@ pub struct SubmitEncryptedTurnResponse {
 pub struct CellResponse {
     pub id: String,
     pub found: bool,
-    pub balance: Option<u64>,
+    // THE EPOCH: SIGNED (i64) — issuer wells carry −supply.
+    pub balance: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -491,7 +493,8 @@ pub struct FederationInfo {
 #[derive(Serialize)]
 pub struct CellListEntry {
     pub id: String,
-    pub balance: u64,
+    // THE EPOCH: SIGNED (i64) — issuer wells carry −supply.
+    pub balance: i64,
     pub nonce: u64,
     pub capability_count: usize,
     pub has_delegate: bool,
@@ -503,7 +506,8 @@ pub struct CellListEntry {
 pub struct CellDetailResponse {
     pub id: String,
     pub found: bool,
-    pub balance: u64,
+    // THE EPOCH: SIGNED (i64) — issuer wells carry −supply.
+    pub balance: i64,
     pub nonce: u64,
     pub capability_count: usize,
     /// Alias for JS inspector compat (cell.js + Starbridge Remote expect num_capabilities in some paths).
@@ -2465,8 +2469,12 @@ fn revalidate_http_witness(
             hex_encode(&turn.agent.0)
         ));
     };
+    // THE EPOCH: balances are SIGNED (i64); the circuit VM state is u64. The
+    // agent cell is ORDINARY (non-negative) — checked conversion, no `as`.
+    let agent_vm_balance = u64::try_from(agent_cell.state.balance())
+        .map_err(|_| "agent cell balance is negative; cannot build VM pre-state".to_string())?;
     let initial_state = dregg_circuit::effect_vm::CellState::new(
-        agent_cell.state.balance(),
+        agent_vm_balance,
         agent_cell.state.nonce() as u32,
     );
     let (trace, mut public_inputs) =

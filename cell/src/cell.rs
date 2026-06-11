@@ -233,8 +233,9 @@ pub struct Cell {
 pub struct CellConfig {
     /// Whether the cell is hosted or sovereign.
     pub mode: CellMode,
-    /// Initial balance (computrons).
-    pub balance: u64,
+    /// Initial balance (SIGNED — THE EPOCH §5; negative only for issuer
+    /// wells seeded by genesis issuer-moves).
+    pub balance: i64,
     /// Permissions (defaults to Permissions::default() if None).
     pub permissions: Option<Permissions>,
     /// Cell program (defaults to CellProgram::None if None).
@@ -273,7 +274,7 @@ impl CellConfig {
     }
 
     /// Set the initial balance.
-    pub fn with_balance(mut self, balance: u64) -> Self {
+    pub fn with_balance(mut self, balance: i64) -> Self {
         self.balance = balance;
         self
     }
@@ -344,7 +345,7 @@ impl Cell {
     /// Create a new cell with a specific initial balance.
     ///
     /// Remains hosted for backward compatibility with existing tests.
-    pub fn with_balance(public_key: [u8; 32], token_id: [u8; 32], balance: u64) -> Self {
+    pub fn with_balance(public_key: [u8; 32], token_id: [u8; 32], balance: i64) -> Self {
         let id = CellId::derive_raw(&public_key, &token_id);
         Cell {
             id,
@@ -401,7 +402,7 @@ impl Cell {
     /// remote cell whose canonical balance lives on another node — without
     /// the local balance, the Transfer would hit InsufficientBalance even
     /// though it would succeed on the canonical node).
-    pub fn remote_stub_with_id_and_balance(id: CellId, balance: u64) -> Self {
+    pub fn remote_stub_with_id_and_balance(id: CellId, balance: i64) -> Self {
         Self::remote_stub_with_id_pk_balance(id, [0u8; 32], balance)
     }
 
@@ -410,7 +411,7 @@ impl Cell {
     /// executor walks the local ledger to find the *delegator* of a bearer
     /// cap by pk: a zero-pk stub wouldn't match, so the bearer-cap proof
     /// would be rejected as if the delegator weren't present.
-    pub fn remote_stub_with_id_pk_balance(id: CellId, public_key: [u8; 32], balance: u64) -> Self {
+    pub fn remote_stub_with_id_pk_balance(id: CellId, public_key: [u8; 32], balance: i64) -> Self {
         Cell {
             id,
             public_key,

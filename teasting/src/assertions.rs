@@ -97,7 +97,13 @@ use std::collections::{HashMap, HashSet};
 ///
 /// After any sequence of transfers, balance must be conserved (no creation/destruction).
 pub fn assert_conservation_invariant(ledger: &Ledger, expected_total: u64) {
-    let actual_total: u64 = ledger.iter().map(|(_, cell)| cell.state.balance()).sum();
+    // THE EPOCH: balances are SIGNED (i64) — issuer wells carry −supply. Sum
+    // in the signed domain (a closed mint/well system nets to zero); these
+    // conservation harnesses use ORDINARY-only ledgers, so the signed total is
+    // non-negative and converts back to the u64 `expected_total` (checked).
+    let signed_total: i64 = ledger.iter().map(|(_, cell)| cell.state.balance()).sum();
+    let actual_total: u64 =
+        u64::try_from(signed_total).expect("conservation total is non-negative for ordinary ledgers");
     assert_eq!(
         actual_total,
         expected_total,

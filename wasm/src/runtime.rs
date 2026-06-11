@@ -1018,7 +1018,13 @@ impl DreggRuntime {
             // Genesis cannot itself be born from a factory because no signer
             // exists yet — this is the canonical "Provenance::genesis"
             // bootstrap point.
-            let cell = Cell::with_balance(public_key, token_id, initial_balance);
+            // THE EPOCH: balances are SIGNED (i64); a freshly minted genesis
+            // cell is ordinary (non-negative) — checked conversion, no `as`.
+            let cell = Cell::with_balance(
+                public_key,
+                token_id,
+                i64::try_from(initial_balance).expect("initial_balance fits in i64"),
+            );
             self.ledger.insert_cell(cell).unwrap();
         } else {
             // Subsequent agents: mint the cell via a real turn issued by the

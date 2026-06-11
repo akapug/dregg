@@ -1827,8 +1827,13 @@ dependencies = [
 name = "dregg-auth"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "biscuit-auth",
+ "blake3",
  "dregg-token",
+ "ed25519-dalek",
+ "getrandom 0.2.17",
+ "postcard",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

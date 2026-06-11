@@ -51,7 +51,9 @@ use crate::generators::cell::{LedgerSpec, build_open_ledger};
 /// Snapshot of the per-cell state we care about for differential checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CellSnapshot {
-    balance: u64,
+    // THE EPOCH: runtime balances are SIGNED (i64) — issuer wells carry
+    // −supply. The snapshot mirrors the runtime field faithfully.
+    balance: i64,
     nonce: u64,
     cap_count: usize,
     permissions_hash: [u8; 32],
@@ -357,8 +359,12 @@ fn air_claim(actor_cell: &Cell, turn: &Turn) -> AirClaim {
     let cell_id = actor_cell.id();
     let vm_effects = project_turn_to_vm(&cell_id, turn);
     // Build the AIR's starting state from the cell.
-    let mut vm_initial =
-        VmCellState::new(actor_cell.state.balance(), actor_cell.state.nonce() as u32);
+    // THE EPOCH: the actor cell is ORDINARY (non-negative); the VM's starting
+    // balance is u64, so use a checked conversion rather than an `as` cast
+    // that would silently wrap a (well-only) negative balance.
+    let vm_balance =
+        u64::try_from(actor_cell.state.balance()).expect("ordinary actor cell balance is non-negative");
+    let mut vm_initial = VmCellState::new(vm_balance, actor_cell.state.nonce() as u32);
     // Pull current field bytes into BabyBear (truncated; matches executor
     // projection).
     for i in 0..8 {
@@ -442,7 +448,7 @@ proptest! {
         let after_cell = ledger.get(&actor).unwrap();
         let after = CellSnapshot::of(after_cell);
 
-        let runtime_delta = (after.balance as i64) - (before.balance as i64);
+        let runtime_delta = after.balance - before.balance;
         prop_assert_eq!(
             claim.net_balance_delta, runtime_delta,
             "Transfer: AIR net_delta={} vs runtime delta={} (amount={}, dir={})",

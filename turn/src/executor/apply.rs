@@ -340,10 +340,15 @@ impl TurnExecutor {
                 path,
             )?;
         }
+        // Transfer is an ORDINARY move (signed-balance discipline, THE EPOCH
+        // §5): the source may not go below zero; the destination credit is
+        // overflow-checked.
         let from_cell = ledger
             .get(from)
             .ok_or_else(|| (TurnError::CellNotFound { id: *from }, path.to_vec()))?;
-        if from_cell.state.balance() < amount {
+        let amount_i = i64::try_from(amount)
+            .map_err(|_| (TurnError::BalanceOverflow { cell: *from }, path.to_vec()))?;
+        if from_cell.state.balance() < amount_i {
             return Err((
                 TurnError::InsufficientBalance {
                     cell: *from,
@@ -357,7 +362,7 @@ impl TurnExecutor {
             return Err((TurnError::TransferDestNotFound { id: *to }, path.to_vec()));
         }
         let to_balance = ledger.get(to).unwrap().state.balance();
-        if to_balance.checked_add(amount).is_none() {
+        if to_balance.checked_add(amount_i).is_none() {
             return Err((TurnError::BalanceOverflow { cell: *to }, path.to_vec()));
         }
         // Record old balances, then apply.
@@ -369,12 +374,12 @@ impl TurnExecutor {
             .get_mut(from)
             .unwrap()
             .state
-            .set_balance(old_from_balance - amount);
+            .set_balance(old_from_balance - amount_i);
         ledger
             .get_mut(to)
             .unwrap()
             .state
-            .set_balance(old_to_balance + amount);
+            .set_balance(old_to_balance + amount_i);
         Ok(())
     }
 
@@ -2008,11 +2013,20 @@ impl TurnExecutor {
                 path,
             )?;
         }
-        let c = ledger
-            .get(target)
+        // THE EPOCH §5 ("burn as issuer-move", the Lean `burnA` dispatch):
+        // resolve the target asset's ISSUER WELL before mutating. With a
+        // registered well, burn is a MOVE target→well — the well (carrying
+        // −supply) is credited toward zero and the verb conserves exactly.
+        // Without one, the legacy non-conserving debit remains (pre-epoch
+        // assets only; genesis registers the devnet well).
+        let well_id = self.issuer_well_for(ledger, target);
+
+        let cm = ledger
+            .get_mut(target)
             .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
-        let bal = c.state.balance();
-        if bal < amount {
+        let bal = cm.state.balance();
+        // Ordinary debit: you cannot burn more than you hold (floor zero).
+        if !cm.state.debit_balance(amount) {
             return Err((
                 TurnError::InsufficientBalance {
                     cell: *target,
@@ -2022,12 +2036,33 @@ impl TurnExecutor {
                 path.to_vec(),
             ));
         }
-        let new_bal = bal - amount;
-        let cm = ledger
-            .get_mut(target)
-            .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
         journal.record_set_balance(*target, bal);
-        cm.state.set_balance(new_bal);
+
+        if let Some(well_id) = well_id {
+            let well = ledger.get_mut(&well_id).ok_or_else(|| {
+                // A registered well that is not live refuses the burn (the
+                // genesis-order tooth); the journaled debit above is rolled
+                // back by the caller on this error.
+                (
+                    TurnError::InvalidEffect {
+                        reason: format!(
+                            "issuer well {well_id} for the burn target's asset is not live"
+                        ),
+                    },
+                    path.to_vec(),
+                )
+            })?;
+            let well_bal = well.state.balance();
+            if !well.state.credit_balance(amount) {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: format!("issuer well {well_id} balance overflow on burn credit"),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            journal.record_set_balance(well_id, well_bal);
+        }
         Ok(())
     }
 

@@ -384,7 +384,7 @@ impl CellStatePrecondition {
             });
         }
         if let Some(min_bal) = self.min_balance
-            && state.balance < min_bal
+            && (state.balance < 0 || (state.balance as u64) < min_bal)
         {
             return Err(PreconditionError::InsufficientBalance {
                 required: min_bal,
@@ -454,7 +454,8 @@ pub enum PreconditionError {
     },
     InsufficientBalance {
         required: u64,
-        actual: u64,
+        /// SIGNED (THE EPOCH §5): an issuer well can read negative.
+        actual: i64,
     },
     FieldMismatch {
         index: usize,

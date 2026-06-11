@@ -63,6 +63,17 @@ pub fn configure_turn_executor(
     // conditional-turn verification of our receipts was impossible.
     executor.set_executor_signing_key(s.cclerk.gossip_signing_key().to_bytes());
 
+    // THE EPOCH §5 (signed wells): wire the genesis-declared wells so fees
+    // are MOVES to the fee well and Burn is a MOVE to the asset's issuer
+    // well — every committed turn conserves exactly
+    // (`reachable_total_zero`'s hypotheses hold on the deployed chain).
+    if let Some(fee_well) = s.fee_well {
+        executor.set_fee_well_cell(fee_well);
+    }
+    for (token_id, well) in &s.issuer_wells {
+        executor.register_issuer_well(*token_id, *well);
+    }
+
     let base = attested_block_height(s);
     let height = match height_mode {
         BlockHeightMode::Current => base,

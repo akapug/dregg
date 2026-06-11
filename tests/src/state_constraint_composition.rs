@@ -166,7 +166,7 @@ fn make_open_programmed_cell(seed: u8, balance: u64, program: CellProgram) -> Ce
     let mut public_key = [0u8; 32];
     public_key[0] = seed;
     public_key[31] = seed.wrapping_mul(7);
-    let mut cell = Cell::with_balance(public_key, [0u8; 32], balance);
+    let mut cell = Cell::with_balance(public_key, [0u8; 32], i64::try_from(balance).expect("balance fits i64"));
     cell.permissions = Permissions {
         send: AuthRequired::None,
         receive: AuthRequired::None,

@@ -140,10 +140,12 @@ pub enum LedgerError {
     CellNotFound(CellId),
     /// Invalid field index in a state update.
     InvalidFieldIndex { cell_id: CellId, index: usize },
-    /// Insufficient balance for a transfer or deduction.
+    /// Insufficient balance for a transfer or deduction. `available` is
+    /// SIGNED (THE EPOCH §5): an issuer well legitimately reads negative,
+    /// and ordinary verbs refuse to take any cell below zero.
     InsufficientBalance {
         cell_id: CellId,
-        available: u64,
+        available: i64,
         required: u64,
     },
     /// Balance overflow.
@@ -454,20 +456,24 @@ impl Ledger {
             Self::apply_cell_delta(cell, state_delta, cell_id)?;
         }
 
-        // Apply transfers (on the already-modified clone).
+        // Apply transfers (on the already-modified clone). Transfers are
+        // ORDINARY moves: the source may not go below zero (signed-well
+        // discipline lives on the issuer-move verbs, not here).
         for &(from_id, to_id, amount) in &delta.computron_transfers {
+            let amt = i64::try_from(amount)
+                .map_err(|_| LedgerError::BalanceOverflow { cell_id: from_id })?;
             let from_balance = {
                 let from_cell = new_cells
                     .get(&from_id)
                     .ok_or(LedgerError::TransferSourceNotFound(from_id))?;
-                if from_cell.state.balance < amount {
+                if from_cell.state.balance < amt {
                     return Err(LedgerError::InsufficientBalance {
                         cell_id: from_id,
                         available: from_cell.state.balance,
                         required: amount,
                     });
                 }
-                from_cell.state.balance - amount
+                from_cell.state.balance - amt
             };
             new_cells.get_mut(&from_id).unwrap().state.balance = from_balance;
 
@@ -477,7 +483,7 @@ impl Ledger {
             to_cell.state.balance = to_cell
                 .state
                 .balance
-                .checked_add(amount)
+                .checked_add(amt)
                 .ok_or(LedgerError::BalanceOverflow { cell_id: to_id })?;
         }
 
@@ -528,10 +534,12 @@ impl Ledger {
 
         // Track running balances per cell (cumulative across all operations).
         // Initialized lazily from the cell's current balance on first access.
-        let mut running_balances: HashMap<CellId, u64> = HashMap::new();
+        // SIGNED: a well cell may start negative; ordinary verbs still refuse
+        // to push any balance below zero.
+        let mut running_balances: HashMap<CellId, i64> = HashMap::new();
 
         let get_running_balance =
-            |balances: &mut HashMap<CellId, u64>, id: &CellId| -> Option<u64> {
+            |balances: &mut HashMap<CellId, i64>, id: &CellId| -> Option<i64> {
                 if let Some(&b) = balances.get(id) {
                     Some(b)
                 } else {
@@ -560,43 +568,42 @@ impl Ledger {
             let balance =
                 get_running_balance(&mut running_balances, cell_id).unwrap_or(cell.state.balance);
 
-            // Validate and apply balance change cumulatively.
-            if state_delta.balance_change < 0 {
-                let required = state_delta.balance_change.unsigned_abs();
-                if balance < required {
-                    return Err(LedgerError::InsufficientBalance {
-                        cell_id: *cell_id,
-                        available: balance,
-                        required,
-                    });
-                }
-                running_balances.insert(*cell_id, balance - required);
-            } else {
-                let add = state_delta.balance_change as u64;
-                let new_balance = balance
-                    .checked_add(add)
-                    .ok_or(LedgerError::BalanceOverflow { cell_id: *cell_id })?;
-                running_balances.insert(*cell_id, new_balance);
+            // Validate and apply balance change cumulatively (ORDINARY
+            // discipline: a debit may not land below zero; mirrors
+            // `CellState::apply_balance_change`).
+            let new_balance = balance
+                .checked_add(state_delta.balance_change)
+                .ok_or(LedgerError::BalanceOverflow { cell_id: *cell_id })?;
+            if state_delta.balance_change < 0 && new_balance < 0 {
+                return Err(LedgerError::InsufficientBalance {
+                    cell_id: *cell_id,
+                    available: balance,
+                    required: state_delta.balance_change.unsigned_abs(),
+                });
             }
+            running_balances.insert(*cell_id, new_balance);
         }
 
-        // Check transfers using cumulative running balances.
+        // Check transfers using cumulative running balances (ordinary moves;
+        // source may not go below zero).
         for &(from_id, to_id, amount) in &delta.computron_transfers {
+            let amt = i64::try_from(amount)
+                .map_err(|_| LedgerError::BalanceOverflow { cell_id: from_id })?;
             let from_balance = get_running_balance(&mut running_balances, &from_id)
                 .ok_or(LedgerError::TransferSourceNotFound(from_id))?;
-            if from_balance < amount {
+            if from_balance < amt {
                 return Err(LedgerError::InsufficientBalance {
                     cell_id: from_id,
                     available: from_balance,
                     required: amount,
                 });
             }
-            running_balances.insert(from_id, from_balance - amount);
+            running_balances.insert(from_id, from_balance - amt);
 
             let to_balance = get_running_balance(&mut running_balances, &to_id)
                 .ok_or(LedgerError::TransferDestNotFound(to_id))?;
             let new_to = to_balance
-                .checked_add(amount)
+                .checked_add(amt)
                 .ok_or(LedgerError::BalanceOverflow { cell_id: to_id })?;
             running_balances.insert(to_id, new_to);
         }

@@ -324,8 +324,28 @@ fn seed_one_cell(
             // Devnet backfill: materialize the owner issuer cell the way
             // genesis `initial_cells` would have (insert-if-absent, funded
             // enough to pay the seed-turn fees).
-            let issuer = dregg_cell::Cell::with_balance(owner_pubkey, [0u8; 32], 50_000);
+            //
+            // THE EPOCH §5: fund by ISSUER-MOVE from the deterministic
+            // devnet well when it is live (the well goes further negative —
+            // value stays conserved). Only a pre-epoch data dir without the
+            // well falls back to the legacy ex-nihilo credit.
+            const BACKFILL_FUNDING: u64 = 50_000;
+            let issuer = dregg_cell::Cell::with_balance(owner_pubkey, [0u8; 32], 0);
             let _ = ledger.insert_cell(issuer);
+            let well_id = crate::genesis::devnet_issuer_well_id();
+            let well_debited = ledger
+                .get_mut(&well_id)
+                .map(|w| w.state.well_debit_balance(BACKFILL_FUNDING))
+                .unwrap_or(false);
+            if let Some(c) = ledger.get_mut(&issuer_cell) {
+                let _ = c.state.credit_balance(BACKFILL_FUNDING);
+            }
+            if !well_debited {
+                tracing::warn!(
+                    owner = %entry.owner_agent,
+                    "devnet backfill funded ex nihilo (issuer well not in ledger) — pre-epoch data dir"
+                );
+            }
             info!(
                 owner = %entry.owner_agent,
                 cell_id = %hex_encode(&issuer_cell.0),

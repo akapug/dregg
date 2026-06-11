@@ -110,7 +110,9 @@ impl TurnExecutor {
             hasher.update(cell.public_key());
             hasher.update(cell.token_id());
             hasher.update(&cell.state.nonce().to_le_bytes());
-            hasher.update(&cell.state.balance().to_le_bytes());
+            // THE EPOCH §5: signed balance, the biased two-limb boundary
+            // encoding (coherent with the v6 canonical commitment).
+            hasher.update(&dregg_cell::state::encode_balance_le(cell.state.balance()));
             for field in &cell.state.fields {
                 hasher.update(field);
             }
@@ -498,7 +500,7 @@ impl TurnExecutor {
         let mut updated_cells: HashMap<CellId, CellStateDelta> = HashMap::new();
 
         // Track the FIRST old balance/nonce per cell (the pre-turn value).
-        let mut first_balance: HashMap<CellId, u64> = HashMap::new();
+        let mut first_balance: HashMap<CellId, i64> = HashMap::new();
         let mut first_nonce: HashMap<CellId, u64> = HashMap::new();
         let mut first_fields: HashMap<(CellId, usize), [u8; 32]> = HashMap::new();
 
@@ -640,12 +642,14 @@ impl TurnExecutor {
     }
 
     /// Compute a LedgerDelta including the Phase 1 fee + nonce commitment and
-    /// Phase 3 fee distribution (proposer/treasury credits).
+    /// Phase 3 fee distribution (proposer/treasury/fee-well credits).
     ///
     /// Since Phase 1 (fee/nonce) and Phase 3 (distribution) are committed outside
     /// the journal, we need to account for them separately in the delta. The agent's
     /// balance decreased by `fee` and nonce incremented by 1. The proposer receives
-    /// 50% and treasury receives 30% (if configured and present in ledger).
+    /// 50% and treasury receives 30% (if configured and present in ledger); the
+    /// remainder MOVES to the fee well (THE EPOCH §5, "fees as moves"), so the
+    /// delta sums to exactly zero when a fee well is configured.
     pub(super) fn compute_delta_from_journal_with_fee(
         journal: &LedgerJournal,
         ledger: &Ledger,
@@ -653,6 +657,7 @@ impl TurnExecutor {
         fee: u64,
         proposer_cell: Option<&CellId>,
         treasury_cell: Option<&CellId>,
+        fee_well_cell: Option<&CellId>,
     ) -> LedgerDelta {
         let mut delta = Self::compute_delta_from_journal(journal, ledger);
 
@@ -676,9 +681,12 @@ impl TurnExecutor {
             delta.updated.push((*agent, cell_delta));
         }
 
-        // Account for fee distribution credits (Phase 3).
+        // Account for fee distribution credits (Phase 3). Track what was
+        // actually delivered so the fee-well move below closes the books
+        // exactly (mirrors `distribute_fee_shares`).
         let proposer_share = fee / 2;
         let treasury_share = fee * 3 / 10;
+        let mut delivered: u64 = 0;
 
         if let Some(proposer_id) = proposer_cell {
             // Only include in delta if proposer exists in ledger.
@@ -691,6 +699,7 @@ impl TurnExecutor {
                     cell_delta.balance_change = proposer_share as i64;
                     delta.updated.push((*proposer_id, cell_delta));
                 }
+                delivered += proposer_share;
             }
         }
 
@@ -704,6 +713,21 @@ impl TurnExecutor {
                     let mut cell_delta = CellStateDelta::empty();
                     cell_delta.balance_change = treasury_share as i64;
                     delta.updated.push((*treasury_id, cell_delta));
+                }
+                delivered += treasury_share;
+            }
+        }
+
+        // THE EPOCH §5: the undelivered remainder moves to the fee well.
+        if let Some(well_id) = fee_well_cell {
+            if ledger.get(well_id).is_some() && fee > delivered {
+                let well_in_delta = delta.updated.iter_mut().find(|(id, _)| id == well_id);
+                if let Some((_, cell_delta)) = well_in_delta {
+                    cell_delta.balance_change += (fee - delivered) as i64;
+                } else {
+                    let mut cell_delta = CellStateDelta::empty();
+                    cell_delta.balance_change = (fee - delivered) as i64;
+                    delta.updated.push((*well_id, cell_delta));
                 }
             }
         }
