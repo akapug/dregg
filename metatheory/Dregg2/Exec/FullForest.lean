@@ -585,7 +585,7 @@ caps the `recKDelegateAtten` connectivity gate checks — WITHOUT them the fores
 def fmaDeleg : RecChainedState :=
   { fma0 with kernel :=
       { fma0.kernel with
-        caps := fun l => if l = 9 then [Cap.node 0]
+        caps := fun l => if l = 9 then [Cap.node 0, Cap.node 1]
                          else if l = 0 then [Cap.endpoint 1 [Auth.read, Auth.write], Cap.node 0]
                          else if l = 1 then [Cap.endpoint 0 [Auth.read, Auth.write]]
                          else [] } }
@@ -594,14 +594,16 @@ def fmaDeleg : RecChainedState :=
 against `fmaDeleg`, where every delegation edge's parent GENUINELY holds the delegated cap (the
 EXECUTED `recCDelegateAtten` handoff commits for the RIGHT reason — see `forgedEdgeForest` for the
 adversarial twin that REJECTS):
-  * ROOT: `mintA 9 0 1 50` — actor 9 mints +50 of ASSET 1 on cell 0 (privileged, disclosed);
+  * ROOT: `mintA 9 0 1 50` — actor 9 (holding the ISSUER cap `node 1`) mints 50 of ASSET 1 into
+    cell 0: the W1 issuer-move — well 1 → −50, cell 0 → +50, supply UNCHANGED;
   * CHILD (delegated 0⟶0-holder, `[read] ⊆ [read,write]`, target cell 1): `balanceA ⟨0,0,1,30⟩ 0` —
     actor 0 transfers 30 of ASSET 0 from cell 0 to cell 1 (conserves asset 0). The delegation handoff
     GATES on cell 0 holding a cap to cell 1 (`endpoint 1 [r,w]` in `fmaDeleg`);
-  * GRANDCHILD (delegated, target cell 0): `burnA 9 0 1 50` — actor 9 burns −50 of ASSET 1 on cell 0.
-    The handoff GATES on cell 0 holding a cap to cell 0 (`node 0` in `fmaDeleg`).
-The per-asset net is `0` in BOTH assets (asset 1: +50 −50 = 0; asset 0: 0), so the whole tree
-conserves PER-ASSET. The delegation edges are non-amplifying AND now EXECUTED (gated). -/
+  * GRANDCHILD (delegated, target cell 0): `burnA 9 0 1 50` — actor 9 burns cell 0's 50 of ASSET 1
+    back into well 1 (the return-to-well move). The handoff GATES on cell 0 holding a cap to cell 0
+    (`node 0` in `fmaDeleg`).
+W1: EVERY node conserves EVERY asset exactly (mint/burn are issuer-moves), so the per-asset net is
+identically `0`. The delegation edges are non-amplifying AND EXECUTED (gated). -/
 def goodFullForest : FullForestA :=
   ⟨ .mintA 9 0 1 50
   , [ { holder := 0, keep := [Auth.read], parentCap := .endpoint 1 [Auth.read, Auth.write]
@@ -680,22 +682,23 @@ def badRootFullForest : FullForestA :=
 
 #guard ((execFullForestA fma0 badRootFullForest).isSome) == false  --  false (unauthorized root ⇒ fail-closed)
 
-/-- **`launderFullForest`** — the scalar-LAUNDERING tree a single-aggregate kernel would WRONGLY
-accept as "conserving": mint +50 of ASSET 1 (root) while burning −50 of ASSET 0 (child). An aggregate
-scalar delta = +50 − 50 = 0 ("conserved" — the BUG). The per-asset VECTOR delta is NONZERO in EACH
-asset (asset 0: −50; asset 1: +50), so the per-asset carrier CANNOT pass it off as conservative. THIS
-is why per-asset is the sole canonical carrier — a scalar would hide the laundering. -/
+/-- **`launderFullForest`** — the pre-W1 scalar-LAUNDERING tree (mint asset 1 at the root, burn
+asset 0 in a child: a single-aggregate kernel saw +50 − 50 = 0 and accepted the cross-asset swap).
+W1 kills the channel structurally: mint/burn are issuer-moves, so the per-asset delta family is
+IDENTICALLY ZERO — no supply op exists to launder with. The tree below still REJECTS, now for an
+even sharper reason: the child's `burnA 9 0 0 50` is a SELF-BURN of the issuer's own well
+(`cell = a = 0`), which the `cell ≠ a` gate refuses outright. -/
 def launderFullForest : FullForestA :=
-  ⟨ .mintA 9 0 1 50            -- +50 of asset 1
+  ⟨ .mintA 9 0 1 50            -- issuer-move: well 1 → cell 0 (conserving)
   , [ { holder := 9, keep := [Auth.read], parentCap := .endpoint 0 [Auth.read, Auth.write]
-      , sub := ⟨ .burnA 9 0 0 50, [] ⟩ } ] ⟩   -- -50 of asset 0
+      , sub := ⟨ .burnA 9 0 0 50, [] ⟩ } ] ⟩   -- self-burn of well 0: REFUSED (cell ≠ a)
 
--- The per-asset VECTOR delta is NONZERO in EACH asset (a scalar aggregate would hide both):
-#guard (turnLedgerDeltaAsset (lowerForestA launderFullForest) 0) == -50  --  -50 (NOT 0)
-#guard (turnLedgerDeltaAsset (lowerForestA launderFullForest) 1) == 50  --  50  (NOT 0)
--- The per-asset ledger AFTER the launder tree: the launder forest is REJECTED outright (fail-closed):
+-- W1: the delta family vanishes — there is NO disclosed non-conservation left to aggregate away:
+#guard (turnLedgerDeltaAsset (lowerForestA launderFullForest) 0) == 0  --  0 (W1 exactness)
+#guard (turnLedgerDeltaAsset (lowerForestA launderFullForest) 1) == 0  --  0 (W1 exactness)
+-- The launder forest is REJECTED outright (fail-closed — the self-burn child refuses):
 #guard ((execFullForestA fma0 launderFullForest).map
-        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))).isNone  -- TODO(triage): comment claimed `some (55, 57)` (computed-then-CAUGHT); code yields `none` — `execFullForestA` rejects the launder forest entirely (fail-closed), it does not compute a post-state. The narration "CAUGHT" is still true; the tuple value was stale.
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))).isNone
 
 /-! The NO-AMPLIFY edge witness: a STRICT attenuation. `keep = [read]` ⊊ `parentCap = endpoint with
 [read, write]` — `attenuate` STRICTLY drops `write`, so `confRights` drops a REAL element (not a

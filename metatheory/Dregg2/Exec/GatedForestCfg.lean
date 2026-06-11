@@ -275,11 +275,12 @@ theorem logBumpForestG_log_one {s' : RecChainedState}
 #guard ((execFullForestG fmaDeleg falseCaveatForestG).isSome) == false
 #guard (caveatsDischarged falseCaveatForestG.auth fmaDeleg) == false
 #guard (caveatsDischarged goodFullForestG.auth fmaDeleg)
-#guard ((execFullForestG fmaDeleg launderFullForestG).isSome)
-#guard (turnLedgerDeltaAsset ((lowerForestG launderFullForestG).map Prod.snd) 0) == -50
-#guard (turnLedgerDeltaAsset ((lowerForestG launderFullForestG).map Prod.snd) 1) == 50
-#guard ((execFullForestG fmaDeleg launderFullForestG).map
-        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (55, 57)
+-- W1: the launder forest's delta family VANISHES (mint/burn are issuer-moves — there is no
+-- disclosed non-conservation left to aggregate away), and the forest itself REJECTS: its child
+-- `.burnA 9 0 0 50` is a self-burn of the issuer's own well (`cell = a = 0`), refused fail-closed.
+#guard ((execFullForestG fmaDeleg launderFullForestG).isSome) == false
+#guard (turnLedgerDeltaAsset ((lowerForestG launderFullForestG).map Prod.snd) 0) == 0
+#guard (turnLedgerDeltaAsset ((lowerForestG launderFullForestG).map Prod.snd) 1) == 0
 #guard ((execFullForestA fmaDeleg (eraseG goodFullForestG)).isSome)
 #guard (((execFullForestG fmaDeleg goodFullForestG).map (fun s => s.log.length)
         == (execFullForestA fmaDeleg (eraseG goodFullForestG)).map (fun s => s.log.length)))

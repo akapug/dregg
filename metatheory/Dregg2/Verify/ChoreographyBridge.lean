@@ -24,7 +24,7 @@ open Dregg2.Exec.JointCell
 open Dregg2.Exec.FullForest (fmaDeleg)
 
 open Dregg2.Exec.FullForestAuth (execFullForestG)
-open Dregg2.Exec.StarbridgeGated (execForestG launderFullForestG)
+open Dregg2.Exec.StarbridgeGated (execForestG launderFullForestG goodFullForestG)
 open Dregg2.Exec.TurnExecutorFull (fma0)
 open Dregg2.Exec (cellObsA)
 open Production (Contract Sched)
@@ -67,7 +67,10 @@ theorem red_binding_implies_cross_cell_conservation
 
 #guard (halfA jointDemoSwap + halfB jointDemoSwap == 0)
 #guard (recTotalAsset fmaDeleg.kernel 0 + recTotalAsset fmaDeleg.kernel 1 == 112)
-#guard ((execFullForestG fmaDeleg launderFullForestG).map
+-- W1: the launder forest REJECTS outright (its burn child is a self-burn of the issuer's well);
+-- the GOOD gated forest commits and conserves the combined total exactly (mint/burn = issuer-moves).
+#guard ((execFullForestG fmaDeleg launderFullForestG).isNone)
+#guard ((execFullForestG fmaDeleg goodFullForestG).map
         (fun s => recTotalAsset s.kernel 0 + recTotalAsset s.kernel 1) == some (112 : ℤ))
 
 #assert_axioms identity_blue_forever

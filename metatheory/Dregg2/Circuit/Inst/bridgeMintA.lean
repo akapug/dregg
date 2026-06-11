@@ -67,10 +67,10 @@ structure BridgeMintArgs where
 /-- The bridge-inbound-mint guard as a `Prop` (the spec's `inboundMintAdmit`): privileged supply
 authority ∧ non-negativity ∧ destination-cell liveness. -/
 def bridgeMintGuardProp (s : RecChainedState) (args : BridgeMintArgs) : Prop :=
-  inboundMintAdmit s.kernel args.actor args.cell args.value
+  inboundMintAdmit s.kernel args.actor args.cell args.a args.value
 
 instance (s : RecChainedState) (args : BridgeMintArgs) : Decidable (bridgeMintGuardProp s args) := by
-  unfold bridgeMintGuardProp inboundMintAdmit; exact inferInstanceAs (Decidable (_ ∧ _ ∧ _))
+  unfold bridgeMintGuardProp inboundMintAdmit; exact inferInstanceAs (Decidable (_ ∧ _ ∧ _ ∧ _ ∧ _))
 
 /-- The guard's witness generator: lay the single `propBit` column at wire `0` (`vBitGuard`), reusing
 the validated single-bit guard sub-system. -/
@@ -100,8 +100,8 @@ def bridgeMintE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Inject
     EffectSpec2 RecChainedState BridgeMintArgs where
   view         := chainView
   active       := funcComponent (β := CellId → AssetId → ℤ) (·.bal) D hD
-                    (fun s args => recBalCredit s.kernel.bal args.cell args.a args.value)
-  logUpdate    := some (fun s args => inboundMintReceipt args.actor args.cell args.value :: s.log)
+                    (fun s args => recTransferBal s.kernel.bal args.a args.cell args.a args.value)
+  logUpdate    := some (fun s args => inboundMintReceipt args.actor args.cell args.a args.value :: s.log)
   restFrame    := fun k k' =>
     (k'.accounts = k.accounts ∧ k'.cell = k.cell ∧ k'.caps = k.caps
       ∧ k'.nullifiers = k.nullifiers ∧ k'.revoked = k.revoked
@@ -160,8 +160,8 @@ theorem apex_iff_inboundMintSpec (D : (CellId → AssetId → ℤ) → ℤ) (hD 
       ↔ InboundMintSpec s args.actor args.cell args.a args.value s' := by
   -- unfold the apex's four conjuncts to the bare components.
   show (bridgeMintGuardProp s args
-        ∧ s'.kernel.bal = recBalCredit s.kernel.bal args.cell args.a args.value
-        ∧ s'.log = inboundMintReceipt args.actor args.cell args.value :: s.log
+        ∧ s'.kernel.bal = recTransferBal s.kernel.bal args.a args.cell args.a args.value
+        ∧ s'.log = inboundMintReceipt args.actor args.cell args.a args.value :: s.log
         ∧ ((bridgeMintE D hD).restFrame s.kernel s'.kernel))
        ↔ InboundMintSpec s args.actor args.cell args.a args.value s'
   unfold InboundMintSpec bridgeMintGuardProp bridgeMintE

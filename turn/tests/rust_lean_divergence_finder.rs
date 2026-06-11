@@ -219,13 +219,18 @@ fn build_corpus() -> Vec<CorpusCase> {
     // ---- Effects WITHOUT a Lean wire model yet (expected: GAP) ----
     case!("IncrementNonce", 100, 100, |a, _b| vec![Effect::IncrementNonce { cell: a }]);
     // Burn on an OWNED, OPEN, cap-LESS cell: apply.rs commits (ownership suffices), the verified
-    // `.burnA` REJECTS (it requires an explicit `node`/`control` mint-cap — bare ownership is
-    // deliberately insufficient). A characterised, SAFE-direction model difference (allowlisted).
+    // `.burnA` REJECTS. W1 (issuer-supply, DREGG3 §2.2): the verified burn is a RETURN-TO-WELL —
+    // an ordinary move from the holder to the asset's ISSUER cell, gated on the issuer capability.
+    // The Rust scalar burn (destroy balance, no destination) has NO conserving image, so the
+    // verified executor refuses it. A characterised, SAFE-direction model difference (allowlisted)
+    // until the Rust value-model migration lands the native issuer well.
     case!("Burn", 100, 100, |a, _b| vec![Effect::Burn { target: a, slot: 0, amount: 10 }]);
-    // Burn TOOTH: the SAME burn on a cell that HOLDS a `node` cap on itself. The c-list edge is
-    // marshalled to `Cap::Node(self)`, which `mintAuthorizedB` reads as burn-authority, so the
-    // verified `.burnA` now COMMITS — matching apply.rs. This proves the Lean burn gate is
-    // GENUINELY gated (not vacuously-false): empty c-list ⇒ reject, self-node-cap ⇒ commit.
+    // Burn W1 TOOTH: the SAME burn WITH a self `node` cap. Pre-W1 this committed in Lean (the
+    // recipient-shaped gate). Under issuer-supply it is a SELF-BURN of the well (`cell = asset`)
+    // — the verified kernel refuses the no-move outright, cap or no cap. Both corpus burns now
+    // land on the refuse side; the two-sidedness of the burn gate lives in the Lean kernel's own
+    // `#guard` teeth (`ReachableConservation` / `StateSupply`), and the Rust-side agreement
+    // returns when apply.rs's burn becomes the return-to-well move (the staged W1 migration).
     {
         let (mut ledger, ida, _idb) = two_cell_ledger(100, 100);
         grant_self_cap(&mut ledger, ida);
@@ -452,15 +457,16 @@ fn rust_lean_divergence_finder() {
     // not a hidden bug:
     //
     //   * `Burn` — a genuine, SAFE-DIRECTION MODEL DIFFERENCE (the verified kernel is
-    //     STRICTER). The verified `.burnA` requires `mintAuthorizedB` — an explicit `node` /
-    //     `control`-endpoint CAP on the burned cell (mint/burn is privileged; bare ownership
-    //     is deliberately NOT sufficient, `Generators.lean:31`). The corpus cell has an EMPTY
-    //     c-list, so the verified gate correctly FAILS (lean=false) while apply.rs commits the
-    //     burn on the owned open cell (rust=true). This is NOT a marshaller under-spec — the
-    //     real (empty) c-list IS marshalled; it is the verified kernel refusing an
-    //     under-authorised burn apply.rs allows. The divergence is on the SAFE side (the
-    //     verified executor rejects what apply.rs accepts), and it surfaces a swap-relevant
-    //     authority-model tightening, so it is recorded — not hidden.
+    //     STRICTER). W1 (issuer-supply): the verified `.burnA` is the RETURN-TO-WELL move —
+    //     value flows from the holder back to the asset's ISSUER cell, gated on the issuer
+    //     capability (`mintAuthorizedB actor asset`), conserving `Σ_c bal c a` EXACTLY. The
+    //     Rust scalar `Effect::Burn` (destroy balance, no destination) has no conserving
+    //     image: the corpus burns marshal to the self-burn shape (`cell = asset` in the
+    //     1-cell wire numbering), which the verified kernel refuses outright. lean=false,
+    //     rust=true — the SAFE direction (the verified executor rejects what apply.rs
+    //     accepts). Recorded, not hidden; closes when the staged W1 Rust migration gives the
+    //     native asset its issuer well (signed well balance + genesis issuer cell) and
+    //     apply.rs's burn becomes the well move.
     //
     // The OLD `Transfer` overspend drift is now RESOLVED (not on the list): the status-bearing
     // export reports the body-failure as `ok:0` and the `Unchecked → Breadstuff` projection
@@ -535,11 +541,12 @@ fn rust_lean_divergence_finder() {
             .map(|s| (s.agree, s.diverge))
             .unwrap_or((0, 0));
         assert!(
-            b_agree >= 1 && b_diverge >= 1,
-            "Burn-gate non-vacuity TOOTH failed — got agree={b_agree} diverge={b_diverge}. \
-             The verified burn-authority gate must COMMIT with a mint-cap (Burn/with-cap) and \
-             REJECT without one (Burn); a gate that only ever agrees or only ever diverges is \
-             vacuous."
+            b_agree == 0 && b_diverge >= 2,
+            "Burn W1 TOOTH failed — got agree={b_agree} diverge={b_diverge}. Under issuer-supply \
+             the verified burn is the return-to-well move; the Rust scalar burn has no conserving \
+             image, so BOTH corpus burns must land on the refuse side (lean=false, rust=true — \
+             the safe direction). An agreement here would mean the verified kernel committed a \
+             supply-destroying burn — a conservation regression."
         );
         // (F2b: the QueueAllocate GAP-shrink tooth died with the FACTORY-DISSOLVED queue family —
         // see lean_state_producer_coverage::queue_falls_back_factory_dissolved for the loud
@@ -653,9 +660,10 @@ fn write_ledger_markdown(
          The agreement comparison is COMMIT-BIT-ONLY (the shadow compares whether both \
          executors commit/roll back, not the full post-state). With that lens:\n\n\
          1. **Modelled & agreeing** — `SetField`, `SetPermissions`, `SetVerificationKey`, \
-         `EmitEvent`, `MakeSovereign`, `NoteCreate`, `IncrementNonce`, `CellSeal`, the authorised \
-         `Burn/with-cap`, AND **all four `Transfer` cases incl. both overspends** — apply.rs and \
-         the verified Lean executor agree on the commit decision.\n\n\
+         `EmitEvent`, `MakeSovereign`, `NoteCreate`, `IncrementNonce`, `CellSeal`, AND **all four \
+         `Transfer` cases incl. both overspends** — apply.rs and the verified Lean executor agree \
+         on the commit decision. (W1: BOTH `Burn` cases now diverge — the verified burn is the \
+         issuer-supply return-to-well move; see the allowlist note.)\n\n\
          2. **Transfer overspend — RESOLVED (was the headline drift).** Two fixes closed it: \
          (a) the `@[export]` now uses the STATUS-bearing `runGatedForestTurnStatus` and reports \
          `ok:1` ONLY when the gated forest BODY commits — a prologue-only result (fee/nonce \

@@ -247,12 +247,13 @@ Three theorems certify the assembled run at once:
   * **every committed node attested its StepInv** — `execFullForestA_each_attests` (per-asset ledger
     vector ∧ ChainLink ∧ ObsAdvance ∧ the kind obligation). -/
 
-/-- **`orchestration`** — the whole multi-agent run as one call-forest:
-  * root (`minter`): mint +50 of asset 1 on cell 0;
+/-- **`orchestration`** — the whole multi-agent run as one call-forest (W1: mint/burn are
+issuer-moves — the issuer of asset 1 is cell 1, whose well absorbs both):
+  * root (`minter`, holding the `node 1` ISSUER cap): mint 50 of asset 1 into cell 0 (well 1 → −50);
   * worker A (delegated, `[read] ⊊ [read,write]`): transfer 30 of asset 0;
-  * worker B (delegated, deeper): burn −50 of asset 1 (`minter`).
-Per-asset net is `0` in both assets (asset 1: +50 −50 = 0; asset 0: 0). Every delegation edge is
-non-amplifying. -/
+  * worker B (delegated, deeper): burn cell 0's 50 of asset 1 back into well 1.
+EVERY node conserves EVERY asset exactly (the W1 exactness — no netting argument needed). Every
+delegation edge is non-amplifying. -/
 def orchestration : FullForestA :=
   ⟨ .mintA minter orchestrator 1 50
   , [ { holder := counterparty, keep := workerKeep, parentCap := orchestratorCap
@@ -266,16 +267,10 @@ the transfer is internal. `execFullForestA_conserves_per_asset` on the concrete 
 theorem orchestration_conserves (s' : RecChainedState) (b : AssetId)
     (h : execFullForestA world orchestration = some s') :
     recTotalAsset s'.kernel b = recTotalAsset world.kernel b := by
-  have hzero : turnLedgerDeltaAsset (lowerForestA orchestration) b = 0 := by
-    -- asset 1: +50 (mint) − 50 (burn) = 0; asset 0: 0; every other asset: 0.
-    simp only [orchestration, lowerForestA, lowerChildrenA, capTarget, orchestratorCap,
-               List.cons_append, List.nil_append, turnLedgerDeltaAsset,
-               List.map_cons, List.map_nil, List.append_nil, List.sum_cons, List.sum_nil,
-               ledgerDeltaAsset, add_zero]
-    by_cases hb : b = 1
-    · subst hb; decide
-    · simp only [if_neg hb, add_zero]
-  exact execFullForestA_conserves_per_asset world s' orchestration b h hzero
+  -- W1: the delta family vanishes IDENTICALLY (mint/burn are issuer-moves) — no per-asset
+  -- netting argument needed; every forest's net is 0 at every asset.
+  exact execFullForestA_conserves_per_asset world s' orchestration b h
+    (Dregg2.Exec.TurnExecutorFull.turnLedgerDeltaAsset_eq_zero _ b)
 
 /-- **`orchestration_no_amplify` — ⑥b no agent amplified authority.** Every delegation edge is
 non-amplifying: for each `(keep, parentCap)` edge the cap handed to the worker confers ⊆ the parent's

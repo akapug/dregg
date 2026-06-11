@@ -276,22 +276,44 @@ def cellProjA (k : RecordKernelState) (c : CellId) (a : AssetId) : CellState whe
   reserved := 0
   commit   := 0
 
-/-- **`unify_mint` — THE UNIFICATION.** A committed universe-A mint (`MintASpec`), projected onto the
-minted `(cell, asset)` entry under `cellProjA`, satisfies `CellMintSpec` EXACTLY: the conserved
-`bal cell a` rises by `amt`; frame `0 = 0`. So `CellMintSpec` IS `recCMintAsset`'s per-entry effect. -/
+/-- **`unify_mint` — THE UNIFICATION (the recipient leg).** A committed universe-A mint
+(`MintASpec`, W1: the issuer-move), projected onto the RECIPIENT's `(cell, a)` entry under
+`cellProjA`, satisfies `CellMintSpec` EXACTLY: the recipient's `bal cell a` rises by `amt`; frame
+`0 = 0`. So `CellMintSpec` IS `recCMintAsset`'s per-entry effect at the recipient. The WELL leg —
+the issuer's row falling by the same `amt`, which is what makes the sum exact — is
+`unify_mint_well` below. -/
 theorem unify_mint (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (hspec : MintASpec s actor cell a amt s') :
     CellMintSpec (cellProjA s.kernel cell a) amt (cellProjA s'.kernel cell a) := by
   refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
   show s'.kernel.bal cell a = s.kernel.bal cell a + amt
   rw [hspec.2.1]
-  exact (recBalCredit_correct s.kernel.bal cell a amt).1
+  exact (recTransferBal_mint_correct s.kernel.bal cell a amt hspec.1.2.2.2.2).2.1
+
+/-- **`unify_mint_well` — THE WELL LEG (W1).** The SAME committed mint, projected onto the ISSUER's
+well `(a, a)`, satisfies `CellMintSpec` with the NEGATED amount: the well falls by exactly `amt`
+(the negative-capable well carries −supply). Recipient `+amt` (above) and well `−amt` (here) are
+the two rows of ONE issuer-move — their sum is the exact-conservation content at row level. -/
+theorem unify_mint_well (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
+    (hspec : MintASpec s actor cell a amt s') :
+    CellMintSpec (cellProjA s.kernel a a) (-amt) (cellProjA s'.kernel a a) := by
+  refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
+  show s'.kernel.bal a a = s.kernel.bal a a + (-amt)
+  rw [hspec.2.1]
+  have := (recTransferBal_mint_correct s.kernel.bal cell a amt hspec.1.2.2.2.2).1
+  omega
 
 /-- **`unify_mint_exec` — same, against the executor.** -/
 theorem unify_mint_exec (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (h : recCMintAsset s actor cell a amt = some s') :
     CellMintSpec (cellProjA s.kernel cell a) amt (cellProjA s'.kernel cell a) :=
   unify_mint s s' actor cell a amt ((recCMintAsset_iff_spec s actor cell a amt s').mp h)
+
+/-- **`unify_mint_well_exec` — the well leg, against the executor.** -/
+theorem unify_mint_well_exec (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
+    (h : recCMintAsset s actor cell a amt = some s') :
+    CellMintSpec (cellProjA s.kernel a a) (-amt) (cellProjA s'.kernel a a) :=
+  unify_mint_well s s' actor cell a amt ((recCMintAsset_iff_spec s actor cell a amt s').mp h)
 
 /-- **`descriptor_agrees_with_executor` — per-cell circuit⟺executor agreement.** The descriptor's
 pinned post-state agrees with the executor's minted-entry post-state on EVERY clause (the conserved
@@ -426,7 +448,9 @@ theorem mintDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv)
 #assert_axioms mintDescriptor_full_sound
 #assert_axioms mintDescriptor_commit_binds_state
 #assert_axioms unify_mint
+#assert_axioms unify_mint_well
 #assert_axioms unify_mint_exec
+#assert_axioms unify_mint_well_exec
 #assert_axioms descriptor_agrees_with_executor
 #assert_axioms goodMintRow_realizes_intent
 #assert_axioms badMintRow_rejected

@@ -891,6 +891,20 @@ theorem execFullForestG_conserves_per_asset (s s' : RecChainedState)
     recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   rw [execFullForestG_ledger_per_asset s s' f b h, hzero, add_zero]
 
+/-- **`execFullForestG_conserves_exact` (W1: UNCONDITIONAL exactness at the RUNNING entry).** A
+committed gated full-forest conserves EVERY asset's total supply exactly — no zero-net hypothesis:
+the per-action delta family vanishes identically (`ledgerDeltaAsset_eq_zero` — mint/burn/bridgeMint
+are issuer-moves, so NO verb in the gated op-set moves any asset's sum). This is the conservation
+leg `running_entry_sound` carries: `Σ_c bal c a` is invariant across the FFI entry, full stop. -/
+theorem execFullForestG_conserves_exact (s s' : RecChainedState)
+    (f : FullForestG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
+      (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
+      (Bytes := Bytes) (Tag := Tag)) (b : AssetId)
+    (h : execFullForestG s f = some s') :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
+  execFullForestG_conserves_per_asset s s' f b h
+    (Dregg2.Exec.TurnExecutorFull.turnLedgerDeltaAsset_eq_zero _ b)
+
 /-- **`execFullForestG_no_amplify` (Granovetter survives the gate).** EVERY delegation edge
 of the gated forest is non-amplifying: the credential+caveat decoration adds no amplification (the edge
 data is the `FullChildG` triple, IDENTICAL to `FullChildA`). A one-liner off

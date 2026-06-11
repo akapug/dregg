@@ -425,7 +425,20 @@ theorem unify_burn (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) 
   refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
   show s'.kernel.bal cell a = s.kernel.bal cell a - amt
   rw [hspec.2.1]
-  exact (recBurn_ledger_correct s.kernel.bal cell a amt).1
+  exact (recBurn_ledger_correct s.kernel.bal cell a amt hspec.1.2.2.2.2.2).1
+
+/-- **`unify_burn_well` — THE WELL LEG (W1).** The SAME committed burn, projected onto the ISSUER's
+well `(a, a)`, satisfies the frozen-nonce spec with the NEGATED amount: the well RISES by exactly
+`amt` (the burned value RETURNS to the well — supply shrinks). Holder `−amt` (above) and well
+`+amt` (here) are the two rows of ONE return-to-well move — exact conservation at row level. -/
+theorem unify_burn_well (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
+    (hspec : BurnSpec s actor cell a amt s') :
+    CellBurnSpecFrozenNonce (cellProjA s.kernel a a) (-amt) (cellProjA s'.kernel a a) := by
+  refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
+  show s'.kernel.bal a a = s.kernel.bal a a - (-amt)
+  rw [hspec.2.1]
+  have := (recBurn_ledger_correct s.kernel.bal cell a amt hspec.1.2.2.2.2.2).2.1
+  omega
 
 /-- **`unify_burn_exec` — same, stated against the executor directly.** A committed
 `recCBurnAsset s actor cell a amt = some s'` (the REAL record-kernel transition) projects per-entry to
@@ -590,6 +603,7 @@ theorem burnDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow :
 #assert_axioms burnDescriptor_full_sound
 #assert_axioms burnDescriptor_commit_binds_state
 #assert_axioms unify_burn
+#assert_axioms unify_burn_well
 #assert_axioms unify_burn_exec
 #assert_axioms exec_nonce_is_frozen_not_ticked
 #assert_axioms descriptor_agrees_with_executor

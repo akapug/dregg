@@ -41,12 +41,17 @@ open scoped BigOperators
 not in the whole-state ℤ, but in this NAMED field of the content-addressed record. -/
 def balanceField : FieldName := "balance"
 
-/-- **An asset identity.** A dregg cell holds MANY assets, and conservation must be **per-asset**,
-never one aggregate scalar (`EFFECT-ISA-DESIGN.md:315,320-323`; `dregg2 §2.1`). A turn that moves
-5 of asset 0 must leave the supply of asset 1 *literally untouched* — folding all assets into one
-sum would let a cell silently swap one asset for another while the aggregate stays put. The
-conserved quantity is therefore a *family* indexed by `AssetId` (see `§MULTI-ASSET` below). -/
-abbrev AssetId : Type := Nat
+/-- **An asset identity IS its issuer cell's identity** (W1 value unification, DREGG3 §2.2
+Asset): `AssetId := CellId`. Every asset is the promise of ONE issuer cell; the issuer's own
+balance row in its asset is the (negative-capable) WELL carrying −supply, so `∀ a, Σ_c bal c a = 0`
+exactly (`ExactConservation`, §VALUE-UNIFY below). Mint authority = control of the issuer cell.
+
+A dregg cell holds MANY assets, and conservation must be **per-asset**, never one aggregate scalar
+(`EFFECT-ISA-DESIGN.md:315,320-323`; `dregg2 §2.1`). A turn that moves 5 of asset 0 must leave the
+supply of asset 1 *literally untouched* — folding all assets into one sum would let a cell silently
+swap one asset for another while the aggregate stays put. The conserved quantity is therefore a
+*family* indexed by `AssetId` (see `§MULTI-ASSET` below). -/
+abbrev AssetId : Type := CellId
 
 /-- **`balOf v`** — read a cell record's `balance` field as an `Int`, defaulting an
 absent/ill-typed field to `0` (fail-soft on the *measure*: a malformed record contributes `0` to

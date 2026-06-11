@@ -179,11 +179,13 @@ theorem mint_circuit_refines_exec (S : Surface2) (D : (CellId → AssetId → �
   (mint_exec_equiv_spec s args s').mpr
     (mint_circuit_refines_spec S D hD hRest hLog s args s' h)
 
+/-- W1: a circuit-accepted mint CONSERVES every asset exactly — the issuer-move's exactness
+descends through the refinement chain (circuit → spec → executor → `mintA_supply_delta`). -/
 theorem mint_supply_delta_descends (S : Surface2) (D : (CellId → AssetId → ℤ) → ℤ)
     (hD : Function.Injective D) (hRest : RestIffNoBal S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : MintArgs) (s' : RecChainedState)
     (h : mintCircuitStep S D hD s args s') (b : AssetId) :
-    recTotalAsset s'.kernel b = recTotalAsset s.kernel b + (if b = args.a then args.amt else 0) :=
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
   mintA_supply_delta s args.actor args.cell args.a args.amt s'
     ((mint_exec_equiv_spec s args s').mpr
       (mint_circuit_refines_spec S D hD hRest hLog s args s' h)) b

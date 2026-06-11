@@ -22,7 +22,7 @@ ledger §7). Concretely:
   * **Mint**: PASS, with the equivalence PROVED as a commuting square (`mint_is_issuer_move`):
     debiting the issuer's well in the VIEW of a current-law mint IS the per-asset transfer
     issuer→recipient — pointwise equal ledgers. Mint INTO the issuer's own well is a view-NOOP
-    (`mint_to_issuer_is_noop`). The current `recKMintAsset` provably BREAKS exactness
+    (`mint_to_issuer_is_noop`). The pre-W1 `recKMintAssetLegacy` provably BREAKS exactness
     (`mint_breaks_exact` — the required non-vacuity tooth); its issuer-move replacement
     (`issuerMoveK`) provably PRESERVES it.
   * **Genesis/bootstrap**: PASS with a NECESSARY side condition, made precise: the all-zero genesis
@@ -52,8 +52,8 @@ namespace Dregg2.Substrate.IssuerSupplyProbe
 
 open Dregg2.Exec
 open Dregg2.Authority
-open Dregg2.Exec.TurnExecutorFull (recKMintAsset recBalCredit recBalCredit_recTotalAsset
-  recKMintAsset_delta)
+open Dregg2.Exec.TurnExecutorFull (recKMintAssetLegacy recBalCredit recBalCredit_recTotalAsset
+  recKMintAssetLegacy_delta)
 open Dregg2.Exec.Admission (AdmCtx TurnHdr admissible commitPrologue distributeFee feeBurned
   feeTriSum proposerShare treasuryShare creditCell creditOpt fee_conservation_modulo_burn
   distributeFee_frame creditCell_balance creditCell_frame commitPrologue_frame
@@ -196,10 +196,10 @@ theorem createCell_preserves_exact (k : RecordKernelState) (newCell : CellId)
 SAME LEDGER under the view (the commuting square). -/
 
 /-- Shape of a committed current-law mint (gate-peeled). -/
-private theorem recKMintAsset_shape {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId}
-    {amt : ℤ} (h : recKMintAsset k actor cell a amt = some k') :
+private theorem recKMintAssetLegacy_shape {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId}
+    {amt : ℤ} (h : recKMintAssetLegacy k actor cell a amt = some k') :
     k' = { k with bal := recBalCredit k.bal cell a amt } ∧ cell ∈ k.accounts := by
-  unfold recKMintAsset at h
+  unfold recKMintAssetLegacy at h
   by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ cell ∈ k.accounts
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
@@ -208,14 +208,14 @@ private theorem recKMintAsset_shape {k k' : RecordKernelState} {actor cell : Cel
     exact absurd h (by simp)
 
 /-- **NON-VACUITY TOOTH: the CURRENT mint provably BREAKS exact conservation.** A committed
-`recKMintAsset` of a positive amount on an exact state yields a NON-exact state — supply inflation
+`recKMintAssetLegacy` of a positive amount on an exact state yields a NON-exact state — supply inflation
 is provably not conservation-preserving (instantiates `recKMintAsset_delta`). This is what makes
 the issuer-move reformulation a REPAIR, not a relabeling. -/
 theorem mint_breaks_exact {k k' : RecordKernelState} {actor cell : CellId} {a : AssetId} {amt : ℤ}
-    (h : recKMintAsset k actor cell a amt = some k') (hpos : 0 < amt)
+    (h : recKMintAssetLegacy k actor cell a amt = some k') (hpos : 0 < amt)
     (hex : ExactLedger k) : ¬ ExactLedger k' := by
   intro hex'
-  have hd := recKMintAsset_delta k k' actor cell a amt h a
+  have hd := recKMintAssetLegacy_delta k k' actor cell a amt h a
   rw [if_pos rfl] at hd
   have h0 := hex a
   have h1 := hex' a
@@ -348,15 +348,15 @@ theorem mint_to_issuer_is_noop (k : RecordKernelState) (cell : CellId) (a : Asse
   · have hccand : ¬ (c = cell ∧ b = a) := fun hp => hba hp.2
     rw [if_neg hccand, if_neg hba, add_zero]
 
-/-- **The executable corollary**: a committed `recKMintAsset` to a non-issuer recipient, seen
+/-- **The executable corollary**: a committed `recKMintAssetLegacy` to a non-issuer recipient, seen
 through the view, IS the issuer-move ledger (and accounts are untouched). The reformed
 state equals the current state plus the reform — no information is created or lost by the cutover. -/
 theorem recKMintAsset_view_is_transfer {k k' : RecordKernelState} {actor cell : CellId}
-    {a : AssetId} {amt : ℤ} (h : recKMintAsset k actor cell a amt = some k')
+    {a : AssetId} {amt : ℤ} (h : recKMintAssetLegacy k actor cell a amt = some k')
     (hne : cell ≠ issuerOf a) :
     issuerBal issuerOf k' = recTransferBal (issuerBal issuerOf k) (issuerOf a) cell a amt
       ∧ k'.accounts = k.accounts := by
-  obtain ⟨hk', hcell⟩ := recKMintAsset_shape h
+  obtain ⟨hk', hcell⟩ := recKMintAssetLegacy_shape h
   subst hk'
   exact ⟨mint_is_issuer_move issuerOf k cell a amt hcell hne, rfl⟩
 
@@ -674,7 +674,7 @@ def kPool : RecordKernelState :=
     value law is undamaged — but ISSUANCE POLICY (how negative may the well go, who may pull) is
     no longer a kernel gate: it becomes the issuer cell's program (`Pred`), exactly the DREGG3
     §2.2 intent. The kernel keeps conservation; the cell keeps policy.
-  * **E2 — mint authority re-targets.** The current `recKMintAsset` gates `mintAuthorizedB` over
+  * **E2 — mint authority re-targets (LANDED).** The pre-W1 `recKMintAssetLegacy` gates `mintAuthorizedB` over
     the RECIPIENT cell; the issuer-move gates it over the ISSUER. The commuting square is about
     LEDGERS, not gates — the cutover must migrate mint capabilities from recipient-shaped to
     issuer-shaped, a real (small) migration, not a relabeling.
