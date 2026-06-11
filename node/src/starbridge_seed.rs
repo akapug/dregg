@@ -75,15 +75,62 @@ pub fn seed_starbridge_factory_cells_with_operator(
     federation_id: [u8; 32],
     operator: Option<[u8; 32]>,
 ) -> StarbridgeSeedStats {
+    let entries = match parse_starbridge_cells(genesis) {
+        Some(entries) if !entries.is_empty() => entries,
+        _ => return StarbridgeSeedStats::default(),
+    };
+    seed_starbridge_cells(
+        &entries,
+        data_dir,
+        ledger,
+        federation_id,
+        operator,
+        /* devnet_fallback */ false,
+    )
+}
+
+/// Idempotent-on-boot DEVNET seeding from the built-in default starbridge cell
+/// set ([`crate::genesis::default_starbridge_genesis_cells`]).
+///
+/// This is the backfill path for a devnet data dir that predates the
+/// starbridge seed (no `genesis.json`, or one without `starbridge_cells`):
+/// invoked on every boot when the node runs with `--enable-faucet` (the devnet
+/// switch), it inserts the missing poll/bounty/nameservice/... cells exactly
+/// like `materialize_genesis_cells` — insert-if-absent, never overwriting.
+/// `devnet_fallback` additionally lets it synthesize what an old data dir
+/// lacks: a missing `agent-<owner>.key` is derived deterministically (devnet
+/// keys are declared non-production by `.devnet` semantics) and a missing
+/// owner issuer cell is materialized with a devnet balance, both logged.
+pub fn seed_default_starbridge_cells_devnet(
+    data_dir: &Path,
+    ledger: &mut Ledger,
+    federation_id: [u8; 32],
+    operator: Option<[u8; 32]>,
+) -> StarbridgeSeedStats {
+    let entries = crate::genesis::default_starbridge_genesis_cells();
+    seed_starbridge_cells(
+        &entries,
+        data_dir,
+        ledger,
+        federation_id,
+        operator,
+        /* devnet_fallback */ true,
+    )
+}
+
+fn seed_starbridge_cells(
+    entries: &[StarbridgeGenesisCell],
+    data_dir: &Path,
+    ledger: &mut Ledger,
+    federation_id: [u8; 32],
+    operator: Option<[u8; 32]>,
+    devnet_fallback: bool,
+) -> StarbridgeSeedStats {
     // Derive the operator's agent cell id the same way `api.rs` (the
     // `/turn/submit` path) and `executor_setup::local_agent_cell` do, so the cap
     // we grant lands on the cell the live ingress actually acts as.
     let operator_cell =
         operator.map(|pk| CellId::derive_raw(&pk, blake3::hash(b"default").as_bytes()));
-    let entries = match parse_starbridge_cells(genesis) {
-        Some(entries) if !entries.is_empty() => entries,
-        _ => return StarbridgeSeedStats::default(),
-    };
 
     let factory_descriptors = register_starbridge_factory_descriptors();
     let mut stats = StarbridgeSeedStats {
@@ -109,7 +156,7 @@ pub fn seed_starbridge_factory_cells_with_operator(
 
     for entry in entries {
         match seed_one_cell(
-            &entry,
+            entry,
             data_dir,
             ledger,
             federation_id,
@@ -117,6 +164,7 @@ pub fn seed_starbridge_factory_cells_with_operator(
             &mut turn_executor,
             &mut marker,
             &mut receipt_heads,
+            devnet_fallback,
         ) {
             SeedOutcome::Created { cell_id } => {
                 stats.created += 1;
@@ -186,6 +234,7 @@ fn seed_one_cell(
     turn_executor: &mut TurnExecutor,
     marker: &mut BTreeMap<String, String>,
     receipt_heads: &mut BTreeMap<CellId, [u8; 32]>,
+    devnet_fallback: bool,
 ) -> SeedOutcome {
     let factory_vk = match hex_decode_32(&entry.factory_vk_hex) {
         Some(vk) => vk,
@@ -209,6 +258,23 @@ fn seed_one_cell(
 
     let owner_pubkey = match load_agent_public_key(data_dir, &entry.owner_agent) {
         Some(pk) => pk,
+        None if devnet_fallback => {
+            // Devnet backfill: the data dir predates the agent keys genesis
+            // would have written. Derive a deterministic devnet key (same
+            // pattern as the faucet's `dregg-devnet-faucet-key-v1`) and
+            // persist it so the seeded cells are stable across restarts and
+            // the operator can act as the owner agent later.
+            match materialize_devnet_agent_key(data_dir, &entry.owner_agent) {
+                Some(pk) => pk,
+                None => {
+                    return SeedOutcome::Skipped(format!(
+                        "could not materialize devnet agent-{}.key in {}",
+                        entry.owner_agent,
+                        data_dir.display()
+                    ));
+                }
+            }
+        }
         None => {
             return SeedOutcome::Skipped(format!(
                 "missing agent-{}.key in {}",
@@ -254,10 +320,23 @@ fn seed_one_cell(
     let issuer_cell = CellId::derive_raw(&owner_pubkey, &[0u8; 32]);
 
     if ledger.get(&issuer_cell).is_none() {
-        return SeedOutcome::Skipped(format!(
-            "owner agent '{}' cell not present in ledger; run genesis initial_cells first",
-            entry.owner_agent
-        ));
+        if devnet_fallback {
+            // Devnet backfill: materialize the owner issuer cell the way
+            // genesis `initial_cells` would have (insert-if-absent, funded
+            // enough to pay the seed-turn fees).
+            let issuer = dregg_cell::Cell::with_balance(owner_pubkey, [0u8; 32], 50_000);
+            let _ = ledger.insert_cell(issuer);
+            info!(
+                owner = %entry.owner_agent,
+                cell_id = %hex_encode(&issuer_cell.0),
+                "devnet backfill: materialized owner issuer cell for starbridge seeding"
+            );
+        } else {
+            return SeedOutcome::Skipped(format!(
+                "owner agent '{}' cell not present in ledger; run genesis initial_cells first",
+                entry.owner_agent
+            ));
+        }
     }
 
     // Synthesize the minimal `initial_fields` that satisfy the descriptor's
@@ -419,6 +498,26 @@ fn save_seed_marker(data_dir: &Path, marker: &BTreeMap<String, String>) -> std::
 
 fn marker_path(data_dir: &Path) -> PathBuf {
     data_dir.join(SEED_MARKER_FILE)
+}
+
+/// Derive + persist a deterministic devnet agent key (`agent-<name>.key`).
+/// Returns the public key. Devnet-only (the `.devnet`/`--enable-faucet`
+/// contract already declares these keys non-production-grade); deterministic
+/// derivation keeps the seeded cell ids stable across data dirs and restarts.
+fn materialize_devnet_agent_key(data_dir: &Path, agent: &str) -> Option<[u8; 32]> {
+    let secret = blake3::derive_key("dregg-devnet-agent-key-v1", agent.as_bytes());
+    let path = data_dir.join(format!("agent-{agent}.key"));
+    if let Err(e) = std::fs::write(&path, secret) {
+        warn!(error = %e, path = %path.display(), "failed to write devnet agent key");
+        return None;
+    }
+    info!(
+        agent = %agent,
+        path = %path.display(),
+        "devnet backfill: materialized deterministic agent key (NOT production-grade)"
+    );
+    let signing = ed25519_dalek::SigningKey::from_bytes(&secret);
+    Some(signing.verifying_key().to_bytes())
 }
 
 fn load_agent_secret_key(data_dir: &Path, agent: &str) -> Option<[u8; 32]> {

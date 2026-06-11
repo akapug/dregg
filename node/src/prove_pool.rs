@@ -130,8 +130,18 @@ impl ProvePool {
     /// queue, `false` if the queue is full (job dropped — the commit is already
     /// sound; see module docs). Never blocks the caller.
     pub fn enqueue(&self, job: ProveJob) -> bool {
+        let turn_hash = job.turn_hash_hex.clone();
         match self.tx.try_send(job) {
-            Ok(()) => true,
+            Ok(()) => {
+                // Loud (info-level) job-lifecycle line: the pool's only other
+                // success logs were debug-level, so a healthy pipeline looked
+                // identical to a dead one at the default RUST_LOG=info.
+                tracing::info!(
+                    turn_hash = %turn_hash,
+                    "async prove job ENQUEUED (proof attaches to the receipt when it lands)"
+                );
+                true
+            }
             Err(mpsc::error::TrySendError::Full(job)) => {
                 crate::metrics::inc_async_proofs_dropped();
                 tracing::warn!(
@@ -218,10 +228,12 @@ async fn run_job(worker_id: usize, job: ProveJob, state: &NodeState) {
         hash: turn_hash_hex.clone(),
     });
 
-    tracing::debug!(
+    // Info-level so the live pipeline is visibly healthy: this is the line
+    // operators (and the quickstart) watch for after submitting a turn.
+    tracing::info!(
         worker_id,
         turn_hash = %turn_hash_hex,
         elapsed_ms = started.elapsed().as_millis(),
-        "async proof attached to committed receipt"
+        "async proof attached to committed receipt (has_proof flips true)"
     );
 }

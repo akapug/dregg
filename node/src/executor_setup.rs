@@ -57,6 +57,11 @@ pub fn configure_turn_executor(
 ) {
     executor.set_local_federation_id(federation_id_for_executor(s));
     executor.set_timestamp(wall_clock_secs());
+    // Sign committed receipts with the node's key (same key the MCP entry
+    // points use). Without this, every HTTP/blocklace-path receipt carried
+    // `executor_signature: None` (`executor_signed:false` in /api/receipts) and
+    // conditional-turn verification of our receipts was impossible.
+    executor.set_executor_signing_key(s.cclerk.gossip_signing_key().to_bytes());
 
     let base = attested_block_height(s);
     let height = match height_mode {

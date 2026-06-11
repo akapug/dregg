@@ -499,6 +499,7 @@ async fn run_node(
     }
 
     // Load genesis.json if present in the data directory.
+    let mut starbridge_seeded_from_genesis = false;
     let genesis_path = data_path.join("genesis.json");
     if genesis_path.exists() {
         match std::fs::read_to_string(&genesis_path) {
@@ -572,6 +573,7 @@ async fn run_node(
                                 Some(operator_pubkey),
                             );
                         if seed_stats.total() > 0 {
+                            starbridge_seeded_from_genesis = true;
                             info!(
                                 registered = seed_stats.registered_factories,
                                 created = seed_stats.created,
@@ -591,6 +593,34 @@ async fn run_node(
             Err(e) => {
                 error!(error = %e, "failed to read genesis.json");
             }
+        }
+    }
+
+    // Starbridge devnet backfill — idempotent on every boot. A devnet data dir
+    // that predates the starbridge seed (no genesis.json at all, or one without
+    // `starbridge_cells`) gains the default poll/bounty/nameservice/... factory
+    // cells on restart, insert-if-absent exactly like `materialize_genesis_cells`.
+    // Gated on `--enable-faucet` (the explicit devnet switch); production nodes
+    // seed only through genesis.
+    if enable_faucet && !starbridge_seeded_from_genesis {
+        let mut s = node_state.write().await;
+        let federation_id = s.federation_id;
+        let operator_pubkey = s.cclerk.public_key().0;
+        let stats = starbridge_seed::seed_default_starbridge_cells_devnet(
+            &data_path,
+            &mut s.ledger,
+            federation_id,
+            Some(operator_pubkey),
+        );
+        if stats.total() > 0 {
+            info!(
+                registered = stats.registered_factories,
+                created = stats.created,
+                existing = stats.existing,
+                skipped = stats.skipped,
+                failed = stats.failed,
+                "starbridge devnet backfill seeding complete (default cell set)"
+            );
         }
     }
 
