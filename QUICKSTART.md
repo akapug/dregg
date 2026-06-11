@@ -249,7 +249,37 @@ including the constitution + forward-certified amendment ceremony.)
 Also try `cargo run -p dregg-sdk --example hello_receipt_chain` — the smallest
 possible "what is a receipt" loop.
 
-## 7. Inspect what you made
+## 7. Subscribe to the receipt stream (reactivity)
+
+Every receipt the node commits is broadcast live at `/api/events/stream`
+(Server-Sent Events — plain curl works; `-N` disables buffering):
+
+```sh
+curl -N "$DREGG_NODE_URL/api/events/stream"
+# filter to one cell and/or effect kind:
+curl -N "$DREGG_NODE_URL/api/events/stream?cell=<hex-cell-id>&kind=set_field"
+```
+
+```text
+event: receipt
+id: 9
+data: {"chain_index":9,"receipt_hash":"…","turn_hash":"8dae2ff1…","cells":["…"],
+       "kinds":["set_field"],"height":2799,"has_proof":false,"finality":"tentative",…}
+```
+
+Each event's `id` is the receipt-chain index; reconnect with a
+`Last-Event-ID:` header to resume where you left off. A `: hb` comment every
+30s keeps proxies from closing the stream. From the SDK the same feed is
+`dregg_sdk::events::NodeEvents::new(url).subscribe(filter)` — a reconnecting
+`Stream` of the public `Receipt` noun. The worked agent-actuator pattern
+(watch a cell, react with a budget-mandate-bounded turn — cells are law,
+agents are will, receipts are the nervous system) is:
+
+```sh
+cargo run -p dregg-sdk --example reactive_agent
+```
+
+## 8. Inspect what you made
 
 ```sh
 dregg cell inspect <cell-id>                  # state, nonce, program, c-list
