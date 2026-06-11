@@ -20,1631 +20,1958 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/index.ts
 var index_exports = {};
 __export(index_exports, {
-  AgentCipherclerk: () => AgentCipherclerk,
-  MerkleTree: () => MerkleTree,
-  PredicateEvaluator: () => PredicateEvaluator,
-  ProofEngine: () => ProofEngine,
-  DreggClient: () => DreggClient,
-  DreggRuntime: () => DreggRuntime,
-  TokenOps: () => TokenOps
+  AgentRuntime: () => AgentRuntime,
+  AuthorizedTurn: () => AuthorizedTurn,
+  EmptyTurnError: () => EmptyTurnError,
+  Identity: () => Identity,
+  MAIN_IDENTITY_PATH: () => MAIN_IDENTITY_PATH,
+  NodeClient: () => NodeClient,
+  NodeError: () => NodeError,
+  NodeEvents: () => NodeEvents,
+  PROFILE_ENV: () => PROFILE_ENV,
+  ProfileError: () => ProfileError,
+  Receipt: () => Receipt,
+  ReceiptFilter: () => ReceiptFilter,
+  ReceiptStream: () => ReceiptStream,
+  TurnBuilder: () => TurnBuilder,
+  TurnProof: () => TurnProof,
+  WrongTurnProofError: () => WrongTurnProofError,
+  createSseParser: () => createSseParser,
+  explainAction: () => explainAction,
+  explainEffect: () => explainEffect,
+  explainTurn: () => explainTurn,
+  fieldFromU64: () => fieldFromU64,
+  hexDecode: () => hexDecode,
+  hexEncode: () => hexEncode,
+  profiles: () => profiles_exports,
+  program: () => program_exports,
+  renderTurn: () => renderTurn,
+  symbol: () => symbol
 });
 module.exports = __toCommonJS(index_exports);
 
-// src/cipherclerk.ts
-var AgentCipherclerk = class _AgentCipherclerk {
-  constructor(wasm, rootKey) {
-    this.wasm = wasm;
-    this.rootKey = rootKey;
+// src/internal/blake3.ts
+var IV = [
+  1779033703,
+  3144134277,
+  1013904242,
+  2773480762,
+  1359893119,
+  2600822924,
+  528734635,
+  1541459225
+];
+var MSG_PERMUTATION = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
+var CHUNK_LEN = 1024;
+var BLOCK_LEN = 64;
+var CHUNK_START = 1 << 0;
+var CHUNK_END = 1 << 1;
+var PARENT = 1 << 2;
+var ROOT = 1 << 3;
+var DERIVE_KEY_CONTEXT = 1 << 5;
+var DERIVE_KEY_MATERIAL = 1 << 6;
+var rotr = (x, n) => (x >>> n | x << 32 - n) >>> 0;
+function g(s, a, b, c, d, mx, my) {
+  s[a] = s[a] + s[b] + mx >>> 0;
+  s[d] = rotr(s[d] ^ s[a], 16);
+  s[c] = s[c] + s[d] >>> 0;
+  s[b] = rotr(s[b] ^ s[c], 12);
+  s[a] = s[a] + s[b] + my >>> 0;
+  s[d] = rotr(s[d] ^ s[a], 8);
+  s[c] = s[c] + s[d] >>> 0;
+  s[b] = rotr(s[b] ^ s[c], 7);
+}
+function roundFn(s, m) {
+  g(s, 0, 4, 8, 12, m[0], m[1]);
+  g(s, 1, 5, 9, 13, m[2], m[3]);
+  g(s, 2, 6, 10, 14, m[4], m[5]);
+  g(s, 3, 7, 11, 15, m[6], m[7]);
+  g(s, 0, 5, 10, 15, m[8], m[9]);
+  g(s, 1, 6, 11, 12, m[10], m[11]);
+  g(s, 2, 7, 8, 13, m[12], m[13]);
+  g(s, 3, 4, 9, 14, m[14], m[15]);
+}
+function compress(cv, blockWords, counterLo, counterHi, blockLen, flags) {
+  const s = [
+    cv[0],
+    cv[1],
+    cv[2],
+    cv[3],
+    cv[4],
+    cv[5],
+    cv[6],
+    cv[7],
+    IV[0],
+    IV[1],
+    IV[2],
+    IV[3],
+    counterLo >>> 0,
+    counterHi >>> 0,
+    blockLen >>> 0,
+    flags >>> 0
+  ];
+  let m = blockWords.slice();
+  for (let r = 0; r < 7; r++) {
+    roundFn(s, m);
+    if (r < 6) m = MSG_PERMUTATION.map((i) => m[i]);
   }
-  /**
-   * Create a new AgentCipherclerk with a randomly generated root key.
-   *
-   * @param wasm - The initialized dregg-wasm module.
-   * @returns A new AgentCipherclerk instance with a fresh root key.
-   */
-  static async create(wasm) {
-    const keyResult = wasm.generate_root_key();
-    const rootKey = new Uint8Array(keyResult.key_bytes);
-    return new _AgentCipherclerk(wasm, rootKey);
+  const out = new Array(16);
+  for (let i = 0; i < 8; i++) {
+    out[i] = (s[i] ^ s[i + 8]) >>> 0;
+    out[i + 8] = (s[i + 8] ^ cv[i]) >>> 0;
   }
-  /**
-   * Create an AgentCipherclerk from an existing root key.
-   *
-   * @param wasm - The initialized dregg-wasm module.
-   * @param rootKey - A 32-byte root key (Uint8Array or hex string).
-   * @returns A new AgentCipherclerk instance using the provided key.
-   * @throws Error if the key is not exactly 32 bytes.
-   */
-  static fromKey(wasm, rootKey) {
-    const keyBytes = typeof rootKey === "string" ? hexToBytes(rootKey) : rootKey;
-    if (keyBytes.length !== 32) {
-      throw new Error(
-        `Root key must be exactly 32 bytes, got ${keyBytes.length}`
-      );
+  return out;
+}
+var readLE32 = (bytes, off) => (bytes[off] | bytes[off + 1] << 8 | bytes[off + 2] << 16 | bytes[off + 3] << 24) >>> 0;
+function wordsToBytes(words) {
+  const out = new Uint8Array(words.length * 4);
+  words.forEach((w, i) => {
+    out[i * 4] = w & 255;
+    out[i * 4 + 1] = w >>> 8 & 255;
+    out[i * 4 + 2] = w >>> 16 & 255;
+    out[i * 4 + 3] = w >>> 24 & 255;
+  });
+  return out;
+}
+function bytesToWords(bytes) {
+  const out = new Array(bytes.length / 4);
+  for (let i = 0; i < out.length; i++) out[i] = readLE32(bytes, i * 4);
+  return out;
+}
+function chunkOutput(input, counter, keyWords, flags, isRoot) {
+  const counterLo = counter >>> 0;
+  const counterHi = Math.floor(counter / 2 ** 32) >>> 0;
+  let cv = keyWords.slice();
+  const blockCount = input.length === 0 ? 1 : Math.ceil(input.length / BLOCK_LEN);
+  let last = [];
+  for (let i = 0; i < blockCount; i++) {
+    const block = input.subarray(i * BLOCK_LEN, Math.min((i + 1) * BLOCK_LEN, input.length));
+    let blockFlags = flags;
+    if (i === 0) blockFlags |= CHUNK_START;
+    if (i === blockCount - 1) {
+      blockFlags |= CHUNK_END;
+      if (isRoot) blockFlags |= ROOT;
     }
-    return new _AgentCipherclerk(wasm, keyBytes);
+    const padded = new Uint8Array(BLOCK_LEN);
+    padded.set(block);
+    last = compress(cv, bytesToWords(padded), counterLo, counterHi, block.length, blockFlags);
+    cv = last.slice(0, 8);
+  }
+  return last;
+}
+function leftLen(len) {
+  let full = Math.floor((len - 1) / CHUNK_LEN);
+  let p = 1;
+  while (p * 2 <= full) p *= 2;
+  return p * CHUNK_LEN;
+}
+function subtreeCv(input, counter, keyWords, flags) {
+  if (input.length <= CHUNK_LEN) {
+    return chunkOutput(input, counter, keyWords, flags, false).slice(0, 8);
+  }
+  const split = leftLen(input.length);
+  const left = subtreeCv(input.subarray(0, split), counter, keyWords, flags);
+  const right = subtreeCv(input.subarray(split), counter + split / CHUNK_LEN, keyWords, flags);
+  return compress(keyWords, left.concat(right), 0, 0, BLOCK_LEN, flags | PARENT).slice(0, 8);
+}
+function blake3Internal(input, keyWords, flags) {
+  if (input.length <= CHUNK_LEN) {
+    return wordsToBytes(chunkOutput(input, 0, keyWords, flags, true).slice(0, 8));
+  }
+  const split = leftLen(input.length);
+  const left = subtreeCv(input.subarray(0, split), 0, keyWords, flags);
+  const right = subtreeCv(input.subarray(split), split / CHUNK_LEN, keyWords, flags);
+  const out = compress(keyWords, left.concat(right), 0, 0, BLOCK_LEN, flags | PARENT | ROOT);
+  return wordsToBytes(out.slice(0, 8));
+}
+function blake3(input) {
+  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
+  return blake3Internal(bytes, IV.slice(), 0);
+}
+function blake3DeriveKey(context, keyMaterial) {
+  const contextKey = blake3Internal(
+    new TextEncoder().encode(context),
+    IV.slice(),
+    DERIVE_KEY_CONTEXT
+  );
+  return blake3Internal(keyMaterial, bytesToWords(contextKey), DERIVE_KEY_MATERIAL);
+}
+var Blake3Hasher = class _Blake3Hasher {
+  constructor(context = null) {
+    this.parts = [];
+    this.context = context;
+  }
+  static new() {
+    return new _Blake3Hasher(null);
+  }
+  /** `blake3::Hasher::new_derive_key(context)`. */
+  static newDeriveKey(context) {
+    return new _Blake3Hasher(context);
+  }
+  update(bytes) {
+    this.parts.push(typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes);
+    return this;
+  }
+  finalize() {
+    let total = 0;
+    for (const p of this.parts) total += p.length;
+    const all = new Uint8Array(total);
+    let off = 0;
+    for (const p of this.parts) {
+      all.set(p, off);
+      off += p.length;
+    }
+    return this.context === null ? blake3(all) : blake3DeriveKey(this.context, all);
+  }
+};
+
+// src/internal/ed25519.ts
+var import_node_crypto = require("crypto");
+var PKCS8_PREFIX = Uint8Array.from([
+  48,
+  46,
+  2,
+  1,
+  0,
+  48,
+  5,
+  6,
+  3,
+  43,
+  101,
+  112,
+  4,
+  34,
+  4,
+  32
+]);
+var SPKI_PREFIX = Uint8Array.from([
+  48,
+  42,
+  48,
+  5,
+  6,
+  3,
+  43,
+  101,
+  112,
+  3,
+  33,
+  0
+]);
+function privateKeyFromSeed(seed32) {
+  if (seed32.length !== 32) throw new Error("ed25519 seed must be 32 bytes");
+  const der = Buffer.concat([PKCS8_PREFIX, seed32]);
+  return (0, import_node_crypto.createPrivateKey)({ key: der, format: "der", type: "pkcs8" });
+}
+function ed25519PublicKey(seed32) {
+  const priv = privateKeyFromSeed(seed32);
+  const spki = (0, import_node_crypto.createPublicKey)(priv).export({ format: "der", type: "spki" });
+  return new Uint8Array(spki.subarray(spki.length - 32));
+}
+function ed25519Sign(seed32, message) {
+  const priv = privateKeyFromSeed(seed32);
+  return new Uint8Array((0, import_node_crypto.sign)(null, message, priv));
+}
+
+// src/internal/bytes.ts
+function hexEncode(bytes) {
+  let out = "";
+  for (const b of bytes) out += b.toString(16).padStart(2, "0");
+  return out;
+}
+function hexDecode(hex) {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  if (clean.length % 2 !== 0 || /[^0-9a-fA-F]/.test(clean)) {
+    throw new Error(`invalid hex string (len ${clean.length})`);
+  }
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+function hexDecodeExact(hex, len) {
+  const b = hexDecode(hex);
+  if (b.length !== len) throw new Error(`expected ${len} bytes, got ${b.length}`);
+  return b;
+}
+function concatBytes(...parts) {
+  let total = 0;
+  for (const p of parts) total += p.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+}
+function u64le(v) {
+  const out = new Uint8Array(8);
+  let n = BigInt(v);
+  if (n < 0n) throw new Error("u64le: negative");
+  for (let i = 0; i < 8; i++) {
+    out[i] = Number(n & 0xffn);
+    n >>= 8n;
+  }
+  return out;
+}
+function i64le(v) {
+  let n = BigInt(v);
+  if (n < 0n) n += 1n << 64n;
+  return u64le(n);
+}
+function u32le(v) {
+  const out = new Uint8Array(4);
+  out[0] = v & 255;
+  out[1] = v >>> 8 & 255;
+  out[2] = v >>> 16 & 255;
+  out[3] = v >>> 24 & 255;
+  return out;
+}
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+function exactBytes(v, len, what) {
+  if (!(v instanceof Uint8Array) || v.length !== len) {
+    throw new Error(`${what} must be exactly ${len} bytes`);
+  }
+  return Uint8Array.from(v);
+}
+var utf8 = {
+  encode: (s) => new TextEncoder().encode(s)
+};
+
+// src/internal/wire.ts
+function symbol(name) {
+  return blake3(utf8.encode(name));
+}
+function defaultTokenId() {
+  return blake3(utf8.encode("default"));
+}
+function deriveCellId(publicKey, tokenId = defaultTokenId()) {
+  return blake3DeriveKey(
+    "dregg-cell-id-v1",
+    concatBytes(exactBytes(publicKey, 32, "publicKey"), exactBytes(tokenId, 32, "tokenId"))
+  );
+}
+function fieldFromU64(v) {
+  const out = new Uint8Array(32);
+  let n = BigInt(v);
+  if (n < 0n || n >= 1n << 64n) throw new Error("fieldFromU64: out of u64 range");
+  for (let i = 31; i >= 24; i--) {
+    out[i] = Number(n & 0xffn);
+    n >>= 8n;
+  }
+  return out;
+}
+function unsignedAction(target, method, effects) {
+  return {
+    target: exactBytes(target, 32, "target"),
+    method: exactBytes(method, 32, "method"),
+    args: [],
+    authorization: { kind: "unchecked" },
+    effects
+  };
+}
+function unsignedActionNamed(target, method, effects) {
+  return unsignedAction(target, symbol(method), effects);
+}
+var Writer = class {
+  constructor() {
+    this.parts = [];
+  }
+  u8(v) {
+    this.parts.push(v & 255);
+    return this;
+  }
+  bytes(b) {
+    for (const x of b) this.parts.push(x);
+    return this;
+  }
+  /** Unsigned LEB128 varint (postcard's u16/u32/u64/usize encoding). */
+  varint(v) {
+    let n = BigInt(v);
+    if (n < 0n) throw new Error("varint: negative");
+    do {
+      let byte = Number(n & 0x7fn);
+      n >>= 7n;
+      if (n !== 0n) byte |= 128;
+      this.parts.push(byte);
+    } while (n !== 0n);
+    return this;
+  }
+  /** Zigzag varint (postcard's i64 encoding). */
+  ivarint(v) {
+    const n = BigInt(v);
+    return this.varint(n >= 0n ? n << 1n : (-n << 1n) - 1n);
+  }
+  /** Option discriminant + value. */
+  option(v, write) {
+    if (v === void 0 || v === null) {
+      this.u8(0);
+    } else {
+      this.u8(1);
+      write(v);
+    }
+    return this;
+  }
+  /** Length-prefixed sequence. */
+  seq(items, write) {
+    this.varint(items.length);
+    for (const it of items) write(it);
+    return this;
+  }
+  /** Length-prefixed byte string (postcard `Vec<u8>` / serde_bytes). */
+  byteSeq(b) {
+    this.varint(b.length);
+    return this.bytes(b);
+  }
+  out() {
+    return Uint8Array.from(this.parts);
+  }
+};
+function writeAuthRequired(w, a) {
+  switch (a.kind) {
+    case "none":
+      w.varint(0);
+      break;
+    case "signature":
+      w.varint(1);
+      break;
+    case "proof":
+      w.varint(2);
+      break;
+    case "either":
+      w.varint(3);
+      break;
+    case "impossible":
+      w.varint(4);
+      break;
+    case "custom":
+      w.varint(5).bytes(exactBytes(a.vkHash, 32, "vkHash"));
+      break;
+  }
+}
+function writeCapabilityRef(w, cap) {
+  w.bytes(exactBytes(cap.target, 32, "cap.target"));
+  w.varint(cap.slot);
+  writeAuthRequired(w, cap.permissions);
+  w.option(cap.breadstuff, (b) => w.bytes(exactBytes(b, 32, "cap.breadstuff")));
+  w.option(cap.expiresAt, (e) => w.varint(e));
+  w.option(cap.storedEpoch, (e) => w.varint(e));
+}
+function writeEffect(w, e) {
+  switch (e.kind) {
+    case "setField":
+      w.varint(0).bytes(exactBytes(e.cell, 32, "cell")).varint(e.index).bytes(exactBytes(e.value, 32, "value"));
+      break;
+    case "transfer":
+      w.varint(1).bytes(exactBytes(e.from, 32, "from")).bytes(exactBytes(e.to, 32, "to")).varint(e.amount);
+      break;
+    case "grantCapability":
+      w.varint(2).bytes(exactBytes(e.from, 32, "from")).bytes(exactBytes(e.to, 32, "to"));
+      writeCapabilityRef(w, e.cap);
+      break;
+    case "revokeCapability":
+      w.varint(3).bytes(exactBytes(e.cell, 32, "cell")).varint(e.slot);
+      break;
+    case "emitEvent":
+      w.varint(4).bytes(exactBytes(e.cell, 32, "cell")).bytes(exactBytes(e.topic, 32, "topic"));
+      w.seq(e.data, (d) => w.bytes(exactBytes(d, 32, "event data word")));
+      break;
+    case "incrementNonce":
+      w.varint(5).bytes(exactBytes(e.cell, 32, "cell"));
+      break;
+    case "createCell":
+      w.varint(6).bytes(exactBytes(e.publicKey, 32, "publicKey")).bytes(exactBytes(e.tokenId, 32, "tokenId")).varint(e.balance);
+      break;
+  }
+}
+function writeAuthorization(w, a) {
+  switch (a.kind) {
+    case "signature":
+      w.varint(0).bytes(exactBytes(a.r, 32, "sig r")).bytes(exactBytes(a.s, 32, "sig s"));
+      break;
+    case "unchecked":
+      w.varint(4);
+      break;
+  }
+}
+var PRECONDITIONS_DEFAULT = Uint8Array.from([0, 0, 0, 0]);
+function writeAction(w, a) {
+  w.bytes(exactBytes(a.target, 32, "target"));
+  w.bytes(exactBytes(a.method, 32, "method"));
+  w.seq(a.args, (arg) => w.bytes(exactBytes(arg, 32, "arg")));
+  writeAuthorization(w, a.authorization);
+  w.bytes(PRECONDITIONS_DEFAULT);
+  w.seq(a.effects, (e) => writeEffect(w, e));
+  w.varint(0);
+  w.varint(0);
+  w.option(a.balanceChange, (d) => w.ivarint(d));
+  w.varint(0);
+}
+function writeCallTree(w, t) {
+  writeAction(w, t.action);
+  w.seq(t.children, (c) => writeCallTree(w, c));
+  w.bytes(new Uint8Array(32));
+}
+function encodeTurn(t) {
+  const w = new Writer();
+  w.bytes(exactBytes(t.agent, 32, "agent"));
+  w.varint(t.nonce);
+  w.seq(t.roots, (r) => writeCallTree(w, r));
+  w.bytes(new Uint8Array(32));
+  w.varint(t.fee);
+  w.option(t.memo, (m) => w.byteSeq(utf8.encode(m)));
+  w.option(t.validUntil, (v) => w.ivarint(v));
+  w.option(t.previousReceiptHash, (h) => w.bytes(exactBytes(h, 32, "previousReceiptHash")));
+  w.seq(t.dependsOn ?? [], (d) => w.bytes(exactBytes(d, 32, "dependsOn")));
+  w.u8(0);
+  w.varint(0);
+  w.u8(0);
+  w.u8(0);
+  w.u8(0);
+  w.u8(0);
+  w.varint(0);
+  w.varint(0);
+  w.varint(0);
+  return w.out();
+}
+function encodeSignedTurn(turn, signature, signer) {
+  const w = new Writer();
+  w.bytes(encodeTurn(turn));
+  w.byteSeq(exactBytes(signature, 64, "signature"));
+  w.byteSeq(exactBytes(signer, 32, "signer"));
+  return w.out();
+}
+function effectHash(e) {
+  const h = Blake3Hasher.new();
+  switch (e.kind) {
+    case "setField":
+      h.update(Uint8Array.from([0])).update(e.cell).update(u64le(e.index)).update(e.value);
+      break;
+    case "transfer":
+      h.update(Uint8Array.from([1])).update(e.from).update(e.to).update(u64le(e.amount));
+      break;
+    case "grantCapability":
+      h.update(Uint8Array.from([2])).update(e.from).update(e.to).update(e.cap.target).update(u32le(e.cap.slot));
+      break;
+    case "revokeCapability":
+      h.update(Uint8Array.from([3])).update(e.cell).update(u32le(e.slot));
+      break;
+    case "emitEvent":
+      h.update(Uint8Array.from([4])).update(e.cell).update(e.topic);
+      for (const d of e.data) h.update(d);
+      break;
+    case "incrementNonce":
+      h.update(Uint8Array.from([5])).update(e.cell);
+      break;
+    case "createCell":
+      h.update(Uint8Array.from([6])).update(e.publicKey).update(e.tokenId).update(u64le(e.balance));
+      break;
+  }
+  return h.finalize();
+}
+function authHashUpdate(h, a) {
+  switch (a.kind) {
+    case "signature":
+      h.update(Uint8Array.from([0])).update(a.r).update(a.s);
+      break;
+    case "unchecked":
+      h.update(Uint8Array.from([3]));
+      break;
+  }
+}
+function actionHash(a) {
+  const h = Blake3Hasher.new();
+  h.update(utf8.encode("dregg-action-v2:"));
+  h.update(a.target);
+  h.update(a.method);
+  for (const arg of a.args) h.update(arg);
+  authHashUpdate(h, a.authorization);
+  h.update(Uint8Array.from([0]));
+  h.update(Uint8Array.from([0]));
+  if (a.balanceChange !== void 0) {
+    h.update(Uint8Array.from([1])).update(i64le(a.balanceChange));
+  } else {
+    h.update(Uint8Array.from([0]));
+  }
+  for (const e of a.effects) h.update(effectHash(e));
+  h.update(PRECONDITIONS_DEFAULT);
+  h.update(u64le(0));
+  return h.finalize();
+}
+function actionSigningMessage(a, federationId) {
+  const h = Blake3Hasher.new();
+  h.update(utf8.encode("dregg-action-sig-v2:"));
+  h.update(exactBytes(federationId, 32, "federationId"));
+  h.update(a.target);
+  h.update(a.method);
+  for (const arg of a.args) h.update(arg);
+  for (const e of a.effects) h.update(effectHash(e));
+  h.update(Uint8Array.from([0]));
+  h.update(Uint8Array.from([0]));
+  if (a.balanceChange !== void 0) {
+    h.update(Uint8Array.from([1])).update(i64le(a.balanceChange));
+  } else {
+    h.update(Uint8Array.from([0]));
+  }
+  h.update(PRECONDITIONS_DEFAULT);
+  return h.finalize();
+}
+function treeHash(t) {
+  const a = actionHash(t.action);
+  let children;
+  if (t.children.length === 0) {
+    children = new Uint8Array(32);
+  } else {
+    const h = Blake3Hasher.new();
+    for (const c of t.children) h.update(treeHash(c));
+    children = h.finalize();
+  }
+  return Blake3Hasher.new().update(a).update(children).finalize();
+}
+function forestHash(roots) {
+  if (roots.length === 0) return new Uint8Array(32);
+  const h = Blake3Hasher.new();
+  for (const r of roots) h.update(treeHash(r));
+  return h.finalize();
+}
+function turnHash(t) {
+  const h = Blake3Hasher.new();
+  h.update(utf8.encode("dregg-turn-v3:"));
+  h.update(t.agent);
+  h.update(u64le(t.nonce));
+  h.update(forestHash(t.roots));
+  h.update(u64le(t.fee));
+  if (t.memo !== void 0) {
+    const m = utf8.encode(t.memo);
+    h.update(Uint8Array.from([1])).update(u64le(m.length)).update(m);
+  } else {
+    h.update(Uint8Array.from([0]));
+  }
+  if (t.validUntil !== void 0) {
+    h.update(Uint8Array.from([1])).update(i64le(t.validUntil));
+  } else {
+    h.update(Uint8Array.from([0]));
+  }
+  const deps = t.dependsOn ?? [];
+  h.update(u64le(deps.length));
+  for (const d of deps) h.update(d);
+  if (t.previousReceiptHash !== void 0) {
+    h.update(Uint8Array.from([1])).update(t.previousReceiptHash);
+  } else {
+    h.update(Uint8Array.from([0]));
+  }
+  h.update(Uint8Array.from([0]));
+  h.update(Uint8Array.from([0]));
+  h.update(Uint8Array.from([0]));
+  h.update(u64le(0));
+  h.update(Uint8Array.from([0]));
+  return h.finalize();
+}
+
+// src/identity.ts
+var MAIN_IDENTITY_PATH = "dregg/0";
+var Identity = class _Identity {
+  constructor(seed32) {
+    this.seed = exactBytes(seed32, 32, "ed25519 seed");
+    this.publicKey = ed25519PublicKey(this.seed);
   }
   /**
-   * Get the root key as a hex string.
+   * Derive the main identity from a 64-byte master seed at path `dregg/0`
+   * (the profile-store derivation — mirrors `AgentCipherclerk::from_seed`).
    */
-  get keyHex() {
-    return bytesToHex(this.rootKey);
+  static fromSeed(seed64, path = MAIN_IDENTITY_PATH) {
+    exactBytes(seed64, 64, "master seed");
+    return new _Identity(blake3DeriveKey(path, seed64));
+  }
+  /** Wrap a raw 32-byte Ed25519 seed directly (no path derivation). */
+  static fromKeyBytes(seed32) {
+    return new _Identity(seed32);
+  }
+  /** A fresh random identity (OS randomness). */
+  static generate() {
+    const seed = new Uint8Array(64);
+    globalThis.crypto.getRandomValues(seed);
+    return _Identity.fromSeed(seed);
+  }
+  /** Hex Ed25519 public key (the profile store's `public_key_hex`). */
+  get publicKeyHex() {
+    return hexEncode(this.publicKey);
   }
   /**
-   * Get the raw root key bytes.
+   * This identity's default agent cell:
+   * `CellId::derive_raw(publicKey, blake3("default"))` — the cell the node
+   * requires as `turn.agent` for envelope-signed submissions.
    */
-  get keyBytes() {
-    return new Uint8Array(this.rootKey);
+  cellId() {
+    return deriveCellId(this.publicKey);
+  }
+  /** Hex form of [`cellId`]. */
+  cellIdHex() {
+    return hexEncode(this.cellId());
+  }
+  /** Sign arbitrary bytes (Ed25519, deterministic). */
+  signBytes(message) {
+    return ed25519Sign(this.seed, message);
   }
   /**
-   * Mint a new root token for the given service/location.
-   *
-   * This creates an unrestricted token that can later be attenuated.
-   *
-   * @param location - The service name or location identifier.
-   * @returns The minted token result with the encoded token string.
-   * @throws Error if the WASM call fails.
+   * Sign an action over the canonical federation-bound signing message
+   * (`dregg-action-sig-v2`), replacing its authorization with a real
+   * `Signature` — the ONLY way an action leaves the authorized flow.
    */
-  async mint(location) {
+  signAction(action, federationId) {
+    const message = actionSigningMessage(action, federationId);
+    const sig = this.signBytes(message);
+    return {
+      ...action,
+      authorization: { kind: "signature", r: sig.slice(0, 32), s: sig.slice(32, 64) }
+    };
+  }
+  /**
+   * Sign a turn's canonical `Turn::hash` (v3) and wrap it in the postcard
+   * `SignedTurn` envelope the node's `/api/turns/submit-signed` ingress
+   * verifies (signature over the hash; `turn.agent` must be this identity's
+   * default cell).
+   */
+  signTurnEnvelope(turn) {
+    const hash = turnHash(turn);
+    const sig = this.signBytes(hash);
+    return encodeSignedTurn(turn, sig, this.publicKey);
+  }
+};
+
+// src/profiles.ts
+var profiles_exports = {};
+__export(profiles_exports, {
+  PROFILE_ENV: () => PROFILE_ENV,
+  ProfileError: () => ProfileError,
+  activeName: () => activeName,
+  create: () => create,
+  list: () => list,
+  load: () => load,
+  loadActive: () => loadActive,
+  profilesDir: () => profilesDir,
+  setActive: () => setActive
+});
+var import_node_fs = require("fs");
+var import_node_crypto2 = require("crypto");
+var import_node_path = require("path");
+var PROFILE_ENV = "DREGG_PROFILE";
+var ProfileError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "ProfileError";
+    this.code = code;
+  }
+};
+function profilesDir() {
+  const home = process.env.DREGG_HOME;
+  if (home) return (0, import_node_path.join)(home, "profiles");
+  const base = process.env.HOME ?? ".";
+  return (0, import_node_path.join)(base, ".dregg", "profiles");
+}
+function validName(name) {
+  return /^[a-z0-9_-]{1,64}$/.test(name);
+}
+function profilePath(name) {
+  return (0, import_node_path.join)(profilesDir(), `${name}.json`);
+}
+function activePath() {
+  return (0, import_node_path.join)(profilesDir(), "ACTIVE");
+}
+function writePrivate(path, contents) {
+  (0, import_node_fs.mkdirSync)(profilesDir(), { recursive: true });
+  (0, import_node_fs.writeFileSync)(path, contents, { mode: 384 });
+  (0, import_node_fs.chmodSync)(path, 384);
+}
+function readProfile(name) {
+  const path = profilePath(name);
+  if (!(0, import_node_fs.existsSync)(path)) {
+    throw new ProfileError("not_found", `profile ${JSON.stringify(name)} not found`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse((0, import_node_fs.readFileSync)(path, "utf8"));
+  } catch (e) {
+    throw new ProfileError("malformed", `profile file for ${JSON.stringify(name)} is malformed: ${e.message}`);
+  }
+  const p = parsed;
+  if (typeof p !== "object" || p === null || p.version !== 1 || typeof p.name !== "string" || typeof p.seed_hex !== "string" || typeof p.public_key_hex !== "string") {
+    throw new ProfileError("malformed", `profile file for ${JSON.stringify(name)} is malformed: missing/invalid fields`);
+  }
+  return {
+    version: 1,
+    name: p.name,
+    seed_hex: p.seed_hex,
+    public_key_hex: p.public_key_hex,
+    created_at: typeof p.created_at === "number" ? p.created_at : 0
+  };
+}
+function create(name) {
+  if (!validName(name)) {
+    throw new ProfileError("invalid_name", `invalid profile name ${JSON.stringify(name)}: use 1-64 chars of [a-z0-9-_]`);
+  }
+  const path = profilePath(name);
+  if ((0, import_node_fs.existsSync)(path)) {
+    throw new ProfileError("already_exists", `profile ${JSON.stringify(name)} already exists`);
+  }
+  const seed = new Uint8Array((0, import_node_crypto2.randomBytes)(64));
+  const identity = Identity.fromSeed(seed);
+  const createdAt = Math.floor(Date.now() / 1e3);
+  const record = {
+    version: 1,
+    name,
+    seed_hex: hexEncode(seed),
+    public_key_hex: identity.publicKeyHex,
+    created_at: createdAt
+  };
+  writePrivate(path, JSON.stringify(record, null, 2));
+  return {
+    name,
+    publicKeyHex: identity.publicKeyHex,
+    createdAt,
+    active: activeName() === name
+  };
+}
+function list() {
+  const dir = profilesDir();
+  const active = activeName();
+  let entries;
+  try {
+    entries = (0, import_node_fs.readdirSync)(dir);
+  } catch (e) {
+    if (e.code === "ENOENT") return [];
+    throw new ProfileError("io", `profile store io error: ${e.message}`);
+  }
+  const out = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    const name = entry.slice(0, -".json".length);
     try {
-      return this.wasm.mint_token(this.rootKey, location);
+      const p = readProfile(name);
+      out.push({
+        name: p.name,
+        publicKeyHex: p.public_key_hex,
+        createdAt: p.created_at,
+        active: active === name
+      });
     } catch (e) {
-      throw new Error(`Failed to mint token: ${extractError(e)}`);
+      if (e instanceof ProfileError && e.code === "malformed") {
+        out.push({ name, publicKeyHex: `<malformed: ${e.message}>`, createdAt: 0, active: false });
+        continue;
+      }
+      throw e;
     }
   }
-  /**
-   * Attenuate (restrict) an existing token with additional caveats.
-   *
-   * Attenuation is monotonic: you can only further restrict a token,
-   * never broaden its permissions.
-   *
-   * @param tokenStr - The encoded token string to attenuate.
-   * @param options - Restriction options (service, actions, expiry).
-   * @returns The attenuated token result.
-   * @throws Error if the token is invalid or the WASM call fails.
-   */
-  async attenuate(tokenStr, options = {}) {
-    const service = options.service ?? "";
-    const actions = options.actions ?? "";
-    const expiresSecs = options.expiresSecs ?? 0;
-    try {
-      return this.wasm.attenuate_token(
-        tokenStr,
-        this.rootKey,
-        service,
-        actions,
-        BigInt(expiresSecs)
-      );
-    } catch (e) {
-      throw new Error(`Failed to attenuate token: ${extractError(e)}`);
-    }
+  out.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  return out;
+}
+function setActive(name) {
+  if (!validName(name)) {
+    throw new ProfileError("invalid_name", `invalid profile name ${JSON.stringify(name)}: use 1-64 chars of [a-z0-9-_]`);
+  }
+  if (!(0, import_node_fs.existsSync)(profilePath(name))) {
+    throw new ProfileError("not_found", `profile ${JSON.stringify(name)} not found`);
+  }
+  writePrivate(activePath(), name);
+}
+function activeName() {
+  const env = process.env[PROFILE_ENV]?.trim();
+  if (env) return env;
+  try {
+    const contents = (0, import_node_fs.readFileSync)(activePath(), "utf8").trim();
+    return contents.length > 0 ? contents : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function load(name) {
+  const record = readProfile(name);
+  let seed;
+  try {
+    seed = hexDecodeExact(record.seed_hex, 64);
+  } catch (e) {
+    throw new ProfileError("malformed", `profile file for ${JSON.stringify(name)} is malformed: seed_hex: ${e.message}`);
+  }
+  return Identity.fromSeed(seed);
+}
+function loadActive() {
+  const name = activeName();
+  return name === void 0 ? void 0 : load(name);
+}
+
+// src/receipt.ts
+var TurnProof = class {
+  constructor(turnHash2, bytes) {
+    if (turnHash2.length !== 32) throw new Error("TurnProof: turnHash must be 32 bytes");
+    this.turnHash = Uint8Array.from(turnHash2);
+    this.bytes = bytes;
+  }
+  get turnHashHex() {
+    return hexEncode(this.turnHash);
+  }
+};
+var WrongTurnProofError = class extends Error {
+  constructor(expectedHex, gotHex) {
+    super(`proof is bound to turn ${gotHex}, receipt is turn ${expectedHex}`);
+    this.name = "WrongTurnProofError";
+  }
+};
+var num32ToHex = (a) => Array.isArray(a) ? hexEncode(Uint8Array.from(a)) : void 0;
+var Receipt = class _Receipt {
+  constructor(fields) {
+    this.turnHash = fields.turnHash.toLowerCase();
+    this.receiptHash = fields.receiptHash?.toLowerCase();
+    this.agent = fields.agent?.toLowerCase();
+    this.preStateHash = fields.preStateHash;
+    this.postStateHash = fields.postStateHash;
+    this.timestamp = fields.timestamp;
+    this.computronsUsed = fields.computronsUsed;
+    this.actionCount = fields.actionCount;
+    this.previousReceiptHash = fields.previousReceiptHash;
+    this.finality = fields.finality;
+    this.wasEncrypted = fields.wasEncrypted;
+    this.wasBurn = fields.wasBurn;
+    this.chainIndex = fields.chainIndex;
+    this.hasProofHint = fields.hasProofHint;
+    this.raw = fields.raw;
+  }
+  /** Build from the canonical wire receipt (the SSE `receipt` field). */
+  static fromTurnReceipt(r, extra) {
+    return new _Receipt({
+      turnHash: num32ToHex(r.turn_hash) ?? "",
+      agent: num32ToHex(r.agent),
+      preStateHash: num32ToHex(r.pre_state_hash),
+      postStateHash: num32ToHex(r.post_state_hash),
+      timestamp: r.timestamp,
+      computronsUsed: r.computrons_used,
+      actionCount: r.action_count,
+      previousReceiptHash: num32ToHex(r.previous_receipt_hash) ?? void 0,
+      finality: typeof r.finality === "string" ? r.finality.toLowerCase() : void 0,
+      wasEncrypted: r.was_encrypted,
+      wasBurn: r.was_burn,
+      raw: r,
+      ...extra
+    });
+  }
+  /** The attached proof, if one has been attached (receipts are born proofless). */
+  proof() {
+    return this.attached;
+  }
+  /** Whether a proof has been attached. */
+  hasProof() {
+    return this.attached !== void 0;
   }
   /**
-   * Verify a token against a specific request.
-   *
-   * Checks all caveats (service, action, expiry) and returns whether
-   * the token grants access.
-   *
-   * @param tokenStr - The encoded token string to verify.
-   * @param options - The request to verify against.
-   * @returns Verification result with allowed/denied status.
-   * @throws Error if the token is malformed or the WASM call fails.
+   * Attach the composed turn proof. Idempotent-at-first-writer: returns
+   * `false` if one was already attached (a receipt never silently swaps
+   * attestations) and throws [`WrongTurnProofError`] if the proof names a
+   * different turn (a mis-bound attachment is refused, not stored).
    */
-  async verify(tokenStr, options = {}) {
-    const appId = options.appId ?? "";
-    const action = options.action ?? "";
+  attachProof(proof) {
+    const expected = hexDecodeExact(this.turnHash, 32);
+    if (!bytesEqual(proof.turnHash, expected)) {
+      throw new WrongTurnProofError(this.turnHash, proof.turnHashHex);
+    }
+    if (this.attached !== void 0) return false;
+    this.attached = proof;
+    return true;
+  }
+  /**
+   * Lazily attach: return the attached proof, producing it with `f` if none
+   * is attached yet (mirrors `Receipt::proof_or_attach`). A produced proof
+   * bound to the wrong turn is refused, never stored.
+   */
+  async proofOrAttach(f) {
+    if (this.attached === void 0) {
+      const produced = await f();
+      this.attachProof(produced);
+    }
+    const got = this.attached;
+    if (got === void 0) throw new Error("unreachable: attached above");
+    return got;
+  }
+};
+
+// src/events.ts
+var ReceiptFilter = class {
+  /**
+   * Only receipts touching `cell` (the agent cell, an event-emitting cell,
+   * or the commit record's cell).
+   */
+  cell(cell) {
+    this.cellHexValue = hexEncode(cell);
+    return this;
+  }
+  /** [`cell`] with a raw hex id (e.g. straight from an explorer URL). */
+  cellHex(cell) {
+    this.cellHexValue = cell;
+    return this;
+  }
+  /**
+   * Only receipts whose commit record names this effect kind
+   * (e.g. `set_field`, `transfer`, `turn_committed`).
+   */
+  kind(kind) {
+    this.kindValue = kind;
+    return this;
+  }
+  query() {
+    const q = new URLSearchParams();
+    if (this.cellHexValue) q.set("cell", this.cellHexValue);
+    if (this.kindValue) q.set("kind", this.kindValue);
+    const s = q.toString();
+    return s.length > 0 ? `?${s}` : "";
+  }
+};
+function createSseParser() {
+  let buffer = "";
+  let eventType = "";
+  let dataLines = [];
+  let id = null;
+  function dispatch(out) {
+    if (dataLines.length === 0) {
+      eventType = "";
+      return;
+    }
+    out.push({ event: eventType || "message", data: dataLines.join("\n"), id });
+    eventType = "";
+    dataLines = [];
+  }
+  function processLine(line, out) {
+    if (line === "") {
+      dispatch(out);
+      return;
+    }
+    if (line.startsWith(":")) return;
+    const colon = line.indexOf(":");
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    switch (field) {
+      case "event":
+        eventType = value;
+        break;
+      case "data":
+        dataLines.push(value);
+        break;
+      case "id":
+        if (!value.includes("\0")) id = value;
+        break;
+      default:
+        break;
+    }
+  }
+  return {
+    feed(chunk) {
+      buffer += chunk;
+      const out = [];
+      let start = 0;
+      for (let i = 0; i < buffer.length; i++) {
+        const c = buffer[i];
+        if (c === "\n" || c === "\r") {
+          processLine(buffer.slice(start, i), out);
+          if (c === "\r" && buffer[i + 1] === "\n") i++;
+          start = i + 1;
+        }
+      }
+      buffer = buffer.slice(start);
+      return out;
+    }
+  };
+}
+var ReceiptStream = class {
+  constructor(url, headers, initialBackoffMs) {
+    this.url = url;
+    this.headers = headers;
+    this.queue = [];
+    this.closed = false;
+    this.abort = new AbortController();
+    void this.run(initialBackoffMs);
+  }
+  push(r) {
+    const w = this.waiter;
+    if (w) {
+      this.waiter = void 0;
+      w(r);
+    } else {
+      this.queue.push(r);
+    }
+  }
+  async run(initialBackoffMs) {
+    let lastEventId = null;
+    let backoff = initialBackoffMs;
+    const decoder = new TextDecoder();
+    while (!this.closed) {
+      try {
+        const headers = {
+          accept: "text/event-stream",
+          ...this.headers
+        };
+        if (lastEventId !== null) headers["last-event-id"] = lastEventId;
+        const resp = await fetch(this.url, { headers, signal: this.abort.signal });
+        if (resp.ok && resp.body) {
+          const parser = createSseParser();
+          const reader = resp.body.getReader();
+          for (; ; ) {
+            const { done, value } = await reader.read();
+            if (done || this.closed) break;
+            for (const event of parser.feed(decoder.decode(value, { stream: true }))) {
+              if (event.id !== null) lastEventId = event.id;
+              if (event.event !== "receipt") continue;
+              let wire;
+              try {
+                wire = JSON.parse(event.data);
+              } catch {
+                continue;
+              }
+              this.push(
+                Receipt.fromTurnReceipt(wire.receipt, {
+                  turnHash: wire.turn_hash,
+                  receiptHash: wire.receipt_hash,
+                  chainIndex: wire.chain_index,
+                  hasProofHint: wire.has_proof,
+                  finality: wire.finality
+                })
+              );
+              backoff = initialBackoffMs;
+            }
+          }
+        }
+      } catch {
+      }
+      if (this.closed) break;
+      await new Promise((r) => setTimeout(r, backoff));
+      backoff = Math.min(backoff * 2, 15e3);
+    }
+    const w = this.waiter;
+    if (w) {
+      this.waiter = void 0;
+      w(null);
+    }
+  }
+  /** The next committed receipt (`null` only after [`close`]). */
+  next() {
+    const head = this.queue.shift();
+    if (head !== void 0) return Promise.resolve(head);
+    if (this.closed) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      this.waiter = resolve;
+    });
+  }
+  /** End the subscription. */
+  close() {
+    this.closed = true;
+    this.abort.abort();
+    const w = this.waiter;
+    if (w) {
+      this.waiter = void 0;
+      w(null);
+    }
+  }
+  async *[Symbol.asyncIterator]() {
     try {
-      return this.wasm.verify_token(
-        tokenStr,
-        this.rootKey,
-        appId,
-        action
-      );
-    } catch (e) {
-      throw new Error(`Failed to verify token: ${extractError(e)}`);
+      for (; ; ) {
+        const r = await this.next();
+        if (r === null) return;
+        yield r;
+      }
+    } finally {
+      this.close();
     }
   }
 };
-function hexToBytes(hex) {
-  if (hex.length % 2 !== 0) {
-    throw new Error("Hex string must have even length");
-  }
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-function bytesToHex(bytes) {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-function extractError(e) {
-  if (e instanceof Error) return e.message;
-  return String(e);
-}
-
-// src/token.ts
-var TokenOps = class {
-  constructor(wasm) {
-    this.wasm = wasm;
+var NodeEvents = class {
+  /** Point at a node's base URL (e.g. `https://devnet.dregg.fg-goose.online`). */
+  constructor(baseUrl, opts = {}) {
+    this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.opts = opts;
   }
   /**
-   * Demonstrate a fold operation: create a token state, then attenuate it
-   * by removing facts, showing the Merkle root transition.
-   *
-   * This models the core dregg attenuation primitive where tokens can only
-   * monotonically lose capabilities (facts are removed, never added).
-   *
-   * @param options - The facts and removal list.
-   * @returns Fold result with old/new roots and verification status.
-   * @throws Error if the WASM call fails.
+   * Subscribe to the node's committed receipts. Reconnects with exponential
+   * backoff and `Last-Event-ID` resume; the stream ends only when closed.
    */
-  async demonstrateFold(options) {
-    const factsJson = JSON.stringify(options.facts);
-    const removeJson = JSON.stringify(options.removeFacts);
-    try {
-      return this.wasm.demonstrate_fold(factsJson, removeJson);
-    } catch (e) {
-      throw new Error(`Failed to demonstrate fold: ${extractError2(e)}`);
-    }
-  }
-  /**
-   * Compute a BLAKE3 hash of an arbitrary string.
-   *
-   * Returns the 64-character hex digest. Uses the same BLAKE3 implementation
-   * as the Rust backend for consistency.
-   *
-   * @param input - The string to hash.
-   * @returns 64-character hex-encoded BLAKE3 digest.
-   */
-  blake3Hash(input) {
-    return this.wasm.blake3_hash(input);
-  }
-  /**
-   * Compute the canonical intent ID using the same algorithm as the Rust
-   * intent engine (postcard serialization + BLAKE3 domain-separated hash).
-   *
-   * This produces a deterministic 32-byte ID that matches `Intent::compute_id()`
-   * in the `dregg-intent` crate.
-   *
-   * @param input - The intent specification.
-   * @returns 64-character hex-encoded intent ID.
-   * @throws Error if the intent is malformed or serialization fails.
-   */
-  async computeIntentId(input) {
-    const json = JSON.stringify(input);
-    try {
-      return this.wasm.compute_intent_id(json);
-    } catch (e) {
-      throw new Error(`Failed to compute intent ID: ${extractError2(e)}`);
-    }
-  }
-  /**
-   * Derive a keypair from a BIP39 mnemonic using dregg's BLAKE3 derivation path.
-   *
-   * Returns 64 bytes: first 32 are the secret key seed, last 32 are reserved
-   * for the public key (computed externally with Ed25519).
-   *
-   * @param mnemonic - A 24-word BIP39 mnemonic.
-   * @param passphrase - Optional passphrase (empty string for none).
-   * @returns 64-byte Uint8Array with the derived key material.
-   * @throws Error if the mnemonic is invalid.
-   */
-  async deriveKeypairFromMnemonic(mnemonic, passphrase = "") {
-    try {
-      return new Uint8Array(
-        this.wasm.derive_keypair_from_mnemonic(mnemonic, passphrase)
-      );
-    } catch (e) {
-      throw new Error(`Failed to derive keypair: ${extractError2(e)}`);
-    }
+  subscribe(filter = new ReceiptFilter()) {
+    const headers = {};
+    if (this.opts.devnetKey) headers["X-Devnet-Key"] = this.opts.devnetKey;
+    return new ReceiptStream(
+      `${this.baseUrl}/api/events/stream${filter.query()}`,
+      headers,
+      this.opts.initialBackoffMs ?? 500
+    );
   }
 };
-function extractError2(e) {
-  if (e instanceof Error) return e.message;
-  return String(e);
-}
 
-// src/proof.ts
-var ProofEngine = class {
-  constructor(wasm) {
-    this.wasm = wasm;
-  }
-  // ==========================================================================
-  // STARK Proofs
-  // ==========================================================================
-  /**
-   * Generate a STARK proof for a Merkle membership claim.
-   *
-   * Creates a proof that a leaf value is part of a Merkle tree of the
-   * specified depth. The proof uses FRI-based polynomial commitments.
-   *
-   * @param leafValue - The leaf value (u32 field element).
-   * @param depth - Merkle tree depth (2-8, will be clamped).
-   * @returns The proof result with serialized proof and metrics.
-   * @throws Error if proof generation fails.
-   */
-  async generateStarkProof(leafValue, depth) {
-    try {
-      return this.wasm.generate_demo_stark_proof(
-        leafValue,
-        depth
-      );
-    } catch (e) {
-      throw new Error(`Failed to generate STARK proof: ${extractError3(e)}`);
+// src/explain.ts
+var hx32 = (b) => hexEncode(b);
+function semTag(hash) {
+  return `[sem ${hx32(hash)}]`;
+}
+function effectBody(effect) {
+  switch (effect.kind) {
+    case "setField":
+      return `set state field #${effect.index} of cell ${hx32(effect.cell)} to 0x${hx32(effect.value)}`;
+    case "transfer":
+      return `transfer ${effect.amount} computrons from cell ${hx32(effect.from)} to cell ${hx32(effect.to)}`;
+    case "grantCapability":
+      return `grant capability (target ${hx32(effect.cap.target)} slot ${effect.cap.slot}) from cell ${hx32(effect.from)} to cell ${hx32(effect.to)}`;
+    case "revokeCapability":
+      return `revoke capability in slot ${effect.slot} of cell ${hx32(effect.cell)}`;
+    case "emitEvent":
+      return `emit event (topic 0x${hx32(effect.topic)}, ${effect.data.length} data field(s)) from cell ${hx32(effect.cell)}`;
+    case "incrementNonce":
+      return `increment the nonce of cell ${hx32(effect.cell)}`;
+    case "createCell":
+      return `create a new cell (owner 0x${hx32(effect.publicKey)}, token 0x${hx32(effect.tokenId)}) with balance ${effect.balance}`;
+    default: {
+      const unreachable = effect;
+      return unreachable;
     }
   }
-  /**
-   * Verify a previously generated STARK proof.
-   *
-   * @param proofJson - The serialized proof JSON string.
-   * @returns Verification result with valid/invalid status.
-   * @throws Error if the proof JSON is malformed.
-   */
-  async verifyStarkProof(proofJson) {
-    try {
-      return this.wasm.verify_demo_stark_proof(proofJson);
-    } catch (e) {
-      throw new Error(`Failed to verify STARK proof: ${extractError3(e)}`);
+}
+function explainEffect(effect) {
+  return `${effectBody(effect)} ${semTag(effectHash(effect))}`;
+}
+function authMode(auth) {
+  switch (auth.kind) {
+    case "signature":
+      return "an Ed25519 signature";
+    case "unchecked":
+      return "NO authorization (unchecked \u2014 only valid if the cell permits)";
+    default: {
+      const unreachable = auth;
+      return unreachable;
     }
   }
-  /**
-   * Tamper with a STARK proof by flipping bits. Useful for testing that
-   * verification correctly rejects corrupted proofs.
-   *
-   * @param proofJson - The original proof JSON.
-   * @returns The tampered proof JSON.
-   * @throws Error if the proof is malformed.
-   */
-  async tamperStarkProof(proofJson) {
-    try {
-      return this.wasm.tamper_demo_stark_proof(proofJson);
-    } catch (e) {
-      throw new Error(`Failed to tamper proof: ${extractError3(e)}`);
-    }
+}
+function explainAction(action) {
+  let out = `Action on cell ${hx32(action.target)}, authorized by ${authMode(action.authorization)}`;
+  if (action.balanceChange !== void 0) {
+    out += `, balance change ${action.balanceChange}`;
   }
-  // ==========================================================================
-  // Predicate Proofs
-  // ==========================================================================
-  /**
-   * Options for generating a predicate proof.
-   */
-  /**
-   * Generate a predicate proof for a private attribute.
-   *
-   * Proves a comparison (e.g., age >= 18) about a private value without
-   * revealing the value itself. The proof is bound to a fact commitment
-   * derived from the attribute key and state root.
-   *
-   * @param options - The predicate parameters.
-   * @returns The predicate proof result.
-   * @throws Error if the predicate is not satisfiable.
-   */
-  async generatePredicateProof(options) {
-    try {
-      return this.wasm.generate_predicate_proof(
-        options.predicateType,
-        options.privateValue,
-        options.threshold,
-        options.attributeKey,
-        options.stateRoot
-      );
-    } catch (e) {
-      throw new Error(`Failed to generate predicate proof: ${extractError3(e)}`);
-    }
+  out += `:
+  ${action.effects.length} effect(s):
+`;
+  action.effects.forEach((effect, i) => {
+    out += `    ${i + 1}. ${explainEffect(effect)}
+`;
+  });
+  out += `  ${semTag(actionHash(action))}`;
+  return out;
+}
+function explainTurn(turn) {
+  let out = `Turn by agent ${hx32(turn.agent)} (nonce ${turn.nonce}, fee ${turn.fee})`;
+  if (turn.memo !== void 0) {
+    out += ` memo ${JSON.stringify(turn.memo)}`;
   }
-  /**
-   * Verify a predicate proof.
-   *
-   * @param proofJson - The serialized predicate proof.
-   * @param threshold - The expected threshold value.
-   * @param factCommitment - The expected fact commitment.
-   * @returns Whether the proof is valid.
-   * @throws Error if the proof is malformed.
-   */
-  async verifyPredicateProof(proofJson, threshold, factCommitment) {
-    try {
-      return this.wasm.verify_predicate_proof(
-        proofJson,
-        threshold,
-        factCommitment
-      );
-    } catch (e) {
-      throw new Error(`Failed to verify predicate proof: ${extractError3(e)}`);
+  out += "\n";
+  const actions = [];
+  const walk = (trees) => {
+    for (const t of trees) {
+      actions.push(t.action);
+      walk(t.children);
     }
+  };
+  walk(turn.roots);
+  out += `${actions.length} action(s) in the call forest:
+`;
+  actions.forEach((a, i) => {
+    out += `[${i}] ${explainAction(a)}
+`;
+  });
+  return out;
+}
+var renderTurn = explainTurn;
+
+// src/turns.ts
+var DEFAULT_FEE = 10000n;
+var VALIDITY_HORIZON_SECS = 3600n;
+var EmptyTurnError = class extends Error {
+  constructor() {
+    super("refusing to sign an empty turn (no effects staged)");
+    this.name = "EmptyTurnError";
   }
-  // ==========================================================================
-  // Committed Threshold Proofs
-  // ==========================================================================
-  /**
-   * Prove that a private value meets a committed threshold (value >= threshold)
-   * without revealing either value to third parties.
-   *
-   * The threshold is hidden behind a Poseidon2 commitment, so the verifier
-   * only learns that the check passed, not what the threshold was.
-   *
-   * @param value - The prover's private attribute value.
-   * @param threshold - The verifier's threshold.
-   * @param blinding - Randomness for the threshold commitment.
-   * @returns The committed threshold proof result.
-   * @throws Error if the predicate is not satisfiable (value < threshold).
-   */
-  async proveCommittedThreshold(value, threshold, blinding) {
-    try {
-      return this.wasm.prove_committed_threshold(
-        value,
-        threshold,
-        blinding
-      );
-    } catch (e) {
-      throw new Error(
-        `Failed to prove committed threshold: ${extractError3(e)}`
-      );
-    }
+};
+var TurnBuilder = class {
+  constructor(runtime) {
+    this.methodName = "execute";
+    this.effectList = [];
+    this.runtime = runtime;
+  }
+  /** The cell whose authority this turn exercises. */
+  actingCell() {
+    return this.actingOn ?? this.runtime.identity.cellId();
   }
   /**
-   * Verify a committed threshold proof given the public commitments.
-   *
-   * @param proofJson - Serialized STARK proof.
-   * @param thresholdCommitment - The Poseidon2(threshold, blinding) value.
-   * @param factCommitment - The binding to token state.
-   * @returns Whether the proof is valid.
-   * @throws Error if the proof is malformed.
+   * Target another cell the identity administers (the action targets
+   * `target`; this agent signs and pays). The node verifies the signature
+   * against `target`'s `owner_pubkey` and requires the agent's c-list
+   * capability on it.
    */
-  async verifyCommittedThreshold(proofJson, thresholdCommitment, factCommitment) {
-    try {
-      return this.wasm.verify_committed_threshold(
-        proofJson,
-        thresholdCommitment,
-        factCommitment
-      );
-    } catch (e) {
-      throw new Error(
-        `Failed to verify committed threshold: ${extractError3(e)}`
-      );
-    }
+  on(target) {
+    this.actingOn = target;
+    return this;
   }
-  // ==========================================================================
-  // Garbled Circuit Comparison
-  // ==========================================================================
-  /**
-   * Run the garbled circuit comparison protocol (both parties simulated in-process).
-   *
-   * Proves `proverValue >= verifierThreshold` without the prover learning
-   * the threshold. This uses a garbled circuit approach where the verifier
-   * garbles a comparison circuit and the prover evaluates it.
-   *
-   * @param proverValue - The prover's private value.
-   * @param verifierThreshold - The verifier's private threshold.
-   * @returns The comparison result with pass/fail status and proof.
-   */
-  async garbledCompare(proverValue, verifierThreshold) {
-    try {
-      return this.wasm.garbled_compare(
-        proverValue,
-        verifierThreshold
-      );
-    } catch (e) {
-      throw new Error(`Failed to run garbled comparison: ${extractError3(e)}`);
-    }
+  /** Set the action's method verb (default `"execute"`). */
+  method(name) {
+    this.methodName = name;
+    return this;
   }
-  // ==========================================================================
-  // Anonymous Membership
-  // ==========================================================================
-  /**
-   * Generate a blinded ring membership proof.
-   *
-   * Proves that an agent is a member of a ring (set of identities) without
-   * revealing which specific member they are. Uses Poseidon2 blinding for
-   * unlinkability across sessions.
-   *
-   * @param agentIdHex - Hex-encoded 32-byte agent identity.
-   * @param ringMembers - Array of hex-encoded 32-byte member identities.
-   * @returns The anonymous membership proof result.
-   * @throws Error if the agent is not in the ring or inputs are malformed.
-   */
-  async proveAnonymousMembership(agentIdHex, ringMembers) {
-    const ringJson = JSON.stringify(ringMembers);
-    try {
-      return this.wasm.prove_anonymous_membership(
-        agentIdHex,
-        ringJson
-      );
-    } catch (e) {
-      throw new Error(
-        `Failed to prove anonymous membership: ${extractError3(e)}`
-      );
-    }
+  /** Set the turn fee (computron budget). Defaults to 10 000. */
+  fee(fee) {
+    this.feeValue = BigInt(fee);
+    return this;
   }
-  // ==========================================================================
-  // Schnorr Signatures
-  // ==========================================================================
+  // ─── typed verbs ───
+  /** Transfer `amount` computrons from the acting cell to `to`. */
+  transfer(to, amount) {
+    this.effectList.push({ kind: "transfer", from: this.actingCell(), to, amount });
+    return this;
+  }
   /**
-   * Generate a Schnorr keypair on the BabyBear^8 curve.
-   *
-   * @returns A keypair with secret key bytes and public key coordinates.
+   * Transfer with an explicit source cell (must still be within this
+   * identity's authority — the executor checks, not the builder).
    */
-  async schnorrKeygen() {
-    try {
-      const result = this.wasm.schnorr_keygen();
-      return {
-        secret_key: new Uint8Array(result.secret_key),
-        public_key_x: result.public_key_x,
-        public_key_y: result.public_key_y
+  transferFrom(from, to, amount) {
+    this.effectList.push({ kind: "transfer", from, to, amount });
+    return this;
+  }
+  /**
+   * Write state slot `index` of the acting cell (admitted only where the
+   * cell's installed program allows).
+   */
+  write(index, value) {
+    this.effectList.push({ kind: "setField", cell: this.actingCell(), index, value });
+    return this;
+  }
+  /** [`write`] with a numeric value (encoded like `field_from_u64`). */
+  writeU64(index, value) {
+    return this.write(index, fieldFromU64(value));
+  }
+  /**
+   * Grant a capability from the acting cell to `to` (non-amplifying: the
+   * executor admits only grants within held authority).
+   */
+  grant(to, cap) {
+    this.effectList.push({ kind: "grantCapability", from: this.actingCell(), to, cap });
+    return this;
+  }
+  /** Bump the acting cell's nonce (a deliberate no-op state advance). */
+  incrementNonce() {
+    this.effectList.push({ kind: "incrementNonce", cell: this.actingCell() });
+    return this;
+  }
+  /** Append one prebuilt effect (escape hatch; the executor's gates apply identically). */
+  effect(effect) {
+    this.effectList.push(effect);
+    return this;
+  }
+  /** Append a prebuilt effect list (the splice point for plan builders). */
+  effects(effects) {
+    for (const e of effects) this.effectList.push(e);
+    return this;
+  }
+  // ─── terminal ───
+  /**
+   * Sign the built action with this identity's key over the canonical
+   * federation-bound signing message, yielding an [`AuthorizedTurn`] ready
+   * to [`submit`](AuthorizedTurn.submit).
+   *
+   * After this point the act is credentialed; there is no way back to an
+   * unauthorized shape. (Async because the federation binding is discovered
+   * from the node on first use.)
+   */
+  async sign() {
+    if (this.effectList.length === 0) {
+      throw new EmptyTurnError();
+    }
+    const target = this.actingCell();
+    const federationId = await this.runtime.node.federationId();
+    const unsigned = unsignedActionNamed(target, this.methodName, this.effectList);
+    const action = this.runtime.identity.signAction(unsigned, federationId);
+    return new AuthorizedTurn(this.runtime, action, this.feeValue ?? DEFAULT_FEE);
+  }
+};
+var AuthorizedTurn = class {
+  constructor(runtime, action, fee) {
+    this.submitted = false;
+    this.runtime = runtime;
+    this.signedAction = action;
+    this.fee = fee;
+  }
+  /**
+   * The clerk's faithful, total explanation of exactly what was signed —
+   * the anti-blind-signing reading (see `explain.ts`).
+   */
+  explain() {
+    return explainAction(this.signedAction);
+  }
+  /** The signed action (inspection only — `submit` consumes the turn). */
+  action() {
+    return this.signedAction;
+  }
+  /**
+   * Execute the turn on the node and return the [`Receipt`] noun.
+   *
+   * The agent cell pays; the turn rides the cell's live nonce, the node's
+   * receipt-chain head (`previous_receipt_hash` causal binding), and a
+   * one-hour validity horizon; the envelope signature binds the canonical
+   * `Turn::hash` (v3). A chain-head race (another commit landing between
+   * read and submit) is retried once with fresh bindings — the per-action
+   * signature stays valid; only the envelope is re-signed. One-shot: a
+   * second call is refused (the consumed turn would replay-fail anyway).
+   */
+  async submit() {
+    if (this.submitted) {
+      throw new Error("AuthorizedTurn already submitted (one-shot, like the Rust consume-on-submit)");
+    }
+    this.submitted = true;
+    let lastError;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const nonce = await this.runtime.currentNonce();
+      const previousReceiptHash = await this.runtime.node.receiptChainHead();
+      const turn = {
+        agent: this.runtime.identity.cellId(),
+        nonce,
+        roots: [{ action: this.signedAction, children: [] }],
+        fee: this.fee,
+        validUntil: BigInt(Math.floor(Date.now() / 1e3)) + VALIDITY_HORIZON_SECS,
+        previousReceiptHash
       };
-    } catch (e) {
-      throw new Error(`Failed to generate Schnorr keypair: ${extractError3(e)}`);
-    }
-  }
-  /**
-   * Sign a message with a Schnorr secret key.
-   *
-   * @param secretKey - The 32-byte secret key.
-   * @param message - The message string to sign.
-   * @returns The Schnorr signature.
-   * @throws Error if the key is invalid.
-   */
-  async schnorrSign(secretKey, message) {
-    const keyJson = JSON.stringify({
-      secret_key: Array.from(secretKey)
-    });
-    try {
-      const result = this.wasm.schnorr_sign(keyJson, message);
-      return {
-        r_x: result.r_x,
-        r_y: result.r_y,
-        s: new Uint8Array(result.s)
-      };
-    } catch (e) {
-      throw new Error(`Failed to sign message: ${extractError3(e)}`);
-    }
-  }
-  /**
-   * Verify a Schnorr signature.
-   *
-   * @param publicKeyX - BabyBear8 x-coordinate (8 u32 elements).
-   * @param publicKeyY - BabyBear8 y-coordinate (8 u32 elements).
-   * @param message - The message that was signed.
-   * @param signature - The signature to verify.
-   * @returns Whether the signature is valid.
-   * @throws Error if inputs are malformed.
-   */
-  async schnorrVerify(publicKeyX, publicKeyY, message, signature) {
-    const pkJson = JSON.stringify({
-      public_key_x: publicKeyX,
-      public_key_y: publicKeyY
-    });
-    const sigJson = JSON.stringify({
-      r_x: signature.r_x,
-      r_y: signature.r_y,
-      s: Array.from(signature.s)
-    });
-    try {
-      return this.wasm.schnorr_verify(
-        pkJson,
-        message,
-        sigJson
-      );
-    } catch (e) {
-      throw new Error(`Failed to verify signature: ${extractError3(e)}`);
-    }
-  }
-};
-function extractError3(e) {
-  if (e instanceof Error) return e.message;
-  return String(e);
-}
-
-// src/merkle.ts
-var MerkleTree = class {
-  constructor(wasm) {
-    this.wasm = wasm;
-  }
-  /**
-   * Compute the Merkle root of a set of leaf strings.
-   *
-   * Each leaf is hashed as a unary fact with predicate "leaf" and the
-   * string as the term, matching the FactSet representation.
-   *
-   * @param leaves - Array of leaf strings.
-   * @returns The root hash and leaf count.
-   * @throws Error if the input is invalid.
-   */
-  async computeRoot(leaves) {
-    const leavesJson = JSON.stringify(leaves);
-    try {
-      return this.wasm.compute_merkle_root(leavesJson);
-    } catch (e) {
-      throw new Error(`Failed to compute Merkle root: ${extractError4(e)}`);
-    }
-  }
-  /**
-   * Generate a Merkle membership proof for a specific leaf.
-   *
-   * Proves that `targetLeaf` is a member of the set defined by `leaves`.
-   * The proof consists of sibling hashes along the path from the leaf to the root.
-   *
-   * @param leaves - All leaves in the tree.
-   * @param targetLeaf - The leaf to prove membership for.
-   * @returns Membership proof result with the root and verification status.
-   * @throws Error if the WASM call fails.
-   */
-  async proveMembership(leaves, targetLeaf) {
-    const leavesJson = JSON.stringify(leaves);
-    try {
-      return this.wasm.merkle_membership_proof(
-        leavesJson,
-        targetLeaf
-      );
-    } catch (e) {
-      throw new Error(
-        `Failed to generate membership proof: ${extractError4(e)}`
-      );
-    }
-  }
-  /**
-   * Generate a Merkle non-membership proof for a leaf NOT in the set.
-   *
-   * Proves that `absentLeaf` is NOT a member of the set. This is used
-   * for revocation checks and negative authorization.
-   *
-   * @param leaves - All leaves in the tree.
-   * @param absentLeaf - The leaf to prove absence for.
-   * @returns Non-membership proof result.
-   * @throws Error if the WASM call fails.
-   */
-  async proveNonMembership(leaves, absentLeaf) {
-    const leavesJson = JSON.stringify(leaves);
-    try {
-      return this.wasm.merkle_non_membership_proof(
-        leavesJson,
-        absentLeaf
-      );
-    } catch (e) {
-      throw new Error(
-        `Failed to generate non-membership proof: ${extractError4(e)}`
-      );
-    }
-  }
-};
-function extractError4(e) {
-  if (e instanceof Error) return e.message;
-  return String(e);
-}
-
-// src/predicates.ts
-var PredicateEvaluator = class {
-  constructor(wasm) {
-    this.wasm = wasm;
-  }
-  /**
-   * Evaluate a Datalog authorization request against a set of facts.
-   *
-   * Uses the standard dregg policy rules to derive an allow/deny conclusion.
-   * The derivation trace is returned for debugging and auditability.
-   *
-   * @param facts - The facts representing the current authorization state.
-   * @param request - The authorization request to evaluate.
-   * @returns The evaluation result with conclusion and derivation trace.
-   * @throws Error if the facts or request are malformed.
-   */
-  async evaluate(facts, request) {
-    const factsJson = JSON.stringify(facts);
-    const requestJson = JSON.stringify(request);
-    try {
-      return this.wasm.evaluate_datalog(
-        factsJson,
-        requestJson
-      );
-    } catch (e) {
-      throw new Error(`Failed to evaluate Datalog: ${extractError5(e)}`);
-    }
-  }
-  /**
-   * Check if a specific action is allowed given a set of facts.
-   *
-   * Convenience method that wraps `evaluate()` and returns a boolean.
-   *
-   * @param facts - The authorization facts.
-   * @param action - The action to check.
-   * @param service - The service context (optional).
-   * @param appId - The application ID (optional).
-   * @returns True if the action is allowed.
-   */
-  async isAllowed(facts, action, service, appId) {
-    const request = { action };
-    if (service) request.service = service;
-    if (appId) request.app_id = appId;
-    const result = await this.evaluate(facts, request);
-    return result.conclusion === "allow";
-  }
-  /**
-   * Build a set of facts from a simplified permission map.
-   *
-   * Converts a record of `{ role: actions[] }` into Datalog facts
-   * suitable for the standard policy engine.
-   *
-   * @param permissions - A map of role names to allowed actions.
-   * @param userRole - The user's role.
-   * @param userId - The user's ID.
-   * @returns An array of DatalogFact objects.
-   *
-   * @example
-   * ```ts
-   * const facts = evaluator.buildFacts(
-   *   { admin: ["read", "write", "delete"], viewer: ["read"] },
-   *   "admin",
-   *   "alice"
-   * );
-   * ```
-   */
-  buildFacts(permissions, userRole, userId) {
-    const facts = [];
-    facts.push({ predicate: "member", terms: [userId, userRole] });
-    for (const [role, actions] of Object.entries(permissions)) {
-      for (const action of actions) {
-        facts.push({ predicate: "permission", terms: [role, action] });
+      try {
+        return await this.runtime.submitTurn(turn);
+      } catch (e) {
+        lastError = e;
+        const msg = e instanceof Error ? e.message : String(e);
+        if (attempt === 0 && /receipt chain mismatch|nonce/i.test(msg)) {
+          continue;
+        }
+        throw e;
       }
     }
-    return facts;
+    throw lastError;
   }
 };
-function extractError5(e) {
-  if (e instanceof Error) return e.message;
-  return String(e);
-}
 
-// src/runtime.ts
-var DreggRuntime = class {
-  constructor(wasm) {
-    this.destroyed = false;
-    this.wasm = wasm;
-    this.handle = wasm.create_runtime();
-  }
-  /**
-   * Destroy this runtime, freeing all associated resources.
-   * After calling this, the runtime instance cannot be used.
-   */
-  destroy() {
-    if (!this.destroyed) {
-      this.wasm.destroy_runtime(this.handle);
-      this.destroyed = true;
-    }
-  }
-  assertAlive() {
-    if (this.destroyed) {
-      throw new Error("Runtime has been destroyed");
-    }
-  }
-  // ==========================================================================
-  // Agent Management
-  // ==========================================================================
-  /**
-   * Create an agent (cclerk + cell) in the runtime.
-   *
-   * The agent gets a deterministic keypair derived from their name,
-   * a cell in the ledger with the specified balance, and a commitment ID
-   * for intent matching.
-   *
-   * @param name - Display name for the agent.
-   * @param initialBalance - Starting balance for the agent's cell.
-   * @returns Agent info with index, cell ID, and public key.
-   */
-  async createAgent(name, initialBalance) {
-    this.assertAlive();
-    try {
-      return this.wasm.create_agent(
-        this.handle,
-        name,
-        BigInt(initialBalance)
-      );
-    } catch (e) {
-      throw new Error(`Failed to create agent: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Mint a token for an agent (for intent matching).
-   *
-   * @param agentIndex - The agent's index.
-   * @param resource - Resource pattern (e.g., "docs/*").
-   * @param actions - Allowed actions (e.g., ["read", "write"]).
-   * @param expiry - Expiry timestamp (0 for no expiry).
-   * @returns The minted token info.
-   */
-  async mintToken(agentIndex, resource, actions, expiry = 0) {
-    this.assertAlive();
-    const actionsJson = JSON.stringify(actions);
-    try {
-      return this.wasm.agent_mint_token(
-        this.handle,
-        agentIndex,
-        resource,
-        actionsJson,
-        BigInt(expiry)
-      );
-    } catch (e) {
-      throw new Error(`Failed to mint token: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Attenuate an existing held token by narrowing its actions/resource.
-   *
-   * @param agentIndex - The agent's index.
-   * @param tokenIndex - Index of the token to attenuate.
-   * @param restrictActions - Actions to keep (empty = keep all).
-   * @param restrictResource - New resource pattern (empty = keep original).
-   * @returns The attenuated token info.
-   */
-  async attenuateToken(agentIndex, tokenIndex, restrictActions = [], restrictResource = "") {
-    this.assertAlive();
-    const actionsJson = JSON.stringify(restrictActions);
-    try {
-      return this.wasm.agent_attenuate(
-        this.handle,
-        agentIndex,
-        tokenIndex,
-        actionsJson,
-        restrictResource
-      );
-    } catch (e) {
-      throw new Error(`Failed to attenuate token: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Cell Operations
-  // ==========================================================================
-  /**
-   * Get the full state of a cell.
-   *
-   * @param cellIdHex - Hex-encoded cell ID.
-   * @returns The cell's state including balance, nonce, fields, and permissions.
-   */
-  async getCellState(cellIdHex) {
-    this.assertAlive();
-    try {
-      return this.wasm.get_cell_state(
-        this.handle,
-        cellIdHex
-      );
-    } catch (e) {
-      throw new Error(`Failed to get cell state: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Get all cells in the ledger.
-   *
-   * @returns Array of cell summaries.
-   */
-  async getAllCells() {
-    this.assertAlive();
-    try {
-      return this.wasm.get_all_cells(this.handle);
-    } catch (e) {
-      throw new Error(`Failed to get cells: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Turn Execution
-  // ==========================================================================
-  /**
-   * Build and execute a turn (transaction) for an agent.
-   *
-   * A turn consists of one or more actions (transfers, field sets, etc.)
-   * that are atomically committed or rejected.
-   *
-   * @param agentIndex - The agent executing the turn.
-   * @param actions - Array of actions to execute.
-   * @param fee - Fee to pay for the turn (in computrons).
-   * @returns The turn result with status and receipt.
-   */
-  async executeTurn(agentIndex, actions, fee = 0) {
-    this.assertAlive();
-    const actionsJson = JSON.stringify(actions);
-    try {
-      return this.wasm.execute_turn(
-        this.handle,
-        agentIndex,
-        actionsJson,
-        BigInt(fee)
-      );
-    } catch (e) {
-      throw new Error(`Failed to execute turn: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Execute a turn with step-by-step tracing for debugging.
-   *
-   * Same as `executeTurn` but returns detailed trace information
-   * about each step of execution.
-   *
-   * @param agentIndex - The agent executing the turn.
-   * @param actions - Array of actions to execute.
-   * @param fee - Fee to pay.
-   * @returns Detailed trace with per-step results.
-   */
-  async executeTurnStepByStep(agentIndex, actions, fee = 0) {
-    this.assertAlive();
-    const actionsJson = JSON.stringify(actions);
-    try {
-      return this.wasm.execute_turn_step_by_step(
-        this.handle,
-        agentIndex,
-        actionsJson,
-        BigInt(fee)
-      );
-    } catch (e) {
-      throw new Error(`Failed to execute turn (traced): ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Capabilities
-  // ==========================================================================
-  /**
-   * Grant a capability from one agent to another.
-   *
-   * @param fromAgent - Index of the granting agent.
-   * @param toAgent - Index of the receiving agent.
-   * @param permission - Permission level to grant.
-   * @param targetCellHex - Target cell (empty = from agent's cell).
-   * @returns The grant result with slot number.
-   */
-  async grantCapability(fromAgent, toAgent, permission, targetCellHex = "") {
-    this.assertAlive();
-    try {
-      return this.wasm.grant_capability(
-        this.handle,
-        fromAgent,
-        toAgent,
-        targetCellHex,
-        permission
-      );
-    } catch (e) {
-      throw new Error(`Failed to grant capability: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Revoke a capability by slot index.
-   *
-   * @param agentIndex - The agent whose capability to revoke.
-   * @param slot - The capability slot number.
-   * @returns Whether the revocation succeeded.
-   */
-  async revokeCapability(agentIndex, slot) {
-    this.assertAlive();
-    try {
-      return this.wasm.revoke_capability(
-        this.handle,
-        agentIndex,
-        slot
-      );
-    } catch (e) {
-      throw new Error(`Failed to revoke capability: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Get the Capability Delegation Tree (CDT) for an agent.
-   *
-   * @param agentIndex - The agent's index.
-   * @returns The CDT view with all capabilities.
-   */
-  async getCapabilityTree(agentIndex) {
-    this.assertAlive();
-    try {
-      return this.wasm.get_capability_tree(
-        this.handle,
-        agentIndex
-      );
-    } catch (e) {
-      throw new Error(`Failed to get capability tree: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Notes (Privacy-Preserving Values)
-  // ==========================================================================
-  /**
-   * Create a note commitment for an agent.
-   *
-   * Notes are privacy-preserving value stores. The commitment hides
-   * the value while allowing later spending with nullifier reveal.
-   *
-   * @param agentIndex - The agent creating the note.
-   * @param value - The note's value.
-   * @param assetType - The asset type identifier.
-   * @returns The note commitment.
-   */
-  async createNote(agentIndex, value, assetType) {
-    this.assertAlive();
-    try {
-      return this.wasm.create_note(
-        this.handle,
-        agentIndex,
-        BigInt(value),
-        BigInt(assetType)
-      );
-    } catch (e) {
-      throw new Error(`Failed to create note: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Spend a note by revealing its nullifier.
-   *
-   * Double-spending is prevented by the nullifier set.
-   *
-   * @param agentIndex - The agent spending the note.
-   * @param value - The note's value.
-   * @param assetType - The asset type.
-   * @returns The nullifier and spend status.
-   * @throws Error if the note was already spent (double-spend).
-   */
-  async spendNote(agentIndex, value, assetType) {
-    this.assertAlive();
-    try {
-      return this.wasm.spend_note(
-        this.handle,
-        agentIndex,
-        BigInt(value),
-        BigInt(assetType)
-      );
-    } catch (e) {
-      throw new Error(`Failed to spend note: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Federation
-  // ==========================================================================
-  /**
-   * Create a simulated federation with the specified number of nodes.
-   *
-   * @param name - Federation name.
-   * @param numNodes - Number of validator nodes.
-   * @returns Federation info with index.
-   */
-  async createFederation(name, numNodes) {
-    this.assertAlive();
-    try {
-      return this.wasm.create_federation(
-        this.handle,
-        name,
-        numNodes
-      );
-    } catch (e) {
-      throw new Error(`Failed to create federation: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Propose a block of events to a federation.
-   *
-   * @param fedIndex - Federation index.
-   * @param events - Array of event data strings.
-   * @returns The block hash and new height.
-   */
-  async proposeBlock(fedIndex, events) {
-    this.assertAlive();
-    const eventsJson = JSON.stringify(events);
-    try {
-      return this.wasm.propose_block(
-        this.handle,
-        fedIndex,
-        eventsJson
-      );
-    } catch (e) {
-      throw new Error(`Failed to propose block: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Get the current state of a federation.
-   *
-   * @param fedIndex - Federation index.
-   * @returns The federation state.
-   */
-  async getFederationState(fedIndex) {
-    this.assertAlive();
-    try {
-      return this.wasm.get_federation_state(
-        this.handle,
-        fedIndex
-      );
-    } catch (e) {
-      throw new Error(`Failed to get federation state: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Simulate a consensus round (all nodes vote and finalize).
-   *
-   * @param fedIndex - Federation index.
-   * @returns The consensus round result.
-   */
-  async simulateConsensusRound(fedIndex) {
-    this.assertAlive();
-    try {
-      return this.wasm.simulate_consensus_round(
-        this.handle,
-        fedIndex
-      );
-    } catch (e) {
-      throw new Error(`Failed to simulate consensus: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Intents
-  // ==========================================================================
-  /**
-   * Create an intent (Need, Offer, or Query).
-   *
-   * @param agentIndex - The creating agent's index.
-   * @param kind - Intent kind: "Need", "Offer", or "Query".
-   * @param actions - Action patterns to match.
-   * @param constraints - Constraint specifications.
-   * @param resourcePattern - Optional resource pattern.
-   * @param expiry - Expiry timestamp.
-   * @returns The intent info with ID and index.
-   */
-  async createIntent(agentIndex, kind, actions, constraints = [], resourcePattern = "", expiry = 0) {
-    this.assertAlive();
-    const actionsJson = JSON.stringify(actions);
-    const constraintsJson = JSON.stringify(constraints);
-    try {
-      return this.wasm.create_intent(
-        this.handle,
-        agentIndex,
-        kind,
-        actionsJson,
-        constraintsJson,
-        resourcePattern,
-        BigInt(expiry)
-      );
-    } catch (e) {
-      throw new Error(`Failed to create intent: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Match an intent against an agent's held tokens.
-   *
-   * @param intentIndex - Index of the intent to match.
-   * @param agentIndex - Index of the agent to match against.
-   * @returns The match result.
-   */
-  async matchIntent(intentIndex, agentIndex) {
-    this.assertAlive();
-    try {
-      return this.wasm.match_intent_for_agent(
-        this.handle,
-        intentIndex,
-        agentIndex
-      );
-    } catch (e) {
-      throw new Error(`Failed to match intent: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Conditional Turns
-  // ==========================================================================
-  /**
-   * Submit a conditional turn that executes only when a condition is proven.
-   *
-   * @param agentIndex - The agent submitting the conditional.
-   * @param actions - Actions to execute if condition is met.
-   * @param fee - Fee to pay.
-   * @param condition - The proof condition that must be satisfied.
-   * @param timeoutBlocks - Number of blocks before timeout.
-   * @returns The conditional turn ID and timeout height.
-   */
-  async submitConditional(agentIndex, actions, fee, condition, timeoutBlocks) {
-    this.assertAlive();
-    const actionsJson = JSON.stringify(actions);
-    const conditionJson = JSON.stringify(condition);
-    try {
-      return this.wasm.submit_conditional(
-        this.handle,
-        agentIndex,
-        actionsJson,
-        BigInt(fee),
-        conditionJson,
-        BigInt(timeoutBlocks)
-      );
-    } catch (e) {
-      throw new Error(`Failed to submit conditional: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Advance the block height (for timeout simulation).
-   *
-   * @param blocks - Number of blocks to advance.
-   * @returns The new height and timestamp.
-   */
-  async advanceHeight(blocks) {
-    this.assertAlive();
-    try {
-      return this.wasm.advance_height(
-        this.handle,
-        BigInt(blocks)
-      );
-    } catch (e) {
-      throw new Error(`Failed to advance height: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Revocation Channels
-  // ==========================================================================
-  /**
-   * Create a revocation channel for an agent.
-   *
-   * Revocation channels allow an agent to instantly invalidate
-   * all capabilities delegated through that channel.
-   *
-   * @param revokerAgent - The agent who can trigger revocation.
-   * @returns The channel ID.
-   */
-  async createRevocationChannel(revokerAgent) {
-    this.assertAlive();
-    try {
-      return this.wasm.create_revocation_channel(
-        this.handle,
-        revokerAgent
-      );
-    } catch (e) {
-      throw new Error(`Failed to create revocation channel: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Trip (activate) a revocation channel, invalidating all associated capabilities.
-   *
-   * @param revokerAgent - The agent triggering revocation.
-   * @param channelIdHex - Hex-encoded channel ID.
-   * @returns Whether the trip succeeded.
-   */
-  async tripRevocationChannel(revokerAgent, channelIdHex) {
-    this.assertAlive();
-    try {
-      return this.wasm.trip_revocation_channel(
-        this.handle,
-        revokerAgent,
-        channelIdHex
-      );
-    } catch (e) {
-      throw new Error(`Failed to trip channel: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Check if a revocation channel is still active (not tripped).
-   *
-   * @param channelIdHex - Hex-encoded channel ID.
-   * @returns Active status.
-   */
-  async isChannelActive(channelIdHex) {
-    this.assertAlive();
-    try {
-      return this.wasm.is_channel_active(
-        this.handle,
-        channelIdHex
-      );
-    } catch (e) {
-      throw new Error(`Failed to check channel: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Visualization Helpers
-  // ==========================================================================
-  /**
-   * Get the Merkle tree visualization data for the ledger.
-   *
-   * @returns Tree visualization info (root, leaf count, type).
-   */
-  async getMerkleTreeViz() {
-    this.assertAlive();
-    try {
-      return this.wasm.get_merkle_tree_viz(this.handle);
-    } catch (e) {
-      throw new Error(`Failed to get tree viz: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Get the full receipt chain (all committed turn receipts).
-   *
-   * @returns Array of receipt entries in order.
-   */
-  async getReceiptChain() {
-    this.assertAlive();
-    try {
-      return this.wasm.get_receipt_chain(
-        this.handle
-      );
-    } catch (e) {
-      throw new Error(`Failed to get receipt chain: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Get the delegation graph (all capability edges across all cells).
-   *
-   * Useful for visualizing the authorization topology.
-   *
-   * @returns Graph with nodes and edges.
-   */
-  async getDelegationGraph() {
-    this.assertAlive();
-    try {
-      return this.wasm.get_delegation_graph(
-        this.handle
-      );
-    } catch (e) {
-      throw new Error(`Failed to get delegation graph: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Cell creation (non-agent paths)
-  // ==========================================================================
-  /**
-   * Create a cell in the runtime via a real `Effect::CreateCell` turn issued
-   * by the genesis agent (agent 0).
-   *
-   * @param ownerPkHex - 32-byte owner public key as a hex string.
-   * @param initialBalance - Starting balance.
-   * @returns The new cell ID.
-   */
-  async createCell(ownerPkHex, initialBalance) {
-    this.assertAlive();
-    try {
-      return this.wasm.create_cell(
-        this.handle,
-        ownerPkHex,
-        BigInt(initialBalance)
-      );
-    } catch (e) {
-      throw new Error(`Failed to create cell: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Create an agent whose cell is minted from a specific factory VK.
-   *
-   * The factory must have been deployed via `deployFactoryDescriptor`.
-   *
-   * @param name - Display name for the agent.
-   * @param initialBalance - Starting balance.
-   * @param factoryVkHex - Hex-encoded factory VK.
-   * @returns Agent info.
-   */
-  async createAgentWithFactory(name, initialBalance, factoryVkHex) {
-    this.assertAlive();
-    try {
-      return this.wasm.create_agent_with_factory(
-        this.handle,
-        name,
-        BigInt(initialBalance),
-        factoryVkHex
-      );
-    } catch (e) {
-      throw new Error(`Failed to create agent with factory: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Deploy a factory descriptor into the runtime, returning the factory VK.
-   *
-   * @param descriptorJson - Serde-serialized `FactoryDescriptor` JSON.
-   * @returns The factory VK that addresses the deployed descriptor.
-   */
-  async deployFactoryDescriptor(descriptorJson) {
-    this.assertAlive();
-    try {
-      return this.wasm.deploy_factory_descriptor(
-        this.handle,
-        descriptorJson
-      );
-    } catch (e) {
-      throw new Error(`Failed to deploy factory descriptor: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Get the VK of the runtime's default test-cipherclerk factory.
-   *
-   * Useful for pre-registering the wasm-runtime factory set with
-   * `verify_provenance` or displaying the constructor-transparency anchor.
-   *
-   * @returns The default factory VK.
-   */
-  async defaultFactoryVk() {
-    this.assertAlive();
-    try {
-      return this.wasm.default_factory_vk(
-        this.handle
-      );
-    } catch (e) {
-      throw new Error(`Failed to get default factory VK: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Read the current canonical state-commitment of a cell.
-   *
-   * Returns `null` in the `commitment` field if the cell isn't in the ledger.
-   *
-   * @param cellIdHex - Hex-encoded cell ID.
-   * @returns The current state commitment.
-   */
-  async getCellStateCommitment(cellIdHex) {
-    this.assertAlive();
-    try {
-      return this.wasm.get_cell_state_commitment(
-        this.handle,
-        cellIdHex
-      );
-    } catch (e) {
-      throw new Error(`Failed to get cell state commitment: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Turn trace
-  // ==========================================================================
-  /**
-   * Return execution trace steps for a committed turn.
-   *
-   * @param turnHashHex - Hex-encoded turn hash (from a `TurnResultView`).
-   * @returns Array of trace steps, or `null` if the turn is not in the receipt chain.
-   */
-  async getTurnTrace(turnHashHex) {
-    this.assertAlive();
-    try {
-      return this.wasm.get_turn_trace(
-        this.handle,
-        turnHashHex
-      );
-    } catch (e) {
-      throw new Error(`Failed to get turn trace: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Peer exchange
-  // ==========================================================================
-  /**
-   * Register a peer cell on the named agent's exchange session.
-   *
-   * Must be called before `verifyPeerTransition` will accept transitions
-   * from that peer.
-   *
-   * @param agentIdx - Agent whose session to register the peer on.
-   * @param peerCellIdHex - Hex-encoded peer cell ID.
-   * @param peerPubkeyHex - Hex-encoded peer Ed25519 verifying key.
-   * @param initialCommitmentHex - Hex-encoded initial commitment agreed out-of-band.
-   * @returns The registered peer cell view.
-   */
-  async registerPeer(agentIdx, peerCellIdHex, peerPubkeyHex, initialCommitmentHex) {
-    this.assertAlive();
-    try {
-      return this.wasm.register_peer(
-        this.handle,
-        agentIdx,
-        peerCellIdHex,
-        peerPubkeyHex,
-        initialCommitmentHex
-      );
-    } catch (e) {
-      throw new Error(`Failed to register peer: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Get the agent's PeerExchange public key.
-   *
-   * @param agentIdx - Agent index.
-   * @returns The agent's peer pubkey as a hex string.
-   */
-  async getPeerPubkey(agentIdx) {
-    this.assertAlive();
-    try {
-      return this.wasm.get_peer_pubkey(
-        this.handle,
-        agentIdx
-      );
-    } catch (e) {
-      throw new Error(`Failed to get peer pubkey: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Read the agent's current view of a registered peer cell.
-   *
-   * @param agentIdx - Agent index.
-   * @param peerCellIdHex - Hex-encoded peer cell ID.
-   * @returns The peer cell view, or `null` if not registered.
-   */
-  async getPeerView(agentIdx, peerCellIdHex) {
-    this.assertAlive();
-    try {
-      return this.wasm.get_peer_view(
-        this.handle,
-        agentIdx,
-        peerCellIdHex
-      );
-    } catch (e) {
-      throw new Error(`Failed to get peer view: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * List all peer cell IDs the agent has registered.
-   *
-   * @param agentIdx - Agent index.
-   * @returns Array of hex-encoded peer cell IDs.
-   */
-  async listPeers(agentIdx) {
-    this.assertAlive();
-    try {
-      return this.wasm.list_peers(
-        this.handle,
-        agentIdx
-      );
-    } catch (e) {
-      throw new Error(`Failed to list peers: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Sign a state-transition for the named agent's exchange session.
-   *
-   * Returns raw postcard-encoded `PeerStateTransition` bytes — not JSON —
-   * because the whole point is a compact signed blob for paste UX.
-   *
-   * @param agentIdx - Agent index.
-   * @param oldCommitHex - Hex-encoded old commitment.
-   * @param newCommitHex - Hex-encoded new commitment.
-   * @param effectsHashHex - Hex-encoded effects bundle hash.
-   * @returns Postcard-encoded transition bytes.
-   */
-  async createPeerTransition(agentIdx, oldCommitHex, newCommitHex, effectsHashHex) {
-    this.assertAlive();
-    try {
-      return this.wasm.create_peer_transition(
-        this.handle,
-        agentIdx,
-        oldCommitHex,
-        newCommitHex,
-        effectsHashHex
-      );
-    } catch (e) {
-      throw new Error(`Failed to create peer transition: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Decode a `PeerStateTransition` blob into structured fields.
-   *
-   * @param bytes - Postcard-encoded transition bytes (from `createPeerTransition`).
-   * @returns Decoded transition fields.
-   */
-  async decodePeerTransition(bytes) {
-    this.assertAlive();
-    try {
-      return this.wasm.decode_peer_transition(
-        bytes
-      );
-    } catch (e) {
-      throw new Error(`Failed to decode peer transition: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * Verify a peer transition against the agent's registered session.
-   *
-   * On success returns the updated `PeerCellView`. On failure throws with
-   * the typed variant name (e.g. `"InvalidSignature: invalid Ed25519 signature"`)
-   * so callers can switch on the error code.
-   *
-   * @param agentIdx - Agent index whose session is checked.
-   * @param transitionBytes - Postcard-encoded transition bytes.
-   * @param peerPubkeyHex - Hex-encoded peer verifying key.
-   * @returns Updated peer cell view.
-   */
-  async verifyPeerTransition(agentIdx, transitionBytes, peerPubkeyHex) {
-    this.assertAlive();
-    try {
-      return this.wasm.verify_peer_transition(
-        this.handle,
-        agentIdx,
-        transitionBytes,
-        peerPubkeyHex
-      );
-    } catch (e) {
-      throw new Error(`Failed to verify peer transition: ${extractError6(e)}`);
-    }
-  }
-  // ==========================================================================
-  // Federation block history
-  // ==========================================================================
-  /**
-   * Get a finalized block by height (1-indexed).
-   *
-   * @param fedIndex - Federation index.
-   * @param height - Block height (1 = first finalized block).
-   * @returns The full block view, or `null` if not yet finalized.
-   */
-  async getFederationBlock(fedIndex, height) {
-    this.assertAlive();
-    try {
-      return this.wasm.get_federation_block(
-        this.handle,
-        fedIndex,
-        BigInt(height)
-      );
-    } catch (e) {
-      throw new Error(`Failed to get federation block: ${extractError6(e)}`);
-    }
-  }
-  /**
-   * List all finalized block headers for a federation.
-   *
-   * Call `getFederationBlock(fedIndex, height)` for full block contents.
-   *
-   * @param fedIndex - Federation index.
-   * @returns Array of compact block headers (empty if nothing finalized yet).
-   */
-  async listFederationBlocks(fedIndex) {
-    this.assertAlive();
-    try {
-      return this.wasm.list_federation_blocks(
-        this.handle,
-        fedIndex
-      );
-    } catch (e) {
-      throw new Error(`Failed to list federation blocks: ${extractError6(e)}`);
-    }
+// src/client.ts
+var NodeError = class extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "NodeError";
+    this.status = status;
   }
 };
-function extractError6(e) {
-  if (e instanceof Error) return e.message;
-  return String(e);
-}
+var NodeClient = class {
+  constructor(baseUrl, opts = {}) {
+    this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.opts = opts;
+    if (opts.federationId !== void 0) {
+      this.cachedFederationId = typeof opts.federationId === "string" ? hexDecodeExact(opts.federationId, 32) : Uint8Array.from(opts.federationId);
+    }
+  }
+  headers(extra = {}) {
+    const h = { ...extra };
+    if (this.opts.devnetKey) {
+      h["X-Devnet-Key"] = this.opts.devnetKey;
+      h["Authorization"] = `Bearer ${this.opts.devnetKey}`;
+    }
+    return h;
+  }
+  async request(path, init = {}) {
+    const url = this.baseUrl + path;
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(this.opts.timeoutMs ?? 15e3),
+      ...init,
+      headers: this.headers(init.headers ?? {})
+    });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      throw new NodeError(`HTTP ${resp.status} from ${path}: ${body.slice(0, 300)}`, resp.status);
+    }
+    return await resp.json();
+  }
+  /** `GET /api/node/identity` — the node operator's identity. */
+  nodeIdentity() {
+    return this.request("/api/node/identity");
+  }
+  /** The node operator's Ed25519 public key (hex). Falls back from
+   * `/api/node/identity` to `/status` for older node builds. */
+  async operatorPublicKeyHex() {
+    try {
+      return (await this.nodeIdentity()).public_key;
+    } catch (e) {
+      if (e instanceof NodeError && e.status === 404) {
+        const status = await this.request("/status");
+        return status.public_key;
+      }
+      throw e;
+    }
+  }
+  /** `GET /api/cell/{id}` — live cell state (balance, nonce, slots). */
+  cell(cellId) {
+    const hex = typeof cellId === "string" ? cellId : hexEncode(cellId);
+    return this.request(`/api/cell/${hex}`);
+  }
+  /** `GET /api/receipts` — the node's recent committed receipts. */
+  receipts() {
+    return this.request("/api/receipts");
+  }
+  /**
+   * The node's receipt-chain head hash (32 bytes), or undefined on an empty
+   * chain. Submitted turns bind to this via `previous_receipt_hash` (causal
+   * ordering; the node verifies the claim against its live head).
+   */
+  async receiptChainHead() {
+    const infos = await this.receipts();
+    if (infos.length === 0) return void 0;
+    const head = infos.find((r) => r.chain_head) ?? infos.reduce((a, b) => a.chain_index >= b.chain_index ? a : b);
+    return hexDecodeExact(head.receipt_hash, 32);
+  }
+  /**
+   * The federation id the node's EXECUTOR verifies action signatures
+   * against. Explicit option wins; else discovered (see
+   * [`NodeClientOptions.federationId`]) and cached.
+   */
+  async federationId() {
+    if (this.cachedFederationId) return this.cachedFederationId;
+    try {
+      const feds = await this.request(
+        "/api/federations"
+      );
+      const local = feds.find((f) => f.is_local && f.member_count > 0 && f.committee_epoch > 0);
+      if (local) {
+        this.cachedFederationId = hexDecodeExact(local.federation_id, 32);
+        return this.cachedFederationId;
+      }
+    } catch {
+    }
+    const operatorPk = await this.operatorPublicKeyHex();
+    this.cachedFederationId = blake3(hexDecodeExact(operatorPk, 32));
+    return this.cachedFederationId;
+  }
+  /**
+   * `POST /api/faucet` — devnet: materialize a hosted cell (`amount: 0`)
+   * and/or claim computrons (max 10000 per request). Passing `publicKey`
+   * lets the node install a canonical hosted cell with a real owner key —
+   * REQUIRED before that cell can pass Ed25519 turn authorization.
+   */
+  async faucet(recipient, amount, publicKey) {
+    const body = {
+      recipient: typeof recipient === "string" ? recipient : hexEncode(recipient),
+      amount
+    };
+    if (publicKey !== void 0) {
+      body.public_key = typeof publicKey === "string" ? publicKey : hexEncode(publicKey);
+    }
+    return this.request("/api/faucet", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  /** Submit a postcard `SignedTurn` envelope (the signed-byte ingress). */
+  submitSignedEnvelope(envelope) {
+    return this.request("/api/turns/submit-signed", {
+      method: "POST",
+      body: envelope,
+      headers: { "Content-Type": "application/octet-stream" }
+    });
+  }
+  /**
+   * Find the committed receipt for `turnHashHex`, polling briefly — commits
+   * land synchronously but the receipt listing is a separate read.
+   */
+  async receiptForTurn(turnHashHex, attempts = 10, delayMs = 300) {
+    const want = turnHashHex.toLowerCase();
+    for (let i = 0; i < attempts; i++) {
+      const infos = await this.receipts();
+      const hit = infos.find((r) => r.turn_hash.toLowerCase() === want);
+      if (hit) {
+        return new Receipt({
+          turnHash: hit.turn_hash,
+          receiptHash: hit.receipt_hash,
+          agent: hit.agent,
+          preStateHash: hit.pre_state,
+          postStateHash: hit.post_state,
+          timestamp: hit.timestamp,
+          computronsUsed: hit.computrons_used,
+          actionCount: hit.action_count,
+          previousReceiptHash: hit.previous_receipt_hash ?? void 0,
+          finality: hit.finality,
+          wasEncrypted: hit.was_encrypted,
+          wasBurn: hit.was_burn,
+          chainIndex: hit.chain_index,
+          hasProofHint: hit.has_proof
+        });
+      }
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+    return new Receipt({ turnHash: want });
+  }
+  /**
+   * Fetch the persisted full-turn STARK for a committed turn
+   * (`GET /api/turn/{hash}/proof`) — proofs land asynchronously from the
+   * node's prove pool; `undefined` until then.
+   */
+  async turnProof(turnHashHex) {
+    try {
+      const res = await this.request(
+        `/api/turn/${turnHashHex}/proof`
+      );
+      const bytes = new Uint8Array(res.proof_hex.length / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(res.proof_hex.slice(i * 2, i * 2 + 2), 16);
+      }
+      return new TurnProof(hexDecodeExact(res.turn_hash, 32), bytes);
+    } catch (e) {
+      if (e instanceof NodeError && e.status === 404) return void 0;
+      throw e;
+    }
+  }
+  /** The node's committed-receipt event stream (SSE). */
+  events() {
+    return new NodeEvents(this.baseUrl, { devnetKey: this.opts.devnetKey });
+  }
+};
+var AgentRuntime = class {
+  constructor(identity, node, opts = {}) {
+    this.identity = identity;
+    this.node = typeof node === "string" ? new NodeClient(node, opts) : node;
+  }
+  /** This identity's default agent cell (hex). */
+  cellIdHex() {
+    return this.identity.cellIdHex();
+  }
+  /**
+   * Open the typed turn builder — the SDK's one public turn shape:
+   * `runtime.turn().transfer(..).write(..).sign()` → `submit()` → `Receipt`.
+   */
+  turn() {
+    return new TurnBuilder(this);
+  }
+  /**
+   * Devnet bootstrap: materialize this identity's agent cell with its real
+   * owner key and claim `amount` computrons.
+   */
+  async faucet(amount) {
+    const res = await this.node.faucet(this.identity.cellId(), amount, this.identity.publicKey);
+    if (!res.success) {
+      throw new NodeError(`faucet refused: ${res.error ?? "unknown"}`);
+    }
+  }
+  /** The agent cell's current nonce (0 for a never-seen cell). */
+  async currentNonce() {
+    try {
+      const cell = await this.node.cell(this.identity.cellId());
+      return cell.found ? BigInt(cell.nonce) : 0n;
+    } catch (e) {
+      if (e instanceof NodeError && e.status === 404) return 0n;
+      throw e;
+    }
+  }
+  /**
+   * Envelope-sign and submit a finished turn; resolve the committed
+   * [`Receipt`]. Used by `AuthorizedTurn.submit()`.
+   */
+  async submitTurn(turn) {
+    const envelope = this.identity.signTurnEnvelope(turn);
+    const res = await this.node.submitSignedEnvelope(envelope);
+    const hashHex = res.turn_hash ?? hexEncode(turnHash(turn));
+    if (!res.accepted) {
+      throw new NodeError(`turn rejected: ${res.error ?? "unknown"} (turn ${hashHex})`);
+    }
+    return this.node.receiptForTurn(hashHex);
+  }
+};
 
-// src/index.ts
-var DreggClient = class _DreggClient {
-  /**
-   * Create a new DreggClient. Prefer using `DreggClient.init()` which
-   * handles async cclerk creation.
-   *
-   * @param wasm - The initialized dregg-wasm module.
-   * @param cclerk - A pre-created AgentCipherclerk instance.
-   */
-  constructor(wasm, cclerk) {
-    this.wasm = wasm;
-    this.cclerk = cclerk;
-    this.token = new TokenOps(wasm);
-    this.proof = new ProofEngine(wasm);
-    this.merkle = new MerkleTree(wasm);
-    this.predicates = new PredicateEvaluator(wasm);
+// src/program.ts
+var program_exports = {};
+__export(program_exports, {
+  CellProgramBuilder: () => CellProgramBuilder,
+  anyOf: () => anyOf,
+  balanceGte: () => balanceGte,
+  balanceLte: () => balanceLte,
+  canonicalProgramVk: () => canonicalProgramVk,
+  encodeConstraints: () => encodeConstraints,
+  fieldEquals: () => fieldEquals,
+  fieldFromU64: () => fieldFromU642,
+  immutable: () => immutable,
+  implies: () => implies,
+  preimageGate: () => preimageGate,
+  programmedCellDescriptor: () => programmedCellDescriptor,
+  senderInSlot: () => senderInSlot,
+  senderIs: () => senderIs,
+  simple: () => simple,
+  writeOnce: () => writeOnce
+});
+function fieldFromU642(v) {
+  const out = new Uint8Array(32);
+  let n = BigInt(v);
+  if (n < 0n || n >= 1n << 64n) throw new Error("fieldFromU64: out of u64 range");
+  for (let i = 31; i >= 24; i--) {
+    out[i] = Number(n & 0xffn);
+    n >>= 8n;
   }
+  return out;
+}
+function senderIs(pk) {
+  return { kind: "senderIs", pk: exactBytes(pk, 32, "senderIs pk") };
+}
+function senderInSlot(index) {
+  return { kind: "senderInSlot", index };
+}
+function balanceGte(min) {
+  return { kind: "balanceGte", min: BigInt(min) };
+}
+function balanceLte(max) {
+  return { kind: "balanceLte", max: BigInt(max) };
+}
+function preimageGate(commitmentIndex, hashKind = "blake3") {
+  return { kind: "preimageGate", commitmentIndex, hashKind };
+}
+function immutable(index) {
+  return { kind: "immutable", index };
+}
+function writeOnce(index) {
+  return { kind: "writeOnce", index };
+}
+function fieldEquals(index, value) {
+  return { kind: "fieldEquals", index, value: exactBytes(value, 32, "fieldEquals value") };
+}
+function anyOf(variants) {
+  return { kind: "anyOf", variants };
+}
+var simple = {
+  fieldEquals: (index, value) => ({
+    kind: "fieldEquals",
+    index,
+    value: exactBytes(value, 32, "fieldEquals value")
+  }),
+  writeOnce: (index) => ({ kind: "writeOnce", index }),
+  immutable: (index) => ({ kind: "immutable", index }),
+  senderIs: (pk) => ({
+    kind: "senderIs",
+    pk: exactBytes(pk, 32, "senderIs pk")
+  }),
+  senderInSlot: (index) => ({ kind: "senderInSlot", index }),
+  balanceGte: (min) => ({ kind: "balanceGte", min: BigInt(min) }),
+  balanceLte: (max) => ({ kind: "balanceLte", max: BigInt(max) }),
+  preimageGate: (commitmentIndex, hashKind = "blake3") => ({
+    kind: "preimageGate",
+    commitmentIndex,
+    hashKind
+  }),
   /**
-   * Initialize a DreggClient with a fresh random cclerk.
-   *
-   * This is the recommended way to create a client instance.
-   *
-   * @param wasm - The initialized dregg-wasm module.
-   * @returns A fully initialized DreggClient.
+   * Negation — accept iff the inner constraint rejects. Fail-closed: an
+   * unevaluable inner stays unevaluable, never vacuously satisfied.
+   * Double-negation is unrepresentable (mirrors the Rust type shape).
    */
-  static async init(wasm) {
-    const cclerk = await AgentCipherclerk.create(wasm);
-    return new _DreggClient(wasm, cclerk);
+  not: (inner) => {
+    if (inner.kind === "not") {
+      throw new Error("Not(Not(..)) is not representable; use the inner constraint directly");
+    }
+    return { kind: "not", inner };
   }
-  /**
-   * Initialize a DreggClient with an existing root key.
-   *
-   * @param wasm - The initialized dregg-wasm module.
-   * @param rootKey - A 32-byte root key (Uint8Array or hex string).
-   * @returns A DreggClient using the provided key.
-   */
-  static fromKey(wasm, rootKey) {
-    const cclerk = AgentCipherclerk.fromKey(wasm, rootKey);
-    return new _DreggClient(wasm, cclerk);
+};
+function implies(antecedent, consequent) {
+  return anyOf([simple.not(antecedent), consequent]);
+}
+var W = class {
+  constructor() {
+    this.parts = [];
   }
-  /**
-   * Create a new DreggRuntime for full distributed system simulation.
-   *
-   * The runtime provides agents, cells, turns, federations, intents,
-   * notes, capabilities, and revocation channels -- all running in WASM.
-   *
-   * @returns A new DreggRuntime instance.
-   */
-  createRuntime() {
-    return new DreggRuntime(this.wasm);
+  u8(v) {
+    this.parts.push(v & 255);
+    return this;
+  }
+  varint(v) {
+    let n = BigInt(v);
+    if (n < 0n) throw new Error("varint: negative");
+    do {
+      let b = Number(n & 0x7fn);
+      n >>= 7n;
+      if (n !== 0n) b |= 128;
+      this.parts.push(b);
+    } while (n !== 0n);
+    return this;
+  }
+  bytes(b) {
+    for (const x of b) this.parts.push(x);
+    return this;
+  }
+  out() {
+    return Uint8Array.from(this.parts);
+  }
+};
+var hashKindIndex = (k) => k === "blake3" ? 0 : 1;
+function writeSimple(w, c) {
+  switch (c.kind) {
+    case "fieldEquals":
+      w.varint(0).u8(c.index).bytes(c.value);
+      break;
+    case "fieldGte":
+      w.varint(1).u8(c.index).bytes(c.value);
+      break;
+    case "fieldLte":
+      w.varint(2).u8(c.index).bytes(c.value);
+      break;
+    case "writeOnce":
+      w.varint(3).u8(c.index);
+      break;
+    case "immutable":
+      w.varint(4).u8(c.index);
+      break;
+    case "monotonic":
+      w.varint(5).u8(c.index);
+      break;
+    case "strictMonotonic":
+      w.varint(6).u8(c.index);
+      break;
+    case "boundedBy":
+      w.varint(7).u8(c.index).u8(c.witnessIndex);
+      break;
+    case "not":
+      w.varint(11);
+      writeSimple(w, c.inner);
+      break;
+    case "senderIs":
+      w.varint(12).bytes(c.pk);
+      break;
+    case "senderInSlot":
+      w.varint(13).u8(c.index);
+      break;
+    case "balanceGte":
+      w.varint(14).varint(c.min);
+      break;
+    case "balanceLte":
+      w.varint(15).varint(c.max);
+      break;
+    case "preimageGate":
+      w.varint(16).u8(c.commitmentIndex).varint(hashKindIndex(c.hashKind));
+      break;
+  }
+}
+function writeConstraint(w, c) {
+  switch (c.kind) {
+    case "fieldEquals":
+      w.varint(0).u8(c.index).bytes(c.value);
+      break;
+    case "fieldGte":
+      w.varint(1).u8(c.index).bytes(c.value);
+      break;
+    case "fieldLte":
+      w.varint(2).u8(c.index).bytes(c.value);
+      break;
+    case "writeOnce":
+      w.varint(6).u8(c.index);
+      break;
+    case "immutable":
+      w.varint(7).u8(c.index);
+      break;
+    case "preimageGate":
+      w.varint(21).u8(c.commitmentIndex).varint(hashKindIndex(c.hashKind));
+      break;
+    case "anyOf":
+      w.varint(26).varint(c.variants.length);
+      for (const v of c.variants) writeSimple(w, v);
+      break;
+    case "senderIs":
+      w.varint(38).bytes(c.pk);
+      break;
+    case "senderInSlot":
+      w.varint(39).u8(c.index);
+      break;
+    case "balanceGte":
+      w.varint(40).varint(c.min);
+      break;
+    case "balanceLte":
+      w.varint(41).varint(c.max);
+      break;
+  }
+}
+function encodeConstraints(constraints) {
+  const w = new W();
+  w.varint(constraints.length);
+  for (const c of constraints) writeConstraint(w, c);
+  return w.out();
+}
+function canonicalProgramVk(constraints) {
+  const w = new W();
+  w.varint(1);
+  w.bytes(encodeConstraints(constraints));
+  const serialized = w.out();
+  return Blake3Hasher.newDeriveKey("dregg-cellprogram-vk-v1").update(u64le(serialized.length)).update(serialized).finalize();
+}
+function programmedCellDescriptor(constraints) {
+  const encoded = encodeConstraints(constraints);
+  const factoryVk = Blake3Hasher.newDeriveKey("dregg-sdk:programmed-cell-factory v1").update(u64le(encoded.length)).update(encoded).finalize();
+  const childVk = canonicalProgramVk(constraints);
+  return {
+    factoryVk,
+    factoryVkHex: hexEncode(factoryVk),
+    childProgramVk: childVk,
+    childProgramVkHex: hexEncode(childVk),
+    stateConstraints: constraints,
+    defaultMode: "hosted",
+    creationBudget: 1
+  };
+}
+var CellProgramBuilder = class {
+  constructor() {
+    this.staged = [];
+  }
+  /** Add one constraint atom. */
+  require(constraint) {
+    this.staged.push(constraint);
+    return this;
+  }
+  /** Add a whole constraint list (e.g. a blueprint's published set). */
+  program(constraints) {
+    for (const c of constraints) this.staged.push(c);
+    return this;
+  }
+  /** The staged constraint set. */
+  constraints() {
+    return this.staged;
+  }
+  /** Publish as a content-addressed descriptor. */
+  descriptor() {
+    return programmedCellDescriptor(this.staged);
   }
 };
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  AgentCipherclerk,
-  MerkleTree,
-  PredicateEvaluator,
-  ProofEngine,
-  DreggClient,
-  DreggRuntime,
-  TokenOps
+  AgentRuntime,
+  AuthorizedTurn,
+  EmptyTurnError,
+  Identity,
+  MAIN_IDENTITY_PATH,
+  NodeClient,
+  NodeError,
+  NodeEvents,
+  PROFILE_ENV,
+  ProfileError,
+  Receipt,
+  ReceiptFilter,
+  ReceiptStream,
+  TurnBuilder,
+  TurnProof,
+  WrongTurnProofError,
+  createSseParser,
+  explainAction,
+  explainEffect,
+  explainTurn,
+  fieldFromU64,
+  hexDecode,
+  hexEncode,
+  profiles,
+  program,
+  renderTurn,
+  symbol
 });

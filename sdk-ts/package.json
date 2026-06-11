@@ -1,7 +1,7 @@
 {
   "name": "@dregg/sdk",
-  "version": "0.1.0",
-  "description": "TypeScript SDK for the dregg distributed authorization system",
+  "version": "0.2.0",
+  "description": "TypeScript SDK for dregg — authorization-first turns, receipts, profiles, events, and the cell-program constraint language",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -10,6 +10,16 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./raw": {
+      "import": "./dist/raw.mjs",
+      "require": "./dist/raw.js",
+      "types": "./dist/raw.d.ts"
+    },
+    "./wasm": {
+      "import": "./dist/wasm.mjs",
+      "require": "./dist/wasm.js",
+      "types": "./dist/wasm.d.ts"
     }
   },
   "files": [
@@ -17,28 +27,35 @@
     "src"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "build": "tsup src/index.ts src/raw.ts src/wasm.ts --format cjs,esm --dts --clean",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
+    "test": "npm run build && node --test 'test/*.test.mjs'",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
     "dregg",
     "authorization",
-    "macaroon",
+    "capability",
     "stark",
-    "merkle",
-    "zero-knowledge",
-    "wasm"
+    "receipt",
+    "ed25519",
+    "blake3"
   ],
   "license": "AGPL-3.0-or-later",
   "peerDependencies": {
     "dregg-wasm": ">=0.1.0"
   },
+  "peerDependenciesMeta": {
+    "dregg-wasm": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "typescript": "^5.4.0",
     "tsup": "^8.0.0",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "dregg-wasm": "file:../wasm/pkg"
   },
   "repository": {
     "type": "git",

@@ -1,135 +1,111 @@
 # @dregg/sdk
 
-TypeScript SDK for the dregg distributed authorization system.
+TypeScript SDK for dregg. Two user-facing nouns and one shape:
 
-Wraps the `dregg-wasm` module into ergonomic, type-safe APIs for token management, zero-knowledge proofs, Merkle trees, Datalog authorization, and full runtime simulation.
+```text
+Identity → .turn() → typed verb builders → .sign() → .submit() → Receipt
+```
 
-## Installation
+An unauthorized act is inexpressible on the public surface: every action
+carries a real Ed25519 `Authorization::Signature` over the canonical
+federation-bound signing message, and every submission rides a `SignedTurn`
+envelope over the canonical `Turn::hash`. The raw vocabulary (including
+unauthorized construction) is sealed behind `@dregg/sdk/raw`.
+
+This package mirrors the Rust SDK (`sdk/`) shape-for-shape and
+byte-for-byte: key derivation, postcard wire encoding, canonical hashes, and
+signing preimages are differentially tested against the repo's own
+`dregg-wasm` build, and the identity derivation is pinned by the same golden
+vector as the Rust SDK, CLI, and browser extension — if any implementation
+drifts, all of them fail together.
+
+## Walkthrough (devnet)
+
+```ts
+import { AgentRuntime, Identity, NodeClient, ReceiptFilter, profiles } from "@dregg/sdk";
+
+// 1. A named identity — the same $DREGG_HOME/profiles store as `dregg id`.
+const identity = profiles.loadActive() ?? (profiles.create("me"), profiles.load("me"));
+
+// 2. Bind to a node.
+const node = new NodeClient("https://devnet.dregg.fg-goose.online", {
+  devnetKey: process.env.DREGG_DEVNET_KEY, // the signed-turn ingress is operator-gated
+});
+const runtime = new AgentRuntime(identity, node);
+
+// 3. Materialize + fund the agent cell (devnet faucet).
+await runtime.faucet(2000);
+
+// 4. Observe before acting.
+const stream = node.events().subscribe(new ReceiptFilter().cell(identity.cellId()));
+
+// 5. The one public turn shape.
+const authorized = await runtime.turn().writeU64(0, 42n).fee(1000).sign();
+console.log(authorized.explain()); // the anti-blind-signing reading, [sem]-tagged
+const receipt = await authorized.submit();
+
+// 6. The same noun arrives on the nervous system.
+for await (const observed of stream) {
+  if (observed.turnHash === receipt.turnHash) break;
+}
+
+// 7. The STARK attaches lazily (the node's async prove pool).
+const proof = await node.turnProof(receipt.turnHash);
+if (proof) receipt.attachProof(proof);
+```
+
+Runnable version: `node examples/devnet-walkthrough.mjs` (after `npm run build`).
+
+## Surface
+
+| Export | Purpose |
+|--------|---------|
+| `Identity` | Ed25519 identity; `blake3 derive_key("dregg/0", seed64)` derivation |
+| `profiles` | Shared `$DREGG_HOME/profiles` named-identity store (`dregg id …`) |
+| `NodeClient` / `AgentRuntime` | A node's HTTP surface / an identity bound to it |
+| `TurnBuilder` / `AuthorizedTurn` | Typed verbs → `.sign()` → `.submit()`; empty turns refused |
+| `Receipt` / `TurnProof` | Proof-of-execution noun; STARK lazily attached, mis-bound attachments refused |
+| `NodeEvents` / `ReceiptFilter` | `subscribe(filter)` → `AsyncIterable<Receipt>` (SSE, Last-Event-ID resume, reconnecting) |
+| `explainTurn` / `renderTurn` / `explainAction` / `explainEffect` | The clerk's faithful reading: total, `[sem <digest>]`-tagged (equal text ⇒ equal semantics) |
+| `program` | Cell-program atoms (`senderIs` / `senderInSlot` / `balanceGte` / `balanceLte` / `preimageGate`, `anyOf` / `not` / `implies`) + content-addressed factory descriptors |
+
+### Turn verbs
+
+`transfer(to, amount)` · `transferFrom(from, to, amount)` · `write(index, value)` ·
+`writeU64(index, n)` · `grant(to, cap)` · `incrementNonce()` · `effect(e)` /
+`effects(list)` · modifiers `on(target)` · `method(name)` · `fee(n)`.
+
+Unlike the Rust in-process runtime there is no `.asCell(..)`: the remote
+signed ingress pins `turn.agent` to the signer's default cell.
+
+### Sealed: `@dregg/sdk/raw`
+
+The wire vocabulary (postcard encoders, canonical hashes, signing preimages,
+`unsignedAction`). Quarantined exactly like the Rust SDK's `sdk/src/raw.rs`:
+if you import it in application code you are almost certainly building
+something the executor will reject.
+
+### Legacy: `@dregg/sdk/wasm`
+
+The pre-refinement wasm-bound playground client (`DreggClient`,
+`DreggRuntime`, proof/Merkle/Datalog toys) — unchanged, for existing
+consumers.
+
+## Tests
 
 ```bash
-npm install @dregg/sdk dregg-wasm
+npm test   # build + node --test
 ```
 
-## Quick Start
-
-```ts
-import init from "dregg-wasm";
-import { DreggClient } from "@dregg/sdk";
-
-// Initialize WASM and create client
-const wasm = await init();
-const client = await DreggClient.init(wasm);
-
-// Mint a token
-const token = await client.cclerk.mint("api-gateway");
-console.log(token.token); // "em2_..."
-
-// Attenuate (restrict) the token
-const restricted = await client.cclerk.attenuate(token.token, {
-  service: "api-gateway",
-  actions: "read",
-  expiresSecs: 3600,
-});
-
-// Verify
-const result = await client.cclerk.verify(restricted.token, { action: "read" });
-console.log(result.allowed); // true
-```
-
-## Modules
-
-### Cipherclerk (Token Lifecycle)
-
-```ts
-const cclerk = await AgentCipherclerk.create(wasm);
-const token = await cclerk.mint("my-service");
-const attenuated = await cclerk.attenuate(token.token, { actions: "read" });
-const verified = await cclerk.verify(attenuated.token, { action: "read" });
-```
-
-### STARK Proofs
-
-```ts
-const engine = new ProofEngine(wasm);
-const proof = await engine.generateStarkProof(42, 4);
-const valid = await engine.verifyStarkProof(proof.proof_json);
-```
-
-### Predicate Proofs (ZK Comparisons)
-
-```ts
-// Prove age >= 18 without revealing exact age
-const proof = await engine.generatePredicateProof({
-  predicateType: "gte",
-  privateValue: 25,
-  threshold: 18,
-  attributeKey: "age",
-  stateRoot: 12345,
-});
-```
-
-### Merkle Trees
-
-```ts
-const tree = new MerkleTree(wasm);
-const root = await tree.computeRoot(["alice", "bob", "carol"]);
-const proof = await tree.proveMembership(["alice", "bob", "carol"], "bob");
-```
-
-### Datalog Authorization
-
-```ts
-const evaluator = new PredicateEvaluator(wasm);
-const result = await evaluator.evaluate(
-  [
-    { predicate: "member", terms: ["alice", "admin"] },
-    { predicate: "permission", terms: ["admin", "read"] },
-  ],
-  { action: "read" }
-);
-```
-
-### Runtime Simulation
-
-```ts
-const runtime = client.createRuntime();
-
-const alice = await runtime.createAgent("alice", 1000);
-const bob = await runtime.createAgent("bob", 500);
-
-// Transfer
-const result = await runtime.executeTurn(alice.agent_index, [
-  { type: "transfer", to: bob.cell_id, amount: 100 },
-]);
-
-// Federations
-const fed = await runtime.createFederation("testnet", 4);
-await runtime.proposeBlock(fed.fed_index, ["event1", "event2"]);
-
-// Intents
-const intent = await runtime.createIntent(
-  alice.agent_index,
-  "Need",
-  [{ action: "read", resource: "docs/*" }],
-  [{ Service: "storage" }],
-  "",
-  1716000000
-);
-
-runtime.destroy();
-```
-
-## API Reference
-
-| Class | Purpose |
-|-------|---------|
-| `DreggClient` | Main entry point combining all subsystems |
-| `AgentCipherclerk` | Token mint/attenuate/verify |
-| `TokenOps` | Fold chains, BLAKE3 hashing, intent IDs |
-| `ProofEngine` | STARK proofs, predicates, Schnorr, garbled circuits |
-| `MerkleTree` | Root computation, membership/non-membership proofs |
-| `PredicateEvaluator` | Datalog authorization engine |
-| `DreggRuntime` | Full distributed system simulation |
+- **Differential**: TS-built signed turns are byte-identical (postcard
+  encoding AND canonical `Turn::hash` v3) to the Rust implementation via the
+  repo's `dregg-wasm` build; BLAKE3 is differentially tested across chunk
+  boundaries.
+- **Golden vector**: seed `00..3f` → pubkey `335840a9…8b9a`, the same pin as
+  `sdk/src/profiles.rs`, `cli/src/commands/id.rs`, and
+  `extension/test/derivation.test.mjs`.
+- Profile store, SSE resume/reconnect, explain totality + sem-tag
+  discrimination, program content-addressing.
 
 ## License
 
