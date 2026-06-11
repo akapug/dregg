@@ -114,7 +114,14 @@ apex + non-revocation depth, W1 Rust 7-step (in the rotation).
 
 ## Ops crib
 
-persvati for big cargo (`scripts/pbuild <lane> <cmd>`); lake builds local; FFI reseed
+**BATCH CARGO VERIFICATION (ember 2026-06-11):** concurrent lanes sharing ./target
+thrash the cache (one cell/ edit = whole-spine rebuild for every lane; every test
+binary re-links libdregg_lean.a). Policy: a lane verifies ONLY its own crate's
+narrow lib/suite; the cross-crate gauntlet (sdk e2e + node + producer + circuit
+harness) runs ONCE per landing-wave, batched by the main loop — on persvati
+(`git push persvati main` then `scripts/pbuild <lane> <cmd>`, 24 cores) when it's
+workspace-scale. Don't let each lane independently rediscover the same 21-minute
+compile. persvati for big cargo; lake builds local (cache replays in seconds); FFI reseed
 `dregg-lean-ffi/scripts/rebuild-dregg2-closure.sh` after Lean changes, BEFORE
 lean-shadow tests; site builds in Docker node:22 (host lacks darwin lightningcss);
 `git add` named paths THEN commit (never `commit --pathspec` on untracked, never -A);

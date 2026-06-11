@@ -292,6 +292,27 @@ impl PersistentStore {
         }
     }
 
+    /// The blocklace `block_id` of every durably committed turn, in commit
+    /// order.
+    ///
+    /// This is the exact identity set of turn-carrying blocks this node has
+    /// durably applied (each id was written atomically with its turn's ledger
+    /// commit), and is the turn half of the node's identity execution cursor on
+    /// recovery: a turn block is re-executed after a restart iff its id is NOT
+    /// here — no lost finalized turn, no double-apply.
+    pub fn commit_log_block_ids(&self) -> Result<Vec<[u8; 32]>> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::COMMIT_LOG)?;
+        let mut out = Vec::new();
+        for entry in table.range(0u64..)? {
+            let entry =
+                entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+            let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
+            out.push(record.block_id);
+        }
+        Ok(out)
+    }
+
     /// Load every commit record from `start` (inclusive) to the cursor, in order.
     ///
     /// This is the replay source for recovery: feeding these records' post-state

@@ -487,10 +487,8 @@ impl AgentRuntime {
             authorization: Authorization::Unchecked,
             ..unsigned
         };
-        let message = TurnExecutor::compute_signing_message(
-            &unsigned,
-            &self.executor.local_federation_id,
-        );
+        let message =
+            TurnExecutor::compute_signing_message(&unsigned, &self.executor.local_federation_id);
         let sig = self
             .cipherclerk
             .read()

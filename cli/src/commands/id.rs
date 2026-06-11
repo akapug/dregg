@@ -195,7 +195,9 @@ fn create(cfg: &Config, ctx: &Context, name: &str) -> Result<(), Box<dyn std::er
 fn list(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::Error>> {
     let dir = profiles_dir();
     let active = active_name();
-    let env_override = std::env::var(PROFILE_ENV).ok().filter(|v| !v.trim().is_empty());
+    let env_override = std::env::var(PROFILE_ENV)
+        .ok()
+        .filter(|v| !v.trim().is_empty());
 
     let mut profiles: Vec<ProfileFile> = Vec::new();
     match std::fs::read_dir(&dir) {
@@ -274,7 +276,9 @@ fn list(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     ctx.table(&["Name", "Public key"], &rows);
     match (&env_override, &active) {
-        (Some(name), _) => ctx.info(&format!("  * active via {PROFILE_ENV}={name} (env override)")),
+        (Some(name), _) => ctx.info(&format!(
+            "  * active via {PROFILE_ENV}={name} (env override)"
+        )),
         (None, Some(name)) => ctx.kv_dim("Active", &format!("{name} (persistent default)")),
         (None, None) => ctx.info("  No active profile. Set one with `dregg id use <name>`."),
     }

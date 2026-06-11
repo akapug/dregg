@@ -4330,7 +4330,7 @@ async fn post_fulfill_intent(
 
     // Deserialize the base fulfillment. For now we construct a minimal one from the
     // request fields since the full Fulfillment struct isn't directly serde-friendly
-    // across the wire. The verification happens inside execute_fulfillment_flow.
+    // across the wire. The verification happens inside execute_fulfillment_flow_verified.
     let state_root = dregg_circuit::BabyBear::new(req.state_root);
 
     // Build a minimal FulfillmentWithPredicates for the execution flow.
@@ -4371,12 +4371,14 @@ async fn post_fulfill_intent(
         .map(|r| r.height)
         .unwrap_or(0);
 
-    // Execute the fulfillment payment flow.
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
-    let result = dregg_intent::fulfillment::execute_fulfillment_flow(
+    // Execute the fulfillment payment through the VERIFIED settle path: the value-moving leg
+    // folds through the verified per-asset transition and is cross-checked against the REAL
+    // Lean executor export `dregg_record_kernel_step` (the node builds dregg-intent with
+    // `verified-settle` on). Fail-closed — a payment the verified executor refuses is REFUSED;
+    // there is no fallback to the legacy `dregg_turn::TurnExecutor`.
+    let result = dregg_intent::fulfillment::execute_fulfillment_flow_verified(
         &intent,
         &fulfillment_with_preds,
-        &executor,
         &mut s.ledger,
         payer_cell,
         recipient_cell,

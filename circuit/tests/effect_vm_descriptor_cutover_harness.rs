@@ -1063,12 +1063,12 @@ fn frozen_frame_nonce_tick_effects_graduated_into_cutover() {
 fn lifecycle_family_graduated_into_cutover() {
     use dregg_circuit::effect_vm::columns::sel;
     let selectors: &[usize] = &[
-        sel::MAKE_SOVEREIGN,          // 12
+        sel::MAKE_SOVEREIGN,           // 12
         sel::CREATE_CELL_FROM_FACTORY, // 13
-        sel::CREATE_CELL,             // 31
-        sel::CELL_UNSEAL,             // 50 (Sealed→Live: frozen-frame + tick; flip off-row)
-        sel::SPAWN_WITH_DELEGATION,   // 32
-        sel::RECEIPT_ARCHIVE,         // 51
+        sel::CREATE_CELL,              // 31
+        sel::CELL_UNSEAL,              // 50 (Sealed→Live: frozen-frame + tick; flip off-row)
+        sel::SPAWN_WITH_DELEGATION,    // 32
+        sel::RECEIPT_ARCHIVE,          // 51
     ];
 
     let mut graduated = 0usize;
@@ -1076,7 +1076,11 @@ fn lifecycle_family_graduated_into_cutover() {
         let (st, effects) = honest_case_for_selector(s)
             .unwrap_or_else(|| panic!("[sel {s}] no honest single-effect constructor"));
         let (base_trace, pis) = generate_effect_vm_trace(&st, &effects);
-        assert_eq!(base_trace[0].len(), 186, "[sel {s}] canonical 186-col layout");
+        assert_eq!(
+            base_trace[0].len(),
+            186,
+            "[sel {s}] canonical 186-col layout"
+        );
         let json = descriptor_for_selector(s)
             .unwrap_or_else(|| panic!("[sel {s}] no descriptor registered"));
         let name = descriptor_name_for_selector(s).unwrap();
@@ -1101,9 +1105,18 @@ fn lifecycle_family_graduated_into_cutover() {
         // (3) THE DIFFERENTIAL — both accept the SAME honest witness.
         let hand_accepts = p3_air_accepts(&base_trace, &pis);
         let desc_accepts = descriptor_air_accepts(&desc, &base_trace, dpis);
-        assert!(hand_accepts, "[sel {s} {name}] hand-AIR rejected a witness it just PROVED");
-        assert!(desc_accepts, "[sel {s} {name}] descriptor rejected a witness it just PROVED");
-        assert_eq!(hand_accepts, desc_accepts, "[sel {s} {name}] DIFFERENTIAL DISAGREEMENT");
+        assert!(
+            hand_accepts,
+            "[sel {s} {name}] hand-AIR rejected a witness it just PROVED"
+        );
+        assert!(
+            desc_accepts,
+            "[sel {s} {name}] descriptor rejected a witness it just PROVED"
+        );
+        assert_eq!(
+            hand_accepts, desc_accepts,
+            "[sel {s} {name}] DIFFERENTIAL DISAGREEMENT"
+        );
 
         // (4a) ANTI-GHOST — forged FINAL_BAL_LO is UNSAT for BOTH.
         {
@@ -1144,7 +1157,8 @@ fn lifecycle_family_graduated_into_cutover() {
             let mut t = base_trace.clone();
             // Undo the +256 advance on the active row (row 0) AND keep the rest as-is: the
             // descriptor's gSovReserved gate must reject.
-            t[0][STATE_AFTER_BASE + state::RESERVED] = t[0][dregg_circuit::effect_vm::columns::STATE_BEFORE_BASE + state::RESERVED];
+            t[0][STATE_AFTER_BASE + state::RESERVED] =
+                t[0][dregg_circuit::effect_vm::columns::STATE_BEFORE_BASE + state::RESERVED];
             assert!(
                 !descriptor_air_accepts(&desc, &t, dpis),
                 "[sel {s} {name}] descriptor took a sovereignty claim without the mode bit"
@@ -1157,7 +1171,10 @@ fn lifecycle_family_graduated_into_cutover() {
         );
         graduated += 1;
     }
-    assert_eq!(graduated, 6, "all 6 lifecycle-family selectors must graduate");
+    assert_eq!(
+        graduated, 6,
+        "all 6 lifecycle-family selectors must graduate"
+    );
 }
 
 /// THE SELECTOR-BINDING TOOTH (closes the `sdk/full_turn_proof.rs` SOUNDNESS NOTE). Each cutover

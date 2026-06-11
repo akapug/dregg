@@ -63,6 +63,10 @@ pub enum FulfillmentError {
     /// The STARK proof's action binding does not match the intent's requirements.
     /// This prevents replaying a proof from a different authorization context.
     ProofActionMismatch(String),
+    /// The VERIFIED executor refused the payment leg (gate failure, liveness, FFI
+    /// divergence, …). Fail-closed: a refusal here is final — there is NO fallback
+    /// to the legacy Rust executor.
+    VerifiedRefusal(String),
 }
 
 impl std::fmt::Display for FulfillmentError {
@@ -78,6 +82,7 @@ impl std::fmt::Display for FulfillmentError {
             Self::StaleStateRoot(e) => write!(f, "stale state root: {}", e),
             Self::PaymentFailed(e) => write!(f, "payment failed: {}", e),
             Self::ProofActionMismatch(e) => write!(f, "proof action mismatch: {}", e),
+            Self::VerifiedRefusal(e) => write!(f, "verified executor refused the payment: {}", e),
         }
     }
 }
@@ -965,6 +970,214 @@ pub fn execute_fulfillment_flow_with_key(
             "payment turn unexpectedly pending".into(),
         )),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The VERIFIED fulfillment payment flow — the value move settles through the
+// verified executor edge (`verified_settle`), NOT `dregg_turn::TurnExecutor`.
+// ---------------------------------------------------------------------------
+
+/// The computron column as a verified-ledger asset id.
+///
+/// The fulfillment payment moves COMPUTRONS — the cell record's scalar `balance` field. The
+/// verified per-asset executor ([`crate::verified_settle`]) indexes balances by a 32-byte asset
+/// column; the all-zero id names the computron column. This matches the Lean projection
+/// (`Dregg2.Intent.RingFFI.projAsset`): the scalar `balance` IS the projected asset column the
+/// verified export `dregg_record_kernel_step` runs over.
+pub const COMPUTRON_ASSET: [u8; 32] = [0u8; 32];
+
+/// Execute the fulfillment-to-payment flow with the VALUE MOVE settled by the VERIFIED executor.
+///
+/// Same contract as [`execute_fulfillment_flow`] (verify the fulfillment, then pay
+/// `intent.matcher.min_budget` from `payer_cell` to `recipient_cell`), with ONE difference that
+/// is the point: the payment leg does NOT run through the legacy `dregg_turn::TurnExecutor`. It
+/// is folded through [`crate::verified_settle::settle_ring_verified`] — the verified per-asset
+/// transition `recKExecAsset` (proved in `metatheory/Dregg2/Intent/Ring.lean`), which under the
+/// `verified-settle` feature is cross-checked leg-by-leg against the REAL Lean FFI export
+/// `@[export] dregg_record_kernel_step` (the PROVED `Exec.recKExec`;
+/// `RingFFI.ffi_export_realises_settleRing_leg`) and FAILS CLOSED on any divergence.
+///
+/// Fail-closed means fail-closed: a payment the verified executor refuses (underfunded payer,
+/// non-distinct cells, a missing/dead cell, an FFI divergence) returns
+/// [`FulfillmentError::VerifiedRefusal`] and the ledger is untouched. There is NO fallback to the
+/// legacy executor.
+///
+/// Differences from the legacy flow a caller can observe (all REFUSALS, never silent changes):
+/// * `payer_cell == recipient_cell` is refused (the verified distinctness gate).
+/// * Both cells must already exist in the ledger (the verified liveness gate); the flow never
+///   implicitly creates the recipient.
+/// * No conditional-turn fee/deposit is charged and no fee distribution runs — the verified edge
+///   moves EXACTLY the payment leg, conserving the computron column (`settleRing_conserves`).
+///
+/// The returned receipt binds the SAME canonical payment turn the legacy flow built
+/// ([`create_fulfillment_turn`] — so `turn_hash` is unchanged across the rewire) plus the REAL
+/// pre-/post-state Merkle roots of the ledger around the verified write-back.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_fulfillment_flow_verified(
+    intent: &Intent,
+    fulfillment: &FulfillmentWithPredicates,
+    ledger: &mut Ledger,
+    payer_cell: CellId,
+    recipient_cell: CellId,
+    current_height: u64,
+    current_block: u64,
+) -> Result<TurnReceipt, FulfillmentError> {
+    execute_fulfillment_flow_verified_with_key(
+        intent,
+        fulfillment,
+        ledger,
+        payer_cell,
+        recipient_cell,
+        current_height,
+        current_block,
+        None,
+    )
+}
+
+/// [`execute_fulfillment_flow_verified`] with an explicit root key for Trusted-mode HMAC
+/// verification (the secure variant, mirroring [`execute_fulfillment_flow_with_key`]).
+#[allow(clippy::too_many_arguments)]
+pub fn execute_fulfillment_flow_verified_with_key(
+    intent: &Intent,
+    fulfillment: &FulfillmentWithPredicates,
+    ledger: &mut Ledger,
+    payer_cell: CellId,
+    recipient_cell: CellId,
+    current_height: u64,
+    current_block: u64,
+    root_key: Option<&[u8; 32]>,
+) -> Result<TurnReceipt, FulfillmentError> {
+    use crate::verified_settle::{VerifiedLedger, VerifiedLeg, settle_ring_verified};
+
+    // Step 1: Verify the fulfillment (identical to the legacy flow).
+    let state_root = fulfillment.state_root;
+    verify_fulfillment_with_predicates_and_key(
+        fulfillment,
+        intent,
+        state_root,
+        current_block,
+        root_key,
+    )?;
+
+    // Step 2: Payment amount from the intent's min_budget.
+    let payment_amount = intent.matcher.min_budget.unwrap_or(0);
+    if payment_amount == 0 {
+        return Err(FulfillmentError::PaymentFailed(
+            "intent has no min_budget specified (no payment required)".into(),
+        ));
+    }
+
+    // Step 3: Build the verified leg. Distinctness is checked on the REAL 32-byte cell ids
+    // BEFORE projection — the projection below assigns synthetic indices, so two distinct
+    // cells can never alias, and a true self-payment can never slip past the gate.
+    if payer_cell == recipient_cell {
+        return Err(FulfillmentError::VerifiedRefusal(
+            "payer and recipient are the same cell (distinctness gate)".into(),
+        ));
+    }
+
+    // Project the real ledger's computron column for the two touched cells onto the verified
+    // per-asset ledger. Both cells must be LIVE (present) — the verified liveness gate; a
+    // missing cell is a refusal, never an implicit create.
+    let payer_balance = ledger
+        .get(&payer_cell)
+        .ok_or_else(|| {
+            FulfillmentError::VerifiedRefusal(
+                "payer cell not found in ledger (liveness gate)".into(),
+            )
+        })?
+        .state
+        .balance();
+    let recipient_balance = ledger
+        .get(&recipient_cell)
+        .ok_or_else(|| {
+            FulfillmentError::VerifiedRefusal(
+                "recipient cell not found in ledger (liveness gate)".into(),
+            )
+        })?
+        .state
+        .balance();
+
+    const PAYER: u8 = 0;
+    const RECIPIENT: u8 = 1;
+    let mut k0 = VerifiedLedger::new();
+    k0.add_account(PAYER);
+    k0.add_account(RECIPIENT);
+    k0.set(PAYER, &COMPUTRON_ASSET, payer_balance as i128);
+    k0.set(RECIPIENT, &COMPUTRON_ASSET, recipient_balance as i128);
+
+    let leg = VerifiedLeg {
+        from: PAYER,
+        to: RECIPIENT,
+        asset: COMPUTRON_ASSET,
+        amount: payment_amount as i128,
+    };
+
+    // Step 4: Settle through the verified executor — fail-closed, NO fallback. Under the
+    // `verified-settle` feature (on in the node), the leg is additionally settled by the REAL
+    // Lean FFI export `dregg_record_kernel_step` over this exact projection and cross-checked;
+    // any divergence refuses the payment.
+    let k1 = settle_ring_verified(&k0, &[leg])
+        .map_err(|e| FulfillmentError::VerifiedRefusal(e.to_string()))?;
+
+    // Step 5: Write the VERIFIED post-balances back to the real ledger. The verified gate
+    // guarantees the payer post-balance is non-negative; the recipient bound is the u64
+    // write-back check (the Lean side is ℤ — overflow lives only at this conversion).
+    let payer_post = u64::try_from(k1.get(PAYER, &COMPUTRON_ASSET)).map_err(|_| {
+        FulfillmentError::VerifiedRefusal("verified payer post-balance out of u64 range".into())
+    })?;
+    let recipient_post = u64::try_from(k1.get(RECIPIENT, &COMPUTRON_ASSET)).map_err(|_| {
+        FulfillmentError::VerifiedRefusal("verified recipient post-balance overflows u64".into())
+    })?;
+
+    let pre_state_hash = ledger.root();
+    ledger
+        .update_with(&payer_cell, |c| c.state.set_balance(payer_post))
+        .map_err(|e| {
+            FulfillmentError::PaymentFailed(format!("ledger write-back (payer): {e:?}"))
+        })?;
+    ledger
+        .update_with(&recipient_cell, |c| c.state.set_balance(recipient_post))
+        .map_err(|e| {
+            FulfillmentError::PaymentFailed(format!("ledger write-back (recipient): {e:?}"))
+        })?;
+    let post_state_hash = ledger.root();
+
+    // Step 6: The audit-trail receipt over the SAME canonical payment turn the legacy flow
+    // built, so the turn hash a fulfillment receipt carries is unchanged across the rewire.
+    let conditional = create_fulfillment_turn(
+        intent,
+        fulfillment,
+        payer_cell,
+        recipient_cell,
+        payment_amount,
+        current_height,
+    );
+    let turn_hash = conditional.turn.hash();
+    let forest_hash = conditional.turn.call_forest.compute_hash();
+    let effects_hash = {
+        let mut hasher = blake3::Hasher::new_derive_key("dregg-verified-fulfillment-effects-v1");
+        hasher.update(payer_cell.as_bytes());
+        hasher.update(recipient_cell.as_bytes());
+        hasher.update(&payment_amount.to_le_bytes());
+        *hasher.finalize().as_bytes()
+    };
+
+    Ok(TurnReceipt {
+        turn_hash,
+        forest_hash,
+        pre_state_hash,
+        post_state_hash,
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+        effects_hash,
+        computrons_used: 0,
+        action_count: 1,
+        agent: payer_cell,
+        ..Default::default()
+    })
 }
 
 /// Execute the fulfillment flow with anti-frontrunning enforcement.
@@ -2600,6 +2813,198 @@ mod tests {
         let recipient_state = ledger.get(&recipient_cell).unwrap();
         assert!(payer_state.state.balance() < 100_000); // Fee + transfer deducted.
         assert_eq!(recipient_state.state.balance(), 1000); // Received payment.
+    }
+
+    /// Shared setup for the VERIFIED flow tests: a Trusted-mode fulfillment for an intent
+    /// with `min_budget = 1000`, plus payer/recipient cells in a fresh ledger.
+    fn verified_flow_fixture(
+        payer_balance: u64,
+    ) -> (
+        Intent,
+        FulfillmentWithPredicates,
+        [u8; 32],
+        dregg_cell::Ledger,
+        CellId,
+        CellId,
+    ) {
+        use dregg_cell::{Cell, Ledger};
+
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: Some(1000),
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 5000, None);
+
+        let key = test_root_key();
+        let token = source_token();
+        let matched = Match {
+            intent_id: intent.id,
+            satisfier: CommitmentId([0xBB; 32]),
+            proof: None,
+            mode: VerificationMode::Trusted,
+        };
+        let options = FulfillOptions {
+            mode: VerificationMode::Trusted,
+            root_key: Some(key),
+            ..Default::default()
+        };
+        let base = fulfill(
+            &intent,
+            &matched,
+            &token,
+            CommitmentId([0xBB; 32]),
+            &options,
+        )
+        .unwrap();
+
+        let fulfillment = FulfillmentWithPredicates {
+            base,
+            predicate_proofs: vec![],
+            state_root: BabyBear::new(99999),
+            state_root_block: 990,
+        };
+
+        let payer_pk = [0xAA; 32];
+        let payer_token = [0x01; 32];
+        let payer_cell = CellId::derive_raw(&payer_pk, &payer_token);
+        let recipient_pk = [0xBB; 32];
+        let recipient_token = [0x02; 32];
+        let recipient_cell = CellId::derive_raw(&recipient_pk, &recipient_token);
+
+        let mut ledger = Ledger::new();
+        ledger
+            .insert_cell(Cell::with_balance(payer_pk, payer_token, payer_balance))
+            .unwrap();
+        ledger
+            .insert_cell(Cell::with_balance(recipient_pk, recipient_token, 0))
+            .unwrap();
+
+        (intent, fulfillment, key, ledger, payer_cell, recipient_cell)
+    }
+
+    #[test]
+    fn test_execute_fulfillment_flow_verified_success_moves_exactly_the_payment() {
+        let (intent, fulfillment, key, mut ledger, payer_cell, recipient_cell) =
+            verified_flow_fixture(100_000);
+
+        let pre_root = ledger.root();
+        let receipt = execute_fulfillment_flow_verified_with_key(
+            &intent,
+            &fulfillment,
+            &mut ledger,
+            payer_cell,
+            recipient_cell,
+            1000,
+            1000,
+            Some(&key),
+        )
+        .expect("verified flow settles");
+
+        // The verified edge moves EXACTLY the payment leg — no fee, no deposit, conserved.
+        assert_eq!(ledger.get(&payer_cell).unwrap().state.balance(), 99_000);
+        assert_eq!(ledger.get(&recipient_cell).unwrap().state.balance(), 1000);
+
+        // The receipt binds the real pre-/post-state roots and the canonical payment turn.
+        assert_eq!(receipt.agent, payer_cell);
+        assert_eq!(receipt.pre_state_hash, pre_root);
+        assert_eq!(receipt.post_state_hash, ledger.root());
+        assert_ne!(receipt.turn_hash, [0u8; 32]);
+        let expected_turn = create_fulfillment_turn(
+            &intent,
+            &fulfillment,
+            payer_cell,
+            recipient_cell,
+            1000,
+            1000,
+        );
+        assert_eq!(receipt.turn_hash, expected_turn.turn.hash());
+    }
+
+    #[test]
+    fn test_execute_fulfillment_flow_verified_underfunded_refuses_untouched() {
+        // Payer holds less than min_budget: the verified gate REFUSES and the ledger
+        // is byte-identical (no partial debit, no fallback executor).
+        let (intent, fulfillment, key, mut ledger, payer_cell, recipient_cell) =
+            verified_flow_fixture(999);
+
+        let pre_root = ledger.root();
+        let result = execute_fulfillment_flow_verified_with_key(
+            &intent,
+            &fulfillment,
+            &mut ledger,
+            payer_cell,
+            recipient_cell,
+            1000,
+            1000,
+            Some(&key),
+        );
+        assert!(
+            matches!(result, Err(FulfillmentError::VerifiedRefusal(_))),
+            "underfunded payment must be a VerifiedRefusal; got {result:?}"
+        );
+        assert_eq!(
+            ledger.root(),
+            pre_root,
+            "refusal must leave the ledger untouched"
+        );
+        assert_eq!(ledger.get(&payer_cell).unwrap().state.balance(), 999);
+        assert_eq!(ledger.get(&recipient_cell).unwrap().state.balance(), 0);
+    }
+
+    #[test]
+    fn test_execute_fulfillment_flow_verified_missing_recipient_refuses() {
+        // The verified liveness gate: a recipient cell absent from the ledger is a
+        // refusal, never an implicit create (the legacy edge fell through here).
+        let (intent, fulfillment, key, mut ledger, payer_cell, _recipient_cell) =
+            verified_flow_fixture(100_000);
+        let ghost = CellId::derive_raw(&[0xEE; 32], &[0xEE; 32]);
+
+        let result = execute_fulfillment_flow_verified_with_key(
+            &intent,
+            &fulfillment,
+            &mut ledger,
+            payer_cell,
+            ghost,
+            1000,
+            1000,
+            Some(&key),
+        );
+        assert!(
+            matches!(result, Err(FulfillmentError::VerifiedRefusal(_))),
+            "missing recipient must be a VerifiedRefusal; got {result:?}"
+        );
+        assert_eq!(ledger.get(&payer_cell).unwrap().state.balance(), 100_000);
+    }
+
+    #[test]
+    fn test_execute_fulfillment_flow_verified_self_payment_refuses() {
+        // The verified distinctness gate, checked on the REAL 32-byte cell ids.
+        let (intent, fulfillment, key, mut ledger, payer_cell, _recipient_cell) =
+            verified_flow_fixture(100_000);
+
+        let result = execute_fulfillment_flow_verified_with_key(
+            &intent,
+            &fulfillment,
+            &mut ledger,
+            payer_cell,
+            payer_cell,
+            1000,
+            1000,
+            Some(&key),
+        );
+        assert!(
+            matches!(result, Err(FulfillmentError::VerifiedRefusal(_))),
+            "self-payment must be a VerifiedRefusal; got {result:?}"
+        );
+        assert_eq!(ledger.get(&payer_cell).unwrap().state.balance(), 100_000);
     }
 
     #[test]

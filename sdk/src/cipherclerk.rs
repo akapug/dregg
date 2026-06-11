@@ -4067,7 +4067,8 @@ impl AgentCipherclerk {
     /// The method:
     /// - Generates predicate proofs for all requirements using `my_values`.
     /// - Constructs a `FulfillmentWithPredicates`.
-    /// - Calls `execute_fulfillment_flow` which verifies + pays atomically.
+    /// - Calls `execute_fulfillment_flow_verified` which verifies + pays atomically,
+    ///   settling the payment leg through the verified executor edge (fail-closed).
     ///
     /// # Arguments
     ///
@@ -4115,12 +4116,14 @@ impl AgentCipherclerk {
         let recipient_cell = runtime.cell_id(); // We (the fulfiller) receive.
 
         let mut ledger = runtime.ledger().lock().unwrap();
-        let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
 
-        dregg_intent::fulfillment::execute_fulfillment_flow(
+        // The value-moving leg settles through the VERIFIED executor edge
+        // (`dregg_intent::verified_settle` — the proved per-asset transition, FFI
+        // cross-checked when `verified-settle` is enabled), NOT the legacy
+        // `dregg_turn::TurnExecutor`. Fail-closed: a refused payment is refused.
+        dregg_intent::fulfillment::execute_fulfillment_flow_verified(
             intent,
             &fulfillment_with_preds,
-            &executor,
             &mut ledger,
             payer_cell,
             recipient_cell,

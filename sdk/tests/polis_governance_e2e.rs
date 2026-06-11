@@ -27,8 +27,8 @@ use dregg_sdk::polis::{
     inspect_council, propose, propose_amendment, reject_proposal, supersede_constitution,
 };
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, Effect, SdkError};
-use dregg_turn::TurnReceipt;
 use dregg_turn::TurnError;
+use dregg_turn::TurnReceipt;
 use starbridge_polis::STATE_SLOT;
 use starbridge_polis::constitution::{
     COUNCIL_THRESHOLD_SLOT, STATE_ACTIVE, STATE_SUPERSEDED, SUCCESSOR_HASH_SLOT,
