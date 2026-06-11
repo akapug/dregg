@@ -2651,7 +2651,7 @@ impl SiloServer {
 
                 let mut captp = captp_state.write().await;
                 let current_height = captp.current_height;
-                let agent_cell = dregg_types::CellId(config.node_id);
+                let _agent_cell = dregg_types::CellId(config.node_id);
 
                 // Attempt to enliven the swiss number.
                 match captp.swiss_table.enliven(&uri.swiss, current_height) {

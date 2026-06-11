@@ -19,6 +19,16 @@ Internet
   └── GitHub Actions nodes ──► devnet.dregg.fg-goose.online:9420 (QUIC gossip)
 ```
 
+Only `/api/*`-prefixed node routes (plus `/ws`, `/status`, `/federation/*`,
+`/checkpoint/*`, `/pir/*`, `/queues/*`, `/cipherclerk`) traverse the gateway.
+The node exposes `/api/` aliases for the public app surface (turn submit, the
+turn/atomic family, turns/peer-exchange, cells/create-from-factory,
+programs/deploy, cipherclerk/unlock — see the alias router in
+`node/src/api.rs`). Canonical routes WITHOUT an `/api/` alias (set-passphrase,
+cells/register / deregister / update-commitment / make-sovereign,
+turns/aggregate, the conditional-turn pair, proofs/compose) are operator-local
+by choice: reach them on the instance via `localhost:8420`.
+
 ## Prerequisites
 
 - AWS Graviton instance (t4g.small or larger) with Ubuntu 22.04+ or AL2023

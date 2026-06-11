@@ -1604,6 +1604,20 @@ pub fn router_with_cors(
                 }
             }),
         )
+        // Gateway-reachable alias (the public Caddy forwards only /api/-prefixed
+        // routes): unlocking is the remote operator's auth bootstrap, so it must
+        // be reachable through the gateway. Same handler + rate limiter.
+        // /cipherclerk/set-passphrase intentionally has NO alias — first-time
+        // passphrase setup stays operator-local (loopback).
+        .route(
+            "/api/cipherclerk/unlock",
+            post({
+                let limiter = passphrase_limiter.clone();
+                move |connect_info, headers, state, body| {
+                    post_cclerk_unlock(connect_info, headers, state, body, limiter)
+                }
+            }),
+        )
         .route(
             "/cipherclerk/set-passphrase",
             post({
@@ -1758,6 +1772,26 @@ pub fn router_with_cors(
         .route("/api/turns/encryption-key", get(get_turn_encryption_key))
         .route("/api/turns/fast-path", post(post_fast_path_lock))
         .route("/api/turns/certificate", post(post_fast_path_certificate))
+        // Gateway-reachable aliases for the public-facing app surface (the
+        // devnet Caddy forwards only /api/-prefixed routes; a canonical route
+        // without an /api/ alias is operator-local in practice). Same handlers,
+        // same bearer-token gate. Routes deliberately left WITHOUT an alias
+        // (operator-local by choice): /cipherclerk/set-passphrase + the
+        // /cipherclerk key-management surface (authorize/mint/attenuate),
+        // /cells/register, /cells/deregister, /cells/update-commitment,
+        // /cells/make-sovereign, /turns/aggregate, /turn/submit-conditional,
+        // /turn/resolve-conditional, /proofs/compose — node-administration
+        // operations, not app traffic.
+        .route("/api/turn/atomic", post(post_atomic_proposal))
+        .route("/api/turn/atomic/vote", post(post_atomic_vote))
+        .route("/api/turn/atomic/{id}", get(get_proposal_status))
+        .route("/api/turn/atomic/evaluate", post(post_evaluate_proposal))
+        .route("/api/turns/peer-exchange", post(post_peer_exchange))
+        .route(
+            "/api/cells/create-from-factory",
+            post(post_create_from_factory),
+        )
+        .route("/api/programs/deploy", post(post_deploy_program))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     public_routes
@@ -2176,12 +2210,15 @@ async fn get_starbridge_receipts(
         .map(|(idx, r)| {
             let receipt_hash = r.receipt_hash();
             let witness_count = s.witnessed_receipt_count(&receipt_hash);
+            let turn_hash_hex = hex_encode(&r.turn_hash);
+            // Same attached-proof semantics as `receipt_infos_from_chain_with_witnesses`.
+            let has_proof = witness_count > 0 || stored_full_turn_proof_exists(&s, &turn_hash_hex);
             StarbridgeReceiptInfo {
                 receipt: ReceiptInfo {
                     chain_index: idx as u64,
                     chain_head: idx + 1 == chain_len,
                     receipt_hash: hex_encode(&receipt_hash),
-                    turn_hash: hex_encode(&r.turn_hash),
+                    turn_hash: turn_hash_hex,
                     agent: hex_encode(&r.agent.0),
                     pre_state: hex_encode(&r.pre_state_hash),
                     post_state: hex_encode(&r.post_state_hash),
@@ -2192,7 +2229,7 @@ async fn get_starbridge_receipts(
                     finality: format!("{:?}", r.finality).to_lowercase(),
                     was_encrypted: r.was_encrypted,
                     was_burn: r.was_burn,
-                    has_proof: r.executor_signature.is_some(),
+                    has_proof,
                     executor_signed: r.executor_signature.is_some(),
                     has_witness: witness_count > 0,
                     witness_count,
@@ -2210,16 +2247,28 @@ async fn get_starbridge_receipts(
     Json(receipts)
 }
 
+/// Does the node hold a persisted full-turn STARK proof for this turn hash
+/// (the blocklace finalized-turn proving leg persists under
+/// [`crate::turn_proving::turn_proof_config_key`])?
+fn stored_full_turn_proof_exists(s: &crate::state::NodeStateInner, turn_hash_hex: &str) -> bool {
+    let key = crate::turn_proving::turn_proof_config_key(turn_hash_hex);
+    matches!(s.store.get_config(&key), Ok(Some(_)))
+}
+
 fn receipt_infos_from_chain(s: &crate::state::NodeStateInner, limit: usize) -> Vec<ReceiptInfo> {
-    receipt_infos_from_chain_with_witnesses(s.cclerk.receipt_chain(), limit, |hash| {
-        s.witnessed_receipt_count(hash)
-    })
+    receipt_infos_from_chain_with_witnesses(
+        s.cclerk.receipt_chain(),
+        limit,
+        |hash| s.witnessed_receipt_count(hash),
+        |turn_hash_hex| stored_full_turn_proof_exists(s, turn_hash_hex),
+    )
 }
 
 fn receipt_infos_from_chain_with_witnesses(
     chain: &[dregg_turn::TurnReceipt],
     limit: usize,
     witness_count_for: impl Fn(&[u8; 32]) -> usize,
+    stored_proof_for: impl Fn(&str) -> bool,
 ) -> Vec<ReceiptInfo> {
     let chain_len = chain.len();
     chain
@@ -2230,11 +2279,21 @@ fn receipt_infos_from_chain_with_witnesses(
         .map(|(idx, r)| {
             let receipt_hash = r.receipt_hash();
             let witness_count = witness_count_for(&receipt_hash);
+            let turn_hash_hex = hex_encode(&r.turn_hash);
+            // `has_proof` reports whether a STARK attestation is actually
+            // ATTACHED to this committed turn: either the async prove pool's
+            // WitnessedReceipt (the HTTP commit path) or the persisted
+            // full-turn proof (the blocklace finalized-turn path). It is NOT
+            // the executor signature — that is `executor_signed`. Deriving it
+            // from `executor_signature` made the field permanently false on
+            // node configs that never set an executor signing key, even while
+            // the pool was attaching real proofs.
+            let has_proof = witness_count > 0 || stored_proof_for(&turn_hash_hex);
             ReceiptInfo {
                 chain_index: idx as u64,
                 chain_head: idx + 1 == chain_len,
                 receipt_hash: hex_encode(&receipt_hash),
-                turn_hash: hex_encode(&r.turn_hash),
+                turn_hash: turn_hash_hex,
                 agent: hex_encode(&r.agent.0),
                 pre_state: hex_encode(&r.pre_state_hash),
                 post_state: hex_encode(&r.post_state_hash),
@@ -2245,7 +2304,7 @@ fn receipt_infos_from_chain_with_witnesses(
                 finality: format!("{:?}", r.finality).to_lowercase(),
                 was_encrypted: r.was_encrypted,
                 was_burn: r.was_burn,
-                has_proof: r.executor_signature.is_some(),
+                has_proof,
                 executor_signed: r.executor_signature.is_some(),
                 has_witness: witness_count > 0,
                 witness_count,
@@ -2467,6 +2526,29 @@ async fn enqueue_async_proof(
     }
 }
 
+/// Validity horizon (wall-clock seconds) stamped onto operator-constructed
+/// turns at the API boundary. Generous for a turn that executes immediately on
+/// the submit path; bounded so a replayed envelope eventually expires.
+const DEFAULT_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
+
+/// Default `valid_until` for turns the node constructs itself (the thin-HTTP
+/// `/turn/submit` and faucet paths).
+///
+/// The Lean producer's wire marshal REQUIRES the turn envelope's `valid_until`
+/// (`lean_shadow::turn_to_wire_turn`); a `None` here meant every thin-HTTP turn
+/// fell off the verified Lean producer back to the legacy Rust producer,
+/// per-turn, forever ("turn.valid_until required for wire marshal"). The Rust
+/// executor enforces `current_timestamp <= valid_until` (a TIMESTAMP deadline,
+/// not a height), so the default is wall-clock now + a horizon — never a block
+/// height, which would be in the past as a timestamp and expire every turn.
+fn default_valid_until() -> Option<i64> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Some(now + DEFAULT_TURN_VALIDITY_HORIZON_SECS)
+}
+
 /// Build a 200-with-error `SubmitTurnResponse` for a malformed action/effect
 /// spec. Returns `Ok(...)` so the body carries the diagnostic rather than an
 /// opaque 4xx status (matching the rest of this handler's error reporting).
@@ -2585,7 +2667,9 @@ async fn post_submit_turn(
         nonce: effective_nonce,
         fee: req.fee,
         memo: req.memo,
-        valid_until: None,
+        // Stamped so the wire marshal accepts the envelope and the turn stays
+        // on the verified Lean producer (see `default_valid_until`).
+        valid_until: default_valid_until(),
         call_forest,
         depends_on: vec![],
         previous_receipt_hash,
@@ -5703,6 +5787,12 @@ pub struct FaucetResponse {
     pub success: bool,
     pub tx_hash: Option<String>,
     pub amount: u64,
+    /// Hex hash of the REAL committed faucet turn (the key under which its
+    /// receipt appears in `/api/receipts`, where `has_proof` flips true once
+    /// the async prove pool attaches the attestation). `tx_hash` remains the
+    /// synthetic activity-feed hash for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -5779,6 +5869,7 @@ async fn post_faucet(
         return Ok(Json(FaucetResponse {
             success: false,
             tx_hash: None,
+            turn_hash: None,
             amount: 0,
             error: Some("amount must be between 0 and 10000".to_string()),
         }));
@@ -5791,6 +5882,7 @@ async fn post_faucet(
             return Ok(Json(FaucetResponse {
                 success: false,
                 tx_hash: None,
+                turn_hash: None,
                 amount: 0,
                 error: Some("invalid recipient: must be 64 hex characters".to_string()),
             }));
@@ -5806,6 +5898,7 @@ async fn post_faucet(
                     return Ok(Json(FaucetResponse {
                         success: false,
                         tx_hash: None,
+                        turn_hash: None,
                         amount: 0,
                         error: Some("invalid public_key: must be 64 hex characters".to_string()),
                     }));
@@ -5817,6 +5910,7 @@ async fn post_faucet(
                 return Ok(Json(FaucetResponse {
                     success: false,
                     tx_hash: None,
+                    turn_hash: None,
                     amount: 0,
                     error: Some("public_key does not derive the recipient cell".to_string()),
                 }));
@@ -5831,6 +5925,7 @@ async fn post_faucet(
         return Ok(Json(FaucetResponse {
             success: false,
             tx_hash: None,
+            turn_hash: None,
             amount: 0,
             error: Some("rate limited: 1 request per cell per minute".to_string()),
         }));
@@ -5877,6 +5972,7 @@ async fn post_faucet(
         return Ok(Json(FaucetResponse {
             success: true,
             tx_hash: Some(tx_hash),
+            turn_hash: None,
             amount: 0,
             error: None,
         }));
@@ -5918,15 +6014,23 @@ async fn post_faucet(
         .get(&faucet_cell_id)
         .map(|c| c.state.nonce())
         .unwrap_or(0);
+    // Link to the receipt-chain head BEFORE execution (same convention as
+    // post_submit_turn). The cipherclerk's `append_receipt` fills a `None`
+    // prev with the chain head, which CHANGES the appended receipt's hash —
+    // a WitnessedReceipt stored under the pre-append hash would then never be
+    // found for the chain's receipt and has_proof would stay false.
+    let faucet_prev_receipt = s.cclerk.receipt_chain().last().map(|r| r.receipt_hash());
     let mut faucet_turn = Turn {
         agent: faucet_cell_id,
         nonce: faucet_nonce,
         fee: 0, // sized to the estimated cost below so the budget gate passes
         memo: Some(format!("faucet_transfer:{}", req.amount)),
-        valid_until: None,
+        // Stamped so the wire marshal accepts the envelope and the turn stays
+        // on the verified Lean producer (see `default_valid_until`).
+        valid_until: default_valid_until(),
         call_forest,
         depends_on: vec![],
-        previous_receipt_hash: None,
+        previous_receipt_hash: faucet_prev_receipt,
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -5939,29 +6043,107 @@ async fn post_faucet(
     };
 
     let executor = crate::executor_setup::new_submit_executor(&s);
+    seed_executor_receipt_head(&executor, faucet_turn.agent, faucet_prev_receipt);
     // Size the fee (= computron budget cap) to the estimated cost so the budget
     // gate passes; the faucet cell holds the genesis supply and covers it.
     faucet_turn.fee = executor.estimate_cost(&faucet_turn);
 
     let signed = faucet_cclerk.sign_turn(&faucet_turn);
     let turn_hash_bytes = faucet_turn.hash();
+    let turn_hash_hex = hex_encode(&turn_hash_bytes);
 
+    // Pre-execution ledger snapshot for the witness revalidation below (the
+    // proof's pre-state must be captured BEFORE the executor mutates it).
+    let pre_ledger = s.ledger.clone();
     let exec_result = executor.execute(&faucet_turn, &mut s.ledger);
 
     match exec_result {
-        dregg_turn::TurnResult::Committed { .. } => {
+        dregg_turn::TurnResult::Committed { mut receipt, .. } => {
             crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
+
+            // Solo mode: tentative finality + height advance, exactly like the
+            // /turn/submit commit path.
+            if let Some(ref mut solo) = s.solo_consensus {
+                if solo.is_solo {
+                    receipt.finality = dregg_turn::Finality::Tentative;
+                    let height = solo.height;
+                    let _ = solo
+                        .nullifier_log
+                        .insert(turn_hash_bytes, turn_hash_bytes, height);
+                    solo.advance_height();
+                }
+            }
+
+            // The faucet turn is a REAL committed turn: append its receipt to
+            // the chain and hand its revalidated witness to the async prove
+            // pool, the same pipeline as /turn/submit. Previously the receipt
+            // was dropped here, so a faucet turn never appeared in
+            // /api/receipts and could never reach has_proof:true — the exact
+            // silent gap the devnet quickstart hit. The witness check is
+            // best-effort for the faucet (the commit stands either way; an
+            // unattested faucet grant is a devnet-liveness issue, not a
+            // soundness one), but a failure is logged loudly.
+            let pending_proof = match revalidate_http_witness(&faucet_turn, &pre_ledger) {
+                Ok(HttpWitnessOutcome::Revalidated(revalidated)) => Some(revalidated),
+                Ok(HttpWitnessOutcome::NotRequired) => None,
+                Err(err) => {
+                    tracing::warn!(
+                        turn_hash = %turn_hash_hex,
+                        error = %err,
+                        "faucet turn witness revalidation failed; receipt stays \
+                         committed-but-unattested (has_proof will not flip)"
+                    );
+                    None
+                }
+            };
+            let proof_status = if pending_proof.is_some() {
+                ActivityProofStatus::ProofPending
+            } else {
+                ActivityProofStatus::NotRequired
+            };
+
+            let appended = match s.cclerk.append_receipt(receipt.clone()) {
+                Ok(()) => true,
+                Err(err) => {
+                    tracing::warn!(
+                        turn_hash = %turn_hash_hex,
+                        error = %err,
+                        "faucet receipt could not be appended to the receipt chain"
+                    );
+                    false
+                }
+            };
+            let receipt_hash = receipt.receipt_hash();
+
             push_committed_event(
                 &mut s,
                 tx_hash.clone(),
                 req.recipient.clone(),
                 vec![format!("faucet_transfer:{}", req.amount)],
-                ActivityProofStatus::NotRequired,
+                proof_status,
             );
 
             // Replicate through gossip + blocklace consensus.
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
             drop(s);
+
+            // Async STARK attestation, off the lock — flips the receipt's
+            // has_proof once the pool lands the proof.
+            if appended {
+                if let Some(revalidated) = pending_proof {
+                    enqueue_async_proof(
+                        &state,
+                        revalidated,
+                        receipt.clone(),
+                        receipt_hash,
+                        turn_hash_hex.clone(),
+                    )
+                    .await;
+                }
+                state.emit(crate::state::NodeEvent::Receipt {
+                    hash: turn_hash_hex.clone(),
+                });
+            }
 
             let turn_data_for_gossip = turn_data.clone();
             if let Some(gossip) = state.gossip().await {
@@ -5981,6 +6163,7 @@ async fn post_faucet(
             Ok(Json(FaucetResponse {
                 success: true,
                 tx_hash: Some(tx_hash),
+                turn_hash: Some(turn_hash_hex),
                 amount: req.amount,
                 error: None,
             }))
@@ -5988,12 +6171,14 @@ async fn post_faucet(
         dregg_turn::TurnResult::Rejected { reason, .. } => Ok(Json(FaucetResponse {
             success: false,
             tx_hash: None,
+            turn_hash: None,
             amount: 0,
             error: Some(format!("transfer rejected: {reason}")),
         })),
         _ => Ok(Json(FaucetResponse {
             success: false,
             tx_hash: None,
+            turn_hash: None,
             amount: 0,
             error: Some("faucet transfer did not commit".to_string()),
         })),
@@ -6959,7 +7144,7 @@ mod tests {
             });
         }
 
-        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 0);
+        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 0, |_| false);
         assert_eq!(infos.len(), 3);
         assert_eq!(infos[0].chain_index, 2);
         assert!(infos[0].chain_head);
@@ -6967,6 +7152,46 @@ mod tests {
         assert!(!infos[1].chain_head);
         assert_eq!(infos[2].chain_index, 0);
         assert!(!infos[2].chain_head);
+    }
+
+    /// `has_proof` reports an ATTACHED attestation (async-pool WitnessedReceipt
+    /// or persisted full-turn proof), independently of the executor signature.
+    /// This is the regression test for the silent devnet path where every
+    /// receipt stayed `has_proof:false` forever because the field was wired to
+    /// `executor_signature` (which no node entry point configures) while the
+    /// prove pool was in fact attaching real proofs (`has_witness:true`).
+    #[test]
+    fn receipt_has_proof_reflects_attached_attestation_not_signature() {
+        let chain = vec![dregg_turn::TurnReceipt {
+            turn_hash: [0x42; 32],
+            agent: CellId([0xA0; 32]),
+            executor_signature: None, // no signing key configured (the devnet config)
+            ..Default::default()
+        }];
+
+        // No witness, no stored proof: honestly unproven.
+        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 0, |_| false);
+        assert!(!infos[0].has_proof);
+        assert!(!infos[0].executor_signed);
+
+        // The async prove pool attached a WitnessedReceipt: has_proof flips.
+        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 1, |_| false);
+        assert!(
+            infos[0].has_proof,
+            "a pool-attached WitnessedReceipt must flip has_proof even with no executor signature"
+        );
+
+        // Only the persisted full-turn proof (blocklace finalized path): also flips.
+        let infos = receipt_infos_from_chain_with_witnesses(
+            &chain,
+            50,
+            |_| 0,
+            |th| th == hex_encode(&[0x42u8; 32]),
+        );
+        assert!(
+            infos[0].has_proof,
+            "a persisted full-turn proof must flip has_proof"
+        );
     }
 
     #[tokio::test]
