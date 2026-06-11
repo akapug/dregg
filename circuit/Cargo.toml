@@ -47,31 +47,16 @@ tracing = { version = "0.1", optional = true }
 itertools = { version = "0.14", optional = true }
 rand = { version = "0.10", optional = true }
 rmp-serde = { version = "1.2", optional = true }
-rand_core = { version = "0.6", optional = true, features = ["getrandom"] }
-
-# Mina/Kimchi - Plonk variant over Pasta curves with IPA commitments
-kimchi = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", optional = true, default-features = false, features = ["prover"] }
-poly-commitment = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", optional = true }
-mina-curves = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", optional = true, default-features = false, features = ["asm"] }
-mina-poseidon = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", optional = true }
-groupmap = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", optional = true }
-ark-ff = { version = "0.5", optional = true, default-features = false, features = ["asm"] }
-ark-poly = { version = "0.5", optional = true, default-features = false }
-ark-ec = { version = "0.5", optional = true, default-features = false }
 
 [features]
-default = ["plonky3", "recursion", "mina"]
+default = ["plonky3", "recursion"]
 mock = []
 dev = []
 plonky3 = [
     "p3-field", "p3-baby-bear", "p3-air", "p3-matrix", "p3-uni-stark",
     "p3-challenger", "p3-commit", "p3-fri", "p3-symmetric", "p3-dft",
     "p3-poseidon2", "p3-mds", "p3-monty-31", "p3-merkle-tree", "p3-util",
-    "rand", "tracing", "itertools",
-]
-mina = [
-    "kimchi", "poly-commitment", "mina-curves", "mina-poseidon", "groupmap",
-    "ark-ff", "ark-poly", "ark-ec", "rmp-serde", "rand_core",
+    "rand", "tracing", "itertools", "rmp-serde",
 ]
 recursion = [
     "plonky3",

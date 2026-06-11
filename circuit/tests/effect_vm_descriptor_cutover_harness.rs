@@ -22,7 +22,7 @@
 //!
 //! ## What this validated (real Plonky3 output)
 //!
-//! * **GRADUATED (19 surviving selectors AGREE + prove+verify+anti-ghost):** `transfer` (1, the
+//! * **GRADUATED (23 surviving selectors AGREE + prove+verify+anti-ghost):** `transfer` (1, the
 //!   beachhead), the FULL-ECONOMIC effects `note_spend` (4), `note_create` (5), `bridge_mint` (40),
 //!   `burn` (46) (reconciled onto the runtime balance-column + nonce-tick convention), and — via the
 //!   NONCE-TICK-PATCH graduation (`frozen_frame_nonce_tick_effects_graduated_into_cutover`) — the 12 reconciled
@@ -37,7 +37,16 @@
 //!   `cap_root` — onto their own frozen-frame+tick descriptor; the cap-table move is bound OFF-row via the
 //!   universe-A connector. `emit_event` is the pure observation-LOG no-state-move row: economic block
 //!   FROZEN, nonce TICKS; its FREEZE-ALL primitives are preserved for the no-op-style reuse, and the
-//!   Argus full-state crown + §6 weld were reconciled to the tick.)
+//!   Argus full-state crown + §6 weld were reconciled to the tick.) The FORMER DEEPER LIFECYCLE
+//!   family graduated via `lifecycle_family_graduated_into_cutover`: the birth family `create_cell`
+//!   (31) / `spawn_with_delegation` (32) / `create_cell_from_factory` (13) re-pointed onto the
+//!   ACTING cell's frozen-frame+tick row (the born-empty CHILD faces stay verified in their Lean
+//!   modules as named off-row stories), `receipt_archive` (51) onto frozen-frame+tick (the lifecycle
+//!   write is off-row), `make_sovereign` (12) onto the runtime frame-freeze + RESERVED +256
+//!   mode-bit + tick row (the executor's rebind-to-zero face stays verified in-module; which
+//!   sovereignty semantics is canonical remains a named protocol decision), and `cell_unseal` (50)
+//!   onto frozen-frame+tick (the cellSeal row shape with `selectorGates 50`; the Sealed→Live flip
+//!   stays verified in `EffectVmEmitCellUnseal` off-row).
 //!
 //! * **The remaining selectors DIVERGE / are unconstructible.** `enumerate_all_descriptor_divergences`
 //!   maps the full set; `pinpoint_divergence_per_selector` reports the FIRST failing constraint per
@@ -49,25 +58,24 @@
 //!   the anti-ghost-WEAK ones (frozen-frame descriptors MISSING the last-row balance PI binding —
 //!   their forged-balance tooth does not bite until that binding is emitted).
 //!
-//! ## THE REMAINING DIVERGENCES (post verb-lockstep)
+//! ## THE REMAINING DIVERGENCES (post verb-lockstep, post lifecycle graduation)
 //!
 //! The verb lockstep DELETED the factory-dissolved families (escrow/obligation, queue,
 //! seal/swiss/sturdyref/handoff, bridge lock/finalize/cancel) — their selectors are RETIRED
-//! (pinned to zero in BOTH AIRs) and their descriptors left the registry, so the old DEEPER
-//! escrow/queue/swiss rows are gone WITH their effects, not reconciled. What remains DIVERGE:
+//! (pinned to zero in BOTH AIRs) and their descriptors left the registry. The lifecycle/birth +
+//! lifecycle-SET + sovereign families graduated (see above). ONE family remains:
 //!
-//!   * **lifecycle/birth family — `create_cell` (31), `spawn_with_delegation` (32),
-//!     `create_cell_from_factory` (13).** The Lean descriptor pins the BORN-EMPTY CHILD cell;
-//!     the runtime EffectVM row is the ACTING cell's PASSTHROUGH+tick. Reconciling needs
-//!     deciding which cell the row models + binding the other off-row.
-//!   * **lifecycle-SET / sovereign-ZERO — `receipt_archive` (51), `make_sovereign` (12).**
-//!     On-trace SET/ZERO (verified executor) vs runtime off-row freeze.
 //!   * **cap-reshape family — `grant_cap` (3), `attenuate_capability` (48).** RESERVED for the
 //!     cap-commitment reshape lanes (Phase B graduated the hand-AIR; the descriptor DSL needs
-//!     Merkle-membership + lattice-table constraint kinds).
+//!     Merkle-membership + lattice-table constraint kinds to express the membership-open +
+//!     submask + AuthRequired-lattice + expiry gates over the scalar witness columns).
 //!
-//! In every DEEPER case the right reconcile is an ember-level decision about WHICH LAYER holds
-//! the canonical move, NOT a mechanical descriptor patch.
+//! Separately, three LIVE selectors stay on the named hand-AIR fallback: SET_FIELD (2) — its Lean
+//! module emits a PER-SLOT descriptor family (`setFieldVmDescriptor (slot : Fin 8)`) while the
+//! runtime row selects the slot DYNAMICALLY (the Lagrange-basis index gate); the selector-keyed
+//! registry cannot carry the family until the dynamic-index gate is emitted; CUSTOM (8) — needs an
+//! accumulator/recursive proof-binding constraint kind the per-row IR does not have; and
+//! REVOKE_CAPABILITY (24) — its cap-root advance is being reshaped by the cap-crown lanes.
 
 use dregg_circuit::effect_vm::columns::{STATE_AFTER_BASE, state};
 use dregg_circuit::effect_vm::{CellState, Effect, generate_effect_vm_trace, pi};
@@ -180,6 +188,7 @@ fn honest_case_for_selector(sel: usize) -> Option<(CellState, Vec<Effect>)> {
             target: eight(0x1),
             reason_hash: eight(0x2),
         },
+        s if s == sel::CELL_UNSEAL => Effect::CellUnseal { target: eight(0x1) },
         s if s == sel::RECEIPT_ARCHIVE => Effect::ReceiptArchive {
             target: eight(0x1),
             archive_end_height: BabyBear::new(0x10),
@@ -1028,6 +1037,129 @@ fn frozen_frame_nonce_tick_effects_graduated_into_cutover() {
     );
 }
 
+/// GRADUATED LIFECYCLE FAMILY — `create_cell` (31) / `spawn_with_delegation` (32) /
+/// `create_cell_from_factory` (13) / `receipt_archive` (51) / `make_sovereign` (12), the former
+/// DEEPER divergences, reconciled onto the RUNTIME row and re-emitted from the verified Lean modules:
+///
+///   * the BIRTH family (31/32/13): the wire descriptor is now the ACTING cell's frozen-frame +
+///     nonce-tick row (the runtime Stage-3 passthrough); the BORN-EMPTY CHILD face stays verified
+///     in each Lean module as the named OFF-ROW story (`createCellA_full_sound` /
+///     `spawnA_full_sound`), bound via `effects_hash` — exactly the revoke/introduce re-point
+///     precedent.
+///   * `receipt_archive` (51): frozen-frame + nonce-tick (the lifecycle-slot SET face is the
+///     executor's off-row write; the runtime row freezes `field[1]` and ticks the nonce).
+///   * `make_sovereign` (12): frame-freeze + the RESERVED **+256 mode-bit** gate (the hand-AIR's
+///     `new_reserved − old_reserved − 256`) + nonce-tick. The executor's rebind-to-zero face stays
+///     verified in `EffectVmEmitMakeSovereign`; which sovereignty semantics is canonical
+///     (rebind-zero vs mode-bit) remains a named protocol decision — the cutover models what the
+///     runtime proves today.
+///   * `cell_unseal` (50): frozen-frame + nonce-tick (the cellSeal row shape with `selectorGates
+///     50`; the single `CELL_UNSEAL_TARGET` param mirrors into aux[0]). The lifecycle Sealed→Live
+///     flip stays verified in `EffectVmEmitCellUnseal` (off-row via `cellUnsealA_full_sound`).
+///
+/// Each runs the FULL gauntlet: descriptor + hand-AIR both prove+verify the honest witness, AGREE on
+/// accept, and BOTH reject the forged-balance + forged-state-commit tampers.
+#[test]
+fn lifecycle_family_graduated_into_cutover() {
+    use dregg_circuit::effect_vm::columns::sel;
+    let selectors: &[usize] = &[
+        sel::MAKE_SOVEREIGN,          // 12
+        sel::CREATE_CELL_FROM_FACTORY, // 13
+        sel::CREATE_CELL,             // 31
+        sel::CELL_UNSEAL,             // 50 (Sealed→Live: frozen-frame + tick; flip off-row)
+        sel::SPAWN_WITH_DELEGATION,   // 32
+        sel::RECEIPT_ARCHIVE,         // 51
+    ];
+
+    let mut graduated = 0usize;
+    for &s in selectors {
+        let (st, effects) = honest_case_for_selector(s)
+            .unwrap_or_else(|| panic!("[sel {s}] no honest single-effect constructor"));
+        let (base_trace, pis) = generate_effect_vm_trace(&st, &effects);
+        assert_eq!(base_trace[0].len(), 186, "[sel {s}] canonical 186-col layout");
+        let json = descriptor_for_selector(s)
+            .unwrap_or_else(|| panic!("[sel {s}] no descriptor registered"));
+        let name = descriptor_name_for_selector(s).unwrap();
+        let desc = parse_vm_descriptor(json).expect("descriptor parses");
+        let dpis = &pis[..desc.public_input_count];
+
+        // (1) DESCRIPTOR INTERPRETER — prove + independent verify, real Plonky3.
+        let desc_proof = prove_vm_descriptor(&desc, &base_trace, dpis).unwrap_or_else(|e| {
+            panic!("[sel {s} {name}] descriptor failed to PROVE the honest witness: {e}")
+        });
+        verify_vm_descriptor(&desc, &desc_proof, dpis).unwrap_or_else(|e| {
+            panic!("[sel {s} {name}] descriptor proof failed independent verify: {e}")
+        });
+
+        // (2) HAND-AIR — prove + independent verify, same witness.
+        let hand_proof = prove_effect_vm_p3(&base_trace, &pis).unwrap_or_else(|e| {
+            panic!("[sel {s} {name}] hand-AIR failed to prove honest witness: {e:?}")
+        });
+        verify_effect_vm_p3(&hand_proof, &pis)
+            .unwrap_or_else(|e| panic!("[sel {s} {name}] hand-AIR proof failed verify: {e:?}"));
+
+        // (3) THE DIFFERENTIAL — both accept the SAME honest witness.
+        let hand_accepts = p3_air_accepts(&base_trace, &pis);
+        let desc_accepts = descriptor_air_accepts(&desc, &base_trace, dpis);
+        assert!(hand_accepts, "[sel {s} {name}] hand-AIR rejected a witness it just PROVED");
+        assert!(desc_accepts, "[sel {s} {name}] descriptor rejected a witness it just PROVED");
+        assert_eq!(hand_accepts, desc_accepts, "[sel {s} {name}] DIFFERENTIAL DISAGREEMENT");
+
+        // (4a) ANTI-GHOST — forged FINAL_BAL_LO is UNSAT for BOTH.
+        {
+            let mut forged = pis.clone();
+            forged[pi::FINAL_BAL_LO] = forged[pi::FINAL_BAL_LO] + BabyBear::new(123);
+            let fdpis = &forged[..desc.public_input_count];
+            assert!(
+                !p3_air_accepts(&base_trace, &forged),
+                "[sel {s} {name}] hand-AIR took forged bal"
+            );
+            assert!(
+                !descriptor_air_accepts(&desc, &base_trace, fdpis),
+                "[sel {s} {name}] descriptor MORE PERMISSIVE on forged FINAL_BAL_LO"
+            );
+            assert!(
+                prove_vm_descriptor(&desc, &base_trace, fdpis).is_err(),
+                "[sel {s} {name}] descriptor PROVED a forged FINAL_BAL_LO"
+            );
+        }
+        // (4b) ANTI-GHOST — mutated last-row state-commit cell is UNSAT for the descriptor.
+        {
+            let mut t = base_trace.clone();
+            let last = t.len() - 1;
+            t[last][STATE_AFTER_BASE + state::STATE_COMMIT] =
+                t[last][STATE_AFTER_BASE + state::STATE_COMMIT] + BabyBear::new(1);
+            assert!(
+                !descriptor_air_accepts(&desc, &t, dpis),
+                "[sel {s} {name}] descriptor took a forged last-row state-commit cell"
+            );
+            assert!(
+                prove_vm_descriptor(&desc, &t, dpis).is_err(),
+                "[sel {s} {name}] descriptor PROVED a forged state-commit cell"
+            );
+        }
+        // (4c) MAKE-SOVEREIGN ONLY — a row claiming sovereignty WITHOUT the mode bit (reserved
+        // frozen) is UNSAT for the v2 descriptor (its +256 gate) AND the hand-AIR.
+        if s == sel::MAKE_SOVEREIGN {
+            let mut t = base_trace.clone();
+            // Undo the +256 advance on the active row (row 0) AND keep the rest as-is: the
+            // descriptor's gSovReserved gate must reject.
+            t[0][STATE_AFTER_BASE + state::RESERVED] = t[0][dregg_circuit::effect_vm::columns::STATE_BEFORE_BASE + state::RESERVED];
+            assert!(
+                !descriptor_air_accepts(&desc, &t, dpis),
+                "[sel {s} {name}] descriptor took a sovereignty claim without the mode bit"
+            );
+        }
+
+        eprintln!(
+            "[sel {s:>2} {name}] GRADUATED: descriptor + hand-AIR both prove+verify the honest \
+             witness, agree on accept, and both reject the forged-balance + forged-state-commit tampers."
+        );
+        graduated += 1;
+    }
+    assert_eq!(graduated, 6, "all 6 lifecycle-family selectors must graduate");
+}
+
 /// THE SELECTOR-BINDING TOOTH (closes the `sdk/full_turn_proof.rs` SOUNDNESS NOTE). Each cutover
 /// descriptor now carries the Lean `selectorGate s` (`(1 - sel[NOOP]) · (1 - sel[s]) = 0`), which
 /// forces the descriptor's OWN selector column on the active row. So a proof produced for effect `s`
@@ -1051,6 +1183,7 @@ fn descriptor_proof_binds_to_its_selector() {
         sel::BRIDGE_MINT,
         sel::BURN,
         sel::CELL_SEAL,
+        sel::CELL_UNSEAL,
         sel::CELL_DESTROY,
         sel::REFUSAL,
         sel::SET_VERIFICATION_KEY,
@@ -1062,6 +1195,11 @@ fn descriptor_proof_binds_to_its_selector() {
         sel::REVOKE_DELEGATION,
         sel::INTRODUCE,
         sel::EMIT_EVENT,
+        sel::MAKE_SOVEREIGN,
+        sel::CREATE_CELL_FROM_FACTORY,
+        sel::CREATE_CELL,
+        sel::SPAWN_WITH_DELEGATION,
+        sel::RECEIPT_ARCHIVE,
     ];
 
     // Prove the transfer honest witness under the transfer descriptor (selector 1).
@@ -1190,11 +1328,34 @@ fn homogeneous_x2_case_for_selector(s: usize) -> Option<(CellState, Vec<Effect>)
             target: eight(0x9),
             reason_hash: eight(0xA),
         },
+        s if s == sel::CELL_UNSEAL => Effect::CellUnseal { target: eight(0x9) },
         s if s == sel::REFUSAL => Effect::Refusal {
             target: eight(0x9),
             reason_hash: eight(0xA),
         },
         s if s == sel::INCREMENT_NONCE => Effect::IncrementNonce,
+        // Lifecycle family (actor passthrough+tick rows): x2 with distinct hashes.
+        s if s == sel::CREATE_CELL => Effect::CreateCell {
+            create_hash: eight(0x9),
+        },
+        s if s == sel::SPAWN_WITH_DELEGATION => Effect::SpawnWithDelegation {
+            spawn_hash: eight(0x9),
+        },
+        s if s == sel::CREATE_CELL_FROM_FACTORY => Effect::CreateCellFromFactory {
+            factory_vk: BabyBear::new(0x33),
+            child_vk_derived: BabyBear::new(0x44),
+        },
+        s if s == sel::RECEIPT_ARCHIVE => Effect::ReceiptArchive {
+            target: eight(0x9),
+            archive_end_height: BabyBear::new(0x20),
+            terminal_receipt_hash: eight(0xA),
+        },
+        // MakeSovereign x2: the runtime mode bit is already set after the first row
+        // (reserved 256 → 256, delta 0; aux mode_bit = 1), so the HAND-AIR itself
+        // rejects the second row (`s_makesov · mode_bit` + the +256 advance) AND the
+        // v2 descriptor's +256 gate rejects it — both engines refuse a double
+        // sovereignty claim. Included so the census records the boundary honestly.
+        s if s == sel::MAKE_SOVEREIGN => Effect::MakeSovereign,
         _ => return None,
     };
     let mut effects = e1;
@@ -1212,16 +1373,21 @@ fn homogeneous_x2_case_for_selector(s: usize) -> Option<(CellState, Vec<Effect>)
 /// hand-AIR rejects is exactly the MORE-PERMISSIVE direction routing must never take.)
 const MULTI_EFFECT_READY_SELECTORS: &[usize] = &[
     1,  // TRANSFER
+    13, // CREATE_CELL_FROM_FACTORY (actor passthrough+tick row)
     26, // SET_PERMISSIONS
     27, // SET_VERIFICATION_KEY
     29, // REFRESH_DELEGATION
     30, // REVOKE_DELEGATION
+    31, // CREATE_CELL (actor passthrough+tick row)
+    32, // SPAWN_WITH_DELEGATION (actor passthrough+tick row)
     34, // EXERCISE_VIA_CAPABILITY
     35, // INTRODUCE
     36, // PIPELINED_SEND
     40, // BRIDGE_MINT (mint_hash folds per-row into effects_hash; balance accumulates)
     47, // CELL_DESTROY
     49, // CELL_SEAL
+    50, // CELL_UNSEAL (passthrough+tick row)
+    51, // RECEIPT_ARCHIVE (passthrough+tick row)
     52, // REFUSAL
     53, // INCREMENT_NONCE
 ];
@@ -1236,16 +1402,20 @@ const MULTI_EFFECT_READY_SELECTORS: &[usize] = &[
 #[test]
 fn multi_effect_agreement_census() {
     use dregg_circuit::effect_vm::columns::sel;
-    // The 17 single-effect-graduated selectors (the AGREE set).
+    // The 23 single-effect-graduated selectors (the AGREE set).
     let graduated: &[usize] = &[
         sel::TRANSFER,
         sel::NOTE_SPEND,
         sel::NOTE_CREATE,
+        sel::MAKE_SOVEREIGN,
+        sel::CREATE_CELL_FROM_FACTORY,
         sel::EMIT_EVENT,
         sel::SET_PERMISSIONS,
         sel::SET_VERIFICATION_KEY,
         sel::REFRESH_DELEGATION,
         sel::REVOKE_DELEGATION,
+        sel::CREATE_CELL,
+        sel::SPAWN_WITH_DELEGATION,
         sel::EXERCISE_VIA_CAPABILITY,
         sel::INTRODUCE,
         sel::PIPELINED_SEND,
@@ -1253,6 +1423,8 @@ fn multi_effect_agreement_census() {
         sel::BURN,
         sel::CELL_DESTROY,
         sel::CELL_SEAL,
+        sel::CELL_UNSEAL,
+        sel::RECEIPT_ARCHIVE,
         sel::REFUSAL,
         sel::INCREMENT_NONCE,
     ];

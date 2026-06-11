@@ -8,9 +8,8 @@
 //! 5. Export the receipt chain as proof of state (federation exit scenario)
 //! 6. Show: another party can verify the agent's state from just the receipt chain
 
-use dregg_sdk::{
-    AgentCipherclerk, CellId, TurnReceipt, verify_receipt_chain, verify_receipt_chain_head,
-};
+use dregg_sdk::{AgentCipherclerk, CellId, verify_receipt_chain, verify_receipt_chain_head};
+use dregg_turn::TurnReceipt;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

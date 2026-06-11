@@ -21,6 +21,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitBridgeMint
 import Dregg2.Circuit.Emit.EffectVmEmitBurn
 import Dregg2.Circuit.Emit.EffectVmEmitCellDestroy
 import Dregg2.Circuit.Emit.EffectVmEmitCellSeal
+import Dregg2.Circuit.Emit.EffectVmEmitCellUnseal
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCell
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactory
 import Dregg2.Circuit.Emit.EffectVmEmitDelegate
@@ -62,28 +63,34 @@ def allEntries : List Entry :=
   , ⟨"burnVmDescriptor",                EffectVmEmitBurn.burnVmDescriptor⟩
   , ⟨"cellDestroyVmDescriptor",         EffectVmEmitCellDestroy.cellDestroyVmDescriptor⟩
   , ⟨"cellSealVmDescriptor",            EffectVmEmitCellSeal.cellSealVmDescriptor⟩
-  , ⟨"createCellVmDescriptor",          EffectVmEmitCreateCell.createCellVmDescriptor⟩
-  , ⟨"factoryVmDescriptor",             EffectVmEmitCreateCellFromFactory.factoryVmDescriptor⟩
+    -- cellUnseal (selector 50): the lifecycle Sealed→Live inverse, runtime-reconciled onto the
+    -- SAME frozen-frame + nonce-tick row shape as cellSeal-v2; the lifecycle flip stays verified
+    -- in-module (off-row, `cellUnsealA_full_sound`).
+  , ⟨"cellUnsealVmDescriptor",          EffectVmEmitCellUnseal.cellUnsealVmDescriptor⟩
+    -- LIFECYCLE/BIRTH graduations: the WIRE descriptor is the RUNTIME ACTOR row (frozen-frame +
+    -- nonce-tick); the born-empty CHILD faces stay verified in-module (off-row content).
+  , ⟨"createCellActorVmDescriptor",     EffectVmEmitCreateCell.createCellActorVmDescriptor⟩
+  , ⟨"factoryActorVmDescriptor",        EffectVmEmitCreateCellFromFactory.factoryActorVmDescriptor⟩
   , ⟨"delegateVmDescriptor",            EffectVmEmitDelegate.delegateVmDescriptor⟩
   , ⟨"delegateAttenVmDescriptor",       EffectVmEmitDelegateAtten.delegateAttenVmDescriptor⟩
   , ⟨"emitEventVmDescriptor",           EffectVmEmitEmitEvent.emitEventVmDescriptor⟩
   , ⟨"exerciseVmDescriptor",            EffectVmEmitExercise.exerciseVmDescriptor⟩
   , ⟨"incrementNonceVmDescriptor",      EffectVmEmitIncrementNonce.incrementNonceVmDescriptor⟩
   , ⟨"introduceVmDescriptor",           EffectVmEmitIntroduce.introduceVmDescriptor⟩
-  , ⟨"makeSovereignVmDescriptor",       EffectVmEmitMakeSovereign.makeSovereignVmDescriptor⟩
+  , ⟨"makeSovereignRuntimeVmDescriptor", EffectVmEmitMakeSovereign.makeSovereignRuntimeVmDescriptor⟩
   , ⟨"mintVmDescriptor",                EffectVmEmitMint.mintVmDescriptor⟩
   , ⟨"noteCreateVmDescriptor",          EffectVmEmitNoteCreate.noteCreateVmDescriptor⟩
   , ⟨"noteSpendVmDescriptor",           EffectVmEmitNoteSpend.noteSpendVmDescriptor⟩
   , ⟨"pipelinedSendVmDescriptor",       EffectVmEmitPipelinedSend.pipelinedSendVmDescriptor⟩
     -- (F2a) the six queue descriptors are GONE from the emit-all manifest: the queue family
     -- dissolved into the verified factory cells (`Dregg2/Apps/QueueFactory` et al).
-  , ⟨"receiptArchiveVmDescriptor",      EffectVmEmitReceiptArchive.receiptArchiveVmDescriptor⟩
+  , ⟨"receiptArchiveActorVmDescriptor", EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor⟩
   , ⟨"refreshVmDescriptor",             EffectVmEmitRefreshDelegation.refreshVmDescriptor⟩
   , ⟨"refusalVmDescriptor",             EffectVmEmitRefusal.refusalVmDescriptor⟩
   , ⟨"revokeVmDescriptor",              EffectVmEmitRevokeDelegation.revokeVmDescriptor⟩
   , ⟨"setPermsVmDescriptor",            EffectVmEmitSetPermissions.setPermsVmDescriptor⟩
   , ⟨"setVKVmDescriptor",               EffectVmEmitSetVK.setVKVmDescriptor⟩
-  , ⟨"spawnVmDescriptor",               EffectVmEmitSpawn.spawnVmDescriptor⟩
+  , ⟨"spawnActorVmDescriptor",          EffectVmEmitSpawn.spawnActorVmDescriptor⟩
     -- RECORD-LAYER STAGE 2: transfer descriptor + `fields_root`-absorbing GROUP-4 (site 3's
     -- spare 4th input now binds the user-field-map root cell into `state_commit`). Width-neutral
     -- (186): the carrier is the existing `state.FIELDS_ROOT` (= RESERVED, col 89) within the base

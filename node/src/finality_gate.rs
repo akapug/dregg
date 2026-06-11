@@ -3,7 +3,8 @@
 //! # What this is
 //!
 //! `blocklace_sync::poll_finalized_blocks` computes the finalized total order with the Rust
-//! `dregg_blocklace::ordering::tau` and slices `ordered[executed_up_to..]` to the executor. The
+//! `dregg_blocklace::ordering::tau` and serves the not-yet-executed blocks (tracked BY IDENTITY in
+//! `crate::execution_cursor::ExecutionCursor`; see TauPrefixMonotone) to the executor. The
 //! verified Lean model of that rule (`metatheory/Dregg2/Distributed/BlocklaceFinality.lean`:
 //! `computeRounds`/`findAllFinalLeaders`/`tauOrder`) was, until now, only AGREEMENT-CHECKED in a
 //! unit test (`ordering::tests::test_tau_differential_against_lean_model`). It did NOT gate the live

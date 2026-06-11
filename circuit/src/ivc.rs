@@ -759,17 +759,6 @@ pub fn verify_ivc_stark(
 // Utility: BabyBear <-> bytes conversion for cross-backend interop
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convert a BabyBear field element to a 32-byte representation.
-/// The value is stored in the first 4 bytes (little-endian), with the
-/// remaining 28 bytes zeroed. This is used when bridging BabyBear state
-/// roots to the Pickles backend which operates over 255-bit Pasta fields.
-#[cfg(feature = "mina")]
-fn babybear_to_bytes32(val: BabyBear) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[0..4].copy_from_slice(&val.0.to_le_bytes());
-    out
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Prover / Verifier API
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1322,11 +1311,6 @@ pub enum IvcBackend {
     HashChain,
     /// AIR-backed BabyBear STARK proof for the accumulated fold chain.
     BabyBearStark,
-    /// Experimental Pickles/Kimchi path behind the `mina` feature.
-    ///
-    /// This currently generates Kimchi proofs and accumulates transitions, but
-    /// verification does not yet run the full Kimchi verifier equation.
-    ExperimentalPickles,
 }
 
 /// Proof produced by [`IvcBuilder::finalize_with_backend`].
@@ -1336,9 +1320,6 @@ pub enum IvcBackendProof {
     HashChain(IvcProof),
     /// AIR-backed BabyBear STARK IVC proof.
     BabyBearStark(IvcProof),
-    /// Experimental Pickles/Kimchi IVC proof.
-    #[cfg(feature = "mina")]
-    ExperimentalPickles(crate::backends::mina::PicklesRecursiveProof),
 }
 
 impl IvcBuilder {
@@ -1394,10 +1375,6 @@ impl IvcBuilder {
     }
 
     /// Finalize using an explicitly selected backend.
-    ///
-    /// `HashChain` and `BabyBearStark` are available in the default build.
-    /// `ExperimentalPickles` requires the `mina` feature and is intentionally
-    /// labeled experimental until full Kimchi verifier integration lands.
     pub fn finalize_with_backend(
         &self,
         backend: IvcBackend,
@@ -1409,83 +1386,9 @@ impl IvcBuilder {
             IvcBackend::BabyBearStark => self
                 .finalize_with_air()
                 .map(|proof| Ok(IvcBackendProof::BabyBearStark(proof))),
-            IvcBackend::ExperimentalPickles => self.finalize_pickles_backend(),
         }
     }
 
-    #[cfg(feature = "mina")]
-    fn finalize_pickles_backend(&self) -> Option<Result<IvcBackendProof, String>> {
-        self.finalize_pickles()
-            .map(|result| result.map(IvcBackendProof::ExperimentalPickles))
-    }
-
-    #[cfg(not(feature = "mina"))]
-    fn finalize_pickles_backend(&self) -> Option<Result<IvcBackendProof, String>> {
-        if self.deltas.is_empty() {
-            None
-        } else {
-            Some(Err(
-                "ExperimentalPickles backend requires the dregg-circuit `mina` feature".to_string(),
-            ))
-        }
-    }
-
-    /// Finalize using the Pickles/Kimchi recursive IVC backend.
-    ///
-    /// Instead of using the BabyBear STARK, this produces a Kimchi proof chain
-    /// over the Pasta cycle (Pallas/Vesta).
-    ///
-    /// This is an alternative to `finalize()` / `finalize_with_air()` which
-    /// use the BabyBear STARK backend. The Pickles backend trades:
-    /// - Slower proving (~1-2s per step vs ~64us for STARK)
-    /// - Smaller proofs (~5-10 KiB vs ~48 KiB)
-    /// - Pickles-style state accumulation
-    /// - NOT post-quantum secure (relies on elliptic curve DLP)
-    ///
-    /// Soundness note: this path is experimental. The current verifier checks
-    /// proof structure and public-input consistency, but does not yet call the
-    /// full Kimchi verifier equation.
-    ///
-    /// Returns `None` if no steps have been added.
-    /// Returns `Err` if Kimchi proving fails.
-    ///
-    /// Requires the `mina` feature.
-    #[cfg(feature = "mina")]
-    pub fn finalize_pickles(
-        &self,
-    ) -> Option<Result<crate::backends::mina::PicklesRecursiveProof, String>> {
-        use crate::backends::mina::{PicklesStateTransition, prove_recursive_step};
-
-        if self.deltas.is_empty() {
-            return None;
-        }
-
-        // Convert each fold delta into a Pickles state transition.
-        // The state hashes are derived from the BabyBear roots by encoding
-        // them as 32-byte little-endian values.
-        let mut prev_proof: Option<crate::backends::mina::PicklesRecursiveProof> = None;
-
-        let mut current_old_root = self.initial_root;
-        for delta in &self.deltas {
-            let pre_hash = babybear_to_bytes32(current_old_root);
-            let post_hash = babybear_to_bytes32(delta.fold.new_root);
-
-            let transition = PicklesStateTransition {
-                pre_state_hash: pre_hash,
-                post_state_hash: post_hash,
-            };
-
-            let result = prove_recursive_step(prev_proof.as_ref(), &transition);
-            match result {
-                Ok(proof) => prev_proof = Some(proof),
-                Err(e) => return Some(Err(e)),
-            }
-
-            current_old_root = delta.fold.new_root;
-        }
-
-        Some(Ok(prev_proof.unwrap()))
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2864,38 +2767,6 @@ mod tests {
         assert!(matches!(stark_proof, IvcBackendProof::BabyBearStark(_)));
     }
 
-    #[cfg(not(feature = "mina"))]
-    #[test]
-    fn ivc_builder_pickles_backend_requires_mina_feature() {
-        let (initial_root, deltas) = create_test_chain(1);
-
-        let mut builder = IvcBuilder::new(initial_root);
-        builder.add_fold(deltas[0].clone()).unwrap();
-
-        let err = builder
-            .finalize_with_backend(IvcBackend::ExperimentalPickles)
-            .unwrap()
-            .unwrap_err();
-        assert!(err.contains("mina"));
-    }
-
-    #[cfg(feature = "mina")]
-    #[test]
-    fn ivc_builder_finalize_with_backend_pickles() {
-        let (initial_root, deltas) = create_test_chain(1);
-
-        let mut builder = IvcBuilder::new(initial_root);
-        builder.add_fold(deltas[0].clone()).unwrap();
-
-        let proof = builder
-            .finalize_with_backend(IvcBackend::ExperimentalPickles)
-            .unwrap()
-            .unwrap();
-        match proof {
-            IvcBackendProof::ExperimentalPickles(proof) => assert_eq!(proof.num_steps, 1),
-            _ => panic!("expected Pickles proof"),
-        }
-    }
 
     #[test]
     fn ivc_accumulated_hash_deterministic() {

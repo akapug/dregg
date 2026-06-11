@@ -324,117 +324,23 @@ fn bench_proof_verification(c: &mut Criterion) {
 }
 
 // =============================================================================
-// 4. Recursive Composition (Kimchi/Pickles + IVC STARK)
+// 4. IVC Composition (BabyBear STARK hash-chain accumulation)
 // =============================================================================
-
-#[cfg(feature = "mina")]
-fn bench_recursive_composition(c: &mut Criterion) {
-    use dregg_circuit::backends::mina::{
-        PicklesRecursiveProof, PicklesStateTransition, prove_recursive_step, verify_recursive_proof,
-    };
-
-    let mut group = c.benchmark_group("4_recursive_pickles");
-    group.sample_size(10);
-
-    // --- prove_recursive_step: base case (no previous proof) ---
-    let transition_1 = PicklesStateTransition {
-        pre_state_hash: *blake3::hash(b"state-0").as_bytes(),
-        post_state_hash: *blake3::hash(b"state-1").as_bytes(),
-    };
-
-    group.bench_function("prove_recursive_step_base", |b| {
-        b.iter(|| {
-            black_box(prove_recursive_step(None, &transition_1).unwrap());
-        });
-    });
-
-    let base_proof = prove_recursive_step(None, &transition_1).unwrap();
-
-    // --- prove_recursive_step: recursive (with previous proof) ---
-    let transition_2 = PicklesStateTransition {
-        pre_state_hash: *blake3::hash(b"state-1").as_bytes(),
-        post_state_hash: *blake3::hash(b"state-2").as_bytes(),
-    };
-
-    group.bench_function("prove_recursive_step_recursive", |b| {
-        b.iter(|| {
-            black_box(prove_recursive_step(Some(&base_proof), &transition_2).unwrap());
-        });
-    });
-
-    // --- verify_recursive_proof: should be constant regardless of chain length ---
-    group.bench_function("verify_recursive_proof_1step", |b| {
-        b.iter(|| {
-            black_box(verify_recursive_proof(&base_proof, None).unwrap());
-        });
-    });
-
-    let step2_proof = prove_recursive_step(Some(&base_proof), &transition_2).unwrap();
-    group.bench_function("verify_recursive_proof_2step", |b| {
-        b.iter(|| {
-            black_box(verify_recursive_proof(&step2_proof, None).unwrap());
-        });
-    });
-
-    // Build a 5-step chain and verify (demonstrating constant verification time)
-    let mut prev: Option<PicklesRecursiveProof> = None;
-    for step in 0..5 {
-        let t = PicklesStateTransition {
-            pre_state_hash: *blake3::hash(format!("state-{step}").as_bytes()).as_bytes(),
-            post_state_hash: *blake3::hash(format!("state-{}", step + 1).as_bytes()).as_bytes(),
-        };
-        let p = prove_recursive_step(prev.as_ref(), &t).unwrap();
-        let proof_size = p.public_inputs.len() + p.proof_bytes.len();
-        eprintln!(
-            "  [pickles] chain_length={} proof_size={} bytes (should be ~constant)",
-            step + 1,
-            proof_size
-        );
-        prev = Some(p);
-    }
-
-    let final_proof = prev.unwrap();
-    group.bench_function("verify_recursive_proof_5step", |b| {
-        b.iter(|| {
-            black_box(verify_recursive_proof(&final_proof, None).unwrap());
-        });
-    });
-
-    group.finish();
-}
 
 fn bench_ivc_stark(c: &mut Criterion) {
     let mut group = c.benchmark_group("4_ivc_stark");
     group.sample_size(10);
 
-    // IVC prove/verify via STARK (the main recursion path)
-    for &steps in &[1, 3, 5, 10] {
+    for &steps in &[1usize, 3, 5] {
         let (initial_root, deltas) = create_test_chain(steps);
         let new_roots: Vec<BabyBear> = deltas.iter().map(|d| d.fold.new_root).collect();
 
-        group.bench_with_input(
-            BenchmarkId::new("prove", format!("{steps}_steps")),
-            &(initial_root, new_roots.clone()),
-            |b, (root, roots)| {
-                b.iter(|| black_box(prove_ivc_stark(*root, roots)));
-            },
-        );
-
-        let (stark_proof, pub_inputs) = prove_ivc_stark(initial_root, &new_roots);
-        let sp_bytes = proof_to_bytes(&stark_proof);
-        eprintln!(
-            "  [ivc_stark {steps}-step] proof size: {} bytes ({:.1} KiB)",
-            sp_bytes.len(),
-            sp_bytes.len() as f64 / 1024.0
-        );
-
-        group.bench_with_input(
-            BenchmarkId::new("verify", format!("{steps}_steps")),
-            &(stark_proof.clone(), pub_inputs.clone()),
-            |b, (sp, pi)| {
-                b.iter(|| black_box(verify_ivc_stark(sp, pi).unwrap()));
-            },
-        );
+        group.bench_function(format!("prove_verify_{steps}_step"), |b| {
+            b.iter(|| {
+                let (sp, pi) = prove_ivc_stark(initial_root, &new_roots);
+                black_box(verify_ivc_stark(&sp, &pi).unwrap());
+            });
+        });
     }
 
     group.finish();
@@ -835,13 +741,6 @@ criterion_group!(
     targets = bench_ivc_stark
 );
 
-#[cfg(feature = "mina")]
-criterion_group!(
-    name = recursive_composition;
-    config = Criterion::default().sample_size(10);
-    targets = bench_recursive_composition
-);
-
 criterion_group!(
     name = federation_ops;
     config = Criterion::default().sample_size(10);
@@ -854,23 +753,11 @@ criterion_group!(
     targets = bench_full_flow
 );
 
-#[cfg(not(feature = "mina"))]
 criterion_main!(
     token_ops,
     proof_generation,
     proof_verification,
     ivc_composition,
-    federation_ops,
-    headline_e2e,
-);
-
-#[cfg(feature = "mina")]
-criterion_main!(
-    token_ops,
-    proof_generation,
-    proof_verification,
-    ivc_composition,
-    recursive_composition,
     federation_ops,
     headline_e2e,
 );

@@ -1339,26 +1339,14 @@ impl super::FullProofBackend for Plonky3Backend {}
 fn serialize_p3_proof(proof: &plonky3_prover::DreggProof) -> Result<Vec<u8>, String> {
     // DreggProof = p3_uni_stark::Proof<DreggStarkConfig>, which derives Serialize
     // when all constituent types implement it (BabyBear, extension field, Merkle
-    // proofs all do). Use rmp-serde for compact binary encoding.
-    //
-    // rmp-serde is pulled in via the 'mina' feature (which is default).
-    // If mina is not enabled, we fall back to a JSON encoding.
-    #[cfg(feature = "mina")]
-    {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"P3PF"); // format marker
-        let payload = rmp_serde::to_vec(proof)
-            .map_err(|e| format!("Plonky3 proof serialization failed: {}", e))?;
-        bytes.extend_from_slice(&payload);
-        Ok(bytes)
-    }
-    #[cfg(not(feature = "mina"))]
-    {
-        // Without rmp-serde, we cannot serialize the Plonky3 proof.
-        // This path should not be reached in practice because the default features
-        // include both 'recursion' (implies 'plonky3') and 'mina'.
-        Err("Cannot serialize Plonky3 proof without rmp-serde (enable 'mina' feature)".into())
-    }
+    // proofs all do). Use rmp-serde for compact binary encoding (enabled by the
+    // 'plonky3' feature).
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"P3PF"); // format marker
+    let payload = rmp_serde::to_vec(proof)
+        .map_err(|e| format!("Plonky3 proof serialization failed: {}", e))?;
+    bytes.extend_from_slice(&payload);
+    Ok(bytes)
 }
 
 #[cfg(feature = "plonky3")]
@@ -1366,15 +1354,8 @@ fn deserialize_p3_proof(bytes: &[u8]) -> Result<plonky3_prover::DreggProof, Stri
     if bytes.len() < 4 || &bytes[..4] != b"P3PF" {
         return Err("Invalid Plonky3 proof format marker".into());
     }
-    #[cfg(feature = "mina")]
-    {
-        rmp_serde::from_slice(&bytes[4..])
-            .map_err(|e| format!("Plonky3 proof deserialization failed: {}", e))
-    }
-    #[cfg(not(feature = "mina"))]
-    {
-        Err("Cannot deserialize Plonky3 proof without rmp-serde (enable 'mina' feature)".into())
-    }
+    rmp_serde::from_slice(&bytes[4..])
+        .map_err(|e| format!("Plonky3 proof deserialization failed: {}", e))
 }
 
 // ============================================================================

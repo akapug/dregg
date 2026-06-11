@@ -19,8 +19,7 @@ pub fn run() -> Vec<CheckResult> {
     vec![
         run_check("stark", check_custom_stark),
         run_check("plonky3", check_plonky3_backend),
-        run_check("kimchi", check_kimchi_backend),
-        run_check("pickles", check_pickles_recursive),
+        run_check("ivc-recursive", check_ivc_recursive),
     ]
 }
 
@@ -147,27 +146,7 @@ fn check_plonky3_backend() -> Result<(), String> {
     }
 }
 
-fn check_kimchi_backend() -> Result<(), String> {
-    #[cfg(feature = "mina")]
-    {
-        let (witness, _, tree, fact_pos) = build_test_witness();
-        let body_proofs = vec![make_membership_proof(&tree, fact_pos)];
-        let proof = prove_authorization_with_membership(&witness, &body_proofs);
-        let conclusion = witness.conclusion();
-        let acc_hash = witness.final_accumulated_hash();
-        let expected_hashes = body_fact_hashes_from_witness(&witness);
-        verify_authorization_with_membership(&proof, conclusion, acc_hash, &expected_hashes)
-            .map_err(|e| format!("kimchi-equivalent STARK failed: {e}"))?;
-        return Ok(());
-    }
-
-    #[cfg(not(feature = "mina"))]
-    {
-        Ok(())
-    }
-}
-
-fn check_pickles_recursive() -> Result<(), String> {
+fn check_ivc_recursive() -> Result<(), String> {
     use dregg_circuit::fold_air::{FoldWitness, compute_test_checks_commitment};
     use dregg_circuit::ivc::{FoldDelta, IvcVerification, prove_ivc, verify_ivc};
 

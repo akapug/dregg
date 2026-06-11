@@ -2,39 +2,24 @@
 //!
 //! # Architecture
 //!
-//! Unlike the Midnight bridge (Level 1.5, optimistic + attestation), the Mina bridge
-//! is **Level 2 (proof-carrying)** from day one. This is possible because dregg and
-//! Mina share the same proof system family:
+//! The bridge is an OBSERVATION bridge: dregg state roots are wrapped with a
+//! cryptographic binding commitment (`wrap_stark_for_mina`, BLAKE3-bound to the
+//! STARK proof bytes + public inputs) and tracked through a confirm/advance
+//! state machine (`MinaBridgeState`).
 //!
-//! - **Shared curves:** Pasta cycle (Pallas/Vesta)
-//! - **Shared proof system:** Kimchi (Plonk variant with custom gates)
-//! - **Shared recursion:** Pickles (dual-curve step/wrap architecture)
-//! - **Shared hash:** Poseidon over Fp (native to both chains)
-//!
-//! # Proof Flow
-//!
-//! ```text
-//! Effect VM / Presentation (BabyBear STARK)
-//!     |
-//!     | PoseidonStarkVerifierCircuit::prove()
-//!     v
-//! Kimchi proof on Vesta (~5-10 KiB)
-//!     |
-//!     | prove_recursive_step() / prove_dual_curve_wrap()
-//!     v
-//! Pickles-wrapped proof (constant-size, Mina-compatible)
-//!     |
-//!     | wrap_stark_for_mina() [this module]
-//!     v
-//! Mina-submittable proof (verifiable on-chain by zkApp)
-//! ```
+//! The former "Level 2" recursive pipeline (BabyBear STARK verified inside a
+//! Kimchi circuit, wrapped via Pickles into a Mina zkApp proof) was REMOVED
+//! with the kimchi/pickles backend family: its pickles step never verified the
+//! Kimchi proof in-circuit, so the recursion was vacuous scaffolding — see
+//! `docs/PROOF-ECONOMICS.md` §4. A proof-carrying Mina bridge would need a
+//! real (audited) in-circuit verifier; until then this module is honest about
+//! being binding-commitment + relay-liveness only.
 //!
 //! # Security Model
 //!
-//! - **No federation trust for safety.** Proof validity is computational.
-//! - **No dispute window.** Verification is immediate (one Mina block, ~3 min).
-//! - **Recursive composition.** zkApp-to-zkApp proof verification is native.
-//! - The bridge relay is needed only for liveness, not safety.
+//! - The binding commitment ties a wrapped proof to its STARK bytes; it is NOT
+//!   on-chain computational verification. Safety rests on the dregg-side
+//!   verifier; the relay is needed for liveness.
 //!
 //! # Key Types
 //!
@@ -184,30 +169,21 @@ pub struct StateAdvance {
 // Proof Wrapping Pipeline
 // ============================================================================
 
-/// Wrap a BabyBear STARK proof into a Pickles-compatible recursive proof.
-///
-/// This is the core of the Mina bridge:
-/// 1. Deserialize the STARK proof
-/// 2. Build the `PoseidonStarkVerifierCircuit` with these public inputs
-/// 3. Generate a Kimchi witness (Vesta scalar field = Fp)
-/// 4. Produce a Pickles recursive proof (via `prove_recursive_step`)
-///
-/// The resulting proof is directly submittable to a Mina zkApp that accepts
-/// Pickles-wrapped state transitions.
+/// Wrap a serialized dregg STARK proof with a cryptographic binding commitment
+/// (BLAKE3 over the proof bytes + public inputs) for relay through the bridge
+/// state machine.
 ///
 /// # Arguments
-/// - `stark_proof`: Serialized `PoseidonStarkProof` (BabyBear STARK over Poseidon).
+/// - `stark_proof`: Serialized STARK proof bytes.
 /// - `public_inputs`: The BabyBear public inputs (state root fields as u32 limbs).
 ///
 /// # Returns
-/// The Pickles-wrapped proof bytes, ready for Mina submission.
+/// The commitment-wrapped bytes (version `0x01`).
 ///
 /// # Note
-/// This function requires the `mina` feature on `dregg-circuit`. The full pipeline
-/// exercises: STARK deserialization -> Kimchi circuit construction -> Kimchi proving
-/// -> Pickles recursive wrapping. In the current implementation, steps 2-4 are
-/// stubbed with a cryptographic binding commitment (BLAKE3 over STARK proof + inputs)
-/// until the full `PoseidonStarkVerifierCircuit` integration is wired up.
+/// This is a BINDING COMMITMENT, not on-chain verification. The former
+/// kimchi/pickles recursive wrap was removed as vacuous scaffolding
+/// (see the module docs).
 pub fn wrap_stark_for_mina(
     stark_proof: &[u8],
     public_inputs: &[u32],
@@ -218,16 +194,7 @@ pub fn wrap_stark_for_mina(
         });
     }
 
-    // Phase 1 implementation: cryptographic binding commitment.
-    //
-    // In production (Phase 2+), this will:
-    // 1. Deserialize PoseidonStarkProof from `stark_proof`
-    // 2. Call PoseidonStarkVerifierCircuit::prove() to get Kimchi proof
-    // 3. Call prove_recursive_step() to get Pickles proof
-    // 4. Call prove_dual_curve_wrap() for final Mina-compatible form
-    //
-    // For now, we produce a binding commitment that allows the bridge state
-    // machine to function while the full pipeline integration is completed.
+    // Cryptographic binding commitment over the proof bytes + inputs.
     let mut hasher = blake3::Hasher::new_derive_key("dregg-mina-bridge-wrap-v1");
     hasher.update(stark_proof);
     for input in public_inputs {
@@ -247,7 +214,7 @@ pub fn wrap_stark_for_mina(
 /// Verify a wrapped proof's binding commitment.
 ///
 /// This checks that the proof bytes were produced by `wrap_stark_for_mina` with
-/// the given public inputs. In Phase 2+, this will perform full Pickles verification.
+/// the given public inputs (binding commitment only; not on-chain verification).
 pub fn verify_wrapped_proof(
     wrapped_proof: &[u8],
     public_inputs: &[u32],
@@ -365,338 +332,6 @@ pub fn confirm_state_advance(state: &mut MinaBridgeState, height: u64) -> bool {
 /// (meaning it was already confirmed).
 pub fn verify_mina_inclusion(state: &MinaBridgeState, height: u64) -> bool {
     height <= state.proven_height
-}
-
-// ============================================================================
-// Phase 2: Recursive Proof Wrapping (STARK -> Kimchi -> Pickles)
-// ============================================================================
-
-/// Wrap a BabyBear STARK proof into a Pickles-compatible recursive proof.
-///
-/// This is the full Phase 2 pipeline:
-/// 1. Deserialize the PoseidonStarkProof
-/// 2. Build the `PoseidonStarkVerifierCircuit` (Kimchi circuit that verifies STARK)
-/// 3. Prove the verifier circuit in Kimchi (produces a Vesta proof)
-/// 4. Wrap into a Pickles recursive proof via `prove_recursive_step`
-///
-/// The resulting proof is a valid Mina zkApp proof: it can be submitted to
-/// a Mina zkApp that accepts Pickles-wrapped state transitions.
-///
-/// # Arguments
-/// - `stark_proof_bytes`: Serialized `PoseidonStarkProof` (postcard-encoded).
-/// - `public_inputs`: The BabyBear public inputs (state root fields as u32 limbs).
-///
-/// # Returns
-/// The Pickles-wrapped proof bytes, ready for Mina submission.
-#[cfg(feature = "mina")]
-pub fn wrap_stark_for_mina_recursive(
-    stark_proof_bytes: &[u8],
-    public_inputs: &[u32],
-) -> Result<Vec<u8>, BridgeError> {
-    use dregg_circuit::backends::mina::{PicklesStateTransition, prove_recursive_step};
-    use dregg_circuit::poseidon_stark::PoseidonStarkProof;
-    use dregg_circuit::poseidon_stark_verifier_circuit::PoseidonStarkVerifierCircuit;
-
-    if stark_proof_bytes.is_empty() {
-        return Err(BridgeError::InvalidStarkProof {
-            reason: "empty STARK proof".to_string(),
-        });
-    }
-
-    // 1. Deserialize the PoseidonStarkProof
-    let stark_proof: PoseidonStarkProof =
-        postcard::from_bytes(stark_proof_bytes).map_err(|e| BridgeError::InvalidStarkProof {
-            reason: format!("deserialization failed: {}", e),
-        })?;
-
-    // 2. Build the Kimchi verifier circuit and generate witness
-    let circuit = PoseidonStarkVerifierCircuit::new_minimal(stark_proof);
-    let kimchi_proof = circuit
-        .prove()
-        .map_err(|e| BridgeError::WitnessGenerationFailed {
-            reason: format!("Kimchi verifier circuit proof failed: {}", e),
-        })?;
-
-    // 3. Verify the Kimchi proof locally before wrapping (sanity check)
-    let verify_ok =
-        PoseidonStarkVerifierCircuit::verify(&kimchi_proof).map_err(|e| BridgeError::Internal {
-            reason: format!("Kimchi proof self-verification failed: {}", e),
-        })?;
-    if !verify_ok {
-        return Err(BridgeError::Internal {
-            reason: "Kimchi proof failed self-verification".to_string(),
-        });
-    }
-
-    // 4. Compute state hashes from public inputs for the Pickles transition.
-    //    Both hashes are derived DETERMINISTICALLY from the STARK proof and public
-    //    inputs (not from the Kimchi proof bytes, which contain random blinders).
-    //    This allows independent verification without re-proving.
-    let pre_state_hash = {
-        let mut hasher = blake3::Hasher::new_derive_key("dregg-mina-pre-state-v1");
-        for &input in public_inputs {
-            hasher.update(&input.to_le_bytes());
-        }
-        *hasher.finalize().as_bytes()
-    };
-
-    let post_state_hash = {
-        let mut hasher = blake3::Hasher::new_derive_key("dregg-mina-post-state-v1");
-        hasher.update(stark_proof_bytes);
-        for &input in public_inputs {
-            hasher.update(&input.to_le_bytes());
-        }
-        *hasher.finalize().as_bytes()
-    };
-
-    // 5. Produce the Pickles recursive proof (base case, no previous proof)
-    let transition = PicklesStateTransition {
-        pre_state_hash,
-        post_state_hash,
-    };
-
-    let pickles_proof =
-        prove_recursive_step(None, &transition).map_err(|e| BridgeError::PicklesWrapFailed {
-            reason: format!("prove_recursive_step failed: {}", e),
-        })?;
-
-    // 6. Serialize the complete wrapped proof.
-    //    Format: [version(1)] [pickles_proof(postcard)] [kimchi_proof_bytes_len(4)] [kimchi_proof_bytes]
-    let pickles_serialized =
-        postcard::to_stdvec(&pickles_proof).map_err(|e| BridgeError::PicklesWrapFailed {
-            reason: format!("Pickles proof serialization failed: {}", e),
-        })?;
-
-    let mut wrapped =
-        Vec::with_capacity(1 + 4 + pickles_serialized.len() + 4 + kimchi_proof.proof_bytes.len());
-    wrapped.push(0x02); // version byte: Phase 2 (full recursive)
-    wrapped.extend_from_slice(&(pickles_serialized.len() as u32).to_le_bytes());
-    wrapped.extend_from_slice(&pickles_serialized);
-    wrapped.extend_from_slice(&(kimchi_proof.proof_bytes.len() as u32).to_le_bytes());
-    wrapped.extend_from_slice(&kimchi_proof.proof_bytes);
-
-    Ok(wrapped)
-}
-
-/// Verify a Mina-wrapped recursive proof.
-///
-/// Supports both Phase 1 (binding commitment) and Phase 2 (full Pickles) proofs
-/// based on the version byte.
-///
-/// For Phase 2 proofs, this performs full Pickles verification, confirming that:
-/// - The STARK was correctly verified inside the Kimchi circuit
-/// - The Kimchi proof was correctly wrapped via Pickles recursion
-/// - The proven state root matches `expected_state_root`
-///
-/// # Arguments
-/// - `pickles_proof_bytes`: The wrapped proof bytes (output of `wrap_stark_for_mina_recursive`).
-/// - `expected_state_root`: The expected post-state root (32 bytes).
-///
-/// # Returns
-/// `Ok(true)` if the proof is valid and the state root matches.
-#[cfg(feature = "mina")]
-pub fn verify_mina_wrapped_proof(
-    pickles_proof_bytes: &[u8],
-    expected_state_root: &[u8; 32],
-) -> Result<bool, BridgeError> {
-    use dregg_circuit::backends::mina::{PicklesRecursiveProof, verify_recursive_proof};
-
-    if pickles_proof_bytes.is_empty() {
-        return Err(BridgeError::InvalidStarkProof {
-            reason: "empty proof bytes".to_string(),
-        });
-    }
-
-    let version = pickles_proof_bytes[0];
-
-    match version {
-        0x01 => {
-            // Phase 1: binding commitment only (cannot verify state root cryptographically)
-            Err(BridgeError::Internal {
-                reason: "Phase 1 proofs do not support state root verification; \
-                         use verify_wrapped_proof() for binding checks"
-                    .to_string(),
-            })
-        }
-        0x02 => {
-            // Phase 2: full Pickles recursive proof
-            if pickles_proof_bytes.len() < 5 {
-                return Err(BridgeError::InvalidStarkProof {
-                    reason: "proof too short for Phase 2 format".to_string(),
-                });
-            }
-
-            let pickles_len =
-                u32::from_le_bytes(pickles_proof_bytes[1..5].try_into().unwrap()) as usize;
-
-            if pickles_proof_bytes.len() < 5 + pickles_len {
-                return Err(BridgeError::InvalidStarkProof {
-                    reason: "proof truncated (Pickles section)".to_string(),
-                });
-            }
-
-            let pickles_bytes = &pickles_proof_bytes[5..5 + pickles_len];
-            let pickles_proof: PicklesRecursiveProof = postcard::from_bytes(pickles_bytes)
-                .map_err(|e| BridgeError::InvalidStarkProof {
-                    reason: format!("Pickles proof deserialization failed: {}", e),
-                })?;
-
-            // Verify the Pickles recursive proof
-            let valid = verify_recursive_proof(&pickles_proof, None).map_err(|e| {
-                BridgeError::Internal {
-                    reason: format!("Pickles verification failed: {}", e),
-                }
-            })?;
-
-            if !valid {
-                return Ok(false);
-            }
-
-            // Check that the proven post-state matches the expected state root.
-            // The post_state_hash is encoded in public_inputs[32..64].
-            if pickles_proof.public_inputs.len() < 64 {
-                return Err(BridgeError::Internal {
-                    reason: "Pickles proof missing post_state_hash in public inputs".to_string(),
-                });
-            }
-
-            let post_hash_bytes: [u8; 32] = pickles_proof.public_inputs[32..64]
-                .try_into()
-                .map_err(|_| BridgeError::Internal {
-                    reason: "post_state_hash extraction failed".to_string(),
-                })?;
-
-            Ok(post_hash_bytes == *expected_state_root)
-        }
-        other => Err(BridgeError::InvalidStarkProof {
-            reason: format!("unsupported wrap version: {:#x}", other),
-        }),
-    }
-}
-
-// ============================================================================
-// Mina zkApp Bridge (Federation Presence as a zkApp)
-// ============================================================================
-
-/// Represents how the dregg federation appears as a Mina zkApp.
-///
-/// The zkApp's on-chain state is the proven federation root. Each state advance
-/// is a zkApp transaction carrying a recursive proof. The proof attests that:
-/// - A valid STARK proved the state transition (Effect VM or presentation)
-/// - The STARK was verified inside a Kimchi circuit
-/// - The Kimchi proof was recursively wrapped via Pickles
-///
-/// This gives full proof-carrying data: no federation trust needed for safety,
-/// no dispute windows, immediate finality (one Mina block, ~3 min).
-#[cfg(feature = "mina")]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MinaZkAppBridge {
-    /// The compiled zkApp verification key (Pickles verification key bytes).
-    /// This identifies the specific verifier circuit that accepts our proofs.
-    pub verification_key: Vec<u8>,
-    /// The zkApp's public key on Mina (Base58Check, starts with "B62").
-    pub zkapp_address: String,
-    /// History of proven state transitions: (height, old_root, new_root).
-    /// Each entry was proven via the full STARK -> Kimchi -> Pickles pipeline.
-    pub proven_transitions: Vec<(u64, [u8; 32], [u8; 32])>,
-}
-
-#[cfg(feature = "mina")]
-impl MinaZkAppBridge {
-    /// Create a new zkApp bridge with the given address and verification key.
-    ///
-    /// The verification key is the Pickles VK for our STARK verifier circuit.
-    /// It is deployed once and identifies which proofs the zkApp accepts.
-    pub fn new(zkapp_address: String, verification_key: Vec<u8>) -> Result<Self, BridgeError> {
-        if !is_valid_mina_address(&zkapp_address) {
-            return Err(BridgeError::InvalidMinaAddress {
-                reason: format!(
-                    "invalid zkApp address: '{}'",
-                    &zkapp_address[..zkapp_address.len().min(10)]
-                ),
-            });
-        }
-        Ok(Self {
-            verification_key,
-            zkapp_address,
-            proven_transitions: Vec::new(),
-        })
-    }
-
-    /// Record a proven state transition.
-    ///
-    /// Called after a recursive proof has been verified on-chain by the Mina zkApp.
-    pub fn record_transition(&mut self, height: u64, old_root: [u8; 32], new_root: [u8; 32]) {
-        self.proven_transitions.push((height, old_root, new_root));
-    }
-
-    /// Get the latest proven state root (the zkApp's current on-chain state).
-    pub fn latest_root(&self) -> Option<[u8; 32]> {
-        self.proven_transitions.last().map(|(_, _, new)| *new)
-    }
-
-    /// Get the latest proven height.
-    pub fn latest_height(&self) -> u64 {
-        self.proven_transitions
-            .last()
-            .map(|(h, _, _)| *h)
-            .unwrap_or(0)
-    }
-
-    /// Compute the verification key digest (for identifying the zkApp program).
-    pub fn vk_digest(&self) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_derive_key("dregg-mina-zkapp-vk-v1");
-        hasher.update(&self.verification_key);
-        *hasher.finalize().as_bytes()
-    }
-
-    /// Prepare a state advance transaction for submission to Mina.
-    ///
-    /// This bundles a recursive proof with the state transition metadata,
-    /// ready for the bridge relay to submit as a zkApp transaction.
-    pub fn prepare_advance_transaction(
-        &self,
-        _state: &MinaBridgeState,
-        advance: &StateAdvance,
-    ) -> Result<MinaZkAppTransaction, BridgeError> {
-        if advance.pickles_proof.is_none() {
-            return Err(BridgeError::PicklesWrapFailed {
-                reason:
-                    "state advance has no Pickles proof (call wrap_stark_for_mina_recursive first)"
-                        .to_string(),
-            });
-        }
-
-        Ok(MinaZkAppTransaction {
-            zkapp_address: self.zkapp_address.clone(),
-            old_state_root: advance.old_root,
-            new_state_root: advance.new_root,
-            height: advance.height,
-            proof_bytes: advance.pickles_proof.clone().unwrap(),
-            vk_digest: self.vk_digest(),
-        })
-    }
-}
-
-/// A prepared zkApp transaction for Mina submission.
-///
-/// This contains everything the bridge relay needs to construct and submit
-/// a Mina zkApp transaction carrying the recursive proof.
-#[cfg(feature = "mina")]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MinaZkAppTransaction {
-    /// Target zkApp address on Mina.
-    pub zkapp_address: String,
-    /// The state root before this transition.
-    pub old_state_root: [u8; 32],
-    /// The state root after this transition.
-    pub new_state_root: [u8; 32],
-    /// Height/epoch of this transition.
-    pub height: u64,
-    /// The recursive proof bytes (Pickles-wrapped).
-    pub proof_bytes: Vec<u8>,
-    /// Verification key digest (identifies the program).
-    pub vk_digest: [u8; 32],
 }
 
 // ============================================================================
@@ -1134,218 +769,5 @@ mod tests {
         assert!(verify_mina_inclusion(&state, 0));
         // Any height > 0 should not be included.
         assert!(!verify_mina_inclusion(&state, 1));
-    }
-}
-
-// ============================================================================
-// Phase 2 Integration Tests (feature-gated)
-// ============================================================================
-
-#[cfg(all(test, feature = "mina"))]
-mod mina_tests {
-    use super::*;
-
-    /// Test the full STARK -> Kimchi -> Pickles pipeline.
-    ///
-    /// This is the end-to-end test for Phase 2:
-    /// 1. Create a real PoseidonStarkProof (from a MerkleStarkAir execution)
-    /// 2. Serialize it
-    /// 3. Call wrap_stark_for_mina_recursive() to produce a Pickles proof
-    /// 4. Verify the Pickles proof
-    /// 5. Confirm the proven state root matches expectations
-    #[test]
-    fn test_full_stark_to_pickles_pipeline() {
-        use dregg_circuit::BabyBear;
-        use dregg_circuit::dsl::descriptors::merkle_poseidon2_circuit;
-        use dregg_circuit::dsl::membership::generate_merkle_poseidon2_trace;
-        use dregg_circuit::poseidon_stark::prove_poseidon;
-        use dregg_circuit::stark::StarkAir;
-
-        // 1. Create a real STARK proof using the sound Poseidon2-based DSL circuit
-        // (migrated away from the deprecated linear-binding `MerkleStarkAir`).
-        let leaf_hash = BabyBear::new(42);
-        let siblings = [
-            [BabyBear::new(100), BabyBear::new(200), BabyBear::new(300)],
-            [BabyBear::new(400), BabyBear::new(500), BabyBear::new(600)],
-            [BabyBear::new(700), BabyBear::new(800), BabyBear::new(900)],
-            [
-                BabyBear::new(1000),
-                BabyBear::new(1100),
-                BabyBear::new(1200),
-            ],
-        ];
-        let positions = [0u8, 1, 2, 3];
-
-        let (trace, pi) = generate_merkle_poseidon2_trace(leaf_hash, &siblings, &positions);
-        let circuit = merkle_poseidon2_circuit();
-        let stark_proof = prove_poseidon(&circuit, &trace, &pi);
-
-        // 2. Serialize the proof using postcard
-        let stark_proof_bytes =
-            postcard::to_stdvec(&stark_proof).expect("STARK proof serialization should succeed");
-
-        // 3. Extract public inputs as u32 limbs
-        let public_inputs: Vec<u32> = pi.iter().map(|bb| bb.0).collect();
-
-        // 4. Run the full wrapping pipeline
-        let wrapped = wrap_stark_for_mina_recursive(&stark_proof_bytes, &public_inputs)
-            .expect("wrap_stark_for_mina_recursive should succeed");
-
-        // 5. The wrapped proof should be non-empty and start with version 0x02
-        assert!(!wrapped.is_empty());
-        assert_eq!(wrapped[0], 0x02, "Should be Phase 2 version");
-
-        // 6. Parse back the Pickles proof to check structure
-        let pickles_len = u32::from_le_bytes(wrapped[1..5].try_into().unwrap()) as usize;
-        assert!(pickles_len > 0, "Pickles proof section should be non-empty");
-        assert!(
-            wrapped.len() >= 5 + pickles_len,
-            "Wrapped proof should contain full Pickles section"
-        );
-
-        // 7. Compute expected post_state_hash (same deterministic derivation as
-        //    wrap_stark_for_mina_recursive — uses STARK proof bytes + public inputs)
-        let post_state_hash = {
-            let mut hasher = blake3::Hasher::new_derive_key("dregg-mina-post-state-v1");
-            hasher.update(&stark_proof_bytes);
-            for &input in &public_inputs {
-                hasher.update(&input.to_le_bytes());
-            }
-            *hasher.finalize().as_bytes()
-        };
-
-        // 8. Verify the wrapped proof against the expected state root
-        let verify_result = verify_mina_wrapped_proof(&wrapped, &post_state_hash);
-        assert!(
-            verify_result.is_ok(),
-            "Verification should not error: {:?}",
-            verify_result.err()
-        );
-        assert!(
-            verify_result.unwrap(),
-            "Proof should verify against the correct state root"
-        );
-
-        // 9. Verification should fail with a wrong state root
-        let wrong_root = [0xFFu8; 32];
-        let wrong_result = verify_mina_wrapped_proof(&wrapped, &wrong_root);
-        assert!(
-            wrong_result.is_ok(),
-            "Verification with wrong root should not error"
-        );
-        assert!(
-            !wrong_result.unwrap(),
-            "Proof should NOT verify against a wrong state root"
-        );
-    }
-
-    /// Test the MinaZkAppBridge struct and transaction preparation.
-    #[test]
-    fn test_zkapp_bridge_lifecycle() {
-        let mina_addr = "B62qrPN5Y5yq8kGE3FbVKbGTdTAJNdtNtS5vH1e3jX5uFtkKXb7x3zX";
-        let vk = vec![0x01, 0x02, 0x03, 0x04]; // mock verification key
-
-        // Create the bridge
-        let mut bridge = MinaZkAppBridge::new(mina_addr.to_string(), vk.clone()).unwrap();
-        assert_eq!(bridge.zkapp_address, mina_addr);
-        assert_eq!(bridge.latest_height(), 0);
-        assert_eq!(bridge.latest_root(), None);
-
-        // Record transitions
-        bridge.record_transition(1, [0xAA; 32], [0xBB; 32]);
-        bridge.record_transition(2, [0xBB; 32], [0xCC; 32]);
-
-        assert_eq!(bridge.latest_height(), 2);
-        assert_eq!(bridge.latest_root(), Some([0xCC; 32]));
-        assert_eq!(bridge.proven_transitions.len(), 2);
-
-        // VK digest should be deterministic
-        let digest1 = bridge.vk_digest();
-        let digest2 = bridge.vk_digest();
-        assert_eq!(digest1, digest2);
-        assert_ne!(digest1, [0u8; 32]);
-    }
-
-    /// Test that an invalid Mina address is rejected by MinaZkAppBridge.
-    #[test]
-    fn test_zkapp_bridge_invalid_address() {
-        let result = MinaZkAppBridge::new("bad-address".to_string(), vec![]);
-        assert!(matches!(
-            result,
-            Err(BridgeError::InvalidMinaAddress { .. })
-        ));
-    }
-
-    /// Test transaction preparation requires a Pickles proof.
-    #[test]
-    fn test_zkapp_transaction_requires_proof() {
-        let mina_addr = "B62qrPN5Y5yq8kGE3FbVKbGTdTAJNdtNtS5vH1e3jX5uFtkKXb7x3zX";
-        let bridge = MinaZkAppBridge::new(mina_addr.to_string(), vec![0x01]).unwrap();
-        let state = MinaBridgeState::new([0xAA; 32]);
-
-        // Advance without Pickles proof should fail
-        let advance = StateAdvance {
-            old_root: [0xAA; 32],
-            new_root: [0xBB; 32],
-            height: 1,
-            stark_proof: vec![0x01, 0x02],
-            pickles_proof: None,
-            submitted_at: None,
-        };
-
-        let result = bridge.prepare_advance_transaction(&state, &advance);
-        assert!(matches!(result, Err(BridgeError::PicklesWrapFailed { .. })));
-
-        // With a Pickles proof it should succeed
-        let advance_with_proof = StateAdvance {
-            old_root: [0xAA; 32],
-            new_root: [0xBB; 32],
-            height: 1,
-            stark_proof: vec![0x01, 0x02],
-            pickles_proof: Some(vec![0xDE, 0xAD]),
-            submitted_at: None,
-        };
-
-        let tx = bridge
-            .prepare_advance_transaction(&state, &advance_with_proof)
-            .unwrap();
-        assert_eq!(tx.zkapp_address, mina_addr);
-        assert_eq!(tx.old_state_root, [0xAA; 32]);
-        assert_eq!(tx.new_state_root, [0xBB; 32]);
-        assert_eq!(tx.height, 1);
-        assert_eq!(tx.proof_bytes, vec![0xDE, 0xAD]);
-    }
-
-    /// Test empty proof rejection in wrap_stark_for_mina_recursive.
-    #[test]
-    fn test_recursive_wrap_empty_proof_rejected() {
-        let result = wrap_stark_for_mina_recursive(&[], &[1, 2, 3]);
-        assert!(matches!(result, Err(BridgeError::InvalidStarkProof { .. })));
-    }
-
-    /// Test that invalid serialized proofs are properly rejected.
-    #[test]
-    fn test_recursive_wrap_invalid_bytes_rejected() {
-        let garbage = vec![0xFF, 0xFE, 0xFD, 0xFC, 0xFB];
-        let result = wrap_stark_for_mina_recursive(&garbage, &[1, 2, 3]);
-        assert!(
-            matches!(result, Err(BridgeError::InvalidStarkProof { .. })),
-            "Garbage bytes should fail deserialization: {:?}",
-            result
-        );
-    }
-
-    /// Test that verify_mina_wrapped_proof rejects Phase 1 proofs.
-    #[test]
-    fn test_verify_rejects_phase1_proofs() {
-        // Create a Phase 1 proof
-        let mock_stark_proof = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let phase1 = wrap_stark_for_mina(&mock_stark_proof, &[1, 2, 3]).unwrap();
-
-        let result = verify_mina_wrapped_proof(&phase1, &[0u8; 32]);
-        assert!(
-            matches!(result, Err(BridgeError::Internal { .. })),
-            "Phase 1 proofs should not be verifiable via verify_mina_wrapped_proof"
-        );
     }
 }

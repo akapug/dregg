@@ -419,25 +419,31 @@ fn descriptor_prover_enabled() -> bool {
 /// The graduated descriptor selector for ONE effect, or `None` if the effect's selector
 /// has not graduated the differential harness (DEEPER divergence / no descriptor).
 ///
-/// The graduated set (17 selectors, `enumerate_all_descriptor_divergences` AGREE):
+/// The graduated set (23 selectors, `enumerate_all_descriptor_divergences` AGREE):
 /// `Transfer` (1), the full-economic effects `NoteSpend` (4) / `NoteCreate` (5) /
-/// `BridgeMint` (40) / `Burn` (46), the observation-log `EmitEvent` (25), and the
+/// `BridgeMint` (40) / `Burn` (46), the observation-log `EmitEvent` (25), the
 /// frozen-frame + nonce-tick effects `SetPermissions` (26), `SetVerificationKey` (27),
 /// `RefreshDelegation` (29), `RevokeDelegation` (30), `ExerciseViaCapability` (34),
 /// `Introduce` (35), `PipelinedSend` (36), `CellDestroy` (47), `CellSeal` (49),
-/// `Refusal` (52), `IncrementNonce` (53). Their off-trace semantics (cap-table moves,
-/// lifecycle/audit/VK writes, the event log) are bound OFF-row by each Lean module's
-/// proven connector.
+/// `Refusal` (52), `IncrementNonce` (53), the lifecycle/birth family `CreateCell` (31) /
+/// `SpawnWithDelegation` (32) / `CreateCellFromFactory` (13) (the wire descriptor is the
+/// ACTING cell's frozen-frame+tick row; the born-empty CHILD faces stay verified in
+/// their Lean modules as named off-row stories), `ReceiptArchive` (51) (frozen-frame +
+/// tick; the lifecycle write is off-row), `MakeSovereign` (12) (frame-freeze +
+/// RESERVED +256 mode-bit + tick), and `CellUnseal` (50) (frozen-frame + tick, the
+/// cellSeal row shape; the Sealed→Live flip is off-row). Their off-trace semantics
+/// (cap-table moves, lifecycle/audit/VK writes, the event log, the born-empty child)
+/// are bound OFF-row by each Lean module's proven connector.
 ///
 /// NOT graduated (the automatic hand-AIR fallback, each a named census entry):
-/// the lifecycle/birth family `CreateCell` (31) / `SpawnWithDelegation` (32) /
-/// `CreateCellFromFactory` (13) (descriptor pins the BORN-EMPTY CHILD; the runtime row
-/// is the ACTING cell's passthrough — a layer decision), the on-trace SET/ZERO pair
-/// `ReceiptArchive` (51) / `MakeSovereign` (12), the cap-reshape family
-/// `GrantCapability` (3) / `AttenuateCapability` (48) (the descriptor DSL lacks the
-/// Merkle-membership + lattice-table constraint kinds of cap Phase B), and the
-/// no-descriptor selectors `SetField` (2) / `Custom` (8) / `RevokeCapability` (24) /
-/// `CellUnseal` (50).
+/// the cap-reshape family `GrantCapability` (3) / `AttenuateCapability` (48) (the
+/// descriptor DSL lacks the Merkle-membership + lattice-table constraint kinds of cap
+/// Phase B — reserved for the cap-crown lanes), and the no-descriptor selectors
+/// `SetField` (2) (the Lean module emits a PER-SLOT family `setFieldVmDescriptor
+/// (slot : Fin 8)` but the runtime row selects the slot DYNAMICALLY via the
+/// Lagrange-basis index gate — no single registry descriptor until that gate is
+/// emitted) / `Custom` (8) (needs an accumulator/recursive proof-binding constraint
+/// kind) / `RevokeCapability` (24) (cap-root advance, mid-reshape).
 fn selector_for_effect(effect: &VmEffectKind) -> Option<usize> {
     match effect {
         VmEffectKind::Transfer { .. } => Some(sel::TRANSFER),
@@ -457,6 +463,12 @@ fn selector_for_effect(effect: &VmEffectKind) -> Option<usize> {
         VmEffectKind::RefreshDelegation => Some(sel::REFRESH_DELEGATION),
         VmEffectKind::RevokeDelegation { .. } => Some(sel::REVOKE_DELEGATION),
         VmEffectKind::Introduce { .. } => Some(sel::INTRODUCE),
+        VmEffectKind::CreateCell { .. } => Some(sel::CREATE_CELL),
+        VmEffectKind::SpawnWithDelegation { .. } => Some(sel::SPAWN_WITH_DELEGATION),
+        VmEffectKind::CreateCellFromFactory { .. } => Some(sel::CREATE_CELL_FROM_FACTORY),
+        VmEffectKind::ReceiptArchive { .. } => Some(sel::RECEIPT_ARCHIVE),
+        VmEffectKind::MakeSovereign => Some(sel::MAKE_SOVEREIGN),
+        VmEffectKind::CellUnseal { .. } => Some(sel::CELL_UNSEAL),
         _ => None,
     }
 }
@@ -475,16 +487,21 @@ fn selector_for_effect(effect: &VmEffectKind) -> Option<usize> {
 /// semantics, exactly what the cutover must never do.
 const MULTI_EFFECT_READY_SELECTORS: &[usize] = &[
     sel::TRANSFER,
+    sel::CREATE_CELL_FROM_FACTORY,
     sel::SET_PERMISSIONS,
     sel::SET_VERIFICATION_KEY,
     sel::REFRESH_DELEGATION,
     sel::REVOKE_DELEGATION,
+    sel::CREATE_CELL,
+    sel::SPAWN_WITH_DELEGATION,
     sel::EXERCISE_VIA_CAPABILITY,
     sel::INTRODUCE,
     sel::PIPELINED_SEND,
     sel::BRIDGE_MINT,
     sel::CELL_DESTROY,
     sel::CELL_SEAL,
+    sel::CELL_UNSEAL,
+    sel::RECEIPT_ARCHIVE,
     sel::REFUSAL,
     sel::INCREMENT_NONCE,
 ];
@@ -606,6 +623,12 @@ const CUTOVER_READY_SELECTORS: &[usize] = &[
     sel::REFRESH_DELEGATION,
     sel::REVOKE_DELEGATION,
     sel::INTRODUCE,
+    sel::MAKE_SOVEREIGN,
+    sel::CREATE_CELL_FROM_FACTORY,
+    sel::CREATE_CELL,
+    sel::SPAWN_WITH_DELEGATION,
+    sel::RECEIPT_ARCHIVE,
+    sel::CELL_UNSEAL,
 ];
 
 /// Prove the Effect-VM state transition: by DEFAULT through the Lean descriptor

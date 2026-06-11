@@ -52,13 +52,11 @@
 //!
 //! **Path A — aggregator AIR.** The implementation already exists at
 //! `circuit/src/bilateral_aggregation_air.rs` (the outer AIR) and
-//! `turn/src/aggregate_bilateral_prover.rs` (the prover + verifier). Path B
-//! (Pickles recursion) is the long-term composition target but lives in a
-//! crate (`circuit/src/backends/stark_in_pickles.rs`) that does not today
-//! enforce a *conservation* metadata field on the wrapper — so until
-//! `compose_wrapped_starks` learns to bind `sum-of-PIs = 0` the only honest
-//! "this is enforced cryptographically" path is the aggregation AIR. The
-//! existing prover's AIR-level replay (`replay_aggregation_air` in
+//! `turn/src/aggregate_bilateral_prover.rs` (the prover + verifier). The
+//! long-term composition target is the Plonky3 recursion stack
+//! (`plonky3_recursion_impl.rs` / `ivc_turn_chain.rs`); the former Pickles
+//! path was removed with the kimchi/pickles backends. The existing prover's
+//! AIR-level replay (`replay_aggregation_air` in
 //! `aggregate_bilateral_prover.rs`) IS the cryptographic constraint that
 //! makes the binding load-bearing.
 //!

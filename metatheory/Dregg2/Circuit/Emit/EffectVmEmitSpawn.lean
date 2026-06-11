@@ -54,6 +54,7 @@ the NAMED hypothesis `Poseidon2SpongeCR hash`; the cap-table digest ONLY as `Fun
 `sorry`, no `:= True`, no `native_decide`, no `rfl`-posing-as-bridge. Imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
+import Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Spec.accountgrowth
 
@@ -454,5 +455,101 @@ theorem spawnBadBalRow_rejected : ¬ (VmConstraint.gate gBalLoZero).holdsVm spaw
 #assert_axioms unify_spawn_via_exec
 #assert_axioms spawnGoodRow_realizes_intent
 #assert_axioms spawnBadBalRow_rejected
+
+/-! ## §RT — the RUNTIME-RECONCILED cutover descriptor (v3): the ACTING cell's passthrough + nonce-TICK
+row (GRADUATED into the descriptor cutover).
+
+THE RUNTIME GROUND TRUTH. The running prover runs `spawn_with_delegation` (selector 32) as a member of
+the **Stage-3 passthrough batch** (`effect_vm/trace.rs`: the arm parks `spawn_hash[0]` into `params[0]`
+and does `new_state.nonce += 1`). Every economic state-block column of the ACTING (parent) cell is
+FROZEN; the global nonce gate TICKS the nonce by 1. The CHILD cell's born-empty + cap-handoff block —
+the §1–§9 descriptor above (`spawnVmDescriptor`, the v2-QUINT CHILD face) — is OFF-ROW content for THIS
+row: the child reset + `spawnCapsMap` handoff is the executor's guarantee (`spawnA_full_sound`, the §
+connectors), bound through `effects_hash`, NOT a column move on the parent's row. The pre-v3 cutover
+registered the CHILD-face descriptor against selector 32, which the runtime hand-AIR row (the PARENT's
+row) cannot satisfy — the documented lifecycle/birth divergence. This v3 emits the runtime actor row
+directly: the validated frozen-frame + nonce-tick template (`revokeRowGates`, proven faithful in
+`EffectVmEmitRevokeDelegation`) + the spawn selector binding. Both faces stay verified; the WIRE
+descriptor is the actor row. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
+  (revokeRowGates RevokeRowIntent revokeVm_faithful intent_to_cellSpec RevokeCellSpec
+   RowEncodesRevoke gBalLoFreeze goodRevokeRow goodRevokeRow_realizes_intent
+   badRevokeRow badRevokeRow_rejected)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer
+  (eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass gFieldPassAll
+   boundaryLastPins boundaryLast_pins)
+
+/-- The `spawn_with_delegation` selector column index (runtime `sel::SPAWN_WITH_DELEGATION = 32`). -/
+def SEL_SPAWN_RT : Nat := 32
+
+/-- The v3 (runtime-reconciled) `spawn` AIR identity. -/
+def spawnActorVmAirName : String := "dregg-effectvm-spawnA-v3-actorrow"
+
+/-- **`spawnActorVmDescriptor`** — the `spawn_with_delegation` ACTOR-row circuit, RECONCILED onto the
+runtime hand-AIR: the shared frozen-frame + nonce-TICK gates ++ transition continuity ++ the 7 boundary
+PI pins ++ the selector-binding gate, with the 4 ordered GROUP-4 hash sites and the 2 balance-limb
+range checks. Body structurally identical to the validated `revokeDelegation-v2` template; only the
+name and the selector gate differ. The born-empty CHILD face stays `spawnVmDescriptor` (§2). -/
+def spawnActorVmDescriptor : EffectVmDescriptor :=
+  { name := spawnActorVmAirName
+  , traceWidth := EFFECT_VM_WIDTH
+  , piCount := 34
+  , constraints := revokeRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                     ++ selectorGates SEL_SPAWN_RT
+  , hashSites := transferHashSites
+  , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
+
+/-- **Faithfulness (inherited from the shared template).** The actor row's per-row gates hold IFF the
+frozen-frame + nonce-tick intent holds. Non-vacuity rides with the template (`goodRevokeRow` /
+`badRevokeRow`). -/
+theorem spawnActor_faithful (env : VmRowEnv) :
+    (∀ c ∈ revokeRowGates, c.holdsVm env false false) ↔ RevokeRowIntent env :=
+  revokeVm_faithful env
+
+/-- **`spawnActor_full_sound`** — the v3 descriptor's row soundness: a satisfying row, decoded, pins
+the full per-cell frozen-frame + nonce-tick post-state AND publishes its commit as `NEW_COMMIT`. -/
+theorem spawnActor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
+    (henc : RowEncodesRevoke env pre post)
+    (hsat : satisfiedVm hash spawnActorVmDescriptor env true true) :
+    RevokeCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+  obtain ⟨hcs, _⟩ := hsat
+  have hgates' : ∀ c ∈ revokeRowGates, c.holdsVm env false false := by
+    intro c hc
+    have hmem : c ∈ spawnActorVmDescriptor.constraints := by
+      unfold spawnActorVmDescriptor
+      simp only [List.mem_append]
+      exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
+    have := hcs c hmem
+    unfold Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation.revokeRowGates gFieldPassAll at hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
+      List.mem_range] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+      simpa only [VmConstraint.holdsVm] using this
+  have hint := (revokeVm_faithful env).mp hgates'
+  refine ⟨intent_to_cellSpec env pre post hnoop henc hint, ?_⟩
+  have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
+    intro c hc
+    have hmem : c ∈ spawnActorVmDescriptor.constraints := by
+      unfold spawnActorVmDescriptor
+      simp only [List.mem_append]
+      exact Or.inl (Or.inr hc)
+    have hh := hcs c hmem
+    unfold boundaryLastPins at hc
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+    rcases hc with rfl | rfl | rfl <;>
+      · simp only [VmConstraint.holdsVm] at hh ⊢
+        exact hh
+  have hpin := (boundaryLast_pins env hlast).1
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
+  rw [← hsaC]; exact hpin
+
+#guard spawnActorVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
+#guard spawnActorVmDescriptor.hashSites.length == 4
+#guard spawnActorVmDescriptor.traceWidth == 186
+
+#assert_axioms spawnActor_faithful
+#assert_axioms spawnActor_full_sound
 
 end Dregg2.Circuit.Emit.EffectVmEmitSpawn
