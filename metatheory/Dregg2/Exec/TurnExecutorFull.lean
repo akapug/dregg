@@ -65,6 +65,7 @@ import Dregg2.Exec.AuthTurn
 import Dregg2.Exec.Generators
 import Dregg2.CatalogEffects
 import Dregg2.Exec.EffectsState
+import Dregg2.Substrate.HeapKernel
 
 namespace Dregg2.Exec.TurnExecutorFull
 
@@ -2151,6 +2152,19 @@ inductive FullActionA where
   from spawn (INITIAL snapshot) and revokeDelegation (CLEAR). Fail-closed on the self-authority gate AND the
   child having a parent (`delegate child ≠ 0`). Routes to `refreshDelegationChainA`. bal-NEUTRAL. -/
   | refreshDelegationA (actor child : CellId)
+  -- §MA-heap: THE HEAP's `write`-verb face (REFINEMENT-DESIGN Decision 1, THE ROTATION's wire arm).
+  /-- `HeapWrite { target, collection, key, value }` — the sorted-map insert-or-update of the cell's
+  openable heap (`Substrate.HeapKernel`). The WIRE carries the computed digests (the cap `slot_hash`
+  discipline): `addr = H[coll, key]` (the sorted address, recomputed in-row by the descriptor
+  gadget's address hash-site and verified cell-side) and `newRoot` (the executor-computed
+  sorted-Poseidon2 post-root, PINNED into the `heap_root` register; the gadget's
+  membership-open / leaf-update / sorted-insert gates verify `old_root → new_root` against the same
+  leaf list — cap Phase-A staging). Routes to the spliced caveat-gated wire-face step
+  `Substrate.HeapKernel.heapStepGuardedW` (authority + membership + lifecycle + per-slot caveats on
+  `heap_root`, fail-closed); the parametric model semantics is `heapStepGuarded`
+  (`heapStepGuardedW_honest`). bal-NEUTRAL (`heapStepW_conserves`: the per-asset ledger is
+  literally untouched). -/
+  | heapWriteA (actor target : CellId) (addr v newRoot : ℤ)
 
 /-- **The per-asset COMBINED ledger delta of a `FullActionA`, indexed by asset `b`** — the move of the
 COMBINED measure `recTotalAsset` (= `bal`-ledger + per-asset holding-store). W1 (DREGG3 §2.2): this
@@ -2205,6 +2219,9 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .cellUnsealA _ _,              _ => 0
   | .cellDestroyA _ _ _,           _ => 0
   | .refreshDelegationA _ _,       _ => 0
+  -- §MA-heap: the heap write edits `heaps` + the `heap_root` register, NEVER `bal` ⇒ `0`
+  -- (`heapStepW_conserves`: bal/accounts are the SAME functions — untouched, not cancelled).
+  | .heapWriteA _ _ _ _ _,         _ => 0
 
 mutual
 /-- **W1 KEYSTONE: the disclosed delta family vanishes IDENTICALLY.** Every `FullActionA`'s
@@ -2244,6 +2261,7 @@ theorem ledgerDeltaAsset_eq_zero : ∀ (fa : FullActionA) (b : AssetId), ledgerD
   | .cellUnsealA _ _,     _ => by simp only [ledgerDeltaAsset]
   | .cellDestroyA _ _ _,  _ => by simp only [ledgerDeltaAsset]
   | .refreshDelegationA _ _, _ => by simp only [ledgerDeltaAsset]
+  | .heapWriteA _ _ _ _ _, _ => by simp only [ledgerDeltaAsset]
 
 /-- The inner-fold delta of an `exerciseA` vanishes too (mutual with the per-action vanishing —
 each summand is a structural subterm). -/
@@ -2294,6 +2312,7 @@ def requiredFacetA : FullActionA → Authority.Auth
   | .cellSealA _ _           => Authority.Auth.write
   | .cellUnsealA _ _         => Authority.Auth.write
   | .cellDestroyA _ _ _      => Authority.Auth.write
+  | .heapWriteA _ _ _ _ _    => Authority.Auth.write
   -- authority-conferring effects ⇒ grant (they mint/move CAPABILITY, not cell state)
   | .delegate _ _ _          => Authority.Auth.grant
   | .revoke _ _              => Authority.Auth.grant
@@ -2396,6 +2415,10 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   | .cellUnsealA actor cell        => cellUnsealChainA s actor cell
   | .cellDestroyA actor cell ch    => cellDestroyChainA s actor cell ch
   | .refreshDelegationA actor child => refreshDelegationChainA s actor child
+  -- §MA-heap: the wire-face guarded heap write (THE ROTATION's dispatch arm — the staged
+  -- `execHeapWriteG` gate semantics ride in via the standard `gateOK` front the forest applies).
+  | .heapWriteA actor target addr v newRoot =>
+      Substrate.HeapKernel.heapStepGuardedW s actor target addr v newRoot
 
 /-- **The inner-effect fold an `exerciseA` recurses through** (dregg1 `apply.rs:2647`: the `for
 inner_effect in inner_effects` loop applying each against the cap's target). Folds `execFullA`
@@ -2631,6 +2654,13 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       rw [show recTotalAsset s'.kernel b = recTotalAsset s.kernel b from
             refreshDelegationChainA_balNeutral h b]
       simp only [recTotalAsset]; ring
+  | heapWriteA actor target addr v newRoot =>
+      -- §MA-heap: the wire-face heap write is a guarded `heap_root` write + a `heaps` splice; the
+      -- per-asset measure reads neither (`heapStepW_conserves`: `bal`/`accounts` untouched).
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      obtain ⟨s₁, hw, rfl⟩ := Substrate.HeapKernel.heapStepGuardedW_factors h
+      show recTotalAsset s₁.kernel b = recTotalAsset s.kernel b + 0
+      rw [stateStepGuarded_recTotalAsset hw b]; ring
 
 /-- **`execInnerA_ledger_per_asset` — the inner-fold conservation an `exerciseA` reads.** A
 committed `execInnerA` (the inner-effect fold an exercise recurses through) moves the COMBINED per-asset
@@ -2811,6 +2841,9 @@ def fullReceiptA (s : RecChainedState) : FullActionA → Turn
   | .cellUnsealA actor cell          => { actor := actor, src := cell, dst := cell, amt := 0 }
   | .cellDestroyA actor cell _       => { actor := actor, src := cell, dst := cell, amt := 0 }
   | .refreshDelegationA actor child  => { actor := actor, src := child, dst := child, amt := 0 }
+  -- §MA-heap: the heap write appends the same balance-`0` self-`Turn` clock row every guarded
+  -- field write appends (it IS a `stateStepGuarded` write of the `heap_root` register + a splice).
+  | .heapWriteA actor target _ _ _   => { actor := actor, src := target, dst := target, amt := 0 }
 
 /-- **`execFullA_chainlinkExact` (the one-row chainlink for every NON-recursive kind).** A
 committed NON-exercise `FullActionA` extends the receipt chain by EXACTLY its
@@ -2943,6 +2976,11 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
   | refreshDelegationA actor child =>
       simp only [execFullA, fullReceiptA] at h ⊢
       obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; rfl
+  | heapWriteA actor target addr v newRoot =>
+      -- §MA-heap: the splice keeps the log; the underlying guarded write appends the clock row.
+      simp only [execFullA, fullReceiptA] at h ⊢
+      obtain ⟨s₁, hw, rfl⟩ := Substrate.HeapKernel.heapStepGuardedW_factors h
+      obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq hw); subst hs'; rfl
 
 mutual
 /-- **`execFullA_log_suffix` / `execInnerA_log_suffix` (the append-only audit chain).** A
@@ -3703,7 +3741,13 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
        effectLinearity .cellDestroy = LinearityClass.Terminal
    | .refreshDelegationA actor child =>
        stateAuthB s.kernel.caps actor child = true ∧
-       effectLinearity .refreshDelegation = LinearityClass.Neutral)
+       effectLinearity .refreshDelegation = LinearityClass.Neutral
+   -- §MA-heap: the heap write carries its REAL authority gate (`stateAuthB` over the target — the
+   -- `write` verb's gate, fired through `stateStepGuarded` on the `heap_root` register). No legacy
+   -- dregg1 `EffectTag` coloring exists for it (it is a dregg3-native `write`-verb instance); its
+   -- balance-neutrality is already the Ledger conjunct (`ledgerDeltaAsset = 0`, exact).
+   | .heapWriteA actor target _ _ _ =>
+       stateAuthB s.kernel.caps actor target = true)
 
 /-- **`execFullA_attests_per_asset` — THE PER-ASSET OP-SET IS STEP-COMPLETE BY CONSTRUCTION
 .** Every committed `FullActionA` attests its full `StepInv` content: the per-asset ledger
@@ -3800,6 +3844,10 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   | cellUnsealA actor cell => exact ⟨execFullA_cellUnsealA_authorized s s' actor cell h, rfl⟩
   | cellDestroyA actor cell ch => exact ⟨execFullA_cellDestroyA_authorized s s' actor cell ch h, rfl⟩
   | refreshDelegationA actor child => exact ⟨execFullA_refreshDelegationA_authorized s s' actor child h, rfl⟩
+  -- §MA-heap: discharge the heap write's REAL authority gate off the wire-face keystone.
+  | heapWriteA actor target addr v newRoot =>
+      exact Substrate.HeapKernel.heapStepW_authorized
+        (by simpa only [execFullA] using h)
 
 /-- **`execFullTurnA_each_attests`.** Step-completeness holds at EVERY action of a committed
 per-asset transaction, across all kinds: the per-node `fullActionInvA` witness threaded along the

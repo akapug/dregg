@@ -768,6 +768,15 @@ fn constraint_dissect(
             terms.iter().skip(1).map(|(_, s)| *s).collect(),
         ),
         SC::Reachable { from_index, .. } => ("reachable", Some(*from_index), vec![]),
+        // Sender/balance atoms (the language-uplift actor/context layer).
+        // `SenderIs` binds the literal sender pubkey (no slot — the pk lives
+        // in the program body, like `SenderAuthorized`'s set); `SenderInSlot`
+        // reads the controller identity out of `new[index]`. The balance
+        // atoms read the sealed `CellState::balance`, which is not a slot.
+        SC::SenderIs { .. } => ("sender_is", None, vec![]),
+        SC::SenderInSlot { index } => ("sender_in_slot", Some(*index), vec![]),
+        SC::BalanceGte { .. } => ("balance_gte", None, vec![]),
+        SC::BalanceLte { .. } => ("balance_lte", None, vec![]),
         SC::AllOf { .. } => ("all_of", None, vec![]),
     }
 }

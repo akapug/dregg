@@ -142,7 +142,10 @@ mod zk_plonky3 {
             log_blowup: 3,
             log_final_poly_len: 0,
             max_log_arity: 3,
-            num_queries: 50,
+            // q = 38 (THE ROTATION's ride-along, matching `create_config`):
+            // 38 * 3 + 16 PoW ~= 130 bits conjectured -- the declared 128-bit
+            // capacity-bound target. See plonky3_prover.rs::create_config.
+            num_queries: 38,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 16,
             mmcs: challenge_mmcs,

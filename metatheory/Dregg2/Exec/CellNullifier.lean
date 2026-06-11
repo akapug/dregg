@@ -249,6 +249,12 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
   | refreshDelegationA actor child =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; exact List.Subset.refl _
+  | heapWriteA actor target addr v newRoot =>
+      -- §MA-heap: the guarded `heap_root` write + `heaps` splice never touches `nullifiers`.
+      simp only [execFullA] at h
+      obtain ⟨s₁, hw, hs'⟩ := Dregg2.Substrate.HeapKernel.heapStepGuardedW_factors h
+      obtain ⟨-, hs₁⟩ := stateStep_factors (stateStepGuarded_eq hw)
+      subst hs'; subst hs₁; exact List.Subset.refl _
   -- pipelinedSend edits NOTHING (kernel literally unchanged).
   | pipelinedSendA actor =>
       simp only [execFullA, Option.some.injEq] at h; subst h; exact List.Subset.refl _

@@ -392,6 +392,13 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
   | refreshDelegationA actor child =>
       obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors (by simpa only [execFullA] using h)
       exact CapsConfined.of_caps_eq (by rw [hs']) hpre
+  | heapWriteA actor target addr v newRoot =>
+      -- §MA-heap: the guarded `heap_root` write + `heaps` splice never touches `caps`.
+      obtain ⟨s₁, hw, hs'⟩ := Dregg2.Substrate.HeapKernel.heapStepGuardedW_factors
+        (by simpa only [execFullA] using h)
+      obtain ⟨-, hs₁⟩ := stateStep_factors (stateStepGuarded_eq hw)
+      subst hs'; subst hs₁
+      exact CapsConfined.of_caps_eq rfl hpre
 
 /-- **`execInnerA_confine`** — the inner-effect fold an `exerciseA` recurses through preserves
 confinement under the SAME `control ∈ U` ceiling (+ the Wave-3 `grant`/`reply`/box hypotheses for the

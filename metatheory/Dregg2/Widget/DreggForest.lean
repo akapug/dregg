@@ -116,6 +116,7 @@ def ctorName : FullActionA → String
   | .cellUnsealA _ _           => "cellUnsealA"
   | .cellDestroyA _ _ _        => "cellDestroyA"
   | .refreshDelegationA _ _    => "refreshDelegationA"
+  | .heapWriteA _ _ _ _ _      => "heapWriteA"
 
 /-- **`ctorSummary a`** — the constructor name PLUS its real argument vector (for the representative arms
 the demo forests exercise: balance/mint/burn/the authority + state ops). Spliced from the value's actual

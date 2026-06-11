@@ -26,7 +26,7 @@
 //!   * the recursive ACTION-TREE node (`auth,caveats,action,children`) + delegation EDGEs;
 //!   * the 10-variant `Authorization` sum (`sig/pf/bread/bearer/unchecked/captp/custom/
 //!     oneof/stealth/token`);
-//!   * all 29 `FullActionA` arms via `WireAction` (byte-exact with `encodeActionW`);
+//!   * all 30 `FullActionA` arms via `WireAction` (byte-exact with `encodeActionW`);
 //!   * dregg1 `GrantCapability` / `RevokeCapability` map to `Delegate` / `Revoke` on the wire;
 //!   * dregg1 `BiscuitIssuer` / `CellScopedMacaroon` map to `Token` / `Custom` via
 //!     `auth_biscuit_issuer` / `auth_cell_macaroon`.
@@ -368,7 +368,8 @@ pub struct WireCaveat {
 }
 
 // ===================================================================
-// ACTION — the 29-arm `FullActionA` (FFI.lean encodeActionW, post verb-lockstep). Every arm is
+// ACTION — the 30-arm `FullActionA` (FFI.lean encodeActionW, post verb-lockstep + THE ROTATION's
+// heapWriteA). Every arm is
 // representable via `WireAction`. Each `id/asset/idx/...` is a Nat; each
 // `amt/value/amount/stake/deposit/v/perms/vk/topic/data` is SIGNED.
 // ===================================================================
@@ -500,6 +501,18 @@ pub enum WireAction {
     RefreshDelegation { actor: u64, child: u64 },
     /// {"psend":[actor]}
     PipelinedSend { actor: u64 },
+    /// {"hwrite":[actor,target,addr,value,newRoot]} — THE ROTATION's heap write
+    /// (`FullActionA.heapWriteA`). `addr`/`value`/`new_root` are SIGNED felts: `addr = H[coll,key]`
+    /// (the sorted heap address under the cap `slot_hash` discipline), `value` the written felt, and
+    /// `new_root` the executor-computed openable sorted-Poseidon2 post-root pinned into the
+    /// `heap_root` register (the descriptor gadget's address/leaf/advance sites verify it).
+    HeapWrite {
+        actor: u64,
+        target: u64,
+        addr: i128,
+        value: i128,
+        new_root: i128,
+    },
 }
 
 // ===================================================================
@@ -929,7 +942,7 @@ fn encode_caveats(cs: &[WireCaveat], out: &mut String) {
     out.push(']');
 }
 
-// ---- WireAction (FFI.lean encodeActionW), all 29 arms ----
+// ---- WireAction (FFI.lean encodeActionW), all 30 arms ----
 
 /// Encode a `Nat` list as the `NATSW` array `[N(,N)*]` (or `[]`) — FFI.lean:1658.
 fn encode_nats_w(ns: &[u64], out: &mut String) {
@@ -1245,6 +1258,25 @@ fn encode_action(a: &WireAction, out: &mut String) {
             push_nat(out, *actor);
             out.push_str("]}");
         }
+        WireAction::HeapWrite {
+            actor,
+            target,
+            addr,
+            value,
+            new_root,
+        } => {
+            out.push_str("{\"hwrite\":[");
+            push_nat(out, *actor);
+            out.push(',');
+            push_nat(out, *target);
+            out.push(',');
+            push_int(out, *addr);
+            out.push(',');
+            push_int(out, *value);
+            out.push(',');
+            push_int(out, *new_root);
+            out.push_str("]}");
+        }
     }
 }
 
@@ -1475,7 +1507,7 @@ fn encode_cell_nats(entries: &[(u64, u64)], out: &mut String) {
     out.push(']');
 }
 
-/// ONE representative per Lean `allActions` arm — the 29-arm demo set.
+/// ONE representative per Lean `allActions` arm — the 30-arm demo set.
 pub fn all_action_arms_demo() -> Vec<WireAction> {
     vec![
         WireAction::Balance {
@@ -1624,6 +1656,13 @@ pub fn all_action_arms_demo() -> Vec<WireAction> {
             child: 157,
         },
         WireAction::PipelinedSend { actor: 177 },
+        WireAction::HeapWrite {
+            actor: 178,
+            target: 179,
+            addr: -180,
+            value: 181,
+            new_root: -182,
+        },
     ]
 }
 
