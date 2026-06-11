@@ -1,7 +1,9 @@
 /**
  * Frame-embedding (site side) smoke test.
  *
- * Starbridge is the IDE host. Opening an app from the Apps surface renders an
+ * The Starbridge WORKBENCH (the inspector IDE, /starbridge/workbench.html) is
+ * the embed host this test pins; the shell at /starbridge/ mounts the same app
+ * pages as places. Opening an app from the Apps surface renders an
  * <iframe class="sb__app-frame"> whose src is the app page with ?embedded=1.
  * The SITE-side contract this test pins:
  *
@@ -52,7 +54,7 @@ async function run() {
   });
 
   // ─── Boot the host ─────────────────────────────────────────────────────────
-  await page.goto(`${BASE}/starbridge/`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${BASE}/starbridge/workbench.html`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.dreggUi, { timeout: 20000 });
   // Parent must expose the runtime handle apps reach for.
   await page.waitForFunction(() => !!window.__starbridge?.runtime, { timeout: 20000 });
