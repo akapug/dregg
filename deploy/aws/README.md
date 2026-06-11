@@ -19,6 +19,17 @@ Internet
   └── GitHub Actions nodes ──► devnet.dregg.fg-goose.online:9420 (QUIC gossip)
 ```
 
+### 3-node federation (n=3, live)
+
+The instance can run the full 3-member federation (gateway = validator
+node-0 plus two internal-only nodes on ports 8421/9421 and 8422/9422):
+template unit `dregg-node@.service`, gateway drop-in
+`dregg-gateway-federation.conf`, on-instance keygen `federation-keygen.sh`,
+env templates `node-{2,3}.env.example`. Bring-up order, verification gates,
+and the partition drill: **`deploy/aws/N3-RUNBOOK.md`**. Caddy keeps routing
+exclusively to node 1 (`localhost:8420`); nodes 2/3 are never proxied and
+their ports stay out of the security group.
+
 Only `/api/*`-prefixed node routes (plus `/ws`, `/status`, `/federation/*`,
 `/checkpoint/*`, `/pir/*`, `/queues/*`, `/cipherclerk`) traverse the gateway.
 The node exposes `/api/` aliases for the public app surface (turn submit, the
