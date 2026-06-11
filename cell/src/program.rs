@@ -2567,6 +2567,661 @@ pub fn field_from_u64_be(val: u64) -> FieldElement {
 }
 
 // ============================================================================
+// Live-view projection (StateConstraintView) — the self-describing surface
+// ============================================================================
+//
+// A live cell must be able to SHOW its own program. The node's cell endpoint
+// (`node/src/api.rs` `get_cell_detail`) and the wasm runtime's
+// `get_cell_state` both project `CellProgram` through these view types so JS
+// inspectors (e.g. the Studio polis inspector) can switch on `kind` without
+// decoding postcard bytes.
+//
+// TOTAL BY CONSTRUCTION: the `to_view` matches carry no wildcard arm, so
+// adding a `StateConstraint` / `SimpleStateConstraint` / `TransitionGuard`
+// variant without a view projection is a COMPILE ERROR — the live-view seam
+// cannot silently reopen. (`tests::view_projection_is_total_and_kind_tagged`
+// additionally pins the serialized `kind` tag per variant.)
+//
+// Wire shape: `{ "kind": "<VariantName>", ...semantic payload }`. Field
+// names and hex encodings are wire-compatible with the original wasm-only
+// views; 32-byte values are lowercase 64-hex strings; u64-lane scalars
+// (`MemberOf` sets, `Reachable` edges, affine coefficients…) are plain JSON
+// numbers.
+
+fn view_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Top-level view of a cell's program.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind")]
+pub enum CellProgramView {
+    /// No program — any authorized state change is valid.
+    None,
+    /// Predicate program: a list of slot-caveat constraints (implicit AND).
+    Predicate {
+        constraints: Vec<StateConstraintView>,
+    },
+    /// Cases program: operation-scoped cases with guards.
+    Cases { cases: Vec<TransitionCaseView> },
+    /// Circuit program: an AIR/R1CS circuit identified by its VK hash.
+    Circuit { circuit_hash: String },
+}
+
+/// Per-case view in a Cases program.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TransitionCaseView {
+    pub guard: TransitionGuardView,
+    pub constraints: Vec<StateConstraintView>,
+}
+
+/// [`TransitionGuard`] view.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind")]
+pub enum TransitionGuardView {
+    Always,
+    MethodIs { method: String },
+    EffectKindIs { mask: u32 },
+    SlotChanged { index: u8 },
+    AnyOf { children: Vec<TransitionGuardView> },
+    AllOf { children: Vec<TransitionGuardView> },
+}
+
+/// Per-variant view for each [`StateConstraint`] (plus `Not`, which only
+/// occurs inside `AnyOf`/`AllOf` via [`SimpleStateConstraint`]). Uses a
+/// tagged-union shape so JS can switch on `kind`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind")]
+pub enum StateConstraintView {
+    FieldEquals {
+        index: u8,
+        value: String,
+    },
+    FieldGte {
+        index: u8,
+        value: String,
+    },
+    FieldLte {
+        index: u8,
+        value: String,
+    },
+    FieldLteField {
+        left_index: u8,
+        right_index: u8,
+    },
+    /// `new[index] <= new[other] + delta` (signed; u64 lane).
+    FieldLteOther {
+        index: u8,
+        other: u8,
+        delta: i64,
+    },
+    SumEquals {
+        indices: Vec<u8>,
+        value: String,
+    },
+    WriteOnce {
+        index: u8,
+    },
+    Immutable {
+        index: u8,
+    },
+    Monotonic {
+        index: u8,
+    },
+    StrictMonotonic {
+        index: u8,
+    },
+    BoundedBy {
+        index: u8,
+        witness_index: u8,
+    },
+    FieldDelta {
+        index: u8,
+        delta: String,
+    },
+    FieldDeltaInRange {
+        index: u8,
+        min_delta: String,
+        max_delta: String,
+    },
+    FieldGteHeight {
+        index: u8,
+        offset: i64,
+    },
+    FieldLteHeight {
+        index: u8,
+        offset: i64,
+    },
+    SumEqualsAcross {
+        input_fields: Vec<u8>,
+        output_fields: Vec<u8>,
+    },
+    SenderAuthorized {
+        set_kind: String,
+        commitment: String,
+    },
+    CapabilityUniqueness {
+        cap_set_root_slot: u8,
+    },
+    RateLimit {
+        max_per_epoch: u32,
+        epoch_duration: u64,
+    },
+    RateLimitBySum {
+        slot_index: u8,
+        max_sum_per_epoch: u64,
+        epoch_duration: u64,
+    },
+    TemporalGate {
+        not_before: Option<u64>,
+        not_after: Option<u64>,
+    },
+    PreimageGate {
+        commitment_index: u8,
+        hash_kind: String,
+    },
+    MonotonicSequence {
+        seq_index: u8,
+    },
+    AllowedTransitions {
+        slot_index: u8,
+        /// Allowed `(old_value, new_value)` pairs, each 64-hex.
+        allowed: Vec<(String, String)>,
+    },
+    TemporalPredicate {
+        witness_index: u8,
+        dsl_hash: String,
+    },
+    BoundDelta {
+        local_slot: u8,
+        peer_cell: String,
+        peer_slot: u8,
+        delta_relation: String,
+    },
+    AnyOf {
+        variants: Vec<StateConstraintView>,
+    },
+    Witnessed {
+        predicate_kind: String,
+        commitment: String,
+        input_ref: String,
+        proof_witness_index: usize,
+    },
+    Renounced {
+        set_kind: String,
+        commitment: String,
+    },
+    /// `new[index]` must be one of `set` (u64 lane).
+    MemberOf {
+        index: u8,
+        set: Vec<u64>,
+    },
+    /// The scalar path read from `seg_indices` must start with `prefix`.
+    PrefixOf {
+        seg_indices: Vec<u8>,
+        prefix: Vec<u64>,
+    },
+    /// `lo <= new[index] <= hi` (u64 lane).
+    InRangeTwoSided {
+        index: u8,
+        lo: u64,
+        hi: u64,
+    },
+    /// `|new[index] - old[index]| <= d` (u64 lane).
+    DeltaBounded {
+        index: u8,
+        d: u64,
+    },
+    /// `Σ kᵢ·new[slotᵢ] <= c` — `terms` are `(coefficient, slot)` pairs.
+    AffineLe {
+        terms: Vec<(i64, u8)>,
+        c: i64,
+    },
+    /// `Σ kᵢ·new[slotᵢ] = c` — `terms` are `(coefficient, slot)` pairs.
+    AffineEq {
+        terms: Vec<(i64, u8)>,
+        c: i64,
+    },
+    /// Label at `new[from_index]` must reach `to_label` through `edges`
+    /// (`(dominator, dominated)` pairs, reflexive-transitive closure).
+    Reachable {
+        from_index: u8,
+        to_label: u64,
+        edges: Vec<(u64, u64)>,
+    },
+    AllOf {
+        variants: Vec<StateConstraintView>,
+    },
+    /// Negation (inside `AnyOf`/`AllOf` only): accept iff `inner` rejects.
+    Not {
+        inner: Box<StateConstraintView>,
+    },
+    Custom {
+        ir_hash: String,
+        descriptor_debug: String,
+    },
+}
+
+impl CellProgram {
+    /// Project this program to its serving view. Total over all variants.
+    pub fn to_view(&self) -> CellProgramView {
+        match self {
+            CellProgram::None => CellProgramView::None,
+            CellProgram::Predicate(constraints) => CellProgramView::Predicate {
+                constraints: constraints.iter().map(StateConstraint::to_view).collect(),
+            },
+            CellProgram::Cases(cases) => CellProgramView::Cases {
+                cases: cases.iter().map(TransitionCase::to_view).collect(),
+            },
+            CellProgram::Circuit { circuit_hash } => CellProgramView::Circuit {
+                circuit_hash: view_hex(circuit_hash),
+            },
+        }
+    }
+}
+
+impl TransitionCase {
+    /// Project this case to its serving view.
+    pub fn to_view(&self) -> TransitionCaseView {
+        TransitionCaseView {
+            guard: self.guard.to_view(),
+            constraints: self
+                .constraints
+                .iter()
+                .map(StateConstraint::to_view)
+                .collect(),
+        }
+    }
+}
+
+impl TransitionGuard {
+    /// Project this guard to its serving view. Total over all variants.
+    pub fn to_view(&self) -> TransitionGuardView {
+        match self {
+            TransitionGuard::Always => TransitionGuardView::Always,
+            TransitionGuard::MethodIs { method } => TransitionGuardView::MethodIs {
+                method: view_hex(method),
+            },
+            TransitionGuard::EffectKindIs { mask } => {
+                TransitionGuardView::EffectKindIs { mask: *mask }
+            }
+            TransitionGuard::SlotChanged { index } => {
+                TransitionGuardView::SlotChanged { index: *index }
+            }
+            TransitionGuard::AnyOf(children) => TransitionGuardView::AnyOf {
+                children: children.iter().map(TransitionGuard::to_view).collect(),
+            },
+            TransitionGuard::AllOf(children) => TransitionGuardView::AllOf {
+                children: children.iter().map(TransitionGuard::to_view).collect(),
+            },
+        }
+    }
+}
+
+fn authorized_set_view(set: &AuthorizedSet) -> (String, String) {
+    match set {
+        AuthorizedSet::PublicRoot { set_root_index } => (
+            format!("PublicRoot(slot={set_root_index})"),
+            "from_slot".to_string(),
+        ),
+        AuthorizedSet::BlindedSet { commitment } => {
+            ("BlindedSet".to_string(), view_hex(commitment))
+        }
+        AuthorizedSet::CredentialSet {
+            issuer_cell,
+            credential_schema_id,
+        } => (
+            "CredentialSet".to_string(),
+            format!(
+                "issuer={} schema={}",
+                &view_hex(issuer_cell)[..8],
+                &view_hex(credential_schema_id)[..8]
+            ),
+        ),
+    }
+}
+
+fn renounced_set_view(set: &RenouncedSet) -> (String, String) {
+    match set {
+        RenouncedSet::PublicRoot { set_root_index } => (
+            format!("PublicRoot(slot={set_root_index})"),
+            "from_slot".to_string(),
+        ),
+        RenouncedSet::BlindedSet { commitment } => {
+            ("BlindedSet".to_string(), view_hex(commitment))
+        }
+    }
+}
+
+fn witnessed_predicate_kind_view(kind: &crate::predicate::WitnessedPredicateKind) -> String {
+    use crate::predicate::WitnessedPredicateKind;
+    match kind {
+        WitnessedPredicateKind::Dfa => "Dfa".to_string(),
+        WitnessedPredicateKind::Temporal => "Temporal".to_string(),
+        WitnessedPredicateKind::MerkleMembership => "MerkleMembership".to_string(),
+        WitnessedPredicateKind::NonMembership => "NonMembership".to_string(),
+        WitnessedPredicateKind::BlindedSet => "BlindedSet".to_string(),
+        WitnessedPredicateKind::BridgePredicate => "BridgePredicate".to_string(),
+        WitnessedPredicateKind::PedersenEquality => "PedersenEquality".to_string(),
+        WitnessedPredicateKind::Custom { vk_hash } => {
+            format!("Custom({})", &view_hex(vk_hash)[..8])
+        }
+    }
+}
+
+fn input_ref_view(ir: &crate::predicate::InputRef) -> String {
+    use crate::predicate::InputRef;
+    match ir {
+        InputRef::Slot { index } => format!("Slot({index})"),
+        InputRef::Witness { index } => format!("Witness({index})"),
+        InputRef::PublicInput { pi_index } => format!("PublicInput({pi_index})"),
+        InputRef::Sender => "Sender".to_string(),
+        InputRef::SigningMessage => "SigningMessage".to_string(),
+    }
+}
+
+impl StateConstraint {
+    /// Project this constraint to its serving view, carrying the full
+    /// semantic payload. TOTAL: no wildcard arm — adding a variant without
+    /// a projection breaks the build.
+    pub fn to_view(&self) -> StateConstraintView {
+        match self {
+            StateConstraint::FieldEquals { index, value } => StateConstraintView::FieldEquals {
+                index: *index,
+                value: view_hex(value),
+            },
+            StateConstraint::FieldGte { index, value } => StateConstraintView::FieldGte {
+                index: *index,
+                value: view_hex(value),
+            },
+            StateConstraint::FieldLte { index, value } => StateConstraintView::FieldLte {
+                index: *index,
+                value: view_hex(value),
+            },
+            StateConstraint::FieldLteField {
+                left_index,
+                right_index,
+            } => StateConstraintView::FieldLteField {
+                left_index: *left_index,
+                right_index: *right_index,
+            },
+            StateConstraint::FieldLteOther {
+                index,
+                other,
+                delta,
+            } => StateConstraintView::FieldLteOther {
+                index: *index,
+                other: *other,
+                delta: *delta,
+            },
+            StateConstraint::SumEquals { indices, value } => StateConstraintView::SumEquals {
+                indices: indices.clone(),
+                value: view_hex(value),
+            },
+            StateConstraint::WriteOnce { index } => {
+                StateConstraintView::WriteOnce { index: *index }
+            }
+            StateConstraint::Immutable { index } => {
+                StateConstraintView::Immutable { index: *index }
+            }
+            StateConstraint::Monotonic { index } => {
+                StateConstraintView::Monotonic { index: *index }
+            }
+            StateConstraint::StrictMonotonic { index } => {
+                StateConstraintView::StrictMonotonic { index: *index }
+            }
+            StateConstraint::BoundedBy {
+                index,
+                witness_index,
+            } => StateConstraintView::BoundedBy {
+                index: *index,
+                witness_index: *witness_index,
+            },
+            StateConstraint::FieldDelta { index, delta } => StateConstraintView::FieldDelta {
+                index: *index,
+                delta: view_hex(delta),
+            },
+            StateConstraint::FieldDeltaInRange {
+                index,
+                min_delta,
+                max_delta,
+            } => StateConstraintView::FieldDeltaInRange {
+                index: *index,
+                min_delta: view_hex(min_delta),
+                max_delta: view_hex(max_delta),
+            },
+            StateConstraint::FieldGteHeight { index, offset } => {
+                StateConstraintView::FieldGteHeight {
+                    index: *index,
+                    offset: *offset,
+                }
+            }
+            StateConstraint::FieldLteHeight { index, offset } => {
+                StateConstraintView::FieldLteHeight {
+                    index: *index,
+                    offset: *offset,
+                }
+            }
+            StateConstraint::SumEqualsAcross {
+                input_fields,
+                output_fields,
+            } => StateConstraintView::SumEqualsAcross {
+                input_fields: input_fields.clone(),
+                output_fields: output_fields.clone(),
+            },
+            StateConstraint::SenderAuthorized { set } => {
+                let (set_kind, commitment) = authorized_set_view(set);
+                StateConstraintView::SenderAuthorized {
+                    set_kind,
+                    commitment,
+                }
+            }
+            StateConstraint::CapabilityUniqueness { cap_set_root_slot } => {
+                StateConstraintView::CapabilityUniqueness {
+                    cap_set_root_slot: *cap_set_root_slot,
+                }
+            }
+            StateConstraint::RateLimit {
+                max_per_epoch,
+                epoch_duration,
+            } => StateConstraintView::RateLimit {
+                max_per_epoch: *max_per_epoch,
+                epoch_duration: *epoch_duration,
+            },
+            StateConstraint::RateLimitBySum {
+                slot_index,
+                max_sum_per_epoch,
+                epoch_duration,
+            } => StateConstraintView::RateLimitBySum {
+                slot_index: *slot_index,
+                max_sum_per_epoch: *max_sum_per_epoch,
+                epoch_duration: *epoch_duration,
+            },
+            StateConstraint::TemporalGate {
+                not_before,
+                not_after,
+            } => StateConstraintView::TemporalGate {
+                not_before: *not_before,
+                not_after: *not_after,
+            },
+            StateConstraint::PreimageGate {
+                commitment_index,
+                hash_kind,
+            } => StateConstraintView::PreimageGate {
+                commitment_index: *commitment_index,
+                hash_kind: match hash_kind {
+                    HashKind::Poseidon2 => "Poseidon2".to_string(),
+                    HashKind::Blake3 => "Blake3".to_string(),
+                },
+            },
+            StateConstraint::MonotonicSequence { seq_index } => {
+                StateConstraintView::MonotonicSequence {
+                    seq_index: *seq_index,
+                }
+            }
+            StateConstraint::AllowedTransitions {
+                slot_index,
+                allowed,
+            } => StateConstraintView::AllowedTransitions {
+                slot_index: *slot_index,
+                allowed: allowed
+                    .iter()
+                    .map(|(old, new)| (view_hex(old), view_hex(new)))
+                    .collect(),
+            },
+            StateConstraint::TemporalPredicate {
+                witness_index,
+                dsl_hash,
+            } => StateConstraintView::TemporalPredicate {
+                witness_index: *witness_index,
+                dsl_hash: view_hex(dsl_hash),
+            },
+            StateConstraint::BoundDelta {
+                local_slot,
+                peer_cell,
+                peer_slot,
+                delta_relation,
+            } => StateConstraintView::BoundDelta {
+                local_slot: *local_slot,
+                peer_cell: view_hex(&peer_cell.0),
+                peer_slot: *peer_slot,
+                delta_relation: format!("{delta_relation:?}"),
+            },
+            StateConstraint::AnyOf { variants } => StateConstraintView::AnyOf {
+                variants: variants.iter().map(SimpleStateConstraint::to_view).collect(),
+            },
+            StateConstraint::Witnessed { wp } => StateConstraintView::Witnessed {
+                predicate_kind: witnessed_predicate_kind_view(&wp.kind),
+                commitment: view_hex(&wp.commitment),
+                input_ref: input_ref_view(&wp.input_ref),
+                proof_witness_index: wp.proof_witness_index,
+            },
+            StateConstraint::Renounced { set } => {
+                let (set_kind, commitment) = renounced_set_view(set);
+                StateConstraintView::Renounced {
+                    set_kind,
+                    commitment,
+                }
+            }
+            StateConstraint::MemberOf { index, set } => StateConstraintView::MemberOf {
+                index: *index,
+                set: set.clone(),
+            },
+            StateConstraint::PrefixOf {
+                seg_indices,
+                prefix,
+            } => StateConstraintView::PrefixOf {
+                seg_indices: seg_indices.clone(),
+                prefix: prefix.clone(),
+            },
+            StateConstraint::InRangeTwoSided { index, lo, hi } => {
+                StateConstraintView::InRangeTwoSided {
+                    index: *index,
+                    lo: *lo,
+                    hi: *hi,
+                }
+            }
+            StateConstraint::DeltaBounded { index, d } => StateConstraintView::DeltaBounded {
+                index: *index,
+                d: *d,
+            },
+            StateConstraint::AffineLe { terms, c } => StateConstraintView::AffineLe {
+                terms: terms.clone(),
+                c: *c,
+            },
+            StateConstraint::AffineEq { terms, c } => StateConstraintView::AffineEq {
+                terms: terms.clone(),
+                c: *c,
+            },
+            StateConstraint::Reachable {
+                from_index,
+                to_label,
+                edges,
+            } => StateConstraintView::Reachable {
+                from_index: *from_index,
+                to_label: *to_label,
+                edges: edges.clone(),
+            },
+            StateConstraint::AllOf { variants } => StateConstraintView::AllOf {
+                variants: variants.iter().map(SimpleStateConstraint::to_view).collect(),
+            },
+            StateConstraint::Custom {
+                ir_hash,
+                descriptor,
+                reads: _,
+            } => StateConstraintView::Custom {
+                ir_hash: view_hex(ir_hash),
+                descriptor_debug: format!("{descriptor:?}"),
+            },
+        }
+    }
+}
+
+impl SimpleStateConstraint {
+    /// Project this simple constraint (the `AnyOf`/`AllOf` element type) to
+    /// its serving view. TOTAL: no wildcard arm.
+    pub fn to_view(&self) -> StateConstraintView {
+        match self {
+            SimpleStateConstraint::FieldEquals { index, value } => {
+                StateConstraintView::FieldEquals {
+                    index: *index,
+                    value: view_hex(value),
+                }
+            }
+            SimpleStateConstraint::FieldGte { index, value } => StateConstraintView::FieldGte {
+                index: *index,
+                value: view_hex(value),
+            },
+            SimpleStateConstraint::FieldLte { index, value } => StateConstraintView::FieldLte {
+                index: *index,
+                value: view_hex(value),
+            },
+            SimpleStateConstraint::WriteOnce { index } => {
+                StateConstraintView::WriteOnce { index: *index }
+            }
+            SimpleStateConstraint::Immutable { index } => {
+                StateConstraintView::Immutable { index: *index }
+            }
+            SimpleStateConstraint::Monotonic { index } => {
+                StateConstraintView::Monotonic { index: *index }
+            }
+            SimpleStateConstraint::StrictMonotonic { index } => {
+                StateConstraintView::StrictMonotonic { index: *index }
+            }
+            SimpleStateConstraint::BoundedBy {
+                index,
+                witness_index,
+            } => StateConstraintView::BoundedBy {
+                index: *index,
+                witness_index: *witness_index,
+            },
+            SimpleStateConstraint::FieldGteHeight { index, offset } => {
+                StateConstraintView::FieldGteHeight {
+                    index: *index,
+                    offset: *offset,
+                }
+            }
+            SimpleStateConstraint::FieldLteHeight { index, offset } => {
+                StateConstraintView::FieldLteHeight {
+                    index: *index,
+                    offset: *offset,
+                }
+            }
+            SimpleStateConstraint::TemporalGate {
+                not_before,
+                not_after,
+            } => StateConstraintView::TemporalGate {
+                not_before: *not_before,
+                not_after: *not_after,
+            },
+            SimpleStateConstraint::Not(inner) => StateConstraintView::Not {
+                inner: Box::new(inner.to_view()),
+            },
+        }
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -3637,5 +4292,315 @@ mod tests {
         };
         p.evaluate_full(&s, None, None, &TransitionMeta::wildcard(), &bundle_ok)
             .expect("proof at witness_index+1 accepts via stub verifier");
+    }
+
+    /// VIEW-PROJECTION TOTALITY PIN — the live-view seam must never reopen.
+    ///
+    /// Constructs one instance of EVERY `StateConstraint` variant (and every
+    /// `SimpleStateConstraint` variant), projects each through `to_view`,
+    /// and pins the serialized `kind` tag. Two teeth:
+    ///
+    /// 1. The `to_view` match itself has no wildcard arm, so adding a
+    ///    variant without a projection is a COMPILE error.
+    /// 2. This test exhaustively matches over the same constructor list, so
+    ///    a projection that maps a variant to the WRONG kind tag (or drops
+    ///    its payload tag) fails here.
+    #[test]
+    fn view_projection_is_total_and_kind_tagged() {
+        use crate::predicate::{InputRef, WitnessedPredicate, WitnessedPredicateKind};
+
+        let fe = field_from_u64(7);
+        let all: Vec<(StateConstraint, &str)> = vec![
+            (StateConstraint::FieldEquals { index: 0, value: fe }, "FieldEquals"),
+            (StateConstraint::FieldGte { index: 0, value: fe }, "FieldGte"),
+            (StateConstraint::FieldLte { index: 0, value: fe }, "FieldLte"),
+            (
+                StateConstraint::FieldLteField { left_index: 0, right_index: 1 },
+                "FieldLteField",
+            ),
+            (
+                StateConstraint::FieldLteOther { index: 0, other: 1, delta: -3 },
+                "FieldLteOther",
+            ),
+            (
+                StateConstraint::SumEquals { indices: vec![0, 1], value: fe },
+                "SumEquals",
+            ),
+            (StateConstraint::WriteOnce { index: 1 }, "WriteOnce"),
+            (StateConstraint::Immutable { index: 1 }, "Immutable"),
+            (StateConstraint::Monotonic { index: 1 }, "Monotonic"),
+            (StateConstraint::StrictMonotonic { index: 1 }, "StrictMonotonic"),
+            (
+                StateConstraint::BoundedBy { index: 1, witness_index: 2 },
+                "BoundedBy",
+            ),
+            (StateConstraint::FieldDelta { index: 1, delta: fe }, "FieldDelta"),
+            (
+                StateConstraint::FieldDeltaInRange { index: 1, min_delta: fe, max_delta: fe },
+                "FieldDeltaInRange",
+            ),
+            (
+                StateConstraint::FieldGteHeight { index: 1, offset: 0 },
+                "FieldGteHeight",
+            ),
+            (
+                StateConstraint::FieldLteHeight { index: 1, offset: 0 },
+                "FieldLteHeight",
+            ),
+            (
+                StateConstraint::SumEqualsAcross {
+                    input_fields: vec![0],
+                    output_fields: vec![1],
+                },
+                "SumEqualsAcross",
+            ),
+            (
+                StateConstraint::SenderAuthorized {
+                    set: AuthorizedSet::BlindedSet { commitment: [9u8; 32] },
+                },
+                "SenderAuthorized",
+            ),
+            (
+                StateConstraint::CapabilityUniqueness { cap_set_root_slot: 3 },
+                "CapabilityUniqueness",
+            ),
+            (
+                StateConstraint::RateLimit { max_per_epoch: 4, epoch_duration: 100 },
+                "RateLimit",
+            ),
+            (
+                StateConstraint::RateLimitBySum {
+                    slot_index: 1,
+                    max_sum_per_epoch: 10,
+                    epoch_duration: 100,
+                },
+                "RateLimitBySum",
+            ),
+            (
+                StateConstraint::TemporalGate { not_before: Some(5), not_after: None },
+                "TemporalGate",
+            ),
+            (
+                StateConstraint::PreimageGate {
+                    commitment_index: 2,
+                    hash_kind: HashKind::Poseidon2,
+                },
+                "PreimageGate",
+            ),
+            (
+                StateConstraint::MonotonicSequence { seq_index: 0 },
+                "MonotonicSequence",
+            ),
+            (
+                StateConstraint::AllowedTransitions {
+                    slot_index: 0,
+                    allowed: vec![(field_from_u64(0), field_from_u64(1))],
+                },
+                "AllowedTransitions",
+            ),
+            (
+                StateConstraint::TemporalPredicate { witness_index: 0, dsl_hash: [1u8; 32] },
+                "TemporalPredicate",
+            ),
+            (
+                StateConstraint::BoundDelta {
+                    local_slot: 0,
+                    peer_cell: crate::id::CellId([2u8; 32]),
+                    peer_slot: 1,
+                    delta_relation: DeltaRelation::EqualAndOpposite,
+                },
+                "BoundDelta",
+            ),
+            (
+                StateConstraint::AnyOf {
+                    variants: vec![
+                        SimpleStateConstraint::Monotonic { index: 0 },
+                        SimpleStateConstraint::Not(Box::new(
+                            SimpleStateConstraint::FieldEquals { index: 0, value: fe },
+                        )),
+                    ],
+                },
+                "AnyOf",
+            ),
+            (
+                StateConstraint::Witnessed {
+                    wp: WitnessedPredicate {
+                        kind: WitnessedPredicateKind::Dfa,
+                        commitment: [3u8; 32],
+                        input_ref: InputRef::Sender,
+                        proof_witness_index: 0,
+                    },
+                },
+                "Witnessed",
+            ),
+            (
+                StateConstraint::Renounced {
+                    set: RenouncedSet::BlindedSet { commitment: [4u8; 32] },
+                },
+                "Renounced",
+            ),
+            (
+                StateConstraint::MemberOf { index: 0, set: vec![1, 2, 3] },
+                "MemberOf",
+            ),
+            (
+                StateConstraint::PrefixOf { seg_indices: vec![0, 1], prefix: vec![42] },
+                "PrefixOf",
+            ),
+            (
+                StateConstraint::InRangeTwoSided { index: 0, lo: 1, hi: 9 },
+                "InRangeTwoSided",
+            ),
+            (StateConstraint::DeltaBounded { index: 0, d: 5 }, "DeltaBounded"),
+            (
+                StateConstraint::AffineLe { terms: vec![(2, 2), (-1, 3)], c: 0 },
+                "AffineLe",
+            ),
+            (
+                StateConstraint::AffineEq { terms: vec![(1, 0), (1, 1)], c: 10 },
+                "AffineEq",
+            ),
+            (
+                StateConstraint::Reachable {
+                    from_index: 0,
+                    to_label: 9,
+                    edges: vec![(1, 9)],
+                },
+                "Reachable",
+            ),
+            (
+                StateConstraint::AllOf {
+                    variants: vec![SimpleStateConstraint::WriteOnce { index: 0 }],
+                },
+                "AllOf",
+            ),
+            (
+                StateConstraint::Custom {
+                    ir_hash: [5u8; 32],
+                    descriptor: CustomDescriptor::default(),
+                    reads: ReadSet::default(),
+                },
+                "Custom",
+            ),
+        ];
+
+        // COVERAGE TOOTH: this match must name every variant exactly once.
+        // Adding a `StateConstraint` variant forces an arm here AND a
+        // projection arm in `to_view` (both are non-wildcard matches).
+        for (sc, _) in &all {
+            match sc {
+                StateConstraint::FieldEquals { .. }
+                | StateConstraint::FieldGte { .. }
+                | StateConstraint::FieldLte { .. }
+                | StateConstraint::FieldLteField { .. }
+                | StateConstraint::FieldLteOther { .. }
+                | StateConstraint::SumEquals { .. }
+                | StateConstraint::WriteOnce { .. }
+                | StateConstraint::Immutable { .. }
+                | StateConstraint::Monotonic { .. }
+                | StateConstraint::StrictMonotonic { .. }
+                | StateConstraint::BoundedBy { .. }
+                | StateConstraint::FieldDelta { .. }
+                | StateConstraint::FieldDeltaInRange { .. }
+                | StateConstraint::FieldGteHeight { .. }
+                | StateConstraint::FieldLteHeight { .. }
+                | StateConstraint::SumEqualsAcross { .. }
+                | StateConstraint::SenderAuthorized { .. }
+                | StateConstraint::CapabilityUniqueness { .. }
+                | StateConstraint::RateLimit { .. }
+                | StateConstraint::RateLimitBySum { .. }
+                | StateConstraint::TemporalGate { .. }
+                | StateConstraint::PreimageGate { .. }
+                | StateConstraint::MonotonicSequence { .. }
+                | StateConstraint::AllowedTransitions { .. }
+                | StateConstraint::TemporalPredicate { .. }
+                | StateConstraint::BoundDelta { .. }
+                | StateConstraint::AnyOf { .. }
+                | StateConstraint::Witnessed { .. }
+                | StateConstraint::Renounced { .. }
+                | StateConstraint::MemberOf { .. }
+                | StateConstraint::PrefixOf { .. }
+                | StateConstraint::InRangeTwoSided { .. }
+                | StateConstraint::DeltaBounded { .. }
+                | StateConstraint::AffineLe { .. }
+                | StateConstraint::AffineEq { .. }
+                | StateConstraint::Reachable { .. }
+                | StateConstraint::AllOf { .. }
+                | StateConstraint::Custom { .. } => {}
+            }
+        }
+
+        for (sc, expected_kind) in &all {
+            let view = sc.to_view();
+            let json = serde_json::to_value(&view).expect("view serializes");
+            assert_eq!(
+                json.get("kind").and_then(|k| k.as_str()),
+                Some(*expected_kind),
+                "view kind tag for {sc:?}"
+            );
+        }
+
+        // Semantic-payload spot checks for the newly projected variants —
+        // a live council cell must self-describe its threshold M.
+        let affine = StateConstraint::AffineLe { terms: vec![(2, 2), (-1, 3), (-1, 4)], c: 0 };
+        let j = serde_json::to_value(affine.to_view()).unwrap();
+        assert_eq!(j["terms"][0][0], 2, "AffineLe view carries coefficients");
+        assert_eq!(j["terms"][0][1], 2, "AffineLe view carries slot indices");
+        assert_eq!(j["c"], 0, "AffineLe view carries the bound");
+
+        let member = StateConstraint::MemberOf { index: 6, set: vec![10, 20] };
+        let j = serde_json::to_value(member.to_view()).unwrap();
+        assert_eq!(j["set"], serde_json::json!([10, 20]), "MemberOf view carries the allowed set");
+
+        // SimpleStateConstraint totality (incl. the structural Not view).
+        let simples: Vec<(SimpleStateConstraint, &str)> = vec![
+            (SimpleStateConstraint::FieldEquals { index: 0, value: fe }, "FieldEquals"),
+            (SimpleStateConstraint::FieldGte { index: 0, value: fe }, "FieldGte"),
+            (SimpleStateConstraint::FieldLte { index: 0, value: fe }, "FieldLte"),
+            (SimpleStateConstraint::WriteOnce { index: 0 }, "WriteOnce"),
+            (SimpleStateConstraint::Immutable { index: 0 }, "Immutable"),
+            (SimpleStateConstraint::Monotonic { index: 0 }, "Monotonic"),
+            (SimpleStateConstraint::StrictMonotonic { index: 0 }, "StrictMonotonic"),
+            (SimpleStateConstraint::BoundedBy { index: 0, witness_index: 1 }, "BoundedBy"),
+            (SimpleStateConstraint::FieldGteHeight { index: 0, offset: 1 }, "FieldGteHeight"),
+            (SimpleStateConstraint::FieldLteHeight { index: 0, offset: 1 }, "FieldLteHeight"),
+            (
+                SimpleStateConstraint::TemporalGate { not_before: None, not_after: Some(9) },
+                "TemporalGate",
+            ),
+            (
+                SimpleStateConstraint::Not(Box::new(SimpleStateConstraint::WriteOnce { index: 0 })),
+                "Not",
+            ),
+        ];
+        for (sc, expected_kind) in &simples {
+            match sc {
+                SimpleStateConstraint::FieldEquals { .. }
+                | SimpleStateConstraint::FieldGte { .. }
+                | SimpleStateConstraint::FieldLte { .. }
+                | SimpleStateConstraint::WriteOnce { .. }
+                | SimpleStateConstraint::Immutable { .. }
+                | SimpleStateConstraint::Monotonic { .. }
+                | SimpleStateConstraint::StrictMonotonic { .. }
+                | SimpleStateConstraint::BoundedBy { .. }
+                | SimpleStateConstraint::FieldGteHeight { .. }
+                | SimpleStateConstraint::FieldLteHeight { .. }
+                | SimpleStateConstraint::TemporalGate { .. }
+                | SimpleStateConstraint::Not(_) => {}
+            }
+            let json = serde_json::to_value(sc.to_view()).expect("simple view serializes");
+            assert_eq!(
+                json.get("kind").and_then(|k| k.as_str()),
+                Some(*expected_kind),
+                "simple view kind tag for {sc:?}"
+            );
+        }
+        // Not carries its inner constraint structurally (not a debug hack).
+        let not = SimpleStateConstraint::Not(Box::new(SimpleStateConstraint::FieldEquals {
+            index: 0,
+            value: fe,
+        }));
+        let j = serde_json::to_value(not.to_view()).unwrap();
+        assert_eq!(j["inner"]["kind"], "FieldEquals", "Not view nests its inner view");
     }
 }
