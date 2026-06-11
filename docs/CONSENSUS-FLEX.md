@@ -358,18 +358,38 @@ function of the causal past) ⇒ same state.
 
 Same shape as `tauOrder_deterministic`; trivial-as-Lean, load-bearing as statement.
 
-**T5 — finalized-prefix monotonicity (wave; ALSO closes the §1.5 gap).**
+**T5 — finalized-prefix monotonicity (RESOLVED 2026-06-11 — with a SOUNDNESS
+FINDING; see `Dregg2/Consensus/TauPrefixMonotone.lean`).**
 
-> If `laceIds B ⊆ laceIds B'` (both canonical, content-agreeing), then
+> ~~If `laceIds B ⊆ laceIds B'` (both canonical, content-agreeing), then
 > `tauOrder B P w` is a prefix of `tauOrder B' P w` at the super-ratified-wave
-> granularity (a finalized wave's segment never changes as the lace grows).
+> granularity (a finalized wave's segment never changes as the lace grows).~~
 
-Currently *claimed* in the `BlocklaceFinality.lean:52` header and *relied on* by
-`executed_up_to` slicing (`blocklace_sync.rs:660-661`), but proved nowhere. Without
-it neither the existing node nor the fast path has no-rollback. The proof shape: a
-super-ratified leader stays super-ratified under lace growth (ratification counts
-are monotone in the block set), and `leaderCoverage` of earlier waves is closed
-(causal pasts don't grow for fixed blocks). Estimated: one focused wave.
+**REFUTED as stated.** The original proof sketch's second premise was wrong:
+`leaderCoverage` of an earlier wave is NOT closed under lace growth. Coverage is the
+union of causal pasts of the wave-END blocks that *ratify* the leader, and that SET of
+ratifiers grows: a wave-end block arriving late and ratifying an already-final leader
+grows the wave's coverage, and the new blocks `xsort` into the MIDDLE of the executed
+region. The machine-checked counterexample (`lagBase → lagGrown`, `#guard`-pinned) is
+fully HONEST: a 4-validator run where validator 4 lags one wave and catches up — every
+block passes the verified `insert` (signed, preds present, seq monotone, zero
+equivocation), yet `tauOrder` goes `[…,31,12,22,32]` → `[…,31,41,12,22,32,42]`. Node
+implication: with `executed_up_to = 10`, the next poll slices `[32, 42]` — block 32 is
+re-executed and block 41 (a finalized honest turn) falls behind the cursor FOREVER.
+The FinalityGate does not catch it (membership-, not position-, based).
+
+**What is proved instead** (`tau_finalized_prefix_monotone`): prefix monotonicity holds
+under `FinalizedRegionStable B B' P w` — (1) the final-leader sequence extends
+(`leaders_extend`) and (2) replaying the old leaders' segment fold in the grown lace
+reproduces it exactly (`fold_agrees`; pointwise sufficient condition
+`fold_agrees_of_pointwise`). The hypothesis has an executable mirror (`stableCheck`) —
+exactly the check `poll_finalized_blocks` is missing before advancing
+`executed_up_to`. Node-side closure lane: either (a) check `stableCheck`/diff the
+recomputed prefix against the executed prefix and STOP (alert) on instability, or
+(b) replace index slicing with executed-set tracking by block id (order-insensitive),
+or (c) enforce the wave-completeness discipline (only feed tau a lace pruned to
+completed waves). Until one lands, no-rollback is an UNDISCHARGED assumption of the
+deployed node — and T6's "eventually-tau-final" inherits the same caveat.
 
 **T6 — fast-final ⊆ eventually-tau-final (wave, after T5).**
 
@@ -594,8 +614,9 @@ deterrent", which is what makes T6's residual honest.
 ## 9. Staging and verdict ladder
 
 **Rides now (independent of everything):**
-* T5 prefix monotonicity — also discharges an existing header overclaim the live
-  node leans on. *(wave)*
+* T5 prefix monotonicity — DONE 2026-06-11 (`Dregg2/Consensus/TauPrefixMonotone.lean`):
+  conditional theorem + unconditional REFUTATION (honest-laggard counterexample); the
+  header overclaim is closed and a node-side gap (missing `stableCheck`) is opened. *(landed)*
 * T1/T4 + the NEG witness — landed in the feasibility note. *(afternoon, done)*
 * The conflict table (§2.2) → a `Conflict` column in the descriptor/verb registry
   (VerbRegistry is the anchor file for exactly this kind of reconciliation).
@@ -623,10 +644,13 @@ deterrent", which is what makes T6's residual honest.
 * §5 polis-owned membership (constitution cell + the feedback edge), after the
   DREGG3 §8 relational-guard closure.
 
-**The single highest-leverage next implementation step:** prove
-**T5 — `tauOrder` finalized-prefix monotonicity** in
-`Dregg2/Distributed/BlocklaceFinality.lean`. It is the one theorem that (a) the
-running node already silently assumes at `blocklace_sync.rs:660-661`, (b) the
-module header already claims at `BlocklaceFinality.lean:52` without a proof in the
-tree, and (c) every fast-path no-rollback statement (T6, hence the whole thesis)
-stands on. One wave, no wire changes, closes an honesty gap and opens the lane.
+**The single highest-leverage next implementation step** *(DONE 2026-06-11 — and it
+flipped)*: T5 is now `Dregg2/Consensus/TauPrefixMonotone.lean`. The proof attempt
+REFUTED the unconditional statement the node silently assumes at
+`blocklace_sync.rs:660-661` (honest-laggard coverage growth reorders the executed
+prefix: one block re-executed, one skipped forever) and proved the corrected
+conditional theorem (`tau_finalized_prefix_monotone` under `FinalizedRegionStable`,
+executable mirror `stableCheck`). The new highest-leverage step is NODE-SIDE: make
+`poll_finalized_blocks` sit inside the theorem (check `stableCheck` / track executed
+blocks by id / prune to completed waves) — until then T6 and every fast-path
+no-rollback statement inherit the caveat.

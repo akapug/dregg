@@ -22,8 +22,11 @@ and then SLICES `ordered[executed_up_to..]` and feeds those turns to `TurnExecut
 
 This module models THAT computed rule — `computeRounds` / `findAllFinalLeaders` / `tauOrder` as
 genuine **executable Lean functions over `Lace`** (not an abstract record) — proves a REAL safety
-property the node relies on (**no two conflicting final leaders per wave** + finalized-prefix
-**monotonicity** under lace growth at the committed prefix), CONNECTS it to the verified executor
+property the node relies on (**no two conflicting final leaders per wave**; for finalized-prefix
+monotonicity under lace growth see `Dregg2.Consensus.TauPrefixMonotone`, where it is proved
+CONDITIONAL — `tau_finalized_prefix_monotone` under `FinalizedRegionStable` — and REFUTED
+unconditionally by an honest-laggard counterexample the live node does NOT exclude), CONNECTS it
+to the verified executor
 (`Exec.ConsensusExec.executeFinalized`, the cell `execFullForestG` commits onto), and ships a
 **DIFFERENTIAL**: the computed Lean `tauOrder` and the Rust `ordering.rs::tau` AGREE on a concrete
 multi-node trace (the Lean model reproduces the exact order the node finalizes).
@@ -48,9 +51,14 @@ SIMPLIFIED (a faithful PROJECTION, stated, not hidden):
   the SAFETY theorem (no conflicting leader) does NOT depend on the tie-break, only on WHICH leaders
   anchor, exactly as `cordial_agreement` is about the anchor.
 
-The safety theorem proved here — `finalLeaders_one_per_wave` / `tauOrder_deterministic` /
-`finalized_prefix_monotone` — is a property the NODE relies on: a wave anchors at most one leader,
-the order is a deterministic function of (lace, participants), and finalization is append-only.
+The safety theorems proved here — `finalLeaders_one_per_wave` / `tauOrder_deterministic` — are
+properties the NODE relies on: a wave anchors at most one leader and the order is a deterministic
+function of (lace, participants). "Finalization is append-only" (T5, finalized-prefix
+monotonicity) is NOT unconditional for this rule: `Dregg2.Consensus.TauPrefixMonotone` proves it
+under `FinalizedRegionStable` (closed finalized region) and exhibits an HONEST counterexample —
+a lagging validator's late round-2/round-3 blocks grow an already-final wave's coverage and land
+MID-PREFIX — which the node's `executed_up_to` index slicing (`blocklace_sync.rs`) does not
+tolerate. See that module's header for the node-side implication.
 
 `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`.
 Verified with `lake build Dregg2.Distributed.BlocklaceFinality`.
@@ -245,18 +253,33 @@ def xsortBy (B : Lace) (ids : List BlockId) : List BlockId :=
   (ids.toArray.qsort (fun a b =>
     roundOf B a < roundOf B b || (roundOf B a == roundOf B b && a < b))).toList
 
+/-- **`leaderSegment B participants wavelength prevCovered l`** — the blocks a final leader `l`
+APPENDS to the order: its coverage minus the previously-covered set, minus equivocators visible
+from the leader, linearized by `xsortBy`. The per-leader segment of `ordering.rs::tau`'s loop
+body, hoisted so the prefix-monotonicity analysis (`Consensus.TauPrefixMonotone`) can speak
+about one wave's contribution. -/
+def leaderSegment (B : Lace) (participants : List AuthorId) (wavelength : Nat)
+    (prevCovered : List BlockId) (l : Block) : List BlockId :=
+  let coverage := leaderCoverage B participants l wavelength
+  let newBlocks := (coverage.filter (fun bid => ¬ prevCovered.contains bid)).filter
+    (fun bid => match B.lookup bid with
+      | some b => ¬ hasEquivInPast B l.id b.creator
+      | none   => false)
+  xsortBy B newBlocks
+
+/-- **`tauStep`** — one iteration of `ordering.rs::tau`'s leader loop: append the leader's
+segment to the order accumulated so far, and replace `prevCovered` with this leader's coverage
+(exactly the Rust `prev_covered = coverage`). Hoisted to the top level so the fold is a named
+object theorems can decompose. -/
+def tauStep (B : Lace) (participants : List AuthorId) (wavelength : Nat)
+    (acc : List BlockId × List BlockId) (l : Block) : List BlockId × List BlockId :=
+  (acc.1 ++ leaderSegment B participants wavelength acc.2 l,
+   leaderCoverage B participants l wavelength)
+
 /-- **`tauOrder B participants wavelength`** — the computed total order (`ordering.rs::tau`). -/
 def tauOrder (B : Lace) (participants : List AuthorId) (wavelength : Nat) : List BlockId :=
-  let leaders := findAllFinalLeaders B participants wavelength
-  let step : (List BlockId × List BlockId) → Block → (List BlockId × List BlockId) :=
-    fun (ordered, prevCovered) l =>
-      let coverage := leaderCoverage B participants l wavelength
-      let newBlocks := (coverage.filter (fun bid => ¬ prevCovered.contains bid)).filter
-        (fun bid => match B.lookup bid with
-          | some b => ¬ hasEquivInPast B l.id b.creator
-          | none   => false)
-      (ordered ++ xsortBy B newBlocks, coverage)
-  (leaders.foldl step ([], [])).1
+  ((findAllFinalLeaders B participants wavelength).foldl
+    (tauStep B participants wavelength) ([], [])).1
 
 /-! ## 7. THE SAFETY PROPERTY — no two conflicting final leaders per wave + determinism.
 
