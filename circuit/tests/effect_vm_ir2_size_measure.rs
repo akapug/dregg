@@ -1,0 +1,138 @@
+//! # THE EPOCH PAYOFF MEASUREMENT — does IR-v2 actually make the per-turn proof SMALLER?
+//!
+//! `docs/EPOCH-DESIGN.md` predicts that moving Poseidon2 out of row-width (the 4 hash-site aux
+//! blocks = 1,408 of the 1,654 extended columns, 85%) into a chip-table lookup shrinks the
+//! 451.7 KiB per-turn proof toward ~100-200 KiB. This test MEASURES that claim before the VK
+//! bump rides on it: the SAME real transfer effect (the validated reference of
+//! `effect_vm_ir2_validate.rs`) is proven through BOTH provers and the postcard-serialized
+//! wire sizes are compared.
+//!
+//!   * **v1** — the LIVE path: `lean_descriptor_air::prove_vm_descriptor` over the graduated
+//!     transfer descriptor (the single-table extended-row AIR; the wire `EffectVmP3Proof` the
+//!     SDK cutover emits today — `docs/PROOF-ECONOMICS.md` §1's 451.7 KiB baseline).
+//!   * **IR-v2** — `descriptor_ir2::prove_vm_descriptor2` over the graduated
+//!     `transferVmDescriptor2` (the five-table EPOCH batch STARK: main + poseidon2-chip +
+//!     range + memory + map-ops).
+//!
+//! Both proofs verify through their INDEPENDENT verifiers before being measured, so the sizes
+//! compared are sizes of REAL proofs. The test asserts nothing about WHICH is smaller — it is
+//! a measurement, and a negative result (multi-table overhead exceeding the inline-aux saving
+//! at this trace size) is exactly what it exists to surface. The numbers land in
+//! `docs/PROOF-ECONOMICS.md`.
+//!
+//! Gated on `recursion` (the feature that compiles `descriptor_ir2`). Run ONCE, release
+//! (debug prove times would be lies):
+//!   cargo test -p dregg-circuit --release --features recursion --test effect_vm_ir2_size_measure -- --nocapture
+
+#![cfg(feature = "recursion")]
+
+use std::time::Instant;
+
+use dregg_circuit::descriptor_ir2::{
+    MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2, verify_vm_descriptor2,
+};
+use dregg_circuit::effect_vm::{CellState, Effect, generate_effect_vm_trace, sel};
+use dregg_circuit::effect_vm_descriptors::{descriptor2_for_key, descriptor_for_selector};
+use dregg_circuit::field::BabyBear;
+use dregg_circuit::lean_descriptor_air::{
+    descriptor_recursion_matrix, parse_vm_descriptor, prove_vm_descriptor, verify_vm_descriptor,
+};
+
+fn kib(bytes: usize) -> f64 {
+    bytes as f64 / 1024.0
+}
+
+/// Postcard component breakdown shared by both wire proofs (`BatchProof<DreggStarkConfig>`).
+fn breakdown(
+    label: &str,
+    proof: &p3_batch_stark::BatchProof<dregg_circuit::plonky3_prover::DreggStarkConfig>,
+) -> usize {
+    let total = postcard::to_allocvec(proof).expect("postcard").len();
+    let commitments = postcard::to_allocvec(&proof.commitments).unwrap().len();
+    let opened = postcard::to_allocvec(&proof.opened_values).unwrap().len();
+    let opening = postcard::to_allocvec(&proof.opening_proof).unwrap().len();
+    let lookups = postcard::to_allocvec(&proof.global_lookup_data).unwrap().len();
+    println!(
+        "[{label}] total: {total} B ({:.1} KiB) | commitments: {commitments} B | \
+         opened_values: {opened} B ({:.1} KiB) | opening_proof: {opening} B ({:.1} KiB) | \
+         lookups: {lookups} B | degree_bits: {:?}",
+        kib(total),
+        kib(opened),
+        kib(opening),
+        proof.degree_bits,
+    );
+    total
+}
+
+/// THE MEASUREMENT: one real transfer, proven through the live v1 descriptor path AND the
+/// EPOCH IR-v2 multi-table path; wire sizes + prove/verify times reported side by side.
+#[test]
+fn ir2_vs_v1_transfer_proof_size() {
+    // The same real transfer witness both provers consume (the validated reference).
+    let state = CellState::new(100_000, 0);
+    let effects = vec![Effect::Transfer {
+        amount: 50,
+        direction: 1,
+    }];
+    let (base_trace, pis) = generate_effect_vm_trace(&state, &effects);
+    assert_eq!(base_trace[0].len(), 186, "canonical 186-col EffectVM layout");
+
+    // ---- v1: the LIVE single-table descriptor-interpreter path (the SDK cutover prover). ----
+    let v1_json = descriptor_for_selector(sel::TRANSFER).expect("v1 transfer descriptor");
+    let v1_desc = parse_vm_descriptor(v1_json).expect("v1 transfer descriptor parses");
+    let v1_dpis: Vec<BabyBear> = pis[..v1_desc.public_input_count].to_vec();
+    let extended_width = descriptor_recursion_matrix(&v1_desc, &base_trace)
+        .expect("v1 extended matrix")
+        .width;
+
+    let t0 = Instant::now();
+    let v1_proof =
+        prove_vm_descriptor(&v1_desc, &base_trace, &v1_dpis).expect("v1 transfer proves");
+    let v1_prove_ms = t0.elapsed().as_millis();
+    let t1 = Instant::now();
+    verify_vm_descriptor(&v1_desc, &v1_proof, &v1_dpis).expect("v1 transfer verifies");
+    let v1_verify_ms = t1.elapsed().as_micros() as f64 / 1000.0;
+
+    println!("== v1 (live single-table descriptor AIR; extended row = {extended_width} cols) ==");
+    let v1_bytes = breakdown("v1", &v1_proof);
+    println!("[v1] prove+selfverify: {v1_prove_ms} ms | verify: {v1_verify_ms:.1} ms");
+
+    // ---- IR-v2: the EPOCH five-table batch STARK. ----
+    let v2_json = descriptor2_for_key("transferVmDescriptor2").expect("v2 transfer descriptor");
+    let v2_desc = parse_vm_descriptor2(v2_json).expect("v2 transfer descriptor parses");
+    assert_eq!(v2_desc.trace_width, 186, "graduated transfer keeps the 186 base width");
+    assert_eq!(v2_desc.tables.len(), 5, "the five EPOCH tables");
+    let v2_dpis: Vec<BabyBear> = pis[..v2_desc.public_input_count].to_vec();
+    // Transfer declares no memory ops and no map ops → empty boundary + no witness heaps.
+    let mem_boundary = MemBoundaryWitness::default();
+    let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
+
+    let t2 = Instant::now();
+    let v2_proof = prove_vm_descriptor2(&v2_desc, &base_trace, &v2_dpis, &mem_boundary, &map_heaps)
+        .expect("IR-v2 transfer proves");
+    let v2_prove_ms = t2.elapsed().as_millis();
+    let t3 = Instant::now();
+    verify_vm_descriptor2(&v2_desc, &v2_proof, &v2_dpis).expect("IR-v2 transfer verifies");
+    let v2_verify_ms = t3.elapsed().as_micros() as f64 / 1000.0;
+
+    println!("== IR-v2 (EPOCH multi-table batch STARK: main + chip + range + memory + map-ops) ==");
+    let v2_bytes = breakdown("ir2", &v2_proof);
+    println!("[ir2] prove+selfverify: {v2_prove_ms} ms | verify: {v2_verify_ms:.1} ms");
+
+    // ---- The verdict line. ----
+    let delta = v1_bytes as i64 - v2_bytes as i64;
+    let ratio = v2_bytes as f64 / v1_bytes as f64;
+    println!("== VERDICT (same real transfer, both proofs independently verified) ==");
+    println!(
+        "v1: {v1_bytes} B ({:.1} KiB) | IR-v2: {v2_bytes} B ({:.1} KiB) | delta: {delta} B \
+         ({:.1} KiB) | IR-v2/v1 ratio: {ratio:.3} ({:+.1}%)",
+        kib(v1_bytes),
+        kib(v2_bytes),
+        kib(delta.unsigned_abs() as usize) * delta.signum() as f64,
+        (ratio - 1.0) * 100.0,
+    );
+    println!(
+        "prove: v1 {v1_prove_ms} ms vs IR-v2 {v2_prove_ms} ms | verify: v1 {v1_verify_ms:.1} ms \
+         vs IR-v2 {v2_verify_ms:.1} ms"
+    );
+}
