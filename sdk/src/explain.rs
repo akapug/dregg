@@ -626,9 +626,13 @@ mod tests {
             spending_proof: vec![1, 2, 3], // differs only in proof bytes
             value_commitment: None,
         }]));
-        actions.push(sample_action(vec![Effect::ReleaseEscrow {
-            escrow_id: [11u8; 32],
-            proof: Some(vec![9, 9, 9]), // differs only in elided proof
+        actions.push(sample_action(vec![Effect::NoteCreate {
+            commitment: NoteCommitment([6u8; 32]),
+            value: 10,
+            asset_type: 0,
+            encrypted_note: vec![9, 9, 9], // differs only in elided ciphertext
+            value_commitment: None,
+            range_proof: None,
         }]));
         // Same effects, different authorization mode (semantic).
         let mut alt_auth = sample_action(vec![Effect::IncrementNonce { cell: cid(1) }]);

@@ -8119,31 +8119,11 @@ mod tests {
     }
     
 
-    /// Signatures should bind to the federation_id: signing the same
-    /// queue allocation under two different federations must produce
-    /// distinct signature bytes. This is the "no cross-federation
-    /// replay" property of `compute_signing_message`.
-    #[test]
-    fn queue_signature_binds_to_federation_id() {
-        use dregg_turn::action::Authorization;
-        let cclerk = AgentCipherclerk::new();
-        let fed_a = [1u8; 32];
-        let fed_b = [2u8; 32];
-        let t_a = cclerk.allocate_queue(4, None, &fed_a).unwrap();
-        let t_b = cclerk.allocate_queue(4, None, &fed_b).unwrap();
-        let sig_a = match root_action(&t_a).authorization {
-            Authorization::Signature(a, b) => (a, b),
-            _ => panic!("expected Signature"),
-        };
-        let sig_b = match root_action(&t_b).authorization {
-            Authorization::Signature(a, b) => (a, b),
-            _ => panic!("expected Signature"),
-        };
-        assert_ne!(
-            sig_a, sig_b,
-            "queue signatures must bind to federation_id (got identical sigs across two feds)"
-        );
-    }
+    // (The queue-allocation signature tests died with the queue family in the
+    // verb lockstep. Their properties live on against surviving methods:
+    // cross-federation no-replay in
+    // `create_from_factory_signature_binds_to_federation_id`, verify-against-
+    // pubkey in `signature_verifies_against_cclerk_pubkey` below.)
 
     // -----------------------------------------------------------------
     // create_from_factory authorization tests.
@@ -8213,17 +8193,30 @@ mod tests {
     /// (not against some zero key or other party's key). This proves the
     /// signature was produced by `self.signing_key`, closing the
     /// "Unchecked → Signature shape but uses [0;64] key" attack.
+    /// (Originally pinned via the queue family; re-carried on the surviving
+    /// `create_from_factory` after the verb lockstep deleted the queue verbs.)
     #[test]
-    fn queue_signature_verifies_against_cclerk_pubkey() {
+    fn signature_verifies_against_cclerk_pubkey() {
         use dregg_turn::action::{Action, Authorization};
         use dregg_turn::executor::TurnExecutor;
         use ed25519_dalek::{Signature, VerifyingKey};
 
         let cclerk = AgentCipherclerk::new();
         let fed = [13u8; 32];
-        let turn = cclerk
-            .enqueue_message(cclerk.cell_id("q"), [0xEE; 32], 25, &fed)
-            .unwrap();
+        let turn = cclerk.create_from_factory(
+            cclerk.cell_id("q"),
+            [0xAA; 32],
+            [0xBB; 32],
+            [0xEE; 32],
+            dregg_cell::FactoryCreationParams {
+                owner_pubkey: [0xBB; 32],
+                mode: dregg_cell::CellMode::default(),
+                program_vk: None,
+                initial_fields: vec![],
+                initial_caps: vec![],
+            },
+            &fed,
+        );
         let action = root_action(&turn);
 
         // Recompute the canonical signing message (must match what
@@ -8247,7 +8240,7 @@ mod tests {
         let vk = VerifyingKey::from_bytes(&vk_bytes).expect("valid pubkey");
 
         vk.verify_strict(&msg, &sig)
-            .expect("queue signature must verify against cipherclerk pubkey");
+            .expect("clerk signature must verify against cipherclerk pubkey");
     }
 
     /// The clerk's anti-blind-signing seam, exercised end-to-end through the
