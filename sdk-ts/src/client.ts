@@ -1,0 +1,367 @@
+/**
+ * `NodeClient` (a node's HTTP surface) and `AgentRuntime` (an identity bound
+ * to a node — the holder of `.turn()`).
+ *
+ * The Rust `AgentRuntime` executes in-process; the TS runtime is a remote
+ * client over the node's signed-envelope ingress
+ * (`POST /api/turns/submit-signed`, postcard `SignedTurn`). The shape is the
+ * same: `Identity → .turn() → verbs → .sign() → .submit() → Receipt`.
+ */
+
+import { Identity } from "./identity";
+import { NodeEvents } from "./events";
+import { Receipt, TurnProof } from "./receipt";
+import { TurnBuilder } from "./turns";
+import { blake3 } from "./internal/blake3";
+import { hexDecodeExact, hexEncode } from "./internal/bytes";
+import type { Turn } from "./internal/wire";
+import { turnHash } from "./internal/wire";
+
+export interface NodeClientOptions {
+  /** Devnet gate key, sent as both `X-Devnet-Key` and `Authorization: Bearer`. */
+  devnetKey?: string;
+  /**
+   * Pin the executor federation id (32 bytes or hex). When unset, it is
+   * discovered: a configured federation's local id from `/api/federations`,
+   * else `blake3(node operator pubkey)` — exactly
+   * `node/src/executor_setup.rs::federation_id_for_executor`'s fallback for
+   * an unconfigured solo node (the devnet shape).
+   */
+  federationId?: Uint8Array | string;
+  /** Request timeout (ms). Default 15000. */
+  timeoutMs?: number;
+}
+
+/** `GET /api/node/identity`. */
+export interface NodeIdentity {
+  public_key: string;
+  agent_cell: string;
+  unlocked: boolean;
+  agent_balance: number | null;
+  agent_nonce: number | null;
+}
+
+/** `GET /api/cell/{id}` (subset). */
+export interface CellDetail {
+  id: string;
+  found: boolean;
+  balance: number;
+  nonce: number;
+  public_key: string;
+  fields: string[];
+  [extra: string]: unknown;
+}
+
+/** `POST /api/turns/submit-signed` response. */
+export interface SubmitSignedTurnResponse {
+  accepted?: boolean;
+  turn_hash?: string | null;
+  signer?: string | null;
+  action_count?: number;
+  proof_status?: string;
+  has_witness?: boolean;
+  witness_count?: number;
+  error?: string | null;
+}
+
+/** `GET /api/receipts` entries. */
+export interface ReceiptInfo {
+  chain_index: number;
+  chain_head: boolean;
+  receipt_hash: string;
+  turn_hash: string;
+  agent: string;
+  pre_state: string;
+  post_state: string;
+  timestamp: number;
+  computrons_used: number;
+  action_count: number;
+  previous_receipt_hash: string | null;
+  finality: string;
+  was_encrypted: boolean;
+  was_burn: boolean;
+  has_proof: boolean;
+}
+
+/** The node rejected a request / a turn. */
+export class NodeError extends Error {
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "NodeError";
+    this.status = status;
+  }
+}
+
+export class NodeClient {
+  readonly baseUrl: string;
+  private readonly opts: NodeClientOptions;
+  private cachedFederationId: Uint8Array | undefined;
+
+  constructor(baseUrl: string, opts: NodeClientOptions = {}) {
+    this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.opts = opts;
+    if (opts.federationId !== undefined) {
+      this.cachedFederationId =
+        typeof opts.federationId === "string"
+          ? hexDecodeExact(opts.federationId, 32)
+          : Uint8Array.from(opts.federationId);
+    }
+  }
+
+  private headers(extra: Record<string, string> = {}): Record<string, string> {
+    const h: Record<string, string> = { ...extra };
+    if (this.opts.devnetKey) {
+      h["X-Devnet-Key"] = this.opts.devnetKey;
+      h["Authorization"] = `Bearer ${this.opts.devnetKey}`;
+    }
+    return h;
+  }
+
+  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const url = this.baseUrl + path;
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(this.opts.timeoutMs ?? 15000),
+      ...init,
+      headers: this.headers((init.headers as Record<string, string>) ?? {}),
+    });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      throw new NodeError(`HTTP ${resp.status} from ${path}: ${body.slice(0, 300)}`, resp.status);
+    }
+    return (await resp.json()) as T;
+  }
+
+  /** `GET /api/node/identity` — the node operator's identity. */
+  nodeIdentity(): Promise<NodeIdentity> {
+    return this.request<NodeIdentity>("/api/node/identity");
+  }
+
+  /** The node operator's Ed25519 public key (hex). Falls back from
+   * `/api/node/identity` to `/status` for older node builds. */
+  async operatorPublicKeyHex(): Promise<string> {
+    try {
+      return (await this.nodeIdentity()).public_key;
+    } catch (e) {
+      if (e instanceof NodeError && e.status === 404) {
+        const status = await this.request<{ public_key: string }>("/status");
+        return status.public_key;
+      }
+      throw e;
+    }
+  }
+
+  /** `GET /api/cell/{id}` — live cell state (balance, nonce, slots). */
+  cell(cellId: Uint8Array | string): Promise<CellDetail> {
+    const hex = typeof cellId === "string" ? cellId : hexEncode(cellId);
+    return this.request<CellDetail>(`/api/cell/${hex}`);
+  }
+
+  /** `GET /api/receipts` — the node's recent committed receipts. */
+  receipts(): Promise<ReceiptInfo[]> {
+    return this.request<ReceiptInfo[]>("/api/receipts");
+  }
+
+  /**
+   * The node's receipt-chain head hash (32 bytes), or undefined on an empty
+   * chain. Submitted turns bind to this via `previous_receipt_hash` (causal
+   * ordering; the node verifies the claim against its live head).
+   */
+  async receiptChainHead(): Promise<Uint8Array | undefined> {
+    const infos = await this.receipts();
+    if (infos.length === 0) return undefined;
+    const head =
+      infos.find((r) => r.chain_head) ??
+      infos.reduce((a, b) => (a.chain_index >= b.chain_index ? a : b));
+    return hexDecodeExact(head.receipt_hash, 32);
+  }
+
+  /**
+   * The federation id the node's EXECUTOR verifies action signatures
+   * against. Explicit option wins; else discovered (see
+   * [`NodeClientOptions.federationId`]) and cached.
+   */
+  async federationId(): Promise<Uint8Array> {
+    if (this.cachedFederationId) return this.cachedFederationId;
+    // A configured federation: the local entry in /api/federations with a
+    // real committee. An unconfigured solo node (the devnet default) serves
+    // a placeholder there, while its executor binds blake3(operator pubkey).
+    try {
+      const feds = await this.request<Array<{ federation_id: string; is_local: boolean; committee_epoch: number; member_count: number }>>(
+        "/api/federations",
+      );
+      const local = feds.find((f) => f.is_local && f.member_count > 0 && f.committee_epoch > 0);
+      if (local) {
+        this.cachedFederationId = hexDecodeExact(local.federation_id, 32);
+        return this.cachedFederationId;
+      }
+    } catch {
+      // fall through to the solo-node derivation
+    }
+    const operatorPk = await this.operatorPublicKeyHex();
+    this.cachedFederationId = blake3(hexDecodeExact(operatorPk, 32));
+    return this.cachedFederationId;
+  }
+
+  /**
+   * `POST /api/faucet` — devnet: materialize a hosted cell (`amount: 0`)
+   * and/or claim computrons (max 10000 per request). Passing `publicKey`
+   * lets the node install a canonical hosted cell with a real owner key —
+   * REQUIRED before that cell can pass Ed25519 turn authorization.
+   */
+  async faucet(
+    recipient: Uint8Array | string,
+    amount: number,
+    publicKey?: Uint8Array | string,
+  ): Promise<{ success: boolean; turn_hash?: string | null; amount: number; error?: string | null }> {
+    const body: Record<string, unknown> = {
+      recipient: typeof recipient === "string" ? recipient : hexEncode(recipient),
+      amount,
+    };
+    if (publicKey !== undefined) {
+      body.public_key = typeof publicKey === "string" ? publicKey : hexEncode(publicKey);
+    }
+    return this.request("/api/faucet", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  /** Submit a postcard `SignedTurn` envelope (the signed-byte ingress). */
+  submitSignedEnvelope(envelope: Uint8Array): Promise<SubmitSignedTurnResponse> {
+    return this.request<SubmitSignedTurnResponse>("/api/turns/submit-signed", {
+      method: "POST",
+      body: envelope as unknown as BodyInit,
+      headers: { "Content-Type": "application/octet-stream" },
+    });
+  }
+
+  /**
+   * Find the committed receipt for `turnHashHex`, polling briefly — commits
+   * land synchronously but the receipt listing is a separate read.
+   */
+  async receiptForTurn(turnHashHex: string, attempts = 10, delayMs = 300): Promise<Receipt> {
+    const want = turnHashHex.toLowerCase();
+    for (let i = 0; i < attempts; i++) {
+      const infos = await this.receipts();
+      const hit = infos.find((r) => r.turn_hash.toLowerCase() === want);
+      if (hit) {
+        return new Receipt({
+          turnHash: hit.turn_hash,
+          receiptHash: hit.receipt_hash,
+          agent: hit.agent,
+          preStateHash: hit.pre_state,
+          postStateHash: hit.post_state,
+          timestamp: hit.timestamp,
+          computronsUsed: hit.computrons_used,
+          actionCount: hit.action_count,
+          previousReceiptHash: hit.previous_receipt_hash ?? undefined,
+          finality: hit.finality,
+          wasEncrypted: hit.was_encrypted,
+          wasBurn: hit.was_burn,
+          chainIndex: hit.chain_index,
+          hasProofHint: hit.has_proof,
+        });
+      }
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+    // The turn committed (the submit response said so); return the minimal noun.
+    return new Receipt({ turnHash: want });
+  }
+
+  /**
+   * Fetch the persisted full-turn STARK for a committed turn
+   * (`GET /api/turn/{hash}/proof`) — proofs land asynchronously from the
+   * node's prove pool; `undefined` until then.
+   */
+  async turnProof(turnHashHex: string): Promise<TurnProof | undefined> {
+    try {
+      const res = await this.request<{ turn_hash: string; proof_hex: string }>(
+        `/api/turn/${turnHashHex}/proof`,
+      );
+      const bytes = new Uint8Array(res.proof_hex.length / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(res.proof_hex.slice(i * 2, i * 2 + 2), 16);
+      }
+      return new TurnProof(hexDecodeExact(res.turn_hash, 32), bytes);
+    } catch (e) {
+      if (e instanceof NodeError && e.status === 404) return undefined;
+      throw e;
+    }
+  }
+
+  /** The node's committed-receipt event stream (SSE). */
+  events(): NodeEvents {
+    return new NodeEvents(this.baseUrl, { devnetKey: this.opts.devnetKey });
+  }
+}
+
+/**
+ * An identity bound to a node — the SDK's acting surface. Open the typed
+ * turn builder with [`turn`]:
+ *
+ * ```ts
+ * const runtime = new AgentRuntime(identity, "https://devnet.dregg.fg-goose.online");
+ * const receipt = await (await runtime.turn().writeU64(0, 42).sign()).submit();
+ * ```
+ */
+export class AgentRuntime {
+  readonly identity: Identity;
+  readonly node: NodeClient;
+
+  constructor(identity: Identity, node: NodeClient | string, opts: NodeClientOptions = {}) {
+    this.identity = identity;
+    this.node = typeof node === "string" ? new NodeClient(node, opts) : node;
+  }
+
+  /** This identity's default agent cell (hex). */
+  cellIdHex(): string {
+    return this.identity.cellIdHex();
+  }
+
+  /**
+   * Open the typed turn builder — the SDK's one public turn shape:
+   * `runtime.turn().transfer(..).write(..).sign()` → `submit()` → `Receipt`.
+   */
+  turn(): TurnBuilder {
+    return new TurnBuilder(this);
+  }
+
+  /**
+   * Devnet bootstrap: materialize this identity's agent cell with its real
+   * owner key and claim `amount` computrons.
+   */
+  async faucet(amount: number): Promise<void> {
+    const res = await this.node.faucet(this.identity.cellId(), amount, this.identity.publicKey);
+    if (!res.success) {
+      throw new NodeError(`faucet refused: ${res.error ?? "unknown"}`);
+    }
+  }
+
+  /** The agent cell's current nonce (0 for a never-seen cell). */
+  async currentNonce(): Promise<bigint> {
+    try {
+      const cell = await this.node.cell(this.identity.cellId());
+      return cell.found ? BigInt(cell.nonce) : 0n;
+    } catch (e) {
+      if (e instanceof NodeError && e.status === 404) return 0n;
+      throw e;
+    }
+  }
+
+  /**
+   * Envelope-sign and submit a finished turn; resolve the committed
+   * [`Receipt`]. Used by `AuthorizedTurn.submit()`.
+   */
+  async submitTurn(turn: Turn): Promise<Receipt> {
+    const envelope = this.identity.signTurnEnvelope(turn);
+    const res = await this.node.submitSignedEnvelope(envelope);
+    const hashHex = res.turn_hash ?? hexEncode(turnHash(turn));
+    if (!res.accepted) {
+      throw new NodeError(`turn rejected: ${res.error ?? "unknown"} (turn ${hashHex})`);
+    }
+    return this.node.receiptForTurn(hashHex);
+  }
+}
