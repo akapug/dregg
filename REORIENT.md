@@ -26,7 +26,10 @@ key `~/.ssh/negneg-cq.pem`, token in `/etc/dregg/node.env` there).
 5. **Correspondence is half of assurance.** The deployed system must sit inside the
    theorems' hypotheses (the spec review named where it doesn't yet: genesis not
    value-empty, fee path, see AssuranceCase's deployment-correspondence section).
-6. **Conservation is not correctness; l4v quality.** Specs must be sufficient, not
+6. **WE DO NOT NAME — WE REDESIGN, IMPLEMENT, SHIP** (ember 2026-06-11). A named/
+   logged/honest gap is never a deliverable; every caveat arrives with its closure
+   lane already running. The "named" inventory is a burn-down list.
+7. **Conservation is not correctness; l4v quality.** Specs must be sufficient, not
    just true. No quick fixes. Never `git add -A`. Unsigned commits OK. Never stash.
    Main loop commits; agents never run git. Plain constructive register (language
    design / developer experience framing).

@@ -1290,9 +1290,9 @@ impl PoseidonStarkVerifierCircuit {
         // Map each distinct cell to a dense index.
         let mut idx_of: HashMap<(usize, usize), usize> = HashMap::new();
         let mut cells: Vec<(usize, usize)> = Vec::new();
-        let mut id = |c: (usize, usize),
-                      idx_of: &mut HashMap<(usize, usize), usize>,
-                      cells: &mut Vec<(usize, usize)>|
+        let id = |c: (usize, usize),
+                  idx_of: &mut HashMap<(usize, usize), usize>,
+                  cells: &mut Vec<(usize, usize)>|
          -> usize {
             *idx_of.entry(c).or_insert_with(|| {
                 cells.push(c);

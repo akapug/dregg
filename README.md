@@ -51,8 +51,8 @@ Everything below is that sentence, given algebra:
 - **Circuits are emitted from Lean.** Constraint systems are generated from proved Lean modules as
   byte-pinned descriptor artifacts (a SHA-256-fingerprinted registry, drift-rejected in CI); the
   Rust prover *interprets* them. Rust authors no constraints. Most effect selectors prove on this
-  Lean-descriptor path today; the remainder fall back to a legacy circuit with a named, logged
-  reason — never silently — and the fallback set only shrinks.
+  Lean-descriptor path today; graduating the rest and deleting the legacy fallback circuit
+  entirely is active work.
 - **Receipts and proofs.** Every turn leaves a receipt; STARK proofs (Plonky3, BabyBear, Poseidon2,
   FRI — post-quantum assumptions only) attest turns *additively* (verification of a turn never
   requires re-executing history); recursive aggregation folds a whole history into one root.

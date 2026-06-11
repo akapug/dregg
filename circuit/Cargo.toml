@@ -93,6 +93,9 @@ dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
 getrandom = { workspace = true }
 blake3 = "1"
 rmp-serde = { workspace = true }
+# proof-economics measurements (tests/proof_economics.rs): structural walk of
+# serialized proofs to count commitment-path digests for the pickles-bridge estimate.
+serde_json = { workspace = true }
 
 [[bench]]
 name = "stark_bench"

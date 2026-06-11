@@ -90,6 +90,35 @@ pub type DreggStarkConfig = StarkConfig<TestPcs, EF, TestChallenger>;
 pub type DreggProof = Proof<DreggStarkConfig>;
 
 pub fn create_config() -> DreggStarkConfig {
+    // log_blowup must be >= log2_ceil(max_constraint_degree - 1).
+    // For Poseidon2 S-box (degree 7): log2_ceil(6) = 3, so log_blowup >= 3.
+    //
+    // Security at these settings (FRI batched soundness, per query):
+    //   conjectured (capacity bound): ~log_blowup bits/query
+    //     => 50 * 3 + 16 PoW = ~166 bits conjectured
+    //   proven (Johnson bound, list-decoding to sqrt(rate)): ~log_blowup/2 bits/query
+    //     => 50 * 1.5 + 16 PoW = ~91 bits proven
+    // (both additionally capped by the degree-4 extension field, ~2^124, and the
+    // Poseidon2 commitment hash.) See docs/PROOF-ECONOMICS.md for the measured
+    // size/prover-time tradeoff of these knobs.
+    create_config_with_fri(3, 0, 3, 50, 16)
+}
+
+/// Build a `DreggStarkConfig` with explicit FRI knobs. The production
+/// configuration is [`create_config`]; this parameterized constructor exists so
+/// the proof-economics measurements (`tests/proof_economics.rs`) can prove the
+/// SAME statement under alternative `(log_blowup, log_final_poly_len,
+/// max_log_arity, num_queries, query_pow_bits)` settings and measure the real
+/// size/time deltas. Proofs from different configs are NOT interchangeable
+/// (FRI shape and Fiat–Shamir differ), so non-default configs must never leak
+/// onto the wire.
+pub fn create_config_with_fri(
+    log_blowup: usize,
+    log_final_poly_len: usize,
+    max_log_arity: usize,
+    num_queries: usize,
+    query_proof_of_work_bits: usize,
+) -> DreggStarkConfig {
     let perm16 = default_babybear_poseidon2_16();
 
     let hash = PaddingFreeSponge::new(perm16.clone());
@@ -98,15 +127,13 @@ pub fn create_config() -> DreggStarkConfig {
 
     let challenge_mmcs = ExtensionMmcs::<P3BabyBear, EF, _>::new(val_mmcs.clone());
 
-    // log_blowup must be >= log2_ceil(max_constraint_degree - 1).
-    // For Poseidon2 S-box (degree 7): log2_ceil(6) = 3, so log_blowup >= 3.
     let fri_params = FriParameters {
-        log_blowup: 3,
-        log_final_poly_len: 0,
-        max_log_arity: 3,
-        num_queries: 50,
+        log_blowup,
+        log_final_poly_len,
+        max_log_arity,
+        num_queries,
         commit_proof_of_work_bits: 0,
-        query_proof_of_work_bits: 16,
+        query_proof_of_work_bits,
         mmcs: challenge_mmcs,
     };
 
