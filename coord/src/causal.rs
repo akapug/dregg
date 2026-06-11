@@ -18,7 +18,7 @@ pub use dregg_types::CausalDag;
 // ─── Verified happened-before (STRONG-FORM swap) ───────────────────────────────
 
 /// Decide `ancestor` happened-before `descendant` on a `CausalDag`, STRONG-FORM swap: when the
-/// verified Lean causal-order gate is linked (`--features lean-gate`,
+/// verified Lean causal-order gate is linked (every native build;
 /// `Dregg2.Exec.DistributedExports::dregg_coord_causal_order` = `CausalOrder.happenedBefore` decided
 /// via `hbBool`), the AUTHORITATIVE verdict comes from the verified Lean — so the causal layer
 /// inherits the partial-order guarantees (`hb_irrefl` / `hb_trans` / `hb_asymm`) by construction. The
@@ -46,8 +46,8 @@ pub fn verified_happened_before(
 /// Query the verified Lean causal-order gate `dregg_coord_causal_order`. Returns `Some(verdict)` when
 /// the gate ran, or `None` when it is unavailable (feature off / archive lacks the export / either
 /// endpoint absent from the DAG) so [`verified_happened_before`] falls back to the native Rust.
-/// Built `--features lean-gate`; a stub returning `None` otherwise.
-#[cfg(feature = "lean-gate")]
+/// Compiled on every native build (the inverted default); a stub returning `None` under the `no-lean-link` platform gate.
+#[cfg(not(feature = "no-lean-link"))]
 fn lean_happened_before(
     dag: &CausalDag,
     ancestor: &[u8; 32],
@@ -86,9 +86,9 @@ fn lean_happened_before(
     dregg_lean_ffi::verified_happened_before(&wire).ok()
 }
 
-/// Stub when the `lean-gate` feature is off: the verified gate is unavailable, so the native Rust
+/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so the native Rust
 /// `CausalDag::happened_before` decides. Referenced unconditionally in [`verified_happened_before`].
-#[cfg(not(feature = "lean-gate"))]
+#[cfg(feature = "no-lean-link")]
 fn lean_happened_before(
     _dag: &CausalDag,
     _ancestor: &[u8; 32],

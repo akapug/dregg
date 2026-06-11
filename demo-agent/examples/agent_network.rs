@@ -48,7 +48,7 @@ use dregg_turn::{
 // Helpers
 // =========================================================================
 
-fn make_open_cell(seed: u8, balance: u64) -> Cell {
+fn make_open_cell(seed: u8, balance: i64) -> Cell {
     let mut key = [0u8; 32];
     key[0] = seed;
     let token_id = [0u8; 32];

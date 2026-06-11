@@ -1181,7 +1181,7 @@ mod hardening_tests {
         }
     }
 
-    fn make_permissive_cell(seed: u8, balance: u64) -> Cell {
+    fn make_permissive_cell(seed: u8, balance: i64) -> Cell {
         let mut pk = [0u8; 32];
         pk[0] = seed;
         let token = [0u8; 32];
@@ -1190,7 +1190,7 @@ mod hardening_tests {
         cell
     }
 
-    fn make_signed_cell(seed: u8, balance: u64) -> Cell {
+    fn make_signed_cell(seed: u8, balance: i64) -> Cell {
         let mut pk = [0u8; 32];
         pk[0] = seed;
         let token = [0u8; 32];

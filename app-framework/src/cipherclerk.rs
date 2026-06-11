@@ -381,9 +381,9 @@ impl EmbeddedExecutor {
     /// app substrate (and the discord-bot + starbridge-apps that inherit it) routes the user-facing
     /// surface through the verified kernel.
     ///
-    /// Default mirrors `DREGG_LEAN_PRODUCER` (off unless the env opt-in is set). Has NO effect unless
-    /// `dregg-sdk` was built with the `lean-producer` feature (enable via the app-framework
-    /// `lean-producer` feature). Returns the runtime's resulting producer-mode state.
+    /// Default mirrors `DREGG_LEAN_PRODUCER`. The producer is compiled into every native build
+    /// (Lean unconditional); it is absent only under the `no-lean-link` platform gate
+    /// (wasm32/zkvm). Returns the runtime's resulting producer-mode state.
     pub fn set_lean_producer(&self, enabled: bool) -> bool {
         let mut rt = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
         rt.set_lean_producer(enabled);

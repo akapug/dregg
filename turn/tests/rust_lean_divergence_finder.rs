@@ -20,7 +20,7 @@
 //!                 not a divergence — it tells us what still needs a Lean model before swap.
 //!
 //! Run with the Lean FFI linked + shadow on:
-//!   DREGG_LEAN_SHADOW=1 cargo test -p dregg-turn --features lean-shadow \
+//!   DREGG_LEAN_SHADOW=1 cargo test -p dregg-turn \
 //!       --test rust_lean_divergence_finder -- --nocapture
 //!
 //! Without the feature the harness still runs (every effect reports GAP — no Lean linked),
@@ -54,7 +54,7 @@ fn open_permissions() -> Permissions {
     }
 }
 
-fn make_open_cell(seed: u8, balance: u64) -> Cell {
+fn make_open_cell(seed: u8, balance: i64) -> Cell {
     let mut pk = [0u8; 32];
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(37);
@@ -127,7 +127,7 @@ fn grant_self_cap(ledger: &mut Ledger, holder: CellId) {
         .expect("grant self cap");
 }
 
-fn two_cell_ledger(bal_a: u64, bal_b: u64) -> (Ledger, CellId, CellId) {
+fn two_cell_ledger(bal_a: i64, bal_b: i64) -> (Ledger, CellId, CellId) { // signed-wells (ac01f9b7b)
     let a = make_open_cell(1, bal_a);
     let b = make_open_cell(2, bal_b);
     let (ida, idb) = (a.id(), b.id());
@@ -691,7 +691,7 @@ fn write_ledger_markdown(
          FFI) side-by-side over a corpus of turns and records every divergence.\n\n",
     );
     md.push_str(&format!(
-        "- `DREGG_LEAN_SHADOW`/`lean-shadow` active: **{shadow_on}** (false ⇒ Lean not linked; \
+        "- `DREGG_LEAN_SHADOW` active (Lean linked by default on native): **{shadow_on}** (false ⇒ Lean not linked; \
          the table records the eligibility map only — every effect shows GAP).\n",
     ));
     md.push_str(&format!(
@@ -784,11 +784,11 @@ fn write_ledger_markdown(
          the cell's REAL c-list (`capabilities`) as wire `caps`, so the verified authority gates \
          (`authorizedB`/`mintAuthorizedB`) read the actual edges the actor holds.\n\n\
          ## How to run\n\n```\nDREGG_LEAN_SHADOW=1 cargo test -p dregg-turn \
-         --features lean-shadow --test rust_lean_divergence_finder -- --nocapture\n```\n\n\
+         --test rust_lean_divergence_finder -- --nocapture\n```\n\n\
          Requires `dregg-lean-ffi/libdregg_lean.a` (the compiled Lean closure) present + the \
          project Lean toolchain (build.rs resolves the sysroot via `lake env`). \
          Wire into CI / devnet by running the node with `DREGG_LEAN_SHADOW=1` and the \
-         `lean-shadow` feature — `lean_shadow::maybe_shadow_turn` then logs live divergences \
+         default native build — `lean_shadow::maybe_shadow_turn` then logs live divergences \
          (target `dregg::lean_shadow::divergence`) for every executed turn.\n",
     );
 

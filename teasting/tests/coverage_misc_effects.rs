@@ -22,9 +22,12 @@ use dregg_cell::{
     Ledger, NoteCommitment, Permissions, SealPair, ValueCommitment, note_bridge::BridgeReceipt,
 };
 use dregg_turn::{
-    ActionBuilder, Effect, EscrowClaimAuth, TurnBuilder, TurnResult,
+    // RETIRED (dregg3): EscrowClaimAuth + the dregg_turn::escrow module
+    // (CommittedEscrow, compute_identity_commitment) were dissolved with the
+    // committed-escrow verb family; the escrow/bridge section headers below are
+    // vestigial and their tests already removed.
+    ActionBuilder, Effect, TurnBuilder, TurnResult,
     action::RefusalReason,
-    escrow::{CommittedEscrow, compute_identity_commitment},
     executor::{ComputronCosts, TurnExecutor},
 };
 
@@ -50,7 +53,7 @@ fn make_cell(seed: u8, balance: u64) -> Cell {
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(37).wrapping_add(1);
     let token_id = [seed.wrapping_add(100); 32];
-    let mut cell = Cell::with_balance(pk, token_id, balance);
+    let mut cell = Cell::with_balance(pk, token_id, balance as i64);
     cell.permissions = open_permissions();
     cell
 }

@@ -205,6 +205,15 @@ fn state_constraint_executor_coverage(c: &StateConstraint) -> bool {
         StateConstraint::Witnessed { .. } => false,      // needs witness registry
         StateConstraint::Renounced { .. } => false,      // needs witness registry
         StateConstraint::Custom { .. } => false,         // needs ir/descriptor verifier
+
+        // Sender/balance caveat predicates — confirmed enforced through the
+        // executor commit path by the accept+reject pairs in
+        // coverage_state_constraints.rs (sender_is / sender_in_slot /
+        // balance_gte / balance_lte).
+        StateConstraint::SenderIs { .. } => true,
+        StateConstraint::SenderInSlot { .. } => true,
+        StateConstraint::BalanceGte { .. } => true,
+        StateConstraint::BalanceLte { .. } => true,
     }
 }
 

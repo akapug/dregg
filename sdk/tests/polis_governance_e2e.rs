@@ -79,14 +79,19 @@ fn agent_pubkey(runtime: &AgentRuntime) -> [u8; 32] {
 }
 
 fn balance_of(runtime: &AgentRuntime, cell: CellId) -> u64 {
-    runtime
-        .ledger()
-        .lock()
-        .unwrap()
-        .get(&cell)
-        .expect("cell exists")
-        .state
-        .balance()
+    // signed-wells (ac01f9b7b): balance() is i64; these e2e cells are ordinary
+    // (non-negative), so surface the public u64 via a checked conversion.
+    u64::try_from(
+        runtime
+            .ledger()
+            .lock()
+            .unwrap()
+            .get(&cell)
+            .expect("cell exists")
+            .state
+            .balance(),
+    )
+    .expect("ordinary cell balance is non-negative")
 }
 
 fn slot_of(runtime: &AgentRuntime, cell: CellId, slot: u8) -> [u8; 32] {

@@ -15,7 +15,7 @@
 //! participants are the bootstrap **seeds** (the trust root, admitted by construction, exactly the
 //! Lean `seeds`/`isSeed` semantics, identical to `Constitution::new`'s initial set) — and filters the
 //! participant set through `AdmissionRegistry::admitted`. With the node's `dregg-federation`
-//! dependency built `--features lean-admission`, `admitted` routes through the VERIFIED Lean
+//! dependency (Lean unconditional on native), `admitted` routes through the VERIFIED Lean
 //! `dregg_strand_admit` export (`dregg_lean_ffi::verified_admits`), so the participant set the node
 //! finalizes over is decided BY THE VERIFIED RULE — not a Rust mirror. The Lean theorem
 //! `strand_admit_eq_admitted` proves the export's verdict IS `StrandAdmission.admitted`, so this gates
@@ -71,7 +71,7 @@ pub fn lean_backed() -> bool {
 /// set headed to `tau` (normally equal to `participants`, but kept separate so a caller may gate a
 /// wider proposed set against the constitutional seed root).
 ///
-/// With the node's `dregg-federation` built `--features lean-admission`, `AdmissionRegistry::admitted`
+/// With the node's `dregg-federation` (Lean unconditional on native), `AdmissionRegistry::admitted`
 /// routes each verdict through the VERIFIED Lean `dregg_strand_admit` export — so the returned subset
 /// is the one the VERIFIED `StrandAdmission.admitted` rule admits. The pure-Rust sibling is the
 /// fallback when the archive is absent.

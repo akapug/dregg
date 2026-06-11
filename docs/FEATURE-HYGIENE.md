@@ -24,10 +24,10 @@ Classification key:
 | Crate | Feature | What it gates | Class | Disposition |
 |---|---|---|---|---|
 | app-framework | `dev` | forwards `dregg-sdk/dev` | D | keep |
-| app-framework | `lean-producer` | forwards `dregg-sdk/lean-producer` | B | **FLAGGED** (lean-archive constraint, see §Lean) |
+| app-framework | ~~`lean-producer`~~ → `no-lean-link` | forwards the platform gate | B→A | **INVERTED** (§Lean) — Lean unconditional on native |
 | bridge | ~~`turn`~~ | the turn-proof `verifier` module (`DslAwareProofVerifier`, `StarkProofVerifier`) | B | **REMOVED** — always compiled in now |
 | bridge | `test-utils` | test helpers in `present.rs` | D | keep |
-| captp | `lean-gate` | verified Lean non-amplification verdict in `validate_handoff` / gc / pipeline; off ⇒ silent fallback to the Rust lattice | B | **FLAGGED** (§Lean) |
+| captp | ~~`lean-gate`~~ → `no-lean-link` | the verified non-amplification verdict in `validate_handoff` / gc / pipeline is now UNCONDITIONAL on native; the platform gate compiles the Rust-lattice fallback only on wasm32/zkvm | B→A | **INVERTED** (§Lean) |
 | cell | `crypto` (default) | dalek/chacha/bulletproofs stack; off only for the zkVM guest | A | keep (platform: SP1 guest) |
 | cell | `zkvm` | SP1-guest code paths (`note.rs`, `peer_exchange.rs`) | A | keep |
 | cell | `test-stubs` | predicate test stubs | D | keep |
@@ -38,15 +38,15 @@ Classification key:
 | circuit | `recursion` (default) | recursion/IVC prover stack | A | keep |
 | circuit | ~~`mock`~~ | **nothing** — zero `cfg` uses anywhere | C | **DELETED** (and the dangling `features = ["mock"]` requests in `wasm/`, `apps/compute-exchange`, `apps/bounty-board` removed) |
 | circuit | ~~`dev`~~ | **nothing** — zero `cfg` uses | C | **DELETED** (sdk's forward `dev = ["dregg-circuit/dev"]` → `dev = []`) |
-| coord | `lean-gate` | verified Lean gates in `shared_budget`/`causal`/`atomic`; off ⇒ silent Rust fallback | B | **FLAGGED** (§Lean) |
+| coord | ~~`lean-gate`~~ → `no-lean-link` | verified Lean gates in `shared_budget`/`causal`/`atomic` now UNCONDITIONAL on native | B→A | **INVERTED** (§Lean) |
 | dfa | `federation-verifier` | the `federation_verifier` module (`dep:dregg-federation`) | B | **FLAGGED — UNWIRED**: enabled by NO crate in the tree; the federation verifier compiles into no build. Decide: wire it on in `node`/`wire` consumers, or make unconditional (changes the wasm dep closure — needs a wasm32 check) |
 | dregg-dsl-runtime | `plonky3` (default) | prover-coupled half of the runtime | A | keep |
-| dregg-lean-ffi | `lean-lib` | linking `libdregg_lean.a` + the differential bins | A/B | keep as platform/native-link gate, but it is the root of the §Lean footgun |
+| dregg-lean-ffi | `no-lean-link` (new) + `lean-lib` | the link is UNCONDITIONAL on native (build.rs also hard-skips wasm32/zkvm targets); `no-lean-link` is the ONE platform opt-out; `lean-lib` now only arms the differential bins (+ proptest) | A | **INVERTED** (§Lean) |
 | federation | `runtime` (default) | tokio + crossbeam transport (non-wasm32) | A | keep |
-| federation | `lean-admission` | verified `dregg_strand_admit` in the F-4 admission gate; off ⇒ `admitted_rust` fallback | B | **FLAGGED** (§Lean) |
+| federation | ~~`lean-admission`~~ → `no-lean-link` | verified `dregg_strand_admit` F-4 gate now UNCONDITIONAL on native | B→A | **INVERTED** (§Lean) |
 | hints | `parallel` (default) | rayon/ark parallel | A | keep (perf/platform) |
 | hints | `asm` (default) | `ark-ff/asm` | A | keep |
-| intent | `verified-settle` | per-leg Lean FFI cross-check in `settle_ring_verified`; off ⇒ Rust mirror only | B | **FLAGGED** (§Lean) |
+| intent | ~~`verified-settle`~~ → `no-lean-link` | per-leg Lean FFI cross-check in `settle_ring_verified` now UNCONDITIONAL on native | B→A | **INVERTED** (§Lean) |
 | lightclient | `recursion` (default) | forwards `dregg-circuit/recursion` | A | keep |
 | macaroon | `crypto` (default) | the crypto stack; off only for zkVM guest | A | keep |
 | macaroon | `zkvm` | SP1-guest path | A | keep |
@@ -55,7 +55,7 @@ Classification key:
 | sdk | `federation-client` | reqwest client (non-wasm32) | A | keep |
 | sdk | `network` (default) | tokio + quinn + dregg-wire (non-wasm32) | A | keep |
 | sdk | `captp` (default) | dregg-captp surface (non-wasm32 today) | A | keep |
-| sdk | `lean-producer` | `dregg-turn/lean-shadow` + lean-ffi | B | **FLAGGED** (§Lean) |
+| sdk | ~~`lean-producer`~~ → `no-lean-link` | the verified Lean producer now UNCONDITIONAL on native (runtime-gated by `DREGG_LEAN_PRODUCER`) | B→A | **INVERTED** (§Lean) |
 | sdk | `dev` | exports `verify_any_tier` (any-tier acceptance) under `any(test, dev)` | D | keep — loud, additive, absent by default (using it without the feature is a compile error, not a silent downgrade) |
 | sdk | `unsafe-test-utils` | loud unsafe test helpers in cipherclerk | D | keep |
 | secrets | `keychain` (default) | OS keyring backend | A | keep |
@@ -65,7 +65,7 @@ Classification key:
 | token | `macaroon` (default) | macaroon token format | A | keep |
 | token | `rand-deps` (default) | getrandom/rand/ed25519 (no getrandom in zkVM guest) | A | keep |
 | token | `zkvm` | SP1-guest macaroon path | A | keep |
-| turn | `lean-shadow` | the Lean shadow/gate executor path (`lean_shadow.rs`); off ⇒ Rust-only execution | B | **FLAGGED** (§Lean) |
+| turn | ~~`lean-shadow`~~ → `no-lean-link` | the Lean shadow/gate executor path (`lean_shadow.rs` + `lean_apply`) now UNCONDITIONAL on native | B→A | **INVERTED** (§Lean) |
 | wire | ~~`stark-verifier`~~ | the real `StarkVerifier` impl; off ⇒ fail-closed reject-all stub | B | **REMOVED** — always compiled in. The optionality was illusory anyway: the unconditional `dregg-dsl-runtime` dep already pulled `dregg-circuit/plonky3` |
 | wire | ~~`bridge`~~ | dregg-bridge/dregg-commit deps + `cross_node_auth` bin | B | **REMOVED** — unconditional |
 | wire | ~~`dev`~~ | **nothing** — zero `cfg` uses, enabled nowhere | C | **DELETED** |
@@ -80,30 +80,38 @@ code wearing a feature's name):
   declared `test-utils` (D-class) gate.
 - `preflight/src/checks/backends.rs`: see table — the vacuous preflight gate.
 
-## §Lean — the one big remaining footgun (flagged for ember)
+## §Lean — CLOSED: the polarity inversion (2026-06-11)
 
-Every Lean enforcement gate in Rust is feature-optional and **off by default**:
-`captp/lean-gate`, `coord/lean-gate`, `federation/lean-admission`, `turn/lean-shadow`,
-`intent/verified-settle`, `sdk`/`app-framework` `lean-producer` — all bottoming out in
-`dregg-lean-ffi/lean-lib`, which links the checked-in `libdregg_lean.a`.
+The footgun this section used to flag is closed. The recommended inversion is DONE:
 
-What keeps this from being a pure category-B removal today:
-1. **It is a genuine native-link constraint.** The archive cannot link on wasm32, and a
-   build box without the Lean toolchain/archive can `cargo check` but not link tests/bins.
-2. `node/Cargo.toml` enables **all** of them, so the production node runs gated.
+**The Lean gates are the unconditional default on native.** The seven former opt-in
+features (`captp/lean-gate`, `coord/lean-gate`, `federation/lean-admission`,
+`turn/lean-shadow`, `intent/verified-settle`, `sdk/lean-producer`,
+`app-framework/lean-producer`) are deleted. Their Lean-using paths compile into every
+native build; `dregg-lean-ffi` is a regular (non-optional) dependency of captp / coord /
+federation / turn / intent / sdk, and its build.rs links `libdregg_lean.a`
+unconditionally on native.
 
-Why it is still a footgun: every *other* consumer (default `sdk`, `teasting`, `wire`'s
-captp/coord deps, any new binary) silently compiles the `cfg(not(...))` fallbacks —
-Rust-lattice handoff verdicts, `admitted_rust`, un-cross-checked settlement — with no
-runtime evidence that the verified gate is absent. "Never break the live path" today
-means "silently run the unverified path".
+**ONE platform gate: `no-lean-link`** (workspace-consistent name, declared by each of the
+seven crates + `dregg-lean-ffi`), OFF by default, set ONLY by builds whose target cannot
+link the archive (wasm32 today; the SP1 zkvm guest doesn't consume these crates but the
+gate covers it). It compiles the Rust fallback paths *in place of* the verified gates —
+a statement about the target's linker, never about which guarantees a dregg has.
+`dregg-wasm` enables it on its dregg-turn/coord/intent/sdk/captp/federation deps.
+Defense-in-depth: `dregg-lean-ffi/build.rs` also hard-skips the archive refresh + all
+link directives whenever `CARGO_CFG_TARGET_ARCH=wasm32` or `CARGO_CFG_TARGET_OS=zkvm`,
+so a wasm/zkvm build that forgot the feature degrades to the marshal-only stubs instead
+of attempting a native-archive link.
 
-Recommended closure lane (needs a human/build-infra decision, hence flagged not done):
-invert the polarity — make the Lean gates the **unconditional default** on native, and
-introduce ONE platform-named gate (e.g. `platform-no-lean-link`, enabled only by the
-wasm/zkvm builds) for the genuinely-can't-link targets, so absence of verification is
-visible at the build graph instead of defaulted into. That touches link-time CI on every
-machine that builds the workspace, so it is sequenced behind a decision, not snuck in.
+`node/Cargo.toml` no longer carries per-crate Lean enables (they are the default).
+`dregg-lean-ffi/lean-lib` survives only to arm the differential binaries
+(`required-features` + the optional `proptest` dep, which is what keeps the
+now-unconditional lib dep wasm32-compilable).
+
+Residual (known, accepted): every native consumer of these crates now links the Lean
+runtime into its test/bin link step — a build box needs the checked-in archive + the
+project Lean toolchain to LINK (cargo check is unaffected). That is the point: absence
+of verification is visible at the build graph, not defaulted into.
 
 ## Notes / smaller flags
 

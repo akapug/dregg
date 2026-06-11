@@ -2,7 +2,7 @@
 //! authority on the commit path.
 //!
 //! With `DREGG_LEAN_SHADOW=1` + `DREGG_LEAN_SHADOW_STRICT=1` (and the Lean FFI linked via the
-//! `lean-shadow` feature), a turn the legacy Rust executor COMMITS but the verified Lean executor
+//! Lean link — default on native), a turn the legacy Rust executor COMMITS but the verified Lean executor
 //! REJECTS is VETOED: the commit is rolled back and the turn is reported `Rejected(LeanShadowVeto)`.
 //! The verified kernel can ONLY tighten the decision (kernel-vs-NEW-Rust; it never launders a Rust
 //! rejection to a commit), so a divergence makes the node strictly MORE conservative.
@@ -13,7 +13,7 @@
 //!
 //! Run (single-threaded — the test mutates process env):
 //!   DREGG_LEAN_SHADOW=1 DREGG_LEAN_SHADOW_STRICT=1 cargo test -p dregg-turn \
-//!       --features lean-shadow --test lean_strict_veto -- --nocapture --test-threads=1
+//!       --test lean_strict_veto -- --nocapture --test-threads=1
 
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_turn::{
@@ -34,7 +34,7 @@ fn open_permissions() -> Permissions {
     }
 }
 
-fn make_open_cell(seed: u8, balance: u64) -> Cell {
+fn make_open_cell(seed: u8, balance: i64) -> Cell {
     let mut pk = [0u8; 32];
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(37);
@@ -43,7 +43,7 @@ fn make_open_cell(seed: u8, balance: u64) -> Cell {
     cell
 }
 
-fn one_cell_ledger(bal: u64) -> (Ledger, CellId) {
+fn one_cell_ledger(bal: i64) -> (Ledger, CellId) { // signed-wells (ac01f9b7b): i64 balances
     let a = make_open_cell(1, bal);
     let id = a.id();
     let mut l = Ledger::new();
@@ -159,7 +159,7 @@ fn strict_veto_rolls_back_lean_rejected_burn() {
             eprintln!(
                 "[strict-veto] Lean FFI not linked — no verified verdict to veto; the burn \
                  committed (strict path does not spuriously reject). Build with --features \
-                 lean-shadow + a present libdregg_lean.a to exercise the veto."
+                 a present libdregg_lean.a (linked by default on native) to exercise the veto."
             );
         }
         other => panic!("unexpected strict-veto outcome: {other:?}"),

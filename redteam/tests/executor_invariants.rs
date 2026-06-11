@@ -57,7 +57,7 @@ impl Kp {
     }
 }
 
-fn open_cell(seed: u8, balance: u64) -> (Cell, Kp) {
+fn open_cell(seed: u8, balance: i64) -> (Cell, Kp) {
     let kp = Kp::seed(seed);
     let mut cell = Cell::with_balance(kp.pk, [0u8; 32], balance);
     cell.permissions = Permissions {
@@ -74,7 +74,7 @@ fn open_cell(seed: u8, balance: u64) -> (Cell, Kp) {
 }
 
 /// A cell whose `send` requires a real Signature — the authority test target.
-fn sig_cell(seed: u8, balance: u64) -> (Cell, Kp) {
+fn sig_cell(seed: u8, balance: i64) -> (Cell, Kp) {
     let kp = Kp::seed(seed);
     // Default Cell permissions require Signature; keep them.
     (Cell::with_balance(kp.pk, [0u8; 32], balance), kp)
@@ -273,8 +273,11 @@ fn unauthorized_transfer_is_rejected_and_state_unchanged() {
 /// wrap around to a small credit (which would mint value out of thin air).
 #[test]
 fn destination_overflow_does_not_mint() {
-    let (mut sender, _) = open_cell(11, u64::MAX);
-    let (recipient, _) = open_cell(12, u64::MAX);
+    // signed-wells (ac01f9b7b): balances are i64; the overflow boundary is now
+    // i64::MAX. Intent preserved: a transfer that would overflow the balance
+    // type must be rejected (no wrap-around mint).
+    let (mut sender, _) = open_cell(11, i64::MAX);
+    let (recipient, _) = open_cell(12, i64::MAX);
     sender
         .capabilities
         .grant(recipient.id(), AuthRequired::None);
@@ -288,7 +291,7 @@ fn destination_overflow_does_not_mint() {
     let exec = TurnExecutor::new(ComputronCosts::zero());
     let before = total_balance(&ledger, &[sid, rid]);
 
-    // recipient already at u64::MAX; any positive transfer overflows.
+    // recipient already at i64::MAX; any positive transfer overflows.
     let nonce = ledger.get(&sid).unwrap().state.nonce();
     let turn = transfer_turn(sid, rid, 1, nonce, Authorization::Unchecked, None);
     let r = exec.execute(&turn, &mut ledger);
@@ -301,7 +304,7 @@ fn destination_overflow_does_not_mint() {
         before,
         "FINDING: total value changed on a rejected overflow transfer"
     );
-    assert_eq!(ledger.get(&rid).unwrap().state.balance(), u64::MAX);
+    assert_eq!(ledger.get(&rid).unwrap().state.balance(), i64::MAX);
 }
 
 // ============================================================================

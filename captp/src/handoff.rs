@@ -443,9 +443,9 @@ fn effect_mask_field(m: Option<EffectMask>) -> String {
 /// `dregg_captp_validate_handoff` (= `Dregg2.Exec.CapTPConcrete.handoffNonAmplifyingC`). Returns
 /// `Some(true)` (non-amplifying) / `Some(false)` (amplifies) when the gate ran, or `None` when the
 /// verified gate is unavailable (feature off / archive lacks the export) so the caller falls back to
-/// the Rust lattice. Built `--features lean-gate`; a stub returning `None` otherwise so the crate has
+/// the Rust lattice. Compiled on every native build (the inverted default); a stub returning `None` under the `no-lean-link` platform gate so the crate has
 /// no hard dependency on the Lean archive.
-#[cfg(feature = "lean-gate")]
+#[cfg(not(feature = "no-lean-link"))]
 fn verified_non_amplifying(
     granted_perm: &AuthRequired,
     held_perm: &AuthRequired,
@@ -469,9 +469,9 @@ fn verified_non_amplifying(
     }
 }
 
-/// Stub when the `lean-gate` feature is off: the verified gate is unavailable, so the Rust lattice
+/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so the Rust lattice
 /// decides (the helper is referenced unconditionally in `validate_handoff`, so it must exist).
-#[cfg(not(feature = "lean-gate"))]
+#[cfg(feature = "no-lean-link")]
 fn verified_non_amplifying(
     _granted_perm: &AuthRequired,
     _held_perm: &AuthRequired,
@@ -549,7 +549,7 @@ pub fn validate_handoff(
     // 6. Non-amplification (Granovetter): granted ⊆ held — on BOTH the permission lattice and the
     //    effect-mask facet.
     //
-    //    STRONG-FORM SWAP: when built `--features lean-gate`, this verdict is decided BY the VERIFIED
+    //    STRONG-FORM SWAP: on every native build (Lean unconditional), this verdict is decided BY the VERIFIED
     //    Lean export `dregg_captp_validate_handoff` (= `Dregg2.Exec.CapTPConcrete.handoffNonAmplifyingC`,
     //    proved equal to the export by `captp_validate_handoff_eq`); the Rust lattice below is then the
     //    DIFFERENTIAL sibling. Without the feature (or when the archive lacks the export) the Rust

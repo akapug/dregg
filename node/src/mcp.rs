@@ -2948,7 +2948,7 @@ async fn tool_fulfill_intent(params: &Value, state: &NodeState) -> McpToolResult
     // Execute the fulfillment payment through the VERIFIED settle path (same edge as the
     // `/intents/fulfill` API handler): the value-moving leg folds through the verified
     // per-asset transition, cross-checked against the REAL Lean executor export
-    // `dregg_record_kernel_step` (`verified-settle` is on in the node). Fail-closed — no
+    // `dregg_record_kernel_step` (Lean unconditional on native). Fail-closed — no
     // fallback to the legacy `dregg_turn::TurnExecutor`.
     let result = dregg_intent::fulfillment::execute_fulfillment_flow_verified(
         &intent,

@@ -153,9 +153,10 @@ fn cell_state_balance_underflow() {
 
 #[test]
 fn cell_state_balance_overflow() {
-    let mut state = CellState::new(u64::MAX - 5);
+    // signed-wells (ac01f9b7b): balance is i64; i64::MAX is the overflow boundary now.
+    let mut state = CellState::new(i64::MAX - 5);
     assert!(!state.apply_balance_change(10));
-    assert_eq!(state.balance, u64::MAX - 5);
+    assert_eq!(state.balance, i64::MAX - 5);
 }
 
 // ============================================================
@@ -1720,7 +1721,7 @@ fn p0_1_cell_accessors_are_read_only() {
 #[test]
 fn p0_1_cell_state_accessors_are_read_only() {
     let state = CellState::new(100);
-    let _bal: u64 = state.balance();
+    let _bal: i64 = state.balance(); // signed-wells (ac01f9b7b): balance() is i64
     let _nonce: u64 = state.nonce();
     let _ps: bool = state.proved_state();
     let _de: u64 = state.delegation_epoch();

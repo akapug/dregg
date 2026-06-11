@@ -15,12 +15,13 @@ dregg-cell = { path = "../cell" }
 dregg-turn = { path = "../turn" }
 starbridge-polis = { path = "../starbridge-apps/polis" }
 dregg-bridge = { path = "../bridge" }
-# `lean-producer` feature: THE SWAP producer-mode path. Brings in the verified
-# Lean executor (via `dregg-turn/lean-shadow` → `dregg_turn::lean_apply`) and the
-# `dregg-lean-ffi` runtime so `AgentRuntime` can make the verified executor the
-# authoritative state producer (opt-in; default OFF, archive-gated). Optional so
-# wasm/default consumers are not forced to link `libdregg_lean.a`.
-dregg-lean-ffi = { path = "../dregg-lean-ffi", optional = true }
+# UNCONDITIONAL (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): THE SWAP producer-mode
+# path. The verified Lean executor (via `dregg_turn::lean_apply`) and the `dregg-lean-ffi`
+# runtime are compiled into every native build, so `AgentRuntime` makes the verified
+# executor the authoritative state producer (runtime-gated by `DREGG_LEAN_PRODUCER`,
+# archive-gated by `lean_available()`). The ONE opt-out is the `no-lean-link` platform
+# feature (wasm32/zkvm — targets that cannot link libdregg_lean.a).
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
 # `network` feature: tokio + dregg-wire — non-wasm32 (mio, quinn). Wasm
 # consumers set `default-features = false`; the modules that depend on
 # these (client, embed, discharge, discovery) are `#[cfg]`-gated.
@@ -70,14 +71,17 @@ default = ["federation-client", "network", "captp"]
 federation-client = ["dep:reqwest"]
 network = ["dep:dregg-wire", "dep:tokio", "dep:futures-core"]
 captp = ["dep:dregg-captp"]
-# THE SWAP — opt-in producer mode. Enables the `dregg_turn::lean_apply` extractor
-# (the verified Lean executor as the authoritative state producer) and links the
-# `dregg-lean-ffi` runtime (for `lean_available()` + archive presence). With this
-# feature OFF, `AgentRuntime`/`EmbeddedExecutor` behaviour is byte-for-byte the
-# legacy Rust-producer path; with it ON, the producer is gated at runtime by the
-# `DREGG_LEAN_PRODUCER=1` env var (default OFF) / `set_lean_producer`, and an
-# unlinked archive self-falls-back to the Rust producer.
-lean-producer = ["dregg-turn/lean-shadow", "dep:dregg-lean-ffi", "dregg-lean-ffi/lean-lib"]
+# PLATFORM gate, OFF by default: only wasm32/zkvm builds set it. It compiles the legacy
+# Rust-producer path IN PLACE OF the verified Lean producer — a statement about the
+# target's linker, never about which guarantees this dregg has. On native the producer is
+# always compiled in; it stays runtime-gated by `DREGG_LEAN_PRODUCER` / `set_lean_producer`,
+# and an unlinked archive self-falls-back to the Rust producer.
+no-lean-link = [
+    "dregg-lean-ffi/no-lean-link",
+    "dregg-turn/no-lean-link",
+    "dregg-intent/no-lean-link",
+    "dregg-captp?/no-lean-link",
+]
 dev = []
 # Enables `DelegationAuthority::Open`, which accepts any well-signed envelope
 # without an authority check. This is a footgun in production and is gated

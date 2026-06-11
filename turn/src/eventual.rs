@@ -486,7 +486,7 @@ mod tests {
     use dregg_cell::{CapabilityRef, CellId, Ledger, Permissions, Preconditions};
 
     /// Create a cell with open permissions (no auth required for anything).
-    fn make_open_cell(pk: [u8; 32], balance: u64) -> dregg_cell::Cell {
+    fn make_open_cell(pk: [u8; 32], balance: i64) -> dregg_cell::Cell {
         let token_id = [0u8; 32];
         let mut cell = dregg_cell::Cell::with_balance(pk, token_id, balance);
         cell.permissions = Permissions {
@@ -887,7 +887,9 @@ mod tests {
         }
 
         // Check final balances (each turn pays 10_000 fee from the agent).
-        let fee = 10_000u64;
+        // signed-wells (ac01f9b7b): balances are i64 now; keep the fee i64 so the
+        // expected-balance arithmetic stays in the signed domain.
+        let fee = 10_000i64;
         let a_final = ledger.get(&id_a).unwrap().state.balance();
         assert_eq!(a_final, 100_000 - fee - 100);
 

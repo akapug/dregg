@@ -15,10 +15,10 @@
 //! against the export's verdict + post-column — failing closed on any drift. So here "an intent
 //! fulfilled" literally executes through the linked verified kernel and conserves there.
 //!
-//! Gated on the `verified-settle` feature (links `libdregg_lean.a`). Run with:
-//!   cargo test -p dregg-intent --features verified-settle --test fulfillment_ffi_verified
+//! Compiled on every native build (Lean unconditional; gated OUT only by `no-lean-link`). Run with:
+//!   cargo test -p dregg-intent --test fulfillment_ffi_verified
 
-#![cfg(feature = "verified-settle")]
+#![cfg(not(feature = "no-lean-link"))]
 
 use dregg_federation::threshold_decrypt::{
     KeyShare, ThresholdEncryptionKey, generate_epoch_key, produce_decryption_share,

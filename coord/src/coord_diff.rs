@@ -311,7 +311,7 @@ mod two_phase_commit_diff {
         (seed, pk)
     }
 
-    fn permissive_cell(key_byte: u8, balance: u64) -> Cell {
+    fn permissive_cell(key_byte: u8, balance: i64) -> Cell {
         let mut pk = [0u8; 32];
         pk[0] = key_byte;
         let mut cell = Cell::with_balance(pk, [0u8; 32], balance);

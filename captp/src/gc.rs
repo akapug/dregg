@@ -30,8 +30,8 @@ use crate::{FederationId, StrandId};
 /// The cell's holder-table is interned to the gate's wire `"H=<fed:count:s=n+...|...>;f=<fed>;s=<s>"`,
 /// mapping each 32-byte `FederationId` to a small index and reusing each `SessionId` u64 directly
 /// (the Lean gate compares fed/session by identity, so any injective interning preserves the verdict).
-/// Built `--features lean-gate`; a stub returning `None` otherwise.
-#[cfg(feature = "lean-gate")]
+/// Compiled on every native build (the inverted default); a stub returning `None` under the `no-lean-link` platform gate.
+#[cfg(not(feature = "no-lean-link"))]
 fn verified_drop_verdict(
     entry: Option<&ExportEntry>,
     from_federation: FederationId,
@@ -89,9 +89,9 @@ fn verified_drop_verdict(
     }
 }
 
-/// Stub when the `lean-gate` feature is off: the verified gate is unavailable, so the native Rust
+/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so the native Rust
 /// mutation's verdict decides. Referenced unconditionally in `process_drop_inner`.
-#[cfg(not(feature = "lean-gate"))]
+#[cfg(feature = "no-lean-link")]
 fn verified_drop_verdict(
     _entry: Option<&ExportEntry>,
     _from_federation: FederationId,
@@ -309,7 +309,7 @@ impl ExportGcManager {
         from_federation: FederationId,
         session: SessionId,
     ) -> DropResult {
-        // STRONG-FORM swap: when the verified Lean GC gate is linked (`--features lean-gate`,
+        // STRONG-FORM swap: when the verified Lean GC gate is linked (every native build;
         // `Dregg2.Exec.DistributedExports::dregg_captp_process_drop` =
         // `CapTPGCConcrete.processDrop`), the AUTHORITATIVE verdict (StillHeld / CanRevoke / Invalid)
         // comes from the verified Lean — so the F-11/F-12 session-refcount logic is decided BY the

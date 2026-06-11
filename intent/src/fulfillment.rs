@@ -993,7 +993,7 @@ pub const COMPUTRON_ASSET: [u8; 32] = [0u8; 32];
 /// is the point: the payment leg does NOT run through the legacy `dregg_turn::TurnExecutor`. It
 /// is folded through [`crate::verified_settle::settle_ring_verified`] — the verified per-asset
 /// transition `recKExecAsset` (proved in `metatheory/Dregg2/Intent/Ring.lean`), which under the
-/// `verified-settle` feature is cross-checked leg-by-leg against the REAL Lean FFI export
+/// default native build (Lean unconditional) is cross-checked leg-by-leg against the REAL Lean FFI export
 /// `@[export] dregg_record_kernel_step` (the PROVED `Exec.recKExec`;
 /// `RingFFI.ffi_export_realises_settleRing_leg`) and FAILS CLOSED on any divergence.
 ///
@@ -1114,7 +1114,7 @@ pub fn execute_fulfillment_flow_verified_with_key(
     };
 
     // Step 4: Settle through the verified executor — fail-closed, NO fallback. Under the
-    // `verified-settle` feature (on in the node), the leg is additionally settled by the REAL
+    // default native build (Lean unconditional), the leg is additionally settled by the REAL
     // Lean FFI export `dregg_record_kernel_step` over this exact projection and cross-checked;
     // any divergence refuses the payment.
     let k1 = settle_ring_verified(&k0, &[leg])
@@ -2819,7 +2819,7 @@ mod tests {
     /// Shared setup for the VERIFIED flow tests: a Trusted-mode fulfillment for an intent
     /// with `min_budget = 1000`, plus payer/recipient cells in a fresh ledger.
     fn verified_flow_fixture(
-        payer_balance: u64,
+        payer_balance: i64, // signed-wells (ac01f9b7b): cell balances are i64
     ) -> (
         Intent,
         FulfillmentWithPredicates,

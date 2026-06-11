@@ -605,7 +605,7 @@ mod tests {
     }
 
     /// Helper: create a cell with a given public key and insert it into the ledger.
-    fn insert_cell_with_key(ledger: &mut Ledger, public_key: [u8; 32], balance: u64) -> CellId {
+    fn insert_cell_with_key(ledger: &mut Ledger, public_key: [u8; 32], balance: i64) -> CellId {
         let token_id = [0u8; 32];
         let cell = Cell::with_balance(public_key, token_id, balance);
         let id = cell.id();

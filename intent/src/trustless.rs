@@ -1626,7 +1626,7 @@ impl TrustlessIntentEngine {
     ///   2. Runs [`Self::finalize`] to lower them to a real [`SettlementOutput`]'s `SealedTurn`.
     ///   3. Folds the lowered `Effect::Transfer` legs through the verified per-asset executor
     ///      ([`crate::verified_settle::settle_fulfillment_verified`]) — ALL-OR-NOTHING, asserting
-    ///      conservation per asset. With the `verified-settle` feature on, each leg is settled by
+    ///      conservation per asset. On every native build (Lean unconditional), each leg is settled by
     ///      the REAL Lean FFI (`@[export] dregg_record_kernel_step` over the PROVED `Exec.recKExec`,
     ///      per the Lean keystone `Dregg2.Intent.RingFFI.ffi_export_realises_settleRing_leg`), NOT a
     ///      Rust mirror; off, the in-process verified transition (the proved-equivalent reference)

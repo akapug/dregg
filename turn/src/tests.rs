@@ -65,7 +65,7 @@ impl TestKeypair {
 }
 
 /// Helper: create a test cell with a known keypair and open permissions (no auth needed).
-fn make_open_cell(seed: u8, balance: u64) -> (Cell, TestKeypair) {
+fn make_open_cell(seed: u8, balance: i64) -> (Cell, TestKeypair) {
     let kp = TestKeypair::from_seed(seed);
     let token_id = [0u8; 32];
     let mut cell = Cell::with_balance(kp.public_key, token_id, balance);
@@ -84,7 +84,7 @@ fn make_open_cell(seed: u8, balance: u64) -> (Cell, TestKeypair) {
 }
 
 /// Helper: create a test cell with signature-required permissions and a known keypair.
-fn make_sig_cell(seed: u8, balance: u64) -> (Cell, TestKeypair) {
+fn make_sig_cell(seed: u8, balance: i64) -> (Cell, TestKeypair) {
     let kp = TestKeypair::from_seed(seed);
     let token_id = [0u8; 32];
     let cell = Cell::with_balance(kp.public_key, token_id, balance);
@@ -93,7 +93,7 @@ fn make_sig_cell(seed: u8, balance: u64) -> (Cell, TestKeypair) {
 }
 
 /// Helper: create a ledger with two open cells (agent + target).
-fn setup_two_open_cells(agent_balance: u64, target_balance: u64) -> (Ledger, CellId, CellId) {
+fn setup_two_open_cells(agent_balance: i64, target_balance: i64) -> (Ledger, CellId, CellId) {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, agent_balance);
     let (target, _) = make_open_cell(2, target_balance);
@@ -3005,7 +3005,7 @@ fn test_fragment_signature_count_mismatch() {
 // =============================================================================
 
 /// Helper: create a cell with a program and open permissions.
-fn make_programmed_cell(seed: u8, balance: u64, program: dregg_cell::CellProgram) -> Cell {
+fn make_programmed_cell(seed: u8, balance: i64, program: dregg_cell::CellProgram) -> Cell {
     let kp = TestKeypair::from_seed(seed);
     let token_id = [0u8; 32];
     let mut cell = Cell::with_balance(kp.public_key, token_id, balance);
@@ -3256,9 +3256,10 @@ fn test_program_sum_conservation_enforced() {
 
 /// Helper: create a ledger with three open cells (agent, cell_a, cell_b).
 fn setup_three_open_cells(
-    agent_balance: u64,
-    a_balance: u64,
-    b_balance: u64,
+    // signed-wells (ac01f9b7b): cell balances are i64
+    agent_balance: i64,
+    a_balance: i64,
+    b_balance: i64,
 ) -> (Ledger, CellId, CellId, CellId) {
     let mut ledger = Ledger::new();
     let (agent, _) = make_open_cell(1, agent_balance);
@@ -5962,8 +5963,10 @@ fn test_fee_distribution() {
         }
 
         let agent_cell = ledger.get(&agent_id).unwrap();
+        // signed-wells (ac01f9b7b): balance() is i64; these are ordinary
+        // (non-negative) cells, so compare in u64 via a checked conversion.
         assert_eq!(
-            agent_cell.state.balance(),
+            u64::try_from(agent_cell.state.balance()).unwrap(),
             10000 - case.fee,
             "case {}: agent balance mismatch",
             case.name
@@ -5973,7 +5976,7 @@ fn test_fee_distribution() {
             if case.proposer_exists {
                 let proposer_cell = ledger.get(&pid).unwrap();
                 assert_eq!(
-                    proposer_cell.state.balance(),
+                    u64::try_from(proposer_cell.state.balance()).unwrap(),
                     case.expect_proposer_balance,
                     "case {}: proposer balance mismatch",
                     case.name
@@ -5983,7 +5986,7 @@ fn test_fee_distribution() {
         if let Some(tid) = treasury_id {
             let treasury_cell = ledger.get(&tid).unwrap();
             assert_eq!(
-                treasury_cell.state.balance(),
+                u64::try_from(treasury_cell.state.balance()).unwrap(),
                 case.expect_treasury_balance,
                 "case {}: treasury balance mismatch",
                 case.name
@@ -7265,7 +7268,9 @@ fn setup_sovereign_cell_for_proof_test() -> (Ledger, CellId, CellId, [u8; 32]) {
     // matches what EffectVmAir puts into PI[OLD_COMMIT_BASE..+4] via
     // CellState::compute_commitment_4 (resolves Silver-Vision bug #99).
     let vm_state = dregg_circuit::CellState::new(
-        sovereign_cell.state.balance(),
+        // signed-wells (ac01f9b7b): cell balance is i64; the circuit VM domain
+        // takes u64. This sovereign cell is ordinary (non-negative) — checked.
+        u64::try_from(sovereign_cell.state.balance()).unwrap(),
         sovereign_cell.state.nonce() as u32,
     );
     let commit_4bb = dregg_circuit::CellState::compute_commitment_4(
@@ -10053,7 +10058,7 @@ mod binding_proof_executor_tests {
         }
     }
 
-    fn permissive_cell_with_balance(seed: u8, balance: u64) -> Cell {
+    fn permissive_cell_with_balance(seed: u8, balance: i64) -> Cell {
         let mut pk = [0u8; 32];
         pk[0] = seed;
         let token = [0u8; 32];
@@ -10179,10 +10184,18 @@ mod binding_proof_executor_tests {
         ledger.insert_cell(target_cell).unwrap();
 
         // Prover claims: old=1000 (from ledger), new=900, amount=100.
+        // signed-wells (ac01f9b7b): balances cross the binding-proof PI boundary
+        // as the order-preserving BIASED u64 (`balance_biased`), matching the
+        // executor's snapshot-aware reconstruction in extract_burn_binding_params.
         let witness = EffectActionWitness {
             schema: SCHEMA_BURN,
             fields: vec![*target_id.as_bytes()],
-            amounts: vec![1000, 900, 100, 1],
+            amounts: vec![
+                dregg_cell::state::balance_biased(1000),
+                dregg_cell::state::balance_biased(900),
+                100,
+                1,
+            ],
         };
         let proof = prove_effect_action(&witness);
         let pi = witness.public_inputs();
@@ -10309,7 +10322,7 @@ mod binding_proof_executor_tests {
     fn executor_rejects_forged_effect_binding_proof_bytes() {
         // Build a two-cell ledger: agent has enough balance for the fee, and
         // the target is reachable via a capability on the agent.
-        let agent_balance: u64 = 1_000;
+        let agent_balance: i64 = 1_000; // signed-wells (ac01f9b7b): balances are i64
         let (mut ledger, agent_id, target_id) = super::setup_two_open_cells(agent_balance, 500);
 
         let executor = super::zero_cost_executor();

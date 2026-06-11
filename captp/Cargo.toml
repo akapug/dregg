@@ -19,20 +19,21 @@ hkdf = "0.12"
 sha2 = { workspace = true }
 zeroize = { workspace = true }
 
-# Optional: route the §6 non-amplification verdict of `validate_handoff` through the VERIFIED Lean
-# export (`dregg_captp_validate_handoff` = `handoffNonAmplifyingC`), keeping the Rust lattice as the
-# differential sibling. Enabled by the node (which already links `dregg-lean-ffi` with the Lean
-# archive); off by default so the low-level crate stays lean and the Lean archive is not pulled into
-# every consumer.
-dregg-lean-ffi = { path = "../dregg-lean-ffi", optional = true }
+# UNCONDITIONAL (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): the §6 non-amplification
+# verdict of `validate_handoff` routes through the VERIFIED Lean export
+# (`dregg_captp_validate_handoff` = `handoffNonAmplifyingC`) on every native build, keeping the
+# Rust lattice as the differential sibling. The ONE opt-out is the `no-lean-link` platform
+# feature (wasm32 / zkvm guest — targets that cannot link libdregg_lean.a).
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
 
 [dev-dependencies]
 serde_json = "1"
 
 [features]
-# Gate the verified handoff non-amplification leg on the Lean export. With the archive linked, the
-# §6 verdict is decided BY the verified rule; without it, the Rust lattice decides (differential).
-lean-gate = ["dep:dregg-lean-ffi", "dregg-lean-ffi/lean-lib"]
+# PLATFORM gate, OFF by default: only wasm32/zkvm builds set it. It compiles the Rust-lattice
+# fallback IN PLACE OF the verified Lean gate — a statement about the target's linker, never
+# about which guarantees this dregg has.
+no-lean-link = ["dregg-lean-ffi/no-lean-link"]
 
 [lints]
 workspace = true

@@ -137,10 +137,12 @@ mod atomicity_diff {
         (seed, pk)
     }
 
+    // signed-wells (ac01f9b7b): cell balances are i64; keep a u64 convenience
+    // param (callers pass non-negative bal0/bal1/bal2) and convert at the boundary.
     fn permissive_cell(key_byte: u8, balance: u64) -> Cell {
         let mut pk = [0u8; 32];
         pk[0] = key_byte;
-        let mut cell = Cell::with_balance(pk, [0u8; 32], balance);
+        let mut cell = Cell::with_balance(pk, [0u8; 32], balance as i64);
         cell.permissions = dregg_cell::Permissions {
             send: dregg_cell::AuthRequired::None,
             receive: dregg_cell::AuthRequired::None,

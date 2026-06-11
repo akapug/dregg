@@ -105,7 +105,7 @@ fn token_id() -> [u8; 32] {
 /// live in other tests).
 fn permissive_cell(seed: &str, balance: u64) -> Cell {
     let key = test_key(seed);
-    let mut cell = Cell::with_balance(key, token_id(), balance);
+    let mut cell = Cell::with_balance(key, token_id(), balance as i64);
     cell.permissions = Permissions {
         send: AuthRequired::None,
         receive: AuthRequired::None,
@@ -363,7 +363,7 @@ fn run_graph(executor: &TurnExecutor, ledger: &mut Ledger, ids: [CellId; 5]) -> 
         label: "A-issuer",
         turn: t1,
         receipt: r1,
-        agent_balance_pre: pre_a,
+        agent_balance_pre: pre_a as u64,
         vm_effect: VmEffect::SetField {
             field_idx: 0,
             value: BabyBear::new(1), // a meaningful non-zero; the AIR doesn't constrain
@@ -397,7 +397,7 @@ fn run_graph(executor: &TurnExecutor, ledger: &mut Ledger, ids: [CellId; 5]) -> 
         label: "B-registry",
         turn: t2,
         receipt: r2,
-        agent_balance_pre: pre_b,
+        agent_balance_pre: pre_b as u64,
         vm_effect: VmEffect::SetField {
             field_idx: 0,
             value: BabyBear::new(2),
@@ -427,7 +427,7 @@ fn run_graph(executor: &TurnExecutor, ledger: &mut Ledger, ids: [CellId; 5]) -> 
         label: "C-subscription",
         turn: t3,
         receipt: r3,
-        agent_balance_pre: pre_c,
+        agent_balance_pre: pre_c as u64,
         vm_effect: VmEffect::SetField {
             field_idx: 0,
             value: BabyBear::new(3),
@@ -460,7 +460,7 @@ fn run_graph(executor: &TurnExecutor, ledger: &mut Ledger, ids: [CellId; 5]) -> 
         label: "D-worker",
         turn: t4,
         receipt: r4,
-        agent_balance_pre: pre_d,
+        agent_balance_pre: pre_d as u64,
         vm_effect: VmEffect::Transfer {
             amount: bounty_amount,
             direction: 0, // 0 = incoming/credit (from D's perspective)
@@ -498,7 +498,7 @@ fn run_graph(executor: &TurnExecutor, ledger: &mut Ledger, ids: [CellId; 5]) -> 
         label: "E-settlement",
         turn: t5,
         receipt: r5,
-        agent_balance_pre: pre_e,
+        agent_balance_pre: pre_e as u64,
         vm_effect: VmEffect::SetField {
             field_idx: 0,
             value: BabyBear::new(5),
@@ -570,13 +570,14 @@ fn silver_vision_graph_e2e() {
         "step3 effect must be visible on subscription"
     );
     // Step 4 was a Transfer — assert the value moved.
+    // signed-wells (ac01f9b7b): balance() is i64; compare in u64 (ordinary cells).
     assert_eq!(
-        ledger.get(&ids[3]).unwrap().state.balance(),
+        u64::try_from(ledger.get(&ids[3]).unwrap().state.balance()).unwrap(),
         steps[3].agent_balance_pre + 100 - 300,
         "worker balance must increase by bounty amount (after paying turn fee)"
     );
     assert_eq!(
-        ledger.get(&ids[2]).unwrap().state.balance(),
+        u64::try_from(ledger.get(&ids[2]).unwrap().state.balance()).unwrap(),
         steps[2].agent_balance_pre - 100 - 300,
         "subscription balance must decrease by bounty amount (after paying its turn fee)"
     );

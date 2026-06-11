@@ -19,8 +19,15 @@ path = "src/lib.rs"
 
 [features]
 default = []
-# Enable Lean FFI linking + differential/marshal binaries (requires libdregg_lean.a).
-lean-lib = []
+# PLATFORM gate (polarity-inverted, see docs/FEATURE-HYGIENE.md §Lean): linking
+# libdregg_lean.a is the UNCONDITIONAL default on native. `no-lean-link` is ON only for
+# targets that genuinely cannot link the archive (wasm32, zkvm guest); it suppresses the
+# archive refresh + all link directives, so the crate builds marshal-only with the runtime
+# stubs (`lean_available()` = false). build.rs additionally hard-skips the link for
+# wasm32/zkvm targets as defense-in-depth.
+no-lean-link = []
+# Enable the differential/marshal binaries (they require the linked archive at run time).
+lean-lib = ["dep:proptest"]
 
 [[bin]]
 name = "dregg-lean-ffi"
@@ -83,7 +90,9 @@ blake3 = "1"
 # dependency (not dev) because the fuzzer runs inside the `full_turn_differential` BINARY,
 # which performs the one-time Lean runtime init (`dregg_ffi_init`) before driving proptest's
 # `TestRunner` — a `#[test]` cannot guarantee the single-init ordering the FFI requires.
-proptest = "1"
+# Optional (tied to `lean-lib`): the fuzzer only runs in the differential bins; keeping it
+# out of the default graph is what lets the now-unconditional lib dep compile on wasm32.
+proptest = { version = "1", optional = true }
 
 [build-dependencies]
 cc = "1"
