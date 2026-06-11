@@ -43,3 +43,4 @@ libdregg_lean.a*
 # build spikes; a build/scratch area, never committed.
 web/
 /target-swaplane
+site/pkg

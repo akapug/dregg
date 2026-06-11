@@ -521,6 +521,12 @@ pub struct CellDetailResponse {
     pub state_commitment: String,
     /// Quick kind for <dregg-cell-program> and raw views without full program dump.
     pub program_kind: String,
+    /// Full self-describing program view (`{ kind, constraints | cases |
+    /// circuit_hash }`) — the SAME total `StateConstraintView` projection the
+    /// wasm runtime serves (`dregg_cell::program::CellProgramView`), so a
+    /// live cell can show its own slot caveats (e.g. a council cell's
+    /// AffineLe threshold M) to remote inspectors.
+    pub program: dregg_cell::program::CellProgramView,
     /// The cell's `[FieldElement; 8]` state slots, each hex-encoded (64 chars).
     ///
     /// Empty when the cell is not found. Slot indices match the on-chain layout
@@ -3467,6 +3473,7 @@ async fn get_cell_detail(
                 dregg_cell::CellProgram::Cases { .. } => "Cases".to_string(),
                 dregg_cell::CellProgram::Circuit { .. } => "Circuit".to_string(),
             },
+            program: cell.program.to_view(),
             fields: cell
                 .state
                 .fields
@@ -3490,6 +3497,7 @@ async fn get_cell_detail(
             delegation_epoch: 0,
             state_commitment: String::new(),
             program_kind: "None".to_string(),
+            program: dregg_cell::program::CellProgramView::None,
             fields: Vec::new(),
         })),
     }

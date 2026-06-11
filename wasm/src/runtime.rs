@@ -1027,26 +1027,27 @@ impl DreggRuntime {
             // `default_mode` determines whether the new cell is Hosted or
             // Sovereign; the runtime's default factory uses Hosted.
             //
-            // We look up the factory's required mode from the registry so
-            // the params match what `validate_creation` expects — passing
-            // a mismatched mode would trip `FactoryError::ModeMismatch`.
-            let factory_mode = self
-                .executor
-                .factory_registry
-                .borrow()
-                .get(factory_vk)
-                .ok_or_else(|| {
+            // We look up the factory's required mode AND its pinned child
+            // program VK from the registry so the params match what
+            // `validate_creation` expects — a mismatched mode trips
+            // `FactoryError::ModeMismatch`, and a program-pinned factory
+            // (e.g. the polis council/constitution descriptors, which carry
+            // `child_program_vk`) trips `FactoryError::ProgramMismatch` if
+            // the params claim `None`.
+            let (factory_mode, child_program_vk) = {
+                let registry = self.executor.factory_registry.borrow();
+                let descriptor = registry.get(factory_vk).ok_or_else(|| {
                     format!(
                         "unknown factory VK {} — call deploy_factory first",
                         hex_encode_bytes(factory_vk)
                     )
-                })?
-                .default_mode
-                .clone();
+                })?;
+                (descriptor.default_mode.clone(), descriptor.child_program_vk)
+            };
 
             let params = FactoryCreationParams {
                 mode: factory_mode,
-                program_vk: None,
+                program_vk: child_program_vk,
                 initial_fields: Vec::new(),
                 initial_caps: Vec::new(),
                 owner_pubkey: public_key,
