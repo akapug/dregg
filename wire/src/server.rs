@@ -55,7 +55,6 @@ pub trait ProofVerifier: Send + Sync + std::fmt::Debug {
 #[derive(Clone, Debug)]
 pub struct StarkVerifier;
 
-#[cfg(feature = "stark-verifier")]
 impl ProofVerifier for StarkVerifier {
     fn verify(&self, proof_bytes: &[u8], action: &str, resource: &str) -> Result<bool, String> {
         let proof = dregg_circuit::stark::proof_from_bytes(proof_bytes)?;
@@ -104,15 +103,6 @@ impl ProofVerifier for StarkVerifier {
             Ok(()) => Ok(true),
             Err(_reason) => Ok(false),
         }
-    }
-}
-
-/// Fallback StarkVerifier when the stark-verifier feature is not enabled.
-/// Always rejects proofs (fail-closed).
-#[cfg(not(feature = "stark-verifier"))]
-impl ProofVerifier for StarkVerifier {
-    fn verify(&self, _proof_bytes: &[u8], _action: &str, _resource: &str) -> Result<bool, String> {
-        Err("STARK verification unavailable: stark-verifier feature not enabled".to_string())
     }
 }
 

@@ -793,8 +793,11 @@ mod tests {
         }
     }
 
+    // signed-wells (ac01f9b7b): cell balances are i64; this test helper keeps a
+    // u64 convenience param (callers pass small non-negative amounts) and
+    // converts at the boundary.
     fn cell(seed: u8, balance: u64) -> Cell {
-        Cell::with_balance([seed; 32], [seed.wrapping_add(7); 32], balance)
+        Cell::with_balance([seed; 32], [seed.wrapping_add(7); 32], balance as i64)
     }
 
     #[test]

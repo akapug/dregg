@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 dregg-app-framework = { path = "../../app-framework" }
-dregg-circuit = { path = "../../circuit", default-features = false, features = ["mock"] }
+dregg-circuit = { path = "../../circuit", default-features = false }
 dregg-dsl-runtime = { path = "../../dregg-dsl-runtime" }
 dregg-turn = { path = "../../turn" }
 dregg-intent = { path = "../../intent" }

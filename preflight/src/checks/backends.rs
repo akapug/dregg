@@ -126,24 +126,20 @@ fn check_custom_stark() -> Result<(), String> {
     Ok(())
 }
 
+// NOTE: this was previously wrapped in `#[cfg(feature = "plonky3")]` — but preflight
+// declares NO `plonky3` feature, so the cfg was ALWAYS FALSE and the check passed
+// vacuously (a preflight gate that never ran). Preflight depends on dregg-circuit with
+// default features (plonky3 on), so the check is now unconditional and real.
 fn check_plonky3_backend() -> Result<(), String> {
-    #[cfg(feature = "plonky3")]
-    {
-        let (witness, _, tree, fact_pos) = build_test_witness();
-        let body_proofs = vec![make_membership_proof(&tree, fact_pos)];
-        let proof = prove_authorization_with_membership(&witness, &body_proofs);
-        let conclusion = witness.conclusion();
-        let acc_hash = witness.final_accumulated_hash();
-        let expected_hashes = body_fact_hashes_from_witness(&witness);
-        verify_authorization_with_membership(&proof, conclusion, acc_hash, &expected_hashes)
-            .map_err(|e| format!("plonky3-compatible STARK failed: {e}"))?;
-        return Ok(());
-    }
-
-    #[cfg(not(feature = "plonky3"))]
-    {
-        Ok(())
-    }
+    let (witness, _, tree, fact_pos) = build_test_witness();
+    let body_proofs = vec![make_membership_proof(&tree, fact_pos)];
+    let proof = prove_authorization_with_membership(&witness, &body_proofs);
+    let conclusion = witness.conclusion();
+    let acc_hash = witness.final_accumulated_hash();
+    let expected_hashes = body_fact_hashes_from_witness(&witness);
+    verify_authorization_with_membership(&proof, conclusion, acc_hash, &expected_hashes)
+        .map_err(|e| format!("plonky3-compatible STARK failed: {e}"))?;
+    Ok(())
 }
 
 fn check_ivc_recursive() -> Result<(), String> {

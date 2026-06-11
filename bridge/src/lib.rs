@@ -46,7 +46,6 @@ pub mod present;
 /// values into a single felt). See module docs for the integration shape.
 pub mod action_binding;
 
-#[cfg(feature = "turn")]
 pub mod verifier;
 
 #[cfg(test)]
@@ -70,5 +69,4 @@ pub use present::{
     verify_presentation_complete, verify_presentation_full, verify_proof_complete,
     verify_revealed_facts_commitment, verify_wire_fold_chain,
 };
-#[cfg(feature = "turn")]
 pub use verifier::{DslAwareProofVerifier, StarkProofVerifier};

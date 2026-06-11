@@ -72,7 +72,9 @@ pub struct UnsafeLocalOnlyMarker(());
 
 impl UnsafeLocalOnlyMarker {
     /// Construct the marker. Only call this in tests or benchmarks.
-    #[cfg(any(test, feature = "bench"))]
+    /// (Was gated on an undeclared `bench` feature — an always-false cfg; now uses
+    /// the declared `test-utils` dev gate.)
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn new_for_testing() -> Self {
         Self(())
     }
