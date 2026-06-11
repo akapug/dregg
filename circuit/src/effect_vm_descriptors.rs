@@ -239,6 +239,122 @@ pub const DREGG_EFFECTVM_RECORD_V1_JSON: &str =
 pub const DREGG_EFFECTVM_RECORD_V1_FP: &str =
     "8c0a25d8b1c4b63ad0957516ff89eb7f10d8e3ba5ad310d2d64950a12ab3d6a8";
 
+// ==== IR-v2 descriptor consts (EPOCH flag-day; ADDITIVE — the v1 consts above stay LIVE) ====
+//
+// These are the byte-exact output of the Lean executable `EmitAllJsonV2.lean`
+// (`lake env lean --run`, which wires `EffectVmEmitV2.v2Registry` through
+// `DescriptorIR2.emitVmJson2`). Each is a VERSIONED v2 wire string (`"ir":2`) carrying the five
+// EPOCH tables (main / poseidon2_chip / range / memory / map_ops) + the lookup/mem_op/map_op
+// constraint grammar that `descriptor_ir2::parse_vm_descriptor2` interprets. They sit ALONGSIDE
+// the v1 JSONs during the transition: the live prover still routes through the v1 path
+// (`lean_descriptor_air::prove_vm_descriptor`); these are wired+fingerprinted ahead of the
+// cutover lane. The registry key is the UNIQUE Lean def-name (the 8 setField slots share the wire
+// `name` `dregg-effectvm-setfield-v1`, so name-keying would collide — def-name does not).
+pub const DREGG_EFFECTVM_TRANSFER_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-transfer-ir2.json");
+pub const DREGG_EFFECTVM_TRANSFER_IR2_FP: &str =
+    "dfbb072d8b4abe68b7ea2c184f40971f473869102079865263ab25e125a91abd";
+pub const DREGG_EFFECTVM_BURN_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-burn-ir2.json");
+pub const DREGG_EFFECTVM_BURN_IR2_FP: &str =
+    "b774cca29d918f917e620474352c308d040632b396392cebf9852ebe1eeba609";
+pub const DREGG_EFFECTVM_MINT_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-mint-ir2.json");
+pub const DREGG_EFFECTVM_MINT_IR2_FP: &str =
+    "5fc8021abf225b689bccadc7a5f66810d7aec0a737e177f6c7a24451f7230627";
+pub const DREGG_EFFECTVM_NOTE_SPEND_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-note-spend-ir2.json");
+pub const DREGG_EFFECTVM_NOTE_SPEND_IR2_FP: &str =
+    "233986f9087db17190ead8738d7bcc17c3a249cfbd144d231b75718d952e8718";
+pub const DREGG_EFFECTVM_NOTE_CREATE_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-note-create-ir2.json");
+pub const DREGG_EFFECTVM_NOTE_CREATE_IR2_FP: &str =
+    "7c7bd3857023489bd6d8aa08360bc48031a8db3d35d8b2a5b09e183b318b3c0d";
+pub const DREGG_EFFECTVM_CELL_SEAL_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-cell-seal-ir2.json");
+pub const DREGG_EFFECTVM_CELL_SEAL_IR2_FP: &str =
+    "d5438a848af9324effc6f2fc355cc7567c10f0a48acec7d812ec718beb0c84ed";
+pub const DREGG_EFFECTVM_CELL_DESTROY_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-cell-destroy-ir2.json");
+pub const DREGG_EFFECTVM_CELL_DESTROY_IR2_FP: &str =
+    "3ed698e913022364620d16e7ce92d95c04c5ab52985a98b7397a7860649d78d1";
+pub const DREGG_EFFECTVM_REFUSAL_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-refusal-ir2.json");
+pub const DREGG_EFFECTVM_REFUSAL_IR2_FP: &str =
+    "2b50ef88cc82bcd6e6cd93e80d9a12537ebc86ee3c7ffdf74170a5da979c8629";
+pub const DREGG_EFFECTVM_SET_PERMS_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-perms-ir2.json");
+pub const DREGG_EFFECTVM_SET_PERMS_IR2_FP: &str =
+    "09b4b9853b19a1a0160fc75a86c2fd2e4e7134d0a98c2e5746f7f2224f14a5e3";
+pub const DREGG_EFFECTVM_SET_VK_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-vk-ir2.json");
+pub const DREGG_EFFECTVM_SET_VK_IR2_FP: &str =
+    "1d1b77641197e4d0d293a778a5038405cbac7776ad0f1c5608b4b97ed0ed1845";
+pub const DREGG_EFFECTVM_EXERCISE_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-exercise-ir2.json");
+pub const DREGG_EFFECTVM_EXERCISE_IR2_FP: &str =
+    "68bbb2fc28d868296f3f28127d068cef81c3572598bff6f173665a2b6caeb623";
+pub const DREGG_EFFECTVM_PIPELINED_SEND_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-pipelined-send-ir2.json");
+pub const DREGG_EFFECTVM_PIPELINED_SEND_IR2_FP: &str =
+    "12b06b7a67a5c64dfe5ff19530fc0d4e4f7b8f1268e3365bf26d3199a732caa3";
+pub const DREGG_EFFECTVM_REFRESH_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-refresh-ir2.json");
+pub const DREGG_EFFECTVM_REFRESH_IR2_FP: &str =
+    "4cff64900f8e448d096dc68d5c3492221bfb969ba4c2921ae4d7567f23745ae5";
+pub const DREGG_EFFECTVM_INCREMENT_NONCE_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-increment-nonce-ir2.json");
+pub const DREGG_EFFECTVM_INCREMENT_NONCE_IR2_FP: &str =
+    "4d1d14fe2a6c2dab9c1ced872f5923a527297c62d85163a7ab52ad889667c34e";
+pub const DREGG_EFFECTVM_REVOKE_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-revoke-ir2.json");
+pub const DREGG_EFFECTVM_REVOKE_IR2_FP: &str =
+    "084f26bb514051cc3c8091c7d8cdc3da5fb2c062d5fed17c759df2a86c2e5e1f";
+pub const DREGG_EFFECTVM_INTRODUCE_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-introduce-ir2.json");
+pub const DREGG_EFFECTVM_INTRODUCE_IR2_FP: &str =
+    "844f639b3bc67bf7bfeda2fdb8495ac72735c427bdda5978c735bbd302e52a4b";
+pub const DREGG_EFFECTVM_ATTENUATE_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-attenuate-ir2.json");
+pub const DREGG_EFFECTVM_ATTENUATE_IR2_FP: &str =
+    "606d2db855d06129c0f1f4faba6ccf6b84ae7e4fef6885c48914f653a2cd658d";
+pub const DREGG_EFFECTVM_SET_FIELD_DYN_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-field-dyn-ir2.json");
+pub const DREGG_EFFECTVM_SET_FIELD_DYN_IR2_FP: &str =
+    "d0e1e196fd68f91afeb507f0760b2054eacda1759d81a3db6e772fa8485f3bfe";
+pub const DREGG_EFFECTVM_SET_FIELD_0_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-field-0-ir2.json");
+pub const DREGG_EFFECTVM_SET_FIELD_0_IR2_FP: &str =
+    "df2405f05a4e4efd301f197a8e54e86579a11fd31fcdf79a7f73ac6cf1229480";
+pub const DREGG_EFFECTVM_SET_FIELD_1_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-field-1-ir2.json");
+pub const DREGG_EFFECTVM_SET_FIELD_1_IR2_FP: &str =
+    "44784f2bd822f00de34045ff3ba7bd0fb3db871f11ed2bee1b4ccbcdfb352f0d";
+pub const DREGG_EFFECTVM_SET_FIELD_2_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-field-2-ir2.json");
+pub const DREGG_EFFECTVM_SET_FIELD_2_IR2_FP: &str =
+    "fd2d4779f83ff487bc4537018dcf851aa4426c25fc68d4da100821b10d8865db";
+pub const DREGG_EFFECTVM_SET_FIELD_3_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-field-3-ir2.json");
+pub const DREGG_EFFECTVM_SET_FIELD_3_IR2_FP: &str =
+    "608f692524f8e3ad836f5029ebfa2a97dbaa96a48bdbe82dfdc57ada7997ab6c";
+pub const DREGG_EFFECTVM_SET_FIELD_4_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-field-4-ir2.json");
+pub const DREGG_EFFECTVM_SET_FIELD_4_IR2_FP: &str =
+    "3e7d0504b72738ef816d4a3655150d5a02189e45e6a41bee11b2b2d10b454adf";
+pub const DREGG_EFFECTVM_SET_FIELD_5_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-field-5-ir2.json");
+pub const DREGG_EFFECTVM_SET_FIELD_5_IR2_FP: &str =
+    "405612aa93b657c728f7e99da9a5eb7000639b1db538aafaee8494b42ea17a78";
+pub const DREGG_EFFECTVM_SET_FIELD_6_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-field-6-ir2.json");
+pub const DREGG_EFFECTVM_SET_FIELD_6_IR2_FP: &str =
+    "a0d6d4a1792b06c72b66f0fc5a14ff33705ace8616a613667394ffeb437988e9";
+pub const DREGG_EFFECTVM_SET_FIELD_7_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-set-field-7-ir2.json");
+pub const DREGG_EFFECTVM_SET_FIELD_7_IR2_FP: &str =
+    "4edd664b2f61ac9f5a4fe9ab7873d9a9c6469d8bb9b7a1dd1c3ec4f392811bf4";
+
 // ==== selector index -> (descriptor name, const json, fingerprint) ====
 pub const SELECTOR_DESCRIPTORS: &[(usize, &str, &str, &str)] = &[
     (
@@ -400,6 +516,147 @@ pub const NAME_ONLY_DESCRIPTORS: &[(&str, &str, &str)] = &[
         DREGG_EFFECTVM_MINT_V1_JSON,
         DREGG_EFFECTVM_MINT_V1_FP,
     ), // mintVmDescriptor: supply MINT (balance credit); no dedicated EffectVM sel (distinct from BRIDGE_MINT)
+];
+
+// ==== IR-v2 descriptor registry (EPOCH; ADDITIVE — keyed by UNIQUE Lean def-name) ====
+//
+// The `EffectVmEmitV2.v2Registry` entries, byte-exact from `EmitAllJsonV2.lean`, fingerprinted.
+// These prove+verify through `descriptor_ir2::{parse_vm_descriptor2, prove_vm_descriptor2,
+// verify_vm_descriptor2}` (the multi-table batch STARK). The live prover does NOT route through
+// these yet — they are wired ahead of the cutover lane so the flag-day flips a registry pointer,
+// not an emission. Key = the Lean def-name (`transferVmDescriptor2`, `setFieldVmDescriptor2-3`, …)
+// since the wire `name` collides across graduated/per-slot descriptors.
+pub const V2_DESCRIPTORS: &[(&str, &str, &str)] = &[
+    (
+        "transferVmDescriptor2",
+        DREGG_EFFECTVM_TRANSFER_IR2_JSON,
+        DREGG_EFFECTVM_TRANSFER_IR2_FP,
+    ),
+    (
+        "burnVmDescriptor2",
+        DREGG_EFFECTVM_BURN_IR2_JSON,
+        DREGG_EFFECTVM_BURN_IR2_FP,
+    ),
+    (
+        "mintVmDescriptor2",
+        DREGG_EFFECTVM_MINT_IR2_JSON,
+        DREGG_EFFECTVM_MINT_IR2_FP,
+    ),
+    (
+        "noteSpendVmDescriptor2",
+        DREGG_EFFECTVM_NOTE_SPEND_IR2_JSON,
+        DREGG_EFFECTVM_NOTE_SPEND_IR2_FP,
+    ),
+    (
+        "noteCreateVmDescriptor2",
+        DREGG_EFFECTVM_NOTE_CREATE_IR2_JSON,
+        DREGG_EFFECTVM_NOTE_CREATE_IR2_FP,
+    ),
+    (
+        "cellSealVmDescriptor2",
+        DREGG_EFFECTVM_CELL_SEAL_IR2_JSON,
+        DREGG_EFFECTVM_CELL_SEAL_IR2_FP,
+    ),
+    (
+        "cellDestroyVmDescriptor2",
+        DREGG_EFFECTVM_CELL_DESTROY_IR2_JSON,
+        DREGG_EFFECTVM_CELL_DESTROY_IR2_FP,
+    ),
+    (
+        "refusalVmDescriptor2",
+        DREGG_EFFECTVM_REFUSAL_IR2_JSON,
+        DREGG_EFFECTVM_REFUSAL_IR2_FP,
+    ),
+    (
+        "setPermsVmDescriptor2",
+        DREGG_EFFECTVM_SET_PERMS_IR2_JSON,
+        DREGG_EFFECTVM_SET_PERMS_IR2_FP,
+    ),
+    (
+        "setVKVmDescriptor2",
+        DREGG_EFFECTVM_SET_VK_IR2_JSON,
+        DREGG_EFFECTVM_SET_VK_IR2_FP,
+    ),
+    (
+        "exerciseVmDescriptor2",
+        DREGG_EFFECTVM_EXERCISE_IR2_JSON,
+        DREGG_EFFECTVM_EXERCISE_IR2_FP,
+    ),
+    (
+        "pipelinedSendVmDescriptor2",
+        DREGG_EFFECTVM_PIPELINED_SEND_IR2_JSON,
+        DREGG_EFFECTVM_PIPELINED_SEND_IR2_FP,
+    ),
+    (
+        "refreshVmDescriptor2",
+        DREGG_EFFECTVM_REFRESH_IR2_JSON,
+        DREGG_EFFECTVM_REFRESH_IR2_FP,
+    ),
+    (
+        "incrementNonceVmDescriptor2",
+        DREGG_EFFECTVM_INCREMENT_NONCE_IR2_JSON,
+        DREGG_EFFECTVM_INCREMENT_NONCE_IR2_FP,
+    ),
+    (
+        "revokeVmDescriptor2",
+        DREGG_EFFECTVM_REVOKE_IR2_JSON,
+        DREGG_EFFECTVM_REVOKE_IR2_FP,
+    ),
+    (
+        "introduceVmDescriptor2",
+        DREGG_EFFECTVM_INTRODUCE_IR2_JSON,
+        DREGG_EFFECTVM_INTRODUCE_IR2_FP,
+    ),
+    (
+        "attenuateVmDescriptor2",
+        DREGG_EFFECTVM_ATTENUATE_IR2_JSON,
+        DREGG_EFFECTVM_ATTENUATE_IR2_FP,
+    ),
+    (
+        "setFieldDynVmDescriptor2",
+        DREGG_EFFECTVM_SET_FIELD_DYN_IR2_JSON,
+        DREGG_EFFECTVM_SET_FIELD_DYN_IR2_FP,
+    ),
+    (
+        "setFieldVmDescriptor2-0",
+        DREGG_EFFECTVM_SET_FIELD_0_IR2_JSON,
+        DREGG_EFFECTVM_SET_FIELD_0_IR2_FP,
+    ),
+    (
+        "setFieldVmDescriptor2-1",
+        DREGG_EFFECTVM_SET_FIELD_1_IR2_JSON,
+        DREGG_EFFECTVM_SET_FIELD_1_IR2_FP,
+    ),
+    (
+        "setFieldVmDescriptor2-2",
+        DREGG_EFFECTVM_SET_FIELD_2_IR2_JSON,
+        DREGG_EFFECTVM_SET_FIELD_2_IR2_FP,
+    ),
+    (
+        "setFieldVmDescriptor2-3",
+        DREGG_EFFECTVM_SET_FIELD_3_IR2_JSON,
+        DREGG_EFFECTVM_SET_FIELD_3_IR2_FP,
+    ),
+    (
+        "setFieldVmDescriptor2-4",
+        DREGG_EFFECTVM_SET_FIELD_4_IR2_JSON,
+        DREGG_EFFECTVM_SET_FIELD_4_IR2_FP,
+    ),
+    (
+        "setFieldVmDescriptor2-5",
+        DREGG_EFFECTVM_SET_FIELD_5_IR2_JSON,
+        DREGG_EFFECTVM_SET_FIELD_5_IR2_FP,
+    ),
+    (
+        "setFieldVmDescriptor2-6",
+        DREGG_EFFECTVM_SET_FIELD_6_IR2_JSON,
+        DREGG_EFFECTVM_SET_FIELD_6_IR2_FP,
+    ),
+    (
+        "setFieldVmDescriptor2-7",
+        DREGG_EFFECTVM_SET_FIELD_7_IR2_JSON,
+        DREGG_EFFECTVM_SET_FIELD_7_IR2_FP,
+    ),
 ];
 
 // ==== ALL unique descriptors (name -> json, fingerprint): the total name registry ====
@@ -572,9 +829,21 @@ pub fn fingerprint_for_name(name: &str) -> Option<&'static str> {
         .map(|(_, _, fp)| *fp)
 }
 
+/// Look up an IR-v2 descriptor JSON by its Lean def-name key (e.g. `"transferVmDescriptor2"`,
+/// `"setFieldVmDescriptor2-3"`). The byte-exact `emitVmJson2` wire (`"ir":2`), interpreted by
+/// `descriptor_ir2::parse_vm_descriptor2`. ADDITIVE: the v1 path (`descriptor_for_selector` /
+/// `descriptor_for_name`) stays the live one until the cutover lane flips the pointer.
+pub fn descriptor2_for_key(key: &str) -> Option<&'static str> {
+    V2_DESCRIPTORS
+        .iter()
+        .find(|(k, _, _)| *k == key)
+        .map(|(_, json, _)| *json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::descriptor_ir2::parse_vm_descriptor2;
     use crate::lean_descriptor_air::parse_vm_descriptor;
 
     /// Self-contained SHA-256 (FIPS 180-4), no external dep, so the drift
@@ -757,5 +1026,42 @@ mod tests {
                 "name-only descriptor {name} unexpectedly has a selector"
             );
         }
+    }
+
+    /// THE IR-v2 DRIFT GUARD + ROUND-TRIP: every `V2_DESCRIPTORS` entry (a) re-hashes to its
+    /// committed fingerprint (Lean→Rust byte binding) and (b) round-trips through the v2 decoder
+    /// `descriptor_ir2::parse_vm_descriptor2` — a `"ir":2` wire with the five EPOCH tables and the
+    /// lookup/mem_op/map_op grammar, NOT the v1 wire. Any re-emit of `EmitAllJsonV2.lean` that
+    /// changes a descriptor (or a stale committed JSON) fails here.
+    #[test]
+    fn v2_descriptors_parse_and_match_fingerprint() {
+        assert_eq!(V2_DESCRIPTORS.len(), 26, "expected 26 IR-v2 descriptors");
+        for (key, json, fp) in V2_DESCRIPTORS {
+            // (a) fingerprint binding
+            let got = sha256_hex(json.as_bytes());
+            assert_eq!(
+                &got, fp,
+                "v2 descriptor {key}: SHA-256 drift — committed {fp}, embedded bytes hash {got}"
+            );
+            // (b) round-trips through the v2 multi-table decoder
+            let d = parse_vm_descriptor2(json)
+                .unwrap_or_else(|e| panic!("v2 descriptor {key} failed parse_vm_descriptor2: {e}"));
+            assert_eq!(d.tables.len(), 5, "v2 descriptor {key}: not the five EPOCH tables");
+            assert!(d.trace_width > 0, "v2 descriptor {key}: zero trace_width");
+            // graduated v1 descriptors carry NO legacy hash-site/range carriers (lookup-shaped).
+            assert!(
+                d.hash_sites.is_empty() && d.ranges.is_empty(),
+                "v2 descriptor {key}: a graduated descriptor must carry empty v1 carriers"
+            );
+            // the accessor resolves it
+            assert_eq!(descriptor2_for_key(key), Some(*json));
+        }
+        // The transfer v2 graduated descriptor is present and 186-wide (the validated reference).
+        let t = parse_vm_descriptor2(
+            descriptor2_for_key("transferVmDescriptor2").expect("transfer v2 present"),
+        )
+        .unwrap();
+        assert_eq!(t.trace_width, 186, "graduated transfer keeps the 186 base width");
+        assert_eq!(t.public_input_count, 34);
     }
 }
