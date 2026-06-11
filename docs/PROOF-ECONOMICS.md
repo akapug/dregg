@@ -84,6 +84,53 @@ Any future trace-shape work that moves permutation aux out of row-width
 fewer/merged hash sites) dwarfs both the column compaction and the query
 knob combined.
 
+## 2b. IR-v2 (the EPOCH multi-table prover) — measured, and currently a size REGRESSION
+
+Measured by `circuit/tests/effect_vm_ir2_size_measure.rs` (release, recursion
+feature): the SAME real transfer effect proven through the live v1 descriptor
+path (`lean_descriptor_air::prove_vm_descriptor`) and through the IR-v2
+five-table batch STARK (`descriptor_ir2::prove_vm_descriptor2`), both under
+the current production FRI config (`create_config`: lb=3, **q=38**, pow=16 —
+the −23% query rotation has landed, which is why the v1 baseline below reads
+350.5 KiB rather than §1's q=50-era 451.7 KiB).
+
+| path | bytes | prove | verify | per-query opening |
+|---|---:|---:|---:|---:|
+| v1 (single-table, 1,654-col extended row) | **350.5 KiB** (358,900 B) | 42 ms | 12 ms | ≈ 8.6 KiB |
+| IR-v2 (main + chip + byte + memory + boundary + map-ops) | **2,564.7 KiB** (2,626,278 B) | 160 ms | 106 ms | ≈ 62.1 KiB |
+
+**IR-v2 is 7.3x LARGER, 3.8x slower to prove, 8.7x slower to verify.** This is
+the opposite of `EPOCH-DESIGN.md`'s predicted ~100–200 KiB landing, and the
+full VK cutover must not ride until it is fixed. Where the bytes go, precisely:
+
+- **The chip-table lever itself WORKS.** The poseidon2 chip table proves at
+  2³ = 8 rows × 363 cols — transfer's real permutation count — versus the
+  1,408 inline aux columns (4 × 352) the v1 extended row carries on all 64
+  rows. The committed hashing area genuinely collapses.
+- **The win is drowned by the map-ops table.** `MAP_WIDTH` = 39 + 34·352 =
+  **12,007 columns** (`descriptor_ir2.rs`): each map-ops row carries 34
+  in-row Poseidon2 permutation-aux blocks (old/new leaf + two depth-16
+  chains) — the exact row-width disease the EPOCH exists to cure, relocated
+  into the boundary table.
+- **Empty tables are still committed.** Transfer declares ZERO mem/map ops,
+  but the assembly commits all five tables anyway, padded to 8 rows. FRI
+  opening cost is per-query × the row width of EVERY committed matrix, so
+  the empty map-ops table alone costs ≈ 38 queries × 12,007 cols × 4 B ≈
+  **1.74 MiB** of the 2.30 MiB opening proof, and dominates the
+  out-of-domain values (205.4 KiB vs v1's 25.0 KiB) the same way. The byte
+  table adds a fixed 256 rows; memory/boundary add 18/28 cols each (cheap).
+
+The fix direction this measurement names (the closure lane for the EPOCH
+thesis, not a reason to abandon it): (a) do not commit tables the descriptor
+declares empty — a zero-op table has no business costing 1.7 MiB; (b) the
+map-ops table's 34 in-row permutation blocks must ride the chip bus like every
+other hash site, collapsing `MAP_WIDTH` from 12,007 to ~39+34·11 ≈ 413 cols.
+With both, transfer's per-query opening is ~600 opened columns (main + chip +
+byte + memory + boundary) against v1's 1,654 — the shape under which the
+EPOCH's predicted win becomes arithmetic rather than hope. Until that is
+measured, v1 stays the only prover on the wire; no `DREGG_IR2_PROVER` opt-in
+flag is wired (it would only let users opt into a 7.3x-larger proof).
+
 ## 3. The transport story (who needs which proof)
 
 - **Turn counterparties / the node admission gate / the browser verifier**
