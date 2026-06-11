@@ -105,7 +105,8 @@ const u64hex = (n) => BigInt(n).toString(16).padStart(64, '0');
   check(cls.enactNotBefore === 500, `cooling gate decodes 500 (got ${cls?.enactNotBefore})`);
 }
 
-// --- node-VIEW shape (kind-tagged, decimal strings; no AffineLe projection) -
+// --- node-VIEW shape (kind-tagged; the total StateConstraintView projection
+// carries AffineLe verbatim, so a LIVE cell self-describes its threshold M) --
 {
   const view = {
     kind: 'Predicate',
@@ -115,15 +116,52 @@ const u64hex = (n) => BigInt(n).toString(16).padStart(64, '0');
       { kind: 'Monotonic', index: 2 },
       { kind: 'Monotonic', index: 3 },
       { kind: 'Monotonic', index: 4 },
+      // ── THE THRESHOLD GATE as the view serves it: M·flag − Σ approvals <= 0
+      // (StateConstraintView::AffineLe — terms/c verbatim from the program) ──
+      { kind: 'AffineLe', terms: [[2, 2], [-1, 3], [-1, 4]], c: 0 },
+      { kind: 'MemberOf', index: 2, set: [0, 1] }, // flag ∈ {0,1} — also in view now
       { kind: 'FieldEquals', index: 5, value: ZERO }, // non-member slot pinned zero
       { kind: 'FieldEquals', index: 7, value: ZERO },
     ],
   };
   const cls = classifyConstraints(constraintsOf(view));
   check(cls && cls.family === 'council', 'view-shaped council classifies');
+  check(cls.threshold === 2 && cls.thresholdInData === true,
+    `view shape carries threshold M live (AffineLe projected; got M=${cls?.threshold}, inData=${cls?.thresholdInData})`);
+  check(cls.members === 2, `view shape member count from AffineLe terms = 2 (got ${cls?.members})`);
+
+  // view-shape Not normalizes structurally ({ kind:'Not', inner:{...} })
+  const amendmentView = {
+    kind: 'Predicate',
+    constraints: [
+      ...view.constraints,
+      { kind: 'AnyOf', variants: [{ kind: 'Not', inner: { kind: 'FieldEquals', index: 0, value: u64hex(4) } }, { kind: 'TemporalGate', not_before: 500, not_after: null }] },
+    ],
+  };
+  const clsA = classifyConstraints(constraintsOf(amendmentView));
+  check(clsA && clsA.family === 'amendment' && clsA.enactNotBefore === 500,
+    `view-shape Not(FieldEquals)+TemporalGate decodes the cooling gate (got ${clsA?.family}/${clsA?.enactNotBefore})`);
+}
+
+// --- LEGACY node-view (older node, pre-projection: no AffineLe in view) ------
+{
+  const view = {
+    kind: 'Predicate',
+    constraints: [
+      { kind: 'AllowedTransitions', slot_index: 0, allowed: [['0', '0'], ['0', '1'], ['1', '1'], ['1', '2'], ['1', '3'], ['3', '3'], ['3', '4']] },
+      { kind: 'WriteOnce', index: 1 },
+      { kind: 'Monotonic', index: 2 },
+      { kind: 'Monotonic', index: 3 },
+      { kind: 'Monotonic', index: 4 },
+      { kind: 'FieldEquals', index: 5, value: ZERO },
+      { kind: 'FieldEquals', index: 7, value: ZERO },
+    ],
+  };
+  const cls = classifyConstraints(constraintsOf(view));
+  check(cls && cls.family === 'council', 'legacy view-shaped council still classifies');
   check(cls.threshold === null && cls.thresholdInData === false,
-    'view shape honestly carries NO threshold (AffineLe has no view projection)');
-  check(cls.members === 2, `view shape member count from Monotonic teeth = 2 (got ${cls?.members})`);
+    'legacy view (no AffineLe served) degrades honestly: M unknown, not fabricated');
+  check(cls.members === 2, `legacy view member count from Monotonic teeth = 2 (got ${cls?.members})`);
 }
 
 // --- the generated constitution sample ---------------------------------------

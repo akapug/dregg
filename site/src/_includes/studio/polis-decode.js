@@ -121,9 +121,11 @@ export function normalizeConstraint(sc) {
   }
   const out = { kind, ...body };
   if (Array.isArray(out.variants)) out.variants = out.variants.map(normalizeConstraint).filter(Boolean);
-  // SimpleStateConstraint::Not(Box<...>) — serde: { "Not": { "FieldEquals": {...} } }.
+  // SimpleStateConstraint::Not(Box<...>) — serde: { "Not": { "FieldEquals": {...} } };
+  // view: { kind: 'Not', inner: { kind: 'FieldEquals', ... } }.
   if (kind === 'Not') {
-    const inner = normalizeConstraint(body.value !== undefined ? body.value : body);
+    const raw = body.inner !== undefined ? body.inner : (body.value !== undefined ? body.value : body);
+    const inner = normalizeConstraint(raw);
     return { kind: 'Not', inner };
   }
   return out;
@@ -183,9 +185,10 @@ function transitionRows(cs) {
  * Returns null when the set is not polis-shaped, else:
  * {
  *   family: 'council' | 'amendment' | 'constitution' | 'mandate',
- *   // council/amendment (threshold null when reading a node VIEW — the
- *   // AffineLe gate has no StateConstraintView projection yet, so a live
- *   // program view honestly cannot carry M):
+ *   // council/amendment — threshold M reads from the AffineLe gate in BOTH
+ *   // shapes (descriptor serde AND the served StateConstraintView, which
+ *   // projects AffineLe since the view-totality close). threshold is null
+ *   // only against an older node whose view predates the projection:
  *   threshold, members, membersCommit, pinnedProposalHash, enactNotBefore,
  *   // constitution:
  *   version, councilThreshold, amendmentDelay, treasuryCap,
@@ -204,8 +207,9 @@ export function classifyConstraints(rawConstraints) {
   const isTwoStep = !isCouncilMachine && rows.has('0>1') && rows.has('1>2');
 
   if (isCouncilMachine) {
-    // threshold M + member count N from the AffineLe gate when present
-    // (descriptor serde); from the per-member approval teeth otherwise (view).
+    // threshold M + member count N from the AffineLe gate — present in BOTH
+    // shapes (descriptor serde and the served StateConstraintView, whose
+    // total projection carries `terms` + `c` verbatim).
     const affine = cs.find((c) => c.kind === 'AffineLe' && Array.isArray(c.terms));
     let threshold = null;
     let members = 0;
@@ -215,8 +219,9 @@ export function classifyConstraints(rawConstraints) {
         if (Number(coef) < 0) members++;
       }
     } else {
-      // View fallback: a member slot has Monotonic teeth; a non-member slot is
-      // pinned zero. (MemberOf/AffineLe have no view projection.)
+      // Legacy-view fallback (older node whose StateConstraintView predates
+      // the AffineLe projection): a member slot has Monotonic teeth; a
+      // non-member slot is pinned zero. M honestly unknown → null.
       for (let i = 0; i < COUNCIL.MAX_MEMBERS; i++) {
         const slot = COUNCIL.FIRST_APPROVAL_SLOT + i;
         if (cs.some((c) => c.kind === 'Monotonic' && Number(c.index) === slot)) members++;

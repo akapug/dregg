@@ -422,6 +422,20 @@ function fileInfo(rel) {
   };
 }
 
+// The wasm runtime is load-bearing for the playground/studio/explorer and is
+// required; the extension downloads are optional — when absent (e.g. a
+// checkout without the packaged zips), the build warns and the manifest
+// records the absence honestly instead of failing the whole site.
+function optionalFileInfo(rel) {
+  const file = path.join(DIST, rel);
+  if (!fs.existsSync(file)) {
+    console.warn(`  Warning: optional artifact missing from dist: ${rel} ` +
+      '(run scripts/build-web-artifacts.sh to package it)');
+    return { missing: true };
+  }
+  return fileInfo(rel);
+}
+
 function writeArtifactsManifest() {
   const manifest = {
     schema: 'dregg-web-artifacts-v1',
@@ -429,8 +443,8 @@ function writeArtifactsManifest() {
     artifacts: {
       'pkg/dregg_wasm.js': fileInfo('pkg/dregg_wasm.js'),
       'pkg/dregg_wasm_bg.wasm': fileInfo('pkg/dregg_wasm_bg.wasm'),
-      'extension/dregg-cipherclerk.zip': fileInfo('extension/dregg-cipherclerk.zip'),
-      'extension/dregg-cipherclerk-firefox.xpi': fileInfo('extension/dregg-cipherclerk-firefox.xpi'),
+      'extension/dregg-cipherclerk.zip': optionalFileInfo('extension/dregg-cipherclerk.zip'),
+      'extension/dregg-cipherclerk-firefox.xpi': optionalFileInfo('extension/dregg-cipherclerk-firefox.xpi'),
     },
   };
   writeDist('artifacts-manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);

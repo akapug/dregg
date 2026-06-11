@@ -1,23 +1,25 @@
 <layout src="_layouts/default.html">
-<title>dregg — a verified distributed object-capability substrate</title>
+<title>dregg — authority you can hand out without having to watch it</title>
 
 <!-- ==================== HERO ==================== -->
 <header class="hero">
   <div class="hero__inner">
-    <p class="hero__eyebrow">A verified distributed object-capability substrate.</p>
-    <h1>The proof witnesses the protocol's <em>correct evolution</em>.</h1>
+    <p class="hero__eyebrow">dregg · Dragon's Egg · a verified distributed object-capability substrate</p>
+    <h1>Authority you can hand out <em>without having to watch it</em>.</h1>
     <p class="hero__sub">
-      In <code>dregg</code>, a <strong>turn</strong> is the exercise of an attenuable,
-      proof-carrying token over owned state, leaving a verifiable receipt. State lives in
-      <strong>cells</strong>; authority is a <strong>capability</strong> you can exhibit, never
-      merely assert; every rule that binds a turn is a predicate the executor enforces and the
-      proof commits to. The semantics are a Lean 4 kernel — the same kernel the node executes —
-      and a light client verifies an entire history by checking one root, re-executing nothing.
+      dregg is a shared computer for agreements that must not quietly break.
+      Give an AI agent a budget it <strong>physically cannot exceed</strong> — the limit is
+      enforced by the substrate, not by the agent's good behavior. Stand up a council whose
+      rules are the <strong>cell's own physics</strong>, not a moderator's promise. Hand a
+      stranger your entire history and let them <strong>verify every step of it</strong>
+      without trusting you, your server, or anyone in between. Underneath, each of these is
+      the same small machine: every action needs a checkable warrant, every change leaves a
+      receipt, and the receipts compose into one proof that a light client checks in one step.
     </p>
     <div class="hero__cta">
-      <a class="btn btn--primary" href="/docs.html">Read the protocol</a>
-      <a class="btn btn--secondary" href="/studio.html">Open the Studio</a>
-      <a class="btn btn--secondary" href="/paper.html">Read the paper</a>
+      <a class="btn btn--primary" href="#start-here">Start here — five minutes</a>
+      <a class="btn btn--secondary" href="/docs.html">Learn the protocol</a>
+      <a class="btn btn--secondary" href="/playground/">Open the playground</a>
     </div>
     <p class="hero__note">
       Open source (AGPL-3.0-or-later) ·
@@ -29,58 +31,81 @@
 
 <main>
 
-<!-- ==================== WHAT IT IS ==================== -->
-<section class="section wrap">
-  <span class="section__label">What <code>dregg</code> is</span>
-  <h2 class="section__title">Four substances, eight verbs, one gate</h2>
-  <p class="section__intro">
-    The kernel governs four substances, each under its own law: <strong>value</strong> is
-    linear (moves, never copies or vanishes), <strong>authority</strong> is produced under
-    non-forgeability (it grows — but only by authorized, receipt-disclosed construction from
-    connectivity already held), <strong>evidence</strong> is monotone (once known, never
-    unknown), and <strong>state</strong> is guarded (changes only under its cell's program,
-    only by its owner). The kernel signature is eight verbs — each the structural rule of one
-    substance's discipline, and minimality is a theorem
-    (<code>VerbRegistry.each_verb_irreplaceable</code>). Everything else — escrows, queues,
-    councils, namespaces — is a cell program minted by a factory and enforced by the same
-    executor.
-  </p>
-  <div class="flow">
-    <div class="flow__step">
-      <span class="flow__n">01 / Cells</span>
-      <p class="flow__name">The four substances, gathered behind one identity</p>
-      <p class="flow__desc">A cell holds balances, a capability list, slots, and a program — a predicate over its own transitions. Nothing is ownerless; every object is a cell or lives in one. A cell can only touch what it has been handed.</p>
-    </div>
-    <div class="flow__step">
-      <span class="flow__n">02 / Turns</span>
-      <p class="flow__name">Authorized inference, atomically</p>
-      <p class="flow__desc">Each action demands a predicate and supplies a witness; admissibility is verification, never trust. A turn commits whole or not at all, and a forged credential or undischarged caveat on any leg rejects the entire forest.</p>
-    </div>
-    <div class="flow__step">
-      <span class="flow__n">03 / Receipts</span>
-      <p class="flow__name">History you can hand to a stranger</p>
-      <p class="flow__desc">A committed turn leaves Q — a receipt binding the whole post-state. Receipts chain; proofs fold; one verification of one root attests every turn that ever happened, correctly ordered, with nothing re-executed.</p>
+<!-- ==================== START HERE ==================== -->
+<section class="section wrap" id="start-here">
+  <span class="section__label">Start here</span>
+  <h2 class="section__title">Your first five minutes</h2>
+  <div class="quickstart">
+    <div class="quickstart__steps">
+      <div class="quickstart__step">
+        <span class="quickstart__n">1</span>
+        <div>
+          <p><strong>Read the one idea</strong> (thirty seconds — it's the next paragraph).
+          Everything in dregg is one sentence: <em>a <a href="/glossary.html#turn">turn</a> is
+          the exercise of an attenuable, proof-carrying token over owned state, leaving a
+          verifiable receipt.</em> In plain terms: all state lives in
+          <a href="/glossary.html#cell">cells</a>; nobody acts on a cell without presenting a
+          token that provably licenses exactly that action; and every committed action leaves
+          a <a href="/glossary.html#receipt">receipt</a> anyone can check later. Authority is
+          something you <em>show</em>, never something you <em>claim</em>.</p>
+        </div>
+      </div>
+      <div class="quickstart__step">
+        <span class="quickstart__n">2</span>
+        <div>
+          <p><strong>Touch a turn.</strong> The <a href="/playground/">playground</a> runs the
+          real executor in your browser as WebAssembly — no install, no server. Stage a
+          transfer, run it, and then try to break the rules: overdraw a balance, replay a
+          spent authorization. Watch the substrate reject you. The rejection is the product.</p>
+        </div>
+      </div>
+      <div class="quickstart__step">
+        <span class="quickstart__n">3</span>
+        <div>
+          <p><strong>Watch it in the explorer.</strong> The <a href="/explorer/">explorer</a>
+          shows a live federation: cells, turns, receipts. Open any cell and scrub its history
+          backward — time travel is just reading receipts, because the receipts <em>are</em>
+          the history.</p>
+        </div>
+      </div>
+      <div class="quickstart__step">
+        <span class="quickstart__n">4</span>
+        <div>
+          <p><strong>Learn what the proof badge means.</strong> Objects in the explorer carry
+          a verification status. <a href="/verify.html">The Verify page</a> explains exactly
+          what is proven, what it rests on, and how to check the proofs yourself — the
+          guarantees are theorems in open Lean you can build from the repo.</p>
+        </div>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- ==================== GUARANTEES ==================== -->
-<section class="section wrap section--feature">
-  <span class="section__label">The assurance case</span>
-  <h2 class="section__title">What is proven — and what it rests on</h2>
+<!-- ==================== WHAT IT IS ==================== -->
+<section class="section wrap">
+  <span class="section__label">What <code>dregg</code> is</span>
+  <h2 class="section__title">Cells, turns, receipts</h2>
   <p class="section__intro">
-    The system's guarantees are organized as an assurance case in
-    <code>Dregg2/AssuranceCase.lean</code>: each guarantee names an apex theorem and the
-    keystones that discharge it, every name machine-pinned to the Lean kernel's three axioms.
-    The cards below are embedded at build time from the catalog generated out of that file —
-    this page cannot say more than the proofs do.
+    Three objects carry the whole system. Everything else — escrows, councils, name
+    registries, budgets — is built from them, and inherits their guarantees.
   </p>
-  <catalog view="guarantees">
-  <p class="guarantee-foot">
-    The full delimitation — the eight-carrier assumption floor, the named Rust components
-    inside the trust base, and the present limitations, stated plainly — is
-    <a href="/learn/concepts/trust-boundary.html">rung 7 of the protocol docs</a>.
-  </p>
+  <div class="flow">
+    <div class="flow__step">
+      <span class="flow__n">01 / Cells</span>
+      <p class="flow__name">Where state lives, behind its own rules</p>
+      <p class="flow__desc">A <a href="/glossary.html#cell">cell</a> holds balances, capabilities, and named slots — plus a program: a predicate over its own transitions that the substrate enforces on every change. Nothing is ownerless. A cell changes only under its own program, only by an authorized actor; a turn touching one cell leaves every other cell untouched. "A budget that cannot be exceeded" is just a cell whose program says so.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">02 / Turns</span>
+      <p class="flow__name">Actions that must show their warrant</p>
+      <p class="flow__desc">A <a href="/glossary.html#turn">turn</a> is an atomic batch of actions. Each action presents a capability — a token naming what it may touch and how, narrowable but never amplifiable — and must discharge every <a href="/glossary.html#guard">guard</a> in scope. The whole turn commits or none of it does. A forged credential on any leg rejects the entire turn.</p>
+    </div>
+    <div class="flow__step">
+      <span class="flow__n">03 / Receipts</span>
+      <p class="flow__name">History you can hand to a stranger</p>
+      <p class="flow__desc">A committed turn leaves <a href="/glossary.html#q">Q</a> — a <a href="/glossary.html#receipt">receipt</a> binding the entire post-state, with no field a tamperer can edit. Receipts chain; proofs fold; a light client verifies a whole history by checking one root, re-executing nothing and trusting no executor.</p>
+    </div>
+  </div>
 </section>
 
 <!-- ==================== THREE DOORS ==================== -->
@@ -91,47 +116,63 @@
     <div class="flow__step">
       <span class="flow__n">Use it</span>
       <p class="flow__name">A clerk that cannot lie to you</p>
-      <p class="flow__desc">The cipherclerk holds your keys and tokens, attenuates before it delegates, and discloses by projection — what a counterparty's proof does not need, it does not see. Drive it from the <a href="/learn/users/cli.html">CLI</a>, the <a href="/learn/users/quickstart.html">quickstart</a>, or the <a href="/usecases.html">apps</a>.</p>
+      <p class="flow__desc">The cipherclerk holds your keys and tokens, narrows authority before it delegates, and discloses by projection — what a counterparty's proof does not need, it does not see. Start with the <a href="/learn/users/quickstart.html">quickstart</a> or the <a href="/learn/users/cli.html">CLI</a>.</p>
     </div>
     <div class="flow__step">
       <span class="flow__n">Build on it</span>
       <p class="flow__name">Rules the substrate enforces for you</p>
-      <p class="flow__desc">Publish a factory descriptor — a slot layout plus predicate constraints — and every cell minted from it carries its rules in the executor, not in your code. Your app inherits theorems by consuming receipts. Start with the <a href="/learn/developers/building-apps.html">developer guide</a> and the <a href="/studio.html">Studio</a>.</p>
+      <p class="flow__desc">Publish a <a href="/glossary.html#factory">factory</a> descriptor — a slot layout plus constraints — and every cell minted from it carries its rules in the executor, not in your code. Your app does no enforcement bookkeeping of its own. <a href="/build.html">The Build page</a> walks the pattern with eight worked examples.</p>
     </div>
     <div class="flow__step">
       <span class="flow__n">Verify it</span>
       <p class="flow__name">Check, don't trust</p>
-      <p class="flow__desc">A light client checks one root and learns the whole history (<code>light_client_verifies_whole_history</code>). The semantics, the guarantees, and their axiom hygiene are open Lean you can build yourself: <code>metatheory/</code> in the repo, explained in <a href="/docs.html">the protocol docs</a>.</p>
+      <p class="flow__desc">A light client checks one root and learns the whole history. The semantics are a Lean 4 kernel — the same kernel the node executes — and the guarantee catalog below is generated from it at build time. <a href="/verify.html">The Verify page</a> states what is proven and what it rests on.</p>
     </div>
   </div>
 </section>
 
+<!-- ==================== GUARANTEES ==================== -->
+<section class="section wrap section--feature">
+  <span class="section__label">The assurance case</span>
+  <h2 class="section__title">What is proven — and what it rests on</h2>
+  <p class="section__intro">
+    These cards are not marketing copy: they are embedded at build time from a catalog
+    generated out of <code>Dregg2/AssuranceCase.lean</code>, where each guarantee names an
+    apex theorem machine-pinned to the Lean kernel's three axioms. This page cannot say more
+    than the proofs do — the build fails if it tries.
+  </p>
+  <catalog view="guarantees">
+  <p class="guarantee-foot">
+    The full delimitation — the assumption floor, the named Rust components inside the trust
+    base, and the present limitations, stated plainly — is
+    <a href="/verify.html">the Verify page</a> and
+    <a href="/learn/concepts/trust-boundary.html">rung 7 of the protocol docs</a>.
+  </p>
+</section>
+
 <!-- ==================== THE LADDER ==================== -->
 <section class="section wrap">
-  <span class="section__label">Understand it</span>
+  <span class="section__label">Go deeper</span>
   <h2 class="section__title">The protocol, in seven rungs</h2>
   <p class="section__intro">
     The docs are a ladder, one sentence unfolding outward: the
     <a href="/learn/concepts/turn.html">turn</a>, the
     <a href="/learn/concepts/substances.html">four substances and eight verbs</a>,
-    <a href="/learn/concepts/guards.html">guards</a> (one predicate algebra with a
-    coordination dial and a disclosure dial),
+    <a href="/learn/concepts/guards.html">guards</a>,
     <a href="/learn/concepts/receipts.html">receipts</a>,
     <a href="/learn/concepts/light-client.html">the light client</a>,
     <a href="/learn/concepts/userspace.html">userspace and the polis</a>, and
-    <a href="/learn/concepts/trust-boundary.html">the trust boundary</a>. Each rung is prose,
-    then the grounding theorems, then a live surface to touch:
-    the <a href="/explorer/">explorer</a>, the <a href="/playground/">playground</a>, the
-    <a href="/studio.html">Studio</a>.
+    <a href="/learn/concepts/trust-boundary.html">the trust boundary</a>. Each rung is prose
+    first, then the grounding theorems, then a live surface to touch.
   </p>
   <p style="text-align: center;">
     <a href="/docs.html" class="btn btn--secondary">Start the ladder &rarr;</a>
   </p>
 </section>
 
-<!-- ==================== TRY IT ==================== -->
+<!-- ==================== RUN IT YOURSELF ==================== -->
 <section class="section wrap" id="quickstart">
-  <span class="section__label">Try it</span>
+  <span class="section__label">Run it yourself</span>
   <h2 class="section__title">From clone to a verified turn</h2>
   <div class="quickstart">
     <div class="quickstart__steps">
@@ -165,12 +206,12 @@ dregg bounty payout --bounty &lt;id&gt;</code></pre>
       <div class="quickstart__step">
         <span class="quickstart__n">4</span>
         <div>
-          <p>Or skip the build — everything has a browser surface:</p>
+          <p>Or stay in the browser — everything above has a live surface:</p>
           <p style="margin-top: var(--s2);">
-            <a href="/usecases.html">Use-case explorer</a> &middot;
-            <a href="/explorer/">Chain explorer</a> &middot;
             <a href="/playground/">Playground</a> &middot;
+            <a href="/explorer/">Explorer</a> &middot;
             <a href="/studio.html">Studio</a> &middot;
+            <a href="/build.html">Worked examples</a> &middot;
             <a href="/learn/developers/tutorial-first-app.html">First-app tutorial</a>
           </p>
         </div>
