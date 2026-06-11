@@ -166,6 +166,59 @@ answer:
 
 ---
 
+## Decision 6 — THE KERNEL UNDER THE UNIVERSAL MAP
+*(the verb-compression verdict; proved in `Dregg2/Substrate/VerbCompression.lean`)*
+
+The heap rotation raises the question Decision 1 defers: once caps, nullifiers,
+and cell state are collections of one sorted-map family, is the eight-verb
+kernel still minimal — or are grant/revoke/lifecycle/shield-unshield just
+guarded writes to distinguished collections? The answer is proved, both ways:
+
+**The kernel under the universal map is `create · guarded-write · move`**
+(`compressed_kernel_three`; exercise stays turn structure). Five of the seven
+verb constructors are one verb — the eight-verb minimality is a property of
+the flat ontology, not of the semantics (`verb_minimality_is_ontology_relative`).
+The dissolved verbs land at proven positions in a **strict guard-class
+stratification**, which is where their proof obligations live now:
+
+- **lifecycle** and **revoke** are guarded writes in the *landed* local
+  caveat class — guards of `(actor, old, new)` at the written key
+  (`lifecycle_compresses_local`, `revoke_compresses_local`). The one-way
+  automaton and the narrowing law are the guards themselves; the teeth
+  survive (`life_reseal_refused`, `life_destroyed_terminal`,
+  `narrow_committed_narrows`).
+- **shield/unshield** is a guarded write **only with the absence atom**: the
+  freshness/double-spend gate *is* non-membership (`fresh_is_absence_atom`),
+  and no conjunction of the landed positive atoms (`heap_contains`/`heap_get`)
+  expresses it (`freshness_not_positive`). The atom's circuit floor is the
+  already-proven non-membership opening. Anti-double-spend and evidence
+  monotonicity survive compression (`fresh_write_no_replay`,
+  `fresh_write_grows`).
+- **grant** is a guarded write **only with an order-relational guard**
+  (`granted ⊆ held-at-delegator`): non-amplification reads a different key
+  than it writes and compares values under the rights order — provably
+  outside the local class (`grant_guard_not_local`) and outside every
+  literal-atom conjunction, absence included (`grant_guard_not_literal`).
+  The guard *is* the guarantee (`grant_non_amplifying`); the real
+  `attenuate` always passes it (`attenuate_passes_guard`).
+- **move** does not compress, in any guard class: a single-key write that
+  preserves the collection total is value-trivial
+  (`gwrite_conservation_trivializes`), so conservation is a *shape* property
+  — the paired two-key cancelling delta — not a guard property
+  (`move_not_single_write`, `demo_debit_breaks_conservation`).
+- **create** keeps its verb by the arity argument (bundle birth initializes
+  several addresses atomically, `create_birth_not_single_write`) and by its
+  inverted authority polarity; its existence leg rides the same absence
+  guard as unshield.
+
+What the rotation takes from this: the universal map's guard algebra must
+carry **local caveats + literal atoms + the absence atom + the order-comparison
+atom** — each extension proven necessary — and the wire/circuit surface needs
+only three verb shapes plus the guard language. The verb distinctions are not
+deleted; they are re-housed as guard classes with the same teeth.
+
+---
+
 ## The distributed reality: n=3, live
 
 `peer_count: 0` forever is the gap between proven capability and lived
