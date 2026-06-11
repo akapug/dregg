@@ -20,9 +20,9 @@ cargo test -p dregg-circuit --release --lib backends::poseidon2_bb_kimchi -- --n
 | per-turn EffectVM descriptor proof (`EffectVmP3Proof`, label `effect-vm`) | postcard | **451.7 KiB** (462,537 B) | ~0.3 s | 22 ms | `create_config` (lb=3, q=50, pow=16) |
 | joint-turn, per participating cell | postcard | 451.7 KiB each | ~0.3 s each | 22 ms each | same |
 | joint-turn Silver apex (width-4 aggregation `BatchProof`) | postcard | ≲ per-turn (same FRI shape, far narrower trace) | — | — | same |
-| whole-chain IVC ROOT (`WholeChainProof.root`, K=2) | postcard | **46.4 KiB** (47,538 B) | 5.0 s fold | **2 ms** | recursion config (lb=3, **q=2, pow=0**) |
-| whole-chain IVC ROOT (K=3) | postcard | 46.4 KiB (47,519 B) | 7.6 s fold | 2 ms | same |
-| + carried chain-binding proof (K=2 / K=3) | postcard | 1.3 / 1.9 KiB | — | included | same |
+| whole-chain IVC ROOT (`WholeChainProof.root`, K=2) | postcard | **502.4 KiB** (514,489 B) | 30.7 s fold | **16 ms** | recursion config (lb=3, **q=38, pow=14** = 128-bit conjectured) |
+| whole-chain IVC ROOT (K=3) | postcard | 502.4 KiB (514,498 B) | 44.5 s fold | 16 ms | same |
+| + carried chain-binding proof (K=2 / K=3) | postcard | 18.8 / 28.4 KiB | — | included | same |
 | + the verifier's trust anchor (`RecursionVk`) | out-of-band, once | 32 B | — | — | — |
 
 The browser-measured ~452–497 KiB per-turn proof is confirmed: 451.7 KiB is
@@ -36,9 +36,11 @@ full extended-trace row (**1,654 columns**: 186 base EffectVM columns + 4
 Poseidon2 hash-site aux blocks of 352 columns each + range-bit columns) plus
 its Merkle path — ≈ 8.5 KiB per query.
 
-The ROOT proof is **K-independent**: K=2 and K=3 both serialize to 46.4 KiB
-and verify in 2 ms. This is the genuine IVC property — the root's cost is the
-root verifier-circuit's, not the history's.
+The ROOT proof is **K-independent**: K=2 and K=3 both serialize to 502.4 KiB
+and verify in 16 ms. This is the genuine IVC property — the root's cost is the
+root verifier-circuit's, not the history's. Fold time is what grows with K
+(one leaf wrap + one aggregation layer per added turn, ~14 s each at this
+config).
 
 ## 2. The knobs (measured grid)
 
@@ -91,25 +93,27 @@ knob combined.
   *consumed*: it never needs to be re-shipped to history audiences. 452 KiB
   for a one-hop, 22 ms-verifiable attestation is unremarkable; if it must
   shrink, §2's query knob is the lever.
-- **A light client / a bridge** receives the whole-chain ROOT: 46.4 KiB +
-  ~2 KiB binding proof + four public field elements, against a 32 B
-  out-of-band anchor, verifying in 2 ms regardless of K. *This* is the
-  artifact whose size answers "the proof is big" for external consumers —
-  and it is already small.
-- **The honest caveat on the ROOT, named:** the recursion config
-  (`create_recursion_config`, `plonky3_recursion_impl.rs:254` — consumed by
+- **A light client / a bridge** receives the whole-chain ROOT: 502.4 KiB +
+  a 19–29 KiB binding proof + four public field elements, against a 32 B
+  out-of-band anchor, verifying in 16 ms regardless of K. *This* is the
+  artifact whose size answers "the proof is big" for external consumers.
+- **The ROOT's security config, named:** the recursion config
+  (`create_recursion_config`, `plonky3_recursion_impl.rs` — consumed by
   `ivc_turn_chain`, `joint_turn_recursive`, and the descriptor-leaf wrap)
-  runs FRI with **num_queries=2, pow=0 → ≈6 bits conjectured FRI
-  soundness**. The 46.4 KiB
-  root is real machinery at demo-strength parameters. Production-strength
-  (≥128-bit conj at lb=3) needs ~38–43 queries: the root grows roughly
-  linearly in queries (≈ 15 KiB fixed + ~16 KiB/query ⇒ ~600–700 KiB), the
-  in-circuit FRI verifier grows ~20x (it re-verifies every query of every
-  wrapped child), and fold times grow accordingly — OR the fork gains
-  grinding/cap-height options to claw that back. Raising the recursion
-  config (and re-measuring the fold) is the single highest-value
-  proof-economics lane open; until then the ROOT must not be presented as a
-  production light-client artifact.
+  runs FRI at **lb=3, num_queries=38, query-PoW=14 → 128 bits conjectured**
+  (capacity-bound conjecture; ~71 bits proven/Johnson) — the same
+  conjecture the per-turn production config stands on. Every proof in the
+  recursion tree runs at this strength, and the in-circuit FRI verifier
+  re-verifies all 38 queries plus the PoW witness of every wrapped child
+  (`check_pow_witness` in the fork's circuit challenger). The measured cost
+  of that strength: the root is 502.4 KiB (the in-circuit verifier's own
+  FRI opening dominates, same shape as the per-turn artifact), folds run
+  ~14 s per turn (30.7 s at K=2, 44.5 s at K=3, off the verification path),
+  and root verification is 16 ms, K-independent. The remaining honest
+  residuals on the ROOT are the fork follow-ups named in
+  `circuit/src/ivc_turn_chain.rs` module docs (child-circuit identity
+  pinning, public-value propagation) — config strength is no longer one of
+  them.
 
 ## 4. The Pickles wrap (interop lane): what exists, what was built, the distance
 
@@ -198,11 +202,9 @@ in order:
 ### Verdict
 
 **Keep-as-interop; do not invest now; do not retire.** The measured numbers
-say the system's real proof-size answer for external verifiers is already
-the BabyBear ROOT — 46.4 KiB / 2 ms / K-independent — once the recursion
-config is production-strength; that config (q=2→~40, plus fold-time
-re-measurement) is where proof-economics investment actually belongs, and it
-is fork-config work, not Pickles work. The Pickles lane's honest state is:
+say the system's real proof-size answer for external verifiers is the
+BabyBear ROOT — 502.4 KiB / 16 ms / K-independent, at 128-bit-conjectured
+FRI (§3). The Pickles lane's honest state is:
 a real native-hash Kimchi STARK verifier for the bespoke engine (643 rows at
 1 query, ~50.6K estimated at full 80 — valuable as the §4-distance step-2
 template), a pickles step whose

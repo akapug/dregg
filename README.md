@@ -90,11 +90,6 @@ discharged by reduction onto this floor, not assumed outright.
 
 **Open, named (why this is not security-critical-ready):**
 
-- **The recursion config is demo-strength.** The aggregation ROOT (46 KiB, 2 ms verify,
-  K-independent) is real machinery, but its FRI config currently runs at ~6 bits of conjectured
-  soundness; production strength needs ~20× more in-circuit query verification. Until that lands,
-  the ROOT is not a production light-client artifact. Measured in detail in
-  [`docs/PROOF-ECONOMICS.md`](docs/PROOF-ECONOMICS.md).
 - **Deployment correspondence.** The running devnet's genesis predates guarantee B's value-empty
   hypothesis, and the legacy fee path sits outside the conservation law; both fixes ride the next
   layout rotation. The assurance case names every such gap in its deployment-correspondence
