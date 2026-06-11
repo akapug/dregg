@@ -55,8 +55,8 @@
   "coverage": {
     "guarantees_with_apex": 6,
     "guarantees_with_pins": 6,
-    "total_pins": 69,
-    "total_keystones": 27
+    "total_pins": 83,
+    "total_keystones": 28
   },
   "guarantees": [
     {
@@ -84,7 +84,7 @@
         },
         {
           "name": "Spec.introduce_non_amplifying",
-          "summary": "(the Spec-level capability graph) closes the loop."
+          "summary": "(the Spec-level capability graph) closes the loop. COVERAGE (every authority-conferring path, post-reduction): the live verb set confers authority through exactly these mouths, and each is pinned below — * `introduceA` (copy of a held cap) — `execFullA_introduceA_non_amplifying`; * `delegateAttenA` (the EXECUTED narrowed grant)— `execFullA_delegateAttenA_non_amplifying` (+ the kernel-op face `recKDelegateAtten_non_amplifying`); forest delegation EDGES are the same op, covered for EVERY committed forest by `running_entry_sound` (guarantee R); * `attenuateA` / `refreshDelegationA` — `execFullA_attenuateA_non_amplifying`, `EffectsAuthority.refresh_non_amplifying` (a refresh is a re-snapshot via attenuation); * `revokeDelegationA` — `revokeDelegation_non_amplifying` (only subtracts); * `exerciseA` — `exercise_non_amplifying` (using a cap confers nothing new) + the R4 facet gate (an inner effect demanding a facet the held cap lacks ⇒ `none`); * `setPermissions` — `setPermissions_non_amplifying`; * STORED caps (caps-in-slots, the F3 seal/swiss/sturdyref replacement) — the storage round-trip confers nothing beyond the original grant: `CapSlotFactory.no_forge_from_storage` (store-mouth held-gated; retrieval = one survivor grant of the SAME payload); * PRODUCTION authority (mint) is not a cap-grant at all: it is gated on holding the ISSUER cell's cap (`recKMintAsset_authorized`, pinned under guarantee B) — the constructive production law, never a recipient-shaped grant; * cell BIRTH (`createCellA` / factory create) grants the creator a cap to the NEW cell only — authority over a previously-nonexistent resource, not amplification of held authority. There is no other cap-conferring constructor in `FullActionA`; the wire enum is reconciled against the registry (`Substrate.VerbRegistry.classify`, exhaustive by the compiler). The WHO leg: `credentialValid` is the §8 `AuthPortal` PORTAL (routed to `CryptoKernel.verify` / `Credential.verify` — the named ed25519/HMAC carriers), NOT a proven signature scheme. That is the same floor item 3/4 above, entering as a typeclass; the gate's soundness statement (`captp_sound`/`token_sound`) is conditional on it, as stated."
         }
       ],
       "pins": [
@@ -96,7 +96,17 @@
         "Dregg2.Exec.EffectsAuthority.introduce_non_amplifying",
         "Dregg2.Exec.EffectsAuthority.introduce_grounded_and_non_amplifying",
         "Dregg2.Exec.EffectsAuthority.amplifying_grant_rejected",
-        "Dregg2.Spec.introduce_non_amplifying"
+        "Dregg2.Spec.introduce_non_amplifying",
+        "Dregg2.Exec.TurnExecutorFull.execFullA_introduceA_non_amplifying",
+        "Dregg2.Exec.TurnExecutorFull.execFullA_attenuateA_non_amplifying",
+        "Dregg2.Exec.TurnExecutorFull.execFullA_delegateAttenA_non_amplifying",
+        "Dregg2.Exec.recKDelegateAtten_non_amplifying",
+        "Dregg2.Exec.EffectsAuthority.revokeDelegation_non_amplifying",
+        "Dregg2.Exec.EffectsAuthority.attenuate_non_amplifying",
+        "Dregg2.Exec.EffectsAuthority.refresh_non_amplifying",
+        "Dregg2.Exec.EffectsAuthority.exercise_non_amplifying",
+        "Dregg2.Exec.EffectsAuthority.setPermissions_non_amplifying",
+        "Dregg2.Apps.CapSlotFactory.no_forge_from_storage"
       ],
       "summary": "every state change is justified by an unforgeable, non-amplified,"
     },
@@ -104,7 +114,7 @@
       "letter": "B",
       "title": "CONSERVATION",
       "statement": "Per asset, the resource sum is IDENTICALLY ZERO — on every reachable state, always.",
-      "floor": "NONE beyond integer arithmetic. Conservation is a kernel theorem; the only crypto that touches it is Pedersen (DLog) IF values are committed rather than cleartext, and the case proves committed = cleartext via `Spec.committed_iff_cleartext`.",
+      "floor": "NONE beyond integer arithmetic. Conservation is a kernel theorem; the only crypto that touches it is Pedersen (DLog) IF values are committed rather than cleartext, and the case proves committed = cleartext via `Spec.committed_iff_cleartext`. DEPLOYMENT CORRESPONDENCE (named, not closed — the theorem's hypothesis vs the running node): `reachable_total_zero` quantifies over states reachable from a VALUE-EMPTY genesis (`GenesisState`: `bal ≡ 0`; live cells may pre-exist, value may not). Two deployed paths are TODAY outside that hypothesis, and this case does not claim them: 1. **Devnet genesis seeding** — `node/src/genesis.rs` mints the faucet (1,000,000) and demo agents (alice/bob/carol) with positive balances and NO issuer well carrying −supply, so the deployed genesis is not value-empty in the model's sense. The W1-faithful fix is to seed via issuer-moves from a genesis issuer cell (then genesis Σ=0 holds by construction). 2. **The legacy atomic-path fee epilogue** — `turn/src/executor/atomic.rs` (the fee deduct in `execute_atomic`) debits `atomic_turn.fee` from the agent with no crediting move: a burn OUTSIDE the issuer-move discipline (DREGG3 staged item: fees become moves to wells). Until both are reshaped, `conservation_guarantee` is a theorem about the kernel the node RUNS (`execFullTurnA` — every committed transaction preserves Σ exactly) but the deployed CHAIN's Σ is offset by its genesis seed and decremented by legacy fees. Reported here so the spec SAYS what it covers; the closure lane is the genesis/fee reshape, not a caveat to carry.",
       "apex_theorem": "conservation_guarantee",
       "keystones": [
         {
@@ -204,7 +214,7 @@
       "letter": "D",
       "title": "FRESHNESS",
       "statement": "No replay / double-spend; a committed spend's nullifier was fresh; revocation at finality.",
-      "floor": "Poseidon2-CR (the nullifier-set sorted-tree root openings). PostGSTProgress for the revocation-at-finality leg (consensus terminates after GST).",
+      "floor": "Poseidon2-CR (the nullifier-set sorted-tree root openings). PostGSTProgress for the revocation-at-finality leg (consensus terminates after GST). KNOWN RESIDUAL (named, out-of-model): the node's MCP gateway binds biscuit-cap temporal caveats to the live attested consensus height (`node/src/mcp.rs` `McpCapContext.block_height`) — the height-expiry leg is real — but consults NO revocation registry for MCP-issued biscuit caps (the gateway's own doc names this). An MCP cap dies only by expiry caveat, never by explicit revocation, until a revocation feed is wired. That path is OUTSIDE this guarantee's statement; it is listed here so the case says so rather than implying coverage.",
       "apex_theorem": "freshness_guarantee",
       "keystones": [
         {
@@ -226,6 +236,10 @@
         {
           "name": "Liveness.revocation_needs_consensus",
           "summary": "revocation is consensus-bound: it takes effect when (and only when) all relevant views agree the epoch advanced (immediate AT finality, the negative-lifecycle dual of consensus-free GC)."
+        },
+        {
+          "name": "CapSlotFactory.{stored_cap_only_fresh_if_epoch_unrevoked, revoke_stales_stored_cap,\n    store_then_revoke_refused}",
+          "summary": "THE R7 RETRIEVAL-EPOCH RULE over STORED capabilities: a cap parked in a slot is stamped with the grantor's `delegationEpoch` at store time, and EVERY load+exercise refuses iff the grantor's epoch has advanced. This is the freshness leg for the ENTIRE surviving storage surface: post-F3 the seal/swiss/sturdyref verb family is GONE from the kernel (`VerbRegistry.no_live_factory_tags`) and caps-in-slots is the ONE storage pattern that replaces it, so covering `storeCap`/`retrieveCap` covers all stored-cap paths the kernel admits. A stored cap can no longer outlive its grantor's revocation (the dregg1 `apply_unseal`/`apply_exercise_via_capability` gap, closed)."
         }
       ],
       "pins": [
@@ -237,6 +251,9 @@
         "Dregg2.Crypto.NonMembership.nonmembership_sound",
         "Dregg2.Crypto.NonMembership.nonmembership_complete",
         "Dregg2.Liveness.revocation_needs_consensus",
+        "Dregg2.Apps.CapSlotFactory.stored_cap_only_fresh_if_epoch_unrevoked",
+        "Dregg2.Apps.CapSlotFactory.revoke_stales_stored_cap",
+        "Dregg2.Apps.CapSlotFactory.store_then_revoke_refused",
         "Dregg2.Liveness.dead_undecidable"
       ],
       "summary": "no replay / double-spend; a committed spend's nullifier was fresh, and"
@@ -299,6 +316,7 @@
       "pins": [
         "running_entry_sound",
         "Dregg2.Exec.FullForestAuth.execFullForestG_conserves_per_asset",
+        "Dregg2.Exec.FullForestAuth.execFullForestG_conserves_exact",
         "Dregg2.Exec.FullForestAuth.execFullForestG_ledger_per_asset",
         "Dregg2.Exec.FullForestAuth.execFullForestG_no_amplify",
         "Dregg2.Exec.FullForestAuth.execFullForestG_each_attests",
