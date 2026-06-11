@@ -53,18 +53,30 @@ key `~/.ssh/negneg-cq.pem`, token in `/etc/dregg/node.env` there).
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
   `project-refinement-epoch.md` is the live resume file; MEMORY.md is the index.
 
-## State of the world (2026-06-11, refinement night)
+## State of the world (2026-06-11 refinement night, ~14 commits)
 
-- main @ `d97b37d1f`, all pushed. **GitHub Pages: GREEN**.
-- LANDED tonight: proof economics #161 (`c053ede33`, docs/PROOF-ECONOMICS.md —
-  452 KiB per-turn = 92% FRI openings, 85% hash-site aux; ROOT is the external
-  artifact) · README rewritten to teach what-is (`4c4172e04`) · **recursion config
-  PRODUCTION strength** (`e1d6d1d26`: q=38+14 PoW = 128-bit conjectured, ROOT
-  502 KiB / 16 ms / K-independent, in-circuit PoW check) · **THE HEAP Lean
-  foundation** (`d97b37d1f`: Substrate/Heap.lean + HeapKernel.lean, root_injective
-  anti-ghost, balance-neutral guarded step; splice plan in task #165 metadata).
-- STILL RUNNING: language uplift (keystone) · devnet quality #159 ·
-  graduate-all-selectors + DELETE hand-AIR fallback + kimchi/pickles backends.
+- main @ `61db0dc6a`, all pushed. **GitHub Pages: GREEN**.
+- LANDED tonight: proof economics #161 (`c053ede33`) · README teach-what-is
+  (`4c4172e04`) · **recursion 128-bit** (`e1d6d1d26`: ROOT 502 KiB/16ms, real
+  light-client artifact) · **HEAP foundation + splice** (`d97b37d1f`+`6e8d8a817`:
+  heaps in RecordKernelState, execHeapWriteG gated, apex pins heaps) ·
+  **language uplift keystone** (`82bb3faf2`: actor/context atoms + the
+  nested-effect program-bypass soundness fix + polis actor-bound) · devnet
+  quality #159 code (`239d739bd`) · **non-omission** (`9dcd42cd9`:
+  server_cannot_omit; rotation must bind iroot into recStateCommit) ·
+  consensus-flex (`001521af2`: on-demand thesis + T1 proved + the
+  finalized_prefix_monotone GAP found → T5 lane) · **SDK two-nouns +
+  dregg id** (`b62259300`: Unchecked sealed, .turn().sign().submit(),
+  golden-vector profiles) · **verb compression** (`61db0dc6a`: kernel = 3
+  verbs + 4-strata guard ISA, both directions proved).
+- AMBITIONS RATIFIED (ember): universal map = the LAST rotation · non-omission ·
+  temporal modal layer (CTL-backed) · epistemic K/E/D/C tower (finality IS
+  common knowledge; threshold IS D_G) · consensus-on-demand · intent re-founding
+  (census: ~80% unreachable, 4 ontologies; the live fulfill edge rides the
+  LEGACY executor while verified_settle sits proved+unfired → rewire lane).
+- STILL RUNNING: graduation+delete (selectors 17→22+, kimchi/pickles deletion) ·
+  T5 prefix-monotonicity (node's unproven assumption) · temporal modalities ·
+  epistemic tower · intent fulfill rewire · graviton gateway-only redeploy.
 - Devnet: dregg3 semantics live; `state_producer: lean`; quiescent block production
   (mutation-driven + 120s heartbeat); CORS single-header; solo node (n=3 is a filed
   wave-R2 item). KNOWN GAPS (task #159, lane running): proofs never attach
