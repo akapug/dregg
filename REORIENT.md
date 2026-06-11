@@ -53,6 +53,32 @@ key `~/.ssh/negneg-cq.pem`, token in `/etc/dregg/node.env` there).
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
   `project-refinement-epoch.md` is the live resume file; MEMORY.md is the index.
 
+## ⚑⚑ UNCOMMITTED LOCAL TREE STATE (2026-06-11 late — READ BEFORE ANY `git add`)
+
+The local working tree has THREE lanes' uncommitted work INTERMIXED — do NOT
+blanket `git add`. Land each cleanly by its OWN file set:
+- **IR-v2 size fix** (circuit/src/descriptor_ir2.rs — MAP_WIDTH 12,007→71 +
+  empty-table elision). Its VERIFICATION lane (a9f11d1ca31a8a456) is running
+  the measure+validate; commit ONLY when it reports IR-v2 < v1 (the GATE 0
+  number) + anti-ghost still bites. Paths: descriptor_ir2.rs (+ any test/doc it
+  lists).
+- **Lean-gate polarity inversion** (abb9f6e0596ba76b8, running): captp/coord/
+  federation/turn/intent/sdk/app-framework Cargo.toml + cfg code + node/Cargo.toml
+  + wasm wiring → a `no-lean-link` platform gate. Commit its file set when it
+  reports BOTH native + wasm green.
+- **TEST-TRIAGE bulk (Opus, DONE — head was 4dd84a3a)**: ~50 test/helper/example
+  files greened (signed-wells i64 stale pins fixed across cell/turn/intent/
+  persist/coord/redteam/protocol-tests/sdk-e2e/teasting/demo-agent; dregg3
+  retired-verb tests DELETED: tests/src/captp_effects_pipeline.rs,
+  teasting/tests/cross_federation_captp_turn.rs, demo-agent/examples/
+  proof_obligation.rs; protocol_coverage_gate ratchet 9 + new
+  coverage_state_constraints.rs). Mirrored+green on persvati. The A-BUG it found
+  is ALREADY COMMITTED (aa381aeed, execution_cursor.rs pending() unsound slice).
+  The bulk B/C test-greening is in the local tree intermixed w/ the above two
+  lanes — land it AS ITS OWN COMMIT after the inversion + IR-v2 lanes land
+  (its exact file list is in the triage task report). NOT soundness-critical
+  (stale pre-Lean pins); 6888 tests pass with it.
+
 ## ⚑ EPOCH STATUS (2026-06-11 evening — FOUR PIECES LANDED, flag-day deferred)
 
 THE EPOCH (docs/EPOCH-DESIGN.md) — boundary/interior proving. LANDED + pushed:
