@@ -148,7 +148,9 @@ fn honest_corpus_accepted_identically_by_both_airs() {
             total += 1;
         }
     }
-    assert!(total >= 9, "corpus shrank unexpectedly ({total} cases)");
+    // VERB LOCKSTEP: the corpus dropped a doomed-effect case with its Effect
+    // variant; 8 survivor cases remain.
+    assert!(total >= 8, "corpus shrank unexpectedly ({total} cases)");
 }
 
 /// SOUNDNESS (the load-bearing direction): build a battery of TAMPERED (trace, PI)

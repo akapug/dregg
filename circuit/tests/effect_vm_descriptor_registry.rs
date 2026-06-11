@@ -23,7 +23,9 @@ use dregg_circuit::lean_descriptor_air::parse_vm_descriptor;
 /// EffectVM interpreter, and the parsed `name` round-trips the registry key.
 #[test]
 fn every_registered_descriptor_parses() {
-    assert_eq!(ALL_DESCRIPTORS.len(), 47, "expected 47 unique descriptors");
+    // VERB LOCKSTEP: 47 → 25 (the 22 descriptors of the factory-dissolved
+    // families died with their Effect variants).
+    assert_eq!(ALL_DESCRIPTORS.len(), 25, "expected 25 unique descriptors");
     for (name, json, fp) in ALL_DESCRIPTORS {
         let by_name = descriptor_for_name(name).expect("name must resolve");
         assert_eq!(*json, by_name, "{name}: descriptor_for_name mismatch");
@@ -53,13 +55,14 @@ fn selector_lookup_drives_the_dispatcher() {
         parse_vm_descriptor(json)
             .unwrap_or_else(|e| panic!("selector {s} ({name}) failed to parse: {e}"));
     }
-    // 44 selectors carry a descriptor; a few share one JSON (e.g. GRANT_CAP /
-    // REVOKE_DELEGATION / INTRODUCE / ATTENUATE_CAPABILITY all map to the `attenuateA`
-    // cap-move JSON), so the 44 selector rows reference 43 distinct descriptor names.
-    assert_eq!(SELECTOR_DESCRIPTORS.len(), 44);
+    // VERB LOCKSTEP: 24 of the 29 live selectors carry a descriptor (NOOP /
+    // SET_FIELD / CUSTOM / REVOKE_CAPABILITY / CELL_UNSEAL have no emit module
+    // yet). GRANT_CAP and ATTENUATE_CAPABILITY share the `attenuateA` cap-move
+    // JSON, so the 24 selector rows reference 23 distinct descriptor names.
+    assert_eq!(SELECTOR_DESCRIPTORS.len(), 24);
     let distinct_names: std::collections::BTreeSet<&str> =
         SELECTOR_DESCRIPTORS.iter().map(|(_, n, _, _)| *n).collect();
-    assert_eq!(distinct_names.len(), 43);
+    assert_eq!(distinct_names.len(), 23);
 
     // The transfer beachhead: selector 1 → the verified transfer descriptor.
     assert_eq!(
@@ -88,11 +91,12 @@ fn selector_lookup_drives_the_dispatcher() {
     );
 }
 
-/// The 3 name-only descriptors (`mint`, `swissDropA`, `swissHandoffA`) are real,
-/// parse, and are reachable by name — they simply lack a dedicated Rust selector.
+/// The name-only descriptor (`mint` — the swiss family died in the verb
+/// lockstep) is real, parses, and is reachable by name — it simply lacks a
+/// dedicated Rust selector.
 #[test]
 fn name_only_descriptors_are_real() {
-    assert_eq!(NAME_ONLY_DESCRIPTORS.len(), 3);
+    assert_eq!(NAME_ONLY_DESCRIPTORS.len(), 1);
     for (name, json, _fp) in NAME_ONLY_DESCRIPTORS {
         assert_eq!(descriptor_for_name(name), Some(*json));
         parse_vm_descriptor(json)

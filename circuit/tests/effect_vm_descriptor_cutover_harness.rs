@@ -879,7 +879,7 @@ fn descriptor_proof_binds_to_its_selector() {
         sel::CELL_SEAL, sel::CELL_DESTROY, sel::REFUSAL,
         sel::SET_VERIFICATION_KEY, sel::SET_PERMISSIONS, sel::EXERCISE_VIA_CAPABILITY,
         sel::PIPELINED_SEND, sel::INCREMENT_NONCE, sel::REFRESH_DELEGATION, sel::REVOKE_DELEGATION,
-        sel::INTRODUCE,
+        sel::INTRODUCE, sel::EMIT_EVENT,
     ];
 
     // Prove the transfer honest witness under the transfer descriptor (selector 1).
@@ -930,6 +930,337 @@ fn descriptor_proof_binds_to_its_selector() {
         "transfer descriptor verified a BURN proof — selector binding FAILED"
     );
     eprintln!("SELECTOR-BINDING: a burn (sel 46) proof is REJECTED by the transfer verifier. Bidirectional binding confirmed.");
+}
+
+/// A representative HOMOGENEOUS x2 fixture for a graduated selector (the same effect,
+/// twice, with distinct parameters where the variant carries any). `None` if the
+/// selector has no meaningful repeated form here.
+fn homogeneous_x2_case_for_selector(s: usize) -> Option<(CellState, Vec<Effect>)> {
+    let (st, e1) = honest_case_for_selector(s)?;
+    use dregg_circuit::effect_vm::columns::sel;
+    let eight = |x: u32| -> [BabyBear; 8] {
+        let mut a = [BabyBear::ZERO; 8];
+        a[0] = BabyBear::new(x);
+        a
+    };
+    // Second instance with DIFFERENT params (so the probe is not a row-copy artifact).
+    let e2 = match s {
+        s if s == sel::TRANSFER => Effect::Transfer { amount: 30, direction: 1 },
+        s if s == sel::NOTE_SPEND => Effect::NoteSpend { nullifier: BabyBear::new(0x4321), value: 60 },
+        s if s == sel::NOTE_CREATE => Effect::NoteCreate { commitment: BabyBear::new(0x8765), value: 40 },
+        s if s == sel::EMIT_EVENT => Effect::EmitEvent { topic_hash: eight(0x3), payload_hash: eight(0x4) },
+        s if s == sel::SET_PERMISSIONS => Effect::SetPermissions { permissions_hash: eight(0x9) },
+        s if s == sel::SET_VERIFICATION_KEY => Effect::SetVerificationKey { vk_hash: eight(0x9) },
+        s if s == sel::REFRESH_DELEGATION => Effect::RefreshDelegation,
+        s if s == sel::REVOKE_DELEGATION => Effect::RevokeDelegation { child_hash: eight(0x9) },
+        s if s == sel::EXERCISE_VIA_CAPABILITY => Effect::ExerciseViaCapability { exercise_hash: eight(0x9) },
+        s if s == sel::INTRODUCE => Effect::Introduce { intro_hash: eight(0x9) },
+        s if s == sel::PIPELINED_SEND => Effect::PipelinedSend { send_hash: eight(0x9) },
+        s if s == sel::BRIDGE_MINT => Effect::BridgeMint {
+            value_lo: BabyBear::new(15),
+            mint_hash: BabyBear::new(0x9),
+            value_full: 15,
+        },
+        s if s == sel::BURN => Effect::Burn {
+            target_hash: BabyBear::new(0xB0C),
+            amount_lo: BabyBear::new(25),
+            amount_full: 25,
+        },
+        s if s == sel::CELL_DESTROY => Effect::CellDestroy {
+            target_hash: eight(0x9),
+            death_certificate_hash: eight(0xA),
+        },
+        s if s == sel::CELL_SEAL => Effect::CellSeal { target: eight(0x9), reason_hash: eight(0xA) },
+        s if s == sel::REFUSAL => Effect::Refusal { target: eight(0x9), reason_hash: eight(0xA) },
+        s if s == sel::INCREMENT_NONCE => Effect::IncrementNonce,
+        _ => return None,
+    };
+    let mut effects = e1;
+    effects.push(e2);
+    Some((st, effects))
+}
+
+/// The homogeneous multi-effect selectors `full_turn_proof::cutover_route` routes to the
+/// descriptor prover. EXACTLY the selectors whose x2 differential below shows hand-AIR ⟺
+/// descriptor AGREEMENT on the honest multi-row witness. (Notably ABSENT: the PI-SLOT
+/// effects — `note_spend` (4) / `note_create` (5) / `emit_event` (25) / `burn` (46)
+/// bind per-turn SCALAR PI slots (one nullifier / one commitment / one event hash / one
+/// burn amount), so the HAND-AIR itself rejects their x2 traces — a multi-instance turn
+/// of those is unprovable on EITHER engine today, and the descriptor accepting what the
+/// hand-AIR rejects is exactly the MORE-PERMISSIVE direction routing must never take.)
+const MULTI_EFFECT_READY_SELECTORS: &[usize] = &[
+    1,  // TRANSFER
+    26, // SET_PERMISSIONS
+    27, // SET_VERIFICATION_KEY
+    29, // REFRESH_DELEGATION
+    30, // REVOKE_DELEGATION
+    34, // EXERCISE_VIA_CAPABILITY
+    35, // INTRODUCE
+    36, // PIPELINED_SEND
+    40, // BRIDGE_MINT (mint_hash folds per-row into effects_hash; balance accumulates)
+    47, // CELL_DESTROY
+    49, // CELL_SEAL
+    52, // REFUSAL
+    53, // INCREMENT_NONCE
+];
+
+/// THE MULTI-EFFECT AGREEMENT CENSUS — the differential map `full_turn_proof`'s
+/// `MULTI_EFFECT_READY_SELECTORS` mirror rests on. For every GRADUATED (single-effect
+/// AGREE) selector, build the honest x2 homogeneous trace and check whether the hand-AIR
+/// and the descriptor interpreter AGREE on it. Asserts:
+///   * every selector in `MULTI_EFFECT_READY_SELECTORS` AGREES (both accept), and
+///   * every graduated selector NOT in the set genuinely does NOT agree (so the routing
+///     boundary is the real differential boundary, not an arbitrary subset).
+#[test]
+fn multi_effect_agreement_census() {
+    use dregg_circuit::effect_vm::columns::sel;
+    // The 17 single-effect-graduated selectors (the AGREE set).
+    let graduated: &[usize] = &[
+        sel::TRANSFER, sel::NOTE_SPEND, sel::NOTE_CREATE, sel::EMIT_EVENT,
+        sel::SET_PERMISSIONS, sel::SET_VERIFICATION_KEY, sel::REFRESH_DELEGATION,
+        sel::REVOKE_DELEGATION, sel::EXERCISE_VIA_CAPABILITY, sel::INTRODUCE,
+        sel::PIPELINED_SEND, sel::BRIDGE_MINT, sel::BURN, sel::CELL_DESTROY,
+        sel::CELL_SEAL, sel::REFUSAL, sel::INCREMENT_NONCE,
+    ];
+    let mut agree = Vec::new();
+    let mut disagree = Vec::new();
+    for &s in graduated {
+        let Some((st, effects)) = homogeneous_x2_case_for_selector(s) else {
+            disagree.push((s, "no x2 fixture".to_string()));
+            continue;
+        };
+        let generated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            generate_effect_vm_trace(&st, &effects)
+        }));
+        let (base_trace, pis) = match generated {
+            Ok(v) => v,
+            Err(_) => {
+                disagree.push((s, "x2 trace fixture panics".into()));
+                continue;
+            }
+        };
+        let desc = parse_vm_descriptor(descriptor_for_selector(s).unwrap()).unwrap();
+        let dpis = &pis[..desc.public_input_count];
+        let hand = p3_air_accepts(&base_trace, &pis);
+        let descr = descriptor_air_accepts(&desc, &base_trace, dpis);
+        if hand && descr {
+            agree.push(s);
+        } else {
+            disagree.push((s, format!("hand_accepts={hand} desc_accepts={descr}")));
+        }
+    }
+    eprintln!("\n==== MULTI-EFFECT (x2 homogeneous) AGREEMENT CENSUS ====");
+    eprintln!("AGREE ({}): {:?}", agree.len(), agree);
+    eprintln!("NOT MULTI-ROUTABLE ({}):", disagree.len());
+    for (s, why) in &disagree {
+        eprintln!("  sel {s:>2}  {why}");
+    }
+    assert_eq!(
+        agree, MULTI_EFFECT_READY_SELECTORS,
+        "the multi-effect routing set must be EXACTLY the x2-differential AGREE set \
+         (update full_turn_proof::MULTI_EFFECT_READY_SELECTORS + this mirror together)"
+    );
+}
+
+/// MULTI-EFFECT (HOMOGENEOUS) TURNS GRADUATE — the cutover's multi-effect routing tooth.
+///
+/// A descriptor's per-row gates hold on EVERY transition row (effect rows AND NoOp pad
+/// rows), its selector gate `(1 - sel[NOOP])·(1 - sel[s])` permits any mix of NoOp pads
+/// and selector-`s` rows, and its PI bindings pin the FIRST-row pre-state + LAST-row
+/// post-state — so a turn of N effects ALL carrying the SAME graduated selector is
+/// provable by that selector's single descriptor over the one multi-row trace
+/// `generate_effect_vm_trace` already produces. This is the conjunction the descriptor
+/// interpreter natively supports (the descriptor body IS the per-row conjunction); no
+/// per-effect proof splitting or constraint surgery is needed. Scope: the selectors in
+/// `MULTI_EFFECT_READY_SELECTORS` (the x2-differential AGREE set of
+/// `multi_effect_agreement_census` — the PI-slot economic effects are excluded because
+/// the HAND-AIR itself rejects their multi-instance traces).
+///
+/// This test is the prove-side validation `full_turn_proof::cutover_route` rests on:
+/// for each homogeneous multi-effect case, the descriptor interpreter AND the hand-AIR
+/// both prove+verify the SAME honest witness, agree on accept, and BOTH reject the
+/// forged-balance + forged-state-commit tampers — exactly the single-effect gauntlet,
+/// over multi-effect traces.
+#[test]
+fn homogeneous_multi_effect_turns_graduate_into_cutover() {
+    use dregg_circuit::effect_vm::columns::sel;
+    let eight = |x: u32| -> [BabyBear; 8] {
+        let mut a = [BabyBear::ZERO; 8];
+        a[0] = BabyBear::new(x);
+        a
+    };
+    struct Case {
+        label: &'static str,
+        sel: usize,
+        st: CellState,
+        effects: Vec<Effect>,
+    }
+    let cases = vec![
+        Case {
+            label: "transfer x2 (out,out)",
+            sel: sel::TRANSFER,
+            st: CellState::new(100_000, 0),
+            effects: vec![
+                Effect::Transfer { amount: 50, direction: 1 },
+                Effect::Transfer { amount: 30, direction: 1 },
+            ],
+        },
+        Case {
+            label: "transfer x3 (out,in,out)",
+            sel: sel::TRANSFER,
+            st: CellState::new(100_000, 0),
+            effects: vec![
+                Effect::Transfer { amount: 50, direction: 1 },
+                Effect::Transfer { amount: 20, direction: 0 },
+                Effect::Transfer { amount: 10, direction: 1 },
+            ],
+        },
+        Case {
+            label: "bridge_mint x2 (economic multi-row)",
+            sel: sel::BRIDGE_MINT,
+            st: CellState::new(100_000, 0),
+            effects: vec![
+                Effect::BridgeMint {
+                    value_lo: BabyBear::new(40),
+                    mint_hash: BabyBear::new(0x1),
+                    value_full: 40,
+                },
+                Effect::BridgeMint {
+                    value_lo: BabyBear::new(15),
+                    mint_hash: BabyBear::new(0x9),
+                    value_full: 15,
+                },
+            ],
+        },
+        Case {
+            label: "increment_nonce x2 (frozen-frame multi-row)",
+            sel: sel::INCREMENT_NONCE,
+            st: CellState::new(100_000, 0),
+            effects: vec![Effect::IncrementNonce, Effect::IncrementNonce],
+        },
+    ];
+    let _ = eight;
+
+    let mut graduated = 0usize;
+    for c in cases {
+        let (base_trace, pis) = generate_effect_vm_trace(&c.st, &c.effects);
+        assert_eq!(base_trace[0].len(), 186, "[{}] canonical 186-col layout", c.label);
+        let json = descriptor_for_selector(c.sel)
+            .unwrap_or_else(|| panic!("[{}] selector {} has no descriptor", c.label, c.sel));
+        let name = descriptor_name_for_selector(c.sel).unwrap();
+        let desc = parse_vm_descriptor(json).expect("descriptor parses");
+        let dpis = &pis[..desc.public_input_count];
+
+        // (1) DESCRIPTOR INTERPRETER — prove + independent verify, real Plonky3.
+        let desc_proof = prove_vm_descriptor(&desc, &base_trace, dpis).unwrap_or_else(|e| {
+            panic!("[{}] descriptor `{name}` failed to PROVE the honest multi-effect witness: {e}", c.label)
+        });
+        verify_vm_descriptor(&desc, &desc_proof, dpis).unwrap_or_else(|e| {
+            panic!("[{}] descriptor multi-effect proof failed independent verify: {e}", c.label)
+        });
+
+        // (2) HAND-AIR — prove + independent verify, same witness.
+        let hand_proof = prove_effect_vm_p3(&base_trace, &pis)
+            .unwrap_or_else(|e| panic!("[{}] hand-AIR failed to prove honest witness: {e:?}", c.label));
+        verify_effect_vm_p3(&hand_proof, &pis)
+            .unwrap_or_else(|e| panic!("[{}] hand-AIR proof failed verify: {e:?}", c.label));
+
+        // (3) THE DIFFERENTIAL — both accept the SAME honest multi-effect witness.
+        let hand_accepts = p3_air_accepts(&base_trace, &pis);
+        let desc_accepts = descriptor_air_accepts(&desc, &base_trace, dpis);
+        assert!(hand_accepts, "[{}] hand-AIR rejected a witness it just PROVED", c.label);
+        assert!(desc_accepts, "[{}] descriptor rejected a witness it just PROVED", c.label);
+        assert_eq!(hand_accepts, desc_accepts, "[{}] DIFFERENTIAL DISAGREEMENT", c.label);
+
+        // (4a) ANTI-GHOST — forged FINAL_BAL_LO is UNSAT for BOTH.
+        {
+            let mut forged = pis.clone();
+            forged[pi::FINAL_BAL_LO] = forged[pi::FINAL_BAL_LO] + BabyBear::new(123);
+            let fdpis = &forged[..desc.public_input_count];
+            assert!(!p3_air_accepts(&base_trace, &forged), "[{}] hand-AIR took forged bal", c.label);
+            assert!(
+                !descriptor_air_accepts(&desc, &base_trace, fdpis),
+                "[{}] descriptor MORE PERMISSIVE on forged FINAL_BAL_LO (multi-effect)", c.label
+            );
+        }
+        // (4b) ANTI-GHOST — mutated last-row state-commit cell is UNSAT for the descriptor.
+        {
+            let mut t = base_trace.clone();
+            let last = t.len() - 1;
+            t[last][STATE_AFTER_BASE + state::STATE_COMMIT] =
+                t[last][STATE_AFTER_BASE + state::STATE_COMMIT] + BabyBear::new(1);
+            assert!(
+                !descriptor_air_accepts(&desc, &t, dpis),
+                "[{}] descriptor took a forged last-row state-commit cell (multi-effect)", c.label
+            );
+        }
+        // (4c) ANTI-GHOST, multi-row-specific — tamper a MIDDLE effect row's post-state
+        // balance (not the first, not the last): the transition-continuity + per-row move
+        // gates must catch an interior tamper, not just the boundary-pinned rows.
+        if c.effects.len() >= 2 {
+            let mut t = base_trace.clone();
+            t[1][STATE_AFTER_BASE + state::BALANCE_LO] =
+                t[1][STATE_AFTER_BASE + state::BALANCE_LO] + BabyBear::new(7);
+            assert!(
+                !descriptor_air_accepts(&desc, &t, dpis),
+                "[{}] descriptor took a tampered INTERIOR row balance (multi-effect)", c.label
+            );
+        }
+
+        eprintln!(
+            "[{}] MULTI-EFFECT GRADUATED: descriptor `{name}` + hand-AIR both prove+verify the honest \
+             {}-effect witness, agree on accept, and both reject the tampers.",
+            c.label,
+            c.effects.len()
+        );
+        graduated += 1;
+    }
+    assert_eq!(graduated, 4, "all homogeneous multi-effect cases must graduate");
+}
+
+/// THE NAMED HETEROGENEOUS CONDITION — why mixed-selector turns stay on the hand-AIR.
+///
+/// A heterogeneous turn (effects with DIFFERENT selectors) is NOT provable by any single
+/// descriptor: descriptor-`s`'s Lean selector gate `(1 - sel[NOOP])·(1 - sel[s])` is
+/// violated on the row carrying the OTHER selector. There is no Lean-emitted conjunction
+/// descriptor for selector SETS (hand-merging two descriptors' constraint sets in Rust
+/// would forfeit verified-by-construction), so `full_turn_proof::cutover_route` reports
+/// the mixed-selector turn as the EXPLICIT `HeterogeneousSelectors` fallback. This test
+/// pins that the condition is REAL (both candidate descriptors genuinely reject the mixed
+/// trace), not a precautionary len check.
+#[test]
+fn heterogeneous_multi_effect_is_not_descriptor_provable() {
+    use dregg_circuit::effect_vm::columns::sel;
+    let st = CellState::new(100_000, 0);
+    let effects = vec![
+        Effect::Transfer { amount: 50, direction: 1 },
+        Effect::Burn {
+            target_hash: BabyBear::new(0xB0B),
+            amount_lo: BabyBear::new(25),
+            amount_full: 25,
+        },
+    ];
+    let (base_trace, pis) = generate_effect_vm_trace(&st, &effects);
+    // The hand-AIR (the fallback engine) accepts the honest mixed turn.
+    assert!(
+        p3_air_accepts(&base_trace, &pis),
+        "hand-AIR must accept the honest transfer+burn turn (the fallback is live)"
+    );
+    // Neither constituent descriptor accepts the mixed trace (the selector gate bites).
+    for s in [sel::TRANSFER, sel::BURN] {
+        let desc = parse_vm_descriptor(descriptor_for_selector(s).unwrap()).unwrap();
+        let dpis = &pis[..desc.public_input_count];
+        assert!(
+            !descriptor_air_accepts(&desc, &base_trace, dpis),
+            "descriptor for selector {s} ACCEPTED a mixed transfer+burn trace — the \
+             HeterogeneousSelectors fallback condition would be vacuous"
+        );
+    }
+    eprintln!(
+        "HETEROGENEOUS CONDITION CONFIRMED: a transfer+burn turn is rejected by both the \
+         transfer and burn descriptors (selector gate), and accepted by the hand-AIR — the \
+         named fallback is real."
+    );
 }
 
 /// ATTENUATE GRADUATES (cap Phase B) — selector 48 now carries GENUINE in-circuit

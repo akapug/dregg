@@ -227,7 +227,7 @@ pub fn verify_forest(forest: &ProofForest) -> Result<(), ForestError> {
 // Lean-emitted descriptor JSON in `effect_vm_descriptors`), which the differential
 // harness (`circuit/tests/effect_vm_descriptor_cutover_harness.rs`) proves decides
 // IDENTICALLY to the hand-AIR on the real witness (honest accept + anti-ghost
-// reject) for the 18 GRADUATED single-effect selectors.
+// reject) for the 17 GRADUATED single-effect selectors.
 //
 // A descriptor forest node carries an `EffectVmP3Proof` (the SAME wire type the SDK
 // production prove-path emits via `prove_effect_vm_with_cutover`), so this is the
@@ -252,6 +252,7 @@ pub const CUTOVER_READY_SELECTORS: &[usize] = &[
     crate::effect_vm::columns::sel::TRANSFER,
     crate::effect_vm::columns::sel::NOTE_SPEND,
     crate::effect_vm::columns::sel::NOTE_CREATE,
+    crate::effect_vm::columns::sel::EMIT_EVENT,
     crate::effect_vm::columns::sel::BRIDGE_MINT,
     crate::effect_vm::columns::sel::BURN,
     crate::effect_vm::columns::sel::CELL_SEAL,
