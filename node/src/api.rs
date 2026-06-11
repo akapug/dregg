@@ -1587,6 +1587,7 @@ pub fn router_with_cors(
             })
         })
         .route("/api/events", get(get_events))
+        .route("/api/events/stream", get(crate::events::events_stream))
         .route("/observability/stream", get(observability_stream))
         .route("/checkpoint/latest", get(get_checkpoint_latest))
         .route("/checkpoint/{height}", get(get_checkpoint_at_height))

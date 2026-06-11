@@ -113,6 +113,8 @@ pub mod discovery;
 #[cfg(feature = "network")]
 pub mod embed;
 pub mod error;
+#[cfg(all(feature = "federation-client", feature = "network"))]
+pub mod events;
 pub mod explain;
 pub mod factories;
 pub mod full_turn_proof;
@@ -159,6 +161,11 @@ pub mod cclerk {
 /// **Noun 1**: proof-of-execution for one committed turn, with the composed
 /// STARK lazily attached. See [`receipt`].
 pub use receipt::{Receipt, TurnProof};
+
+/// The receipt nervous system: subscribe to a node's committed receipts as
+/// a `Stream` of [`Receipt`]. See [`events`].
+#[cfg(all(feature = "federation-client", feature = "network"))]
+pub use events::{NodeEvents, ReceiptFilter, ReceiptStream};
 
 /// **Noun 2**: the light-client artifact — the verdict from verifying ONE
 /// succinct whole-history aggregate (re-witnessing nothing), plus its
