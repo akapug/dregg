@@ -39,7 +39,10 @@ boundary; they enter as `Prop`-portals (typeclass fields / hypotheses), never as
 
 No other assumption is load-bearing anywhere in the case below. In particular: there is no
 trusted executor, no out-of-band "this turn was authorized" premise, and no field of the
-post-state left uncommitted (see guarantee C).
+post-state left uncommitted (see guarantee C). The DEPLOYMENT-side boundary — which prover
+covers which turn shape, the host-fed admission inputs, and producer coverage — is named
+explicitly in the **Named boundary seams** section after guarantee R (a seam the case does
+not name is a seam the case launders).
 
 ## The five guarantees
 
@@ -71,6 +74,7 @@ import Dregg2.Circuit.Argus.Effects.NoteSpend
 import Dregg2.Exec.FullForestAuth          -- the RUNNING ENTRY: execFullForestG (the dregg_exec_full_forest_auth FFI)
 import Dregg2.Exec.ReachableConservation   -- conservation (W1): Σ=0 as a reachability invariant
 import Dregg2.Exec.IssuerMove              -- conservation (W1): the issuer-move mechanism + the legacy-break tooth
+import Dregg2.Apps.CapSlotFactory          -- freshness (R7): stored-cap retrieval-epoch gate + no-forge-from-storage
 
 namespace Dregg2.AssuranceCase
 
@@ -98,6 +102,36 @@ DAG:
   • `EffectsAuthority.amplifying_grant_rejected` — the TEETH: a grant conferring authority
     the holder lacks is REJECTED (the predicate is two-valued, not `:= True`).
   • `Spec.introduce_non_amplifying` (the Spec-level capability graph) closes the loop.
+
+COVERAGE (every authority-conferring path, post-reduction): the live verb set confers
+authority through exactly these mouths, and each is pinned below —
+  * `introduceA` (copy of a held cap)            — `execFullA_introduceA_non_amplifying`;
+  * `delegateAttenA` (the EXECUTED narrowed grant)— `execFullA_delegateAttenA_non_amplifying`
+    (+ the kernel-op face `recKDelegateAtten_non_amplifying`); forest delegation EDGES are the
+    same op, covered for EVERY committed forest by `running_entry_sound` (guarantee R);
+  * `attenuateA` / `refreshDelegationA`           — `execFullA_attenuateA_non_amplifying`,
+    `EffectsAuthority.refresh_non_amplifying` (a refresh is a re-snapshot via attenuation);
+  * `revokeDelegationA`                           — `revokeDelegation_non_amplifying` (only
+    subtracts);
+  * `exerciseA`                                   — `exercise_non_amplifying` (using a cap
+    confers nothing new) + the R4 facet gate (an inner effect demanding a facet the held cap
+    lacks ⇒ `none`);
+  * `setPermissions`                              — `setPermissions_non_amplifying`;
+  * STORED caps (caps-in-slots, the F3 seal/swiss/sturdyref replacement) — the storage
+    round-trip confers nothing beyond the original grant: `CapSlotFactory.no_forge_from_storage`
+    (store-mouth held-gated; retrieval = one survivor grant of the SAME payload);
+  * PRODUCTION authority (mint) is not a cap-grant at all: it is gated on holding the ISSUER
+    cell's cap (`recKMintAsset_authorized`, pinned under guarantee B) — the constructive
+    production law, never a recipient-shaped grant;
+  * cell BIRTH (`createCellA` / factory create) grants the creator a cap to the NEW cell only —
+    authority over a previously-nonexistent resource, not amplification of held authority.
+There is no other cap-conferring constructor in `FullActionA`; the wire enum is reconciled
+against the registry (`Substrate.VerbRegistry.classify`, exhaustive by the compiler).
+
+The WHO leg: `credentialValid` is the §8 `AuthPortal` PORTAL (routed to
+`CryptoKernel.verify` / `Credential.verify` — the named ed25519/HMAC carriers), NOT a proven
+signature scheme. That is the same floor item 3/4 above, entering as a typeclass; the gate's
+soundness statement (`captp_sound`/`token_sound`) is conditional on it, as stated.
 
 Floor: ed25519 (signature on the handoff), HMAC (caveat-chain tags), Poseidon2-CR
 (in-circuit cap-root openings). No trusted "this was authorized" premise survives.
@@ -130,6 +164,17 @@ theorem authority_guarantee
 #assert_axioms Dregg2.Exec.EffectsAuthority.introduce_grounded_and_non_amplifying
 #assert_axioms Dregg2.Exec.EffectsAuthority.amplifying_grant_rejected
 #assert_axioms Dregg2.Spec.introduce_non_amplifying
+-- the per-mouth COVERAGE pins (every authority-conferring path, see the coverage note above):
+#assert_axioms Dregg2.Exec.TurnExecutorFull.execFullA_introduceA_non_amplifying
+#assert_axioms Dregg2.Exec.TurnExecutorFull.execFullA_attenuateA_non_amplifying
+#assert_axioms Dregg2.Exec.TurnExecutorFull.execFullA_delegateAttenA_non_amplifying
+#assert_axioms Dregg2.Exec.recKDelegateAtten_non_amplifying
+#assert_axioms Dregg2.Exec.EffectsAuthority.revokeDelegation_non_amplifying
+#assert_axioms Dregg2.Exec.EffectsAuthority.attenuate_non_amplifying
+#assert_axioms Dregg2.Exec.EffectsAuthority.refresh_non_amplifying
+#assert_axioms Dregg2.Exec.EffectsAuthority.exercise_non_amplifying
+#assert_axioms Dregg2.Exec.EffectsAuthority.setPermissions_non_amplifying
+#assert_axioms Dregg2.Apps.CapSlotFactory.no_forge_from_storage
 
 /-! ===========================================================================
 ## Guarantee B — CONSERVATION
@@ -166,6 +211,22 @@ DAG:
 Floor: NONE beyond integer arithmetic. Conservation is a kernel theorem; the only crypto
 that touches it is Pedersen (DLog) IF values are committed rather than cleartext, and the
 case proves committed = cleartext via `Spec.committed_iff_cleartext`.
+
+DEPLOYMENT CORRESPONDENCE (named, not closed — the theorem's hypothesis vs the running node):
+`reachable_total_zero` quantifies over states reachable from a VALUE-EMPTY genesis
+(`GenesisState`: `bal ≡ 0`; live cells may pre-exist, value may not). Two deployed paths are
+TODAY outside that hypothesis, and this case does not claim them:
+  1. **Devnet genesis seeding** — `node/src/genesis.rs` mints the faucet (1,000,000) and demo
+     agents (alice/bob/carol) with positive balances and NO issuer well carrying −supply, so
+     the deployed genesis is not value-empty in the model's sense. The W1-faithful fix is to
+     seed via issuer-moves from a genesis issuer cell (then genesis Σ=0 holds by construction).
+  2. **The legacy atomic-path fee epilogue** — `turn/src/executor/atomic.rs` (the fee deduct
+     in `execute_atomic`) debits `atomic_turn.fee` from the agent with no crediting move: a
+     burn OUTSIDE the issuer-move discipline (DREGG3 staged item: fees become moves to wells).
+Until both are reshaped, `conservation_guarantee` is a theorem about the kernel the node RUNS
+(`execFullTurnA` — every committed transaction preserves Σ exactly) but the deployed CHAIN's
+Σ is offset by its genesis seed and decremented by legacy fees. Reported here so the spec
+SAYS what it covers; the closure lane is the genesis/fee reshape, not a caveat to carry.
 =========================================================================== -/
 
 open Dregg2.Exec.ReachableConservation (Reachable reachable_total_zero) in
@@ -289,9 +350,25 @@ DAG:
   • `Liveness.revocation_needs_consensus` — revocation is consensus-bound: it takes effect
     when (and only when) all relevant views agree the epoch advanced (immediate AT finality,
     the negative-lifecycle dual of consensus-free GC).
+  • `CapSlotFactory.{stored_cap_only_fresh_if_epoch_unrevoked, revoke_stales_stored_cap,
+    store_then_revoke_refused}` — THE R7 RETRIEVAL-EPOCH RULE over STORED capabilities: a
+    cap parked in a slot is stamped with the grantor's `delegationEpoch` at store time, and
+    EVERY load+exercise refuses iff the grantor's epoch has advanced. This is the freshness
+    leg for the ENTIRE surviving storage surface: post-F3 the seal/swiss/sturdyref verb
+    family is GONE from the kernel (`VerbRegistry.no_live_factory_tags`) and caps-in-slots
+    is the ONE storage pattern that replaces it, so covering `storeCap`/`retrieveCap` covers
+    all stored-cap paths the kernel admits. A stored cap can no longer outlive its grantor's
+    revocation (the dregg1 `apply_unseal`/`apply_exercise_via_capability` gap, closed).
 
 Floor: Poseidon2-CR (the nullifier-set sorted-tree root openings). PostGSTProgress for the
 revocation-at-finality leg (consensus terminates after GST).
+
+KNOWN RESIDUAL (named, out-of-model): the node's MCP gateway binds biscuit-cap temporal
+caveats to the live attested consensus height (`node/src/mcp.rs` `McpCapContext.block_height`)
+— the height-expiry leg is real — but consults NO revocation registry for MCP-issued biscuit
+caps (the gateway's own doc names this). An MCP cap dies only by expiry caveat, never by
+explicit revocation, until a revocation feed is wired. That path is OUTSIDE this guarantee's
+statement; it is listed here so the case says so rather than implying coverage.
 =========================================================================== -/
 
 /-- **`freshness_guarantee` (NEW aggregation).** The anti-replay case for noteSpend, in one
@@ -316,6 +393,10 @@ theorem freshness_guarantee {nf : Nat} {k k' : RecordKernelState}
 #assert_axioms Dregg2.Crypto.NonMembership.nonmembership_sound
 #assert_axioms Dregg2.Crypto.NonMembership.nonmembership_complete
 #assert_axioms Dregg2.Liveness.revocation_needs_consensus
+-- the R7 stored-cap freshness keystones (caps-in-slots = the whole surviving storage surface):
+#assert_axioms Dregg2.Apps.CapSlotFactory.stored_cap_only_fresh_if_epoch_unrevoked
+#assert_axioms Dregg2.Apps.CapSlotFactory.revoke_stales_stored_cap
+#assert_axioms Dregg2.Apps.CapSlotFactory.store_then_revoke_refused
 -- the negative-lifecycle teeth: liveness/death is not decidable (consensus-bound, like revocation):
 #assert_axioms Dregg2.Liveness.dead_undecidable
 
@@ -449,6 +530,56 @@ theorem running_entry_sound
 #assert_axioms Dregg2.Exec.FullForestAuth.execFullForestG_unauthorized_fails
 
 end RunningEntry
+
+/-! ===========================================================================
+## Named boundary seams (what the deployed node feeds the verified surface)
+
+The guarantees above are kernel-unconditional modulo the §8 floor. Between the verified
+surface and the deployed node there are, additionally, exactly THREE host-side seams. They
+are not Lean hypotheses (nothing below `#assert_axioms`-rests on them); they are the
+admission/coverage boundary of the RUNNING system, and the case is not honest unless it
+names them:
+
+  1. **The prover partition (which circuit attests which turn).** The descriptor prover —
+     the Lean-emitted ONE-circuit constraint set (`EffectVmDescriptorAir`) — is the DEFAULT
+     for the 17 graduated turn shapes (`sdk/src/full_turn_proof.rs` `CUTOVER_READY_SELECTORS`:
+     transfer, noteSpend/Create, emitEvent, bridgeMint, burn, cellSeal/Destroy, refusal,
+     setVk/setPerms, exercise, pipelinedSend, incrementNonce, refresh/revokeDelegation,
+     introduce). Every OTHER turn shape falls back — LOGGED, never silent — to the legacy
+     hand-written AIR (`circuit/src/effect_vm_p3_full_air.rs`). The hand-AIR enforces the
+     same PI bindings and is adversarially tested (forged-commit/tamper suites), but its
+     constraint set is NOT Lean-derived: for non-graduated shapes, circuit⟺kernel agreement
+     is test-attested, not theorem-attested. The graduation lane closes this by emptying the
+     fallback set. (The verifier side enforces the same partition: a descriptor proof must
+     bind to exactly ONE graduated selector, else reject.)
+
+  2. **The `ShadowHostCtx` host-fed admission inputs.** The verified executor's admission
+     check reads five values the HOST supplies (`turn/src/lean_shadow.rs` `ShadowHostCtx`):
+     `block_height` (expiry caveats), the migration `frozen` set, the agent's `stored_head`
+     receipt-chain head (anti-fork/replay), the silo `budget`, and `intro_lifetime`. The
+     theorems say: IF these are the node's true values THEN admission is decided correctly
+     and fail-closed. Their fidelity (the production override of `ShadowHostCtx::diag`) is a
+     host obligation outside the Lean statement — the same epistemic status as the §8
+     carriers, but engineering- rather than cryptography-shaped. A host lying to itself about
+     its own height/budget harms only admission, never the A–C invariants (which are proven
+     over whatever state the executor actually runs on).
+
+  3. **Producer coverage (which turns the verified executor PRODUCES).** By default
+     (`DREGG_LEAN_PRODUCER` unset) the verified Lean executor is the authoritative state
+     producer for the swap-safe covered set (`lean_shadow::producer_root_agreeing_effects`);
+     turn shapes outside it are executed by the legacy Rust executor with the Lean verdict as
+     a differential/veto. `running_entry_sound` quantifies over every forest the FFI is
+     INVOKED on; this seam is about which turns route there. The honest partition
+     (mappable = root-agreeing ∪ root-gap) is maintained in `lean_shadow.rs` and burns down
+     toward total coverage.
+
+Also named (low-severity circuit residual): the EffectVM layout still carries the F3-retired
+field-seal `RESERVED` column. Every surviving effect PRESERVES it and no live verb can set a
+sealed bit (the seal family's selectors are pinned to zero), but the column is NOT absorbed
+into the in-circuit state commitment (`state_commit = H4(bal,nonce,fields,cap_root)` chain),
+so its value is prover-chosen. No surviving semantics depends on it; the relayout lane that
+regenerates descriptors against the compacted selector layout deletes it.
+=========================================================================== -/
 
 /-! ===========================================================================
 ## Axiom-hygiene coverage note
