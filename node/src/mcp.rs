@@ -2937,12 +2937,14 @@ async fn tool_fulfill_intent(params: &Value, state: &NodeState) -> McpToolResult
         state_root_block: current_height,
     };
 
-    // Execute the fulfillment payment flow.
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
-    let result = dregg_intent::fulfillment::execute_fulfillment_flow(
+    // Execute the fulfillment payment through the VERIFIED settle path (same edge as the
+    // `/intents/fulfill` API handler): the value-moving leg folds through the verified
+    // per-asset transition, cross-checked against the REAL Lean executor export
+    // `dregg_record_kernel_step` (`verified-settle` is on in the node). Fail-closed — no
+    // fallback to the legacy `dregg_turn::TurnExecutor`.
+    let result = dregg_intent::fulfillment::execute_fulfillment_flow_verified(
         &intent,
         &fulfillment_with_preds,
-        &executor,
         &mut s.ledger,
         payer_cell,
         recipient_cell,

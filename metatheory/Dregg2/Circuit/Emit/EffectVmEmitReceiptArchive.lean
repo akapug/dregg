@@ -64,6 +64,7 @@ the NAMED hypothesis `Poseidon2SpongeCR hash`. No `sorry`, no `:= True`, no `nat
 `rfl`-posing-as-bridge. Imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
+import Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Spec.cellstateaudit
 
@@ -481,5 +482,103 @@ theorem archiveBadRow_rejected : ¬ (VmConstraint.gate gLifeSet).holdsVm archive
 #assert_axioms unify_archive_via_exec
 #assert_axioms archiveGoodRow_realizes_intent
 #assert_axioms archiveBadRow_rejected
+
+/-! ## §RT — the RUNTIME-RECONCILED cutover descriptor (v2): passthrough + nonce-TICK
+(GRADUATED into the descriptor cutover).
+
+THE RUNTIME GROUND TRUTH. The running prover's `receipt_archive` (selector 51) trace arm
+(`effect_vm/trace.rs`) parks `target[0]` / `archive_end_height` / `terminal_receipt_hash[0]` into the
+three params and does `new_state.nonce += 1`; the hand-AIR freezes EVERY economic state-block column
+(balance limbs, `cap_root`, all 8 fields, reserved — `s_receipt_archive` passthrough block) and the
+global nonce gate TICKS the nonce. The archive lifecycle-slot SET (`field[1] := 1` — the §1–§10
+descriptor above, the verified-executor face) is OFF-ROW for the runtime row: the lifecycle write lives
+in the executor's side-table, bound through `effects_hash`, NOT an on-row field move. The pre-v2
+cutover registered the lifecycle-SET face against selector 51, which the runtime hand-AIR row cannot
+satisfy (it FREEZES `field[1]` and TICKS the nonce the v1 froze) — the documented lifecycle-SET
+divergence. This v2 emits the runtime row directly: the validated frozen-frame + nonce-tick template
+(`revokeRowGates`, proven faithful in `EffectVmEmitRevokeDelegation`) + the receipt-archive selector
+binding. Both faces stay verified; the WIRE descriptor is the runtime row. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
+  (revokeRowGates RevokeRowIntent revokeVm_faithful intent_to_cellSpec RevokeCellSpec
+   RowEncodesRevoke gBalLoFreeze goodRevokeRow goodRevokeRow_realizes_intent
+   badRevokeRow badRevokeRow_rejected)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer
+  (eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass gFieldPassAll
+   boundaryLastPins boundaryLast_pins)
+
+/-- The `receipt_archive` selector column index (runtime `sel::RECEIPT_ARCHIVE = 51`). -/
+def SEL_RECEIPT_ARCHIVE_RT : Nat := 51
+
+/-- The v2 (runtime-reconciled) `receiptArchiveA` AIR identity. -/
+def receiptArchiveActorVmAirName : String := "dregg-effectvm-receiptArchiveA-v2"
+
+/-- **`receiptArchiveActorVmDescriptor`** — the `receipt_archive` runtime-row circuit, RECONCILED onto
+the runtime hand-AIR: the shared frozen-frame + nonce-TICK gates ++ transition continuity ++ the 7
+boundary PI pins ++ the selector-binding gate, with the 4 ordered GROUP-4 hash sites and the 2
+balance-limb range checks. Body structurally identical to the validated `revokeDelegation-v2` template;
+only the name and the selector gate differ. The lifecycle-SET face stays
+`receiptArchiveVmDescriptor` (§2). -/
+def receiptArchiveActorVmDescriptor : EffectVmDescriptor :=
+  { name := receiptArchiveActorVmAirName
+  , traceWidth := EFFECT_VM_WIDTH
+  , piCount := 34
+  , constraints := revokeRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                     ++ selectorGates SEL_RECEIPT_ARCHIVE_RT
+  , hashSites := transferHashSites
+  , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
+
+/-- **Faithfulness (inherited from the shared template).** The runtime row's per-row gates hold IFF the
+frozen-frame + nonce-tick intent holds. Non-vacuity rides with the template (`goodRevokeRow` /
+`badRevokeRow`). -/
+theorem receiptArchiveActor_faithful (env : VmRowEnv) :
+    (∀ c ∈ revokeRowGates, c.holdsVm env false false) ↔ RevokeRowIntent env :=
+  revokeVm_faithful env
+
+/-- **`receiptArchiveActor_full_sound`** — the v2 descriptor's row soundness: a satisfying row,
+decoded, pins the full per-cell frozen-frame + nonce-tick post-state AND publishes its commit as
+`NEW_COMMIT`. -/
+theorem receiptArchiveActor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
+    (henc : RowEncodesRevoke env pre post)
+    (hsat : satisfiedVm hash receiptArchiveActorVmDescriptor env true true) :
+    RevokeCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+  obtain ⟨hcs, _⟩ := hsat
+  have hgates' : ∀ c ∈ revokeRowGates, c.holdsVm env false false := by
+    intro c hc
+    have hmem : c ∈ receiptArchiveActorVmDescriptor.constraints := by
+      unfold receiptArchiveActorVmDescriptor
+      simp only [List.mem_append]
+      exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
+    have := hcs c hmem
+    unfold Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation.revokeRowGates gFieldPassAll at hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
+      List.mem_range] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+      simpa only [VmConstraint.holdsVm] using this
+  have hint := (revokeVm_faithful env).mp hgates'
+  refine ⟨intent_to_cellSpec env pre post hnoop henc hint, ?_⟩
+  have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
+    intro c hc
+    have hmem : c ∈ receiptArchiveActorVmDescriptor.constraints := by
+      unfold receiptArchiveActorVmDescriptor
+      simp only [List.mem_append]
+      exact Or.inl (Or.inr hc)
+    have hh := hcs c hmem
+    unfold boundaryLastPins at hc
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+    rcases hc with rfl | rfl | rfl <;>
+      · simp only [VmConstraint.holdsVm] at hh ⊢
+        exact hh
+  have hpin := (boundaryLast_pins env hlast).1
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
+  rw [← hsaC]; exact hpin
+
+#guard receiptArchiveActorVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
+#guard receiptArchiveActorVmDescriptor.hashSites.length == 4
+#guard receiptArchiveActorVmDescriptor.traceWidth == 186
+
+#assert_axioms receiptArchiveActor_faithful
+#assert_axioms receiptArchiveActor_full_sound
 
 end Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive

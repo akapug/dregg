@@ -1,13 +1,10 @@
-//! Alternative proof backends for dregg circuits.
+//! Proof backends for dregg circuits.
 //!
-//! While the primary STARK backend (`crate::stark`) uses BabyBear + FRI,
-//! these backends provide alternative proof systems with different tradeoffs:
-//!
-//! - **Mina/Kimchi** (Plonk variant over Pasta curves with IPA): Experimental
-//!   Pickles-style IVC over the Pasta cycle. This path generates Kimchi proofs
-//!   and verifies base-step proofs with Kimchi, but multi-step standalone
-//!   transitivity still requires the in-circuit IPA verifier gadget. NOT
-//!   post-quantum secure.
+//! The production backend is **Plonky3** (BabyBear + FRI STARK, below). The
+//! former Mina/Kimchi/Pickles backend family was REMOVED: its pickles wrap
+//! never verified the Kimchi proof in-circuit (the recursive step was
+//! vacuous scaffolding), so it provided no soundness the Plonky3 path does
+//! not — see `docs/PROOF-ECONOMICS.md` §4.
 //!
 //! # Trait Hierarchy
 //!
@@ -29,29 +26,7 @@
 //! ```
 //!
 //! Backends implement whichever traits they support. The `FullProofBackend`
-//! supertrait is a convenience bound for code that requires the complete surface
-//! (e.g., the Kimchi/Pickles recursive pipeline).
-
-#[cfg(feature = "mina")]
-pub mod mina;
-
-/// STARK-in-Pickles wrapper: verify BabyBear STARK proofs inside Pickles recursive SNARKs.
-///
-/// Uses the Poseidon-committed STARK path (`poseidon_stark.rs`) for efficient in-circuit
-/// verification via native Kimchi Poseidon gates (~30K rows vs ~272K for BLAKE3 emulation).
-/// Bridges: PoseidonStarkProof -> Kimchi verifier circuit -> Pickles recursive proof.
-#[cfg(feature = "mina")]
-pub mod stark_in_pickles;
-
-/// Native Kimchi circuit backend: implements dregg's core proof statements
-/// (derivation, non-membership) as native Kimchi circuits over Fp.
-///
-/// Uses Mina-native Poseidon hashing (different commitments from the BabyBear
-/// STARK backend). Cross-backend interop requires commitment translation.
-/// Enables: recursive STARK composition via Pickles, FOR-ALL quantification
-/// over committed sets, native L1 verification on Mina.
-#[cfg(feature = "mina")]
-pub mod kimchi_native;
+//! supertrait is a convenience bound for code that requires the complete surface.
 
 /// Plonky3 backend: production-grade STARK using BabyBear + FRI.
 ///

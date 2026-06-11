@@ -48,6 +48,16 @@ pub fn inc_gossip(direction: &'static str) {
     counter!("dregg_gossip_messages_total", "direction" => direction).increment(1);
 }
 
+/// Increment the tau finalized-order prefix-shift counter: the previously
+/// computed finalized order was NOT a prefix of the newly computed one — a
+/// reorg-by-catchup (an honest late block sorted into the already-executed
+/// region), the live occurrence of the machine-checked counterexample in
+/// `metatheory/Dregg2/Consensus/TauPrefixMonotone.lean`. The identity execution
+/// cursor absorbs it correctly; this counter makes it visible to operators.
+pub fn inc_tau_prefix_shift() {
+    counter!("dregg_tau_prefix_shifts_total").increment(1);
+}
+
 // ─── Histograms ──────────────────────────────────────────────────────────────
 
 /// Record turn execution duration.

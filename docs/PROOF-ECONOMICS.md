@@ -115,103 +115,51 @@ knob combined.
   pinning, public-value propagation) — config strength is no longer one of
   them.
 
-## 4. The Pickles wrap (interop lane): what exists, what was built, the distance
+## 4. The Pickles wrap: removed (the backends were unsound scaffolding)
 
-### What `stark_in_pickles` verifies today
+The kimchi/pickles backend family is REMOVED from the tree:
+`circuit/src/backends/{mina/, kimchi_native/, stark_in_pickles.rs,
+poseidon2_bb_kimchi.rs}`, the bespoke `poseidon_stark.rs` engine +
+`poseidon_stark_verifier_circuit.rs` it existed to feed, the `mina` cargo
+feature, and the o1-labs git dependencies (kimchi / poly-commitment /
+mina-curves / mina-poseidon / groupmap). The system's proof-size answer for
+external verifiers is the BabyBear ROOT (§3): 502.4 KiB / 16 ms /
+K-independent, at 128-bit-conjectured FRI.
 
-`circuit/src/backends/stark_in_pickles.rs` wraps a **`PoseidonStarkProof`**
-— the bespoke in-house STARK engine (`poseidon_stark.rs`), re-proven with
-Poseidon-over-Pasta-Fp Merkle commitments so Kimchi's *native* Poseidon gate
-(~12 rows/hash) can walk the paths in-circuit. Three honest boundaries:
+Why removed rather than kept as an interop lane:
 
-1. **One AIR shape.** The in-circuit constraint-evaluation section is
-   hardcoded to `MerkleStarkAir` (width 6, degree 4) —
-   `poseidon_stark_verifier_circuit.rs:779-797`. It verifies no p3 proof of
-   any kind, and not the EffectVM descriptor statement.
-2. **1 query by default.** `WrapConfig::default()` re-checks one FRI query
-   in-circuit; measured: the minimal wrap circuit is **643 Kimchi rows** and
-   the resulting pickles step proof is **4.6 KiB** (composed: 4.8 KiB),
-   wrap+verify a couple of seconds. The full 80-query circuit estimates
-   ~50.6K rows and needs a 2¹⁶ Kimchi domain (over the original 2¹⁵ design
-   target).
-3. **The pickles step does not verify the Kimchi proof in-circuit.** The
-   recursive step (`backends/mina/pickles.rs::prove_recursive_step`) proves
-   a small hash-transition circuit with an IPA accumulator carried forward
-   (assisted recursion); the 30K-row Kimchi STARK-verifier proof is
-   self-checked host-side at wrap time and then **dropped** —
-   `PicklesWrappedStark` carries only the step proof. An external verifier
-   of the wrapped artifact checks the hash-chain step, not STARK validity:
-   anyone who computes the two blake3 hashes can produce an identical
-   artifact without ever constructing the Kimchi proof. As a *soundness*
-   artifact for external consumers the wrap is therefore currently vacuous;
-   it is interop scaffolding.
+1. **The pickles step never verified the Kimchi proof in-circuit.** The
+   recursive step proved a small hash-transition circuit with an IPA
+   accumulator carried forward; the Kimchi STARK-verifier proof was
+   self-checked host-side at wrap time and then dropped. An external
+   verifier of the wrapped artifact checked a blake3 hash chain, not STARK
+   validity — anyone could produce an identical artifact without ever
+   constructing the Kimchi proof. As a soundness artifact the wrap was
+   vacuous.
+2. **The wrap covered the wrong statement.** The in-circuit
+   constraint-evaluation section was hardcoded to one bespoke AIR shape
+   (`MerkleStarkAir`, width 6) over the in-house `poseidon_stark` engine —
+   never any Plonky3 proof, never the EffectVM descriptor statement the
+   system actually proves.
+3. **Brute-force wrapping the real ROOT is measured-infeasible on Kimchi.**
+   One Poseidon2-BabyBear width-16 permutation costs 5,908 Kimchi Generic
+   rows (measured, proven, tamper-checked); the K=2 ROOT needs ~1,650
+   permutations ≈ 9.7 million rows, ~150x the largest practical Kimchi
+   domain (2^16), before Fiat–Shamir replay or FRI-fold extension-field
+   arithmetic. Lazy reduction cuts ~3x and does not change the conclusion.
+4. **The kimchi_native circuits lacked copy constraints.** Generic gates
+   wired every position to its own row and never threaded gadget outputs
+   into dependent binding gates through the permutation argument, so a
+   prover bypassing the honest `prove()` wrapper was unconstrained
+   (the old AUDIT-circuit.md P0-2 finding). Production use was already
+   forbidden.
 
-### Can the IVC ROOT be wrapped? The measured obstruction
-
-The ROOT is a `BatchStarkProof` whose Merkle commitments are
-**Poseidon2-width-16-over-BabyBear**. BabyBear *values* embed natively in
-Pasta Fp (the field is not the obstruction); the **hash** is: Kimchi has no
-Poseidon2-BabyBear gate, so every commitment-path step must be re-executed in
-emulated BabyBear arithmetic.
-
-The unit cost is measured for real, not estimated:
-`backends/poseidon2_bb_kimchi.rs` arithmetizes one width-16
-Poseidon2-BabyBear permutation in Kimchi Generic gates (eager modular
-reduction, full copy-constraint wiring, witness differentially checked
-against the native `crate::poseidon2`, proven and verified with the real
-Kimchi prover over Vesta):
-
-| | value |
-|---|---|
-| rows per permutation (eager reduction) | **5,908** |
-| mul gadgets / add gadgets | 772 / 1,192 (3 rows each, + 16 constant pins) |
-| end-to-end build+prove+verify | 2.6 s (domain 2¹³) |
-| tampered-witness refusal | exercised (`tampered_witness_refused`) |
-
-The K=2 ROOT's structural census: **420 Merkle digests + 9,827 field
-elements** ⇒ ≈ 420 compressions + ≈1,230 sponge absorptions ≈ **~1,650
-Poseidon2-BabyBear permutations** to re-verify the root's commitment openings
-and Fiat–Shamir replay — *at today's 2-query demo config*. At
-5,908 rows each that is ≈ **9.7 million Generic rows**, i.e.
-~**150x** the largest practical Kimchi domain (2¹⁶ = 65,536), before
-counting the Fiat–Shamir challenger replay or FRI-fold extension-field
-arithmetic. Lazy reduction (reduce only
-before S-boxes) cuts roughly 3x; it does not change the conclusion. At a
-production-strength 40-query root the count multiplies by ~20 again.
-
-So the full-hog "pickles-wrap the root" is **genuinely obstructed**, and the
-obstruction is precisely localized: it is not the field, not the proof
-format per se, but the **commitment hash at the final layer**. The distance,
-in order:
-
-1. **(fork)** Instantiate the *final* recursion layer's MMCS with a
-   Pasta-Poseidon hash (the same boundary-layer hash-switch
-   `poseidon_stark.rs` performs for the bespoke engine, and the same trick
-   RISC0/SP1 use for their terminal SNARK wraps). The fork's MMCS is
-   generic over the hasher; the work is a second `StarkConfig` + transcript
-   for the last `build_and_prove_aggregation_layer` call only.
-2. **(circuit)** A Kimchi verifier circuit for the *batch*-STARK shape
-   (multi-table, LogUp, preprocessed commitments) — with step 1 its Merkle
-   paths become native Poseidon rows again (~12/hash), putting it in the
-   same ~30–60K row class as the existing bespoke-shape circuit.
-3. **(pickles)** Real in-circuit composition: today's assisted-recursion
-   step cannot attest "a Kimchi proof verified"; closing boundary 3 above
-   means an in-circuit Kimchi verifier (true Pickles step/wrap machinery),
-   which this lane does not have and o1's OCaml stack does.
-
-### Verdict
-
-**Keep-as-interop; do not invest now; do not retire.** The measured numbers
-say the system's real proof-size answer for external verifiers is the
-BabyBear ROOT — 502.4 KiB / 16 ms / K-independent, at 128-bit-conjectured
-FRI (§3). The Pickles lane's honest state is:
-a real native-hash Kimchi STARK verifier for the bespoke engine (643 rows at
-1 query, ~50.6K estimated at full 80 — valuable as the §4-distance step-2
-template), a pickles step whose
-composition is currently hash-binding rather than in-circuit verification
-(boundary 3 — must be closed before any "Mina-style O(1)" claim), and a now-
-measured bridge cost (5,908 rows/permutation, ~150x over the largest
-domain) that rules out brute-force wrapping. Retire nothing: `poseidon_stark`
-+ the verifier circuit embody exactly the hash-switch pattern step 1 needs.
-Revisit with funding only if Mina-ecosystem verification becomes a product
-requirement.
+What survives as knowledge: the measured numbers above, and the localized
+shape of a future interop lane if Mina-ecosystem verification ever becomes a
+product requirement — (1) a final recursion layer whose MMCS uses a
+Pasta-native hash (the standard terminal-wrap hash-switch, as in RISC0/SP1
+terminal SNARKs), (2) a Kimchi verifier circuit for the batch-STARK shape
+(native Poseidon rows once step 1 lands), (3) real in-circuit step/wrap
+machinery (which o1's OCaml stack has and this lane never did). Building
+that would be a new, audited construction — not a revival of the removed
+scaffolding.

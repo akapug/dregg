@@ -44,6 +44,7 @@ was sovereign-committed. The rebind SOUNDNESS lives ONLY in `makeSovereignA_full
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Emit.EffectVmEmitEscrowRoot
+import Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Spec.sovereigncommitment
 
@@ -326,5 +327,248 @@ theorem forgedRow_rejected : ¬ (gZero state.BALANCE_LO).holdsVm forgedRow false
 #assert_axioms makeSovereign_offrow_unenforced
 #assert_axioms zeroRow_realizes_intent
 #assert_axioms forgedRow_rejected
+
+/-! ## §RT — the RUNTIME-RECONCILED cutover descriptor (v2): frame-freeze + MODE-BIT SET + nonce-TICK
+(GRADUATED into the descriptor cutover).
+
+THE RUNTIME GROUND TRUTH. The running prover's `make_sovereign` (selector 12) trace arm
+(`effect_vm/trace.rs`) sets `new_state.mode_flag = 1` and ticks the nonce; the `reserved` column packs
+`low_bits + mode_flag·256`, so the hand-AIR enforces `new_reserved − old_reserved − 256 = 0` (+ the
+aux mode-bit booleanity), freezes balances / `cap_root` / all 8 fields, and the global nonce gate TICKS
+the nonce. The §1–§10 descriptor above (`makeSovereignVmDescriptor`, the verified-executor REBIND face:
+the readable record dropped to the zero block behind `stateCommitment`) is a DIFFERENT semantics for
+sovereignty than the runtime's mode-bit convention — the documented sovereign-ZERO divergence. WHICH
+layer's sovereignty semantics is canonical (record-rebind-to-commitment vs mode-bit-with-retained
+balance) is an open protocol decision; the CUTOVER convention (model the row the runtime hand-AIR
+actually proves, keep the executor face as the named off-row/other-layer story) graduates the wire
+descriptor NOW without changing any shipped semantics. This v2 emits the runtime row: frame-freeze +
+`reserved` +256 MODE-BIT SET + nonce-tick + the makeSovereign selector binding. Both faces stay
+verified; the WIRE descriptor is the runtime row. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
+  (RowEncodesRevoke)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer
+  (eSB eSub eSelNoop gBalHi gNonce gCapPass gFieldPass gFieldPassAll
+   transitionAll boundaryFirstPins boundaryLastPins transferHashSites boundaryLast_pins)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
+
+/-- The `make_sovereign` selector column index (runtime `sel::MAKE_SOVEREIGN = 12`). -/
+def SEL_MAKE_SOVEREIGN_RT : Nat := 12
+
+/-- Balance-lo FREEZE body (the runtime row retains the balance; the rebind face zeroes it). -/
+def gSovBalLoFreeze : EmittedExpr := eSub (eSA state.BALANCE_LO) (eSB state.BALANCE_LO)
+
+/-- The MODE-BIT SET body: `(after.RESERVED − before.RESERVED) − 256·(1 − sel.NOOP)`. On the active
+row (`s_noop = 0`) the reserved word advances by EXACTLY `256` (the packed `mode_flag` bit set, low
+bits untouched); on NoOp pad rows it freezes. Mirrors the hand-AIR's
+`s_makesov · (new_reserved − old_reserved − 256)`. -/
+def gSovReserved : EmittedExpr :=
+  eSub (eSub (eSA state.RESERVED) (eSB state.RESERVED))
+       (.mul (.const 256) (.add (.const 1) (.mul (.const (-1)) eSelNoop)))
+
+/-- The v2 per-row gates: balances + `cap_root` + 8 fields FROZEN, nonce TICK, reserved +256. -/
+def sovereignRuntimeRowGates : List VmConstraint :=
+  [ .gate gSovBalLoFreeze, .gate gBalHi, .gate gNonce
+  , .gate gCapPass, .gate gSovReserved ] ++ gFieldPassAll
+
+/-- The v2 (runtime-reconciled) `makeSovereign` AIR identity. -/
+def makeSovereignRuntimeVmAirName : String := "dregg-effectvm-makesovereign-v2"
+
+/-- **`makeSovereignRuntimeVmDescriptor`** — the `make_sovereign` runtime-row circuit, RECONCILED onto
+the runtime hand-AIR: frame-freeze + mode-bit-SET + nonce-TICK gates ++ transition continuity ++ the 7
+boundary PI pins ++ the selector-binding gate, with the 4 ordered GROUP-4 hash sites and the 2
+balance-limb range checks. The executor REBIND face stays `makeSovereignVmDescriptor` (§3). -/
+def makeSovereignRuntimeVmDescriptor : EffectVmDescriptor :=
+  { name := makeSovereignRuntimeVmAirName
+  , traceWidth := EFFECT_VM_WIDTH
+  , piCount := 34
+  , constraints := sovereignRuntimeRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                     ++ selectorGates SEL_MAKE_SOVEREIGN_RT
+  , hashSites := transferHashSites
+  , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
+
+/-- **`SovRuntimeRowIntent env`** — balances / `cap_root` / fields UNCHANGED; the nonce TICKS by 1; the
+reserved word advances by 256 (the mode bit), both gated off on NoOp pad rows. -/
+def SovRuntimeRowIntent (env : VmRowEnv) : Prop :=
+  env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
+  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
+  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
+  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
+  ∧ env.loc (saCol state.RESERVED)
+      = env.loc (sbCol state.RESERVED) + 256 * (1 - env.loc sel.NOOP)
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+
+/-- **FAITHFULNESS.** The v2 per-row gates hold IFF `SovRuntimeRowIntent` holds. -/
+theorem sovereignRuntimeVm_faithful (env : VmRowEnv) :
+    (∀ c ∈ sovereignRuntimeRowGates, c.holdsVm env false false) ↔ SovRuntimeRowIntent env := by
+  unfold sovereignRuntimeRowGates gFieldPassAll SovRuntimeRowIntent
+  constructor
+  · intro h
+    have hLo := h (.gate gSovBalLoFreeze) (by simp)
+    have hHi := h (.gate gBalHi) (by simp)
+    have hNon := h (.gate gNonce) (by simp)
+    have hCap := h (.gate gCapPass) (by simp)
+    have hRes := h (.gate gSovReserved) (by simp)
+    have hFld : ∀ i, i < 8 → VmConstraint.holdsVm env false false (.gate (gFieldPass i)) := by
+      intro i hi
+      apply h
+      simp only [List.mem_append, List.mem_map, List.mem_range]
+      exact Or.inr ⟨i, hi, rfl⟩
+    simp only [VmConstraint.holdsVm, gSovBalLoFreeze, gBalHi, gNonce, gCapPass, gSovReserved,
+      eSA, eSB, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hNon hCap hRes
+    refine ⟨by linarith [hLo], by linarith [hHi], by linarith [hNon], by linarith [hCap],
+      by linarith [hRes], ?_⟩
+    intro i hi
+    have := hFld i hi
+    simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
+    linarith
+  · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
+      List.mem_range] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
+    · simp only [VmConstraint.holdsVm, gSovBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
+      rw [hLo]; ring
+    · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]; rw [hHi]; ring
+    · simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
+      rw [hNon]; ring
+    · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]; rw [hCap]; ring
+    · simp only [VmConstraint.holdsVm, gSovReserved, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
+      rw [hRes]; ring
+    · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
+      rw [hFld i hi]; ring
+
+/-- **Anti-ghost (mode bit NOT set).** A row whose reserved word does NOT advance by 256 on the active
+row fails the mode-bit gate — a sovereignty claim without the mode bit is UNSAT. -/
+theorem sovereignRuntimeVm_rejects_unset_mode (env : VmRowEnv)
+    (hwrong : env.loc (saCol state.RESERVED)
+        ≠ env.loc (sbCol state.RESERVED) + 256 * (1 - env.loc sel.NOOP)) :
+    ¬ (VmConstraint.gate gSovReserved).holdsVm env false false := by
+  simp only [VmConstraint.holdsVm, gSovReserved, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
+  intro h; apply hwrong; linarith
+
+/-- **`SovRuntimeCellSpec pre post`** — the per-cell runtime makeSovereign spec: balances / capRoot /
+fields FROZEN, nonce +1, reserved +256 (the packed mode bit). -/
+def SovRuntimeCellSpec (pre post : CellState) : Prop :=
+  post.balLo = pre.balLo
+  ∧ post.balHi = pre.balHi
+  ∧ post.nonce = pre.nonce + 1
+  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
+  ∧ post.capRoot = pre.capRoot
+  ∧ post.reserved = pre.reserved + 256
+
+theorem sovIntent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
+    (hnoop : env.loc sel.NOOP = 0)
+    (henc : RowEncodesRevoke env pre post) (hint : SovRuntimeRowIntent env) :
+    SovRuntimeCellSpec pre post := by
+  obtain ⟨hsbLo, hsbHi, hsbN, hsbF, hsbCap, hsbRes, hsbC,
+          hsaLo, hsaHi, hsaN, hsaF, hsaCap, hsaRes, hsaC, hOld, hNew⟩ := henc
+  obtain ⟨hbal, hbhi, hnon, hcap, hres, hfld⟩ := hint
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [← hsaLo, ← hsbLo]; exact hbal
+  · rw [← hsaHi, ← hsbHi]; exact hbhi
+  · rw [← hsaN, ← hsbN, hnon, hnoop]; ring
+  · intro i
+    have := hfld i.val i.isLt
+    rw [← hsaF i, ← hsbF i]; exact this
+  · rw [← hsaCap, ← hsbCap]; exact hcap
+  · rw [← hsaRes, ← hsbRes, hres, hnoop]; ring
+
+/-- **`sovereignRuntime_full_sound`** — the v2 descriptor's row soundness: a satisfying row, decoded,
+pins the full per-cell frame-freeze + mode-bit + nonce-tick post-state AND publishes its commit as
+`NEW_COMMIT`. -/
+theorem sovereignRuntime_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
+    (henc : RowEncodesRevoke env pre post)
+    (hsat : satisfiedVm hash makeSovereignRuntimeVmDescriptor env true true) :
+    SovRuntimeCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+  obtain ⟨hcs, _⟩ := hsat
+  have hgates' : ∀ c ∈ sovereignRuntimeRowGates, c.holdsVm env false false := by
+    intro c hc
+    have hmem : c ∈ makeSovereignRuntimeVmDescriptor.constraints := by
+      unfold makeSovereignRuntimeVmDescriptor
+      simp only [List.mem_append]
+      exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
+    have := hcs c hmem
+    unfold sovereignRuntimeRowGates gFieldPassAll at hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
+      List.mem_range] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+      simpa only [VmConstraint.holdsVm] using this
+  have hint := (sovereignRuntimeVm_faithful env).mp hgates'
+  refine ⟨sovIntent_to_cellSpec env pre post hnoop henc hint, ?_⟩
+  have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
+    intro c hc
+    have hmem : c ∈ makeSovereignRuntimeVmDescriptor.constraints := by
+      unfold makeSovereignRuntimeVmDescriptor
+      simp only [List.mem_append]
+      exact Or.inl (Or.inr hc)
+    have hh := hcs c hmem
+    unfold boundaryLastPins at hc
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+    rcases hc with rfl | rfl | rfl <;>
+      · simp only [VmConstraint.holdsVm] at hh ⊢
+        exact hh
+  have hpin := (boundaryLast_pins env hlast).1
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
+  rw [← hsaC]; exact hpin
+
+/-- A concrete runtime makeSovereign row: frame frozen at zero, nonce `0 → 1`, reserved `0 → 256`. -/
+def goodSovRow : VmRowEnv where
+  loc := fun v =>
+    if v = saCol state.NONCE then 1
+    else if v = saCol state.RESERVED then 256
+    else 0
+  nxt := fun _ => 0
+  pub := fun _ => 0
+
+/-- **NON-VACUITY (witness TRUE).** `goodSovRow` realizes the runtime makeSovereign intent. -/
+theorem goodSovRow_realizes_intent : SovRuntimeRowIntent goodSovRow := by
+  unfold SovRuntimeRowIntent goodSovRow
+  refine ⟨by decide, by decide, by decide, by decide, by decide, ?_⟩
+  intro i hi
+  show (if saCol (state.FIELD_BASE + i) = saCol state.NONCE then (1:ℤ)
+        else if saCol (state.FIELD_BASE + i) = saCol state.RESERVED then 256 else 0)
+      = (if sbCol (state.FIELD_BASE + i) = saCol state.NONCE then (1:ℤ)
+        else if sbCol (state.FIELD_BASE + i) = saCol state.RESERVED then 256 else 0)
+  have h1 : (saCol (state.FIELD_BASE + i) = saCol state.NONCE) = False := by
+    simp only [saCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS, STATE_SIZE,
+      NUM_PARAMS, state.FIELD_BASE, state.NONCE]
+    exact eq_false (by omega)
+  have h2 : (saCol (state.FIELD_BASE + i) = saCol state.RESERVED) = False := by
+    simp only [saCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS, STATE_SIZE,
+      NUM_PARAMS, state.FIELD_BASE, state.RESERVED]
+    exact eq_false (by omega)
+  have h3 : (sbCol (state.FIELD_BASE + i) = saCol state.NONCE) = False := by
+    simp only [saCol, sbCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS,
+      STATE_SIZE, NUM_PARAMS, state.FIELD_BASE, state.NONCE]
+    exact eq_false (by omega)
+  have h4 : (sbCol (state.FIELD_BASE + i) = saCol state.RESERVED) = False := by
+    simp only [saCol, sbCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS,
+      STATE_SIZE, NUM_PARAMS, state.FIELD_BASE, state.RESERVED]
+    exact eq_false (by omega)
+  simp only [h1, h2, h3, h4, if_false]
+
+/-- A FORGED row: `goodSovRow` with the reserved advance dropped (mode bit NOT set). -/
+def badSovRow : VmRowEnv where
+  loc := fun v => if v = saCol state.RESERVED then 0 else goodSovRow.loc v
+  nxt := goodSovRow.nxt
+  pub := goodSovRow.pub
+
+/-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badSovRow` claims sovereignty without
+setting the mode bit; the `gSovReserved` gate REJECTS it. -/
+theorem badSovRow_rejected : ¬ (VmConstraint.gate gSovReserved).holdsVm badSovRow false false := by
+  apply sovereignRuntimeVm_rejects_unset_mode
+  decide
+
+#guard makeSovereignRuntimeVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
+#guard makeSovereignRuntimeVmDescriptor.hashSites.length == 4
+#guard makeSovereignRuntimeVmDescriptor.traceWidth == 186
+
+#assert_axioms sovereignRuntimeVm_faithful
+#assert_axioms sovereignRuntimeVm_rejects_unset_mode
+#assert_axioms sovIntent_to_cellSpec
+#assert_axioms sovereignRuntime_full_sound
+#assert_axioms goodSovRow_realizes_intent
+#assert_axioms badSovRow_rejected
 
 end Dregg2.Circuit.Emit.EffectVmEmitMakeSovereign

@@ -132,7 +132,20 @@ pub const BLOCKLACE_META: TableDefinition<&str, &[u8]> = TableDefinition::new("b
 pub const BLOCKLACE_META_KEY: &str = "meta";
 
 /// Key for the executed_up_to index in the BLOCKLACE_META table.
+///
+/// LEGACY/diagnostic: a bare COUNT of executed blocks. It is no longer a resume
+/// point — an index into the tau order is unsound as a cursor because the order
+/// can shift under honest catch-up growth (the machine-checked counterexample in
+/// `metatheory/Dregg2/Consensus/TauPrefixMonotone.lean`). Recovery resumes from
+/// the identity set (`BLOCKLACE_EXECUTED_IDS_KEY` ∪ the commit log's block ids).
 pub const BLOCKLACE_EXECUTED_UP_TO_KEY: &str = "executed_up_to";
+
+/// Key for the executed finalized-block IDENTITY set in the BLOCKLACE_META
+/// table (postcard-serialized `Vec<BlockId>`, first-served order). Together
+/// with the commit log's per-turn `block_id`s, this is the crash-consistent
+/// resume state for the node's identity execution cursor (the TauPrefixMonotone
+/// closure: execution tracked by block id, never by position).
+pub const BLOCKLACE_EXECUTED_IDS_KEY: &str = "executed_block_ids";
 
 /// Node-local witnessed receipt artifacts.
 ///

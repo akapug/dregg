@@ -25,11 +25,10 @@ p3-merkle-tree = { workspace = true, optional = true }
 p3-util = { workspace = true, optional = true }
 
 [dev-dependencies]
-dregg-circuit = { path = "../circuit", features = ["mina"] }
+dregg-circuit = { path = "../circuit" }
 
 [features]
 default = ["plonky3"]
-kimchi-bridge = ["dregg-circuit/mina"]
 plonky3 = [
     "dregg-circuit/plonky3",
     "dep:rmp-serde",

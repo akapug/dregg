@@ -187,10 +187,6 @@ pub mod schnorr_sig;
 pub mod stark;
 pub mod stark_zk;
 
-#[cfg(feature = "mina")]
-pub mod poseidon_stark;
-#[cfg(feature = "mina")]
-pub mod poseidon_stark_verifier_circuit;
 pub mod temporal_predicate_dsl;
 
 #[cfg(feature = "plonky3")]

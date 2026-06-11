@@ -751,57 +751,6 @@ fn bench_plonky3_backend(c: &mut Criterion) {
 }
 
 // =============================================================================
-// 6. Pickles/Mina backend (feature-gated)
-// =============================================================================
-
-#[cfg(feature = "mina")]
-fn bench_pickles_backend(c: &mut Criterion) {
-    let mut group = c.benchmark_group("pickles_backend");
-    group.sample_size(10);
-
-    // The Mina/Kimchi backend uses recursive SNARK verification (Pickles protocol).
-    // We bench IVC proof generation + verification which exercises the recursive path.
-    // With the mina feature, the IVC proof can use Pasta curve IPA commitments
-    // for constant-size proofs regardless of chain length.
-
-    // Single recursive step
-    let (initial_root, deltas) = create_test_chain(1);
-    let new_roots_1: Vec<BabyBear> = deltas.iter().map(|d| d.fold.new_root).collect();
-
-    group.bench_function("recursive_1_step", |b| {
-        b.iter(|| {
-            let (sp, pi) = prove_ivc_stark(initial_root, &new_roots_1);
-            black_box(verify_ivc_stark(&sp, &pi).unwrap());
-        });
-    });
-
-    // 3-step recursive chain
-    let (root3, deltas3) = create_test_chain(3);
-    let new_roots_3: Vec<BabyBear> = deltas3.iter().map(|d| d.fold.new_root).collect();
-
-    group.bench_function("recursive_3_step", |b| {
-        b.iter(|| {
-            let (sp, pi) = prove_ivc_stark(root3, &new_roots_3);
-            black_box(verify_ivc_stark(&sp, &pi).unwrap());
-        });
-    });
-
-    // Compare: constant proof size across chain lengths
-    for &steps in &[1, 3, 5] {
-        let (root, ds) = create_test_chain(steps);
-        let roots: Vec<BabyBear> = ds.iter().map(|d| d.fold.new_root).collect();
-        let (sp, _) = prove_ivc_stark(root, &roots);
-        let size = proof_to_bytes(&sp).len();
-        eprintln!(
-            "  [pickles {steps}-step] proof size: {:.1} KiB (should be ~constant)",
-            size as f64 / 1024.0
-        );
-    }
-
-    group.finish();
-}
-
-// =============================================================================
 // Criterion configuration
 // =============================================================================
 
@@ -830,34 +779,14 @@ criterion_group!(
 #[cfg(feature = "plonky3")]
 criterion_group!(plonky3_benches, bench_plonky3_backend);
 
-#[cfg(feature = "mina")]
-criterion_group!(pickles_benches, bench_pickles_backend);
-
-// Main: include feature-gated groups only when enabled
-#[cfg(all(not(feature = "plonky3"), not(feature = "mina")))]
+// Main: include the feature-gated plonky3 group only when enabled
+#[cfg(not(feature = "plonky3"))]
 criterion_main!(individual_proofs, composed_proofs, context_and_pipeline);
 
-#[cfg(all(feature = "plonky3", not(feature = "mina")))]
+#[cfg(feature = "plonky3")]
 criterion_main!(
     individual_proofs,
     composed_proofs,
     context_and_pipeline,
     plonky3_benches
-);
-
-#[cfg(all(not(feature = "plonky3"), feature = "mina"))]
-criterion_main!(
-    individual_proofs,
-    composed_proofs,
-    context_and_pipeline,
-    pickles_benches
-);
-
-#[cfg(all(feature = "plonky3", feature = "mina"))]
-criterion_main!(
-    individual_proofs,
-    composed_proofs,
-    context_and_pipeline,
-    plonky3_benches,
-    pickles_benches
 );

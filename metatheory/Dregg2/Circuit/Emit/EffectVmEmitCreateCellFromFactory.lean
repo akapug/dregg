@@ -38,6 +38,7 @@ off-row.
 hypothesis. No `sorry`, no `:= True`, no `native_decide`. Read-only imports.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
+import Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Spec.factorycreation
 
@@ -348,5 +349,100 @@ theorem forgedRow_rejected : ¬ (gZero state.BALANCE_LO).holdsVm forgedRow false
 #assert_axioms factory_offrow_unenforced
 #assert_axioms zeroRow_realizes_intent
 #assert_axioms forgedRow_rejected
+
+/-! ## §RT — the RUNTIME-RECONCILED cutover descriptor (v2): the ACTING cell's passthrough + nonce-TICK
+row (GRADUATED into the descriptor cutover).
+
+THE RUNTIME GROUND TRUTH. The running prover's `create_cell_from_factory` (selector 13) trace arm
+(`effect_vm/trace.rs`) parks `factory_vk` / `child_vk_derived` into `params` (mirrored into aux) and
+does `new_state.nonce += 1`; the hand-AIR freezes every economic state-block column of the ACTING cell
+(balance limbs, `cap_root`, all 8 fields, reserved) and the global nonce gate TICKS the nonce. The
+MINTED cell's born-empty block — the §1–§10 descriptor above (`factoryVmDescriptor`, the CHILD face) —
+is OFF-ROW content for THIS row (the executor's guarantee, bound through `effects_hash`). The pre-v2
+cutover registered the CHILD-face descriptor against selector 13, which the runtime hand-AIR row (the
+ACTOR's row) cannot satisfy — the documented lifecycle/birth divergence. This v2 emits the runtime
+actor row directly: the validated frozen-frame + nonce-tick template (`revokeRowGates`, proven faithful
+in `EffectVmEmitRevokeDelegation`) + the factory selector binding. Both faces stay verified; the WIRE
+descriptor is the actor row. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
+  (revokeRowGates RevokeRowIntent revokeVm_faithful intent_to_cellSpec RevokeCellSpec
+   RowEncodesRevoke gBalLoFreeze goodRevokeRow goodRevokeRow_realizes_intent
+   badRevokeRow badRevokeRow_rejected)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer
+  (eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass gFieldPassAll
+   transitionAll boundaryFirstPins boundaryLastPins transferHashSites boundaryLast_pins)
+
+/-- The `create_cell_from_factory` selector column index (runtime `sel::CREATE_CELL_FROM_FACTORY = 13`). -/
+def SEL_FACTORY_RT : Nat := 13
+
+/-- The v2 (runtime-reconciled) `createCellFromFactory` AIR identity. -/
+def factoryActorVmAirName : String := "dregg-effectvm-createcellfromfactory-v2"
+
+/-- **`factoryActorVmDescriptor`** — the `createCellFromFactory` ACTOR-row circuit, RECONCILED onto the
+runtime hand-AIR: the shared frozen-frame + nonce-TICK gates ++ transition continuity ++ the 7 boundary
+PI pins ++ the selector-binding gate, with the 4 ordered GROUP-4 hash sites and the 2 balance-limb
+range checks. Body structurally identical to the validated `revokeDelegation-v2` template; only the
+name and the selector gate differ. The born-empty CHILD face stays `factoryVmDescriptor` (§3). -/
+def factoryActorVmDescriptor : EffectVmDescriptor :=
+  { name := factoryActorVmAirName
+  , traceWidth := EFFECT_VM_WIDTH
+  , piCount := 34
+  , constraints := revokeRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
+                     ++ selectorGates SEL_FACTORY_RT
+  , hashSites := transferHashSites
+  , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
+
+/-- **Faithfulness (inherited from the shared template).** The actor row's per-row gates hold IFF the
+frozen-frame + nonce-tick intent holds. Non-vacuity rides with the template (`goodRevokeRow` /
+`badRevokeRow`). -/
+theorem factoryActor_faithful (env : VmRowEnv) :
+    (∀ c ∈ revokeRowGates, c.holdsVm env false false) ↔ RevokeRowIntent env :=
+  revokeVm_faithful env
+
+/-- **`factoryActor_full_sound`** — the v2 descriptor's row soundness: a satisfying row, decoded, pins
+the full per-cell frozen-frame + nonce-tick post-state AND publishes its commit as `NEW_COMMIT`. -/
+theorem factoryActor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
+    (henc : RowEncodesRevoke env pre post)
+    (hsat : satisfiedVm hash factoryActorVmDescriptor env true true) :
+    RevokeCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+  obtain ⟨hcs, _⟩ := hsat
+  have hgates' : ∀ c ∈ revokeRowGates, c.holdsVm env false false := by
+    intro c hc
+    have hmem : c ∈ factoryActorVmDescriptor.constraints := by
+      unfold factoryActorVmDescriptor
+      simp only [List.mem_append]
+      exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
+    have := hcs c hmem
+    unfold Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation.revokeRowGates gFieldPassAll at hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
+      List.mem_range] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+      simpa only [VmConstraint.holdsVm] using this
+  have hint := (revokeVm_faithful env).mp hgates'
+  refine ⟨intent_to_cellSpec env pre post hnoop henc hint, ?_⟩
+  have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
+    intro c hc
+    have hmem : c ∈ factoryActorVmDescriptor.constraints := by
+      unfold factoryActorVmDescriptor
+      simp only [List.mem_append]
+      exact Or.inl (Or.inr hc)
+    have hh := hcs c hmem
+    unfold boundaryLastPins at hc
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+    rcases hc with rfl | rfl | rfl <;>
+      · simp only [VmConstraint.holdsVm] at hh ⊢
+        exact hh
+  have hpin := (boundaryLast_pins env hlast).1
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
+  rw [← hsaC]; exact hpin
+
+#guard factoryActorVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
+#guard factoryActorVmDescriptor.hashSites.length == 4
+#guard factoryActorVmDescriptor.traceWidth == 186
+
+#assert_axioms factoryActor_faithful
+#assert_axioms factoryActor_full_sound
 
 end Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactory

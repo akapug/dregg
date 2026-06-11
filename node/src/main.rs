@@ -15,6 +15,7 @@ mod finality_gate;
 // The old `bridge` module is removed. Cross-group communication now happens
 // via multi_group.rs (unified blocklace cross-references + interest-based dissemination).
 // See: `dregg-node run --groups` for multi-group participation.
+mod execution_cursor;
 mod executor_setup;
 mod genesis;
 pub mod gossip;
