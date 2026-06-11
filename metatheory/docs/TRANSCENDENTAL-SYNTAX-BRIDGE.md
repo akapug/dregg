@@ -101,9 +101,34 @@ it tested the machinery, not the thesis.
 conservation is forced by the orthogonality once (and only once) the testing
 language is composite, and the boundary theorem is two-sided. The coordination
 grading is half-derived: sound through `^⊥`, semantically completed by the
-join. Remaining relational families to push closure on: the temporal
-until-since (behaviours over traces) and the epistemic K/E/D/C (orthogonality
-over who-can-refute).
+join.
+
+The relational families are CLOSED (`Dregg2/Calculus/BiorthRelational.lean`):
+
+- **Temporal**: point guards are behaviours with an exact characterization —
+  height behaviours are precisely the convex sets, i.e. until/since windows
+  (`height_behaviour_iff_convex`), with completeness
+  (`behaviour_is_window_guard`); the installed gates are orthogonality
+  membership by `Iff.rfl`. The modal step discipline (write-once `Mono`) is
+  NOT a behaviour under any per-time-point rectangular family and IS one with
+  the step observable fielded (`writeOnce_not/is_behaviour`).
+- **Epistemic**: `Knows` IS `{φ}^⊥` membership; `E_G` is the additive `&` of
+  K-classes; `C_G` is K of the finalized ledger (the floor's delivery law is
+  invisible to the testing relation — stated scope, not a hidden gap);
+  ignorance is NOT a behaviour (challenge behaviours are evidence-monotone).
+  Threshold-D mirrors conservation exactly: an affine correlation over the
+  sharing randomness, not rectangular-closed, pooled-closed, equal to the
+  closure of matched-randomness tensors
+  (`distributed_knowledge_recovered_from_orthogonality`).
+- **The synthesis** (`correlation_classifies_the_family`, proved): one
+  two-sided pattern across time/resource/members. Every negative is an
+  instance of the one generic mix law (`rect_mix_in_biorth`); a family is a
+  behaviour exactly when the test language fields its single correlating
+  observable (`stepOk` / `Σδ` / pooled reconstruction). Biorthogonality is
+  load-bearing exactly where correlation matters, and the correlation TYPE
+  classifies the guard family. Known residue: D is proved at the 2-of-2
+  additive instance (the deployed Shamir t-of-n is the same correlation,
+  iff not yet lifted); n-step traces reduce to the adjacent-step atom.
 
 ## What is NOT proved — the exact gap (pre-S1/S2; retained for the conjecture statement)
 
