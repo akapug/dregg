@@ -43,10 +43,22 @@
 //! *compile* time today — a token-crate edge that wants feature-gating; none of
 //! it runs. See the README residuals.) The adoption quotient stands at runtime:
 //! the polis is PULL, never TOLL.
+//!
+//! ## The proven credential core
+//! The [`credential`] module is the standalone token scheme whose semantics
+//! are the machine-checked ones in `metatheory/Dregg2/` — an ed25519 caveat
+//! chain ([`credential::Credential`]) with the proven caveat algebra
+//! ([`credential::Pred`]), third-party discharge with the macaroon binding
+//! discipline ([`credential::Discharge`]), a versioned postcard/base64url
+//! wire form (`dga1_…`), and `explain()` everywhere. Each type's doc comment
+//! names its Lean counterpart. Start there for new integrations; the
+//! `Root`/[`Grant`]/[`Token`] surface below is the biscuit/Datalog wedge the
+//! CLI and MCP gate ride on.
 
 use biscuit_auth::{Algorithm, KeyPair, PrivateKey, PublicKey};
 use dregg_token::{AuthRequest, AuthToken, BiscuitToken, TokenError};
 
+pub mod credential;
 mod grant;
 pub mod mcp;
 
