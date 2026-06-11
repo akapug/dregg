@@ -10,8 +10,10 @@ The `½(n+f)` quorum is lifted into per-group `Config` (not hardcoded); the four
 synchronized deadline) are deliberately excluded — tiers 1–2 progress with n=1 and no
 synchrony.
 
-Cheap data (`Tier`, `rank`, `crossTierJoin`) is defined; genuine distributed-agreement
-obligations are honest `Prop`s with `sorry` bodies. Each `sorry` is a real obligation.
+Cheap data (`Tier`, `rank`, `crossTierJoin`) is defined and every theorem in this file is
+proved — NO `sorry` remains. The genuine distributed-agreement obligations live (proved) in
+the `Dregg2.Distributed.*` modules (`BlocklaceFinality` for the node's computed tau rule,
+`Consensus` for quorum safety) and `Dregg2.Consensus.TauPrefixMonotone` for prefix monotonicity.
 -/
 import Mathlib.Order.Lattice
 import Mathlib.Algebra.Order.Group.Nat

@@ -37,10 +37,11 @@ you contend.*
   * T2 (`FrameCommutes` for `recKExecAsset`) — wave: per-verb frame lemmas.
   * T3 (Mazurkiewicz trace convergence: linear extensions agreeing on conflicting pairs
     fold equal) — epoch: T1 is its empty-conflict case.
-  * T5 (`tauOrder` finalized-prefix monotonicity) — wave; claimed at
-    `Distributed/BlocklaceFinality.lean:52` but proved NOWHERE in the tree, while the
-    node's `executed_up_to` slicing relies on it (`node/src/blocklace_sync.rs:660`).
-    The single highest-leverage next theorem.
+  * T5 — RESOLVED in `Dregg2.Consensus.TauPrefixMonotone`: REFUTED unconditionally (an
+    honest laggard's late wave-end ratifier grows a final wave's coverage mid-prefix —
+    the node's `executed_up_to` slicing does NOT sit inside the truth) and PROVED
+    conditional (`tau_finalized_prefix_monotone` under `FinalizedRegionStable`, the
+    stability check the node is missing).
 
 No import of the executor or the blocklace: this module is the pure order-theoretic
 core, deliberately dependency-light so the fast-path argument is reusable against any
@@ -213,9 +214,11 @@ theorem frame_fastpath_sound {step : S → T → S} (fc : FrameCommutes step)
   * **T3** — trace convergence: two linear extensions of happened-before agreeing on the
     relative order of every NON-commuting pair fold equal (T1 = the all-commuting case).
     EPOCH; unlocks the executor dual-frontier.
-  * **T5** — `tauOrder` finalized-prefix monotonicity under lace growth: claimed at
-    `BlocklaceFinality.lean:52`, relied on by `blocklace_sync.rs::poll_finalized_blocks`,
-    proved nowhere. The no-rollback keystone — the highest-leverage next theorem.
+  * **T5** — RESOLVED (`Dregg2.Consensus.TauPrefixMonotone`): the unconditional claim is
+    REFUTED by an insert-valid honest-laggard counterexample; the corrected theorem
+    `tau_finalized_prefix_monotone` holds under `FinalizedRegionStable` (executable
+    mirror `stableCheck`), which `blocklace_sync.rs::poll_finalized_blocks` does NOT
+    check — a reported node-side soundness gap, not a wall.
   * **T6** — supermajority ack-depth ⇒ eventual tau membership (after T5; the
     quorum-intersection arithmetic is `EpochReconfig.quorums_intersect`'s shape).
 -/
