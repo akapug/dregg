@@ -53,6 +53,29 @@ key `~/.ssh/negneg-cq.pem`, token in `/etc/dregg/node.env` there).
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
   `project-refinement-epoch.md` is the live resume file; MEMORY.md is the index.
 
+## ⚑ EPOCH RESUME (2026-06-11 afternoon, for the 5:10pm full-bore session)
+
+THE EPOCH (docs/EPOCH-DESIGN.md) ran as workflow wf_fe4bbe0a-596. Foundations
+phase COMPLETE + COMMITTED; interpreter + regen hit the session limit.
+
+- **COMMITTED + pushed** (head `e09789807`): the Lean foundations
+  (`6f23f5467` — Blum MemoryChecking, DescriptorIR2, EffectVmEmitV2 re-anchor,
+  MMR; anchor green 3869 jobs, all four imports wired into Dregg2.lean — the
+  parallel lanes had RACED and only MMR's import survived, fixed at commit) +
+  dregg-auth standalone token lib (`e09789807`, 8 tests green).
+- **IN TREE, UNCOMMITTED, for full-bore**:
+  (verify on persvati, then commit). (1) **signed-wells lane** — cell/ turn/ node/ : the i64/two-limb signed
+  balance value-model + genesis-as-issuer-moves + fees-as-moves (the
+  deployment-correspondence closure; invasive, cross-crate, COMPLETED by its
+  lane but needs the gauntlet). (2) **interpreter** — circuit/src/descriptor_ir2.rs
+  + lean_descriptor_air.rs : INCOMPLETE (the lane died mid-work). Resume:
+  Workflow({scriptPath: …/epoch-build-wf_fe4bbe0a-596.js, resumeFromRunId:
+  "wf_fe4bbe0a-596"}) — foundations replay from cache, interpreter+regen run
+  live. THEN regen (descriptors + VK bump + AssuranceCase correspondence
+  close-out) + the persvati workspace gauntlet.
+- The wave-2 persvati gauntlet (b165susv3-era, head 325611a50) predates the
+  epoch foundations — re-run it after the epoch lands, not before.
+
 ## State of the world (2026-06-11 refinement night, ~14 commits)
 
 - main @ `61db0dc6a`, all pushed. **GitHub Pages: GREEN**.
