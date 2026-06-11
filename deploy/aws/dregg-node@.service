@@ -1,0 +1,88 @@
+# Dregg internal federation node template (instances: dregg-node@2, dregg-node@3).
+#
+# The %i instance number selects everything per-node:
+#   env file   /etc/dregg/node-%i.env   (ports, node index, peer list — see
+#              deploy/aws/node-2.env.example / node-3.env.example)
+#   data dir   /opt/dregg-data-%i       (node.key + genesis.json installed by
+#              deploy/aws/federation-keygen.sh)
+#
+# These instances are INTERNAL-ONLY peers of the public gateway (dregg-gateway
+# = federation member node-0). They bind the HTTP API to 127.0.0.1 and are
+# never added to the Caddyfile or the AWS security group. The QUIC gossip
+# listener binds 0.0.0.0:${DREGG_GOSSIP_PORT} (hard-coded in
+# node/src/blocklace_sync.rs) — the security group is the fence that keeps
+# 9421/9422 unreachable from outside.
+#
+# Install:
+#   sudo cp /opt/dregg/deploy/aws/dregg-node@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now dregg-node@2 dregg-node@3
+#
+# See deploy/aws/N3-RUNBOOK.md for the full bring-up order and gates.
+
+[Unit]
+Description=Dregg Federation Node %i (internal)
+After=network-online.target
+Wants=network-online.target
+# Restart-storm brake, same shape as dregg-gateway.service: a hard crash loop
+# stops the unit instead of pegging the box. `systemctl reset-failed
+# dregg-node@%i` re-arms after a fix.
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=dregg
+Group=dregg
+WorkingDirectory=/opt/dregg
+# REQUIRED (no leading '-'): a missing env file must fail the start loudly,
+# not boot a half-configured node on default ports that collide with node-0.
+EnvironmentFile=/etc/dregg/node-%i.env
+# Fail loudly if federation-keygen.sh has not installed this instance's
+# identity + genesis (a node without its validator key would still run, but
+# its blocks would never count toward the committee).
+ExecStartPre=/usr/bin/test -f /opt/dregg-data-%i/node.key
+ExecStartPre=/usr/bin/test -f /opt/dregg-data-%i/genesis.json
+ExecStart=/opt/dregg/target/release/dregg-node run \
+    --data-dir /opt/dregg-data-%i \
+    --port ${DREGG_PORT} \
+    --bind 127.0.0.1 \
+    --gossip-port ${DREGG_GOSSIP_PORT} \
+    --node-index ${DREGG_NODE_INDEX} \
+    --federation-size 3 \
+    --federation-peers ${DREGG_FEDERATION_PEERS} \
+    --enable-pruning \
+    --enable-faucet \
+    --federation-mode full \
+    --consensus blocklace
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+# No DREGG_TRUSTED_PROXIES: these nodes are not behind Caddy; XFF must never
+# be believed on a directly-reached (loopback) listener.
+# No ExecStartPost unlock: the cipherclerk stays locked. Consensus signing
+# (gossip_signing_key) does not require unlock, and the partition-drill faucet
+# endpoint is token-free. Unlock manually via POST /cipherclerk/unlock on the
+# instance if operator turn-submit on 2/3 is ever needed.
+
+# Security hardening (same posture as dregg-gateway.service)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/dregg-data-%i
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits — the 8 GB box now carries THREE nodes + Caddy + the
+# Discord bot. Internal nodes get a smaller slice than the gateway (which is
+# retuned by the dregg-gateway-federation.conf drop-in): 1.5G/2G each.
+LimitNOFILE=65536
+LimitNPROC=4096
+MemoryHigh=1536M
+MemoryMax=2G
+TasksMax=2048
+
+[Install]
+WantedBy=multi-user.target
