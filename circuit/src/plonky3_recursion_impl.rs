@@ -272,8 +272,8 @@ pub mod recursive {
 
         use p3_circuit::ops::PermConfig;
         let fri_verifier_params = FriVerifierParams::with_mmcs(
-            3, // log_blowup (match prover)
-            0, // log_final_poly_len
+            3,  // log_blowup (match prover)
+            0,  // log_final_poly_len
             0,  // commit_pow_bits (match prover)
             14, // query_pow_bits (match prover)
             PermConfig::poseidon2(Poseidon2Config::BABY_BEAR_D4_W16),

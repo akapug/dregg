@@ -111,6 +111,45 @@ impl PersistentStore {
         Ok(())
     }
 
+    /// Persist the executed finalized-block IDENTITY set (first-served order).
+    ///
+    /// This is the durable half of the node's identity execution cursor (the
+    /// TauPrefixMonotone closure): on restart, execution resumes from this set
+    /// (∪ the commit log's per-turn `block_id`s, which atomically cover the
+    /// turn-carrying blocks), NEVER from an index into the tau order — the
+    /// order can shift under honest catch-up growth. Written at the same batch
+    /// cadence as [`Self::persist_blocklace_meta`]; if it lags a crash, the
+    /// uncovered non-turn blocks re-process idempotently and turns are covered
+    /// exactly by the commit log.
+    pub fn persist_executed_block_ids(&self, ids: &[BlockId]) -> Result<()> {
+        let value =
+            postcard::to_stdvec(ids).map_err(|e| StoreError::Serialization(e.to_string()))?;
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(tables::BLOCKLACE_META)?;
+            table.insert(tables::BLOCKLACE_EXECUTED_IDS_KEY, value.as_slice())?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Load the executed finalized-block identity set.
+    ///
+    /// Returns an empty vector if never persisted (fresh start or pre-upgrade
+    /// DB — in the latter case the commit log still recovers every turn
+    /// exactly, and non-turn blocks re-process idempotently once).
+    pub fn load_executed_block_ids(&self) -> Result<Vec<BlockId>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(tables::BLOCKLACE_META)?;
+        match table.get(tables::BLOCKLACE_EXECUTED_IDS_KEY)? {
+            Some(guard) => {
+                let ids: Vec<BlockId> = postcard::from_bytes(guard.value())?;
+                Ok(ids)
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Load the executed_up_to index from the store.
     ///
     /// Returns 0 if not previously persisted (fresh start).
@@ -225,5 +264,33 @@ impl PersistentStore {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(tables::BLOCKLACE_BLOCKS)?;
         Ok(table.len()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The executed-block identity set round-trips (the durable resume state of
+    /// the node's identity execution cursor — TauPrefixMonotone closure), and a
+    /// never-persisted store reads back EMPTY (pre-upgrade/fresh DB: the commit
+    /// log alone then covers every durably applied turn).
+    #[test]
+    fn executed_block_ids_round_trip_and_default_empty() {
+        let store = PersistentStore::open_in_memory().expect("in-memory store");
+        assert_eq!(
+            store.load_executed_block_ids().expect("load"),
+            Vec::<BlockId>::new(),
+            "fresh/pre-upgrade store has no executed-id set"
+        );
+
+        let ids: Vec<BlockId> = (0u8..5).map(|i| BlockId([i; 32])).collect();
+        store.persist_executed_block_ids(&ids).expect("persist");
+        assert_eq!(store.load_executed_block_ids().expect("load"), ids);
+
+        // Re-persisting (batch cadence) overwrites, preserving order.
+        let grown: Vec<BlockId> = (0u8..7).map(|i| BlockId([i; 32])).collect();
+        store.persist_executed_block_ids(&grown).expect("persist");
+        assert_eq!(store.load_executed_block_ids().expect("load"), grown);
     }
 }

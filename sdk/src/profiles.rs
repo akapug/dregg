@@ -323,15 +323,12 @@ mod tests {
 
     fn with_temp_store<R>(f: impl FnOnce() -> R) -> R {
         let _guard = env_lock();
-        let dir = std::env::temp_dir().join(format!(
-            "dregg-profile-test-{}-{}",
-            std::process::id(),
-            {
+        let dir =
+            std::env::temp_dir().join(format!("dregg-profile-test-{}-{}", std::process::id(), {
                 let mut b = [0u8; 8];
                 getrandom::fill(&mut b).unwrap();
                 hex::encode(b)
-            }
-        ));
+            }));
         // SAFETY: guarded by env_lock; tests in this module are the only
         // mutators of DREGG_HOME / DREGG_PROFILE in this crate.
         unsafe {
@@ -355,7 +352,10 @@ mod tests {
             assert!(!info.active, "no active profile yet");
 
             // Duplicate name refused.
-            assert!(matches!(create("ember"), Err(ProfileError::AlreadyExists(_))));
+            assert!(matches!(
+                create("ember"),
+                Err(ProfileError::AlreadyExists(_))
+            ));
 
             create("walnut").unwrap();
             set_active("walnut").unwrap();
@@ -409,9 +409,18 @@ mod tests {
     fn names_are_validated_and_loads_are_deterministic() {
         with_temp_store(|| {
             assert!(matches!(create(""), Err(ProfileError::InvalidName(_))));
-            assert!(matches!(create("No Caps"), Err(ProfileError::InvalidName(_))));
-            assert!(matches!(create("../evil"), Err(ProfileError::InvalidName(_))));
-            assert!(matches!(set_active("ghost"), Err(ProfileError::NotFound(_))));
+            assert!(matches!(
+                create("No Caps"),
+                Err(ProfileError::InvalidName(_))
+            ));
+            assert!(matches!(
+                create("../evil"),
+                Err(ProfileError::InvalidName(_))
+            ));
+            assert!(matches!(
+                set_active("ghost"),
+                Err(ProfileError::NotFound(_))
+            ));
 
             create("stable").unwrap();
             let a = load("stable").unwrap().public_key();

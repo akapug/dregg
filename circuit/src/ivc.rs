@@ -1388,7 +1388,6 @@ impl IvcBuilder {
                 .map(|proof| Ok(IvcBackendProof::BabyBearStark(proof))),
         }
     }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2766,7 +2765,6 @@ mod tests {
             .unwrap();
         assert!(matches!(stark_proof, IvcBackendProof::BabyBearStark(_)));
     }
-
 
     #[test]
     fn ivc_accumulated_hash_deterministic() {

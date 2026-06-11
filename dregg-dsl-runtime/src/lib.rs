@@ -228,4 +228,3 @@ pub struct MembershipConstraint {
     /// Identifier for the hash function used (e.g., "poseidon", "sha256").
     pub hash_function: &'static str,
 }
-

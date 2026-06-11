@@ -231,7 +231,8 @@ impl CommittedTurnBuilder {
         // executor) — the privacy path deliberately carries no signature leg
         // that would link the spender. CommitmentMode::Full is the raw
         // scaffold's default.
-        let action = crate::raw::unsigned_action_named(agent_cell, "committed_transfer", all_effects);
+        let action =
+            crate::raw::unsigned_action_named(agent_cell, "committed_transfer", all_effects);
 
         let mut call_forest = CallForest::new();
         call_forest.add_root(action);

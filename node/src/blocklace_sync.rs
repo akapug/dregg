@@ -95,8 +95,13 @@ pub struct BlocklaceHandle {
     pub topic: TopicHandle,
     /// Our own public key (node identity for the blocklace).
     pub self_key: [u8; 32],
-    /// Index tracking which ordered blocks have already been executed.
-    pub executed_up_to: Arc<RwLock<usize>>,
+    /// Identity-tracking execution cursor over the finalized order: which
+    /// blocks have already been served to the executor, BY BLOCK ID — not an
+    /// index. An index cursor assumes tau's finalized prefix is stable across
+    /// lace growth, which `metatheory/Dregg2/Consensus/TauPrefixMonotone.lean`
+    /// REFUTES (an honest catch-up block can sort mid-prefix); identity
+    /// tracking executes each finalized block exactly once regardless.
+    pub cursor: Arc<RwLock<crate::execution_cursor::ExecutionCursor>>,
     /// Notify channel: signaled when new blocks arrive that may advance finality.
     /// This makes the executor truly quiescent -- no polling.
     pub finality_notify: Arc<Notify>,
@@ -538,7 +543,7 @@ impl BlocklaceHandle {
             );
         }
 
-        let mut executed_up_to = self.executed_up_to.write().await;
+        let mut cursor = self.cursor.write().await;
 
         // For solo mode (n=1): every block is immediately finalized in topological
         // order. tau() handles this correctly because with a single participant,
@@ -656,9 +661,9 @@ impl BlocklaceHandle {
         // FAIL-OPEN: when the verified archive lacks the export (stale build) or the wire returns
         // ERR, `compute` is `None` and the gate is a no-op with a loud warning — the live path is
         // never broken. When it IS armed and the verified projection excludes a block, we STOP the
-        // committed prefix BEFORE that block (we do NOT advance `executed_up_to` past it), so it is
-        // re-evaluated on a later poll once the lace has grown enough — preserving liveness (tau's
-        // finalized prefix is monotone).
+        // committed batch BEFORE that block (it is NOT marked executed), so it is re-evaluated on a
+        // later poll once the lace has grown enough — preserving liveness (a finalized block stays
+        // pending until served; identity tracking makes the retry order-shift-proof).
         let gate_armed = participants.len() > 1 && crate::finality_gate::finality_gate_enabled();
         let verified = if gate_armed {
             crate::finality_gate::VerifiedFinality::compute(&lace, &participants)
@@ -673,81 +678,110 @@ impl BlocklaceHandle {
             );
         }
 
-        // Skip already-executed blocks.
-        if ordered.len() <= *executed_up_to {
+        // ── TAU-PREFIX-MONOTONE CLOSURE (identity cursor, not an index) ─────────────────────────
+        // `TauPrefixMonotone.lean` proves tau's finalized prefix is stable only CONDITIONALLY
+        // (`FinalizedRegionStable`) and refutes the unconditional claim with an honest catch-up
+        // trace (`lagBase → lagGrown`): a lagging validator's late wave-end block ratifies an
+        // already-final leader, grows the wave's coverage, and sorts MID-PREFIX — so a bare index
+        // cursor both RE-EXECUTES a block past the cursor and PERMANENTLY SKIPS the honest
+        // finalized block that fell behind it. The node cannot discharge the stability hypothesis
+        // locally, so the cursor does not assume it: executed blocks are tracked BY IDENTITY and
+        // each poll serves exactly the finalized blocks not yet executed, in the CURRENT tau order
+        // (execution = set difference, order = current tau — the corrected theorem's shape). A
+        // prefix shift is then absorbed correctly and surfaced as OBSERVABILITY: `observe_order`
+        // diffs the previously computed order against the new one (the conclusion-level mirror of
+        // the Lean `stableCheck`) so operators SEE reorgs-by-catchup happen.
+        let prefix_stable = cursor.observe_order(&ordered);
+        if !prefix_stable {
+            crate::metrics::inc_tau_prefix_shift();
+            warn!(
+                total_shifts = cursor.prefix_shifts(),
+                finalized = ordered.len(),
+                "tau finalized order PREFIX SHIFTED (reorg-by-catchup: an honest late block sorted \
+                 into the already-executed region — the TauPrefixMonotone counterexample, live). \
+                 The identity cursor absorbs this correctly: every finalized block still executes \
+                 exactly once, late blocks execute on this poll."
+            );
+        }
+
+        let pending = cursor.pending(&ordered);
+        if pending.is_empty() {
             return vec![];
         }
 
-        let new_blocks = &ordered[*executed_up_to..];
         let mut finalized = Vec::new();
-        // The number of `new_blocks` we COMMIT this poll. With the gate armed, the committed prefix
-        // STOPS at the first actionable block the verified rule does not finalize (so refused blocks
-        // are retried later); without the gate it is all of `new_blocks` (legacy behaviour).
-        let mut committed_count = new_blocks.len();
 
-        for (offset, block_id) in new_blocks.iter().enumerate() {
-            if let Some(block) = lace.get(block_id) {
-                // GATE: REFUSE any actionable block the verified rule did not finalize. Ack/Data are
-                // not consensus-actionable (skipped below regardless), so a heartbeat the rule does
-                // not "finalize" never trips the gate.
-                if let Some(vf) = verified.as_ref() {
-                    let actionable = matches!(
-                        &block.payload,
-                        Payload::Turn(_)
-                            | Payload::TurnBundle(_)
-                            | Payload::MembershipVote { .. }
-                            | Payload::Checkpoint { .. }
+        for block_id in pending {
+            let Some(block) = lace.get(&block_id) else {
+                // A finalized id missing from the lace is an invariant breach (tau orders only
+                // lace members); mark it so it cannot wedge the cursor in a hot retry loop.
+                warn!(
+                    block_id = %block_id,
+                    "finalized block id not present in the lace — marking served and skipping"
+                );
+                cursor.mark_executed(block_id);
+                continue;
+            };
+            // GATE: REFUSE any actionable block the verified rule did not finalize. Ack/Data are
+            // not consensus-actionable (skipped below regardless), so a heartbeat the rule does
+            // not "finalize" never trips the gate. The refused block and everything after it are
+            // NOT marked executed, so they are re-evaluated on a later poll once the lace has
+            // grown enough (verified rule wins; liveness preserved).
+            if let Some(vf) = verified.as_ref() {
+                let actionable = matches!(
+                    &block.payload,
+                    Payload::Turn(_)
+                        | Payload::TurnBundle(_)
+                        | Payload::MembershipVote { .. }
+                        | Payload::Checkpoint { .. }
+                );
+                if actionable && !vf.admits(&block.creator, block.seq) {
+                    warn!(
+                        block_id = %block_id,
+                        seq = block.seq,
+                        "verified finality gate REFUSED a block the Rust tau ordered but the \
+                         verified rule did NOT finalize — STOPPING the committed batch here \
+                         (will re-evaluate on a later poll; verified rule wins)"
                     );
-                    if actionable && !vf.admits(&block.creator, block.seq) {
-                        warn!(
-                            block_id = %block_id,
-                            seq = block.seq,
-                            "verified finality gate REFUSED a block the Rust tau ordered but the \
-                             verified rule did NOT finalize — STOPPING the committed prefix here \
-                             (will re-evaluate on a later poll; verified rule wins)"
-                        );
-                        committed_count = offset;
-                        break;
-                    }
-                }
-                match &block.payload {
-                    Payload::Turn(data) => {
-                        finalized.push(FinalizedBlock::Turn {
-                            block_id: *block_id,
-                            data: data.clone(),
-                            artifacts: None,
-                        });
-                    }
-                    Payload::TurnBundle(bundle) => {
-                        finalized.push(FinalizedBlock::Turn {
-                            block_id: *block_id,
-                            data: bundle.signed_turn.clone(),
-                            artifacts: Some(bundle.clone()),
-                        });
-                    }
-                    Payload::MembershipVote { action } => {
-                        finalized.push(FinalizedBlock::Membership {
-                            block_id: *block_id,
-                            creator: block.creator,
-                            action: action.clone(),
-                        });
-                    }
-                    Payload::Checkpoint { root, height } => {
-                        finalized.push(FinalizedBlock::Checkpoint {
-                            block_id: *block_id,
-                            root: *root,
-                            height: *height,
-                        });
-                    }
-                    // Ack and Data payloads need no consensus-level processing.
-                    Payload::Ack | Payload::Data(_) => {}
+                    break;
                 }
             }
+            match &block.payload {
+                Payload::Turn(data) => {
+                    finalized.push(FinalizedBlock::Turn {
+                        block_id,
+                        data: data.clone(),
+                        artifacts: None,
+                    });
+                }
+                Payload::TurnBundle(bundle) => {
+                    finalized.push(FinalizedBlock::Turn {
+                        block_id,
+                        data: bundle.signed_turn.clone(),
+                        artifacts: Some(bundle.clone()),
+                    });
+                }
+                Payload::MembershipVote { action } => {
+                    finalized.push(FinalizedBlock::Membership {
+                        block_id,
+                        creator: block.creator,
+                        action: action.clone(),
+                    });
+                }
+                Payload::Checkpoint { root, height } => {
+                    finalized.push(FinalizedBlock::Checkpoint {
+                        block_id,
+                        root: *root,
+                        height: *height,
+                    });
+                }
+                // Ack and Data payloads need no consensus-level processing.
+                Payload::Ack | Payload::Data(_) => {}
+            }
+            // Served (or consensus-inert): never serve this identity again.
+            cursor.mark_executed(block_id);
         }
 
-        // Advance the high-water mark by the committed prefix only. Without the gate (or a fully
-        // admitted batch) this is `ordered.len()`, exactly the legacy behaviour.
-        *executed_up_to += committed_count;
         finalized
     }
 
@@ -939,51 +973,95 @@ pub async fn run_blocklace_sync(
     let constitution_manager = ConstitutionManager::new(constitution);
 
     // Attempt to restore blocklace from persistent storage.
-    let (blocklace, restored_executed_up_to) = {
+    let (blocklace, restored_cursor) = {
         let s = state.read().await;
         match s
             .store
             .load_blocklace(signing_key.clone(), quorum_threshold)
         {
-            Ok(Some((restored_lace, executed_up_to))) => {
+            Ok(Some((restored_lace, legacy_executed_up_to))) => {
                 let block_count = restored_lace.len();
-                // CRASH-CONSISTENT resume point. `executed_up_to` here comes from
-                // the legacy, separately-written `BLOCKLACE_EXECUTED_UP_TO_KEY`,
-                // which can run AHEAD of the durable ledger across a torn crash
-                // (its write is not atomic with the per-turn ledger commit). The
-                // durable commit log records, atomically with each applied turn,
-                // the block cursor as of that turn (`recovered_block_cursor`). We
-                // resume from the MINIMUM of the two: the durable cursor is the
-                // safe floor below which every turn is provably in the commit log
-                // (so re-processing is idempotent), and we never skip a finalized
-                // turn that the legacy cursor jumped past. When the durable cursor
-                // is 0 (fresh node / pre-upgrade DB) we fall back to the legacy
-                // value unchanged.
-                let durable = s.store.recovered_block_cursor().unwrap_or(0) as usize;
-                let resume = if durable == 0 {
-                    executed_up_to
-                } else {
-                    executed_up_to.min(durable)
-                };
+                // CRASH-CONSISTENT resume point, BY IDENTITY (TauPrefixMonotone
+                // closure). Two durable sources compose the executed set:
+                //
+                //  * TURN-carrying blocks — recovered EXACTLY from the durable
+                //    commit log: each `CommitRecord.block_id` was written in the
+                //    same atomic transaction as the applied turn, so a turn is in
+                //    this set iff its effects are durably in the ledger (no lost
+                //    turn, no double-apply). A persisted id whose turn is NOT in
+                //    the commit log (torn crash between serve and commit) is
+                //    DROPPED so the turn is re-served and re-applied idempotently
+                //    — the same contract the old min(legacy, durable-cursor)
+                //    resume relied on, now per-block instead of per-prefix.
+                //  * NON-TURN blocks (membership/checkpoint/ack) — restored from
+                //    the batch-cadence persisted id set; if that lags a crash,
+                //    re-processing is idempotent (the commit-log contract).
+                //
+                // Pre-upgrade DBs have no persisted id set: turns still restore
+                // exactly from the commit log; non-turn blocks re-process once.
+                // The legacy index count is logged for visibility only — an
+                // INDEX cannot be trusted as a resume point, because the order it
+                // indexes into can shift under honest catch-up growth.
+                let durable_turn_ids: std::collections::HashSet<BlockId> = s
+                    .store
+                    .commit_log_block_ids()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(BlockId)
+                    .collect();
+                let persisted_ids = s.store.load_executed_block_ids().unwrap_or_default();
+                let persisted_count = persisted_ids.len();
+                let mut executed_ids: Vec<BlockId> = Vec::new();
+                let mut seen: std::collections::HashSet<BlockId> = std::collections::HashSet::new();
+                for id in persisted_ids {
+                    let keep = match restored_lace.get(&id).map(|b| &b.payload) {
+                        Some(Payload::Turn(_)) | Some(Payload::TurnBundle(_)) => {
+                            durable_turn_ids.contains(&id)
+                        }
+                        Some(_) => true,
+                        // Not in the restored lace: tau can never order it, so it
+                        // can never be served; carrying it would only grow the set.
+                        None => false,
+                    };
+                    if keep && seen.insert(id) {
+                        executed_ids.push(id);
+                    }
+                }
+                for id in &durable_turn_ids {
+                    if seen.insert(*id) {
+                        executed_ids.push(*id);
+                    }
+                }
                 info!(
                     blocks = block_count,
-                    legacy_executed_up_to = executed_up_to,
-                    durable_block_cursor = durable,
-                    resume_from = resume,
-                    "restored blocklace from persistent storage (crash-consistent resume)"
+                    executed_restored = executed_ids.len(),
+                    persisted_ids = persisted_count,
+                    durable_turns = durable_turn_ids.len(),
+                    legacy_executed_up_to,
+                    "restored blocklace from persistent storage (crash-consistent \
+                     identity-cursor resume)"
                 );
-                (restored_lace, resume)
+                (
+                    restored_lace,
+                    crate::execution_cursor::ExecutionCursor::restore(executed_ids),
+                )
             }
             Ok(None) => {
                 info!("no persisted blocklace found, starting fresh");
-                (Blocklace::new(signing_key.clone(), quorum_threshold), 0)
+                (
+                    Blocklace::new(signing_key.clone(), quorum_threshold),
+                    crate::execution_cursor::ExecutionCursor::new(),
+                )
             }
             Err(e) => {
                 warn!(
                     error = %e,
                     "failed to restore blocklace from storage, starting fresh"
                 );
-                (Blocklace::new(signing_key.clone(), quorum_threshold), 0)
+                (
+                    Blocklace::new(signing_key.clone(), quorum_threshold),
+                    crate::execution_cursor::ExecutionCursor::new(),
+                )
             }
         }
     };
@@ -1134,7 +1212,7 @@ pub async fn run_blocklace_sync(
     // Build the shared handle.
     let lace = Arc::new(RwLock::new(blocklace));
     let constitution_handle = Arc::new(RwLock::new(constitution_manager));
-    let executed_up_to = Arc::new(RwLock::new(restored_executed_up_to));
+    let cursor = Arc::new(RwLock::new(restored_cursor));
     let finality_notify = Arc::new(Notify::new());
 
     let handle = BlocklaceHandle {
@@ -1143,7 +1221,7 @@ pub async fn run_blocklace_sync(
         gossip: gossip.clone(),
         topic: topic.clone(),
         self_key,
-        executed_up_to,
+        cursor,
         finality_notify: finality_notify.clone(),
         auto_approve_joins, // F-CRIT-2: gated by main.rs on --auto-approve-joins CLI flag OR .devnet marker
         checkpoint_interval: blocklace_checkpoint_interval,
@@ -1796,15 +1874,13 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
                 );
             }
 
-            // Block-level resume cursor for crash recovery: `poll_finalized_blocks`
-            // has already advanced `executed_up_to` to the post-batch high-water
-            // mark, so this is the position recovery resumes blocklace processing
-            // from. We persist it inside each turn's atomic commit (see
-            // `execute_finalized_turn`) so the durable block cursor can never run
-            // ahead of the durable ledger. Resuming from the post-batch cursor is
-            // safe: every turn in the batch that durably committed is in the
-            // commit log, and any re-processed turn is idempotent there.
-            let block_executed_up_to = { *handle.executed_up_to.read().await as u64 };
+            // Block-level executed COUNT for the durable commit record. Recovery
+            // resumes BY IDENTITY (the commit log's `block_id`s ∪ the persisted
+            // executed-id set), not from this count — it is carried in each
+            // turn's atomic commit as a diagnostic/compat field only (an index
+            // into the tau order cannot be a sound resume point: the order can
+            // shift under honest catch-up growth, see TauPrefixMonotone).
+            let block_executed_up_to = { handle.cursor.read().await.executed_count() as u64 };
 
             for block in &finalized_blocks {
                 match block {
@@ -1897,7 +1973,7 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
             maybe_checkpoint_ledger(&state).await;
 
             // ── Persist Blocklace Metadata ───────────────────────────────────
-            // Save the executed_up_to index and blocklace metadata (tips,
+            // Save the executed block-id set and blocklace metadata (tips,
             // equivocators, ordering state) so restarts don't re-execute turns.
             persist_blocklace_state(&state, &handle).await;
         }
@@ -2500,10 +2576,11 @@ async fn execute_finalized_turn(
                     Err(e) => {
                         // A failed durable commit is a serious crash-consistency
                         // event: the ledger was mutated in RAM but the durable
-                        // record/cursor did not advance. We surface it loudly; on
-                        // the next poll the in-RAM `executed_up_to` is ahead, but
-                        // the durable cursor is NOT, so recovery resumes from the
-                        // durable cursor and re-applies this turn idempotently.
+                        // record/cursor did not advance. We surface it loudly; the
+                        // in-RAM cursor has this block marked executed, but its
+                        // `block_id` is NOT in the durable commit log, so identity
+                        // recovery drops it from the restored executed set and
+                        // re-applies this turn idempotently after a restart.
                         error!(
                             turn_hash = %turn_hash_hex,
                             error = %e,
@@ -3276,15 +3353,18 @@ async fn maybe_checkpoint_ledger(state: &NodeState) {
 
 // ─── Blocklace State Persistence ────────────────────────────────────────────
 
-/// Persist the current blocklace metadata and executed_up_to index.
+/// Persist the current blocklace metadata and the executed-block identity set.
 ///
-/// Called after each batch of finalized turns is executed. This ensures that on
-/// restart, the node resumes from the correct position without re-executing
-/// already-processed turns.
+/// Called after each batch of finalized turns is executed. On restart the node
+/// resumes BY IDENTITY: turn-carrying blocks from the durable commit log, the
+/// rest from this batch-cadence set (idempotent on re-process if it lags a
+/// crash). The legacy `executed_up_to` COUNT is still written for
+/// diagnostics/compat, but is never used as a resume index (TauPrefixMonotone:
+/// the order it would index into can shift under honest catch-up growth).
 async fn persist_blocklace_state(state: &NodeState, handle: &BlocklaceHandle) {
-    let executed_up_to = {
-        let idx = handle.executed_up_to.read().await;
-        *idx
+    let (executed_up_to, executed_ids) = {
+        let cursor = handle.cursor.read().await;
+        (cursor.executed_count(), cursor.executed_ids().to_vec())
     };
 
     // Gather metadata from the blocklace.
@@ -3300,7 +3380,10 @@ async fn persist_blocklace_state(state: &NodeState, handle: &BlocklaceHandle) {
 
     let s = state.read().await;
     if let Err(e) = s.store.persist_executed_up_to(executed_up_to as u64) {
-        warn!(error = %e, "failed to persist executed_up_to index");
+        warn!(error = %e, "failed to persist executed_up_to count");
+    }
+    if let Err(e) = s.store.persist_executed_block_ids(&executed_ids) {
+        warn!(error = %e, "failed to persist executed block-id set");
     }
     if let Err(e) = s.store.persist_blocklace_meta(&meta) {
         warn!(error = %e, "failed to persist blocklace metadata");
@@ -3315,10 +3398,7 @@ async fn persist_blocklace_state(state: &NodeState, handle: &BlocklaceHandle) {
 ///
 /// Called from the finality executor after each batch of finalized turns.
 async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
-    let executed_count = {
-        let e = handle.executed_up_to.read().await;
-        *e as u64
-    };
+    let executed_count = { handle.cursor.read().await.executed_count() as u64 };
 
     // Only produce checkpoints at interval boundaries. (uses the configured value for this run)
     if executed_count == 0 || executed_count % handle.checkpoint_interval != 0 {
