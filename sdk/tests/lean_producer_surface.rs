@@ -24,8 +24,8 @@
 //!
 //! Both gate on the linked Lean archive (`dregg_lean_ffi::lean_available()`); when it is absent the
 //! test self-skips (it cannot run the verified producer). No `#[ignore]`, no weakened asserts. The
-//! whole file only compiles under `--features lean-producer`.
-#![cfg(feature = "lean-producer")]
+//! whole file only compiles when the Lean producer is compiled in (every native build; gated OUT only by `no-lean-link`).
+#![cfg(not(feature = "no-lean-link"))]
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};

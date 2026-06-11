@@ -94,7 +94,7 @@ fn token_id() -> [u8; 32] {
 
 fn permissive_cell(seed: &str, balance: u64) -> Cell {
     let key_bytes = *blake3::hash(format!("cross-fed-lift:{seed}").as_bytes()).as_bytes();
-    let mut cell = Cell::with_balance(key_bytes, token_id(), balance);
+    let mut cell = Cell::with_balance(key_bytes, token_id(), balance as i64);
     cell.permissions = open_permissions();
     cell
 }
@@ -379,12 +379,12 @@ fn cross_fed_receipt_lift_seam6() {
     let r4 = execute_or_panic(&executor_f2, &mut ledger_f2, &t4, "t4/D-worker");
     assert_eq!(
         ledger_f2.get(&id_d).unwrap().state.balance(),
-        pre_d_balance + bounty_amount - 300,
+        pre_d_balance + bounty_amount as i64 - 300, // signed-wells (ac01f9b7b): balances are i64
         "t4 must credit D's balance (after paying turn's computron fee)"
     );
     assert_eq!(
         ledger_f2.get(&id_c).unwrap().state.balance(),
-        pre_c_balance - bounty_amount,
+        pre_c_balance - bounty_amount as i64,
         "t4 must debit C's balance"
     );
 

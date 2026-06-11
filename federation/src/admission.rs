@@ -307,7 +307,7 @@ impl AdmissionRegistry {
     /// **THE HYBRID ADMISSION GATE (F-4).** A strand is admitted iff it is a seed, OR it is bonded
     /// (stake path), OR it is vouched to threshold by rooted members (vouch path).
     ///
-    /// When built with `--features lean-admission` AND the Lean archive exports `dregg_strand_admit`,
+    /// On every native build (Lean unconditional), when the Lean archive exports `dregg_strand_admit`,
     /// this routes the verdict through the VERIFIED Lean rule
     /// `Dregg2.Distributed.StrandAdmission.admitted` (the `dregg_strand_admit` export): the F-4 gate
     /// the federation runs IS the verified gate, carried by the Lean theorem `strand_admit_eq_admitted`
@@ -315,7 +315,7 @@ impl AdmissionRegistry {
     /// absent (marshal-only / wasm build) it FAILS BACK to the pure-Rust [`Self::admitted_rust`] — so
     /// the gate is never broken, only un-verified. The Rust path remains the differential sibling.
     pub fn admitted(&self, strand: &StrandId) -> bool {
-        #[cfg(feature = "lean-admission")]
+        #[cfg(not(feature = "no-lean-link"))]
         {
             if let Some(verdict) = self.lean_admitted(strand) {
                 return verdict;
@@ -331,7 +331,7 @@ impl AdmissionRegistry {
     /// `dregg_strand_admit` export, and decodes the `"1"`/`"0"` verdict. Returns `None` when the
     /// archive lacks the export (so [`Self::admitted`] falls back to the Rust gate); a malformed wire
     /// (`ERR`) decodes fail-closed to `Some(false)` — the verified rule's "not admitted".
-    #[cfg(feature = "lean-admission")]
+    #[cfg(not(feature = "no-lean-link"))]
     fn lean_admitted(&self, strand: &StrandId) -> Option<bool> {
         if !dregg_lean_ffi::strand_admit_available() {
             return None;
@@ -697,13 +697,13 @@ mod tests {
     }
 
     /// THE LIVE F-4 LEAN-BACKED GATE DIFFERENTIAL — when the verified Lean archive is linked
-    /// (`--features lean-admission` + the `dregg_strand_admit` export present), the Lean-backed
+    /// (every native build with the `dregg_strand_admit` export present), the Lean-backed
     /// `admitted` AGREES with the pure-Rust `admitted_rust` on every strand role of the `fedDemo`
     /// fixture. This is the runtime proof that routing the gate through the verified rule is
     /// transparent for the modelled cases — `admitted` IS `admitted_rust` IS the verified Lean
     /// `StrandAdmission.admitted`. Self-skips when the archive lacks the export (then `admitted`
     /// already falls back to `admitted_rust`, so they are trivially equal).
-    #[cfg(feature = "lean-admission")]
+    #[cfg(not(feature = "no-lean-link"))]
     #[test]
     fn lean_backed_gate_agrees_with_rust_gate() {
         let (sk_s1, s1) = generate_keypair();

@@ -12,37 +12,29 @@ description = "Federation node daemon — hosts an agent cipherclerk, participat
 [dependencies]
 dregg-types = { path = "../types" }
 dregg-cell = { path = "../cell" }
-dregg-turn = { path = "../turn", features = ["lean-shadow"] }
+# Lean is UNCONDITIONAL on native (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): the
+# shadow/gate executor, the F-4 admission gate, verified settle, and the captp/coord gates are
+# all compiled in by default — no per-crate enables needed here anymore.
+dregg-turn = { path = "../turn" }
 # The verified FINALITY GATE (`finality_gate.rs`) calls the Lean-exported `dregg_blocklace_finalize`
-# directly. `dregg-turn`'s `lean-shadow` feature already links `dregg-lean-ffi` into the node's
-# production binary, so this regular-dependency entry adds NO new linkage — it only makes the FFI
-# symbols nameable from the node's own code (the gate path). Same path + features as the dev-dep below.
-dregg-lean-ffi = { path = "../dregg-lean-ffi", features = ["lean-lib"] }
+# directly. `dregg-turn` already links `dregg-lean-ffi` into the node's production binary, so this
+# regular-dependency entry adds NO new linkage — it only makes the FFI symbols nameable from the
+# node's own code (the gate path).
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
 dregg-token = { path = "../token", default-features = false, features = ["macaroon", "biscuit", "rand-deps"] }
 dregg-persist = { path = "../persist" }
-# `lean-admission`: the node routes the F-4 strand-admission gate through the VERIFIED Lean
-# `dregg_strand_admit` export (the node already links the Lean archive via `dregg-lean-ffi` above), so
-# `AdmissionRegistry::admitted` is the verified rule, not a Rust mirror. The Rust gate stays as the
-# differential sibling + fallback.
-dregg-federation = { path = "../federation", features = ["lean-admission"] }
+dregg-federation = { path = "../federation" }
 dregg-sdk = { path = "../sdk" }
-# `verified-settle`: route live ring settlement through the VERIFIED Lean executor FFI
-# (`dregg_record_kernel_step` over the proved `Exec.recKExec`) — a fulfilled intent IS a
-# verified, conserving, authorized executor turn. The node links the archive anyway.
-dregg-intent = { path = "../intent", features = ["verified-settle"] }
+dregg-intent = { path = "../intent" }
 dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit" }
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
-# `lean-gate`: 2PC / causal-order / shared-budget verdicts decided BY the verified Lean rule
-# (the native Rust runs as the differential sibling). The node links the archive anyway.
-dregg-coord = { path = "../coord", features = ["lean-gate"] }
+dregg-coord = { path = "../coord" }
 dregg-net = { path = "../net" }
 dregg-blocklace = { path = "../blocklace" }
 dregg-storage = { path = "../storage" }
 dregg-storage-templates = { path = "../dregg-storage-templates" }
-# `lean-gate`: route captp's §6 handoff non-amplification verdict through the VERIFIED Lean export
-# (`dregg_captp_validate_handoff`); the node already links `dregg-lean-ffi` with the Lean archive.
-dregg-captp = { path = "../captp", features = ["lean-gate"] }
+dregg-captp = { path = "../captp" }
 dregg-app-framework = { path = "../app-framework" }
 dregg-credentials = { path = "../credentials" }
 starbridge-nameservice = { path = "../starbridge-apps/nameservice" }

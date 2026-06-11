@@ -88,7 +88,7 @@ fn test_conservation_invariant_transfers() {
         };
         let token_id = [0xFE; 32];
         let mut cell = Cell::new_hosted(pk, token_id);
-        cell.state.set_balance(initial_balance);
+        cell.state.set_balance(initial_balance as i64); // signed-wells (ac01f9b7b): i64 balances
         let id = ledger.insert_cell(cell).unwrap();
         cell_ids.push(id);
     }
@@ -111,7 +111,7 @@ fn test_conservation_invariant_transfers() {
         if from_balance == 0 {
             continue;
         }
-        let amount = rng.gen_range(1, from_balance + 1);
+        let amount = rng.gen_range(1, from_balance as u64 + 1); // signed-wells (ac01f9b7b): balance() is i64
 
         let delta = LedgerDelta {
             created: Vec::new(),
@@ -137,7 +137,7 @@ fn test_conservation_invariant_with_creation() {
         let balance = rng.gen_range(0, 500);
 
         let mut cell = Cell::new_hosted(pk, token_id);
-        cell.state.set_balance(balance);
+        cell.state.set_balance(balance as i64); // signed-wells (ac01f9b7b): i64 balances
         ledger.insert_cell(cell).unwrap();
         expected_total += balance;
 

@@ -904,6 +904,20 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_strand_admit_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_distributed_exports_present)");
 
+    // ── PLATFORM GATE (polarity inversion, docs/FEATURE-HYGIENE.md §Lean): the link is
+    // UNCONDITIONAL on native; the ONE opt-out is the `no-lean-link` platform feature, set
+    // only by builds whose target cannot link libdregg_lean.a (wasm32, the SP1 zkvm guest).
+    // We also hard-skip on those targets regardless of the feature — a wasm32 build that
+    // forgot to wire `no-lean-link` should degrade to the marshal-only stubs, never attempt
+    // a native-archive link. No archive refresh, no shim, no link directives: the crate
+    // builds marshal-only and `lean_available()` is false.
+    let no_lean_link = std::env::var_os("CARGO_FEATURE_NO_LEAN_LINK").is_some();
+    let gate_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let gate_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if no_lean_link || gate_arch == "wasm32" || gate_os == "zkvm" {
+        return;
+    }
+
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
     let lean_archive = crate_dir.join("libdregg_lean.a");

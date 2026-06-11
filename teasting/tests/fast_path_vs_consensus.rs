@@ -54,7 +54,7 @@ fn permissive_permissions() -> Permissions {
 /// Helper: create a cell owned by the given public key with permissive permissions.
 fn insert_permissive_cell(ledger: &mut Ledger, owner: [u8; 32], balance: u64) -> CellId {
     let token_id = [0u8; 32];
-    let mut cell = Cell::with_balance(owner, token_id, balance);
+    let mut cell = Cell::with_balance(owner, token_id, balance as i64);
     cell.permissions = permissive_permissions();
     let id = cell.id();
     ledger.insert_cell(cell).unwrap();
@@ -68,7 +68,7 @@ fn insert_permissive_cell_domain(
     token_id: [u8; 32],
     balance: u64,
 ) -> CellId {
-    let mut cell = Cell::with_balance(owner, token_id, balance);
+    let mut cell = Cell::with_balance(owner, token_id, balance as i64);
     cell.permissions = permissive_permissions();
     let id = cell.id();
     ledger.insert_cell(cell).unwrap();

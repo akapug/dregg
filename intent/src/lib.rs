@@ -89,7 +89,7 @@ pub mod validation;
 ///
 /// The unconditional [`verified_settle::VerifiedLedger`] / [`verified_settle::settle_ring`]
 /// surface (the verified per-asset transition + atomic fold) is always present; the
-/// `verified-settle` feature additionally arms the REAL FFI ([`verified_settle::ffi`]) that
+/// default native build (Lean unconditional) additionally arms the REAL FFI ([`verified_settle::ffi`]) that
 /// routes each leg through the linked Lean archive.
 pub mod verified_settle;
 

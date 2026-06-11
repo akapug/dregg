@@ -60,7 +60,7 @@ fn coord_signing_key() -> [u8; 32] {
 
 /// Create a test cell with a given public key byte and balance.
 /// Permissions are set to AuthRequired::None for all actions (permissive, for testing).
-fn make_cell(key_byte: u8, balance: u64) -> Cell {
+fn make_cell(key_byte: u8, balance: i64) -> Cell {
     let mut pk = [0u8; 32];
     pk[0] = key_byte;
     let token_id = [0u8; 32]; // default token domain

@@ -153,30 +153,9 @@ fn replay_entry_with_receipt_pi(receipt: TurnReceipt) -> dregg_verifier::ReplayE
     }
 }
 
-fn effect_vm_air_rejects_tampered_trace(
-    trace: &[Vec<dregg_circuit::field::BabyBear>],
-    public_inputs: &[dregg_circuit::field::BabyBear],
-    row: usize,
-    label: &str,
-) {
-    use dregg_circuit::field::BabyBear;
-    use dregg_circuit::stark::StarkAir;
-
-    let air = dregg_circuit::EffectVmAir::new(trace.len());
-    let next = (row + 1) % trace.len();
-    let rejects_for_some_challenge = [7u32, 13, 101, 2017, 31337].into_iter().any(|alpha| {
-        air.eval_constraints(
-            &trace[row],
-            &trace[next],
-            public_inputs,
-            BabyBear::new(alpha),
-        ) != BabyBear::ZERO
-    });
-    assert!(
-        rejects_for_some_challenge,
-        "{label}: AIR accepted the tampered trace for all sampled alphas"
-    );
-}
+// RETIRED (dregg3): effect_vm_air_rejects_tampered_trace was the anti-tamper
+// AIR helper used solely by t10_captp_variants_use_real_merkle_membership, which
+// tested the now-dissolved CapTP sturdyref effect family. Removed with t10.
 
 // ===========================================================================
 // T1 — Reorder effects within a turn
@@ -628,83 +607,13 @@ fn t10_executor_rejects_transfer_without_required_capability() {
     );
 }
 
-#[test]
-fn t10_captp_variants_use_real_merkle_membership() {
-    use dregg_circuit::effect_vm as vm;
-    use dregg_circuit::field::BabyBear;
-    use dregg_circuit::poseidon2::hash_2_to_1;
-
-    let mut export_state = dregg_circuit::CellState::new(1_000, 0);
-    export_state.fields[7] = BabyBear::new(5);
-    export_state.refresh_commitment();
-    let export_effect = vm::Effect::ExportSturdyRef {
-        cell_id: BabyBear::new(0xCE11),
-        permissions: BabyBear::new(0x07),
-        random_seed: BabyBear::new(0x5EED),
-        export_counter: 5,
-    };
-    let (mut export_trace, export_pi) =
-        vm::generate_effect_vm_trace(&export_state, &[export_effect]);
-    export_trace[0][vm::AUX_BASE] = export_trace[0][vm::AUX_BASE] + BabyBear::ONE;
-    effect_vm_air_rejects_tampered_trace(&export_trace, &export_pi, 0, "ExportSturdyRef swiss");
-
-    let mut enliven_state = dregg_circuit::CellState::new(1_000, 0);
-    enliven_state.fields[6] = BabyBear::new(2);
-    enliven_state.fields[4] = BabyBear::new(0x4444);
-    enliven_state.refresh_commitment();
-    let enliven_effect = vm::Effect::EnlivenRef {
-        swiss_number: BabyBear::new(0x5155),
-        presenter_id: BabyBear::new(0x9E5),
-        expected_cell_id: BabyBear::new(0xCE11),
-        expected_permissions: BabyBear::new(0x07),
-    };
-    let (mut enliven_trace, enliven_pi) =
-        vm::generate_effect_vm_trace(&enliven_state, &[enliven_effect]);
-    enliven_trace[0][vm::AUX_BASE + 6] = enliven_trace[0][vm::AUX_BASE + 6] + BabyBear::ONE;
-    effect_vm_air_rejects_tampered_trace(
-        &enliven_trace,
-        &enliven_pi,
-        0,
-        "EnlivenRef membership sibling",
-    );
-
-    let mut drop_state = dregg_circuit::CellState::new(1_000, 0);
-    drop_state.fields[5] = BabyBear::new(3);
-    drop_state.fields[3] = BabyBear::new(0x3333);
-    drop_state.refresh_commitment();
-    let drop_effect = vm::Effect::DropRef {
-        cell_id: BabyBear::new(0xCE11),
-        holder_federation: BabyBear::new(0xFED1),
-        current_refcount: 3,
-    };
-    let (mut drop_trace, drop_pi) = vm::generate_effect_vm_trace(&drop_state, &[drop_effect]);
-    drop_trace[0][vm::AUX_BASE + 6] = drop_trace[0][vm::AUX_BASE + 6] + BabyBear::ONE;
-    effect_vm_air_rejects_tampered_trace(&drop_trace, &drop_pi, 0, "DropRef membership sibling");
-
-    let handoff_state = dregg_circuit::CellState::new(1_000, 0);
-    let cert_hash = BabyBear::new(0xCE87);
-    let recipient_pk = BabyBear::new(0x8EC1);
-    let introducer_pk = BabyBear::new(0x1117);
-    let leaf = hash_2_to_1(cert_hash, hash_2_to_1(recipient_pk, introducer_pk));
-    let approved_root = hash_2_to_1(leaf, BabyBear::ZERO);
-    let handoff_effect = vm::Effect::ValidateHandoff {
-        certificate_hash: cert_hash,
-        recipient_pk,
-        introducer_pk,
-        approved_set_root: approved_root,
-    };
-    let mut context = vm::EffectVmContext::default();
-    context.approved_handoffs_root[0] = approved_root;
-    let (mut handoff_trace, handoff_pi) =
-        vm::generate_effect_vm_trace_ext(&handoff_state, &[handoff_effect], context);
-    handoff_trace[0][vm::AUX_BASE] = handoff_trace[0][vm::AUX_BASE] + BabyBear::ONE;
-    effect_vm_air_rejects_tampered_trace(
-        &handoff_trace,
-        &handoff_pi,
-        0,
-        "ValidateHandoff membership leaf",
-    );
-}
+// RETIRED (dregg3): t10_captp_variants_use_real_merkle_membership tested the
+// anti-tamper Merkle-membership soundness of the CapTP sturdyref effect family
+// — ExportSturdyRef / EnlivenRef / DropRef / ValidateHandoff. The dregg3
+// reduction dissolved all four variants from the circuit Effect enum (the
+// CapTP-handoff machinery is no longer a kernel-level effect), so the test no
+// longer compiles and no longer corresponds to any live behaviour. Deleted
+// rather than rewritten: there is no surviving effect to anti-tamper here.
 
 // ===========================================================================
 // T11 — Submit a stale / cached proof for a new turn

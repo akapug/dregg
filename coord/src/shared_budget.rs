@@ -570,7 +570,7 @@ impl SharedResourceBudget {
             .collect();
 
         // STRONG-FORM swap: get the per-debit accept/reject verdicts + remaining balance from the
-        // VERIFIED Lean tau-resolution gate when linked (`--features lean-gate`,
+        // VERIFIED Lean tau-resolution gate when linked (every native build;
         // `dregg_coord_shared_budget` = `SharedBudgetDynamics.resolveOrdered`), which carries
         // `resolveOrdered_accepted_le_balance` (Σ accepted ≤ balance). The native first-wins fold
         // [`resolve_ordered_native`] is the DIFFERENTIAL sibling and the fallback.
@@ -819,8 +819,8 @@ fn resolve_ordered_native(
 /// export) so the caller falls back to [`resolve_ordered_native`]. The wire is
 /// `"B=<balance>;D=<amt,amt,...>"`; the gate replies `"R=<v,v,...>;b=<remaining>;a=<accepted>"`
 /// (v: 1=accepted 0=rejected). Carries `resolveOrdered_accepted_le_balance` (Σ accepted ≤ balance) by
-/// construction. Built `--features lean-gate`; a stub returning `None` otherwise.
-#[cfg(feature = "lean-gate")]
+/// construction. Compiled on every native build (the inverted default); a stub returning `None` under the `no-lean-link` platform gate.
+#[cfg(not(feature = "no-lean-link"))]
 fn verified_resolve_ordering(
     balance: ResourceAmount,
     amounts: &[ResourceAmount],
@@ -838,9 +838,9 @@ fn verified_resolve_ordering(
     parse_budget_reply(&out, amounts.len())
 }
 
-/// Stub when the `lean-gate` feature is off: the verified gate is unavailable, so
+/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so
 /// [`resolve_ordered_native`] decides. Referenced unconditionally in `resolve_with_ordering`.
-#[cfg(not(feature = "lean-gate"))]
+#[cfg(feature = "no-lean-link")]
 fn verified_resolve_ordering(
     _balance: ResourceAmount,
     _amounts: &[ResourceAmount],
@@ -851,7 +851,7 @@ fn verified_resolve_ordering(
 /// Parse the `dregg_coord_shared_budget` reply `"R=<v,v,...>;b=<remaining>;a=<accepted>"` into
 /// `(per-debit accept verdicts, remaining balance)`. Returns `None` on the `"ERR"` sentinel or any
 /// malformed body / verdict-count mismatch (fail-closed — the caller then uses the native fold).
-#[cfg(feature = "lean-gate")]
+#[cfg(not(feature = "no-lean-link"))]
 fn parse_budget_reply(out: &str, expected: usize) -> Option<(Vec<bool>, ResourceAmount)> {
     // Sections: "R=<verdicts>", "b=<remaining>", "a=<accepted>".
     let mut parts = out.split(';');

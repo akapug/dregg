@@ -49,7 +49,7 @@ use crate::FederationId;
 /// fulfill the verified drain is the queue unchanged (indices in order); on a break it is empty. We
 /// reassemble the messages in the gate's verified index order. When the gate is unavailable (feature
 /// off / archive lacks the export / a malformed reply), the native FIFO `drained` is returned as-is.
-#[cfg(feature = "lean-gate")]
+#[cfg(not(feature = "no-lean-link"))]
 fn verified_drain_reorder(drained: Vec<PipelinedMessage>, fulfill: bool) -> Vec<PipelinedMessage> {
     if !dregg_lean_ffi::distributed_exports_available() {
         return drained;
@@ -94,9 +94,9 @@ fn verified_drain_reorder(drained: Vec<PipelinedMessage>, fulfill: bool) -> Vec<
     reordered
 }
 
-/// Stub when the `lean-gate` feature is off: the verified gate is unavailable, so the native FIFO
+/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so the native FIFO
 /// drain order is kept. Referenced unconditionally in `resolve_promise`.
-#[cfg(not(feature = "lean-gate"))]
+#[cfg(feature = "no-lean-link")]
 fn verified_drain_reorder(drained: Vec<PipelinedMessage>, _fulfill: bool) -> Vec<PipelinedMessage> {
     drained
 }
@@ -274,7 +274,7 @@ impl PipelineRegistry {
         // Drain queued messages (the native FIFO drain — the differential sibling).
         let drained = self.queued.remove(&promise_id).unwrap_or_default();
 
-        // STRONG-FORM swap: the VERIFIED Lean pipeline gate (`--features lean-gate`,
+        // STRONG-FORM swap: the VERIFIED Lean pipeline gate (every native build;
         // `Dregg2.Exec.DistributedExports::dregg_captp_pipeline_resolve` =
         // `CapTPPipeline.Registry` FIFO resolve, carrying `pipeline_fulfill_drains_fifo`) is
         // AUTHORITATIVE for the drain ORDER: on a fulfill it returns the queue indices in FIFO order

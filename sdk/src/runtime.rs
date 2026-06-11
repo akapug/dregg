@@ -30,10 +30,10 @@ use crate::turns::TurnBuilder;
 /// other value (or unset) keeps the verified producer ON.
 ///
 /// Mirrors `dregg_node::state::lean_producer_env_enabled` so the node and the SDK read the SAME
-/// switch. When the crate is built WITHOUT the `lean-producer` feature this always returns `false`
+/// switch. Under the `no-lean-link` platform gate (wasm32/zkvm) this always returns `false`
 /// (the producer path is not compiled in), so wasm/default consumers never link the Lean archive.
 pub fn lean_producer_env_enabled() -> bool {
-    #[cfg(feature = "lean-producer")]
+    #[cfg(not(feature = "no-lean-link"))]
     {
         !matches!(
             std::env::var("DREGG_LEAN_PRODUCER").ok().as_deref(),
@@ -46,7 +46,7 @@ pub fn lean_producer_env_enabled() -> bool {
                 | Some("NO")
         )
     }
-    #[cfg(not(feature = "lean-producer"))]
+    #[cfg(feature = "no-lean-link")]
     {
         false
     }
@@ -177,7 +177,7 @@ pub struct AgentRuntime {
     /// verified producer installs its state only for the swap-safe covered set; a root-gap or
     /// unmappable effect falls back to Rust for that turn. Default mirrors `DREGG_LEAN_PRODUCER`
     /// (ON unless `DREGG_LEAN_PRODUCER=0`); `false` is the legacy Rust-producer path. Only ever
-    /// `true` when the crate is built with the `lean-producer` feature; an unlinked archive
+    /// `true` on every native build (Lean unconditional; gated OUT only by `no-lean-link`); an unlinked archive
     /// self-falls-back per turn.
     lean_producer_enabled: bool,
 }
@@ -370,7 +370,7 @@ impl AgentRuntime {
     /// explicitly (e.g. an app that wires the producer path from its own config field rather than
     /// the env var).
     ///
-    /// Has NO effect unless the crate was built with the `lean-producer` feature — without it the
+    /// Has NO effect under the `no-lean-link` platform gate — there the
     /// producer path is not compiled in and execution always uses the legacy Rust producer.
     pub fn set_lean_producer(&mut self, enabled: bool) {
         self.lean_producer_enabled = enabled;
@@ -385,7 +385,7 @@ impl AgentRuntime {
     /// Run one fully-built turn against `ledger`, choosing the PRODUCER per [`Self::lean_producer_enabled`].
     ///
     /// THE SWAP authority inversion lives here: when producer mode is on (and the crate was built
-    /// with the `lean-producer` feature), the VERIFIED Lean executor produces the committed ledger
+    /// by default on native), the VERIFIED Lean executor produces the committed ledger
     /// via `dregg_turn::lean_apply::produce_via_lean`, and the Rust `TurnExecutor` is demoted to a
     /// parallel differential — its post-state root is compared against the Lean-produced root, and a
     /// divergence is logged loudly (`error!`) as a real soundness finding, never silently reconciled.
@@ -396,7 +396,7 @@ impl AgentRuntime {
     /// with no wire arm) / the archive is unlinked — this is exactly the legacy
     /// `self.executor.execute(turn, ledger)` path, byte-for-byte unchanged.
     fn run_turn(&self, turn: &Turn, ledger: &mut Ledger) -> TurnResult {
-        #[cfg(feature = "lean-producer")]
+        #[cfg(not(feature = "no-lean-link"))]
         {
             if self.lean_producer_enabled {
                 use dregg_turn::lean_apply::{self, ProducerOutcome};
@@ -463,7 +463,7 @@ impl AgentRuntime {
                 return rust_result;
             }
         }
-        // Legacy Rust-producer path (also the only path when `lean-producer` is not compiled in).
+        // Legacy Rust-producer path (also the only path under the `no-lean-link` platform gate).
         self.executor.execute(turn, ledger)
     }
 

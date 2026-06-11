@@ -53,7 +53,7 @@ fn make_cell(seed: u8, balance: u64) -> Cell {
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(37).wrapping_add(1);
     let token_id = [seed.wrapping_add(100); 32];
-    let mut cell = Cell::with_balance(pk, token_id, balance);
+    let mut cell = Cell::with_balance(pk, token_id, balance as i64);
     cell.permissions = open_permissions();
     cell
 }

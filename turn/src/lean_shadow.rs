@@ -25,12 +25,12 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 use dregg_cell::state::FieldElement;
 use dregg_cell::{Cell, CellId, Ledger};
 
 use crate::action::Effect;
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 use crate::action::{Authorization, DelegationProofData};
 use crate::forest::CallTree;
 use crate::turn::{Turn, TurnResult};
@@ -41,7 +41,7 @@ use crate::turn::{Turn, TurnResult};
 /// `turn_to_wire_turn`); the non-feature build still captures the snapshot so eligibility
 /// is decided identically, hence the conditional `allow(dead_code)`.
 #[derive(Clone, Debug)]
-#[cfg_attr(not(feature = "lean-shadow"), allow(dead_code))]
+#[cfg_attr(feature = "no-lean-link", allow(dead_code))]
 pub(crate) struct ShadowPreLedger {
     pub(crate) cells: HashMap<CellId, Cell>,
     pub(crate) id_map: HashMap<CellId, u64>,
@@ -57,7 +57,7 @@ pub(crate) struct ShadowPreLedger {
 /// (clock 0, no frozen cells, genesis head, large budget) — used by tests/round-trips. The
 /// security of bug-1 is that the EXECUTOR overrides every field from its own state.
 #[derive(Clone, Debug)]
-#[cfg_attr(not(feature = "lean-shadow"), allow(dead_code))]
+#[cfg_attr(feature = "no-lean-link", allow(dead_code))]
 pub struct ShadowHostCtx {
     /// The executor's current chain block height (`self.block_height`).
     pub block_height: u64,
@@ -140,7 +140,7 @@ pub fn maybe_shadow_turn(
         return None;
     }
 
-    #[cfg(feature = "lean-shadow")]
+    #[cfg(not(feature = "no-lean-link"))]
     {
         if !dregg_lean_ffi::lean_available() {
             tracing::debug!("lean shadow: Lean lib unavailable, skipping");
@@ -202,7 +202,7 @@ pub fn maybe_shadow_turn(
         }
     }
 
-    #[cfg(not(feature = "lean-shadow"))]
+    #[cfg(feature = "no-lean-link")]
     {
         SHADOW_PRE.with(|slot| slot.borrow_mut().take());
         SHADOW_HOST.with(|slot| slot.borrow_mut().take());
@@ -576,7 +576,7 @@ fn turn_effect_kinds(turn: &Turn) -> Vec<&'static str> {
 /// corpus divergence-finder. Must be called with the SAME `ledger` and `block_height` as the
 /// `execute` call that produced `result`; it internally re-snapshots the pre-state from the
 /// post-state would be wrong, so callers should snapshot BEFORE executing (see the harness).
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 pub fn shadow_report(
     turn: &Turn,
     pre_ledger: &Ledger,
@@ -639,7 +639,7 @@ pub fn shadow_report(
 }
 
 /// Non-FFI build: shadow report is always "ineligible to compare" (no Lean linked).
-#[cfg(not(feature = "lean-shadow"))]
+#[cfg(feature = "no-lean-link")]
 pub fn shadow_report(
     turn: &Turn,
     _pre_ledger: &Ledger,
@@ -895,7 +895,7 @@ fn effect_cells(eff: &Effect) -> Vec<CellId> {
 /// offset created ids by `FRESH_ID_BASE + seq` where `seq` is the created-thing's index in the
 /// pre-order walk. Both executors then see a never-before-used id, so the insert always succeeds
 /// (no spurious duplicate-id rejection on either side).
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 const FRESH_ID_BASE: u64 = 1_000_000;
 
 // ===================================================================
@@ -924,7 +924,7 @@ pub(crate) fn build_pre_ledger(turn: &Turn, ledger: &Ledger) -> ShadowPreLedger 
 /// Project ONE Rust effect to ONE wire action. The supported subset is the algebraic core
 /// the Lean per-asset executor models faithfully; unsupported effects return `None` (the
 /// turn is then skipped rather than mis-encoded). MUST agree with `effect_is_mappable`.
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn effect_to_wire(
     actor: u64,
     eff: &Effect,
@@ -1212,15 +1212,15 @@ fn effect_to_wire(
 }
 
 /// The pre-state nonce of a cell in the snapshot (0 if absent — a fresh cell's nonce).
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn pre_nonce_of(pre: &ShadowPreLedger, cell: &CellId) -> u64 {
     pre.cells.get(cell).map(|c| c.state.nonce()).unwrap_or(0)
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 use dregg_lean_ffi::marshal::WireAction;
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn run_shadow(turn: &Turn, pre: &ShadowPreLedger, host: &ShadowHostCtx) -> Result<bool, String> {
     use dregg_lean_ffi::marshal::marshal_turn_hosted;
 
@@ -1273,7 +1273,7 @@ fn run_shadow(turn: &Turn, pre: &ShadowPreLedger, host: &ShadowHostCtx) -> Resul
 /// away — the verified executor's produced `WireState`, which `lean_apply` reconstitutes into the
 /// authoritative `Ledger`. The pre-snapshot id_map is returned alongside so the caller can invert
 /// the wire Nats back to real `CellId`s.
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 pub(crate) fn run_shadow_state(
     turn: &Turn,
     pre: &ShadowPreLedger,
@@ -1309,7 +1309,7 @@ pub(crate) fn run_shadow_state(
     dregg_lean_ffi::decode_shadow_state(&out)
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn ledger_to_wire_state(
     pre: &ShadowPreLedger,
 ) -> Result<dregg_lean_ffi::marshal::WireState, String> {
@@ -1405,7 +1405,7 @@ fn ledger_to_wire_state(
 /// The kernel-model lifecycle discriminant for a Rust `CellLifecycle` (mirrors
 /// `CellLifecycle::discriminant`: 0=Live, 1=Sealed, 3=Destroyed; the kernel models only these three
 /// Wave-3 states, so Migrated(2)/Archived(4) fall back as their own discriminant).
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn lifecycle_discriminant(lc: &dregg_cell::lifecycle::CellLifecycle) -> u64 {
     use dregg_cell::lifecycle::CellLifecycle;
     match lc {
@@ -1420,18 +1420,18 @@ fn lifecycle_discriminant(lc: &dregg_cell::lifecycle::CellLifecycle) -> u64 {
 /// The low 64 bits (big-endian) of a 32-byte digest — the kernel models hashes as `Nat` and the wire
 /// carries the low `u64` for the death-cert table (the high 192 bits are the residual hash-fidelity
 /// gap the kernel's `Nat` payload model does not yet carry).
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn low_u64_be(h: &[u8; 32]) -> u64 {
     u64::from_be_bytes(h[24..32].try_into().unwrap())
 }
 
 /// Look up a `CellId`'s wire Nat in the snapshot's id map (for c-list edge projection).
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn id_map_lookup(pre: &ShadowPreLedger, c: &CellId) -> Option<u64> {
     pre.id_map.get(c).copied()
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn turn_to_wire_turn(
     turn: &Turn,
     pre: &ShadowPreLedger,
@@ -1497,7 +1497,7 @@ fn turn_to_wire_turn(
 }
 
 /// A fully-resolved wire action with its credential (FFI build only).
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 struct FullMapped {
     action: WireAction,
     wire_auth: dregg_lean_ffi::marshal::WireAuth,
@@ -1505,7 +1505,7 @@ struct FullMapped {
 
 /// Flatten the forest into wire actions paired with their originating credential. Each
 /// Rust action's auth decorates every effect-node it produced.
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn flatten_forest_actions_full(turn: &Turn, pre: &ShadowPreLedger) -> Option<Vec<FullMapped>> {
     let mut out = Vec::new();
     // A single fresh-id counter threaded across the WHOLE pre-order walk, so each created
@@ -1520,7 +1520,7 @@ fn flatten_forest_actions_full(turn: &Turn, pre: &ShadowPreLedger) -> Option<Vec
     Some(out)
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn flatten_tree_full(
     tree: &CallTree,
     pre: &ShadowPreLedger,
@@ -1547,7 +1547,7 @@ fn flatten_tree_full(
 // AUTH — carry the credential WHO-leg in FULL (no zeroed digests).
 // ===================================================================
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
     use dregg_lean_ffi::marshal::{Digest, WireAuth};
     match auth {
@@ -1658,7 +1658,7 @@ fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
     }
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn predicate_commitment(p: &dregg_cell::predicate::WitnessedPredicate) -> [u8; 32] {
     // Hash the predicate's serialized form as a stable WHO-commitment. The exact preimage
     // need not match the kernel byte-for-byte (the kernel only reads the digest as an
@@ -1667,7 +1667,7 @@ fn predicate_commitment(p: &dregg_cell::predicate::WitnessedPredicate) -> [u8; 3
     blake3_of(&bytes)
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn predicate_proof_nat(p: &dregg_cell::predicate::WitnessedPredicate) -> u64 {
     let bytes = postcard::to_allocvec(p).unwrap_or_default();
     bytes_to_nat(&bytes)
@@ -1675,24 +1675,24 @@ fn predicate_proof_nat(p: &dregg_cell::predicate::WitnessedPredicate) -> u64 {
 
 // ---- digest / nat helpers ----
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn digest_of(hash: [u8; 32]) -> dregg_lean_ffi::marshal::Digest {
     dregg_lean_ffi::marshal::Digest::from_bytes(hash)
 }
 
 /// A signature is two 32-byte halves; the "pubkey/message" digest the wire carries for the
 /// `Signature` arm is the R half (the first 32 bytes), preserved in full.
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn digest_from_halves(r: &[u8; 32], _s: &[u8; 32]) -> dregg_lean_ffi::marshal::Digest {
     dregg_lean_ffi::marshal::Digest::from_bytes(*r)
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn blake3_of(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn field_index_to_name(index: usize) -> String {
     match index {
         2 => "name".into(),
@@ -1704,33 +1704,33 @@ fn field_index_to_name(index: usize) -> String {
     }
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn field_to_i128(field: &FieldElement) -> i128 {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&field[24..32]);
     u64::from_be_bytes(bytes) as i128
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn field_is_zero(field: &FieldElement) -> bool {
     field.iter().all(|&b| b == 0)
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn bytes32_to_nat(bytes: &[u8; 32]) -> u64 {
     let mut buf = [0u8; 8];
     buf.copy_from_slice(&bytes[24..32]);
     u64::from_be_bytes(buf)
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn sig64_to_nat(sig: &[u8; 64]) -> u64 {
     let mut buf = [0u8; 8];
     buf.copy_from_slice(&sig[56..64]);
     u64::from_be_bytes(buf)
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn bytes_to_nat(bytes: &[u8]) -> u64 {
     let mut buf = [0u8; 8];
     let n = bytes.len().min(8);
@@ -1738,12 +1738,12 @@ fn bytes_to_nat(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(buf)
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn str_to_nat(s: &str) -> u64 {
     bytes_to_nat(s.as_bytes())
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn permissions_to_i128(_perms: &dregg_cell::Permissions) -> i128 {
     // Permissions are a structured value; the wire `setperms` arm carries a scalar. We
     // encode 0 as a neutral marker (the executor models perms abstractly). This is the one
@@ -1752,7 +1752,7 @@ fn permissions_to_i128(_perms: &dregg_cell::Permissions) -> i128 {
     0
 }
 
-#[cfg(feature = "lean-shadow")]
+#[cfg(not(feature = "no-lean-link"))]
 fn event_data_to_i128(_event: &crate::action::Event) -> i128 {
     0
 }

@@ -42,7 +42,7 @@ use dregg_turn::turn::TurnResult;
 // Helpers
 // =========================================================================
 
-fn make_cell(tag: u8, balance: u64) -> Cell {
+fn make_cell(tag: u8, balance: i64) -> Cell {
     let mut pk = [0u8; 32];
     pk[0] = tag;
     let token_id = [0u8; 32];
@@ -554,9 +554,11 @@ fn main() {
     }
 
     // Verify final balances
-    let client_final = ledger.get(&client_id).unwrap().state.balance();
-    let provider_final = ledger.get(&winner_id).unwrap().state.balance();
-    let escrow_final = ledger.get(&escrow_id).unwrap().state.balance();
+    // signed-wells (ac01f9b7b): balance() is i64; these are ordinary (non-negative)
+    // cells, so view them in u64 for the value-accounting below.
+    let client_final = u64::try_from(ledger.get(&client_id).unwrap().state.balance()).unwrap();
+    let provider_final = u64::try_from(ledger.get(&winner_id).unwrap().state.balance()).unwrap();
+    let escrow_final = u64::try_from(ledger.get(&escrow_id).unwrap().state.balance()).unwrap();
 
     println!();
     println!("  Post-settlement state:");
@@ -611,12 +613,13 @@ fn main() {
     );
 
     // Conservation of value
-    let total_value: u64 = ledger.get(&client_id).unwrap().state.balance()
-        + ledger.get(&winner_id).unwrap().state.balance()
-        + ledger.get(&escrow_id).unwrap().state.balance();
+    // signed-wells (ac01f9b7b): balance() is i64; ordinary cells → u64.
+    let total_value: u64 = u64::try_from(ledger.get(&client_id).unwrap().state.balance()).unwrap()
+        + u64::try_from(ledger.get(&winner_id).unwrap().state.balance()).unwrap()
+        + u64::try_from(ledger.get(&escrow_id).unwrap().state.balance()).unwrap();
     // The other providers still have their original balances
-    let others: u64 = ledger.get(&provider_a_id).unwrap().state.balance()
-        + ledger.get(&provider_c_id).unwrap().state.balance();
+    let others: u64 = u64::try_from(ledger.get(&provider_a_id).unwrap().state.balance()).unwrap()
+        + u64::try_from(ledger.get(&provider_c_id).unwrap().state.balance()).unwrap();
     println!(
         "    Conservation: client + winner + escrow = {} (expected {})",
         total_value,

@@ -27,7 +27,7 @@ use dregg_turn::{
 // ============================================================================
 
 /// Create a cell with a specific seed (deterministic public key).
-fn make_cell(seed: u8, balance: u64) -> Cell {
+fn make_cell(seed: u8, balance: i64) -> Cell {
     let mut pk = [0u8; 32];
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(7);
@@ -36,7 +36,7 @@ fn make_cell(seed: u8, balance: u64) -> Cell {
 }
 
 /// Create a ledger with N cells, each having the given starting balance.
-fn setup_ledger(n: u8, balance_each: u64) -> (Ledger, Vec<CellId>) {
+fn setup_ledger(n: u8, balance_each: i64) -> (Ledger, Vec<CellId>) { // signed-wells (ac01f9b7b): i64 balances
     let mut ledger = Ledger::new();
     let mut ids = Vec::new();
     for i in 0..n {
@@ -291,7 +291,10 @@ proptest! {
     fn proptest_balance_conservation_holds(ops in arb_balance_ops(4, 30)) {
         let initial_balance = 10_000u64;
         let n_cells = 4u8;
-        let (mut ledger, ids) = setup_ledger(n_cells, initial_balance);
+        // signed-wells (ac01f9b7b): cell balances are i64; these are ordinary
+        // (non-negative) cells, so the conservation arithmetic stays in u64
+        // and the i64 balances cross back via checked conversions below.
+        let (mut ledger, ids) = setup_ledger(n_cells, initial_balance as i64);
         let initial_total = initial_balance * (n_cells as u64);
 
         // Give each cell capabilities to all others (for transfers) and set
@@ -379,7 +382,10 @@ proptest! {
         }
 
         // INVARIANT: sum of all balances == initial_total - total_fees
-        let current_total: u64 = ids.iter().map(|id| ledger.get(id).unwrap().state.balance()).sum();
+        let current_total: u64 = ids
+            .iter()
+            .map(|id| u64::try_from(ledger.get(id).unwrap().state.balance()).unwrap())
+            .sum();
         prop_assert_eq!(current_total, initial_total - total_fees,
             "Balance conservation violated: initial={}, fees={}, current={}",
             initial_total, total_fees, current_total);
@@ -387,7 +393,8 @@ proptest! {
         // INVARIANT: no cell has "negative" balance (u64 can't be negative, but
         // we verify no underflow panic occurred by reaching this point).
         for id in &ids {
-            let balance = ledger.get(id).unwrap().state.balance();
+            // signed-wells (ac01f9b7b): balance() is i64; ordinary cell → u64.
+            let balance = u64::try_from(ledger.get(id).unwrap().state.balance()).unwrap();
             // This is trivially true for u64, but documents the invariant.
             prop_assert!(balance <= initial_total,
                 "Cell balance {} exceeds initial total {}", balance, initial_total);

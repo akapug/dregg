@@ -19,8 +19,9 @@ crate-type = ["cdylib", "rlib"]
 # `network`/`captp`/`federation-client` features (tokio, quinn, dregg-wire,
 # dregg-captp, reqwest) — the Python binding does its own blocking HTTP via
 # ureq. The always-on modules we ride: cipherclerk, profiles, turns/raw,
-# receipt, program, explain. The `lean-producer` feature (the Lean FFI
-# archive link) is default-OFF in dregg-sdk and stays off here.
+# receipt, program, explain. The Lean FFI archive link is UNCONDITIONAL on
+# native (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean), so this extension
+# module links libdregg_lean.a like every other native consumer.
 dregg-sdk = { path = "../sdk", default-features = false }
 dregg-cell = { path = "../cell" }
 dregg-turn = { path = "../turn" }

@@ -265,9 +265,9 @@ pub enum Decision {
 /// when the verified gate is unavailable (feature off / archive lacks the export) so the caller falls
 /// back to the native Rust `evaluate_votes_native`. The wire is
 /// `"y=<yes>;n=<no>;N=<participants>;t=<threshold>"`; the gate returns `Decision2pc` which we map onto
-/// this crate's `Decision`. Built `--features lean-gate`; a stub returning `None` otherwise so the
+/// this crate's `Decision`. Compiled on every native build (the inverted default); a stub returning `None` under the `no-lean-link` platform gate so the
 /// crate has no hard dependency on the Lean archive.
-#[cfg(feature = "lean-gate")]
+#[cfg(not(feature = "no-lean-link"))]
 fn verified_decision(yes: usize, no: usize, n: usize, threshold: usize) -> Option<Decision> {
     if !dregg_lean_ffi::distributed_exports_available() {
         return None;
@@ -282,10 +282,10 @@ fn verified_decision(yes: usize, no: usize, n: usize, threshold: usize) -> Optio
     }
 }
 
-/// Stub when the `lean-gate` feature is off: the verified gate is unavailable, so the native Rust
+/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so the native Rust
 /// `evaluate_votes_native` decides. The helper is referenced unconditionally in `evaluate_votes`,
 /// so it must exist in both feature configurations.
-#[cfg(not(feature = "lean-gate"))]
+#[cfg(feature = "no-lean-link")]
 fn verified_decision(_yes: usize, _no: usize, _n: usize, _threshold: usize) -> Option<Decision> {
     None
 }
@@ -789,7 +789,7 @@ impl Coordinator {
 
     /// Evaluate the current votes to determine if a decision can be made.
     ///
-    /// STRONG-FORM swap: when the verified Lean 2PC gate is linked (`--features lean-gate`,
+    /// STRONG-FORM swap: when the verified Lean 2PC gate is linked (every native build;
     /// `Dregg2.Exec.DistributedExports::dregg_coord_2pc_decide` = `TwoPhaseCommit.evaluate`), the
     /// AUTHORITATIVE verdict comes from the verified Lean — so the coordinator inherits
     /// `evaluate_not_commit_and_abort` (no conflicting Commit+Abort) and `commit_needs_threshold` by

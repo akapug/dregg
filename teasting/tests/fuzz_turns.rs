@@ -195,7 +195,7 @@ fn test_fuzz_turns_conservation_and_nonce() {
                 let from_id = cell_ids[*from];
                 let to_id = cell_ids[*to];
                 let from_balance = ledger.get(&from_id).unwrap().state.balance();
-                if from_balance < *amount {
+                if from_balance < *amount as i64 {
                     continue; // skip invalid transfers
                 }
                 let delta = LedgerDelta {
@@ -247,7 +247,7 @@ fn test_fuzz_turns_conservation_and_nonce() {
                 let pk = rng.gen_bytes();
                 let token_id = rng.gen_bytes();
                 let mut cell = Cell::new_hosted(pk, token_id);
-                cell.state.set_balance(*balance);
+                cell.state.set_balance(*balance as i64);
                 expected_total += *balance;
                 let id = ledger.insert_cell(cell).unwrap();
                 cell_ids.push(id);
@@ -311,7 +311,7 @@ fn test_fuzz_transfers_only() {
         };
         let token_id = [0x11; 32];
         let mut cell = Cell::new_hosted(pk, token_id);
-        cell.state.set_balance(initial_per_cell);
+        cell.state.set_balance(initial_per_cell as i64);
         let id = ledger.insert_cell(cell).unwrap();
         cell_ids.push(id);
     }
@@ -332,7 +332,7 @@ fn test_fuzz_transfers_only() {
             continue;
         }
 
-        let amount = rng.gen_range(1, from_balance.min(1000) + 1);
+        let amount = rng.gen_range(1, from_balance.min(1000) as u64 + 1);
         let delta = LedgerDelta {
             created: Vec::new(),
             updated: Vec::new(),
@@ -458,7 +458,7 @@ fn test_fuzz_mixed_effects_500_turns() {
                 let from_id = cell_ids[*from];
                 let to_id = cell_ids[*to];
                 let from_balance = ledger.get(&from_id).unwrap().state.balance();
-                if from_balance < *amount {
+                if from_balance < *amount as i64 {
                     continue;
                 }
                 ledger.apply_delta(&LedgerDelta {
@@ -507,7 +507,7 @@ fn test_fuzz_mixed_effects_500_turns() {
                 let pk = rng.gen_bytes();
                 let token_id = rng.gen_bytes();
                 let mut cell = Cell::new_hosted(pk, token_id);
-                cell.state.set_balance(*balance);
+                cell.state.set_balance(*balance as i64);
                 expected_total += *balance;
                 let id = ledger.insert_cell(cell).unwrap();
                 cell_ids.push(id);

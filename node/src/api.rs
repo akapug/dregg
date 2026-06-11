@@ -4382,8 +4382,7 @@ async fn post_fulfill_intent(
 
     // Execute the fulfillment payment through the VERIFIED settle path: the value-moving leg
     // folds through the verified per-asset transition and is cross-checked against the REAL
-    // Lean executor export `dregg_record_kernel_step` (the node builds dregg-intent with
-    // `verified-settle` on). Fail-closed — a payment the verified executor refuses is REFUSED;
+    // Lean executor export `dregg_record_kernel_step` (Lean unconditional on native). Fail-closed — a payment the verified executor refuses is REFUSED;
     // there is no fallback to the legacy `dregg_turn::TurnExecutor`.
     let result = dregg_intent::fulfillment::execute_fulfillment_flow_verified(
         &intent,

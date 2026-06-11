@@ -61,9 +61,10 @@ proptest! {
         }
 
         // INVARIANT: total ledger balance is conserved.
+        // signed-wells (ac01f9b7b): balance() is i64; ordinary cells → u64.
         let current_total: u64 = ids
             .iter()
-            .map(|id| ledger.get(id).unwrap().state.balance())
+            .map(|id| u64::try_from(ledger.get(id).unwrap().state.balance()).unwrap())
             .sum();
         prop_assert_eq!(
             current_total,

@@ -801,3 +801,133 @@ fn capability_uniqueness_executor_fails_closed_on_empty_root() {
          empty/zero cap-set root, got: {res:?}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 20. SenderIs — the turn sender must equal a bound identity (pk).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `SenderIs { pk }`: the authorizing sender (`ctx.sender`, the signature pk)
+/// must equal the bound `pk`.
+/// Accept: bind to the agent's own pk (it signs the action). Reject: bind to a
+/// different pk so the same agent's signature no longer matches.
+#[test]
+fn sender_is_accept_and_reject() {
+    let (ex, cc) = fresh(21);
+    let agent_pk = cc.public_key().0;
+
+    // Accept: the predicate binds the agent's own pk; the agent signs, so
+    // ctx.sender == agent_pk.
+    ex.install_program(
+        ex.cell_id(),
+        CellProgram::Predicate(vec![StateConstraint::SenderIs { pk: agent_pk }]),
+    );
+    let ok = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(1)));
+    assert!(ok.is_ok(), "SenderIs accept (bound to own pk) failed: {ok:?}");
+
+    // Reject: bind to a different identity; the agent's sender no longer matches.
+    let mut other_pk = agent_pk;
+    other_pk[0] ^= 0xFF;
+    ex.install_program(
+        ex.cell_id(),
+        CellProgram::Predicate(vec![StateConstraint::SenderIs { pk: other_pk }]),
+    );
+    let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(2)));
+    assert!(
+        err.is_err(),
+        "SenderIs did not reject a sender that is not the bound identity"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 21. SenderInSlot — the turn sender must equal the identity held in slot[i].
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `SenderInSlot { index }`: `ctx.sender` must equal the (post-state) value in
+/// slot[index].
+/// Accept: write the agent's own pk into the slot in the same turn. Reject:
+/// write different bytes so the post-state slot no longer holds the sender.
+#[test]
+fn sender_in_slot_accept_and_reject() {
+    let (ex, cc) = fresh(22);
+    let agent_pk = cc.public_key().0;
+
+    ex.install_program(
+        ex.cell_id(),
+        CellProgram::Predicate(vec![StateConstraint::SenderInSlot { index: 0 }]),
+    );
+
+    // Accept: the SetField writes the sender's pk into slot[0], so the
+    // post-state slot equals ctx.sender.
+    let ok = ex.submit_action(&cc, set_field(&ex, &cc, 0, agent_pk));
+    assert!(
+        ok.is_ok(),
+        "SenderInSlot accept (slot[0] := sender pk) failed: {ok:?}"
+    );
+
+    // Reject: write a different value into slot[0]; it no longer holds the sender.
+    let mut not_pk = agent_pk;
+    not_pk[0] ^= 0xFF;
+    let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, not_pk));
+    assert!(
+        err.is_err(),
+        "SenderInSlot did not reject when slot[0] does not hold the sender"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 22. BalanceGte — the cell's (post-state) balance must be >= a floor.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `BalanceGte { min }`: the cell balance must be at least `min`. The embedded
+/// agent cell is seeded with 1_000_000 computrons and a SetField does not move
+/// balance, so the unchanged balance is what is checked.
+/// Accept: floor below the balance. Reject: floor above it.
+#[test]
+fn balance_gte_accept_and_reject() {
+    let (ex, cc) = fresh(23);
+
+    ex.install_program(
+        ex.cell_id(),
+        CellProgram::Predicate(vec![StateConstraint::BalanceGte { min: 500_000 }]),
+    );
+    let ok = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(1)));
+    assert!(ok.is_ok(), "BalanceGte accept (1_000_000 >= 500_000) failed: {ok:?}");
+
+    ex.install_program(
+        ex.cell_id(),
+        CellProgram::Predicate(vec![StateConstraint::BalanceGte { min: 2_000_000 }]),
+    );
+    let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(2)));
+    assert!(
+        err.is_err(),
+        "BalanceGte did not reject a balance below the required minimum"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 23. BalanceLte — the cell's (post-state) balance must be <= a ceiling.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `BalanceLte { max }`: the cell balance must be at most `max`.
+/// Accept: ceiling above the balance. Reject: ceiling below it.
+#[test]
+fn balance_lte_accept_and_reject() {
+    let (ex, cc) = fresh(24);
+
+    ex.install_program(
+        ex.cell_id(),
+        CellProgram::Predicate(vec![StateConstraint::BalanceLte { max: 2_000_000 }]),
+    );
+    let ok = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(1)));
+    assert!(ok.is_ok(), "BalanceLte accept (1_000_000 <= 2_000_000) failed: {ok:?}");
+
+    ex.install_program(
+        ex.cell_id(),
+        CellProgram::Predicate(vec![StateConstraint::BalanceLte { max: 500_000 }]),
+    );
+    let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(2)));
+    assert!(
+        err.is_err(),
+        "BalanceLte did not reject a balance above the allowed maximum"
+    );
+}

@@ -37,12 +37,16 @@ tower = "0.5"
 [features]
 default = []
 dev = ["dregg-sdk/dev"]
-# THE SWAP — opt-in producer mode passthrough. Enables `dregg-sdk/lean-producer`, which makes the
-# verified Lean executor the authoritative state producer inside the `EmbeddedExecutor`'s
-# `AgentRuntime` (the common bypass substrate that discord-bot + starbridge-apps inherit). Gated at
-# runtime by `DREGG_LEAN_PRODUCER=1` (default OFF) / `EmbeddedExecutor::set_lean_producer`. With the
-# feature OFF the framework behaves byte-for-byte as before.
-lean-producer = ["dregg-sdk/lean-producer"]
+# PLATFORM gate passthrough (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): the verified
+# Lean producer is UNCONDITIONAL on native (the sdk compiles it in by default; runtime-gated
+# by `DREGG_LEAN_PRODUCER` / `EmbeddedExecutor::set_lean_producer`). Only wasm32/zkvm builds
+# set `no-lean-link`, which compiles the legacy Rust-producer path instead.
+no-lean-link = [
+    "dregg-sdk/no-lean-link",
+    "dregg-turn/no-lean-link",
+    "dregg-intent/no-lean-link",
+    "dregg-captp/no-lean-link",
+]
 
 [lints]
 workspace = true

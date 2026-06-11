@@ -135,7 +135,7 @@ fn token_id() -> [u8; 32] {
 
 fn permissive_cell(seed: &str, balance: u64) -> Cell {
     let key = test_key(seed);
-    let mut cell = Cell::with_balance(key, token_id(), balance);
+    let mut cell = Cell::with_balance(key, token_id(), balance as i64);
     cell.permissions = Permissions {
         send: AuthRequired::None,
         receive: AuthRequired::None,
@@ -543,14 +543,15 @@ fn silver_vision_multi_fed_graph_e2e() {
         bounty_value,
         "t3 effect (cross-fed citation as field) must be visible on C"
     );
+    // signed-wells (ac01f9b7b): balance() and pre_* are i64; keep the arithmetic i64.
     assert_eq!(
         f2_ledger.get(&f2_ids[1]).unwrap().state.balance(),
-        pre_d + bounty_amount - 300,
+        pre_d + bounty_amount as i64 - 300,
         "D's balance must increase by bounty amount (after paying its turn fee)"
     );
     assert_eq!(
         f2_ledger.get(&f2_ids[0]).unwrap().state.balance(),
-        pre_c - bounty_amount - 300,
+        pre_c - bounty_amount as i64 - 300,
         "C's balance must decrease by bounty amount (after paying its t3 turn fee)"
     );
 
@@ -610,7 +611,7 @@ fn silver_vision_multi_fed_graph_e2e() {
             field_idx: 0,
             value: BabyBear::new(1),
         },
-        pre_a,
+        pre_a as u64,
     )];
     {
         let mut r = r2.clone();
@@ -621,7 +622,7 @@ fn silver_vision_multi_fed_graph_e2e() {
                 field_idx: 0,
                 value: BabyBear::new(2),
             },
-            pre_b,
+            pre_b as u64,
         ));
     }
     let f1_verdict = replay_chain(&f1_chain);
@@ -648,7 +649,7 @@ fn silver_vision_multi_fed_graph_e2e() {
                 field_idx: 0,
                 value: BabyBear::new(3),
             },
-            pre_c,
+            pre_c as u64,
         ),
         build_replay_entry(
             r4.clone(),
@@ -656,7 +657,7 @@ fn silver_vision_multi_fed_graph_e2e() {
                 amount: bounty_amount,
                 direction: 0,
             },
-            pre_d,
+            pre_d as u64,
         ),
     ];
 
@@ -666,7 +667,7 @@ fn silver_vision_multi_fed_graph_e2e() {
             field_idx: 0,
             value: BabyBear::new(3),
         },
-        pre_c,
+        pre_c as u64,
     )];
     {
         let mut r = r4.clone();
@@ -677,7 +678,7 @@ fn silver_vision_multi_fed_graph_e2e() {
                 amount: bounty_amount,
                 direction: 0,
             },
-            pre_d,
+            pre_d as u64,
         ));
     }
     let f2_verdict = replay_chain(&f2_chain);
@@ -788,7 +789,7 @@ fn silver_vision_multi_fed_graph_e2e() {
                 amount: bounty_amount,
                 direction: 0,
             },
-            pre_d,
+            pre_d as u64,
         );
         chain_view.push(rebuilt);
     }

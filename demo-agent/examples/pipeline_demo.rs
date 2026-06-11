@@ -32,7 +32,7 @@ fn short_hex(bytes: &[u8]) -> String {
 }
 
 /// Create a cell with open permissions (no auth required for anything).
-fn make_open_cell(pk: [u8; 32], balance: u64) -> dregg_cell::Cell {
+fn make_open_cell(pk: [u8; 32], balance: i64) -> dregg_cell::Cell {
     let token_id = [0u8; 32];
     let mut cell = dregg_cell::Cell::with_balance(pk, token_id, balance);
     cell.permissions = Permissions {

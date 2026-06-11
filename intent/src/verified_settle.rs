@@ -17,7 +17,7 @@
 //!   * [`extract_legs`] pulls the `Effect::Transfer` legs out of the lowered `SealedTurn` — the
 //!     EXACT value moves the executor would run.
 //!   * [`settle_ring_verified`] folds those legs through the verified per-asset executor, one leg
-//!     at a time, ALL-OR-NOTHING. When the `verified-settle` feature is on, each leg is settled by
+//!     at a time, ALL-OR-NOTHING. On every native build (Lean unconditional), each leg is settled by
 //!     the REAL Lean FFI ([`ffi::settle_leg`], `@[export] dregg_record_kernel_step` over the PROVED
 //!     `Exec.recKExec`), over that leg's asset-projected column — NOT a Rust mirror. When the
 //!     feature is off, the in-process [`rec_exec_asset`] runs the SAME verified transition (the
@@ -136,7 +136,7 @@ pub enum VerifiedSettleError {
     /// post-column). Fail-closed: the verified executor is the authority, and a drift is a bug we
     /// refuse to settle through. Carries the diverging leg + a description.
     FfiDivergence { index: usize, detail: String },
-    /// The `verified-settle` feature is required for the real-FFI path but the Lean archive was not
+    /// The real-FFI path is compiled in (native default) but the Lean archive was not
     /// available at runtime.
     FfiUnavailable(String),
 }
@@ -303,7 +303,7 @@ pub fn rec_exec_asset(k: &VerifiedLedger, leg: &VerifiedLeg) -> Option<VerifiedL
 /// and ASSERTS conservation per touched asset (the Lean `settleRing_conserves`); a leak — which
 /// must be impossible for a committed fold — is surfaced fail-closed as `ConservationViolated`.
 ///
-/// When the `verified-settle` feature is on, each leg is ALSO settled through the REAL Lean FFI
+/// On every native build (Lean unconditional), each leg is ALSO settled through the REAL Lean FFI
 /// ([`ffi::settle_leg`]) over its asset-projected column and the two are cross-checked; any
 /// divergence (commit bit or post-column) FAILS CLOSED (`FfiDivergence`). So with the feature on,
 /// the fold's accept/reject and post-ledger ARE the linked verified executor's, leg by leg — not a
@@ -328,7 +328,7 @@ pub fn settle_ring_verified(
         // FEATURE-GATED: cross-check this leg against the REAL Lean FFI export over the leg's
         // asset-projected column (`RingFFI.projAsset` + `dregg_record_kernel_step`). The export's
         // commit bit and post-column must MATCH the verified transition; a drift fails closed.
-        #[cfg(feature = "verified-settle")]
+        #[cfg(not(feature = "no-lean-link"))]
         {
             ffi::cross_check_leg(&k, leg, &next, index)?;
         }
@@ -370,7 +370,7 @@ pub fn settle_fulfillment_verified(
 // The REAL Lean FFI path — route each leg through `dregg_record_kernel_step`.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "verified-settle")]
+#[cfg(not(feature = "no-lean-link"))]
 pub mod ffi {
     //! Settle one ring leg through the REAL verified Lean executor export
     //! `@[export] dregg_record_kernel_step` (the PROVED `Exec.recKExec`), over the leg's
@@ -557,7 +557,7 @@ pub mod ffi {
 
 // ---------------------------------------------------------------------------
 // Tests (in-process verified transition; the FFI path is exercised in
-// tests/fulfillment_verified_turn.rs under the `verified-settle` feature).
+// tests/fulfillment_verified_turn.rs on the default native build).
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]

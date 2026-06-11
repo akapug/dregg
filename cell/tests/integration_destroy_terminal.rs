@@ -17,7 +17,8 @@ use dregg_cell::{
     },
 };
 
-fn make_cell(seed: u8, balance: u64) -> Cell {
+// signed-wells (ac01f9b7b): Cell balances are now i64 (issuer wells carry -supply).
+fn make_cell(seed: u8, balance: i64) -> Cell {
     let mut pk = [0u8; 32];
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(37);

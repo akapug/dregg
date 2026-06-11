@@ -44,8 +44,11 @@ mod sovereign_proof;
 // DSL circuit full pipeline: descriptor -> CellProgram -> ProgramRegistry -> executor dispatch
 mod dsl_pipeline;
 
-// CapTP effects pipeline: ExportSturdyRef, EnlivenRef, DropRef, ValidateHandoff via Effect VM STARK
-pub mod captp_effects_pipeline;
+// RETIRED (dregg3): captp_effects_pipeline tested the CapTP sturdyref effect
+// family (ExportSturdyRef / EnlivenRef / DropRef / ValidateHandoff) end-to-end
+// through the Effect VM STARK. All four variants were dissolved from the circuit
+// Effect enum by the dregg3 reduction, so the module is deleted (no live effect
+// to drive the pipeline).
 
 // DFA routing proven in circuit: transition table commitment + STARK proof of classification
 pub mod dfa_circuit;

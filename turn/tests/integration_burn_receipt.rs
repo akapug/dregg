@@ -26,7 +26,7 @@ fn open_permissions() -> Permissions {
     }
 }
 
-fn make_open_cell(seed: u8, balance: u64) -> Cell {
+fn make_open_cell(seed: u8, balance: i64) -> Cell {
     let mut pk = [0u8; 32];
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(37);
@@ -108,8 +108,9 @@ fn burn_reduces_balance_and_sets_was_burn_flag() {
     let receipt = unwrap_receipt(executor.execute(&turn, &mut ledger));
 
     // Balance reduced by exactly burn_amount.
+    // signed-wells (ac01f9b7b): balance() is i64; ordinary cell, compare in u64.
     assert_eq!(
-        ledger.get(&cell_id).unwrap().state.balance(),
+        u64::try_from(ledger.get(&cell_id).unwrap().state.balance()).unwrap(),
         1000 - burn_amount,
         "balance must be reduced by burn_amount"
     );
@@ -148,7 +149,7 @@ fn receipt_hash_binds_was_burn_flag() {
 
 #[test]
 fn burn_exceeding_balance_rejected_balance_preserved() {
-    let balance = 100u64;
+    let balance = 100i64; // signed-wells (ac01f9b7b): cell balances are i64
     let cell = make_open_cell(2, balance);
     let cell_id = cell.id();
     let mut ledger = Ledger::new();
@@ -162,7 +163,7 @@ fn burn_exceeding_balance_rejected_balance_preserved() {
         Effect::Burn {
             target: cell_id,
             slot: 0,
-            amount: balance + 1,
+            amount: (balance + 1) as u64, // signed-wells (ac01f9b7b): balance is i64; Burn amount is u64
         },
     );
     let result = executor.execute(&turn, &mut ledger);
@@ -258,7 +259,7 @@ fn plain_transfer_does_not_set_was_burn() {
 
 #[test]
 fn burn_entire_balance_leaves_zero() {
-    let balance = 777u64;
+    let balance = 777i64; // signed-wells (ac01f9b7b): cell balances are i64
     let cell = make_open_cell(6, balance);
     let cell_id = cell.id();
     let mut ledger = Ledger::new();
@@ -272,7 +273,7 @@ fn burn_entire_balance_leaves_zero() {
         Effect::Burn {
             target: cell_id,
             slot: 0,
-            amount: balance,
+            amount: balance as u64, // signed-wells (ac01f9b7b): balance is i64; Burn amount is u64
         },
     );
     let receipt = unwrap_receipt(executor.execute(&turn, &mut ledger));

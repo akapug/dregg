@@ -114,8 +114,8 @@ name = "note_bridge"
 [[example]]
 name = "cross_fed_atomic"
 
-[[example]]
-name = "proof_obligation"
+# RETIRED (dregg3): proof_obligation example removed — built on the dissolved
+# dregg_turn::obligation verb family (ProofObligation/create_obligation/...).
 
 [[example]]
 name = "bench_summary"
