@@ -524,4 +524,134 @@ example (s' : RecChainedState)
 
 #assert_axioms hs0_violation_refuses
 
+/-! ## §8 — the WIRE-FACE step `heapStepGuardedW` (THE ROTATION's `FullActionA.heapWriteA` target).
+
+The deployed wire (cap `slot_hash` discipline, `EffectVmEmitCapRoot §"cap Phase A VALUE model"`)
+carries the heap ADDRESS and the NEW ROOT as computed digests:
+
+  * `addr = H[coll, key]` — computed by the ONE deployed Poseidon2 implementation
+    (`circuit::heap_root::heap_addr`, shared cell↔circuit), recomputed in-row by the descriptor
+    gadget's address hash-site. The Lean executor addresses the spliced leaf list BY that carried
+    key; the `(coll, key) ↦ addr` relation is the circuit/cell obligation, never re-derived here.
+  * `newRoot` — the executor-computed openable sorted-Poseidon2 root of the post-heap,
+    PINNED-AS-DIGEST into the `heap_root` register (the cap Phase-A staging: the circuit's
+    membership-open / leaf-update / sorted-insert gates verify `old_root → new_root` against the
+    SAME leaf list; the Rust cell recomputes and refuses a mismatch). The MODEL-layer recompute
+    (`heapStepGuarded`, parametric in the sponge) is the proven semantics; `heapStepGuardedW_honest`
+    pins that an HONESTLY-rooted wire step IS the model step, definitionally.
+
+The gate stack is UNCHANGED: the same caveat-gated `write` of the root register
+(`stateStepGuarded`: authority + membership + lifecycle + per-slot caveats) plus the `heaps`
+splice. No atom list rides this wire shape (guard atoms enter via the cell-program caveat layer);
+`heapStepGuarded`'s atom gate at `atoms = []` is vacuously `true`, which is what makes the honest
+bridge definitional. -/
+
+/-- **`heapStepGuardedW` — the wire-face guarded heap write.** Sorted insert-or-update of the
+carried `addr ↦ v` into the target's spliced heap, with the carried `newRoot` written through the
+EXISTING caveat-gated `write` of `heap_root`. Fail-closed on every `stateStepGuarded` gate. -/
+def heapStepGuardedW (s : RecChainedState) (actor target : CellId) (addr v newRoot : ℤ) :
+    Option RecChainedState :=
+  match stateStepGuarded s heapRootField actor target newRoot with
+  | some s' => some { s' with kernel := { s'.kernel with
+                        heaps := fun c => if c = target
+                                          then Heap.set (s.kernel.heaps target) addr v
+                                          else s.kernel.heaps c } }
+  | none => none
+
+/-- **`heapStepGuardedW_honest` — the wire face IS the model step when the wire is honest.** At
+`addr = addrOf hash coll key` and `newRoot = ` the genuine recomputed root, the wire-face step is
+EXACTLY `heapStepGuarded hash … []` (the atom-free model step). The circuit gadget + the cell
+recompute are what force the wire onto this honest instance. -/
+theorem heapStepGuardedW_honest (hash : List ℤ → ℤ) (s : RecChainedState)
+    (actor target : CellId) (coll key v : ℤ) :
+    heapStepGuardedW s actor target (Heap.addrOf hash coll key) v
+        (Heap.root hash (heapAfter hash s target coll key v))
+      = heapStepGuarded hash s [] actor target coll key v := by
+  unfold heapStepGuardedW heapStepGuarded heapPost heapAfter Heap.hset
+  rw [if_pos (by rfl : heapAtomsAdmit hash [] (s.kernel.heaps target) = true)]
+
+/-- **The wire-face factorization** — a committed `heapStepGuardedW` is the underlying guarded
+`write` of the carried root with ONLY `heaps` re-spliced (the `heapStepGuarded_factors` shape, so
+every keystone proof replays). -/
+theorem heapStepGuardedW_factors {s : RecChainedState} {actor target : CellId}
+    {addr v newRoot : ℤ} {s' : RecChainedState}
+    (h : heapStepGuardedW s actor target addr v newRoot = some s') :
+    ∃ s₁, stateStepGuarded s heapRootField actor target newRoot = some s₁ ∧
+      s' = { s₁ with kernel := { s₁.kernel with
+               heaps := fun c => if c = target
+                                 then Heap.set (s.kernel.heaps target) addr v
+                                 else s.kernel.heaps c } } := by
+  unfold heapStepGuardedW at h
+  cases hw : stateStepGuarded s heapRootField actor target newRoot with
+  | none => rw [hw] at h; exact absurd h (by simp)
+  | some s₁ =>
+      rw [hw] at h
+      simp only [Option.some.injEq] at h
+      exact ⟨s₁, rfl, h.symm⟩
+
+/-- **Wire-face balance-neutrality** — the carried-root step moves no asset: scalar total
+unchanged, per-asset ledger LITERALLY untouched (the splice edits only `heaps`; the underlying
+write edits only the non-`balance` `heap_root` register). -/
+theorem heapStepW_conserves {s : RecChainedState} {actor target : CellId}
+    {addr v newRoot : ℤ} {s' : RecChainedState}
+    (h : heapStepGuardedW s actor target addr v newRoot = some s') :
+    recTotal s'.kernel = recTotal s.kernel ∧
+    s'.kernel.bal = s.kernel.bal ∧ s'.kernel.accounts = s.kernel.accounts := by
+  obtain ⟨s₁, hw, rfl⟩ := heapStepGuardedW_factors h
+  obtain ⟨-, hs₁⟩ := stateStep_factors (stateStepGuarded_eq hw)
+  refine ⟨?_, ?_, ?_⟩
+  · show recTotal s₁.kernel = recTotal s.kernel
+    exact guarded_state_conserves heapRootField_ne_balance hw
+  · show s₁.kernel.bal = s.kernel.bal
+    subst hs₁; rfl
+  · show s₁.kernel.accounts = s.kernel.accounts
+    subst hs₁; rfl
+
+/-- **Wire-face authority tooth** — a committed wire heap write proves the actor held kernel
+authority over the target (the `write` verb's gate fired). -/
+theorem heapStepW_authorized {s : RecChainedState} {actor target : CellId}
+    {addr v newRoot : ℤ} {s' : RecChainedState}
+    (h : heapStepGuardedW s actor target addr v newRoot = some s') :
+    stateAuthB s.kernel.caps actor target = true := by
+  obtain ⟨s₁, hw, -⟩ := heapStepGuardedW_factors h
+  exact guarded_state_authorized hw
+
+/-- **Wire-face register pin** — the committed `heap_root` register reads back EXACTLY the carried
+`newRoot` (the pinned-as-digest leg the circuit gadget then verifies against the leaf list). -/
+theorem heapStepW_root_pinned {s : RecChainedState} {actor target : CellId}
+    {addr v newRoot : ℤ} {s' : RecChainedState}
+    (h : heapStepGuardedW s actor target addr v newRoot = some s') :
+    fieldOf heapRootField (s'.kernel.cell target) = newRoot := by
+  obtain ⟨s₁, hw, rfl⟩ := heapStepGuardedW_factors h
+  show fieldOf heapRootField (s₁.kernel.cell target) = newRoot
+  exact guarded_state_field_written hw
+
+/-- **Wire-face leaf splice** — the committed post-heap at the target is the sorted
+insert-or-update of `addr ↦ v`; every other cell's heap is untouched. -/
+theorem heapStepW_heaps {s : RecChainedState} {actor target : CellId}
+    {addr v newRoot : ℤ} {s' : RecChainedState}
+    (h : heapStepGuardedW s actor target addr v newRoot = some s') :
+    ∀ c, s'.kernel.heaps c = if c = target
+                             then Heap.set (s.kernel.heaps target) addr v
+                             else s.kernel.heaps c := by
+  obtain ⟨s₁, hw, rfl⟩ := heapStepGuardedW_factors h
+  intro c; rfl
+
+-- Wire-face non-vacuity: an authorized wire heap write COMMITS, reads back, conserves; an
+-- unauthorized actor is refused (the same §7 concrete states).
+#guard (heapStepGuardedW hs0 0 0 17 42 999).isSome
+#guard ((heapStepGuardedW hs0 0 0 17 42 999).map
+        (fun p => Heap.get (p.kernel.heaps 0) (17 : ℤ))) == some (some 42)
+#guard ((heapStepGuardedW hs0 0 0 17 42 999).map
+        (fun p => fieldOf heapRootField (p.kernel.cell 0))) == some 999
+#guard ((heapStepGuardedW hs0 0 0 17 42 999).map (fun p => recTotal p.kernel)) == some 105
+#guard (heapStepGuardedW hs0 9 0 17 42 999).isSome == false
+
+#assert_axioms heapStepGuardedW_honest
+#assert_axioms heapStepGuardedW_factors
+#assert_axioms heapStepW_conserves
+#assert_axioms heapStepW_authorized
+#assert_axioms heapStepW_root_pinned
+#assert_axioms heapStepW_heaps
+
 end Dregg2.Substrate.HeapKernel

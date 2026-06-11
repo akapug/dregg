@@ -33,6 +33,7 @@ import Dregg2.Circuit.Inst.cellSealA
 import Dregg2.Circuit.Inst.cellUnsealA
 import Dregg2.Circuit.Inst.cellDestroyA
 import Dregg2.Circuit.Inst.refreshDelegationA
+import Dregg2.Circuit.Inst.heapWriteA
 import Dregg2.Circuit.WitnessExtract
 import Dregg2.Exec.CircuitEmit
 import Dregg2.Exec.RecordKernel
@@ -108,6 +109,7 @@ open Dregg2.Circuit.Inst.CellSealA (cellSealE CellSealArgs RestIffNoLifecycle)
 open Dregg2.Circuit.Inst.CellUnsealA (cellUnsealE CellUnsealArgs)
 open Dregg2.Circuit.Inst.CellDestroyA (cellDestroyE CellDestroyArgs RestIffNoLifecycleDeathCert)
 open Dregg2.Circuit.Inst.RefreshDelegationA (refreshDelegationE RefreshDelegationArgs RestIffNoDelegations)
+open Dregg2.Circuit.Inst.HeapWriteA (heapWriteE HeapWriteArgs)
 open Dregg2.Circuit.BornEmptyCommit (BornEmptyAuthorityTables)
 
 /-! ## §0 — decidability (for concrete `#guard`s / `#eval`s). -/
@@ -278,6 +280,7 @@ def stepEmittedEncodeAgrees
     (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
     (DSC : (CellId → List SlotCaveat) → ℤ) (hDSC : Function.Injective DSC)
     (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth)
+    (DHeaps : (CellId → Dregg2.Substrate.Heap.FeltHeap) → ℤ) (hDHeaps : Function.Injective DHeaps)
     (sw : StepWitness) (st st' : RecChainedState) (fa : FullActionA) : Prop :=
   match fa with
   | .balanceA t a =>
@@ -347,6 +350,10 @@ def stepEmittedEncodeAgrees
   | .refreshDelegationA actor child =>
       assignmentOf sw.assignment =
         encodeE2 S (refreshDelegationE DDgs hDDgs) st ⟨actor, child⟩ st'
+  | .heapWriteA actor target addr v newRoot =>
+      assignmentOf sw.assignment =
+        encodeE2Dual S (heapWriteE DCell hDCell DHeaps hDHeaps) st
+          ⟨actor, target, addr, v, newRoot⟩ st'
   | fa' =>
       assignmentOf sw.assignment = assignmentOf sw.assignment ∧ fa' = fa'
 
@@ -387,6 +394,7 @@ theorem step_emitted_refines_fullActionStep
     (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
     (DSC : (CellId → List SlotCaveat) → ℤ) (hDSC : Function.Injective DSC)
     (DAuth : BornEmptyAuthorityTables → ℤ) (hDAuth : Function.Injective DAuth)
+    (DHeaps : (CellId → Dregg2.Substrate.Heap.FeltHeap) → ℤ) (hDHeaps : Function.Injective DHeaps)
     (hRestBal : RestIffNoBal S.RH) (hRestAccounts : RestIffNoAccountsBalBorn S.RH)
     (hRestSpawn : RestIffNoSpawnTouched S.RH) (hRestCaps : RestIffNoCaps S.RH)
     (hRestNull : RestIffNoNullifiers S.RH)  (hRestCommitments : RestIffNoCommitments S.RH)
@@ -394,17 +402,18 @@ theorem step_emitted_refines_fullActionStep
     (hRestLifecycle : RestIffNoLifecycle S.RH)
     (hRestLifecycleDeathCert : RestIffNoLifecycleDeathCert S.RH)
     (hRestDelegations : RestIffNoDelegations S.RH)
+    (hRestCellHeaps : Dregg2.Circuit.Inst.HeapWriteA.RestIffNoCellHeaps S.RH)
     (hLog : logHashInjective S.LH)
     (sw : StepWitness) (st st' : RecChainedState) (fa : FullActionA)
     (h : stepEmittedSat defaultDescriptorLookup sw st st' fa)
     (hEnc : stepEmittedEncodeAgrees S D_bal hD_bal D_caps hD_caps LE_cell LE_null
       cN hN hLE_cell hLE_null CS DBal hDBal DSide hDSide DLeg hDLeg
-      DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth
+      DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth DHeaps hDHeaps
       sw st st' fa)
     (hcircuit :
       fullActionCircuitStepInst S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN
         hLE_cell hLE_null CS DBal hDBal DSide hDSide DLeg hDLeg
-        DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth
+        DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth DHeaps hDHeaps
         st fa st') :
     fullActionStep st fa st' := by
   unfold fullActionCircuitStepInst fullActionCircuitStep at hcircuit
@@ -508,9 +517,9 @@ theorem step_emitted_refines_fullActionStep
       -- `hcircuit` is exactly that circuit acceptance.
       exact fullAction_circuit_refines_spec S D_bal hD_bal D_caps hD_caps LE_cell LE_null cN hN hLE_cell hLE_null CS hCSN hCSL hRestFrame
         hLogCS DBal hDBal DSide hDSide DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs DLife hDLife
-        DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull
+        DDC hDDC DCell hDCell DSC hDSC DAuth hDAuth DHeaps hDHeaps hRestBal hRestAccounts hRestSpawn hRestCaps hRestNull
         hRestCommitments hRestFactory
-        hRestLifecycle hRestLifecycleDeathCert hRestDelegations hLog st (.exerciseA actor target inner)
+        hRestLifecycle hRestLifecycleDeathCert hRestDelegations hRestCellHeaps hLog st (.exerciseA actor target inner)
         st' hcircuit
   | .createCellFromFactoryA actor newCell vk =>
       simp only [fullActionStep]
@@ -558,6 +567,13 @@ theorem step_emitted_refines_fullActionStep
       simp only [fullActionStep]
       exact refreshDelegationA_emitted_refines_spec S DDgs hDDgs hRestDelegations hLog st ⟨actor, child⟩ st'
         ((refreshDelegationA_emitted_equiv_circuit S DDgs hDDgs st ⟨actor, child⟩ st').mpr hcircuit)
+  | .heapWriteA actor target addr v newRoot =>
+      -- THE ROTATION: the emitted heap-write diamond ⊑ the leaf `HeapWriteSpec`.
+      simp only [fullActionStep]
+      exact heapWriteA_emitted_refines_spec S DCell hDCell DHeaps hDHeaps hRestCellHeaps hLog
+        st ⟨actor, target, addr, v, newRoot⟩ st'
+        ((heapWriteA_emitted_equiv_circuit S DCell hDCell DHeaps hDHeaps st
+            ⟨actor, target, addr, v, newRoot⟩ st').mpr hcircuit)
 
 /-! ## §5c — REPRESENTATIVE adversarial-witness EXTRACTION (mint), killing the dead `hEnc`.
 
@@ -735,7 +751,7 @@ theorem turn_emitted_demo_mint_burn :
 #guard (defaultDescriptorLookup releaseCommittedEscrowAHoleName == none)
 #guard (defaultDescriptorLookup refundCommittedEscrowAHoleName == none)
 #guard (∀ name ∈ holeAirNames, defaultDescriptorLookup name == none)
-#guard registryCoverage == 31
+#guard registryCoverage == 32
 
 #assert_axioms descriptorLookup_of_actionAirName
 #assert_axioms turn_emitted_demo_mint_burn

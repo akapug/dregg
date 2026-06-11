@@ -67,6 +67,8 @@ def actionWriteSet : FullActionA → List CellId
   | .pipelinedSendA actor => [actor]
   | .cellDestroyA _ cell _ => [cell]
   | .refreshDelegationA actor child => [actor, child]
+  -- §MA-heap: the heap write mutates the `target` cell (its heap leaves + `heap_root` register).
+  | .heapWriteA _ target _ _ _ => [target]
 
 mutual
 /-- Write-set of a structural `FullForestA` tree (pre-order union). -/

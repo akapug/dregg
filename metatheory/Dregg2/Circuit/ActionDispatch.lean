@@ -64,6 +64,7 @@ import Dregg2.Circuit.Spec.factorycreation
 import Dregg2.Circuit.Spec.notecommitment
 import Dregg2.Circuit.Spec.notenullifier
 import Dregg2.Circuit.Spec.queuepipelinedsend
+import Dregg2.Circuit.Spec.heapwrite
 import Dregg2.Circuit.Spec.refreshdelegation
 import Dregg2.Circuit.Spec.sovereigncommitment
 import Dregg2.Circuit.Spec.supplycreation
@@ -96,6 +97,7 @@ open Dregg2.Circuit.Spec.CellStateAudit
 open Dregg2.Circuit.Spec.QueuePipelinedSend
 open Dregg2.Circuit.Spec.CellLifecycle
 open Dregg2.Circuit.Spec.RefreshDelegation
+open Dregg2.Circuit.Spec.HeapWrite
 
 /-! ## §1 — action tags (wire metadata for turn witnesses). -/
 
@@ -130,9 +132,12 @@ def actionTag : FullActionA → Nat
   | .cellUnsealA _ _ => 53
   | .cellDestroyA _ _ _ => 54
   | .refreshDelegationA _ _ => 55
+  -- THE ROTATION: the heap write takes the next stable tag (REFINEMENT-DESIGN Decision 1).
+  | .heapWriteA _ _ _ _ _ => 56
 
-/-- Coverage count: every `FullActionA` constructor has a dispatch arm. -/
-def actionDispatchCoverage : Nat := 56
+/-- Coverage count: every `FullActionA` constructor has a dispatch arm (57/57 with the rotation's
+`heapWriteA`). -/
+def actionDispatchCoverage : Nat := 57
 
 /-! ## §2 — the hold-gate (for the `exerciseA` arm only; R4 facet-mask DEFERRED). -/
 
@@ -224,6 +229,8 @@ mutual
         CellDestroySpec st actor cell certHash st'
     | .refreshDelegationA actor child =>
         RefreshDelegationSpec st actor child st'
+    | .heapWriteA actor target addr v newRoot =>
+        HeapWriteSpec st actor target addr v newRoot st'
 
   /-- **Declarative inner-turn fold** — left-to-right, all-or-nothing, matching `execInnerA`. -/
   def turnSpec : RecChainedState → List FullActionA → RecChainedState → Prop
@@ -431,6 +438,10 @@ mutual
     | .refreshDelegationA actor child => by
       simp only [fullActionStep, execFullA]
       exact refreshDelegation_iff_spec st actor child st'
+    | .heapWriteA actor target addr v newRoot => by
+      -- THE ROTATION's arm: the leaf keystone carries both directions.
+      simp only [fullActionStep]
+      exact execFullA_heapWriteA_iff_spec st actor target addr v newRoot st'
   termination_by fa => sizeOf fa
 end
 

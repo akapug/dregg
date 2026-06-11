@@ -22,6 +22,7 @@ import Dregg2.Circuit.Inst.pipelinedSendA
 import Dregg2.Circuit.Inst.cellSealA
 import Dregg2.Circuit.Inst.cellUnsealA
 import Dregg2.Circuit.Inst.cellDestroyA
+import Dregg2.Circuit.Inst.heapWriteA
 import Dregg2.Circuit.Inst.refreshDelegationA
 
 namespace Dregg2.Circuit.EffectRefinementBatch2
@@ -54,6 +55,7 @@ open Dregg2.Circuit.Inst.PipelinedSendA
 open Dregg2.Circuit.Inst.CellSealA
 open Dregg2.Circuit.Inst.CellUnsealA
 open Dregg2.Circuit.Inst.CellDestroyA
+open Dregg2.Circuit.Inst.HeapWriteA
 open Dregg2.Circuit.Inst.RefreshDelegationA
 open Dregg2.Circuit.Spec.CellStateLog (EmitEventSpec)
 open Dregg2.Circuit.Spec.CellStateMonotone (IncrementNonceSpec)
@@ -261,6 +263,24 @@ theorem cellDestroy_circuit_refines_spec (S : Surface2) (DLife : (CellId → Nat
     (h : cellDestroyCircuitStep S DLife hDLife DDC hDDC s args s') :
     CellDestroySpec s args.actor args.cell args.certHash s' :=
   cellDestroyA_full_sound S DLife hDLife DDC hDDC hRest hLog s args s' h
+
+/-- THE ROTATION: the heap write's v2-dual circuit step (`cell` register write + `heaps` splice). -/
+def heapWriteCircuitStep (S : Surface2)
+    (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
+    (DHeaps : (CellId → Dregg2.Substrate.Heap.FeltHeap) → ℤ) (hDHeaps : Function.Injective DHeaps)
+    (s : RecChainedState) (args : HeapWriteArgs) (s' : RecChainedState) : Prop :=
+  satisfiedE2Dual S (heapWriteE DCell hDCell DHeaps hDHeaps)
+    (encodeE2Dual S (heapWriteE DCell hDCell DHeaps hDHeaps) s args s')
+
+theorem heapWrite_circuit_refines_spec (S : Surface2)
+    (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective DCell)
+    (DHeaps : (CellId → Dregg2.Substrate.Heap.FeltHeap) → ℤ) (hDHeaps : Function.Injective DHeaps)
+    (hRest : RestIffNoCellHeaps S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : HeapWriteArgs) (s' : RecChainedState)
+    (h : heapWriteCircuitStep S DCell hDCell DHeaps hDHeaps s args s') :
+    Dregg2.Circuit.Spec.HeapWrite.HeapWriteSpec s args.actor args.target args.addr args.value
+      args.newRoot s' :=
+  heapWriteA_full_sound S DCell hDCell DHeaps hDHeaps hRest hLog s args s' h
 
 /-! ## §4 — triple-component effects. -/
 

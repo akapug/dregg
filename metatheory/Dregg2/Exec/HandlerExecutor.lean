@@ -186,6 +186,8 @@ def toClosedEffect : FullActionA → ClosedEffect
   | .cellUnsealA actor cell        => cellUnsealEffect actor cell
   | .cellDestroyA actor cell certHash => cellDestroyEffect actor cell certHash
   | .refreshDelegationA actor child => refreshDelegationEffect actor child
+  -- §MA-heap: the heap write routes to its dedicated live+authority-gated splice handler.
+  | .heapWriteA actor target addr v newRoot => heapWriteEffect actor target addr v newRoot
 
 /-! ## §4 — `execHandlerTurn`: the registry executor over the chained state.
 

@@ -579,6 +579,35 @@ sealed bit (the seal family's selectors are pinned to zero), but the column is N
 into the in-circuit state commitment (`state_commit = H4(bal,nonce,fields,cap_root)` chain),
 so its value is prover-chosen. No surviving semantics depends on it; the relayout lane that
 regenerates descriptors against the compacted selector layout deletes it.
+
+## THE ROTATION correspondence (REFINEMENT-DESIGN Decision 1 — what is bound today)
+
+THE HEAP is in the kernel and in the case: `RecordKernelState.heaps` is a frame component
+of every keystone (`Circuit.StateCommit.RestHashIffFrame` lists it; tampering it moves the
+rest hash), the wire face `FullActionA.heapWriteA` routes through the SAME caveat-gated
+`write`-verb step every register write uses (`Substrate.HeapKernel.heapStepGuardedW`:
+authority + membership + lifecycle gates, fail-closed, balance-neutral exactly), and the
+ONE deployed heap-root scheme is `circuit::heap_root` (the cap-root generalization with the
+generic `hash[addr, value]` leaf; `heap_root_cell_circuit_differential.rs` pins it against
+an independent rebuild, and the Lean gadget `Emit.EffectVmEmitHeapRoot` recomputes the SAME
+arity-2 address/leaf images in-row with `heapRoot_binds_write` as the anti-ghost).
+
+What the wire carries vs what the circuit forces, stated exactly (the cap Phase-A staging):
+the turn carries `(addr, value, newRoot)` with `addr`/`newRoot` EXECUTOR-COMPUTED digests.
+`heapStepGuardedW_honest` proves the honest instance IS the model step (`heapStepGuarded`);
+the gadget forces `addr = hash[coll,key]`, `leaf = hash[addr,value]`, and the prepend
+advance in-row — but the DEPLOYED EffectVM row does not yet carry a `heap_root` register
+column of its own, the PI vector does not yet bind it, and the genuine sorted-TREE-update
+gates (membership-open / leaf-update / bracketed insert, the revocation-circuit shape) are
+the Phase-E lane. Until the rotation's relayout lands, `heap_root` is kernel-bound and
+scheme-pinned but NOT yet circuit-committed: a heap write today is attested by the kernel
+theorems, not by the per-turn proof. The remaining rotation legs ride ONE VK/commitment
+epoch together: registers 8→16 with the `FactoryDescriptor` fields declaration · the
+`heap_root` register + PI v3 · the RESERVED deletion + 54→29 selector compaction (186→159)
+· the W1 signed-well balance representation (the Rust value model; the Lean kernel already
+runs signed wells — `reachable_total_zero`) · genesis-as-issuer-moves + fees-as-moves
+(closing the two conservation deployment gaps named under guarantee B) · the descriptor
+regeneration (`EmitAllJson` → `circuit/descriptors/*.json` + fingerprints).
 =========================================================================== -/
 
 /-! ===========================================================================

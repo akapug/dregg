@@ -1699,6 +1699,12 @@ def encodeActionW : FullActionA → String
   | .refreshDelegationA actor child => "{\"rdel\":[" ++ toString actor ++ "," ++ toString child ++ "]}"
   -- the E-style promise-pipelined send: `psend` carries just the dispatching actor.
   | .pipelinedSendA actor => "{\"psend\":[" ++ toString actor ++ "]}"
+  -- THE ROTATION: the heap write (`Substrate.HeapKernel.heapStepGuardedW`). `addr`/`newRoot` are
+  -- the wire-carried digests (`addr = H[coll,key]`, `newRoot` = the openable sorted-Poseidon2
+  -- post-root) under the cap `slot_hash` discipline; `v` is the written value (signed felt).
+  | .heapWriteA actor target addr v newRoot =>
+      "{\"hwrite\":[" ++ toString actor ++ "," ++ toString target ++ "," ++ toString addr ++ ","
+        ++ toString v ++ "," ++ toString newRoot ++ "]}"
 
 /-- Encode a `List FullActionA` as a `;`-joined sequence of action-encodings (the inner-effect array an
 `exerciseA` carries on the wire). Empty ⇒ the empty string (the wire `[]`). -/
@@ -1922,6 +1928,13 @@ def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState)
   | some r0 => do
       let (actor, r1) ← parseNat r0; let r2 ← lit "]}" r1
       some (.pipelinedSendA actor, r2)
+  | none =>
+  -- THE ROTATION: the heap write — `(actor, target, addr, v, newRoot)`, the digests signed.
+  match lit "{\"hwrite\":[" cs with
+  | some r0 => do
+      let (actor, r1) ← parseNat r0; let (target, r2) ← cN r1; let (addr, r3) ← cI r2
+      let (v, r4) ← cI r3; let (nr, r5) ← cI r4; let r6 ← lit "]}" r5
+      some (.heapWriteA actor target addr v nr, r6)
   | none => none
 
 /-- Parse the `;`-joined inner-effect array body an `exerciseA` carries (everything up to the closing
@@ -1993,12 +2006,14 @@ def allActions : List FullActionA :=
   , .cellDestroyA 153 154 155
   , .refreshDelegationA 156 157
     -- a promise-pipelined send.
-  , .pipelinedSendA 177 ]
+  , .pipelinedSendA 177
+    -- THE ROTATION: a heap write (negative digests exercise the signed codec).
+  , .heapWriteA 178 179 (-180) 181 (-182) ]
 
 /-- EVERY representative round-trips (the all-arms non-vacuity guard). -/
 def allActionsRoundtrip : Bool := allActions.all actionRoundtrips
 
-#guard (allActions.length) == 29  --  29 (one per FullActionA arm; F1b: escrow/obligation/committed/bridge-LFC GONE; F2b: queues GONE; F3: seal/swiss/sturdyref GONE — caps-in-slots)
+#guard (allActions.length) == 30  --  30 (one per FullActionA arm; F1b: escrow/obligation/committed/bridge-LFC GONE; F2b: queues GONE; F3: seal/swiss/sturdyref GONE — caps-in-slots; THE ROTATION adds heapWriteA)
 #guard (allActionsRoundtrip)  --  true (every arm round-trips)
 -- HARD CI check (fails the build if ANY arm — incl. the Wave-3 seal/lifecycle arms — stops round-tripping):
 #guard allActionsRoundtrip

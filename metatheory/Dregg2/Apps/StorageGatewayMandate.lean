@@ -417,6 +417,14 @@ theorem execFullA_progLive_preserved (s s' : RecChainedState) (fa : FullActionA)
       exact ⟨hlive, hprog⟩
   | pipelinedSendA actor =>
       simp only [execFullA, Option.some.injEq] at h; subst h; exact ⟨hlive, hprog⟩
+  | heapWriteA actor target addr v newRoot =>
+      -- §MA-heap: the guarded `heap_root` write + `heaps` splice touches neither `accounts` nor
+      -- `slotCaveats` (writeField edits only `cell`; the splice only `heaps`).
+      simp only [execFullA] at h
+      obtain ⟨s₁, hw, hs'⟩ := Dregg2.Substrate.HeapKernel.heapStepGuardedW_factors h
+      obtain ⟨-, hs₁⟩ := stateStep_factors (stateStepGuarded_eq hw)
+      subst hs'; subst hs₁
+      exact ⟨hlive, hprog⟩
 
 
 /-- **`execInnerA_progLive_preserved`** — the inner-effect fold an `exerciseA` recurses through keeps a
@@ -784,6 +792,20 @@ theorem execFullA_anchorVal_preserved (s s' : RecChainedState) (fa : FullActionA
       obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; rfl
   | pipelinedSendA actor =>
       simp only [execFullA, Option.some.injEq] at h; subst h; rfl
+  | heapWriteA actor target addr v newRoot =>
+      -- §MA-heap: the heap write writes the DISTINCT `heap_root` slot (on any cell), so the anchor
+      -- scalar reads back verbatim (`writeField_field_ne`); the splice never touches `cell`.
+      simp only [execFullA] at h
+      obtain ⟨s₁, hw, hs'⟩ := Dregg2.Substrate.HeapKernel.heapStepGuardedW_factors h
+      obtain ⟨-, hs₁⟩ := stateStep_factors (stateStepGuarded_eq hw)
+      subst hs'; subst hs₁
+      show fieldOf commitmentAnchorSlot
+            ((writeField s.kernel Dregg2.Substrate.HeapKernel.heapRootField target
+                (.int newRoot)).cell c)
+          = fieldOf commitmentAnchorSlot (s.kernel.cell c)
+      exact fieldOf_of_field_eq
+        (writeField_field_ne s.kernel Dregg2.Substrate.HeapKernel.heapRootField
+          commitmentAnchorSlot target c (.int newRoot) (by decide))
 
 /-- **`execInnerA_anchorVal_preserved`** — the inner-effect fold preserves `c`'s anchor scalar when
 every inner action is anchor-safe for `c`. Mutual with `execFullA_anchorVal_preserved`. -/

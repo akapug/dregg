@@ -150,6 +150,8 @@ def affectedOf : FullActionA → List CellId
   | .cellUnsealA _ cell        => [cell]
   | .cellDestroyA _ cell _     => [cell]
   | .refreshDelegationA _ child => [child]
+  -- §MA-heap: the heap write mutates the `target` cell (its heap + `heap_root` register).
+  | .heapWriteA _ target _ _ _ => [target]
   -- notes (nullifier / commitment SETS): the spending/creating `actor`. (F1b: the escrow/
   -- obligation/committed-escrow/bridge-LFC arms are GONE with the kernel holding-store.)
   | .noteSpendA _ actor _      => [actor]

@@ -231,6 +231,12 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
   | pipelinedSendA actor =>
       -- `kernel := s.kernel` LITERALLY — only `log` grows; `revoked` is read straight off `s.kernel`.
       simp only [execFullA, Option.some.injEq] at h; subst h; rfl
+  | heapWriteA actor target addr v newRoot =>
+      -- §MA-heap: the guarded `heap_root` write + `heaps` splice never touches `revoked`.
+      simp only [execFullA] at h
+      obtain ⟨s₁, hw, hs'⟩ := Dregg2.Substrate.HeapKernel.heapStepGuardedW_factors h
+      obtain ⟨-, hs₁⟩ := stateStep_factors (stateStepGuarded_eq hw)
+      subst hs'; subst hs₁; rfl
 
 /-- **`execInnerA_revoked_eq`** — the inner-effect fold an `exerciseA` recurses through leaves the
 credential revocation registry UNCHANGED. Mutual with `execFullA_revoked_eq`; chains `Eq.trans`. -/

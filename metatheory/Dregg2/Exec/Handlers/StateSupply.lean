@@ -338,14 +338,89 @@ cellstateaudit.lean`). Earlier this was a distinct `"receipt_archive"` flag, whi
 handler-vs-`execFullA` kernel diverge (the §6.3b hole); writing `"lifecycle"` closes it. -/
 def receiptArchiveField : FieldName := "lifecycle"
 
+/-! ### §2.2 — THE HEAP write handler (REFINEMENT-DESIGN Decision 1, THE ROTATION's wire arm).
+
+The handler face of `Substrate.HeapKernel.heapStepGuardedW`: the live-gated, authority-gated write
+of the carried `newRoot` into the `heap_root` register PLUS the sorted insert-or-update splice of
+the carried `addr ↦ value` into the target's `heaps` leaf list. Same gate pair as `stateWriteH`
+(the `write`-verb family); the splice is balance-invisible (`recTotalAsset` reads neither `cell`
+nor `heaps`). -/
+
+/-- Heap-write arguments: the actor, the target cell, the carried sorted ADDRESS
+(`addr = H[coll,key]`, the cap `slot_hash` discipline), the written value, and the carried
+post-root (pinned into `heap_root`; verified by the descriptor gadget + the cell recompute). -/
+structure HeapWriteArgs where
+  /-- The actor performing the write (must hold authority over `target`). -/
+  actor : CellId
+  /-- The cell whose heap is written. -/
+  target : CellId
+  /-- The carried heap address (the sorted key, a Poseidon2 image of `(coll, key)`). -/
+  addr : Int
+  /-- The written value. -/
+  value : Int
+  /-- The carried post-root (pinned-as-digest into the `heap_root` register). -/
+  newRoot : Int
+
+/-- The live-gated heap write: gate exactly like `stateWriteStep`, then write `heap_root` AND
+splice the target's heap leaf list. -/
+def heapWriteStep (k : RecordKernelState) (a : HeapWriteArgs) : Option RecordKernelState :=
+  if acceptsEffects k a.target
+      && authorizedB k.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 } then
+    some { writeField k Dregg2.Substrate.HeapKernel.heapRootField a.target (.int a.newRoot) with
+             heaps := fun c => if c = a.target
+                               then Dregg2.Substrate.Heap.set (k.heaps a.target) a.addr a.value
+                               else k.heaps c }
+  else none
+
+/-- The spliced heap write leaves the per-asset ledger literally unchanged (`recTotalAsset` reads
+`accounts`/`bal`; the step edits only `cell` + `heaps`). -/
+theorem heapWrite_recTotalAsset_fixed (k : RecordKernelState) (a : HeapWriteArgs) (b : AssetId) :
+    recTotalAsset { writeField k Dregg2.Substrate.HeapKernel.heapRootField a.target (.int a.newRoot) with
+                      heaps := fun c => if c = a.target
+                                        then Dregg2.Substrate.Heap.set (k.heaps a.target) a.addr a.value
+                                        else k.heaps c } b
+      = recTotalAsset k b := by
+  unfold recTotalAsset writeField; rfl
+
+/-- **`heapWriteH` — the heap-write handler.** `delta = 0`; the same live-cell + authority gate pair
+as `stateWriteH`; the trace row is the standard clock row on the target. -/
+def heapWriteH : EffectHandler HeapWriteArgs where
+  step := heapWriteStep
+  delta := fun _ _ => 0
+  auth := fun k a => authorizedB k.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+  admission := fun k a => acceptsEffects k a.target
+  trace := fun a => { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+  auth_gated := by
+    intro s a s' h
+    unfold heapWriteStep at h
+    by_cases hg : acceptsEffects s a.target
+        && authorizedB s.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+    · simp only [Bool.and_eq_true] at hg; exact hg.2
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  admission_gated := by
+    intro s a s' h
+    unfold heapWriteStep at h
+    by_cases hg : acceptsEffects s a.target
+        && authorizedB s.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+    · simp only [Bool.and_eq_true] at hg; exact hg.1
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+  conserves := by
+    intro s a s' h b
+    unfold heapWriteStep at h
+    by_cases hg : acceptsEffects s a.target
+        && authorizedB s.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+    · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
+      rw [heapWrite_recTotalAsset_fixed s a b]; ring
+    · rw [if_neg hg] at h; exact absurd h (by simp)
+
 /-! ## §3 — The SUPPLY+STATE registry coproduct and the `ClosedEffect` builders. -/
 
 /-- The SUPPLY+STATE registry slice: mint, burn, bridge-mint, createCell, createCellFromFactory, spawn,
-and the generic state write. Adding an effect is adding one well-typed `PackedHandler`. -/
+the generic state write, and the heap write. Adding an effect is adding one well-typed `PackedHandler`. -/
 def stateSupplyRegistry : Registry :=
   [ ⟨SupplyArgs, mintH⟩, ⟨SupplyArgs, burnH⟩, ⟨SupplyArgs, bridgeMintH⟩,
     ⟨CreateArgs, createCellH⟩, ⟨CreateArgs, createCellFromFactoryH⟩, ⟨CreateArgs, spawnH⟩,
-    ⟨StateWriteArgs, stateWriteH⟩ ]
+    ⟨StateWriteArgs, stateWriteH⟩, ⟨HeapWriteArgs, heapWriteH⟩ ]
 
 /-- Build a closed mint effect (tag `0`). -/
 def mintEffect (actor cell : CellId) (asset : AssetId) (amt : Int) : ClosedEffect :=
@@ -379,6 +454,12 @@ def spawnEffect (actor child : CellId) : ClosedEffect :=
 def stateWriteEffect (actor target : CellId) (field : FieldName) (value : Int) : ClosedEffect :=
   { tag := 6, Args := StateWriteArgs,
     args := { actor := actor, target := target, field := field, value := value }, handler := stateWriteH }
+
+/-- Build a closed heap-write effect (tag `7`): the carried `(addr, value, newRoot)` heap splice. -/
+def heapWriteEffect (actor target : CellId) (addr value newRoot : Int) : ClosedEffect :=
+  { tag := 7, Args := HeapWriteArgs,
+    args := { actor := actor, target := target, addr := addr, value := value, newRoot := newRoot },
+    handler := heapWriteH }
 
 /-- `SetField` — the generic field write at an explicit field. -/
 def setFieldEffect (actor target : CellId) (field : FieldName) (value : Int) : ClosedEffect :=

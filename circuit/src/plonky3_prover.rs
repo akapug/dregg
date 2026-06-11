@@ -95,13 +95,17 @@ pub fn create_config() -> DreggStarkConfig {
     //
     // Security at these settings (FRI batched soundness, per query):
     //   conjectured (capacity bound): ~log_blowup bits/query
-    //     => 50 * 3 + 16 PoW = ~166 bits conjectured
+    //     => 38 * 3 + 16 PoW = ~130 bits conjectured
     //   proven (Johnson bound, list-decoding to sqrt(rate)): ~log_blowup/2 bits/query
-    //     => 50 * 1.5 + 16 PoW = ~91 bits proven
+    //     => 38 * 1.5 + 16 PoW = ~73 bits proven
     // (both additionally capped by the degree-4 extension field, ~2^124, and the
     // Poseidon2 commitment hash.) See docs/PROOF-ECONOMICS.md for the measured
-    // size/prover-time tradeoff of these knobs.
-    create_config_with_fri(3, 0, 3, 50, 16)
+    // size/prover-time tradeoff of these knobs: q = 50 → 38 (the rotation's
+    // planned ride-along) keeps the conjectured bound ≥ 128 bits and was
+    // measured at −23% proof size. Proofs are NOT interchangeable across this
+    // bump (FRI shape + Fiat–Shamir differ) — it lands inside the one
+    // VK/commitment rotation epoch by design.
+    create_config_with_fri(3, 0, 3, 38, 16)
 }
 
 /// Build a `DreggStarkConfig` with explicit FRI knobs. The production

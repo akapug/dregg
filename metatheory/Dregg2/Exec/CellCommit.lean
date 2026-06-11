@@ -268,6 +268,13 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
   | refreshDelegationA actor child =>
       simp only [execFullA] at h; obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'
       exact subset_of_commitments_eq rfl
+  | heapWriteA actor target addr v newRoot =>
+      -- §MA-heap: the guarded `heap_root` write + `heaps` splice never touches `commitments`.
+      simp only [execFullA] at h
+      obtain ⟨s₁, hw, hs'⟩ := Dregg2.Substrate.HeapKernel.heapStepGuardedW_factors h
+      obtain ⟨-, hs₁⟩ := stateStep_factors (stateStepGuarded_eq hw)
+      subst hs'; subst hs₁
+      exact subset_of_commitments_eq rfl
 
 /-- **`execInnerA_commitments_grow`** — the inner-effect fold an `exerciseA` recurses through never
 shrinks the commitment set. Mutual with `execFullA_commitments_grow`; chains `List.Subset.trans`. -/

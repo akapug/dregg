@@ -43,6 +43,7 @@ import Dregg2.Circuit.Inst.pipelinedSendA
 import Dregg2.Circuit.Inst.cellSealA
 import Dregg2.Circuit.Inst.cellUnsealA
 import Dregg2.Circuit.Inst.cellDestroyA
+import Dregg2.Circuit.Inst.heapWriteA
 import Dregg2.Circuit.Inst.refreshDelegationA
 
 namespace Dregg2.Circuit.EffectEmittedRefinement
@@ -565,6 +566,8 @@ open Dregg2.Circuit.Inst.CellDestroyA
 open Dregg2.Circuit.Inst.RefreshDelegationA
   (refreshDelegationE refreshDelegationAAirName RefreshDelegationArgs RestIffNoDelegations
     refreshDelegationA_full_sound)
+open Dregg2.Circuit.Inst.HeapWriteA
+  (heapWriteE heapWriteAAirName HeapWriteArgs RestIffNoCellHeaps heapWriteA_full_sound)
 open Dregg2.Circuit.Spec.AuthorityAttenuation (AttenuateSpec DelegateAttenSpec)
 open Dregg2.Circuit.Spec.CellStateLog (EmitEventSpec)
 open Dregg2.Circuit.Spec.CellStateMonotone (IncrementNonceSpec)
@@ -948,7 +951,48 @@ theorem refreshDelegationA_emitted_refines_spec (S : Surface2) (DDel : (CellId �
     (fun pre args post => refreshDelegationA_emitted_equiv_circuit S DDel hDDel pre args post)
     s args s' h
 
+/-! ## §17b — THE HEAP write (THE ROTATION): the emitted-diamond refinement. -/
+
+def heapWriteAEmittedStep (S : Surface2) (DCell : (CellId → Value) → ℤ)
+    (hDCell : Function.Injective DCell) (DH : (CellId → Dregg2.Substrate.Heap.FeltHeap) → ℤ)
+    (hDH : Function.Injective DH) (s : RecChainedState) (args : HeapWriteArgs)
+    (s' : RecChainedState) : Prop :=
+  effect2dualEmittedStepLocal S (heapWriteE DCell hDCell DH hDH) heapWriteAAirName s args s'
+
+theorem heapWriteA_emitted_equiv_circuit (S : Surface2) (DCell : (CellId → Value) → ℤ)
+    (hDCell : Function.Injective DCell) (DH : (CellId → Dregg2.Substrate.Heap.FeltHeap) → ℤ)
+    (hDH : Function.Injective DH) (s : RecChainedState) (args : HeapWriteArgs)
+    (s' : RecChainedState) :
+    heapWriteAEmittedStep S DCell hDCell DH hDH s args s' ↔
+      satisfiedE2Dual S (heapWriteE DCell hDCell DH hDH)
+        (encodeE2Dual S (heapWriteE DCell hDCell DH hDH) s args s') :=
+  effect2dual_emitted_equiv_circuit_local S (heapWriteE DCell hDCell DH hDH) heapWriteAAirName
+    s args s'
+
+theorem heapWriteA_emitted_refines_spec (S : Surface2) (DCell : (CellId → Value) → ℤ)
+    (hDCell : Function.Injective DCell) (DH : (CellId → Dregg2.Substrate.Heap.FeltHeap) → ℤ)
+    (hDH : Function.Injective DH)
+    (hRest : RestIffNoCellHeaps S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : HeapWriteArgs) (s' : RecChainedState)
+    (h : heapWriteAEmittedStep S DCell hDCell DH hDH s args s') :
+    Dregg2.Circuit.Spec.HeapWrite.HeapWriteSpec s args.actor args.target args.addr args.value
+      args.newRoot s' :=
+  effect2dual_emitted_refines_bespoke_spec S (heapWriteE DCell hDCell DH hDH) heapWriteAAirName
+    (fun pre args post =>
+      satisfiedE2Dual S (heapWriteE DCell hDCell DH hDH)
+        (encodeE2Dual S (heapWriteE DCell hDCell DH hDH) pre args post))
+    (fun pre args post =>
+      Dregg2.Circuit.Spec.HeapWrite.HeapWriteSpec pre args.actor args.target args.addr args.value
+        args.newRoot post)
+    (fun pre args post hc =>
+      heapWriteA_full_sound S DCell hDCell DH hDH hRest hLog pre args post hc)
+    (fun pre args post =>
+      heapWriteA_emitted_equiv_circuit S DCell hDCell DH hDH pre args post)
+    s args s' h
+
 /-! ## §18 — Axiom hygiene. -/
+
+#assert_axioms heapWriteA_emitted_refines_spec
 
 #assert_axioms bespoke_emitted_refines_spec
 #assert_axioms effect2_emitted_refines_bespoke_spec

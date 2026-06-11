@@ -163,6 +163,8 @@ def targetOf : FullActionA → CellId
   | .cellUnsealA _ cell                     => cell
   | .cellDestroyA _ cell _                  => cell
   | .refreshDelegationA _ child             => child
+  -- §MA-heap: the heap write acts on the `target` cell (its `heaps` entry + `heap_root` register).
+  | .heapWriteA _ target _ _ _              => target
 
 /-! ## §2 — `execFullForestA`: run the tree as an ALL-OR-NOTHING transaction (the executable artifact).
 
