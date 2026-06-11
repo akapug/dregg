@@ -3,9 +3,11 @@ name = "dregg-bridge"
 version.workspace = true
 edition.workspace = true
 
+# `test-utils` is a DEV/TEST gate only (loud, fail-closed: it ADDS test helpers, never
+# removes a guarantee). The old `turn` feature gated the turn-proof verifier module —
+# core semantics — and was removed: the verifier is always compiled in.
+# See docs/FEATURE-HYGIENE.md.
 [features]
-default = ["turn"]
-turn = []
 test-utils = []
 
 [dependencies]

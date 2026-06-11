@@ -78,7 +78,7 @@ captp = ["dep:dregg-captp"]
 # `DREGG_LEAN_PRODUCER=1` env var (default OFF) / `set_lean_producer`, and an
 # unlinked archive self-falls-back to the Rust producer.
 lean-producer = ["dregg-turn/lean-shadow", "dep:dregg-lean-ffi", "dregg-lean-ffi/lean-lib"]
-dev = ["dregg-circuit/dev"]
+dev = []
 # Enables `DelegationAuthority::Open`, which accepts any well-signed envelope
 # without an authority check. This is a footgun in production and is gated
 # behind a feature flag so that production builds cannot construct it at all.

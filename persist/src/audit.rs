@@ -235,7 +235,6 @@ impl PersistentStore {
 /// `PersistentStore` remain available for backward compatibility, but new code
 /// should use the in-memory `AuditLog` as the primary system and call
 /// `persist_audit_events` periodically to durably store events.
-#[cfg(feature = "audit-bridge")]
 impl PersistentStore {
     /// Persist events from an in-memory `AuditLog` to durable storage.
     ///
