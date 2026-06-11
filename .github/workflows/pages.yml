@@ -42,37 +42,24 @@ jobs:
       - name: Build WASM
         # Output must match the path imported by the playground/sandbox
         # (../pkg/dregg_wasm.js). The build script copies site/pkg/ verbatim
-        # into dist/pkg/. (Was ../site/demo/pkg, which nothing imported, so
-        # deployments shipped without any WASM bundle at all.)
-        #
-        # The bulletproofs -> clear_on_drop cross-compile to wasm32 is gated
-        # via wasm/Cargo.toml's direct `clear_on_drop = { features = ["no_cc"] }`
-        # dep, which switches it off the C build path. If this step fails, the
-        # playground will be broken — fail the deploy rather than ship a
-        # WASM-less site.
+        # into dist/pkg/. GREEN OR BUST: a broken wasm crate fails the
+        # workflow — fix the crate, never ship stale artifacts.
         run: wasm-pack build wasm --target web --out-dir ../site/pkg
 
-      - name: Build extension WASM
-        # Same cross-compile setup as the playground WASM step above.
-        run: wasm-pack build wasm --target web --out-dir ../extension/pkg --no-typescript
-
       - name: Package extension
+        # TS build via esbuild + build.sh package. The extension's wasm glue
+        # (extension/dregg_wasm.js + _bg.wasm) is committed, so this needs no
+        # cargo build. GREEN OR BUST: packaging failure fails the workflow.
         run: |
-          mkdir -p site/extension
+          set -euo pipefail
           cd extension
-          if [ -d pkg ]; then
-            zip -r ../site/extension/dregg-wallet.zip \
-              manifest.json background.js content.js page.js \
-              popup.html popup-script.js provision.html provision.js \
-              recovery.html recovery.js confirm-intent.html origin-permission.html \
-              bip39_english.txt pkg/
-          else
-            zip -r ../site/extension/dregg-wallet.zip \
-              manifest.json background.js content.js page.js \
-              popup.html popup-script.js provision.html provision.js \
-              recovery.html recovery.js confirm-intent.html origin-permission.html \
-              bip39_english.txt
-          fi
+          npm install
+          npm run build
+          ./build.sh package
+          mkdir -p ../site/extension
+          cp dist/dregg-cipherclerk-chrome.zip ../site/extension/dregg-cipherclerk.zip
+          cp dist/dregg-cipherclerk-chrome.zip ../site/extension/dregg-wallet.zip
+          cp dist/dregg-cipherclerk-firefox.xpi ../site/extension/dregg-cipherclerk-firefox.xpi
 
       - name: Fetch latest demo results from demos.yml
         # Pulls the most recent successful demo-results artifact from the
@@ -81,7 +68,6 @@ jobs:
         # step is a no-op and the site simply ships without results.
         env:
           GH_TOKEN: ${{ github.token }}
-        continue-on-error: true
         run: |
           set -euo pipefail
           mkdir -p site/demos
@@ -109,7 +95,6 @@ jobs:
           sudo mv typst-x86_64-unknown-linux-musl/typst /usr/local/bin/
 
       - name: Build paper PDF
-        continue-on-error: true
         run: |
           mkdir -p site/paper
           typst compile paper/dregg.typ site/paper/dregg.pdf
@@ -124,6 +109,13 @@ jobs:
           cd site
           npm install
           npm run build
+
+      - name: Site tests (built output)
+        # Static checks against dist/: nav coherence (every internal link
+        # resolves; no orphan pages) and the living-docs drift check.
+        run: |
+          node site/tests/nav-coherence.mjs
+          node site/tests/docs-living-content.mjs
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

@@ -1,0 +1,119 @@
+<layout src="_layouts/default.html">
+<title>Verify — dregg</title>
+
+<main class="wrap main--compact">
+  <div class="page-header">
+    <h1>Verify it</h1>
+    <p>
+      This page says exactly what "verified" means on this site — no more, no less. dregg's
+      semantics are a Lean 4 kernel, and its guarantees are theorems about that kernel, each
+      machine-pinned to the Lean kernel's three axioms. The same kernel the theorems are
+      about is the executor the node runs. You do not have to take any of this on faith:
+      every claim below links the thing you would check, and the catalogs on this page are
+      generated from the proof sources at build time — the site build fails if they drift.
+    </p>
+    <p>
+      Why this matters: most systems ask you to trust that the code matches the whitepaper
+      and the deployment matches the code. Here the chain is shorter — the proof is about
+      the artifact that runs, and a <a href="/learn/concepts/light-client.html">light
+      client</a> can check a whole history against one root without trusting any executor,
+      including ours.
+    </p>
+  </div>
+
+  <section class="section section--compact" id="badge">
+    <span class="section__label">The proof badge</span>
+    <h2 class="section__title">What the badge in the explorer means</h2>
+    <p style="color: var(--fg-dim); margin-bottom: var(--s4);">
+      Objects in the <a href="/explorer/">explorer</a> and
+      <a href="/playground/#proofs">playground</a> carry a verification status. It is never
+      hand-set: a receipt's witness status comes from actually checking the witness bundle,
+      and a proof's trust tier names which proving path produced it — a real STARK from the
+      effect VM, or an honest <em>placeholder</em> label where a surface seeded local data
+      without proving it. A theorem badge in the Studio comes from Lean's own axiom audit
+      (<code>#assert_axioms</code>), not from a list someone typed. When something is not
+      proven, the badge says so; that honesty is the feature.
+    </p>
+  </section>
+
+  <section class="section section--compact" id="guarantees">
+    <span class="section__label">The guarantees</span>
+    <h2 class="section__title">What is proven</h2>
+    <p style="color: var(--fg-dim); margin-bottom: var(--s4);">
+      The assurance case is organized by guarantee in <code>Dregg2/AssuranceCase.lean</code>:
+      each names an apex theorem and the keystones that discharge it. Generated from that
+      file:
+    </p>
+    <catalog view="guarantees">
+  </section>
+
+  <section class="section section--compact" id="floor">
+    <span class="section__label">The assumption floor</span>
+    <h2 class="section__title">What it rests on</h2>
+    <p style="color: var(--fg-dim); margin-bottom: var(--s4);">
+      No proof rests on nothing. These are the only out-of-kernel carriers any guarantee
+      depends on — they enter as explicit hypotheses, never as axioms, and there are no
+      others:
+    </p>
+    <catalog view="assumption-floor">
+    <p style="color: var(--fg-dim); margin-top: var(--s4);">
+      The full delimitation — including the named Rust components inside the trust base and
+      the present limitations, stated plainly — is
+      <a href="/learn/concepts/trust-boundary.html">rung 7 · the trust boundary</a>.
+    </p>
+  </section>
+
+  <section class="section section--compact" id="check">
+    <span class="section__label">Check it yourself</span>
+    <h2 class="section__title">From clone to a checked proof</h2>
+    <div class="quickstart">
+      <div class="quickstart__steps">
+        <div class="quickstart__step">
+          <span class="quickstart__n">1</span>
+          <div>
+            <p>Build the Lean development — every theorem on this page elaborates under the
+            kernel, and the axiom pins fail the build if a proof smuggles in an assumption:</p>
+            <pre><code class="language-bash">git clone https://github.com/emberian/dregg && cd dregg/metatheory
+lake build</code></pre>
+          </div>
+        </div>
+        <div class="quickstart__step">
+          <span class="quickstart__n">2</span>
+          <div>
+            <p>Read a guarantee's apex theorem where it lives — the names in the cards above
+            are Lean declaration names resolvable in <code>metatheory/Dregg2/</code>.</p>
+          </div>
+        </div>
+        <div class="quickstart__step">
+          <span class="quickstart__n">3</span>
+          <div>
+            <p>Ask a running node which semantics produced each turn — the verified-producer
+            split is live API, not documentation:</p>
+            <pre><code class="language-bash">curl localhost:8420/api/node/producer | jq</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--compact">
+    <span class="section__label">The formal treatment</span>
+    <h2 class="section__title">Go deeper</h2>
+    <div class="link-cards">
+      <a class="link-card" href="/paper.html">
+        <span class="link-card__title">The paper</span>
+        <span class="link-card__desc">The model, the authority logic, the guard algebra, the assurance case, the realization — with citations that are Lean declaration names.</span>
+      </a>
+      <a class="link-card" href="/learn/concepts/trust-boundary.html">
+        <span class="link-card__title">Rung 7 · the trust boundary</span>
+        <span class="link-card__desc">Proven · assumed · trusted-code · your-discipline: the four-way split, enumerated in full.</span>
+      </a>
+      <a class="link-card" href="/learn/concepts/light-client.html">
+        <span class="link-card__title">Rung 5 · the light client</span>
+        <span class="link-card__desc">Verify everything, re-execute nothing: how one check on one root learns a whole history.</span>
+      </a>
+    </div>
+  </section>
+</main>
+
+</layout>

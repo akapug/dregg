@@ -19,9 +19,11 @@
  * labeled as not-a-live-cell. The Studio's worked examples open this view.
  *
  * HONESTY notes baked in:
- *   * A live node program view has NO projection for `AffineLe`/`MemberOf`
- *     (StateConstraintView gap) — so the threshold M is shown from data only
- *     when a descriptor carries it; otherwise the gap is stated, not papered.
+ *   * Threshold M is READ from the AffineLe gate in whichever shape serves it
+ *     — a descriptor's serde constraints OR the live StateConstraintView (the
+ *     projection is total since the view-totality close, so a live cell
+ *     self-describes its M). Only an older node whose view predates the
+ *     projection yields M-unknown, and that gap is stated, not papered.
  *   * Slot values come from the cell's CURRENT fields; the machine's monotone
  *     design is what makes the ceremony ladder a sound readback (each rung's
  *     "done" is witnessed by a monotone slot, not inferred from history).
@@ -198,8 +200,8 @@ class DreggCouncil extends PolisBase {
           ${a ? '●' : '○'} m${i}</span>`);
 
       const thresholdCell = status.threshold != null
-        ? html`<strong>${status.approvalCount} / ${status.threshold}</strong>`
-        : html`<strong>${status.approvalCount}</strong> <span class="dregg-inspector__meta" title="the AffineLe threshold gate has no StateConstraintView projection yet, so a live program view cannot carry M; the executor still enforces it — read M from the published descriptor">/ M (not in node view)</span>`;
+        ? html`<strong>${status.approvalCount} / ${status.threshold}</strong> <span class="dregg-inspector__meta" title=${mode === 'descriptor' ? 'threshold M from the descriptor’s AffineLe gate' : 'threshold M read live from the AffineLe gate in the served program view — the cell self-describes its charter'}>(AffineLe)</span>`
+        : html`<strong>${status.approvalCount}</strong> <span class="dregg-inspector__meta" title="this node’s program view predates the AffineLe StateConstraintView projection, so it cannot carry M; the executor still enforces it — read M from the published descriptor">/ M (not in this node’s view)</span>`;
 
       return html`
         <div class="dregg-inspector dregg-polis">
@@ -232,7 +234,7 @@ class DreggCouncil extends PolisBase {
           </div>
 
           <dl class="dregg-inspector__kv">
-            ${isCouncilShaped ? html`<dt>charter</dt><dd>${cls.threshold != null ? `${cls.threshold}-of-${cls.members}` : `${cls.members} member slot${cls.members === 1 ? '' : 's'} (M not in view)`}</dd>` : null}
+            ${isCouncilShaped ? html`<dt>charter</dt><dd>${cls.threshold != null ? `${cls.threshold}-of-${cls.members}` : `${cls.members} member slot${cls.members === 1 ? '' : 's'} (M not in this node's view)`}</dd>` : null}
             <dt>member approvals</dt><dd>${approvalsChips.length ? approvalsChips : html`<em>none decodable</em>`}</dd>
             <dt>staged ${family === 'amendment' ? 'successor hash' : 'proposal hash'}</dt>
             <dd>${status.proposalStaged ? html`<code title=${status.proposalHash}>${shortHex(status.proposalHash, 20)}</code>` : html`<em>nothing staged${mode === 'descriptor' ? ' at birth' : ''}</em>`}

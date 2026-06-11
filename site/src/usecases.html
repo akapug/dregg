@@ -1,16 +1,17 @@
 <layout src="_layouts/default.html">
-<title>Use cases — dregg</title>
+<title>Worked examples — dregg</title>
 
 <main class="wrap main--compact uc-page">
   <div class="page-header">
-    <h1>Use-case explorer</h1>
+    <h1>Worked examples, walkable</h1>
     <p>
-      Eight real applications, each presented as a walkable use case: what it does, the cell
-      <strong>slots</strong> it lays out, the <strong>state constraints</strong> (caveats) that make
-      its rules unbreakable, the <strong>turns</strong> that drive it — and a live
-      <em>try-it</em> against a node. Every structural fact below is read straight from the app’s
-      <code>manifest.json</code>, which is generated from the Rust source of truth; nothing here is
-      hand-maintained narrative except the plain-language description of each rule.
+      The eight real applications from <a href="/build.html">the Build page</a>, each opened
+      up: what it does, the cell <strong>slots</strong> it lays out, the
+      <strong>constraints</strong> that make its rules unbreakable, the
+      <strong>turns</strong> that drive it — and a live <em>try-it</em> against a node. Every
+      structural fact below is read straight from the app's <code>manifest.json</code>, which
+      is generated from the Rust source of truth; nothing here is hand-maintained narrative
+      except the plain-language description of each rule.
     </p>
     <div id="uc-node-banner" class="uc-banner">Checking for a reachable node…</div>
   </div>
@@ -21,8 +22,10 @@
     <h2 class="section__title">The vocabulary of a guarantee</h2>
     <p style="color: var(--fg-dim); margin-bottom: var(--s4);">
       A dregg app does not enforce its own rules in application code. It mints generic
-      <em>StateConstraints</em> onto a factory-born cell at birth, and the executor refuses any turn
-      that would violate them. The same small vocabulary appears across every app:
+      constraints onto a <a href="/glossary.html#factory">factory</a>-born
+      <a href="/glossary.html#cell">cell</a> at birth, and the executor refuses any
+      <a href="/glossary.html#turn">turn</a> that would violate them. The same small
+      vocabulary appears across every app:
     </p>
     <dl class="uc-legend">
       <div><dt>WriteOnce</dt><dd>a slot may be written once, then is frozen forever</dd></div>
@@ -58,7 +61,7 @@
       <p class="uc-muted">
         The use-case explorer renders from each app’s <code>manifest.json</code> with JavaScript.
         With JS disabled, browse the apps directly under <code>starbridge-apps/</code> in the
-        repository, or read <a href="/apps.html">the apps catalog</a>.
+        repository, or read <a href="/build.html">the catalog on the Build page</a>.
       </p>
     </noscript>
   </div>

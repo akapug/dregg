@@ -17,7 +17,8 @@
  *   { kind: "Cases", cases: TransitionCaseView[] }
  *   { kind: "Circuit", circuit_hash: string }
  *
- * StateConstraintView: 21+ variants, all tagged with `kind`.
+ * StateConstraintView: one variant per StateConstraint (the projection is
+ * TOTAL — `dregg_cell::program::StateConstraintView`), all tagged with `kind`.
  * All color tokens from site palette (--bg, --fg, --accent, --line, etc).
  */
 
@@ -89,10 +90,36 @@ function chipColors(kind) {
       return 'background:color-mix(in srgb,#d4685c 20%,var(--bg-raised));color:#e08878';
 
     // Custom / unknown
+    // value-set / structure / arithmetic / DAG atoms (policy-combinator core)
+    case 'FieldLteOther':
+    case 'MemberOf':
+    case 'PrefixOf':
+    case 'InRangeTwoSided':
+    case 'DeltaBounded':
+    case 'AffineLe':
+    case 'AffineEq':
+    case 'Reachable':
+      return 'background:color-mix(in srgb,var(--accent,#7aa2f7) 14%,var(--bg-raised));color:var(--accent,#7aa2f7)';
+    case 'AllOf':
+    case 'Not':
+      return 'background:color-mix(in srgb,var(--warn,#e0af68) 14%,var(--bg-raised));color:var(--warn,#e0af68)';
     case 'Custom':
     default:
       return 'background:color-mix(in srgb,var(--fg-dim,#8a948f) 14%,var(--bg-raised));color:var(--fg-dim)';
   }
+}
+
+/** `Σ kᵢ·slot[fᵢ]` rendering for AffineLe/AffineEq `terms: [[coef, slot]]`. */
+function affineTerms(terms) {
+  return (terms || [])
+    .map(([k, s], i) => {
+      const coef = Number(k);
+      const mag = Math.abs(coef);
+      const body = `${mag === 1 ? '' : `${mag}·`}slot[${s}]`;
+      if (i === 0) return coef < 0 ? `−${body}` : body;
+      return `${coef < 0 ? '−' : '+'} ${body}`;
+    })
+    .join(' ');
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +167,20 @@ function constraintSummary(c) {
     case 'TemporalPredicate': return `witness[${c.witness_index}] dsl=${shortHex(c.dsl_hash,8)}`;
     case 'Witnessed':      return `${c.predicate_kind} commitment=${shortHex(c.commitment,8)}`;
     case 'Renounced':      return `${c.set_kind} commitment=${shortHex(c.commitment,8)}`;
+    case 'FieldLteOther': {
+      const d = Number(c.delta);
+      const tail = d === 0 ? '' : d > 0 ? ` + ${d}` : ` − ${Math.abs(d)}`;
+      return `slot[${c.index}] ≤ slot[${c.other}]${tail}`;
+    }
+    case 'MemberOf':       return `slot[${c.index}] ∈ {${(c.set||[]).join(', ')}}`;
+    case 'PrefixOf':       return `path(slots ${(c.seg_indices||[]).join(',')}) starts with [${(c.prefix||[]).join(', ')}]`;
+    case 'InRangeTwoSided':return `${c.lo} ≤ slot[${c.index}] ≤ ${c.hi}`;
+    case 'DeltaBounded':   return `|Δ slot[${c.index}]| ≤ ${c.d}`;
+    case 'AffineLe':       return `${affineTerms(c.terms)} ≤ ${c.c}`;
+    case 'AffineEq':       return `${affineTerms(c.terms)} = ${c.c}`;
+    case 'Reachable':      return `slot[${c.from_index}] ⇝ ${c.to_label} (${(c.edges||[]).length} edges)`;
+    case 'AllOf':          return `${(c.variants||[]).length} conjuncts`;
+    case 'Not':            return c.inner ? `¬(${constraintSummary(c.inner) || c.inner.kind})` : '¬(…)';
     case 'Custom':         return `ir=${shortHex(c.ir_hash,8)}`;
     default:               return '';
   }

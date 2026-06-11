@@ -77,37 +77,19 @@
       "pattern": "escrow",
       "doc": "conditional escrow (cleartext + committed) — `Dregg2.Apps.EscrowFactory`.",
       "module": "Dregg2.Apps.EscrowFactory",
-      "wire_tags": [
-        "CreateEscrow",
-        "ReleaseEscrow",
-        "RefundEscrow",
-        "CreateCommittedEscrow",
-        "ReleaseCommittedEscrow",
-        "RefundCommittedEscrow"
-      ]
+      "wire_tags": []
     },
     {
       "pattern": "obligation",
       "doc": "bonded proof obligation — `Dregg2.Apps.ObligationFactory`.",
       "module": "Dregg2.Apps.ObligationFactory",
-      "wire_tags": [
-        "CreateObligation",
-        "FulfillObligation",
-        "SlashObligation"
-      ]
+      "wire_tags": []
     },
     {
       "pattern": "queue",
       "doc": "bounded FIFO queue (value-bearing) — `Dregg2.Apps.QueueFactory`.",
       "module": "Dregg2.Apps.QueueFactory",
-      "wire_tags": [
-        "QueueAllocate",
-        "QueueEnqueue",
-        "QueueDequeue",
-        "QueueResize",
-        "QueueAtomicTx",
-        "QueuePipelineStep"
-      ]
+      "wire_tags": []
     },
     {
       "pattern": "inbox",
@@ -125,29 +107,17 @@
       "pattern": "bridge",
       "doc": "cross-domain bridge (lock / finalize-to-pot / cancel) — `Dregg2.Apps.BridgeCell`.",
       "module": "Dregg2.Apps.BridgeCell",
-      "wire_tags": [
-        "BridgeLock",
-        "BridgeFinalize",
-        "BridgeCancel"
-      ]
+      "wire_tags": []
     },
     {
       "pattern": "capsInSlots",
       "doc": "caps-in-slots: sealer/unsealer boxes, swiss sturdyrefs, handoff certs (R7 epoch-at-retrieval). A stored cap is a value in a slot; seal/unseal/enliven/handoff are grants gated on retrieval-epoch freshness.",
       "module": "Dregg2.Apps.CapSlotFactory (caps-in-slots, R7 epoch-at-retrieval LANDED)",
-      "wire_tags": [
-        "CreateSealPair",
-        "Seal",
-        "Unseal",
-        "ExportSturdyRef",
-        "EnlivenRef",
-        "DropRef",
-        "ValidateHandoff"
-      ]
+      "wire_tags": []
     }
   ],
   "wire_cover": {
-    "effect_tag_count": 52,
+    "effect_tag_count": 27,
     "survivor": [
       {
         "tag": "SetField",
@@ -260,211 +230,7 @@
         "role": "receiptLog"
       }
     ],
-    "factory": [
-      {
-        "tag": "CreateEscrow",
-        "pattern": "escrow",
-        "built_from": [
-          "create",
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "ReleaseEscrow",
-        "pattern": "escrow",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "RefundEscrow",
-        "pattern": "escrow",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "CreateCommittedEscrow",
-        "pattern": "escrow",
-        "built_from": [
-          "create",
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "ReleaseCommittedEscrow",
-        "pattern": "escrow",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "RefundCommittedEscrow",
-        "pattern": "escrow",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "CreateObligation",
-        "pattern": "obligation",
-        "built_from": [
-          "create",
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "FulfillObligation",
-        "pattern": "obligation",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "SlashObligation",
-        "pattern": "obligation",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "QueueAllocate",
-        "pattern": "queue",
-        "built_from": [
-          "create",
-          "write"
-        ]
-      },
-      {
-        "tag": "QueueEnqueue",
-        "pattern": "queue",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "QueueDequeue",
-        "pattern": "queue",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "QueueResize",
-        "pattern": "queue",
-        "built_from": [
-          "write"
-        ]
-      },
-      {
-        "tag": "QueueAtomicTx",
-        "pattern": "queue",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "QueuePipelineStep",
-        "pattern": "queue",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "BridgeLock",
-        "pattern": "bridge",
-        "built_from": [
-          "create",
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "BridgeFinalize",
-        "pattern": "bridge",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "BridgeCancel",
-        "pattern": "bridge",
-        "built_from": [
-          "move",
-          "write"
-        ]
-      },
-      {
-        "tag": "CreateSealPair",
-        "pattern": "capsInSlots",
-        "built_from": [
-          "create",
-          "grant"
-        ]
-      },
-      {
-        "tag": "Seal",
-        "pattern": "capsInSlots",
-        "built_from": [
-          "write",
-          "grant"
-        ]
-      },
-      {
-        "tag": "Unseal",
-        "pattern": "capsInSlots",
-        "built_from": [
-          "write",
-          "grant"
-        ]
-      },
-      {
-        "tag": "ExportSturdyRef",
-        "pattern": "capsInSlots",
-        "built_from": [
-          "write",
-          "grant"
-        ]
-      },
-      {
-        "tag": "EnlivenRef",
-        "pattern": "capsInSlots",
-        "built_from": [
-          "write",
-          "grant"
-        ]
-      },
-      {
-        "tag": "DropRef",
-        "pattern": "capsInSlots",
-        "built_from": [
-          "write",
-          "revoke"
-        ]
-      },
-      {
-        "tag": "ValidateHandoff",
-        "pattern": "capsInSlots",
-        "built_from": [
-          "write",
-          "grant"
-        ]
-      }
-    ]
+    "factory": []
   },
   "minimality_theorems": [
     "minimality",

@@ -155,6 +155,23 @@ async function run() {
       { kind: 'TemporalPredicate',  witness_index: 2, dsl_hash: 'dead000000000000000000000000000000000000000000000000000000000000' },
       { kind: 'Witnessed',          predicate_kind: 'Dfa', commitment: 'face000000000000000000000000000000000000000000000000000000000000', input_ref: 'Slot', proof_witness_index: 3 },
       { kind: 'Renounced',          set_kind: 'AllowList', commitment: 'bead000000000000000000000000000000000000000000000000000000000000' },
+      // Policy-combinator core + structural Not — projected by the TOTAL
+      // StateConstraintView since the view-totality close (a live council
+      // cell self-describes its AffineLe threshold M through these).
+      { kind: 'FieldLteOther',      index: 0, other: 1, delta: -3 },
+      { kind: 'MemberOf',           index: 2, set: [0, 1] },
+      { kind: 'PrefixOf',           seg_indices: [0, 1], prefix: [42, 7] },
+      { kind: 'InRangeTwoSided',    index: 3, lo: 1, hi: 9 },
+      { kind: 'DeltaBounded',       index: 4, d: 5 },
+      { kind: 'AffineLe',           terms: [[2, 2], [-1, 3], [-1, 4]], c: 0 },
+      { kind: 'AffineEq',           terms: [[1, 0], [1, 1]], c: 10 },
+      { kind: 'Reachable',          from_index: 0, to_label: 9, edges: [[1, 9], [0, 1]] },
+      { kind: 'AllOf',              variants: [
+          { kind: 'WriteOnce', index: 0 },
+          { kind: 'Not', inner: { kind: 'FieldEquals', index: 0, value: '0000000000000000000000000000000000000000000000000000000000000004' } },
+        ]
+      },
+      { kind: 'Not',                inner: { kind: 'Monotonic', index: 5 } },
       { kind: 'Custom',             ir_hash: 'aabb000000000000000000000000000000000000000000000000000000000000', descriptor_debug: 'custom_constraint_v1' },
     ],
   };
@@ -169,7 +186,7 @@ async function run() {
 
   await page.waitForFunction(() => {
     const el = document.getElementById('test-cp-all-variants');
-    return el && el.querySelectorAll('dregg-state-constraint').length >= 28;
+    return el && el.querySelectorAll('dregg-state-constraint').length >= 38;
   }, { timeout: 5000 });
 
   const allVariantChips = await page.$$eval('#test-cp-all-variants .dregg-sc__chip', chips =>
@@ -184,14 +201,29 @@ async function run() {
     'SumEqualsAcross', 'SenderAuthorized', 'CapabilityUniqueness',
     'RateLimit', 'RateLimitBySum', 'TemporalGate', 'PreimageGate',
     'AllowedTransitions', 'AnyOf', 'BoundDelta', 'TemporalPredicate',
-    'Witnessed', 'Renounced', 'Custom',
+    'Witnessed', 'Renounced',
+    'FieldLteOther', 'MemberOf', 'PrefixOf', 'InRangeTwoSided', 'DeltaBounded',
+    'AffineLe', 'AffineEq', 'Reachable', 'AllOf', 'Not',
+    'Custom',
   ];
 
   const missing = expectedVariants.filter(v => !allVariantChips.includes(v));
   if (missing.length > 0) {
     throw new Error(`TEST FAILED: Missing chips for variants: ${missing.join(', ')}`);
   }
-  console.log('[test 4] PASS: All 28 variants render with chips.');
+  console.log(`[test 4] PASS: All ${expectedVariants.length} variants render with chips.`);
+
+  // The threshold gate's semantic payload renders (live-M legibility tooth).
+  const affineSummary = await page.$eval('#test-cp-all-variants', el => {
+    const rows = [...el.querySelectorAll('dregg-state-constraint')];
+    const row = rows.find(r => r.textContent.includes('AffineLe'));
+    return row ? row.textContent : '';
+  });
+  console.log('[test 4b] AffineLe row:', affineSummary.trim());
+  if (!affineSummary.includes('2·slot[2]') || !affineSummary.includes('≤ 0')) {
+    throw new Error('TEST FAILED: AffineLe summary should render the threshold terms (2·slot[2] … ≤ 0)');
+  }
+  console.log('[test 4b] PASS: AffineLe renders its coefficients + bound.');
 
   // ─── Test 5: Cases program ──────────────────────────────────────────────────
   const casesProgram = {

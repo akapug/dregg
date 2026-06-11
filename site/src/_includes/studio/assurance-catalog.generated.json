@@ -55,8 +55,8 @@
   "coverage": {
     "guarantees_with_apex": 6,
     "guarantees_with_pins": 6,
-    "total_pins": 58,
-    "total_keystones": 26
+    "total_pins": 69,
+    "total_keystones": 27
   },
   "guarantees": [
     {
@@ -103,33 +103,48 @@
     {
       "letter": "B",
       "title": "CONSERVATION",
-      "statement": "Per asset, the resource sum is exactly zero across a turn (and a run).",
+      "statement": "Per asset, the resource sum is IDENTICALLY ZERO — on every reachable state, always.",
       "floor": "NONE beyond integer arithmetic. Conservation is a kernel theorem; the only crypto that touches it is Pedersen (DLog) IF values are committed rather than cleartext, and the case proves committed = cleartext via `Spec.committed_iff_cleartext`.",
       "apex_theorem": "conservation_guarantee",
       "keystones": [
         {
+          "name": "Exec.ReachableConservation.reachable_total_zero",
+          "summary": "THE APEX: every reachable state satisfies `ExactConservation` (`∀ a, recTotalAsset k a = 0`)."
+        },
+        {
+          "name": "TurnExecutorFull.ledgerDeltaAsset_eq_zero",
+          "summary": "the per-verb delta family vanishes: there is NO non-conserving verb (mint/burn/bridgeMint became issuer-moves)."
+        },
+        {
+          "name": "TurnExecutorFull.execFullA_conserves_exact",
+          "summary": "/ `execFullTurnA_conserves_exact` — every committed action/transaction conserves EVERY asset exactly (unconditional)."
+        },
+        {
+          "name": "TurnExecutorFull.recKMintAsset_delta",
+          "summary": "/ `recKBurnAsset_delta` — the reshaped supply verbs conserve (the issuer-debit and recipient-credit cancel inside the sum); their authority gate targets the ISSUER (`recKMintAsset_authorized` — the production law E2); `IssuerMove.recKMintAsset_breaks_exact` is the non-vacuity tooth (the LEGACY supply-increment law provably breaks the value law — the reshape is a repair)."
+        },
+        {
           "name": "RecordKernel.recTransferBal_sum_conserve_moved",
-          "summary": "over the GENUINE multi-asset ledger `CellId → AssetId → ℤ`: a transfer of asset `a` leaves `∑_c bal c a` invariant (the moved asset's total supply is exactly conserved)."
-        },
-        {
-          "name": "RecordKernel.recTransferBal_untouched",
-          "summary": "an UNtouched asset `b ≠ a` is pointwise unchanged (no cross-asset leakage: the per-asset sums are independent)."
-        },
-        {
-          "name": "RecordKernel.recKExec_conserves",
-          "summary": "the executor step conserves the balance sum."
-        },
-        {
-          "name": "Spec.turnConserves_balance",
-          "summary": "/ `Spec.conservation_over_monoid` — the value-monoid -parametric whole-turn conservation (committed = cleartext value)."
+          "summary": "/ `recTransferBal_untouched` — the transfer keystones every move (ordinary or issuer) instantiates: the moved column's debit/credit cancel; untouched assets are pointwise unchanged (no cross-asset leakage)."
         },
         {
           "name": "Conserve.sum_transfer_conserve",
-          "summary": "the shared library lemma the above rest on; with the honesty rail `Conserve.sum_transfer_conserve` genuinely requiring `src ≠ dst`."
+          "summary": "the shared library lemma the above rest on; with the honesty rail requiring `src ≠ dst`."
         }
       ],
       "pins": [
         "conservation_guarantee",
+        "conservation_guarantee_step",
+        "Dregg2.Exec.ReachableConservation.reachable_total_zero",
+        "Dregg2.Exec.TurnExecutorFull.ledgerDeltaAsset_eq_zero",
+        "Dregg2.Exec.TurnExecutorFull.execFullA_conserves_exact",
+        "Dregg2.Exec.TurnExecutorFull.execFullTurnA_conserves_exact",
+        "Dregg2.Exec.TurnExecutorFull.recKMintAsset_delta",
+        "Dregg2.Exec.TurnExecutorFull.recKBurnAsset_delta",
+        "Dregg2.Exec.TurnExecutorFull.recKMintAsset_authorized",
+        "Dregg2.Exec.TurnExecutorFull.recKMintAsset_requires_live_issuer",
+        "Dregg2.Exec.IssuerMove.recKMintAsset_breaks_exact",
+        "Dregg2.Exec.IssuerMove.recKBurnAsset_breaks_exact",
         "Dregg2.Exec.recTransferBal_sum_conserve_moved",
         "Dregg2.Exec.recTransferBal_untouched",
         "Dregg2.Exec.recKExec_conserves",
@@ -202,7 +217,7 @@
         },
         {
           "name": "Circuit.Argus.noteSpendStmt_replay_rejected",
-          "summary": "the TEETH (witness FALSE): a nullifier already present is REJECTED (`= none`); the gate is genuinely two-valued."
+          "summary": "the TEETH (witness FALSE): a nullifier already present is REJECTED (`= none`); the gate is two-valued."
         },
         {
           "name": "Crypto.NonMembership.nonmembership_sound",
