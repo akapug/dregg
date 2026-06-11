@@ -31,12 +31,24 @@
 //!     closure by lookup). Soundness of balance ⇒ consistency is the PROVED
 //!     `Dregg2.Crypto.MemoryChecking.memcheck_sound`;
 //!   * **map-ops** — one row per boundary reconciliation `(root, key, value, op) → new_root`,
-//!     each row verifying a REAL sorted-Poseidon2-Merkle opening in-row (leaf
-//!     `hash[key, value]`, nodes `hash_fact(l, [r])`, depth 16 — byte-identical to
+//!     each row verifying a REAL sorted-Poseidon2-Merkle opening (leaf `hash[key, value]`,
+//!     nodes `hash_fact(l, [r])`, depth 16 — byte-identical to
 //!     `heap_root::CanonicalHeapTree`): `read` authenticates the leaf under `root` and pins
 //!     `new_root = root`; `write` is the in-place sorted-tree leaf UPDATE (old leaf under
 //!     `root`, new leaf over the SAME siblings to `new_root` — `HeapUpdateWitness`'s shape).
-//!     Main sends each guarded op; the table receives it (`mapTableFaithful`).
+//!     Every permutation of the opening RIDES THE CHIP BUS (the leaf hashes as arity-2
+//!     `ir2_p2` lookups, the node hashes as `ir2_fact` lookups into fact-marked chip rows) —
+//!     the map row carries only the opening's spine (key/value/sibs/dirs + the 32 chain
+//!     digests), never an in-row aux block. Main sends each guarded op; the table receives
+//!     it (`mapTableFaithful`).
+//!
+//! **Descriptor-empty tables are NOT committed.** The batch is assembled over only the
+//! tables the descriptor actually uses (a function of the constraint list alone, so prover
+//! and verifier agree): the chip table iff any chip lookup or map op, the byte table iff any
+//! range lookup or mem op, memory+boundary iff any mem op, map-ops iff any map op. FRI
+//! opening cost is per-query × the row width of every committed matrix, so committing a
+//! padded empty table is pure regression (`docs/PROOF-ECONOMICS.md` §2b measured the empty
+//! map-ops table alone at ~1.7 MiB per transfer proof).
 //!
 //! **The law: Rust authors NO constraints.** Every enforced relation here is the realization
 //! of a DECLARED descriptor element (a v1 form, a lookup into a declared table, a mem op, a
@@ -132,6 +144,7 @@ const BUS_MEM_LOG: &str = "ir2_mem_log";
 const BUS_MEM_CHECK: &str = "ir2_mem_check";
 const BUS_MEM_ADDRS: &str = "ir2_mem_addrs";
 const BUS_MAP_LOG: &str = "ir2_map_log";
+const BUS_FACT: &str = "ir2_fact";
 
 /// The `hash_fact` domain-separation marker (`poseidon2::hash_fact` state[5]).
 const FACT_MARK: u32 = 0xFACF;
@@ -868,7 +881,11 @@ const MB_ACHK: usize = MB_AGAP_LIMB0 + decomp_cols(MEM_GAP_BITS); // 17
 const MB_ACHK_LIMB0: usize = MB_ACHK + 1; // 18
 const MB_WIDTH: usize = MB_ACHK_LIMB0 + decomp_cols(MEM_GAP_BITS); // 28
 
-// -- Map-ops table layout (one row per reconciliation, log order). --
+// -- Map-ops table layout (one row per reconciliation, log order). Every permutation of
+//    the opening rides the chip bus: the row carries the two leaf digests and the two
+//    sibling-sharing chains' intermediate digests (the final links ARE root / new_root),
+//    NEVER an in-row aux block (the EPOCH's row-width cure, applied to its own boundary
+//    table — previously 39 + 34·352 = 12,007 cols, the measured §2b disease). --
 const MAP_ROOT: usize = 0;
 const MAP_KEY: usize = 1;
 const MAP_VALUE: usize = 2;
@@ -878,18 +895,24 @@ const MAP_IS_REAL: usize = 5;
 const MAP_OLD_VALUE: usize = 6;
 const MAP_SIB0: usize = 7;
 const MAP_DIR0: usize = MAP_SIB0 + HEAP_TREE_DEPTH; // 23
-const MAP_AUX0: usize = MAP_DIR0 + HEAP_TREE_DEPTH; // 39
-/// Permutation blocks per map row: old leaf + new leaf + two depth-16 chains.
-const MAP_PERM_BLOCKS: usize = 2 + 2 * HEAP_TREE_DEPTH; // 34
-const MAP_WIDTH: usize = MAP_AUX0 + MAP_PERM_BLOCKS * POSEIDON2_PERM_AUX_COLS;
+const MAP_OLD_LEAF: usize = MAP_DIR0 + HEAP_TREE_DEPTH; // 39
+const MAP_NEW_LEAF: usize = MAP_OLD_LEAF + 1; // 40
+const MAP_OLD_CHAIN0: usize = MAP_NEW_LEAF + 1; // 41 (levels 0..14; level 15 = MAP_ROOT)
+const MAP_NEW_CHAIN0: usize = MAP_OLD_CHAIN0 + (HEAP_TREE_DEPTH - 1); // 56
+const MAP_WIDTH: usize = MAP_NEW_CHAIN0 + (HEAP_TREE_DEPTH - 1); // 71
 
-// -- Chip table layout. --
+// -- Chip table layout. A row is EITHER a sponge-absorb permutation (`is_fact = 0`:
+//    state = (in0..in3, arity tag) — the hash_many shape every hash-site lookup queries)
+//    OR a Merkle-node permutation (`is_fact = 1`, arity pinned 0: state = fact_state
+//    (in0, in1) — `poseidon2::hash_fact`'s marker shape, provided on the `ir2_fact` bus
+//    for the map-ops chains). One aux block per UNIQUE permutation, either way. --
 const CHIP_ARITY: usize = 0;
 const CHIP_IN0: usize = 1;
 const CHIP_OUT: usize = CHIP_IN0 + CHIP_RATE; // 9
 const CHIP_MULT: usize = CHIP_OUT + 1; // 10
-const CHIP_AUX0: usize = CHIP_MULT + 1; // 11
-const CHIP_WIDTH: usize = CHIP_AUX0 + POSEIDON2_PERM_AUX_COLS; // 363
+const CHIP_IS_FACT: usize = CHIP_MULT + 1; // 11
+const CHIP_AUX0: usize = CHIP_IS_FACT + 1; // 12
+const CHIP_WIDTH: usize = CHIP_AUX0 + POSEIDON2_PERM_AUX_COLS; // 364
 
 /// The five-table interpreter AIR. One Rust type covering every instance of the batch
 /// (the batch prover is monomorphic in the AIR type), entirely descriptor-driven.
@@ -941,9 +964,10 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for Ir2Air {
 
     fn max_constraint_degree(&self) -> Option<usize> {
         match self {
-            // The Poseidon2 S-box (degree 7) dominates the permutation-bearing tables.
-            Ir2Air::Chip | Ir2Air::MapOps => Some(7),
-            // Let the symbolic analysis infer the main instance (descriptor gates vary).
+            // The Poseidon2 S-box (degree 7) dominates the only permutation-bearing table.
+            Ir2Air::Chip => Some(7),
+            // Let the symbolic analysis infer the rest (map-ops is lookup-spine only now;
+            // descriptor gates vary on main).
             _ => None,
         }
     }
@@ -982,27 +1006,6 @@ where
         }
     }
     builder.assert_zero(recomposed - value_expr);
-}
-
-/// The in-circuit `hash_many([a, b])` input state (two-element absorb, arity tag at state 4)
-/// — byte-identical to `poseidon2::hash_many` and the v1 site absorb.
-fn hash2_state<AB: AirBuilder>(a: AB::Expr, b: AB::Expr) -> [AB::Expr; POSEIDON2_WIDTH] {
-    let mut st: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|_| AB::Expr::ZERO);
-    st[0] = a;
-    st[1] = b;
-    st[4] = AB::Expr::from_u64(2);
-    st
-}
-
-/// The in-circuit `hash_fact(l, [r])` input state (the Merkle NODE hash) — byte-identical
-/// to `poseidon2::hash_fact` (marker at state 5, leaf flag at state 6).
-fn fact_state<AB: AirBuilder>(l: AB::Expr, r: AB::Expr) -> [AB::Expr; POSEIDON2_WIDTH] {
-    let mut st: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|_| AB::Expr::ZERO);
-    st[0] = l;
-    st[1] = r;
-    st[5] = AB::Expr::from_u64(FACT_MARK as u64);
-    st[6] = AB::Expr::ONE;
-    st
 }
 
 impl<AB> Air<AB> for Ir2Air
@@ -1152,22 +1155,31 @@ where
             // ----------------------------------------------------------------
             Ir2Air::Chip => {
                 let arity: AB::Expr = local[CHIP_ARITY].into();
+                let is_fact: AB::Expr = local[CHIP_IS_FACT].into();
                 let two = AB::Expr::from_u64(2);
                 let four = AB::Expr::from_u64(4);
-                // arity ∈ {0 (pad), 2, 4} — the deployed site arities.
+                builder.assert_zero(is_fact.clone() * (is_fact.clone() - AB::Expr::ONE));
+                // arity ∈ {0 (pad/fact), 2, 4} — the deployed site arities.
                 builder.assert_zero(
                     arity.clone() * (arity.clone() - two.clone()) * (arity.clone() - four.clone()),
                 );
+                // A fact row carries arity 0 (so state[4] = arity is the genuine fact
+                // state's zero tag — no hybrid absorb/fact state is expressible).
+                builder.assert_zero(is_fact.clone() * arity.clone());
                 // Inputs beyond the arity are ZERO (the padTo discipline — a row with junk
-                // padding is not a genuine chipRow and must be rejected).
+                // padding is not a genuine chipRow and must be rejected). Fact rows absorb
+                // exactly (in0, in1), so their in0/in1 are exempt; in2.. stay pinned.
                 for i in 0..2 {
-                    // in0/in1 vanish unless arity ∈ {2,4}.
+                    // in0/in1 vanish unless arity ∈ {2,4} or the row is a fact row.
                     let inp: AB::Expr = local[CHIP_IN0 + i].into();
-                    builder
-                        .assert_zero(inp * (arity.clone() - two.clone()) * (arity.clone() - four.clone()));
+                    builder.assert_zero(
+                        inp * (arity.clone() - two.clone())
+                            * (arity.clone() - four.clone())
+                            * (AB::Expr::ONE - is_fact.clone()),
+                    );
                 }
                 for i in 2..4 {
-                    // in2/in3 vanish unless arity = 4.
+                    // in2/in3 vanish unless arity = 4 (fact rows have arity 0 ⇒ pinned).
                     let inp: AB::Expr = local[CHIP_IN0 + i].into();
                     builder.assert_zero(inp * (arity.clone() - four.clone()));
                 }
@@ -1176,18 +1188,25 @@ where
                     // padding lanes are identically zero.
                     builder.assert_zero(local[CHIP_IN0 + i].into());
                 }
-                // The REAL permutation: state = (in0..in3, arity tag), output pinned.
+                // The REAL permutation, output pinned. Absorb rows (is_fact = 0):
+                // state = (in0..in3, arity tag) — `hash_many`'s shape. Fact rows
+                // (is_fact = 1, arity = 0): state = (l, r, 0, 0, 0, FACT_MARK, 1, 0…) —
+                // `hash_fact`'s marker shape, byte-identical to fact_state.
                 let mut st: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|_| AB::Expr::ZERO);
                 for i in 0..4 {
                     st[i] = local[CHIP_IN0 + i].into();
                 }
                 st[4] = arity;
+                st[5] = is_fact.clone() * AB::Expr::from_u64(FACT_MARK as u64);
+                st[6] = is_fact.clone();
                 let aux: Vec<AB::Var> =
                     local[CHIP_AUX0..CHIP_AUX0 + POSEIDON2_PERM_AUX_COLS].to_vec();
                 let digest = poseidon2_permute_expr::<AB>(builder, st, &aux);
                 builder.assert_zero(local[CHIP_OUT].into() - digest);
 
-                // Provide the (arity, ins, out) tuple, consumed `mult` times.
+                // Provide the (arity, ins, out) tuple on the absorb bus, consumed `mult`
+                // times — fact rows provide ZERO here (no fact digest can serve a
+                // hash-site lookup) and vice versa.
                 let bus = LookupBus::new(BUS_P2);
                 let mut tuple: Vec<AB::Expr> = Vec::with_capacity(CHIP_TUPLE_LEN);
                 tuple.push(local[CHIP_ARITY].into());
@@ -1195,7 +1214,22 @@ where
                     tuple.push(local[CHIP_IN0 + i].into());
                 }
                 tuple.push(local[CHIP_OUT].into());
-                bus.table_entry(builder, tuple, local[CHIP_MULT].into());
+                bus.table_entry(
+                    builder,
+                    tuple,
+                    local[CHIP_MULT].into() * (AB::Expr::ONE - is_fact.clone()),
+                );
+                // Provide (l, r, out) on the fact bus for fact rows only.
+                let fact_bus = LookupBus::new(BUS_FACT);
+                fact_bus.table_entry(
+                    builder,
+                    [
+                        local[CHIP_IN0].into(),
+                        local[CHIP_IN0 + 1].into(),
+                        local[CHIP_OUT].into(),
+                    ],
+                    local[CHIP_MULT].into() * is_fact,
+                );
             }
 
             // ----------------------------------------------------------------
@@ -1352,27 +1386,38 @@ where
                     builder.assert_zero(dir.clone() * (dir - AB::Expr::ONE));
                 }
 
-                let aux_block = |i: usize| -> Vec<AB::Var> {
-                    let base = MAP_AUX0 + i * POSEIDON2_PERM_AUX_COLS;
-                    local[base..base + POSEIDON2_PERM_AUX_COLS].to_vec()
+                // Leaf digests ride the chip bus: hash[key, old_value] and hash[key, value]
+                // are arity-2 absorb lookups (gated by is_real — pad rows query nothing).
+                let p2 = LookupBus::new(BUS_P2);
+                let leaf_tuple = |val_col: usize, leaf_col: usize| -> Vec<AB::Expr> {
+                    let mut t: Vec<AB::Expr> = Vec::with_capacity(CHIP_TUPLE_LEN);
+                    t.push(AB::Expr::from_u64(2));
+                    t.push(local[MAP_KEY].into());
+                    t.push(local[val_col].into());
+                    for _ in 2..CHIP_RATE {
+                        t.push(AB::Expr::ZERO);
+                    }
+                    t.push(local[leaf_col].into());
+                    t
                 };
-
-                // Leaf digests: hash[key, old_value] and hash[key, value].
-                let old_leaf = poseidon2_permute_expr::<AB>(
+                p2.lookup_key(
                     builder,
-                    hash2_state::<AB>(local[MAP_KEY].into(), local[MAP_OLD_VALUE].into()),
-                    &aux_block(0),
+                    leaf_tuple(MAP_OLD_VALUE, MAP_OLD_LEAF),
+                    is_real.clone(),
                 );
-                let new_leaf = poseidon2_permute_expr::<AB>(
-                    builder,
-                    hash2_state::<AB>(local[MAP_KEY].into(), local[MAP_VALUE].into()),
-                    &aux_block(1),
-                );
+                p2.lookup_key(builder, leaf_tuple(MAP_VALUE, MAP_NEW_LEAF), is_real.clone());
 
-                // The two chains share siblings and directions: the in-place sorted-tree
-                // leaf update (HeapUpdateWitness's shape).
-                let mut cur_old = old_leaf;
-                let mut cur_new = new_leaf;
+                // The two sibling-sharing chains (the in-place sorted-tree leaf update,
+                // HeapUpdateWitness's shape) ride the fact bus: each node hash is one
+                // (l, r, out) lookup into a fact-marked chip row. The final links ARE the
+                // root columns, so the old path authenticates against the pre-root and
+                // the new path IS the post-root — the table only carries genuine
+                // permutations, so a forged link has no serving entry. (On reads
+                // old_value = value makes the chains coincide; both final lookups share
+                // (l, r), whose unique genuine digest forces new_root = root.)
+                let fact_bus = LookupBus::new(BUS_FACT);
+                let mut cur_old: AB::Expr = local[MAP_OLD_LEAF].into();
+                let mut cur_new: AB::Expr = local[MAP_NEW_LEAF].into();
                 for lvl in 0..HEAP_TREE_DEPTH {
                     let sib: AB::Expr = local[MAP_SIB0 + lvl].into();
                     let dir: AB::Expr = local[MAP_DIR0 + lvl].into();
@@ -1383,24 +1428,24 @@ where
                             (AB::Expr::ONE - dir.clone()) * sib.clone() + dir.clone() * cur;
                         (left, right)
                     };
+                    let last = lvl + 1 == HEAP_TREE_DEPTH;
+                    let out_old: AB::Expr = if last {
+                        local[MAP_ROOT].into()
+                    } else {
+                        local[MAP_OLD_CHAIN0 + lvl].into()
+                    };
                     let (lo, ro) = mix(cur_old);
-                    cur_old = poseidon2_permute_expr::<AB>(
-                        builder,
-                        fact_state::<AB>(lo, ro),
-                        &aux_block(2 + lvl),
-                    );
+                    fact_bus.lookup_key(builder, [lo, ro, out_old.clone()], is_real.clone());
+                    cur_old = out_old;
+                    let out_new: AB::Expr = if last {
+                        local[MAP_NEW_ROOT].into()
+                    } else {
+                        local[MAP_NEW_CHAIN0 + lvl].into()
+                    };
                     let (ln, rn) = mix(cur_new);
-                    cur_new = poseidon2_permute_expr::<AB>(
-                        builder,
-                        fact_state::<AB>(ln, rn),
-                        &aux_block(2 + HEAP_TREE_DEPTH + lvl),
-                    );
+                    fact_bus.lookup_key(builder, [ln, rn, out_new.clone()], is_real.clone());
+                    cur_new = out_new;
                 }
-                // The old path authenticates against the pre-root; the new path IS the
-                // post-root. (On reads old_value = value makes the chains coincide, so
-                // new_root = root is forced transitively.)
-                builder.assert_zero(is_real.clone() * (cur_old - local[MAP_ROOT].into()));
-                builder.assert_zero(is_real.clone() * (cur_new - local[MAP_NEW_ROOT].into()));
 
                 // The table carries EXACTLY the gathered log (mapTableFaithful).
                 let map_log = PermutationCheckBus::new(BUS_MAP_LOG);
@@ -1503,62 +1548,64 @@ pub struct MemBoundaryWitness {
     pub init_vals: Vec<u32>,
 }
 
-/// One fully assembled multi-table witness (the six instance traces, in instance order).
+/// Which non-main tables the descriptor actually USES — a function of the constraint
+/// list (and the resolved layout) ALONE, so prover and verifier compute the same set.
+/// Absent tables are NOT committed: FRI opening cost is per-query × the row width of
+/// every committed matrix, so a declared-but-unused table is pure proof-size regression.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Presence {
+    /// Chip table: any chip lookup, or any map op (the openings' permutations ride it).
+    chip: bool,
+    /// Byte table: any range-lookup limb, or any mem op (gap/address decompositions).
+    byte: bool,
+    /// Memory + boundary tables: any mem op.
+    memory: bool,
+    /// Map-ops table: any map op.
+    map_ops: bool,
+}
+
+impl Presence {
+    fn of(desc: &EffectVmDescriptor2, layout: &MainLayout) -> Self {
+        let has_mem = desc
+            .constraints
+            .iter()
+            .any(|k| matches!(k, VmConstraint2::MemOp(_)));
+        let has_map = desc
+            .constraints
+            .iter()
+            .any(|k| matches!(k, VmConstraint2::MapOp(_)));
+        let has_chip_lookup = desc
+            .constraints
+            .iter()
+            .any(|k| matches!(k, VmConstraint2::Lookup(l) if l.table == TID_P2));
+        Presence {
+            chip: has_chip_lookup || has_map,
+            byte: !layout.ranges.is_empty() || has_mem,
+            memory: has_mem,
+            map_ops: has_map,
+        }
+    }
+}
+
+/// One fully assembled multi-table witness (the PRESENT instance traces; absent tables
+/// are not built — and so contribute no byte-bus pad queries and no committed matrix).
 struct Ir2Traces {
     main: Vec<Vec<BabyBear>>,
-    chip: Vec<Vec<BabyBear>>,
-    byte: Vec<Vec<BabyBear>>,
-    memory: Vec<Vec<BabyBear>>,
-    boundary: Vec<Vec<BabyBear>>,
-    map_ops: Vec<Vec<BabyBear>>,
+    chip: Option<Vec<Vec<BabyBear>>>,
+    byte: Option<Vec<Vec<BabyBear>>>,
+    memory: Option<Vec<Vec<BabyBear>>>,
+    boundary: Option<Vec<Vec<BabyBear>>>,
+    map_ops: Option<Vec<Vec<BabyBear>>>,
 }
 
-/// Build a fully padded map-ops row (main columns given; aux blocks computed concretely,
-/// valid for pad rows too — every permutation block is genuine on any column values).
-fn map_row_with_aux(main_cols: &[BabyBear]) -> Vec<BabyBear> {
-    let mut row = main_cols.to_vec();
-    debug_assert_eq!(row.len(), MAP_AUX0);
-    let key = row[MAP_KEY];
-    let value = row[MAP_VALUE];
-    let old_value = row[MAP_OLD_VALUE];
-    let (aux_old_leaf, mut cur_old) = perm_aux(hash2_state_c(key, old_value));
-    let (aux_new_leaf, mut cur_new) = perm_aux(hash2_state_c(key, value));
-    let mut chain_old_aux: Vec<BabyBear> = Vec::new();
-    let mut chain_new_aux: Vec<BabyBear> = Vec::new();
-    for lvl in 0..HEAP_TREE_DEPTH {
-        let sib = row[MAP_SIB0 + lvl];
-        let dir = row[MAP_DIR0 + lvl];
-        let mix = |cur: BabyBear| -> (BabyBear, BabyBear) {
-            if dir == BabyBear::ZERO {
-                (cur, sib)
-            } else {
-                (sib, cur)
-            }
-        };
-        let (lo, ro) = mix(cur_old);
-        let (aux, d) = perm_aux(fact_state_c(lo, ro));
-        chain_old_aux.extend(aux);
-        cur_old = d;
-        let (ln, rn) = mix(cur_new);
-        let (aux, d) = perm_aux(fact_state_c(ln, rn));
-        chain_new_aux.extend(aux);
-        cur_new = d;
-    }
-    row.extend(aux_old_leaf);
-    row.extend(aux_new_leaf);
-    row.extend(chain_old_aux);
-    row.extend(chain_new_aux);
-    debug_assert_eq!(row.len(), MAP_WIDTH);
-    row
-}
-
-/// Assemble all six instance traces from the base main trace + the boundary witness +
+/// Assemble the PRESENT instance traces from the base main trace + the boundary witness +
 /// the map heaps. `check` controls the prover-side pre-flight replay (the test harness
 /// disables it to exercise the in-circuit refusals).
 #[allow(clippy::too_many_lines)]
 fn build_traces(
     desc: &EffectVmDescriptor2,
     layout: &MainLayout,
+    presence: Presence,
     base_trace: &[Vec<BabyBear>],
     mem_boundary: &MemBoundaryWitness,
     map_heaps: &[Vec<HeapLeaf>],
@@ -1604,41 +1651,22 @@ fn build_traces(
         main.push(row);
     }
 
-    // ---- chip: histogram of every row's every chip-lookup tuple. ----
+    // ---- chip histograms: absorb tuples from the main rows' chip lookups; fact tuples
+    //      come from the map-ops openings below. The table itself is built after the
+    //      map section so it carries one row per UNIQUE permutation of EITHER kind. ----
     let mut chip_hist: BTreeMap<Vec<u32>, u64> = BTreeMap::new();
-    for base_row in base_trace {
-        for k in &desc.constraints {
-            if let VmConstraint2::Lookup(l) = k {
-                if l.table == TID_P2 {
-                    let tuple: Vec<u32> =
-                        l.tuple.iter().map(|e| eval_c(e, base_row).as_u32()).collect();
-                    *chip_hist.entry(tuple).or_insert(0) += 1;
+    let mut fact_hist: BTreeMap<(u32, u32, u32), u64> = BTreeMap::new();
+    if presence.chip {
+        for base_row in base_trace {
+            for k in &desc.constraints {
+                if let VmConstraint2::Lookup(l) = k {
+                    if l.table == TID_P2 {
+                        let tuple: Vec<u32> =
+                            l.tuple.iter().map(|e| eval_c(e, base_row).as_u32()).collect();
+                        *chip_hist.entry(tuple).or_insert(0) += 1;
+                    }
                 }
             }
-        }
-    }
-    let mut chip: Vec<Vec<BabyBear>> = Vec::new();
-    for (tuple, mult) in &chip_hist {
-        let mut row: Vec<BabyBear> = tuple.iter().map(|&v| BabyBear::new(v)).collect();
-        row.push(BabyBear::new((*mult % (BABYBEAR_P as u64)) as u32));
-        let mut st = [BabyBear::ZERO; POSEIDON2_WIDTH];
-        for i in 0..4 {
-            st[i] = row[CHIP_IN0 + i];
-        }
-        st[4] = row[CHIP_ARITY];
-        let (aux, _digest) = perm_aux(st);
-        row.extend(aux);
-        chip.push(row);
-    }
-    // Pad: genuine arity-0 permutation rows with multiplicity 0.
-    {
-        let (aux, digest) = perm_aux([BabyBear::ZERO; POSEIDON2_WIDTH]);
-        let mut pad = vec![BabyBear::ZERO; CHIP_AUX0];
-        pad[CHIP_OUT] = digest;
-        pad.extend(aux);
-        let target = next_pow2(chip.len());
-        while chip.len() < target {
-            chip.push(pad.clone());
         }
     }
 
@@ -1666,8 +1694,11 @@ fn build_traces(
     }
 
     // ---- memory table: log rows in order, positional serials, gap decomposition. ----
+    let mut memory: Option<Vec<Vec<BabyBear>>> = None;
+    let mut boundary: Option<Vec<Vec<BabyBear>>> = None;
+    if presence.memory {
     let mem_height = next_pow2(mem_log.len());
-    let mut memory: Vec<Vec<BabyBear>> = Vec::with_capacity(mem_height);
+    let mut mem_rows: Vec<Vec<BabyBear>> = Vec::with_capacity(mem_height);
     for i in 0..mem_height {
         let serial = (i + 1) as u32;
         let mut row = vec![BabyBear::ZERO; MEM_ADDR];
@@ -1696,8 +1727,9 @@ fn build_traces(
         row.push(BabyBear::new(gap));
         fill_decomp(gap, MEM_GAP_BITS, &mut row, &mut byte_hist);
         debug_assert_eq!(row.len(), MEM_WIDTH);
-        memory.push(row);
+        mem_rows.push(row);
     }
+    memory = Some(mem_rows);
 
     // ---- memory boundary: declared addrs (strictly increasing), replayed final image. ----
     if mem_boundary.addrs.len() != mem_boundary.init_vals.len() {
@@ -1743,7 +1775,7 @@ fn build_traces(
         *addr_mult.entry(a).or_insert(0) += 1;
     }
     let mb_height = next_pow2(mem_boundary.addrs.len());
-    let mut boundary: Vec<Vec<BabyBear>> = Vec::with_capacity(mb_height);
+    let mut mb_rows: Vec<Vec<BabyBear>> = Vec::with_capacity(mb_height);
     for i in 0..mb_height {
         let mut row: Vec<BabyBear> = Vec::with_capacity(MB_WIDTH);
         let (addr, init_v, is_real) = if i < mem_boundary.addrs.len() {
@@ -1782,8 +1814,10 @@ fn build_traces(
         row.push(BabyBear::new(achk));
         fill_decomp(achk, MEM_GAP_BITS, &mut row, &mut byte_hist);
         debug_assert_eq!(row.len(), MB_WIDTH);
-        boundary.push(row);
+        mb_rows.push(row);
     }
+    boundary = Some(mb_rows);
+    } // if presence.memory
 
     // ---- the map-ops log + the opening witnesses. ----
     let mut map_log: Vec<([BabyBear; 5], MapKind)> = Vec::new();
@@ -1810,12 +1844,14 @@ fn build_traces(
             }
         }
     }
+    let mut map_ops: Option<Vec<Vec<BabyBear>>> = None;
+    if presence.map_ops {
     let mut trees: Vec<CanonicalHeapTree> = map_heaps
         .iter()
         .map(|leaves| CanonicalHeapTree::new(leaves.clone(), HEAP_TREE_DEPTH))
         .collect();
     let map_height = next_pow2(map_log.len());
-    let mut map_ops: Vec<Vec<BabyBear>> = Vec::with_capacity(map_height);
+    let mut map_rows: Vec<Vec<BabyBear>> = Vec::with_capacity(map_height);
     for (i, (tuple, kind)) in map_log.iter().enumerate() {
         let [root, key, value, _opc, new_root] = *tuple;
         let tree = trees
@@ -1879,7 +1915,7 @@ fn build_traces(
             }
             MapKind::Absent => unreachable!("absent refused by check_descriptor2"),
         };
-        let mut cols = vec![BabyBear::ZERO; MAP_AUX0];
+        let mut cols = vec![BabyBear::ZERO; MAP_WIDTH];
         cols[MAP_ROOT] = root;
         cols[MAP_KEY] = key;
         cols[MAP_VALUE] = value;
@@ -1891,21 +1927,111 @@ fn build_traces(
             cols[MAP_SIB0 + lvl] = sibs[lvl];
             cols[MAP_DIR0 + lvl] = BabyBear::new(dirs[lvl] as u32);
         }
-        map_ops.push(map_row_with_aux(&cols));
+        // The opening's permutations ride the chip table: the two leaf hashes are
+        // absorb (arity-2) tuples on the chip bus, the chains' node hashes are fact
+        // tuples on the fact bus. The row carries digests only, never aux.
+        let leaf_digest = |a: BabyBear, b: BabyBear| perm_aux(hash2_state_c(a, b)).1;
+        let absorb2_tuple = |a: BabyBear, b: BabyBear, d: BabyBear| -> Vec<u32> {
+            let mut t = vec![2u32, a.as_u32(), b.as_u32()];
+            t.extend(std::iter::repeat(0u32).take(CHIP_RATE - 2));
+            t.push(d.as_u32());
+            t
+        };
+        let old_leaf = leaf_digest(key, old_value);
+        let new_leaf = leaf_digest(key, value);
+        *chip_hist
+            .entry(absorb2_tuple(key, old_value, old_leaf))
+            .or_insert(0) += 1;
+        *chip_hist
+            .entry(absorb2_tuple(key, value, new_leaf))
+            .or_insert(0) += 1;
+        cols[MAP_OLD_LEAF] = old_leaf;
+        cols[MAP_NEW_LEAF] = new_leaf;
+        let mut cur_old = old_leaf;
+        let mut cur_new = new_leaf;
+        for lvl in 0..HEAP_TREE_DEPTH {
+            let sib = sibs[lvl];
+            let mix = |cur: BabyBear| -> (BabyBear, BabyBear) {
+                if dirs[lvl] != 0 { (sib, cur) } else { (cur, sib) }
+            };
+            let (lo, ro) = mix(cur_old);
+            let d_old = perm_aux(fact_state_c(lo, ro)).1;
+            *fact_hist
+                .entry((lo.as_u32(), ro.as_u32(), d_old.as_u32()))
+                .or_insert(0) += 1;
+            let (ln, rn) = mix(cur_new);
+            let d_new = perm_aux(fact_state_c(ln, rn)).1;
+            *fact_hist
+                .entry((ln.as_u32(), rn.as_u32(), d_new.as_u32()))
+                .or_insert(0) += 1;
+            if lvl + 1 < HEAP_TREE_DEPTH {
+                cols[MAP_OLD_CHAIN0 + lvl] = d_old;
+                cols[MAP_NEW_CHAIN0 + lvl] = d_new;
+            }
+            cur_old = d_old;
+            cur_new = d_new;
+        }
+        map_rows.push(cols);
     }
-    while map_ops.len() < map_height {
-        map_ops.push(map_row_with_aux(&vec![BabyBear::ZERO; MAP_AUX0]));
+    // Pad rows are all-zero: is_real = 0 gates every lookup and the log receive.
+    while map_rows.len() < map_height {
+        map_rows.push(vec![BabyBear::ZERO; MAP_WIDTH]);
     }
+    map_ops = Some(map_rows);
+    } // if presence.map_ops
+
+    // ---- chip table: one row per unique permutation (absorb + fact), mult-counted. ----
+    let chip: Option<Vec<Vec<BabyBear>>> = if presence.chip {
+        let mut chip_rows: Vec<Vec<BabyBear>> = Vec::new();
+        for (tuple, mult) in &chip_hist {
+            let mut row: Vec<BabyBear> = tuple.iter().map(|&v| BabyBear::new(v)).collect();
+            row.push(BabyBear::new((*mult % (BABYBEAR_P as u64)) as u32));
+            row.push(BabyBear::ZERO); // is_fact
+            let mut st = [BabyBear::ZERO; POSEIDON2_WIDTH];
+            for i in 0..4 {
+                st[i] = row[CHIP_IN0 + i];
+            }
+            st[4] = row[CHIP_ARITY];
+            let (aux, _digest) = perm_aux(st);
+            row.extend(aux);
+            chip_rows.push(row);
+        }
+        for (&(l, r, out), mult) in &fact_hist {
+            let mut row = vec![BabyBear::ZERO; CHIP_AUX0];
+            row[CHIP_IN0] = BabyBear::new(l);
+            row[CHIP_IN0 + 1] = BabyBear::new(r);
+            row[CHIP_OUT] = BabyBear::new(out);
+            row[CHIP_MULT] = BabyBear::new((*mult % (BABYBEAR_P as u64)) as u32);
+            row[CHIP_IS_FACT] = BabyBear::ONE;
+            let (aux, _digest) = perm_aux(fact_state_c(BabyBear::new(l), BabyBear::new(r)));
+            row.extend(aux);
+            chip_rows.push(row);
+        }
+        // Pad: genuine arity-0 absorb permutation rows with multiplicity 0.
+        let (aux, digest) = perm_aux([BabyBear::ZERO; POSEIDON2_WIDTH]);
+        let mut pad = vec![BabyBear::ZERO; CHIP_AUX0];
+        pad[CHIP_OUT] = digest;
+        pad.extend(aux);
+        let target = next_pow2(chip_rows.len());
+        while chip_rows.len() < target {
+            chip_rows.push(pad.clone());
+        }
+        Some(chip_rows)
+    } else {
+        None
+    };
 
     // ---- the byte table (height pinned at 256). ----
-    let byte: Vec<Vec<BabyBear>> = (0..BYTE_TABLE_HEIGHT)
-        .map(|b| {
-            vec![
-                BabyBear::new(b as u32),
-                BabyBear::new((byte_hist[b] % (BABYBEAR_P as u64)) as u32),
-            ]
-        })
-        .collect();
+    let byte: Option<Vec<Vec<BabyBear>>> = presence.byte.then(|| {
+        (0..BYTE_TABLE_HEIGHT)
+            .map(|b| {
+                vec![
+                    BabyBear::new(b as u32),
+                    BabyBear::new((byte_hist[b] % (BABYBEAR_P as u64)) as u32),
+                ]
+            })
+            .collect()
+    });
 
     Ok(Ir2Traces {
         main,
@@ -1917,20 +2043,28 @@ fn build_traces(
     })
 }
 
-/// The six instance AIRs for a checked descriptor, in instance order
-/// (main, chip, byte, memory, boundary, map-ops).
-fn instance_airs(desc: &EffectVmDescriptor2, layout: MainLayout) -> Vec<Ir2Air> {
-    vec![
-        Ir2Air::Main {
-            desc: desc.clone(),
-            layout: MainLayoutPub(layout),
-        },
-        Ir2Air::Chip,
-        Ir2Air::ByteTable,
-        Ir2Air::Memory,
-        Ir2Air::MemBoundary,
-        Ir2Air::MapOps,
-    ]
+/// The PRESENT instance AIRs for a checked descriptor, in canonical instance order
+/// (main, then chip / byte / memory+boundary / map-ops, each iff the descriptor uses it).
+/// Presence is a function of the descriptor alone, so the verifier rebuilds the same set.
+fn instance_airs(desc: &EffectVmDescriptor2, layout: MainLayout, presence: Presence) -> Vec<Ir2Air> {
+    let mut airs = vec![Ir2Air::Main {
+        desc: desc.clone(),
+        layout: MainLayoutPub(layout),
+    }];
+    if presence.chip {
+        airs.push(Ir2Air::Chip);
+    }
+    if presence.byte {
+        airs.push(Ir2Air::ByteTable);
+    }
+    if presence.memory {
+        airs.push(Ir2Air::Memory);
+        airs.push(Ir2Air::MemBoundary);
+    }
+    if presence.map_ops {
+        airs.push(Ir2Air::MapOps);
+    }
+    airs
 }
 
 fn prove_vm_descriptor2_inner(
@@ -1966,19 +2100,36 @@ fn prove_vm_descriptor2_inner(
         ));
     }
 
-    let traces = build_traces(desc, &layout, base_trace, mem_boundary, map_heaps, check)?;
-    let airs = instance_airs(desc, layout);
+    let presence = Presence::of(desc, &layout);
+    if !presence.memory && !(mem_boundary.addrs.is_empty() && mem_boundary.init_vals.is_empty()) {
+        return Err(
+            "descriptor declares no mem ops but a memory boundary witness was supplied \
+             (the memory tables are not committed for this descriptor)"
+                .to_string(),
+        );
+    }
+    if !presence.map_ops && !map_heaps.is_empty() {
+        return Err(
+            "descriptor declares no map ops but witness heaps were supplied \
+             (the map-ops table is not committed for this descriptor)"
+                .to_string(),
+        );
+    }
 
-    let matrices = [
-        to_matrix(&traces.main),
-        to_matrix(&traces.chip),
-        to_matrix(&traces.byte),
-        to_matrix(&traces.memory),
-        to_matrix(&traces.boundary),
-        to_matrix(&traces.map_ops),
-    ];
+    let traces = build_traces(desc, &layout, presence, base_trace, mem_boundary, map_heaps, check)?;
+    let airs = instance_airs(desc, layout, presence);
+
+    let mut matrices = vec![to_matrix(&traces.main)];
+    for t in [&traces.chip, &traces.byte, &traces.memory, &traces.boundary, &traces.map_ops]
+        .into_iter()
+        .flatten()
+    {
+        matrices.push(to_matrix(t));
+    }
+    debug_assert_eq!(matrices.len(), airs.len());
     let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
-    let pvs: Vec<Vec<P3BabyBear>> = vec![pis, vec![], vec![], vec![], vec![], vec![]];
+    let mut pvs: Vec<Vec<P3BabyBear>> = vec![pis];
+    pvs.resize(airs.len(), vec![]);
 
     let config = create_config();
     let instances: Vec<StarkInstance<'_, DreggStarkConfig, Ir2Air>> = airs
@@ -2032,10 +2183,20 @@ pub fn verify_vm_descriptor2(
     public_inputs: &[BabyBear],
 ) -> Result<(), String> {
     let layout = check_descriptor2(desc)?;
-    let airs = instance_airs(desc, layout);
+    let presence = Presence::of(desc, &layout);
+    let airs = instance_airs(desc, layout, presence);
+    if proof.degree_bits.len() != airs.len() {
+        return Err(format!(
+            "IR v2 proof carries {} instances but the descriptor's present-table set is {} \
+             (descriptor-empty tables are not committed)",
+            proof.degree_bits.len(),
+            airs.len()
+        ));
+    }
     let config = create_config();
     let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
-    let pvs: Vec<Vec<P3BabyBear>> = vec![pis, vec![], vec![], vec![], vec![], vec![]];
+    let mut pvs: Vec<Vec<P3BabyBear>> = vec![pis];
+    pvs.resize(airs.len(), vec![]);
     let common = ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).common;
     verify_batch(&config, &airs, proof, &pvs, &common)
         .map_err(|e| format!("IR v2 verification failed: {e:?}"))
@@ -2226,7 +2387,49 @@ mod tests {
             &[test_heap()],
         )
         .expect("honest IR v2 witness must prove");
+        assert_eq!(
+            proof.degree_bits.len(),
+            6,
+            "the full gauntlet uses every table: main + chip + byte + memory + boundary + map"
+        );
         verify_vm_descriptor2(&desc, &proof, &[]).expect("honest IR v2 proof must verify");
+    }
+
+    /// FLAW-1 regression (the §2b size disease): a descriptor that uses only chip + range
+    /// lookups (the graduated v1 cohort's shape — transfer et al.) commits ONLY
+    /// main + chip + byte; the memory / boundary / map-ops tables are NOT in the batch,
+    /// and the verifier agrees on the present-table set from the descriptor alone.
+    #[test]
+    fn ir2_elides_descriptor_empty_tables() {
+        let mut desc = test_desc();
+        desc.constraints
+            .retain(|k| !matches!(k, VmConstraint2::MemOp(_) | VmConstraint2::MapOp(_)));
+        let proof =
+            prove_vm_descriptor2(&desc, &test_trace(), &[], &MemBoundaryWitness::default(), &[])
+                .expect("chip+range-only witness must prove");
+        assert_eq!(
+            proof.degree_bits.len(),
+            3,
+            "main + chip + byte only — descriptor-empty tables must be elided"
+        );
+        verify_vm_descriptor2(&desc, &proof, &[]).expect("elided-table proof must verify");
+
+        // A stray witness for an elided table is a refusal, not a silent drop.
+        assert!(
+            prove_vm_descriptor2(&desc, &test_trace(), &[], &test_boundary(), &[]).is_err(),
+            "a memory boundary witness without mem ops must refuse"
+        );
+        assert!(
+            prove_vm_descriptor2(
+                &desc,
+                &test_trace(),
+                &[],
+                &MemBoundaryWitness::default(),
+                &[test_heap()]
+            )
+            .is_err(),
+            "witness heaps without map ops must refuse"
+        );
     }
 
     /// A tampered memory READ (claims value 7 where the init image holds 9) must REFUSE:
@@ -2406,6 +2609,11 @@ mod tests {
             &[test_heap()],
         )
         .expect("map write update must prove");
+        assert_eq!(
+            proof.degree_bits.len(),
+            3,
+            "map-only descriptor commits main + chip + map-ops (chains ride the chip bus)"
+        );
         verify_vm_descriptor2(&desc, &proof, &[]).expect("map write proof must verify");
     }
 }
