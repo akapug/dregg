@@ -2543,6 +2543,7 @@ dependencies = [
  "dregg-types",
  "dregg-wire",
  "ed25519-dalek",
+ "futures-core",
  "getrandom 0.3.4",
  "hex",
  "hmac 0.12.1",

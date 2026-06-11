@@ -43,6 +43,7 @@ dregg-trace = { path = "../trace" }
 
 async-trait = "0.1"
 base64 = { workspace = true }
+futures-core = { version = "0.3", optional = true }
 blake3 = "1"
 curve25519-dalek = { version = "4", features = ["alloc"] }
 ed25519-dalek = { version = "2", features = ["std"] }
@@ -67,7 +68,7 @@ zeroize = { workspace = true }
 # pass `default-features = false`.
 default = ["federation-client", "network", "captp"]
 federation-client = ["dep:reqwest"]
-network = ["dep:dregg-wire", "dep:tokio"]
+network = ["dep:dregg-wire", "dep:tokio", "dep:futures-core"]
 captp = ["dep:dregg-captp"]
 # THE SWAP — opt-in producer mode. Enables the `dregg_turn::lean_apply` extractor
 # (the verified Lean executor as the authoritative state producer) and links the
