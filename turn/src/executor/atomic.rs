@@ -125,7 +125,8 @@ pub enum AtomicTurnError {
     /// Agent cell not found (for fee/nonce).
     AgentNotFound(CellId),
     /// Insufficient balance for fee.
-    InsufficientFee { available: u64, required: u64 },
+    /// `available` is SIGNED (THE EPOCH §5).
+    InsufficientFee { available: i64, required: u64 },
     /// Nonce mismatch.
     NonceMismatch { expected: u64, got: u64 },
     /// Duplicate cell in proof entries.
@@ -449,7 +450,9 @@ impl TurnExecutor {
                 got: atomic_turn.nonce,
             });
         }
-        if agent_cell.state.balance() < atomic_turn.fee {
+        if agent_cell.state.balance() < 0
+            || (agent_cell.state.balance() as u64) < atomic_turn.fee
+        {
             return Err(AtomicTurnError::InsufficientFee {
                 available: agent_cell.state.balance(),
                 required: atomic_turn.fee,
@@ -611,14 +614,28 @@ impl TurnExecutor {
         }
 
         // 4. All proofs verified + conservation holds. Commit atomically.
-        // Deduct fee and increment nonce.
+        // Deduct fee and increment nonce. THE EPOCH §5 ("fees as moves"):
+        // the fee is a MOVE agent→fee-well, not a burn — with a configured
+        // well the atomic turn's total value delta is exactly zero.
         {
             let agent = ledger.get_mut(&atomic_turn.agent).unwrap();
-            agent
-                .state
-                .set_balance(agent.state.balance() - atomic_turn.fee);
+            let prior_balance = agent.state.balance();
+            if !agent.state.debit_balance(atomic_turn.fee) {
+                return Err(AtomicTurnError::ProofFailed {
+                    cell: atomic_turn.agent,
+                    reason: format!(
+                        "agent balance {prior_balance} cannot cover fee {}",
+                        atomic_turn.fee
+                    ),
+                });
+            }
             if !agent.state.increment_nonce() {
                 return Err(AtomicTurnError::NonceOverflow(atomic_turn.agent));
+            }
+        }
+        if let Some(well_id) = &self.fee_well_cell {
+            if let Some(well) = ledger.get_mut(well_id) {
+                let _ = well.state.credit_balance(atomic_turn.fee);
             }
         }
 
@@ -716,7 +733,9 @@ impl TurnExecutor {
                 got: mixed_turn.nonce,
             });
         }
-        if agent_cell.state.balance() < mixed_turn.fee {
+        if agent_cell.state.balance() < 0
+            || (agent_cell.state.balance() as u64) < mixed_turn.fee
+        {
             return Err(AtomicTurnError::InsufficientFee {
                 available: agent_cell.state.balance(),
                 required: mixed_turn.fee,
@@ -971,15 +990,24 @@ impl TurnExecutor {
                     *hosted_cell_deltas.entry(*from).or_insert(0) -= *amount as i64;
                     *hosted_cell_deltas.entry(*to).or_insert(0) += *amount as i64;
                 }
-                // Burn is non-conservation: it removes supply from the
-                // target slot. Track its contribution to the per-cell
-                // delta and mark `was_burn` for the receipt.
+                // Burn debits the target. THE EPOCH §5: when the target's
+                // asset has a registered ISSUER WELL, the burn is a MOVE
+                // target→well (the well is credited back toward zero), so it
+                // contributes ZERO net — `was_burn` stays as the disclosure
+                // bit. Without a registered well, the legacy non-conserving
+                // contribution remains.
                 if let crate::action::Effect::Burn { target, amount, .. } = effect {
                     if target == &action.target {
                         net_delta -= *amount as i64;
                         action_was_burn = true;
                     }
                     *hosted_cell_deltas.entry(*target).or_insert(0) -= *amount as i64;
+                    if let Some(well_id) = self.issuer_well_for(ledger, target) {
+                        *hosted_cell_deltas.entry(well_id).or_insert(0) += *amount as i64;
+                        if well_id == action.target {
+                            net_delta += *amount as i64;
+                        }
+                    }
                 }
                 if let Err((err, _)) = self.apply_effect(
                     effect,
@@ -1030,11 +1058,27 @@ impl TurnExecutor {
         // ====================================================================
         {
             let agent = ledger.get_mut(&mixed_turn.agent).unwrap();
-            agent
-                .state
-                .set_balance(agent.state.balance() - mixed_turn.fee);
+            let prior_balance = agent.state.balance();
+            // THE EPOCH §5: ordinary debit (refuses below zero) instead of a
+            // raw subtraction that could underflow.
+            if !agent.state.debit_balance(mixed_turn.fee) {
+                journal.rollback(ledger, &self.bridged_nullifiers, &self.note_nullifiers);
+                return Err(AtomicTurnError::ProofFailed {
+                    cell: mixed_turn.agent,
+                    reason: format!(
+                        "agent balance {prior_balance} cannot cover fee {}",
+                        mixed_turn.fee
+                    ),
+                });
+            }
             if !agent.state.increment_nonce() {
                 return Err(AtomicTurnError::NonceOverflow(mixed_turn.agent));
+            }
+        }
+        // THE EPOCH §5 ("fees as moves"): the fee MOVES to the fee well.
+        if let Some(well_id) = &self.fee_well_cell {
+            if let Some(well) = ledger.get_mut(well_id) {
+                let _ = well.state.credit_balance(mixed_turn.fee);
             }
         }
 

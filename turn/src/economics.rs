@@ -210,9 +210,13 @@ impl EpochMinter {
         // the minted computrons are effectively lost (misconfiguration).
         // Production deployments MUST ensure the treasury cell exists at genesis.
         if let Some(treasury) = ledger.get_mut(&self.policy.treasury_cell) {
+            // NOTE (THE EPOCH §5): epoch minting remains an ex-nihilo credit
+            // — the LAST non-conserving verb in the executor. The deployed
+            // chain does not configure an `epoch_minter`; converting this to
+            // an issuer-well move is the natural follow-up when it is.
             treasury
                 .state
-                .set_balance(treasury.state.balance().saturating_add(amount));
+                .set_balance(treasury.state.balance().saturating_add_unsigned(amount));
         } else {
             // Treasury cell not found — this is a configuration error.
             // Log and skip rather than panic. The computrons are not created.

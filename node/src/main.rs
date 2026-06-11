@@ -564,6 +564,29 @@ async fn run_node(
                                 "processed genesis initial_cells"
                             );
                         }
+                        // THE EPOCH §5: pick up the genesis wells so every
+                        // executor (configure_turn_executor) runs fees and
+                        // burns as exact MOVES.
+                        if let Some(fee_well_hex) = genesis["fee_well"].as_str() {
+                            match hex_decode_32(fee_well_hex) {
+                                Some(id) => s.fee_well = Some(dregg_cell::CellId(id)),
+                                None => tracing::warn!(
+                                    "genesis fee_well is not a 32-byte hex cell id; fees will burn"
+                                ),
+                            }
+                        }
+                        if let Some(issuer_well_hex) = genesis["issuer_well"].as_str() {
+                            match hex_decode_32(issuer_well_hex) {
+                                // The devnet issuer well backs the DEFAULT
+                                // asset (all-zero token domain).
+                                Some(id) => s
+                                    .issuer_wells
+                                    .push(([0u8; 32], dregg_cell::CellId(id))),
+                                None => tracing::warn!(
+                                    "genesis issuer_well is not a 32-byte hex cell id; burns stay non-conserving"
+                                ),
+                            }
+                        }
                         let federation_id = s.federation_id;
                         let operator_pubkey = s.cclerk.public_key().0;
                         let seed_stats =
@@ -1058,6 +1081,15 @@ impl GenesisCellLoadStats {
 /// a public key, token id, and balance. Label-only entries are skipped because
 /// turning an arbitrary label into a signing public key would create cells that
 /// no holder can authorize.
+///
+/// THE EPOCH §5 ("genesis as issuer-moves"): when the genesis carries
+/// `genesis_moves`, every cell is inserted at ZERO balance (value-empty
+/// genesis) and value enters ONLY by replaying the issuer-moves — the well
+/// is well-debited (goes negative, −supply) and each recipient credited —
+/// after which every declared `balance` is verified against the outcome.
+/// The deployed chain therefore starts inside guarantee B's hypotheses
+/// (`reachable_total_zero`). A genesis without `genesis_moves` (legacy)
+/// materializes declared balances directly.
 fn materialize_genesis_cells(
     genesis: &serde_json::Value,
     ledger: &mut dregg_cell::Ledger,
@@ -1066,6 +1098,12 @@ fn materialize_genesis_cells(
     let Some(initial_cells) = genesis["initial_cells"].as_array() else {
         return stats;
     };
+    let moves = genesis["genesis_moves"].as_array();
+    let seed_by_moves = moves.is_some_and(|m| !m.is_empty());
+
+    // Declared (post-seed) balances by cell id, for the issuer-move
+    // verification pass.
+    let mut declared: Vec<(dregg_cell::CellId, i64)> = Vec::new();
 
     for cell in initial_cells {
         let label = cell["id"]
@@ -1073,11 +1111,21 @@ fn materialize_genesis_cells(
             .or_else(|| cell["name"].as_str())
             .unwrap_or("<unnamed>");
 
-        let Some(balance) = cell["balance"].as_u64() else {
-            tracing::warn!(cell = %label, "skipping genesis cell without u64 balance");
+        // SIGNED balance (THE EPOCH §5): the issuer well declares a negative
+        // post-seed balance.
+        let Some(balance) = cell["balance"].as_i64() else {
+            tracing::warn!(cell = %label, "skipping genesis cell without i64 balance");
             stats.invalid += 1;
             continue;
         };
+        if !seed_by_moves && balance < 0 {
+            tracing::warn!(
+                cell = %label,
+                "skipping negative-balance genesis cell without genesis_moves (a well needs issuer-moves to be derived)"
+            );
+            stats.invalid += 1;
+            continue;
+        }
 
         let Some(public_key_hex) = cell["public_key"].as_str() else {
             tracing::warn!(
@@ -1105,7 +1153,10 @@ fn materialize_genesis_cells(
             None => [0u8; 32],
         };
 
-        let ledger_cell = dregg_cell::Cell::with_balance(public_key, token_id, balance);
+        // Issuer-move seeding inserts the cell VALUE-EMPTY; legacy seeding
+        // installs the declared balance directly.
+        let initial_balance = if seed_by_moves { 0 } else { balance };
+        let ledger_cell = dregg_cell::Cell::with_balance(public_key, token_id, initial_balance);
         let cell_id = ledger_cell.id();
         if let Some(declared_id_hex) = cell["id"].as_str().filter(|id| id.len() == 64) {
             match hex_decode_32(declared_id_hex) {
@@ -1133,10 +1184,73 @@ fn materialize_genesis_cells(
         }
 
         match ledger.insert_cell(ledger_cell) {
-            Ok(_) => stats.inserted += 1,
+            Ok(_) => {
+                stats.inserted += 1;
+                declared.push((cell_id, balance));
+            }
             Err(dregg_cell::LedgerError::CellAlreadyExists(_)) => stats.existing += 1,
             Err(e) => {
                 tracing::warn!(cell = %label, error = %e, "failed to insert genesis cell");
+                stats.invalid += 1;
+            }
+        }
+    }
+
+    // THE EPOCH §5: replay the issuer-moves over the value-empty cells. Each
+    // move WELL-debits the source (may go negative — the issuer well carries
+    // −supply) and credits the recipient.
+    if seed_by_moves {
+        for mv in moves.into_iter().flatten() {
+            let (Some(from_hex), Some(to_hex), Some(amount)) = (
+                mv["from"].as_str(),
+                mv["to"].as_str(),
+                mv["amount"].as_u64(),
+            ) else {
+                tracing::warn!("skipping malformed genesis_moves entry: {mv}");
+                continue;
+            };
+            let (Some(from_id), Some(to_id)) = (hex_decode_32(from_hex), hex_decode_32(to_hex))
+            else {
+                tracing::warn!("skipping genesis move with malformed cell ids");
+                continue;
+            };
+            let from_id = dregg_cell::CellId(from_id);
+            let to_id = dregg_cell::CellId(to_id);
+            let Some(from_cell) = ledger.get_mut(&from_id) else {
+                tracing::warn!(from = %from_hex, "genesis move source not in ledger; skipping");
+                continue;
+            };
+            if !from_cell.state.well_debit_balance(amount) {
+                tracing::warn!(from = %from_hex, amount, "genesis well debit overflow; skipping");
+                continue;
+            }
+            let Some(to_cell) = ledger.get_mut(&to_id) else {
+                // Restore the debit so the books stay closed.
+                if let Some(from_cell) = ledger.get_mut(&from_id) {
+                    let _ = from_cell.state.credit_balance(amount);
+                }
+                tracing::warn!(to = %to_hex, "genesis move recipient not in ledger; skipping");
+                continue;
+            };
+            if !to_cell.state.credit_balance(amount) {
+                if let Some(from_cell) = ledger.get_mut(&from_id) {
+                    let _ = from_cell.state.credit_balance(amount);
+                }
+                tracing::warn!(to = %to_hex, amount, "genesis credit overflow; skipping");
+            }
+        }
+
+        // Verify the declared post-seed balances (and, transitively, that
+        // the value column sums to zero exactly when the declarations do).
+        for (cell_id, expect) in &declared {
+            let got = ledger.get(cell_id).map(|c| c.state.balance());
+            if got != Some(*expect) {
+                tracing::error!(
+                    cell = %dregg_types::hex_encode(&cell_id.0),
+                    expected = expect,
+                    got = ?got,
+                    "genesis issuer-move outcome does not match the declared balance"
+                );
                 stats.invalid += 1;
             }
         }

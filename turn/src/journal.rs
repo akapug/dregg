@@ -25,8 +25,9 @@ pub(crate) enum JournalEntry {
         old_value: FieldElement,
     },
     /// A cell's balance was changed (by transfer or fee deduction).
-    /// Records the old balance.
-    SetBalance { cell: CellId, old_balance: u64 },
+    /// Records the old balance. SIGNED (THE EPOCH §5): a well's prior
+    /// balance may be negative.
+    SetBalance { cell: CellId, old_balance: i64 },
     /// A cell's nonce was incremented. Records the old nonce.
     SetNonce { cell: CellId, old_nonce: u64 },
     /// A capability was granted to a cell. Records the slot that was assigned,
@@ -132,7 +133,7 @@ impl LedgerJournal {
     }
 
     /// Record a balance change.
-    pub fn record_set_balance(&mut self, cell: CellId, old_balance: u64) {
+    pub fn record_set_balance(&mut self, cell: CellId, old_balance: i64) {
         self.entries
             .push(JournalEntry::SetBalance { cell, old_balance });
     }

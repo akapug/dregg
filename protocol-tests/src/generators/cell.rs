@@ -47,6 +47,10 @@ pub fn make_cell(seed: u8, balance: u64) -> Cell {
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(7);
     let token_id = [0u8; 32];
+    // THE EPOCH: balances are SIGNED (i64). Test ledgers are ordinary cells
+    // (non-negative), so use a checked conversion — never an `as` cast that
+    // could silently wrap a too-large value negative.
+    let balance = i64::try_from(balance).expect("test cell balance fits in i64");
     Cell::with_balance(pk, token_id, balance)
 }
 

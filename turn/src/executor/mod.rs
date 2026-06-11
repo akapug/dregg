@@ -458,6 +458,22 @@ pub struct TurnExecutor {
     pub proposer_cell: Option<CellId>,
     /// Federation treasury cell (receives 30% of fees). If None, that share is burned.
     pub treasury_cell: Option<CellId>,
+    /// THE EPOCH §5 ("fees as moves"): the FEE WELL cell. When configured,
+    /// every fee share that would previously have been BURNED (the 20%
+    /// remainder, rounding dust, and any unconfigured proposer/treasury
+    /// share) is instead MOVED here, so a committed turn's value delta is
+    /// exactly zero and the deployed chain stays inside guarantee B's
+    /// hypotheses (`reachable_total_zero`). Genesis always configures this;
+    /// `None` retains the legacy burn-without-credit semantics (pre-epoch
+    /// tests only — the deployed chain never runs with `None`).
+    pub fee_well_cell: Option<CellId>,
+    /// THE EPOCH §5 ("mint/burn as issuer-moves"): asset (`token_id`) →
+    /// ISSUER WELL cell. A runtime `Effect::Burn` whose target's asset has a
+    /// registered well is executed as a MOVE target→well (the well, carrying
+    /// −supply, is credited toward zero), exactly the Lean `burnA` dispatch;
+    /// an unregistered asset retains the legacy non-conserving burn. Genesis
+    /// registers the devnet issuer well.
+    pub issuer_wells: HashMap<[u8; 32], CellId>,
     /// Maximum lifetime (in blocks) for capabilities introduced via three-party
     /// introduction. After `current_height + max_introduction_lifetime`, the routing
     /// directive expires and the introduced capability becomes stale.
@@ -590,6 +606,8 @@ impl TurnExecutor {
             note_nullifiers: Mutex::new(NullifierSet::new()),
             trusted_destination_keys: Vec::new(),
             proposer_cell: None,
+            fee_well_cell: None,
+            issuer_wells: HashMap::new(),
             treasury_cell: None,
             max_introduction_lifetime: 1000,
             revocation_channels: None,
@@ -626,6 +644,8 @@ impl TurnExecutor {
             note_nullifiers: Mutex::new(NullifierSet::new()),
             trusted_destination_keys: Vec::new(),
             proposer_cell: None,
+            fee_well_cell: None,
+            issuer_wells: HashMap::new(),
             treasury_cell: None,
             max_introduction_lifetime: 1000,
             revocation_channels: None,
@@ -658,6 +678,8 @@ impl TurnExecutor {
             note_nullifiers: Mutex::new(NullifierSet::new()),
             trusted_destination_keys: Vec::new(),
             proposer_cell: None,
+            fee_well_cell: None,
+            issuer_wells: HashMap::new(),
             treasury_cell: None,
             max_introduction_lifetime: 1000,
             revocation_channels: None,
@@ -1091,6 +1113,37 @@ impl TurnExecutor {
         self.treasury_cell = Some(cell_id);
     }
 
+    /// THE EPOCH §5 ("fees as moves"): set the FEE WELL cell. Every fee
+    /// share that would otherwise be burned (the 20% remainder, rounding
+    /// dust, unconfigured proposer/treasury shares, and the whole fee on the
+    /// atomic paths) is MOVED here instead, making every committed turn's
+    /// value delta exactly zero. Genesis configures this on the deployed
+    /// chain.
+    pub fn set_fee_well_cell(&mut self, cell_id: CellId) {
+        self.fee_well_cell = Some(cell_id);
+    }
+
+    /// THE EPOCH §5 ("burn as issuer-move"): register the ISSUER WELL cell
+    /// for an asset (`token_id`). A `Burn` targeting a cell of this asset is
+    /// executed as a MOVE target→well — the well, carrying −supply, is
+    /// credited back toward zero (the Lean `burnA` dispatch) — so burn stops
+    /// being a non-conserving verb for registered assets.
+    pub fn register_issuer_well(&mut self, token_id: [u8; 32], well: CellId) {
+        self.issuer_wells.insert(token_id, well);
+    }
+
+    /// Resolve the registered ISSUER WELL for a cell's asset (`token_id`),
+    /// or `None` when the asset has no registered well (legacy burn
+    /// semantics).
+    pub(super) fn issuer_well_for(
+        &self,
+        ledger: &Ledger,
+        cell: &CellId,
+    ) -> Option<CellId> {
+        let token_id = *ledger.get(cell)?.token_id();
+        self.issuer_wells.get(&token_id).copied()
+    }
+
     /// Configure epoch-based computron minting to prevent deflationary deadlock.
     ///
     /// When set, the executor will mint new computrons to the treasury cell at
@@ -1162,8 +1215,8 @@ impl TurnExecutor {
                 if let TurnResult::Committed { .. } = &result {
                     if conditional.deposit_amount > 0 {
                         if let Some(cell) = ledger.get_mut(&conditional.turn.agent) {
-                            cell.state
-                                .set_balance(cell.state.balance() + conditional.deposit_amount);
+                            // Overflow-checked credit (signed balances).
+                            let _ = cell.state.credit_balance(conditional.deposit_amount);
                         }
                     }
                 }

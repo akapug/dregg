@@ -913,11 +913,14 @@ fn cmd_slot_caveat_suite(state_dir: &PathBuf) {
                     nonce: u64|
      -> Result<(), ProgramError> {
         let program = CellProgram::Predicate(vec![constraint]);
-        let mut old_state = CellState::new(nonce);
+        // THE EPOCH: CellState::new takes a SIGNED (i64) balance; this helper
+        // seeds the state from `nonce` (a non-negative test value) — checked.
+        let seed_balance = i64::try_from(nonce).unwrap_or(i64::MAX);
+        let mut old_state = CellState::new(seed_balance);
         for (i, f) in old_fields.iter().enumerate() {
             old_state.fields[i] = *f;
         }
-        let mut new_state = CellState::new(nonce);
+        let mut new_state = CellState::new(seed_balance);
         for (i, f) in new_fields.iter().enumerate() {
             new_state.fields[i] = *f;
         }

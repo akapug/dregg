@@ -722,10 +722,12 @@ impl TurnExecutor {
                 .ok_or_else(|| (TurnError::CellNotFound { id: action.target }, path.clone()))?;
             let current_balance = target.state.balance();
 
-            // Check for underflow on withdrawal (negative delta).
-            if delta < 0 {
-                let abs_delta = delta.unsigned_abs();
-                if current_balance < abs_delta {
+            // Ordinary signed-balance discipline (THE EPOCH §5): a
+            // withdrawal may not take the balance below zero; a deposit is
+            // overflow-checked.
+            match current_balance.checked_add(delta) {
+                Some(new_bal) if delta >= 0 || new_bal >= 0 => {}
+                Some(_) => {
                     return Err((
                         TurnError::BalanceChangeUnderflow {
                             cell: action.target,
@@ -735,10 +737,7 @@ impl TurnExecutor {
                         path.clone(),
                     ));
                 }
-            } else {
-                // Check for overflow on deposit (positive delta).
-                let abs_delta = delta as u64;
-                if current_balance.checked_add(abs_delta).is_none() {
+                None => {
                     return Err((
                         TurnError::BalanceOverflow {
                             cell: action.target,
@@ -751,15 +750,9 @@ impl TurnExecutor {
             // Record old balance for rollback and apply the delta.
             let cell_mut = ledger.get_mut(&action.target).unwrap();
             journal.record_set_balance(action.target, cell_mut.state.balance());
-            if delta < 0 {
-                cell_mut
-                    .state
-                    .set_balance(cell_mut.state.balance() - delta.unsigned_abs());
-            } else {
-                cell_mut
-                    .state
-                    .set_balance(cell_mut.state.balance() + delta as u64);
-            }
+            cell_mut
+                .state
+                .set_balance(cell_mut.state.balance() + delta);
 
             // Update excess: withdrawal (negative delta) PRODUCES excess (adds to excess),
             // deposit (positive delta) CONSUMES excess (subtracts from excess).

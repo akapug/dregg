@@ -601,13 +601,32 @@ column of its own, the PI vector does not yet bind it, and the genuine sorted-TR
 gates (membership-open / leaf-update / bracketed insert, the revocation-circuit shape) are
 the Phase-E lane. Until the rotation's relayout lands, `heap_root` is kernel-bound and
 scheme-pinned but NOT yet circuit-committed: a heap write today is attested by the kernel
-theorems, not by the per-turn proof. The remaining rotation legs ride ONE VK/commitment
-epoch together: registers 8→16 with the `FactoryDescriptor` fields declaration · the
-`heap_root` register + PI v3 · the RESERVED deletion + 54→29 selector compaction (186→159)
-· the W1 signed-well balance representation (the Rust value model; the Lean kernel already
-runs signed wells — `reachable_total_zero`) · genesis-as-issuer-moves + fees-as-moves
-(closing the two conservation deployment gaps named under guarantee B) · the descriptor
-regeneration (`EmitAllJson` → `circuit/descriptors/*.json` + fingerprints).
+theorems, not by the per-turn proof.
+
+THE EPOCH §5 deployment-correspondence legs are CLOSED on the deployed chain (these rode the
+commitment `v5 → v6` bump): the Rust value model is a SIGNED well — `dregg_cell::CellState.balance`
+is `i64`, encoded at every commitment/wire boundary as the biased two-limb LE encoding
+(`balance_limbs` / `encode_balance_le`), matching the Lean kernel that already ran signed wells
+(`reachable_total_zero`); value ENTERS only by genesis issuer-moves — `node::genesis::GenesisMove`
+replays from an issuer well seeded `−total_issued`, so no balance is conjured (the W1
+guarantee-B conservation gap that genesis previously punched is gone); and fees are MOVES, not
+burns — `TurnExecutor::fee_well_cell` / `set_fee_well_cell` route the fee remainder to a fee well
+that starts at zero and accumulates (`finalize.rs`, "fees as moves"), so the per-turn balance sum
+is exactly neutral over the deployed executor. Guarantee B (conservation) therefore holds over the
+deployed chain, not only the abstract kernel; the two conservation deployment caveats named under
+guarantee B are discharged.
+
+The remaining rotation legs ride ONE further VK/commitment epoch together (the descriptor IR-v2
+flag-day, `docs/EPOCH-DESIGN.md`): registers 8→16 with the `FactoryDescriptor` fields declaration
+· the `heap_root` register + PI v3 (committed-height column + rateBound/challengeWindow caveat tags)
+· the RESERVED deletion + 54→29 selector compaction (the 186-column layout dies; the post-LogUp
+main table is far thinner, so the 159 target is obsolete) · the descriptor IR-v2 regeneration
+(`Dregg2.Circuit.DescriptorIR2.emitVmJson2` over the v2 registry → `circuit/descriptors/*.json` +
+fingerprints, driving the multi-table batch-STARK interpreter `circuit::descriptor_ir2`). The
+interpreter is authored and feature-gated (`recursion`); it does NOT yet sit on the live proving
+path, which still rides the v1 `effect_vm_descriptors` registry through `lean_descriptor_air` /
+`effect_vm_p3_full_air`. The IR-v2 emission + VK bump are deferred to that flag-day because pulling
+them before the register relayout lands would orphan the live v1 path against unread v2-wire JSON.
 =========================================================================== -/
 
 /-! ===========================================================================

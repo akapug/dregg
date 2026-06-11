@@ -2278,7 +2278,13 @@ async fn tool_create_agent(params: &Value, state: &NodeState) -> McpToolResult {
     let already_existed = s.ledger.get(&cell_id).is_some();
 
     if !already_existed {
-        let cell = dregg_cell::Cell::with_balance(pk_bytes, [0u8; 32], initial_balance);
+        // THE EPOCH: balances are SIGNED (i64); a freshly created agent is an
+        // ORDINARY cell (non-negative) — checked conversion, never `as`.
+        let cell = dregg_cell::Cell::with_balance(
+            pk_bytes,
+            [0u8; 32],
+            i64::try_from(initial_balance).unwrap_or(i64::MAX),
+        );
         if let Err(e) = s.ledger.insert_cell(cell) {
             return McpToolResult::error(format!("ledger insert failed: {e}"));
         }
@@ -2593,10 +2599,12 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
 
     // Snapshot and prove before execution. A grant that cannot produce its
     // Effect VM proof is a structured rejection, not a committed null-proof turn.
+    // THE EPOCH: balances are SIGNED (i64); the VM pre-state is u64. The agent
+    // is an ORDINARY cell (non-negative) — checked conversion, never `as`.
     let pre_state: Option<(u64, u64)> = s
         .ledger
         .get(&agent_cell_id)
-        .map(|c| (c.state.balance(), c.state.nonce()));
+        .map(|c| (u64::try_from(c.state.balance()).unwrap_or(0), c.state.nonce()));
 
     let vm_effects = vec![dregg_circuit::effect_vm::Effect::GrantCapability {
         // 32-byte widening: the cap-entry identity is a scalar slot index here,
@@ -3866,10 +3874,12 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
     // Snapshot the agent cell's pre-state so we can attach an Effect VM proof
     // over (pre-balance, pre-nonce) → effects. The "agent" view is the one the
     // bearer operates as on this node (the exerciser of the cap).
+    // THE EPOCH: balances are SIGNED (i64); the VM pre-state is u64. The agent
+    // is an ORDINARY cell (non-negative) — checked conversion, never `as`.
     let pre_state: Option<(u64, u64)> = s
         .ledger
         .get(&agent_cell_id)
-        .map(|c| (c.state.balance(), c.state.nonce()));
+        .map(|c| (u64::try_from(c.state.balance()).unwrap_or(0), c.state.nonce()));
 
     let vm_effects = project_effects_for_mcp(&parsed_effects);
     let proof_material = if vm_effects.is_empty() {
@@ -5496,10 +5506,12 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
     }
 
     // ── Snapshot agent pre-state for Effect-VM proof ──────────────────────────
+    // THE EPOCH: balances are SIGNED (i64); the VM pre-state is u64. The agent
+    // is an ORDINARY cell (non-negative) — checked conversion, never `as`.
     let pre_state: Option<(u64, u64)> = s
         .ledger
         .get(&agent_cell_id)
-        .map(|c| (c.state.balance(), c.state.nonce()));
+        .map(|c| (u64::try_from(c.state.balance()).unwrap_or(0), c.state.nonce()));
 
     let mut vm_effects: Vec<dregg_circuit::effect_vm::Effect> =
         vec![dregg_circuit::effect_vm::Effect::NoOp];
@@ -5725,7 +5737,11 @@ async fn tool_sign_sovereign_witness(params: &Value, state: &NodeState) -> McpTo
             direction: 1,
         }];
         let (proof_hex, _pi, _trace, _wh) =
-            generate_effect_vm_proof(cell.state.balance(), cell.state.nonce(), &vm_effects);
+            generate_effect_vm_proof(
+                u64::try_from(cell.state.balance()).unwrap_or(0),
+                cell.state.nonce(),
+                &vm_effects,
+            );
         proof_hex
     } else {
         String::new()
@@ -6013,14 +6029,16 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
     };
     let turn_hash = hex_encode(&turn.hash());
 
+    // THE EPOCH: balances are SIGNED (i64); the VM pre-state tuples are u64.
+    // Both sides are ORDINARY cells (non-negative) — checked conversion.
     let from_pre = s
         .ledger
         .get(&from_cell)
-        .map(|c| (c.state.balance(), c.state.nonce()));
+        .map(|c| (u64::try_from(c.state.balance()).unwrap_or(0), c.state.nonce()));
     let to_pre = s
         .ledger
         .get(&to_cell)
-        .map(|c| (c.state.balance(), c.state.nonce()));
+        .map(|c| (u64::try_from(c.state.balance()).unwrap_or(0), c.state.nonce()));
 
     let (from_vm, to_vm): (
         Vec<dregg_circuit::effect_vm::Effect>,
@@ -6495,7 +6513,9 @@ fn ensure_cell_in_ledger(
         let _ = ledger.insert_cell(cell);
     }
     match ledger.get(&cell_id) {
-        Some(c) => (c.state.balance(), c.state.nonce()),
+        // THE EPOCH: balances are SIGNED (i64); the VM pre-state tuple is u64.
+        // These are ORDINARY cells (non-negative) — checked conversion.
+        Some(c) => (u64::try_from(c.state.balance()).unwrap_or(0), c.state.nonce()),
         None => (0, 0),
     }
 }

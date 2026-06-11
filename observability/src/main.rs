@@ -58,6 +58,9 @@ fn make_cell(seed: u8, balance: u64) -> Cell {
     let mut pk = [0u8; 32];
     pk[0] = seed;
     let token_id = [0u8; 32];
+    // THE EPOCH: balances are SIGNED (i64); ordinary cells stay non-negative,
+    // so convert with a checked cast (never `as`, which would wrap negatives).
+    let balance = i64::try_from(balance).expect("observability cell balance fits in i64");
     let mut cell = Cell::with_balance(pk, token_id, balance);
     cell.permissions = open_permissions();
     cell

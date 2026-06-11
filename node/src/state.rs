@@ -212,6 +212,17 @@ pub struct NodeStateInner {
     /// root-gap effect (root provably diverges) or an unmappable effect falls back to the Rust
     /// producer for that turn, with a logged reason — never a silent commit of divergent state.
     pub lean_producer_enabled: bool,
+    /// THE EPOCH §5 ("fees as moves"): the FEE WELL cell from genesis
+    /// (`genesis.json` `fee_well`). Wired onto every executor via
+    /// [`crate::executor_setup::configure_turn_executor`] so undelivered fee
+    /// shares MOVE here instead of burning — committed turns conserve
+    /// exactly.
+    pub fee_well: Option<CellId>,
+    /// THE EPOCH §5 ("burn as issuer-move"): (token_id → issuer well cell)
+    /// registrations from genesis (`genesis.json` `issuer_well`, registered
+    /// for the default asset). Wired onto every executor so `Burn` executes
+    /// as a move target→well.
+    pub issuer_wells: Vec<([u8; 32], CellId)>,
     /// MCP per-tool capability enforcement. When `true`, the `tools/call`
     /// surface REQUIRES a covering `Authorization::Token` for every call (a
     /// missing credential is rejected). Independent of this flag, any presented
@@ -731,6 +742,8 @@ impl NodeState {
                 prove_transitions: false,
                 full_turn_proving_enabled: false,
                 lean_producer_enabled: lean_producer_env_enabled(),
+                fee_well: None,
+                issuer_wells: Vec::new(),
                 mcp_cap_enforce: mcp_cap_enforce_env_enabled(),
                 pir_index_cache: None,
                 discharge_gateway: None,
@@ -835,6 +848,8 @@ impl NodeState {
                 prove_transitions: false,
                 full_turn_proving_enabled: false,
                 lean_producer_enabled: lean_producer_env_enabled(),
+                fee_well: None,
+                issuer_wells: Vec::new(),
                 mcp_cap_enforce: mcp_cap_enforce_env_enabled(),
                 pir_index_cache: None,
                 discharge_gateway: None,

@@ -1120,14 +1120,15 @@ pub fn execute_fulfillment_flow_verified_with_key(
     let k1 = settle_ring_verified(&k0, &[leg])
         .map_err(|e| FulfillmentError::VerifiedRefusal(e.to_string()))?;
 
-    // Step 5: Write the VERIFIED post-balances back to the real ledger. The verified gate
-    // guarantees the payer post-balance is non-negative; the recipient bound is the u64
-    // write-back check (the Lean side is ℤ — overflow lives only at this conversion).
-    let payer_post = u64::try_from(k1.get(PAYER, &COMPUTRON_ASSET)).map_err(|_| {
-        FulfillmentError::VerifiedRefusal("verified payer post-balance out of u64 range".into())
+    // Step 5: Write the VERIFIED post-balances back to the real ledger. Cell balances are
+    // signed (i64) under the well model; the verified gate guarantees these ordinary
+    // (non-well) cells stay non-negative, so the only failure here is the ℤ→i64 range
+    // conversion (the Lean side is ℤ — overflow lives only at this conversion).
+    let payer_post = i64::try_from(k1.get(PAYER, &COMPUTRON_ASSET)).map_err(|_| {
+        FulfillmentError::VerifiedRefusal("verified payer post-balance out of i64 range".into())
     })?;
-    let recipient_post = u64::try_from(k1.get(RECIPIENT, &COMPUTRON_ASSET)).map_err(|_| {
-        FulfillmentError::VerifiedRefusal("verified recipient post-balance overflows u64".into())
+    let recipient_post = i64::try_from(k1.get(RECIPIENT, &COMPUTRON_ASSET)).map_err(|_| {
+        FulfillmentError::VerifiedRefusal("verified recipient post-balance overflows i64".into())
     })?;
 
     let pre_state_hash = ledger.root();

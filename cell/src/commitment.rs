@@ -64,7 +64,15 @@ use crate::state::{CellState, FieldVisibility};
 /// identically to the EffectVM circuit's `cap_root`, replacing the old
 /// disjoint BLAKE3 XOR-fold. The bump cleanly invalidates any stale v4
 /// commitment rather than risking a silent cross-version collision.
-pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v5";
+///
+/// `v5 → v6` (THE EPOCH §5, signed wells): the balance is now a SIGNED i64
+/// committed via the order-preserving biased two-limb encoding
+/// ([`crate::state::encode_balance_le`] — `biased = bits(balance) ⊕ 2^63`,
+/// LE), replacing the raw `u64::to_le_bytes`. Issuer wells legitimately
+/// commit negative balances (−supply); the range-table limb shape `(lo, hi)`
+/// is [`crate::state::balance_limbs`]. Rides the epoch's one
+/// VK/commitment flag-day.
+pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v6";
 
 /// Domain-separation context for the canonical capability-set root.
 ///
@@ -257,7 +265,10 @@ fn hash_lifecycle_into(hasher: &mut blake3::Hasher, lc: &crate::lifecycle::CellL
 /// Hash the inner `CellState` (no domain separator — used as a sub-hasher).
 fn hash_cell_state_into(hasher: &mut blake3::Hasher, state: &CellState) {
     hasher.update(&state.nonce.to_le_bytes());
-    hasher.update(&state.balance.to_le_bytes());
+    // THE EPOCH §5 (v6): signed balance, biased two-limb LE encoding. A well's
+    // negative balance and an ordinary positive balance commit injectively and
+    // order-preservingly (`encode_balance_le`).
+    hasher.update(&crate::state::encode_balance_le(state.balance));
     for field in &state.fields {
         hasher.update(field);
     }
@@ -968,7 +979,8 @@ mod tests {
         // hand for the fields_root absorption.
         let state = &cell.state;
         hasher.update(&state.nonce().to_le_bytes());
-        hasher.update(&state.balance().to_le_bytes());
+        // v6: the signed biased two-limb balance encoding, mirrored inline.
+        hasher.update(&crate::state::encode_balance_le(state.balance()));
         for field in &state.fields {
             hasher.update(field);
         }

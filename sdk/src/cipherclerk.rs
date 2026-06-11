@@ -4676,12 +4676,12 @@ impl AgentCipherclerk {
                     if from == cell_id {
                         new_cell_state
                             .state
-                            .set_balance(new_cell_state.state.balance().saturating_sub(*amount));
+                            .set_balance(new_cell_state.state.balance().saturating_sub(*amount as i64));
                     }
                     if to == cell_id {
                         new_cell_state
                             .state
-                            .set_balance(new_cell_state.state.balance().saturating_add(*amount));
+                            .set_balance(new_cell_state.state.balance().saturating_add(*amount as i64));
                     }
                 }
                 Effect::SetField { cell, index, value } if cell == cell_id => {
@@ -4951,12 +4951,12 @@ impl AgentCipherclerk {
                     if from == cell_id {
                         new_cell_state
                             .state
-                            .set_balance(new_cell_state.state.balance().saturating_sub(*amount));
+                            .set_balance(new_cell_state.state.balance().saturating_sub(*amount as i64));
                     }
                     if to == cell_id {
                         new_cell_state
                             .state
-                            .set_balance(new_cell_state.state.balance().saturating_add(*amount));
+                            .set_balance(new_cell_state.state.balance().saturating_add(*amount as i64));
                     }
                 }
                 Effect::SetField { cell, index, value } if cell == cell_id => {
@@ -4977,8 +4977,15 @@ impl AgentCipherclerk {
         // turn over a cell that holds capabilities now binds the SAME cap_root
         // the cell commits to in `state_commitment()` above.
         let vm_effects = Self::convert_effects_to_vm(cell_id, &effects);
+        // THE EPOCH: balances are SIGNED (i64); the circuit VM state is u64.
+        // The actor cell here is ORDINARY (non-negative) — use a checked
+        // conversion rather than an `as` cast that could wrap a negative.
         let initial_vm_state = dregg_circuit::CellState::with_capability_root(
-            cell_state.state.balance(),
+            u64::try_from(cell_state.state.balance()).map_err(|_| {
+                SdkError::Wire(
+                    "cell balance is negative; cannot prove turn over a well cell here".into(),
+                )
+            })?,
             cell_state.state.nonce() as u32,
             dregg_cell::compute_canonical_capability_root_felt(&cell_state.capabilities),
         );
@@ -5595,11 +5602,11 @@ impl AgentCipherclerk {
                 }
                 Effect::Transfer { to, amount, .. } if to == cell_id => {
                     cell.state
-                        .set_balance(cell.state.balance().saturating_add(*amount));
+                        .set_balance(cell.state.balance().saturating_add(*amount as i64));
                 }
                 Effect::Transfer { from, amount, .. } if from == cell_id => {
                     cell.state
-                        .set_balance(cell.state.balance().saturating_sub(*amount));
+                        .set_balance(cell.state.balance().saturating_sub(*amount as i64));
                 }
                 Effect::IncrementNonce { cell: target } if target == cell_id => {
                     let _ = cell.state.increment_nonce();

@@ -206,7 +206,8 @@ fn check_multi_party_atomic() -> Result<(), String> {
         a.state.balance() + b.state.balance()
     };
 
-    let fee = 1000u64;
+    // THE EPOCH: balances are SIGNED (i64); totals are i64 sums.
+    let fee = 1000i64;
     if total_after != total_before - fee {
         return Err(format!(
             "conservation violated: before={total_before}, after={total_after}, fee={fee}"

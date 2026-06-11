@@ -49,7 +49,7 @@ fn make_open_cell(seed: u8, balance: u64) -> Cell {
     let mut public_key = [0u8; 32];
     public_key[0] = seed;
     let token_id = [0u8; 32];
-    let mut cell = Cell::with_balance(public_key, token_id, balance);
+    let mut cell = Cell::with_balance(public_key, token_id, i64::try_from(balance).expect("balance fits i64"));
     cell.permissions = Permissions {
         send: AuthRequired::None,
         receive: AuthRequired::None,

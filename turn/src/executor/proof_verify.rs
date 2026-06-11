@@ -1207,19 +1207,26 @@ impl TurnExecutor {
             } => {
                 let ledger = ledger?;
                 let cell = ledger.get(target)?;
+                // THE EPOCH §5: balances are SIGNED and cross the PI
+                // boundary as the order-preserving BIASED u64
+                // (`balance_biased`), which preserves differences —
+                // `biased(old) - biased(new) = old - new` — so the AIR's
+                // `new = old - amount` constraint shape is unchanged.
+                // (Encoding touchpoint for the descriptor-regen lane.)
                 let old_balance = cell.state.balance();
-                // `new_balance` is the post-Burn balance. The AIR's
-                // algebraic constraint is `new = old - amount` with a
-                // boolean borrow; underflow is rejected by the executor's
-                // runtime `InsufficientBalance` check before this code is
-                // reached. Use saturating_sub so an off-AIR sanity test
-                // doesn't panic; a real Burn that underflows would be
-                // rejected by the runtime apply gate before we ever try
-                // to verify its binding proof.
-                let new_balance = old_balance.saturating_sub(*amount);
+                // `new_balance` is the post-Burn balance. Underflow is
+                // rejected by the executor's runtime `InsufficientBalance`
+                // check before this code is reached; saturate at zero so an
+                // off-AIR sanity test doesn't panic.
+                let new_balance = old_balance.saturating_sub_unsigned(*amount).max(0);
                 Some((
                     vec![*target.as_bytes()],
-                    vec![old_balance, new_balance, *amount, 1],
+                    vec![
+                        dregg_cell::state::balance_biased(old_balance),
+                        dregg_cell::state::balance_biased(new_balance),
+                        *amount,
+                        1,
+                    ],
                 ))
             }
             _ => None,

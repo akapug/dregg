@@ -93,9 +93,22 @@ pub struct CellState {
     /// Monotonically increasing action counter. Sealed (P0-1); mutate via
     /// `increment_nonce`, read via `nonce()`.
     pub(crate) nonce: u64,
-    /// Computron balance (execution budget). Sealed (P0-1); mutate via
-    /// `apply_balance_change`, read via `balance()`.
-    pub(crate) balance: u64,
+    /// SIGNED value balance (THE EPOCH, `docs/EPOCH-DESIGN.md` §5 "signed
+    /// wells"). The Lean kernel's ledger is `bal : cell → asset → ℤ` and
+    /// `reachable_total_zero` holds because issuer WELLS carry −supply; the
+    /// Rust value model now matches: `i64`, encoded at every commitment/wire
+    /// boundary via the order-preserving biased two-limb encoding
+    /// ([`encode_balance_le`] / [`balance_limbs`] — the range-table limb
+    /// discipline).
+    ///
+    /// Sign discipline is enforced BY VERB, mirroring the Lean dispatch:
+    /// ordinary moves go through [`CellState::debit_balance`] /
+    /// [`CellState::apply_balance_change`] (refuse to go below zero);
+    /// issuer-well moves (mint / genesis issuer-moves) go through
+    /// [`CellState::well_debit_balance`] /
+    /// [`CellState::apply_balance_change_well`] (may go negative — the well
+    /// carries −supply). Sealed (P0-1); read via `balance()`.
+    pub(crate) balance: i64,
     /// Whether all 8 state fields were last set by a verified proof.
     /// Becomes `true` only when ALL 8 fields are set by a single proof-authorized action.
     /// Becomes `false` if any field is modified by a non-proof authorization.
@@ -270,16 +283,18 @@ impl CellState {
         self.nonce
     }
 
-    /// Read accessor for `balance`. Sealed for P0-1.
+    /// Read accessor for `balance`. Sealed for P0-1. SIGNED (THE EPOCH):
+    /// ordinary cells are kept ≥ 0 by the verb discipline; issuer wells may
+    /// legitimately read negative (−supply).
     ///
     /// External code cannot mutate this field directly:
     /// ```compile_fail
     /// # use dregg_cell::CellState;
     /// let mut s = CellState::new(0);
-    /// s.balance = u64::MAX;
+    /// s.balance = i64::MAX;
     /// ```
     #[inline]
-    pub fn balance(&self) -> u64 {
+    pub fn balance(&self) -> i64 {
         self.balance
     }
 
@@ -328,7 +343,7 @@ impl CellState {
     /// because journal restoration needs to put balance back to an exact prior
     /// value on rollback.
     #[inline]
-    pub fn set_balance(&mut self, value: u64) {
+    pub fn set_balance(&mut self, value: i64) {
         self.balance = value;
     }
 
@@ -352,12 +367,17 @@ impl CellState {
         self.delegation_epoch = value;
     }
 
-    /// Credit balance by `amount`. Returns `false` on overflow (caller must
-    /// check). Sealed-write semantic accessor.
+    /// Credit balance by `amount`. Returns `false` on `i64` overflow (caller
+    /// must check). Sealed-write semantic accessor. Valid on ANY cell —
+    /// crediting a (negative) issuer well moves it toward zero, which is how
+    /// `burn` returns supply to the well.
     #[inline]
     #[must_use = "balance credit may overflow; the caller must handle the false return"]
     pub fn credit_balance(&mut self, amount: u64) -> bool {
-        match self.balance.checked_add(amount) {
+        let Ok(amt) = i64::try_from(amount) else {
+            return false;
+        };
+        match self.balance.checked_add(amt) {
             Some(new) => {
                 self.balance = new;
                 true
@@ -366,12 +386,37 @@ impl CellState {
         }
     }
 
-    /// Debit balance by `amount`. Returns `false` on underflow (caller must
-    /// check). Sealed-write semantic accessor.
+    /// ORDINARY-CELL debit by `amount`: refuses to take the balance below
+    /// ZERO. Returns `false` on underflow (caller must check). This is the
+    /// verb every ordinary move (transfer source, fee payer, burn target)
+    /// uses — only issuer-well verbs may go negative, via
+    /// [`well_debit_balance`](Self::well_debit_balance).
     #[inline]
     #[must_use = "balance debit may underflow; the caller must handle the false return"]
     pub fn debit_balance(&mut self, amount: u64) -> bool {
-        match self.balance.checked_sub(amount) {
+        let Ok(amt) = i64::try_from(amount) else {
+            return false;
+        };
+        if self.balance >= amt {
+            self.balance -= amt;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// ISSUER-WELL debit by `amount`: the balance MAY go negative (the well
+    /// carries −supply — `reachable_total_zero`'s issuer rows). Fails only on
+    /// `i64` overflow. The EXECUTOR gates who may use this verb (production
+    /// authority = control of the issuer cell, never of the recipient); this
+    /// accessor is the mechanism, not the policy.
+    #[inline]
+    #[must_use = "well debit may overflow; the caller must handle the false return"]
+    pub fn well_debit_balance(&mut self, amount: u64) -> bool {
+        let Ok(amt) = i64::try_from(amount) else {
+            return false;
+        };
+        match self.balance.checked_sub(amt) {
             Some(new) => {
                 self.balance = new;
                 true
@@ -381,7 +426,7 @@ impl CellState {
     }
 
     /// Create a fresh cell state with zero fields and the given balance.
-    pub fn new(balance: u64) -> Self {
+    pub fn new(balance: i64) -> Self {
         CellState {
             fields: [FIELD_ZERO; STATE_SLOTS],
             field_visibility: [FieldVisibility::Public; STATE_SLOTS],
@@ -600,24 +645,33 @@ impl CellState {
         }
     }
 
-    /// Apply a balance change (positive or negative). Returns false on underflow.
+    /// Apply an ORDINARY balance change (positive or negative). Refuses to
+    /// take the balance below ZERO (ordinary-cell sign discipline) and
+    /// returns `false` on underflow/overflow. Issuer-well moves use
+    /// [`apply_balance_change_well`](Self::apply_balance_change_well).
     pub fn apply_balance_change(&mut self, delta: i64) -> bool {
-        if delta >= 0 {
-            match self.balance.checked_add(delta as u64) {
-                Some(new_bal) => {
-                    self.balance = new_bal;
-                    true
-                }
-                None => false,
-            }
-        } else {
-            let abs = delta.unsigned_abs();
-            if self.balance >= abs {
-                self.balance -= abs;
+        match self.balance.checked_add(delta) {
+            // A credit (delta ≥ 0) may land anywhere (a negative well
+            // credited toward zero stays valid); an ordinary debit must not
+            // land below zero.
+            Some(new_bal) if delta >= 0 || new_bal >= 0 => {
+                self.balance = new_bal;
                 true
-            } else {
-                false
             }
+            _ => false,
+        }
+    }
+
+    /// Apply an ISSUER-WELL balance change (positive or negative). The well
+    /// may go negative (−supply); only `i64` overflow fails. The executor
+    /// gates who may invoke well verbs.
+    pub fn apply_balance_change_well(&mut self, delta: i64) -> bool {
+        match self.balance.checked_add(delta) {
+            Some(new_bal) => {
+                self.balance = new_bal;
+                true
+            }
+            None => false,
         }
     }
 
@@ -641,6 +695,139 @@ impl CellState {
 impl Default for CellState {
     fn default() -> Self {
         Self::new(0)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE EPOCH signed-balance boundary encoding (`docs/EPOCH-DESIGN.md` §5 +
+// the range-table limb discipline).
+//
+// A signed balance crosses a proof/commitment boundary as the ORDER-PRESERVING
+// biased u64: `biased = (balance as u64) ⊕ 2^63` (two's complement with the
+// sign bit flipped), so `a < b  ⇔  biased(a) < biased(b)` as unsigned — the
+// comparison the range table wants. The biased value decomposes into TWO
+// 32-bit limbs `(lo, hi)`; in-circuit each limb is further range-checked by
+// lookup (BabyBear holds < 2^31, so the circuit lane splits limbs again as it
+// pleases — these two limbs are the canonical WIRE shape it must reproduce).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The order-preserving biased encoding of a signed balance:
+/// `i64::MIN → 0`, `0 → 2^63`, `i64::MAX → 2^64−1`.
+#[inline]
+pub fn balance_biased(balance: i64) -> u64 {
+    (balance as u64) ^ (1u64 << 63)
+}
+
+/// Invert [`balance_biased`].
+#[inline]
+pub fn balance_from_biased(biased: u64) -> i64 {
+    (biased ^ (1u64 << 63)) as i64
+}
+
+/// The canonical two-limb decomposition `(lo, hi)` of the biased balance —
+/// the range-table shape (each limb < 2^32).
+#[inline]
+pub fn balance_limbs(balance: i64) -> (u32, u32) {
+    let b = balance_biased(balance);
+    ((b & 0xFFFF_FFFF) as u32, (b >> 32) as u32)
+}
+
+/// Encode a signed balance for a commitment/wire boundary: the biased u64,
+/// little-endian (= limbs `lo‖hi`, each LE). THE canonical byte shape every
+/// commitment site uses (`compute_canonical_state_commitment` v6).
+#[inline]
+pub fn encode_balance_le(balance: i64) -> [u8; 8] {
+    balance_biased(balance).to_le_bytes()
+}
+
+/// Invert [`encode_balance_le`].
+#[inline]
+pub fn decode_balance_le(bytes: [u8; 8]) -> i64 {
+    balance_from_biased(u64::from_le_bytes(bytes))
+}
+
+#[cfg(test)]
+mod signed_balance_tests {
+    //! THE EPOCH §5: the signed value model + the biased two-limb boundary
+    //! encoding. Positive AND negative witnesses for every discipline.
+
+    use super::*;
+
+    /// The biased encoding is order-preserving and round-trips.
+    #[test]
+    fn biased_encoding_order_preserving_roundtrip() {
+        let samples = [
+            i64::MIN,
+            -1_085_000,
+            -1,
+            0,
+            1,
+            50_000,
+            i64::MAX,
+        ];
+        for w in samples.windows(2) {
+            assert!(
+                balance_biased(w[0]) < balance_biased(w[1]),
+                "bias must preserve order: {} vs {}",
+                w[0],
+                w[1]
+            );
+        }
+        for &s in &samples {
+            assert_eq!(decode_balance_le(encode_balance_le(s)), s);
+            assert_eq!(balance_from_biased(balance_biased(s)), s);
+            let (lo, hi) = balance_limbs(s);
+            assert_eq!(((hi as u64) << 32) | lo as u64, balance_biased(s));
+        }
+        // The fixed pins the circuit lane reproduces:
+        assert_eq!(balance_biased(0), 1u64 << 63);
+        assert_eq!(balance_biased(i64::MIN), 0);
+        assert_eq!(balance_biased(i64::MAX), u64::MAX);
+    }
+
+    /// Ordinary discipline: debit refuses to cross zero; well debit goes
+    /// negative (−supply).
+    #[test]
+    fn sign_discipline_by_verb() {
+        let mut ordinary = CellState::new(10);
+        assert!(ordinary.debit_balance(10), "exact spend-to-zero is fine");
+        assert!(!ordinary.debit_balance(1), "ordinary cells may not go negative");
+        assert_eq!(ordinary.balance(), 0);
+
+        let mut well = CellState::new(0);
+        assert!(well.well_debit_balance(1_085_000), "the well carries −supply");
+        assert_eq!(well.balance(), -1_085_000);
+        // burn returns supply: an ordinary CREDIT moves the well toward zero.
+        assert!(well.credit_balance(85_000));
+        assert_eq!(well.balance(), -1_000_000);
+    }
+
+    /// `apply_balance_change` keeps the ordinary floor; the well variant
+    /// doesn't.
+    #[test]
+    fn apply_change_disciplines() {
+        let mut s = CellState::new(5);
+        assert!(!s.apply_balance_change(-6), "ordinary refuses below zero");
+        assert!(s.apply_balance_change(-5));
+        assert_eq!(s.balance(), 0);
+        assert!(s.apply_balance_change_well(-7), "well variant may go negative");
+        assert_eq!(s.balance(), -7);
+        // credit on a negative balance is an ORDINARY change (delta ≥ 0).
+        assert!(s.apply_balance_change(3));
+        assert_eq!(s.balance(), -4);
+    }
+
+    /// Overflow teeth: amounts beyond i64 refuse on every verb.
+    #[test]
+    fn overflow_refusals() {
+        let mut s = CellState::new(0);
+        assert!(!s.credit_balance(u64::MAX));
+        assert!(!s.debit_balance(u64::MAX));
+        assert!(!s.well_debit_balance(u64::MAX));
+        s.set_balance(i64::MAX);
+        assert!(!s.credit_balance(1));
+        s.set_balance(i64::MIN);
+        assert!(!s.well_debit_balance(1));
     }
 }
 

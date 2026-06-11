@@ -2090,9 +2090,17 @@ async fn execute_finalized_turn(
     // `old_commit` to this pre-state; capturing it after execution would let a
     // forged transition pass. Only collected when proving is enabled (devnet).
     let full_turn_pre_state: Option<(u64, u64)> = if s.full_turn_proving_enabled {
+        // THE EPOCH: balances are SIGNED (i64); the full-turn VM pre-state is
+        // u64. The actor is an ORDINARY cell (non-negative) on the proving
+        // path — checked conversion, never an `as` cast that wraps negatives.
         s.ledger
             .get(&signed_turn.turn.agent)
-            .map(|cell| (cell.state.balance(), cell.state.nonce()))
+            .map(|cell| {
+                (
+                    u64::try_from(cell.state.balance()).unwrap_or(0),
+                    cell.state.nonce(),
+                )
+            })
             .or(Some((0, 0)))
     } else {
         None

@@ -10,10 +10,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TurnError {
     /// The source cell doesn't have enough computrons for a transfer.
+    /// `available` is SIGNED (THE EPOCH §5): an issuer well legitimately
+    /// reads negative; ordinary verbs refuse to take any cell below zero.
     InsufficientBalance {
         cell: CellId,
         required: u64,
-        available: u64,
+        available: i64,
     },
 
     /// The provided authorization doesn't satisfy the cell's permission requirements.
@@ -82,7 +84,8 @@ pub enum TurnError {
     /// A balance_change would underflow the target cell's balance (withdrawal exceeds holdings).
     BalanceChangeUnderflow {
         cell: CellId,
-        current: u64,
+        /// SIGNED (THE EPOCH §5).
+        current: i64,
         delta: i64,
     },
 

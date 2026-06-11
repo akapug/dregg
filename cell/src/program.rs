@@ -2434,7 +2434,9 @@ fn evaluate_constraint_full(
 
         StateConstraint::BalanceGte { min } => {
             let bal = new_state.balance();
-            if bal < *min {
+            // SIGNED balance (THE EPOCH §5): any negative balance is below
+            // every u64 floor.
+            if bal < 0 || (bal as u64) < *min {
                 return violated(
                     constraint,
                     format!("cell balance {bal} < required minimum {min}"),
@@ -2445,7 +2447,8 @@ fn evaluate_constraint_full(
 
         StateConstraint::BalanceLte { max } => {
             let bal = new_state.balance();
-            if bal > *max {
+            // A negative balance satisfies every u64 ceiling.
+            if bal >= 0 && (bal as u64) > *max {
                 return violated(
                     constraint,
                     format!("cell balance {bal} > allowed maximum {max}"),

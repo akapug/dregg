@@ -862,7 +862,12 @@ pub fn wire_state_to_ledger(
                 nat: *nat,
                 field: "balance",
             })?;
-        cell.state.set_balance(bal.max(0) as u64);
+        // THE EPOCH §5: the Rust balance is now SIGNED, so the Lean kernel's
+        // ℤ balance (including a well's −supply) marshals FAITHFULLY — the
+        // old `.max(0)` clamp silently zeroed negative wells. The i64 clamp
+        // is a range artifact only (kernel balances never approach ±2^63).
+        cell.state
+            .set_balance(bal.clamp(i64::MIN as i128, i64::MAX as i128) as i64);
         cell.state.set_nonce(nonce.max(0) as u64);
 
         // Any other named Int field maps to a `fields[]` slot.

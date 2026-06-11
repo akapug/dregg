@@ -27,12 +27,33 @@ struct GenesisValidator {
 }
 
 /// An initial cell in the genesis configuration.
+///
+/// THE EPOCH §5: `balance` is SIGNED and DECLARATIVE — it is the expected
+/// post-seed balance, derived by replaying [`GenesisMove`]s from a
+/// value-empty start. The issuer well's declared balance is negative
+/// (−total issued supply); every other cell's is non-negative; the column
+/// sums to ZERO (`reachable_total_zero`'s genesis hypothesis).
 #[derive(Serialize)]
 struct GenesisCell {
     id: String,
     public_key: String,
     token_id: String,
-    balance: u64,
+    balance: i64,
+}
+
+/// A genesis ISSUER-MOVE (THE EPOCH §5, "genesis as issuer-moves"): value
+/// enters circulation only by moving OUT of the issuer well (which goes
+/// negative, carrying −supply). The deployed chain therefore starts inside
+/// guarantee B's hypotheses: a value-empty genesis followed by conserving
+/// moves.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct GenesisMove {
+    /// Hex cell id of the (issuer well) source — debited, may go negative.
+    pub from: String,
+    /// Hex cell id of the recipient — credited.
+    pub to: String,
+    /// Amount moved.
+    pub amount: u64,
 }
 
 /// A starbridge factory cell to materialize on node boot.
@@ -63,6 +84,19 @@ struct GenesisConfig {
     validators: Vec<GenesisValidator>,
     threshold: usize,
     initial_cells: Vec<GenesisCell>,
+    /// THE EPOCH §5: hex cell id of the ISSUER WELL for the default asset.
+    /// The runtime registers it with the executor
+    /// (`TurnExecutor::register_issuer_well`) so `Burn` executes as a move
+    /// target→well.
+    issuer_well: String,
+    /// THE EPOCH §5: hex cell id of the FEE WELL. The runtime configures it
+    /// (`TurnExecutor::set_fee_well_cell`) so fees are moves, not burns.
+    fee_well: String,
+    /// THE EPOCH §5 ("genesis as issuer-moves"): the seeding moves. The
+    /// runtime materializes every `initial_cells` entry at ZERO balance and
+    /// then applies these moves; `initial_cells[].balance` is the declared
+    /// (checked) outcome.
+    genesis_moves: Vec<GenesisMove>,
     /// Factory cells minted at boot via `starbridge_seed` (devnet only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     starbridge_cells: Vec<StarbridgeGenesisCell>,
@@ -170,11 +204,30 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
     // cells (the explorer / `/api/cells` is not empty on first run). Every
     // cell here is a REAL canonical hosted cell: its `id` is the
     // content-addressed `CellId::derive_raw(public_key, token_id)` that the
-    // executor will recompute and accept, not a label. The faucet cell holds
-    // the genesis supply; the demo agent cells are backed by real Ed25519
-    // keypairs (written to `agent-<name>.key`) so they are actually spendable
-    // for demos, not just display rows.
+    // executor will recompute and accept, not a label.
+    //
+    // THE EPOCH §5 ("genesis as issuer-moves"): value enters by MOVES from
+    // the ISSUER WELL, never ex nihilo. The well's declared balance is
+    // −total_issued; the faucet/demo balances are the move outcomes; the
+    // whole column sums to ZERO, so the deployed chain starts inside
+    // guarantee B's hypotheses (`reachable_total_zero`). The FEE WELL starts
+    // at zero and accumulates fee moves.
     let default_token_id = [0u8; 32];
+
+    // The ISSUER WELL cell. Deterministic key so the runtime can locate it
+    // (`register_issuer_well` for the default asset).
+    let issuer_well_secret = blake3::derive_key("dregg-devnet-issuer-well-key-v1", b"genesis");
+    let issuer_well_signing = ed25519_dalek::SigningKey::from_bytes(&issuer_well_secret);
+    let issuer_well_pubkey = issuer_well_signing.verifying_key().to_bytes();
+    write_key_file(output, "issuer-well.key", &issuer_well_secret);
+    let issuer_well_id = derive_cell_id(&issuer_well_pubkey, &default_token_id);
+
+    // The FEE WELL cell. Deterministic key; starts empty, accumulates fees.
+    let fee_well_secret = blake3::derive_key("dregg-devnet-fee-well-key-v1", b"genesis");
+    let fee_well_signing = ed25519_dalek::SigningKey::from_bytes(&fee_well_secret);
+    let fee_well_pubkey = fee_well_signing.verifying_key().to_bytes();
+    write_key_file(output, "fee-well.key", &fee_well_secret);
+    let fee_well_id = derive_cell_id(&fee_well_pubkey, &default_token_id);
 
     // The faucet cell. Its key is deterministic so the running node / faucet
     // endpoint can locate it, but it is still a real derived CellId.
@@ -182,16 +235,13 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
     let faucet_signing = ed25519_dalek::SigningKey::from_bytes(&faucet_secret);
     let faucet_pubkey = faucet_signing.verifying_key().to_bytes();
     write_key_file(output, "faucet.key", &faucet_secret);
+    let faucet_id = derive_cell_id(&faucet_pubkey, &default_token_id);
 
-    let mut initial_cells = vec![GenesisCell {
-        id: derive_cell_id(&faucet_pubkey, &default_token_id),
-        public_key: hex_encode(&faucet_pubkey),
-        token_id: hex_encode(&default_token_id),
-        balance: 1_000_000,
-    }];
-
-    // A handful of demo agent cells with starting balances.
-    for (name, balance) in [
+    // Recipients: faucet supply + demo agents. Every entry becomes one
+    // issuer-move well → recipient.
+    let mut recipients: Vec<(String, [u8; 32], u64)> =
+        vec![(faucet_id.clone(), faucet_pubkey, 1_000_000u64)];
+    for (name, amount) in [
         ("alice", 50_000u64),
         ("bob", 25_000u64),
         ("carol", 10_000u64),
@@ -201,13 +251,48 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
         let signing = ed25519_dalek::SigningKey::from_bytes(&key_bytes);
         let pubkey = signing.verifying_key().to_bytes();
         write_key_file(output, &format!("agent-{name}.key"), &key_bytes);
-        initial_cells.push(GenesisCell {
-            id: derive_cell_id(&pubkey, &default_token_id),
-            public_key: hex_encode(&pubkey),
+        recipients.push((derive_cell_id(&pubkey, &default_token_id), pubkey, amount));
+    }
+
+    let total_issued: u64 = recipients.iter().map(|(_, _, amt)| amt).sum();
+    let genesis_moves: Vec<GenesisMove> = recipients
+        .iter()
+        .map(|(id, _, amount)| GenesisMove {
+            from: issuer_well_id.clone(),
+            to: id.clone(),
+            amount: *amount,
+        })
+        .collect();
+
+    // Declared post-seed balances: the well carries −supply; the column
+    // sums to zero.
+    let mut initial_cells = vec![
+        GenesisCell {
+            id: issuer_well_id.clone(),
+            public_key: hex_encode(&issuer_well_pubkey),
             token_id: hex_encode(&default_token_id),
-            balance,
+            balance: -(total_issued as i64),
+        },
+        GenesisCell {
+            id: fee_well_id.clone(),
+            public_key: hex_encode(&fee_well_pubkey),
+            token_id: hex_encode(&default_token_id),
+            balance: 0,
+        },
+    ];
+    for (id, pubkey, amount) in &recipients {
+        initial_cells.push(GenesisCell {
+            id: id.clone(),
+            public_key: hex_encode(pubkey),
+            token_id: hex_encode(&default_token_id),
+            balance: *amount as i64,
         });
     }
+    debug_assert_eq!(
+        initial_cells.iter().map(|c| c.balance as i128).sum::<i128>(),
+        0,
+        "genesis value column must sum to zero"
+    );
 
     let starbridge_cells = default_starbridge_genesis_cells();
 
@@ -219,6 +304,9 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
         validators: genesis_validators,
         threshold,
         initial_cells,
+        issuer_well: issuer_well_id,
+        fee_well: fee_well_id,
+        genesis_moves,
         starbridge_cells,
     };
 
@@ -329,6 +417,18 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The deterministic devnet ISSUER WELL cell id — the same derivation
+/// [`run_genesis`] uses (key context `dregg-devnet-issuer-well-key-v1`,
+/// default `[0u8; 32]` token domain). Lets the runtime (faucet backfill,
+/// `starbridge_seed`) locate the well without re-reading genesis.json.
+pub fn devnet_issuer_well_id() -> dregg_cell::CellId {
+    let secret = blake3::derive_key("dregg-devnet-issuer-well-key-v1", b"genesis");
+    let pubkey = ed25519_dalek::SigningKey::from_bytes(&secret)
+        .verifying_key()
+        .to_bytes();
+    dregg_cell::Cell::with_balance(pubkey, [0u8; 32], 0).id()
+}
+
 /// Derive the canonical content-addressed `CellId` for a hosted cell, using the
 /// exact same path the runtime (`materialize_genesis_cells`) recomputes:
 /// `dregg_cell::Cell::with_balance(pk, token, _).id()`. This guarantees the
@@ -416,6 +516,9 @@ mod tests {
             validators: vec![],
             threshold: 1,
             initial_cells: vec![],
+            issuer_well: "00".repeat(32),
+            fee_well: "11".repeat(32),
+            genesis_moves: vec![],
             starbridge_cells: default_starbridge_genesis_cells(),
         };
 
