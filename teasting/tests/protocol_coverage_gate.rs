@@ -195,6 +195,12 @@ fn state_constraint_executor_coverage(c: &StateConstraint) -> bool {
         StateConstraint::Reachable { .. } => true,
         StateConstraint::AllOf { .. } => true,
 
+        // Pre-rotation: enforced through the executor commit path by the
+        // identity e2e (sdk/tests/identity_prerotation_e2e.rs — rotation
+        // turns ride AgentRuntime .turn(); the compromise-resistance tooth
+        // is an executor refusal, counters/state unmoved).
+        StateConstraint::KeyRotationGate { .. } => true,
+
         // Not yet enforced/confirmed through the executor (#142 work-list):
         StateConstraint::FieldGteHeight { .. } => false, // not attempted (height-relative)
         StateConstraint::FieldLteHeight { .. } => false, // not attempted (height-relative)
