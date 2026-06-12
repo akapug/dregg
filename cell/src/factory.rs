@@ -938,6 +938,84 @@ impl FactoryRegistry {
     }
 }
 
+// ---- THE ROTATION (staged): `FactoryDescriptor.fields` name declarations ----
+//
+// `docs/UNIVERSAL-MAP-ROTATION.md` §2.1: the rotation widens the register
+// file 8 → 16 and gives `FactoryDescriptor` a `fields` NAME declaration;
+// compilation resolves indices. The RESOLUTION SEMANTICS ship here, staged;
+// the struct field itself (`pub fields: Vec<String>` + the `hash` absorption
+// under a v2 derive key) is a flag-day change — it touches all ~65
+// `FactoryDescriptor { .. }` construction sites across the workspace and the
+// descriptor's content-addressed identity — and is listed in
+// `docs/ROTATION-CUTOVER.md`, NOT flipped here.
+//
+// The Lean twin (the authority on the semantics): `metatheory/Dregg2/Circuit/
+// RotationLayout.lean` — `resolve` with `resolve_total` (total on declared
+// names when ≤ 16 are declared) and `resolve_inj` (first-match resolution is
+// injective on resolved indices, NO nodup hypothesis needed), welded to the
+// rotated commitment by `rotatedCommit_binds_named_field`.
+
+/// The rotated register-file width (Lean: `RotationLayout.NUM_REGISTERS`).
+pub const NUM_ROTATED_REGISTERS: usize = 16;
+
+/// First-match resolution of a declared field name into the 16-register
+/// file: `Some(index)` iff the name is declared and its first occurrence
+/// fits the file. The Rust twin of `RotationLayout.resolve`.
+pub fn resolve_field_name(fields: &[String], name: &str) -> Option<usize> {
+    let idx = fields.iter().position(|f| f == name)?;
+    (idx < NUM_ROTATED_REGISTERS).then_some(idx)
+}
+
+#[cfg(test)]
+mod rotation_fields_tests {
+    use super::{NUM_ROTATED_REGISTERS, resolve_field_name};
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Lean twin pins (`RotationLayout` §5 guards): first-match index,
+    /// undeclared name, the 17th name does NOT fit, exactly 16 fit.
+    #[test]
+    fn resolution_matches_lean_guards() {
+        let decl = names(&["balance", "owner", "expiry"]);
+        assert_eq!(resolve_field_name(&decl, "owner"), Some(1));
+        assert_eq!(resolve_field_name(&decl, "ghost"), None);
+
+        let seventeen: Vec<String> = (0..17).map(|i| i.to_string()).collect();
+        assert_eq!(resolve_field_name(&seventeen, "16"), None);
+
+        let sixteen: Vec<String> = (0..16).map(|i| i.to_string()).collect();
+        assert_eq!(resolve_field_name(&sixteen, "15"), Some(15));
+    }
+
+    /// `resolve_total`: every declared name resolves when ≤ 16 are declared.
+    #[test]
+    fn resolution_total_on_declared() {
+        let decl: Vec<String> = (0..NUM_ROTATED_REGISTERS).map(|i| format!("f{i}")).collect();
+        for n in &decl {
+            assert!(resolve_field_name(&decl, n).is_some(), "declared name {n} must resolve");
+        }
+    }
+
+    /// `resolve_inj`: two names landing on the same register are the same
+    /// name — first-match never aliases (even WITH duplicate declarations,
+    /// mirroring the Lean theorem's no-nodup-needed form).
+    #[test]
+    fn resolution_injective_even_with_duplicates() {
+        let decl = names(&["a", "b", "a", "c"]);
+        let mut by_index = std::collections::HashMap::new();
+        for n in ["a", "b", "c"] {
+            let i = resolve_field_name(&decl, n).unwrap();
+            if let Some(prev) = by_index.insert(i, n) {
+                panic!("register {i} aliased by {prev} and {n}");
+            }
+        }
+        // the duplicate "a" resolves to its FIRST occurrence
+        assert_eq!(resolve_field_name(&decl, "a"), Some(0));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

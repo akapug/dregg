@@ -3,8 +3,8 @@
 use dregg_cell::{AuthRequired, CapabilityRef, Cell, Ledger, Permissions};
 use dregg_turn::builder::ActionBuilder;
 use dregg_turn::{
-    BudgetGate, BudgetSlice, ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor,
-    TurnResult,
+    BudgetGate, BudgetSlice, ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnError,
+    TurnExecutor, TurnResult,
 };
 
 use crate::report::{CheckResult, run_check};
@@ -407,18 +407,21 @@ fn check_budget_gate() -> Result<(), String> {
     tb1.add_action(action);
     let turn1 = tb1.build();
     let result1 = executor.execute(&turn1, &mut ledger);
-    match result1 {
-        TurnResult::Committed { .. } => {}
+    let receipt1 = match result1 {
+        TurnResult::Committed { receipt, .. } => receipt,
         TurnResult::Rejected { reason, .. } => {
             return Err(format!("first turn (fee=300) should commit: {reason}"));
         }
         _ => return Err("unexpected result for first turn".into()),
-    }
+    };
 
     // After turn 1: nonce is 1, budget used: 300.
     // Second turn with fee=300: should succeed (600 total == ceiling).
+    // The executor enforces the receipt chain at write time (P0-3), so each
+    // subsequent turn must reference the prior receipt hash.
     let mut tb2 = TurnBuilder::new(owner_id, 1);
     tb2.set_fee(300);
+    tb2.set_previous_receipt_hash(receipt1.receipt_hash());
     let action = ActionBuilder::new_unchecked_for_tests(owner_id, "budget-test-2", owner_id)
         .delegation(DelegationMode::None)
         .effect(Effect::SetField {
@@ -430,18 +433,19 @@ fn check_budget_gate() -> Result<(), String> {
     tb2.add_action(action);
     let turn2 = tb2.build();
     let result2 = executor.execute(&turn2, &mut ledger);
-    match result2 {
-        TurnResult::Committed { .. } => {}
+    let receipt2 = match result2 {
+        TurnResult::Committed { receipt, .. } => receipt,
         TurnResult::Rejected { reason, .. } => {
             return Err(format!("second turn (fee=300) should commit: {reason}"));
         }
         _ => return Err("unexpected result for second turn".into()),
-    }
+    };
 
     // After turn 2: nonce is 2, budget used: 600 (at ceiling).
     // Third turn with fee=300: should be REJECTED (900 > ceiling 600).
     let mut tb3 = TurnBuilder::new(owner_id, 2);
     tb3.set_fee(300);
+    tb3.set_previous_receipt_hash(receipt2.receipt_hash());
     let action = ActionBuilder::new_unchecked_for_tests(owner_id, "budget-test-3", owner_id)
         .delegation(DelegationMode::None)
         .effect(Effect::SetField {
@@ -454,8 +458,16 @@ fn check_budget_gate() -> Result<(), String> {
     let turn3 = tb3.build();
     let result3 = executor.execute(&turn3, &mut ledger);
     match result3 {
-        TurnResult::Rejected { .. } => {
+        TurnResult::Rejected {
+            reason: TurnError::BudgetExhausted { .. } | TurnError::BudgetExceeded { .. },
+            ..
+        } => {
             // Good: budget exhausted.
+        }
+        TurnResult::Rejected { reason, .. } => {
+            return Err(format!(
+                "third turn rejected for the WRONG reason (expected budget): {reason}"
+            ));
         }
         TurnResult::Committed { .. } => {
             return Err("third turn should be REJECTED (budget exhausted: 900 > 600)".into());

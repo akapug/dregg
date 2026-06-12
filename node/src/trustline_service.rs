@@ -91,6 +91,36 @@ pub struct TrustlineRegistry {
 }
 
 impl TrustlineRegistry {
+    /// Rebuild the registry from the durable forever-digest table at boot
+    /// (`docs/PERSISTENCE.md`): every digest ever burned on this node is
+    /// reloaded, so a replayed draw refuses identically across restarts —
+    /// the deployed counterpart of Lean `draw_replay_refused_across_epochs`
+    /// holds across process lifetimes, not only rebalance epochs.
+    pub fn load(store: &dregg_persist::PersistentStore) -> Self {
+        let mut registry = Self::default();
+        match store.load_forever_digests(dregg_persist::tables::NS_TRUSTLINE_DIGEST) {
+            Ok(pairs) => {
+                let count = pairs.len();
+                for (scope, digest) in pairs {
+                    registry.digests.entry(CellId(scope)).or_default().insert(digest);
+                }
+                if count > 0 {
+                    tracing::info!(digests = count, "restored trustline forever-digest registry");
+                }
+            }
+            Err(e) => {
+                // Fail LOUDLY: an unreadable digest table narrows anti-replay
+                // to this process lifetime — a real degradation, named.
+                tracing::error!(
+                    error = %e,
+                    "failed to load durable trustline digests; \
+                     forever anti-replay narrowed to this process lifetime"
+                );
+            }
+        }
+        registry
+    }
+
     /// Whether `digest` has ever committed a draw against `trustline`.
     pub fn digest_seen(&self, trustline: &CellId, digest: &[u8; 32]) -> bool {
         self.digests
@@ -102,6 +132,28 @@ impl TrustlineRegistry {
     pub fn record_digest(&mut self, trustline: CellId, digest: [u8; 32]) {
         self.digests.entry(trustline).or_default().insert(digest);
     }
+}
+
+/// Burn a digest FOREVER: durable first (one committed redb transaction —
+/// the digest survives an arbitrary crash from here on), then the in-memory
+/// registry the hot refusal path reads. A durable-write failure cannot unwind
+/// the already-committed turn, so it degrades (loudly) to in-memory-only
+/// rather than refusing: the live process still refuses replays; only the
+/// restart carrier is narrowed, and the error names it.
+pub fn record_digest_durable(s: &mut NodeStateInner, trustline: CellId, digest: [u8; 32]) {
+    if let Err(e) = s.store.record_forever_digest(
+        dregg_persist::tables::NS_TRUSTLINE_DIGEST,
+        trustline.as_bytes(),
+        &digest,
+    ) {
+        tracing::error!(
+            trustline = %hex_encode(trustline.as_bytes()),
+            error = %e,
+            "durable digest burn FAILED — forever anti-replay for this digest \
+             is narrowed to this process lifetime"
+        );
+    }
+    s.trustlines.record_digest(trustline, digest);
 }
 
 // =============================================================================
@@ -480,7 +532,7 @@ pub fn ensure_coordinator(
         // Burn the rebuild digest in the forever registry, exactly as a
         // committed draw's digest is burned: the slice's debit list resets
         // at every rebalance epoch, the registry does not.
-        s.trustlines.record_digest(trustline, digest);
+        record_digest_durable(s, trustline, digest);
         tracing::info!(
             trustline = %hex_encode(trustline.as_bytes()),
             outstanding,
@@ -913,8 +965,8 @@ async fn post_trustline_draw(
             return Err(refusal);
         }
     };
-    // Burn the digest FOREVER only after commit.
-    inner.trustlines.record_digest(trustline, digest);
+    // Burn the digest FOREVER only after commit (durable-then-in-memory).
+    record_digest_durable(inner, trustline, digest);
 
     let coordinator_remaining = inner
         .budget_coordinators
@@ -1139,7 +1191,7 @@ async fn post_trustline_settle(
                             Ok(()) => {
                                 // Registry ⊇ slice-debits: the compensation
                                 // digest is burned forever like any other.
-                                inner.trustlines.record_digest(agent, digest);
+                                record_digest_durable(inner, agent, digest);
                                 tracing::warn!(
                                     trustline = %hex_encode(agent.as_bytes()),
                                     amount = total_spent,
@@ -1895,5 +1947,80 @@ mod tests {
         assert_eq!(settlements[0]["amount"].as_u64(), Some(10));
         assert_eq!(tl_slot(&state, tl, TL_SETTLED_SLOT).await, 40);
         assert_shadow_matches_cell(&state, tl).await;
+    }
+
+    // ── persistence: the forever registry survives the restart ──────────────
+
+    /// THE RESTART TEST (docs/PERSISTENCE.md): a committed draw digest is
+    /// burned durably, so a brand-new process over the same data dir still
+    /// refuses the replay — the deployed counterpart of Lean
+    /// `draw_replay_refused_across_epochs` holds across process lifetimes,
+    /// not only within one.
+    #[tokio::test]
+    async fn draw_digest_refused_across_restart() {
+        let (state, holder, dir) = funded_state().await;
+        let tl = open_line(&state, holder, LINE).await;
+        let tl_hex = hex_encode(&tl.0);
+        let digest = hex_decode_32(&digest_hex(9)).unwrap();
+
+        let (status, json) = post_json(
+            &state,
+            "/trustline/draw",
+            serde_json::json!({ "trustline": tl_hex, "amount": 30, "digest": digest_hex(9) }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+
+        // Capture the cells: the test ledger has no checkpoint, so the reborn
+        // node reseeds them (the registries are the subject here, the ledger
+        // recovery path has its own tests + Lean twin CrashRecovery.lean).
+        let (tl_cell, holder_cell, op_cell) = {
+            let s = state.write().await;
+            let operator = crate::executor_setup::local_agent_cell(&s);
+            (
+                s.ledger.get(&tl).expect("trustline cell").clone(),
+                s.ledger.get(&holder).expect("holder cell").clone(),
+                s.ledger.get(&operator).expect("operator cell").clone(),
+            )
+        };
+
+        // THE RESTART: every in-memory registry dies with the process.
+        drop(state);
+
+        let state = NodeState::new(dir.path(), vec![]).expect("reborn node state");
+        {
+            let mut s = state.write().await;
+            s.unlocked = true;
+            // The registry was reloaded from the durable forever-digest table.
+            assert!(
+                s.trustlines.digest_seen(&tl, &digest),
+                "burned digest must survive the restart in the registry"
+            );
+            assert!(
+                s.store
+                    .forever_digest_seen(
+                        dregg_persist::tables::NS_TRUSTLINE_DIGEST,
+                        tl.as_bytes(),
+                        &digest,
+                    )
+                    .expect("durable lookup"),
+                "burned digest must be in the durable table"
+            );
+            let _ = s.ledger.insert_cell(tl_cell);
+            let _ = s.ledger.insert_cell(holder_cell);
+            let _ = s.ledger.insert_cell(op_cell);
+        }
+
+        // The replayed draw refuses END TO END through the reborn node.
+        let (status, json) = post_json(
+            &state,
+            "/trustline/draw",
+            serde_json::json!({ "trustline": tl_hex, "amount": 5, "digest": digest_hex(9) }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["reason"], "duplicate-draw");
+        // And the refusal changed nothing: drawn register unmoved.
+        assert_eq!(tl_slot(&state, tl, TL_DRAWN_SLOT).await, 30);
     }
 }

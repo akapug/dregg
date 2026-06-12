@@ -1248,3 +1248,90 @@ fn test_attested_root_includes_note_tree() {
     assert_eq!(loaded.nullifier_set_root, Some(nullifier_root));
     assert_eq!(loaded.merkle_root, [0xAB; 32]);
 }
+
+// =============================================================================
+// Forever-Digest Set Tests (restart-durable anti-replay carriers)
+// =============================================================================
+
+#[test]
+fn forever_digests_survive_reopen() {
+    use crate::tables::{NS_COURT_RESOLVED, NS_TRUSTLINE_DIGEST};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("forever.redb");
+
+    let scope = [0x11; 32];
+    let draw = [0x22; 32];
+    let resolved = [0x33; 32];
+
+    {
+        let store = PersistentStore::open(&path).expect("open store");
+        assert!(
+            store
+                .record_forever_digest(NS_TRUSTLINE_DIGEST, &scope, &draw)
+                .unwrap(),
+            "first burn is new"
+        );
+        assert!(
+            !store
+                .record_forever_digest(NS_TRUSTLINE_DIGEST, &scope, &draw)
+                .unwrap(),
+            "second burn is idempotent"
+        );
+        assert!(
+            store
+                .record_forever_digest(NS_COURT_RESOLVED, &[0u8; 32], &resolved)
+                .unwrap()
+        );
+        // Drop: the simulated restart.
+    }
+
+    let store = PersistentStore::open(&path).expect("reopen store");
+    assert!(
+        store
+            .forever_digest_seen(NS_TRUSTLINE_DIGEST, &scope, &draw)
+            .unwrap(),
+        "a burned draw digest survives the restart"
+    );
+    assert!(
+        store
+            .forever_digest_seen(NS_COURT_RESOLVED, &[0u8; 32], &resolved)
+            .unwrap(),
+        "a resolved-evidence digest survives the restart"
+    );
+
+    // Namespaces do not bleed: the same bytes under the other namespace are unseen.
+    assert!(
+        !store
+            .forever_digest_seen(NS_COURT_RESOLVED, &scope, &draw)
+            .unwrap()
+    );
+    assert!(
+        !store
+            .forever_digest_seen(NS_TRUSTLINE_DIGEST, &[0u8; 32], &resolved)
+            .unwrap()
+    );
+
+    // Boot-time load returns exactly the namespace's pairs.
+    let trustline_pairs = store.load_forever_digests(NS_TRUSTLINE_DIGEST).unwrap();
+    assert_eq!(trustline_pairs, vec![(scope, draw)]);
+    let court_pairs = store.load_forever_digests(NS_COURT_RESOLVED).unwrap();
+    assert_eq!(court_pairs, vec![([0u8; 32], resolved)]);
+}
+
+#[test]
+fn forever_digest_scopes_are_disjoint() {
+    use crate::tables::NS_TRUSTLINE_DIGEST;
+
+    let store = new_store();
+    let digest = [0x77; 32];
+    store
+        .record_forever_digest(NS_TRUSTLINE_DIGEST, &[0xAA; 32], &digest)
+        .unwrap();
+    assert!(
+        !store
+            .forever_digest_seen(NS_TRUSTLINE_DIGEST, &[0xBB; 32], &digest)
+            .unwrap(),
+        "a digest burned against one trustline does not refuse another's"
+    );
+}

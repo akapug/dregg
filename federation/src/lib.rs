@@ -186,39 +186,60 @@ pub use types::{
 
 /// Canonical BFT quorum threshold: minimum votes needed for safety.
 ///
-/// For n validators tolerating f = floor(n/3) Byzantine faults,
-/// quorum = n - f.
+/// DELEGATES to [`dregg_blocklace::supermajority_threshold`] — there is
+/// exactly ONE quorum formula in the system, the strict supermajority
+/// `⌊2n/3⌋ + 1` the Cordial-Miners/Stingray DAG semantics demand. It equals
+/// `n − ⌊(n−1)/3⌋` for `n ≥ 1`, so it tolerates `f = ⌊(n−1)/3⌋` Byzantine
+/// members with UNCONDITIONAL quorum intersection (two quorums always share
+/// more than `f` members).
 ///
-/// This is the ONE correct formula used throughout the system.
-/// - n=1 -> 1, n=2 -> 2, n=3 -> 2, n=4 -> 3, n=7 -> 5, n=10 -> 7
+/// - n=1 -> 1, n=2 -> 2, n=3 -> 3, n=4 -> 3, n=6 -> 5, n=7 -> 5, n=10 -> 7
+///
+/// History: this crate previously used `n − ⌊n/3⌋`, which agreed with the
+/// blocklace supermajority everywhere EXCEPT `3 ∣ n` (n=3 gave 2-of-3,
+/// n=6 gave 4-of-6 — quorums of exactly `2n/3` whose pairwise intersection
+/// can be a single, possibly Byzantine, member). The Lean side
+/// (`Dregg2/Distributed/BlsQuorumCert.lean`) carries that exact hole as the
+/// explicit `StrictBft` hypothesis ("we carry it explicitly rather than fake
+/// a margin that is false at n=3,6,9,…"); unifying on the supermajority
+/// closes it for all `n`. The change is STRICTLY SAFE-SIDE relative to the
+/// Lean model: this threshold is ≥ the Lean `quorumThreshold n` at every
+/// `n`, so every Lean acceptance lower bound still applies, and liveness is
+/// preserved because `n − f` honest members still meet it.
+///
+/// `n = 0` returns 1 (fail-closed): an empty committee can never attest
+/// anything, instead of a vacuous threshold of 0 that an empty vote set
+/// would satisfy.
 pub fn quorum_threshold(n: usize) -> usize {
-    if n == 0 {
-        return 0;
-    }
-    let f = fault_tolerance(n);
-    n - f
+    dregg_blocklace::supermajority_threshold(n)
 }
 
-/// Maximum Byzantine faults tolerable for n validators.
+/// Maximum Byzantine faults tolerable for n validators: `f = ⌊(n−1)/3⌋`
+/// (`n ≥ 3f + 1`, the robust-BFT bound).
 ///
-/// f = floor(n/3)
-///
-/// Standard BFT: a system of n nodes can tolerate at most floor(n/3) faulty nodes
-/// while maintaining safety (no conflicting commits) and liveness (progress continues).
+/// This is the budget [`quorum_threshold`] actually protects against:
+/// `quorum_threshold n = n − fault_tolerance n` for all `n ≥ 1`, and two
+/// quorums always intersect in strictly more than `fault_tolerance n`
+/// members. (The historical `⌊n/3⌋` overclaimed by one at `3 ∣ n` — with
+/// n=3 it claimed to tolerate 1 fault, which no 3-member BFT system can.)
 pub fn fault_tolerance(n: usize) -> usize {
-    n / 3
+    if n == 0 { 0 } else { (n - 1) / 3 }
 }
 
 #[cfg(test)]
 mod threshold_tests {
     use super::*;
 
+    /// Boundary-case pins for the ONE unified quorum formula, including the
+    /// `3 ∣ n` sizes where the historical federation formula diverged.
     #[test]
     fn test_quorum_threshold() {
+        assert_eq!(quorum_threshold(0), 1); // empty committee: fail-closed
         assert_eq!(quorum_threshold(1), 1);
         assert_eq!(quorum_threshold(2), 2);
-        assert_eq!(quorum_threshold(3), 2);
+        assert_eq!(quorum_threshold(3), 3); // was 2 under n − ⌊n/3⌋: the StrictBft hole
         assert_eq!(quorum_threshold(4), 3);
+        assert_eq!(quorum_threshold(6), 5); // was 4: same hole
         assert_eq!(quorum_threshold(7), 5);
         assert_eq!(quorum_threshold(10), 7);
     }
@@ -228,9 +249,29 @@ mod threshold_tests {
         assert_eq!(fault_tolerance(0), 0);
         assert_eq!(fault_tolerance(1), 0);
         assert_eq!(fault_tolerance(2), 0);
-        assert_eq!(fault_tolerance(3), 1);
+        assert_eq!(fault_tolerance(3), 0); // 3 nodes tolerate ZERO faults (n ≥ 3f+1)
         assert_eq!(fault_tolerance(4), 1);
         assert_eq!(fault_tolerance(7), 2);
         assert_eq!(fault_tolerance(10), 3);
+    }
+
+    /// The federation quorum IS the blocklace supermajority — the #170
+    /// unification: ONE formula, ONE place, both layers consume it.
+    #[test]
+    fn test_quorum_is_blocklace_supermajority_everywhere() {
+        for n in 0..=512usize {
+            assert_eq!(
+                quorum_threshold(n),
+                dregg_blocklace::supermajority_threshold(n),
+                "federation and blocklace quorum diverge at n={n}"
+            );
+            if n >= 1 {
+                assert_eq!(quorum_threshold(n), n - fault_tolerance(n), "q = n - f at n={n}");
+                assert!(
+                    2 * quorum_threshold(n) - n > fault_tolerance(n),
+                    "unconditional quorum intersection at n={n}"
+                );
+            }
+        }
     }
 }

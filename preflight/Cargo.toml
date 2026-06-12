@@ -31,15 +31,17 @@ dregg-token = { path = "../token", default-features = false, features = ["macaro
 serde_json = "1"
 toml = "0.8"
 
-# App crates — exercised by preflight app integration checks.
-#
-# apps/gallery and apps/identity were both retired in the apps/ → starbridge-apps/
-# migration (STARBRIDGE-APPS-PLAN.md §4.1). Their starbridge-apps equivalents
-# (starbridge-identity, etc.) use a different public API; the preflight checks
-# that exercised them are retired in preflight/src/checks/apps.rs.
-#
-# When a starbridge-apps integration check is added, add the dep here:
-#   starbridge-identity = { path = "../starbridge-apps/identity", optional = true }
+# App crates — exercised by the preflight app integration checks
+# (preflight/src/checks/apps.rs): factory-descriptor deploys for the six
+# starbridge-apps with factory_birth executor tests, plus real birth turns
+# through the embedded executor for subscription and identity.
+dregg-app-framework = { path = "../app-framework" }
+starbridge-nameservice = { path = "../starbridge-apps/nameservice" }
+starbridge-identity = { path = "../starbridge-apps/identity" }
+starbridge-subscription = { path = "../starbridge-apps/subscription" }
+starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace" }
+starbridge-compartment-workflow-mandate = { path = "../starbridge-apps/compartment-workflow-mandate" }
+starbridge-tool-access-delegation = { path = "../starbridge-apps/tool-access-delegation" }
 
 blake3 = "1"
 curve25519-dalek = { version = "4", features = ["alloc"] }

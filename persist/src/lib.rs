@@ -59,6 +59,7 @@ pub mod blocklace_store;
 pub mod checkpoint;
 pub mod commit_log;
 pub mod federation;
+pub mod forever_digests;
 pub mod keys;
 pub mod ledger_store;
 pub mod note_tree;
@@ -217,6 +218,8 @@ impl PersistentStore {
             let _ = write_txn.open_table(tables::IDX_TURN_BY_HASH)?;
             let _ = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
             let _ = write_txn.open_table(tables::IDX_CELL_BY_ID)?;
+            // Forever-digest sets (restart-durable anti-replay carriers).
+            let _ = write_txn.open_table(tables::FOREVER_DIGESTS)?;
             // Metadata tables.
             let _ = write_txn.open_table(tables::METADATA)?;
             let _ = write_txn.open_table(tables::METADATA_BYTES)?;

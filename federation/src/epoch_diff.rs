@@ -13,9 +13,16 @@
 //! actually computes — same discipline as `threshold_decrypt_diff` and `BlocklaceFinality`'s golden
 //! vectors:
 //!
-//!  1. **Threshold agreement** — the Lean `quorumThreshold` (= `n − n/3`) is re-run here against the
+//!  1. **Threshold relation** — the Lean `quorumThreshold` (= `n − n/3`) is re-run here against the
 //!     REAL `quorum_threshold`/`compute_bft_threshold` over the Lean `#guard` golden values AND an
-//!     exhaustive `0..=256` sweep (the Lean side samples; here we close the range).
+//!     exhaustive `0..=256` sweep (the Lean side samples; here we close the range). Since the #170
+//!     quorum unification the REAL formula is the blocklace strict supermajority `⌊2n/3⌋ + 1`,
+//!     which is the Lean value PLUS ONE exactly when `3 ∣ n` (incl. n=0) and EQUAL otherwise. The
+//!     `+1` at `3 ∣ n` is the deliberate closure of the `StrictBft` hole the Lean module
+//!     (`BlsQuorumCert.lean`) carries explicitly ("false at n=3,6,9,…"); Rust requiring MORE votes
+//!     than the Lean threshold is strictly safe-side (every Lean acceptance lower bound still
+//!     holds). The residual lane: lift the Lean `quorumThreshold` to the supermajority and
+//!     discharge `StrictBft` (metatheory side).
 //!  2. **Set-transform agreement** — the Lean `applyDelta` (filter removals, append additions) and
 //!     `applyDelta_count` are re-run against the REAL `apply_epoch_transition` member set and count.
 //!  3. **No-gap gate agreement** — the Lean `verifyTransition`'s teeth (sequential epochs, old-epoch
@@ -88,50 +95,73 @@ fn sign_quorum(transition_qc: &mut QuorumCertificate, sks: &[&SigningKey], n: us
 
 // ───────────────────────────── §1 threshold agreement ─────────────────────────────
 
+/// The exact pinned relation between the Lean `quorumThreshold` and the REAL unified
+/// supermajority: `rust(n) = lean(n) + [3 ∣ n]` (uniformly, including `n = 0` where the
+/// fail-closed empty-committee threshold is 1). Equal at every n NOT divisible by 3.
+fn lean_to_rust_threshold(n: usize) -> usize {
+    lean_quorum_threshold(n) + usize::from(n % 3 == 0)
+}
+
 #[test]
 fn lean_threshold_matches_rust_golden() {
-    // The Lean `#guard` golden values (`EpochReconfig.lean` §1).
-    for (n, t) in [
-        (1usize, 1usize),
-        (2, 2),
-        (3, 2),
-        (4, 3),
-        (5, 4),
-        (6, 4),
-        (7, 5),
-        (10, 7),
-        (13, 9),
+    // The Lean `#guard` golden values (`EpochReconfig.lean` §1), with the REAL (post-#170
+    // unification) value alongside: +1 exactly at the 3∣n sizes (the StrictBft closure).
+    for (n, lean_t, rust_t) in [
+        (1usize, 1usize, 1usize),
+        (2, 2, 2),
+        (3, 2, 3), // 3 ∣ n: Rust strict supermajority is one stronger
+        (4, 3, 3),
+        (5, 4, 4),
+        (6, 4, 5), // 3 ∣ n
+        (7, 5, 5),
+        (10, 7, 7),
+        (13, 9, 9),
     ] {
-        assert_eq!(lean_quorum_threshold(n), t, "lean golden n={n}");
-        assert_eq!(quorum_threshold(n), t, "rust quorum_threshold n={n}");
+        assert_eq!(lean_quorum_threshold(n), lean_t, "lean golden n={n}");
+        assert_eq!(quorum_threshold(n), rust_t, "rust quorum_threshold n={n}");
         assert_eq!(
             compute_bft_threshold(n),
-            t,
+            rust_t,
             "rust compute_bft_threshold n={n}"
         );
+        assert_eq!(lean_to_rust_threshold(n), rust_t, "pinned relation n={n}");
     }
 }
 
 #[test]
 fn lean_threshold_matches_rust_exhaustive() {
-    // Close the whole 0..=256 range: Lean transcription ≡ real quorum_threshold ≡ compute_bft.
+    // Close the whole 0..=256 range: real quorum_threshold ≡ compute_bft ≡ the pinned
+    // `lean + [3∣n]` relation — no UNTRACKED drift anywhere in the operating range.
     for n in 0..=256usize {
         assert_eq!(
-            lean_quorum_threshold(n),
+            lean_to_rust_threshold(n),
             quorum_threshold(n),
-            "lean vs quorum_threshold n={n}"
+            "lean(+[3|n]) vs quorum_threshold n={n}"
         );
         assert_eq!(
             quorum_threshold(n),
             compute_bft_threshold(n),
             "quorum_threshold vs compute_bft n={n}"
         );
+        // Safe-side direction: the REAL threshold is never below the Lean one, so every
+        // Lean acceptance lower bound (quorum attested ⇒ …) applies to Rust-accepted QCs.
+        assert!(
+            quorum_threshold(n) >= lean_quorum_threshold(n),
+            "rust must be ≥ lean n={n}"
+        );
         // Lean `quorum_gt_half`: for n ≥ 1, n < 2*quorum (strict-majority / intersection backbone).
         if n >= 1 {
             assert!(n < 2 * quorum_threshold(n), "quorum_gt_half n={n}");
+            // Lean `quorum_le`: quorum ≤ n — i.e. an honest committee can still form a
+            // quorum (liveness). (At n=0 the unified threshold is 1 > 0: fail-closed.)
+            assert!(quorum_threshold(n) <= n, "quorum_le n={n}");
+            // The StrictBft closure: unconditional honest overlap, with NO 3∣n caveat —
+            // the margin property the Lean side only has under `StrictBft`.
+            assert!(
+                2 * quorum_threshold(n) - n > (n - 1) / 3,
+                "unconditional overlap n={n}"
+            );
         }
-        // Lean `quorum_le`: quorum ≤ n.
-        assert!(quorum_threshold(n) <= n, "quorum_le n={n}");
     }
 }
 
@@ -245,7 +275,7 @@ fn positive_witness_verifies() {
 fn negative_under_quorum_rejected() {
     // Lean `Demo` NEGATIVE #1: too few valid signers ⇒ verify fails (no-minority-seizure).
     let (config, mut transition, (sk0, sk1, _)) = build_verifiable();
-    // Only TWO sigs (threshold is quorumThreshold(3) = 2... so drop to ONE to go under).
+    // Threshold at n=3 is the strict supermajority 3 (post-#170); ONE sig is well under.
     sign_quorum(&mut transition.attestation, &[&sk0, &sk1], 1);
     assert!(transition.attestation.votes.len() < config.threshold);
     assert!(!verify_epoch_transition(&transition, &config));

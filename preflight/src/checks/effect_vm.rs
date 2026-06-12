@@ -45,11 +45,12 @@ fn check_trace_generation() -> Result<(), String> {
         return Err("trace should not be empty".into());
     }
 
-    // Trace should have exactly `effects.len()` rows.
-    let expected_rows = effects.len();
+    // Trace height: padded to a power of 2 with a minimum of 64 rows
+    // (MIN_TRACE_HEIGHT — the FRI single-row-gap closure, task #90).
+    let expected_rows = effects.len().next_power_of_two().max(64);
     if trace.len() != expected_rows {
         return Err(format!(
-            "expected {} trace rows, got {}",
+            "expected {} trace rows (next_pow2(effects).max(64)), got {}",
             expected_rows,
             trace.len()
         ));
@@ -237,18 +238,15 @@ fn check_effects_hash_commitment() -> Result<(), String> {
 
 /// Verify net delta encoding and extraction round-trips correctly.
 fn check_net_delta_encoding() -> Result<(), String> {
-    // extract_net_delta expects at least 7 elements (pi::BASE_COUNT = 7).
-    // NET_DELTA_MAG is at index 2, NET_DELTA_SIGN is at index 3.
+    use dregg_circuit::effect_vm::pi;
+
+    // extract_net_delta requires a full pi::BASE_COUNT-length vector and
+    // reads mag/sign at pi::NET_DELTA_MAG / pi::NET_DELTA_SIGN.
     fn make_public_inputs(mag: BabyBear, sign: BabyBear) -> Vec<BabyBear> {
-        vec![
-            BabyBear::ZERO, // [0] old_commitment
-            BabyBear::ZERO, // [1] new_commitment
-            mag,            // [2] net_delta_mag
-            sign,           // [3] net_delta_sign
-            BabyBear::ZERO, // [4] effects_hash_lo
-            BabyBear::ZERO, // [5] effects_hash_hi
-            BabyBear::ZERO, // [6] custom_effect_count
-        ]
+        let mut v = vec![BabyBear::ZERO; pi::BASE_COUNT];
+        v[pi::NET_DELTA_MAG] = mag;
+        v[pi::NET_DELTA_SIGN] = sign;
+        v
     }
 
     // Positive delta (net inflow).
@@ -327,15 +325,16 @@ fn check_custom_dispatch() -> Result<(), String> {
     }
 
     // Public inputs should contain the custom proof commitments.
-    // custom_effect_count is at index 6 in public inputs.
-    if public_inputs.len() < 7 {
+    use dregg_circuit::effect_vm::pi;
+    if public_inputs.len() < pi::BASE_COUNT {
         return Err(format!(
-            "public inputs too short: {}, expected >= 7",
-            public_inputs.len()
+            "public inputs too short: {}, expected >= {}",
+            public_inputs.len(),
+            pi::BASE_COUNT
         ));
     }
 
-    let custom_count = public_inputs[6];
+    let custom_count = public_inputs[pi::CUSTOM_EFFECT_COUNT];
     if custom_count != BabyBear::ONE {
         return Err(format!(
             "expected 1 custom effect in public inputs, got {:?}",

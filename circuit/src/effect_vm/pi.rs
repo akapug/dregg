@@ -676,3 +676,50 @@ pub const MAX_CUSTOM_EFFECTS_DEFAULT: u8 = 4;
 // matching loop (deterministic recomputation from cell/federation
 // state), not by per-row AIR constraints. Stage 2 may add aux columns
 // to anchor positions 1..3 of state-commit forms inside the trace.
+
+// ---- PI v3 (THE ROTATION, STAGED — `docs/UNIVERSAL-MAP-ROTATION.md` §2.6) ----
+//
+// The v3 tail appends THREE slots after the frozen v2 prefix. NOTHING on the
+// live wire path reads these yet: they are staged for the one VK flag-day
+// (`docs/ROTATION-CUTOVER.md`), exactly the additive IR-v2 pattern. The Lean
+// twin is `metatheory/Dregg2/Circuit/RotationLayout.lean` namespace `PiV3` —
+// the offsets below are EMITTED THERE (every layout fact a theorem or a named
+// carrier); the `pi_v3_offsets_match_lean` test is the drift guard: if the
+// live v2 prefix (`BASE_COUNT`) grows before the flag-day, the pin fails
+// loudly here and the Lean module must be re-anchored first.
+pub mod v3 {
+    use super::BASE_COUNT;
+
+    /// The committed-height column: the `committedHeight` commitment limb's
+    /// public face (Lean: `PiV3.COMMITTED_HEIGHT`). Closes the temporal
+    /// gate's prover-chosen-height note: the verifier reads the height FROM
+    /// the committed state (`RotationLayout.committed_height_not_prover_chosen`);
+    /// `CURRENT_BLOCK_HEIGHT` (PI 18) stays as the verifier-supplied comparand.
+    pub const COMMITTED_HEIGHT: usize = BASE_COUNT;
+    /// The rateBound caveat tag (Lean: `PiV3.RATE_BOUND_TAG`).
+    pub const RATE_BOUND_TAG: usize = BASE_COUNT + 1;
+    /// The challengeWindow caveat tag (Lean: `PiV3.CHALLENGE_WINDOW_TAG`).
+    /// What the optimistic proving mode reads (#169) — the tag ships at the
+    /// flag-day, the mode ships later.
+    pub const CHALLENGE_WINDOW_TAG: usize = BASE_COUNT + 2;
+    /// The v3 base count (Lean: `PiV3.V3_BASE_COUNT`). At the cutover,
+    /// `VK_PI_LAYOUT_VERSION` bumps 2 → 3 and `CUSTOM_PROOFS_BASE` moves here.
+    pub const V3_BASE_COUNT: usize = BASE_COUNT + 3;
+}
+
+#[cfg(test)]
+mod v3_drift_guard {
+    /// THE DRIFT GUARD: the staged v3 offsets are byte-pinned against the
+    /// Lean emission (`RotationLayout.PiV3`: V2_BASE_COUNT = 201, tail
+    /// 201/202/203, V3_BASE_COUNT = 204). A change to the live v2 prefix
+    /// before the flag-day fails HERE, forcing the Lean re-anchor first —
+    /// Rust never invents a layout fact (law #1 of the rotation spec).
+    #[test]
+    fn pi_v3_offsets_match_lean() {
+        assert_eq!(super::BASE_COUNT, 201, "v2 prefix drifted: re-anchor RotationLayout.PiV3.V2_BASE_COUNT");
+        assert_eq!(super::v3::COMMITTED_HEIGHT, 201);
+        assert_eq!(super::v3::RATE_BOUND_TAG, 202);
+        assert_eq!(super::v3::CHALLENGE_WINDOW_TAG, 203);
+        assert_eq!(super::v3::V3_BASE_COUNT, 204);
+    }
+}

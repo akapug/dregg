@@ -2458,6 +2458,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "curve25519-dalek",
+ "dregg-app-framework",
  "dregg-blocklace",
  "dregg-bridge",
  "dregg-captp",
@@ -2476,6 +2477,12 @@ dependencies = [
  "getrandom 0.3.4",
  "postcard",
  "serde_json",
+ "starbridge-compartment-workflow-mandate",
+ "starbridge-governed-namespace",
+ "starbridge-identity",
+ "starbridge-nameservice",
+ "starbridge-subscription",
+ "starbridge-tool-access-delegation",
  "tokio",
  "toml",
 ]

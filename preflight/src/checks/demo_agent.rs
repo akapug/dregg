@@ -40,7 +40,9 @@ const SKIP_MARKERS: &[&str] = &[
 /// newly added examples must be explicitly registered here (i.e., registration is a
 /// conscious act, not silent auto-discovery).
 ///
-/// All 43 examples that exist under demo-agent/examples/ as of 2026-05-23.
+/// All 41 examples that exist under demo-agent/examples/ as of 2026-06-12.
+/// (federation_bootstrap / federation_exit / proof_obligation were retired;
+/// orchestration_demo was added.)
 const EXAMPLES: &[&str] = &[
     "agent_network",
     "ai_agent_mcp_workflow",
@@ -58,8 +60,6 @@ const EXAMPLES: &[&str] = &[
     "delegation_demo",
     "delegation_swarm",
     "escrow_demo",
-    "federation_bootstrap",
-    "federation_exit",
     "intent_lifecycle",
     "ivc_attenuation_chain",
     "multi_org_delegation",
@@ -68,6 +68,7 @@ const EXAMPLES: &[&str] = &[
     "note_bridge",
     "note_privacy",
     "offline_verification",
+    "orchestration_demo",
     "payment_channel",
     "payment_channel_burst",
     "pipeline_demo",
@@ -76,7 +77,6 @@ const EXAMPLES: &[&str] = &[
     "private_orderbook",
     "programmable_cell",
     "progressive_disclosure",
-    "proof_obligation",
     "rbac_datalog",
     "seal_unseal_transfer",
     "sub_agent_spawn",
