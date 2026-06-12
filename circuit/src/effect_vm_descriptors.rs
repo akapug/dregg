@@ -684,12 +684,74 @@ pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_JSON: &str =
 pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_FP: &str =
     "f80801c9eb428d005232c250ff2d873432a7edb982dd6c0bf39c669311554c26";
 
-/// The v3-staged registry (keyed by Lean def-name, the `V2_DESCRIPTORS` pattern).
-pub const V3_STAGED_DESCRIPTORS: &[(&str, &str, &str)] = &[(
-    "rotationProbeVmDescriptor2",
-    DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_JSON,
-    DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_FP,
-)];
+/// The REGISTER-COUNT MEASUREMENT probes (`docs/ROTATION-CUTOVER.md` pre-gates): the same
+/// staged rotation probe emitted at R=24 and R=32 registers from the PARAMETRIC Lean
+/// emission (`Dregg2/Circuit/Emit/EffectVmEmitRotationR.lean`, driver `EmitRotationV3.lean`;
+/// keystone `wireCommitR_binds` holds parametrically in R — no per-R axiom). The R=16
+/// probe above is the deployed reference and its bytes DO NOT move (Lean `#guard`s the
+/// graduated R=16 wire JSON byte-identical to the pinned emission). These exist to be
+/// MEASURED (`descriptor_ir2.rs::rotation_probe_register_count_measurement`): registers
+/// are ALWAYS-PAID commitment limbs in every turn proof; heap fields are METERED umem rows.
+pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R24_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-rotation-state-v3-staged-r24.json");
+pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R24_FP: &str =
+    "78924093cf0617e1c80b7384e99a72bffaff4df4283e131108797e7ea9a5f360";
+pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R32_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-rotation-state-v3-staged-r32.json");
+pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R32_FP: &str =
+    "cbe22881a7de7a73473f5ba75a445b1e7c2906b2f2fd39fd466364f616dfbdb5";
+
+/// The v3-staged registry (keyed by Lean def-name, the `V2_DESCRIPTORS` pattern). Entry 0
+/// is the deployed R=16 reference; entries 1-2 are the register-count measurement probes.
+pub const V3_STAGED_DESCRIPTORS: &[(&str, &str, &str)] = &[
+    (
+        "rotationProbeVmDescriptor2",
+        DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_JSON,
+        DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_FP,
+    ),
+    (
+        "rotationProbeVmDescriptorR24",
+        DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R24_JSON,
+        DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R24_FP,
+    ),
+    (
+        "rotationProbeVmDescriptorR32",
+        DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R32_JSON,
+        DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R32_FP,
+    ),
+];
+
+/// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
+/// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
+/// 3-wide chip groups while ≥ 3 remain, singletons after — arity ∈ {2,4}, NEVER 3 — and the
+/// iroot rides its own arity-2 final site, literally last).
+pub fn rotation_layout_for(r: usize) -> RotationLayoutR {
+    let m = r + 3; // post-head pre-iroot fresh inputs
+    let num_sites = 1 + m / 3 + m % 3 + 1; // head + 3-groups + singletons + the iroot site
+    RotationLayoutR {
+        num_registers: r,
+        committed_height: r + 6,
+        iroot: r + 7,
+        state_commit: r + 8,
+        block_size: r + 9,
+        chain_base: r + 9,
+        num_chain: num_sites - 1,
+        probe_width: r + 9 + num_sites - 1,
+    }
+}
+
+/// See [`rotation_layout_for`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RotationLayoutR {
+    pub num_registers: usize,
+    pub committed_height: usize,
+    pub iroot: usize,
+    pub state_commit: usize,
+    pub block_size: usize,
+    pub chain_base: usize,
+    pub num_chain: usize,
+    pub probe_width: usize,
+}
 
 // ==== ALL unique descriptors (name -> json, fingerprint): the total name registry ====
 pub const ALL_DESCRIPTORS: &[(&str, &str, &str)] = &[
@@ -1148,58 +1210,97 @@ mod tests {
     }
 
     /// The v3-staged probe registry: fingerprint binding + round-trip through the
-    /// IR-v2 decoder + PRESENCE — the probe's chip-lookup chain must absorb EVERY
-    /// rotated limb column exactly once, in the manifest's absorption order, with
-    /// the final digest on `STATE_COMMIT` (a re-emit that drops a limb — e.g. the
-    /// heap_root — fails HERE, before any prover runs).
+    /// IR-v2 decoder + PRESENCE at EVERY register count — each probe's chip-lookup
+    /// chain must absorb EVERY rotated limb column exactly once, in the absorption
+    /// order, with the final digest on `STATE_COMMIT` (a re-emit that drops a limb —
+    /// e.g. the heap_root, or a widened register — fails HERE, before any prover
+    /// runs). The presence-refusal tooth scales with the block: a wider block with
+    /// untested columns would be worse than a narrow one.
     #[test]
     fn v3_staged_descriptors_parse_match_fingerprint_and_cover_all_limbs() {
         use crate::descriptor_ir2::VmConstraint2;
         use crate::effect_vm::columns::rotation as rot;
         use crate::lean_descriptor_air::LeanExpr;
-        assert_eq!(V3_STAGED_DESCRIPTORS.len(), 1, "expected 1 v3-staged descriptor");
-        let (key, json, fp) = &V3_STAGED_DESCRIPTORS[0];
-        assert_eq!(&sha256_hex(json.as_bytes()), fp, "v3 staged {key}: SHA-256 drift");
-        let d = parse_vm_descriptor2(json)
-            .unwrap_or_else(|e| panic!("v3 staged {key} failed parse_vm_descriptor2: {e}"));
-        assert_eq!(d.trace_width, rot::PROBE_WIDTH);
-        assert_eq!(d.public_input_count, 2);
-        assert!(d.hash_sites.is_empty() && d.ranges.is_empty(), "graduated carriers only");
-        // PRESENCE: walk the chip lookups in order; collect fresh (non-chain) absorbed
-        // columns; they must be exactly 0..=IROOT in order, and each non-final site's
-        // digest must be the next chain carrier, the final site's digest STATE_COMMIT.
-        let mut absorbed: Vec<usize> = Vec::new();
-        let mut digests: Vec<usize> = Vec::new();
-        for c in &d.constraints {
-            if let VmConstraint2::Lookup(l) = c {
-                let vars: Vec<usize> = l
-                    .tuple
-                    .iter()
-                    .filter_map(|e| match e {
-                        LeanExpr::Var(v) => Some(*v),
-                        _ => None,
-                    })
-                    .collect();
-                let (digest, inputs) = vars.split_last().expect("chip tuple has a digest");
-                digests.push(*digest);
-                for v in inputs {
-                    if *v < rot::BLOCK_SIZE {
-                        absorbed.push(*v);
-                    }
+        assert_eq!(V3_STAGED_DESCRIPTORS.len(), 3, "expected 3 v3-staged descriptors");
+        // The R=16 entry is the deployed reference: its parametric twin must agree with
+        // the pinned `columns.rs::rotation` constants exactly.
+        let l16 = rotation_layout_for(16);
+        assert_eq!(l16.committed_height, rot::COMMITTED_HEIGHT);
+        assert_eq!(l16.iroot, rot::IROOT);
+        assert_eq!(l16.state_commit, rot::STATE_COMMIT);
+        assert_eq!(l16.block_size, rot::BLOCK_SIZE);
+        assert_eq!(l16.chain_base, rot::CHAIN_BASE);
+        assert_eq!(l16.num_chain, rot::NUM_CHAIN);
+        assert_eq!(l16.probe_width, rot::PROBE_WIDTH);
+        // R=24: exact 3-fill (no mid arity-2 site); R=32: two arity-2 mid sites.
+        assert_eq!(rotation_layout_for(24).probe_width, 43);
+        assert_eq!(rotation_layout_for(24).num_chain, 10);
+        assert_eq!(rotation_layout_for(32).probe_width, 55);
+        assert_eq!(rotation_layout_for(32).num_chain, 14);
+        for (key, json, fp) in V3_STAGED_DESCRIPTORS {
+            let r = match *key {
+                "rotationProbeVmDescriptor2" => 16,
+                "rotationProbeVmDescriptorR24" => 24,
+                "rotationProbeVmDescriptorR32" => 32,
+                other => panic!("unknown v3-staged key {other}"),
+            };
+            let lay = rotation_layout_for(r);
+            assert_eq!(&sha256_hex(json.as_bytes()), fp, "v3 staged {key}: SHA-256 drift");
+            let d = parse_vm_descriptor2(json)
+                .unwrap_or_else(|e| panic!("v3 staged {key} failed parse_vm_descriptor2: {e}"));
+            assert_eq!(d.trace_width, lay.probe_width, "{key}: probe width");
+            assert_eq!(d.public_input_count, 2);
+            assert!(d.hash_sites.is_empty() && d.ranges.is_empty(), "graduated carriers only");
+            // PRESENCE: walk the chip lookups in order; collect fresh (non-chain) absorbed
+            // columns; they must be exactly 0..=IROOT in order, and each non-final site's
+            // digest must be the next chain carrier, the final site's digest STATE_COMMIT.
+            // Also: every site's fresh-input arity ∈ {4 head, 3, 1} (+1 digest ⇒ chip
+            // arity ∈ {2,4}; an arity-3 site would REFUSE on the deployed chip AIR).
+            let mut absorbed: Vec<usize> = Vec::new();
+            let mut digests: Vec<usize> = Vec::new();
+            for c in &d.constraints {
+                if let VmConstraint2::Lookup(l) = c {
+                    let vars: Vec<usize> = l
+                        .tuple
+                        .iter()
+                        .filter_map(|e| match e {
+                            LeanExpr::Var(v) => Some(*v),
+                            _ => None,
+                        })
+                        .collect();
+                    let (digest, inputs) = vars.split_last().expect("chip tuple has a digest");
+                    digests.push(*digest);
+                    let fresh: Vec<usize> = inputs
+                        .iter()
+                        .copied()
+                        .filter(|v| *v < lay.block_size)
+                        .collect();
+                    let chained = inputs.len() - fresh.len();
+                    assert!(
+                        (chained == 0 && fresh.len() == 4)
+                            || (chained == 1 && (fresh.len() == 3 || fresh.len() == 1)),
+                        "{key}: site shape must be 4-fresh head or digest+3 / digest+1 \
+                         (chip arity ∈ {{2,4}}), got {chained} chained + {} fresh",
+                        fresh.len()
+                    );
+                    absorbed.extend(fresh);
                 }
             }
+            let expected: Vec<usize> = (0..=lay.iroot).collect();
+            assert_eq!(
+                absorbed, expected,
+                "{key}: the probe must absorb every rotated limb column exactly once, in \
+                 the absorption order (cells root, {r} registers, cap/nullifier/heap \
+                 roots, lifecycle, epoch, committed height, iroot LAST)"
+            );
+            let expected_digests: Vec<usize> = (0..lay.num_chain)
+                .map(|k| lay.chain_base + k)
+                .chain(std::iter::once(lay.state_commit))
+                .collect();
+            assert_eq!(
+                digests, expected_digests,
+                "{key}: chained digest carriers, final = STATE_COMMIT"
+            );
         }
-        let expected: Vec<usize> = (0..=rot::IROOT).collect();
-        assert_eq!(
-            absorbed, expected,
-            "the probe must absorb every rotated limb column exactly once, in the \
-             absorption order (cells root, 16 registers, cap/nullifier/heap roots, \
-             lifecycle, epoch, committed height, iroot LAST)"
-        );
-        let expected_digests: Vec<usize> = (0..rot::NUM_CHAIN)
-            .map(|k| rot::CHAIN_BASE + k)
-            .chain(std::iter::once(rot::STATE_COMMIT))
-            .collect();
-        assert_eq!(digests, expected_digests, "chained digest carriers, final = STATE_COMMIT");
     }
 }
