@@ -44,14 +44,14 @@
 //!   relation.
 //! * **Governance must be legible** — what the executor enforces, anyone can
 //!   READ back out of the ledger. [`council::inspect_council`] decodes a
-//!   proposal cell's machine from its 8 slots (pure; works on a node read, a
+//!   proposal cell's machine from its 16 slots (pure; works on a node read, a
 //!   receipt's post-state, or a light-client proof) and is the shared
 //!   decoder behind the CLI (`dregg polis council`) and the Discord
 //!   `/council-status` surface.
 //!
 //! ## Expressibility gaps (documented, NOT shimmed — dregg4 guard-algebra feed)
 //!
-//! The `StateConstraint` grammar evaluates over the 8 field slots of the ONE
+//! The `StateConstraint` grammar evaluates over the 16 field slots of the ONE
 //! touched cell's post-state (+ old state + block height). The following legs
 //! of the polis semantics are therefore **not program-enforced**; each is
 //! listed with what carries it instead:
@@ -103,7 +103,7 @@
 //!    decode which "tool" a turn used; per-tool gating lives at the MCP
 //!    capability layer (`node/src/mcp.rs`). The cell publishes the scope so
 //!    every spend receipt is traceable to the mandate's published terms.
-//! 7. **Slot budget.** With 8 constraint-visible slots, a council cell
+//! 7. **Slot budget.** With 16 constraint-visible slots, a council cell
 //!    supports at most [`council::MAX_MEMBERS`] (= 3) members
 //!    (state + proposal hash + approved flag + 3 approval slots + membership
 //!    commitment + reserved). Larger councils need the dregg4 grammar
@@ -130,7 +130,7 @@ pub const STATE_SLOT: u8 = 0;
 pub enum PolisError {
     /// A council charter with no members cannot gate anything.
     NoMembers,
-    /// More members than the 8-slot grammar can hold (see module docs, gap 7).
+    /// More members than the 16-slot grammar can hold (see module docs, gap 7).
     TooManyMembers { got: usize, max: usize },
     /// Threshold must satisfy `1 <= threshold <= members.len()`.
     ThresholdOutOfRange { threshold: u64, members: usize },
@@ -767,7 +767,7 @@ pub mod council {
     /// staged hash, and per-member approvals in charter order. Governance the
     /// polis can READ is governance the polis can trust — this is the shared
     /// decoder for every inspection surface (CLI, bots, verifiers), pure over
-    /// the cell's 8 field slots.
+    /// the cell's 16 field slots.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct CouncilStatus {
         /// Decoded lifecycle state.
@@ -1341,7 +1341,7 @@ pub mod identity {
     }
 
     /// An identity cell, made legible: the decoded key state. Pure over
-    /// the 8 field slots (a node read, a receipt post-state, or a
+    /// the 16 field slots (a node read, a receipt post-state, or a
     /// light-client proof).
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct IdentityStatus {

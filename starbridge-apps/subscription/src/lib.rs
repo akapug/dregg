@@ -65,7 +65,7 @@
 //!
 //! ## The slot layout
 //!
-//! `STATE_SLOTS = 8`. The 8 slots are:
+//! `STATE_SLOTS = 16`. The 16 slots are:
 //!
 //! | Slot | Name | Caveat | Purpose |
 //! |---:|---|---|---|
@@ -78,11 +78,11 @@
 //! | 6 | `message_root` | per-method non-zero | Poseidon2/BLAKE3 root over the (seq, payload_hash) tuples published into the queue. |
 //! | 7 | `latest_payload_hash` | per-method | The hash of the most recently published payload. On publish: written. On consume: unchanged. Inspectors read it as the head-of-queue summary. |
 //!
-//! ### Why a `message_root` and not 8 dedicated `message_slot[i]` slots?
+//! ### Why a `message_root` and not 16 dedicated `message_slot[i]` slots?
 //!
 //! The spec in `STORAGE-AS-CELL-PROGRAMS.md` §3.1 talks about per-message
 //! `WriteOnce` slots as an *idealized* surface. The cell substrate has
-//! `STATE_SLOTS = 8` total (`dregg_cell::state::STATE_SLOTS`), which is
+//! `STATE_SLOTS = 16` total (`dregg_cell::state::STATE_SLOTS`), which is
 //! not enough to host an unbounded message ring. The actual data path
 //! is the same one `MerkleQueue::root` uses today in `dregg_storage`:
 //! a root commitment in slot 6, with the per-message tuples stored
@@ -182,18 +182,18 @@ pub const MESSAGE_ROOT_SLOT: u8 = 6;
 pub const LATEST_PAYLOAD_SLOT: u8 = 7;
 
 /// **Record-layer Stage 0 (`_RECORD-LAYER-UPGRADE.md` §E).** Subscription is the
-/// 8/8-full app — slots 0..7 are all assigned above, so it has historically had
+/// 16/16-full app — slots 0..15 are all assigned above, so it has historically had
 /// to fold *unbounded* message state into the slot-6 `message_root` workaround
 /// by hand. The committed user-field MAP (`CellState::fields_root` /
-/// `fields_map`) frees it: keys `>= STATE_SLOTS` (8) live in the map, committed
+/// `fields_map`) frees it: keys `>= STATE_SLOTS` (16) live in the map, committed
 /// by `fields_root`, with a membership read-back.
 ///
 /// This is the FIRST overflow field on the map: a per-subscription
-/// `subscriber_count` that the 8-slot cell had no room for. It demonstrates the
+/// `subscriber_count` that the 16-slot cell had no room for. It demonstrates the
 /// end-to-end path (write → root update → committed read-back) on the app the
-/// 8-cap actually blocked. Reserved low keys are `0..7`; this is the first
+/// 16-cap actually blocked. Reserved low keys are `0..15`; this is the first
 /// user-map key.
-pub const SUBSCRIBER_COUNT_KEY: u64 = 8;
+pub const SUBSCRIBER_COUNT_KEY: u64 = 16;
 
 fn u64_field(value: u64) -> FieldElement {
     let mut out = [0u8; 32];
@@ -719,7 +719,7 @@ pub fn build_grant_consumer_action(
 // Record-layer Stage 0: the committed user-field MAP (the unbounded-fields win)
 // =============================================================================
 
-/// Write the `subscriber_count` overflow field (user-map key 8) into a
+/// Write the `subscriber_count` overflow field (user-map key 16) into a
 /// subscription cell's committed field-map, recomputing `fields_root`.
 ///
 /// `_RECORD-LAYER-UPGRADE.md` §E.3: subscription is 8/8-full, so this field has
@@ -965,8 +965,8 @@ mod tests {
 
     // ─── Record-layer Stage 0: committed user-field MAP (end-to-end) ─────
 
-    /// The 8/8-full subscription cell gains an unbounded overflow field
-    /// (`subscriber_count`, user-map key 8) via the committed `fields_root`.
+    /// The 16/16-full subscription cell gains an unbounded overflow field
+    /// (`subscriber_count`, user-map key 16) via the committed `fields_root`.
     /// END-TO-END: write -> root update -> committed membership read-back.
     #[test]
     fn subscriber_count_overflow_field_roundtrips_through_fields_root() {
@@ -975,7 +975,7 @@ mod tests {
         assert_eq!(state.fields_root, dregg_cell::empty_fields_root());
         assert_eq!(read_subscriber_count(&state), None, "absent before write");
 
-        // Write the overflow field (key 8) — the 8 fixed slots are untouched.
+        // Write the overflow field (key 16) — the 16 fixed slots are untouched.
         assert!(write_subscriber_count(&mut state, 1234));
         assert_ne!(
             state.fields_root,
@@ -990,7 +990,7 @@ mod tests {
             "membership read-back must return the committed value"
         );
 
-        // The fixed slots 0..7 are all still zero — the map did not steal a slot.
+        // The fixed slots 0..15 are all still zero — the map did not steal a slot.
         for i in 0..dregg_cell::STATE_SLOTS {
             assert_eq!(*state.get_field(i).unwrap(), [0u8; 32]);
         }

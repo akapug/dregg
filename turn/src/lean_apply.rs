@@ -34,12 +34,12 @@
 //! # What the cell commitment binds — and the wire-model swap-gaps it reveals
 //!
 //! `compute_canonical_state_commitment` hashes, per cell:
-//! `(balance, nonce, fields[0..8], permissions, verification_key, cap_root, lifecycle, program)`.
+//! `(balance, nonce, fields[0..STATE_SLOTS], permissions, verification_key, cap_root, lifecycle, program)`.
 //! So for the Lean-produced ledger's `.root()` to equal the Rust-produced one, the reconstitution
 //! must install the post-state of EVERY one of those that an effect can touch. The verified
 //! `WireState` carries enough to reconstitute:
 //!   * `balance` (via the per-asset `bal` side-table) — Transfer / Burn;
-//!   * `nonce`, `fields[0..8]` (the cell record) — SetField / IncrementNonce;
+//!   * `nonce`, `fields[0..STATE_SLOTS]` (the cell record) — SetField / IncrementNonce;
 //!   * `cap_root` (via the `caps` side-table → [`rebuild_capabilities`]) — best-effort, lossy.
 //!
 //! The `WireState` does NOT carry several commitment-bound payloads — but for the SURVIVOR effects

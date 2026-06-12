@@ -140,14 +140,14 @@ fn stress_registry(custom_hash: [u8; 32]) -> WitnessedPredicateRegistry {
 /// substrate honestly handles all of these — this test is the regression
 /// guard against any future refactor that quietly silos them.
 ///
-/// Note: `STATE_SLOTS = 8` limits us to indices 0..7. The original design
+/// Note: `STATE_SLOTS = 16` limits us to indices 0..15. The original design
 /// used indices 0..17; those have been remapped to fit the current cell-state
-/// capacity. Variants not fitting in 8 independent slots (SumEqualsAcross,
+/// capacity. Variants not fitting in 16 independent slots (SumEqualsAcross,
 /// BoundedBy, SumEquals) are tested in `state_constraint_composition.rs`
 /// and the unit-level `state_constraint_variants.rs`.
 #[test]
 fn predicate_all_honest_variants_in_one_program_accept_legal_transition() {
-    // Layout of slots used (all within [0, 7] — STATE_SLOTS = 8):
+    // Layout of slots used (all within [0, 7] — leaving 8..15 free):
     //   slot 0: FieldEquals(=1)           — static value check
     //   slot 1: FieldGte(>=100)           — static lower bound
     //           + StrictMonotonic         — new(150) > old(100) covers both
@@ -942,6 +942,6 @@ fn cell_program_none_accepts_every_transition() {
     let program = CellProgram::None;
     let _ = FIELD_ZERO; // touch the import so it's visible in test output
     assert!(program.evaluate(&CellState::default(), None, None).is_ok());
-    let new = state_with(&[(0, 99), (5, 17), (7, 1)]); // slot 7 is the last valid index (STATE_SLOTS = 8)
+    let new = state_with(&[(0, 99), (5, 17), (7, 1)]); // slot 7 is still a valid fixed index
     assert!(program.evaluate(&new, None, None).is_ok());
 }

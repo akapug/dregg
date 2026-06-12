@@ -92,9 +92,9 @@ use dregg_app_framework::{
 
 /// State field slot at which a registered name's hash is anchored.
 ///
-/// Slot indices are 0..8 (per [`dregg_cell::STATE_SLOTS`]); `nonce` and
+/// Slot indices are 0..16 (per [`dregg_cell::STATE_SLOTS`]); `nonce` and
 /// `balance` are *not* in `fields[]` (they live on separate `CellState`
-/// accessors), so all 8 slots are addressable. The constants here pin a
+/// accessors), so all 16 slots are addressable. The constants here pin a
 /// stable schema so:
 ///
 /// - The factory descriptor's `FieldConstraint::NonZero { field_index:

@@ -1,3 +1,9 @@
+use dregg_circuit::cap_root::fold_bytes32;
+use dregg_circuit::field::BabyBear;
+use dregg_circuit::heap_root::{
+    compute_heap_root as compute_heap_root_felt, empty_heap_root as empty_heap_root_felt,
+    heap_addr, HeapLeaf,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -9,12 +15,12 @@ pub type FieldElement = [u8; 32];
 pub const FIELD_ZERO: FieldElement = [0u8; 32];
 
 /// Number of user-defined state slots per cell.
-pub const STATE_SLOTS: usize = 8;
+pub const STATE_SLOTS: usize = 16;
 
 /// Number of kernel-owned side-table roots in the dedicated `system_roots`
 /// sub-block (`_RECORD-LAYER-UPGRADE.md` §C, Option C1; record-layer STAGE 3).
-/// One root per side-table; parallel to (and disjoint from) the 8 user
-/// `fields[0..7]` and the `fields_root` map.
+/// One root per side-table; parallel to (and disjoint from) the 16 user
+/// `fields[0..15]` and the `fields_root` map.
 pub const N_SYSTEM_ROOTS: usize = 8;
 
 /// Kernel-owned indices into [`CellState::system_roots`] — the dedicated home
@@ -83,7 +89,7 @@ impl Default for FieldVisibility {
 /// executor mutates them by index in tight loops.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellState {
-    /// 8 user-defined state fields (like Mina's app_state).
+    /// 16 user-defined state fields (like Mina's app_state).
     pub fields: [FieldElement; STATE_SLOTS],
     /// Visibility level for each field slot.
     pub field_visibility: [FieldVisibility; STATE_SLOTS],
@@ -109,8 +115,8 @@ pub struct CellState {
     /// [`CellState::apply_balance_change_well`] (may go negative — the well
     /// carries −supply). Sealed (P0-1); read via `balance()`.
     pub(crate) balance: i64,
-    /// Whether all 8 state fields were last set by a verified proof.
-    /// Becomes `true` only when ALL 8 fields are set by a single proof-authorized action.
+    /// Whether all 16 state fields were last set by a verified proof.
+    /// Becomes `true` only when ALL 16 fields are set by a single proof-authorized action.
     /// Becomes `false` if any field is modified by a non-proof authorization.
     /// Sealed (P0-1); mutate via `set_proved_state`, read via `proved_state()`.
     pub(crate) proved_state: bool,
@@ -137,9 +143,9 @@ pub struct CellState {
     pub refcount_table_root: [u8; 32],
     /// `_RECORD-LAYER-UPGRADE.md` §B (Stage 0): the committed root of the
     /// **user-field MAP** — an unbounded `key → FieldElement` accumulator over
-    /// keys `>= STATE_SLOTS` (8). The hybrid unsqueeze of the 8-fixed-slot
-    /// cell: keys `0..7` stay in `fields[]` (existing access byte-identical);
-    /// keys `>= 8` live in [`fields_map`] and are committed here.
+    /// keys `>= STATE_SLOTS` (16). The hybrid unsqueeze of the 16-fixed-slot
+    /// cell: keys `0..15` stay in `fields[]` (existing access byte-identical);
+    /// keys `>= 16` live in [`fields_map`] and are committed here.
     ///
     /// `fields_root` is the **committed** root (the on-cell/in-circuit
     /// witness); [`fields_map`] is the prover-side store whose digest this is.
@@ -157,7 +163,7 @@ pub struct CellState {
     #[serde(default = "empty_fields_root")]
     pub fields_root: [u8; 32],
     /// `_RECORD-LAYER-UPGRADE.md` §B.3: the **prover-side witness** store for
-    /// the user-field map — the actual `key (>= 8) -> value` entries whose
+    /// the user-field map — the actual `key (>= 16) -> value` entries whose
     /// digest is [`fields_root`]. Not itself committed (its digest is).
     /// `BTreeMap` for a canonical (sorted-key) iteration order so the digest is
     /// deterministic. `#[serde(default)]` ⇒ old cells deserialize with an empty
@@ -183,6 +189,21 @@ pub struct CellState {
     /// keeps every existing serialized cell deserializing.
     #[serde(default = "default_system_roots")]
     pub system_roots: [FieldElement; N_SYSTEM_ROOTS],
+    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.4: the committed openable sorted-
+    /// Poseidon2 root of the cell's **heap** — a `(collection_id, key) →
+    /// FieldElement` map. Included in `compute_canonical_state_commitment` so
+    /// the cell's state commitment binds heap state. A legacy (no-heap-activity)
+    /// cell carries the FIXED [`empty_heap_root`] constant so the absorption is
+    /// a uniform no-op across legacy cells.
+    #[serde(default = "empty_heap_root")]
+    pub heap_root: [u8; 32],
+    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.4: the **prover-side witness** store
+    /// for the heap — the actual `(collection, key) → value` entries whose
+    /// digest is [`heap_root`]. Not itself committed (its digest is).
+    /// `BTreeMap` for deterministic iteration order so the root is canonical.
+    /// `#[serde(default)]` keeps every existing serialized cell deserializing.
+    #[serde(default)]
+    pub heap_map: BTreeMap<(u32, u32), FieldElement>,
 }
 
 /// The all-empty-tree-sentinel `system_roots` sub-block a LEGACY cell carries:
@@ -260,6 +281,41 @@ pub fn compute_fields_root(map: &BTreeMap<u64, FieldElement>) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+/// The canonical 32-byte encoding of a BabyBear felt: the felt's 4
+/// little-endian bytes in the low 4 positions, the rest zero. Deterministic
+/// and injective on canonical BabyBear values (< p), so distinct roots encode
+/// to distinct byte strings.
+fn babybear_to_bytes32(felt: BabyBear) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[0..4].copy_from_slice(&felt.as_u32().to_le_bytes());
+    out
+}
+
+/// The digest of the **empty** heap — the fixed `heap_root` constant a legacy
+/// (no-heap-activity) cell carries. Cell-independent: folding it into the
+/// canonical commitment is a no-op for legacy cells (`UNIVERSAL-MAP-ROTATION.md`
+/// §2.4).
+pub fn empty_heap_root() -> [u8; 32] {
+    babybear_to_bytes32(empty_heap_root_felt())
+}
+
+/// Compute the canonical heap root over a `(collection_id, key) → value` map.
+///
+/// The Rust shadow of the Lean `Substrate.Heap.root`: a sorted Poseidon2 binary
+/// Merkle tree over `hash[hash[coll, key], value]` leaves. Values are folded
+/// from 32-byte `FieldElement`s to a single BabyBear felt so the leaf shape
+/// matches `circuit::heap_root::HeapLeaf`.
+pub fn compute_heap_root(map: &BTreeMap<(u32, u32), FieldElement>) -> [u8; 32] {
+    let leaves: Vec<HeapLeaf> = map
+        .iter()
+        .map(|((coll, key), value)| HeapLeaf {
+            addr: heap_addr(BabyBear::new(*coll), BabyBear::new(*key)),
+            value: fold_bytes32(value),
+        })
+        .collect();
+    babybear_to_bytes32(compute_heap_root_felt(leaves))
+}
+
 /// The public view of a field — either the actual value (if public) or its commitment hash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicFieldView {
@@ -327,7 +383,7 @@ impl CellState {
     /// Set the `proved_state` flag. Sealed-write accessor (P0-1).
     ///
     /// The executor calls this after applying a proof-authorized action: it
-    /// passes `true` only when all 8 fields were set by a single proof, and
+    /// passes `true` only when all 16 fields were set by a single proof, and
     /// `false` when any non-proof authorization touched the cell.
     #[inline]
     pub fn set_proved_state(&mut self, value: bool) {
@@ -443,6 +499,9 @@ impl CellState {
             fields_map: BTreeMap::new(),
             // Record-layer Stage 3: empty (all-sentinel) side-table sub-block.
             system_roots: default_system_roots(),
+            // Universal-map rotation §2.4: empty heap.
+            heap_root: empty_heap_root(),
+            heap_map: BTreeMap::new(),
         }
     }
 
@@ -569,7 +628,7 @@ impl CellState {
     // ───────────────────────────────────────────────────────────────────────
     // `_RECORD-LAYER-UPGRADE.md` §B.3 — the committed user-field MAP (Stage 0).
     //
-    // The hybrid read/write: keys `< STATE_SLOTS` (8) hit the existing fixed
+    // The hybrid read/write: keys `< STATE_SLOTS` (16) hit the existing fixed
     // `fields[]` array (byte-identical to before); keys `>= STATE_SLOTS` hit the
     // committed map. These are NEW methods — every existing `get_field`/
     // `set_field` call (which takes a `usize` slot index) is untouched.
@@ -622,6 +681,54 @@ impl CellState {
     pub fn fields_root_membership(&self, key: u64) -> Option<FieldElement> {
         let v = self.fields_map.get(&key).copied()?;
         if compute_fields_root(&self.fields_map) == self.fields_root {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // `docs/UNIVERSAL-MAP-ROTATION.md` §2.4 — the committed HEAP (sorted-
+    // Poseidon2 `(collection, key) → value` map). The heap root is a canonical
+    // commitment limb; `heap_map` is the prover-side witness store.
+    // ───────────────────────────────────────────────────────────────────────
+
+    /// Read a heap entry by its `(collection_id, key)`.
+    pub fn get_heap(&self, coll: u32, key: u32) -> Option<FieldElement> {
+        self.heap_map.get(&(coll, key)).copied()
+    }
+
+    /// Write a heap entry by its `(collection_id, key)` and recompute
+    /// [`heap_root`](Self::heap_root).
+    pub fn set_heap(&mut self, coll: u32, key: u32, value: FieldElement) -> bool {
+        self.heap_map.insert((coll, key), value);
+        self.heap_root = compute_heap_root(&self.heap_map);
+        true
+    }
+
+    /// Remove a heap entry by its `(collection_id, key)` and recompute
+    /// [`heap_root`](Self::heap_root). Returns `true` if the key was present.
+    pub fn remove_heap(&mut self, coll: u32, key: u32) -> bool {
+        let removed = self.heap_map.remove(&(coll, key)).is_some();
+        if removed {
+            self.heap_root = compute_heap_root(&self.heap_map);
+        }
+        removed
+    }
+
+    /// Recompute and store `heap_root` from the current `heap_map`. Idempotent;
+    /// callers that mutate `heap_map` out-of-band must call this to re-seal the
+    /// root.
+    pub fn reseal_heap_root(&mut self) {
+        self.heap_root = compute_heap_root(&self.heap_map);
+    }
+
+    /// **Membership witness** for a committed heap key: returns the value
+    /// `Some(v)` iff `(coll, key)` is present AND the recomputed root over the
+    /// current map equals the stored `heap_root`.
+    pub fn heap_root_membership(&self, coll: u32, key: u32) -> Option<FieldElement> {
+        let v = self.heap_map.get(&(coll, key)).copied()?;
+        if compute_heap_root(&self.heap_map) == self.heap_root {
             Some(v)
         } else {
             None
@@ -857,18 +964,18 @@ mod fields_map_tests {
         );
     }
 
-    /// POSITIVE membership: a written key `>= 8` reads back exactly its value,
+    /// POSITIVE membership: a written key `>= STATE_SLOTS` reads back exactly its value,
     /// and the membership witness confirms it is committed by `fields_root`.
     #[test]
     fn map_field_write_then_membership_readback() {
         let mut s = CellState::new(0);
-        assert!(s.set_field_ext(8, fe(42)));
-        assert!(s.set_field_ext(9, fe(7)));
-        assert_eq!(s.get_field_ext(8), Some(fe(42)));
-        assert_eq!(s.get_field_ext(9), Some(fe(7)));
+        assert!(s.set_field_ext(16, fe(42)));
+        assert!(s.set_field_ext(17, fe(7)));
+        assert_eq!(s.get_field_ext(16), Some(fe(42)));
+        assert_eq!(s.get_field_ext(17), Some(fe(7)));
         // The committed read-back: value is genuinely committed by fields_root.
-        assert_eq!(s.fields_root_membership(8), Some(fe(42)));
-        assert_eq!(s.fields_root_membership(9), Some(fe(7)));
+        assert_eq!(s.fields_root_membership(16), Some(fe(42)));
+        assert_eq!(s.fields_root_membership(17), Some(fe(7)));
     }
 
     /// NEGATIVE membership: an absent key reads `None` (the tail does not commit
@@ -876,12 +983,12 @@ mod fields_map_tests {
     #[test]
     fn absent_map_field_reads_none() {
         let mut s = CellState::new(0);
-        s.set_field_ext(8, fe(42));
-        assert_eq!(s.get_field_ext(10), None);
-        assert_eq!(s.fields_root_membership(10), None);
+        s.set_field_ext(16, fe(42));
+        assert_eq!(s.get_field_ext(18), None);
+        assert_eq!(s.fields_root_membership(18), None);
     }
 
-    /// Keys `< 8` fall through to the fixed array (existing access unchanged):
+    /// Keys `< STATE_SLOTS` fall through to the fixed array (existing access unchanged):
     /// `set_field_ext`/`get_field_ext` on a low key mirror `set_field`/`get_field`.
     #[test]
     fn low_keys_hit_the_fixed_array() {
@@ -900,7 +1007,7 @@ mod fields_map_tests {
     #[test]
     fn fields_root_is_not_vacuous() {
         let mut s = CellState::new(0);
-        s.set_field_ext(8, fe(42));
+        s.set_field_ext(16, fe(42));
         assert_ne!(
             s.fields_root,
             empty_fields_root(),
@@ -908,15 +1015,15 @@ mod fields_map_tests {
         );
         let root_before = s.fields_root;
         // Tamper the value at the same key.
-        s.set_field_ext(8, fe(43));
+        s.set_field_ext(16, fe(43));
         assert_ne!(
             root_before, s.fields_root,
             "tampering a value must flip the root"
         );
         // Distinct maps cannot share a root: a drop also flips it.
-        s.set_field_ext(9, fe(1));
+        s.set_field_ext(17, fe(1));
         let two_entries = s.fields_root;
-        s.fields_map.remove(&9);
+        s.fields_map.remove(&17);
         s.reseal_fields_root();
         assert_ne!(
             two_entries, s.fields_root,
@@ -929,11 +1036,11 @@ mod fields_map_tests {
     #[test]
     fn fields_root_is_order_canonical() {
         let mut a = CellState::new(0);
-        a.set_field_ext(8, fe(1));
-        a.set_field_ext(9, fe(2));
+        a.set_field_ext(16, fe(1));
+        a.set_field_ext(17, fe(2));
         let mut b = CellState::new(0);
-        b.set_field_ext(9, fe(2));
-        b.set_field_ext(8, fe(1));
+        b.set_field_ext(17, fe(2));
+        b.set_field_ext(16, fe(1));
         assert_eq!(a.fields_root, b.fields_root);
     }
 
@@ -956,5 +1063,117 @@ mod fields_map_tests {
         assert_eq!(s.balance(), 100);
         assert!(s.fields_map.is_empty());
         assert_eq!(s.fields_root, empty_fields_root());
+    }
+}
+
+#[cfg(test)]
+mod heap_root_tests {
+    //! `docs/UNIVERSAL-MAP-ROTATION.md` §2.4: the committed `heap_root` register.
+
+    use super::*;
+
+    fn fe(byte: u8) -> FieldElement {
+        let mut f = [0u8; 32];
+        f[31] = byte;
+        f
+    }
+
+    /// A fresh cell has the FIXED empty-heap root (legacy backward-compat
+    /// constant) and an empty heap map.
+    #[test]
+    fn fresh_cell_has_empty_heap_root() {
+        let s = CellState::new(0);
+        assert!(s.heap_map.is_empty());
+        assert_eq!(
+            s.heap_root,
+            empty_heap_root(),
+            "a no-heap-activity cell carries the fixed empty-heap constant"
+        );
+    }
+
+    /// POSITIVE membership: a written `(coll, key)` reads back exactly its value,
+    /// and the membership witness confirms it is committed by `heap_root`.
+    #[test]
+    fn heap_write_then_membership_readback() {
+        let mut s = CellState::new(0);
+        assert!(s.set_heap(1, 2, fe(42)));
+        assert!(s.set_heap(1, 3, fe(7)));
+        assert_eq!(s.get_heap(1, 2), Some(fe(42)));
+        assert_eq!(s.get_heap(1, 3), Some(fe(7)));
+        assert_eq!(s.heap_root_membership(1, 2), Some(fe(42)));
+        assert_eq!(s.heap_root_membership(1, 3), Some(fe(7)));
+    }
+
+    /// NEGATIVE membership: an absent key reads `None`.
+    #[test]
+    fn absent_heap_entry_reads_none() {
+        let mut s = CellState::new(0);
+        s.set_heap(1, 2, fe(42));
+        assert_eq!(s.get_heap(1, 10), None);
+        assert_eq!(s.heap_root_membership(1, 10), None);
+    }
+
+    /// ANTI-VACUITY: a heap with data has a root DIFFERENT from the empty
+    /// constant, and a tampered value FLIPS the root.
+    #[test]
+    fn heap_root_is_not_vacuous() {
+        let mut s = CellState::new(0);
+        s.set_heap(1, 2, fe(42));
+        assert_ne!(
+            s.heap_root,
+            empty_heap_root(),
+            "a populated heap must not collapse to the empty constant"
+        );
+        let root_before = s.heap_root;
+        s.set_heap(1, 2, fe(43));
+        assert_ne!(
+            root_before, s.heap_root,
+            "tampering a heap value must flip the root"
+        );
+        let two_entries = s.heap_root;
+        s.remove_heap(1, 2);
+        assert_ne!(
+            two_entries, s.heap_root,
+            "dropping an entry must flip the root"
+        );
+        assert_eq!(s.heap_root, empty_heap_root());
+    }
+
+    /// The root is deterministic and order-canonical (`BTreeMap` order): the
+    /// same entries in any insertion order yield the same root.
+    #[test]
+    fn heap_root_is_order_canonical() {
+        let mut a = CellState::new(0);
+        a.set_heap(1, 2, fe(1));
+        a.set_heap(1, 3, fe(2));
+        let mut b = CellState::new(0);
+        b.set_heap(1, 3, fe(2));
+        b.set_heap(1, 2, fe(1));
+        assert_eq!(a.heap_root, b.heap_root);
+    }
+
+    /// Collection ids bind the root: the same value at the same key under
+    /// different collections yields different roots.
+    #[test]
+    fn collection_id_binds_heap_root() {
+        let mut a = CellState::new(0);
+        a.set_heap(1, 2, fe(1));
+        let mut b = CellState::new(0);
+        b.set_heap(2, 2, fe(1));
+        assert_ne!(a.heap_root, b.heap_root);
+    }
+
+    /// A legacy serialized cell (no `heap_root`/`heap_map`) deserializes with
+    /// the empty-heap defaults.
+    #[test]
+    fn legacy_serialized_cell_deserializes_heap_defaults() {
+        let fresh = CellState::new(100);
+        let mut blob = serde_json::to_value(&fresh).expect("serialize");
+        let obj = blob.as_object_mut().unwrap();
+        obj.remove("heap_root");
+        obj.remove("heap_map");
+        let s: CellState = serde_json::from_value(blob).expect("legacy cell deserializes");
+        assert!(s.heap_map.is_empty());
+        assert_eq!(s.heap_root, empty_heap_root());
     }
 }

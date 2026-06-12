@@ -18,7 +18,7 @@
 //!
 //! A Cell is the agent-model analog of a Mina zkApp account. It holds:
 //! - Content-addressed identity (`CellId`)
-//! - Mutable state with 8 generic field slots (`CellState`)
+//! - Mutable state with 16 generic field slots (`CellState`)
 //! - Permission requirements for each action type (`Permissions`)
 //! - A capability set (c-list) defining what the agent can reach (`CapabilitySet`)
 //! - An optional verification key for ZK proof validation
@@ -157,7 +157,7 @@ pub use ring_closure::{
 pub use seal::{SealError, SealPair, SealedBox, SealerPublic, test_seal_pair};
 pub use state::{
     CellState, FIELD_ZERO, FIELDS_ROOT_CONTEXT, FieldElement, FieldVisibility, PublicFieldView,
-    STATE_SLOTS, compute_fields_root, empty_fields_root,
+    STATE_SLOTS, compute_fields_root, compute_heap_root, empty_fields_root, empty_heap_root,
 };
 #[cfg(feature = "crypto")]
 pub use stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress};

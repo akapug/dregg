@@ -32,8 +32,8 @@
 //! | executor state                          | `UKey` collection        | domain     |
 //! |-----------------------------------------|--------------------------|------------|
 //! | cell existence (ledger membership)      | `Exist`                  | heap       |
-//! | `CellState.fields[0..8]`                | `Field` (slot < 8)       | heap       |
-//! | `CellState.fields_map` (keys ≥ 8)       | `Field` (slot ≥ 8)       | heap       |
+//! | `CellState.fields[0..16]`               | `Field` (slot < 16)      | heap       |
+//! | `CellState.fields_map` (keys ≥ 16)      | `Field` (slot ≥ 16)      | heap       |
 //! | `CellState.balance`                     | `Balance`                | heap       |
 //! | `CellState.nonce`                       | `Nonce`                  | heap       |
 //! | `CellState.proved_state`                | `ProvedState`            | heap       |
@@ -45,6 +45,7 @@
 //! | `CellState.swiss_table_root`            | `SwissTableRoot`         | heap       |
 //! | `CellState.refcount_table_root`         | `RefcountTableRoot`      | heap       |
 //! | `CellState.system_roots[i]`             | `SystemRoot`             | heap       |
+//! | `CellState.heap_root`                   | `HeapRoot`               | heap       |
 //! | sovereign commitments                   | `SovereignCommitment`    | heap       |
 //! | `Cell.capabilities` (c-list slots)      | `CapSlot`                | caps       |
 //! | `Cell.delegate`                         | `Delegate`               | caps       |
@@ -114,7 +115,7 @@ pub enum UKey {
     // -- heap domain --------------------------------------------------------
     /// Cell existence (ledger membership bit).
     Exist(CellId),
-    /// A cell record field: slots `< 8` are `fields[]`, slots `≥ 8` are `fields_map`.
+    /// A cell record field: slots `< 16` are `fields[]`, slots `≥ 16` are `fields_map`.
     Field { cell: CellId, slot: u64 },
     /// The cell's signed balance.
     Balance(CellId),
@@ -140,6 +141,8 @@ pub enum UKey {
     RefcountTableRoot(CellId),
     /// One `system_roots` sub-block cell.
     SystemRoot { cell: CellId, index: u64 },
+    /// The committed openable sorted-Poseidon2 heap root carried in cell state.
+    HeapRoot(CellId),
     /// A sovereign cell's 32-byte state commitment.
     SovereignCommitment(CellId),
     // -- caps domain --------------------------------------------------------
@@ -186,6 +189,7 @@ impl UKey {
             | UKey::SwissTableRoot(_)
             | UKey::RefcountTableRoot(_)
             | UKey::SystemRoot { .. }
+            | UKey::HeapRoot(_)
             | UKey::SovereignCommitment(_) => UDomain::Heap,
             UKey::CapSlot { .. }
             | UKey::Delegate(_)
@@ -213,6 +217,7 @@ impl UKey {
             | UKey::Identity(c)
             | UKey::SwissTableRoot(c)
             | UKey::RefcountTableRoot(c)
+            | UKey::HeapRoot(c)
             | UKey::SovereignCommitment(c)
             | UKey::Delegate(c)
             | UKey::DelegationSnapshot(c)
@@ -320,6 +325,7 @@ pub fn project_cell(cell: &Cell, out: &mut UProjection) {
             UVal::Bytes32(*root),
         );
     }
+    out.insert(UKey::HeapRoot(id), UVal::Bytes32(cell.state.heap_root));
     // -- caps domain planes --
     for cap in cell.capabilities.iter() {
         out.insert(

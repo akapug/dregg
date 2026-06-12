@@ -32,7 +32,7 @@
 //!
 //! ## The shared shape (one state machine, three skins)
 //!
-//! All three families are conditional-settlement cells over the same 8-slot
+//! All three families are conditional-settlement cells over the same 16-slot
 //! schema ([`STATE_SLOT`] … [`WITNESS_SLOT`]) and the same lifecycle:
 //!
 //! ```text
@@ -83,7 +83,7 @@
 //!
 //! ## What the program CANNOT see (expressibility limits, by design honesty)
 //!
-//! * The cell `balance` is sealed (not one of the 8 slots), so "resolve drains
+//! * The cell `balance` is sealed (not one of the 16 slots), so "resolve drains
 //!   the full balance" and "the payout goes to the published counterparty" are
 //!   NOT program-enforced; they are enforced by the SDK builders
 //!   (`dregg_sdk::factories`) constructing the only sensible turn, and by the

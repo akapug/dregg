@@ -189,7 +189,7 @@ pub struct Cell {
     pub(crate) id: CellId,
     /// The cell's public key (Ed25519). See `id` for sealing rationale.
     pub(crate) public_key: [u8; 32],
-    /// Mutable state: 8 fields + nonce + balance.
+    /// Mutable state: 16 fields + nonce + balance.
     pub state: CellState,
     /// Authorization requirements for each action type.
     pub permissions: Permissions,

@@ -529,7 +529,7 @@ pub struct CellDetailResponse {
     /// live cell can show its own slot caveats (e.g. a council cell's
     /// AffineLe threshold M) to remote inspectors.
     pub program: dregg_cell::program::CellProgramView,
-    /// The cell's `[FieldElement; 8]` state slots, each hex-encoded (64 chars).
+    /// The cell's `[FieldElement; 16]` state slots, each hex-encoded (64 chars).
     ///
     /// Empty when the cell is not found. Slot indices match the on-chain layout
     /// (`SetField` writes here); userspace apps (e.g. the nameservice) pin a

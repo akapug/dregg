@@ -109,14 +109,14 @@ fn cell_state_set_field_valid() {
 #[test]
 fn cell_state_set_field_out_of_bounds() {
     let mut state = CellState::new(0);
-    assert!(!state.set_field(8, field_from_u64(1)));
+    assert!(!state.set_field(16, field_from_u64(1)));
     assert!(!state.set_field(100, field_from_u64(1)));
 }
 
 #[test]
 fn cell_state_get_field_out_of_bounds() {
     let state = CellState::new(0);
-    assert_eq!(state.get_field(8), None);
+    assert_eq!(state.get_field(16), None);
 }
 
 #[test]
@@ -695,7 +695,7 @@ fn ledger_delta_invalid_field_index_fails() {
         updated: vec![(
             id,
             CellStateDelta {
-                field_updates: vec![(STATE_SLOTS, field_from_u64(1))], // index 8 is invalid
+                field_updates: vec![(STATE_SLOTS, field_from_u64(1))], // index STATE_SLOTS is invalid
                 nonce_increment: false,
                 balance_change: 0,
                 permission_changes: None,
