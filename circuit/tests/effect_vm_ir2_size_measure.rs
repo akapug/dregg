@@ -138,6 +138,190 @@ fn ir2_vs_v1_transfer_proof_size() {
     );
 }
 
+/// THE UNIVERSAL-MEMORY SIZE PROBE: one state write + read-back expressed BOTH ways —
+/// as boundary map ops (sorted-Poseidon2 openings riding the chip bus) and as universal
+/// memory ops (the ONE Blum multiset, `docs/UNIVERSAL-MEMORY.md`) — plus the `absent`
+/// non-membership shape, all proven through the production `ir2_config` and measured.
+/// The umem proof commits NO chip table (zero intra-proof hashing); the map/absent proofs
+/// pay the chip. Numbers, not vibes: this is the intra-proof half of the universal-memory
+/// economics (boundary reconciliation stays map-op-shaped, once per touched key per proof).
+#[test]
+fn ir2_umem_vs_map_size_probe() {
+    use dregg_circuit::descriptor_ir2::{
+        EffectVmDescriptor2, MapKind, MapOpSpec, MemKind, NULLIFIER_DOMAIN, UMemBoundaryWitness,
+        UMemOpSpec, VmConstraint2, prove_vm_descriptor2_umem,
+    };
+    use dregg_circuit::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
+    use dregg_circuit::lean_descriptor_air::LeanExpr;
+
+    let heap = vec![
+        HeapLeaf {
+            addr: BabyBear::new(100),
+            value: BabyBear::new(77),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(200),
+            value: BabyBear::new(88),
+        },
+    ];
+    let tree = CanonicalHeapTree::new(heap.clone(), HEAP_TREE_DEPTH);
+    let root = tree.root();
+
+    // ---- (a) the map-write shape: one in-place sorted write. ----
+    let w = tree
+        .update_witness(HeapLeaf {
+            addr: BabyBear::new(100),
+            value: BabyBear::new(99),
+        })
+        .expect("key present");
+    let map_desc = EffectVmDescriptor2 {
+        name: "probe-map-write".to_string(),
+        trace_width: 6,
+        public_input_count: 0,
+        tables: vec![],
+        constraints: vec![VmConstraint2::MapOp(MapOpSpec {
+            guard: LeanExpr::Var(5),
+            root: LeanExpr::Var(0),
+            key: LeanExpr::Var(1),
+            value: LeanExpr::Var(2),
+            new_root: LeanExpr::Var(3),
+            op: MapKind::Write,
+        })],
+        hash_sites: vec![],
+        ranges: vec![],
+    };
+    let mut map_rows = vec![
+        vec![
+            root,
+            BabyBear::new(100),
+            BabyBear::new(99),
+            w.new_root,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ];
+        4
+    ];
+    map_rows[0][5] = BabyBear::ONE;
+    let t0 = Instant::now();
+    let map_proof = prove_vm_descriptor2(
+        &map_desc,
+        &map_rows,
+        &[],
+        &MemBoundaryWitness::default(),
+        &[heap.clone()],
+    )
+    .expect("map write proves");
+    let map_ms = t0.elapsed().as_millis();
+    verify_vm_descriptor2(&map_desc, &map_proof, &[]).expect("map write verifies");
+    let map_bytes = breakdown("map-write", &map_proof);
+
+    // ---- (b) the SAME state intent as universal memory ops: write + read-back. ----
+    let umem_desc = EffectVmDescriptor2 {
+        name: "probe-umem-write".to_string(),
+        trace_width: 4,
+        public_input_count: 0,
+        tables: vec![],
+        constraints: vec![
+            VmConstraint2::UMemOp(UMemOpSpec {
+                guard: LeanExpr::Var(3),
+                domain: 1, // heap
+                key: LeanExpr::Var(0),
+                present: LeanExpr::Const(1),
+                value: LeanExpr::Var(1),
+                prev_present: LeanExpr::Const(1),
+                prev_value: LeanExpr::Const(77),
+                prev_serial: LeanExpr::Const(0),
+                kind: MemKind::Write,
+            }),
+            VmConstraint2::UMemOp(UMemOpSpec {
+                guard: LeanExpr::Var(3),
+                domain: 1,
+                key: LeanExpr::Var(0),
+                present: LeanExpr::Const(1),
+                value: LeanExpr::Var(1),
+                prev_present: LeanExpr::Const(1),
+                prev_value: LeanExpr::Var(1),
+                prev_serial: LeanExpr::Const(1),
+                kind: MemKind::Read,
+            }),
+        ],
+        hash_sites: vec![],
+        ranges: vec![],
+    };
+    let mut um_rows = vec![
+        vec![
+            BabyBear::new(100),
+            BabyBear::new(99),
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ];
+        4
+    ];
+    um_rows[0][3] = BabyBear::ONE;
+    let boundary = UMemBoundaryWitness {
+        addrs: vec![(1, BabyBear::new(100))],
+        init_vals: vec![Some(BabyBear::new(77))],
+    };
+    let t1 = Instant::now();
+    let um_proof = prove_vm_descriptor2_umem(
+        &umem_desc,
+        &um_rows,
+        &[],
+        &MemBoundaryWitness::default(),
+        &[],
+        &boundary,
+    )
+    .expect("umem write+read proves");
+    let um_ms = t1.elapsed().as_millis();
+    verify_vm_descriptor2(&umem_desc, &um_proof, &[]).expect("umem proof verifies");
+    let um_bytes = breakdown("umem-write+read", &um_proof);
+
+    // ---- (c) the `absent` non-membership shape (the boundary gap leg). ----
+    let absent_desc = EffectVmDescriptor2 {
+        name: "probe-absent".to_string(),
+        trace_width: 4,
+        public_input_count: 0,
+        tables: vec![],
+        constraints: vec![VmConstraint2::MapOp(MapOpSpec {
+            guard: LeanExpr::Var(3),
+            root: LeanExpr::Var(0),
+            key: LeanExpr::Var(1),
+            value: LeanExpr::Const(0),
+            new_root: LeanExpr::Var(2),
+            op: MapKind::Absent,
+        })],
+        hash_sites: vec![],
+        ranges: vec![],
+    };
+    let mut ab_rows = vec![vec![root, BabyBear::new(150), root, BabyBear::ZERO]; 4];
+    ab_rows[0][3] = BabyBear::ONE;
+    let t2 = Instant::now();
+    let ab_proof = prove_vm_descriptor2(
+        &absent_desc,
+        &ab_rows,
+        &[],
+        &MemBoundaryWitness::default(),
+        &[heap],
+    )
+    .expect("absent proves");
+    let ab_ms = t2.elapsed().as_millis();
+    verify_vm_descriptor2(&absent_desc, &ab_proof, &[]).expect("absent verifies");
+    let ab_bytes = breakdown("absent", &ab_proof);
+
+    println!("== UNIVERSAL-MEMORY PROBE VERDICT (production ir2_config, all verified) ==");
+    println!(
+        "map-write: {map_bytes} B ({:.1} KiB, {map_ms} ms) | umem write+read: {um_bytes} B \
+         ({:.1} KiB, {um_ms} ms) | absent: {ab_bytes} B ({:.1} KiB, {ab_ms} ms) | NULLIFIER_DOMAIN={NULLIFIER_DOMAIN}",
+        kib(map_bytes),
+        kib(um_bytes),
+        kib(ab_bytes),
+    );
+    assert!(
+        um_proof.degree_bits.len() == 4,
+        "umem probe must commit main + byte + umemory + umem-boundary (NO chip)"
+    );
+}
+
 /// THE FRI GRID: the same real transfer proven through the IR-v2 batch at every
 /// security-parity `(log_blowup, num_queries)` point the degree-7 chip admits
 /// (`q × lb + 16 PoW ≥ 130 bits` conjectured throughout — v1-`create_config` parity

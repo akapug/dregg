@@ -56,7 +56,7 @@ fn open_permissions() -> Permissions {
     }
 }
 
-fn make_open_cell(seed: u8, balance: u64) -> Cell {
+fn make_open_cell(seed: u8, balance: i64) -> Cell {
     let mut pk = [0u8; 32];
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(37);
