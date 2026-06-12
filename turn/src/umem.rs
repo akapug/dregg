@@ -490,7 +490,7 @@ fn touches_of_entry(e: &JournalEntry) -> Vec<Touch> {
                 cell: *cell,
                 slot: *index as u64,
             },
-            Some(Some(UVal::Bytes32(*old_value))),
+            Some(old_value.map(|v| UVal::Bytes32(v))),
         )],
         JournalEntry::SetBalance { cell, old_balance } => vec![Touch::At(
             UKey::Balance(*cell),

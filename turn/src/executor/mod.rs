@@ -42,8 +42,8 @@ use std::sync::Mutex;
 use tracing::info;
 
 use dregg_cell::{
-    AuthRequired, BulletproofRangeProof, Cell, CellId, CellStateDelta, Ledger, LedgerDelta,
-    RevocationChannelSet, ValueCommitment, ValueCommitmentBytes,
+    AuthRequired, BulletproofRangeProof, Cell, CellId, CellStateDelta, FIELD_ZERO, FieldElement,
+    Ledger, LedgerDelta, RevocationChannelSet, ValueCommitment, ValueCommitmentBytes,
     note::NoteError,
     note_bridge::BridgedNullifierSet,
     nullifier_set::NullifierSet,

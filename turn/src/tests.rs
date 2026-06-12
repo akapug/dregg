@@ -1754,30 +1754,30 @@ fn test_increment_nonce_effect() {
 // =============================================================================
 
 #[test]
-fn test_invalid_field_index() {
+fn test_heap_field_index_commits() {
     let (mut ledger, agent_id, target_id) = setup_two_open_cells(5000, 0);
     let executor = zero_cost_executor();
 
     let mut builder = TurnBuilder::new(agent_id, 0);
+    let value = [1u8; 32];
     {
-        let action = ActionBuilder::new_unchecked_for_tests(target_id, "bad_field", agent_id)
-            // STATE_SLOTS = 8, so index 99 is out of bounds.
-            .effect_set_field(target_id, 99, [1u8; 32])
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "heap_field", agent_id)
+            // STATE_SLOTS = 8, so index 99 is a heap field and must now commit.
+            .effect_set_field(target_id, 99, value)
             .build();
         builder.add_action(action);
     }
     let turn = builder.fee(100).build();
 
     let result = executor.execute(&turn, &mut ledger);
-    assert!(result.is_rejected());
+    assert!(result.is_committed(), "heap field write must commit: {result:?}");
 
-    let (error, _) = result.unwrap_rejected();
-    match error {
-        TurnError::InvalidFieldIndex { index, .. } => {
-            assert_eq!(index, 99);
-        }
-        other => panic!("expected InvalidFieldIndex, got {other:?}"),
-    }
+    let target = ledger.get(&target_id).expect("target present");
+    assert_eq!(
+        target.state.get_field_ext(99),
+        Some(value),
+        "heap slot 99 must hold the written value"
+    );
 }
 
 // =============================================================================

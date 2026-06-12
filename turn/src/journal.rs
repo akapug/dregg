@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use dregg_cell::{
     CapabilityRef, CellId, DelegatedRef, Ledger, NoteCommitment, Nullifier, Permissions,
     VerificationKey, lifecycle::CellLifecycle, note_bridge::BridgedNullifierSet,
-    nullifier_set::NullifierSet, permissions::AuthRequired, state::FieldElement,
+    nullifier_set::NullifierSet, permissions::AuthRequired, state::{FieldElement, STATE_SLOTS},
 };
 
 use crate::action::Symbol;
@@ -18,11 +18,12 @@ use crate::action::Symbol;
 /// A single undo entry in the journal.
 #[derive(Debug)]
 pub(crate) enum JournalEntry {
-    /// A state field was overwritten. Records the old value.
+    /// A state field was overwritten. Records the old value (`None` for a heap
+    /// key that was absent before this turn — the universal-map absent leg).
     SetField {
         cell: CellId,
         index: usize,
-        old_value: FieldElement,
+        old_value: Option<FieldElement>,
     },
     /// A cell's balance was changed (by transfer or fee deduction).
     /// Records the old balance. SIGNED (THE EPOCH §5): a well's prior
@@ -123,8 +124,14 @@ impl LedgerJournal {
         &self.entries
     }
 
-    /// Record a field change.
-    pub fn record_set_field(&mut self, cell: CellId, index: usize, old_value: FieldElement) {
+    /// Record a field change. `old_value = None` means the heap key was absent
+    /// before this turn; fixed slots are always `Some`.
+    pub fn record_set_field(
+        &mut self,
+        cell: CellId,
+        index: usize,
+        old_value: Option<FieldElement>,
+    ) {
         self.entries.push(JournalEntry::SetField {
             cell,
             index,
@@ -273,7 +280,16 @@ impl LedgerJournal {
                     old_value,
                 } => {
                     if let Some(c) = ledger.get_mut(&cell) {
-                        c.state.fields[index] = old_value;
+                        if index < STATE_SLOTS {
+                            c.state.fields[index] = old_value.expect(
+                                "fixed-slot SetField rollback always carries the prior value",
+                            );
+                        } else if let Some(v) = old_value {
+                            c.state.set_field_ext(index as u64, v);
+                        } else {
+                            c.state.fields_map.remove(&(index as u64));
+                            c.state.reseal_fields_root();
+                        }
                     }
                 }
                 JournalEntry::SetBalance { cell, old_balance } => {

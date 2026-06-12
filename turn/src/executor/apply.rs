@@ -291,12 +291,6 @@ impl TurnExecutor {
         index: usize,
         value: &FieldElement,
     ) -> Result<(), (TurnError, Vec<usize>)> {
-        if index >= STATE_SLOTS {
-            return Err((
-                TurnError::InvalidFieldIndex { cell: *cell, index },
-                path.to_vec(),
-            ));
-        }
         if cell != action_target {
             self.check_cross_cell_permission(
                 ledger,
@@ -310,11 +304,20 @@ impl TurnExecutor {
         let c = ledger
             .get_mut(cell)
             .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
-        journal.record_set_field(*cell, index, c.state.fields[index]);
-        c.state.fields[index] = *value;
-        // Invalidate stale field commitment (the old hash no longer matches).
-        if c.state.commitments[index].is_some() {
-            c.state.commitments[index] = None;
+        if index < STATE_SLOTS {
+            // Fixed register-file slot: the legacy 8-slot path.
+            journal.record_set_field(*cell, index, Some(c.state.fields[index]));
+            c.state.fields[index] = *value;
+            // Invalidate stale field commitment (the old hash no longer matches).
+            if c.state.commitments[index].is_some() {
+                c.state.commitments[index] = None;
+            }
+        } else {
+            // Heap field (key >= STATE_SLOTS): the openable sorted-map spine.
+            // The journal stores the slot as usize; umem.rs reads it back as u64.
+            let old_value = c.state.get_field_ext(index as u64);
+            journal.record_set_field(*cell, index, old_value);
+            c.state.set_field_ext(index as u64, *value);
         }
         Ok(())
     }
@@ -1861,7 +1864,7 @@ impl TurnExecutor {
             }
         };
         let audit = *h.finalize().as_bytes();
-        journal.record_set_field(*cell, 4, c.state.fields[4]);
+        journal.record_set_field(*cell, 4, Some(c.state.fields[4]));
         c.state.fields[4] = audit;
         if c.state.commitments[4].is_some() {
             c.state.commitments[4] = None;
