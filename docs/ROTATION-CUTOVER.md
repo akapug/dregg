@@ -108,9 +108,11 @@ for hot scalars, the heap is where app state lives.
 
 Pre-gates (ALL green before anything flips):
 
-- [ ] **The register-count decision** (§2b): MEASURED at R ∈ {16, 24, 32} (table above;
-      recommendation **R=24**, +2.2 KiB always-paid per turn for 22 app registers);
-      ember confirms R before the flag-day regen fixes `NUM_REGISTERS`.
+- [x] **The register-count decision** (§2b): MEASURED at R ∈ {16, 24, 32} (table above)
+      — **CONFIRMED R=24 by ember, 2026-06-12 ("22 it is")**: 22 app registers after
+      balance/nonce take r0/r1, +2.2 KiB always-paid per turn. The flag-day regen fixes
+      `NUM_REGISTERS = 24`; the R-parametric emission (`rotationProbeVmDescriptorR2`)
+      and `wireCommitR_binds` make this a parameter instantiation, not new design.
 
 - [ ] **GATE 0**: `effect_vm_ir2_size_measure` at-or-under the v1 350.5 KiB
       baseline (per-effect; the staged probe's block-only shape measures ~tens of

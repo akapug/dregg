@@ -48,7 +48,7 @@ Last sweep: 2026-06-12 (the Grand Convergence session).
   fails ("bilateral bundle entry 0 has 201 public inputs, expected at least 204",
   turn/src/executor/proof_verify.rs:1465) — the PI v3 lane closes producer emission to the
   new layout (found red by the remote-lane finisher 2026-06-12; unrelated to #170/#171).
-- Register-count measurement: MEASURED (2026-06-12) — 16/24/32 probes from the parametric
+- Register-count: MEASURED + CONFIRMED R=24 (ember 2026-06-12, "22 it is") — pre-gate ✓; remaining work rides the regen. (was: measurement: MEASURED (2026-06-12) — 16/24/32 probes from the parametric
   Lean emission (`EffectVmEmitRotationR.lean`; `wireCommitR_binds` parametric in R; R=16
   byte-identical to the pinned artifacts), proved+verified+toothed at production
   `ir2_config`: 94.4 / 96.5 / 99.8 KiB. Table + verdict in ROTATION-CUTOVER.md §2b —
