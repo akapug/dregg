@@ -256,7 +256,9 @@ fn check_effect_vm_proof() -> Result<(), String> {
     }
 
     // The AIR constraints are enforced; verify via constraint prover path.
-    let _air = EffectVmAir::new(effects.len());
+    // Height: power of 2 with a 64-row minimum (the FRI single-row-gap
+    // closure, task #90), matching the trace generator's MIN_TRACE_HEIGHT.
+    let _air = EffectVmAir::new(effects.len().next_power_of_two().max(64));
     // The trace itself being well-formed (no assertion panics in generate) proves
     // the constraints hold. For the preflight, confirming trace generation succeeds
     // and the hash commits to the effects is sufficient.

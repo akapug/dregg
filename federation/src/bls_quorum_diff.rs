@@ -18,9 +18,16 @@
 //! NAMED irreducible primitive, here driven through the REAL `hints` weighted-threshold aggregate so
 //! the model's hypotheses are exercised concretely, not abstractly:
 //!
-//!  1. **Formula agreement** — the Lean `faultBudget`/`quorumThreshold` re-run against the REAL
+//!  1. **Formula relation** — the Lean `faultBudget`/`quorumThreshold` re-run against the REAL
 //!     `fault_tolerance`/`quorum_threshold` over the Lean `#guard` golden values AND an exhaustive
 //!     `0..=512` sweep (the Lean side samples; here we close the range), incl. `StrictBft ⇔ 3∤n`.
+//!     Post-#170 unification the REAL formulas are the blocklace strict supermajority
+//!     `q = ⌊2n/3⌋+1` and `f = ⌊(n−1)/3⌋`; they differ from the Lean transcriptions EXACTLY at
+//!     `3 ∣ n` (q one HIGHER, f one LOWER) — the deliberate closure of the `StrictBft` hole this
+//!     very Lean module carries ("false at n=3,6,9,…"). Strictly safe-side: Rust demands more
+//!     signers and claims less corruption tolerance, so every Lean bound still applies; the
+//!     honest-overlap margin now holds UNCONDITIONALLY (no `StrictBft` caveat). Residual lane:
+//!     lift the Lean `quorumThreshold` to the supermajority and discharge `StrictBft`.
 //!  2. **Honest-signer agreement** — over a REAL committee with a corrupt subset of size `≤ f`, the
 //!     real `sign_aggregate` with ONLY the honest signers reaching quorum verifies, while the corrupt
 //!     subset alone (`|B| ≤ f < quorum`) CANNOT produce a verifying QC — `aggregate` returns Err
@@ -60,47 +67,68 @@ fn lean_strict_bft(n: usize) -> bool {
 
 #[test]
 fn fault_budget_matches_real_golden() {
-    // Lean §5b `#guard faultBudget {0,1,2,3,4,7,10}` golden vectors vs the real `fault_tolerance`.
-    for (n, f) in [(0, 0), (1, 0), (2, 0), (3, 1), (4, 1), (7, 2), (10, 3)] {
-        assert_eq!(lean_fault_budget(n), f, "lean faultBudget({n})");
-        assert_eq!(fault_tolerance(n), f, "real fault_tolerance({n})");
-        assert_eq!(
-            lean_fault_budget(n),
-            fault_tolerance(n),
-            "agreement at n={n}"
-        );
+    // Lean §5b `#guard faultBudget {0,1,2,3,4,7,10}` golden vectors, with the REAL (post-#170)
+    // `fault_tolerance = ⌊(n−1)/3⌋` alongside: one LOWER exactly at 3∣n (n ≥ 3f+1 honesty).
+    for (n, lean_f, rust_f) in [
+        (0, 0, 0),
+        (1, 0, 0),
+        (2, 0, 0),
+        (3, 1, 0), // 3 ∣ n: no 3-member system tolerates a fault
+        (4, 1, 1),
+        (7, 2, 2),
+        (10, 3, 3),
+    ] {
+        assert_eq!(lean_fault_budget(n), lean_f, "lean faultBudget({n})");
+        assert_eq!(fault_tolerance(n), rust_f, "real fault_tolerance({n})");
     }
 }
 
 #[test]
 fn quorum_threshold_matches_real_golden() {
-    // Lean §5b `#guard quorumThreshold {1,2,3,4,7,10}` golden vectors vs the real `quorum_threshold`.
-    for (n, q) in [(1, 1), (2, 2), (3, 2), (4, 3), (7, 5), (10, 7)] {
-        assert_eq!(lean_quorum_threshold(n), q, "lean quorumThreshold({n})");
-        assert_eq!(quorum_threshold(n), q, "real quorum_threshold({n})");
+    // Lean §5b `#guard quorumThreshold {1,2,3,4,7,10}` golden vectors, with the REAL (post-#170)
+    // supermajority alongside: one HIGHER exactly at 3∣n (the StrictBft closure).
+    for (n, lean_q, rust_q) in [(1, 1, 1), (2, 2, 2), (3, 2, 3), (4, 3, 3), (7, 5, 5), (10, 7, 7)] {
+        assert_eq!(lean_quorum_threshold(n), lean_q, "lean quorumThreshold({n})");
+        assert_eq!(quorum_threshold(n), rust_q, "real quorum_threshold({n})");
     }
 }
 
 #[test]
 fn formulas_agree_exhaustively() {
-    // The Lean side samples; close the range 0..=512. Lean `faultBudget`/`quorumThreshold` IS the
-    // semantics the federation computes — no drift anywhere in the operating range.
+    // The Lean side samples; close the range 0..=512 with the EXACT pinned relation: the real
+    // formulas equal the Lean transcriptions away from 3∣n and differ by exactly one AT 3∣n
+    // (q one higher, f one lower) — no untracked drift anywhere in the operating range.
     for n in 0..=512usize {
+        let div3 = n % 3 == 0;
         assert_eq!(
-            lean_fault_budget(n),
             fault_tolerance(n),
-            "faultBudget drift at n={n}"
+            lean_fault_budget(n) - usize::from(div3 && n > 0),
+            "faultBudget relation at n={n}"
         );
         assert_eq!(
-            lean_quorum_threshold(n),
             quorum_threshold(n),
-            "quorumThreshold drift at n={n}"
+            lean_quorum_threshold(n) + usize::from(div3),
+            "quorumThreshold relation at n={n}"
         );
-        // Lean `quorum_gt_faultBudget`: a quorum strictly exceeds the corruption budget (n ≥ 1).
+        // Safe-side directions: more signers demanded, less corruption claimed.
+        assert!(quorum_threshold(n) >= lean_quorum_threshold(n), "q dir n={n}");
+        assert!(fault_tolerance(n) <= lean_fault_budget(n), "f dir n={n}");
+        // `quorum_gt_faultBudget`: a quorum strictly exceeds the corruption budget (n ≥ 1) —
+        // holds for BOTH the Lean pair and the real pair.
         if n >= 1 {
             assert!(
                 lean_fault_budget(n) < lean_quorum_threshold(n),
-                "quorum must exceed fault budget at n={n}"
+                "lean quorum must exceed lean fault budget at n={n}"
+            );
+            assert!(
+                fault_tolerance(n) < quorum_threshold(n),
+                "real quorum must exceed real fault budget at n={n}"
+            );
+            // The unification's whole point: the honest-overlap margin holds UNCONDITIONALLY
+            // for the real pair (no StrictBft caveat).
+            assert!(
+                2 * quorum_threshold(n) - n > fault_tolerance(n),
+                "unconditional honest overlap at n={n}"
             );
         }
         // Lean `strictBft_iff`: StrictBft ⇔ ¬(3 ∣ n).
@@ -109,8 +137,9 @@ fn formulas_agree_exhaustively() {
             n % 3 != 0,
             "strictBft_iff drift at n={n}"
         );
-        // Under StrictBft the inclusion–exclusion honest-overlap margin 2q − n > f holds; at n=3f it
-        // does NOT (the honest subtlety the Lean module carries explicitly).
+        // Under StrictBft the inclusion–exclusion honest-overlap margin 2q − n > f holds for the
+        // LEAN pair; at n=3f it does NOT (the honest subtlety the Lean module carries explicitly,
+        // and which the real supermajority pair closes above).
         if n >= 1 {
             let margin = 2 * lean_quorum_threshold(n) - n;
             assert_eq!(

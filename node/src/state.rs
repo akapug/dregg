@@ -631,6 +631,13 @@ impl NodeState {
         let used_proof_hashes = store.load_all_proof_hashes().unwrap_or_default();
         let (witnessed_receipts, witnessed_receipt_order) = load_witnessed_receipts(&store);
 
+        // Restore the forever-digest registries (docs/PERSISTENCE.md): the
+        // trustline draw/settle anti-replay set and the court's resolved-
+        // evidence set are node-local-but-load-bearing — NOT derivable from
+        // the cells — so their refusal teeth must survive the restart.
+        let trustlines = crate::trustline_service::TrustlineRegistry::load(&store);
+        let equivocation_court = crate::equivocation_court_service::CourtLedger::load(&store);
+
         // Restore ledger from the latest checkpoint (if one exists), then apply
         // the durable commit-log overlay (CRASH-CONSISTENT RECOVERY).
         //
@@ -797,8 +804,8 @@ impl NodeState {
                 solo_consensus: None,
                 blocklace_handle: None,
                 storage_gateway: crate::storage_service::StorageGatewayService::from_env(),
-                trustlines: crate::trustline_service::TrustlineRegistry::default(),
-                equivocation_court: crate::equivocation_court_service::CourtLedger::default(),
+                trustlines,
+                equivocation_court,
                 channels: crate::channels_service::ChannelRegistry::default(),
             })),
             events_tx,
@@ -820,6 +827,13 @@ impl NodeState {
 
         let cclerk = AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(key_bytes));
         let (witnessed_receipts, witnessed_receipt_order) = load_witnessed_receipts(&store);
+
+        // Restore the forever-digest registries (docs/PERSISTENCE.md): the
+        // trustline draw/settle anti-replay set and the court's resolved-
+        // evidence set are node-local-but-load-bearing — NOT derivable from
+        // the cells — so their refusal teeth must survive the restart.
+        let trustlines = crate::trustline_service::TrustlineRegistry::load(&store);
+        let equivocation_court = crate::equivocation_court_service::CourtLedger::load(&store);
 
         // Restore ledger from the latest checkpoint, then apply the durable
         // commit-log overlay (crash-consistent recovery; see `new_with_key_file`).
@@ -907,8 +921,8 @@ impl NodeState {
                 solo_consensus: None,
                 blocklace_handle: None,
                 storage_gateway: crate::storage_service::StorageGatewayService::from_env(),
-                trustlines: crate::trustline_service::TrustlineRegistry::default(),
-                equivocation_court: crate::equivocation_court_service::CourtLedger::default(),
+                trustlines,
+                equivocation_court,
                 channels: crate::channels_service::ChannelRegistry::default(),
             })),
             events_tx,

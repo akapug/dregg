@@ -179,10 +179,10 @@ pub fn compute_epoch(height: u64, epoch_length: u64) -> u64 {
 
 /// Compute the BFT threshold for a given number of members.
 ///
-/// Delegates to [`crate::quorum_threshold`], the canonical formula:
-/// `threshold = n - floor((n-1)/3)`.
+/// Delegates to [`crate::quorum_threshold`] (itself the ONE blocklace
+/// supermajority `⌊2n/3⌋ + 1 = n − ⌊(n−1)/3⌋`).
 ///
-/// For n=1: threshold=1, n=2: threshold=2, n=3: threshold=2, n=4: threshold=3, n=7: threshold=5, n=10: threshold=7.
+/// For n=1: threshold=1, n=2: threshold=2, n=3: threshold=3, n=4: threshold=3, n=7: threshold=5, n=10: threshold=7.
 pub fn compute_bft_threshold(member_count: usize) -> usize {
     crate::quorum_threshold(member_count)
 }
@@ -623,13 +623,13 @@ mod tests {
 
     #[test]
     fn test_compute_bft_threshold() {
-        assert_eq!(compute_bft_threshold(0), 0);
+        assert_eq!(compute_bft_threshold(0), 1); // empty committee: fail-closed
         assert_eq!(compute_bft_threshold(1), 1);
         assert_eq!(compute_bft_threshold(2), 2);
-        assert_eq!(compute_bft_threshold(3), 2);
+        assert_eq!(compute_bft_threshold(3), 3); // strict supermajority (n=3f)
         assert_eq!(compute_bft_threshold(4), 3);
         assert_eq!(compute_bft_threshold(5), 4);
-        assert_eq!(compute_bft_threshold(6), 4);
+        assert_eq!(compute_bft_threshold(6), 5); // strict supermajority (n=3f)
         assert_eq!(compute_bft_threshold(7), 5);
         assert_eq!(compute_bft_threshold(10), 7);
     }
@@ -642,7 +642,7 @@ mod tests {
         let (v3, _sk3) = make_validator(0);
 
         let mut config = EpochConfig::genesis(vec![v0.clone(), v1.clone(), v2.clone()], 100);
-        assert_eq!(config.threshold, 2); // quorum_threshold(3) = 3 - 0 = 2 (was wrong: 1)
+        assert_eq!(config.threshold, 3); // quorum_threshold(3) = ⌊6/3⌋+1 = 3 (strict supermajority)
 
         // Propose adding v3.
         let transition = propose_epoch_transition(&config, &[v3.clone()], &[]).unwrap();
@@ -681,7 +681,7 @@ mod tests {
         // Remove v3.
         let transition = propose_epoch_transition(&config, &[], &[v3.public_key.clone()]).unwrap();
 
-        assert_eq!(transition.new_threshold, 2); // quorum_threshold(3) = 3 - 0 = 2
+        assert_eq!(transition.new_threshold, 3); // quorum_threshold(3) = ⌊6/3⌋+1 = 3
 
         let mut transition = transition;
         transition.attestation.threshold = config.threshold;
@@ -695,7 +695,7 @@ mod tests {
 
         assert_eq!(config.current_epoch, 1);
         assert_eq!(config.members.len(), 3);
-        assert_eq!(config.threshold, 2);
+        assert_eq!(config.threshold, 3);
         assert!(!config.members.iter().any(|m| m.public_key == v3.public_key));
     }
 
@@ -715,7 +715,7 @@ mod tests {
     fn test_epoch_transition_requires_attestation() {
         let (v0, sk0) = make_validator(0);
         let (v1, sk1) = make_validator(0);
-        let (v2, _sk2) = make_validator(0);
+        let (v2, sk2) = make_validator(0);
         let (v3, _sk3) = make_validator(1);
 
         let config = EpochConfig::genesis(vec![v0.clone(), v1.clone(), v2.clone()], 100);
@@ -727,7 +727,7 @@ mod tests {
 
         // Add properly signed votes to the attestation.
         // The vote message must match what QuorumCertificate::vote_message produces.
-        // With threshold=2, we need at least 2 valid signatures.
+        // With threshold = quorum_threshold(3) = 3, we need all 3 valid signatures.
         let vote_message = QuorumCertificate::vote_message(
             &transition.attestation.block_hash,
             transition.attestation.height,
@@ -735,8 +735,15 @@ mod tests {
         );
         let sig0 = sign(&sk0, &vote_message);
         let sig1 = sign(&sk1, &vote_message);
+        let sig2 = sign(&sk2, &vote_message);
+
+        // An under-quorum attestation (2 of 3) must STILL fail — the strict
+        // supermajority at n=3 is 3, not the historical 2.
         transition.attestation.threshold = config.threshold;
-        transition.attestation.votes = vec![(0, sig0), (1, sig1)];
+        transition.attestation.votes = vec![(0, sig0.clone()), (1, sig1.clone())];
+        assert!(!verify_epoch_transition(&transition, &config));
+
+        transition.attestation.votes = vec![(0, sig0), (1, sig1), (2, sig2)];
         assert!(verify_epoch_transition(&transition, &config));
     }
 

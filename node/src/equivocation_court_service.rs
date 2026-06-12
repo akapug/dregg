@@ -108,6 +108,12 @@ pub struct CourtLedger {
     pub registry: AdmissionRegistry,
     /// strand key → the cell escrowing that strand's bond.
     bond_cells: HashMap<[u8; 32], CellId>,
+    /// Resolved-evidence digests restored from (and mirrored to) the durable
+    /// forever-digest table (`docs/PERSISTENCE.md`): the live court's set is
+    /// rebuilt fresh each boot, so without this carrier a restart would
+    /// forget every verdict and re-admit a double-slash. Checked alongside
+    /// the live court by [`Self::is_resolved`].
+    durable_resolved: std::collections::HashSet<[u8; 32]>,
 }
 
 impl Default for CourtLedger {
@@ -118,11 +124,49 @@ impl Default for CourtLedger {
             // inert (0 ≥ 1 is false); admission here is purely bond-backed.
             registry: AdmissionRegistry::new([], 1, DEFAULT_MIN_BOND),
             bond_cells: HashMap::new(),
+            durable_resolved: std::collections::HashSet::new(),
         }
     }
 }
 
 impl CourtLedger {
+    /// Rebuild the ledger at boot, restoring the resolved-evidence digests
+    /// from the durable forever-digest table so no-double-resolve (and so
+    /// no-double-slash) holds across restarts. Bonds and bindings are NOT
+    /// restored here: they are derivable from the live ledger's bond cells,
+    /// and an unrestored bond fails CLOSED (NothingAtStake — no value moves).
+    pub fn load(store: &dregg_persist::PersistentStore) -> Self {
+        let mut ledger = Self::default();
+        match store.load_forever_digests(dregg_persist::tables::NS_COURT_RESOLVED) {
+            Ok(pairs) => {
+                let count = pairs.len();
+                ledger
+                    .durable_resolved
+                    .extend(pairs.into_iter().map(|(_scope, digest)| digest));
+                if count > 0 {
+                    tracing::info!(
+                        digests = count,
+                        "restored court resolved-evidence digests"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "failed to load durable court digests; no-double-resolve \
+                     narrowed to this process lifetime"
+                );
+            }
+        }
+        ledger
+    }
+
+    /// Whether this evidence digest has been resolved — by the live court
+    /// THIS process ran, or durably by any previous one.
+    pub fn is_resolved(&self, digest: &[u8; 32]) -> bool {
+        self.court.is_resolved(digest) || self.durable_resolved.contains(digest)
+    }
+
     /// The bond cell bound to `strand` (if a bond was ever posted here).
     pub fn bond_cell_of(&self, strand: &[u8; 32]) -> Option<CellId> {
         self.bond_cells.get(strand).copied()
@@ -300,8 +344,10 @@ pub fn execute_slash(
         .map_err(|e| CourtServiceRefusal::BadEvidence(e.to_string()))?;
     let digest = ev.digest();
 
-    // 2. No-double-resolve: a burned digest refuses in either block order.
-    if s.equivocation_court.court.is_resolved(&digest) {
+    // 2. No-double-resolve: a burned digest refuses in either block order —
+    //    including digests burned by a PREVIOUS process (the durable carrier;
+    //    without it a restart would forget every verdict and double-slash).
+    if s.equivocation_court.is_resolved(&digest) {
         return Err(CourtServiceRefusal::AlreadyResolved);
     }
 
@@ -382,6 +428,24 @@ pub fn execute_slash(
         ))
     })?;
     debug_assert_eq!(verdict.burned, burned);
+
+    // 6. Burn the digest DURABLY before the verdict is acknowledged, so
+    //    no-double-resolve survives a restart. A failure here cannot unwind
+    //    the committed move; it degrades (loudly) to live-process-only
+    //    refusal — the restart carrier is narrowed and the error names it.
+    if let Err(e) = s.store.record_forever_digest(
+        dregg_persist::tables::NS_COURT_RESOLVED,
+        &[0u8; 32],
+        &digest,
+    ) {
+        tracing::error!(
+            digest = %hex_encode(&digest),
+            error = %e,
+            "durable verdict burn FAILED — no-double-resolve for this digest \
+             is narrowed to this process lifetime"
+        );
+    }
+    s.equivocation_court.durable_resolved.insert(digest);
 
     let admitted_after = s.equivocation_court.registry.admitted(&strand);
     tracing::warn!(
@@ -1161,5 +1225,72 @@ mod tests {
                 .is_err(),
             "a wrong digest still refuses through the live registry"
         );
+    }
+
+    // ── persistence: the resolved set survives the restart ──────────────────
+
+    /// THE RESTART TEST (docs/PERSISTENCE.md): a resolved exhibit's digest is
+    /// burned durably, so a brand-new process over the same data dir still
+    /// refuses the re-submission — no-double-resolve (and so no-double-slash)
+    /// holds across process lifetimes. Without the durable carrier the reborn
+    /// court would treat the spent exhibit as fresh.
+    #[tokio::test]
+    async fn resolved_evidence_refused_across_restart() {
+        let (state, dir) = funded_state().await;
+        let (dalek, typed, _pk) = strand(67);
+        let (status, json) = post_bond(&state, &typed, STAKE).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+
+        let ev = fork_evidence(&dalek, 3);
+        let (status, json) = post_json(
+            &state,
+            "/court/evidence",
+            serde_json::json!({ "evidence": hex_encode(&ev.to_bytes()) }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["burned"].as_u64(), Some(STAKE));
+
+        // THE RESTART: the live court (and the bond registry) die with the
+        // process; only the durable digest table carries the verdict.
+        drop(state);
+
+        let state = NodeState::new(dir.path(), vec![]).expect("reborn node state");
+        {
+            let mut s = state.write().await;
+            s.unlocked = true;
+            assert!(
+                s.equivocation_court.is_resolved(&ev.digest()),
+                "resolved digest must survive the restart"
+            );
+            assert!(
+                !s.equivocation_court.court.is_resolved(&ev.digest()),
+                "the LIVE court is fresh — the durable carrier is what refuses"
+            );
+        }
+
+        // Re-submission refuses END TO END through the reborn node, in
+        // either block order (the digest is order-insensitive).
+        let (status, json) = post_json(
+            &state,
+            "/court/evidence",
+            serde_json::json!({ "evidence": hex_encode(&ev.to_bytes()) }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["reason"], "already-resolved");
+        let flipped = EvidenceOfEquivocation {
+            creator: ev.creator,
+            header_a: ev.header_b.clone(),
+            header_b: ev.header_a.clone(),
+        };
+        let (status, json) = post_json(
+            &state,
+            "/court/evidence",
+            serde_json::json!({ "evidence": hex_encode(&flipped.to_bytes()) }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["reason"], "already-resolved");
     }
 }

@@ -19,6 +19,11 @@ pub struct RouteEntry {
     pub via_peer: SocketAddr,
     /// The cell that authorized this introduction.
     pub introduced_by: CellId,
+    /// The hash of the turn that authorized this introduction. `mark_verified`
+    /// only flips entries whose stored hash matches the turn actually found in
+    /// the receipt store — a forged directive for the same cell cannot ride a
+    /// legitimate directive's verification.
+    pub authorizing_turn: [u8; 32],
     /// Block height at which this route expires (None = no expiry).
     pub expires: Option<u64>,
     /// Timestamp (unix seconds) when this route was created.
@@ -80,6 +85,7 @@ impl RoutingTable {
         let entry = RouteEntry {
             via_peer,
             introduced_by: directive.sender,
+            authorizing_turn: directive.authorizing_turn,
             expires: directive.expires,
             created_at: now,
             // Issue 5: Start unverified; caller must confirm the authorizing turn exists.
@@ -91,15 +97,16 @@ impl RoutingTable {
         Ok(())
     }
 
-    /// Mark a route entry as verified (its authorizing turn exists in the receipt store).
+    /// Mark route entries as verified (their authorizing turn exists in the
+    /// receipt store). Only entries whose STORED `authorizing_turn` matches are
+    /// flipped — verifying one directive must not launder verification onto
+    /// other (possibly forged) routes for the same cell.
     pub fn mark_verified(&mut self, cell: &CellId, authorizing_turn: &[u8; 32]) {
         if let Some(entries) = self.routes.get_mut(cell) {
             for entry in entries.iter_mut() {
-                // We don't store authorizing_turn in the entry, but caller can use
-                // introduced_by + created_at to correlate. For now, we verify all
-                // entries for a cell that match the directive's source.
-                let _ = authorizing_turn;
-                entry.verified = true;
+                if &entry.authorizing_turn == authorizing_turn {
+                    entry.verified = true;
+                }
             }
         }
     }
@@ -306,8 +313,13 @@ mod tests {
 
         assert!(!table.lookup_immut(&make_cell_id(2))[0].verified);
 
-        table.mark_verified(&make_cell_id(2), &[0xAA; 32]);
+        // A NON-matching turn hash must not verify the entry (a forged
+        // directive cannot ride another directive's verification).
+        table.mark_verified(&make_cell_id(2), &[0xBB; 32]);
+        assert!(!table.lookup_immut(&make_cell_id(2))[0].verified);
 
+        // The matching authorizing turn does.
+        table.mark_verified(&make_cell_id(2), &[0xAA; 32]);
         assert!(table.lookup_immut(&make_cell_id(2))[0].verified);
     }
 }

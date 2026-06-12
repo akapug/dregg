@@ -169,7 +169,30 @@ pub fn wave_leader(wave: u64, participants: &[[u8; 32]]) -> [u8; 32] {
     participants[(wave as usize) % participants.len()]
 }
 
-/// Compute the supermajority threshold: floor(2n/3) + 1.
+/// THE canonical quorum formula for the whole system: the strict
+/// SUPERMAJORITY threshold `⌊2n/3⌋ + 1` — the smallest vote count STRICTLY
+/// greater than `2n/3`.
+///
+/// This is the quorum the Cordial-Miners / Stingray DAG semantics demand
+/// (arXiv:2205.09174 §2: ratification requires blocks from "more than
+/// two-thirds of the miners"), and it is the formula with UNCONDITIONAL
+/// quorum intersection: any two quorums of this size share strictly more
+/// than `n/3` members, which exceeds the Byzantine budget
+/// `f = ⌊(n−1)/3⌋` for every `n ≥ 1` — no `n` caveat.
+///
+/// Equivalently `supermajority_threshold n = n − ⌊(n−1)/3⌋` for `n ≥ 1`.
+///
+/// The federation layer's `dregg_federation::quorum_threshold` DELEGATES
+/// here — there is exactly ONE quorum formula in the system. (Its
+/// historical formula `n − ⌊n/3⌋` agreed everywhere EXCEPT `3 ∣ n`, where
+/// it admitted a quorum of exactly `2n/3`: at `n = 3f` two such quorums can
+/// intersect in a single — possibly Byzantine — member. That is precisely
+/// the `StrictBft` hole `metatheory/Dregg2/Distributed/BlsQuorumCert.lean`
+/// carries as an explicit hypothesis; this formula closes it for all `n`.)
+///
+/// `n = 0` returns 1: an EMPTY committee can never certify anything
+/// (fail-closed), rather than a vacuous threshold of 0 that an empty vote
+/// set would satisfy.
 pub fn supermajority_threshold(n: usize) -> usize {
     (n * 2 / 3) + 1
 }
@@ -947,10 +970,30 @@ mod tests {
 
     #[test]
     fn test_supermajority_threshold() {
-        assert_eq!(supermajority_threshold(3), 3); // 2*3/3 + 1 = 3
+        assert_eq!(supermajority_threshold(0), 1); // empty committee: fail-closed
+        assert_eq!(supermajority_threshold(1), 1); // solo: own block suffices
+        assert_eq!(supermajority_threshold(2), 2); // both
+        assert_eq!(supermajority_threshold(3), 3); // 2*3/3 + 1 = 3 (NOT 2: n=3f)
         assert_eq!(supermajority_threshold(4), 3); // 2*4/3 + 1 = 3
+        assert_eq!(supermajority_threshold(6), 5); // n=3f again: strictly > 2n/3
         assert_eq!(supermajority_threshold(7), 5); // 2*7/3 + 1 = 5
         assert_eq!(supermajority_threshold(10), 7); // 2*10/3 + 1 = 7
+    }
+
+    /// Unconditional quorum intersection: two quorums share STRICTLY more
+    /// than the Byzantine budget `⌊(n−1)/3⌋` at every committee size — the
+    /// property the federation's historical `n − ⌊n/3⌋` lacked at `3 ∣ n`.
+    #[test]
+    fn test_supermajority_quorum_intersection_unconditional() {
+        for n in 1..=512usize {
+            let q = supermajority_threshold(n);
+            let f = (n - 1) / 3;
+            assert!(q <= n, "quorum must be formable at n={n}");
+            // |Q1 ∩ Q2| ≥ 2q − n must strictly exceed f.
+            assert!(2 * q - n > f, "quorum intersection > fault budget at n={n}");
+            // Equivalent closed form for n ≥ 1.
+            assert_eq!(q, n - f, "supermajority = n - floor((n-1)/3) at n={n}");
+        }
     }
 
     #[test]

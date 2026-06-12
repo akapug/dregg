@@ -99,6 +99,99 @@ pub fn local_agent_cell(s: &NodeStateInner) -> dregg_cell::CellId {
     dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &default_token_id)
 }
 
+/// THE one executor gate (#171): execute `turn` through the producer-aware path
+/// shared by EVERY ingress — the thin-HTTP `/turn/submit`, the signed-envelope
+/// `/turns/submit` (remote agents), and blocklace-finalized turns all call this,
+/// so a remote-submitted turn runs on exactly the same authoritative state
+/// producer as a local one (no parallel entry).
+///
+/// THE SWAP — producer mode (authority inversion), the DEFAULT. When
+/// `lean_producer_enabled` is set (default ON unless `DREGG_LEAN_PRODUCER=0`),
+/// the VERIFIED Lean executor is the authoritative state PRODUCER for the
+/// swap-safe COVERED set: `produce_via_lean` reconstitutes the committed ledger
+/// from the Lean FFI's post-state and demotes the Rust `TurnExecutor` to a
+/// parallel differential cross-check, returning the Rust `TurnResult` (so the
+/// receipt / proving / attestation machinery is unchanged) together with a
+/// differential outcome. A turn that is unmappable or touches a characterized
+/// root-gap effect falls back to the Rust producer for that turn (logged, never
+/// silent). A covered-set divergence keeps the Rust state and is surfaced as a
+/// real soundness finding. When the flag is OFF, this is exactly the legacy
+/// Rust-producer path.
+pub fn execute_via_producer(
+    executor: &TurnExecutor,
+    turn: &dregg_turn::Turn,
+    ledger: &mut dregg_cell::Ledger,
+    lean_producer_enabled: bool,
+) -> dregg_turn::TurnResult {
+    use tracing::{error, info, warn};
+
+    if !lean_producer_enabled {
+        return executor.execute(turn, ledger);
+    }
+
+    let agent = turn.agent;
+    let (rust_result, outcome) = dregg_turn::lean_apply::produce_via_lean(executor, turn, ledger);
+    match &outcome {
+        dregg_turn::lean_apply::ProducerOutcome::LeanProduced {
+            committed,
+            agree,
+            lean_root,
+            rust_root,
+            rust_committed,
+        } => {
+            if *agree {
+                info!(
+                    target: "dregg::lean_shadow::producer",
+                    agent = ?agent,
+                    committed = *committed,
+                    "THE SWAP producer mode: verified Lean executor PRODUCED the committed \
+                     state; Rust differential AGREES"
+                );
+            } else {
+                error!(
+                    target: "dregg::lean_shadow::producer",
+                    agent = ?agent,
+                    lean_committed = *committed,
+                    rust_committed = *rust_committed,
+                    lean_root = %dregg_types::hex_encode(lean_root),
+                    rust_root = %dregg_types::hex_encode(rust_root),
+                    "THE SWAP producer DIVERGENCE: verified Lean producer and Rust differential \
+                     disagree on the committed state — REAL soundness finding (Lean output \
+                     committed; investigate)"
+                );
+            }
+        }
+        dregg_turn::lean_apply::ProducerOutcome::Fallback { reason } => {
+            warn!(
+                target: "dregg::lean_shadow::producer",
+                agent = ?agent,
+                reason = %reason,
+                "THE SWAP producer mode: turn outside the swap-safe covered set — fell back to \
+                 the Rust producer for this turn (no silent divergence)"
+            );
+        }
+        dregg_turn::lean_apply::ProducerOutcome::CoveredDivergence {
+            lean_committed,
+            rust_committed,
+            lean_root,
+            rust_root,
+        } => {
+            error!(
+                target: "dregg::lean_shadow::producer",
+                agent = ?agent,
+                lean_committed = *lean_committed,
+                rust_committed = *rust_committed,
+                lean_root = %dregg_types::hex_encode(lean_root),
+                rust_root = %dregg_types::hex_encode(rust_root),
+                "THE SWAP producer COVERED-SET DIVERGENCE: a turn classified swap-safe diverged \
+                 — REAL soundness finding (coverage misclassification). Kept the Rust post-state \
+                 (chain-consistent); did NOT commit the divergent Lean state"
+            );
+        }
+    }
+    rust_result
+}
+
 /// Build a fresh executor configured for turn submission (height = attested + 1).
 pub fn new_submit_executor(s: &NodeStateInner) -> TurnExecutor {
     let mut executor = TurnExecutor::new(dregg_turn::ComputronCosts::default());

@@ -63,6 +63,11 @@ pub mod evidence;
 pub mod finality;
 pub mod ordering;
 
+/// THE one quorum formula (strict supermajority `⌊2n/3⌋ + 1`); see
+/// [`ordering::supermajority_threshold`]. `dregg_federation::quorum_threshold`
+/// delegates here.
+pub use ordering::supermajority_threshold;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};

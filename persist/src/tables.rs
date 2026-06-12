@@ -215,3 +215,36 @@ pub const IDX_CELL_BY_ID: TableDefinition<&[u8; 32], &[u8]> =
 /// `BLOCKLACE_EXECUTED_UP_TO_KEY`; recovery reads THIS value (advanced inside
 /// the per-turn commit transaction) as the authoritative high-water mark.
 pub const META_COMMIT_CURSOR: &str = "commit_cursor";
+
+// ─── Forever-Digest Sets (restart-durable anti-replay carriers) ──────────────
+//
+// Several node registries carry "burned forever" digest sets whose refusal
+// semantics must survive a process restart: the trustline draw / rebuild /
+// settle-unapplied digests (Lean `no_double_draw_forever`,
+// `draw_replay_refused_across_epochs` — the slice's own debit list resets at
+// every rebalance epoch, so the FOREVER property needs a carrier that does
+// not) and the equivocation court's resolved-evidence digests (no-double-
+// resolve / no-double-slash). These are NOT derivable from the cells: the
+// cell holds only the LAST digest (`TL_DIGEST_SLOT`) and the court's verdicts
+// move value without leaving the full digest set on any cell. See
+// `docs/PERSISTENCE.md`.
+
+/// Forever-burned digest sets, namespaced per registry and scoped per cell.
+///
+/// Key layout: 1-byte namespace ++ 32-byte scope ++ 32-byte digest = 65 bytes.
+/// Value: unit (presence = burned).
+///
+/// The scope is the cell the digest was burned against (the trustline cell id
+/// for `NS_TRUSTLINE_DIGEST`); namespaces whose digests are global use the
+/// all-zero scope.
+pub const FOREVER_DIGESTS: TableDefinition<&[u8; 65], ()> =
+    TableDefinition::new("forever_digests");
+
+/// Namespace byte: the node's trustline digest registry (committed draws,
+/// shadow-rebuild digests, settle-unapplied compensation digests — everything
+/// `TrustlineRegistry::record_digest` burns).
+pub const NS_TRUSTLINE_DIGEST: u8 = 1;
+
+/// Namespace byte: the equivocation court's resolved-evidence digests
+/// (scope = all-zero; evidence digests are global, not per-cell).
+pub const NS_COURT_RESOLVED: u8 = 2;

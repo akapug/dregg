@@ -133,6 +133,8 @@ pub mod profiles;
 pub mod program;
 pub mod raw;
 pub mod receipt;
+#[cfg(feature = "federation-client")]
+pub mod remote;
 pub mod runtime;
 pub mod trustline;
 pub mod turns;

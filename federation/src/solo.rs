@@ -389,7 +389,8 @@ mod tests {
 
         state.detect_peers();
         assert!(!state.is_solo);
-        assert_eq!(state.effective_threshold(3), 2);
+        // quorum_threshold(3) = 3 — the strict supermajority (#170 unification).
+        assert_eq!(state.effective_threshold(3), 3);
     }
 
     #[test]
@@ -492,8 +493,8 @@ mod tests {
         };
         assert_eq!(finality_after, Finality::Final);
 
-        // Threshold is now standard BFT.
-        assert_eq!(state.effective_threshold(3), 2);
+        // Threshold is now standard BFT (strict supermajority at n=3 is 3).
+        assert_eq!(state.effective_threshold(3), 3);
     }
 
     #[test]

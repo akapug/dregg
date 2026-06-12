@@ -2716,10 +2716,17 @@ async fn post_submit_turn(
 
     let pre_ledger = s.ledger.clone();
 
-    // Execute the turn locally FIRST.
+    // Execute the turn locally FIRST — through the ONE shared producer gate
+    // (#171): same authoritative (Lean-producer-aware) path as the signed
+    // envelope ingress and blocklace-finalized turns.
     let executor = crate::executor_setup::new_submit_executor(&s);
     seed_executor_receipt_head(&executor, turn.agent, previous_receipt_hash);
-    let exec_result = executor.execute(&turn, &mut s.ledger);
+    let exec_result = crate::executor_setup::execute_via_producer(
+        &executor,
+        &turn,
+        &mut s.ledger,
+        s.lean_producer_enabled,
+    );
 
     match exec_result {
         dregg_turn::TurnResult::Committed { mut receipt, .. } => {
@@ -2977,9 +2984,19 @@ async fn post_submit_signed_turn(
     }
 
     let pre_ledger = s.ledger.clone();
+    // ONE executor gate (#171): the remote signed envelope executes through the
+    // same producer-aware path as local thin-HTTP turns and finalized turns —
+    // a remote agent's turn is covered by the verified Lean producer exactly
+    // like a local one (its SDK stamps `valid_until`, so it does not fall off
+    // the wire marshal).
     let executor = crate::executor_setup::new_submit_executor(&s);
     seed_executor_receipt_head(&executor, signed.turn.agent, expected_prev);
-    let exec_result = executor.execute(&signed.turn, &mut s.ledger);
+    let exec_result = crate::executor_setup::execute_via_producer(
+        &executor,
+        &signed.turn,
+        &mut s.ledger,
+        s.lean_producer_enabled,
+    );
 
     match exec_result {
         dregg_turn::TurnResult::Committed { mut receipt, .. } => {
@@ -4878,7 +4895,14 @@ async fn post_resolve_conditional(
             let conditional = s.pending_conditionals.remove(idx);
 
             let executor = crate::executor_setup::new_submit_executor(&s);
-            let exec_result = executor.execute(&conditional.turn, &mut s.ledger);
+            // ONE executor gate (#171): resolved conditionals commit through the
+            // same producer-aware path as every other ingress.
+            let exec_result = crate::executor_setup::execute_via_producer(
+                &executor,
+                &conditional.turn,
+                &mut s.ledger,
+                s.lean_producer_enabled,
+            );
 
             match exec_result {
                 dregg_turn::TurnResult::Committed { mut receipt, .. } => {
@@ -6081,7 +6105,14 @@ async fn post_faucet(
     // Pre-execution ledger snapshot for the witness revalidation below (the
     // proof's pre-state must be captured BEFORE the executor mutates it).
     let pre_ledger = s.ledger.clone();
-    let exec_result = executor.execute(&faucet_turn, &mut s.ledger);
+    // ONE executor gate (#171): faucet turns commit through the same
+    // producer-aware path as every other ingress.
+    let exec_result = crate::executor_setup::execute_via_producer(
+        &executor,
+        &faucet_turn,
+        &mut s.ledger,
+        s.lean_producer_enabled,
+    );
 
     match exec_result {
         dregg_turn::TurnResult::Committed { mut receipt, .. } => {
