@@ -364,6 +364,10 @@ pub struct NodeStateInner {
     /// strand-key → bond-cell bindings, so blocklace fork evidence executes
     /// as an ordinary conserved move from the bonded cell.
     pub equivocation_court: crate::equivocation_court_service::CourtLedger,
+    /// Channels registry (ORGANS §4 weld): per-group room state — the open
+    /// roster (re-commits to the on-cell membership root), the epoch keys
+    /// this node minted, and the off-cell ciphertext ring + SSE bus.
+    pub channels: crate::channels_service::ChannelRegistry,
 }
 
 /// Maximum number of events retained in the ring buffer for REST polling.
@@ -795,6 +799,7 @@ impl NodeState {
                 storage_gateway: crate::storage_service::StorageGatewayService::from_env(),
                 trustlines: crate::trustline_service::TrustlineRegistry::default(),
                 equivocation_court: crate::equivocation_court_service::CourtLedger::default(),
+                channels: crate::channels_service::ChannelRegistry::default(),
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -904,6 +909,7 @@ impl NodeState {
                 storage_gateway: crate::storage_service::StorageGatewayService::from_env(),
                 trustlines: crate::trustline_service::TrustlineRegistry::default(),
                 equivocation_court: crate::equivocation_court_service::CourtLedger::default(),
+                channels: crate::channels_service::ChannelRegistry::default(),
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),

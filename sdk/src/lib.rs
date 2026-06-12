@@ -102,6 +102,8 @@
 // the always-on group below is wasm-friendly.
 #[cfg(feature = "captp")]
 pub mod captp_client;
+#[cfg(feature = "captp")]
+pub mod channels;
 pub mod cipherclerk;
 #[cfg(feature = "network")]
 pub mod client;

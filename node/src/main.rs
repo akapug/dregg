@@ -9,6 +9,7 @@
 mod api;
 mod blocklace_sync;
 mod catchup;
+mod channels_service;
 pub mod config;
 mod coord_gate;
 mod finality_gate;

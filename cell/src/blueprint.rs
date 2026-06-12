@@ -170,6 +170,13 @@ pub enum BlueprintError {
     /// A trustline party identity is the all-zero field — settlement would
     /// target the zero cell. Rejected at build (fail-closed).
     ZeroParty,
+    /// A channel group with a zero admin key would have NO governor: every
+    /// membership/epoch/key write would refuse forever (`SenderIs` against
+    /// the zero key never matches a real sender). Rejected at build.
+    ZeroAdmin,
+    /// A channel group tag of zero is indistinguishable from an unborn
+    /// cell's empty slot. Rejected at build (fail-closed).
+    ZeroTag,
 }
 
 impl std::fmt::Display for BlueprintError {
@@ -190,6 +197,12 @@ impl std::fmt::Display for BlueprintError {
                     f,
                     "trustline issuer/holder identities must be nonzero fields"
                 )
+            }
+            BlueprintError::ZeroAdmin => {
+                write!(f, "channel admin key must be a nonzero field")
+            }
+            BlueprintError::ZeroTag => {
+                write!(f, "channel group tag must be nonzero")
             }
         }
     }
@@ -656,6 +669,257 @@ pub fn trustline_factory_descriptor(
 }
 
 // =============================================================================
+// Channel group — the ORGANS §4 weld (the group-key lift)
+// =============================================================================
+//
+// A group is a CELL: membership state and the group-key epoch commitment live
+// on-cell; joins/removals are ordinary turns under the group's program, so
+// the whole governance algebra applies to membership. Message bodies NEVER
+// touch the chain — control plane on-cell, data plane ciphertext over any
+// transport (mailboxes, SSE, captp store-and-forward).
+//
+// ## THE KEYSTONE — epoch unification
+//
+// The group's key epoch and the capability freshness epoch are THE SAME
+// counter, enforced from two sides:
+//
+// * **Slot side (program-enforced, this module):** the constraint triple
+//   below makes "remove + rekey are ONE turn" a *program* fact —
+//   1. membership-root change ⇒ the epoch slot strictly increases,
+//   2. key-commitment change ⇒ the epoch slot strictly increases,
+//   3. epoch-slot change ⇒ the key commitment is REWRITTEN
+//      (`AnyOf[Immutable{epoch}, Not(Immutable{key_commit})]` — the Heyting
+//      `Not` is exactly "this slot changed").
+//   So the same turn that drops a member MUST bump the epoch and MUST commit
+//   a fresh key — a membership change with a stale key is UNSAT.
+// * **Capability side (executor-enforced, `turn/src/executor/apply.rs`
+//   R7 epoch-at-retrieval):** group-held capabilities are minted with
+//   `stored_epoch: Some(e)` against the group cell; exercise refuses
+//   (`TurnError::CapabilityStale`) once the group cell's `delegation_epoch`
+//   advances past `e`. The canonical epoch-step turn (see
+//   `dregg_sdk::channels` / `node/src/channels_service.rs`) carries a
+//   `RevokeDelegation{ child: epoch_anchor }` effect — the one verb that
+//   bumps `delegation_epoch` — so BOTH counters step in the SAME atomic
+//   turn: removing a member ends their forward-read ability (rekey) and
+//   their group-held capabilities (freshness) in one epoch step.
+//
+// ## Honest residue (named, loud)
+//
+// A cell program cannot READ `delegation_epoch` (it sees slots only), so
+// "epoch slot ≡ delegation_epoch" is carried by the canonical turn builders
+// (SDK + node service, tested both sides) rather than by the program. The
+// closure lane is a program atom that mirrors the cell's delegation epoch
+// into the EvalContext (an executor + Lean `Exec.Program` change — the
+// executor lane owns those files). Until then a divergence is detectable by
+// any member (`epoch slot ≠ delegation_epoch` is loud) and the slot teeth
+// above still force rekey-on-removal.
+//
+// ## Key schedule (deliberately NOT RFC 9420 — yet)
+//
+// The cell only ever sees COMMITMENTS, so the key schedule is swappable
+// without touching this blueprint. The shipped schedule
+// (`dregg_sdk::channels`) is sender-keys style: a fresh random 32-byte group
+// key per epoch, sealed per-member over the existing seal-pair machinery
+// (X25519 → HKDF → ChaCha20-Poly1305, `dregg_captp::store_forward`) — O(n)
+// rekey, correct forward darkness. RFC 9420 MLS (TreeKEM, O(log n) rekey,
+// PCS ratchet) is the named successor substrate; it replaces the FAN-OUT
+// only — the on-cell interface (membership root, epoch counter, key
+// commitment) is UNCHANGED.
+
+/// Channel slot 0 — lifecycle state ([`STATE_UNINIT`] → [`STATE_OPEN`] →
+/// [`CH_STATE_CLOSED`]).
+pub const CH_STATE_SLOT: u8 = 0;
+/// Channel slot 1 — the openable membership commitment: a domain-tagged
+/// BLAKE3 hash over the SORTED member-leaf set ([`channel_member_root`]) —
+/// the `sdk/src/mailbox.rs` slot-5 sender-set shape. Anyone holding the
+/// open set can recompute it; a stale or foreign set fails closed.
+pub const CH_MEMBER_ROOT_SLOT: u8 = 1;
+/// Channel slot 2 — THE epoch counter (big-endian u64): the group-key epoch
+/// AND the capability freshness epoch (the keystone unification).
+pub const CH_EPOCH_SLOT: u8 = 2;
+/// Channel slot 3 — the epoch key commitment
+/// ([`channel_key_commitment`]`(epoch, key)`). The cell sees only this
+/// commitment; the key itself is sealed member-to-member off-cell.
+pub const CH_KEY_COMMIT_SLOT: u8 = 3;
+/// Channel slot 4 — the governance identity: the admin public key whose
+/// signature gates membership/epoch/key writes (term-pinned once OPEN).
+pub const CH_ADMIN_SLOT: u8 = 4;
+/// Channel slots 5/6 — application slots (unconstrained by this blueprint;
+/// reserved for the M-of-N council-approval successor, see
+/// [`channel_state_constraints`] docs).
+pub const CH_APP_SLOT_A: u8 = 5;
+/// See [`CH_APP_SLOT_A`].
+pub const CH_APP_SLOT_B: u8 = 6;
+/// Channel slot 7 — the group tag (term-pinned): disambiguates two groups
+/// under the same admin and content-addresses the per-group factory.
+pub const CH_TAG_SLOT: u8 = 7;
+
+/// Terminal state of a closed channel (inert — no row out of CLOSED).
+pub const CH_STATE_CLOSED: u64 = 2;
+
+/// The published terms of one channel group: the governance admin key + the
+/// group tag. Membership/epoch/key are LIVE state (not terms) — they change
+/// under the program's teeth.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelTerms {
+    /// Admin public key (32 bytes): the `SenderIs` governance gate over
+    /// membership, epoch, key-commitment, and lifecycle writes. May be any
+    /// key the deployment treats as the group's governor (an operator key,
+    /// or a council-held key).
+    pub admin: FieldElement,
+    /// Group tag (nonzero): names THIS group among the admin's groups and
+    /// content-addresses the per-group factory.
+    pub tag: FieldElement,
+}
+
+/// Domain tag for [`channel_member_leaf`].
+const CHANNEL_MEMBER_LEAF_DOMAIN: &str = "dregg-channel-member-leaf-v1";
+/// Domain tag for [`channel_member_root`].
+const CHANNEL_MEMBER_ROOT_DOMAIN: &str = "dregg-channel-member-root-v1";
+/// Domain tag for [`channel_key_commitment`].
+const CHANNEL_KEY_COMMIT_DOMAIN: &str = "dregg-channel-key-commit-v1";
+
+/// One member leaf: BLAKE3(domain, member_cell ‖ seal_pk). Binding the seal
+/// public key INTO the on-cell membership commitment means the rekey fan-out
+/// target set is pinned by the chain — a key-substitution on the off-cell
+/// roster re-commits to a different root and fails closed.
+pub fn channel_member_leaf(member_cell: &[u8; 32], seal_pk: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key(CHANNEL_MEMBER_LEAF_DOMAIN);
+    hasher.update(member_cell);
+    hasher.update(seal_pk);
+    *hasher.finalize().as_bytes()
+}
+
+/// Canonical openable commitment over the member-leaf set: BLAKE3 over the
+/// length-prefixed SORTED leaves (the mailbox sender-set shape). An empty
+/// set commits to a nonzero root distinct from the unborn all-zero slot.
+pub fn channel_member_root(
+    leaves: &std::collections::BTreeSet<[u8; 32]>,
+) -> FieldElement {
+    let mut hasher = blake3::Hasher::new_derive_key(CHANNEL_MEMBER_ROOT_DOMAIN);
+    hasher.update(&(leaves.len() as u64).to_le_bytes());
+    for leaf in leaves {
+        hasher.update(leaf);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// The epoch key commitment written to [`CH_KEY_COMMIT_SLOT`]:
+/// BLAKE3(domain, epoch ‖ key). Binding the epoch into the commitment makes
+/// a replayed old-key commitment at a new epoch detectable by every member.
+pub fn channel_key_commitment(epoch: u64, key: &[u8; 32]) -> FieldElement {
+    let mut hasher = blake3::Hasher::new_derive_key(CHANNEL_KEY_COMMIT_DOMAIN);
+    hasher.update(&epoch.to_le_bytes());
+    hasher.update(key);
+    *hasher.finalize().as_bytes()
+}
+
+/// The channel-group constraint set. The teeth, in keystone order:
+///
+/// 1. **term pins** — admin + tag pinned once out of `UNINIT` (the
+///    settlement-family `pin_term` shape);
+/// 2. **lifecycle** — `AllowedTransitions` UNINIT→OPEN→CLOSED; CLOSED is
+///    terminal/inert (no row out, no self-row);
+/// 3. **epoch never rewinds** — `Monotonic{epoch}`;
+/// 4. **THE EPOCH UNIFICATION TRIPLE** (see the module-section docs):
+///    membership change ⇒ epoch step; key change ⇒ epoch step; epoch step ⇒
+///    fresh key commitment. Together: remove + rekey are ONE turn or UNSAT.
+/// 5. **governance** — membership / epoch / key / lifecycle writes admit
+///    only the admin sender (`AnyOf[Immutable{slot}, SenderIs{admin}]`, the
+///    polis per-slot actor binding). A turn that touches none of the gated
+///    slots admits any sender (posting is off-cell anyway). An in-program
+///    M-of-N council gate needs a count-equal/order-statistic atom the
+///    constraint language does not yet have (a Lean `Exec.Program` +
+///    executor lane addition, named loudly here); until then a council
+///    governs by holding the admin key.
+///
+/// Fails closed on a zero admin (no governor) and a zero tag
+/// (indistinguishable from an unborn cell).
+pub fn channel_state_constraints(
+    terms: &ChannelTerms,
+) -> Result<Vec<StateConstraint>, BlueprintError> {
+    if terms.admin == FIELD_ZERO {
+        return Err(BlueprintError::ZeroAdmin);
+    }
+    if terms.tag == FIELD_ZERO {
+        return Err(BlueprintError::ZeroTag);
+    }
+    let admin_gated = |slot: u8| StateConstraint::AnyOf {
+        variants: vec![
+            SimpleStateConstraint::Immutable { index: slot },
+            SimpleStateConstraint::SenderIs { pk: terms.admin },
+        ],
+    };
+    let epoch_steps_when_changed = |slot: u8| StateConstraint::AnyOf {
+        variants: vec![
+            SimpleStateConstraint::Immutable { index: slot },
+            SimpleStateConstraint::StrictMonotonic {
+                index: CH_EPOCH_SLOT,
+            },
+        ],
+    };
+    Ok(vec![
+        // ── 1. term pins ──
+        pin_term(CH_ADMIN_SLOT, terms.admin),
+        pin_term(CH_TAG_SLOT, terms.tag),
+        // ── 2. lifecycle (CLOSED terminal/inert) ──
+        StateConstraint::AllowedTransitions {
+            slot_index: CH_STATE_SLOT,
+            allowed: vec![
+                (field_from_u64(STATE_UNINIT), field_from_u64(STATE_UNINIT)),
+                (field_from_u64(STATE_UNINIT), field_from_u64(STATE_OPEN)),
+                (field_from_u64(STATE_OPEN), field_from_u64(STATE_OPEN)),
+                (field_from_u64(STATE_OPEN), field_from_u64(CH_STATE_CLOSED)),
+            ],
+        },
+        // ── 3. the epoch never rewinds ──
+        StateConstraint::Monotonic {
+            index: CH_EPOCH_SLOT,
+        },
+        // ── 4. THE EPOCH UNIFICATION TRIPLE ──
+        // membership change ⇒ epoch strictly steps:
+        epoch_steps_when_changed(CH_MEMBER_ROOT_SLOT),
+        // key-commitment change ⇒ epoch strictly steps (no silent rekey
+        // within an epoch):
+        epoch_steps_when_changed(CH_KEY_COMMIT_SLOT),
+        // epoch step ⇒ the key commitment is REWRITTEN (a removal that
+        // bumps the epoch but keeps the old key is UNSAT):
+        StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::Immutable {
+                    index: CH_EPOCH_SLOT,
+                },
+                SimpleStateConstraint::Not(Box::new(SimpleStateConstraint::Immutable {
+                    index: CH_KEY_COMMIT_SLOT,
+                })),
+            ],
+        },
+        // ── 5. governance: the admin sender gates the control plane ──
+        admin_gated(CH_MEMBER_ROOT_SLOT),
+        admin_gated(CH_EPOCH_SLOT),
+        admin_gated(CH_KEY_COMMIT_SLOT),
+        admin_gated(CH_STATE_SLOT),
+    ])
+}
+
+/// The `CellProgram` installed on the channel cell for its whole life.
+pub fn channel_cell_program(terms: &ChannelTerms) -> Result<CellProgram, BlueprintError> {
+    Ok(CellProgram::Predicate(channel_state_constraints(terms)?))
+}
+
+/// **The channel-group factory (per-group, content-addressed)** — the ORGANS
+/// §4 group cell. Like the settlement families, each (admin, tag) pair gets
+/// its own descriptor whose constraints bake the terms as literals.
+pub fn channel_factory_descriptor(
+    terms: &ChannelTerms,
+) -> Result<FactoryDescriptor, BlueprintError> {
+    Ok(settlement_descriptor(
+        "dregg-blueprint:channel-factory v1",
+        channel_state_constraints(terms)?,
+    ))
+}
+
+// =============================================================================
 // Program-level tests (the executor-independent half; the end-to-end half
 // lives in `sdk/tests/factory_settlement_e2e.rs` on the real TurnExecutor)
 // =============================================================================
@@ -1083,6 +1347,246 @@ mod tests {
         };
         let d = trustline_factory_descriptor(&swapped).unwrap();
         assert_ne!(a.factory_vk, d.factory_vk, "A→B ≠ B→A");
+    }
+
+    // ── Channel-group program teeth (ORGANS §4 — the epoch unification) ──
+
+    fn ctx_sender(pk: [u8; 32], height: u64) -> EvalContext {
+        EvalContext {
+            block_height: height,
+            timestamp: 0,
+            current_epoch: 0,
+            sender: Some(pk),
+            sender_epoch_count: 0,
+            revealed_preimage: None,
+        }
+    }
+
+    fn eval_ctx(
+        program: &CellProgram,
+        new: &CellState,
+        old: Option<&CellState>,
+        ctx: &EvalContext,
+    ) -> Result<(), crate::program::ProgramError> {
+        program.evaluate_full(
+            new,
+            old,
+            Some(ctx),
+            &TransitionMeta::wildcard(),
+            &WitnessBundle::empty(),
+        )
+    }
+
+    const ADMIN: [u8; 32] = [0xADu8; 32];
+    const STRANGER: [u8; 32] = [0x57u8; 32];
+
+    fn ch_terms() -> ChannelTerms {
+        ChannelTerms {
+            admin: ADMIN,
+            tag: field_from_u64(0xC0FFEE),
+        }
+    }
+
+    fn ch_member_set(n: u64) -> std::collections::BTreeSet<[u8; 32]> {
+        (0..n)
+            .map(|i| {
+                channel_member_leaf(
+                    &field_from_u64(100 + i),
+                    &field_from_u64(200 + i),
+                )
+            })
+            .collect()
+    }
+
+    /// The post-open state of the canonical test channel: 3 members at
+    /// epoch 1, key k1 committed.
+    fn ch_open_state(t: &ChannelTerms) -> CellState {
+        let mut s = CellState::new(0);
+        s.fields[CH_STATE_SLOT as usize] = field_from_u64(STATE_OPEN);
+        s.fields[CH_MEMBER_ROOT_SLOT as usize] = channel_member_root(&ch_member_set(3));
+        s.fields[CH_EPOCH_SLOT as usize] = field_from_u64(1);
+        s.fields[CH_KEY_COMMIT_SLOT as usize] = channel_key_commitment(1, &[0x11; 32]);
+        s.fields[CH_ADMIN_SLOT as usize] = t.admin;
+        s.fields[CH_TAG_SLOT as usize] = t.tag;
+        s
+    }
+
+    #[test]
+    fn channel_birth_and_open() {
+        let t = ch_terms();
+        let p = channel_cell_program(&t).unwrap();
+        let born = CellState::new(0);
+        assert!(
+            eval_ctx(&p, &born, None, &ctx_sender(ADMIN, 0)).is_ok(),
+            "all-zero birth passes"
+        );
+        assert!(
+            eval_ctx(&p, &ch_open_state(&t), Some(&born), &ctx_sender(ADMIN, 0)).is_ok(),
+            "the open turn writes terms + the first epoch"
+        );
+        // Open with a tampered admin slot: rejected (term pin).
+        let mut bad = ch_open_state(&t);
+        bad.fields[CH_ADMIN_SLOT as usize] = STRANGER;
+        assert!(eval_ctx(&p, &bad, Some(&born), &ctx_sender(ADMIN, 0)).is_err());
+    }
+
+    /// THE KEYSTONE, slot side: remove + rekey are ONE turn or UNSAT.
+    #[test]
+    fn channel_remove_and_rekey_are_one_turn() {
+        let t = ch_terms();
+        let p = channel_cell_program(&t).unwrap();
+        let open = ch_open_state(&t);
+        let admin = ctx_sender(ADMIN, 0);
+
+        // The canonical remove: drop a member AND step the epoch AND commit
+        // a fresh key — admitted.
+        let mut removed = open.clone();
+        removed.fields[CH_MEMBER_ROOT_SLOT as usize] = channel_member_root(&ch_member_set(2));
+        removed.fields[CH_EPOCH_SLOT as usize] = field_from_u64(2);
+        removed.fields[CH_KEY_COMMIT_SLOT as usize] = channel_key_commitment(2, &[0x22; 32]);
+        assert!(eval_ctx(&p, &removed, Some(&open), &admin).is_ok());
+
+        // Remove WITHOUT the epoch step: UNSAT (membership ⇒ epoch tooth).
+        let mut no_epoch = removed.clone();
+        no_epoch.fields[CH_EPOCH_SLOT as usize] = open.fields[CH_EPOCH_SLOT as usize];
+        no_epoch.fields[CH_KEY_COMMIT_SLOT as usize] =
+            open.fields[CH_KEY_COMMIT_SLOT as usize];
+        assert!(
+            eval_ctx(&p, &no_epoch, Some(&open), &admin).is_err(),
+            "membership change without an epoch step must refuse"
+        );
+
+        // Remove + epoch step but the OLD key kept: UNSAT (epoch ⇒ fresh-key
+        // tooth — the removal that forgets to rekey).
+        let mut stale_key = removed.clone();
+        stale_key.fields[CH_KEY_COMMIT_SLOT as usize] =
+            open.fields[CH_KEY_COMMIT_SLOT as usize];
+        assert!(
+            eval_ctx(&p, &stale_key, Some(&open), &admin).is_err(),
+            "an epoch step carrying the stale key must refuse"
+        );
+
+        // A silent rekey (key change without an epoch step): UNSAT.
+        let mut silent = open.clone();
+        silent.fields[CH_KEY_COMMIT_SLOT as usize] = channel_key_commitment(1, &[0x99; 32]);
+        assert!(
+            eval_ctx(&p, &silent, Some(&open), &admin).is_err(),
+            "rekey without an epoch step must refuse"
+        );
+
+        // Epoch rewind: UNSAT (Monotonic).
+        let mut rewind = removed.clone();
+        rewind.fields[CH_EPOCH_SLOT as usize] = field_from_u64(0);
+        assert!(eval_ctx(&p, &rewind, Some(&open), &admin).is_err());
+
+        // A pure rekey (epoch step + fresh key, membership unchanged):
+        // admitted — compromise recovery.
+        let mut rekey = open.clone();
+        rekey.fields[CH_EPOCH_SLOT as usize] = field_from_u64(2);
+        rekey.fields[CH_KEY_COMMIT_SLOT as usize] = channel_key_commitment(2, &[0x33; 32]);
+        assert!(eval_ctx(&p, &rekey, Some(&open), &admin).is_ok());
+    }
+
+    /// The governance algebra gates membership: only the admin sender may
+    /// touch membership / epoch / key / lifecycle.
+    #[test]
+    fn channel_governance_gates_membership() {
+        let t = ch_terms();
+        let p = channel_cell_program(&t).unwrap();
+        let open = ch_open_state(&t);
+
+        let mut joined = open.clone();
+        joined.fields[CH_MEMBER_ROOT_SLOT as usize] = channel_member_root(&ch_member_set(4));
+        joined.fields[CH_EPOCH_SLOT as usize] = field_from_u64(2);
+        joined.fields[CH_KEY_COMMIT_SLOT as usize] = channel_key_commitment(2, &[0x44; 32]);
+
+        // Admin joins a member: admitted.
+        assert!(eval_ctx(&p, &joined, Some(&open), &ctx_sender(ADMIN, 0)).is_ok());
+        // A NON-MEMBER (any non-admin sender) forcing their own join:
+        // refused — the SenderIs gate.
+        assert!(
+            eval_ctx(&p, &joined, Some(&open), &ctx_sender(STRANGER, 0)).is_err(),
+            "non-admin membership write must refuse"
+        );
+        // No sender at all (system turn): fail-closed on gated slots.
+        assert!(eval_ctx(&p, &joined, Some(&open), &ctx_at(0)).is_err());
+        // A non-admin turn touching NOTHING gated: admitted (app slots are
+        // free; the control plane alone is governed).
+        let mut app_write = open.clone();
+        app_write.fields[CH_APP_SLOT_A as usize] = field_from_u64(7);
+        assert!(eval_ctx(&p, &app_write, Some(&open), &ctx_sender(STRANGER, 0)).is_ok());
+    }
+
+    #[test]
+    fn channel_terms_pinned_and_closed_inert() {
+        let t = ch_terms();
+        let p = channel_cell_program(&t).unwrap();
+        let open = ch_open_state(&t);
+        let admin = ctx_sender(ADMIN, 0);
+
+        // Re-pointing the admin or the tag is refused even FOR the admin.
+        let mut usurp = open.clone();
+        usurp.fields[CH_ADMIN_SLOT as usize] = STRANGER;
+        assert!(eval_ctx(&p, &usurp, Some(&open), &admin).is_err());
+        let mut retag = open.clone();
+        retag.fields[CH_TAG_SLOT as usize] = field_from_u64(2);
+        assert!(eval_ctx(&p, &retag, Some(&open), &admin).is_err());
+
+        // OPEN → CLOSED admits (admin); any touch of a closed group refuses.
+        let mut closed = open.clone();
+        closed.fields[CH_STATE_SLOT as usize] = field_from_u64(CH_STATE_CLOSED);
+        assert!(eval_ctx(&p, &closed, Some(&open), &admin).is_ok());
+        assert!(eval_ctx(&p, &closed, Some(&closed), &admin).is_err());
+        assert!(eval_ctx(&p, &open, Some(&closed), &admin).is_err());
+    }
+
+    #[test]
+    fn channel_zero_terms_rejected_at_build() {
+        let mut t = ch_terms();
+        t.admin = FIELD_ZERO;
+        assert_eq!(channel_state_constraints(&t), Err(BlueprintError::ZeroAdmin));
+        let mut t2 = ch_terms();
+        t2.tag = FIELD_ZERO;
+        assert_eq!(channel_state_constraints(&t2), Err(BlueprintError::ZeroTag));
+    }
+
+    #[test]
+    fn channel_descriptors_are_per_group_content_addressed() {
+        let a = channel_factory_descriptor(&ch_terms()).unwrap();
+        let b = channel_factory_descriptor(&ch_terms()).unwrap();
+        assert_eq!(a.factory_vk, b.factory_vk, "same group → same factory");
+        let mut t2 = ch_terms();
+        t2.tag = field_from_u64(2);
+        let c = channel_factory_descriptor(&t2).unwrap();
+        assert_ne!(a.factory_vk, c.factory_vk, "different tag → different group");
+        let mut t3 = ch_terms();
+        t3.admin = STRANGER;
+        let d = channel_factory_descriptor(&t3).unwrap();
+        assert_ne!(a.factory_vk, d.factory_vk, "different admin → different group");
+    }
+
+    #[test]
+    fn channel_member_root_binds_seal_keys() {
+        // The root is deterministic over the open set…
+        let r1 = channel_member_root(&ch_member_set(3));
+        let r2 = channel_member_root(&ch_member_set(3));
+        assert_eq!(r1, r2);
+        // …distinct from the empty set and the unborn slot…
+        assert_ne!(r1, channel_member_root(&std::collections::BTreeSet::new()));
+        assert_ne!(channel_member_root(&std::collections::BTreeSet::new()), FIELD_ZERO);
+        // …and a SEAL-KEY substitution for the same member cell re-commits
+        // to a different root (the fan-out target set is chain-pinned).
+        let mut subbed = ch_member_set(2);
+        subbed.insert(channel_member_leaf(
+            &field_from_u64(102),
+            &field_from_u64(0xEEEE), // wrong seal pk for member 102
+        ));
+        assert_ne!(r1, channel_member_root(&subbed));
+        // The key commitment binds the epoch.
+        assert_ne!(
+            channel_key_commitment(1, &[0x11; 32]),
+            channel_key_commitment(2, &[0x11; 32])
+        );
     }
 
     #[test]
