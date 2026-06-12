@@ -245,6 +245,71 @@ fn umem_witness_set_field_round_trip() {
 }
 
 // ---------------------------------------------------------------------------
+// gwrite (heap domain): Effect::SetField with index >= STATE_SLOTS — the
+// openable sorted-map spine (`CellState.fields_map`). This is the Rust executor
+// half of the universal-map rotation: the live executor must admit heap keys
+// so real collections (nameservice entries, council members, ...) can grow.
+// ---------------------------------------------------------------------------
+#[test]
+fn umem_witness_set_heap_field_round_trip() {
+    let agent = make_open_cell(10, 100);
+    let target = make_open_cell(11, 0);
+    let (agent_id, target_id) = (agent.id(), target.id());
+    let mut agent_with_cap = agent;
+    agent_with_cap
+        .capabilities
+        .grant(target_id, AuthRequired::None)
+        .unwrap();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let executor = umem_executor();
+    let slot: u64 = 42; // any key >= STATE_SLOTS (8) is a heap field.
+    let value = [42u8; 32];
+    let turn = single_effect_turn(
+        agent_id,
+        target_id,
+        0,
+        Effect::SetField {
+            cell: target_id,
+            index: slot as usize,
+            value,
+        },
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_committed(),
+        "set_field on heap slot must commit: {result:?}"
+    );
+
+    // The cell state actually grew into the heap map.
+    let target_after = ledger.get(&target_id).expect("target present");
+    assert_eq!(
+        target_after.state.get_field_ext(slot),
+        Some(value),
+        "heap slot {slot} must hold the written value"
+    );
+
+    let w = take_witness(&executor);
+    assert_bridge_square(&w);
+
+    let write = w
+        .ops
+        .iter()
+        .find(|op| {
+            op.key
+                == UKey::Field {
+                    cell: target_id,
+                    slot,
+                }
+        })
+        .expect("heap field write present in umem trace");
+    assert_eq!(write.prev_val, None, "fresh heap key was absent before the write");
+    assert_eq!(write.val, Some(UVal::Bytes32(value)));
+}
+
+// ---------------------------------------------------------------------------
 // gwrite (caps domain): Effect::AttenuateCapability — the guarded narrow write.
 // ---------------------------------------------------------------------------
 #[test]
