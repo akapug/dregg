@@ -66,7 +66,12 @@ inductive SimpleConstraint where
   | writeOnce   (field : FieldName)
   /-- `new[field] ≥ old[field]` (append-only / monotone counter). -/
   | monotonic   (field : FieldName)
-  /-- `new[field] > old[field]` (strictly increasing — bids, sequence numbers). -/
+  /-- `new[field] > old[field]` (strictly increasing — bids, sequence numbers, the channel-group
+  epoch step). Mirrors `SimpleStateConstraint::StrictMonotonic { index }` /
+  `StateConstraint::StrictMonotonic` (`cell/src/program.rs:703`/`:486`; eval `:1615` "requires
+  new > old"; simple→full lift `:2687`) — the SAME alignment story as `monotonic` ↔ `Monotonic`.
+  Fail-closed on an absent/ill-typed old OR new (the record-substrate strengthening of Rust's
+  always-present 8-slot fields). Admit-char: `evalSimple_strictMono_iff`. -/
   | strictMono  (field : FieldName)
   /-- `new[field] = old[field] + delta`. -/
   | fieldDelta  (field : FieldName) (delta : Int)
@@ -455,6 +460,27 @@ theorem evalSimple_deltaBounded_iff (f : FieldName) (d : Int) (o n : Value) :
     | none   => simp
     | some b => simp [intLe, decide_eq_true_eq]
 
+/-- **`strictMono` admit-char (the `StrictMonotonic` mirror).** Admits IFF both old and new are
+present AND `old < new` — the strict twin of `evalSimple_monotonic_iff` (`Proof/WPCatalog.lean:144`),
+with the same fail-closed reading: an absent/ill-typed field on EITHER side rejects. This is the
+atom the channel-group epoch-unification triple disjoins against `immutable`
+(`cell/src/blueprint.rs:853` `epoch_steps_when_changed`); `Apps/ChannelGroup.lean` consumes it. -/
+theorem evalSimple_strictMono_iff (f : FieldName) (o n : Value) :
+    evalSimple (.strictMono f) o n = true ↔
+      ∃ a b, o.scalar f = some a ∧ n.scalar f = some b ∧ a < b := by
+  unfold evalSimple
+  cases ha : o.scalar f with
+  | none   => simp
+  | some a =>
+    cases hb : n.scalar f with
+    | none   => simp
+    | some b => simp [intLt, decide_eq_true_eq]
+
+-- strictMono non-vacuity pair (admit a strict step / reject a plateau — the equality edge
+-- `monotonic` admits and `strictMono` must refuse).
+example : evalSimple (.strictMono "n") (.record [("n", .int 1)]) (.record [("n", .int 2)]) = true := by decide
+example : evalSimple (.strictMono "n") (.record [("n", .int 1)]) (.record [("n", .int 1)]) = false := by decide
+
 /-- **`affineLe` admit-char.** Admits IFF every term-field reads AND the affine combination
 `Σ kᵢ·new[fᵢ] ≤ c`. The general arithmetic relation. -/
 theorem evalConstraint_affineLe_iff (terms : List (Int × FieldName)) (c : Int) (o n : Value) :
@@ -636,6 +662,7 @@ example : evalConstraint (.reachable workflowDag "step" (Label.id 1)) (.record [
 #assert_axioms evalSimple_prefixOf_iff
 #assert_axioms evalSimple_inRangeTwoSided_iff
 #assert_axioms evalSimple_deltaBounded_iff
+#assert_axioms evalSimple_strictMono_iff
 #assert_axioms evalConstraint_affineLe_iff
 #assert_axioms evalConstraint_affineEq_iff
 #assert_axioms evalConstraint_reachable_sound
