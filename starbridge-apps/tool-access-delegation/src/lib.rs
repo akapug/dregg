@@ -33,9 +33,11 @@
 //!
 //!   * `calls_made`  (the RATE COUNTER) — incremented `c → c+1` on each invocation; `Monotonic` so it
 //!     can never roll back to forge head-room, and the admit-table requires `c+1 ≤ rate_limit`.
-//!   * `rate_limit`  (the granted N) — `Immutable`: the ceiling fixed at grant, never raised.
+//!   * `rate_limit`  (the granted N) — `WriteOnce`: bound once by the grant turn (from zero on the
+//!     factory-born cell), frozen thereafter — the ceiling is never raised.
 //!   * `deadline`    (the EXPIRY) — `WriteOnce`: the grantor sets it once at grant; thereafter frozen.
-//!   * `tool_id`     (the SCOPE) — `Immutable`: the single allowlisted tool/MCP id.
+//!   * `tool_id`     (the SCOPE) — `WriteOnce`: the single allowlisted tool/MCP id, bound at grant
+//!     and frozen.
 //!
 //! ## Differential pinning
 //!
@@ -49,9 +51,9 @@
 
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
-    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, FieldConstraint,
-    InspectorDescriptor, StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard,
-    canonical_program_vk, field_from_u64, hex_encode_32, symbol,
+    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, InspectorDescriptor,
+    StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard, canonical_program_vk,
+    field_from_u64, hex_encode_32, symbol,
 };
 
 pub use dregg_app_framework::{FieldElement, field_from_bytes};
@@ -154,7 +156,10 @@ pub fn tool_id_field(tool: &str) -> FieldElement {
 ///
 ///   * `calls_made` is `Monotonic` (the counter never rolls back) AND `FieldLte rate_limit` (the
 ///     granted ceiling) — together the RATE bound `c+1 <= rate_limit` checked on every invocation;
-///   * `rate_limit` and `tool_id` are `Immutable` (the ceiling and the SCOPE are fixed at grant);
+///   * `rate_limit` and `tool_id` are `WriteOnce` — a factory-born mandate is empty, so the ceiling
+///     and the SCOPE are bound once by the grant turn (from zero) and frozen thereafter, the
+///     birth-compatible form of "fixed at grant" (`Immutable` would freeze the born-empty slots AT
+///     ZERO and refuse the grant turn itself — mirror privacy-voting/bounty-board);
 ///   * `deadline` is `WriteOnce` (set once at grant; thereafter frozen);
 ///   * `calls_made` mutation is gated by `FieldLteHeight deadline` (the executor refuses an invocation
 ///     presented after the granted deadline — the time bound).
@@ -164,11 +169,11 @@ pub fn tad_cell_program() -> CellProgram {
             // ALWAYS: the structural invariants the mandate carries for its whole life.
             guard: TransitionGuard::Always,
             constraints: vec![
-                // SCOPE + ceiling are pinned forever.
-                StateConstraint::Immutable {
+                // SCOPE + ceiling are bound once at grant (from zero), then pinned forever.
+                StateConstraint::WriteOnce {
                     index: RATE_LIMIT_SLOT,
                 },
-                StateConstraint::Immutable {
+                StateConstraint::WriteOnce {
                     index: TOOL_ID_SLOT,
                 },
                 // The expiry is set once, then frozen.
@@ -220,21 +225,29 @@ pub fn tad_factory_descriptor() -> FactoryDescriptor {
             max_permissions: AuthRequired::Signature,
             attenuatable: true,
         }],
-        field_constraints: vec![
-            // A grant must pin a non-zero rate ceiling and tool id (a zero grant is malformed).
-            FieldConstraint::NonZero {
-                field_index: RATE_LIMIT_SLOT as u32,
-            },
-            FieldConstraint::NonZero {
-                field_index: TOOL_ID_SLOT as u32,
-            },
-        ],
+        // No creation-time `field_constraints`: a factory-born mandate cell is
+        // born empty and the GRANT turn binds `TOOL_ID` + `RATE_LIMIT` +
+        // `DEADLINE` (`WriteOnce`, frozen after) before any invocation. The
+        // previous birth `NonZero`s validated against `params.initial_fields`
+        // (a `Vec<(u32, u64)>` written little-endian into the LOW bytes of the
+        // slot), which (a) cannot carry the real 32-byte `tool_id_field` hash
+        // and (b) makes an LE-encoded `rate_limit` read as an astronomically
+        // large big-endian operand of `FieldLteField` — a vacuous ceiling.
+        // Mirror privacy-voting/bounty-board: born empty, bound by the grant
+        // turn under `WriteOnce`.
+        field_constraints: vec![],
         state_constraints: vec![
-            StateConstraint::Immutable {
+            // SCOPE + ceiling + expiry: bound once by the grant turn (from
+            // zero), frozen thereafter. (`Immutable` would freeze the
+            // born-empty slots AT ZERO and refuse the grant turn itself.)
+            StateConstraint::WriteOnce {
                 index: TOOL_ID_SLOT,
             },
-            StateConstraint::Immutable {
+            StateConstraint::WriteOnce {
                 index: RATE_LIMIT_SLOT,
+            },
+            StateConstraint::WriteOnce {
+                index: DEADLINE_SLOT,
             },
             StateConstraint::Monotonic {
                 index: CALLS_MADE_SLOT,
