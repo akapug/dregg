@@ -345,11 +345,17 @@ impl StingrayCounter {
     ///
     /// For safety: true_balance >= total_honestly_spent (enforced at rebalance time).
     pub fn compute_slice_ceiling(&self) -> u64 {
+        self.slice_ceiling_for(self.total_balance)
+    }
+
+    /// The slice-ceiling formula evaluated against an explicit balance
+    /// (used to pre-check [`Self::restore_unapplied`] atomically).
+    fn slice_ceiling_for(&self, balance: u64) -> u64 {
         let f = self.byzantine_tolerance as u64;
         let numerator = f + 1;
         let denominator = 2 * f + 1;
         // Use u128 to avoid overflow on large balances.
-        ((self.total_balance as u128 * numerator as u128) / denominator as u128) as u64
+        ((balance as u128 * numerator as u128) / denominator as u128) as u64
     }
 
     /// Distribute (or redistribute) slices to all silos.
@@ -422,6 +428,61 @@ impl StingrayCounter {
             .get_mut(&silo)
             .ok_or(BudgetError::UnknownSilo { silo })?;
         Ok(slice.unwind_debit(amount, digest))
+    }
+
+    /// Compensating action for a settlement that [`Self::rebalance`] already
+    /// recorded but whose EXTERNAL application (the escrow→holder ledger
+    /// move) was rejected: restore `amount` to the true balance, lift every
+    /// slice ceiling to the recomputed value, and re-debit `amount` into the
+    /// named silo's fresh slice under `digest` — so the next epoch's spending
+    /// certificate carries the unapplied amount again and settlement is
+    /// RE-ATTEMPTED instead of silently dropped.
+    ///
+    /// The version is deliberately NOT touched: epoch monotonicity is what
+    /// refuses stale certificates, and this is a within-epoch correction of
+    /// the just-opened epoch, not a new epoch.
+    ///
+    /// Atomic: all pre-checks fire before any mutation, so a refusal leaves
+    /// the counter exactly as it was.
+    pub fn restore_unapplied(
+        &mut self,
+        silo: SiloId,
+        amount: u64,
+        digest: DebitDigest,
+    ) -> Result<(), BudgetError> {
+        let restored_balance = self.total_balance.saturating_add(amount);
+        let ceiling = self.slice_ceiling_for(restored_balance);
+        {
+            let slice = self
+                .silo_states
+                .get(&silo)
+                .ok_or(BudgetError::UnknownSilo { silo })?;
+            if slice.debits.contains(&digest) {
+                return Err(BudgetError::DuplicateDebit { digest });
+            }
+            if slice.spent.saturating_add(amount) > ceiling {
+                return Err(BudgetError::SliceExhausted {
+                    agent: self.agent,
+                    remaining: ceiling.saturating_sub(slice.spent),
+                    requested: amount,
+                });
+            }
+        }
+        self.total_balance = restored_balance;
+        let mut total_allocated = 0u64;
+        for slice in self.silo_states.values_mut() {
+            slice.ceiling = ceiling;
+            total_allocated = total_allocated.saturating_add(ceiling);
+        }
+        self.total_allocated = total_allocated;
+        let slice = self
+            .silo_states
+            .get_mut(&silo)
+            .expect("checked present above");
+        slice
+            .try_debit_fresh(amount, digest)
+            .expect("pre-checked: digest fresh and amount within the lifted ceiling");
+        Ok(())
     }
 
     /// Get the remaining budget for a specific silo.
@@ -1125,6 +1186,71 @@ mod tests {
         );
         // Unwinding a digest that was never debited reports false.
         assert!(!coord.unwind_debit(silo, 5, &test_digest(99)).unwrap());
+    }
+
+    #[test]
+    fn test_restore_unapplied_recreates_the_pre_rebalance_obligation() {
+        // The trustline settle-rejection compensation: a rebalance recorded a
+        // settlement the ledger move then refused. restore_unapplied must put
+        // the counter back in the exact rebuild shape (Lean
+        // Dregg2.Apps.Trustline.epochSlice): balance = line − settled(cell),
+        // spent = drawn − settled(cell), remaining = line − drawn — WITHOUT
+        // regressing the version (epoch monotonicity guards cert anti-replay).
+        let silos = test_silos(1);
+        let silo = silos[0];
+        let mut coord = StingrayCounter::new(test_agent(), 100, silos, 0).unwrap();
+        register_all_silo_pubkeys(&mut coord);
+
+        coord.try_debit_fresh(silo, 30, test_digest(1)).unwrap();
+        let key = test_signing_key(&silo);
+        let cert = coord.silo_states[&silo].certificate(silo, &key);
+        assert_eq!(coord.rebalance(&[cert]).unwrap(), 30);
+        assert_eq!(coord.total_balance, 70);
+        assert_eq!(coord.version, 1);
+
+        // The external move was rejected: compensate.
+        coord.restore_unapplied(silo, 30, test_digest(2)).unwrap();
+        assert_eq!(coord.total_balance, 100, "balance = line − settled(cell)");
+        assert_eq!(
+            coord.remaining(&silo),
+            Some(70),
+            "remaining = line − drawn(cell): the two gates re-agree"
+        );
+        assert_eq!(coord.total_spent(), 30, "the obligation is re-carried");
+        assert_eq!(coord.version, 1, "version must NOT regress");
+
+        // The next rebalance RE-CARRIES the unapplied amount.
+        let cert = coord.silo_states[&silo].certificate(silo, &key);
+        assert_eq!(
+            coord.rebalance(&[cert]).unwrap(),
+            30,
+            "the re-attempted settlement carries the unapplied amount"
+        );
+        assert_eq!(coord.total_balance, 70);
+        assert_eq!(coord.version, 2);
+    }
+
+    #[test]
+    fn test_restore_unapplied_refusals_leave_counter_unmoved() {
+        let silos = test_silos(1);
+        let silo = silos[0];
+        let mut coord = StingrayCounter::new(test_agent(), 100, silos, 0).unwrap();
+
+        // Unknown silo: refused.
+        let err = coord
+            .restore_unapplied([0xEE; 32], 10, test_digest(1))
+            .unwrap_err();
+        assert!(matches!(err, BudgetError::UnknownSilo { .. }));
+
+        // Duplicate digest: refused, counter unmoved.
+        coord.try_debit_fresh(silo, 30, test_digest(1)).unwrap();
+        let err = coord
+            .restore_unapplied(silo, 10, test_digest(1))
+            .unwrap_err();
+        assert!(matches!(err, BudgetError::DuplicateDebit { .. }));
+        assert_eq!(coord.total_balance, 100);
+        assert_eq!(coord.remaining(&silo), Some(70));
+        assert_eq!(coord.compute_slice_ceiling(), 100);
     }
 
     #[test]
