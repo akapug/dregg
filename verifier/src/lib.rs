@@ -205,12 +205,12 @@ pub fn verify_effect_vm_proof(
     }
 
     // Step 5: build the Effect VM AIR and convert public inputs.
-    if public_inputs_u32.len() < dregg_circuit::effect_vm::pi::BASE_COUNT {
+    if public_inputs_u32.len() < dregg_circuit::effect_vm::pi::ACTIVE_BASE_COUNT {
         return (
             VerifierOutput::reject(format!(
                 "Effect VM PI too short: have {} elements, need at least {}",
                 public_inputs_u32.len(),
-                dregg_circuit::effect_vm::pi::BASE_COUNT
+                dregg_circuit::effect_vm::pi::ACTIVE_BASE_COUNT
             )),
             exit_code::REJECTED,
         );
@@ -527,16 +527,16 @@ pub fn check_receipt_pi_binding(
         _ => {}
     }
 
-    // PI length sanity: must carry the full Effect VM base layout. Earlier
-    // versions only required TURN_HASH, which let truncated PI vectors skip
-    // PREVIOUS_RECEIPT_HASH / IS_AGENT_CELL binding when this helper was used
-    // directly.
+    // PI length sanity: must carry the full active Effect VM PI layout (v3).
+    // Earlier versions only required TURN_HASH, which let truncated PI vectors
+    // skip PREVIOUS_RECEIPT_HASH / IS_AGENT_CELL binding when this helper was
+    // used directly.
     let pi_len = wr.public_inputs.len();
-    if pi_len < pi::BASE_COUNT {
+    if pi_len < pi::ACTIVE_BASE_COUNT {
         return Some(format!(
             "PI too short for receipt binding: have {} elements, need at least {}",
             pi_len,
-            pi::BASE_COUNT
+            pi::ACTIVE_BASE_COUNT
         ));
     }
 
@@ -1093,7 +1093,7 @@ mod tests {
     fn entry_with_pi_from_receipt(receipt: dregg_turn::TurnReceipt) -> ReplayEntry {
         use dregg_circuit::effect_vm::pi;
         use dregg_commit::typed::canonical_32_to_felts_4;
-        let mut pi_vec = vec![0u32; pi::BASE_COUNT];
+        let mut pi_vec = vec![0u32; pi::ACTIVE_BASE_COUNT];
         let th = canonical_32_to_felts_4(&receipt.turn_hash);
         for i in 0..pi::TURN_HASH_LEN {
             pi_vec[pi::TURN_HASH_BASE + i] = th[i].as_u32();
@@ -1279,7 +1279,7 @@ mod tests {
     #[test]
     fn effect_vm_verifier_rejects_short_base_pi() {
         let (proof_bytes, mut pi_u32) = sample_effect_vm_proof_and_pi();
-        pi_u32.truncate(dregg_circuit::effect_vm::pi::BASE_COUNT - 1);
+        pi_u32.truncate(dregg_circuit::effect_vm::pi::ACTIVE_BASE_COUNT - 1);
 
         let (out, code) = verify_effect_vm_proof(&proof_bytes, &pi_u32, EFFECT_VM_VK_HASH_HEX);
         assert!(!out.verified);

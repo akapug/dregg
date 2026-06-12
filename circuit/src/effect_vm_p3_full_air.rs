@@ -913,7 +913,7 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for EffectVmP3Air {
         effect_vm_p3_width()
     }
     fn num_public_values(&self) -> usize {
-        pi::BASE_COUNT
+        pi::ACTIVE_BASE_COUNT
     }
     fn main_next_row_columns(&self) -> Vec<usize> {
         // Transition continuity reads next.state_before for every state column.

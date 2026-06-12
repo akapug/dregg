@@ -158,7 +158,7 @@ fn fabricate_wr_for_fed(turn: &Turn, cell_id: &CellId, home_fed: [u8; 32]) -> Wi
     let counts = sched.counts_for(cell_id);
     let roots = sched.roots_for(cell_id, turn.nonce);
 
-    let mut pi_bb = vec![BabyBear::ZERO; inner_pi::BASE_COUNT];
+    let mut pi_bb = vec![BabyBear::ZERO; inner_pi::ACTIVE_BASE_COUNT];
     let (th, eg, _, prev) = dregg_turn::executor::TurnExecutor::compute_turn_identity_pi(turn);
     for i in 0..4 {
         pi_bb[inner_pi::TURN_HASH_BASE + i] = th[i];

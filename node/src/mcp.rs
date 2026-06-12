@@ -222,7 +222,7 @@ fn witnessed_receipt_from_effect_material(
     proof: &EffectVmProofMaterial,
 ) -> Option<dregg_turn::WitnessedReceipt> {
     let mut public_inputs: Vec<u32> = proof.public_inputs.iter().map(|x| *x as u32).collect();
-    let needed = dregg_circuit::effect_vm::pi::BASE_COUNT
+    let needed = dregg_circuit::effect_vm::pi::ACTIVE_BASE_COUNT
         .max(
             dregg_circuit::effect_vm::pi::TURN_HASH_BASE
                 + dregg_circuit::effect_vm::pi::TURN_HASH_LEN,
@@ -5819,8 +5819,8 @@ fn schedule_projected_wr(
         .iter()
         .map(|&v| BabyBear::new(v as u32))
         .collect();
-    if pi.len() < p::BASE_COUNT {
-        pi.resize(p::BASE_COUNT, BabyBear::ZERO);
+    if pi.len() < p::ACTIVE_BASE_COUNT {
+        pi.resize(p::ACTIVE_BASE_COUNT, BabyBear::ZERO);
     }
 
     let (th, eg, actor_nonce, prev) = dregg_turn::TurnExecutor::compute_turn_identity_pi(turn);

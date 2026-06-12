@@ -650,7 +650,7 @@ impl Default for BilateralRoots {
 // ---------------------------------------------------------------------------
 
 /// Project this cell's bilateral counts + roots into the γ.2 slots of a PI
-/// vector. The vector must be at least `pi::BASE_COUNT` long; the function
+/// vector. The vector must be at least `pi::ACTIVE_BASE_COUNT` long; the function
 /// writes slots 38..73 (counts + roots) and leaves IS_AGENT_CELL untouched
 /// (the executor decides that separately).
 pub fn project_into_pi(pi: &mut [BabyBear], counts: &BilateralCounts, roots: &BilateralRoots) {

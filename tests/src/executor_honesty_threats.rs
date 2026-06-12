@@ -132,7 +132,7 @@ fn replay_entry_with_receipt_pi(receipt: TurnReceipt) -> dregg_verifier::ReplayE
     use dregg_circuit::effect_vm::pi;
     use dregg_commit::typed::canonical_32_to_felts_4;
 
-    let mut public_inputs = vec![0u32; pi::BASE_COUNT];
+    let mut public_inputs = vec![0u32; pi::ACTIVE_BASE_COUNT];
     let turn_hash = canonical_32_to_felts_4(&receipt.turn_hash);
     for i in 0..pi::TURN_HASH_LEN {
         public_inputs[pi::TURN_HASH_BASE + i] = turn_hash[i].as_u32();

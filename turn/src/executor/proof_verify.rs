@@ -100,8 +100,9 @@ impl TurnExecutor {
         // populates from federation state.
         let approved_handoffs_root: [BabyBear; 4] = self.read_approved_handoffs_root();
 
-        // 9. Build the public inputs vector (Stage 1 Effect VM layout).
-        let pi_len = effect_vm::pi::BASE_COUNT + custom_count * effect_vm::pi::CUSTOM_ENTRY_SIZE;
+        // 9. Build the public inputs vector (PI v3 layout).
+        let pi_len = effect_vm::pi::ACTIVE_BASE_COUNT
+            + custom_count * effect_vm::pi::CUSTOM_ENTRY_SIZE;
         let mut public_inputs: Vec<BabyBear> = vec![BabyBear::ZERO; pi_len];
         for i in 0..effect_vm::pi::OLD_COMMIT_LEN {
             public_inputs[effect_vm::pi::OLD_COMMIT_BASE + i] = old_commit_4[i];
@@ -252,6 +253,22 @@ impl TurnExecutor {
             public_inputs[effect_vm::pi::BURN_TARGET_PI] = target_bb;
         }
 
+        // ---- PI v3 tail (THE ROTATION) ----
+        //
+        // Surface the committed-height commitment limb and the staged caveat
+        // tags. The committed height is read from the cell's state (not
+        // prover-chosen), closing the temporal-gate anti-ghost tooth. The
+        // rate-bound / challenge-window tags are zero sentinels today; the
+        // optimistic-proving / dispute machinery (#169) will populate them.
+        let committed_height = ledger
+            .get(cell_id)
+            .map(|c| c.state.committed_height())
+            .unwrap_or(0);
+        public_inputs[effect_vm::pi::v3::COMMITTED_HEIGHT] =
+            BabyBear::new((committed_height & 0x7FFF_FFFF) as u32);
+        public_inputs[effect_vm::pi::v3::RATE_BOUND_TAG] = BabyBear::ZERO;
+        public_inputs[effect_vm::pi::v3::CHALLENGE_WINDOW_TAG] = BabyBear::ZERO;
+
         // Sovereign-witness AIR teeth (SOVEREIGN-WITNESS-AIR-DESIGN.md §3.2):
         //
         // This path (`verify_and_commit_proof`) is the proof-carrying path
@@ -276,11 +293,11 @@ impl TurnExecutor {
         );
 
         // Append custom proof entries (vk_hash + proof_commitment per custom
-        // effect). PI layout v2 (`effect_vm::pi::VK_PI_LAYOUT_VERSION == 2`):
-        // 8 felts vk_hash + 4 felts proof_commit per entry. Pre-v2 layouts
-        // used a 4-felt low-half vk_hash and zero-padded the upper 16 bytes
-        // at registry-lookup time — that path is removed (closes
-        // AIR-SOUNDNESS-AUDIT.md #70).
+        // effect). PI layout v3 (`effect_vm::pi::VK_PI_LAYOUT_VERSION == 3`):
+        // 8 felts vk_hash + 4 felts proof_commit per entry, appended after the
+        // 3-slot v3 tail. Pre-v2 layouts used a 4-felt low-half vk_hash and
+        // zero-padded the upper 16 bytes at registry-lookup time — that path
+        // is removed (closes AIR-SOUNDNESS-AUDIT.md #70).
         let mut custom_idx = 0;
         for effect in &vm_effects {
             if let effect_vm::Effect::Custom {
@@ -303,7 +320,7 @@ impl TurnExecutor {
         // INIT/FINAL_BAL_* are sourced from the proof's PIs (the trace pins
         // them at boundaries and Group 6 binds them algebraically). We copy
         // them now so the PI matching loop below doesn't trip on zero.
-        if proof.public_inputs.len() >= effect_vm::pi::BASE_COUNT {
+        if proof.public_inputs.len() >= effect_vm::pi::ACTIVE_BASE_COUNT {
             public_inputs[effect_vm::pi::INIT_BAL_LO] =
                 BabyBear::new_canonical(proof.public_inputs[effect_vm::pi::INIT_BAL_LO]);
             public_inputs[effect_vm::pi::INIT_BAL_HI] =
@@ -543,10 +560,11 @@ impl TurnExecutor {
         let new_commit_4 = Self::commitment_to_4bb(new_commitment);
         let effects_hash_4 = Self::commitment_to_4bb(effects_hash);
 
-        let min_pi_count = pi::BASE_COUNT;
+        let min_pi_count = pi::ACTIVE_BASE_COUNT;
         if proof.public_inputs.len() < min_pi_count {
             return Err(TurnError::InvalidExecutionProof(format!(
-                "sovereign witness STARK proof has {} public inputs, expected at least {}",
+                "sovereign witness STARK proof has {} public inputs, expected at least {} \
+                 (PI v3 layout)",
                 proof.public_inputs.len(),
                 min_pi_count
             )));
@@ -660,16 +678,16 @@ impl TurnExecutor {
             return Ok(());
         }
 
-        // Every PI vector must be at least as long as the base layout —
-        // shorter vectors can't carry the γ.0a slots at all.
+        // Every PI vector must be at least as long as the active PI layout —
+        // shorter vectors can't carry the γ.0a slots or the v3 tail at all.
         for (i, p) in bundle_pis.iter().enumerate() {
-            if p.len() < pi::BASE_COUNT {
+            if p.len() < pi::ACTIVE_BASE_COUNT {
                 return Err(TurnError::InvalidExecutionProof(format!(
                     "bundle proof {} has {} public inputs, expected at least {} \
-                     (Stage 7-γ.0a layout)",
+                     (PI v3 layout)",
                     i,
                     p.len(),
-                    pi::BASE_COUNT
+                    pi::ACTIVE_BASE_COUNT
                 )));
             }
         }
@@ -1440,16 +1458,16 @@ impl TurnExecutor {
             return Ok(());
         }
 
-        // Reject any per-cell PI that's too short to carry the γ.2 layout.
+        // Reject any per-cell PI that's too short to carry the active layout.
         for (i, (cid, p)) in bundle.iter().enumerate() {
-            if p.len() < pi::BASE_COUNT {
+            if p.len() < pi::ACTIVE_BASE_COUNT {
                 return Err(TurnError::InvalidExecutionProof(format!(
                     "bilateral bundle entry {} (cell {:?}) has {} public \
-                     inputs, expected at least {} (Stage 7-γ.2 layout)",
+                     inputs, expected at least {} (PI v3 layout)",
                     i,
                     cid,
                     p.len(),
-                    pi::BASE_COUNT
+                    pi::ACTIVE_BASE_COUNT
                 )));
             }
         }
@@ -1750,7 +1768,7 @@ impl TurnExecutor {
     /// to 8 felts (full 32 bytes); see `babybear8_to_bytes32`. This helper
     /// is retained only so legacy callers compile; no live dispatch path
     /// uses it.
-    #[deprecated(note = "PI layout v2: use babybear8_to_bytes32 against the full 8-felt PI slot")]
+    #[deprecated(note = "PI layout v3: use babybear8_to_bytes32 against the full 8-felt PI slot")]
     #[allow(dead_code)]
     pub(super) fn expand_vk_hash_16_to_32(short: &[u8; 16]) -> [u8; 32] {
         let mut result = [0u8; 32];

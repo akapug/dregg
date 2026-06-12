@@ -127,6 +127,14 @@ pub struct CellState {
     /// `delegation_epoch()`.
     #[serde(default)]
     pub(crate) delegation_epoch: u64,
+    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.6 (PI v3): the block height at which
+    /// this cell's state was last committed. Folded into the canonical state
+    /// commitment as the `committedHeight` limb so the commitment (and its PI
+    /// face) is bound to a specific chain height — closing the temporal gate's
+    /// prover-chosen-height note. A legacy (never-committed) cell carries 0;
+    /// the absorption is a uniform no-op for legacy cells.
+    #[serde(default)]
+    pub(crate) committed_height: u64,
     /// Stage 1 / `DESIGN-captp-integration.md` §4.1: per-cell CapTP swiss
     /// table Merkle root. Initialised to the empty-tree sentinel; populated
     /// by `Effect::ExportSturdyRef` and `Effect::EnlivenRef` in Stage 7.
@@ -380,6 +388,14 @@ impl CellState {
         self.delegation_epoch
     }
 
+    /// Read the `committed_height` field. Sealed-read accessor (P0-1).
+    ///
+    /// The block height at which this cell's state was last committed.
+    #[inline]
+    pub fn committed_height(&self) -> u64 {
+        self.committed_height
+    }
+
     /// Set the `proved_state` flag. Sealed-write accessor (P0-1).
     ///
     /// The executor calls this after applying a proof-authorized action: it
@@ -421,6 +437,15 @@ impl CellState {
     #[inline]
     pub fn set_delegation_epoch(&mut self, value: u64) {
         self.delegation_epoch = value;
+    }
+
+    /// Raw write of `committed_height`. Sealed-write accessor (P0-1).
+    ///
+    /// **Low-level**: same caveats as `set_balance`. Exists for journal-
+    /// rollback restoration to an exact prior height.
+    #[inline]
+    pub fn set_committed_height(&mut self, value: u64) {
+        self.committed_height = value;
     }
 
     /// Credit balance by `amount`. Returns `false` on `i64` overflow (caller
@@ -491,6 +516,7 @@ impl CellState {
             balance,
             proved_state: false,
             delegation_epoch: 0,
+            committed_height: 0,
             // Stage 1 CapTP-prep: empty-tree sentinels.
             swiss_table_root: [0u8; 32],
             refcount_table_root: [0u8; 32],

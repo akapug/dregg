@@ -1252,7 +1252,7 @@ mod tests {
             row[STATE_AFTER_BASE + state::STATE_COMMIT] = claimed_new;
             stub_trace.push(row);
         }
-        let mut stub_pis = vec![BabyBear::ZERO; pi::BASE_COUNT];
+        let mut stub_pis = vec![BabyBear::ZERO; pi::ACTIVE_BASE_COUNT];
         stub_pis[pi::OLD_COMMIT] = claimed_old;
         stub_pis[pi::NEW_COMMIT] = claimed_new;
 

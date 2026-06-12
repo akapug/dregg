@@ -260,28 +260,37 @@ pub const CREATE_ESCROW_AMOUNT_LIMBS_LEN: usize = 4;
 ///   PI[CUSTOM_PROOFS_BASE + i*12 + 0..8]  = custom_program_vk_hash (8 elements, full 32B)
 ///   PI[CUSTOM_PROOFS_BASE + i*12 + 8..12] = custom_proof_commitment (4 elements)
 ///
-/// **PI layout v2** (`VK_PI_LAYOUT_VERSION == 2`): vk_hash widened from 4
-/// to 8 felts (~16B → 32B) per `AIR-SOUNDNESS-AUDIT.md` #70. Pre-v2
-/// callers wrote a 4-felt low half and zero-padded the upper 16 bytes for
-/// registry lookup, allowing two VKs that collide in the lower half to
-/// dispatch to the same handler (80-bit security in a 128-bit system).
-/// Post-v2 proofs are NOT verifier-compatible with pre-v2 proofs (the PI
-/// length differs by 4 felts/custom-entry); the verifier rejects on PI
-/// length mismatch.
+/// **PI layout v3** (`VK_PI_LAYOUT_VERSION == 3`): the frozen v2 prefix
+/// (`BASE_COUNT = 201` felts) is followed by the 3-slot v3 tail
+/// (`COMMITTED_HEIGHT`, `RATE_BOUND_TAG`, `CHALLENGE_WINDOW_TAG`); custom
+/// proof entries are appended after the tail. This moves
+/// `CUSTOM_PROOFS_BASE` from `BASE_COUNT` to `v3::V3_BASE_COUNT`. Pre-v3
+/// proofs are NOT verifier-compatible with post-v3 proofs (the PI length
+/// differs by 3 felts plus any custom entries); the verifier rejects on
+/// PI length mismatch.
 ///
-/// Note: CUSTOM_PROOFS_BASE is computed from BASE_COUNT so that adding
-/// new γ.2 PI fields shifts the custom-proof entries automatically. All
-/// callers compute from `BASE_COUNT` rather than the literal constant.
-pub const CUSTOM_PROOFS_BASE: usize = BASE_COUNT;
+/// Note: CUSTOM_PROOFS_BASE is computed from `v3::V3_BASE_COUNT` so that
+/// adding new v3+ PI fields shifts the custom-proof entries automatically.
+/// All callers compute from the active base count rather than the literal
+/// constant.
+pub const CUSTOM_PROOFS_BASE: usize = v3::V3_BASE_COUNT;
 
-/// PI layout version for custom-effect dispatch. Bumped from 1 to 2 when
-/// vk_hash widened from 4 to 8 felts. Verifiers MAY consult this constant
-/// to gate compatibility (the PI length itself is also a deterministic
-/// check).
-pub const VK_PI_LAYOUT_VERSION: u32 = 2;
-/// Base public inputs (without custom proof data).
+/// PI layout version for custom-effect dispatch. Bumped from 2 to 3 when
+/// the v3 tail (`COMMITTED_HEIGHT`, `RATE_BOUND_TAG`, `CHALLENGE_WINDOW_TAG`)
+/// was appended after the frozen v2 prefix. Verifiers MAY consult this
+/// constant to gate compatibility (the PI length itself is also a
+/// deterministic check).
+pub const VK_PI_LAYOUT_VERSION: u32 = 3;
+
+/// Number of fixed public inputs in the active layout (PI v3).
 ///
-/// Layout (post sovereign-witness teeth + unilateral binding; BASE_COUNT 173):
+/// This is the value provers/verifiers should use when sizing the fixed
+/// portion of the PI vector. Custom proof entries are appended after this.
+/// The frozen v2 prefix lives at offsets `0..BASE_COUNT`.
+pub const ACTIVE_BASE_COUNT: usize = v3::V3_BASE_COUNT;
+/// Frozen v2 public-input prefix (without custom proof data).
+///
+/// Layout (post D5c burn-target cross-binding; BASE_COUNT 201):
 ///   0..21   pre-γ.0a slots (commitments, balances, block height, etc.)
 ///   21..25  APPROVED_HANDOFFS[4]
 ///   25..29  TURN_HASH[4]                       (γ.0a)
@@ -322,6 +331,14 @@ pub const VK_PI_LAYOUT_VERSION: u32 = 2;
 ///   198     NOTESPEND_NULLIFIER                  (D5 nullifier cross-binding)
 ///   199     NOTECREATE_COMMITMENT                (D5b commitment cross-binding)
 ///   200     BURN_TARGET_PI                       (D5c burn-target cross-binding)
+///
+/// Active layout (PI v3): the frozen v2 prefix above is followed by
+///   201     COMMITTED_HEIGHT                   (PI v3)
+///   202     RATE_BOUND_TAG                     (PI v3)
+///   203     CHALLENGE_WINDOW_TAG               (PI v3)
+/// and custom proof entries start at offset 204 (`ACTIVE_BASE_COUNT`).
+/// The v2 prefix is frozen so that pre-v3 descriptors and Lean facts
+/// remain byte-identical; new PI fields land in the v3+ tail.
 ///
 /// ---- Slot-caveat manifest (Cav-Codex Block 3) ----
 ///

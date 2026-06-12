@@ -351,7 +351,7 @@ impl PeerExchange {
 
         // Validate minimum PI count.
         use dregg_circuit::effect_vm::pi;
-        let min_pi_count = pi::BASE_COUNT;
+        let min_pi_count = pi::ACTIVE_BASE_COUNT;
         if proof.public_inputs.len() < min_pi_count {
             return Err(PeerExchangeError::InvalidTransitionProof(format!(
                 "proof has {} public inputs, expected at least {}",

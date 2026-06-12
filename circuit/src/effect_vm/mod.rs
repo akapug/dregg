@@ -98,7 +98,7 @@
 //!
 //! # Public Inputs
 //!
-//! Base layout (`pi::BASE_COUNT` felts, Stage 7-γ.2 Phase 1 widening):
+//! Base layout (`pi::ACTIVE_BASE_COUNT` felts, Stage 7-γ.2 Phase 1 widening):
 //!
 //! ```text
 //!   [ 0.. 4]  OLD_COMMIT[4]                   cell pre-state commitment (Poseidon2)
@@ -130,7 +130,7 @@
 //!   [69..73]  INTRO_AS_TARGET_ROOT[4]         (7-γ.2)
 //!   [73]      IS_AGENT_CELL                   (7-γ.2; 1 iff this proof is the actor's)
 //!   ... (sovereign-witness teeth, value-limbs, slot-caveat / cross-effect /
-//!        witness-index manifests; see `pi::BASE_COUNT` for the precise tail
+//!        witness-index manifests; see `pi::ACTIVE_BASE_COUNT` for the precise tail
 //!        layout) ...
 //!   [168]     UNILATERAL_ATTESTATIONS_COUNT   (7-γ.2 unilateral; number of self-attestations this turn)
 //!   [169..173] UNILATERAL_ATTESTATIONS_ROOT[4] (7-γ.2 unilateral; Merkle/Poseidon2 accumulator over (kind, data) tuples)

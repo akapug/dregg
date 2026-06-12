@@ -16,12 +16,12 @@ use super::{
 /// of [`EffectVmAir`] so callers can fingerprint it into VK v2's
 /// layered hash.
 ///
-/// `public_input_layout` enumerates the BASE_COUNT-wide PI surface
-/// (commitments, balance limbs, bilateral aggregation roots,
-/// sovereign-witness teeth, 30-bit-trunc value limbs). The
-/// CUSTOM_PROOFS region beyond `BASE_COUNT` is variable per-cell and
-/// is *not* listed here — its presence is implicit (CUSTOM_PROOFS_BASE
-/// == BASE_COUNT, with `max_custom_effects * 8` additional felts).
+/// `public_input_layout` enumerates the frozen v2 prefix (`pi::BASE_COUNT`)
+/// PI surface (commitments, balance limbs, bilateral aggregation roots,
+/// sovereign-witness teeth, 30-bit-trunc value limbs). The PI v3 tail
+/// (`COMMITTED_HEIGHT`, `RATE_BOUND_TAG`, `CHALLENGE_WINDOW_TAG`) and the
+/// CUSTOM_PROOFS region beyond `pi::ACTIVE_BASE_COUNT` are variable/staged
+/// and are *not* listed here — their presence is implicit.
 pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
     crate::air_descriptor::AirDescriptor {
         air_id: "effect_vm_air_v1",

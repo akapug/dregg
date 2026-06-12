@@ -78,7 +78,11 @@ use crate::state::{CellState, FieldVisibility};
 /// root of the cell's `(collection, key) → value` heap (`circuit::heap_root`).
 /// A legacy (no-heap-activity) cell contributes the fixed `empty_heap_root()`
 /// constant, so the absorption is a uniform no-op for legacy cells.
-pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v7";
+/// `v7 → v8` (`docs/UNIVERSAL-MAP-ROTATION.md` §2.6): add the `committed_height`
+/// scalar as a canonical commitment limb — the PI v3 committed-height column's
+/// commitment face. A legacy (never-committed) cell contributes 0, so the
+/// absorption is a uniform no-op for legacy cells.
+pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v8";
 
 /// Domain-separation context for the canonical capability-set root.
 ///
@@ -294,6 +298,14 @@ fn hash_cell_state_into(hasher: &mut blake3::Hasher, state: &CellState) {
     }
     hasher.update(&[state.proved_state as u8]);
     hasher.update(&state.delegation_epoch.to_le_bytes());
+    // `docs/UNIVERSAL-MAP-ROTATION.md` §2.6 (PI v3): absorb the
+    // `committed_height` scalar. This folds the block height at which the cell's
+    // state was last committed into the authority-bearing commitment, so the
+    // commitment (and its PI face) is bound to a specific chain height. A legacy
+    // cell carries 0 — a cell-independent constant — so the absorption is a
+    // uniform no-op for legacy cells. Anti-ghost tooth: a prover-chosen height
+    // differs from the real committed height ⇒ commitment mismatch.
+    hasher.update(&state.committed_height.to_le_bytes());
     // Stage 1: CapTP-prep committed roots (`DESIGN-captp-integration.md` §4).
     // These are part of authority-bearing state because they gate enliven /
     // drop-ref / handoff operations.
@@ -1015,6 +1027,7 @@ mod tests {
         }
         hasher.update(&[state.proved_state() as u8]);
         hasher.update(&state.delegation_epoch().to_le_bytes());
+        hasher.update(&state.committed_height().to_le_bytes());
         hasher.update(&state.swiss_table_root);
         hasher.update(&state.refcount_table_root);
         // The no-op fold: the empty-map constant, independent of the cell.
@@ -1138,6 +1151,43 @@ mod tests {
         assert_eq!(
             c_fresh, c_ref,
             "the empty-heap-root absorption is a fixed no-op constant for legacy cells"
+        );
+    }
+
+    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.6 (PI v3 committed-height limb): the
+    /// `committed_height` scalar is FOLDED into the canonical commitment
+    /// (v7->v8 bump). Setting it to a non-zero height MUST move the commitment;
+    /// a legacy cell carries 0 and the no-op reference still matches.
+    #[test]
+    fn committed_height_write_moves_commitment() {
+        let mut cell = Cell::new(test_key(7), test_token(11));
+        let before = compute_canonical_state_commitment(&cell);
+        assert_eq!(cell.state.committed_height(), 0, "fresh cell height is 0");
+
+        cell.state.set_committed_height(42);
+        let after = compute_canonical_state_commitment(&cell);
+        assert_ne!(
+            before, after,
+            "committed_height is absorbed; a non-zero height MUST move the canonical commitment"
+        );
+
+        // A DIFFERENT height moves it again.
+        let mid = after;
+        cell.state.set_committed_height(43);
+        let after2 = compute_canonical_state_commitment(&cell);
+        assert_ne!(
+            mid, after2,
+            "a different committed height must move the commitment again"
+        );
+
+        // Legacy no-op reference still reproduces the canonical commitment.
+        let mut fresh = Cell::new(test_key(7), test_token(11));
+        fresh.state.set_committed_height(0);
+        let c_fresh = compute_canonical_state_commitment(&fresh);
+        let c_ref = legacy_reference_commitment(&fresh);
+        assert_eq!(
+            c_fresh, c_ref,
+            "the zero committed_height absorption is a fixed no-op constant for legacy cells"
         );
     }
 

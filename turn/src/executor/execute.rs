@@ -1065,6 +1065,48 @@ impl TurnExecutor {
             gate_cell.lock().unwrap().commit_debit(digest);
         }
 
+        // PI v3 committed-height column: every cell touched by this turn has its
+        // `committed_height` advanced to the current chain height. This binds the
+        // post-turn state commitment to a specific height, closing the temporal
+        // gate's prover-chosen-height note. The update is journaled so rollback
+        // (if this turn later fails at a downstream check) restores the old height.
+        {
+            use crate::journal::JournalEntry;
+            let mut touched: std::collections::BTreeSet<CellId> = std::collections::BTreeSet::new();
+            for entry in journal.entries() {
+                let cell = match entry {
+                    JournalEntry::SetField { cell, .. }
+                    | JournalEntry::SetBalance { cell, .. }
+                    | JournalEntry::SetNonce { cell, .. }
+                    | JournalEntry::GrantCapability { cell, .. }
+                    | JournalEntry::RevokeCapability { cell, .. }
+                    | JournalEntry::CreateCell { cell }
+                    | JournalEntry::SetProvedState { cell, .. }
+                    | JournalEntry::SetPermissions { cell, .. }
+                    | JournalEntry::SetVerificationKey { cell, .. }
+                    | JournalEntry::SetDelegation { cell, .. }
+                    | JournalEntry::SetDelegationEpoch { cell, .. }
+                    | JournalEntry::SetCommittedHeight { cell, .. }
+                    | JournalEntry::EventEmitted { cell, .. }
+                    | JournalEntry::SetLifecycle { cell, .. }
+                    | JournalEntry::AttenuateCapability { cell, .. } => Some(*cell),
+                    _ => None,
+                };
+                if let Some(cell) = cell {
+                    touched.insert(cell);
+                }
+            }
+            for cell_id in touched {
+                if let Some(c) = ledger.get_mut(&cell_id) {
+                    let old_height = c.state.committed_height();
+                    if old_height != self.block_height {
+                        journal.record_set_committed_height(cell_id, old_height);
+                        c.state.set_committed_height(self.block_height);
+                    }
+                }
+            }
+        }
+
         // THE EXECUTOR-STATE BRIDGE: the forest committed — snapshot the post
         // projection and re-read the journal as the turn's Blum write trace. The
         // window deliberately closes BEFORE Phase 3 fee distribution (the witness

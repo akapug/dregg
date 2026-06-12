@@ -20,8 +20,8 @@
 //! This module answers that with a minimal AIR — `EffectVmShapeAir` — that:
 //!
 //! 1. Has the **same width** as the full Effect VM (`EFFECT_VM_WIDTH = 105`).
-//! 2. Declares the **same number of public inputs** as the base PI layout
-//!    (`pi::BASE_COUNT = 74`), so the PI-binding shape that `p3-recursion`
+//! 2. Declares the **same number of public inputs** as the active PI v3 layout
+//!    (`pi::ACTIVE_BASE_COUNT`), so the PI-binding shape that `p3-recursion`
 //!    expects matches reality.
 //! 3. Enforces a non-trivial **subset** of the real constraints — selector
 //!    booleanity, selector sum-to-one, NoOp passthrough, Transfer balance
@@ -77,8 +77,8 @@ pub struct EffectVmShapeAir;
 impl EffectVmShapeAir {
     /// Width of the AIR (matches `EFFECT_VM_WIDTH = 105`).
     pub const WIDTH: usize = EFFECT_VM_WIDTH;
-    /// Public-input count (matches the Stage 7-γ.0a base layout: 74 felts).
-    pub const PUBLIC_INPUTS: usize = pi::BASE_COUNT;
+    /// Public-input count (matches the active PI v3 layout).
+    pub const PUBLIC_INPUTS: usize = pi::ACTIVE_BASE_COUNT;
 }
 
 impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for EffectVmShapeAir {
@@ -242,7 +242,7 @@ pub fn build_minimal_shape_trace(n_rows: usize) -> (Vec<Vec<BabyBear>>, Vec<Baby
         trace.push(row);
     }
 
-    let mut public_inputs = vec![BabyBear::ZERO; pi::BASE_COUNT];
+    let mut public_inputs = vec![BabyBear::ZERO; pi::ACTIVE_BASE_COUNT];
     public_inputs[pi::OLD_COMMIT] = chosen_commit;
     public_inputs[pi::NEW_COMMIT] = chosen_commit;
 
@@ -262,8 +262,8 @@ mod tests {
     fn shape_matches_effect_vm_constants() {
         // From `effect_vm::EFFECT_VM_WIDTH`.
         assert_eq!(EffectVmShapeAir::WIDTH, EFFECT_VM_WIDTH);
-        // From `effect_vm::pi::BASE_COUNT`.
-        assert_eq!(EffectVmShapeAir::PUBLIC_INPUTS, pi::BASE_COUNT);
+        // From `effect_vm::pi::ACTIVE_BASE_COUNT`.
+        assert_eq!(EffectVmShapeAir::PUBLIC_INPUTS, pi::ACTIVE_BASE_COUNT);
     }
 
     /// The minimal trace produced by `build_minimal_shape_trace` should

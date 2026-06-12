@@ -264,14 +264,14 @@ fn build_replay_entry(receipt: TurnReceipt, vm_effect: VmEffect, balance_pre: u6
     // Patch the turn-identity slots (from receipt) into the PI *before* proving.
     // This ensures the proof is generated against the exact PI vector that will
     // be supplied at verify time (fixes "Public inputs mismatch").
-    // Extended needed to vm_pi::BASE_COUNT to cover the full current layout
-    // (Stage 7-γ turn id, sovereign teeth, slot-caveat manifest, bridge value
-    // limbs, emit-event hashes, cross-effect deps, witness index map,
-    // unilateral attestations, etc.) produced by generate_effect_vm_trace_ext
-    // + EffectVmContext population. All non-identity fields (commits, balances,
-    // per-cell effects_hash, actor_nonce from state, etc.) are preserved from
-    // the generate path.
-    let needed = vm_pi::BASE_COUNT
+    // Extended needed to vm_pi::ACTIVE_BASE_COUNT to cover the full active PI v3
+    // layout (Stage 7-γ turn id, sovereign teeth, slot-caveat manifest, bridge
+    // value limbs, emit-event hashes, cross-effect deps, witness index map,
+    // unilateral attestations, plus the v3 tail) produced by
+    // generate_effect_vm_trace_ext + EffectVmContext population. All non-identity
+    // fields (commits, balances, per-cell effects_hash, actor_nonce from state,
+    // etc.) are preserved from the generate path.
+    let needed = vm_pi::ACTIVE_BASE_COUNT
         .max(vm_pi::TURN_HASH_BASE + vm_pi::TURN_HASH_LEN)
         .max(vm_pi::PREVIOUS_RECEIPT_HASH_BASE + vm_pi::PREVIOUS_RECEIPT_HASH_LEN);
     if pi.len() < needed {

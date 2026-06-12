@@ -194,23 +194,23 @@ pub fn verify_bilateral_bundle(bundle: &BilateralBundle) -> BilateralVerdict {
 
 impl BilateralVerdict {
     /// Optional structural overlay: confirm every WR's `public_inputs` length
-    /// is at least the γ.2 `BASE_COUNT`; reject otherwise. (The bilateral
-    /// chain verify already enforces this — we keep the check here as a
-    /// belt-and-suspenders surface for when `entries` is empty / the chain
-    /// verify short-circuits early.)
+    /// is at least the active PI layout (`ACTIVE_BASE_COUNT`); reject otherwise.
+    /// (The bilateral chain verify already enforces this — we keep the check
+    /// here as a belt-and-suspenders surface for when `entries` is empty / the
+    /// chain verify short-circuits early.)
     fn also_check_stark_pi(mut self, bundle: &BilateralBundle) -> Self {
         if !self.verified {
             return self;
         }
         use dregg_circuit::effect_vm::pi as p;
         for (i, e) in bundle.entries.iter().enumerate() {
-            if e.witnessed_receipt.public_inputs.len() < p::BASE_COUNT {
+            if e.witnessed_receipt.public_inputs.len() < p::ACTIVE_BASE_COUNT {
                 self.verified = false;
                 self.reason = format!(
-                    "entry {i} (cell {}): PI vector has {} entries, expected at least {} (γ.2 layout)",
+                    "entry {i} (cell {}): PI vector has {} entries, expected at least {} (PI v3 layout)",
                     hex::encode(e.cell_id.as_bytes()),
                     e.witnessed_receipt.public_inputs.len(),
-                    p::BASE_COUNT
+                    p::ACTIVE_BASE_COUNT
                 );
                 return self;
             }
@@ -260,7 +260,7 @@ pub fn fabricate_witnessed_receipt_with_schedule(
     let counts = schedule.counts_for(cell_id);
     let roots = schedule.roots_for(cell_id, turn.nonce);
 
-    let mut pi_bb = vec![BabyBear::ZERO; p::BASE_COUNT];
+    let mut pi_bb = vec![BabyBear::ZERO; p::ACTIVE_BASE_COUNT];
     // Populate turn-identity slots (shared across all per-cell proofs of one turn).
     let (th, eg, _, prev) = dregg_turn::executor::TurnExecutor::compute_turn_identity_pi(turn);
     for i in 0..4 {
