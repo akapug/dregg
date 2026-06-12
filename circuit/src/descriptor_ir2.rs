@@ -4988,6 +4988,155 @@ mod tests {
         );
     }
 
+    // ==== THE REGISTER-COUNT MEASUREMENT (R ∈ {16, 24, 32}) ====
+    //
+    // Registers are ALWAYS-PAID: every register is a commitment limb in EVERY turn
+    // proof (a main-trace column opened at each FRI query + chip absorption rows),
+    // forever. Heap fields are METERED: umem rows only when touched (the real-turn
+    // umem proof measures 64.4 KiB — `tests/effect_vm_umem_real_turn.rs`). The
+    // parametric Lean emission (`EffectVmEmitRotationR.lean`, keystone
+    // `wireCommitR_binds` parametric in R) stages R=24/R=32 probes beside the
+    // deployed R=16 so the register-count decision is MEASURED, not vibed
+    // (`docs/ROTATION-CUTOVER.md` pre-gates).
+
+    /// The staged probe descriptor for a v3-staged registry key.
+    fn rotation_probe_desc_key(key: &str) -> EffectVmDescriptor2 {
+        let json = crate::effect_vm_descriptors::V3_STAGED_DESCRIPTORS
+            .iter()
+            .find(|(k, _, _)| *k == key)
+            .unwrap_or_else(|| panic!("v3-staged key {key} not registered"))
+            .1;
+        parse_vm_descriptor2(json).expect("staged rotation probe parses")
+    }
+
+    /// The honest rotated-block witness at register count `r`: distinct limbs
+    /// (`100 + col`), the genuine chained absorption (4-wide head, 3-wide groups
+    /// while ≥ 3 remain, singletons after, the iroot alone LAST — the Lean
+    /// `chunk31` chunking), site digests on the chain carriers, final digest on
+    /// `state_commit`, PI = [published commit, committed height].
+    fn rotation_probe_trace_r(r: usize) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+        use crate::effect_vm_descriptors::rotation_layout_for;
+        use crate::poseidon2::hash_many;
+        let lay = rotation_layout_for(r);
+        let mut row = vec![BabyBear::ZERO; lay.probe_width];
+        for (i, cell) in row.iter_mut().enumerate().take(lay.iroot + 1) {
+            *cell = BabyBear::new(100 + i as u32);
+        }
+        let mut d = hash_many(&[row[0], row[1], row[2], row[3]]);
+        let mut chain = 0usize;
+        row[lay.chain_base + chain] = d;
+        chain += 1;
+        let mut col = 4;
+        while col <= lay.committed_height {
+            let remaining = lay.committed_height - col + 1;
+            if remaining >= 3 {
+                d = hash_many(&[d, row[col], row[col + 1], row[col + 2]]);
+                col += 3;
+            } else {
+                d = hash_many(&[d, row[col]]);
+                col += 1;
+            }
+            row[lay.chain_base + chain] = d;
+            chain += 1;
+        }
+        assert_eq!(chain, lay.num_chain, "chain carrier count at R={r}");
+        let commit = hash_many(&[d, row[lay.iroot]]);
+        row[lay.state_commit] = commit;
+        let pi = vec![commit, row[lay.committed_height]];
+        (vec![row; 4], pi)
+    }
+
+    /// The honest R=16 witness built by the PARAMETRIC builder is bit-identical to
+    /// the hand-built one (the pinned shape did not move).
+    #[test]
+    fn rotation_probe_trace_r16_matches_pinned_builder() {
+        let (a, pa) = rotation_probe_trace();
+        let (b, pb) = rotation_probe_trace_r(16);
+        assert_eq!(a, b);
+        assert_eq!(pa, pb);
+    }
+
+    /// THE MEASUREMENT: prove + verify all three register counts at the production
+    /// `ir2_config` and print the always-paid grid — proof bytes, opened-values
+    /// bytes, prove/verify time, chip rows, trace width. Run with
+    /// `--release --nocapture` to read it; the verdict lives in
+    /// `docs/ROTATION-CUTOVER.md`.
+    #[test]
+    fn rotation_probe_register_count_measurement() {
+        for (key, r) in [
+            ("rotationProbeVmDescriptor2", 16usize),
+            ("rotationProbeVmDescriptorR24", 24),
+            ("rotationProbeVmDescriptorR32", 32),
+        ] {
+            let desc = rotation_probe_desc_key(key);
+            let (rows, pi) = rotation_probe_trace_r(r);
+            let t0 = std::time::Instant::now();
+            let proof = prove_vm_descriptor2(&desc, &rows, &pi, &MemBoundaryWitness::default(), &[])
+                .unwrap_or_else(|e| panic!("honest R={r} rotated-block witness must prove: {e}"));
+            let prove_ms = t0.elapsed().as_secs_f64() * 1e3;
+            assert_eq!(
+                proof.degree_bits.len(),
+                2,
+                "R={r}: rotation probe commits main + chip only"
+            );
+            let t1 = std::time::Instant::now();
+            verify_vm_descriptor2(&desc, &proof, &pi)
+                .unwrap_or_else(|e| panic!("R={r} rotation probe proof must verify: {e}"));
+            let verify_ms = t1.elapsed().as_secs_f64() * 1e3;
+            let total = postcard::to_allocvec(&proof).expect("postcard").len();
+            let opened = postcard::to_allocvec(&proof.opened_values)
+                .expect("postcard")
+                .len();
+            println!(
+                "rotation-probe R={r}: proof {total} B (~{:.1} KiB) | opened-values {opened} B \
+                 (~{:.1} KiB) | prove {prove_ms:.0} ms | verify {verify_ms:.1} ms | \
+                 chip 2^{} rows | main width {}",
+                total as f64 / 1024.0,
+                opened as f64 / 1024.0,
+                proof.degree_bits[1],
+                desc.trace_width,
+            );
+        }
+    }
+
+    /// SPOT TAMPER-REFUSAL at the measured widths (R=24, R=32): a wider block with
+    /// untested columns is worse than a narrow one. A +1 tamper on a LOW register
+    /// (r0), the HIGHEST register (r_{R-1} — no narrower layout carries it), the
+    /// iroot, and the commit carrier each refuses; so do both PIs. (R=16 keeps the
+    /// full every-column gauntlet below.)
+    #[test]
+    fn rotation_probe_r24_r32_spot_tamper_refusal() {
+        use crate::effect_vm_descriptors::rotation_layout_for;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        for (key, r) in [
+            ("rotationProbeVmDescriptorR24", 24usize),
+            ("rotationProbeVmDescriptorR32", 32),
+        ] {
+            let desc = rotation_probe_desc_key(key);
+            let lay = rotation_layout_for(r);
+            let (rows, pi) = rotation_probe_trace_r(r);
+            let refused = |rows: &Vec<Vec<BabyBear>>, pi: &Vec<BabyBear>| -> bool {
+                let res = catch_unwind(AssertUnwindSafe(|| {
+                    prove_vm_descriptor2(&desc, rows, pi, &MemBoundaryWitness::default(), &[])
+                }));
+                match res {
+                    Err(_) => true,
+                    Ok(res) => res.is_err(),
+                }
+            };
+            for col in [1, r, lay.iroot, lay.state_commit] {
+                let mut t = rows.clone();
+                t[0][col] = t[0][col] + BabyBear::ONE;
+                assert!(refused(&t, &pi), "R={r}: tampered column {col} must refuse");
+            }
+            for k in 0..pi.len() {
+                let mut p = pi.clone();
+                p[k] = p[k] + BabyBear::ONE;
+                assert!(refused(&rows, &p), "R={r}: tampered PI {k} must refuse");
+            }
+        }
+    }
+
     /// TAMPER-REFUSAL, every column: each of the 33 probe columns (all 24 limbs —
     /// including the widened registers r8..r15, the heap_root limb, the committed
     /// height, and the iroot — plus the commitment carrier and every chain carrier)

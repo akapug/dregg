@@ -56,9 +56,61 @@ already maps Balance/Nonce keys into the heap domain — `turn/src/umem.rs`). Th
 flag-day regen must fix the canonical name→register assignment for the kernel's
 own scalars (an ember-visible decision; HORIZONLOG'd).
 
+## §2b — Register count: MEASURED (16 vs 24 vs 32 — the always-paid vs metered economics)
+
+Registers are **always-paid**: every register limb rides EVERY turn proof's commitment
+chain — a main-trace column opened at each FRI query point plus its share of the chained
+chip absorption — whether or not the app touches it, forever. Heap fields are **metered**:
+umem rows enter a proof only when touched (the first REAL-TURN umem proof measures
+**64.4 KiB**, `tests/effect_vm_umem_real_turn.rs`, landed `93a34fa74`). So "is 16 enough?"
+is a price table, not a taste call. The staged probe was re-emitted at three register
+counts from the PARAMETRIC Lean emission (`metatheory/Dregg2/Circuit/Emit/
+EffectVmEmitRotationR.lean`: layout columns, arity-{2,4} chunking, and the chained
+commitment are FUNCTIONS of R; the anti-ghost keystone `wireCommitR_binds` holds
+parametrically in R under the one CR floor — no per-R axiom; the R=16 instance reproduces
+the pinned emission BYTE-IDENTICALLY, `#guard`ed on the emitted JSON) and measured at the
+production `ir2_config` (`descriptor_ir2.rs::rotation_probe_register_count_measurement`,
+release, M-series laptop; teeth scale with the block: presence-refusal walks every limb
+per R, spot tamper-refusal at low/high register + iroot + commit carrier per R, the full
+33-column gauntlet stays on R=16):
+
+| R | app registers (after balance/nonce) | chip sites | probe width | proof size | Δ vs 16 | opened-values | prove | verify |
+|---|---|---|---|---|---|---|---|---|
+| 16 | 14 | 9 (7×4 + 2×2) | 33 | 96,620 B (94.4 KiB) | — | 16,936 B | 23 ms | 3.2 ms |
+| 24 | 22 | 11 (10×4 + 1×2, EXACT 3-fill) | 43 | 98,846 B (96.5 KiB) | **+2.2 KiB (+2.3%)** | 17,382 B | 28 ms | 2.9 ms |
+| 32 | 30 | 15 (12×4 + 3×2) | 55 | 102,178 B (99.8 KiB) | **+5.4 KiB (+5.8%)** | 18,203 B | 18 ms | 3.1 ms |
+
+(Chip table 2⁴ rows at every R — the chained sites dedupe per distinct absorption, so
+9/11/15 sites all pad to 16; prove/verify differences are run-to-run noise at this scale.)
+
+**Always-paid delta:** R=24 costs **+2.2 KiB per turn proof, forever** (~278 B per added
+register); R=32 costs **+5.4 KiB** (~347 B per added register — the marginal register gets
+DEARER past 24 because the 3-fill breaks: 24→32 adds 4 chip sites where 16→24 adds 2).
+Against the metered baseline: a heap-resident field costs ~64.4 KiB on the turns that
+TOUCH it (the real-turn umem proof) and zero on every other turn — registers are the L1
+for hot scalars, the heap is where app state lives.
+
+**Recommendation: R=24.**
+  * The always-paid price is small and measured: +2.3% proof size per turn, forever — and
+    22 app registers (after balance/nonce take r0/r1) retires the "14 doesn't seem like
+    enough" concern with real headroom.
+  * R=24 is the chunking sweet spot: the 31 pre-iroot limbs fill 4+9·3 EXACTLY, so the
+    chain is 10 arity-4 sites + the lone arity-2 iroot tail — the cleanest chip realization
+    of the three (R=16 and R=32 both carry mid-chain arity-2 sites).
+  * R=32's further +3.2 KiB buys 8 more always-paid limbs at a WORSE per-register rate, for
+    state that the heap economics says should be metered instead: a register only beats a
+    heap field when it is touched on a large fraction of turns, and cold scalars belong in
+    the heap (`umem` rows only when touched).
+  * The decision stays cheap to revisit before the flag-day: the emission is parametric
+    (`rotationProbeVmDescriptorR2 R`), so re-measuring any other R is one driver line.
+
 ## §3 — The cutover sequence (one motion, in order)
 
 Pre-gates (ALL green before anything flips):
+
+- [ ] **The register-count decision** (§2b): MEASURED at R ∈ {16, 24, 32} (table above;
+      recommendation **R=24**, +2.2 KiB always-paid per turn for 22 app registers);
+      ember confirms R before the flag-day regen fixes `NUM_REGISTERS`.
 
 - [ ] **GATE 0**: `effect_vm_ir2_size_measure` at-or-under the v1 350.5 KiB
       baseline (per-effect; the staged probe's block-only shape measures ~tens of

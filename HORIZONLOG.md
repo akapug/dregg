@@ -48,9 +48,12 @@ Last sweep: 2026-06-12 (the Grand Convergence session).
   fails ("bilateral bundle entry 0 has 201 public inputs, expected at least 204",
   turn/src/executor/proof_verify.rs:1465) — the PI v3 lane closes producer emission to the
   new layout (found red by the remote-lane finisher 2026-06-12; unrelated to #170/#171).
-- Register-count measurement: 16 vs 24 vs 32 probe variants of the staged rotation
-  emission; measure the always-paid delta (commit-chain sites + opened columns) before the
-  count freezes at cutover. Folds into ROTATION-CUTOVER pre-gates. LANE RUNNING.
+- Register-count measurement: MEASURED (2026-06-12) — 16/24/32 probes from the parametric
+  Lean emission (`EffectVmEmitRotationR.lean`; `wireCommitR_binds` parametric in R; R=16
+  byte-identical to the pinned artifacts), proved+verified+toothed at production
+  `ir2_config`: 94.4 / 96.5 / 99.8 KiB. Table + verdict in ROTATION-CUTOVER.md §2b —
+  recommendation R=24 (+2.2 KiB always-paid per turn, 22 app registers, exact 3-fill
+  chunking). REMAINS: ember confirms R (the §3 pre-gate checkbox).
 
 ## Metatheory closures (Lean-side, mostly lane-sized)
 
