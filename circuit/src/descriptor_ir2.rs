@@ -337,9 +337,11 @@ pub struct UMemOpSpec {
 pub enum MapKind {
     /// Membership read (root unchanged).
     Read,
-    /// Sorted insert-or-update write (realized: in-place update at an existing key).
+    /// Sorted insert-or-update write (realized: in-place update at an existing key;
+    /// fresh-key sorted INSERT is the separate follow-up at witness-build lines 3096–3099).
     Write,
-    /// Non-membership read (NOT yet realized; assembly refuses).
+    /// Non-membership / bracketed-gap read (realized and tested; see `ir2_absent_*` tests
+    /// and the map-absent table assembly). The `value` field is pinned to `const 0`.
     Absent,
 }
 
