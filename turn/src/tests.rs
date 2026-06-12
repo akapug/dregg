@@ -1762,7 +1762,7 @@ fn test_heap_field_index_commits() {
     let value = [1u8; 32];
     {
         let action = ActionBuilder::new_unchecked_for_tests(target_id, "heap_field", agent_id)
-            // STATE_SLOTS = 8, so index 99 is a heap field and must now commit.
+            // index 99 is well above STATE_SLOTS, so it is a heap field and must now commit.
             .effect_set_field(target_id, 99, value)
             .build();
         builder.add_action(action);
@@ -3812,7 +3812,7 @@ fn test_permission_change_doesnt_affect_same_action() {
 }
 
 // =============================================================================
-// Test: proved_state set to true when all 8 fields set by proof authorization
+// Test: proved_state set to true when all STATE_SLOTS fields set by proof authorization
 // =============================================================================
 
 #[test]
@@ -3839,7 +3839,7 @@ fn test_proved_state_set_by_proof() {
     let mut executor = zero_cost_executor();
     executor.set_proof_verifier(Box::new(AlwaysAcceptVerifier));
 
-    // Set ALL 8 fields with proof authorization.
+    // Set ALL STATE_SLOTS fields with proof authorization.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let mut ab = ActionBuilder::new(target_id, "prove_all", agent_id).with_proof(
@@ -3948,7 +3948,7 @@ fn test_proved_state_unchanged_when_no_fields_modified() {
     let mut executor = zero_cost_executor();
     executor.set_proof_verifier(Box::new(AlwaysAcceptVerifier));
 
-    // Set all 8 fields by proof -> proved_state = true.
+    // Set all STATE_SLOTS fields by proof -> proved_state = true.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let mut ab = ActionBuilder::new(target_id, "prove_all", agent_id).with_proof(
@@ -4009,7 +4009,7 @@ fn test_precondition_proved_state_true() {
     let mut executor = zero_cost_executor();
     executor.set_proof_verifier(Box::new(AlwaysAcceptVerifier));
 
-    // Set all 8 fields by proof -> proved_state = true.
+    // Set all STATE_SLOTS fields by proof -> proved_state = true.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let mut ab = ActionBuilder::new(target_id, "prove_all", agent_id).with_proof(
@@ -4079,7 +4079,7 @@ fn test_precondition_proved_state_false_rejects() {
 }
 
 // =============================================================================
-// Test: partial proof fields (< 8) does not set proved_state
+// Test: partial proof fields (< STATE_SLOTS) does not set proved_state
 // =============================================================================
 
 #[test]
@@ -4103,7 +4103,7 @@ fn test_partial_proof_fields_doesnt_set_proved() {
     let mut executor = zero_cost_executor();
     executor.set_proof_verifier(Box::new(AlwaysAcceptVerifier));
 
-    // Set only 3 out of 8 fields with proof authorization.
+    // Set only 3 out of STATE_SLOTS fields with proof authorization.
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
         let action = ActionBuilder::new(target_id, "partial_prove", agent_id)
@@ -4119,7 +4119,7 @@ fn test_partial_proof_fields_doesnt_set_proved() {
     let result = executor.execute(&turn, &mut ledger);
     assert!(result.is_committed());
 
-    // proved_state should still be false (only 3/8 fields set).
+    // proved_state should still be false (only 3/STATE_SLOTS fields set).
     assert!(!ledger.get(&target_id).unwrap().state.proved_state());
 }
 

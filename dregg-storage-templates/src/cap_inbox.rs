@@ -8,8 +8,8 @@
 //!
 //! The §3.1 design carries 8 slots (`head`, `tail`, `capacity`,
 //! `min_deposit`, `owner`, `sender_set_root`, `total_deposits_held`,
-//! `message_root`). Dregg cells have exactly `STATE_SLOTS = 8`, so
-//! every §3.1 slot maps 1:1. The `latest_payload_hash` accessory slot
+//! `message_root`). Dregg cells have `STATE_SLOTS = 16`, so these 8
+//! slots map 1:1 to the low indices, leaving 8..15 free. The `latest_payload_hash` accessory slot
 //! that the subscription template carries in slot 7 has no place
 //! here; the §3.1 design routes per-message payload commitments
 //! through `EmitEvent` and commits to them aggregate via the ring

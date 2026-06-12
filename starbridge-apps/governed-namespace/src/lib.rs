@@ -40,7 +40,7 @@
 //!
 //! ## Slot layout
 //!
-//! `STATE_SLOTS = 8`. We use 6 of them:
+//! `STATE_SLOTS = 16`. We use 6 of them:
 //!
 //! | Slot | Name | Caveat | Purpose |
 //! |---:|---|---|---|
@@ -51,7 +51,7 @@
 //! | 4 | `dispute_window_height` | `Monotonic` | Block height at which a pending proposal finalizes (height after which un-disputed updates may commit). |
 //! | 5 | `pending_proposal_root` | per-method | Commitment to the in-flight proposal payload + vote tally. Read by `commit_table_update`; advanced by `propose_table_update` and `vote_on_proposal`. |
 //!
-//! Slots 6 and 7 are reserved (`Immutable`-by-default) for future
+//! Slots 6..15 are reserved (`Immutable`-by-default) for future
 //! extensions — e.g. a registry root pointing at the named-service
 //! sub-cells `register_service` produces.
 //!

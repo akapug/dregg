@@ -305,7 +305,7 @@ impl TurnExecutor {
             .get_mut(cell)
             .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
         if index < STATE_SLOTS {
-            // Fixed register-file slot: the legacy 8-slot path.
+            // Fixed register-file slot: the legacy 16-slot path.
             journal.record_set_field(*cell, index, Some(c.state.fields[index]));
             c.state.fields[index] = *value;
             // Invalidate stale field commitment (the old hash no longer matches).

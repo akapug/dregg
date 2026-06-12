@@ -25,8 +25,8 @@
 //! | 6    | Created-at block height (`WriteOnce`)                        |
 //! | 7    | Reserved for sub-directory parent ref (used by MetaDirectory)|
 //!
-//! The eight slots map onto `dregg_cell::STATE_SLOTS`. The `entries`
-//! data themselves live off-cell (a Merkle tree); slot 5 commits to
+//! These slots map onto the low indices of `dregg_cell::STATE_SLOTS`. The
+//! `entries` data themselves live off-cell (a Merkle tree); slot 5 commits to
 //! that tree's root so the executor can verify swap operations against
 //! a Merkle-membership witness.
 //!

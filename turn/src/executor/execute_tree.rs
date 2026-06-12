@@ -188,7 +188,7 @@ impl TurnExecutor {
     /// **actual** capability set.
     ///
     /// SECURITY (audit item 1): the scalar `(old_state, new_state)`
-    /// evaluator cannot decide structural uniqueness — it only sees the 8
+    /// evaluator cannot decide structural uniqueness — it only sees the 16
     /// state slots, not the cell's `CapabilitySet`. It therefore fails
     /// closed (`ProgramError::CapabilityUniquenessRequiresExecutor`). This
     /// is the real enforcement site, where the cell's full capability list
@@ -692,7 +692,7 @@ impl TurnExecutor {
 
         // Update proved_state based on authorization type and fields touched.
         if is_proof_auth {
-            // If ALL 8 fields were set by this proof-authorized action, proved_state = true.
+            // If ALL STATE_SLOTS fields were set by this proof-authorized action, proved_state = true.
             for (cell_id, indices) in &proof_field_sets {
                 if indices.len() == STATE_SLOTS {
                     if let Some(c) = ledger.get_mut(cell_id) {

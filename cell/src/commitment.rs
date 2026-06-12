@@ -12,7 +12,7 @@
 //!    committed to a **superset** (all of `state_commitment` plus visibility,
 //!    commitments, delegation_epoch, proved_state, program, delegate, delegation).
 //! 3. `circuit::CellState::compute_commitment()` — Poseidon2 over BabyBear,
-//!    committed to **only** `(balance, nonce, fields[0..8], capability_root)`,
+//!    committed to **only** `(balance, nonce, fields[0..STATE_SLOTS], capability_root)`,
 //!    omitting identity, permissions, VK, etc.
 //!
 //! The trust gap: a sovereign cell's circuit-side identity had no binding
@@ -72,7 +72,13 @@ use crate::state::{CellState, FieldVisibility};
 /// commit negative balances (−supply); the range-table limb shape `(lo, hi)`
 /// is [`crate::state::balance_limbs`]. Rides the epoch's one
 /// VK/commitment flag-day.
-pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v6";
+///
+/// `v6 → v7` (`docs/UNIVERSAL-MAP-ROTATION.md` §2.4): add the `heap_root`
+/// register as a canonical commitment limb — the openable sorted-Poseidon2
+/// root of the cell's `(collection, key) → value` heap (`circuit::heap_root`).
+/// A legacy (no-heap-activity) cell contributes the fixed `empty_heap_root()`
+/// constant, so the absorption is a uniform no-op for legacy cells.
+pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v7";
 
 /// Domain-separation context for the canonical capability-set root.
 ///
@@ -294,10 +300,10 @@ fn hash_cell_state_into(hasher: &mut blake3::Hasher, state: &CellState) {
     hasher.update(&state.swiss_table_root);
     hasher.update(&state.refcount_table_root);
     // Record-layer Stage 1 (`_RECORD-LAYER-UPGRADE.md` §D.2.1): absorb the
-    // user-field-MAP root. This is what folds the unbounded `key >= 8` overflow
-    // map (`fields_map`, digested into `fields_root`) into the cell's authority-
-    // bearing commitment, so a verifier binds the WHOLE record, not just the 8
-    // fixed slots. Absorbed at a FIXED position by a FIXED constant for legacy
+    // user-field-MAP root. This is what folds the unbounded `key >= STATE_SLOTS`
+    // overflow map (`fields_map`, digested into `fields_root`) into the cell's
+    // authority-bearing commitment, so a verifier binds the WHOLE record, not
+    // just the 16 fixed slots. Absorbed at a FIXED position by a FIXED constant for legacy
     // cells: a no-overflow cell carries `empty_fields_root()` — a cell-independent
     // constant (the digest of the empty map) — so the absorption is a uniform
     // no-op across all legacy cells (proven byte-identical in the Lean keystone
@@ -320,6 +326,15 @@ fn hash_cell_state_into(hasher: &mut blake3::Hasher, state: &CellState) {
     // tampered side-table root flips this digest, flipping the commitment
     // (`SystemRoots.cellCommitS_binds_systemRoots`).
     hasher.update(&state.system_roots_digest());
+    // `docs/UNIVERSAL-MAP-ROTATION.md` §2.4: absorb the `heap_root` register.
+    // This folds the openable sorted-Poseidon2 root of the cell's
+    // `(collection, key) → value` heap into the authority-bearing commitment.
+    // Absorbed at a FIXED position by a FIXED constant for legacy cells: a
+    // no-heap-activity cell carries `empty_heap_root()` — a cell-independent
+    // constant — so the absorption is a uniform no-op for legacy cells.
+    // Anti-ghost tooth: a tampered heap entry flips this root, flipping the
+    // commitment.
+    hasher.update(&state.heap_root);
 }
 
 fn hash_permissions_into(hasher: &mut blake3::Hasher, perms: &Permissions) {
@@ -737,8 +752,8 @@ mod tests {
         let mut cell = Cell::new(test_key(7), test_token(11));
         let before = compute_canonical_state_commitment(&cell);
 
-        // Populate the user-field map (keys >= 8) and reseal its root.
-        assert!(cell.state.set_field_ext(8, [42u8; 32]));
+        // Populate the user-field map (keys >= STATE_SLOTS) and reseal its root.
+        assert!(cell.state.set_field_ext(16, [42u8; 32]));
         assert_ne!(
             cell.state.fields_root,
             crate::state::empty_fields_root(),
@@ -755,7 +770,7 @@ mod tests {
         // A SECOND, distinct map write moves it again (distinct maps => distinct
         // roots => distinct commitments — off the fields_root injectivity).
         let mid = after;
-        assert!(cell.state.set_field_ext(9, [7u8; 32]));
+        assert!(cell.state.set_field_ext(17, [7u8; 32]));
         let after2 = compute_canonical_state_commitment(&cell);
         assert_ne!(
             mid, after2,
@@ -763,7 +778,7 @@ mod tests {
         );
 
         // Tampering a committed value at the same key also moves it.
-        assert!(cell.state.set_field_ext(8, [43u8; 32]));
+        assert!(cell.state.set_field_ext(16, [43u8; 32]));
         let tampered = compute_canonical_state_commitment(&cell);
         assert_ne!(
             after2, tampered,
@@ -930,13 +945,13 @@ mod tests {
         // returns to the same constant, so its commitment is byte-identical to
         // (a) — the absorbed constant does not depend on the map's history.
         let mut drained = Cell::new(test_key(7), test_token(11));
-        assert!(drained.state.set_field_ext(8, [99u8; 32]));
+        assert!(drained.state.set_field_ext(16, [99u8; 32]));
         assert_ne!(
             drained.state.fields_root,
             empty_fields_root(),
             "populated: root differs from empty (non-vacuous)"
         );
-        drained.state.fields_map.remove(&8);
+        drained.state.fields_map.remove(&16);
         drained.state.reseal_fields_root();
         assert_eq!(drained.state.fields_root, empty_fields_root());
         let c_drained = compute_canonical_state_commitment(&drained);
@@ -1007,6 +1022,9 @@ mod tests {
         // STAGE 3 no-op fold: the empty system-roots digest, independent of the
         // cell (a legacy cell carries the all-zero sub-block).
         hasher.update(&crate::state::empty_system_roots_digest());
+        // Universal-map rotation §2.4 no-op fold: the empty-heap constant,
+        // independent of the cell.
+        hasher.update(&crate::state::empty_heap_root());
         hash_permissions_into(&mut hasher, &cell.permissions);
         match &cell.verification_key {
             Some(vk) => {
@@ -1040,6 +1058,87 @@ mod tests {
         hash_program_into(&mut hasher, &cell.program);
         hash_lifecycle_into(&mut hasher, &cell.lifecycle);
         *hasher.finalize().as_bytes()
+    }
+
+    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.4 (the heap-root absorb): the
+    /// `heap_root` register is FOLDED into the canonical commitment (v6->v7
+    /// bump). Mutating ANY heap entry MUST move the commitment. This is the
+    /// anti-ghost tooth for the heap: a `heap_root := 0` stub would make this
+    /// assertion FAIL, so the absorption is genuinely load-bearing.
+    #[test]
+    fn heap_root_write_moves_commitment() {
+        let mut cell = Cell::new(test_key(7), test_token(11));
+        let before = compute_canonical_state_commitment(&cell);
+
+        assert!(cell.state.set_heap(1, 2, [42u8; 32]));
+        assert_ne!(
+            cell.state.heap_root,
+            crate::state::empty_heap_root(),
+            "the heap must actually be populated (non-vacuous)"
+        );
+
+        let after = compute_canonical_state_commitment(&cell);
+        assert_ne!(
+            before, after,
+            "heap_root is absorbed; a heap write MUST move the canonical commitment"
+        );
+
+        // A DISTINCT heap entry moves it again.
+        let mid = after;
+        assert!(cell.state.set_heap(2, 3, [7u8; 32]));
+        let after2 = compute_canonical_state_commitment(&cell);
+        assert_ne!(
+            mid, after2,
+            "a distinct heap entry must move the commitment again"
+        );
+
+        // ANTI-GHOST: tampering the SAME heap entry moves it.
+        assert!(cell.state.set_heap(1, 2, [99u8; 32]));
+        let tampered = compute_canonical_state_commitment(&cell);
+        assert_ne!(
+            after2, tampered,
+            "tampering a heap entry must move the commitment"
+        );
+    }
+
+    /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.4 backward-compat keystone (the no-op
+    /// fold): a LEGACY cell (empty `heap_map`) carries the FIXED
+    /// `empty_heap_root()` constant, which is cell-INDEPENDENT. So absorbing
+    /// `heap_root` is a uniform no-op across legacy cells.
+    #[test]
+    fn legacy_cells_share_heap_root_contribution() {
+        use crate::state::empty_heap_root;
+
+        // (a) a fresh (never-touched) cell is a legacy cell.
+        let fresh = Cell::new(test_key(7), test_token(11));
+        assert_eq!(fresh.state.heap_root, empty_heap_root());
+        let c_fresh = compute_canonical_state_commitment(&fresh);
+
+        // (b) a cell whose heap was populated then DRAINED back to empty: the
+        // root returns to the same constant, so its commitment is byte-identical
+        // to (a).
+        let mut drained = Cell::new(test_key(7), test_token(11));
+        assert!(drained.state.set_heap(1, 2, [99u8; 32]));
+        assert_ne!(
+            drained.state.heap_root,
+            empty_heap_root(),
+            "populated: root differs from empty (non-vacuous)"
+        );
+        assert!(drained.state.remove_heap(1, 2));
+        assert_eq!(drained.state.heap_root, empty_heap_root());
+        let c_drained = compute_canonical_state_commitment(&drained);
+        assert_eq!(
+            c_fresh, c_drained,
+            "a legacy (empty-heap) cell's commitment is independent of heap history"
+        );
+
+        // (c) the byte-identical no-op reference must reproduce the canonical
+        // commitment exactly for a legacy cell.
+        let c_ref = legacy_reference_commitment(&fresh);
+        assert_eq!(
+            c_fresh, c_ref,
+            "the empty-heap-root absorption is a fixed no-op constant for legacy cells"
+        );
     }
 
     /// All output felts must fit within BabyBear's representable range

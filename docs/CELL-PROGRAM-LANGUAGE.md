@@ -205,16 +205,16 @@ same v-bump lane as the cap-root Phase A):
 
 ### 6.1 Variable-length regions (gap 7)
 
-`STATE_SLOTS = 8` is baked into `CellState`, the canonical state commitment,
+`STATE_SLOTS = 16` is baked into `CellState`, the canonical state commitment,
 and the Effect-VM state columns. The grammar for the successor is the
 *name-keyed record* the Lean side already uses (`Exec/Value.lean` records,
 `Exec/Program.lean` constraints keyed by `FieldName`, `FieldsMap.lean` for the
 flatten): constraints address named fields, the commitment becomes a keyed
 Merkle/Poseidon map (the `cap_root` openable-sorted-map pattern is the
-precedent), and the 8-slot array becomes the degenerate fixed schema. The
+precedent), and the 16-slot array becomes the degenerate fixed schema. The
 council then constrains `approval[m]` for any member id `m`; `MAX_MEMBERS`
 dies. **Grammar verdict: do NOT pre-land a slot-map grammar against the
-8-slot layout** — every name-keyed constraint would be a lie until the
+16-slot layout** — every name-keyed constraint would be a lie until the
 commitment opens; this is one rotation, done once, with the Lean record
 semantics as the spec (it is already proved there).
 

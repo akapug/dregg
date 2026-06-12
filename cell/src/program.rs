@@ -55,7 +55,7 @@ pub enum CellProgram {
     None,
 
     /// Predicate program: a set of conditions that must hold after transition.
-    /// Expressed as a list of constraints over the 8 field slots. All constraints
+    /// Expressed as a list of constraints over the 16 field slots. All constraints
     /// must hold (implicit conjunction). For disjunction, use
     /// [`StateConstraint::AnyOf`].
     ///
@@ -561,7 +561,7 @@ pub enum SimpleStateConstraint {
         index: u8,
     },
     /// **Own-balance floor:** the cell's post-turn balance (the sealed
-    /// `CellState::balance`, NOT one of the 8 slots) must be
+    /// `CellState::balance`, NOT one of the 16 slots) must be
     /// `>= min`. Dissolves the "programs can't see their own balance"
     /// gap (blueprint gap 2): solvency floors, fee-reserve guards.
     BalanceGte {
@@ -1937,7 +1937,7 @@ fn evaluate_constraint_full(
             // SECURITY (audit item 1): structural "exactly one / no
             // duplicate live capability" cannot be decided from
             // `(old_state, new_state)` alone — the scalar evaluator only
-            // sees the 8 state-slot field values, NOT the cell's actual
+            // sees the 16 state-slot field values, NOT the cell's actual
             // `CapabilitySet`. The cap-set root in
             // `slot[cap_set_root_slot]` is an opaque 32-byte commitment;
             // verifying that it encodes a unique cap requires the real

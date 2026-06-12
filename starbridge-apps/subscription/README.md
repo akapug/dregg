@@ -39,7 +39,7 @@ content-store for the (off-slot) message payloads.
 
 ## The slot layout
 
-`STATE_SLOTS = 8`:
+`STATE_SLOTS = 16`:
 
 | Slot | Name | Lifetime caveat | Operation-scoped caveats |
 |---:|---|---|---|
@@ -56,7 +56,7 @@ content-store for the (off-slot) message payloads.
 
 The reference design in `STORAGE-AS-CELL-PROGRAMS.md` §3.1 sketches
 per-message `WriteOnce` slots as the *idealized* shape. Cells have
-only 8 slots total, which can't host an unbounded message ring. The
+only 16 slots total, which can't host an unbounded message ring. The
 real data path is the same one `MerkleQueue::root` uses today in
 `dregg_storage`: a Poseidon2/BLAKE3 root commitment in slot 6, with
 the per-message `(seq, payload_hash)` tuples stored out-of-band in a
