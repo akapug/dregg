@@ -418,6 +418,29 @@ fn run_signed_turn(
 // The coordinator shadow (THE BIRTH EDGE + the rebuild rule)
 // =============================================================================
 
+/// The deterministic digest the shadow rebuild re-debits the outstanding
+/// position under. Pure over `(trustline, drawn, settled)` so a test (or a
+/// second rebuild at the same position) derives the identical digest.
+fn shadow_rebuild_digest(trustline: &CellId, drawn: u64, settled: u64) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-trustline-shadow-rebuild-v1");
+    hasher.update(trustline.as_bytes());
+    hasher.update(&drawn.to_le_bytes());
+    hasher.update(&settled.to_le_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+/// The deterministic digest a settle-rejection compensation re-debits the
+/// unapplied settlement under (see `post_trustline_settle`). Includes the
+/// post-rebalance epoch version so repeated failures across epochs derive
+/// distinct digests.
+fn settle_unapplied_digest(trustline: &CellId, amount: u64, version: u64) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-trustline-settle-unapplied-v1");
+    hasher.update(trustline.as_bytes());
+    hasher.update(&amount.to_le_bytes());
+    hasher.update(&version.to_le_bytes());
+    *hasher.finalize().as_bytes()
+}
+
 /// Ensure the Stingray coordinator shadow exists for `trustline`, REBUILDING
 /// it from the cell's registers when absent (restart, or a line opened
 /// before this node joined): `total_balance = line − settled`, then the
@@ -427,6 +450,11 @@ fn run_signed_turn(
 /// Coordinator remaining = `(line − settled) − (drawn − settled)` =
 /// `line − drawn` = the cell's remaining line: the two draw gates agree at
 /// every reachable state.
+///
+/// The rebuild digest is recorded in the FOREVER registry too (not only in
+/// the rebuilt slice's `debits`), so registry ⊇ slice-debits is a real
+/// invariant and a client draw replaying the rebuild digest refuses
+/// identically across rebalance epochs and further rebuilds.
 pub fn ensure_coordinator(
     s: &mut NodeStateInner,
     trustline: CellId,
@@ -440,11 +468,7 @@ pub fn ensure_coordinator(
         .map_err(|e| TrustlineRefusal::Counter(format!("coordinator init failed: {e}")))?;
     let outstanding = position.drawn.saturating_sub(position.settled);
     if outstanding > 0 {
-        let mut hasher = blake3::Hasher::new_derive_key("dregg-trustline-shadow-rebuild-v1");
-        hasher.update(trustline.as_bytes());
-        hasher.update(&position.drawn.to_le_bytes());
-        hasher.update(&position.settled.to_le_bytes());
-        let digest = *hasher.finalize().as_bytes();
+        let digest = shadow_rebuild_digest(&trustline, position.drawn, position.settled);
         let silo = s.silo_id;
         if let Some(coordinator) = s.budget_coordinators.get_mut(&trustline) {
             coordinator
@@ -453,6 +477,10 @@ pub fn ensure_coordinator(
                     TrustlineRefusal::Counter(format!("coordinator shadow rebuild failed: {e}"))
                 })?;
         }
+        // Burn the rebuild digest in the forever registry, exactly as a
+        // committed draw's digest is burned: the slice's debit list resets
+        // at every rebalance epoch, the registry does not.
+        s.trustlines.record_digest(trustline, digest);
         tracing::info!(
             trustline = %hex_encode(trustline.as_bytes()),
             outstanding,
@@ -550,7 +578,10 @@ struct SettleResponse {
     certificates: usize,
     settlements: Vec<SettlementEntry>,
     /// Settlement entries the ledger application FAILED for — a non-empty
-    /// list is a counter↔ledger divergence and is also logged loudly.
+    /// list is a counter↔ledger divergence and is also logged loudly. Each
+    /// rejected move is compensated in the same request (the unapplied
+    /// amount is re-carried by the counter and re-attempted next settle);
+    /// a compensation failure appends a second entry here.
     failures: Vec<String>,
 }
 
@@ -995,6 +1026,11 @@ async fn post_trustline_repay(
 /// `settled` march. Balance-neutral: the hard pair is exactly conserved
 /// (Lean `settlePay_conserves_hard`), and solvency is the program's
 /// `settled ≤ drawn ≤ ceiling` teeth against the escrowed line.
+///
+/// A move the executor REJECTS after the rebalance is surfaced loudly AND
+/// compensated in the same request (`StingrayCounter::restore_unapplied`):
+/// the counter re-carries the unapplied amount so the two gates re-agree
+/// immediately and the next settle re-attempts the payout.
 async fn post_trustline_settle(
     State(state): State<NodeState>,
 ) -> Result<Json<SettleResponse>, TrustlineRefusal> {
@@ -1085,6 +1121,64 @@ async fn post_trustline_settle(
                     hex_encode(agent.as_bytes()),
                     e.detail()
                 ));
+                // COMPENSATE in the SAME request (the cell is the truth; the
+                // shadow resyncs): the rebalance recorded a settlement the
+                // ledger refused, so void the counter-side record — restore
+                // the unapplied amount to the counter's balance and re-debit
+                // it into the fresh epoch slice. This lands the counter in
+                // exactly the §10b rebuild shape (Lean `epochSlice`:
+                // balance = line − settled(cell), spent = drawn − settled(cell))
+                // a restart would produce, and the NEXT settle re-attempts
+                // the move instead of silently dropping the holder's payout.
+                let silo = inner.silo_id;
+                match inner.budget_coordinators.get_mut(&agent) {
+                    Some(coordinator) => {
+                        let digest =
+                            settle_unapplied_digest(&agent, total_spent, coordinator.version);
+                        match coordinator.restore_unapplied(silo, total_spent, digest) {
+                            Ok(()) => {
+                                // Registry ⊇ slice-debits: the compensation
+                                // digest is burned forever like any other.
+                                inner.trustlines.record_digest(agent, digest);
+                                tracing::warn!(
+                                    trustline = %hex_encode(agent.as_bytes()),
+                                    amount = total_spent,
+                                    "rejected settlement compensated: unapplied amount re-carried \
+                                     by the counter; settlement will be re-attempted next epoch"
+                                );
+                            }
+                            Err(err) => {
+                                tracing::error!(
+                                    trustline = %hex_encode(agent.as_bytes()),
+                                    amount = total_spent,
+                                    error = %err,
+                                    "settlement compensation FAILED — counter/ledger divergence \
+                                     persists until a restart rebuild"
+                                );
+                                failures.push(format!(
+                                    "trustline {} compensation of {total_spent} failed: {err}",
+                                    hex_encode(agent.as_bytes()),
+                                ));
+                            }
+                        }
+                    }
+                    None => failures.push(format!(
+                        "trustline {} compensation of {total_spent} skipped: no coordinator",
+                        hex_encode(agent.as_bytes()),
+                    )),
+                }
+                // The two-gates identity, restored within this request: the
+                // failed turn moved nothing on the cell, so the pre-settle
+                // position still reads the cell truth.
+                debug_assert_eq!(
+                    inner
+                        .budget_coordinators
+                        .get(&agent)
+                        .and_then(|c| c.remaining(&silo)),
+                    Some(terms.line - position.drawn),
+                    "coordinator remaining diverged from the cell's remaining line \
+                     after settle-rejection compensation"
+                );
             }
         }
     }
@@ -1221,6 +1315,43 @@ mod tests {
         s.budget_coordinators
             .get(&cell)
             .and_then(|c| c.remaining(&silo))
+    }
+
+    /// THE INVARIANT (the code's own two-gates debug_assert, made total over
+    /// the §10b epochSlice shape): at every settle outcome the coordinator
+    /// shadow ≡ the cell truth —
+    ///   coordinator.total_balance == line − settled(cell)
+    ///   coordinator remaining     == line − drawn(cell)
+    /// (for f=0/n=1 the two together pin ceiling == line − settled and
+    /// spent == drawn − settled, i.e. Lean `SLine.epochSlice` exactly).
+    async fn assert_shadow_matches_cell(state: &NodeState, tl: CellId) {
+        let s = state.write().await;
+        let silo = s.silo_id;
+        let cell = s.ledger.get(&tl).expect("trustline cell");
+        let line = slot_u64(cell, TL_CEILING_SLOT);
+        let drawn = slot_u64(cell, TL_DRAWN_SLOT);
+        let settled = slot_u64(cell, TL_SETTLED_SLOT);
+        let coordinator = s.budget_coordinators.get(&tl).expect("coordinator");
+        assert_eq!(
+            coordinator.total_balance,
+            line - settled,
+            "coordinator balance must equal line − settled(cell)"
+        );
+        assert_eq!(
+            coordinator.remaining(&silo),
+            Some(line - drawn),
+            "coordinator remaining must equal line − drawn(cell): the two gates agree"
+        );
+    }
+
+    /// Restart-shaped rebuild: drop the in-memory shadow (exactly what a
+    /// process restart loses) and let `ensure_coordinator` rebuild it from
+    /// the cell registers.
+    async fn restart_shaped_rebuild(state: &NodeState, tl: CellId) {
+        let mut s = state.write().await;
+        s.budget_coordinators.remove(&tl);
+        let (_, position) = resolve_trustline(&s, tl).expect("trustline resolves");
+        ensure_coordinator(&mut s, tl, &position).expect("rebuild succeeds");
     }
 
     fn digest_hex(n: u64) -> String {
@@ -1452,6 +1583,7 @@ mod tests {
         // Post-settle the counter re-arms at the new epoch and still agrees
         // with the cell: remaining = line − drawn.
         assert_eq!(coordinator_remaining(&state, tl).await, Some(LINE - 20));
+        assert_shadow_matches_cell(&state, tl).await;
         {
             let s = state.write().await;
             assert_eq!(s.budget_coordinators.get(&tl).unwrap().version, 1);
@@ -1470,6 +1602,7 @@ mod tests {
         let (status, json) = post_json(&state, "/trustline/settle", serde_json::json!({})).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["settlements"].as_array().map(Vec::len), Some(0));
+        assert_shadow_matches_cell(&state, tl).await;
 
         // The line keeps working across epochs: a post-settle draw debits
         // the fresh slice and the cell agrees.
@@ -1482,6 +1615,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{json}");
         assert_eq!(json["drawn"].as_u64(), Some(70));
         assert_eq!(coordinator_remaining(&state, tl).await, Some(LINE - 70));
+        assert_shadow_matches_cell(&state, tl).await;
     }
 
     // ── the executor tooth, exercised directly ───────────────────────────────
@@ -1555,5 +1689,211 @@ mod tests {
         // trustline interpretation is even attempted.
         assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
         assert_eq!(json["reason"], "no-capability");
+    }
+
+    // ── RESIDUE 1 closed: the rebuild digest enters the FOREVER registry ─────
+
+    #[tokio::test]
+    async fn rebuild_digest_enters_forever_registry_and_refuses_identically() {
+        let (state, holder, _dir) = funded_state().await;
+        let tl = open_line(&state, holder, LINE).await;
+        let tl_hex = hex_encode(&tl.0);
+
+        // An outstanding position to rebuild: draw 30.
+        let (status, json) = post_json(
+            &state,
+            "/trustline/draw",
+            serde_json::json!({ "trustline": tl_hex, "amount": 30, "digest": digest_hex(1) }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+
+        // Restart-shaped rebuild #1: the shadow is rebuilt from the cell
+        // (drawn = 30, settled = 0) under the deterministic rebuild digest.
+        restart_shaped_rebuild(&state, tl).await;
+        let d_rebuild = shadow_rebuild_digest(&tl, 30, 0);
+        {
+            let s = state.write().await;
+            assert!(
+                s.trustlines.digest_seen(&tl, &d_rebuild),
+                "the rebuild digest must enter the forever registry at rebuild time"
+            );
+            // The closed invariant: registry ⊇ slice-debits.
+            let silo = s.silo_id;
+            let slice = &s.budget_coordinators.get(&tl).unwrap().silo_states[&silo];
+            for d in &slice.debits {
+                assert!(
+                    s.trustlines.digest_seen(&tl, d),
+                    "forever registry must cover every slice debit"
+                );
+            }
+        }
+        assert_shadow_matches_cell(&state, tl).await;
+
+        // A client draw replaying the rebuild digest refuses DuplicateDraw,
+        // counters unmoved.
+        let (status, json) = post_json(
+            &state,
+            "/trustline/draw",
+            serde_json::json!({
+                "trustline": tl_hex, "amount": 5, "digest": hex_encode(&d_rebuild)
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["reason"], "duplicate-draw");
+        assert_eq!(tl_slot(&state, tl, TL_DRAWN_SLOT).await, 30);
+        assert_eq!(coordinator_remaining(&state, tl).await, Some(70));
+
+        // Restart-shaped rebuild #2 (same position → the SAME digest): the
+        // refusal is IDENTICAL after further rebuilds.
+        restart_shaped_rebuild(&state, tl).await;
+        let (status, json) = post_json(
+            &state,
+            "/trustline/draw",
+            serde_json::json!({
+                "trustline": tl_hex, "amount": 5, "digest": hex_encode(&d_rebuild)
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["reason"], "duplicate-draw");
+        assert_eq!(tl_slot(&state, tl, TL_DRAWN_SLOT).await, 30);
+        assert_eq!(coordinator_remaining(&state, tl).await, Some(70));
+
+        // And ACROSS a settle epoch (the slice's own debit list resets at
+        // rebalance — only the forever registry carries the digest): still
+        // the identical refusal.
+        let (status, json) = post_json(&state, "/trustline/settle", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["failures"].as_array().map(Vec::len), Some(0));
+        assert_shadow_matches_cell(&state, tl).await;
+        let (status, json) = post_json(
+            &state,
+            "/trustline/draw",
+            serde_json::json!({
+                "trustline": tl_hex, "amount": 5, "digest": hex_encode(&d_rebuild)
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["reason"], "duplicate-draw");
+        assert_shadow_matches_cell(&state, tl).await;
+    }
+
+    // ── RESIDUE 2 closed: a rejected settle move is compensated in-request ───
+
+    #[tokio::test]
+    async fn settle_rejected_move_compensates_counter_and_reattempts_next_epoch() {
+        let (state, holder, _dir) = funded_state().await;
+        let tl = open_line(&state, holder, LINE).await;
+        let tl_hex = hex_encode(&tl.0);
+
+        let (status, json) = post_json(
+            &state,
+            "/trustline/draw",
+            serde_json::json!({ "trustline": tl_hex, "amount": 30, "digest": digest_hex(1) }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_shadow_matches_cell(&state, tl).await;
+
+        // Tamper the escrow below the settle amount (the harness shape of the
+        // executor-tooth test): the escrow→holder move MUST be rejected.
+        {
+            let mut s = state.write().await;
+            s.ledger.get_mut(&tl).unwrap().state.set_balance(5);
+        }
+        let holder_before = balance(&state, holder).await;
+
+        // TOTAL-FAILURE settle: loud failure surfaced, nothing applied, the
+        // cell truth unmoved — and the counter compensated IN THIS REQUEST.
+        let (status, json) = post_json(&state, "/trustline/settle", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(
+            json["settlements"].as_array().map(Vec::len),
+            Some(0),
+            "no settlement applied: {json}"
+        );
+        let failures = json["failures"].as_array().unwrap();
+        assert_eq!(failures.len(), 1, "the loud failure surface stays: {json}");
+        assert!(
+            failures[0].as_str().unwrap().contains("rejected"),
+            "{json}"
+        );
+        // The cell truth is unmoved (the rejected turn committed nothing).
+        assert_eq!(tl_slot(&state, tl, TL_SETTLED_SLOT).await, 0);
+        assert_eq!(tl_slot(&state, tl, TL_DRAWN_SLOT).await, 30);
+        assert_eq!(balance(&state, holder).await, holder_before);
+        // THE INVARIANT, restored in the same request (without compensation
+        // the counter's balance would read line − drawn = 70 ≠ line − settled).
+        assert_shadow_matches_cell(&state, tl).await;
+        // The compensation digest is burned in the forever registry and the
+        // epoch did not regress.
+        {
+            let s = state.write().await;
+            let coordinator = s.budget_coordinators.get(&tl).unwrap();
+            assert_eq!(coordinator.version, 1, "epoch advanced exactly once");
+            let d_comp = settle_unapplied_digest(&tl, 30, 1);
+            assert!(
+                s.trustlines.digest_seen(&tl, &d_comp),
+                "compensation digest must enter the forever registry"
+            );
+        }
+        // A client draw replaying the compensation digest refuses.
+        let d_comp = settle_unapplied_digest(&tl, 30, 1);
+        let (status, json) = post_json(
+            &state,
+            "/trustline/draw",
+            serde_json::json!({
+                "trustline": tl_hex, "amount": 5, "digest": hex_encode(&d_comp)
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["reason"], "duplicate-draw");
+        assert_shadow_matches_cell(&state, tl).await;
+
+        // Heal the escrow; the NEXT settle RE-ATTEMPTS the unapplied move
+        // (the counter re-carried it) and it now applies.
+        {
+            let mut s = state.write().await;
+            s.ledger.get_mut(&tl).unwrap().state.set_balance(LINE as i64);
+        }
+        let escrow_before = balance(&state, tl).await;
+        let (status, json) = post_json(&state, "/trustline/settle", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(
+            json["failures"].as_array().map(Vec::len),
+            Some(0),
+            "re-attempt applies cleanly: {json}"
+        );
+        let settlements = json["settlements"].as_array().unwrap();
+        assert_eq!(settlements.len(), 1, "{json}");
+        assert_eq!(settlements[0]["amount"].as_u64(), Some(30));
+        // SUCCESS branch of the invariant + the ledger pair conserves.
+        assert_eq!(tl_slot(&state, tl, TL_SETTLED_SLOT).await, 30);
+        assert_eq!(balance(&state, holder).await, holder_before + 30);
+        assert_eq!(balance(&state, tl).await, escrow_before - 30);
+        assert_shadow_matches_cell(&state, tl).await;
+
+        // PARTIAL-OUTCOME epoch: new spending settles normally afterwards —
+        // the compensation machinery left no residue.
+        let (status, json) = post_json(
+            &state,
+            "/trustline/draw",
+            serde_json::json!({ "trustline": tl_hex, "amount": 10, "digest": digest_hex(2) }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_shadow_matches_cell(&state, tl).await;
+        let (status, json) = post_json(&state, "/trustline/settle", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["failures"].as_array().map(Vec::len), Some(0));
+        let settlements = json["settlements"].as_array().unwrap();
+        assert_eq!(settlements.len(), 1, "{json}");
+        assert_eq!(settlements[0]["amount"].as_u64(), Some(10));
+        assert_eq!(tl_slot(&state, tl, TL_SETTLED_SLOT).await, 40);
+        assert_shadow_matches_cell(&state, tl).await;
     }
 }
