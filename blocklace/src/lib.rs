@@ -59,6 +59,7 @@ pub mod cross_reference;
 pub mod delegation;
 pub mod dissemination;
 pub mod dregg_bridge;
+pub mod evidence;
 pub mod finality;
 pub mod ordering;
 

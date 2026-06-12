@@ -255,13 +255,28 @@ impl Block {
         payload: &Payload,
         predecessors: &[BlockId],
     ) -> Vec<u8> {
+        // Hash the payload to keep the signed content compact.
+        let payload_hash = blake3::hash(&Self::payload_bytes(payload));
+        Self::signing_content_from_payload_hash(creator, seq, payload_hash.as_bytes(), predecessors)
+    }
+
+    /// The signing content reconstructed from an already-computed payload
+    /// hash. This is what makes a compact equivocation-evidence header
+    /// ([`crate::evidence::EvidenceHeader`]) verifiable WITHOUT the payload
+    /// (and without the lace): the header carries `(seq, payload_hash,
+    /// predecessors, signature)` and any verifier rebuilds the exact signed
+    /// bytes from it. Must stay byte-identical to [`Self::signing_content`].
+    pub(crate) fn signing_content_from_payload_hash(
+        creator: &[u8; 32],
+        seq: u64,
+        payload_hash: &[u8; 32],
+        predecessors: &[BlockId],
+    ) -> Vec<u8> {
         let mut buf = Vec::with_capacity(18 + 32 + 8 + 32 + predecessors.len() * 32);
         buf.extend_from_slice(b"dregg-blocklace-v1");
         buf.extend_from_slice(creator);
         buf.extend_from_slice(&seq.to_le_bytes());
-        // Hash the payload to keep the signed content compact.
-        let payload_hash = blake3::hash(&Self::payload_bytes(payload));
-        buf.extend_from_slice(payload_hash.as_bytes());
+        buf.extend_from_slice(payload_hash);
         for pred in predecessors {
             buf.extend_from_slice(&pred.0);
         }
@@ -269,7 +284,7 @@ impl Block {
     }
 
     /// Serialize a payload into bytes for hashing (deterministic).
-    fn payload_bytes(payload: &Payload) -> Vec<u8> {
+    pub(crate) fn payload_bytes(payload: &Payload) -> Vec<u8> {
         let mut buf = Vec::new();
         match payload {
             Payload::Turn(data) => {
