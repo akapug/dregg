@@ -78,6 +78,12 @@ pub mod beacon;
 #[cfg(test)]
 mod bls_quorum_diff;
 pub mod checkpoint;
+/// The adjudication court (ORGANS §5, CONSENSUS-FLEX §7 items 1–2): the witness-first
+/// equivocation court — the `validEquivocation` predicate atom over the blocklace's wire
+/// evidence value, the evidence→slash pipe into [`admission::AdmissionRegistry::slash`]
+/// (no-double-resolve via burned evidence digests), and the beacon-seeded council
+/// selection for the non-certifiable residue.
+pub mod court;
 /// Differential: the verified Lean `Dregg2.Distributed.CheckpointPrune` model ⟺ this crate's real
 /// checkpoint-prune arc (the `RetentionPolicy::would_prune` predicate transcribed from
 /// `node/src/config.rs`, the prune/recover keyset reconstruction, and the `Checkpoint::verify`
@@ -85,6 +91,14 @@ pub mod checkpoint;
 #[cfg(test)]
 mod checkpoint_prune_diff;
 pub mod cross_fed_bundle;
+/// Distributed key generation (Feldman/JF-DKG) + proactive resharing for the
+/// beacon committee — the upgrade `beacon`'s NOTES §1 names: share issuance
+/// with NO party ever holding `f(0)`, plus same-`f(0)` resharing for
+/// committee rotation. Outputs drop straight into [`beacon`]'s types
+/// (`BeaconCommittee` / `BeaconShare`), so `beacon_at` / `verify_beacon`
+/// work unchanged over DKG-derived keys. Round messages are transport-
+/// agnostic serde structs (the ceremony-as-cell-app lane rides them later).
+pub mod dkg;
 pub mod epoch;
 /// Differential: the verified Lean `Dregg2.Distributed.EpochReconfig` model ⟺ this crate's real
 /// `epoch` reconfiguration (quorum threshold, the member-set transform, and the no-safety-gap
@@ -110,6 +124,10 @@ pub mod types;
 // Re-export primary types.
 pub use admission::{
     AdmissionRegistry, Bond, EquivocationEvidence, StrandId as AdmissionStrandId, Vouch,
+};
+pub use court::{
+    CourtRefusal, CourtVerdict, EquivocationCourt, EquivocationEvidenceVerifier,
+    equivocation_predicate_vk, register_equivocation_court, seed_council,
 };
 pub use checkpoint::{
     Checkpoint, CheckpointError, DEFAULT_CHECKPOINT_INTERVAL, create_checkpoint,

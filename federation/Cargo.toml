@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# The adjudication court (`court.rs`): the equivocation-evidence wire value
+# lives where the lace retains it. blocklace has no dregg deps besides types,
+# so this edge introduces no cycle.
+dregg-blocklace = { path = "../blocklace" }
 dregg-captp = { path = "../captp" }
 dregg-cell = { path = "../cell" }
 dregg-commit = { path = "../commit" }

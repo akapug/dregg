@@ -239,6 +239,19 @@ impl BeaconCommittee {
         Ok((committee, shares))
     }
 
+    /// Crate-internal constructor for committees whose keys were issued by a
+    /// process OTHER than [`BeaconCommittee::deal`] — the DKG in
+    /// [`crate::dkg`] (the NOTES §1 upgrade: no party ever holds `f(0)`).
+    /// The verification surface (`verify_partial` / `aggregate` /
+    /// `verify_beacon`) is identical regardless of issuance.
+    pub(crate) fn from_parts(group_public: G1, share_publics: Vec<G1>, threshold: usize) -> Self {
+        Self {
+            group_public,
+            share_publics,
+            threshold,
+        }
+    }
+
     /// The group public key — all anyone needs to verify finished beacons.
     pub fn group_public(&self) -> &G1 {
         &self.group_public
@@ -365,6 +378,13 @@ impl BeaconCommittee {
 }
 
 impl BeaconShare {
+    /// Crate-internal constructor for shares issued WITHOUT the dealer
+    /// shortcut — the DKG finalization in [`crate::dkg`] sums verified
+    /// Feldman sub-shares into `f(index)` with no party ever holding `f(0)`.
+    pub(crate) fn from_parts(index: usize, secret: F) -> Self {
+        Self { index, secret }
+    }
+
     /// Produce this member's partial beacon signature for `(epoch, height)`:
     /// `H(BEACON_DOMAIN ‖ epoch ‖ height)^{f(index)}`. Deterministic — no
     /// per-signature randomness exists to grind.
