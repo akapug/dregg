@@ -279,3 +279,25 @@ fn proof_for_one_queue_refused_on_another() {
     assert!(verify_dequeue_proof(&proof_a));
     assert!(!verify_dequeue_proof_against(&proof_a, &qb.root()));
 }
+
+/// Zero-padding alias hardening: a proof smuggling a zero leaf into
+/// `remaining_leaves` must refuse, even though the pow2 padding alias
+/// (`merkle_root([a,b,c]) == merkle_root([a,b,c,0])`) would otherwise let
+/// the pre-root check pass while admitting a non-canonical post-root
+/// (proved in Lean: QueueRoot.refRoot_pad_alias / verifyDequeueStrict).
+#[test]
+fn zero_leaf_in_remaining_refuses() {
+    let (mut q, _) = three_entry_queue();
+    let (_, proof) = q.dequeue().unwrap();
+    assert!(verify_dequeue_proof(&proof), "honest proof verifies");
+
+    let mut forged = proof.clone();
+    forged.remaining_leaves.push([0u8; 32]);
+    // Fail-closed on the zero leaf alone, regardless of what roots the
+    // forger recomputes around the alias.
+    assert!(
+        !verify_dequeue_proof(&forged),
+        "zero-leaf smuggling must refuse"
+    );
+    assert!(!verify_dequeue_proof_against(&forged, &forged.old_root));
+}

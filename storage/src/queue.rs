@@ -452,6 +452,15 @@ fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
 /// also refuse replayed/stale proofs, verify against the known live root
 /// with [`verify_dequeue_proof_against`].
 pub fn verify_dequeue_proof(proof: &DequeueProof) -> bool {
+    // Zero leaves never occur as real entry commitments (hash_entry is a
+    // domain-tagged BLAKE3 digest) but DO alias the pow2 zero-padding:
+    // merkle_root([a,b,c]) == merkle_root([a,b,c,0]). A claimed zero leaf
+    // would let check (1) pass via the alias while check (2) admits a
+    // non-canonical post-root, diverging a tracked root from the live
+    // queue. (Lean: QueueRoot.verifyDequeueStrict / strict_dequeue_proof_pins.)
+    if proof.remaining_leaves.iter().any(|l| l == &[0u8; 32]) {
+        return false;
+    }
     // (1) old_root commits to [head leaf, remaining...].
     let head_leaf = hash_entry(&proof.entry);
     let mut old_leaves = Vec::with_capacity(1 + proof.remaining_leaves.len());
