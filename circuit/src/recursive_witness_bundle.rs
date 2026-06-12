@@ -43,7 +43,7 @@
 //! [`crate::effect_vm_p3_air::EffectVmShapeAir`] — the p3-air-compatible
 //! "Effect VM shape" AIR introduced in Block 2 of the Golden Vision
 //! recursion lane. It mirrors the real `EffectVmAir`'s column count
-//! (`EFFECT_VM_WIDTH = 105`), public-input count (`pi::BASE_COUNT`), and
+//! (`EFFECT_VM_WIDTH = 105`), public-input count (`pi::ACTIVE_BASE_COUNT`), and
 //! a structural subset of the constraints (selector booleanity, sum-to-one,
 //! NoOp passthrough, Transfer balance delta, chain continuity, boundary
 //! PI binding).
@@ -277,7 +277,7 @@ impl RecursiveProofProducer {
             .collect();
         let matrix = RowMajorMatrix::new(flat, width);
 
-        // The shape AIR consumes exactly the first BASE_COUNT slots of
+        // The shape AIR consumes exactly the first ACTIVE_BASE_COUNT slots of
         // the receipt's PI. The full receipt PI is wider (custom-effect
         // commitments); we truncate to the shape-AIR's declared width.
         let pi_for_air: Vec<BabyBear> = public_inputs[..EffectVmShapeAir::PUBLIC_INPUTS].to_vec();

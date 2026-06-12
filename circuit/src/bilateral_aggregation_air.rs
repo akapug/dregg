@@ -6,9 +6,9 @@
 //! match loop" into a single outer AIR whose public input is the reduced
 //! bundle-level summary. The outer trace has one row per inner per-cell proof
 //! (padded to a power of two). Each row carries that proof's complete
-//! `γ.2 BASE_COUNT = 74` PI vector lifted into trace columns, plus an
-//! identically-shaped "expected" projection derived from the bilateral
-//! schedule (`turn::bilateral_schedule::ExpectedBilateral::roots_for/counts_for`
+//! active PI v3 vector (`inner_pi::ACTIVE_BASE_COUNT` felts) lifted into trace
+//! columns, plus an identically-shaped "expected" projection derived from the
+//! bilateral schedule (`turn::bilateral_schedule::ExpectedBilateral::roots_for/counts_for`
 //! over the row's owner-cell). The AIR's constraints then enforce, in one
 //! algebraic pass, every check the Rust loop performs today:
 //!
@@ -101,10 +101,10 @@ use crate::field::BabyBear;
 // Outer-AIR column layout
 // ---------------------------------------------------------------------------
 
-/// Width of the inner PI buffer columns. Equal to the per-cell γ.2 base PI
-/// count (`74`). We lift the entire vector into the trace so every CG-2/CG-3
-/// constraint is a simple column equality.
-pub const PI_BUFFER_WIDTH: usize = inner_pi::BASE_COUNT;
+/// Width of the inner PI buffer columns. Equal to the active per-cell PI v3
+/// fixed count (`inner_pi::ACTIVE_BASE_COUNT`). We lift the entire vector into
+/// the trace so every CG-2/CG-3 constraint is a simple column equality.
+pub const PI_BUFFER_WIDTH: usize = inner_pi::ACTIVE_BASE_COUNT;
 
 /// Offset of the inner PI buffer (column 0).
 pub const PI_BUFFER_BASE: usize = 0;
@@ -587,13 +587,13 @@ impl StarkAir for BilateralAggregationAir {
 // ---------------------------------------------------------------------------
 
 /// One inner-proof row's worth of data: the cell's PI vector (length
-/// `BASE_COUNT = 74`) plus the prover-derived expected counts/roots block.
+/// `inner_pi::ACTIVE_BASE_COUNT`) plus the prover-derived expected counts/roots block.
 /// The prover holds the cell-id externally (used by the outer-PI
 /// agent_cell_id check and by the higher-level prover when looking up the
 /// schedule projection).
 #[derive(Clone, Debug)]
 pub struct AggregationInnerRow {
-    /// Full γ.2 per-cell PI buffer (length `inner_pi::BASE_COUNT`).
+    /// Full active per-cell PI v3 buffer (length `inner_pi::ACTIVE_BASE_COUNT`).
     pub inner_pi: Vec<BabyBear>,
     /// 7 expected counts in canonical order:
     /// `[outbound_transfer, inbound_transfer, outbound_grant, inbound_grant,
@@ -611,7 +611,7 @@ impl AggregationInnerRow {
     /// are zero.
     pub fn blank_padding() -> Self {
         Self {
-            inner_pi: vec![BabyBear::ZERO; inner_pi::BASE_COUNT],
+            inner_pi: vec![BabyBear::ZERO; inner_pi::ACTIVE_BASE_COUNT],
             expected_counts: [BabyBear::ZERO; 7],
             expected_roots: [[BabyBear::ZERO; 4]; 7],
         }
@@ -673,8 +673,8 @@ pub fn build_aggregation_trace(rows: &[AggregationInnerRow]) -> Vec<Vec<BabyBear
 
     for (i, row) in rows.iter().enumerate() {
         let mut t = vec![BabyBear::ZERO; AGG_WIDTH];
-        assert_eq!(row.inner_pi.len(), inner_pi::BASE_COUNT);
-        for j in 0..inner_pi::BASE_COUNT {
+        assert_eq!(row.inner_pi.len(), inner_pi::ACTIVE_BASE_COUNT);
+        for j in 0..inner_pi::ACTIVE_BASE_COUNT {
             t[PI_BUFFER_BASE + j] = row.inner_pi[j];
         }
         for k in 0..7 {
@@ -1236,7 +1236,7 @@ mod tests {
     use super::*;
 
     fn make_row(is_agent: bool) -> AggregationInnerRow {
-        let mut inner_pi = vec![BabyBear::ZERO; inner_pi::BASE_COUNT];
+        let mut inner_pi = vec![BabyBear::ZERO; inner_pi::ACTIVE_BASE_COUNT];
         inner_pi[inner_pi::IS_AGENT_CELL] = if is_agent {
             BabyBear::new(1)
         } else {

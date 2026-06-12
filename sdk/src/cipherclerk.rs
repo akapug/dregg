@@ -7290,7 +7290,7 @@ mod tests {
             .require_scope2_witness()
             .expect("scope-2 witness binds witness_hash");
         // PI carries the agent's projected bilateral role: one outbound transfer.
-        assert!(agent_wr.public_inputs.len() >= pi::BASE_COUNT);
+        assert!(agent_wr.public_inputs.len() >= pi::ACTIVE_BASE_COUNT);
         assert_eq!(
             agent_wr.public_inputs[pi::OUTBOUND_TRANSFER_COUNT],
             1,

@@ -234,15 +234,15 @@ pub fn prove_aggregated_bundle(
     let mut rows: Vec<AggregationInnerRow> = Vec::with_capacity(per_cell.len());
     let mut federation_ids_seen: Vec<[u8; 32]> = Vec::new();
     for (cid, wr) in per_cell {
-        if wr.public_inputs.len() < inner_pi::BASE_COUNT {
+        if wr.public_inputs.len() < inner_pi::ACTIVE_BASE_COUNT {
             return Err(TurnError::InvalidExecutionProof(format!(
-                "WR for cell {:?}: PI has {} entries, expected at least {} (γ.2 layout)",
+                "WR for cell {:?}: PI has {} entries, expected at least {} (PI v3 layout)",
                 cid,
                 wr.public_inputs.len(),
-                inner_pi::BASE_COUNT
+                inner_pi::ACTIVE_BASE_COUNT
             )));
         }
-        let inner_pi_vec: Vec<BabyBear> = wr.public_inputs[..inner_pi::BASE_COUNT]
+        let inner_pi_vec: Vec<BabyBear> = wr.public_inputs[..inner_pi::ACTIVE_BASE_COUNT]
             .iter()
             .map(|&v| BabyBear::new_canonical(v))
             .collect();
@@ -1002,7 +1002,7 @@ mod tests {
         let counts = sched.counts_for(cell_id);
         let roots = sched.roots_for(cell_id, turn.nonce);
 
-        let mut pi_bb = vec![BabyBear::ZERO; p::BASE_COUNT];
+        let mut pi_bb = vec![BabyBear::ZERO; p::ACTIVE_BASE_COUNT];
         // Populate turn-identity slots.
         let (th, eg, _, prev) = crate::executor::TurnExecutor::compute_turn_identity_pi(turn);
         for i in 0..4 {

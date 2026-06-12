@@ -154,6 +154,8 @@ pub enum UKey {
     DelegationSnapshot(CellId),
     /// The parent-side delegation epoch counter.
     DelegationEpoch(CellId),
+    /// The block height at which the cell's state was last committed.
+    CommittedHeight(CellId),
     /// The cell's permissions object.
     Permissions(CellId),
     /// The cell's verification key.
@@ -190,7 +192,8 @@ impl UKey {
             | UKey::RefcountTableRoot(_)
             | UKey::SystemRoot { .. }
             | UKey::HeapRoot(_)
-            | UKey::SovereignCommitment(_) => UDomain::Heap,
+            | UKey::SovereignCommitment(_)
+            | UKey::CommittedHeight(_) => UDomain::Heap,
             UKey::CapSlot { .. }
             | UKey::Delegate(_)
             | UKey::DelegationSnapshot(_)
@@ -222,6 +225,7 @@ impl UKey {
             | UKey::Delegate(c)
             | UKey::DelegationSnapshot(c)
             | UKey::DelegationEpoch(c)
+            | UKey::CommittedHeight(c)
             | UKey::Permissions(c)
             | UKey::VerificationKey(c)
             | UKey::Program(c) => Some(*c),
@@ -326,6 +330,10 @@ pub fn project_cell(cell: &Cell, out: &mut UProjection) {
         );
     }
     out.insert(UKey::HeapRoot(id), UVal::Bytes32(cell.state.heap_root));
+    out.insert(
+        UKey::CommittedHeight(id),
+        UVal::U64(cell.state.committed_height()),
+    );
     // -- caps domain planes --
     for cap in cell.capabilities.iter() {
         out.insert(
@@ -546,6 +554,10 @@ fn touches_of_entry(e: &JournalEntry) -> Vec<Touch> {
         JournalEntry::SetDelegationEpoch { cell, old_epoch } => vec![Touch::At(
             UKey::DelegationEpoch(*cell),
             Some(Some(UVal::U64(*old_epoch))),
+        )],
+        JournalEntry::SetCommittedHeight { cell, old_height } => vec![Touch::At(
+            UKey::CommittedHeight(*cell),
+            Some(Some(UVal::U64(*old_height))),
         )],
         JournalEntry::SetLifecycle {
             cell,

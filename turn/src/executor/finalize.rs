@@ -570,7 +570,9 @@ impl TurnExecutor {
                     // Verification key changes don't have a delta field currently;
                     // tracked via the cell's state.
                 }
-                JournalEntry::SetDelegation { .. } | JournalEntry::SetDelegationEpoch { .. } => {}
+                JournalEntry::SetDelegation { .. }
+                | JournalEntry::SetDelegationEpoch { .. }
+                | JournalEntry::SetCommittedHeight { .. } => {}
                 // Note/obligation/event/escrow entries don't affect the ledger delta directly.
                 // Obligation/escrow/nullifier insertion entries are rollback-only bookkeeping.
                 JournalEntry::NoteSpend { .. }
@@ -581,8 +583,8 @@ impl TurnExecutor {
                 // Lifecycle / capability narrowing: rollback-only — no
                 // separate LedgerDelta field today. On commit the cell's
                 // CellLifecycle / CapabilityRef change is read off the
-                // cell itself; verifiers re-execute against state
-                // commitment v2 which folds the lifecycle byte in (see
+                // cell itself; verifiers re-execute against the canonical
+                // commitment which folds the lifecycle byte in (see
                 // cell/src/commitment.rs).
                 JournalEntry::SetLifecycle { .. } | JournalEntry::AttenuateCapability { .. } => {}
             }

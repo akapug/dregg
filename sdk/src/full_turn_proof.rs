@@ -296,7 +296,8 @@ fn build_full_turn_descriptor(components: &TurnProofComponents) -> ComposedCircu
 /// descriptor wrapper for composition purposes. The VK hash is computed
 /// from the AIR's structural parameters.
 fn effect_vm_circuit_descriptor() -> CircuitDescriptor {
-    // The Effect VM has 61 columns, degree 9, and 7+ public inputs.
+    // The Effect VM has 61 columns, degree 9, and ACTIVE_BASE_COUNT public inputs
+    // in the PI v3 layout.
     // We create a minimal descriptor that captures its identity for VK hashing.
     CircuitDescriptor {
         name: "dregg-effect-vm-v1".into(),
@@ -305,7 +306,7 @@ fn effect_vm_circuit_descriptor() -> CircuitDescriptor {
         columns: vec![],     // Not needed for composition — VK hash suffices
         constraints: vec![], // Constraints are in the StarkAir impl
         boundaries: vec![],  // Boundaries are in the StarkAir impl
-        public_input_count: effect_vm::pi::BASE_COUNT,
+        public_input_count: effect_vm::pi::ACTIVE_BASE_COUNT,
         lookup_tables: vec![],
     }
 }
@@ -1238,7 +1239,7 @@ pub fn verify_full_turn_bound(
         .find(|sp| sp.label == "effect-vm")
         .ok_or(FullTurnVerifyError::MissingComponent("effect-vm".into()))?;
 
-    if effect_sub.sub_public_inputs.len() < effect_vm::pi::BASE_COUNT {
+    if effect_sub.sub_public_inputs.len() < effect_vm::pi::ACTIVE_BASE_COUNT {
         return Err(FullTurnVerifyError::MalformedPublicInputs(
             "effect VM PI too short".into(),
         ));

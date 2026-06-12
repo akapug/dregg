@@ -154,6 +154,18 @@ pub struct EffectVmContext {
     /// do not yet thread the owner id through; the off-AIR verifier supplies
     /// the same sentinel so the binding holds trivially).
     pub owner_cell_id: [u8; 32],
+
+    /// PI v3 (THE ROTATION): the block height at which this cell's state was
+    /// last committed. Bound to the canonical commitment as a commitment limb,
+    /// so the PI face cannot be prover-chosen. Zero default (legacy / fresh
+    /// cells) is a valid committed height.
+    pub committed_height: u64,
+    /// PI v3: rate-bound caveat tag. Semantics are staged: today this is the
+    /// zero sentinel; the optimistic-proving mode (#169) will populate it.
+    pub rate_bound_tag: u32,
+    /// PI v3: challenge-window caveat tag. Semantics are staged: today this is
+    /// the zero sentinel; the dispute/slashing mode (#169) will populate it.
+    pub challenge_window_tag: u32,
 }
 
 /// A single entry in the slot-caveat manifest (Cav-Codex Block 3).
@@ -213,6 +225,9 @@ impl Default for EffectVmContext {
             slot_caveat_manifest: [SlotCaveatEntry::zero(); pi::MAX_SLOT_CAVEATS],
             federation_id: [0u8; 32],
             owner_cell_id: [0u8; 32],
+            committed_height: 0,
+            rate_bound_tag: 0,
+            challenge_window_tag: 0,
         }
     }
 }
@@ -943,8 +958,8 @@ pub fn generate_effect_vm_trace_ext(
         pi::MAX_CUSTOM_EFFECTS_HARD_CAP,
     );
 
-    // Build public inputs in the Stage 1 widened layout (see `pi` module).
-    let pi_len = pi::BASE_COUNT + custom_count * pi::CUSTOM_ENTRY_SIZE;
+    // Build public inputs in the PI v3 layout (see `pi` module).
+    let pi_len = pi::ACTIVE_BASE_COUNT + custom_count * pi::CUSTOM_ENTRY_SIZE;
     let mut public_inputs = vec![BabyBear::ZERO; pi_len];
 
     // ---- Commitments (4 felts each) ----
@@ -1234,7 +1249,19 @@ pub fn generate_effect_vm_trace_ext(
             .write_to(&mut public_inputs[base..base + pi::SLOT_CAVEAT_ENTRY_SIZE]);
     }
 
-    // ---- Custom proof entries (PI layout v2: 8 vk + 4 commit per entry) ----
+    // ---- PI v3 tail (THE ROTATION) ----
+    //
+    // Surface the committed-height commitment limb and the staged caveat
+    // tags. The committed-height slot closes the temporal-gate anti-ghost
+    // tooth: the prover cannot choose a height because the canonical
+    // commitment already absorbed it. The tag slots are staged zero
+    // sentinels today; the optimistic-proving / dispute modes (#169) will
+    // populate them later.
+    public_inputs[pi::v3::COMMITTED_HEIGHT] = BabyBear::new((context.committed_height & 0x7FFF_FFFF) as u32);
+    public_inputs[pi::v3::RATE_BOUND_TAG] = BabyBear::new(context.rate_bound_tag);
+    public_inputs[pi::v3::CHALLENGE_WINDOW_TAG] = BabyBear::new(context.challenge_window_tag);
+
+    // ---- Custom proof entries (PI layout v3: 8 vk + 4 commit per entry) ----
     for (i, (vk_hash, proof_commit)) in custom_entries.iter().enumerate() {
         let base = pi::CUSTOM_PROOFS_BASE + i * pi::CUSTOM_ENTRY_SIZE;
         for j in 0..8 {

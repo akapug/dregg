@@ -9284,7 +9284,7 @@ mod gamma_2_bilateral_tests {
         let schedule = ExpectedBilateral::from_turn(turn);
         let counts = schedule.counts_for(cell);
         let roots = schedule.roots_for(cell, turn.nonce);
-        let mut pi = vec![BabyBear::ZERO; pi::BASE_COUNT];
+        let mut pi = vec![BabyBear::ZERO; pi::ACTIVE_BASE_COUNT];
         project_into_pi(&mut pi, &counts, &roots);
         pi[pi::IS_AGENT_CELL] = if cell == &turn.agent {
             BabyBear::new(1)

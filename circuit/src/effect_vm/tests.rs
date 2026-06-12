@@ -2143,7 +2143,7 @@ fn test_stage1_widened_pi_commitments_are_consistent() {
     // The 4-felt commitment slots must be present and non-zero (the
     // initial state has balance=1000, so the canonical commitment is
     // not the empty-tree sentinel).
-    assert_eq!(public_inputs.len(), pi::BASE_COUNT);
+    assert_eq!(public_inputs.len(), pi::ACTIVE_BASE_COUNT);
     for i in 0..pi::OLD_COMMIT_LEN {
         // Position 0 is the legacy 1-felt commitment; positions 1..3 are
         // 3 independent compressions of the same intermediates with
@@ -2604,12 +2604,14 @@ fn test_stage7_actor_nonce_trace_mismatch_rejected() {
 // dispatch keys reconstructed via `babybear8_to_bytes32` are distinct.
 
 #[test]
-fn test_vk_pi_layout_version_is_v2() {
+fn test_vk_pi_layout_version_is_v3() {
     // Sentinel for callers that gate on PI layout version: bumping this
     // constant should be a deliberate, audited PI-shape change.
-    assert_eq!(pi::VK_PI_LAYOUT_VERSION, 2);
+    assert_eq!(pi::VK_PI_LAYOUT_VERSION, 3);
     // Entry size after v2 widening: 8 vk + 4 commit.
     assert_eq!(pi::CUSTOM_ENTRY_SIZE, 12);
+    // Custom entries start after the 3-slot v3 tail.
+    assert_eq!(pi::CUSTOM_PROOFS_BASE, pi::ACTIVE_BASE_COUNT);
 }
 
 #[test]

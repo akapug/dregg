@@ -493,7 +493,7 @@ impl TurnExecutor {
                 }
             })?;
 
-            // Stage 1: reconstruct Effect VM PI in the widened layout
+            // Stage 1: reconstruct Effect VM PI in the PI v3 layout
             // (resolves REVIEW[effect-vm-coord]). Commitments are 4 felts
             // each; other PIs are forwarded from the proof and bound by
             // the AIR's boundary/transition constraints + the PI matching
@@ -502,12 +502,12 @@ impl TurnExecutor {
             let new_commit_4 = Self::commitment_to_4bb(&entry.new_commitment);
 
             use dregg_circuit::effect_vm::pi;
-            let min_pi_count = pi::BASE_COUNT;
+            let min_pi_count = pi::ACTIVE_BASE_COUNT;
             if proof.public_inputs.len() < min_pi_count {
                 return Err(AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
                     reason: format!(
-                        "proof has {} public inputs, expected at least {}",
+                        "proof has {} public inputs, expected at least {} (PI v3 layout)",
                         proof.public_inputs.len(),
                         min_pi_count
                     ),
@@ -797,18 +797,18 @@ impl TurnExecutor {
                 }
             })?;
 
-            // Stage 1: reconstruct Effect VM PI in the widened layout
+            // Stage 1: reconstruct Effect VM PI in the PI v3 layout
             // (resolves REVIEW[effect-vm-coord]).
             let old_commit_4 = Self::commitment_to_4bb(&entry.old_commitment);
             let new_commit_4 = Self::commitment_to_4bb(&entry.new_commitment);
 
             use dregg_circuit::effect_vm::pi;
-            let min_pi_count = pi::BASE_COUNT;
+            let min_pi_count = pi::ACTIVE_BASE_COUNT;
             if proof.public_inputs.len() < min_pi_count {
                 return Err(AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
                     reason: format!(
-                        "proof has {} public inputs, expected at least {}",
+                        "proof has {} public inputs, expected at least {} (PI v3 layout)",
                         proof.public_inputs.len(),
                         min_pi_count
                     ),

@@ -40,7 +40,7 @@ use dregg_circuit::effect_vm::{
 use dregg_circuit::field::BabyBear;
 
 fn pi_with_manifest(entries: &[SlotCaveatEntry]) -> Vec<BabyBear> {
-    let mut public_inputs = vec![BabyBear::ZERO; pi::BASE_COUNT];
+    let mut public_inputs = vec![BabyBear::ZERO; pi::ACTIVE_BASE_COUNT];
     let count = entries.len().min(pi::MAX_SLOT_CAVEATS);
     public_inputs[pi::SLOT_CAVEAT_COUNT] = BabyBear::new(count as u32);
     for (i, entry) in entries.iter().take(count).enumerate() {
@@ -330,7 +330,7 @@ fn unknown_type_tag_is_rejected() {
 
 #[test]
 fn count_above_max_is_rejected() {
-    let mut public_inputs = vec![BabyBear::ZERO; pi::BASE_COUNT];
+    let mut public_inputs = vec![BabyBear::ZERO; pi::ACTIVE_BASE_COUNT];
     public_inputs[pi::SLOT_CAVEAT_COUNT] = BabyBear::new(pi::MAX_SLOT_CAVEATS as u32 + 1);
     let initial = [BabyBear::ZERO; 8];
     let final_ = [BabyBear::ZERO; 8];

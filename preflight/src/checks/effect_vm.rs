@@ -240,10 +240,10 @@ fn check_effects_hash_commitment() -> Result<(), String> {
 fn check_net_delta_encoding() -> Result<(), String> {
     use dregg_circuit::effect_vm::pi;
 
-    // extract_net_delta requires a full pi::BASE_COUNT-length vector and
-    // reads mag/sign at pi::NET_DELTA_MAG / pi::NET_DELTA_SIGN.
+    // extract_net_delta requires a full active-layout PI vector and reads
+    // mag/sign at pi::NET_DELTA_MAG / pi::NET_DELTA_SIGN.
     fn make_public_inputs(mag: BabyBear, sign: BabyBear) -> Vec<BabyBear> {
-        let mut v = vec![BabyBear::ZERO; pi::BASE_COUNT];
+        let mut v = vec![BabyBear::ZERO; pi::ACTIVE_BASE_COUNT];
         v[pi::NET_DELTA_MAG] = mag;
         v[pi::NET_DELTA_SIGN] = sign;
         v
@@ -326,11 +326,11 @@ fn check_custom_dispatch() -> Result<(), String> {
 
     // Public inputs should contain the custom proof commitments.
     use dregg_circuit::effect_vm::pi;
-    if public_inputs.len() < pi::BASE_COUNT {
+    if public_inputs.len() < pi::ACTIVE_BASE_COUNT {
         return Err(format!(
             "public inputs too short: {}, expected >= {}",
             public_inputs.len(),
-            pi::BASE_COUNT
+            pi::ACTIVE_BASE_COUNT
         ));
     }
 

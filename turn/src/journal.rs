@@ -61,6 +61,8 @@ pub(crate) enum JournalEntry {
     },
     /// A cell's delegation_epoch was changed. Records the old epoch.
     SetDelegationEpoch { cell: CellId, old_epoch: u64 },
+    /// A cell's committed_height was changed. Records the old height.
+    SetCommittedHeight { cell: CellId, old_height: u64 },
     /// A note was spent (nullifier revealed). Marker for journal replay ordering;
     /// actual nullifier insertion is tracked via NoteNullifierInserted.
     NoteSpend,
@@ -200,6 +202,12 @@ impl LedgerJournal {
     pub fn record_set_delegation_epoch(&mut self, cell: CellId, old_epoch: u64) {
         self.entries
             .push(JournalEntry::SetDelegationEpoch { cell, old_epoch });
+    }
+
+    /// Record a committed_height change.
+    pub fn record_set_committed_height(&mut self, cell: CellId, old_height: u64) {
+        self.entries
+            .push(JournalEntry::SetCommittedHeight { cell, old_height });
     }
 
     /// Record a note spend (nullifier revealed). Actual nullifier insertion
@@ -347,6 +355,11 @@ impl LedgerJournal {
                 JournalEntry::SetDelegationEpoch { cell, old_epoch } => {
                     if let Some(c) = ledger.get_mut(&cell) {
                         c.state.set_delegation_epoch(old_epoch);
+                    }
+                }
+                JournalEntry::SetCommittedHeight { cell, old_height } => {
+                    if let Some(c) = ledger.get_mut(&cell) {
+                        c.state.set_committed_height(old_height);
                     }
                 }
                 // CRITICAL FIX: Remove nullifier insertions on rollback.
