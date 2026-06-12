@@ -40,6 +40,7 @@ import Dregg2.Circuit.Emit.EffectVmEmit
 import Dregg2.Circuit.Lookup
 import Dregg2.Substrate.Heap
 import Dregg2.Crypto.MemoryChecking
+import Dregg2.Crypto.UniversalMemory
 import Mathlib.Data.Multiset.Basic
 
 namespace Dregg2.Circuit.DescriptorIR2
@@ -91,6 +92,12 @@ inductive RowSemantics where
   | memAccess
   /-- One row per boundary reconciliation: a `(root, key, value, op, new_root)` sorted-map opening. -/
   | mapReconcile
+  /-- One row per UNIVERSAL state access: the domain-tagged `Option`-valued offline-checking
+  entry (`docs/UNIVERSAL-MEMORY.md` — the one Blum multiset over `Domain × κ`). -/
+  | umemAccess
+  /-- One row per declared universal address: the `(domain, key)` boundary image
+  (init/final `Option` cells), domain-major strictly increasing. -/
+  | umemBoundaryRow
   deriving Repr, DecidableEq
 
 /-- A declared table: id, display name, column arity, row semantics. -/
@@ -177,6 +184,41 @@ structure MemOp where
   kind       : MemoryChecking.Kind
   deriving Repr
 
+/-! ### The UNIVERSAL memory op (`docs/UNIVERSAL-MEMORY.md` — the one Blum multiset).
+
+A `UMemOp` is a state access against the unified `Domain × κ` address space
+(`Dregg2.Crypto.UniversalMemory.UAddr`): the address is the PAIR `(domain, key)` — the domain
+tag is carried as its own bus coordinate, so the abstract injectivity `(d, a) = (d, b) ↔ a = b`
+is wire-literal (no hashing at all, not even the boundary `addr = hash[domain, coll, key]`
+realization — strictly stronger). Cells are `Option`-valued: `(present, value)` with the
+canonical encoding `none ↦ (0, 0)`, `some v ↦ (1, v)` — which is what makes nullifier freshness
+ONE read row returning `none` (`nullifier_fresh_sound`), Merkle-path-free. -/
+
+/-- The wire code of a state domain (`UniversalMemory.Domain`): the five collections of the
+commitment layout. A FUTURE state component is a new code, never a new table. -/
+def domainCode : UniversalMemory.Domain → ℤ
+  | .registers => 0 | .heap => 1 | .caps => 2 | .nullifiers => 3 | .index => 4
+
+/-- Domain codes are collision-free on the wire. -/
+theorem domainCode_injective : Function.Injective domainCode := by
+  intro a b h
+  cases a <;> cases b <;> simp_all [domainCode]
+
+/-- A universal-memory access row: the offline-checking instrumentation against the
+domain-tagged address space, with `Option`-valued cells as `(present, value)` pairs.
+`guard` gates the contribution; the op's own serial is positional (like `MemOp`). -/
+structure UMemOp where
+  guard       : EmittedExpr
+  domain      : UniversalMemory.Domain
+  key         : EmittedExpr
+  present     : EmittedExpr
+  value       : EmittedExpr
+  prevPresent : EmittedExpr
+  prevValue   : EmittedExpr
+  prevSerial  : EmittedExpr
+  kind        : MemoryChecking.Kind
+  deriving Repr
+
 /-- Map reconciliation kind: a membership read, a non-membership read, or a (sorted insert-or-
 update) write. -/
 inductive MapOpKind where
@@ -198,12 +240,15 @@ structure MapOp where
   op      : MapOpKind
   deriving Repr
 
-/-- The v2 constraint: v1 embedded whole, plus the three new kinds. -/
+/-- The v2 constraint: v1 embedded whole, plus the three new kinds — and the UNIVERSAL memory
+op (`umemOp`, additive: no shipped descriptor emits it until the rotation; the wire and the
+interpreter carry it recursion-gated, exactly like the rest of IR-v2). -/
 inductive VmConstraint2 where
   | base   (c : VmConstraint)
   | lookup (l : Lookup)
   | memOp  (m : MemOp)
   | mapOp  (m : MapOp)
+  | umemOp (m : UMemOp)
   deriving Repr
 
 /-- The v2 descriptor: name, main-trace width, PI count, the declared tables, the constraints,
@@ -375,14 +420,15 @@ def mapLog (d : EffectVmDescriptor2) (t : VmTrace) : Table :=
     (mapOpsOf d).filterMap fun m =>
       if m.guard.eval a = 1 then some (m.rowAt a) else none
 
-/-- Per-row meaning of one v2 constraint. (`memOp` is `True` here: its content is the GLOBAL
-multiset legs of `Satisfied2`, not a row-local equation.) -/
+/-- Per-row meaning of one v2 constraint. (`memOp`/`umemOp` are `True` here: their content is
+the GLOBAL multiset legs of `Satisfied2`/`Satisfied2U`, not a row-local equation.) -/
 def VmConstraint2.holdsAt (hash : List ℤ → ℤ) (tf : TraceFamily) (env : VmRowEnv)
     (isFirst isLast : Bool) : VmConstraint2 → Prop
   | .base c   => c.holdsVm env isFirst isLast
   | .lookup l => l.holdsAt tf env
   | .memOp _  => True
   | .mapOp m  => m.holdsAt hash env
+  | .umemOp _ => True
 
 /-- **The v2 denotation.** A multi-table witness satisfies a v2 descriptor (relative to the
 declared memory boundary: initial image `minit`, claimed final image `mfin`, declared address
@@ -413,6 +459,178 @@ theorem satisfied2_mem_consistent (hash : List ℤ → ℤ) (d : EffectVmDescrip
     (h : Satisfied2 hash d minit mfin maddrs t) :
     MemoryChecking.Consistent minit (memLog d t) :=
   MemoryChecking.memcheck_sound h.memAddrsNodup h.memClosed h.memDisciplined h.memBalanced
+
+/-! ## §6b — `Satisfied2U`: the UNIVERSAL-memory denotation (the one-Blum-multiset leg).
+
+`docs/UNIVERSAL-MEMORY.md`, realized at the IR: a descriptor's `umemOp`s gather into ONE log
+over the `Domain × κ` address space with `Option ℤ` cells, certified by ONE balance against a
+declared universal boundary `(uinit, ufin, uaddrs)`. The keystones are direct applications of
+the PROVED `Dregg2.Crypto.UniversalMemory` results:
+
+  * `satisfied2U_umem_sound` — `universal_memory_sound`: the whole log is consistent AND every
+    domain's projection is a consistent standalone memory (registers + heap + caps +
+    nullifiers + index, one argument, zero intra-proof hashing);
+  * `satisfied2U_pins_final` — `memcheck_pins_final`: the claimed final column is FORCED;
+  * `satisfied2U_boundary_root` — `boundary_root_from_memcheck`: the per-domain map root
+    derived from the (pinned) final column EQUALS today's committed map root — the map roots
+    are DERIVED BOUNDARY VIEWS, by canonicity, no crypto;
+  * `satisfied2U_nullifier_fresh` — `nullifier_fresh_sound`: a read returning `none` at
+    `(nullifiers, x)` proves initial absence AND no intra-proof insert — NO Merkle path, NO gap
+    opening, NO hashing intra-proof. (The gap machinery survives exactly at the boundary: the
+    `absent` map-op authenticates the loaded initial view against the incoming root, once per
+    touched address per proof — `nullifier_fresh_binds_root`'s composition.)
+
+The insert-only discipline (`InsertOnlyAt` — nobody un-spends) is a DENOTATION leg
+(`umemNullifierInsertOnly`), realized in-table by the interpreter: a nullifier-domain write
+installing `none` is refused in-circuit. -/
+
+/-- Decode a `(present, value)` column pair to the `Option` cell: `present = 1 ↦ some value`,
+anything else `↦ none` (the table AIR pins `present` boolean and `none ↦ value = 0`). -/
+def optOf (p v : ℤ) : Option ℤ := if p = 1 then some v else none
+
+/-- The present bit of the canonical `Option` encoding. -/
+def presentBit : Option ℤ → ℤ
+  | none => 0 | some _ => 1
+
+/-- The payload of the canonical `Option` encoding (`none ↦ 0`). -/
+def payloadOf : Option ℤ → ℤ
+  | none => 0 | some v => v
+
+@[simp] theorem optOf_roundtrip (o : Option ℤ) : optOf (presentBit o) (payloadOf o) = o := by
+  cases o <;> simp [optOf, presentBit, payloadOf]
+
+/-- A gathered universal-memory operation: the proved model's op over the domain-tagged
+address space with `Option` cells. -/
+abbrev UMemTraceOp := MemoryChecking.Op (UniversalMemory.UAddr ℤ) (Option ℤ)
+
+/-- Evaluate a `UMemOp` on a row: `some` instrumented op when the guard fires. The address is
+the literal pair `(domain, key)` — the tag is a separate coordinate, injective for free. -/
+def UMemOp.opAt? (a : Assignment) (m : UMemOp) : Option UMemTraceOp :=
+  if m.guard.eval a = 1 then
+    some ⟨m.kind, (m.domain, m.key.eval a),
+          optOf (m.present.eval a) (m.value.eval a),
+          optOf (m.prevPresent.eval a) (m.prevValue.eval a),
+          (m.prevSerial.eval a).toNat⟩
+  else none
+
+/-- The universal-memory ops a descriptor declares. -/
+def umemOpsOf (d : EffectVmDescriptor2) : List UMemOp :=
+  d.constraints.filterMap fun c => match c with | .umemOp m => some m | _ => none
+
+/-- The gathered universal-memory log: every main row's guarded `umemOp` entries, in trace
+order (positional serials number EXACTLY this order). -/
+def umemLog (d : EffectVmDescriptor2) (t : VmTrace) : List UMemTraceOp :=
+  t.rows.flatMap fun a => (umemOpsOf d).filterMap (UMemOp.opAt? a)
+
+/-- The universal-memory table row of an op:
+`[domain, key, present, value, prev_present, prev_value, prev_serial, kind]`. -/
+def uopRow (op : UMemTraceOp) : List ℤ :=
+  [domainCode op.addr.1, op.addr.2,
+   presentBit op.val, payloadOf op.val,
+   presentBit op.prevVal, payloadOf op.prevVal,
+   (op.prevSerial : ℤ), kindCode op.kind]
+
+/-- The trace-family slot of the universal memory table (`custom 1`, wire id 6; the submask
+table is `custom 0`, wire id 5). -/
+def UMEM_TID : Nat := 1
+
+/-- **The universal-memory denotation** — `Satisfied2` PLUS the one-Blum-multiset legs against
+the declared universal boundary (initial image `uinit`, claimed final image `ufin`, declared
+address list `uaddrs`, all over `Domain × κ`). -/
+structure Satisfied2U (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (uinit : UniversalMemory.UAddr ℤ → Option ℤ)
+    (ufin : UniversalMemory.UAddr ℤ → Option ℤ × Nat)
+    (uaddrs : List (UniversalMemory.UAddr ℤ)) (t : VmTrace) : Prop
+    extends Satisfied2 hash d minit mfin maddrs t where
+  umemAddrsNodup : uaddrs.Nodup
+  umemClosed : ∀ op ∈ umemLog d t, op.addr ∈ uaddrs
+  umemDisciplined : MemoryChecking.Disciplined (umemLog d t)
+  umemBalanced : MemoryChecking.MemCheck uinit ufin uaddrs (umemLog d t)
+  umemNullifierInsertOnly : ∀ op ∈ umemLog d t,
+    op.addr.1 = UniversalMemory.Domain.nullifiers → op.kind = .write → op.val ≠ none
+  umemTableFaithful : t.tf (.custom UMEM_TID) = (umemLog d t).map uopRow
+
+/-- **ONE balance covers every domain — `universal_memory_sound` applied.** A `Satisfied2U`
+witness's universal log is consistent, and EVERY domain's projection — stripped to a standalone
+κ-addressed memory — is consistent from that domain's slice of the initial image. Registers,
+heap, caps, nullifiers, index: one memory argument, zero intra-proof hashing. -/
+theorem satisfied2U_umem_sound (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
+    {uinit : UniversalMemory.UAddr ℤ → Option ℤ}
+    {ufin : UniversalMemory.UAddr ℤ → Option ℤ × Nat}
+    {uaddrs : List (UniversalMemory.UAddr ℤ)} {t : VmTrace}
+    (h : Satisfied2U hash d minit mfin maddrs uinit ufin uaddrs t) :
+    MemoryChecking.Consistent uinit (umemLog d t) ∧
+      ∀ dm : UniversalMemory.Domain,
+        MemoryChecking.Consistent (fun a => uinit (dm, a))
+          ((UniversalMemory.domTrace dm (umemLog d t)).map UniversalMemory.stripOp) :=
+  UniversalMemory.universal_memory_sound
+    h.umemAddrsNodup h.umemClosed h.umemDisciplined h.umemBalanced
+
+/-- **The claimed final column is FORCED — `memcheck_pins_final` applied.** Every declared
+universal address's final claim equals the genuine fold of the log: the boundary views are
+derived from a forced column, not a chosen one. -/
+theorem satisfied2U_pins_final (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
+    {uinit : UniversalMemory.UAddr ℤ → Option ℤ}
+    {ufin : UniversalMemory.UAddr ℤ → Option ℤ × Nat}
+    {uaddrs : List (UniversalMemory.UAddr ℤ)} {t : VmTrace}
+    (h : Satisfied2U hash d minit mfin maddrs uinit ufin uaddrs t) :
+    ∀ a ∈ uaddrs, (ufin a).1 = ((umemLog d t).foldl MemoryChecking.step uinit) a :=
+  UniversalMemory.memcheck_pins_final
+    h.umemAddrsNodup h.umemClosed h.umemDisciplined h.umemBalanced
+
+/-- **The map roots are DERIVED boundary views — `boundary_root_from_memcheck` applied.** For
+any map domain `dm`: if today's committed map `hmap` has the lookup semantics of the genuine
+post-state over the touched keys `as` (declared, sorted), then today's root EQUALS the
+sorted-Poseidon2 root of the boundary view derived from the prover's claimed final column —
+because the claims are pinned. Materializing roots at the boundary is a refactor, not a
+semantic change. -/
+theorem satisfied2U_boundary_root (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    (dm : UniversalMemory.Domain)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
+    {uinit : UniversalMemory.UAddr ℤ → Option ℤ}
+    {ufin : UniversalMemory.UAddr ℤ → Option ℤ × Nat}
+    {uaddrs : List (UniversalMemory.UAddr ℤ)} {t : VmTrace}
+    {hmap : Heap.FeltHeap} {as : List ℤ}
+    (h : Satisfied2U hash d minit mfin maddrs uinit ufin uaddrs t)
+    (hs : Heap.SortedKeys hmap) (has : as.Pairwise (· < ·))
+    (hda : ∀ a ∈ as, (dm, a) ∈ uaddrs)
+    (hsem : ∀ a : ℤ, Heap.get hmap a
+      = if a ∈ as then ((umemLog d t).foldl MemoryChecking.step uinit) (dm, a) else none) :
+    Heap.root hash hmap
+      = Heap.root hash (UniversalMemory.boundaryCells (fun a => (ufin (dm, a)).1) as) :=
+  UniversalMemory.boundary_root_from_memcheck hash dm
+    h.umemAddrsNodup h.umemClosed h.umemDisciplined h.umemBalanced hs has hda hsem
+
+/-- **THE NULLIFIER WIN at the IR — `nullifier_fresh_sound` applied.** In a `Satisfied2U`
+witness whose universal log splits around a guarded read returning `none` at
+`(nullifiers, x)`, the read PROVES: `x` was absent from the proof's initial nullifier view,
+and no earlier op in this proof inserted it. The insert-only side condition is the
+denotation's own `umemNullifierInsertOnly` leg, restricted to the prefix. ONE memory-read row;
+no Merkle path, no gap opening, no hashing intra-proof. -/
+theorem satisfied2U_nullifier_fresh (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
+    {uinit : UniversalMemory.UAddr ℤ → Option ℤ}
+    {ufin : UniversalMemory.UAddr ℤ → Option ℤ × Nat}
+    {uaddrs : List (UniversalMemory.UAddr ℤ)} {t : VmTrace}
+    {pre post : List UMemTraceOp} {rop : UMemTraceOp} {x : ℤ}
+    (h : Satisfied2U hash d minit mfin maddrs uinit ufin uaddrs t)
+    (hsplit : umemLog d t = pre ++ rop :: post)
+    (hread : rop.kind = .read)
+    (haddr : rop.addr = (UniversalMemory.Domain.nullifiers, x))
+    (hnone : rop.val = none) :
+    uinit (UniversalMemory.Domain.nullifiers, x) = none ∧
+      ∀ op ∈ pre, op.addr = (UniversalMemory.Domain.nullifiers, x) → op.kind ≠ .write := by
+  have hio : UniversalMemory.InsertOnlyAt (UniversalMemory.Domain.nullifiers, x) pre := by
+    intro op hop haddr' hk
+    exact h.umemNullifierInsertOnly op
+      (by rw [hsplit]; exact List.mem_append_left _ hop) (by rw [haddr']) hk
+  have hcons : MemoryChecking.Consistent uinit (pre ++ rop :: post) := by
+    rw [← hsplit]
+    exact (satisfied2U_umem_sound hash d h).1
+  exact UniversalMemory.nullifier_fresh_sound hcons hread haddr hnone hio
 
 /-! ### The v1 embedding is FAITHFUL. -/
 
@@ -685,11 +903,21 @@ def chipParamsJson : String :=
 
 /-- The row-semantics wire tag. -/
 def RowSemantics.tag : RowSemantics → String
-  | .mainRow      => "main"
-  | .permutation  => "poseidon2_chip"
-  | .rangeLimb _  => "range"
-  | .memAccess    => "memory"
-  | .mapReconcile => "map_ops"
+  | .mainRow         => "main"
+  | .permutation     => "poseidon2_chip"
+  | .rangeLimb _     => "range"
+  | .memAccess       => "memory"
+  | .mapReconcile    => "map_ops"
+  | .umemAccess      => "umemory"
+  | .umemBoundaryRow => "umem_boundary"
+
+/-- The universal memory table: one row per universal state access
+(`[domain, key, present, value, prev_present, prev_value, prev_serial, kind]` = `uopRow`). -/
+def umemTableDef : TableDef := ⟨.custom UMEM_TID, "umemory", 8, .umemAccess⟩
+
+/-- The universal boundary table: one row per declared `(domain, key)` address
+(`[domain, key, init_present, init_value, fin_present, fin_value, fin_serial]`). -/
+def umemBoundaryTableDef : TableDef := ⟨.custom 2, "umem_boundary", 7, .umemBoundaryRow⟩
 
 /-- Render one table definition (range carries its `bits`; the chip carries its params). -/
 def TableDef.toJson (td : TableDef) : String :=
@@ -722,12 +950,23 @@ def MapOp.toJson (m : MapOp) : String :=
   ",\"root\":" ++ m.root.toJson ++ ",\"key\":" ++ m.key.toJson ++
   ",\"value\":" ++ m.value.toJson ++ ",\"new_root\":" ++ m.newRoot.toJson ++ "}"
 
+/-- Render one universal-memory op (the domain-tagged `Option`-valued instrumented row). -/
+def UMemOp.toJson (m : UMemOp) : String :=
+  "{\"t\":\"umem_op\",\"kind\":\"" ++ kindTag m.kind ++
+  "\",\"domain\":" ++ toString (domainCode m.domain) ++
+  ",\"guard\":" ++ m.guard.toJson ++ ",\"key\":" ++ m.key.toJson ++
+  ",\"present\":" ++ m.present.toJson ++ ",\"value\":" ++ m.value.toJson ++
+  ",\"prev_present\":" ++ m.prevPresent.toJson ++
+  ",\"prev_value\":" ++ m.prevValue.toJson ++
+  ",\"prev_serial\":" ++ m.prevSerial.toJson ++ "}"
+
 /-- Render one v2 constraint (the v1 forms reuse the v1 renderer byte-for-byte). -/
 def VmConstraint2.toJson : VmConstraint2 → String
   | .base c   => c.toJson
   | .lookup l => l.toJson
   | .memOp m  => m.toJson
   | .mapOp m  => m.toJson
+  | .umemOp m => m.toJson
 
 /-- **`emitVmJson2`** — the canonical v2 wire string: versioned (`"ir":2`), tables declared,
 constraints in v2 grammar, v1 hash-site/range carriers preserved. -/
@@ -797,7 +1036,151 @@ def demoV2 : EffectVmDescriptor2 :=
 -- The embedded-v1 face is inert: no mem ops, no map ops.
 #guard (memOpsOf (embedV1 { name := "n", traceWidth := 1, piCount := 0, constraints := [.transition 0 0], hashSites := [], ranges := [] })).length == 0
 
+/-! ### §10b — the UNIVERSAL-memory demo: wire golden + non-vacuity + the keystone fired.
+
+`demoU` exercises the `umemOp` kind across TWO domains in ONE table: a nullifier insert, a
+nullifier FRESHNESS read (present = 0 — `none`, no Merkle path), and a register write. The
+trace, boundary and `Satisfied2U` witness are constructed CONCRETELY below, and
+`satisfied2U_nullifier_fresh` fires on them end-to-end — nothing vacuous in the pipeline. -/
+
+/-- The umem demo descriptor: nullifier insert (key `col 0`) · nullifier freshness read
+(key `col 1`) · register write (key `col 2`, value `col 3`). -/
+def demoU : EffectVmDescriptor2 :=
+  { name := "demo-umem", traceWidth := 4, piCount := 0
+  , tables := [mainTableDef 4, umemTableDef, umemBoundaryTableDef]
+  , constraints :=
+      [ .umemOp ⟨.const 1, .nullifiers, .var 0, .const 1, .const 1,
+                 .const 0, .const 0, .const 0, .write⟩
+      , .umemOp ⟨.const 1, .nullifiers, .var 1, .const 0, .const 0,
+                 .const 0, .const 0, .const 0, .read⟩
+      , .umemOp ⟨.const 1, .registers, .var 2, .const 1, .var 3,
+                 .const 0, .const 0, .const 0, .write⟩ ]
+  , hashSites := [], ranges := [] }
+
+-- THE UMEM WIRE GOLDEN: the canonical JSON of the umem grammar, byte-pinned (the Rust
+-- `descriptor_ir2.rs` decoder's `umem_op` arm + `umemory`/`umem_boundary` table sems parse
+-- THIS string's grammar; mirrored as `DEMO_UMEM` in its tests).
+#guard emitVmJson2 demoU ==
+  "{\"name\":\"demo-umem\",\"ir\":2,\"trace_width\":4,\"public_input_count\":0,\"tables\":[{\"id\":0,\"name\":\"main\",\"arity\":4,\"sem\":\"main\"},{\"id\":6,\"name\":\"umemory\",\"arity\":8,\"sem\":\"umemory\"},{\"id\":7,\"name\":\"umem_boundary\",\"arity\":7,\"sem\":\"umem_boundary\"}],\"constraints\":[{\"t\":\"umem_op\",\"kind\":\"write\",\"domain\":3,\"guard\":{\"t\":\"const\",\"v\":1},\"key\":{\"t\":\"var\",\"v\":0},\"present\":{\"t\":\"const\",\"v\":1},\"value\":{\"t\":\"const\",\"v\":1},\"prev_present\":{\"t\":\"const\",\"v\":0},\"prev_value\":{\"t\":\"const\",\"v\":0},\"prev_serial\":{\"t\":\"const\",\"v\":0}},{\"t\":\"umem_op\",\"kind\":\"read\",\"domain\":3,\"guard\":{\"t\":\"const\",\"v\":1},\"key\":{\"t\":\"var\",\"v\":1},\"present\":{\"t\":\"const\",\"v\":0},\"value\":{\"t\":\"const\",\"v\":0},\"prev_present\":{\"t\":\"const\",\"v\":0},\"prev_value\":{\"t\":\"const\",\"v\":0},\"prev_serial\":{\"t\":\"const\",\"v\":0}},{\"t\":\"umem_op\",\"kind\":\"write\",\"domain\":0,\"guard\":{\"t\":\"const\",\"v\":1},\"key\":{\"t\":\"var\",\"v\":2},\"present\":{\"t\":\"const\",\"v\":1},\"value\":{\"t\":\"var\",\"v\":3},\"prev_present\":{\"t\":\"const\",\"v\":0},\"prev_value\":{\"t\":\"const\",\"v\":0},\"prev_serial\":{\"t\":\"const\",\"v\":0}}],\"hash_sites\":[],\"ranges\":[]}"
+
+-- The new table ids stay collision-free with the five EPOCH ids + the submask table (5).
+#guard ([TableId.main, .poseidon2, .range, .memory, .mapOps, .custom 0,
+         .custom UMEM_TID, .custom 2].map TableId.wireId).dedup.length == 8
+
+-- The Option cell encoding round-trips, both polarities.
+#guard optOf (presentBit (some (42 : ℤ))) (payloadOf (some 42)) == some 42
+#guard optOf (presentBit (none : Option ℤ)) (payloadOf (none : Option ℤ)) == none
+#guard optOf 0 0 == (none : Option ℤ)
+#guard optOf 1 0 == some (0 : ℤ)
+
+/-- The demo main row: nullifier 7 inserted, nullifier 9 freshness-checked, register 0 ← 42. -/
+def demoURow : Assignment := fun i =>
+  if i = 0 then 7 else if i = 1 then 9 else if i = 2 then 0 else if i = 3 then 42 else 0
+
+/-- The demo multi-table witness: one main row; the umem table carries exactly the gathered
+log's rows; every other table empty. -/
+def demoUTrace : VmTrace :=
+  { rows := [demoURow], pub := zeroAsg
+  , tf := fun tid => match tid with
+      | .custom 1 => [[3, 7, 1, 1, 0, 0, 0, 1], [3, 9, 0, 0, 0, 0, 0, 0],
+                      [0, 0, 1, 42, 0, 0, 0, 1]]
+      | _ => [] }
+
+/-- The demo universal boundary: everything starts absent/unset. -/
+def uinitU : UniversalMemory.UAddr ℤ → Option ℤ := fun _ => none
+
+/-- The demo final claims (value, last-touch serial). -/
+def ufinU : UniversalMemory.UAddr ℤ → Option ℤ × Nat := fun a =>
+  if a = (UniversalMemory.Domain.nullifiers, 7) then (some 1, 1)
+  else if a = (UniversalMemory.Domain.nullifiers, 9) then (none, 2)
+  else if a = (UniversalMemory.Domain.registers, 0) then (some 42, 3)
+  else (none, 0)
+
+/-- The demo declared universal addresses. -/
+def uaddrsU : List (UniversalMemory.UAddr ℤ) :=
+  [(.nullifiers, 7), (.nullifiers, 9), (.registers, 0)]
+
+-- The gathered umem log balances (ONE check), is disciplined, and is consistent — and its
+-- nullifier projection too (the executable shadow of the keystones, AT the IR).
+#guard decide (MemoryChecking.Disciplined (umemLog demoU demoUTrace))
+#guard decide (MemoryChecking.MemCheck uinitU ufinU uaddrsU (umemLog demoU demoUTrace))
+#guard decide (MemoryChecking.Consistent uinitU (umemLog demoU demoUTrace))
+#guard decide (MemoryChecking.Consistent (fun a => uinitU (.nullifiers, a))
+  ((UniversalMemory.domTrace .nullifiers (umemLog demoU demoUTrace)).map
+    UniversalMemory.stripOp))
+
+-- NEGATIVE polarity at the IR: re-keying the freshness read onto the INSERTED nullifier
+-- (col 1 ↦ 7) is the intra-proof double spend — the gathered log is INCONSISTENT, and no
+-- final claim can balance it (`UniversalMemory.lean` §6 carries the balance refusals).
+def demoURowDouble : Assignment := fun i =>
+  if i = 0 then 7 else if i = 1 then 7 else if i = 2 then 0 else if i = 3 then 42 else 0
+#guard decide (¬ MemoryChecking.Consistent uinitU
+  (umemLog demoU { demoUTrace with rows := [demoURowDouble] }))
+
+/-- The demo `Satisfied2U` witness, fully constructed — every leg discharged concretely (the
+row constraints are the global-content kinds; the multiset legs are `decide`-level facts). -/
+theorem demoU_satisfied :
+    Satisfied2U (fun _ => 0) demoU (fun _ => 0) (fun _ => ((0 : ℤ), 0)) []
+      uinitU ufinU uaddrsU demoUTrace := by
+  refine ⟨⟨?_, ?_, ?_, List.nodup_nil, ?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- rowConstraints: every constraint is an `umemOp` (global content ⇒ row-locally True)
+    intro i hi c hc
+    simp only [demoU, List.mem_cons, List.not_mem_nil, or_false] at hc
+    rcases hc with rfl | rfl | rfl <;> trivial
+  · -- rowHashes: no hash sites
+    intro i hi
+    trivial
+  · -- rowRanges: no ranges
+    intro i hi r hr
+    simp [demoU] at hr
+  · -- memClosed: the flat memory log is empty
+    intro op hop
+    rw [show memLog demoU demoUTrace = [] from rfl] at hop
+    cases hop
+  · -- memDisciplined
+    rw [show memLog demoU demoUTrace = [] from rfl]
+    exact by decide
+  · -- memBalanced
+    rw [show memLog demoU demoUTrace = [] from rfl]
+    exact memCheck_nil _ _
+  · -- memTableFaithful
+    rfl
+  · -- mapTableFaithful
+    rfl
+  · -- umemAddrsNodup
+    exact by decide
+  · -- umemClosed
+    exact by decide
+  · -- umemDisciplined
+    exact by decide
+  · -- umemBalanced
+    exact by decide
+  · -- umemNullifierInsertOnly
+    exact by decide
+  · -- umemTableFaithful
+    rfl
+
+-- THE NULLIFIER KEYSTONE, fired end-to-end on the demo witness: the freshness read (log
+-- position 2) PROVES nullifier 9 absent from the initial view AND never inserted in the
+-- prefix — one memory row, no Merkle path, every hypothesis concrete.
+example :
+    uinitU (UniversalMemory.Domain.nullifiers, 9) = none ∧
+      ∀ op ∈ ([⟨.write, (.nullifiers, 7), some 1, none, 0⟩] : List UMemTraceOp),
+        op.addr = (UniversalMemory.Domain.nullifiers, 9) → op.kind ≠ .write :=
+  satisfied2U_nullifier_fresh (fun _ => 0) demoU demoU_satisfied
+    (pre := [⟨.write, (.nullifiers, 7), some 1, none, 0⟩])
+    (post := [⟨.write, (.registers, 0), some 42, none, 0⟩])
+    (rop := ⟨.read, (.nullifiers, 9), none, none, 0⟩)
+    rfl rfl rfl rfl
+
 #assert_axioms TableId.wireId_injective
+#assert_axioms domainCode_injective
+#assert_axioms optOf_roundtrip
+#assert_axioms satisfied2U_umem_sound
+#assert_axioms satisfied2U_pins_final
+#assert_axioms satisfied2U_boundary_root
+#assert_axioms satisfied2U_nullifier_fresh
+#assert_axioms demoU_satisfied
 #assert_axioms opensTo_functional
 #assert_axioms opensTo_some_excludes_none
 #assert_axioms writesTo_functional

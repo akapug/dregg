@@ -57,15 +57,43 @@
 //! `mapTableFaithful`+`opensTo`/`writesTo`). Which wires are constrained is entirely the
 //! descriptor's (= Lean's) choice.
 //!
+//! Two ADDITIVE table families ride the same batch, recursion-gated like everything here,
+//! committed only when a descriptor uses them (`docs/UNIVERSAL-MEMORY.md` /
+//! `docs/UNIVERSAL-MAP-ROTATION.md` §2.2):
+//!
+//!   * **map-absent** — one row per `map_op` kind `absent`: the bracketed sorted-gap
+//!     NON-MEMBERSHIP opening (Lean `opensTo … none` via `opensTo_none_of_gap`): two
+//!     membership paths at ADJACENT leaf positions under the same root, with
+//!     `lo_addr < key < hi_addr` enforced by canonical-BabyBear-decomposition lexicographic
+//!     comparators (`key = hi4·2^27 + lo27`, unique by the `is15·lo27 = 0` tooth since
+//!     `p − 1 = 15·2^27` — full-felt hash-image keys order soundly). This is the
+//!     once-per-touched-address boundary leg of `nullifier_fresh_binds_root`.
+//!   * **umemory + umem-boundary** — the UNIVERSAL memory: `umem_op` constraints address the
+//!     `Domain × κ` space as a literal `(domain, key)` pair with `Option`-valued cells
+//!     `(present, value)`; ONE Blum multiset covers every domain
+//!     (`UniversalMemory.universal_memory_sound`), with ZERO intra-proof hashing — a
+//!     umem-only descriptor commits NO chip table (measured: a write+read-back is 67.6 KiB
+//!     against 128.7 KiB for the same write as a boundary map op). Nullifier freshness is
+//!     ONE read row with `present = 0` (`nullifier_fresh_sound` — no Merkle path, no gap
+//!     opening); the nullifier domain's INSERT-ONLY discipline is an in-table tooth. The
+//!     boundary table's declared `(domain, key)` list is Nodup by domain-major
+//!     lexicographic strict increase over the canonical decomposition.
+//!
 //! ## Honest boundary notes (named, with their closure lanes)
 //!
-//!   * `map_op` kind `absent` (non-membership via the sorted gap bracketing) is NOT yet
-//!     realized — assembly refuses it with a precise error. Its realization is two adjacent
-//!     membership paths + the gap comparisons (`non_membership.rs` machinery); it lands with
-//!     the nullifier-insert lane (no shipped v2 descriptor emits `absent` yet).
 //!   * `map_op` kind `write` is realized as the in-place leaf UPDATE at an existing key
 //!     (exactly `Heap.set` when the key is present — the cap-crown phase-B shape). A
-//!     fresh-key sorted INSERT shifts leaf positions and rides the same lane as `absent`.
+//!     fresh-key sorted INSERT shifts leaf positions; its bracketed-insert witness can now
+//!     reuse the map-absent adjacency/gap machinery and rides the nullifier-insert lane.
+//!   * The universal-memory tables are the INTERIOR argument only: map roots remain derived
+//!     boundary views reconciled by map ops at the proof's edge (today's map-ops machinery,
+//!     once per touched key per proof — `boundary_root_from_memcheck` is the Lean anchor
+//!     that both regimes commit to the same object). The full table-collapse (per-map tables
+//!     subsumed for ALL live descriptors) is flag-day work by the spec's §3 ordering: it
+//!     rides THE ONE ROTATION with the 3-verb executor, never before it.
+//!   * The universal boundary image (`uinit`/`ufin`/declared `(domain, key)` list) is
+//!     witness-supplied (`UMemBoundaryWitness`), exactly like the flat memory boundary;
+//!     binding it to state columns is the same PI-v3 ride-along.
 //!   * The custom table id 5 (Lean `SUBMASK_TID = 0`) is realized as the bitwise-submask
 //!     relation at 30 bits (`subsetTable_mem_iff`: both elements in `[0, 2^30)` and
 //!     `keep & held = keep`), enforced by per-bit decomposition — the custom-table CONTENTS
@@ -89,7 +117,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_batch_stark::{BatchProof, ProverData, StarkInstance, prove_batch, verify_batch};
 
 use crate::field::{BABYBEAR_P, BabyBear};
-use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
+use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf, SENTINEL_MAX, SENTINEL_MIN};
 use crate::lean_descriptor_air::{
     EFFECTVM_STATE_AFTER_BASE, EFFECTVM_STATE_BEFORE_BASE, JsonCursor, LeanExpr, VmConstraint,
     VmHashSite, VmRow, i64_to_babybear, parse_expr, parse_hash_site, parse_range,
@@ -117,6 +145,21 @@ pub const TID_MEMORY: usize = 3;
 pub const TID_MAP_OPS: usize = 4;
 /// Wire id of `custom 0` = the bitwise-submask table (`DescriptorIR2.SUBMASK_TID`).
 pub const TID_CUSTOM_SUBMASK: usize = 5;
+/// Wire id of `custom 1` = the UNIVERSAL memory table (`DescriptorIR2.UMEM_TID`,
+/// `docs/UNIVERSAL-MEMORY.md` — one Blum multiset over the `Domain × κ` address space).
+pub const TID_UMEMORY: usize = 6;
+/// Wire id of `custom 2` = the universal boundary table (declared `(domain, key)` addresses
+/// with their init/final `Option` images).
+pub const TID_UMEM_BOUNDARY: usize = 7;
+
+/// The nullifier domain's wire code (`DescriptorIR2.domainCode .nullifiers`). The universal
+/// memory table enforces the INSERT-ONLY discipline on this domain in-circuit (a write
+/// installing `none` is refused), which is what turns a `none` read into the proved
+/// freshness fact (`UniversalMemory.nullifier_fresh_sound`).
+pub const NULLIFIER_DOMAIN: u32 = 3;
+/// Domains are nibble-bounded on the wire (codes 0..4 deployed; new state components get new
+/// codes, never new tables).
+pub const DOMAIN_BOUND: u32 = 16;
 
 /// The chip lookup rate in base-field elements (`babyBearD4W16.rate = 8`); a chip tuple is
 /// `1 (arity) + CHIP_RATE (padded inputs) + 1 (output) = 10` wide.
@@ -155,6 +198,21 @@ const BUS_MEM_CHECK: &str = "ir2_mem_check";
 const BUS_MEM_ADDRS: &str = "ir2_mem_addrs";
 const BUS_MAP_LOG: &str = "ir2_map_log";
 const BUS_FACT: &str = "ir2_fact";
+const BUS_UMEM_LOG: &str = "ir2_umem_log";
+const BUS_UMEM_CHECK: &str = "ir2_umem_check";
+const BUS_UMEM_ADDRS: &str = "ir2_umem_addrs";
+
+/// The low-limb width of the CANONICAL BabyBear key decomposition
+/// `key = hi4 · 2^27 + lo27` (BabyBear `p = 2^31 − 2^27 + 1 = 15 · 2^27 + 1`, so the canonical
+/// range `[0, p)` is exactly `hi4 < 15 ∨ (hi4 = 15 ∧ lo27 = 0)` — the `is15 · lo27 = 0` tooth
+/// makes the decomposition UNIQUE, which is what lets full-felt keys (hash images) be compared
+/// as integers, lexicographically over `(hi4, lo27)`). The flat 30-bit address regime of the
+/// EPOCH memory boundary cannot order hash-image keys; this one can.
+const KEY_LO_BITS: usize = 27;
+/// `2^27` as a field constant base for the canonical decomposition.
+const KEY_HI_BASE: u64 = 1 << KEY_LO_BITS;
+/// The top nibble value excluded from carrying a nonzero low limb (`p − 1 = 15 · 2^27`).
+const KEY_HI_MAX: u64 = 15;
 
 /// The `hash_fact` domain-separation marker (`poseidon2::hash_fact` state[5]).
 const FACT_MARK: u32 = 0xFACF;
@@ -179,6 +237,10 @@ pub enum TableSem {
     Memory,
     /// One row per boundary reconciliation (sorted-map opening).
     MapOps,
+    /// One row per UNIVERSAL state access (the domain-tagged `Option`-valued Blum multiset).
+    UMemory,
+    /// One row per declared universal `(domain, key)` address (init/final `Option` images).
+    UMemBoundary,
 }
 
 /// A declared table (Lean `TableDef`).
@@ -241,6 +303,35 @@ pub struct MemOpSpec {
     pub kind: MemKind,
 }
 
+/// A UNIVERSAL memory access row (Lean `UMemOp`): the offline-checking instrumentation against
+/// the `Domain × κ` address space, with `Option`-valued cells as `(present, value)` pairs
+/// (canonical encoding: `none ↦ (0, 0)`, `some v ↦ (1, v)`). The address is the literal PAIR
+/// `(domain, key)` — the domain tag is its own bus coordinate, so the abstract injectivity
+/// `(d, a) = (d, b) ↔ a = b` is wire-literal: NO hashing, not even at the boundary. This is
+/// what makes nullifier freshness ONE read row returning `none`
+/// (`UniversalMemory.nullifier_fresh_sound`) — Merkle-path-free, gap-opening-free.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UMemOpSpec {
+    /// Selector guard (active iff it evaluates to 1).
+    pub guard: LeanExpr,
+    /// The STATIC domain code (Lean `domainCode`; the emission fixes the domain per op).
+    pub domain: u32,
+    /// The in-domain key expression (full-felt: hash images welcome).
+    pub key: LeanExpr,
+    /// Present bit of the returned (read) / installed (write) cell.
+    pub present: LeanExpr,
+    /// Payload of the returned / installed cell (0 when absent).
+    pub value: LeanExpr,
+    /// Present bit of the claimed latest prior cell.
+    pub prev_present: LeanExpr,
+    /// Payload of the claimed latest prior cell.
+    pub prev_value: LeanExpr,
+    /// Claimed latest prior serial.
+    pub prev_serial: LeanExpr,
+    /// Access kind.
+    pub kind: MemKind,
+}
+
 /// Map reconciliation kind (Lean `MapOpKind`; wire codes 0/1/2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MapKind {
@@ -292,6 +383,8 @@ pub enum VmConstraint2 {
     MemOp(MemOpSpec),
     /// A map-ops-table reconciliation row.
     MapOp(MapOpSpec),
+    /// A UNIVERSAL memory-table access row (the one-Blum-multiset leg).
+    UMemOp(UMemOpSpec),
 }
 
 /// The Rust mirror of Lean's `EffectVmDescriptor2` (decoded from `emitVmJson2`).
@@ -465,6 +558,8 @@ fn parse_table_def(c: &mut JsonCursor) -> Result<TableDef2, String> {
         },
         Some("memory") => TableSem::Memory,
         Some("map_ops") => TableSem::MapOps,
+        Some("umemory") => TableSem::UMemory,
+        Some("umem_boundary") => TableSem::UMemBoundary,
         Some(other) => return Err(format!("unknown table sem \"{other}\"")),
         None => return Err("table def missing \"sem\"".to_string()),
     };
@@ -517,6 +612,50 @@ fn parse_constraint2(c: &mut JsonCursor) -> Result<VmConstraint2, String> {
                 guard,
                 addr,
                 value,
+                prev_value,
+                prev_serial,
+                kind,
+            })
+        }
+        "umem_op" => {
+            c.expect(b',')?;
+            c.expect_key("kind")?;
+            let kind = match c.parse_string()?.as_str() {
+                "read" => MemKind::Read,
+                "write" => MemKind::Write,
+                other => return Err(format!("unknown umem_op kind \"{other}\"")),
+            };
+            c.expect(b',')?;
+            c.expect_key("domain")?;
+            let domain = parse_usize(c, "umem_op domain")? as u32;
+            c.expect(b',')?;
+            c.expect_key("guard")?;
+            let guard = parse_expr(c)?;
+            c.expect(b',')?;
+            c.expect_key("key")?;
+            let key = parse_expr(c)?;
+            c.expect(b',')?;
+            c.expect_key("present")?;
+            let present = parse_expr(c)?;
+            c.expect(b',')?;
+            c.expect_key("value")?;
+            let value = parse_expr(c)?;
+            c.expect(b',')?;
+            c.expect_key("prev_present")?;
+            let prev_present = parse_expr(c)?;
+            c.expect(b',')?;
+            c.expect_key("prev_value")?;
+            let prev_value = parse_expr(c)?;
+            c.expect(b',')?;
+            c.expect_key("prev_serial")?;
+            let prev_serial = parse_expr(c)?;
+            VmConstraint2::UMemOp(UMemOpSpec {
+                guard,
+                domain,
+                key,
+                present,
+                value,
+                prev_present,
                 prev_value,
                 prev_serial,
                 kind,
@@ -773,10 +912,10 @@ impl MainLayout {
                         ));
                     }
                 }
-                TID_MAIN | TID_MEMORY | TID_MAP_OPS => {
+                TID_MAIN | TID_MEMORY | TID_MAP_OPS | TID_UMEMORY | TID_UMEM_BOUNDARY => {
                     return Err(format!(
                         "constraint {ci}: lookups into table {} are not part of the graduated \
-                         grammar (state accesses are mem_op / map_op constraints)",
+                         grammar (state accesses are mem_op / map_op / umem_op constraints)",
                         l.table
                     ));
                 }
@@ -847,14 +986,51 @@ fn check_descriptor2(desc: &EffectVmDescriptor2) -> Result<MainLayout, String> {
                 }
             }
             VmConstraint2::MapOp(m) => {
-                if m.op == MapKind::Absent {
+                if m.op == MapKind::Absent && m.value != LeanExpr::Const(0) {
+                    // The absent denotation ignores the value; the wire convention pins it to
+                    // the literal 0 so the map-log bus tuple is canonical (the MapAbsent
+                    // table receives the 0 coordinate).
                     return Err(format!(
-                        "constraint {ci}: map_op kind `absent` is not realized yet (the \
-                         bracketed-gap non-membership leg rides the nullifier-insert lane)"
+                        "constraint {ci}: map_op kind `absent` must carry value `const 0` \
+                         (the non-membership read has no value; the wire pins the canonical 0)"
                     ));
                 }
                 for e in [&m.guard, &m.root, &m.key, &m.value, &m.new_root] {
                     chk(e, "map_op field", ci)?;
+                }
+            }
+            VmConstraint2::UMemOp(m) => {
+                if m.domain >= DOMAIN_BOUND {
+                    return Err(format!(
+                        "constraint {ci}: umem_op domain {} out of the nibble bound {}",
+                        m.domain, DOMAIN_BOUND
+                    ));
+                }
+                if m.domain == NULLIFIER_DOMAIN
+                    && m.kind == MemKind::Write
+                    && m.present == LeanExpr::Const(0)
+                {
+                    // The INSERT-ONLY discipline, statically-violating shape: a nullifier
+                    // write installing a definitely-absent cell (Lean
+                    // `umemNullifierInsertOnly` — nobody un-spends). Dynamic `present`
+                    // expressions pass here and meet the in-circuit tooth
+                    // (`is_null·kind·(1−present)`) row-by-row.
+                    return Err(format!(
+                        "constraint {ci}: nullifier-domain umem_op write installs a \
+                         definitely-absent cell (insert-only: nobody un-spends; \
+                         UniversalMemory.InsertOnlyAt)"
+                    ));
+                }
+                for e in [
+                    &m.guard,
+                    &m.key,
+                    &m.present,
+                    &m.value,
+                    &m.prev_present,
+                    &m.prev_value,
+                    &m.prev_serial,
+                ] {
+                    chk(e, "umem_op field", ci)?;
                 }
             }
         }
@@ -890,6 +1066,96 @@ const MB_AGAP_LIMB0: usize = 7;
 const MB_ACHK: usize = MB_AGAP_LIMB0 + decomp_cols(MEM_GAP_BITS); // 17
 const MB_ACHK_LIMB0: usize = MB_ACHK + 1; // 18
 const MB_WIDTH: usize = MB_ACHK_LIMB0 + decomp_cols(MEM_GAP_BITS); // 28
+
+// -- UNIVERSAL memory table layout (one row per access, log order): the ONE Blum multiset over
+//    the `(domain, key)` address space with `Option`-valued cells. Identical Blum discipline to
+//    the flat memory table, plus: the domain coordinate (nibble-bounded), the present bits
+//    (boolean, `none ↦ value = 0` canonical), and the nullifier INSERT-ONLY tooth (a
+//    nullifier-domain write installing `none` is UNSAT — `UniversalMemory.InsertOnlyAt`,
+//    in-circuit). NO hashing rides this table at all: freshness of a nullifier is one read row
+//    with `present = 0` (`nullifier_fresh_sound`), and the map roots are reconciled at the
+//    boundary by map ops, never per access. --
+const UM_DOMAIN: usize = 0;
+const UM_KEY: usize = 1;
+const UM_PRESENT: usize = 2;
+const UM_VALUE: usize = 3;
+const UM_PREV_PRESENT: usize = 4;
+const UM_PREV_VALUE: usize = 5;
+const UM_PREV_SERIAL: usize = 6;
+const UM_KIND: usize = 7;
+const UM_SERIAL: usize = 8;
+const UM_IS_REAL: usize = 9;
+const UM_GAP: usize = 10;
+const UM_GAP_LIMB0: usize = 11;
+const UM_IS_NULL: usize = UM_GAP_LIMB0 + decomp_cols(MEM_GAP_BITS); // 21
+const UM_NULL_INV: usize = UM_IS_NULL + 1; // 22
+const UM_WIDTH: usize = UM_NULL_INV + 1; // 23
+
+// -- Universal boundary layout (one row per declared `(domain, key)` address, domain-major
+//    lexicographically increasing). Nodup of the declared addresses — the hypothesis
+//    `memcheck_sound` stands on — is enforced for FULL-FELT keys via the canonical BabyBear
+//    decomposition `key = hi4·2^27 + lo27` (unique by the `is15·lo27 = 0` tooth, since
+//    `p − 1 = 15·2^27`) and a lexicographic strict-increase over `(domain, hi4, lo27)`.
+//    The flat memory boundary's 30-bit address pin cannot carry hash-image keys; this can. --
+const UB_DOMAIN: usize = 0;
+const UB_KEY: usize = 1;
+const UB_INIT_PRESENT: usize = 2;
+const UB_INIT_VALUE: usize = 3;
+const UB_FIN_PRESENT: usize = 4;
+const UB_FIN_VALUE: usize = 5;
+const UB_FIN_SERIAL: usize = 6;
+const UB_IS_REAL: usize = 7;
+const UB_ADDR_MULT: usize = 8;
+const UB_KEY_HI4: usize = 9;
+const UB_KEY_LIMB0: usize = 10;
+const UB_KEY_IS15: usize = UB_KEY_LIMB0 + decomp_cols(KEY_LO_BITS); // 20
+const UB_KEY_INV15: usize = UB_KEY_IS15 + 1; // 21
+const UB_DGAP: usize = UB_KEY_INV15 + 1; // 22
+const UB_SAME_DOM: usize = UB_DGAP + 1; // 23
+const UB_SAMEDOM_INV: usize = UB_SAME_DOM + 1; // 24
+const UB_KCMP_S: usize = UB_SAMEDOM_INV + 1; // 25
+const UB_KCMP_DHI: usize = UB_KCMP_S + 1; // 26
+const UB_KCMP_DLO: usize = UB_KCMP_DHI + 1; // 27
+const UB_KCMP_DLO_LIMB0: usize = UB_KCMP_DLO + 1; // 28
+const UB_WIDTH: usize = UB_KCMP_DLO_LIMB0 + decomp_cols(KEY_LO_BITS); // 38
+
+// -- Map-ABSENT table layout (one row per non-membership reconciliation): the realization of
+//    `map_op` kind `absent` (Lean `opensTo … none`, constructible by `opensTo_none_of_gap`) —
+//    the sorted-gap bracketing, IN-CIRCUIT: two membership paths at ADJACENT leaf positions
+//    (position = Σ dirᵢ·2ⁱ; adjacency is one linear constraint) under the SAME root, with
+//    `lo_addr < key < hi_addr` enforced by the canonical-decomposition lexicographic
+//    comparators. The sentinel bracketing (MIN/MAX, `heap_root.rs`) guarantees every
+//    non-reserved absent key has a real adjacent pair. This is THE boundary leg of
+//    `nullifier_fresh_binds_root`: the gap machinery survives exactly here — once per touched
+//    address per proof, never per access. Committed ONLY when a descriptor declares an
+//    `absent` op (presence-elided like every other table). --
+const MA_ROOT: usize = 0;
+const MA_KEY: usize = 1;
+const MA_NEW_ROOT: usize = 2;
+const MA_IS_REAL: usize = 3;
+const MA_LO_ADDR: usize = 4;
+const MA_LO_VALUE: usize = 5;
+const MA_HI_ADDR: usize = 6;
+const MA_HI_VALUE: usize = 7;
+const MA_LO_LEAF: usize = 8;
+const MA_HI_LEAF: usize = 9;
+const MA_LO_SIB0: usize = 10;
+const MA_LO_DIR0: usize = MA_LO_SIB0 + HEAP_TREE_DEPTH; // 26
+const MA_LO_CHAIN0: usize = MA_LO_DIR0 + HEAP_TREE_DEPTH; // 42
+const MA_HI_SIB0: usize = MA_LO_CHAIN0 + (HEAP_TREE_DEPTH - 1); // 57
+const MA_HI_DIR0: usize = MA_HI_SIB0 + HEAP_TREE_DEPTH; // 73
+const MA_HI_CHAIN0: usize = MA_HI_DIR0 + HEAP_TREE_DEPTH; // 89
+// Canonical decompositions (hi4 · 2^27 + lo27, unique) of lo_addr / key / hi_addr:
+// each block = [hi4, lo27 limbs (10), is15, inv15] = 13 columns.
+const MA_DECOMP_COLS: usize = 1 + decomp_cols(KEY_LO_BITS) + 2; // 13
+const MA_A_DEC0: usize = MA_HI_CHAIN0 + (HEAP_TREE_DEPTH - 1); // 104 (lo_addr)
+const MA_K_DEC0: usize = MA_A_DEC0 + MA_DECOMP_COLS; // 117 (key)
+const MA_B_DEC0: usize = MA_K_DEC0 + MA_DECOMP_COLS; // 130 (hi_addr)
+// Lexicographic strict-lt comparator blocks: [s, dhi, dlo, dlo limbs (10)] = 13 columns.
+const MA_CMP_COLS: usize = 3 + decomp_cols(KEY_LO_BITS); // 13
+const MA_CMP_LO0: usize = MA_B_DEC0 + MA_DECOMP_COLS; // 143 (lo_addr < key)
+const MA_CMP_HI0: usize = MA_CMP_LO0 + MA_CMP_COLS; // 156 (key < hi_addr)
+const MA_WIDTH: usize = MA_CMP_HI0 + MA_CMP_COLS; // 169
 
 // -- Map-ops table layout (one row per reconciliation, log order). Every permutation of
 //    the opening rides the chip bus: the row carries the two leaf digests and the two
@@ -969,6 +1235,13 @@ pub enum Ir2Air {
     MemBoundary,
     /// The map-ops table (in-row sorted-Poseidon2 openings).
     MapOps,
+    /// The map-ABSENT table (bracketed sorted-gap non-membership openings).
+    MapAbsent,
+    /// The UNIVERSAL memory table (the one Blum multiset over `Domain × κ`).
+    UMemory,
+    /// The universal boundary (init/final `Option` images over the declared,
+    /// domain-major lexicographically increasing `(domain, key)` list).
+    UMemBoundary,
 }
 
 /// Public re-export wrapper of the resolved main layout (kept opaque; constructed by
@@ -985,6 +1258,9 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for Ir2Air {
             Ir2Air::Memory => MEM_WIDTH,
             Ir2Air::MemBoundary => MB_WIDTH,
             Ir2Air::MapOps => MAP_WIDTH,
+            Ir2Air::MapAbsent => MA_WIDTH,
+            Ir2Air::UMemory => UM_WIDTH,
+            Ir2Air::UMemBoundary => UB_WIDTH,
         }
     }
 
@@ -1044,6 +1320,90 @@ where
         }
     }
     builder.assert_zero(recomposed - value_expr);
+}
+
+/// Emit one CANONICAL BabyBear decomposition `value = hi4 · 2^27 + lo27` over a 13-column
+/// block `[hi4, lo27 limbs (10), is15, inv15]`. Uniqueness (and hence integer-faithfulness of
+/// the lexicographic comparators) is the `is15 · lo27 = 0` tooth: `p − 1 = 15 · 2^27`, so the
+/// only admissible composite with `hi4 = 15` is `p − 1` itself — the non-canonical alias
+/// `value + p` of any small value is UNSAT. `gate` activates the is15-forcing leg (pad rows
+/// stay all-zero). Returns `(hi4, lo27)` as expressions for the comparators.
+fn eval_canon_decomp<AB>(
+    builder: &mut AB,
+    value_expr: AB::Expr,
+    block: &[AB::Var],
+    gate: AB::Expr,
+) -> (AB::Expr, AB::Expr)
+where
+    AB: AirBuilder + InteractionBuilder,
+    AB::F: PrimeField32,
+{
+    let hi4: AB::Expr = block[0].into();
+    let limbs: Vec<AB::Var> = block[1..1 + decomp_cols(KEY_LO_BITS)].to_vec();
+    let is15: AB::Expr = block[1 + decomp_cols(KEY_LO_BITS)].into();
+    let inv15: AB::Expr = block[2 + decomp_cols(KEY_LO_BITS)].into();
+    let fifteen = AB::Expr::from_u64(KEY_HI_MAX);
+    // hi4 is a nibble (the shared limb table is exactly [0, 16)).
+    let bus = LookupBus::new(BUS_BYTE);
+    bus.lookup_key(builder, [hi4.clone()], AB::Expr::ONE);
+    // lo27 = value − hi4·2^27, decomposed to 27 bits.
+    let lo27 = value_expr - hi4.clone() * AB::Expr::from_u64(KEY_HI_BASE);
+    eval_decomp(builder, lo27.clone(), &limbs, KEY_LO_BITS);
+    // is15 forced: boolean; (hi4 − 15)·is15 = 0; (hi4 − 15)·inv15 = gate − is15.
+    builder.assert_zero(is15.clone() * (is15.clone() - AB::Expr::ONE));
+    builder.assert_zero((hi4.clone() - fifteen.clone()) * is15.clone());
+    builder.assert_zero((hi4.clone() - fifteen) * inv15 - (gate - is15.clone()));
+    // THE UNIQUENESS TOOTH: hi4 = 15 admits only lo27 = 0 (the value p − 1).
+    builder.assert_zero(is15 * lo27.clone());
+    (hi4, lo27)
+}
+
+/// Emit one lexicographic STRICT-LT comparator `a < b` over canonical `(hi4, lo27)`
+/// decompositions, on a 13-column block `[s, dhi, dlo, dlo limbs (10)]`, gated by `gate`
+/// (degree ≤ 1). When the gate fires: `s = 1` ⇒ `b.hi4 ≥ a.hi4 + 1` (dhi a nibble);
+/// `s = 0` ⇒ `b.hi4 = a.hi4` and `b.lo27 ≥ a.lo27 + 1` (dlo 27-bit). Since the
+/// decompositions are unique-canonical, this is integer `<` on the felts — full-felt keys
+/// (hash images) compare soundly, which the 30-bit flat-address regime could never do.
+#[allow(clippy::too_many_arguments)]
+fn eval_lex_lt<AB>(
+    builder: &mut AB,
+    a_hi4: AB::Expr,
+    a_lo27: AB::Expr,
+    b_hi4: AB::Expr,
+    b_lo27: AB::Expr,
+    block: &[AB::Var],
+    gate: AB::Expr,
+    transition_only: bool,
+) where
+    AB: AirBuilder + InteractionBuilder,
+    AB::F: PrimeField32,
+{
+    let s: AB::Expr = block[0].into();
+    let dhi: AB::Var = block[1];
+    let dlo: AB::Var = block[2];
+    let dlo_limbs: Vec<AB::Var> = block[3..3 + decomp_cols(KEY_LO_BITS)].to_vec();
+    builder.assert_zero(s.clone() * (s.clone() - AB::Expr::ONE));
+    // dhi/dlo are committed columns, range-bound unconditionally (pads carry 0); their
+    // VALUES are pinned by the gated branch equations.
+    let bus = LookupBus::new(BUS_BYTE);
+    bus.lookup_key(builder, [dhi.into()], AB::Expr::ONE);
+    eval_decomp(builder, dlo.into(), &dlo_limbs, KEY_LO_BITS);
+    let one = AB::Expr::ONE;
+    let c_dhi = dhi.into()
+        - gate.clone() * s.clone() * (b_hi4.clone() - a_hi4.clone() - one.clone());
+    let c_eq = gate.clone() * (one.clone() - s.clone()) * (b_hi4 - a_hi4);
+    let c_dlo =
+        dlo.into() - gate * (one.clone() - s) * (b_lo27 - a_lo27 - one);
+    if transition_only {
+        let mut tb = builder.when_transition();
+        tb.assert_zero(c_dhi);
+        tb.assert_zero(c_eq);
+        tb.assert_zero(c_dlo);
+    } else {
+        builder.assert_zero(c_dhi);
+        builder.assert_zero(c_eq);
+        builder.assert_zero(c_dlo);
+    }
 }
 
 impl<AB> Air<AB> for Ir2Air
@@ -1174,7 +1534,9 @@ where
                     }
                 }
 
-                // -- Map ops: send the reconciliation row on the map log bus. --
+                // -- Map ops: send the reconciliation row on the map log bus (read/write rows
+                //    are received by the map-ops table; `absent` rows by the map-absent
+                //    table — the op code partitions the one multiset). --
                 let map_log = PermutationCheckBus::new(BUS_MAP_LOG);
                 for k in &desc.constraints {
                     if let VmConstraint2::MapOp(m) = k {
@@ -1186,6 +1548,24 @@ where
                             m.new_root.eval_expr::<AB>(&local),
                         ];
                         map_log.send(builder, fields, m.guard.eval_expr::<AB>(&local));
+                    }
+                }
+
+                // -- Universal mem ops: send the instrumented row on the umem log bus. --
+                let umem_log = PermutationCheckBus::new(BUS_UMEM_LOG);
+                for k in &desc.constraints {
+                    if let VmConstraint2::UMemOp(m) = k {
+                        let fields = [
+                            AB::Expr::from_u64(m.domain as u64),
+                            m.key.eval_expr::<AB>(&local),
+                            m.present.eval_expr::<AB>(&local),
+                            m.value.eval_expr::<AB>(&local),
+                            m.prev_present.eval_expr::<AB>(&local),
+                            m.prev_value.eval_expr::<AB>(&local),
+                            m.prev_serial.eval_expr::<AB>(&local),
+                            AB::Expr::from_u64(m.kind.code() as u64),
+                        ];
+                        umem_log.send(builder, fields, m.guard.eval_expr::<AB>(&local));
                     }
                 }
             }
@@ -1510,6 +1890,358 @@ where
                     is_real,
                 );
             }
+
+            // ----------------------------------------------------------------
+            Ir2Air::MapAbsent => {
+                let is_real: AB::Expr = local[MA_IS_REAL].into();
+                builder.assert_zero(is_real.clone() * (is_real.clone() - AB::Expr::ONE));
+                for lvl in 0..HEAP_TREE_DEPTH {
+                    for dir0 in [MA_LO_DIR0, MA_HI_DIR0] {
+                        let dir: AB::Expr = local[dir0 + lvl].into();
+                        builder.assert_zero(dir.clone() * (dir - AB::Expr::ONE));
+                    }
+                }
+                // A non-membership read preserves the root.
+                builder.assert_zero(
+                    is_real.clone() * (local[MA_NEW_ROOT].into() - local[MA_ROOT].into()),
+                );
+
+                // ADJACENCY: the two opened leaves sit at consecutive positions
+                // (position = Σ dirᵢ·2ⁱ): hi_pos − lo_pos = 1. With the sentinel
+                // bracketing this pins the pair as sorted-neighbours of the gap.
+                {
+                    let mut diff = AB::Expr::ZERO;
+                    let mut w = AB::Expr::ONE;
+                    for lvl in 0..HEAP_TREE_DEPTH {
+                        diff = diff
+                            + (local[MA_HI_DIR0 + lvl].into() - local[MA_LO_DIR0 + lvl].into())
+                                * w.clone();
+                        w = w.clone() + w;
+                    }
+                    builder.assert_zero(is_real.clone() * (diff - AB::Expr::ONE));
+                }
+
+                // THE GAP: lo_addr < key < hi_addr as INTEGERS, via the unique canonical
+                // decompositions + lexicographic strict-lt comparators (the in-circuit face
+                // of `Crypto.NonMembership.sorted_gap_excludes` / `Heap.get_none_of_gap`).
+                let (a_hi4, a_lo27) = eval_canon_decomp(
+                    builder,
+                    local[MA_LO_ADDR].into(),
+                    &local[MA_A_DEC0..MA_A_DEC0 + MA_DECOMP_COLS],
+                    is_real.clone(),
+                );
+                let (k_hi4, k_lo27) = eval_canon_decomp(
+                    builder,
+                    local[MA_KEY].into(),
+                    &local[MA_K_DEC0..MA_K_DEC0 + MA_DECOMP_COLS],
+                    is_real.clone(),
+                );
+                let (b_hi4, b_lo27) = eval_canon_decomp(
+                    builder,
+                    local[MA_HI_ADDR].into(),
+                    &local[MA_B_DEC0..MA_B_DEC0 + MA_DECOMP_COLS],
+                    is_real.clone(),
+                );
+                eval_lex_lt(
+                    builder,
+                    a_hi4,
+                    a_lo27,
+                    k_hi4.clone(),
+                    k_lo27.clone(),
+                    &local[MA_CMP_LO0..MA_CMP_LO0 + MA_CMP_COLS],
+                    is_real.clone(),
+                    false,
+                );
+                eval_lex_lt(
+                    builder,
+                    k_hi4,
+                    k_lo27,
+                    b_hi4,
+                    b_lo27,
+                    &local[MA_CMP_HI0..MA_CMP_HI0 + MA_CMP_COLS],
+                    is_real.clone(),
+                    false,
+                );
+
+                // Both bracketing leaves are GENUINE members under the SAME root: leaf
+                // digests ride the chip bus (arity-2 absorbs), node hashes ride the fact
+                // bus, both final links ARE the root column — the map-ops chain shape, twice.
+                let p2 = LookupBus::new(BUS_P2);
+                let leaf_tuple = |addr_col: usize, val_col: usize, leaf_col: usize| {
+                    let mut t: Vec<AB::Expr> = Vec::with_capacity(CHIP_TUPLE_LEN);
+                    t.push(AB::Expr::from_u64(2));
+                    t.push(local[addr_col].into());
+                    t.push(local[val_col].into());
+                    for _ in 2..CHIP_RATE {
+                        t.push(AB::Expr::ZERO);
+                    }
+                    t.push(local[leaf_col].into());
+                    t
+                };
+                p2.lookup_key(
+                    builder,
+                    leaf_tuple(MA_LO_ADDR, MA_LO_VALUE, MA_LO_LEAF),
+                    is_real.clone(),
+                );
+                p2.lookup_key(
+                    builder,
+                    leaf_tuple(MA_HI_ADDR, MA_HI_VALUE, MA_HI_LEAF),
+                    is_real.clone(),
+                );
+                let fact_bus = LookupBus::new(BUS_FACT);
+                for (leaf_col, sib0, dir0, chain0) in [
+                    (MA_LO_LEAF, MA_LO_SIB0, MA_LO_DIR0, MA_LO_CHAIN0),
+                    (MA_HI_LEAF, MA_HI_SIB0, MA_HI_DIR0, MA_HI_CHAIN0),
+                ] {
+                    let mut cur: AB::Expr = local[leaf_col].into();
+                    for lvl in 0..HEAP_TREE_DEPTH {
+                        let sib: AB::Expr = local[sib0 + lvl].into();
+                        let dir: AB::Expr = local[dir0 + lvl].into();
+                        let left = (AB::Expr::ONE - dir.clone()) * cur.clone()
+                            + dir.clone() * sib.clone();
+                        let right = (AB::Expr::ONE - dir.clone()) * sib + dir * cur;
+                        let out: AB::Expr = if lvl + 1 == HEAP_TREE_DEPTH {
+                            local[MA_ROOT].into()
+                        } else {
+                            local[chain0 + lvl].into()
+                        };
+                        fact_bus.lookup_key(builder, [left, right, out.clone()], is_real.clone());
+                        cur = out;
+                    }
+                }
+
+                // The table carries EXACTLY the gathered absent sub-log (op code 2, the
+                // canonical value 0 — the map-log multiset partitions by op).
+                let map_log = PermutationCheckBus::new(BUS_MAP_LOG);
+                map_log.receive(
+                    builder,
+                    [
+                        local[MA_ROOT].into(),
+                        local[MA_KEY].into(),
+                        AB::Expr::ZERO,
+                        AB::Expr::from_u64(MapKind::Absent.code() as u64),
+                        local[MA_NEW_ROOT].into(),
+                    ],
+                    is_real,
+                );
+            }
+
+            // ----------------------------------------------------------------
+            Ir2Air::UMemory => {
+                let is_real: AB::Expr = local[UM_IS_REAL].into();
+                let kind: AB::Expr = local[UM_KIND].into();
+                let present: AB::Expr = local[UM_PRESENT].into();
+                let prev_present: AB::Expr = local[UM_PREV_PRESENT].into();
+                let is_null: AB::Expr = local[UM_IS_NULL].into();
+                for b in [&is_real, &kind, &present, &prev_present, &is_null] {
+                    builder.assert_zero(b.clone() * (b.clone() - AB::Expr::ONE));
+                }
+                // Real rows form a prefix.
+                builder.when_transition().assert_zero(
+                    (AB::Expr::ONE - local[UM_IS_REAL].into()) * next[UM_IS_REAL].into(),
+                );
+                // Positional serials.
+                builder
+                    .when_first_row()
+                    .assert_zero(local[UM_SERIAL].into() - AB::Expr::ONE);
+                builder.when_transition().assert_zero(
+                    next[UM_SERIAL].into() - local[UM_SERIAL].into() - AB::Expr::ONE,
+                );
+                // Read discipline on the Option cell: a read returns its claimed prior cell.
+                builder.assert_zero(
+                    is_real.clone()
+                        * (AB::Expr::ONE - kind.clone())
+                        * (local[UM_PRESENT].into() - local[UM_PREV_PRESENT].into()),
+                );
+                builder.assert_zero(
+                    is_real.clone()
+                        * (AB::Expr::ONE - kind.clone())
+                        * (local[UM_VALUE].into() - local[UM_PREV_VALUE].into()),
+                );
+                // Canonical `none`: an absent cell carries payload 0 (the (present, value)
+                // pair is then a faithful encoding of `Option` — Lean `optOf`).
+                builder.assert_zero(
+                    is_real.clone() * (AB::Expr::ONE - present.clone()) * local[UM_VALUE].into(),
+                );
+                builder.assert_zero(
+                    is_real.clone()
+                        * (AB::Expr::ONE - prev_present.clone())
+                        * local[UM_PREV_VALUE].into(),
+                );
+                // prev_serial < serial (Disciplined), exactly the flat memory's gap shape.
+                builder.assert_zero(
+                    local[UM_GAP].into()
+                        - is_real.clone()
+                            * (local[UM_SERIAL].into()
+                                - AB::Expr::ONE
+                                - local[UM_PREV_SERIAL].into()),
+                );
+                let limbs: Vec<AB::Var> =
+                    local[UM_GAP_LIMB0..UM_GAP_LIMB0 + decomp_cols(MEM_GAP_BITS)].to_vec();
+                eval_decomp(builder, local[UM_GAP].into(), &limbs, MEM_GAP_BITS);
+                // Domain is a nibble (new state components are new codes, never new tables).
+                let bus = LookupBus::new(BUS_BYTE);
+                bus.lookup_key(builder, [local[UM_DOMAIN].into()], AB::Expr::ONE);
+                // THE INSERT-ONLY TOOTH (nullifiers): is_null is FORCED to the domain
+                // indicator, and a nullifier-domain write installing `none` is UNSAT —
+                // `UniversalMemory.InsertOnlyAt`, in-circuit. This is what upgrades a
+                // `present = 0` read into the PROVED freshness fact.
+                let dom_m3 =
+                    local[UM_DOMAIN].into() - AB::Expr::from_u64(NULLIFIER_DOMAIN as u64);
+                builder.assert_zero(dom_m3.clone() * is_null.clone());
+                builder.assert_zero(
+                    dom_m3 * local[UM_NULL_INV].into() - (is_real.clone() - is_null.clone()),
+                );
+                builder.assert_zero(
+                    is_null * kind * (AB::Expr::ONE - present),
+                );
+
+                // The table carries EXACTLY the gathered log (umemTableFaithful).
+                let umem_log = PermutationCheckBus::new(BUS_UMEM_LOG);
+                umem_log.receive(
+                    builder,
+                    [
+                        local[UM_DOMAIN].into(),
+                        local[UM_KEY].into(),
+                        local[UM_PRESENT].into(),
+                        local[UM_VALUE].into(),
+                        local[UM_PREV_PRESENT].into(),
+                        local[UM_PREV_VALUE].into(),
+                        local[UM_PREV_SERIAL].into(),
+                        local[UM_KIND].into(),
+                    ],
+                    is_real.clone(),
+                );
+                // The ONE Blum multiset (Lean `MemCheck` over `Domain × κ` with `Option`
+                // cells): every op consumes its claimed prior cell and publishes its own.
+                let umem_check = PermutationCheckBus::new(BUS_UMEM_CHECK);
+                umem_check.send(
+                    builder,
+                    [
+                        local[UM_DOMAIN].into(),
+                        local[UM_KEY].into(),
+                        local[UM_PRESENT].into(),
+                        local[UM_VALUE].into(),
+                        local[UM_SERIAL].into(),
+                    ],
+                    is_real.clone(),
+                );
+                umem_check.receive(
+                    builder,
+                    [
+                        local[UM_DOMAIN].into(),
+                        local[UM_KEY].into(),
+                        local[UM_PREV_PRESENT].into(),
+                        local[UM_PREV_VALUE].into(),
+                        local[UM_PREV_SERIAL].into(),
+                    ],
+                    is_real.clone(),
+                );
+                // Address closure over the declared universal boundary.
+                let addrs = LookupBus::new(BUS_UMEM_ADDRS);
+                addrs.lookup_key(
+                    builder,
+                    [local[UM_DOMAIN].into(), local[UM_KEY].into()],
+                    is_real,
+                );
+            }
+
+            // ----------------------------------------------------------------
+            Ir2Air::UMemBoundary => {
+                let is_real: AB::Expr = local[UB_IS_REAL].into();
+                let init_present: AB::Expr = local[UB_INIT_PRESENT].into();
+                let fin_present: AB::Expr = local[UB_FIN_PRESENT].into();
+                let same_dom: AB::Expr = local[UB_SAME_DOM].into();
+                for b in [&is_real, &init_present, &fin_present, &same_dom] {
+                    builder.assert_zero(b.clone() * (b.clone() - AB::Expr::ONE));
+                }
+                builder.when_transition().assert_zero(
+                    (AB::Expr::ONE - local[UB_IS_REAL].into()) * next[UB_IS_REAL].into(),
+                );
+                // Canonical `none` images.
+                builder.assert_zero(
+                    is_real.clone()
+                        * (AB::Expr::ONE - init_present.clone())
+                        * local[UB_INIT_VALUE].into(),
+                );
+                builder.assert_zero(
+                    is_real.clone()
+                        * (AB::Expr::ONE - fin_present.clone())
+                        * local[UB_FIN_VALUE].into(),
+                );
+                // Domain nibble + the unique canonical key decomposition (full-felt keys).
+                let bus = LookupBus::new(BUS_BYTE);
+                bus.lookup_key(builder, [local[UB_DOMAIN].into()], AB::Expr::ONE);
+                let (hi4, lo27) = eval_canon_decomp(
+                    builder,
+                    local[UB_KEY].into(),
+                    &local[UB_KEY_HI4..UB_KEY_HI4 + MA_DECOMP_COLS],
+                    is_real.clone(),
+                );
+                // DOMAIN-MAJOR LEXICOGRAPHIC strict increase ⇒ the declared addresses are
+                // Nodup — the hypothesis `memcheck_sound` stands on, enforced for full-felt
+                // keys. dgap = next.domain − domain is a nibble; same_dom is FORCED to the
+                // dgap-zero indicator (against next-real); equal domains compare keys.
+                bus.lookup_key(builder, [local[UB_DGAP].into()], AB::Expr::ONE);
+                {
+                    let mut tb = builder.when_transition();
+                    tb.assert_zero(
+                        local[UB_DGAP].into()
+                            - next[UB_IS_REAL].into()
+                                * (next[UB_DOMAIN].into() - local[UB_DOMAIN].into()),
+                    );
+                    tb.assert_zero(
+                        local[UB_DGAP].into() * local[UB_SAMEDOM_INV].into()
+                            - (next[UB_IS_REAL].into() - local[UB_SAME_DOM].into()),
+                    );
+                }
+                builder.assert_zero(local[UB_DGAP].into() * local[UB_SAME_DOM].into());
+                let next_hi4: AB::Expr = next[UB_KEY_HI4].into();
+                let next_lo27 = next[UB_KEY].into()
+                    - next[UB_KEY_HI4].into() * AB::Expr::from_u64(KEY_HI_BASE);
+                eval_lex_lt(
+                    builder,
+                    hi4,
+                    lo27,
+                    next_hi4,
+                    next_lo27,
+                    &local[UB_KCMP_S..UB_KCMP_S + MA_CMP_COLS],
+                    same_dom,
+                    true,
+                );
+
+                // Init cells produced at serial 0; final cells consumed (the ONE balance).
+                let umem_check = PermutationCheckBus::new(BUS_UMEM_CHECK);
+                umem_check.send(
+                    builder,
+                    [
+                        local[UB_DOMAIN].into(),
+                        local[UB_KEY].into(),
+                        local[UB_INIT_PRESENT].into(),
+                        local[UB_INIT_VALUE].into(),
+                        AB::Expr::ZERO,
+                    ],
+                    is_real.clone(),
+                );
+                umem_check.receive(
+                    builder,
+                    [
+                        local[UB_DOMAIN].into(),
+                        local[UB_KEY].into(),
+                        local[UB_FIN_PRESENT].into(),
+                        local[UB_FIN_VALUE].into(),
+                        local[UB_FIN_SERIAL].into(),
+                    ],
+                    is_real,
+                );
+                // The declared-address table for closure lookups.
+                let addrs = LookupBus::new(BUS_UMEM_ADDRS);
+                addrs.table_entry(
+                    builder,
+                    [local[UB_DOMAIN].into(), local[UB_KEY].into()],
+                    local[UB_ADDR_MULT].into(),
+                );
+            }
         }
     }
 }
@@ -1598,6 +2330,24 @@ pub struct MemBoundaryWitness {
     pub init_vals: Vec<u32>,
 }
 
+/// The witness-supplied UNIVERSAL memory boundary: the declared `(domain, key)` address list
+/// (domain-major lexicographically STRICTLY increasing; keys are full felts) and the initial
+/// `Option` image over it. The final image is computed by replaying the gathered universal
+/// log. Lean's `(uinit, ufin, uaddrs)` triple of `Satisfied2U`.
+#[derive(Clone, Debug, Default)]
+pub struct UMemBoundaryWitness {
+    /// Declared `(domain, key)` addresses, lexicographically strictly increasing.
+    pub addrs: Vec<(u32, BabyBear)>,
+    /// Initial `Option` cell per declared address (same length as `addrs`).
+    pub init_vals: Vec<Option<BabyBear>>,
+}
+
+impl UMemBoundaryWitness {
+    fn is_empty(&self) -> bool {
+        self.addrs.is_empty() && self.init_vals.is_empty()
+    }
+}
+
 /// Which non-main tables the descriptor actually USES — a function of the constraint
 /// list (and the resolved layout) ALONE, so prover and verifier compute the same set.
 /// Absent tables are NOT committed: FRI opening cost is per-query × the row width of
@@ -1606,12 +2356,19 @@ pub struct MemBoundaryWitness {
 struct Presence {
     /// Chip table: any chip lookup, or any map op (the openings' permutations ride it).
     chip: bool,
-    /// Byte table: any range-lookup limb, or any mem op (gap/address decompositions).
+    /// Byte table: any range-lookup limb, any mem/umem op (gap/address decompositions), or
+    /// any absent map op (the canonical-decomposition comparators).
     byte: bool,
     /// Memory + boundary tables: any mem op.
     memory: bool,
-    /// Map-ops table: any map op.
+    /// Map-ops table: any read/write map op.
     map_ops: bool,
+    /// Map-absent table: any `absent` map op (the bracketed-gap non-membership leg).
+    map_absent: bool,
+    /// Universal memory + universal boundary tables: any umem op. NOTE: umem ops alone pull
+    /// in NO chip table — the universal memory argument does zero hashing, which is the
+    /// measured point of `docs/UNIVERSAL-MEMORY.md`.
+    umem: bool,
 }
 
 impl Presence {
@@ -1620,19 +2377,29 @@ impl Presence {
             .constraints
             .iter()
             .any(|k| matches!(k, VmConstraint2::MemOp(_)));
-        let has_map = desc
+        let has_map_rw = desc
             .constraints
             .iter()
-            .any(|k| matches!(k, VmConstraint2::MapOp(_)));
+            .any(|k| matches!(k, VmConstraint2::MapOp(m) if m.op != MapKind::Absent));
+        let has_map_absent = desc
+            .constraints
+            .iter()
+            .any(|k| matches!(k, VmConstraint2::MapOp(m) if m.op == MapKind::Absent));
+        let has_umem = desc
+            .constraints
+            .iter()
+            .any(|k| matches!(k, VmConstraint2::UMemOp(_)));
         let has_chip_lookup = desc
             .constraints
             .iter()
             .any(|k| matches!(k, VmConstraint2::Lookup(l) if l.table == TID_P2));
         Presence {
-            chip: has_chip_lookup || has_map,
-            byte: !layout.ranges.is_empty() || has_mem,
+            chip: has_chip_lookup || has_map_rw || has_map_absent,
+            byte: !layout.ranges.is_empty() || has_mem || has_umem || has_map_absent,
             memory: has_mem,
-            map_ops: has_map,
+            map_ops: has_map_rw,
+            map_absent: has_map_absent,
+            umem: has_umem,
         }
     }
 }
@@ -1646,12 +2413,62 @@ struct Ir2Traces {
     memory: Option<Vec<Vec<BabyBear>>>,
     boundary: Option<Vec<Vec<BabyBear>>>,
     map_ops: Option<Vec<Vec<BabyBear>>>,
+    map_absent: Option<Vec<Vec<BabyBear>>>,
+    umemory: Option<Vec<Vec<BabyBear>>>,
+    umem_boundary: Option<Vec<Vec<BabyBear>>>,
+}
+
+/// Witness fill of one canonical decomposition block `[hi4, lo27 limbs, is15, inv15]` of a
+/// canonical (`< p`) value. `real` gates the is15-forcing leg exactly as the AIR's `gate`.
+fn fill_canon(v: u32, real: bool, out: &mut Vec<BabyBear>, hist: &mut [u64; BYTE_TABLE_HEIGHT]) {
+    let hi4 = v >> KEY_LO_BITS;
+    let lo27 = v & ((1u32 << KEY_LO_BITS) - 1);
+    out.push(BabyBear::new(hi4));
+    hist[hi4 as usize] += 1;
+    fill_decomp(lo27, KEY_LO_BITS, out, hist);
+    let is15 = real && hi4 as u64 == KEY_HI_MAX;
+    out.push(if is15 { BabyBear::ONE } else { BabyBear::ZERO });
+    // (hi4 − 15)·inv15 = gate − is15: zero on pads; the field inverse on real non-15 rows.
+    let inv15 = if !real || is15 {
+        BabyBear::ZERO
+    } else {
+        (BabyBear::new(hi4) - BabyBear::new(KEY_HI_MAX as u32))
+            .inverse()
+            .expect("hi4 != 15")
+    };
+    out.push(inv15);
+}
+
+/// Witness fill of one lexicographic strict-lt comparator block `[s, dhi, dlo, dlo limbs]`
+/// for `a < b` (both canonical), gated by `active`.
+fn fill_lex_lt(
+    a: u32,
+    b: u32,
+    active: bool,
+    out: &mut Vec<BabyBear>,
+    hist: &mut [u64; BYTE_TABLE_HEIGHT],
+) -> Result<(), String> {
+    let (a_hi, a_lo) = (a >> KEY_LO_BITS, a & ((1u32 << KEY_LO_BITS) - 1));
+    let (b_hi, b_lo) = (b >> KEY_LO_BITS, b & ((1u32 << KEY_LO_BITS) - 1));
+    if active && b <= a {
+        return Err(format!("lex-lt witness: {b} is not strictly above {a}"));
+    }
+    let s = active && b_hi != a_hi;
+    let dhi = if s { b_hi - a_hi - 1 } else { 0 };
+    let dlo = if active && !s { b_lo - a_lo - 1 } else { 0 };
+    out.push(if s { BabyBear::ONE } else { BabyBear::ZERO });
+    out.push(BabyBear::new(dhi));
+    hist[dhi as usize] += 1;
+    out.push(BabyBear::new(dlo));
+    fill_decomp(dlo, KEY_LO_BITS, out, hist);
+    Ok(())
 }
 
 /// Assemble the PRESENT instance traces from the base main trace + the boundary witness +
 /// the map heaps. `check` controls the prover-side pre-flight replay (the test harness
 /// disables it to exercise the in-circuit refusals).
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn build_traces(
     desc: &EffectVmDescriptor2,
     layout: &MainLayout,
@@ -1659,6 +2476,7 @@ fn build_traces(
     base_trace: &[Vec<BabyBear>],
     mem_boundary: &MemBoundaryWitness,
     map_heaps: &[Vec<HeapLeaf>],
+    umem_boundary: &UMemBoundaryWitness,
     check: bool,
 ) -> Result<Ir2Traces, String> {
     let mut byte_hist = [0u64; BYTE_TABLE_HEIGHT];
@@ -1869,6 +2687,238 @@ fn build_traces(
     boundary = Some(mb_rows);
     } // if presence.memory
 
+    // ---- the UNIVERSAL memory log (per row, per declared umem op, guard = 1). ----
+    let mut umem_log: Vec<[BabyBear; 8]> = Vec::new();
+    for (ri, base_row) in base_trace.iter().enumerate() {
+        for k in &desc.constraints {
+            if let VmConstraint2::UMemOp(m) = k {
+                let g = eval_c(&m.guard, base_row);
+                if g == BabyBear::ZERO {
+                    continue;
+                }
+                if g != BabyBear::ONE {
+                    return Err(format!("row {ri}: umem_op guard evaluates to {g:?}, not 0/1"));
+                }
+                let present = eval_c(&m.present, base_row);
+                let value = eval_c(&m.value, base_row);
+                let prev_present = eval_c(&m.prev_present, base_row);
+                let prev_value = eval_c(&m.prev_value, base_row);
+                for (p, v, what) in
+                    [(present, value, "cell"), (prev_present, prev_value, "prev cell")]
+                {
+                    if p != BabyBear::ZERO && p != BabyBear::ONE {
+                        return Err(format!(
+                            "row {ri}: umem_op {what} present bit is {p:?}, not 0/1"
+                        ));
+                    }
+                    if p == BabyBear::ZERO && v != BabyBear::ZERO {
+                        return Err(format!(
+                            "row {ri}: umem_op {what} is non-canonical: absent (present = 0) \
+                             with payload {v:?} != 0"
+                        ));
+                    }
+                }
+                umem_log.push([
+                    BabyBear::new(m.domain),
+                    eval_c(&m.key, base_row),
+                    present,
+                    value,
+                    prev_present,
+                    prev_value,
+                    eval_c(&m.prev_serial, base_row),
+                    BabyBear::new(m.kind.code()),
+                ]);
+            }
+        }
+    }
+
+    // ---- universal memory table: log rows, positional serials, gaps, the nullifier
+    //      insert-only indicator. NO chip rows: the one-multiset argument hashes nothing. ----
+    let mut umemory: Option<Vec<Vec<BabyBear>>> = None;
+    let mut umem_boundary_rows: Option<Vec<Vec<BabyBear>>> = None;
+    if presence.umem {
+        let um_height = next_pow2(umem_log.len());
+        let mut um_rows: Vec<Vec<BabyBear>> = Vec::with_capacity(um_height);
+        for i in 0..um_height {
+            let serial = (i + 1) as u32;
+            let (tuple, is_real): ([BabyBear; 8], bool) = if i < umem_log.len() {
+                (umem_log[i], true)
+            } else {
+                ([BabyBear::ZERO; 8], false)
+            };
+            let mut row: Vec<BabyBear> = Vec::with_capacity(UM_WIDTH);
+            row.extend_from_slice(&tuple);
+            row.push(BabyBear::new(serial));
+            row.push(if is_real { BabyBear::ONE } else { BabyBear::ZERO });
+            let gap = if is_real {
+                let prev = tuple[6].as_u32();
+                if prev >= serial {
+                    return Err(format!(
+                        "umem op {i}: claimed prev serial {prev} not before own serial {serial}"
+                    ));
+                }
+                serial - 1 - prev
+            } else {
+                0
+            };
+            if (gap as u64) >= (1u64 << MEM_GAP_BITS) {
+                return Err(format!("umem op {i}: serial gap {gap} >= 2^{MEM_GAP_BITS}"));
+            }
+            row.push(BabyBear::new(gap));
+            fill_decomp(gap, MEM_GAP_BITS, &mut row, &mut byte_hist);
+            // The forced nullifier-domain indicator + its inverse witness.
+            let domain = tuple[0];
+            byte_hist[domain.as_u32() as usize] += 1; // the domain nibble lookup, every row
+            let is_null = is_real && domain.as_u32() == NULLIFIER_DOMAIN;
+            row.push(if is_null { BabyBear::ONE } else { BabyBear::ZERO });
+            let null_inv = if !is_real || is_null {
+                BabyBear::ZERO
+            } else {
+                (domain - BabyBear::new(NULLIFIER_DOMAIN))
+                    .inverse()
+                    .expect("domain != nullifiers")
+            };
+            row.push(null_inv);
+            // THE INSERT-ONLY TOOTH, pre-flight face (the AIR refuses it in-circuit too).
+            if is_null && tuple[7] == BabyBear::ONE && tuple[2] == BabyBear::ZERO {
+                return Err(format!(
+                    "umem op {i}: nullifier-domain write installs an ABSENT cell — \
+                     insert-only discipline violated (nobody un-spends)"
+                ));
+            }
+            debug_assert_eq!(row.len(), UM_WIDTH);
+            um_rows.push(row);
+        }
+        umemory = Some(um_rows);
+
+        // ---- universal boundary: declared (domain, key) addresses, lexicographically
+        //      strictly increasing; replayed Option final image; full-felt key ordering via
+        //      the canonical decomposition. ----
+        if umem_boundary.addrs.len() != umem_boundary.init_vals.len() {
+            return Err("umem boundary addrs/init_vals length mismatch".to_string());
+        }
+        for w in umem_boundary.addrs.windows(2) {
+            let (d0, k0) = (w[0].0, w[0].1.as_u32());
+            let (d1, k1) = (w[1].0, w[1].1.as_u32());
+            if (d1, k1) <= (d0, k0) {
+                return Err(format!(
+                    "umem boundary addresses must be lexicographically strictly increasing \
+                     (({d0}, {k0}) then ({d1}, {k1}))"
+                ));
+            }
+        }
+        for &(d, _) in &umem_boundary.addrs {
+            if d >= DOMAIN_BOUND {
+                return Err(format!("umem boundary domain {d} out of the nibble bound"));
+            }
+        }
+        // Replay: image (domain, key) → (present, value, serial); per-address multiplicity.
+        let mut image: BTreeMap<(u32, u32), (BabyBear, BabyBear, u32)> = umem_boundary
+            .addrs
+            .iter()
+            .zip(&umem_boundary.init_vals)
+            .map(|(&(d, k), &v)| {
+                (
+                    (d, k.as_u32()),
+                    match v {
+                        Some(v) => (BabyBear::ONE, v, 0u32),
+                        None => (BabyBear::ZERO, BabyBear::ZERO, 0u32),
+                    },
+                )
+            })
+            .collect();
+        let mut addr_mult: BTreeMap<(u32, u32), u64> = BTreeMap::new();
+        for (i, op) in umem_log.iter().enumerate() {
+            let a = (op[0].as_u32(), op[1].as_u32());
+            let Some(&(cur_p, cur_v, cur_s)) = image.get(&a) else {
+                return Err(format!(
+                    "umem op {i} touches undeclared address ({}, {}) (umemClosed)",
+                    a.0, a.1
+                ));
+            };
+            if check && (op[4] != cur_p || op[5] != cur_v || op[6].as_u32() != cur_s) {
+                return Err(format!(
+                    "umem op {i} at ({}, {}): claimed prev cell ({}, {}, {}) != replayed \
+                     ({}, {}, {cur_s})",
+                    a.0,
+                    a.1,
+                    op[4].as_u32(),
+                    op[5].as_u32(),
+                    op[6].as_u32(),
+                    cur_p.as_u32(),
+                    cur_v.as_u32(),
+                ));
+            }
+            image.insert(a, (op[2], op[3], (i + 1) as u32));
+            *addr_mult.entry(a).or_insert(0) += 1;
+        }
+        let ub_height = next_pow2(umem_boundary.addrs.len());
+        let mut ub_rows: Vec<Vec<BabyBear>> = Vec::with_capacity(ub_height);
+        for i in 0..ub_height {
+            let mut row: Vec<BabyBear> = Vec::with_capacity(UB_WIDTH);
+            let (domain, key, init, is_real) = if i < umem_boundary.addrs.len() {
+                (
+                    umem_boundary.addrs[i].0,
+                    umem_boundary.addrs[i].1,
+                    umem_boundary.init_vals[i],
+                    true,
+                )
+            } else {
+                (0, BabyBear::ZERO, None, false)
+            };
+            let (init_p, init_v) = match init {
+                Some(v) => (BabyBear::ONE, v),
+                None => (BabyBear::ZERO, BabyBear::ZERO),
+            };
+            let (fin_p, fin_v, fin_s) = if is_real {
+                image[&(domain, key.as_u32())]
+            } else {
+                (BabyBear::ZERO, BabyBear::ZERO, 0)
+            };
+            row.push(BabyBear::new(domain));
+            byte_hist[domain as usize] += 1; // the domain nibble lookup, every row
+            row.push(key);
+            row.push(init_p);
+            row.push(init_v);
+            row.push(fin_p);
+            row.push(fin_v);
+            row.push(BabyBear::new(fin_s));
+            row.push(if is_real { BabyBear::ONE } else { BabyBear::ZERO });
+            row.push(BabyBear::new(
+                (*addr_mult.get(&(domain, key.as_u32())).unwrap_or(&0)
+                    % (BABYBEAR_P as u64)) as u32
+                    * (is_real as u32),
+            ));
+            fill_canon(key.as_u32(), is_real, &mut row, &mut byte_hist);
+            // Ordering witness vs the NEXT declared row.
+            let next_real = i + 1 < umem_boundary.addrs.len();
+            let (dgap, same_dom) = if next_real {
+                let nd = umem_boundary.addrs[i + 1].0;
+                (nd - domain, nd == domain)
+            } else {
+                (0, false)
+            };
+            row.push(BabyBear::new(dgap));
+            byte_hist[dgap as usize] += 1; // the dgap nibble lookup, every row
+            row.push(if same_dom { BabyBear::ONE } else { BabyBear::ZERO });
+            // dgap·inv = next_real − same_dom: the inverse witness when domains differ.
+            row.push(if next_real && dgap != 0 {
+                BabyBear::new(dgap).inverse().expect("dgap != 0")
+            } else {
+                BabyBear::ZERO
+            });
+            let next_key = if next_real {
+                umem_boundary.addrs[i + 1].1.as_u32()
+            } else {
+                0
+            };
+            fill_lex_lt(key.as_u32(), next_key, same_dom, &mut row, &mut byte_hist)?;
+            debug_assert_eq!(row.len(), UB_WIDTH);
+            ub_rows.push(row);
+        }
+        umem_boundary_rows = Some(ub_rows);
+    } // if presence.umem
+
     // ---- the map-ops log + the opening witnesses. ----
     let mut map_log: Vec<([BabyBear; 5], MapKind)> = Vec::new();
     for (ri, base_row) in base_trace.iter().enumerate() {
@@ -1895,13 +2945,14 @@ fn build_traces(
         }
     }
     let mut map_ops: Option<Vec<Vec<BabyBear>>> = None;
-    if presence.map_ops {
+    let mut map_absent: Option<Vec<Vec<BabyBear>>> = None;
+    if presence.map_ops || presence.map_absent {
     let mut trees: Vec<CanonicalHeapTree> = map_heaps
         .iter()
         .map(|leaves| CanonicalHeapTree::new(leaves.clone(), HEAP_TREE_DEPTH))
         .collect();
-    let map_height = next_pow2(map_log.len());
-    let mut map_rows: Vec<Vec<BabyBear>> = Vec::with_capacity(map_height);
+    let mut map_rows: Vec<Vec<BabyBear>> = Vec::new();
+    let mut ma_rows: Vec<Vec<BabyBear>> = Vec::new();
     for (i, (tuple, kind)) in map_log.iter().enumerate() {
         let [root, key, value, _opc, new_root] = *tuple;
         let tree = trees
@@ -1909,6 +2960,112 @@ fn build_traces(
             .find(|t| t.root() == root)
             .cloned()
             .ok_or_else(|| format!("map op {i}: no witness heap with root {}", root.as_u32()))?;
+
+        // -- `absent`: the bracketed sorted-gap non-membership opening, its own table. --
+        if *kind == MapKind::Absent {
+            if check && new_root != root {
+                return Err(format!("map op {i}: absent must preserve the root"));
+            }
+            if check && value != BabyBear::ZERO {
+                return Err(format!("map op {i}: absent carries the canonical value 0"));
+            }
+            let key_u = key.as_u32();
+            if key == SENTINEL_MIN || key.as_u32() >= SENTINEL_MAX.as_u32() {
+                return Err(format!(
+                    "map op {i}: absent key {key_u} collides with the sentinel range"
+                ));
+            }
+            if tree.position_of(key).is_some() {
+                return Err(format!(
+                    "map op {i}: absent key {key_u} IS present in the heap — no bracketing \
+                     witness exists (the gap teeth would refuse it in-circuit)"
+                ));
+            }
+            let leaves = tree.sorted_leaves();
+            let lo_pos = leaves
+                .iter()
+                .rposition(|l| l.addr.as_u32() < key_u)
+                .ok_or_else(|| format!("map op {i}: no lower bracket for key {key_u}"))?;
+            let lo = leaves[lo_pos];
+            let hi = *leaves
+                .get(lo_pos + 1)
+                .ok_or_else(|| format!("map op {i}: no upper bracket for key {key_u}"))?;
+            debug_assert!(hi.addr.as_u32() > key_u);
+            let (lo_sibs, lo_dirs) = tree
+                .prove_membership(lo_pos)
+                .ok_or_else(|| format!("map op {i}: lower bracket path failed"))?;
+            let (hi_sibs, hi_dirs) = tree
+                .prove_membership(lo_pos + 1)
+                .ok_or_else(|| format!("map op {i}: upper bracket path failed"))?;
+
+            let mut cols: Vec<BabyBear> = Vec::with_capacity(MA_WIDTH);
+            cols.push(root);
+            cols.push(key);
+            cols.push(new_root);
+            cols.push(BabyBear::ONE);
+            cols.push(lo.addr);
+            cols.push(lo.value);
+            cols.push(hi.addr);
+            cols.push(hi.value);
+            // The two leaf digests (chip absorbs) + the two fact chains to the root.
+            let leaf_digest = |a: BabyBear, b: BabyBear| perm_aux(hash2_state_c(a, b)).1;
+            let absorb2_tuple = |a: BabyBear, b: BabyBear, d: BabyBear| -> Vec<u32> {
+                let mut t = vec![2u32, a.as_u32(), b.as_u32()];
+                t.extend(std::iter::repeat(0u32).take(CHIP_RATE - 2));
+                t.push(d.as_u32());
+                t
+            };
+            let lo_leaf = leaf_digest(lo.addr, lo.value);
+            let hi_leaf = leaf_digest(hi.addr, hi.value);
+            *chip_hist
+                .entry(absorb2_tuple(lo.addr, lo.value, lo_leaf))
+                .or_insert(0) += 1;
+            *chip_hist
+                .entry(absorb2_tuple(hi.addr, hi.value, hi_leaf))
+                .or_insert(0) += 1;
+            cols.push(lo_leaf);
+            cols.push(hi_leaf);
+            let mut chains: Vec<Vec<BabyBear>> = Vec::with_capacity(2);
+            for (leaf, sibs, dirs) in
+                [(lo_leaf, &lo_sibs, &lo_dirs), (hi_leaf, &hi_sibs, &hi_dirs)]
+            {
+                let mut chain: Vec<BabyBear> = Vec::with_capacity(HEAP_TREE_DEPTH - 1);
+                let mut cur = leaf;
+                for lvl in 0..HEAP_TREE_DEPTH {
+                    let sib = sibs[lvl];
+                    let (l, r) = if dirs[lvl] != 0 { (sib, cur) } else { (cur, sib) };
+                    let d = perm_aux(fact_state_c(l, r)).1;
+                    *fact_hist
+                        .entry((l.as_u32(), r.as_u32(), d.as_u32()))
+                        .or_insert(0) += 1;
+                    if lvl + 1 < HEAP_TREE_DEPTH {
+                        chain.push(d);
+                    }
+                    cur = d;
+                }
+                debug_assert_eq!(cur, root, "bracket path must authenticate against the root");
+                chains.push(chain);
+            }
+            for sibs in [&lo_sibs, &hi_sibs] {
+                debug_assert_eq!(sibs.len(), HEAP_TREE_DEPTH);
+            }
+            cols.extend_from_slice(&lo_sibs);
+            cols.extend(lo_dirs.iter().map(|&d| BabyBear::new(d as u32)));
+            cols.extend_from_slice(&chains[0]);
+            cols.extend_from_slice(&hi_sibs);
+            cols.extend(hi_dirs.iter().map(|&d| BabyBear::new(d as u32)));
+            cols.extend_from_slice(&chains[1]);
+            // Canonical decompositions of (lo_addr, key, hi_addr) + the two gap comparators.
+            fill_canon(lo.addr.as_u32(), true, &mut cols, &mut byte_hist);
+            fill_canon(key_u, true, &mut cols, &mut byte_hist);
+            fill_canon(hi.addr.as_u32(), true, &mut cols, &mut byte_hist);
+            fill_lex_lt(lo.addr.as_u32(), key_u, true, &mut cols, &mut byte_hist)?;
+            fill_lex_lt(key_u, hi.addr.as_u32(), true, &mut cols, &mut byte_hist)?;
+            debug_assert_eq!(cols.len(), MA_WIDTH);
+            ma_rows.push(cols);
+            continue;
+        }
+
         let (old_value, sibs, dirs) = match kind {
             MapKind::Read => {
                 let pos = tree.position_of(key).ok_or_else(|| {
@@ -1963,7 +3120,7 @@ fn build_traces(
                 trees.push(CanonicalHeapTree::new(new_leaves, HEAP_TREE_DEPTH));
                 (w.old_leaf.value, w.siblings, w.directions)
             }
-            MapKind::Absent => unreachable!("absent refused by check_descriptor2"),
+            MapKind::Absent => unreachable!("absent handled above"),
         };
         let mut cols = vec![BabyBear::ZERO; MAP_WIDTH];
         cols[MAP_ROOT] = root;
@@ -2023,12 +3180,36 @@ fn build_traces(
         }
         map_rows.push(cols);
     }
-    // Pad rows are all-zero: is_real = 0 gates every lookup and the log receive.
-    while map_rows.len() < map_height {
-        map_rows.push(vec![BabyBear::ZERO; MAP_WIDTH]);
+    // Pad rows: all-zero for map-ops (is_real = 0 gates every lookup and the log receive);
+    // canon/comparator-shaped zeros for map-absent (its hi4/dhi/limb lookups ride the byte
+    // bus with multiplicity ONE on every row, so pads contribute their zero queries).
+    if presence.map_ops {
+        let map_height = next_pow2(map_rows.len());
+        while map_rows.len() < map_height {
+            map_rows.push(vec![BabyBear::ZERO; MAP_WIDTH]);
+        }
+        map_ops = Some(map_rows);
+    } else if !map_rows.is_empty() {
+        return Err("read/write map ops gathered but the map-ops table is absent".to_string());
     }
-    map_ops = Some(map_rows);
-    } // if presence.map_ops
+    if presence.map_absent {
+        let ma_height = next_pow2(ma_rows.len());
+        while ma_rows.len() < ma_height {
+            let mut cols: Vec<BabyBear> = vec![BabyBear::ZERO; MA_A_DEC0];
+            for _ in 0..3 {
+                fill_canon(0, false, &mut cols, &mut byte_hist);
+            }
+            for _ in 0..2 {
+                fill_lex_lt(0, 0, false, &mut cols, &mut byte_hist)?;
+            }
+            debug_assert_eq!(cols.len(), MA_WIDTH);
+            ma_rows.push(cols);
+        }
+        map_absent = Some(ma_rows);
+    } else if !ma_rows.is_empty() {
+        return Err("absent map ops gathered but the map-absent table is absent".to_string());
+    }
+    } // if presence.map_ops || presence.map_absent
 
     // ---- chip table: one row per unique permutation (absorb + fact), mult-counted. ----
     let chip: Option<Vec<Vec<BabyBear>>> = if presence.chip {
@@ -2090,6 +3271,9 @@ fn build_traces(
         memory,
         boundary,
         map_ops,
+        map_absent,
+        umemory,
+        umem_boundary: umem_boundary_rows,
     })
 }
 
@@ -2113,6 +3297,13 @@ fn instance_airs(desc: &EffectVmDescriptor2, layout: MainLayout, presence: Prese
     }
     if presence.map_ops {
         airs.push(Ir2Air::MapOps);
+    }
+    if presence.map_absent {
+        airs.push(Ir2Air::MapAbsent);
+    }
+    if presence.umem {
+        airs.push(Ir2Air::UMemory);
+        airs.push(Ir2Air::UMemBoundary);
     }
     airs
 }
@@ -2138,12 +3329,14 @@ fn ir2_config() -> DreggStarkConfig {
     create_config_with_fri(6, 0, 3, 19, 16)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prove_vm_descriptor2_inner(
     desc: &EffectVmDescriptor2,
     base_trace: &[Vec<BabyBear>],
     public_inputs: &[BabyBear],
     mem_boundary: &MemBoundaryWitness,
     map_heaps: &[Vec<HeapLeaf>],
+    umem_boundary: &UMemBoundaryWitness,
     check: bool,
     config: &DreggStarkConfig,
 ) -> Result<BatchProof<DreggStarkConfig>, String> {
@@ -2180,21 +3373,46 @@ fn prove_vm_descriptor2_inner(
                 .to_string(),
         );
     }
-    if !presence.map_ops && !map_heaps.is_empty() {
+    if !(presence.map_ops || presence.map_absent) && !map_heaps.is_empty() {
         return Err(
             "descriptor declares no map ops but witness heaps were supplied \
-             (the map-ops table is not committed for this descriptor)"
+             (the map-ops/map-absent tables are not committed for this descriptor)"
+                .to_string(),
+        );
+    }
+    if !presence.umem && !umem_boundary.is_empty() {
+        return Err(
+            "descriptor declares no umem ops but a universal boundary witness was supplied \
+             (the universal memory tables are not committed for this descriptor)"
                 .to_string(),
         );
     }
 
-    let traces = build_traces(desc, &layout, presence, base_trace, mem_boundary, map_heaps, check)?;
+    let traces = build_traces(
+        desc,
+        &layout,
+        presence,
+        base_trace,
+        mem_boundary,
+        map_heaps,
+        umem_boundary,
+        check,
+    )?;
     let airs = instance_airs(desc, layout, presence);
 
     let mut matrices = vec![to_matrix(&traces.main)];
-    for t in [&traces.chip, &traces.byte, &traces.memory, &traces.boundary, &traces.map_ops]
-        .into_iter()
-        .flatten()
+    for t in [
+        &traces.chip,
+        &traces.byte,
+        &traces.memory,
+        &traces.boundary,
+        &traces.map_ops,
+        &traces.map_absent,
+        &traces.umemory,
+        &traces.umem_boundary,
+    ]
+    .into_iter()
+    .flatten()
     {
         matrices.push(to_matrix(t));
     }
@@ -2249,6 +3467,32 @@ pub fn prove_vm_descriptor2(
         public_inputs,
         mem_boundary,
         map_heaps,
+        &UMemBoundaryWitness::default(),
+        true,
+        &ir2_config(),
+    )
+}
+
+/// **`prove_vm_descriptor2_umem`** — [`prove_vm_descriptor2`] for descriptors that declare
+/// UNIVERSAL memory ops: takes the declared `(domain, key)` boundary + initial `Option` image
+/// (`UMemBoundaryWitness`, Lean's `(uinit, ufin, uaddrs)` with `ufin` replayed). Everything
+/// else is identical — and a umem-only descriptor commits NO chip table: the one-multiset
+/// memory argument hashes nothing, intra-proof.
+pub fn prove_vm_descriptor2_umem(
+    desc: &EffectVmDescriptor2,
+    base_trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+    mem_boundary: &MemBoundaryWitness,
+    map_heaps: &[Vec<HeapLeaf>],
+    umem_boundary: &UMemBoundaryWitness,
+) -> Result<BatchProof<DreggStarkConfig>, String> {
+    prove_vm_descriptor2_inner(
+        desc,
+        base_trace,
+        public_inputs,
+        mem_boundary,
+        map_heaps,
+        umem_boundary,
         true,
         &ir2_config(),
     )
@@ -2273,6 +3517,7 @@ pub fn prove_vm_descriptor2_with_config(
         public_inputs,
         mem_boundary,
         map_heaps,
+        &UMemBoundaryWitness::default(),
         true,
         config,
     )
@@ -2370,6 +3615,9 @@ mod tests {
                     Ir2Air::Memory => "memory",
                     Ir2Air::MemBoundary => "boundary",
                     Ir2Air::MapOps => "map_ops",
+                    Ir2Air::MapAbsent => "map_absent",
+                    Ir2Air::UMemory => "umemory",
+                    Ir2Air::UMemBoundary => "umem_boundary",
                 };
                 (name.to_string(), deg)
             })
@@ -2385,7 +3633,8 @@ mod tests {
     /// prover panic on one descriptor later.
     ///
     /// Measured (2026-06-11): main ≤ 3 (setFieldDyn 8) · chip 7 (inline S-box) ·
-    /// byte 3 · memory 3 · boundary 3 · map_ops 4 (in-tuple dir-mix legs).
+    /// byte 3 · memory 3 · boundary 3 · map_ops 4 (in-tuple dir-mix legs) ·
+    /// map_absent 4 (the same dir-mix legs, twice) · umemory 3 · umem_boundary 3.
     #[test]
     fn ir2_degree_budget() {
         let mut cohort: Vec<(String, EffectVmDescriptor2)> =
@@ -2396,6 +3645,8 @@ mod tests {
                 })
                 .collect();
         cohort.push(("ir2-test-gauntlet".to_string(), test_desc()));
+        cohort.push(("ir2-umem-gauntlet".to_string(), umem_desc()));
+        cohort.push(("ir2-absent-gauntlet".to_string(), absent_desc()));
         for (key, desc) in &cohort {
             let degs = instance_degrees(desc);
             println!("{key} degrees: {degs:?}");
@@ -2409,6 +3660,13 @@ mod tests {
                     "chip" => 7,
                     // The in-tuple dir-mix lookup legs.
                     "map_ops" => 4,
+                    // The bracketed-gap table: the in-tuple dir-mix fact legs (the
+                    // comparator branches measure lower).
+                    "map_absent" => 4,
+                    // The one-multiset legs + the degree-3 insert-only tooth.
+                    "umemory" => 3,
+                    // The transition-gated lexicographic comparator legs.
+                    "umem_boundary" => 3,
                     // Value-pinned table + decomposition booleans + Blum legs.
                     "byte" | "memory" | "boundary" => 3,
                     other => panic!("{key}: unknown table {other}"),
@@ -2665,6 +3923,7 @@ mod tests {
                 &[],
                 &test_boundary(),
                 &[test_heap()],
+                &UMemBoundaryWitness::default(),
                 false,
                 &ir2_config(),
             )
@@ -2695,6 +3954,7 @@ mod tests {
                 &[],
                 &test_boundary(),
                 &[test_heap()],
+                &UMemBoundaryWitness::default(),
                 false,
                 &ir2_config(),
             )
@@ -2726,6 +3986,7 @@ mod tests {
                 &[],
                 &test_boundary(),
                 &[test_heap()],
+                &UMemBoundaryWitness::default(),
                 false,
                 &ir2_config(),
             )
@@ -2780,6 +4041,7 @@ mod tests {
             &test_trace(),
             &test_boundary(),
             &[test_heap()],
+            &UMemBoundaryWitness::default(),
             true,
         )
         .expect("honest traces");
@@ -2791,9 +4053,18 @@ mod tests {
         }
         let airs = instance_airs(&desc, layout, presence);
         let mut matrices = vec![to_matrix(&traces.main)];
-        for t in [&traces.chip, &traces.byte, &traces.memory, &traces.boundary, &traces.map_ops]
-            .into_iter()
-            .flatten()
+        for t in [
+            &traces.chip,
+            &traces.byte,
+            &traces.memory,
+            &traces.boundary,
+            &traces.map_ops,
+            &traces.map_absent,
+            &traces.umemory,
+            &traces.umem_boundary,
+        ]
+        .into_iter()
+        .flatten()
         {
             matrices.push(to_matrix(t));
         }
@@ -2888,5 +4159,546 @@ mod tests {
             "map-only descriptor commits main + chip + map-ops (chains ride the chip bus)"
         );
         verify_vm_descriptor2(&desc, &proof, &[]).expect("map write proof must verify");
+    }
+
+    // ================================================================
+    // The UNIVERSAL memory leg (umem_op) + the absent (sorted-gap) leg
+    // ================================================================
+
+    /// The Lean `#guard`-pinned demo-umem golden (DescriptorIR2 §10b): the `umem_op` grammar
+    /// + the `umemory`/`umem_boundary` table sems, byte-for-byte.
+    const DEMO_UMEM: &str = "{\"name\":\"demo-umem\",\"ir\":2,\"trace_width\":4,\"public_input_count\":0,\"tables\":[{\"id\":0,\"name\":\"main\",\"arity\":4,\"sem\":\"main\"},{\"id\":6,\"name\":\"umemory\",\"arity\":8,\"sem\":\"umemory\"},{\"id\":7,\"name\":\"umem_boundary\",\"arity\":7,\"sem\":\"umem_boundary\"}],\"constraints\":[{\"t\":\"umem_op\",\"kind\":\"write\",\"domain\":3,\"guard\":{\"t\":\"const\",\"v\":1},\"key\":{\"t\":\"var\",\"v\":0},\"present\":{\"t\":\"const\",\"v\":1},\"value\":{\"t\":\"const\",\"v\":1},\"prev_present\":{\"t\":\"const\",\"v\":0},\"prev_value\":{\"t\":\"const\",\"v\":0},\"prev_serial\":{\"t\":\"const\",\"v\":0}},{\"t\":\"umem_op\",\"kind\":\"read\",\"domain\":3,\"guard\":{\"t\":\"const\",\"v\":1},\"key\":{\"t\":\"var\",\"v\":1},\"present\":{\"t\":\"const\",\"v\":0},\"value\":{\"t\":\"const\",\"v\":0},\"prev_present\":{\"t\":\"const\",\"v\":0},\"prev_value\":{\"t\":\"const\",\"v\":0},\"prev_serial\":{\"t\":\"const\",\"v\":0}},{\"t\":\"umem_op\",\"kind\":\"write\",\"domain\":0,\"guard\":{\"t\":\"const\",\"v\":1},\"key\":{\"t\":\"var\",\"v\":2},\"present\":{\"t\":\"const\",\"v\":1},\"value\":{\"t\":\"var\",\"v\":3},\"prev_present\":{\"t\":\"const\",\"v\":0},\"prev_value\":{\"t\":\"const\",\"v\":0},\"prev_serial\":{\"t\":\"const\",\"v\":0}}],\"hash_sites\":[],\"ranges\":[]}";
+
+    /// The byte-pinned Lean umem golden parses, with every element decoded.
+    #[test]
+    fn parses_lean_umem_golden() {
+        let d = parse_vm_descriptor2(DEMO_UMEM).expect("umem golden must parse");
+        assert_eq!(d.name, "demo-umem");
+        assert_eq!(d.tables.len(), 3);
+        assert_eq!(d.tables[1].sem, TableSem::UMemory);
+        assert_eq!(d.tables[1].id, TID_UMEMORY);
+        assert_eq!(d.tables[2].sem, TableSem::UMemBoundary);
+        assert_eq!(d.tables[2].id, TID_UMEM_BOUNDARY);
+        assert_eq!(d.constraints.len(), 3);
+        assert!(matches!(
+            &d.constraints[0],
+            VmConstraint2::UMemOp(UMemOpSpec { kind: MemKind::Write, domain: NULLIFIER_DOMAIN, .. })
+        ));
+        assert!(matches!(
+            &d.constraints[1],
+            VmConstraint2::UMemOp(UMemOpSpec { kind: MemKind::Read, domain: NULLIFIER_DOMAIN, .. })
+        ));
+        assert!(matches!(
+            &d.constraints[2],
+            VmConstraint2::UMemOp(UMemOpSpec { kind: MemKind::Write, domain: 0, .. })
+        ));
+        check_descriptor2(&d).expect("umem golden must check");
+    }
+
+    /// A HUGE (hash-image-scale) nullifier key: `p − 2` (hi4 = 14, lo27 = 2^27 − 1) — the
+    /// canonical-decomposition machinery must order it, which the 30-bit flat regime cannot.
+    const BIG_KEY: u32 = BABYBEAR_P - 2;
+
+    /// Base layout: col 0 = inserted nullifier key, 1 = fresh-checked nullifier key,
+    /// 2 = register key, 3 = register value, 4 = the op guard.
+    fn umem_desc() -> EffectVmDescriptor2 {
+        let op = |domain: u32,
+                  key: LeanExpr,
+                  present: LeanExpr,
+                  value: LeanExpr,
+                  prev_present: LeanExpr,
+                  prev_value: LeanExpr,
+                  prev_serial: LeanExpr,
+                  kind: MemKind| {
+            VmConstraint2::UMemOp(UMemOpSpec {
+                guard: LeanExpr::Var(4),
+                domain,
+                key,
+                present,
+                value,
+                prev_present,
+                prev_value,
+                prev_serial,
+                kind,
+            })
+        };
+        EffectVmDescriptor2 {
+            name: "ir2-umem-test".to_string(),
+            trace_width: 5,
+            public_input_count: 0,
+            tables: vec![],
+            constraints: vec![
+                // The nullifier INSERT (serial 1).
+                op(
+                    NULLIFIER_DOMAIN,
+                    LeanExpr::Var(0),
+                    LeanExpr::Const(1),
+                    LeanExpr::Const(1),
+                    LeanExpr::Const(0),
+                    LeanExpr::Const(0),
+                    LeanExpr::Const(0),
+                    MemKind::Write,
+                ),
+                // THE FRESHNESS READ (serial 2): one row, present = 0 — `none`. No Merkle
+                // path, no gap opening, no hashing (`nullifier_fresh_sound`).
+                op(
+                    NULLIFIER_DOMAIN,
+                    LeanExpr::Var(1),
+                    LeanExpr::Const(0),
+                    LeanExpr::Const(0),
+                    LeanExpr::Const(0),
+                    LeanExpr::Const(0),
+                    LeanExpr::Const(0),
+                    MemKind::Read,
+                ),
+                // A register write (serial 3): a SECOND domain in the SAME table — the
+                // one-multiset coverage (`universal_memory_sound`).
+                op(
+                    0,
+                    LeanExpr::Var(2),
+                    LeanExpr::Const(1),
+                    LeanExpr::Var(3),
+                    LeanExpr::Const(0),
+                    LeanExpr::Const(0),
+                    LeanExpr::Const(0),
+                    MemKind::Write,
+                ),
+            ],
+            hash_sites: vec![],
+            ranges: vec![],
+        }
+    }
+
+    fn umem_trace() -> Vec<Vec<BabyBear>> {
+        let row = vec![
+            BabyBear::new(7),       // inserted nullifier
+            BabyBear::new(BIG_KEY), // fresh-checked nullifier (full-felt key)
+            BabyBear::new(0),       // register key
+            BabyBear::new(42),      // register value
+            BabyBear::ZERO,         // guard (row 0 only)
+        ];
+        let mut rows = vec![row; 4];
+        rows[0][4] = BabyBear::ONE;
+        rows
+    }
+
+    fn umem_test_boundary() -> UMemBoundaryWitness {
+        UMemBoundaryWitness {
+            addrs: vec![
+                (0, BabyBear::new(0)),
+                (NULLIFIER_DOMAIN, BabyBear::new(7)),
+                (NULLIFIER_DOMAIN, BabyBear::new(BIG_KEY)),
+            ],
+            init_vals: vec![None, None, None],
+        }
+    }
+
+    /// THE UNIVERSAL-MEMORY GATE: nullifier insert + Merkle-path-free freshness read +
+    /// cross-domain register write, ONE multiset, proven and verified — with NO chip table
+    /// committed (the memory argument hashes nothing; `docs/UNIVERSAL-MEMORY.md`'s point,
+    /// measured).
+    #[test]
+    fn ir2_umem_honest_proves_and_verifies_no_chip() {
+        let desc = umem_desc();
+        let proof = prove_vm_descriptor2_umem(
+            &desc,
+            &umem_trace(),
+            &[],
+            &MemBoundaryWitness::default(),
+            &[],
+            &umem_test_boundary(),
+        )
+        .expect("honest umem witness must prove");
+        assert_eq!(
+            proof.degree_bits.len(),
+            4,
+            "umem descriptor commits main + byte + umemory + umem-boundary — and NO chip \
+             table (zero intra-proof hashing)"
+        );
+        verify_vm_descriptor2(&desc, &proof, &[]).expect("umem proof must verify");
+    }
+
+    /// PRESENCE refusal: a universal boundary witness without umem ops must refuse (the
+    /// tables are not committed), and a umem descriptor's proof must carry the tables.
+    #[test]
+    fn ir2_umem_presence_teeth() {
+        let r = prove_vm_descriptor2_umem(
+            &test_desc(),
+            &test_trace(),
+            &[],
+            &test_boundary(),
+            &[test_heap()],
+            &umem_test_boundary(),
+        );
+        assert!(r.is_err(), "stray umem boundary witness must refuse");
+    }
+
+    /// THE DOUBLE-SPEND TOOTH: insert nullifier 7, then claim it is STILL FRESH (the read's
+    /// key re-pointed at the inserted key). Pre-flight replay refuses; with the replay
+    /// bypassed the one-multiset argument has no balancing assembly.
+    #[test]
+    fn ir2_umem_double_spend_refuses() {
+        let desc = umem_desc();
+        let mut rows = umem_trace();
+        rows[0][1] = BabyBear::new(7); // "fresh" read of the JUST-INSERTED nullifier
+        let boundary = UMemBoundaryWitness {
+            addrs: vec![(0, BabyBear::new(0)), (NULLIFIER_DOMAIN, BabyBear::new(7))],
+            init_vals: vec![None, None],
+        };
+        assert!(
+            prove_vm_descriptor2_umem(
+                &desc,
+                &rows,
+                &[],
+                &MemBoundaryWitness::default(),
+                &[],
+                &boundary,
+            )
+            .is_err(),
+            "pre-flight replay must refuse the double spend"
+        );
+        let r = std::panic::catch_unwind(|| {
+            prove_vm_descriptor2_inner(
+                &desc,
+                &rows,
+                &[],
+                &MemBoundaryWitness::default(),
+                &[],
+                &boundary,
+                false,
+                &ir2_config(),
+            )
+        });
+        match r {
+            Err(_) => {}
+            Ok(res) => assert!(
+                res.is_err(),
+                "intra-proof double spend produced an accepted proof — freshness tooth OPEN"
+            ),
+        }
+    }
+
+    /// THE CROSS-DOMAIN STEAL TOOTH: a caps-domain read claims the REGISTER write's cell
+    /// (same key 0, value 42, serial 3 — only the domain tag differs). The tag is its own
+    /// bus coordinate, so the claimed entry cancels nothing: unbalanced, refused. (The Lean
+    /// twin: `UniversalMemory.lean` §6 negative polarity 1.)
+    #[test]
+    fn ir2_umem_cross_domain_steal_refuses() {
+        let mut desc = umem_desc();
+        desc.constraints.push(VmConstraint2::UMemOp(UMemOpSpec {
+            guard: LeanExpr::Var(4),
+            domain: 2, // caps — stealing the registers-domain (0) tuple
+            key: LeanExpr::Var(2),
+            present: LeanExpr::Const(1),
+            value: LeanExpr::Var(3),
+            prev_present: LeanExpr::Const(1),
+            prev_value: LeanExpr::Var(3),
+            prev_serial: LeanExpr::Const(3),
+            kind: MemKind::Read,
+        }));
+        let mut boundary = umem_test_boundary();
+        boundary.addrs.insert(1, (2, BabyBear::new(0)));
+        boundary.init_vals.insert(1, None);
+        assert!(
+            prove_vm_descriptor2_umem(
+                &desc,
+                &umem_trace(),
+                &[],
+                &MemBoundaryWitness::default(),
+                &[],
+                &boundary,
+            )
+            .is_err(),
+            "pre-flight replay must refuse the cross-domain steal"
+        );
+        let r = std::panic::catch_unwind(|| {
+            prove_vm_descriptor2_inner(
+                &desc,
+                &umem_trace(),
+                &[],
+                &MemBoundaryWitness::default(),
+                &[],
+                &boundary,
+                false,
+                &ir2_config(),
+            )
+        });
+        match r {
+            Err(_) => {}
+            Ok(res) => assert!(
+                res.is_err(),
+                "cross-domain tuple steal produced an accepted proof — domain-tag tooth OPEN"
+            ),
+        }
+    }
+
+    /// THE INSERT-ONLY TOOTH: a nullifier-domain write installing `none`. The statically
+    /// violating shape (present = const 0) is refused at check; the DYNAMIC shape (present
+    /// rides a column that evaluates to 0) is refused by the in-circuit
+    /// `is_null·kind·(1−present)` row constraint.
+    #[test]
+    fn ir2_umem_insert_only_refuses_unspend() {
+        // Static shape: refused at descriptor check.
+        let mut desc = umem_desc();
+        desc.constraints[0] = VmConstraint2::UMemOp(UMemOpSpec {
+            guard: LeanExpr::Var(4),
+            domain: NULLIFIER_DOMAIN,
+            key: LeanExpr::Var(0),
+            present: LeanExpr::Const(0),
+            value: LeanExpr::Const(0),
+            prev_present: LeanExpr::Const(0),
+            prev_value: LeanExpr::Const(0),
+            prev_serial: LeanExpr::Const(0),
+            kind: MemKind::Write,
+        });
+        let err = check_descriptor2(&desc).expect_err("static un-spend must refuse");
+        assert!(err.contains("insert-only"), "got: {err}");
+
+        // Dynamic shape: present rides col 3 (set to 0); value 0 keeps the cell canonical.
+        let mut desc2 = umem_desc();
+        desc2.constraints[0] = VmConstraint2::UMemOp(UMemOpSpec {
+            guard: LeanExpr::Var(4),
+            domain: NULLIFIER_DOMAIN,
+            key: LeanExpr::Var(0),
+            present: LeanExpr::Var(3),
+            value: LeanExpr::Const(0),
+            prev_present: LeanExpr::Const(0),
+            prev_value: LeanExpr::Const(0),
+            prev_serial: LeanExpr::Const(0),
+            kind: MemKind::Write,
+        });
+        let mut rows = umem_trace();
+        for row in &mut rows {
+            row[3] = BabyBear::ZERO; // the dynamic present bit evaluates to 0
+            row[1] = BabyBear::new(9); // make the freshness read consistent (key 9 untouched)
+        }
+        let boundary = UMemBoundaryWitness {
+            addrs: vec![
+                (0, BabyBear::new(0)),
+                (NULLIFIER_DOMAIN, BabyBear::new(7)),
+                (NULLIFIER_DOMAIN, BabyBear::new(9)),
+            ],
+            init_vals: vec![None, None, None],
+        };
+        assert!(
+            prove_vm_descriptor2_umem(
+                &desc2,
+                &rows,
+                &[],
+                &MemBoundaryWitness::default(),
+                &[],
+                &boundary,
+            )
+            .is_err(),
+            "pre-flight must refuse the dynamic un-spend"
+        );
+        let r = std::panic::catch_unwind(|| {
+            prove_vm_descriptor2_inner(
+                &desc2,
+                &rows,
+                &[],
+                &MemBoundaryWitness::default(),
+                &[],
+                &boundary,
+                false,
+                &ir2_config(),
+            )
+        });
+        match r {
+            Err(_) => {}
+            Ok(res) => assert!(
+                res.is_err(),
+                "nullifier un-spend produced an accepted proof — insert-only tooth OPEN"
+            ),
+        }
+    }
+
+    /// A tampered umem READ (claims register value 43 where the write installed 42) must
+    /// refuse: replay pre-flight, and the multiset legs with the replay bypassed.
+    #[test]
+    fn ir2_umem_tampered_read_refuses() {
+        let mut desc = umem_desc();
+        // A read-back of the register cell, claiming the write's cell as prior.
+        desc.constraints.push(VmConstraint2::UMemOp(UMemOpSpec {
+            guard: LeanExpr::Var(4),
+            domain: 0,
+            key: LeanExpr::Var(2),
+            present: LeanExpr::Const(1),
+            value: LeanExpr::Const(43), // the LIE: the write installed 42
+            prev_present: LeanExpr::Const(1),
+            prev_value: LeanExpr::Const(43),
+            prev_serial: LeanExpr::Const(3),
+            kind: MemKind::Read,
+        }));
+        assert!(
+            prove_vm_descriptor2_umem(
+                &desc,
+                &umem_trace(),
+                &[],
+                &MemBoundaryWitness::default(),
+                &[],
+                &umem_test_boundary(),
+            )
+            .is_err()
+        );
+        let r = std::panic::catch_unwind(|| {
+            prove_vm_descriptor2_inner(
+                &desc,
+                &umem_trace(),
+                &[],
+                &MemBoundaryWitness::default(),
+                &[],
+                &umem_test_boundary(),
+                false,
+                &ir2_config(),
+            )
+        });
+        match r {
+            Err(_) => {}
+            Ok(res) => assert!(
+                res.is_err(),
+                "tampered umem read produced an accepted proof — Blum tooth OPEN"
+            ),
+        }
+    }
+
+    // ---- the `absent` (bracketed sorted-gap) realization ----
+
+    /// Base layout: col 0 = root, 1 = key, 2 = new_root, 3 = guard.
+    fn absent_desc() -> EffectVmDescriptor2 {
+        EffectVmDescriptor2 {
+            name: "ir2-absent-test".to_string(),
+            trace_width: 4,
+            public_input_count: 0,
+            tables: vec![],
+            constraints: vec![VmConstraint2::MapOp(MapOpSpec {
+                guard: LeanExpr::Var(3),
+                root: LeanExpr::Var(0),
+                key: LeanExpr::Var(1),
+                value: LeanExpr::Const(0),
+                new_root: LeanExpr::Var(2),
+                op: MapKind::Absent,
+            })],
+            hash_sites: vec![],
+            ranges: vec![],
+        }
+    }
+
+    fn absent_trace(key: u32) -> Vec<Vec<BabyBear>> {
+        let tree = CanonicalHeapTree::new(test_heap(), HEAP_TREE_DEPTH);
+        let root = tree.root();
+        let mut rows = vec![
+            vec![root, BabyBear::new(key), root, BabyBear::ZERO];
+            4
+        ];
+        rows[0][3] = BabyBear::ONE;
+        rows
+    }
+
+    /// THE NON-MEMBERSHIP GATE: an honest `absent` op (key 150, bracketed by the committed
+    /// leaves 100 and 200) proves and verifies — the realization of `opensTo … none` /
+    /// `opensTo_none_of_gap`, the boundary leg of `nullifier_fresh_binds_root`.
+    #[test]
+    fn ir2_absent_honest_proves_and_verifies() {
+        let desc = absent_desc();
+        let proof = prove_vm_descriptor2(
+            &desc,
+            &absent_trace(150),
+            &[],
+            &MemBoundaryWitness::default(),
+            &[test_heap()],
+        )
+        .expect("honest absent witness must prove");
+        assert_eq!(
+            proof.degree_bits.len(),
+            4,
+            "absent-only descriptor commits main + chip + byte + map-absent (no map-ops)"
+        );
+        verify_vm_descriptor2(&desc, &proof, &[]).expect("absent proof must verify");
+    }
+
+    /// An `absent` claim for a PRESENT key (100 — a committed leaf) must refuse: no
+    /// bracketing witness exists, and a forged one violates the gap comparators.
+    #[test]
+    fn ir2_absent_of_present_key_refuses() {
+        let desc = absent_desc();
+        assert!(
+            prove_vm_descriptor2(
+                &desc,
+                &absent_trace(100),
+                &[],
+                &MemBoundaryWitness::default(),
+                &[test_heap()],
+            )
+            .is_err(),
+            "absent of a present key must refuse"
+        );
+    }
+
+    /// THE FORGED-BRACKET TOOTH, in-circuit: build the HONEST absent assembly for key 150,
+    /// then tamper the claim to the PRESENT key 100 in BOTH the main row and the map-absent
+    /// row (so the map-log multiset still balances — the strongest forgery shape). The raw
+    /// batch prover must have no satisfying assembly: the key's canonical decomposition and
+    /// the `lo < key` comparator (100 < 100) refuse the re-keyed bracketing witness.
+    #[test]
+    fn ir2_absent_forged_bracket_refuses() {
+        let desc = absent_desc();
+        let layout = check_descriptor2(&desc).expect("absent gauntlet checks");
+        let presence = Presence::of(&desc, &layout);
+        let mut traces = build_traces(
+            &desc,
+            &layout,
+            presence,
+            &absent_trace(150),
+            &MemBoundaryWitness::default(),
+            &[test_heap()],
+            &UMemBoundaryWitness::default(),
+            true,
+        )
+        .expect("honest absent traces");
+        traces.main[0][1] = BabyBear::new(100); // the forged claim, main side
+        traces.map_absent.as_mut().expect("absent table present")[0][MA_KEY] =
+            BabyBear::new(100); // …and table side (multiset balanced)
+        let airs = instance_airs(&desc, layout, presence);
+        let mut matrices = vec![to_matrix(&traces.main)];
+        for t in [
+            &traces.chip,
+            &traces.byte,
+            &traces.memory,
+            &traces.boundary,
+            &traces.map_ops,
+            &traces.map_absent,
+            &traces.umemory,
+            &traces.umem_boundary,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            matrices.push(to_matrix(t));
+        }
+        let pvs: Vec<Vec<P3BabyBear>> = vec![vec![]; airs.len()];
+        let config = ir2_config();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let instances: Vec<StarkInstance<'_, DreggStarkConfig, Ir2Air>> = airs
+                .iter()
+                .zip(matrices.iter())
+                .zip(pvs.iter())
+                .map(|((air, trace), pv)| StarkInstance {
+                    air,
+                    trace,
+                    public_values: pv.clone(),
+                })
+                .collect();
+            let prover_data = ProverData::from_instances(&config, &instances);
+            let proof = prove_batch(&config, &instances, &prover_data);
+            verify_batch(&config, &airs, &proof, &pvs, &prover_data.common)
+        }));
+        match r {
+            Err(_) => {} // the debug prover panicked on the violated gap/decomp teeth
+            Ok(res) => assert!(
+                res.is_err(),
+                "forged absent bracket produced an accepted proof — gap tooth OPEN"
+            ),
+        }
     }
 }
