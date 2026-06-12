@@ -1,6 +1,6 @@
 # REORIENT — read this first after any context loss
 
-*(maintained for session continuity; update at every major landing. Last: 2026-06-11 ~01:00)*
+*(maintained for session continuity; update at every major landing. Last: 2026-06-12 ~10:00)*
 
 ## What this project is, in one breath
 
@@ -83,7 +83,7 @@ blanket `git add`. Land each cleanly by its OWN file set:
   (its exact file list is in the triage task report). NOT soundness-critical
   (stale pre-Lean pins); 6888 tests pass with it.
 
-## ⚑ EPOCH STATUS (2026-06-11 evening — FOUR PIECES LANDED, flag-day deferred)
+## ⚑ EPOCH STATUS (2026-06-12 — GATE 0 GREEN, executor heap wired, flag-day deferred)
 
 THE EPOCH (docs/EPOCH-DESIGN.md) — boundary/interior proving. LANDED + pushed:
 - `6f23f5467` **foundations** (Lean): Blum MemoryChecking (memcheck_sound),
@@ -98,13 +98,31 @@ THE EPOCH (docs/EPOCH-DESIGN.md) — boundary/interior proving. LANDED + pushed:
   checked conversions, no silent well-wraps). guarantee B now holds over the
   DEPLOYED chain; AssuranceCase deployment-correspondence legs CLOSED. cargo
   check green across all in-scope crates.
+- `113126a45` + `2d8df8381` **rotation hygiene**: stale `MapKind::Absent` doc
+  fix; `execute_via_producer` borrow-checker regression fix.
+- `b133354fc` **executor admits heap fields**: Rust `Effect::SetField` now
+  routes `index < STATE_SLOTS` to fixed `fields[]` and `index >= STATE_SLOTS`
+  to `CellState::set_field_ext`, with journal rollback + umem Blum-trace
+  support (`JournalEntry::SetField.old_value` is `Option<FieldElement>`).
+- `c053ede33` **proof economics #161 / GATE 0**: IR-v2 transfer proof measured
+  at **120.4 KiB** vs v1 **350.5 KiB** (−65.6%), below the v1 baseline. Live
+  v1 path untouched; IR-v2 is additive behind recursion gating.
+
+IN FLIGHT (subagents running, do not step on working tree):
+- registers 8→16 (`agent-qzo8iiar`, `cell/src/state.rs` already touched).
+- heap_root commitment limb (`agent-j4tp7z0z`).
+- fresh-key sorted INSERT map-op (`agent-05072rgr`, `circuit/src/descriptor_ir2.rs`).
+- Full `cargo test -p dregg-turn --tests` + `cargo check --workspace` after
+  the heap-field executor change.
 
 STILL DEFERRED (the flag-day — would orphan the live v1 path until the relayout
-lands; do as ONE VK epoch): registers 8→16 + FactoryDescriptor.fields · RESERVED
-removal + 186→159 compaction · descriptor IR-v2 REGEN (EmitAllJson still emits
-v1; the 26 v2 descriptors live in EffectVmEmitV2.v2Registry) + VK bump · PI v3
-(committed-height column + rateBound/challengeWindow tags) · heap_root register.
-The IR-v2 interpreter is ready and waiting for this. THEN the persvati gauntlet.
+lands; do as ONE VK epoch): the three in-flight slices above · RESERVED
+removal + 186→159 compaction (now subsumed by universal-memory table reshape) ·
+descriptor IR-v2 REGEN (EmitAllJson still emits v1; the 26 v2 descriptors live
+in EffectVmEmitV2.v2Registry) + VK bump · PI v3 (committed-height column +
+rateBound/challengeWindow tags — constants staged in `circuit/src/effect_vm/pi.rs`
+`pub mod v3` and `RotationLayout.PiV3`, wiring queued) · the 3-verb executor
+reshape (the real long pole after the wiring gaps close). THEN the persvati gauntlet.
 KNOWN: dregg-tests (#167) has PRE-EXISTING retired-verb breakage (blocks a bare
 `cargo check --workspace`); unrelated to the epoch.
 
