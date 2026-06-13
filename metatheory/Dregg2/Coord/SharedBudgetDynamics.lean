@@ -119,15 +119,74 @@ theorem ceiling_le_balance (balance f : Nat) : ceiling balance f ≤ balance := 
 
 /-! ## 2. The Byzantine worst-case-overspend bound (`f * ceiling`). -/
 
-/-- **`overspend_bounded_by_f_ceiling` — the STINGRAY SAFETY BOUND.** With `n` agents, each
-allotted `ceiling balance f`, and at most `f` Byzantine, the maximum overspend the honest majority
-cannot detect before rebalance is `f * ceiling balance f`. We prove: the total an adversary of `f`
-agents can spend (each up to its ceiling) is `f * ceiling`, and this is the entire undetectable
-surplus, because the `n - f` honest agents reveal their true spending at rebalance. Stated as: the
-adversarial spend `≤ f * ceiling`. -/
-theorem overspend_bounded_by_f_ceiling (balance f advSpend : Nat)
-    (hadv : advSpend ≤ f * ceiling balance f) :
-    advSpend ≤ f * ceiling balance f := hadv
+/-- **`adversarialSpend` — the total an adversary actually spends across the agents it controls.**
+The adversary is a SET of agents (modelled as the list of their individual spend amounts); its total
+spend is the sum. This is the quantity the safety bound must constrain — NOT a free variable, but the
+sum over the corrupted agents. -/
+def adversarialSpend (spends : List Nat) : Nat := spends.sum
+
+/-- **`adversarial_spend_bounded` — the per-agent allowance ceiling bounds each corrupted agent.**
+The structural fact the system ENFORCES: a list of agents each of whose spend is within `ceil` sums
+to at most `(number of agents) * ceil`. (Same shape as `StingrayCertReconcile.sum_spent_le_len_ceil`;
+re-proved locally over raw spend amounts.) -/
+theorem sum_le_len_mul (ceil : Nat) :
+    ∀ (spends : List Nat), (∀ a ∈ spends, a ≤ ceil) → spends.sum ≤ spends.length * ceil := by
+  intro spends
+  induction spends with
+  | nil => intro _; simp
+  | cons a rest ih =>
+      intro hval
+      simp only [List.sum_cons, List.length_cons]
+      have hhead : a ≤ ceil := hval a (List.mem_cons_self ..)
+      have htail : rest.sum ≤ rest.length * ceil := ih (fun x hx => hval x (List.mem_cons_of_mem a hx))
+      calc a + rest.sum ≤ ceil + rest.length * ceil := Nat.add_le_add hhead htail
+        _ = (rest.length + 1) * ceil := by ring
+
+/-- **`overspend_bounded_by_f_ceiling` — the STINGRAY SAFETY BOUND (the REAL bound, from the
+dynamics).** The adversary controls at most `f` agents (`hf : corrupted.length ≤ f`), and the
+system's per-agent allowance gate caps each corrupted agent's spend at `ceiling balance f`
+(`hcap : ∀ a ∈ corrupted, a ≤ ceiling balance f` — the `compute_allowance_ceiling` enforcement,
+`shared_budget.rs:309-314`, the SAME gate `resolveOrdered`/`rebalance` apply). Then the adversary's
+TOTAL spend (`adversarialSpend corrupted`) is at most `f * ceiling balance f`.
+
+This is NOT the conclusion assumed: `adversarialSpend corrupted = Σ (corrupted spends)` is DERIVED to
+be `≤ f * ceiling` from (i) each summand `≤ ceiling` (per-agent gate) and (ii) at most `f` summands
+(quorum-honesty: only `f` agents are Byzantine; the `n − f` honest agents reveal their true spend at
+rebalance and contribute nothing undetectable). The two hypotheses are the genuine system invariants,
+not the goal. -/
+theorem overspend_bounded_by_f_ceiling (balance f : Nat) (corrupted : List Nat)
+    (hf : corrupted.length ≤ f)
+    (hcap : ∀ a ∈ corrupted, a ≤ ceiling balance f) :
+    adversarialSpend corrupted ≤ f * ceiling balance f := by
+  unfold adversarialSpend
+  calc corrupted.sum
+      ≤ corrupted.length * ceiling balance f := sum_le_len_mul (ceiling balance f) corrupted hcap
+    _ ≤ f * ceiling balance f := Nat.mul_le_mul_right _ hf
+
+/-! ### Non-vacuity teeth for the Byzantine bound (both polarities). -/
+
+-- POLARITY 1 — the bound BINDS (it is tight, not slack): with f = 2, balance 10000, ceiling 6000,
+-- two corrupted agents EACH at the cap 6000 spend exactly 2 * 6000 = 12000 = f * ceiling. So the
+-- bound is achieved with equality — it is a real constraint the worst-case adversary saturates,
+-- never a vacuous over-estimate.
+#guard adversarialSpend [6000, 6000] == 12000
+#guard adversarialSpend [6000, 6000] == 2 * ceiling 10000 2
+-- and the hypotheses genuinely hold for this witness (length 2 ≤ f=2; each spend ≤ ceiling 6000):
+#guard ([6000, 6000] : List Nat).length ≤ 2
+#guard decide (∀ a ∈ ([6000, 6000] : List Nat), a ≤ ceiling 10000 2)
+
+-- POLARITY 2 — an OVER-CEILING agent is REJECTED by the per-agent gate, so it cannot enter a valid
+-- corrupted set: a would-be spend of 7000 EXCEEDS ceiling 6000, so `7000 ≤ ceiling 10000 2` is
+-- FALSE — `hcap` fails for `[7000, …]`, the bound's hypothesis is unmet, and (crucially) such a
+-- debit is rejected at resolution: `resolveOrdered`'s accept gate (`a ≤ remaining`) drops it, and
+-- `rebalance` rejects the report (`ReportExceedsCeiling`). The gate is what MAKES `hcap` true for the
+-- agents that survive. Were the bound stated WITHOUT `hcap`, [7000, 7000] would refute it
+-- (14000 > 12000) — so `hcap` is load-bearing, not decorative.
+#guard decide (¬ (7000 ≤ ceiling 10000 2))
+#guard adversarialSpend [7000, 7000] == 14000     -- > 2 * ceiling = 12000: the bound WOULD break…
+#guard decide (¬ (adversarialSpend [7000, 7000] ≤ 2 * ceiling 10000 2))  -- …without the gate.
+-- (The resolution-gate rejection of an over-ceiling debit is witnessed in §3, once `resolveOrdered`
+-- is in scope: `over_ceiling_debit_rejected_at_resolution`.)
 
 /-- **`f_ceiling_safe_margin` — the bound is BELOW the doubled-balance blowup (non-vacuity).**
 The `f * ceiling` overspend is a genuine bound: with `f ≥ 1` and the ceiling a `(f+1)/(2f+1) ≈ 1/2`
@@ -290,6 +349,11 @@ def roundTrip : List Resolution × Nat := resolveOrdered 1000 [400, 400, 400]
 #guard (decide (acceptedSum 1000 [400, 400, 400] ≤ 1000))
 -- After resolution, the new ceiling is computed from remaining 200: 200 * 2/3 = 133.
 #guard ceiling 200 1 == 133
+-- BYZANTINE-BOUND polarity 2 (resolution-gate tooth): an over-ceiling debit (7000 > ceiling 6000)
+-- does not fit even a full ceiling-sized remaining balance, so `resolve_with_ordering` REJECTS it —
+-- the gate that MAKES each surviving agent's spend ≤ ceiling (the `hcap` hypothesis of
+-- `overspend_bounded_by_f_ceiling` is enforced here, not assumed).
+#guard (resolveOrdered (ceiling 10000 2) [7000]).1 == [Resolution.rejected]
 -- REBALANCE: pool 9000, reports [1000, 2000, 0] (`test_rebalance_full_reports`) ⇒ new balance 6000.
 #guard rebalance 9000 [1000, 2000, 0] == 6000
 #guard totalReported [1000, 2000, 0] == 3000
@@ -299,6 +363,7 @@ def roundTrip : List Resolution × Nat := resolveOrdered 1000 [400, 400, 400]
 /-! ## 6. Axiom-hygiene tripwires. -/
 
 #assert_axioms ceiling_le_balance
+#assert_axioms sum_le_len_mul
 #assert_axioms overspend_bounded_by_f_ceiling
 #assert_axioms f_ceiling_le_f_balance
 #assert_axioms resolveOrdered_remaining_le
