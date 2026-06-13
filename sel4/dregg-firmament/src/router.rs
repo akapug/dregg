@@ -14,7 +14,8 @@
 use dregg_types::CellId;
 
 use crate::{
-    Backing, Capability, DistributedBacking, LocalBacking, Resolution, ResolveError, Rights, Target,
+    Backing, Capability, DistributedBacking, LocalBacking, Resolution, ResolveError, Rights,
+    SurfaceBacking, Target,
 };
 
 /// The router interface an app sees. ONE handle in, a resolution out — the
@@ -48,6 +49,12 @@ pub enum Recipient {
     LocalChild,
     /// Distributed: the recipient cell that receives the granted cap.
     DistributedCell(CellId),
+    /// Surface: the recipient cell that receives the granted SURFACE cap (the
+    /// app you hand a window to — e.g. sharing a read-only view of a window).
+    /// A surface IS a cell, so this addressee is a [`CellId`] exactly like
+    /// [`Recipient::DistributedCell`]; it is kept distinct only so the router's
+    /// surface arm reads clearly.
+    SurfaceCell(CellId),
 }
 
 /// The firmament's router: it owns both backings and dispatches between them.
@@ -60,22 +67,42 @@ pub struct FirmamentRouter {
     pub local: LocalBacking,
     /// The dregg federation (the distributed backing).
     pub distributed: DistributedBacking,
-    /// For a distributed handle, which cell HOLDS the cap being invoked /
-    /// delegated. (The app's own cell — the firmament knows it; the app does
-    /// not pass it, keeping the handle a pure `(target, rights)`.)
+    /// The surface fabric (the SURFACE backing) — the cells the compositor
+    /// renders as windows. A surface IS a cell, so this backing is the same
+    /// real-executor machinery as [`Self::distributed`], aimed at the glass.
+    pub surface: SurfaceBacking,
+    /// For a distributed OR surface handle, which cell HOLDS the cap being
+    /// invoked / delegated. (The app's own cell — the firmament knows it; the
+    /// app does not pass it, keeping the handle a pure `(target, rights)`.)
     pub holder_cell: Option<CellId>,
 }
 
 impl FirmamentRouter {
-    /// A router over the given backings, with no holder cell bound yet.
+    /// A router over the given local + distributed backings, with a fresh empty
+    /// surface fabric and no holder cell bound yet. Inject a seeded surface
+    /// fabric via [`Self::with_surface`] (mirroring [`Self::with_holder`]).
     pub fn new(local: LocalBacking, distributed: DistributedBacking) -> Self {
-        FirmamentRouter { local, distributed, holder_cell: None }
+        FirmamentRouter {
+            local,
+            distributed,
+            surface: SurfaceBacking::new(),
+            holder_cell: None,
+        }
     }
 
-    /// Bind the app's own cell (the holder of distributed caps). The firmament
-    /// supplies this; the app's handle stays a pure `(target, rights)`.
+    /// Bind the app's own cell (the holder of distributed / surface caps). The
+    /// firmament supplies this; the app's handle stays a pure `(target,
+    /// rights)`.
     pub fn with_holder(mut self, holder: CellId) -> Self {
         self.holder_cell = Some(holder);
+        self
+    }
+
+    /// Install the surface fabric (the seeded [`SurfaceBacking`] whose cells the
+    /// compositor renders). Mirrors [`Self::with_holder`]: the firmament
+    /// supplies the fabric; the app names only a `Surface(cell)` target.
+    pub fn with_surface(mut self, surface: SurfaceBacking) -> Self {
+        self.surface = surface;
         self
     }
 }
@@ -89,6 +116,15 @@ impl Router for FirmamentRouter {
                     .holder_cell
                     .ok_or_else(|| ResolveError::Unauthorized("no holder cell bound".into()))?;
                 self.distributed.invoke(holder, *cell, &cap.rights)
+            }
+            Target::Surface { cell } => {
+                // A window IS a cell — present/draw resolves the surface cap
+                // through the SAME real-executor authority check as a
+                // distributed cell.
+                let holder = self
+                    .holder_cell
+                    .ok_or_else(|| ResolveError::Unauthorized("no holder cell bound".into()))?;
+                self.surface.invoke(holder, *cell, &cap.rights)
             }
         }
     }
@@ -126,9 +162,9 @@ impl Router for FirmamentRouter {
                     .ok_or_else(|| ResolveError::Unauthorized("no holder cell bound".into()))?;
                 let to = match recipient {
                     Recipient::DistributedCell(c) => c,
-                    Recipient::LocalChild => {
+                    Recipient::LocalChild | Recipient::SurfaceCell(_) => {
                         return Err(ResolveError::Unauthorized(
-                            "distributed delegate needs a recipient cell".into(),
+                            "distributed delegate needs a distributed recipient cell".into(),
                         ))
                     }
                 };
@@ -139,17 +175,44 @@ impl Router for FirmamentRouter {
                 // The recipient's handle is the same target with narrowed rights.
                 Ok(Capability::distributed(*cell, narrowed.rights))
             }
+            Target::Surface { cell } => {
+                // Handing a window to another app: the SAME real executor turn
+                // (`Effect::GrantCapability`) and the SAME `granted ⊆ held`
+                // gate as a distributed cell — a surface IS a cell. A widening
+                // surface grant is rejected by the executor (DelegationDenied);
+                // the backing-agnostic `Capability::attenuate` above already
+                // refused it before we got here, and the executor re-checks
+                // (defense in depth).
+                let holder = self
+                    .holder_cell
+                    .ok_or_else(|| ResolveError::Unauthorized("no holder cell bound".into()))?;
+                let to = match recipient {
+                    Recipient::SurfaceCell(c) => c,
+                    Recipient::LocalChild | Recipient::DistributedCell(_) => {
+                        return Err(ResolveError::Unauthorized(
+                            "surface delegate needs a surface recipient cell".into(),
+                        ))
+                    }
+                };
+                self.surface
+                    .delegate(holder, to, *cell, narrowed.rights.clone())?;
+                // The recipient's handle is the same surface with narrowed rights.
+                Ok(Capability::surface(*cell, narrowed.rights))
+            }
         }
     }
 }
 
 impl FirmamentRouter {
     /// Convenience: which backing WOULD resolve this handle — purely for
-    /// assertions/logging. (The app never calls this; it cannot tell.)
+    /// assertions/logging. (The app never calls this; it cannot tell.) A local
+    /// target resolves via the kernel; a distributed cell AND a surface (which
+    /// IS a cell) both resolve via a real executor turn.
     pub fn backing_of(cap: &Capability) -> Backing {
         if cap.target.is_local() {
             Backing::LocalKernel
         } else {
+            // Distributed cell or Surface — both go through the executor turn.
             Backing::DistributedTurn
         }
     }
