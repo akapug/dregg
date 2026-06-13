@@ -22,6 +22,8 @@
 #[cfg(feature = "embedded-executor")]
 pub mod agent;
 #[cfg(feature = "embedded-executor")]
+pub mod buffer;
+#[cfg(feature = "embedded-executor")]
 pub mod cipherclerk;
 #[cfg(feature = "embedded-executor")]
 pub mod compositor;
@@ -42,15 +44,21 @@ pub mod shell;
 #[cfg(feature = "embedded-executor")]
 pub mod surface;
 #[cfg(feature = "embedded-executor")]
+pub mod terminal;
+#[cfg(feature = "embedded-executor")]
 pub mod world;
 
 #[cfg(feature = "embedded-executor")]
 pub use agent::{AgentActivity, AgentSurface};
 #[cfg(feature = "embedded-executor")]
+pub use buffer::{BufferCell, BufferDoc, BufferError, BufferView};
+#[cfg(feature = "embedded-executor")]
 pub use compositor::{
     label_of, CompositedSurface, Compositor, CompositorScene, FrameCommit, Present, PresentError,
     RegionId,
 };
+#[cfg(feature = "embedded-executor")]
+pub use terminal::{Command, CommandError, OutputLine, TerminalCell, TerminalView};
 #[cfg(feature = "embedded-executor")]
 pub use shell::{Layout, Scene, SceneItem, Shell, ShellError};
 #[cfg(feature = "embedded-executor")]

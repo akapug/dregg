@@ -39,6 +39,23 @@ pub enum CommandId {
     GoEditor,
     GoShell,
     GoAgent,
+    GoBuffer,
+    GoTerminal,
+
+    // --- the A1 IDE DEVELOPER surfaces (editor buffer + terminal) ---
+    /// Type a line into the editor buffer (free, in-memory — the doc goes dirty).
+    BufferType,
+    /// COMMIT the editor buffer's digest into the backing cell (cap-gated turn).
+    BufferCommit,
+    /// Attempt to COMMIT through a READ-ONLY mirror — the no-amplification rule
+    /// firing at the editor (a read-only buffer cannot write: REFUSED).
+    BufferReadOnlyWrite,
+    /// Run an IN-MANDATE terminal command — the terminal-cell reaches the target,
+    /// so it COMMITS and its receipt is the output (the ADOS tool-call seam).
+    TerminalRunInMandate,
+    /// Run an OUT-OF-MANDATE terminal command — the target is outside the
+    /// terminal-cell's caps; the command cap-gate REFUSES it (confined Bash).
+    TerminalRunOutOfMandate,
 
     // --- the cap-first SHELL / compositor (surfaces over real cells) ---
     /// Open a cap-confined surface (window) viewing the selected cell.
@@ -101,7 +118,9 @@ impl CommandId {
                 Category::Verb
             }
             GoComposer | GoObjects | GoDebugger | GoReplay | GoCipherclerk | GoEditor
-            | GoShell | GoAgent => Category::Navigate,
+            | GoShell | GoAgent | GoBuffer | GoTerminal => Category::Navigate,
+            BufferType | BufferCommit | BufferReadOnlyWrite | TerminalRunInMandate
+            | TerminalRunOutOfMandate => Category::Ide,
             ReplayStepBack | ReplayStepForward | ReplayToGenesis | ReplayToHead
             | ReplayForkHere | ReplayClearFork => Category::Replay,
             ClerkMint | ClerkAttenuate | ClerkDelegate | ClerkDischarge => Category::Clerk,
@@ -133,6 +152,13 @@ impl CommandId {
             GoEditor => "Go to Editor",
             GoShell => "Go to Shell (surfaces · windows · compositor)",
             GoAgent => "Go to Agent (a loop's provable activity)",
+            GoBuffer => "Go to Editor buffer (a text buffer as a Surface cell)",
+            GoTerminal => "Go to Terminal (a command surface · the ADOS seam)",
+            BufferType => "Buffer: type a line (in-memory — goes dirty)",
+            BufferCommit => "Buffer: commit the edit (cap-gated verified turn)",
+            BufferReadOnlyWrite => "Buffer: ⚠ write a read-only mirror (watch it REFUSE)",
+            TerminalRunInMandate => "Terminal: run an in-mandate command (COMMITS)",
+            TerminalRunOutOfMandate => "Terminal: ⚠ run an out-of-mandate command (REFUSE)",
             ShellOpenSelected => "Shell: open the selected cell as a surface",
             ShellFocusFront => "Shell: focus the front surface (cap-gated)",
             ShellCloseFocused => "Shell: close the focused surface (cap-gated)",
@@ -179,6 +205,13 @@ impl CommandId {
             GoEditor => "author validate deploy program factory",
             GoShell => "surface window compositor desktop apps wm",
             GoAgent => "agent loop swarm activity mandate receipt grounded ados integrator",
+            GoBuffer => "editor buffer text file write edit document ide code scratch",
+            GoTerminal => "terminal command shell console bash run ide tool-call ados seam",
+            BufferType => "edit type insert text buffer dirty",
+            BufferCommit => "save commit buffer write digest turn cap-gated revision",
+            BufferReadOnlyWrite => "read-only refuse attenuate mirror no-amplify buffer write guard",
+            TerminalRunInMandate => "command run terminal bash mandate commit receipt authorized",
+            TerminalRunOutOfMandate => "command refuse terminal bash mandate out-of-reach confined guard",
             ShellOpenSelected => "open window surface cell app spawn view",
             ShellFocusFront => "focus raise front bring forward window",
             ShellCloseFocused => "close window surface dismiss",
@@ -214,6 +247,8 @@ pub enum Category {
     Replay,
     Clerk,
     Shell,
+    /// The A1 IDE developer surfaces (editor buffer + terminal command ops).
+    Ide,
     Debug,
     Inspect,
     Palette,
@@ -227,6 +262,7 @@ impl Category {
             Category::Replay => "replay",
             Category::Clerk => "clerk",
             Category::Shell => "shell",
+            Category::Ide => "ide",
             Category::Debug => "debug",
             Category::Inspect => "inspect",
             Category::Palette => "palette",
@@ -263,9 +299,12 @@ pub fn all_commands() -> Vec<Command> {
         ShellOpenSelected, ShellFocusFront, ShellCloseFocused, ShellCycleLayout,
         ShellMinimizeFocused, ShellShareFocused, ShellOverShareFocused,
         ShellPresentFocused, ShellOverpaintFocused, ShellInputSteal,
+        // the A1 IDE developer surfaces (editor buffer + terminal)
+        BufferType, BufferCommit, BufferReadOnlyWrite,
+        TerminalRunInMandate, TerminalRunOutOfMandate,
         // navigation
         GoComposer, GoObjects, GoDebugger, GoReplay, GoCipherclerk, GoEditor, GoShell,
-        GoAgent,
+        GoAgent, GoBuffer, GoTerminal,
         // replay
         ReplayStepBack, ReplayStepForward, ReplayToGenesis, ReplayToHead,
         ReplayForkHere, ReplayClearFork,
@@ -550,6 +589,39 @@ mod tests {
         assert!(search(&reg, "compositor").iter().any(|h| h.command.id == CommandId::GoShell));
         assert!(search(&reg, "delegate").iter().any(|h| h.command.id == CommandId::ShellShareFocused));
         assert!(search(&reg, "amplify").iter().any(|h| h.command.id == CommandId::ShellOverShareFocused));
+    }
+
+    #[test]
+    fn the_a1_ide_commands_are_registered_and_findable() {
+        // The A1 DEVELOPER surfaces (editor buffer + terminal) are reachable
+        // through the palette like every other action: their nav switches +
+        // cap-gated ops are registered, categorized, and findable by concept.
+        let reg = all_commands();
+        let ids: std::collections::HashSet<CommandId> = reg.iter().map(|c| c.id).collect();
+        // The nav switches are Navigate (like the other Go*).
+        for go in [CommandId::GoBuffer, CommandId::GoTerminal] {
+            assert!(ids.contains(&go), "{go:?} must be registered");
+            assert_eq!(go.category(), Category::Navigate);
+        }
+        // The IDE action ops are Category::Ide.
+        for op in [
+            CommandId::BufferType,
+            CommandId::BufferCommit,
+            CommandId::BufferReadOnlyWrite,
+            CommandId::TerminalRunInMandate,
+            CommandId::TerminalRunOutOfMandate,
+        ] {
+            assert!(ids.contains(&op), "{op:?} must be registered");
+            assert_eq!(op.category(), Category::Ide);
+        }
+        // Found by concept: "editor"/"buffer" → the buffer; "terminal"/"bash" →
+        // the terminal; "read-only"/"commit"/"mandate" → the cap-gated ops.
+        assert!(search(&reg, "editor buffer").iter().any(|h| h.command.id == CommandId::GoBuffer));
+        assert!(search(&reg, "terminal bash").iter().any(|h| h.command.id == CommandId::GoTerminal));
+        assert!(search(&reg, "commit").iter().any(|h| h.command.id == CommandId::BufferCommit));
+        assert!(search(&reg, "read-only").iter().any(|h| h.command.id == CommandId::BufferReadOnlyWrite));
+        assert!(search(&reg, "mandate").iter().any(|h| h.command.id == CommandId::TerminalRunInMandate
+            || h.command.id == CommandId::TerminalRunOutOfMandate));
     }
 
     #[test]
