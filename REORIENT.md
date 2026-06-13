@@ -57,6 +57,25 @@ not durable across compaction; the log is the burn-down. Sweep it at every Conve
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
   `project-refinement-epoch.md` is the live resume file; MEMORY.md is the index.
 
+## ⚑⚑ PUG-WORTHINESS WAVE (2026-06-13, head b983458c7 — 8 lanes, ember's broad horizon)
+
+After the 13 full-burn lanes landed, ember opened the breadth horizon (make it pug-worthy:
+well-documented/packaged/thought-through for an outside evaluator's agents; deploy stays
+LOW-priority to accumulate enhancements). 8 disjoint Opus lanes running, each verifies its
+OWN narrow build (verification economy), lander commits by file set:
+- TS SDK parity+packaging (sdk-ts/ → /tmp/ts-sdk-lane.log)
+- Userspace-Verify toolkit for SDK-produced subgraphs — ember "vital, not-yet-addressed"
+  (NEW dregg-userspace-verify/ → /tmp/uverify-lane.log)
+- Site generator + education + shell/IDE coherence + extension (/tmp/site-lane.log)
+- Privacy: offline-cell witnessless-ZK consensus participation (docs + new Lean → /tmp/privacy-lane.log)
+- seL4/Robigalia bootable-image + CapDL-inspired "DreggDL" polyglot DX (docs → /tmp/sel4-lane.log)
+- Assurance spec UNIFICATION + drift audit (docs/ASSURANCE.md + the #93 answer → /tmp/assurance-lane.log)
+- Apps up-to-snuff + one new organ-composing verified app (starbridge-apps/ → /tmp/apps-lane.log)
+- Protocol/network/persist/storage enhancement catalog + 1 concrete win (/tmp/protocol-lane.log)
+ROUND 8 gauntlet still validating the converged tree (persvati). STILL PENDING (ember
+reminder): the rotation FLIP + its preidentified followups (docs/ROTATION-CUTOVER.md);
+devnet redeploy (low-priority).
+
 ## ⚑⚑ OPUS LANDING COMPLETE (2026-06-12 night — all 13 full-burn lanes home, head 5bf7adda3)
 
 The export directive sealed Fable mid-wave; Opus 4.8 resumed all 13 dying lanes as finishers
