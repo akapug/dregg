@@ -543,6 +543,88 @@ theorem recStateCommit_binds (hCmb : compressInjective cmb) (k k' : RecordKernel
 
 #assert_axioms recStateCommit_binds
 
+/-! ### The CELL-MAP recovery: equal `cellDigest` ⇒ equal `cell` map (every cell, all four cases).
+
+`cellDigest k t = compress (frameDigest over accounts\{src,dst}) (movedDigest over {src,dst})`. The
+partition `{src} ∪ {dst} ∪ (accounts\{src,dst}) ∪ (cells outside accounts)` is EXHAUSTIVE, so equal
+`cellDigest`s (for the SAME turn `t`) force `k.cell = k'.cell` pointwise: `compress`-injectivity
+splits the node into frame ⊕ moved children, `MovedDigestBindsCells` recovers `src`/`dst`,
+`FrameDigestBindsCells` recovers every untouched live cell, and `AccountsWF` (on BOTH states) closes
+the dead-cell case (both default). This is the SAME `funext` `transfer_circuit_full_sound` runs to
+reconstruct `k'.cell`, but here over an ARBITRARY pair (not a `recTransfer` post), so it needs equal
+`frameCarrier`s — which it gets because `accounts` is itself recovered (from `RH`, see
+`recStateCommit_binds_kernel`). Stated standalone so the history-aggregation seam can lift it. -/
+theorem cellDigest_binds_cells
+    (hCompress : compressInjective compress)
+    (hCompressN : compressNInjective compressN)
+    (hLeaf : cellLeafInjective CH)
+    (k k' : RecordKernelState) (t : Turn)
+    (hwf : AccountsWF k) (hwf' : AccountsWF k')
+    (hAcc : k.accounts = k'.accounts)
+    (hcd : cellDigest CH compress compressN k t = cellDigest CH compress compressN k' t) :
+    k.cell = k'.cell := by
+  -- the cell-digest on the `k'` side partitions over `k'.accounts`; rewrite it to `k.accounts`
+  -- (they are equal) so both Merkle nodes are over the SAME carrier before splitting.
+  unfold cellDigest at hcd
+  rw [← hAcc] at hcd
+  obtain ⟨hframeEq, hmovedEq⟩ := hCompress _ _ _ _ hcd
+  -- frame digests over the COMMON carrier `k.accounts \ {src,dst}` ⇒ untouched cells equal.
+  have hcellframe : ∀ c ∈ (k.accounts \ {t.src, t.dst}), k.cell c = k'.cell c :=
+    FrameDigestBindsCells CH compressN hCompressN hLeaf k k' (k.accounts \ {t.src, t.dst}) hframeEq
+  -- moved digests equal ⇒ both moved leaves equal.
+  obtain ⟨hmsrc, hmdst⟩ :=
+    MovedDigestBindsCells CH compress hCompress hLeaf k.cell k'.cell t.src t.dst hmovedEq
+  -- reconstruct the whole cell map by funext over the exhaustive partition.
+  funext c
+  by_cases hcsrc : c = t.src
+  · subst hcsrc; exact hmsrc
+  · by_cases hcdst : c = t.dst
+    · subst hcdst; exact hmdst
+    · by_cases hcacc : c ∈ k.accounts
+      · -- untouched live cell: in `accounts \ {src,dst}` ⇒ frame lemma.
+        have hmem : c ∈ k.accounts \ {t.src, t.dst} := by
+          simp only [Finset.mem_sdiff, Finset.mem_insert, Finset.mem_singleton, not_or]
+          exact ⟨hcacc, hcsrc, hcdst⟩
+        exact hcellframe c hmem
+      · -- dead cell: AccountsWF on both states ⇒ both default.
+        have hk'acc : c ∉ k'.accounts := by rw [← hAcc]; exact hcacc
+        rw [hwf c hcacc, hwf' c hk'acc]
+
+#assert_axioms cellDigest_binds_cells
+
+/-- **`recStateCommit_binds_kernel` (THE WHOLE-KERNEL recovery).** Equal full-state roots (same turn)
+force the WHOLE `RecordKernelState` equal — all 16 fields, not just the digest children. The non-cell
+15 come from `RH k = RH k'` via `RestHashIffFrame` (which lists exactly `accounts … heaps`); `accounts`
+is among them, so the frame carriers coincide, and `cellDigest_binds_cells` then recovers `cell`.
+Structure eta assembles the field equalities into `k = k'`. This is the binding the unfoolability
+case needs to recover STATE continuity (not merely commitment-equality) from a verified root — under
+the SAME standard Poseidon CR set (`compressInjective cmb/compress`, `compressNInjective`,
+`cellLeafInjective`, `RestHashIffFrame`) + the PROVED-preserved `AccountsWF` structural invariant. -/
+theorem recStateCommit_binds_kernel
+    (hCmb : compressInjective cmb)
+    (hCompress : compressInjective compress)
+    (hCompressN : compressNInjective compressN)
+    (hLeaf : cellLeafInjective CH)
+    (hRest : RestHashIffFrame RH)
+    (k k' : RecordKernelState) (t : Turn)
+    (hwf : AccountsWF k) (hwf' : AccountsWF k')
+    (hroot : recStateCommit CH RH cmb compress compressN k t
+      = recStateCommit CH RH cmb compress compressN k' t) :
+    k = k' := by
+  obtain ⟨hcd, hRHeq⟩ := recStateCommit_binds CH RH cmb compress compressN hCmb k k' t hroot
+  -- the 15 non-cell fields from RH (RestHashIffFrame is `RH k = RH k' ↔ (k'.* = k.*)`).
+  obtain ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel, hDgs, hDE, hDEA, hHeaps⟩ :=
+    (hRest k k').mp hRHeq
+  -- the cell map from the cell-digest (needs equal `accounts` for matching carriers).
+  have hcell : k.cell = k'.cell :=
+    cellDigest_binds_cells CH compress compressN hCompress hCompressN hLeaf k k' t hwf hwf'
+      hAcc.symm hcd
+  -- assemble: every field equal (RestHashIffFrame gives `k'.* = k.*`, so use `.symm`).
+  cases k; cases k'
+  simp_all
+
+#assert_axioms recStateCommit_binds_kernel
+
 /-! ## §6 — FULL-STATE COMPLETENESS: every committed step satisfies `stateCircuit`. -/
 
 /-- **THEOREM 3 — `transfer_circuit_full_complete`.** A real committed `recKExec` step (=
@@ -745,6 +827,36 @@ def forgedThirdCell : RecordKernelState :=
 #guard decide (cSFrameReuse.holds
   (encodeS chConcrete rhConcrete cmbConcrete compressConcrete compressNConcrete kS0 goodTurnS
     forgedThirdCell)) == false
+
+/-! ### §8b — `recStateCommit_binds_kernel` NON-VACUITY (the kernel-binding has TEETH, both polarities).
+
+The whole-kernel binding `recStateCommit_binds_kernel` (equal roots ⇒ equal KERNEL) is meaningful only
+if distinct kernels give DISTINCT roots — otherwise the recovered equality is vacuous. We witness the
+CONTRAPOSITIVE concretely on the injective toy portal: a cell-tampered kernel AND a non-cell-field
+(nullifier) tampered kernel each yield a `recStateCommit` root DIFFERENT from the honest one — so equal
+roots genuinely force equal kernels. Positive polarity: the honest state's root equals itself (the
+binding fires). The toy portal is the SAME injective `chConcrete`/`compressConcrete`/`compressNConcrete`/
+`cmbConcrete`/`rhConcrete` the forgery guards use (a `+`-fold would make these collide — the binding
+would be vacuous — so the injective shape is load-bearing here too). -/
+
+/-- A nullifier-tampered post-state: the honest cells, but a spurious nullifier inserted (a non-cell
+field-tamper the kernel-binding must also catch via `RH`). -/
+def forgedNullifier : RecordKernelState := { goodPostS with nullifiers := [42] }
+
+-- POSITIVE: the honest state commits to ITS OWN root (the binding is reflexively inhabited).
+#guard decide (recStateCommit chConcrete rhConcrete cmbConcrete compressConcrete compressNConcrete
+  goodPostS goodTurnS == recStateCommit chConcrete rhConcrete cmbConcrete compressConcrete
+  compressNConcrete goodPostS goodTurnS)
+-- TEETH (cell-tamper): the forged-third-cell kernel has a DIFFERENT root than the honest post-state,
+-- so equal roots ⇒ equal kernel is non-vacuous on the cell component.
+#guard decide (recStateCommit chConcrete rhConcrete cmbConcrete compressConcrete compressNConcrete
+  forgedThirdCell goodTurnS == recStateCommit chConcrete rhConcrete cmbConcrete compressConcrete
+  compressNConcrete goodPostS goodTurnS) == false
+-- TEETH (non-cell field-tamper): a nullifier-tampered kernel ALSO has a different root (via `RH`),
+-- so the binding recovers the non-cell fields too, not only the cells.
+#guard decide (recStateCommit chConcrete rhConcrete cmbConcrete compressConcrete compressNConcrete
+  forgedNullifier goodTurnS == recStateCommit chConcrete rhConcrete cmbConcrete compressConcrete
+  compressNConcrete goodPostS goodTurnS) == false
 
 /-! ## §9 — EMISSION: the full-state circuit composes with `CircuitEmit.emit`/`emit_faithful`.
 

@@ -56,6 +56,19 @@ pub(crate) struct ShadowPreLedger {
 /// Defaults (via [`ShadowHostCtx::diag`]) are the DIAGNOSTIC values that never spuriously reject
 /// (clock 0, no frozen cells, genesis head, large budget) — used by tests/round-trips. The
 /// security of bug-1 is that the EXECUTOR overrides every field from its own state.
+///
+/// # The host obligation (Lean: `Dregg2.Exec.HostCorrespondence`, AssuranceCase seam §2)
+///
+/// The verified gate's conditional soundness lemma `admissible_sound_of_reflects` proves: IF this
+/// context FAITHFULLY REFLECTS the node's true runtime facts (`HostFacts`: true clock / freeze-set /
+/// stored head / budget) THEN the gate decides EXACTLY as the node's own state would. The teeth
+/// (`{stored_head,budget,freeze,clock}_obligation_teeth`) show each field is load-bearing: an unsafe
+/// under-report (omit a truly-frozen referenced cell, advance the head to a forked turn's `prev`,
+/// inflate the budget, retard the clock) ADMITS a turn the true-facts gate REJECTS. So the production
+/// executor MUST override every field below from its own `self` state — never `diag()`. The only
+/// residual is producer-coverage: every cell the freeze gate reads (agent + write-set) must get a
+/// wire id; the `frozen` projection here (`run_shadow`'s `filter_map(id_map.get)`) is faithful on
+/// exactly those read cells (`marshalled_admission_sound`).
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "no-lean-link", allow(dead_code))]
 pub struct ShadowHostCtx {

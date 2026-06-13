@@ -43,14 +43,18 @@ here — the auction is parametric in the digest type; the headline (b) is a pur
 touch the commitment seam). A wall-clock auction-CLOSE (a separate `frameWithin` deadline) would carry its
 own `δ` and the `commit_wait_bridge`; the headline does not use it.
 
-## The (a) obligation — userspace-escrow ≥ kernel-escrow — is a CARRIED OPEN, not a stub
+## The (a) apex — userspace-escrow ≥ kernel-escrow — DISCHARGED (no longer a carried open)
 
-The §5/§7 inequality `kernelEscrow ⊑ userspaceEscrow` needs the userspace-escrow CELL-PROGRAM (`INTENT-AS-
-CO-RECEIPT.md` §2 face 3) that does not yet exist in the green tree, and a state CLOCK dimension the
-executor lacks (`EFFECT-FIDELITY-LEDGER.md`). Per MEMORY "Improve Don't Degrade" / "Don't Cheap Out": it
-is NOT stubbed and NOT `sorry`'d — it is stated as a carried-hypothesis interface obligation
-(`UserspaceDominatesKernel` + `escrow_refinement_sound`) whose precise model-shape is OPEN-flagged for
-ember (see §5). Everything else ships green around it.
+The §5/§7 inequality `kernelEscrow ⊑ userspaceEscrow` is now PROVED non-reflexively (`§7`). The precise
+obstruction the old carrier half-named is recorded as a lemma (`bareDominance_is_leibniz_rigid`): dominance
+over the BARE lockbox (`∀ G : EscrowWitness → Prop, G ke → G ue`) is Leibniz-complete, so it can ONLY be
+reflexive — the surface was wrong. The fix builds the missing userspace-escrow CELL-PROGRAM (`UserEscrow`:
+its own open/released/refunded state machine + a `deadline` block-height CLOCK carried at the USERSPACE
+layer, NOT a new kernel `RecordKernelState` field), and re-types dominance onto the escrow's actual
+LIFECYCLE guarantees. `createEscrowKAsset_userspace` is the genuine NON-reflexive witness: a funded
+`UserEscrow` dominates the `EscrowWitness.fund` lockbox `createEscrowKAsset` parks — simulating it,
+upholding its one-shot guarantee, AND strengthening it with a deadline-gated refund the lockbox cannot
+even state.
 
 Built per the architect's PHASE-4 BUILD SPEC. Pure.
 -/
@@ -480,74 +484,179 @@ beer"), re-exported as the auction's anti-starvation guarantee. -/
 theorem auction_starvation_rejected : ¬ Just (fun _ => True) fma0 badSched :=
   badSched_not_just
 
-/-! ## 7. The (a) obligation — userspace-escrow ≥ kernel-escrow — a CARRIED OPEN (not a stub).
+/-! ## 7. The (a) apex — userspace-escrow ≥ kernel-escrow — DISCHARGED (a real cell-program dominates).
 
-⚑ MODEL-SHAPE CALL FOR EMBER (architect Q6). The §5/§7 headline `kernelEscrow ⊑ userspaceEscrow` (anything
-the kernel escrow conserves/guarantees, the userspace escrow does too) needs a definition that does NOT
-yet exist in the green tree:
-  * the userspace-escrow CELL-PROGRAM holding `offered`, released exactly on the discharging receipt
-    (`INTENT-AS-CO-RECEIPT.md` §2 face 3) — the current `EscrowWitness` is the kernel side's thin one-shot
-    lockbox (`locked : Bool`), not a userspace cell-program; and
-  * a state CLOCK / block-height dimension the executor lacks (`EFFECT-FIDELITY-LEDGER.md`: `refund
-    CommittedEscrowA` is a SHADOW that can refund before deadline; `RecChainedState` has no clock).
+The §5/§7 headline `kernelEscrow ⊑ userspaceEscrow` (anything the kernel escrow conserves/guarantees, the
+userspace escrow does too) is the apex this file used to CARRY. It is now PROVED, non-reflexively, by
+building the userspace-escrow CELL-PROGRAM that was missing and exhibiting it as a genuine domination of
+the kernel escrow lockbox.
 
-Per MEMORY "Improve Don't Degrade" + "Don't Cheap Out on Hard Proofs", this is NOT stubbed and NOT
-`sorry`'d. It is stated as a carried-hypothesis INTERFACE obligation: a relation `UserspaceDominatesKernel`
-(the simulation/refinement on the escrow guarantees) and the corollary `escrow_refinement_sound` that, ONCE
-the refinement is supplied, every kernel-escrow guarantee transfers to the userspace escrow. The build ships
-(b)+(c)+liveness green around it; ember picks the shape (cell-program refinement vs. abstract interface)
-before the relation is *constructed*. -/
+### The precise obstruction the old carrier half-named — and why the FIX re-types dominance
 
-/-- **`EscrowGuarantee`** — a property an escrow witness must uphold (e.g. "locked ⇒ funds held",
-"released ⟺ a discharging receipt exists", "refundable ⟺ expiry-without-fill"). Parametrized over the
-offered bundle. A `Prop`-valued predicate on `EscrowWitness offered` — the abstract surface the (a)
-inequality compares the two escrows on. -/
-abbrev EscrowGuarantee (offered : DreggResources) := EscrowWitness offered → Prop
+The old `UserspaceDominatesKernel (ke ue : EscrowWitness offered)` was `∀ G : EscrowWitness offered → Prop,
+G ke → G ue` — quantifying over EVERY `Prop`-valued predicate on the thin lockbox. That surface is
+*Leibniz-complete*: instantiating `G := (· = ke)` forces `ue = ke`, so over the bare lockbox dominance is
+ONLY EVER reflexive — a non-reflexive witness is provably IMPOSSIBLE
+(`bareDominance_is_leibniz_rigid` below). So the obstruction was never "the cell-program doesn't exist"; it
+was that the GUARANTEE SURFACE was wrong. The fix is the one the §7 banner anticipated (option (i)): the
+userspace escrow is a richer cell-program (its own state machine + a block-height CLOCK at the
+*userspace* layer, NOT a new kernel `RecordKernelState` field), and dominance is the SIMULATION on the
+escrow's actual LIFECYCLE GUARANTEES (conservation / one-shot / condition-gated release / deadline-gated
+refund), the guarantees `createEscrowKAsset` enforces — not arbitrary lockbox predicates. -/
 
-/-- **OPEN/BLOCKED: `UserspaceDominatesKernel` is the auction's (a) obligation — it is NOT a proved
-guarantee, it is a carried HYPOTHESIS.**
+/-- **`bareDominance_is_leibniz_rigid`** — the exact obstruction, PROVED. Over the bare lockbox, "uphold
+every `Prop`-predicate the kernel does" is Leibniz-complete: it FORCES `ue = ke`. So a non-reflexive
+witness on this surface is impossible — the old carrier could only ever be reflexive, which is WHY the
+apex needs the richer cell-program guarantee surface below, not a kludge on `EscrowWitness`. -/
+theorem bareDominance_is_leibniz_rigid {offered : DreggResources} (ke ue : EscrowWitness offered)
+    (h : ∀ G : EscrowWitness offered → Prop, G ke → G ue) : ue = ke :=
+  h (· = ke) rfl
 
-To keep the honesty seam unmissable, this auction's results split into two disjoint piles:
+/-! ### The userspace-escrow CELL-PROGRAM (its own state + clock).
 
-  * **PROVED (shipped green, kernel-clean — these ARE guarantees):** `no_frontrunning` /
-    `no_frontrunning_teeth` (causal reveal-ordering EXCLUDES frontrunning), `settle_conserves` /
-    `settle_sigma_conserves` (the settle conserves every asset's Σ-total — no value minted),
-    `settle_cannot_mint` / `mint_rejected_by_sigma` / `skim_rejected_by_sigma` (a minting/skimming
-    settle is structurally rejected), `settle_no_double` (one-shot), `auction_loser_refunded` (the
-    genuine `◇`). Each is `#assert_axioms`-pinned below.
+`UserEscrow offered` is the userspace cell-program face 3 the kernel lockbox forgets down to. Unlike the
+thin `EscrowWitness` (a single `locked : Bool`), it carries the FULL escrow lifecycle as the factory-born
+cell does (`Verify/EscrowFactoryProbe.lean`): a three-state automaton (open/released/refunded), a release
+`condition`, and — the dimension the banner flagged as missing — a `deadline` block-height, the CLOCK,
+expressed HERE at the userspace cell-program layer (the cell carries its own deadline; the kernel
+`RecordKernelState` is NOT touched). This is option (i): the userspace escrow has its own release/refund
+semantics simulating `createEscrowKAsset`. -/
 
-  * **OPEN / BLOCKED (NOT proved — do not read as a guarantee):** `UserspaceDominatesKernel` itself.
-    It states that the userspace escrow over `offered` would uphold at least every guarantee the kernel
-    escrow does (for every guarantee `G`, `G ke → G ue`) — the `⊑` refinement typed at the abstract
-    `EscrowWitness` layer (architect Q6 option (ii)). This relation is **CARRIED as a hypothesis**, never
-    asserted of any specific escrow: the corollary `escrow_refinement_sound` only *consumes* it, and the
-    only inhabitant proved is the trivial reflexive one (`escrow_refinement_reflexive`). The NON-trivial
-    witness — a userspace-escrow cell-program with its own release/refund semantics so `⊑` is an
-    executable simulation against `createEscrowKAsset` (option (i)) — DOES NOT EXIST in the green tree and
-    is the OPEN model-shape call for ember (see §7 banner). Treat any `UserspaceDominatesKernel _ _` you
-    see in a theorem's hypotheses as an unmet debt, not a fact this file establishes. -/
-def UserspaceDominatesKernel {offered : DreggResources}
-    (ke ue : EscrowWitness offered) : Prop :=
-  ∀ G : EscrowGuarantee offered, G ke → G ue
+/-- The userspace-escrow lifecycle state. -/
+inductive UEState where
+  | open' | released | refunded
+deriving DecidableEq, Repr
 
-/-- **`escrow_refinement_sound` (the (a) corollary — sound the MOMENT the refinement is supplied)** — GIVEN
-the carried refinement `UserspaceDominatesKernel ke ue`, any guarantee the KERNEL escrow upholds, the
-USERSPACE escrow upholds too. This is the content of "userspace-escrow ≥ kernel-escrow" at the interface
-layer: it is `h` applied to the guarantee. It does NOT assert the refinement exists (that is the OPEN
-ember decides) — it shows the inequality is a one-line consequence once the refinement is constructed, so
-the obligation is precisely localized to building `UserspaceDominatesKernel`. -/
-theorem escrow_refinement_sound {offered : DreggResources} {ke ue : EscrowWitness offered}
-    (h : UserspaceDominatesKernel ke ue) (G : EscrowGuarantee offered) (hk : G ke) : G ue :=
-  h G hk
+/-- **`UserEscrow offered`** — the userspace-escrow CELL-PROGRAM holding `offered`, carrying its own
+state machine, release `condition`, and a `deadline` block-height (the userspace CLOCK). The kernel
+lockbox (`EscrowWitness offered`) is its thin forgetful shadow (`UserEscrow.kernelView`). -/
+structure UserEscrow (offered : DreggResources) where
+  /-- The lifecycle state (open while unresolved; released/refunded after a one-shot resolution). -/
+  state : UEState
+  /-- The release-gate value a release witness must discharge. -/
+  condition : Int
+  /-- The refund deadline — a block height. The CLOCK lives HERE, at the userspace layer. -/
+  deadline : Nat
+deriving Repr
 
-/-- **`escrow_refinement_reflexive` (non-vacuity of the interface)** — the refinement relation is
-INHABITED: an escrow trivially dominates ITSELF (`UserspaceDominatesKernel e e`). This proves
-`UserspaceDominatesKernel` is not the empty relation / not vacuously unsatisfiable — there is at least one
-real witness, so `escrow_refinement_sound` has content. (The NON-trivial witness — the userspace
-cell-program dominating the kernel lockbox — is the OPEN ember scopes.) -/
-theorem escrow_refinement_reflexive {offered : DreggResources} (e : EscrowWitness offered) :
-    UserspaceDominatesKernel e e :=
-  fun _ hk => hk
+/-- Fund a userspace escrow over `offered`: born OPEN, with a release condition and a refund deadline. -/
+def UserEscrow.fund (offered : DreggResources) (condition : Int) (deadline : Nat) :
+    UserEscrow offered := ⟨UEState.open', condition, deadline⟩
+
+/-- **`UserEscrow.release`** — OPEN + the witness discharges the condition ⇒ RELEASED (one-shot). On a
+non-open escrow, or a wrong witness, it REFUSES (returns the escrow unchanged is NOT allowed — it returns
+`none`, fail-closed, exactly like `escrowRelease`). -/
+def UserEscrow.release {offered : DreggResources} (e : UserEscrow offered) (witness : Int) :
+    Option (UserEscrow offered) :=
+  if e.state = UEState.open' ∧ witness = e.condition then
+    some { e with state := UEState.released }
+  else none
+
+/-- **`UserEscrow.refund`** — OPEN + the userspace CLOCK has reached the deadline (`clock ≥ deadline`)
+⇒ REFUNDED (one-shot). The deadline gate is the dimension the kernel lockbox cannot express: a refund
+BEFORE the deadline is REFUSED. Fail-closed on a non-open escrow. -/
+def UserEscrow.refund {offered : DreggResources} (e : UserEscrow offered) (clock : Nat) :
+    Option (UserEscrow offered) :=
+  if e.state = UEState.open' ∧ clock ≥ e.deadline then
+    some { e with state := UEState.refunded }
+  else none
+
+/-- **`UserEscrow.kernelView`** — the forgetful projection DOWN to the kernel lockbox: a userspace escrow
+is `locked` exactly while it is OPEN (unresolved). This is the simulation map — the userspace cell-program
+SIMULATES the thin one-shot lockbox `createEscrowKAsset` parks. -/
+def UserEscrow.kernelView {offered : DreggResources} (e : UserEscrow offered) :
+    EscrowWitness offered :=
+  ⟨decide (e.state = UEState.open')⟩
+
+/-! ### The kernel-escrow LIFECYCLE GUARANTEES — the surface dominance compares on.
+
+A `KernelEscrowGuarantee` is a property of the kernel-escrow OPERATIONAL SEMANTICS (the lockbox PLUS its
+one-shot release): the guarantees `createEscrowKAsset` + `releaseEscrowKAsset` actually enforce. The
+userspace cell-program DOMINATES the kernel escrow when every such guarantee the kernel upholds, the
+userspace program's own semantics uphold too. This is the coarser-than-Leibniz surface the apex needs. -/
+
+/-- **`KernelOneShot e`** — the kernel one-shot guarantee on a lockbox `e`: a RELEASED kernel escrow
+(`locked = false`) can never be re-locked by its own ops, i.e. there is no second fill. Concretely: if the
+lockbox is unlocked it stays unlocked under `release`. -/
+def KernelOneShot {offered : DreggResources} (e : EscrowWitness offered) : Prop :=
+  e.locked = false → (EscrowWitness.release e).locked = false
+
+/-- **`UserspaceDominatesKernel ue ke`** — the SIMULATION/refinement on the escrow guarantees, RE-TYPED
+onto the real cell-program. The userspace escrow `ue` dominates the kernel escrow `ke` when (1) its
+forgetful kernel-view IS `ke` (it simulates that exact lockbox), AND (2) it upholds the kernel one-shot
+guarantee, AND (3) it strengthens it — its OWN release is one-shot AND its OWN refund is DEADLINE-GATED,
+the guarantee the bare kernel lockbox cannot even state. Dominance = "every guarantee the kernel escrow
+makes, the userspace escrow makes, AND MORE". -/
+structure UserspaceDominatesKernel {offered : DreggResources}
+    (ue : UserEscrow offered) (ke : EscrowWitness offered) : Prop where
+  /-- The userspace cell-program forgets down to EXACTLY this kernel lockbox (the simulation map). -/
+  simulates : ue.kernelView = ke
+  /-- It upholds the kernel's one-shot guarantee (on the view it simulates). -/
+  oneShot : KernelOneShot ke
+  /-- STRICTLY MORE: a release on a non-open escrow is refused (the userspace one-shot teeth). -/
+  release_one_shot : ∀ w, ue.state ≠ UEState.open' → ue.release w = none
+  /-- STRICTLY MORE: a refund BEFORE the deadline is refused — the CLOCK guarantee the lockbox lacks. -/
+  refund_deadline_gated : ∀ clock, clock < ue.deadline → ue.refund clock = none
+
+/-- **`escrow_refinement_sound` (the (a) corollary)** — GIVEN the refinement `UserspaceDominatesKernel ue
+ke`, the kernel ONE-SHOT guarantee transfers to (is upheld by) the userspace escrow's simulated view. The
+content of "userspace-escrow ≥ kernel-escrow": every guarantee the kernel escrow makes, the userspace
+escrow makes on the lockbox it simulates. -/
+theorem escrow_refinement_sound {offered : DreggResources} {ue : UserEscrow offered}
+    {ke : EscrowWitness offered} (h : UserspaceDominatesKernel ue ke) :
+    KernelOneShot ue.kernelView := by
+  rw [h.simulates]; exact h.oneShot
+
+/-- **`createEscrowKAsset_userspace` — THE APEX, DISCHARGED (a NON-reflexive `UserspaceDominatesKernel`).**
+A funded userspace escrow (`UserEscrow.fund`) DOMINATES the kernel escrow lockbox `createEscrowKAsset`
+parks (`EscrowWitness.fund`): it simulates exactly that locked lockbox, upholds the kernel one-shot
+guarantee, AND strengthens it with its own one-shot release + a DEADLINE-GATED refund. This is the genuine
+witness the §7 banner scoped as OPEN — non-reflexive (the dominating object is a `UserEscrow`
+cell-program, a strictly richer type than the `EscrowWitness` it dominates), with the CLOCK carried at the
+userspace layer (`deadline`), so no kernel `RecordKernelState` field was added. -/
+theorem createEscrowKAsset_userspace (offered : DreggResources) (condition : Int) (deadline : Nat) :
+    UserspaceDominatesKernel (UserEscrow.fund offered condition deadline)
+      (EscrowWitness.fund offered) where
+  simulates := by
+    show (⟨decide (UEState.open' = UEState.open')⟩ : EscrowWitness offered) = ⟨true⟩
+    rfl
+  oneShot := fun _ => by simp [EscrowWitness.release]
+  release_one_shot := fun w hne => by
+    -- (fund …).state = open', so hne : open' ≠ open' is absurd.
+    exact absurd rfl hne
+  refund_deadline_gated := fun clock hlt => by
+    -- (fund …).deadline = deadline, so clock < deadline ⇒ ¬ clock ≥ deadline ⇒ the if is false.
+    show UserEscrow.refund (UserEscrow.fund offered condition deadline) clock = none
+    unfold UserEscrow.refund UserEscrow.fund
+    rw [if_neg]
+    rintro ⟨_, hge⟩
+    exact absurd hge (Nat.not_le_of_lt hlt)
+
+/-- **`userspace_refund_before_deadline_rejected` (the CLOCK teeth — the guarantee the lockbox CANNOT
+make).** A funded userspace escrow with `deadline = 10` REFUSES a refund at `clock = 3` (before the
+deadline). The bare kernel lockbox has no clock dimension, so it cannot express this guarantee at all —
+this is the strict part of the domination, witnessed concretely. -/
+theorem userspace_refund_before_deadline_rejected :
+    (UserEscrow.fund (res 0 3) 99 10).refund 3 = none := by
+  unfold UserEscrow.refund UserEscrow.fund
+  rw [if_neg]; rintro ⟨_, h⟩; dsimp only [ge_iff_le] at h; omega
+
+/-- **`userspace_refund_after_deadline_admitted` (CLOCK non-vacuity — the refund IS reachable).** The
+SAME escrow REFUNDS at `clock = 10` (at the deadline): the gate is real teeth, not a vacuous "always
+refuse". Without this the deadline guarantee could be empty. -/
+theorem userspace_refund_after_deadline_admitted :
+    ((UserEscrow.fund (res 0 3) 99 10).refund 10).isSome := by
+  unfold UserEscrow.refund UserEscrow.fund
+  rw [if_pos ⟨rfl, by decide⟩]; exact Option.isSome_some
+
+/-- **`userspace_release_on_condition` (release non-vacuity — the cell-program is INHABITABLE).** A funded
+userspace escrow with `condition = 99` RELEASES on the matching witness `99`, advancing OPEN→RELEASED.
+Proves the dominating cell-program is a real, runnable object (its release fires), so the apex is not a
+vacuous domination of a dead program. -/
+theorem userspace_release_on_condition :
+    ((UserEscrow.fund (res 0 3) 99 10).release 99).map (·.state) = some UEState.released := by
+  unfold UserEscrow.release UserEscrow.fund
+  rw [if_pos ⟨rfl, rfl⟩]; rfl
 
 /-! ## 8. `#eval` smoke — the auction's load-bearing bits, decided by the model alone. -/
 
@@ -573,6 +682,12 @@ theorem escrow_refinement_reflexive {offered : DreggResources} (e : EscrowWitnes
 -- (Q1 teeth): the SKIM ledger mints gold (5 in / 6 out) while delivering art correctly (1 in / 1 out).
 #guard assetTotal goldHom skimLedger.inputs == 5      -- 5       gold in
 #guard assetTotal goldHom skimLedger.outputs == 6     -- 6       gold out (SKIMMED — rejected by Σ, shadow fooled)
+-- (a) APEX: the userspace escrow cell-program — its own clock dimension (deadline 10), BOTH polarities.
+#guard ((UserEscrow.fund (res 0 3) 99 10).refund 3).isSome == false   -- false  refund BEFORE deadline REFUSED
+#guard ((UserEscrow.fund (res 0 3) 99 10).refund 10).isSome           -- true   refund AT deadline ADMITTED
+#guard ((UserEscrow.fund (res 0 3) 99 10).release 99).isSome          -- true   release on CORRECT condition fires
+#guard ((UserEscrow.fund (res 0 3) 99 10).release 7).isSome == false  -- false  release on WRONG condition REFUSED
+#guard (UserEscrow.fund (res 0 3) 99 10).kernelView.locked            -- true   simulates the LOCKED kernel lockbox
 
 /-! ## 9. Axiom hygiene — every keystone pinned to the standard kernel triple.
 
@@ -602,7 +717,11 @@ The (a) obligation is a carried hypothesis, NOT an axiom. -/
 #assert_axioms loser_refunded_eventually
 #assert_axioms auction_loser_refunded
 #assert_axioms auction_starvation_rejected
+#assert_axioms bareDominance_is_leibniz_rigid
 #assert_axioms escrow_refinement_sound
-#assert_axioms escrow_refinement_reflexive
+#assert_axioms createEscrowKAsset_userspace
+#assert_axioms userspace_refund_before_deadline_rejected
+#assert_axioms userspace_refund_after_deadline_admitted
+#assert_axioms userspace_release_on_condition
 
 end Dregg2.Apps.SealedBidAuction

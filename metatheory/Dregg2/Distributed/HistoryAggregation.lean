@@ -38,7 +38,8 @@ namespace Dregg2.Distributed.HistoryAggregation
 
 open Dregg2.Exec (RecChainedState recCexec recChainedSystem recChained_run_conserves recTotal)
 open Dregg2.Execution (System Run)
-open Dregg2.Circuit.StateCommit (recStateCommit recStateCommit_binds compressInjective cellDigest)
+open Dregg2.Circuit.StateCommit (recStateCommit recStateCommit_binds recStateCommit_binds_kernel
+  compressInjective compressNInjective cellLeafInjective RestHashIffFrame AccountsWF cellDigest)
 
 /-- The all-zero turn — `Turn` has no `Inhabited` instance, so we name the canonical default
 turn-context used to commit the genesis/empty-chain root. -/
@@ -189,6 +190,32 @@ theorem root_tooth_pins_state (hCmb : compressInjective cmb) (s s' : ChainStep)
   exact recStateCommit_binds CH RH cmb compress compressN hCmb
           s.post.kernel s'.pre.kernel s'.turn htooth
 
+/-- **`root_tooth_pins_kernel` (THE STRENGTHENED CR RECOVERY — state-equality, not just commitment).**
+The critique's precise gap: `root_tooth_pins_state` recovers only `cellDigest`+`RH` EQUALITY
+(commitment-level), not the `s.post.kernel = s'.pre.kernel` STATE equality `StateChained` needs — so
+the headline still took state continuity as a separate prover hypothesis. This closes it: under the
+FULL standard Poseidon CR set + the PROVED-preserved `AccountsWF` structural invariant on BOTH seam
+kernels, an agreeing root-tooth at a matched turn-context forces the WHOLE kernel equal
+(`recStateCommit_binds_kernel`: `RH` recovers the 15 non-cell fields incl. `accounts`, then the cell
+digest recovers `cell` over the now-common carrier). So a light client seeing only the matching roots
+GENUINELY learns the adjacent KERNELS coincide — up to CR — not merely their commitments. (The
+receipt LOG is the one `RecChainedState` component the §8 state root does NOT bind; see
+`KernelChained` below — conservation rides on the kernel alone, so the log is conservation-irrelevant,
+and that is the exact, named residual rather than a hidden hypothesis.) -/
+theorem root_tooth_pins_kernel
+    (hCmb : compressInjective cmb) (hCompress : compressInjective compress)
+    (hCompressN : compressNInjective compressN) (hLeaf : cellLeafInjective CH)
+    (hRest : RestHashIffFrame RH) (s s' : ChainStep)
+    (hwf : AccountsWF s.post.kernel) (hwf' : AccountsWF s'.pre.kernel)
+    (hturn : s.turn = s'.turn)
+    (htooth : ChainStep.newRoot CH RH cmb compress compressN s
+                = ChainStep.oldRoot CH RH cmb compress compressN s') :
+    s.post.kernel = s'.pre.kernel := by
+  unfold ChainStep.newRoot ChainStep.oldRoot stateRoot at htooth
+  rw [hturn] at htooth
+  exact recStateCommit_binds_kernel CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest
+          s.post.kernel s'.pre.kernel s'.turn hwf hwf' htooth
+
 /-! ## 6. THE HEADLINE — a well-formed chain attests the WHOLE history. -/
 
 /-- **`every_turn_executed_correctly`.** For EVERY turn in the chain, the turn executed
@@ -221,6 +248,141 @@ theorem wellformed_history_conserves (g : RecChainedState) (steps : List ChainSt
     (hch : StateChained g steps) :
     recTotal (lastStateOf g steps).kernel = recTotal g.kernel :=
   recChained_run_conserves (wellformed_is_run g steps hch)
+
+/-! ### Conservation-over-history from KERNEL continuity alone (the §8 root binds the kernel, not the log).
+
+`StateChained` is full `RecChainedState` equality at every seam — it includes the receipt LOG, which
+the §8 state commitment does NOT bind (`recStateCommit`/`cellDigest`/`RH` are pure functions of the
+kernel; `RecChainedState.log` is uncommitted). A light client verifying roots can therefore recover
+KERNEL continuity (`root_tooth_pins_kernel`) but not log continuity. The headline content the critique
+demands — conservation-over-history — needs ONLY kernel continuity (`recTotal` reads the kernel), so we
+factor it through `KernelChained` and DERIVE it from the verified root teeth, with no `StateChained`
+hypothesis. (Full `Run`/`StateChained` — which a few downstream theorems use for run-level facts beyond
+conservation — is what additionally needs the log; named, not hidden.) -/
+
+/-- The kernel projection of `recCexec`: a committed chained step commits the underlying kernel step
+`recKExec pre.kernel turn = some post.kernel`. Read off the `recCexec` match (the success arm sets
+`post.kernel := k'`). -/
+theorem recCexec_kernel {s s' : RecChainedState} {t : Dregg2.Exec.Turn}
+    (h : recCexec s t = some s') : Dregg2.Exec.recKExec s.kernel t = some s'.kernel := by
+  unfold recCexec at h
+  split at h
+  · next k' heq => simp only [Option.some.injEq] at h; rw [← h]; exact heq
+  · exact absurd h (by simp)
+
+/-- **`KernelChained g steps`** — the steps form a contiguous executor run from genesis `g` AT THE
+KERNEL LEVEL (the receipt log set aside): the first step's pre-KERNEL is `g`'s, and each step's
+post-kernel is the next step's pre-kernel. This is exactly what the §8 root tooth recovers under CR
+(`root_tooth_pins_kernel`) — and exactly what conservation needs. -/
+def KernelChained (g : RecChainedState) : List ChainStep → Prop
+  | []        => True
+  | s :: rest => s.pre.kernel = g.kernel ∧ KernelChained s.post rest
+
+/-- **`KernelGenesisPin g steps`** — the head step's pre-KERNEL is genesis `g`'s (vacuous if empty).
+Genesis is a PUBLIC, agreed value (the chain's declared start, pinned in `Aggregate.genesisRoot`), so
+this is an honest input, NOT the malicious-prover surface (which is the INTER-step continuity, derived
+below). Named as its own predicate so the conservation headlines share one stable hypothesis type. -/
+def KernelGenesisPin (g : RecChainedState) : List ChainStep → Prop
+  | []        => True
+  | s :: _    => s.pre.kernel = g.kernel
+
+/-- `StateChained` (full-state) entails `KernelChained` (its kernel projection): equal states have
+equal kernels. So `KernelChained` is the strictly weaker continuity the commitment can actually
+deliver, and every honest `StateChained` chain is a `KernelChained` chain. -/
+theorem kernelChained_of_stateChained (g : RecChainedState) (steps : List ChainStep)
+    (hch : StateChained g steps) : KernelChained g steps := by
+  induction steps generalizing g with
+  | nil => trivial
+  | cons s rest ih =>
+    obtain ⟨hpre, hrest⟩ := hch
+    exact ⟨by rw [hpre], ih s.post hrest⟩
+
+/-- **`kernelChained_conserves` (KEYSTONE — conservation rides KERNEL continuity, no log).** Value is
+conserved across the whole history given only KERNEL continuity from genesis: the ledger total at the
+folded endpoint equals the genesis total. Proved by direct induction on the per-step kernel
+conservation (`recKExec_conserves` over each `ChainStep.commits`, projected by `recCexec_kernel`) —
+NOT via `Run`, so it never touches the receipt log. This is the conservation the §8 root genuinely
+buys a light client, since the commitment binds the kernel. -/
+theorem kernelChained_conserves (g : RecChainedState) (steps : List ChainStep)
+    (hkc : KernelChained g steps) :
+    recTotal (lastStateOf g steps).kernel = recTotal g.kernel := by
+  induction steps generalizing g with
+  | nil => rfl
+  | cons s rest ih =>
+    obtain ⟨hpre, hrest⟩ := hkc
+    -- this step conserves at the kernel level …
+    have hstep : recTotal s.post.kernel = recTotal s.pre.kernel :=
+      Dregg2.Exec.recKExec_conserves s.pre.kernel s.post.kernel s.turn (recCexec_kernel s.commits)
+    -- … and the tail conserves from `s.post` by IH.
+    have htail : recTotal (lastStateOf s.post rest).kernel = recTotal s.post.kernel := ih s.post hrest
+    rw [show lastStateOf g (s :: rest) = lastStateOf s.post rest from rfl, htail, hstep, hpre]
+
+/-- **`SeamStruct steps`** — the per-seam STRUCTURAL facts (NOT continuity, NOT roots): at every
+adjacent pair the turn-contexts match AND both seam kernels are `AccountsWF`. These are exactly the
+two non-cryptographic side facts `root_tooth_pins_kernel` consumes beyond the tooth itself: turn-match
+holds under the accumulator's NoOp-padding (`ivc_turn_chain.rs:325`), and `AccountsWF` is the
+structural invariant every `recKExec` PRESERVES (`StateCommit.recKExec_preserves_AccountsWF`). The
+TOOTH itself is NOT here — it comes from `ChainBound`, which a verified `bindingProof` supplies. So
+`SeamStruct` is the honest, non-prover-controlled structural envelope; continuity is DERIVED. -/
+def SeamStruct : List ChainStep → Prop
+  | []            => True
+  | [_]           => True
+  | s :: s' :: rest =>
+      (s.turn = s'.turn ∧ AccountsWF s.post.kernel ∧ AccountsWF s'.pre.kernel)
+      ∧ SeamStruct (s' :: rest)
+
+/-- **`kernelChained_of_verified` (THE DERIVATION — state continuity FROM verification).** From the
+genesis pin `s₀.pre.kernel = g.kernel` (genesis is public/agreed — NOT the malicious surface), the
+verified root tooth `ChainBound` (what a verified `bindingProof` delivers, = `AggregateAttests.ordered`),
+and the structural envelope `SeamStruct` (matched turns + `AccountsWF`), the whole chain is
+`KernelChained`. Each inter-step seam `s.post.kernel = s'.pre.kernel` is DERIVED by
+`root_tooth_pins_kernel` from the `ChainBound` tooth — it is no longer the prover-supplied `StateChained`
+hypothesis the critique flagged. Kernel continuity (hence conservation) follows from the VERIFIED root
+under the CR floor, with only the genesis pin + structural envelope as honest inputs. -/
+theorem kernelChained_of_verified
+    (hCmb : compressInjective cmb) (hCompress : compressInjective compress)
+    (hCompressN : compressNInjective compressN) (hLeaf : cellLeafInjective CH)
+    (hRest : RestHashIffFrame RH)
+    (g : RecChainedState) :
+    ∀ steps : List ChainStep,
+      KernelGenesisPin g steps →
+      ChainBound CH RH cmb compress compressN steps →
+      SeamStruct steps →
+      KernelChained g steps
+  | [], _, _, _ => trivial
+  | [s], hgen, _, _ => ⟨hgen, trivial⟩
+  | s :: s' :: rest, hgen, hbound, hstruct => by
+    obtain ⟨htooth, hboundrest⟩ := hbound
+    obtain ⟨⟨hturn, hwf, hwf'⟩, hstructrest⟩ := hstruct
+    -- the seam `s.post.kernel = s'.pre.kernel` is DERIVED from the verified `ChainBound` tooth.
+    have hseam : s.post.kernel = s'.pre.kernel :=
+      root_tooth_pins_kernel CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest
+        s s' hwf hwf' hturn htooth
+    refine ⟨hgen, ?_⟩
+    -- recurse on the tail from `s.post`; the next genesis pin is the derived seam (`s'.pre = s.post`).
+    exact kernelChained_of_verified hCmb hCompress hCompressN hLeaf hRest s.post (s' :: rest)
+      hseam.symm hboundrest hstructrest
+
+/-- **`verified_history_conserves` (THE HEADLINE CLOSURE — conservation from VERIFICATION ALONE).**
+Conservation across the WHOLE history with NO `StateChained` hypothesis: given the genesis pin, the
+VERIFIED root tooth `ChainBound` (= `AggregateAttests.ordered`), and the structural envelope
+`SeamStruct`, the ledger total at the folded endpoint equals the genesis total. Composes
+`kernelChained_of_verified` (verified tooth ⇒ kernel continuity, via the strengthened
+`root_tooth_pins_kernel`) with `kernelChained_conserves` (kernel continuity ⇒ conservation). This is
+the precise statement the critique asked for: "trusting the aggregate trusts a no-mint/no-burn history"
+now follows from the VERIFIED root, not from the prover's honesty about state continuity. -/
+theorem verified_history_conserves
+    (hCmb : compressInjective cmb) (hCompress : compressInjective compress)
+    (hCompressN : compressNInjective compressN) (hLeaf : cellLeafInjective CH)
+    (hRest : RestHashIffFrame RH)
+    (g : RecChainedState) (steps : List ChainStep)
+    (hgen : KernelGenesisPin g steps)
+    (hbound : ChainBound CH RH cmb compress compressN steps)
+    (hstruct : SeamStruct steps) :
+    recTotal (lastStateOf g steps).kernel = recTotal g.kernel :=
+  kernelChained_conserves g steps
+    (kernelChained_of_verified CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest
+      g steps hgen hbound hstruct)
 
 /-- **`chainBound_of_stateChained`.** State-level continuity entails the root-level temporal
 tooth at every seam WHERE THE TURN-CONTEXTS AGREE. We state the per-seam fact directly via
@@ -287,6 +449,30 @@ non-empty history, not a vacuous `none`. -/
 theorem honest_step_executes :
     (recCexec teethGenesis honestTurn).isSome = true := by decide
 
+/-- **`honest_chain_kernelChained` (non-vacuity of the kernel-continuity path).** The honest
+single-step chain is `KernelChained` from genesis — exhibited by projecting its `StateChained` witness
+(`kernelChained_of_stateChained`). So the kernel-continuity conservation path (`kernelChained_conserves`
+/ `verified_history_conserves`) fires on a REAL chain, not a vacuous one. -/
+theorem honest_chain_kernelChained :
+    KernelChained teethGenesis [honestStep] :=
+  kernelChained_of_stateChained teethGenesis [honestStep] ⟨rfl, trivial⟩
+
+/-- **`honest_kernelChained_conserves` (the conservation ENGINE fires).** The honest chain conserves
+the ledger total through the KERNEL-continuity path (`kernelChained_conserves`, the conservation engine
+the verification headline rides) — `recTotal` at the endpoint equals genesis (`100`, cell-0 debit 10 =
+cell-1 credit 10). This witnesses that the NEW conservation-from-kernel-continuity machinery delivers a
+TRUE conservation fact on a real executor run, independent of any `StateChained`/`Run`. -/
+theorem honest_kernelChained_conserves :
+    recTotal (lastStateOf teethGenesis [honestStep]).kernel = recTotal teethGenesis.kernel :=
+  kernelChained_conserves teethGenesis [honestStep] honest_chain_kernelChained
+
+/-- **`honest_total_is_100` (the conserved value is REAL, not a formal husk).** Reading the conclusion:
+the honest chain's endpoint ledger total is exactly `100` — the genuine conserved supply. So the
+conservation the kernel-continuity path proves is a TRUE arithmetic fact about a real run. -/
+theorem honest_total_is_100 :
+    recTotal (lastStateOf teethGenesis [honestStep]).kernel = 100 := by
+  rw [honest_kernelChained_conserves]; decide
+
 /-- **`tooth_rejects_broken_order` (THE ANTI-GHOST TOOTH, witnessed negative).** A reordered
 / spliced chain is NOT `ChainBound`: if the first step's `newRoot` differs from the second's
 `oldRoot`, the `Continues` tooth fails, so `ChainBound` is false. We witness this abstractly: for ANY
@@ -305,9 +491,21 @@ end Portal
 /-! ## 8. Axiom hygiene. -/
 
 #assert_axioms Dregg2.Distributed.HistoryAggregation.root_tooth_pins_state
+#assert_axioms Dregg2.Distributed.HistoryAggregation.root_tooth_pins_kernel
 #assert_axioms Dregg2.Distributed.HistoryAggregation.wellformed_is_run
 #assert_axioms Dregg2.Distributed.HistoryAggregation.wellformed_history_conserves
 #assert_axioms Dregg2.Distributed.HistoryAggregation.wellformed_attests_whole_history
 #assert_axioms Dregg2.Distributed.HistoryAggregation.tooth_rejects_broken_order
+-- the §8-root binds the KERNEL (not the log): conservation-over-history from VERIFICATION, not from a
+-- prover-supplied StateChained hypothesis (the critique's CRITICAL-3 closure):
+#assert_axioms Dregg2.Distributed.HistoryAggregation.recCexec_kernel
+#assert_axioms Dregg2.Distributed.HistoryAggregation.kernelChained_of_stateChained
+#assert_axioms Dregg2.Distributed.HistoryAggregation.kernelChained_conserves
+#assert_axioms Dregg2.Distributed.HistoryAggregation.kernelChained_of_verified
+#assert_axioms Dregg2.Distributed.HistoryAggregation.verified_history_conserves
+-- non-vacuity of the kernel-continuity conservation path (witnessed on a real executor run):
+#assert_axioms Dregg2.Distributed.HistoryAggregation.honest_chain_kernelChained
+#assert_axioms Dregg2.Distributed.HistoryAggregation.honest_kernelChained_conserves
+#assert_axioms Dregg2.Distributed.HistoryAggregation.honest_total_is_100
 
 end Dregg2.Distributed.HistoryAggregation
