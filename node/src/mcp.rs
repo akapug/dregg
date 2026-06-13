@@ -771,6 +771,10 @@ fn tool_group(tool: &str) -> &'static str {
         "dregg_get_status"
         | "dregg_check_capabilities"
         | "dregg_read_cell"
+        | "dregg_list_cells"
+        | "dregg_get_cap_graph"
+        | "dregg_get_trustline_status"
+        | "dregg_get_channel_status"
         | "dregg_get_receipt_chain"
         | "dregg_get_blocklace_status"
         | "dregg_get_constitution"
@@ -839,6 +843,10 @@ fn tool_title(tool: &str) -> &'static str {
         "dregg_delegate" => "Delegate Sub-Capability",
         "dregg_check_capabilities" => "List My Capabilities",
         "dregg_read_cell" => "Read Cell State",
+        "dregg_list_cells" => "List Ledger Cells",
+        "dregg_get_cap_graph" => "Read Capability Graph",
+        "dregg_get_trustline_status" => "Read Trustline Status",
+        "dregg_get_channel_status" => "Read Channel Status",
         "dregg_get_receipt_chain" => "Read Receipt Chain",
         "dregg_seal_data" => "Seal Data (Encrypt)",
         "dregg_unseal_data" => "Unseal Data (Decrypt)",
@@ -1208,6 +1216,74 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
                     "cell_id": { "type": "string", "description": "Hex-encoded 32-byte cell ID" }
                 },
                 "required": ["cell_id"]
+            }),
+        },
+        McpToolDef {
+            name: "dregg_list_cells",
+            title: None,
+            output_schema: None,
+            annotations: None,
+            description: "Survey the cells in the local ledger (the map of what you can act on). \
+                          Returns each cell's id, balance, nonce, capability count, and kind \
+                          (cell | sovereign | trustline | channel). Paginated via an opaque cursor.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "cursor": { "type": "string", "description": "Opaque pagination cursor from a previous call's next_cursor (decimal offset). Omit to start at the beginning." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Max cells to return (default 20)." }
+                },
+                "required": []
+            }),
+        },
+        McpToolDef {
+            name: "dregg_get_cap_graph",
+            title: None,
+            output_schema: None,
+            annotations: None,
+            description: "Read the OUTGOING capability edges held by a cell — which targets it can \
+                          reach, under what permission (none/signature/proof/...), with what facet \
+                          and expiry. The ocap reachability map for planning delegation/exercise. \
+                          Defaults to your own agent cell when cell_id is omitted.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "cell_id": { "type": "string", "description": "Hex-encoded 32-byte cell ID whose capability graph to read. Omit for your own agent cell." }
+                },
+                "required": []
+            }),
+        },
+        McpToolDef {
+            name: "dregg_get_trustline_status",
+            title: None,
+            output_schema: None,
+            annotations: None,
+            description: "Read the self-authenticating position of a trustline cell (ORGANS §1): \
+                          its line ceiling, directional parties (issuer→holder), collateral mode \
+                          (fullReserve | pureCredit), and the escrow backing the line. A cell is a \
+                          trustline IFF its program VK re-derives from its own terms — never a \
+                          tamper-able slot.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "trustline_cell": { "type": "string", "description": "Hex-encoded 32-byte trustline cell ID (see dregg_list_cells, kind=trustline)." }
+                },
+                "required": ["trustline_cell"]
+            }),
+        },
+        McpToolDef {
+            name: "dregg_get_channel_status",
+            title: None,
+            output_schema: None,
+            annotations: None,
+            description: "Read the self-authenticating terms of a channel-group cell (ORGANS §4): \
+                          its governance admin key and group tag. A cell is a channel IFF its \
+                          program VK re-derives from its own terms.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "channel_cell": { "type": "string", "description": "Hex-encoded 32-byte channel cell ID (see dregg_list_cells, kind=channel)." }
+                },
+                "required": ["channel_cell"]
             }),
         },
         McpToolDef {
@@ -1905,6 +1981,10 @@ fn tool_required_scope(tool: &str) -> &'static str {
         "dregg_get_status"
         | "dregg_check_capabilities"
         | "dregg_read_cell"
+        | "dregg_list_cells"
+        | "dregg_get_cap_graph"
+        | "dregg_get_trustline_status"
+        | "dregg_get_channel_status"
         | "dregg_get_receipt_chain"
         | "dregg_verify_provenance"
         | "dregg_verify_sovereign_proof"
@@ -2173,6 +2253,10 @@ async fn dispatch_tool(name: &str, params: Value, state: &NodeState) -> McpToolR
         "dregg_delegate" => tool_delegate(&params, state).await,
         "dregg_check_capabilities" => tool_check_capabilities(state).await,
         "dregg_read_cell" => tool_read_cell(&params, state).await,
+        "dregg_list_cells" => tool_list_cells(&params, state).await,
+        "dregg_get_cap_graph" => tool_get_cap_graph(&params, state).await,
+        "dregg_get_trustline_status" => tool_get_trustline_status(&params, state).await,
+        "dregg_get_channel_status" => tool_get_channel_status(&params, state).await,
         "dregg_get_receipt_chain" => tool_get_receipt_chain(&params, state).await,
         "dregg_seal_data" => tool_seal_data(&params, state).await,
         "dregg_unseal_data" => tool_unseal_data(&params, state).await,
@@ -3240,6 +3324,251 @@ async fn tool_read_cell(params: &Value, state: &NodeState) -> McpToolResult {
         // "Circuit"; `state_constraints` (when present) is the structured
         // constraint vocabulary defined by `dregg_cell::program::StateConstraint`.
         "program": program_json,
+    }))
+}
+
+/// A short, agent-legible label for an `AuthRequired` permission requirement.
+fn auth_required_label(a: &dregg_cell::permissions::AuthRequired) -> &'static str {
+    use dregg_cell::permissions::AuthRequired as A;
+    match a {
+        A::None => "none",
+        A::Signature => "signature",
+        A::Proof => "proof",
+        A::Either => "signature-or-proof",
+        A::Impossible => "impossible",
+        A::Custom { .. } => "custom-predicate",
+    }
+}
+
+/// `dregg_list_cells` — paginate over the cells the node holds in its local
+/// ledger. The ledger is the agent's MAP of the world it can act on: every
+/// grant/transfer/exercise target must already be a cell here. A read-only,
+/// idempotent survey — no authority beyond `read`.
+///
+/// Pagination follows the same cursor convention as resources/list: an opaque
+/// `cursor` (a decimal offset) + a `limit` (default `MCP_PAGE_SIZE`). The
+/// result carries `next_cursor` when more cells remain.
+async fn tool_list_cells(params: &Value, state: &NodeState) -> McpToolResult {
+    let s = state.read().await;
+
+    let start = params
+        .get("cursor")
+        .and_then(|v| v.as_str())
+        .and_then(|c| c.parse::<usize>().ok())
+        .unwrap_or(0);
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| (n as usize).clamp(1, 200))
+        .unwrap_or(MCP_PAGE_SIZE);
+
+    // Stable order: sort by cell id so pagination is deterministic across calls.
+    let mut all: Vec<(dregg_cell::CellId, &dregg_cell::Cell)> =
+        s.ledger.iter().map(|(id, c)| (*id, c)).collect();
+    all.sort_by(|a, b| a.0.0.cmp(&b.0.0));
+    let total = all.len();
+
+    let page: Vec<Value> = all
+        .iter()
+        .skip(start)
+        .take(limit)
+        .map(|(id, c)| {
+            let is_trustline = crate::trustline_service::trustline_terms_of(c).is_some();
+            let is_channel = crate::channels_service::channel_terms_of(c).is_some();
+            let kind = if is_trustline {
+                "trustline"
+            } else if is_channel {
+                "channel"
+            } else if s.ledger.is_sovereign(id) {
+                "sovereign"
+            } else {
+                "cell"
+            };
+            serde_json::json!({
+                "cell_id": hex_encode(id.as_bytes()),
+                "balance": c.state.balance(),
+                "nonce": c.state.nonce(),
+                "capability_count": c.capabilities.len(),
+                "kind": kind,
+            })
+        })
+        .collect();
+
+    let next = next_cursor(start, page.len(), total);
+
+    McpToolResult::json(&serde_json::json!({
+        "cells": page,
+        "total": total,
+        "returned": page.len(),
+        "next_cursor": next,
+    }))
+}
+
+/// `dregg_get_cap_graph` — the OUTGOING capability edges held by a cell: which
+/// targets it can reach, under what permission, with what facet/expiry. This is
+/// the ocap reachability map an agent needs to plan delegation/exercise without
+/// blindly probing. Read-only.
+///
+/// Defaults to the node's OWN agent cell when `cell_id` is omitted — the most
+/// common question ("what can *I* reach?").
+async fn tool_get_cap_graph(params: &Value, state: &NodeState) -> McpToolResult {
+    let s = state.read().await;
+
+    let cell_id = match params.get("cell_id").and_then(|v| v.as_str()) {
+        Some(h) => match hex_decode(h) {
+            Ok(b) => dregg_cell::CellId(b),
+            Err(_) => {
+                return McpToolResult::actionable_error(
+                    "invalid hex for cell_id",
+                    "pass a 64-hex-char cell id, or omit cell_id to read your own agent cell",
+                );
+            }
+        },
+        None => agent_cell_of(&s.cclerk),
+    };
+
+    let cell = match s.ledger.get(&cell_id) {
+        Some(c) => c,
+        None => {
+            return McpToolResult::json(&serde_json::json!({
+                "cell_id": hex_encode(cell_id.as_bytes()),
+                "found": false,
+                "edges": [],
+            }));
+        }
+    };
+
+    let edges: Vec<Value> = cell
+        .capabilities
+        .iter()
+        .map(|cap| {
+            serde_json::json!({
+                "target": hex_encode(cap.target.as_bytes()),
+                "slot": cap.slot,
+                "permissions": auth_required_label(&cap.permissions),
+                "expires_at": cap.expires_at,
+                "faceted": cap.allowed_effects.is_some(),
+            })
+        })
+        .collect();
+
+    McpToolResult::json(&serde_json::json!({
+        "cell_id": hex_encode(cell_id.as_bytes()),
+        "found": true,
+        "edge_count": edges.len(),
+        "edges": edges,
+    }))
+}
+
+/// `dregg_get_trustline_status` (ORGANS §1) — read the self-authenticating
+/// position of a trustline cell: its line ceiling, the directional parties
+/// (issuer→holder), the collateral mode, and the escrow currently backing the
+/// line (the cell's own balance). Self-authenticating: a cell is a trustline
+/// IFF its installed program VK re-derives from its own term registers, so this
+/// never trusts a tamper-able slot to decide what is a trustline. Read-only.
+async fn tool_get_trustline_status(params: &Value, state: &NodeState) -> McpToolResult {
+    let cell_id = match params.get("trustline_cell").and_then(|v| v.as_str()) {
+        Some(h) => match hex_decode(h) {
+            Ok(b) => dregg_cell::CellId(b),
+            Err(_) => {
+                return McpToolResult::actionable_error(
+                    "invalid hex for trustline_cell",
+                    "pass the 64-hex-char id of a trustline cell (see dregg_list_cells, kind=trustline)",
+                );
+            }
+        },
+        None => return McpToolResult::error("missing required parameter: trustline_cell"),
+    };
+
+    let s = state.read().await;
+    let cell = match s.ledger.get(&cell_id) {
+        Some(c) => c,
+        None => {
+            return McpToolResult::actionable_error(
+                format!("cell {} not in ledger", hex_encode(cell_id.as_bytes())),
+                "list cells with dregg_list_cells to find a live trustline",
+            );
+        }
+    };
+
+    let (terms, collateral) = match crate::trustline_service::trustline_terms_of(cell) {
+        Some(tc) => tc,
+        None => {
+            return McpToolResult::actionable_error(
+                format!(
+                    "cell {} is not a trustline (program VK does not re-derive from its terms)",
+                    hex_encode(cell_id.as_bytes())
+                ),
+                "use dregg_list_cells and look for kind=trustline",
+            );
+        }
+    };
+
+    let escrow = u64::try_from(cell.state.balance()).unwrap_or(0);
+    let collateral_label = match collateral {
+        dregg_cell::blueprint::TrustlineCollateral::FullReserve => "fullReserve",
+        dregg_cell::blueprint::TrustlineCollateral::PureCredit => "pureCredit",
+    };
+
+    McpToolResult::json(&serde_json::json!({
+        "trustline_cell": hex_encode(cell_id.as_bytes()),
+        "is_trustline": true,
+        "line": terms.line,
+        "issuer": hex_encode(&terms.issuer),
+        "holder": hex_encode(&terms.holder),
+        "collateral": collateral_label,
+        "escrow_balance": escrow,
+    }))
+}
+
+/// `dregg_get_channel_status` (ORGANS §4) — read the self-authenticating terms
+/// of a channel-group cell: its governance admin key and group tag. A cell is a
+/// channel IFF its installed program VK re-derives from its own term registers.
+/// Read-only. (Live membership/epoch/key-commit are program-state in private
+/// slots; this surface reports the immutable group identity.)
+async fn tool_get_channel_status(params: &Value, state: &NodeState) -> McpToolResult {
+    let cell_id = match params.get("channel_cell").and_then(|v| v.as_str()) {
+        Some(h) => match hex_decode(h) {
+            Ok(b) => dregg_cell::CellId(b),
+            Err(_) => {
+                return McpToolResult::actionable_error(
+                    "invalid hex for channel_cell",
+                    "pass the 64-hex-char id of a channel cell (see dregg_list_cells, kind=channel)",
+                );
+            }
+        },
+        None => return McpToolResult::error("missing required parameter: channel_cell"),
+    };
+
+    let s = state.read().await;
+    let cell = match s.ledger.get(&cell_id) {
+        Some(c) => c,
+        None => {
+            return McpToolResult::actionable_error(
+                format!("cell {} not in ledger", hex_encode(cell_id.as_bytes())),
+                "list cells with dregg_list_cells to find a live channel",
+            );
+        }
+    };
+
+    let terms = match crate::channels_service::channel_terms_of(cell) {
+        Some(t) => t,
+        None => {
+            return McpToolResult::actionable_error(
+                format!(
+                    "cell {} is not a channel group (program VK does not re-derive from its terms)",
+                    hex_encode(cell_id.as_bytes())
+                ),
+                "use dregg_list_cells and look for kind=channel",
+            );
+        }
+    };
+
+    McpToolResult::json(&serde_json::json!({
+        "channel_cell": hex_encode(cell_id.as_bytes()),
+        "is_channel": true,
+        "admin": hex_encode(&terms.admin),
+        "tag": hex_encode(&terms.tag),
     }))
 }
 
@@ -9848,6 +10177,88 @@ mod tests {
         );
     }
 
+    /// The new query tools are wired end-to-end: registered (dispatch + defs +
+    /// metadata) AND return the right shape against a real ledger.
+    #[tokio::test]
+    async fn list_cells_surfaces_the_agent_cell() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let agent_cell = {
+            let s = state.read().await;
+            hex_encode(agent_cell_of(&s.cclerk).as_bytes())
+        };
+        let result = dispatch_tool("dregg_list_cells", serde_json::json!({}), &state).await;
+        let j = extract_json(&result);
+        let cells = j["cells"].as_array().expect("cells array");
+        assert!(
+            cells
+                .iter()
+                .any(|c| c["cell_id"].as_str() == Some(agent_cell.as_str())),
+            "list_cells must surface the in-ledger agent cell; got {cells:?}"
+        );
+        // The agent cell is an ordinary cell (not a trustline/channel/sovereign).
+        let entry = cells
+            .iter()
+            .find(|c| c["cell_id"].as_str() == Some(agent_cell.as_str()))
+            .unwrap();
+        assert_eq!(entry["kind"].as_str(), Some("cell"));
+    }
+
+    #[tokio::test]
+    async fn cap_graph_defaults_to_agent_cell_and_returns_edges_shape() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let agent_cell = {
+            let s = state.read().await;
+            hex_encode(agent_cell_of(&s.cclerk).as_bytes())
+        };
+        // No cell_id ⇒ the node's own agent cell.
+        let result = dispatch_tool("dregg_get_cap_graph", serde_json::json!({}), &state).await;
+        let j = extract_json(&result);
+        assert_eq!(j["cell_id"].as_str(), Some(agent_cell.as_str()));
+        assert_eq!(j["found"].as_bool(), Some(true));
+        assert!(j["edges"].is_array(), "edges must be an array");
+        assert!(j["edge_count"].is_u64(), "edge_count must be present");
+    }
+
+    /// A non-organ cell is correctly REFUSED by the organ-status tools (the
+    /// self-authenticating VK check rejects it), with an actionable error.
+    #[tokio::test]
+    async fn trustline_status_rejects_a_plain_cell() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let agent_cell = {
+            let s = state.read().await;
+            hex_encode(agent_cell_of(&s.cclerk).as_bytes())
+        };
+        let result = dispatch_tool(
+            "dregg_get_trustline_status",
+            serde_json::json!({ "trustline_cell": agent_cell }),
+            &state,
+        )
+        .await;
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "a plain agent cell is not a trustline and must be refused"
+        );
+        let sc = result.structured_content.expect("actionable error payload");
+        assert!(sc.get("error").is_some() && sc.get("hint").is_some());
+    }
+
+    /// The four new read tools require only the `read` scope (never write/admin)
+    /// — so an orienting agent can survey the world with a read-only cap.
+    #[test]
+    fn new_query_tools_are_read_scoped_and_grouped() {
+        for t in [
+            "dregg_list_cells",
+            "dregg_get_cap_graph",
+            "dregg_get_trustline_status",
+            "dregg_get_channel_status",
+        ] {
+            assert_eq!(tool_required_scope(t), "read", "{t} must be read-scoped");
+            assert_eq!(tool_group(t), "orient", "{t} must be in the orient group");
+            assert!(tool_annotations(t).read_only_hint, "{t} must be read-only");
+        }
+    }
+
     #[test]
     fn structured_content_mirrors_json_results() {
         let v = serde_json::json!({ "a": 1, "b": "x" });
@@ -9926,8 +10337,13 @@ mod tests {
         );
     }
 
+    /// The ontology resource exposes a self-consistent effect catalog: a
+    /// non-empty effect list whose length matches the advertised `effect_count`.
+    /// (The exact count is generator-owned — `ontology-catalog.generated.json` —
+    /// so this pins the INVARIANT, not a magic number that drifts every time the
+    /// kernel grows an effect.)
     #[tokio::test]
-    async fn ontology_resource_exposes_29_effects() {
+    async fn ontology_resource_effect_catalog_is_self_consistent() {
         let (state, _tmp) = fresh_unlocked_state().await;
         let resp = handle_resources_read(
             serde_json::json!(1),
@@ -9938,8 +10354,13 @@ mod tests {
         let v = serde_json::to_value(&resp).unwrap();
         let text = v["result"]["contents"][0]["text"].as_str().unwrap();
         let catalog: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(catalog["effect_count"], 29);
-        assert_eq!(catalog["effects"].as_array().unwrap().len(), 29);
+        let effects = catalog["effects"].as_array().expect("effects array");
+        assert!(!effects.is_empty(), "ontology must advertise at least one effect");
+        assert_eq!(
+            catalog["effect_count"].as_u64(),
+            Some(effects.len() as u64),
+            "advertised effect_count must match the effects array length",
+        );
     }
 
     #[tokio::test]
