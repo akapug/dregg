@@ -40,6 +40,43 @@ pub fn canonical_id_to_felts_4(canonical: &[u8; 32]) -> [BabyBear; 4] {
     [a, b, c, d]
 }
 
+/// The Effect-VM selector column index for one `Effect` — the single source of truth the
+/// trace generator writes into the selector block AND the rotated descriptor resolver reads
+/// (`effect_vm::trace_rotated::rotated_descriptor_name_for_effect`).
+pub fn effect_selector(effect: &Effect) -> usize {
+    match effect {
+        Effect::NoOp => sel::NOOP,
+        Effect::Transfer { .. } => sel::TRANSFER,
+        Effect::SetField { .. } => sel::SET_FIELD,
+        Effect::GrantCapability { .. } => sel::GRANT_CAP,
+        Effect::NoteSpend { .. } => sel::NOTE_SPEND,
+        Effect::NoteCreate { .. } => sel::NOTE_CREATE,
+        Effect::Custom { .. } => sel::CUSTOM,
+        Effect::MakeSovereign => sel::MAKE_SOVEREIGN,
+        Effect::CreateCellFromFactory { .. } => sel::CREATE_CELL_FROM_FACTORY,
+        Effect::RevokeCapability { .. } => sel::REVOKE_CAPABILITY,
+        Effect::EmitEvent { .. } => sel::EMIT_EVENT,
+        Effect::SetPermissions { .. } => sel::SET_PERMISSIONS,
+        Effect::SetVerificationKey { .. } => sel::SET_VERIFICATION_KEY,
+        Effect::RefreshDelegation => sel::REFRESH_DELEGATION,
+        Effect::IncrementNonce => sel::INCREMENT_NONCE,
+        Effect::RevokeDelegation { .. } => sel::REVOKE_DELEGATION,
+        Effect::CreateCell { .. } => sel::CREATE_CELL,
+        Effect::SpawnWithDelegation { .. } => sel::SPAWN_WITH_DELEGATION,
+        Effect::ExerciseViaCapability { .. } => sel::EXERCISE_VIA_CAPABILITY,
+        Effect::Introduce { .. } => sel::INTRODUCE,
+        Effect::PipelinedSend { .. } => sel::PIPELINED_SEND,
+        Effect::BridgeMint { .. } => sel::BRIDGE_MINT,
+        Effect::Burn { .. } => sel::BURN,
+        Effect::CellDestroy { .. } => sel::CELL_DESTROY,
+        Effect::AttenuateCapability { .. } => sel::ATTENUATE_CAPABILITY,
+        Effect::CellSeal { .. } => sel::CELL_SEAL,
+        Effect::CellUnseal { .. } => sel::CELL_UNSEAL,
+        Effect::ReceiptArchive { .. } => sel::RECEIPT_ARCHIVE,
+        Effect::Refusal { .. } => sel::REFUSAL,
+    }
+}
+
 /// Generate the execution trace and public inputs for an effect VM proof.
 ///
 /// # Arguments
@@ -472,44 +509,7 @@ pub fn generate_effect_vm_trace_ext(
         let mut row = vec![BabyBear::ZERO; EFFECT_VM_WIDTH];
 
         // Set selector.
-        let sel_idx = match effect {
-            Effect::NoOp => sel::NOOP,
-            Effect::Transfer { .. } => sel::TRANSFER,
-            Effect::SetField { .. } => sel::SET_FIELD,
-            Effect::GrantCapability { .. } => sel::GRANT_CAP,
-            Effect::NoteSpend { .. } => sel::NOTE_SPEND,
-            Effect::NoteCreate { .. } => sel::NOTE_CREATE,
-
-            Effect::Custom { .. } => sel::CUSTOM,
-
-            Effect::MakeSovereign => sel::MAKE_SOVEREIGN,
-            Effect::CreateCellFromFactory { .. } => sel::CREATE_CELL_FROM_FACTORY,
-
-            Effect::RevokeCapability { .. } => sel::REVOKE_CAPABILITY,
-            Effect::EmitEvent { .. } => sel::EMIT_EVENT,
-            Effect::SetPermissions { .. } => sel::SET_PERMISSIONS,
-            Effect::SetVerificationKey { .. } => sel::SET_VERIFICATION_KEY,
-
-            Effect::RefreshDelegation => sel::REFRESH_DELEGATION,
-            Effect::IncrementNonce => sel::INCREMENT_NONCE,
-            Effect::RevokeDelegation { .. } => sel::REVOKE_DELEGATION,
-            Effect::CreateCell { .. } => sel::CREATE_CELL,
-            Effect::SpawnWithDelegation { .. } => sel::SPAWN_WITH_DELEGATION,
-
-            Effect::ExerciseViaCapability { .. } => sel::EXERCISE_VIA_CAPABILITY,
-            Effect::Introduce { .. } => sel::INTRODUCE,
-            Effect::PipelinedSend { .. } => sel::PIPELINED_SEND,
-
-            Effect::BridgeMint { .. } => sel::BRIDGE_MINT,
-
-            Effect::Burn { .. } => sel::BURN,
-            Effect::CellDestroy { .. } => sel::CELL_DESTROY,
-            Effect::AttenuateCapability { .. } => sel::ATTENUATE_CAPABILITY,
-            Effect::CellSeal { .. } => sel::CELL_SEAL,
-            Effect::CellUnseal { .. } => sel::CELL_UNSEAL,
-            Effect::ReceiptArchive { .. } => sel::RECEIPT_ARCHIVE,
-            Effect::Refusal { .. } => sel::REFUSAL,
-        };
+        let sel_idx = effect_selector(effect);
         row[sel_idx] = BabyBear::ONE;
 
         // Write state_before.

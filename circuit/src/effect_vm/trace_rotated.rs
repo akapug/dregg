@@ -324,6 +324,86 @@ fn fill_caveat(row: &mut [BabyBear], base: usize, m: &RotatedCaveatManifest) {
     row[commit_col] = d;
 }
 
+/// Resolve the rotated registry descriptor NAME for one effect's v1 selector — the
+/// `*VmDescriptor2R24` member of `V3_STAGED_REGISTRY_TSV` whose rotated shape proves THIS
+/// effect. The cohort is the 26 graduated descriptors the Lean `EffectVmEmitRotationV3.
+/// v3Registry` emits (18 base + 8 per-slot `setField`); the trace the rotated generator emits
+/// is the SAME shape (311 cols + 38 PIs) for every member (the appendix is parametric, not
+/// per-effect — `rotateV3`), so this resolver picks WHICH per-effect constraint family the
+/// IR-v2 prover enforces on the shared trace.
+///
+/// `None` for a selector OUTSIDE this cohort (a non-cohort effect has no rotated descriptor —
+/// the caller fails closed rather than proving the wrong shape). The `SetField` family
+/// (selector 2) routes to the per-slot descriptor by the field index via
+/// [`rotated_set_field_descriptor_name`].
+///
+/// NOTE: the rotated cohort is the v3Registry's exact membership, which matches the v2
+/// graduated set. Selectors that are NOT in the v3Registry (e.g. `MakeSovereign`,
+/// `CreateCell`, `CreateCellFromFactory`, `SpawnWithDelegation`, `ReceiptArchive`,
+/// `CellUnseal`, `GrantCapability`, `RevokeCapability`, `EmitEvent`, `Custom`) return `None`
+/// — they were never emitted into the rotated registry, so a rotated proof of them does not
+/// exist (this is the honest cohort boundary; widening the cohort is a Lean-emission act).
+pub fn rotated_descriptor_name(selector: usize) -> Option<&'static str> {
+    use super::columns::sel;
+    Some(match selector {
+        s if s == sel::TRANSFER => "transferVmDescriptor2R24",
+        s if s == sel::BURN => "burnVmDescriptor2R24",
+        s if s == sel::BRIDGE_MINT => "mintVmDescriptor2R24",
+        s if s == sel::NOTE_SPEND => "noteSpendVmDescriptor2R24",
+        s if s == sel::NOTE_CREATE => "noteCreateVmDescriptor2R24",
+        s if s == sel::CELL_SEAL => "cellSealVmDescriptor2R24",
+        s if s == sel::CELL_DESTROY => "cellDestroyVmDescriptor2R24",
+        s if s == sel::REFUSAL => "refusalVmDescriptor2R24",
+        s if s == sel::SET_PERMISSIONS => "setPermsVmDescriptor2R24",
+        s if s == sel::SET_VERIFICATION_KEY => "setVKVmDescriptor2R24",
+        s if s == sel::EXERCISE_VIA_CAPABILITY => "exerciseVmDescriptor2R24",
+        s if s == sel::PIPELINED_SEND => "pipelinedSendVmDescriptor2R24",
+        s if s == sel::REFRESH_DELEGATION => "refreshVmDescriptor2R24",
+        s if s == sel::INCREMENT_NONCE => "incrementNonceVmDescriptor2R24",
+        s if s == sel::REVOKE_DELEGATION => "revokeVmDescriptor2R24",
+        s if s == sel::INTRODUCE => "introduceVmDescriptor2R24",
+        s if s == sel::ATTENUATE_CAPABILITY => "attenuateVmDescriptor2R24",
+        _ => return None,
+    })
+}
+
+/// Resolve the per-slot `SetField` rotated descriptor name for a concrete field index
+/// (`setFieldVmDescriptor2-{0..7}R24`), or the dynamic descriptor for an out-of-range /
+/// runtime index.
+pub fn rotated_set_field_descriptor_name(field_idx: u32) -> &'static str {
+    match field_idx {
+        0 => "setFieldVmDescriptor2-0R24",
+        1 => "setFieldVmDescriptor2-1R24",
+        2 => "setFieldVmDescriptor2-2R24",
+        3 => "setFieldVmDescriptor2-3R24",
+        4 => "setFieldVmDescriptor2-4R24",
+        5 => "setFieldVmDescriptor2-5R24",
+        6 => "setFieldVmDescriptor2-6R24",
+        7 => "setFieldVmDescriptor2-7R24",
+        _ => "setFieldDynVmDescriptor2R24",
+    }
+}
+
+/// Resolve the rotated registry descriptor name for one EFFECT (the cohort-general entry
+/// point the live prover uses). The `SetField` family routes by field index; every other
+/// graduated effect routes by its selector. `None` for a non-cohort effect.
+pub fn rotated_descriptor_name_for_effect(effect: &Effect) -> Option<&'static str> {
+    match effect {
+        Effect::SetField { field_idx, .. } => Some(rotated_set_field_descriptor_name(*field_idx)),
+        Effect::NoOp => None,
+        other => rotated_descriptor_name(super::effect_selector(other)),
+    }
+}
+
+/// The cohort-general caveat manifest for a turn: by default EMPTY (most effects carry no
+/// in-circuit caveat operand — the manifest's `count = 0` and every entry is the zero
+/// sentinel, which `fill_caveat` commits to a well-defined `caveatCommit`). A turn that
+/// genuinely carries slot/heap caveats supplies a populated manifest via the SDK bridge; the
+/// rotated shape is identical either way (the appendix width does not change with the count).
+pub fn empty_caveat_manifest() -> RotatedCaveatManifest {
+    RotatedCaveatManifest::default()
+}
+
 /// The honest transfer-turn caveat manifest the flip test + the cutover use: ONE register
 /// caveat (entry 0, domain registers, key = register 3) and one HEAP-KEY caveat (entry 1,
 /// domain heap, key well beyond u8 range). The remaining slots stay empty.
@@ -342,4 +422,76 @@ pub fn transfer_caveat_manifest() -> RotatedCaveatManifest {
         params: [BabyBear::ZERO; 4],
     };
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
+    use std::collections::BTreeSet;
+
+    /// The rotated descriptor resolvers cover EXACTLY the registry's 26 cohort members:
+    /// every name the resolvers can return is in the registry, and every registry member is
+    /// reachable from some effect. This is the cohort-completeness tooth — the rotated
+    /// generator can prove every effect the rotated registry emitted a descriptor for, and
+    /// names nothing the registry lacks (fail-closed for non-cohort effects).
+    #[test]
+    fn resolvers_cover_exactly_the_rotated_registry() {
+        let registry: BTreeSet<&str> = V3_STAGED_REGISTRY_TSV
+            .lines()
+            .filter_map(|l| l.split('\t').next())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(registry.len(), 26, "the rotated registry has 26 members");
+
+        // Every name the resolvers produce: the 17 selector-mapped base effects, the dynamic
+        // setField, and the 8 per-slot setFields.
+        let mut reached: BTreeSet<&str> = BTreeSet::new();
+        for &name in &[
+            rotated_descriptor_name(super::super::columns::sel::TRANSFER).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::BURN).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::BRIDGE_MINT).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::NOTE_SPEND).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::NOTE_CREATE).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::CELL_SEAL).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::CELL_DESTROY).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::REFUSAL).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::SET_PERMISSIONS).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::SET_VERIFICATION_KEY).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::EXERCISE_VIA_CAPABILITY).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::PIPELINED_SEND).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::REFRESH_DELEGATION).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::INCREMENT_NONCE).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::REVOKE_DELEGATION).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::INTRODUCE).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::ATTENUATE_CAPABILITY).unwrap(),
+            rotated_set_field_descriptor_name(99), // dynamic
+        ] {
+            reached.insert(name);
+        }
+        for i in 0..8 {
+            reached.insert(rotated_set_field_descriptor_name(i));
+        }
+        assert_eq!(reached.len(), 26, "the resolvers reach 26 distinct names");
+        assert_eq!(
+            reached, registry,
+            "the resolver names are EXACTLY the rotated registry's members"
+        );
+    }
+
+    /// A non-cohort effect (e.g. `MakeSovereign`, `CreateCell`, `EmitEvent`) resolves to
+    /// `None` — the resolver fails closed rather than naming a descriptor that does not exist.
+    #[test]
+    fn non_cohort_effects_resolve_to_none() {
+        assert_eq!(rotated_descriptor_name_for_effect(&Effect::MakeSovereign), None);
+        assert_eq!(rotated_descriptor_name_for_effect(&Effect::NoOp), None);
+        assert_eq!(
+            rotated_descriptor_name(super::super::columns::sel::CREATE_CELL),
+            None
+        );
+        assert_eq!(
+            rotated_descriptor_name(super::super::columns::sel::RECEIPT_ARCHIVE),
+            None
+        );
+    }
 }

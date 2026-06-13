@@ -58,6 +58,75 @@ already maps Balance/Nonce keys into the heap domain — `turn/src/umem.rs`). Th
 flag-day regen must fix the canonical name→register assignment for the kernel's
 own scalars (an ember-visible decision; HORIZONLOG'd).
 
+### §2a — THE AUTHORITY-DIGEST DESIGN (G3 design call, the rotated-commitment authority coverage)
+
+The rotated v9 commitment (`cell/src/commitment.rs::compute_canonical_state_commitment_v9`)
+binds the FULL authority-bearing cell state v8 commits — it does NOT drop authority state.
+The decision (made + implemented 2026-06-13, Opus):
+
+* **The problem.** v8 (BLAKE3, `CANONICAL_COMMITMENT_CONTEXT "…v8"`) absorbs the whole cell:
+  identity, `mode`, the eight `Permissions` fields, the `verification_key`, `delegate`, the
+  `delegation` snapshot, the `program`, and the full CellState authority sub-state
+  (`field_visibility`, `commitments`, `proved_state`, the side-table/overflow roots, all 16
+  `fields`). The rotated v9 NAMED limbs cover only a SUBSET: balance/nonce (r0/r1/r2),
+  `fields[0..8]` (r3..r10), cap_root (r25), nullifier/heap roots (r26/r27),
+  lifecycle/epoch/committed_height (r28/r29/r30). Everything else would be DROPPED by a
+  rotated commitment that left the app-register headroom (r11..r23) zeroed — a soundness hole
+  (two cells identical in the named limbs but differing in permissions/VK commit identically).
+
+* **The fix — bind an AUTHORITY DIGEST into register r23.** `compute_authority_digest_felt`
+  (one Poseidon2 felt) folds EXACTLY the authority residue no named limb carries: identity,
+  mode, permissions, VK, delegate, delegation snapshot, program, `field_visibility`,
+  `commitments`, `proved_state`, `swiss_table_root`, `refcount_table_root`, `fields_root`,
+  `system_roots_digest`, and `fields[8..16]` (fields[0..8] are welded, so only the high
+  fields go here). It walks the SAME byte serialization v8 uses (one source of truth for
+  "what is authority state"), then hashes to a felt. The digest is cell-local; the
+  turn-context limbs (cells_root/nullifier_root/iroot) ride `V9RotationContext`. So v9
+  **covers all authority state (via r23) AND binds turn-context (via the context limbs)** —
+  the design problem's two requirements, both met.
+
+* **Why r23, and why NO Lean change.** The Lean welds (`EffectVmEmitRotationV3.weldsAt`)
+  constrain ONLY r0..r10 + cap_root — r11..r23 are freely-witnessed limbs. The anti-ghost
+  keystone (`wireCommitR_binds` / `RotationLayout.rotatedCommit_binds_reg`) ALREADY proves
+  EVERY register is bound by the commitment. So r23 is "just a register" to the circuit and
+  Lean: the authority digest binds with zero new keystone, zero Lean edit. The three-way
+  agreement holds by construction — the cell-side v9, the producer
+  (`turn/src/rotation_witness.rs::produce`), and the circuit trace generator
+  (`trace_rotated.rs::fill_block`, which carries r23 from the witness) all derive r23 from the
+  SAME `compute_authority_digest_felt(cell)`.
+
+* **The tooth.** `cell/src/commitment.rs::v9_binds_full_authority_state` proves the property:
+  two cells differing ONLY in permissions / VK / a high field / proved_state / a side-table
+  root / mode commit distinctly under v9. This is what a zeroed-headroom rotated commitment
+  would FAIL.
+
+### §2c — THE COHORT-GENERAL GENERATOR (G4)
+
+The rotated trace generator (`trace_rotated.rs::generate_rotated_effect_vm_trace`) was always
+shape-general (the v1 sub-trace `generate_effect_vm_trace` dispatches every effect's selector
++ rows; the rotated appendix is parametric, not per-effect). What was transfer-only was the
+DESCRIPTOR RESOLUTION and the caveat manifest. Now:
+
+* `trace_rotated::rotated_descriptor_name_for_effect(effect)` resolves the `*VmDescriptor2R24`
+  registry member for any of the 26 cohort effects (the 17 selector-mapped base effects +
+  `setFieldDyn` + the 8 per-slot `setField`s), `None` (fail-closed) for a non-cohort effect.
+  `effect_vm::trace::effect_selector` is the single source of truth (extracted from the trace
+  generator's selector match, no duplication). The coverage tooth
+  (`resolvers_cover_exactly_the_rotated_registry`) proves the resolvers reach EXACTLY the 26
+  registry members.
+* `sdk::full_turn_proof::prove_effect_vm_rotated_ir2_with_caveat` is the cohort-general
+  rotated prover: it resolves the descriptor by effect, defaults to the empty caveat manifest
+  (transfer keeps the two-domain reference manifest), proves the shared 311-col trace through
+  the IR-v2 batch prover, and fails closed on empty / heterogeneous / non-cohort turns.
+
+**Cohort boundary (honest):** the rotated registry the Lean `v3Registry` emitted is the
+v2-graduated set; effects OUTSIDE it (`MakeSovereign`, `CreateCell`, `CreateCellFromFactory`,
+`SpawnWithDelegation`, `ReceiptArchive`, `CellUnseal`, `GrantCapability`, `RevokeCapability`,
+`EmitEvent`, `Custom`) have NO rotated descriptor — `rotated_descriptor_name_for_effect`
+returns `None`. Widening the cohort to them is a Lean-emission act (extend `v3Registry`), not
+a Rust act; until then the live-path rewrite (G2) must keep the v1 path reachable for those
+effects OR the regen must add them. This is the precise residue the flag-day must resolve.
+
 ## §2b — Register count: MEASURED (16 vs 24 vs 32 — the always-paid vs metered economics)
 
 Registers are **always-paid**: every register limb rides EVERY turn proof's commitment
