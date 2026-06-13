@@ -1,236 +1,237 @@
-# dregg2, in Lean 4 — the metatheory *and* the verification
+# `metatheory/` — dregg's verified core
 
-This directory (`metatheory/`) holds two distinct things that we were, for a long time,
-wrongly collapsing into one name:
+This directory is the formal heart of dregg: a Lean 4 library, named **`Dregg2`**, that is
+not a *model* of the system sitting beside it but the system's *executor*, its *circuits*,
+and its *assurance case*, all in one corpus.
 
-1. **The actual metatheory** — the candidate-independent *logic of constructive knowledge
-   and authority* that dregg is an instance of. Prose in **[`CONSTRUCTIVE-KNOWLEDGE.md`](./CONSTRUCTIVE-KNOWLEDGE.md)**;
-   first Lean form in the **`Metatheory.*`** namespace (`Metatheory/ConstructiveKnowledge.lean`,
-   `Metatheory/Categorical.lean`).
-2. **The verification of dregg2** — the (much larger) Lean library, named **`Dregg2`**
-   (sources under `Dregg2/`, root `Dregg2.lean`), built l4v-shaped. *This* is dregg2 as an
-   executable, proof-carrying system.
+Three facts orient everything else.
 
-They interact — the verification *discharges* the metatheory's obligations against a real
-system — but they are **not the same thing**, and the library was renamed `Metatheory → Dregg2`
-to stop hiding that.
+1. **The Lean kernel IS the executor.** The body the deployed node runs to apply a turn —
+   `execFullForestG`, behind the `dregg_exec_full_forest_auth` FFI export
+   (`Dregg2/Exec/FFI.lean`, reached through `dregg-lean-ffi`) — is the same definition the
+   theorems are proved about. There is no Rust executor to keep in sync with a Lean spec;
+   the verified definition *is* the production code path.
+
+2. **Circuits are emitted from Lean** (architectural **law #1: zero Rust-authored
+   constraints or AIRs, ever**). Every constraint set the prover enforces is a byte-pinned
+   artifact emitted from a proved Lean module (the Argus IR and the descriptor JSONs); Rust
+   only *interprets* those artifacts. A coverage gap is closed by emitting from a new proved
+   module, never by hand-authoring a constraint.
+
+3. **The assurance case is an artifact you can read.** `Dregg2/AssuranceCase.lean` states
+   the five guarantees the system makes to a light client and, under each, assembles exactly
+   the theorems that discharge it — *and* names its own boundary seams. It is meant to be the
+   document a verification-literate evaluator reads to decide whether to trust the core.
 
 A capability here is **constructive knowledge**: to *hold* one is to be able to *exhibit a
-witness that verifies* — never merely to assert. Everything below is a projection of that.
-
-> ## 🧭 New here? Start with the navigation layer.
->
-> The tree is large (70+ Rust crates, hundreds of Lean modules, dozens of ledgers). Three docs
-> exist so you don't have to grep blind:
->
-> - **[`docs/NAVIGATION.md`](docs/NAVIGATION.md)** — the *where-is-X* map: every subsystem
->   (executor, circuit-emit, distributed/consensus, authority/caveats, intent/agents, crypto,
->   apps, node, the Rust crates) → its directory, entry-point files, and key theorems.
-> - **[`docs/rebuild/_INDEX.md`](docs/rebuild/_INDEX.md)** — a one-line index of every design /
->   ledger / orientation doc under `docs/rebuild/`, with a *what it covers + is it current* tag.
-> - **[`docs/guides/`](docs/guides/)** — readable orientations for the four highest-value
->   subsystems: the [executor & effect model](docs/guides/executor.md), the
->   [circuit / descriptor / assurance story](docs/guides/circuit.md), the
->   [distributed / SSB-federation model](docs/guides/distributed.md), and the
->   [authority / capability / caveat model](docs/guides/authority.md).
-
-Toolchain `leanprover/lean4:v4.30.0`; mathlib via a local `path` require. **It builds**:
-`lake build` ⇒ **0 errors** (the Argus anchor `Dregg2.Circuit.Argus` builds green at ~3.3K jobs;
-re-run `lake build` for the current full count). The Abstract Spec, the
-`Spec` middle layer, the executor core, and every `#assert_axioms`-pinned keystone are
-**`sorry`-free and kernel-clean** throughout — open obligations (the §8 crypto laws, the verify/find
-seam's *find* side) enter as explicit interface assumptions, never `sorry`s.
-
-**Verifiable execution is real, and the per-effect assurance is now unified under one IR.**
-Every effect is a term of the **Argus IR** (`Dregg2/Circuit/Argus/*`): one reified term whose
-`interp` **is** the verified executor and whose `compile` **is** the runnable circuit, proven to
-agree — so the circuit cannot drift from what the system does. ~45 effects are welded across every
-shape; the whole library builds as one coherent anchor (`lake build Dregg2.Circuit.Argus`). Each
-weld carries an executor-derived witness → a real Plonky3 STARK `prove`/`verify` with forged-state
-rejection (the anti-ghost tooth makes tampering an absorbed state-block column UNSAT).
-
-The agreement is no longer a per-effect grind: `compile` is now a **fold** over the IR
-(`Circuit/Argus/CompileFold`), so executor⟺circuit agreement rides **initiality** — agreement on
-the finite set of constructors gives agreement on *all* terms (the N²→1 collapse). The
-effect-annotated fold (`Circuit/Argus/CompileE`) carries the genuine per-effect circuits at the
-leaves (transfer, mint, burn each their own, proven distinct), welded to the existing per-effect
-soundness. `transfer` remains the worked class-A keystone (`satisfiedVm transferDescriptor ⟹` the
-full per-cell post-state, welded to `recKExec`); the IR generalizes that shape across the catalog.
-
-Whole-turn proofs bind a turn's effects to **one authenticated state root** (per cell); the node
-commit path proves every finalized turn under `--prove-turns`; the l4v **data refinement**
-(`Exec/ConcreteKernel`, HashMap-backed) is *proved* to transfer the abstract soundness to an
-efficient runtime. The honest floor is the **§8 crypto portals** (named interface assumptions —
-Poseidon2/BLAKE3/ed25519, the verify/find seam's *find* side) and **the swap** (making the
-verified executor *be* the runtime). The forward design that consolidates all of this — the
-8-verb kernel, the four substances, the guard-algebra uplift, the staged reduction — is
-[`docs/DREGG3.md`](../docs/DREGG3.md) + [`docs/DREGG3-MARATHON.md`](../docs/DREGG3-MARATHON.md),
-which restructure the five guarantees (Authority · Conservation · Integrity · Freshness ·
-Unfoolability) into one assurance case organized by guarantee rather than by date.
-
-**Distributed protocols are now verified, not just modeled.** The federation is *Secure-Scuttlebutt-
-on-crack* — a **blocklace** (block-DAG-lace) where each author's blocks form a **strand** (an SSB
-feed). The live Rust consensus engine (`blocklace/`, Cordial-Miners-style DAG + Stingray budget) is
-now pinned by an executable Lean model + golden differential (`Dregg2/Distributed/*`,
-`Dregg2/Coord/*`, `Dregg2/Proof/{CordialMiners,Stingray,BFT}*`): blocklace finality
-(`BlocklaceFinality.finalLeaders_one_per_wave`), strand integrity / fork-freedom
-(`StrandIntegrity.forkFree_iff_seqMonotone`), CRDT lace-merge as a semilattice join
-(`LaceMerge.{laceIds_mergeLace,merge_comm,merge_assoc,merge_idem}`), membership safety, CapTP
-handoff-unforgeability + leased GC (`Exec/CapTP{HandoffSound,GC,ConsentLace}`), cross-cell atomic
-joint turns (`Distributed/EntangledJoint.jointApplyAll_atomic`), threshold decryption, and
-**cell migration across federations conserving balance+caps** (`CellMigration.handoff_conserves_*`).
-See [`docs/guides/distributed.md`](docs/guides/distributed.md).
-
-**The dregg / dreggrs split.** Per the corrected SWAP framing
-([`docs/rebuild/_DREGG-DREGGRS-MANIFEST.md`](docs/rebuild/_DREGG-DREGGRS-MANIFEST.md)):
-**dregg** = the Lean-primary truth (`Dregg2/*` is the source of semantics; the Rust is bridge /
-shadow / client, routing through the kernel via `dregg-lean-ffi`). **dreggrs** = the Rust heritage,
-backburner — self-contained engines that a Lean model + differential now pins (kept as fast
-verified shadows: `blocklace`, `coord`, `federation`, `captp`, `macaroon`, …) plus pure
-infra/crypto-primitives (`hints`, `secrets`, `net`, …). The boundary is *where the source of truth
-lives*, not Rust-vs-Lean.
-
-**The tier ladder** (assurance grades, low→high): **silver** = every Rust semantic is modeled +
-implemented in Lean and callable (a faithful model + differential/FFI, per
-[`_SILVER-COVERAGE-LEDGER.md`](docs/rebuild/_SILVER-COVERAGE-LEDGER.md)); **gold** = fully
-recursive / succinct proofs (proof *trees* aggregated to O(1)-verify, the
-[Titanium light-client target](docs/rebuild/TITANIUM-PHASE.md)); **diamond** = the full algebraic
-constraint / folded-DAG endgame. ("magnesium" appears informally between silver and gold for the
-genuinely-recomputed-but-not-yet-deployed descriptor cohort.) These are *visions/targets*, not all
-reached — silver is the active campaign and is FULLY DONE for protocol semantics; gold/diamond are
-forward.
-
-The discipline that got us here is the same **de-vacuify** one: a read-only audit + reconcile-build
-pass repeatedly found that "deep" `sorry`s were in fact
-repeatedly found that "deep" `sorry`s were in fact **false, contradictory, or ill-posed *as
-stated*** (e.g. `dead_undecidable` quantified over arbitrary deciders that `Classical.decide`
-always supplies; `quorum_intersection`'s bound was self-contradictory; `privacy_by_projection`
-was false on open recursion; `hyperedge_sound_bisim` was vacuous over a free `Spec`). Each was
-restated *honestly* (strengthen a hypothesis / fix the framing — never gut the conclusion) and
-then **actually proved**, several leaving a *proved refutation theorem* behind to record the old
-vacuity. Honesty is build-enforced: **`Dregg2/Claims.lean`** re-pins every "PROVED" keystone with
-`#assert_axioms` / `#assert_namespace_axioms` (erroring on any hidden `sorryAx` or stray axiom),
-and `lake env lean Dregg2/Claims.lean` is the credibility artifact.
+witness that verifies*, never merely to assert it. Authority, conservation, and integrity are
+all projections of that single idea.
 
 ---
 
-## The layer cake (l4v-shaped, four altitudes)
+## The five guarantees
 
-### 0. The actual metatheory — `Metatheory.*` (candidate-independent)
-- **`Metatheory/ConstructiveKnowledge`** — knowledge = a discharging witness exists
-  (`holds_iff_discharged_witness`); the verify/find asymmetry (trusted decidable `Verify` ⊣
-  untrusted opaque `find`); the **epistemic-boundary lattice** (`verifier_learns_only_acceptance`
-  — a ZK verifier sits strictly below content); the generative/restrictive authority duality +
-  `no_forge_step`; coinductive `knowledge_does_not_drift`; `knowledge_no_free_copy`.
-- **`Metatheory/Categorical`** — *deriving* the abstract spec from categorical first principles:
-  conservation as a monoidal functor to a discrete monoid ⇒ no-free-copy; verify/find as a
-  Galois connection/adjunction; the cell as a coalgebra, the hyperedge as a (wide) pullback.
-  (Research-grade; the goal is "the spec is *derived*, not postulated.")
+`Dregg2/AssuranceCase.lean` is organized by guarantee, not by module. Each is a small
+theorem-DAG whose apex is `#assert_axioms`-clean and whose leaves are independently pinned in
+their home modules.
 
-### 1. Abstract Spec — the laws (`l4v spec/abstract`)
-`Core` (symmetric-monoidal cells/turns; **conservation (Law 1)** as a monoid-valued measure),
-`Resource`/`StepCamera` (the Iris-camera tier — conservation and authority are *one law*),
-`Laws` (`Predicate ⊣ Witness` + the verify/find seam), `Authority/Positional` (the l4v
-integrity lift; intra/cross), `Confluence` (I-confluence, the 3rd judgement), `Boundary`
-(coinductive soundness over the `νF` cell — the proved keystone is `stepComplete_preserves`),
-`Finality` (the 4-tier ordering judgement, `no_downgrade`), `JointTurn` (the cross-cell ⊗ /
-`SharedTurnId` pullback ⊗ CG-5 binding), `Privacy`/`Coordination`/`Projection`/`Await`/
-`Liveness`/`Upgrade`.
+| | Guarantee | Apex |
+|---|---|---|
+| **A** | **Authority** — no effect confers more authority than was held; every change rides an unforgeable, non-amplified, fresh token chain | `authority_guarantee` (over the real `List Auth` attenuation lattice, with teeth: an amplifying grant is *rejected*) |
+| **B** | **Conservation** — per asset, the resource sum is identically zero on every reachable state | `conservation_guarantee` / `reachable_total_zero` (W1: every asset is its issuer cell; the issuer well carries −supply; mint/burn/bridge are ordinary moves) |
+| **C** | **Integrity** — a receipt binds the *whole* post-state; a tampered field is rejected | `integrity_guarantee_memory_program` (the executor is a memory program: `uproj` of all 17 kernel fields equals the fold of the verb's emitted Blum trace) |
+| **D** | **Freshness** — no replay / double-spend; a spent nullifier was fresh; revocation takes effect at finality | `freshness_guarantee` (anti-replay is the noteSpend term's own `interp`, not a side table) + the R7 stored-cap retrieval-epoch rule |
+| **E** | **Unfoolability** — a light client checking only `verify agg.root` learns A–D for the whole history, re-witnessing nothing | `light_client_verifies_whole_history` (proofs as additive attestation; a reordered chain forces `ChainBound = False`) |
+| **R** | **The running entry** — A∧B∧C hold over the executor the node *actually invokes* | `running_entry_sound` (over `execFullForestG`, the FFI body — not a sibling abstraction) |
 
-### 2. **`Dregg2.Spec.*` — the factored middle layer (the abstract spec of the *actual*
-dregg2 semantics).** This is the new spine: a *small* set of orthogonal primitives that
-*generate* dregg1's sprawling catalogs as derived definitions (no flat-coproduct port), with
-abstract types throughout (never `Nat` for a hash/commitment).
-- **`Spec/Guard`** — ONE verify/find seam unifying authorization ⊣, preconditions, state-
-  constraints, and caveats (`firstParty | witnessed | all(∧) | any(OneOf ∨) | gnot`);
-  `attenuate_narrows` is the **meet-semilattice** narrowing (*not* a Heyting residual). Legacy
-  constraints/auths come back as derived smart-constructors.
-- **`Spec/Conservation`** — multi-domain, `LinearityClass`-typed, **value-monoid-parametric**
-  conservation: the *same* `Σ = 0` law over cleartext `ℤ` or a commitment group
-  (`committed_iff_cleartext` — value hidden yet provably conserved); `multi_domain_independent`.
-- **`Spec/Authority`** — the **generative capability graph** (the characteristically-capability
-  part): introduce / amplify / mint / endow + attenuate / revoke, governed by Miller's
-  *"only connectivity begets connectivity"* (`gen_step_traces` — per-step non-forgeability).
-- **`Spec/Lifecycle`** — the **attested dual of creation**: `creation_and_death_are_dual`,
-  `archival_is_fold` (the IVC fold as history-compression), and the epistemic asymmetry
-  `creation_provable_death_temporal` (birth is exhibitable; distributed death is only leased time).
-- **`Hyperedge`** — **the turn is an atomic hyperedge** = the *wide pullback over a shared
-  `TurnId`* + N-ary conservation; bilateral / ring / forest are *incidences of one object*.
-  `hyperedge_sound` is PROVED (the single-object framing dissolves the `family_joint_sound` knot);
-  `Spec/JointViaHyper` derives N-ary joint soundness from it and proves
-  **`hyperedge_is_validity_not_canonicity`** (validity = a decidable proof-check; canonicity =
-  the separate consensus layer).
-- **`Spec/Choreography`** — the blue/red split: **red (coupled) interactions project to a
-  hyperedge; blue (I-confluent) commit independently** (`red_projects_to_hyperedge`).
-- **`Spec/Await`** — the await family factored: dataflow (promises) ⊕ a temporal `Guard`
-  (a `Conditional` = a third-party caveat deferred over time).
-- **`Spec/VatBoundary`** — Φ as the named-lossy caps↔keys functor: *permission survives the
-  crossing, authority does not* (`forwarded_cap_is_revocable`).
+Each guarantee carries an explicit **floor** (what it rests on) and, where the deployed node
+sits outside a theorem's hypotheses, a named **deployment-correspondence** note. The case does
+not launder a seam it cannot close — it names it (the prover partition, the host-fed
+`ShadowHostCtx` admission inputs, producer coverage; see *Honest open items* below).
 
-### 3. The portals + the dischargeable §8 — `Crypto.*`, `World`, `PrivacyKernel`
-Crypto / network-nondeterminism as *uninterpreted interfaces*: proving is parametric over an
-abstract instance; running uses a Rust instance via `@[extern]`. **Crypto-soundness is the
-portal's job, never Lean's** — but the portal is now a *layered, dischargeable contract*, not a
-flat oracle:
-- **`Crypto.Primitives` (Layer A)** — Poseidon2 `compress` / Pedersen `commit`+`commit_hom`
-  (real *algebraic* laws, proved) with *computational hardness* (`collisionHard`/`binding`/
-  `unlinkable`) as honest `Prop` **carriers** — replacing the wrong-kind idealized `hash_inj`.
-- **`Crypto.VerifierKernel` (Layer B)** — `verify` *defined* as "the extracted circuit is
-  satisfiable", with `*_verify_sound` a **derived theorem** (off a `merkle_bridge`-style
-  Satisfies↔Relation equivalence), not an assumed oracle.
-- **`Crypto.PredicateKernel` (Layer C)** — the `WitnessedKind`s as per-kind `KindObligation`s
-  carrying circuit + statement-algebra + a **`Dial` floor**, finally **wiring `EpistemicDial`**
-  to the per-kind verifier.
-- **Real §8 discharges, end to end (bridge both directions, *no primitive seam*):**
-  `Crypto.Merkle` (membership, dial `acceptanceOnly`), `Crypto.Pedersen` (value conservation via
-  `commit_hom`, dial `selective`), `Crypto.NonMembership` (sorted-tree neighbor-bracketing). The
-  single trust boundary stays exactly the FRI / DLog / Poseidon-CR `Prop` carriers — everything
-  above is proved.
-`PrivacyKernel` realizes the privacy tiers over the portal; `Privacy`'s graph tier was
-de-vacuified into `GraphPrivacyKernel`/`BlindedMembershipKernel` law-carrying classes with
-**axiom-free `def` consistency witnesses** (a constructive instance ⇒ the laws can't be
-contradictory ⇒ cannot cascade; zero blast radius).
+---
 
-### 4. Executable Design Spec + Refinement (`Dregg2.Exec.*`, `Dregg2.Proof.*`, `Protocol/*`)
-The running machine (`exec`, fail-closed, conservation+authority checked; `sorry`-free,
-`#eval`-able), the living record cell (`Exec/RecordCellLive`), and the FFI beachhead. The toy
-scalar ledger has been lifted to a **content-addressed `Value` record cell** (`Exec/RecordKernel`:
-`recCexec_attests`/`recKExec_conserves` re-proved over the named `balance` field), with a second
-`Exec ⊑ Spec` refinement square in `Spec/ExecRefinement §3.5`. The **operational LTS** — long the
-roadmap's scariest "research" item — is, for the single cell, **complete**: `Proof/LTS`'s
-`absStep'_forward` unions the balance-turn and authority-turn forward-simulation squares
-(`Exec/AuthTurn` supplies the executable delegate/revoke transition); the residual is the
-cross-cell whole-history closure (genuine research, in progress).
+## The architecture
 
-### 5. The program logic + userspace verification (`Dregg2.Proof.WP`, `Dregg2.DSL`, `Dregg2.Catalog`, `Protocol/WorkflowGuard`)
-This is what makes the system **useful** to a developer, not just sound:
-- **`Proof/WP`** — a weakest-precondition / VCG calculus over the `Option`-monad transition
-  (`wp`/`Triple`/`vcg`), whose capstone **`vcg_run_sound`** *reduces to the already-proved*
-  `stepComplete_preserves` — the run-level soundness was already done; the VCG only *generates*
-  the per-turn obligations. Worked: a monotonic counter and a single-ledger escrow.
-- **`DSL`** — DSL-A, the `dregg_program {…}` cell-program eDSL: a **parser onto already-proved
-  smart-constructors** (no new metatheory), the in-situ-verified replacement for dregg1's external
-  `#[dregg_caveat]`/`#[dregg_effect]` macros. The counter/escrow elaborate to their kernel terms by
-  `rfl`.
-- **`Catalog`** — the metaprogramming spine: `#assert_namespace_axioms` (collapsed the hand ledger),
-  the `catalog … where` codegen (emits the smart-ctor + `admits`-characterization + auto-pin triple,
-  with a planted `sorry` failing *at generation time*), and the fail-loud `discharge` tactic +
-  `Dregg2` aesop rule-set.
-- **`Protocol/WorkflowGuard`** — the first verified application's Spec layer (the RDII closed loop):
-  the workflow's authorization / ordering / attestation gates re-founded as `Spec.Guard` instances,
-  all three **equivalence-proved** down to the running predicate.
+### The substrate — eight verbs (`Dregg2/Substrate/VerbRegistry.lean`)
 
-## §8 — crypto-soundness is the portal's job, never Lean's
-The soundness/extractability of `verify`/`commit`/`hash` is a *circuit* obligation, stated as
-`CryptoKernel` *laws*. Lean treats `verify` as a decidable oracle. A boundary, not a gap.
+The kernel signature is **eight survivor verbs** — `create · write · move · grant · revoke ·
+shield/unshield · lifecycle` — each the structural rule of exactly one of the four substances
+(linear value, non-forgeable authority, monotone evidence, guarded-mutable state) plus birth
+and retirement. The registry reifies this as Lean data with two theorems that make it
+load-bearing:
 
-## Building
-`lake build` (needs the pinned mathlib). For one file during concurrent swarm work,
-`lake env lean Dregg2/<Module>.lean` (race-free; reads oleans, writes none — never `lake build`
-mid-swarm). The library is `Dregg2`; the actual-metatheory sibling files (`Metatheory/*.lean`)
-verify standalone via `lake env lean` and will get their own `lean_lib`. The outer directory
-stays named `metatheory/`.
+- **Completeness** — the live 27-variant wire `Effect` enum is reified one-tag-per-variant, so
+  the compiler's exhaustiveness check on `classify` *is* the completeness proof: a new wire
+  variant with no registry entry will not compile. `no_live_factory_tags` proves the doomed
+  families (escrow, bridge-3phase, queue, seal/swiss/sturdyref…) are *deleted*, not
+  reclassified — they re-land as verified factory cell-programs (`Dregg2/Apps/*Factory.lean`).
+- **Minimality** — `verbBehavior` assigns each verb a (substance, polarity) and is proved
+  *injective* (`minimality`, `each_verb_irreplaceable`): drop any one verb and a behavior no
+  other verb provides is lost. The eight are independent.
 
-> The egg metaphor holds: we are learning what is inside without cracking it. What is inside is
-> a living, distributed, capability-secure organism that *knows things by being able to prove
-> them*, one guarded step ahead of the drifting dark. 🐉🥚
+### The executor — `execFullForestG` (`Dregg2/Exec/`)
+
+`execFullForestG` is the credential-and-caveat-**gated** whole-forest step. The gate
+`gateOK = credentialValid ∧ capAuthorityG ∧ caveatsDischarged` fires fail-closed in front of
+the ungated executor; the linear guarantees ride an `eraseG` bridge onto the existing
+`FullForest` theorems, so the gate *adds teeth* (a forged credential, an unauthorized cap, or
+a false caveat ⇒ the whole forest rejects) without weakening conservation or non-amplification.
+The `credentialValid` leg is the §8 portal (routed to ed25519 / HMAC carriers); the
+`capAuthorityG` leg (`granted ≤ held`) is verified *in Lean* — it is exactly the
+`is_attenuation` check dregg1's CapTP delivery failed to perform.
+
+### The Argus circuit — emitted from Lean (`Dregg2/Circuit/Argus/`)
+
+Every effect is one term of the **Argus IR**. The term's `interp` *is* the verified executor;
+its `compile` *is* the runnable circuit; the two are proved to agree, so the circuit cannot
+drift from what the system does. The agreement is not a per-effect grind: `compile` is a
+**fold** over the IR (`CompileFold`), so executor⟺circuit agreement on the finite set of
+constructors lifts to agreement on *all* terms by initiality (the N²→1 collapse). The
+effect-annotated fold (`CompileE`) carries the genuine per-effect circuits at the leaves
+(~29 effect welds under `Argus/Effects/`, transfer/mint/burn each proven distinct). Each weld
+carries an executor-derived witness through a real Plonky3 STARK `prove`/`verify`, with the
+**anti-ghost tooth**: tampering an absorbed state-block column makes the constraint UNSAT.
+
+Above the per-effect layer sit the five apex layers — the **descriptor circuit** (`Receipt`:
+a turn binds to one authenticated state root, `argus_commits_to_one_receipt`), coeffects,
+joint turns, disclosure, and the **light-client theorem** (`Aggregate` /
+`RecursiveAggregation`: checking one aggregate root attests the whole history). The whole
+circuit library builds as one coherent anchor (`Dregg2/Circuit/Argus.lean`).
+
+### The distributed layer (`Dregg2/Distributed/`, `Dregg2/Coord/`, `Dregg2/Consensus/`)
+
+The federation is *Secure-Scuttlebutt-on-crack*: a **blocklace** (block-DAG-lace) where each
+author's blocks form a **strand** (an SSB feed). The live Rust consensus engine
+(Cordial-Miners-style DAG + a Stingray budget) is pinned by an executable Lean model + golden
+differential: blocklace finality (`finalLeaders_one_per_wave`), strand fork-freedom
+(`forkFree_iff_seqMonotone`), CRDT lace-merge as a semilattice join (`LaceMerge.*`), CapTP
+handoff-unforgeability + leased GC, cross-cell atomic joint turns
+(`jointApplyAll_atomic`), threshold decryption, and cell migration across federations
+conserving balance + caps.
+
+### The apps — verified on the gated executor (`Dregg2/Apps/`)
+
+The application layer is verified *over `execFullForestG`* (the `*Gated.lean` modules:
+nameservice, shielded payment, identity, governed namespace, privacy voting, compute exchange,
+bounty board, and more), not over an ungated escape hatch. The doomed kernel verb families are
+re-provided here as factory cell-programs (`EscrowFactory`, `ObligationFactory`, `QueueFactory`,
+`InboxFactory`, `PubsubFactory`, `BridgeCell`, `CapSlotFactory`), each carrying its own safety
+keystones — the land-before-kill replacements the verb registry cross-references by name.
+
+---
+
+## The proof discipline
+
+**Every keystone is pinned to the kernel-clean axiom triple**
+`{propext, Classical.choice, Quot.sound}` — and *nothing else*. The mechanism lives in
+`Dregg2/Tactics.lean` (`docs/AXIOM-HYGIENE.md` is the prose):
+
+- `#assert_axioms foo` / `#assert_clean foo` — pin one keystone; errors at build time if its
+  transitive axiom set escapes the triple (notably on any `sorryAx`, i.e. a leaked `sorry`).
+- `#assert_all_clean [a, b, c]` — pin a list in one command.
+- `#assert_namespace_axioms NS (except …)?` — pin *every* theorem under a namespace; strictly
+  stronger than a hand-curated block because it cannot miss one someone forgot to add.
+
+These are **pure rejectors**: a checker can only error, never close or weaken a goal, so adding
+one can never make a false theorem look true. They were validated non-vacuous against a planted
+`axiom bad : True`. `Dregg2/Claims.lean` is the corpus-wide CI net (~190 per-keystone pins);
+`Dregg2/AssuranceCase.lean` is the by-guarantee reading artifact. A textual zero-`sorry` grep
+(`scripts/no-sorry-metatheory.sh`) is the second guard layer.
+
+**Non-vacuity is tested in both polarities.** A guarantee is not just *true* — its teeth are
+exhibited: a tampered receipt is UNSAT, an amplifying grant is rejected, a replayed nullifier
+fails closed, a field-dropping commitment is *not* a faithful bridge. Spot-checks use `#guard`
+/ `by decide` — never `native_decide` on a non-decidable prop, and never an `#eval -- expected`
+comment masquerading as a test.
+
+**The honest seams are named crypto primitives, and only those.** Cryptographic soundness is
+the circuit/portal's job, never Lean's. The trust floor is a small, explicit set —
+Poseidon2-permutation CR, BLAKE3 CR, ed25519 EUF-CMA, HMAC, AEAD, discrete-log hardness, the
+FRI/STARK soundness chain, and post-GST progress for liveness — each entering as a `Prop`
+typeclass parameter or hypothesis (a *carrier*), **never as an `axiom` keyword**, which is
+precisely why they do not appear in `collectAxioms` and do not trip the hygiene guards. If a
+genuine `axiom`-keyword oracle were ever introduced it would surface there and require a
+commented allow-list entry. The floor never widens to silence a failure.
+
+---
+
+## How to build
+
+The toolchain is pinned (`leanprover/lean4`, mathlib via a local `path` require in
+`lakefile.toml`).
+
+```sh
+lake build Dregg2                 # the whole verified corpus (executor + circuits + distributed + apps)
+lake build Dregg2.Claims          # the corpus-wide axiom-hygiene CI net (~190 pins)
+lake build Dregg2.AssuranceCase   # the five guarantee apexes, by guarantee
+```
+
+For a single file during concurrent work, `lake env lean Dregg2/<Module>.lean` is race-free
+(reads oleans, writes none) — never run `lake build` mid-swarm. The `Metatheory/*` sibling
+library (the candidate-independent logic of constructive knowledge and authority) is its own
+`lean_lib`.
+
+**Becoming the node's executor.** After Lean changes, reseed the FFI closure with
+`../dregg-lean-ffi/scripts/rebuild-dregg2-closure.sh` *before* running any lean-shadow tests.
+That closure links the `@[export] dregg_exec_full_forest_auth` entry into `dregg-lean-ffi`; the
+node calls it as `produce_via_lean` / `lean_shadow`. The thing the theorems are about is the
+thing the binary runs.
+
+---
+
+## Map — navigating the corpus
+
+`Dregg2/` is large (~630 Lean modules). The high-value groups:
+
+| Group | What lives there |
+|---|---|
+| `Substrate/` | the 8-verb registry + minimality/completeness theorems (the kernel signature) |
+| `Exec/` | the executor: `FullForestAuth` (`execFullForestG`), `RecordKernel`, `UniversalBridge` (the memory-program proof), `ConcreteKernel` (the HashMap-backed l4v refinement), `FFI` |
+| `Circuit/`, `Circuit/Argus/` | the emitted circuits: the IR, the `interp`=executor / `compile`=circuit welds, the descriptor + aggregation apexes, the light-client theorem |
+| `Distributed/`, `Coord/`, `Consensus/` | blocklace / strand / CapTP / joint-turn / migration — the federation, model + differential |
+| `Authority/`, `Crypto/` | the capability/caveat model; the §8 portals (Poseidon2 / Pedersen / Merkle / non-membership) as dischargeable layered contracts |
+| `Apps/` | applications verified on the gated executor + the factory cell-programs (escrow/queue/bridge/…) |
+| `Spec/` | the factored abstract spec the executor refines (guards, conservation, the generative capability graph, the hyperedge turn) |
+| `Proof/`, `Calculus/`, `DSL.lean`, `Catalog.lean` | the program logic (WP/VCG), the developer-facing eDSL, the codegen spine |
+| `Metatheory/` | the candidate-independent logic of constructive knowledge + authority (the abstract theory dregg instances) |
+| `AssuranceCase.lean`, `Claims.lean`, `Tactics.lean` | the assurance artifact, the CI net, the axiom-hygiene commands |
+
+The navigation docs (`docs/NAVIGATION.md`, `docs/rebuild/_INDEX.md`, `docs/guides/`) carry the
+fuller where-is-X map.
+
+---
+
+## Honest open items — the named research frontier
+
+The corpus is `sorry`-free; an open obligation enters as an explicit interface hypothesis,
+never a silent gap. Three are worth naming up front so an evaluator can find them rather than
+discover them:
+
+- **Userspace-escrow ⊒ kernel-escrow** (`Dregg2/Apps/SealedBidAuction.lean §7`). The headline
+  refinement `kernelEscrow ⊑ userspaceEscrow` is a **carried hypothesis**
+  (`UserspaceDominatesKernel`), not a proved guarantee. The corollary `escrow_refinement_sound`
+  *consumes* it (so the inequality is one line once the refinement is supplied), but the only
+  inhabitant proved is the trivial reflexive one. The non-trivial witness — a userspace-escrow
+  cell-program with its own release/refund semantics, against an executor that currently lacks a
+  block-height/clock dimension — does not yet exist in the green tree. The app ships its proved
+  guarantees (no-frontrunning, settle-conserves, settle-cannot-mint, one-shot, loser-refunded)
+  green around it; this is the deliberate open call.
+
+- **The prover partition** (`AssuranceCase.lean`, Named boundary seams §1). The Lean-emitted
+  descriptor circuit is the default for the graduated turn shapes; every other shape falls back
+  — *logged, never silent* — to a hand-written AIR that enforces the same PI bindings and is
+  adversarially tested but is not yet Lean-derived. For non-graduated shapes, circuit⟺kernel
+  agreement is test-attested, not theorem-attested. The graduation lane closes this by emptying
+  the fallback set.
+
+- **Host-side correspondence** (Named boundary seams §2–§3). The verified admission check reads
+  values the host supplies (`ShadowHostCtx`: block height, freeze set, receipt-chain head,
+  budget); the theorems say *if these are the node's true values then* admission is decided
+  correctly. Their fidelity is a host obligation outside the Lean statement — engineering-shaped
+  rather than cryptography-shaped, and a host lying to itself harms only admission, never the
+  A–C invariants (which hold over whatever state the executor actually runs on). Producer
+  coverage (which turn shapes route through the verified executor by default) burns down toward
+  total in `lean_shadow.rs`.
+
+Reported here so the case says what it covers. Each has a closure lane; none is a wall.
