@@ -83,13 +83,15 @@ metrics-exporter-prometheus = "0.16"
 # The LIVE postgres client for the pg-mirror sink — OPTIONAL, pulled only by the
 # `pg-mirror-live` feature. The mirror's load-bearing half (MirrorBatch construction
 # from CommitRecords + the RootChain anti-substitution gate) is feature-INDEPENDENT and
-# always compiled/tested; only the network shipping to a live pg17 needs this client. The
+# always compiled/tested; only the network shipping to a live pg18 needs this client. The
 # node runs unchanged with the feature off (and even on, the sink is opt-in via
-# DREGG_PG_MIRROR_URL). (node/src/pg_mirror.rs.)
-tokio-postgres = { version = "0.7", optional = true }
+# DREGG_PG_MIRROR_URL). `with-serde_json-1` makes a `serde_json::Value` bind as the
+# postgres `jsonb` type (the cell's fields_json column), so the kernel writer sends
+# real jsonb, not a text-cast string. (node/src/pg_mirror.rs.)
+tokio-postgres = { version = "0.7", optional = true, features = ["with-serde_json-1"] }
 
 [features]
-# Off by default: the node ships verified-turn MirrorBatches to a live pg17 ONLY when
+# Off by default: the node ships verified-turn MirrorBatches to a live pg18 ONLY when
 # this is on AND DREGG_PG_MIRROR_URL is set. With it off, the pg-mirror module still
 # compiles its construction + RootChain core and its in-memory sink (the tested,
 # load-bearing path); the live postgres writer is simply absent.

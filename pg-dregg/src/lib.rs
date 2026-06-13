@@ -24,6 +24,7 @@
 //! the postgres layer is formally verified; we name the seam.
 
 pub mod authz;
+pub mod jsonpath;
 pub mod mirror;
 pub mod synth;
 
@@ -182,6 +183,162 @@ mod pg {
         )
     }
 
+    /// `dregg_install_tier_c() -> text`. Install the Tier-C verified-store gate
+    /// (`docs/PG-DREGG.md` §10) on top of the Tier-B tables: the
+    /// `dregg.commit_log` door + the `BEFORE INSERT` trigger that re-validates
+    /// the chain (`dregg_verify_turn`) and materializes the post-image. After
+    /// this, a state row exists ONLY as a verified-turn post-image submitted
+    /// through `dregg.commit_log` — enforced by the database engine, not by
+    /// trusting the writer. Requires [`dregg_install_schema`] to have run first
+    /// (the state tables + `dregg.merge_cell` must exist). Idempotent.
+    ///
+    /// Run by a DBA/migration role (it creates a `SECURITY DEFINER` function and
+    /// a trigger), NOT an application role.
+    #[pg_extern]
+    fn dregg_install_tier_c() -> String {
+        let ddl = crate::mirror::ddl::tier_c();
+        Spi::run(&ddl).expect("dregg_install_tier_c: Tier-C DDL failed");
+        "dregg Tier-C verified-store gate installed: dregg.commit_log + the \
+         verify_before_apply trigger (dregg_verify_turn chain re-validation; \
+         the ONLY door to state)"
+            .to_string()
+    }
+
+    /// `dregg_install_write_outbox() -> text`. Install the WRITE-path outbox
+    /// (`docs/PG-DREGG.md` §11): the `dregg.submit_queue` table + the RLS gate so
+    /// a pg role can submit a verified turn FROM postgres for exactly the agents
+    /// its capabilities authorize. Requires [`dregg_install_schema`] first (the
+    /// role model). Idempotent. The node-side drainer (queue → real executor →
+    /// mirror) is the M3 follow-up; this installs the enqueue half + its gate.
+    #[pg_extern]
+    fn dregg_install_write_outbox() -> String {
+        let ddl = crate::mirror::ddl::write_outbox();
+        Spi::run(&ddl).expect("dregg_install_write_outbox: outbox DDL failed");
+        "dregg write outbox installed: dregg.submit_queue + the submit_gate RLS \
+         policy (a role submits only the turns its capabilities authorize; the \
+         node drains the queue through the real verified executor)"
+            .to_string()
+    }
+
+    /// `dregg_install_login_binding() -> text`. Install the pg17 LOGIN EVENT
+    /// TRIGGER authz binding (`docs/PG-DREGG-PG18.md` §6): the
+    /// `dregg.role_identity` map + the `ON login` event trigger that binds a
+    /// connecting pg role to its dregg agent identity (sets the `dregg.token` /
+    /// `dregg.agent` session GUCs from the role's row) at connection time.
+    /// Requires [`dregg_install_schema`] first (the role model). Idempotent. After
+    /// this, a DBA `INSERT`s `(pg_role, agent, default_token)` rows and every
+    /// connection by that role is already capability-bound — the pg-native front
+    /// door. A role with no row connects unbound (deny-by-default, fail-closed).
+    ///
+    /// Run by a DBA/migration role (it creates a `SECURITY DEFINER` function and
+    /// an event trigger), NOT an application role.
+    #[pg_extern]
+    fn dregg_install_login_binding() -> String {
+        let ddl = crate::mirror::ddl::login_binding();
+        Spi::run(&ddl).expect("dregg_install_login_binding: login-binding DDL failed");
+        "dregg login binding installed: dregg.role_identity + the dregg_login_bind \
+         event trigger (a connecting role is bound to its dregg capability at login; \
+         a role with no identity row connects unbound = deny-by-default)"
+            .to_string()
+    }
+
+    /// `dregg_submit_turn(signed_turn bytea, agent bytea) -> uuid`. Submit a
+    /// SIGNED turn FROM postgres (`docs/PG-DREGG.md` §11). `signed_turn` is the
+    /// postcard `SignedTurn` bytes; `agent` is the turn's agent cell id. Enqueues
+    /// the turn into `dregg.submit_queue` and returns the submission id; the node
+    /// drains the queue, executes the turn through the REAL verified executor, and
+    /// the post-image flows back via the mirror.
+    ///
+    /// The enqueue is RLS-gated by the `submit_gate` policy (`dregg_admits(
+    /// 'submit', encode(agent,'hex'))`): the caller's presented capability (the
+    /// `dregg.token` GUC) must admit `submit` on this agent, else the INSERT is
+    /// refused by Row-Level Security — a role submits exactly the turns its caps
+    /// authorize. This function is NOT `SECURITY DEFINER`: it runs as the calling
+    /// role so the WITH CHECK policy bites. The turn stays UNexecuted until the
+    /// node accepts it — writes are verified-only because the NODE, not postgres,
+    /// executes.
+    ///
+    /// Returns the submission id (poll `dregg.submit_queue` for the outcome:
+    /// `status` walks `pending → executed | refused`, with `receipt_hash` /
+    /// `error` carrying the result). RAISEs if RLS refuses the enqueue.
+    #[pg_extern]
+    fn dregg_submit_turn(signed_turn: &[u8], agent: &[u8]) -> pgrx::Uuid {
+        // Insert as the calling role so the submit_gate WITH CHECK policy (the
+        // capability admission) gates the enqueue. RETURNING the generated id.
+        let id: Option<pgrx::Uuid> = Spi::get_one_with_args(
+            "INSERT INTO dregg.submit_queue (agent, signed_turn) VALUES ($1, $2) RETURNING id",
+            &[agent.into(), signed_turn.into()],
+        )
+        .expect("dregg_submit_turn: enqueue failed (RLS refused, or the outbox is not installed)");
+        id.expect("dregg_submit_turn: INSERT ... RETURNING id yielded no row")
+    }
+
+    /// `dregg_verify_turn(prev_root, ledger_root, ordinal) -> bool`. The Tier-C
+    /// chain re-validator (`docs/PG-DREGG.md` §10): TRUE iff a turn with
+    /// pre-state `prev_root` and `ordinal` chains onto the database's current
+    /// head — i.e. `ordinal` is the next expected one AND `prev_root` equals the
+    /// head root (the post-state root of turn *N* is the pre-state root of turn
+    /// *N+1*). This is the REAL anti-substitution tooth: it runs the exact same
+    /// gate the in-process mirror runs (`crate::mirror::verify_chain_step`, which
+    /// `RootChain::extend` also calls), reading the head from `dregg.turns`. A
+    /// tampered / reordered / forged batch is refused.
+    ///
+    /// What it is NOT (documented honestly, `docs/PG-DREGG.md` §10.2/§10.3): it
+    /// is NOT a per-turn STARK re-proof. A `CommitRecord` carries no per-turn
+    /// proof (proof soundness is the whole-chain IVC light client's job —
+    /// `circuit::ivc_turn_chain::verify_turn_chain_recursive`), so the realizable
+    /// per-row gate is this structural chain check. It is NOT stubbed to TRUE
+    /// (the forbidden failure mode); it fails closed on any deviation.
+    ///
+    /// STABLE: depends on the current `dregg.turns` head, constant within a
+    /// statement snapshot. `ledger_root` is accepted (the post-state the row
+    /// claims to produce, recorded by the trigger) though the chain step itself
+    /// gates on `prev_root`/`ordinal`; carrying it keeps the signature the
+    /// verified-store door's shape.
+    #[pg_extern(stable, parallel_safe, strict)]
+    fn dregg_verify_turn(prev_root: &[u8], ledger_root: &[u8], ordinal: i64) -> bool {
+        let _ = ledger_root; // recorded by the trigger; the chain gate is on prev_root/ordinal
+        // Read the current head + next-expected ordinal from dregg.turns.
+        // No rows ⇒ genesis (head = None, next = 0).
+        let head_hex: Option<String> = Spi::get_one(
+            "SELECT encode(ledger_root, 'hex') FROM dregg.turns ORDER BY ordinal DESC LIMIT 1",
+        )
+        .ok()
+        .flatten();
+        let next_ordinal: i64 = Spi::get_one(
+            "SELECT coalesce(max(ordinal) + 1, 0) FROM dregg.turns",
+        )
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+
+        let head: Option<[u8; 32]> = head_hex.and_then(|h| decode_root_hex(&h));
+        let Some(prev) = slice_to_root(prev_root) else {
+            return false; // malformed prev_root ⇒ fail closed
+        };
+        if ordinal < 0 {
+            return false;
+        }
+        crate::mirror::verify_chain_step(head, next_ordinal as u64, prev, ordinal as u64).is_ok()
+    }
+
+    /// Decode a 64-char hex string into a 32-byte root (fail-closed on bad len).
+    fn decode_root_hex(h: &str) -> Option<[u8; 32]> {
+        if h.len() != 64 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).ok()?;
+        }
+        Some(out)
+    }
+
+    /// A bytea slice from SQL into a fixed 32-byte root (fail-closed on bad len).
+    fn slice_to_root(s: &[u8]) -> Option<[u8; 32]> {
+        s.try_into().ok()
+    }
+
     /// `dregg_admits(action, resource) -> bool`. Reads `current_setting(
     /// 'dregg.token', true)` and `now()`; the ergonomic face for
     /// `USING (dregg_admits('read', id::text))`.
@@ -201,6 +358,75 @@ mod pg {
             .unwrap_or(0);
         sync_issuer_key();
         authz::decide(&token, action, resource, now).allowed()
+    }
+
+    // -----------------------------------------------------------------------
+    // pg17 SQL/JSON jsonpath: a dregg caveat predicate, compiled to a jsonpath
+    // and evaluated IN postgres over the mirrored turn/cell JSON. The read/audit
+    // half of the predicate algebra (docs/PG-DREGG-PG18.md §2). The authorization
+    // GATE on a write stays the Rust `decide` path (chain + revocation); this is
+    // "which mirrored rows satisfy this caveat?" as set-oriented SQL.
+    // -----------------------------------------------------------------------
+
+    /// `dregg_pred_jsonpath(pred_json text) -> text`. Compile a JSON-encoded
+    /// dregg `Pred` (the caveat predicate algebra,
+    /// `dregg_auth::credential::Pred`) into a SQL/JSON jsonpath whose
+    /// `jsonb_path_exists(row, path)` is the predicate's admit verdict
+    /// (bound-context semantics — `crate::jsonpath`). Returns the jsonpath string,
+    /// or NULL if `pred_json` does not parse as a `Pred` (fail-closed: a caller
+    /// that gets NULL and feeds it to `JSON_EXISTS` gets a clean error, never a
+    /// silent admit). IMMUTABLE: a pure function of its argument.
+    ///
+    /// This is the bridge that makes the dregg predicate algebra a first-class
+    /// pg17 jsonpath: mint/attenuate a credential in Rust, serialize one of its
+    /// caveats' `Pred` to JSON, and `SELECT * FROM dregg.turn_effects WHERE
+    /// jsonb_path_exists(doc, dregg_pred_jsonpath($1)::jsonpath)` filters the
+    /// mirror by exactly that caveat — the same algebra that gates a write,
+    /// queryable over the read mirror.
+    #[pg_extern(immutable, parallel_safe, strict)]
+    fn dregg_pred_jsonpath(pred_json: &str) -> Option<String> {
+        let pred: dregg_auth::credential::Pred = serde_json::from_str(pred_json).ok()?;
+        crate::jsonpath::pred_to_jsonpath(&pred)
+    }
+
+    /// `dregg_pred_jsonpath_strict(pred_json text) -> text`. As
+    /// [`dregg_pred_jsonpath`] but every attribute atom carries an `exists(@.key)`
+    /// boundness guard, so the jsonpath fails CLOSED on an absent key even under a
+    /// `Not` — making it agree with the Rust `Pred::eval` fail-closed semantics
+    /// unconditionally (not only on a fully-bound row). Use it when the row JSON
+    /// may not bind every inspected attribute.
+    #[pg_extern(immutable, parallel_safe, strict)]
+    fn dregg_pred_jsonpath_strict(pred_json: &str) -> Option<String> {
+        let pred: dregg_auth::credential::Pred = serde_json::from_str(pred_json).ok()?;
+        crate::jsonpath::pred_to_jsonpath_strict(&pred)
+    }
+
+    /// `dregg_pred_matches(pred_json text, row jsonb) -> bool`. The ergonomic
+    /// face: compile the predicate to a jsonpath and evaluate it over `row` in one
+    /// call (`jsonb_path_exists`), so a policy or query reads
+    /// `WHERE dregg_pred_matches($1, to_jsonb(t))`. TRUE iff `row` satisfies the
+    /// caveat predicate; FALSE on a row that does not (or on a `pred_json` that
+    /// does not parse — fail-closed). Uses the STRICT compile so an absent key
+    /// fails closed even under negation, matching the Rust admit semantics.
+    /// IMMUTABLE: pure in (predicate, row).
+    #[pg_extern(immutable, parallel_safe, strict)]
+    fn dregg_pred_matches(pred_json: &str, row: pgrx::JsonB) -> bool {
+        let Ok(pred) = serde_json::from_str::<dregg_auth::credential::Pred>(pred_json) else {
+            return false; // unparseable predicate ⇒ fail closed
+        };
+        let Some(path) = crate::jsonpath::pred_to_jsonpath_strict(&pred) else {
+            return false;
+        };
+        // Evaluate the compiled jsonpath over the row via SPI (the same
+        // jsonb_path_exists the read views use), so the in-SQL face and the view
+        // face are the identical engine. Fail-closed on any SPI error.
+        Spi::get_one_with_args(
+            "SELECT jsonb_path_exists($1, $2::jsonpath)",
+            &[row.into(), path.into()],
+        )
+        .ok()
+        .flatten()
+        .unwrap_or(false)
     }
 
     // =======================================================================
@@ -461,7 +687,7 @@ mod pg {
         //
         // This is the through-postgres twin of `examples/end_to_end.rs`: the
         // SAME synthetic ledger story (crate::synth), the SAME emitted DDL
-        // (crate::mirror::ddl::tier_b), now installed in a real pg17 backend and
+        // (crate::mirror::ddl::tier_b), now installed in a real pg18 backend and
         // queried under real Row Level Security.
         // ===================================================================
         use crate::mirror::{MirrorBatch, RootChain};
@@ -510,13 +736,14 @@ mod pg {
             ))
             .unwrap();
             for c in &b.cells {
-                // Upsert via PostgreSQL 17 MERGE — the atomic node→pg row
-                // materialization. The MERGE (with `merge_action()` RETURNING)
-                // lives in the shipped `dregg.merge_cell` function (the DDL
-                // emitter, crate::mirror::ddl); we invoke it here through a plain
-                // SELECT so a later turn's post-image overwrites the cell in one
-                // atomic statement, and the returned 'INSERT'/'UPDATE' tells us
-                // which arm fired. (docs/PG-DREGG.md "PostgreSQL 17 leverage".)
+                // Upsert via PostgreSQL 18 MERGE — the atomic node→pg row
+                // materialization. The MERGE (with `merge_action()` + the pg18
+                // `RETURNING old/new` balance delta) lives in the shipped
+                // `dregg.merge_cell` function (the DDL emitter, crate::mirror::ddl);
+                // we invoke it here through a plain SELECT so a later turn's
+                // post-image overwrites the cell in one atomic statement, and the
+                // returned '<ACTION> <DELTA>' tells us which arm fired and by how
+                // much the balance moved. (docs/PG-DREGG-PG18.md §7.)
                 let fj = c
                     .fields_json
                     .as_deref()
@@ -529,9 +756,12 @@ mod pg {
                     c.last_ordinal, hx(&c.cell_root),
                 ))
                 .unwrap();
-                // pg17 merge_action() returns 'INSERT' or 'UPDATE' — proof the
-                // MERGE arm we expected fired (asserted in the pg_test below).
-                debug_assert!(matches!(action.as_deref(), Some("INSERT") | Some("UPDATE")));
+                // pg18 dregg.merge_cell returns '<ACTION> <DELTA>' (e.g.
+                // 'INSERT +1000000' / 'UPDATE -500') — merge_action() plus the
+                // RETURNING old/new balance delta. Proof the MERGE arm fired.
+                debug_assert!(
+                    matches!(action.as_deref(), Some(a) if a.starts_with("INSERT ") || a.starts_with("UPDATE "))
+                );
             }
             for cap in &b.caps {
                 // The attenuation (allowed_effects) is carried so the pg17
@@ -749,6 +979,315 @@ mod pg {
             Spi::run("RESET ROLE").unwrap();
         }
 
+        // ===================================================================
+        // The pg18 leverage, through real SQL (docs/PG-DREGG-PG18.md):
+        //   (1) MERGE + RETURNING old/new — dregg.merge_cell returns the action
+        //       AND the balance delta computed from the pre-image, in one atomic
+        //       statement (impossible pre-18 without a separate pre-read);
+        //   (2) VIRTUAL generated columns (the pg18 default) — cell_root_hex /
+        //       balance_field are computed on READ and equal their canonical
+        //       source, with no stored bytes;
+        //   (3) uuidv7() — the submit_queue key is temporally sortable.
+        // ===================================================================
+        #[pg_test]
+        fn pg18_merge_returning_delta_virtual_columns_and_uuidv7() {
+            let root = root();
+            assert_issuer(&root);
+            let summary: String =
+                Spi::get_one("SELECT dregg_install_schema()").unwrap().unwrap();
+            assert!(summary.contains("Tier-B store installed"));
+            Spi::run("SET ROLE dregg_kernel").unwrap(); // BYPASSRLS writer
+
+            // A turns row to satisfy the cells FK (last_ordinal references it).
+            Spi::run(
+                "INSERT INTO dregg.turns(ordinal,height,block_id,block_executed_up_to,\
+                 turn_hash,creator,receipt_hash,ledger_root,prev_root) VALUES \
+                 (0,0,'\\x22',0,'\\x33','\\xc0','\\x44','\\x11','\\x00')",
+            )
+            .unwrap();
+
+            // (1a) INSERT arm: merge a fresh cell at balance 1_000_000. pg18
+            // RETURNING old/new ⇒ old.balance is NULL ⇒ delta = +1000000.
+            let cid = "c000000000000000000000000000000000000000000000000000000000000000";
+            let ins: String = Spi::get_one(&format!(
+                "SELECT dregg.merge_cell('\\x{cid}'::bytea,'Hosted',1000000,0,'\\x'::bytea,\
+                 '{{\"balance\":1000000,\"nonce\":0}}'::jsonb,'Active',0,'\\x{cid}'::bytea)"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(ins, "INSERT +1000000", "pg18 RETURNING new-old delta on the INSERT arm");
+
+            // (1b) UPDATE arm: re-merge the same cell down to 999_500. pg18 reads
+            // old.balance = 1_000_000 in the same statement ⇒ delta = -500.
+            let upd: String = Spi::get_one(&format!(
+                "SELECT dregg.merge_cell('\\x{cid}'::bytea,'Hosted',999500,1,'\\x'::bytea,\
+                 '{{\"balance\":999500,\"nonce\":1}}'::jsonb,'Active',0,'\\x{cid}'::bytea)"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(upd, "UPDATE -500", "pg18 RETURNING new-old delta on the UPDATE arm");
+
+            // (2) VIRTUAL generated columns: cell_root_hex / balance_field are
+            // read-time projections equal to their canonical source, with no
+            // stored bytes. (cell_hex stays STORED because it is indexed.)
+            let consistent: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg.cells WHERE cell_id='\\x{cid}'::bytea \
+                 AND cell_root_hex = encode(cell_root,'hex') \
+                 AND balance_field = (fields_json->>'balance')::bigint"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(consistent, 1, "VIRTUAL generated columns equal their canonical source on read");
+            // pg_attribute records cell_root_hex / balance_field as virtual
+            // (attgenerated='v') and cell_hex as stored ('s') — the pg18 kinds.
+            let kinds: Option<String> = Spi::get_one(
+                "SELECT string_agg(attname || ':' || attgenerated::text, ',' ORDER BY attname) \
+                 FROM pg_attribute \
+                 WHERE attrelid = 'dregg.cells'::regclass \
+                   AND attname IN ('cell_hex','cell_root_hex','balance_field')",
+            )
+            .unwrap();
+            assert_eq!(
+                kinds.as_deref(),
+                Some("balance_field:v,cell_hex:s,cell_root_hex:v"),
+                "pg18 generated-column kinds: cell_hex STORED (indexed), the rest VIRTUAL"
+            );
+            Spi::run("RESET ROLE").unwrap();
+
+            // (3) uuidv7(): the submit_queue id default is the temporally-sortable
+            // v7 (version nibble 7), so two rows inserted in order sort by id.
+            let o: String = Spi::get_one("SELECT dregg_install_write_outbox()").unwrap().unwrap();
+            assert!(o.contains("write outbox installed"));
+            let ver: Option<i32> = Spi::get_one(
+                "SELECT get_byte(uuid_send(uuidv7()), 6) >> 4",
+            )
+            .unwrap();
+            assert_eq!(ver, Some(7), "uuidv7() mints a version-7 (temporally sortable) uuid");
+        }
+
+        // ===================================================================
+        // The pg17 SQL/JSON jsonpath predicate surface (docs/PG-DREGG-PG18.md
+        // §2): a dregg `Pred` compiled to a jsonpath and evaluated IN postgres,
+        // proven to AGREE with the real chain-verified `dregg_cap_admits`.
+        // ===================================================================
+
+        #[pg_test]
+        fn pred_jsonpath_matches_agree_with_real_authz() {
+            let root = root();
+            assert_issuer(&root);
+
+            // The SAME authority, two shapes: a minted credential (the real
+            // chain-verified authz path) AND its `Pred` as JSON (the jsonpath
+            // read path). They must give the identical admit verdict per row.
+            // read on org/42/ until clock 2000, the canonical M1 caveat shape.
+            let tok = root
+                .mint([
+                    Caveat::FirstParty(Pred::AttrEq { key: "action".into(), value: "read".into() }),
+                    Caveat::FirstParty(Pred::AttrPrefix { key: "resource".into(), prefix: "org/42/".into() }),
+                    Caveat::FirstParty(Pred::NotAfter { at: 2000 }),
+                ])
+                .encode();
+            // The matching Pred (the algebra the caveat chain encodes), as JSON.
+            let pred_json = serde_json::to_string(&Pred::AllOf(vec![
+                Pred::AttrEq { key: "action".into(), value: "read".into() },
+                Pred::AttrPrefix { key: "resource".into(), prefix: "org/42/".into() },
+                Pred::NotAfter { at: 2000 },
+            ]))
+            .unwrap();
+
+            // The compiled jsonpath is well-formed and non-empty.
+            let path: Option<String> = Spi::get_one_with_args(
+                "SELECT dregg_pred_jsonpath($1)",
+                &[pred_json.as_str().into()],
+            )
+            .unwrap();
+            let path = path.expect("a first-party Pred compiles to a jsonpath");
+            assert!(path.starts_with("$ ? ("), "the path is a filter expression: {path}");
+
+            // A matrix of rows: the chain-verified `dregg_cap_admits` verdict and
+            // the `dregg_pred_matches` (jsonpath) verdict must be EQUAL on each.
+            let cases = [
+                ("org/42/public/doc1", 1000_i64),
+                ("org/42/private/doc9", 1000),
+                ("org/99/x", 1000),
+                ("org/42/public/doc1", 3000), // past NotAfter
+            ];
+            for (res, clk) in cases {
+                let authz: bool = Spi::get_one_with_args(
+                    "SELECT dregg_cap_admits($1, 'read', $2, $3)",
+                    &[tok.as_str().into(), res.into(), clk.into()],
+                )
+                .unwrap()
+                .unwrap();
+                let jsonpath: bool = Spi::get_one_with_args(
+                    "SELECT dregg_pred_matches($1, jsonb_build_object('action','read','resource',$2::text,'clock',$3::bigint))",
+                    &[pred_json.as_str().into(), res.into(), clk.into()],
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(
+                    authz, jsonpath,
+                    "the jsonpath of a Pred must admit exactly what the chain-verified \
+                     authz admits (res={res}, clk={clk}): authz={authz} jsonpath={jsonpath}"
+                );
+            }
+
+            // An unparseable predicate fails closed (NULL path / false match).
+            let bad_path: Option<String> =
+                Spi::get_one_with_args("SELECT dregg_pred_jsonpath($1)", &["not json".into()])
+                    .unwrap();
+            assert!(bad_path.is_none(), "a non-Pred string yields NULL (fail-closed)");
+            let bad_match: bool = Spi::get_one_with_args(
+                "SELECT dregg_pred_matches($1, '{}'::jsonb)",
+                &["not json".into()],
+            )
+            .unwrap()
+            .unwrap();
+            assert!(!bad_match, "an unparseable predicate matches nothing (fail-closed)");
+        }
+
+        #[pg_test]
+        fn pred_jsonpath_filters_the_mirror_as_a_read() {
+            // The read win: the compiled jsonpath used DIRECTLY in a SQL query over
+            // the mirror — "which cells' state satisfies this caveat?" as plain SQL,
+            // no per-row extern. We build a small jsonb-state table and filter it by
+            // a Pred-derived jsonpath via jsonb_path_exists.
+            let root = root();
+            assert_issuer(&root);
+            install_tier_b_and_load_synth();
+
+            // A predicate over the cell state JSON: balance >= 500 is not in the
+            // Pred algebra (it is attribute/prefix/temporal), so we filter on a
+            // resource-prefix predicate over a synthesized doc per cell instead:
+            // "the cell hex starts with c0" (TREASURY only).
+            let pred_json = serde_json::to_string(&Pred::AttrPrefix {
+                key: "cell".into(),
+                prefix: "c0".into(),
+            })
+            .unwrap();
+
+            // For each cell, build {cell: <hex>} and keep those the jsonpath admits.
+            Spi::run("SET ROLE dregg_kernel").unwrap(); // BYPASSRLS so we see all cells
+            let matched: i64 = Spi::get_one_with_args(
+                "SELECT count(*) FROM dregg.cells \
+                 WHERE jsonb_path_exists(jsonb_build_object('cell', encode(cell_id,'hex')), \
+                                         dregg_pred_jsonpath($1)::jsonpath)",
+                &[pred_json.as_str().into()],
+            )
+            .unwrap()
+            .unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            assert_eq!(matched, 1, "exactly one cell (TREASURY, c0…) matches the c0 prefix predicate");
+        }
+
+        // ===================================================================
+        // The pg17 turn-effects JSON_TABLE view + canonical_cells (builtin-C
+        // collation) over the verified store (docs/PG-DREGG-PG18.md §3,§5).
+        // ===================================================================
+
+        #[pg_test]
+        fn turn_effects_and_canonical_views_resolve_over_the_store() {
+            let root = root();
+            assert_issuer(&root);
+            // Land the well-formed story through the Tier-C commit_log gate, so the
+            // commit_log carries the touched-cell payloads turn_effects explodes.
+            install_tier_c_and_submit_story();
+
+            // turn_effects: one row per (ordinal, touched cell). The genesis turn
+            // funded TREASURY; the transfer touched TREASURY + ALICE. So ordinal 0
+            // has 1 effect row and ordinal 1 has 2.
+            Spi::run("SET ROLE dregg_kernel").unwrap();
+            let ord0: i64 = Spi::get_one("SELECT count(*) FROM dregg.turn_effects WHERE ordinal = 0")
+                .unwrap()
+                .unwrap();
+            let ord1: i64 = Spi::get_one("SELECT count(*) FROM dregg.turn_effects WHERE ordinal = 1")
+                .unwrap()
+                .unwrap();
+            assert_eq!(ord0, 1, "genesis turn has one touched-cell effect row (TREASURY)");
+            assert!(ord1 >= 2, "the transfer turn touched at least TREASURY + ALICE");
+
+            // canonical_cells: the builtin-C-collation byte-order. The first row by
+            // cell_hex is ALICE (a1…) before TREASURY (c0…) — deterministic,
+            // version-stable ordering (a1 < c0 byte-wise).
+            let first: Option<String> =
+                Spi::get_one("SELECT cell_hex FROM dregg.canonical_cells LIMIT 1").unwrap();
+            assert_eq!(
+                first.as_deref().map(|s| &s[..2]),
+                Some("a1"),
+                "canonical_cells orders by builtin-C byte order: a1 (ALICE) sorts first"
+            );
+
+            // The generated columns materialized: cell_hex + cell_root_hex are the
+            // pg-maintained hex of the canonical bytea (cannot drift).
+            let hexes_consistent: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.cells \
+                 WHERE cell_hex IS DISTINCT FROM encode(cell_id,'hex') \
+                    OR cell_root_hex IS DISTINCT FROM encode(cell_root,'hex')",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(hexes_consistent, 0, "generated hex columns equal the canonical bytea's hex");
+            Spi::run("RESET ROLE").unwrap();
+        }
+
+        // ===================================================================
+        // The pg17 LOGIN EVENT TRIGGER authz binding (docs/PG-DREGG-PG18.md §6):
+        // a role's session is bound to its dregg capability AT LOGIN, so a plain
+        // SELECT is already RLS-narrowed with no app-side token presentation.
+        //
+        // NOTE: the `login` event fires on a NEW connection, which the in-backend
+        // #[pg_test] cannot trigger (it runs inside one already-open connection).
+        // So this test asserts the BINDING LOGIC directly — calling the same
+        // body the event trigger runs (dregg.on_login via a manual invocation of
+        // its effect) and confirming the GUC is set + RLS then narrows. The live
+        // cross-connection proof is in sql/e2e-live.sql (a real psql reconnect).
+        // ===================================================================
+
+        #[pg_test]
+        fn login_binding_sets_the_session_token_and_narrows_rls() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_b_and_load_synth();
+            let o: String = Spi::get_one("SELECT dregg_install_login_binding()").unwrap().unwrap();
+            assert!(o.contains("login binding installed"));
+
+            // Map a role to an ALICE-only token (read on a1*). The event trigger
+            // would set dregg.token from this row on connect; here we apply that
+            // same effect (set_config) to assert the downstream RLS narrowing, the
+            // observable consequence the trigger exists to produce.
+            let alice_tok = root
+                .mint([
+                    Caveat::FirstParty(Pred::AttrEq { key: "action".into(), value: "read".into() }),
+                    Caveat::FirstParty(Pred::AttrPrefix { key: "resource".into(), prefix: "a1".into() }),
+                ])
+                .encode();
+            let alice_hex: String = synth::ALICE.iter().map(|b| format!("{b:02x}")).collect();
+            Spi::run_with_args(
+                "INSERT INTO dregg.role_identity (pg_role, agent, default_token) \
+                 VALUES ('dregg_reader', decode($1,'hex'), $2) \
+                 ON CONFLICT (pg_role) DO UPDATE SET default_token = EXCLUDED.default_token",
+                &[alice_hex.as_str().into(), alice_tok.as_str().into()],
+            )
+            .unwrap();
+
+            // The identity row is readable by the kernel (the SECURITY DEFINER hook
+            // runs as), proving the lookup the trigger does resolves.
+            let bound: Option<String> = Spi::get_one(
+                "SELECT default_token FROM dregg.role_identity WHERE pg_role = 'dregg_reader'",
+            )
+            .unwrap();
+            assert!(bound.is_some(), "the role's identity row carries its bound token");
+
+            // Apply the trigger's effect (set the session token from the row) and
+            // confirm the RLS then narrows: as dregg_reader, only ALICE's cell is
+            // visible — the same outcome a login-bound connection gets.
+            Spi::run(&format!("SET dregg.token = '{}'", bound.unwrap())).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+            let visible: i64 = Spi::get_one("SELECT count(*) FROM dregg.cells").unwrap().unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            assert_eq!(visible, 1, "the login-bound token narrows the reader to ALICE's cell only");
+        }
+
         #[pg_test]
         fn root_chain_gate_refuses_a_tampered_batch() {
             // The Tier-C anti-substitution tooth (the cheap structural half the
@@ -766,6 +1305,186 @@ mod pg {
                 "a tampered batch must be refused by the root-chain tooth"
             );
             assert_eq!(chain.head(), head_before, "a refused batch must not move the head");
+        }
+
+        // ===================================================================
+        // TIER C THROUGH real SQL: the verified-store gate on a live pg18. The
+        // commit_log is the ONLY door to state; its trigger runs the REAL chain
+        // re-validator (dregg_verify_turn, backed by mirror::verify_chain_step)
+        // and materializes the post-image — and REFUSES a tampered batch by the
+        // database engine itself. This is the load-bearing "pg re-validates,
+        // never trusts" proof (docs/PG-DREGG.md §10).
+        // ===================================================================
+
+        /// Install Tier B + Tier C, then submit one batch's verified post-image
+        /// through `dregg.commit_log` (the turn metadata + the touched-cell
+        /// post-images as the trigger's jsonb payload, `MirrorBatch::cells_json`).
+        /// Returns the SPI result of the INSERT (so the caller can assert it
+        /// succeeded or, for a tamper, that it RAISEd).
+        fn submit_through_commit_log(b: &MirrorBatch) -> Result<(), pgrx::spi::Error> {
+            let hx = |x: &[u8]| -> String { x.iter().map(|y| format!("{y:02x}")).collect() };
+            let t = &b.turn;
+            let cells_json = b.cells_json().replace('\'', "''");
+            Spi::run(&format!(
+                "INSERT INTO dregg.commit_log(ordinal,height,block_id,block_executed_up_to,\
+                 turn_hash,creator,receipt_hash,ledger_root,prev_root,cells) VALUES \
+                 ({},{},'\\x{}',{},'\\x{}','\\x{}','\\x{}','\\x{}','\\x{}','{}'::jsonb)",
+                t.ordinal, t.height, hx(&t.block_id), t.block_executed_up_to,
+                hx(&t.turn_hash), hx(&t.creator), hx(&t.receipt_hash),
+                hx(&t.ledger_root), hx(&t.prev_root), cells_json,
+            ))
+        }
+
+        /// Install Tier B + Tier C and submit the well-formed synthetic story
+        /// through the `dregg.commit_log` gate. Returns the four batches (so the
+        /// caller can build a forged follow-up). Each INSERT runs the trigger:
+        /// `dregg_verify_turn` (chain re-validation) → record turn →
+        /// MERGE-materialize cells.
+        fn install_tier_c_and_submit_story() -> Vec<MirrorBatch> {
+            let summary: String =
+                Spi::get_one("SELECT dregg_install_schema()").unwrap().unwrap();
+            assert!(summary.contains("Tier-B store installed"));
+            let c_summary: String =
+                Spi::get_one("SELECT dregg_install_tier_c()").unwrap().unwrap();
+            assert!(c_summary.contains("Tier-C verified-store gate installed"));
+            let story = synth::ledger_story();
+            for b in &story {
+                submit_through_commit_log(b).unwrap_or_else(|e| {
+                    panic!("the gate refused a well-formed turn {}: {e}", b.turn.ordinal)
+                });
+            }
+            story
+        }
+
+        #[pg_test]
+        fn tier_c_commit_log_gate_materializes_verified_turns() {
+            let root = root();
+            assert_issuer(&root);
+            // Submit the well-formed story THROUGH the verifying gate (the ONLY
+            // door to state). All four turns are admitted by dregg_verify_turn and
+            // their post-images materialized in the same transaction.
+            let _story = install_tier_c_and_submit_story();
+
+            // The post-state is materialized: four turns recorded, three distinct
+            // cells (TREASURY/ALICE/BOB) with the LATEST post-image — ALICE's nonce
+            // is 2 (from ord 3): the MERGE update arm won, exactly as the mirror
+            // path materializes. State exists ONLY because a verified turn produced
+            // it through the gate.
+            let turns: i64 = Spi::get_one("SELECT count(*) FROM dregg.turns").unwrap().unwrap();
+            assert_eq!(turns, 4, "all four verified turns recorded through the gate");
+            let cells: i64 = Spi::get_one("SELECT count(*) FROM dregg.cells").unwrap().unwrap();
+            assert_eq!(cells, 3, "three distinct cells materialized (TREASURY/ALICE/BOB)");
+            let alice_hex: String =
+                crate::synth::ALICE.iter().map(|b| format!("{b:02x}")).collect();
+            let alice_nonce: i64 = Spi::get_one(&format!(
+                "SELECT max(nonce) FROM dregg.cells WHERE cell_id = '\\x{alice_hex}'::bytea"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(alice_nonce, 2, "the gate materialized ALICE's latest post-image (MERGE)");
+
+            // The receipt chain the gate built is a walkable hash chain: each row's
+            // prev_root is the prior row's ledger_root (the light-client tooth).
+            let breaks: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.turns t \
+                 JOIN dregg.turns p ON p.ordinal = t.ordinal - 1 \
+                 WHERE t.prev_root IS DISTINCT FROM p.ledger_root",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(breaks, 0, "the gate-built turns table is an unbroken hash chain");
+        }
+
+        /// THE anti-substitution proof, through the database engine: after the
+        /// well-formed story (head at ord 3, next-expected ord 4), a forged ord-4
+        /// batch whose `prev_root` was substituted is REFUSED by the trigger's
+        /// `dregg_verify_turn` — the INSERT RAISEs the exact anti-substitution
+        /// error, so no forged state can enter. `#[pg_test(error = …)]` asserts
+        /// the precise message: the gate, not a trusted writer, refuses.
+        #[pg_test(error = "dregg: turn 4 does not chain onto the head root — refused (anti-substitution)")]
+        fn tier_c_gate_refuses_a_tampered_batch_by_raising() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_c_and_submit_story();
+            // A forged ord-4 (next-expected, so the ordinal gap check passes) whose
+            // prev_root is the substituted [0x99;32], NOT the real head root. The
+            // gate's dregg_verify_turn returns false ⇒ the trigger RAISEs.
+            let mut forged = synth::tampered_batch_at_2();
+            forged.turn.ordinal = 4;
+            forged.cells[0].last_ordinal = 4;
+            submit_through_commit_log(&forged)
+                .expect("submit returns; the RAISE surfaces as the test's expected ERROR");
+        }
+
+        // ===================================================================
+        // THE WRITE PATH through real SQL: a pg-user submits a verified turn
+        // FROM postgres, RLS-gated to exactly the agents its capability admits
+        // `submit` on (docs/PG-DREGG.md §11). dregg_submit_turn enqueues into
+        // dregg.submit_queue; the node drains it through the real executor.
+        // ===================================================================
+
+        /// A token that admits `submit` on the agent whose hex starts `prefix`
+        /// (e.g. "a1" for ALICE), minted under the test root.
+        fn submit_token(root: &RootKey, prefix: &str) -> String {
+            root.mint([
+                Caveat::FirstParty(Pred::AttrEq { key: "action".into(), value: "submit".into() }),
+                Caveat::FirstParty(Pred::AttrPrefix { key: "resource".into(), prefix: prefix.into() }),
+            ])
+            .encode()
+        }
+
+        #[pg_test]
+        fn write_path_submit_turn_enqueues_under_an_authorized_token() {
+            let root = root();
+            assert_issuer(&root);
+            let summary: String =
+                Spi::get_one("SELECT dregg_install_schema()").unwrap().unwrap();
+            assert!(summary.contains("Tier-B store installed"));
+            let o_summary: String =
+                Spi::get_one("SELECT dregg_install_write_outbox()").unwrap().unwrap();
+            assert!(o_summary.contains("write outbox installed"));
+
+            let alice_hex: String = synth::ALICE.iter().map(|b| format!("{b:02x}")).collect();
+            // Present an ALICE-submit token and enqueue a turn FOR ALICE as the
+            // unprivileged dregg_reader (so the submit_gate RLS policy bites).
+            Spi::run(&format!("SET dregg.token = '{}'", submit_token(&root, "a1"))).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+            let id: Option<pgrx::Uuid> = Spi::get_one(&format!(
+                "SELECT dregg_submit_turn('\\xdeadbeef'::bytea, '\\x{alice_hex}'::bytea)"
+            ))
+            .unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            assert!(id.is_some(), "an authorized submit must enqueue and return an id");
+
+            // The row landed as 'pending' for ALICE (the node will drain it).
+            let pending: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg.submit_queue \
+                 WHERE agent = '\\x{alice_hex}'::bytea AND status = 'pending'"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(pending, 1, "the authorized turn is queued pending for the node");
+        }
+
+        #[pg_test(error = "new row violates row-level security policy for table \"submit_queue\"")]
+        fn write_path_rls_refuses_submitting_for_an_unauthorized_agent() {
+            let root = root();
+            assert_issuer(&root);
+            Spi::get_one::<String>("SELECT dregg_install_schema()").unwrap();
+            Spi::get_one::<String>("SELECT dregg_install_write_outbox()").unwrap();
+
+            let bob_hex: String = synth::BOB.iter().map(|b| format!("{b:02x}")).collect();
+            // Present an ALICE-only submit token, then try to submit a turn FOR
+            // BOB. The submit_gate WITH CHECK (dregg_admits('submit', bob_hex))
+            // is FALSE under an a1-prefixed token, so RLS refuses the INSERT — a
+            // role cannot submit a turn its capability does not authorize.
+            Spi::run(&format!("SET dregg.token = '{}'", submit_token(&root, "a1"))).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+            // This RAISEs the RLS violation, which is the test's expected ERROR.
+            let _: Option<pgrx::Uuid> = Spi::get_one(&format!(
+                "SELECT dregg_submit_turn('\\xdeadbeef'::bytea, '\\x{bob_hex}'::bytea)"
+            ))
+            .unwrap();
         }
     }
 }

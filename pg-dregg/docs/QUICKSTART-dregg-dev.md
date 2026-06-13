@@ -166,22 +166,46 @@ the bearer token they already hold; no separate authorization surface.
 
 ---
 
-## 8. The roadmap from here
+## 8. Submit a verified turn FROM postgres (the write path)
+
+The bidirectional half: a pg-user submits a SIGNED turn from postgres, gated to
+exactly the agents their capability authorizes. Install the outbox, then submit.
+
+```sql
+SELECT dregg_install_write_outbox();   -- dregg.submit_queue + the submit_gate RLS
+
+-- present a token that admits `submit` on your agent (minted with the issuer
+-- secret out of band: cargo run --example mint -- --action submit --prefix <hex>)
+SELECT set_config('dregg.token', 'dga1_…', true);
+SET ROLE dregg_reader;                 -- so the submit_gate policy bites
+SELECT dregg_submit_turn(:signed_turn_bytes, :agent_id_bytes);  -- returns a uuid
+```
+
+The enqueue is RLS-gated by `dregg_admits('submit', encode(agent,'hex'))`: submit
+a turn for an agent your token does not authorize and Row-Level Security refuses
+it. **Postgres never executes** — the turn is queued for the node, which drains
+it through the real verified executor; only verified post-state lands. Reads stay
+free SQL; writes stay verified-only. (Proven: `write_path_submit_turn_enqueues_
+under_an_authorized_token` + `write_path_rls_refuses_submitting_for_an_
+unauthorized_agent`, `cargo pgrx test pg18`.)
+
+---
+
+## 9. The roadmap from here
 
 | Tier | What | Status |
 |---|---|---|
-| **A** | caps as RLS (the M1 functions) | **landed**, proven (`cargo test`, `cargo pgrx test pg14`) |
-| **B** | dregg state as queryable tables (this doc) | **core landed + demonstrated**; the live node→pg **writer is M2** (needs `node/` + `dregg-cell`, queued behind the rotation lane) |
-| **C** | writes through the verifier (`dregg_verify_turn` CHECK) | designed (`sql/schema-tierC.sql`, `tier-c` feature); the `RootChain` structural half is live |
-| **D** | the executor as a pg function (`dregg_submit_turn`) | the north star — one transaction mutates dregg state AND your app data atomically |
+| **A** | caps as RLS (the M1 functions) | **landed**, proven (`cargo test`, `cargo pgrx test pg18`) |
+| **B** | dregg state as queryable tables (this doc) | **LANDED + live on pg18**: the node→pg writer (`node/src/pg_mirror.rs` `pg_live::PgSink`) ships each verified turn's `MirrorBatch` over `tokio-postgres`; the `RootChain` tooth gates it |
+| **C** | the verified-store gate (`dregg_verify_turn` + `dregg.commit_log`) | **LANDED + live**: the trigger runs the REAL anti-substitution chain re-validator + materializes via MERGE; a tampered batch is refused by the engine (`dregg_install_tier_c()`). The per-turn *proof* gate (whole-chain IVC) is the orthogonal M3 item |
+| **C-write** | submit a verified turn FROM pg (`dregg_submit_turn` + the outbox) | **LANDED** (§8): RLS-gated enqueue; the node-side drainer is M3 |
+| **D** | the executor as a pg function (in-process) | the north star — one transaction mutates dregg state AND your app data atomically |
 
-**M2 is the next milestone**: a node-side sink that tails the commit log,
-projects each `Cell` post-image into a `MirrorBatch`, and ships it to the mirror
-(the `RootChain` tooth gates the write). The wire unit, the row shapes, the DDL,
-and the chaining discipline this quickstart queries are all already built and
-proven here — M2 is the writer that fills them from a live node, not a redesign.
+The whole arc runs live: `cargo pgrx test pg18`, or `scripts/e2e-live.sh` for a
+standalone `psql` walk-through (rows land, the chain verifies, a tampered batch
+is refused, the write-path gate narrows submission).
 
-Tier D is where it gets awesome: `SELECT dregg_submit_turn(envelope)` inside a
-transaction that also `UPDATE`s your app tables — kernel state and app state
-commit together or not at all. No separate node can offer that cross-domain
+Tier D is where it gets awesome: `SELECT dregg_submit_turn_inproc(envelope)`
+inside a transaction that also `UPDATE`s your app tables — kernel state and app
+state commit together or not at all. No separate node can offer that cross-domain
 atomicity. See `docs/PG-DREGG.md` §11.

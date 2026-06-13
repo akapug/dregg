@@ -1,177 +1,176 @@
--- pg-dregg — Tier C schema sketch: writes through the verifier (the CHECK tooth).
+-- pg-dregg — Tier C schema: writes through the verifier (the CHECK tooth).
 --
 -- =============================================================================
--- ⚠ DESIGN SKETCH — NOT A MIGRATION. See docs/PG-DREGG.md §10 (Tier C).
+-- This is the human-readable mirror of the Rust DDL emitter
+-- `pg_dregg::mirror::ddl::tier_c()` (the SQL the extension actually ships via
+-- `SELECT dregg_install_tier_c()`). See docs/PG-DREGG.md §10 (Tier C).
 -- =============================================================================
--- Tier C makes the VERIFIER ITSELF the gate on dregg state: no row exists unless
--- it is the post-image of a turn whose proof verified AND whose pre-state root
--- chains onto the current head. This is the spine invariant (docs/PG-DREGG.md
--- §8) enforced by the database engine, not by trusting the writer:
+-- Tier C makes the database engine — not a trusted writer — gate dregg state:
+-- a row reaches dregg.cells/memory/capabilities ONLY through dregg.commit_log,
+-- whose BEFORE INSERT trigger re-validates the turn and only then materializes
+-- the post-image. This is the spine invariant (docs/PG-DREGG.md §8) enforced in
+-- SQL:
 --
 --     Reads are free SQL; state mutates ONLY through verified turns.
 --
--- Builds on schema-tierB.sql (the tables). The ONLY door to state is
--- dregg.commit_log; its INSERT trigger runs dregg_verify_turn + the root-chain
--- check, then materializes the post-state. dregg_verify_turn is provided by the
--- pg-dregg extension built with the `tier-c` feature (the embedded STARK/PI
--- verifier — AUTHORIZED, docs/PG-DREGG.md §8.1), or as a C-callout to a
--- co-located node.
+-- Builds on schema-tierB.sql (the tables + the dregg.merge_cell upsert + the
+-- role model). Requires SELECT dregg_install_schema() to have run first.
 --
--- HONEST FAILURE MODE (docs/PG-DREGG.md §10.3): if dregg_verify_turn is stubbed
--- to TRUE, the trigger is dropped, or an app is granted a direct write, the gate
--- is GONE and forged state is silently accepted. Tier C's correctness rests on
--- (a) the verifier being the REAL verifier (the named differential, §4), and
--- (b) this trigger + the privilege lockdown being audited as load-bearing.
+-- WHAT `dregg_verify_turn` DOES (and does NOT) — the honest boundary
+-- (docs/PG-DREGG.md §10.2/§10.3):
+--   * It RE-VALIDATES THE CHAIN: the turn's ordinal is the next expected one AND
+--     its prev_root equals the database's current head root (the post-state of
+--     turn N is the pre-state of turn N+1). This is the REAL anti-substitution
+--     tooth — the exact gate the in-process mirror runs
+--     (pg_dregg::mirror::verify_chain_step, which RootChain::extend also calls),
+--     so a tampered / reordered / forged batch is refused by postgres itself.
+--   * It does NOT re-prove a per-turn STARK. A CommitRecord carries no per-turn
+--     proof; proof soundness is the whole-chain IVC light client's job
+--     (circuit::ivc_turn_chain::verify_turn_chain_recursive), not a per-row pg
+--     check. The realizable per-row gate is the structural chain re-validation.
+--   * It is NOT stubbed to TRUE — the forbidden failure mode (§10.3): a labeled
+--     gate that does not gate. It fails closed on any deviation, and the
+--     materialization is downstream of it (no chain ⇒ no rows).
 
-CREATE EXTENSION IF NOT EXISTS pg_dregg;   -- built with the `tier-c` feature
+CREATE EXTENSION IF NOT EXISTS pg_dregg;
 
 -- ===========================================================================
--- 1.  The verifier surface (provided by the extension, `tier-c` feature).
+-- 1.  The chain re-validator (provided by the extension).
 -- ===========================================================================
--- TRUE iff `proof` proves that applying `envelope` to the pre-state produces
--- `receipt` (whose post-state root is receipt's ledger_root), under `vk`.
--- Pure verification: no execution, no Lean executor — the STARK/PI light-client
--- checker + the PI binding. STABLE (depends only on its args + the configured
--- verifying key); fail-closed (any decode/verify error ⇒ FALSE).
+-- TRUE iff a turn with pre-state `prev_root` and `ordinal` chains onto the
+-- database's current head (read from dregg.turns): `ordinal` is the next
+-- expected one AND `prev_root` equals the head root. `ledger_root` is the
+-- post-state the row claims to produce (recorded by the trigger). STABLE
+-- (depends on the current head, constant within a statement); STRICT +
+-- fail-closed (a malformed/short root ⇒ FALSE).
 --
---   CREATE FUNCTION dregg_verify_turn(envelope bytea, receipt bytea,
---                                     proof bytea, vk bytea)
+--   CREATE FUNCTION dregg_verify_turn(prev_root bytea, ledger_root bytea,
+--                                     ordinal bigint)
 --     RETURNS boolean STABLE PARALLEL SAFE STRICT;   -- (extension-provided)
---
--- The verifying key (vk) is the database's proof trust root, configured like the
--- issuer key (a GUC, dregg.turn_vk), so a turn cannot point verification at a vk
--- it controls. Passing vk per-row is for the multi-vk case; the GUC is the norm.
 
 -- ===========================================================================
 -- 2.  The commit log — the ONE door to state.
 -- ===========================================================================
--- An application NEVER writes dregg.cells/memory/capabilities directly (the
--- privilege lockdown in schema-tierB.sql §7 forbids it). The only way state
--- changes is to submit a verified turn here. Even dregg_kernel writes go through
--- the trigger.
+-- A verified-turn post-image is submitted here (the turn metadata + its
+-- touched-cell post-images as a jsonb array — the realizable payload). An
+-- application NEVER writes the state tables directly (the Tier-B privilege
+-- lockdown forbids it); the only door is this INSERT, and this INSERT runs the
+-- verifier. Even dregg_kernel writes go through the trigger.
 CREATE TABLE IF NOT EXISTS dregg.commit_log (
-    ordinal    bigint PRIMARY KEY,     -- must be (SELECT coalesce(max(ordinal)+1,0) FROM dregg.turns)
-    envelope   bytea NOT NULL,         -- the submitted turn (CallForest / SignedTurn bytes)
-    receipt    bytea NOT NULL,         -- the produced TurnReceipt (carries post-state root)
-    proof      bytea NOT NULL,         -- the full-turn STARK proof
-    vk         bytea NOT NULL,         -- the verifying key the proof is under
-    prev_root  bytea NOT NULL,         -- the pre-state root this turn applies to
-    submitted_at timestamptz NOT NULL DEFAULT now()
-);
+    ordinal      bigint PRIMARY KEY,
+    height       bigint NOT NULL,
+    block_id     bytea  NOT NULL,
+    block_executed_up_to bigint NOT NULL,
+    turn_hash    bytea  NOT NULL,
+    creator      bytea  NOT NULL,
+    receipt_hash bytea  NOT NULL,
+    ledger_root  bytea  NOT NULL,   -- the verified post-state root of this turn
+    prev_root    bytea  NOT NULL,   -- the pre-state root it claims to chain onto
+    cells        jsonb  NOT NULL DEFAULT '[]'::jsonb,  -- touched-cell post-images
+    submitted_at timestamptz NOT NULL DEFAULT now());
 
 -- ===========================================================================
--- 3.  The gate — verify + chain + materialize, atomically.
+-- 3.  The gate — verify (chain) + record + materialize, atomically.
 -- ===========================================================================
 -- A row reaches dregg.cells/memory/capabilities ONLY through this trigger, and
--- ONLY after (a) the proof verifies and (b) the root chains. The materialize
--- step derives the post-images from the VERIFIED receipt and upserts them in the
--- SAME transaction — so cells/memory/caps and the turns row commit together or
--- not at all. (dregg.materialize_post_state decodes the receipt into the typed
--- rows; in the embedded build it is an extension function, in the mirror build
--- the node supplies the MirrorBatch. The root-chain check is the Rust
--- mirror::RootChain tooth, proven postgres-free in src/mirror.rs.)
+-- ONLY after dregg_verify_turn admits the chain. The materialize step upserts
+-- the post-images via the pg17 dregg.merge_cell MERGE in the SAME transaction —
+-- so the cells and the turns row commit together or not at all. SECURITY
+-- DEFINER so the least-privileged submitter (who holds only INSERT on
+-- commit_log) never touches the locked-down state tables directly.
 CREATE OR REPLACE FUNCTION dregg.apply_verified_turn() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER AS $$
-DECLARE
-    head_root  bytea;
-    next_ord   bigint;
+DECLARE c jsonb;
 BEGIN
-    -- (1) The proof MUST verify. Fail-closed: a stub/forged proof RAISEs.
-    IF NOT dregg_verify_turn(NEW.envelope, NEW.receipt, NEW.proof, NEW.vk) THEN
-        RAISE EXCEPTION 'dregg: turn proof does not verify — refused (ordinal %)', NEW.ordinal;
+    -- (1) The chain MUST re-validate (anti-substitution). Fail-closed: RAISE.
+    IF NOT dregg_verify_turn(NEW.prev_root, NEW.ledger_root, NEW.ordinal) THEN
+        RAISE EXCEPTION 'dregg: turn % does not chain onto the head root — refused (anti-substitution)', NEW.ordinal;
     END IF;
 
-    -- (2) The turn MUST chain: its pre-state root equals the current head root,
-    --     and its ordinal is the next expected one. (mirror::RootChain in SQL.)
-    SELECT ledger_root, ordinal + 1 INTO head_root, next_ord
-      FROM dregg.turns ORDER BY ordinal DESC LIMIT 1;
-    IF NOT FOUND THEN
-        next_ord := 0;                         -- genesis
-        head_root := NEW.prev_root;            -- pinned by the configured genesis
-    END IF;
-    IF NEW.ordinal <> next_ord THEN
-        RAISE EXCEPTION 'dregg: ordinal gap — expected %, got % (replay/gap refused)',
-            next_ord, NEW.ordinal;
-    END IF;
-    IF NEW.prev_root IS DISTINCT FROM head_root THEN
-        RAISE EXCEPTION 'dregg: turn does not chain to head root — refused (anti-substitution)';
-    END IF;
-
-    -- (3) Record the verified turn + materialize its post-state, same txn.
+    -- (2) Record the verified turn row.
     INSERT INTO dregg.turns(ordinal, height, block_id, block_executed_up_to,
                             turn_hash, creator, receipt_hash, ledger_root, prev_root)
-        SELECT * FROM dregg.decode_turn_row(NEW.ordinal, NEW.receipt);
-    PERFORM dregg.materialize_post_state(NEW.ordinal, NEW.receipt);
+        VALUES (NEW.ordinal, NEW.height, NEW.block_id, NEW.block_executed_up_to,
+                NEW.turn_hash, NEW.creator, NEW.receipt_hash, NEW.ledger_root, NEW.prev_root);
+
+    -- (3) Materialize the post-image cells, same txn, via the pg17 MERGE upsert.
+    FOR c IN SELECT * FROM jsonb_array_elements(NEW.cells) LOOP
+        PERFORM dregg.merge_cell(
+            decode(c->>'cell_id', 'hex'),
+            c->>'mode',
+            (c->>'balance')::bigint,
+            (c->>'nonce')::bigint,
+            decode(coalesce(c->>'fields',''), 'hex'),
+            (c->'fields_json'),
+            c->>'lifecycle',
+            NEW.ordinal,
+            decode(c->>'cell_root', 'hex'));
+    END LOOP;
     RETURN NEW;
 END $$;
 
--- The post-state materialization is a PostgreSQL 17 MERGE (docs/PG-DREGG.md
--- "PostgreSQL 17 leverage"): each touched cell of the verified receipt is
--- upserted in ONE atomic statement (a later turn's post-image overwrites; a
--- first-seen cell inserts), and merge_action()/RETURNING reports which arm
--- fired. This is the SQL twin of src/lib.rs::write_batch's MERGE path, so the
--- mirror build and the verified-store build materialize identically:
---
---   MERGE INTO dregg.cells AS t
---   USING dregg.decode_cells(NEW.ordinal, NEW.receipt) AS s
---     ON t.cell_id = s.cell_id
---   WHEN MATCHED     THEN UPDATE SET balance = s.balance, nonce = s.nonce,
---                          last_ordinal = s.last_ordinal, cell_root = s.cell_root
---   WHEN NOT MATCHED THEN INSERT (cell_id, mode, balance, nonce, fields,
---                                 lifecycle, last_ordinal, cell_root)
---                          VALUES (s.cell_id, s.mode, s.balance, s.nonce, s.fields,
---                                  s.lifecycle, s.last_ordinal, s.cell_root)
---   RETURNING merge_action(), t.cell_id;   -- audit: which arm, which cell
-
 DROP TRIGGER IF EXISTS verify_before_apply ON dregg.commit_log;
-CREATE TRIGGER verify_before_apply
-    BEFORE INSERT ON dregg.commit_log
+CREATE TRIGGER verify_before_apply BEFORE INSERT ON dregg.commit_log
     FOR EACH ROW EXECUTE FUNCTION dregg.apply_verified_turn();
 
 -- ===========================================================================
--- 4.  Submitting a turn IS the only write. Apps get INSERT on commit_log only.
+-- 4.  Submitting a turn IS the only write. The kernel writer gets INSERT +
+--     SELECT on commit_log (it submits AND audits the verified-store door) —
+--     and even the INSERT runs the verifier. The turn-effects JSON_TABLE view
+--     (a turn's touched cells exploded into rows) is granted to it too. PUBLIC
+--     gets nothing.
 -- ===========================================================================
--- Note: the ONLY grant an application needs to change state is INSERT on
--- dregg.commit_log — and even that runs the verifier. They never touch the
--- state tables directly.
-GRANT INSERT ON dregg.commit_log TO dregg_kernel;   -- the submit role
+GRANT INSERT, SELECT ON dregg.commit_log TO dregg_kernel;
+GRANT SELECT ON dregg.turn_effects TO dregg_kernel;
 REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 
 -- The light client, in SQL: dregg.turns is now a hash chain (each row's
--- ledger_root is the verified post-state of applying the prior root + this
--- turn). A consumer can walk it and re-verify non-omission against the receipt
--- range (dregg-query's AttestedAnswer, docs/PG-DREGG.md §7) — reads are not only
+-- prev_root is the prior row's ledger_root, enforced by the gate). A consumer
+-- can walk dregg.receipt_chain and re-verify it itself — reads are not only
 -- free, they can be ATTESTED free.
 
 -- ===========================================================================
--- 4b. Bulk mirror backfill — PostgreSQL 17 COPY ... ON_ERROR (robust ingest).
+-- 5.  The WRITE-path outbox (docs/PG-DREGG.md §11) — submit a turn FROM pg.
 -- ===========================================================================
--- When a subscriber/replica backfills the mirror from a dump of verified-turn
--- post-images (the distributed-mirror path, docs/PG-DREGG.md "PostgreSQL 17
--- leverage"), a single malformed row should not abort the whole load. pg17's
--- COPY ON_ERROR + log_verbosity skips and reports the bad rows instead:
+-- The mirror of pg_dregg::mirror::ddl::write_outbox() (SELECT
+-- dregg_install_write_outbox()). A pg-user submits a SIGNED turn FROM postgres
+-- via dregg_submit_turn(signed_turn, agent), which enqueues it here; the node
+-- drains the queue, executes through the REAL verified executor, and the
+-- post-image flows back via the mirror. Postgres NEVER executes — it enqueues an
+-- intent the verifier must accept. RLS gates submission on the dregg cap layer:
+-- a role submits ONLY the turns its capability admits `submit` on.
 --
---   COPY dregg.commit_log (ordinal, envelope, receipt, proof, vk, prev_root)
---     FROM '/backfill/turns.csv' WITH (FORMAT csv, ON_ERROR ignore,
---                                       LOG_VERBOSITY verbose);
+--   CREATE TABLE dregg.submit_queue (
+--       id uuid PRIMARY KEY DEFAULT uuidv7(),   -- pg18: temporally-sortable drain key
+--       agent bytea NOT NULL,            -- the turn's agent cell (the RLS key)
+--       signed_turn bytea NOT NULL,      -- postcard SignedTurn bytes
+--       submitter text NOT NULL DEFAULT current_user,
+--       status text NOT NULL DEFAULT 'pending'
+--              CHECK (status IN ('pending','executed','refused')),
+--       receipt_hash bytea, error text,  -- set by the node on resolution
+--       submitted_at timestamptz NOT NULL DEFAULT now(), resolved_at timestamptz);
 --
--- This is INGEST robustness only — the per-turn verifier trigger (§3) still
--- gates every row that lands, so a skipped malformed row is simply absent, never
--- an unverified write. (The chain tooth then refuses the resulting ordinal gap,
--- so a partial backfill fails CLOSED rather than forging a head.)
+--   CREATE POLICY submit_gate ON dregg.submit_queue FOR INSERT TO dregg_reader
+--       WITH CHECK (dregg_admits('submit', encode(agent, 'hex')));
+--   CREATE POLICY submit_read ON dregg.submit_queue FOR SELECT TO dregg_reader
+--       USING (dregg_admits('submit', encode(agent, 'hex')));
+--   GRANT INSERT, SELECT ON dregg.submit_queue TO dregg_reader;  -- the submitter
+--   GRANT SELECT, UPDATE ON dregg.submit_queue TO dregg_kernel;  -- the node drainer
 
 -- ===========================================================================
--- 5.  Tier D preview (docs/PG-DREGG.md §11) — the executor as a pg function.
+-- 6.  Tier D preview (docs/PG-DREGG.md §11) — the executor as a pg function.
 -- ===========================================================================
--- With the `tier-d` feature (the embedded executor — AUTHORIZED, §8.1, gated on
--- the pg/Lean process-model spike), submission collapses to EXECUTION:
+-- With the `tier-d` feature (the embedded executor, gated on the pg/Lean
+-- process-model spike), submission collapses to EXECUTION inside the backend:
 --
---   SELECT dregg_submit_turn(envelope);   -- runs the kernel, returns the receipt
+--   SELECT dregg_submit_turn_inproc(envelope);   -- runs the kernel, returns the receipt
 --
 -- and the post-state lands atomically. At that point postgres IS a dregg node:
 --   BEGIN;
---     SELECT dregg_submit_turn(pay_invoice_envelope);  -- dregg state changes
---     UPDATE invoices SET paid = true WHERE id = 7;     -- app state changes
---   COMMIT;                                              -- both, or neither.
+--     SELECT dregg_submit_turn_inproc(pay_invoice_envelope);  -- dregg state changes
+--     UPDATE invoices SET paid = true WHERE id = 7;           -- app state changes
+--   COMMIT;                                                    -- both, or neither.
 -- That cross-domain atomicity (kernel + app data in one transaction) is the
--- unique Tier-D payoff no separate node can offer.
+-- unique Tier-D payoff no separate node can offer. The §11 outbox above is the
+-- realizable slice today (the node executes out-of-process); Tier D is the
+-- north-star where postgres executes in-process.
