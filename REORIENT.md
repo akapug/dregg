@@ -57,6 +57,23 @@ not durable across compaction; the log is the burn-down. Sweep it at every Conve
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
   `project-refinement-epoch.md` is the live resume file; MEMORY.md is the index.
 
+## ⚑⚑ THE FULL-BURN WAVE (2026-06-12 evening, head 72563c8a1 — THIRTEEN lanes, the whole
+HORIZONLOG in flight; ember: max tokens, validation optional, directive imminent)
+
+Land each off its /tmp log + tree diff; lanes were told builds are OPTIONAL — so the
+lander RUNS the narrow suite per file set before committing (the one exception to the
+verification economy: unvalidated authoring needs one validation pass at landing):
+- cutover-exec → /tmp/cutover-exec-lane.log (26-descriptor regen @R=24, producers, carriers, GATE-0, differential)
+- metatheory closures → /tmp/metaclosures-lane.log (CrashRecovery burns, FeeChainStep, tagged QueueRoot, Coeffect, Fibration)
+- node closures → /tmp/nodeclosures-lane.log (burn weld, rosters, c-list sweep, obligation bond, persist retirement)
+- pug handoff → /tmp/handoff-lane.log (fresh-clone sim, bootstrap, QUICKSTART, EVALUATION.md, e2e story)
+- python-lean → /tmp/pylean-lane.log (DREGG_LEAN_LINK=shared; sdk-py gets the REAL kernel; persvati cmd in report)
+- DKG ceremony / ECVRF / KERI export / OCapN netlayer / dregg-query / flash-well /
+  trustline-parity+MLS / coverage-debts — each reports its own file list (sprint lanes,
+  authored-possibly-unvalidated; logs named in their reports)
+Convergence: round 7's catches FIXED (libc++ ead215c99, sdk-py eviction 72563c8a1);
+persvati target cleaned (312G free); ROUND 8 = full sweep AFTER this wave lands.
+
 ## ⚑ IN-FLIGHT LANES (2026-06-12 ~15:00, head 5e0558fdc — land each off its teed log)
 
 Three lanes running at note-time; their outputs survive any session boundary in /tmp +
