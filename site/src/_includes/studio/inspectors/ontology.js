@@ -48,6 +48,15 @@ function esc(s) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Render the light inline markdown the generated `semantics` carry (`` `code` ``
+// spans + `**bold**` ledes) into safe HTML — everything is escaped first, so
+// only <code>/<strong> wrap already-safe text.
+function mdInline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
 function catColor(cat) {
   const hue = CAT_HUE[cat] || CAT_HUE.other;
   return `background:color-mix(in srgb,${hue} 20%,var(--bg-raised));color:${hue}`;
@@ -159,10 +168,22 @@ class DreggOntology extends HTMLElement {
         this._render();
       });
     });
+    this._wireCards();
+  }
+
+  // Toggle a card open/closed on click or Enter/Space, keeping aria-expanded in
+  // sync for assistive tech.
+  _wireCards() {
     this.querySelectorAll('.dregg-onto__card-head').forEach((h) => {
-      h.addEventListener('click', () => {
+      const toggle = () => {
         const card = h.closest('.dregg-onto__card');
-        if (card) card.classList.toggle('is-open');
+        if (!card) return;
+        const open = card.classList.toggle('is-open');
+        h.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      h.addEventListener('click', toggle);
+      h.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); }
       });
     });
   }
@@ -186,12 +207,7 @@ class DreggOntology extends HTMLElement {
       ? filtered.map((e) => this._effectCard(e)).join('')
       : `<div class="dregg-inspector--empty">no effects match “${esc(q)}”` +
         (catFilter ? ` in category ${esc(catFilter)}` : '') + `</div>`;
-    results.querySelectorAll('.dregg-onto__card-head').forEach((h) => {
-      h.addEventListener('click', () => {
-        const card = h.closest('.dregg-onto__card');
-        if (card) card.classList.toggle('is-open');
-      });
-    });
+    this._wireCards();
   }
 
   _effectCard(e) {
@@ -202,14 +218,18 @@ class DreggOntology extends HTMLElement {
     const facetDesc = FACET_DESC[e.facet] || '';
     return (
       `<div class="dregg-onto__card">` +
-        `<div class="dregg-onto__card-head">` +
+        `<div class="dregg-onto__card-head" role="button" tabindex="0" aria-expanded="false" ` +
+          `title="show typed args + authorization facet">` +
+          `<span class="dregg-onto__chev" aria-hidden="true">▸</span>` +
           `<code class="dregg-onto__ctor">${esc(e.ctor)}</code>` +
           (e.wire ? `<code class="dregg-onto__wire" title="wire mnemonic">${esc(e.wire)}</code>` : '') +
           `<span class="dregg-onto__cat-chip" style="${catColor(e.category)}">${esc(e.category)}</span>` +
           (e.facet ? `<span class="dregg-onto__facet" title="${esc(facetDesc)}">needs&nbsp;${esc(e.facet)}</span>` : '') +
         `</div>` +
+        // The one-line semantics is the catalog's core teaching content — always
+        // visible. The typed args + authorization facet are the expandable detail.
+        `<div class="dregg-onto__sem">${mdInline(e.semantics)}</div>` +
         `<div class="dregg-onto__card-body">` +
-          `<div class="dregg-onto__sem">${esc(e.semantics)}</div>` +
           (args ? `<div class="dregg-onto__args"><span class="dregg-onto__args-label">args</span>${args}</div>` : '') +
           (e.facet ? `<div class="dregg-onto__facet-line"><span class="dregg-onto__args-label">auth</span>` +
             `<code>Authority.Auth.${esc(e.facet)}</code> — ${esc(facetDesc)}</div>` : '') +
@@ -251,9 +271,12 @@ if (!customElements.get('dregg-ontology')) {
 .dregg-onto__wire { font-size:0.74rem; color:var(--fg-dim); background:var(--bg); padding:1px 6px; border-radius:3px; border:1px solid var(--line); }
 .dregg-onto__cat-chip { font-size:0.7rem; padding:1px 8px; border-radius:3px; font-weight:600; }
 .dregg-onto__facet { margin-left:auto; font-size:0.72rem; color:var(--fg-dim); }
-.dregg-onto__card-body { padding:0 10px 10px 10px; }
+.dregg-onto__chev { color:var(--fg-dim); font-size:0.7rem; transition:transform 0.12s ease; display:inline-block; }
+.dregg-onto__card.is-open .dregg-onto__chev { transform:rotate(90deg); }
+.dregg-onto__card-head:focus-visible { outline:2px solid var(--accent,#5b8a5a); outline-offset:-2px; }
+.dregg-onto__card-body { display:none; padding:0 10px 10px 12px; }
 .dregg-onto__card.is-open .dregg-onto__card-body { display:block; }
-.dregg-onto__sem { font-size:0.82rem; color:var(--fg); line-height:1.55; margin:4px 0 8px; }
+.dregg-onto__sem { font-size:0.82rem; color:var(--fg); line-height:1.55; margin:0 0 8px; padding:0 10px 0 12px; }
 .dregg-onto__args, .dregg-onto__facet-line { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px; font-size:0.78rem; margin-top:4px; }
 .dregg-onto__args-label { font-size:0.68rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--fg-dim); min-width:34px; }
 .dregg-onto__arg { display:inline-flex; gap:4px; align-items:baseline; padding:1px 7px; background:var(--bg); border:1px solid var(--line); border-radius:3px; }

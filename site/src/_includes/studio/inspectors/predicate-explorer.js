@@ -34,6 +34,16 @@ function esc(s) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// The generated `semantics` strings carry light rustdoc-derived inline markdown
+// (`` `code` `` spans and `**bold**` ledes). Render those two forms so the
+// language reference reads as prose, not raw asterisks/backticks — everything
+// is escaped first, so this only ever emits <code>/<strong> around safe text.
+function mdInline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
 // ---------------------------------------------------------------------------
 // Faithful JS MIRROR of the locally-evaluable fragment of
 // `StateConstraint::evaluate` (cell/src/program.rs). Slots are plain integers
@@ -202,7 +212,7 @@ class DreggPredicateExplorer extends HTMLElement {
           : '';
         return `<div class="dregg-pred__item" id="pred-${esc(it.kind || it.name)}">` +
           `<div class="dregg-pred__item-head"><code class="dregg-pred__kind">${esc(it.kind || it.name)}</code>${evalable}</div>` +
-          `<div class="dregg-pred__sem">${esc(it.semantics)}</div>` +
+          `<div class="dregg-pred__sem">${mdInline(it.semantics)}</div>` +
           (fields ? `<div class="dregg-pred__fields">${fields}</div>` : '') +
         `</div>`;
       }).join('') + `</section>`;

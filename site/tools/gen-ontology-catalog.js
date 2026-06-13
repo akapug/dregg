@@ -296,7 +296,16 @@ function collectDoc(lines) {
     .map((l) => l.replace(/^\s*\/\/\/\s?/, ''))
     .join(' ')
     .replace(/\s+/g, ' ')
-    .replace(/\[`[^`]*`\]/g, '') // drop rustdoc intra-links
+    // Resolve rustdoc intra-links `[`Path::To::Sym`]` to the bare symbol name
+    // (last path segment) so the prose still reads. Deleting them outright left
+    // dangling gaps ("the top-level lift of  over heap key") in the studio copy.
+    .replace(/\[`([^`]*)`\]/g, (_, path) => {
+      const sym = path.split('::').filter(Boolean).pop() || path;
+      return '`' + sym + '`';
+    })
+    // `[text](url)` plain markdown links → just the text.
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
