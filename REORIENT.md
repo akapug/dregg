@@ -57,6 +57,41 @@ not durable across compaction; the log is the burn-down. Sweep it at every Conve
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
   `project-refinement-epoch.md` is the live resume file; MEMORY.md is the index.
 
+## ⚑⚑⚑ CURRENT STATE (2026-06-13 late, head a0d0d45d3 — Opus, +8 commits; CUTOVER PARKED, CAP-CROWN IS THE GATE)
+
+Resumed post-compaction; landed 8 commits by file set (each narrow-verified):
+`34dbca54a` starbridge-v2 coverage · `29c51bde3` metatheory assurance frontiers + Klein #2/#3
+(composed `deployed_system_secure` apex; conserves-from-verification — `StateChained` derived now;
+the macaroon↔kernel-cap arrow `chainGateG⇒capAuthorityG`; host-correspondence) · `84e4409db` the
+Gerwin-Klein assurance critique (`docs/ASSURANCE-CRITIQUE.md` — the deliverable; honest verdict:
+abstract kernel sound / deployed-binary bridge unverified / NOT l4v-grade; §4 = a 16-item TCB
+manifest; §5 = closure roadmap Stages 0-6) · `5df9a091a` flip G3 (r23 full-authority digest — a
+real soundness fix) · `59eef48dd` flip G4 (cohort-general generator) · `231c70c39` pg-dregg M2
+(node→pg verified mirror) · `fb2da3600` seL4 v0 source · `a0d0d45d3` cutover STEP 1 (rotated
+v3Registry 26→34 + an EmitEvent sorryAx fix).
+
+⚑ THE CUTOVER IS PARKED at step-1 by EMBER DECISION (2026-06-13): **"finish cap-crown #103 first."**
+Step 2 (the live-path rewrite, ~70 call-sites + executor PI reconstruction) is NOT started. Full
+v1-deletion is HARD-GATED on 2 residue effects: **RevokeCapability (sel 24)** — needs its in-circuit
+cap-root advance from the cap-crown reshape (#103); **Custom (sel 8)** — needs a new accumulator
+constraint kind the per-row IR lacks. Sequence: cap-crown #103 → unblocks RevokeCapability → ONE
+clean cutover deletes v1 entirely (no fallback tail). A read-only cap-crown state-mapping agent is
+running (A-F stages + the RevokeCapability critical path); plan/launch the cap-crown completion off it.
+The parked cutover checkpoint is `a0d0d45d3`; ROTATION-CUTOVER.md §2c/§3 has the precise remaining steps.
+
+UNCOMMITTED RESIDUE (tree not clean): a warnings-import sweep (protocol-tests/ + tests/ + teasting/,
+unused-import removals — needs a `cargo check` before commit), sdk-ts/dist + wasm/Cargo.lock (DreggDL
+dist/lock propagation). PENDING: a persvati workspace gauntlet on the committed tree + push (HELD —
+the Rust tree had no full `cargo check --workspace` since the flip-G3/G4 + pg-dregg commits).
+
+KLEIN ROADMAP (→ §5 of ASSURANCE-CRITIQUE.md; the post-cutover l4v program for ember to call):
+Stage 0 make the executor authoritative (invert `lean_apply.rs:1143`) · Stage 1 spec→binary
+refinement · Stage 2 derive `leaf_sound` + empty the hand-AIR partition · Stage 3 apex over one
+turn/history · Stage 4 real UC (native CryptHOL-in-Lean) · Stage 5 n>1 consensus that runs the
+ordering rule · Stage 6 config-pin the crypto floor. Other open: pg-dregg live-pg17 e2e + PgSink async
+stub · seL4 walls (leanrt ELF runtime; net RX-ring → DHCP bind) in the per-PD WALL.md · starbridge
+seal/destroy effect-gate.
+
 ## ⚑⚑⚑ LATE-NIGHT STATE (2026-06-13, ~32 commits — the swarm-of-surfaces wave + the TOY AUDIT)
 
 After the rotation engine landed (`15353932c`, G1+G3 — the flip is now mechanical), ember
@@ -159,14 +194,50 @@ generator (`circuit/src/effect_vm/trace_rotated.rs`) + the cell v9 Poseidon2 com
 (`cell/src/commitment.rs::compute_canonical_state_commitment_v9`) exist; the LIVE cell≡circuit
 differential HOLDS (cell_v9 == circuit row-0 STATE_COMMIT == producer wire_commit); the
 live-generated proof is 144.1 KiB proved+verified; anti-ghost bites. Live v1 byte-untouched,
-all behind `DREGG_ROTATED_PROVER` + the `recursion` feature (off by default). The remaining
-flip (G2/G4/G5) is NOW actually mechanical — config/regen/VK acts, no new machinery:
-G2 = flip defaults (DREGG_ROTATED_PROVER default-on / route cutover to prove_effect_vm_rotated_ir2;
-cell context v8→v9 — the v9 fn EXISTS; EmitAllJson→v3Registry; NUM_REGISTERS 16→24; the 59
-re-pins) · G4 = widen the generator beyond transfer (additive descriptors through the SAME
-shape-general generator) · G5 = VK epoch + delete v1. Deploy path when ember calls it:
-G2→G4→G5 (mechanical) → persvati gauntlet → FRESH graviton redeploy (new VK+context = fresh
-genesis, existing devnet disposable). The hard part is DONE.
+all behind `DREGG_ROTATED_PROVER` + the `recursion` feature (off by default).
+
+✅✅ UPDATE 2 (2026-06-13, Opus — TWO MORE staged-additive stages, fully green, v8/v1 untouched):
+- **G3 AUTHORITY-DIGEST DESIGN CALL (the rotated-commitment authority coverage — the #1 scope item).**
+  The v9 rotated commitment was DROPPING authority state (it bound only balance/nonce/fields[0..8]/
+  roots/lifecycle/epoch/height — NOT permissions/VK/delegate/delegation/program/mode/token_id/
+  visibility/commitments/proved/side-table-roots/fields[8..16]). FIXED: `compute_authority_digest_felt`
+  (cell/src/commitment.rs) folds the FULL authority residue into register **r23** (the Lean welds leave
+  r11..r23 free → the anti-ghost keystone `wireCommitR_binds`/`rotatedCommit_binds_reg` binds it with
+  ZERO Lean change). Three-way agreement (cell v9 / producer rotation_witness / trace generator) holds —
+  all derive r23 from the same fn. Tooth `v9_binds_full_authority_state` PASSES (two cells differing only
+  in permissions/VK/high-field/proved/side-table/mode commit distinctly). Doc: ROTATION-CUTOVER §2a.
+- **G4 COHORT-GENERAL GENERATOR (widened beyond transfer).** `rotated_descriptor_name_for_effect`
+  (trace_rotated.rs) resolves any of the 26 cohort effects to its `*VmDescriptor2R24` (fail-closed
+  otherwise); `effect_vm::trace::effect_selector` extracted as the single source of truth;
+  `sdk::prove_effect_vm_rotated_ir2_with_caveat` is the cohort-general prover. Teeth:
+  `resolvers_cover_exactly_the_rotated_registry` (=26), `non_cohort_effects_resolve_to_none`. Doc §2c.
+- **VALIDATED with REAL proofs:** the flip test now proves+verifies BOTH transfer (144.5 KiB) AND
+  burn (143.8 KiB) through the LIVE generator, cell v9 (FULL-authority) ≡ circuit STATE_COMMIT for
+  both, anti-ghost bites. `lake build Dregg2` green (3890 jobs); dregg-cell 626 / dregg-circuit 951
+  lib tests pass; all 11 descriptor drift guards pass; sdk `--features recursion` compiles.
+
+⚠⚠ **NEWLY SURFACED BLOCKER for "v1 deleted, rotated is the ONLY path":** the rotated `v3Registry` is
+ONLY the 26 v2-graduated effects. The LIVE path proves MORE — `MakeSovereign`/`CreateCell`/
+`CreateCellFromFactory`/`SpawnWithDelegation`/`ReceiptArchive`/`CellUnseal`/`GrantCapability`/
+`RevokeCapability`/`EmitEvent`/`Custom` are NOT in the rotated registry. Flipping to rotated-ONLY +
+deleting v1 would BRICK these effects. GATE before "v1 deleted": extend the Lean `v3Registry` to emit
+rotated descriptors for them (the same `rotateV3` lift) + re-pin the registry TSV. **Also: `columns::
+rotation::NUM_REGISTERS` is the R=16 STAGED-PROBE module (drift-guarded `rotation_layout_matches_lean`
++ SHA pin) — NOT the live path. The LIVE rotated machinery is ALREADY R=24 (`trace_rotated`/`caveat`/v9).
+The brief's "NUM_REGISTERS 16→24" is the staged-probe re-emit, a Lean act, not a standalone const bump
+(doing it standalone breaks the drift guard + SHA pin).**
+
+The remaining flip (the deep multi-day tail, NOT mechanical) = the live-path rewrite: route
+`prove_full_turn` → rotated `Ir2BatchProof` (changes `AttachedSubProof` wire shape + `compose_aggregate`
++ ComposedProof effect-vm leg) · rewrite `verify_full_turn`/`verify_effect_vm_proof_with_cutover` to
+the rotated verifier · rewrite executor `proof_verify.rs::verify_and_commit_proof` PI reconstruction
+(v1 `pi::ACTIVE_BASE_COUNT` + bespoke `stark::verify` → rotated 38-PI Ir2BatchProof + v9 commitment) ·
+`aggregate_bilateral_prover.rs` · reroute ~70 v1 call-sites · un-gate. THEN regen EmitAllJson→v3Registry
+live · cell context v8→v9 · re-emit R=16 staged-probe→R=24 + re-pin ~58 artifacts/11 guards · VK epoch ·
+DELETE v1 (effect_vm_p3_full_air.rs / lean_descriptor_air.rs v1 / CutoverFallback / ~40 test call-sites
+in effect_vm_descriptor_cutover_harness.rs + effect_vm_{grant,attenuate}_non_amp.rs). Each gated green
+before the next; persvati gauntlet before deploy. The HARD DESIGN CALLS (authority coverage, cohort
+boundary) are DONE; what remains is the wide irreversible wire rewrite + Lean cohort extension.
 
 --- (historical, for the record) ---
 The earlier "mechanical tail" framing (from the staged-flip lane's report, which I

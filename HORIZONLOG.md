@@ -31,13 +31,45 @@ deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 ## THE ROTATION FLIP — the irreversible tail (ember-COMMISSIONED, a4c7368ae; touches cell/+live registry+executor PI)
 
 *(The genuinely-new long pole — staged producers + rotated trace builder + cell≡circuit
-differential — is DONE and GREEN beside v1, no VK bump. What remains is the deliberate flip:)*
+differential — is DONE and GREEN beside v1, no VK bump. Two MORE staged-additive stages landed
+2026-06-13 (Opus, G3-authority + G4-cohort); what remains is the deliberate live-path rewrite +
+flip:)*
 
-- regen EmitAllJson so `v3Registry`→THE live registry (fingerprints bump) · cell
-  `CANONICAL_COMMITMENT_CONTEXT` v8→v9 (rotated absorption order) · executor PI assembly reads
-  `pi::v3` as LIVE · VK/commitment bump + succession drill · v1 path deletion (DORMANT today).
-  ROTATION-CUTOVER §3 steps 2-6 / §4 pins. Off-limits this run (cell/+registry+executor+persvati
-  gauntlet) — the main loop's separate deliberate act at the VK epoch.
+- ✅ DONE (staged-additive, green): **G3 AUTHORITY-DIGEST DESIGN** — the v9 rotated commitment now
+  binds the FULL authority state (not a subset). `cell/src/commitment.rs::compute_authority_digest_felt`
+  folds permissions/VK/delegate/delegation/program/mode/token_id + visibility/commitments/proved/
+  side-table roots + fields[8..16] into register r23 (Lean welds leave r23 free → the anti-ghost
+  keystone binds it, ZERO Lean change). Three-way agreement (cell v9 / producer rotation_witness /
+  trace generator) holds — all derive r23 from the same fn. Tooth: `v9_binds_full_authority_state`.
+  Doc: ROTATION-CUTOVER §2a. (cell + turn, no VK bump, v8 untouched.)
+- ✅ DONE (staged-additive, green): **G4 COHORT-GENERAL GENERATOR** — `trace_rotated::
+  rotated_descriptor_name_for_effect` resolves any of the 26 cohort effects to its `*VmDescriptor2R24`
+  (fail-closed for non-cohort), `effect_vm::trace::effect_selector` extracted as the single source of
+  truth; `sdk::prove_effect_vm_rotated_ir2_with_caveat` is the cohort-general rotated prover. Teeth:
+  `resolvers_cover_exactly_the_rotated_registry` (=26), `non_cohort_effects_resolve_to_none`. Doc:
+  ROTATION-CUTOVER §2c.
+- ⚠ **NEWLY SURFACED BLOCKER (the cohort boundary).** The rotated `v3Registry` is only the 26
+  v2-graduated effects. The LIVE path proves MORE: `MakeSovereign`/`CreateCell`/`CreateCellFromFactory`/
+  `SpawnWithDelegation`/`ReceiptArchive`/`CellUnseal`/`GrantCapability`/`RevokeCapability`/`EmitEvent`/
+  `Custom` are NOT in the rotated registry. Flipping to rotated-ONLY + deleting v1 would BRICK these
+  effects (no rotated descriptor to prove them). RESOLUTION before "v1 deleted": extend the Lean
+  `v3Registry` to emit rotated descriptors for these (a Lean-emission act, the same `rotateV3` lift) +
+  re-pin the registry TSV. This is the gate that makes "the rotated path is the ONLY path" actually
+  cover all effects. (Until then v1 must stay reachable for them.)
+- REMAINING (the live-path rewrite + flip, the deep multi-day tail): route `prove_full_turn` →
+  rotated `Ir2BatchProof` as the only path (changes `AttachedSubProof` wire shape + `compose_aggregate`
+  + `ComposedProof` effect-vm leg) · rewrite `verify_full_turn`/`verify_effect_vm_proof_with_cutover`
+  to the rotated verifier · rewrite executor `proof_verify.rs::verify_and_commit_proof` PI
+  reconstruction (v1 `pi::ACTIVE_BASE_COUNT` shape + bespoke `stark::verify` → the rotated 38-PI
+  Ir2BatchProof + v9 commitment) · `aggregate_bilateral_prover.rs` · reroute ~70 v1 call-sites
+  (node/sdk/verifier/lightclient/perf/preflight) · un-gate (remove `recursion`/`DREGG_ROTATED_PROVER`).
+  THEN regen EmitAllJson→`v3Registry` live · cell `CANONICAL_COMMITMENT_CONTEXT` v8→v9 · re-emit the
+  R=16 `columns::rotation` staged-probe module at R=24 (the `rotation_layout_matches_lean` drift guard
+  + SHA pin re-anchor — NOTE the LIVE rotated path is ALREADY R=24 via `trace_rotated`/`caveat`; only
+  the staged-probe reference module is R=16) · re-pin ~58 byte artifacts + 11 drift guards · VK epoch +
+  succession · DELETE v1 (`effect_vm_p3_full_air.rs`, `lean_descriptor_air.rs` v1, `CutoverFallback`,
+  the v1 PI layouts, the ~40 test call-sites in `effect_vm_descriptor_cutover_harness.rs` +
+  `effect_vm_{grant,attenuate}_non_amp.rs`). ROTATION-CUTOVER §3 steps 2-6 / §4 pins.
 
 ## Metatheory closures (Lean-side, lane-sized — tails of landed work)
 
