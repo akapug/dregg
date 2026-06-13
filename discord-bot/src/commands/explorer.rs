@@ -1,7 +1,15 @@
 //! `/explorer` command — browse devnet state from Discord.
 //!
-//! Subcommands: feed, cell, turn, block, note, proof, factory, search, stats, recent, watch, unwatch.
+//! Subcommands: feed, cell, turn, block, blocklace, federations, witnesses,
+//! checkpoint, note, proof, factory, search, stats, recent, watch, unwatch.
+//!
+//! Every read hits the **real** node surface through the shared `DevnetClient`
+//! (its modelled methods, or `state.devnet.client()` for routes the shared
+//! client doesn't model yet — `/api/blocklace/blocks`, `/api/federations`,
+//! `/api/receipts/{hash}/witnesses`, `/checkpoint/latest`). Nothing here
+//! reimplements a node query.
 
+use serde::Deserialize;
 use serenity::all::{
     CommandDataOptionValue, CommandInteraction, CommandOptionType, Context, CreateCommand,
     CreateCommandOption, CreateEmbed, CreateInteractionResponse, CreateInteractionResponseMessage,
@@ -10,6 +18,108 @@ use serenity::all::{
 
 use crate::BotState;
 use crate::embeds;
+
+// ─── Real node read shapes for routes the shared client doesn't model yet ────
+
+#[derive(Debug, Clone, Deserialize)]
+struct BlockViewWire {
+    #[serde(default)]
+    height: u64,
+    #[serde(default)]
+    view: u64,
+    #[serde(default)]
+    proposer: String,
+    #[serde(default)]
+    block_hash: String,
+    #[serde(default)]
+    predecessors: Vec<String>,
+    #[serde(default)]
+    num_votes: usize,
+    #[serde(default)]
+    qc_threshold: usize,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    finality_round: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FederationInfoWire {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    committee_epoch: u64,
+    #[serde(default)]
+    threshold: u32,
+    #[serde(default)]
+    member_count: usize,
+    #[serde(default)]
+    members: Vec<String>,
+    #[serde(default)]
+    is_local: bool,
+    #[serde(default)]
+    latest_height: u64,
+    #[serde(default)]
+    latest_root: Option<String>,
+    #[serde(default)]
+    num_finalized_roots: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WitnessesWire {
+    #[serde(default)]
+    receipt_hash: String,
+    #[serde(default)]
+    witness_count: usize,
+    #[serde(default)]
+    artifact_format: String,
+    #[serde(default)]
+    witness_artifacts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CheckpointWire {
+    #[serde(default)]
+    height: u64,
+    #[serde(default)]
+    ledger_state_root: String,
+    #[serde(default)]
+    note_tree_root: String,
+    #[serde(default)]
+    nullifier_set_root: String,
+    #[serde(default)]
+    revocation_tree_root: String,
+    #[serde(default)]
+    epoch: u64,
+    #[serde(default)]
+    timestamp: i64,
+    #[serde(default)]
+    federation_members: usize,
+    #[serde(default)]
+    qc_votes: usize,
+}
+
+/// GET a JSON route off the real node via the shared client, returning a framed
+/// error string on any failure. `route` is the path (e.g. "/api/federations").
+async fn node_get_json<T: for<'de> Deserialize<'de>>(
+    state: &BotState,
+    route: &str,
+) -> Result<T, String> {
+    let url = format!("{}{route}", state.config.devnet_url.trim_end_matches('/'));
+    let resp = state
+        .devnet
+        .client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("could not reach the node: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("node returned HTTP {}", resp.status().as_u16()));
+    }
+    resp.json::<T>()
+        .await
+        .map_err(|e| format!("could not parse {route}: {e}"))
+}
 
 /// Register the /explorer command with all subcommands.
 pub fn register() -> CreateCommand {
@@ -74,6 +184,46 @@ pub fn register() -> CreateCommand {
         .add_option(
             CreateCommandOption::new(
                 CommandOptionType::SubCommand,
+                "blocklace",
+                "Browse recent blocks in the consensus DAG (blocklace)",
+            )
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Integer,
+                    "count",
+                    "Number of recent DAG blocks to show (default 8, max 20)",
+                )
+                .required(false),
+            ),
+        )
+        .add_option(CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "federations",
+            "List the federations this node tracks (epoch, threshold, roots)",
+        ))
+        .add_option(CreateCommandOption::new(
+            CommandOptionType::SubCommand,
+            "checkpoint",
+            "Show the latest finalized state checkpoint (the four roots)",
+        ))
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "witnesses",
+                "Show the witness artifacts attached to a committed receipt",
+            )
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "receipt_hash",
+                    "Receipt hash (64 hex) of a committed turn",
+                )
+                .required(true),
+            ),
+        )
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
                 "note",
                 "Look up a note by commitment",
             )
@@ -90,10 +240,10 @@ pub fn register() -> CreateCommand {
             CreateCommandOption::new(
                 CommandOptionType::SubCommand,
                 "proof",
-                "Look up proof metadata by hash",
+                "Fetch the proof artifact attached to a committed turn",
             )
             .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::String, "hash", "Proof hash")
+                CreateCommandOption::new(CommandOptionType::String, "hash", "Turn hash (64 hex)")
                     .required(true),
             ),
         )
@@ -192,6 +342,10 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
         "cell" => handle_cell(ctx, command, state).await,
         "turn" => handle_turn(ctx, command, state).await,
         "block" => handle_block(ctx, command, state).await,
+        "blocklace" => handle_blocklace(ctx, command, state).await,
+        "federations" => handle_federations(ctx, command, state).await,
+        "checkpoint" => handle_checkpoint(ctx, command, state).await,
+        "witnesses" => handle_witnesses(ctx, command, state).await,
         "note" => handle_note(ctx, command, state).await,
         "proof" => handle_proof(ctx, command, state).await,
         "factory" => handle_factory(ctx, command, state).await,
@@ -417,6 +571,220 @@ async fn handle_block(ctx: &Context, command: &CommandInteraction, state: &BotSt
     }
 }
 
+async fn handle_blocklace(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    let options = get_sub_options(command);
+    let count = options
+        .iter()
+        .find(|o| o.name == "count")
+        .and_then(|o| match &o.value {
+            CommandDataOptionValue::Integer(n) => Some((*n as usize).clamp(1, 20)),
+            _ => None,
+        })
+        .unwrap_or(8);
+
+    defer_ephemeral(ctx, command).await;
+
+    match node_get_json::<Vec<BlockViewWire>>(state, "/api/blocklace/blocks").await {
+        Ok(mut blocks) => {
+            if blocks.is_empty() {
+                let embed = embeds::warning_embed(
+                    "No DAG Blocks",
+                    "The node reports an empty blocklace — consensus may not be running on this node.",
+                );
+                let _ = command
+                    .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                    .await;
+                return;
+            }
+            // Newest first.
+            blocks.sort_by(|a, b| b.height.cmp(&a.height));
+            let total = blocks.len();
+            let mut desc = String::new();
+            for block in blocks.iter().take(count) {
+                let final_mark = match block.finality_round {
+                    Some(round) => format!("\u{2705} final (r{round})"),
+                    None => "\u{231b} pending".to_string(),
+                };
+                desc.push_str(&format!(
+                    "{} **#{}** `{}` — {} · {} pred · {}/{} votes · {}\n",
+                    kind_icon(&block.kind),
+                    block.height,
+                    truncate(&block.block_hash, 12),
+                    if block.kind.is_empty() { "block" } else { &block.kind },
+                    block.predecessors.len(),
+                    block.num_votes,
+                    block.qc_threshold,
+                    final_mark,
+                ));
+                let _ = block.view; // view is carried by the wire shape; height is the user-facing index
+            }
+
+            let embed = embeds::dregg_embed("Blocklace (consensus DAG)")
+                .description(desc)
+                .field("Local DAG Blocks", total.to_string(), true)
+                .field("Showing", count.min(total).to_string(), true);
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Blocklace Unavailable", &e);
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
+async fn handle_federations(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    defer_ephemeral(ctx, command).await;
+
+    match node_get_json::<Vec<FederationInfoWire>>(state, "/api/federations").await {
+        Ok(feds) => {
+            if feds.is_empty() {
+                let embed = embeds::warning_embed(
+                    "No Federations",
+                    "The node tracks no federations yet.",
+                );
+                let _ = command
+                    .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                    .await;
+                return;
+            }
+            let mut embed = embeds::dregg_embed("Federations")
+                .description("Federations this node tracks. \u{2b50} marks the local federation.");
+            for fed in feds.iter().take(8) {
+                let root = fed
+                    .latest_root
+                    .as_deref()
+                    .map(|r| truncate(r, 16))
+                    .unwrap_or_else(|| "none".to_string());
+                let title = format!(
+                    "{} {}",
+                    if fed.is_local { "\u{2b50}" } else { "\u{1f517}" },
+                    truncate(&fed.id, 16)
+                );
+                embed = embed.field(
+                    title,
+                    format!(
+                        "epoch {} · threshold {}/{} · {} members · h{} · {} finalized roots\nlatest root: `{}`",
+                        fed.committee_epoch,
+                        fed.threshold,
+                        fed.member_count,
+                        fed.members.len().max(fed.member_count),
+                        fed.latest_height,
+                        fed.num_finalized_roots,
+                        root,
+                    ),
+                    false,
+                );
+            }
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Federations Unavailable", &e);
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
+async fn handle_checkpoint(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    defer_ephemeral(ctx, command).await;
+
+    match node_get_json::<CheckpointWire>(state, "/checkpoint/latest").await {
+        Ok(cp) => {
+            let embed = embeds::dregg_embed("Latest Finalized Checkpoint")
+                .description(
+                    "The four authenticated roots that pin global state at this finalized height.",
+                )
+                .field("Height", cp.height.to_string(), true)
+                .field("Epoch", cp.epoch.to_string(), true)
+                .field("QC Votes", format!("{}/{}", cp.qc_votes, cp.federation_members), true)
+                .field("Ledger State Root", format!("`{}...`", truncate(&cp.ledger_state_root, 24)), false)
+                .field("Note Tree Root", format!("`{}...`", truncate(&cp.note_tree_root, 24)), false)
+                .field("Nullifier Set Root", format!("`{}...`", truncate(&cp.nullifier_set_root, 24)), false)
+                .field("Revocation Tree Root", format!("`{}...`", truncate(&cp.revocation_tree_root, 24)), false)
+                .field("Timestamp", cp.timestamp.to_string(), true);
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let embed = embeds::warning_embed(
+                "No Checkpoint",
+                &format!("Could not load the latest checkpoint: {e}\n\nA fresh node may not have finalized one yet."),
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
+async fn handle_witnesses(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    let options = get_sub_options(command);
+    let receipt_hash = get_string_option(&options, "receipt_hash");
+    let receipt_hash = receipt_hash.trim().to_string();
+
+    defer_ephemeral(ctx, command).await;
+
+    if receipt_hash.len() != 64 || hex::decode(&receipt_hash).is_err() {
+        let embed = embeds::error_embed(
+            "Invalid Receipt Hash",
+            "Provide a 64-hex receipt hash (find one via `/explorer recent`).",
+        );
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+
+    let route = format!("/api/receipts/{receipt_hash}/witnesses");
+    match node_get_json::<WitnessesWire>(state, &route).await {
+        Ok(w) => {
+            if w.witness_count == 0 && w.witness_artifacts.is_empty() {
+                let embed = embeds::warning_embed(
+                    "No Witnesses",
+                    &format!(
+                        "Receipt `{}...` has no witness artifacts on record (unknown hash, or a turn that committed without witnesses).",
+                        truncate(&receipt_hash, 16)
+                    ),
+                );
+                let _ = command
+                    .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                    .await;
+                return;
+            }
+            let mut desc = String::new();
+            for (i, art) in w.witness_artifacts.iter().take(6).enumerate() {
+                desc.push_str(&format!("`#{i}` `{}...` ({} bytes)\n", truncate(art, 24), art.len() / 2));
+            }
+            let embed = embeds::dregg_embed("Receipt Witnesses")
+                .field("Receipt", format!("`{}...`", truncate(&w.receipt_hash, 16)), false)
+                .field("Witness Count", w.witness_count.to_string(), true)
+                .field(
+                    "Artifact Format",
+                    if w.artifact_format.is_empty() { "n/a".to_string() } else { w.artifact_format },
+                    true,
+                )
+                .field("Artifacts (head)", if desc.is_empty() { "none".to_string() } else { desc }, false);
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Witnesses Unavailable", &e);
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
 async fn handle_note(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     let options = get_sub_options(command);
     let commitment = get_string_option(&options, "commitment");
@@ -458,38 +826,94 @@ async fn handle_note(ctx: &Context, command: &CommandInteraction, state: &BotSta
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct TurnProofWire {
+    #[serde(default)]
+    turn_hash: String,
+    #[serde(default)]
+    proof_len: u64,
+    #[serde(default)]
+    proof_hex: String,
+}
+
 async fn handle_proof(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     let options = get_sub_options(command);
     let hash = get_string_option(&options, "hash");
+    let hash = hash.trim().to_string();
 
     defer_ephemeral(ctx, command).await;
 
-    match state.devnet.get_proof_details(&hash).await {
+    // The real proof surface is keyed by a committed *turn* hash.
+    if hash.len() != 64 || hex::decode(&hash).is_err() {
+        let embed = embeds::error_embed(
+            "Invalid Hash",
+            "Provide the 64-hex hash of a committed turn (find one via `/explorer recent`).",
+        );
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+
+    let url = format!(
+        "{}/api/turn/{hash}/proof",
+        state.config.devnet_url.trim_end_matches('/')
+    );
+    let resp = match state.devnet.client().get(&url).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            let embed =
+                embeds::error_embed("Node Unreachable", &format!("Could not fetch the proof: {e}"));
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+
+    if resp.status().as_u16() == 404 {
+        let embed = embeds::warning_embed(
+            "No Proof Attached",
+            &format!(
+                "Turn `{}...` has no proof artifact (unknown hash, or it committed on the executor-signed-receipt path — see `/status`).",
+                truncate(&hash, 16)
+            ),
+        );
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+    if !resp.status().is_success() {
+        let embed = embeds::error_embed(
+            "Proof Lookup Failed",
+            &format!("Node returned HTTP {}.", resp.status().as_u16()),
+        );
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+
+    match resp.json::<TurnProofWire>().await {
         Ok(proof) => {
-            let short_hash = truncate(&proof.hash, 16);
-            let verified_icon = if proof.verified {
-                "\u{2705}"
-            } else {
-                "\u{274c}"
-            };
-
-            let embed = embeds::dregg_embed("Proof Metadata")
-                .field("Hash", format!("`{short_hash}...`"), false)
-                .field("AIR", &proof.air_name, true)
-                .field("Trace Size", proof.trace_size.to_string(), true)
-                .field("Public Inputs", proof.public_inputs_count.to_string(), true)
-                .field(
-                    "Verified",
-                    format!("{verified_icon} {}", proof.verified),
-                    true,
-                );
-
+            let kib = proof.proof_len as f64 / 1024.0;
+            let explorer_url = format!("{}/turn/{}", state.devnet.explorer_base_url(), hash);
+            let embed = embeds::dregg_embed("Turn Proof Artifact")
+                .field("Turn", format!("`{}...`", truncate(&proof.turn_hash, 16)), false)
+                .field("Proof Size", format!("{} bytes ({kib:.1} KiB)", proof.proof_len), true)
+                .field("Attached", "\u{2705} yes", true)
+                .field("Proof (head)", format!("`{}...`", truncate(&proof.proof_hex, 32)), false)
+                .field("Explorer", format!("[View turn]({explorer_url})"), false);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
         }
         Err(e) => {
-            let embed = embeds::error_embed("Proof Lookup Failed", &e.to_string());
+            let embed = embeds::error_embed(
+                "Proof Decode Failed",
+                &format!("The node returned a proof body the bot couldn't parse: {e}"),
+            );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
@@ -821,6 +1245,18 @@ fn event_icon(event_type: &str) -> &'static str {
             "\u{1f534}" // red circle
         }
         _ => "\u{26aa}", // white circle
+    }
+}
+
+/// Icon for a blocklace block kind.
+fn kind_icon(kind: &str) -> &'static str {
+    match kind {
+        "turn" | "turn_bundle" => "\u{1f7e2}",   // green: state-advancing
+        "heartbeat" => "\u{1f499}",              // blue heart: liveness
+        "checkpoint" => "\u{1f4cd}",             // pin: finalization
+        "membership" => "\u{1f465}",             // people: committee change
+        "data" => "\u{1f4e6}",                   // package
+        _ => "\u{26aa}",                          // white circle
     }
 }
 

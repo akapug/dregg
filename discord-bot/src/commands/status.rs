@@ -1,5 +1,14 @@
 //! `/status`, `/proof verify`, `/metrics` commands — federation health and verification.
+//!
+//! These read the **real** node surface through the shared `DevnetClient`
+//! (`/status`, `/api/federations`, `/api/turn/{hash}/proof`) — no reinvention.
+//! `/status` surfaces the full producer-fidelity picture the node reports
+//! (verified-Lean vs legacy-Rust state producer, full-turn proving, and the
+//! count of SWAP-safe effect kinds the verified producer covers), and
+//! `/proof verify` fetches the genuine STARK proof artifact a committed turn
+//! emitted rather than asking for a raw hex blob the public node won't verify.
 
+use serde::Deserialize;
 use serenity::all::{
     CommandDataOptionValue, CommandInteraction, CommandOptionType, Context, CreateCommand,
     CreateCommandOption, CreateInteractionResponse, CreateInteractionResponseMessage,
@@ -9,26 +18,136 @@ use serenity::all::{
 use crate::BotState;
 use crate::embeds;
 
+// ─── Real node read shapes (subset of the node's `/status` + proof routes) ───
+//
+// `devnet.rs` (shared infra) only deserializes the liveness subset of `/status`;
+// the producer-fidelity fields below are read here directly off the same real
+// route via `state.devnet.client()`, the established pattern for node routes the
+// shared client doesn't model yet (see dashboard.rs `/queues/*`).
+
+#[derive(Debug, Clone, Deserialize)]
+struct StatusProducer {
+    #[serde(default)]
+    healthy: bool,
+    #[serde(default)]
+    peer_count: u32,
+    #[serde(default)]
+    latest_height: u64,
+    #[serde(default)]
+    dag_height: u64,
+    #[serde(default)]
+    block_count: u64,
+    #[serde(default)]
+    consensus_live: bool,
+    #[serde(default)]
+    federation_mode: String,
+    #[serde(default)]
+    state_producer: String,
+    #[serde(default)]
+    lean_producer: bool,
+    #[serde(default)]
+    full_turn_proving: bool,
+    #[serde(default)]
+    producer_covered_effects: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FederationInfoWire {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    committee_epoch: u64,
+    #[serde(default)]
+    threshold: u32,
+    #[serde(default)]
+    member_count: usize,
+    #[serde(default)]
+    is_local: bool,
+    #[serde(default)]
+    latest_height: u64,
+    #[serde(default)]
+    latest_root: Option<String>,
+    #[serde(default)]
+    num_finalized_roots: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TurnProofWire {
+    #[serde(default)]
+    turn_hash: String,
+    #[serde(default)]
+    proof_len: u64,
+    #[serde(default)]
+    proof_hex: String,
+}
+
+/// Fetch the full `/status` producer picture off the real node route.
+async fn fetch_status_producer(state: &BotState) -> Result<StatusProducer, String> {
+    let url = format!("{}/status", state.config.devnet_url.trim_end_matches('/'));
+    let resp = state
+        .devnet
+        .client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("could not reach the node: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("node returned HTTP {}", resp.status().as_u16()));
+    }
+    resp.json::<StatusProducer>()
+        .await
+        .map_err(|e| format!("could not parse /status: {e}"))
+}
+
+/// Fetch the real federation table off `/api/federations`.
+async fn fetch_federations(state: &BotState) -> Result<Vec<FederationInfoWire>, String> {
+    let url = format!(
+        "{}/api/federations",
+        state.config.devnet_url.trim_end_matches('/')
+    );
+    let resp = state
+        .devnet
+        .client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("could not reach the node: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("node returned HTTP {}", resp.status().as_u16()));
+    }
+    resp.json::<Vec<FederationInfoWire>>()
+        .await
+        .map_err(|e| format!("could not parse /api/federations: {e}"))
+}
+
+fn short(s: &str, n: usize) -> String {
+    if s.len() > n {
+        format!("{}...", &s[..n])
+    } else {
+        s.to_string()
+    }
+}
+
 /// Register the /status command.
 pub fn register_status() -> CreateCommand {
     CreateCommand::new("status").description("Show federation health status")
 }
 
-/// Register the /proof command (for proof verification).
+/// Register the /proof command (for proof artifact lookup on a committed turn).
 pub fn register_proof() -> CreateCommand {
     CreateCommand::new("proof")
-        .description("Verify a STARK proof")
+        .description("Fetch the STARK proof artifact a committed turn emitted")
         .add_option(
             CreateCommandOption::new(
                 CommandOptionType::SubCommand,
-                "verify",
-                "Verify a STARK proof by hex",
+                "turn",
+                "Fetch the proof artifact attached to a committed turn",
             )
             .add_sub_option(
                 CreateCommandOption::new(
                     CommandOptionType::String,
-                    "hex",
-                    "Hex-encoded STARK proof",
+                    "hash",
+                    "Turn hash (64 hex) of a committed turn",
                 )
                 .required(true),
             ),
@@ -40,106 +159,228 @@ pub fn register_metrics() -> CreateCommand {
     CreateCommand::new("metrics").description("Show key devnet metrics")
 }
 
-/// Handle /status interaction.
+/// Handle /status interaction — the full node + producer-fidelity surface.
 pub async fn handle_status(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     defer_ephemeral(ctx, command).await;
 
-    match state.devnet.federation_health().await {
-        Ok(health) => {
-            let status_icon = match health.status.as_str() {
-                "healthy" => "\u{2705}",
-                "degraded" => "\u{26a0}\u{fe0f}",
-                _ => "\u{274c}",
-            };
-
-            let embed = embeds::dregg_embed("Federation Status")
-                .field(
-                    "Status",
-                    format!("{status_icon} {}", health.status.to_uppercase()),
-                    true,
-                )
-                .field(
-                    "Nodes",
-                    format!("{}/{}", health.nodes_up, health.nodes_total),
-                    true,
-                )
-                .field("Block Height", health.block_height.to_string(), true)
-                .field("Last Block", &health.last_block_time, true)
-                .field(
-                    "Avg Block Time",
-                    format!("{}ms", health.avg_block_time_ms),
-                    true,
-                );
-            let _ = command
-                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                .await;
-        }
+    let status = match fetch_status_producer(state).await {
+        Ok(status) => status,
         Err(e) => {
             let embed = embeds::error_embed(
-                "Federation Offline",
+                "Node Offline",
                 &format!(
-                    "Could not reach the federation: {e}\n\nDevnet is currently offline, try again later."
+                    "Could not reach the node `{}`: {e}\n\nDevnet may be offline — try again shortly.",
+                    state.config.devnet_url
                 ),
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
+            return;
         }
+    };
+
+    let health_icon = if status.healthy {
+        "\u{2705}"
+    } else if status.consensus_live {
+        "\u{26a0}\u{fe0f}"
+    } else {
+        "\u{274c}"
+    };
+    let health_word = if status.healthy {
+        "HEALTHY"
+    } else if status.consensus_live {
+        "DEGRADED"
+    } else {
+        "OFFLINE"
+    };
+
+    // Producer fidelity — the SWAP story: verified-Lean producer vs legacy Rust.
+    let producer_icon = if status.lean_producer {
+        "\u{2705}" // verified Lean producer
+    } else {
+        "\u{26a0}\u{fe0f}" // legacy Rust path
+    };
+    let producer_label = if status.state_producer.is_empty() {
+        if status.lean_producer { "lean" } else { "rust" }.to_string()
+    } else {
+        status.state_producer.clone()
+    };
+    let proving_icon = if status.full_turn_proving {
+        "\u{2705}"
+    } else {
+        "\u{2796}" // heavy minus — proving off (still honest, not an error)
+    };
+
+    let nodes = if status.federation_mode == "solo" {
+        "1 (solo)".to_string()
+    } else {
+        format!("{} peer(s) + self", status.peer_count)
+    };
+
+    let mut embed = embeds::dregg_embed("Node Status")
+        .field(
+            "Health",
+            format!("{health_icon} {health_word}"),
+            true,
+        )
+        .field(
+            "Consensus",
+            if status.consensus_live {
+                "\u{2705} live"
+            } else {
+                "\u{274c} not running"
+            },
+            true,
+        )
+        .field("Federation Mode", &status.federation_mode, true)
+        .field("Attested Height", status.latest_height.to_string(), true)
+        .field("DAG Tip", status.dag_height.to_string(), true)
+        .field("Blocks (local DAG)", status.block_count.to_string(), true)
+        .field("Nodes", nodes, true)
+        .field(
+            "State Producer",
+            format!("{producer_icon} {producer_label}"),
+            true,
+        )
+        .field(
+            "Full-Turn Proving",
+            format!("{proving_icon} {}", status.full_turn_proving),
+            true,
+        )
+        .field(
+            "SWAP-Safe Effects Covered",
+            status.producer_covered_effects.to_string(),
+            true,
+        );
+
+    // Append the real federation table, when the node exposes it.
+    match fetch_federations(state).await {
+        Ok(feds) if !feds.is_empty() => {
+            let mut lines = String::new();
+            for fed in feds.iter().take(5) {
+                let root = fed
+                    .latest_root
+                    .as_deref()
+                    .map(|r| short(r, 12))
+                    .unwrap_or_else(|| "none".to_string());
+                lines.push_str(&format!(
+                    "{} `{}` epoch {} · {}/{} thr · h{} · root `{}` · {} finalized\n",
+                    if fed.is_local { "\u{2b50}" } else { "\u{2022}" },
+                    short(&fed.id, 12),
+                    fed.committee_epoch,
+                    fed.threshold,
+                    fed.member_count,
+                    fed.latest_height,
+                    root,
+                    fed.num_finalized_roots,
+                ));
+            }
+            embed = embed.field("Federations", lines, false);
+        }
+        _ => {}
     }
+
+    let _ = command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await;
 }
 
-/// Handle /proof interaction.
+/// Handle /proof interaction — fetch the real proof artifact a committed turn
+/// emitted, off `/api/turn/{hash}/proof`.
 pub async fn handle_proof(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     let sub_opts = match &command.data.options[0].value {
         CommandDataOptionValue::SubCommand(opts) => opts.clone(),
         _ => return,
     };
 
-    let proof_hex = sub_opts
+    let turn_hash = sub_opts
         .iter()
-        .find(|o| o.name == "hex")
+        .find(|o| o.name == "hash")
         .and_then(|o| match &o.value {
-            CommandDataOptionValue::String(s) => Some(s.clone()),
+            CommandDataOptionValue::String(s) => Some(s.trim().to_string()),
             _ => None,
         })
         .unwrap_or_default();
 
     defer_ephemeral(ctx, command).await;
 
-    match state.devnet.verify_proof(&proof_hex).await {
-        Ok(result) => {
-            let valid_icon = if result.valid { "\u{2705}" } else { "\u{274c}" };
+    if turn_hash.len() != 64 || hex::decode(&turn_hash).is_err() {
+        let embed = embeds::error_embed(
+            "Invalid Turn Hash",
+            "Provide the 64-hex hash of a committed turn (find one via `/explorer recent`).",
+        );
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
 
-            let mut embed = embeds::dregg_embed("Proof Verification").field(
-                "Valid",
-                format!("{valid_icon} {}", result.valid),
-                true,
+    let url = format!(
+        "{}/api/turn/{turn_hash}/proof",
+        state.config.devnet_url.trim_end_matches('/')
+    );
+    let resp = match state.devnet.client().get(&url).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            let embed = embeds::error_embed(
+                "Node Unreachable",
+                &format!("Could not reach the node to fetch the proof: {e}"),
             );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
 
-            if let Some(air) = &result.air_name {
-                embed = embed.field("AIR", air, true);
-            }
+    if resp.status().as_u16() == 404 {
+        let embed = embeds::warning_embed(
+            "No Proof Attached",
+            &format!(
+                "Turn `{}...` has no proof artifact on record. Either the hash is unknown, or this turn committed on the executor-signed-receipt path without a full-turn STARK proof (check `/status` → Full-Turn Proving).",
+                short(&turn_hash, 16)
+            ),
+        );
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+    if !resp.status().is_success() {
+        let embed = embeds::error_embed(
+            "Proof Lookup Failed",
+            &format!("Node returned HTTP {}.", resp.status().as_u16()),
+        );
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
 
-            if let Some(inputs) = &result.public_inputs {
-                let inputs_str = inputs
-                    .iter()
-                    .take(5)
-                    .map(|i| format!("`{}`", i))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                embed = embed.field("Public Inputs", inputs_str, false);
-            }
-
+    match resp.json::<TurnProofWire>().await {
+        Ok(proof) => {
+            let kib = proof.proof_len as f64 / 1024.0;
+            let preview = short(&proof.proof_hex, 32);
+            let explorer_url = format!(
+                "{}/turn/{}",
+                state.devnet.explorer_base_url(),
+                turn_hash
+            );
+            let embed = embeds::success_embed("Proof Artifact")
+                .field("Turn", format!("`{}...`", short(&proof.turn_hash, 16)), false)
+                .field("Proof Size", format!("{} bytes ({kib:.1} KiB)", proof.proof_len), true)
+                .field("Attached", "\u{2705} yes", true)
+                .field("Proof (head)", format!("`{preview}...`"), false)
+                .field("Explorer", format!("[View turn]({explorer_url})"), false);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
         }
         Err(e) => {
             let embed = embeds::error_embed(
-                "Verification Failed",
-                &format!(
-                    "Could not verify proof: {e}\n\nEnsure the hex is valid and devnet is online."
-                ),
+                "Proof Decode Failed",
+                &format!("The node returned a proof body the bot couldn't parse: {e}"),
             );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))

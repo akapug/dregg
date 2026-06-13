@@ -68,6 +68,12 @@ pub fn register_revoke() -> CreateCommand {
         )
 }
 
+/// Register `/cap-peer` — show the bot's CapTP peer identity + held/exported tallies.
+pub fn register_peer() -> CreateCommand {
+    CreateCommand::new("cap-peer")
+        .description("Show the bot's CapTP peer identity and capability tallies")
+}
+
 // ─── Handlers ───────────────────────────────────────────────────────────────
 
 /// Handle `/cap-share`.
@@ -415,6 +421,48 @@ pub async fn handle_revoke(ctx: &Context, command: &CommandInteraction, state: &
                 .await;
         }
     }
+}
+
+/// Handle `/cap-peer` — the bot-as-capability-peer story: its federation root,
+/// its own cell id, the node it speaks to, and what it currently holds/exports.
+pub async fn handle_peer(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    defer_ephemeral(ctx, command).await;
+
+    let fed_id = hex::encode(state.captp.federation_id.0);
+    let bot_cell = state.captp.bot_cell_id.clone();
+    let node = state.captp.node_url.clone();
+
+    let held = state.captp.list_held(&state.db).await.map(|h| h.len()).unwrap_or(0);
+    let exports = state
+        .captp
+        .list_exports(&state.db)
+        .await
+        .map(|e| e.len())
+        .unwrap_or(0);
+    let handoffs = state
+        .captp
+        .list_handoffs(&state.db)
+        .await
+        .map(|h| h.len())
+        .unwrap_or(0);
+    let swiss = state.handoff_broker.lock().await.swiss_len();
+
+    let embed = embeds::dregg_embed("CapTP Peer")
+        .description(
+            "This bot is a first-class dregg capability peer. It exports sturdy refs, enlivens \
+             shared `dregg://` URIs, mints/redeems canonical handoff certificates, and routes \
+             through the live node — alongside node and sdk peers.",
+        )
+        .field("Federation Root", format!("`{}...`", truncate(&fed_id, 24)), false)
+        .field("Bot Cell", format!("`{}...`", truncate(&bot_cell, 24)), false)
+        .field("Node", format!("`{node}`"), false)
+        .field("Held (live refs)", held.to_string(), true)
+        .field("Exported", exports.to_string(), true)
+        .field("Local Handoffs", handoffs.to_string(), true)
+        .field("Live Swiss Entries", swiss.to_string(), true);
+    let _ = command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

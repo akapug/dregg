@@ -152,6 +152,24 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
         }
     };
 
+    // Pre-flight balance check so the user gets a clear "top up" message rather
+    // than a raw executor rejection. Best-effort: if the read fails we still try
+    // the transfer (the executor remains the authority).
+    if let Ok(balance) = state.devnet.get_balance(&sender_cell).await {
+        if balance < amount {
+            let embed = embeds::warning_embed(
+                "Insufficient Balance",
+                &format!(
+                    "You have **{balance} DEC** but tried to send **{amount} DEC**. Top up with `/faucet`."
+                ),
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    }
+
     // Derive sender's cclerk and submit a canonical signed turn.
     let cclerk = UserCipherclerk::derive(
         &state.config.bot_secret,
@@ -172,14 +190,31 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
                 .record_transaction(&sender_discord, &recipient_discord, amount, &tx_hash)
                 .await;
 
+            // Best-effort post-transfer balance for confirmation.
+            let remaining = state
+                .devnet
+                .get_balance(&sender_cell)
+                .await
+                .ok()
+                .map(|b| format!("{b} DEC"))
+                .unwrap_or_else(|| "—".to_string());
+
+            let receipt_link = format!(
+                "[view on explorer]({}/turn/{})",
+                state.devnet.explorer_base_url(),
+                tx_hash
+            );
+
             let embed = embeds::success_embed("Transfer Sent")
                 .field("To", format!("<@{recipient_id}>"), true)
                 .field("Amount", format!("{amount} DEC"), true)
+                .field("Your Balance", remaining, true)
                 .field(
                     "Tx Hash",
                     format!("`{}...`", &tx_hash[..16.min(tx_hash.len())]),
                     true,
-                );
+                )
+                .field("Receipt", receipt_link, false);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;

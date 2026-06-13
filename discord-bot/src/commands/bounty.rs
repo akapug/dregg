@@ -182,11 +182,15 @@ async fn handle_post(ctx: &Context, command: &CommandInteraction, state: &BotSta
     {
         Ok(r) if r.accepted => {
             record(state, command, "post", &cell.hex, "accepted").await;
-            embeds::success_embed("Bounty Posted")
-                .field("Title", title.clone(), true)
-                .field("Reward", format!("{reward} DEC"), true)
-                .field("Bounty", short_cell(&cell.hex), true)
-                .field("Turn", turn_field(r.turn_hash), false)
+            with_receipt(
+                embeds::success_embed("Bounty Posted")
+                    .field("Title", title.clone(), true)
+                    .field("Reward", format!("{reward} DEC"), true)
+                    .field("Bounty", short_cell(&cell.hex), true)
+                    .field("Turn", turn_field(r.turn_hash.clone()), false),
+                state,
+                r.turn_hash,
+            )
         }
         Ok(r) => rejected("Post Rejected", r.error),
         Err(e) => embeds::error_embed("Post Failed", &e.user_message("post the bounty")),
@@ -218,10 +222,14 @@ async fn handle_claim(ctx: &Context, command: &CommandInteraction, state: &BotSt
     {
         Ok(r) if r.accepted => {
             record(state, command, "claim", &cell.hex, "accepted").await;
-            embeds::success_embed("Bounty Claimed")
-                .field("Bounty", short_cell(&cell.hex), true)
-                .field("Claimant", short_cell(&claimant), true)
-                .field("Turn", turn_field(r.turn_hash), false)
+            with_receipt(
+                embeds::success_embed("Bounty Claimed")
+                    .field("Bounty", short_cell(&cell.hex), true)
+                    .field("Claimant", short_cell(&claimant), true)
+                    .field("Turn", turn_field(r.turn_hash.clone()), false),
+                state,
+                r.turn_hash,
+            )
         }
         Ok(r) => rejected("Claim Rejected", r.error),
         Err(e) => embeds::error_embed("Claim Failed", &e.user_message("claim the bounty")),
@@ -263,10 +271,14 @@ async fn handle_submit(ctx: &Context, command: &CommandInteraction, state: &BotS
     {
         Ok(r) if r.accepted => {
             record(state, command, "submit", &cell.hex, "accepted").await;
-            embeds::success_embed("Work Submitted")
-                .field("Bounty", short_cell(&cell.hex), true)
-                .field("Artifact", truncate(&artifact, 60), false)
-                .field("Turn", turn_field(r.turn_hash), false)
+            with_receipt(
+                embeds::success_embed("Work Submitted")
+                    .field("Bounty", short_cell(&cell.hex), true)
+                    .field("Artifact", truncate(&artifact, 60), false)
+                    .field("Turn", turn_field(r.turn_hash.clone()), false),
+                state,
+                r.turn_hash,
+            )
         }
         Ok(r) => rejected("Submission Rejected", r.error),
         Err(e) => embeds::error_embed("Submission Failed", &e.user_message("submit the work")),
@@ -295,9 +307,13 @@ async fn handle_payout(ctx: &Context, command: &CommandInteraction, state: &BotS
     {
         Ok(r) if r.accepted => {
             record(state, command, "payout", &cell.hex, "accepted").await;
-            embeds::success_embed("Bounty Paid")
-                .field("Bounty", short_cell(&cell.hex), true)
-                .field("Turn", turn_field(r.turn_hash), false)
+            with_receipt(
+                embeds::success_embed("Bounty Paid")
+                    .field("Bounty", short_cell(&cell.hex), true)
+                    .field("Turn", turn_field(r.turn_hash.clone()), false),
+                state,
+                r.turn_hash,
+            )
         }
         Ok(r) => rejected("Payout Rejected", r.error),
         Err(e) => embeds::error_embed("Payout Failed", &e.user_message("pay out the bounty")),
@@ -508,6 +524,22 @@ fn turn_field(turn_hash: Option<String>) -> String {
     turn_hash
         .map(|h| format!("`{h}`"))
         .unwrap_or_else(|| "`unknown`".to_string())
+}
+
+/// Append an explorer receipt link to an embed when a turn hash is available.
+fn with_receipt(embed: CreateEmbed, state: &BotState, turn_hash: Option<String>) -> CreateEmbed {
+    match turn_hash {
+        Some(hash) => embed.field(
+            "Receipt",
+            format!(
+                "[view on explorer]({}/turn/{})",
+                state.devnet.explorer_base_url(),
+                hash
+            ),
+            false,
+        ),
+        None => embed,
+    }
 }
 
 fn truncate(s: &str, n: usize) -> String {

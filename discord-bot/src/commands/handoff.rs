@@ -62,7 +62,48 @@ pub fn register_redeem() -> CreateCommand {
         )
 }
 
+/// Register `/handoff-status` — surface the live handoff broker state.
+pub fn register_status() -> CreateCommand {
+    CreateCommand::new("handoff-status")
+        .description("Show the bot's CapTP handoff broker state (swiss table, federation root)")
+}
+
 // ─── Handlers ───────────────────────────────────────────────────────────────
+
+/// Handle `/handoff-status` — the real broker surface a newcomer's onboarding
+/// flows through: how many live swiss entries are minted-and-unredeemed, and the
+/// soft-federation root those certificates validate against.
+pub async fn handle_status(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    defer_ephemeral(ctx, command).await;
+
+    let swiss = state.handoff_broker.lock().await.swiss_len();
+    let fed_id = hex::encode(state.federation_id_bytes);
+    let height = state.devnet.current_height().await.ok();
+
+    let embed = embeds::dregg_embed("Handoff Broker")
+        .description(
+            "The stranger-handoff path. `/handoff` mints a real signed \
+             `dregg_captp::handoff::HandoffCertificate` scoped to a newcomer; they redeem it with \
+             `/handoff-redeem`. The bot's soft-federation swiss table is the broker that the \
+             canonical `validate_handoff` checks the presentation against.",
+        )
+        .field("Soft-Federation Root", format!("`{}...`", short(&fed_id)), false)
+        .field("Live Swiss Entries", swiss.to_string(), true)
+        .field(
+            "Node Height (validity ref)",
+            height.map(|h| h.to_string()).unwrap_or_else(|| "unreachable".to_string()),
+            true,
+        )
+        .field(
+            "Onboarding",
+            "A newcomer needs a hosted `/cipherclerk create` identity to receive a certificate; \
+             the introducer must own the hosted cell being handed off.",
+            false,
+        );
+    let _ = command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await;
+}
 
 /// Handle `/handoff`.
 pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotState) {

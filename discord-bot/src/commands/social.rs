@@ -23,6 +23,12 @@ pub fn register_history() -> CreateCommand {
     CreateCommand::new("history").description("Show your transaction history")
 }
 
+/// Register the /activity command.
+pub fn register_activity() -> CreateCommand {
+    CreateCommand::new("activity")
+        .description("Show recent committed activity across the devnet")
+}
+
 /// Handle /faucet interaction.
 pub async fn handle_faucet(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     let user_id = command.user.id.get();
@@ -225,6 +231,69 @@ pub async fn handle_history(ctx: &Context, command: &CommandInteraction, state: 
         }
         Err(e) => {
             let embed = embeds::error_embed("History Error", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
+/// Handle /activity interaction — a public, read-only feed of recent
+/// committed turns from the live node (`/api/events`). This is the social
+/// "who's doing what on devnet" surface; it reads real node state, no local
+/// bookkeeping.
+pub async fn handle_activity(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    // Public — not ephemeral.
+    let _ = command
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()),
+        )
+        .await;
+
+    match state.devnet.get_recent_events(12, None).await {
+        Ok(events) if events.is_empty() => {
+            let embed = embeds::dregg_embed("Devnet Activity")
+                .description("No committed turns observed yet. Be the first — try `/faucet` or `/send`.");
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Ok(events) => {
+            let mut description = String::new();
+            for event in &events {
+                let who = event
+                    .cell_id
+                    .as_deref()
+                    .map(|c| format!("`{}...`", &c[..12.min(c.len())]))
+                    .unwrap_or_else(|| "—".to_string());
+                let turn = event
+                    .tx_hash
+                    .as_deref()
+                    .map(|h| format!(" `{}...`", &h[..10.min(h.len())]))
+                    .unwrap_or_default();
+                description.push_str(&format!(
+                    "**{}** — {} — {who}{turn}\n",
+                    event.event_type, event.summary,
+                ));
+            }
+            let embed = embeds::dregg_embed("Devnet Activity")
+                .description(description)
+                .field("Events", events.len().to_string(), true)
+                .field(
+                    "Source",
+                    "Live node `/api/events` (committed turns)",
+                    true,
+                );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed(
+                "Activity Unavailable",
+                &e.user_message("read the activity feed"),
+            );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
