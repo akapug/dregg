@@ -34,8 +34,8 @@ QEMU_AARCH64 := qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-
                 -m 2G -nographic
 QEMU_RISCV   := qemu-system-riscv64 -machine virt -m 2G -nographic
 
-.PHONY: all run run-m0 run-m1 run-m2 run-stark run-net run-riscv build-aarch64 build-riscv \
-        verify-isolation clean help
+.PHONY: all run run-m0 run-m1 run-m2 run-stark run-net run-assembly run-riscv \
+        build-aarch64 build-assembly build-riscv verify-isolation clean help
 
 help:
 	@echo "dregg Robigalia v0 seL4 image:"
@@ -46,6 +46,7 @@ help:
 	@echo "  make run-m2       — boot the rbg DirectoryCell PD (M2)"
 	@echo "  make run-stark    — boot the verifier-stark PD: real STARK on-device"
 	@echo "  make run-net      — boot the net-driver PD: probe a REAL virtio-net (M3 edge)"
+	@echo "  make run-assembly — boot the 5-PD FIRMAMENT (verifier+executor+persist+net+app)"
 	@echo "  make run-riscv    — boot M0 on qemu_virt_riscv64 (M5)"
 
 all: build-aarch64
@@ -57,6 +58,16 @@ build-aarch64:
 build-riscv:
 	cd $(PD_DIR) && SEL4_INCLUDE_DIRS=$(MICROKIT_SDK)/board/qemu_virt_riscv64/$(CONFIG)/include \
 		cargo build $(CARGO_FLAGS) --target $(RISCV_TARGET) -p dregg-m0-hello
+
+# M5 full: build the verifier-stark heart organ + the rbg DirectoryCell heart
+# for riscv64 (the same no_std PDs that boot M-STARK/M2 on aarch64; they are
+# arch-agnostic — sel4-microkit + blake3/serde only). Its own target dir
+# (target-riscv) so it never collides with the aarch64 `target/`.
+build-riscv-full:
+	cd $(PD_DIR) && SEL4_INCLUDE_DIRS=$(MICROKIT_SDK)/board/qemu_virt_riscv64/$(CONFIG)/include \
+		CARGO_TARGET_DIR=target-riscv \
+		cargo build $(CARGO_FLAGS) --target $(RISCV_TARGET) \
+			-p dregg-verifier-stark-pd -p dregg-rbg-dir
 
 # ── Link an image for one PD and boot it (aarch64) ──────────────────────────
 # $1 = PD elf basename (no ext), $2 = system file, $3 = pd-xml-name
@@ -99,6 +110,45 @@ run-net: build-aarch64
 		-netdev user,id=net0 \
 		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.31 \
 		-device loader,file=$(BUILD)/net-driver.img,addr=0x70000000,cpu-num=0 \
+		-serial mon:stdio
+
+# ── THE 5-PD FIRMAMENT ASSEMBLY (dregg.system) ──────────────────────────────
+# Wire the real PDs into ONE booting multi-PD seL4 image (docs/FIRMAMENT.md §2):
+#   verifier — dregg-verifier-stark-pd : a REAL BabyBear+BLAKE3+FRI STARK
+#              proved+verified on-device (the bankable verified-compute HEART
+#              ORGAN; anti-ghost teeth fire). Self-contains its proof — no Lean.
+#   executor — dregg-executor-stub-pd  : the HEART SEAT. Holds the executor's
+#              exact cap partition (turn_in R, commit_out RW; NO device/NIC cap)
+#              until the verified Lean execFullForestG cross-compiles (THE
+#              blocker, docs/SEL4-EMBEDDING.md §2). Writes the commit_out sentinel.
+#   persist  — dregg-persist-stub-pd   : the durable-store seat. Maps commit_out
+#              (R) ONLY and reads the executor's sentinel back — the cross-PD
+#              channel proven live. The storage-device cap lands HERE (§3).
+#   net      — dregg-net-driver-pd     : the EDGE. SOLE holder of the NIC cap +
+#              virtio-mmio + DMA paddr + IRQ 79; probes a REAL virtio-net device
+#              and brings the NIC UP (the n>1 end of the cap gradation, §3).
+#   app      — dregg-rbg-dir           : a houyhnhnm app-PD (rbg DirectoryCell:
+#              CAS + ACL + factory slot-caveat). Holds ONLY its own caps.
+# The cap partition IS the trust boundary ("capabilities all the way down").
+# QEMU carries the same -device virtio-net-device the net edge probes (slot 31).
+build-assembly: build-aarch64
+	cd $(PD_DIR) && cargo build $(CARGO_FLAGS) \
+		-p dregg-verifier-stark-pd -p dregg-executor-stub-pd \
+		-p dregg-persist-stub-pd -p dregg-net-driver-pd -p dregg-rbg-dir
+	mkdir -p $(BUILD)
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-verifier-stark-pd.elf $(BUILD)/
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-executor-stub-pd.elf  $(BUILD)/
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-persist-stub-pd.elf   $(BUILD)/
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-net-driver-pd.elf     $(BUILD)/
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-rbg-dir.elf           $(BUILD)/
+	$(MICROKIT) dregg.system --search-path $(BUILD) --board $(BOARD) --config $(CONFIG) -o $(BUILD)/dregg.img -r $(BUILD)/dregg.report.txt
+
+run-assembly: build-assembly
+	$(QEMU_AARCH64) \
+		-global virtio-mmio.force-legacy=false \
+		-netdev user,id=net0 \
+		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.31 \
+		-device loader,file=$(BUILD)/dregg.img,addr=0x70000000,cpu-num=0 \
 		-serial mon:stdio
 
 # ── M5: M0 on riscv64 ───────────────────────────────────────────────────────

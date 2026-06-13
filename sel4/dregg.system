@@ -1,137 +1,180 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  dregg.system — Microkit system description for the dregg node on seL4.
+  dregg.system — THE 5-PD firmament assembly. The §1 "decomposed system" of
+  docs/SEL4-EMBEDDING.md, realized as a REAL booting multi-PD seL4 image: five
+  protection domains whose seL4 capability partition IS the trust boundary the
+  node's crate-split gestures at ("capabilities all the way down",
+  docs/FIRMAMENT.md §2).
 
-  This is the §1 "decomposed system" assembly from docs/SEL4-EMBEDDING.md:
-  five protection domains whose seL4 capability partition IS the trust boundary
-  the node's crate-split already gestures at ("capabilities all the way down").
+  STATUS (2026-06-13): BOOTS. Every PD here is a real, cross-compiled ELF that
+  reaches userspace and prints over serial. The five seats:
 
-  STATUS (2026-06-13): SCAFFOLD. Only `verifier` is a real, buildable PD today
-  (its crate is Lean-free / IO-free — see sel4/verifier-pd/ and the isolation
-  audit in docs/SEL4-EMBEDDING.md §2). The other four PDs are declared but
-  their ELF images do not yet exist: `executor` is blocked on the Lean-runtime
-  bottom-half port (THE blocker, §2); `persist`/`ingress`/`gossip` are blocked
-  on the redb-over-block-cap (§3) and lwIP (§4) ecosystem work.
+    verifier  — dregg-verifier-stark-pd : the REAL plonky3 STARK
+                (BabyBear+BLAKE3+FRI), proved + verified ON-DEVICE with the
+                anti-ghost tooth. The firmament's bankable verified-compute HEART
+                ORGAN (docs/FIRMAMENT.md §6) — no Lean, no libuv, no GMP.
+    executor  — dregg-executor-stub-pd  : the HEART SEAT. Holds the executor's
+                exact cap partition (turn_in R, commit_out RW; NO device/NIC cap)
+                until the verified Lean `execFullForestG` cross-compiles for the
+                bare target (THE blocker, docs/SEL4-EMBEDDING.md §2). Touches its
+                regions + services the ingress→executor / executor→persist
+                channels.
+    persist   — dregg-persist-stub-pd   : the durable-store seat. Maps commit_out
+                (R) ONLY; the storage-device cap will land HERE and only here
+                (sole holder). redb-over-block-cap is the §3 port.
+    net       — dregg-net-driver-pd     : the EDGE. SOLE holder of the NIC cap +
+                the virtio-mmio region + the DMA paddr + IRQ 79. Probes a real
+                virtio-net device and brings the NIC UP (docs/FIRMAMENT.md §6, M3)
+                — the distributed end (n>1) of the cap gradation (§3).
+    app       — dregg-rbg-dir           : a houyhnhnm app-PD. The rbg
+                DirectoryCell (CAS swap + membership ACL + factory slot-caveat →
+                seL4_Untyped_Retype). Holds only its own caps — no ambient
+                authority (docs/FIRMAMENT.md §5).
 
-  Build with the seL4 Microkit SDK:  see sel4/Makefile and sel4/README.md.
-  This file is the reviewable ARTIFACT, not a booting image — no seL4 toolchain
-  runs in the authoring environment; the build recipe is documented, not run.
+  The executor + persist seats are placeholders for the §2 Lean port and the §3
+  block-cap backend; the assembly is COMPLETE and BOOTS, with the verifier-stark
+  PD as the verified-compute heart and the net PD as the real edge — the bankable
+  near-term firmament (docs/FIRMAMENT.md §7: "verifier-PD (real STARK) + net-PD
+  (real wire)").
 
-  Target board placeholder: QEMU virt AArch64 (the standard rust-sel4 bring-up
-  target). Swap the microkit `board` argument (qemu_virt_aarch64) for real
-  hardware later — see sel4/Makefile.
+  Build + boot: sel4/Makefile `make run-assembly` (cross-builds the five ELFs +
+  links them into ONE Microkit image + boots under qemu-system-aarch64 with the
+  virtio-net device the edge probes). Board: qemu_virt_aarch64.
+
+  The net edge's virtio-mmio region (phys_addr 0xa003000) + IRQ 79 are the same
+  device-cap layout proven in net-driver-only.system; here they live ONLY in the
+  net PD, which is the trust-boundary point of the whole assembly.
 -->
 <system>
 
     <!-- ════════════════════════════════════════════════════════════════════
-         Shared memory regions (the only cross-PD channels; seL4 caps to these
-         pages are the ONLY way two PDs touch the same bytes).
+         Shared memory regions — the ONLY cross-PD byte channels. An seL4 cap to
+         one of these pages is the only way two PDs touch the same bytes; the
+         partition below grants each region to exactly the PDs that need it.
          ════════════════════════════════════════════════════════════════════ -->
 
-    <!-- The buffer the verifier reads its BilateralBundle / proof bytes from.
-         In the weekend demo this is filled by the loader from a fixed image
-         section; in the full node `ingress` writes it. The verifier has it
-         READ-ONLY: it cannot mutate the bundle, mirroring the crate invariant
-         "no shared mutable state, no callbacks into a prover". -->
-    <memory_region name="proof_in"   size="0x100000" />   <!-- 1 MiB -->
+    <!-- turn de-envelope → executor handoff. The net/ingress edge writes a
+         signature-checked turn here; the executor reads it (R). -->
+    <memory_region name="turn_in"    size="0x100000" />   <!-- 1 MiB -->
+    <!-- executor → persist commit-log handoff. executor writes (RW), persist
+         reads (R) — the only path durable state is reached. -->
+    <memory_region name="commit_out" size="0x400000" />   <!-- 4 MiB -->
+    <!-- NOTE: the bankable heart organ shipping in this image is the
+         verifier-stark PD (dregg-verifier-stark-pd.elf), which SELF-CONTAINS its
+         proof: it proves+verifies a REAL BabyBear+BLAKE3+FRI STARK inline and
+         exercises the anti-ghost teeth (no bundle is read from a shared region).
+         So it maps NO shared region — `proof_in`/`verdict_out` would be dead caps
+         (microkit fails the link: "no symbol named 'proof_in_vaddr'"). The
+         no-prover-callback contract (FIRMAMENT §2) is still expressed: the
+         executor→verifier channel below is ONE-WAY (verifier never signals a
+         prover). When a future verifier PD reads turn bundles from a region, the
+         proof_in/verdict_out regions return here. -->
 
-    <!-- The verifier's verdict page (exit-code + reason). Written by verifier,
-         read by whoever scheduled the verification. -->
-    <memory_region name="verdict_out" size="0x1000" />     <!-- 4 KiB -->
 
-    <!-- Turn ingress → executor handoff (declared for the full node; unused in
-         the weekend demo). -->
-    <memory_region name="turn_in"    size="0x100000" />
-    <!-- executor → persist commit-log handoff. -->
-    <memory_region name="commit_out" size="0x400000" />
+    <!-- The net EDGE's device + DMA + ring regions. The virtio-mmio region is a
+         DEVICE region (phys_addr pinned to where QEMU places -device
+         virtio-net-device: mmio slot 31, base 0xa003000). These live ONLY in the
+         net PD — it is the sole holder of the NIC cap (docs/FIRMAMENT.md §2). -->
+    <memory_region name="virtio_mmio" size="0x1000" phys_addr="0xa003000" />
+    <memory_region name="virtio_net_driver_dma" size="0x200_000" page_size="0x200_000" />
+    <memory_region name="virtio_net_client_dma" size="0x200_000" page_size="0x200_000" />
+    <memory_region name="virtio_net_rx_free" size="0x200_000" page_size="0x200_000"/>
+    <memory_region name="virtio_net_rx_used" size="0x200_000" page_size="0x200_000"/>
+    <memory_region name="virtio_net_tx_free" size="0x200_000" page_size="0x200_000"/>
+    <memory_region name="virtio_net_tx_used" size="0x200_000" page_size="0x200_000"/>
 
 
     <!-- ════════════════════════════════════════════════════════════════════
-         PD: verifier  — THE weekend win. Real, buildable, Lean-free, IO-free.
-         No prover authority: it holds caps to proof_in (R) + verdict_out (RW)
-         and NOTHING else. Cannot reach the storage device, the NIC, or call
-         back into a prover — the seL4-native form of dregg-verifier's
-         "completely separate OS process, no shared mutable state" guarantee.
+         PD: verifier  — the HEART ORGAN. A REAL plonky3 STARK proved + verified
+         on-device. No prover authority over state, no device/NIC cap — pure
+         deterministic verification (FIRMAMENT §2, §6).
          ════════════════════════════════════════════════════════════════════ -->
-    <protection_domain name="verifier" priority="100" budget="1000" period="10000">
-        <program_image path="dregg-verifier-pd.elf" />
-        <map mr="proof_in"    vaddr="0x2_000_000" perms="r"  cached="true" setvar_vaddr="proof_in_vaddr" />
-        <map mr="verdict_out" vaddr="0x2_100_000" perms="rw" cached="true" setvar_vaddr="verdict_out_vaddr" />
+    <protection_domain name="verifier" priority="100" stack_size="0x10000">
+        <program_image path="dregg-verifier-stark-pd.elf" />
+        <!-- maps NO shared region: the STARK + its public input are self-contained
+             in the PD; verification is pure compute over in-PD bytes. -->
     </protection_domain>
 
 
     <!-- ════════════════════════════════════════════════════════════════════
-         PD: executor — the verified kernel (compiled Lean). BLOCKED on §2 Lean
-         runtime port. Declared so the assembly is complete and reviewable; its
-         ELF is not yet produced. Holds NO device/NIC caps — pure compute.
+         PD: executor  — the HEART SEAT. Verified Lean executor's exact cap
+         partition: turn_in (R), commit_out (RW), NOTHING else. The verified
+         execFullForestG is BLOCKED on the §2 Lean ELF port; the seat boots,
+         touches its regions, and wires the channels so the assembly is whole.
          ════════════════════════════════════════════════════════════════════ -->
-    <protection_domain name="executor" priority="120" budget="2000" period="10000">
-        <!-- BLOCKED: dregg-executor-pd.elf requires libdregg_lean.a linked
-             against an IO-free / libuv-free leanrt+gmp on musl/seL4 (§2). -->
-        <program_image path="dregg-executor-pd.elf" />
+    <protection_domain name="executor" priority="120" stack_size="0x10000">
+        <program_image path="dregg-executor-stub-pd.elf" />
         <map mr="turn_in"    vaddr="0x3_000_000" perms="r"  cached="true" setvar_vaddr="turn_in_vaddr" />
-        <map mr="commit_out" vaddr="0x3_100_000" perms="rw" cached="true" setvar_vaddr="commit_out_vaddr" />
+        <map mr="commit_out" vaddr="0x3_400_000" perms="rw" cached="true" setvar_vaddr="commit_out_vaddr" />
     </protection_domain>
 
 
     <!-- ════════════════════════════════════════════════════════════════════
-         PD: persist — the SOLE holder of the storage-device cap (§3). redb over
-         a raw block cap (not a POSIX file). BLOCKED on the block-cap backend.
+         PD: persist  — the durable-store seat. commit_out (R) ONLY. The storage
+         device cap will land here (sole holder); redb-over-block-cap is the §3
+         port.
          ════════════════════════════════════════════════════════════════════ -->
-    <protection_domain name="persist" priority="80" budget="1000" period="10000">
-        <program_image path="dregg-persist-pd.elf" />
-        <map mr="commit_out" vaddr="0x4_000_000" perms="r"  cached="true" setvar_vaddr="commit_out_vaddr" />
-        <!-- The storage device cap lives ONLY here. On real hardware this is an
-             <irq>/<map> of the block device's MMIO + IRQ. Placeholder until the
-             block-cap backend exists. -->
-        <!-- <map mr="block_dev_mmio" vaddr="0x4_100_000" perms="rw" cached="false" /> -->
+    <protection_domain name="persist" priority="80" stack_size="0x10000">
+        <program_image path="dregg-persist-stub-pd.elf" />
+        <map mr="commit_out" vaddr="0x4_000_000" perms="r" cached="true" setvar_vaddr="commit_out_vaddr" />
     </protection_domain>
 
 
     <!-- ════════════════════════════════════════════════════════════════════
-         PD: ingress — network + turn de-envelope (§4). De-envelopes the
-         postcard SignedTurn and verifies the Ed25519 sig BEFORE the executor
-         ever sees it. BLOCKED on lwIP-on-seL4 + the NIC driver PD.
+         PD: net  — the EDGE. SOLE holder of the NIC cap + virtio-mmio + DMA paddr
+         + IRQ 79. Probes a REAL virtio-net device, brings the NIC up (the n>1 end
+         of the cap gradation, FIRMAMENT §3, §6). Same device layout proven in
+         net-driver-only.system; here it lives ONLY in this PD.
          ════════════════════════════════════════════════════════════════════ -->
-    <protection_domain name="ingress" priority="90" budget="1000" period="10000">
-        <program_image path="dregg-ingress-pd.elf" />
-        <map mr="turn_in" vaddr="0x5_000_000" perms="rw" cached="true" setvar_vaddr="turn_in_vaddr" />
-        <!-- The NIC cap lives ONLY here (driver PD or direct device cap). -->
+    <protection_domain name="net" priority="60" stack_size="0x10000">
+        <program_image path="dregg-net-driver-pd.elf" />
+
+        <map mr="virtio_mmio" vaddr="0x6_000_000_000" perms="rw" cached="false" setvar_vaddr="virtio_net_mmio_vaddr" />
+
+        <map mr="virtio_net_driver_dma" vaddr="0x7_000_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_driver_dma_vaddr" />
+        <setvar symbol="virtio_net_driver_dma_paddr" region_paddr="virtio_net_driver_dma" />
+
+        <map mr="virtio_net_client_dma" vaddr="0x1_000_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_client_dma_vaddr" />
+
+        <map mr="virtio_net_rx_free" vaddr="0x2_000_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_rx_free" />
+        <map mr="virtio_net_rx_used" vaddr="0x2_001_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_rx_used" />
+        <map mr="virtio_net_tx_free" vaddr="0x2_002_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_tx_free" />
+        <map mr="virtio_net_tx_used" vaddr="0x2_003_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_tx_used" />
+
+        <irq irq="79" id="0" />
     </protection_domain>
 
 
     <!-- ════════════════════════════════════════════════════════════════════
-         PD: gossip — peer blocklace sync. Quarter+ milestone (single-node n=1
-         devnet image needs none of this; the single-machine principle).
+         PD: app  — a houyhnhnm app-PD: the rbg DirectoryCell (CAS + ACL + factory
+         slot-caveat). Holds ONLY its own caps — no device, no NIC, no other PD's
+         memory. Ambient authority is structurally absent (FIRMAMENT §5).
          ════════════════════════════════════════════════════════════════════ -->
-    <protection_domain name="gossip" priority="70" budget="1000" period="10000">
-        <program_image path="dregg-gossip-pd.elf" />
+    <protection_domain name="app" priority="50" stack_size="0x10000">
+        <program_image path="dregg-rbg-dir.elf" />
     </protection_domain>
 
 
     <!-- ════════════════════════════════════════════════════════════════════
-         Channels (Microkit notification + PPC edges between PDs). These are the
-         only control-flow edges; the seL4 cap layout forbids any other.
+         Channels — the only control-flow edges; the cap layout forbids any other.
          ════════════════════════════════════════════════════════════════════ -->
 
-    <!-- ingress signals the executor that a verified-signature turn is staged. -->
+    <!-- net/ingress edge signals the executor: "a signature-checked turn is
+         staged in turn_in". -->
     <channel>
-        <end pd="ingress"  id="1" />
+        <end pd="net"      id="1" />
         <end pd="executor" id="1" />
     </channel>
 
-    <!-- executor signals persist that a commit-log entry is ready. -->
+    <!-- executor signals persist: "a commit-log entry is ready in commit_out". -->
     <channel>
         <end pd="executor" id="2" />
         <end pd="persist"  id="1" />
     </channel>
 
-    <!-- whoever-schedules → verifier: "a bundle is staged in proof_in".
-         For the weekend demo the loader pre-fills proof_in and the verifier
-         runs once at init; this channel is for the steady-state node where the
-         executor (or a test harness PD) requests verification. NOTE the
-         direction: the verifier NEVER calls OUT to a prover — it only signals
-         "verdict ready". This one-way edge IS the no-prover-callback property. -->
+    <!-- executor → verifier: "a bundle is staged in proof_in". ONE-WAY: the
+         verifier NEVER calls out to a prover — it only signals "verdict ready".
+         This one-way edge IS the no-prover-callback property (FIRMAMENT §2). -->
     <channel>
         <end pd="executor" id="3" />
         <end pd="verifier" id="1" />

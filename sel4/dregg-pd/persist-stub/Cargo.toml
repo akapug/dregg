@@ -1,0 +1,24 @@
+# persist-stub — the durable-store PD seat in the 5-PD firmament assembly
+# (../../dregg.system). The real persist-PD is the SOLE holder of the
+# storage-device cap and backs `redb` over a raw block cap (docs/SEL4-EMBEDDING.md
+# §3, docs/FIRMAMENT.md §2) with the snapshot⊕overlay + root tooth
+# (persist/src/snapshot.rs). That backend is the §3 block-cap ecosystem work.
+#
+# This placeholder occupies the persist seat so the assembly boots as a real
+# multi-PD image: it maps `commit_out` (R) — the executor→persist commit-log
+# handoff — and NOTHING else (no block-device cap yet), services the
+# executor→persist notification channel, and prints its partition. It is the
+# only PD positioned to ever touch the disk; the device cap will land HERE.
+
+[package]
+name = "dregg-persist-stub-pd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-persist-stub-pd"
+path = "src/main.rs"
+
+[dependencies]
+sel4-microkit = { workspace = true, features = ["alloc"] }

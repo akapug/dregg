@@ -1,0 +1,28 @@
+# executor-stub — the firmament HEART seat, held by a minimal placeholder PD
+# until the verified Lean executor (`execFullForestG`) can be cross-compiled for
+# the bare aarch64-sel4-microkit target (THE blocker: the Lean-runtime
+# bottom-half ELF recompile + libuv excision + musl host — docs/SEL4-EMBEDDING.md
+# §2, docs/FIRMAMENT.md §6).
+#
+# In the 5-PD assembly (../../dregg.system) this PD occupies the executor seat so
+# the assembly is COMPLETE and BOOTS as a real multi-PD image: it maps the
+# `turn_in` (R) and `commit_out` (RW) shared regions exactly as the real executor
+# will, services the ingress→executor and executor→persist notification channels,
+# and prints its capability partition over serial. It performs no verified
+# compute — the verifier-stark PD is the bankable heart organ until the Lean port
+# lands (the firmament has a heart when EITHER the executor-PD boots OR the
+# verifier-PD runs a real STARK; this assembly ships the latter, with the
+# executor SEAT held and wired).
+
+[package]
+name = "dregg-executor-stub-pd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-executor-stub-pd"
+path = "src/main.rs"
+
+[dependencies]
+sel4-microkit = { workspace = true, features = ["alloc"] }
