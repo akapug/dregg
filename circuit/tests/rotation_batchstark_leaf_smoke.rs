@@ -69,17 +69,19 @@ fn producer_cell(balance: i64, nonce: u64) -> Cell {
 
 /// THE SMOKE FOLD: a real rotated transfer leaf wrapped as a NativeBatchStark recursion leaf.
 ///
-/// `#[ignore]`: the two TYPE walls of the prior pass are crossed (the native-batch leaf-wrap
-/// compiles, runs, builds the in-circuit verifier, and PASSES FRI MMCS verification), but a
-/// REMAINING SEMANTIC wall panics inside `prove_all_tables` — the recursion verifier circuit's
-/// own `WitnessChecks` LogUp bus is unbalanced (net +779, config/arity-INDEPENDENT) when the
-/// wrapped leaf is a multi-table native batch carrying BOTH per-instance public values AND
-/// cross-table global LogUp lookups. Ignored (not deleted) so it stays compiled as the exact
-/// reproduction; run with `--ignored` to reproduce the wall. Remove `#[ignore]` + assert green
-/// when the fork closes the foreign-multi-table-LogUp-leaf accounting.
+/// GREEN (2026-06-13): a real rotated 3-instance multi-table LogUp descriptor leaf (main w=331 /
+/// 38 PV / 50 global lookups · chip w=364 / 2 global · byte w=2 / 1 global) now folds as a
+/// `RecursionInput::NativeBatchStark` leaf AND the wrapped root self-verifies in-circuit. All
+/// three walls of the C3 leaf-wrap are crossed: (1) the proof-type wall (bare
+/// `p3_batch_stark::BatchProof` + caller `&[Ir2Air]` ride the native-batch entry), (2) the
+/// config wall (inner proof + verifier + output at ONE FRI engine, FRI MMCS verifies
+/// in-circuit), and (3) the foreign-multi-table-LogUp-leaf `WitnessChecks` accounting wall —
+/// the recursion verifier circuit's own LogUp bus was unbalanced (net +779 on the all-zero
+/// tuple) because a descriptor public input asserted equal to the zero constant gave
+/// `WitnessId(0)` TWO bus creators (the zero `Const` AND a `Public` op). The fork now demotes
+/// such a duplicate `Public` to a bus READER (see `PreprocessedColumns::dup_public_outputs`),
+/// restoring the one-creator-per-witness invariant.
 #[test]
-#[ignore = "C3 native-batch leaf-wrap: in-circuit WitnessChecks imbalance (+779) for a \
-            multi-table global-LogUp leaf; type walls crossed, FRI verifies; see fn doc"]
 fn rotated_transfer_leaf_folds_as_batchstark() {
     let desc =
         parse_vm_descriptor2(rotated_transfer_json()).expect("rotated transfer descriptor parses");
@@ -142,39 +144,24 @@ fn rotated_transfer_leaf_folds_as_batchstark() {
 
     // -- THE SMOKE FOLD: wrap the multi-table native batch proof as a NativeBatchStark leaf. --
     //
-    // PROGRESS (2026-06-13): the prior pass's TWO walls are CROSSED —
-    //   1. proof-type: the bare `p3_batch_stark::BatchProof` + caller `&[Ir2Air]` ride the NEW
+    // GREEN (2026-06-13): all three walls are crossed —
+    //   1. proof-type: the bare `p3_batch_stark::BatchProof` + caller `&[Ir2Air]` ride the
     //      `RecursionInput::NativeBatchStark` variant (allocating verifier inputs straight from
     //      the bare batch via `BatchStarkVerifierInputsBuilder::allocate`, running the generic
     //      `verify_batch_circuit`) — NOT the `CircuitTablesAir` reconstruction;
     //   2. config: inner proof + in-circuit verifier + output all run at ONE FRI engine (the
-    //      leaf-wrap config), so the FRI Merkle path lengths match (the "siblings vs op_ids"
-    //      wall is gone, and FRI MMCS verification PASSES in-circuit).
-    //
-    // REMAINING WALL (precise, config/arity-INDEPENDENT — identical net +779 under FRI arity 1
-    // and 3): the recursion verifier circuit's own `WitnessChecks` LogUp bus is UNBALANCED
-    // (net +779 on the all-zero tuple) when the wrapped leaf is a multi-table native batch with
-    // BOTH per-instance public values AND cross-table global LogUp lookups (transfer = 3
-    // instances: main w=331/38 PV/50 global lookups, chip w=364/2 global, byte w=2/1 global).
-    // This is the blanket `RecursiveAir::eval_folded_circuit` + `verify_batch_circuit` path
-    // applied to a FOREIGN multi-table LogUp STARK as a recursion leaf — validated in the fork
-    // only for recursion-circuit-shaped AIRs (Const/Public/Alu), not yet for this. The panic is
-    // `p3_lookup::debug_util::check_lookups` inside `prove_all_tables` (the verifier circuit's
-    // OWN witness graph), reached from `build_and_prove_next_layer`.
-    //
-    // When the fork closes the global-lookup-leaf accounting, flip this to assert the leaf
-    // folds + the wrapped root self-verifies (the two commented lines below are the green form).
-    let folded = dregg_circuit::ivc_turn_chain::prove_descriptor_leaf_rotated_with_config(
+    //      leaf-wrap config), so the FRI Merkle path lengths match and FRI MMCS verification
+    //      PASSES in-circuit;
+    //   3. WitnessChecks accounting: the recursion verifier circuit's own LogUp bus now balances
+    //      for a FOREIGN multi-table LogUp leaf. The earlier net-+779 imbalance on the all-zero
+    //      tuple was a descriptor public input asserted equal to the zero constant, which gave
+    //      `WitnessId(0)` two bus creators (the zero `Const` + a `Public`). The fork now demotes
+    //      the duplicate `Public` to a bus reader (`PreprocessedColumns::dup_public_outputs`),
+    //      restoring one-creator-per-witness; upstream's debug `check_lookups` passes.
+    let wrapped = dregg_circuit::ivc_turn_chain::prove_descriptor_leaf_rotated_with_config(
         &desc, &proof, &dpis, &wrap_config,
-    );
-    match folded {
-        Ok(wrapped) => {
-            verify_recursive_batch_proof_with_config(&wrapped.0, &wrap_config)
-                .expect("the wrapped native-batch leaf root proof verifies in-circuit");
-            // GREEN: the global-lookup-leaf wall lifted. (If this branch runs, update the doc
-            // on `prove_descriptor_leaf_rotated` + delete the panic arms below.)
-        }
-        Err(e) => panic!("native-batch leaf-wrap returned Err (expected the in-circuit \
-                          WitnessChecks panic, not a clean Err): {e}"),
-    }
+    )
+    .expect("the rotated multi-table LogUp leaf folds as a NativeBatchStark recursion leaf");
+    verify_recursive_batch_proof_with_config(&wrapped.0, &wrap_config)
+        .expect("the wrapped native-batch leaf root proof verifies in-circuit");
 }
