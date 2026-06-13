@@ -53,6 +53,7 @@ namespace Dregg2.Circuit.RecursiveAggregation
 open Dregg2.Exec (RecChainedState recCexec recChainedSystem recTotal)
 open Dregg2.Execution (Run)
 open Dregg2.Distributed.HistoryAggregation
+open Dregg2.Circuit.StateCommit (compressInjective compressNInjective cellLeafInjective RestHashIffFrame)
 
 section Engine
 
@@ -221,7 +222,15 @@ the aggregate attests is consistent with the verified leaves. -/
 /-- **`attested_history_is_run`.** Given the executor-genuine chain (`StateChained` — the
 prover's witness that the steps are a real run, which the verifying leaves attest step-by-step), the
 whole attested history is a `Run recChainedSystem` from genesis to the folded endpoint. The light
-client inherits every run-level theorem of the verified record cell. -/
+client inherits every run-level theorem of the verified record cell.
+
+NOTE (the run vs conservation split): a full `Run recChainedSystem` is a relation on `RecChainedState`
+configs, so composing the steps requires the receipt LOG to chain (`s.post = s'.pre`), which the §8
+state commitment does NOT bind (it commits the kernel, not the log). The full `Run` therefore genuinely
+needs `StateChained`. CONSERVATION, by contrast, reads only the kernel — so it is derivable from the
+VERIFIED root without `StateChained`; that is `conserves_from_verification` below (the CRITICAL-3
+closure). The log being uncommitted is the exact, named residual: it blocks the full RUN, never
+conservation. -/
 theorem attested_history_is_run
     (g : RecChainedState) (steps : List ChainStep) (hch : StateChained g steps) :
     Run recChainedSystem g (lastStateOf g steps) :=
@@ -230,11 +239,56 @@ theorem attested_history_is_run
 /-- **`attested_history_conserves` (KEYSTONE).** Value is conserved across the WHOLE attested
 history: the ledger total at the folded endpoint equals the genesis total. A light client trusting the
 aggregate trusts a no-mint/no-burn history of arbitrary length, having re-executed nothing. Rides
-`HistoryAggregation.wellformed_history_conserves`. -/
+`HistoryAggregation.wellformed_history_conserves`.
+
+This form takes `StateChained` as a hypothesis (the legitimate producer-supplied path —
+`Argus/Aggregate.lean` DERIVES `StateChained` from the genuine producer run). The verification-derived
+form that needs NO such hypothesis is `conserves_from_verification` below. -/
 theorem attested_history_conserves
     (g : RecChainedState) (steps : List ChainStep) (hch : StateChained g steps) :
     recTotal (lastStateOf g steps).kernel = recTotal g.kernel :=
   wellformed_history_conserves g steps hch
+
+/-! ### CRITICAL-3 CLOSURE — conservation-over-history DERIVED from `verify agg.root`, no `StateChained`.
+
+The critique: `attested_history_conserves` takes `StateChained` (state continuity) as a SEPARATE
+prover-supplied hypothesis — exactly what a malicious prover controls — and the tool that could close
+it (`root_tooth_pins_state`) recovered only commitment-equality, not state-equality. We close it:
+the strengthened `HistoryAggregation.root_tooth_pins_kernel` recovers KERNEL-equality from the verified
+root tooth (under the standard Poseidon CR set + the preserved `AccountsWF` invariant), and
+`verified_history_conserves` rides that to conservation through `KernelChained` — so conservation
+follows from `verify agg.root` itself (which delivers the `ChainBound` tooth via `AggregateAttests`),
+plus the genesis pin + the non-cryptographic structural envelope `SeamStruct`. The `StateChained`
+hypothesis is GONE from the conservation headline. -/
+
+/-- **`conserves_from_verification` (THE CRITICAL-3 HEADLINE — conservation from `verify agg.root`).**
+A light client that checks ONLY `verify agg.root = true` (re-witnessing NOTHING) learns the WHOLE
+history conserves value — the ledger total at the folded endpoint equals the genesis total — with NO
+`StateChained` hypothesis. The verified root gives `AggregateAttests` (hence the `ChainBound` root
+tooth); under the standard Poseidon CR set + the genesis pin + the structural envelope `SeamStruct`
+(matched turns + the preserved `AccountsWF` invariant, both non-cryptographic, neither a
+state-continuity assertion), `verified_history_conserves` DERIVES kernel continuity from that tooth
+(`root_tooth_pins_kernel`) and rides it to conservation. This is the exact gap the critique flagged,
+closed: "trusting the aggregate trusts a no-mint/no-burn history" now follows from VERIFICATION, not
+from the prover's honesty about state continuity. (The receipt LOG — the one `RecChainedState`
+component the §8 root does not bind — blocks only the full `Run`, never conservation; named, not
+hidden.) -/
+theorem conserves_from_verification
+    (hCmb : compressInjective cmb) (hCompress : compressInjective compress)
+    (hCompressN : compressNInjective compressN) (hLeaf : cellLeafInjective CH)
+    (hRest : RestHashIffFrame RH)
+    (agg : Aggregate Proof) (g : RecChainedState) (steps : List ChainStep)
+    (es : EngineSound Proof verify CH RH cmb compress compressN agg g steps)
+    (hroot : verify agg.root = true)
+    (hgen : KernelGenesisPin g steps)
+    (hstruct : SeamStruct steps) :
+    recTotal (lastStateOf g steps).kernel = recTotal g.kernel := by
+  -- the verified root delivers the ordering tooth (ChainBound) — no re-witnessing.
+  have hatt := light_client_verifies_whole_history Proof verify CH RH cmb compress compressN
+    agg g steps es hroot
+  -- conservation follows from the VERIFIED tooth + genesis pin + structural envelope; no StateChained.
+  exact verified_history_conserves CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest
+    g steps hgen hatt.ordered hstruct
 
 end Engine
 
@@ -388,6 +442,8 @@ end AntiGhost
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.every_leaf_verifies_implies_executed
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.light_client_verifies_whole_history
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.attested_history_conserves
+-- the CRITICAL-3 closure: conservation-over-history DERIVED from `verify agg.root`, no StateChained:
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.conserves_from_verification
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.real_engine_sound
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.light_client_fires_on_real_chain
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.real_chain_first_turn_executed

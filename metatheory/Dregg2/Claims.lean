@@ -297,6 +297,9 @@ quorum-intersection (honest union-cardinality bound), and GST-liveness (from a
 #assert_namespace_axioms Dregg2.Crypto.NonMembership
 #assert_namespace_axioms Dregg2.Coordination
 #assert_namespace_axioms Dregg2.Hyperedge
+-- The macaroon↔kernel-cap convergence arrow (`caveatChainAuthority` shared narrowing,
+-- `chainGateG_implies_capAuthorityG` on a coherent node).
+#assert_namespace_axioms Dregg2.Authority.CaveatCapBridge
 
 /-! ## §21 — 4th/5th §8 discharges + BFT safety/liveness + cross-cell LTS + WP catalog.
 

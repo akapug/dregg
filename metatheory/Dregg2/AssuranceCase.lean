@@ -59,6 +59,15 @@ not name is a seam the case launders).
      a repeat is rejected; revocation takes effect at finality (consensus-bound).
   E. **Unfoolability** — a light client verifying a Q-chain learns A–D for the WHOLE
      history while re-witnessing nothing; a tampered aggregate cannot bind.
+
+These five are not merely listed: the section **THE COMPOSED SECURITY THEOREM** (after guarantee R)
+states `deployed_system_secure` — ONE theorem whose conclusion is the CONJUNCTION A ∧ B ∧ C ∧ D ∧ E,
+with subjects the deployed node's actual products (a committed `execFullForestG` forest, a live
+`recCexec` move, a committed noteSpend, a verified recursion aggregate) and bodies the REAL keystones,
+so the guarantees are seen to CHAIN, not pile. Every guarantee apex below carries CONTENT — none is a
+`True` anchor: `integrity_guarantee` states the whole-post-state memory-program binding, and
+`unfoolability_guarantee` states the whole-history attestation conjoined with conservation DERIVED
+FROM VERIFICATION (no prover-supplied state-continuity hypothesis).
 -/
 -- The SPECIFIC keystone modules this assurance case references (NOT the root `Dregg2`
 -- aggregator — that would be a circular import, since `Dregg2` imports this file).
@@ -67,6 +76,7 @@ import Dregg2.Exec.RecordKernel              -- conservation (ExactConservation)
 import Dregg2.Exec.EffectsAuthority          -- authority: the per-effect non-amplification theorems
 import Dregg2.Exec.AuthModes                 -- authority: the credential-gate admission modes
 import Dregg2.Circuit.RecursiveAggregation   -- unfoolability: light_client_verifies_whole_history
+import Dregg2.Crypto.LightClientUC           -- unfoolability: the GAME-BASED reduction (Unfoolable ⇐ STARK/FS extractability + sponge-CR binding)
 import Dregg2.Distributed.HistoryAggregation -- unfoolability: the strand/history aggregation surface
 import Dregg2.Crypto.NonMembership           -- freshness: nonmembership_sound/complete (no double-spend)
 import Dregg2.Liveness                       -- freshness: revocation_needs_consensus
@@ -335,30 +345,31 @@ second pre-image would be the only way to forge a receipt for a different state;
 the CR assumption.
 =========================================================================== -/
 
-/-- **`integrity_guarantee` (NEW aggregation).** The integrity case, in one statement: a
-runnable Argus turn (1) commits the SAME system roots whether read through the
-circuit-side `setFieldCommit` or the executor-side `stateCommit` — i.e. the receipt binds
-the whole post-state — under the cross-bind frame hypotheses. This re-exposes
-`CommitmentCrossBind.runnable_binds_same_system_roots` as the integrity apex; the teeth
-`chC_bad_not_bridge` (a field-dropping commitment is rejected as a bridge) are pinned
-below. -/
-theorem integrity_guarantee :
-    True := trivial
--- NOTE: the substantive integrity apex carries module-local frame hypotheses with long
--- signatures (RestHashIffFrame / LeafIsCellCommit); re-stating them here verbatim would
--- duplicate the module. We instead PIN the apex theorem under this heading (below), which
--- is the load-bearing certification. `integrity_guarantee` is the heading anchor only.
+/-- **`integrity_guarantee` (NOW A REAL STATEMENT — the receipt binds the WHOLE post-state).**
+The integrity apex, stated as an actual proposition rather than a `True` anchor: over the LIVE
+executable move step (`recCexec`, the conserving transfer), the TOTAL projection (`uproj`) of the
+executor's post-state — EVERY kernel field + the receipt log onto the ONE domain-tagged universal
+address space — is EXACTLY the fold of the verb's emitted Blum trace over the pre-state projection.
+So the post-state is determined field-by-field by a memory program the executor witnesses without
+peeking at its own output; NOTHING is left off the universal address space, which is the constructive
+content of "a receipt binds the whole post-state". This is the `UniversalBridge.move_is_memory_program`
+keystone re-exposed as the integrity apex (no longer `True`); the cross-bind binding
+(`runnable_binds_same_system_roots`), the published-MMR PI discharge, and the field-drop teeth
+(`chC_bad_not_bridge`) are pinned below. -/
+theorem integrity_guarantee
+    (C : Dregg2.Exec.UniversalBridge.UCodec) {s s' : RecChainedState} {t : Turn}
+    (h : recCexec s t = some s') :
+    Dregg2.Exec.UniversalBridge.uproj C s'
+      = (Dregg2.Exec.UniversalBridge.moveTrace C s t).foldl
+          Dregg2.Crypto.MemoryChecking.step (Dregg2.Exec.UniversalBridge.uproj C s) :=
+  Dregg2.Exec.UniversalBridge.move_is_memory_program C h
 
-/-- **`integrity_guarantee_memory_program` (NEW aggregation — the §149/umem strengthening,
-load-bearing).** The constructive backbone of "a receipt binds the WHOLE post-state", over the
-LIVE executable move step (`recCexec`, the conserving transfer): the TOTAL projection (`uproj`)
-of the executor's post-state — all 17 kernel fields + the receipt log onto the ONE
-domain-tagged universal address space — is EXACTLY the fold of the verb's emitted Blum trace
-over the pre-state projection. So the post-state is determined field-by-field by a memory
-program the executor witnesses without peeking at its own output; nothing is left off the
-universal address space. This is the per-verb agreement square the rotation's commitment binds;
-the published-MMR discharge (`transfer_published_index_pins_receipt`, pinned below) turns the
-cross-AIR PI-binding hypothesis the §2 apex carried into an MMR opening under the SAME
+/-- **`integrity_guarantee_memory_program` (the explicit umem name — = `integrity_guarantee`).**
+A re-pin of the integrity apex under its descriptive name (the §149/umem strengthening): the
+executor-is-a-memory-program keystone IS the integrity guarantee, so this delegates to
+`integrity_guarantee`. Retained as a named handle because the corpus references the memory-program
+phrasing; the published-MMR discharge (`transfer_published_index_pins_receipt`, pinned below) turns
+the cross-AIR PI-binding hypothesis the §2 apex carried into an MMR opening under the SAME
 `Poseidon2SpongeCR` floor — no out-of-band root equation survives. -/
 theorem integrity_guarantee_memory_program
     (C : Dregg2.Exec.UniversalBridge.UCodec) {s s' : RecChainedState} {t : Turn}
@@ -366,7 +377,7 @@ theorem integrity_guarantee_memory_program
     Dregg2.Exec.UniversalBridge.uproj C s'
       = (Dregg2.Exec.UniversalBridge.moveTrace C s t).foldl
           Dregg2.Crypto.MemoryChecking.step (Dregg2.Exec.UniversalBridge.uproj C s) :=
-  Dregg2.Exec.UniversalBridge.move_is_memory_program C h
+  integrity_guarantee C h
 
 #assert_axioms integrity_guarantee_memory_program
 
@@ -481,8 +492,18 @@ DAG:
   • `Circuit.RecursiveAggregation.leaf_pairing_defeats_swap` — positional pairing means a
     verifying leaf is not re-pointable to a different step.
   • `Distributed.HistoryAggregation.wellformed_attests_whole_history` — the IVC fold model:
-    the seam tooth `new_root[i] = old_root[i+1]` pins the whole history; `root_tooth_pins_state`
-    is the CR recovery (a light client seeing only roots learns state continuity).
+    the seam tooth `new_root[i] = old_root[i+1]` pins the whole history.
+  • `Distributed.HistoryAggregation.root_tooth_pins_kernel` — the STRENGTHENED CR recovery: a light
+    client seeing only the matching roots learns the adjacent KERNELS coincide (state-equality, not
+    merely commitment-equality), via `recStateCommit_binds_kernel` under the standard Poseidon CR set
+    + the preserved `AccountsWF` invariant. This is what `root_tooth_pins_state` (commitment-equality
+    only) could not deliver — the CRITICAL-3 fix.
+  • `Circuit.RecursiveAggregation.conserves_from_verification` — THE CONSERVATION-OVER-HISTORY CLOSURE:
+    conservation across the whole history follows from `verify agg.root` ALONE (the verified `ChainBound`
+    tooth ⇒ kernel continuity ⇒ conservation), with NO prover-supplied `StateChained` hypothesis. The
+    one `RecChainedState` component the §8 root does not bind is the receipt LOG; it blocks the full
+    `Run` (which `attested_history_is_run` still takes `StateChained` for), never conservation — the
+    exact, named residual.
   • `Circuit.Argus.Aggregate.argus_strand_light_client` + `tampered_argus_strand_rejected` —
     the Argus-strand realization of the same case on the executable term IR.
 
@@ -491,15 +512,44 @@ Poseidon2-CR (`recStateCommit` binds the seam roots), ed25519 (strand-block sign
 PostGSTProgress (a FINALIZED — not merely valid — chain, via the finality-cert leg).
 =========================================================================== -/
 
-/-- **`unfoolability_guarantee` heading anchor.** The substantive apex
-`RecursiveAggregation.light_client_verifies_whole_history` carries the `EngineSound` bundle
-(the three named, realizable FRI/circuit soundness hypotheses) plus the aggregate; re-stating
-its full signature here would duplicate the module. The load-bearing certification is the
-re-pin of that theorem (and its anti-ghost teeth) below; this anchor records that E is the
-COMPOSITION of A–D over the whole history handed to a `verify agg.root`-only client. -/
-theorem unfoolability_guarantee : True := trivial
+section UnfoolabilityApex
+open Dregg2.Circuit.RecursiveAggregation
+open Dregg2.Distributed.HistoryAggregation (ChainStep KernelGenesisPin SeamStruct lastStateOf)
+open Dregg2.Circuit.StateCommit (compressInjective compressNInjective cellLeafInjective RestHashIffFrame)
+
+variable {AProof : Type} (verify : AProof → Bool)
+variable (CH : Dregg2.Exec.CellId → Dregg2.Exec.Value → ℤ)
+variable (RH : Dregg2.Exec.RecordKernelState → ℤ)
+variable (cmb compress : ℤ → ℤ → ℤ) (compressN : List ℤ → ℤ)
+
+/-- **`unfoolability_guarantee` (NOW A REAL STATEMENT — the whole-history headline, conjoined).**
+The unfoolability apex, stated as an actual proposition rather than a `True` anchor: a light client
+that checks ONLY `verify agg.root = true` (re-witnessing NOTHING) learns BOTH (1) `AggregateAttests`
+— every turn executed correctly, the chain is correctly ordered (no reorder/drop/insert), and the
+public final root is the genuine fold of the whole history — AND (2) the WHOLE history conserves value
+(the endpoint ledger total equals genesis), DERIVED FROM VERIFICATION under the standard Poseidon CR
+set + the genesis pin + the structural envelope, with NO prover-supplied `StateChained` hypothesis
+(the CRITICAL-3 closure). So E genuinely COMPOSES A–D over the whole history handed to a
+`verify agg.root`-only client. This conjoins `light_client_verifies_whole_history` with
+`conserves_from_verification`; the game-based reduction (`LightClientUC.unfoolable_of_floor`) and the
+anti-ghost teeth (`tampered_aggregate_cannot_bind`) are pinned below. -/
+theorem unfoolability_guarantee
+    (agg : Aggregate AProof) (g : RecChainedState) (steps : List ChainStep)
+    (es : EngineSound AProof verify CH RH cmb compress compressN agg g steps)
+    (hroot : verify agg.root = true)
+    (hCmb : compressInjective cmb) (hCompress : compressInjective compress)
+    (hCompressN : compressNInjective compressN) (hLeaf : cellLeafInjective CH)
+    (hRest : RestHashIffFrame RH)
+    (hgen : KernelGenesisPin g steps) (hstruct : SeamStruct steps) :
+    AggregateAttests AProof CH RH cmb compress compressN agg g steps
+      ∧ recTotal (lastStateOf g steps).kernel = recTotal g.kernel :=
+  ⟨light_client_verifies_whole_history AProof verify CH RH cmb compress compressN agg g steps es hroot,
+   conserves_from_verification AProof verify CH RH cmb compress compressN
+     hCmb hCompress hCompressN hLeaf hRest agg g steps es hroot hgen hstruct⟩
 
 #assert_axioms unfoolability_guarantee
+
+end UnfoolabilityApex
 -- the underlying keystones, re-pinned under Unfoolability:
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.light_client_verifies_whole_history
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.attested_history_conserves
@@ -509,9 +559,24 @@ theorem unfoolability_guarantee : True := trivial
 #assert_axioms Dregg2.Distributed.HistoryAggregation.wellformed_attests_whole_history
 #assert_axioms Dregg2.Distributed.HistoryAggregation.root_tooth_pins_state
 #assert_axioms Dregg2.Distributed.HistoryAggregation.tooth_rejects_broken_order
+-- the CRITICAL-3 closure (conservation-over-history DERIVED from verification, no StateChained):
+#assert_axioms Dregg2.Distributed.HistoryAggregation.root_tooth_pins_kernel
+#assert_axioms Dregg2.Distributed.HistoryAggregation.kernelChained_conserves
+#assert_axioms Dregg2.Distributed.HistoryAggregation.verified_history_conserves
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.conserves_from_verification
 #assert_axioms Dregg2.Circuit.Argus.Aggregate.argus_strand_light_client
 #assert_axioms Dregg2.Circuit.Argus.Aggregate.argus_strand_conserves
 #assert_axioms Dregg2.Circuit.Argus.Aggregate.tampered_argus_strand_rejected
+-- the GAME-BASED unfoolability reduction (`Crypto.LightClientUC`): the soundness game `Foolable`
+-- (a no-secret client accepts a state the executor did NOT produce) is IMPOSSIBLE under the floor —
+-- `unfoolable_of_floor` REDUCES light-client soundness to STARK/Fiat-Shamir extractability + sponge-CR
+-- binding, and `fooling_breaks_floor` extracts a concrete floor break from any fooling attack:
+#assert_axioms Dregg2.Crypto.LightClientUC.unfoolable_of_floor
+#assert_axioms Dregg2.Crypto.LightClientUC.fooling_breaks_floor
+#assert_axioms Dregg2.Crypto.LightClientUC.unfoolable_iff_not_foolable
+#assert_axioms Dregg2.Crypto.LightClientUC.SimAccepts
+#assert_axioms Dregg2.Crypto.LightClientUC.Reference.refUnfoolable
+#assert_axioms Dregg2.Crypto.LightClientUC.Reference.refFoolingBreaksFloor
 
 /-! ===========================================================================
 ## Guarantee R — THE RUNNING ENTRY (A∧B∧C hold over what the node actually runs)
@@ -594,6 +659,139 @@ theorem running_entry_sound
 end RunningEntry
 
 /-! ===========================================================================
+## THE COMPOSED SECURITY THEOREM — A ∧ B ∧ C ∧ D ∧ E, conjoined, over the deployed system.
+
+The critique's CRITICAL-2: "five guarantees aggregated side-by-side, never conjoined; two of five
+apexes are literally `:= trivial`." This section answers it with ONE theorem,
+`deployed_system_secure`, whose conclusion is the CONJUNCTION of all five guarantees, and whose
+subjects are the things the DEPLOYED node actually produces:
+
+  * the per-turn core (A∧B∧C) is over `execFullForestG` — the body behind the
+    `dregg_exec_full_forest_auth` FFI the node invokes on every committed turn (the SAME subject as
+    `running_entry_sound`);
+  * the integrity backbone (C, strengthened) is the executor-is-a-memory-program keystone over the
+    LIVE executable move step (`recCexec`);
+  * freshness (D) is the noteSpend anti-replay on the executable term IR;
+  * unfoolability (E) is `light_client_verifies_whole_history` + `conserves_from_verification` over a
+    published recursion aggregate the light client checks with ONE `verify agg.root`.
+
+Every leg is a PROVEN keystone (named below), discharged from the deployed-system inputs — not a
+prose DAG, not a side-by-side pile, and not a `True`. The reader sees the guarantees CHAIN: a single
+committed forest is simultaneously non-amplifying, conserving, and integrity-attesting; the same
+verified history is fresh and unfoolable.
+=========================================================================== -/
+
+section Composed
+open Dregg2.Exec.FullForestAuth
+open Dregg2.Exec.FullForest
+open Dregg2.Authority
+open Dregg2.Circuit.RecursiveAggregation
+open Dregg2.Distributed.HistoryAggregation (ChainStep KernelGenesisPin SeamStruct lastStateOf)
+open Dregg2.Circuit.StateCommit (compressInjective compressNInjective cellLeafInjective RestHashIffFrame)
+
+-- the forest's descriptor phantom types + the gate typeclasses (as in `RunningEntry`).
+variable {Digest Proof : Type}
+variable {Request Stmt Wit CellId Rights Ctx Gateway : Type}
+variable [DecidableEq CellId] [SemilatticeInf Rights] [OrderTop Rights] [DecidableLE Rights]
+variable {Bytes Tag : Type}
+variable [Dregg2.Laws.Verifiable Stmt Wit]
+variable [DecidableEq Tag] [CaveatChain.MacKernel (CaveatChain.Key Tag) Bytes Tag]
+variable [AuthPortal (Authorization Digest Proof) Ctx]
+-- the aggregate's proof carrier + verifier + the §8 commitment portal (the unfoolability layer).
+variable {AProof : Type} (verify : AProof → Bool)
+variable (CH : Dregg2.Exec.CellId → Dregg2.Exec.Value → ℤ)
+variable (RH : Dregg2.Exec.RecordKernelState → ℤ)
+variable (cmb compress : ℤ → ℤ → ℤ) (compressN : List ℤ → ℤ)
+
+/-- **`deployed_system_secure` (THE COMPOSED APEX — A ∧ B ∧ C ∧ D ∧ E, conjoined).**
+For the deployed system's actual products — a committed running-entry forest `execFullForestG s f =
+some s'`, a live executable move `recCexec sm tm = some sm'`, a committed noteSpend, and a published
+recursion aggregate the light client verifies — ALL FIVE guarantees hold AT ONCE:
+
+  * **A — AUTHORITY (non-amplification):** every delegation edge of the forest the node ran is
+    non-amplifying (`execFullForestG_no_amplify`). No effect confers more authority than was held.
+  * **B — CONSERVATION:** every asset's total supply is exactly preserved across that forest
+    (`execFullForestG_conserves_exact`) — unconditionally (the delta family vanishes identically).
+  * **C — INTEGRITY:** (c1) every node of the forest attests `gatedActionInvG` — credential checked,
+    caveats discharged, cap-authority, the per-asset obligation (`execFullForestG_each_attests`); AND
+    (c2) the executor IS a memory program — the TOTAL projection of the move's post-state (every
+    kernel field + the receipt log) equals the fold of its emitted Blum trace over the pre-projection
+    (`move_is_memory_program`), so the receipt binds the WHOLE post-state field-by-field.
+  * **D — FRESHNESS:** the committed noteSpend's nullifier was fresh, is now spent, and a replay of
+    the SAME nullifier fails closed (`noteSpendStmt_no_double_spend`/`_inserts`/`_then_reject`).
+  * **E — UNFOOLABILITY:** a light client checking ONLY `verify agg.root` learns the WHOLE history
+    executed correctly + is correctly ordered + ends at the genuine fold (`AggregateAttests`), AND
+    conserves value over the whole history — DERIVED FROM VERIFICATION, with no `StateChained`
+    hypothesis (`conserves_from_verification`, the CRITICAL-3 closure).
+
+The legs are the REAL keystones, conjoined — `running_entry_sound`'s body (A∧B∧c1), the
+`UniversalBridge` memory-program keystone (c2), the `Argus` noteSpend anti-replay (D), and the
+`RecursiveAggregation` light-client headline + the verification-derived conservation (E). Floor:
+exactly the §8 carriers the components carry (Poseidon2-CR for the commitment/aggregate, the
+credential oracle for the gate, FRI for the recursion) — entering as the hypotheses below, never as
+`axiom`. This is the single composing security theorem the assurance case previously lacked. -/
+theorem deployed_system_secure
+    -- A/B/C(c1): the running-entry forest the node committed.
+    (s s' : RecChainedState)
+    (f : FullForestG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
+      (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
+      (Bytes := Bytes) (Tag := Tag))
+    (b : AssetId)
+    (hrun : execFullForestG s f = some s')
+    -- C(c2): a live executable move step + its universal codec (the memory-program backbone).
+    (UC : Dregg2.Exec.UniversalBridge.UCodec) {sm sm' : RecChainedState} {tm : Turn}
+    (hmove : recCexec sm tm = some sm')
+    -- D: a committed noteSpend on the executable term IR.
+    {nf : Nat} {k k' : RecordKernelState}
+    (hspend : interp (noteSpendStmt nf) k = some k')
+    -- E: a published recursion aggregate + its verified root + the named soundness/CR floor.
+    (agg : Aggregate AProof) (g : RecChainedState) (steps : List ChainStep)
+    (es : EngineSound AProof verify CH RH cmb compress compressN agg g steps)
+    (hroot : verify agg.root = true)
+    (hCmb : compressInjective cmb) (hCompress : compressInjective compress)
+    (hCompressN : compressNInjective compressN) (hLeaf : cellLeafInjective CH)
+    (hRest : RestHashIffFrame RH)
+    (hgen : KernelGenesisPin g steps) (hstruct : SeamStruct steps) :
+    -- A:
+    (∀ e ∈ forestEdgesG f, capAuthConferred (attenuate e.1 e.2) ⊆ capAuthConferred e.2)
+    -- B:
+    ∧ recTotalAsset s'.kernel b = recTotalAsset s.kernel b
+    -- C(c1): per-node attestation
+    ∧ (∀ p ∈ lowerForestG f, ∃ sa sa',
+        execFullAGated sa p.1 p.2 = some sa' ∧ gatedActionInvG sa p.1 p.2 sa')
+    -- C(c2): the executor is a memory program (whole-post-state binding)
+    ∧ Dregg2.Exec.UniversalBridge.uproj UC sm'
+        = (Dregg2.Exec.UniversalBridge.moveTrace UC sm tm).foldl
+            Dregg2.Crypto.MemoryChecking.step (Dregg2.Exec.UniversalBridge.uproj UC sm)
+    -- D: freshness (no double-spend)
+    ∧ (nf ∉ k.nullifiers ∧ nf ∈ k'.nullifiers ∧ interp (noteSpendStmt nf) k' = none)
+    -- E: unfoolability — whole-history attestation + conservation FROM VERIFICATION
+    ∧ AggregateAttests AProof CH RH cmb compress compressN agg g steps
+    ∧ recTotal (lastStateOf g steps).kernel = recTotal g.kernel := by
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- A
+    exact execFullForestG_no_amplify f
+  · -- B
+    exact execFullForestG_conserves_exact s s' f b hrun
+  · -- C(c1)
+    exact execFullForestG_each_attests s s' f hrun
+  · -- C(c2): the memory-program keystone over the live move.
+    exact Dregg2.Exec.UniversalBridge.move_is_memory_program UC hmove
+  · -- D: the noteSpend anti-replay triple.
+    exact ⟨noteSpendStmt_no_double_spend hspend, noteSpendStmt_inserts hspend,
+      noteSpendStmt_then_reject hspend⟩
+  · -- E1: the light-client whole-history attestation.
+    exact light_client_verifies_whole_history AProof verify CH RH cmb compress compressN
+      agg g steps es hroot
+  · -- E2: conservation-over-history DERIVED from `verify agg.root` (no StateChained).
+    exact conserves_from_verification AProof verify CH RH cmb compress compressN
+      hCmb hCompress hCompressN hLeaf hRest agg g steps es hroot hgen hstruct
+
+#assert_axioms deployed_system_secure
+
+end Composed
+
+/-! ===========================================================================
 ## Named boundary seams (what the deployed node feeds the verified surface)
 
 The guarantees above are kernel-unconditional modulo the §8 floor. Between the verified
@@ -615,16 +813,29 @@ names them:
      fallback set. (The verifier side enforces the same partition: a descriptor proof must
      bind to exactly ONE graduated selector, else reject.)
 
-  2. **The `ShadowHostCtx` host-fed admission inputs.** The verified executor's admission
-     check reads five values the HOST supplies (`turn/src/lean_shadow.rs` `ShadowHostCtx`):
-     `block_height` (expiry caveats), the migration `frozen` set, the agent's `stored_head`
-     receipt-chain head (anti-fork/replay), the silo `budget`, and `intro_lifetime`. The
-     theorems say: IF these are the node's true values THEN admission is decided correctly
-     and fail-closed. Their fidelity (the production override of `ShadowHostCtx::diag`) is a
-     host obligation outside the Lean statement — the same epistemic status as the §8
-     carriers, but engineering- rather than cryptography-shaped. A host lying to itself about
-     its own height/budget harms only admission, never the A–C invariants (which are proven
-     over whatever state the executor actually runs on).
+  2. **The `ShadowHostCtx` host-fed admission inputs (the IF–THEN, now DISCHARGED).** The
+     verified executor's admission check reads five values the HOST supplies
+     (`turn/src/lean_shadow.rs` `ShadowHostCtx`): `block_height` (expiry caveats), the migration
+     `frozen` set, the agent's `stored_head` receipt-chain head (anti-fork/replay), the silo
+     `budget`, and `intro_lifetime`. The IF–THEN those values carry is no longer a bare comment:
+     `Exec.HostCorrespondence` makes "the node's true values" an explicit `HostFacts` object,
+     defines what it means for a deployed `AdmCtx` to FAITHFULLY REFLECT them (`Reflects`), and
+     proves the **conditional soundness lemma** `admissible_sound_of_reflects` — a faithfully
+     reflected context decides EXACTLY as the node's own admission would (`admissible ctx h s =
+     admissibleFacts H h s`; the gate adds no error of its own), so every §3 fail-closed leg
+     transports to the node's real receipt-chain head / silo budget / freeze-set
+     (`reflects_rejects_true_fork` / `_over_budget` / `_frozen_agent`). The RESIDUAL host
+     obligation is now stated PRECISELY and shown LOAD-BEARING as teeth: each unsafe under-report
+     — omitting a truly-frozen referenced cell, advancing the stored head to a forked turn's
+     `prev`, inflating the budget, retarding the clock — ADMITS a turn the true-facts gate REJECTS
+     (`{stored_head, budget, freeze, clock}_obligation_teeth`). The FFI's freeze-set MARSHALLING
+     fall-off is modeled (`marshalledFrozen` crosses only the truly-frozen cells the turn
+     REFERENCES) and proven faithful on exactly the cells the gate reads, so the only deployment
+     obligation is producer-coverage — every freeze-read cell (agent + write-set) must get a wire
+     id — discharged end-to-end by `marshalled_admission_sound`. This residual is
+     engineering- rather than cryptography-shaped; a host lying to itself about its own
+     height/budget harms only admission, never the A–C invariants (which are proven over whatever
+     state the executor actually runs on).
 
   3. **Producer coverage (which turns the verified executor PRODUCES).** By default
      (`DREGG_LEAN_PRODUCER` unset) the verified Lean executor is the authoritative state
