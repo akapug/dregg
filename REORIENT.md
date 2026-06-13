@@ -57,6 +57,17 @@ not durable across compaction; the log is the burn-down. Sweep it at every Conve
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
   `project-refinement-epoch.md` is the live resume file; MEMORY.md is the index.
 
+## ⚑ IN-FLIGHT LANES (2026-06-12 ~15:00, head 5e0558fdc — land each off its teed log)
+
+Three lanes running at note-time; their outputs survive any session boundary in /tmp +
+the working tree. Land by file set, spot-check seconds-scale, push, sweep HORIZONLOG:
+- caveat-operand staging → /tmp/caveatop-lane.log (circuit staged + RotationLayout; rotation pre-gate 2)
+- executor atoms (delegation_epoch + count-equal) → /tmp/execatoms-lane.log (cell/turn/ChannelGroup)
+- Argus R1/R2 Boundary arm → /tmp/argus-r1r2-lane.log (lean_descriptor_air.rs + differential)
+- preflight failure names → /tmp/preflight-names.log (rerun preflight after the PI fix 26b452772)
+Decided: NUM_REGISTERS=24 (cutover pre-gate 1 ✓). The work queue = HORIZONLOG.md.
+Cutover = docs/ROTATION-CUTOVER.md. Deploy next week, pug-handoff bar in HORIZONLOG.
+
 ## ⚑⚑ UNCOMMITTED LOCAL TREE STATE (2026-06-11 late — READ BEFORE ANY `git add`)
 
 The local working tree has THREE lanes' uncommitted work INTERMIXED — do NOT
