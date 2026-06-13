@@ -154,25 +154,22 @@ fn hash_sites() -> Vec<HashSite> {
         ],
         arity: 2,
     });
-    // ---- RevokeCapability: H2(old_cap_root, slot_hash) ----  (site 5)
-    v.push(HashSite {
-        inputs: [
-            Col(STATE_BEFORE_BASE + state::CAP_ROOT),
-            Col(PARAM_BASE + param::CAP_ENTRY),
-            Zero,
-            Zero,
-        ],
-        arity: 2,
-    });
+    // ---- RevokeCapability ----
+    // GRADUATED: the cap_root advance is NO LONGER a pinned H2(old, slot_hash)
+    // digest (the old generic site 5 is GONE). It is a GENUINE sorted-tree
+    // membership-open (held leaf authenticated against old_cap_root) + zero-fold
+    // DELETION (the ZERO/padding leaf folded up the SAME path to new_cap_root),
+    // emitted in a DEDICATED block of Poseidon2 sites (see [`rev`] +
+    // [`emit_revoke_hashes`]). Revoke adds no generic sites.
     // ---- AttenuateCapability ----
     // Phase B: the cap_root advance is NO LONGER a pinned 2-of-2 digest fold.
     // It is a GENUINE sorted-tree membership-open (held leaf authenticated
     // against old_cap_root) + leaf-update (granted leaf folded up the SAME path
     // to new_cap_root), emitted in a DEDICATED block of Poseidon2 sites laid out
     // after the generic sites (see [`attn`] + [`emit_attenuate_hashes`]). The
-    // generic site list therefore ends at RevokeCapability (site 5; the 23
-    // doomed-effect sites died in the verb lockstep); Attenuate adds no
-    // generic sites.
+    // generic site list therefore ends at GrantCapability (site 4); both
+    // Attenuate and Revoke add no generic sites (their cap_root moves ride
+    // dedicated chains).
 
     v
 }
@@ -181,7 +178,6 @@ fn hash_sites() -> Vec<HashSite> {
 mod hs {
     pub const STATE_COMMIT: usize = 3;
     pub const GRANT_CAP: usize = 4;
-    pub const REVOKE_CAP: usize = 5;
 }
 
 /// Number of hash sites (= number of Poseidon2 aux blocks per row).
@@ -408,13 +404,99 @@ pub mod attn {
     }
 }
 
+// ============================================================================
+// Cap REMOVAL — RevokeCapability (sel 24), the GRADUATED cap-crown leg.
+//
+// A verifying RevokeCapability proof IMPLIES the revoked capability WAS HELD
+// (its leaf is authenticated against `old_cap_root`) AND the post `cap_root` is
+// the GENUINE sorted-tree result of DELETING that slot — the position collapses
+// to the ZERO/padding leaf, folded up the SAME sibling path to `new_cap_root`.
+// This REPLACES the pre-graduation pinned-digest advance
+// (`new_cap_root == H2(old_cap_root, slot_hash)`), which proved nothing about
+// the c-list: a prover could fold ANY slot, member or not, into the root.
+//
+// Revoke is SIMPLER than Attenuate — TWO teeth, both gated by
+// `sel::REVOKE_CAPABILITY` (no submask, no AuthRequired lattice, no expiry: a
+// revoke deletes a slot, it does not narrow rights):
+//   1. MEMBERSHIP-OPEN: the held leaf
+//        H_many[slot_hash, target, held_auth_tag, held_mask_lo, held_mask_hi,
+//               held_expiry, breadstuff]
+//      is opened (depth-`CAP_TREE_DEPTH` `hash_fact` path) against
+//      `state_before.cap_root`. The held leaf is the REAL committed cap — a
+//      fabricated held leaf has no path to the seeded root. (Forgery: held.)
+//   2. ZERO-FOLD ROOT RECOMPUTE: the ZERO/padding leaf (`BabyBear::ZERO`, the
+//      empty-position marker `CanonicalCapTree::new` pads with) folded up the
+//      SAME sibling path MUST equal `state_after.cap_root`. The circuit forces
+//      the canonical sorted-tree slot DELETION; a tampered `new_cap_root` (not
+//      the zero-fold) is UNSAT. (Forgery: tampered new root.)
+// ============================================================================
+pub mod rev {
+    use super::POSEIDON2_PERM_AUX_COLS;
+    use crate::cap_root::CAP_TREE_DEPTH;
+
+    // ---- Scalar witness column offsets, relative to REV_SCALAR_BASE ----
+    /// The revoked leaf's sort key (`slot_hash`).
+    pub const SLOT_HASH: usize = 0;
+    /// The revoked leaf's target cell-id felt.
+    pub const TARGET: usize = 1;
+    /// The revoked leaf's auth tier tag.
+    pub const AUTH_TAG: usize = 2;
+    /// The revoked leaf's mask low-16.
+    pub const MASK_LO: usize = 3;
+    /// The revoked leaf's mask high-16.
+    pub const MASK_HI: usize = 4;
+    /// The revoked leaf's encoded expiry.
+    pub const EXPIRY: usize = 5;
+    /// The revoked leaf's breadstuff felt.
+    pub const BREADSTUFF: usize = 6;
+    /// `CAP_TREE_DEPTH` path direction bits (0 = current is left child).
+    pub const DIR_BITS_BASE: usize = 7;
+    /// `CAP_TREE_DEPTH` sibling digests along the path.
+    pub const SIBLINGS_BASE: usize = DIR_BITS_BASE + CAP_TREE_DEPTH; // 23
+    /// Total scalar witness columns in the revoke block.
+    pub const REV_SCALAR_COLS: usize = SIBLINGS_BASE + CAP_TREE_DEPTH; // 39
+
+    /// Number of dedicated Poseidon2 hash sites for the revoke membership +
+    /// zero-fold: 2 (held leaf, `hash_many`-7 = 2 perms) + `CAP_TREE_DEPTH`
+    /// (held path) + `CAP_TREE_DEPTH` (zero-fold path).
+    pub const NUM_REV_HASH_SITES: usize = 2 + 2 * CAP_TREE_DEPTH;
+
+    /// Absolute column where the revoke scalar block begins (after the generic
+    /// hash blocks, the Attenuate scalar block, AND the Attenuate hash blocks).
+    pub fn rev_scalar_base() -> usize {
+        super::attn::attn_hash_base()
+            + super::attn::NUM_ATTN_HASH_SITES * POSEIDON2_PERM_AUX_COLS
+    }
+    /// Absolute column where the revoke dedicated Poseidon2 hash blocks begin.
+    pub fn rev_hash_base() -> usize {
+        rev_scalar_base() + REV_SCALAR_COLS
+    }
+    /// Absolute base of revoke hash site `i`'s aux block.
+    pub fn rev_hash_block(i: usize) -> usize {
+        rev_hash_base() + i * POSEIDON2_PERM_AUX_COLS
+    }
+    /// Hash-site index of the held-leaf digest (second of its two perms).
+    /// (Documentation of the chain layout; the emit/witness walk it positionally.)
+    #[allow(dead_code)]
+    pub const HS_HELD_LEAF_1: usize = 1;
+    /// Hash-site index of the held path's TOP node (== old_cap_root).
+    #[allow(dead_code)]
+    pub const HS_HELD_PATH_TOP: usize = 2 + CAP_TREE_DEPTH - 1;
+    /// Hash-site index of the zero-fold path's TOP node (== new_cap_root).
+    #[allow(dead_code)]
+    pub const HS_NEW_PATH_TOP: usize = 2 + 2 * CAP_TREE_DEPTH - 1;
+}
+
 /// FULL p3 trace width = base EffectVM width + generic hash blocks + the
-/// dedicated Attenuate scalar-witness block + the Attenuate hash blocks.
+/// dedicated Attenuate scalar-witness block + the Attenuate hash blocks + the
+/// dedicated Revoke scalar-witness block + the Revoke hash blocks.
 pub fn effect_vm_p3_width() -> usize {
     EFFECT_VM_WIDTH
         + num_hash_sites() * POSEIDON2_PERM_AUX_COLS
         + attn::ATTN_SCALAR_COLS
         + attn::NUM_ATTN_HASH_SITES * POSEIDON2_PERM_AUX_COLS
+        + rev::REV_SCALAR_COLS
+        + rev::NUM_REV_HASH_SITES * POSEIDON2_PERM_AUX_COLS
 }
 
 // ============================================================================
@@ -701,6 +783,228 @@ fn last_state(aux: &[BabyBear]) -> [BabyBear; POSEIDON2_WIDTH] {
 }
 
 // ============================================================================
+// Revoke dedicated Poseidon2 chain — symbolic (eval) + concrete (witness).
+// Both walk the SAME 2 + 2*CAP_TREE_DEPTH-permutation ordering (see [`rev`]).
+// The held leaf digest is `hash_many` of the 7 CapLeaf fields; the path nodes
+// are `hash_fact(l,[r])`. The emitted DIGESTS are the held-path top
+// (= old_cap_root) and the zero-fold-path top (= new_cap_root), which the eval
+// gates pin. The zero-fold path starts from `BabyBear::ZERO` (the empty/padding
+// leaf) instead of a granted leaf — that is the ONLY difference from the
+// Attenuate chain's leaf-update path.
+// ============================================================================
+
+/// The named digests emitted by [`emit_revoke_hashes`].
+struct RevDigests<E> {
+    old_root: E,
+    new_root: E,
+}
+
+/// Symbolically emit the Revoke membership + zero-fold Poseidon2 chain and
+/// return `(old_root, new_root)` as `AB::Expr`. The round-by-round permutation
+/// constraints are emitted on EVERY row (like the generic / Attenuate sites);
+/// the gates that USE these digests are selector-gated in `eval`, so non-Revoke
+/// rows carry a (witness-filled) chain that constrains nothing downstream.
+fn emit_revoke_hashes<AB: AirBuilder>(builder: &mut AB, local: &[AB::Var]) -> RevDigests<AB::Expr>
+where
+    AB::F: PrimeField32,
+{
+    use rev::*;
+    let s = rev_scalar_base();
+    let sc = |off: usize| -> AB::Expr { local[s + off].into() };
+    let hb = |i: usize| rev_hash_block(i);
+    let block_aux =
+        |i: usize| -> Vec<AB::Var> { local[hb(i)..hb(i) + POSEIDON2_PERM_AUX_COLS].to_vec() };
+    let zero = AB::Expr::ZERO;
+    let seven = AB::Expr::from_u64(7);
+    let fact = AB::Expr::from_u64(FACT_MARKER);
+    let one = AB::Expr::ONE;
+
+    // ---- Held leaf digest = hash_many[slot,target,tag,mlo,mhi,exp,bread] ----
+    let h0_in: [AB::Expr; POSEIDON2_WIDTH] = {
+        let mut st: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|_| zero.clone());
+        st[0] = sc(SLOT_HASH);
+        st[1] = sc(TARGET);
+        st[2] = sc(AUTH_TAG);
+        st[3] = sc(MASK_LO);
+        st[4] = seven.clone();
+        st
+    };
+    let _ = poseidon2_permute_expr::<AB>(builder, h0_in, &block_aux(0));
+    let h0_out = perm_out_state_expr::<AB>(local, hb(0));
+    let h1_in: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|j| match j {
+        0 => h0_out[0].clone() + sc(MASK_HI),
+        1 => h0_out[1].clone() + sc(EXPIRY),
+        2 => h0_out[2].clone() + sc(BREADSTUFF),
+        _ => h0_out[j].clone(),
+    });
+    let held_leaf = poseidon2_permute_expr::<AB>(builder, h1_in, &block_aux(1));
+
+    // ---- Held path (depth nodes) from held leaf up to old_cap_root, AND the
+    //      zero-fold path from BabyBear::ZERO up to new_cap_root over the SAME
+    //      siblings / directions. ----
+    let mut held_cur = held_leaf;
+    let mut new_cur: AB::Expr = zero.clone(); // the empty/padding leaf
+    for level in 0..CAP_TREE_DEPTH {
+        let dir = sc(DIR_BITS_BASE + level);
+        let sib = sc(SIBLINGS_BASE + level);
+        let held_left = held_cur.clone() + dir.clone() * (sib.clone() - held_cur.clone());
+        let held_right = sib.clone() + dir.clone() * (held_cur.clone() - sib.clone());
+        let held_node_in: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|j| match j {
+            0 => held_left.clone(),
+            1 => held_right.clone(),
+            5 => fact.clone(),
+            6 => one.clone(),
+            _ => zero.clone(),
+        });
+        held_cur = poseidon2_permute_expr::<AB>(builder, held_node_in, &block_aux(2 + level));
+
+        let new_left = new_cur.clone() + dir.clone() * (sib.clone() - new_cur.clone());
+        let new_right = sib.clone() + dir.clone() * (new_cur.clone() - sib.clone());
+        let new_node_in: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|j| match j {
+            0 => new_left.clone(),
+            1 => new_right.clone(),
+            5 => fact.clone(),
+            6 => one.clone(),
+            _ => zero.clone(),
+        });
+        new_cur = poseidon2_permute_expr::<AB>(
+            builder,
+            new_node_in,
+            &block_aux(2 + CAP_TREE_DEPTH + level),
+        );
+    }
+
+    RevDigests {
+        old_root: held_cur,
+        new_root: new_cur,
+    }
+}
+
+/// Concrete witness for the Revoke hash chain: returns the `Vec<BabyBear>` of
+/// all `NUM_REV_HASH_SITES * POSEIDON2_PERM_AUX_COLS` aux columns, in the SAME
+/// order [`emit_revoke_hashes`] consumes them. Driven by the already-filled
+/// scalar witness columns in `row` (leaf fields, siblings, dir bits).
+fn revoke_hash_witness(row: &[BabyBear]) -> Vec<BabyBear> {
+    use rev::*;
+    let s = rev_scalar_base();
+    let sc = |off: usize| row[s + off];
+    let mut out: Vec<BabyBear> = Vec::with_capacity(NUM_REV_HASH_SITES * POSEIDON2_PERM_AUX_COLS);
+
+    // Held leaf: hash_many over 7 fields (2 perms).
+    let mut h0 = [BabyBear::ZERO; POSEIDON2_WIDTH];
+    h0[0] = sc(SLOT_HASH);
+    h0[1] = sc(TARGET);
+    h0[2] = sc(AUTH_TAG);
+    h0[3] = sc(MASK_LO);
+    h0[4] = BabyBear::new(7);
+    let h0_aux = poseidon2_permute_aux_witness(h0);
+    let h0_out = last_state(&h0_aux);
+    out.extend(h0_aux);
+    let mut h1 = h0_out;
+    h1[0] += sc(MASK_HI);
+    h1[1] += sc(EXPIRY);
+    h1[2] += sc(BREADSTUFF);
+    let h1_aux = poseidon2_permute_aux_witness(h1);
+    let held_leaf = last_state(&h1_aux)[0];
+    out.extend(h1_aux);
+
+    // Held path + zero-fold path (shared siblings / directions). The zero-fold
+    // path starts from BabyBear::ZERO (the empty/padding leaf).
+    let mut held_cur = held_leaf;
+    let mut new_cur = BabyBear::ZERO;
+    let mut held_blocks: Vec<BabyBear> = Vec::new();
+    let mut new_blocks: Vec<BabyBear> = Vec::new();
+    for level in 0..CAP_TREE_DEPTH {
+        let dir = sc(DIR_BITS_BASE + level).as_u32();
+        let sib = sc(SIBLINGS_BASE + level);
+        let (hl, hr) = if dir == 0 {
+            (held_cur, sib)
+        } else {
+            (sib, held_cur)
+        };
+        let mut hin = [BabyBear::ZERO; POSEIDON2_WIDTH];
+        hin[0] = hl;
+        hin[1] = hr;
+        hin[5] = BabyBear::new(FACT_MARKER as u32);
+        hin[6] = BabyBear::ONE;
+        let haux = poseidon2_permute_aux_witness(hin);
+        held_cur = last_state(&haux)[0];
+        held_blocks.extend(haux);
+
+        let (nl, nr) = if dir == 0 {
+            (new_cur, sib)
+        } else {
+            (sib, new_cur)
+        };
+        let mut nin = [BabyBear::ZERO; POSEIDON2_WIDTH];
+        nin[0] = nl;
+        nin[1] = nr;
+        nin[5] = BabyBear::new(FACT_MARKER as u32);
+        nin[6] = BabyBear::ONE;
+        let naux = poseidon2_permute_aux_witness(nin);
+        new_cur = last_state(&naux)[0];
+        new_blocks.extend(naux);
+    }
+    out.extend(held_blocks);
+    out.extend(new_blocks);
+
+    debug_assert_eq!(out.len(), NUM_REV_HASH_SITES * POSEIDON2_PERM_AUX_COLS);
+    out
+}
+
+/// Build the Revoke scalar-witness block for ONE Revoke row from its
+/// [`RevokeWitness`]. Fills the revoked leaf's 7 fields and the path siblings +
+/// direction bits. The returned block has length [`rev::REV_SCALAR_COLS`].
+///
+/// A PURE function of the witness; the AIR's gates re-derive the membership +
+/// zero-fold from these columns, so a block that does not encode a genuine
+/// held-leaf deletion yields an UNSAT trace.
+pub fn revoke_scalar_block(w: &crate::effect_vm::RevokeWitness) -> Vec<BabyBear> {
+    use rev::*;
+    let mut b = vec![BabyBear::ZERO; REV_SCALAR_COLS];
+    let held = &w.held;
+    b[SLOT_HASH] = held.slot_hash;
+    b[TARGET] = held.target;
+    b[AUTH_TAG] = held.auth_tag;
+    b[MASK_LO] = held.mask_lo;
+    b[MASK_HI] = held.mask_hi;
+    b[EXPIRY] = held.expiry;
+    b[BREADSTUFF] = held.breadstuff;
+    for (i, &sib) in w.siblings.iter().enumerate() {
+        b[SIBLINGS_BASE + i] = sib;
+    }
+    for (i, &dir) in w.directions.iter().enumerate() {
+        b[DIR_BITS_BASE + i] = BabyBear::new(dir as u32);
+    }
+    b
+}
+
+/// Build the per-row Revoke scalar blocks for an effect sequence: the all-zero
+/// block for every unwitnessed row, and [`revoke_scalar_block`] for each
+/// `RevokeCapability { phase_b: Some(_), .. }` row. Row-aligned to
+/// [`generate_effect_vm_trace`]'s output (one row per effect, then NoOp padding
+/// to the power-of-two height).
+pub fn revoke_scalar_blocks_for(
+    effects: &[crate::effect_vm::Effect],
+    trace_height: usize,
+) -> Vec<Vec<BabyBear>> {
+    use crate::effect_vm::Effect;
+    let mut blocks: Vec<Vec<BabyBear>> = Vec::with_capacity(trace_height);
+    for eff in effects {
+        match eff {
+            Effect::RevokeCapability {
+                phase_b: Some(w), ..
+            } => blocks.push(revoke_scalar_block(w)),
+            _ => blocks.push(vec![BabyBear::ZERO; rev::REV_SCALAR_COLS]),
+        }
+    }
+    while blocks.len() < trace_height {
+        blocks.push(vec![BabyBear::ZERO; rev::REV_SCALAR_COLS]);
+    }
+    blocks
+}
+
+// ============================================================================
 // Attenuate Phase-B scalar-witness builder + proving / accept entry points.
 // ============================================================================
 
@@ -900,6 +1204,51 @@ pub fn p3_air_accepts_attenuation(
     p3_air::check_all_constraints(&air, &matrix, &pis, Some(1)).is_ok()
 }
 
+/// Prove a RevokeCapability (or any) effect turn through the AUDITED p3 prover
+/// with the Revoke scalar witness threaded in. `base_trace` is the 186-col trace
+/// from [`generate_effect_vm_trace`]; `effects` is the SAME sequence (used to
+/// recover the per-row revoke witness). The proof self-verifies before return.
+pub fn prove_effect_vm_p3_revocation(
+    base_trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+    effects: &[crate::effect_vm::Effect],
+) -> Result<EffectVmP3Proof, EffectVmP3Error> {
+    let air = EffectVmP3Air;
+    let config = create_config();
+    let revoke_blocks = revoke_scalar_blocks_for(effects, base_trace.len());
+    let full_trace = extend_trace_with_revocation(base_trace, &revoke_blocks);
+    let matrix = to_matrix(&full_trace);
+    let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &matrix,
+        public_values: pis.clone(),
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+    let airs = vec![air];
+    let pvs = vec![pis];
+    verify_batch(&config, &airs, &proof, &pvs, common)
+        .map_err(|e| EffectVmP3Error::VerificationFailed(format!("{e:?}")))?;
+    Ok(proof)
+}
+
+/// FRI-free accept/reject decision (the exact predicate the audited verifier
+/// enforces) for a RevokeCapability turn carrying the Revoke scalar witness.
+pub fn p3_air_accepts_revocation(
+    base_trace: &[Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+    effects: &[crate::effect_vm::Effect],
+) -> bool {
+    let air = EffectVmP3Air;
+    let revoke_blocks = revoke_scalar_blocks_for(effects, base_trace.len());
+    let full_trace = extend_trace_with_revocation(base_trace, &revoke_blocks);
+    let matrix = to_matrix(&full_trace);
+    let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+    p3_air::check_all_constraints(&air, &matrix, &pis, Some(1)).is_ok()
+}
+
 // ============================================================================
 // The AIR
 // ============================================================================
@@ -991,6 +1340,11 @@ where
         //    unconditional, like the generic sites); the digests feed the
         //    selector-gated gates below. --
         let attn_d = emit_attenuate_hashes(builder, &local);
+
+        // -- RevokeCapability dedicated Poseidon2 chain (membership + zero-fold
+        //    deletion). Emitted on every row; the digests feed the
+        //    `sel::REVOKE_CAPABILITY`-gated gates below. --
+        let rev_d = emit_revoke_hashes(builder, &local);
 
         // All Effect VM constraints hold on the transition domain (rows 0..n-2):
         // the bespoke prover divides the whole constraint polynomial by Z_T.
@@ -1245,11 +1599,45 @@ where
             passthrough_bal_cap_fields!(lc(s_sel_idx));
         }
 
-        // -- RevokeCapability (hash site 5) --
+        // -- RevokeCapability (GRADUATED cap-crown leg, sel 24) --
+        // The pre-graduation pinned-digest advance (`new_cap_root ==
+        // H2(old_cap_root, slot_hash)`, the old hash site 5) is GONE. A verifying
+        // revoke row now proves the revoked leaf WAS HELD (membership-open against
+        // old_cap_root) AND new_cap_root is the genuine sorted-tree DELETION (the
+        // ZERO/padding leaf folded up the SAME path). See [`rev`] + the dedicated
+        // chain `emit_revoke_hashes`. Two teeth, no submask / lattice / expiry.
         let s_revokecap = lc(sel::REVOKE_CAPABILITY);
-        tb.assert_zero(
-            s_revokecap.clone() * (new_cap_root.clone() - digests[hs::REVOKE_CAP].clone()),
-        );
+        {
+            use rev::*;
+            let rbase = rev_scalar_base();
+            let rw = |off: usize| -> AB::Expr { local[rbase + off].into() };
+
+            // ===== GATE 1: MEMBERSHIP-OPEN — held leaf authenticated vs
+            // old_cap_root. The held-path top (folded from the held leaf digest up
+            // the witnessed sibling path) MUST equal state_before.cap_root. The
+            // sorted tree has exactly one leaf per slot, so this pins the revoked
+            // cap to the real committed leaf (a fabricated held leaf has no path to
+            // the real root ⇒ this fails).
+            tb.assert_zero(s_revokecap.clone() * (rev_d.old_root.clone() - old_cap_root.clone()));
+            // Bind the param-anchored slot hash (params[0] = CAP_ENTRY, the
+            // revoked slot_hash[0]) to the witnessed leaf's slot, so the public
+            // params identify the same slot the membership opens.
+            tb.assert_zero(s_revokecap.clone() * (prm(param::CAP_ENTRY) - rw(SLOT_HASH)));
+
+            // ===== GATE 2: ZERO-FOLD ROOT RECOMPUTE — new_cap_root forced by the
+            // canonical slot DELETION. The ZERO/padding leaf folded up the SAME
+            // sibling path MUST equal state_after.cap_root. This REPLACES the
+            // pinned-digest advance: the circuit forces the sorted-tree slot
+            // removal, not the executor. A tampered new_cap_root is UNSAT.
+            tb.assert_zero(s_revokecap.clone() * (rev_d.new_root.clone() - new_cap_root.clone()));
+
+            // Path direction bits are boolean (gated).
+            for level in 0..CAP_TREE_DEPTH {
+                let d = rw(DIR_BITS_BASE + level);
+                tb.assert_zero(s_revokecap.clone() * d.clone() * (d - one.clone()));
+            }
+        }
+        // Frame: balance + fields frozen (revoke touches only cap_root + nonce).
         tb.assert_zero(s_revokecap.clone() * (new_bal_lo.clone() - old_bal_lo.clone()));
         tb.assert_zero(s_revokecap.clone() * (new_bal_hi.clone() - old_bal_hi.clone()));
         for i in 0..8 {
@@ -1839,7 +2227,7 @@ fn lift<AB: AirBuilder>(v: BabyBear) -> AB::Expr {
 /// An honest witnessed Attenuate turn goes through
 /// [`extend_trace_with_attenuation`] instead.
 pub fn extend_trace_with_hashes(trace: &[Vec<BabyBear>]) -> Vec<Vec<BabyBear>> {
-    extend_trace_inner(trace, None)
+    extend_trace_inner(trace, None, None)
 }
 
 /// Extend a base trace where row `r` carries the Phase-B Attenuate scalar
@@ -1851,16 +2239,30 @@ pub fn extend_trace_with_attenuation(
     scalar_blocks: &[Vec<BabyBear>],
 ) -> Vec<Vec<BabyBear>> {
     assert_eq!(trace.len(), scalar_blocks.len(), "one scalar block per row");
-    extend_trace_inner(trace, Some(scalar_blocks))
+    extend_trace_inner(trace, Some(scalar_blocks), None)
+}
+
+/// Extend a base trace where row `r` carries the Revoke scalar witness
+/// `revoke_blocks[r]` (length [`rev::REV_SCALAR_COLS`]; the all-zero block for
+/// non-Revoke rows). Produces the full p3-width trace whose Revoke gates can be
+/// SATISFIED on the witnessed Revoke rows.
+pub fn extend_trace_with_revocation(
+    trace: &[Vec<BabyBear>],
+    revoke_blocks: &[Vec<BabyBear>],
+) -> Vec<Vec<BabyBear>> {
+    assert_eq!(trace.len(), revoke_blocks.len(), "one revoke block per row");
+    extend_trace_inner(trace, None, Some(revoke_blocks))
 }
 
 fn extend_trace_inner(
     trace: &[Vec<BabyBear>],
     scalar_blocks: Option<&[Vec<BabyBear>]>,
+    revoke_blocks: Option<&[Vec<BabyBear>]>,
 ) -> Vec<Vec<BabyBear>> {
     let sites = hash_sites();
     let generic_end = EFFECT_VM_WIDTH + sites.len() * POSEIDON2_PERM_AUX_COLS;
     let scalar_end = attn::attn_hash_base(); // generic_end + ATTN_SCALAR_COLS
+    let rev_scalar_end = rev::rev_hash_base(); // attn_hash_end + REV_SCALAR_COLS
     let full_width = effect_vm_p3_width();
     trace
         .iter()
@@ -1890,6 +2292,19 @@ fn extend_trace_inner(
             // (4) Attenuate Poseidon2 hash blocks, computed from the scalar block.
             let attn_aux = attenuate_hash_witness(&full);
             full.extend(attn_aux);
+            debug_assert_eq!(full.len(), scalar_end + attn::NUM_ATTN_HASH_SITES * POSEIDON2_PERM_AUX_COLS);
+            // (5) Revoke scalar block: from the supplied witness, else zeros.
+            match revoke_blocks {
+                Some(blocks) => {
+                    debug_assert_eq!(blocks[r].len(), rev::REV_SCALAR_COLS);
+                    full.extend_from_slice(&blocks[r]);
+                }
+                None => full.extend(std::iter::repeat(BabyBear::ZERO).take(rev::REV_SCALAR_COLS)),
+            }
+            debug_assert_eq!(full.len(), rev_scalar_end);
+            // (6) Revoke Poseidon2 hash blocks, computed from the revoke scalar block.
+            let rev_aux = revoke_hash_witness(&full);
+            full.extend(rev_aux);
             debug_assert_eq!(full.len(), full_width);
             full
         })

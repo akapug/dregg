@@ -580,14 +580,42 @@ pub fn generate_effect_vm_trace_ext(
                 }
                 new_state.nonce += 1;
             }
-            Effect::RevokeCapability { slot_hash } => {
+            Effect::RevokeCapability { slot_hash, phase_b } => {
                 // The slot_hash limb[0] shares param slot 0 with cap_entry.
                 row[PARAM_BASE + param::CAP_ENTRY] = slot_hash[0];
 
-                // Mirror GrantCapability: cap_root deterministically updates
-                // by hashing limb[0] of slot_hash with the previous root.
-                let new_cap = hash_2_to_1(current_state.capability_root, slot_hash[0]);
-                new_state.capability_root = new_cap;
+                match phase_b {
+                    // ---- Phase B (GRADUATED): GENUINE sorted-tree slot DELETION.
+                    // The cap_root advances from the held leaf's authenticated
+                    // position to the tree with that slot removed — the ZERO/
+                    // padding leaf recomputed over the real Merkle path.
+                    // `state_before.cap_root` MUST already equal the witness's
+                    // `old_root` (the caller seeds the actor's tree root), and
+                    // `state_after.cap_root` becomes the zero-fold `new_root`. The
+                    // p3 AIR's revoke gates (membership-open + zero-fold recompute)
+                    // prove the held leaf WAS in the tree over THIS move. ----
+                    Some(w) => {
+                        // Recompute the new root over the witnessed sibling path
+                        // with the ZERO/padding leaf at the revoked position.
+                        let mut cur = BabyBear::ZERO;
+                        for level in 0..w.siblings.len() {
+                            let sib = w.siblings[level];
+                            cur = if w.directions[level] == 0 {
+                                hash_fact(cur, &[sib])
+                            } else {
+                                hash_fact(sib, &[cur])
+                            };
+                        }
+                        new_state.capability_root = cur;
+                    }
+                    // ---- Legacy (pre-graduation): opaque 2-of-2 fold. NOT a
+                    // genuine sorted-tree deletion and NOT provable through the
+                    // audited p3 revoke gates. ----
+                    None => {
+                        let new_cap = hash_2_to_1(current_state.capability_root, slot_hash[0]);
+                        new_state.capability_root = new_cap;
+                    }
+                }
                 new_state.nonce += 1;
             }
             Effect::EmitEvent {

@@ -82,7 +82,32 @@ use crate::state::{CellState, FieldVisibility};
 /// scalar as a canonical commitment limb — the PI v3 committed-height column's
 /// commitment face. A legacy (never-committed) cell contributes 0, so the
 /// absorption is a uniform no-op for legacy cells.
-pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v8";
+/// `v8 → v9` (cap crown — the REVOKE tombstone reconciliation): the absorbed
+/// `capability_root` is now the TOMBSTONE-deletion root (a revoked slot leaves a
+/// ZERO/padding leaf at its sorted position rather than a compacted rebuild),
+/// matching the in-circuit sel-24 revoke gate byte-for-byte. The cap-root value
+/// changes for any cell that has revoked, so the cell commitment that absorbs it
+/// must bump in lockstep (the coupled CAP_ROOT + COMMITMENT flag-day per the
+/// cap-crown rule) so stale compacted roots cleanly invalidate. A never-revoked
+/// cell's cap-root — and therefore its commitment — is byte-unchanged; the bump
+/// is a uniform no-op for them, it just re-domain-separates so no stale
+/// post-revoke commitment can collide cross-version.
+///
+/// NB — this `v9` is the BLAKE3 *context-string* version (an axis that has
+/// counted v1→v9 over the commitment's history); it is ORTHOGONAL to the
+/// rotated-Poseidon2 commitment's `V9_*` constants below (which name the
+/// 24-register rotation "generation 9", not this string). The rotated
+/// commitment AUTOMATICALLY reflects the tombstone change because its cap-root
+/// limb (`compute_rotated_pre_limbs`, limb 25) calls the SAME
+/// `compute_canonical_capability_root_felt`, which now tombstones.
+///
+/// NB — the EffectVM VK (`dregg_verifier::EFFECT_VM_VK_HASH_HEX`) is, in this
+/// codebase's v1 verifier, a hash of the AIR *name* (`"dregg-effect-vm-v1"`),
+/// NOT a structural commitment to the constraint set — so it does not need (and
+/// would not meaningfully reflect) a tombstone bump. The cryptographic
+/// invalidation of stale post-revoke roots is enforced by the changed cap-root
+/// VALUE flowing into this commitment's PI face, not by a VK-string change.
+pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v9";
 
 /// Domain-separation context for the canonical capability-set root.
 ///
@@ -92,7 +117,20 @@ pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commi
 /// circuit. The single-cap commitment returned by
 /// [`crate::capability::CapabilitySet::attenuate_in_place`] is now the 32-byte
 /// encoding of that cap's leaf-digest felt under this context.
-pub const CANONICAL_CAP_ROOT_CONTEXT: &str = "dregg-cell:canonical-capability-root v2";
+///
+/// `v2 → v3` (cap crown — the REVOKE tombstone reconciliation): a revoke is now
+/// a TOMBSTONE deletion (the revoked slot leaves a ZERO/padding leaf at its
+/// sorted position via [`crate::capability::CapabilitySet`]'s tombstone set)
+/// rather than a COMPACTED rebuild (`retain` + `CanonicalCapTree::new` over the
+/// remaining caps, which re-indexes every key sorting after the revoked one).
+/// The tombstone root equals the in-circuit sel-24 revoke gate's zero-fold
+/// deletion byte-for-byte, so `cell_cap_root == circuit_cap_root` after a revoke
+/// (closing the seam that would otherwise brick any live RevokeCapability turn).
+/// The root value changes only for cells that have revoked; this bump cleanly
+/// invalidates any stale compacted root. Coupled with the
+/// `CANONICAL_COMMITMENT_CONTEXT` v8→v9 bump and the EffectVM VK rebump (the
+/// cap-crown flag-day rule: CAP_ROOT + COMMITMENT + VK bump together).
+pub const CANONICAL_CAP_ROOT_CONTEXT: &str = "dregg-cell:canonical-capability-root v3";
 
 /// Compute the canonical tier-byte for a single `AuthRequired` value.
 ///
@@ -504,8 +542,21 @@ fn auth_required_to_tag(auth: &AuthRequired) -> dregg_circuit::field::BabyBear {
 pub fn compute_canonical_capability_root_felt(
     caps: &CapabilitySet,
 ) -> dregg_circuit::field::BabyBear {
-    let leaves: Vec<dregg_circuit::cap_root::CapLeaf> = caps.iter().map(cap_ref_to_leaf).collect();
-    dregg_circuit::cap_root::compute_capability_root(leaves)
+    use dregg_circuit::cap_root;
+    let leaves: Vec<cap_root::CapLeaf> = caps.iter().map(cap_ref_to_leaf).collect();
+    // TOMBSTONE deletion (cap crown, the cell↔circuit revoke reconciliation):
+    // a revoked slot leaves a ZERO/padding leaf at its sorted POSITION rather
+    // than compacting (re-indexing) the tree, so every OTHER capability's
+    // membership witness stays valid across an unrelated revoke — and the root
+    // matches the in-circuit sel-24 revoke gate's zero-fold deletion
+    // byte-for-byte (`cap_root::revocation_witness`). We fold each tombstoned
+    // slot's `slot_hash` (the same sort key `cap_ref_to_leaf` uses) as a ghost
+    // leaf; a slot that is currently live is shadowed by its live leaf. When a
+    // cell has never revoked under this scheme, `tombstone_keys` is empty and
+    // this is byte-identical to the plain `compute_capability_root`.
+    let tombstone_keys: Vec<dregg_circuit::field::BabyBear> =
+        caps.tombstoned_slots().map(cap_root::slot_hash).collect();
+    cap_root::compute_capability_root_with_tombstones(leaves, &tombstone_keys)
 }
 
 /// Compute the canonical 32-byte capability root of a `CapabilitySet`.

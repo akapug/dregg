@@ -41,19 +41,21 @@ cohort member against the rotated 25+…-limb state block — as ONE parametric 
     WHOLE after block, both iroots, the published height, AND the WHOLE caveat manifest —
     under the ONE `Poseidon2SpongeCR` floor, via the parametric `wireCommitR_binds` /
     `caveatCommit_binds`. One theorem, 26 descriptors.
-  * **§5 the v3 registry** — `v3Registry`: all 34 cohort members rotated. The 26 `v2Registry`
-    members (the 17 graduated cohort + attenuate WITH its phase-B map ops/submask lookup + the
-    dynamic setField WITH its mem ops + the 8 per-slot setFields) PLUS the 8 LIVE-path effects
+  * **§5 the v3 registry** — `v3Registry`: all 35 cohort members rotated. The 27 `v2Registry`
+    members (the 17 graduated cohort + attenuate WITH its phase-B map ops/submask lookup + revoke
+    WITH its cap-crown map ops + the dynamic setField WITH its mem ops + the 8 per-slot setFields)
+    PLUS the 8 LIVE-path effects
     the v2 graduation never covered but the v1 wire DID (STEP 1 / ROTATION-CUTOVER §2c cohort
     widening): grantCap (the bare unattenuated cap-root grant), makeSovereign, createCell,
     factory, spawn, receiptArchive, cellUnseal, emitEvent — each the graduated RUNTIME row
     lifted through the SAME `rotateV3`, so the soundness keystones apply unchanged. Keys
     suffixed `R24`. Driver: `EmitRotationV3.lean` (the Rust staged twin is
     `circuit/descriptors/rotation-v3-staged-registry.tsv`, sha-pinned).
-    HONEST RESIDUE: two LIVE selectors still have NO rotated descriptor — `RevokeCapability`
-    (24; its cap-root advance is being reshaped by the cap-crown lanes, no graduated v1
-    descriptor exists) and `Custom` (8; needs an accumulator/recursive proof-binding constraint
-    kind the per-row IR does not have). These are precise obstructions, not papered over.
+    HONEST RESIDUE: ONE LIVE selector still has NO rotated descriptor — `Custom` (8; needs an
+    accumulator/recursive proof-binding constraint kind the per-row IR does not have). This is a
+    precise obstruction, not papered over. (`RevokeCapability` (24) GRADUATED via the cap-crown
+    `revokeCapabilityVmDescriptor2` — held-membership map-read + ZERO-value remove-write — and is
+    now rotated as `revokeCapabilityV3`.)
 
 ## Honest boundary notes (do NOT over-read)
 
@@ -764,7 +766,7 @@ theorem rotV3_binds_published (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR
 #assert_axioms rotV3_publishes
 #assert_axioms rotV3_binds_published
 
-/-! ## §5 — the v3 registry: all 26 cohort members, rotated. -/
+/-! ## §5 — the v3 registry: all 27 v2-cohort members (+ the 8 widened), rotated. -/
 
 /-- Append v2-native extras (map ops / mem ops / lookups) to a rotated graduation —
 the attenuate phase-B leg and the dynamic setField ride through unchanged. -/
@@ -786,12 +788,20 @@ def attenuateV3 : EffectVmDescriptor2 :=
   v3OfWith EffectVmEmitAttenuateA.attenuateVmDescriptor
     [.mapOp heldReadOp, .mapOp keepWriteOp, .lookup submaskLookup]
 
+/-- The rotated REVOKE (sel 24) WITH the cap-crown circuit leg: held-membership map read +
+ZERO-value remove-write (NO submask — revoke deletes a slot, it does not narrow rights), verbatim
+from `revokeCapabilityVmDescriptor2`. -/
+def revokeCapabilityV3 : EffectVmDescriptor2 :=
+  v3OfWith EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor
+    [.mapOp heldReadOp, .mapOp removeWriteOp]
+
 /-- The rotated dynamic setField WITH its memory ops (the Blum write→read transport). -/
 def setFieldDynV3 : EffectVmDescriptor2 :=
   v3OfWith setFieldDynV1Face [.memOp fieldWriteOp, .memOp fieldReadbackOp]
 
-/-- **`v3Registry`** — the full 26-member cohort at the rotated block (keys = the v2 keys
-suffixed `R24`; wire strings via `emitVmJson2`; driver `EmitRotationV3.lean`). -/
+/-- **`v3Registry`** — the full 35-member cohort at the rotated block (the 27 v2-graduated members
++ the 8 STEP-1-widened; keys = the v2 keys suffixed `R24`; wire strings via `emitVmJson2`; driver
+`EmitRotationV3.lean`). -/
 def v3Registry : List (String × EffectVmDescriptor2) :=
   [ ("transferVmDescriptor2R24", v3Of EffectVmEmitTransfer.transferVmDescriptor)
   , ("burnVmDescriptor2R24", v3Of EffectVmEmitBurn.burnVmDescriptor)
@@ -811,6 +821,7 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
   , ("revokeVmDescriptor2R24", v3Of EffectVmEmitRevokeDelegation.revokeVmDescriptor)
   , ("introduceVmDescriptor2R24", v3Of EffectVmEmitIntroduce.introduceVmDescriptor)
   , ("attenuateVmDescriptor2R24", attenuateV3)
+  , ("revokeCapabilityVmDescriptor2R24", revokeCapabilityV3)
   , ("setFieldDynVmDescriptor2R24", setFieldDynV3)
     -- THE COHORT-WIDENING (ROTATION-CUTOVER §2c, STEP 1): the eight LIVE-path effects that
     -- the v2 graduation never covered but the v1 wire DID — their graduated RUNTIME row
@@ -835,7 +846,7 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
       (s!"setFieldVmDescriptor2-{slot.val}R24",
         v3Of (EffectVmEmitSetField.setFieldVmDescriptor slot))
 
-#guard v3Registry.length == 34
+#guard v3Registry.length == 35
 -- Every registry entry emits a versioned v2 wire string with the rotated width, the five
 -- EPOCH tables, and the four appended PI slots.
 #guard v3Registry.all fun (_, d) => (emitVmJson2 d).startsWith "{\"name\":\""
@@ -852,6 +863,7 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 #guard graduable (rotateV3 EffectVmEmitTransfer.transferVmDescriptor)
 #guard graduable (rotateV3 setFieldDynV1Face)
 #guard graduable (rotateV3 EffectVmEmitAttenuateA.attenuateVmDescriptor)
+#guard graduable (rotateV3 EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor)
 -- The COHORT-WIDENING faces (STEP 1): each graduable, so `rotV3_sound_v1` /
 -- `rotV3_binds_published` apply to them with no new proof. (GrantCapability rides the
 -- attenuate template already guarded above.)
@@ -862,12 +874,16 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 #guard graduable (rotateV3 EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor)
 #guard graduable (rotateV3 EffectVmEmitCellUnseal.cellUnsealVmDescriptor)
 #guard graduable (rotateV3 EffectVmEmitEmitEvent.emitEventVmDescriptor)
--- The extras ride: attenuate carries its 3 phase-B constraints, setFieldDyn its 2 mem ops.
+-- The extras ride: attenuate carries its 3 phase-B constraints, revoke its 2 cap-crown
+-- constraints (held-read + remove-write, no submask), setFieldDyn its 2 mem ops.
 #guard attenuateV3.constraints.length
         == (v3Of EffectVmEmitAttenuateA.attenuateVmDescriptor).constraints.length + 3
+#guard revokeCapabilityV3.constraints.length
+        == (v3Of EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor).constraints.length + 2
 #guard (memOpsOf setFieldDynV3).length == 2
 #guard (mapOpsOf setFieldDynV3).length == 0
 #guard (mapOpsOf attenuateV3).length == 2
+#guard (mapOpsOf revokeCapabilityV3).length == 2
 
 /-! ### The extras' theorems, transported (the §7/§8 legs survive the rotation). -/
 

@@ -43,6 +43,10 @@ import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Spec.supplycreation
+-- The bridge-mint arm writes `bal` via the ISSUER-MOVE `recTransferBal … a cell a value`
+-- (`MintASpec`), so the per-entry credit is the validated `recTransferBal_correct` dst clause.
+-- (`supplycreation` does NOT transitively bring `balancemovement`; import it for the lemma.)
+import Dregg2.Circuit.Spec.balancemovement
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitBridgeMint
 
@@ -311,8 +315,13 @@ theorem unify_bridgeMint (s s' : RecChainedState) (actor cell : CellId) (a : Ass
     CellBridgeMintSpecFrozenNonce (cellProjA s.kernel cell a) value (cellProjA s'.kernel cell a) := by
   refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
   show s'.kernel.bal cell a = s.kernel.bal cell a + value
+  -- The bridge-mint arm's post-`bal` is the issuer-MOVE `recTransferBal … a cell a value`
+  -- (`MintASpec`'s second conjunct), so the recipient `(cell, a)` entry rises by `value` — the
+  -- validated dst clause of `recTransferBal_correct` (src = issuer `a`, dst = `cell`; `a ≠ cell`
+  -- from the `mintAdmit` guard). (Earlier this arm credited via `recBalCredit`; it now issuer-moves.)
   rw [hspec.2.1]
-  exact (recBalCredit_correct s.kernel.bal cell a value).1
+  exact (Dregg2.Circuit.Spec.BalanceMovement.recTransferBal_correct
+    s.kernel.bal a cell a value hspec.1.2.2.2.2).2.1
 
 /-- **`unify_bridgeMint_exec` — same, against the executor's `.bridgeMintA` arm directly.** Reading
 through `execBridgeMintA_iff_spec`, a committed `execFullA s (.bridgeMintA actor cell a value) = some s'`

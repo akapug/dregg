@@ -326,8 +326,8 @@ fn fill_caveat(row: &mut [BabyBear], base: usize, m: &RotatedCaveatManifest) {
 
 /// Resolve the rotated registry descriptor NAME for one effect's v1 selector — the
 /// `*VmDescriptor2R24` member of `V3_STAGED_REGISTRY_TSV` whose rotated shape proves THIS
-/// effect. The cohort is the 34 graduated descriptors the Lean `EffectVmEmitRotationV3.
-/// v3Registry` emits (26 base + 8 per-slot `setField`); the trace the rotated generator emits
+/// effect. The cohort is the 35 graduated descriptors the Lean `EffectVmEmitRotationV3.
+/// v3Registry` emits (27 base + 8 per-slot `setField`); the trace the rotated generator emits
 /// is the SAME shape (311 cols + 38 PIs) for every member (the appendix is parametric, not
 /// per-effect — `rotateV3`), so this resolver picks WHICH per-effect constraint family the
 /// IR-v2 prover enforces on the shared trace.
@@ -337,13 +337,13 @@ fn fill_caveat(row: &mut [BabyBear], base: usize, m: &RotatedCaveatManifest) {
 /// (selector 2) routes to the per-slot descriptor by the field index via
 /// [`rotated_set_field_descriptor_name`].
 ///
-/// NOTE: the rotated cohort is the v3Registry's exact membership (34 members) — the 26
-/// v2-graduated descriptors PLUS the 8 LIVE-path effects the STEP 1 widening added
-/// (`GrantCapability`, `MakeSovereign`, `CreateCell`, `CreateCellFromFactory`,
-/// `SpawnWithDelegation`, `ReceiptArchive`, `CellUnseal`, `EmitEvent`). Only `RevokeCapability`
-/// (24) and `Custom` (8) still return `None` — they have no rotated descriptor yet (no
-/// graduated v1 descriptor / a missing recursive-binding constraint kind, respectively); these
-/// are the honest residue (widening to them is a Lean-emission act, not a Rust act).
+/// NOTE: the rotated cohort is the v3Registry's exact membership (35 members) — the 27
+/// v2-graduated descriptors (incl. the cap-crown `RevokeCapability`) PLUS the 8 LIVE-path effects
+/// the STEP 1 widening added (`GrantCapability`, `MakeSovereign`, `CreateCell`,
+/// `CreateCellFromFactory`, `SpawnWithDelegation`, `ReceiptArchive`, `CellUnseal`, `EmitEvent`).
+/// Only `Custom` (8) still returns `None` — it has no rotated descriptor yet (a missing
+/// recursive-binding constraint kind); that is the honest residue (widening to it is a
+/// Lean-emission act, not a Rust act).
 pub fn rotated_descriptor_name(selector: usize) -> Option<&'static str> {
     use super::columns::sel;
     Some(match selector {
@@ -376,10 +376,13 @@ pub fn rotated_descriptor_name(selector: usize) -> Option<&'static str> {
         s if s == sel::SPAWN_WITH_DELEGATION => "spawnVmDescriptor2R24",
         s if s == sel::CELL_UNSEAL => "cellUnsealVmDescriptor2R24",
         s if s == sel::RECEIPT_ARCHIVE => "receiptArchiveVmDescriptor2R24",
-        // HONEST RESIDUE — still NO rotated descriptor (precise obstructions, not papered over):
+        // GRADUATED (cap-crown): RevokeCapability (24) now has a rotated descriptor — the cap-REMOVAL
+        // leg `revokeCapabilityVmDescriptor2R24` (held-membership map-read + ZERO-value remove-write,
+        // NO submask). The pre-graduation pinned-digest advance is gone.
+        s if s == sel::REVOKE_CAPABILITY => "revokeCapabilityVmDescriptor2R24",
+        // HONEST RESIDUE — still NO rotated descriptor (a precise obstruction, not papered over):
         // sel::CUSTOM (8) needs an accumulator/recursive proof-binding constraint kind the
-        // per-row IR lacks; sel::REVOKE_CAPABILITY (24) has no graduated v1 descriptor (its
-        // cap-root advance is being reshaped by the cap-crown lanes). Both fail closed here.
+        // per-row IR lacks. Fails closed here.
         _ => return None,
     })
 }
@@ -447,7 +450,7 @@ mod tests {
     use crate::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
     use std::collections::BTreeSet;
 
-    /// The rotated descriptor resolvers cover EXACTLY the registry's 34 cohort members:
+    /// The rotated descriptor resolvers cover EXACTLY the registry's 35 cohort members:
     /// every name the resolvers can return is in the registry, and every registry member is
     /// reachable from some effect. This is the cohort-completeness tooth — the rotated
     /// generator can prove every effect the rotated registry emitted a descriptor for, and
@@ -459,7 +462,7 @@ mod tests {
             .filter_map(|l| l.split('\t').next())
             .filter(|s| !s.is_empty())
             .collect();
-        assert_eq!(registry.len(), 34, "the rotated registry has 34 members");
+        assert_eq!(registry.len(), 35, "the rotated registry has 35 members");
 
         // Every name the resolvers produce: the 17 selector-mapped base effects, the 8
         // STEP-1-widened LIVE-path effects, the dynamic setField, and the 8 per-slot setFields.
@@ -482,6 +485,8 @@ mod tests {
             rotated_descriptor_name(super::super::columns::sel::REVOKE_DELEGATION).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::INTRODUCE).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::ATTENUATE_CAPABILITY).unwrap(),
+            // GRADUATED cap-crown:
+            rotated_descriptor_name(super::super::columns::sel::REVOKE_CAPABILITY).unwrap(),
             // STEP-1 widened:
             rotated_descriptor_name(super::super::columns::sel::GRANT_CAP).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::MAKE_SOVEREIGN).unwrap(),
@@ -498,17 +503,18 @@ mod tests {
         for i in 0..8 {
             reached.insert(rotated_set_field_descriptor_name(i));
         }
-        assert_eq!(reached.len(), 34, "the resolvers reach 34 distinct names");
+        assert_eq!(reached.len(), 35, "the resolvers reach 35 distinct names");
         assert_eq!(
             reached, registry,
             "the resolver names are EXACTLY the rotated registry's members"
         );
     }
 
-    /// The honest residue: `Custom` (8) and `RevokeCapability` (24) still resolve to `None` —
-    /// the resolver fails closed rather than naming a descriptor that does not exist. (The
-    /// other former non-cohort effects — MakeSovereign, CreateCell, ReceiptArchive, etc. — now
-    /// resolve to their STEP-1 rotated descriptors, covered by the test above.)
+    /// The honest residue: `Custom` (8) still resolves to `None` — the resolver fails closed
+    /// rather than naming a descriptor that does not exist. (`RevokeCapability` (24) GRADUATED via
+    /// the cap-crown and now resolves to its rotated descriptor, covered by the test above; the
+    /// other former non-cohort effects — MakeSovereign, CreateCell, etc. — resolve to their STEP-1
+    /// rotated descriptors.)
     #[test]
     fn non_cohort_effects_resolve_to_none() {
         assert_eq!(rotated_descriptor_name_for_effect(&Effect::NoOp), None);
@@ -516,9 +522,10 @@ mod tests {
             rotated_descriptor_name(super::super::columns::sel::CUSTOM),
             None
         );
+        // RevokeCapability (24) now GRADUATED — it resolves to a rotated descriptor.
         assert_eq!(
             rotated_descriptor_name(super::super::columns::sel::REVOKE_CAPABILITY),
-            None
+            Some("revokeCapabilityVmDescriptor2R24")
         );
     }
 }

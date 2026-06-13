@@ -178,6 +178,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     let slot_hash_bytes = blake3::hash(&slot_bytes);
                     vm_effects.push(VmEffect::RevokeCapability {
                         slot_hash: hash_to_8(slot_hash_bytes.as_bytes()),
+                        phase_b: None,
                     });
                 }
                 Effect::CreateCell {

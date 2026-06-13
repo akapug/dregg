@@ -20,7 +20,7 @@
 //!
 //! ## Coverage (HONEST)
 //!
-//! 25 UNIQUE descriptors are registered (VERB-LOCKSTEP: the 22 descriptors of
+//! 26 UNIQUE descriptors are registered (VERB-LOCKSTEP: the 22 descriptors of
 //! the factory-dissolved families — escrow/obligation-adjacent legs, the queue
 //! family, seal/unseal/seal-pair, the swiss/sturdyref/handoff family, bridge
 //! lock/finalize/cancel — died with their `Effect` variants; their semantics
@@ -30,9 +30,10 @@
 //! nonce-TICK descriptors, and the cap-table semantics are bound OFF-row via
 //! each module's universe-A connector.
 //!
-//!   * `SELECTOR_DESCRIPTORS`: 24 of the 29 LIVE EffectVM selectors carry a
-//!     descriptor (the 5 others — NOOP, SET_FIELD, CUSTOM, REVOKE_CAPABILITY,
-//!     CELL_UNSEAL — have no emit module yet). Two selectors (3/48 cap moves)
+//!   * `SELECTOR_DESCRIPTORS`: 25 of the 29 LIVE EffectVM selectors carry a
+//!     descriptor (the 4 others — NOOP, SET_FIELD, CUSTOM, CELL_UNSEAL — have no
+//!     emit module yet; REVOKE_CAPABILITY (24) GRADUATED via the cap-crown v1
+//!     face `dregg-effectvm-revokecapability-v1`). Two selectors (3/48 cap moves)
 //!     point at the shared `attenuateA` JSON.
 //!
 //!   * `NAME_ONLY_DESCRIPTORS`: 1 verified descriptor (`mint`) whose effect has
@@ -75,6 +76,14 @@ pub const DREGG_EFFECTVM_BURN_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-burn-v1.json");
 pub const DREGG_EFFECTVM_BURN_V1_FP: &str =
     "3c49af13cae8285f136b8cdf06632a76bd2f5c0c3a156eba3275254d3fbd5d50";
+// GRADUATED (cap-crown): RevokeCapability (sel 24) v1 FACE — the cap-root MOVE + frame freeze (the
+// SAME row shape as the attenuate template, only the AIR name differs). The in-circuit sorted-tree
+// slot DELETION is the v2 leg (`DREGG_EFFECTVM_REVOKE_CAP_IR2_*`). Lean source
+// `EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor`.
+pub const DREGG_EFFECTVM_REVOKECAPABILITY_V1_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-revokecapability-v1.json");
+pub const DREGG_EFFECTVM_REVOKECAPABILITY_V1_FP: &str =
+    "8e3bb9b1ef3b5f46820e8c6c86b3535725068dfd76fd31a58ad859a2cff2db45";
 // GRADUATED (nonce-tick reconcile, v2): frozen-balance + ticked-nonce effect; the Lean descriptor
 // now ticks the runtime nonce (`gNonce`) AND carries the full last-row balance PI binding
 // (`boundaryLastPins`), so the descriptor decides IDENTICALLY to the hand-AIR on the real witness
@@ -318,6 +327,15 @@ pub const DREGG_EFFECTVM_ATTENUATE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-attenuate-ir2.json");
 pub const DREGG_EFFECTVM_ATTENUATE_IR2_FP: &str =
     "606d2db855d06129c0f1f4faba6ccf6b84ae7e4fef6885c48914f653a2cd658d";
+// GRADUATED (cap-crown): RevokeCapability (sel 24). The v2 leg of the cap-REMOVAL effect — a
+// held-membership map-read authenticated against the before cap_root + a ZERO-value remove-write
+// (the slot's rights deleted), NO submask (revoke deletes a slot, it does not narrow rights). Lean
+// source `EffectVmEmitV2.revokeCapabilityVmDescriptor2`; keystones `revokeV2_removes` /
+// `revokeV2_held_determined` / `revokeV2_post_determined`.
+pub const DREGG_EFFECTVM_REVOKE_CAP_IR2_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-revoke-cap-ir2.json");
+pub const DREGG_EFFECTVM_REVOKE_CAP_IR2_FP: &str =
+    "21916d7c0f4884c8079f527771b1edd4243fd27fcc7e29565be83e72bc2198bb";
 pub const DREGG_EFFECTVM_SET_FIELD_DYN_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-dyn-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_DYN_IR2_FP: &str =
@@ -393,6 +411,12 @@ pub const SELECTOR_DESCRIPTORS: &[(usize, &str, &str, &str)] = &[
         DREGG_EFFECTVM_CREATECELLFROMFACTORY_V2_JSON,
         DREGG_EFFECTVM_CREATECELLFROMFACTORY_V2_FP,
     ), // CREATE_CELL_FROM_FACTORY: factoryActorVmDescriptor (GRADUATED: actor frozen-frame + nonce-tick; child face off-row)
+    (
+        24,
+        "dregg-effectvm-revokecapability-v1",
+        DREGG_EFFECTVM_REVOKECAPABILITY_V1_JSON,
+        DREGG_EFFECTVM_REVOKECAPABILITY_V1_FP,
+    ), // REVOKE_CAPABILITY: revokeCapabilityVmDescriptor (GRADUATED cap-crown v1 FACE; in-circuit slot DELETION = the v2 leg)
     (
         25,
         "dregg-effectvm-emitEvent-v1",
@@ -613,6 +637,11 @@ pub const V2_DESCRIPTORS: &[(&str, &str, &str)] = &[
         DREGG_EFFECTVM_ATTENUATE_IR2_FP,
     ),
     (
+        "revokeCapabilityVmDescriptor2",
+        DREGG_EFFECTVM_REVOKE_CAP_IR2_JSON,
+        DREGG_EFFECTVM_REVOKE_CAP_IR2_FP,
+    ),
+    (
         "setFieldDynVmDescriptor2",
         DREGG_EFFECTVM_SET_FIELD_DYN_IR2_JSON,
         DREGG_EFFECTVM_SET_FIELD_DYN_IR2_FP,
@@ -750,10 +779,11 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 )];
 
 /// THE FULL-COHORT REGEN at the rotated R=24 block (`ROTATION-CUTOVER.md` §5 item 1):
-/// all 34 cohort descriptors re-emitted past their v1 layout with the rotated
+/// all 35 cohort descriptors re-emitted past their v1 layout with the rotated
 /// BEFORE/AFTER blocks + the widened-caveat region (Lean `rotateV3` /
-/// `EffectVmEmitRotationV3.lean`; `v3Registry` is the source) — the 26 v2-graduated members
-/// PLUS the 8 LIVE-path effects the STEP 1 widening added (grantCap · makeSovereign ·
+/// `EffectVmEmitRotationV3.lean`; `v3Registry` is the source) — the 27 v2-graduated members
+/// (incl. the cap-crown `revokeCapability`) PLUS the 8 LIVE-path effects the STEP 1 widening
+/// added (grantCap · makeSovereign ·
 /// createCell · factory · spawn · receiptArchive · cellUnseal · emitEvent). The TSV is
 /// `key\tname\tjson` per line, sha-256 pinned by
 /// `v3_staged_registry_parses_matches_fingerprint_and_covers`.
@@ -763,7 +793,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "02984897593286817aaa14b72870d06b37e275270d63846f2a4a04e27f78b105";
+    "b17ffa0f6499196661eb2d8ef5db5154b02cb4daa3a5eaabecb52aa17c59bbbd";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -898,6 +928,11 @@ pub const ALL_DESCRIPTORS: &[(&str, &str, &str)] = &[
         "dregg-effectvm-refusal-v2",
         DREGG_EFFECTVM_REFUSAL_V2_JSON,
         DREGG_EFFECTVM_REFUSAL_V2_FP,
+    ),
+    (
+        "dregg-effectvm-revokecapability-v1",
+        DREGG_EFFECTVM_REVOKECAPABILITY_V1_JSON,
+        DREGG_EFFECTVM_REVOKECAPABILITY_V1_FP,
     ),
     (
         "dregg-effectvm-revokeDelegation-v2",
@@ -1090,7 +1125,7 @@ mod tests {
     /// stale committed JSON, fails here.
     #[test]
     fn all_descriptors_parse_and_match_fingerprint() {
-        assert_eq!(ALL_DESCRIPTORS.len(), 26, "expected 26 unique descriptors");
+        assert_eq!(ALL_DESCRIPTORS.len(), 27, "expected 27 unique descriptors");
         for (name, json, fp) in ALL_DESCRIPTORS {
             // (a) fingerprint binding
             let got = sha256_hex(json.as_bytes());
@@ -1173,7 +1208,7 @@ mod tests {
     /// changes a descriptor (or a stale committed JSON) fails here.
     #[test]
     fn v2_descriptors_parse_and_match_fingerprint() {
-        assert_eq!(V2_DESCRIPTORS.len(), 26, "expected 26 IR-v2 descriptors");
+        assert_eq!(V2_DESCRIPTORS.len(), 27, "expected 27 IR-v2 descriptors");
         for (key, json, fp) in V2_DESCRIPTORS {
             // (a) fingerprint binding
             let got = sha256_hex(json.as_bytes());
@@ -1637,7 +1672,7 @@ mod tests {
                 "{key}: four appended PI pins (rotated OLD/NEW commit · height · caveat commit)"
             );
         }
-        assert_eq!(n, 34, "expected the full 34-member cohort (26 v2-graduated + 8 widened)");
+        assert_eq!(n, 35, "expected the full 35-member cohort (27 v2-graduated + 8 widened)");
     }
 
     /// The widened-entry codec teeth: round-trip + FAIL-CLOSED decode. A forged
