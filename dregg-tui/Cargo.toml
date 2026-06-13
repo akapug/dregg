@@ -1,0 +1,33 @@
+# dregg-tui — the face of the Robigalia v0 demo: a terminal light client.
+#
+# A STANDALONE crate (its own workspace root — deliberately NOT a member of the
+# repo-root workspace, so it can pin a TUI/HTTP toolchain without perturbing the
+# main tree). It is a light client: it connects over HTTP to a running dregg
+# node's API (node/src/api.rs — /api/node/identity, /api/cells, /api/receipts),
+# lists cells, shows receipts, and renders the node identity. This is M4 of the
+# seL4 boot ladder (docs/SEL4-EMBEDDING.md §5): once the M3 net stack carries
+# the node onto seL4, this same TUI is the operator's window onto it.
+#
+# Runs on the host (the operator's terminal). It reaches the node over the
+# network the M3 PD provides — it does not itself boot on seL4.
+
+# Own workspace root: keeps dregg-tui out of the repo-root workspace members.
+[workspace]
+
+[package]
+name = "dregg-tui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-tui"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"

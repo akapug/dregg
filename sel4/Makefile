@@ -1,74 +1,97 @@
-# sel4/Makefile — build path for the dregg seL4 image (Microkit assembly).
+# sel4/Makefile — build + boot the dregg Robigalia v0 seL4 image.
 #
-# STATUS (2026-06-13): the seL4 Microkit SDK + rust-sel4 toolchain are NOT
-# present in the dregg authoring environment, so `make image` cannot run here.
-# This Makefile is the DOCUMENTED, reviewable recipe. The one target that DOES
-# run on a normal host — and that we verified — is `make verify-isolation`: it
-# proves the verifier core links Lean-free (no libuv / no GMP / no Lean symbols),
-# which is the precondition for the whole weekend win.
+# This BOOTS on a native-macOS toolchain (Microkit SDK 2.2.0 + rust-sel4 +
+# qemu-system-aarch64/riscv64). Run `./setup.sh` once to install deps + the SDK,
+# then `make run` (aarch64) or `make run-riscv` (riscv64).
 #
-# To actually build the image you need, on a Linux box:
-#   1. the seL4 Microkit SDK:   https://github.com/seL4/microkit   (provides
-#      `microkit` the tool + board support packages).
-#   2. the rust-sel4 toolchain: https://github.com/seL4/rust-sel4  (provides the
-#      aarch64-sel4-microkit target spec + the `sel4-microkit` crate).
-#   3. a nightly Rust with `build-std` (the seL4 target is `no_std`/tier-3).
+# Boot ladder (docs/SEL4-EMBEDDING.md §5), each an actual QEMU boot:
+#   make run-m0   — M0: a Rust PD prints "dregg robigalia v0" on seL4.
+#   make run-m1   — M1: the verifier PD (proof-in -> verdict-out contract).
+#   make run-m2   — M2: the rbg DirectoryCell PD (the Robigalia heart).
+#   make run-riscv— M5: M0 retargeted to qemu_virt_riscv64.
+#   make run      — alias for run-m2 (the richest single-PD demo).
 
 # ── Configuration ───────────────────────────────────────────────────────────
-MICROKIT_SDK ?= $(HOME)/microkit-sdk
+MICROKIT_SDK ?= $(HOME)/sel4-sdk/microkit-sdk-2.2.0
 BOARD        ?= qemu_virt_aarch64
 CONFIG       ?= debug
-SEL4_TARGET  ?= aarch64-sel4-microkit
+PD_DIR       := dregg-pd
 BUILD        ?= build
+MICROKIT     := $(MICROKIT_SDK)/bin/microkit
 
-VERIFIER_PD_ELF := $(BUILD)/dregg-verifier-pd.elf
-IMAGE           := $(BUILD)/dregg.img
-SYSTEM          := dregg.system
+# The libsel4 headers rust-sel4's build.rs locates via $SEL4_INCLUDE_DIRS.
+export SEL4_INCLUDE_DIRS := $(MICROKIT_SDK)/board/$(BOARD)/$(CONFIG)/include
 
-.PHONY: all image verifier-pd verify-isolation clean help
+# The aarch64 / riscv64 seL4 Microkit target specs (vendored in dregg-pd/targets).
+AARCH64_TARGET := targets/aarch64-sel4-microkit.json
+RISCV_TARGET   := targets/riscv64imac-sel4-microkit.json
+
+CARGO_FLAGS := --release -Z json-target-spec
+
+# QEMU: the qemu_virt_aarch64 Microkit kernel is built as a hypervisor, so the
+# vCPU must have EL2 — `virtualization=on`.
+QEMU_AARCH64 := qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 \
+                -m 2G -nographic
+QEMU_RISCV   := qemu-system-riscv64 -machine virt -m 2G -nographic
+
+.PHONY: all run run-m0 run-m1 run-m2 run-riscv build-aarch64 build-riscv \
+        verify-isolation clean help
 
 help:
-	@echo "dregg seL4 scaffold targets:"
-	@echo "  make verify-isolation  — HOST: prove the verifier core is Lean-free (RUNS HERE)"
-	@echo "  make verifier-pd       — cross-build the verifier PD ELF (needs rust-sel4 toolchain)"
-	@echo "  make image             — link the Microkit image from dregg.system (needs Microkit SDK)"
-	@echo "  make run               — boot the image in QEMU (needs qemu-system-aarch64)"
+	@echo "dregg Robigalia v0 seL4 image:"
+	@echo "  ./setup.sh        — install deps + Microkit SDK (run once)"
+	@echo "  make run          — boot the rbg DirectoryCell PD (M2) in QEMU"
+	@echo "  make run-m0       — boot the 'dregg robigalia v0' banner PD (M0)"
+	@echo "  make run-m1       — boot the verifier PD (M1)"
+	@echo "  make run-m2       — boot the rbg DirectoryCell PD (M2)"
+	@echo "  make run-riscv    — boot M0 on qemu_virt_riscv64 (M5)"
 
-# ── The HOST proof (runs in any dregg dev env) ──────────────────────────────
-# Builds the verifier with `no-lean-link` and asserts the resulting binary has
-# NO Lean/libuv/GMP linkage. This is the empirical isolation verdict.
+all: build-aarch64
+
+# ── Cross-build the PD ELFs (aarch64) ───────────────────────────────────────
+build-aarch64:
+	cd $(PD_DIR) && cargo build $(CARGO_FLAGS)
+
+build-riscv:
+	cd $(PD_DIR) && SEL4_INCLUDE_DIRS=$(MICROKIT_SDK)/board/qemu_virt_riscv64/$(CONFIG)/include \
+		cargo build $(CARGO_FLAGS) --target $(RISCV_TARGET) -p dregg-m0-hello
+
+# ── Link an image for one PD and boot it (aarch64) ──────────────────────────
+# $1 = PD elf basename (no ext), $2 = system file, $3 = pd-xml-name
+define LINK_AND_RUN_AARCH64
+	mkdir -p $(BUILD)
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/$(1).elf $(BUILD)/
+	printf '<?xml version="1.0" encoding="UTF-8"?>\n<system>\n  <protection_domain name="$(3)" priority="100" stack_size="0x10000">\n    <program_image path="$(1).elf" />\n  </protection_domain>\n</system>\n' > $(BUILD)/$(1).system
+	$(MICROKIT) $(BUILD)/$(1).system --search-path $(BUILD) --board $(BOARD) --config $(CONFIG) -o $(BUILD)/$(1).img -r $(BUILD)/$(1).report.txt
+	$(QEMU_AARCH64) -device loader,file=$(BUILD)/$(1).img,addr=0x70000000,cpu-num=0 -serial mon:stdio
+endef
+
+run: run-m2
+
+run-m0: build-aarch64
+	$(call LINK_AND_RUN_AARCH64,dregg-m0-hello,m0,dregg_m0)
+
+run-m1: build-aarch64
+	$(call LINK_AND_RUN_AARCH64,dregg-verifier-pd,m1,dregg_verifier)
+
+run-m2: build-aarch64
+	$(call LINK_AND_RUN_AARCH64,dregg-rbg-dir,m2,dregg_rbg_dir)
+
+# ── M5: M0 on riscv64 ───────────────────────────────────────────────────────
+run-riscv: build-riscv
+	mkdir -p $(BUILD)
+	cp $(PD_DIR)/target/riscv64imac-sel4-microkit/release/dregg-m0-hello.elf $(BUILD)/
+	printf '<?xml version="1.0" encoding="UTF-8"?>\n<system>\n  <protection_domain name="dregg_m0" priority="100" stack_size="0x10000">\n    <program_image path="dregg-m0-hello.elf" />\n  </protection_domain>\n</system>\n' > $(BUILD)/m0-riscv.system
+	$(MICROKIT) $(BUILD)/m0-riscv.system --search-path $(BUILD) --board qemu_virt_riscv64 --config $(CONFIG) -o $(BUILD)/m0-riscv.img -r $(BUILD)/m0-riscv.report.txt
+	$(QEMU_RISCV) -kernel $(BUILD)/m0-riscv.img -serial mon:stdio
+
+# ── The HOST proof: the verify core links Lean-free (runs anywhere) ──────────
 verify-isolation:
 	cargo build -p dregg-verifier --features no-lean-link
-	@echo "--- linked dynamic libs (expect system libs only, NO libuv/libleanshared) ---"
-	@otool -L ../target/debug/dregg-verifier 2>/dev/null || ldd ../target/debug/dregg-verifier 2>/dev/null || true
-	@echo "--- Lean/libuv symbols (expect NONE) ---"
+	@echo "--- linked dynamic libs (expect system libs only) ---"
+	@otool -L ../target/debug/dregg-verifier 2>/dev/null || true
 	@! nm ../target/debug/dregg-verifier 2>/dev/null | grep -iE "uv_run|lean_initialize|leanrt|__gmp" \
 		&& echo "PASS: no Lean runtime symbols" || (echo "FAIL: Lean symbols present" && exit 1)
 
-# ── Cross-build the verifier PD (needs the seL4 toolchain) ───────────────────
-verifier-pd:
-	cd verifier-pd && \
-	cargo build --release \
-		--target $(SEL4_TARGET) \
-		-Z build-std=core,alloc,compiler_builtins \
-		-Z build-std-features=compiler-builtins-mem
-	mkdir -p $(BUILD)
-	cp verifier-pd/target/$(SEL4_TARGET)/release/dregg-verifier-pd $(VERIFIER_PD_ELF)
-
-# ── Link the Microkit image (needs the Microkit SDK `microkit` tool) ────────
-image: verifier-pd
-	$(MICROKIT_SDK)/bin/microkit $(SYSTEM) \
-		--search-path $(BUILD) \
-		--board $(BOARD) \
-		--config $(CONFIG) \
-		-o $(IMAGE) \
-		-r $(BUILD)/report.txt
-
-# ── Boot in QEMU ────────────────────────────────────────────────────────────
-run: image
-	qemu-system-aarch64 -machine virt -cpu cortex-a53 -m 256 -nographic \
-		-device loader,file=$(IMAGE),addr=0x70000000,cpu-num=0 \
-		-serial mon:stdio
-
 clean:
-	rm -rf $(BUILD) verifier-pd/target
+	rm -rf $(BUILD) $(PD_DIR)/target

@@ -1,0 +1,5 @@
+# seL4 build outputs
+build/
+dregg-pd/target/
+verifier-pd/target/
+*.img

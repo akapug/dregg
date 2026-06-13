@@ -1,0 +1,19 @@
+# m0-hello — M0 of the boot ladder: a minimal Rust seL4 Microkit protection
+# domain that prints "dregg robigalia v0" to the serial console. Proves the
+# native-macOS rust-sel4 toolchain + Microkit SDK + QEMU boot path end to end,
+# independent of any heavy dregg dependency.
+
+[package]
+name = "dregg-m0-hello"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-m0-hello"
+path = "src/main.rs"
+
+[dependencies]
+# `alloc` to stay consistent with the workspace's feature-unified build of
+# sel4-microkit (M1/M2 enable it); M0 declares a tiny heap but uses no alloc.
+sel4-microkit = { workspace = true, features = ["alloc"] }

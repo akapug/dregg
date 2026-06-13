@@ -1,6 +1,9 @@
 # seL4 Embedding Roadmap — dregg as a bootable image
 
-*Design + scoping doc. Status: roadmap, not implementation. Cites the actual
+*Design + scoping doc. Status: the Robigalia v0 demo now BOOTS — M0/M1/M2 run
+Rust protection domains on the seL4 microkernel under `qemu-system-aarch64`, and
+M5 boots M0 under `qemu-system-riscv64`, on a native-macOS toolchain (Microkit
+SDK 2.2.0 + rust-sel4). See `sel4/README.md` + `sel4/setup.sh`. Cites the actual
 tree as of 2026-06-13.*
 
 ## 0. Where we are today
@@ -234,17 +237,26 @@ for the cell caps.
    specifically there is no such downgrade — it carries no executor authority,
    so `no-lean-link` there is pure link-suppression, not a guarantee change.)
 
-## 8. Scaffold status (2026-06-13)
+## 8. Status (2026-06-13) — the Robigalia v0 demo BOOTS
 
-The §5 weekend-win skeleton now exists under `sel4/`:
+The §5 weekend win is no longer a paper scaffold: Rust protection domains boot
+on the seL4 microkernel in QEMU, on a **native-macOS toolchain** (no Docker).
+The key unlock was that the seL4 Foundation ships a **native macos-aarch64
+Microkit SDK** (`microkit-sdk-2.2.0-macos-aarch64.tar.gz`) — the `microkit`
+image tool and the prebuilt seL4 kernel ELFs run natively, and rust-sel4's
+`sel4-microkit` runtime cross-builds for the `aarch64-sel4-microkit` /
+`riscv64imac-sel4-microkit` targets with `-Z build-std` on a pinned nightly.
 
 | Item | Status |
 |------|--------|
-| Verifier-isolation verdict | **✅ proven** — clean `no-lean-link` build, zero Lean/libuv/GMP symbols, no tokio/mio/async/redb/net in closure |
-| `no-lean-link` wiring on `verifier/Cargo.toml` | **✅ added** (the one-line fix; fans out to federation/captp/turn) |
-| `sel4/dregg.system` (5-PD Microkit assembly) | **✅ scaffolded** (verifier wired; other 4 declared, ELFs blocked) |
-| `sel4/verifier-pd/` (`#![no_std]` PD crate) | **✅ scaffolded** (wraps real verify core; rust-sel4 entry gated on `target_os="sel4"`) |
-| Build recipe + rbg→seL4 mapping | **✅** `sel4/Makefile`, `sel4/RBG-TO-SEL4.md` |
-| Actual seL4 cross-build / boot | **remaining** — needs Microkit SDK + rust-sel4 toolchain (absent here) |
-| `executor` PD ELF | **remaining** — THE blocker (§2 Lean runtime port) |
-| `persist`/`ingress`/`gossip` PD ELFs | **remaining** — redb-over-block-cap (§3), lwIP (§4), quarter+ |
+| Native-macOS toolchain (`sel4/setup.sh`) | **✅** Microkit SDK 2.2.0 (macos-aarch64) + nightly-2026-04-04 + rust-sel4 `efef73cc`; `make run` reproduces from clean |
+| **M0** — Rust PD prints "dregg robigalia v0" | **✅ boots** in `qemu-system-aarch64` (`sel4/dregg-pd/m0-hello`) |
+| **M1** — verifier PD (bundle-in → verdict-out, anti-ghost reject) | **✅ boots** (`sel4/dregg-pd/verifier`); no_std structural verify, STARK core is the no_std closure port |
+| **M2** — rbg `DirectoryCell` PD (CAS + membership ACL + factory slot-caveat) | **✅ boots** (`sel4/dregg-pd/rbg-dir`) — the Robigalia heart, alive on seL4 |
+| **M3** — virtio-net + smoltcp net system | **◐** toolchain proven (the net-driver PD cross-builds natively for bare seL4); multi-PD system assembly remains |
+| **M4** — dregg TUI light client | **✅** `dregg-tui/` builds + runs on the host (the face; reaches the node over M3) |
+| **M5** — riscv64 | **✅ boots** — M0 on `qemu_virt_riscv64` (OpenSBI → seL4 → userspace → dregg PD) |
+| Verifier-isolation verdict | **✅ proven** — `no-lean-link` build, zero Lean/libuv/GMP symbols |
+| `sel4/dregg.system` (5-PD node assembly) | **✅ scaffolded** (the steady-state node shape; `executor` blocked on §2) |
+| `executor` PD ELF | **remaining** — THE blocker (§2 Lean runtime port); v0 leads with verifier + rbg userspace |
+| `persist`/`ingress`/`gossip` PD ELFs | **remaining** — redb-over-block-cap (§3), the M3 net system (§4), quarter+ |
