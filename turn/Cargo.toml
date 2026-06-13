@@ -35,6 +35,16 @@ x25519-dalek = { workspace = true }
 dregg-lean-ffi = { path = "../dregg-lean-ffi" }
 
 [features]
+# `recursion` is in the DEFAULT set: native builds compile the ROTATED sovereign
+# verify leg (`executor::verify_and_commit_proof_rotated` →
+# `dregg-circuit::descriptor_ir2::verify_vm_descriptor2`, the cutover's target
+# path). The `not(recursion)` build keeps the legacy hand-AIR sovereign verify
+# (`verify_and_commit_proof_v1`) — that is the wasm / no-lean-link VERIFIER path
+# (it passes `default-features = false`) until the prover-free rotated verify
+# surface lands (cutover C2, ROTATION-CUTOVER §EXEC). The feature forwards to
+# `dregg-circuit/recursion` so `descriptor_ir2` is present when the branch is.
+default = ["recursion"]
+recursion = ["dregg-circuit/recursion"]
 # PLATFORM gate, OFF by default: only wasm32/zkvm builds set it. It compiles the Rust-only
 # execution path IN PLACE OF the Lean shadow/gate executor — a statement about the target's
 # linker, never about which guarantees this dregg has.

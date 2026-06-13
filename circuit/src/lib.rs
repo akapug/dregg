@@ -235,7 +235,13 @@ pub mod lean_lookup_air;
 /// authors NO constraints; it realizes the declared tables/lookups/mem-ops/
 /// map-ops. v1 descriptors keep proving through `lean_descriptor_air` until the
 /// flag-day. See module docs.
-#[cfg(feature = "recursion")]
+///
+/// Gated on `any(recursion, verifier)`: the PROVE surface (`prove_vm_descriptor2*`,
+/// trace assembly, `prove_batch`) is `recursion`-only, but the VERIFY surface
+/// (`verify_vm_descriptor2{,_with_config}`, the AIRs, `ir2_config`) compiles under the
+/// prover-free `verifier` feature so the wasm / no-lean-link verifier can verify
+/// rotated proofs without the prover DFT (cutover C2).
+#[cfg(any(feature = "recursion", feature = "verifier"))]
 pub mod descriptor_ir2;
 
 /// Recursive (Golden Vision) compression bridge for `dregg_turn::WitnessedReceipt`

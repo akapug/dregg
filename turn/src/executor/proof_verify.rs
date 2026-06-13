@@ -31,6 +31,214 @@ impl TurnExecutor {
         turn: &Turn,
         ledger: &mut Ledger,
     ) -> Result<(), TurnError> {
+        // THE ROTATION (cutover C1): the matched producer
+        // (`sdk::cipherclerk::execute_sovereign_turn_with_proof`) mints a rotated
+        // R=24 `Ir2BatchProof` over the cohort descriptor, carrying the v9 felt
+        // commitment. When that producer is compiled (native default,
+        // `dregg-circuit/recursion`), verify through `verify_vm_descriptor2` (the
+        // multi-table batch verifier), NOT the weak hand-AIR `EffectVmAir`. The
+        // rotated wire is a postcard-serialized `BatchProof` (no `DREG` magic), so
+        // it would (correctly) fail the v1 `stark::proof_from_bytes` — the two
+        // halves move together.
+        #[cfg(feature = "recursion")]
+        {
+            self.verify_and_commit_proof_rotated(cell_id, proof_bytes, turn, ledger)
+        }
+        #[cfg(not(feature = "recursion"))]
+        {
+            self.verify_and_commit_proof_v1(cell_id, proof_bytes, turn, ledger)
+        }
+    }
+
+    /// THE ROTATED sovereign verify (cutover C1, decision #1's verify leg). The
+    /// proof is a rotated R=24 `Ir2BatchProof` minted by
+    /// `sdk::cipherclerk::execute_sovereign_turn_with_proof` over the cohort
+    /// descriptor for the turn's effect. We RECONSTRUCT the exact 38-PI vector the
+    /// prover bound and verify through `descriptor_ir2::verify_vm_descriptor2` — the
+    /// multi-table batch verifier — retiring the weaker hand-AIR `EffectVmAir` leg.
+    ///
+    /// PI reconstruction (all 38 must match the prover for Fiat–Shamir to agree):
+    ///   * PIs 0..33 (the v1 sub-trace prefix) + PI 37 (the caveat commit) are
+    ///     witness-INDEPENDENT — they are a function of `(initial_vm_state,
+    ///     vm_effects, caveat)` alone, so a re-run of `generate_rotated_effect_vm_trace`
+    ///     with PLACEHOLDER block witnesses reproduces them exactly;
+    ///   * PI 34 (rotated OLD commit) ← the stored sovereign v9 commitment felt;
+    ///   * PI 35 (rotated NEW commit) ← `turn.execution_proof_new_commitment` felt
+    ///     (the claimed post-state; the descriptor's `pi_binding` at col 261 ties it
+    ///     to the trace's after-block `STATE_COMMIT`, so a forged claim is rejected);
+    ///   * PI 36 (committed height) ← the cell's own committed height.
+    ///
+    /// The verifier does NOT reconstruct the producer's turn-context (`cells_root` /
+    /// `iroot`): those are absorbed INTO the v9 commitment, which the proof binds and
+    /// the verifier takes from trusted storage/claim. A tampered post-state commitment
+    /// makes PI 35 disagree with the trace's bound carrier ⇒ UNSAT (the anti-ghost
+    /// tooth, exercised in `tests/src/sovereign_proof.rs`).
+    #[cfg(feature = "recursion")]
+    pub(super) fn verify_and_commit_proof_rotated(
+        &self,
+        cell_id: &CellId,
+        proof_bytes: &[u8],
+        turn: &Turn,
+        ledger: &mut Ledger,
+    ) -> Result<(), TurnError> {
+        use dregg_circuit::descriptor_ir2::{
+            DreggStarkConfig, Ir2BatchProof, parse_vm_descriptor2, verify_vm_descriptor2,
+        };
+        use dregg_circuit::effect_vm::trace_rotated::{
+            RotatedBlockWitness, empty_caveat_manifest, generate_rotated_effect_vm_trace,
+            rotated_descriptor_name_for_effect, transfer_caveat_manifest,
+        };
+        use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
+        use dregg_circuit::field::BabyBear;
+        use crate::rotation_witness::{NUM_PRE_LIMBS, committed_height_felt};
+
+        // 1. Stored sovereign commitment (the v9 felt the matched producer wrote).
+        let old_commitment = if let Some(c) = ledger.get_sovereign_commitment(cell_id) {
+            *c
+        } else if let Some(reg) = ledger.get_sovereign_registration(cell_id) {
+            reg.commitment
+        } else {
+            return Err(TurnError::SovereignNotRegistered { cell: *cell_id });
+        };
+        let new_commitment = turn.execution_proof_new_commitment.ok_or_else(|| {
+            TurnError::InvalidExecutionProof("execution_proof_new_commitment is required".to_string())
+        })?;
+
+        // 2. Deserialize the rotated `Ir2BatchProof` (postcard; no `DREG` magic).
+        let ir2_proof: Ir2BatchProof<DreggStarkConfig> = postcard::from_bytes(proof_bytes)
+            .map_err(|e| {
+                TurnError::InvalidExecutionProof(format!("rotated proof deserialize: {e}"))
+            })?;
+
+        // 3. Reconstruct the circuit pre-state + VM effects from the before-cell the
+        //    ledger holds (the SAME construction the producer used).
+        let cell = ledger.get(cell_id).ok_or_else(|| {
+            TurnError::InvalidExecutionProof(format!(
+                "rotated verify: sovereign cell {cell_id} not present in the ledger"
+            ))
+        })?;
+        // UNDO PHASE 1 (`execute.rs` PHASE 1, "Commit fee + nonce"): by the time this
+        // verifier runs the executor has ALREADY debited `turn.fee` from the agent cell's
+        // balance and incremented its nonce. The matched producer proved against the
+        // PRE-fee, PRE-increment state (the cipherclerk's sovereign cell), so we reconstruct
+        // that state to reproduce the v1 sub-trace's init/final balance + nonce PIs. The
+        // reconstruction's correctness is cross-checked by OLD_COMMIT (PI 34): if our
+        // pre-state diverges from the producer's, PI 34 ≠ the stored sovereign commitment.
+        let cap_root = dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities);
+        let post_fee_balance = cell.state.balance();
+        let pre_balance = u64::try_from(post_fee_balance.saturating_add(turn.fee as i64))
+            .map_err(|_| {
+                TurnError::InvalidExecutionProof(
+                    "rotated verify: cell balance is negative".to_string(),
+                )
+            })?;
+        let pre_nonce = (cell.state.nonce().saturating_sub(1)) as u32;
+        let cell_committed_height = cell.state.committed_height();
+        let initial_vm_state =
+            dregg_circuit::CellState::with_capability_root(pre_balance, pre_nonce, cap_root);
+        let vm_effects = convert_turn_effects_to_vm(cell_id, turn, ledger);
+
+        // 4. Resolve the cohort descriptor by the turn's lead effect (the SAME resolver
+        //    the producer used). A non-cohort effect fails closed.
+        let lead = vm_effects.first().ok_or_else(|| {
+            TurnError::InvalidExecutionProof("rotated verify: empty effect set".to_string())
+        })?;
+        let name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
+            TurnError::InvalidExecutionProof(format!(
+                "rotated verify: effect {lead:?} is not in the R=24 rotated cohort"
+            ))
+        })?;
+        let json = V3_STAGED_REGISTRY_TSV
+            .lines()
+            .find_map(|line| {
+                let mut it = line.splitn(3, '\t');
+                if it.next() == Some(name) {
+                    let _name = it.next();
+                    it.next()
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                TurnError::InvalidExecutionProof(format!(
+                    "rotated verify: {name} not in the staged rotated registry"
+                ))
+            })?;
+        let desc = parse_vm_descriptor2(json).map_err(|e| {
+            TurnError::InvalidExecutionProof(format!("rotated descriptor parse: {e}"))
+        })?;
+
+        // 5. The caveat manifest the producer used (transfer exercises both domains;
+        //    everything else uses the empty manifest).
+        let caveat = match vm_effects.as_slice() {
+            [dregg_circuit::effect_vm::Effect::Transfer { .. }] => transfer_caveat_manifest(),
+            _ => empty_caveat_manifest(),
+        };
+
+        // 6. Reconstruct the 38-PI vector. PLACEHOLDER block witnesses reproduce the
+        //    witness-INDEPENDENT PIs (0..33 + 37) exactly; the commit/height PIs (34/35/36)
+        //    are overridden from trusted storage/claim/cell below.
+        let placeholder =
+            RotatedBlockWitness::new(vec![BabyBear::ZERO; NUM_PRE_LIMBS], BabyBear::ZERO)
+                .map_err(|e| {
+                    TurnError::InvalidExecutionProof(format!("rotated placeholder witness: {e}"))
+                })?;
+        let (_trace, mut dpis) = generate_rotated_effect_vm_trace(
+            &initial_vm_state,
+            &vm_effects,
+            &placeholder,
+            &placeholder,
+            &caveat,
+        )
+        .map_err(|e| {
+            TurnError::InvalidExecutionProof(format!("rotated PI reconstruction: {e}"))
+        })?;
+        if dpis.len() != desc.public_input_count {
+            return Err(TurnError::InvalidExecutionProof(format!(
+                "rotated verify: reconstructed {} PIs but descriptor wants {}",
+                dpis.len(),
+                desc.public_input_count
+            )));
+        }
+        // OLD commit (PI 34) ← stored v9 felt; NEW (PI 35) ← claimed v9 felt; the
+        // canonical single-felt encoding is the low-4-byte LE u32 (`felt_to_bytes32`),
+        // read back as `BabyBear::new(u32)`.
+        dpis[34] = BabyBear::new(u32::from_le_bytes(old_commitment[0..4].try_into().unwrap()));
+        dpis[35] = BabyBear::new(u32::from_le_bytes(new_commitment[0..4].try_into().unwrap()));
+        dpis[36] = committed_height_felt(cell_committed_height);
+
+        // 7. Verify through the multi-table batch verifier (the hand-AIR leg is gone).
+        verify_vm_descriptor2(&desc, &ir2_proof, &dpis).map_err(|e| {
+            // A post-state forgery surfaces here: PI 35 disagrees with the trace's
+            // after-block STATE_COMMIT carrier (the descriptor's col-261 pi_binding).
+            TurnError::ProofVerificationFailed(format!("rotated effect-vm verify: {e}"))
+        })?;
+
+        // 8. Update commitment (legacy map first, then registrations) — unchanged.
+        if ledger.is_sovereign(cell_id) {
+            let _ = ledger.update_sovereign_commitment(cell_id, new_commitment);
+        } else {
+            let _ = ledger.update_sovereign_registration_commitment(
+                cell_id,
+                old_commitment,
+                new_commitment,
+                self.block_height,
+            );
+        }
+        Ok(())
+    }
+
+    /// The legacy v1 hand-AIR (`EffectVmAir`) sovereign verify. Retained behind
+    /// `not(recursion)` for the wasm / no-lean-link verifier builds until the
+    /// prover-free rotated verify surface lands (cutover C2); deleted at C7.
+    #[cfg(not(feature = "recursion"))]
+    pub(super) fn verify_and_commit_proof_v1(
+        &self,
+        cell_id: &CellId,
+        proof_bytes: &[u8],
+        turn: &Turn,
+        ledger: &mut Ledger,
+    ) -> Result<(), TurnError> {
         use dregg_circuit::effect_vm;
         use dregg_circuit::field::BabyBear;
         use dregg_circuit::stark;
@@ -1286,6 +1494,11 @@ impl TurnExecutor {
     /// we use it only to detect whether a NoteSpend row exists for this cell
     /// and as the source for the felt we ultimately return, so the value is
     /// byte-identical to the trace's `param0`.
+    ///
+    /// V1-only: consumed exclusively by `verify_and_commit_proof_v1` (the rotated
+    /// verifier reconstructs PIs from the trace generator, not these per-effect
+    /// cross-binding helpers). Dead under `recursion`; deleted with the v1 leg at C7.
+    #[cfg_attr(feature = "recursion", allow(dead_code))]
     fn expected_notespend_nullifier_bb(
         &self,
         _cell_id: &CellId,
@@ -1339,6 +1552,7 @@ impl TurnExecutor {
     ///      `verify_effect_binding_proofs` STARK-verifies + PI-matches against
     ///      its value/asset/range opening); failing that
     ///   2. the runtime NoteCreate effect's own commitment (backwards compat).
+    #[cfg_attr(feature = "recursion", allow(dead_code))]
     fn expected_notecreate_commitment_bb(
         &self,
         turn: &Turn,
@@ -1380,6 +1594,7 @@ impl TurnExecutor {
     ///      balance arithmetic `verify_effect_binding_proofs_with_ledger`
     ///      validates against the ledger snapshot); failing that
     ///   2. the runtime Burn effect's own target (backwards compat).
+    #[cfg_attr(feature = "recursion", allow(dead_code))]
     fn expected_burn_target_bb(
         &self,
         turn: &Turn,
@@ -1674,6 +1889,10 @@ impl TurnExecutor {
     /// Stage 1: looks at sovereign registration's `max_custom_effects` optional
     /// field (added in this stage). Stage 8 may move the source of truth into
     /// `cell::CellProgram::max_custom_effects` directly.
+    ///
+    /// V1-only (consumed by `verify_and_commit_proof_v1`'s PI reconstruction);
+    /// dead under `recursion`, deleted with the v1 leg at C7.
+    #[cfg_attr(feature = "recursion", allow(dead_code))]
     pub(super) fn read_cell_max_custom_effects(&self, cell_id: &CellId, ledger: &Ledger) -> u8 {
         if let Some(reg) = ledger.get_sovereign_registration(cell_id) {
             if let Some(m) = reg.max_custom_effects {
@@ -1688,6 +1907,10 @@ impl TurnExecutor {
     /// Stage 1: returns the empty-tree sentinel (`Commitment4::empty()`).
     /// Stage 7 populates this from federation state when CapTP runtime
     /// emitters land. Per `DESIGN-captp-integration.md` §4.2.
+    ///
+    /// V1-only (consumed by `verify_and_commit_proof_v1`'s PI reconstruction);
+    /// dead under `recursion`, deleted with the v1 leg at C7.
+    #[cfg_attr(feature = "recursion", allow(dead_code))]
     pub(super) fn read_approved_handoffs_root(&self) -> [dregg_circuit::field::BabyBear; 4] {
         [dregg_circuit::field::BabyBear::ZERO; 4]
     }
@@ -1725,6 +1948,9 @@ impl TurnExecutor {
     }
 
     /// Convert 4 BabyBear elements to a 16-byte array (for custom proof commitment matching).
+    /// V1-only (the rotated verify path reconstructs PIs from the trace generator); dead under
+    /// `recursion`, deleted with the v1 leg at C7.
+    #[cfg_attr(feature = "recursion", allow(dead_code))]
     pub(super) fn babybear4_to_bytes16(elems: &[dregg_circuit::field::BabyBear; 4]) -> [u8; 16] {
         let mut result = [0u8; 16];
         for (i, elem) in elems.iter().enumerate() {
@@ -1740,6 +1966,7 @@ impl TurnExecutor {
     /// `expand_vk_hash_16_to_32` (zero-padded upper 16 bytes), giving 80-bit
     /// effective security in a 128-bit system. The full 32-byte form
     /// distinguishes VK hashes whose lower 16 bytes collide.
+    #[cfg_attr(feature = "recursion", allow(dead_code))]
     pub(super) fn babybear8_to_bytes32(elems: &[dregg_circuit::field::BabyBear; 8]) -> [u8; 32] {
         let mut result = [0u8; 32];
         for (i, elem) in elems.iter().enumerate() {
@@ -1749,6 +1976,7 @@ impl TurnExecutor {
     }
 
     /// Hash custom proof bytes to produce a 16-byte commitment (matching BabyBear[4]).
+    #[cfg_attr(feature = "recursion", allow(dead_code))]
     pub(super) fn hash_custom_proof(proof_bytes: &[u8]) -> [u8; 16] {
         let h = blake3::hash(proof_bytes);
         let bytes = h.as_bytes();
@@ -1950,6 +2178,7 @@ impl TurnExecutor {
     }
 
     /// Encode two BabyBear elements as a [u8; 32] for error reporting.
+    #[cfg_attr(feature = "recursion", allow(dead_code))]
     pub(super) fn babybear_pair_to_bytes32(
         lo: dregg_circuit::field::BabyBear,
         hi: dregg_circuit::field::BabyBear,
@@ -2068,6 +2297,9 @@ impl TurnExecutor {
     ///
     /// Returns (magnitude_u32, sign_u32) where sign=0 means positive/incoming,
     /// sign=1 means negative/outgoing.
+    /// V1-only (the rotated verify reconstructs balance PIs from the trace generator);
+    /// dead under `recursion`, deleted with the v1 leg at C7.
+    #[cfg_attr(feature = "recursion", allow(dead_code))]
     pub(super) fn compute_balance_delta_from_effects(cell_id: &CellId, turn: &Turn) -> (u32, u32) {
         fn walk_delta(tree: &CallTree, cell_id: &CellId, net: &mut i64) {
             for effect in &tree.action.effects {

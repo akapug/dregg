@@ -48,21 +48,68 @@ flip:)*
   truth; `sdk::prove_effect_vm_rotated_ir2_with_caveat` is the cohort-general rotated prover. Teeth:
   `resolvers_cover_exactly_the_rotated_registry` (=26), `non_cohort_effects_resolve_to_none`. Doc:
   ROTATION-CUTOVER §2c.
-- ⚠ **NEWLY SURFACED BLOCKER (the cohort boundary).** The rotated `v3Registry` is only the 26
-  v2-graduated effects. The LIVE path proves MORE: `MakeSovereign`/`CreateCell`/`CreateCellFromFactory`/
-  `SpawnWithDelegation`/`ReceiptArchive`/`CellUnseal`/`GrantCapability`/`RevokeCapability`/`EmitEvent`/
-  `Custom` are NOT in the rotated registry. Flipping to rotated-ONLY + deleting v1 would BRICK these
-  effects (no rotated descriptor to prove them). RESOLUTION before "v1 deleted": extend the Lean
-  `v3Registry` to emit rotated descriptors for these (a Lean-emission act, the same `rotateV3` lift) +
-  re-pin the registry TSV. This is the gate that makes "the rotated path is the ONLY path" actually
-  cover all effects. (Until then v1 must stay reachable for them.)
-- REMAINING (the live-path rewrite + flip, the deep multi-day tail): route `prove_full_turn` →
-  rotated `Ir2BatchProof` as the only path (changes `AttachedSubProof` wire shape + `compose_aggregate`
-  + `ComposedProof` effect-vm leg) · rewrite `verify_full_turn`/`verify_effect_vm_proof_with_cutover`
-  to the rotated verifier · rewrite executor `proof_verify.rs::verify_and_commit_proof` PI
-  reconstruction (v1 `pi::ACTIVE_BASE_COUNT` shape + bespoke `stark::verify` → the rotated 38-PI
-  Ir2BatchProof + v9 commitment) · `aggregate_bilateral_prover.rs` · reroute ~70 v1 call-sites
-  (node/sdk/verifier/lightclient/perf/preflight) · un-gate (remove `recursion`/`DREGG_ROTATED_PROVER`).
+- ✅ CLOSED (the cohort boundary). The rotated registry now has all **36** cohort members
+  (`circuit/descriptors/rotation-v3-staged-registry.tsv`), incl. the two former residues
+  `revokeCapabilityVmDescriptor2R24` (cap-crown graduated) + `customVmDescriptor2R24` (ProofBind IR
+  constraint, 3c27a51cf). Every LIVE selector resolves via `rotated_descriptor_name_for_effect`;
+  none is bricked by deleting v1. The cutover-EXECUTE lane (ROTATION-CUTOVER §EXEC) drives the flip.
+- ✅ DONE (cutover **C1**, 2026-06-13): the SOVEREIGN proof-carrying matched pair (FLOW A,
+  test-only) is rotated — `executor::verify_and_commit_proof` routes (under `recursion`) to
+  `verify_and_commit_proof_rotated` (38-PI reconstruction + `verify_vm_descriptor2`, hand-AIR
+  `EffectVmAir` RETIRED on this path); producer `cipherclerk::prove_sovereign_turn_rotated` mints
+  the rotated `Ir2BatchProof`. New `dregg-turn`/`dregg-sdk` `recursion` feature (default-on; wasm
+  `not(recursion)` keeps the v1 leg `verify_and_commit_proof_v1`). Green: `sdk/tests/
+  sovereign_rotated_c1.rs` (accept + anti-ghost) + both feature configs compile. Two obstructions
+  found+fixed (NOT papered): stored NEW commit must be the trace's PI 35 (welds from the v1
+  sub-trace after-state, ≠ `compute_v9(after_cell)`); verifier undoes `execute.rs` PHASE 1 (fee
+  debit + nonce++) to reconstruct the producer's pre-state (cross-checked by OLD_COMMIT/PI 34).
+  RE-VERIFIED 2026-06-13 (fresh persvati build, not a self-report): `sovereign_rotated_c1` both
+  tests green under `recursion`; `dregg-turn` compiles green under BOTH `--no-default-features`
+  and default. MEASURED win (`effect_vm_ir2_size_measure`): v1 hand-AIR 358900 B (350.5 KiB),
+  verify 16.8 ms → rotated IR-v2 123292 B (120.4 KiB), verify 5.0 ms — **0.344 ratio (−65.6 %
+  size), verify 3.4× faster**, on TOP of the soundness win (multi-table batch verifier replaces
+  the weak hand-AIR). Hygiene: removed a dead `use serde::Deserialize;` in `executor/mod.rs`
+  (the WIP's `cfg_attr(recursion, allow(unused_imports))` had the condition backwards — the
+  import is unused in BOTH configs; submodules import serde themselves).
+  SEQUENCING NOTE — `verify_sovereign_witness_stark` (the OTHER live sovereign verify leg,
+  `execute.rs:798`, the `sovereign_witnesses[].transition_proof` path) STAYS on v1 `EffectVmAir`
+  for now and is deliberately OUT of C1: it has NO matched rotated producer (every LIVE producer
+  sets `transition_proof: None` — `sdk/src/cipherclerk.rs:4861`, federation/*, peer_exchange; only
+  `node/src/mcp.rs:6165` + the observability demo feed it). The C1 rotated producer emits
+  `sovereign_witnesses: HashMap::new()`, so it never exercises this leg. Rotating its verifier in
+  isolation = a verify-without-producer brick (the exact hazard the cutover brief warns against);
+  it rotates WITH the FLOW B / witness producer (C3) or retires at C7, NOT before.
+- ✅ DONE (cutover **C2**, 2026-06-13): prover-free `verify_vm_descriptor2` split. A `verifier`
+  feature on `dregg-circuit` (`recursion = ["verifier", + recursion-prover crates]`) compiles
+  `verify_vm_descriptor2{,_with_config}` + AIRs + `ir2_config` under `--no-default-features
+  --features verifier` (no `prove_batch`/DFT link); `descriptor_ir2` module-gated
+  `any(recursion, verifier)`, the whole PROVE surface (`prove_vm_descriptor2*`, `build_traces` +
+  trace-fill helpers, `Ir2Traces`, `prove_batch`/`StarkInstance` + prover-only imports,
+  `MIN_TABLE_HEIGHT`, test mod) `recursion`-only. `verify_batch` is prover-free + `from_airs_and_
+  degrees(..).common` builds only symbolic `Lookups` (the IR-v2 AIRs have empty preprocessed).
+  Verified on persvati: verifier-only lib (zero `descriptor_ir2` warnings) AND default lib both
+  green. Files: `circuit/Cargo.toml`, `circuit/src/lib.rs`, `circuit/src/descriptor_ir2.rs`.
+- ⚠️ HARD WALL (cutover **C3**, found 2026-06-13 — needs an ember architecture decision before C3
+  can proceed): `prove_full_turn`'s effect-vm leg is an `EffectVmP3Proof` that THREE LIVE
+  recursive-composition surfaces ingest / re-prove as the v1 **186-col** statement, so it cannot
+  rotate to `Ir2BatchProof` and C7 cannot delete `EffectVmAir`/`generate_effect_vm_trace`/
+  `EffectVmP3Proof` while they stand: (1) `circuit/src/ivc_turn_chain.rs` (lightclient
+  `WholeChainProof`) — `prove_descriptor_leaf` re-proves `EffectVmDescriptorAir` over the 186-col
+  recursion matrix via the recursion-fork in-circuit verifier (a uni-STARK leaf-wrap); (2)
+  `circuit/src/joint_turn_aggregation.rs` (lightclient `DescriptorParticipant`) — aggregation AIR
+  built on `EffectVmAir::new`; (3) `turn/src/aggregate_bilateral_prover.rs` (node bilateral bundle,
+  `blocklace_sync.rs:3265`/`mcp.rs:6587`) — outer STARK via `EffectVmAir` + the 204-PI slice. The
+  flat FLOW B quartet (`prove_full_turn`/`verify_full_turn`/node-`turn_proving`/
+  `verify_sovereign_witness_stark`) is INSEPARABLE — it mints the very proof they ingest. **Decision
+  needed:** how does the whole-history recursion (and joint-turn aggregation) wrap the rotated
+  MULTI-TABLE `BatchProof` (no batch-proof leaf-wrap/in-circuit-verifier exists in the recursion
+  fork; the present leaf-wrap is uni-STARK only) — OR re-architect it — OR freeze a legacy v1 leaf
+  for historical turns while live turns rotate (keeps v1 alive ⇒ contradicts grep-zero). Detail in
+  ROTATION-CUTOVER §EXEC C3 ⚠. (`proof_forest.rs` has no non-test consumer; dies at C7.)
+- C3-onward (gated on the above decision): FLOW B route `prove_full_turn`→rotated as the only path
+  (`AttachedSubProof`/`compose_aggregate`/`ComposedProof` effect-vm leg) + `verify_full_turn` rotated;
+  **C4** `aggregate_bilateral_prover.rs` 204→38 PI slice + reroute ~70 v1 call-sites
+  (node/sdk/verifier/lightclient/perf/preflight) + un-gate (remove `recursion`/`DREGG_ROTATED_PROVER`).
   THEN regen EmitAllJson→`v3Registry` live · cell `CANONICAL_COMMITMENT_CONTEXT` v8→v9 · re-emit the
   R=16 `columns::rotation` staged-probe module at R=24 (the `rotation_layout_matches_lean` drift guard
   + SHA pin re-anchor — NOTE the LIVE rotated path is ALREADY R=24 via `trace_rotated`/`caveat`; only
