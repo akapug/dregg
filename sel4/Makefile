@@ -34,7 +34,7 @@ QEMU_AARCH64 := qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-
                 -m 2G -nographic
 QEMU_RISCV   := qemu-system-riscv64 -machine virt -m 2G -nographic
 
-.PHONY: all run run-m0 run-m1 run-m2 run-riscv build-aarch64 build-riscv \
+.PHONY: all run run-m0 run-m1 run-m2 run-stark run-riscv build-aarch64 build-riscv \
         verify-isolation clean help
 
 help:
@@ -76,6 +76,11 @@ run-m1: build-aarch64
 
 run-m2: build-aarch64
 	$(call LINK_AND_RUN_AARCH64,dregg-rbg-dir,m2,dregg_rbg_dir)
+
+# M1+ : the verified-compute heart organ — a REAL plonky3-style STARK
+# (BabyBear+BLAKE3+FRI) proved + verified on-device, with the anti-ghost tooth.
+run-stark: build-aarch64
+	$(call LINK_AND_RUN_AARCH64,dregg-verifier-stark-pd,mstark,dregg_verifier_stark)
 
 # ── M5: M0 on riscv64 ───────────────────────────────────────────────────────
 run-riscv: build-riscv
