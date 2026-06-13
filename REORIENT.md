@@ -57,6 +57,24 @@ not durable across compaction; the log is the burn-down. Sweep it at every Conve
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
   `project-refinement-epoch.md` is the live resume file; MEMORY.md is the index.
 
+## ⚑⚑ OPUS LANDING COMPLETE (2026-06-12 night — all 13 full-burn lanes home, head 5bf7adda3)
+
+The export directive sealed Fable mid-wave; Opus 4.8 resumed all 13 dying lanes as finishers
+and LANDED every one green. 7 substantive commits f554d34d2..475f19115 + HORIZONLOG residues:
+  f554d34d2 handoff docs (bootstrap.sh + EVALUATION.md) · d20791e68 Lean batch (metatheory
+  closures + 26-descriptor rotation regen STAGED) · 3a68e265d python-lean (sdk-py embeds the
+  REAL kernel) · 740e2e273 persist (burn weld + rosters + dregg1 retirement) · 1a95623aa
+  ocapn netlayer · 03c36c937 dregg-query · 475f19115 node cluster (DKG ceremony + ECVRF +
+  KERI + flash-well + trustline parity + auth coverage 6→4).
+Method that held: lander VALIDATES each finisher's narrow suite, commits by file set, never
+forces a partial; the entangled node cluster got ONE convergence pass (all 4 gates green:
+fed 185 + sdk 209 + node-bin check + coverage 9/9). The finishers caught REAL bugs the
+unverified Fable drafts carried (flash-well laundered-vacuity refusals; channels PFS-vs-
+determinism test; ecvrf RFC nibble typo; dregg-query serde tag collision; ocapn dial claim).
+NEXT: ROUND 8 gauntlet on persvati (the converged tree's full validation + the python-lean
+ELF proof + the DKG/KERI/roster e2e in a lock-free window) → the rotation FLIP when ready
+(docs/ROTATION-CUTOVER.md, both wire-shapes staged + R=24 confirmed) → deploy.
+
 ## ⚑⚑ OPUS RELAUNCH (2026-06-12 night, head 6f13c22dd — Fable sealed by export directive; Opus is the lander)
 
 Fable 5 was suspended by a US export-control directive mid-wave (seal note:
