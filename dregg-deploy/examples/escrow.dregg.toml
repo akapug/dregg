@@ -1,0 +1,66 @@
+# escrow.dregg.toml — one declarative dregg deployment.
+#
+# The reference deployment from sdk/src/factories.rs, written as DreggDL: an
+# escrow factory, one deal cell born from it, funded, with an operator self-
+# grant (the in-band adopt). `dregg-deploy check escrow.dregg.toml` lowers this
+# to a CallForest and runs dregg-userspace-verify over the WHOLE authority
+# layout — before any gas.
+
+[federation]
+id   = "auto"                # derive from the node at signing time
+node = "in-process"          # the Rust in-process executor path
+
+# An escrow factory: the constructor contract. The state_constraints are baked
+# into every child cell for life (the executor re-evaluates them on every
+# touching turn); the allowed_cap_template bounds what the factory may grant.
+[[factory]]
+ref              = "escrow"
+default_mode     = "hosted"
+creation_budget  = 100
+
+  [[factory.state_constraint]]
+  kind = "write_once"        # slot 3 may be written once, then frozen
+  slot = 3
+
+  [[factory.state_constraint]]
+  kind = "monotonic"         # slot 5 only ever grows
+  slot = 5
+
+  [[factory.allowed_cap_template]]
+  permissions = "signature"
+  target      = "self"
+  attenuatable = true
+
+# A deal cell, born from the escrow factory, all-zero with the factory's
+# state_constraints installed for life.
+[[cell]]
+name           = "deal-001"
+factory        = "escrow"
+mode           = "hosted"
+initial_fields = [ { slot = 1, value = 0 }, { slot = 3, value = 42 } ]
+
+# The operator agent cell that will hold the adopt grant.
+[[cell]]
+name    = "operator"
+factory = "escrow"
+
+# Fund the deal: the funding bank moves value into the deal cell. Conservation
+# (guarantee B) is checked over this transfer.
+[[cell]]
+name    = "bank"
+factory = "escrow"
+
+[[fund]]
+from   = "bank"
+to     = "deal-001"
+amount = 1000
+
+# The authority graph: the operator gets a signature cap reaching the deal cell
+# (the one-time adopt self-grant, the in-band form of the node's operator
+# grant). Reading the [[grant]] rows IS reading the whole cap graph.
+[[grant]]
+from        = "deal-001"
+to          = "operator"
+permissions = "signature"
+target      = "deal-001"
+expires_at  = 0
