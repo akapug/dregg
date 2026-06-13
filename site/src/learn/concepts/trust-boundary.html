@@ -110,11 +110,13 @@
       <li><strong>Composition security is not machine-checked end-to-end.</strong> The
         per-guarantee theorems are; a universal-composability statement for the whole
         protocol stack is not yet a Lean artifact.</li>
-      <li><strong>The global value law is per-turn, not yet per-issuer-global.</strong>
-        Conservation (Σδ = 0 per asset, per turn and per attested run) is proven; the
-        stronger issuer-supply invariant — every asset's total system-wide balance
-        identically zero against its issuer's well — is specified
-        (<code>docs/DREGG3.md</code> §2.2) but not yet the deployed ledger discipline.</li>
+      <li><strong>The circuit graduation and the rotation are in progress.</strong> The
+        Lean-emitted descriptor prover is authoritative for a named set of graduated turn shapes;
+        every other shape falls back — logged, never silent — to a hand-written AIR that enforces
+        the same bindings but is test-attested, not theorem-attested. Graduating the remainder, and
+        binding the cell heap's <code>heap_root</code> in-circuit per turn, ride the one
+        VK/commitment epoch (the "rotation"); the heap is kernel-bound and scheme-pinned today, not
+        yet per-turn circuit-committed.</li>
     </ul>
 
     <h2 id="grounding">Grounding</h2>

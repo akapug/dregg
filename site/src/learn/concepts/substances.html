@@ -51,6 +51,33 @@
       under its own program.
     </p>
 
+    <h2 id="registers-heap">Registers are the L1; the heap is where apps live</h2>
+
+    <p>
+      A cell's programmable state is two tiers. The <strong>registers</strong> are a small,
+      fixed set of named fields — the cell's L1: lifecycle, nonce, the capability root, and a
+      handful of program slots. They are cheap, always present, and committed directly. Above
+      them sits the <strong>heap</strong>: a single register, <code>heap_root</code>, commits an
+      openable sorted-Poseidon2 Merkle map over <code>(collection, key) → value</code>. An app
+      that needs more than a few slots — an order book, a per-member tally, a content index —
+      keeps its data <em>in the heap</em>, and the cell still carries only one root.
+    </p>
+
+    <p>
+      The expressiveness uplift is that a heap key is a first-class subject of the guard
+      algebra. A program can demand <code>heap_get(collection, key) = v</code> or
+      <code>heap_contains(collection, key)</code> as a precondition, exactly as it demands a
+      register relation — so a cell's rules can range over unbounded state without growing the
+      kernel. A heap write is <em>the <code>write</code> verb</em>: it runs under the same
+      caveat-gated frame discipline as any slot write (authority, membership, lifecycle, per-slot
+      caveats), recomputes the root, and touches nothing else. The register and the heap are one
+      object — the cell, the executor, and the circuit all read <code>Heap.root</code> of the same
+      sorted leaf list — so installing the heap added <em>no</em> verb. The kernel did not grow;
+      the addressable state did. (Where the heap binds today: kernel-proven against the deployed
+      <code>circuit::heap_root</code> scheme; the per-turn in-circuit <code>heap_root</code>
+      register rides the rotation relayout — <a href="/learn/concepts/trust-boundary.html">rung 7</a>.)
+    </p>
+
     <h2 id="verbs">The eight verbs</h2>
 
     <p>
@@ -99,6 +126,11 @@
       <li><code>metatheory/Dregg2/Exec/RecordKernel.lean</code> — the kernel state the verbs
         act on, and the per-asset conservation keystones
         (<code>recTransferBal_sum_conserve_moved</code>, <code>recTransferBal_untouched</code>).</li>
+      <li><code>metatheory/Dregg2/Substrate/{Heap,HeapKernel}.lean</code> — the heap as the
+        <code>write</code> verb: the openable sorted map (<code>root_deterministic</code>,
+        <code>root_injective</code> under the named Poseidon2-CR floor) and its kernel face
+        (<code>heapStepGuarded</code>, <code>heapStep_conserves</code> = balance-neutral,
+        <code>heapStep_root_written</code> = the register binds the heap, <code>heapStep_*_frame</code>).</li>
       <li><code>metatheory/CONSTRUCTIVE-KNOWLEDGE.md</code> §3 — why authority is production,
         not descent.</li>
     </ul>
