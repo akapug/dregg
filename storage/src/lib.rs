@@ -62,6 +62,7 @@
 //! 7. Quotas compose with computrons (quota IS a computron allocation)
 
 pub mod atomic;
+pub mod availability;
 pub mod blinded;
 pub mod commitment;
 pub mod content;
