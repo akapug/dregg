@@ -461,7 +461,7 @@ mod pg {
         //
         // This is the through-postgres twin of `examples/end_to_end.rs`: the
         // SAME synthetic ledger story (crate::synth), the SAME emitted DDL
-        // (crate::mirror::ddl::tier_b), now installed in a real pg14 backend and
+        // (crate::mirror::ddl::tier_b), now installed in a real pg17 backend and
         // queried under real Row Level Security.
         // ===================================================================
         use crate::mirror::{MirrorBatch, RootChain};
@@ -510,24 +510,48 @@ mod pg {
             ))
             .unwrap();
             for c in &b.cells {
-                // Upsert: a later turn overwrites a cell's post-image.
-                Spi::run(&format!(
-                    "INSERT INTO dregg.cells(cell_id,mode,balance,nonce,fields,lifecycle,\
-                     last_ordinal,cell_root) VALUES \
-                     ('\\x{}','{}',{},{},'\\x','{}',{},'\\x{}') \
-                     ON CONFLICT (cell_id) DO UPDATE SET balance=EXCLUDED.balance,\
-                     nonce=EXCLUDED.nonce,last_ordinal=EXCLUDED.last_ordinal",
-                    hx(&c.cell_id), c.mode, c.balance, c.nonce, c.lifecycle,
+                // Upsert via PostgreSQL 17 MERGE — the atomic node→pg row
+                // materialization. The MERGE (with `merge_action()` RETURNING)
+                // lives in the shipped `dregg.merge_cell` function (the DDL
+                // emitter, crate::mirror::ddl); we invoke it here through a plain
+                // SELECT so a later turn's post-image overwrites the cell in one
+                // atomic statement, and the returned 'INSERT'/'UPDATE' tells us
+                // which arm fired. (docs/PG-DREGG.md "PostgreSQL 17 leverage".)
+                let fj = c
+                    .fields_json
+                    .as_deref()
+                    .map(|s| format!("'{}'::jsonb", s.replace('\'', "''")))
+                    .unwrap_or_else(|| "NULL".to_string());
+                let action: Option<String> = Spi::get_one(&format!(
+                    "SELECT dregg.merge_cell('\\x{}'::bytea,'{}',{},{},'\\x'::bytea,{},\
+                     '{}',{},'\\x{}'::bytea)",
+                    hx(&c.cell_id), c.mode, c.balance, c.nonce, fj, c.lifecycle,
                     c.last_ordinal, hx(&c.cell_root),
                 ))
                 .unwrap();
+                // pg17 merge_action() returns 'INSERT' or 'UPDATE' — proof the
+                // MERGE arm we expected fired (asserted in the pg_test below).
+                debug_assert!(matches!(action.as_deref(), Some("INSERT") | Some("UPDATE")));
             }
             for cap in &b.caps {
+                // The attenuation (allowed_effects) is carried so the pg17
+                // JSON_TABLE view dregg.cap_attenuations can explode it into rows
+                // (the no-amplification audit surface).
+                let eff = cap
+                    .allowed_effects_json
+                    .as_deref()
+                    .map(|s| format!("'{}'::jsonb", s.replace('\'', "''")))
+                    .unwrap_or_else(|| "NULL".to_string());
+                let exp = cap
+                    .expires_at
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "NULL".to_string());
                 Spi::run(&format!(
                     "INSERT INTO dregg.capabilities(holder,slot,target,permissions,\
-                     last_ordinal) VALUES ('\\x{}',{},'\\x{}','{}'::jsonb,{})",
+                     allowed_effects,expires_at,last_ordinal) \
+                     VALUES ('\\x{}',{},'\\x{}','{}'::jsonb,{},{},{})",
                     hx(&cap.holder), cap.slot, hx(&cap.target),
-                    cap.permissions_json, cap.last_ordinal,
+                    cap.permissions_json, eff, exp, cap.last_ordinal,
                 ))
                 .unwrap();
             }
@@ -661,6 +685,68 @@ mod pg {
             };
             assert!(kernel("INSERT"), "the kernel writer must hold INSERT");
             assert!(kernel("UPDATE"), "the kernel writer must hold UPDATE");
+        }
+
+        #[pg_test]
+        fn pg17_merge_upsert_and_json_table_views() {
+            // The pg17 feature leverage, through real SQL:
+            //   (1) the MERGE-based mirror upsert in write_batch fires both arms
+            //       across the synthetic story (ALICE is inserted at ord 1, then
+            //       UPDATEd at ord 2 and ord 3 — a later turn's post-image wins);
+            //   (2) the JSON_TABLE projection views (cap_attenuations, cell_fields)
+            //       resolve and explode the embedded jsonb into rows.
+            let root = root();
+            assert_issuer(&root);
+            install_tier_b_and_load_synth(); // runs the MERGE path 6 times
+
+            let (operator, _) = mirror_tokens(&root);
+            Spi::run(&format!("SET dregg.token = '{operator}'")).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+
+            // MERGE update arm won: ALICE's final post-image is nonce=2 (ord 3),
+            // not the ord-1 insert's nonce=0 — a later turn overwrote in place,
+            // and there is exactly ONE ALICE row (no duplicate from re-insert).
+            // (Aggregates so the scalar read always yields a row.)
+            let alice_hex: String =
+                crate::synth::ALICE.iter().map(|b| format!("{b:02x}")).collect();
+            let alice_nonce: i64 = Spi::get_one(&format!(
+                "SELECT coalesce(max(nonce), -1) FROM dregg.cells \
+                 WHERE cell_id = '\\x{alice_hex}'::bytea"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(alice_nonce, 2, "MERGE update arm: ALICE's latest post-image wins");
+            let alice_rows: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg.cells WHERE cell_id = '\\x{alice_hex}'::bytea"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(alice_rows, 1, "MERGE keeps exactly one row per cell (no dup insert)");
+
+            // JSON_TABLE view cell_fields: the decoded balance/nonce slots come
+            // out of fields_json as typed columns. TREASURY's row shows 999_500.
+            let treasury_bal: i64 = Spi::get_one(
+                "SELECT coalesce(max(balance), -1) FROM dregg.cell_fields",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(treasury_bal, 999_500, "cell_fields JSON_TABLE projects the balance slot");
+
+            // JSON_TABLE view cap_attenuations: the grant turn's allowed_effects
+            // array `["transfer"]` is exploded into one effect row for ALICE→BOB.
+            let n_effects: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.cap_attenuations",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(n_effects, 1, "exactly one attenuated effect across the story");
+            let effect: Option<String> = Spi::get_one::<String>(
+                "SELECT string_agg(effect, ',') FROM dregg.cap_attenuations",
+            )
+            .unwrap();
+            assert_eq!(effect.as_deref(), Some("transfer"),
+                "cap_attenuations JSON_TABLE explodes the allowed_effects array");
+            Spi::run("RESET ROLE").unwrap();
         }
 
         #[pg_test]

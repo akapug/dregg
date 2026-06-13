@@ -105,6 +105,24 @@ BEGIN
     RETURN NEW;
 END $$;
 
+-- The post-state materialization is a PostgreSQL 17 MERGE (docs/PG-DREGG.md
+-- "PostgreSQL 17 leverage"): each touched cell of the verified receipt is
+-- upserted in ONE atomic statement (a later turn's post-image overwrites; a
+-- first-seen cell inserts), and merge_action()/RETURNING reports which arm
+-- fired. This is the SQL twin of src/lib.rs::write_batch's MERGE path, so the
+-- mirror build and the verified-store build materialize identically:
+--
+--   MERGE INTO dregg.cells AS t
+--   USING dregg.decode_cells(NEW.ordinal, NEW.receipt) AS s
+--     ON t.cell_id = s.cell_id
+--   WHEN MATCHED     THEN UPDATE SET balance = s.balance, nonce = s.nonce,
+--                          last_ordinal = s.last_ordinal, cell_root = s.cell_root
+--   WHEN NOT MATCHED THEN INSERT (cell_id, mode, balance, nonce, fields,
+--                                 lifecycle, last_ordinal, cell_root)
+--                          VALUES (s.cell_id, s.mode, s.balance, s.nonce, s.fields,
+--                                  s.lifecycle, s.last_ordinal, s.cell_root)
+--   RETURNING merge_action(), t.cell_id;   -- audit: which arm, which cell
+
 DROP TRIGGER IF EXISTS verify_before_apply ON dregg.commit_log;
 CREATE TRIGGER verify_before_apply
     BEFORE INSERT ON dregg.commit_log
@@ -124,6 +142,23 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 -- turn). A consumer can walk it and re-verify non-omission against the receipt
 -- range (dregg-query's AttestedAnswer, docs/PG-DREGG.md §7) — reads are not only
 -- free, they can be ATTESTED free.
+
+-- ===========================================================================
+-- 4b. Bulk mirror backfill — PostgreSQL 17 COPY ... ON_ERROR (robust ingest).
+-- ===========================================================================
+-- When a subscriber/replica backfills the mirror from a dump of verified-turn
+-- post-images (the distributed-mirror path, docs/PG-DREGG.md "PostgreSQL 17
+-- leverage"), a single malformed row should not abort the whole load. pg17's
+-- COPY ON_ERROR + log_verbosity skips and reports the bad rows instead:
+--
+--   COPY dregg.commit_log (ordinal, envelope, receipt, proof, vk, prev_root)
+--     FROM '/backfill/turns.csv' WITH (FORMAT csv, ON_ERROR ignore,
+--                                       LOG_VERBOSITY verbose);
+--
+-- This is INGEST robustness only — the per-turn verifier trigger (§3) still
+-- gates every row that lands, so a skipped malformed row is simply absent, never
+-- an unverified write. (The chain tooth then refuses the resulting ordinal gap,
+-- so a partial backfill fails CLOSED rather than forging a head.)
 
 -- ===========================================================================
 -- 5.  Tier D preview (docs/PG-DREGG.md §11) — the executor as a pg function.

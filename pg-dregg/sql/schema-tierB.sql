@@ -187,6 +187,36 @@ CREATE INDEX memory_by_domain ON dregg.memory (domain);
 -- with the committed map root is the Lean-proved boundary reconciliation.
 
 -- ===========================================================================
+-- 5a. THE MIRROR WRITE PATH — a PostgreSQL 17 MERGE upsert (one atomic stmt).
+-- ===========================================================================
+-- The kernel writer materializes each touched cell's post-image with a single
+-- pg17 MERGE: a first-seen cell INSERTs, a re-touched cell UPDATEs in place, and
+-- `merge_action()` (pg17) RETURNS which arm fired so the write is auditable.
+-- Shipped as a function (the same one the mirror::ddl emitter generates) so the
+-- node invokes it as `SELECT dregg.merge_cell(...)`. (docs/PG-DREGG.md
+-- "PostgreSQL 17 leverage"; the Tier-C trigger materializes the same way,
+-- schema-tierC.sql §3.)
+CREATE OR REPLACE FUNCTION dregg.merge_cell(
+    p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
+    p_fields bytea, p_fields_json jsonb, p_lifecycle text,
+    p_last_ordinal bigint, p_cell_root bytea) RETURNS text
+LANGUAGE plpgsql AS $$
+DECLARE v_action text;
+BEGIN
+    MERGE INTO dregg.cells AS t
+    USING (SELECT p_cell_id AS cell_id) AS s
+      ON t.cell_id = s.cell_id
+    WHEN MATCHED THEN UPDATE SET balance=p_balance, nonce=p_nonce,
+        fields_json=p_fields_json, last_ordinal=p_last_ordinal, cell_root=p_cell_root
+    WHEN NOT MATCHED THEN INSERT
+        (cell_id,mode,balance,nonce,fields,fields_json,lifecycle,last_ordinal,cell_root)
+        VALUES (p_cell_id,p_mode,p_balance,p_nonce,p_fields,p_fields_json,
+                p_lifecycle,p_last_ordinal,p_cell_root)
+    RETURNING merge_action() INTO v_action;   -- pg17: 'INSERT' | 'UPDATE'
+    RETURN v_action;
+END $$;
+
+-- ===========================================================================
 -- 5b. THE DREGG-DEVELOPER QUERY SURFACE — views over the Tier-B tables.
 -- ===========================================================================
 -- These are the views the `mirror::ddl::tier_b()` emitter ships (kept in step
@@ -213,6 +243,29 @@ CREATE OR REPLACE VIEW dregg.receipt_chain AS
            encode(prev_root, 'hex') AS prev_root,
            encode(ledger_root, 'hex') AS ledger_root, committed_at
     FROM dregg.turns ORDER BY ordinal;
+
+-- PostgreSQL 17 SQL/JSON projections (JSON_TABLE) — the embedded jsonb state,
+-- surfaced as flat relational rows so a developer JOINs/aggregates it without
+-- hand-rolled jsonb operators (docs/PG-DREGG.md "PostgreSQL 17 leverage").
+
+-- One row per attenuated effect in a capability's allowed_effects array: the
+-- no-amplification audit surface, exploded from the jsonb array into rows.
+CREATE OR REPLACE VIEW dregg.cap_attenuations AS
+    SELECT encode(c.holder, 'hex') AS holder, c.slot,
+           encode(c.target, 'hex') AS target, jt.effect, c.expires_at,
+           c.last_ordinal
+    FROM dregg.capabilities c,
+         JSON_TABLE(c.allowed_effects, '$[*]'
+             COLUMNS (effect text PATH '$')) AS jt;
+
+-- The decoded cell field slots (balance/nonce) projected out of fields_json: a
+-- typed face over the canonical jsonb the mirror writer fills.
+CREATE OR REPLACE VIEW dregg.cell_fields AS
+    SELECT encode(cell_id, 'hex') AS cell, jt.balance, jt.nonce, last_ordinal
+    FROM dregg.cells,
+         JSON_TABLE(fields_json, '$'
+             COLUMNS (balance bigint PATH '$.balance',
+                      nonce    bigint PATH '$.nonce')) AS jt;
 
 -- ===========================================================================
 -- 6.  READ-SIDE RLS — every state table composes with the M1 cap layer.
