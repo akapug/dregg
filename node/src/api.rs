@@ -1563,6 +1563,15 @@ pub fn router_with_cors(
         .route("/api/tokens", get(get_tokens))
         .route("/api/receipts", get(get_receipts))
         .route("/api/receipts/{hash}/witnesses", get(get_receipt_witnesses))
+        // ORGANS identity rider — the KERI-shaped identity event-log export:
+        // a cell's chained / signed / witness-receipted key-event history as
+        // a PORTABLE artifact (independently checkable via
+        // `crate::identity_export::verify_export`, no node required).
+        // Public: the KEL is the cell's self-published key history.
+        .route(
+            "/identity/export/{cell}",
+            get(crate::identity_export::get_identity_export),
+        )
         .route("/api/turn/{hash}/proof", get(get_turn_proof))
         .route("/api/starbridge/receipts", get(get_starbridge_receipts))
         .route("/api/starbridge/events", get(get_starbridge_events))
@@ -1746,6 +1755,11 @@ pub fn router_with_cors(
         // a real bond cell) / evidence (the witness-first slash, executed as
         // one conserved executor move from the bonded cell) / status.
         .merge(crate::equivocation_court_service::routes())
+        // DKG ceremony (ORGANS §6): start (factory-birth the ceremony cell
+        // from blueprint terms) / contribute (signed dealing + sealed shares,
+        // round roots pinned per phase) / complain (witness-first response) /
+        // finalize (|QUAL| >= t -> output commitment pinned) / status.
+        .merge(crate::dkg_service::routes())
         // Queue operations
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 

@@ -112,32 +112,27 @@ fn authorization_executor_coverage(a: &Authorization) -> bool {
         Authorization::Breadstuff(..) => false,
         Authorization::Custom { .. } => false,
         Authorization::OneOf { .. } => false,
-        // New wave-2 authorization modes (one-time-key stealth invocation and
-        // first-class biscuit/macaroon Token credentials). They are not yet
-        // exercised end-to-end by an executor-invoking coverage test, so they
-        // are recorded here as uncovered (honest gap, not masked).
-        Authorization::Stealth { .. } => false,
-        Authorization::Token { .. } => false,
+        // Wave-2 authorization modes (one-time-key stealth invocation and
+        // first-class biscuit/macaroon Token credentials), now exercised
+        // end-to-end through `TurnExecutor::execute` by coverage_auth_modes.rs:
+        // a valid stealth/token credential COMMITS and mutates a
+        // Signature-gated slot (the Unchecked control refuses on the same
+        // cell), while replay / forgery / height-expiry / tamper /
+        // untrusted-issuer / cross-cell-key_ref cases REFUSE with the precise
+        // TurnError, state untouched.
+        Authorization::Stealth { .. } => true, // coverage_auth_modes.rs (stealth_*)
+        Authorization::Token { .. } => true,   // coverage_auth_modes.rs (token_*)
     }
 }
 
-const NOT_YET_COVERED_AUTH: &[&str] = &[
-    "Proof",
-    "Breadstuff",
-    "Custom",
-    "OneOf",
-    // New wave-2 modes; see authorization_executor_coverage.
-    "Stealth",
-    "Token",
-];
+const NOT_YET_COVERED_AUTH: &[&str] = &["Proof", "Breadstuff", "Custom", "OneOf"];
 
 /// Ratchet for Authorization-mode coverage — may only shrink.
 ///
-/// Bumped 4 → 6 when the wave-2 lanes introduced the `Stealth` and `Token`
-/// authorization modes without accompanying executor-invoking coverage tests.
-/// This records the new gap honestly; it should shrink again as those modes
-/// gain end-to-end coverage.
-const MAX_UNCOVERED_AUTH: usize = 6;
+/// History: 4 → 6 when the wave-2 lanes introduced `Stealth` and `Token`
+/// without coverage; back down to 4 once coverage_auth_modes.rs drove both
+/// modes through `TurnExecutor::execute` with real accept+reject pairs.
+const MAX_UNCOVERED_AUTH: usize = 4;
 
 #[test]
 fn authorization_coverage_ratchet_only_shrinks() {

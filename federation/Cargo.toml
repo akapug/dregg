@@ -16,7 +16,12 @@ dregg-types = { path = "../types" }
 serde_json = { workspace = true }
 hints = { path = "../hints", package = "dregg-hints" }
 blake3 = "1"
+# `vrf.rs` (RFC 9381 ECVRF-EDWARDS25519-SHA512-TAI) needs the raw group ops
+# (decompress / cofactor-clear / double-scalar-mul) under the SAME curve
+# ed25519-dalek already pins here — no new curve enters the tree.
+curve25519-dalek = { version = "4", features = ["alloc"] }
 ed25519-dalek = { version = "2", features = ["std"] }
+sha2 = { workspace = true }
 hex = "0.4"
 getrandom = { workspace = true }
 serde = { version = "1", features = ["derive"] }

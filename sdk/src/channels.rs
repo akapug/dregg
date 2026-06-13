@@ -50,7 +50,10 @@
 //! AEAD-opaque to them. RFC 9420 MLS (TreeKEM) gives O(log n) rekeys and a
 //! PCS ratchet; adopting it replaces ONLY the fan-out in this module — the
 //! cell interface (commitments) is UNCHANGED, which is exactly why the
-//! blueprint stores commitments and never key material.
+//! blueprint stores commitments and never key material. That swap point is
+//! named as the [`KeySchedule`] trait ([`SenderKeys`] today, [`TreeKem`] the
+//! RFC 9420 successor stub); the [`Channel`] driver routes every rekey
+//! through it, so the upgrade is a type swap, not a rewrite.
 //!
 //! ## Honest residues (named)
 //!
@@ -278,30 +281,113 @@ pub struct SealedEpochKey {
     pub ciphertext: Vec<u8>,
 }
 
-/// Seal `key` (serving `epoch`) to every roster member. O(n) — the honest
-/// minimal fan-out; TreeKEM replaces exactly this function.
+/// The rekey fan-out as a swappable strategy — THE MLS-UPGRADE SEAM.
+///
+/// An epoch step mints one fresh group key and must deliver it to every
+/// remaining member; *how* it is delivered is the only thing MLS changes.
+/// This trait names that join point so the cell interface (commitments) and
+/// the [`Channel`] driver stay untouched across the upgrade:
+///
+/// * [`SenderKeys`] — today's honest-minimal schedule. ONE fresh random key
+///   per epoch, sealed to each member individually over the seal-pair
+///   machinery (X25519 → HKDF-SHA256 → ChaCha20-Poly1305). O(n) per rekey,
+///   correct forward darkness (a removed member holds keys ≤ e and
+///   epoch-(e+1) ciphertext is AEAD-opaque to them).
+/// * [`TreeKem`] — the RFC 9420 (MLS) successor (stub). TreeKEM gives
+///   O(log n) rekeys and a PCS (post-compromise security) ratchet; adopting
+///   it replaces ONLY this fan-out — the blueprint stores commitments and
+///   never key material, which is exactly what makes the swap local.
+///
+/// The chain sees only the key COMMITMENT ([`CH_KEY_COMMIT_SLOT`]); the
+/// schedule produces the off-chain sealed copies that let members recover the
+/// key whose commitment the turn pinned.
+pub trait KeySchedule {
+    /// Seal `key` (serving `epoch`) to every roster member, producing the
+    /// per-member fan-out the epoch step delivers off-chain.
+    fn seal_epoch_key(&self, epoch: u64, key: &[u8; 32], roster: &Roster)
+    -> Vec<SealedEpochKey>;
+}
+
+/// Today's schedule: a fresh random group key per epoch, sealed pairwise to
+/// each member. O(n) per rekey — the honest-minimal point on the seam.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SenderKeys;
+
+impl KeySchedule for SenderKeys {
+    fn seal_epoch_key(
+        &self,
+        epoch: u64,
+        key: &[u8; 32],
+        roster: &Roster,
+    ) -> Vec<SealedEpochKey> {
+        let mut payload = Vec::with_capacity(EPOCH_KEY_PAYLOAD_DOMAIN.len() + 8 + 32);
+        payload.extend_from_slice(EPOCH_KEY_PAYLOAD_DOMAIN);
+        payload.extend_from_slice(&epoch.to_le_bytes());
+        payload.extend_from_slice(key);
+        roster
+            .iter()
+            .map(|(member, seal_pk)| {
+                let (ephemeral_pk, ciphertext) =
+                    encrypt_for_destination(&payload, seal_pk, &[0u8; 32]);
+                SealedEpochKey {
+                    member: *member,
+                    epoch,
+                    ephemeral_pk,
+                    ciphertext,
+                }
+            })
+            .collect()
+    }
+}
+
+/// The RFC 9420 (MLS) TreeKEM schedule — the named successor (STUB).
+///
+/// MLS arranges members as the leaves of a left-balanced binary tree of
+/// HPKE key pairs (RFC 9420 §7); a member rekeys by sending one `Commit`
+/// carrying `UpdatePath` ciphertexts along its root path (§7.5, §12.4), so a
+/// rekey is O(log n) sealed copies, not O(n), and the ratchet up the tree's
+/// `secret_tree`/`key_schedule` (§9, §8) gives post-compromise security: a
+/// transiently-leaked member key heals at the next commit.
+///
+/// Adopting it is LOCAL to this module: the on-cell key commitment stays the
+/// epoch's `joiner_secret`/`epoch_secret` commitment (the cell interface is
+/// unchanged), and only [`KeySchedule::seal_epoch_key`] changes from a flat
+/// pairwise fan-out to a tree `UpdatePath`. The stub carries the design refs
+/// so the seam is a doer lane, not a wall; it is not yet wired (the tree
+/// state — ratchet tree, leaf HPKE keys, the `secret_tree` — has no home in
+/// this struct yet, so it cannot produce a real `UpdatePath`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TreeKem;
+
+impl KeySchedule for TreeKem {
+    fn seal_epoch_key(
+        &self,
+        _epoch: u64,
+        _key: &[u8; 32],
+        _roster: &Roster,
+    ) -> Vec<SealedEpochKey> {
+        // RFC 9420 §7.5/§12.4: this is where the flat fan-out becomes a
+        // TreeKEM `UpdatePath` along the committer's root path. The ratchet
+        // tree + per-leaf HPKE key state it needs is not modeled here yet.
+        unimplemented!(
+            "TreeKem (RFC 9420 MLS) key schedule is the named successor seam, not yet wired: \
+             needs the ratchet tree + leaf HPKE key state to emit an UpdatePath"
+        )
+    }
+}
+
+/// Seal `key` (serving `epoch`) to every roster member under the deployed
+/// schedule ([`SenderKeys`] today). Thin compatibility wrapper over
+/// [`KeySchedule::seal_epoch_key`] — byte-identical to the historical
+/// fan-out; the [`Channel`] driver routes through this so swapping the
+/// schedule type swaps the rekey strategy without touching the cell or the
+/// turn shapes.
 pub fn seal_epoch_key_to_roster(
     epoch: u64,
     key: &[u8; 32],
     roster: &Roster,
 ) -> Vec<SealedEpochKey> {
-    let mut payload = Vec::with_capacity(EPOCH_KEY_PAYLOAD_DOMAIN.len() + 8 + 32);
-    payload.extend_from_slice(EPOCH_KEY_PAYLOAD_DOMAIN);
-    payload.extend_from_slice(&epoch.to_le_bytes());
-    payload.extend_from_slice(key);
-    roster
-        .iter()
-        .map(|(member, seal_pk)| {
-            let (ephemeral_pk, ciphertext) =
-                encrypt_for_destination(&payload, seal_pk, &[0u8; 32]);
-            SealedEpochKey {
-                member: *member,
-                epoch,
-                ephemeral_pk,
-                ciphertext,
-            }
-        })
-        .collect()
+    SenderKeys.seal_epoch_key(epoch, key, roster)
 }
 
 /// A group-key epoch ledger held by one party (the admin holds all epochs
@@ -451,6 +537,11 @@ impl MemberKeyring {
         key.copy_from_slice(&payload[dlen + 8..]);
         self.keys.insert(epoch, key);
         Ok(epoch)
+    }
+
+    /// The epoch group key this ring has unsealed for `epoch`, if any.
+    pub fn epoch_key(&self, epoch: u64) -> Option<&[u8; 32]> {
+        self.keys.get(epoch)
     }
 
     /// Open a group message with this ring. An epoch this member was never
@@ -1119,5 +1210,63 @@ mod tests {
         assert_eq!(post.delegation_epoch, 3);
         assert_eq!(post.member_root, pre.member_root);
         assert_ne!(post.key_commit, pre.key_commit);
+    }
+
+    // ── the MLS seam: SenderKeys-through-trait is byte-identical ─────────────
+
+    #[test]
+    fn sender_keys_through_trait_is_behaviourally_identical_to_the_free_fanout() {
+        // The seam restructure is non-behavioural: routing through the
+        // KeySchedule trait's SenderKeys impl produces the SAME fan-out as the
+        // historical free function. The seal is a real X25519→HKDF→ChaCha20
+        // AEAD with a FRESH ephemeral keypair per copy (PFS), so the raw
+        // ciphertext/ephemeral_pk are deliberately randomised and a byte
+        // compare is meaningless — equivalence is that each member recovers the
+        // IDENTICAL epoch key from either path. We also pin that the free
+        // function IS the SenderKeys impl (no second code path can drift).
+        let key = [7u8; 32];
+        let epoch = 5u64;
+
+        // Three members with REAL seal keypairs (so the fan-out is decryptable).
+        let mut rings: Vec<MemberKeyring> = (0u8..3)
+            .map(|i| {
+                let cell = CellId([i; 32]);
+                let mut secret = [0u8; 32];
+                secret[0] = i.wrapping_add(1);
+                MemberKeyring::new(cell, secret)
+            })
+            .collect();
+        let mut roster = Roster::new();
+        for ring in &rings {
+            roster.insert(ring.cell, ring.seal_pk());
+        }
+
+        let via_free = seal_epoch_key_to_roster(epoch, &key, &roster);
+        let via_trait = SenderKeys.seal_epoch_key(epoch, &key, &roster);
+
+        assert_eq!(via_free.len(), 3);
+        assert_eq!(via_free.len(), via_trait.len());
+        for ((a, b), ring) in via_free.iter().zip(via_trait.iter()).zip(rings.iter_mut()) {
+            // Structural fields ARE identical across the seam: same member, same
+            // epoch, same destination ordering.
+            assert_eq!(a.member, b.member);
+            assert_eq!(a.epoch, b.epoch);
+            assert_eq!(a.member, ring.cell, "fan-out preserves roster order");
+            // Each path's sealed copy decrypts to the SAME epoch key for this
+            // member — the real behavioural-equivalence guarantee.
+            assert_eq!(ring.accept(a).expect("free copy decrypts"), epoch);
+            assert_eq!(*ring.epoch_key(epoch).unwrap(), key, "free path delivers the key");
+            assert_eq!(ring.accept(b).expect("trait copy decrypts"), epoch);
+            assert_eq!(*ring.epoch_key(epoch).unwrap(), key, "trait path delivers the key");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "RFC 9420")]
+    fn treekem_stub_is_unimplemented_named_successor() {
+        // The named seam is a doer lane, not a wall: TreeKem is present and
+        // selectable but refuses loudly until the ratchet tree is wired.
+        let roster = Roster::new();
+        let _ = TreeKem.seal_epoch_key(1, &[0u8; 32], &roster);
     }
 }

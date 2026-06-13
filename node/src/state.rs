@@ -368,6 +368,11 @@ pub struct NodeStateInner {
     /// roster (re-commits to the on-cell membership root), the epoch keys
     /// this node minted, and the off-cell ciphertext ring + SSE bus.
     pub channels: crate::channels_service::ChannelRegistry,
+    /// DKG ceremony registry (ORGANS §6 weld): per-ceremony room state — the
+    /// node's copy of the deterministic common view (signed round messages)
+    /// and the sealed-share ciphertexts held for pickup. The chain holds the
+    /// pinned round roots; the view re-derives them for comparison.
+    pub dkg: crate::dkg_service::DkgRegistry,
 }
 
 /// Maximum number of events retained in the ring buffer for REST polling.
@@ -723,6 +728,15 @@ impl NodeState {
         // Derive the silo ID from the cipherclerk's public key.
         let silo_id: SiloId = *blake3::hash(cclerk.public_key().as_bytes()).as_bytes();
 
+        // Restore node-held channel rooms from the durable roster table
+        // (docs/PERSISTENCE.md §3, the roster caveat): each stored roster is
+        // RE-COMMITTED against the recovered ledger's on-cell membership root;
+        // a stale durable roster is discarded (and durably removed). This is
+        // built against the just-recovered `ledger`, before it moves into the
+        // state.
+        let mut channels = crate::channels_service::ChannelRegistry::default();
+        channels.restore_rosters(&store, &ledger);
+
         // Issue 10: the freshly-constructed state has no federation keys yet.
         // This is expected: `run_node` loads them from `genesis.json` (via
         // `set_federation_keys`) immediately after construction, which emits the
@@ -806,7 +820,8 @@ impl NodeState {
                 storage_gateway: crate::storage_service::StorageGatewayService::from_env(),
                 trustlines,
                 equivocation_court,
-                channels: crate::channels_service::ChannelRegistry::default(),
+                channels,
+                dkg: crate::dkg_service::DkgRegistry::default(),
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -851,6 +866,11 @@ impl NodeState {
 
         // Derive the silo ID from the cipherclerk's public key.
         let silo_id: SiloId = *blake3::hash(cclerk.public_key().as_bytes()).as_bytes();
+
+        // Restore node-held channel rooms from the durable roster table
+        // (docs/PERSISTENCE.md §3), re-committed against the recovered ledger.
+        let mut channels = crate::channels_service::ChannelRegistry::default();
+        channels.restore_rosters(&store, &ledger);
 
         Ok(Self {
             inner: Arc::new(RwLock::new(NodeStateInner {
@@ -923,7 +943,8 @@ impl NodeState {
                 storage_gateway: crate::storage_service::StorageGatewayService::from_env(),
                 trustlines,
                 equivocation_court,
-                channels: crate::channels_service::ChannelRegistry::default(),
+                channels,
+                dkg: crate::dkg_service::DkgRegistry::default(),
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),

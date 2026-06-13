@@ -178,3 +178,121 @@ impl AgentRuntime {
             .submit()
     }
 }
+
+// =============================================================================
+// VRF sortition keys — the vrf-keyed sortition surface
+// =============================================================================
+//
+// Per-agent ECVRF sortition (`dregg_federation::vrf`, RFC 9381
+// ECVRF-EDWARDS25519-SHA512-TAI) lets an agent PRIVATELY learn whether the
+// beacon selected it for a duty (`sortition_select(beacon, sk, role,
+// threshold)`) and reveal a publicly-checkable ticket only if so — the
+// targeting-resistant complement to `dregg_federation::beacon::select_jury`,
+// which computes a public roster anyone can enumerate (and therefore target)
+// the instant the beacon lands.
+//
+// ## Key class: a CURRENT-key-class member of the identity cell
+//
+// ECVRF-EDWARDS25519 key generation IS RFC 8032 Ed25519 key generation
+// (RFC 9381 §5.5), so a VRF key is managed exactly like a device signing
+// key:
+//
+// * its 32-byte public key is one MEMBER of the key set committed by
+//   [`key_set_commitment`] into `CURRENT_KEYS_COMMIT_SLOT`
+//   ([`key_set_with_vrf`] builds that set), and
+// * the NEXT epoch's VRF public key sits inside the unexposed set whose
+//   digest is pre-committed under [`next_keys_digest`] —
+//
+// so KERI-shaped pre-rotation covers sortition keys with no new verb: a
+// rotation (`rotate_identity`) retires the exfiltratable VRF secret along
+// with the signing keys, and a thief holding the current VRF secret can
+// neither block the rotation nor carry selection power past it. Derive the
+// per-epoch seed with [`derive_vrf_seed`] from the SAME unexposed master
+// material whose escrow discipline the module docs above prescribe.
+//
+// A juror-verifier therefore checks two bindings: the cryptographic one
+// (`dregg_federation::vrf::verify_sortition`) and the identity one (the
+// ticket's `public_key` is a member of the candidate's CURRENT committed
+// key set — the `key_set_commitment` opening).
+
+/// blake3 `derive_key` context for per-epoch VRF seeds. Distinct from every
+/// other derive-key context in the tree (`dregg-fed-id-v1`,
+/// `dregg-beacon-output-v1`, `dregg-beacon-draw-v1`, …).
+pub const VRF_SEED_CONTEXT: &str = "dregg-identity-vrf-seed-v1";
+
+/// Derive the VRF seed for one key epoch from the identity's unexposed
+/// master seed: `blake3::derive_key(VRF_SEED_CONTEXT, master ‖ epoch_be)`.
+///
+/// `key_epoch` is the identity cell's rotation generation (0 at genesis,
+/// +1 per `rotate_identity`), so each rotation FORWARD-derives a fresh VRF
+/// key whose public half was already pre-committed in `next_keys_digest` —
+/// compromise of one epoch's VRF secret says nothing about the next
+/// (one-wayness of the derive), and the master seed never touches a prover.
+pub fn derive_vrf_seed(master_seed: &[u8; 32], key_epoch: u64) -> [u8; 32] {
+    let mut input = [0u8; 40];
+    input[..32].copy_from_slice(master_seed);
+    input[32..].copy_from_slice(&key_epoch.to_be_bytes());
+    blake3::derive_key(VRF_SEED_CONTEXT, &input)
+}
+
+/// The VRF public key for a seed — byte-identical to the Ed25519 verifying
+/// key of the same seed, because ECVRF-EDWARDS25519 keygen IS RFC 8032
+/// keygen (RFC 9381 §5.5). This is why the SDK needs no VRF implementation
+/// of its own: commitment-side key management rides `ed25519-dalek`, and
+/// proving/verifying live in `dregg_federation::vrf` (whose
+/// `keygen_agrees_with_ed25519_dalek` test pins this very agreement).
+pub fn vrf_public_key(vrf_seed: &[u8; 32]) -> [u8; 32] {
+    ed25519_dalek::SigningKey::from_bytes(vrf_seed)
+        .verifying_key()
+        .to_bytes()
+}
+
+/// The key set an identity commits when it carries a sortition key: the
+/// device signing keys PLUS the VRF public key, in that order (members are
+/// position-committed, so the convention is part of the opening). Feed the
+/// result to [`key_set_commitment`] for `CURRENT_KEYS_COMMIT_SLOT` /
+/// [`genesis_effects`], or hash its commitment with [`next_keys_digest`]
+/// for the pre-commitment — same as any other key set.
+pub fn key_set_with_vrf(device_keys: &[[u8; 32]], vrf_public: [u8; 32]) -> Vec<[u8; 32]> {
+    let mut keys = Vec::with_capacity(device_keys.len() + 1);
+    keys.extend_from_slice(device_keys);
+    keys.push(vrf_public);
+    keys
+}
+
+#[cfg(test)]
+mod vrf_surface_tests {
+    use super::*;
+
+    #[test]
+    fn vrf_seed_derivation_is_deterministic_and_epoch_separated() {
+        let master = [7u8; 32];
+        assert_eq!(derive_vrf_seed(&master, 3), derive_vrf_seed(&master, 3));
+        assert_ne!(derive_vrf_seed(&master, 3), derive_vrf_seed(&master, 4));
+        assert_ne!(derive_vrf_seed(&master, 3), derive_vrf_seed(&[8u8; 32], 3));
+        // The derived seed is not the master (one-way derive, no echo).
+        assert_ne!(derive_vrf_seed(&master, 0), master);
+    }
+
+    #[test]
+    fn vrf_public_key_is_the_ed25519_verifying_key() {
+        let seed = [21u8; 32];
+        let expected = ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes();
+        assert_eq!(vrf_public_key(&seed), expected);
+    }
+
+    #[test]
+    fn key_set_with_vrf_changes_the_commitment() {
+        let devices = [[1u8; 32], [2u8; 32]];
+        let vrf_pk = vrf_public_key(&derive_vrf_seed(&[9u8; 32], 0));
+        let with = key_set_commitment(&key_set_with_vrf(&devices, vrf_pk));
+        let without = key_set_commitment(&devices);
+        assert_ne!(with, without);
+        // Position-committed: the same members in the documented order
+        // reproduce the commitment.
+        let again = key_set_commitment(&key_set_with_vrf(&devices, vrf_pk));
+        assert_eq!(with, again);
+    }
+}
