@@ -95,6 +95,41 @@ freestanding-enough runtime. That is a genuine port of Lean's runtime
 bottom-half, not a config flag — call it weeks-to-a-quarter of specialist
 work, and it is the single highest-risk line item in this whole roadmap.
 
+**The excision map (probed directly, `leanrt` v4.30.0).** The wall is two
+compounding facts, now made precise:
+
+1. **Object format.** `libdregg_lean.a` (~8200 objs) and the runtime archives
+   (`libleanrt.a` etc.) are **Mach-O arm64** (the macOS host build); the seL4
+   target is **ELF `aarch64-unknown-none`**. The whole closure must be
+   *recompiled* with `leanc` targeting an ELF triple — not a relink.
+2. **The libuv coupling is concentrated and separable.** Of `leanrt`'s 34
+   objects, exactly **10 carry the libuv coupling** (`dns, event_loop, io,
+   libuv, net_addr, signal, system, tcp, timer, udp`) — named by IO concern,
+   and the pure executor path calls *none* of them. The pull is at init:
+   `lean_initialize_runtime_module` (in `init_module.cpp.o`, which our
+   `dregg_ffi_init` calls) has undefined refs to `initialize_libuv` +
+   `initialize_io`. The other six initializers (`alloc, debug, mutex, object,
+   thread, process, stack_overflow`) are libuv-free. **GMP** is referenced by
+   only 2 objects (`mpz.cpp.o`, `sharecommon.cpp.o`). The pure path
+   additionally needs `mi_malloc` (mimalloc, in `static.c.o`), `pthread_*`
+   (GC/thread init), the C++ exception runtime, and `__tlv_bootstrap` (TLS).
+
+So the excision plan is concrete: *(1)* ELF-recompile the Lean closure under
+`leanc`; *(2)* **stub `initialize_libuv` + `initialize_io`** as no-op
+success (the executor opens no socket/file/timer) and provide the handful of
+`uv_*` symbols the linker demands but execution never reaches, dropping the 10
+libuv objects; *(3)* **GMP for ELF**, or a fixnum-only shim that stubs the
+`mpz` path (if no turn exceeds 63-bit fixnums — needs a numeric-range check);
+*(4)* host on the experimental `crates/experimental/sel4-musl` syscall shim +
+`sel4-root-task-with-std`. This is the same weeks-to-a-quarter estimate, now a
+checklist rather than a fog.
+
+**The banked fallback heart organ.** While the executor PD waits on this port,
+the firmament's verified-compute heart is **M-STARK** (`sel4/dregg-pd/
+verifier-stark/`): a real plonky3-style STARK (BabyBear + BLAKE3 + FRI),
+proved + verified on-device, *boots today* with no Lean. See `docs/FIRMAMENT.md`
+§6.
+
 **Escape hatch if the Lean port stalls:** `dregg-lean-ffi` already has a
 `no-lean-link` feature (polarity-inverted PLATFORM gate, used for
 wasm32/zkvm) that builds the crate "marshal-only with the runtime stubs
@@ -251,9 +286,10 @@ image tool and the prebuilt seL4 kernel ELFs run natively, and rust-sel4's
 |------|--------|
 | Native-macOS toolchain (`sel4/setup.sh`) | **✅** Microkit SDK 2.2.0 (macos-aarch64) + nightly-2026-04-04 + rust-sel4 `efef73cc`; `make run` reproduces from clean |
 | **M0** — Rust PD prints "dregg robigalia v0" | **✅ boots** in `qemu-system-aarch64` (`sel4/dregg-pd/m0-hello`) |
-| **M1** — verifier PD (bundle-in → verdict-out, anti-ghost reject) | **✅ boots** (`sel4/dregg-pd/verifier`); no_std structural verify, STARK core is the no_std closure port |
+| **M1** — verifier PD (bundle-in → verdict-out, anti-ghost reject) | **✅ boots** (`sel4/dregg-pd/verifier`); no_std structural verify |
+| **M-STARK** — verifier-stark PD: a **REAL** STARK proved + verified on-device | **✅ boots** (`sel4/dregg-pd/verifier-stark`) — BabyBear+BLAKE3+FRI+Fiat-Shamir, the verbatim `dregg-circuit` STARK carried `std→core`/`alloc`; anti-ghost teeth (tampered proof + wrong PI both REJECT). The firmament's verified heart organ (`docs/FIRMAMENT.md` §6). No Lean/libuv/GMP. |
 | **M2** — rbg `DirectoryCell` PD (CAS + membership ACL + factory slot-caveat) | **✅ boots** (`sel4/dregg-pd/rbg-dir`) — the Robigalia heart, alive on seL4 |
-| **M3** — virtio-net + smoltcp net system | **◐** toolchain proven (the net-driver PD cross-builds natively for bare seL4); multi-PD system assembly remains |
+| **M3** — virtio-net + smoltcp net system | **◐** driver PD boots + runs init (cross-builds, reaches the virtio MMIO probe on seL4, `sel4/dregg-pd/net/`); remaining = QEMU mmio-slot alignment + smoltcp client PD + 2-PD channel |
 | **M4** — dregg TUI light client | **✅** `dregg-tui/` builds + runs on the host (the face; reaches the node over M3) |
 | **M5** — riscv64 | **✅ boots** — M0 on `qemu_virt_riscv64` (OpenSBI → seL4 → userspace → dregg PD) |
 | Verifier-isolation verdict | **✅ proven** — `no-lean-link` build, zero Lean/libuv/GMP symbols |

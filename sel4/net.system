@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  M3 — the firmament's network edge (docs/FIRMAMENT.md §3, §6): a two-PD
+  virtio-net system. The driver PD (dregg-net-driver-pd) holds the NIC cap +
+  the virtio-mmio region + the DMA paddr and is the SOLE PD that touches the
+  wire — the seL4-enforced form of "net-PD owns the NIC cap". The client PD
+  (dregg-net-client-pd, the smoltcp DHCP/echo PD) speaks to it over the shared
+  ring buffers + a notification channel; it is the distributed END of the
+  capability gradation.
+
+  Memory layout + setvars are the rust-sel4 http-server example's net half
+  (the virtio-blk / pl031 / sp804 PDs stripped). The driver PD ELF is BUILT and
+  cross-compiles (../sel4/dregg-pd/net/); the client PD ELF is the remaining
+  smoltcp-async wiring (see README.md M3).
+
+  Boot: microkit net.system --board qemu_virt_aarch64 ... then
+    qemu-system-aarch64 ... \
+      -netdev user,id=net0,hostfwd=tcp::5555-:5555 \
+      -device virtio-net-device,netdev=net0
+-->
+<system>
+    <memory_region name="virtio_mmio" size="0x1000" phys_addr="0xa003000" />
+
+    <memory_region name="virtio_net_driver_dma" size="0x200_000" page_size="0x200_000" />
+    <memory_region name="virtio_net_client_dma" size="0x200_000" page_size="0x200_000" />
+
+    <memory_region name="virtio_net_rx_free" size="0x200_000" page_size="0x200_000"/>
+    <memory_region name="virtio_net_rx_used" size="0x200_000" page_size="0x200_000"/>
+    <memory_region name="virtio_net_tx_free" size="0x200_000" page_size="0x200_000"/>
+    <memory_region name="virtio_net_tx_used" size="0x200_000" page_size="0x200_000"/>
+
+    <!-- The smoltcp DHCP/echo client PD: the distributed end of the cap gradation. -->
+    <protection_domain name="dregg_net_client" priority="1" stack_size="0x10_000">
+        <program_image path="dregg-net-client-pd.elf" />
+
+        <map mr="virtio_net_client_dma" vaddr="0x1_000_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_client_dma_vaddr" />
+
+        <map mr="virtio_net_rx_free" vaddr="0x2_000_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_rx_free" />
+        <map mr="virtio_net_rx_used" vaddr="0x2_001_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_rx_used" />
+        <map mr="virtio_net_tx_free" vaddr="0x2_002_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_tx_free" />
+        <map mr="virtio_net_tx_used" vaddr="0x2_003_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_tx_used" />
+    </protection_domain>
+
+    <!-- The virtio-net driver PD: the SOLE holder of the NIC cap + MMIO + DMA paddr. -->
+    <protection_domain name="dregg_net_driver" priority="4" stack_size="0x10_000">
+        <program_image path="dregg-net-driver-pd.elf" />
+
+        <map mr="virtio_mmio" vaddr="0x6_000_000_000" perms="rw" cached="false" setvar_vaddr="virtio_net_mmio_vaddr" />
+
+        <map mr="virtio_net_driver_dma" vaddr="0x7_000_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_driver_dma_vaddr" />
+        <setvar symbol="virtio_net_driver_dma_paddr" region_paddr="virtio_net_driver_dma" />
+
+        <map mr="virtio_net_client_dma" vaddr="0x1_000_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_client_dma_vaddr" />
+
+        <map mr="virtio_net_rx_free" vaddr="0x2_000_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_rx_free" />
+        <map mr="virtio_net_rx_used" vaddr="0x2_001_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_rx_used" />
+        <map mr="virtio_net_tx_free" vaddr="0x2_002_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_tx_free" />
+        <map mr="virtio_net_tx_used" vaddr="0x2_003_000_000" perms="rw" cached="true" setvar_vaddr="virtio_net_tx_used" />
+
+        <irq irq="79" id="0" />
+    </protection_domain>
+
+    <!-- driver DEVICE channel (id 0) is the IRQ; CLIENT channel (id 1) <-> client. -->
+    <channel>
+        <end pd="dregg_net_driver" id="1" />
+        <end pd="dregg_net_client" id="0" pp="true" />
+    </channel>
+</system>

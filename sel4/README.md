@@ -30,7 +30,8 @@ Use `ctrl-a x` to exit a QEMU run.
 | **M0** | a Rust PD prints "dregg robigalia v0" on seL4 | ✅ **boots** (aarch64) |
 | **M1** | the verifier PD: bundle-in → verify → verdict-out, anti-ghost reject | ✅ **boots** (aarch64) |
 | **M2** | the rbg `DirectoryCell` PD (versioned CAS, membership ACL, factory slot-caveat) — the Robigalia heart | ✅ **boots** (aarch64) |
-| **M3** | networking (virtio-net driver PD + smoltcp) | ◐ toolchain proven (the net-driver PD cross-builds for bare seL4 natively); the multi-PD net system is the wiring that remains |
+| **M-STARK** | the verifier-stark PD: a **REAL** STARK (BabyBear+BLAKE3+FRI+Fiat-Shamir) proved + verified on-device, with the anti-ghost tooth | ✅ **boots** (aarch64) — the firmament's verified heart organ (`make run-stark`) |
+| **M3** | networking (virtio-net driver PD + smoltcp) | ◐ driver PD **boots + runs its init** (cross-builds + reaches the virtio MMIO probe on seL4); the remaining wall is the QEMU virtio-mmio slot alignment + the smoltcp client PD + the 2-PD channel (see "M3" below) |
 | **M4** | the dregg TUI light client (`../dregg-tui/`) | ✅ builds + runs on the host (the face; reaches the node over M3) |
 | **M5** | retarget to `qemu_virt_riscv64` | ✅ **boots** (M0 on riscv64) |
 
@@ -42,7 +43,7 @@ Serial logs from the real boots are captured under `/tmp/sel4-boot-*.log`.
 |------|------------|
 | `setup.sh`            | Idempotent native-macOS toolchain: brew deps + Microkit SDK (native macos-aarch64 build) + pinned nightly + vendored rust-sel4. |
 | `Makefile`            | `make run` / `make run-m0/m1/m2` / `make run-riscv` — build the PD ELFs, link the Microkit image, boot in QEMU. |
-| `dregg-pd/`           | The PD workspace (standalone — NOT a repo-root member; cross-compiles to `aarch64-sel4-microkit`). Members: `m0-hello` (M0), `verifier` (M1), `rbg-dir` (M2). Target specs in `dregg-pd/targets/`. |
+| `dregg-pd/`           | The PD workspace (standalone — NOT a repo-root member; cross-compiles to `aarch64-sel4-microkit`). Members: `m0-hello` (M0), `verifier` (M1, structural), `rbg-dir` (M2), `verifier-stark` (M-STARK, **real STARK**), `net` (M3 driver). Target specs in `dregg-pd/targets/`. |
 | `dregg.system`        | The full five-PD node assembly (verifier · executor · persist · ingress · gossip). The single-PD demos above use minimal generated `.system` files; this is the steady-state node shape. Only `verifier` is buildable today; `executor` is blocked on the Lean runtime port (§2). |
 | `verifier-pd/`        | The original committed verifier-PD scaffold; the booting form now lives in `dregg-pd/verifier/`. |
 | `RBG-TO-SEL4.md`      | The rbg-heritage → real-seL4-primitive mapping (DirectoryFactory → `seL4_Untyped_Retype`, etc.) — realized in M2. |
@@ -70,21 +71,35 @@ Serial logs from the real boots are captured under `/tmp/sel4-boot-*.log`.
 - M5 — M0 on riscv64 (full path: OpenSBI → seL4 altloader → kernel → userspace
   → CapDL init → Microkit monitor → dregg PD).
 
+**Boots — the firmament's verified heart organ (M-STARK):**
+- `sel4/dregg-pd/verifier-stark/` runs a **real cryptographic STARK** on seL4:
+  it PROVES a 4-row AIR (78 KiB proof), VERIFIES it (ACCEPT), roundtrips the
+  wire form (ACCEPT), and shows the anti-ghost teeth — a tampered proof REJECTS
+  ("Trace Merkle proof failed"), a wrong public-input REJECTS ("Public inputs
+  mismatch"). The STARK core (`src/stark_core/{field,stark}.rs`) is the verbatim
+  `dregg-circuit` custom STARK (BabyBear + BLAKE3 Merkle + FRI + Fiat-Shamir)
+  carried `std → core`/`alloc` — byte-identical prove/verify. `prove()` is
+  deterministic (Fiat-Shamir, no RNG/clock), so the PD needs no entropy source.
+  No Lean, no libuv, no GMP. Serial: `/tmp/sel4-boot-stark.log`. `make run-stark`.
+
 **Remaining:**
-- **M3 net system** — the upstream `virtio-net-driver` PD cross-builds natively
-  for bare seL4 (proven), so the toolchain is not the wall; what remains is the
-  multi-PD system assembly (virtio-mmio `phys_addr` + DMA `paddr` setvars, the
-  shared-ring-buffer wiring, a smoltcp echo/DHCP client PD, the QEMU
-  `-netdev user` + `-device virtio-net-device` invocation).
+- **M3 net system** — the `virtio-net-driver` PD now lives in the workspace
+  (`sel4/dregg-pd/net/`, the rust-sel4 example vendored with git-pinned deps);
+  it **cross-builds and BOOTS** — on seL4 it runs its init and reaches the
+  virtio MMIO device probe (`net/src/main.rs:51`). The remaining wall is three
+  precise pieces: (1) align the QEMU virtio-mmio device placement to the
+  `0xa003000` / offset-`0xe00` slot the driver expects (the probe currently sees
+  device-type 0 because QEMU put the net device in a different mmio slot);
+  (2) a smoltcp DHCP/echo **client** PD over `sel4-shared-ring-buffer-smoltcp`
+  + `sel4-async-network`; (3) the 2-PD `.system` assembly (`sel4/net.system`,
+  scaffolded) + the channel wiring. Serial: `/tmp/sel4-boot-net-driver.log`.
 - **The `executor` PD** — blocked on THE blocker: an IO-free / libuv-free
   `leanrt` + GMP build so `libdregg_lean.a` links on the seL4 target
-  (`docs/SEL4-EMBEDDING.md` §2). v0 leads with the verifier + rbg userspace,
-  not the full Lean executor.
-- **M1's STARK core** — the M1 PD runs the full read→verify→verdict contract
-  with a no_std structural verify; the plonky3-STARK proof check itself needs
-  the `dregg-verifier` closure (dregg-circuit + dregg-turn/captp/federation)
-  carried to no_std. Plonky3 is already `#![no_std]`, so this is a large but
-  mechanical port, not a wall.
+  (`docs/SEL4-EMBEDDING.md` §2, `docs/FIRMAMENT.md` §6 — the exact excision plan
+  is banked: ELF-recompile the Lean closure under `leanc`, stub the 10
+  libuv-coupled `leanrt` objects + their two init functions, GMP-for-ELF or a
+  fixnum shim, host on `sel4-musl`). v0 leads with the verifier-stark heart
+  organ + rbg userspace, not the full Lean executor.
 
 ## The verifier-isolation verdict (verified on the host)
 

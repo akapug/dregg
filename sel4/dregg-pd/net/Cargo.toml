@@ -1,0 +1,34 @@
+# net — M3 the firmament's network edge: the virtio-net driver PD (the
+# distributed end of the cap gradation, docs/FIRMAMENT.md §3).
+#
+# This is the rust-sel4 `microkit-http-server-example-virtio-net-driver` PD
+# vendored verbatim, pulling the rust-sel4 driver/ring-buffer/virtio crates as
+# git deps pinned to the same commit (efef73cc) the rest of the workspace uses.
+# The driver holds the NIC cap + the virtio-mmio region + the DMA paddr; it is
+# the sole PD that touches the wire. Proving it cross-builds for
+# aarch64-sel4-microkit is the toolchain half of M3; the smoltcp client PD + the
+# multi-PD shared-ring assembly is the wiring that completes it (see
+# ../../README.md M3 + the net.system assembly).
+
+[package]
+name = "dregg-net-driver-pd"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "dregg-net-driver-pd"
+path = "src/main.rs"
+
+[dependencies]
+sel4-microkit = { workspace = true }
+
+virtio-drivers = { version = "0.13.0", default-features = false, features = ["alloc"] }
+
+# The rust-sel4 driver substrate, pulled as git deps pinned to the workspace
+# commit. Cargo resolves each crate's intra-repo path deps automatically.
+sel4-shared-memory = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-shared-ring-buffer = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-virtio-hal-impl = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-virtio-net = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-microkit-driver-adapters = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }

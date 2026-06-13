@@ -1,0 +1,410 @@
+# The Firmament — the seL4-hosted deterministic ground for houyhnhnm apps
+
+*Architecture doc. Present-tense, first-principles. The firmament is the
+seL4-hosted substrate that embeds the dregg executor, holds the apps, gives
+them capabilities (local seL4 + distributed dregg under one model), and can
+checkpoint/restore them transparently. Companion to `docs/SEL4-EMBEDDING.md`
+(the boot ladder + the Lean-runtime blocker) and `sel4/` (the booting PDs).*
+
+---
+
+## 1. What the firmament is
+
+The **firmament** is the boundary that holds the apps and gives them a
+deterministic ground to run on. Concretely it is four things, each a real
+seL4 construct:
+
+1. **The seL4 root** — the microkernel + the Microkit monitor + the CapDL
+   initializer that instantiates the protection-domain (PD) assembly. This is
+   the trusted computing base: ~10kLOC of verified C, the only code that runs
+   in privileged mode.
+
+2. **The dregg-executor PD** — the *heart*. A protection domain that embeds
+   the verified executor (`execFullForestG` via `dregg-lean-ffi`, the
+   credential-gated complete-turn executor proved in `metatheory/`). The
+   firmament runs every app turn *through* this PD: a turn arrives, the
+   executor decodes it, runs the verified `decode → step → encode`, and emits
+   a receipt. Nothing reaches durable state except through a turn this PD
+   accepted. (Status: this PD is the one true blocker — §6, §7.)
+
+3. **The capability fabric** — the unification of two capability graphs under
+   one interface. seL4 caps isolate the PDs (which PD may touch which page,
+   device, notification). dregg caps mediate the cells *inside* the executor
+   PD (c-lists, grants, attenuation). The firmament's claim is that these are
+   the **same abstraction at two points on a distance parameter** (§3).
+
+4. **The checkpoint/restore substrate** — the machinery that freezes a PD's
+   cap-state + memory and thaws it deterministically. seL4 gives transparent
+   PD checkpoint/restore; dregg gives the snapshot/seal model
+   (`persist/src/snapshot.rs`, `Dregg2/Spec/Lifecycle.lean`). The firmament
+   *marries* them: a PD checkpoint **is** a dregg snapshot (§4).
+
+The apps live *inside* the firmament. They are fully deterministic and
+houyhnhnm — pure, reproducible, no hidden nondeterminism, no deception (§5).
+The firmament is what makes that contract enforceable rather than aspirational:
+the apps cannot reach a clock, an RNG, a socket, or another app's memory except
+through a capability the firmament hands them, and every turn they take runs
+through the verified executor and is replayable.
+
+```
+            ┌──────────────────────── seL4 root (TCB: kernel + monitor) ─────────────────────┐
+            │                                                                                 │
+            │   ┌─ app-PD ─┐   ┌─ app-PD ─┐        the FIRMAMENT BOUNDARY                      │
+            │   │ houyhnhnm│   │ houyhnhnm│   (every turn crosses it into the executor)        │
+            │   └────┬─────┘   └────┬─────┘                                                    │
+            │        │  turn        │  turn                                                    │
+            │        ▼              ▼                                                          │
+            │   ┌──────────────────────────┐   ┌──────────────┐   ┌──────────────┐            │
+            │   │   executor-PD (HEART)     │──▶│  verifier-PD │   │  persist-PD  │            │
+            │   │ execFullForestG, verified │   │ STARK check, │   │ snapshot⊕    │            │
+            │   │ decode→step→encode        │   │ no prover    │   │ overlay, redb│            │
+            │   └─────────────┬────────────┘   └──────────────┘   └──────┬───────┘            │
+            │                 │ receipt                                   │ device cap          │
+            │                 ▼                                          ▼                     │
+            │           ┌──────────────┐                          [ block device ]             │
+            │           │   net-PD     │── NIC cap ──▶ [ virtio-net ] ── the DISTRIBUTED edge   │
+            │           └──────────────┘                                                       │
+            └─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. The PD topology — where each cap and trust boundary sits
+
+The firmament is the five-PD assembly (`sel4/dregg.system`), evolved so the
+executor-PD is the heart and the app-PDs sit inside the boundary:
+
+| PD | Role | Caps it holds | Trust boundary |
+|----|------|---------------|----------------|
+| **executor-PD** | the firmament heart: runs every turn through the verified `execFullForestG` | `turn_in` (R), `state` (RW), `receipt_out` (RW), a notification to each app-PD | holds NO device cap, NO NIC cap — it is pure compute over bytes. The verified semantics is the only authority over state transitions. |
+| **verifier-PD** | independent proof checking: bundle-in → STARK verify → verdict-out | `proof_in` (R), `verdict_out` (RW), one notification | holds NO prover authority, NO state cap. The seL4-enforced form of "a verifier runs in a separate process with no callback into a prover" (`verifier/src/lib.rs`). |
+| **persist-PD** | the durable store: commit log, checkpoints, snapshot⊕overlay | the **sole** holder of the storage-device cap; `commit_in` (R) from the executor | the only PD that can touch the disk. No other PD can read or forge durable state. |
+| **net-PD** | the network edge: virtio-net driver + smoltcp; turn ingress + gossip | the **sole** holder of the NIC cap + the virtio-mmio region + DMA paddr | the only PD that can touch the wire. De-envelopes + Ed25519-checks a `SignedTurn` *before* handing it to the executor; bad signatures never reach the heart. This PD is the **distributed end** of the cap gradation (§3). |
+| **app-PD(s)** | the houyhnhnm apps: pure, deterministic, replayable | only the caps the firmament grants: a `turn_out` page to submit turns, a notification, and whatever dregg cell-caps the app was issued | cannot reach a clock, RNG, socket, device, or another app's memory. Ambient authority is structurally absent (§5). |
+
+The seL4 cap partition **is** the trust boundary the dregg crate-split already
+gestures at: `dregg-verifier`'s "no callback into a prover" becomes the
+verifier-PD's missing prover cap; `dregg-persist`'s "the node's one durable
+store" becomes the persist-PD's sole device cap. The firmament makes the
+architecture's invariants load-bearing at the kernel level.
+
+---
+
+## 3. The transparent local↔distributed capability gradation
+
+This is the firmament's central thesis: **an seL4 capability and a dregg
+capability are the same abstraction at different points on a distance
+parameter.** Both are unforgeable, attenuable, delegable references that
+mediate access to a resource. They differ only in *how far away* the resource
+is and *what bounds hold on operations against it*.
+
+### One interface, two backings
+
+A firmament capability is a handle `(target, rights)` that an app holds and
+may invoke, attenuate (`rights' ⊆ rights`), or delegate. The interface is the
+same whether the target is:
+
+- **local** — an seL4 kernel object (a CNode slot, an endpoint, a frame). The
+  invocation is a kernel syscall; revocation is `seL4_CNode_Revoke`; the rights
+  are seL4 cap rights.
+- **distributed** — a dregg cell on a (possibly remote) federation. The
+  invocation is a turn through the executor-PD; revocation is the group-key
+  epoch lift (the `remove(m)` that darkens ciphertext + capabilities in one
+  turn); the rights are dregg grant-attenuation (`granted ⊆ held`, enforced by
+  the capability crown / `checkSubset`).
+
+The app does not see which backing it holds. It holds a capability; it
+invokes it; the firmament routes the invocation to the kernel (local) or the
+executor→net path (distributed). **Adoption is attenuation** at both ends:
+granting a sub-capability is `seL4_CNode_Mint` with reduced rights locally and
+`recKDelegateAtten` (the proven `granted ≤ held` gate) distributedly.
+
+### The distance parameter `n` and what collapses at `n = 1`
+
+The single-machine principle (`project-dregg4-vision`, the
+`SINGLE-MACHINE PRINCIPLE`): the honest bounds on a distributed capability are
+**distance bounds**, parametrized by the topology `n` (the number of machines
+the cap's target is spread across). The firmament is the place where
+`n = 1` — everything is on one seL4 machine — so the distributed bounds
+**collapse to strong local properties**:
+
+| Operation | `n > 1` (distributed) | `n = 1` (firmament, local) |
+|-----------|-----------------------|----------------------------|
+| **Revocation** | eventual: the epoch lift must propagate; an in-flight invocation may still land | **immediate**: `seL4_CNode_Revoke` is synchronous; the cap is dead the instant the syscall returns |
+| **Checkpoint** | a *consistent cut* across machines (Chandy–Lamport); may be stale | **consistent checkpoint**: one PD's cap-state + memory is captured atomically (§4) |
+| **Commit** | quorum/finality latency; the turn is final only after the blocklace finalizes it | **synchronous commit**: the persist-PD writes the commit record in one redb transaction before the turn returns |
+| **Agreement** | FLP-bounded; needs a consensus round | trivial: one machine is its own quorum |
+
+This is the single-machine principle made *architectural*. The firmament is
+not "distributed dregg, crippled to one box" — it is the **collapsed limit**
+of the same capability model, where the distance parameter is pinned to its
+minimum and the bounds become the strong properties. A capability that an app
+holds works identically whether the executor resolves it locally (kernel
+object, immediate) or routes it to a peer over the net-PD (cell, eventual). The
+gradation is *transparent*: the same `(target, rights)` handle, the same
+attenuate/delegate/invoke operations, sliding along `n`.
+
+The net-PD reaching the network (M3, §6) is what makes the `n > 1` end *real*
+and not merely designed: a capability whose target lives on another machine is
+resolved across the wire the net-PD holds. With both ends present, the
+gradation is a measured axis, not a slogan.
+
+---
+
+## 4. Transparent checkpoint/restore — PD checkpoint **is** a dregg snapshot
+
+seL4 gives transparent checkpoint/restore of a protection domain: capture a
+PD's capability state (its CNode) + its mapped memory, and later restore it.
+dregg gives the snapshot/seal model. The firmament marries them so a houyhnhnm
+app can be **frozen and thawed deterministically**, with an integrity tooth
+that makes the thaw unforgeable.
+
+### The dregg snapshot model (`persist/src/snapshot.rs`)
+
+The snapshot is `checkpoint ⊕ overlay`, and the equation
+`recover = checkpoint ⊕ overlay = replay` is the verified recovery spec
+(`metatheory/Dregg2/Distributed/CrashRecovery.lean`, `recover_eq_replay`):
+
+- A **checkpoint** (`LedgerCheckpoint`, `persist/src/ledger_store.rs`) is the
+  full cell state at a height cut — the "freeze."
+- An **overlay** (`Snapshot.overlay: Vec<Cell>`, from `cell_overlay_since`,
+  `persist/src/commit_log.rs`) is every cell post-state committed *after* that
+  cut — the "delta since freeze," last-writer-wins.
+- **Replay** = instantiate the checkpoint, then `upsert_cell` the overlay over
+  it (`snapshot.rs`, `apply_snapshot`). The result is provably equal to a full
+  replay from genesis, *for any checkpoint cut* — so where you cut is free.
+
+### The root tooth — the anti-substitution guard
+
+`Snapshot.claimed_root: [u8; 32]` is the **root-binding tooth**. It is the
+Merkle root of the reconstructed ledger, and it is bound to the chain at
+`CommitRecord::ledger_root` (`persist/src/commit_log.rs`) — the post-state
+commitment the federation attested to. The tooth makes the thaw unforgeable
+three ways:
+
+1. **Ship-side** (`ship_snapshot`): a node never ships a snapshot whose
+   reconstructed root ≠ its own recorded finalized root (fail-closed).
+2. **Apply-side** (`apply_snapshot`): the joiner independently recomputes the
+   root from `checkpoint ⊕ overlay`; if it ≠ `claimed_root`, the thaw is
+   refused (fail-closed). Tampering with the checkpoint *or* the overlay fails
+   here.
+3. **Trusted-root** (`apply_snapshot_verified`): the joiner additionally
+   checks `claimed_root` against a root it already trusts (a finality proof) —
+   so a server cannot ship a *self-consistent* snapshot of a *different*
+   ledger.
+
+### How the PD checkpoint maps to the snapshot
+
+In the firmament an app-PD's deterministic state is a dregg cell forest. The
+mapping:
+
+| seL4 PD checkpoint | dregg snapshot |
+|--------------------|----------------|
+| freeze the PD's cap-state + memory atomically | `ship_snapshot` — capture `checkpoint ⊕ overlay` at a height cut |
+| the delta since the freeze | the `overlay` (cell post-states since the cut) |
+| restore = rebuild frozen state + replay delta | `apply_snapshot` — `upsert` the overlay onto the checkpoint |
+| "is this the state I froze?" | the `claimed_root` tooth — recompute + compare, fail-closed |
+| restore only to a trusted anchor | `apply_snapshot_verified(trusted_root)` |
+
+Because the app is houyhnhnm — deterministic, no hidden state — its entire
+observable state *is* its cell forest, so the dregg snapshot captures it
+completely. There is no torn state (the checkpoint is a single-height cut), no
+lost mutation (the overlay carries every committed write), no double-apply (the
+commit cursor is crash-consistent), and no forgery (the root tooth). Freezing
+and thawing a houyhnhnm app is `ship_snapshot` then `apply_snapshot_verified`.
+
+### Seal vs. snapshot — the Lifecycle taxonomy
+
+`metatheory/Dregg2/Spec/Lifecycle.lean` distinguishes the *lifecycle* states a
+cell can be in, which is orthogonal to snapshot-shipping:
+
+- **`sealed (reasonHash, sealedAt)`** — reversible quiescence: the cell rejects
+  new effects, state + history preserved; `unseal` returns it to `live`. This
+  is the *pause* primitive: freeze an app-PD in place (stop accepting turns)
+  without shipping it anywhere.
+- **`live`** — effects flow normally.
+- **`archived`** — still live, but the receipt-chain prefix is folded into a
+  checkpoint (the IVC fold) — the history-compression that makes the snapshot's
+  checkpoint cheap.
+- **`migrated` / `destroyed`** — terminal (no transition leaves them, proved by
+  `terminal_rejects_transition`).
+
+So the firmament has two complementary freeze operations: **seal** (pause in
+place, reversible via unseal) and **snapshot** (ship the state, verifiable via
+the root tooth). A transparent checkpoint/restore of an app-PD is
+*seal → ship_snapshot → (move/store) → apply_snapshot_verified → unseal*.
+
+---
+
+## 5. The deterministic-houyhnhnm app contract
+
+The firmament enforces that apps are **houyhnhnm**: pure, reproducible, no
+hidden nondeterminism, no deception. The enforcement is structural — it falls
+out of the cap fabric, not from app good behaviour.
+
+**What the firmament enforces:**
+
+1. **No ambient authority.** An app-PD's CNode contains *only* the caps the
+   firmament minted for it: a `turn_out` page, a notification, and its issued
+   dregg cell-caps. It has no device cap, no NIC cap, no cap to any other PD's
+   memory. Anything not granted is unreachable — seL4 enforces this in
+   hardware (the MMU + the cap-derivation tree).
+
+2. **No wall-clock, no RNG — except through caps.** There is no `gettimeofday`,
+   no `getrandom`, no syscall surface in an app-PD (it is `#![no_std]`,
+   `#![no_main]`, panic=abort, with only the Microkit IPC primitives). If an
+   app needs time or randomness it must receive it as an *input to its turn*
+   (a cap-mediated value the executor supplies and the receipt records), so the
+   value is part of the replayable transcript rather than an ambient draw.
+
+3. **Replayability.** Every app action is a turn through the executor-PD. The
+   turn + its inputs are recorded in the commit log (`persist/src/commit_log.rs`,
+   `CommitRecord`). Re-running the recorded turns from a checkpoint reproduces
+   the exact state (`recover_eq_replay`). Determinism is not trusted — it is
+   *checked*: the executor is the verified `execFullForestG`, so the same
+   inputs always yield the same post-state + receipt + root.
+
+4. **No deception.** The executor is the verified semantics; the verifier-PD
+   independently STARK-checks the turn's proof with no prover authority; the
+   snapshot's root tooth makes a thawed state self-attesting. An app cannot
+   claim a state transition the executor did not produce, and cannot ship a
+   snapshot of a state it was not in. The whole stack is "the proof witnesses
+   the protocol's correct evolution" (the ARGUS vision) carried down to the
+   seL4 substrate.
+
+The contract in one line: **an app's entire observable behaviour is a sequence
+of cap-mediated, verified, replayable turns over a deterministic cell forest,
+with no path to ambient nondeterminism and no path to assert an unverified
+transition.** The firmament is the substrate that makes every clause of that
+sentence true by construction.
+
+---
+
+## 6. The heart and the edge — status
+
+The firmament needs a **heart** (a PD that runs real verified compute) and an
+**edge** (a PD that reaches the network, making the `n > 1` end of the
+gradation real). Their status:
+
+### The executor-PD (the true heart) — the blocker, precisely characterized
+
+The executor-PD embeds the Lean-compiled `execFullForestG`. It cannot be built
+for the bare `aarch64-sel4-microkit` target today, for two compounding reasons
+established by direct probe of the toolchain (`leanrt` v4.30.0):
+
+1. **Object format.** The compiled Lean closure (`libdregg_lean.a`, ~8200
+   objects) and the Lean runtime archives (`libleanrt.a` etc.) are **Mach-O
+   arm64** (the macOS host build), while the seL4 target is **ELF
+   `aarch64-unknown-none`**. The entire closure must be *recompiled* with
+   `leanc` targeting an ELF triple — not a relink.
+
+2. **The libuv coupling at runtime init.** The pure executor path
+   (`dregg_exec_full_forest_auth_str`) performs no IO. But the init ritual
+   `lean_initialize_runtime_module` (in `init_module.cpp.o`) has an **undefined
+   reference to `initialize_libuv` and `initialize_io`** — so the linker pulls
+   in the 10 libuv-coupled leanrt objects (`dns, event_loop, io, libuv,
+   net_addr, signal, system, tcp, timer, udp`) even though we never run the
+   event loop. The pure-path objects additionally require `mi_malloc`
+   (mimalloc), `pthread_*` (GC/thread init), the C++ exception runtime
+   (`__cxa_*`), and TLS (`__tlv_bootstrap`).
+
+**The excision plan (the exact remaining wall + the path through it):**
+
+- **The 10 libuv objects are cleanly separable** — they are named by IO concern
+  and the pure path calls none of them. Stub `initialize_libuv` and
+  `initialize_io` as no-ops returning success (the executor never opens a
+  socket/file/timer), and provide the handful of `uv_*` symbols the linker
+  demands but execution never reaches. The other six runtime initializers
+  (`alloc, debug, mutex, object, thread, process, stack_overflow`) are
+  libuv-free and stay. This is *weld, not build*.
+- **GMP** is referenced only by `mpz.cpp.o` + `sharecommon.cpp.o`. It is
+  portable C (malloc + libc only); recompile it for the ELF target, or — for a
+  hand-reduced shim that uses only small fixnums — stub the `mpz` path.
+- **The substrate for libc/pthread/mimalloc** exists experimentally in
+  rust-sel4: `crates/experimental/sel4-musl` (a musl syscall-emulation shim)
+  and `crates/private/support/sel4-root-task-with-std`. The executor-PD is a
+  **root-task-with-std** style PD (not a bare Microkit PD): build musl for the
+  ELF target, wire `sel4-musl`'s syscall handler, recompile the Lean closure
+  with `leanc --target aarch64-unknown-linux-musl`, link under the shim with
+  the libuv objects excised.
+
+This is the genuine weeks-to-a-quarter port the roadmap names, now reduced to a
+concrete checklist: *(1) ELF-recompile the Lean closure under leanc;
+(2) excise the 10 libuv objects + stub their two init functions;
+(3) GMP for ELF (or fixnum-only shim); (4) host on `sel4-musl` + a root-task
+runtime.* When it lands, the executor-PD boots and runs ONE real turn,
+printing the receipt over serial — the firmament's first heartbeat.
+
+### The verifier-PD STARK core (the bankable heart organ)
+
+Until the executor-PD lands, the firmament's verified-compute heart is the
+**verifier-PD running a real plonky3 STARK verification**. This needs *no
+Lean*: the verify entry (`verify_effect_vm_proof`, `verifier/src/lib.rs`) calls
+`stark::verify` (`circuit/src/stark.rs`), and the entire verify path uses only
+`core::ops` / `core::fmt` — no getrandom (verification is deterministic), no
+rayon, no std collections. The port is `std → core` on ~20 circuit files, all
+mechanical (plonky3 is already `#![no_std]`). A booting verifier-PD that does
+real proof-checking is a concrete firmament organ and the high-value win when
+the full Lean port is too deep for one lane (§ `sel4/dregg-pd/verifier-stark/`).
+
+### The net-PD (the edge)
+
+M3 networking is the distributed edge. The `sel4-virtio-net` driver PD already
+cross-builds for seL4; the rust-sel4 `http-server` example
+(`crates/examples/microkit/http-server/`) is the canonical multi-PD net
+assembly (virtio-net driver PD + smoltcp client PD + shared ring buffers +
+virtio-mmio phys_addr/DMA paddr setvars). A stripped TCP-echo / DHCP client PD
+over `sel4-shared-ring-buffer-smoltcp` is the minimal edge boot (§
+`sel4/dregg-pd/net/`).
+
+---
+
+## 7. The firmament status board
+
+| Firmament organ | What it is | Status |
+|-----------------|------------|--------|
+| **seL4 root + monitor** | TCB, CapDL init, Microkit monitor | ✅ boots (M0/M2 on aarch64, M5 on riscv64) |
+| **executor-PD (heart)** | verified `execFullForestG` | ⛔ blocked — Lean ELF recompile + libuv excision + musl host (§6; exact plan banked) |
+| **verifier-PD STARK core (heart organ)** | real plonky3 STARK verify | ◐ no_std structural verify boots (M1); STARK-core port is mechanical std→core (§6) |
+| **persist-PD** | snapshot⊕overlay + root tooth | ◐ snapshot model lands in `persist/src/snapshot.rs`; PD = redb-over-block-cap (quarter) |
+| **net-PD (edge)** | virtio-net + smoltcp | ◐ driver cross-builds (proven); multi-PD assembly is the M3 wiring (§6) |
+| **app-PDs** | houyhnhnm apps | ◐ rbg DirectoryCell PD boots (M2); the cap contract (§5) is the firmament's enforcement target |
+| **cap fabric** | local↔distributed gradation | design (§3); becomes real when the net-PD edge + executor heart both boot |
+| **checkpoint/restore** | seal/snapshot/unseal | design (§4) on real `snapshot.rs` + Lifecycle.lean; PD-checkpoint wiring is quarter+ |
+
+**The firmament has a heart and an edge** when *either* the executor-PD boots
+(the true heart) *or* the verifier-PD runs a real STARK check (the heart
+organ), **and** the net-PD reaches the network (the edge). The bankable
+near-term firmament is: **verifier-PD (real STARK) + net-PD (real TCP)** — a
+substrate that does real proof-checking and reaches the distributed end of the
+cap gradation, while the executor-PD's exact wall is characterized and its
+excision plan is banked for the quarter port.
+
+---
+
+## 8. Decisions for the project lead
+
+1. **Heart sequencing.** The executor-PD is a weeks-to-a-quarter port (§6). Do
+   we (a) fund the full Lean-ELF-on-musl port now, or (b) ship the firmament
+   v0 with the **verifier-PD real STARK core** as the heart organ + the net-PD
+   edge, and queue the executor-PD as the headline quarter milestone? The
+   STARK-core path needs no Lean and is mechanical.
+
+2. **GMP strategy.** Full GMP recompiled for ELF (portable, heavy) vs. a
+   **fixnum-only shim** that stubs the `mpz` bignum path. The executor's
+   verified arithmetic — does any turn ever exceed 63-bit fixnums? If not, the
+   shim deletes a whole C dependency. (Needs a check of the kernel's numeric
+   ranges.)
+
+3. **Executor-PD runtime shape.** `sel4-musl` + `root-task-with-std` is
+   *experimental* in rust-sel4 and root-task-only (not Microkit). Do we host
+   the executor-PD as a root task (simpler, weaker isolation) or invest in a
+   Microkit-PD musl substrate (the steady-state firmament shape in
+   `dregg.system`)?
+
+4. **The `n = 1` collapse as the security model.** §3 claims the firmament *is*
+   the collapsed limit of the distributed cap model. Is the single-machine
+   firmament the *primary* product (the strong-properties deployment) with
+   distribution as the relaxation, or is it a stepping-stone to the `n > 1`
+   target? This sets whether immediate-revocation / synchronous-commit are
+   headline guarantees or transient ones.
