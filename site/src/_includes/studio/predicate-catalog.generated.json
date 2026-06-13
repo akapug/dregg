@@ -539,7 +539,7 @@
           "type": "DeltaRelation"
         }
       ],
-      "semantics": "Cross-cell binding pair to γ.2: this cell's `local_slot` delta must match `peer_cell`'s `peer_slot` delta under the named .",
+      "semantics": "Cross-cell binding pair to γ.2: this cell's `local_slot` delta must match `peer_cell`'s `peer_slot` delta under the named `DeltaRelation`.",
       "in_view": true,
       "locally_evaluable": false,
       "simple": false
@@ -578,7 +578,7 @@
           "type": "RenouncedSet"
         }
       ],
-      "semantics": "**Categorical dual of : proof of non-holding / non-membership.** A *renunciation* slot caveat — the action's sender must verifiably *NOT* be in the `set`'s sorted Merkle leaf set.",
+      "semantics": "**Categorical dual of `SenderAuthorized`: proof of non-holding / non-membership.** A *renunciation* slot caveat — the action's sender must verifiably *NOT* be in the `set`'s sorted Merkle leaf set.",
       "in_view": true,
       "locally_evaluable": false,
       "simple": false
@@ -837,7 +837,7 @@
           "type": "HeapAtom"
         }
       ],
-      "semantics": "**Heap-keyed atom (THE ROTATION's app-state lane)** — the top-level lift of  over heap key `key`, the twin of  (both surfaces share ONE evaluator arm, like the `SenderIs`/`BalanceGte` precedent).",
+      "semantics": "**Heap-keyed atom (THE ROTATION's app-state lane)** — the top-level lift of `HeapAtom` over heap key `key`, the twin of `HeapField` (both surfaces share ONE evaluator arm, like the `SenderIs`/`BalanceGte` precedent).",
       "in_view": true,
       "locally_evaluable": false,
       "simple": true

@@ -60,6 +60,15 @@ function esc(s) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Render the light inline markdown the generated constraint `semantics` carry
+// (`` `code` `` spans + `**bold**` ledes) into safe HTML — text is escaped
+// first, so this only wraps already-safe content in <code>/<strong>.
+function mdInline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
 // ---------------------------------------------------------------------------
 // Field-element codec (display/entry only — no hashing, no kernel semantics).
 // A `Field` is a 32-byte array in the serde shape. Users enter a decimal
@@ -488,7 +497,7 @@ class DreggFactoryComposer extends HTMLElement {
         const guard = entry.guard
           ? `<span class="dregg-fc__chip is-guardchip${errs._guardSlot || errs._guardValue ? ' is-bad' : ''}">unless slot[${esc(entry.guard.slot)}] = <code>${esc(entry.guard.value)}</code></span>`
           : '';
-        body = `<div class="dregg-fc__sem">${esc(cat.semantics)}</div><div class="dregg-fc__chips">${chips}${guard}</div>`;
+        body = `<div class="dregg-fc__sem">${mdInline(cat.semantics)}</div><div class="dregg-fc__chips">${chips}${guard}</div>`;
       }
       return `<li class="dregg-fc__entry${bad ? ' is-bad' : ''}">` +
         `<div class="dregg-fc__entry-head"><code class="dregg-fc__kind">${esc(entry.opaque ? Object.keys(entry.opaque)[0] : entry.kind)}</code>` +
@@ -541,7 +550,7 @@ class DreggFactoryComposer extends HTMLElement {
       `<div class="dregg-fc__add">` +
         `<div class="dregg-fc__add-pick">` +
           `<select class="dregg-fc__add-kind">${opts}</select>` +
-          (cat ? `<span class="dregg-fc__add-sem">${esc(cat.semantics)}</span>` : '') +
+          (cat ? `<span class="dregg-fc__add-sem">${mdInline(cat.semantics)}</span>` : '') +
         `</div>` +
         `<div class="dregg-fc__add-fields">${inputs}</div>` +
         guardRow +
