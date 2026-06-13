@@ -1,0 +1,62 @@
+//! # dregg-query — attested queries over the receipt fact-base
+//!
+//! The Q1+Q2 core of `docs/EPISTEMIC-DATALOG.md`, deliberately NOT a full
+//! Datalog engine (the named trap): no IDB rules, no recursion, no
+//! stratification — one conjunctive query at a time, over a closed EDB
+//! schema, with the two things no Datalog DB has:
+//!
+//! - **the CALM grade from day one** ([`classify`]): every query is
+//!   annotated monotone (coordination-free, rows final, cacheable) or
+//!   finalized-dependent ("fresh as of height H") — the I-confluence /
+//!   `modality_price_monotone` story applied per query;
+//! - **the non-omission certificate** ([`attested`]): answers carry a range
+//!   opening against the receipt-log MMR root, so a verifying answer is
+//!   provably computed from EXACTLY the committed receipt range — nothing
+//!   hidden, nothing forged, nothing reordered. The verifier re-derives the
+//!   rows; the server is trusted for nothing but availability.
+//!
+//! ## Layout
+//!
+//! - [`fact`] — the EDB schema: `created` / `transfer` / `balance` /
+//!   `granted` / `revoked`, height-stamped, append-only.
+//! - [`receipt`] — the receipt row consumed (node wire mirror + offline
+//!   `Vec<ReceiptRecord>` mode) and fact extraction.
+//! - [`query`] — terms / atoms / filters / safe negation + the nested-loop
+//!   join evaluator.
+//! - [`classify`] — the CALM classifier.
+//! - [`mmr`] — the receipt-index MMR: the Rust embodiment of
+//!   `metatheory/Dregg2/Lightclient/MMR.lean` (`RVerifies`,
+//!   `server_cannot_omit_position`); prover + root-pinned range verifier.
+//! - [`attested`] — `AttestedSlice` / `AttestedAnswer`: the
+//!   certificate-carrying answer type and its `verify`.
+//! - [`client`] — transport-agnostic node-API mirrors + the COMMENT-SPEC for
+//!   the node-side `/api/receipts/index/{root,range}` handlers (not yet
+//!   served) and the enrichment the typed effect summaries need.
+//!
+//! ## The proof story (what is and is not verified)
+//!
+//! The non-omission ARGUMENT is machine-checked in Lean
+//! (`Dregg2/Lightclient/{HistoryIndex,AttestedQuery,MMR}.lean` — axiom-clean,
+//! non-vacuous both ways). THIS crate is the unverified Rust mirror of the
+//! MMR specialization: same structure, same acceptance condition, same
+//! false-witness suite as the model's §7 (see `tests/`). The hash floor here
+//! is blake3 with arity-separated domain tags standing in the model's
+//! `Poseidon2SpongeCR` slot; the in-circuit Poseidon2 instantiation arrives
+//! with THE ROTATION's `CommitBindsMMR` weld, at which point the trusted
+//! root stops being out-of-band and is pinned by the IVC aggregate.
+
+pub mod attested;
+pub mod classify;
+pub mod client;
+pub mod fact;
+mod hexutil;
+pub mod mmr;
+pub mod query;
+pub mod receipt;
+
+pub use attested::{answer, AttestError, AttestedAnswer, AttestedSlice, RangeCertificate};
+pub use classify::{classify, Classification, CoordinationClass};
+pub use fact::{Fact, FactBase, Height, Pred, Value};
+pub use mmr::{verify_range, Blake3Mmr, Mmr, MmrError, MmrHasher, Peak, RangeOpening};
+pub use query::{eval, Atom, Bindings, CmpOp, Filter, Query, QueryError, Term};
+pub use receipt::{extract_facts, EffectSummary, ReceiptRecord};
