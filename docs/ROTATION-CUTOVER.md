@@ -99,6 +99,35 @@ CHECKPOINT LADDER (each a coherent green boundary; relaunch from the last done):
      live turn path rotates (which keeps v1 alive and contradicts "grep-zero v1 refs")?
      `proof_forest.rs` has NO non-test consumer (it can die at C7). C2 (verifier split) is the last
      unblocked rung; C3 onward is gated on this decision.
+
+     ✅ **WALL PARTIALLY FELL 2026-06-13 (C3 leaf-wrap GREEN, commit `bbea731e7`/fork `72ffc56`;
+     aggregation gate GREEN this lane).** Decision #1 = OPTION (a): build the in-circuit verifier /
+     leaf-wrap for the rotated multi-table `BatchProof`. DONE for the two RECURSION knots:
+       * `circuit/src/ivc_turn_chain.rs::prove_descriptor_leaf_rotated[_with_config]` (:610/:639)
+         wraps a rotated `Ir2BatchProof` as a `RecursionInput::NativeBatchStark` leaf and the wrapped
+         root self-verifies in-circuit (`rotation_batchstark_leaf_smoke.rs::rotated_transfer_leaf_folds_as_batchstark`).
+       * **NEW (this lane) — the aggregation gate:** `rotation_batchstark_leaf_smoke.rs::
+         two_rotated_leaves_aggregate_at_wrap_config` PROVES two rotated leaves fold up an
+         aggregation layer at `ir2_leaf_wrap_config` (log_blowup 6) and the aggregated root
+         self-verifies — GREEN in 339.87 s on persvati. So `prove_chain_core` (ivc) +
+         `prove_joint_core` (joint) can rotate by (i) threading a rotated `Ir2BatchProof<DreggRecursionConfig>`
+         + its `EffectVmDescriptor2` through `FinalizedTurn`/`JointCell`, (ii) minting leaves via
+         `prove_descriptor_leaf_rotated_with_config(.., ir2_leaf_wrap_config())`, (iii) running the
+         binding-leaf wrap + `aggregate_tree` at `ir2_leaf_wrap_config` instead of `create_recursion_config`.
+         NOTE: the stale doc comment on `create_recursion_config_for_inner_fri` ("prover side unchanged,
+         log_blowup 3") is WRONG — it delegates to `create_recursion_config_with_fri(inner_blowup,..)`,
+         so the rotated leaf OUTPUT is log_blowup 6; the whole chain must run at that one engine.
+       * The recursion knots are SETUP/DEMO-invoked (`lightclient::fold_and_attest` +
+         `lightclient/src/bin/whole_history_demo.rs`); NO `node/`/`sdk/` production loop folds a chain.
+     ⚠️ **STILL A HARD WALL — the BILATERAL aggregation outer AIR (knot 3).**
+     `circuit/src/bilateral_aggregation_air.rs::BilateralAggregationAir` is a plain `StarkAir`
+     (NOT the recursion machinery) proven via `dregg_circuit::stark::try_prove` over per-row
+     `wr.public_inputs[..ACTIVE_BASE_COUNT]` (the 204-PI v1 slice). It is **LIVE** via the node HTTP
+     endpoint `node/src/api.rs::post_aggregate_bundle` (:3299) + `node/src/mcp.rs:6587` — NOT covered
+     by the C3 leaf-wrap (which is for the chain/joint uni→batch recursion). Rotating it is a
+     from-scratch ROTATED OUTER AIR + Lean emission (a 38-PI inner-row aggregation AIR), distinct
+     from the mechanical 204→38 reslice. This is the precise residual C3/C4 wall blocking grep-zero
+     of `EffectVmAir` / `ACTIVE_BASE_COUNT` on the live bilateral path.
   4. C4 = reroute the ~70 v1 call-sites + `aggregate_bilateral_prover.rs` (204→38 PI slice) + un-gate.
   5. C5 = regen (EmitAllJson→v3Registry live, R=16 probe→R=24, re-pin artifacts, reseed FFI closure).
   6. C6 = VK epoch + succession record.
