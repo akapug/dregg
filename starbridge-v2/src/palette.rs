@@ -38,6 +38,7 @@ pub enum CommandId {
     GoCipherclerk,
     GoEditor,
     GoShell,
+    GoAgent,
 
     // --- the cap-first SHELL / compositor (surfaces over real cells) ---
     /// Open a cap-confined surface (window) viewing the selected cell.
@@ -57,6 +58,15 @@ pub enum CommandId {
     /// held) — the no-amplification guarantee firing at the desktop: REJECTED by
     /// the real executor. The window-manager analogue of the ⚠ over-grant verb.
     ShellOverShareFocused,
+    /// PRESENT from the focused surface through the verified scene — an honest
+    /// frame advance that passes T1∧T2∧T3 and COMMITS (the commit polarity).
+    ShellPresentFocused,
+    /// Attempt an OVERPAINT — the focused surface painting another surface's
+    /// region; the T1 non-overlap tooth REFUSES it (no-amplification on glass).
+    ShellOverpaintFocused,
+    /// Attempt an INPUT-STEAL — a non-focused surface asserting focus to grab the
+    /// keystroke; the T3 input-routing tooth REFUSES it.
+    ShellInputSteal,
 
     // --- replay / time-travel scrubber ---
     ReplayStepBack,
@@ -91,12 +101,13 @@ impl CommandId {
                 Category::Verb
             }
             GoComposer | GoObjects | GoDebugger | GoReplay | GoCipherclerk | GoEditor
-            | GoShell => Category::Navigate,
+            | GoShell | GoAgent => Category::Navigate,
             ReplayStepBack | ReplayStepForward | ReplayToGenesis | ReplayToHead
             | ReplayForkHere | ReplayClearFork => Category::Replay,
             ClerkMint | ClerkAttenuate | ClerkDelegate | ClerkDischarge => Category::Clerk,
             ShellOpenSelected | ShellFocusFront | ShellCloseFocused | ShellCycleLayout
-            | ShellMinimizeFocused | ShellShareFocused | ShellOverShareFocused => Category::Shell,
+            | ShellMinimizeFocused | ShellShareFocused | ShellOverShareFocused
+            | ShellPresentFocused | ShellOverpaintFocused | ShellInputSteal => Category::Shell,
             DebugRetargetSelected => Category::Debug,
             SelectImage => Category::Inspect,
             Dismiss => Category::Palette,
@@ -121,6 +132,7 @@ impl CommandId {
             GoCipherclerk => "Go to Cipherclerk",
             GoEditor => "Go to Editor",
             GoShell => "Go to Shell (surfaces · windows · compositor)",
+            GoAgent => "Go to Agent (a loop's provable activity)",
             ShellOpenSelected => "Shell: open the selected cell as a surface",
             ShellFocusFront => "Shell: focus the front surface (cap-gated)",
             ShellCloseFocused => "Shell: close the focused surface (cap-gated)",
@@ -128,6 +140,9 @@ impl CommandId {
             ShellMinimizeFocused => "Shell: minimize the focused surface",
             ShellShareFocused => "Shell: share the focused window (read-only mirror)",
             ShellOverShareFocused => "Shell: ⚠ over-share the focused window (watch it REJECT)",
+            ShellPresentFocused => "Shell: present the focused surface (T1∧T2∧T3 commits)",
+            ShellOverpaintFocused => "Shell: ⚠ overpaint another surface's region (T1 REJECT)",
+            ShellInputSteal => "Shell: ⚠ steal input focus (T3 REJECT)",
             ReplayStepBack => "Replay: step back one turn",
             ReplayStepForward => "Replay: step forward one turn",
             ReplayToGenesis => "Replay: jump to genesis",
@@ -163,6 +178,7 @@ impl CommandId {
             GoCipherclerk => "keys macaroon token identity wallet",
             GoEditor => "author validate deploy program factory",
             GoShell => "surface window compositor desktop apps wm",
+            GoAgent => "agent loop swarm activity mandate receipt grounded ados integrator",
             ShellOpenSelected => "open window surface cell app spawn view",
             ShellFocusFront => "focus raise front bring forward window",
             ShellCloseFocused => "close window surface dismiss",
@@ -170,6 +186,9 @@ impl CommandId {
             ShellMinimizeFocused => "minimize collapse hide window surface",
             ShellShareFocused => "share window surface delegate grant attenuate mirror hand-off",
             ShellOverShareFocused => "over-share amplify widen reject window surface no-amplification grant",
+            ShellPresentFocused => "present paint frame surface composite commit scene verified t1 t2 t3",
+            ShellOverpaintFocused => "overpaint region reject non-overlap t1 amplify paint another scene security",
+            ShellInputSteal => "input steal focus keystroke reject t3 route misroute volition scene security",
             ReplayStepBack => "rewind previous undo back",
             ReplayStepForward => "advance next redo forward",
             ReplayToGenesis => "start beginning empty zero",
@@ -243,8 +262,10 @@ pub fn all_commands() -> Vec<Command> {
         // the cap-first shell / compositor
         ShellOpenSelected, ShellFocusFront, ShellCloseFocused, ShellCycleLayout,
         ShellMinimizeFocused, ShellShareFocused, ShellOverShareFocused,
+        ShellPresentFocused, ShellOverpaintFocused, ShellInputSteal,
         // navigation
         GoComposer, GoObjects, GoDebugger, GoReplay, GoCipherclerk, GoEditor, GoShell,
+        GoAgent,
         // replay
         ReplayStepBack, ReplayStepForward, ReplayToGenesis, ReplayToHead,
         ReplayForkHere, ReplayClearFork,
