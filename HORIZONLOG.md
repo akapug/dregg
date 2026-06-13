@@ -144,7 +144,7 @@ for HIS purposes. Everything here is judged by "works without ember in the loop.
 
 ## Decisions pending (ember)
 
-- #93 proof-audit: build a harness, or declare `#assert_axioms` + non-vacuity-both-polarities + the Convergence gauntlet its successor and close. (Recommendation: the latter.)
+- #93 proof-audit: build a harness, or declare `#assert_axioms` + non-vacuity-both-polarities + the Convergence gauntlet its successor and close. (Recommendation: the latter — now WRITTEN UP as `docs/ASSURANCE.md` §4 with the close-rationale; awaiting ember's flip to close.)
 - Hosted key custody posture (above).
 
 ## Research tier (explicitly not scheduled)
@@ -152,6 +152,34 @@ for HIS purposes. Everything here is judged by "works without ember in the loop.
 - Transcendental-syntax S3 (substructural recovery from the dregg side) + S5 (stella instantiation).
 - UC-security / CryptHOL (#31) + research pillars (revocation/info-flow/metadata).
 - Hypersystem/simplicial joint turns (dregg4 vision).
+
+## seL4 / DreggDL lane (2026-06-13 — design+scoping landed, first-step lanes named)
+
+*(Two scoping docs landed: `docs/SEL4-EMBEDDING.md` (bootable-image roadmap; THE
+blocker = libuv-free/IO-free Lean `leanrt`+GMP on musl/seL4) and
+`docs/CAPDL-POLYGLOT-DX.md` (DreggDL = describe the cap graph once, all 3 SDKs
+instantiate it; DreggDL + dregg-userspace-verify = checkable deployment spec).
+These are the concrete first build lanes:)*
+
+- **`dregg-deploy` (DreggDL parser crate)** — serde schema structs
+  (federation/factory/cell/grant), TOML+JSON parser, name-resolution pass,
+  `lower(&Deployment) -> CallForest`. Reuses `FactoryDescriptor` /
+  `FactoryCreationParams` / `Effect` / `CapabilityRef` / `FederationId`
+  verbatim (no new on-chain types). Wire `deploy check` to
+  `dregg-userspace-verify` (the static A/B/well-formed/ring checks over the
+  lowered forest). Round-trip test: same DreggDL lowered Rust vs PyO3/wasm
+  paths → byte-identical signed turns.
+- **seL4 component manifest (Microkit `.system` / CAmkES skeleton)** — the
+  five-PD decomposition (ingress/executor/persist/verifier/gossip) with caps
+  partitioned (device cap only in persist, NIC cap only in the driver PD,
+  verifier with NO prover authority). Weekend win: cross-compile the
+  no-tokio `dregg-verifier` crate as an seL4 PD on the rust-sel4 SDK (needs no
+  Lean, no IO loop) + boot a Rust root task under QEMU.
+- **Lean runtime bottom-half port (THE blocker, weeks–quarter)** — IO-free,
+  libuv-free `leanrt`+GMP build so `libdregg_lean.a` links on musl/seL4. Until
+  then `no-lean-link` builds the node marshal-only (shadow-off) — bring-up
+  scaffold ONLY, never the authoritative ship (would downgrade the verified
+  executor to the Rust subject-under-test).
 
 ## OPUS FULL-BURN LANDING RESIDUES (2026-06-12 night — named at landing, post-seal)
 
@@ -176,3 +204,46 @@ no-launder discipline. None block the green board.)*
   flash-well obligation_factory pattern, now landed — unblocked for a future lane).
 - **DKG ceremony, KERI, channel-rosters**: tests authored + type-check; full e2e runs need
   a lock-free window (round 8 on persvati exercises them).
+
+## PRIVACY/OFFLINE-CELL lane (2026-06-13)
+
+- **Rust private-participant turn role (the production wiring follow-up)** — the design +
+  Lean model landed (docs/PRIVATE-OFFLINE-CELLS.md + Dregg2/Distributed/PrivateLeg.lean,
+  keystone joint_turn_sound_with_private_legs, #assert_axioms-clean). What remains to SHIP:
+  a private-participant leg type in coord/src/atomic.rs — an AtomicForest participant whose
+  contribution is (commitPre, commitPost, proof) instead of an applied action, with a
+  verify-gate in the commit path implementing MixedAdmissible (every private leg's STARK
+  verifies + binds the shared jid). Plus the AIR that the CarrierEncodesPrivLeg hypothesis
+  names (recKExecAsset + recStateCommit state-root opening, producible offline by the
+  maintainer), and state-root continuity across turns for a long-lived offline cell
+  (commitPost[i] = commitPre[i+1], mirroring HistoryAggregation.ChainBound). Liveness is
+  out of scope: a dark private participant aborts the all-or-none turn (safety-preserving,
+  exactly as a public No-vote does). Named crypto floor = STARK extractability (the SAME
+  floor the rest of the circuit column already rests on — NO new assumption).
+
+## PROTOCOL-ENHANCEMENTS catalog (2026-06-13) — full catalog: docs/PROTOCOL-ENHANCEMENTS.md
+
+*(LANDED this lane: the storage availability route — storage/src/availability.rs wires the
+hitherto-unreachable erasure machinery to the content store, 10 tests green. The ORGANS §3
+"erasure unreachable from routes" gap, in-crate half, is closed. Top remaining items:)*
+
+- **persist snapshot shipping** (catalog §2.2) — `ship_snapshot(from_height) -> {checkpoint +
+  cell_overlay_since}` so a fresh/lagging node bootstraps from checkpoint+delta instead of
+  O(history) log replay. The dominant join/recovery-latency lever. Builds on existing
+  `latest_checkpoint` + `commit_log::cell_overlay_since`.
+- **checkpoint-prune → commit-log compaction** (§2.1) — `prune_before` trims attested roots
+  but commit-log records below a finalized checkpoint are never compacted (unbounded WAL).
+  Add `CommitLog::compact_below(height)` preserving the index-audit invariant.
+- **range-based set reconciliation** (§1.5 / §3.2d, the Willow shape) — the shared primitive
+  behind scalable anti-entropy (O(diff·log) not O(state) per reconnect) AND storage
+  partial-sync; capability chains as the pluggable authorization. Adopt the geometry, keep
+  our proofs.
+- **eclipse hardening at scale** (§1.1) — peer_score buckets by SocketAddr today; add /24·/48
+  prefix + AS-diversity bucketing so a single cloud /24 cannot fill the eager set.
+- **availability route follow-ons** (§3.1): swap XOR-prototype erasure (erasure.rs:11) for real
+  Reed–Solomon; real Merkle-path chunk proof vs manifest.root (erasure.rs:226 is integrity-only);
+  the node put/get HTTP route gated by the storage-gateway-mandate cell can now CALL the
+  in-crate availability route (the remaining ORGANS §3 "weld to the shell" half).
+- **proving-modality dial #169** (§4.1, still pending) — make prove-on-demand vs checkpoint
+  vs eager a CONFIGURED axis, not a hardcoded policy; settlement/pipelining depth (§4.2)
+  parameterized by topology (n=1 collapses to immediate settlement).

@@ -25,8 +25,11 @@ cryptographic hardness / collision-resistance assumptions. These are the system'
 boundary; they enter as `Prop`-portals (typeclass fields / hypotheses), never as `axiom`:
 
   1. **Poseidon2-permutation collision-resistance** — the arithmetization-friendly hash; the
-     sponge/Merkle/state-commitment collision-resistance is reduced to permutation-CR
-     (`Crypto.Poseidon2*`, `Crypto.Merkle`, the `recStateCommit` injectivity portal).
+     sponge/Merkle/state-commitment/MMR collision-resistance is reduced to permutation-CR
+     (`Crypto.Poseidon2*`, `Crypto.Merkle`, the `recStateCommit` injectivity portal, the
+     receipt-index `Lightclient.MMR.mroot_binds_position`, and the sorted-set/queue
+     `Apps.QueueRoot.RootCR`/`LenBindCR` and identity-keyset `Apps.PreRotation.KeySetCR`
+     carriers — every one a named CR `Prop` over a `Poseidon2`/`BLAKE3` image, NOT an `axiom`).
   2. **BLAKE3 collision-resistance** — the out-of-circuit content/transcript hash.
   3. **ed25519 EUF-CMA** — turn / strand-block signature unforgeability.
   4. **HMAC (PRF/MAC) unforgeability** — macaroon caveat-chain tags (`Authority.CaveatChain`).
@@ -69,6 +72,7 @@ import Dregg2.Crypto.NonMembership           -- freshness: nonmembership_sound/c
 import Dregg2.Liveness                       -- freshness: revocation_needs_consensus
 import Dregg2.Circuit.CommitmentCrossBind
 import Dregg2.Circuit.Argus.Receipt
+import Dregg2.Exec.UniversalBridge          -- integrity (STRENGTHENED): the executor IS a memory program (uproj = total post-state projection)
 import Dregg2.Circuit.Argus.Aggregate
 import Dregg2.Circuit.Argus.Effects.NoteSpend
 import Dregg2.Exec.FullForestAuth          -- the RUNNING ENTRY: execFullForestG (the dregg_exec_full_forest_auth FFI)
@@ -301,9 +305,34 @@ DAG:
     detected because the honest commitment recovers it).
   • `Circuit.Argus.Receipt.transfer_commits_to_one_receipt` — the transfer weld instance.
 
+  STRENGTHENED (the §149 apex — the PI-binding hypothesis DISCHARGED onto the MMR):
+  • `Circuit.Argus.Receipt.argus_published_index_pins_receipt` /
+    `transfer_published_index_pins_receipt` — the §2 keystone carried the cross-AIR / cross-proof
+    PI binding as a BARE hypothesis ("the circuit root and the executor receipt-chain root are
+    pinned to the SAME published value"). That hypothesis is now DERIVED, not assumed: the receipt
+    index the epoch publishes is an MMR (`Lightclient/MMR.lean`), history keys are dense positions,
+    and `published_position_pins_value` (a thin lift of `MMR.mroot_binds_position`) proves —
+    adversarial-server included (the prover's openings may be against its OWN log `L'`; CR forces
+    `L' = L`) — that any two roots opening at the same dense position of the published index are
+    EQUAL. So "both proofs bind their root to the same value" burns down to MMR openings under the
+    ONE named `Poseidon2SpongeCR` floor; no out-of-band PI equation survives. The remaining protocol
+    obligation is exactly MMR §6's `CommitBindsMMR` layout fact (the node writes both roots at their
+    dense positions), discharged-by-construction at the flag-day layout (HORIZONLOG rotation rider).
+  • THE EXECUTOR IS A MEMORY PROGRAM (`Exec.UniversalBridge`, the universal-map rotation's long
+    pole): `gwrite_is_memory_program` / `move_is_memory_program` / `create_is_memory_program`
+    prove that the TOTAL projection (`uproj`) of the executor's post-state — all 17 kernel fields
+    + the receipt log onto the ONE domain-tagged universal address space — EQUALS the fold of the
+    verb's emitted Blum trace over the pre-state projection, for the three compressed verbs against
+    the LIVE executable steps (`stateStepGuarded` / `recCexec` / `createCellStep`). This is the
+    constructive backbone under "a receipt binds the WHOLE post-state": every field has a universal
+    address, the executor witnesses the memory program without peeking at its own post-state, and
+    the boundary commitment is the sorted-map / MMR root of those cells (`index_boundary_mroot_derived`
+    routes the receipt-index domain to the same MMR root, NO crypto — canonicity).
+
 Floor: Poseidon2-permutation-CR (the `recStateCommit`/`cellCommit`/`stateCommit`
-injectivity portals reduce to it). A second pre-image would be the only way to forge a
-receipt for a different state; that is exactly the CR assumption.
+injectivity portals reduce to it; the MMR discharge rests on the SAME `Poseidon2SpongeCR`). A
+second pre-image would be the only way to forge a receipt for a different state; that is exactly
+the CR assumption.
 =========================================================================== -/
 
 /-- **`integrity_guarantee` (NEW aggregation).** The integrity case, in one statement: a
@@ -320,6 +349,27 @@ theorem integrity_guarantee :
 -- duplicate the module. We instead PIN the apex theorem under this heading (below), which
 -- is the load-bearing certification. `integrity_guarantee` is the heading anchor only.
 
+/-- **`integrity_guarantee_memory_program` (NEW aggregation — the §149/umem strengthening,
+load-bearing).** The constructive backbone of "a receipt binds the WHOLE post-state", over the
+LIVE executable move step (`recCexec`, the conserving transfer): the TOTAL projection (`uproj`)
+of the executor's post-state — all 17 kernel fields + the receipt log onto the ONE
+domain-tagged universal address space — is EXACTLY the fold of the verb's emitted Blum trace
+over the pre-state projection. So the post-state is determined field-by-field by a memory
+program the executor witnesses without peeking at its own output; nothing is left off the
+universal address space. This is the per-verb agreement square the rotation's commitment binds;
+the published-MMR discharge (`transfer_published_index_pins_receipt`, pinned below) turns the
+cross-AIR PI-binding hypothesis the §2 apex carried into an MMR opening under the SAME
+`Poseidon2SpongeCR` floor — no out-of-band root equation survives. -/
+theorem integrity_guarantee_memory_program
+    (C : Dregg2.Exec.UniversalBridge.UCodec) {s s' : RecChainedState} {t : Turn}
+    (h : recCexec s t = some s') :
+    Dregg2.Exec.UniversalBridge.uproj C s'
+      = (Dregg2.Exec.UniversalBridge.moveTrace C s t).foldl
+          Dregg2.Crypto.MemoryChecking.step (Dregg2.Exec.UniversalBridge.uproj C s) :=
+  Dregg2.Exec.UniversalBridge.move_is_memory_program C h
+
+#assert_axioms integrity_guarantee_memory_program
+
 #assert_axioms integrity_guarantee
 -- the underlying keystones, re-pinned under Integrity:
 #assert_axioms Dregg2.Circuit.Argus.Receipt.argus_commits_to_one_receipt
@@ -330,6 +380,18 @@ theorem integrity_guarantee :
 #assert_axioms Dregg2.Circuit.CommitmentCrossBind.stateCommit_binds_cells_and_rest
 #assert_axioms Dregg2.Circuit.CommitmentCrossBind.setFieldCommit_binds_cellCommit
 #assert_axioms Dregg2.Circuit.CommitmentCrossBind.chC_bad_not_bridge
+-- the §149 STRENGTHENING: the PI-binding hypothesis discharged onto the published MMR index
+-- (the bare cross-AIR root equality is no longer carried — it is derived from MMR openings):
+#assert_axioms Dregg2.Circuit.Argus.Receipt.published_position_pins_value
+#assert_axioms Dregg2.Circuit.Argus.Receipt.argus_published_index_pins_receipt
+#assert_axioms Dregg2.Circuit.Argus.Receipt.transfer_published_index_pins_receipt
+-- THE EXECUTOR IS A MEMORY PROGRAM (the universal-map bridge): post-state projection = trace-fold
+-- over the pre-state projection, for all three compressed verbs against the LIVE executable steps:
+#assert_axioms Dregg2.Exec.UniversalBridge.gwrite_is_memory_program
+#assert_axioms Dregg2.Exec.UniversalBridge.move_is_memory_program
+#assert_axioms Dregg2.Exec.UniversalBridge.create_is_memory_program
+#assert_axioms Dregg2.Exec.UniversalBridge.cap_leaf_value_codec
+#assert_axioms Dregg2.Exec.UniversalBridge.index_boundary_mroot_derived
 
 /-! ===========================================================================
 ## Guarantee D — FRESHNESS
@@ -602,6 +664,20 @@ gates (membership-open / leaf-update / bracketed insert, the revocation-circuit 
 the Phase-E lane. Until the rotation's relayout lands, `heap_root` is kernel-bound and
 scheme-pinned but NOT yet circuit-committed: a heap write today is attested by the kernel
 theorems, not by the per-turn proof.
+
+THE EXECUTOR-STATE BRIDGE (the universal-map rotation's long pole, NOW LANDED — `Exec.UniversalBridge`):
+the executor IS a memory program. `uproj` is the TOTAL projection of `RecordKernelState` (all 17 fields)
++ the receipt log onto the ONE domain-tagged `(Domain, key) ↦ Option ℤ` address space (registers EMPTY
+by design — per-proof VM transients, never persistent state), and `gwrite/move/create_is_memory_program`
+prove the post-projection equals the fold of the verb's emitted Blum trace over the pre-projection, for
+the three compressed verbs against the LIVE executable steps. This is what makes "a receipt binds the
+WHOLE post-state" (guarantee C) a constructive fact rather than a per-field inference: every executor
+field has a universal address, and the boundary commitment is the sorted-map / MMR root of those cells.
+The receipt-index domain rides the SAME MMR (`index_boundary_mroot_derived`), which is exactly the index
+that DISCHARGES the §149 Receipt PI-binding hypothesis (`argus_published_index_pins_receipt`): the
+cross-AIR root equality the Receipt apex once carried is now an MMR opening under the named CR floor.
+This is the verified surface the rotation's relayout will bind in-circuit per turn; today it is bound by
+the kernel theorems, scheme-pinned to the deployed `circuit::heap_root` / MMR layout.
 
 THE EPOCH §5 deployment-correspondence legs are CLOSED on the deployed chain (these rode the
 commitment `v5 → v6` bump): the Rust value model is a SIGNED well — `dregg_cell::CellState.balance`
