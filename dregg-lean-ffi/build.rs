@@ -1129,6 +1129,13 @@ fn main() {
     if target_os == "macos" {
         println!("cargo:rustc-link-lib=dylib=c++");
     } else {
-        println!("cargo:rustc-link-lib=dylib=stdc++");
+        // Lean's Linux toolchain compiles its C++ (leancpp et al.) against the
+        // BUNDLED LLVM libc++ (`std::__1::` ABI), shipped as static archives in
+        // the sysroot's lib/ (already on the search path above). Linking the
+        // GNU libstdc++ instead leaves `std::__1::cout` & friends undefined —
+        // the first-ever Linux link of the full archive (Convergence round 6)
+        // caught exactly that. Order matters: c++ before c++abi.
+        println!("cargo:rustc-link-lib=static=c++");
+        println!("cargo:rustc-link-lib=static=c++abi");
     }
 }
