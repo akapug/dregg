@@ -3787,6 +3787,46 @@ pub fn verify_vm_descriptor2_with_config(
         .map_err(|e| format!("IR v2 verification failed: {e:?}"))
 }
 
+/// The verify-path's `(airs, table_public_inputs, common)` triple for a proven
+/// descriptor — the exact ingredients the recursion fork's `RecursionInput::BatchStark`
+/// leaf-wrap consumes (THREAD 1 of the C3 cutover). `airs` is the present-table
+/// `Ir2Air` set, `table_public_inputs[main_idx]` is the descriptor's PI vector (empty
+/// for the other tables), and `common` is the symbolic `CommonData` derived from
+/// `ProverData::from_airs_and_degrees(..)` — the SAME `common` `verify_vm_descriptor2`
+/// passes to `verify_batch`. Built under the deployed `ir2_config()`.
+///
+/// Exposed so the IVC leaf-wrap (`ivc_turn_chain.rs`) can assemble a BatchStark leaf
+/// from a rotated `Ir2BatchProof` without re-deriving the private presence/layout
+/// machinery. `CommonData` is re-exported as [`Ir2CommonData`].
+#[cfg(any(feature = "recursion", feature = "verifier"))]
+pub(crate) fn ir2_airs_and_common(
+    desc: &EffectVmDescriptor2,
+    proof: &BatchProof<DreggStarkConfig>,
+    public_inputs: &[BabyBear],
+) -> Result<(Vec<Ir2Air>, Vec<Vec<P3BabyBear>>, p3_batch_stark::CommonData<DreggStarkConfig>), String>
+{
+    let config = ir2_config();
+    let layout = check_descriptor2(desc)?;
+    let presence = Presence::of(desc, &layout);
+    let airs = instance_airs(desc, layout, presence);
+    if proof.degree_bits.len() != airs.len() {
+        return Err(format!(
+            "IR v2 proof carries {} instances but present-table set is {}",
+            proof.degree_bits.len(),
+            airs.len()
+        ));
+    }
+    let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+    let mut table_public_inputs: Vec<Vec<P3BabyBear>> = vec![pis];
+    table_public_inputs.resize(airs.len(), vec![]);
+    let common = ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).common;
+    Ok((airs, table_public_inputs, common))
+}
+
+/// The IR-v2 batch proof's symbolic common data type (re-exported for the leaf-wrap).
+#[cfg(any(feature = "recursion", feature = "verifier"))]
+pub(crate) type Ir2CommonData = p3_batch_stark::CommonData<DreggStarkConfig>;
+
 // ============================================================================
 // Tests (run on persvati with the batched validation, not by the build lane)
 // ============================================================================
