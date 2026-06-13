@@ -73,7 +73,7 @@ while IFS= read -r c; do
     else
         fail=$((fail+1)); failed="$failed $name"
     fi
-done < <(find "$IR_DIR/Dregg2" -name '*.c')
+done < <(find "$IR_DIR/Dregg2" "$IR_DIR/Metatheory" -name '*.c' 2>/dev/null)
 
 echo "[xcompile] Dregg2 facets: OK=$ok  FAIL=$fail"
 if [ "$fail" -ne 0 ]; then

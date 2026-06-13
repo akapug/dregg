@@ -1,122 +1,120 @@
-# The executor-PD wall — exact remaining blocker + the precise next step
+# The executor-PD wall — PASSED: the verified executor runs on real aarch64
 
-*The firmament's one true blocker (docs/FIRMAMENT.md §6, §7), characterized to
-the symbol. Probed directly against the live toolchain (leanrt v4.30.0, Lean
-v4.30.0 `d024af099`, the in-tree `metatheory/` closure) on 2026-06-13.*
+*The firmament's one true blocker (docs/FIRMAMENT.md §6, §7) — the ELF Lean
+runtime — is BUILT, and the VERIFIED executor now runs one real turn through
+`dregg_exec_full_forest_auth` on aarch64-linux-musl, emitting a correct accepted
+receipt. The remaining step is the seL4-PD host (step 4). Probed against the live
+toolchain (leanrt v4.30.0, Lean `d024af099`, the in-tree `metatheory/` closure)
+and run under an aarch64 Linux/musl runtime on 2026-06-13.*
 
-## The four-step excision plan and where each stands
-
-The destination: an seL4 PD that embeds the VERIFIED executor (`execFullForestG`
-via `dregg_exec_full_forest_auth`) and runs one real turn, printing the receipt
-over serial. The plan (docs/SEL4-EMBEDDING.md §2):
+## The four-step excision plan — where each stands now
 
 | Step | What | Status |
 |------|------|--------|
-| (1) | ELF-recompile the Lean closure under leanc | **✅ GREEN — done** |
-| (2) | ELF leanrt + stub `initialize_libuv`/`initialize_io` | **⛔ THE WALL** |
-| (3) | GMP for ELF, or a fixnum-only shim | ◐ shim plausible (evidence below) |
-| (4) | host on `sel4-musl` + `root-task-with-std` | ◐ gated on (2)+(3) |
+| (1) | ELF-recompile the Lean closure under leanc | **✅ GREEN** |
+| (2) | ELF leanrt + the Lean library bottom-half (Init/Std/Lean/mathlib/deps) | **✅ GREEN — built** |
+| (3) | GMP for ELF | **✅ GREEN — real GMP 6.3.0 cross-built** |
+| (4) | host on seL4 (`sel4-musl` + `root-task-with-std`) | ◐ the remaining step |
 
-## Step (1) — GREEN (the part the roadmap called "weeks-to-a-quarter fog")
+**The turn runs.** `scripts/link-probe.sh` links the verified closure + the ELF
+runtime into a static `aarch64-linux-musl` executable (`out/dregg-executor.elf`,
+0 undefined symbols) and drives one real turn. On the `wideDemoInput` wire the
+verified `dregg_exec_full_forest_auth` (= `execFullForestG` + admission) produces
+**`status:2, ok:1` (bodyCommitted)** — nonce 7→8, a 30-unit transfer (cell-0 bal
+100→70, cell-1 5→35), balance 100→90, a nullifier + commitment registered. The
+boot/run evidence is `out/dregg-executor-run.log`. The same binary is the host-
+musl validation of what the seL4 executor-PD will run (sel4-musl emulates the
+musl syscall surface) — so the turn is banked BEFORE the PD link.
 
-`scripts/cross-compile-closure.sh` ELF-recompiles the whole application closure:
+## How the wall fell (the build pipeline, all in `scripts/`)
 
-- **All 757 Dregg2 `:c` facets** emitted by `lake build` (`metatheory/.lake/
-  build/ir/Dregg2/**/*.c`) compile to **ELF aarch64** with the in-toolchain
-  clang, **ZERO source changes**. `OK=757 FAIL=0`.
-- The verified executor's production entry **`dregg_exec_full_forest_auth`**
-  (emitted by `@[export]` in `Dregg2/Exec/FFI.lean:3313`, lands in
-  `Dregg2/Exec/FFI.c:37508`) survives into the ELF closure as a **global text
-  symbol (`T`)**, verified with `nm` on the archived `out/libdregg_lean_elf.a`
-  (757-member, 58.9 MB, ELF aarch64).
+The destination is an seL4 PD embedding the VERIFIED executor. Step (1) had
+already ELF-recompiled the closure; the wall was that **no ELF Lean runtime
+existed** to link it against (the toolchain ships leanrt/leancpp Mach-O-only with
+no C++ sources). The fix was to rebuild the runtime + library bottom-half from
+the upstream `lean4@d024af099` sources for a **hosted aarch64-linux-musl** target
+(NOT bare freestanding — the Lean runtime is hosted C++ needing libstdc++ + malloc
++ GMP, all supplied by the `aarch64-unknown-linux-musl` GCC cross-toolchain that
+`sel4-musl` emulates in-PD):
 
-The two knobs that made it work (vs. the naive attempt that fails on
-`stddef.h not found`):
+1. **ELF leanrt** (`build-leanrt-elf.sh`) — the 24 runtime objects (incl. `io.cpp`,
+   the IO-monad core), a 5-symbol **mimalloc shim** over musl malloc, and a small
+   **libuv stub** (the excision: drop `libuv.cpp` + the 8 `uv/*.cpp`, keep the IO
+   monad; the pure executor turn does no socket/file/timer). `init_module.cpp` is
+   welded to skip only `initialize_libuv()`.
+2. **ELF Lean library** (`build-leanlib-elf.sh`) — re-emits the C facets for
+   `Init` (589), `Std` (442), and `Lean` (1105) via the toolchain `lean -c` from
+   the cloned sources, then ELF-compiles them (the step-1 recipe). The dependency
+   libs (`Batteries`, `Aesop`, `Qq`, `Plausible`, `ProofWidgets`, `ImportGraph`,
+   `LeanSearchClient`) and `mathlib` (8098) compile from their existing `.lake`
+   facets via `compile-facets-elf.sh`.
+3. **ELF Lean kernel C++** (`build-leancpp-elf.sh`) — the 17 `src/kernel/*.cpp` +
+   `src/util/*.cpp` (Expr/Level smart constructors, instantiate, the typechecker).
+   Some live module initializers build `Expr`/`Level` literals at init, so these
+   `lean_expr_*`/`lean_level_*` are genuinely needed (the run probe surfaced this
+   when a stub aborted on `lean_level_mk_data` — an honest result).
+4. **Real GMP** (`build-gmp-elf.sh`) — GMP 6.3.0 cross-built static for
+   aarch64-musl (the toolchain bundles GMP internally but exposes no `libgmp.a`).
+   `-std=gnu17` works around GCC-15's C23 default rejecting GMP's configure probes.
+5. **The link** (`link-probe.sh`) — joins the closure + the four bottom-halves
+   under `--start-group`, GC-reduced from the entry, with three small stub TUs:
+   - `crypto-stub.c` — the 8 `dregg_*` crypto-floor symbols the **Rust PD supplies
+     in production** (panic-if-reached here; a non-crypto turn links + runs).
+   - `init-stubs.c` — no-op `initialize_Lean`/`initialize_aesop_Aesop`/
+     `initialize_Dregg2_Dregg2_Tactics`. These cut the **Lean elaborator** out of
+     the init-chain: the executor's compute path calls ZERO elaborator/kernel
+     primitives (verified) — they enter only because `Dregg2.Tactics` (a proof
+     module imported pervasively) drags the elaborator at init.
+   - `kernel-stub.c` (`kernel-stub-syms.txt`) — the libuv/dynlib/module-IO/
+     elaborator-typechecker entries (`lean_uv_*`, `lean_kernel_check`, …) the dead
+     tactic facets reference but the turn never reaches.
+   - `dead-stub.c` (`dead-stub-syms.txt`) — a handful of metaprogramming/lemma
+     `initialize_*`/`l_*` symbols pulled by dead init-chains (Lake/Qq/plausible/
+     parallel-elab); no-op'd / abort-guarded (verified unreachable on the turn).
+   - `aux-defs.c` — see the one fidelity gap below.
 
-1. The Lean toolchain's clang ships its **freestanding headers** (`stddef.h`,
-   `stdint.h`, `stdarg.h`) under `$LEAN_SYSROOT/include/clang`, **not** the
-   usual `-print-resource-dir`/include. Pass `-isystem $LEAN_SYSROOT/include/clang`.
-2. The archive must be built with the toolchain's **`llvm-ar`**, not the host
-   BSD `ar` — the latter mangles cross-arch (ELF-on-Mach-O-host) archives
-   (collapses members, runs a Mach-O-only ranlib).
+## The one re-emission fidelity gap (characterized + recovered exactly)
 
-So the object-format wall (Mach-O→ELF) is **passable on the native macOS host
-with the in-toolchain clang**. This was the highest-risk line item in the
-roadmap; it is now retired for the application closure.
+The released `lean -c`, reading the prebuilt v4.30.0 `.olean`s, is internally
+inconsistent for **`l_String_instDecidableLtRaw___aux__1`**: `Init.Data.String.Basic`
+*calls* it (Basic.c:1672, 5795) but `Init.Data.String.PosRaw` (its canonical owner,
+where the toolchain's bootstrap `libInit.a` defines it) does **not** re-emit it — so
+no re-emitted module supplies the body. It is reached at executor **init** (core
+String infra). Recovered exactly (not hand-rolled): the SELF-CONTAINED wrapper that
+IS emitted (`PosRaw.c: l_String_instDecidableLtRaw`) is verbatim `return
+lean_nat_dec_lt(p1,p2)` (a `String.Pos.Raw` is a `Nat` byteIdx; its `<` is `Nat.decLt`),
+and the `___aux__1` worker is the same instance's equation form — so the faithful
+body is `lean_nat_dec_lt(p1,p2)` (`aux-defs.c`). Three sibling auxiliaries
+(`l_instDecidableLtBitVec___aux__1___redArg`, two `Std.Time.Duration` ones) share the
+gap but are unreachable on the turn (verified) and stay abort-guarded in dead-stub.c.
 
-## Step (2) — THE WALL: there is no ELF Lean runtime to link against
+## The remaining step (4): the seL4-PD host
 
-The ELF application closure (`libdregg_lean_elf.a`) is the *application* half of
-the link. Its objects call leanrt entry points — `lean_nat_add`,
-`lean_alloc_ctor`, `lean_initialize_runtime_module`, the GC, `mi_malloc`, … —
-which live in the **Lean runtime archives** (`libleanrt.a`, `libleancpp.a`,
-`libInit.a`, `libStd.a`, `libLean.a`). On this toolchain those archives are
-**Mach-O arm64 only** (the host build), e.g. `libleanrt.a`'s 34 objects are all
-`Mach-O 64-bit object arm64`. They cannot link into an ELF image.
+The executor is a **root-task-with-std**-style PD (it needs malloc/pthread/TLS/
+C++-exceptions), not a bare Microkit PD. The substrate exists in rust-sel4
+(`~/sel4-sdk/rust-sel4/crates/experimental/sel4-musl` +
+`crates/private/support/sel4-root-task-with-std`). The next concrete action: wire
+`sel4-musl`'s syscall handler, link `out/dregg-executor.elf`'s object set (or the
+archives) into a `root-task-with-std` PD, and boot it under `qemu-system-aarch64`
+via the Microkit/loader path (../Makefile). Decision §8.3: root-task (simpler,
+weaker isolation) vs. a Microkit-PD musl substrate (the steady-state `dregg.system`
+shape). The Lean runtime is now an ordinary musl aarch64 image — the hard part
+(an ELF runtime that runs the verified turn) is done.
 
-**The exact wall: the toolchain ships NO C++ runtime sources to recompile them
-for ELF.** `$LEAN_SYSROOT/src/lean/` contains the Lean *library* sources
-(`Init/`, `Std/`, `Lean/` — `.lean` files) and an empty `runtime/uv/` tree, but
-**none of the runtime `.cpp`** (`init_module.cpp`, `object.cpp`, `alloc.cpp`,
-`mpz.cpp`, …). `find $LEAN_SYSROOT/src -name '*.cpp'` returns nothing. Unlike
-step (1) — where the `.c` facets are on disk and recompile trivially — the
-runtime must be **rebuilt from the upstream lean4 repo** at the toolchain commit.
+## Reproduce
 
-### The precise next step (step 2)
-
-Fetch `github.com/leanprover/lean4` at commit **`d024af099ca4bf2c86f649261ebf59565dc8c622`**
-(the v4.30.0 toolchain commit, from `lean --version`), then build the runtime
-bottom-half for the ELF target. With the runtime sources present, the libuv
-excision is *weld, not build* — it is concentrated and separable:
-
-- **The libuv coupling is exactly 10 of leanrt's 34 objects** (`dns,
-  event_loop, io, libuv, net_addr, signal, system, tcp, timer, udp`), named by
-  IO concern. The pure executor path (`dregg_exec_full_forest_auth`, no
-  socket/file/timer) calls **none** of them.
-- **The pull is at init only**: `lean_initialize_runtime_module` (in
-  `init_module.cpp.o`) has undefined refs to **`initialize_libuv`** and
-  **`lean::initialize_io`** (`nm init_module.cpp.o` confirms exactly these two).
-  Stub both as no-op-success and provide the handful of `uv_*` symbols the
-  linker demands but execution never reaches; drop the 10 libuv objects. The
-  other six initializers (`alloc, debug, mutex, object, thread, process,
-  stack_overflow`) are libuv-free and stay.
-
-## Step (3) — GMP: the fixnum-only shim is plausible (measured)
-
-GMP is referenced by exactly **2 leanrt objects** (`mpz.cpp.o`,
-`sharecommon.cpp.o`; `mpz.cpp.o` carries 43 `__gmpz_*` refs). The question
-(decision §8.2): does any kernel turn ever exceed a 63-bit fixnum, forcing the
-`mpz` bignum path? **Evidence it does not:**
-
-- **Zero** Dregg2 `:c` facets reference `lean_alloc_mpz` / `lean_mpz` / any
-  bignum-allocation entry (`grep -lrE 'lean_alloc_mpz|...' Dregg2/*.c` → 0).
-- All executor arithmetic is via `lean_nat_add` (630×), `lean_int_add` (349×),
-  `lean_nat_sub`/`mul`/`mod`/`div`/`pow`, etc. — the small-arg fast paths.
-  These fall back to GMP only when a runtime value exceeds 63 bits. The kernel
-  state (cell ids, balances, nonces, heights) operates on small values, so the
-  GMP path is **reachable but cold**.
-
-⇒ A **fixnum-only shim** that stubs `__gmpz_*` (panic-if-reached) is plausible
-and deletes a whole C dependency. The conservative alternative — recompile GMP
-(portable C, malloc+libc only) for ELF — is also available; it is the safer of
-the two and the right default unless the shim is proven exhaustively safe.
-
-## Step (4) — the host substrate (gated on 2+3)
-
-The executor-PD is a **root-task-with-std** style PD, not a bare Microkit PD: it
-needs malloc/pthread/TLS/C++-exceptions. The substrate exists experimentally in
-rust-sel4: `crates/experimental/sel4-musl` (a musl syscall-emulation shim) +
-`crates/private/support/sel4-root-task-with-std`. Build musl for the ELF target,
-wire `sel4-musl`'s syscall handler, link the ELF closure + the ELF leanrt (from
-step 2) + the fixnum/GMP layer (step 3) under the shim. Decision §8.3: root-task
-(simpler, weaker isolation) vs. a Microkit-PD musl substrate (the steady-state
-`dregg.system` shape).
-
-## Summary — the one symbol that is the wall
-
-The whole blocker reduces to: **there is no ELF build of `lean_initialize_runtime_module`
-+ the six libuv-free runtime initializers** (the toolchain ships them Mach-O-only
-and carries no sources). Everything downstream of an ELF leanrt — the libuv
-excision, the GMP shim, the musl host — is characterized and low-risk. The next
-concrete action is to build an ELF leanrt from `lean4@d024af099` with the 10
-libuv objects excised and the two init stubs in place.
+```sh
+# 0) fetch lean4 sources at the toolchain commit:
+git -C /tmp/lean4-rt init && git -C /tmp/lean4-rt remote add origin https://github.com/leanprover/lean4
+git -C /tmp/lean4-rt fetch --depth 1 origin d024af099ca4bf2c86f649261ebf59565dc8c622
+git -C /tmp/lean4-rt checkout FETCH_HEAD
+# 1) the closure (banked) + the runtime bottom-halves:
+./scripts/cross-compile-closure.sh                 # the verified closure -> ELF
+./scripts/build-leanrt-elf.sh                       # ELF leanrt (+ mimalloc/libuv stubs)
+./scripts/build-leancpp-elf.sh                      # ELF Lean kernel C++
+./scripts/build-gmp-elf.sh                          # real GMP for aarch64-musl
+for L in Init Std Lean; do ./scripts/build-leanlib-elf.sh $L; done
+# mathlib + deps from existing .lake facets (compile-facets-elf.sh; see link-probe.sh inputs)
+# 2) link + run one turn (host-musl validation, via an aarch64 Linux/musl runtime):
+./scripts/link-probe.sh "$(cat out/demo-wire.txt)"  # -> out/dregg-executor.elf, status:2 ok:1
+```
