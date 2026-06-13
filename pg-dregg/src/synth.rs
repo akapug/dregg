@@ -15,7 +15,7 @@
 //! It is the SINGLE source of demo data, shared by:
 //!
 //!   * `examples/end_to_end.rs` (the `cargo run --example` artifact), and
-//!   * the `#[pg_test]`s in [`crate`] (run against real pg14),
+//!   * the `#[pg_test]`s in [`crate`] (run against real pg17),
 //!
 //! so the postgres-free demo and the through-SQL demo cannot drift.
 //!

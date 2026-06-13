@@ -401,6 +401,7 @@ pub mod ddl {
         s.push_str(CELLS);
         s.push_str(CAPS);
         s.push_str(MEMORY);
+        s.push_str(MERGE_CELL);
         s.push_str(VIEWS);
         s.push_str(RLS);
         s
@@ -454,8 +455,46 @@ CREATE TABLE IF NOT EXISTS dregg.memory (
 CREATE INDEX IF NOT EXISTS memory_by_domain ON dregg.memory (domain);
 "#;
 
+    // The PostgreSQL 17 MERGE-based cell upsert, shipped as a SECURITY DEFINER
+    // function so the kernel writer materializes a post-image in ONE atomic
+    // statement. The MERGE's `merge_action()` (pg17) reports which arm fired and
+    // is returned to the caller as text ('INSERT' | 'UPDATE'), so the write path
+    // is auditable. Wrapping the MERGE in a SQL function (rather than issuing it
+    // as a top-level statement) is also what lets the mirror invoke it through a
+    // plain `SELECT dregg.merge_cell(...)` — the MERGE status is consumed inside
+    // the function; the caller sees a normal SELECT result. (docs/PG-DREGG.md
+    // "PostgreSQL 17 leverage".)
+    const MERGE_CELL: &str = r#"
+CREATE OR REPLACE FUNCTION dregg.merge_cell(
+    p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
+    p_fields bytea, p_fields_json jsonb, p_lifecycle text,
+    p_last_ordinal bigint, p_cell_root bytea) RETURNS text
+LANGUAGE plpgsql AS $$
+DECLARE v_action text;
+BEGIN
+    MERGE INTO dregg.cells AS t
+    USING (SELECT p_cell_id AS cell_id) AS s
+      ON t.cell_id = s.cell_id
+    WHEN MATCHED THEN UPDATE SET balance=p_balance, nonce=p_nonce,
+        fields_json=p_fields_json, last_ordinal=p_last_ordinal, cell_root=p_cell_root
+    WHEN NOT MATCHED THEN INSERT
+        (cell_id,mode,balance,nonce,fields,fields_json,lifecycle,last_ordinal,cell_root)
+        VALUES (p_cell_id,p_mode,p_balance,p_nonce,p_fields,p_fields_json,
+                p_lifecycle,p_last_ordinal,p_cell_root)
+    RETURNING merge_action() INTO v_action;   -- pg17: 'INSERT' | 'UPDATE'
+    RETURN v_action;
+END $$;
+"#;
+
     // The dregg-developer query surface (docs/QUICKSTART-dregg-dev.md). Plain
     // SELECTs over the Tier-B tables; each inherits the table's read-side RLS.
+    //
+    // The last two views use PostgreSQL 17's SQL/JSON `JSON_TABLE` to project the
+    // jsonb columns (`capabilities.allowed_effects`, `cells.fields_json`) into a
+    // flat relational surface — turning dregg's embedded JSON state into proper
+    // rows a developer can JOIN/aggregate without hand-written jsonb operators.
+    // (docs/PG-DREGG.md "PostgreSQL 17 leverage".) JSON_TABLE is a pg17 feature;
+    // the mirror's PRIMARY target is pg17, so these ship by default.
     const VIEWS: &str = r#"
 CREATE OR REPLACE VIEW dregg.cap_edges AS
     SELECT holder AS src, target AS dst, slot, permissions, expires_at
@@ -468,6 +507,19 @@ CREATE OR REPLACE VIEW dregg.receipt_chain AS
            encode(prev_root, 'hex') AS prev_root,
            encode(ledger_root, 'hex') AS ledger_root, committed_at
     FROM dregg.turns ORDER BY ordinal;
+CREATE OR REPLACE VIEW dregg.cap_attenuations AS
+    SELECT encode(c.holder, 'hex') AS holder, c.slot,
+           encode(c.target, 'hex') AS target, jt.effect, c.expires_at,
+           c.last_ordinal
+    FROM dregg.capabilities c,
+         JSON_TABLE(c.allowed_effects, '$[*]'
+             COLUMNS (effect text PATH '$')) AS jt;
+CREATE OR REPLACE VIEW dregg.cell_fields AS
+    SELECT encode(cell_id, 'hex') AS cell, jt.balance, jt.nonce, last_ordinal
+    FROM dregg.cells,
+         JSON_TABLE(fields_json, '$'
+             COLUMNS (balance bigint PATH '$.balance',
+                      nonce    bigint PATH '$.nonce')) AS jt;
 "#;
 
     const RLS: &str = r#"
@@ -677,6 +729,13 @@ mod tests {
         assert!(sql.contains("CREATE OR REPLACE VIEW dregg.cell_balances"));
         assert!(sql.contains("CREATE OR REPLACE VIEW dregg.cap_edges"));
         assert!(sql.contains("CREATE OR REPLACE VIEW dregg.receipt_chain"));
+        // The pg17 SQL/JSON (JSON_TABLE) projection views are emitted.
+        assert!(sql.contains("CREATE OR REPLACE VIEW dregg.cap_attenuations"));
+        assert!(sql.contains("CREATE OR REPLACE VIEW dregg.cell_fields"));
+        assert!(sql.contains("JSON_TABLE"));
+        // The pg17 MERGE-based upsert function is emitted.
+        assert!(sql.contains("dregg.merge_cell"));
+        assert!(sql.contains("merge_action()"));
     }
 
     /// ANTI-DRIFT: the committed `sql/schema-tierB.sql` and the Rust DDL emitter
@@ -704,6 +763,11 @@ mod tests {
             "dregg.cap_edges",
             "dregg.cell_balances",
             "dregg.receipt_chain",
+            "dregg.cap_attenuations",
+            "dregg.cell_fields",
+            "JSON_TABLE",
+            "dregg.merge_cell",
+            "merge_action()",
             "CREATE POLICY cells_read",
             "CREATE POLICY turns_read",
             "CREATE POLICY caps_read",

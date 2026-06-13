@@ -17,11 +17,15 @@
 #
 #   2. EXTENSION (needs cargo-pgrx + a managed postgres) — the thin
 #      `#[pg_extern]` wrappers in `src/lib.rs` are gated behind the `pgrx`
-#      feature; building/running them is a cargo-pgrx job:
+#      feature; building/running them is a cargo-pgrx job. The PRIMARY target is
+#      PostgreSQL 17 (the current release); pg13–pg16 stay available.
 #          cargo install cargo-pgrx --version 0.17.0
-#          cargo pgrx init --pg16 <download|existing>
-#          cargo pgrx test pg16          # runs the #[pg_test]s against managed pg16
-#          cargo pgrx run  pg16          # opens psql with the extension loaded
+#          cargo pgrx init --pg17 $(brew --prefix postgresql@17)/bin/pg_config
+#          cargo pgrx test pg17          # runs the #[pg_test]s against managed pg17
+#          cargo pgrx run  pg17          # opens psql with the extension loaded
+#      `pg17` is the default ABI cargo-pgrx targets here (the `[features]` block
+#      and `pg_dregg.control` name it as primary). pg13–pg16 remain selectable
+#      for older deployments (`cargo pgrx test pg16`, etc.).
 [workspace]
 
 [package]
@@ -45,6 +49,11 @@ required-features = ["pgrx"]
 
 [features]
 # Default is EMPTY so `cargo test` builds only the postgres-independent core.
+# (A pgNN feature CANNOT be a cargo default: pgrx requires exactly one pg ABI
+# and would force the extension to compile under plain `cargo test`, defeating
+# the postgres-free core path. The PRIMARY ABI is `pg17` — the current
+# PostgreSQL — selected explicitly on the cargo-pgrx command line and named as
+# primary in `pg_dregg.control`; pg13–pg16 remain available below.)
 default = []
 # Turning on `pgrx` compiles the #[pg_extern] wrappers; pick a pg ABI alongside.
 pgrx = ["dep:pgrx"]
