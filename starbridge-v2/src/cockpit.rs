@@ -40,6 +40,9 @@ use starbridge_v2::surface::{SurfaceCapability, SurfaceId};
 use starbridge_v2::world::{self, CommitOutcome, World};
 // The feature panels — wired in as tabs of the master interface.
 use starbridge_v2::{cipherclerk, debug, edit, replay};
+// The A1 DEVELOPER content surfaces — the IDE's editor + terminal panes.
+use starbridge_v2::buffer::{BufferCell, BufferView};
+use starbridge_v2::terminal::{Command, TerminalCell, TerminalView};
 
 /// Which object the inspector is focused on.
 #[derive(Clone)]
@@ -55,6 +58,12 @@ pub enum Selection {
 pub enum Tab {
     Shell,
     Agent,
+    /// The IDE's EDITOR pane — a text buffer as a cap-confined Surface cell
+    /// (A1). Distinct from `Editor` (the artifact-authoring Live Editor).
+    Buffer,
+    /// The IDE's TERMINAL pane — a command surface as a cap-confined Surface
+    /// cell (A1; the home of the ADOS tool-call seam).
+    Terminal,
     Composer,
     Objects,
     Debugger,
@@ -64,9 +73,11 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 8] = [
+    const ALL: [Tab; 10] = [
         Tab::Shell,
         Tab::Agent,
+        Tab::Buffer,
+        Tab::Terminal,
         Tab::Composer,
         Tab::Objects,
         Tab::Debugger,
@@ -78,6 +89,8 @@ impl Tab {
         match self {
             Tab::Shell => "SHELL",
             Tab::Agent => "AGENT",
+            Tab::Buffer => "BUFFER",
+            Tab::Terminal => "TERMINAL",
             Tab::Composer => "COMPOSER",
             Tab::Objects => "OBJECTS",
             Tab::Debugger => "DEBUGGER",
@@ -152,6 +165,22 @@ pub struct Cockpit {
     /// service cell stands in as a live, cap-holding, turn-committing agent.
     agent_surface: starbridge_v2::agent::AgentSurface,
 
+    // --- the A1 EDITOR/BUFFER surface (a text buffer as a Surface cell) -----
+    /// The editor buffer — a cap-confined text buffer backed by a real cell
+    /// (its digest rides the cell's state; an edit is a cap-gated turn). The
+    /// IDE's editor pane.
+    editor_buffer: BufferCell,
+    /// The WRITE capability the cockpit holds for `editor_buffer` (the shell
+    /// minted it on open). The cockpit can only COMMIT an edit by presenting
+    /// this — a read-only mirror could not (the §7 cap discipline at the editor).
+    editor_buffer_cap: SurfaceCapability,
+
+    // --- the A1 TERMINAL surface (a command surface as a Surface cell) ------
+    /// The terminal — a cap-confined command surface whose backing cell's
+    /// c-list IS the command authority (a command outside it REFUSES). The home
+    /// of the ADOS A0 tool-call seam; the IDE's terminal pane.
+    terminal: TerminalCell,
+
     // --- the ⌘K COMMAND PALETTE --------------------------------------------
     /// The command palette over EVERY action (open with ⌘K). The cockpit feeds
     /// it keystrokes and dispatches its selected `CommandId` through the same
@@ -217,6 +246,30 @@ impl Cockpit {
             service,
         );
 
+        // The A1 EDITOR/BUFFER surface: a fresh dedicated cell backs the buffer
+        // (its state slot carries the content digest; the cockpit holds the
+        // WRITE cap the shell mints). Open it as a real shell surface so it
+        // composites under the A0 verified scene like every other surface.
+        let buffer_backing = world.borrow_mut().genesis_cell(0x5B, 0);
+        let editor_buffer_cap = shell.open_cell_view(buffer_backing, "scratch.txt");
+        surface_caps.insert(editor_buffer_cap.surface(), editor_buffer_cap.clone());
+        let editor_buffer = BufferCell::new(
+            editor_buffer_cap.surface(),
+            buffer_backing,
+            "scratch.txt",
+            "// a cap-confined buffer — its digest rides a real cell.\n\
+             // editing is free; COMMIT is a cap-gated verified turn.\n",
+        );
+
+        // The A1 TERMINAL surface: the SERVICE cell backs it — it holds a REAL
+        // cap reaching the user cell (a genuine mandate), so a command targeting
+        // the user is in-mandate (commits) and one targeting an out-of-reach cell
+        // REFUSES (the ADOS tool-call seam, confined). Opened as a shell surface.
+        let term_cap = shell.open_cell_view(service, "service-term");
+        let terminal_surface = term_cap.surface();
+        surface_caps.insert(terminal_surface, term_cap);
+        let terminal = TerminalCell::new(terminal_surface, service, "service-term");
+
         Self {
             world,
             cells,
@@ -236,6 +289,9 @@ impl Cockpit {
             console_surface,
             frame_seq: 0,
             agent_surface,
+            editor_buffer,
+            editor_buffer_cap,
+            terminal,
             palette: CommandPalette::new(),
             focus,
         }
@@ -394,6 +450,122 @@ impl Cockpit {
             .unwrap_or(0);
         let out = self.clerk.discharge("alice", "dns", "r", now);
         self.clerk_outcome = Some(out);
+        cx.notify();
+    }
+
+    // --- the A1 EDITOR/BUFFER surface ops (cap-gated edits) ------------------
+    //
+    // Editing the buffer's text is free (an in-memory doc edit); LANDING it is a
+    // cap-gated verified turn — the cockpit presents the WRITE cap and the
+    // backing cell's digest advances (a real receipt). A read-only buffer would
+    // refuse — the no-amplification rule at the editor.
+
+    /// Type a line into the editor buffer (free, in-memory) — the operator can
+    /// watch the doc become DIRTY (its digest now differs from the committed one).
+    fn buffer_type_demo(&mut self, cx: &mut Context<Self>) {
+        let stamp = self.world.borrow().height();
+        self.editor_buffer
+            .doc_mut()
+            .insert(&format!("edit @ h{stamp}\n"));
+        self.last_outcome = Some(
+            "buffer: typed a line (in-memory — the doc is now DIRTY until a cap-gated commit)"
+                .to_string(),
+        );
+        self.tab = Tab::Buffer;
+        cx.notify();
+    }
+
+    /// COMMIT the editor buffer — write its digest into the backing cell through
+    /// a REAL verified turn (cap-gated; the cockpit presents the WRITE cap).
+    fn buffer_commit(&mut self, cx: &mut Context<Self>) {
+        let cap = self.editor_buffer_cap.clone();
+        let result = {
+            let mut w = self.world.borrow_mut();
+            self.editor_buffer.commit(&mut w, &cap)
+        };
+        self.last_outcome = Some(match result {
+            Ok(rev) => format!(
+                "buffer: COMMITTED — digest written to the backing cell as a verified turn (revision {rev})"
+            ),
+            Err(e) => format!("buffer: commit REFUSED — {}", e.explain()),
+        });
+        self.refresh_cells();
+        self.tab = Tab::Buffer;
+        cx.notify();
+    }
+
+    /// Attempt to COMMIT through a READ-ONLY mirror — the no-amplification rule
+    /// firing at the editor. The cockpit narrows its write cap to a read-only
+    /// (Signature) mirror via a REAL GrantCapability share, then tries to commit
+    /// through it: the buffer-cap gate REFUSES (a read-only buffer cannot write).
+    fn buffer_readonly_write_demo(&mut self, cx: &mut Context<Self>) {
+        let cap = self.editor_buffer_cap.clone();
+        // Narrow to a read-only mirror through the real executor (None → Signature).
+        let mirror = match self.shell.share(&cap, /*peer app*/ 0x4E0, dregg_cell::AuthRequired::Signature) {
+            Ok(m) => m,
+            Err(e) => {
+                self.last_outcome = Some(format!("buffer: could not make a read-only mirror — {}", shell_err(&e)));
+                cx.notify();
+                return;
+            }
+        };
+        self.surface_caps.insert(mirror.surface(), mirror.clone());
+        // A read-only buffer rendered into the mirror's surface.
+        let ro_buffer = BufferCell::new(
+            mirror.surface(),
+            self.editor_buffer.backing(),
+            "scratch.txt (read-only mirror)",
+            self.editor_buffer.doc().text(),
+        );
+        let result = {
+            let mut w = self.world.borrow_mut();
+            ro_buffer.commit(&mut w, &mirror)
+        };
+        self.last_outcome = Some(match result {
+            Ok(_) => "buffer: read-only write UNEXPECTEDLY committed (should have refused!)".to_string(),
+            Err(e) => format!("buffer: ⚠ read-only write REFUSED — {} (no-amplification at the editor)", e.explain()),
+        });
+        self.tab = Tab::Buffer;
+        cx.notify();
+    }
+
+    // --- the A1 TERMINAL surface ops (the ADOS tool-call seam) ---------------
+    //
+    // A command is cap-gated on the terminal-cell's c-list: an in-mandate target
+    // COMMITS (its receipt is the output); an out-of-mandate one REFUSES. This is
+    // the agent's Bash confined to its mandate, made a surface.
+
+    /// Run an IN-MANDATE command — the service terminal-cell holds a cap reaching
+    /// the user cell, so a transfer to the user COMMITS (its receipt is the output).
+    fn terminal_run_in_mandate(&mut self, cx: &mut Context<Self>) {
+        let [_treasury, _service, user] = self.anchors;
+        let line = {
+            let mut w = self.world.borrow_mut();
+            self.terminal.run(&mut w, Command::Transfer { target: user, amount: 100 })
+        };
+        self.last_outcome = Some(match line {
+            Ok(l) => format!("terminal: command COMMITTED — {} (receipt is the output)", l.result),
+            Err(e) => format!("terminal: command REFUSED — {}", e.explain()),
+        });
+        self.refresh_cells();
+        self.tab = Tab::Terminal;
+        cx.notify();
+    }
+
+    /// Run an OUT-OF-MANDATE command — target a cell the terminal-cell holds NO
+    /// cap for; the command cap-gate REFUSES it (the agent's Bash confined). Uses
+    /// the treasury (the service holds no cap reaching it).
+    fn terminal_run_out_of_mandate(&mut self, cx: &mut Context<Self>) {
+        let [treasury, _service, _user] = self.anchors;
+        let line = {
+            let mut w = self.world.borrow_mut();
+            self.terminal.run(&mut w, Command::Transfer { target: treasury, amount: 1 })
+        };
+        self.last_outcome = Some(match line {
+            Ok(_) => "terminal: out-of-mandate command UNEXPECTEDLY committed (should have refused!)".to_string(),
+            Err(e) => format!("terminal: ⚠ command REFUSED — {} (cap-gate, BEFORE any turn)", e.explain()),
+        });
+        self.tab = Tab::Terminal;
         cx.notify();
     }
 
@@ -835,6 +1007,14 @@ impl Cockpit {
             CommandId::GoEditor => self.set_tab(Tab::Editor, cx),
             CommandId::GoShell => self.set_tab(Tab::Shell, cx),
             CommandId::GoAgent => self.set_tab(Tab::Agent, cx),
+            CommandId::GoBuffer => self.set_tab(Tab::Buffer, cx),
+            CommandId::GoTerminal => self.set_tab(Tab::Terminal, cx),
+
+            CommandId::BufferType => self.buffer_type_demo(cx),
+            CommandId::BufferCommit => self.buffer_commit(cx),
+            CommandId::BufferReadOnlyWrite => self.buffer_readonly_write_demo(cx),
+            CommandId::TerminalRunInMandate => self.terminal_run_in_mandate(cx),
+            CommandId::TerminalRunOutOfMandate => self.terminal_run_out_of_mandate(cx),
 
             CommandId::ShellOpenSelected => self.shell_open_selected(cx),
             CommandId::ShellFocusFront => self.shell_focus_front(cx),
@@ -1238,6 +1418,8 @@ impl Cockpit {
         match self.tab {
             Tab::Shell => self.shell_panel(cx).into_any_element(),
             Tab::Agent => self.agent_panel().into_any_element(),
+            Tab::Buffer => self.buffer_panel(cx).into_any_element(),
+            Tab::Terminal => self.terminal_panel(cx).into_any_element(),
             Tab::Composer => self.composer(cx).into_any_element(),
             Tab::Objects => self.objects_panel().into_any_element(),
             Tab::Debugger => self.debugger_panel().into_any_element(),
@@ -1974,6 +2156,192 @@ impl Cockpit {
         scrim.child(card)
     }
 
+    /// THE A1 EDITOR/BUFFER panel — a text buffer as a cap-confined Surface cell.
+    /// Maps `buffer::BufferView` (gpui-free) onto gpui: the buffer header (its
+    /// backing cell, revision, read-only/dirty badges, digests), the cap-gated
+    /// action row (type · commit · the read-only-write REFUSE teaching moment),
+    /// and the buffer body (the editable text, with line numbers). You watch the
+    /// authenticated digest advance through a verified turn — not a self-report.
+    fn buffer_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let w = self.world.borrow();
+        let v = BufferView::build(&self.editor_buffer, &w, Some(&self.editor_buffer_cap));
+        drop(w);
+
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full();
+        col = col.child(section_title("EDITOR · a text buffer as a cap-confined Surface cell").mb_1());
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "The buffer is backed by a REAL cell: its content DIGEST rides the cell's state, and \
+             its REVISION is the cell's nonce. Editing the text is free (in-memory); COMMITTING is \
+             a CAP-GATED verified turn (a SetField writing the digest). A read-only buffer holds an \
+             ATTENUATED cap — a write to it REFUSES (no-amplification at the editor).",
+        ));
+
+        // The buffer header: backing cell, state, badges, digests.
+        let backed_color = if v.backed { theme::good() } else { theme::bad() };
+        let rw_badge = if v.read_only { ("read-only", theme::warn()) } else { ("writable", theme::good()) };
+        let clean_badge = if v.clean { ("clean", theme::good()) } else { ("DIRTY (unsaved)", theme::warn()) };
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(pill(v.name.clone(), theme::accent()))
+                .child(pill(format!("cell {}", v.backing_short), theme::text()))
+                .child(pill(if v.backed { "live" } else { "UNBACKED" }.to_string(), backed_color))
+                .child(pill(rw_badge.0, rw_badge.1))
+                .child(pill(clean_badge.0, clean_badge.1))
+                .child(pill(format!("rev {}", v.revision), theme::muted())),
+        );
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(div().text_xs().text_color(theme::muted()).child("doc digest"))
+                .child(pill(v.doc_digest_short.clone(), theme::accent()))
+                .when(v.stored_digest_short.is_some(), |d| {
+                    d.child(div().text_xs().text_color(theme::muted()).child("committed"))
+                        .child(pill(v.stored_digest_short.clone().unwrap(), theme::good()))
+                }),
+        );
+
+        // The cap-gated action row.
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .mt_1()
+                .child(shell_button(cx, "type a line", theme::accent(), Cockpit::buffer_type_demo))
+                .child(shell_button(cx, "commit (cap-gated turn)", theme::good(), Cockpit::buffer_commit))
+                .child(shell_button(cx, "⚠ read-only write (REFUSE)", theme::warn(), Cockpit::buffer_readonly_write_demo)),
+        );
+
+        // The buffer body: the editable text with line numbers.
+        col = col.child(section_title("buffer (the surface content)").mt_2());
+        let mut body = div().flex().flex_col().gap_0p5().p_2().rounded_md().bg(theme::panel());
+        for (i, line) in v.lines.iter().enumerate() {
+            body = body.child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(div().text_xs().text_color(theme::muted()).w(px(28.)).child(format!("{:>3}", i + 1)))
+                    .child(div().text_xs().text_color(theme::text()).font_family("monospace").child(line.clone())),
+            );
+        }
+        col = col.child(body);
+        col = col.child(
+            div().text_xs().text_color(theme::muted()).mt_1().child(format!(
+                "cursor @ byte {} · {} line(s) — the digest above is what a COMMIT would bind into the cell",
+                v.cursor,
+                v.lines.len()
+            )),
+        );
+        col
+    }
+
+    /// THE A1 TERMINAL panel — a command surface as a cap-confined Surface cell
+    /// (the home of the ADOS tool-call seam). Maps `terminal::TerminalView`
+    /// (gpui-free) onto gpui: the terminal header (its backing cell + its
+    /// MANDATE — the targets it may reach), the cap-gated action row (an
+    /// in-mandate command COMMITS; an out-of-mandate one REFUSES), and the output
+    /// body (each command + its REAL receipt, or its REFUSAL — never faked).
+    fn terminal_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let w = self.world.borrow();
+        let v = TerminalView::build(&self.terminal, &w);
+        drop(w);
+
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full();
+        col = col.child(section_title("TERMINAL · a command surface as a cap-confined Surface cell").mb_1());
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "A command is a CAP-GATED action: the terminal-cell holds the cap for what it may run / \
+             touch, and the output is its receipt. This is WHERE THE ADOS TOOL-CALL SEAM LIVES — an \
+             agent's Bash routed through the terminal-cell's cap. A command whose target is within \
+             the cell's mandate COMMITS (its receipt is the output); one outside it REFUSES.",
+        ));
+
+        // The terminal header: backing cell + the mandate (reachable targets).
+        let backed_color = if v.backed { theme::good() } else { theme::bad() };
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(pill(v.name.clone(), theme::accent()))
+                .child(pill(format!("cell {}", v.backing_short), theme::text()))
+                .child(pill(if v.backed { "live" } else { "UNBACKED" }.to_string(), backed_color))
+                .child(pill(format!("{} committed", v.committed_count), theme::good())),
+        );
+        col = col.child(section_title("mandate — the targets this terminal may reach").mt_1());
+        let mut mandate = div().flex().flex_wrap().gap_1().items_center();
+        for t in &v.reachable_short {
+            mandate = mandate.child(pill(format!("→ {t}"), theme::accent()));
+        }
+        col = col.child(mandate);
+
+        // The cap-gated action row.
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .mt_1()
+                .child(shell_button(cx, "run in-mandate (COMMITS)", theme::good(), Cockpit::terminal_run_in_mandate))
+                .child(shell_button(cx, "⚠ run out-of-mandate (REFUSE)", theme::warn(), Cockpit::terminal_run_out_of_mandate)),
+        );
+
+        // The output body: commands + receipts / refusals (oldest-first).
+        col = col.child(section_title("output (commands + receipts — the surface content)").mt_2());
+        if v.lines.is_empty() {
+            col = col.child(div().text_xs().text_color(theme::muted()).child(
+                "no commands yet — run one above; an in-mandate target COMMITS, an out-of-mandate one REFUSES.",
+            ));
+        } else {
+            let mut body = div().flex().flex_col().gap_0p5();
+            for l in &v.lines {
+                let (mark, mark_color) = if l.committed { ("$", theme::good()) } else { ("✗", theme::bad()) };
+                body = body.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .px_2()
+                        .py_0p5()
+                        .rounded_md()
+                        .bg(theme::panel())
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .items_center()
+                                .child(div().text_xs().text_color(mark_color).child(mark))
+                                .child(div().text_xs().text_color(theme::text()).font_family("monospace").child(l.command.clone()))
+                                .when(l.committed, |d| {
+                                    d.child(pill(format!("{} ⚙", l.computrons), theme::muted()))
+                                })
+                                .when(l.receipt_short().is_some(), |d| {
+                                    d.child(pill(l.receipt_short().unwrap(), theme::good()))
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(if l.committed { theme::muted() } else { theme::bad() })
+                                .font_family("monospace")
+                                .child(l.result.clone()),
+                        ),
+                );
+            }
+            col = col.child(body);
+        }
+        col
+    }
+
     /// THE LIVE EDITOR panel — `edit::render_panel` is gpui-free text; the
     /// cockpit presents it line-by-line.
     fn editor_panel(&self) -> impl IntoElement {
@@ -2226,6 +2594,7 @@ fn category_badge(cat: Category) -> (&'static str, Hsla) {
         Category::Replay => (cat.label(), theme::warn()),
         Category::Clerk => (cat.label(), theme::accent()),
         Category::Shell => (cat.label(), theme::accent()),
+        Category::Ide => (cat.label(), theme::good()),
         Category::Debug => (cat.label(), theme::warn()),
         Category::Inspect => (cat.label(), theme::muted()),
         Category::Palette => (cat.label(), theme::muted()),
