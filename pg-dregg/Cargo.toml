@@ -9,9 +9,14 @@
 #
 # TWO build modes (see docs/PG-DREGG.md §5 + the M1 verification boundary):
 #
-#   1. CORE (no postgres needed) — the authorization core lives in `src/core.rs`
-#      and is proven by plain `cargo test`:
-#          cargo test                     # builds core.rs + its #[cfg(test)] tests
+#   1. CORE (no postgres needed) — the postgres-independent cores live in
+#      `src/authz.rs` (Tier-A: decode+verify, the verified-credential LRU,
+#      revocation, the caveat algebra), `src/jsonpath.rs` (Pred→jsonpath compile),
+#      `src/mirror.rs` (Tier-B/C row types + the RootChain anti-substitution tooth
+#      + the §15 federation subscriber re-validation), and `src/attest.rs` (the
+#      Tier-C range-attest proof gate + the circuit-link seam) — all proven by
+#      plain `cargo test`:
+#          cargo test                     # builds the cores + their #[cfg(test)] tests
 #      The default feature set is EMPTY, so this builds NO pgrx code and needs no
 #      postgres / cargo-pgrx toolchain. This is the always-runnable verification.
 #
@@ -76,12 +81,21 @@ pg_test = []
 # default `pgNN` build. This is the realizable per-row half of the spine
 # invariant (a `CommitRecord` carries no per-turn proof, §10.2).
 #
-# This `tier-c` feature is reserved for the heavyweight PROOF verifier: linking
-# the whole-chain IVC light client (`circuit::ivc_turn_chain`) so a receipt RANGE
-# can be proof-attested (the orthogonal soundness half `dregg_verify_turn` does
-# NOT do per-row). Off by default: the Tier A/B/chain-gate build stays
-# circuit-free; the proof-attesting build opts in. (The verifier crate dep is
-# wired when that range-attestation lands; declared now so the path is explicit.)
+# This `tier-c` feature gates the heavyweight PROOF verifier — the whole-chain IVC
+# light client (`circuit::ivc_turn_chain::verify_turn_chain_recursive`) so a receipt
+# RANGE can be proof-attested (the orthogonal soundness half `dregg_verify_turn` does
+# NOT do per-row). The RANGE-ATTEST SRF SHAPE already ships in `src/attest.rs` + the
+# `dregg_attest_range`/`dregg_attest_explain` externs (the request/verdict types, the
+# anti-overclaim tooth, the fail-closed discipline), written ONCE against the single
+# circuit-link seam `attest::verify_serialized_proof`. With `tier-c` OFF (default,
+# circuit-free) that seam is STUBBED and the SRF FAILS CLOSED — attests nothing — which
+# is the only safe default (§10.3: a labeled proof gate that does not verify must say
+# "unattested", never "attested"). Turning `tier-c` ON wires the seam to the real,
+# Lean-FREE circuit verifier (§8.1; `dregg-circuit` with `--features verifier`/`recursion`,
+# NO executor/NO Lean). The remaining settle items (named in `src/attest.rs` + §10.2):
+# S1 = serialize `WholeChainProof`; S2 = node-side proof producer + `dregg.turn_proofs`;
+# S3 = the `dregg-circuit` dep itself (added here when S1 lands). Declared depless now so
+# the staged shape is explicit and the default build stays circuit-free.
 tier-c = []
 # Tier D (docs/PG-DREGG.md §11) — the EXECUTOR-IN-POSTGRES endgame. Links the
 # verified Lean executor so `dregg_submit_turn` executes a turn inside the

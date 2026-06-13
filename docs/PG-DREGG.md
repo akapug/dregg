@@ -153,14 +153,36 @@ Optional **mint/attenuate helpers** (so an application can issue and narrow
 tokens without leaving SQL — useful for row-scoped sub-tokens):
 
 ```sql
--- Issue a credential carrying caveats encoded as a small JSON DSL
--- (mirrors the Pred algebra: {"attr_eq":{"key":"tool","value":"read"}}, etc).
--- The issuer private key is read from a SUPERUSER-only GUC; this function is
--- itself SECURITY DEFINER and only callable by the app's issuing role.
-CREATE FUNCTION dregg_mint(subject text, caveats jsonb, until bigint) RETURNS text;
+-- Issue a credential carrying caveats encoded as a JSON array of Pred objects.
+-- The JSON is the serde-default encoding of dregg_auth::credential::Pred:
+-- PascalCase variant names, e.g.:
+--   [{"AttrEq":{"key":"action","value":"read"}},
+--    {"AttrPrefix":{"key":"resource","prefix":"org/42/"}},
+--    {"NotAfter":{"at":2000}}]
+-- Other variants: NotBefore, Within, AllOf, AnyOf, Not, "True", "False".
+-- The issuer private key is read from the SUPERUSER-ONLY dregg.issuer_privkey GUC;
+-- this function is SECURITY DEFINER and only callable by the role the DBA grants.
+CREATE FUNCTION dregg_mint(subject text, caveats jsonb, until bigint) RETURNS text
+  SECURITY DEFINER;
 
 -- Attenuate a presented token by appending caveats — never widening.
+-- IMMUTABLE: no issuer key needed; the token holder may attenuate freely.
 CREATE FUNCTION dregg_attenuate(token text, caveats jsonb) RETURNS text
+  IMMUTABLE PARALLEL SAFE STRICT;
+
+-- TRUE iff the credential has NOT been revoked in the backend-local registry
+-- (populated by dregg_revoke). Use as:
+--   USING (dregg_admits(...) AND dregg_cap_not_revoked(current_setting('dregg.token',true)))
+-- for instant-revocation semantics (docs §3.4 tier 2). STABLE.
+CREATE FUNCTION dregg_cap_not_revoked(token text) RETURNS boolean
+  STABLE PARALLEL SAFE STRICT;
+
+-- The per-issuance nonce hex of a credential (root + all its attenuated children
+-- carry the same nonce, so revoking by nonce covers the whole family). NULL if
+-- the token does not decode. HORIZONLOG: currently returns NULL pending a
+-- dregg-auth Credential::nonce() public accessor; use dregg_cap_id for per-token
+-- revocation in the meantime.
+CREATE FUNCTION dregg_cap_nonce(token text) RETURNS text
   IMMUTABLE PARALLEL SAFE;
 ```
 
@@ -289,6 +311,8 @@ context** — exactly what per-row RLS needs:
 | `dregg_cap_subject(token)` | decode, verify, then read the subject caveat / attribute the mint convention puts in block 0; `None` ⇒ NULL | for `actor`-column joins and audit |
 | `dregg_attenuate(token, caveats)` | `Credential::decode(token)?.attenuate(parse_caveats(caveats)).encode()` | narrowing only; `attenuate_subset` is the no-amplify guarantee |
 | `dregg_mint(subject, caveats, until)` | `RootKey::from_seed(secret).mint([... caveats, NotAfter{until}])` `.encode()` | privileged; secret from a superuser GUC |
+| `dregg_cap_not_revoked(token)` | `!is_revoked(cap_id(token))` against the backend-local revocation set | STABLE (revocation set can change between statements); optional opt-in tier 2 (§3.4) |
+| `dregg_cap_nonce(token)` | `Credential::nonce()` hex — pending `dregg-auth` public accessor; returns NULL today | IMMUTABLE; for family revocation (root + all children share the same nonce); see HORIZONLOG |
 
 The biscuit `Token`/`verify_offline` path (`dregg-auth/src/lib.rs`) remains
 available for a **tool-gate** profile (a token confined to *tools* rather than
@@ -314,10 +338,12 @@ Everything dregg-auth needs crosses as text and bigint:
   trust root, read once from extension configuration (§3.3) and cached in a
   `OnceCell` for the backend process. Passing it per-call would invite a
   policy author to verify against an attacker-chosen key.
-- **caveats JSON** (mint/attenuate only) — SQL `jsonb` ⇄ a small serde DSL
-  mapping 1:1 onto the `Pred` enum (`{"not_after":2000}`,
-  `{"attr_prefix":{"key":"resource","value":"org/42/"}}`,
-  `{"all_of":[…]}`). The DSL is the `Pred` algebra; nothing new is invented.
+- **caveats JSON** (mint/attenuate only) — SQL `jsonb` ⇄ the serde-default
+  encoding of `dregg_auth::credential::Pred` (PascalCase variant names — e.g.
+  `{"NotAfter":{"at":2000}}`, `{"AttrPrefix":{"key":"resource","prefix":"org/42/"}}`,
+  `{"AllOf":[…]}`). The DSL is the `Pred` algebra; nothing new is invented.
+  **Note:** variant names are PascalCase (no `rename_all` on the Rust enum), so
+  `AttrEq` not `attr_eq`, `NotAfter` not `not_after`, etc.
 
 ### 3.3 The offline-verify model (issuer key as extension config)
 
@@ -895,6 +921,67 @@ is to run the real verifier on the write path. The recommended shape:
   must be the real verifier, co-located and authenticated). Use this only where
   embedding the verifier is genuinely unwanted; C-embed is the first-class path.
 
+#### 10.2.1 The proof gate as a RANGE-attest SRF (the shape, and the circuit-link seam)
+
+The per-row `dregg_verify_turn` is the *structural* chain tooth; the *proof*
+gate is a different shape, because the IVC artifact is whole-chain by
+construction. `circuit::ivc_turn_chain::verify_turn_chain_recursive` checks ONE
+succinct recursive proof attesting that **all K finalized turns in a receipt
+RANGE executed correctly and the root chain advanced** from `genesis_root` to
+`final_root` — verifier cost independent of K. Its natural SQL shape is therefore
+a **set-returning function over a range**, not a per-row boolean:
+
+```sql
+-- Verify ONE whole-chain proof for the window [lo, hi] against the published VK
+-- anchor; on success return one row per attested ordinal (read from dregg.turns),
+-- each tagged proof_attested = true. Fail-closed: a refusal returns ZERO rows.
+dregg_attest_range(proof bytea, vk_anchor bytea, lo bigint, hi bigint)
+  RETURNS SETOF (ordinal bigint, prev_root bytea, ledger_root bytea, proof_attested bool);
+dregg_attest_explain(proof bytea, vk_anchor bytea, lo bigint, hi bigint) RETURNS text;  -- the verdict reason
+```
+
+A consumer JOINs it against `dregg.turns` to mark the proof-attested prefix —
+distinct from the merely chain-consistent rows the structural tooth admits:
+
+```sql
+SELECT t.ordinal, (a.proof_attested IS TRUE) AS proof_attested
+FROM dregg.turns t
+LEFT JOIN dregg_attest_range(:proof, :vk, 0, 100) a USING (ordinal)
+ORDER BY t.ordinal;
+```
+
+The SRF *shape* is **built and `cargo test`-proven** in `pg-dregg/src/attest.rs`
+(the request/verdict types, the **anti-overclaim tooth** — a proof for K turns
+cannot attest a window of more than K — and the fail-closed expansion to rows),
+written ONCE against a single circuit-link seam, `attest::verify_serialized_proof`.
+
+**The circuit-link is the named settle item.** `verify_turn_chain_recursive`
+takes an *in-memory* `WholeChainProof` (plonky3 proof objects), which is **not
+yet serde-serializable**, so a proof cannot cross the SQL boundary as `bytea`
+today. What *can* cross now is the 32-byte VK anchor (`RecursionVk`) and the
+bound publics. So the proof-bytes leg is **stubbed behind the `tier-c` feature**,
+and the stub FAILS CLOSED — it attests nothing — which is the §10.3 safe
+direction (a stub that returned *success* would be the forbidden failure mode;
+this stub returns *refusal*). Wiring it is three bounded steps:
+
+- **S1** — add a versioned serialization to `circuit::ivc_turn_chain::WholeChainProof`
+  (the plonky3 proof objects are postcard/serde-encodable; the struct needs the
+  derives + an envelope), so the node ships a proof as `bytea` and the SRF does
+  `decode → verify_turn_chain_recursive`.
+- **S2** — the node-side PRODUCER: when finality advances, fold the new finalized
+  turns (`prove_turn_chain_recursive` / the `fold_two_turns` accumulator) and
+  write the serialized proof + its window bounds into a `dregg.turn_proofs(lo,
+  hi, genesis_root, final_root, proof bytea, vk)` table the SRF reads.
+- **S3** — the `tier-c` feature pulls `dregg-circuit` **Lean-free** (`--features
+  verifier`/`recursion`: the prover-free batch-STARK verify surface + the
+  recursion verifier, NO executor, NO Lean runtime — §8.1 authorizes the circuit
+  link for Tier C), so `attest::verify_serialized_proof` becomes the real
+  `verify_turn_chain_recursive` instead of the stub.
+
+S2 touches the node and is therefore the post-flip half of M3 (the structural
+gate + this SRF shape are the realizable pg-side halves that ship now); S1/S3 are
+circuit-side and Lean-free.
+
 ### 10.3 Soundness, and the honest failure mode
 
 Done right, Tier C is the *strongest* sound tier short of D: the database refuses
@@ -1124,6 +1211,67 @@ for convenience.
 > the corrected stance — C and D are first-class, authorized targets, gated only
 > by their genuine engineering (the verifier carve-out; the pg/Lean process
 > model), not by any prohibition on linking the proof stack.
+
+### 13.1 The four open ember-decisions — recommended, with reasons
+
+The decisions surfaced in §6 (1–4) and §13 (5–8) collapse to four that actually
+gate work. Each below is the *recommended* call, with the reasoning a decider
+needs and the implementation consequence — so the choice is "confirm or override",
+not "rediscover the tradeoff".
+
+1. **Default revocation = instant, NOT bounded-staleness (override the §6/§3.4
+   default).** The doc's *original* framing made bounded-staleness-via-TTL the
+   default and instant the opt-in. The code already went the other way and it is
+   right: `authz::decide` consults the revocation registry on **every** call
+   (including hot-LRU hits — only the ed25519 chain verify is cached, never the
+   verdict), so a revoked credential's rows vanish on the **very next statement**
+   (`instant_revocation_makes_rows_vanish`, live pg18). TTL is still the
+   *clustered-horizon* fallback (a backend that has not yet seen a `dregg.revoked`
+   row), but the single-node default is instant, at no extra infrastructure.
+   *Consequence:* `dregg_cap_not_revoked` ships M1 (it does), and the per-row cost
+   of the registry check is a hash-set lookup — negligible beside the cached
+   chain. **Confirm: instant is the default.**
+
+2. **Tier-B tables = TYPED (cells/caps/turns), documented as views over the one
+   `dregg.memory` relation (decision 6).** Lead with the typed tables for query
+   ergonomics — `SELECT balance FROM dregg.cells` is the "your node IS your
+   postgres" story; `SELECT value FROM dregg.memory WHERE domain='registers'` is
+   the honest model but a worse hello-dregg. The single `dregg.memory` multiset
+   (one row per `(domain, collection, key)`, the §12 universal-memory collapse)
+   IS shipped and IS the honest substrate; the typed tables are its query sugar.
+   *Consequence (the one real follow-up):* today the typed tables and `dregg.memory`
+   are populated **in parallel** by the writer rather than the typed tables being
+   literal `VIEW`s over `dregg.memory` — promoting them to views (so a new state
+   component is provably just a new `domain` value) is a clean, additive M-future
+   refactor, not a v1 blocker. **Confirm: typed-tables-lead; views-over-memory is
+   the documented end state.**
+
+3. **Tier-C verifier = C-EMBED, behind the `tier-c` feature (decision 7).**
+   Embedding the Lean-free circuit verifier (`dregg-circuit --features
+   verifier`/`recursion`) is the *point* of the verified store (§8.1), not a
+   reluctant heavyweight — the database itself attests every proof. The whole-chain
+   IVC light client already isolates the verifier from the executor, so the
+   carve-out is bounded (the §10.2.1 settle items S1/S3). C-callout (a co-located
+   node verifies over RPC) is the **fallback only** if the carve-out proves more
+   Lean-entangled than the light-client framing suggests — it preserves soundness
+   but adds a synchronous dependency + a trust boundary. *Consequence:* the
+   range-attest SRF shape ships now (fail-closed stub); flipping `tier-c` on is
+   S1/S3. **Confirm: C-embed; C-callout is the documented fallback.**
+
+4. **Tier-D = run the pg/Lean process-model SPIKE first; full-D if clean, else
+   D-sidecar (decision 8).** Tier D (the verified Lean executor *in* the backend,
+   so a turn and the app's own rows commit in ONE transaction) is the most-sound
+   tier — the kernel itself is the writer — and the unique payoff (cross-domain
+   atomicity no separate node can offer). The single real hazard is technical, not
+   policy: pg's `setjmp`/`longjmp` error unwinding vs a Lean runtime mid-stack
+   (§11.3). So the call is **conditional**: front-load a small spike that links
+   the executor into one backend and hammers the error path; if clean, pursue full
+   D; if not, **D-sidecar** (`dregg_submit_turn` hands the envelope to a co-located
+   node over a unix socket — SQL submit ergonomics, no Lean in the backend, ~75%
+   of the payoff minus the single-transaction atomicity) is the sound stepping
+   stone. *Consequence:* neither blocks M3 — the §11.4 outbox + drainer is the
+   realizable write path; D is the post-M3 north star. **Confirm: spike-gated full
+   D; D-sidecar as the de-risked alternative.**
 
 # Part III — PostgreSQL leverage
 
@@ -1371,19 +1519,40 @@ verdict the publisher did. Three consequences:
    replica enforces; the verifier is the expensive complete half a verifying
    replica adds.
 
-**Honest scope.** This milestone is **DESIGN, not built** — no replication is
-wired in this change. The build-out is: (a) a publication over the four state
-tables + `turns`; (b) a subscriber-side apply hook (or periodic sweep) that runs
-`RootChain` over the replicated `dregg.turns` and alarms on a refusal; (c) the
-`pg_createsubscriber` bootstrap runbook; (d) optionally the Tier-C verify-on-tail
-for a full verifying replica. The load-bearing claim — *the RootChain tooth
-survives replication and lets a subscriber re-validate locally* — holds because
-the tooth is defined on the replicated rows themselves.
+**Honest scope.** The *soundness-load-bearing* piece is **built**; the
+*replication wiring* is operational config (a publisher conninfo + a
+`pg_createsubscriber` run), which the extension cannot perform on a DBA's behalf.
+Built and `cargo test`-proven (`pg-dregg/src/mirror.rs`): (a) the
+**`federation_publication()` DDL emitter** (`CREATE PUBLICATION dregg_mirror` over
+the four state tables + `turns`) and its `dregg_install_federation()` extern; (b)
+**`revalidate_replicated_chain()`** — the subscriber-side sweep that walks the
+replicated `dregg.turns` through the SAME `verify_chain_step` tooth the publisher
+ran, surfaced as the `dregg_revalidate_replicated_chain()` extern; it returns the
+re-validated head, or **refuses** a substituted / reordered / gapped / truncated
+stream — caught *on the subscriber side, locally, with no call back to the
+publisher* (`subscriber_catches_a_substituted_replicated_turn`,
+`subscriber_revalidates_the_synthetic_story_after_replication`). Operational
+(emitted as a runbook, `federation_subscriber()` / the
+`dregg_federation_subscriber_runbook(conninfo)` extern): (c) the
+`pg_createsubscriber` bootstrap + the `CREATE SUBSCRIPTION … WITH (failover =
+true)`. Optional: (d) the Tier-C verify-on-tail (`dregg_attest_range` on the
+replicated stream) for a *full verifying* replica. The load-bearing claim — *the
+RootChain tooth survives replication and lets a subscriber re-validate locally* —
+is exactly what `revalidate_replicated_chain` enforces, because the tooth is
+defined on the replicated rows themselves.
 
-### 15.1 Tier-B-distributed verdict: **GREEN on design, the next federation step**
+### 15.1 Tier-B-distributed verdict: **GREEN — the re-validation is built; replication is config**
 
 The chain tooth being structural-on-the-rows is what makes this sound: a
 replicated mirror is a re-validating replica, not a trusted copy. pg17's
 `pg_createsubscriber` + failover slots remove the two operational blockers
-(expensive join, fragile slot across failover). Build-out is sequenced after the
-M2 mirror writer (the thing being replicated must exist first).
+(expensive join, fragile slot across failover). The **soundness piece is now
+built** — the publication emitter + the subscriber re-validation sweep
+(`revalidate_replicated_chain`, `cargo test`-proven; the
+`dregg_install_federation` / `dregg_revalidate_replicated_chain` externs) — so a
+subscriber re-validates the replicated chain locally and refuses a tampered
+stream. What remains is the per-deployment *replication config* (the publisher
+conninfo + the `pg_createsubscriber` bootstrap), which the
+`dregg_federation_subscriber_runbook` extern emits but only a DBA can run. The
+verifying-replica option (Tier-C `dregg_attest_range` on the tail) composes on
+top once the §10.2.1 circuit-link lands.

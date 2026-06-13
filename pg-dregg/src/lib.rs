@@ -23,6 +23,7 @@
 //! is conventional extension code, tested directly in [`core`]. We do not claim
 //! the postgres layer is formally verified; we name the seam.
 
+pub mod attest;
 pub mod authz;
 pub mod jsonpath;
 pub mod mirror;
@@ -54,6 +55,15 @@ mod pg {
     static ISSUER_PUBKEY: GucSetting<Option<std::ffi::CString>> =
         GucSetting::<Option<std::ffi::CString>>::new(None);
 
+    // The PRIVATE key for minting is a SUPERUSER-ONLY GUC: it never appears in
+    // SHOW ALL and cannot be read by non-superuser roles.  `dregg_mint` is
+    // SECURITY DEFINER and checked via the DBA's GRANT.  The production
+    // recommendation (docs/PG-DREGG.md §2.1) is to never place the private key
+    // in postgres at all — mint tokens out-of-database and use this helper only
+    // for convenience in dev / single-tenant deployments.
+    static ISSUER_PRIVKEY: GucSetting<Option<std::ffi::CString>> =
+        GucSetting::<Option<std::ffi::CString>>::new(None);
+
     #[pg_guard]
     pub extern "C-unwind" fn _PG_init() {
         GucRegistry::define_string_guc(
@@ -65,11 +75,22 @@ mod pg {
             GucContext::Sighup,
             GucFlags::empty(),
         );
+        GucRegistry::define_string_guc(
+            c"dregg.issuer_privkey",
+            c"The dregg issuer PRIVATE key seed (64 hex chars). SUPERUSER ONLY.",
+            c"Used only by dregg_mint (SECURITY DEFINER). The recommendation is to never \
+              place the private key in postgres — mint tokens out-of-database and use \
+              dregg.issuer_privkey only for dev/single-tenant deployments. A malformed or \
+              absent key makes dregg_mint return an error (fail-closed).",
+            &ISSUER_PRIVKEY,
+            GucContext::Suset,   // superuser-set only
+            GucFlags::NO_SHOW_ALL,
+        );
     }
 
-    /// Pull the issuer key from the GUC into the process-local core slot. Called
-    /// at the head of every decision so a SIGHUP-changed key takes effect. Cheap
-    /// (a hex parse); on a malformed/absent key it clears the slot ⇒ deny.
+    /// Pull the issuer PUBLIC key from the GUC into the process-local core slot.
+    /// Called at the head of every decision so a SIGHUP-changed key takes effect.
+    /// Cheap (a hex parse); on a malformed/absent key it clears the slot ⇒ deny.
     fn sync_issuer_key() {
         match ISSUER_PUBKEY.get() {
             Some(cstring) => {
@@ -79,6 +100,21 @@ mod pg {
             None => {
                 // No key configured ⇒ ensure the slot reflects "deny".
                 authz::clear_issuer_pubkey();
+            }
+        }
+    }
+
+    /// Pull the issuer PRIVATE key from the SUPERUSER-ONLY GUC. Called at the
+    /// head of `dregg_mint` only (not on every decision — the private key is not
+    /// needed for verification). A SIGHUP rotation takes effect on the next mint.
+    fn sync_mint_key() {
+        match ISSUER_PRIVKEY.get() {
+            Some(cstring) => {
+                let hex = cstring.to_str().unwrap_or("");
+                authz::set_mint_key_hex(hex);
+            }
+            None => {
+                authz::clear_mint_key();
             }
         }
     }
@@ -242,6 +278,258 @@ mod pg {
             .to_string()
     }
 
+    /// `dregg_install_federation() -> text`. Install the FEDERATION publication
+    /// (`docs/PG-DREGG.md` §15): a `CREATE PUBLICATION dregg_mirror` over the four
+    /// state tables + `turns`, so a subscriber postgres tails this node's
+    /// verified-turn stream by PostgreSQL's own logical replication
+    /// (federation-via-pg). Run on the PUBLISHER. The subscriber side is a
+    /// `pg_createsubscriber` runbook (`dregg_federation_subscriber_runbook`), not
+    /// extension SQL. Idempotent. Requires [`dregg_install_schema`] first (the
+    /// tables must exist to publish). The replicated chain is re-validated on the
+    /// subscriber by `dregg_revalidate_replicated_chain` — a subscriber
+    /// re-validates, it does not trust the stream.
+    #[pg_extern]
+    fn dregg_install_federation() -> String {
+        let ddl = crate::mirror::ddl::federation_publication();
+        Spi::run(&ddl).expect("dregg_install_federation: publication DDL failed");
+        "dregg federation publication installed: CREATE PUBLICATION dregg_mirror over \
+         dregg.turns/cells/capabilities/memory (a subscriber tails this verified-turn \
+         stream; it re-validates the chain via dregg_revalidate_replicated_chain — \
+         re-validate, do not trust)"
+            .to_string()
+    }
+
+    /// `dregg_federation_subscriber_runbook(publisher_conninfo text) -> text`. The
+    /// SUBSCRIBER-side runbook (`docs/PG-DREGG.md` §15): the `pg_createsubscriber`
+    /// bootstrap + the `CREATE SUBSCRIPTION … WITH (failover = true)` that tails the
+    /// publisher and survives its failover, with the publisher conninfo substituted.
+    /// Returns the runbook as text (it is an operational procedure, not in-database
+    /// SQL the extension runs). The subscriber then re-validates the replicated chain
+    /// locally via `dregg_revalidate_replicated_chain`.
+    #[pg_extern]
+    fn dregg_federation_subscriber_runbook(publisher_conninfo: &str) -> String {
+        crate::mirror::ddl::federation_subscriber(publisher_conninfo)
+    }
+
+    /// `dregg_revalidate_replicated_chain() -> text`. The SUBSCRIBER-side
+    /// re-validation sweep (`docs/PG-DREGG.md` §15): read the replicated
+    /// `dregg.turns` as `(ordinal, prev_root, ledger_root)` ordered by ordinal and
+    /// walk them through the SAME anti-substitution tooth the publisher ran
+    /// (`crate::mirror::revalidate_replicated_chain`). Returns `'ok: N turns,
+    /// head=…'` if the whole replicated chain re-validates, or `'REFUSED: …'`
+    /// naming the first link that does not chain — a tampered / reordered /
+    /// substituted / gapped replication stream is caught HERE, locally, with no
+    /// call back to the publisher. This is what makes a replicated mirror a
+    /// re-validating replica, not a trusted copy: the chain tooth survives
+    /// replication because it is structural on the replicated rows.
+    ///
+    /// Run as a role that can read `dregg.turns` (the kernel/operator). It does NOT
+    /// mutate; it is a read-only attestation of the replicated stream's integrity.
+    #[pg_extern]
+    fn dregg_revalidate_replicated_chain() -> String {
+        use crate::mirror::ChainLink;
+        // Read the replicated chain links, ordered by ordinal.
+        let mut links: Vec<ChainLink> = Vec::new();
+        let _ = Spi::connect(|client| {
+            let rows = client.select(
+                "SELECT ordinal, encode(prev_root,'hex'), encode(ledger_root,'hex') \
+                 FROM dregg.turns ORDER BY ordinal",
+                None,
+                &[],
+            )?;
+            for row in rows {
+                let ordinal: i64 = row.get::<i64>(1)?.unwrap_or(-1);
+                let prev_hex: String = row.get::<String>(2)?.unwrap_or_default();
+                let post_hex: String = row.get::<String>(3)?.unwrap_or_default();
+                if ordinal < 0 {
+                    continue;
+                }
+                let (Some(prev), Some(post)) =
+                    (decode_root_hex(&prev_hex), decode_root_hex(&post_hex))
+                else {
+                    // A malformed root in the stream ⇒ record an impossible link so
+                    // the sweep refuses (fail-closed). Use a sentinel that breaks
+                    // the chain.
+                    links.push(ChainLink {
+                        ordinal: ordinal as u64,
+                        prev_root: [0xFF; 32],
+                        ledger_root: [0x00; 32],
+                    });
+                    continue;
+                };
+                links.push(ChainLink {
+                    ordinal: ordinal as u64,
+                    prev_root: prev,
+                    ledger_root: post,
+                });
+            }
+            Ok::<(), pgrx::spi::Error>(())
+        });
+
+        // Pin genesis from the first link's prev_root (a subscriber bootstrapped
+        // from a consistent base inherits the publisher's genesis; the all-zero
+        // default matches a fresh chain). The count is what we actually have, so we
+        // do not impose an external expectation here — the per-link chaining is the
+        // tooth; a truncation check needs a published height the subscriber trusts
+        // separately, which a deployment supplies out of band.
+        let genesis = links.first().map(|l| l.prev_root).unwrap_or([0u8; 32]);
+        match crate::mirror::revalidate_replicated_chain(genesis, &links, None) {
+            Ok(head) => format!(
+                "ok: {} turns re-validated, head={}",
+                links.len(),
+                head.map(|h| h.iter().map(|b| format!("{b:02x}")).collect::<String>())
+                    .unwrap_or_else(|| "<empty>".to_string())
+            ),
+            Err(e) => format!("REFUSED: {e}"),
+        }
+    }
+
+    /// `dregg_attest_range(proof bytea, vk_anchor bytea, lo bigint, hi bigint)
+    /// RETURNS SETOF (ordinal bigint, prev_root bytea, ledger_root bytea,
+    /// proof_attested bool)`. The Tier-C PROOF gate (`docs/PG-DREGG.md` §10.2) — the
+    /// whole-chain IVC RANGE attestation, as a set-returning function.
+    ///
+    /// This is the orthogonal soundness half `dregg_verify_turn` honestly does NOT
+    /// do per-row: a `CommitRecord` carries no per-turn STARK, so per-row proof is
+    /// impossible AND the wrong cost model. Instead, ONE succinct recursive proof
+    /// (`circuit::ivc_turn_chain::verify_turn_chain_recursive`) attests that ALL
+    /// turns in a receipt RANGE executed correctly and the root chain advanced — the
+    /// verifier cost is independent of the range size. This SRF takes the serialized
+    /// proof + the published VK anchor + the claimed window `[lo, hi]`, and — if the
+    /// proof verifies against the anchor and does not over-claim — returns one row
+    /// per ordinal in the attested window (read from `dregg.turns`), each tagged
+    /// `proof_attested = true`. A consumer JOINs these against `dregg.turns` to mark
+    /// the proof-attested prefix:
+    ///
+    /// ```sql
+    /// SELECT t.ordinal, a.proof_attested
+    /// FROM dregg.turns t
+    /// LEFT JOIN dregg_attest_range(:proof, :vk, 0, 100) a USING (ordinal);
+    /// ```
+    ///
+    /// **The circuit-link settle item (named, §10.2):** the IVC verifier takes an
+    /// in-memory `WholeChainProof` (plonky3 proof objects), which is not yet
+    /// serde-serializable, so the proof-bytes leg (`crate::attest::verify_serialized_proof`)
+    /// is STUBBED behind the `tier-c` feature. With `tier-c` OFF (the default,
+    /// circuit-free build), the SRF FAILS CLOSED — it attests NOTHING (returns zero
+    /// rows), which is the only safe default (§10.3: a labeled proof gate that does
+    /// not verify must say "unattested", never "attested"). Wiring it is settle
+    /// items S1–S3 in `crate::attest`: serialize `WholeChainProof` (S1), the
+    /// node-side proof producer + a `dregg.turn_proofs` table (S2), and the
+    /// `tier-c` dep on the Lean-free circuit verifier (S3, §8.1-authorized).
+    ///
+    /// `dregg_attest_explain(proof, vk_anchor, lo, hi) -> text` returns the verdict
+    /// reason (for debugging which requirement failed) without the row expansion.
+    #[pg_extern]
+    fn dregg_attest_range(
+        proof: &[u8],
+        vk_anchor: &[u8],
+        lo: i64,
+        hi: i64,
+    ) -> TableIterator<
+        'static,
+        (
+            name!(ordinal, i64),
+            name!(prev_root, Vec<u8>),
+            name!(ledger_root, Vec<u8>),
+            name!(proof_attested, bool),
+        ),
+    > {
+        let rows = attest_range_rows(proof, vk_anchor, lo, hi);
+        TableIterator::new(rows.into_iter())
+    }
+
+    /// `dregg_attest_explain(...) -> text`. The verdict reason for a range
+    /// attestation (the explain face of [`dregg_attest_range`]): `'attested: …'` or
+    /// `'<refusal reason>'` (including, in the default build, the named circuit-link
+    /// settle item). For debugging the proof gate.
+    #[pg_extern]
+    fn dregg_attest_explain(proof: &[u8], vk_anchor: &[u8], lo: i64, hi: i64) -> String {
+        let Some(anchor) = slice_to_root(vk_anchor) else {
+            return "REFUSED: vk_anchor must be exactly 32 bytes".to_string();
+        };
+        if lo < 0 || hi < 0 {
+            return "REFUSED: lo/hi must be non-negative ordinals".to_string();
+        }
+        let req = crate::attest::AttestRequest {
+            proof_bytes: proof,
+            vk_anchor: anchor,
+            lo: lo as u64,
+            hi: hi as u64,
+        };
+        crate::attest::attest_range(&req).reason()
+    }
+
+    /// Shared logic for [`dregg_attest_range`]: verify the proof for `[lo, hi]`,
+    /// and on success read the attested window's recorded turns from `dregg.turns`
+    /// and tag them. Fail-closed: any refusal (bad anchor, unverified proof,
+    /// over-claim, malformed args, or the unwired circuit-link stub) yields ZERO
+    /// rows. Separated out so it is plain logic over SPI + the `crate::attest` core.
+    fn attest_range_rows(
+        proof: &[u8],
+        vk_anchor: &[u8],
+        lo: i64,
+        hi: i64,
+    ) -> Vec<(i64, Vec<u8>, Vec<u8>, bool)> {
+        let Some(anchor) = slice_to_root(vk_anchor) else {
+            return Vec::new(); // anchor must be 32 bytes ⇒ fail closed
+        };
+        if lo < 0 || hi < 0 {
+            return Vec::new();
+        }
+        let req = crate::attest::AttestRequest {
+            proof_bytes: proof,
+            vk_anchor: anchor,
+            lo: lo as u64,
+            hi: hi as u64,
+        };
+        let verdict = crate::attest::attest_range(&req);
+        if !verdict.attested() {
+            return Vec::new(); // fail closed — attest nothing on a refusal
+        }
+        // Read the attested window's recorded turns to expand the verdict into
+        // rows (the proof attests the WINDOW; the roots are the recorded ones,
+        // re-tagged proof_attested=true).
+        let mut recorded: Vec<crate::attest::AttestedTurn> = Vec::new();
+        let _ = Spi::connect(|client| {
+            let rows = client.select(
+                "SELECT ordinal, encode(prev_root,'hex'), encode(ledger_root,'hex') \
+                 FROM dregg.turns WHERE ordinal BETWEEN $1 AND $2 ORDER BY ordinal",
+                None,
+                &[lo.into(), hi.into()],
+            )?;
+            for row in rows {
+                let ordinal: i64 = row.get::<i64>(1)?.unwrap_or(-1);
+                let prev_hex: String = row.get::<String>(2)?.unwrap_or_default();
+                let post_hex: String = row.get::<String>(3)?.unwrap_or_default();
+                if let (true, Some(prev), Some(post)) = (
+                    ordinal >= 0,
+                    decode_root_hex(&prev_hex),
+                    decode_root_hex(&post_hex),
+                ) {
+                    recorded.push(crate::attest::AttestedTurn {
+                        ordinal: ordinal as u64,
+                        prev_root: prev,
+                        ledger_root: post,
+                        proof_attested: false,
+                    });
+                }
+            }
+            Ok::<(), pgrx::spi::Error>(())
+        });
+        crate::attest::attested_rows(&verdict, &recorded)
+            .into_iter()
+            .map(|t| {
+                (
+                    t.ordinal as i64,
+                    t.prev_root.to_vec(),
+                    t.ledger_root.to_vec(),
+                    t.proof_attested,
+                )
+            })
+            .collect()
+    }
+
     /// `dregg_bind_role(pg_role text, agent bytea, token text) -> bool`. Bind a
     /// connecting pg role to its dregg agent identity (`docs/PG-DREGG-PG18.md` §6):
     /// upsert the `dregg.role_identity` row the `ON login` trigger installs, so the
@@ -379,6 +667,97 @@ mod pg {
             .unwrap_or(0);
         sync_issuer_key();
         authz::decide(&token, action, resource, now).allowed()
+    }
+
+    // -----------------------------------------------------------------------
+    // Mint and attenuate helpers (docs/PG-DREGG.md §2.1).
+    //
+    // `dregg_mint` is SECURITY DEFINER and role-gated (the issuing role). The
+    // private key is read from the SUPERUSER-ONLY `dregg.issuer_privkey` GUC;
+    // it never appears in SHOW ALL. The production recommendation is to mint
+    // out-of-database; these helpers are a dev/convenience surface.
+    //
+    // `dregg_attenuate` is IMMUTABLE + PARALLEL SAFE: it requires no issuer
+    // private key (attenuation is the TOKEN HOLDER's right), is a pure function
+    // of its inputs, and can only narrow — the `attenuate_subset` proof is the
+    // no-amplify guarantee (docs/PG-DREGG.md §2.1, §4).
+    // -----------------------------------------------------------------------
+
+    /// `dregg_mint(subject, caveats, until) -> text`. Issue a fresh credential:
+    /// `subject` is the bound identity (an `AttrEq{key:"subject"}` in block 0),
+    /// `caveats` is a JSON ARRAY of `Pred` objects (the serde encoding of
+    /// `dregg_auth::credential::Pred` — see docs/PG-DREGG.md §2.1 for the DSL),
+    /// `until` is the unix-second `NotAfter` bound. Returns the encoded `dga1_…`
+    /// string. Fails with an ERROR if `dregg.issuer_privkey` is not configured or
+    /// the `caveats` JSON is malformed (fail-closed). SECURITY DEFINER so the
+    /// private key GUC is readable; the DBA grants EXECUTE to the issuing role.
+    #[pg_extern(security_definer)]
+    fn dregg_mint(subject: &str, caveats: pgrx::JsonB, until: i64) -> String {
+        sync_mint_key();
+        let json = serde_json::to_string(&caveats.0)
+            .unwrap_or_else(|_| "[]".to_string());
+        authz::mint_token(subject, &json, until)
+            .unwrap_or_else(|e| pgrx::error!("dregg_mint: {e}"))
+    }
+
+    /// `dregg_attenuate(token, caveats) -> text`. Narrow an existing credential
+    /// by appending additional first-party caveats. The admitted set of the
+    /// returned token is a STRICT SUBSET of the input token's (the
+    /// `attenuate_subset` guarantee). `caveats` is a JSON array of `Pred` objects
+    /// (same DSL as `dregg_mint`). Returns the encoded attenuated token. Fails
+    /// with an ERROR if the token does not decode or the caveats are malformed.
+    /// IMMUTABLE + PARALLEL SAFE: no issuer key needed; the holder may attenuate.
+    #[pg_extern(immutable, parallel_safe, strict)]
+    fn dregg_attenuate(token: &str, caveats: pgrx::JsonB) -> String {
+        let json = serde_json::to_string(&caveats.0)
+            .unwrap_or_else(|_| "[]".to_string());
+        authz::attenuate_token(token, &json)
+            .unwrap_or_else(|e| pgrx::error!("dregg_attenuate: {e}"))
+    }
+
+    // -----------------------------------------------------------------------
+    // Opt-in revocation check (docs/PG-DREGG.md §3.4, tier 2).
+    //
+    // The default revocation is bounded-staleness via TTL (short `NotAfter`).
+    // `dregg_cap_not_revoked` is the opt-in synchronous tier: a policy adds
+    // `AND dregg_cap_not_revoked(current_setting('dregg.token',true))` to get
+    // instant-revocation semantics backed by the backend-local revocation set
+    // (populated by `dregg_revoke`). In a clustered deployment the policy would
+    // also join against a `dregg.revoked` table; the backend set is what the
+    // `cargo test` / pgrx test suite proves the semantics of.
+    //
+    // The function's volatility is STABLE (not IMMUTABLE): the revocation set
+    // can change between statements (a `dregg_revoke` call in a prior statement),
+    // so the planner must not fold it across rows. Within a single statement's
+    // snapshot the verdict is constant for a given token.
+    // -----------------------------------------------------------------------
+
+    /// `dregg_cap_not_revoked(token) -> bool`. TRUE iff the credential has NOT
+    /// been revoked in the backend-local revocation registry (populated by
+    /// `dregg_revoke`). NULL token ⇒ FALSE (fail-closed via STRICT). Use as
+    /// `AND dregg_cap_not_revoked(current_setting('dregg.token',true))` to add
+    /// instant-revocation semantics to a policy (docs/PG-DREGG.md §3.4 tier 2).
+    /// STABLE (the revocation set can change between statements).
+    #[pg_extern(stable, parallel_safe, strict)]
+    fn dregg_cap_not_revoked(token: &str) -> bool {
+        // cap_id decodes only (no issuer-key check needed for the revocation
+        // lookup — the stable id is a commitment to the chain itself, forging
+        // a chain that collides with a real id would require a BLAKE3 preimage).
+        match authz::cap_id(token) {
+            Some(id) => !authz::is_revoked_pub(&id),
+            None => false, // non-decodable token ⇒ fail closed
+        }
+    }
+
+    /// `dregg_cap_nonce(token) -> text`. The credential's stable per-issuance
+    /// nonce (hex of the root block's random nonce), or NULL if the token does
+    /// not decode. Useful for populating a `dregg.revoked(nonce)` table that
+    /// covers ALL attenuated children minted from the same root credential (the
+    /// root nonce survives attenuation; see docs/PG-DREGG.md §3.4). IMMUTABLE:
+    /// a pure function of the token string.
+    #[pg_extern(immutable, parallel_safe)]
+    fn dregg_cap_nonce(token: Option<&str>) -> Option<String> {
+        authz::cap_nonce(token?)
     }
 
     // -----------------------------------------------------------------------
@@ -1861,6 +2240,122 @@ mod pg {
             .unwrap();
             assert_eq!(bad_ratio, 0, "cache_hit_ratio is a fraction in [0,1]");
             Spi::run("RESET ROLE").unwrap();
+        }
+
+        // ===================================================================
+        // The §15 FEDERATION re-validation through real SQL: the publication
+        // installs, and the subscriber-side sweep (dregg_revalidate_replicated_chain)
+        // re-validates the store's turns chain and REFUSES a tampered one — a
+        // subscriber re-validates, it does not trust the stream.
+        // ===================================================================
+
+        #[pg_test]
+        fn federation_publishes_and_revalidates_the_replicated_chain() {
+            let root = root();
+            assert_issuer(&root);
+            // Land the well-formed story through the Tier-C gate (so dregg.turns is
+            // a real, gate-built hash chain — exactly what would be replicated).
+            install_tier_c_and_submit_story();
+
+            // The publisher installs the publication over the state tables.
+            let fed: String = Spi::get_one("SELECT dregg_install_federation()").unwrap().unwrap();
+            assert!(fed.contains("federation publication installed"));
+            let pubs: i64 = Spi::get_one(
+                "SELECT count(*) FROM pg_publication WHERE pubname = 'dregg_mirror'",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(pubs, 1, "CREATE PUBLICATION dregg_mirror landed");
+
+            // The subscriber-side sweep re-validates the (here, local) turns chain:
+            // it walks dregg.turns through the SAME anti-substitution tooth and
+            // reports ok with the head — a subscriber re-validates locally.
+            Spi::run("SET ROLE dregg_kernel").unwrap();
+            let verdict: String =
+                Spi::get_one("SELECT dregg_revalidate_replicated_chain()").unwrap().unwrap();
+            assert!(
+                verdict.starts_with("ok:") && verdict.contains("4 turns"),
+                "the faithfully-replicated chain re-validates: {verdict}"
+            );
+
+            // Now simulate a tampered replication stream: substitute ord-2's
+            // prev_root so it no longer chains. The sweep REFUSES it locally — the
+            // tooth survives replication, caught on the subscriber side.
+            Spi::run(
+                "UPDATE dregg.turns SET prev_root = '\\x9999999999999999999999999999999999999999999999999999999999999999' \
+                 WHERE ordinal = 2",
+            )
+            .unwrap();
+            let refused: String =
+                Spi::get_one("SELECT dregg_revalidate_replicated_chain()").unwrap().unwrap();
+            assert!(
+                refused.starts_with("REFUSED:"),
+                "a tampered replicated chain must be refused by the subscriber sweep: {refused}"
+            );
+            Spi::run("RESET ROLE").unwrap();
+
+            // The subscriber runbook substitutes the publisher conninfo + names the
+            // re-validation sweep (it is an operational procedure, returned as text).
+            let runbook: String = Spi::get_one(
+                "SELECT dregg_federation_subscriber_runbook('host=pub dbname=dregg')",
+            )
+            .unwrap()
+            .unwrap();
+            assert!(runbook.contains("pg_createsubscriber"));
+            assert!(runbook.contains("host=pub dbname=dregg"));
+            assert!(runbook.contains("dregg_revalidate_replicated_chain"));
+        }
+
+        // ===================================================================
+        // The §10.2.1 Tier-C RANGE-ATTEST SRF through real SQL: with the
+        // circuit-link UNWIRED (the default, circuit-free build), the proof gate
+        // FAILS CLOSED — it attests NOTHING (zero rows) and the explain names the
+        // settle item. This is the §10.3 safe direction: a labeled proof gate that
+        // does not verify must say "unattested", never "attested".
+        // ===================================================================
+
+        #[pg_test]
+        fn tier_c_range_attest_srf_fails_closed_until_wired() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_c_and_submit_story(); // dregg.turns has 4 turns
+
+            let vk = "0000000000000000000000000000000000000000000000000000000000000000";
+            // A non-empty (but unverifiable, since the link is stubbed) proof + a
+            // claimed window [0,3]. The SRF must return ZERO rows (fail-closed).
+            let attested: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg_attest_range('\\xdeadbeef'::bytea, '\\x{vk}'::bytea, 0, 3)"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(attested, 0, "the unwired proof gate attests NOTHING (fail-closed)");
+
+            // The explain names the circuit-link settle item (not a silent deny).
+            let why: String = Spi::get_one(&format!(
+                "SELECT dregg_attest_explain('\\xdeadbeef'::bytea, '\\x{vk}'::bytea, 0, 3)"
+            ))
+            .unwrap()
+            .unwrap();
+            assert!(
+                why.contains("not yet wired") || why.contains("settle item"),
+                "the refusal names the circuit-link settle item: {why}"
+            );
+
+            // A bad VK anchor (wrong length) is refused, not panicked.
+            let bad_vk: String = Spi::get_one(
+                "SELECT dregg_attest_explain('\\xde'::bytea, '\\x00'::bytea, 0, 1)",
+            )
+            .unwrap()
+            .unwrap();
+            assert!(bad_vk.contains("32 bytes"), "a malformed VK anchor fails closed: {bad_vk}");
+
+            // An inverted/empty window is refused too (zero rows).
+            let inverted: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg_attest_range('\\xde'::bytea, '\\x{vk}'::bytea, 5, 4)"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(inverted, 0, "an inverted window attests nothing");
         }
     }
 }
