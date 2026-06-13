@@ -68,8 +68,9 @@ open Dregg2.Exec.CapTPConcrete (AuthReq authNarrowerOrEqual handoffNonAmplifying
   facetAttenuation handoff_concrete_attenuation)
 open Dregg2.Crypto.PortalFloor (SignatureKernel)
 open Dregg2.Circuit.Spec.AuthorityUnattenuated
-  (DelegateSpec delegateGuard recDelegateCaps execFullA_validateHandoff_iff_spec
-   delegate_grants_recipient delegate_rejects_unconnected recDelegateCaps_correct)
+  (DelegateSpec delegateGuard recDelegateCaps execFullA_introduceA_iff_spec
+   execFullA_introduceA_eq delegate_grants_recipient delegate_rejects_unconnected
+   recDelegateCaps_correct)
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Authority (Caps Cap)
@@ -244,7 +245,13 @@ commits the unique post-state, the recipient's slot gains EXACTLY A's held `t`-c
 and the granted permission is non-amplifying. -/
 
 /-- The cap A actually holds and hands off: `heldCapTo`, the first `t`-conferring cap in A's
-slot — the executable `lookup_by_target`. This is what `validateHandoffA` installs into B. -/
+slot — the executable `lookup_by_target`. This is what the handoff (`introduceA`) installs into B.
+
+NOTE (F3): the dedicated `validateHandoffA` effect dissolved into the caps-in-slots family
+(`REDUCTION F3`, `Circuit/Spec/authorityunattenuated.lean:20`); the handoff IS the Granovetter
+`introduceA` skeleton (the unattenuated held-cap copy). §4 below is wired to `introduceA` /
+`recCDelegate_iff_spec` accordingly — the certificate's §1/§6 crypto+lattice content is unchanged;
+only the executor arm it drives was renamed by the reduction. -/
 def HandoffCert2.installedCap (s : RecChainedState) (c : HandoffCert2) : Cap :=
   heldCapTo s.kernel.caps c.introducer c.targetCell
 
@@ -264,26 +271,23 @@ theorem handoff_installs_exactly
     (hvalid : validateHandoff2 K c env = true)
     (s : RecChainedState)
     (hconn : delegateGuard s c.introducer c.targetCell) :
-    ∃ s', execFullA s (.validateHandoffA c.introducer c.recipient c.targetCell) = some s'
+    ∃ s', execFullA s (.introduceA c.introducer c.recipient c.targetCell) = some s'
         ∧ DelegateSpec s c.introducer c.recipient c.targetCell s'
         ∧ c.installedCap s ∈ s'.kernel.caps c.recipient
         ∧ c.grantedPerm ≤ c.heldPerm := by
-  -- Build the spec'd post-state directly from the connectivity premise.
-  refine ⟨{ kernel := { s.kernel with
-              caps := recDelegateCaps s.kernel.caps c.introducer c.recipient c.targetCell }
-          , log := authReceipt c.introducer :: s.log }, ?_, ?_, ?_, ?_⟩
+  -- The executor commits SOME post-state iff the spec holds; the spec is satisfiable from the
+  -- connectivity premise. We get the spec'd state from the ← direction of the verified iff.
+  obtain ⟨s', hspec⟩ : ∃ s', DelegateSpec s c.introducer c.recipient c.targetCell s' := by
+    refine ⟨{ kernel := { s.kernel with
+                caps := recDelegateCaps s.kernel.caps c.introducer c.recipient c.targetCell }
+            , log := authReceipt c.introducer :: s.log }, ?_⟩
+    exact ⟨hconn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+      rfl⟩
+  refine ⟨s', ?_, hspec, ?_, ?_⟩
   · -- the executor commits exactly this state, via the verified iff.
-    rw [execFullA_validateHandoff_iff_spec]
-    exact ⟨hconn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-      rfl⟩
-  · -- the full-state spec holds (same witness).
-    exact ⟨hconn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-      rfl⟩
-  · -- B's slot gains exactly A's held cap.
-    show heldCapTo s.kernel.caps c.introducer c.targetCell
-        ∈ (recDelegateCaps s.kernel.caps c.introducer c.recipient c.targetCell) c.recipient
-    rw [(recDelegateCaps_correct s.kernel.caps c.introducer c.recipient c.targetCell).1]
-    exact List.mem_cons_self
+    rw [execFullA_introduceA_iff_spec]; exact hspec
+  · -- B's slot gains exactly A's held cap (from the spec's caps clause + the declarative helper).
+    exact delegate_grants_recipient s c.introducer c.recipient c.targetCell s' hspec
   · -- non-amplification at the concrete lattice.
     exact validateHandoff2_attenuates hvalid
 
@@ -294,8 +298,8 @@ non-amplifying certificate cannot drive the executor to commit: `validateHandoff
 signature attests intent, but connectivity must already exist. -/
 theorem handoff_rejects_unconnected (s : RecChainedState) (c : HandoffCert2)
     (hbad : (s.kernel.caps c.introducer).any (fun cap => confersEdgeTo c.targetCell cap) = false) :
-    execFullA s (.validateHandoffA c.introducer c.recipient c.targetCell) = none := by
-  show recCDelegate s c.introducer c.recipient c.targetCell = none
+    execFullA s (.introduceA c.introducer c.recipient c.targetCell) = none := by
+  rw [execFullA_introduceA_eq]
   exact delegate_rejects_unconnected s c.introducer c.recipient c.targetCell hbad
 
 /-! ## §5 — THEOREM (2): unforgeability at n>1.
@@ -429,7 +433,7 @@ def goodEnv : HandoffEnv :=
 
 /-- The genuine certificate VALIDATES on the reference kernel — `Attested` is non-vacuously
 TRUE, and all 6 checks pass. -/
-example : validateHandoff2 instSignatureKernel goodCert goodEnv = true := by native_decide
+example : validateHandoff2 instSignatureKernel goodCert goodEnv = true := by decide
 
 /-- The reference EUF-CMA carrier HOLDS for `instSignatureKernel` (the proved unforgeability),
 so the theorems are dischargeable on a real carrier, not just hypothetically. -/
@@ -465,7 +469,7 @@ theorem forged_handoff_rejected :
 
 /-- The genuine certificate VALIDATES (Attested TRUE) and the forged one does NOT — both witnessed
 directly. Non-vacuity on both polarities. -/
-example : validateHandoff2 instSignatureKernel goodCert goodEnv = true := by native_decide
+example : validateHandoff2 instSignatureKernel goodCert goodEnv = true := by decide
 example : validateHandoff2 instSignatureKernel forgedCert goodEnv = false := forged_handoff_rejected
 
 /-- A federation of TWO distinct vats with an injective key map (n = 2 > 1). -/
@@ -587,21 +591,21 @@ section ReplayNonVacuity
 open Dregg2.Crypto.PortalFloor.Reference (instSignatureKernel)
 
 /-- First presentation of `goodCert` against an EMPTY seen-set validates (replay-aware). -/
-example : validateHandoff2R instSignatureKernel goodCert goodEnv [] = true := by native_decide
+example : validateHandoff2R instSignatureKernel goodCert goodEnv [] = true := by decide
 
 /-- The IMMEDIATE replay (after consuming `goodCert`'s nonce) is REJECTED — the tooth fires. -/
 example :
     validateHandoff2R instSignatureKernel goodCert goodEnv (consumeNonce [] goodCert) = false := by
-  native_decide
+  decide
 
 end ReplayNonVacuity
 
 /-! ## §7 — Axiom-hygiene tripwires.
 
 Every PROVED theorem depends ONLY on the three standard kernel axioms (whitelist
-`{propext, Classical.choice, Quot.sound}`); no `sorryAx`. (The `#guard`/`example` non-vacuity
-checks use `native_decide` LOCALLY — they are demonstrations, not load-bearing theorems, and are
-NOT in the asserted set; the soundness theorems below are all `decide`/term-mode clean.) -/
+`{propext, Classical.choice, Quot.sound}`); no `sorryAx`. The `#guard`/`example` non-vacuity
+checks are `decide`/term-mode clean (the kernel-trusted decision procedure, NOT `native_decide`);
+they are demonstrations, not load-bearing theorems, and are NOT in the asserted set. -/
 
 #assert_axioms validateHandoff2_attested
 #assert_axioms validateHandoff2_nonAmplifying

@@ -271,6 +271,66 @@ def Dag.noDup (d : Dag) : Prop :=
   ∀ i j (hi : i < d.turns.length) (hj : j < d.turns.length),
     (d.turns.get ⟨i, hi⟩).hash = (d.turns.get ⟨j, hj⟩).hash → i = j
 
+/-- The empty DAG (`CausalDag::new`) is dup-free (vacuously). -/
+theorem noDup_empty : (Dag.noDup ⟨[]⟩) := by
+  intro i j hi _ _; simp at hi
+
+/-- **`insert_noDup` — `insert` PRESERVES dup-freeness (the carried hyp is dischargeable).** A turn
+admitted by `insert` is NOT already present (the `Duplicate` reject, `causal.rs:95`), so appending it
+keeps every hash unique. Hence ANY DAG reachable from the empty DAG via `insert` is `noDup` — the
+`hnd : d.noDup` hypothesis the partial-order theorems carry is NOT a free assumption but an invariant
+the real construction maintains (alongside `insert_wf`). It is a structural PARAMETER only because the
+theorems are stated over an arbitrary `Dag`; on every constructed DAG it holds by this lemma. -/
+theorem insert_noDup (d : Dag) (h : Hash) (deps : List Hash)
+    (hnd : d.noDup) {d' : Dag} (hins : d.insert h deps = some d') : d'.noDup := by
+  -- recover d'.turns = d.turns ++ [⟨h, deps⟩] and the not-present gate.
+  unfold Dag.insert at hins
+  by_cases hp : d.present h
+  · rw [if_pos hp] at hins; exact absurd hins (by simp)
+  rw [if_neg hp] at hins
+  by_cases hself : h ∈ deps
+  · rw [if_pos hself] at hins; exact absurd hins (by simp)
+  rw [if_neg hself] at hins
+  by_cases hall : deps.all (fun dp => d.containsHash dp) = true
+  · rw [if_pos hall] at hins
+    simp only [Option.some.injEq] at hins
+    subst hins
+    -- `h` is not present in `d`: no earlier entry has hash `h`.
+    have hnoth : ∀ k (hk : k < d.turns.length), (d.turns.get ⟨k, hk⟩).hash ≠ h := by
+      intro k hk hkh
+      exact hp ⟨d.turns.get ⟨k, hk⟩, List.get_mem .., hkh⟩
+    have hlen : (d.turns ++ [(⟨h, deps⟩ : Entry)]).length = d.turns.length + 1 := by simp
+    intro i j hi hj hij
+    -- the appended last entry sits at index d.turns.length with hash h.
+    have hlasthash : ∀ k (hk : k < (d.turns ++ [(⟨h, deps⟩ : Entry)]).length),
+        k = d.turns.length → ((d.turns ++ [(⟨h, deps⟩ : Entry)]).get ⟨k, hk⟩).hash = h := by
+      intro k hk hkeq; subst hkeq
+      show (d.turns ++ [(⟨h, deps⟩ : Entry)])[d.turns.length].hash = h
+      rw [List.getElem_append_right (by omega)]; simp
+    -- for an index < d.turns.length, the hash is the original entry's hash (≠ h).
+    have hleft : ∀ k (hk : k < (d.turns ++ [(⟨h, deps⟩ : Entry)]).length) (hk' : k < d.turns.length),
+        ((d.turns ++ [(⟨h, deps⟩ : Entry)]).get ⟨k, hk⟩).hash = (d.turns.get ⟨k, hk'⟩).hash := by
+      intro k hk hk'; rw [get_append_left _ _ k hk']
+    have hi1 : i < d.turns.length + 1 := by rw [← hlen]; exact hi
+    have hj1 : j < d.turns.length + 1 := by rw [← hlen]; exact hj
+    by_cases hi' : i < d.turns.length <;> by_cases hj' : j < d.turns.length
+    · -- both old: use hnd.
+      have := hnd i j hi' hj' (by rw [← hleft i hi hi', ← hleft j hj hj']; exact hij)
+      exact this
+    · -- i old, j = last (hash h). Then i's hash = h, contradicting hnoth.
+      have hjeq : j = d.turns.length := by omega
+      rw [hleft i hi hi', hlasthash j hj hjeq] at hij
+      exact absurd hij (hnoth i hi')
+    · -- i = last (hash h), j old: symmetric contradiction.
+      have hieq : i = d.turns.length := by omega
+      rw [hlasthash i hi hieq, hleft j hj hj'] at hij
+      exact absurd hij.symm (hnoth j hj')
+    · -- both = last index.
+      have hieq : i = d.turns.length := by omega
+      have hjeq : j = d.turns.length := by omega
+      rw [hieq, hjeq]
+  · rw [if_neg hall] at hins; exact absurd hins (by simp)
+
 /-- **`directDep_strict_rank` — every backward edge strictly decreases the canonical index.**
 On a wellformed, dup-free DAG, if `b`'s entry at index `i` has `a` as a dep, there is an index
 `j < i` whose hash is `a`. This is the numeric heart of acyclicity. -/
@@ -492,7 +552,9 @@ def diamond : Option Dag :=
 /-! ## 10. Axiom-hygiene tripwires. -/
 
 #assert_axioms wf_empty
+#assert_axioms noDup_empty
 #assert_axioms insert_wf
+#assert_axioms insert_noDup
 #assert_axioms directDep_strict_rank
 #assert_axioms hb_index_descends
 #assert_axioms hb_irrefl
