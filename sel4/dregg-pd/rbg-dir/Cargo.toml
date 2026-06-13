@@ -1,0 +1,22 @@
+# rbg-dir — M2 of the boot ladder: the Robigalia-personality heart.
+#
+# A no_std seL4 Microkit PD that brings up a real slice of rbg/'s userspace
+# primitives — a `DirectoryCell` (versioned capability-list with CAS swap +
+# membership ACL + provenance) and the `DirectoryFactory → seL4_Untyped_Retype`
+# slot-caveat check from ../RBG-TO-SEL4.md. This is the rbg *design heritage*
+# (rbg/src/{directory,factory}.rs) realized in a form that boots: the std rbg
+# crate itself is std-bound (std::collections, dregg-cell), so this PD ports the
+# IDEAS faithfully onto no_std + alloc rather than linking the std crate.
+
+[package]
+name = "dregg-rbg-dir"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-rbg-dir"
+path = "src/main.rs"
+
+[dependencies]
+sel4-microkit = { workspace = true, features = ["alloc"] }
