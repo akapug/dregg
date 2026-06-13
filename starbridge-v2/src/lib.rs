@@ -5,6 +5,9 @@
 //!   * [`world`] — the embedded verified executor + live local dregg world.
 //!   * [`dynamics`] — the observation/event stream of state transitions.
 //!   * [`reflect`] — the uniform reflective object model the views consume.
+//!   * [`surface`] / [`shell`] — the cap-first multi-SURFACE desktop shell: each
+//!     dregg cell can be a cap-confined surface (apps-as-cells), and the shell is
+//!     a cap-first window manager / compositor over the live world.
 //!
 //! The `native-full` binary (`src/main.rs`) wires these into the gpui cockpit.
 //! The wire-contract client (`client`/`model`) lives in the binary crate for
@@ -25,7 +28,15 @@ pub mod reflect;
 #[cfg(feature = "embedded-executor")]
 pub mod replay;
 #[cfg(feature = "embedded-executor")]
+pub mod shell;
+#[cfg(feature = "embedded-executor")]
+pub mod surface;
+#[cfg(feature = "embedded-executor")]
 pub mod world;
 
+#[cfg(feature = "embedded-executor")]
+pub use shell::{Layout, Scene, SceneItem, Shell, ShellError};
+#[cfg(feature = "embedded-executor")]
+pub use surface::{Rect, Surface, SurfaceCapability, SurfaceId, SurfaceKind};
 #[cfg(feature = "embedded-executor")]
 pub use world::{CommitOutcome, World};

@@ -37,6 +37,19 @@ pub enum CommandId {
     GoReplay,
     GoCipherclerk,
     GoEditor,
+    GoShell,
+
+    // --- the cap-first SHELL / compositor (surfaces over real cells) ---
+    /// Open a cap-confined surface (window) viewing the selected cell.
+    ShellOpenSelected,
+    /// Focus + raise the front-most owned surface (a cap-gated op).
+    ShellFocusFront,
+    /// Close the focused surface (cap-gated; the console is protected).
+    ShellCloseFocused,
+    /// Cycle the compositor layout (float → tile → stack).
+    ShellCycleLayout,
+    /// Minimize the focused surface (cap-gated).
+    ShellMinimizeFocused,
 
     // --- replay / time-travel scrubber ---
     ReplayStepBack,
@@ -70,12 +83,13 @@ impl CommandId {
             Transfer | ComposeMulti | Grant | CreateCell | Seal | Burn | OverGrant => {
                 Category::Verb
             }
-            GoComposer | GoObjects | GoDebugger | GoReplay | GoCipherclerk | GoEditor => {
-                Category::Navigate
-            }
+            GoComposer | GoObjects | GoDebugger | GoReplay | GoCipherclerk | GoEditor
+            | GoShell => Category::Navigate,
             ReplayStepBack | ReplayStepForward | ReplayToGenesis | ReplayToHead
             | ReplayForkHere | ReplayClearFork => Category::Replay,
             ClerkMint | ClerkAttenuate | ClerkDelegate | ClerkDischarge => Category::Clerk,
+            ShellOpenSelected | ShellFocusFront | ShellCloseFocused | ShellCycleLayout
+            | ShellMinimizeFocused => Category::Shell,
             DebugRetargetSelected => Category::Debug,
             SelectImage => Category::Inspect,
             Dismiss => Category::Palette,
@@ -99,6 +113,12 @@ impl CommandId {
             GoReplay => "Go to Replay (time-travel)",
             GoCipherclerk => "Go to Cipherclerk",
             GoEditor => "Go to Editor",
+            GoShell => "Go to Shell (surfaces · windows · compositor)",
+            ShellOpenSelected => "Shell: open the selected cell as a surface",
+            ShellFocusFront => "Shell: focus the front surface (cap-gated)",
+            ShellCloseFocused => "Shell: close the focused surface (cap-gated)",
+            ShellCycleLayout => "Shell: cycle layout (float · tile · stack)",
+            ShellMinimizeFocused => "Shell: minimize the focused surface",
             ReplayStepBack => "Replay: step back one turn",
             ReplayStepForward => "Replay: step forward one turn",
             ReplayToGenesis => "Replay: jump to genesis",
@@ -133,6 +153,12 @@ impl CommandId {
             GoReplay => "history time travel scrub checkpoint",
             GoCipherclerk => "keys macaroon token identity wallet",
             GoEditor => "author validate deploy program factory",
+            GoShell => "surface window compositor desktop apps wm",
+            ShellOpenSelected => "open window surface cell app spawn view",
+            ShellFocusFront => "focus raise front bring forward window",
+            ShellCloseFocused => "close window surface dismiss",
+            ShellCycleLayout => "tile float stack arrange layout compositor",
+            ShellMinimizeFocused => "minimize collapse hide window surface",
             ReplayStepBack => "rewind previous undo back",
             ReplayStepForward => "advance next redo forward",
             ReplayToGenesis => "start beginning empty zero",
@@ -157,6 +183,7 @@ pub enum Category {
     Navigate,
     Replay,
     Clerk,
+    Shell,
     Debug,
     Inspect,
     Palette,
@@ -169,6 +196,7 @@ impl Category {
             Category::Navigate => "go",
             Category::Replay => "replay",
             Category::Clerk => "clerk",
+            Category::Shell => "shell",
             Category::Debug => "debug",
             Category::Inspect => "inspect",
             Category::Palette => "palette",
@@ -201,8 +229,11 @@ pub fn all_commands() -> Vec<Command> {
         Transfer, ComposeMulti, Grant, CreateCell, Seal, Burn, OverGrant,
         // the cipherclerk loop
         ClerkMint, ClerkAttenuate, ClerkDelegate, ClerkDischarge,
+        // the cap-first shell / compositor
+        ShellOpenSelected, ShellFocusFront, ShellCloseFocused, ShellCycleLayout,
+        ShellMinimizeFocused,
         // navigation
-        GoComposer, GoObjects, GoDebugger, GoReplay, GoCipherclerk, GoEditor,
+        GoComposer, GoObjects, GoDebugger, GoReplay, GoCipherclerk, GoEditor, GoShell,
         // replay
         ReplayStepBack, ReplayStepForward, ReplayToGenesis, ReplayToHead,
         ReplayForkHere, ReplayClearFork,
@@ -453,8 +484,35 @@ mod tests {
         }
         // Dismiss is intentionally NOT a row (Esc handles it).
         assert!(!ids.contains(&CommandId::Dismiss));
-        // The registry is non-trivial.
-        assert!(reg.len() >= 24, "registry should cover the whole action surface");
+        // The registry is non-trivial (and now includes the shell surface).
+        assert!(reg.len() >= 30, "registry should cover the whole action surface");
+    }
+
+    #[test]
+    fn the_shell_commands_are_registered_and_findable() {
+        // The cap-first shell surface is reachable through the palette like every
+        // other action (no parallel path): its commands are registered and can be
+        // found by their window-manager concepts.
+        let reg = all_commands();
+        let ids: std::collections::HashSet<CommandId> = reg.iter().map(|c| c.id).collect();
+        // GoShell is a tab-switch (Navigate, like the other Go* commands); the
+        // Shell* ops are the cap-first window-manager actions (Category::Shell).
+        assert!(ids.contains(&CommandId::GoShell), "GoShell must be registered");
+        assert_eq!(CommandId::GoShell.category(), Category::Navigate);
+        for must in [
+            CommandId::ShellOpenSelected,
+            CommandId::ShellFocusFront,
+            CommandId::ShellCloseFocused,
+            CommandId::ShellCycleLayout,
+            CommandId::ShellMinimizeFocused,
+        ] {
+            assert!(ids.contains(&must), "{must:?} must be registered");
+            assert_eq!(must.category(), Category::Shell);
+        }
+        // Found by concept: "tile" → cycle-layout; "open window" → open-surface.
+        assert!(search(&reg, "tile").iter().any(|h| h.command.id == CommandId::ShellCycleLayout));
+        assert!(search(&reg, "window").iter().any(|h| h.command.id == CommandId::ShellOpenSelected));
+        assert!(search(&reg, "compositor").iter().any(|h| h.command.id == CommandId::GoShell));
     }
 
     #[test]
