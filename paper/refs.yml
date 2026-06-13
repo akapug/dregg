@@ -1,207 +1,193 @@
-stingray:
-  type: article
-  title: "Stingray: Bounded Counters for BFT Payment Channels"
-  author: ["Auvolat, Alex", "Beyer, Simon", "Kuznetsov, Petr"]
-  date: 2025-01
-  serial-number: "arXiv:2501.06531"
-  url: "https://arxiv.org/abs/2501.06531"
-
-blocklace:
-  type: article
-  title: "Cordial Miners: Fast and Efficient Consensus for Every Eventuality"
-  author: ["Shapiro, Ehud", "Sela, Nimrod"]
-  date: 2024
-  url: "https://arxiv.org/abs/2205.09174"
-  serial-number: "arXiv:2205.09174"
-
 macaroons:
   type: article
-  title: "Macaroons: Cookies with Contextual Caveats for Decentralized Authorization in the Cloud"
-  author: ["Birgisson, Arnar", "Politz, Joe Gibbs", "Erlingsson, Ulfar", "Taly, Ankur", "Vrable, Michael", "Lentczner, Mark"]
+  title: 'Macaroons: Cookies with Contextual Caveats for Decentralized Authorization
+    in the Cloud'
+  author:
+  - Birgisson, Arnar
+  - Politz, Joe Gibbs
+  - Erlingsson, Ulfar
+  - Taly, Ankur
+  - Vrable, Michael
+  - Lentczner, Mark
   date: 2014
   parent:
     type: proceedings
-    title: "Network and Distributed System Security Symposium (NDSS)"
-
+    title: Network and Distributed System Security Symposium (NDSS)
+biscuit:
+  type: web
+  title: 'Biscuit: Authorization Tokens with Decentralized Verification'
+  author:
+  - Sonntag, Geoffroy
+  url: https://www.biscuitsec.org/
+  date: 2023
 mina:
   type: article
-  title: "Mina: Decentralized Cryptocurrency at Scale"
-  author: ["Bonneau, Joseph", "Meckler, Izaak", "Rao, Vanishree", "Shapiro, Evan"]
+  title: 'Mina: Decentralized Cryptocurrency at Scale'
+  author:
+  - Bonneau, Joseph
+  - Meckler, Izaak
+  - Rao, Vanishree
+  - Shapiro, Evan
   date: 2020
-  url: "https://minaprotocol.com/wp-content/uploads/technicalWhitepaper.pdf"
-
+  url: https://minaprotocol.com/wp-content/uploads/technicalWhitepaper.pdf
 poseidon2:
   type: article
-  title: "Poseidon2: A Faster Version of the Poseidon Hash Function"
-  author: ["Grassi, Lorenzo", "Khovratovich, Dmitry", "Lüftenegger, Reinhard", "Rechberger, Christian", "Schofnegger, Markus", "Walch, Roman"]
+  title: 'Poseidon2: A Faster Version of the Poseidon Hash Function'
+  author:
+  - Grassi, Lorenzo
+  - Khovratovich, Dmitry
+  - Lüftenegger, Reinhard
+  - Rechberger, Christian
+  - Schofnegger, Markus
+  - Walch, Roman
   date: 2023
-  serial-number: "IACR ePrint 2023/323"
-
+  serial-number: IACR ePrint 2023/323
 fri:
   type: article
-  title: "Fast Reed-Solomon Interactive Oracle Proofs of Proximity"
-  author: ["Ben-Sasson, Eli", "Bentov, Iddo", "Horesh, Yinon", "Riabzev, Michael"]
+  title: Fast Reed-Solomon Interactive Oracle Proofs of Proximity
+  author:
+  - Ben-Sasson, Eli
+  - Bentov, Iddo
+  - Horesh, Yinon
+  - Riabzev, Michael
   date: 2018
   parent:
     type: proceedings
-    title: "International Colloquium on Automata, Languages, and Programming (ICALP)"
-
-biscuit:
-  type: web
-  title: "Biscuit: Authorization Tokens with Decentralized Verification"
-  author: ["Sonntag, Geoffroy"]
-  url: "https://www.biscuitsec.org/"
-  date: 2023
-
-bls:
-  type: article
-  title: "BLS12-381: For the Rest of Us"
-  author: ["Bowe, Sean"]
-  date: 2019
-  url: "https://hackmd.io/@benjaminion/bls12-381"
-
-ucan:
-  type: web
-  title: "UCAN: User Controlled Authorization Networks"
-  author: ["Fission"]
-  url: "https://ucan.xyz/"
-  date: 2023
-
-coconut:
-  type: article
-  title: "Coconut: Threshold Issuance Selective Disclosure Credentials with Applications to Distributed Ledgers"
-  author: ["Sonnino, Alberto", "Al-Bassam, Mustafa", "Bano, Shehar", "Meiklejohn, Sarah", "Danezis, George"]
-  date: 2019
-  parent:
-    type: proceedings
-    title: "Network and Distributed System Security Symposium (NDSS)"
-
-midnight:
-  type: web
-  title: "Midnight: A Data Protection Blockchain"
-  author: ["Input Output Global"]
-  url: "https://midnight.network/"
-  date: 2024
-
-ibc:
-  type: article
-  title: "The Interblockchain Communication Protocol: An Overview"
-  author: ["Goes, Christopher"]
-  date: 2020
-  serial-number: "arXiv:2006.15918"
-
+    title: International Colloquium on Automata, Languages, and Programming (ICALP)
 nova:
   type: article
-  title: "Nova: Recursive Zero-Knowledge Arguments from Folding Schemes"
-  author: ["Kothapalli, Abhiram", "Setty, Srinath", "Tzialla, Ioanna"]
+  title: 'Nova: Recursive Zero-Knowledge Arguments from Folding Schemes'
+  author:
+  - Kothapalli, Abhiram
+  - Setty, Srinath
+  - Tzialla, Ioanna
   date: 2022
   parent:
     type: proceedings
-    title: "Annual International Cryptology Conference (CRYPTO)"
-
-plumtree:
-  type: article
-  title: "Epidemic Broadcast Trees"
-  author: ["Leitao, Joao", "Pereira, Jose", "Rodrigues, Luis"]
-  date: 2007
-  parent:
-    type: proceedings
-    title: "IEEE Symposium on Reliable Distributed Systems (SRDS)"
-
-babybear:
+    title: Annual International Cryptology Conference (CRYPTO)
+plonky3:
   type: web
-  title: "The BabyBear Prime"
-  author: ["Polygon Labs"]
-  url: "https://docs.polygon.technology/miden/"
+  title: 'Plonky3: A Toolkit for Implementing Polynomial IOPs'
+  author:
+  - Polygon Labs
+  url: https://github.com/Plonky3/Plonky3
   date: 2024
-
+blocklace:
+  type: article
+  title: 'Cordial Miners: Fast and Efficient Consensus for Every Eventuality'
+  author:
+  - Shapiro, Ehud
+  - Sela, Nimrod
+  date: 2024
+  url: https://arxiv.org/abs/2205.09174
+  serial-number: arXiv:2205.09174
+stingray:
+  type: article
+  title: 'Stingray: Bounded Counters for BFT Payment Channels'
+  author:
+  - Auvolat, Alex
+  - Beyer, Simon
+  - Kuznetsov, Petr
+  date: 2025-01
+  serial-number: arXiv:2501.06531
+  url: https://arxiv.org/abs/2501.06531
 sel4:
   type: article
-  title: "seL4: Formal Verification of an OS Kernel"
-  author: ["Klein, Gerwin", "Elphinstone, Kevin", "Heiser, Gernot", "Andronick, June", "Cock, David", "Derrin, Philip", "Elkaduwe, Dhammika", "Engelhardt, Kai", "Kolanski, Rafal", "Norrish, Michael", "Sewell, Thomas", "Tuch, Harvey", "Winwood, Simon"]
+  title: 'seL4: Formal Verification of an OS Kernel'
+  author:
+  - Klein, Gerwin
+  - Elphinstone, Kevin
+  - Heiser, Gernot
+  - Andronick, June
+  - Cock, David
+  - Derrin, Philip
+  - Elkaduwe, Dhammika
+  - Engelhardt, Kai
+  - Kolanski, Rafal
+  - Norrish, Michael
+  - Sewell, Thomas
+  - Tuch, Harvey
+  - Winwood, Simon
   date: 2009
   parent:
     type: proceedings
-    title: "ACM Symposium on Operating Systems Principles (SOSP)"
-
+    title: ACM Symposium on Operating Systems Principles (SOSP)
 capnproto:
   type: web
-  title: "Cap'n Proto: Capability-Based RPC Protocol"
-  author: ["Varda, Kenton"]
-  url: "https://capnproto.org/"
+  title: 'Cap''n Proto: Capability-Based RPC Protocol'
+  author:
+  - Varda, Kenton
+  url: https://capnproto.org/
   date: 2013
-
 elang:
   type: article
-  title: "Robust Composition: Towards a Unified Approach to Access Control and Concurrency Control"
-  author: ["Miller, Mark S."]
+  title: 'Robust Composition: Towards a Unified Approach to Access Control and Concurrency
+    Control'
+  author:
+  - Miller, Mark S.
   date: 2006
   parent:
     type: proceedings
-    title: "PhD Thesis, Johns Hopkins University"
-
-yao86:
-  type: article
-  title: "How to Generate and Exchange Secrets"
-  author: ["Yao, Andrew Chi-Chih"]
-  date: 1986
-  parent:
-    type: proceedings
-    title: "IEEE Symposium on Foundations of Computer Science (FOCS)"
-
-bhr12:
-  type: article
-  title: "Foundations of Garbled Circuits"
-  author: ["Bellare, Mihir", "Hoang, Viet Tung", "Rogaway, Phillip"]
-  date: 2012
-  parent:
-    type: proceedings
-    title: "ACM Conference on Computer and Communications Security (CCS)"
-
-jawurek13:
-  type: article
-  title: "Zero-Knowledge Using Garbled Circuits: How To Prove Non-Algebraic Statements Efficiently"
-  author: ["Jawurek, Marek", "Kerschbaum, Florian", "Orlandi, Claudio"]
-  date: 2013
-  parent:
-    type: proceedings
-    title: "ACM Conference on Computer and Communications Security (CCS)"
-
-capss24:
-  type: article
-  title: "CAPSS: Signatures from Arithmetization-Oriented Permutations"
-  author: ["Aly, Abdelrahaman", "Ashur, Tomer", "Kales, Daniel", "Orsini, Emmanuela", "Schofnegger, Markus"]
-  date: 2024
-  serial-number: "IACR ePrint 2024/252"
-
+    title: PhD Thesis, Johns Hopkins University
 eros:
   type: article
-  title: "The EROS Object System"
-  author: ["Shapiro, Jonathan S."]
+  title: The EROS Object System
+  author:
+  - Shapiro, Jonathan S.
   date: 1999
   parent:
     type: proceedings
-    title: "ACM Symposium on Operating Systems Principles (SOSP)"
-
-dandelion:
+    title: ACM Symposium on Operating Systems Principles (SOSP)
+yao86:
   type: article
-  title: "Dandelion++: Lightweight Cryptocurrency Networking with Formal Anonymity Guarantees"
-  author: ["Fanti, Giulia", "Venkatakrishnan, Shaileshh Bojja", "Bakshi, Surya", "Denby, Bradley", "Bhargava, Shruti", "Miller, Andrew", "Viswanath, Pramod"]
-  date: 2018
+  title: How to Generate and Exchange Secrets
+  author:
+  - Yao, Andrew Chi-Chih
+  date: 1986
   parent:
     type: proceedings
-    title: "ACM SIGMETRICS"
-
-sp1:
-  type: web
-  title: "SP1: A Performant, 100% Open-Source, Contributor-Friendly zkVM"
-  author: ["Succinct Labs"]
-  url: "https://docs.succinct.xyz/"
+    title: IEEE Symposium on Foundations of Computer Science (FOCS)
+bhr12:
+  type: article
+  title: Foundations of Garbled Circuits
+  author:
+  - Bellare, Mihir
+  - Hoang, Viet Tung
+  - Rogaway, Phillip
+  date: 2012
+  parent:
+    type: proceedings
+    title: ACM Conference on Computer and Communications Security (CCS)
+jawurek13:
+  type: article
+  title: 'Zero-Knowledge Using Garbled Circuits: How To Prove Non-Algebraic Statements
+    Efficiently'
+  author:
+  - Jawurek, Marek
+  - Kerschbaum, Florian
+  - Orlandi, Claudio
+  date: 2013
+  parent:
+    type: proceedings
+    title: ACM Conference on Computer and Communications Security (CCS)
+capss24:
+  type: article
+  title: 'CAPSS: Signatures from Arithmetization-Oriented Permutations'
+  author:
+  - Aly, Abdelrahaman
+  - Ashur, Tomer
+  - Kales, Daniel
+  - Orsini, Emmanuela
+  - Schofnegger, Markus
   date: 2024
-
-plonky3:
-  type: web
-  title: "Plonky3: A Toolkit for Implementing Polynomial IOPs"
-  author: ["Polygon Labs"]
-  url: "https://github.com/Plonky3/Plonky3"
-  date: 2024
+  serial-number: IACR ePrint 2024/252
+ceptre:
+  type: article
+  title: 'Ceptre: A Language for Modeling Generative Interactive Systems'
+  author:
+  - Martens, Chris
+  date: 2015
+  parent:
+    type: proceedings
+    title: AAAI Conference on Artificial Intelligence and Interactive Digital Entertainment
+      (AIIDE)

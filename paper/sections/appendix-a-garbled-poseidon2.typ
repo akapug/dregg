@@ -2,7 +2,18 @@
 // Poseidon2 as Garbling Function for STARK-Provable Garbled Circuits
 // =============================================================================
 
-= Poseidon2 as Garbling Function for STARK-Provable Garbled Circuits
+#import "../defs.typ": lean
+= Poseidon2 as garbling function for STARK-provable garbled circuits <app-garbled>
+
+This appendix details the garbled rung of the disclosure dial (@sec-guards): the
+two-party gate at which each party learns the verdict and nothing else. The Lean
+spec it must meet is `Crypto/GarbledJoint.lean` --- correctness
+(#lean("GarbledJoint.garbled_input_private") states the dual privacy carrier) and
+the joint-turn weld #lean("GarbledJoint.joint_turn_private_gate"), with the
+disclosure floor pinned to acceptance-only
+(#lean("GarbledJoint.garbledDialFloor_is_bot")). The construction below is the
+cryptographic realization the Rust garbled-circuit machinery
+(`circuit/src/garbled.rs`) implements to discharge that spec.
 
 == Motivation
 

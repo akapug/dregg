@@ -119,10 +119,20 @@ kernel theorems rather than re-established per app.
 #include "sections/02-model.typ"
 #include "sections/03-authorization.typ"
 #include "sections/04-proofs.typ"
+#include "sections/05-guards.typ"
+#include "sections/06-ordering.typ"
+#include "sections/07-realization.typ"
+#include "sections/08-assurance.typ"
+#include "sections/09-related.typ"
+#include "sections/10-limitations.typ"
+#include "sections/11-conclusion.typ"
 
-// The remaining sections (guard algebra, ordering/finality, realization,
-// assurance, related, limitations, conclusion, appendix) are the rewrite
-// burn-down in _REWRITE-PLAN.md; they are not yet in the build.
+// --- Appendix ----------------------------------------------------------------
+
+#set heading(numbering: "A.1")
+#counter(heading).update(0)
+
+#include "sections/appendix-a-garbled-poseidon2.typ"
 
 // --- References --------------------------------------------------------------
 
