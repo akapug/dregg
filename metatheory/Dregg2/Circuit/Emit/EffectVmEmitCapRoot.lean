@@ -93,6 +93,22 @@ staging boundary:
     revocation circuit's C6/C7/C10/C11) is **Phase E**, out of scope here. Phase B adds the
     in-circuit non-amplification / authority gates that OPEN this root.
 
+This module is therefore ONE layer of a SINGLE cap-root story, not a competing model — read it
+alongside its two siblings rather than as a standalone "cap_root = digest" emit:
+  * **Phase B (the in-circuit sorted open + non-amp leg)** lives in `EffectVmEmitV2`
+    (`attenuateVmDescriptor2`): it EXTENDS the same v1 descriptor with `MapOp.read`/`MapOp.write`
+    over the openable sorted-Poseidon2 cap-map plus the bitwise-submask `Lookup`
+    (`attenuateV2_non_amp` — held membership authenticated against the before `cap_root`, post
+    root the genuine sorted write, `granted ⊑ held`). That is the OPEN of the very root this
+    module advances-as-digest; the digest pin here and the sorted open there are different LAYERS
+    of one root, not two roots.
+  * **The class-A genuine descriptor** that consumes `capRecomputeSites` is
+    `EffectVmEmitAttenuateA.attenuateVmDescriptorGenuine` (proven in
+    `Dregg2.Circuit.Argus.Effects.Attenuate`); the whole cap-graph family
+    (delegate / delegateAtten / revokeDelegation / introduce) reuses it. So the prepend-accumulator
+    advance below is the SHARED digest spine under all of them, and `EffectVmEmitV2` is the Phase-B
+    opening bolted onto the same descriptors.
+
 So every theorem below holds for any `cap_root` value, including the new sorted-Poseidon2 root: the
 prepend-accumulator advance + its anti-ghost (`capRoot_binds_edge`) are the Phase-A digest pin; the
 openable-tree VALUE the digest carries is the cell≡circuit sorted root.
