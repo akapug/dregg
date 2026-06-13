@@ -561,34 +561,12 @@ def demoCh' : Channel := settleAll demoCh
 -- The hard pair is conserved: 530 + 470 = 500 + 500.
 #guard demoCh'.issuerHard + demoCh'.holderHard == demoCh.issuerHard + demoCh.holderHard
 
-/-! ## §8 — Axiom-hygiene tripwires. -/
+/-! ## §8 — Axiom-hygiene tripwires.
 
-#assert_axioms draw_spec
-#assert_axioms repay_spec
-#assert_axioms init_WF
-#assert_axioms init_remaining
-#assert_axioms draw_within_line
-#assert_axioms over_line_draw_refused
-#assert_axioms draw_records
-#assert_axioms draw_replay_refused
-#assert_axioms draw_digest_was_fresh
-#assert_axioms repay_draws_fixed
-#assert_axioms bilateral_conserved
-#assert_axioms repay_monotone_down
-#assert_axioms over_repay_refused
-#assert_axioms draw_repay_roundtrip
-#assert_axioms settlePay_conserves_hard
-#assert_axioms settleAll_clears
-#assert_axioms draw_preserves_WF
-#assert_axioms repay_preserves_WF
-#assert_axioms trustline_WF_forever
-#assert_axioms trustline_within_line_forever
-#assert_axioms trustline_conserved_forever
-#assert_axioms no_double_draw_forever
-#assert_axioms holder_credit_le_line_forever
-#assert_axioms ceiling_immutable_forever
-#assert_axioms draw_slice_tracks_tryDebit
-#assert_axioms draw_fires_iff_tryDebit
+Pinned in ONE batch by `#assert_namespace_axioms Dregg2.Apps.Trustline` after the closing
+`end` (below): it walks every theorem under this namespace — §1–§7 AND §9–§14 — and fails on
+any that escapes the kernel-clean triple. Strictly stronger than the old per-keystone block
+(it cannot miss a theorem someone forgot to list). See `metatheory/docs/AXIOM-HYGIENE.md`. -/
 
 /-! ## §9 — The `settled` register: monotone redemption (the DEPLOYED settlement shape).
 
@@ -1474,56 +1452,15 @@ def pdemo₁ : ChannelC := (settleC .pureCredit pdemo₀ 30).getD pdemo₀
 #guard (settleC .pureCredit pdemo₀ 30).isSome
 #guard (settleC .pureCredit pdemo₀ 31).isNone
 
-/-! ## §14 — Axiom-hygiene tripwires for §9–§12. -/
+/-! ## §14 — Axiom-hygiene: ONE batch tripwire for the WHOLE module.
 
-#assert_axioms drawS_spec
-#assert_axioms repayS_spec
-#assert_axioms settleS_spec
-#assert_axioms init_SWF
-#assert_axioms settle_monotone
-#assert_axioms settleS_tl_fixed
-#assert_axioms repay_below_settled_refused
-#assert_axioms over_settle_refused
-#assert_axioms repayS_fires_iff
-#assert_axioms settleS_fires_iff
-#assert_axioms drawS_preserves_WF
-#assert_axioms repayS_preserves_WF
-#assert_axioms settleS_preserves_WF
-#assert_axioms stepS_preserves_WF
-#assert_axioms sline_WF_forever
-#assert_axioms settle_le_drawn_forever
-#assert_axioms solvency
-#assert_axioms solvency_forever
-#assert_axioms sline_within_line_forever
-#assert_axioms sline_conserved_forever
-#assert_axioms no_double_draw_forever_across_settles
-#assert_axioms stepS_settled_mono
-#assert_axioms settled_monotone_forever
-#assert_axioms stepS_draws_mono
-#assert_axioms digest_burned_forever
-#assert_axioms draw_replay_refused_across_epochs
-#assert_axioms stepS_ceiling_fixed
-#assert_axioms sline_ceiling_immutable_forever
-#assert_axioms epochSlice_remaining
-#assert_axioms drawS_fires_iff_epoch_tryDebit
-#assert_axioms drawS_tracks_epoch_tryDebit
-#assert_axioms ofView_WF
-#assert_axioms derived_view_faithful
-#assert_axioms view_determines_line
-#assert_axioms sline_derived_view_faithful
-#assert_axioms settleC_conserves_hard
-#assert_axioms settleC_fullReserve_spec
-#assert_axioms settleReserve_conserves_hard
-#assert_axioms settleReserve_conserves_pair
-#assert_axioms settleC_pureCredit_agrees_settlePay
-#assert_axioms settleC_pureCredit_total
-#assert_axioms stepC_hard_fixed
-#assert_axioms hard_conserved_forever
-#assert_axioms openReserve_is_a_move
-#assert_axioms openReserve_ReserveWF
-#assert_axioms escrow_solvent
-#assert_axioms stepC_preserves_ReserveWF
-#assert_axioms reserveWF_forever
-#assert_axioms escrow_solvent_forever
+`#assert_namespace_axioms Dregg2.Apps.Trustline` (below, after `end`) pins EVERY theorem in
+this namespace — §1–§14, both the `Line` and `SLine`/`Channel`/reserve models — to the
+kernel-clean triple `{propext, Classical.choice, Quot.sound}` in a single line, failing on
+the first `sorryAx`/stray axiom. It replaces the two former ~26- and ~49-line per-keystone
+blocks and is strictly stronger: it audits every theorem, not just the ones a human listed. -/
 
 end Dregg2.Apps.Trustline
+
+-- §8 + §14 collapsed into one batch pin (see the §14 note above).
+#assert_namespace_axioms Dregg2.Apps.Trustline

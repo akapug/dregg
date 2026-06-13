@@ -663,45 +663,15 @@ theorem modality_span (r : LitTest) :
 -- the mixed corner really is admitted by the tests the pair shares (e.g. monotonic):
 #guard Cav.survivesB Biorth.Cav.cMix (.monotonic "x")
 
-/-! ## §8 — Axiom hygiene. -/
+/-! ## §8 — Axiom hygiene.
 
--- §1 the generic core
-#assert_axioms orth_duality
-#assert_axioms subset_biorth
-#assert_axioms orthSet_triple
-#assert_axioms coOrth_isBehaviour
-#assert_axioms biorth_isBehaviour
-#assert_axioms isBehaviour_iff_coOrth
-#assert_axioms coOrth_union
-#assert_axioms listAdm_isBehaviour
-#assert_axioms listAdm_refusal
--- §2 S1: the relation + sanity
-#assert_axioms survives_denotes
-#assert_axioms admits_is_program_admitsCtx
-#assert_axioms Adm_eq_coOrth
-#assert_axioms refusal_pins_counterwitness
-#assert_axioms admits_iff_survives_all_refutations
--- §3 S2: THE THEOREM + non-vacuity both polarities
-#assert_axioms guard_class_is_biorthogonally_closed
-#assert_axioms atom_class_is_behaviour
-#assert_axioms demo_behaviour_proper
-#assert_axioms survives_old_blind
-#assert_axioms singleton_not_behaviour
-#assert_axioms closure_grows
--- §4 the executor weld + its non-vacuity
-#assert_axioms Cav.caveat_class_is_behaviour
-#assert_axioms Cav.caveatsAdmit_is_orthogonality
-#assert_axioms Cav.reduces_lands_in_behaviour
-#assert_axioms Cav.cav_demo_proper
-#assert_axioms Cav.eval_mix
-#assert_axioms Cav.pair_not_behaviour
--- §5 S3: the additive + affine faces
-#assert_axioms behaviour_meet
-#assert_axioms meet_is_behaviour
-#assert_axioms attenuation_is_refutation_growth
-#assert_axioms Adm_antitone
-#assert_axioms attenuation_strict_demo
--- §6 the modality index
-#assert_axioms modality_span
+One batch tripwire (`#assert_namespace_axioms Dregg2.Calculus.Biorth`, after `end` below)
+pins EVERY theorem under this namespace — including the nested `Cav.*` and `ListGuard.*`
+members (the prefix walk descends) — to `{propext, Classical.choice, Quot.sound}`, failing
+on the first `sorryAx`/stray axiom. Replaces the §1–§6 per-keystone block, strictly stronger
+(audits every theorem, nested ones included). See `metatheory/docs/AXIOM-HYGIENE.md`. -/
 
 end Dregg2.Calculus.Biorth
+
+-- §8 collapsed into one batch pin (covers nested `Cav`/`ListGuard`); see the §8 note above.
+#assert_namespace_axioms Dregg2.Calculus.Biorth
