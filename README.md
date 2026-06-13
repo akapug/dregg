@@ -10,6 +10,8 @@ Dragon's Egg is my experiment in the metatheory of constructive knowledge, and a
 
 **Hands-on in 15 minutes:** [QUICKSTART.md](QUICKSTART.md) — talk to the live devnet, sign a real turn, run the guided demo, run the site locally, drive a governance ceremony. Every command verified.
 
+**Evaluating dregg?** [docs/EVALUATION.md](docs/EVALUATION.md) — what dregg is, the five guarantees in human terms, the honest caveats (single-node devnet, staged proving), and a no-build first ten minutes.
+
 > ### The question underneath
 >
 > Most systems chase scale, speed, or money. dregg chases a different question, and means it
