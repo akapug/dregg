@@ -1,12 +1,12 @@
 [package]
 name = "dregg-sdk-py"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-authors.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.0"
+authors = ["Dregg Contributors"]
+license = "AGPL-3.0-or-later"
+homepage = "https://dregg.dev"
+repository = "https://github.com/emberian/dregg"
 description = "Python (pyo3) binding for the dregg SDK's two-noun surface: Identity → turn → sign → submit → Receipt"
 
 [lib]
@@ -22,17 +22,25 @@ crate-type = ["cdylib", "rlib"]
 # receipt, program, explain. The Lean FFI archive link is UNCONDITIONAL on
 # native (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean), so this extension
 # module links libdregg_lean.a like every other native consumer.
-dregg-sdk = { path = "../sdk", default-features = false }
+# no-lean-link: a Python cdylib cannot embed the Lean archive on ELF
+# (mimalloc local-exec TLS, R_X86_64_TPOFF32 vs -shared — Convergence round 7).
+# Standalone workspace (root excludes sdk-py) so this gate never feature-unifies
+# onto the native crates — the same discipline as the wasm eviction (55318b702).
+dregg-sdk = { path = "../sdk", default-features = false, features = ["no-lean-link"] }
 dregg-cell = { path = "../cell" }
-dregg-turn = { path = "../turn" }
+dregg-turn = { path = "../turn", features = ["no-lean-link"] }
 dregg-types = { path = "../types" }
 
 pyo3 = { version = "0.28", features = ["extension-module", "abi3-py310"] }
 ureq = { version = "2.12", features = ["json"] }
 postcard = { version = "1", features = ["use-std"] }
-serde_json = { workspace = true }
+serde_json = "1"
 hex = "0.4"
 blake3 = "1"
 
-[lints]
-workspace = true
+[workspace]
+
+# Mirrors the root workspace's patch (patch sections don't cross workspace boundaries).
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
