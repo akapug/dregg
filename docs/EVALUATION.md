@@ -22,9 +22,12 @@ Concretely:
 - **Turns** are atomic, capability-gated state transitions across one or more
   cells. Authority is structural: a turn that cannot exhibit a valid,
   sufficiently-empowered, fresh token chain simply does not execute.
-- **The kernel is eight verbs** (`create · write · move · grant · revoke ·
-  shield/unshield · lifecycle · exercise`), specified in Lean 4 with
-  machine-checked minimality and completeness theorems.
+- **The kernel is eight verbs** — seven constructors with `shieldUnshield`
+  carrying two directions (`create · write · move · grant · revoke ·
+  shield/unshield · lifecycle`), specified in Lean 4 with machine-checked
+  minimality and completeness theorems. Everything else a turn carries is
+  *turn structure* (exercising a capability is a use, not a verb; refusal is an
+  outcome; the nonce is prologue) or a *factory pattern* built from these verbs.
 - **The verified executor *is* the executor.** The node's state producer is the
   Lean function `execFullForestG` — credential- and caveat-gated, proven sound —
   compiled and linked into the node over a C ABI (`dregg-lean-ffi/`). It is not a
@@ -40,13 +43,15 @@ Concretely:
 The thing that makes this more than a verified library: the proofs are *about
 the running system*, because the running system calls the proved function.
 
-## The five guarantees, in human terms
+## The guarantees, in human terms
 
-dregg states its case as five top-level guarantees to a light client. They are
-assembled, by guarantee, in
+dregg states its case as six guarantees to a light client (A–E below, plus **R**,
+the running entry). They are assembled, by guarantee, in
 [`metatheory/Dregg2/AssuranceCase.lean`](../metatheory/Dregg2/AssuranceCase.lean)
-— each one a theorem-DAG over the keystones that discharge it. Here is what each
-means if you are not reading Lean:
+— each one a theorem-DAG over the keystones that discharge it. The precise
+contract — exact terms, the full crypto floor by carrier name, and the
+deployment correspondence at file:line — is [ASSURANCE.md](ASSURANCE.md). Here is
+what each means if you are not reading Lean:
 
 1. **Authority** — every state change is justified by an unforgeable,
    non-amplified, fresh token chain. *No effect ever confers more authority than
@@ -73,6 +78,13 @@ means if you are not reading Lean:
    1–4 for the *whole history* while re-witnessing nothing. A tampered aggregate
    cannot bind. This is the property the whole design exists to protect: a thin
    verifier cannot be fooled into accepting an incorrect protocol evolution.
+
+**R. The running entry** — Authority, Conservation, and Integrity hold over
+*what the node actually runs*, not over a model of it. The state producer is the
+proved Lean function the node calls over a C ABI, so the guarantees above are
+about execution itself, not a paper abstraction of it. This is why the case
+names its deployment-side boundary (producer coverage) explicitly rather than
+quietly assuming it away.
 
 ### What the guarantees rest on (the trust boundary)
 

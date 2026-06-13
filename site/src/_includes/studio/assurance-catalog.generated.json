@@ -13,7 +13,7 @@
     {
       "index": 1,
       "name": "Poseidon2-permutation collision-resistance",
-      "detail": "the arithmetization-friendly hash; the sponge/Merkle/state-commitment collision-resistance is reduced to permutation-CR (`Crypto.Poseidon2*`, `Crypto.Merkle`, the `recStateCommit` injectivity portal)."
+      "detail": "the arithmetization-friendly hash; the sponge/Merkle/state-commitment/MMR collision-resistance is reduced to permutation-CR (`Crypto.Poseidon2*`, `Crypto.Merkle`, the `recStateCommit` injectivity portal, the receipt-index `Lightclient.MMR.mroot_binds_position`, and the sorted-set/queue `Apps.QueueRoot.RootCR`/`LenBindCR` and identity-keyset `Apps.PreRotation.KeySetCR` carriers — every one a named CR `Prop` over a `Poseidon2`/`BLAKE3` image, NOT an `axiom`)."
     },
     {
       "index": 2,
@@ -55,8 +55,8 @@
   "coverage": {
     "guarantees_with_apex": 6,
     "guarantees_with_pins": 6,
-    "total_pins": 83,
-    "total_keystones": 28
+    "total_pins": 92,
+    "total_keystones": 29
   },
   "guarantees": [
     {
@@ -173,7 +173,7 @@
       "letter": "C",
       "title": "INTEGRITY",
       "statement": "A receipt binds the WHOLE post-state; a tampered input is rejected.",
-      "floor": "Poseidon2-permutation-CR (the `recStateCommit`/`cellCommit`/`stateCommit` injectivity portals reduce to it). A second pre-image would be the only way to forge a receipt for a different state; that is exactly the CR assumption.",
+      "floor": "Poseidon2-permutation-CR (the `recStateCommit`/`cellCommit`/`stateCommit` injectivity portals reduce to it; the MMR discharge rests on the SAME `Poseidon2SpongeCR`). A second pre-image would be the only way to forge a receipt for a different state; that is exactly the CR assumption.",
       "apex_theorem": "integrity_guarantee",
       "keystones": [
         {
@@ -194,10 +194,15 @@
         },
         {
           "name": "Circuit.Argus.Receipt.transfer_commits_to_one_receipt",
-          "summary": "the transfer weld instance."
+          "summary": "the transfer weld instance. STRENGTHENED (the §149 apex — the PI-binding hypothesis DISCHARGED onto the MMR):"
+        },
+        {
+          "name": "Circuit.Argus.Receipt.argus_published_index_pins_receipt",
+          "summary": "/ `transfer_published_index_pins_receipt` — the §2 keystone carried the cross-AIR / cross-proof PI binding as a BARE hypothesis (\"the circuit root and the executor receipt-chain root are pinned to the SAME published value\"). That hypothesis is now DERIVED, not assumed: the receipt index the epoch publishes is an MMR (`Lightclient/MMR.lean`), history keys are dense positions, and `published_position_pins_value` (a thin lift of `MMR.mroot_binds_position`) proves — adversarial-server included (the prover's openings may be against its OWN log `L'`; CR forces `L' = L`) — that any two roots opening at the same dense position of the published index are EQUAL. So \"both proofs bind their root to the same value\" burns down to MMR openings under the ONE named `Poseidon2SpongeCR` floor; no out-of-band PI equation survives. The remaining protocol obligation is exactly MMR §6's `CommitBindsMMR` layout fact (the node writes both roots at their dense positions), discharged-by-construction at the flag-day layout (HORIZONLOG rotation rider)."
         }
       ],
       "pins": [
+        "integrity_guarantee_memory_program",
         "integrity_guarantee",
         "Dregg2.Circuit.Argus.Receipt.argus_commits_to_one_receipt",
         "Dregg2.Circuit.Argus.Receipt.argus_circuit_executor_receipts_agree",
@@ -206,7 +211,15 @@
         "Dregg2.Circuit.CommitmentCrossBind.runnable_binds_same_system_roots",
         "Dregg2.Circuit.CommitmentCrossBind.stateCommit_binds_cells_and_rest",
         "Dregg2.Circuit.CommitmentCrossBind.setFieldCommit_binds_cellCommit",
-        "Dregg2.Circuit.CommitmentCrossBind.chC_bad_not_bridge"
+        "Dregg2.Circuit.CommitmentCrossBind.chC_bad_not_bridge",
+        "Dregg2.Circuit.Argus.Receipt.published_position_pins_value",
+        "Dregg2.Circuit.Argus.Receipt.argus_published_index_pins_receipt",
+        "Dregg2.Circuit.Argus.Receipt.transfer_published_index_pins_receipt",
+        "Dregg2.Exec.UniversalBridge.gwrite_is_memory_program",
+        "Dregg2.Exec.UniversalBridge.move_is_memory_program",
+        "Dregg2.Exec.UniversalBridge.create_is_memory_program",
+        "Dregg2.Exec.UniversalBridge.cap_leaf_value_codec",
+        "Dregg2.Exec.UniversalBridge.index_boundary_mroot_derived"
       ],
       "summary": "a receipt binds the WHOLE post-state; a tampered input is rejected"
     },

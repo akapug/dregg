@@ -99,11 +99,11 @@
       "semantics": "Conjunction — match if every child matches."
     }
   ],
-  "constraint_count": 42,
+  "constraint_count": 46,
   "coverage": {
-    "constraints_in_view": 42,
+    "constraints_in_view": 46,
     "locally_evaluable": 15,
-    "simple": 16,
+    "simple": 19,
     "missing_from_view": [],
     "extra_in_view": [
       "Not"
@@ -795,10 +795,87 @@
       "in_view": true,
       "locally_evaluable": false,
       "simple": true
+    },
+    {
+      "name": "KeyRotationGate",
+      "fields": [
+        {
+          "name": "digest_slot",
+          "type": "u8"
+        },
+        {
+          "name": "current_slot",
+          "type": "u8"
+        },
+        {
+          "name": "last_rotated_slot",
+          "type": "u8"
+        },
+        {
+          "name": "cooling_period",
+          "type": "u64"
+        },
+        {
+          "name": "hash_kind",
+          "type": "HashKind"
+        }
+      ],
+      "semantics": "**Pre-rotation gate (KERI-shaped)** — the identity rider (`docs/ORGANS.md` \"Identity rider\"; kernel semantics proven in `metatheory/Dregg2/Apps/PreRotation.lean`, the `rotateWriteCooled` production shape).",
+      "in_view": true,
+      "locally_evaluable": false,
+      "simple": false
+    },
+    {
+      "name": "HeapField",
+      "fields": [
+        {
+          "name": "key",
+          "type": "u64"
+        },
+        {
+          "name": "atom",
+          "type": "HeapAtom"
+        }
+      ],
+      "semantics": "**Heap-keyed atom (THE ROTATION's app-state lane)** — the top-level lift of  over heap key `key`, the twin of  (both surfaces share ONE evaluator arm, like the `SenderIs`/`BalanceGte` precedent).",
+      "in_view": true,
+      "locally_evaluable": false,
+      "simple": true
+    },
+    {
+      "name": "DelegationEpochEquals",
+      "fields": [
+        {
+          "name": "index",
+          "type": "u8"
+        }
+      ],
+      "semantics": "`new[index]` must equal the touched cell's post-turn `delegation_epoch`.",
+      "in_view": true,
+      "locally_evaluable": false,
+      "simple": true
+    },
+    {
+      "name": "CountGe",
+      "fields": [
+        {
+          "name": "threshold",
+          "type": "u32"
+        },
+        {
+          "name": "set_commitment_slot",
+          "type": "u8"
+        }
+      ],
+      "semantics": "The witness must exhibit ≥ `threshold` distinct elements opening the commitment in `new[set_commitment_slot]`.",
+      "in_view": true,
+      "locally_evaluable": false,
+      "simple": true
     }
   ],
   "expressibility_limits": [
-    "The cell `balance` is sealed (not one of the 8 slots), so \"resolve drains the full balance\" and \"the payout goes to the published counterparty\" are NOT program-enforced; they are enforced by the SDK builders (`dregg_sdk::factories`) constructing the only sensible turn, and by the kernel move law (a `Transfer` conserves and fail-closes). This mirrors the Lean contracts, where the settle target is an argument of `escrowRelease`/`obSettle` rather than a checked field.",
-    "The committed-escrow knowledge gate (release on a HASH-PREIMAGE reveal) needs `PreimageGate` under a state guard, which the current constraint grammar cannot express (`PreimageGate` is not a `SimpleStateConstraint`, so it cannot sit inside `AnyOf`/`Implies`). The cleartext witness-equality gate below is exactly the Lean `EscrowFactory` contract; the committed variant is kernel-design feedback for the dregg3 constraint grammar."
+    "The cell `balance` is sealed (not one of the 16 slots), so \"resolve drains the full balance\" and \"the payout goes to the published counterparty\" are NOT program-enforced; they are enforced by the SDK builders (`dregg_sdk::factories`) constructing the only sensible turn, and by the kernel move law (a `Transfer` conserves and fail-closes). This mirrors the Lean contracts, where the settle target is an argument of `escrowRelease`/`obSettle` rather than a checked field.",
+    "The committed-escrow knowledge gate (release on a HASH-PREIMAGE reveal) is now EXPRESSIBLE: `PreimageGate` is a `SimpleStateConstraint` (`docs/CELL-PROGRAM-LANGUAGE.md` §4), so `when_state(RESOLVED_A, PreimageGate { commitment_index: CONDITION_SLOT, .. })` composes — see `cell::program::tests::preimage_gate_composes_under_state_guard` and the Lean `committedRelease` twin (`Dregg2/Exec/Program.lean`). The cleartext witness-equality gate below remains the Lean `EscrowFactory` contract; a committed-deal blueprint is the natural next variant.",
+    "The \"resolve drains the full balance\" tooth is likewise now expressible (`BalanceLte { max: 0 }` under the terminal-state guards — the `balance_atoms_see_own_balance` pin). The published settlement blueprints keep the Lean-twin constraint set verbatim; adding the drain tooth is a descriptor evolution to land together with its Lean keystone (one semantics, both sides — see `docs/CELL-PROGRAM-LANGUAGE.md` §9)."
   ]
 }
