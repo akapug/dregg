@@ -44,6 +44,42 @@
       parts the step did not touch (the frame is committed too).
     </p>
 
+    <h2 id="memory-program">The executor is a memory program</h2>
+
+    <p>
+      "Binds <em>every</em> field" is not a slogan bolted onto the commitment — it is a
+      structural fact about how the executor moves state. Every state access the kernel makes —
+      a register read or write, a heap get or set, a capability-membership check, a nullifier
+      insert or freshness test — is one tuple in <strong>one memory multiset</strong> over a
+      single domain-tagged address space. The whole post-state has a <em>universal map</em>: a
+      total projection that lays all seventeen kernel fields, the heap, the c-list, the
+      nullifiers, and the receipt log onto one address space, and the post-state's projection
+      <em>equals</em> the fold of the verb's emitted memory trace over the pre-state's
+      projection. Every field has a universal address; nothing is off the map, so nothing can be
+      smuggled past the commitment.
+    </p>
+
+    <p>
+      This collapse pays out twice. First, it is what makes integrity <em>constructive</em>
+      rather than asserted — the commitment binds the whole state because the whole state <em>is</em>
+      the final column of one memory argument, and a single Blum multiset-balance check certifies
+      every per-domain view at once (the domain tag keeps the views disjoint: a capability check
+      cannot alias a nullifier cell). Second, it makes nullifier freshness <em>Merkle-path-free
+      inside a proof</em>: a read that returns "absent" at a nullifier address, under the
+      insert-only discipline, <em>proves</em> the nullifier was fresh — no per-access hashing, no
+      in-proof Merkle path. Cross-proof persistence still rides the published sorted-tree root
+      (the boundary view derived from the final memory cells equals today's root), so anyone
+      holding the root learns absence; the path just stops being paid intra-proof.
+    </p>
+
+    <p>
+      One thing deliberately does <em>not</em> ride the memory multiset: conservation. Σδ = 0 is a
+      <em>correlated</em> property of a paired write (value out of one balance, into another) and
+      cannot be expressed by any per-address argument — so it stays an in-row paired constraint on
+      the move row, exactly where <a href="/learn/concepts/substances.html">rung 2</a>'s linear
+      law lives.
+    </p>
+
     <h2 id="evidence">Evidence is monotone</h2>
 
     <p>
@@ -72,6 +108,15 @@
         <code>noteSpendStmt_replay_rejected</code>.</li>
       <li><code>Crypto/NonMembership.lean</code> — <code>nonmembership_sound</code> /
         <code>nonmembership_complete</code>.</li>
+      <li><code>Exec/UniversalBridge.lean</code> —
+        <code>uproj</code> (the universal map of the whole post-state) and
+        <code>{gwrite,move,create}_is_memory_program</code> (the post-state projection equals the
+        fold of the verb's memory trace, against the live executable steps).</li>
+      <li><code>Crypto/UniversalMemory.lean</code> — <code>universal_memory_sound</code> (one Blum
+        balance certifies every per-domain view), <code>nullifier_fresh_sound</code> /
+        <code>nullifier_fresh_binds_root</code> (intra-proof freshness with no Merkle path; the
+        root pins absence at the boundary), and
+        <code>boundary_root_derived</code> (the derived view equals today's map roots).</li>
     </ul>
 
     <h2 id="live">Live instance</h2>
