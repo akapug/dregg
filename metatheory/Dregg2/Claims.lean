@@ -392,6 +392,27 @@ E6: `@[export] dregg_exec_full_turn` FFI in `Exec/FFI.lean`. -/
 #assert_namespace_axioms Dregg2.Spec.ExecRefinementFull
 #assert_namespace_axioms Dregg2.Exec.ConditionalTurn
 
+/-! ## §28b — the FFI WIRE CODEC is inside the proof (assurance §5 Stage 1, CRITICAL-2).
+
+The node invokes the `@[export dregg_exec_full_forest_auth]` String→String entry
+`Dregg2.Exec.FFI.Wide.execFullForestAuthStep`. Two theorems remove its wire codec from the TCB:
+(1) `CodecRoundtrip.parseWWire_encode` — the codec ROUND-TRIP (`parseWWire ∘ encodeWWire = id` on
+well-formed wires; the genuine left inverse, all leaves/the action-tree/the 11-field state composed); and
+(2) `Refine.export_refines_on_parseable` — the String→String export REFINES the model: on every parseable
+input it equals `encodeResult ∘ runModel ∘ parseWWire`, where `runModel` is the PROVED admission-wrapped
+gated turn (`runGatedForestTurnStatus`, NOT bare `execFullForestG`) and `encodeResult` the post-state/status
+encoder. Composed (`export_refines_endToEnd`): `export ∘ encode = encode ∘ model`, both codec halves by
+theorem — the literal Stage-1 statement. `runModel_state` projects the model onto `runGatedForestTurn`, so
+the `FullForestAuth` keystones (conservation/no-amplification/attestation) bind the export's output bytes.
+Residual (named, NOT closed here): the Rust marshaller/reconstitutor + the Lean→C link are a SEPARATE TCB
+limb — the §5 translation-validation obligation, outside this Lean pin. -/
+#assert_axioms Dregg2.Exec.CodecRoundtrip.parseWWire_encode
+#assert_axioms Dregg2.Exec.FFI.Wide.runModel
+#assert_axioms Dregg2.Exec.FFI.Wide.export_refines_on_parseable
+#assert_axioms Dregg2.Exec.FFI.Wide.export_rejects_unparseable
+#assert_axioms Dregg2.Exec.FFI.Wide.export_refines_endToEnd
+#assert_axioms Dregg2.Exec.FFI.Wide.runModel_state
+
 /-! ## §29 — EffectVM constraints + Cordial-Miners DAG consensus.
 
 `Spike.EffectVmConstraints`: 7 BabyBear AIR constraints; `underflow_now_impossible` proves
