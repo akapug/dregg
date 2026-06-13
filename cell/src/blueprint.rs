@@ -668,6 +668,98 @@ pub fn trustline_factory_descriptor(
     ))
 }
 
+// ── The collateral axis (Lean §12 `Collateral`, ORGANS parameterization) ──
+
+/// Trustline slot 7 — the collateral mode of the line, term-pinned once OPEN
+/// for pureCredit lines ([`TL_COLLATERAL_PURE_CREDIT`]). fullReserve lines
+/// keep the EXACT pre-axis constraint set (no pin, value stays the all-zero
+/// default = [`TL_COLLATERAL_FULL_RESERVE`]) so their program VK — and every
+/// already-born cell — is byte-identical to before the axis was reified.
+/// Identification is by VK re-derivation, never by reading this slot.
+pub const TL_COLLATERAL_SLOT: u8 = 7;
+/// Slot-7 code: the full line is escrowed at open (the payment-channel point
+/// — the deployed default; Lean `Collateral.fullReserve`).
+pub const TL_COLLATERAL_FULL_RESERVE: u64 = 0;
+/// Slot-7 code: no hard backing; the line is the issuer's consented risk
+/// (the mutual-credit point; Lean `Collateral.pureCredit`).
+pub const TL_COLLATERAL_PURE_CREDIT: u64 = 1;
+
+/// The collateral backing of a trustline (Lean twin
+/// `Dregg2.Apps.Trustline.Collateral`, §12). One axis, two points, ONE
+/// parametric conservation keystone (`settleC_conserves_hard`):
+///
+/// * **fullReserve** — the issuer escrows the full line at open; epoch
+///   settlement pays the holder OUT OF THE ESCROW while `settled` marches
+///   (`settleC_fullReserve_spec`). Solvent by construction
+///   (`escrow_solvent_forever`).
+/// * **pureCredit** — nothing is escrowed; the bilateral ±`drawn` pair IS the
+///   credit (Lean §11: `holderAcct = +drawn`, `issuerWell = −drawn`, both
+///   DERIVED — the deployed cell carries no extra registers). Draws and
+///   repays move no hard value (§12b `stepC`); settlement is the holder
+///   repaying the issuer hard value while the credit legs unwind
+///   (`settleC_pureCredit_agrees_settlePay` — the §5b `settlePay` shape).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TrustlineCollateral {
+    /// The full line is escrowed at open (the deployed default).
+    #[default]
+    FullReserve,
+    /// No hard backing; draws are issuer-moves on the DERIVED ±drawn pair.
+    PureCredit,
+}
+
+impl TrustlineCollateral {
+    /// The slot-7 code this mode pins (pureCredit) or defaults to
+    /// (fullReserve).
+    pub fn slot_code(self) -> u64 {
+        match self {
+            TrustlineCollateral::FullReserve => TL_COLLATERAL_FULL_RESERVE,
+            TrustlineCollateral::PureCredit => TL_COLLATERAL_PURE_CREDIT,
+        }
+    }
+}
+
+/// [`trustline_state_constraints`] at a point of the collateral axis.
+/// `FullReserve` returns the EXACT historical constraint vector (identical
+/// program VK — existing lines are untouched); `PureCredit` additionally
+/// term-pins slot 7 to [`TL_COLLATERAL_PURE_CREDIT`], so the mode is
+/// content-addressed into the per-line program and a born cell
+/// self-authenticates its collateral point forever.
+pub fn trustline_state_constraints_collateral(
+    terms: &TrustlineTerms,
+    collateral: TrustlineCollateral,
+) -> Result<Vec<StateConstraint>, BlueprintError> {
+    let mut constraints = trustline_state_constraints(terms)?;
+    if collateral == TrustlineCollateral::PureCredit {
+        constraints.push(pin_term(
+            TL_COLLATERAL_SLOT,
+            field_from_u64(TL_COLLATERAL_PURE_CREDIT),
+        ));
+    }
+    Ok(constraints)
+}
+
+/// The `CellProgram` installed on a trustline cell at a collateral point.
+pub fn trustline_cell_program_collateral(
+    terms: &TrustlineTerms,
+    collateral: TrustlineCollateral,
+) -> Result<CellProgram, BlueprintError> {
+    Ok(CellProgram::Predicate(
+        trustline_state_constraints_collateral(terms, collateral)?,
+    ))
+}
+
+/// [`trustline_factory_descriptor`] at a point of the collateral axis (the
+/// fullReserve point is byte-identical to the historical descriptor).
+pub fn trustline_factory_descriptor_collateral(
+    terms: &TrustlineTerms,
+    collateral: TrustlineCollateral,
+) -> Result<FactoryDescriptor, BlueprintError> {
+    Ok(settlement_descriptor(
+        "dregg-blueprint:trustline-factory v1",
+        trustline_state_constraints_collateral(terms, collateral)?,
+    ))
+}
+
 // =============================================================================
 // Channel group — the ORGANS §4 weld (the group-key lift)
 // =============================================================================
@@ -1335,6 +1427,61 @@ mod tests {
     }
 
     #[test]
+    fn trustline_collateral_axis_full_reserve_is_byte_identical() {
+        // The fullReserve point of the axis IS the historical program: same
+        // constraints, same VK, same factory — no already-born line moves.
+        let t = tl_terms();
+        assert_eq!(
+            trustline_state_constraints(&t).unwrap(),
+            trustline_state_constraints_collateral(&t, TrustlineCollateral::FullReserve).unwrap(),
+        );
+        assert_eq!(
+            trustline_factory_descriptor(&t).unwrap().factory_vk,
+            trustline_factory_descriptor_collateral(&t, TrustlineCollateral::FullReserve)
+                .unwrap()
+                .factory_vk,
+        );
+    }
+
+    #[test]
+    fn trustline_pure_credit_pins_the_mode_and_distinguishes_the_vk() {
+        let t = tl_terms();
+        let full = trustline_factory_descriptor(&t).unwrap();
+        let pure = trustline_factory_descriptor_collateral(&t, TrustlineCollateral::PureCredit)
+            .unwrap();
+        assert_ne!(
+            full.factory_vk, pure.factory_vk,
+            "the collateral point is content-addressed into the per-line program"
+        );
+
+        let p = trustline_cell_program_collateral(&t, TrustlineCollateral::PureCredit).unwrap();
+        let born = CellState::new(0);
+        assert!(eval(&p, &born, None, 0).is_ok(), "all-zero birth passes");
+        // The open turn writes the mode pin alongside the terms.
+        let mut open = tl_open_state(&t);
+        open.fields[TL_COLLATERAL_SLOT as usize] = field_from_u64(TL_COLLATERAL_PURE_CREDIT);
+        assert!(eval(&p, &open, Some(&born), 0).is_ok(), "pureCredit open");
+        // Opening WITHOUT the mode pin is refused (slot 7 ≠ the pinned literal).
+        assert!(
+            eval(&p, &tl_open_state(&t), Some(&born), 0).is_err(),
+            "a pureCredit program refuses an unpinned open"
+        );
+        // Once open, flipping the mode back is refused (term pin).
+        let mut flipped = open.clone();
+        flipped.fields[TL_COLLATERAL_SLOT as usize] =
+            field_from_u64(TL_COLLATERAL_FULL_RESERVE);
+        assert!(eval(&p, &flipped, Some(&open), 0).is_err(), "mode immutable");
+        // The credit teeth ride unchanged: within-line draw admits, over-line
+        // refuses (Lean §12b stepC — draws move only the credit registers).
+        let mut drawn = open.clone();
+        drawn.fields[TL_DRAWN_SLOT as usize] = field_from_u64(30);
+        assert!(eval(&p, &drawn, Some(&open), 0).is_ok());
+        let mut over = open.clone();
+        over.fields[TL_DRAWN_SLOT as usize] = field_from_u64(101);
+        assert!(eval(&p, &over, Some(&open), 0).is_err());
+    }
+
+    #[test]
     fn trustline_zero_terms_rejected_at_build() {
         let mut t = tl_terms();
         t.line = 0;
@@ -1798,5 +1945,1326 @@ mod tests {
         })
         .unwrap();
         assert_ne!(a.factory_vk, ob.factory_vk);
+    }
+}
+
+// =============================================================================
+// Flash well — the zero-duration line of credit (the flash-loan answer)
+// =============================================================================
+//
+// A FLASH WELL is a liquidity cell whose credit has ZERO DURATION: borrowing
+// and settlement are the SAME action. The load-bearing semantics is the
+// executor's per-action net-delta program check
+// (`turn/src/executor/execute_tree.rs`): before an action's effects apply,
+// the executor snapshots every cell the action touches (lines 600–624, over
+// `collect_touched_cells`, `turn/src/executor/authorize.rs:2127`), and after
+// the effects it re-evaluates each touched cell's installed program against
+// the NET `(old, new)` pair (lines 770–886; a violation is
+// `TurnError::ProgramViolation` and the WHOLE action refuses). The program
+// never sees the intra-action dip — only the net — so a well program of the
+// shape "my post-balance ≥ my pre-balance + fee" admits ANY intra-action use
+// of the liquidity (any ring of legs through any cells) while refusing every
+// action that nets the well down. The ACTION is the loan's whole lifetime.
+//
+// ## The granularity constraint (per-ACTION, not per-turn)
+//
+// Programs are evaluated once per action over that action's net. A ring
+// split across TWO actions is two nets: the borrow action alone nets the
+// well down `amount` and refuses; nothing carries credit forward. This is
+// the flash-loan atomicity law as a PROGRAM consequence, not builder
+// convention — see `flash_well_tests::ring_split_across_two_actions_refuses`.
+//
+// ## Encoding `post ≥ pre + fee` with today's atoms (the quantized ratchet)
+//
+// The runtime has NO relative balance atom: `BalanceGte`/`BalanceLte`
+// (`cell/src/program.rs`) read only the absolute post-state balance. The
+// well therefore carries its floor in a slot — `FW_RATCHET_SLOT`, the fee
+// schedule position — and the program welds three teeth into the relative
+// gate:
+//
+// 1. **Quantization** — `MemberOf{ratchet, {0, fee, 2·fee, …}}`: the ratchet
+//    only ever sits on whole-fee rungs (no penny-stepping past the floor).
+// 2. **Strict-on-touch** — `state == OPEN ⇒ StrictMonotonic{ratchet}`: EVERY
+//    action that touches an open well (the executor's touched-set is every
+//    cell named by any effect, incl. `ExerciseViaCapability` inner effects)
+//    must climb the ratchet at least one rung. A net-zero borrow/repay that
+//    skips the fee is refused HERE — the fee-evasion tooth.
+// 3. **The rung ladder** — for every rung k:
+//    `state == OPEN ∧ ratchet == k·fee ⇒ BalanceGte{principal + (k−1)·fee}`.
+//    Climbing a rung raises the absolute floor by `fee`, so the net effect
+//    of any admitted well-touching action is `post ≥ floor(old rung) + fee·Δrungs
+//    ≥ pre-floor + fee` — the flash-loan invariant, program-enforced.
+//
+// Together: an action that touches an open well MUST climb ≥1 rung (tooth 2),
+// CAN only climb in whole fees (tooth 1), and every climb drags the absolute
+// balance floor up with it (tooth 3). The well's liquidity never decreases
+// and every use pays ≥ the published fee. Accrued fees live IN the well's
+// balance (solvent by the same floor) until the owner closes and sweeps.
+//
+// ## Honest residue (named, with the closure lane)
+//
+// * The floor is the SCHEDULE, not the literal pre-balance: a donation above
+//   the current floor builds a cushion a later borrower could spend down to
+//   the floor. Donations to an open well are not the protocol shape (fund
+//   while UNINIT; while OPEN every touch pays a quantum anyway). The closure
+//   lane is a real `BalanceDeltaGte { min_delta }` atom (old-vs-new balance,
+//   one evaluator arm + a Lean `Exec.Program` twin) which collapses teeth
+//   1–3 into one constraint; this blueprint's published surface (terms,
+//   slots, builders) is unchanged by that swap.
+// * EVERY open-well touch pays a quantum — including a post-open
+//   `GrantCapability{from: well}` (the touched-set includes grant sources).
+//   Mint borrower capabilities at adopt time (pre-OPEN), or attenuate the
+//   adopt-time grant holder-side (delegation does not touch the well cell).
+// * `max_draws` bounds the ladder (descriptor size is O(max_draws)); a well
+//   at the last rung is exhausted — close it and open a successor.
+//
+// Lean twin: NOT YET AUTHORED (this blueprint is runtime-first; the
+// `Dregg2.Apps.FlashWell` keystones — net-floor admission, fee-evasion
+// refusal, two-action refusal — are the named lane to land with the
+// `BalanceDeltaGte` atom). Until then the spec is this module doc + the
+// program-level tests below + the executor-path tests in
+// `sdk/src/flashwell.rs`.
+
+/// Flash-well slot 0 — lifecycle state ([`STATE_UNINIT`] → [`STATE_OPEN`] →
+/// [`FW_STATE_CLOSED`]).
+pub const FW_STATE_SLOT: u8 = 0;
+/// Flash-well slot 1 — the published principal: the liquidity the well must
+/// never end an action below (big-endian u64). Term-pinned once OPEN.
+pub const FW_PRINCIPAL_SLOT: u8 = 1;
+/// Flash-well slot 2 — the published flat fee per use (big-endian u64).
+/// Term-pinned once OPEN.
+pub const FW_FEE_SLOT: u8 = 2;
+/// Flash-well slot 3 — the governance identity: the public key whose
+/// signature gates lifecycle writes (open/close). Term-pinned once OPEN.
+pub const FW_OWNER_SLOT: u8 = 3;
+/// Flash-well slot 4 — THE RATCHET: the fee-schedule position, a multiple of
+/// the published fee. The open turn primes it to `1·fee`; every open-well
+/// touch must climb ≥1 rung, and rung k pins the absolute balance floor
+/// `principal + (k−1)·fee`. Accrued (redeemable) fees =
+/// [`flash_well_accrued_fees`]` = ratchet − fee`.
+pub const FW_RATCHET_SLOT: u8 = 4;
+
+/// Terminal state of a closed (swept) flash well — inert: no transition row
+/// out of CLOSED, the settlement-family no-double-resolve shape.
+pub const FW_STATE_CLOSED: u64 = 2;
+
+/// The ladder-size guard: descriptors are O(`max_draws`) constraints, so the
+/// blueprint refuses schedules past this many rungs (fail-closed at build).
+pub const MAX_FLASH_WELL_DRAWS: u32 = 4096;
+
+/// The published terms of one flash well.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlashWellTerms {
+    /// The well's principal: the liquidity floor (nonzero). Funded at birth
+    /// (while UNINIT) like the settlement families; the program's rung
+    /// ladder keeps the balance ≥ this forever while OPEN.
+    pub principal: u64,
+    /// Flat fee per use (nonzero): the minimum the well's balance must rise
+    /// per well-touching action while OPEN.
+    pub fee: u64,
+    /// Governance public key (nonzero): the `SenderIs` gate over lifecycle
+    /// writes (the [`ChannelTerms::admin`] shape — the executor evaluates
+    /// `EvalContext::sender` as the acting agent cell's public key).
+    pub owner: FieldElement,
+    /// Number of servable draws after open (nonzero, ≤
+    /// [`MAX_FLASH_WELL_DRAWS`]). Rung domain is `{0} ∪ {k·fee : k ∈
+    /// 1..=max_draws+1}` (rung 1 is the open turn's priming quantum); a well
+    /// at the last rung is exhausted.
+    pub max_draws: u32,
+}
+
+/// A flash-well term set the blueprint refuses to publish (fail-closed at
+/// build). A separate enum from [`BlueprintError`] so this section stays
+/// append-only against the parallel lanes editing that enum.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FlashWellError {
+    /// `principal == 0`: a well with nothing to lend, indistinguishable from
+    /// an unborn cell.
+    ZeroPrincipal,
+    /// `fee == 0`: the ratchet rungs collapse onto one value, so the
+    /// strict-on-touch tooth would refuse every use forever (and the well
+    /// would earn nothing). Rejected at build.
+    ZeroFee,
+    /// A zero owner key would have NO governor: the well could never open.
+    ZeroOwner,
+    /// `max_draws == 0` (an unusable well) or `> MAX_FLASH_WELL_DRAWS` (a
+    /// descriptor-size bomb).
+    BadDrawBound,
+    /// `principal + (max_draws+1)·fee` overflows u64: the top rung's floor
+    /// would wrap. Rejected at build.
+    ScheduleOverflow,
+}
+
+impl std::fmt::Display for FlashWellError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FlashWellError::ZeroPrincipal => write!(f, "flash-well principal must be nonzero"),
+            FlashWellError::ZeroFee => write!(f, "flash-well fee must be nonzero"),
+            FlashWellError::ZeroOwner => write!(f, "flash-well owner key must be nonzero"),
+            FlashWellError::BadDrawBound => write!(
+                f,
+                "flash-well max_draws must be in 1..={MAX_FLASH_WELL_DRAWS}"
+            ),
+            FlashWellError::ScheduleOverflow => write!(
+                f,
+                "flash-well fee schedule overflows u64 (principal + (max_draws+1)*fee)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FlashWellError {}
+
+/// The redeemable accrued fees at a given ratchet reading: `ratchet − fee`
+/// (the open turn's priming quantum is the schedule origin, not income).
+pub fn flash_well_accrued_fees(ratchet: u64, fee: u64) -> u64 {
+    ratchet.saturating_sub(fee)
+}
+
+/// The absolute balance floor pinned at rung `k` (`k ≥ 1`):
+/// `principal + (k−1)·fee`.
+pub fn flash_well_floor_at(terms: &FlashWellTerms, rung: u32) -> u64 {
+    terms.principal + (rung.saturating_sub(1) as u64) * terms.fee
+}
+
+/// The flash-well constraint set. The teeth, in keystone order (see the
+/// section docs above for why this encodes `post ≥ pre + fee`):
+///
+/// 1. **term pins** — principal / fee / owner pinned once out of `UNINIT`
+///    (the settlement-family `pin_term` shape);
+/// 2. **lifecycle** — `AllowedTransitions` UNINIT→OPEN→CLOSED; CLOSED is
+///    terminal and inert (no row out — the sweep is the last word);
+/// 3. **governance** — lifecycle writes admit only the owner sender
+///    (`AnyOf[Immutable{state}, SenderIs{owner}]`);
+/// 4. **ratchet never rewinds** — `Monotonic{ratchet}`;
+/// 5. **quantization** — `MemberOf{ratchet, {0} ∪ {k·fee}}`;
+/// 6. **strict-on-touch** — `OPEN ⇒ StrictMonotonic{ratchet}`: every action
+///    touching an open well climbs ≥1 rung (the fee-evasion tooth; also
+///    forces the open turn itself to prime rung 1);
+/// 7. **the rung ladder** — `OPEN ∧ ratchet == k·fee ⇒
+///    BalanceGte{principal + (k−1)·fee}` for every rung k: the climb drags
+///    the absolute liquidity floor up by `fee` per rung.
+pub fn flash_well_state_constraints(
+    terms: &FlashWellTerms,
+) -> Result<Vec<StateConstraint>, FlashWellError> {
+    if terms.principal == 0 {
+        return Err(FlashWellError::ZeroPrincipal);
+    }
+    if terms.fee == 0 {
+        return Err(FlashWellError::ZeroFee);
+    }
+    if terms.owner == FIELD_ZERO {
+        return Err(FlashWellError::ZeroOwner);
+    }
+    if terms.max_draws == 0 || terms.max_draws > MAX_FLASH_WELL_DRAWS {
+        return Err(FlashWellError::BadDrawBound);
+    }
+    // Top rung = max_draws + 1 (rung 1 is the open turn's priming quantum).
+    let top_rung = terms.max_draws as u64 + 1;
+    let schedule_top = top_rung
+        .checked_mul(terms.fee)
+        .and_then(|fees| terms.principal.checked_add(fees))
+        .ok_or(FlashWellError::ScheduleOverflow)?;
+    let _ = schedule_top;
+
+    let mut cs = vec![
+        // ── 1. term pins ──
+        pin_term(FW_PRINCIPAL_SLOT, field_from_u64(terms.principal)),
+        pin_term(FW_FEE_SLOT, field_from_u64(terms.fee)),
+        pin_term(FW_OWNER_SLOT, terms.owner),
+        // ── 2. lifecycle (CLOSED terminal/inert) ──
+        StateConstraint::AllowedTransitions {
+            slot_index: FW_STATE_SLOT,
+            allowed: vec![
+                (field_from_u64(STATE_UNINIT), field_from_u64(STATE_UNINIT)),
+                (field_from_u64(STATE_UNINIT), field_from_u64(STATE_OPEN)),
+                (field_from_u64(STATE_OPEN), field_from_u64(STATE_OPEN)),
+                (field_from_u64(STATE_OPEN), field_from_u64(FW_STATE_CLOSED)),
+            ],
+        },
+        // ── 3. governance: only the owner steps the lifecycle ──
+        StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::Immutable {
+                    index: FW_STATE_SLOT,
+                },
+                SimpleStateConstraint::SenderIs { pk: terms.owner },
+            ],
+        },
+        // ── 4. the ratchet never rewinds ──
+        StateConstraint::Monotonic {
+            index: FW_RATCHET_SLOT,
+        },
+        // ── 5. quantization: whole-fee rungs only ──
+        StateConstraint::MemberOf {
+            index: FW_RATCHET_SLOT,
+            set: std::iter::once(0)
+                .chain((1..=top_rung).map(|k| k * terms.fee))
+                .collect(),
+        },
+        // ── 6. THE FEE-EVASION TOOTH: every open-well touch climbs ──
+        StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::Not(Box::new(state_is(STATE_OPEN))),
+                SimpleStateConstraint::StrictMonotonic {
+                    index: FW_RATCHET_SLOT,
+                },
+            ],
+        },
+    ];
+    // ── 7. THE RUNG LADDER: OPEN ∧ ratchet == k·fee ⇒ balance ≥ floor(k) ──
+    // Rung 0 (unreachable while OPEN — tooth 6 forces the open turn off it)
+    // is floored at the principal anyway, defense-in-depth.
+    cs.push(StateConstraint::AnyOf {
+        variants: vec![
+            SimpleStateConstraint::Not(Box::new(state_is(STATE_OPEN))),
+            SimpleStateConstraint::Not(Box::new(SimpleStateConstraint::FieldEquals {
+                index: FW_RATCHET_SLOT,
+                value: field_from_u64(0),
+            })),
+            SimpleStateConstraint::BalanceGte {
+                min: terms.principal,
+            },
+        ],
+    });
+    for k in 1..=top_rung {
+        cs.push(StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::Not(Box::new(state_is(STATE_OPEN))),
+                SimpleStateConstraint::Not(Box::new(SimpleStateConstraint::FieldEquals {
+                    index: FW_RATCHET_SLOT,
+                    value: field_from_u64(k * terms.fee),
+                })),
+                SimpleStateConstraint::BalanceGte {
+                    min: terms.principal + (k - 1) * terms.fee,
+                },
+            ],
+        });
+    }
+    Ok(cs)
+}
+
+/// The `CellProgram` installed on the flash-well cell for its whole life.
+pub fn flash_well_cell_program(terms: &FlashWellTerms) -> Result<CellProgram, FlashWellError> {
+    Ok(CellProgram::Predicate(flash_well_state_constraints(terms)?))
+}
+
+/// **The flash-well factory (per-well, content-addressed)** — like the
+/// settlement families, each term set gets its own descriptor whose
+/// constraints bake the terms as literals; the liquidity lives in the cell's
+/// own `balance` (funding and sweeping are ordinary conserving `Transfer`s).
+pub fn flash_well_factory_descriptor(
+    terms: &FlashWellTerms,
+) -> Result<FactoryDescriptor, FlashWellError> {
+    Ok(settlement_descriptor(
+        "dregg-blueprint:flash-well-factory v1",
+        flash_well_state_constraints(terms)?,
+    ))
+}
+
+// =============================================================================
+// Flash-well program tests — the executor-independent half. Each test name
+// states the LAW it pins; the executor-path twins (real TurnExecutor, real
+// per-action snapshots) live in `sdk/src/flashwell.rs`.
+//
+// VERIFIED 2026-06-12: all 10 program-level tests pass (`cargo test -p
+// dregg-cell flash_well`); the executor-path twins pass in the SDK lane.
+// =============================================================================
+
+#[cfg(test)]
+mod flash_well_tests {
+    use super::*;
+    use crate::preconditions::EvalContext;
+    use crate::program::{TransitionMeta, WitnessBundle};
+    use crate::state::CellState;
+
+    const OWNER: [u8; 32] = [0x0Fu8; 32];
+    const STRANGER: [u8; 32] = [0x51u8; 32];
+
+    fn fw_terms() -> FlashWellTerms {
+        FlashWellTerms {
+            principal: 1_000,
+            fee: 10,
+            owner: OWNER,
+            max_draws: 4,
+        }
+    }
+
+    fn ctx(sender: Option<[u8; 32]>) -> EvalContext {
+        EvalContext {
+            block_height: 7,
+            timestamp: 0,
+            current_epoch: 0,
+            sender,
+            sender_epoch_count: 0,
+            revealed_preimage: None,
+        }
+    }
+
+    fn eval(
+        program: &CellProgram,
+        new: &CellState,
+        old: Option<&CellState>,
+        sender: Option<[u8; 32]>,
+    ) -> Result<(), crate::program::ProgramError> {
+        program.evaluate_full(
+            new,
+            old,
+            Some(&ctx(sender)),
+            &TransitionMeta::wildcard(),
+            &WitnessBundle::empty(),
+        )
+    }
+
+    /// The post-open canonical well: terms written, ratchet primed at rung 1
+    /// (`1·fee`), balance = exactly the principal (the funded birth, after
+    /// the adopt turn burns its fee — the settlement-family lifecycle).
+    fn open_well(t: &FlashWellTerms) -> CellState {
+        let mut s = CellState::new(0);
+        s.fields[FW_STATE_SLOT as usize] = field_from_u64(STATE_OPEN);
+        s.fields[FW_PRINCIPAL_SLOT as usize] = field_from_u64(t.principal);
+        s.fields[FW_FEE_SLOT as usize] = field_from_u64(t.fee);
+        s.fields[FW_OWNER_SLOT as usize] = t.owner;
+        s.fields[FW_RATCHET_SLOT as usize] = field_from_u64(t.fee);
+        s.set_balance(t.principal as i64);
+        s
+    }
+
+    /// `old_well` net-mutated to rung `k` with balance `bal` — the (old, new)
+    /// pair the executor's per-action program check sees
+    /// (`turn/src/executor/execute_tree.rs:600-624` snapshot,
+    /// `:770-886` net re-check). The intra-action borrow/use legs are
+    /// INVISIBLE here by construction — that is the artifact's whole point.
+    fn net(base: &CellState, rung: u64, fee: u64, bal: i64) -> CellState {
+        let mut s = base.clone();
+        s.fields[FW_RATCHET_SLOT as usize] = field_from_u64(rung * fee);
+        s.set_balance(bal);
+        s
+    }
+
+    #[test]
+    fn birth_funding_and_open() {
+        let t = fw_terms();
+        let p = flash_well_cell_program(&t).unwrap();
+        // All-zero birth passes.
+        let born = CellState::new(0);
+        assert!(eval(&p, &born, None, Some(OWNER)).is_ok());
+        // Funding while UNINIT (balance up, slots untouched): admitted, no
+        // ratchet quantum owed — UNINIT is exempt from the touch tooth.
+        let mut funded = born.clone();
+        funded.set_balance(t.principal as i64);
+        assert!(eval(&p, &funded, Some(&born), Some(STRANGER)).is_ok());
+        // The owner opens: terms + state + the rung-1 priming quantum.
+        assert!(eval(&p, &open_well(&t), Some(&funded), Some(OWNER)).is_ok());
+        // A stranger may NOT open (lifecycle is owner-gated).
+        assert!(eval(&p, &open_well(&t), Some(&funded), Some(STRANGER)).is_err());
+        // Opening without priming the ratchet: refused (the touch tooth —
+        // the open turn is itself an open-well-ending touch).
+        let mut unprimed = open_well(&t);
+        unprimed.fields[FW_RATCHET_SLOT as usize] = field_from_u64(0);
+        assert!(eval(&p, &unprimed, Some(&funded), Some(OWNER)).is_err());
+        // Opening with a tampered principal term: refused (term pin).
+        let mut inflated = open_well(&t);
+        inflated.fields[FW_PRINCIPAL_SLOT as usize] = field_from_u64(9_999_999);
+        assert!(eval(&p, &inflated, Some(&funded), Some(OWNER)).is_err());
+    }
+
+    /// LAW 1 — the honest ring succeeds. The ring's net on the well is
+    /// (ratchet +1 rung, balance +fee); every intra-action leg (the draw out,
+    /// the caller's ring legs, the repayment in) collapses into that net
+    /// before the program ever runs.
+    #[test]
+    fn honest_ring_net_admits() {
+        let t = fw_terms();
+        let p = flash_well_cell_program(&t).unwrap();
+        let old = open_well(&t); // rung 1, balance = principal
+        let new = net(&old, 2, t.fee, (t.principal + t.fee) as i64);
+        assert!(
+            eval(&p, &new, Some(&old), Some(STRANGER)).is_ok(),
+            "borrow→use→repay(+fee) in ONE action must admit, any sender"
+        );
+        // And again from rung 2 (the well keeps lending; fees accrue in
+        // the balance, floored by the next rung).
+        let newer = net(&new, 3, t.fee, (t.principal + 2 * t.fee) as i64);
+        assert!(eval(&p, &newer, Some(&new), Some(STRANGER)).is_ok());
+        assert_eq!(flash_well_accrued_fees(2 * t.fee, t.fee), t.fee);
+    }
+
+    /// LAW 2 — a ring missing its repayment leg refuses WHOLE: the net is
+    /// (ratchet +1, balance −amount), under the new rung's floor. In the
+    /// executor this is `TurnError::ProgramViolation` for the whole action
+    /// (`execute_tree.rs:870-880`) — no leg of the ring survives.
+    #[test]
+    fn missing_repayment_refuses() {
+        let t = fw_terms();
+        let p = flash_well_cell_program(&t).unwrap();
+        let old = open_well(&t);
+        let borrowed = 600;
+        let new = net(&old, 2, t.fee, (t.principal - borrowed) as i64);
+        assert!(eval(&p, &new, Some(&old), Some(STRANGER)).is_err());
+        // Even repaying the principal exactly (fee short) nets under-floor —
+        // see the under-fee law; and not bumping the rung at all is the
+        // fee-evasion law. All roads refuse.
+    }
+
+    /// LAW 3 — an under-fee ring refuses; the boundary (exactly +fee) admits.
+    #[test]
+    fn under_fee_refuses_boundary_admits() {
+        let t = fw_terms();
+        let p = flash_well_cell_program(&t).unwrap();
+        let old = open_well(&t);
+        let short = net(&old, 2, t.fee, (t.principal + t.fee - 1) as i64);
+        assert!(
+            eval(&p, &short, Some(&old), Some(STRANGER)).is_err(),
+            "one unit under the fee must refuse (rung-2 floor)"
+        );
+        let exact = net(&old, 2, t.fee, (t.principal + t.fee) as i64);
+        assert!(eval(&p, &exact, Some(&old), Some(STRANGER)).is_ok());
+    }
+
+    /// LAW 4 — THE GRANULARITY CONSTRAINT: a ring split across TWO actions
+    /// refuses. Programs evaluate per ACTION over the net (old, new) pair —
+    /// `execute_tree.rs` snapshots the touched set BEFORE one action's
+    /// effects (lines 600–624) and re-checks each touched cell's program on
+    /// its (pre, post) AFTER them (lines 770–886). The borrow action alone
+    /// nets the well down: there is no cross-action credit to carry.
+    #[test]
+    fn ring_split_across_two_actions_refuses() {
+        let t = fw_terms();
+        let p = flash_well_cell_program(&t).unwrap();
+        let old = open_well(&t);
+        let borrowed = 600;
+        // Action 1 of the split ring: draw out (with the dutiful rung bump).
+        let action1 = net(&old, 2, t.fee, (t.principal - borrowed) as i64);
+        assert!(
+            eval(&p, &action1, Some(&old), Some(STRANGER)).is_err(),
+            "the borrow half of a split ring must refuse (floor)"
+        );
+        // Action 1 without the bump refuses too (fee-evasion tooth).
+        let action1_sneaky = net(&old, 1, t.fee, (t.principal - borrowed) as i64);
+        assert!(eval(&p, &action1_sneaky, Some(&old), Some(STRANGER)).is_err());
+        // The SAME two legs fused into ONE action are the admitted honest
+        // ring of `honest_ring_net_admits` — granularity IS the law.
+    }
+
+    /// The fee-evasion tooth: a net-zero touch (borrow X, repay exactly X,
+    /// no rung climb) refuses — every action touching an open well pays.
+    #[test]
+    fn net_zero_touch_without_climb_refuses() {
+        let t = fw_terms();
+        let p = flash_well_cell_program(&t).unwrap();
+        let old = open_well(&t);
+        assert!(
+            eval(&p, &old.clone(), Some(&old), Some(STRANGER)).is_err(),
+            "an untouched-net touch of an open well must refuse (StrictMonotonic)"
+        );
+        // Climbing one rung while paying: admits (the contrast).
+        let paid = net(&old, 2, t.fee, (t.principal + t.fee) as i64);
+        assert!(eval(&p, &paid, Some(&old), Some(STRANGER)).is_ok());
+    }
+
+    /// Quantization + monotonicity teeth: penny-steps, rewinds, and
+    /// past-the-schedule climbs all refuse.
+    #[test]
+    fn ratchet_quantized_monotone_bounded() {
+        let t = fw_terms();
+        let p = flash_well_cell_program(&t).unwrap();
+        let old = open_well(&t);
+        // A non-multiple ratchet write: refused (MemberOf).
+        let mut penny = old.clone();
+        penny.fields[FW_RATCHET_SLOT as usize] = field_from_u64(t.fee + 1);
+        penny.set_balance((t.principal + t.fee) as i64);
+        assert!(eval(&p, &penny, Some(&old), Some(STRANGER)).is_err());
+        // A rewind: refused (Monotonic), even back onto a valid rung.
+        let high = net(&old, 3, t.fee, (t.principal + 2 * t.fee) as i64);
+        let rewound = net(&high, 2, t.fee, (t.principal + 2 * t.fee) as i64);
+        assert!(eval(&p, &rewound, Some(&high), Some(STRANGER)).is_err());
+        // Past the top rung (max_draws=4 → top rung 5): refused — exhaustion.
+        let top = net(&old, 5, t.fee, (t.principal + 4 * t.fee) as i64);
+        assert!(eval(&p, &top, Some(&old), Some(STRANGER)).is_ok());
+        let past = net(&top, 6, t.fee, (t.principal + 5 * t.fee) as i64);
+        assert!(eval(&p, &past, Some(&top), Some(STRANGER)).is_err());
+    }
+
+    /// Close: the owner sweeps (principal + accrued fees) and the well goes
+    /// inert; strangers cannot close; CLOSED is terminal.
+    #[test]
+    fn owner_close_sweeps_and_inert() {
+        let t = fw_terms();
+        let p = flash_well_cell_program(&t).unwrap();
+        let open = net(&open_well(&t), 3, t.fee, (t.principal + 2 * t.fee) as i64);
+        let mut closed = open.clone();
+        closed.fields[FW_STATE_SLOT as usize] = field_from_u64(FW_STATE_CLOSED);
+        closed.set_balance(0); // the sweep rides the same action
+        assert!(eval(&p, &closed, Some(&open), Some(OWNER)).is_ok());
+        assert!(eval(&p, &closed, Some(&open), Some(STRANGER)).is_err());
+        // Any touch of a closed well refuses (no transition row out).
+        assert!(eval(&p, &closed, Some(&closed), Some(OWNER)).is_err());
+        assert!(eval(&p, &open, Some(&closed), Some(OWNER)).is_err());
+    }
+
+    #[test]
+    fn bad_terms_rejected_at_build() {
+        let mut t = fw_terms();
+        t.principal = 0;
+        assert_eq!(
+            flash_well_state_constraints(&t),
+            Err(FlashWellError::ZeroPrincipal)
+        );
+        let mut t = fw_terms();
+        t.fee = 0;
+        assert_eq!(flash_well_state_constraints(&t), Err(FlashWellError::ZeroFee));
+        let mut t = fw_terms();
+        t.owner = FIELD_ZERO;
+        assert_eq!(
+            flash_well_state_constraints(&t),
+            Err(FlashWellError::ZeroOwner)
+        );
+        let mut t = fw_terms();
+        t.max_draws = 0;
+        assert_eq!(
+            flash_well_state_constraints(&t),
+            Err(FlashWellError::BadDrawBound)
+        );
+        let mut t = fw_terms();
+        t.principal = u64::MAX - 5;
+        assert_eq!(
+            flash_well_state_constraints(&t),
+            Err(FlashWellError::ScheduleOverflow)
+        );
+    }
+
+    #[test]
+    fn descriptors_are_per_well_content_addressed() {
+        let a = flash_well_factory_descriptor(&fw_terms()).unwrap();
+        let b = flash_well_factory_descriptor(&fw_terms()).unwrap();
+        assert_eq!(a.factory_vk, b.factory_vk, "same terms → same factory");
+        let mut t2 = fw_terms();
+        t2.fee = 11;
+        let c = flash_well_factory_descriptor(&t2).unwrap();
+        assert_ne!(a.factory_vk, c.factory_vk, "different fee → different well");
+    }
+}
+
+// =============================================================================
+// DKG ceremony — the randomness-organ transport cell (ORGANS §6 upgrade path)
+// =============================================================================
+//
+// The ceremony state of one distributed key generation
+// (`dregg_federation::dkg`, joint-Feldman) is a CELL. The DKG module proves
+// the protocol math and DEMANDS two things of its environment: a COMMON VIEW
+// (`compute_qual` is deterministic GIVEN agreed `(dealings, complaints,
+// reveals)` sets) and ATTRIBUTABLE messages (so a bad dealing / false
+// complaint is slashable). This blueprint is where both become chain facts:
+//
+// * **The phase machine** — UNINIT → DEALING → COMPLAINT → REVEAL →
+//   FINAL/ABORTED, forward-only, terminals inert (the settlement-family
+//   no-double-resolve shape). Rounds cannot be skipped, reopened, or
+//   reordered.
+// * **Per-round view roots** — each round-CLOSING turn pins the canonical
+//   root of that round's agreed message set
+//   (`dregg_federation::dkg_ceremony::CeremonyView::{dealings_root,
+//   responses_root, reveals_root}`) into a slot that is writable ONLY by
+//   that one transition and frozen forever after. "We all computed QUAL
+//   over the same view" is then checkable against the chain: recompute the
+//   root from the published signed messages and compare.
+// * **Deadline gates** — a round may close only AFTER its window
+//   (`TemporalGate`, the executor's block height), so silence becomes
+//   attributable: a dealer who did not answer a complaint by the reveal
+//   deadline had the whole window and is disqualified with cause.
+// * **The participant set is a TERM** — the roster commitment
+//   ([`dkg_roster_root`] over [`dkg_participant_leaf`]s binding index, cell,
+//   seal key, AND signing key) is pinned at open, so the per-ceremony
+//   factory content-addresses the EXACT participant set; substituting a
+//   seal or signing key re-commits to a different ceremony and fails closed.
+// * **The output is a commitment** — FINAL requires a nonzero output-slot
+//   commitment (`CeremonyPublicOutput::commitment()`: QUAL ‖ the
+//   `DkgPublicView` bytes); ABORTED requires it ZERO. A ceremony can
+//   never present as both finished and aborted, and the committed output
+//   is recomputable by anyone holding the agreed view.
+//
+// ## What this program CANNOT see (honesty, like the settlement families)
+//
+// * The roots are commitments, not the messages: the program enforces that
+//   SOME root was pinned by the right transition under the right authority
+//   at the right height — that the root matches the genuinely-broadcast
+//   message set is the transport's auditable obligation
+//   (`dregg_federation::dkg_ceremony` signed messages + the node service /
+//   blocklace carrying them; any participant recomputes and compares).
+// * Slashing is NOT here: an offense (`dkg_ceremony::Offense` — verifiable
+//   equivocation pairs, witness-first complaint attribution) is evidence
+//   against a participant's obligation bond (`obligation_factory_descriptor`
+//   — bond in the cell's own balance, slash = an ordinary move), composed in
+//   the adjudication lane (ORGANS §5).
+//
+// ## Governance shape
+//
+// Hosted, like the channel group: an admin key (the ceremony coordinator —
+// a node operator or a council-held key) gates phase/root/output writes via
+// `SenderIs`. Participants AUTHENTICATE their round messages with their own
+// roster signing keys (transport layer); the admin merely sequences the
+// closes. A coordinator that pins a WRONG root is caught by recomputation
+// (and the descriptor's content address names exactly which ceremony it
+// betrayed); it cannot forge participants' signed messages.
+
+/// DKG slot 0 — ceremony phase ([`STATE_UNINIT`] → [`DKG_PHASE_DEALING`] →
+/// [`DKG_PHASE_COMPLAINT`] → [`DKG_PHASE_REVEAL`] → [`DKG_PHASE_FINAL`] /
+/// [`DKG_PHASE_ABORTED`]).
+pub const DKG_PHASE_SLOT: u8 = 0;
+/// DKG slot 1 — the packed ceremony parameters ([`dkg_params_field`]:
+/// committee size n ‖ threshold t). Term-pinned once dealing.
+pub const DKG_PARAMS_SLOT: u8 = 1;
+/// DKG slot 2 — the participant-set commitment ([`dkg_roster_root`]).
+/// Term-pinned once dealing: a ceremony IS its roster (resharing or a retry
+/// is a NEW ceremony cell).
+pub const DKG_ROSTER_SLOT: u8 = 2;
+/// DKG slot 3 — the round-1 agreed-view root (canonical root over the
+/// operative signed dealings). Writable only by the DEALING→COMPLAINT
+/// transition; frozen forever after.
+pub const DKG_DEALINGS_ROOT_SLOT: u8 = 3;
+/// DKG slot 4 — the round-2 agreed-view root (acks + complaints). Writable
+/// only by the COMPLAINT→REVEAL transition.
+pub const DKG_RESPONSES_ROOT_SLOT: u8 = 4;
+/// DKG slot 5 — the round-3 agreed-view root (complaint reveals). Writable
+/// only by the closing transition into FINAL or ABORTED.
+pub const DKG_REVEALS_ROOT_SLOT: u8 = 5;
+/// DKG slot 6 — the finalize output commitment
+/// (`dregg_federation::dkg_ceremony::CeremonyPublicOutput::commitment()`).
+/// Nonzero iff FINAL (zero in every other reachable state).
+pub const DKG_OUTPUT_SLOT: u8 = 6;
+/// DKG slot 7 — the ceremony coordinator key (term-pinned; `SenderIs` gates
+/// phase/root/output writes).
+pub const DKG_ADMIN_SLOT: u8 = 7;
+/// DKG slot 8 — the ceremony tag (term-pinned, nonzero): names THIS
+/// ceremony among the admin's ceremonies and content-addresses the factory.
+pub const DKG_TAG_SLOT: u8 = 8;
+/// DKG slot 9 — dealing-round deadline (block height, term-pinned): the
+/// round may close (→ COMPLAINT) only at `height ≥` this.
+pub const DKG_DEALING_DEADLINE_SLOT: u8 = 9;
+/// DKG slot 10 — complaint-round deadline (→ REVEAL gate).
+pub const DKG_COMPLAINT_DEADLINE_SLOT: u8 = 10;
+/// DKG slot 11 — reveal-round deadline (→ FINAL gate; silence past this is
+/// attributable, hence the disqualification in `compute_qual` is fair).
+pub const DKG_REVEAL_DEADLINE_SLOT: u8 = 11;
+
+/// Phase 1: dealings are being broadcast + private shares delivered.
+pub const DKG_PHASE_DEALING: u64 = 1;
+/// Phase 2: the dealing set is pinned; acks/complaints accumulate.
+pub const DKG_PHASE_COMPLAINT: u64 = 2;
+/// Phase 3: the response set is pinned; complained-against dealers reveal.
+pub const DKG_PHASE_REVEAL: u64 = 3;
+/// Terminal: |QUAL| ≥ t, output commitment pinned. Inert.
+pub const DKG_PHASE_FINAL: u64 = 4;
+/// Terminal: the ceremony aborted (|QUAL| < t, or killed after timeout).
+/// Output stays ZERO — an abort can never impersonate a finish. Inert.
+pub const DKG_PHASE_ABORTED: u64 = 5;
+
+/// Domain tag for [`dkg_participant_leaf`].
+const DKG_PARTICIPANT_LEAF_DOMAIN: &str = "dregg-dkg-participant-leaf-v1";
+/// Domain tag for [`dkg_roster_root`].
+const DKG_ROSTER_ROOT_DOMAIN: &str = "dregg-dkg-roster-root-v1";
+/// Domain tag for [`dkg_ceremony_token_id`].
+const DKG_CEREMONY_TOKEN_DOMAIN: &str = "dregg-dkg-ceremony-token-v1";
+
+/// A ceremony-terms set the blueprint refuses to publish (fail-closed at
+/// build). Separate from [`BlueprintError`] so this section stays strictly
+/// appended (parallel-lane discipline); the two compose at the service layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DkgBlueprintError {
+    /// `n == 0`, `t == 0`, or `t > n` (mirrors the federation
+    /// `DkgParams::validate`, duplicated here so the cell crate stays
+    /// dependency-clean).
+    InvalidParams {
+        /// Committee size.
+        n: u64,
+        /// Threshold.
+        t: u64,
+    },
+    /// Deadlines must satisfy `0 < dealing ≤ complaint ≤ reveal` — a zero
+    /// or reordered window would let a round close before it opened.
+    BadDeadlines,
+    /// An all-zero roster commitment is indistinguishable from an unborn
+    /// cell's empty slot.
+    ZeroRoster,
+    /// A zero admin key would have NO coordinator: every phase write would
+    /// refuse forever.
+    ZeroCeremonyAdmin,
+    /// A zero tag is indistinguishable from an unborn cell.
+    ZeroCeremonyTag,
+}
+
+impl std::fmt::Display for DkgBlueprintError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DkgBlueprintError::InvalidParams { n, t } => {
+                write!(f, "invalid DKG ceremony parameters: n={n}, t={t}")
+            }
+            DkgBlueprintError::BadDeadlines => write!(
+                f,
+                "ceremony deadlines must satisfy 0 < dealing <= complaint <= reveal"
+            ),
+            DkgBlueprintError::ZeroRoster => {
+                write!(f, "ceremony roster commitment must be nonzero")
+            }
+            DkgBlueprintError::ZeroCeremonyAdmin => {
+                write!(f, "ceremony admin key must be a nonzero field")
+            }
+            DkgBlueprintError::ZeroCeremonyTag => {
+                write!(f, "ceremony tag must be nonzero")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DkgBlueprintError {}
+
+/// Pack `(n, t)` into one field element: n big-endian in bytes 8..16, t
+/// big-endian in bytes 24..32. Nonzero for every valid parameter set
+/// (t ≥ 1), so the pinned term is never confusable with an unborn slot.
+pub fn dkg_params_field(n: u64, t: u64) -> FieldElement {
+    let mut f = FIELD_ZERO;
+    f[8..16].copy_from_slice(&n.to_be_bytes());
+    f[24..32].copy_from_slice(&t.to_be_bytes());
+    f
+}
+
+/// Unpack a [`dkg_params_field`] back to `(n, t)`.
+pub fn dkg_params_from_field(f: &FieldElement) -> (u64, u64) {
+    let n = u64::from_be_bytes(f[8..16].try_into().expect("8-byte lane"));
+    let t = u64::from_be_bytes(f[24..32].try_into().expect("8-byte lane"));
+    (n, t)
+}
+
+/// One participant leaf: BLAKE3(domain, index ‖ member_cell ‖ seal_pk ‖
+/// auth_pk). Binding BOTH keys into the on-cell roster commitment means the
+/// share fan-out targets AND the round-message verification keys are pinned
+/// by the chain — a key substitution on the off-cell roster re-commits to a
+/// different root and fails closed (the channel-member-leaf shape, plus the
+/// signing key, because DKG rounds must be attributable).
+pub fn dkg_participant_leaf(
+    index: u64,
+    member_cell: &[u8; 32],
+    seal_pk: &[u8; 32],
+    auth_pk: &[u8; 32],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key(DKG_PARTICIPANT_LEAF_DOMAIN);
+    hasher.update(&index.to_le_bytes());
+    hasher.update(member_cell);
+    hasher.update(seal_pk);
+    hasher.update(auth_pk);
+    *hasher.finalize().as_bytes()
+}
+
+/// Canonical openable commitment over the participant-leaf set: BLAKE3 over
+/// the length-prefixed SORTED leaves (the channel-member-root shape).
+pub fn dkg_roster_root(leaves: &std::collections::BTreeSet<[u8; 32]>) -> FieldElement {
+    let mut hasher = blake3::Hasher::new_derive_key(DKG_ROSTER_ROOT_DOMAIN);
+    hasher.update(&(leaves.len() as u64).to_le_bytes());
+    for leaf in leaves {
+        hasher.update(leaf);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// The ceremony cell's token id: BLAKE3(domain, admin ‖ tag ‖ roster_root).
+/// Binding the roster into the token means the ceremony's CELL ID names its
+/// exact participant set — the id every round message is signed against.
+pub fn dkg_ceremony_token_id(
+    admin: &FieldElement,
+    tag: &FieldElement,
+    roster_root: &FieldElement,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key(DKG_CEREMONY_TOKEN_DOMAIN);
+    hasher.update(admin);
+    hasher.update(tag);
+    hasher.update(roster_root);
+    *hasher.finalize().as_bytes()
+}
+
+/// The published terms of one DKG ceremony. ALL of these are term-pinned
+/// (the ceremony's whole shape is decided at birth; only the phase, the
+/// round roots, and the output commitment are live state).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DkgCeremonyTerms {
+    /// Committee size n (participants are indexed 1..=n).
+    pub n: u64,
+    /// Threshold t.
+    pub t: u64,
+    /// The participant-set commitment ([`dkg_roster_root`]).
+    pub roster_root: FieldElement,
+    /// The ceremony coordinator key (`SenderIs` gate over phase/root/output
+    /// writes). An operator key, or a council-held key.
+    pub admin: FieldElement,
+    /// Ceremony tag (nonzero): names THIS ceremony among the admin's.
+    pub tag: FieldElement,
+    /// Block height the dealing round may close at (≥).
+    pub dealing_deadline: u64,
+    /// Block height the complaint round may close at (≥).
+    pub complaint_deadline: u64,
+    /// Block height the reveal round may close at (≥) — the finalize gate.
+    pub reveal_deadline: u64,
+}
+
+/// The DKG-ceremony constraint set. The teeth, in keystone order:
+///
+/// 1. **term pins** — params, roster, admin, tag, the three deadlines
+///    (`pin_term`: immutable once out of UNINIT);
+/// 2. **the phase machine** — `AllowedTransitions` forward-only
+///    (UNINIT→DEALING→COMPLAINT→REVEAL→FINAL, aborts from any live round),
+///    NO self-rows on live rounds (between closes the cell is quiet) and no
+///    rows out of FINAL/ABORTED (terminals inert);
+/// 3. **round roots write-once-at-close** — each root slot may change only
+///    in a turn whose POST-phase is the phase that round's close enters
+///    (and each such phase is entered exactly once, so the root is frozen
+///    forever after); entering a post-round phase REQUIRES its closing root
+///    nonzero (a close must pin SOMETHING);
+/// 4. **deadline gates** — each close admits only at `height ≥` its
+///    published deadline (`TemporalGate`), making silence attributable;
+///    an abort is gated on the dealing deadline (no pre-window griefing);
+/// 5. **output discipline** — the output slot may change only entering
+///    FINAL; FINAL requires it nonzero; ABORTED requires it ZERO;
+/// 6. **governance** — phase, roots, and output writes admit only the admin
+///    sender (`AnyOf[Immutable{slot}, SenderIs{admin}]`, the channel-group
+///    per-slot actor binding).
+pub fn dkg_ceremony_state_constraints(
+    terms: &DkgCeremonyTerms,
+) -> Result<Vec<StateConstraint>, DkgBlueprintError> {
+    if terms.n == 0 || terms.t == 0 || terms.t > terms.n {
+        return Err(DkgBlueprintError::InvalidParams {
+            n: terms.n,
+            t: terms.t,
+        });
+    }
+    if terms.dealing_deadline == 0
+        || terms.complaint_deadline < terms.dealing_deadline
+        || terms.reveal_deadline < terms.complaint_deadline
+    {
+        return Err(DkgBlueprintError::BadDeadlines);
+    }
+    if terms.roster_root == FIELD_ZERO {
+        return Err(DkgBlueprintError::ZeroRoster);
+    }
+    if terms.admin == FIELD_ZERO {
+        return Err(DkgBlueprintError::ZeroCeremonyAdmin);
+    }
+    if terms.tag == FIELD_ZERO {
+        return Err(DkgBlueprintError::ZeroCeremonyTag);
+    }
+    let admin_gated = |slot: u8| StateConstraint::AnyOf {
+        variants: vec![
+            SimpleStateConstraint::Immutable { index: slot },
+            SimpleStateConstraint::SenderIs { pk: terms.admin },
+        ],
+    };
+    // `slot` changes ⇒ the post-phase is `phase` (the write-once-at-close
+    // window: the phase machine enters each post-round phase exactly once).
+    let writable_only_entering = |slot: u8, phase: u64| StateConstraint::AnyOf {
+        variants: vec![
+            SimpleStateConstraint::Immutable { index: slot },
+            state_is(phase),
+        ],
+    };
+    let nonzero = |slot: u8| {
+        SimpleStateConstraint::Not(Box::new(SimpleStateConstraint::FieldEquals {
+            index: slot,
+            value: FIELD_ZERO,
+        }))
+    };
+    Ok(vec![
+        // ── 1. term pins ──
+        pin_term(DKG_PARAMS_SLOT, dkg_params_field(terms.n, terms.t)),
+        pin_term(DKG_ROSTER_SLOT, terms.roster_root),
+        pin_term(DKG_ADMIN_SLOT, terms.admin),
+        pin_term(DKG_TAG_SLOT, terms.tag),
+        pin_term(
+            DKG_DEALING_DEADLINE_SLOT,
+            field_from_u64(terms.dealing_deadline),
+        ),
+        pin_term(
+            DKG_COMPLAINT_DEADLINE_SLOT,
+            field_from_u64(terms.complaint_deadline),
+        ),
+        pin_term(
+            DKG_REVEAL_DEADLINE_SLOT,
+            field_from_u64(terms.reveal_deadline),
+        ),
+        // ── 2. the phase machine (forward-only; terminals inert) ──
+        StateConstraint::AllowedTransitions {
+            slot_index: DKG_PHASE_SLOT,
+            allowed: vec![
+                (field_from_u64(STATE_UNINIT), field_from_u64(STATE_UNINIT)),
+                (
+                    field_from_u64(STATE_UNINIT),
+                    field_from_u64(DKG_PHASE_DEALING),
+                ),
+                (
+                    field_from_u64(DKG_PHASE_DEALING),
+                    field_from_u64(DKG_PHASE_COMPLAINT),
+                ),
+                (
+                    field_from_u64(DKG_PHASE_COMPLAINT),
+                    field_from_u64(DKG_PHASE_REVEAL),
+                ),
+                (
+                    field_from_u64(DKG_PHASE_REVEAL),
+                    field_from_u64(DKG_PHASE_FINAL),
+                ),
+                (
+                    field_from_u64(DKG_PHASE_DEALING),
+                    field_from_u64(DKG_PHASE_ABORTED),
+                ),
+                (
+                    field_from_u64(DKG_PHASE_COMPLAINT),
+                    field_from_u64(DKG_PHASE_ABORTED),
+                ),
+                (
+                    field_from_u64(DKG_PHASE_REVEAL),
+                    field_from_u64(DKG_PHASE_ABORTED),
+                ),
+            ],
+        },
+        // ── 3. round roots: write-once-at-close + close-pins-something ──
+        writable_only_entering(DKG_DEALINGS_ROOT_SLOT, DKG_PHASE_COMPLAINT),
+        writable_only_entering(DKG_RESPONSES_ROOT_SLOT, DKG_PHASE_REVEAL),
+        // The reveal root closes into EITHER terminal (an abort still pins
+        // the reveal record — the slash evidence survives the failure).
+        StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::Immutable {
+                    index: DKG_REVEALS_ROOT_SLOT,
+                },
+                state_is(DKG_PHASE_FINAL),
+                state_is(DKG_PHASE_ABORTED),
+            ],
+        },
+        when_state(DKG_PHASE_COMPLAINT, nonzero(DKG_DEALINGS_ROOT_SLOT)),
+        when_state(DKG_PHASE_REVEAL, nonzero(DKG_RESPONSES_ROOT_SLOT)),
+        when_state(DKG_PHASE_FINAL, nonzero(DKG_REVEALS_ROOT_SLOT)),
+        // ── 4. deadline gates (rounds close only after their windows) ──
+        when_state(
+            DKG_PHASE_COMPLAINT,
+            SimpleStateConstraint::TemporalGate {
+                not_before: Some(terms.dealing_deadline),
+                not_after: None,
+            },
+        ),
+        when_state(
+            DKG_PHASE_REVEAL,
+            SimpleStateConstraint::TemporalGate {
+                not_before: Some(terms.complaint_deadline),
+                not_after: None,
+            },
+        ),
+        when_state(
+            DKG_PHASE_FINAL,
+            SimpleStateConstraint::TemporalGate {
+                not_before: Some(terms.reveal_deadline),
+                not_after: None,
+            },
+        ),
+        when_state(
+            DKG_PHASE_ABORTED,
+            SimpleStateConstraint::TemporalGate {
+                not_before: Some(terms.dealing_deadline),
+                not_after: None,
+            },
+        ),
+        // ── 5. output discipline (FINAL ⇔ committed output) ──
+        writable_only_entering(DKG_OUTPUT_SLOT, DKG_PHASE_FINAL),
+        when_state(DKG_PHASE_FINAL, nonzero(DKG_OUTPUT_SLOT)),
+        when_state(
+            DKG_PHASE_ABORTED,
+            SimpleStateConstraint::FieldEquals {
+                index: DKG_OUTPUT_SLOT,
+                value: FIELD_ZERO,
+            },
+        ),
+        // ── 6. governance: the admin sequences the ceremony ──
+        admin_gated(DKG_PHASE_SLOT),
+        admin_gated(DKG_DEALINGS_ROOT_SLOT),
+        admin_gated(DKG_RESPONSES_ROOT_SLOT),
+        admin_gated(DKG_REVEALS_ROOT_SLOT),
+        admin_gated(DKG_OUTPUT_SLOT),
+    ])
+}
+
+/// The `CellProgram` installed on the ceremony cell for its whole life.
+pub fn dkg_ceremony_cell_program(
+    terms: &DkgCeremonyTerms,
+) -> Result<CellProgram, DkgBlueprintError> {
+    Ok(CellProgram::Predicate(dkg_ceremony_state_constraints(
+        terms,
+    )?))
+}
+
+/// **The DKG-ceremony factory (per-ceremony, content-addressed)** — the
+/// ORGANS §6 upgrade-path cell ("DKG replaces the dealer"). Like the
+/// settlement families, each ceremony gets its own descriptor whose
+/// constraints bake every term (params, roster, deadlines, coordinator) as
+/// literals; the factory births exactly ONE cell.
+pub fn dkg_ceremony_factory_descriptor(
+    terms: &DkgCeremonyTerms,
+) -> Result<FactoryDescriptor, DkgBlueprintError> {
+    Ok(settlement_descriptor(
+        "dregg-blueprint:dkg-ceremony-factory v1",
+        dkg_ceremony_state_constraints(terms)?,
+    ))
+}
+
+// =============================================================================
+// DKG-ceremony program tests (executor-independent half; the end-to-end half
+// rides the node service tests, `node/src/dkg_service.rs`)
+// =============================================================================
+
+#[cfg(test)]
+mod dkg_ceremony_tests {
+    use super::*;
+    use crate::preconditions::EvalContext;
+    use crate::program::{TransitionMeta, WitnessBundle};
+    use crate::state::CellState;
+
+    const ADMIN: FieldElement = [0xAD; 32];
+    const STRANGER: FieldElement = [0x66; 32];
+
+    fn terms() -> DkgCeremonyTerms {
+        DkgCeremonyTerms {
+            n: 5,
+            t: 3,
+            roster_root: [0x77; 32],
+            admin: ADMIN,
+            tag: field_from_u64(42),
+            dealing_deadline: 10,
+            complaint_deadline: 20,
+            reveal_deadline: 30,
+        }
+    }
+
+    fn ctx(height: u64, sender: Option<FieldElement>) -> EvalContext {
+        EvalContext {
+            block_height: height,
+            timestamp: 0,
+            current_epoch: 0,
+            sender,
+            sender_epoch_count: 0,
+            revealed_preimage: None,
+        }
+    }
+
+    fn eval(
+        program: &CellProgram,
+        new: &CellState,
+        old: Option<&CellState>,
+        height: u64,
+        sender: Option<FieldElement>,
+    ) -> Result<(), crate::program::ProgramError> {
+        program.evaluate_full(
+            new,
+            old,
+            Some(&ctx(height, sender)),
+            &TransitionMeta::wildcard(),
+            &WitnessBundle::empty(),
+        )
+    }
+
+    /// The post-open (DEALING) state of the canonical test ceremony.
+    fn dealing_state(t: &DkgCeremonyTerms) -> CellState {
+        let mut s = CellState::new(0);
+        s.fields[DKG_PHASE_SLOT as usize] = field_from_u64(DKG_PHASE_DEALING);
+        s.fields[DKG_PARAMS_SLOT as usize] = dkg_params_field(t.n, t.t);
+        s.fields[DKG_ROSTER_SLOT as usize] = t.roster_root;
+        s.fields[DKG_ADMIN_SLOT as usize] = t.admin;
+        s.fields[DKG_TAG_SLOT as usize] = t.tag;
+        s.fields[DKG_DEALING_DEADLINE_SLOT as usize] = field_from_u64(t.dealing_deadline);
+        s.fields[DKG_COMPLAINT_DEADLINE_SLOT as usize] = field_from_u64(t.complaint_deadline);
+        s.fields[DKG_REVEAL_DEADLINE_SLOT as usize] = field_from_u64(t.reveal_deadline);
+        s
+    }
+
+    fn at_phase(t: &DkgCeremonyTerms, phase: u64) -> CellState {
+        let mut s = dealing_state(t);
+        s.fields[DKG_PHASE_SLOT as usize] = field_from_u64(phase);
+        if phase >= DKG_PHASE_COMPLAINT {
+            s.fields[DKG_DEALINGS_ROOT_SLOT as usize] = [0xD1; 32];
+        }
+        if phase >= DKG_PHASE_REVEAL {
+            s.fields[DKG_RESPONSES_ROOT_SLOT as usize] = [0xD2; 32];
+        }
+        if phase >= DKG_PHASE_FINAL {
+            s.fields[DKG_REVEALS_ROOT_SLOT as usize] = [0xD3; 32];
+        }
+        if phase == DKG_PHASE_FINAL {
+            s.fields[DKG_OUTPUT_SLOT as usize] = [0xF1; 32];
+        }
+        s
+    }
+
+    #[test]
+    fn refused_terms_fail_closed_at_build() {
+        let ok = terms();
+        assert!(dkg_ceremony_factory_descriptor(&ok).is_ok());
+        let mut bad = ok.clone();
+        bad.t = 6; // t > n
+        assert_eq!(
+            dkg_ceremony_state_constraints(&bad).unwrap_err(),
+            DkgBlueprintError::InvalidParams { n: 5, t: 6 }
+        );
+        let mut bad = ok.clone();
+        bad.reveal_deadline = 15; // < complaint deadline
+        assert_eq!(
+            dkg_ceremony_state_constraints(&bad).unwrap_err(),
+            DkgBlueprintError::BadDeadlines
+        );
+        let mut bad = ok.clone();
+        bad.roster_root = FIELD_ZERO;
+        assert_eq!(
+            dkg_ceremony_state_constraints(&bad).unwrap_err(),
+            DkgBlueprintError::ZeroRoster
+        );
+        let mut bad = ok.clone();
+        bad.admin = FIELD_ZERO;
+        assert_eq!(
+            dkg_ceremony_state_constraints(&bad).unwrap_err(),
+            DkgBlueprintError::ZeroCeremonyAdmin
+        );
+        let mut bad = ok;
+        bad.tag = FIELD_ZERO;
+        assert_eq!(
+            dkg_ceremony_state_constraints(&bad).unwrap_err(),
+            DkgBlueprintError::ZeroCeremonyTag
+        );
+    }
+
+    #[test]
+    fn birth_and_open_pass_and_term_tamper_refuses() {
+        let t = terms();
+        let p = dkg_ceremony_cell_program(&t).unwrap();
+        let born = CellState::new(0);
+        assert!(eval(&p, &born, None, 0, None).is_ok(), "birth state passes");
+        let open = dealing_state(&t);
+        assert!(
+            eval(&p, &open, Some(&born), 1, Some(ADMIN)).is_ok(),
+            "open writes the terms"
+        );
+        // Tampered params / roster / deadline refuse at open.
+        for (slot, val) in [
+            (DKG_PARAMS_SLOT, dkg_params_field(5, 2)),
+            (DKG_ROSTER_SLOT, [0x78; 32]),
+            (DKG_DEALING_DEADLINE_SLOT, field_from_u64(11)),
+        ] {
+            let mut bad = open.clone();
+            bad.fields[slot as usize] = val;
+            assert!(
+                eval(&p, &bad, Some(&born), 1, Some(ADMIN)).is_err(),
+                "term pin must bite on slot {slot}"
+            );
+        }
+        // Re-writing a term while live refuses, even for the admin.
+        let mut rewrite = open.clone();
+        rewrite.fields[DKG_REVEAL_DEADLINE_SLOT as usize] = field_from_u64(31);
+        assert!(eval(&p, &rewrite, Some(&open), 1, Some(ADMIN)).is_err());
+    }
+
+    #[test]
+    fn rounds_close_in_order_after_their_deadlines_only() {
+        let t = terms();
+        let p = dkg_ceremony_cell_program(&t).unwrap();
+        let open = dealing_state(&t);
+
+        // Skipping a round refuses (DEALING → REVEAL).
+        let skip = at_phase(&t, DKG_PHASE_REVEAL);
+        assert!(eval(&p, &skip, Some(&open), 25, Some(ADMIN)).is_err());
+
+        // Closing the dealing round: height 9 < 10 refuses; height 10 passes
+        // WITH a pinned root and the admin sender.
+        let close1 = at_phase(&t, DKG_PHASE_COMPLAINT);
+        assert!(eval(&p, &close1, Some(&open), 9, Some(ADMIN)).is_err());
+        assert!(eval(&p, &close1, Some(&open), 10, Some(ADMIN)).is_ok());
+        // ... but NOT without the root (close must pin something) ...
+        let mut rootless = close1.clone();
+        rootless.fields[DKG_DEALINGS_ROOT_SLOT as usize] = FIELD_ZERO;
+        assert!(eval(&p, &rootless, Some(&open), 10, Some(ADMIN)).is_err());
+        // ... and NOT for a stranger.
+        assert!(eval(&p, &close1, Some(&open), 10, Some(STRANGER)).is_err());
+        assert!(eval(&p, &close1, Some(&open), 10, None).is_err());
+
+        // Closing the complaint round (root freeze checked next test).
+        let close2 = at_phase(&t, DKG_PHASE_REVEAL);
+        assert!(eval(&p, &close2, Some(&close1), 19, Some(ADMIN)).is_err());
+        assert!(eval(&p, &close2, Some(&close1), 20, Some(ADMIN)).is_ok());
+
+        // Finalize: needs the reveal deadline, the reveals root, AND a
+        // nonzero output commitment.
+        let fin = at_phase(&t, DKG_PHASE_FINAL);
+        assert!(eval(&p, &fin, Some(&close2), 29, Some(ADMIN)).is_err());
+        assert!(eval(&p, &fin, Some(&close2), 30, Some(ADMIN)).is_ok());
+        let mut no_out = fin.clone();
+        no_out.fields[DKG_OUTPUT_SLOT as usize] = FIELD_ZERO;
+        assert!(eval(&p, &no_out, Some(&close2), 30, Some(ADMIN)).is_err());
+        let mut no_reveals = fin.clone();
+        no_reveals.fields[DKG_REVEALS_ROOT_SLOT as usize] = FIELD_ZERO;
+        assert!(eval(&p, &no_reveals, Some(&close2), 30, Some(ADMIN)).is_err());
+    }
+
+    #[test]
+    fn pinned_roots_freeze_forever() {
+        let t = terms();
+        let p = dkg_ceremony_cell_program(&t).unwrap();
+        let close1 = at_phase(&t, DKG_PHASE_COMPLAINT);
+        // The complaint-round close may NOT also rewrite the dealing root.
+        let mut close2 = at_phase(&t, DKG_PHASE_REVEAL);
+        close2.fields[DKG_DEALINGS_ROOT_SLOT as usize] = [0xEE; 32];
+        assert!(
+            eval(&p, &close2, Some(&close1), 20, Some(ADMIN)).is_err(),
+            "a pinned round root must never move again"
+        );
+        // Nor may the finalize rewrite the responses root.
+        let close2 = at_phase(&t, DKG_PHASE_REVEAL);
+        let mut fin = at_phase(&t, DKG_PHASE_FINAL);
+        fin.fields[DKG_RESPONSES_ROOT_SLOT as usize] = [0xEF; 32];
+        assert!(eval(&p, &fin, Some(&close2), 30, Some(ADMIN)).is_err());
+    }
+
+    #[test]
+    fn abort_is_gated_zero_output_and_terminal() {
+        let t = terms();
+        let p = dkg_ceremony_cell_program(&t).unwrap();
+        let open = dealing_state(&t);
+
+        // An abort before the dealing window closes refuses (no griefing).
+        let mut abort = open.clone();
+        abort.fields[DKG_PHASE_SLOT as usize] = field_from_u64(DKG_PHASE_ABORTED);
+        assert!(eval(&p, &abort, Some(&open), 9, Some(ADMIN)).is_err());
+        assert!(eval(&p, &abort, Some(&open), 10, Some(ADMIN)).is_ok());
+
+        // An abort impersonating a finish (nonzero output) refuses.
+        let mut fake = abort.clone();
+        fake.fields[DKG_OUTPUT_SLOT as usize] = [0xF1; 32];
+        assert!(eval(&p, &fake, Some(&open), 10, Some(ADMIN)).is_err());
+
+        // Terminals are inert: any touch of FINAL or ABORTED refuses.
+        assert!(eval(&p, &abort, Some(&abort), 40, Some(ADMIN)).is_err());
+        let close2 = at_phase(&t, DKG_PHASE_REVEAL);
+        let fin = at_phase(&t, DKG_PHASE_FINAL);
+        assert!(eval(&p, &fin, Some(&close2), 30, Some(ADMIN)).is_ok());
+        assert!(eval(&p, &fin, Some(&fin), 40, Some(ADMIN)).is_err());
+        let mut reopened = fin.clone();
+        reopened.fields[DKG_PHASE_SLOT as usize] = field_from_u64(DKG_PHASE_REVEAL);
+        assert!(eval(&p, &reopened, Some(&fin), 40, Some(ADMIN)).is_err());
+    }
+
+    #[test]
+    fn descriptors_content_address_the_ceremony() {
+        let a = dkg_ceremony_factory_descriptor(&terms()).unwrap();
+        // Same terms ⇒ same factory (re-derivable by any party).
+        let b = dkg_ceremony_factory_descriptor(&terms()).unwrap();
+        assert_eq!(a.factory_vk, b.factory_vk);
+        assert_eq!(a.creation_budget, Some(1));
+        // Any varied term ⇒ a different ceremony.
+        let mut other = terms();
+        other.roster_root = [0x79; 32];
+        let c = dkg_ceremony_factory_descriptor(&other).unwrap();
+        assert_ne!(a.factory_vk, c.factory_vk);
+        // Params round-trip through the packed field.
+        assert_eq!(dkg_params_from_field(&dkg_params_field(5, 3)), (5, 3));
     }
 }

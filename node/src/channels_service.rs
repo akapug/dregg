@@ -33,9 +33,15 @@
 //!   operator can read group traffic it relays. Sovereign-member groups
 //!   (admin = a council-held key, fan-out built client-side) ride the SDK
 //!   noun directly; the service is the HOSTED setting.
-//! * The room registry (roster / keys / message ring) is in-memory; the
-//!   ROSTER is rebuildable only off-cell (the chain holds its commitment).
-//!   Persistence rides the same lane as the relay/coordinator state.
+//! * The room's keys and message ring are in-memory (the ring is a bounded
+//!   delivery buffer; epoch keys are node-minted secrets a rekey re-mints).
+//!   The ROSTER — rebuildable only off-cell (the chain holds only its
+//!   commitment) — is now DURABLE: every committed epoch step persists it
+//!   (`persist_roster` → `persist/src/channel_rosters.rs`) and boot rebuilds
+//!   each room after re-committing the stored roster against the on-cell
+//!   `member_root` (`ChannelRegistry::restore_rosters`), so a restart no
+//!   longer serves `RosterStale` for a roster that still matches its cell
+//!   (docs/PERSISTENCE.md §3, the roster caveat).
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::convert::Infallible;
@@ -51,7 +57,7 @@ use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
-use dregg_cell::CellId;
+use dregg_cell::{CellId, Ledger};
 use dregg_cell::blueprint::{
     CH_ADMIN_SLOT, CH_EPOCH_SLOT, CH_KEY_COMMIT_SLOT, CH_MEMBER_ROOT_SLOT, CH_STATE_SLOT,
     CH_TAG_SLOT, ChannelTerms, STATE_OPEN, channel_cell_program, channel_factory_descriptor,
@@ -105,6 +111,61 @@ pub struct Room {
     next_seq: u64,
 }
 
+/// The durable carrier of a room's node-held roster (docs/PERSISTENCE.md §3,
+/// the roster caveat). The cell pins only the membership ROOT; the
+/// member→seal-pk content and the epoch anchor are node-held, verifiable
+/// against the cell but not derivable from it. Persisting this lets a node
+/// that restarts mid-life rebuild the room WITHOUT waiting for every member
+/// to re-post — but only after re-committing the roster against the on-cell
+/// root (a stale durable roster is discarded loudly; `RosterStale` afterwards
+/// means genuine divergence, never a mere restart).
+#[derive(Serialize, Deserialize)]
+struct DurableRoster {
+    /// The epoch anchor cell (the standing `RevokeDelegation` target).
+    anchor: [u8; 32],
+    /// `(member cell, X25519 seal pk)` pairs — the BTreeMap content.
+    members: Vec<([u8; 32], [u8; 32])>,
+}
+
+impl DurableRoster {
+    fn encode(anchor: CellId, roster: &Roster) -> Vec<u8> {
+        let payload = DurableRoster {
+            anchor: anchor.0,
+            members: roster.iter().map(|(m, pk)| (m.0, *pk)).collect(),
+        };
+        // Infallible for this fixed-shape struct; an empty vec on the
+        // (unreachable) error path simply fails the load-time re-commit.
+        postcard::to_stdvec(&payload).unwrap_or_default()
+    }
+
+    fn decode(bytes: &[u8]) -> Option<(CellId, Roster)> {
+        let payload: DurableRoster = postcard::from_bytes(bytes).ok()?;
+        let mut roster = Roster::new();
+        for (m, pk) in payload.members {
+            roster.insert(CellId(m), pk);
+        }
+        Some((CellId(payload.anchor), roster))
+    }
+}
+
+/// Persist a room's roster durably (one committed redb transaction). Called
+/// after every committed epoch step (open/join/remove/rekey): the roster the
+/// step installed survives an arbitrary crash from here on. A durable-write
+/// failure cannot unwind the already-committed turn, so it degrades — loudly
+/// — to "this room needs re-posting after a restart" (the pre-closure
+/// behaviour), never refusing the live step.
+fn persist_roster(inner: &NodeStateInner, channel: CellId, anchor: CellId, roster: &Roster) {
+    let bytes = DurableRoster::encode(anchor, roster);
+    if let Err(e) = inner.store.store_channel_roster(&channel.0, &bytes) {
+        tracing::error!(
+            channel = %hex_encode(&channel.0),
+            error = %e,
+            "durable channel-roster write FAILED — this room will serve \
+             RosterStale until members re-post after a restart"
+        );
+    }
+}
+
 /// Node-held channels registry + the SSE wake-up bus.
 pub struct ChannelRegistry {
     rooms: HashMap<CellId, Room>,
@@ -142,6 +203,78 @@ impl ChannelRegistry {
     }
     pub fn subscribe(&self) -> broadcast::Receiver<(CellId, u64)> {
         self.tx.subscribe()
+    }
+
+    /// Restore node-held rooms from the durable roster table at boot
+    /// (docs/PERSISTENCE.md §3, the roster caveat). For each stored roster we
+    /// RE-COMMIT it against the live cell's on-chain membership root before
+    /// trusting it:
+    ///
+    /// * the cell is gone, or is not a channel cell, or the stored roster's
+    ///   `roster_root` ≠ the cell's `member_root` ⇒ the durable roster is
+    ///   STALE; discard it AND durably remove the row (so it does not re-alarm
+    ///   on every boot), and leave the room absent (it will serve
+    ///   `RosterStale` until members re-post — the pre-closure behaviour, now
+    ///   only on genuine divergence, never on a mere restart);
+    /// * it re-commits ⇒ rebuild the [`Room`] with the verified roster and the
+    ///   stored anchor. Epoch keys are node-minted secrets that are NOT
+    ///   persisted (a delivery property, not a soundness one); the restored
+    ///   room carries an empty key map and a rekey re-establishes forward
+    ///   delivery, while membership operations resume immediately.
+    pub fn restore_rosters(
+        &mut self,
+        store: &dregg_persist::PersistentStore,
+        ledger: &Ledger,
+    ) {
+        let stored = match store.load_channel_rosters() {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "failed to load durable channel rosters; rooms will serve \
+                     RosterStale until members re-post"
+                );
+                return;
+            }
+        };
+        let mut restored = 0usize;
+        let mut discarded = 0usize;
+        for (channel_bytes, bytes) in stored {
+            let channel = CellId(channel_bytes);
+            let Some((anchor, roster)) = DurableRoster::decode(&bytes) else {
+                tracing::warn!(
+                    channel = %hex_encode(&channel_bytes),
+                    "durable roster failed to decode; discarding"
+                );
+                let _ = store.remove_channel_roster(&channel_bytes);
+                discarded += 1;
+                continue;
+            };
+            // Re-commit against the on-cell membership root. Anything that
+            // does not match is STALE and discarded (durably).
+            let on_cell_root = ledger
+                .get(&channel)
+                .and_then(channel_terms_of_root);
+            if on_cell_root != Some(roster_root(&roster)) {
+                tracing::warn!(
+                    channel = %hex_encode(&channel_bytes),
+                    "durable roster does not re-commit to the on-cell root; \
+                     discarding (stale)"
+                );
+                let _ = store.remove_channel_roster(&channel_bytes);
+                discarded += 1;
+                continue;
+            }
+            self.rooms.insert(channel, Room::new(anchor, roster));
+            restored += 1;
+        }
+        if restored > 0 || discarded > 0 {
+            tracing::info!(
+                restored,
+                discarded,
+                "restored channel rooms from the durable roster table"
+            );
+        }
     }
 
     /// Append a ciphertext to a room's ring and wake SSE cursors.
@@ -300,6 +433,13 @@ pub fn channel_terms_of(cell: &dregg_cell::Cell) -> Option<ChannelTerms> {
     let program = channel_cell_program(&terms).ok()?;
     let expected = canonical_program_vk(&program);
     (cell.verification_key.as_ref()?.hash == expected).then_some(terms)
+}
+
+/// The on-cell membership root of a channel cell `cell`, IF it is a valid,
+/// self-authenticating channel-group cell. `None` for a non-channel cell —
+/// the load-time re-commit treats that as a stale durable roster (discard).
+fn channel_terms_of_root(cell: &dregg_cell::Cell) -> Option<[u8; 32]> {
+    channel_terms_of(cell).map(|_| slot(cell, CH_MEMBER_ROOT_SLOT))
 }
 
 /// The live on-cell position of one group.
@@ -620,6 +760,7 @@ async fn post_create(
     )?);
 
     let fan_out = seal_epoch_key_to_roster(1, &key, &roster);
+    persist_roster(inner, channel, anchor, &roster);
     let mut room = Room::new(anchor, roster);
     room.keys.insert(1, key);
     inner.channels.insert_room(channel, room);
@@ -695,8 +836,13 @@ fn run_epoch_step(
         .channels
         .room_mut(&channel)
         .expect("room exists (resolved above)");
-    room.roster = new_roster;
+    room.roster = new_roster.clone();
     room.keys.insert(new_epoch, key);
+    // Persist the post-step roster durably (docs/PERSISTENCE.md §3): the
+    // roster the committed turn installed survives an arbitrary crash from
+    // here on, so a restart rebuilds the room without waiting for members to
+    // re-post (re-committed against the on-cell root at load).
+    persist_roster(inner, channel, anchor, &new_roster);
     Ok((fan_out, turn_hash))
 }
 
@@ -1275,5 +1421,75 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// THE DURABLE-ROSTER CLOSURE (docs/PERSISTENCE.md §3 roster caveat):
+    /// every committed epoch step persists the roster; a fresh registry
+    /// (the restart) rebuilds the room from the durable table after
+    /// RE-COMMITTING it against the on-cell membership root — and discards a
+    /// roster that no longer matches its cell, fail-closed.
+    #[tokio::test]
+    async fn roster_survives_a_simulated_restart_and_stale_is_discarded() {
+        let (state, members, _dir) = funded_state().await;
+        let (channel, _) = create_group(&state, &members).await;
+
+        // Open already persisted the roster. Simulate a restart: a brand-new
+        // registry restored from the SAME store against the live ledger.
+        {
+            let s = state.read().await;
+            let mut fresh = ChannelRegistry::default();
+            fresh.restore_rosters(&s.store, &s.ledger);
+            let room = fresh
+                .room(&channel)
+                .expect("the room rebuilds from the durable roster");
+            assert_eq!(
+                room.roster.len(),
+                members.len(),
+                "the restored roster has every member"
+            );
+            for (id, ring) in &members {
+                assert_eq!(
+                    room.roster.get(id).copied(),
+                    Some(ring.seal_pk()),
+                    "each member's seal pk re-commits to the on-cell root"
+                );
+            }
+            // The room re-committed: its roster_root equals the cell's root.
+            let cell = s.ledger.get(&channel).unwrap();
+            assert_eq!(
+                roster_root(&room.roster),
+                slot(cell, CH_MEMBER_ROOT_SLOT),
+                "the restored roster re-commits to the on-cell membership root"
+            );
+            // Epoch keys are node-minted secrets, NOT persisted — a restored
+            // room carries none and rekeys to re-establish forward delivery.
+            assert!(
+                room.keys.is_empty(),
+                "epoch keys are not persisted across a restart"
+            );
+        }
+
+        // STALE PATH: corrupt the on-cell membership root so the durable
+        // roster no longer re-commits; the restart must DISCARD it (and the
+        // discard is durable — a second restart sees no row, no re-alarm).
+        {
+            let mut s = state.write().await;
+            let mut cell = s.ledger.get(&channel).unwrap().clone();
+            cell.state.fields[CH_MEMBER_ROOT_SLOT as usize] = [0xEE; 32];
+            s.ledger.insert_cell(cell).unwrap();
+
+            let mut fresh = ChannelRegistry::default();
+            fresh.restore_rosters(&s.store, &s.ledger);
+            assert!(
+                fresh.room(&channel).is_none(),
+                "a roster that does not re-commit to the (mutated) on-cell root is discarded"
+            );
+            // Durable removal: the row is gone.
+            let remaining = s.store.load_channel_rosters().unwrap();
+            assert!(
+                !remaining.iter().any(|(c, _)| *c == channel.0),
+                "the stale roster row was durably removed (no re-alarm on the next boot)"
+            );
+        }
     }
 }

@@ -99,6 +99,13 @@ pub mod cross_fed_bundle;
 /// work unchanged over DKG-derived keys. Round messages are transport-
 /// agnostic serde structs (the ceremony-as-cell-app lane rides them later).
 pub mod dkg;
+/// The DKG **ceremony** — the transport + agreement layer over [`dkg`]:
+/// signed round messages (authenticated broadcast, attributable hence
+/// slashable), seal-pair private shares bound to (ceremony, dealer,
+/// recipient), the deterministic common-view accumulator whose round roots
+/// the ceremony CELL pins (`dregg_cell::blueprint` DKG section), and the
+/// witness-first offense attribution the court/obligation lane slashes on.
+pub mod dkg_ceremony;
 pub mod epoch;
 /// Differential: the verified Lean `Dregg2.Distributed.EpochReconfig` model ⟺ this crate's real
 /// `epoch` reconfiguration (quorum threshold, the member-set transform, and the no-safety-gap
@@ -120,6 +127,14 @@ mod threshold_decrypt_diff;
 #[cfg(feature = "runtime")]
 pub mod transport;
 pub mod types;
+/// Per-agent ECVRF sortition (RFC 9381 ECVRF-EDWARDS25519-SHA512-TAI): each
+/// candidate PRIVATELY evaluates `VRF_sk(beacon ‖ role)` and self-selects
+/// under a public threshold — nobody can enumerate the jury before members
+/// reveal their tickets (the targeting-resistant complement to
+/// [`beacon::select_jury`], which computes a public roster). Keys are
+/// CURRENT-key-class members of the agent's identity cell, covered by
+/// KERI-shaped pre-rotation.
+pub mod vrf;
 
 // Re-export primary types.
 pub use admission::{
@@ -172,6 +187,10 @@ pub use threshold_decrypt::{
 pub use transport::{
     FederationEnvelope, FederationTransport, LocalTransport, NetworkConsensusNode,
     TcpFederationTransport, TransportError,
+};
+pub use vrf::{
+    SortitionThreshold, SortitionTicket, VrfError, VrfProof, VrfPublicKey, VrfSecretKey,
+    sortition_select, verify_sortition,
 };
 pub use types::{
     AttestedRoot, ConsensusMessage, LightClientProof, NodeIdentity, PublicKey, QuorumCertificate,

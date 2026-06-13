@@ -12,6 +12,7 @@ mod catchup;
 mod channels_service;
 pub mod config;
 mod coord_gate;
+mod dkg_service;
 mod finality_gate;
 // The old `bridge` module is removed. Cross-group communication now happens
 // via multi_group.rs (unified blocklace cross-references + interest-based dissemination).
@@ -22,6 +23,7 @@ mod execution_cursor;
 mod executor_setup;
 mod genesis;
 pub mod gossip;
+mod identity_export;
 mod mcp;
 pub mod metrics;
 pub mod multi_group;

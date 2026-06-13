@@ -66,9 +66,10 @@ use serde::{Deserialize, Serialize};
 
 use dregg_cell::CellId;
 use dregg_cell::blueprint::{
-    STATE_OPEN, TL_CEILING_SLOT, TL_DIGEST_SLOT, TL_DRAWN_SLOT, TL_HOLDER_SLOT, TL_ISSUER_SLOT,
-    TL_SETTLED_SLOT, TL_STATE_SLOT, TrustlineTerms, trustline_cell_program,
-    trustline_factory_descriptor,
+    STATE_OPEN, TL_CEILING_SLOT, TL_DIGEST_SLOT, TL_DRAWN_SLOT,
+    TL_HOLDER_SLOT, TL_ISSUER_SLOT, TL_SETTLED_SLOT, TL_STATE_CLOSED, TL_STATE_SLOT,
+    TrustlineCollateral, TrustlineTerms, trustline_cell_program_collateral,
+    trustline_factory_descriptor_collateral,
 };
 use dregg_cell::factory::{FactoryCreationParams, FactoryDescriptor, canonical_program_vk};
 use dregg_coord::budget::BudgetError;
@@ -180,6 +181,9 @@ pub enum TrustlineRefusal {
     /// The repay exceeds the outstanding unsettled draw
     /// (Lean `over_repay_refused`, strengthened by the settled floor).
     OverRepay { outstanding: u64, requested: u64 },
+    /// A pureCredit close was requested over an outstanding draw (closing
+    /// cannot debit the holder — settle or repay first).
+    OutstandingAtClose { outstanding: u64 },
     /// The Stingray counter refused the debit (slice exhausted / replay /
     /// unknown silo) — the `Slice.tryDebit` gate.
     Counter(String),
@@ -201,6 +205,7 @@ impl TrustlineRefusal {
             TrustlineRefusal::DuplicateDraw => StatusCode::CONFLICT,
             TrustlineRefusal::OverLine { .. }
             | TrustlineRefusal::OverRepay { .. }
+            | TrustlineRefusal::OutstandingAtClose { .. }
             | TrustlineRefusal::Counter(_) => StatusCode::PAYMENT_REQUIRED,
             TrustlineRefusal::BadTerms(_) | TrustlineRefusal::BadRequest(_) => {
                 StatusCode::BAD_REQUEST
@@ -218,6 +223,7 @@ impl TrustlineRefusal {
             TrustlineRefusal::DuplicateDraw => "duplicate-draw",
             TrustlineRefusal::OverLine { .. } => "over-line",
             TrustlineRefusal::OverRepay { .. } => "over-repay",
+            TrustlineRefusal::OutstandingAtClose { .. } => "outstanding-at-close",
             TrustlineRefusal::Counter(_) => "counter-refused",
             TrustlineRefusal::TurnRejected(_) => "turn-rejected",
             TrustlineRefusal::BadRequest(_) => "bad-request",
@@ -245,6 +251,10 @@ impl TrustlineRefusal {
                 outstanding,
                 requested,
             } => format!("repay {requested} exceeds outstanding unsettled draw {outstanding}"),
+            TrustlineRefusal::OutstandingAtClose { outstanding } => format!(
+                "pureCredit close refused: {outstanding} outstanding — settle or repay first \
+                 (closing cannot debit the holder)"
+            ),
         }
     }
 }
@@ -308,29 +318,44 @@ pub struct TrustlinePosition {
     pub open: bool,
 }
 
-/// Structurally identify a trustline cell: re-derive the per-line program
-/// from the cell's OWN term registers and check the installed VK matches.
-/// Self-authenticating — no side registry decides what is a trustline.
-pub fn trustline_terms_of(cell: &dregg_cell::Cell) -> Option<TrustlineTerms> {
+/// Structurally identify a trustline cell AND its collateral point:
+/// re-derive the per-line program from the cell's OWN term registers (trying
+/// each point of the collateral axis — the mode is content-addressed into
+/// the program VK, never read from a tamper-able slot) and check the
+/// installed VK matches. Self-authenticating — no side registry decides
+/// what is a trustline.
+pub fn trustline_terms_of(
+    cell: &dregg_cell::Cell,
+) -> Option<(TrustlineTerms, TrustlineCollateral)> {
     let terms = TrustlineTerms {
         line: slot_u64(cell, TL_CEILING_SLOT),
         issuer: slot(cell, TL_ISSUER_SLOT),
         holder: slot(cell, TL_HOLDER_SLOT),
     };
-    let program = trustline_cell_program(&terms).ok()?;
-    let expected = canonical_program_vk(&program);
-    (cell.verification_key.as_ref()?.hash == expected).then_some(terms)
+    let installed = cell.verification_key.as_ref()?.hash;
+    for collateral in [
+        TrustlineCollateral::FullReserve,
+        TrustlineCollateral::PureCredit,
+    ] {
+        if let Ok(program) = trustline_cell_program_collateral(&terms, collateral) {
+            if canonical_program_vk(&program) == installed {
+                return Some((terms, collateral));
+            }
+        }
+    }
+    None
 }
 
-/// Resolve `id` as an OPEN trustline cell and read its position + terms.
+/// Resolve `id` as a trustline cell and read its position + terms + the
+/// collateral point of its line.
 fn resolve_trustline(
     s: &NodeStateInner,
     id: CellId,
-) -> Result<(TrustlineTerms, TrustlinePosition), TrustlineRefusal> {
+) -> Result<(TrustlineTerms, TrustlineCollateral, TrustlinePosition), TrustlineRefusal> {
     let cell = s.ledger.get(&id).ok_or_else(|| {
         TrustlineRefusal::NoTrustline(format!("cell {} not in ledger", hex_encode(&id.0)))
     })?;
-    let terms = trustline_terms_of(cell).ok_or_else(|| {
+    let (terms, collateral) = trustline_terms_of(cell).ok_or_else(|| {
         TrustlineRefusal::NoTrustline(format!(
             "cell {} is not a trustline cell (program VK does not match its terms)",
             hex_encode(&id.0)
@@ -346,7 +371,35 @@ fn resolve_trustline(
         escrow: u64::try_from(cell.state.balance()).unwrap_or(0),
         open: slot_u64(cell, TL_STATE_SLOT) == STATE_OPEN,
     };
-    Ok((terms, position))
+    Ok((terms, collateral, position))
+}
+
+/// The wire name of a collateral point (requests + responses).
+fn collateral_name(c: TrustlineCollateral) -> &'static str {
+    match c {
+        TrustlineCollateral::FullReserve => "fullReserve",
+        TrustlineCollateral::PureCredit => "pureCredit",
+    }
+}
+
+/// Parse a request's collateral string (absent = the deployed default).
+///
+/// TODO(collateral-axis): the node `OpenRequest` does not yet carry a
+/// collateral field, so the HTTP open path is fullReserve-only (its turn-2
+/// funded birth escrows the full line unconditionally). This parser is the
+/// request-side half of the pureCredit open lane; wiring it requires an
+/// `OpenRequest.collateral` field AND a pureCredit funding branch that escrows
+/// nothing (cf. `dregg_sdk::trustline::open_with_collateral`). Kept (not
+/// deleted) to preserve the migration's intent; currently unreached.
+#[allow(dead_code)]
+fn parse_collateral(s: Option<&str>) -> Result<TrustlineCollateral, TrustlineRefusal> {
+    match s {
+        None | Some("fullReserve") => Ok(TrustlineCollateral::FullReserve),
+        Some("pureCredit") => Ok(TrustlineCollateral::PureCredit),
+        Some(other) => Err(TrustlineRefusal::BadRequest(format!(
+            "unknown collateral mode {other:?} (expected \"fullReserve\" or \"pureCredit\")"
+        ))),
+    }
 }
 
 /// The request-level authority gate (the storage-weld shape): node unlocked
@@ -554,29 +607,30 @@ pub fn routes() -> Router<NodeState> {
         .route("/trustline/draw", post(post_trustline_draw))
         .route("/trustline/repay", post(post_trustline_repay))
         .route("/trustline/settle", post(post_trustline_settle))
+        .route("/trustline/close", post(post_trustline_close))
         .route("/trustline/status/{cell}", get(get_trustline_status))
 }
 
 #[derive(Deserialize)]
-struct OpenRequest {
+pub(crate) struct OpenRequest {
     /// Holder (counterparty) cell id, hex.
-    holder: String,
+    pub(crate) holder: String,
     /// The line N to extend (escrowed in full at open — fullReserve).
-    line: u64,
+    pub(crate) line: u64,
     /// Optional salt disambiguating multiple lines to the same holder.
     #[serde(default)]
-    salt: Option<String>,
+    pub(crate) salt: Option<String>,
 }
 
 #[derive(Serialize)]
-struct OpenResponse {
-    trustline: String,
-    issuer: String,
-    holder: String,
-    line: u64,
-    escrow: u64,
-    coordinator_remaining: u64,
-    turn_hashes: Vec<String>,
+pub(crate) struct OpenResponse {
+    pub(crate) trustline: String,
+    pub(crate) issuer: String,
+    pub(crate) holder: String,
+    pub(crate) line: u64,
+    pub(crate) escrow: u64,
+    pub(crate) coordinator_remaining: u64,
+    pub(crate) turn_hashes: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -616,6 +670,25 @@ struct RepayResponse {
     turn_hash: String,
 }
 
+#[derive(Deserialize)]
+struct CloseRequest {
+    trustline: String,
+}
+
+#[derive(Serialize)]
+struct CloseResponse {
+    trustline: String,
+    /// `"fullReserve"` | `"pureCredit"`.
+    collateral: String,
+    /// Outstanding draw settled to the holder at close (fullReserve only;
+    /// pureCredit requires a clean position, so always 0 there).
+    settled_to_holder: u64,
+    /// Residual escrow returned to the issuer (`escrow − outstanding`;
+    /// pureCredit has no escrow, so always 0).
+    residual_to_issuer: u64,
+    turn_hash: String,
+}
+
 #[derive(Serialize)]
 struct SettlementEntry {
     trustline: String,
@@ -642,6 +715,8 @@ struct StatusResponse {
     trustline: String,
     issuer: String,
     holder: String,
+    /// The collateral point of the line (`"fullReserve"` | `"pureCredit"`).
+    collateral: String,
     #[serde(flatten)]
     position: TrustlinePosition,
     coordinator_remaining: Option<u64>,
@@ -654,8 +729,19 @@ async fn post_trustline_open(
     Json(req): Json<OpenRequest>,
 ) -> Result<Json<OpenResponse>, TrustlineRefusal> {
     let mut s = state.write().await;
-    let inner = &mut *s;
+    open_trustline(&mut s, req).await.map(Json)
+}
 
+/// The trustline birth lifecycle, callable in-process (the HTTP route above
+/// AND the `dregg_extend_trustline` MCP tool both drive it): birth from the
+/// per-line factory → funded birth (the issuer is REALLY debited the full
+/// line) → adopt (grant operator + holder their line capability) → open
+/// (pin the terms, step UNINIT → OPEN) → seed the bounded-counter shadow.
+/// Returns the same [`OpenResponse`] the route serializes.
+pub(crate) async fn open_trustline(
+    inner: &mut NodeStateInner,
+    req: OpenRequest,
+) -> Result<OpenResponse, TrustlineRefusal> {
     if !inner.unlocked {
         return Err(TrustlineRefusal::Locked);
     }
@@ -678,7 +764,12 @@ async fn post_trustline_open(
         issuer: *issuer.as_bytes(),
         holder: *holder.as_bytes(),
     };
-    let descriptor = trustline_factory_descriptor(&terms)
+    // The open flow is the fullReserve point of the collateral axis: turn 2
+    // below escrows the full line unconditionally, so the cell is solvent by
+    // construction. fullReserve's descriptor is byte-identical to the
+    // historical (pre-axis) descriptor, so already-born lines are untouched.
+    // pureCredit lines are constructed by their own (DERIVED-leg) flow.
+    let descriptor = trustline_factory_descriptor_collateral(&terms, TrustlineCollateral::FullReserve)
         .map_err(|e| TrustlineRefusal::BadTerms(e.to_string()))?;
 
     // Per-line token id: deterministic over the terms + caller salt + the
@@ -829,8 +920,7 @@ async fn post_trustline_open(
         "trustline opened: escrow funded, coordinator seeded (ORGANS §1 birth edge)"
     );
 
-    drop(s);
-    Ok(Json(OpenResponse {
+    Ok(OpenResponse {
         trustline: hex_encode(&trustline.0),
         issuer: hex_encode(&issuer.0),
         holder: req.holder,
@@ -838,7 +928,7 @@ async fn post_trustline_open(
         escrow,
         coordinator_remaining,
         turn_hashes: turn_hashes.iter().map(|h| hex_encode(h)).collect(),
-    }))
+    })
 }
 
 /// `POST /trustline/draw` — (b) exercise the line: the Stingray counter gate
@@ -856,7 +946,7 @@ async fn post_trustline_draw(
         TrustlineRefusal::BadRequest(format!("malformed trustline cell id: {}", req.trustline))
     })?);
     require_operator_authority(inner, trustline)?;
-    let (terms, position) = resolve_trustline(inner, trustline)?;
+    let (terms, _collateral, position) = resolve_trustline(inner, trustline)?;
     if !position.open {
         return Err(TrustlineRefusal::NotOpen);
     }
@@ -1007,7 +1097,7 @@ async fn post_trustline_repay(
         TrustlineRefusal::BadRequest(format!("malformed trustline cell id: {}", req.trustline))
     })?);
     require_operator_authority(inner, trustline)?;
-    let (terms, position) = resolve_trustline(inner, trustline)?;
+    let (terms, _collateral, position) = resolve_trustline(inner, trustline)?;
     if !position.open {
         return Err(TrustlineRefusal::NotOpen);
     }
@@ -1103,7 +1193,7 @@ async fn post_trustline_settle(
     let mut applied = Vec::new();
     let mut failures = Vec::new();
     for (agent, total_spent) in settlements {
-        let (terms, position) = match resolve_trustline(inner, agent) {
+        let (terms, _collateral, position) = match resolve_trustline(inner, agent) {
             Ok(t) => t,
             Err(e) => {
                 // A coordinator that is not a trustline cell settles outside
@@ -1245,6 +1335,115 @@ async fn post_trustline_settle(
     }))
 }
 
+/// `POST /trustline/close` — (d) THE TERMINAL EDGE: settle-then-return, one
+/// turn, then the line is INERT (the program's transition table has no row out
+/// of `TL_STATE_CLOSED`, so every later touch refuses).
+///
+/// * **fullReserve**: any outstanding draw (`drawn − settled`) is settled to
+///   the holder (`settled := drawn` + escrow → holder), the RESIDUAL escrow
+///   (`escrow − outstanding`) returns to the issuer, and the state slot steps
+///   to [`TL_STATE_CLOSED`]. The hard column is exactly conserved (two moves,
+///   no mint).
+/// * **pureCredit**: there is no escrow to return; closing demands a clean
+///   position (`outstanding == 0`) — the issuer cannot debit the holder as a
+///   side effect of closing. Settle/repay first.
+///
+/// The coordinator shadow is retired with the line (the cell is the truth and
+/// is now inert).
+async fn post_trustline_close(
+    State(state): State<NodeState>,
+    Json(req): Json<CloseRequest>,
+) -> Result<Json<CloseResponse>, TrustlineRefusal> {
+    let mut s = state.write().await;
+    let inner = &mut *s;
+
+    let trustline = CellId(hex_decode_32(&req.trustline).ok_or_else(|| {
+        TrustlineRefusal::BadRequest(format!("malformed trustline cell id: {}", req.trustline))
+    })?);
+    require_operator_authority(inner, trustline)?;
+    let (terms, collateral, position) = resolve_trustline(inner, trustline)?;
+    if !position.open {
+        return Err(TrustlineRefusal::NotOpen);
+    }
+    let outstanding = position.drawn.saturating_sub(position.settled);
+
+    let mut effects: Vec<Effect> = Vec::new();
+    let (settled_to_holder, residual_to_issuer) = match collateral {
+        TrustlineCollateral::FullReserve => {
+            if outstanding > 0 {
+                effects.push(Effect::SetField {
+                    cell: trustline,
+                    index: TL_SETTLED_SLOT as usize,
+                    value: field_u64(position.drawn),
+                });
+                effects.push(Effect::Transfer {
+                    from: trustline,
+                    to: CellId(terms.holder),
+                    amount: outstanding,
+                });
+            }
+            let residual = position.escrow.saturating_sub(outstanding);
+            if residual > 0 {
+                effects.push(Effect::Transfer {
+                    from: trustline,
+                    to: CellId(terms.issuer),
+                    amount: residual,
+                });
+            }
+            (outstanding, residual)
+        }
+        TrustlineCollateral::PureCredit => {
+            if outstanding > 0 {
+                return Err(TrustlineRefusal::OutstandingAtClose { outstanding });
+            }
+            (0, 0)
+        }
+    };
+    effects.push(Effect::SetField {
+        cell: trustline,
+        index: TL_STATE_SLOT as usize,
+        value: field_u64(TL_STATE_CLOSED),
+    });
+    effects.push(Effect::EmitEvent {
+        cell: trustline,
+        event: Event::new(
+            symbol("trustline-closed"),
+            vec![field_u64(settled_to_holder), field_u64(residual_to_issuer)],
+        ),
+    });
+
+    let turn_hash = run_signed_turn(
+        inner,
+        crate::executor_setup::local_agent_cell(inner),
+        trustline,
+        "trustline_close",
+        effects,
+        None,
+        None,
+    )?;
+
+    // The line is terminal: retire its bounded-counter shadow (the inert cell
+    // is the truth from here, and no further draw/settle can occur).
+    inner.budget_coordinators.remove(&trustline);
+
+    tracing::info!(
+        trustline = %hex_encode(&trustline.0),
+        collateral = collateral_name(collateral),
+        settled_to_holder,
+        residual_to_issuer,
+        "trustline closed: settled then returned residual; line is inert (ORGANS §1 terminal edge)"
+    );
+
+    drop(s);
+    Ok(Json(CloseResponse {
+        trustline: req.trustline,
+        collateral: collateral_name(collateral).to_string(),
+        settled_to_holder,
+        residual_to_issuer,
+        turn_hash: hex_encode(&turn_hash),
+    }))
+}
+
 /// `GET /trustline/status/{cell}` — the live position + the counter shadow.
 async fn get_trustline_status(
     State(state): State<NodeState>,
@@ -1256,13 +1455,14 @@ async fn get_trustline_status(
     let trustline = CellId(hex_decode_32(&cell_hex).ok_or_else(|| {
         TrustlineRefusal::BadRequest(format!("malformed trustline cell id: {cell_hex}"))
     })?);
-    let (terms, position) = resolve_trustline(inner, trustline)?;
+    let (terms, collateral, position) = resolve_trustline(inner, trustline)?;
     let silo = inner.silo_id;
     let coordinator = inner.budget_coordinators.get(&trustline);
     Ok(Json(StatusResponse {
         trustline: cell_hex,
         issuer: hex_encode(&terms.issuer),
         holder: hex_encode(&terms.holder),
+        collateral: collateral_name(collateral).to_string(),
         position,
         coordinator_remaining: coordinator.and_then(|c| c.remaining(&silo)),
         coordinator_version: coordinator.map(|c| c.version),
@@ -1402,7 +1602,7 @@ mod tests {
     async fn restart_shaped_rebuild(state: &NodeState, tl: CellId) {
         let mut s = state.write().await;
         s.budget_coordinators.remove(&tl);
-        let (_, position) = resolve_trustline(&s, tl).expect("trustline resolves");
+        let (_, _, position) = resolve_trustline(&s, tl).expect("trustline resolves");
         ensure_coordinator(&mut s, tl, &position).expect("rebuild succeeds");
     }
 

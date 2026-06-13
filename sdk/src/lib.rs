@@ -119,6 +119,7 @@ pub mod error;
 pub mod events;
 pub mod explain;
 pub mod factories;
+pub mod flashwell;
 pub mod full_turn_proof;
 pub mod identity;
 #[cfg(feature = "captp")]
@@ -230,6 +231,10 @@ pub use factories::{
     create_obligation_cell, finalize_bridge, fulfill_obligation, party_field, refund_escrow,
     release_escrow, slash_obligation,
 };
+
+// The flash-well ring builder (zero-duration credit; settlement is the same
+// action — enforced by the well's installed program, not by the builder).
+pub use flashwell::{FlashRing, FlashWell, FlashWellPlan, FlashWellStatus, plan_flash_well};
 
 // Mnemonic generation for identity backup.
 pub use mnemonic::generate_mnemonic;

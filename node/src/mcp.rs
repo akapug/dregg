@@ -1605,6 +1605,23 @@ fn tool_definitions_raw() -> Vec<McpToolDef> {
                 "required": ["cell_id", "amount"]
             }),
         },
+        // ─── Trustlines (ORGANS §1) ──────────────────────────────────────────────
+        McpToolDef {
+            name: "dregg_extend_trustline",
+            title: None,
+            output_schema: None,
+            annotations: None,
+            description: "Extend a holder a bilateral line of credit (ORGANS §1): birth a per-line trustline cell, escrow the full line from this node's agent cell (the funded birth — you are REALLY debited), grant the holder their line capability, and open it. The holder draws/repays against the line and settlement redeems drawn value as a real conserving transfer. Returns the trustline cell id, the escrowed amount, and the four birth turn hashes.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "holder": { "type": "string", "description": "Hex-encoded 32-byte holder (counterparty) cell ID. Must already exist in the ledger (settlement needs a real target)." },
+                    "line": { "type": "integer", "description": "The credit line N to extend, in computrons. Escrowed in full at open (fullReserve collateral) — the issuer is debited line + the adopt fee." },
+                    "salt": { "type": "string", "description": "Optional salt disambiguating multiple lines to the same holder (vary it to open a second concurrent line)." }
+                },
+                "required": ["holder", "line"]
+            }),
+        },
         // ─── Gallery ───────────────────────────────────────────────────────────────
         McpToolDef {
             name: "dregg_list_auctions",
@@ -2199,6 +2216,8 @@ async fn dispatch_tool(name: &str, params: Value, state: &NodeState) -> McpToolR
         "dregg_create_cell_from_factory_effect" => {
             tool_create_cell_from_factory_effect(&params, state).await
         }
+        // Trustlines (ORGANS §1 — the bilateral line of credit)
+        "dregg_extend_trustline" => tool_extend_trustline(&params, state).await,
         // Starbridge-app builders (cross-app-e2e closure)
         "dregg_register_name" => tool_register_name(&params, state).await,
         "dregg_publish_subscription" => tool_publish_subscription(&params, state).await,
@@ -4921,6 +4940,51 @@ async fn tool_debit_shared_resource(params: &Value, state: &NodeState) -> McpToo
             "amount": amount,
             "error": format!("{e}"),
         })),
+    }
+}
+
+// =============================================================================
+// Trustline tools (ORGANS §1 — the bilateral line of credit)
+// =============================================================================
+
+/// `dregg_extend_trustline` — drive the trustline birth lifecycle in-process
+/// against the node's authoritative executor (the same path the
+/// `/trustline/open` HTTP route uses). "Extend a holder a line of N" births a
+/// per-line cell, escrows the full line from this node's agent cell (the
+/// funded birth), grants the holder their line capability, and opens it.
+async fn tool_extend_trustline(params: &Value, state: &NodeState) -> McpToolResult {
+    let holder = match params.get("holder").and_then(|v| v.as_str()) {
+        Some(h) => h.to_string(),
+        None => return McpToolResult::error("missing required parameter: holder"),
+    };
+    let line = match params.get("line").and_then(|v| v.as_u64()) {
+        Some(l) => l,
+        None => return McpToolResult::error("missing required parameter: line (integer)"),
+    };
+    let salt = params
+        .get("salt")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let req = crate::trustline_service::OpenRequest { holder, line, salt };
+    let mut s = state.write().await;
+    match crate::trustline_service::open_trustline(&mut s, req).await {
+        Ok(resp) => McpToolResult::json(&serde_json::json!({
+            "trustline": resp.trustline,
+            "issuer": resp.issuer,
+            "holder": resp.holder,
+            "line": resp.line,
+            "escrow": resp.escrow,
+            "coordinator_remaining": resp.coordinator_remaining,
+            "turn_hashes": resp.turn_hashes,
+            "note": "Trustline opened (ORGANS §1 birth edge): the line is escrowed and granted to the holder as a capability. The holder draws/repays against it; settlement redeems drawn value as a conserving transfer.",
+        })),
+        Err(e) => McpToolResult::actionable_error(
+            format!("trustline open refused: {}", e.detail()),
+            "ensure the node is unlocked, the holder cell exists in the ledger, and the agent \
+             cell is funded for the line + fees; vary `salt` if a line to this holder already \
+             exists",
+        ),
     }
 }
 
