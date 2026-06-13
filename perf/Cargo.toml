@@ -24,19 +24,73 @@ dregg-sdk = { path = "../sdk" }
 dregg-intent = { path = "../intent" }
 dregg-token = { path = "../token" }
 dregg-turn = { path = "../turn" }
+dregg-cell = { path = "../cell" }
 postcard = { version = "1", features = ["use-std"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 criterion = { workspace = true }
 
+# ---------------------------------------------------------------------------
+# Criterion benches. Each is a real, compiling benchmark over the PUBLIC API of
+# the crate under test. Every bench is parameterized SMOKE-vs-FULL:
+#   * SMOKE (default)   — tiny input; cheap `--no-run`, seconds-scale smoke run.
+#   * FULL (PERF_FULL=1) — realistic input; the persvati capture run.
+# See `perf/src/lib.rs::perf_full()` and `docs/PERF.md`.
+# ---------------------------------------------------------------------------
+
+# The original turn-proof bench (prove + verify of the EffectVM transition).
 [[bench]]
 name = "turn_proof"
+harness = false
+
+# Transfer PROVE: hand-AIR EffectVM prover + the verified descriptor-interpreter
+# prover (`prove_vm_descriptor`) over the same transition.
+[[bench]]
+name = "prove"
+harness = false
+
+# Proof VERIFY: the audited p3 verifier on a pre-built proof (verify is the
+# light side; the future light-client cost lives here).
+[[bench]]
+name = "verify"
+harness = false
+
+# Executor TURN: the live Rust `TurnExecutor::execute` (the executor entry the
+# node drives), measured over a real Transfer turn against a `Ledger`.
+[[bench]]
+name = "executor_turn"
+harness = false
+
+# TRACE-GEN: `generate_effect_vm_trace` (witness generation) + the Poseidon2-aux
+# extension, the witness surface every EffectVM proof consumes.
+[[bench]]
+name = "trace_gen"
+harness = false
+
+# COMMITMENT: the canonical cell state commitment (`compute_canonical_state_commitment`)
+# and the v9 rotated-limbs commitment (the rotation long pole).
+[[bench]]
+name = "commitment"
+harness = false
+
+# POSEIDON2: one BabyBear width-16 permutation + the 2->1 / many sponge hashes —
+# the in-circuit hash primitive that dominates aux witness-gen.
+[[bench]]
+name = "poseidon2"
 harness = false
 
 [[bin]]
 name = "perf-summary"
 path = "src/bin/perf_summary.rs"
+
+# Proof-SIZE microbench: the wire-byte numbers the docs cite (descriptor ~120
+# KiB, rotated full-turn ~144 KiB), emitted as text or `--json` for regression
+# tracking against a committed baseline.
+[[bin]]
+name = "proof-sizes"
+path = "src/bin/proof_sizes.rs"
 
 # Full-system performance report: every prove/verify primitive on the real
 # commit path, the descriptor-interpreter vs hand-AIR cost, the silver/gold
