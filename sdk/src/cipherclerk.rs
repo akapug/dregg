@@ -989,6 +989,18 @@ pub struct AgentCipherclerk {
     /// crate compiles on wasm32 (CapTpClient pulls async-runtime deps).
     #[cfg(feature = "captp")]
     captp_client: Option<crate::captp_client::CapTpClient>,
+    /// Token ids this cipherclerk has locally revoked.
+    ///
+    /// This is the *wallet-side* mirror of the provider-side
+    /// [`dregg_token::RevocationRegistry`]: when a citizen decides a token
+    /// they minted/hold should no longer be honoured, they record its id
+    /// here. [`Self::is_locally_revoked`] is then a cheap local pre-check
+    /// before presenting a token, and the leaf for a server-side registry
+    /// is [`dregg_token::RevocationRegistry::token_id_to_leaf`] of the same
+    /// id — so the local set and the published Merkle registry agree on the
+    /// keying. This set is *advisory*: authoritative non-revocation is
+    /// proven against the published registry root, not this field.
+    local_revocations: std::collections::HashSet<String>,
 }
 
 /// Internal carrier for a proven sovereign turn: the proof-carrying [`Turn`]
@@ -1080,6 +1092,7 @@ impl AgentCipherclerk {
             sovereign_witness_sequences: HashMap::new(),
             #[cfg(feature = "captp")]
             captp_client: None,
+            local_revocations: std::collections::HashSet::new(),
         }
     }
 
@@ -1132,6 +1145,7 @@ impl AgentCipherclerk {
             sovereign_witness_sequences: HashMap::new(),
             #[cfg(feature = "captp")]
             captp_client: None,
+            local_revocations: std::collections::HashSet::new(),
         }
     }
 
@@ -1149,6 +1163,26 @@ impl AgentCipherclerk {
             .ok_or_else(|| SdkError::MissingKey("cipherclerk has no seed for derivation".into()))?;
         let path = format!("dregg/{}", index);
         Ok(Self::from_seed_at_path(seed, &path))
+    }
+
+    /// Derive a sub-agent cipherclerk at an explicit derivation path.
+    ///
+    /// Generalises [`Self::derive_sub_agent`] (which is exactly this with
+    /// `path = format!("dregg/{index}")`) to arbitrary path strings, so an
+    /// agent can carve out *namespaced* sub-identities — per-device
+    /// (`"dregg/device/laptop"`), per-app (`"dregg/app/orderbook"`), or
+    /// per-purpose (`"dregg/signing/cold"`) — all recoverable from the one
+    /// seed. Requires that this cipherclerk holds a seed (mnemonic- or
+    /// seed-derived); raw-key cipherclerks have no seed to derive from.
+    ///
+    /// The path is fed verbatim into the same BLAKE3 hardened-derivation
+    /// scheme [`Self::derive_sub_agent`] uses, so distinct paths yield
+    /// independent keys and the same path is stable across restarts.
+    pub fn derive_sub_agent_at_path(&self, path: &str) -> Result<Self, SdkError> {
+        let seed = self
+            .seed
+            .ok_or_else(|| SdkError::MissingKey("cipherclerk has no seed for derivation".into()))?;
+        Ok(Self::from_seed_at_path(seed, path))
     }
 
     /// Export the mnemonic phrase if this cipherclerk was created from one.
@@ -1248,6 +1282,60 @@ impl AgentCipherclerk {
     /// Find a held token by its ID.
     pub fn find_token_by_id(&self, id: &str) -> Option<&HeldToken> {
         self.tokens.iter().find(|t| t.id == id)
+    }
+
+    /// Drop a held token from the wallet by its id.
+    ///
+    /// Returns `true` if a token with that id was present (and is now
+    /// removed), `false` if no such token was held. This is wallet hygiene:
+    /// a citizen who no longer needs a delegated or attenuated token can
+    /// forget it so it stops cluttering [`Self::tokens`] and cannot be
+    /// presented by mistake. Forgetting does **not** revoke the token for
+    /// *other* holders — for that, see [`Self::revoke_token`].
+    ///
+    /// On removal the `HeldToken`'s `Drop` zeroizes its `root_key` /
+    /// `issuer_key`, so the secret material does not linger.
+    pub fn forget_token(&mut self, id: &str) -> bool {
+        let before = self.tokens.len();
+        self.tokens.retain(|t| t.id != id);
+        self.tokens.len() != before
+    }
+
+    /// Locally revoke a token id and forget any held copy of it.
+    ///
+    /// Records `id` in this cipherclerk's [`local_revocations`] set (so
+    /// [`Self::is_locally_revoked`] reports it) and removes any held token
+    /// with that id from the wallet. Returns `true` if a held token was
+    /// actually removed by this call.
+    ///
+    /// # Relationship to the published registry
+    ///
+    /// This is the *wallet-side* half of revocation. It is advisory: it
+    /// stops *this* cipherclerk from presenting the token and lets local
+    /// code pre-check. The *authoritative*, third-party-verifiable half is
+    /// the provider's [`dregg_token::RevocationRegistry`] — call
+    /// `registry.revoke(id)` there and publish the root. The keying agrees:
+    /// the leaf this id occupies in that Merkle registry is exactly
+    /// [`dregg_token::RevocationRegistry::token_id_to_leaf`] of the same
+    /// `id`, so a local revocation can be lifted to a published one without
+    /// re-deriving identifiers.
+    pub fn revoke_token(&mut self, id: &str) -> bool {
+        self.local_revocations.insert(id.to_string());
+        self.forget_token(id)
+    }
+
+    /// Whether the given token id has been locally revoked via
+    /// [`Self::revoke_token`].
+    ///
+    /// Advisory only — see [`Self::revoke_token`] for the authoritative
+    /// (registry-rooted) revocation path.
+    pub fn is_locally_revoked(&self, id: &str) -> bool {
+        self.local_revocations.contains(id)
+    }
+
+    /// The number of token ids this cipherclerk has locally revoked.
+    pub fn locally_revoked_count(&self) -> usize {
+        self.local_revocations.len()
     }
 
     // =========================================================================
@@ -8334,6 +8422,106 @@ mod tests {
             "carried explanation must be the faithful rendering of the signed action"
         );
         assert!(!explained.explanation.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // Wallet hygiene + local revocation (cheap-win surface).
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn forget_token_removes_only_the_matching_id() {
+        let mut cclerk = AgentCipherclerk::new();
+        let a = cclerk.mint_token(&[1u8; 32], "dns");
+        let b = cclerk.mint_token(&[2u8; 32], "storage");
+        assert_eq!(cclerk.tokens().len(), 2);
+
+        // Forget a present token: removed, returns true.
+        assert!(cclerk.forget_token(a.id()));
+        assert_eq!(cclerk.tokens().len(), 1);
+        assert!(cclerk.find_token_by_id(a.id()).is_none());
+        // The other token is untouched.
+        assert!(cclerk.find_token_by_id(b.id()).is_some());
+
+        // Forgetting an absent id is a no-op returning false.
+        assert!(!cclerk.forget_token("no-such-id"));
+        assert!(!cclerk.forget_token(a.id()));
+        assert_eq!(cclerk.tokens().len(), 1);
+    }
+
+    #[test]
+    fn revoke_token_records_and_forgets() {
+        let mut cclerk = AgentCipherclerk::new();
+        let t = cclerk.mint_token(&[7u8; 32], "compute");
+        let id = t.id().to_string();
+
+        assert!(!cclerk.is_locally_revoked(&id));
+        assert_eq!(cclerk.locally_revoked_count(), 0);
+
+        // Revoking a held token removes it AND records the id.
+        assert!(cclerk.revoke_token(&id));
+        assert!(cclerk.is_locally_revoked(&id));
+        assert_eq!(cclerk.locally_revoked_count(), 1);
+        assert!(cclerk.find_token_by_id(&id).is_none());
+
+        // Re-revoking the same id is idempotent in the set; nothing left to
+        // forget, so it returns false but the revocation persists.
+        assert!(!cclerk.revoke_token(&id));
+        assert!(cclerk.is_locally_revoked(&id));
+        assert_eq!(cclerk.locally_revoked_count(), 1);
+    }
+
+    #[test]
+    fn local_revocation_keying_agrees_with_registry_leaf() {
+        // The wallet-side revocation and the provider-side
+        // RevocationRegistry must agree on how a token id maps to a leaf, so
+        // a local revocation can be lifted to a published, third-party-
+        // verifiable one without re-deriving identifiers.
+        let mut cclerk = AgentCipherclerk::new();
+        let t = cclerk.mint_token(&[9u8; 32], "dns");
+        let id = t.id().to_string();
+        cclerk.revoke_token(&id);
+
+        let mut registry = dregg_token::RevocationRegistry::new();
+        assert!(registry.revoke(&id));
+        assert!(registry.is_revoked(&id));
+
+        // Same id -> same registry leaf, both sides agree on the keying.
+        let leaf_a = dregg_token::RevocationRegistry::token_id_to_leaf(&id);
+        let leaf_b = dregg_token::RevocationRegistry::token_id_to_leaf(&id);
+        assert_eq!(leaf_a, leaf_b);
+        assert!(cclerk.is_locally_revoked(&id));
+    }
+
+    #[test]
+    fn derive_sub_agent_at_path_namespaces_independent_keys() {
+        // A seed-derived cipherclerk can carve namespaced sub-identities.
+        let seed = [3u8; 64];
+        let root = AgentCipherclerk::from_seed(seed);
+
+        let laptop = root.derive_sub_agent_at_path("dregg/device/laptop").unwrap();
+        let phone = root.derive_sub_agent_at_path("dregg/device/phone").unwrap();
+        let app = root.derive_sub_agent_at_path("dregg/app/orderbook").unwrap();
+
+        // Distinct paths -> distinct identities.
+        assert_ne!(laptop.public_key(), phone.public_key());
+        assert_ne!(laptop.public_key(), app.public_key());
+        assert_ne!(phone.public_key(), app.public_key());
+        // Path is recorded and stable across re-derivation.
+        assert_eq!(laptop.derivation_path(), Some("dregg/device/laptop"));
+        let laptop_again = root.derive_sub_agent_at_path("dregg/device/laptop").unwrap();
+        assert_eq!(laptop.public_key(), laptop_again.public_key());
+
+        // derive_sub_agent(i) is exactly derive_sub_agent_at_path("dregg/{i}").
+        let by_index = root.derive_sub_agent(5).unwrap();
+        let by_path = root.derive_sub_agent_at_path("dregg/5").unwrap();
+        assert_eq!(by_index.public_key(), by_path.public_key());
+    }
+
+    #[test]
+    fn derive_sub_agent_at_path_requires_seed() {
+        // A raw-key cipherclerk has no seed and cannot derive sub-agents.
+        let cclerk = AgentCipherclerk::new();
+        assert!(cclerk.derive_sub_agent_at_path("dregg/device/laptop").is_err());
     }
 }
 
