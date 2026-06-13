@@ -1,50 +1,74 @@
-# pg-dregg — SKELETON (design proposal docs/PG-DREGG.md).
+# pg-dregg — dregg verified object-capability authorization as a PostgreSQL
+# RLS/policy layer (pgrx extension). Milestone 1.
 #
-# This crate is a DESIGN SKELETON, not a built extension. It is deliberately
-# kept OUT of the workspace `members` list (see docs/PG-DREGG.md §5): a
+# This crate is a STANDALONE workspace root (its own empty `[workspace]`), kept
+# OUT of the parent workspace `members` list (docs/PG-DREGG.md §5): a
 # `cargo-pgrx`-managed cdylib does not want to participate in
 # `cargo check --workspace`, and excluding it protects the shared `./target`
 # from pgrx's postgres-binding build during concurrent lanes / VK rotation.
 #
-# Build/test (NOT run from the proposal lane — invokes cargo-pgrx):
-#   cargo install cargo-pgrx --version 0.17.0
-#   cargo pgrx init --pg16 <download|existing>
-#   cargo pgrx test pg16
+# TWO build modes (see docs/PG-DREGG.md §5 + the M1 verification boundary):
 #
-# Standalone workspace root: pg-dregg is intentionally NOT a member of the
-# parent workspace (the note above), so it declares its own empty `[workspace]`
-# to keep `cargo`/`cargo-pgrx` invocations inside this directory from resolving
-# against the parent root Cargo.toml.
+#   1. CORE (no postgres needed) — the authorization core lives in `src/core.rs`
+#      and is proven by plain `cargo test`:
+#          cargo test                     # builds core.rs + its #[cfg(test)] tests
+#      The default feature set is EMPTY, so this builds NO pgrx code and needs no
+#      postgres / cargo-pgrx toolchain. This is the always-runnable verification.
+#
+#   2. EXTENSION (needs cargo-pgrx + a managed postgres) — the thin
+#      `#[pg_extern]` wrappers in `src/lib.rs` are gated behind the `pgrx`
+#      feature; building/running them is a cargo-pgrx job:
+#          cargo install cargo-pgrx --version 0.17.0
+#          cargo pgrx init --pg16 <download|existing>
+#          cargo pgrx test pg16          # runs the #[pg_test]s against managed pg16
+#          cargo pgrx run  pg16          # opens psql with the extension loaded
 [workspace]
 
 [package]
 name = "pg-dregg"
 version = "0.1.0"
 edition = "2021"
-description = "dregg verified object-capability authorization as a PostgreSQL-native RLS/policy layer (pgrx extension). SKELETON."
+description = "dregg verified object-capability authorization as a PostgreSQL-native RLS/policy layer (pgrx extension). Milestone 1."
 
 [lib]
 crate-type = ["cdylib", "lib"]
 
+# cargo-pgrx's schema generator builds this binary (with --cfg pgrx_embed) to
+# emit the extension SQL. It is only meaningful with the pgrx feature on, so it
+# is gated by `required-features` — plain `cargo test` (no features) never
+# compiles it, keeping the core path postgres-free. The name MUST be
+# `pgrx_embed_<crate-name>` (cargo-pgrx looks it up by that name).
+[[bin]]
+name = "pgrx_embed_pg-dregg"
+path = "./src/bin/pgrx_embed.rs"
+required-features = ["pgrx"]
+
 [features]
-default = ["pg16"]
-pg13 = ["pgrx/pg13", "pgrx-tests/pg13"]
-pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
-pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
-pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
-pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
+# Default is EMPTY so `cargo test` builds only the postgres-independent core.
+default = []
+# Turning on `pgrx` compiles the #[pg_extern] wrappers; pick a pg ABI alongside.
+pgrx = ["dep:pgrx"]
+pg13 = ["pgrx", "pgrx/pg13", "dep:pgrx-tests", "pgrx-tests/pg13"]
+pg14 = ["pgrx", "pgrx/pg14", "dep:pgrx-tests", "pgrx-tests/pg14"]
+pg15 = ["pgrx", "pgrx/pg15", "dep:pgrx-tests", "pgrx-tests/pg15"]
+pg16 = ["pgrx", "pgrx/pg16", "dep:pgrx-tests", "pgrx-tests/pg16"]
+pg17 = ["pgrx", "pgrx/pg17", "dep:pgrx-tests", "pgrx-tests/pg17"]
+# pg_test enables the #[pg_test]s (cargo-pgrx sets this).
 pg_test = []
 
 [dependencies]
-pgrx = "0.17"
+# pgrx is OPTIONAL: only the extension build pulls it (and its postgres
+# bindings). The core (`src/core.rs`) never touches it.
+pgrx = { version = "0.17", optional = true }
+# pgrx-tests backs the #[pg_test] harness; OPTIONAL so plain `cargo test` (the
+# core path) never compiles the postgres test machinery. cargo-pgrx enables it
+# via the chosen pgNN feature.
+pgrx-tests = { version = "0.17", optional = true }
 # The whole authorization core. Already circuit-free + offline:
 # `cargo tree -i dregg-circuit -p dregg-auth` is empty.
 dregg-auth = { path = "../dregg-auth" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-[dev-dependencies]
-pgrx-tests = "0.17"
 
 [profile.dev]
 panic = "unwind"
