@@ -20,7 +20,7 @@
 use dregg_firmament::router::{Recipient, Router};
 use dregg_firmament::{
     AuthRequired, Backing, Bounds, Capability, DistributedBacking, FirmamentRouter, LocalBacking,
-    Resolution, ResolveError,
+    Resolution, ResolveError, SurfaceBacking, Target,
 };
 
 /// The houyhnhnm APP — written ONCE, backing-agnostic. It does not know and
@@ -172,4 +172,181 @@ fn amplification_refused_at_both_backings() {
     assert!(matches!(err_dist, Err(ResolveError::Unauthorized(_))));
     // Neither backing mutated: the recipient never received the widened cap.
     assert!(!router.distributed.holds_cap(recipient_cell, remote_cell));
+}
+
+// ===========================================================================
+// THE GLASS — `docs/DREGG-DESKTOP-OS.md` R0: a window IS a surface capability.
+//
+// These two tests are the desktop-OS first slice: they make "a window =
+// `Capability{ target: Surface(cell), rights }`" REAL and load-bearing. A
+// surface cap attenuates / delegates / is-rejected-when-widened through the
+// EXACT SAME `is_attenuation` (`granted ⊆ held`) gate and the EXACT SAME real
+// `TurnExecutor` as every other firmament cap — with zero new authority, zero
+// special-casing, zero drivers. Validated by a turn against the REAL executor,
+// exactly as the executor-state bridge (#180) and channels (#181) validated
+// theirs.
+// ===========================================================================
+
+#[test]
+fn surface_attenuate_is_backing_agnostic() {
+    // The SAME `Capability::attenuate` gate that a local seL4 cap and a
+    // distributed cell use, on a SURFACE handle — no special-casing. A window
+    // narrows (a writable surface → a read-only mirror) and refuses to widen
+    // (a read-only mirror cannot promote itself to writable), through the REAL
+    // `is_attenuation` lattice.
+    fn cid(b: u8) -> Target {
+        let mut k = [0u8; 32];
+        k[0] = b;
+        Target::surface(dregg_firmament::CellId::derive_raw(&k, &[0u8; 32]))
+    }
+    let window = if let Target::Surface { cell } = cid(9) {
+        cell
+    } else {
+        unreachable!()
+    };
+
+    // A writable (Either) window narrows to a read-only mirror (Signature) —
+    // the SAME genuine narrowing the local/distributed handles make.
+    let writable = Capability::surface(window, AuthRequired::Either);
+    let mirror = writable
+        .attenuate(AuthRequired::Signature)
+        .expect("Either -> Signature is a genuine surface narrowing");
+    assert_eq!(mirror.rights, AuthRequired::Signature);
+    // The narrowed handle keeps the SAME Surface target — only rights moved.
+    assert_eq!(mirror.target, writable.target);
+    assert!(mirror.target.is_surface());
+
+    // A read-only mirror (Signature) CANNOT widen to writable (Either): the
+    // SAME `granted ⊆ held` gate refuses it — backing-agnostic, identical to
+    // the local-cap and distributed-cell rejections.
+    let mirror_only = Capability::surface(window, AuthRequired::Signature);
+    assert!(mirror_only.attenuate(AuthRequired::Either).is_none());
+
+    // backing_of routes a surface through the executor-turn path (a surface IS
+    // a cell), exactly like a distributed cell.
+    assert_eq!(
+        FirmamentRouter::backing_of(&writable),
+        Backing::DistributedTurn
+    );
+}
+
+#[test]
+fn surface_delegate_through_real_executor_and_widening_rejected() {
+    // Hand a window to another app through the firmament router. The narrowing
+    // share COMMITS via a GENUINE `Effect::GrantCapability` turn; a WIDENING
+    // share is REJECTED by the REAL executor (DelegationDenied), and the other
+    // app gets nothing. This is the real distributed half of "a window is a
+    // capability" — byte-for-byte the deployed attenuation semantics, on glass.
+    let local = LocalBacking::new();
+    let dist = DistributedBacking::new();
+
+    let mut surfaces = SurfaceBacking::new(); // n = 1
+    let app_cell = surfaces.seed_surface(0); // the app holding the window
+    let window = surfaces.seed_surface(2); // the surface (window) cell
+    let other_app = surfaces.seed_surface(1); // who we share the window with
+    // The compositor granted the app a WRITABLE (Either) surface cap.
+    surfaces.install(app_cell, window, AuthRequired::Either);
+
+    let mut router = FirmamentRouter::new(local, dist)
+        .with_surface(surfaces)
+        .with_holder(app_cell);
+
+    // ---- INVOKE: presenting/drawing into the window resolves via a turn, with
+    //      the n=1 collapse (immediate, synchronous — the glass is on this box).
+    let win_cap = Capability::surface(window, AuthRequired::Either);
+    let res = router.resolve(&win_cap).expect("present surface");
+    assert_eq!(res.backing, Backing::DistributedTurn);
+    assert_eq!(res.bounds, Bounds::LOCAL); // n = 1 collapse: a surface revoke is immediate
+    assert!(res.bounds.revocation_immediate);
+    assert!(res.bounds.commit_synchronous);
+
+    // ---- SHARE (narrowing): hand a read-only mirror (Either -> Signature) to
+    //      the other app. Commits via the REAL executor turn.
+    let shared = router
+        .attenuate_and_grant(
+            &win_cap,
+            AuthRequired::Signature,
+            Recipient::SurfaceCell(other_app),
+        )
+        .expect("narrowing surface share commits through the real executor");
+    // The shared handle is the SAME window with narrowed rights — still a surface.
+    assert!(shared.target.is_surface());
+    assert_eq!(shared.target, win_cap.target);
+    assert_eq!(shared.rights, AuthRequired::Signature);
+    // The other app ACTUALLY HOLDS the mirror now (a committed GrantCapability
+    // turn — the real `granted ⊆ held`).
+    assert!(router.surface.holds_cap(other_app, window));
+    assert_eq!(
+        router.surface.rights_held(other_app, window),
+        Some(AuthRequired::Signature)
+    );
+
+    // ---- WIDENING SHARE is REJECTED. The other app now holds only Signature
+    //      over the window; trying to re-share it as a WIDER Either grant is
+    //      refused by the SAME gate (here at the backing-agnostic pre-check),
+    //      so a window cannot leak more authority than it carries. We rebind a
+    //      router whose holder IS that read-only-mirror app and have it attempt
+    //      the widen.
+    let local2 = LocalBacking::new();
+    let dist2 = DistributedBacking::new();
+    let mut fab2 = SurfaceBacking::new();
+    let mirror_app = fab2.seed_surface(1); // holds only Signature over the window
+    let w = fab2.seed_surface(2); // == `window` (deterministic seed)
+    let victim = fab2.seed_surface(3); // who the mirror app tries to widen-share to
+    fab2.install(mirror_app, w, AuthRequired::Signature);
+    let mut router2 = FirmamentRouter::new(local2, dist2)
+        .with_surface(fab2)
+        .with_holder(mirror_app);
+
+    let widen_cap = Capability::surface(w, AuthRequired::Signature);
+    let err = router2.attenuate_and_grant(
+        &widen_cap,
+        AuthRequired::Either, // wider than the held Signature — must be refused
+        Recipient::SurfaceCell(victim),
+    );
+    assert!(matches!(err, Err(ResolveError::Unauthorized(_))));
+    assert!(!router2.surface.holds_cap(victim, w));
+}
+
+#[test]
+fn surface_n_equals_one_collapse() {
+    // The surface fabric's `n = 1` collapse made concrete: a surface on THIS
+    // box (compositor + apps co-located) gets the strong local bounds —
+    // immediate dark-on-revoke, synchronous present — and a remote window
+    // (n > 1) relaxes them with the VERBS UNCHANGED.
+    let local = LocalBacking::new();
+    let dist = DistributedBacking::new();
+
+    // n = 1: a local window.
+    let mut near = SurfaceBacking::new();
+    let app = near.seed_surface(0);
+    let window = near.seed_surface(2);
+    near.install(app, window, AuthRequired::Either);
+    let router = FirmamentRouter::new(local, dist)
+        .with_surface(near)
+        .with_holder(app);
+    let win_cap = Capability::surface(window, AuthRequired::Either);
+    let res = router.resolve(&win_cap).expect("near surface");
+    assert_eq!(res.bounds, Bounds::LOCAL);
+    assert_eq!(res.bounds.n, 1);
+    assert!(res.bounds.revocation_immediate);
+    assert!(res.bounds.commit_synchronous);
+
+    // n = 5: a REMOTE window (its backing cell lives on another machine). The
+    // bounds relax — eventual revocation, quorum present — but the app still
+    // just called `router.resolve(&handle)`; no seam, same Surface verb.
+    let local2 = LocalBacking::new();
+    let dist2 = DistributedBacking::new();
+    let mut far = SurfaceBacking::new().with_distance(5);
+    let app2 = far.seed_surface(0);
+    let rwindow = far.seed_surface(2);
+    far.install(app2, rwindow, AuthRequired::Either);
+    let router_far = FirmamentRouter::new(local2, dist2)
+        .with_surface(far)
+        .with_holder(app2);
+    let rwin_cap = Capability::surface(rwindow, AuthRequired::Either);
+    let rres = router_far.resolve(&rwin_cap).expect("far surface");
+    assert_eq!(rres.bounds.n, 5);
+    assert!(!rres.bounds.revocation_immediate);
+    assert!(!rres.bounds.commit_synchronous);
 }

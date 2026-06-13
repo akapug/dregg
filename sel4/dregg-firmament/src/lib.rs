@@ -49,10 +49,12 @@ use std::string::String;
 
 pub mod local;
 pub mod distributed;
+pub mod surface;
 pub mod router;
 
 pub use local::LocalBacking;
 pub use distributed::DistributedBacking;
+pub use surface::SurfaceBacking;
 pub use router::{FirmamentRouter, Router};
 
 // Re-export the REAL dregg rights lattice and id so app code names the genuine
@@ -90,6 +92,19 @@ pub enum Target {
         /// The cell this capability points at — the REAL dregg [`CellId`].
         cell: CellId,
     },
+    /// A SURFACE: a dregg cell whose state is rendered as a window — **the
+    /// firmament made visual** (`docs/DREGG-DESKTOP-OS.md`). A window IS a
+    /// capability over a cell; holding/attenuating/delegating/revoking the
+    /// window is exactly holding/attenuating/delegating/revoking that cap,
+    /// through the SAME `granted ⊆ held` gate and the SAME real executor as a
+    /// [`Target::Distributed`] cell. The invocation is a turn (present/draw);
+    /// at `n = 1` (compositor + apps on one box) the bounds collapse to
+    /// strong-local — a surface revoke darkens the glass the instant it returns.
+    Surface {
+        /// The cell that backs this surface — the REAL dregg [`CellId`] whose
+        /// state the compositor renders.
+        cell: CellId,
+    },
 }
 
 impl Target {
@@ -103,9 +118,20 @@ impl Target {
         Target::Distributed { cell }
     }
 
+    /// A SURFACE target — a dregg cell rendered as a window.
+    pub fn surface(cell: CellId) -> Self {
+        Target::Surface { cell }
+    }
+
     /// Is this target local (resolves via the kernel/stub path)?
     pub fn is_local(&self) -> bool {
         matches!(self, Target::Local { .. })
+    }
+
+    /// Is this target a surface (a window — resolves via the executor turn
+    /// path, the same as a distributed cell, since a surface IS a cell)?
+    pub fn is_surface(&self) -> bool {
+        matches!(self, Target::Surface { .. })
     }
 }
 
@@ -132,6 +158,16 @@ impl Capability {
     /// Mint a handle to a DISTRIBUTED dregg cell with `rights`.
     pub fn distributed(cell: CellId, rights: Rights) -> Self {
         Capability { target: Target::distributed(cell), rights }
+    }
+
+    /// Mint a handle to a SURFACE (a window backed by a dregg cell) with
+    /// `rights`. This is "a window = a `Capability{ target: Surface(cell),
+    /// rights }`" made concrete — it attenuates / delegates through the SAME
+    /// [`Capability::attenuate`] and router gates as every other handle, with
+    /// no special-casing (the surface target rides the generic backing-agnostic
+    /// machinery).
+    pub fn surface(cell: CellId, rights: Rights) -> Self {
+        Capability { target: Target::surface(cell), rights }
     }
 
     /// Attenuate this handle's rights to `narrower` — backing-agnostic.
