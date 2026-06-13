@@ -1,0 +1,43 @@
+[package]
+name = "starbridge-escrow-market"
+version = "0.1.0"
+edition = "2024"
+description = "Starbridge escrowed-delivery marketplace — a factory-born escrow cell that composes the organ semantics: a trustline-style funding ceiling (escrowed ≤ ceiling), a mailbox-style sealed-delivery commitment (WriteOnce), a one-way order lifecycle, and a flashwell-style atomic, value-conserving settlement (released + refunded == escrowed). One verified cell program, enforced by the real executor every turn."
+
+# The escrowed-delivery marketplace: a buyer escrows funds against a listing; a
+# seller commits a sealed delivery; settlement releases to the seller (or
+# refunds the buyer) ATOMICALLY and value-neutrally. It composes — in the
+# slot-caveat idiom of a single factory-born cell — the guarantees the night's
+# organs provide:
+#
+#   - TRUSTLINE  (escrowed ≤ ceiling): the funded amount can never exceed the
+#     listing's escrow ceiling — `FieldLteField{ ESCROWED, CEILING }`. The
+#     buyer draws against a bounded line, exactly the trustline `drawn ≤ line`.
+#   - MAILBOX    (sealed delivery, exactly once): the seller commits a
+#     `DELIVERY_HASH` — the digest of the sealed goods/turn-intent — under
+#     `WriteOnce`. It is bound exactly once and is tamper-evident, the mailbox
+#     sealed-intent delivery contract.
+#   - FLASHWELL  (atomic, conserving settlement): settlement splits the escrow
+#     into RELEASED (to the seller) and REFUNDED (to the buyer) with
+#     `RELEASED + REFUNDED == ESCROWED` enforced by `SumEqualsAcross` — the
+#     all-or-nothing, no-mint/no-burn flash-settlement invariant.
+#   - one-way LIFECYCLE: LISTED→FUNDED→SHIPPED→SETTLED under `StrictMonotonic`,
+#     so an order can never regress, double-settle, or re-fund.
+#
+# Composes dregg primitives only (FactoryDescriptor + Effect::SetField +
+# Effect::EmitEvent + StateConstraint slot caveats) — no domain-specific escrow
+# Effect, no Authorization::Unchecked, no placeholder signatures. Routes through
+# the REAL verified executor via EmbeddedExecutor / submit_action.
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

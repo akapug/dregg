@@ -6886,6 +6886,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "starbridge-escrow-market"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "starbridge-governed-namespace"
 version = "0.1.0"
 dependencies = [
