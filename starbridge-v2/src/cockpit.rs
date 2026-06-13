@@ -35,6 +35,8 @@ use crate::views::{pill, section_title, theme};
 use starbridge_v2::dynamics;
 use starbridge_v2::palette::{Category, CommandId, CommandPalette};
 use starbridge_v2::reflect::{self, Field, FieldValue, Inspectable, ObjectKind};
+use starbridge_v2::shell::{Scene, Shell};
+use starbridge_v2::surface::{SurfaceCapability, SurfaceId};
 use starbridge_v2::world::{self, CommitOutcome, World};
 // The feature panels — wired in as tabs of the master interface.
 use starbridge_v2::{cipherclerk, debug, edit, replay};
@@ -51,6 +53,7 @@ pub enum Selection {
 /// surfaces the composer alongside the four feature panels.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
+    Shell,
     Composer,
     Objects,
     Debugger,
@@ -60,7 +63,8 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 6] = [
+    const ALL: [Tab; 7] = [
+        Tab::Shell,
         Tab::Composer,
         Tab::Objects,
         Tab::Debugger,
@@ -70,6 +74,7 @@ impl Tab {
     ];
     fn label(self) -> &'static str {
         match self {
+            Tab::Shell => "SHELL",
             Tab::Composer => "COMPOSER",
             Tab::Objects => "OBJECTS",
             Tab::Debugger => "DEBUGGER",
@@ -121,6 +126,19 @@ pub struct Cockpit {
     /// The live-editor's authoring/validation/deploy state.
     editor: edit::EditorState,
 
+    // --- the cap-first SHELL / compositor ----------------------------------
+    /// The cap-first window manager / compositor over the live world. Every
+    /// window op routes through its CAP-GATED API.
+    shell: Shell,
+    /// The operator's cap-vault: the [`SurfaceCapability`] held for each open
+    /// surface. The cockpit IS the operator (it holds every surface's cap), but
+    /// it can ONLY drive a surface by presenting the cap from here — so the
+    /// shell's ocap discipline is real, not bypassed. The console's cap lives
+    /// here too (under `console_surface`).
+    surface_caps: std::collections::HashMap<SurfaceId, SurfaceCapability>,
+    /// The console surface's id (the privileged trusted-root surface).
+    console_surface: SurfaceId,
+
     // --- the ⌘K COMMAND PALETTE --------------------------------------------
     /// The command palette over EVERY action (open with ⌘K). The cockpit feeds
     /// it keystrokes and dispatches its selected `CommandId` through the same
@@ -136,7 +154,7 @@ impl Cockpit {
 
         // Seed the debugger with a demo turn (treasury → user transfer) that
         // the operator can step + explain against the live world.
-        let [treasury, _service, user] = anchors;
+        let [treasury, service, user] = anchors;
         let debug_turn = world.borrow().turn(treasury, vec![world::transfer(treasury, user, 1_000)]);
 
         // Seed the cipherclerk vault with two real HD-derived identities.
@@ -159,13 +177,27 @@ impl Cockpit {
         // Start the replay scrubber at the head of the live world's history.
         let replay_cursor = world.borrow().recorded_turns().len();
 
+        // Boot the cap-first SHELL: open the privileged console surface (the
+        // cockpit's own trusted root, run as the treasury/operator identity),
+        // then open the three anchor cells as cap-confined cell-view surfaces so
+        // the compositor boots into a LIVE multi-surface scene over real cells.
+        let mut shell = Shell::new();
+        let mut surface_caps = std::collections::HashMap::new();
+        let console_cap = shell.open_console(treasury, "Master Console");
+        let console_surface = console_cap.surface();
+        surface_caps.insert(console_surface, console_cap);
+        for (cell, name) in [(treasury, "Treasury"), (user, "User"), (service, "Service")] {
+            let cap = shell.open_cell_view(cell, name);
+            surface_caps.insert(cap.surface(), cap);
+        }
+
         Self {
             world,
             cells,
             selection: Selection::Image,
             last_outcome: None,
             anchors,
-            tab: Tab::Composer,
+            tab: Tab::Shell,
             debug_turn,
             breakpoints: vec![debug::Breakpoint::OnRefusal, debug::Breakpoint::OnConservationBreak],
             replay_cursor,
@@ -173,6 +205,9 @@ impl Cockpit {
             clerk,
             clerk_outcome: None,
             editor,
+            shell,
+            surface_caps,
+            console_surface,
             palette: CommandPalette::new(),
             focus,
         }
@@ -412,6 +447,123 @@ impl Cockpit {
         }
     }
 
+    // --- the cap-first SHELL ops (each routes through the CAP-GATED shell) ---
+    //
+    // The cockpit IS the operator: it holds every surface's cap in `surface_caps`.
+    // But it can ONLY drive a surface by presenting that cap to the shell's
+    // gated API — so the window manager's ocap discipline is demonstrated, not
+    // bypassed. (A window op with no held cap simply has nothing to present and
+    // is refused — exactly the no-ambient-authority property.)
+
+    /// Open the currently-selected cell as a new cap-confined SURFACE. The shell
+    /// mints the surface's cap; the cockpit files it in its vault. (Opening a
+    /// cell that isn't selected falls back to the service anchor so the verb is
+    /// always live.)
+    fn shell_open_selected(&mut self, cx: &mut Context<Self>) {
+        let cell = match self.selection {
+            Selection::Cell(id) => id,
+            _ => self.anchors[1], // service, as a sensible default
+        };
+        let short = reflect::short_hex(cell.as_bytes());
+        let cap = self.shell.open_cell_view(cell, format!("cell {short}"));
+        self.surface_caps.insert(cap.surface(), cap);
+        self.last_outcome = Some(format!("shell: opened surface for cell {short} (cap minted)"));
+        self.tab = Tab::Shell;
+        cx.notify();
+    }
+
+    /// Focus + raise the front-most NON-console surface (a cap-gated op). The
+    /// cockpit presents the held cap; the shell authenticates it before raising.
+    fn shell_focus_front(&mut self, cx: &mut Context<Self>) {
+        // Find the current front non-console surface in the live scene.
+        let front = {
+            let w = self.world.borrow();
+            let scene = self.shell.compose(&w);
+            scene
+                .items
+                .iter()
+                .rev()
+                .find(|it| !it.surface.is_console())
+                .map(|it| it.surface.id())
+        };
+        if let Some(id) = front {
+            self.with_cap(id, |shell, cap| shell.focus(cap), cx, "focus");
+        } else {
+            self.last_outcome = Some("shell: no cell surface to focus".to_string());
+            cx.notify();
+        }
+    }
+
+    /// Close the focused surface (cap-gated; the console is protected, so closing
+    /// it is refused — a refusal the operator can watch). The cap is dropped when
+    /// the surface closes.
+    fn shell_close_focused(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.shell.focused() else {
+            self.last_outcome = Some("shell: nothing focused to close".to_string());
+            cx.notify();
+            return;
+        };
+        let outcome = match self.surface_caps.get(&id) {
+            Some(cap) => self.shell.close(cap),
+            None => Err(starbridge_v2::shell::ShellError::Unauthorized),
+        };
+        match outcome {
+            Ok(()) => {
+                self.surface_caps.remove(&id);
+                self.last_outcome = Some("shell: closed the focused surface (cap retired)".to_string());
+            }
+            Err(e) => {
+                self.last_outcome = Some(format!("shell: close REFUSED — {}", shell_err(&e)));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Minimize the focused surface (cap-gated).
+    fn shell_minimize_focused(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.shell.focused() else {
+            self.last_outcome = Some("shell: nothing focused to minimize".to_string());
+            cx.notify();
+            return;
+        };
+        self.with_cap(id, |shell, cap| shell.set_minimized(cap, true), cx, "minimize");
+    }
+
+    /// Cycle the compositor layout (float → tile → stack). A shell-global op (it
+    /// rearranges the whole scene), so it is not surface-cap-scoped.
+    fn shell_cycle_layout(&mut self, cx: &mut Context<Self>) {
+        self.shell.cycle_layout();
+        self.last_outcome = Some(format!("shell: layout → {}", self.shell.layout().label()));
+        self.tab = Tab::Shell;
+        cx.notify();
+    }
+
+    /// Focus a surface by id when the operator clicks it in the scene. The click
+    /// is only a HINT — the cockpit then presents the held cap, and the shell's
+    /// cap-gated `focus` is the actual authority (no held cap ⇒ no focus).
+    fn shell_click_surface(&mut self, id: SurfaceId, cx: &mut Context<Self>) {
+        self.with_cap(id, |shell, cap| shell.focus(cap), cx, "focus");
+    }
+
+    /// Drive a cap-gated shell op for surface `id`: look up the held cap, present
+    /// it to the shell, and surface the verdict. Centralizes the "present the
+    /// cap or it's refused" discipline so every op goes through it.
+    fn with_cap<F>(&mut self, id: SurfaceId, op: F, cx: &mut Context<Self>, what: &str)
+    where
+        F: FnOnce(&mut Shell, &SurfaceCapability) -> Result<(), starbridge_v2::shell::ShellError>,
+    {
+        let result = match self.surface_caps.get(&id) {
+            Some(cap) => op(&mut self.shell, cap),
+            // No held cap for this surface → nothing to present → refused. This
+            // IS the no-ambient-authority property (you can't act without a cap).
+            None => Err(starbridge_v2::shell::ShellError::Unauthorized),
+        };
+        if let Err(e) = result {
+            self.last_outcome = Some(format!("shell: {what} REFUSED — {}", shell_err(&e)));
+        }
+        cx.notify();
+    }
+
     // --- THE CENTRAL DISPATCHER — one path for buttons AND the palette -------
 
     /// Run a palette [`CommandId`] through the SAME `&mut Cockpit` verbs the
@@ -434,6 +586,13 @@ impl Cockpit {
             CommandId::GoReplay => self.set_tab(Tab::Replay, cx),
             CommandId::GoCipherclerk => self.set_tab(Tab::Cipherclerk, cx),
             CommandId::GoEditor => self.set_tab(Tab::Editor, cx),
+            CommandId::GoShell => self.set_tab(Tab::Shell, cx),
+
+            CommandId::ShellOpenSelected => self.shell_open_selected(cx),
+            CommandId::ShellFocusFront => self.shell_focus_front(cx),
+            CommandId::ShellCloseFocused => self.shell_close_focused(cx),
+            CommandId::ShellCycleLayout => self.shell_cycle_layout(cx),
+            CommandId::ShellMinimizeFocused => self.shell_minimize_focused(cx),
 
             CommandId::ReplayStepBack => self.replay_step_back(cx),
             CommandId::ReplayStepForward => self.replay_step_forward(cx),
@@ -755,7 +914,8 @@ impl Cockpit {
 
     fn outcome_banner(&self) -> impl IntoElement {
         let (txt, color) = match &self.last_outcome {
-            Some(s) if s.contains("REJECTED") => (s.clone(), theme::bad()),
+            // A rejected turn OR a refused shell op — the guarantee firing.
+            Some(s) if s.contains("REJECTED") || s.contains("REFUSED") => (s.clone(), theme::bad()),
             Some(s) => (s.clone(), theme::good()),
             None => ("(no turn run yet)".to_string(), theme::muted()),
         };
@@ -823,6 +983,7 @@ impl Cockpit {
     /// The active right-pane workspace panel.
     fn workspace(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         match self.tab {
+            Tab::Shell => self.shell_panel(cx).into_any_element(),
             Tab::Composer => self.composer(cx).into_any_element(),
             Tab::Objects => self.objects_panel().into_any_element(),
             Tab::Debugger => self.debugger_panel().into_any_element(),
@@ -830,6 +991,214 @@ impl Cockpit {
             Tab::Cipherclerk => self.cipherclerk_panel(cx).into_any_element(),
             Tab::Editor => self.editor_panel().into_any_element(),
         }
+    }
+
+    /// THE SHELL panel — the cap-first window manager / compositor. Composes the
+    /// live [`Scene`] (surfaces over real cells, z-ordered) and renders each
+    /// surface as a window with: a SHELL-DRAWN trusted-path identity header
+    /// (anti-spoof — the owning cell id + lifecycle, read from the live ledger),
+    /// the surface's own title, cap-gated window controls, and a body of the
+    /// real cell's state. The whole compositor reacts to real turns (it re-reads
+    /// the world each frame).
+    fn shell_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let w = self.world.borrow();
+        let scene: Scene = self.shell.compose(&w);
+        let layout = scene.layout;
+        let focused = scene.focused;
+
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full();
+        col = col.child(section_title("SHELL · cap-first compositor over real cells").mb_1());
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "Each dregg CELL is a cap-confined SURFACE. Every window op (focus · close · \
+             minimize) is GATED by the surface's capability — there is no ambient authority. \
+             The identity badge on each surface is drawn by the SHELL from the live ledger \
+             (anti-spoof), so a surface cannot impersonate another cell.",
+        ));
+
+        // The compositor toolbar: layout + the cap-gated ops.
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(pill(format!("layout: {}", layout.label()), theme::accent()))
+                .child(pill(format!("{} surfaces", self.shell.surface_count()), theme::good()))
+                .child(pill(format!("console s{}", self.console_surface.as_u64()), theme::warn()))
+                .child(shell_button(cx, "open selected as surface", theme::good(), Cockpit::shell_open_selected))
+                .child(shell_button(cx, "focus front", theme::accent(), Cockpit::shell_focus_front))
+                .child(shell_button(cx, "minimize focused", theme::accent(), Cockpit::shell_minimize_focused))
+                .child(shell_button(cx, "close focused", theme::warn(), Cockpit::shell_close_focused))
+                .child(shell_button(cx, "cycle layout", theme::accent(), Cockpit::shell_cycle_layout)),
+        );
+        col = col.child(self.outcome_banner());
+
+        // The composed scene: surfaces front-to-back (front first, so the most
+        // recently focused window reads at the top of the list).
+        let mut stack = div().flex().flex_col().gap_2().mt_1();
+        for item in scene.items.iter().rev() {
+            let id = item.surface.id();
+            let is_focused = focused == Some(id);
+            let is_console = item.surface.is_console();
+            let held_cap = self.surface_caps.contains_key(&id);
+
+            // The trusted-path identity header — SHELL-drawn, from the ledger.
+            let (badge_label, badge_color) = identity_badge(item.identity.lifecycle);
+            let owner = if is_console {
+                "SYSTEM (trusted root)".to_string()
+            } else {
+                format!("owner cell {}", item.identity.short)
+            };
+
+            // The window body: the real cell's live state (balance/nonce/caps/
+            // lifecycle), read fresh from the ledger — never a mock.
+            let body = self.surface_body(&item.surface.cell(), &w, is_console);
+
+            let border = if is_focused { theme::accent() } else { theme::border() };
+            stack = stack.child(
+                div()
+                    .id(SharedString::from(format!("surface-{}", id.as_u64())))
+                    .flex()
+                    .flex_col()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(border)
+                    .bg(theme::panel())
+                    .cursor_pointer()
+                    // Clicking the surface is a HINT; the cap-gated focus is the
+                    // authority (routed through `shell_click_surface`).
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev, _w, cx| {
+                            this.shell_click_surface(id, cx);
+                        }),
+                    )
+                    // The title bar: identity badge (shell-drawn) + title + chrome.
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .items_center()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(if is_focused { theme::panel_hi() } else { theme::panel() })
+                            .border_b_1()
+                            .border_color(theme::border())
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(div().text_xs().text_color(if is_console { theme::warn() } else { theme::accent() }).child(if is_console { "◆" } else { "⬡" }))
+                                    .child(div().text_color(theme::text()).child(item.surface.title().to_string()))
+                                    .child(pill(badge_label, badge_color)),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(div().text_xs().text_color(theme::muted()).child(format!("z{}", item.surface.z())))
+                                    .when(is_focused, |d| d.child(pill("focused", theme::good())))
+                                    .when(item.surface.is_minimized(), |d| d.child(pill("min", theme::muted())))
+                                    .when(!held_cap, |d| d.child(pill("no cap", theme::bad()))),
+                            ),
+                    )
+                    // The trusted-path provenance line (anti-spoof): the owner the
+                    // SHELL attests, plus whether the cell is backed in the ledger.
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .px_2()
+                            .py_0p5()
+                            .child(div().text_xs().text_color(theme::muted()).child(owner))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(if item.identity.backed || is_console { theme::muted() } else { theme::bad() })
+                                    .child(if is_console {
+                                        "trusted-path: system console".to_string()
+                                    } else if item.identity.backed {
+                                        "trusted-path: shell-attested ✓".to_string()
+                                    } else {
+                                        "trusted-path: UNBACKED (cell missing)".to_string()
+                                    }),
+                            ),
+                    )
+                    // The body (the real cell's live state) — hidden when minimized.
+                    .when(!item.surface.is_minimized(), |d| d.child(body)),
+            );
+        }
+        col = col.child(stack);
+        col
+    }
+
+    /// The body of a surface: the backing cell's LIVE state, read from the
+    /// ledger. For the console it shows the image summary instead (it is the
+    /// system's own root, not a single cell's view). Never a mock — this is the
+    /// surface "reacting to real turns".
+    fn surface_body(&self, cell: &CellId, w: &World, is_console: bool) -> gpui::AnyElement {
+        let mut body = div().flex().flex_col().gap_0p5().px_2().py_1();
+        if is_console {
+            body = body
+                .child(div().text_xs().text_color(theme::muted()).child(format!(
+                    "image · {} cells · h{} · {} receipts",
+                    w.cell_count(),
+                    w.height(),
+                    w.receipts().len()
+                )))
+                .child(div().text_xs().text_color(theme::accent()).child(format!(
+                    "root {}",
+                    reflect::short_hex(&w.state_root())
+                )));
+            return body.into_any_element();
+        }
+        match w.ledger().get(cell) {
+            Some(c) => {
+                let bal = c.state.balance();
+                let bal_color = if bal < 0 { theme::warn() } else { theme::text() };
+                body = body
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .child(div().text_xs().text_color(theme::muted()).child("balance"))
+                            .child(div().text_xs().text_color(bal_color).child(format!("{bal}"))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .child(div().text_xs().text_color(theme::muted()).child("nonce"))
+                            .child(div().text_xs().text_color(theme::text()).child(format!("{}", c.state.nonce()))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .child(div().text_xs().text_color(theme::muted()).child("capabilities"))
+                            .child(div().text_xs().text_color(theme::text()).child(format!("{}", c.capabilities.len()))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .child(div().text_xs().text_color(theme::muted()).child("lifecycle"))
+                            .child(div().text_xs().text_color(theme::text()).child(format!("{:?}", c.lifecycle))),
+                    );
+            }
+            None => {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::bad())
+                        .child("(backing cell is not in the ledger — a dangling surface)"),
+                );
+            }
+        }
+        body.into_any_element()
     }
 
     /// THE TURN DEBUGGER panel — maps `debug::render`'s gpui-free model onto
@@ -1248,6 +1617,18 @@ fn sorted_cells(w: &World) -> Vec<CellId> {
     ids
 }
 
+/// A human reason for a refused shell op (the window-manager ocap guarantee
+/// firing). Surfaced in the outcome banner the same way the executor's
+/// rejections are — a refusal is a feature, not an error to hide.
+fn shell_err(e: &starbridge_v2::shell::ShellError) -> String {
+    use starbridge_v2::shell::ShellError;
+    match e {
+        ShellError::Unauthorized => "no valid capability presented (no ambient authority)".to_string(),
+        ShellError::NoSuchSurface(id) => format!("surface {} does not exist", id.as_u64()),
+        ShellError::ConsoleProtected => "the system console is the trusted root (cannot close)".to_string(),
+    }
+}
+
 fn kind_badge(kind: ObjectKind) -> impl IntoElement {
     let (label, color) = match kind {
         ObjectKind::Cell => ("cell", theme::accent()),
@@ -1391,8 +1772,53 @@ fn category_badge(cat: Category) -> (&'static str, Hsla) {
         Category::Navigate => (cat.label(), theme::accent()),
         Category::Replay => (cat.label(), theme::warn()),
         Category::Clerk => (cat.label(), theme::accent()),
+        Category::Shell => (cat.label(), theme::accent()),
         Category::Debug => (cat.label(), theme::warn()),
         Category::Inspect => (cat.label(), theme::muted()),
         Category::Palette => (cat.label(), theme::muted()),
     }
+}
+
+/// A short label + color for a surface's SHELL-DRAWN trusted-path lifecycle
+/// badge (the anti-spoof identity chrome). Mirrors the shell's lifecycle strings.
+fn identity_badge(lifecycle: &str) -> (&'static str, Hsla) {
+    match lifecycle {
+        "live" => ("live", theme::good()),
+        "sealed" => ("sealed", theme::warn()),
+        "destroyed" => ("destroyed", theme::bad()),
+        "migrated" => ("migrated", theme::muted()),
+        "archived" => ("archived", theme::accent()),
+        "system" => ("system", theme::warn()),
+        _ => ("missing", theme::bad()),
+    }
+}
+
+/// A compact shell-toolbar button (the cap-first compositor's window ops). Same
+/// shape as a clerk button; runs a `&mut Cockpit` method through the listener.
+fn shell_button(
+    cx: &mut Context<Cockpit>,
+    label: &str,
+    color: Hsla,
+    handler: fn(&mut Cockpit, &mut Context<Cockpit>),
+) -> impl IntoElement {
+    let id = SharedString::from(format!("shell-{label}"));
+    div()
+        .id(id)
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(theme::panel_hi())
+        .border_1()
+        .border_color(theme::border())
+        .text_xs()
+        .text_color(color)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::border()))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _ev, _window, cx| {
+                handler(this, cx);
+            }),
+        )
+        .child(label.to_string())
 }

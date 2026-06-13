@@ -101,19 +101,28 @@ starbridge_v2 (lib, feature embedded-executor)
 ├── dynamics   — Dynamics: an append-only observation stream of state
 │               transitions (cell born, cap granted, turn committed, balance
 │               flowed) the visual layer renders. Decoupled from gpui.
-└── reflect    — the reflective object model: cell / receipt / image projected
-                into one uniform `Inspectable` (typed Field tree) every view
-                consumes. Reads the live protocol types — never a parallel wire
-                schema — so it cannot drift from what the executor holds.
+├── reflect    — the reflective object model: cell / receipt / image projected
+│               into one uniform `Inspectable` (typed Field tree) every view
+│               consumes. Reads the live protocol types — never a parallel wire
+│               schema — so it cannot drift from what the executor holds.
+├── surface    — Surface + SurfaceCapability: a cap-confined cell view
+│               (apps-as-cells). A surface is OWNED via an unforgeable cap and
+│               re-reads the live ledger — no mock surfaces. gpui-free, testable.
+└── shell      — Shell: the cap-first window manager + compositor. Every window
+                op (focus/raise/move/resize/minimize/close) is GATED by the
+                surface's cap; `compose(world)` builds the Scene (z-ordered paint
+                list) with shell-drawn anti-spoof identity chrome. gpui-free.
 
 starbridge-v2 (bin)
 ├── cockpit    — the gpui cockpit (feature gpui-ui): the comprehensive panels
 │               (cell world · inspector · blocklace · composer · objects ·
-│               dynamics) plus the workspace tabs (composer · objects · debugger
-│               · replay · cipherclerk · editor), rendering `World` directly. The
-│               OBJECTS tab projects proofs / nullifiers / cell lifecycle through
-│               `reflect`. A ⌘K COMMAND PALETTE (`palette`) overlays the whole
-│               cockpit: one fuzzy-searchable surface over EVERY action.
+│               dynamics) plus the workspace tabs (SHELL · composer · objects ·
+│               debugger · replay · cipherclerk · editor), rendering `World`
+│               directly. The SHELL tab renders the cap-first compositor scene
+│               (surfaces over real cells); the OBJECTS tab projects proofs /
+│               nullifiers / cell lifecycle through `reflect`. A ⌘K COMMAND
+│               PALETTE (`palette`) overlays the whole cockpit: one
+│               fuzzy-searchable surface over EVERY action.
 └── palette    — the ⌘K command registry + fuzzy matcher + selection model
                 (gpui-free, testable). Every cockpit action is one `CommandId`;
                 the cockpit dispatches a selected command through the SAME
@@ -139,6 +148,82 @@ Every state transition flows through `World::commit_turn(turn)`, which:
 A rejection is not an error path to hide; it is the cockpit's most important
 teaching moment. The "⚠ over-grant" verb exists precisely to make you watch the
 no-amplification guarantee reject an illegitimate capability grant.
+
+## The shell — a cap-first multi-surface desktop (the native pillar)
+
+The master interface is not one monolithic panel: it is a **cap-first
+multi-surface desktop shell**, the native pillar of the dregg desktop-OS vision.
+The same object-capability discipline that gates every *turn* gates every
+*window op*. Three modules carry it (the first two gpui-free + `cargo test`-able;
+the third is the gpui SHELL tab):
+
+```
+surface  (src/surface.rs)  — Surface: a cap-confined cell view (apps-as-cells)
+shell    (src/shell.rs)    — Shell: the cap-first window manager + compositor
+cockpit SHELL tab          — the visible compositor over the live world
+```
+
+### Surfaces are cap-confined cell views (apps-as-cells)
+
+Every dregg CELL can be opened as its own **surface** (a window). A surface is
+not a free-floating widget — it is *owned* via an unforgeable
+[`SurfaceCapability`], and only the cap-holder may render or drive it. A surface
+holds **no copy** of its cell's state: it holds the cell's `CellId` and re-reads
+the live ledger when it composes, so it cannot drift from what the executor
+holds. There are **no mock surfaces** — every surface body is the real cell's
+live state (balance / nonce / caps / lifecycle), and it reacts to real turns
+(seal the backing cell through the executor and the surface follows).
+
+### The window manager is cap-first
+
+`Shell` is a window manager where **there is no ambient authority over a
+window.** Every op — focus, raise, move, resize, minimize, close — is GATED by
+the surface's capability:
+
+- A `SurfaceCapability` names *exactly one* surface and carries a `secret` the
+  shell drew at mint time. Authority over a surface is exactly the set of held
+  caps; it is obtained only by being *granted* one (the shell hands it back when
+  the surface opens) — **never** by naming the surface. Knowing a `SurfaceId` is
+  not enough: a forged cap (right id, guessed secret) is *refused on every op*.
+  This is the window-manager analogue of the executor's no-amplification rule.
+- A refusal is a **feature**, surfaced the same way the executor's turn
+  rejections are (the outcome banner colors it red). Trying to act on a surface
+  with no held cap is refused — that *is* the no-ambient-authority property.
+- The **console** (the cockpit's own surface) is a privileged trusted root: it
+  is cap-owned like any surface, but it is *protected from close* (closing it
+  would orphan the shell), and it is labelled `SYSTEM`, never a spoofable cell
+  identity.
+
+In the cockpit, the operator holds every surface's cap in a vault — but every op
+still *presents* the held cap to the shell's gated API, so the discipline is
+**demonstrated, not bypassed.** Clicking a surface is only a *hint*; the cap-gated
+`focus` is the actual authority.
+
+### The trusted-path framing is anti-spoof
+
+Each surface draws its own *title*, but its **identity badge** — the owning cell
+id (abbreviated) plus its lifecycle (`live` / `sealed` / `destroyed` /
+`migrated` / `archived`, or `missing`) — is drawn by the **shell** from the live
+ledger, never from the surface's self-description. So a surface **cannot
+impersonate another cell's identity**: the identity chrome is the shell's,
+attested from the ledger. A surface whose backing cell is not in the ledger is
+shown as `UNBACKED (cell missing)` — it can't masquerade as live.
+
+### The compositor
+
+`Shell::compose(world)` is the compositor: it turns the owned-surface set + the
+live ledger into a [`Scene`] — an ordered (back-to-front) paint list, each item
+carrying its surface, its shell-derived identity label, and its focus state. The
+SHELL tab renders that scene as a stack of windows (front-most first), each with
+a title bar (identity badge · title · z-order · focus · cap chrome) and a body of
+real cell state. Three layouts arrange the non-console surfaces — **float** (free
+placement; move/resize honored), **tile** (a near-square grid of the work area),
+and **stack** (a centered cascade) — all painted in z-order, cycled with one
+toolbar button or the ⌘K palette.
+
+The SHELL is the cockpit's **default tab**: the master interface boots into a
+live compositor with the console plus the three anchor cells (treasury · user ·
+service) already open as cap-confined surfaces over the real world.
 
 ## The window (the Metal path)
 
@@ -170,6 +255,7 @@ over EVERY dregg datum and EVERY action. The coverage is an honest burn-down:
 
 | Datum | Status | Where |
 | --- | --- | --- |
+| surfaces (cap-confined cell views) + the z-ordered compositor scene | **live** | `surface`, `shell::Shell::compose`, SHELL tab |
 | cells (id/balance/nonce/caps/program/delegate/mode/lifecycle/epoch) | **live** | `reflect::reflect_cell` |
 | cell state fields (16 slots) | **live** | inspector `state[i]` rows |
 | capabilities + the ocap edges | **live** | `CapEdge` fields per cap |
@@ -203,6 +289,8 @@ over EVERY dregg datum and EVERY action. The coverage is an honest burn-down:
 | burn (supply reduced, `was_burn` bound) | **live** | `world::burn`, composer "burn 1,000" |
 | factory-birth (`CreateCellFromFactory`) | **live** | `world::deploy_factory` + `world::create_cell_from_factory` |
 | compose multi-action call forests | **live** | `world::forest_turn` (atomic, one receipt), composer "compose multi-action" |
+| shell window ops (open surface · focus/raise · move/resize · minimize · close), all cap-gated | **live** (the cap guarantee fires) | `shell::Shell`, SHELL tab |
+| compositor layout (float · tile · stack) | **live** | `shell::Layout`, SHELL tab "cycle layout" |
 | the organ operations (open/draw/repay; create/join/remove; send/drain; evidence) | designed-pending | trustline/flashwell organ surfaces in embed-core; channel/mailbox/court need `captp` (remote path) |
 | connect to federations | designed-pending | `NodeClient::Http` exists; native panel pending |
 
@@ -290,20 +378,45 @@ real root; attenuate genuinely narrows; delegate files a real recipient
 envelope; **discharge runs the real verify verdict** — a service-confined token
 authorizes its own service/action and DENIES a wider action, a different
 service, or an expired request; the full mint→attenuate→delegate→discharge loop)
-and the **⌘K palette** (the registry covers the whole action surface; the fuzzy
-matcher prefers word-starts + contiguous runs; search finds commands by title
-AND by keyword concept; the open/type/select/accept interaction model).
+and the **⌘K palette** (the registry covers the whole action surface — including
+the shell ops; the fuzzy matcher prefers word-starts + contiguous runs; search
+finds commands by title AND by keyword concept; the open/type/select/accept
+interaction model).
+
+The **cap-first shell / compositor** is tested as its own headless model: a
+rect's contain/translate-clamp; a capability names exactly one surface; opening
+a surface mints an authorizing cap (over a real ledger cell); **a forged cap is
+refused on every op** (the ocap heart — knowing the `SurfaceId` is not enough);
+focus raises to the front of the z-order; closing a surface kills its cap; **the
+console is protected from close** (even with its real cap); move is cap-gated and
+honored under float; **the trusted-path identity badge tracks the live cell
+lifecycle** (seal the backing cell through the verified executor and the badge
+follows from `live` → `sealed`); **a dangling surface is labelled `missing`, not
+spoofable**; the compositor tiles + stacks the non-console surfaces in-bounds;
+minimize drops focus to the front and restore refocuses; hit-test finds the
+front surface under a point; and the layout cycles float → tile → stack.
 
 ## Status
 
 GREEN on the thesis "the master interface is real and growing": the embedded
 verified executor runs a live local world, the four axes are all live in the
-engine, the headless heart is tested green (67 tests), the native-full build
+engine, the headless heart is tested green (105 tests), the native-full build
 compiles (gpui included — built from inside the crate on the rolling nightly),
 and the headless self-check boots the live image. The coverage matrix above has
 moved a full column to **live**: every kernel lifecycle verb (seal/unseal/
 destroy/burn), factory-birth, and multi-action call-forests now run through the
 embedded executor with real receipts, and the OBJECTS panel reflects proofs,
-nullifiers, and cell lifecycle. The remaining **designed-pending** rows (organ
-node-services behind `captp`, the multi-hop delegation graph view, intents/
-obligations panels, the live federation connect panel) are the active burn-down.
+nullifiers, and cell lifecycle.
+
+The native **cap-first multi-surface shell** is live: each dregg cell can be a
+cap-confined surface (apps-as-cells), the window manager gates every op on the
+surface's unforgeable capability (a forged cap is refused on every op; the
+console is a protected trusted root), the trusted-path identity chrome is
+shell-drawn from the live ledger (anti-spoof — a dangling surface reads
+`missing`, a sealed cell's badge follows the executor), and the compositor
+renders the surfaces over the real world in float / tile / stack. The SHELL tab
+is the cockpit's default view.
+
+The remaining **designed-pending** rows (organ node-services behind `captp`, the
+multi-hop delegation graph view, intents/obligations panels, the live federation
+connect panel) are the active burn-down.
