@@ -1,0 +1,4 @@
+.DS_Store
+/target
+**/*.rs.bk
+# Cargo.lock IS committed (this is a deployable cdylib extension, not a library).
