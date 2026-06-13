@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- riscv-stark.system — the verifier-stark PD on qemu_virt_riscv64.
+     The firmament's verified-compute heart organ (a real BabyBear+BLAKE3+FRI
+     STARK proved + verified on-device), retargeted from aarch64 (M-STARK) to
+     riscv64 (M5). Single-PD assembly; boot with `make run-riscv-stark`. -->
+<system>
+  <protection_domain name="dregg_verifier_stark" priority="100" stack_size="0x10000">
+    <program_image path="dregg-verifier-stark-pd.elf" />
+  </protection_domain>
+</system>

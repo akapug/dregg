@@ -14,6 +14,15 @@
 # Own workspace root: keeps dregg-tui out of the repo-root workspace members.
 [workspace]
 
+# The verify path pulls `dregg-federation` (cross-fed bundle leg), which depends
+# on ark-serialize's `serde_with` feature — present only in ember's algebra fork.
+# The repo-root workspace patches it the same way; the standalone tui workspace
+# must mirror the patch so the graph resolves to the SAME ark-serialize the rest
+# of the tree builds against (not a parallel pin).
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
 [package]
 name = "dregg-tui"
 version = "0.1.0"
@@ -31,3 +40,18 @@ ureq = { version = "2", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+
+# The REAL light-client verify path — no mocks. The TUI fetches a node's DWR1
+# witness artifact (`/api/receipts/{hash}/witnesses`), decodes it with the SDK's
+# canonical decoder (`dregg-sdk::decode_witnessed_receipt_artifact_hex`), and
+# runs the REAL plonky3 STARK verifier (`dregg-verifier::verify_effect_vm_proof`)
+# over the proof bytes + public inputs the artifact carries. Both are pulled with
+# `no-lean-link` so the TUI stays a pure host binary (no Lean runtime / libuv /
+# GMP) — link-suppression only; the verify path is plonky3 + crypto, never Lean.
+dregg-sdk = { path = "../sdk", default-features = false, features = ["no-lean-link"] }
+dregg-verifier = { path = "../verifier", features = ["no-lean-link"] }
+dregg-turn = { path = "../turn", default-features = false, features = ["no-lean-link"] }
+# Used only by `--selfcheck`: prove a fresh HEAD-version Effect-VM turn so the
+# verify core can be shown reaching VERIFIED on a version-matched proof (the live
+# devnet runs an older PI layout). Same audited plonky3 prover the node uses.
+dregg-circuit = { path = "../circuit" }

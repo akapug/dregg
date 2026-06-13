@@ -1,0 +1,60 @@
+# net-client — M3 the firmament's network edge, the CLIENT half (docs/FIRMAMENT.md
+# §3, §6): the smoltcp TCP/IP PD that turns "the NIC is up" into "a turn arrives
+# over TCP". It is the distributed END of the capability gradation.
+#
+# Topology (../net-full.system): a 2-PD system. The driver PD
+# (dregg-net-driver-pd, ../net/) holds the NIC cap + the virtio-mmio region + the
+# DMA paddr and is the SOLE PD that touches the wire. This client PD speaks to it
+# over the shared ring buffers (the `Provide` role to the driver's `Use`) + a
+# notification channel, runs a smoltcp Interface (DHCPv4 to acquire an address,
+# a TCP listener on port 5555), and on each received frame Ed25519-checks a
+# SignedTurn-shaped envelope BEFORE it would ever reach the executor — the
+# seL4-enforced form of "the net-PD de-envelopes + Ed25519-checks a SignedTurn
+# before handing the turn to the executor; bad signatures never reach the heart"
+# (docs/SEL4-EMBEDDING.md §4).
+#
+# Built on the rust-sel4 `sel4-shared-ring-buffer-smoltcp::DeviceImpl` (the
+# canonical multi-PD net substrate; same crates the http-server example uses),
+# pinned to the workspace commit efef73cc. The Ed25519 check uses ed25519-dalek 2
+# (no_std), the SAME major the real dregg tree signs SignedTurn with
+# (sdk/Cargo.toml, types/Cargo.toml) — so the verification is byte-identical to
+# the deployed semantics, not a parallel reimplementation.
+
+[package]
+name = "dregg-net-client-pd"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "dregg-net-client-pd"
+path = "src/main.rs"
+
+[dependencies]
+sel4-microkit = { workspace = true }
+
+# smoltcp: the userspace TCP/IP stack. Same version (0.13) + feature set the
+# rust-sel4 net example pins; pulled transitively already by the driver PD.
+smoltcp = { version = "0.13.0", default-features = false, features = [
+    "alloc",
+    "proto-ipv4",
+    "proto-dhcpv4",
+    "socket-dhcpv4",
+    "socket-tcp",
+    "medium-ethernet",
+] }
+
+# The rust-sel4 client-side net substrate, pinned to the workspace commit. The
+# smoltcp `phy::Device` impl over the shared ring buffers + the bounce-buffer
+# allocator + the net-meta IPC client to the driver PD.
+sel4-shared-memory = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-shared-ring-buffer = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-shared-ring-buffer-smoltcp = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-abstract-allocator = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-driver-interfaces = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-microkit-driver-adapters = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+
+# Ed25519 verification, no_std. ed25519-dalek 2 — the SAME major the dregg SDK
+# signs SignedTurn with — so the check on the wire is the deployed semantics, not
+# a parallel one. `verify_strict` needs no RNG, so no getrandom on the bare target.
+ed25519-dalek = { version = "2", default-features = false }

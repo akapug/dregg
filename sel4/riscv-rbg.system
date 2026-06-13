@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- riscv-rbg.system — the rbg DirectoryCell PD on qemu_virt_riscv64.
+     The Robigalia-personality heart (a DirectoryCell: versioned c-list + CAS
+     swap + membership ACL + the DirectoryFactory→seL4_Untyped_Retype slot
+     caveat), retargeted from aarch64 (M2) to riscv64 (M5). Single-PD assembly;
+     boot with `make run-riscv-rbg`. -->
+<system>
+  <protection_domain name="dregg_rbg_dir" priority="100" stack_size="0x10000">
+    <program_image path="dregg-rbg-dir.elf" />
+  </protection_domain>
+</system>

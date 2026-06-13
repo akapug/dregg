@@ -1,0 +1,54 @@
+# executor-pd — THE firmament heart: the protection domain that will embed the
+# VERIFIED dregg executor (`execFullForestG` via `dregg-lean-ffi`, the
+# credential-gated complete-turn executor proved in `metatheory/`). Every app
+# turn runs THROUGH this PD: decode -> step -> encode -> receipt.
+#
+# This is "the firmament's one true blocker" (docs/FIRMAMENT.md §6, §7) — the
+# Lean runtime must build for the bare-metal aarch64-sel4-microkit target,
+# libuv-free + IO-free + GMP-resolved. The excision plan has four steps:
+#   (1) ELF-recompile the Lean closure under leanc      -- ✅ DONE (see scripts/)
+#   (2) stub initialize_libuv + initialize_io           -- needs ELF leanrt
+#   (3) GMP for ELF, or a fixnum-only shim              -- fixnum-shim plausible
+#   (4) host on the sel4-musl + root-task-with-std shim -- needs (2)+(3)
+#
+# STATUS (2026-06-13): step (1) is GREEN — all 757 Dregg2 `:c` facets compile to
+# ELF aarch64 with ZERO source changes and the executor entry
+# `dregg_exec_full_forest_auth` survives as a global text symbol (run
+# `scripts/cross-compile-closure.sh`). The remaining wall is the ELF Lean
+# RUNTIME: the toolchain ships leanrt/leancpp only as Mach-O `.a` and does NOT
+# ship the C++ runtime sources, so the IR closure has no runtime to link against
+# on the ELF target. See WALL.md for the exact remaining symbol + the next step.
+#
+# Until the runtime links, THIS PD boots as a STATUS PD: it prints the heart's
+# bring-up state + the cross-compile proof over serial, so the firmament's heart
+# slot is occupied and self-reporting rather than empty. The verified-compute
+# heart organ that boots TODAY is the verifier-stark PD (a real STARK, no Lean).
+
+# Standalone workspace: this crate lives under sel4/dregg-pd/ but is deliberately
+# NOT a member of that workspace's `members` list (a separate lane owns the
+# `executor-stub` SEAT in the dregg.system assembly; this `executor-pd` is the
+# deeper leanrt-excision attempt that banks the ELF-recompile breakthrough). The
+# empty [workspace] table makes it its own workspace so it builds standalone with
+# its own target dir, swarm-safely, without editing the shared members list.
+[workspace]
+
+[package]
+name = "dregg-executor-pd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-executor-pd"
+path = "src/main.rs"
+
+[dependencies]
+# Direct (not workspace-inherited) pin of the rust-sel4 Microkit runtime, the
+# same commit Microkit SDK 2.2.0 matches (see ../Cargo.toml workspace.dependencies).
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608", default-features = false, features = ["alloc"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
