@@ -162,6 +162,8 @@ use p3_recursion::{
 };
 
 use crate::effect_vm::pi;
+#[cfg(feature = "recursion")]
+use crate::descriptor_ir2::Ir2BatchProof;
 use crate::effect_vm_descriptors::descriptor_for_selector;
 use crate::field::BabyBear;
 use crate::joint_turn_aggregation::{DescriptorParticipant, verify_descriptor_participant};
@@ -531,6 +533,98 @@ pub(crate) fn prove_descriptor_leaf(
     let proof = prove_inner_for_air(&air, matrix, &dpis);
     verify_inner_for_air(&air, &proof, &dpis)?;
     Ok((air, proof, dpis))
+}
+
+/// THREAD 1 (C3 cutover) — the rotated multi-table `Ir2BatchProof` BatchStark leaf-wrap.
+///
+/// **STATUS: HARD WALL (smoke fold EXPLODED at the type boundary, 2026-06-13).** The C3
+/// scope verdict's premise — "`Ir2BatchProof` IS the SAME type `RecursionInput::BatchStark`
+/// holds" — is FALSE. The smoke fold (`circuit/tests/rotation_batchstark_leaf_smoke.rs`)
+/// proved it mechanically: building `RecursionInput::BatchStark { proof, common_data, .. }`
+/// from a real `transferVmDescriptor2R24` proof fails to type-check with TWO independent
+/// mismatches:
+///
+/// 1. **Proof type.** `RecursionInput::BatchStark.proof` is
+///    `&p3_circuit_prover::BatchStarkProof<SC>` — a STRUCT that *wraps* an inner
+///    `p3_batch_stark::BatchProof` plus the recursion circuit-prover's metadata
+///    (`table_packing` / `rows` / `alu_variant` / `non_primitives` / `stark_common`). But
+///    `Ir2BatchProof = p3_batch_stark::BatchProof` (the bare native batch proof) — a
+///    DIFFERENT crate, a DIFFERENT type. (`p3-circuit-prover` is the fork; `p3-batch-stark`
+///    is upstream Plonky3.)
+/// 2. **Config.** `RecursionInput::BatchStark` requires `<DreggRecursionConfig>` (the
+///    recursion FRI config: Poseidon2-sponge MMCS, 38 queries, cap_height 0). `Ir2BatchProof`
+///    is `<DreggStarkConfig>` (the production config: `PaddingFreeSponge`/`TruncatedPermutation`
+///    MMCS, 50 queries). Proofs are NOT interchangeable across configs (FRI shape +
+///    Fiat–Shamir differ — the code says so itself).
+///
+/// And the wall is architectural, not a missing coercion: the ONLY leaf-wrap path from a
+/// `RecursionInput::BatchStark` is `verify_p3_batch_proof_circuit`
+/// (`plonky3-recursion/recursion/src/verifier/batch_stark.rs:183`), which HARDWIRES its AIR
+/// set to the recursion's fixed `CircuitTablesAir` enum `[ConstAir, PublicAir, AluAir]` +
+/// `Dynamic`-from-`non_primitives` (batch_stark.rs:251-276), reconstructed from the
+/// circuit-prover wrapper's metadata. It NEVER accepts a caller-supplied `&[Ir2Air]`. The
+/// `Ir2Air` 9-table native set (Main/Chip/Range/Memory/MapOps + the degree-7 S-box + 8 LogUp
+/// buses) is structurally outside that enum. The inner `verify_batch_circuit` IS generic over
+/// `A: RecursiveAir` — but no reachable code path feeds a native AIR batch into it as a leaf;
+/// the only `RecursionInput::BatchStark` constructor (`RecursionOutput::into_recursion_input`)
+/// takes the circuit-prover's OWN output, and the only `BatchStarkProof` constructor
+/// (`BatchStarkProver::prove`) consumes `p3_circuit::tables::Traces` (the recursion circuit's
+/// witness), not a native batch.
+///
+/// THEREFORE THREAD 1 as scoped is not glue — it is a recursion-fork build: either
+///   (i) a new fork entry that builds a verifier circuit DIRECTLY from a native
+///       `(airs: &[A], p3_batch_stark::BatchProof, CommonData)` triple (re-using the generic
+///       `verify_batch_circuit` with `A = CircuitTablesAir`-free AIRs) and runs it through
+///       `BatchStarkProver` to emit a `RecursionOutput` — i.e. a "native-batch leaf-wrap"
+///       sibling to `verify_p3_uni_proof_circuit`/`verify_p3_batch_proof_circuit`; AND
+///   (ii) re-proving the `Ir2BatchProof` under `DreggRecursionConfig` (or unifying the two
+///        configs), since the production-config proof cannot be verified by the recursion FRI
+///        verifier as-is.
+/// That is fork-surgery in the recursion crate, re-estimate accordingly (NOT 1.5-2.5 days).
+///
+/// The verify-path ingredients THREAD 1 *does* need (`airs`, `table_public_inputs`,
+/// `common`) are exposed and validated via [`crate::descriptor_ir2::ir2_airs_and_common`];
+/// the accessor is correct and reusable by whatever native-batch leaf-wrap path lands. This
+/// function stays as the typed seam (and the smoke test as the falsifiable wall evidence) so
+/// the re-architecture has a landing site.
+#[cfg(feature = "recursion")]
+pub fn prove_descriptor_leaf_rotated(
+    desc: &crate::descriptor_ir2::EffectVmDescriptor2,
+    proof: &Ir2BatchProof<crate::descriptor_ir2::DreggStarkConfig>,
+    descriptor_pis: &[BabyBear],
+) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
+    // The verify-path triple builds and validates correctly — proving the ingredients exist.
+    // (`_common` is the `CommonData<DreggStarkConfig>` the wrap WOULD pass, were the configs
+    // and proof types compatible — see the commented block below for the exact use site.)
+    let (airs, table_public_inputs, _common) =
+        crate::descriptor_ir2::ir2_airs_and_common(desc, proof, descriptor_pis)?;
+
+    // The wall: `RecursionInput::BatchStark` cannot be constructed from these. It demands
+    // `&p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>` + `&CommonData<DreggRecursionConfig>`;
+    // we hold `&p3_batch_stark::BatchProof<DreggStarkConfig>` + `CommonData<DreggStarkConfig>`.
+    // (Uncommenting the block below reproduces the two E0308s the smoke fold reported.)
+    //
+    //   let input: RecursionInput<'_, DreggRecursionConfig, crate::descriptor_ir2::Ir2Air> =
+    //       RecursionInput::BatchStark { proof, common_data: &_common, table_public_inputs };
+    //   return build_and_prove_next_layer::<DreggRecursionConfig, crate::descriptor_ir2::Ir2Air, _, D>(
+    //       &input, &create_recursion_config(), &create_recursion_backend(),
+    //       &ProveNextLayerParams::default(),
+    //   ).map_err(|e| format!("rotated BatchStark leaf-wrap failed: {e:?}"));
+
+    Err(format!(
+        "C3 THREAD-1 HARD WALL: a rotated Ir2BatchProof ({} present tables, {} descriptor PIs) \
+         cannot wrap as RecursionInput::BatchStark — that variant holds \
+         p3_circuit_prover::BatchStarkProof<DreggRecursionConfig> (a circuit-prover wrapper \
+         under the recursion FRI config), NOT p3_batch_stark::BatchProof<DreggStarkConfig> (the \
+         native production-config proof). The fork's only leaf-wrap (verify_p3_batch_proof_circuit) \
+         hardwires the AIR set to CircuitTablesAir[Const/Public/Alu]+NPO, never a native &[Ir2Air]. \
+         See this fn's doc-comment for the required recursion-fork build (native-batch leaf-wrap + \
+         config unification). Ingredients are ready: {} airs, {} table-PI slots, common built.",
+        airs.len(),
+        descriptor_pis.len(),
+        airs.len(),
+        table_public_inputs.len(),
+    ))
 }
 
 /// Build + prove the chain-binding leaf (the sequential temporal binding).
