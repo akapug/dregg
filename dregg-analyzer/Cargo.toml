@@ -1,0 +1,41 @@
+[package]
+name = "dregg-analyzer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Forensic/observability tool: ingests captured traces of a running dregg system (blocklace DAG, receipt strands, persist/WAL commit log) and analyzes them — reconstructing causal order, detecting equivocation, surfacing finality/quorum progress, verifying receipt-chain integrity, and attesting conservation — every checkable claim run against the REAL dregg verifiers, not a re-implementation."
+
+[dependencies]
+# The capture formats ARE the system's own emitted types — we read them, never
+# re-define them, so a format drift is a compile error not a silent skew.
+dregg-blocklace = { path = "../blocklace" }       # finality::{Block,BlockId,Blocklace,CheckpointData}, ordering::{tau_with_config, supermajority_threshold}
+dregg-persist = { path = "../persist" }           # commit_log::CommitRecord (the WAL record)
+dregg-turn = { path = "../turn" }                 # TurnReceipt (the receipt strand)
+dregg-cell = { path = "../cell" }                 # Cell (touched_cells in a CommitRecord)
+dregg-types = { path = "../types" }
+# The static-assurance verifier we REUSE for forest conservation/amplification.
+dregg-userspace-verify = { path = "../dregg-userspace-verify" }
+
+# Re-exported by the blocklace capture path: we mint a throwaway auditor
+# self-key to drive `from_checkpoint` (we authenticate, we never participate).
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true }
+postcard = { version = "1", features = ["use-std"] }
+clap = { version = "4", features = ["derive"] }
+
+[lib]
+name = "dregg_analyzer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dregg-analyze"
+path = "src/main.rs"
+
+[lints]
+workspace = true
