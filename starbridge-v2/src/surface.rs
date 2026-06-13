@@ -44,6 +44,17 @@ impl SurfaceId {
     pub fn as_u64(self) -> u64 {
         self.0
     }
+
+    /// The compositor REGION (tile) this surface owns at the pixel layer — its
+    /// cap-authorized region-set (a singleton keyed by the surface id, so two
+    /// distinct surfaces own DISJOINT regions). This is the `Rights =
+    /// region-set` the verified-scene T1 non-overlap tooth checks `granted ⊆
+    /// held` against (`docs/DREGG-DESKTOP-OS.md` §5; the Lean `Surface.regions`).
+    /// A present targeting a region not in the presenter's set overpaints and is
+    /// refused — the no-amplification guarantee firing at the glass.
+    pub fn region(self) -> crate::compositor::RegionId {
+        self.0
+    }
 }
 
 /// A token that confers authority over a surface — **a REAL `dregg_firmament`

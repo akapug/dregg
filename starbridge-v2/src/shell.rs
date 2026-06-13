@@ -50,6 +50,9 @@ use dregg_cell::lifecycle::CellLifecycle;
 use dregg_cell::CellId;
 use dregg_firmament::{AuthRequired, Capability, ResolveError, SurfaceBacking};
 
+use crate::compositor::{
+    label_of, CompositedSurface, Compositor, CompositorScene, FrameCommit, Present, PresentError,
+};
 use crate::surface::{Rect, Surface, SurfaceCapability, SurfaceId, SurfaceKind};
 use crate::world::World;
 
@@ -76,6 +79,16 @@ pub enum ShellError {
     /// (`DelegationDenied`). This is the no-amplification guarantee firing at the
     /// window-manager layer; carries the executor's reason for the operator log.
     ShareDenied(String),
+    /// A `present()` was REFUSED by the compositor's VERIFIED-SCENE authority —
+    /// the surface tried to overpaint another surface's region (T1), declare a
+    /// label that is not its genuine owner-binding (T2), steal input focus or
+    /// composite into an ambiguous-focus scene (T3). This is the anti-ghost
+    /// tooth firing at the PIXEL layer (the Lean `present_*_rejected` theorems),
+    /// surfaced so the operator sees WHICH tooth bit. Carries the
+    /// [`PresentError`] — distinct from `Unauthorized` (which is the WINDOW-cap
+    /// gate): a present can hold a valid window cap and STILL be refused because
+    /// the scene authority is a separate gate enforced on top (§5).
+    PresentRefused(PresentError),
 }
 
 /// How the shell lays out surfaces. The compositor supports three classic
@@ -205,6 +218,19 @@ pub struct Shell {
     recipients: Vec<(u64, CellId)>,
     /// The shell's logical work-area size (for tile/stack arrangement).
     area: Rect,
+    /// THE VERIFIED-SCENE COMPOSITOR: enforces the T1/T2/T3 scene-authority
+    /// teeth (`docs/DREGG-DESKTOP-OS.md` §5; the Lean `Dregg2.Apps.Compositor`).
+    /// The shell rebuilds its scene each present from the live surfaces + world
+    /// ([`Shell::compose_scene`]) and routes every `present()` / input through
+    /// it. This is a SEPARATE gate from the firmament cap-fabric above: the
+    /// fabric decides who may DRIVE a window (focus/move/share); the compositor
+    /// decides what a surface may PAINT and where input goes — a present can
+    /// hold a valid window cap and STILL be refused for overpaint/spoof/misroute.
+    compositor: Compositor,
+    /// The per-surface content digest the compositor advances on a committed
+    /// present (surface id → current frame digest). Seeded when a surface opens;
+    /// the present path advances it, fail-closed on a refusal.
+    frame_digests: Vec<(SurfaceId, u64)>,
 }
 
 impl Default for Shell {
@@ -227,6 +253,8 @@ impl Shell {
             cell_seq: 0,
             recipients: Vec::new(),
             area: Rect::new(0.0, 0.0, 1280.0, 760.0),
+            compositor: Compositor::new(),
+            frame_digests: Vec::new(),
         }
     }
 
@@ -295,6 +323,9 @@ impl Shell {
         self.surfaces.push(surface);
         self.authorities
             .push((id, SurfaceAuthority { backing_cell, owner }));
+        // Seed the compositor frame digest for this surface (the initial frame,
+        // keyed off the surface id so it is non-trivial + distinct per surface).
+        self.frame_digests.push((id, 0x100 + id.as_u64()));
         self.focus = Some(id);
 
         // The opener holds the REAL firmament cap over the backing surface-cell.
@@ -318,6 +349,8 @@ impl Shell {
         // (no registered backing cell/owner ⇒ `invoke` has nothing to satisfy,
         // so the cap stops authenticating: a closed window's authority is gone).
         self.authorities.retain(|(sid, _)| *sid != id);
+        // Drop its compositor frame digest (a closed surface paints no more).
+        self.frame_digests.retain(|(sid, _)| *sid != id);
         if self.focus == Some(id) {
             self.focus = self.front_id();
         }
@@ -483,6 +516,7 @@ impl Shell {
                 owner: recipient,
             },
         ));
+        self.frame_digests.push((new_id, 0x100 + new_id.as_u64()));
         Ok(SurfaceCapability::new(
             new_id,
             Capability::surface(auth.backing_cell, narrower),
@@ -528,6 +562,13 @@ impl Shell {
     /// The focused surface id, if any.
     pub fn focused(&self) -> Option<SurfaceId> {
         self.focus
+    }
+
+    /// The CELL owning the focused surface, if any — the unique focus holder of
+    /// the verified scene (T3: input routes only here). Used by the cockpit to
+    /// pick a genuinely-distinct foreign surface for the overpaint teaching moment.
+    pub fn focused_cell(&self) -> Option<CellId> {
+        self.focus.and_then(|id| self.get(id).map(|s| s.cell()))
     }
 
     /// Whether the capability still authenticates (its surface is live + the
@@ -596,6 +637,125 @@ impl Shell {
             .map(|it| it.surface.id())
     }
 
+    // --- THE VERIFIED-SCENE COMPOSITOR (T1/T2/T3 enforcement) ----------------
+    //
+    // The shell rebuilds the compositor's scene from its live surfaces + the
+    // world (region ownership, focus, the shell-drawn label), then routes
+    // `present()` and input through it. This is the Rust realization of the Lean
+    // `Dregg2.Apps.Compositor` discipline (§5): a SEPARATE gate from the window-
+    // cap fabric, enforcing what a surface may PAINT + where input goes.
+
+    /// Build the compositor's verified scene from the shell's live surfaces and
+    /// the world. Each surface owns exactly its cap-authorized region (the §5 T1
+    /// region-set, derived from its [`SurfaceId`] so two surfaces own DISJOINT
+    /// regions). The focus flag is the shell's single focus (T3: at-most-one by
+    /// construction). The source-state-root + the genuine label are drawn from
+    /// the SHELL's view of the live world (the §5 T2 binding — NEVER the
+    /// surface's self-description). Minimized surfaces are excluded (they paint
+    /// nothing). This is the closed-over scene the §4 `sceneAdmit` decides over.
+    pub fn compose_scene(&self, world: &World) -> CompositorScene {
+        let mut ordered: Vec<&Surface> = self
+            .surfaces
+            .iter()
+            .filter(|s| !s.is_minimized())
+            .collect();
+        ordered.sort_by_key(|s| s.z());
+        let surfaces = ordered
+            .iter()
+            .map(|s| {
+                let root = self.source_state_root(s.cell(), world);
+                CompositedSurface {
+                    owner: s.cell(),
+                    regions: vec![s.id().region()],
+                    content_digest: self.frame_digest(s.id()),
+                    source_state_root: root,
+                    z_layer: s.z() as i64,
+                    focus_flag: self.focus == Some(s.id()),
+                }
+            })
+            .collect();
+        CompositorScene { surfaces }
+    }
+
+    /// PRESENT through the verified scene: a cap-gated frame advance for the
+    /// capability's surface, enforcing the T1/T2/T3 scene-authority teeth.
+    ///
+    /// Two gates fire, in order (§5 "the scene authority is a SEPARATE gate the
+    /// executor enforces on top" of the surface cap):
+    ///   1. THE WINDOW-CAP GATE ([`Self::authorize`]) — the presented cap must
+    ///      authenticate through the firmament's `granted ⊆ held` (you can only
+    ///      present a window you hold).
+    ///   2. THE SCENE-AUTHORITY GATE ([`Compositor::scene_admit`]) — T1 (the
+    ///      target region-set ⊆ the surface's owned region, disjoint from foreign
+    ///      surfaces), T2 (the declared label is the genuine owner-binding the
+    ///      SHELL computes), T3 (input routes only to the focus holder; the scene
+    ///      is focus-exclusive). A present that holds a valid window cap and
+    ///      OVERPAINTS / SPOOFS / STEALS-FOCUS is still REFUSED here.
+    ///
+    /// On success the compositor advances the surface's frame digest (recorded
+    /// in its frame log — the scene's provenance) and the shell mirrors it; a
+    /// refusal changes NOTHING (fail-closed, the Lean `present_*_rejected`
+    /// polarity). The cockpit surfaces the refused tooth as a teaching moment.
+    pub fn present(
+        &mut self,
+        cap: &SurfaceCapability,
+        world: &World,
+        regions: Vec<crate::compositor::RegionId>,
+        claims_focus: bool,
+        new_digest: u64,
+    ) -> Result<FrameCommit, ShellError> {
+        // (1) the WINDOW-cap gate: you can only present a window you hold.
+        let id = self.authorize(cap)?;
+        let Some(surface) = self.get(id) else {
+            return Err(ShellError::Unauthorized);
+        };
+        let presenter = surface.cell();
+        let source_state_root = self.source_state_root(presenter, world);
+        // The genuine label the compositor binds (the §5 T2 binding — a function
+        // of the owner + the source-state-root, computed by the SHELL).
+        let declared_label = label_of(&presenter, source_state_root);
+
+        // (2) the SCENE-authority gate: rebuild the scene + fold in T1/T2/T3.
+        // (Compose into a local first so the immutable borrow of `self` ends
+        // before the mutable borrow of `self.compositor`.)
+        let scene = self.compose_scene(world);
+        self.compositor.set_scene(scene);
+        let present = Present {
+            target: regions,
+            source_state_root,
+            declared_label,
+            claims_focus,
+            new_digest,
+        };
+        let commit = self
+            .compositor
+            .present(&presenter, present)
+            .map_err(ShellError::PresentRefused)?;
+        // Mirror the advanced frame digest into the shell's per-surface table
+        // (the compositor advanced its own scene copy; keep the shell in step).
+        self.set_frame_digest(id, new_digest);
+        Ok(commit)
+    }
+
+    /// Route an input event to the focus holder through the verified scene's T3
+    /// gate: input is delivered ONLY to the cell the user demonstrably chose (the
+    /// focus holder). `claimed` is the cell some component believes should
+    /// receive the event; the gate confirms it against the unique focus holder,
+    /// refusing a misroute. Returns the (single) cell input is delivered to.
+    pub fn route_input(&mut self, claimed: CellId, world: &World) -> Result<CellId, ShellError> {
+        let scene = self.compose_scene(world);
+        self.compositor.set_scene(scene);
+        self.compositor
+            .route_input(&claimed)
+            .map_err(ShellError::PresentRefused)
+    }
+
+    /// The compositor's committed frame log (the scene's provenance — every
+    /// genuine present that advanced a frame). Read-only.
+    pub fn frame_log(&self) -> &[FrameCommit] {
+        self.compositor.frames()
+    }
+
     // --- internals -----------------------------------------------------------
 
     /// Authenticate a presented capability through the REAL firmament gate. The
@@ -631,6 +791,60 @@ impl Shell {
             .invoke(auth.owner, auth.backing_cell, cap.rights())
             .map_err(|_| ShellError::Unauthorized)?;
         Ok(cap.surface())
+    }
+
+    /// The source state-root a surface's content projects — the §5 T2 bind a
+    /// light client can independently check. Drawn from the SHELL's view of the
+    /// live world (the owning cell's real state: balance ⊕ nonce ⊕ cap-count ⊕
+    /// lifecycle-tag), NOT the surface's self-description. A missing cell folds
+    /// to a distinct sentinel root (a dangling surface projects nothing real).
+    /// This is the value the genuine label binds to ([`label_of`]); it advances
+    /// as the cell's state changes (a turn that moves balance moves the root, so
+    /// the label re-binds — exactly the state-root binding §5 wants).
+    fn source_state_root(&self, cell: CellId, world: &World) -> u64 {
+        match world.ledger().get(&cell) {
+            Some(c) => {
+                let bal = c.state.balance() as u64;
+                let nonce = c.state.nonce();
+                let caps = c.capabilities.len() as u64;
+                let life = match &c.lifecycle {
+                    CellLifecycle::Live => 1u64,
+                    CellLifecycle::Sealed { .. } => 2,
+                    CellLifecycle::Destroyed { .. } => 3,
+                    CellLifecycle::Migrated { .. } => 4,
+                    CellLifecycle::Archived { .. } => 5,
+                };
+                // A simple deterministic fold (a state digest — distinct states
+                // give distinct roots for the executable model; the real
+                // compositor commits the cell's authenticated root).
+                bal.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    ^ nonce.wrapping_mul(0xBF58_476D_1CE4_E5B9)
+                    ^ caps.wrapping_mul(0x94D0_49BB_1331_11EB)
+                    ^ life.wrapping_mul(0xD6E8_FEB8_6659_FD93)
+            }
+            // A dangling surface (cell gone): a distinct sentinel so its label
+            // can never collide with a live cell's binding.
+            None => 0xDEAD_0000_DEAD_0000,
+        }
+    }
+
+    /// The current compositor frame digest for a surface (0 if unknown).
+    fn frame_digest(&self, id: SurfaceId) -> u64 {
+        self.frame_digests
+            .iter()
+            .find(|(sid, _)| *sid == id)
+            .map(|(_, d)| *d)
+            .unwrap_or(0)
+    }
+
+    /// Mirror an advanced frame digest into the shell's per-surface table after
+    /// a committed present (keeps the shell in step with the compositor scene).
+    fn set_frame_digest(&mut self, id: SurfaceId, digest: u64) {
+        if let Some((_, d)) = self.frame_digests.iter_mut().find(|(sid, _)| *sid == id) {
+            *d = digest;
+        } else {
+            self.frame_digests.push((id, digest));
+        }
     }
 
     /// Derive a surface's trusted-path identity from the LIVE ledger (anti-spoof
@@ -1096,5 +1310,151 @@ mod tests {
         assert_eq!(shell.layout(), Layout::Stack);
         shell.cycle_layout();
         assert_eq!(shell.layout(), Layout::Float);
+    }
+
+    // --- THE VERIFIED-SCENE COMPOSITOR (T1/T2/T3) on the shell's real surfaces ---
+
+    #[test]
+    fn compose_scene_gives_each_surface_a_disjoint_region_and_one_focus() {
+        // The shell's scene mirrors the Lean `Scene`: each surface owns exactly
+        // its (distinct) region-set, and at-most-one holds focus (T3 by
+        // construction). The label/source-root come from the live world (T2).
+        let (mut shell, world, anchors, _console) = shell_with_console();
+        let a = shell.open_cell_view(anchors[1], "Service");
+        let _b = shell.open_cell_view(anchors[2], "User");
+        let scene = shell.compose_scene(&world);
+        // Every surface owns disjoint regions.
+        let mut all_regions: Vec<u64> = scene.surfaces.iter().flat_map(|s| s.regions.clone()).collect();
+        let n = all_regions.len();
+        all_regions.sort_unstable();
+        all_regions.dedup();
+        assert_eq!(all_regions.len(), n, "surface regions are pairwise-disjoint (T1)");
+        // At-most-one focus flag (T3 focus-exclusivity, by construction).
+        assert!(scene.surfaces.iter().filter(|s| s.focus_flag).count() <= 1);
+        let _ = a;
+    }
+
+    #[test]
+    fn an_honest_present_by_the_focused_surface_commits() {
+        // THE COMMIT POLARITY on the shell's real surfaces: the focused surface
+        // presenting its OWN region, claiming focus, COMMITS — advancing the
+        // frame digest + logging it (the scene the operator sees is genuine).
+        let (mut shell, world, anchors, _console) = shell_with_console();
+        let a = shell.open_cell_view(anchors[1], "Service");
+        // `a` is focused (opened last). It paints its own region, claims focus.
+        let region = a.surface().region();
+        let commit = shell
+            .present(&a, &world, vec![region], /*claims_focus*/ true, 0xABCD)
+            .expect("the honest present by the focused surface commits");
+        assert_eq!(commit.digest, 0xABCD);
+        assert_eq!(shell.frame_log().len(), 1, "the present is logged (provenance)");
+    }
+
+    #[test]
+    fn an_overpaint_present_is_refused_with_the_t1_tooth() {
+        // THE T1 TOOTH on the shell: surface `a` tries to paint surface `b`'s
+        // region — REFUSED (overpaint), even though `a` holds a valid window cap.
+        // The scene authority is a SEPARATE gate on top of the window cap.
+        let (mut shell, world, anchors, _console) = shell_with_console();
+        let a = shell.open_cell_view(anchors[1], "Service");
+        let b = shell.open_cell_view(anchors[2], "User");
+        // `a` holds a valid cap (it can drive its own window)...
+        assert!(shell.validates(&a));
+        // ...but presenting into `b`'s region overpaints — refused (T1).
+        let b_region = b.surface().region();
+        let r = shell.present(&a, &world, vec![b_region], false, 0x1111);
+        assert!(
+            matches!(r, Err(ShellError::PresentRefused(PresentError::Overpaint { .. }))),
+            "overpainting another surface's region is refused (T1), got {r:?}"
+        );
+        // Fail-closed: nothing was logged.
+        assert_eq!(shell.frame_log().len(), 0);
+    }
+
+    #[test]
+    fn an_input_steal_present_is_refused_with_the_t3_tooth() {
+        // THE T3 TOOTH on the shell: the NON-focused surface asserting focus (to
+        // steal the keystroke) is REFUSED, even with a valid window cap + its own
+        // region. Input routes only to the focus holder.
+        let (mut shell, world, anchors, _console) = shell_with_console();
+        let a = shell.open_cell_view(anchors[1], "Service");
+        let _b = shell.open_cell_view(anchors[2], "User");
+        // `b` opened last so it is focused; `a` is NOT focused. `a` paints its
+        // own region (T1 ok) but asserts focus → input-misroute (T3).
+        let a_region = a.surface().region();
+        let r = shell.present(&a, &world, vec![a_region], /*claims_focus*/ true, 0x2222);
+        assert!(
+            matches!(r, Err(ShellError::PresentRefused(PresentError::InputMisroute { .. }))),
+            "a non-focused surface asserting focus is refused (T3), got {r:?}"
+        );
+        assert_eq!(shell.frame_log().len(), 0);
+    }
+
+    #[test]
+    fn route_input_delivers_only_to_the_focused_surface_cell() {
+        // THE T3 INPUT GATE on the shell: input is delivered only to the focus
+        // holder's cell; a misroute to a non-focused cell is refused.
+        let (mut shell, world, anchors, _console) = shell_with_console();
+        let _a = shell.open_cell_view(anchors[1], "Service");
+        let _b = shell.open_cell_view(anchors[2], "User");
+        // `b` (anchors[2], the User cell) is focused (opened last).
+        assert_eq!(shell.route_input(anchors[2], &world), Ok(anchors[2]));
+        // Routing input to the non-focused Service cell is refused.
+        assert!(matches!(
+            shell.route_input(anchors[1], &world),
+            Err(ShellError::PresentRefused(PresentError::InputMisroute { .. }))
+        ));
+    }
+
+    #[test]
+    fn a_present_without_a_held_cap_is_refused_by_the_window_gate_first() {
+        // The two gates compose: a forged cap is refused by the WINDOW-cap gate
+        // (Unauthorized) BEFORE the scene authority even runs — you can't present
+        // a window you don't hold.
+        use dregg_firmament::{AuthRequired, Capability, CellId as FCellId};
+        let (mut shell, world, anchors, _console) = shell_with_console();
+        let real = shell.open_cell_view(anchors[1], "Service");
+        let ghost_cell = {
+            let mut k = [0u8; 32];
+            k[0] = 0xEE;
+            FCellId::derive_raw(&k, &[0u8; 32])
+        };
+        let forged = SurfaceCapability::new(
+            real.surface(),
+            Capability::surface(ghost_cell, AuthRequired::None),
+        );
+        let region = real.surface().region();
+        let r = shell.present(&forged, &world, vec![region], true, 0x3333);
+        assert_eq!(r, Err(ShellError::Unauthorized), "the window-cap gate refuses a forged cap first");
+    }
+
+    #[test]
+    fn the_t2_label_binding_tracks_the_live_state_root() {
+        // T2 on the shell: the genuine label binds to the owner + the live
+        // source-state-root, which MOVES when the cell's state changes. After a
+        // committed turn that changes balance, a present must declare the NEW
+        // binding — the shell computes it (the app never supplies the label), so
+        // a present always carries the genuine, current binding. We witness that
+        // the source-state-root the shell computes differs across a real turn.
+        let (mut shell, mut world, _anchors, _console) = shell_with_console();
+        let fresh = world.genesis_cell(0x6B, 1_000);
+        let other = world.genesis_cell(0x6C, 0);
+        let cap = shell.open_cell_view(fresh, "Fresh");
+        let root_before = shell.source_state_root(fresh, &world);
+        // A real transfer changes `fresh`'s balance → its state-root moves.
+        let t = world.turn(fresh, vec![crate::world::transfer(fresh, other, 100)]);
+        assert!(world.commit_turn(t).is_committed());
+        let root_after = shell.source_state_root(fresh, &world);
+        assert_ne!(root_before, root_after, "the source-state-root moves with the cell's live state");
+        // The genuine label re-binds to the new root (the §5 state-root binding).
+        assert_ne!(
+            label_of(&fresh, root_before),
+            label_of(&fresh, root_after),
+            "the T2 label re-binds as the state-root advances"
+        );
+        // A present now carries the CURRENT binding (computed by the shell), so
+        // an honest present by the focused surface still commits.
+        let region = cap.surface().region();
+        assert!(shell.present(&cap, &world, vec![region], true, 0x4242).is_ok());
     }
 }

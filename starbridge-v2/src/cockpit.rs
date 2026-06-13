@@ -54,6 +54,7 @@ pub enum Selection {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Shell,
+    Agent,
     Composer,
     Objects,
     Debugger,
@@ -63,8 +64,9 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 7] = [
+    const ALL: [Tab; 8] = [
         Tab::Shell,
+        Tab::Agent,
         Tab::Composer,
         Tab::Objects,
         Tab::Debugger,
@@ -75,6 +77,7 @@ impl Tab {
     fn label(self) -> &'static str {
         match self {
             Tab::Shell => "SHELL",
+            Tab::Agent => "AGENT",
             Tab::Composer => "COMPOSER",
             Tab::Objects => "OBJECTS",
             Tab::Debugger => "DEBUGGER",
@@ -138,6 +141,16 @@ pub struct Cockpit {
     surface_caps: std::collections::HashMap<SurfaceId, SurfaceCapability>,
     /// The console surface's id (the privileged trusted-root surface).
     console_surface: SurfaceId,
+    /// A monotonic frame-digest counter for the verified-scene present teaching
+    /// moments (so every `present()` genuinely advances the frame).
+    frame_seq: u64,
+
+    // --- the AGENT-ACTIVITY surface (the ADOS keystone) --------------------
+    /// The agent cell bound to the agent-activity surface — a cap-confined VIEW
+    /// of an agent loop's provable activity (held mandate · cap-gated turns +
+    /// receipts · authorization boundary), rendered as a Surface cell. The
+    /// service cell stands in as a live, cap-holding, turn-committing agent.
+    agent_surface: starbridge_v2::agent::AgentSurface,
 
     // --- the ⌘K COMMAND PALETTE --------------------------------------------
     /// The command palette over EVERY action (open with ⌘K). The cockpit feeds
@@ -186,10 +199,23 @@ impl Cockpit {
         let console_cap = shell.open_console(treasury, "Master Console");
         let console_surface = console_cap.surface();
         surface_caps.insert(console_surface, console_cap);
+        let mut service_surface = None;
         for (cell, name) in [(treasury, "Treasury"), (user, "User"), (service, "Service")] {
             let cap = shell.open_cell_view(cell, name);
+            if cell == service {
+                service_surface = Some(cap.surface());
+            }
             surface_caps.insert(cap.surface(), cap);
         }
+        // The AGENT-ACTIVITY surface: the service cell is the demo agent (it
+        // holds a cap to the user cell — a real mandate — and commits cap-gated
+        // turns in `demo_world`). Bind it as an agent surface so the Agent panel
+        // renders its grounded-seam activity. Falls back to a fresh agent-view
+        // surface id if the service surface somehow wasn't opened.
+        let agent_surface = starbridge_v2::agent::AgentSurface::new(
+            service_surface.unwrap_or(console_surface),
+            service,
+        );
 
         Self {
             world,
@@ -208,6 +234,8 @@ impl Cockpit {
             shell,
             surface_caps,
             console_surface,
+            frame_seq: 0,
+            agent_surface,
             palette: CommandPalette::new(),
             focus,
         }
@@ -616,6 +644,147 @@ impl Cockpit {
         cx.notify();
     }
 
+    // --- THE VERIFIED-SCENE teaching moments (T1/T2/T3 at the pixel layer) ---
+    //
+    // These exercise the compositor's `present()` path so the operator can WATCH
+    // the scene-authority teeth bite — exactly the over-share teaching moment,
+    // one hop out (the no-amplification guarantee firing at the GLASS).
+
+    /// PRESENT honestly from the FOCUSED surface: paint its own region, claim
+    /// focus (it IS the focus holder), advance the frame. COMMITS — the scene
+    /// the operator sees is the genuine projection (the commit polarity).
+    fn shell_present_focused(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.shell.focused() else {
+            self.last_outcome = Some("shell: nothing focused to present".to_string());
+            cx.notify();
+            return;
+        };
+        let Some(cap) = self.surface_caps.get(&id).cloned() else {
+            self.last_outcome = Some("shell: no held cap for the focused surface".to_string());
+            cx.notify();
+            return;
+        };
+        let region = id.region();
+        let digest = self.next_frame_digest();
+        let w = self.world.borrow();
+        match self.shell.present(&cap, &w, vec![region], /*claims_focus*/ true, digest) {
+            Ok(commit) => {
+                self.last_outcome = Some(format!(
+                    "shell: present COMMITTED — frame {} on the focused surface (genuine projection)",
+                    commit.digest
+                ));
+            }
+            Err(e) => {
+                self.last_outcome = Some(format!("shell: present REFUSED — {}", shell_err(&e)));
+            }
+        }
+        drop(w);
+        self.tab = Tab::Shell;
+        cx.notify();
+    }
+
+    /// Attempt an OVERPAINT: the focused surface tries to paint the FRONT OTHER
+    /// surface's region — the T1 non-overlap tooth REFUSES it (a cell cannot
+    /// paint a region another cell owns). The pixel-layer over-grant.
+    fn shell_overpaint_focused(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.shell.focused() else {
+            self.last_outcome = Some("shell: nothing focused to present".to_string());
+            cx.notify();
+            return;
+        };
+        let Some(cap) = self.surface_caps.get(&id).cloned() else {
+            self.last_outcome = Some("shell: no held cap for the focused surface".to_string());
+            cx.notify();
+            return;
+        };
+        // Find ANOTHER surface's region to overpaint (a genuinely-distinct attack
+        // — a real second surface's region, not a malformed one).
+        let w = self.world.borrow();
+        let victim_region = self
+            .shell
+            .compose_scene(&w)
+            .surfaces
+            .iter()
+            .find(|s| Some(s.owner) != self.shell.focused_cell())
+            .and_then(|s| s.regions.first().copied());
+        let Some(victim_region) = victim_region else {
+            drop(w);
+            self.last_outcome =
+                Some("shell: need a second surface to demo an overpaint".to_string());
+            cx.notify();
+            return;
+        };
+        let digest = self.next_frame_digest();
+        match self.shell.present(&cap, &w, vec![victim_region], true, digest) {
+            Ok(_) => {
+                self.last_outcome = Some(
+                    "shell: overpaint UNEXPECTEDLY committed (should have rejected!)".to_string(),
+                );
+            }
+            Err(e) => {
+                self.last_outcome = Some(format!(
+                    "shell: ⚠ overpaint REFUSED by the verified scene — {} (T1 no-amplification on glass)",
+                    shell_err(&e)
+                ));
+            }
+        }
+        drop(w);
+        self.tab = Tab::Shell;
+        cx.notify();
+    }
+
+    /// Attempt an INPUT-STEAL: a NON-focused surface presents its own region but
+    /// asserts input focus to steal the keystroke — the T3 input-routing tooth
+    /// REFUSES it (input routes only to the focus holder).
+    fn shell_input_steal(&mut self, cx: &mut Context<Self>) {
+        // Find a non-focused, non-console surface to play the thief.
+        let w = self.world.borrow();
+        let thief = self
+            .shell
+            .surfaces_in_z_order()
+            .into_iter()
+            .find(|s| !s.is_console() && Some(s.id()) != self.shell.focused())
+            .map(|s| s.id());
+        let Some(thief) = thief else {
+            drop(w);
+            self.last_outcome =
+                Some("shell: need a second surface to demo an input-steal".to_string());
+            cx.notify();
+            return;
+        };
+        let Some(cap) = self.surface_caps.get(&thief).cloned() else {
+            drop(w);
+            self.last_outcome = Some("shell: no held cap for the thief surface".to_string());
+            cx.notify();
+            return;
+        };
+        let region = thief.region();
+        let digest = self.next_frame_digest();
+        match self.shell.present(&cap, &w, vec![region], /*claims_focus*/ true, digest) {
+            Ok(_) => {
+                self.last_outcome = Some(
+                    "shell: input-steal UNEXPECTEDLY committed (should have rejected!)".to_string(),
+                );
+            }
+            Err(e) => {
+                self.last_outcome = Some(format!(
+                    "shell: ⚠ input-steal REFUSED by the verified scene — {} (T3 only the focus holder gets input)",
+                    shell_err(&e)
+                ));
+            }
+        }
+        drop(w);
+        self.tab = Tab::Shell;
+        cx.notify();
+    }
+
+    /// A monotonic frame digest for the present teaching moments (so every
+    /// present genuinely advances the frame — the Lean `new ≠ old` leg).
+    fn next_frame_digest(&mut self) -> u64 {
+        self.frame_seq = self.frame_seq.wrapping_add(1);
+        0xF00D_0000 + self.frame_seq
+    }
+
     /// Focus a surface by id when the operator clicks it in the scene. The click
     /// is only a HINT — the cockpit then presents the held cap, and the shell's
     /// cap-gated `focus` is the actual authority (no held cap ⇒ no focus).
@@ -665,6 +834,7 @@ impl Cockpit {
             CommandId::GoCipherclerk => self.set_tab(Tab::Cipherclerk, cx),
             CommandId::GoEditor => self.set_tab(Tab::Editor, cx),
             CommandId::GoShell => self.set_tab(Tab::Shell, cx),
+            CommandId::GoAgent => self.set_tab(Tab::Agent, cx),
 
             CommandId::ShellOpenSelected => self.shell_open_selected(cx),
             CommandId::ShellFocusFront => self.shell_focus_front(cx),
@@ -673,6 +843,9 @@ impl Cockpit {
             CommandId::ShellMinimizeFocused => self.shell_minimize_focused(cx),
             CommandId::ShellShareFocused => self.shell_share_focused(cx),
             CommandId::ShellOverShareFocused => self.shell_overshare_focused(cx),
+            CommandId::ShellPresentFocused => self.shell_present_focused(cx),
+            CommandId::ShellOverpaintFocused => self.shell_overpaint_focused(cx),
+            CommandId::ShellInputSteal => self.shell_input_steal(cx),
 
             CommandId::ReplayStepBack => self.replay_step_back(cx),
             CommandId::ReplayStepForward => self.replay_step_forward(cx),
@@ -1064,6 +1237,7 @@ impl Cockpit {
     fn workspace(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         match self.tab {
             Tab::Shell => self.shell_panel(cx).into_any_element(),
+            Tab::Agent => self.agent_panel().into_any_element(),
             Tab::Composer => self.composer(cx).into_any_element(),
             Tab::Objects => self.objects_panel().into_any_element(),
             Tab::Debugger => self.debugger_panel().into_any_element(),
@@ -1108,12 +1282,33 @@ impl Cockpit {
                 .child(shell_button(cx, "open selected as surface", theme::good(), Cockpit::shell_open_selected))
                 .child(shell_button(cx, "focus front", theme::accent(), Cockpit::shell_focus_front))
                 .child(shell_button(cx, "minimize focused", theme::accent(), Cockpit::shell_minimize_focused))
+                .child(shell_button(cx, "present focused (commits)", theme::good(), Cockpit::shell_present_focused))
+                .child(shell_button(cx, "⚠ overpaint (T1 REJECT)", theme::warn(), Cockpit::shell_overpaint_focused))
+                .child(shell_button(cx, "⚠ input-steal (T3 REJECT)", theme::warn(), Cockpit::shell_input_steal))
                 .child(shell_button(cx, "share (read-only mirror)", theme::good(), Cockpit::shell_share_focused))
                 .child(shell_button(cx, "⚠ over-share (watch it REJECT)", theme::warn(), Cockpit::shell_overshare_focused))
                 .child(shell_button(cx, "close focused", theme::warn(), Cockpit::shell_close_focused))
                 .child(shell_button(cx, "cycle layout", theme::accent(), Cockpit::shell_cycle_layout)),
         );
         col = col.child(self.outcome_banner());
+        // The verified-scene legend: the three teeth the compositor enforces.
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "Verified scene (the Lean Compositor AppSpec, on glass): T1 NON-OVERLAP — a surface \
+             paints only its own cap-authorized region (overpaint REFUSED); T2 LABEL-BINDING — the \
+             identity badge is a function of the owner + state-root the SHELL reads (spoof REFUSED); \
+             T3 FOCUS-EXCLUSIVITY — input routes only to the one focused surface (steal REFUSED).",
+        ));
+        // The frame log: how many genuine presents have committed (provenance).
+        col = col.child(
+            div()
+                .flex()
+                .gap_1()
+                .items_center()
+                .child(pill(format!("{} frames committed", self.shell.frame_log().len()), theme::accent()))
+                .child(div().text_xs().text_color(theme::muted()).child(
+                    "each frame is a present that passed T1∧T2∧T3 (a refused present logs none — fail-closed)",
+                )),
+        );
 
         // The composed scene: surfaces front-to-back (front first, so the most
         // recently focused window reads at the top of the list).
@@ -1281,6 +1476,178 @@ impl Cockpit {
             }
         }
         body.into_any_element()
+    }
+
+    /// THE AGENT-ACTIVITY panel — the ADOS keystone. Renders an agent loop's
+    /// PROVABLE activity as a cap-gated surface cell: its held mandate (the
+    /// attenuated authority it runs under), its recent cap-gated turns + their
+    /// receipts (the grounded seam, read from the embedded World's receipt log +
+    /// dynamics stream), and the legible boundary of what it is authorized to do.
+    /// Maps `agent::AgentActivity` (gpui-free) onto gpui — you watch the
+    /// executor's receipts, not the agent's self-report.
+    fn agent_panel(&self) -> impl IntoElement {
+        let w = self.world.borrow();
+        let act = self.agent_surface.activity(&w, 24);
+
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full();
+        col = col.child(section_title("AGENT · the grounded loop (provable activity as a surface)").mb_1());
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "An agent is an intricate LOOP; dregg grounds the ONE seam that matters — its ACTIONS, \
+             at the tool-call/turn boundary — by making every action a cap-gated, RECEIPTED, \
+             conservation-checked turn. This surface renders that seam: the mandate it holds, the \
+             turns it committed (with receipts), and the boundary of what it may do. You watch the \
+             executor's truth, never the agent's self-report.",
+        ));
+
+        // The agent header: who it is + its live resources + grounded step count.
+        let backed_color = if act.backed { theme::good() } else { theme::bad() };
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(pill(format!("agent {}", act.short), theme::accent()))
+                .child(pill(
+                    if act.backed { "live" } else { "UNBACKED" }.to_string(),
+                    backed_color,
+                ))
+                .child(pill(format!("balance {}", act.balance), theme::text()))
+                .child(pill(format!("{} committed turns", act.committed_action_count()), theme::good()))
+                .child(pill(format!("reach {} cell(s)", act.reach()), theme::accent()))
+                .child(pill(format!("nonce {}", act.nonce), theme::muted())),
+        );
+
+        // --- THE HELD MANDATE (the attenuated authority the loop runs under) ---
+        col = col.child(section_title("held mandate (adoption = attenuation)").mt_2());
+        if act.mandate.is_empty() {
+            col = col.child(div().text_xs().text_color(theme::muted()).child(
+                "holds NO outbound capability — this agent is confined to itself (the narrowest mandate).",
+            ));
+        } else {
+            let mut edges = div().flex().flex_col().gap_0p5();
+            for m in &act.mandate {
+                let rights_color = match m.rights_label() {
+                    "open" => theme::warn(),
+                    "locked" => theme::bad(),
+                    _ => theme::good(),
+                };
+                edges = edges.child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .items_center()
+                        .px_2()
+                        .py_0p5()
+                        .rounded_md()
+                        .bg(theme::panel())
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .items_center()
+                                .child(div().text_xs().text_color(theme::muted()).child(format!("slot {}", m.slot)))
+                                .child(div().text_xs().text_color(theme::text()).child(format!(
+                                    "→ {}",
+                                    reflect::short_hex(m.target.as_bytes())
+                                )))
+                                .child(pill(m.rights_label(), rights_color)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_1()
+                                .items_center()
+                                .when(m.faceted, |d| d.child(pill("faceted", theme::accent())))
+                                .when(m.expires_at.is_some(), |d| {
+                                    d.child(pill(format!("expires @{}", m.expires_at.unwrap()), theme::warn()))
+                                }),
+                        ),
+                );
+            }
+            col = col.child(edges);
+        }
+
+        // --- THE CAP-GATED ACTIONS (turns) + their RECEIPTS (the grounded seam) ---
+        col = col.child(section_title("recent cap-gated actions (turns + receipts)").mt_2());
+        if act.actions.is_empty() {
+            col = col.child(div().text_xs().text_color(theme::muted()).child(
+                "no actions yet — this agent's loop has not committed (or attempted) a turn.",
+            ));
+        } else {
+            let mut rows = div().flex().flex_col().gap_0p5();
+            for a in &act.actions {
+                let (mark, mark_color) = if a.committed {
+                    ("✓", theme::good())
+                } else {
+                    ("✗", theme::bad())
+                };
+                let height_label = a
+                    .height
+                    .map(|h| format!("h{h}"))
+                    .unwrap_or_else(|| "—".to_string());
+                rows = rows.child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .items_center()
+                        .px_2()
+                        .py_0p5()
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .items_center()
+                                .child(div().text_xs().text_color(mark_color).child(mark))
+                                .child(div().text_xs().text_color(theme::muted()).child(height_label))
+                                .child(div().text_xs().text_color(if a.committed { theme::text() } else { theme::bad() }).child(a.summary.clone())),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_1()
+                                .items_center()
+                                .when(a.committed, |d| {
+                                    d.child(div().text_xs().text_color(theme::muted()).child(format!("{} act · {} ⚙", a.action_count, a.computrons)))
+                                })
+                                .when(a.receipt_hash.is_some(), |d| {
+                                    d.child(pill(reflect::short_hex(&a.receipt_hash.unwrap()), theme::good()))
+                                }),
+                        ),
+                );
+            }
+            col = col.child(rows);
+        }
+
+        // --- WHAT IT IS AUTHORIZED TO DO (the boundary of the loop's reach) ---
+        col = col.child(section_title("what it is authorized to do (the boundary)").mt_2());
+        let mut auths = div().flex().flex_col().gap_0p5();
+        for a in &act.authorizations {
+            let (mark, mark_color) = if a.permitted {
+                ("CAN", theme::good())
+            } else {
+                ("CANNOT", theme::bad())
+            };
+            auths = auths.child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .px_2()
+                    .py_0p5()
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(pill(mark, mark_color))
+                            .child(div().text_xs().text_color(theme::text()).child(a.verb)),
+                    )
+                    .child(div().text_xs().text_color(theme::muted()).child(a.note.clone())),
+            );
+        }
+        col = col.child(auths);
+        col
     }
 
     /// THE TURN DEBUGGER panel — maps `debug::render`'s gpui-free model onto
@@ -1709,6 +2076,9 @@ fn shell_err(e: &starbridge_v2::shell::ShellError) -> String {
         ShellError::NoSuchSurface(id) => format!("surface {} does not exist", id.as_u64()),
         ShellError::ConsoleProtected => "the system console is the trusted root (cannot close)".to_string(),
         ShellError::ShareDenied(why) => format!("widening share refused by the executor: {why}"),
+        // The verified-scene tooth that bit (T1 overpaint / T2 spoof / T3
+        // misroute|double-focus), surfaced for the operator log.
+        ShellError::PresentRefused(p) => p.explain(),
     }
 }
 
