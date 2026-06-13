@@ -8,9 +8,9 @@ first heartbeat (docs/FIRMAMENT.md §6).
 
 ## What this lane BANKED
 
-**Step (1) of the excision plan is GREEN.** The object-format wall — recompiling
-the Mach-O Lean closure to ELF, the part the roadmap called "weeks-to-a-quarter
-fog" — is **passable on the native macOS host with zero source changes**:
+**Steps (1)-(3) are GREEN and the VERIFIED EXECUTOR RUNS one real turn.** The
+object-format wall (step 1) recompiles the Mach-O Lean closure to ELF with zero
+source changes:
 
 ```
 $ ./scripts/cross-compile-closure.sh
@@ -18,38 +18,64 @@ $ ./scripts/cross-compile-closure.sh
 [xcompile] ✅ executor entry dregg_exec_full_forest_auth present in ELF closure (global text symbol)
 ```
 
+…and the deeper wall (step 2, the ELF Lean *runtime*) is now built, so the closure
+links and EXECUTES (see below).
+
 All 757 Dregg2 `:c` facets (the whole verified-executor closure) ELF-recompile
 for aarch64, and the production entry `dregg_exec_full_forest_auth` survives as a
 global text symbol in the resulting `out/libdregg_lean_elf.a` (757-member ELF
 archive). See `WALL.md` for the exact knobs (`-isystem .../include/clang`,
 `llvm-ar`).
 
-**The PD boots.** `dregg-executor-pd.elf` cross-builds for `aarch64-sel4-microkit`
-and boots on the seL4 microkernel in QEMU, printing the heart's bring-up state +
-the cross-compile proof over serial (captured: `/tmp/sel4-executor-pd-boot.log`,
-ends `[exec] heart slot OCCUPIED + self-reporting`). It is a STATUS heart today —
-it occupies the firmament's heart slot and self-reports rather than leaving it
-empty — because the Lean runtime cannot yet link (step 2, below).
+**The wall is PASSED — the verified executor runs.** `scripts/link-probe.sh`
+links the verified closure against a freshly-built **ELF Lean runtime** (leanrt +
+the Init/Std/Lean/mathlib/deps library bottom-half + the Lean kernel C++ + real
+GMP) into a static `aarch64-linux-musl` executable (`out/dregg-executor.elf`,
+**0 undefined symbols**) and drives ONE real turn:
 
-## The remaining wall (step 2)
+```
+$ ./scripts/link-probe.sh "$(cat out/demo-wire.txt)"
+[exec] lean_initialize_runtime_module()
+[exec] >>> dregg_exec_full_forest_auth(wire)
+[exec] <<< receipt (313 bytes):   ...  "status":2,"ok":1
+```
 
-The ELF *application* closure has no ELF *runtime* to link against: the toolchain
-ships `leanrt`/`leancpp`/`Init`/`Std`/`Lean` as **Mach-O archives only** and
-carries **no C++ runtime sources** to recompile them. The next concrete action is
-to build an ELF `leanrt` from `lean4@d024af099` with the 10 libuv objects excised
-(`initialize_libuv` + `lean::initialize_io` stubbed no-op) and a fixnum/GMP layer.
-`WALL.md` characterizes this to the symbol, with the GMP-shim feasibility measured.
+`dregg_exec_full_forest_auth` (= `execFullForestG` + admission) decoded the wire,
+ran the gated forest turn, executed real state transitions (nonce 7→8, a 30-unit
+transfer, a nullifier + commitment), and emitted **`status:2, ok:1` (bodyCommitted
+— accepted)**. Evidence: `out/dregg-executor-run.log`. This is the host-musl
+validation of what the seL4 executor-PD will run (sel4-musl emulates the musl
+syscall surface), banking the turn before the PD link. See `WALL.md`.
+
+## The remaining step (step 4): the seL4-PD host
+
+The Lean runtime is now an ordinary musl aarch64 image. The remaining work is to
+host it on seL4 as a **root-task-with-std** PD (it needs malloc/pthread/TLS/C++-
+exceptions, not a bare Microkit PD): wire `sel4-musl`'s syscall handler
+(`~/sel4-sdk/rust-sel4/crates/experimental/sel4-musl`), link the executor object
+set into a `sel4-root-task-with-std` PD, and boot under `qemu-system-aarch64`.
 
 ## Files
 
-- `scripts/cross-compile-closure.sh` — the real ELF-recompile of the closure
-  (runnable today; needs `metatheory/.lake/build/ir` populated by `lake build`).
-- `src/main.rs` — the executor-PD (boots, reports bring-up state over serial).
-- `Cargo.toml` / `.cargo/config.toml` / `rust-toolchain.toml` — standalone build
-  (own workspace + own target dir; NOT a member of the dregg-pd workspace, to
-  stay swarm-safe alongside the `executor-stub` assembly-seat lane).
-- `WALL.md` — the exact remaining blocker + the precise next step.
-- `out/` (gitignored) — the ELF closure build artifacts (`libdregg_lean_elf.a`).
+- `scripts/cross-compile-closure.sh` — ELF-recompile the verified closure (incl.
+  the top-level `Metatheory/` facets, a closure-coverage fix found here).
+- `scripts/build-leanrt-elf.sh` — ELF leanrt (runtime + mimalloc/libuv stubs).
+- `scripts/build-leanlib-elf.sh <Init|Std|Lean>` — re-emit + ELF-compile a Lean
+  library from `lean4@d024af099` sources.
+- `scripts/build-leancpp-elf.sh` — ELF Lean kernel C++ (Expr/Level/typechecker).
+- `scripts/build-gmp-elf.sh` — real GMP 6.3.0 cross-built for aarch64-musl.
+- `scripts/compile-facets-elf.sh` — ELF-compile a tree of pre-emitted `.c` facets
+  (mathlib + the dependency libs).
+- `scripts/link-probe.sh` — link the static executor + run one turn.
+- `scripts/driver.c` — the embedded-Lean init + one-turn harness (the PD `main` seed).
+- `scripts/{init,kernel,dead}-stub*.{c,txt}`, `scripts/aux-defs.c` — the small
+  stub TUs (crypto floor = Rust-PD-supplied; the cut elaborator; the one recovered
+  re-emission auxiliary). All justified in `WALL.md`.
+- `src/main.rs` — the (current) bare-Microkit status-heart PD; the root-task-with-std
+  PD that embeds `dregg-executor.elf` is step 4.
+- `Cargo.toml` / `.cargo/config.toml` / `rust-toolchain.toml` — standalone build.
+- `WALL.md` — the full pipeline + the precise remaining step.
+- `out/` (gitignored) — all ELF build artifacts + `dregg-executor.elf` + the run log.
 
 ## Build + boot
 

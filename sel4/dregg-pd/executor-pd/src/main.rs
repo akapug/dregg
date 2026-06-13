@@ -39,17 +39,18 @@ fn init() -> HandlerImpl {
     debug_println!("[exec] excision plan (docs/SEL4-EMBEDDING.md §2):");
     debug_println!("[exec]   (1) ELF-recompile the Lean closure ........ ✅ GREEN");
     debug_println!("[exec]       757/757 Dregg2 facets -> ELF aarch64, 0 source edits");
-    debug_println!("[exec]       entry dregg_exec_full_forest_auth present (global T)");
-    debug_println!("[exec]   (2) ELF leanrt + stub initialize_libuv/io .. ⛔ WALL");
-    debug_println!("[exec]   (3) GMP for ELF / fixnum-only shim ......... ◐ shim plausible");
-    debug_println!("[exec]   (4) host on sel4-musl + root-task-with-std . ◐ after (2),(3)");
+    debug_println!("[exec]   (2) ELF Lean RUNTIME (leanrt+lib+kernel) ... ✅ GREEN — built");
+    debug_println!("[exec]   (3) GMP for ELF ........................... ✅ GREEN — real GMP 6.3.0");
+    debug_println!("[exec]   (4) host on sel4-musl + root-task-with-std . ◐ this PD");
     debug_println!("");
-    debug_println!("[exec] the wall: the toolchain ships leanrt/leancpp Mach-O-ONLY");
-    debug_println!("[exec]   and carries no C++ runtime sources, so the ELF IR closure");
-    debug_println!("[exec]   has no runtime to link against. See WALL.md (next step:");
-    debug_println!("[exec]   build an ELF leanrt from lean4@d024af099 + excise libuv).");
+    debug_println!("[exec] THE WALL IS PASSED: dregg-executor.elf (static aarch64-musl,");
+    debug_println!("[exec]   0 undefined) runs ONE real turn through the VERIFIED");
+    debug_println!("[exec]   dregg_exec_full_forest_auth -> status:2 ok:1 (bodyCommitted:");
+    debug_println!("[exec]   nonce 7->8, a 30-unit transfer, nullifier+commitment). The");
+    debug_println!("[exec]   Lean runtime is now an ordinary musl image; step 4 is to");
+    debug_println!("[exec]   host it as a root-task-with-std PD. See WALL.md.");
     debug_println!("");
-    debug_println!("[exec] heart slot OCCUPIED + self-reporting ( ◕‿◕ )");
+    debug_println!("[exec] heart slot OCCUPIED + the REAL executor links & runs ( ◕‿◕ )");
     HandlerImpl
 }
 
