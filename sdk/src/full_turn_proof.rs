@@ -739,20 +739,75 @@ pub fn prove_effect_vm_rotated_ir2(
     >,
     SdkError,
 > {
+    use dregg_circuit::effect_vm::trace_rotated::{empty_caveat_manifest, transfer_caveat_manifest};
+
+    // The transfer-shaped caveat manifest stays the validated reference for a single transfer
+    // effect (it exercises BOTH caveat domains); every other cohort effect proves with the
+    // default empty manifest. The rotated shape is identical either way.
+    let caveat = match effects {
+        [VmEffectKind::Transfer { .. }] => transfer_caveat_manifest(),
+        _ => empty_caveat_manifest(),
+    };
+    prove_effect_vm_rotated_ir2_with_caveat(initial_state, effects, before_w, after_w, &caveat)
+}
+
+/// The cohort-general rotated IR-v2 prover (G4): proves ANY of the 26 rotated cohort effects
+/// (resolved by `rotated_descriptor_name_for_effect`) through the shared 311-column trace,
+/// with an explicit caveat manifest. Returns the IR-v2 batch proof; self-verifies before
+/// return. Fails closed (`InvalidWitness`) if the turn's effect is NOT in the rotated cohort
+/// (no rotated descriptor exists for it) or if the turn is empty / heterogeneous.
+#[cfg(feature = "recursion")]
+pub fn prove_effect_vm_rotated_ir2_with_caveat(
+    initial_state: &CellState,
+    effects: &[VmEffectKind],
+    before_w: &dregg_turn::rotation_witness::RotationWitness,
+    after_w: &dregg_turn::rotation_witness::RotationWitness,
+    caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest,
+) -> Result<
+    dregg_circuit::descriptor_ir2::Ir2BatchProof<
+        dregg_circuit::descriptor_ir2::DreggStarkConfig,
+    >,
+    SdkError,
+> {
     use dregg_circuit::descriptor_ir2::{
         MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
     };
     use dregg_circuit::effect_vm::trace_rotated::{
-        RotatedBlockWitness, generate_rotated_effect_vm_trace, transfer_caveat_manifest,
+        RotatedBlockWitness, generate_rotated_effect_vm_trace, rotated_descriptor_name_for_effect,
     };
     use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
 
-    // Resolve the committed rotated transfer descriptor.
+    // Resolve the cohort descriptor NAME for this turn's effect. A homogeneous multi-effect
+    // turn (every effect the same cohort member) routes to that member's descriptor — the
+    // rotated per-effect constraint family natively holds over a multi-row trace of its own
+    // effect (the PI pins bind first-row pre / last-row post). Heterogeneous / empty turns
+    // fail closed.
+    let lead = effects
+        .first()
+        .ok_or_else(|| SdkError::InvalidWitness("rotated prover: empty turn".into()))?;
+    let name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
+        SdkError::InvalidWitness(format!(
+            "rotated prover: effect {lead:?} is not in the rotated cohort (no R=24 descriptor)"
+        ))
+    })?;
+    if effects.len() > 1 {
+        for e in &effects[1..] {
+            if rotated_descriptor_name_for_effect(e) != Some(name) {
+                return Err(SdkError::InvalidWitness(
+                    "rotated prover: heterogeneous multi-effect turn (one rotated descriptor \
+                     per proof)"
+                        .into(),
+                ));
+            }
+        }
+    }
+
+    // Resolve the committed rotated descriptor JSON for that name.
     let json = V3_STAGED_REGISTRY_TSV
         .lines()
         .find_map(|line| {
             let mut it = line.splitn(3, '\t');
-            if it.next() == Some("transferVmDescriptor2R24") {
+            if it.next() == Some(name) {
                 let _name = it.next();
                 it.next()
             } else {
@@ -760,7 +815,7 @@ pub fn prove_effect_vm_rotated_ir2(
             }
         })
         .ok_or_else(|| {
-            SdkError::InvalidWitness("transferVmDescriptor2R24 not in staged registry".into())
+            SdkError::InvalidWitness(format!("{name} not in staged rotated registry"))
         })?;
     let desc = parse_vm_descriptor2(json)
         .map_err(|e| SdkError::InvalidWitness(format!("rotated descriptor parse: {e}")))?;
@@ -775,9 +830,8 @@ pub fn prove_effect_vm_rotated_ir2(
         .map_err(|e| SdkError::InvalidWitness(format!("rotated after-witness: {e}")))?;
 
     // LIVE-generate the 311-column rotated trace + 38-PI vector.
-    let caveat = transfer_caveat_manifest();
     let (trace, dpis) =
-        generate_rotated_effect_vm_trace(initial_state, effects, &before, &after, &caveat)
+        generate_rotated_effect_vm_trace(initial_state, effects, &before, &after, caveat)
             .map_err(|e| SdkError::InvalidWitness(format!("rotated trace generation: {e}")))?;
 
     // Prove through the IR-v2 batch prover (self-verifies before return).

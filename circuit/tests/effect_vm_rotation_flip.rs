@@ -43,7 +43,8 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::effect_vm::columns::{STATE_BEFORE_BASE, state};
 use dregg_circuit::effect_vm::trace_rotated::{
     AFTER_BASE, B_COMMITTED_HEIGHT, B_IROOT, B_STATE_COMMIT, BEFORE_BASE, CAVEAT_BASE, C_SPAN,
-    ROT_WIDTH, RotatedBlockWitness, generate_rotated_effect_vm_trace, transfer_caveat_manifest,
+    ROT_WIDTH, RotatedBlockWitness, empty_caveat_manifest, generate_rotated_effect_vm_trace,
+    rotated_descriptor_name_for_effect, transfer_caveat_manifest,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
@@ -297,5 +298,100 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
         "ROTATION FLIP GATE GREEN (LIVE): the rotated cohort (transfer) proves+verifies on a \
          real turn through the LIVE generator, the cell v9 ≡ circuit STATE_COMMIT differential \
          holds, and every anti-ghost tooth bites."
+    );
+}
+
+/// G4 COHORT GENERALIZATION (end-to-end): a SECOND cohort effect — `Burn` — proves+verifies
+/// through the SAME live generator + the cohort-general resolver
+/// (`rotated_descriptor_name_for_effect` → `burnVmDescriptor2R24`), with the v9 authority-bearing
+/// commitment differential holding. This proves the generator widening is not transfer-only: the
+/// rotated machinery proves any cohort member's real turn, and the cell v9 commitment (now binding
+/// FULL authority state via the r23 digest) equals the circuit's STATE_COMMIT for it too.
+#[test]
+fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
+    // The cohort-general resolver picks the burn descriptor for a Burn effect.
+    let burn_effect = Effect::Burn {
+        target_hash: BabyBear::new(0),
+        amount_lo: BabyBear::new(30),
+        amount_full: 30,
+    };
+    let name = rotated_descriptor_name_for_effect(&burn_effect)
+        .expect("Burn is a rotated cohort member");
+    assert_eq!(name, "burnVmDescriptor2R24");
+
+    // Resolve its rotated descriptor from the committed registry.
+    let json = V3_STAGED_REGISTRY_TSV
+        .lines()
+        .find_map(|l| {
+            let mut it = l.splitn(3, '\t');
+            if it.next() == Some(name) {
+                let _ = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .expect("burnVmDescriptor2R24 in registry");
+    let desc = parse_vm_descriptor2(json).expect("burn descriptor parses");
+    assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 311");
+    assert_eq!(desc.public_input_count, 38);
+
+    // A real burn turn: a 30-unit balance debit (no destination credit).
+    let before_balance: i64 = 80_000;
+    let amount: u64 = 30;
+    let st = CellState::new(before_balance as u64, 0);
+    let effects = vec![burn_effect];
+
+    let mut ledger = Ledger::new();
+    let before_cell = producer_cell(before_balance, 0);
+    let after_cell = producer_cell(before_balance - amount as i64, 0);
+    ledger.insert_cell(after_cell.clone()).unwrap();
+    let nullifier_root = [0u8; 32];
+    let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
+
+    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &receipt_log);
+    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &receipt_log);
+
+    // The burn carries no in-circuit caveat operand → the EMPTY manifest (cohort default).
+    let caveat = empty_caveat_manifest();
+    let (trace, dpis) = generate_rotated_effect_vm_trace(
+        &st,
+        &effects,
+        &RotatedBlockWitness::new(before_w.pre_limbs.clone(), before_w.iroot).unwrap(),
+        &RotatedBlockWitness::new(after_w.pre_limbs.clone(), after_w.iroot).unwrap(),
+        &caveat,
+    )
+    .expect("live rotated generator must produce a burn trace");
+    assert_eq!(trace[0].len(), ROT_WIDTH);
+
+    // The cell v9 (now binding FULL authority state via r23) == the circuit STATE_COMMIT.
+    let v9_ctx = V9RotationContext {
+        cells_root: before_w.pre_limbs[0],
+        nullifier_root,
+        iroot: before_w.iroot,
+    };
+    let cell_v9 = compute_canonical_state_commitment_v9_felt(&before_cell, &v9_ctx);
+    assert_eq!(
+        cell_v9,
+        trace[0][BEFORE_BASE + B_STATE_COMMIT],
+        "G4 burn: cell v9 (full-authority) == circuit row-0 STATE_COMMIT"
+    );
+    // r23 (the authority digest limb, pre_limbs index 24) is genuinely carried on the wire.
+    assert_eq!(
+        before_w.pre_limbs[24],
+        trace[0][BEFORE_BASE + 24],
+        "G4 burn: the r23 authority-digest limb rides the rotated trace"
+    );
+
+    let mem_boundary = MemBoundaryWitness::default();
+    let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+        .expect("rotated burn must prove");
+    verify_vm_descriptor2(&desc, &proof, &dpis).expect("rotated burn proof must verify");
+    let total = postcard::to_allocvec(&proof).expect("postcard").len();
+    eprintln!(
+        "ROTATED BURN (cohort member, R=24, LIVE-GENERATED): proof {total} B (~{:.1} KiB) — \
+         PROVED + VERIFIED; cell v9 full-authority differential holds",
+        total as f64 / 1024.0
     );
 }
