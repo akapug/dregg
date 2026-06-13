@@ -373,6 +373,14 @@ pub struct NodeStateInner {
     /// and the sealed-share ciphertexts held for pickup. The chain holds the
     /// pinned round roots; the view re-derives them for comparison.
     pub dkg: crate::dkg_service::DkgRegistry,
+    /// pg-dregg M2: the LIVE node → postgres mirror writer. `Some` only when
+    /// `DREGG_PG_MIRROR_URL` is set (opt-in, off by default — the node runs
+    /// unchanged without it). After each DURABLY committed turn the commit path
+    /// projects the `CommitRecord` into a verified-turn `MirrorBatch`, chains it
+    /// (the same anti-substitution tooth the pg side re-checks), and ships it.
+    /// The node is the ONLY writer; reads on the pg side are free SQL.
+    /// (`crate::pg_mirror`; docs/PG-DREGG.md §8.)
+    pub pg_mirror: Option<crate::pg_mirror::NodeMirror>,
 }
 
 /// Maximum number of events retained in the ring buffer for REST polling.
@@ -822,6 +830,10 @@ impl NodeState {
                 equivocation_court,
                 channels,
                 dkg: crate::dkg_service::DkgRegistry::default(),
+                // pg-dregg M2: lazily initialized on the first commit when
+                // DREGG_PG_MIRROR_URL is set (resumes from the store head); stays
+                // None when mirroring is off. See `NodeStateInner::mirror_committed_record`.
+                pg_mirror: None,
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -945,6 +957,10 @@ impl NodeState {
                 equivocation_court,
                 channels,
                 dkg: crate::dkg_service::DkgRegistry::default(),
+                // pg-dregg M2: lazily initialized on the first commit when
+                // DREGG_PG_MIRROR_URL is set (resumes from the store head); stays
+                // None when mirroring is off. See `NodeStateInner::mirror_committed_record`.
+                pg_mirror: None,
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -1071,6 +1087,50 @@ impl NodeState {
 // =============================================================================
 
 impl NodeStateInner {
+    /// pg-dregg M2: mirror one DURABLY committed turn to postgres.
+    ///
+    /// Called from the commit path AFTER `commit_finalized_turn` succeeds, with
+    /// the record carrying its assigned `ordinal`. A no-op when mirroring is off
+    /// (`DREGG_PG_MIRROR_URL` unset). On first use it lazily builds the mirror
+    /// resuming from this turn's pre-state (the store's prior head) and the
+    /// assigned ordinal, so the chain is correct even on a node that enables
+    /// mirroring mid-life. The batch is projected from the real `CommitRecord`,
+    /// chained (the anti-substitution tooth the pg side re-checks), and shipped;
+    /// a refusal is logged loudly (it means the local chain disagrees — a real
+    /// finding), never silently dropped.
+    pub fn mirror_committed_record(&mut self, record: &dregg_persist::CommitRecord) {
+        // Lazy init: only when configured. Resume from THIS record's pre-state:
+        // the store's recorded head before this turn is the prior turn's
+        // ledger_root (or genesis for ordinal 0), and next_ordinal == this
+        // record's ordinal.
+        if self.pg_mirror.is_none() {
+            let head = if record.ordinal == 0 {
+                crate::pg_mirror::GENESIS_ROOT
+            } else {
+                // The prior committed turn's post-state root is this turn's
+                // pre-state root.
+                self.store
+                    .commit_record_at(record.ordinal - 1)
+                    .ok()
+                    .flatten()
+                    .map(|r| r.ledger_root)
+                    .unwrap_or(crate::pg_mirror::GENESIS_ROOT)
+            };
+            self.pg_mirror = crate::pg_mirror::NodeMirror::from_env(head, record.ordinal);
+        }
+        let Some(mirror) = self.pg_mirror.as_mut() else {
+            return; // mirroring off
+        };
+        if let Err(e) = mirror.mirror_record(record) {
+            tracing::error!(
+                ordinal = record.ordinal,
+                error = %e,
+                "pg-mirror: REFUSED a committed turn — local mirror chain disagrees \
+                 with the durable commit log (a real finding; not silently dropped)"
+            );
+        }
+    }
+
     /// Append a committed event to the ring buffer, evicting the oldest if at capacity.
     pub fn push_event(&mut self, event: CommittedEvent) {
         if self.event_log.len() >= MAX_EVENT_LOG {

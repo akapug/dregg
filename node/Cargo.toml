@@ -45,6 +45,14 @@ starbridge-compartment-workflow-mandate = { path = "../starbridge-apps/compartme
 starbridge-storage-gateway-mandate = { path = "../starbridge-apps/storage-gateway-mandate" }
 starbridge-privacy-voting = { path = "../starbridge-apps/privacy-voting" }
 starbridge-bounty-board = { path = "../starbridge-apps/bounty-board" }
+# The pg-dregg MIRROR core (pg-dregg/src/mirror.rs): MirrorBatch / CellRow / TurnRow /
+# CapRow / MemCell / RootChain. pg-dregg is a STANDALONE workspace whose DEFAULT feature
+# set is EMPTY (no pgrx, no postgres) — this path dep links ONLY its `lib` (the mirror's
+# row types + the anti-substitution RootChain), staying circuit- and postgres-free. The
+# node's pg_mirror sink owns the `dregg_cell::Cell -> CellRow` decode (this crate cannot
+# see dregg-cell by design) and calls MirrorBatch::from_parts + RootChain to ship verified
+# turns. (docs/PG-DREGG.md §8; node/src/pg_mirror.rs.)
+pg-dregg = { path = "../pg-dregg", default-features = false }
 dregg-macaroon = { workspace = true, features = ["crypto"] }
 ark-serialize = { workspace = true }
 ark-std = "0.5.0"
@@ -72,6 +80,20 @@ x25519-dalek = { workspace = true }
 chacha20poly1305 = { workspace = true }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
+# The LIVE postgres client for the pg-mirror sink — OPTIONAL, pulled only by the
+# `pg-mirror-live` feature. The mirror's load-bearing half (MirrorBatch construction
+# from CommitRecords + the RootChain anti-substitution gate) is feature-INDEPENDENT and
+# always compiled/tested; only the network shipping to a live pg17 needs this client. The
+# node runs unchanged with the feature off (and even on, the sink is opt-in via
+# DREGG_PG_MIRROR_URL). (node/src/pg_mirror.rs.)
+tokio-postgres = { version = "0.7", optional = true }
+
+[features]
+# Off by default: the node ships verified-turn MirrorBatches to a live pg17 ONLY when
+# this is on AND DREGG_PG_MIRROR_URL is set. With it off, the pg-mirror module still
+# compiles its construction + RootChain core and its in-memory sink (the tested,
+# load-bearing path); the live postgres writer is simply absent.
+pg-mirror-live = ["dep:tokio-postgres"]
 
 # Dev-deps for future router-level adversarial tests (Stage 0c followup once
 # dregg-turn/dregg-cell rebuild lands from Stages 0a/0b). Currently the

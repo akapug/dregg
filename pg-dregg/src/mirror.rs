@@ -214,6 +214,50 @@ pub struct MirrorBatch {
 }
 
 impl MirrorBatch {
+    /// Assemble a batch from a [`TurnRow`] and the already-projected post-image
+    /// rows of the turn, stamping every row with the turn's ordinal and running
+    /// the structural [`Self::check_ordinals`] tooth before returning.
+    ///
+    /// This is the pg-side assembly point: the node owns the heavy
+    /// `dregg_cell::Cell -> CellRow / CapRow / MemCell` decode (it has
+    /// `dregg-cell`; this crate deliberately does not — see the module header),
+    /// then hands the decoded rows here so the *ordinal-stamping discipline* and
+    /// the *well-formedness gate* live in ONE place (this crate, the SQL-shape
+    /// home) rather than being re-implemented at each node sink. The returned
+    /// batch is guaranteed to satisfy `check_ordinals` (every row carries the
+    /// turn's ordinal); a [`RootChain`] is what then admits or refuses it against
+    /// the head.
+    ///
+    /// Stamping is authoritative: any `last_ordinal` the caller left on a row is
+    /// OVERWRITTEN with `turn.ordinal`, so a node cannot accidentally ship a row
+    /// stamped for a different turn — the only way `check_ordinals` can then fail
+    /// is an internal bug, which surfaces as `Err`.
+    pub fn from_parts(
+        turn: TurnRow,
+        mut cells: Vec<CellRow>,
+        mut caps: Vec<CapRow>,
+        mut memory: Vec<MemCell>,
+    ) -> Result<Self, String> {
+        let o = turn.ordinal;
+        for c in &mut cells {
+            c.last_ordinal = o;
+        }
+        for c in &mut caps {
+            c.last_ordinal = o;
+        }
+        for m in &mut memory {
+            m.last_ordinal = o;
+        }
+        let batch = MirrorBatch {
+            turn,
+            cells,
+            caps,
+            memory,
+        };
+        batch.check_ordinals()?;
+        Ok(batch)
+    }
+
     /// A structural well-formedness check the mirror runs before writing:
     /// every touched row must reference THIS turn's ordinal (no smuggling a row
     /// from a different turn into a batch). Returns the first offending row's
@@ -702,6 +746,49 @@ mod tests {
             last_ordinal: 4, // wrong
         });
         assert!(b.check_ordinals().is_err());
+    }
+
+    #[test]
+    fn from_parts_stamps_ordinals_and_passes_the_gate() {
+        // from_parts is the pg-side assembly point: it OVERWRITES each row's
+        // last_ordinal with the turn's, so a row a caller left stamped for a
+        // different turn is corrected (not smuggled through).
+        let t = turn(7, root(0), root(1));
+        let mut cell = CellRow {
+            cell_id: root(9),
+            mode: "Hosted".into(),
+            balance: 5,
+            nonce: 7,
+            fields: vec![],
+            fields_json: None,
+            heap: None,
+            program: None,
+            verification_key: None,
+            permissions_json: None,
+            delegate: None,
+            lifecycle: "Live".into(),
+            last_ordinal: 999, // wrong on purpose
+            cell_root: root(10),
+        };
+        let b = MirrorBatch::from_parts(t, vec![cell.clone()], vec![], vec![]).unwrap();
+        assert_eq!(b.cells[0].last_ordinal, 7, "from_parts stamps the turn ordinal");
+        assert!(b.check_ordinals().is_ok());
+
+        // And the assembled batch chains exactly like a hand-built one.
+        let mut chain = RootChain::resume(root(0), 7);
+        assert!(chain.extend(&b).is_ok());
+        assert_eq!(chain.head(), Some(root(1)));
+
+        // Independent: a hand-built batch with a mismatched row still fails the
+        // gate (the from_parts overwrite is what saves the normal path).
+        cell.last_ordinal = 4;
+        let bad = MirrorBatch {
+            turn: turn(7, root(0), root(1)),
+            cells: vec![cell],
+            caps: vec![],
+            memory: vec![],
+        };
+        assert!(bad.check_ordinals().is_err());
     }
 
     #[test]

@@ -37,6 +37,7 @@ mod state;
 mod storage_service;
 mod strand_admission_gate;
 mod trustline_service;
+mod pg_mirror;
 mod turn_proving;
 mod ws;
 

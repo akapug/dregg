@@ -2526,6 +2526,14 @@ async fn execute_finalized_turn(
                             block_executed_up_to,
                             "durable commit-log record written (atomic; index updated)"
                         );
+                        // pg-dregg M2: ship this verified turn to the postgres
+                        // mirror (opt-in; no-op unless DREGG_PG_MIRROR_URL is set).
+                        // The record carries its durable ordinal now.
+                        let mirrored = dregg_persist::CommitRecord {
+                            ordinal: assigned,
+                            ..commit_record.clone()
+                        };
+                        s.mirror_committed_record(&mirrored);
                     }
                     Err(e) => {
                         // A failed durable commit is a serious crash-consistency
