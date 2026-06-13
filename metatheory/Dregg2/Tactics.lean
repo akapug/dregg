@@ -25,18 +25,54 @@ typeclass parameters/hypotheses, NOT `axiom`-keyword declarations, so they do no
 in `collectAxioms` and do not trip this guard. A genuine `axiom`-keyword oracle, were one
 ever added, would need to be allow-listed by name with a comment — by design.) -/
 
+/-- The kernel-clean triple. ONE source of truth for what "axiom-clean" means; every
+checker below (`#assert_axioms`, `#assert_clean`, `#assert_all_clean`,
+`#assert_namespace_axioms`) consults this list, so the discipline cannot drift per-command. -/
+def Dregg2.cleanAxioms : List Lean.Name := [``propext, ``Classical.choice, ``Quot.sound]
+
+open Lean Elab Command in
+/-- The shared one-name checker the verbose, terse, and batch commands all call. Runs
+`collectAxioms name` and throws on the first axiom outside `Dregg2.cleanAxioms` (notably
+`sorryAx` ⇒ a silent `sorry` leaked). Pure rejector — never closes a goal. Returns `()` on
+clean. Centralizing here means the terse/batch forms are *exactly* as strict as the verbose
+one (same allow-list, same error), by construction. -/
+def Dregg2.assertNameClean (name : Lean.Name) : Lean.Elab.Command.CommandElabM Unit := do
+  let axs ← Lean.collectAxioms name
+  let bad := axs.filter (fun a => !Dregg2.cleanAxioms.contains a)
+  unless bad.isEmpty do
+    throwError "axiom-hygiene FAIL: {name} depends on non-kernel axioms {bad.toList} \
+      (a `sorryAx` here means a silent `sorry` leaked into a 'PROVED' keystone)"
+
 open Lean Elab Command in
 /-- `#assert_axioms foo` errors unless every axiom `foo` depends on is one of the three
 standard kernel axioms (`propext`, `Classical.choice`, `Quot.sound`). In particular it
 FAILS on `sorryAx`, catching a silent `sorry`-inheritance at build time. -/
 elab "#assert_axioms" id:ident : command => do
   let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
-  let axs ← Lean.collectAxioms name
-  let allowed : List Name := [``propext, ``Classical.choice, ``Quot.sound]
-  let bad := axs.filter (fun a => !allowed.contains a)
-  unless bad.isEmpty do
-    throwError "axiom-hygiene FAIL: {name} depends on non-kernel axioms {bad.toList} \
-      (a `sorryAx` here means a silent `sorry` leaked into a 'PROVED' keystone)"
+  Dregg2.assertNameClean name
+
+open Lean Elab Command in
+/-- `#assert_clean foo` — terse synonym for `#assert_axioms foo` (identical strength: same
+allow-list, same loud failure on the first non-clean axiom). The short token to pin a single
+keystone without the noun-heavy `#assert_axioms`. -/
+elab "#assert_clean" id:ident : command => do
+  let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
+  Dregg2.assertNameClean name
+
+open Lean Elab Command in
+/-- `#assert_all_clean [a, b, c]` — pin a comma-separated LIST of keystones kernel-clean in
+ONE command, replacing N verbose `#assert_axioms` lines. Each name is checked by the same
+`Dregg2.assertNameClean` the per-theorem form uses, so it is exactly as strict; the FIRST
+non-clean name throws (with its offending axiom). A typo'd name is an `unknownConstant` error
+— the list cannot silently drop a pin. Logs the count pinned. -/
+elab "#assert_all_clean" "[" ids:ident,* "]" : command => do
+  let idArr := ids.getElems
+  let mut n : Nat := 0
+  for id in idArr do
+    let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
+    Dregg2.assertNameClean name
+    n := n + 1
+  logInfo m!"#assert_all_clean: {n} keystones pinned kernel-clean"
 
 /-! ## `#assert_namespace_axioms` — module-wide axiom-hygiene pinning.
 
@@ -66,7 +102,7 @@ elab_rules : command
   | `(command| #assert_namespace_axioms $ns:ident $[ except $excIds:ident*]?) => do
   let env ← getEnv
   let prefixName := ns.getId
-  let allowed : List Name := [``propext, ``Classical.choice, ``Quot.sound]
+  let allowed : List Name := Dregg2.cleanAxioms
   -- Resolve the `except` names to fully-qualified constants (a typo is an `unknownConstant`
   -- error here, so the allow-out list cannot silently drift — same discipline as a bad pin).
   let exceptIdents : Array Ident := match excIds with
