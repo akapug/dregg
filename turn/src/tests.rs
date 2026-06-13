@@ -1781,6 +1781,92 @@ fn test_heap_field_index_commits() {
 }
 
 // =============================================================================
+// Test: Heap-keyed constraint gates a real submitted turn (accept + refuse)
+// =============================================================================
+
+/// THE EXECUTOR-PATH TOOTH for `StateConstraint::HeapField` (the rotation's
+/// app-state lane): a cell program constraining a HEAP key (>= STATE_SLOTS,
+/// lives in `fields_map`) gates a real submitted turn through
+/// `TurnExecutor::execute` — refuse on violation, accept on compliance.
+/// Lean twin: `evalHeap_monotonic_iff` + `mixedHeapProgram`
+/// (`metatheory/Dregg2/Exec/Program.lean`). Cited by the coverage
+/// classifier in `teasting/tests/protocol_coverage_gate.rs`.
+#[test]
+fn test_program_heap_field_constraint_enforced() {
+    use dregg_cell::program::{HeapAtom, StateConstraint, field_from_u64};
+
+    // The program: heap key 99 is a monotone counter.
+    let program = dregg_cell::CellProgram::Predicate(vec![StateConstraint::HeapField {
+        key: 99,
+        atom: HeapAtom::Monotonic,
+    }]);
+
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 5000);
+    let mut target = make_programmed_cell(2, 0, program);
+    // Seed the heap key (a committed fields_map write, not a register).
+    assert!(target.state.set_field_ext(99, field_from_u64(5)));
+    let agent_id = agent.id();
+    let target_id = target.id();
+
+    let mut agent_with_cap = agent;
+    agent_with_cap
+        .capabilities
+        .grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent_with_cap).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let executor = zero_cost_executor();
+
+    // REFUSE: lowering the heap counter (5 -> 3) violates Monotonic.
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    {
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "heap_down", agent_id)
+            .effect_set_field(target_id, 99, field_from_u64(3))
+            .build();
+        builder.add_action(action);
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_rejected(),
+        "expected rejection for heap[99] decrease, got: {result:?}"
+    );
+    let (error, _) = result.unwrap_rejected();
+    match error {
+        TurnError::ProgramViolation { cell, .. } => assert_eq!(cell, target_id),
+        other => panic!("expected ProgramViolation, got {other:?}"),
+    }
+    // The refused write must not have leaked into the heap.
+    assert_eq!(
+        ledger.get(&target_id).unwrap().state.get_field_ext(99),
+        Some(field_from_u64(5)),
+        "heap[99] must be unchanged after the refused turn"
+    );
+
+    // ACCEPT: raising the heap counter (5 -> 10) satisfies Monotonic.
+    // Nonce is now 1 (fee+nonce commit is permanent even on failure).
+    let mut builder = TurnBuilder::new(agent_id, 1);
+    {
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "heap_up", agent_id)
+            .effect_set_field(target_id, 99, field_from_u64(10))
+            .build();
+        builder.add_action(action);
+    }
+    let turn = builder.fee(500).build();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_committed(),
+        "expected success for heap[99] increase, got: {result:?}"
+    );
+    assert_eq!(
+        ledger.get(&target_id).unwrap().state.get_field_ext(99),
+        Some(field_from_u64(10)),
+        "heap[99] must hold the admitted value"
+    );
+}
+
+// =============================================================================
 // Test: Transfer to non-existent cell
 // =============================================================================
 

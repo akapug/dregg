@@ -788,6 +788,9 @@ fn constraint_dissect(
         SC::BalanceGte { .. } => ("balance_gte", None, vec![]),
         SC::BalanceLte { .. } => ("balance_lte", None, vec![]),
         SC::AllOf { .. } => ("all_of", None, vec![]),
+        // Heap-keyed atoms bind a u64 fields_map key, which does not fit
+        // the u8 slot lanes; consumers read the key from the program view.
+        SC::HeapField { .. } => ("heap_field", None, vec![]),
     }
 }
 

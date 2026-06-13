@@ -48,6 +48,13 @@ encoded). Reserved low keys `0..reservedKeys-1` use the same encoding so the fix
 `n ≥ reservedKeys`. Injective on `Nat` (decimal encoding is injective). -/
 def userKey (n : Nat) : FieldName := toString n
 
+/-- **The weld to the heap-keyed constraint atoms**: `Exec.Program`'s `heapKey` (the field name
+the `HeapAtom.lift` constraint atoms address) IS this encoding — one canonical heap addressing
+across the commitment layer and the constraint language. -/
+theorem userKey_eq_heapKey : userKey = Dregg2.Exec.heapKey := rfl
+
+#assert_axioms userKey_eq_heapKey
+
 /-- **`isUserTailKey k`** — `k` names a user-map key `≥ reservedKeys`. A field key is in the
 committed tail iff it parses as a numeral `≥ reservedKeys`. Decidable (drives the `#guard`s). -/
 def isUserTailKey (k : FieldName) : Bool :=
