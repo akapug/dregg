@@ -49,6 +49,9 @@
 //! - **Distributed GC** (`gc`) tracks reference counts across federations.
 //! - **Handoff protocol** (`handoff`) enables offline capability transfer to third parties.
 //! - **Store-and-forward** (`store_forward`) queues encrypted messages for offline destinations.
+//! - **Netlayer** (`netlayer`) is the OCapN transport abstraction (Spritely Goblins' design):
+//!   how sessions dial/listen/identify peers, independent of the CapTP session semantics;
+//!   includes `ocapn://` locator strings and the in-process + relay instances.
 //!
 //! # Protocol
 //!
@@ -80,6 +83,7 @@ pub use dregg_types::FederationId;
 
 pub mod gc;
 pub mod handoff;
+pub mod netlayer;
 pub mod pipeline;
 pub mod session;
 pub mod store_forward;
@@ -93,6 +97,11 @@ pub use handoff::{
 pub use pipeline::{
     BrokenPromiseNotification, CrossFedPipelineBridge, PipelineError, PipelinePromiseState,
     PipelineRegistry, PipelineResultValue, PipelineWireMessage, PipelinedAction, PipelinedMessage,
+};
+pub use netlayer::{
+    InProcessFabric, InProcessNetlayer, NetConnection, NetSession, Netlayer, NetlayerError,
+    PeerId, RelayAddr, RelayNetlayer,
+    ocapn_uri::{OcapnLocation, OcapnSturdyRef, OcapnUriError},
 };
 pub use session::CapSession;
 pub use store_forward::{
