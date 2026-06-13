@@ -57,6 +57,55 @@ not durable across compaction; the log is the burn-down. Sweep it at every Conve
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
   `project-refinement-epoch.md` is the live resume file; MEMORY.md is the index.
 
+## ⚑⚑⚑ TONIGHT'S LANDINGS (2026-06-13 night, head 870bb0f7f — Opus, 14 commits)
+
+The pug-worthiness + frontier waves LANDED green by file set (verification economy:
+each lane verified its own narrow suite; no full-suite re-runs):
+- axiom-ergonomics `48f535626` (the #93 answer: terse `#assert_clean`/`#assert_all_clean`,
+  one `Dregg2.cleanAxioms` source-of-truth; demo modules 75→1 / 32→1 lines, and the batch
+  pins MORE than the verbose blocks did).
+- site ×5: front-door `72a3e267f` · studio `431f1f020` · learn `3b6a10d45` · shell
+  `ebaad4f14` (the four organs surfaced live) · playground `def4c3f6d` (live organ demos +
+  a browser-parsable SDK entry `sdk-ts/src/browser.ts`).
+- DreggDL `a7734efcc` (`dregg-deploy/`: declarative deploy spec → userspace-verify; an
+  over-grant is caught as in-forest amplification) · dregg-analyzer `f4d0efa5d` (forensic
+  trace ATTESTATION via the real verifiers; activates dregg-deploy+dregg-analyzer members)
+  · persist snapshot `dc750e1d7` (checkpoint⊕overlay=replay + root tooth; surfaced a node
+  state.rs insert_cell-drops-overwrite latent bug → HORIZONLOG) · seL4 scaffold `152e6b3a5`
+  (verifier proven Lean-free as a PD: `--features no-lean-link` links only libSystem, 14.4
+  vs 27.2 MB) · starbridge-v2 scaffold `fd9763dce` · demo-modernization `870bb0f7f`.
+- ⚡ **ROTATION STAGED LONG POLE** `51850ee91`: `turn/src/rotation_witness.rs` producers
+  (cells_root/iroot-MMR/lifecycle/epoch/wire_commit) + `circuit/tests/effect_vm_rotation_flip.rs`
+  (rotated trace + e2e prove/verify + **cell≡circuit differential HOLDS** + anti-ghost) —
+  STAGED-ADDITIVE, v1 byte-identical, **NO VK bump**. Rotated R=24 transfer = 144.1 KiB.
+
+### THE IRREVERSIBLE FLIP TAIL — still ahead, GATED (do NOT do casually)
+The one-way door, deliberately not walked tonight (ROTATION-CUTOVER §3 steps 2-6 / §4):
+regen `EmitAllJson` to emit the rotated R=24 `v3Registry` as the LIVE registry (fingerprints
+bump) · `columns.rs::rotation::NUM_REGISTERS` 16→24 (nothing live depends on 16; R=24 uses
+`rotation_layout_for(24)`) · cell `CANONICAL_COMMITMENT_CONTEXT` v8→v9 · executor PI reads
+`pi::v3` LIVE · VK/commitment bump + succession drill · delete v1. REQUIRES the persvati
+workspace gauntlet first. v1 is DORMANT-BUT-PRESENT. Deploy stays low-priority (next week).
+
+### RUNNING (2026-06-13 night) — land each by file set when it reports
+- **pg-dregg M1** (postgres RLS extension; STANDALONE workspace `pg-dregg/`, own target —
+  no ./target contention). ember decisions baked: INSTANT revocation in the default path
+  (verified-credential LRU mandatory), credential-path leads, FFI-Lean tier deferred.
+  Proposal already committed `bfe802c1b` (docs/PG-DREGG.md). Two-mode build: `cargo test`
+  core (no pg) + `cargo pgrx` extension.
+- **starbridge-v2 → THE MASTER INTERFACE** (ember reframe): REVERSES the scaffold's thin-
+  client decision — now EMBEDS the real verified executor + is comprehensive for ALL data &
+  actions + smalltalk-surpassing live visual cockpit. One codebase, two builds (`native-full`
+  embeds executor/Lean = the cockpit; `sel4-thin` = the stripped client). Lane also tasked
+  with actually getting gpui to RENDER here (Metal toolchain — brew/xcrun in scope).
+- **seL4 → THE ROBIGALIA v0 DEMO** (ember reframe): Rust-userspace-dregg (the `rbg/` crate
+  primitives) booting on seL4/Microkit in QEMU (aarch64 first → riscv), toward networking
+  (virtio-net + smoltcp/lwIP) + a dregg TUI light client. Reproducible macOS-native
+  toolchain preferred (brew freely), Docker Desktop fallback. Owns `sel4/` + a new
+  `dregg-tui/` standalone crate.
+
+NOTE: stashes exist (stash@{0..6}, old/deleted branches — NOT ours, never touch). On `main`.
+
 ## ⚑⚑⚑ THE FLIP IS GO + WAVE 2 (2026-06-13, head 2c37c50fc — ember's decisions)
 
 ember decided: (1) #93 = NOT close — AUTOMATE the assert_axioms verbosity (a Tactics lane);
