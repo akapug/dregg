@@ -92,6 +92,14 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     "handoff-redeem",
     "intent",
     "bounty",
+    // ─── new reads + organ actions (wired this integration) ─────────────
+    "federation-status",
+    "federation-peers",
+    "council-approve",
+    "activity",
+    "dashboard",
+    "cap-peer",
+    "handoff-status",
 ];
 
 #[cfg(test)]
@@ -188,6 +196,14 @@ impl EventHandler for Handler {
             commands::intent::register(),
             // ─── Bounty board (starbridge-bounty-board) ─────────────────────
             commands::bounty::register(),
+            // ─── New reads + organ actions (wired this integration) ─────────
+            commands::federation::register_status(),
+            commands::federation::register_peers(),
+            commands::polis::register_council_approve(),
+            commands::social::register_activity(),
+            commands::dashboard::register_dashboard(),
+            commands::captp::register_peer(),
+            commands::handoff::register_status(),
         ];
         debug_assert_eq!(commands.len(), REGISTERED_COMMAND_NAMES.len());
 
@@ -271,6 +287,24 @@ impl EventHandler for Handler {
                 }
                 "unlink-cipherclerk" => {
                     commands::federation::handle_unlink(&ctx, &command, &self.state).await
+                }
+                // ─── New reads + organ actions (wired this integration) ──────
+                "federation-status" => {
+                    commands::federation::handle_status(&ctx, &command, &self.state).await
+                }
+                "federation-peers" => {
+                    commands::federation::handle_peers(&ctx, &command, &self.state).await
+                }
+                "council-approve" => {
+                    commands::polis::handle_council_approve(&ctx, &command, &self.state).await
+                }
+                "activity" => commands::social::handle_activity(&ctx, &command, &self.state).await,
+                "dashboard" => {
+                    commands::dashboard::handle_dashboard(&ctx, &command, &self.state).await
+                }
+                "cap-peer" => commands::captp::handle_peer(&ctx, &command, &self.state).await,
+                "handoff-status" => {
+                    commands::handoff::handle_status(&ctx, &command, &self.state).await
                 }
                 // ─── Canonical CapTP handoff (§4.7) ─────────────────────────
                 "handoff" => commands::handoff::handle(&ctx, &command, &self.state).await,

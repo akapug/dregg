@@ -1,15 +1,78 @@
-//! Federation setup commands: `/setup-federation`, `/link-cipherclerk`, `/unlink-cipherclerk`.
+//! Federation commands: `/setup-federation`, `/link-cipherclerk`,
+//! `/unlink-cipherclerk`, `/federation-status`, `/federation-peers`.
 //!
-//! Links a Discord guild to a dregg reference group and binds user identities.
+//! Links a Discord guild to a dregg reference group, binds user identities, and
+//! reads the live federation surface (`/api/federations`) so Discord can see the
+//! real reference-group committee/epoch/threshold and finalized roots — Discord
+//! as a first-class peer of node/sdk.
 
+use serde::Deserialize;
 use serenity::all::{
     CommandDataOptionValue, CommandInteraction, CommandOptionType, Context, CreateCommand,
-    CreateCommandOption, CreateInteractionResponse, CreateInteractionResponseMessage,
+    CreateCommandOption, CreateEmbed, CreateInteractionResponse, CreateInteractionResponseMessage,
     EditInteractionResponse,
 };
 
 use crate::BotState;
 use crate::embeds;
+
+// ─── Live federation surface (`/api/federations`) ────────────────────────────
+
+/// Mirror of the node's `FederationInfo` (`node/src/api.rs`). `default` on the
+/// optional/newer fields keeps older node responses valid.
+#[derive(Debug, Clone, Deserialize)]
+struct FederationInfo {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    federation_id: String,
+    #[serde(default)]
+    committee_epoch: u64,
+    #[serde(default)]
+    threshold: u32,
+    #[serde(default)]
+    member_count: usize,
+    #[serde(default)]
+    members: Vec<String>,
+    #[serde(default)]
+    is_local: bool,
+    #[serde(default)]
+    latest_height: u64,
+    #[serde(default)]
+    latest_root: Option<String>,
+    #[serde(default)]
+    num_finalized_roots: usize,
+}
+
+/// Fetch the live federation list from the node's real `/api/federations` route.
+async fn fetch_federations(state: &BotState) -> Result<Vec<FederationInfo>, String> {
+    let url = format!(
+        "{}/api/federations",
+        state.config.devnet_url.trim_end_matches('/')
+    );
+    let resp = state
+        .devnet
+        .client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                "Couldn't reach the node. The devnet may be offline — check `/status`.".to_string()
+            } else {
+                format!("Network error reading the federation surface: {e}")
+            }
+        })?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Node returned HTTP {} reading `/api/federations`.",
+            resp.status().as_u16()
+        ));
+    }
+    resp.json::<Vec<FederationInfo>>()
+        .await
+        .map_err(|e| format!("Couldn't parse the federation response: {e}"))
+}
 
 // ─── Registration ───────────────────────────────────────────────────────────
 
@@ -37,6 +100,18 @@ pub fn register_link() -> CreateCommand {
 pub fn register_unlink() -> CreateCommand {
     CreateCommand::new("unlink-cipherclerk")
         .description("Unlink your Discord account from your dregg identity")
+}
+
+/// Register `/federation-status` — the live committee/epoch/threshold + roots.
+pub fn register_status() -> CreateCommand {
+    CreateCommand::new("federation-status")
+        .description("Show the live federation: committee, epoch, threshold, finalized roots")
+}
+
+/// Register `/federation-peers` — the reference-group members (committee keys).
+pub fn register_peers() -> CreateCommand {
+    CreateCommand::new("federation-peers")
+        .description("List the federation committee members (reference-group keys)")
 }
 
 // ─── Handlers ───────────────────────────────────────────────────────────────
@@ -244,6 +319,150 @@ pub async fn handle_unlink(ctx: &Context, command: &CommandInteraction, state: &
                 .await;
         }
     }
+}
+
+/// Handle `/federation-status` — read the real `/api/federations` route.
+pub async fn handle_status(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    defer_ephemeral(ctx, command).await;
+
+    let feds = match fetch_federations(state).await {
+        Ok(feds) => feds,
+        Err(msg) => {
+            edit_embed(ctx, command, embeds::error_embed("Federation Unavailable", &msg)).await;
+            return;
+        }
+    };
+
+    if feds.is_empty() {
+        edit_embed(
+            ctx,
+            command,
+            embeds::warning_embed(
+                "No Federations",
+                "The node reports no known reference groups yet.",
+            ),
+        )
+        .await;
+        return;
+    }
+
+    // Lead with the local federation (the one this guild's turns settle on),
+    // falling back to the first if none is flagged local.
+    let local = feds.iter().find(|f| f.is_local).unwrap_or(&feds[0]);
+    let mut embed = embeds::dregg_embed("Federation Status")
+        .field("Federation", short_hex(fed_id(local)), true)
+        .field("Scope", if local.is_local { "local" } else { "remote" }, true)
+        .field("Epoch", local.committee_epoch.to_string(), true)
+        .field(
+            "Threshold",
+            format!("{}-of-{}", local.threshold, local.member_count.max(1)),
+            true,
+        )
+        .field("Members", local.member_count.to_string(), true)
+        .field("Latest Height", local.latest_height.to_string(), true)
+        .field("Finalized Roots", local.num_finalized_roots.to_string(), true)
+        .field(
+            "Latest Root",
+            local
+                .latest_root
+                .as_deref()
+                .map(short_hex)
+                .unwrap_or_else(|| "—".to_string()),
+            true,
+        );
+
+    if feds.len() > 1 {
+        let others = feds
+            .iter()
+            .filter(|f| fed_id(f) != fed_id(local))
+            .take(8)
+            .map(|f| {
+                format!(
+                    "{} — epoch {}, {}-of-{}{}",
+                    short_hex(fed_id(f)),
+                    f.committee_epoch,
+                    f.threshold,
+                    f.member_count.max(1),
+                    if f.is_local { " (local)" } else { "" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        embed = embed.field(format!("Known Federations ({})", feds.len()), others, false);
+    }
+
+    edit_embed(ctx, command, embed).await;
+}
+
+/// Handle `/federation-peers` — the live committee membership.
+pub async fn handle_peers(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    defer_ephemeral(ctx, command).await;
+
+    let feds = match fetch_federations(state).await {
+        Ok(feds) => feds,
+        Err(msg) => {
+            edit_embed(ctx, command, embeds::error_embed("Federation Unavailable", &msg)).await;
+            return;
+        }
+    };
+
+    let Some(local) = feds.iter().find(|f| f.is_local).or_else(|| feds.first()) else {
+        edit_embed(
+            ctx,
+            command,
+            embeds::warning_embed("No Federations", "The node reports no known reference groups."),
+        )
+        .await;
+        return;
+    };
+
+    let members = if local.members.is_empty() {
+        "_(node did not expose member keys)_".to_string()
+    } else {
+        local
+            .members
+            .iter()
+            .enumerate()
+            .take(20)
+            .map(|(i, key)| format!("{}. `{}`", i + 1, short_hex(key)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let embed = embeds::dregg_embed("Federation Peers")
+        .field("Federation", short_hex(fed_id(local)), true)
+        .field("Epoch", local.committee_epoch.to_string(), true)
+        .field(
+            "Threshold",
+            format!("{}-of-{}", local.threshold, local.member_count.max(1)),
+            true,
+        )
+        .field("Committee", members, false);
+    edit_embed(ctx, command, embed).await;
+}
+
+/// Prefer `federation_id`, fall back to `id` (the node sets both equal).
+fn fed_id(info: &FederationInfo) -> &str {
+    if info.federation_id.is_empty() {
+        &info.id
+    } else {
+        &info.federation_id
+    }
+}
+
+fn short_hex(hex: &str) -> String {
+    let trimmed = hex.trim();
+    if trimmed.len() <= 16 {
+        format!("`{trimmed}`")
+    } else {
+        format!("`{}...`", &trimmed[..16])
+    }
+}
+
+async fn edit_embed(ctx: &Context, command: &CommandInteraction, embed: CreateEmbed) {
+    let _ = command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await;
 }
 
 fn ownership_challenge(discord_id: &str, address: &str) -> String {

@@ -43,6 +43,198 @@ pub fn register() -> CreateCommand {
     CreateCommand::new("dregg").description("Open your Starbridge app dashboard")
 }
 
+/// Register `/dashboard` — a live, public node-health dashboard embed.
+pub fn register_dashboard() -> CreateCommand {
+    CreateCommand::new("dashboard")
+        .description("Live devnet health dashboard — producer, consensus, federation, checkpoint")
+}
+
+// ─── Live node-health dashboard (real /status + /api/federations + checkpoint) ─
+
+#[derive(serde::Deserialize)]
+struct DashStatus {
+    #[serde(default)]
+    healthy: bool,
+    #[serde(default)]
+    peer_count: u32,
+    #[serde(default)]
+    latest_height: u64,
+    #[serde(default)]
+    dag_height: u64,
+    #[serde(default)]
+    block_count: u64,
+    #[serde(default)]
+    consensus_live: bool,
+    #[serde(default)]
+    federation_mode: String,
+    #[serde(default)]
+    state_producer: String,
+    #[serde(default)]
+    lean_producer: bool,
+    #[serde(default)]
+    full_turn_proving: bool,
+    #[serde(default)]
+    producer_covered_effects: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct DashFederation {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    committee_epoch: u64,
+    #[serde(default)]
+    threshold: u32,
+    #[serde(default)]
+    member_count: usize,
+    #[serde(default)]
+    is_local: bool,
+    #[serde(default)]
+    num_finalized_roots: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct DashCheckpoint {
+    #[serde(default)]
+    height: u64,
+    #[serde(default)]
+    epoch: u64,
+    #[serde(default)]
+    ledger_state_root: String,
+    #[serde(default)]
+    qc_votes: usize,
+    #[serde(default)]
+    federation_members: usize,
+}
+
+async fn dash_get<T: for<'de> serde::Deserialize<'de>>(
+    state: &BotState,
+    route: &str,
+) -> Result<T, String> {
+    let url = format!("{}{route}", state.config.devnet_url.trim_end_matches('/'));
+    let resp = state
+        .devnet
+        .client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("could not reach the node: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status().as_u16()));
+    }
+    resp.json::<T>().await.map_err(|e| format!("parse {route}: {e}"))
+}
+
+/// Handle `/dashboard` — render the live node-health dashboard.
+pub async fn handle_dashboard(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    let _ = command
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Defer(
+                CreateInteractionResponseMessage::new().ephemeral(true),
+            ),
+        )
+        .await;
+
+    let status = match dash_get::<DashStatus>(state, "/status").await {
+        Ok(status) => status,
+        Err(e) => {
+            let embed = embeds::error_embed(
+                "Node Offline",
+                &format!(
+                    "The dashboard could not reach `{}`: {e}",
+                    state.config.devnet_url
+                ),
+            );
+            let _ = command
+                .edit_response(
+                    &ctx.http,
+                    serenity::all::EditInteractionResponse::new().embed(embed),
+                )
+                .await;
+            return;
+        }
+    };
+
+    let health_icon = if status.healthy {
+        "\u{1f7e2}"
+    } else if status.consensus_live {
+        "\u{1f7e1}"
+    } else {
+        "\u{1f534}"
+    };
+    let producer_icon = if status.lean_producer { "\u{2705}" } else { "\u{26a0}\u{fe0f}" };
+    let producer = if status.state_producer.is_empty() {
+        if status.lean_producer { "lean" } else { "rust" }.to_string()
+    } else {
+        status.state_producer.clone()
+    };
+    let proving = if status.full_turn_proving { "\u{2705} on" } else { "\u{2796} off" };
+    let nodes = if status.federation_mode == "solo" {
+        "1 (solo)".to_string()
+    } else {
+        format!("{} peer(s) + self", status.peer_count)
+    };
+
+    let mut embed = embeds::dregg_embed("Devnet Dashboard")
+        .description(format!(
+            "{health_icon} Live snapshot of `{}`.",
+            state.config.devnet_url
+        ))
+        .field("Health", if status.healthy { "healthy" } else if status.consensus_live { "degraded" } else { "offline" }, true)
+        .field("Consensus", if status.consensus_live { "\u{2705} live" } else { "\u{274c} idle" }, true)
+        .field("Mode", &status.federation_mode, true)
+        .field("Attested Height", status.latest_height.to_string(), true)
+        .field("DAG Tip", status.dag_height.to_string(), true)
+        .field("DAG Blocks", status.block_count.to_string(), true)
+        .field("Nodes", nodes, true)
+        .field("State Producer", format!("{producer_icon} {producer}"), true)
+        .field("Full-Turn Proving", proving.to_string(), true)
+        .field("SWAP-Safe Effects", status.producer_covered_effects.to_string(), true);
+
+    // Federations (real route).
+    if let Ok(feds) = dash_get::<Vec<DashFederation>>(state, "/api/federations").await {
+        if !feds.is_empty() {
+            let mut lines = String::new();
+            for fed in feds.iter().take(4) {
+                lines.push_str(&format!(
+                    "{} `{}...` epoch {} · {}/{} thr · {} finalized\n",
+                    if fed.is_local { "\u{2b50}" } else { "\u{2022}" },
+                    &fed.id[..12.min(fed.id.len())],
+                    fed.committee_epoch,
+                    fed.threshold,
+                    fed.member_count,
+                    fed.num_finalized_roots,
+                ));
+            }
+            embed = embed.field("Federations", lines, false);
+        }
+    }
+
+    // Latest finalized checkpoint (real route; absent on a fresh node).
+    if let Ok(cp) = dash_get::<DashCheckpoint>(state, "/checkpoint/latest").await {
+        embed = embed.field(
+            "Latest Checkpoint",
+            format!(
+                "h{} · epoch {} · {}/{} QC · root `{}...`",
+                cp.height,
+                cp.epoch,
+                cp.qc_votes,
+                cp.federation_members,
+                &cp.ledger_state_root[..16.min(cp.ledger_state_root.len())],
+            ),
+            false,
+        );
+    }
+
+    let _ = command
+        .edit_response(
+            &ctx.http,
+            serenity::all::EditInteractionResponse::new().embed(embed),
+        )
+        .await;
+}
+
 pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     let embed = home_embed(command.user.id.get(), state).await;
     let msg = CreateInteractionResponseMessage::new()

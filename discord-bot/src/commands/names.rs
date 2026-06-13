@@ -196,12 +196,23 @@ pub async fn handle_register(ctx: &Context, command: &CommandInteraction, state:
                 )
                 .await;
 
-            embeds::success_embed("Name Registered")
+            let receipt_link = turn_hash.as_ref().map(|hash| {
+                format!(
+                    "[view on explorer]({}/turn/{})",
+                    state.devnet.explorer_base_url(),
+                    hash
+                )
+            });
+            let mut embed = embeds::success_embed("Name Registered")
                 .field("Name", name, true)
                 .field("Owner", short_cell(&owner), true)
                 .field("Registry", short_cell(&registry_cell_hex), true)
                 .field("Expiry Height", expiry_height.to_string(), true)
-                .field("Turn", turn_hash_field(result.turn_hash), false)
+                .field("Turn", turn_hash_field(result.turn_hash), false);
+            if let Some(link) = receipt_link {
+                embed = embed.field("Receipt", link, false);
+            }
+            embed
         }
         Ok(result) => embeds::error_embed(
             "Registration Rejected",
