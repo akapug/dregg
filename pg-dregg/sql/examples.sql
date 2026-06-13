@@ -7,7 +7,7 @@
 --
 -- These statements are illustrative (they assume the tables exist and the
 -- extension is installed); the machine-checked proofs of the same behaviour are
--- the #[pg_test]s in src/lib.rs (run by `cargo pgrx test pg17`) and the
+-- the #[pg_test]s in src/lib.rs (run by `cargo pgrx test pg18`) and the
 -- postgres-independent core tests in src/authz.rs (run by `cargo test`).
 --
 -- TWO QUICKSTARTS walk these end-to-end:

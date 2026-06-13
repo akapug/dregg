@@ -103,12 +103,31 @@ CREATE TABLE dregg.cells (
     delegate       bytea,                     -- Cell.delegate (Option<CellId>)
     lifecycle      text  NOT NULL,            -- CellLifecycle (Active | Sealed | ...)
     last_ordinal   bigint NOT NULL REFERENCES dregg.turns(ordinal),  -- the turn that produced this row
-    cell_root      bytea NOT NULL             -- this cell's commitment (recStateCommit); part of ledger_root
+    cell_root      bytea NOT NULL,            -- this cell's commitment (recStateCommit); part of ledger_root
+    -- GENERATED COLUMNS: pg-maintained canonical projections that cannot drift
+    -- from the canonical bytea. pg18 makes VIRTUAL (read-time, no storage) the
+    -- DEFAULT; we choose per column by whether it must be indexed:
+    --   * cell_hex STORED — it backs the cells_by_canonical index (a VIRTUAL
+    --     column cannot be indexed). Typed with the pg17 builtin C collation
+    --     pg_c_utf8 so its byte order matches the node's canonical
+    --     lexicographic-on-bytes order — no ICU/locale drift. (PG18 §3,§4.)
+    --   * cell_root_hex / balance_field VIRTUAL (the pg18 default, explicit) —
+    --     read-side projections that need no index; pg18 computes them on read,
+    --     identically and drift-free, with zero stored bytes.
+    cell_hex       text COLLATE pg_c_utf8
+                   GENERATED ALWAYS AS (encode(cell_id, 'hex')) STORED,
+    cell_root_hex  text COLLATE pg_c_utf8
+                   GENERATED ALWAYS AS (encode(cell_root, 'hex')) VIRTUAL,
+    balance_field  bigint
+                   GENERATED ALWAYS AS ((fields_json->>'balance')::bigint) VIRTUAL
 );
-CREATE INDEX cells_by_balance  ON dregg.cells (balance);
-CREATE INDEX cells_by_mode     ON dregg.cells (mode);
-CREATE INDEX cells_fields_gin  ON dregg.cells USING gin (fields_json);
-CREATE INDEX cells_perms_gin   ON dregg.cells USING gin (permissions);
+CREATE INDEX cells_by_balance   ON dregg.cells (balance);
+CREATE INDEX cells_by_mode      ON dregg.cells (mode);
+CREATE INDEX cells_fields_gin   ON dregg.cells USING gin (fields_json);
+CREATE INDEX cells_perms_gin    ON dregg.cells USING gin (permissions);
+-- The canonical-order index: byte-order on the hex id under the builtin C
+-- provider, the deterministic order the node's canonical roots use (no drift).
+CREATE INDEX cells_by_canonical ON dregg.cells (cell_hex);
 
 -- Optional: full history (every post-image, not just latest) for time-travel.
 -- This is the cell-by-(id,ordinal) index of the commit log, surfaced as SQL.
@@ -187,21 +206,23 @@ CREATE INDEX memory_by_domain ON dregg.memory (domain);
 -- with the committed map root is the Lean-proved boundary reconciliation.
 
 -- ===========================================================================
--- 5a. THE MIRROR WRITE PATH — a PostgreSQL 17 MERGE upsert (one atomic stmt).
+-- 5a. THE MIRROR WRITE PATH — a PostgreSQL 18 MERGE upsert (one atomic stmt).
 -- ===========================================================================
 -- The kernel writer materializes each touched cell's post-image with a single
--- pg17 MERGE: a first-seen cell INSERTs, a re-touched cell UPDATEs in place, and
--- `merge_action()` (pg17) RETURNS which arm fired so the write is auditable.
+-- pg18 MERGE: a first-seen cell INSERTs, a re-touched cell UPDATEs in place,
+-- `merge_action()` (pg17) RETURNS which arm fired, and pg18's `RETURNING old.*,
+-- new.*` reads the PRE-image balance in the SAME statement — so the function
+-- returns the action AND the exact balance delta ('INSERT +1000000' /
+-- 'UPDATE -500'), an audit signal impossible pre-18 without a separate pre-read.
 -- Shipped as a function (the same one the mirror::ddl emitter generates) so the
--- node invokes it as `SELECT dregg.merge_cell(...)`. (docs/PG-DREGG.md
--- "PostgreSQL 17 leverage"; the Tier-C trigger materializes the same way,
--- schema-tierC.sql §3.)
+-- node invokes it as `SELECT dregg.merge_cell(...)`. (docs/PG-DREGG-PG18.md §7;
+-- the Tier-C trigger materializes the same way, schema-tierC.sql §3.)
 CREATE OR REPLACE FUNCTION dregg.merge_cell(
     p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
     p_fields bytea, p_fields_json jsonb, p_lifecycle text,
     p_last_ordinal bigint, p_cell_root bytea) RETURNS text
 LANGUAGE plpgsql AS $$
-DECLARE v_action text;
+DECLARE v_action text; v_delta bigint;
 BEGIN
     MERGE INTO dregg.cells AS t
     USING (SELECT p_cell_id AS cell_id) AS s
@@ -212,8 +233,11 @@ BEGIN
         (cell_id,mode,balance,nonce,fields,fields_json,lifecycle,last_ordinal,cell_root)
         VALUES (p_cell_id,p_mode,p_balance,p_nonce,p_fields,p_fields_json,
                 p_lifecycle,p_last_ordinal,p_cell_root)
-    RETURNING merge_action() INTO v_action;   -- pg17: 'INSERT' | 'UPDATE'
-    RETURN v_action;
+    -- pg17 merge_action() = 'INSERT'|'UPDATE'; pg18 old.balance is the pre-image
+    -- (NULL on insert) ⇒ new.balance - coalesce(old.balance,0) is the delta.
+    RETURNING merge_action(), new.balance - coalesce(old.balance, 0)
+        INTO v_action, v_delta;
+    RETURN v_action || ' ' || (CASE WHEN v_delta >= 0 THEN '+' ELSE '' END) || v_delta::text;
 END $$;
 
 -- ===========================================================================
@@ -266,6 +290,16 @@ CREATE OR REPLACE VIEW dregg.cell_fields AS
          JSON_TABLE(fields_json, '$'
              COLUMNS (balance bigint PATH '$.balance',
                       nonce    bigint PATH '$.nonce')) AS jt;
+
+-- The canonical ledger view: cells in the deterministic byte-order the node's
+-- canonical roots use, via the pg17 builtin C collation (pg_c_utf8) on the
+-- generated cell_hex column. ORDER BY here matches the kernel's sorted-leaf
+-- ordering exactly (no ICU/locale drift), so a pg-side fold over this view sees
+-- leaves in the same order the ledger root commits them.
+CREATE OR REPLACE VIEW dregg.canonical_cells AS
+    SELECT cell_hex, balance, nonce, lifecycle, cell_root_hex, last_ordinal
+    FROM dregg.cells
+    ORDER BY cell_hex COLLATE pg_c_utf8;
 
 -- ===========================================================================
 -- 6.  READ-SIDE RLS — every state table composes with the M1 cap layer.

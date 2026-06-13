@@ -295,6 +295,37 @@ impl MirrorBatch {
         }
         Ok(())
     }
+
+    /// The touched-cell post-images as the jsonb the Tier-C `dregg.commit_log`
+    /// trigger consumes (`docs/PG-DREGG.md` §10; [`ddl::tier_c`]). Each element
+    /// carries the fields `dregg.apply_verified_turn` reads to materialize the
+    /// cell via `dregg.merge_cell`: `cell_id` / `cell_root` / `fields` as hex,
+    /// `mode` / `lifecycle` as text, `balance` / `nonce` as numbers, and the
+    /// `fields_json` object verbatim. This is the SQL-submission face of the
+    /// SAME post-image the Tier-B mirror writes; both materialize identically, so
+    /// the verified-store path and the mirror path agree by construction.
+    pub fn cells_json(&self) -> String {
+        let cells: Vec<serde_json::Value> = self
+            .cells
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "cell_id": hex(&c.cell_id),
+                    "mode": c.mode,
+                    "balance": c.balance,
+                    "nonce": c.nonce,
+                    "fields": hex(&c.fields),
+                    "fields_json": c
+                        .fields_json
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+                    "lifecycle": c.lifecycle,
+                    "cell_root": hex(&c.cell_root),
+                })
+            })
+            .collect();
+        serde_json::Value::Array(cells).to_string()
+    }
 }
 
 // ============================================================================
@@ -406,11 +437,61 @@ impl RootChain {
                 });
             }
         }
+        // The pure step gate is the single source of truth for the chain
+        // discipline (also lifted into SQL as the Tier-C `dregg_verify_turn`
+        // extension function — see [`verify_chain_step`]). Run it, then advance.
+        verify_chain_step(self.head, self.next_ordinal, batch.turn.prev_root, batch.turn.ordinal)?;
         // Accept: advance.
         self.head = Some(batch.turn.ledger_root);
         self.next_ordinal += 1;
         Ok(())
     }
+}
+
+/// The pure root-chain step gate — the anti-substitution tooth as a standalone
+/// function over scalars, so it can be lifted verbatim into SQL.
+///
+/// This is the load-bearing "pg re-validates, never trusts" check
+/// (`docs/PG-DREGG.md` §10, Tier C): given the current chain `head`
+/// (`None` ⇒ genesis, no turns yet) and the `next_ordinal` the chain expects, a
+/// candidate turn with pre-state `prev_root` and `ordinal` is admitted ONLY if
+///
+///   * its `ordinal` is exactly the next expected one (else a gap or replay), AND
+///   * (non-genesis) its `prev_root` equals the head — the post-state root of
+///     turn *N* IS the pre-state root of turn *N+1*, so the turns table is a hash
+///     chain a light client could itself walk. A substituted / reordered / forged
+///     batch breaks this and is REFUSED.
+///
+/// It decides nothing about the *contents* of the turn — that is the proof
+/// verifier's job (the whole-chain IVC recursion, `circuit::ivc_turn_chain`; a
+/// per-row STARK check is not realizable because a `CommitRecord` carries no
+/// per-turn proof, `docs/PG-DREGG.md` §10.2). What it DOES enforce, on every row,
+/// is that the row claims to chain onto the exact head the database already
+/// holds — the structural half of the spine invariant the read-only mirror can
+/// (and the Tier-C trigger does) enforce on a live database without re-running a
+/// prover. Fail-closed: any deviation is a refusal, and the caller never
+/// advances the head on a refusal.
+///
+/// `RootChain::extend` calls this so the in-process chain and the SQL gate are
+/// provably the same check.
+pub fn verify_chain_step(
+    head: Option<[u8; 32]>,
+    next_ordinal: u64,
+    prev_root: [u8; 32],
+    ordinal: u64,
+) -> Result<(), ChainRefusal> {
+    if ordinal != next_ordinal {
+        return Err(ChainRefusal::OrdinalGap {
+            expected: next_ordinal,
+            got: ordinal,
+        });
+    }
+    if let Some(head) = head {
+        if prev_root != head {
+            return Err(ChainRefusal::RootMismatch { head, prev: prev_root });
+        }
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -457,6 +538,88 @@ pub mod ddl {
     /// [`tier_b`]; mirrored in `sql/schema-tierB.sql` (anti-drift test below).
     pub const VIEWS_SQL: &str = VIEWS;
 
+    /// The Tier C schema (`docs/PG-DREGG.md` §10) — the verified-store gate.
+    /// Makes `dregg.commit_log` the ONE door to state: its `BEFORE INSERT`
+    /// trigger runs the real chain re-validator (`dregg_verify_turn`, the
+    /// extension function backed by [`super::verify_chain_step`]) and, on
+    /// acceptance, records the turn row and materializes the post-image cells via
+    /// the pg18 `dregg.merge_cell` upsert — all in the same transaction. A row
+    /// reaches the state tables ONLY through this trigger; the privilege lockdown
+    /// (Tier B) forbids every other write path.
+    ///
+    /// Builds on [`tier_b`] (the tables must exist first). Idempotent. Mirrors
+    /// `pg-dregg/sql/schema-tierC.sql` (the human-readable, fully-commented form);
+    /// the load-bearing pieces are pinned together by the anti-drift test.
+    ///
+    /// What `dregg_verify_turn` does and does NOT do is documented honestly on
+    /// [`super::verify_chain_step`]: it enforces the structural anti-substitution
+    /// chain on every row (the realizable, per-row half of the spine invariant),
+    /// NOT a per-turn STARK re-proof (a `CommitRecord` carries no per-turn proof;
+    /// proof soundness is the whole-chain IVC light client's job, §10.2). It is
+    /// NOT stubbed to TRUE — the forbidden failure mode (§10.3) — it runs the same
+    /// gate the in-process `RootChain` runs, so a tampered/reordered batch is
+    /// refused by the database engine itself.
+    pub fn tier_c() -> String {
+        let mut s = String::new();
+        s.push_str(COMMIT_LOG);
+        s.push_str(APPLY_VERIFIED_TURN);
+        s.push_str(TIER_C_TRIGGER);
+        s.push_str(TIER_C_VIEWS);
+        s.push_str(TIER_C_GRANTS);
+        s
+    }
+
+    /// The WRITE-path outbox (`docs/PG-DREGG.md` §11; the first-class
+    /// bidirectional piece). A pg-user submits a SIGNED turn FROM postgres by
+    /// enqueuing it here through `dregg.submit_turn`; the node tails the queue,
+    /// executes it through the REAL verified executor, and the resulting
+    /// post-image flows back via the mirror. The spine is preserved: postgres
+    /// NEVER executes — it only enqueues an intent that the verifier must accept.
+    ///
+    /// RLS gates submission: a role may enqueue a turn ONLY for an `agent` cell
+    /// its presented capability admits `submit` on (the `submit_gate` policy),
+    /// so a pg role can submit exactly the turns its caps authorize and no more.
+    /// Reads stay free SQL; writes stay verified-only.
+    ///
+    /// Builds on [`tier_b`] (the role model). Idempotent. The node-side drainer
+    /// (queue → `execute_via_producer` → mirror) is the M3 follow-up
+    /// (`docs/PG-DREGG.md` §11.x); this installs the enqueue half + its gate.
+    pub fn write_outbox() -> String {
+        let mut s = String::new();
+        s.push_str(SUBMIT_QUEUE);
+        s.push_str(SUBMIT_QUEUE_RLS);
+        s
+    }
+
+    /// The pg17 LOGIN EVENT TRIGGER authz binding (`docs/PG-DREGG-PG18.md` §6):
+    /// bind a connecting pg role to its dregg agent identity AT CONNECTION TIME.
+    /// A `dregg.role_identity` table maps `pg_role -> (agent cell, default token)`;
+    /// an `event_trigger ON login` reads the connecting `session_user`'s row and
+    /// `SET`s the `dregg.token` / `dregg.agent` session GUCs from it, so every
+    /// statement in the session is already gated by that role's capability without
+    /// the application having to present the token itself. This is the pg-native
+    /// front door: the database binds identity → capability the moment you connect.
+    ///
+    /// Fail-OPEN-to-DENY: a role with no `role_identity` row gets NO token set, so
+    /// `dregg_admits` reads an absent `dregg.token` ⇒ deny (the RLS gate shows it
+    /// zero rows). Binding a token never widens authority — the token still has to
+    /// verify against the issuer key and survive the caveats/revocation. The login
+    /// trigger only SAVES the application from presenting a token it would have
+    /// presented anyway; it cannot mint authority.
+    ///
+    /// pg17 login event triggers are a server feature; the trigger function is
+    /// SECURITY DEFINER (it reads the mapping table the connecting role may not
+    /// see) and is written defensively so a fault never locks every role out
+    /// (it wraps the body so an error in the hook does not abort the login —
+    /// `docs/PG-DREGG-PG18.md` §6.1, the lockout-avoidance discipline). Requires
+    /// [`tier_b`] (the role model). Idempotent.
+    pub fn login_binding() -> String {
+        let mut s = String::new();
+        s.push_str(ROLE_IDENTITY);
+        s.push_str(LOGIN_HOOK);
+        s
+    }
+
     const TURNS: &str = r#"
 CREATE TABLE IF NOT EXISTS dregg.turns (
     ordinal bigint PRIMARY KEY, height bigint NOT NULL, block_id bytea NOT NULL,
@@ -468,6 +631,19 @@ CREATE INDEX IF NOT EXISTS turns_by_height  ON dregg.turns (height);
 CREATE INDEX IF NOT EXISTS turns_by_creator ON dregg.turns (creator, ordinal);
 "#;
 
+    // The cells table carries GENERATED COLUMNS for the canonical derived state
+    // (docs/PG-DREGG-PG18.md §4) — pg-MAINTAINED projections that cannot drift
+    // from the canonical bytea, since the database derives them from the pinned
+    // expression. pg18 makes VIRTUAL (read-time, zero storage) the DEFAULT kind;
+    // we pick STORED-vs-VIRTUAL per column by whether it must be indexed:
+    //   * `cell_hex` — STORED, because it backs the canonical-order index
+    //     `cells_by_canonical` (a virtual column cannot be indexed). Typed with
+    //     the pg17 builtin C collation `pg_c_utf8` so its byte order matches the
+    //     node's canonical lexicographic-on-bytes order — no ICU drift (§3).
+    //   * `cell_root_hex` / `balance_field` — VIRTUAL (the pg18 default, named
+    //     explicitly): they are read-side projections (the canonical view, the
+    //     analytics face) that need no index, so paying write-time storage for
+    //     them is waste. pg18 computes them on read, identically and drift-free.
     const CELLS: &str = r#"
 CREATE TABLE IF NOT EXISTS dregg.cells (
     cell_id bytea PRIMARY KEY, mode text NOT NULL, balance bigint NOT NULL,
@@ -475,10 +651,21 @@ CREATE TABLE IF NOT EXISTS dregg.cells (
     heap bytea, program bytea, verification_key bytea, permissions jsonb,
     delegate bytea, lifecycle text NOT NULL,
     last_ordinal bigint NOT NULL REFERENCES dregg.turns(ordinal),
-    cell_root bytea NOT NULL);
+    cell_root bytea NOT NULL,
+    -- STORED: indexed by cells_by_canonical (a VIRTUAL column cannot be indexed).
+    cell_hex text COLLATE pg_c_utf8
+        GENERATED ALWAYS AS (encode(cell_id, 'hex')) STORED,
+    -- VIRTUAL (pg18 default, explicit): read-side projections, no index needed.
+    cell_root_hex text COLLATE pg_c_utf8
+        GENERATED ALWAYS AS (encode(cell_root, 'hex')) VIRTUAL,
+    balance_field bigint
+        GENERATED ALWAYS AS ((fields_json->>'balance')::bigint) VIRTUAL);
 CREATE INDEX IF NOT EXISTS cells_by_balance ON dregg.cells (balance);
 CREATE INDEX IF NOT EXISTS cells_by_mode    ON dregg.cells (mode);
 CREATE INDEX IF NOT EXISTS cells_fields_gin ON dregg.cells USING gin (fields_json);
+-- The canonical-order index: byte-order on the hex id under the builtin C
+-- provider, the ordering the node's canonical roots use (no ICU drift).
+CREATE INDEX IF NOT EXISTS cells_by_canonical ON dregg.cells (cell_hex);
 "#;
 
     const CAPS: &str = r#"
@@ -499,22 +686,24 @@ CREATE TABLE IF NOT EXISTS dregg.memory (
 CREATE INDEX IF NOT EXISTS memory_by_domain ON dregg.memory (domain);
 "#;
 
-    // The PostgreSQL 17 MERGE-based cell upsert, shipped as a SECURITY DEFINER
+    // The PostgreSQL 18 MERGE-based cell upsert, shipped as a SECURITY DEFINER
     // function so the kernel writer materializes a post-image in ONE atomic
-    // statement. The MERGE's `merge_action()` (pg17) reports which arm fired and
-    // is returned to the caller as text ('INSERT' | 'UPDATE'), so the write path
-    // is auditable. Wrapping the MERGE in a SQL function (rather than issuing it
-    // as a top-level statement) is also what lets the mirror invoke it through a
-    // plain `SELECT dregg.merge_cell(...)` — the MERGE status is consumed inside
-    // the function; the caller sees a normal SELECT result. (docs/PG-DREGG.md
-    // "PostgreSQL 17 leverage".)
+    // statement. The MERGE's `merge_action()` (pg17) reports which arm fired, and
+    // pg18's `RETURNING old.*, new.*` reads the PRE-image balance in the SAME
+    // statement — so the function returns the action AND the exact balance delta
+    // the materialization caused (`'INSERT +1000000'` / `'UPDATE -500'`), an
+    // audit signal impossible pre-18 without a separate pre-read. Wrapping the
+    // MERGE in a SQL function (rather than issuing it as a top-level statement) is
+    // also what lets the mirror invoke it through a plain `SELECT
+    // dregg.merge_cell(...)` — the MERGE status is consumed inside the function;
+    // the caller sees a normal SELECT result. (docs/PG-DREGG-PG18.md §7.)
     const MERGE_CELL: &str = r#"
 CREATE OR REPLACE FUNCTION dregg.merge_cell(
     p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
     p_fields bytea, p_fields_json jsonb, p_lifecycle text,
     p_last_ordinal bigint, p_cell_root bytea) RETURNS text
 LANGUAGE plpgsql AS $$
-DECLARE v_action text;
+DECLARE v_action text; v_delta bigint;
 BEGIN
     MERGE INTO dregg.cells AS t
     USING (SELECT p_cell_id AS cell_id) AS s
@@ -525,8 +714,12 @@ BEGIN
         (cell_id,mode,balance,nonce,fields,fields_json,lifecycle,last_ordinal,cell_root)
         VALUES (p_cell_id,p_mode,p_balance,p_nonce,p_fields,p_fields_json,
                 p_lifecycle,p_last_ordinal,p_cell_root)
-    RETURNING merge_action() INTO v_action;   -- pg17: 'INSERT' | 'UPDATE'
-    RETURN v_action;
+    -- pg17 merge_action() = 'INSERT' | 'UPDATE'; pg18 old.balance is the
+    -- pre-image (NULL on an insert), so new.balance - coalesce(old.balance,0) is
+    -- the materialized delta — both read in the one atomic statement.
+    RETURNING merge_action(), new.balance - coalesce(old.balance, 0)
+        INTO v_action, v_delta;
+    RETURN v_action || ' ' || (CASE WHEN v_delta >= 0 THEN '+' ELSE '' END) || v_delta::text;
 END $$;
 "#;
 
@@ -537,8 +730,8 @@ END $$;
     // jsonb columns (`capabilities.allowed_effects`, `cells.fields_json`) into a
     // flat relational surface — turning dregg's embedded JSON state into proper
     // rows a developer can JOIN/aggregate without hand-written jsonb operators.
-    // (docs/PG-DREGG.md "PostgreSQL 17 leverage".) JSON_TABLE is a pg17 feature;
-    // the mirror's PRIMARY target is pg17, so these ship by default.
+    // (docs/PG-DREGG-PG18.md §5.) JSON_TABLE is a pg17 feature; the mirror's
+    // PRIMARY target is pg18 (which includes it), so these ship by default.
     const VIEWS: &str = r#"
 CREATE OR REPLACE VIEW dregg.cap_edges AS
     SELECT holder AS src, target AS dst, slot, permissions, expires_at
@@ -564,6 +757,15 @@ CREATE OR REPLACE VIEW dregg.cell_fields AS
          JSON_TABLE(fields_json, '$'
              COLUMNS (balance bigint PATH '$.balance',
                       nonce    bigint PATH '$.nonce')) AS jt;
+-- The canonical ledger view: cells in the deterministic byte-order the node's
+-- canonical roots use, via the pg17 builtin C collation (pg_c_utf8) on the
+-- generated cell_hex column. ORDER BY here matches the kernel's sorted-leaf
+-- ordering exactly (no ICU/locale drift), so a pg-side fold over this view sees
+-- leaves in the same order the ledger root commits them. (docs/PG-DREGG-PG18.md §3.)
+CREATE OR REPLACE VIEW dregg.canonical_cells AS
+    SELECT cell_hex, balance, nonce, lifecycle, cell_root_hex, last_ordinal
+    FROM dregg.cells
+    ORDER BY cell_hex COLLATE pg_c_utf8;
 "#;
 
     const RLS: &str = r#"
@@ -589,8 +791,239 @@ CREATE POLICY memory_read ON dregg.memory FOR SELECT TO dregg_reader
     USING (dregg_admits('read', encode(collection, 'hex')));
 GRANT USAGE ON SCHEMA dregg TO dregg_reader, dregg_kernel;
 GRANT SELECT ON ALL TABLES IN SCHEMA dregg TO dregg_reader;
-GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA dregg TO dregg_kernel;
+-- The kernel is the verified writer; it needs SELECT as well as the mutating
+-- privileges. The pg17 dregg.merge_cell upsert PROBES the target (its
+-- `WHEN MATCHED` arm reads the existing row), and the kernel is the trust
+-- position that materializes + audits post-images (it is BYPASSRLS, so the
+-- read-side RLS never hides a row from it — but BYPASSRLS is not a table
+-- privilege; the SELECT grant is). Without it the MERGE's matched arm and any
+-- kernel-side read (turn_effects, canonical_cells) is "permission denied".
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA dregg TO dregg_kernel;
 REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA dregg FROM PUBLIC;
+"#;
+
+    // ----------------------------------------------------------------------
+    // Tier C (docs/PG-DREGG.md §10) — the verified-store gate. The commit_log
+    // is the ONE door to state; its BEFORE INSERT trigger re-validates the
+    // chain and materializes the post-image. Mirrors sql/schema-tierC.sql.
+    // ----------------------------------------------------------------------
+
+    // The commit_log: the ONLY door to state. A verified-turn post-image is
+    // submitted here (the turn metadata + its touched-cell post-images as a jsonb
+    // array — the realizable payload, since a CommitRecord carries no per-turn
+    // proof; §10.2). The trigger gates it on the chain re-validator and only then
+    // materializes. Apps NEVER write the state tables directly (the Tier-B
+    // privilege lockdown forbids it); the only door is this INSERT, and this
+    // INSERT runs `dregg_verify_turn`.
+    const COMMIT_LOG: &str = r#"
+CREATE TABLE IF NOT EXISTS dregg.commit_log (
+    ordinal      bigint PRIMARY KEY,
+    height       bigint NOT NULL,
+    block_id     bytea  NOT NULL,
+    block_executed_up_to bigint NOT NULL,
+    turn_hash    bytea  NOT NULL,
+    creator      bytea  NOT NULL,
+    receipt_hash bytea  NOT NULL,
+    ledger_root  bytea  NOT NULL,   -- the verified post-state root of this turn
+    prev_root    bytea  NOT NULL,   -- the pre-state root it claims to chain onto
+    cells        jsonb  NOT NULL DEFAULT '[]'::jsonb,  -- touched-cell post-images
+    submitted_at timestamptz NOT NULL DEFAULT now());
+"#;
+
+    // The gate: verify the chain (the real anti-substitution tooth, the SAME
+    // check `mirror::RootChain` runs — `dregg_verify_turn` is the extension
+    // function backed by `verify_chain_step`), then record the turn + materialize
+    // its cells via the pg18 `dregg.merge_cell` upsert, all in one transaction.
+    // SECURITY DEFINER so the trigger writes the locked-down state tables on
+    // behalf of the (least-privileged) submitter, who holds only INSERT on
+    // commit_log. Fail-closed: a refused chain RAISEs and nothing is written.
+    const APPLY_VERIFIED_TURN: &str = r#"
+CREATE OR REPLACE FUNCTION dregg.apply_verified_turn() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE c jsonb;
+BEGIN
+    -- (1) The chain MUST re-validate. dregg_verify_turn reads the current head
+    --     from dregg.turns and runs the real verify_chain_step gate (ordinal is
+    --     next-expected AND prev_root == head). A tampered / reordered / forged
+    --     row is REFUSED here by the database engine, not by trusting the writer.
+    --     (This is the structural half of the spine invariant; per-turn proof
+    --     soundness is the whole-chain IVC light client's job — §10.2. The
+    --     function is NOT stubbed to TRUE — the forbidden failure mode, §10.3.)
+    IF NOT dregg_verify_turn(NEW.prev_root, NEW.ledger_root, NEW.ordinal) THEN
+        RAISE EXCEPTION 'dregg: turn % does not chain onto the head root — refused (anti-substitution)', NEW.ordinal;
+    END IF;
+
+    -- (2) Record the verified turn row.
+    INSERT INTO dregg.turns(ordinal, height, block_id, block_executed_up_to,
+                            turn_hash, creator, receipt_hash, ledger_root, prev_root)
+        VALUES (NEW.ordinal, NEW.height, NEW.block_id, NEW.block_executed_up_to,
+                NEW.turn_hash, NEW.creator, NEW.receipt_hash, NEW.ledger_root, NEW.prev_root);
+
+    -- (3) Materialize the post-image cells, same transaction, via the pg17 MERGE
+    --     upsert (a later turn's post-image overwrites in place).
+    FOR c IN SELECT * FROM jsonb_array_elements(NEW.cells) LOOP
+        PERFORM dregg.merge_cell(
+            decode(c->>'cell_id', 'hex'),
+            c->>'mode',
+            (c->>'balance')::bigint,
+            (c->>'nonce')::bigint,
+            decode(coalesce(c->>'fields',''), 'hex'),
+            (c->'fields_json'),
+            c->>'lifecycle',
+            NEW.ordinal,
+            decode(c->>'cell_root', 'hex'));
+    END LOOP;
+    RETURN NEW;
+END $$;
+"#;
+
+    const TIER_C_TRIGGER: &str = r#"
+DROP TRIGGER IF EXISTS verify_before_apply ON dregg.commit_log;
+CREATE TRIGGER verify_before_apply BEFORE INSERT ON dregg.commit_log
+    FOR EACH ROW EXECUTE FUNCTION dregg.apply_verified_turn();
+"#;
+
+    // A turn's touched-cell post-images, exploded from the commit_log jsonb
+    // payload into first-class rows with pg17 JSON_TABLE: one row per (ordinal,
+    // cell), so a developer queries "what did turn N do?" as plain SQL over the
+    // verified store. This is the realizable per-turn effect surface (a
+    // CommitRecord's touched cells — the payload the gate verified; §10.2). Lives
+    // in Tier C because it reads dregg.commit_log (the verified-store door).
+    // (docs/PG-DREGG-PG18.md §5.)
+    const TIER_C_VIEWS: &str = r#"
+CREATE OR REPLACE VIEW dregg.turn_effects AS
+    SELECT cl.ordinal, jt.cell_id, jt.balance, jt.nonce, jt.lifecycle,
+           jt.cell_root, cl.submitted_at
+    FROM dregg.commit_log cl,
+         JSON_TABLE(cl.cells, '$[*]'
+             COLUMNS (cell_id   text   PATH '$.cell_id',
+                      balance   bigint PATH '$.balance',
+                      nonce     bigint PATH '$.nonce',
+                      lifecycle text   PATH '$.lifecycle',
+                      cell_root text   PATH '$.cell_root')) AS jt;
+"#;
+
+    // The only grant an app needs to change state is INSERT on commit_log — and
+    // even that runs the verifier. The state tables stay closed to it. The kernel
+    // (the verified writer / auditor trust position) gets SELECT on the
+    // verified-store door + the JSON_TABLE turn-effects view it explodes, so it can
+    // audit "what did turn N do?" over the store it materialized. The Tier-B
+    // GRANT-ALL ran before these Tier-C relations existed, so they are granted
+    // explicitly here (a GRANT ON ALL only covers relations that exist at its time).
+    const TIER_C_GRANTS: &str = r#"
+GRANT INSERT, SELECT ON dregg.commit_log TO dregg_kernel;
+GRANT SELECT ON dregg.turn_effects TO dregg_kernel;
+REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
+"#;
+
+    // ----------------------------------------------------------------------
+    // The WRITE-path outbox (docs/PG-DREGG.md §11) — submit a verified turn
+    // FROM postgres. The node drains this queue through the real executor.
+    // ----------------------------------------------------------------------
+
+    // The submit queue: a pg-user enqueues a SIGNED turn (postcard SignedTurn
+    // bytes) for the node to execute. `agent` is the turn's agent cell (carried
+    // out so the RLS gate can check the submitter's capability admits it WITHOUT
+    // decoding the envelope in SQL). `status` walks pending → executed | refused
+    // as the node drains it; `receipt_hash` / `error` carry the outcome back.
+    // pg18 `uuidv7()` mints a TEMPORALLY-SORTABLE id (its leading bits are a
+    // millisecond timestamp), so the queue's primary key already orders by
+    // submission time — the node drains in arrival order by `id` alone, and the
+    // index is append-friendly (no random-uuid page churn). (docs/PG-DREGG-PG18.md §6.)
+    const SUBMIT_QUEUE: &str = r#"
+CREATE TABLE IF NOT EXISTS dregg.submit_queue (
+    id           uuid PRIMARY KEY DEFAULT uuidv7(),
+    agent        bytea NOT NULL,               -- the turn's agent cell (RLS key)
+    signed_turn  bytea NOT NULL,               -- postcard SignedTurn bytes
+    submitter    text  NOT NULL DEFAULT current_user,
+    status       text  NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending','executed','refused')),
+    receipt_hash bytea,                         -- set by the node on success
+    error        text,                          -- set by the node on refusal
+    submitted_at timestamptz NOT NULL DEFAULT now(),
+    resolved_at  timestamptz);
+CREATE INDEX IF NOT EXISTS submit_queue_pending
+    ON dregg.submit_queue (submitted_at) WHERE status = 'pending';
+"#;
+
+    // RLS: a role may ENQUEUE a turn only for an `agent` cell its presented
+    // capability admits `submit` on — so a pg role submits exactly the turns its
+    // caps authorize. A role may READ only its own submissions' outcomes (gated
+    // on the same `submit` admission, so a submitter sees its turn's status). The
+    // node drainer (dregg_kernel, BYPASSRLS) reads pending rows and writes the
+    // outcome. Reads stay free SQL; writes stay verified-only (only the node, via
+    // the real executor, turns a queued intent into state).
+    const SUBMIT_QUEUE_RLS: &str = r#"
+ALTER TABLE dregg.submit_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dregg.submit_queue FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS submit_gate ON dregg.submit_queue;
+CREATE POLICY submit_gate ON dregg.submit_queue FOR INSERT TO dregg_reader
+    WITH CHECK (dregg_admits('submit', encode(agent, 'hex')));
+DROP POLICY IF EXISTS submit_read ON dregg.submit_queue;
+CREATE POLICY submit_read ON dregg.submit_queue FOR SELECT TO dregg_reader
+    USING (dregg_admits('submit', encode(agent, 'hex')));
+GRANT INSERT, SELECT ON dregg.submit_queue TO dregg_reader;
+GRANT SELECT, UPDATE ON dregg.submit_queue TO dregg_kernel;
+REVOKE INSERT, UPDATE, DELETE ON dregg.submit_queue FROM PUBLIC;
+"#;
+
+    // ----------------------------------------------------------------------
+    // The pg17 LOGIN EVENT TRIGGER authz binding (docs/PG-DREGG-PG18.md §6) —
+    // bind a connecting pg role to its dregg agent identity at connection time.
+    // ----------------------------------------------------------------------
+
+    // The role → dregg-identity map. `pg_role` is the connecting database role
+    // (session_user); `agent` is the dregg cell it acts as; `default_token` is the
+    // dga1_… capability token the login hook installs into the dregg.token GUC for
+    // that role (so the role's whole session is gated by that capability). Only a
+    // DBA writes this table (it is the trust binding of pg-role → dregg-cap); it is
+    // NOT app-writable.
+    const ROLE_IDENTITY: &str = r#"
+CREATE TABLE IF NOT EXISTS dregg.role_identity (
+    pg_role       text PRIMARY KEY,        -- the connecting database role (session_user)
+    agent         bytea NOT NULL,          -- the dregg cell this role acts as
+    default_token text,                    -- the dga1_… token the login hook installs
+    bound_at      timestamptz NOT NULL DEFAULT now());
+REVOKE ALL ON dregg.role_identity FROM PUBLIC;
+GRANT SELECT ON dregg.role_identity TO dregg_kernel;
+"#;
+
+    // The login event trigger. On every connection, look up the connecting role's
+    // identity row and, if present, SET the session dregg.token + dregg.agent GUCs
+    // from it — so the session is bound to that role's dregg capability the moment
+    // it connects, with no application-side token presentation. SECURITY DEFINER
+    // (it reads role_identity, which the connecting role cannot). Defensive: the
+    // whole body is wrapped so any fault (a missing table during bootstrap, a
+    // malformed row) is swallowed and the login still proceeds — a buggy hook must
+    // never lock every role out of the database (the documented pg17 login-trigger
+    // hazard; recover via a single-user-mode `ALTER EVENT TRIGGER … DISABLE`).
+    //
+    // SET_CONFIG with is_local=false makes the GUC session-scoped (it persists for
+    // the connection, not just the current transaction), which is what binds the
+    // whole session. The token is set only if the role HAS an identity row with a
+    // non-null token; otherwise nothing is set and the role is deny-by-default.
+    const LOGIN_HOOK: &str = r#"
+CREATE OR REPLACE FUNCTION dregg.on_login() RETURNS event_trigger
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE r record;
+BEGIN
+    BEGIN
+        SELECT agent, default_token INTO r
+        FROM dregg.role_identity WHERE pg_role = session_user;
+        IF FOUND THEN
+            IF r.default_token IS NOT NULL THEN
+                PERFORM set_config('dregg.token', r.default_token, false);
+            END IF;
+            PERFORM set_config('dregg.agent', encode(r.agent, 'hex'), false);
+        END IF;
+    EXCEPTION WHEN OTHERS THEN
+        -- A fault in the hook must NOT abort the login (anti-lockout). The role
+        -- simply connects unbound (deny-by-default), which is fail-closed.
+        RAISE WARNING 'dregg.on_login: identity binding skipped (%):', SQLERRM;
+    END;
+END $$;
+DROP EVENT TRIGGER IF EXISTS dregg_login_bind;
+CREATE EVENT TRIGGER dregg_login_bind ON login EXECUTE FUNCTION dregg.on_login();
 "#;
 }
 
@@ -801,6 +1234,98 @@ mod tests {
     }
 
     #[test]
+    fn verify_chain_step_is_the_chains_gate() {
+        // The pure step gate (lifted into SQL as dregg_verify_turn) decides
+        // exactly what RootChain::extend decides, over scalars.
+        // Genesis (head None): any prev_root at ordinal 0 is accepted.
+        assert!(verify_chain_step(None, 0, root(9), 0).is_ok());
+        // Genesis at the wrong ordinal is a gap.
+        assert!(matches!(
+            verify_chain_step(None, 0, root(9), 1),
+            Err(ChainRefusal::OrdinalGap { expected: 0, got: 1 })
+        ));
+        // Non-genesis: prev_root must equal head.
+        assert!(verify_chain_step(Some(root(1)), 1, root(1), 1).is_ok());
+        assert!(matches!(
+            verify_chain_step(Some(root(1)), 1, root(9), 1),
+            Err(ChainRefusal::RootMismatch { .. })
+        ));
+        // Wrong ordinal even with the right root is a gap.
+        assert!(matches!(
+            verify_chain_step(Some(root(1)), 1, root(1), 2),
+            Err(ChainRefusal::OrdinalGap { expected: 1, got: 2 })
+        ));
+
+        // It agrees with RootChain::extend on the whole synthetic-style chain:
+        // every accepted extend corresponds to an Ok step at the same head.
+        let g = root(0);
+        let mut chain = RootChain::resume(g, 0);
+        for (ord, prev, post) in [(0, g, root(1)), (1, root(1), root(2)), (2, root(2), root(3))] {
+            let head = chain.head();
+            let next = chain.next_ordinal();
+            // The standalone gate and extend must agree.
+            let step = verify_chain_step(head, next, prev, ord);
+            let res = chain.extend(&batch(ord, prev, post));
+            assert_eq!(step.is_ok(), res.is_ok(), "the gate and extend must agree at ord {ord}");
+        }
+    }
+
+    #[test]
+    fn cells_json_has_the_trigger_shape() {
+        // The Tier-C commit_log trigger reads these exact keys from each element.
+        let b = batch(0, root(0), root(1));
+        let v: serde_json::Value = serde_json::from_str(&b.cells_json()).unwrap();
+        let arr = v.as_array().expect("cells_json is an array");
+        assert_eq!(arr.len(), 1);
+        let c = &arr[0];
+        for key in ["cell_id", "mode", "balance", "nonce", "fields", "lifecycle", "cell_root"] {
+            assert!(c.get(key).is_some(), "cells_json element missing `{key}`");
+        }
+        // cell_id / cell_root / fields are hex strings (the trigger `decode`s them).
+        assert_eq!(c["cell_id"].as_str().unwrap().len(), 64);
+        assert_eq!(c["cell_root"].as_str().unwrap().len(), 64);
+        // balance / nonce are numbers (the trigger casts ::bigint).
+        assert!(c["balance"].is_number());
+        assert!(c["nonce"].is_number());
+    }
+
+    #[test]
+    fn write_outbox_ddl_is_emittable_and_rls_gated() {
+        let sql = ddl::write_outbox();
+        // The outbox door + the index the node drains pending rows by.
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS dregg.submit_queue"));
+        assert!(sql.contains("submit_queue_pending"));
+        // RLS gates submission on the dregg cap layer: a role submits only the
+        // turns its capability admits `submit` on (WITH CHECK on INSERT).
+        assert!(sql.contains("FORCE ROW LEVEL SECURITY"));
+        assert!(sql.contains("CREATE POLICY submit_gate"));
+        assert!(sql.contains("WITH CHECK (dregg_admits('submit', encode(agent, 'hex')))"));
+        // The node (dregg_kernel) drains + writes outcomes; PUBLIC gets nothing.
+        assert!(sql.contains("GRANT SELECT, UPDATE ON dregg.submit_queue TO dregg_kernel"));
+        assert!(sql.contains("REVOKE INSERT, UPDATE, DELETE ON dregg.submit_queue FROM PUBLIC"));
+    }
+
+    #[test]
+    fn tier_c_ddl_is_emittable_and_gates_writes() {
+        let sql = ddl::tier_c();
+        // The ONE door: the commit_log table + the BEFORE INSERT gate trigger.
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS dregg.commit_log"));
+        assert!(sql.contains("BEFORE INSERT ON dregg.commit_log"));
+        assert!(sql.contains("dregg.apply_verified_turn"));
+        // The gate calls the REAL chain re-validator (not stubbed to TRUE).
+        assert!(sql.contains("dregg_verify_turn(NEW.prev_root, NEW.ledger_root, NEW.ordinal)"));
+        assert!(sql.contains("RAISE EXCEPTION"));
+        // It materializes via the pg17 MERGE upsert (same as the mirror path).
+        assert!(sql.contains("dregg.merge_cell"));
+        // SECURITY DEFINER so the least-privileged submitter never touches state.
+        assert!(sql.contains("SECURITY DEFINER"));
+        // The kernel writer gets INSERT + SELECT on commit_log (it submits AND
+        // audits the verified-store door); PUBLIC gets nothing.
+        assert!(sql.contains("GRANT INSERT, SELECT ON dregg.commit_log TO dregg_kernel"));
+        assert!(sql.contains("REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC"));
+    }
+
+    #[test]
     fn ddl_is_emittable_and_mentions_the_lockdown() {
         let sql = ddl::tier_b();
         // The spine: apps read, only the kernel writes. The DDL must REVOKE
@@ -820,9 +1345,44 @@ mod tests {
         assert!(sql.contains("CREATE OR REPLACE VIEW dregg.cap_attenuations"));
         assert!(sql.contains("CREATE OR REPLACE VIEW dregg.cell_fields"));
         assert!(sql.contains("JSON_TABLE"));
+        // The pg17 builtin C collation + stored generated columns (canonical state).
+        assert!(sql.contains("pg_c_utf8"), "builtin C collation on the canonical hex column");
+        assert!(sql.contains("GENERATED ALWAYS AS"), "stored generated columns");
+        assert!(sql.contains("cell_hex"));
+        assert!(sql.contains("balance_field"));
+        assert!(sql.contains("CREATE OR REPLACE VIEW dregg.canonical_cells"));
         // The pg17 MERGE-based upsert function is emitted.
         assert!(sql.contains("dregg.merge_cell"));
         assert!(sql.contains("merge_action()"));
+    }
+
+    /// The pg17 login-binding DDL is emittable and shaped: the role→identity map
+    /// + the `ON login` event trigger that binds a connecting role to its dregg
+    /// capability (docs/PG-DREGG-PG18.md §6). Defensive (anti-lockout) and
+    /// SECURITY DEFINER (it reads the mapping the connecting role cannot).
+    #[test]
+    fn login_binding_ddl_is_emittable_and_defensive() {
+        let sql = ddl::login_binding();
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS dregg.role_identity"));
+        assert!(sql.contains("CREATE EVENT TRIGGER dregg_login_bind ON login"));
+        assert!(sql.contains("dregg.on_login"));
+        assert!(sql.contains("SECURITY DEFINER"));
+        // Binds the session token + agent from the role's identity row.
+        assert!(sql.contains("set_config('dregg.token'"));
+        assert!(sql.contains("set_config('dregg.agent'"));
+        // Anti-lockout: the hook swallows faults so a bug never locks logins out.
+        assert!(sql.contains("EXCEPTION WHEN OTHERS THEN"));
+        // The mapping table is not app-writable (it is the trust binding).
+        assert!(sql.contains("REVOKE ALL ON dregg.role_identity FROM PUBLIC"));
+    }
+
+    /// The pg17 turn-effects JSON_TABLE view ships in Tier C (it reads the
+    /// commit_log verified-store door) — a turn's touched cells exploded into rows.
+    #[test]
+    fn tier_c_emits_the_turn_effects_json_table_view() {
+        let sql = ddl::tier_c();
+        assert!(sql.contains("CREATE OR REPLACE VIEW dregg.turn_effects"));
+        assert!(sql.contains("JSON_TABLE(cl.cells, '$[*]'"));
     }
 
     /// ANTI-DRIFT: the committed `sql/schema-tierB.sql` and the Rust DDL emitter
@@ -852,7 +1412,13 @@ mod tests {
             "dregg.receipt_chain",
             "dregg.cap_attenuations",
             "dregg.cell_fields",
+            "dregg.canonical_cells",
             "JSON_TABLE",
+            // pg17 builtin C collation + stored generated columns (canonical state).
+            "pg_c_utf8",
+            "GENERATED ALWAYS AS",
+            "cell_hex",
+            "balance_field",
             "dregg.merge_cell",
             "merge_action()",
             "CREATE POLICY cells_read",

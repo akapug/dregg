@@ -18,14 +18,16 @@
 #   2. EXTENSION (needs cargo-pgrx + a managed postgres) — the thin
 #      `#[pg_extern]` wrappers in `src/lib.rs` are gated behind the `pgrx`
 #      feature; building/running them is a cargo-pgrx job. The PRIMARY target is
-#      PostgreSQL 17 (the current release); pg13–pg16 stay available.
+#      PostgreSQL 18 (the current release); pg13–pg17 stay available.
 #          cargo install cargo-pgrx --version 0.17.0
-#          cargo pgrx init --pg17 $(brew --prefix postgresql@17)/bin/pg_config
-#          cargo pgrx test pg17          # runs the #[pg_test]s against managed pg17
-#          cargo pgrx run  pg17          # opens psql with the extension loaded
-#      `pg17` is the default ABI cargo-pgrx targets here (the `[features]` block
-#      and `pg_dregg.control` name it as primary). pg13–pg16 remain selectable
-#      for older deployments (`cargo pgrx test pg16`, etc.).
+#          cargo pgrx init --pg18 $(brew --prefix postgresql@18)/bin/pg_config
+#          cargo pgrx test pg18          # runs the #[pg_test]s against managed pg18
+#          cargo pgrx run  pg18          # opens psql with the extension loaded
+#      `pg18` is the default ABI cargo-pgrx targets here (the `[features]` block
+#      and `pg_dregg.control` name it as primary). pg13–pg17 remain selectable
+#      for older deployments (`cargo pgrx test pg17`, etc.). The pg18 leverage
+#      (virtual generated columns, RETURNING old/new, uuidv7, OAuth, async I/O)
+#      is surveyed in docs/PG-DREGG-PG18.md.
 [workspace]
 
 [package]
@@ -51,9 +53,9 @@ required-features = ["pgrx"]
 # Default is EMPTY so `cargo test` builds only the postgres-independent core.
 # (A pgNN feature CANNOT be a cargo default: pgrx requires exactly one pg ABI
 # and would force the extension to compile under plain `cargo test`, defeating
-# the postgres-free core path. The PRIMARY ABI is `pg17` — the current
+# the postgres-free core path. The PRIMARY ABI is `pg18` — the current
 # PostgreSQL — selected explicitly on the cargo-pgrx command line and named as
-# primary in `pg_dregg.control`; pg13–pg16 remain available below.)
+# primary in `pg_dregg.control`; pg13–pg17 remain available below.)
 default = []
 # Turning on `pgrx` compiles the #[pg_extern] wrappers; pick a pg ABI alongside.
 pgrx = ["dep:pgrx"]
@@ -62,14 +64,24 @@ pg14 = ["pgrx", "pgrx/pg14", "dep:pgrx-tests", "pgrx-tests/pg14"]
 pg15 = ["pgrx", "pgrx/pg15", "dep:pgrx-tests", "pgrx-tests/pg15"]
 pg16 = ["pgrx", "pgrx/pg16", "dep:pgrx-tests", "pgrx-tests/pg16"]
 pg17 = ["pgrx", "pgrx/pg17", "dep:pgrx-tests", "pgrx-tests/pg17"]
+pg18 = ["pgrx", "pgrx/pg18", "dep:pgrx-tests", "pgrx-tests/pg18"]
 # pg_test enables the #[pg_test]s (cargo-pgrx sets this).
 pg_test = []
-# Tier C (docs/PG-DREGG.md §10) — the VERIFIED STORE. Links the proof verifier
-# (the STARK/PI light-client checker) so `dregg_verify_turn` runs the REAL
-# verifier in the backend (AUTHORIZED, §8.1). Off by default: the Tier A authz
-# build stays circuit-free; the verified-store build opts in. (The verifier
-# crate dep is wired when this tier is implemented; the feature is declared now
-# so the build path is explicit and the mirror core compiles either way.)
+# Tier C (docs/PG-DREGG.md §10) — the VERIFIED STORE.
+#
+# The CHAIN re-validation half ships UNCONDITIONALLY (no feature needed): the
+# `dregg_verify_turn` extern + the `dregg.commit_log` gate are backed by
+# `mirror::verify_chain_step` (pure, circuit-free), so the verified-store gate —
+# a tampered/reordered batch refused by the database engine — is live in the
+# default `pgNN` build. This is the realizable per-row half of the spine
+# invariant (a `CommitRecord` carries no per-turn proof, §10.2).
+#
+# This `tier-c` feature is reserved for the heavyweight PROOF verifier: linking
+# the whole-chain IVC light client (`circuit::ivc_turn_chain`) so a receipt RANGE
+# can be proof-attested (the orthogonal soundness half `dregg_verify_turn` does
+# NOT do per-row). Off by default: the Tier A/B/chain-gate build stays
+# circuit-free; the proof-attesting build opts in. (The verifier crate dep is
+# wired when that range-attestation lands; declared now so the path is explicit.)
 tier-c = []
 # Tier D (docs/PG-DREGG.md §11) — the EXECUTOR-IN-POSTGRES endgame. Links the
 # verified Lean executor so `dregg_submit_turn` executes a turn inside the
