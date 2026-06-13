@@ -7632,6 +7632,9 @@ fn setup_sovereign_cell_for_proof_test() -> (Ledger, CellId, CellId, [u8; 32]) {
 ///
 /// The `new_commitment` and `effects_hash` params are ignored (kept for API compat);
 /// the real new_commitment is determined by the Effect VM trace execution.
+// V1 hand-AIR proof helper: consumed only by the `not(recursion)`-gated v1 sovereign
+// tests; dead under `recursion`. Deleted with the v1 leg at C7.
+#[cfg_attr(feature = "recursion", allow(dead_code))]
 fn generate_valid_sovereign_proof(
     old_commitment: &[u8; 32],
     _new_commitment: &[u8; 32],
@@ -7649,6 +7652,7 @@ fn generate_valid_sovereign_proof(
 /// `TurnExecutor::commitment_4bb_to_bytes` (4 LE u32 felts in bytes 0..15).
 /// The returned `new_commitment` is in the same format, ready to be stored in the
 /// ledger and verified by `TurnExecutor::commitment_to_4bb`.
+#[cfg_attr(feature = "recursion", allow(dead_code))]
 fn generate_valid_sovereign_proof_with_new_commit(
     _old_commitment: &[u8; 32],
 ) -> (Vec<u8>, [u8; 32]) {
@@ -7758,6 +7762,11 @@ fn generate_sovereign_transfer_proof_for_turn(
 // the AIR trace generator puts into PI[OLD_COMMIT_BASE..+4] / PI[NEW_COMMIT_BASE..+4].
 // The former canonical_32_to_felts_4 path is no longer used for state commitments
 // (it hashed the stored bytes, producing values unrelated to compute_commitment_4).
+// V1-only: validates the hand-AIR (`EffectVmAir`) sovereign verify
+// (`verify_and_commit_proof_v1`). Under `recursion` the sovereign path is rotated
+// (`sdk/tests/sovereign_rotated_c1.rs` is the matched-pair validation); this v1 test
+// runs only in the `not(recursion)` config and is deleted with the v1 leg at C7.
+#[cfg(not(feature = "recursion"))]
 #[test]
 fn test_proof_carrying_turn_accepted() {
     let (mut ledger, agent_id, sovereign_id, _old_commitment) =
@@ -7790,6 +7799,8 @@ fn test_proof_carrying_turn_accepted() {
     assert_eq!(*stored, new_commitment);
 }
 
+// V1-only (hand-AIR sovereign verify); see `test_proof_carrying_turn_accepted`.
+#[cfg(not(feature = "recursion"))]
 #[test]
 fn test_proof_carrying_turn_wrong_old_commitment() {
     let (mut ledger, agent_id, sovereign_id, _old_commitment) =
@@ -7839,6 +7850,8 @@ fn test_proof_carrying_turn_wrong_old_commitment() {
     );
 }
 
+// V1-only (hand-AIR sovereign verify); see `test_proof_carrying_turn_accepted`.
+#[cfg(not(feature = "recursion"))]
 #[test]
 fn test_proof_carrying_turn_wrong_effects_hash() {
     let (mut ledger, agent_id, sovereign_id, old_commitment) =
@@ -7993,6 +8006,10 @@ fn hash_tree_effects_test(tree: &crate::forest::CallTree, hasher: &mut blake3::H
 /// sovereign cell with that program's VK hash, then submit a proof-carrying
 /// turn that the executor verifies via the custom program (not the default
 /// SovereignTransitionAir).
+// V1-only (hand-AIR / custom-program sovereign verify); see
+// `test_proof_carrying_turn_accepted`. The rotated path's custom-effect leg is the
+// `ProofBind` IR constraint (`customVmDescriptor2R24`), validated in the circuit.
+#[cfg(not(feature = "recursion"))]
 #[test]
 fn test_custom_program_proof_carrying_turn() {
     use dregg_circuit::field::BabyBear;
@@ -8148,6 +8165,8 @@ fn test_custom_program_proof_carrying_turn() {
 
 /// Test that a cell with a VK hash but no matching program in the registry
 /// is rejected (not silently falling through to the default AIR).
+// V1-only (hand-AIR sovereign verify); see `test_proof_carrying_turn_accepted`.
+#[cfg(not(feature = "recursion"))]
 #[test]
 fn test_custom_program_missing_from_registry_rejected() {
     use dregg_circuit::field::BabyBear;
@@ -8236,6 +8255,8 @@ fn test_custom_program_missing_from_registry_rejected() {
 
 /// Test that a sovereign cell WITHOUT a VK hash still uses the default
 /// EffectVmAir (backward compatibility).
+// V1-only (hand-AIR sovereign verify); see `test_proof_carrying_turn_accepted`.
+#[cfg(not(feature = "recursion"))]
 #[test]
 fn test_default_air_still_works_without_vk_hash() {
     // Same as test_proof_carrying_turn_accepted but with the program_registry set.

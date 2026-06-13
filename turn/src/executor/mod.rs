@@ -53,7 +53,6 @@ use dregg_cell::{
 };
 use dregg_types::AttestedRoot;
 use ed25519_dalek::{Signature, VerifyingKey};
-use serde::Deserialize;
 
 use crate::action::{Action, Authorization, DelegationMode, Effect, Event};
 use crate::budget_gate::BudgetGate;
