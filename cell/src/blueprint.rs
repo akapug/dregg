@@ -1515,6 +1515,44 @@ mod tests {
         let mut app_write = open.clone();
         app_write.fields[CH_APP_SLOT_A as usize] = field_from_u64(7);
         assert!(eval_ctx(&p, &app_write, Some(&open), &ctx_sender(STRANGER, 0)).is_ok());
+
+        // ── Heap proof-of-life: a HEAP-keyed constraint coexists with the
+        // channel's slot constraints in ONE program (the rotation's
+        // app-state lane; Lean twin `mixedHeapProgram`,
+        // metatheory/Dregg2/Exec/Program.lean). The channel's app state —
+        // here a message sequence counter — lives at heap key 64
+        // (>= STATE_SLOTS, committed in fields_map), governed by a
+        // heap-keyed Monotonic alongside the slot teeth.
+        let mut constraints = channel_state_constraints(&t).unwrap();
+        constraints.push(StateConstraint::HeapField {
+            key: 64,
+            atom: crate::program::HeapAtom::Monotonic,
+        });
+        let p2 = CellProgram::Predicate(constraints);
+        let mut open_h = open.clone();
+        assert!(open_h.set_field_ext(64, field_from_u64(5)));
+        // Heap counter advances, control plane untouched: admitted for anyone.
+        let mut seq_up = open_h.clone();
+        assert!(seq_up.set_field_ext(64, field_from_u64(6)));
+        assert!(eval_ctx(&p2, &seq_up, Some(&open_h), &ctx_sender(STRANGER, 0)).is_ok());
+        // Heap counter REWINDS: the heap tooth bites (slots all clean).
+        let mut seq_down = open_h.clone();
+        assert!(seq_down.set_field_ext(64, field_from_u64(4)));
+        assert!(
+            eval_ctx(&p2, &seq_down, Some(&open_h), &ctx_sender(STRANGER, 0)).is_err(),
+            "heap-keyed Monotonic must refuse a rewind of heap[64]"
+        );
+        // The SLOT teeth still bite under p2: a stranger forcing membership
+        // (heap untouched) is refused exactly as under p.
+        let mut joined_h = open_h.clone();
+        joined_h.fields[CH_MEMBER_ROOT_SLOT as usize] = channel_member_root(&ch_member_set(4));
+        joined_h.fields[CH_EPOCH_SLOT as usize] = field_from_u64(2);
+        joined_h.fields[CH_KEY_COMMIT_SLOT as usize] = channel_key_commitment(2, &[0x44; 32]);
+        assert!(
+            eval_ctx(&p2, &joined_h, Some(&open_h), &ctx_sender(STRANGER, 0)).is_err(),
+            "slot governance must keep biting with the heap atom installed"
+        );
+        assert!(eval_ctx(&p2, &joined_h, Some(&open_h), &ctx_sender(ADMIN, 0)).is_ok());
     }
 
     #[test]

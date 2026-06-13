@@ -31,7 +31,16 @@ Last sweep: 2026-06-12 (the Grand Convergence session).
   indices (the executor already admits heap fields, b133354fc; the "registers are the L1,
   heap is where apps live" argument is VACUOUS until programs can constrain heap fields).
   Lean Exec.Program + cell/program.rs lockstep + the DSL surface. = the language-uplift R3
-  named-fields work, now critical path. LANE RUNNING.
+  named-fields work, now critical path. LANDED 2026-06-12 (this lane): Lean
+  `HeapAtom`/`HeapAtom.lift`/`evalHeap` + absence-as-theorems (Exec/Program.lean, welded to
+  `FieldsMap.userKey`); Rust `HeapField { key, atom }` in BOTH constraint enums +
+  `evaluate_heap_atom`; executor-enforced (turn test
+  `test_program_heap_field_constraint_enforced`, coverage-gate arm true); blueprint
+  proof-of-life (channel + heap counter in one program). REMAINS (this lane's tail):
+  (a) the DSL surface atom (dregg-dsl has no heap-keyed syntax yet — programs construct
+  `StateConstraint::HeapField` directly); (b) multi-key heap atoms (prefixOf/affine/
+  sumEquals over heap keys — only single-key atoms lifted); (c) heap-keyed caveat operand =
+  the SlotCaveatEntry u8 wire item already tracked below.
 - HEAP-KEYED CAVEATS (rotation-URGENT — wire shape): SlotCaveatEntry is slot_index:u8
   (trace.rs:178), so capability attenuation cannot scope to heap fields; if apps live in
   the heap, the caveat operand must become domain×key. The entry is a PI/trace shape ⇒

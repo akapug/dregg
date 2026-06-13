@@ -145,7 +145,9 @@ pub use predicate::{
     WitnessProducerRegistry, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
     WitnessedPredicateRegistry, WitnessedPredicateVerifier, canonical_predicate_vk,
 };
-pub use program::{CellProgram, ProgramError, StateConstraint, field_from_u64, field_from_u64_be};
+pub use program::{
+    CellProgram, HeapAtom, ProgramError, StateConstraint, field_from_u64, field_from_u64_be,
+};
 pub use revocation_channel::{
     ChannelId, RevocationChannel, RevocationChannelError, RevocationChannelSet,
 };

@@ -350,7 +350,11 @@ pub fn project_slot_caveat_manifest(
             | dregg_cell::StateConstraint::SenderIs { .. }
             | dregg_cell::StateConstraint::SenderInSlot { .. }
             | dregg_cell::StateConstraint::BalanceGte { .. }
-            | dregg_cell::StateConstraint::BalanceLte { .. } => None,
+            | dregg_cell::StateConstraint::BalanceLte { .. }
+            // Heap-keyed atoms bind a fields_map key, not a u8 register
+            // slot — executor-enforced by the scalar evaluator
+            // (`evaluate_heap_atom`); no SlotCaveat AIR projection.
+            | dregg_cell::StateConstraint::HeapField { .. } => None,
         };
         if let Some(e) = entry {
             entries[count] = e;

@@ -201,6 +201,13 @@ fn state_constraint_executor_coverage(c: &StateConstraint) -> bool {
         // is an executor refusal, counters/state unmoved).
         StateConstraint::KeyRotationGate { .. } => true,
 
+        // Heap-keyed atoms (the rotation's app-state lane): enforced
+        // through the executor commit path by
+        // turn::tests::test_program_heap_field_constraint_enforced (a
+        // heap-keyed Monotonic gates a real submitted SetField turn —
+        // refuse + accept, heap state checked on both sides).
+        StateConstraint::HeapField { .. } => true,
+
         // Not yet enforced/confirmed through the executor (#142 work-list):
         StateConstraint::FieldGteHeight { .. } => false, // not attempted (height-relative)
         StateConstraint::FieldLteHeight { .. } => false, // not attempted (height-relative)

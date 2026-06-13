@@ -430,6 +430,79 @@ pub struct CustomDescriptor {
     pub authoring_package: String,
 }
 
+/// The index-free heap-atom vocabulary, lifted over a heap key by
+/// [`SimpleStateConstraint::HeapField`] / [`StateConstraint::HeapField`].
+///
+/// THE ROTATION's app-state lane: "registers are the L1; apps live in the
+/// heap". The executor already admits heap writes (`SetField` with index
+/// `>= STATE_SLOTS` routes into [`CellState::fields_map`], commit
+/// `b133354fc`); these atoms let a cell program CONSTRAIN those heap
+/// fields. One lifting variant + this small atom enum instead of ~20 heap
+/// twins of the slot vocabulary.
+///
+/// **Lean twin (the semantics — law #1):** `Dregg2.Exec.HeapAtom` +
+/// `HeapAtom.lift` + `evalHeap` (`metatheory/Dregg2/Exec/Program.lean`,
+/// the "Heap-keyed constraint atoms" section). There the record substrate
+/// is already name-keyed and `Option`-valued, so the lift is pure
+/// instantiation at the canonical heap field name `heapKey k`
+/// (= `FieldsMap.userKey`, welded by `userKey_eq_heapKey`), and every
+/// existing admit-characterization transports verbatim
+/// (`evalHeap_*_iff`). Here the heap is the `Option`-valued
+/// [`CellState::get_field_ext`] read, mirroring `Value.scalar` exactly.
+///
+/// **Absence semantics (each clause is a THEOREM in the Lean twin, not a
+/// comment):** the heap is partial where slots are total —
+///
+/// * post-state atoms (`Equals`/`Gte`/`Lte`/`MemberOf`/`InRangeTwoSided`)
+///   FAIL CLOSED on an absent post-state key (`evalHeap_*_absent_refuses`);
+///   on the heap, absent ≠ present-zero (`Equals{value: 0}` REFUSES an
+///   absent key, unlike an all-zero slot);
+/// * relational atoms (`Monotonic`/`StrictMonotonic`/`DeltaBounded`) FAIL
+///   CLOSED on an absent key on EITHER side — there is deliberately NO
+///   `(old_state = None, nonce = 0)` init escape on the heap (the slot
+///   twins' carve-out does not apply; the Lean record substrate's empty
+///   record IS the missing old state);
+/// * `Immutable` admits the FIRST write (absent-old,
+///   `evalHeap_immutable_absent_old_admits`), then pins the key — flips
+///   AND erasure refused (`evalHeap_immutable_pinned` /
+///   `_erase_refused`);
+/// * `WriteOnce` admits on absent-old or zero-old, then freezes
+///   (`evalHeap_writeOnce_absent_admits` / `_zero_admits` / `_frozen`).
+///
+/// Deliberately NOT recursive: negation/disjunction come from lifting
+/// into the existing Heyting fragment —
+/// `SimpleStateConstraint::Not(Box::new(HeapField { .. }))`,
+/// `AnyOf[HeapField { .. }, SenderIs { .. }]` (the per-HEAP-field actor
+/// binding, `heapActorBound_flip_requires_sender` in the Lean twin).
+///
+/// Numeric lanes mirror the slot twins (`StrictMonotonic` precedent
+/// `0c57aac80`): `Equals`/`Gte`/`Lte` compare full [`FieldElement`]s
+/// big-endian; `MemberOf`/`InRangeTwoSided`/`DeltaBounded` read the u64
+/// lane, exactly like their slot counterparts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HeapAtom {
+    /// `new[heap key] == value` (absent ⇒ refuse, even for `value == 0`).
+    Equals { value: FieldElement },
+    /// `new[heap key] >= value` (big-endian; absent ⇒ refuse).
+    Gte { value: FieldElement },
+    /// `new[heap key] <= value` (big-endian; absent ⇒ refuse).
+    Lte { value: FieldElement },
+    /// First write free (absent-old admits), then pinned; erasure refused.
+    Immutable,
+    /// Absent-old or zero-old admits anything; a nonzero old freezes the key.
+    WriteOnce,
+    /// `old[heap key] <= new[heap key]`, BOTH present (no heap init escape).
+    Monotonic,
+    /// `old[heap key] < new[heap key]`, both present.
+    StrictMonotonic,
+    /// `new[heap key] ∈ set` (u64 lane; absent ⇒ refuse).
+    MemberOf { set: Vec<u64> },
+    /// `lo <= new[heap key] <= hi` (u64 lane; absent ⇒ refuse).
+    InRangeTwoSided { lo: u64, hi: u64 },
+    /// `|new[heap key] - old[heap key]| <= d` (u64 lane; both present).
+    DeltaBounded { d: u64 },
+}
+
 /// Simple (non-recursive) constraint set permitted inside `AnyOf`.
 ///
 /// Per `SLOT-CAVEATS-EVALUATION.md` §4.3 we bound `AnyOf` to a single
@@ -583,6 +656,15 @@ pub enum SimpleStateConstraint {
         commitment_index: u8,
         hash_kind: HashKind,
     },
+    /// **Heap-keyed atom (THE ROTATION's app-state lane):** the lift of
+    /// [`HeapAtom`] over heap key `key` (a felt key into
+    /// [`CellState::fields_map`]; keys `< STATE_SLOTS` resolve to the
+    /// fixed registers under the same encoding). Lives in
+    /// `SimpleStateConstraint` so heap constraints compose under
+    /// `AnyOf`/`Not` exactly like the Lean lift lands in
+    /// `SimpleConstraint`. See [`HeapAtom`] for the full semantics +
+    /// Lean theorem names. APPEND-ONLY (postcard variant indices).
+    HeapField { key: u64, atom: HeapAtom },
 }
 
 impl SimpleStateConstraint {
@@ -1033,6 +1115,18 @@ pub enum StateConstraint {
         /// Hash binding the digest register to its preimage.
         hash_kind: HashKind,
     },
+
+    /// **Heap-keyed atom (THE ROTATION's app-state lane)** — the
+    /// top-level lift of [`HeapAtom`] over heap key `key`, the twin of
+    /// [`SimpleStateConstraint::HeapField`] (both surfaces share ONE
+    /// evaluator arm, like the `SenderIs`/`BalanceGte` precedent).
+    /// Constrains the unbounded [`CellState::fields_map`] state the
+    /// executor admits via `SetField index >= STATE_SLOTS`
+    /// (commit `b133354fc`). Reads are `Option`-valued
+    /// ([`CellState::get_field_ext`]) and every absence case is
+    /// fail-closed-coherent per the Lean theorems on [`HeapAtom`]'s
+    /// docstring. APPEND-ONLY (postcard variant indices).
+    HeapField { key: u64, atom: HeapAtom },
 }
 
 /// Error from evaluating a cell program.
@@ -2640,6 +2734,160 @@ fn evaluate_constraint_full(
             }
             Ok(())
         }
+
+        // ─── Heap-keyed atom (THE ROTATION's app-state lane) ───
+        StateConstraint::HeapField { key, atom } => {
+            evaluate_heap_atom(constraint, *key, atom, new_state, old_state)
+        }
+    }
+}
+
+/// Evaluate a [`HeapAtom`] lifted over heap `key` against the
+/// `Option`-valued heap reads of `(old, new)`.
+///
+/// **Lean twin (the semantics):** `Dregg2.Exec.evalHeap` =
+/// `evalSimple (HeapAtom.lift k a)` (`metatheory/Dregg2/Exec/Program.lean`);
+/// the per-arm behavior below implements exactly the `evalHeap_*_iff`
+/// characterizations and the `evalHeap_*_absent_*` /
+/// `evalHeap_immutable_pinned` / `evalHeap_writeOnce_frozen` absence
+/// theorems. A missing `old_state` is the Lean EMPTY RECORD: every old
+/// key reads `None`. There is deliberately NO `(old_state = None,
+/// nonce = 0)` init escape and NO `TransitionCheckRequiresOldState`
+/// sentinel here — heap absence has total, fail-closed-coherent
+/// semantics of its own (first-write-free where the theorem says so,
+/// refuse everywhere else).
+///
+/// Reads go through [`CellState::get_field_ext`]: keys `< STATE_SLOTS`
+/// resolve to the fixed registers (always present when a state exists),
+/// keys `>= STATE_SLOTS` to the committed `fields_map` heap.
+fn evaluate_heap_atom(
+    constraint: &StateConstraint,
+    key: u64,
+    atom: &HeapAtom,
+    new_state: &CellState,
+    old_state: Option<&CellState>,
+) -> Result<(), ProgramError> {
+    let old_v: Option<FieldElement> = old_state.and_then(|s| s.get_field_ext(key));
+    let new_v: Option<FieldElement> = new_state.get_field_ext(key);
+    match atom {
+        // ── post-state atoms: fail closed on an absent post-state key ──
+        HeapAtom::Equals { value } => match new_v {
+            Some(x) if x == *value => Ok(()),
+            Some(_) => violated(constraint, format!("heap[{key}] != expected value")),
+            // Absent ≠ present-zero on the heap (evalHeap_equals_absent_refuses).
+            None => violated(constraint, format!("heap[{key}] absent post-state (Equals)")),
+        },
+        HeapAtom::Gte { value } => match new_v {
+            Some(ref x) if field_gte(x, value) => Ok(()),
+            Some(_) => violated(constraint, format!("heap[{key}] < minimum value")),
+            None => violated(constraint, format!("heap[{key}] absent post-state (Gte)")),
+        },
+        HeapAtom::Lte { value } => match new_v {
+            Some(ref x) if field_lte(x, value) => Ok(()),
+            Some(_) => violated(constraint, format!("heap[{key}] > maximum value")),
+            None => violated(constraint, format!("heap[{key}] absent post-state (Lte)")),
+        },
+        HeapAtom::MemberOf { set } => match new_v {
+            Some(ref x) if set.contains(&field_to_u64(x)) => Ok(()),
+            Some(ref x) => violated(
+                constraint,
+                format!("heap[{key}] = {} not in allowlist", field_to_u64(x)),
+            ),
+            None => violated(constraint, format!("heap[{key}] absent post-state (MemberOf)")),
+        },
+        HeapAtom::InRangeTwoSided { lo, hi } => match new_v {
+            Some(ref x) => {
+                let v = field_to_u64(x);
+                if v >= *lo && v <= *hi {
+                    Ok(())
+                } else {
+                    violated(constraint, format!("heap[{key}] = {v} outside [{lo}, {hi}]"))
+                }
+            }
+            None => violated(
+                constraint,
+                format!("heap[{key}] absent post-state (InRangeTwoSided)"),
+            ),
+        },
+
+        // ── immutable: first write free, then pinned (erasure refused) ──
+        HeapAtom::Immutable => match old_v {
+            // evalHeap_immutable_absent_old_admits: the first write is free.
+            None => Ok(()),
+            // evalHeap_immutable_pinned: admission ⇔ post-state holds the
+            // SAME value — a flip OR an erasure (new absent) refuses
+            // (evalHeap_immutable_erase_refused).
+            Some(a) => {
+                if new_v == Some(a) {
+                    Ok(())
+                } else {
+                    violated(
+                        constraint,
+                        format!("heap[{key}] is pinned (Immutable) and was mutated or erased"),
+                    )
+                }
+            }
+        },
+
+        // ── writeOnce: absent/zero-old free, nonzero freezes ──
+        HeapAtom::WriteOnce => match old_v {
+            // evalHeap_writeOnce_absent_admits / _zero_admits.
+            None => Ok(()),
+            Some(a) if a == FIELD_ZERO => Ok(()),
+            // evalHeap_writeOnce_frozen: admission ⇔ unchanged.
+            Some(a) => {
+                if new_v == Some(a) {
+                    Ok(())
+                } else {
+                    violated(
+                        constraint,
+                        format!("heap[{key}] is write-once and was already set"),
+                    )
+                }
+            }
+        },
+
+        // ── relational atoms: BOTH sides must be present (no init escape) ──
+        HeapAtom::Monotonic => match (old_v, new_v) {
+            (Some(ref a), Some(ref b)) if field_gte(b, a) => Ok(()),
+            (Some(_), Some(_)) => violated(
+                constraint,
+                format!("heap[{key}] decreased; Monotonic requires new >= old"),
+            ),
+            // evalHeap_monotonic_absent_old/new_refuses.
+            _ => violated(
+                constraint,
+                format!("heap[{key}] absent pre- or post-state (Monotonic fails closed)"),
+            ),
+        },
+        HeapAtom::StrictMonotonic => match (old_v, new_v) {
+            (Some(ref a), Some(ref b)) if field_gt(b, a) => Ok(()),
+            (Some(_), Some(_)) => violated(
+                constraint,
+                format!("heap[{key}] did not strictly increase (StrictMonotonic)"),
+            ),
+            _ => violated(
+                constraint,
+                format!("heap[{key}] absent pre- or post-state (StrictMonotonic fails closed)"),
+            ),
+        },
+        HeapAtom::DeltaBounded { d } => match (old_v, new_v) {
+            (Some(ref a), Some(ref b)) => {
+                let delta = field_delta_i128(a, b);
+                if delta.unsigned_abs() > (*d as u128) {
+                    violated(
+                        constraint,
+                        format!("|heap[{key}] delta| = {} > {d}", delta.unsigned_abs()),
+                    )
+                } else {
+                    Ok(())
+                }
+            }
+            _ => violated(
+                constraint,
+                format!("heap[{key}] absent pre- or post-state (DeltaBounded fails closed)"),
+            ),
+        },
     }
 }
 
@@ -2735,6 +2983,10 @@ fn lift_simple(s: &SimpleStateConstraint) -> StateConstraint {
         } => StateConstraint::PreimageGate {
             commitment_index: *commitment_index,
             hash_kind: *hash_kind,
+        },
+        SimpleStateConstraint::HeapField { key, atom } => StateConstraint::HeapField {
+            key: *key,
+            atom: atom.clone(),
         },
     }
 }
@@ -3176,6 +3428,52 @@ pub enum StateConstraintView {
         cooling_period: u64,
         hash_kind: String,
     },
+    /// Heap-keyed atom lifted over heap key `key` (the rotation's
+    /// app-state lane; `key >= STATE_SLOTS` lives in `fields_map`).
+    HeapField { key: u64, atom: HeapAtomView },
+}
+
+/// [`HeapAtom`] view, nested inside [`StateConstraintView::HeapField`].
+/// 32-byte values are 64-hex strings; u64-lane scalars are JSON numbers.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind")]
+pub enum HeapAtomView {
+    Equals { value: String },
+    Gte { value: String },
+    Lte { value: String },
+    Immutable,
+    WriteOnce,
+    Monotonic,
+    StrictMonotonic,
+    MemberOf { set: Vec<u64> },
+    InRangeTwoSided { lo: u64, hi: u64 },
+    DeltaBounded { d: u64 },
+}
+
+impl HeapAtom {
+    /// Project this heap atom to its serving view. TOTAL: no wildcard arm.
+    pub fn to_view(&self) -> HeapAtomView {
+        match self {
+            HeapAtom::Equals { value } => HeapAtomView::Equals {
+                value: view_hex(value),
+            },
+            HeapAtom::Gte { value } => HeapAtomView::Gte {
+                value: view_hex(value),
+            },
+            HeapAtom::Lte { value } => HeapAtomView::Lte {
+                value: view_hex(value),
+            },
+            HeapAtom::Immutable => HeapAtomView::Immutable,
+            HeapAtom::WriteOnce => HeapAtomView::WriteOnce,
+            HeapAtom::Monotonic => HeapAtomView::Monotonic,
+            HeapAtom::StrictMonotonic => HeapAtomView::StrictMonotonic,
+            HeapAtom::MemberOf { set } => HeapAtomView::MemberOf { set: set.clone() },
+            HeapAtom::InRangeTwoSided { lo, hi } => {
+                HeapAtomView::InRangeTwoSided { lo: *lo, hi: *hi }
+            }
+            HeapAtom::DeltaBounded { d } => HeapAtomView::DeltaBounded { d: *d },
+        }
+    }
 }
 
 impl CellProgram {
@@ -3555,6 +3853,10 @@ impl StateConstraint {
                     HashKind::Blake3 => "Blake3".to_string(),
                 },
             },
+            StateConstraint::HeapField { key, atom } => StateConstraintView::HeapField {
+                key: *key,
+                atom: atom.to_view(),
+            },
         }
     }
 }
@@ -3640,6 +3942,10 @@ impl SimpleStateConstraint {
                     HashKind::Poseidon2 => "Poseidon2".to_string(),
                     HashKind::Blake3 => "Blake3".to_string(),
                 },
+            },
+            SimpleStateConstraint::HeapField { key, atom } => StateConstraintView::HeapField {
+                key: *key,
+                atom: atom.to_view(),
             },
         }
     }
@@ -3785,6 +4091,247 @@ mod tests {
             err,
             ProgramError::TransitionCheckRequiresOldState { .. }
         ));
+    }
+
+    // ── Heap-keyed atoms (HeapField — THE ROTATION's app-state lane) ─────
+    //
+    // Per lifted atom: ADMIT + REFUSE + ABSENCE, mirroring the Lean
+    // theorems in metatheory/Dregg2/Exec/Program.lean (evalHeap_*_iff,
+    // evalHeap_*_absent_*, _pinned, _frozen). The heap key sits well above
+    // STATE_SLOTS so every read goes through fields_map.
+
+    const HK: u64 = 99;
+
+    fn heap_prog(atom: HeapAtom) -> CellProgram {
+        CellProgram::Predicate(vec![StateConstraint::HeapField { key: HK, atom }])
+    }
+
+    fn heap_state(v: Option<u64>) -> CellState {
+        let mut s = CellState::new(0);
+        if let Some(v) = v {
+            assert!(s.set_field_ext(HK, field_from_u64(v)));
+        }
+        s
+    }
+
+    fn heap_eval(
+        p: &CellProgram,
+        new: &CellState,
+        old: Option<&CellState>,
+    ) -> Result<(), ProgramError> {
+        p.evaluate_full(
+            new,
+            old,
+            None,
+            &TransitionMeta::wildcard(),
+            &WitnessBundle::empty(),
+        )
+    }
+
+    #[test]
+    fn heap_equals_admit_refuse_absent() {
+        let p = heap_prog(HeapAtom::Equals {
+            value: field_from_u64(5),
+        });
+        assert!(heap_eval(&p, &heap_state(Some(5)), Some(&heap_state(None))).is_ok());
+        assert!(heap_eval(&p, &heap_state(Some(6)), Some(&heap_state(None))).is_err());
+        // Absent post-state refuses (evalHeap_equals_absent_refuses).
+        assert!(heap_eval(&p, &heap_state(None), Some(&heap_state(None))).is_err());
+        // Absent ≠ present-zero on the heap: Equals{0} still refuses absence.
+        let p0 = heap_prog(HeapAtom::Equals { value: FIELD_ZERO });
+        assert!(heap_eval(&p0, &heap_state(None), Some(&heap_state(None))).is_err());
+        assert!(heap_eval(&p0, &heap_state(Some(0)), Some(&heap_state(None))).is_ok());
+    }
+
+    #[test]
+    fn heap_gte_lte_admit_refuse_absent() {
+        let ge = heap_prog(HeapAtom::Gte {
+            value: field_from_u64(10),
+        });
+        assert!(heap_eval(&ge, &heap_state(Some(10)), None).is_ok());
+        assert!(heap_eval(&ge, &heap_state(Some(9)), None).is_err());
+        assert!(heap_eval(&ge, &heap_state(None), None).is_err());
+        let le = heap_prog(HeapAtom::Lte {
+            value: field_from_u64(10),
+        });
+        assert!(heap_eval(&le, &heap_state(Some(10)), None).is_ok());
+        assert!(heap_eval(&le, &heap_state(Some(11)), None).is_err());
+        assert!(heap_eval(&le, &heap_state(None), None).is_err());
+    }
+
+    #[test]
+    fn heap_immutable_first_write_pin_erase() {
+        let p = heap_prog(HeapAtom::Immutable);
+        // Absent-old: the FIRST write is free (evalHeap_immutable_absent_old_admits)
+        // — including via a missing old_state (the Lean empty record).
+        assert!(heap_eval(&p, &heap_state(Some(7)), Some(&heap_state(None))).is_ok());
+        assert!(heap_eval(&p, &heap_state(Some(7)), None).is_ok());
+        // Present-old PINS (evalHeap_immutable_pinned): unchanged admits…
+        assert!(heap_eval(&p, &heap_state(Some(7)), Some(&heap_state(Some(7)))).is_ok());
+        // …a flip refuses…
+        assert!(heap_eval(&p, &heap_state(Some(8)), Some(&heap_state(Some(7)))).is_err());
+        // …and ERASURE refuses (evalHeap_immutable_erase_refused).
+        assert!(heap_eval(&p, &heap_state(None), Some(&heap_state(Some(7)))).is_err());
+    }
+
+    #[test]
+    fn heap_write_once_then_frozen() {
+        let p = heap_prog(HeapAtom::WriteOnce);
+        // Absent-old and zero-old admit (evalHeap_writeOnce_absent/zero_admits).
+        assert!(heap_eval(&p, &heap_state(Some(9)), Some(&heap_state(None))).is_ok());
+        assert!(heap_eval(&p, &heap_state(Some(9)), Some(&heap_state(Some(0)))).is_ok());
+        // A written (nonzero) key freezes (evalHeap_writeOnce_frozen):
+        assert!(heap_eval(&p, &heap_state(Some(9)), Some(&heap_state(Some(9)))).is_ok());
+        assert!(heap_eval(&p, &heap_state(Some(1)), Some(&heap_state(Some(9)))).is_err());
+        assert!(heap_eval(&p, &heap_state(None), Some(&heap_state(Some(9)))).is_err());
+    }
+
+    #[test]
+    fn heap_monotonic_no_init_escape() {
+        let p = heap_prog(HeapAtom::Monotonic);
+        assert!(heap_eval(&p, &heap_state(Some(2)), Some(&heap_state(Some(1)))).is_ok());
+        assert!(heap_eval(&p, &heap_state(Some(2)), Some(&heap_state(Some(2)))).is_ok());
+        assert!(heap_eval(&p, &heap_state(Some(1)), Some(&heap_state(Some(2)))).is_err());
+        // ABSENT-old refuses — deliberately NO init escape on the heap
+        // (evalHeap_monotonic_absent_old_refuses), including a missing
+        // old_state entirely (≠ the slot Monotonic nonce-0 carve-out).
+        assert!(heap_eval(&p, &heap_state(Some(2)), Some(&heap_state(None))).is_err());
+        assert!(heap_eval(&p, &heap_state(Some(2)), None).is_err());
+        // Absent-new refuses (a monotone key cannot be erased).
+        assert!(heap_eval(&p, &heap_state(None), Some(&heap_state(Some(1)))).is_err());
+    }
+
+    #[test]
+    fn heap_strict_monotonic_admit_refuse_absent() {
+        let p = heap_prog(HeapAtom::StrictMonotonic);
+        assert!(heap_eval(&p, &heap_state(Some(2)), Some(&heap_state(Some(1)))).is_ok());
+        // The equality edge Monotonic admits and StrictMonotonic refuses.
+        assert!(heap_eval(&p, &heap_state(Some(2)), Some(&heap_state(Some(2)))).is_err());
+        assert!(heap_eval(&p, &heap_state(Some(2)), Some(&heap_state(None))).is_err());
+        assert!(heap_eval(&p, &heap_state(None), Some(&heap_state(Some(1)))).is_err());
+    }
+
+    #[test]
+    fn heap_member_of_and_range_admit_refuse_absent() {
+        let m = heap_prog(HeapAtom::MemberOf { set: vec![1, 2, 3] });
+        assert!(heap_eval(&m, &heap_state(Some(2)), None).is_ok());
+        assert!(heap_eval(&m, &heap_state(Some(9)), None).is_err());
+        assert!(heap_eval(&m, &heap_state(None), None).is_err());
+        let r = heap_prog(HeapAtom::InRangeTwoSided { lo: 100, hi: 200 });
+        assert!(heap_eval(&r, &heap_state(Some(150)), None).is_ok());
+        assert!(heap_eval(&r, &heap_state(Some(99)), None).is_err());
+        assert!(heap_eval(&r, &heap_state(None), None).is_err());
+    }
+
+    #[test]
+    fn heap_delta_bounded_admit_refuse_absent() {
+        let p = heap_prog(HeapAtom::DeltaBounded { d: 5 });
+        assert!(heap_eval(&p, &heap_state(Some(104)), Some(&heap_state(Some(100)))).is_ok());
+        assert!(heap_eval(&p, &heap_state(Some(96)), Some(&heap_state(Some(100)))).is_ok());
+        assert!(heap_eval(&p, &heap_state(Some(110)), Some(&heap_state(Some(100)))).is_err());
+        assert!(heap_eval(&p, &heap_state(Some(90)), Some(&heap_state(Some(100)))).is_err());
+        assert!(heap_eval(&p, &heap_state(Some(3)), Some(&heap_state(None))).is_err());
+        assert!(heap_eval(&p, &heap_state(None), Some(&heap_state(Some(3)))).is_err());
+    }
+
+    #[test]
+    fn heap_atom_composes_under_heyting_fragment() {
+        // Not(HeapField) is the clean complement (heap atoms only ever emit
+        // ConstraintViolated, never a structural error, so the Heyting Not
+        // short-circuit applies): refuse-the-pin becomes admit.
+        let not_eq = CellProgram::Predicate(vec![StateConstraint::AnyOf {
+            variants: vec![SimpleStateConstraint::Not(Box::new(
+                SimpleStateConstraint::HeapField {
+                    key: HK,
+                    atom: HeapAtom::Equals {
+                        value: field_from_u64(5),
+                    },
+                },
+            ))],
+        }]);
+        assert!(heap_eval(&not_eq, &heap_state(Some(6)), None).is_ok());
+        assert!(heap_eval(&not_eq, &heap_state(Some(5)), None).is_err());
+        // Absent inner ⇒ inner refuses ⇒ Not admits (the Lean !false).
+        assert!(heap_eval(&not_eq, &heap_state(None), None).is_ok());
+
+        // The per-HEAP-field actor binding: AnyOf[HeapField{Immutable},
+        // SenderIs{pk}] — the heap twin of the polis approval-slot tooth
+        // (Lean heapActorBound_flip_requires_sender).
+        let bound_pk = [0xAB; 32];
+        let bound = CellProgram::Predicate(vec![StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::HeapField {
+                    key: HK,
+                    atom: HeapAtom::Immutable,
+                },
+                SimpleStateConstraint::SenderIs { pk: bound_pk },
+            ],
+        }]);
+        let old = heap_state(Some(1));
+        let flipped = heap_state(Some(2));
+        // The bound sender flips the heap key: admitted.
+        assert!(
+            bound
+                .evaluate_full(
+                    &flipped,
+                    Some(&old),
+                    Some(&ctx_sender(bound_pk, 0)),
+                    &TransitionMeta::wildcard(),
+                    &WitnessBundle::empty(),
+                )
+                .is_ok()
+        );
+        // A stranger flipping the heap key: refused.
+        assert!(
+            bound
+                .evaluate_full(
+                    &flipped,
+                    Some(&old),
+                    Some(&ctx_sender([0x57; 32], 0)),
+                    &TransitionMeta::wildcard(),
+                    &WitnessBundle::empty(),
+                )
+                .is_err()
+        );
+        // A stranger leaving the key alone: admitted (the ceremony stays open).
+        assert!(
+            bound
+                .evaluate_full(
+                    &old,
+                    Some(&old),
+                    Some(&ctx_sender([0x57; 32], 0)),
+                    &TransitionMeta::wildcard(),
+                    &WitnessBundle::empty(),
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn heap_and_slot_constraints_coexist_in_one_program() {
+        // One predicate carrying a SLOT tooth and a HEAP tooth — each bites
+        // independently (the Lean mixedHeapProgram twin).
+        let p = CellProgram::Predicate(vec![
+            StateConstraint::Monotonic { index: 0 },
+            StateConstraint::HeapField {
+                key: HK,
+                atom: HeapAtom::Monotonic,
+            },
+        ]);
+        let mut old = heap_state(Some(5));
+        old.fields[0] = field_from_u64(1);
+        // Both advance: admitted.
+        let mut good = heap_state(Some(9));
+        good.fields[0] = field_from_u64(2);
+        assert!(heap_eval(&p, &good, Some(&old)).is_ok());
+        // Heap tooth bites (slot fine, heap decreases).
+        let mut bad_heap = heap_state(Some(3));
+        bad_heap.fields[0] = field_from_u64(2);
+        assert!(heap_eval(&p, &bad_heap, Some(&old)).is_err());
+        // Slot tooth still bites (heap fine, slot decreases). Slot 0 of
+        // `old` is 1; new slot 0 = 0 < 1.
+        let bad_slot = heap_state(Some(9));
+        assert!(heap_eval(&p, &bad_slot, Some(&old)).is_err());
     }
 
     // ── New variants ──────────────────────────────────────────────────────
@@ -5322,6 +5869,13 @@ mod tests {
                 },
                 "KeyRotationGate",
             ),
+            (
+                StateConstraint::HeapField {
+                    key: 99,
+                    atom: HeapAtom::Monotonic,
+                },
+                "HeapField",
+            ),
         ];
 
         // COVERAGE TOOTH: this match must name every variant exactly once.
@@ -5371,7 +5925,8 @@ mod tests {
                 | StateConstraint::SenderInSlot { .. }
                 | StateConstraint::BalanceGte { .. }
                 | StateConstraint::BalanceLte { .. }
-                | StateConstraint::KeyRotationGate { .. } => {}
+                | StateConstraint::KeyRotationGate { .. }
+                | StateConstraint::HeapField { .. } => {}
             }
         }
 
@@ -5486,6 +6041,13 @@ mod tests {
                 },
                 "PreimageGate",
             ),
+            (
+                SimpleStateConstraint::HeapField {
+                    key: 99,
+                    atom: HeapAtom::Immutable,
+                },
+                "HeapField",
+            ),
         ];
         for (sc, expected_kind) in &simples {
             match sc {
@@ -5505,7 +6067,8 @@ mod tests {
                 | SimpleStateConstraint::SenderInSlot { .. }
                 | SimpleStateConstraint::BalanceGte { .. }
                 | SimpleStateConstraint::BalanceLte { .. }
-                | SimpleStateConstraint::PreimageGate { .. } => {}
+                | SimpleStateConstraint::PreimageGate { .. }
+                | SimpleStateConstraint::HeapField { .. } => {}
             }
             let json = serde_json::to_value(sc.to_view()).expect("simple view serializes");
             assert_eq!(

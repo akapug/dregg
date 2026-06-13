@@ -936,4 +936,390 @@ def committedRelease : StateConstraint := .anyOf [.not (.fieldEquals "state" 2),
 #assert_axioms actorBound_flip_requires_sender
 #assert_axioms actorBound_untouched_open
 
+/-! ## Heap-keyed constraint atoms (THE ROTATION's app-state lane).
+
+The rotation's register economics — "registers are the L1; apps live in the heap" — needs cell
+programs that CONSTRAIN heap fields, not just the 8 reserved slots. The Rust executor already
+ADMITS heap writes (`SetField` with index `≥ STATE_SLOTS` routes into `CellState.fields_map`,
+commit `b133354fc`); this section gives the constraint language its heap-keyed atoms.
+
+**The design is a LIFT, not a new vocabulary.** This record substrate is already name-keyed and
+`Option`-valued (`Value.scalar : Value → FieldName → Option Int`), so a heap field IS a field:
+the canonical encoding `heapKey k` (= `FieldsMap.userKey`, base-10; welded by
+`FieldsMap.userKey_eq_heapKey`) names heap key `k`, and a heap-keyed constraint is the EXISTING
+name-keyed atom instantiated at that name. `HeapAtom` is the index-free residue of the slot-atom
+vocabulary; `HeapAtom.lift k` interprets it into `SimpleConstraint`. Consequences, all free:
+
+  * every existing admit-characterization (`evalSimple_strictMono_iff`, `evalSimple_memberOf_iff`,
+    …) applies to heap-keyed constraints VERBATIM (witnessed below by the one-line reuse proofs);
+  * the Heyting fragment composes: `not (a.lift k)`, `anyOf [a.lift k, .senderIs pk]` — the
+    per-HEAP-field actor binding reuses the `actorBound_*` theorems at `f := heapKey k`
+    (`heapActorBound_flip_requires_sender`);
+  * the WP/VCG catalog (`Proof/WPCatalog.lean`) and the circuit compiler consume heap-keyed
+    programs with NO new cases (a lifted atom is a `.simple` constraint).
+
+**Absence semantics are the record substrate's `Option` reads, now load-bearing** (the heap is
+partial where slots are total): post-state atoms (`equals`/`ge`/`le`/`memberOf`/
+`inRangeTwoSided`) FAIL CLOSED on an absent post-state key; relational atoms
+(`monotonic`/`strictMono`/`deltaBounded`) FAIL CLOSED on an absent key on EITHER side — there is
+NO init escape on the heap, unlike the Rust slot twins' `(old_state = None, nonce = 0)` carve-out;
+`immutable` admits the FIRST write (absent-old) and then pins — including REFUSING erasure;
+`writeOnce` admits on absent-old or zero-old, then freezes. Each clause is a THEOREM below
+(`evalHeap_*_absent_*` / `_pinned` / `_frozen`), not a comment.
+
+Rust mirror: `SimpleStateConstraint::HeapField`/`StateConstraint::HeapField { key, atom }` +
+`evaluate_heap_atom` (`cell/src/program.rs`), reading `CellState::get_field_ext` (`Option`-valued,
+exactly `Value.scalar` at `heapKey k`). -/
+
+/-- **`heapKey k`** — the canonical `FieldName` for heap key `k` (base-10, the
+`FieldsMap.userKey` encoding; `FieldsMap.userKey_eq_heapKey` is `rfl`). Keys `≥ reservedKeys`
+are the user heap; low keys name the reserved registers under the same encoding. -/
+def heapKey (k : Nat) : FieldName := toString k
+
+/-- **`HeapAtom`** — the index-free residue of the slot-atom vocabulary, liftable over any heap
+key. Deliberately NOT recursive: negation/disjunction come from lifting into the existing
+Heyting fragment (`.not (a.lift k)`, `anyOf [a.lift k, …]`). Mirrors Rust
+`cell/src/program.rs::HeapAtom` field-for-field. (Distinct from
+`Substrate.HeapKernel.HeapAtom`, the heap-WRITE guard literals; these are cell-program
+constraint atoms over the heap-backed fields of `(old, new)`.) -/
+inductive HeapAtom where
+  /-- `new[heap k] = v` (absent ⇒ refuse: absent ≠ present-zero on the heap). -/
+  | equals (v : Int)
+  /-- `new[heap k] ≥ v` (absent ⇒ refuse). -/
+  | ge (v : Int)
+  /-- `new[heap k] ≤ v` (absent ⇒ refuse). -/
+  | le (v : Int)
+  /-- First write free (absent-old admits), then pinned — erasure refused. -/
+  | immutable
+  /-- Absent-old or zero-old admits anything; a nonzero old freezes the key. -/
+  | writeOnce
+  /-- `old[heap k] ≤ new[heap k]`, BOTH present (no init escape on the heap). -/
+  | monotonic
+  /-- `old[heap k] < new[heap k]`, both present. -/
+  | strictMono
+  /-- `new[heap k] ∈ set` (absent ⇒ refuse). -/
+  | memberOf (set : List Int)
+  /-- `lo ≤ new[heap k] ≤ hi` (absent ⇒ refuse). -/
+  | inRangeTwoSided (lo hi : Int)
+  /-- `|new[heap k] − old[heap k]| ≤ d`, both present. -/
+  | deltaBounded (d : Int)
+  deriving Repr
+
+/-- **THE LIFT** — a heap atom is the existing name-keyed atom at `heapKey k`. This definitional
+equation is the whole design: heap-keyed constraints inherit the slot atoms' semantics,
+characterizations, and composition with zero new evaluator cases. -/
+def HeapAtom.lift (k : Nat) : HeapAtom → SimpleConstraint
+  | .equals v            => .fieldEquals (heapKey k) v
+  | .ge v                => .fieldGe (heapKey k) v
+  | .le v                => .fieldLe (heapKey k) v
+  | .immutable           => .immutable (heapKey k)
+  | .writeOnce           => .writeOnce (heapKey k)
+  | .monotonic           => .monotonic (heapKey k)
+  | .strictMono          => .strictMono (heapKey k)
+  | .memberOf s          => .memberOf (heapKey k) s
+  | .inRangeTwoSided l h => .inRangeTwoSided (heapKey k) l h
+  | .deltaBounded d      => .deltaBounded (heapKey k) d
+
+/-- Evaluate a heap atom against `(old, new)` — BY DEFINITION the existing evaluator on the
+lifted constraint (`evalHeap_eq_evalSimple` is `rfl`). -/
+def evalHeap (k : Nat) (a : HeapAtom) (o n : Value) : Bool :=
+  evalSimple (a.lift k) o n
+
+/-- **The lift-preservation keystone (definitional).** Evaluating a heap atom IS evaluating the
+lifted slot atom — so every `evalSimple` theorem transports to the heap by instantiation. -/
+theorem evalHeap_eq_evalSimple (k : Nat) (a : HeapAtom) (o n : Value) :
+    evalHeap k a o n = evalSimple (a.lift k) o n := rfl
+
+/-! ### Characterizations transported by REUSE (the lift pays for itself).
+Each of these is the existing admit-characterization instantiated at `heapKey k` — no new
+proof content, which is exactly the point of the lifting design. -/
+
+/-- `strictMono` over a heap key — `evalSimple_strictMono_iff` at `heapKey k`, verbatim. -/
+theorem evalHeap_strictMono_iff (k : Nat) (o n : Value) :
+    evalHeap k .strictMono o n = true ↔
+      ∃ a b, o.scalar (heapKey k) = some a ∧ n.scalar (heapKey k) = some b ∧ a < b :=
+  evalSimple_strictMono_iff (heapKey k) o n
+
+/-- `memberOf` over a heap key — `evalSimple_memberOf_iff` at `heapKey k`, verbatim. -/
+theorem evalHeap_memberOf_iff (k : Nat) (set : List Int) (o n : Value) :
+    evalHeap k (.memberOf set) o n = true ↔
+      ∃ x, n.scalar (heapKey k) = some x ∧ set.contains x = true :=
+  evalSimple_memberOf_iff (heapKey k) set o n
+
+/-- `inRangeTwoSided` over a heap key — the existing iff at `heapKey k`, verbatim. -/
+theorem evalHeap_inRangeTwoSided_iff (k : Nat) (lo hi : Int) (o n : Value) :
+    evalHeap k (.inRangeTwoSided lo hi) o n = true ↔
+      ∃ x, n.scalar (heapKey k) = some x ∧ lo ≤ x ∧ x ≤ hi :=
+  evalSimple_inRangeTwoSided_iff (heapKey k) lo hi o n
+
+/-- `deltaBounded` over a heap key — the existing iff at `heapKey k`, verbatim. -/
+theorem evalHeap_deltaBounded_iff (k : Nat) (d : Int) (o n : Value) :
+    evalHeap k (.deltaBounded d) o n = true ↔
+      ∃ a b, o.scalar (heapKey k) = some a ∧ n.scalar (heapKey k) = some b ∧
+        -d ≤ b - a ∧ b - a ≤ d :=
+  evalSimple_deltaBounded_iff (heapKey k) d o n
+
+/-! ### Characterizations for the atoms that lacked standalone iffs (proved fresh, same shape). -/
+
+/-- **`equals` admit-char.** Admits IFF the post-state key is present AND equal — on the heap,
+absent ≠ present-zero (the Rust slot `FieldEquals{value: 0}` would pass on an all-zero slot;
+the heap atom REFUSES an absent key even for `v = 0`). -/
+theorem evalHeap_equals_iff (k : Nat) (v : Int) (o n : Value) :
+    evalHeap k (.equals v) o n = true ↔ n.scalar (heapKey k) = some v := by
+  simp [evalHeap, HeapAtom.lift, evalSimple]
+
+/-- **`ge` admit-char.** Admits IFF present and `≥ v`. -/
+theorem evalHeap_ge_iff (k : Nat) (v : Int) (o n : Value) :
+    evalHeap k (.ge v) o n = true ↔
+      ∃ x, n.scalar (heapKey k) = some x ∧ v ≤ x := by
+  unfold evalHeap HeapAtom.lift evalSimple
+  cases h : n.scalar (heapKey k) with
+  | none   => simp
+  | some x => simp [intLe, decide_eq_true_eq]
+
+/-- **`le` admit-char.** Admits IFF present and `≤ v`. -/
+theorem evalHeap_le_iff (k : Nat) (v : Int) (o n : Value) :
+    evalHeap k (.le v) o n = true ↔
+      ∃ x, n.scalar (heapKey k) = some x ∧ x ≤ v := by
+  unfold evalHeap HeapAtom.lift evalSimple
+  cases h : n.scalar (heapKey k) with
+  | none   => simp
+  | some x => simp [intLe, decide_eq_true_eq]
+
+/-- **`monotonic` admit-char.** Admits IFF BOTH sides are present and `old ≤ new` — the heap
+twin of `Proof/WPCatalog.evalSimple_monotonic_iff`, restated here at `heapKey k` (this file is
+upstream of the catalog). NO init escape: an absent old key refuses (cf. the Rust slot
+`Monotonic`'s `(old_state = None, nonce = 0)` carve-out, which the heap atom deliberately
+does NOT inherit). -/
+theorem evalHeap_monotonic_iff (k : Nat) (o n : Value) :
+    evalHeap k .monotonic o n = true ↔
+      ∃ a b, o.scalar (heapKey k) = some a ∧ n.scalar (heapKey k) = some b ∧ a ≤ b := by
+  unfold evalHeap HeapAtom.lift evalSimple
+  cases ho : o.scalar (heapKey k) with
+  | none   => simp
+  | some a =>
+    cases hn : n.scalar (heapKey k) with
+    | none   => simp
+    | some b => simp [intLe, decide_eq_true_eq]
+
+/-! ### Absence semantics AS THEOREMS (the heap is partial; every clause is pinned). -/
+
+/-- **`immutable`, absent-old: the FIRST write is free.** An unborn heap key may be initialized
+to anything (including being left absent). -/
+theorem evalHeap_immutable_absent_old_admits (k : Nat) (o n : Value)
+    (h : o.scalar (heapKey k) = none) :
+    evalHeap k .immutable o n = true := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`immutable`, present-old: the key is PINNED** — admission is exactly "the post-state holds
+the same value". Erasure (`new` absent) is therefore refused (`evalHeap_immutable_erase_refused`). -/
+theorem evalHeap_immutable_pinned (k : Nat) (a : Int) (o n : Value)
+    (h : o.scalar (heapKey k) = some a) :
+    evalHeap k .immutable o n = (n.scalar (heapKey k) == some a) := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`immutable` refuses ERASURE**: a present key cannot be deleted out of the heap. -/
+theorem evalHeap_immutable_erase_refused (k : Nat) (a : Int) (o n : Value)
+    (h : o.scalar (heapKey k) = some a) (hn : n.scalar (heapKey k) = none) :
+    evalHeap k .immutable o n = false := by
+  rw [evalHeap_immutable_pinned k a o n h, hn]; rfl
+
+/-- **`writeOnce`, absent-old admits** (the register-once first write). -/
+theorem evalHeap_writeOnce_absent_admits (k : Nat) (o n : Value)
+    (h : o.scalar (heapKey k) = none) :
+    evalHeap k .writeOnce o n = true := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`writeOnce`, zero-old admits** (a present-but-zero key counts as unwritten — the slot
+convention, kept so a key can be PRE-DECLARED at zero and written once later). -/
+theorem evalHeap_writeOnce_zero_admits (k : Nat) (o n : Value)
+    (h : o.scalar (heapKey k) = some 0) :
+    evalHeap k .writeOnce o n = true := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`writeOnce`, written-old FREEZES**: once nonzero, admission is exactly "unchanged"
+(erasure refused for the same reason as `immutable`). -/
+theorem evalHeap_writeOnce_frozen (k : Nat) (a : Int) (ha : a ≠ 0) (o n : Value)
+    (h : o.scalar (heapKey k) = some a) :
+    evalHeap k .writeOnce o n = (n.scalar (heapKey k) == some a) := by
+  -- `simp only` discharges the match's `a ≠ 0` side condition from `ha` in context.
+  simp only [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`monotonic` fails closed on an absent OLD key** — no init escape on the heap. -/
+theorem evalHeap_monotonic_absent_old_refuses (k : Nat) (o n : Value)
+    (h : o.scalar (heapKey k) = none) :
+    evalHeap k .monotonic o n = false := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`monotonic` fails closed on an absent NEW key** — a monotone key cannot be erased. -/
+theorem evalHeap_monotonic_absent_new_refuses (k : Nat) (o n : Value)
+    (h : n.scalar (heapKey k) = none) :
+    evalHeap k .monotonic o n = false := by
+  cases ho : o.scalar (heapKey k) <;> simp [evalHeap, HeapAtom.lift, evalSimple, ho, h]
+
+/-- **`strictMono` fails closed on an absent OLD key.** -/
+theorem evalHeap_strictMono_absent_old_refuses (k : Nat) (o n : Value)
+    (h : o.scalar (heapKey k) = none) :
+    evalHeap k .strictMono o n = false := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`strictMono` fails closed on an absent NEW key.** -/
+theorem evalHeap_strictMono_absent_new_refuses (k : Nat) (o n : Value)
+    (h : n.scalar (heapKey k) = none) :
+    evalHeap k .strictMono o n = false := by
+  cases ho : o.scalar (heapKey k) <;> simp [evalHeap, HeapAtom.lift, evalSimple, ho, h]
+
+/-- **`deltaBounded` fails closed on an absent OLD key.** -/
+theorem evalHeap_deltaBounded_absent_old_refuses (k : Nat) (d : Int) (o n : Value)
+    (h : o.scalar (heapKey k) = none) :
+    evalHeap k (.deltaBounded d) o n = false := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`deltaBounded` fails closed on an absent NEW key.** -/
+theorem evalHeap_deltaBounded_absent_new_refuses (k : Nat) (d : Int) (o n : Value)
+    (h : n.scalar (heapKey k) = none) :
+    evalHeap k (.deltaBounded d) o n = false := by
+  cases ho : o.scalar (heapKey k) <;> simp [evalHeap, HeapAtom.lift, evalSimple, ho, h]
+
+/-- **`equals` fails closed on an absent NEW key** (absent ≠ present-zero on the heap). -/
+theorem evalHeap_equals_absent_refuses (k : Nat) (v : Int) (o n : Value)
+    (h : n.scalar (heapKey k) = none) :
+    evalHeap k (.equals v) o n = false := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`ge` fails closed on an absent NEW key.** -/
+theorem evalHeap_ge_absent_refuses (k : Nat) (v : Int) (o n : Value)
+    (h : n.scalar (heapKey k) = none) :
+    evalHeap k (.ge v) o n = false := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`le` fails closed on an absent NEW key.** -/
+theorem evalHeap_le_absent_refuses (k : Nat) (v : Int) (o n : Value)
+    (h : n.scalar (heapKey k) = none) :
+    evalHeap k (.le v) o n = false := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`memberOf` fails closed on an absent NEW key.** -/
+theorem evalHeap_memberOf_absent_refuses (k : Nat) (set : List Int) (o n : Value)
+    (h : n.scalar (heapKey k) = none) :
+    evalHeap k (.memberOf set) o n = false := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-- **`inRangeTwoSided` fails closed on an absent NEW key.** -/
+theorem evalHeap_inRangeTwoSided_absent_refuses (k : Nat) (lo hi : Int) (o n : Value)
+    (h : n.scalar (heapKey k) = none) :
+    evalHeap k (.inRangeTwoSided lo hi) o n = false := by
+  simp [evalHeap, HeapAtom.lift, evalSimple, h]
+
+/-! ### Composition transports too: the per-HEAP-field actor binding is the slot theorem at
+`heapKey k` — the polis `anyOf [immutable f, senderIs pk]` tooth now guards heap state. -/
+
+/-- A turn that CHANGES heap key `k` with any sender other than `pk` is REJECTED — the
+`actorBound_flip_requires_sender` theorem applied verbatim at `f := heapKey k` (the lift is
+definitional, so the slot proof IS the heap proof). -/
+theorem heapActorBound_flip_requires_sender (k : Nat) (pk : Int) (ctx : TurnCtx) (o n : Value)
+    (hflip : evalSimple (HeapAtom.immutable.lift k) o n = false)
+    (hs : ctx.sender ≠ some pk) :
+    evalConstraintCtx ctx (.anyOf [HeapAtom.immutable.lift k, .senderIs pk]) o n = false :=
+  actorBound_flip_requires_sender pk (heapKey k) ctx o n hflip hs
+
+/-! ### It runs — non-vacuity BOTH polarities + the absence cases, per atom (heap key 42). -/
+
+-- equals: admit the equal value / refuse another / refuse ABSENT even for v = 0.
+#guard evalHeap 42 (.equals 5) (.record []) (.record [(heapKey 42, .int 5)])
+#guard evalHeap 42 (.equals 5) (.record []) (.record [(heapKey 42, .int 6)]) == false
+#guard evalHeap 42 (.equals 0) (.record []) (.record []) == false  -- absent ≠ zero
+-- ge / le: band edges + absence.
+#guard evalHeap 42 (.ge 10) (.record []) (.record [(heapKey 42, .int 10)])
+#guard evalHeap 42 (.ge 10) (.record []) (.record [(heapKey 42, .int 9)]) == false
+#guard evalHeap 42 (.ge 0)  (.record []) (.record []) == false
+#guard evalHeap 42 (.le 10) (.record []) (.record [(heapKey 42, .int 10)])
+#guard evalHeap 42 (.le 10) (.record []) (.record [(heapKey 42, .int 11)]) == false
+#guard evalHeap 42 (.le 10) (.record []) (.record []) == false
+-- immutable: first write free / pin holds / flip refused / ERASURE refused.
+#guard evalHeap 42 .immutable (.record []) (.record [(heapKey 42, .int 7)])
+#guard evalHeap 42 .immutable (.record [(heapKey 42, .int 7)]) (.record [(heapKey 42, .int 7)])
+#guard evalHeap 42 .immutable (.record [(heapKey 42, .int 7)]) (.record [(heapKey 42, .int 8)]) == false
+#guard evalHeap 42 .immutable (.record [(heapKey 42, .int 7)]) (.record []) == false
+-- writeOnce: absent-old free / zero-old free / written freezes (change AND erase refused).
+#guard evalHeap 42 .writeOnce (.record []) (.record [(heapKey 42, .int 9)])
+#guard evalHeap 42 .writeOnce (.record [(heapKey 42, .int 0)]) (.record [(heapKey 42, .int 9)])
+#guard evalHeap 42 .writeOnce (.record [(heapKey 42, .int 9)]) (.record [(heapKey 42, .int 9)])
+#guard evalHeap 42 .writeOnce (.record [(heapKey 42, .int 9)]) (.record [(heapKey 42, .int 1)]) == false
+#guard evalHeap 42 .writeOnce (.record [(heapKey 42, .int 9)]) (.record []) == false
+-- monotonic: up admits / down refuses / ABSENT-old refuses (no heap init escape) / erase refuses.
+#guard evalHeap 42 .monotonic (.record [(heapKey 42, .int 1)]) (.record [(heapKey 42, .int 2)])
+#guard evalHeap 42 .monotonic (.record [(heapKey 42, .int 2)]) (.record [(heapKey 42, .int 1)]) == false
+#guard evalHeap 42 .monotonic (.record []) (.record [(heapKey 42, .int 2)]) == false
+#guard evalHeap 42 .monotonic (.record [(heapKey 42, .int 1)]) (.record []) == false
+-- strictMono: strict step admits / plateau refuses / absence refuses both sides.
+#guard evalHeap 42 .strictMono (.record [(heapKey 42, .int 1)]) (.record [(heapKey 42, .int 2)])
+#guard evalHeap 42 .strictMono (.record [(heapKey 42, .int 1)]) (.record [(heapKey 42, .int 1)]) == false
+#guard evalHeap 42 .strictMono (.record []) (.record [(heapKey 42, .int 2)]) == false
+#guard evalHeap 42 .strictMono (.record [(heapKey 42, .int 1)]) (.record []) == false
+-- memberOf: in-set admits / out-of-set refuses / absent refuses.
+#guard evalHeap 42 (.memberOf [1, 2, 3]) (.record []) (.record [(heapKey 42, .int 2)])
+#guard evalHeap 42 (.memberOf [1, 2, 3]) (.record []) (.record [(heapKey 42, .int 9)]) == false
+#guard evalHeap 42 (.memberOf [1, 2, 3]) (.record []) (.record []) == false
+-- inRangeTwoSided: in-band admits / out-of-band refuses / absent refuses.
+#guard evalHeap 42 (.inRangeTwoSided 100 200) (.record []) (.record [(heapKey 42, .int 150)])
+#guard evalHeap 42 (.inRangeTwoSided 100 200) (.record []) (.record [(heapKey 42, .int 99)]) == false
+#guard evalHeap 42 (.inRangeTwoSided 100 200) (.record []) (.record []) == false
+-- deltaBounded: ±d admits / beyond refuses / absence refuses both sides.
+#guard evalHeap 42 (.deltaBounded 5) (.record [(heapKey 42, .int 100)]) (.record [(heapKey 42, .int 96)])
+#guard evalHeap 42 (.deltaBounded 5) (.record [(heapKey 42, .int 100)]) (.record [(heapKey 42, .int 110)]) == false
+#guard evalHeap 42 (.deltaBounded 5) (.record []) (.record [(heapKey 42, .int 3)]) == false
+#guard evalHeap 42 (.deltaBounded 5) (.record [(heapKey 42, .int 3)]) (.record []) == false
+
+-- Heyting composition: a lifted heap atom under `not` and under the actor-bound `anyOf`.
+#guard evalSimple (.not (HeapAtom.lift 42 (.equals 5))) (.record []) (.record [(heapKey 42, .int 6)])
+#guard evalConstraintCtx { sender := some 17 } (.anyOf [HeapAtom.immutable.lift 42, .senderIs 17])
+  (.record [(heapKey 42, .int 0)]) (.record [(heapKey 42, .int 1)])
+#guard evalConstraintCtx { sender := some 99 } (.anyOf [HeapAtom.immutable.lift 42, .senderIs 17])
+  (.record [(heapKey 42, .int 0)]) (.record [(heapKey 42, .int 1)]) == false
+
+/-- One program mixing a NAMED register field and a heap key — the slot/heap coexistence the
+Rust blueprint test mirrors (`cell/src/blueprint.rs` channel + heap message counter). -/
+def mixedHeapProgram : RecordProgram := .predicate
+  [ .simple (.monotonic "epoch"),
+    .simple (HeapAtom.monotonic.lift 64) ]
+
+#guard mixedHeapProgram.admits 0
+  (.record [("epoch", .int 1), (heapKey 64, .int 5)])
+  (.record [("epoch", .int 1), (heapKey 64, .int 9)])
+#guard mixedHeapProgram.admits 0
+  (.record [("epoch", .int 1), (heapKey 64, .int 5)])
+  (.record [("epoch", .int 1), (heapKey 64, .int 3)]) == false   -- heap tooth bites
+#guard mixedHeapProgram.admits 0
+  (.record [("epoch", .int 2), (heapKey 64, .int 5)])
+  (.record [("epoch", .int 1), (heapKey 64, .int 9)]) == false   -- slot tooth still bites
+
+#assert_axioms evalHeap_eq_evalSimple
+#assert_axioms evalHeap_strictMono_iff
+#assert_axioms evalHeap_memberOf_iff
+#assert_axioms evalHeap_inRangeTwoSided_iff
+#assert_axioms evalHeap_deltaBounded_iff
+#assert_axioms evalHeap_equals_iff
+#assert_axioms evalHeap_ge_iff
+#assert_axioms evalHeap_le_iff
+#assert_axioms evalHeap_monotonic_iff
+#assert_axioms evalHeap_immutable_absent_old_admits
+#assert_axioms evalHeap_immutable_pinned
+#assert_axioms evalHeap_immutable_erase_refused
+#assert_axioms evalHeap_writeOnce_absent_admits
+#assert_axioms evalHeap_writeOnce_zero_admits
+#assert_axioms evalHeap_writeOnce_frozen
+#assert_axioms evalHeap_monotonic_absent_old_refuses
+#assert_axioms evalHeap_monotonic_absent_new_refuses
+#assert_axioms evalHeap_strictMono_absent_old_refuses
+#assert_axioms evalHeap_strictMono_absent_new_refuses
+#assert_axioms evalHeap_deltaBounded_absent_old_refuses
+#assert_axioms evalHeap_deltaBounded_absent_new_refuses
+#assert_axioms evalHeap_equals_absent_refuses
+#assert_axioms evalHeap_ge_absent_refuses
+#assert_axioms evalHeap_le_absent_refuses
+#assert_axioms evalHeap_memberOf_absent_refuses
+#assert_axioms evalHeap_inRangeTwoSided_absent_refuses
+#assert_axioms heapActorBound_flip_requires_sender
+
 end Dregg2.Exec
