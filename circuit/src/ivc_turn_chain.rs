@@ -584,18 +584,18 @@ const IR2_INNER_QUERY_POW_BITS: usize = 16;
 /// `prove_descriptor_leaf` wrap and the aggregation tree consume), so a rotated descriptor
 /// leaf now folds into the SAME `aggregate_tree` / chain machinery.
 ///
-/// **STATUS (2026-06-13): the two TYPE walls above are CROSSED — this compiles, runs, builds
-/// the in-circuit verifier, and PASSES in-circuit FRI MMCS verification.** A REMAINING SEMANTIC
-/// wall panics inside `prove_all_tables` (`p3_lookup::debug_util::check_lookups`): the recursion
-/// verifier circuit's OWN `WitnessChecks` LogUp bus is UNBALANCED (net +779 on the all-zero
-/// tuple, config/arity-INDEPENDENT — identical under FRI arity 1 and 3) when the wrapped leaf is
-/// a multi-table native batch carrying BOTH per-instance public values AND cross-table global
-/// LogUp lookups (transfer = 3 instances: main w=331 / 38 PV / 50 global lookups · chip w=364 /
-/// 2 global · byte w=2 / 1 global). The blanket `RecursiveAir::eval_folded_circuit` +
-/// `verify_batch_circuit` path was validated in the fork only for recursion-circuit-shaped AIRs
-/// (`CircuitTablesAir` = Const/Public/Alu), not for a FOREIGN multi-table LogUp STARK as a leaf;
-/// closing it is the next fork lever (the global-lookup-leaf witness accounting). The smoke test
-/// `rotation_batchstark_leaf_smoke.rs` is `#[ignore]`'d as the exact reproduction.
+/// **STATUS (2026-06-13): GREEN — all three walls crossed.** This compiles, runs, builds the
+/// in-circuit verifier, PASSES in-circuit FRI MMCS verification, the recursion verifier circuit's
+/// own `WitnessChecks` LogUp bus BALANCES, and the wrapped root self-verifies in-circuit. The
+/// final wall was the foreign-multi-table-LogUp-leaf `WitnessChecks` accounting: a descriptor
+/// public input asserted equal to the zero constant put it in `ExprId::ZERO`'s connect-class, so
+/// `WitnessId(0)` had TWO bus creators (the zero `Const` AND a `Public` op) → net +779 on the
+/// all-zero tuple (config/arity-INDEPENDENT). The fork now demotes such a duplicate `Public` to a
+/// bus READER (`p3_circuit::PreprocessedColumns::dup_public_outputs` → multiplicity −1 in
+/// `get_airs_and_degrees_with_prep`), which both restores the one-creator-per-witness invariant
+/// AND soundly binds the public value to the zero constant. The transfer leaf (3 instances: main
+/// w=331 / 38 PV / 50 global lookups · chip w=364 / 2 global · byte w=2 / 1 global) folds GREEN;
+/// the smoke test `rotation_batchstark_leaf_smoke.rs` asserts it (no longer `#[ignore]`'d).
 ///
 /// **The inner proof is a `BatchProof<DreggRecursionConfig>` (SIDESTEP option a):** the
 /// rotated prover mints the IR-v2 batch under the recursion config TYPE (with `ir2`'s FRI
