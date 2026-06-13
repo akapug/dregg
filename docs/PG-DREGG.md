@@ -1176,10 +1176,38 @@ them are present in the pg18 primary target.)
   OAuth subject's authority inside the database IS its dregg capability, gated by
   RLS on every row. (Deployment configuration, not extension SQL — see
   `docs/PG-DREGG-PG18.md` §6.)
-- **Asynchronous I/O (pg18)** — the read-heavy mirror's large scans
-  (`dregg.cells`, `receipt_chain`, the recursive `cap_edges` walk) ride pg18's AIO
-  with no SQL change. Transparent leverage; the perf baseline under `pg_stat_io`
-  is the §14.2 follow-up — `docs/PG-DREGG-PG18.md` §8.
+- **Asynchronous I/O (pg18) — applied + observable.** The read-heavy mirror's
+  large scans (`dregg.cells`, `receipt_chain`, the recursive `cap_edges` walk) ride
+  pg18's AIO with no SQL change. The AIO observability surface is **wired**:
+  `dregg.mirror_io_stats` projects the read-path-relevant `pg_stat_io` relation
+  contexts (with the pg18 `reads`/`read_bytes`/`hits` columns) into a compact
+  view reporting the per-context read/write counts and the `cache_hit_ratio` the
+  mirror watches as the ledger grows. *Proven by* `pg18_mirror_io_stats_view_reports_the_io_mix`
+  (live pg18) — `docs/PG-DREGG-PG18.md` §8.
+- **B-tree skip scan (pg18) — applied.** The composite `cells_by_mode_balance
+  (mode, balance)` index serves both `WHERE mode = …` and `WHERE balance = …` /
+  `ORDER BY balance` — the latter via skip scan over the tiny-cardinality leading
+  `mode` column, so one index covers two hot read paths with no separate balance
+  index on the write path. *Proven by*
+  `pg18_skip_scan_serves_balance_with_unconstrained_leading_mode` (live pg18) —
+  `docs/PG-DREGG-PG18.md` §8.
+- **`security_invoker` views (pg15) — applied.** Every dev-view is created `WITH
+  (security_invoker = true)`, so the base-table RLS is evaluated as the invoking
+  reader THROUGH the view — the capability gate is enforced by declaration, not
+  incidentally. *Proven by* `pg15_security_invoker_views_enforce_rls_through_the_view`
+  (live pg18) — `docs/PG-DREGG-PG18.md` §6/§8. (This is the §14.3 hardening, now
+  wired rather than noted.)
+- **`uuid_extract_timestamp` / `_version` (pg18) — applied.** The
+  `dregg.submit_queue_audit` view recovers the enqueue time + version FROM the
+  `uuidv7()` key (so the key is itself an audit signal, cross-checking the
+  `submitted_at` clock). *Proven by* `pg18_submit_queue_audit_recovers_time_from_the_uuidv7_key`
+  (live pg18) — `docs/PG-DREGG-PG18.md` §6.
+- **`RETURNING WITH (OLD/NEW)` typed applicator (pg18) — applied.** Beyond the
+  string `'<ACTION> <DELTA>'` form, `dregg.merge_cell_delta` returns the typed
+  `(action, balance_delta, nonce_delta)` tuple (both read off the pre-image), so
+  conservation is assertable directly off the applicator. *Proven by*
+  `pg18_merge_cell_delta_typed_and_conservation_off_the_applicator` (live pg18) —
+  `docs/PG-DREGG-PG18.md` §7.
 
 - **SQL/JSON `JSON_TABLE` (pg17)** — the embedded jsonb state, projected into a
   flat relational surface. dregg's cells carry decoded field slots
@@ -1249,23 +1277,23 @@ them are present in the pg18 primary target.)
   (§10.1 step 2) — so a restored mirror is *self-checking*, not merely restored.
   *Milestone B-snapshot:* wire the mirror's bootstrap to consume pg17 incrementals
   and re-validate the head root on restore.
-- **`pg_stat_io` (pg16) + streaming read I/O (pg17)** — the perf-observability
-  path for Tier B/C. The mirror is read-heavy (the explorer/analytics surface) and
-  Tier C adds verify-on-write; `pg_stat_io` makes the read/write/verify I/O mix
-  legible (which relation, which backend, hit vs read vs evict), and pg17's
-  streaming reads improve the large-scan views (`receipt_chain`, the recursive
-  `cap_edges` walk). *Milestone B-perf:* baseline the dev-views with `pg_stat_io`
-  and document the read amplification of the RLS predicate.
+- **`pg_stat_io` (pg16/18 AIO) — the observability VIEW is applied (§14.1); the
+  perf BASELINE remains the milestone.** `dregg.mirror_io_stats` (over the pg18 AIO
+  `pg_stat_io`) makes the read/write/verify I/O mix legible per (backend, context)
+  with the cache hit ratio. What remains designed is the *quantified baseline*:
+  running the dev-views under load and documenting the read amplification of the
+  RLS predicate (the numbers, not the surface — the surface ships).
 
 ### 14.3 RLS / extension-API notes (pg15–17)
 
-- **`SECURITY_INVOKER` views (pg15)** — relevant to the dev-views. Today the
-  query-surface views (`cap_edges`, `cell_fields`, …) run as plain views, so they
-  inherit the *invoking reader's* RLS on the base tables (the desired behaviour:
-  a reader sees only admitted rows through a view too). pg15's explicit
-  `security_invoker = true` makes that guarantee *declared* rather than incidental;
-  a hardening pass can set it on every dregg view so a future owner-privileged
-  base-table change cannot silently widen a view. *Cheap hardening, noted.*
+- **`SECURITY_INVOKER` views (pg15) — WIRED.** Every dregg dev-view (`cap_edges`,
+  `cell_balances`, `receipt_chain`, `cap_attenuations`, `cell_fields`,
+  `canonical_cells`, and the new `mirror_io_stats` / `submit_queue_audit` /
+  `role_bindings`) is now created `WITH (security_invoker = true)`, so the
+  base-table RLS is evaluated as the *invoking reader* THROUGH the view — the
+  capability gate is enforced by declaration, so a future owner-privileged
+  base-table change cannot silently widen a view. (Was "cheap hardening, noted";
+  now applied — see §14.1 and `pg15_security_invoker_views_enforce_rls_through_the_view`.)
 - **`MAINTAIN` privilege + non-superuser `REFRESH MATERIALIZED VIEW` (pg16)** —
   if the mirror ever promotes a hot dev-view to a materialized view, pg16 lets a
   non-superuser maintenance role refresh it, keeping the write-lockdown role model

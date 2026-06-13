@@ -660,8 +660,16 @@ CREATE TABLE IF NOT EXISTS dregg.cells (
         GENERATED ALWAYS AS (encode(cell_root, 'hex')) VIRTUAL,
     balance_field bigint
         GENERATED ALWAYS AS ((fields_json->>'balance')::bigint) VIRTUAL);
-CREATE INDEX IF NOT EXISTS cells_by_balance ON dregg.cells (balance);
-CREATE INDEX IF NOT EXISTS cells_by_mode    ON dregg.cells (mode);
+-- One composite index serves BOTH "cells in this mode" AND "cells by balance,
+-- any mode" — the latter via pg18's B-tree SKIP SCAN. `mode` (the leading column)
+-- has tiny cardinality (Hosted | Sovereign), which is exactly skip scan's sweet
+-- spot: a query that constrains only `balance` makes the planner skip through the
+-- few distinct `mode` prefixes and range-scan `balance` within each, instead of
+-- the pre-18 fallback (a full index scan or a seq scan). So the one index covers
+-- the analytics surface's two hot access paths — `WHERE mode = …` and
+-- `WHERE balance >= …` / `ORDER BY balance` — with no separate `balance` index to
+-- maintain on the write path. (docs/PG-DREGG-PG18.md §8 — applied pg18 leverage.)
+CREATE INDEX IF NOT EXISTS cells_by_mode_balance ON dregg.cells (mode, balance);
 CREATE INDEX IF NOT EXISTS cells_fields_gin ON dregg.cells USING gin (fields_json);
 -- The canonical-order index: byte-order on the hex id under the builtin C
 -- provider, the ordering the node's canonical roots use (no ICU drift).
@@ -689,7 +697,7 @@ CREATE INDEX IF NOT EXISTS memory_by_domain ON dregg.memory (domain);
     // The PostgreSQL 18 MERGE-based cell upsert, shipped as a SECURITY DEFINER
     // function so the kernel writer materializes a post-image in ONE atomic
     // statement. The MERGE's `merge_action()` (pg17) reports which arm fired, and
-    // pg18's `RETURNING old.*, new.*` reads the PRE-image balance in the SAME
+    // pg18's `RETURNING WITH (OLD AS …, NEW AS …)` reads the PRE-image in the SAME
     // statement — so the function returns the action AND the exact balance delta
     // the materialization caused (`'INSERT +1000000'` / `'UPDATE -500'`), an
     // audit signal impossible pre-18 without a separate pre-read. Wrapping the
@@ -697,13 +705,21 @@ CREATE INDEX IF NOT EXISTS memory_by_domain ON dregg.memory (domain);
     // also what lets the mirror invoke it through a plain `SELECT
     // dregg.merge_cell(...)` — the MERGE status is consumed inside the function;
     // the caller sees a normal SELECT result. (docs/PG-DREGG-PG18.md §7.)
+    //
+    // pg18 form: `RETURNING WITH (OLD AS o, NEW AS n)` binds explicit aliases for
+    // the pre/post image (the spec-standard pg18 syntax). It is strictly better
+    // than the bare `old.`/`new.` pseudo-aliases — those only resolve because no
+    // column is literally named `old`/`new`; the explicit alias is unambiguous and
+    // future-proof. `dregg.merge_cell` (the human-readable string contract) is
+    // unchanged; `dregg.merge_cell_delta` exposes the richer typed (action, balance
+    // delta, nonce delta) tuple for the audit surface.
     const MERGE_CELL: &str = r#"
 CREATE OR REPLACE FUNCTION dregg.merge_cell(
     p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
     p_fields bytea, p_fields_json jsonb, p_lifecycle text,
     p_last_ordinal bigint, p_cell_root bytea) RETURNS text
 LANGUAGE plpgsql AS $$
-DECLARE v_action text; v_delta bigint;
+DECLARE v_action text; v_dbal bigint;
 BEGIN
     MERGE INTO dregg.cells AS t
     USING (SELECT p_cell_id AS cell_id) AS s
@@ -714,12 +730,43 @@ BEGIN
         (cell_id,mode,balance,nonce,fields,fields_json,lifecycle,last_ordinal,cell_root)
         VALUES (p_cell_id,p_mode,p_balance,p_nonce,p_fields,p_fields_json,
                 p_lifecycle,p_last_ordinal,p_cell_root)
-    -- pg17 merge_action() = 'INSERT' | 'UPDATE'; pg18 old.balance is the
-    -- pre-image (NULL on an insert), so new.balance - coalesce(old.balance,0) is
-    -- the materialized delta — both read in the one atomic statement.
-    RETURNING merge_action(), new.balance - coalesce(old.balance, 0)
-        INTO v_action, v_delta;
-    RETURN v_action || ' ' || (CASE WHEN v_delta >= 0 THEN '+' ELSE '' END) || v_delta::text;
+    -- pg17 merge_action() = 'INSERT' | 'UPDATE'; pg18 RETURNING WITH binds the
+    -- pre-image (o.balance is NULL on an insert), so n.balance - coalesce(o.balance,0)
+    -- is the materialized delta — both read in the one atomic statement.
+    RETURNING WITH (OLD AS o, NEW AS n)
+        merge_action(), n.balance - coalesce(o.balance, 0)
+        INTO v_action, v_dbal;
+    RETURN v_action || ' ' || (CASE WHEN v_dbal >= 0 THEN '+' ELSE '' END) || v_dbal::text;
+END $$;
+
+-- The richer audit applicator: the SAME atomic MERGE, returning the typed delta
+-- tuple (which arm fired, the signed balance delta, the signed nonce delta) the
+-- pg18 RETURNING WITH (OLD/NEW) reads from the pre-image. The verified-store gate
+-- and the streaming mirror both materialize through dregg.merge_cell (the string
+-- form); this twin is the analytics face when a caller wants the numbers typed —
+-- e.g. asserting conservation (the per-cell balance deltas of a transfer sum to
+-- zero) directly off the applicator's report. (docs/PG-DREGG-PG18.md §7.)
+CREATE OR REPLACE FUNCTION dregg.merge_cell_delta(
+    p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
+    p_fields bytea, p_fields_json jsonb, p_lifecycle text,
+    p_last_ordinal bigint, p_cell_root bytea,
+    OUT action text, OUT balance_delta bigint, OUT nonce_delta bigint)
+LANGUAGE plpgsql AS $$
+BEGIN
+    MERGE INTO dregg.cells AS t
+    USING (SELECT p_cell_id AS cell_id) AS s
+      ON t.cell_id = s.cell_id
+    WHEN MATCHED THEN UPDATE SET balance=p_balance, nonce=p_nonce,
+        fields_json=p_fields_json, last_ordinal=p_last_ordinal, cell_root=p_cell_root
+    WHEN NOT MATCHED THEN INSERT
+        (cell_id,mode,balance,nonce,fields,fields_json,lifecycle,last_ordinal,cell_root)
+        VALUES (p_cell_id,p_mode,p_balance,p_nonce,p_fields,p_fields_json,
+                p_lifecycle,p_last_ordinal,p_cell_root)
+    RETURNING WITH (OLD AS o, NEW AS n)
+        merge_action(),
+        n.balance - coalesce(o.balance, 0),
+        n.nonce   - coalesce(o.nonce, 0)
+        INTO action, balance_delta, nonce_delta;
 END $$;
 "#;
 
@@ -732,26 +779,35 @@ END $$;
     // rows a developer can JOIN/aggregate without hand-written jsonb operators.
     // (docs/PG-DREGG-PG18.md §5.) JSON_TABLE is a pg17 feature; the mirror's
     // PRIMARY target is pg18 (which includes it), so these ship by default.
+    // Every dev-view is created `WITH (security_invoker = true)` (pg15). Without
+    // it, a view runs with its OWNER's privileges, so the read-side RLS on the base
+    // tables would bite a querying reader only INCIDENTALLY (because the views are
+    // owned by the same role and RLS is FORCEd) — a future owner-privileged change
+    // could silently widen what a view exposes past the reader's capability. With
+    // `security_invoker`, RLS is evaluated as the INVOKING reader on every base
+    // table the view reads, so the capability gate on `dregg.cells` / `turns` /
+    // `capabilities` is enforced THROUGH the view, by declaration not by accident.
+    // (docs/PG-DREGG.md §14.3 — the cheap hardening, now wired.)
     const VIEWS: &str = r#"
-CREATE OR REPLACE VIEW dregg.cap_edges AS
+CREATE OR REPLACE VIEW dregg.cap_edges WITH (security_invoker = true) AS
     SELECT holder AS src, target AS dst, slot, permissions, expires_at
     FROM dregg.capabilities;
-CREATE OR REPLACE VIEW dregg.cell_balances AS
+CREATE OR REPLACE VIEW dregg.cell_balances WITH (security_invoker = true) AS
     SELECT encode(cell_id, 'hex') AS cell, balance, nonce, lifecycle, last_ordinal
     FROM dregg.cells;
-CREATE OR REPLACE VIEW dregg.receipt_chain AS
+CREATE OR REPLACE VIEW dregg.receipt_chain WITH (security_invoker = true) AS
     SELECT ordinal, height, encode(creator, 'hex') AS creator,
            encode(prev_root, 'hex') AS prev_root,
            encode(ledger_root, 'hex') AS ledger_root, committed_at
     FROM dregg.turns ORDER BY ordinal;
-CREATE OR REPLACE VIEW dregg.cap_attenuations AS
+CREATE OR REPLACE VIEW dregg.cap_attenuations WITH (security_invoker = true) AS
     SELECT encode(c.holder, 'hex') AS holder, c.slot,
            encode(c.target, 'hex') AS target, jt.effect, c.expires_at,
            c.last_ordinal
     FROM dregg.capabilities c,
          JSON_TABLE(c.allowed_effects, '$[*]'
              COLUMNS (effect text PATH '$')) AS jt;
-CREATE OR REPLACE VIEW dregg.cell_fields AS
+CREATE OR REPLACE VIEW dregg.cell_fields WITH (security_invoker = true) AS
     SELECT encode(cell_id, 'hex') AS cell, jt.balance, jt.nonce, last_ordinal
     FROM dregg.cells,
          JSON_TABLE(fields_json, '$'
@@ -762,10 +818,32 @@ CREATE OR REPLACE VIEW dregg.cell_fields AS
 -- generated cell_hex column. ORDER BY here matches the kernel's sorted-leaf
 -- ordering exactly (no ICU/locale drift), so a pg-side fold over this view sees
 -- leaves in the same order the ledger root commits them. (docs/PG-DREGG-PG18.md §3.)
-CREATE OR REPLACE VIEW dregg.canonical_cells AS
+CREATE OR REPLACE VIEW dregg.canonical_cells WITH (security_invoker = true) AS
     SELECT cell_hex, balance, nonce, lifecycle, cell_root_hex, last_ordinal
     FROM dregg.cells
     ORDER BY cell_hex COLLATE pg_c_utf8;
+-- pg18 AIO observability (docs/PG-DREGG-PG18.md §8, docs/PG-DREGG.md §14.2): the
+-- mirror is read-heavy (the explorer/analytics scans + the recursive cap_edges
+-- walk) and Tier C adds verify-on-write, so the read/write/verify I/O mix is the
+-- thing worth making legible. pg18's asynchronous I/O subsystem feeds pg_stat_io;
+-- this view projects the read-path-relevant contexts (normal heap/index reads,
+-- vacuum, bulkread/bulkwrite) into a compact mirror-facing surface: per (backend
+-- type, io object, context) the read/write/extend counts and — the AIO-specific
+-- columns pg18 adds — `reads`/`read_bytes` and the `hits` that never touched the
+-- OS. `cache_hit_ratio` is the headline the read-heavy mirror watches as the
+-- ledger grows under AIO. It is a thin SELECT over the system view (no security
+-- concern — pg_stat_io exposes no row data), so it ships as a plain view the
+-- kernel/operator reads. NULLs (a context with no activity yet) are coalesced.
+CREATE OR REPLACE VIEW dregg.mirror_io_stats AS
+    SELECT backend_type, object, context,
+           reads, read_bytes, writes, write_bytes, extends, hits, evictions,
+           CASE WHEN coalesce(hits,0) + coalesce(reads,0) > 0
+                THEN round(coalesce(hits,0)::numeric
+                           / (coalesce(hits,0) + coalesce(reads,0)), 4)
+                ELSE NULL END AS cache_hit_ratio
+    FROM pg_stat_io
+    WHERE object IN ('relation')
+      AND context IN ('normal','vacuum','bulkread','bulkwrite');
 "#;
 
     const RLS: &str = r#"
@@ -965,6 +1043,29 @@ CREATE POLICY submit_read ON dregg.submit_queue FOR SELECT TO dregg_reader
 GRANT INSERT, SELECT ON dregg.submit_queue TO dregg_reader;
 GRANT SELECT, UPDATE ON dregg.submit_queue TO dregg_kernel;
 REVOKE INSERT, UPDATE, DELETE ON dregg.submit_queue FROM PUBLIC;
+-- The queue audit surface (docs/PG-DREGG-PG18.md §6): pg18's `uuidv7()` key is
+-- not merely sortable — its leading bits ARE the submission timestamp, and pg18
+-- ships `uuid_extract_timestamp()` / `uuid_extract_version()` to read them back.
+-- So the key itself is an audit signal: `enqueued_at` is recovered FROM the id
+-- (independent of the `submitted_at` clock column — a cross-check that the key
+-- really is time-ordered), `id_version` proves it is a v7, and `queue_latency`
+-- (resolved_at − the key's own timestamp) is the node's drain latency measured
+-- against the key. `security_invoker` so the submit_read RLS still gates which
+-- rows a submitter sees through the view. Ordered by id = arrival order.
+CREATE OR REPLACE VIEW dregg.submit_queue_audit WITH (security_invoker = true) AS
+    SELECT id,
+           encode(agent, 'hex')              AS agent,
+           submitter, status,
+           uuid_extract_version(id)          AS id_version,
+           uuid_extract_timestamp(id)        AS enqueued_at,
+           submitted_at,
+           resolved_at,
+           (resolved_at - uuid_extract_timestamp(id)) AS queue_latency,
+           encode(receipt_hash, 'hex')       AS receipt_hash,
+           error
+    FROM dregg.submit_queue
+    ORDER BY id;
+GRANT SELECT ON dregg.submit_queue_audit TO dregg_reader, dregg_kernel;
 "#;
 
     // ----------------------------------------------------------------------
@@ -986,6 +1087,39 @@ CREATE TABLE IF NOT EXISTS dregg.role_identity (
     bound_at      timestamptz NOT NULL DEFAULT now());
 REVOKE ALL ON dregg.role_identity FROM PUBLIC;
 GRANT SELECT ON dregg.role_identity TO dregg_kernel;
+-- The bind point where pg18 OAuth meets dregg (docs/PG-DREGG-PG18.md §6). OAuth
+-- itself is `pg_hba.conf` deployment config (the `oauth` auth method + an
+-- `oauth_validator_libraries` validator — NOT extension SQL); what it produces is
+-- a pg ROLE for the authenticated IdP subject. `dregg.bind_role` is the seam that
+-- turns that role into a dregg capability: a DBA (or an IdP-provisioning hook)
+-- calls it to upsert the role → (agent, token) row the `ON login` trigger then
+-- installs. So the full chain — OAuth subject → pg role → `dregg.bind_role` →
+-- `role_identity` → login hook → `dregg.token` GUC → RLS on every row — is one
+-- tested code path, not prose. SECURITY DEFINER (it writes role_identity, which is
+-- closed to PUBLIC); callable only by a role the DBA grants EXECUTE.
+CREATE OR REPLACE FUNCTION dregg.bind_role(
+    p_pg_role text, p_agent bytea, p_token text DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    INSERT INTO dregg.role_identity (pg_role, agent, default_token, bound_at)
+        VALUES (p_pg_role, p_agent, p_token, now())
+    ON CONFLICT (pg_role) DO UPDATE
+        SET agent = EXCLUDED.agent,
+            default_token = EXCLUDED.default_token,
+            bound_at = now();
+END $$;
+REVOKE ALL ON FUNCTION dregg.bind_role(text, bytea, text) FROM PUBLIC;
+-- The role→capability introspection view: which pg roles are bound to which dregg
+-- agent, and whether a default token is installed (the token text itself is NOT
+-- exposed — only its presence — so the binding map is auditable without leaking
+-- credentials). `security_invoker`; readable by the kernel/operator.
+CREATE OR REPLACE VIEW dregg.role_bindings WITH (security_invoker = true) AS
+    SELECT pg_role,
+           encode(agent, 'hex')               AS agent,
+           (default_token IS NOT NULL)         AS has_token,
+           bound_at
+    FROM dregg.role_identity;
+GRANT SELECT ON dregg.role_bindings TO dregg_kernel;
 "#;
 
     // The login event trigger. On every connection, look up the connecting role's
@@ -1270,6 +1404,89 @@ mod tests {
         }
     }
 
+    // ----------------------------------------------------------------------
+    // Generative property test for the anti-substitution tooth — no proptest
+    // dep, a tiny deterministic xorshift PRNG drives random batch sequences.
+    // ----------------------------------------------------------------------
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545F4914F6CDD1D)
+        }
+    }
+
+    #[test]
+    fn generative_chain_extends_iff_step_gate_accepts_and_head_is_stable() {
+        // Over MANY random batch sequences (right/wrong ordinals, right/wrong
+        // prev_roots, occasional smuggled rows), assert the three load-bearing
+        // invariants of the anti-substitution tooth on EVERY step:
+        //   (1) RootChain::extend accepts IFF the standalone verify_chain_step gate
+        //       accepts at the SAME (head, next_ordinal) — the SQL gate and the
+        //       in-process chain are provably the same check;
+        //   (2) on a REFUSAL the head and next_ordinal are UNCHANGED (a bad batch
+        //       can never corrupt the chain);
+        //   (3) on ACCEPTANCE the head advances to the batch's ledger_root and
+        //       next_ordinal increments by one.
+        let mut rng = Rng(0xDEADBEEFCAFEF00D);
+        for _ in 0..400 {
+            let g = root((rng.next() % 251) as u8);
+            let mut chain = RootChain::resume(g, 0);
+            for _ in 0..12 {
+                let head_before = chain.head();
+                let next_before = chain.next_ordinal();
+
+                // Build a batch whose ordinal is usually-right (next), sometimes a
+                // gap/replay; whose prev_root is usually-right (the head),
+                // sometimes substituted; occasionally with a smuggled row ordinal.
+                let ord = match rng.next() % 4 {
+                    0 => next_before.wrapping_add(rng.next() % 3), // gap
+                    1 => next_before.saturating_sub(rng.next() % 2), // replay-ish
+                    _ => next_before,                              // correct
+                };
+                let prev = if rng.next() % 3 == 0 {
+                    root((rng.next() % 251) as u8) // substituted
+                } else {
+                    head_before.unwrap_or(g) // correct (chains onto head)
+                };
+                let post = root((rng.next() % 251) as u8);
+                let mut b = batch(ord, prev, post);
+                if rng.next() % 9 == 0 {
+                    b.cells[0].last_ordinal = ord.wrapping_add(1 + rng.next() % 5); // smuggle
+                }
+
+                // (1) the standalone gate's verdict (it does NOT see the smuggle,
+                // which check_ordinals catches first; so predict accordingly).
+                let smuggled = b.check_ordinals().is_err();
+                let gate_ok = !smuggled
+                    && verify_chain_step(head_before, next_before, prev, ord).is_ok();
+
+                let res = chain.extend(&b);
+                assert_eq!(
+                    res.is_ok(),
+                    gate_ok,
+                    "extend must accept iff the step gate accepts (head={head_before:?}, \
+                     next={next_before}, ord={ord}, smuggled={smuggled})"
+                );
+
+                if res.is_ok() {
+                    // (3) accepted ⇒ head advanced to post, next incremented.
+                    assert_eq!(chain.head(), Some(post), "accepted batch advances the head");
+                    assert_eq!(chain.next_ordinal(), next_before + 1, "next ordinal increments");
+                } else {
+                    // (2) refused ⇒ chain UNCHANGED.
+                    assert_eq!(chain.head(), head_before, "a refused batch must not move the head");
+                    assert_eq!(chain.next_ordinal(), next_before, "a refused batch must not move next");
+                }
+            }
+        }
+    }
+
     #[test]
     fn cells_json_has_the_trigger_shape() {
         // The Tier-C commit_log trigger reads these exact keys from each element.
@@ -1303,6 +1520,14 @@ mod tests {
         // The node (dregg_kernel) drains + writes outcomes; PUBLIC gets nothing.
         assert!(sql.contains("GRANT SELECT, UPDATE ON dregg.submit_queue TO dregg_kernel"));
         assert!(sql.contains("REVOKE INSERT, UPDATE, DELETE ON dregg.submit_queue FROM PUBLIC"));
+        // pg18 uuidv7 key as an audit signal: the audit view recovers the enqueue
+        // time + version FROM the key (uuid_extract_timestamp/version), proving the
+        // temporal-sortability claim is load-bearing, not decorative.
+        assert!(sql.contains("CREATE OR REPLACE VIEW dregg.submit_queue_audit"));
+        assert!(sql.contains("uuid_extract_timestamp(id)"));
+        assert!(sql.contains("uuid_extract_version(id)"));
+        // The audit view is security_invoker so submit_read RLS still gates it.
+        assert!(sql.contains("dregg.submit_queue_audit WITH (security_invoker = true)"));
     }
 
     #[test]
@@ -1354,6 +1579,20 @@ mod tests {
         // The pg17 MERGE-based upsert function is emitted.
         assert!(sql.contains("dregg.merge_cell"));
         assert!(sql.contains("merge_action()"));
+        // The pg18 leverage wired in this pass.
+        // RETURNING WITH (OLD/NEW) explicit alias on the applicator (both forms).
+        assert!(sql.contains("RETURNING WITH (OLD AS o, NEW AS n)"),
+            "merge_cell uses the pg18 explicit old/new alias");
+        // The typed-delta twin applicator (action, balance_delta, nonce_delta).
+        assert!(sql.contains("CREATE OR REPLACE FUNCTION dregg.merge_cell_delta"));
+        assert!(sql.contains("OUT balance_delta bigint, OUT nonce_delta bigint"));
+        // The B-tree skip-scan composite index (mode, balance).
+        assert!(sql.contains("cells_by_mode_balance ON dregg.cells (mode, balance)"));
+        // Every dev-view is security_invoker (pg15 RLS-through-views).
+        assert!(sql.contains("security_invoker = true"));
+        // The pg18 AIO observability view over pg_stat_io.
+        assert!(sql.contains("CREATE OR REPLACE VIEW dregg.mirror_io_stats"));
+        assert!(sql.contains("FROM pg_stat_io"));
     }
 
     /// The pg17 login-binding DDL is emittable and shaped: the role→identity map
@@ -1374,6 +1613,14 @@ mod tests {
         assert!(sql.contains("EXCEPTION WHEN OTHERS THEN"));
         // The mapping table is not app-writable (it is the trust binding).
         assert!(sql.contains("REVOKE ALL ON dregg.role_identity FROM PUBLIC"));
+        // The OAuth→role→cap bind seam: the bind_role SECURITY DEFINER upsert (the
+        // tested code path that turns a pg role — e.g. an OAuth-authenticated one —
+        // into a dregg capability) + its PUBLIC lockdown + the introspection view.
+        assert!(sql.contains("CREATE OR REPLACE FUNCTION dregg.bind_role"));
+        assert!(sql.contains("REVOKE ALL ON FUNCTION dregg.bind_role(text, bytea, text) FROM PUBLIC"));
+        assert!(sql.contains("CREATE OR REPLACE VIEW dregg.role_bindings"));
+        // The introspection view exposes token PRESENCE, never the token itself.
+        assert!(sql.contains("(default_token IS NOT NULL)         AS has_token"));
     }
 
     /// The pg17 turn-effects JSON_TABLE view ships in Tier C (it reads the
@@ -1421,6 +1668,13 @@ mod tests {
             "balance_field",
             "dregg.merge_cell",
             "merge_action()",
+            // pg18 leverage wired in this pass — pinned so emitter ↔ file cannot drift.
+            "dregg.merge_cell_delta",           // the typed (action, Δbalance, Δnonce) applicator
+            "RETURNING WITH (OLD AS o, NEW AS n)", // the explicit pg18 old/new alias form
+            "cells_by_mode_balance",            // the B-tree skip-scan composite index
+            "security_invoker = true",          // pg15 RLS-through-views, declared
+            "dregg.mirror_io_stats",            // the pg18 AIO (pg_stat_io) observability view
+            "pg_stat_io",
             "CREATE POLICY cells_read",
             "CREATE POLICY turns_read",
             "CREATE POLICY caps_read",

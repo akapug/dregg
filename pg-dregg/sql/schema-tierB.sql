@@ -121,8 +121,15 @@ CREATE TABLE dregg.cells (
     balance_field  bigint
                    GENERATED ALWAYS AS ((fields_json->>'balance')::bigint) VIRTUAL
 );
-CREATE INDEX cells_by_balance   ON dregg.cells (balance);
-CREATE INDEX cells_by_mode      ON dregg.cells (mode);
+-- One composite index serves BOTH "cells in this mode" AND "cells by balance,
+-- any mode" — the latter via pg18's B-tree SKIP SCAN. The leading column `mode`
+-- has tiny cardinality (Hosted | Sovereign), which is exactly skip scan's sweet
+-- spot: a query constraining only `balance` makes the planner skip through the
+-- few distinct `mode` prefixes and range-scan `balance` within each, instead of
+-- the pre-18 fallback (a full index scan / seq scan). So one index covers the two
+-- hot analytics paths (`WHERE mode=…` and `WHERE balance>=…` / `ORDER BY balance`)
+-- with no separate balance index to maintain on the write path. (PG18 §8.)
+CREATE INDEX cells_by_mode_balance ON dregg.cells (mode, balance);
 CREATE INDEX cells_fields_gin   ON dregg.cells USING gin (fields_json);
 CREATE INDEX cells_perms_gin    ON dregg.cells USING gin (permissions);
 -- The canonical-order index: byte-order on the hex id under the builtin C
@@ -210,19 +217,22 @@ CREATE INDEX memory_by_domain ON dregg.memory (domain);
 -- ===========================================================================
 -- The kernel writer materializes each touched cell's post-image with a single
 -- pg18 MERGE: a first-seen cell INSERTs, a re-touched cell UPDATEs in place,
--- `merge_action()` (pg17) RETURNS which arm fired, and pg18's `RETURNING old.*,
--- new.*` reads the PRE-image balance in the SAME statement — so the function
--- returns the action AND the exact balance delta ('INSERT +1000000' /
--- 'UPDATE -500'), an audit signal impossible pre-18 without a separate pre-read.
--- Shipped as a function (the same one the mirror::ddl emitter generates) so the
--- node invokes it as `SELECT dregg.merge_cell(...)`. (docs/PG-DREGG-PG18.md §7;
--- the Tier-C trigger materializes the same way, schema-tierC.sql §3.)
+-- `merge_action()` (pg17) RETURNS which arm fired, and pg18's
+-- `RETURNING WITH (OLD AS o, NEW AS n)` binds the PRE-image in the SAME statement
+-- — so the function returns the action AND the exact balance delta
+-- ('INSERT +1000000' / 'UPDATE -500'), an audit signal impossible pre-18 without
+-- a separate pre-read. The explicit `RETURNING WITH (OLD/NEW)` alias is the
+-- spec-standard pg18 form (strictly better than the bare `old.`/`new.`
+-- pseudo-aliases, which only resolve when no column is named old/new). Shipped as
+-- a function (the same one the mirror::ddl emitter generates) so the node invokes
+-- it as `SELECT dregg.merge_cell(...)`. (docs/PG-DREGG-PG18.md §7; the Tier-C
+-- trigger materializes the same way, schema-tierC.sql §3.)
 CREATE OR REPLACE FUNCTION dregg.merge_cell(
     p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
     p_fields bytea, p_fields_json jsonb, p_lifecycle text,
     p_last_ordinal bigint, p_cell_root bytea) RETURNS text
 LANGUAGE plpgsql AS $$
-DECLARE v_action text; v_delta bigint;
+DECLARE v_action text; v_dbal bigint;
 BEGIN
     MERGE INTO dregg.cells AS t
     USING (SELECT p_cell_id AS cell_id) AS s
@@ -233,11 +243,41 @@ BEGIN
         (cell_id,mode,balance,nonce,fields,fields_json,lifecycle,last_ordinal,cell_root)
         VALUES (p_cell_id,p_mode,p_balance,p_nonce,p_fields,p_fields_json,
                 p_lifecycle,p_last_ordinal,p_cell_root)
-    -- pg17 merge_action() = 'INSERT'|'UPDATE'; pg18 old.balance is the pre-image
-    -- (NULL on insert) ⇒ new.balance - coalesce(old.balance,0) is the delta.
-    RETURNING merge_action(), new.balance - coalesce(old.balance, 0)
-        INTO v_action, v_delta;
-    RETURN v_action || ' ' || (CASE WHEN v_delta >= 0 THEN '+' ELSE '' END) || v_delta::text;
+    -- pg17 merge_action() = 'INSERT'|'UPDATE'; pg18 RETURNING WITH binds o (the
+    -- pre-image, o.balance NULL on insert) ⇒ n.balance - coalesce(o.balance,0).
+    RETURNING WITH (OLD AS o, NEW AS n)
+        merge_action(), n.balance - coalesce(o.balance, 0)
+        INTO v_action, v_dbal;
+    RETURN v_action || ' ' || (CASE WHEN v_dbal >= 0 THEN '+' ELSE '' END) || v_dbal::text;
+END $$;
+
+-- The richer audit applicator: the SAME atomic MERGE, returning the typed delta
+-- tuple (action, signed balance delta, signed nonce delta) the pg18 RETURNING
+-- WITH (OLD/NEW) reads from the pre-image. The string `dregg.merge_cell` stays the
+-- materialization path; this twin is the analytics face when a caller wants the
+-- numbers typed — e.g. asserting conservation (the per-cell balance deltas of a
+-- transfer sum to zero) directly off the applicator. (docs/PG-DREGG-PG18.md §7.)
+CREATE OR REPLACE FUNCTION dregg.merge_cell_delta(
+    p_cell_id bytea, p_mode text, p_balance bigint, p_nonce bigint,
+    p_fields bytea, p_fields_json jsonb, p_lifecycle text,
+    p_last_ordinal bigint, p_cell_root bytea,
+    OUT action text, OUT balance_delta bigint, OUT nonce_delta bigint)
+LANGUAGE plpgsql AS $$
+BEGIN
+    MERGE INTO dregg.cells AS t
+    USING (SELECT p_cell_id AS cell_id) AS s
+      ON t.cell_id = s.cell_id
+    WHEN MATCHED THEN UPDATE SET balance=p_balance, nonce=p_nonce,
+        fields_json=p_fields_json, last_ordinal=p_last_ordinal, cell_root=p_cell_root
+    WHEN NOT MATCHED THEN INSERT
+        (cell_id,mode,balance,nonce,fields,fields_json,lifecycle,last_ordinal,cell_root)
+        VALUES (p_cell_id,p_mode,p_balance,p_nonce,p_fields,p_fields_json,
+                p_lifecycle,p_last_ordinal,p_cell_root)
+    RETURNING WITH (OLD AS o, NEW AS n)
+        merge_action(),
+        n.balance - coalesce(o.balance, 0),
+        n.nonce   - coalesce(o.nonce, 0)
+        INTO action, balance_delta, nonce_delta;
 END $$;
 
 -- ===========================================================================
@@ -245,24 +285,25 @@ END $$;
 -- ===========================================================================
 -- These are the views the `mirror::ddl::tier_b()` emitter ships (kept in step
 -- with this file by the `emitted_ddl_agrees_with_committed_sql_file` test in
--- src/mirror.rs). Each is a plain SELECT, so it inherits the read-side RLS of
--- the table it draws from: a reader sees only their admitted rows THROUGH the
--- view too. See docs/QUICKSTART-dregg-dev.md for worked queries.
+-- src/mirror.rs). Each is created WITH (security_invoker = true) (pg15), so RLS on
+-- the base tables is evaluated as the INVOKING reader THROUGH the view — the
+-- capability gate is enforced by declaration, not incidentally (docs/PG-DREGG.md
+-- §14.3). See docs/QUICKSTART-dregg-dev.md for worked queries.
 
 -- The delegation graph; WITH RECURSIVE over it gives reachability / the
 -- no-amplification audit (a child's allowed_effects ⊆ its grantor's).
-CREATE OR REPLACE VIEW dregg.cap_edges AS
+CREATE OR REPLACE VIEW dregg.cap_edges WITH (security_invoker = true) AS
     SELECT holder AS src, target AS dst, slot, permissions, expires_at
     FROM dregg.capabilities;
 
 -- The ledger, hex-keyed and balance-first: the "show me the money" view.
-CREATE OR REPLACE VIEW dregg.cell_balances AS
+CREATE OR REPLACE VIEW dregg.cell_balances WITH (security_invoker = true) AS
     SELECT encode(cell_id, 'hex') AS cell, balance, nonce, lifecycle, last_ordinal
     FROM dregg.cells;
 
 -- The receipt/turn hash chain a light client walks: each row's prev_root is the
 -- prior row's ledger_root (the RootChain tooth, surfaced as SQL).
-CREATE OR REPLACE VIEW dregg.receipt_chain AS
+CREATE OR REPLACE VIEW dregg.receipt_chain WITH (security_invoker = true) AS
     SELECT ordinal, height, encode(creator, 'hex') AS creator,
            encode(prev_root, 'hex') AS prev_root,
            encode(ledger_root, 'hex') AS ledger_root, committed_at
@@ -274,7 +315,7 @@ CREATE OR REPLACE VIEW dregg.receipt_chain AS
 
 -- One row per attenuated effect in a capability's allowed_effects array: the
 -- no-amplification audit surface, exploded from the jsonb array into rows.
-CREATE OR REPLACE VIEW dregg.cap_attenuations AS
+CREATE OR REPLACE VIEW dregg.cap_attenuations WITH (security_invoker = true) AS
     SELECT encode(c.holder, 'hex') AS holder, c.slot,
            encode(c.target, 'hex') AS target, jt.effect, c.expires_at,
            c.last_ordinal
@@ -284,7 +325,7 @@ CREATE OR REPLACE VIEW dregg.cap_attenuations AS
 
 -- The decoded cell field slots (balance/nonce) projected out of fields_json: a
 -- typed face over the canonical jsonb the mirror writer fills.
-CREATE OR REPLACE VIEW dregg.cell_fields AS
+CREATE OR REPLACE VIEW dregg.cell_fields WITH (security_invoker = true) AS
     SELECT encode(cell_id, 'hex') AS cell, jt.balance, jt.nonce, last_ordinal
     FROM dregg.cells,
          JSON_TABLE(fields_json, '$'
@@ -296,10 +337,27 @@ CREATE OR REPLACE VIEW dregg.cell_fields AS
 -- generated cell_hex column. ORDER BY here matches the kernel's sorted-leaf
 -- ordering exactly (no ICU/locale drift), so a pg-side fold over this view sees
 -- leaves in the same order the ledger root commits them.
-CREATE OR REPLACE VIEW dregg.canonical_cells AS
+CREATE OR REPLACE VIEW dregg.canonical_cells WITH (security_invoker = true) AS
     SELECT cell_hex, balance, nonce, lifecycle, cell_root_hex, last_ordinal
     FROM dregg.cells
     ORDER BY cell_hex COLLATE pg_c_utf8;
+
+-- pg18 AIO observability (docs/PG-DREGG-PG18.md §8, docs/PG-DREGG.md §14.2): the
+-- read/write/verify I/O mix made legible. pg18's asynchronous I/O subsystem feeds
+-- pg_stat_io; this projects the read-path-relevant relation contexts (normal,
+-- vacuum, bulkread/bulkwrite) into a compact mirror-facing surface with the
+-- AIO-specific reads/read_bytes and the cache hit ratio the read-heavy mirror
+-- watches as the ledger grows. A thin SELECT over the system view (no row data).
+CREATE OR REPLACE VIEW dregg.mirror_io_stats AS
+    SELECT backend_type, object, context,
+           reads, read_bytes, writes, write_bytes, extends, hits, evictions,
+           CASE WHEN coalesce(hits,0) + coalesce(reads,0) > 0
+                THEN round(coalesce(hits,0)::numeric
+                           / (coalesce(hits,0) + coalesce(reads,0)), 4)
+                ELSE NULL END AS cache_hit_ratio
+    FROM pg_stat_io
+    WHERE object IN ('relation')
+      AND context IN ('normal','vacuum','bulkread','bulkwrite');
 
 -- ===========================================================================
 -- 6.  READ-SIDE RLS — every state table composes with the M1 cap layer.
