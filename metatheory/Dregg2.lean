@@ -57,6 +57,7 @@ import Dregg2.Exec.StepComplete -- step-completeness spine: cexec attests all 4 
 import Dregg2.Exec.RecordKernel -- concrete cell: KernelState's bal:ℤ lifted to a content-addressed Value record; recKExec_conserves/recKExec_authorized/recCexec_attests proved over the named `balance` field (#assert_axioms-clean)
 import Dregg2.Exec.FFI         -- @[export] scalar + record-cell entries → the Lean⟷Rust cascade beachhead (Rust hosts the compiled kernel; PoC round-trips)
 import Dregg2.Exec.CodecRoundtrip -- parse∘encode roundtrip theorem (number/digest/string/lit/flag/enum/scalar-value/bal-entry); removes those codec primitives from the Lean-side TCB; #assert_axioms-clean
+import Dregg2.Exec.FFI.Refine  -- §5 Stage-1 (CRITICAL-2): the String→String export REFINES the model — execFullForestAuthStep = encodeResult ∘ runModel ∘ parseWWire (export_refines_on_parseable); composed with CodecRoundtrip.parseWWire_encode ⇒ export∘encode = encode∘model end-to-end (export_refines_endToEnd), bringing the turn/effect wire codec INSIDE the proof (no longer TCB); runModel_state ties the export bytes to runGatedForestTurn's keystones; #assert_axioms-clean
 import Dregg2.Circuit          -- circuit-from-Lean: CCS IR + bridge (satisfied kernelCircuit ↔ fullStepInv); verify-law derived, not assumed
 import Dregg2.Exec.CellProgram -- CellProgram DSL = executable coalgebra structure-map; denote_conserves
 import Dregg2.Proof.Refine    -- Exec ⊑ Abstract: conservation + integrity-intra refinement, simulation diagram OPEN
