@@ -197,8 +197,10 @@ unauthorized_agent`, `cargo pgrx test pg18`.)
 |---|---|---|
 | **A** | caps as RLS (the M1 functions) | **landed**, proven (`cargo test`, `cargo pgrx test pg18`) |
 | **B** | dregg state as queryable tables (this doc) | **LANDED + live on pg18**: the node→pg writer (`node/src/pg_mirror.rs` `pg_live::PgSink`) ships each verified turn's `MirrorBatch` over `tokio-postgres`; the `RootChain` tooth gates it |
-| **C** | the verified-store gate (`dregg_verify_turn` + `dregg.commit_log`) | **LANDED + live**: the trigger runs the REAL anti-substitution chain re-validator + materializes via MERGE; a tampered batch is refused by the engine (`dregg_install_tier_c()`). The per-turn *proof* gate (whole-chain IVC) is the orthogonal M3 item |
+| **C** | the verified-store gate (`dregg_verify_turn` + `dregg.commit_log`) | **LANDED + live**: the trigger runs the REAL anti-substitution chain re-validator + materializes via MERGE; a tampered batch is refused by the engine (`dregg_install_tier_c()`). |
+| **C-proof** | the whole-chain IVC RANGE attestation (`dregg_attest_range`) | **SHAPE LANDED, fail-closed** (§11 below): the SRF + its anti-overclaim tooth are built + `cargo test`-proven; the circuit-link (serialize `WholeChainProof` + the `tier-c` dep on the Lean-free verifier) is the named settle item (`src/attest.rs`, `docs/PG-DREGG.md` §10.2.1). With `tier-c` off it attests nothing (the safe default). |
 | **C-write** | submit a verified turn FROM pg (`dregg_submit_turn` + the outbox) | **LANDED** (§8): RLS-gated enqueue; the node-side drainer is M3 |
+| **Fed** | federation via logical replication (`dregg_install_federation`) | **RE-VALIDATION LANDED** (§10 below): the publication emitter + the subscriber re-validation sweep (`dregg_revalidate_replicated_chain`) are built; replication itself is a `pg_createsubscriber` runbook the DBA runs |
 | **D** | the executor as a pg function (in-process) | the north star — one transaction mutates dregg state AND your app data atomically |
 
 The whole arc runs live: `cargo pgrx test pg18`, or `scripts/e2e-live.sh` for a
@@ -209,3 +211,62 @@ Tier D is where it gets awesome: `SELECT dregg_submit_turn_inproc(envelope)`
 inside a transaction that also `UPDATE`s your app tables — kernel state and app
 state commit together or not at all. No separate node can offer that cross-domain
 atomicity. See `docs/PG-DREGG.md` §11.
+
+---
+
+## 10. Federate: a subscriber tails your verified state (and re-validates it)
+
+Your mirror is a replicable feed. `dregg.turns` is a hash chain, so another
+postgres can tail it by PostgreSQL's own logical replication — federation-via-pg,
+no bespoke gossip (`docs/PG-DREGG.md` §15). On the **publisher**:
+
+```sql
+SELECT dregg_install_federation();   -- CREATE PUBLICATION dregg_mirror over turns/cells/caps/memory
+```
+
+The **subscriber** bootstraps from a consistent base and tails (a DBA runbook the
+extension prints for you, since it needs your publisher's conninfo):
+
+```sql
+SELECT dregg_federation_subscriber_runbook('host=publisher dbname=dregg');
+-- → the pg_createsubscriber bootstrap + CREATE SUBSCRIPTION ... WITH (failover = true)
+```
+
+The point: **a subscriber re-validates, it does not trust the stream.** The
+anti-substitution tooth is structural on the replicated `turns` rows, so the
+subscriber re-runs it locally:
+
+```sql
+SELECT dregg_revalidate_replicated_chain();
+--  'ok: 4 turns re-validated, head=203e…'             ← a faithful replica
+--  'REFUSED: root does not chain: head …, batch …'    ← a tampered/reordered stream, caught locally
+```
+
+A corrupted or reordered replication stream is caught **on the subscriber side,
+with no call back to the publisher** — replication is not a trust boundary. (If
+the subscriber also runs the Tier-C proof verifier, §11, it can re-attest each
+replicated turn's *proof*, not just the chain — a full verifying replica.)
+
+## 11. Attest a receipt RANGE (the whole-chain proof, in SQL)
+
+The per-row `dregg_verify_turn` re-validates the *chain* (cheap, structural). The
+*proof* — that every turn in a range actually executed correctly — is one succinct
+whole-chain IVC proof (`circuit::ivc_turn_chain`), verified as a **range
+attestation** (`docs/PG-DREGG.md` §10.2.1):
+
+```sql
+-- One proof attests the whole window; the SRF returns the attested ordinals as rows.
+SELECT t.ordinal, (a.proof_attested IS TRUE) AS proof_attested
+FROM dregg.turns t
+LEFT JOIN dregg_attest_range(:proof, :vk_anchor, 0, 100) a USING (ordinal);
+
+SELECT dregg_attest_explain(:proof, :vk_anchor, 0, 100);  -- why, if a window is not attested
+```
+
+The SRF **shape is built and `cargo test`-proven** (`src/attest.rs`: the
+request/verdict types, the anti-overclaim tooth — a proof for K turns cannot
+attest more than K — and the fail-closed row expansion). The circuit-link (making
+the in-memory `WholeChainProof` cross the boundary as `bytea`, behind the
+Lean-free `tier-c` feature) is the named settle item (S1–S3, §10.2.1). **Until it
+lands the SRF fails closed — it attests nothing** — which is the only safe default
+for a proof gate: "unattested", never a false "attested".

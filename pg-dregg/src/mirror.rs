@@ -495,6 +495,90 @@ pub fn verify_chain_step(
 }
 
 // ============================================================================
+// 4b. Federation: a SUBSCRIBER re-validates a replicated chain (does not trust).
+// ============================================================================
+//
+// docs/PG-DREGG.md §15 — federation via PostgreSQL logical replication. A
+// subscriber tails a publisher's `dregg.turns`/`cells`/`capabilities`/`memory`
+// (CREATE PUBLICATION / CREATE SUBSCRIPTION). The load-bearing soundness claim is
+// that the anti-substitution tooth SURVIVES replication: it is STRUCTURAL ON THE
+// `turns` ROWS (turn N's `ledger_root` == turn N+1's `prev_root`, ordinals dense),
+// and logical replication copies those rows verbatim — so a subscriber can re-run
+// the SAME `verify_chain_step` over its replicated rows and get the identical
+// accept/refuse verdict the publisher did. A subscriber re-validates; it does not
+// trust the stream. A reordered / substituted / dropped turn in the replication
+// stream is caught by the tooth ON THE SUBSCRIBER SIDE.
+//
+// This is the realizable, circuit-free half every replica enforces (the Tier-C
+// proof verify is the expensive complete half a *verifying* replica adds on top —
+// see `crate::attest`). The function below is what a subscriber-side apply hook /
+// periodic sweep runs over the replicated `dregg.turns` (read as `(ordinal,
+// prev_root, ledger_root)` tuples, ordered by ordinal).
+
+/// A replicated turn-chain row, the minimal projection a subscriber re-validates:
+/// `(ordinal, prev_root, ledger_root)` from a replicated `dregg.turns`. (The full
+/// [`TurnRow`] is what the publisher writes; the chain tooth needs only these
+/// three, so a subscriber sweep reads only these.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainLink {
+    pub ordinal: u64,
+    pub prev_root: [u8; 32],
+    pub ledger_root: [u8; 32],
+}
+
+/// Re-validate a replicated chain on the SUBSCRIBER SIDE (docs/PG-DREGG.md §15).
+/// Walks the replicated links (which MUST be ordered by ordinal) through the SAME
+/// [`verify_chain_step`] the publisher ran, from the pinned `genesis` root. Returns
+/// `Ok(head)` (the post-state root of the last link) if the whole replicated chain
+/// re-validates, or `Err(ChainRefusal)` naming the FIRST link that does not chain —
+/// a tampered / reordered / substituted / gapped replication stream is caught here,
+/// locally, with NO call back to the publisher. This is the property §15 turns on:
+/// *the RootChain tooth survives replication and lets a subscriber re-validate
+/// locally*, because the tooth is defined on the replicated rows themselves.
+///
+/// `expect_count`, if `Some(n)`, additionally requires exactly `n` links (so a
+/// subscriber can assert it received the whole published prefix, not a truncation
+/// the per-link chaining alone would not notice at the tail).
+pub fn revalidate_replicated_chain(
+    genesis: [u8; 32],
+    links: &[ChainLink],
+    expect_count: Option<u64>,
+) -> Result<Option<[u8; 32]>, ChainRefusal> {
+    if let Some(n) = expect_count {
+        if links.len() as u64 != n {
+            return Err(ChainRefusal::Malformed(format!(
+                "replicated chain has {} links, expected {n} (truncated or over-long stream)",
+                links.len()
+            )));
+        }
+    }
+    let mut head: Option<[u8; 32]> = None;
+    let mut next_ordinal: u64 = 0;
+    // If the genesis is non-trivial, the first link's prev_root must equal it; we
+    // express that by seeding the chain with genesis as the head ONLY when there
+    // is a genesis to pin (an all-zero genesis matches the "no head yet" case for
+    // ordinal 0, exactly as `RootChain::resume(genesis, 0)` does).
+    if genesis != [0u8; 32] {
+        head = Some(genesis);
+    }
+    for link in links {
+        // For the very first link under an all-zero genesis, head is None ⇒ the
+        // step gate accepts whatever prev_root ordinal-0 declares (genesis pin);
+        // otherwise prev_root must equal the running head. This mirrors
+        // `RootChain::extend` exactly.
+        let effective_head = if next_ordinal == 0 && genesis == [0u8; 32] {
+            None
+        } else {
+            head
+        };
+        verify_chain_step(effective_head, next_ordinal, link.prev_root, link.ordinal)?;
+        head = Some(link.ledger_root);
+        next_ordinal += 1;
+    }
+    Ok(head)
+}
+
+// ============================================================================
 // 5. DDL emission — the schema generated from the same Rust that defines rows.
 // ============================================================================
 //
@@ -619,6 +703,81 @@ pub mod ddl {
         s.push_str(LOGIN_HOOK);
         s
     }
+
+    /// The FEDERATION-via-logical-replication publication (`docs/PG-DREGG.md`
+    /// §15) — the PUBLISHER side. Publishes the four state tables + `turns` so a
+    /// subscriber postgres tails the verified-turn stream by PostgreSQL's own
+    /// logical replication (federation-via-pg, no bespoke gossip): the publisher's
+    /// `dregg.turns` hash chain IS the replicated feed, and a subscriber that tails
+    /// it is a read replica of verified dregg state. Idempotent.
+    ///
+    /// The SUBSCRIBER side ([`federation_subscriber`]) is a runbook (it needs the
+    /// publisher's connection string + `pg_createsubscriber`), NOT extension SQL,
+    /// so it is emitted as a commented template. The load-bearing soundness claim —
+    /// the `RootChain` anti-substitution tooth SURVIVES replication and lets a
+    /// subscriber re-validate LOCALLY — is enforced by
+    /// [`super::revalidate_replicated_chain`] (the subscriber-side sweep over the
+    /// replicated `dregg.turns`), proven `cargo test`. A subscriber re-validates;
+    /// it does not trust the stream.
+    pub fn federation_publication() -> String {
+        FED_PUBLICATION.to_string()
+    }
+
+    /// The FEDERATION SUBSCRIBER runbook (`docs/PG-DREGG.md` §15) — emitted as a
+    /// commented template because standing up a subscriber needs the publisher's
+    /// connection string and is a `pg_createsubscriber` operation, not in-database
+    /// SQL the extension runs. It documents (a) the `pg_createsubscriber` bootstrap
+    /// (convert a physical standby into a logical subscriber WITHOUT a fresh dump,
+    /// pg17), (b) the `CREATE SUBSCRIPTION … WITH (failover = true)` that tails the
+    /// publisher and survives its failover (pg17 failover slots), and (c) the
+    /// subscriber-side re-validation sweep the extension function
+    /// `dregg_revalidate_replicated_chain()` runs (over `super::revalidate_replicated_chain`).
+    pub fn federation_subscriber(publisher_conninfo: &str) -> String {
+        FED_SUBSCRIBER_TEMPLATE.replace("{PUBLISHER_CONNINFO}", publisher_conninfo)
+    }
+
+    const FED_PUBLICATION: &str = r#"
+-- FEDERATION via logical replication (docs/PG-DREGG.md §15) — the PUBLISHER.
+-- The publisher's dregg.turns hash chain IS the replicated feed; a subscriber
+-- that tails it is a read replica of VERIFIED dregg state. Publishing the four
+-- state tables + turns is all the subscriber needs to re-validate locally.
+DO $$ BEGIN
+    CREATE PUBLICATION dregg_mirror
+        FOR TABLE dregg.turns, dregg.cells, dregg.capabilities, dregg.memory;
+EXCEPTION WHEN duplicate_object THEN
+    -- Re-runnable: keep the existing publication (a DBA ALTERs it to add tables).
+    NULL;
+END $$;
+"#;
+
+    const FED_SUBSCRIBER_TEMPLATE: &str = r#"
+-- FEDERATION via logical replication (docs/PG-DREGG.md §15) — the SUBSCRIBER.
+-- This is a RUNBOOK (it needs the publisher conninfo + pg_createsubscriber), not
+-- extension SQL. Steps:
+--
+-- (1) Bootstrap from a consistent base with pg17 pg_createsubscriber (converts a
+--     physical standby into a logical subscriber WITHOUT a fresh dump — the
+--     subscriber starts already caught up to a consistent point of the WHOLE
+--     mirror, which a real ledger needs):
+--       pg_createsubscriber -d dregg -P "{PUBLISHER_CONNINFO}" \
+--         --publication=dregg_mirror
+--
+-- (2) The subscription tails the publisher's verified-turn stream thereafter,
+--     surviving publisher failover via pg17 FAILOVER SLOTS:
+--       CREATE SUBSCRIPTION dregg_tail
+--         CONNECTION '{PUBLISHER_CONNINFO}'
+--         PUBLICATION dregg_mirror
+--         WITH (failover = true);
+--
+-- (3) RE-VALIDATE, DO NOT TRUST. On apply (or a periodic sweep), the subscriber
+--     walks its replicated dregg.turns through the SAME anti-substitution tooth
+--     the publisher ran (super::revalidate_replicated_chain, surfaced as the
+--     extension function dregg_revalidate_replicated_chain()), and alarms on a
+--     head that does not chain. A corrupted / reordered / substituted replication
+--     stream is caught HERE, locally, with no call back to the publisher —
+--     replication is NOT a trust boundary the tooth assumes away.
+--       SELECT * FROM dregg_revalidate_replicated_chain();  -- () | a refusal row
+"#;
 
     const TURNS: &str = r#"
 CREATE TABLE IF NOT EXISTS dregg.turns (
@@ -1402,6 +1561,101 @@ mod tests {
             let res = chain.extend(&batch(ord, prev, post));
             assert_eq!(step.is_ok(), res.is_ok(), "the gate and extend must agree at ord {ord}");
         }
+    }
+
+    // ----------------------------------------------------------------------
+    // Federation: a SUBSCRIBER re-validates a replicated chain (docs §15).
+    // ----------------------------------------------------------------------
+
+    fn link(ordinal: u64, prev: [u8; 32], post: [u8; 32]) -> ChainLink {
+        ChainLink { ordinal, prev_root: prev, ledger_root: post }
+    }
+
+    #[test]
+    fn subscriber_revalidates_a_faithfully_replicated_chain() {
+        // The §15 soundness property: a subscriber re-runs the SAME tooth over the
+        // replicated turns and gets the publisher's verdict — the chain survives
+        // replication because it is structural on the rows.
+        let g = root(0);
+        let links = [
+            link(0, g, root(1)),
+            link(1, root(1), root(2)),
+            link(2, root(2), root(3)),
+        ];
+        let head = revalidate_replicated_chain(g, &links, Some(3)).unwrap();
+        assert_eq!(head, Some(root(3)), "the re-validated head is the last post-root");
+
+        // It agrees with what RootChain::extend would accept, batch for batch.
+        let mut chain = RootChain::resume(g, 0);
+        for l in &links {
+            assert!(chain.extend(&batch(l.ordinal, l.prev_root, l.ledger_root)).is_ok());
+        }
+        assert_eq!(chain.head(), head, "subscriber sweep == publisher chain head");
+    }
+
+    #[test]
+    fn subscriber_catches_a_substituted_replicated_turn() {
+        // A tampered replication stream (turn 1's prev_root substituted) is caught
+        // ON THE SUBSCRIBER SIDE — replication is not a trust boundary.
+        let g = root(0);
+        let links = [
+            link(0, g, root(1)),
+            link(1, root(7), root(2)), // prev_root should be root(1)
+        ];
+        let err = revalidate_replicated_chain(g, &links, None).unwrap_err();
+        assert!(matches!(err, ChainRefusal::RootMismatch { .. }));
+    }
+
+    #[test]
+    fn subscriber_catches_a_reordered_or_gapped_stream() {
+        let g = root(0);
+        // A gap (ordinals 0 then 2) is caught.
+        let gapped = [link(0, g, root(1)), link(2, root(1), root(3))];
+        assert!(matches!(
+            revalidate_replicated_chain(g, &gapped, None).unwrap_err(),
+            ChainRefusal::OrdinalGap { expected: 1, got: 2 }
+        ));
+        // A truncation (count mismatch) is caught when the expected count is known.
+        let truncated = [link(0, g, root(1))];
+        assert!(matches!(
+            revalidate_replicated_chain(g, &truncated, Some(3)).unwrap_err(),
+            ChainRefusal::Malformed(_)
+        ));
+    }
+
+    #[test]
+    fn subscriber_revalidates_the_synthetic_story_after_replication() {
+        // The whole synthetic story, projected to ChainLinks (as a replicated
+        // dregg.turns would be read), re-validates from the pinned genesis — the
+        // exact federation claim over real demo data.
+        let story = crate::synth::ledger_story();
+        let links: Vec<ChainLink> = story
+            .iter()
+            .map(|b| link(b.turn.ordinal, b.turn.prev_root, b.turn.ledger_root))
+            .collect();
+        let head =
+            revalidate_replicated_chain(crate::synth::GENESIS_ROOT, &links, Some(4)).unwrap();
+        assert_eq!(head, Some(story[3].turn.ledger_root));
+    }
+
+    #[test]
+    fn federation_publication_ddl_publishes_the_state_tables() {
+        let sql = ddl::federation_publication();
+        assert!(sql.contains("CREATE PUBLICATION dregg_mirror"));
+        // All four state relations are in the feed.
+        assert!(sql.contains("dregg.turns"));
+        assert!(sql.contains("dregg.cells"));
+        assert!(sql.contains("dregg.capabilities"));
+        assert!(sql.contains("dregg.memory"));
+        // Idempotent (re-runnable).
+        assert!(sql.contains("duplicate_object"));
+        // The subscriber runbook substitutes the publisher conninfo + names the
+        // re-validation sweep (re-validate, do not trust).
+        let sub = ddl::federation_subscriber("host=pub dbname=dregg");
+        assert!(sub.contains("pg_createsubscriber"));
+        assert!(sub.contains("failover = true"));
+        assert!(sub.contains("host=pub dbname=dregg"));
+        assert!(sub.contains("dregg_revalidate_replicated_chain"));
     }
 
     // ----------------------------------------------------------------------

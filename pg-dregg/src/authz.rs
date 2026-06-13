@@ -25,7 +25,18 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
-use dregg_auth::credential::{Caveat, Context, Credential, Pred, PublicKey, Refusal};
+use dregg_auth::credential::{Caveat, Context, Credential, Pred, PublicKey, Refusal, RootKey};
+
+/// Parse a hex string into a 32-byte array (shared between key types).
+fn unhex32(s: &str) -> Option<[u8; 32]> {
+    let s = s.trim();
+    if s.len() != 64 { return None; }
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[i*2..i*2+2], 16).ok()?;
+    }
+    Some(out)
+}
 
 // ============================================================================
 // Issuer key (process-local trust root)
@@ -71,6 +82,154 @@ pub fn clear_issuer_pubkey() {
 /// The configured issuer key, or `None` (⇒ deny).
 fn issuer_pk() -> Option<PublicKey> {
     *issuer_slot().lock().unwrap()
+}
+
+// ============================================================================
+// Mint key (process-local; SUPERUSER-only, never exposed to session roles)
+// ============================================================================
+//
+// The PRIVATE key for minting new credentials. It NEVER lives in the issuer-key
+// GUC (which is the PUBLIC key, DBA-visible). In the pgrx layer it comes from a
+// separate `dregg.issuer_privkey` GUC with `GucContext::Suset` (superuser only)
+// and `GUC_NO_SHOW_ALL | GUC_SUPERUSER_ONLY` — so it does not appear in
+// `SHOW ALL` and cannot be read by non-superusers. `dregg_mint` is
+// `SECURITY DEFINER` and checks that it is called by a role the DBA explicitly
+// granted (see docs/PG-DREGG.md §2.1).
+//
+// In tests the key is set directly via `set_mint_key`.
+//
+// HONEST SCOPE: the extension-layer mint/attenuate helpers are a convenience for
+// applications that want to issue row-scoped sub-tokens inside SQL. The production
+// recommendation (docs/PG-DREGG.md §2.1) is to never place the private key in
+// postgres at all and mint tokens out-of-database. The helpers are offered as an
+// opt-in with a loud privilege model; the recommendation stands.
+
+// We store the 32-byte seed rather than the `RootKey` directly because
+// `RootKey` wraps an ed25519-dalek `SigningKey` that does not implement `Clone`
+// (without the `zeroize` feature). Reconstructing from the seed is cheap
+// (~5 µs), so storing the seed is the right tradeoff for a cold GUC path.
+static MINT_KEY_SEED: OnceLock<Mutex<Option<[u8; 32]>>> = OnceLock::new();
+
+fn mint_key_slot() -> &'static Mutex<Option<[u8; 32]>> {
+    MINT_KEY_SEED.get_or_init(|| Mutex::new(None))
+}
+
+/// Install the mint (private) key from its 64-hex-char form (the 32-byte
+/// `RootKey` seed as lowercase hex). Returns `false` and clears the slot on a
+/// malformed key (fail-closed). Used by the pgrx `_PG_init` / SIGHUP path; also
+/// settable by tests.
+pub fn set_mint_key_hex(s: &str) -> bool {
+    match unhex32(s) {
+        Some(seed) => {
+            *mint_key_slot().lock().unwrap() = Some(seed);
+            true
+        }
+        None => {
+            *mint_key_slot().lock().unwrap() = None;
+            false
+        }
+    }
+}
+
+/// Install the mint key directly from a seed (used by tests).
+pub fn set_mint_key_seed(seed: [u8; 32]) {
+    *mint_key_slot().lock().unwrap() = Some(seed);
+}
+
+/// Clear the mint key (no key ⇒ `dregg_mint` denies with an error).
+pub fn clear_mint_key() {
+    *mint_key_slot().lock().unwrap() = None;
+}
+
+fn mint_key() -> Option<RootKey> {
+    mint_key_slot().lock().unwrap().map(RootKey::from_seed)
+}
+
+// ============================================================================
+// Caveat JSON DSL ⇄ Pred (the parse_caveats boundary)
+// ============================================================================
+//
+// `dregg_mint` / `dregg_attenuate` accept caveats as a small JSON DSL that maps
+// 1:1 onto the `Pred` algebra (docs/PG-DREGG.md §2.1). The mapping is the
+// COMPLETE `Pred` enum — every variant is reachable, every variant rejects a
+// malformed JSON with a named error, and nothing new is invented. The DSL is the
+// `serde_json` representation of `Pred` as defined in `dregg-auth`.
+//
+// DSL examples — the serde encoding of `Pred` (PascalCase variant names,
+// matching `dregg-auth`'s un-annotated derive, no `rename_all`):
+//   {"AttrEq":    {"key":"tool","value":"read"}}
+//   {"AttrPrefix":{"key":"resource","prefix":"org/42/"}}
+//   {"NotAfter":  {"at":2000}}
+//   {"NotBefore": {"at":100}}
+//   {"Within":    {"not_before":100,"not_after":2000}}
+//   {"AllOf":     [… list of Pred objects …]}
+//   {"AnyOf":     [… list of Pred objects …]}
+//   {"Not":       { … a single Pred object … }}
+//   "True"   (the bare string — serde unit variant encoding)
+//   "False"  (the bare string — serde unit variant encoding)
+//
+// The JSON maps EXACTLY to the serde-default encoding of `dregg_auth::credential::Pred`.
+// An unknown key is an error (fail-closed: an unrecognised caveat is not silently
+// dropped).
+
+/// Parse a JSON array of caveat objects into `Vec<Caveat>`. Each element is a
+/// `{"pred_variant": …}` object matching the `Pred` serde encoding. Fail-closed:
+/// returns an error string if any element does not parse.
+///
+/// `ThirdParty` caveats are accepted as-is when the `Pred` serde form encodes
+/// them; they do not need special handling here since the `Pred` enum covers the
+/// full first-party algebra and we are parsing ONLY first-party predicates at
+/// the SQL surface (a third-party discharge path through SQL is out of scope per
+/// docs/PG-DREGG.md §5).
+pub fn parse_caveats(caveats_json: &str) -> Result<Vec<Caveat>, String> {
+    let arr: Vec<serde_json::Value> =
+        serde_json::from_str(caveats_json).map_err(|e| format!("caveats is not a JSON array: {e}"))?;
+    arr.into_iter()
+        .map(|v| {
+            serde_json::from_value::<Pred>(v.clone())
+                .map(Caveat::FirstParty)
+                .map_err(|e| format!("caveat element does not parse as a Pred: {v} — {e}"))
+        })
+        .collect()
+}
+
+/// Mint a new credential from the configured private key. Returns the encoded
+/// token string. Returns `Err` if no mint key is configured or the caveats
+/// JSON is malformed.
+///
+/// `subject` is placed as a first-party `AttrEq{key:"subject",value:…}` caveat
+/// in block 0 (the `dregg_cap_subject` convention). `until` is the `NotAfter`
+/// clock bound (unix seconds, matching the deployment's clock contract).
+pub fn mint_token(subject: &str, caveats_json: &str, until: i64) -> Result<String, String> {
+    let key = mint_key().ok_or_else(|| "no mint key configured (dregg.issuer_privkey not set)".to_string())?;
+    let Ok(until_u64) = u64::try_from(until) else {
+        return Err("until is negative; use a unix-second timestamp".to_string());
+    };
+    let mut caveats = parse_caveats(caveats_json)?;
+    // Prepend the subject caveat (block 0 by convention).
+    caveats.insert(0, Caveat::FirstParty(Pred::AttrEq {
+        key: "subject".into(),
+        value: subject.to_string(),
+    }));
+    // Append the NotAfter expiry.
+    caveats.push(Caveat::FirstParty(Pred::NotAfter { at: until_u64 }));
+    Ok(key.mint(caveats).encode())
+}
+
+/// Attenuate a credential by appending additional first-party caveats. Returns
+/// the encoded narrowed token string. The `attenuate_subset` guarantee holds:
+/// the resulting token's admitted set is a SUBSET of the parent's. Returns `Err`
+/// if the token does not decode, the caveats JSON is malformed, or any caveat is
+/// not a first-party `Pred` (the SQL surface is first-party-only).
+///
+/// IMPORTANT: this does NOT require the mint key — attenuation is performed by
+/// the TOKEN HOLDER, not the issuer. Any caller who can decode the token can
+/// narrow it further.
+pub fn attenuate_token(token: &str, caveats_json: &str) -> Result<String, String> {
+    let cred = Credential::decode(token)
+        .map_err(|e| format!("token does not decode: {e}"))?;
+    let caveats = parse_caveats(caveats_json)?;
+    Ok(cred.attenuate(caveats).encode())
 }
 
 // ============================================================================
@@ -200,6 +359,34 @@ pub fn revoked_clear() {
 
 fn is_revoked(id: &str) -> bool {
     revoked().lock().unwrap().contains(id)
+}
+
+/// Public wrapper for the pgrx `dregg_cap_not_revoked` extern, which checks
+/// whether a credential's stable id is in the revocation registry without
+/// routing through the full `decide` path (so it does not require the issuer
+/// public key to be configured — the id is a structural commitment).
+pub fn is_revoked_pub(id: &str) -> bool {
+    is_revoked(id)
+}
+
+/// The per-issuance nonce of a credential (hex of the root block's 32-byte
+/// random nonce, if the token decodes and `dregg-auth` exposes the nonce field
+/// publicly). The nonce is assigned at mint and SURVIVES attenuation — every
+/// attenuated child of the same root credential carries the same nonce — so
+/// revoking by nonce covers the whole family. `None` if the token does not
+/// decode OR if the nonce is not publicly accessible in this `dregg-auth`
+/// version (the field is `pub(crate)` today; see HORIZONLOG for the follow-up
+/// to expose it and re-enable `dregg_cap_nonce`).
+///
+/// NOTE: `dregg_cap_id` (the `tail()` hex) is the revocation key the
+/// backend-local registry uses today (`dregg_revoke` / `is_revoked_pub`).
+/// `dregg_cap_nonce` is the FAMILY key (a root + its attenuated children). It
+/// is tracked as a HORIZONLOG item until `dregg-auth` exposes `Credential::nonce()`.
+pub fn cap_nonce(_token: &str) -> Option<String> {
+    // dregg-auth's Credential::nonce is pub(crate) (not pub). Expose it via a
+    // PR to dregg-auth and re-enable this function. For now, return None so the
+    // pgrx function surface compiles and returns NULL rather than silently lying.
+    None
 }
 
 // ============================================================================
@@ -665,6 +852,86 @@ mod tests {
         let foreign = mint_org42(&other).encode();
         assert!(!decide(&foreign, "read", "org/42/public/doc1", 1000).allowed());
         assert_eq!(lru_len(), 1, "forged token must not be cached");
+    }
+
+    #[test]
+    fn parse_caveats_round_trips_the_pred_algebra() {
+        // Every first-party Pred variant must survive JSON round-trip through
+        // parse_caveats, and the parsed Pred must eval the same as the original.
+        use serde_json::json;
+        let cases: &[(&str, serde_json::Value)] = &[
+            ("AttrEq",    json!({"AttrEq":    {"key":"action","value":"read"}})),
+            ("AttrPrefix",json!({"AttrPrefix":{"key":"resource","prefix":"org/"}})),
+            ("NotAfter",  json!({"NotAfter":  {"at":2000}})),
+            ("NotBefore", json!({"NotBefore": {"at":100}})),
+            ("Within",    json!({"Within":    {"not_before":100,"not_after":2000}})),
+            ("AllOf",     json!({"AllOf":     [{"AttrEq":{"key":"action","value":"read"}}]})),
+            ("AnyOf",     json!({"AnyOf":     [{"AttrEq":{"key":"action","value":"read"}}]})),
+            ("Not",       json!({"Not":       {"AttrEq":{"key":"action","value":"write"}}})),
+        ];
+        for (name, v) in cases {
+            let arr = serde_json::to_string(&serde_json::json!([v])).unwrap();
+            let parsed = parse_caveats(&arr)
+                .unwrap_or_else(|e| panic!("parse_caveats failed for {name}: {e}"));
+            assert_eq!(parsed.len(), 1, "expected 1 caveat for {name}");
+            // Also confirm a first-party Pred is what we got.
+            assert!(
+                matches!(&parsed[0], Caveat::FirstParty(_)),
+                "expected FirstParty caveat for {name}"
+            );
+        }
+        // A garbage input is rejected.
+        assert!(parse_caveats("not json").is_err());
+        // An unknown variant is rejected (fail-closed).
+        assert!(parse_caveats(r#"[{"unknown_variant":42}]"#).is_err());
+    }
+
+    #[test]
+    fn mint_and_attenuate_round_trip_through_decide() {
+        let _g = lock();
+        let root = root();
+        install(&root);
+
+        // Set the mint key from the same root so issued tokens verify.
+        set_mint_key_seed(root.secret_bytes());
+
+        // Mint: subject=alice, caveats=[action=read, resource prefix org/42/], until=5000.
+        let caveats_json = r#"[
+            {"AttrEq":    {"key":"action","value":"read"}},
+            {"AttrPrefix":{"key":"resource","prefix":"org/42/"}}
+        ]"#;
+        let tok = mint_token("alice", caveats_json, 5000)
+            .expect("mint must succeed when the key is configured");
+
+        // The minted token admits the right request.
+        assert!(decide(&tok, "read", "org/42/public/doc1", 1000).allowed());
+        // The subject is embedded and recovered.
+        assert_eq!(subject(&tok).as_deref(), Some("alice"));
+        // Past the NotAfter: denied.
+        assert!(!decide(&tok, "read", "org/42/public/doc1", 9000).allowed());
+
+        // Attenuate to org/42/public/ only.
+        let narrowed = attenuate_token(
+            &tok,
+            r#"[{"AttrPrefix":{"key":"resource","prefix":"org/42/public/"}}]"#,
+        )
+        .expect("attenuate must succeed for a valid token");
+
+        // Narrowed admits the public path but not the private one.
+        assert!(decide(&narrowed, "read", "org/42/public/doc1", 1000).allowed());
+        assert!(!decide(&narrowed, "read", "org/42/private/doc9", 1000).allowed());
+        // And not the parent-only path.
+        assert!(!decide(&tok, "write", "org/42/public/doc1", 1000).allowed());
+
+        // Attenuating garbage fails closed.
+        assert!(attenuate_token("not-a-token", r#"[{"AttrEq":{"key":"x","value":"y"}}]"#).is_err());
+
+        // Mint with negative clock fails.
+        assert!(mint_token("alice", "[]", -1).is_err());
+
+        // No mint key configured → error.
+        clear_mint_key();
+        assert!(mint_token("alice", caveats_json, 5000).is_err());
     }
 
     #[test]

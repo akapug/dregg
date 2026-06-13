@@ -174,3 +174,61 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 -- unique Tier-D payoff no separate node can offer. The §11 outbox above is the
 -- realizable slice today (the node executes out-of-process); Tier D is the
 -- north-star where postgres executes in-process.
+
+-- ===========================================================================
+-- 7.  The whole-chain IVC RANGE attestation (docs/PG-DREGG.md §10.2.1) — the
+--     PROOF half of Tier C, the SRF SHAPE (emitted from src/attest.rs, not SQL).
+-- ===========================================================================
+-- dregg_verify_turn (above) re-validates the CHAIN structurally per row. The
+-- PROOF — that every turn in a range actually executed correctly — is ONE
+-- succinct whole-chain IVC proof (circuit::ivc_turn_chain), verified as a RANGE
+-- attestation. The SRF returns the attested ordinals as rows so SQL can use it:
+--
+--   SELECT t.ordinal, (a.proof_attested IS TRUE) AS proof_attested
+--   FROM dregg.turns t
+--   LEFT JOIN dregg_attest_range(:proof, :vk_anchor, 0, 100) a USING (ordinal);
+--
+--   SELECT dregg_attest_explain(:proof, :vk_anchor, 0, 100);  -- the verdict reason
+--
+-- The SRF shape (request/verdict types + the anti-overclaim tooth — a proof for K
+-- turns cannot attest more than K — + the fail-closed row expansion) is built and
+-- `cargo test`-proven in src/attest.rs. The circuit-link (making the in-memory
+-- WholeChainProof cross the boundary as bytea, behind the Lean-free `tier-c`
+-- feature) is the named settle item S1-S3 (§10.2.1). UNTIL it lands the SRF FAILS
+-- CLOSED — it attests NOTHING — which is the only safe default for a proof gate
+-- (§10.3: "unattested", never a false "attested"). The node-side producer writes a
+-- dregg.turn_proofs(lo,hi,genesis_root,final_root,proof bytea,vk) table the SRF
+-- reads (S2, post-flip M3).
+
+-- ===========================================================================
+-- 8.  Federation via logical replication (docs/PG-DREGG.md §15) — distributed.
+-- ===========================================================================
+-- dregg.turns is a hash chain, so another postgres tails this node's verified
+-- state by PostgreSQL's own logical replication — federation-via-pg. PUBLISHER:
+--
+--   SELECT dregg_install_federation();
+--   -- == CREATE PUBLICATION dregg_mirror
+--   --      FOR TABLE dregg.turns, dregg.cells, dregg.capabilities, dregg.memory;
+--
+-- SUBSCRIBER (a pg_createsubscriber runbook the extension prints — it needs the
+-- publisher conninfo, so it is operational config, not in-database SQL):
+--
+--   SELECT dregg_federation_subscriber_runbook('host=publisher dbname=dregg');
+--   -- == pg_createsubscriber -d dregg -P '...' --publication=dregg_mirror
+--   --    CREATE SUBSCRIPTION dregg_tail CONNECTION '...' PUBLICATION dregg_mirror
+--   --        WITH (failover = true);    -- pg17 failover slots survive publisher failover
+--
+-- THE SOUNDNESS POINT — a subscriber RE-VALIDATES, it does not trust the stream.
+-- The anti-substitution tooth is structural on the replicated dregg.turns rows,
+-- so the subscriber re-runs it LOCALLY (no call back to the publisher):
+--
+--   SELECT dregg_revalidate_replicated_chain();
+--   --  'ok: 4 turns re-validated, head=203e…'          ← a faithful replica
+--   --  'REFUSED: root does not chain: …'               ← a tampered/reordered stream, caught locally
+--
+-- A corrupted / reordered / substituted / truncated replication stream is caught
+-- on the subscriber side — replication is NOT a trust boundary. (A subscriber
+-- that also runs the §7 proof verifier re-attests each replicated turn's PROOF,
+-- not just the chain — a full verifying replica.) Proven by cargo test
+-- (mirror::revalidate_replicated_chain) + the live #[pg_test]
+-- federation_publishes_and_revalidates_the_replicated_chain.
