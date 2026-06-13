@@ -39,6 +39,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive
 import Dregg2.Circuit.Emit.EffectVmEmitRefreshDelegation
 import Dregg2.Circuit.Emit.EffectVmEmitRefusal
 import Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
+import Dregg2.Circuit.Emit.EffectVmEmitRevokeCapability
 import Dregg2.Circuit.Emit.EffectVmEmitSetField
 import Dregg2.Circuit.Emit.EffectVmEmitSetPermissions
 import Dregg2.Circuit.Emit.EffectVmEmitSetVK
@@ -88,6 +89,10 @@ def allEntries : List Entry :=
   , ⟨"refreshVmDescriptor",             EffectVmEmitRefreshDelegation.refreshVmDescriptor⟩
   , ⟨"refusalVmDescriptor",             EffectVmEmitRefusal.refusalVmDescriptor⟩
   , ⟨"revokeVmDescriptor",              EffectVmEmitRevokeDelegation.revokeVmDescriptor⟩
+    -- RevokeCapability (selector 24): the GRADUATED cap-REMOVAL v1 FACE (cap-root MOVE + frame
+    -- freeze, the SAME row shape as attenuate); the in-circuit sorted-tree slot DELETION is the v2
+    -- leg (`revokeCapabilityVmDescriptor2`: held-membership map-read + ZERO-value remove-write).
+  , ⟨"revokeCapabilityVmDescriptor",    EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor⟩
   , ⟨"setPermsVmDescriptor",            EffectVmEmitSetPermissions.setPermsVmDescriptor⟩
   , ⟨"setVKVmDescriptor",               EffectVmEmitSetVK.setVKVmDescriptor⟩
   , ⟨"spawnActorVmDescriptor",          EffectVmEmitSpawn.spawnActorVmDescriptor⟩

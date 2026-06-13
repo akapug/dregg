@@ -207,23 +207,89 @@ impl CanonicalCapTree {
     /// Sorts the leaves by `slot_hash`, brackets with the MIN/MAX sentinels,
     /// deduplicates by key (the executor enforces slot uniqueness, so this is
     /// belt-and-suspenders), then builds the padded binary tree.
-    pub fn new(mut leaves: Vec<CapLeaf>, depth: usize) -> Self {
+    pub fn new(leaves: Vec<CapLeaf>, depth: usize) -> Self {
+        Self::new_with_tombstones(leaves, &[], depth)
+    }
+
+    /// Build the canonical capability tree from a cell's LIVE c-list leaves plus
+    /// a set of TOMBSTONED slot keys (the `slot_hash`es of revoked slots).
+    ///
+    /// ## Tombstone semantics (the cap-crown revoke reconciliation)
+    ///
+    /// A revoke does NOT compact (re-index) the sorted tree — it leaves the
+    /// revoked slot's POSITION occupied by the `BabyBear::ZERO` padding leaf,
+    /// so every OTHER capability's membership witness stays valid across an
+    /// unrelated revoke. This is the EXACT semantics
+    /// [`Self::revocation_witness`] realizes (membership-open the held leaf, then
+    /// fold `BabyBear::ZERO` up the SAME sibling path) and the in-circuit
+    /// sel-24 revoke gate enforces.
+    ///
+    /// A tombstone is modeled as a "ghost leaf": it keeps the revoked slot's
+    /// `slot_hash` as its SORT KEY (so it occupies the same sorted position the
+    /// live leaf held — positions do NOT shift) but contributes a ZERO leaf
+    /// DIGEST (the same value [`Self::new`] pads empty positions with). So
+    /// building this tree from `[remaining live leaves] + [tombstone ghosts]`
+    /// yields the byte-identical root to revoking each tombstoned slot from the
+    /// live tree one at a time via the zero-fold witness. (The
+    /// `cell_cap_root == circuit_cap_root` revoke differential pins this.)
+    ///
+    /// Tombstone keys that collide with a live leaf's key are ignored for that
+    /// key (a live leaf shadows a stale tombstone — re-granting the same slot
+    /// resurrects it). Tombstone keys are deduplicated.
+    pub fn new_with_tombstones(
+        mut leaves: Vec<CapLeaf>,
+        tombstone_keys: &[BabyBear],
+        depth: usize,
+    ) -> Self {
         leaves.push(sentinel_leaf(SENTINEL_MIN));
         leaves.push(sentinel_leaf(SENTINEL_MAX));
         // Sort by the canonical sort key (slot_hash). Deterministic, total.
         leaves.sort_by_key(|l| l.slot_hash.as_u32());
         leaves.dedup_by_key(|l| l.slot_hash.as_u32());
 
+        // A tombstone is a GHOST leaf: a sentinel-style `CapLeaf` keyed at the
+        // revoked slot's `slot_hash` (so it occupies that sorted POSITION) but
+        // whose stored leaf DIGEST is forced to `BabyBear::ZERO` (the padding
+        // value `new` uses for empty positions). We keep `sorted_leaves` and the
+        // `levels[0]` digest array INDEX-ALIGNED — both built from the SAME
+        // sorted `(leaf, digest)` order — so `position_of` / `prove_membership`
+        // remain consistent on a tombstoned tree (a survivor's membership path
+        // still opens to the post-revoke root).
+        //
+        // A tombstone whose key already names a live leaf is dropped (live
+        // shadows tombstone); tombstone keys are deduplicated. So after the
+        // merge the keys are still unique.
+        let live_keys: std::collections::HashSet<u32> =
+            leaves.iter().map(|l| l.slot_hash.as_u32()).collect();
+        // (leaf, digest) pairs: live leaves carry their real digest; ghosts
+        // carry ZERO. `sorted_leaves` stores the leaf, `levels[0]` the digest.
+        let mut keyed: Vec<(CapLeaf, BabyBear)> =
+            leaves.into_iter().map(|l| (l, l.digest())).collect();
+        let mut seen_tomb: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for &k in tombstone_keys {
+            let ku = k.as_u32();
+            if live_keys.contains(&ku) || !seen_tomb.insert(ku) {
+                continue;
+            }
+            // Ghost: keyed at `k`, all other fields zero, stored digest ZERO.
+            keyed.push((sentinel_leaf(k), BabyBear::ZERO));
+        }
+        // Re-sort by key so the ghost positions interleave with the live leaves
+        // exactly where their `slot_hash` orders (positions do not shift).
+        keyed.sort_by_key(|(l, _)| l.slot_hash.as_u32());
+
         let capacity = 1usize << depth;
-        // The c-list must fit (minus the two sentinels). A c-list this large
-        // never occurs in practice; fail loudly rather than silently truncate.
+        // The c-list (live + tombstones, incl. the two sentinels) must fit. A
+        // c-list this large never occurs in practice; fail loudly rather than
+        // silently truncate.
         assert!(
-            leaves.len() <= capacity,
-            "capability c-list ({} entries incl. sentinels) exceeds tree capacity 2^{depth}",
-            leaves.len()
+            keyed.len() <= capacity,
+            "capability c-list ({} entries incl. sentinels + tombstones) exceeds tree capacity 2^{depth}",
+            keyed.len()
         );
 
-        let mut leaf_digests: Vec<BabyBear> = leaves.iter().map(CapLeaf::digest).collect();
+        let sorted_leaves: Vec<CapLeaf> = keyed.iter().map(|(l, _)| *l).collect();
+        let mut leaf_digests: Vec<BabyBear> = keyed.iter().map(|(_, d)| *d).collect();
         // Pad with the zero felt (the empty-position marker), exactly like the
         // revocation tree.
         leaf_digests.resize(capacity, BabyBear::ZERO);
@@ -240,7 +306,7 @@ impl CanonicalCapTree {
 
         Self {
             levels,
-            sorted_leaves: leaves,
+            sorted_leaves,
             depth,
         }
     }
@@ -255,11 +321,22 @@ impl CanonicalCapTree {
         &self.sorted_leaves
     }
 
-    /// Number of real (non-sentinel) capabilities.
+    /// Number of real (non-sentinel, non-tombstone) capabilities.
+    ///
+    /// A TOMBSTONE ghost (a revoked slot's position, stored digest
+    /// `BabyBear::ZERO`) is NOT a live capability, so it is excluded — both the
+    /// MIN/MAX sentinels (by key) and any ghost position (by its ZERO leaf
+    /// digest in `levels[0]`) are filtered out.
     pub fn num_caps(&self) -> usize {
         self.sorted_leaves
             .iter()
-            .filter(|l| l.slot_hash != SENTINEL_MIN && l.slot_hash != SENTINEL_MAX)
+            .enumerate()
+            .filter(|(i, l)| {
+                l.slot_hash != SENTINEL_MIN
+                    && l.slot_hash != SENTINEL_MAX
+                    // A ghost (tombstone) position carries a ZERO leaf digest.
+                    && self.levels[0][*i] != BabyBear::ZERO
+            })
             .count()
     }
 
@@ -363,6 +440,50 @@ impl CanonicalCapTree {
         })
     }
 
+    /// Build a **Phase B revocation** witness: membership-open the held leaf at
+    /// `held_key` (its `slot_hash`) in THIS tree, then recompute `new_root` by
+    /// folding the ZERO/padding leaf (the empty-position marker) up the SAME
+    /// sibling path — a genuine sorted-tree leaf DELETION (the slot collapses to
+    /// the padding leaf), not a pinned digest. This is the one-variant
+    /// simplification of [`Self::attenuation_witness`]: revoke does NOT install a
+    /// narrowed leaf (no rights logic), it removes the slot, so the new leaf
+    /// digest is `BabyBear::ZERO` (the same value `CanonicalCapTree::new` pads
+    /// empty positions with). Returns `None` if no leaf with `held_key` is
+    /// present (a fabricated held leaf has no authenticated position — Forgery 3
+    /// for revoke).
+    ///
+    /// The returned `granted` field carries the SENTINEL/zero CapLeaf at the
+    /// revoked slot purely as a placeholder; the load-bearing output is
+    /// `new_root` (the ZERO-folded path top). `held` is the genuine committed
+    /// leaf the membership opens.
+    pub fn revocation_witness(&self, held_key: BabyBear) -> Option<CapAttenuationWitness> {
+        let pos = self.position_of(held_key)?;
+        let held = self.sorted_leaves[pos];
+        let (siblings, directions) = self.prove_membership(pos)?;
+
+        // Recompute the new root over the SAME siblings with the ZERO padding
+        // leaf swapped in at the revoked position (the slot is deleted; the
+        // position becomes an empty/padding leaf, digest `BabyBear::ZERO`).
+        let mut cur = BabyBear::ZERO;
+        for level in 0..self.depth {
+            let sib = siblings[level];
+            cur = if directions[level] == 0 {
+                hash_fact(cur, &[sib])
+            } else {
+                hash_fact(sib, &[cur])
+            };
+        }
+        Some(CapAttenuationWitness {
+            held,
+            // Placeholder: the revoked position carries the zero/padding leaf.
+            granted: sentinel_leaf(BabyBear::ZERO),
+            siblings,
+            directions,
+            old_root: self.root(),
+            new_root: cur,
+        })
+    }
+
     /// Build a **Phase B2 delegation** witness: membership-open the GRANTER's
     /// held leaf at `held_key` (its `slot_hash`) in THIS tree (the granter's
     /// c-list), carrying the `granted` leaf that lands in the RECIPIENT's
@@ -396,6 +517,20 @@ impl CanonicalCapTree {
 /// circuit seeds its `cap_root` column from this same value.
 pub fn compute_capability_root(leaves: Vec<CapLeaf>) -> BabyBear {
     CanonicalCapTree::new(leaves, CAP_TREE_DEPTH).root()
+}
+
+/// Compute the canonical capability root over a set of LIVE leaves plus a set
+/// of TOMBSTONED slot keys (revoked slots' `slot_hash`es), at the canonical
+/// depth ([`CAP_TREE_DEPTH`]). This is the function `dregg-cell` calls once a
+/// cell has revoked any capability: the revoked slot's position stays occupied
+/// by the ZERO/padding leaf (tombstone), matching the in-circuit sel-24 revoke
+/// gate's zero-fold deletion byte-for-byte. See
+/// [`CanonicalCapTree::new_with_tombstones`].
+pub fn compute_capability_root_with_tombstones(
+    leaves: Vec<CapLeaf>,
+    tombstone_keys: &[BabyBear],
+) -> BabyBear {
+    CanonicalCapTree::new_with_tombstones(leaves, tombstone_keys, CAP_TREE_DEPTH).root()
 }
 
 /// The canonical capability root of the EMPTY c-list (only the two sentinels).
@@ -508,5 +643,168 @@ mod tests {
         let sig = compute_capability_root(vec![leaf(0, 1, 1, 0x1)]);
         let proof = compute_capability_root(vec![leaf(0, 1, 2, 0x1)]);
         assert_ne!(sig, proof, "auth tier must bind the root");
+    }
+
+    /// The revocation witness opens the genuine held leaf and recomputes the new
+    /// root as the IN-PLACE zero-fold: the revoked position collapses to the
+    /// `BabyBear::ZERO` padding leaf, folded up the SAME sibling path. This is the
+    /// TOMBSTONE deletion semantics — it leaves a zero leaf at the position rather
+    /// than reindexing the sorted array.
+    ///
+    /// NB (the cap-crown reconciliation gap, deliberate): this is NOT the same as
+    /// `CanonicalCapTree::new(remaining)` (the COMPACTED rebuild the cell currently
+    /// does via `CapabilitySet::revoke`'s `retain`), because a sorted,
+    /// sentinel-bracketed Merkle tree RE-INDEXES on deletion: removing a key shifts
+    /// every key (and the MAX sentinel) that sorts after it, so the compacted root
+    /// differs from the in-place tombstone. The in-circuit revoke gate (Rust AIR +
+    /// Lean v2 descriptor) enforces the TOMBSTONE semantics; the cell→circuit
+    /// reconciliation (cell tombstones-not-compacts, OR the circuit computes the
+    /// reindexing deletion) is the documented flag-day step. This test PINS the
+    /// tombstone semantics the witness/gate actually realize.
+    #[test]
+    fn revocation_witness_zero_folds_the_slot_in_place() {
+        let revoked = leaf(7, 0x11, 1, 0xFF);
+        let other_a = leaf(3, 0x22, 1, 0xFFFF_FFFF);
+        let other_b = leaf(42, 0x33, 2, 0x1);
+        let tree = CanonicalCapTree::new(vec![revoked, other_a, other_b], CAP_TREE_DEPTH);
+
+        let w = tree
+            .revocation_witness(revoked.slot_hash)
+            .expect("revoked slot present");
+        assert_eq!(w.held, revoked, "membership opens the genuine held leaf");
+        assert_eq!(w.old_root, tree.root(), "old_root is the seeded tree root");
+        assert_ne!(w.new_root, w.old_root, "revoking a held slot moves the root");
+
+        // Recompute the in-place tombstone root by hand: fold BabyBear::ZERO up the
+        // witnessed path. This is EXACTLY what the witness returns (and what the
+        // in-circuit zero-fold gate enforces).
+        let mut cur = BabyBear::ZERO;
+        for level in 0..CAP_TREE_DEPTH {
+            cur = if w.directions[level] == 0 {
+                hash_fact(cur, &[w.siblings[level]])
+            } else {
+                hash_fact(w.siblings[level], &[cur])
+            };
+        }
+        assert_eq!(
+            w.new_root, cur,
+            "new_root IS the ZERO/padding leaf folded up the held leaf's sibling path"
+        );
+
+        // And the witness's siblings genuinely authenticate the held leaf: folding
+        // the held leaf digest up the SAME path reproduces old_root.
+        let mut hcur = revoked.digest();
+        for level in 0..CAP_TREE_DEPTH {
+            hcur = if w.directions[level] == 0 {
+                hash_fact(hcur, &[w.siblings[level]])
+            } else {
+                hash_fact(w.siblings[level], &[hcur])
+            };
+        }
+        assert_eq!(hcur, w.old_root, "the held leaf folds up the path to old_root");
+    }
+
+    /// THE TOMBSTONE EQUIVALENCE (the cell↔circuit revoke reconciliation
+    /// keystone): building a fresh tree from the REMAINING live leaves plus the
+    /// revoked slot as a TOMBSTONE key yields the byte-identical root to the
+    /// `revocation_witness` zero-fold (membership-open the held leaf, fold ZERO
+    /// up its sibling path). This is the equivalence the cell-side tombstone
+    /// rebuild relies on: the cell drops the revoked leaf from its live c-list
+    /// and records the slot key as a tombstone; `compute_capability_root_with_
+    /// tombstones` then reproduces the circuit's post-revoke `cap_root` exactly.
+    #[test]
+    fn tombstone_rebuild_equals_revocation_witness_zero_fold() {
+        let revoked = leaf(7, 0x11, 1, 0xFF);
+        let other_a = leaf(3, 0x22, 1, 0xFFFF_FFFF);
+        let other_b = leaf(42, 0x33, 2, 0x1);
+        let live_tree =
+            CanonicalCapTree::new(vec![revoked, other_a, other_b], CAP_TREE_DEPTH);
+
+        // The circuit-truth post-revoke root: the zero-fold deletion witness.
+        let w = live_tree
+            .revocation_witness(revoked.slot_hash)
+            .expect("revoked slot present");
+        let witness_root = w.new_root;
+
+        // The cell-side tombstone rebuild: drop the revoked leaf from the live
+        // set, record its slot_hash as a tombstone key.
+        let tombstone_root = compute_capability_root_with_tombstones(
+            vec![other_a, other_b],
+            &[revoked.slot_hash],
+        );
+
+        assert_eq!(
+            tombstone_root, witness_root,
+            "the tombstone rebuild MUST equal the revocation-witness zero-fold (the cell↔circuit revoke binding)"
+        );
+
+        // And it must DIFFER from the compacted rebuild (the pre-cap-crown cell
+        // behavior), proving the reconciliation is non-vacuous.
+        let compacted_root =
+            CanonicalCapTree::new(vec![other_a, other_b], CAP_TREE_DEPTH).root();
+        assert_ne!(
+            tombstone_root, compacted_root,
+            "tombstone (zero-fold) must DIFFER from the compacted rebuild — the seam the reconciliation closes"
+        );
+    }
+
+    /// Two tombstones fold two positions to ZERO, still position-stable: revoking
+    /// slot 7 then slot 3 from {3,7,42} equals the live set {42} plus tombstones
+    /// {3,7}, and equals chaining two `revocation_witness` zero-folds.
+    #[test]
+    fn two_tombstones_equal_chained_zero_folds() {
+        let a = leaf(3, 0x22, 1, 0xFFFF_FFFF);
+        let b = leaf(7, 0x11, 1, 0xFF);
+        let c = leaf(42, 0x33, 2, 0x1);
+        let t0 = CanonicalCapTree::new(vec![a, b, c], CAP_TREE_DEPTH);
+
+        // Chain: revoke 7 (zero-fold), then revoke 3 against the resulting tree.
+        // The resulting tree after the first revoke is the live {3,42} + tomb{7}.
+        let after_7 =
+            CanonicalCapTree::new_with_tombstones(vec![a, c], &[b.slot_hash], CAP_TREE_DEPTH);
+        let w3 = after_7
+            .revocation_witness(a.slot_hash)
+            .expect("slot 3 still present after revoking 7");
+        let chained_root = w3.new_root;
+
+        // One-shot: live {42} + tombstones {3,7}.
+        let one_shot =
+            compute_capability_root_with_tombstones(vec![c], &[a.slot_hash, b.slot_hash]);
+
+        assert_eq!(
+            one_shot, chained_root,
+            "two tombstones at once == chaining two zero-fold revokes (position stability)"
+        );
+        // Sanity: t0 root differs (caps were actually present).
+        assert_ne!(one_shot, t0.root());
+    }
+
+    /// A stale tombstone whose slot is RE-GRANTED is shadowed by the live leaf:
+    /// {3,42} live + tombstone{7}, then re-grant 7 ⇒ {3,7,42} live + tomb{7} must
+    /// equal the plain live {3,7,42} root (the live leaf resurrects the position).
+    #[test]
+    fn re_granted_slot_shadows_its_tombstone() {
+        let a = leaf(3, 0x22, 1, 0xFFFF_FFFF);
+        let b = leaf(7, 0x11, 1, 0xFF);
+        let c = leaf(42, 0x33, 2, 0x1);
+        let plain = CanonicalCapTree::new(vec![a, b, c], CAP_TREE_DEPTH).root();
+        // b's slot is BOTH live and tombstoned: live must shadow the tombstone.
+        let shadowed =
+            compute_capability_root_with_tombstones(vec![a, b, c], &[b.slot_hash]);
+        assert_eq!(
+            shadowed, plain,
+            "a live leaf must shadow a stale tombstone for the same slot key"
+        );
+    }
+
+    /// A fabricated held slot (not in the tree) has no authenticated position:
+    /// the revocation witness is `None` (Forgery 3 for revoke).
+    #[test]
+    fn revocation_witness_rejects_fabricated_slot() {
+        let tree = CanonicalCapTree::new(vec![leaf(7, 0x11, 1, 0xFF)], CAP_TREE_DEPTH);
+        assert!(
+            tree.revocation_witness(slot_hash(99)).is_none(),
+            "a slot not in the tree has no revocation witness"
+        );
     }
 }

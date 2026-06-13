@@ -29,7 +29,6 @@
 
 use std::collections::HashMap;
 
-use dregg_cell::Permissions;
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger};
 use dregg_circuit::effect_vm::{
     CellState as VmCellState, Effect as VmEffect, extract_net_delta, generate_effect_vm_trace,
@@ -37,8 +36,7 @@ use dregg_circuit::effect_vm::{
 };
 use dregg_circuit::field::BabyBear;
 use dregg_turn::{
-    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
-    TurnResult, turn::Turn,
+    Action, Authorization, CallForest, DelegationMode, Effect, turn::Turn,
 };
 use proptest::prelude::*;
 
@@ -197,6 +195,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                     let slot_hash_bytes = blake3::hash(&slot.to_le_bytes());
                     out.push(VmEffect::RevokeCapability {
                         slot_hash: hash_to_8(slot_hash_bytes.as_bytes()),
+                        phase_b: None,
                     });
                 }
                 Effect::EmitEvent { cell, event } if cell == cell_id => {

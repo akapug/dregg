@@ -839,7 +839,10 @@ fn test_stage3_multi_variant_compose() {
             cap_entry: w8(1),
             phase_b: None,
         },
-        Effect::RevokeCapability { slot_hash: w8(2) },
+        Effect::RevokeCapability {
+            slot_hash: w8(2),
+            phase_b: None,
+        },
         // Stateless side-effects (passthrough):
         Effect::EmitEvent {
             topic_hash: {
@@ -966,6 +969,7 @@ fn test_basic_effect_constraints() {
         Case {
             effect: Effect::RevokeCapability {
                 slot_hash: w8(0x12345),
+                phase_b: None,
             },
             balance: 100,
             extra_assert: |trace| {

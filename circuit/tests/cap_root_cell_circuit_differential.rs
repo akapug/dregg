@@ -243,6 +243,137 @@ fn a2_anti_ghost_every_field_binds() {
     assert_ne!(base, diff_bread, "anti-ghost: breadstuff must bind");
 }
 
+/// THE A2 GATE FOR REVOKE (the cap-crown seam closure): after the CELL revokes a
+/// capability via `CapabilitySet::revoke`, its canonical capability root equals
+/// the circuit-side post-revoke `cap_root` — the TOMBSTONE deletion (the revoked
+/// slot's position folded to the ZERO/padding leaf), NOT a compacted rebuild.
+///
+/// This is the load-bearing invariant that makes a live `RevokeCapability` turn
+/// proof verify: the deployed cell now computes the SAME root the in-circuit
+/// sel-24 revoke gate (`cap_root::revocation_witness`) produces. Before this
+/// reconciliation the cell used a `retain` + rebuild (compacted, re-indexing)
+/// root, which diverged from the circuit's tombstone root and bricked the turn.
+///
+/// Checked THREE ways:
+///   1. cell-root == an independently-built circuit tombstone tree over the
+///      remaining live leaves + the revoked slot as a tombstone key.
+///   2. cell-root == the `revocation_witness` zero-fold of the revoked slot
+///      against the PRE-revoke live tree (the exact in-circuit gate output).
+///   3. cell-root != the compacted rebuild over only the remaining live caps
+///      (the OLD cell behavior — proving the reconciliation is non-vacuous).
+#[test]
+fn a2_revoke_cell_equals_circuit_tombstone() {
+    let mut cell = tcell();
+    let t1 = CellId::derive_raw(&[1u8; 32], &[1u8; 32]);
+    let t2 = CellId::derive_raw(&[2u8; 32], &[2u8; 32]);
+    let t3 = CellId::derive_raw(&[3u8; 32], &[3u8; 32]);
+
+    let s1 = cell.capabilities.grant(t1, AuthRequired::Signature).unwrap();
+    let s2 = cell
+        .capabilities
+        .grant_with_expiry(t2, AuthRequired::Proof, 12345)
+        .unwrap();
+    let bread = [0xABu8; 32];
+    let s3 = cell
+        .capabilities
+        .grant_full(t3, AuthRequired::Either, Some(bread), None)
+        .unwrap();
+
+    // The PRE-revoke live tree (all three leaves), for the witness reference.
+    let leaf1 = ref_leaf(s1, &t1, &AuthRequired::Signature, None, None, None);
+    let leaf2 = ref_leaf(s2, &t2, &AuthRequired::Proof, None, Some(12345), None);
+    let leaf3 = ref_leaf(s3, &t3, &AuthRequired::Either, None, None, Some(&bread));
+    let pre_tree =
+        cap_root::CanonicalCapTree::new(vec![leaf1, leaf2, leaf3], cap_root::CAP_TREE_DEPTH);
+
+    // CELL revokes the MIDDLE slot (s2). Logical c-list: s2 is now absent.
+    assert!(cell.capabilities.revoke(s2), "revoke must find and remove s2");
+    assert!(
+        cell.capabilities.lookup(s2).is_none(),
+        "revoked slot is logically absent from the c-list"
+    );
+    assert!(
+        cell.capabilities.lookup(s1).is_some() && cell.capabilities.lookup(s3).is_some(),
+        "the OTHER caps survive the revoke"
+    );
+
+    let cell_root = dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities);
+
+    // (1) INDEPENDENT circuit tombstone tree: remaining live leaves + s2 tombstone.
+    let circuit_tombstone_root = cap_root::compute_capability_root_with_tombstones(
+        vec![leaf1, leaf3],
+        &[cap_root::slot_hash(s2)],
+    );
+    assert_eq!(
+        cell_root, circuit_tombstone_root,
+        "A2 REVOKE: cell post-revoke root != independently-built circuit TOMBSTONE root"
+    );
+
+    // (2) The exact in-circuit sel-24 gate output: the zero-fold witness.
+    let w = pre_tree
+        .revocation_witness(cap_root::slot_hash(s2))
+        .expect("s2 present in the pre-revoke tree");
+    assert_eq!(
+        cell_root, w.new_root,
+        "A2 REVOKE: cell post-revoke root != the in-circuit revocation_witness zero-fold (the sel-24 gate)"
+    );
+
+    // (3) Non-vacuity: the COMPACTED rebuild (the OLD cell behavior) DIFFERS.
+    let compacted = cap_root::compute_capability_root(vec![leaf1, leaf3]);
+    assert_ne!(
+        cell_root, compacted,
+        "A2 REVOKE: the tombstone root MUST differ from the compacted rebuild — that gap is the seam this closes"
+    );
+}
+
+/// The revoke is POSITION-STABLE for the survivors: revoking s2 must leave the
+/// membership witnesses of s1 and s3 valid against the NEW root (the whole point
+/// of tombstoning over compaction). We check that the survivor leaves still open
+/// to the post-revoke cell root via the tombstone tree's membership paths.
+#[test]
+fn a2_revoke_preserves_survivor_membership() {
+    let mut cell = tcell();
+    let t1 = CellId::derive_raw(&[1u8; 32], &[1u8; 32]);
+    let t2 = CellId::derive_raw(&[2u8; 32], &[2u8; 32]);
+    let t3 = CellId::derive_raw(&[3u8; 32], &[3u8; 32]);
+    let s1 = cell.capabilities.grant(t1, AuthRequired::Signature).unwrap();
+    let s2 = cell.capabilities.grant(t2, AuthRequired::Proof).unwrap();
+    let s3 = cell.capabilities.grant(t3, AuthRequired::Either).unwrap();
+    let leaf1 = ref_leaf(s1, &t1, &AuthRequired::Signature, None, None, None);
+    let leaf3 = ref_leaf(s3, &t3, &AuthRequired::Either, None, None, None);
+
+    assert!(cell.capabilities.revoke(s2));
+    let cell_root = dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities);
+
+    // The post-revoke tombstone tree (survivors + s2 ghost).
+    let tomb_tree = cap_root::CanonicalCapTree::new_with_tombstones(
+        vec![leaf1, leaf3],
+        &[cap_root::slot_hash(s2)],
+        cap_root::CAP_TREE_DEPTH,
+    );
+    assert_eq!(tomb_tree.root(), cell_root, "tombstone tree root == cell root");
+
+    // Each survivor still has an authenticated membership path to the new root.
+    for (key, leaf) in [(s1, leaf1), (s3, leaf3)] {
+        let pos = tomb_tree
+            .position_of(cap_root::slot_hash(key))
+            .expect("survivor slot still occupies a position after the revoke");
+        let (sibs, dirs) = tomb_tree.prove_membership(pos).expect("membership path");
+        let mut cur = leaf.digest();
+        for level in 0..cap_root::CAP_TREE_DEPTH {
+            cur = if dirs[level] == 0 {
+                dregg_circuit::poseidon2::hash_fact(cur, &[sibs[level]])
+            } else {
+                dregg_circuit::poseidon2::hash_fact(sibs[level], &[cur])
+            };
+        }
+        assert_eq!(
+            cur, cell_root,
+            "survivor slot {key} must still open to the post-revoke root (position-stable)"
+        );
+    }
+}
+
 /// `with_capability_root` round-trips the real root into the circuit
 /// `CellState`, and the resulting `state_commitment` differs from the
 /// empty-root state (so the seed genuinely flows into the commitment).

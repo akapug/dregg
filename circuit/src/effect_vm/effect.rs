@@ -51,6 +51,23 @@ pub struct AttenuateWitness {
     pub granted_expiry_height: Option<u64>,
 }
 
+/// The Phase-B (cap-crown) witness for a graduated `RevokeCapability` row: the
+/// HELD leaf the revoke removes, authenticated against the actor's
+/// `old_cap_root` by a membership path. Revoke needs NO narrowed-leaf / rights
+/// witness (unlike [`AttenuateWitness`]) — the post `cap_root` is the genuine
+/// sorted-tree DELETION of the slot (the ZERO/padding leaf folded up the SAME
+/// sibling path), so only the held leaf + its path are witnessed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RevokeWitness {
+    /// The HELD (revoked) leaf — the real committed cap, authenticated against
+    /// the old `cap_root` by [`Self::siblings`] / [`Self::directions`].
+    pub held: crate::cap_root::CapLeaf,
+    /// Sibling digests along the leaf→root path (bottom-up, len `CAP_TREE_DEPTH`).
+    pub siblings: Vec<BabyBear>,
+    /// Direction bits along the path (0 = current is left child, 1 = right).
+    pub directions: Vec<u8>,
+}
+
 /// An effect to be proven in the VM.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
@@ -109,7 +126,19 @@ pub enum Effect {
     /// 32-byte widening: `slot_hash` is the full 32-byte slot hash projected
     /// into 8 BabyBear limbs (see [`Effect::GrantCapability`]). The cap_root
     /// advance uses limb[0]; all 8 limbs bind via effects_hash.
-    RevokeCapability { slot_hash: [BabyBear; 8] },
+    ///
+    /// GRADUATED (cap-crown): with `phase_b = Some(_)` the row carries the
+    /// [`RevokeWitness`] that authenticates the revoked leaf against
+    /// `old_cap_root` (membership-open) and forces `new_cap_root` to be the
+    /// genuine sorted-tree slot DELETION (the ZERO/padding leaf folded up the
+    /// same path). `None` is the pre-graduation pinned-digest form
+    /// (`new_cap_root == H2(old_cap_root, slot_hash)`).
+    RevokeCapability {
+        slot_hash: [BabyBear; 8],
+        /// The cap-crown membership + zero-fold witness. Boxed (large), excluded
+        /// from `effects_hash` binding except for the slot_hash[0] already bound.
+        phase_b: Option<Box<RevokeWitness>>,
+    },
     /// EmitEvent: stateless side-effect. Mirrors the runtime `Event` canonical
     /// encoding (topic ‖ data): `topic_hash` is the 32-byte BLAKE3 of the topic
     /// symbol, projected into 8 BabyBear felts (4 bytes per felt), and

@@ -77,6 +77,7 @@ fn all_schema_variants_prove_and_verify() {
             "RevokeCapability",
             Effect::RevokeCapability {
                 slot_hash: w8(0xDEAD),
+                phase_b: None,
             },
         ),
         (

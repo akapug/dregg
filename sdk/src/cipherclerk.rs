@@ -5362,6 +5362,7 @@ impl AgentCipherclerk {
                     let slot_hash_bytes = blake3::hash(&slot_bytes);
                     vm_effects.push(VmEffect::RevokeCapability {
                         slot_hash: hash_to_8(slot_hash_bytes.as_bytes()),
+                        phase_b: None,
                     });
                 }
                 Effect::AttenuateCapability {
@@ -5386,6 +5387,7 @@ impl AgentCipherclerk {
                         // hash(slot || new_perms) so it's distinct from a plain
                         // RevokeCapability on the same slot.
                         slot_hash: hash_to_8(attn_hash.as_bytes()),
+                        phase_b: None,
                     });
                 }
 

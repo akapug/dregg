@@ -126,6 +126,36 @@ pub struct AttenuatedCap {
 pub struct CapabilitySet {
     refs: Vec<CapabilityRef>,
     next_slot: u32,
+    /// Slot numbers of REVOKED capabilities — the c-list's TOMBSTONE set (cap
+    /// crown, the cell↔circuit revoke reconciliation).
+    ///
+    /// ## Why tombstones (the openable-membership-tree contract)
+    ///
+    /// The capability commitment ([`crate::commitment::compute_canonical_capability_root`])
+    /// is an OPENABLE sorted-Poseidon2 Merkle tree, shared byte-identically with
+    /// the EffectVM circuit's `cap_root`. In an openable membership tree a
+    /// revoke must NOT compact (re-index) the tree — doing so shifts every key
+    /// that sorts after the revoked one, invalidating every OTHER capability's
+    /// membership witness. The worthwhile semantics is a TOMBSTONE: the revoked
+    /// slot's POSITION stays occupied by the `BabyBear::ZERO` padding leaf, so
+    /// all other witnesses stay valid. This is exactly what the in-circuit
+    /// sel-24 revoke gate (`dregg_circuit::cap_root::revocation_witness` —
+    /// membership-open the held leaf, fold ZERO up its sibling path) enforces.
+    ///
+    /// So `revoke` drops the cap from `refs` (logical c-list: the cap is gone,
+    /// `lookup`/`has_access` no longer see it) AND records the slot here; the
+    /// root computation injects a ZERO-digest ghost leaf at each tombstoned
+    /// slot's sort key, reproducing the circuit's post-revoke root. A
+    /// re-granted slot is shadowed by its live leaf (the live leaf resurrects
+    /// the position).
+    ///
+    /// `#[serde(default)]`: legacy persisted c-lists decode with NO tombstones
+    /// (they never revoked under the openable-tree scheme), so their root is
+    /// unchanged. A cell that has revoked under this scheme carries its
+    /// tombstones explicitly; the `CANONICAL_CAP_ROOT_CONTEXT` bump (v2→v3)
+    /// cleanly invalidates any stale compacted root.
+    #[serde(default)]
+    tombstones: Vec<u32>,
 }
 
 impl CapabilitySet {
@@ -134,6 +164,7 @@ impl CapabilitySet {
         CapabilitySet {
             refs: Vec::new(),
             next_slot: 0,
+            tombstones: Vec::new(),
         }
     }
 
@@ -291,10 +322,26 @@ impl CapabilitySet {
     }
 
     /// Revoke a capability by slot number. Returns true if found and removed.
+    ///
+    /// TOMBSTONE deletion (cap crown, the cell↔circuit revoke reconciliation):
+    /// the cap is dropped from the LOGICAL c-list (`refs`) — `lookup` /
+    /// `has_access` no longer see it, exactly as before — AND the slot is
+    /// recorded in [`Self::tombstones`] so the openable sorted-Poseidon2
+    /// capability root keeps a ZERO/padding leaf at the revoked slot's POSITION
+    /// instead of compacting (re-indexing) the tree. This matches the in-circuit
+    /// sel-24 revoke gate's zero-fold deletion byte-for-byte, so
+    /// `cell_cap_root == circuit_cap_root` after a revoke (the seam this closes).
+    /// See [`Self::tombstones`] for the full rationale.
     pub fn revoke(&mut self, slot: u32) -> bool {
         let before = self.refs.len();
         self.refs.retain(|r| r.slot != slot);
-        self.refs.len() < before
+        let removed = self.refs.len() < before;
+        if removed && !self.tombstones.contains(&slot) {
+            // Record the tombstone so the cap-root folds ZERO at this slot's
+            // sorted position (not a compacted rebuild).
+            self.tombstones.push(slot);
+        }
+        removed
     }
 
     /// Look up a capability by slot number.
@@ -486,7 +533,12 @@ impl CapabilitySet {
 
     /// Restore a previously revoked capability by re-inserting it directly.
     /// Used by journal rollback to undo a revocation.
+    ///
+    /// Clears the slot's TOMBSTONE if present (the live leaf resurrects the
+    /// position), so an undone revoke returns the cap-root EXACTLY to its
+    /// pre-revoke value — the rollback is a true inverse of [`Self::revoke`].
     pub fn restore(&mut self, cap: CapabilityRef) {
+        self.tombstones.retain(|&s| s != cap.slot);
         if !self.refs.iter().any(|r| r.slot == cap.slot) {
             self.refs.push(cap);
         }
@@ -505,6 +557,18 @@ impl CapabilitySet {
     /// Iterate over all capability refs.
     pub fn iter(&self) -> impl Iterator<Item = &CapabilityRef> {
         self.refs.iter()
+    }
+
+    /// The slot numbers of REVOKED capabilities (the tombstone set). The
+    /// canonical capability root injects a ZERO/padding leaf at each of these
+    /// slots' sorted positions (see [`Self::revoke`] /
+    /// [`crate::commitment::compute_canonical_capability_root_felt`]). A slot
+    /// that is currently LIVE in `refs` (re-granted after revoke) is shadowed by
+    /// its live leaf — the root logic drops the tombstone for any live slot, so
+    /// this accessor may report a slot that is also live; callers folding it
+    /// into the root must let the live leaf win (the tree builder does).
+    pub fn tombstoned_slots(&self) -> impl Iterator<Item = u32> + '_ {
+        self.tombstones.iter().copied()
     }
 
     /// Mutably iterate over capability refs. Used by the executor's
@@ -724,6 +788,109 @@ mod attenuate_in_place_tests {
         assert_ne!(
             h1, h3,
             "different narrowed state must produce different commitments"
+        );
+    }
+}
+
+#[cfg(test)]
+mod revoke_tombstone_tests {
+    //! The cap-crown REVOKE tombstone semantics: `revoke` drops the cap from the
+    //! LOGICAL c-list AND records a tombstone (so the openable cap-root folds
+    //! ZERO at the revoked slot's position, matching the in-circuit sel-24 gate).
+    //! `restore` (rollback) clears the tombstone, returning the c-list — and thus
+    //! the root — exactly to its pre-revoke value. (The cell↔circuit root
+    //! byte-identity itself is pinned by the circuit-crate differential
+    //! `cap_root_cell_circuit_differential::a2_revoke_*`, which can reach
+    //! `dregg_circuit`.)
+    use super::*;
+
+    fn cid(b: u8) -> CellId {
+        let mut k = [0u8; 32];
+        k[0] = b;
+        CellId::derive_raw(&k, &[0u8; 32])
+    }
+
+    #[test]
+    fn revoke_removes_from_logical_clist() {
+        let mut caps = CapabilitySet::new();
+        let s1 = caps.grant(cid(1), AuthRequired::Signature).unwrap();
+        let s2 = caps.grant(cid(2), AuthRequired::Proof).unwrap();
+
+        assert!(caps.revoke(s1), "revoke finds and removes s1");
+        // Logical c-list: s1 gone, s2 present.
+        assert!(caps.lookup(s1).is_none(), "revoked slot is logically absent");
+        assert!(caps.lookup(s2).is_some(), "other slot survives");
+        assert!(!caps.has_access(&cid(1)), "revoked target no longer accessible");
+        assert!(caps.has_access(&cid(2)), "other target still accessible");
+        // The slot is tombstoned.
+        assert_eq!(
+            caps.tombstoned_slots().collect::<Vec<_>>(),
+            vec![s1],
+            "the revoked slot is recorded as a tombstone"
+        );
+    }
+
+    #[test]
+    fn double_revoke_does_not_duplicate_tombstone() {
+        let mut caps = CapabilitySet::new();
+        let s = caps.grant(cid(1), AuthRequired::Signature).unwrap();
+        assert!(caps.revoke(s));
+        assert!(!caps.revoke(s), "second revoke finds nothing to remove");
+        assert_eq!(
+            caps.tombstoned_slots().collect::<Vec<_>>(),
+            vec![s],
+            "a tombstone is recorded exactly once"
+        );
+    }
+
+    #[test]
+    fn restore_clears_the_tombstone() {
+        let mut caps = CapabilitySet::new();
+        let s = caps.grant(cid(1), AuthRequired::Signature).unwrap();
+        let cap = caps.lookup(s).cloned().unwrap();
+        assert!(caps.revoke(s));
+        assert_eq!(caps.tombstoned_slots().count(), 1);
+
+        // Rollback re-inserts the cap; the tombstone must clear so the root
+        // returns EXACTLY to the pre-revoke value.
+        caps.restore(cap);
+        assert!(caps.lookup(s).is_some(), "restored cap is back in the c-list");
+        assert_eq!(
+            caps.tombstoned_slots().count(),
+            0,
+            "restore clears the tombstone (rollback is a true inverse of revoke)"
+        );
+    }
+
+    #[test]
+    fn tombstone_survives_serde_round_trip() {
+        // The codebase persists cells via the self-describing `serde_json`
+        // (postcard cannot round-trip `CapabilityRef`'s `skip_serializing_if`
+        // fields — a pre-existing constraint, unrelated to tombstones). The
+        // `#[serde(default)]` on `tombstones` decodes legacy (no-`tombstones`)
+        // JSON as an empty set, and a post-revoke set carries its tombstones.
+        let mut caps = CapabilitySet::new();
+        let s1 = caps.grant(cid(1), AuthRequired::Signature).unwrap();
+        let _s2 = caps.grant(cid(2), AuthRequired::Proof).unwrap();
+        assert!(caps.revoke(s1));
+
+        let json = serde_json::to_string(&caps).expect("serialize");
+        let back: CapabilitySet = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            back.tombstoned_slots().collect::<Vec<_>>(),
+            vec![s1],
+            "the tombstone set must round-trip (so the post-revoke root is stable across persistence)"
+        );
+        assert_eq!(back, caps, "the whole c-list round-trips");
+
+        // Legacy compatibility: JSON WITHOUT a `tombstones` field decodes as an
+        // empty tombstone set (so a never-revoked legacy cell's root is unchanged).
+        let legacy_json = r#"{"refs":[],"next_slot":0}"#;
+        let legacy: CapabilitySet = serde_json::from_str(legacy_json).expect("legacy decode");
+        assert_eq!(
+            legacy.tombstoned_slots().count(),
+            0,
+            "legacy c-list (no tombstones field) decodes with an empty tombstone set"
         );
     }
 }

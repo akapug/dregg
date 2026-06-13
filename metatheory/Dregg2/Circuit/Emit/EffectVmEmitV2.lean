@@ -86,6 +86,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitIncrementNonce
 import Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation
 import Dregg2.Circuit.Emit.EffectVmEmitIntroduce
 import Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
+import Dregg2.Circuit.Emit.EffectVmEmitRevokeCapability
 import Dregg2.Circuit.Emit.EffectVmEmitSetField
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitV2
@@ -795,6 +796,102 @@ theorem attenuateV2_held_determined (hash : List ℤ → ℤ)
   have := opensTo_functional hash hCR hclaim h
   simpa using this
 
+/-! ## §7.5 — NEWLY EXPRESSIBLE I.b: the RevokeCapability cap-crown circuit leg (sel 24).
+
+The v1 IR could only PIN the post `cap_root` to a witness-supplied parameter (the
+`EffectVmEmitRevokeCapability` v1 FACE GAP: no in-circuit cap-table opening). Revoke is SIMPLER
+than Attenuate — it does NOT narrow rights, it DELETES a slot — so the v2 leg has only TWO map ops
+and NO submask lookup:
+
+  * **`heldReadOp`** (REUSED from §7) — the held capability is READ out of the before cap-map
+    (authenticated: under CR the row cannot claim a value the root does not hold,
+    `opensTo_functional`), proving the revoked cap WAS HELD. Rejects fabricating a revoke of a
+    non-member.
+  * **`removeWriteOp`** — the post `cap_root` is the GENUINE sorted WRITE of the ZERO sentinel
+    VALUE at the same key (`writesTo old_root key 0 new_root`): the slot's rights are removed (the
+    cap confers nothing). `writesTo_functional` pins the post root — a forged `new_cap_root` is
+    excluded.
+
+There is NO `granted ⊑ held` submask lookup: revoke is not an attenuation. The non-amplification
+content is structural — revoke can ONLY remove authority (the written value is the ZERO sentinel,
+strictly below any held mask). Both map ops fire on the abstract cap-graph-row selector
+(`selA.ATTENUATE`), the same one the v1 face's gates use; the concrete sel-24-vs-48 mapping is the
+Rust registry's job. -/
+
+/-- The revoke WRITE: the post `cap_root` is the genuine sorted write of the ZERO sentinel value at
+the held key (the slot's rights removed). Guarded by the cap-graph-row selector. -/
+def removeWriteOp : MapOp :=
+  { guard   := .var EffectVmEmitAttenuateA.selA.ATTENUATE
+  , root    := .var (sbCol state.CAP_ROOT)
+  , key     := .var (prmCol CAP_KEY)
+  , value   := .const 0
+  , newRoot := .var (saCol state.CAP_ROOT)
+  , op      := .write }
+
+/-- **`revokeCapabilityVmDescriptor2`** — the graduated revoke descriptor PLUS the cap-crown circuit
+leg: held-membership map-read (REUSED) + the ZERO-value remove-write. NO submask lookup (revoke
+deletes a slot; it does not narrow rights). -/
+def revokeCapabilityVmDescriptor2 : EffectVmDescriptor2 :=
+  { graduateV1 EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor with
+    constraints :=
+      (graduateV1 EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor).constraints
+        ++ [.mapOp heldReadOp, .mapOp removeWriteOp] }
+
+/-- **`revokeV2_removes` — cap-crown revoke, the circuit leg.** On an active cap-graph row of a
+`Satisfied2` witness: (1) the revoked capability IS in the before cap-map — some sorted heap behind
+`cap_root` carries `(key ↦ held)`; (2) the post `cap_root` is the GENUINE sorted write of
+`(key ↦ 0)` (the slot's rights removed). The v1 IR could express neither. -/
+theorem revokeV2_removes (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hsat : Satisfied2 hash revokeCapabilityVmDescriptor2 minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length)
+    (hactive : (envAt t i).loc EffectVmEmitAttenuateA.selA.ATTENUATE = 1) :
+    opensTo hash ((envAt t i).loc (sbCol state.CAP_ROOT))
+        ((envAt t i).loc (prmCol CAP_KEY)) (some ((envAt t i).loc (prmCol HELD_MASK)))
+    ∧ writesTo hash ((envAt t i).loc (sbCol state.CAP_ROOT))
+        ((envAt t i).loc (prmCol CAP_KEY)) 0
+        ((envAt t i).loc (saCol state.CAP_ROOT)) := by
+  have hrowc := hsat.rowConstraints i hi
+  have hread := hrowc (.mapOp heldReadOp) (by simp [revokeCapabilityVmDescriptor2])
+  have hwrite := hrowc (.mapOp removeWriteOp) (by simp [revokeCapabilityVmDescriptor2])
+  have hr := hread hactive
+  have hw := hwrite hactive
+  -- The write op's `value` is the constant 0; its evaluated value is `0`.
+  refine ⟨hr.1, ?_⟩
+  simpa [removeWriteOp, EmittedExpr.eval] using hw
+
+/-- **The held leaf is DETERMINED (anti-forgery).** Under CR, ANY opening of the same before-root at
+the same key agrees with the satisfying row's held value — a forged held leaf is excluded by
+`opensTo_functional`. The revoke analogue of `attenuateV2_held_determined`. -/
+theorem revokeV2_held_determined (hash : List ℤ → ℤ)
+    (hCR : Dregg2.Circuit.Poseidon2Binding.Poseidon2SpongeCR hash)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hsat : Satisfied2 hash revokeCapabilityVmDescriptor2 minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length)
+    (hactive : (envAt t i).loc EffectVmEmitAttenuateA.selA.ATTENUATE = 1)
+    (v : ℤ)
+    (hclaim : opensTo hash ((envAt t i).loc (sbCol state.CAP_ROOT))
+        ((envAt t i).loc (prmCol CAP_KEY)) (some v)) :
+    v = (envAt t i).loc (prmCol HELD_MASK) := by
+  have h := (revokeV2_removes hash minit mfin maddrs t hsat i hi hactive).1
+  have := opensTo_functional hash hCR hclaim h
+  simpa using this
+
+/-- **The post `cap_root` is DETERMINED (anti-forgery).** Under CR, the new root is the unique sorted
+write of `(key ↦ 0)` — a forged `new_cap_root` is excluded by `writesTo_functional`. -/
+theorem revokeV2_post_determined (hash : List ℤ → ℤ)
+    (hCR : Dregg2.Circuit.Poseidon2Binding.Poseidon2SpongeCR hash)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hsat : Satisfied2 hash revokeCapabilityVmDescriptor2 minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length)
+    (hactive : (envAt t i).loc EffectVmEmitAttenuateA.selA.ATTENUATE = 1)
+    (r' : ℤ)
+    (hclaim : writesTo hash ((envAt t i).loc (sbCol state.CAP_ROOT))
+        ((envAt t i).loc (prmCol CAP_KEY)) 0 r') :
+    r' = (envAt t i).loc (saCol state.CAP_ROOT) := by
+  have h := (revokeV2_removes hash minit mfin maddrs t hsat i hi hactive).2
+  exact writesTo_functional hash hCR hclaim h
+
 /-! ## §8 — NEWLY EXPRESSIBLE II: SetField with a DYNAMIC slot index.
 
 ONE descriptor for all 8 slots: the field write is a `MemOp` at address `param[SLOT]` — the
@@ -966,11 +1063,12 @@ def v2Registry : List (String × EffectVmDescriptor2) :=
   , ("revokeVmDescriptor2", revokeVmDescriptor2)
   , ("introduceVmDescriptor2", introduceVmDescriptor2)
   , ("attenuateVmDescriptor2", attenuateVmDescriptor2)
+  , ("revokeCapabilityVmDescriptor2", revokeCapabilityVmDescriptor2)
   , ("setFieldDynVmDescriptor2", setFieldDynVmDescriptor2) ]
   ++ (List.finRange 8).map fun slot =>
       (s!"setFieldVmDescriptor2-{slot.val}", setFieldVmDescriptor2 slot)
 
-#guard v2Registry.length == 26
+#guard v2Registry.length == 27
 
 -- The graduated transfer: 36 embedded v1 constraints + 4 chip lookups + 2 range lookups; the
 -- five EPOCH tables declared; NO legacy carriers (graduation means graduation).
@@ -982,6 +1080,14 @@ def v2Registry : List (String × EffectVmDescriptor2) :=
 -- The enriched attenuate carries exactly the 3 phase-B constraints past its graduated base.
 #guard attenuateVmDescriptor2.constraints.length
         == attenuateVmDescriptor2Base.constraints.length + 3
+-- The enriched revoke carries exactly the 2 cap-crown constraints (held-read + remove-write, NO
+-- submask) past its graduated base.
+#guard revokeCapabilityVmDescriptor2.constraints.length
+        == (graduateV1 EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor).constraints.length + 2
+-- The revoke v1 face is graduable (so `graduateV1_sound`/`_complete`/`_faithful` apply).
+#guard graduable EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor
+-- The revoke descriptor declares exactly the 2 map ops (held-read + remove-write), no submask.
+#guard (mapOpsOf revokeCapabilityVmDescriptor2).length == 2
 -- The dyn setField is mem-op shaped: 2 mem ops, no map ops.
 #guard (memOpsOf setFieldDynVmDescriptor2).length == 2
 #guard (mapOpsOf setFieldDynVmDescriptor2).length == 0
@@ -1010,6 +1116,9 @@ def v2Registry : List (String × EffectVmDescriptor2) :=
 #assert_axioms subsetTable_mem_iff
 #assert_axioms attenuateV2_non_amp
 #assert_axioms attenuateV2_held_determined
+#assert_axioms revokeV2_removes
+#assert_axioms revokeV2_held_determined
+#assert_axioms revokeV2_post_determined
 #assert_axioms gSlotRange_holds_iff
 #assert_axioms setFieldDyn_memLog
 #assert_axioms setFieldDyn_readback_genuine

@@ -217,7 +217,7 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
                     hasher_inputs.push(w.held.slot_hash);
                 }
             }
-            Effect::RevokeCapability { slot_hash } => {
+            Effect::RevokeCapability { slot_hash, .. } => {
                 hasher_inputs.push(BabyBear::new(24));
                 hasher_inputs.extend_from_slice(slot_hash);
             }
