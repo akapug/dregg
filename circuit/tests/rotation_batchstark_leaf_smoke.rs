@@ -24,7 +24,9 @@ use dregg_circuit::descriptor_ir2::{
     verify_vm_descriptor2_with_config,
 };
 use dregg_circuit::ivc_turn_chain::ir2_leaf_wrap_config;
-use dregg_circuit::plonky3_recursion_impl::recursive::verify_recursive_batch_proof_with_config;
+use dregg_circuit::plonky3_recursion_impl::recursive::{
+    DreggRecursionConfig, verify_recursive_batch_proof_with_config,
+};
 use dregg_circuit::effect_vm::trace_rotated::{
     ROT_WIDTH, RotatedBlockWitness, generate_rotated_effect_vm_trace, transfer_caveat_manifest,
 };
@@ -164,4 +166,95 @@ fn rotated_transfer_leaf_folds_as_batchstark() {
     .expect("the rotated multi-table LogUp leaf folds as a NativeBatchStark recursion leaf");
     verify_recursive_batch_proof_with_config(&wrapped.0, &wrap_config)
         .expect("the wrapped native-batch leaf root proof verifies in-circuit");
+}
+
+/// C4 GATE PROBE — can two rotated leaves AGGREGATE at the leaf-wrap config?
+///
+/// The C3 smoke (above) wraps ONE rotated leaf and self-verifies it. C4's recursion rewire
+/// (`prove_chain_core` / `prove_joint_core`) must AGGREGATE the rotated leaves up a binary tree
+/// to one root. The rotated leaf-wrap OUTPUT is minted at `ir2_leaf_wrap_config` (log_blowup 6,
+/// 19 queries — the self-consistent FRI engine the inner `Ir2BatchProof` rides), NOT the chain's
+/// standard `create_recursion_config` (log_blowup 3, 38 queries). So a rotated leaf CANNOT be
+/// aggregated under the standard config (the in-circuit FRI verifier params would mismatch the
+/// child's FRI engine). THE QUESTION this probe settles: does `build_and_prove_aggregation_layer`
+/// fold two rotated-leaf outputs when run at `ir2_leaf_wrap_config` itself? If GREEN, C4's
+/// recursion leg is mechanical (run the whole chain — binding leaf + aggregation — at the wrap
+/// config). If it fails, the wall is real and needs a config-lift re-wrap or a fork change.
+#[test]
+fn two_rotated_leaves_aggregate_at_wrap_config() {
+    use dregg_circuit::plonky3_recursion_impl::recursive::create_recursion_backend;
+    use p3_recursion::{BatchOnly, ProveNextLayerParams, build_and_prove_aggregation_layer};
+
+    let desc =
+        parse_vm_descriptor2(rotated_transfer_json()).expect("rotated transfer descriptor parses");
+    let wrap_config = ir2_leaf_wrap_config();
+
+    // Mint two rotated transfer leaves (distinct amounts so the proofs differ).
+    let mint_leaf = |amount: u64| {
+        let before_balance: i64 = 100_000;
+        let st = CellState::new(before_balance as u64, 0);
+        let effects = vec![Effect::Transfer {
+            amount,
+            direction: 1,
+        }];
+        let mut ledger = Ledger::new();
+        let before_cell = producer_cell(before_balance, 0);
+        let after_cell = producer_cell(before_balance - amount as i64, 0);
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let nullifier_root = [0u8; 32];
+        let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
+        let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &receipt_log);
+        let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &receipt_log);
+        let bridge = |w: &rw::RotationWitness| -> RotatedBlockWitness {
+            RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).expect("31 pre-iroot limbs")
+        };
+        let caveat = transfer_caveat_manifest();
+        let (trace, dpis) = generate_rotated_effect_vm_trace(
+            &st,
+            &effects,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &caveat,
+        )
+        .expect("rotated transfer trace generates");
+        let mem_boundary = MemBoundaryWitness::default();
+        let umem_boundary = UMemBoundaryWitness::default();
+        let proof = prove_vm_descriptor2_for_config(
+            &desc,
+            &trace,
+            &dpis,
+            &mem_boundary,
+            &[],
+            &umem_boundary,
+            &wrap_config,
+        )
+        .expect("rotated transfer proves under wrap config");
+        dregg_circuit::ivc_turn_chain::prove_descriptor_leaf_rotated_with_config(
+            &desc,
+            &proof,
+            &dpis,
+            &wrap_config,
+        )
+        .expect("rotated leaf folds")
+    };
+
+    let left_out = mint_leaf(50);
+    let right_out = mint_leaf(70);
+
+    let backend = create_recursion_backend();
+    let params = ProveNextLayerParams::default();
+    let left = left_out.into_recursion_input::<BatchOnly>();
+    let right = right_out.into_recursion_input::<BatchOnly>();
+
+    let agg = build_and_prove_aggregation_layer::<DreggRecursionConfig, BatchOnly, BatchOnly, _, 4>(
+        &left,
+        &right,
+        &wrap_config,
+        &backend,
+        &params,
+        None,
+    )
+    .expect("two rotated leaves aggregate at the wrap config");
+    verify_recursive_batch_proof_with_config(&agg.0, &wrap_config)
+        .expect("the aggregated root verifies in-circuit at the wrap config");
 }
