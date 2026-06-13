@@ -11,7 +11,7 @@
 //! `cargo test` proves), narrating each step and asserting the load-bearing
 //! property so the run is a real artifact, not a print job. The SAME behaviour
 //! is exercised THROUGH real SQL by the `#[pg_test]`s in `src/lib.rs` (run with
-//! `cargo pgrx test pg17`); this example is the cores' story end to end.
+//! `cargo pgrx test pg18`); this example is the cores' story end to end.
 //!
 //! The arc:
 //!   1. The mirror ingests a chain of synthetic committed turns (genesis,
@@ -208,5 +208,5 @@ fn main() {
 
     rule("DONE");
     println!("\x1b[1m✓ end-to-end: mirror→chain→DDL→RLS-narrowing + anti-substitution + revocation, all green.\x1b[0m");
-    println!("  the SAME arc, through real SQL on pg17: cargo pgrx test pg17");
+    println!("  the SAME arc, through real SQL on pg18: cargo pgrx test pg18");
 }

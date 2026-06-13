@@ -559,6 +559,124 @@ mod tests {
         }
     }
 
+    // ---- (3) generative property test: jsonpath admit == Pred::eval ----------
+    //
+    // A self-contained (no proptest dep) generative harness: a tiny deterministic
+    // xorshift PRNG drives THOUSANDS of random first-party Pred trees × random
+    // FULLY-BOUND rows, asserting on EVERY case that (a) the predicate compiles to
+    // a jsonpath (the algebra is first-party-total), and (b) the jsonpath admit
+    // (lax AND strict, per the executable spec) equals `Pred::eval`. This is the
+    // codec-hardening fuzz the structural cases above cannot reach: it explores
+    // deep nesting, the empty AllOf/AnyOf corners under negation, and odd
+    // key/value shapes that the hand-written matrix does not enumerate.
+
+    /// A 64-bit xorshift* PRNG — deterministic, dependency-free.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545F4914F6CDD1D)
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    /// The closed universe of attribute keys/values the generator draws from, so a
+    /// generated row can bind every key a generated predicate inspects (the
+    /// bound-context precondition under which jsonpath == eval). `clock` is the
+    /// temporal key; the rest are string attrs.
+    const KEYS: [&str; 3] = ["action", "resource", "kind"];
+    const VALS: [&str; 4] = ["read", "write", "org/42/x", "a1/b2"];
+
+    /// Generate a random first-party Pred up to `depth` (leaf at depth 0).
+    fn gen_pred(rng: &mut Rng, depth: u32) -> Pred {
+        // At depth 0 only leaves; otherwise pick across the whole algebra.
+        let arms = if depth == 0 { 6 } else { 9 };
+        match rng.below(arms) {
+            0 => Pred::True,
+            1 => Pred::False,
+            2 => Pred::AttrEq {
+                key: KEYS[rng.below(KEYS.len() as u64) as usize].into(),
+                value: VALS[rng.below(VALS.len() as u64) as usize].into(),
+            },
+            3 => Pred::AttrPrefix {
+                key: KEYS[rng.below(KEYS.len() as u64) as usize].into(),
+                // a prefix of one of the values (or a non-matching one)
+                prefix: {
+                    let v = VALS[rng.below(VALS.len() as u64) as usize];
+                    let take = 1 + (rng.below(v.len().max(1) as u64) as usize);
+                    v.chars().take(take).collect()
+                },
+            },
+            4 => Pred::NotBefore { at: rng.below(4000) },
+            5 => Pred::NotAfter { at: rng.below(4000) },
+            6 => Pred::Within {
+                not_before: rng.below(2000),
+                not_after: 2000 + rng.below(2000),
+            },
+            7 => {
+                let n = rng.below(4); // includes 0 (the empty-AllOf corner)
+                Pred::AllOf((0..n).map(|_| gen_pred(rng, depth - 1)).collect())
+            }
+            8 => {
+                // bias toward including the empty-AnyOf (fail-closed) corner
+                let n = rng.below(4);
+                if n == 0 || rng.below(8) == 0 {
+                    Pred::AnyOf((0..n).map(|_| gen_pred(rng, depth.saturating_sub(1))).collect())
+                } else {
+                    Pred::Not(Box::new(gen_pred(rng, depth - 1)))
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// A random FULLY-BOUND row: every KEY bound to a random VAL, plus a clock.
+    fn gen_row(rng: &mut Rng) -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        for k in KEYS {
+            obj.insert(
+                k.to_string(),
+                json!(VALS[rng.below(VALS.len() as u64) as usize]),
+            );
+        }
+        obj.insert("clock".to_string(), json!(rng.below(4000)));
+        serde_json::Value::Object(obj)
+    }
+
+    #[test]
+    fn generative_jsonpath_admit_agrees_with_pred_eval() {
+        let mut rng = Rng(0x9E3779B97F4A7C15);
+        let mut checked = 0u64;
+        for _ in 0..2000 {
+            let p = gen_pred(&mut rng, 4);
+            // The whole first-party algebra compiles (always Some today).
+            let path = pred_to_jsonpath(&p);
+            assert!(path.is_some(), "generated first-party Pred must compile: {p:?}");
+            assert!(pred_to_jsonpath_strict(&p).is_some());
+            // On a handful of fully-bound rows, jsonpath admit == Pred::eval.
+            for _ in 0..4 {
+                let row = gen_row(&mut rng);
+                let ctx = ctx_from_row(&row);
+                // On a fully-bound row Pred::eval never returns Unbound.
+                let eval = p.eval(&ctx).unwrap_or_else(|_| {
+                    panic!("fully-bound row unexpectedly Unbound\n  pred={p:?}\n  row={row}")
+                });
+                let lax = jsonpath_admits(&p, &row, false);
+                let strict = jsonpath_admits(&p, &row, true);
+                assert_eq!(eval, lax, "lax jsonpath != eval\n  pred={p:?}\n  row={row}");
+                assert_eq!(eval, strict, "strict jsonpath != eval\n  pred={p:?}\n  row={row}");
+                checked += 1;
+            }
+        }
+        assert!(checked >= 8000, "the generative harness must exercise thousands of cases");
+    }
+
     #[test]
     fn attenuation_narrowing_shows_through_jsonpath() {
         // The no-amplify property, observed through the jsonpath spec: a child

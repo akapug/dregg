@@ -71,6 +71,55 @@ DELETE FROM dregg.cells WHERE cell_id='\xee0000000000000000000000000000000000000
 RESET ROLE;
 
 \echo ''
+\echo '== 4c. pg18 RETURNING WITH (OLD/NEW) typed applicator: dregg.merge_cell_delta — (action, Δbalance, Δnonce) =='
+\echo '--      INSERT arm: full amount, no pre-image nonce; UPDATE arm: signed balance + nonce deltas, one atomic MERGE'
+SET ROLE dregg_kernel;
+SELECT * FROM dregg.merge_cell_delta('\xff00000000000000000000000000000000000000000000000000000000000000'::bytea,
+    'Hosted',5000,0,'\x'::bytea,'{"balance":5000,"nonce":0}'::jsonb,'Active',1,
+    '\xff00000000000000000000000000000000000000000000000000000000000000'::bytea);     -- INSERT | 5000 | 0
+SELECT * FROM dregg.merge_cell_delta('\xff00000000000000000000000000000000000000000000000000000000000000'::bytea,
+    'Hosted',4500,1,'\x'::bytea,'{"balance":4500,"nonce":1}'::jsonb,'Active',1,
+    '\xff00000000000000000000000000000000000000000000000000000000000000'::bytea);     -- UPDATE | -500 | 1
+DELETE FROM dregg.cells WHERE cell_id='\xff00000000000000000000000000000000000000000000000000000000000000'::bytea;
+RESET ROLE;
+
+\echo ''
+\echo '== 4d. pg18 B-tree SKIP SCAN: the (mode,balance) index serves a balance-only query (leading mode unconstrained) =='
+\echo '--      load enough rows that the index beats a seq scan, then EXPLAIN a balance-only predicate;'
+\echo '--      the plan uses cells_by_mode_balance with an Index Cond on balance — the leading mode column is SKIPPED (pg18).'
+-- Run the bulk load + ANALYZE as the table owner (this psql role), since ANALYZE
+-- needs ownership; then EXPLAIN the plan. dregg.merge_cell is the verified write
+-- path — here we load demo rows directly as the owner purely to give the planner
+-- a table large enough to prefer the index (a 2-row table is always a seq scan).
+INSERT INTO dregg.cells (cell_id, mode, balance, nonce, fields, fields_json, lifecycle, last_ordinal, cell_root)
+SELECT decode(lpad(to_hex(2000000 + g), 64, '0'), 'hex'),
+       CASE WHEN g % 2 = 0 THEN 'Hosted' ELSE 'Sovereign' END,
+       g, 0, '\x'::bytea, jsonb_build_object('balance', g, 'nonce', 0), 'Active', 1,
+       decode(lpad(to_hex(2000000 + g), 64, '0'), 'hex')
+FROM generate_series(1, 4000) g ON CONFLICT (cell_id) DO NOTHING;
+ANALYZE dregg.cells;
+SET enable_seqscan = off;
+EXPLAIN (COSTS off) SELECT cell_id FROM dregg.cells WHERE balance = 1234;   -- Index ... cells_by_mode_balance, Index Cond: (balance = ...)
+SET enable_seqscan = on;
+DELETE FROM dregg.cells WHERE last_ordinal = 1 AND balance BETWEEN 1 AND 4000;  -- leave the story untouched
+
+\echo ''
+\echo '== 4e. pg15 SECURITY_INVOKER on every dev-view (RLS through the view, by declaration) =='
+SELECT c.relname, (array_to_string(c.reloptions,',') LIKE '%security_invoker=true%') AS security_invoker
+FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE n.nspname='dregg' AND c.relkind='v'
+  AND c.relname IN ('cap_edges','cell_balances','receipt_chain','cap_attenuations','cell_fields','canonical_cells')
+ORDER BY c.relname;
+
+\echo ''
+\echo '== 4f. pg18 AIO observability: dregg.mirror_io_stats over pg_stat_io (the read-heavy mirror, made legible) =='
+SET ROLE dregg_kernel;
+SELECT backend_type, context, reads, hits, cache_hit_ratio
+FROM dregg.mirror_io_stats WHERE context='normal' AND (reads > 0 OR hits > 0)
+ORDER BY (coalesce(reads,0)+coalesce(hits,0)) DESC LIMIT 3;
+RESET ROLE;
+
+\echo ''
 \echo '== 5. dregg_verify_turn on a TAMPERED ord-2 (prev_root substituted) => FALSE =='
 SELECT dregg_verify_turn(
     '\x9999999999999999999999999999999999999999999999999999999999999999'::bytea,

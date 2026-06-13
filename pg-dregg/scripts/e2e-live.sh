@@ -58,6 +58,21 @@ echo "-- present the ALICE-only token, become the unprivileged app role, submit 
   "SET dregg.token = '$ALICE_TOK'; SET ROLE dregg_reader;
    SELECT encode(agent,'hex') AS agent, status FROM dregg.submit_queue;"
 
+echo "-- pg18 uuidv7 queue key as an AUDIT SIGNAL: the audit view recovers the enqueue time + version FROM the key itself"
+"$PSQL" -h "$SOCK" -p "$PORT" -d "$DB" -c \
+  "SET ROLE dregg_kernel;
+   SELECT id_version, (id_version = 7) AS is_v7,
+          (abs(extract(epoch FROM (enqueued_at - submitted_at))) < 5) AS key_time_matches_clock,
+          status
+   FROM dregg.submit_queue_audit ORDER BY id;"
+
+echo "-- pg18 OAuth → role → dregg-cap bind seam: dregg_bind_role binds dregg_reader to ALICE; role_bindings shows it WITHOUT the token"
+"$PSQL" -h "$SOCK" -p "$PORT" -d "$DB" -c "SELECT dregg_install_login_binding();" >/dev/null
+"$PSQL" -h "$SOCK" -p "$PORT" -d "$DB" -c \
+  "SELECT dregg_bind_role('dregg_reader', '\\x$ALICE_HEX'::bytea, '$ALICE_TOK');
+   SET ROLE dregg_kernel;
+   SELECT pg_role, agent, has_token FROM dregg.role_bindings WHERE pg_role = 'dregg_reader';"
+
 echo "-- submit FOR BOB under the ALICE-only token => RLS REFUSES (a role submits only what its caps authorize)"
 "$PSQL" -h "$SOCK" -p "$PORT" -d "$DB" -c \
   "SET dregg.token = '$ALICE_TOK'; SET ROLE dregg_reader;

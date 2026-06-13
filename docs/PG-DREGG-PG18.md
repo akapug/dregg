@@ -34,8 +34,8 @@ means the opposite on every axis:
 
 | clause | pg-native means | the pg18/pg17 feature | §  |
 |--------|-----------------|------------------|----|
-| **rich reads** | dregg's embedded JSON state is projected into typed, JOINable, index-eligible relations and views | `JSON_TABLE` (17), **virtual generated columns (18)**, builtin-C collation (17) | §2–§5 |
-| **verified-only writes** | a state row exists ONLY as the post-image of a verified turn, applied atomically through ONE door — and the applicator reports the delta | **`MERGE … RETURNING old/new` (18)**, a `BEFORE INSERT` re-validating trigger | §7 |
+| **rich reads** | dregg's embedded JSON state is projected into typed, JOINable, index-eligible relations and views | `JSON_TABLE` (17), **virtual generated columns (18)**, builtin-C collation (17), **B-tree skip scan (18)**, **AIO + `pg_stat_io` (18)**, `security_invoker` views (15) | §2–§5, §8 |
+| **verified-only writes** | a state row exists ONLY as the post-image of a verified turn, applied atomically through ONE door — and the applicator reports the (typed) delta | **`MERGE … RETURNING WITH (OLD/NEW)` (18)**, a `BEFORE INSERT` re-validating trigger | §7 |
 | **postgres re-validates** | the database engine — not a trusted writer — refuses a tampered/reordered/forged batch | the chain re-validator `dregg_verify_turn`, run inside the gate trigger | §7 |
 | **pg-native authz** | a connecting role is bound to its dregg capability by postgres, and rows are gated by it | login event trigger (17) + **OAuth (18)** + RLS cap policies; `uuidv7()` (18) queue keys | §6 |
 
@@ -305,8 +305,29 @@ role, the `ON login` hook reads that role's `dregg.role_identity` row, and the
 session is capability-bound — **so an OAuth subject's authority inside the
 database is its dregg capability, gated by RLS on every row.** OAuth decides the
 role; dregg decides what the role may touch. (The `pg_hba` `oauth` line and the
-validator are deployment configuration, not extension SQL; pg-dregg's surface is
-the `role_identity` map + the login hook it binds through.)
+validator are deployment configuration, not extension SQL.)
+
+The *bind seam* — the point where the OAuth-decided role becomes a dregg
+capability — is a tested first-class surface, not just prose. `dregg.bind_role(
+pg_role, agent, token)` (the `SECURITY DEFINER` upsert behind the `dregg_bind_role`
+extern) is the call an IdP-provisioning step or a DBA migration makes to populate
+the `role_identity` row the login hook installs; `dregg.role_bindings` is the
+introspection view that shows which role is bound to which agent and *whether* a
+token is installed — **without exposing the token text** (it projects
+`default_token IS NOT NULL`, never the credential). So the whole chain — OAuth
+subject → pg role → `dregg.bind_role` → `role_identity` → `ON login` →
+`dregg.token` GUC → RLS on every row — is one tested code path
+(`oauth_bind_role_seam_binds_then_rls_narrows`, live pg18).
+
+**The queue key is itself an audit signal.** `dregg.submit_queue_audit` recovers
+the enqueue time and version *from the `uuidv7()` key* via pg18's
+`uuid_extract_timestamp()` / `uuid_extract_version()` — so `enqueued_at` is read
+back from the id (a cross-check that the key really is time-ordered, independent of
+the `submitted_at` clock column), `id_version` proves it is a v7, and the view's
+`queue_latency` is the node's drain latency measured against the key. It is
+`security_invoker`, so the `submit_read` RLS still gates which rows a submitter
+sees through it. *Proven by* `pg18_submit_queue_audit_recovers_time_from_the_uuidv7_key`
+(live pg18).
 
 **The write side has its own cap-RLS policy, keyed by a pg18 `uuidv7()`.** A
 pg-user submits a verified turn FROM postgres by enqueuing it into
@@ -386,6 +407,19 @@ for each touched cell, and the *same* function is the live node mirror's writer
 cell), so the verified-store door and the streaming mirror materialize
 identically — by construction, not by coincidence.
 
+The example above uses the **explicit `RETURNING WITH (OLD AS o, NEW AS n)`
+alias** — the spec-standard pg18 form. It is strictly better than the bare
+`old.`/`new.` pseudo-aliases (which only resolve because no column is literally
+named `old`/`new`): the explicit alias is unambiguous and future-proof. A twin
+applicator `dregg.merge_cell_delta(...)` returns the same MERGE's report as a
+*typed tuple* `(action, balance_delta, nonce_delta)` (the pg18 `RETURNING WITH`
+reading both the balance and nonce off the pre-image) — the analytics face when a
+caller wants the numbers typed rather than the `'<ACTION> <DELTA>'` string. The
+payoff: **conservation is assertable directly off the applicator** — the per-cell
+balance deltas of a transfer (TREASURY→ALICE→BOB) the applicator reports sum to
+zero, no separate read needed. *Proven by*
+`pg18_merge_cell_delta_typed_and_conservation_off_the_applicator` (live pg18).
+
 > **pgrx-0.17 note (a named seam, not a pg18 gap).** A *top-level* `MERGE` issued
 > through pgrx's `Spi` panics with *"unrecognized SPI status code: 19"* —
 > `SPI_OK_MERGE` (19) is outside the range pgrx-0.17's Spi wrapper maps. Wrapping
@@ -408,7 +442,7 @@ with exactly one row per cell), and the write-path pair
 
 ---
 
-## 8. Faster reads — asynchronous I/O (pg18)
+## 8. Faster reads — asynchronous I/O (pg18), made observable
 
 The mirror is read-heavy: the explorer/analytics surface scans `dregg.cells`,
 walks `dregg.receipt_chain`, and the recursive `cap_edges` delegation tree;
@@ -417,9 +451,30 @@ Tier C adds verify-on-write. pg18 introduces an **asynchronous I/O subsystem
 shapes the mirror's large-scan views take — with no SQL change (it is configured
 by `io_method` and is transparent to the extension). pg-dregg requires nothing
 of it; it is the engine getting faster underneath the read-heavy mirror, and the
-reason the "rich reads" clause stays cheap as the ledger grows. (A perf-baseline
-of the dev-views under AIO + `pg_stat_io` is the noted observability follow-up,
-`docs/PG-DREGG.md` §14.2.)
+reason the "rich reads" clause stays cheap as the ledger grows.
+
+**The AIO observability surface is wired**, not deferred. pg18's AIO feeds
+`pg_stat_io` (with the new `reads`/`read_bytes` columns and the cache `hits` that
+never touched the OS); `dregg.mirror_io_stats` projects the read-path-relevant
+relation contexts (`normal`, `vacuum`, `bulkread`, `bulkwrite`) into a compact
+mirror-facing view that reports, per (backend type, context), the read/write/extend
+counts and the `cache_hit_ratio` the read-heavy mirror watches as the ledger
+grows. It is a thin SELECT over the system view (no row data, so no RLS concern).
+*Proven by* `pg18_mirror_io_stats_view_reports_the_io_mix` (live pg18: the view
+resolves, reports the `normal` relation context, and the hit ratio is a valid
+fraction).
+
+**B-tree skip scan (pg18) is applied** to the same read paths. The composite
+`cells_by_mode_balance (mode, balance)` index serves *both* `WHERE mode = …` *and*
+`WHERE balance = …` / `ORDER BY balance` — the latter via skip scan: `mode` (the
+leading column) has tiny cardinality (Hosted | Sovereign), so a balance-only
+predicate makes the planner skip through the few `mode` prefixes and range-scan
+`balance` within each, instead of the pre-18 fallback (a full index scan or seq
+scan). One index covers the two hot access paths with no separate `balance` index
+to maintain on the write path. *Proven by*
+`pg18_skip_scan_serves_balance_with_unconstrained_leading_mode` (live pg18: with
+4000 rows the plan uses `cells_by_mode_balance` with an `Index Cond` on `balance`,
+the leading `mode` column unconstrained).
 
 ---
 
@@ -452,6 +507,11 @@ DDL emitter, then:
 - shows the pg18 `MERGE … RETURNING old/new` delta on a demo cell
   (`'INSERT +1000'` then `'UPDATE -300'`) and the VIRTUAL generated columns
   (`cell_root_hex`/`balance_field`, `attgenerated='v'`) equal to their source;
+- shows the pg18 `RETURNING WITH (OLD/NEW)` typed applicator `dregg.merge_cell_delta`
+  (the `(action, Δbalance, Δnonce)` tuple), the pg18 **B-tree skip scan** plan over
+  `cells_by_mode_balance` (an `Index Cond` on `balance`, the leading `mode` column
+  unconstrained), the pg15 `security_invoker` reloption on every dev-view, and the
+  pg18 AIO observability view `dregg.mirror_io_stats` (real `cache_hit_ratio`s);
 - shows the `dregg.turns` hash chain (each `prev_root` is the prior `ledger_root`);
 - submits a TAMPERED ord-2 (substituted `prev_root`) — the trigger RAISEs
   `dregg: turn 2 does not chain onto the head root — refused
@@ -459,8 +519,11 @@ DDL emitter, then:
 - confirms the store is INTACT (still 2 turns, ALICE still 400);
 - confirms the privilege lockdown (an app role has zero write on state; only the
   kernel submits);
-- mints an ALICE-only `submit` token (`cargo run --example mint`), and shows a
-  submit FOR ALICE succeed and a submit FOR BOB refused by RLS.
+- mints an ALICE-only `submit` token (`cargo run --example mint`), shows a submit
+  FOR ALICE succeed and a submit FOR BOB refused by RLS, the pg18 `uuidv7` queue
+  key as an audit signal (`dregg.submit_queue_audit` recovers `id_version=7` + the
+  enqueue time from the key), and the OAuth→role→cap bind seam (`dregg_bind_role`
+  binds the role; `dregg.role_bindings` shows it without leaking the token).
 
 ```
 pg-dregg/scripts/e2e-live.sh
@@ -483,12 +546,15 @@ land via `dregg.merge_cell`, and the pg side re-validates the chain it received.
 | **VIRTUAL generated columns** (now the default) | **18** | rich reads (no-drift, no-storage projections) | §4, `dregg.cells` (`cell_root_hex`/`balance_field`) |
 | STORED generated columns | 12 | rich reads (indexed canonical key) | §4, `dregg.cells` (`cell_hex`) |
 | SQL/JSON `JSON_TABLE` | 17 | rich reads (JSON → rows) | §5, the three projection views |
+| **B-tree skip scan** | **18** | rich reads (one index, two access paths) | §8, `cells_by_mode_balance` |
+| **`security_invoker` views** | 15 | read gate (RLS through every dev-view, declared) | §6/§8, all dev-views `WITH (security_invoker = true)` |
 | login event trigger | 17 | pg-native authz | §6, `dregg.on_login` |
-| **`oauth` authentication method** | **18** | pg-native authz (federated identity → role) | §6, composes with `role_identity` + the login hook |
+| **`oauth` authentication method** | **18** | pg-native authz (federated identity → role) | §6, composes with `role_identity`; the bind seam `dregg.bind_role`/`dregg.role_bindings` |
 | **`uuidv7()`** (temporally sortable) | **18** | pg-native authz (the drain-queue key) | §6, `dregg.submit_queue` |
+| **`uuid_extract_timestamp` / `_version`** | **18** | pg-native authz (the queue key AS an audit signal) | §6, `dregg.submit_queue_audit` |
 | `MERGE` + `merge_action()` | 17 | verified-only writes (atomic upsert) | §7, `dregg.merge_cell` |
-| **`RETURNING old.* / new.*`** | **18** | verified-only writes (the applicator's delta audit) | §7, `dregg.merge_cell` |
-| **asynchronous I/O (AIO)** | **18** | rich reads (faster large scans) | §8, transparent |
+| **`RETURNING WITH (OLD/NEW)`** | **18** | verified-only writes (the applicator's typed delta audit + conservation) | §7, `dregg.merge_cell` / `dregg.merge_cell_delta` |
+| **asynchronous I/O (AIO)** | **18** | rich reads (faster large scans) | §8, transparent + the `dregg.mirror_io_stats` view over `pg_stat_io` |
 | `BEFORE INSERT` re-validating trigger | core | verified-only writes (the one door) | §7, `dregg.apply_verified_turn` |
 | `FORCE ROW LEVEL SECURITY` + cap policies | core | read gate + write gate | §6/§7, the RLS |
 

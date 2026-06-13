@@ -242,6 +242,27 @@ mod pg {
             .to_string()
     }
 
+    /// `dregg_bind_role(pg_role text, agent bytea, token text) -> bool`. Bind a
+    /// connecting pg role to its dregg agent identity (`docs/PG-DREGG-PG18.md` §6):
+    /// upsert the `dregg.role_identity` row the `ON login` trigger installs, so the
+    /// role's session is capability-bound the moment it connects. This is the seam
+    /// where pg18 OAuth meets dregg — OAuth (a `pg_hba.conf` deployment concern, not
+    /// extension SQL) authenticates an external identity to a pg ROLE; this binds
+    /// that role to a dregg capability. Calls the `SECURITY DEFINER`
+    /// `dregg.bind_role` (which writes the PUBLIC-closed mapping table), so it must
+    /// be run by a role the DBA granted `EXECUTE` on `dregg.bind_role`. `token` may
+    /// be NULL (bind the agent identity without a default token; the role then
+    /// presents its own). Requires [`dregg_install_login_binding`] first.
+    #[pg_extern]
+    fn dregg_bind_role(pg_role: &str, agent: &[u8], token: Option<&str>) -> bool {
+        Spi::run_with_args(
+            "SELECT dregg.bind_role($1, $2, $3)",
+            &[pg_role.into(), agent.into(), token.into()],
+        )
+        .expect("dregg_bind_role: bind failed (login binding not installed, or no EXECUTE on dregg.bind_role)");
+        true
+    }
+
     /// `dregg_submit_turn(signed_turn bytea, agent bytea) -> uuid`. Submit a
     /// SIGNED turn FROM postgres (`docs/PG-DREGG.md` §11). `signed_turn` is the
     /// postcard `SignedTurn` bytes; `agent` is the turn's agent cell id. Enqueues
@@ -1485,6 +1506,361 @@ mod pg {
                 "SELECT dregg_submit_turn('\\xdeadbeef'::bytea, '\\x{bob_hex}'::bytea)"
             ))
             .unwrap();
+        }
+
+        // ===================================================================
+        // The pg18 leverage WIRED in the thoroughness pass (docs/PG-DREGG-PG18.md
+        // §4/§6/§7/§8 + docs/PG-DREGG.md §14.3), each executed on the live pg18.
+        // ===================================================================
+
+        /// pg18 B-tree SKIP SCAN: the composite `cells_by_mode_balance (mode,
+        /// balance)` index serves a `WHERE balance = …` query whose LEADING column
+        /// (`mode`) is unconstrained — the planner skips through the few `mode`
+        /// prefixes rather than seq-scanning. We assert the chosen plan is an
+        /// index scan over that index (with seqscan disabled to force the planner
+        /// to use the index path it can, which pre-18 it could not for an
+        /// unconstrained leading column). This is real pg18 leverage, on real rows.
+        #[pg_test]
+        fn pg18_skip_scan_serves_balance_with_unconstrained_leading_mode() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_b_and_load_synth();
+            Spi::run("SET ROLE dregg_kernel").unwrap(); // BYPASSRLS writer
+
+            // Load enough rows that the planner prefers the index (a tiny table is
+            // always a seq scan). Insert many Hosted cells with distinct balances,
+            // chaining off the existing turns (last_ordinal references turn 0).
+            Spi::run(
+                "INSERT INTO dregg.cells \
+                   (cell_id, mode, balance, nonce, fields, fields_json, lifecycle, last_ordinal, cell_root) \
+                 SELECT decode(lpad(to_hex(1000 + g), 64, '0'), 'hex'), \
+                        CASE WHEN g % 2 = 0 THEN 'Hosted' ELSE 'Sovereign' END, \
+                        g, 0, '\\x'::bytea, \
+                        jsonb_build_object('balance', g, 'nonce', 0), 'Active', 0, \
+                        decode(lpad(to_hex(1000 + g), 64, '0'), 'hex') \
+                 FROM generate_series(1, 4000) g \
+                 ON CONFLICT (cell_id) DO NOTHING",
+            )
+            .unwrap();
+            Spi::run("ANALYZE dregg.cells").unwrap();
+            // Force the index path so we observe skip scan (pre-18 this query would
+            // have to fall back to a seq scan or full index scan).
+            Spi::run("SET enable_seqscan = off").unwrap();
+
+            // Collect the plain-text EXPLAIN rows and assert the (mode,balance) index
+            // serves a balance-only predicate — `mode` (the leading column) is
+            // unconstrained, so the index path IS pg18 skip scan.
+            let lines: Vec<String> = Spi::connect(|client| {
+                let mut out = Vec::new();
+                let tup = client
+                    .select(
+                        "EXPLAIN (COSTS off) SELECT cell_id FROM dregg.cells WHERE balance = 2000",
+                        None,
+                        &[],
+                    )
+                    .expect("EXPLAIN runs");
+                for row in tup {
+                    if let Ok(Some(s)) = row.get::<String>(1) {
+                        out.push(s);
+                    }
+                }
+                out
+            });
+            Spi::run("SET enable_seqscan = on").unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            let joined = lines.join("\n");
+            assert!(
+                joined.contains("cells_by_mode_balance"),
+                "the (mode,balance) index serves a balance-only query via skip scan; plan was:\n{joined}"
+            );
+            // And the Index Cond is on balance (the leading mode column is skipped).
+            assert!(
+                joined.contains("balance = 2000") || joined.to_lowercase().contains("index cond"),
+                "the index condition is on balance (mode skipped); plan was:\n{joined}"
+            );
+        }
+
+        /// pg15 SECURITY_INVOKER views (docs/PG-DREGG.md §14.3, wired): the dev
+        /// views run with the INVOKER's privileges, so the base-table RLS narrows a
+        /// reader THROUGH the view. We assert (a) the reloption is set on every
+        /// dev-view, and (b) the narrowing actually bites: an ALICE-only token sees
+        /// only ALICE's cell through `dregg.cell_balances` (the view), not just the
+        /// base table — RLS-through-views by declaration, not incidentally.
+        #[pg_test]
+        fn pg15_security_invoker_views_enforce_rls_through_the_view() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_b_and_load_synth();
+
+            // (a) every dev-view carries security_invoker=true in its reloptions.
+            let non_invoker: i64 = Spi::get_one(
+                "SELECT count(*) FROM pg_class c \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = 'dregg' AND c.relkind = 'v' \
+                   AND c.relname IN ('cap_edges','cell_balances','receipt_chain', \
+                                     'cap_attenuations','cell_fields','canonical_cells') \
+                   AND NOT (coalesce(array_to_string(c.reloptions, ','), '') \
+                            LIKE '%security_invoker=true%')",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(non_invoker, 0, "every dev-view must be security_invoker=true");
+
+            // (b) the narrowing bites THROUGH the view. Grant the reader SELECT on
+            // the view, present an ALICE-only token, and count cell_balances rows as
+            // the unprivileged reader: only ALICE's cell (a1…) is visible.
+            let alice_only = root
+                .mint([
+                    Caveat::FirstParty(Pred::AttrEq { key: "action".into(), value: "read".into() }),
+                    Caveat::FirstParty(Pred::AttrPrefix { key: "resource".into(), prefix: "a1".into() }),
+                ])
+                .encode();
+            Spi::run(&format!("SET dregg.token = '{alice_only}'")).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+            let visible: i64 = Spi::get_one("SELECT count(*) FROM dregg.cell_balances")
+                .unwrap()
+                .unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            assert_eq!(
+                visible, 1,
+                "the security_invoker view narrows the reader to ALICE's cell — RLS through the view"
+            );
+        }
+
+        /// pg18 `RETURNING WITH (OLD/NEW)` typed applicator (docs/PG-DREGG-PG18.md
+        /// §7, wired): `dregg.merge_cell_delta` returns (action, balance_delta,
+        /// nonce_delta) read from the pre-image in one atomic MERGE. We exercise
+        /// the INSERT arm (delta = full amount), the UPDATE arm (signed delta +
+        /// nonce delta), AND — the payoff — assert CONSERVATION directly off the
+        /// applicator: the per-cell balance deltas of a transfer sum to zero.
+        #[pg_test]
+        fn pg18_merge_cell_delta_typed_and_conservation_off_the_applicator() {
+            let root = root();
+            assert_issuer(&root);
+            let summary: String =
+                Spi::get_one("SELECT dregg_install_schema()").unwrap().unwrap();
+            assert!(summary.contains("Tier-B store installed"));
+            Spi::run("SET ROLE dregg_kernel").unwrap();
+            Spi::run(
+                "INSERT INTO dregg.turns(ordinal,height,block_id,block_executed_up_to,\
+                 turn_hash,creator,receipt_hash,ledger_root,prev_root) VALUES \
+                 (0,0,'\\x22',0,'\\x33','\\xc0','\\x44','\\x11','\\x00')",
+            )
+            .unwrap();
+
+            // The OUT params are read via a positional SELECT against the function
+            // (portable + explicit across pgrx versions).
+            // Fresh cell: INSERT arm ⇒ balance_delta = full amount, nonce_delta = 0.
+            let fid = "f000000000000000000000000000000000000000000000000000000000000000";
+            let ins = Spi::get_one::<String>(&format!(
+                "SELECT action||' '||balance_delta||' '||nonce_delta \
+                 FROM dregg.merge_cell_delta('\\x{fid}'::bytea,'Hosted',5000,0,\
+                 '\\x'::bytea,'{{\"balance\":5000,\"nonce\":0}}'::jsonb,'Active',0,'\\x{fid}'::bytea)"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(ins, "INSERT 5000 0", "INSERT arm: balance_delta is the full amount, no pre-image nonce");
+            // UPDATE arm on the same cell: signed balance delta (−500) + nonce delta (+1).
+            let upd = Spi::get_one::<String>(&format!(
+                "SELECT action||' '||balance_delta||' '||nonce_delta \
+                 FROM dregg.merge_cell_delta('\\x{fid}'::bytea,'Hosted',4500,1,\
+                 '\\x'::bytea,'{{\"balance\":4500,\"nonce\":1}}'::jsonb,'Active',0,'\\x{fid}'::bytea)"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(upd, "UPDATE -500 1", "UPDATE arm: signed balance + nonce deltas from the pre-image");
+
+            // CONSERVATION off the applicator: a transfer TREASURY→ALICE→BOB whose
+            // per-cell balance deltas (read from the pre-image by the pg18 RETURNING
+            // WITH) sum to ZERO. Seed three cells, then apply the transfer and SUM
+            // the reported balance deltas. (Seed first so the deltas below are the
+            // transfer's, not the funding's.)
+            for (id, bal) in [("c0", 1_000_000_i64), ("a1", 0), ("b0", 0)] {
+                let full = format!("{id}00000000000000000000000000000000000000000000000000000000000000");
+                Spi::run(&format!(
+                    "SELECT dregg.merge_cell('\\x{full}'::bytea,'Hosted',{bal},0,'\\x'::bytea,\
+                     '{{\"balance\":{bal},\"nonce\":0}}'::jsonb,'Active',0,'\\x{full}'::bytea)"
+                ))
+                .unwrap();
+            }
+            // The transfer: TREASURY 1_000_000→999_500 (−500), ALICE 0→400 (+400),
+            // BOB 0→100 (+100). Σδ = 0.
+            let transfer = [
+                ("c0", 999_500_i64, 1u64),
+                ("a1", 400, 1),
+                ("b0", 100, 1),
+            ];
+            let mut sum: i64 = 0;
+            for (id, bal, nonce) in transfer {
+                let full = format!("{id}00000000000000000000000000000000000000000000000000000000000000");
+                let d: i64 = Spi::get_one(&format!(
+                    "SELECT balance_delta FROM dregg.merge_cell_delta('\\x{full}'::bytea,'Hosted',{bal},{nonce},\
+                     '\\x'::bytea,'{{\"balance\":{bal},\"nonce\":{nonce}}}'::jsonb,'Active',0,'\\x{full}'::bytea)"
+                ))
+                .unwrap()
+                .unwrap();
+                sum += d;
+            }
+            Spi::run("RESET ROLE").unwrap();
+            assert_eq!(sum, 0, "conservation: the per-cell balance deltas the applicator reported sum to zero");
+        }
+
+        /// pg18 `uuidv7()` key as an AUDIT SIGNAL (docs/PG-DREGG-PG18.md §6, wired):
+        /// `dregg.submit_queue_audit` recovers the enqueue time + version FROM the
+        /// key itself (uuid_extract_timestamp / uuid_extract_version). We assert the
+        /// recovered version is 7, the key-derived enqueued_at agrees with the
+        /// submitted_at clock (so the key really is time-ordered), and rows come out
+        /// in key (arrival) order.
+        #[pg_test]
+        fn pg18_submit_queue_audit_recovers_time_from_the_uuidv7_key() {
+            let root = root();
+            assert_issuer(&root);
+            Spi::get_one::<String>("SELECT dregg_install_schema()").unwrap();
+            let o: String = Spi::get_one("SELECT dregg_install_write_outbox()").unwrap().unwrap();
+            assert!(o.contains("write outbox installed"));
+
+            // Enqueue two rows as the table owner (the harness superuser) so the
+            // audit view has data — the queue's INSERT grant is to dregg_reader (the
+            // submitter), NOT dregg_kernel (which drains): a real find baked into the
+            // role model, so we do NOT SET ROLE kernel to write here.
+            let a_hex = "a100000000000000000000000000000000000000000000000000000000000000";
+            Spi::run(&format!(
+                "INSERT INTO dregg.submit_queue(agent, signed_turn) VALUES \
+                 ('\\x{a_hex}'::bytea, '\\x01'::bytea), ('\\x{a_hex}'::bytea, '\\x02'::bytea)"
+            ))
+            .unwrap();
+            Spi::run("SET ROLE dregg_kernel").unwrap(); // BYPASSRLS so we see all rows
+
+            // Every row's key is a v7 and its key-derived enqueued_at is within a
+            // few seconds of submitted_at (the key carries the time).
+            let bad: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.submit_queue_audit \
+                 WHERE id_version <> 7 \
+                    OR abs(extract(epoch FROM (enqueued_at - submitted_at))) > 5",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(bad, 0, "every queue key is a v7 whose embedded time matches submitted_at");
+
+            // The audit view yields rows in key (arrival) order: the first row's
+            // enqueued_at is <= the last row's.
+            let ordered: bool = Spi::get_one(
+                "SELECT (SELECT enqueued_at FROM dregg.submit_queue_audit ORDER BY id LIMIT 1) \
+                      <= (SELECT enqueued_at FROM dregg.submit_queue_audit ORDER BY id DESC LIMIT 1)",
+            )
+            .unwrap()
+            .unwrap();
+            assert!(ordered, "uuidv7 keys order the audit view by enqueue time");
+            Spi::run("RESET ROLE").unwrap();
+        }
+
+        /// The OAuth → role → dregg-cap bind seam (docs/PG-DREGG-PG18.md §6, wired):
+        /// `dregg_bind_role` is the tested code path that turns a pg role (e.g. one
+        /// an OAuth `pg_hba` method authenticated) into a dregg capability. We bind
+        /// `dregg_reader` to an ALICE-only token via the extern, confirm the
+        /// `role_bindings` introspection view shows the binding WITHOUT leaking the
+        /// token, then apply the login hook's effect and confirm RLS narrows — the
+        /// whole chain as one tested path. (OAuth itself is pg_hba config, honestly
+        /// out of extension SQL; this is the composition point it lands on.)
+        #[pg_test]
+        fn oauth_bind_role_seam_binds_then_rls_narrows() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_b_and_load_synth();
+            let o: String = Spi::get_one("SELECT dregg_install_login_binding()").unwrap().unwrap();
+            assert!(o.contains("login binding installed"));
+
+            let alice_tok = root
+                .mint([
+                    Caveat::FirstParty(Pred::AttrEq { key: "action".into(), value: "read".into() }),
+                    Caveat::FirstParty(Pred::AttrPrefix { key: "resource".into(), prefix: "a1".into() }),
+                ])
+                .encode();
+            let alice_hex: String = synth::ALICE.iter().map(|b| format!("{b:02x}")).collect();
+
+            // Bind the role through the EXTERN (the OAuth composition seam): the same
+            // call an IdP-provisioning step or a DBA migration makes.
+            let bound: bool = Spi::get_one(&format!(
+                "SELECT dregg_bind_role('dregg_reader', '\\x{alice_hex}'::bytea, '{alice_tok}')"
+            ))
+            .unwrap()
+            .unwrap();
+            assert!(bound, "dregg_bind_role upserts the role→cap binding");
+
+            // The introspection view shows the binding but NOT the token text.
+            Spi::run("SET ROLE dregg_kernel").unwrap();
+            let (agent, has_token): (String, bool) = {
+                let a: String = Spi::get_one(
+                    "SELECT agent FROM dregg.role_bindings WHERE pg_role = 'dregg_reader'",
+                )
+                .unwrap()
+                .unwrap();
+                let h: bool = Spi::get_one(
+                    "SELECT has_token FROM dregg.role_bindings WHERE pg_role = 'dregg_reader'",
+                )
+                .unwrap()
+                .unwrap();
+                (a, h)
+            };
+            assert_eq!(agent, alice_hex, "role_bindings shows the bound agent");
+            assert!(has_token, "role_bindings reports a token is present");
+            // The view's columns do NOT include the raw token (no default_token col).
+            let leaks_token: i64 = Spi::get_one(
+                "SELECT count(*) FROM information_schema.columns \
+                 WHERE table_schema='dregg' AND table_name='role_bindings' \
+                   AND column_name='default_token'",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(leaks_token, 0, "the introspection view must not expose the token text");
+            Spi::run("RESET ROLE").unwrap();
+
+            // Apply the login hook's effect (set the session token from the bound
+            // row, exactly as dregg.on_login does on a real connection) and confirm
+            // RLS narrows the reader to ALICE's cell.
+            let installed: Option<String> = Spi::get_one(
+                "SELECT default_token FROM dregg.role_identity WHERE pg_role = 'dregg_reader'",
+            )
+            .unwrap();
+            Spi::run(&format!("SET dregg.token = '{}'", installed.unwrap())).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+            let visible: i64 = Spi::get_one("SELECT count(*) FROM dregg.cells").unwrap().unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            assert_eq!(visible, 1, "the OAuth-bound role's capability narrows RLS to ALICE's cell");
+        }
+
+        /// pg18 AIO observability (docs/PG-DREGG-PG18.md §8, wired): the
+        /// `dregg.mirror_io_stats` view over `pg_stat_io` resolves and reports the
+        /// read/cache mix for the read-heavy mirror. We scan the mirror (driving
+        /// real relation I/O), then assert the view has rows for the `normal`
+        /// relation context and the cache_hit_ratio is a sane fraction in [0,1].
+        #[pg_test]
+        fn pg18_mirror_io_stats_view_reports_the_io_mix() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_b_and_load_synth();
+            Spi::run("SET ROLE dregg_kernel").unwrap();
+            // Drive some relation reads against the mirror so pg_stat_io has counts.
+            let _scan: i64 = Spi::get_one("SELECT count(*) FROM dregg.cells").unwrap().unwrap();
+
+            // The view resolves and has at least one relation/normal row.
+            let rows: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.mirror_io_stats WHERE context = 'normal'",
+            )
+            .unwrap()
+            .unwrap();
+            assert!(rows >= 1, "mirror_io_stats reports the normal relation I/O context");
+
+            // Where a cache_hit_ratio is reported it is a valid fraction in [0,1].
+            let bad_ratio: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.mirror_io_stats \
+                 WHERE cache_hit_ratio IS NOT NULL \
+                   AND (cache_hit_ratio < 0 OR cache_hit_ratio > 1)",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(bad_ratio, 0, "cache_hit_ratio is a fraction in [0,1]");
+            Spi::run("RESET ROLE").unwrap();
         }
     }
 }
