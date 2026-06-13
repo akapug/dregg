@@ -149,6 +149,24 @@ and not merely designed: a capability whose target lives on another machine is
 resolved across the wire the net-PD holds. With both ends present, the
 gradation is a measured axis, not a slogan.
 
+### The fluid reach-out — first-class local, seamless to distributed
+
+The firmament's product promise (ember, 2026-06-13): a **local Robigalia install
+is a first-class dregg deployment**, not a demo or a crippled subset. An app runs
+deterministically on the local firmament holding local caps with the strong
+`n = 1` properties (immediate revocation, synchronous commit, consistent
+checkpoint). The moment one of its programs **reaches out to the network** —
+invokes a capability whose target is a cell on a remote federation — the firmament
+resolves it through the executor→net-PD path, and the program flows into **native
+distributed dregg with no seam**: the same `(target, rights)` handle, the same
+attenuate / delegate / invoke verbs, the same receipts and proofs. Nothing in the
+app code distinguishes the local invocation from the remote one; only the *bounds*
+relax (immediate→eventual revocation, synchronous→quorum commit) as `n` rises.
+First-class locally, fluid to the wire — that is the gradation's whole point and
+the firmament's headline UX, not an afterthought. It is also why `n = 1` is a
+**stepping stone, not a terminus**: the same binary that runs the local firmament
+scales out to `n > 1` without a rewrite, because there was only ever one model.
+
 ---
 
 ## 4. Transparent checkpoint/restore — PD checkpoint **is** a dregg snapshot
@@ -402,9 +420,13 @@ excision plan is banked for the quarter port.
    Microkit-PD musl substrate (the steady-state firmament shape in
    `dregg.system`)?
 
-4. **The `n = 1` collapse as the security model.** §3 claims the firmament *is*
-   the collapsed limit of the distributed cap model. Is the single-machine
-   firmament the *primary* product (the strong-properties deployment) with
-   distribution as the relaxation, or is it a stepping-stone to the `n > 1`
-   target? This sets whether immediate-revocation / synchronous-commit are
-   headline guarantees or transient ones.
+4. **The `n = 1` collapse as the security model — DECIDED (ember, 2026-06-13):
+   BOTH.** The single-machine firmament is VITAL and must be **fully first-class**
+   — its strong properties (immediate revocation, consistent checkpoint,
+   synchronous commit) are **headline guarantees** of the `n = 1` deployment, not
+   transient ones — AND it is a **stepping stone** to `n > 1`, never a terminus.
+   The product target is the **fluid reach-out** (§3, "The fluid reach-out"): a
+   local Robigalia install runs programs first-class on the firmament, and when a
+   program reaches the network it flows into native distributed dregg seamlessly
+   (same capability, the bounds simply relax along `n`). The architecture stays
+   the collapsed limit of one model that scales out without a rewrite.
