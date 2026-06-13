@@ -57,7 +57,41 @@ not durable across compaction; the log is the burn-down. Sweep it at every Conve
 - **Memory**: `~/.claude/projects/-Users-ember-dev-breadstuffs/memory/` —
   `project-refinement-epoch.md` is the live resume file; MEMORY.md is the index.
 
-## ⚑⚑⚑ CURRENT STATE (2026-06-13 late, head a0d0d45d3 — Opus, +8 commits; CUTOVER PARKED, CAP-CROWN IS THE GATE)
+## ⚑⚑⚑ CURRENT STATE (2026-06-13, head 3f188ef60 — Opus, +18 commits; THE CUTOVER IS DECIDED + RELAUNCHED)
+
+A long brave-fanout continuation (~18 commits, persvati-gauntlet-green incl. the v8→v9 cap-crown ripple).
+Landed: the Gerwin-Klein critique (`docs/ASSURANCE-CRITIQUE.md`) + **Klein CRITICAL-2 (wire codec) CLOSED both
+halves** (Lean `Refine.lean` export-refines-model + the Rust marshaller conformance-gated to the proof); the
+composed `deployed_system_secure` apex + conserves-from-verification (#2/#3); **cap-crown #103 finished as the
+cutover gate** — RevokeCapability graduated (in-circuit non-amp + cell-TOMBSTONE binding; cap-root v2→v3,
+commitment v8→v9) + Custom graduated via a new **`ProofBind` recursive-binding IR constraint** → **THE ROTATION
+RESIDUE IS EMPTY** (all ~36 effects rotate); **the verified Lean executor RUNS a real turn on aarch64**
+(`3f188ef60` — ELF Lean runtime from lean4@d024af099, status:2 accepted, anti-ghost holds; remaining = host on
+the seL4 root-task-with-std substrate); an n=3 consensus slice runs the ordering rule (frontier = gossip
+dissemination, `docs/STAGE5-CONSENSUS-DEVAC.md`); pg-dregg PgSink + starbridge cipherclerk/⌘K-palette.
+
+⚑⚑ THE CUTOVER (the live work, ember-DECIDED 2026-06-13). The residue is EMPTY; the blocker is ARCHITECTURE
+(confirmed at the type level): the rotated v9 commitment is a TURN-LAYER object (`rotation_witness::produce`
+needs full Cell + Ledger `cells_root` + receipt-log `iroot`), but the SDK `FullTurnWitness` holds only
+`circuit::CellState`. EMBER DECISIONS: (1) **MOVE effect-vm PROVING to the executor/node** (prove where the
+Ledger is; the SDK becomes a thin submit/verify client); (2) **PROVER-FREE rotated VERIFY** (split
+`verify_vm_descriptor2` from the prover so wasm/no-lean-link verifier builds compile it without p3-batch-stark).
+NB `EffectVmP3Proof` ≡ `Ir2BatchProof` (same `BatchProof` wire) — only the PI vector (38 vs 204) + the verify-AIR
+change. PLAN (the finisher's sequence): (a) rewrite executor `turn/src/executor/proof_verify.rs::
+verify_and_commit_proof` (+ `verify_sovereign_witness_stark`) to build `rotation_witness::produce` from its Ledger
++ verify via `verify_vm_descriptor2` — the SELF-CONTAINED prereq; (b) move proving out of the SDK; (c) the
+prover-free verify split; (d) reroute ~70 call-sites + un-gate; (e) regen + VK epoch; (f) DELETE v1
+(`effect_vm_p3_full_air.rs`, `effect_vm/air.rs` `EffectVmAir`, `EffectVmP3Proof`, `generate_effect_vm_trace`,
+`CutoverFallback`). USE persvati for cargo (the local `./target` lock fights). The finisher is RELAUNCHED with
+these decisions; relaunch across passes to v1-deleted-green. (This directly advances Klein CRITICAL-1 — executor
+authority.)
+
+DONE-BUT-DEFERRED: pg-dregg LIVE pg17 confirm-run (code green, blocked on the local lock); the warnings-import
+sweep (protocol-tests/tests/teasting unused imports); the cap-crown `EmitCapRoot` doc note + the Phase-D 4-ary-leg
+ember-decision (HORIZONLOG). KLEIN §5 l4v roadmap: Stage 0 (executor authority) is next-after-cutover; Stages 1-6
+in ASSURANCE-CRITIQUE.md §5.
+
+## ⚑⚑⚑ (SUPERSEDED by CURRENT STATE above) head a0d0d45d3 — cutover-parked / cap-crown-the-gate snapshot
 
 Resumed post-compaction; landed 8 commits by file set (each narrow-verified):
 `34dbca54a` starbridge-v2 coverage · `29c51bde3` metatheory assurance frontiers + Klein #2/#3
