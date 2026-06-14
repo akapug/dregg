@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dregg front door</title>
+    <style>
+      :root {
+        --bg: #0f1117;
+        --panel: #181b24;
+        --fg: #e7e9ee;
+        --muted: #9aa0ad;
+        --accent: #7c9cff;
+        --ok: #4ec9a3;
+        --warn: #ffb454;
+        --danger: #ff6b6b;
+        --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        width: 400px;
+        margin: 0;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 14px;
+      }
+      h1 { font-size: 16px; margin: 0 0 12px; }
+      h2 { font-size: 13px; color: var(--muted); margin: 16px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+      .panel { background: var(--panel); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+      .mono { font-family: var(--mono); font-size: 12px; word-break: break-all; color: var(--accent); }
+      .muted { color: var(--muted); }
+      ul#effects { list-style: none; padding: 0; margin: 0; }
+      ul#effects li { padding: 8px 10px; border-radius: 8px; background: #11141c; margin-bottom: 6px; font-size: 12px; line-height: 1.4; }
+      ul#effects li.unknown { background: #2a1a1a; color: var(--danger); }
+      pre#explain { white-space: pre-wrap; word-break: break-all; font-family: var(--mono); font-size: 11px; color: var(--muted); background: #11141c; padding: 10px; border-radius: 8px; max-height: 160px; overflow: auto; }
+      details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+      .row { display: flex; gap: 8px; margin-top: 12px; }
+      button { flex: 1; padding: 10px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+      #approveBtn { background: var(--ok); color: #06231c; }
+      #declineBtn { background: #2a2e3a; color: var(--fg); }
+      #blindWarning { display: none; background: #3a2410; color: var(--warn); padding: 10px; border-radius: 8px; margin: 10px 0; font-size: 12px; }
+      #pageLabel { display: none; color: var(--muted); font-style: italic; margin-bottom: 8px; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <!-- IDENTITY face -->
+    <section id="identity" style="display: none">
+      <h1>🐉 dregg front door</h1>
+      <div class="panel">
+        <div id="label" style="font-weight: 600; margin-bottom: 6px">dregg identity</div>
+        <h2>Cell id</h2>
+        <div id="cellId" class="mono">…</div>
+        <h2>Public key</h2>
+        <div id="pubkey" class="mono">…</div>
+      </div>
+      <p class="muted">
+        Any web page can ask this wallet to sign and submit a dregg turn. You see exactly what is signed and approve it — the
+        key never leaves the extension.
+      </p>
+    </section>
+
+    <!-- APPROVAL face -->
+    <section id="approval" style="display: none">
+      <h1 id="approvalTitle">Sign this turn?</h1>
+      <div id="approvalBody"></div>
+      <div class="panel">
+        <h2>Requested by</h2>
+        <div id="origin" class="mono">…</div>
+        <h2>Signing as</h2>
+        <div id="signer" class="mono">…</div>
+      </div>
+      <div id="pageLabel"></div>
+      <div id="blindWarning"></div>
+      <h2>This turn will</h2>
+      <ul id="effects"></ul>
+      <details>
+        <summary>Show the exact signed reading (the bytes)</summary>
+        <pre id="explain"></pre>
+      </details>
+      <div class="row">
+        <button id="declineBtn">Decline</button>
+        <button id="approveBtn">Approve &amp; submit</button>
+      </div>
+    </section>
+
+    <script type="module" src="dist/popup.js"></script>
+  </body>
+</html>

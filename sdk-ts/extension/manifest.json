@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "dregg front door",
+  "version": "0.1.0",
+  "description": "A dregg identity and an authorized, human-confirmed .turn() from any web page — the extension mediates, the key never leaves it. Built on @dregg/sdk's browser front door.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://devnet.dregg.fg-goose.online/*",
+    "http://localhost:8420/*",
+    "http://127.0.0.1:8420/*"
+  ],
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/page.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-ancestors 'none'"
+  }
+}

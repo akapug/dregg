@@ -1,0 +1,20 @@
+{
+  "name": "dregg-front-door-extension",
+  "private": true,
+  "description": "MV3 browser-extension front door built on @dregg/sdk/browser — dregg identity + an authorized, human-confirmed .turn() from any page; the key never leaves the extension.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test:build": "node build.mjs --tests",
+    "test": "node build.mjs --tests && node --test 'test/*.test.mjs'",
+    "clean": "rm -rf dist test/.build"
+  },
+  "comment": "@dregg/sdk is consumed from the sibling sdk-ts SOURCE via the build alias (build.mjs), not installed — this is the front-door slice built ON sdk-ts. @noble/* resolve from sdk-ts/node_modules (the parent), which esbuild walks up to.",
+  "devDependencies": {
+    "@types/chrome": "^0.0.270",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.5.0"
+  }
+}
