@@ -335,6 +335,30 @@ impl AppServer {
         self.nest(path, endpoint.router())
     }
 
+    /// Nest an [`AffordanceEndpoint`](crate::affordance_endpoint::AffordanceEndpoint)
+    /// router at `path` — the deos app's cap-gated affordance surface (the
+    /// per-viewer projection + the verified-turn fire endpoint).
+    ///
+    /// `path` is BOTH the mount point and the prefix the descriptor's endpoint
+    /// labels are computed against, so the rendered endpoints match where the
+    /// router is served:
+    ///
+    /// ```ignore
+    /// let endpoint = AffordanceEndpoint::new(surface, cipherclerk, executor);
+    /// AppServer::new(config)
+    ///     .with_affordance_endpoint("/doc-affordances", endpoint)
+    ///     .serve()
+    ///     .await
+    /// ```
+    pub fn with_affordance_endpoint(
+        self,
+        path: &str,
+        endpoint: crate::affordance_endpoint::AffordanceEndpoint,
+    ) -> Self {
+        let router = endpoint.router(path);
+        self.nest(path, router)
+    }
+
     /// Nest a [`FairDistributionEndpoint`] router at `path`.
     pub fn with_blinded_endpoint(
         self,

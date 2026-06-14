@@ -44,6 +44,8 @@
 //! Commonly needed types from sub-crates are re-exported so apps can import from
 //! a single dependency instead of reaching into `dregg-intent`, `dregg-turn`, etc.
 
+pub mod affordance;
+pub mod affordance_endpoint;
 pub mod auth;
 pub mod authorizer;
 pub mod batch_executor;
@@ -124,7 +126,12 @@ pub use cipherclerk::AppCipherclerk as AppCClerk;
 // the framework rather than reaching into `dregg_turn` directly.
 pub use dregg_cell::state::FieldElement;
 pub use dregg_turn::action::{Action, Authorization, DelegationMode, Effect, Event, symbol};
-pub use dregg_turn::{Turn, WitnessedReceipt};
+pub use dregg_turn::{Turn, TurnReceipt, WitnessedReceipt};
+
+// Re-export `CapabilityRef` so apps can build the `Effect::GrantCapability` an
+// admin affordance fires without adding `dregg-cell` to their own Cargo.toml.
+// (`AuthRequired` is already re-exported via the `dregg_cell::{…}` block below.)
+pub use dregg_cell::CapabilityRef;
 
 // Re-export the SDK cipherclerk at the framework root so applications
 // that need to *construct* one (typically in `main`) don't have to add
@@ -159,7 +166,22 @@ pub use ring_trade::{LegId, RingTradeParticipant};
 // Starbridge mounting point. The canonical surface every
 // starbridge-app receives via `register(ctx)`.
 pub use starbridge::{
-    FactoryRegistry, InspectorDescriptor, InspectorRegistry, StarbridgeAppContext,
+    AffordanceRegistry, FactoryRegistry, InspectorDescriptor, InspectorRegistry,
+    StarbridgeAppContext,
+};
+
+// Cell affordances — the deos interaction model (DEOS-APPS.md §"the deos app
+// model"): cap-gated verified-turn templates rendered as web surfaces, fired
+// through the embedded executor (the closed dispatch seam), gated by the REAL
+// `dregg_cell::is_attenuation`. Apps register surfaces via
+// `StarbridgeAppContext::register_affordance_surface` and serve them via the
+// `AffordanceEndpoint` router; `webgen` renders the anti-drift surface descriptor.
+pub use affordance::{
+    AffordanceElement, AffordanceIntent, AffordanceSurface, CellAffordance, EffectSummary,
+    FireError, FireExecuteError, SurfaceDescriptor,
+};
+pub use affordance_endpoint::{
+    AffordanceEndpoint, HeaderHeldRights, HeldRightsResolver, HELD_RIGHTS_HEADER,
 };
 
 // Re-export the embedded executor at the framework root for the
