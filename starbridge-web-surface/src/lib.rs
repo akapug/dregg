@@ -94,6 +94,22 @@
 //! - **Spectating** = a fog-respecting [`AffordanceSnapshot`] ([`Board::snapshot_for`])
 //!   re-expanded through the SAME [`Membrane`].
 //!
+//! ## 6. The deos WORLD — distribution + the negotiation surface ([`world`])
+//!
+//! [`world`] lifts the single-process [`game`] board into a *federated world of
+//! cells* and realizes the membrane's "GitHub-org-settings page" negotiation
+//! (`REHYDRATABLE-SURFACES.md` residual #1). [`world::GameWorld`] publishes the board,
+//! players, and objectives as real attested cells in a [`WebOfCells`];
+//! [`world::Lobby`] hosts a federation of worlds; [`world::MembraneNegotiation`] mints
+//! attenuated [`world::SpectatorGrant`]s (watch-my-side / objectives-scoreboard /
+//! full-post-game) ONLY as genuine `is_attenuation`s of the granter's authority,
+//! refusing over-broad proposals and amplifying re-shares (A→B→C through
+//! [`Membrane::reshare`]); a [`world::SpectatorSession`] carries the [`Rehydration`]
+//! liveness-type and respects the fog. The richer [`game::demo_world`] (terrain +
+//! line-of-sight, [`game::UnitKind`] archetypes, [`game::Objective`]s, win conditions)
+//! and [`game::play_match`] (two [`AgentPlayer`]s to a decision) drive it; the
+//! `deos_world_demo` example narrates the whole thing.
+//!
 //! ## What is real vs. the seam
 //!
 //! - **Real (the cap discipline + attestation):** the `Capability{
@@ -118,6 +134,7 @@ pub mod game;
 pub mod rehydrate;
 pub mod vision_predicate;
 pub mod web_of_cells;
+pub mod world;
 
 // Re-export the REAL dregg cap types so downstream code names the genuine model,
 // not a parallel one. A web surface IS a firmament `Capability`; its rights are
@@ -142,8 +159,13 @@ pub use affordance::{
     AffordanceSurface, CellAffordance, EffectSummary, FireError, SurfaceBoundary,
 };
 pub use game::{
-    demo_skirmish, game_cell, side_rights, AgentPlayer, Board, Coord, IllegalMove, MoveOutcome,
-    PlayerView, Side, TileView, Unit,
+    demo_skirmish, demo_world, game_cell, play_match, side_rights, AgentPlayer, AgentPolicy, Board,
+    Coord, GameOver, IllegalMove, MatchResult, MatchStep, MoveOutcome, Objective, PlayerView, Side,
+    Terrain, TileView, Unit, UnitKind, WinReason,
+};
+pub use world::{
+    GameWorld, Lobby, MembraneNegotiation, NegotiationError, SpectatorGrant, SpectatorScope,
+    SpectatorSession,
 };
 pub use vision_predicate::{
     register_vision_verifier, verify_vision_proof, FogVisionProducer, FogVisionVerifier,

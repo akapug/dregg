@@ -98,6 +98,17 @@ affordances, and rehydration.
   affordance data) with `rehydrate_affordances` re-expanding it PER-VIEWER through
   the existing `Membrane`, carrying the derived `Rehydration` liveness-type — the
   dregg-only novelty made real.
+  **PLUS the fog-of-war WORLD** (`src/game.rs`, `src/world.rs`,
+  `examples/{fog_of_war_demo,deos_world_demo}.rs`) — the forcing-function exemplar
+  where the security property IS the game mechanic: fog = the per-viewer membrane
+  projection (the no-peek keystone, proof-backed by a real `FogVisionVerifier`);
+  terrain-occluded line-of-sight; mixed unit archetypes + objectives + win
+  conditions; moves + objective-captures as cap-gated real `Effect`s; a federated
+  `Lobby` of `GameWorld`s published as attested cells; `AgentPlayer`s (policy-driven,
+  cap-confined) playing a full `play_match` to a decision; and the membrane as a
+  `MembraneNegotiation` surface (the org-settings page — attenuated, re-shareable,
+  liveness-typed, fog-respecting spectator grants). See `DEOS-APPS.md` §"the forcing
+  function". (Tier A; the ZK Tier-B vision AIR is the named cross-crate follow-up.)
 - **QUEUED (fires when the rotation HARDSWAP clears `metatheory/`/`turn/`/`node/`):**
   the verified-deos Lean modeling (the four theorems above) · the membrane wired into
   the live captp sturdyref path (not just the web crate) · starbridge-v2 native cockpit
