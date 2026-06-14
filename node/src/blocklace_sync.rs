@@ -2286,7 +2286,32 @@ async fn execute_finalized_turn(
                     let proving_result = match (actor_cap_witness, spent_nullifiers.first()) {
                         (Some(consumed), spent_nullifier) => {
                             // CAPABILITY-GATED turn → AUTHORITY path (cap Phase D),
-                            // freshness leg included when it also spends.
+                            // freshness leg included when it also spends. FLOW-B (C7 close): build
+                            // the per-turn ROTATION producer witnesses from the REAL before/after
+                            // cells + the canonical pre-state cap root, so the live capability turn
+                            // proves ROTATED and the rotated commit pins fold the REAL authority
+                            // digest r23 (NOT a zero-pk stub). The builder's self-validating gate
+                            // returns None — graceful v1 fallback — for any turn it cannot faithfully
+                            // rotate (e.g. a cap-gated turn that also spends, or a cell whose welded
+                            // scalars diverge from the v1 cap pre-state).
+                            let rotation = match (
+                                full_turn_pre_cell.as_ref(),
+                                s.ledger.get(&signed_turn.turn.agent),
+                            ) {
+                                (Some(before_cell), Some(after_cell)) => {
+                                    let receipt_hashes = [receipt.receipt_hash()];
+                                    crate::turn_proving::rotation_witness_for_capability(
+                                        pre_balance,
+                                        pre_nonce,
+                                        full_turn_pre_cap_root,
+                                        before_cell,
+                                        after_cell,
+                                        &receipt_hashes,
+                                        &effects,
+                                    )
+                                }
+                                _ => None,
+                            };
                             crate::turn_proving::prove_and_verify_finalized_turn_capability(
                                 &signed_turn.turn.agent,
                                 pre_balance,
@@ -2297,6 +2322,7 @@ async fn execute_finalized_turn(
                                 consumed,
                                 spent_nullifier,
                                 &full_turn_previously_spent,
+                                rotation,
                             )
                         }
                         (None, Some(spent_nullifier)) => {

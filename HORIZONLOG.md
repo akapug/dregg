@@ -149,10 +149,19 @@ flip:)*
   PURE not recursion; the hand-AIRs are now layout-of-record, deletable at C7). The remaining grep-zero
   walls are now just (C) + (D), and (b) ✅ NOTE-SPEND now ROTATES (`cc1e1399c` — rotated nullifier at
   PI[38], 39-PI, + the single-spend per-row double-spend GUARD, a model-found bug: the rotated pin was
-  first-row-only while the v1 D5 gate is per-row). The LAST flip sub-gate is the CAPABILITY FLOW-B arm
-  (`prove_and_verify_finalized_turn_capability` still v1; needs `full_turn_pre_cell` threaded to bind the
-  REAL authority digest r23 — NOT a zero-pk stub; a finisher lane is IN FLIGHT). C7's
-  `generate_effect_vm_trace` deletion is unblocked for note-spend, still blocked by the capability arm.** Original (A) plan, for the record: **(A) the BILATERAL rotated outer AIR** — DECISION =
+  first-row-only while the v1 D5 gate is per-row). (b) ✅ CAPABILITY now ROTATES (this lane, WIP uncommitted —
+  `rotation_witness_for_capability` built from the REAL `full_turn_pre_cell` threaded through
+  `prove_and_verify_finalized_turn_capability`; the rotated commit pins fold the REAL authority digest r23,
+  NOT a zero-pk stub; the cap-membership leg + over-grant tooth survive rotation —
+  `cap_over_grant_refused_on_rotated_leg`). **MODEL-FOUND DESCRIPTOR SEAM (residual, NOT this lane — circuit/Lean):
+  `setFieldVmDescriptor2-{0..7}R24` + `mintVmDescriptor2R24` assert nonce PASSTHROUGH (`after_nonce==before_nonce`)
+  while SetField/BridgeMint TICK the nonce → the rotated prover is UNSAT on such a turn (`transferVmDescriptor2R24` /
+  `noteSpendVmDescriptor2R24` correctly carry the `−(1−selector)` tick term). The `EffectVmEmitRotationV3`
+  SetField/BridgeMint nonce constraint must model the tick. UNTIL FIXED, the two rotation builders fall back to
+  v1 for a SetField/BridgeMint actor effect (`rotated_descriptor_mismodels_nonce_tick`, a graceful None) — every
+  other cohort effect (Transfer/Burn/Grant/Revoke/Attenuate/NoteSpend/…) rotates.** C7's `generate_effect_vm_trace`
+  deletion is now unblocked for note-spend AND capability (both rotate); the SetField/BridgeMint descriptor seam
+  is the remaining gap for a SetField-shaped turn to rotate.** Original (A) plan, for the record: **(A) the BILATERAL rotated outer AIR** — DECISION =
   BUILD, emit from Lean (law #1). `bilateral_aggregation_air.rs::BilateralAggregationAir` is a plain
   hand-authored `StarkAir` reading `wr.public_inputs[..ACTIVE_BASE_COUNT]` and the bilateral-schedule
   PI offsets (`effect_vm::pi::{TURN_HASH_BASE 25..IS_AGENT_CELL 73}`). It does NOT ingest an
