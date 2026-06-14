@@ -235,6 +235,27 @@ the rotated 39-PI `rotateV3WithNullifierPin` pins the nullifier at PI[38], anti-
 `flow_b_note_spend_rotated_nullifier_pin_is_antighost` 2026-06-14); the CAPABILITY arm stays v1 (the C4
 honest boundary).
 
+**BILATERAL ROTATED FLOW (WALL B live-path) — DONE (WIP, uncommitted, 2026-06-14).** Rotated
+WitnessedReceipts (38/39-felt PI, no >=204 v1 PI) now flow end-to-end through BOTH bilateral
+consumers. (1) PRODUCER POPULATE: `bilateral_schedule::schedule_block_for_cell(turn, cell)` is the
+single source of truth for the decoupled 49-felt `Sched.*` block (byte-identical to what
+`schedule_block_from_inner_pi` projects from a full v1 PI); the node producers set
+`wr.bilateral_schedule = Some(block)` — `mcp.rs::schedule_projected_wr` (the
+`dregg_bilateral_action` mint) and `api.rs::post_aggregate_bundle` (reconstructs for any decoded
+short-PI WR lacking it). (2) EXECUTOR CROSS-CHECK: `WitnessedReceipt::bilateral_bundle_pi` (the
+shared resolver behind `verify_bilateral_chain{,_with_schedule}`) re-bases a rotated WR's native
+block into the v1 PI window via `bilateral_schedule::pi_from_schedule_block`, so
+`verify_bilateral_bundle_with_schedule`'s per-cell counts/roots/IS_AGENT checks see the rotated WR's
+schedule; a full-PI v1 WR still takes the unchanged direct arm. The prover's Phase-1 gate
+(`prove_aggregated_bundle` → `verify_bilateral_chain`) and `build_inner_rows_v2` thus share ONE
+schedule source. Anti-ghost: a tampered native block is rejected by CG-3 in-circuit AND by the
+executor cross-check (`rotated_wr_tampered_schedule_rejected_by_cross_check`); a short-PI WR with no
+schedule is a hard reject. Tests: `aggregate_bilateral_prover::tests::{rotated_native_schedule_
+bundle_round_trips_through_aggregator, rotated_wr_passes_executor_bilateral_cross_check,
+rotated_wr_tampered_schedule_rejected_by_cross_check, short_pi_without_native_schedule_is_rejected_
+by_cross_check}` (green under `recursion`; lib unittest 54/54). `not(recursion)` (wasm) keeps the
+v1-only reject (no rotated WRs there).
+
 **THE C5 REGEN RECIPE (do NOT run — the MAIN LOOP runs it as the coordinated VK-settle):**
   1. `v3Registry → default`: re-emit `EmitAllJson`/the registry so `effect_vm_descriptors.rs` ships the
      rotated R=24 cohort as the LIVE registry (today `V3_STAGED_REGISTRY_TSV` is staged beside v1). Add the
