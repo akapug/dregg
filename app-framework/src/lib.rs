@@ -52,6 +52,7 @@ pub mod batch_executor;
 pub mod blinded_endpoint;
 pub mod captp_server;
 pub mod cipherclerk;
+pub mod deos_app;
 pub mod discovery;
 pub mod dispute;
 pub mod fee_policy;
@@ -60,9 +61,12 @@ pub mod hex;
 pub mod inbox_endpoint;
 pub mod middleware;
 pub mod multi_group;
+pub mod optimistic_fire;
 pub mod persistence;
 pub mod queue_endpoint;
+pub mod rehydration;
 pub mod ring_trade;
+pub mod scaffold;
 pub mod server;
 pub mod starbridge;
 pub mod store;
@@ -158,6 +162,10 @@ pub use dispute::{DisputeId, SettlementId as DisputeSettlementId};
 // New-world module re-exports.
 pub use batch_executor::{BatchExecution, BatchExecutor, ClientTurnRequest};
 pub use captp_server::CapTpServer;
+// `FederationId` (the web-of-cells group identity) — re-exported so a deos app can
+// construct a `CapTpServer` / set its `DeosApp` federation without adding
+// `dregg-types` to its own Cargo.toml.
+pub use dregg_types::FederationId;
 pub use discovery::{DiscoveryError, NameRegistration, NameserviceClient};
 pub use fee_policy::{AcceptedAsset, FeePolicy};
 pub use multi_group::MultiGroupConfig;
@@ -183,6 +191,41 @@ pub use affordance::{
 pub use affordance_endpoint::{
     AffordanceEndpoint, HeaderHeldRights, HeldRightsResolver, HELD_RIGHTS_HEADER,
 };
+
+// The deos-app COMPOSITION (DEOS-APPS.md §"the deos app model") — the six layers
+// (cells×affordances + the sdk surface + web-of-cells distribution + rehydration +
+// the web surface) wired into ONE shape. `DeosApp::builder(...).cell(...).build()` is
+// the composed `register(ctx)`; `app.register(ctx)` folds every cell's surface into
+// the host context; `app.mount()` yields the whole axum surface (manifest +
+// `/surface.js` web component + per-cell cap-gated fires).
+pub use deos_app::{DeosApp, DeosAppBuilder, DeosCell, PersistenceSeam};
+
+// The frustum-snapshot + cap-membrane (DEOS.md §"the frustum-culled snapshot") — the
+// dregg-only novelty, re-expressed over the framework's OWN `is_attenuation` lattice:
+// snapshot an app surface, a peer rehydrates their attenuated, liveness-typed,
+// per-viewer view.
+pub use rehydration::{
+    Interaction, InteractionLog, Membrane, RehydratedSurface, RehydrateError, Rehydration,
+    Sturdyref, meet_authority,
+};
+
+// The interactive-tempo bridge (DEOS-APPS.md §"the interactive/real-time tempo gap";
+// the #169 optimistic-local + verified-at-boundary dial) for affordance fires:
+// predict locally NOW, settle the verified turn at the trust boundary, reconcile.
+pub use optimistic_fire::{OptimisticFire, Settlement};
+
+// The `dregg new deos-app` SCAFFOLD (DEOS-APPS.md §7) — a spec the builder writes
+// (cells + affordances + rights + effects), turned into a live `DeosApp`
+// (`AppSpec::into_app`) OR a full buildable crate + web surface (`Scaffold::render` /
+// `write_to`) — the "useful deos app in an afternoon" one-command path.
+pub use scaffold::{
+    AffordanceEffect, AffordanceSpec, AppSpec, CellSpec, Scaffold, ScaffoldError, ScaffoldFiles,
+};
+
+// The web-component surface generator (DEOS.md §"htmx on crack") — render a DeosApp's
+// `<dregg-affordance-surface>` custom element (the per-viewer, cap-gated affordance
+// DOM the embedded servo web-surface mounts).
+pub use webgen::render_surface_component;
 
 // Re-export the embedded executor at the framework root for the
 // common pattern: build a cipherclerk, build an executor, hand them
