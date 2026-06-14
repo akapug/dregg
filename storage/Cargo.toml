@@ -12,6 +12,13 @@ kzg = ["poly-commitment", "ark-ec", "ark-ff", "ark-poly", "ark-bn254", "ark-std"
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 
+# Vetted pure-Rust k-of-n Reed–Solomon erasure code over GF(2^8)
+# (Vandermonde, the same crate Substrate/parity use). Replaces the former
+# XOR single-loss prototype: any `n_data` of `n_total` shards reconstruct.
+# `simd-accel` is intentionally OFF (avoids the C `cc` build dep; the pure
+# Rust path is correct and portable for storage's blob sizes).
+reed-solomon-erasure = { version = "6", default-features = false, features = ["std"] }
+
 # Path dependency on dregg-circuit for Poseidon2 + BabyBear primitives.
 # storage is in the root Cargo.toml `exclude` list, so it builds as a
 # standalone crate — but we can still take a path dependency on a workspace

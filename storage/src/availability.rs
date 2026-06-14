@@ -73,11 +73,21 @@ impl AvailabilityManifest {
     }
 
     /// The minimum number of chunks required to reconstruct (the data-chunk
-    /// count). Any `reconstruction_threshold()` *data* chunks — or, for the
-    /// single-loss XOR case, that many total chunks including one parity —
-    /// suffice.
+    /// count `n_data`). With the real Reed–Solomon code, *any* `n_data` of the
+    /// `n_total` chunks — data and/or parity, in any combination — suffice.
     pub fn reconstruction_threshold(&self) -> usize {
         self.n_data
+    }
+
+    /// The redundancy factor `n_total / n_data` (≥ 2). Reconstructed from the
+    /// manifest so the encoder used by [`reconstruct`] matches the one that
+    /// produced the chunks.
+    pub fn expansion_factor(&self) -> usize {
+        if self.n_data == 0 {
+            2
+        } else {
+            (self.n_total / self.n_data).max(2)
+        }
     }
 }
 
@@ -115,7 +125,9 @@ pub fn encode_bytes_for_availability(
 ) -> (AvailabilityManifest, Vec<ErasureChunk>) {
     let encoder = ErasureEncoder::new(chunk_size, expansion_factor);
     let chunks = encoder.encode(data);
-    let n_data = data.len().div_ceil(encoder.chunk_size);
+    // Derive n_data from the emitted set so it always matches the encoder
+    // (e.g. an empty blob still yields one all-zero data shard ⇒ n_data ≥ 1).
+    let n_data = chunks.len() / encoder.expansion_factor;
     let manifest = AvailabilityManifest {
         content_hash: ContentHash(*blake3::hash(data).as_bytes()),
         root: erasure::root_commitment(&chunks),
@@ -134,6 +146,10 @@ pub enum AvailabilityError {
     Reconstruct(ReconstructError),
     /// A supplied chunk failed its own commitment check.
     CorruptChunk { index: usize },
+    /// A supplied chunk's Merkle proof did not authenticate against the
+    /// manifest's root (the chunk is not a member of this manifest's tree at
+    /// its claimed position).
+    ChunkProofInvalid { index: usize },
     /// The reconstructed bytes did not hash to the manifest's content hash
     /// (the chunk set reconstructed *a* blob, but not the expected one).
     ContentHashMismatch,
@@ -142,34 +158,44 @@ pub enum AvailabilityError {
 }
 
 /// Reconstruct the original blob from a surviving subset of its chunks,
-/// verifying integrity at every step.
+/// verifying integrity *and Merkle membership* at every step.
 ///
 /// Checks, in order:
-/// 1. every supplied chunk verifies against its own commitment,
-/// 2. erasure reconstruction succeeds from the subset,
-/// 3. the recovered bytes hash to `manifest.content_hash`.
+/// 1. every supplied chunk verifies against its own commitment (integrity),
+/// 2. every supplied chunk's Merkle proof authenticates against
+///    `manifest.root` (membership — the chunk really belongs to this blob's
+///    erasure set at its claimed position),
+/// 3. Reed–Solomon reconstruction succeeds from the subset (any `n_data` of
+///    `n_total` chunks suffice),
+/// 4. the recovered bytes hash to `manifest.content_hash`.
 ///
 /// Any failure is reported rather than returning unverified bytes. The caller
-/// may pass any subset of the chunk set (including a mix of data and parity);
-/// reconstruction succeeds when the subset meets the manifest's threshold.
+/// may pass any subset of the chunk set (including all-parity); reconstruction
+/// succeeds when the subset meets the manifest's `n_data` threshold.
 pub fn reconstruct(
     manifest: &AvailabilityManifest,
     chunks: &[ErasureChunk],
 ) -> Result<Vec<u8>, AvailabilityError> {
-    // (1) per-chunk integrity.
+    // (1) per-chunk integrity + (2) per-chunk Merkle membership against the
+    // manifest root. The membership check is what binds an operator's chunk to
+    // *this* blob: a valid chunk from a different blob (or a forged leaf) is
+    // rejected here, before it can influence reconstruction.
     for chunk in chunks {
         if !erasure::verify_chunk(chunk) {
             return Err(AvailabilityError::CorruptChunk { index: chunk.index });
         }
+        if !erasure::verify_chunk_against_root(chunk, &manifest.root) {
+            return Err(AvailabilityError::ChunkProofInvalid { index: chunk.index });
+        }
     }
 
-    // (2) erasure reconstruction.
-    let encoder = ErasureEncoder::new(manifest.chunk_size, manifest.n_total / manifest.n_data);
+    // (3) Reed–Solomon reconstruction (k-of-n).
+    let encoder = ErasureEncoder::new(manifest.chunk_size, manifest.expansion_factor());
     let recovered = encoder
         .reconstruct(chunks, manifest.original_size)
         .map_err(AvailabilityError::Reconstruct)?;
 
-    // (3) content-hash binding: the recovered blob must be the expected one.
+    // (4) content-hash binding: the recovered blob must be the expected one.
     if ContentHash(*blake3::hash(&recovered).as_bytes()) != manifest.content_hash {
         return Err(AvailabilityError::ContentHashMismatch);
     }
@@ -242,16 +268,28 @@ mod tests {
 
     #[test]
     fn reconstruct_recovers_single_lost_chunk_from_parity() {
-        // Drop exactly one data chunk; the XOR parity must recover it.
+        // Drop exactly one data chunk; Reed–Solomon parity recovers it.
         let (manifest, chunks) =
             encode_bytes_for_availability(b"lose one chunk and recover it ok", 16, 2);
         // Keep all but the first data chunk, plus the parity chunks.
         let surviving: Vec<_> = chunks
             .into_iter()
-            .filter(|c| !(c.index == 0 && !c.is_parity))
+            .filter(|c| c.index != 0 || c.is_parity)
             .collect();
         let recovered = reconstruct(&manifest, &surviving).unwrap();
         assert_eq!(recovered, b"lose one chunk and recover it ok");
+    }
+
+    #[test]
+    fn reconstruct_recovers_from_any_k_of_n_including_all_parity() {
+        // The real RS guarantee: any n_data of n_total chunks reconstruct —
+        // even keeping ONLY parity shards (impossible under the old XOR scheme).
+        let data = b"reed solomon at the availability layer recovers from any k subset".to_vec();
+        let (manifest, chunks) = encode_bytes_for_availability(&data, 16, 2);
+        let parity_only: Vec<_> = chunks.iter().filter(|c| c.is_parity).cloned().collect();
+        assert!(parity_only.len() >= manifest.n_data);
+        let recovered = reconstruct(&manifest, &parity_only[..manifest.n_data]).unwrap();
+        assert_eq!(recovered, data);
     }
 
     #[test]
@@ -264,19 +302,36 @@ mod tests {
     }
 
     #[test]
+    fn reconstruct_rejects_chunk_with_forged_leaf_via_merkle_proof() {
+        // Stronger than the integrity check: re-derive a tampered chunk's leaf
+        // commitment so it passes verify_chunk, then watch the Merkle proof
+        // reject it — the forged leaf is not in manifest.root's tree.
+        let (manifest, mut chunks) =
+            encode_bytes_for_availability(b"forge a leaf but the root still catches you!", 16, 2);
+        chunks[0].data[0] ^= 0xFF;
+        chunks[0].commitment = erasure::chunk_commitment_dual(&chunks[0].data).blake3;
+        assert!(erasure::verify_chunk(&chunks[0])); // integrity now passes...
+        let err = reconstruct(&manifest, &chunks).unwrap_err();
+        assert_eq!(err, AvailabilityError::ChunkProofInvalid { index: 0 });
+    }
+
+    #[test]
     fn reconstruct_rejects_wrong_blob_under_valid_chunks() {
         // Take a perfectly valid chunk set for blob B, but check it against a
         // manifest for blob A. Per-chunk commitments pass (they're internally
-        // consistent), but the content-hash binding must reject it.
+        // consistent), but the *Merkle membership* leg must reject every chunk:
+        // B's leaves are not in A's tree, so they fail to authenticate against
+        // manifest_a.root before reconstruction can even run.
         let (manifest_a, _) = encode_bytes_for_availability(b"i am blob A, the real one", 16, 2);
         let (_, chunks_b) = encode_bytes_for_availability(b"i am blob B, an impostor!", 16, 2);
         let err = reconstruct(&manifest_a, &chunks_b).unwrap_err();
-        // Either the threshold/shape differs (Reconstruct) or, when shapes
-        // coincide, the content hash mismatches. Both are rejections; for
-        // equal-length inputs we get the content-hash tooth.
+        // The Merkle-root binding is the tooth here. (For pathological inputs
+        // where shapes differ wildly a Reconstruct error is also acceptable.)
         assert!(matches!(
             err,
-            AvailabilityError::ContentHashMismatch | AvailabilityError::Reconstruct(_)
+            AvailabilityError::ChunkProofInvalid { .. }
+                | AvailabilityError::ContentHashMismatch
+                | AvailabilityError::Reconstruct(_)
         ));
     }
 
