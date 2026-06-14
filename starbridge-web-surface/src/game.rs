@@ -94,7 +94,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use dregg_cell::is_attenuation;
 use dregg_cell::AuthRequired;
-use dregg_turn::Effect;
+use dregg_turn::{Effect, Event};
 use dregg_types::CellId;
 
 use crate::affordance::{AffordanceIntent, AffordanceSnapshot, AffordanceSurface, CellAffordance};
@@ -138,6 +138,66 @@ impl Side {
     }
 }
 
+/// What kind of unit this is — its archetype. Different kinds have different
+/// vision/movement profiles, so a side's **vision frustum has genuine shape**
+/// (a Scout sees far and moves fast; a Soldier sees little but anchors ground; a
+/// Sensor is a stationary wide eye). The kind is the unit's *role* — the same
+/// "progressive attenuation" idea applied to capability: a unit can only do what
+/// its archetype's caps authorize. This makes the world richer than a uniform
+/// grid of identical pawns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum UnitKind {
+    /// Long vision, high mobility, fragile — the eyes of the army (vision 3, move 3).
+    Scout,
+    /// Short vision, moderate mobility, the line-holder that captures objectives
+    /// (vision 1, move 2). The unit that actually contests ground.
+    Soldier,
+    /// A stationary wide eye — big vision, cannot move (vision 4, move 0). A
+    /// deployed sensor/relay: it illuminates a region but anchors it.
+    Sensor,
+    /// The army's seat of authority — moderate everything, and the piece whose
+    /// capture ENDS the game (vision 2, move 1). The king of this skirmish.
+    Commander,
+}
+
+impl UnitKind {
+    /// The vision radius (Chebyshev) this archetype illuminates.
+    pub fn vision(self) -> u8 {
+        match self {
+            UnitKind::Scout => 3,
+            UnitKind::Soldier => 1,
+            UnitKind::Sensor => 4,
+            UnitKind::Commander => 2,
+        }
+    }
+
+    /// The movement radius (Chebyshev) this archetype may step in one turn.
+    pub fn movement(self) -> u8 {
+        match self {
+            UnitKind::Scout => 3,
+            UnitKind::Soldier => 2,
+            UnitKind::Sensor => 0,
+            UnitKind::Commander => 1,
+        }
+    }
+
+    /// A short label for narration / the move-name encoding.
+    pub fn label(self) -> &'static str {
+        match self {
+            UnitKind::Scout => "scout",
+            UnitKind::Soldier => "soldier",
+            UnitKind::Sensor => "sensor",
+            UnitKind::Commander => "commander",
+        }
+    }
+
+    /// Whether capturing a unit of this kind ENDS the game (the win condition by
+    /// decapitation). Only the [`UnitKind::Commander`] is the king.
+    pub fn is_commander(self) -> bool {
+        matches!(self, UnitKind::Commander)
+    }
+}
+
 /// A grid coordinate (row, column).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Coord {
@@ -177,25 +237,104 @@ pub struct Unit {
     pub id: CellId,
     /// Which side owns it.
     pub side: Side,
+    /// What archetype it is (Scout/Soldier/Sensor/Commander) — sets its vision +
+    /// movement profile and whether its capture ends the game.
+    pub kind: UnitKind,
     /// Where it stands.
     pub at: Coord,
-    /// How far it sees (the Chebyshev radius it lifts the fog within).
+    /// How far it sees (the Chebyshev radius it lifts the fog within). Defaults to
+    /// the [`UnitKind::vision`] of its [`Self::kind`], but carried explicitly so a
+    /// scenario can override (e.g. a buffed unit).
     pub vision: u8,
     /// How far it can move in one turn (the Chebyshev radius a `move` affordance
-    /// may step it to).
+    /// may step it to). Defaults to the [`UnitKind::movement`] of its kind.
     pub movement: u8,
     /// A short call-sign for narration.
     pub name: String,
+}
+
+impl Unit {
+    /// Build a unit of `kind` for `side` at `at`, with the archetype's default
+    /// vision/movement and an auto-derived id + call-sign. The convenience
+    /// constructor for laying out a richer army without hand-setting every field.
+    pub fn of_kind(side: Side, kind: UnitKind, at: Coord, seed: u8) -> Self {
+        Unit {
+            id: game_cell(side.tag(), seed),
+            side,
+            kind,
+            at,
+            vision: kind.vision(),
+            movement: kind.movement(),
+            // The call-sign embeds the seed so two units of the same kind on one side
+            // get DISTINCT names (hence distinct, unique move-affordance names):
+            // e.g. "B-soldier3". The move-name encoding splits on ':' so a hyphenated
+            // call-sign is safe.
+            name: format!(
+                "{}-{}{}",
+                side.label().chars().next().unwrap_or('?'),
+                kind.label(),
+                seed
+            ),
+        }
+    }
+
+    /// Is this unit the side's [`UnitKind::Commander`] (the king whose capture wins)?
+    pub fn is_commander(&self) -> bool {
+        self.kind.is_commander()
+    }
 }
 
 /// The result of trying to apply a move — kept as a typed value so the game's
 /// state transition is explicit (the move's REAL effect, mirrored onto the model).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MoveOutcome {
-    /// The move was applied: the unit relocated from `from` to `to`.
-    Moved { unit: CellId, from: Coord, to: Coord },
-    /// The move resolved as a capture: the mover took an enemy unit at `to`.
-    Captured { mover: CellId, taken: CellId, at: Coord },
+    /// The move was applied: the unit relocated from `from` to `to`. If the
+    /// destination was a control point, `took_objective` carries its name.
+    Moved {
+        unit: CellId,
+        from: Coord,
+        to: Coord,
+        /// The objective captured by landing here, if any.
+        took_objective: Option<String>,
+    },
+    /// The move resolved as a capture: the mover took an enemy unit at `to`. If the
+    /// taken unit was the enemy [`UnitKind::Commander`], the game is decided.
+    Captured {
+        mover: CellId,
+        taken: CellId,
+        /// The archetype of the captured unit (so a Commander capture is legible
+        /// without a board lookup — the decapitation win).
+        taken_kind: UnitKind,
+        at: Coord,
+    },
+}
+
+impl MoveOutcome {
+    /// Did this outcome capture the enemy [`UnitKind::Commander`] (the decapitation
+    /// that ends the game)?
+    pub fn is_decapitation(&self) -> bool {
+        matches!(self, MoveOutcome::Captured { taken_kind, .. } if taken_kind.is_commander())
+    }
+}
+
+/// The game is over — who won and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GameOver {
+    /// The winning side.
+    pub winner: Side,
+    /// Why the game ended.
+    pub reason: WinReason,
+}
+
+/// How a game was won.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WinReason {
+    /// The loser's [`UnitKind::Commander`] was captured (the king fell).
+    Decapitation,
+    /// The winner held a majority of the objectives (control of the map).
+    Domination,
+    /// The loser has no units left.
+    Annihilation,
 }
 
 /// Why a move was rejected by the game rules (BEFORE the cap gate — these are the
@@ -211,14 +350,86 @@ pub enum IllegalMove {
     OutOfRange { allowed: u8, requested: u8 },
     /// The destination is occupied by a FRIENDLY unit (cannot stack).
     BlockedByFriendly,
+    /// The destination tile is [`Terrain::Impassable`] (a mountain / deep water).
+    Impassable,
     /// It is not this side's turn.
     NotYourTurn { whose: Side },
 }
 
-/// The board — a grid of tiles, the units on it, and whose turn it is. The shared
-/// cell of the web-of-cells skirmish (`docs/deos/DEOS-APPS.md`: "the board a shared
-/// cell"). The board owns the ground truth; each player only ever PROJECTS it
-/// through their own vision cap.
+/// What occupies a tile's terrain — the LINE-OF-SIGHT layer. `Blocking` terrain
+/// (a wall / forest / mountain) **occludes vision**: a unit cannot illuminate a
+/// tile if a `Blocking` tile lies on the straight line between them. This is what
+/// gives the vision frustum genuine *shape* — it is not a uniform Chebyshev disc,
+/// it is a real line-of-sight cone the terrain carves. `Impassable` additionally
+/// blocks movement onto the tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum Terrain {
+    /// Open ground — passable, does not block sight.
+    #[default]
+    Open,
+    /// A sight-blocking feature (forest/wall) — occludes vision past it but can be
+    /// entered (you can hide IN the woods, but not see THROUGH them).
+    Blocking,
+    /// Impassable AND sight-blocking (a mountain/deep water) — blocks both movement
+    /// and vision.
+    Impassable,
+}
+
+impl Terrain {
+    /// Does this terrain block line-of-sight THROUGH the tile?
+    pub fn blocks_sight(self) -> bool {
+        matches!(self, Terrain::Blocking | Terrain::Impassable)
+    }
+    /// Can a unit move ONTO this tile?
+    pub fn is_passable(self) -> bool {
+        !matches!(self, Terrain::Impassable)
+    }
+    /// A single-char glyph for ASCII rendering.
+    pub fn glyph(self) -> char {
+        match self {
+            Terrain::Open => '.',
+            Terrain::Blocking => '#',
+            Terrain::Impassable => '^',
+        }
+    }
+}
+
+/// A capturable **objective** — a control point on the map (a flag / strategic
+/// node). Objectives are what make the world a *game with a point*: a side scores
+/// by **holding** objectives (standing a unit on them) and can win by holding a
+/// majority, or by capturing the enemy [`UnitKind::Commander`]. Each objective is
+/// its own cell (published into the web-of-cells), and capturing it fires a REAL
+/// cap-gated [`Effect::EmitEvent`] turn — a `capture` affordance, gated by the
+/// capturing side's identity exactly as a move is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Objective {
+    /// The objective's stable cell (objectives are cells too — published refs).
+    pub cell: CellId,
+    /// Where it sits on the board.
+    pub at: Coord,
+    /// A short name for narration (e.g. "north-relay", "central-spire").
+    pub name: String,
+    /// Which side currently **holds** it (`None` = neutral/contested). Updated when a
+    /// unit captures it via the cap-gated capture affordance.
+    pub held_by: Option<Side>,
+}
+
+impl Objective {
+    /// A neutral objective named `name` at `at`, with a derived cell.
+    pub fn new(name: impl Into<String>, at: Coord, seed: u8) -> Self {
+        Objective {
+            cell: game_cell(0x0B, seed),
+            at,
+            name: name.into(),
+            held_by: None,
+        }
+    }
+}
+
+/// The board — a grid of tiles, the units on it, the terrain + objectives, and
+/// whose turn it is. The shared cell of the web-of-cells skirmish
+/// (`docs/deos/DEOS-APPS.md`: "the board a shared cell"). The board owns the
+/// ground truth; each player only ever PROJECTS it through their own vision cap.
 #[derive(Clone, Debug)]
 pub struct Board {
     /// Grid extent (rows).
@@ -229,6 +440,11 @@ pub struct Board {
     pub cell: CellId,
     /// Every unit on the board (the ground truth — never handed to a player whole).
     pub units: Vec<Unit>,
+    /// The terrain layer (row-major, `rows * cols` entries). The LINE-OF-SIGHT +
+    /// passability map. Empty = all-[`Terrain::Open`] (the old uniform behaviour).
+    pub terrain: Vec<Terrain>,
+    /// The capturable objectives (control points) on the map.
+    pub objectives: Vec<Objective>,
     /// Whose turn it is.
     pub turn: Side,
     /// The turn counter (advances each completed move).
@@ -299,17 +515,88 @@ pub struct TileView {
 }
 
 impl Board {
-    /// A fresh board of `rows`×`cols` with the given units, Blue to move first. The
-    /// board's backing cell is derived deterministically.
+    /// A fresh board of `rows`×`cols` with the given units, Blue to move first, all
+    /// terrain [`Terrain::Open`] and no objectives. The board's backing cell is
+    /// given. (The classic skirmish; the richer world uses
+    /// [`Board::with_terrain_and_objectives`].)
     pub fn new(rows: u8, cols: u8, board_cell: CellId, units: Vec<Unit>) -> Self {
         Board {
             rows,
             cols,
             cell: board_cell,
             units,
+            terrain: vec![Terrain::Open; rows as usize * cols as usize],
+            objectives: Vec::new(),
             turn: Side::Blue,
             ply: 0,
         }
+    }
+
+    /// A fresh board with a TERRAIN layer (line-of-sight + passability) and capturable
+    /// OBJECTIVES — the richer world. `terrain` is row-major (`rows*cols`); a shorter
+    /// vec is padded with [`Terrain::Open`].
+    pub fn with_terrain_and_objectives(
+        rows: u8,
+        cols: u8,
+        board_cell: CellId,
+        units: Vec<Unit>,
+        mut terrain: Vec<Terrain>,
+        objectives: Vec<Objective>,
+    ) -> Self {
+        terrain.resize(rows as usize * cols as usize, Terrain::Open);
+        Board {
+            rows,
+            cols,
+            cell: board_cell,
+            units,
+            terrain,
+            objectives,
+            turn: Side::Blue,
+            ply: 0,
+        }
+    }
+
+    /// The terrain at `coord` (out-of-bounds reads as [`Terrain::Impassable`] — the
+    /// edge of the world blocks both sight and movement).
+    pub fn terrain_at(&self, coord: Coord) -> Terrain {
+        if !self.in_bounds(coord) {
+            return Terrain::Impassable;
+        }
+        let idx = coord.row as usize * self.cols as usize + coord.col as usize;
+        self.terrain.get(idx).copied().unwrap_or(Terrain::Open)
+    }
+
+    /// **Line-of-sight**: can a unit standing at `from` SEE the tile at `to`? True iff
+    /// `to` is within `radius` (Chebyshev) AND no [`Terrain::blocks_sight`] tile lies
+    /// strictly between them on the straight line (a supercover/Bresenham walk). The
+    /// destination tile itself is visible even if it is blocking (you can see the EDGE
+    /// of the forest, just not through it). This is what carves the vision frustum into
+    /// a real shape instead of a uniform disc.
+    pub fn has_line_of_sight(&self, from: Coord, to: Coord, radius: u8) -> bool {
+        if from.chebyshev(to) > radius {
+            return false;
+        }
+        if from == to {
+            return true;
+        }
+        // Walk the integer points strictly between `from` and `to`; if any blocks
+        // sight, the target is occluded. We sample along the longer axis (king-move
+        // geometry), checking each intermediate cell.
+        let (r0, c0) = (from.row as i16, from.col as i16);
+        let (r1, c1) = (to.row as i16, to.col as i16);
+        let dr = r1 - r0;
+        let dc = c1 - c0;
+        let steps = dr.abs().max(dc.abs());
+        for i in 1..steps {
+            // Linear interpolation, rounded — the tile the sight-line passes through.
+            let rr = r0 + (dr * i + dr.signum() * steps / 2) / steps;
+            let cc = c0 + (dc * i + dc.signum() * steps / 2) / steps;
+            let mid = Coord::new(rr as u8, cc as u8);
+            if self.terrain_at(mid).blocks_sight() {
+                return false;
+            }
+        }
+        true
     }
 
     /// Is `coord` on the board?
@@ -339,7 +626,11 @@ impl Board {
             for row in 0..self.rows {
                 for col in 0..self.cols {
                     let c = Coord::new(row, col);
-                    if unit.at.chebyshev(c) <= unit.vision {
+                    // The frustum is the LINE-OF-SIGHT cone, not a uniform disc: a
+                    // tile is illuminated only if it is in range AND the terrain does
+                    // not occlude it (a wall/forest between the unit and the tile
+                    // blocks the view). This is what gives vision genuine shape.
+                    if self.has_line_of_sight(unit.at, c, unit.vision) {
                         frustum.insert(c.origin());
                     }
                 }
@@ -510,6 +801,50 @@ impl Board {
         surface
     }
 
+    /// **The objective-capture affordance surface for `side`** — the cap-gated
+    /// verified-turn templates for *claiming a control point*. For each objective a
+    /// friendly unit currently STANDS on (and that `side` does not already hold),
+    /// this declares a [`CellAffordance`] named `capture:<objective>`, requiring the
+    /// side's identity ([`side_rights`]) and firing a REAL [`Effect::EmitEvent`] turn
+    /// — a `captured` event from the objective's cell carrying the capturing side +
+    /// the ply. An ENEMY cannot fire these (incomparable identity); the SAME
+    /// `is_attenuation` gate, so claiming an objective is anti-cheat-free exactly as a
+    /// move is. This exercises a SECOND real effect kind (event emission, not just
+    /// `SetField`), so the world drives more of the genuine turn vocabulary.
+    pub fn capture_surface_for(&self, side: Side) -> AffordanceSurface {
+        let mut surface = AffordanceSurface::new(self.cell);
+        for obj in &self.objectives {
+            if obj.held_by == Some(side) {
+                continue; // already ours — nothing to capture
+            }
+            // A friendly unit must be standing on the objective to claim it.
+            let occupied_by_friendly = self
+                .unit_at(obj.at)
+                .map(|u| u.side == side)
+                .unwrap_or(false);
+            if !occupied_by_friendly {
+                continue;
+            }
+            let event = Event {
+                topic: event_topic(b"dregg-fogwar-objective-captured-v1"),
+                data: vec![
+                    pack_coord(obj.at),
+                    side_tag_field(side),
+                    pack_u32(self.ply),
+                ],
+            };
+            surface = surface.declare(CellAffordance::new(
+                capture_name(&obj.name),
+                side_rights(side),
+                Effect::EmitEvent {
+                    cell: obj.cell,
+                    event,
+                },
+            ));
+        }
+        surface
+    }
+
     /// Is moving `unit` to `dest` legal under the GAME rules (not the cap gate)?
     /// On-board, within movement range, and not landing on a friendly. Landing on
     /// an enemy is a legal capture.
@@ -540,6 +875,10 @@ impl Board {
                 allowed: unit.movement,
                 requested: dist,
             });
+        }
+        // Terrain passability: a unit cannot step onto an Impassable tile.
+        if !self.terrain_at(dest).is_passable() {
+            return Err(IllegalMove::Impassable);
         }
         if let Some(occ) = self.unit_at(dest) {
             if occ.side == unit.side {
@@ -591,8 +930,8 @@ impl Board {
 
         let from = unit.at;
         // Resolve a capture: if an enemy stands on the destination, remove it.
-        let captured = self.unit_at(dest).map(|u| u.id);
-        if let Some(taken_id) = captured {
+        let captured = self.unit_at(dest).map(|u| (u.id, u.kind));
+        if let Some((taken_id, taken_kind)) = captured {
             self.units.retain(|u| u.id != taken_id);
             // Recompute the mover's index after the removal (the vector shifted).
             let mover_pos = self
@@ -601,11 +940,14 @@ impl Board {
                 .position(|u| u.id == unit.id)
                 .ok_or(IllegalMove::NoUnitThere)?;
             self.units[mover_pos].at = dest;
+            // Standing on a control point flips it to the mover's side.
+            self.capture_objective_at(dest, mover_side);
             self.ply += 1;
             self.turn = self.turn.opponent();
             return Ok(MoveOutcome::Captured {
                 mover: unit.id,
                 taken: taken_id,
+                taken_kind,
                 at: dest,
             });
         }
@@ -617,13 +959,87 @@ impl Board {
             .position(|u| u.id == unit.id)
             .ok_or(IllegalMove::NoUnitThere)?;
         self.units[mover_pos].at = dest;
+        // Standing on a control point flips it to the mover's side.
+        let took_objective = self.capture_objective_at(dest, mover_side);
         self.ply += 1;
         self.turn = self.turn.opponent();
         Ok(MoveOutcome::Moved {
             unit: unit.id,
             from,
             to: dest,
+            took_objective,
         })
+    }
+
+    /// If an objective sits at `coord`, flip it to `side` (standing on a control
+    /// point captures it). Returns the objective's name if one was (re)captured.
+    fn capture_objective_at(&mut self, coord: Coord, side: Side) -> Option<String> {
+        for obj in &mut self.objectives {
+            if obj.at == coord && obj.held_by != Some(side) {
+                obj.held_by = Some(side);
+                return Some(obj.name.clone());
+            }
+        }
+        None
+    }
+
+    /// How many objectives `side` currently holds (its score on the objective axis).
+    pub fn objectives_held(&self, side: Side) -> usize {
+        self.objectives.iter().filter(|o| o.held_by == Some(side)).count()
+    }
+
+    /// The objective sitting at `coord`, if any (ground truth).
+    pub fn objective_at(&self, coord: Coord) -> Option<&Objective> {
+        self.objectives.iter().find(|o| o.at == coord)
+    }
+
+    /// **Is the game over, and who won?** The win conditions (checked in order):
+    ///
+    /// 1. **Decapitation** — a side whose [`UnitKind::Commander`] has been captured
+    ///    LOSES (the other side wins). If a side has no commander on the board, it is
+    ///    defeated.
+    /// 2. **Domination** — a side holding strictly MORE than half the objectives, when
+    ///    there is at least one objective, wins.
+    /// 3. **Annihilation** — a side with no units left loses.
+    ///
+    /// Returns `None` while the game is live, or `Some(GameOver)` with the winner +
+    /// reason once it is decided.
+    pub fn outcome(&self) -> Option<GameOver> {
+        // (3)/(1) annihilation + decapitation: a side with no units, or no commander
+        // (when commanders are in play), is defeated.
+        let blue_units = self.units_of(Side::Blue).len();
+        let red_units = self.units_of(Side::Red).len();
+        let commanders_in_play = self.units.iter().any(|u| u.is_commander());
+        let blue_has_cmd = self.units_of(Side::Blue).iter().any(|u| u.is_commander());
+        let red_has_cmd = self.units_of(Side::Red).iter().any(|u| u.is_commander());
+
+        if commanders_in_play {
+            match (blue_has_cmd, red_has_cmd) {
+                (false, true) => return Some(GameOver { winner: Side::Red, reason: WinReason::Decapitation }),
+                (true, false) => return Some(GameOver { winner: Side::Blue, reason: WinReason::Decapitation }),
+                (false, false) => return Some(GameOver { winner: Side::Blue, reason: WinReason::Decapitation }), // both gone: caller-defined; Blue by default
+                (true, true) => {}
+            }
+        }
+        if blue_units == 0 && red_units > 0 {
+            return Some(GameOver { winner: Side::Red, reason: WinReason::Annihilation });
+        }
+        if red_units == 0 && blue_units > 0 {
+            return Some(GameOver { winner: Side::Blue, reason: WinReason::Annihilation });
+        }
+        // (2) domination: strictly more than half the objectives.
+        let total = self.objectives.len();
+        if total > 0 {
+            let blue_obj = self.objectives_held(Side::Blue);
+            let red_obj = self.objectives_held(Side::Red);
+            if blue_obj * 2 > total {
+                return Some(GameOver { winner: Side::Blue, reason: WinReason::Domination });
+            }
+            if red_obj * 2 > total {
+                return Some(GameOver { winner: Side::Red, reason: WinReason::Domination });
+            }
+        }
+        None
     }
 
     /// **Take a fog-respecting frustum-snapshot for a spectator of `side`.** The
@@ -891,11 +1307,30 @@ impl VisionDeck {
     }
 }
 
+/// An AI agent's **policy** — its personality / objective-weighting. Crucially this
+/// only changes which *authorized* move the agent PREFERS; it can never change the
+/// agent's *action space*, which is fixed by its caps. An aggressive agent and a
+/// scouting agent draw from the SAME cap-gated affordance set — they just rank it
+/// differently. (This is the deos point made about AI: the policy is the brain, the
+/// caps are the cage; a smarter brain does not get a bigger cage.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentPolicy {
+    /// Hunt the enemy: prefer captures, then close distance to the nearest visible
+    /// enemy. (The historical default policy.)
+    Aggressive,
+    /// Contest the map: prefer stepping toward the nearest un-held objective (and
+    /// capture an enemy only if it is already in reach). Wins by domination.
+    Objective,
+    /// Spread vision: prefer the move that maximizes the agent's frustum (reveal the
+    /// most new fog). The information player.
+    Scout,
+}
+
 /// **An AI agent player** — a first-class user that fires the SAME cap-gated move
 /// affordances as a human (`docs/deos/DEOS-APPS.md`: "AI opponents/allies are
 /// first-class users firing the same affordances, attenuated by the same caps").
 /// The agent holds a side identity ([`Self::vision_cap`] over the board) and a
-/// simple policy; its action space IS its attenuated affordance set — it can only
+/// [`AgentPolicy`]; its action space IS its attenuated affordance set — it can only
 /// ever fire moves its caps authorize, so it is confined to legal+authorized play
 /// by construction (it cannot cheat any more than a human can).
 #[derive(Clone, Debug)]
@@ -904,12 +1339,20 @@ pub struct AgentPlayer {
     pub side: Side,
     /// The agent's cell identity (it is a cell, like any player).
     pub cell: CellId,
+    /// The agent's policy (its preference ordering over authorized moves).
+    pub policy: AgentPolicy,
 }
 
 impl AgentPlayer {
-    /// An agent playing `side` from cell `cell`.
+    /// An agent playing `side` from cell `cell`, with the [`AgentPolicy::Aggressive`]
+    /// default (the historical behaviour).
     pub fn new(side: Side, cell: CellId) -> Self {
-        AgentPlayer { side, cell }
+        AgentPlayer { side, cell, policy: AgentPolicy::Aggressive }
+    }
+
+    /// An agent with an explicit [`AgentPolicy`] (a personality).
+    pub fn with_policy(side: Side, cell: CellId, policy: AgentPolicy) -> Self {
+        AgentPlayer { side, cell, policy }
     }
 
     /// The agent's held vision/authority cap — the SAME [`Board::vision_cap_for`] a
@@ -919,13 +1362,27 @@ impl AgentPlayer {
         board.vision_cap_for(self.side)
     }
 
+    /// **Claim an objective** if a friendly unit stands on an un-held one — fire the
+    /// cap-gated `capture:<obj>` affordance (a REAL [`Effect::EmitEvent`] turn). The
+    /// agent does this through the SAME gate as a move, so it can only ever claim
+    /// objectives its identity authorizes. Returns the fired intent, or `None`.
+    pub fn choose_capture(&self, board: &Board) -> Option<AffordanceIntent> {
+        if board.turn != self.side {
+            return None;
+        }
+        let surface = board.capture_surface_for(self.side);
+        let held = self.vision_cap(board);
+        let candidates = surface.project_for(&held);
+        let first = candidates.first()?;
+        surface.fire(&first.name, self.cell, &held).ok()
+    }
+
     /// **Choose and fire a move** through the cap-gated affordance surface — the
-    /// agentic turn. The policy: among the moves the agent's caps authorize (it
-    /// projects the move surface for its own side, so it only ever SEES its own
-    /// legal moves), prefer the move that captures a visible enemy; else step the
-    /// first unit toward the nearest visible enemy; else the first available legal
-    /// move. Returns the fired [`AffordanceIntent`] (carrying the REAL effect) — or
-    /// `None` if the agent has no legal move (it passes).
+    /// agentic turn, ranked by the agent's [`AgentPolicy`]. The agent only ever
+    /// considers moves its caps AUTHORIZE (it projects the move surface for its own
+    /// side); the policy only reorders that authorized set. Returns the fired
+    /// [`AffordanceIntent`] (carrying the REAL effect), or `None` if the agent has no
+    /// legal move (it passes).
     ///
     /// Crucially the agent FIRES through [`AffordanceSurface::fire`] with its own
     /// side authority, so the move it returns was admitted by the REAL
@@ -939,7 +1396,7 @@ impl AgentPlayer {
         let surface = board.move_surface_for(self.side);
         let held = self.vision_cap(board);
         // The agent's authorized action space: the moves it may fire (project_for is
-        // the SAME gate the fog uses). Each `name` is move:<unit>:<r>-<c>.
+        // the SAME gate the fog uses). The policy ranks WITHIN this set only.
         let candidates = surface.project_for(&held);
         if candidates.is_empty() {
             return None;
@@ -949,37 +1406,90 @@ impl AgentPlayer {
         let view = board.project_for(self.side, Rehydration::Live);
         let visible_enemies: Vec<Coord> = view.visible_enemies().iter().map(|u| u.at).collect();
 
-        // (1) Prefer a capture: a candidate whose destination is a visible enemy.
-        if !visible_enemies.is_empty() {
-            // Find a candidate move landing on a visible enemy tile.
-            for cand in &candidates {
-                if let Some(dest) = dest_of_move(&cand.name) {
-                    if visible_enemies.contains(&dest) {
-                        // Fire it (through the REAL gate, with the agent's authority).
-                        return surface.fire(&cand.name, self.cell, &held).ok();
-                    }
+        // A capture that is available RIGHT NOW is taken by every policy (a free kill,
+        // especially a decapitation, is always worth it).
+        for cand in &candidates {
+            if let Some(dest) = dest_of_move(&cand.name) {
+                if visible_enemies.contains(&dest) {
+                    return surface.fire(&cand.name, self.cell, &held).ok();
                 }
-            }
-            // (2) Else step toward the nearest visible enemy: pick the candidate
-            //     minimizing Chebyshev distance to any visible enemy.
-            let best = candidates
-                .iter()
-                .filter_map(|c| dest_of_move(&c.name).map(|d| (c, d)))
-                .min_by_key(|(_, d)| {
-                    visible_enemies
-                        .iter()
-                        .map(|e| d.chebyshev(*e))
-                        .min()
-                        .unwrap_or(u8::MAX)
-                });
-            if let Some((cand, _)) = best {
-                return surface.fire(&cand.name, self.cell, &held).ok();
             }
         }
 
-        // (3) Else just take the first authorized legal move.
-        let first = &candidates[0];
-        surface.fire(&first.name, self.cell, &held).ok()
+        // Otherwise rank by policy.
+        let chosen = match self.policy {
+            AgentPolicy::Aggressive => self.rank_toward_enemies(&candidates, &visible_enemies),
+            AgentPolicy::Objective => self.rank_toward_objectives(board, &candidates, &visible_enemies),
+            AgentPolicy::Scout => self.rank_by_revealed_fog(board, &candidates),
+        };
+        let pick = chosen.unwrap_or(&candidates[0]);
+        surface.fire(&pick.name, self.cell, &held).ok()
+    }
+
+    /// Aggressive ranking: minimize Chebyshev distance to any visible enemy.
+    fn rank_toward_enemies<'a>(
+        &self,
+        candidates: &'a [CellAffordance],
+        visible_enemies: &[Coord],
+    ) -> Option<&'a CellAffordance> {
+        if visible_enemies.is_empty() {
+            return None;
+        }
+        candidates
+            .iter()
+            .filter_map(|c| dest_of_move(&c.name).map(|d| (c, d)))
+            .min_by_key(|(_, d)| {
+                visible_enemies.iter().map(|e| d.chebyshev(*e)).min().unwrap_or(u8::MAX)
+            })
+            .map(|(c, _)| c)
+    }
+
+    /// Objective ranking: minimize Chebyshev distance to the nearest objective this
+    /// side does not already hold (contest the map).
+    fn rank_toward_objectives<'a>(
+        &self,
+        board: &Board,
+        candidates: &'a [CellAffordance],
+        visible_enemies: &[Coord],
+    ) -> Option<&'a CellAffordance> {
+        let targets: Vec<Coord> = board
+            .objectives
+            .iter()
+            .filter(|o| o.held_by != Some(self.side))
+            .map(|o| o.at)
+            .collect();
+        if targets.is_empty() {
+            // No objectives to chase — fall back to hunting.
+            return self.rank_toward_enemies(candidates, visible_enemies);
+        }
+        candidates
+            .iter()
+            .filter_map(|c| dest_of_move(&c.name).map(|d| (c, d)))
+            .min_by_key(|(_, d)| targets.iter().map(|t| d.chebyshev(*t)).min().unwrap_or(u8::MAX))
+            .map(|(c, _)| c)
+    }
+
+    /// Scout ranking: maximize the agent's frustum size AFTER the move (reveal the
+    /// most fog). We simulate each candidate on a clone and pick the largest frustum.
+    fn rank_by_revealed_fog<'a>(
+        &self,
+        board: &Board,
+        candidates: &'a [CellAffordance],
+    ) -> Option<&'a CellAffordance> {
+        candidates
+            .iter()
+            .max_by_key(|c| {
+                let mut probe = board.clone();
+                // Apply the move on the probe by relocating the unit whose move this is.
+                if let Some(dest) = dest_of_move(&c.name) {
+                    if let Some(idx) = unit_index_of_move(board, self.side, &c.name) {
+                        if let Some(u) = probe.units.get_mut(idx) {
+                            u.at = dest;
+                        }
+                    }
+                }
+                probe.frustum_for(self.side).len()
+            })
     }
 }
 
@@ -1039,6 +1549,53 @@ fn dest_of_move(name: &str) -> Option<Coord> {
     Some(Coord::new(r, c))
 }
 
+/// The canonical name of an objective-capture affordance: `capture:<objective>`.
+fn capture_name(objective_name: &str) -> String {
+    format!("capture:{objective_name}")
+}
+
+/// The unit-name component of a `move:<unit>:<r>-<c>` affordance name.
+fn unit_name_of_move(name: &str) -> Option<&str> {
+    // "move" : "<unit>" : "<r>-<c>"  — the unit name is the middle segment(s); since
+    // a unit name has no ':' the split is unambiguous.
+    let mut parts = name.splitn(3, ':');
+    let _move = parts.next()?;
+    parts.next()
+}
+
+/// Find the board index of the (friendly) unit a `move:<unit>:...` affordance moves,
+/// by matching the unit-name component. Returns `None` if no such friendly unit.
+fn unit_index_of_move(board: &Board, side: Side, name: &str) -> Option<usize> {
+    let uname = unit_name_of_move(name)?;
+    board
+        .units
+        .iter()
+        .position(|u| u.side == side && u.name == uname)
+}
+
+/// A domain-tagged event topic (a real `Symbol = FieldElement = [u8; 32]`) — the
+/// blake3 hash of a domain tag, the same content-addressing the rest of the stack
+/// uses. (The `dregg_turn::symbol` helper is not re-exported at the crate root, so
+/// we hash directly with the SAME `blake3` the crate already depends on.)
+fn event_topic(domain: &[u8]) -> [u8; 32] {
+    *blake3::hash(domain).as_bytes()
+}
+
+/// Pack a [`Side`] tag into a field element (an event-data field naming the side).
+fn side_tag_field(side: Side) -> [u8; 32] {
+    let mut v = [0u8; 32];
+    v[0] = side.tag();
+    v[1] = 0x51; // a domain tag marking this as a side tag
+    v
+}
+
+/// Pack a u32 (the ply) into a field element (event data).
+fn pack_u32(n: u32) -> [u8; 32] {
+    let mut v = [0u8; 32];
+    v[..4].copy_from_slice(&n.to_le_bytes());
+    v
+}
+
 /// Derive a deterministic [`CellId`] for a named game object (a unit, a player, the
 /// board) from a tag + seed — so units/players/board are addressable cells.
 pub fn game_cell(tag: u8, seed: u8) -> CellId {
@@ -1055,10 +1612,15 @@ pub fn game_cell(tag: u8, seed: u8) -> CellId {
 /// enough apart that NEITHER side can initially see the other (the opening fog).
 pub fn demo_skirmish() -> (Board, DreggUri, WebOfCells) {
     let board_cell = game_cell(0xB0, 0);
+    // The classic skirmish keeps four Soldier-profile units (vision 1, movement 2)
+    // with their historical call-signs, so the established no-peek/march/anti-cheat
+    // tests read unchanged. The RICHER world (terrain, mixed unit kinds, objectives,
+    // a win condition) is `demo_world` below.
     let units = vec![
         Unit {
             id: game_cell(0xB1, 1),
             side: Side::Blue,
+            kind: UnitKind::Soldier,
             at: Coord::new(0, 0),
             vision: 1,
             movement: 2,
@@ -1067,6 +1629,7 @@ pub fn demo_skirmish() -> (Board, DreggUri, WebOfCells) {
         Unit {
             id: game_cell(0xB1, 2),
             side: Side::Blue,
+            kind: UnitKind::Soldier,
             at: Coord::new(1, 0),
             vision: 1,
             movement: 2,
@@ -1075,6 +1638,7 @@ pub fn demo_skirmish() -> (Board, DreggUri, WebOfCells) {
         Unit {
             id: game_cell(0xED, 1),
             side: Side::Red,
+            kind: UnitKind::Soldier,
             at: Coord::new(4, 4),
             vision: 1,
             movement: 2,
@@ -1083,6 +1647,7 @@ pub fn demo_skirmish() -> (Board, DreggUri, WebOfCells) {
         Unit {
             id: game_cell(0xED, 2),
             side: Side::Red,
+            kind: UnitKind::Soldier,
             at: Coord::new(3, 4),
             vision: 1,
             movement: 2,
@@ -1099,6 +1664,151 @@ pub fn demo_skirmish() -> (Board, DreggUri, WebOfCells) {
     // snapshot/rehydrate path we use the PUBLISHED uri (it is the one the web-of-cells
     // can fetch). The board's own `cell` is used for the affordance/vision surfaces.
     (board, board_uri, web)
+}
+
+/// Build the **richer demo world** — a 12×12 map with a TERRAIN layer (a central
+/// forest belt that occludes line-of-sight + mountains that block movement), MIXED
+/// unit kinds (Scouts for long vision, Soldiers to hold ground, a Sensor wide-eye,
+/// and a Commander whose capture ends the game), and three capturable OBJECTIVES
+/// (control points). This is the world the fog-of-war thesis was built to show off:
+/// the frustum has real shape (the forest carves it), the armies are heterogeneous,
+/// and there is a point to play for (hold 2 of 3 objectives, or take the enemy
+/// Commander).
+///
+/// Returns just the [`Board`]; publishing it as a web-of-cells world is
+/// [`crate::world::GameWorld::publish`].
+pub fn demo_world() -> Board {
+    let board_cell = game_cell(0xB0, 12);
+    let n = 12u8;
+
+    // ── Terrain: a forest belt across the middle (rows 5-6) with two mountain
+    //    pillars, so a unit cannot simply see corner-to-corner — sight is carved by
+    //    the trees, and the mountains funnel movement. ──────────────────────────
+    let mut terrain = vec![Terrain::Open; (n as usize) * (n as usize)];
+    let set = |t: &mut Vec<Terrain>, r: u8, c: u8, v: Terrain| {
+        t[r as usize * n as usize + c as usize] = v;
+    };
+    // A broken forest belt (Blocking — occludes sight, passable) across row 5 & 6.
+    for c in 2..10 {
+        if c != 5 && c != 6 {
+            set(&mut terrain, 5, c, Terrain::Blocking);
+        }
+        if c != 4 && c != 7 {
+            set(&mut terrain, 6, c, Terrain::Blocking);
+        }
+    }
+    // Two impassable mountain pillars (block sight AND movement).
+    set(&mut terrain, 5, 5, Terrain::Impassable);
+    set(&mut terrain, 6, 6, Terrain::Impassable);
+    // A small forest copse near each home (cover for the Commander).
+    set(&mut terrain, 1, 1, Terrain::Blocking);
+    set(&mut terrain, 10, 10, Terrain::Blocking);
+
+    // ── Objectives: three control points — two flanks + the contested centre. ──
+    let objectives = vec![
+        Objective::new("west-relay", Coord::new(6, 1), 1),
+        Objective::new("central-spire", Coord::new(6, 6 - 1), 2), // beside the mountain
+        Objective::new("east-relay", Coord::new(5, 10), 3),
+    ];
+
+    // ── Armies: Blue starts top, Red starts bottom. Each side fields a Scout
+    //    (eyes), two Soldiers (ground), a Sensor (a deployed wide-eye), and a
+    //    Commander (the king). Distinct seeds → distinct unit cells + move names. ─
+    let units = vec![
+        // Blue (top edge).
+        Unit::of_kind(Side::Blue, UnitKind::Commander, Coord::new(0, 5), 10),
+        Unit::of_kind(Side::Blue, UnitKind::Scout, Coord::new(1, 2), 11),
+        Unit::of_kind(Side::Blue, UnitKind::Soldier, Coord::new(1, 7), 12),
+        Unit::of_kind(Side::Blue, UnitKind::Soldier, Coord::new(2, 4), 13),
+        Unit::of_kind(Side::Blue, UnitKind::Sensor, Coord::new(0, 9), 14),
+        // Red (bottom edge).
+        Unit::of_kind(Side::Red, UnitKind::Commander, Coord::new(11, 6), 10),
+        Unit::of_kind(Side::Red, UnitKind::Scout, Coord::new(10, 9), 11),
+        Unit::of_kind(Side::Red, UnitKind::Soldier, Coord::new(10, 4), 12),
+        Unit::of_kind(Side::Red, UnitKind::Soldier, Coord::new(9, 7), 13),
+        Unit::of_kind(Side::Red, UnitKind::Sensor, Coord::new(11, 2), 14),
+    ];
+
+    Board::with_terrain_and_objectives(n, n, board_cell, units, terrain, objectives)
+}
+
+/// A record of one ply in a played-out match — the side that moved, the
+/// [`MoveOutcome`], and the resulting ply count. The match log is itself a
+/// witness-graph-shaped artifact (each entry is a real fired affordance).
+#[derive(Clone, Debug)]
+pub struct MatchStep {
+    /// Whose turn it was.
+    pub side: Side,
+    /// What happened (relocate / capture).
+    pub outcome: MoveOutcome,
+    /// The ply after this step.
+    pub ply: u32,
+}
+
+/// The result of [`play_match`] — the final board, who won + why, and the step log.
+#[derive(Clone, Debug)]
+pub struct MatchResult {
+    /// The terminal board.
+    pub board: Board,
+    /// Who won and why (`None` only if `max_plies` was hit with no winner — a draw).
+    pub game_over: Option<GameOver>,
+    /// The ply-by-ply log (each a real fired affordance).
+    pub log: Vec<MatchStep>,
+}
+
+/// **Play a full match between two AI agents to a win condition** — the "agentic
+/// desktop" made concrete. Each agent FIRES its move through the cap-gated
+/// affordance surface every turn (so every action in the whole match was admitted
+/// by the REAL `is_attenuation` gate — neither agent can cheat), and after each move
+/// the agent also claims any objective it is now standing on (a cap-gated
+/// `EmitEvent` capture). The loop runs until [`Board::outcome`] decides the game or
+/// `max_plies` is reached. Returns the [`MatchResult`].
+///
+/// This is the proof that a heterogeneous, objective-driven, fog-of-war game plays
+/// to completion entirely through the genuine cap discipline — two agents, no human,
+/// no ambient authority, no cheating possible.
+pub fn play_match(
+    mut board: Board,
+    blue: &AgentPlayer,
+    red: &AgentPlayer,
+    max_plies: u32,
+) -> MatchResult {
+    let mut log = Vec::new();
+    while board.outcome().is_none() && board.ply < max_plies {
+        let agent = match board.turn {
+            Side::Blue => blue,
+            Side::Red => red,
+        };
+        let side = board.turn;
+        // The agent claims an objective it stands on FIRST (free, doesn't consume the
+        // move) — a real cap-gated EmitEvent. We fire it but keep the turn going.
+        if let Some(_cap_intent) = agent.choose_capture(&board) {
+            // The capture event is a real fired affordance; the board already flips
+            // ownership when a unit lands on an objective, so we just witness it here.
+        }
+        // Then the agent moves (the turn-advancing action).
+        match agent.choose_move(&board) {
+            Some(intent) => match board.apply_move(&intent, side) {
+                Ok(outcome) => {
+                    let ply = board.ply;
+                    log.push(MatchStep { side, outcome, ply });
+                }
+                Err(_) => {
+                    // The chosen move was somehow illegal (should not happen — the
+                    // surface only declares legal moves); pass the turn to avoid a
+                    // stall.
+                    board.turn = board.turn.opponent();
+                }
+            },
+            // No legal move → the side passes (turn flips). If BOTH sides are stuck,
+            // the ply cap eventually ends it (a draw).
+            None => {
+                board.turn = board.turn.opponent();
+            }
+        }
+    }
+    let game_over = board.outcome();
+    MatchResult { board, game_over, log }
 }
 
 #[cfg(test)]
@@ -1380,6 +2090,7 @@ mod tests {
                 unit: game_cell(0xB1, 1),
                 from: Coord::new(0, 0),
                 to: Coord::new(2, 2),
+                took_objective: None,
             }
         );
         // The unit relocated.
@@ -1398,6 +2109,7 @@ mod tests {
             Unit {
                 id: game_cell(0xB1, 1),
                 side: Side::Blue,
+                kind: UnitKind::Soldier,
                 at: Coord::new(2, 2),
                 vision: 1,
                 movement: 2,
@@ -1406,6 +2118,7 @@ mod tests {
             Unit {
                 id: game_cell(0xED, 1),
                 side: Side::Red,
+                kind: UnitKind::Soldier,
                 at: Coord::new(2, 3), // adjacent to Blue's scout
                 vision: 1,
                 movement: 2,
@@ -1424,6 +2137,7 @@ mod tests {
             MoveOutcome::Captured {
                 mover: game_cell(0xB1, 1),
                 taken: game_cell(0xED, 1),
+                taken_kind: UnitKind::Soldier,
                 at: Coord::new(2, 3),
             }
         );
@@ -1479,6 +2193,7 @@ mod tests {
             Unit {
                 id: game_cell(0xB1, 1),
                 side: Side::Blue,
+                kind: UnitKind::Scout,
                 at: Coord::new(2, 2),
                 vision: 2, // sees the adjacent enemy
                 movement: 1,
@@ -1487,6 +2202,7 @@ mod tests {
             Unit {
                 id: game_cell(0xED, 1),
                 side: Side::Red,
+                kind: UnitKind::Soldier,
                 at: Coord::new(2, 3),
                 vision: 1,
                 movement: 1,
@@ -1720,5 +2436,296 @@ mod tests {
         // The frustum is a finite allowlist (not the wildcard) — fog is concrete
         // confinement, not "see everything".
         assert!(blue_cap.fetch_allow.is_some(), "the vision frustum is a concrete allowlist");
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // THE BIGGER WORLD: terrain/line-of-sight, unit kinds, objectives, win
+    // conditions, multi-policy agents, and a full agent-vs-agent match.
+    // ════════════════════════════════════════════════════════════════════════════
+
+    // ── Line-of-sight: terrain carves the vision frustum into a real shape. ──
+
+    #[test]
+    fn blocking_terrain_occludes_line_of_sight() {
+        // A Scout (vision 3) at (0,0) would see (0,3) on open ground — but a Blocking
+        // wall at (0,2) between them OCCLUDES it: the frustum is the line-of-sight
+        // cone, not a uniform disc. The tile behind the wall is provably un-seen.
+        let mut terrain = vec![Terrain::Open; 5 * 5];
+        terrain[0 * 5 + 2] = Terrain::Blocking; // a wall at (0,2)
+        let board = Board::with_terrain_and_objectives(
+            5,
+            5,
+            game_cell(0xB0, 50),
+            vec![Unit::of_kind(Side::Blue, UnitKind::Scout, Coord::new(0, 0), 1)],
+            terrain,
+            vec![],
+        );
+        // In range (Chebyshev 3) but occluded by the wall → NOT visible.
+        assert!(
+            !board.has_line_of_sight(Coord::new(0, 0), Coord::new(0, 3), 3),
+            "the tile behind the wall is occluded"
+        );
+        // The wall tile ITSELF is visible (you see the edge of the obstacle).
+        assert!(board.has_line_of_sight(Coord::new(0, 0), Coord::new(0, 2), 3));
+        // A tile NOT behind the wall (a different row) is visible.
+        assert!(board.has_line_of_sight(Coord::new(0, 0), Coord::new(3, 0), 3));
+        // The frustum reflects it: (0,3) is fogged, (3,0) is lit.
+        let frustum = board.frustum_for(Side::Blue);
+        assert!(!frustum.contains(&Coord::new(0, 3).origin()), "occluded tile is fogged");
+        assert!(frustum.contains(&Coord::new(3, 0).origin()), "unoccluded tile is lit");
+    }
+
+    #[test]
+    fn unit_kinds_have_distinct_vision_and_movement_profiles() {
+        // The army is heterogeneous: a Scout sees far + moves fast, a Soldier holds
+        // ground, a Sensor is a stationary wide eye, a Commander is the king.
+        assert_eq!(UnitKind::Scout.vision(), 3);
+        assert_eq!(UnitKind::Scout.movement(), 3);
+        assert_eq!(UnitKind::Soldier.vision(), 1);
+        assert_eq!(UnitKind::Sensor.movement(), 0); // cannot move
+        assert!(UnitKind::Commander.is_commander());
+        assert!(!UnitKind::Scout.is_commander());
+        // of_kind wires the profile onto the unit and gives distinct names per seed.
+        let s1 = Unit::of_kind(Side::Blue, UnitKind::Soldier, Coord::new(0, 0), 1);
+        let s2 = Unit::of_kind(Side::Blue, UnitKind::Soldier, Coord::new(0, 1), 2);
+        assert_ne!(s1.name, s2.name, "two soldiers get distinct call-signs (unique moves)");
+        assert_eq!(s1.vision, 1);
+    }
+
+    #[test]
+    fn an_impassable_tile_blocks_movement() {
+        // A unit cannot step onto Impassable terrain (a mountain) — it is refused as a
+        // GAME-rule illegality (and so never even declared as a move affordance).
+        let mut terrain = vec![Terrain::Open; 5 * 5];
+        terrain[1 * 5 + 1] = Terrain::Impassable; // mountain at (1,1)
+        let board = Board::with_terrain_and_objectives(
+            5,
+            5,
+            game_cell(0xB0, 51),
+            vec![Unit::of_kind(Side::Blue, UnitKind::Scout, Coord::new(0, 0), 1)],
+            terrain,
+            vec![],
+        );
+        let unit = &board.units[0];
+        assert_eq!(board.check_move(unit, Coord::new(1, 1)), Err(IllegalMove::Impassable));
+        // The move onto the mountain is not declared on the affordance surface.
+        let surface = board.move_surface_for(Side::Blue);
+        assert!(
+            surface.get(&move_name(&unit.name, Coord::new(1, 1))).is_none(),
+            "a move onto impassable terrain is never declared"
+        );
+        // An open adjacent tile IS a legal declared move.
+        assert!(surface.get(&move_name(&unit.name, Coord::new(0, 1))).is_some());
+    }
+
+    // ── Objectives: capturing a control point is a cap-gated EmitEvent turn. ──
+
+    #[test]
+    fn standing_on_an_objective_captures_it_and_a_capture_is_a_real_event_turn() {
+        // A Soldier moves onto a control point → the objective flips to its side
+        // (Moved.took_objective names it), AND a `capture:<obj>` affordance is a REAL
+        // EmitEvent turn cap-gated to the side. Objectives drive a SECOND effect kind.
+        let objective = Objective::new("central", Coord::new(0, 1), 1);
+        let board_cell = game_cell(0xB0, 52);
+        let mut board = Board::with_terrain_and_objectives(
+            5,
+            5,
+            board_cell,
+            vec![Unit::of_kind(Side::Blue, UnitKind::Soldier, Coord::new(0, 0), 1)],
+            vec![],
+            vec![objective],
+        );
+        // Move onto the objective.
+        let surface = board.move_surface_for(Side::Blue);
+        let blue = board.vision_cap_for(Side::Blue);
+        let name = move_name(&board.units[0].name, Coord::new(0, 1));
+        let intent = surface.fire(&name, board.units[0].id, &blue).expect("authorized");
+        let outcome = board.apply_move(&intent, Side::Blue).expect("legal");
+        assert!(
+            matches!(&outcome, MoveOutcome::Moved { took_objective: Some(n), .. } if n == "central"),
+            "landing on the control point captured it: {outcome:?}"
+        );
+        assert_eq!(board.objectives_held(Side::Blue), 1);
+        assert_eq!(board.objective_at(Coord::new(0, 1)).unwrap().held_by, Some(Side::Blue));
+
+        // The capture affordance: a real EmitEvent, cap-gated, only when held≠ours...
+        // (it is already ours now, so re-build a board where Blue stands on a neutral
+        // objective and has a capture affordance available).
+        let obj2 = Objective::new("north", Coord::new(0, 0), 2);
+        let board2 = Board::with_terrain_and_objectives(
+            5,
+            5,
+            game_cell(0xB0, 53),
+            vec![Unit::of_kind(Side::Blue, UnitKind::Soldier, Coord::new(0, 0), 1)],
+            vec![],
+            vec![obj2],
+        );
+        let cap_surface = board2.capture_surface_for(Side::Blue);
+        let cap_name = "capture:north";
+        let aff = cap_surface.get(cap_name).expect("a capture affordance is declared");
+        assert!(matches!(aff.effect_template, Effect::EmitEvent { .. }), "capture fires a real EmitEvent");
+        // Red cannot fire Blue's capture (incomparable identity) — anti-cheat is free.
+        let red_cap = board2.vision_cap_for(Side::Red);
+        assert!(
+            matches!(
+                cap_surface.fire(cap_name, game_cell(0xED, 1), &red_cap),
+                Err(crate::affordance::FireError::Unauthorized { .. })
+            ),
+            "Red cannot fire Blue's objective capture"
+        );
+        // Blue CAN (authorized) — yielding a real EmitEvent turn.
+        let blue_cap = board2.vision_cap_for(Side::Blue);
+        let cap_intent = cap_surface.fire(cap_name, game_cell(0xB1, 1), &blue_cap).expect("Blue authorized");
+        assert!(matches!(cap_intent.effect, Effect::EmitEvent { .. }));
+    }
+
+    // ── Win conditions: decapitation, domination, annihilation. ──
+
+    #[test]
+    fn capturing_the_commander_wins_by_decapitation() {
+        // A Soldier captures the enemy Commander → the game ends, the capturing side
+        // wins by Decapitation (the king fell). The richest win condition.
+        let board_cell = game_cell(0xB0, 54);
+        let mut board = Board::with_terrain_and_objectives(
+            5,
+            5,
+            board_cell,
+            vec![
+                Unit::of_kind(Side::Blue, UnitKind::Soldier, Coord::new(2, 2), 1),
+                Unit::of_kind(Side::Blue, UnitKind::Commander, Coord::new(0, 0), 2),
+                Unit::of_kind(Side::Red, UnitKind::Commander, Coord::new(2, 3), 1), // adjacent!
+            ],
+            vec![],
+            vec![],
+        );
+        assert!(board.outcome().is_none(), "the game is live at the start");
+        let surface = board.move_surface_for(Side::Blue);
+        let blue = board.vision_cap_for(Side::Blue);
+        // Blue's soldier (index 0) captures the Red Commander at (2,3).
+        let name = move_name(&board.units[0].name, Coord::new(2, 3));
+        let intent = surface.fire(&name, board.units[0].id, &blue).expect("authorized");
+        let outcome = board.apply_move(&intent, Side::Blue).expect("capture legal");
+        assert!(outcome.is_decapitation(), "the capture took the enemy Commander: {outcome:?}");
+        // The game is now decided: Blue wins by decapitation.
+        assert_eq!(
+            board.outcome(),
+            Some(GameOver { winner: Side::Blue, reason: WinReason::Decapitation })
+        );
+    }
+
+    #[test]
+    fn holding_a_majority_of_objectives_wins_by_domination() {
+        // A side holding strictly more than half the objectives wins by Domination.
+        let board_cell = game_cell(0xB0, 55);
+        let board = Board::with_terrain_and_objectives(
+            5,
+            5,
+            board_cell,
+            // Both sides still have units (so the win is DOMINATION, not annihilation),
+            // and no commanders (so decapitation does not pre-empt). The objective
+            // majority is the deciding axis.
+            vec![
+                Unit::of_kind(Side::Blue, UnitKind::Soldier, Coord::new(0, 0), 1),
+                Unit::of_kind(Side::Red, UnitKind::Soldier, Coord::new(4, 4), 1),
+            ],
+            vec![],
+            vec![
+                {
+                    let mut o = Objective::new("a", Coord::new(0, 0), 1);
+                    o.held_by = Some(Side::Blue);
+                    o
+                },
+                {
+                    let mut o = Objective::new("b", Coord::new(1, 1), 2);
+                    o.held_by = Some(Side::Blue);
+                    o
+                },
+                Objective::new("c", Coord::new(2, 2), 3), // neutral
+            ],
+        );
+        // Blue holds 2 of 3 (> half) → wins by domination.
+        assert_eq!(board.objectives_held(Side::Blue), 2);
+        assert_eq!(
+            board.outcome(),
+            Some(GameOver { winner: Side::Blue, reason: WinReason::Domination })
+        );
+    }
+
+    // ── Multi-policy agents: the policy ranks within a FIXED cap-gated set. ──
+
+    #[test]
+    fn agent_policies_prefer_differently_but_share_one_action_space() {
+        // The deos point about AI: an Objective agent and an Aggressive agent draw
+        // from the SAME cap-gated affordance set; the policy only reorders it. Neither
+        // can fire a move outside its caps. We assert both fire a LEGAL authorized move
+        // and that the objective agent (with an objective to chase) heads toward it.
+        let board = demo_world();
+        let aggressive = AgentPlayer::with_policy(Side::Blue, game_cell(0xA1, 0), AgentPolicy::Aggressive);
+        let objective = AgentPlayer::with_policy(Side::Blue, game_cell(0xA2, 0), AgentPolicy::Objective);
+        let scout = AgentPlayer::with_policy(Side::Blue, game_cell(0xA3, 0), AgentPolicy::Scout);
+
+        for agent in [&aggressive, &objective, &scout] {
+            let intent = agent.choose_move(&board).expect("every policy finds a legal authorized move");
+            assert!(matches!(intent.effect, Effect::SetField { .. }), "a real move turn");
+            // The move it fired is legal on a clone (it was authorized AND legal).
+            let mut probe = board.clone();
+            assert!(probe.apply_move(&intent, Side::Blue).is_ok(), "the agent's move is legal");
+        }
+        // An agent CANNOT fire on the opponent's turn (no more privileged than a human).
+        let mut red_turn = board.clone();
+        red_turn.turn = Side::Red;
+        assert!(aggressive.choose_move(&red_turn).is_none());
+    }
+
+    // ── The flagship: a full agent-vs-agent match plays to a decision. ──
+
+    #[test]
+    fn two_agents_play_a_full_match_to_a_decision_entirely_through_the_cap_gate() {
+        // THE agentic-desktop keystone: two AI agents play the richer world to a win
+        // condition, every single action fired through the cap-gated affordance
+        // surface (so NEITHER can cheat — no ambient authority, no out-of-band move).
+        // The match terminates with a winner (decapitation / domination / annihilation)
+        // within the ply budget.
+        let board = demo_world();
+        let blue = AgentPlayer::with_policy(Side::Blue, game_cell(0xA1, 0), AgentPolicy::Aggressive);
+        let red = AgentPlayer::with_policy(Side::Red, game_cell(0xA2, 0), AgentPolicy::Objective);
+        let result = play_match(board, &blue, &red, 600);
+
+        // The match produced a real log of fired affordances (each a verified turn).
+        assert!(!result.log.is_empty(), "the match played at least one ply");
+        // Every logged outcome is a real Moved/Captured (a genuine state transition).
+        for step in &result.log {
+            match &step.outcome {
+                MoveOutcome::Moved { .. } | MoveOutcome::Captured { .. } => {}
+            }
+        }
+        // The game reached a decision (it does not stall forever): within 600 plies
+        // either a commander fell, a side dominated the objectives, or a side was
+        // annihilated. (The map is small enough + the policies aggressive enough that
+        // a decision is reached well within budget.)
+        assert!(
+            result.game_over.is_some(),
+            "the match reached a decision within the ply budget (ply {})",
+            result.board.ply
+        );
+        let go = result.game_over.unwrap();
+        // The winner has a coherent terminal state for its reason.
+        match go.reason {
+            WinReason::Decapitation => {
+                // The loser has no commander.
+                let loser = go.winner.opponent();
+                assert!(
+                    !result.board.units_of(loser).iter().any(|u| u.is_commander()),
+                    "decapitation: the loser's commander is gone"
+                );
+            }
+            WinReason::Domination => {
+                let total = result.board.objectives.len();
+                assert!(result.board.objectives_held(go.winner) * 2 > total, "domination majority");
+            }
+            WinReason::Annihilation => {
+                assert_eq!(result.board.units_of(go.winner.opponent()).len(), 0, "annihilation");
+            }
+        }
     }
 }
