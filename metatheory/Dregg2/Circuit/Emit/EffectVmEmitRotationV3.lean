@@ -946,13 +946,334 @@ theorem noteSpendV3_satisfiedVm_v1 (hash : List ℤ → ℤ)
 #guard (let env : VmRowEnv := ⟨fun c => if c == 68 then 5 else 0, fun _ => 0, fun k => if k == 38 then 9 else 0⟩;
         decide (env.loc NULLIFIER_PARAM_COL ≠ env.pub ROT_NULLIFIER_PI))   -- mismatch ⇒ pin REJECTS
 
+/-! ### The SetField + BridgeMint runtime reconcile (the last rotation flip gate, C7).
+
+The model (the end-to-end `effect_vm_rotation_flip` prove) surfaced TWO runtime divergences in
+the rotated SetField / BridgeMint descriptors. Both are reconciled here so those turns ROTATE.
+
+**Seam 1 — the nonce tick.** The runtime trace generator (`circuit/src/effect_vm/trace.rs`)
+TICKS the per-cell sequence nonce on EVERY non-NoOp row: `Effect::SetField` →
+`new_state.nonce += 1`, `Effect::BridgeMint` → `new_state.nonce += 1` (only `Effect::NoOp`
+leaves it). `trace_rotated.rs::fill_block` copies that ticked nonce into the rotated `r1` limb
+(`row[base+2] = row[state_base + state::NONCE]`, the `weldsAt` r1↔NONCE weld). But the per-effect
+descriptors FREEZE it (`EffectVmEmitSetField.gNonceFreeze` / `EffectVmEmitMint.gNonceFix` are
+BOTH `after_nonce − before_nonce`), so `after_nonce = before_nonce` is UNSAT on the ticked trace.
+
+**Seam 2 — the value/credit param column.** The runtime puts the EFFECT's payload at `param1`,
+not `param0`: `Effect::SetField` writes `param0 = field_index`, `param1 = new_value`
+(`trace.rs` + the v1 hand-AIR `air.rs` `new_value = p1`); `Effect::BridgeMint` writes
+`param0 = mint_hash`, `param1 = value_lo` and credits `balance += value_lo`. But the per-effect
+descriptors read `param0`: `setFieldVmDescriptor`'s write gate reads `prmCol VALUE = prmCol
+param.AMOUNT = prmCol 0` (= the runtime's FIELD_INDEX), and `mintVmDescriptor`'s credit reads
+`prmCol param.AMOUNT = prmCol 0` (= the runtime's MINT_HASH). So both check the field write /
+balance credit against the WRONG column — UNSAT on the honest trace even with the nonce fixed.
+(The registry's BridgeMint leg is `mintVmDescriptor`, NOT `EffectVmEmitBridgeMint` — that module
+does not build in the shared tree, `EffectVmEmitV2` line 73 — so the param1 fix is applied to the
+mint descriptor's credit here rather than swapping descriptors.)
+
+This section builds TICK-faced + param1-corrected variants by REBUILDING each descriptor's
+constraint list: the nonce freeze gate becomes the transfer/noteSpend TICK gate
+`EffectVmEmitTransfer.gNonce = (after_nonce − before_nonce) − (1 − s_noop)` (the SAME
+`−(1 − selector)` term `transferVmDescriptor2R24` / `noteSpendVmDescriptor2R24` carry), and the
+field-write / balance-credit gate reads `prmCol 1` (the runtime's NEW_VALUE / value_lo). Every
+OTHER gate, transition, boundary pin, hash site, and range tooth is the per-effect descriptor's
+verbatim, so `rotateV3`'s parametric keystones (`rotV3_sound_v1`, `rotV3_binds_published`,
+`graduable_rotateV3`) compose unchanged (the graduable side conditions read only the unchanged
+sites/ranges). The per-effect FREEZE/param0 faithfulness theorems (in the un-owned
+`EffectVmEmitSetField` / `EffectVmEmitMint`) are UNTOUCHED — they describe their own descriptors;
+the rotated registry entries route through these corrected variants. The descriptor NAME is kept
+(`dregg-effectvm-setfield-v1` / `dregg-effectvm-mint-v1`), exactly as the v1 reconciles kept it.
+
+SOUNDNESS TOOTH (do NOT just make it SAT): the tick gate is ENFORCED — a row whose nonce delta is
+NOT the tick (`after_nonce ≠ before_nonce + 1` on a non-NoOp row) FAILS the gate and is UNSAT
+(`setFieldTick_rejects_wrong_nonce_delta` / `mintTick_rejects_wrong_nonce_delta`, both polarities
+`#guard`'d), and the corrected write/credit gate is ENFORCED — a row whose written field / credited
+balance does NOT match `prmCol 1` is UNSAT (`setFieldP1_rejects_wrong_value` /
+`mintP1_rejects_wrong_credit`). So the rotated leg binds the per-cell sequence counter AND the
+genuine payload column the runtime carries. -/
+
+/-- The runtime's value/credit param column: `param1` (NEW_VALUE for setField, value_lo for
+BridgeMint) — NOT `param0` (FIELD_INDEX / MINT_HASH). The v1 hand-AIR (`air.rs`) reads `p1`. -/
+def RUNTIME_VALUE_PARAM : Nat := 1
+
+/-- The runtime's SetField SELECTOR column: `sel::SET_FIELD = 2` (the trace generator writes
+`row[2] = 1` on the active setField row, `effect_selector` → `trace.rs`). This is the CORRECT
+selector column — the per-effect `EffectVmEmitSetField.SEL_SET_FIELD = 54` is a pre-existing bug
+(column 54 is `state_before.balance_lo = sbCol BALANCE_LO`, NOT a selector), so the corrected
+write gate gates by THIS column, never the per-effect constant. -/
+def SEL_SET_FIELD_COL : Nat := 2
+
+-- The runtime selector column is `sel::SET_FIELD = 2`, distinct from `sbCol BALANCE_LO = 54`
+-- (the column the buggy per-effect `EffectVmEmitSetField.SEL_SET_FIELD` actually names).
+#guard SEL_SET_FIELD_COL == 2
+#guard SEL_SET_FIELD_COL ≠ sbCol state.BALANCE_LO
+#guard EffectVmEmitSetField.SEL_SET_FIELD == sbCol state.BALANCE_LO  -- the bug, pinned
+
+/-- The nonce-FREEZE gate body the two stragglers carry (`EffectVmEmitSetField.gNonceFreeze` and
+`EffectVmEmitMint.gNonceFix` are BOTH this): `after_nonce − before_nonce`. -/
+def gNonceFreezeBody : EmittedExpr :=
+  EffectVmEmitTransfer.eSub (EffectVmEmitTransfer.eSA state.NONCE)
+    (EffectVmEmitTransfer.eSB state.NONCE)
+
+theorem setField_gNonceFreeze_eq : EffectVmEmitSetField.gNonceFreeze = gNonceFreezeBody := rfl
+theorem mint_gNonceFix_eq : EffectVmEmitMint.gNonceFix = gNonceFreezeBody := rfl
+
+/-! #### The TICK-faced + param1-corrected SetField (per slot). -/
+
+/-- The field-`slot` WRITE gate reading the RUNTIME value column (`prmCol 1 = NEW_VALUE`),
+SELECTOR-GATED by `s_set_field`: `s_set_field · (fields[slot]_after − param1) = 0`.
+
+Two corrections over the per-effect `gFieldWrite` (which is `fields[slot]_after − prmCol 0`,
+UNGATED): (1) it reads `param1` (the runtime NEW_VALUE — `air.rs` `new_value = p1`), not `param0`
+(FIELD_INDEX); (2) it is gated by `s_set_field`, exactly as the runtime hand-AIR gates every
+setField constraint (`air.rs` `c = s_setfield · …`). The gating is LOAD-BEARING for multi-row
+traces: the field write PERSISTS into the after-state, so a trailing NoOp PAD row carries
+`fields[slot]_after = (the written value)` while its `param1 = 0` — an UNGATED write gate would
+fire `written_value − 0 ≠ 0` and the honest 64-row trace would be UNSAT. With the `s_set_field`
+factor the gate VANISHES on NoOp rows (`s_set_field = 0`) and binds only the ACTIVE row
+(`s_set_field = 1`), matching the runtime. (The freeze gates degenerate naturally on NoOp —
+`after − before = frozen − frozen = 0` — so only the write gate needs the factor.) -/
+def gFieldWriteP1 (slot : Fin 8) : EmittedExpr :=
+  .mul (.var SEL_SET_FIELD_COL)
+    (EffectVmEmitTransfer.eSub (EffectVmEmitTransfer.eSA (state.FIELD_BASE + slot.val))
+      (EffectVmEmitTransfer.ePrm RUNTIME_VALUE_PARAM))
+
+/-- The setField row gates with (1) the nonce FREEZE gate swapped for the transfer/noteSpend TICK
+gate `EffectVmEmitTransfer.gNonce` and (2) the WRITE gate reading the runtime value column
+`prmCol 1`. Every OTHER gate (the bal/cap/reserved freezes, the seven other-field passthroughs)
+is `EffectVmEmitSetField.setFieldRowGates`'s verbatim. -/
+def setFieldRowGatesTick (slot : Fin 8) : List VmConstraint :=
+  [ .gate (gFieldWriteP1 slot)
+  , .gate EffectVmEmitSetField.gBalLoFreeze
+  , .gate EffectVmEmitTransfer.gBalHi
+  , .gate EffectVmEmitTransfer.gNonce
+  , .gate EffectVmEmitTransfer.gCapPass
+  , .gate EffectVmEmitTransfer.gResPass ]
+  ++ EffectVmEmitSetField.gOtherFieldsAll slot
+
+/-- **`setFieldTickFace slot`** — `setFieldVmDescriptor slot` with the nonce gate ticked AND the
+write gate reading the runtime value column. The name, width, PI count, hash sites, and ranges are
+the per-effect descriptor's verbatim; only the constraint list changes those two gates (so
+`graduable` — which reads only sites/ranges — is unchanged, and the rotated keystones compose). -/
+def setFieldTickFace (slot : Fin 8) : EffectVmDescriptor :=
+  { EffectVmEmitSetField.setFieldVmDescriptor slot with
+    constraints := setFieldRowGatesTick slot }
+
+/-- The tick-faced setField shares the per-effect descriptor's sites + ranges (both slot-FREE:
+`transferHashSites` and the two balance-limb range teeth), so it is graduable (the parametric
+`graduable_rotateV3` premise). `graduable` reads only `hashSites`/`ranges`, invisible to the
+constraint swap, so this is the constant `transferHashSites`-graduability — `rfl`. -/
+theorem graduable_setFieldTickFace (slot : Fin 8) :
+    graduable (setFieldTickFace slot) = true := rfl
+
+/-- **`setFieldV3 slot`** — the rotated tick-faced setField (the registry member). -/
+def setFieldV3 (slot : Fin 8) : EffectVmDescriptor2 := v3Of (setFieldTickFace slot)
+
+/-- **The nonce TICK holds on a satisfying non-NoOp setField row.** A row satisfying the rotated
+tick-faced setField, with `s_noop = 0`, carries `after_nonce = before_nonce + 1` (the runtime
+tick) — the rotated re-statement of the transfer/noteSpend nonce gate, now on setField. -/
+theorem setFieldV3_pins_nonce_tick (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst isLast : Bool) (hnoop : env.loc sel.NOOP = 0)
+    (h : satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast) :
+    env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1 := by
+  have hmem : VmConstraint.gate EffectVmEmitTransfer.gNonce ∈ (rotateV3 (setFieldTickFace slot)).constraints := by
+    apply List.mem_append_left
+    show _ ∈ setFieldRowGatesTick slot
+    simp [setFieldRowGatesTick]
+  have hg := h.1 _ hmem
+  simp only [VmConstraint.holdsVm, EffectVmEmitTransfer.gNonce, EffectVmEmitTransfer.eSub,
+    EffectVmEmitTransfer.eSA, EffectVmEmitTransfer.eSB, EffectVmEmitTransfer.eSelNoop,
+    EmittedExpr.eval] at hg
+  rw [hnoop] at hg
+  linarith [hg]
+
+/-- **ANTI-GHOST (wrong nonce delta ⇒ UNSAT)** — the C7 soundness tooth for setField. A non-NoOp
+row whose nonce delta is NOT the tick (`after_nonce ≠ before_nonce + 1`) does NOT satisfy the
+rotated tick-faced setField: the swapped tick gate REJECTS it. A forged passthrough
+(`after = before`) is the special case the FREEZE descriptor wrongly accepted; it is now UNSAT. -/
+theorem setFieldTick_rejects_wrong_nonce_delta (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst isLast : Bool) (hnoop : env.loc sel.NOOP = 0)
+    (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + 1) :
+    ¬ satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast :=
+  fun h => hwrong (setFieldV3_pins_nonce_tick slot hash env isFirst isLast hnoop h)
+
+/-- **The corrected WRITE binds the runtime value column on the ACTIVE row.** A row satisfying the
+rotated param1-corrected setField with `s_set_field = 1` (the active setField row) carries
+`fields[slot]_after = param1` (the runtime NEW_VALUE) — the selector-gated write gate, on the
+active row, reads the column the trace generator wrote the value to. (On NoOp rows
+`s_set_field = 0` the gate vanishes, so the binding is exactly the runtime's gated semantics.) -/
+theorem setFieldV3_pins_value (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst isLast : Bool) (hactive : env.loc SEL_SET_FIELD_COL = 1)
+    (h : satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast) :
+    env.loc (saCol (state.FIELD_BASE + slot.val)) = env.loc (prmCol RUNTIME_VALUE_PARAM) := by
+  have hmem : VmConstraint.gate (gFieldWriteP1 slot) ∈ (rotateV3 (setFieldTickFace slot)).constraints := by
+    apply List.mem_append_left
+    show _ ∈ setFieldRowGatesTick slot
+    simp [setFieldRowGatesTick]
+  have hg := h.1 _ hmem
+  simp only [VmConstraint.holdsVm, gFieldWriteP1, EffectVmEmitTransfer.eSub,
+    EffectVmEmitTransfer.eSA, EffectVmEmitTransfer.ePrm, EmittedExpr.eval] at hg
+  rw [hactive] at hg
+  linarith [hg]
+
+/-- **ANTI-GHOST (wrong written value ⇒ UNSAT)** — the C7 param-column soundness tooth for
+setField. An ACTIVE setField row (`s_set_field = 1`) whose written field does NOT equal `param1`
+(the runtime value column) does NOT satisfy the corrected descriptor: the gated write gate, on the
+active row, REJECTS it. -/
+theorem setFieldP1_rejects_wrong_value (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst isLast : Bool) (hactive : env.loc SEL_SET_FIELD_COL = 1)
+    (hwrong : env.loc (saCol (state.FIELD_BASE + slot.val)) ≠ env.loc (prmCol RUNTIME_VALUE_PARAM)) :
+    ¬ satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast :=
+  fun h => hwrong (setFieldV3_pins_value slot hash env isFirst isLast hactive h)
+
+/-! #### The TICK-faced + param1-corrected BridgeMint (= the `mintVmDescriptor2R24` member). -/
+
+/-- Balance-lo CREDIT body reading the RUNTIME value column (`prmCol 1 = value_lo`):
+`new_bal_lo − old_bal_lo − param1` (so `new = old + value_lo`). (The per-effect `gBalLoCredit`
+reads `prmCol 0 = MINT_HASH` on a BridgeMint row; the runtime credits `param1 = value_lo`.) -/
+def gBalLoCreditP1 : EmittedExpr :=
+  .add (EffectVmEmitTransfer.eSub (EffectVmEmitTransfer.eSA state.BALANCE_LO)
+          (EffectVmEmitTransfer.eSB state.BALANCE_LO))
+    (.mul (.const (-1)) (EffectVmEmitTransfer.ePrm RUNTIME_VALUE_PARAM))
+
+/-- The mint row gates with (1) the nonce FREEZE gate (`gNonceFix`) swapped for the TICK gate and
+(2) the balance credit reading the runtime value column `prmCol 1`. The bal-hi/cap/reserved
+freezes and 8 field freezes are `EffectVmEmitMint.mintRowGates`'s verbatim. -/
+def mintRowGatesTick : List VmConstraint :=
+  [ .gate gBalLoCreditP1
+  , .gate EffectVmEmitMint.gBalHiFix
+  , .gate EffectVmEmitTransfer.gNonce
+  , .gate EffectVmEmitMint.gCapFix
+  , .gate EffectVmEmitMint.gResFix ]
+  ++ EffectVmEmitMint.gFieldFixAll
+
+/-- **`mintTickFace`** — `mintVmDescriptor` (the BridgeMint registry leg) with the nonce gate
+ticked AND the credit reading the runtime value column. The transitions + boundary PI pins + hash
+sites + ranges are verbatim; only those two row gates change. -/
+def mintTickFace : EffectVmDescriptor :=
+  { EffectVmEmitMint.mintVmDescriptor with
+    constraints := mintRowGatesTick ++ EffectVmEmitTransfer.transitionAll
+      ++ EffectVmEmitTransfer.boundaryFirstPins ++ EffectVmEmitTransfer.boundaryLastPins }
+
+/-- The tick-faced mint shares the per-effect descriptor's sites + ranges, so it is graduable. -/
+theorem graduable_mintTickFace : graduable mintTickFace = true := rfl
+
+/-- **`mintV3`** — the rotated tick-faced BridgeMint (the `mintVmDescriptor2R24` registry member). -/
+def mintV3 : EffectVmDescriptor2 := v3Of mintTickFace
+
+/-- **The nonce TICK holds on a satisfying non-NoOp BridgeMint row.** -/
+theorem mintV3_pins_nonce_tick (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hnoop : env.loc sel.NOOP = 0)
+    (h : satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast) :
+    env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1 := by
+  have hmem : VmConstraint.gate EffectVmEmitTransfer.gNonce ∈ (rotateV3 mintTickFace).constraints := by
+    apply List.mem_append_left
+    show _ ∈ mintTickFace.constraints
+    simp [mintTickFace, mintRowGatesTick]
+  have hg := h.1 _ hmem
+  simp only [VmConstraint.holdsVm, EffectVmEmitTransfer.gNonce, EffectVmEmitTransfer.eSub,
+    EffectVmEmitTransfer.eSA, EffectVmEmitTransfer.eSB, EffectVmEmitTransfer.eSelNoop,
+    EmittedExpr.eval] at hg
+  rw [hnoop] at hg
+  linarith [hg]
+
+/-- **ANTI-GHOST (wrong nonce delta ⇒ UNSAT)** — the C7 soundness tooth for BridgeMint. -/
+theorem mintTick_rejects_wrong_nonce_delta (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst isLast : Bool) (hnoop : env.loc sel.NOOP = 0)
+    (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + 1) :
+    ¬ satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast :=
+  fun h => hwrong (mintV3_pins_nonce_tick hash env isFirst isLast hnoop h)
+
+/-- **The corrected CREDIT binds the runtime value column.** A row satisfying the rotated
+param1-corrected BridgeMint carries `bal_lo_after = bal_lo_before + param1` (the runtime
+value_lo) — the credit gate now reads the column the trace generator credited from. -/
+theorem mintV3_pins_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (h : satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast) :
+    env.loc (saCol state.BALANCE_LO)
+      = env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol RUNTIME_VALUE_PARAM) := by
+  have hmem : VmConstraint.gate gBalLoCreditP1 ∈ (rotateV3 mintTickFace).constraints := by
+    apply List.mem_append_left
+    show _ ∈ mintTickFace.constraints
+    simp [mintTickFace, mintRowGatesTick]
+  have hg := h.1 _ hmem
+  simp only [VmConstraint.holdsVm, gBalLoCreditP1, EffectVmEmitTransfer.eSub,
+    EffectVmEmitTransfer.eSA, EffectVmEmitTransfer.eSB, EffectVmEmitTransfer.ePrm,
+    EmittedExpr.eval] at hg
+  linarith [hg]
+
+/-- **ANTI-GHOST (wrong credit ⇒ UNSAT)** — the C7 param-column soundness tooth for BridgeMint.
+A row whose post-balance is NOT `before + param1` (the runtime value_lo) is UNSAT. -/
+theorem mintP1_rejects_wrong_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hwrong : env.loc (saCol state.BALANCE_LO)
+      ≠ env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol RUNTIME_VALUE_PARAM)) :
+    ¬ satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast :=
+  fun h => hwrong (mintV3_pins_credit hash env isFirst isLast h)
+
+#assert_axioms graduable_setFieldTickFace
+#assert_axioms setFieldV3_pins_nonce_tick
+#assert_axioms setFieldTick_rejects_wrong_nonce_delta
+#assert_axioms setFieldV3_pins_value
+#assert_axioms setFieldP1_rejects_wrong_value
+#assert_axioms graduable_mintTickFace
+#assert_axioms mintV3_pins_nonce_tick
+#assert_axioms mintTick_rejects_wrong_nonce_delta
+#assert_axioms mintV3_pins_credit
+#assert_axioms mintP1_rejects_wrong_credit
+
+-- The tick-faced descriptors keep the per-effect width/PI-count/site/range shape (only the
+-- nonce gate body changed): graduable, and the rotated form is the standard 311-col / 38-PI member.
+#guard graduable (setFieldTickFace 0)
+#guard graduable mintTickFace
+#guard (setFieldV3 0).traceWidth == EFFECT_VM_WIDTH + APPENDIX_SPAN
+#guard mintV3.traceWidth == EFFECT_VM_WIDTH + APPENDIX_SPAN
+#guard (setFieldV3 0).piCount == 34 + 4
+#guard mintV3.piCount == 34 + 4
+-- The swap is a ONE-gate change: the tick-faced constraint list has the SAME length as the
+-- per-effect descriptor's (a gate replaced a gate, none added or removed).
+#guard (setFieldTickFace 0).constraints.length
+        == (EffectVmEmitSetField.setFieldVmDescriptor 0).constraints.length
+#guard mintTickFace.constraints.length == EffectVmEmitMint.mintVmDescriptor.constraints.length
+-- The tick gate IS the transfer/noteSpend tick gate (the `−(1 − selector)` term): the rotated
+-- tick-faced constraint list carries `EffectVmEmitTransfer.gNonce` at the nonce slot, and the
+-- freeze-gate body is GONE — the two tick-faced descriptors no longer hold the bare freeze gate
+-- the `mismodels_nonce_tick` predicate guarded against. (`setFieldRowGatesTick`'s 4th gate / the
+-- mint list's 3rd gate ARE the tick gate; `setField{V3_pins,Tick_rejects}_*` prove its membership +
+-- enforcement formally, so this is the lightweight positional witness.)
+#guard (setFieldRowGatesTick 0).length == 13   -- 6 head gates + 7 other-field freezes
+#guard mintRowGatesTick.length == 13           -- 5 head gates + 8 field freezes
+-- BOTH POLARITIES of the NONCE tooth, executable on a toy row (NOOP = col 0; sb NONCE = 56;
+-- sa NONCE = STATE_AFTER_BASE(76) + NONCE(2) = 78). A ticked row (after = before + 1, s_noop = 0)
+-- HOLDS the tick gate; a forged passthrough (after = before) FAILS it. (Mirrors transfer's
+-- `gNonce` adversarial #guards — the `−(1 − selector)` term makes passthrough UNSAT off NoOp.)
+#guard (let env : VmRowEnv := ⟨fun c => if c == 56 then 5 else if c == 78 then 6 else 0, fun _ => 0, fun _ => 0⟩;
+        decide ((EffectVmEmitTransfer.gNonce).eval env.loc = 0))   -- tick (5→6) ⇒ gate holds
+#guard (let env : VmRowEnv := ⟨fun c => if c == 56 then 5 else if c == 78 then 5 else 0, fun _ => 0, fun _ => 0⟩;
+        decide ((EffectVmEmitTransfer.gNonce).eval env.loc ≠ 0))   -- passthrough (5→5) ⇒ gate REJECTS
+-- The corrected WRITE/CREDIT gates read `prmCol 1` (NEW_VALUE / value_lo = col PARAM_BASE+1 = 69),
+-- NOT `prmCol 0` (FIELD_INDEX / MINT_HASH = col 68). Positional witness + both polarities.
+#guard prmCol RUNTIME_VALUE_PARAM == 69
+-- setField WRITE (selector-gated by s_set_field = col SEL_SET_FIELD_COL = 2): on the ACTIVE row
+-- (s_set_field = 1), field0_after (saCol FIELD_BASE = 79) == param1 (69). Match holds; mismatch
+-- rejects. On a NoOp row (s_set_field = 0) the gate VANISHES (third guard).
+#guard (let env : VmRowEnv := ⟨fun c => if c == 2 then 1 else if c == 79 then 7 else if c == 69 then 7 else 0, fun _ => 0, fun _ => 0⟩;
+        decide ((gFieldWriteP1 0).eval env.loc = 0))   -- active + (field0_after == param1) ⇒ holds
+#guard (let env : VmRowEnv := ⟨fun c => if c == 2 then 1 else if c == 79 then 7 else if c == 69 then 9 else 0, fun _ => 0, fun _ => 0⟩;
+        decide ((gFieldWriteP1 0).eval env.loc ≠ 0))   -- active + (field0_after ≠ param1) ⇒ REJECTS
+#guard (let env : VmRowEnv := ⟨fun c => if c == 79 then 7 else if c == 69 then 9 else 0, fun _ => 0, fun _ => 0⟩;
+        decide ((gFieldWriteP1 0).eval env.loc = 0))   -- NoOp (s_set_field = 0) ⇒ gate VANISHES
+-- mint CREDIT: bal_lo_after (76) == bal_lo_before (54) + param1 (69). Honest credit holds; wrong rejects.
+#guard (let env : VmRowEnv := ⟨fun c => if c == 54 then 100 else if c == 76 then 130 else if c == 69 then 30 else 0, fun _ => 0, fun _ => 0⟩;
+        decide (gBalLoCreditP1.eval env.loc = 0))   -- 130 == 100 + 30 ⇒ holds
+#guard (let env : VmRowEnv := ⟨fun c => if c == 54 then 100 else if c == 76 then 999 else if c == 69 then 30 else 0, fun _ => 0, fun _ => 0⟩;
+        decide (gBalLoCreditP1.eval env.loc ≠ 0))   -- 999 ≠ 100 + 30 ⇒ REJECTS
+
 /-- **`v3Registry`** — the full 35-member cohort at the rotated block (the 27 v2-graduated members
 + the 8 STEP-1-widened; keys = the v2 keys suffixed `R24`; wire strings via `emitVmJson2`; driver
 `EmitRotationV3.lean`). -/
 def v3Registry : List (String × EffectVmDescriptor2) :=
   [ ("transferVmDescriptor2R24", v3Of EffectVmEmitTransfer.transferVmDescriptor)
   , ("burnVmDescriptor2R24", v3Of EffectVmEmitBurn.burnVmDescriptor)
-  , ("mintVmDescriptor2R24", v3Of EffectVmEmitMint.mintVmDescriptor)
+  , ("mintVmDescriptor2R24", mintV3)
   , ("noteSpendVmDescriptor2R24", noteSpendV3)
   , ("noteCreateVmDescriptor2R24", v3Of EffectVmEmitNoteCreate.noteCreateVmDescriptor)
   , ("cellSealVmDescriptor2R24", v3Of EffectVmEmitCellSeal.cellSealVmDescriptor)
@@ -991,8 +1312,7 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
   , ("cellUnsealVmDescriptor2R24", v3Of EffectVmEmitCellUnseal.cellUnsealVmDescriptor)
   , ("emitEventVmDescriptor2R24", v3Of EffectVmEmitEmitEvent.emitEventVmDescriptor) ]
   ++ (List.finRange 8).map fun slot =>
-      (s!"setFieldVmDescriptor2-{slot.val}R24",
-        v3Of (EffectVmEmitSetField.setFieldVmDescriptor slot))
+      (s!"setFieldVmDescriptor2-{slot.val}R24", setFieldV3 slot)
 
 #guard v3Registry.length == 36
 -- Every registry entry emits a versioned v2 wire string with the rotated width, the five

@@ -374,9 +374,9 @@ fn rotation_witness_for_self_sovereign_impl(
     // caller passes `None` and the v1 leg runs. This keeps live-turn proving robust across every
     // effect shape (no-ops, non-graduated effects) while the cohort proves rotated.
     let vm_effects = AgentCipherclerk::convert_effects_to_vm(&before_cell.id(), effects);
-    let lead_name = vm_effects.first().and_then(
-        dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect,
-    );
+    let lead_name = vm_effects
+        .first()
+        .and_then(dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect);
     let cohort_ok = lead_name.is_some()
         && vm_effects.iter().all(|e| {
             dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect(e)
@@ -390,7 +390,9 @@ fn rotation_witness_for_self_sovereign_impl(
     let after_w = rw::produce(after_cell, &ctx_ledger, &nullifier_root, receipt_hashes);
 
     Some(dregg_sdk::RotationTurnWitness::for_effects(
-        before_w, after_w, &vm_effects,
+        before_w,
+        after_w,
+        &vm_effects,
     ))
 }
 
@@ -464,9 +466,9 @@ fn rotation_witness_for_capability_turn(
     // the v1 leg runs. The rotated prover fails closed on a non-cohort / heterogeneous turn, so this
     // keeps live capability-turn proving robust.
     let vm_effects = AgentCipherclerk::convert_effects_to_vm(&before_cell.id(), effects);
-    let lead_name = vm_effects.first().and_then(
-        dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect,
-    );
+    let lead_name = vm_effects
+        .first()
+        .and_then(dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect);
     let cohort_ok = lead_name.is_some()
         && vm_effects.iter().all(|e| {
             dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect(e)
@@ -476,42 +478,24 @@ fn rotation_witness_for_capability_turn(
         return None;
     }
 
-    // BROKEN-DESCRIPTOR GATE (a NAMED SEAM — see below): two rotated R=24 descriptors assert nonce
-    // PASSTHROUGH (`after_nonce == before_nonce`) while their effect TICKS the nonce, so the rotated
-    // prover would fail CLOSED on a real such turn. We fall back to the v1 leg for them rather than
-    // commit to a rotated prove that errors (same graceful discipline as the cohort gate). This is a
-    // circuit/descriptor defect (the Lean `EffectVmEmitRotationV3` SetField/BridgeMint nonce
-    // constraint must model the tick, as `transferVmDescriptor2R24` already does) — OUT OF THIS
-    // LANE's scope (no circuit/ edits). Until it is fixed, a cap-gated turn whose actor effect is a
-    // SetField or BridgeMint keeps the v1 leg; every other rotatable cohort effect (Transfer, Burn,
-    // Grant/Revoke/Attenuate, NoteSpend, …) rotates.
-    if vm_effects
-        .iter()
-        .any(rotated_descriptor_mismodels_nonce_tick)
-    {
-        return None;
-    }
+    // The SetField/BridgeMint nonce-tick seam is CLOSED (model-found, then fixed in-circuit): the
+    // rotated `setFieldVmDescriptor2-{0..7}R24` + `mintVmDescriptor2R24` descriptors now carry the
+    // tick-modelling `(after_nonce − before_nonce) − (1 − selector)` gate (Lean
+    // `EffectVmEmitRotationV3.{setFieldTickFace,mintTickFace}` — the SAME `−(1 − selector)` term
+    // `transferVmDescriptor2R24` / `noteSpendVmDescriptor2R24` carry), matching the runtime
+    // `new_state.nonce += 1` the trace generator writes on every non-NoOp row. So a SetField /
+    // BridgeMint actor turn proves ROTATED (the descriptor is SAT on the ticked trace, and a forged
+    // nonce delta is UNSAT — `setFieldTick_rejects_wrong_nonce_delta` / `mintTick_rejects_wrong_nonce_delta`).
+    // No broken-descriptor fallback remains: EVERY cohort effect rotates.
 
     let before_w = rw::produce(before_cell, &ctx_ledger, &nullifier_root, receipt_hashes);
     let after_w = rw::produce(after_cell, &ctx_ledger, &nullifier_root, receipt_hashes);
 
     Some(dregg_sdk::RotationTurnWitness::for_effects(
-        before_w, after_w, &vm_effects,
+        before_w,
+        after_w,
+        &vm_effects,
     ))
-}
-
-/// The rotated R=24 descriptors that assert nonce PASSTHROUGH but whose effect TICKS the nonce, so
-/// a real such turn is UNSAT on the rotated leg (a circuit/descriptor defect, tracked; NOT fixable
-/// from the node lane). Returns `true` for a vm-effect whose rotated descriptor has this defect, so
-/// the rotation builders fall back to v1 for it. The defect was confirmed by inspecting the staged
-/// registry: `setFieldVmDescriptor2-{0..7}R24` + `mintVmDescriptor2R24` carry the bare
-/// `(after_nonce − before_nonce)` gate, while `transferVmDescriptor2R24` / `noteSpendVmDescriptor2R24`
-/// carry the tick-modelling `(after_nonce − before_nonce) − (1 − selector)` gate. (GrantCapability /
-/// RevokeCapability / AttenuateCapability also carry the bare gate but do NOT tick the nonce, so for
-/// them the bare gate is CORRECT and they rotate — they are deliberately NOT excluded here.)
-fn rotated_descriptor_mismodels_nonce_tick(e: &dregg_circuit::effect_vm::Effect) -> bool {
-    use dregg_circuit::effect_vm::Effect as VmEffect;
-    matches!(e, VmEffect::SetField { .. } | VmEffect::BridgeMint { .. })
 }
 
 pub fn prove_and_verify_finalized_turn(
@@ -1005,8 +989,7 @@ mod tests {
         // empty c-list — exactly what the synthetic-shaped gate admits). In the live node path
         // the agent id IS the cell's id (the cell is looked up BY the agent id), so the effect's
         // `from` + the proving `agent` must be `before_cell.id()`, not an unrelated raw id.
-        let before_cell =
-            dregg_cell::Cell::with_balance([0xA1; 32], [0u8; 32], pre_balance as i64);
+        let before_cell = dregg_cell::Cell::with_balance([0xA1; 32], [0u8; 32], pre_balance as i64);
         let alice = before_cell.id();
         // The after-cell: the transfer debits alice's balance by the amount.
         let amount: u64 = 100;
@@ -1037,9 +1020,15 @@ mod tests {
         );
 
         // Prove the finalized turn ROTATED + gate acceptance (the live commit-path call).
-        let proven =
-            prove_and_verify_finalized_turn(&alice, pre_balance, pre_nonce, &effects, turn_hash, rotation)
-                .expect("the rotated self-sovereign turn must prove + verify");
+        let proven = prove_and_verify_finalized_turn(
+            &alice,
+            pre_balance,
+            pre_nonce,
+            &effects,
+            turn_hash,
+            rotation,
+        )
+        .expect("the rotated self-sovereign turn must prove + verify");
 
         // The composed proof must carry the ROTATED effect-vm leg (not the v1 `"effect-vm"`).
         let labels: Vec<&str> = proven
@@ -1631,7 +1620,12 @@ mod tests {
         // The action transfers 100 FROM the agent TO the recipient, authorized by the self-cap.
         let turn = wrap_turn(
             agent_id,
-            transfer_action(agent_id, recipient_id, 100, Authorization::Breadstuff(token)),
+            transfer_action(
+                agent_id,
+                recipient_id,
+                100,
+                Authorization::Breadstuff(token),
+            ),
         );
         let effects: Vec<dregg_turn::Effect> = turn
             .call_forest
@@ -1643,9 +1637,17 @@ mod tests {
             TurnResult::Committed { receipt, .. } => receipt,
             other => panic!("self-cap breadstuff transfer must commit, got {other:?}"),
         };
-        let after_cell = ledger.get(&agent_id).expect("agent present after exec").clone();
+        let after_cell = ledger
+            .get(&agent_id)
+            .expect("agent present after exec")
+            .clone();
         (
-            receipt, agent_id, pre_cap_root, effects, before_cell, after_cell,
+            receipt,
+            agent_id,
+            pre_cap_root,
+            effects,
+            before_cell,
+            after_cell,
         )
     }
 
@@ -1979,8 +1981,9 @@ mod tests {
 
         // Prove WITHOUT the cap leg (the legacy self-sovereign prover), then
         // try to pass it off as the capability-gated proof.
-        let proven = prove_and_verify_finalized_turn(&agent_id, 1_000, 0, &effects, [0xD2u8; 32], None)
-            .expect("legless proof proves");
+        let proven =
+            prove_and_verify_finalized_turn(&agent_id, 1_000, 0, &effects, [0xD2u8; 32], None)
+                .expect("legless proof proves");
         let expectation = dregg_sdk::CapMembershipExpectation {
             leaf: consumed.cap_leaf(),
             cap_root: pre_cap_root,
@@ -2036,7 +2039,10 @@ mod tests {
         // with the v1 cap pre-state. This is the discipline that keeps a zero-pk/empty-authority
         // stub from ever being laundered onto the rotated path.
         let empty_root = dregg_circuit::cap_root::empty_capability_root();
-        assert_ne!(empty_root, pre_cap_root, "the fixture holds a non-empty c-list");
+        assert_ne!(
+            empty_root, pre_cap_root,
+            "the fixture holds a non-empty c-list"
+        );
         let w_bad = rotation_witness_for_capability(
             1_000,
             0,
@@ -2164,8 +2170,14 @@ mod tests {
 
         // The committed grant is NARROW (Transfer only, EFFECT_TRANSFER = 1<<1 = 2) — the inflation
         // below is a REAL amplification, not a no-op.
-        assert_eq!(consumed.leaf_mask_lo, 2, "fixture grants a Transfer-only mask");
-        assert_eq!(consumed.leaf_mask_hi, 0, "fixture grants a Transfer-only mask");
+        assert_eq!(
+            consumed.leaf_mask_lo, 2,
+            "fixture grants a Transfer-only mask"
+        );
+        assert_eq!(
+            consumed.leaf_mask_hi, 0,
+            "fixture grants a Transfer-only mask"
+        );
 
         // (a) PROVER SIDE on the rotated path: an OVER-GRANTED (inflated-mask) witness has no
         // membership path to the canonical cap_root → the cap path refuses even WITH the rotation

@@ -807,7 +807,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "535ce9173d70fc39c1b83f28035e4506db376770944361ee4104cb271b189773";
+    "a531cf0d073d645729f59e73481b1c28f7026586f82d2e1d06843793bba6bbb5";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -1730,7 +1730,10 @@ mod tests {
                 );
             }
         }
-        assert_eq!(n, 36, "expected the full 36-member cohort (28 v2-graduated + 8 widened)");
+        assert_eq!(
+            n, 36,
+            "expected the full 36-member cohort (28 v2-graduated + 8 widened)"
+        );
     }
 
     /// The widened-entry codec teeth: round-trip + FAIL-CLOSED decode. A forged
