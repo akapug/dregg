@@ -107,6 +107,14 @@ surface/`, 20/0) · sdk pg-native (sdk-py 71/4-skip + sdk-ts 74/0). Open residua
   it not-yet-covered (ratchet bumped 9→10). CLOSURE: thread a real `FinalizedRootAuthority` (the finalized-state
   oracle the cell-side evaluator already consumes) into the executor so ObservedFieldEquals can ACCEPT (not only
   the fail-closed REJECT) + add the accept/reject pair to `coverage_state_constraints.rs` → ratchet back to 9.
+- **`cargo check --workspace --tests` is broadly RED — pre-existing dregg3-reduction test-corpus rot** (named
+  2026-06-14, surfaced by the ObservedFieldEquals convergence gauntlet once the WitnessBundle ripple closed):
+  ~172 `cannot find` errors (E0425/E0422/E0433 — stale `use Effect/Turn/TurnExecutor/Action/CallForest/…`) in
+  the TEST targets of `protocol-tests/`, `dregg-dsl-tests/`, `dregg-tests` (`tests/src/`), and the `#[cfg(test)]`
+  modules of `cell`/`turn`/`circuit`/`blocklace`/`bridge`/`rbg`/`token`/`trace`. Every crate LIB compiles — this
+  is pure test-module bit-rot from the verb reduction, invisible because the default nextest profile filters it
+  (per-crate green is the dev loop). CLOSURE: a "green the test corpus" lane — repair the stale imports file-by-
+  file (most cascade from one missing `use` per file) until `--workspace --tests` = 0 errors, then keep it in CI.
 
 ## Rides THE ROTATION (dies at or lands with the one VK epoch — do not do separately)
 
