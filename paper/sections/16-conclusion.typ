@@ -1,5 +1,5 @@
 // =============================================================================
-// Section 11: Conclusion
+// Section 16: Conclusion
 // =============================================================================
 
 #import "../defs.typ": lean
@@ -22,6 +22,17 @@ nothing and trusting no executor
 (#lean("RecursiveAggregation.light_client_verifies_whole_history")). A server
 that ran the protocol wrong cannot produce a verifying aggregate; the pale ghost
 has no proof.
+
+The same capability and the same check carry across a distance parameter and
+down through the stack. A local microkernel object and a distributed cell are
+one attenuable reference whose single-machine limit is the strong case, not the
+degraded one; on seL4 the kernel's capability graph isolates the domains and
+dregg's mediates the cells within, with a real prover on the device; in a
+database reads are SQL and writes are verified turns; and on the desktop a window
+is a capability whose rendering's non-interference and rehydration are kernel
+theorems. The proof architecture holds all of this together as it evolves: the
+circuit rotates under proof, and every finalized turn stays verifiable across
+shapes, so the one root a stranger checks always covers the whole history.
 
 That is the one check a stranger makes, and it is the whole of what they must
 trust.

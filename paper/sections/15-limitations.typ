@@ -1,5 +1,5 @@
 // =============================================================================
-// Section 10: Limitations
+// Section 15: Limitations
 // =============================================================================
 
 #import "../defs.typ": lean
@@ -43,3 +43,30 @@ faithfulness is not a theorem and is not claimed as one.
 unconditional modulo the cryptographic floor; liveness --- finality and
 revocation-at-finality --- additionally rests on PostGSTProgress, eventual
 synchrony. A partitioned network stalls finality; it cannot forge it.
+
+*The verified executor does not yet run on the bare microkernel.* The seL4 image
+(@sec-sel4) boots the microkernel root, an on-device STARK verifier, and the
+directory-cell userspace, and retargets to a second architecture; the *executor*
+protection domain --- the compiled Lean entry --- does not yet link for the
+freestanding target. The wall is characterized (host object format; an
+event-loop-coupled runtime initialization the pure executor path never reaches)
+and the excision is a banked checklist, not an open question, but until it lands
+the substrate's verified-compute organ on seL4 is the prover, not the executor.
+
+*Rotated coverage of heterogeneous turns is staged, not total on the live path.*
+The rotation discipline (@sec-proof-arch) proves equivalent enforcement and equal
+published state for the rotated cohort, and the chained-cohort composition that
+keeps heterogeneous turns proven is mechanized per leg; the live cutover of every
+heterogeneous shape is staged beside the legacy path. Two effect kinds whose
+circuits the current per-row arithmetization does not express resolve fail-closed
+to the monolithic path rather than to a rotated descriptor.
+
+*deos's compositor and pg-dregg's deepest tier are realization frontiers.* The
+deos surface, affordance, membrane, and rehydration theorems are kernel-clean and
+the rehydration and affordance stack ships; the certified compositor as a
+sole-framebuffer protection domain is the frontier piece (@sec-sel4). In pg-dregg
+(@sec-pg) the authorization and mirror tiers and the verified-store chain tooth
+are live and circuit-free; the range proof-attestation (pending proof
+serialization) and the in-backend executor (gated on a runtime-boundary spike)
+are the named horizons. Each is stated as a present-tense fact a reader can
+check, with the live floor and the frontier marked.

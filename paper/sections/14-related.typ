@@ -1,5 +1,5 @@
 // =============================================================================
-// Section 9: Related work
+// Section 14: Related work
 // =============================================================================
 
 #import "../defs.typ": lean
@@ -59,4 +59,29 @@ lineage of dregg's session surface. The kernel-facing difference: a delivered
 handoff is admitted only through a verified non-amplification gate
 (#lean("AuthModes.captp_granted_le_held")), and session machinery is kept out of
 the consensus-visible kernel (pipelining is turn composition; references are
-capabilities in slots).
+capabilities in slots). The sturdy reference is also the unit dregg's
+rehydratable surface (@sec-deos) ships: a persistable, attenuable handle to a
+witnessed scene, behind a membrane that re-checks authority at reacquisition.
+
+*seL4 capability description and deployment* @capdl. seL4's capability layout is
+itself a described artifact (capDL): the component capabilities are written down
+once and a loader instantiates them, so a deployment is reproducible and checkable
+at the capability level. dregg's seL4 image (@sec-sel4) places its cell-and-grant
+layout in the same relation --- the seL4 capabilities isolate the protection
+domains, the dregg capabilities mediate the cells within --- and grounds the inner
+graph in the outer one mechanically
+(#lean("Firmament.dregg_executor_cap_authority_grounded_in_seL4")). The two
+capability graphs are one discipline at two scales, which is the firmament's
+distance-parameter claim (@sec-firmament) read from the substrate.
+
+*Secure GUI servers and cross-domain compositors* @nitpicker. The trusted-window
+lineage --- a minimal GUI server that mediates input and labels output to keep
+domains from spoofing or spying on each other --- is where deos's compositor sits.
+The difference is what is *trusted* versus *proven*: a cross-domain compositor
+trusts its rendering process to provide isolation, whereas deos makes per-viewer
+non-interference a machine-checked theorem about the projection
+(#lean("Deos.noninterference"), #lean("Deos.hiddenCell_absent")), with paint
+order-independence and the frame property proved of the compositing algebra
+(#lean("Deos.paint_order_independent"), #lean("Deos.render_frame_property")). A
+window is a capability, so the right to see is separated from the right to act by
+construction, not by a window-manager policy.
