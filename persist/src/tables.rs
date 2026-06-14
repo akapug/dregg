@@ -185,6 +185,37 @@ pub const IDX_CELL_BY_ID: TableDefinition<&[u8; 32], &[u8]> =
 /// the per-turn commit transaction) as the authoritative high-water mark.
 pub const META_COMMIT_CURSOR: &str = "commit_cursor";
 
+/// Key (in METADATA) for the durable commit-log COMPACTION FLOOR: the number of
+/// commit records that have been compacted away (`compact_below`) because a
+/// finalized ledger checkpoint at/above their height subsumes them. Equals the
+/// lowest commit ordinal still physically present in [`COMMIT_LOG`]: every
+/// ordinal in `[compacted_floor, commit_cursor)` resolves to a record; ordinals
+/// in `[0, compacted_floor)` were compacted (their finalized state lives in the
+/// checkpoint). 0 on a node that has never compacted. NEVER advances the cursor.
+///
+/// The post-compaction index-audit density invariant is
+/// `commit_cursor() == commit_log.len() + compacted_floor` (the pre-compaction
+/// `cursor == len` is the `compacted_floor == 0` special case).
+pub const META_COMMIT_COMPACTED: &str = "commit_compacted_floor";
+
+/// Compacted turn block-ids: the blocklace `block_id` of every turn whose commit
+/// record was compacted away (presence = a turn this node DURABLY APPLIED whose
+/// record is no longer in [`COMMIT_LOG`] because a checkpoint subsumes it).
+///
+/// This is load-bearing for **no-double-apply**: the node's identity execution
+/// cursor (`node/src/execution_cursor.rs`) re-executes a turn block on recovery
+/// iff its id is NOT among the durable applied-turn ids, and the persist-side
+/// source of those ids is [`PersistentStore::commit_log_block_ids`]. Compacting
+/// a record removes its id from the live commit log, so this set carries it
+/// forward: `commit_log_block_ids` returns the SURVIVORS' ids ∪ this set, i.e.
+/// the full set of applied-turn ids, unchanged by compaction. Without it, a
+/// compacted (already-applied) turn would look un-executed and be re-applied on
+/// top of the checkpoint that already includes it (a double-apply).
+///
+/// Key: 32-byte turn block id. Value: unit (presence = compacted-but-applied).
+pub const COMMIT_COMPACTED_BLOCK_IDS: TableDefinition<&[u8; 32], ()> =
+    TableDefinition::new("commit_compacted_block_ids");
+
 // ─── Forever-Digest Sets (restart-durable anti-replay carriers) ──────────────
 //
 // Several node registries carry "burned forever" digest sets whose refusal

@@ -30,15 +30,24 @@
 //! arbitrary crash (even one that kills the process mid-write):
 //!
 //!   * **No torn state.** The cursor and the record at `cursor-1` are always
-//!     consistent: `commit_cursor() == commit_log.len()`, and every ordinal in
-//!     `0..cursor` resolves to a record.
-//!   * **No lost finalized turn.** A turn the node *durably* committed (its
-//!     record is in the log) is recoverable with its full coordinates and the
-//!     post-state of every cell it touched.
+//!     consistent: every ordinal in `[compacted_floor, cursor)` resolves to a
+//!     record, and `commit_cursor() == commit_log.len() + compacted_floor`
+//!     (the `compacted_floor == 0` special case is the pre-compaction
+//!     `cursor == len`; see [`Self::compact_below`]).
+//!   * **No lost finalized turn.** A turn the node *durably* committed is
+//!     recoverable with its full coordinates and the post-state of every cell it
+//!     touched — either from its log record, OR (once [`Self::compact_below`]
+//!     has removed that record under a covering checkpoint) from the checkpoint
+//!     that subsumes it. Compaction never removes a record a checkpoint does not
+//!     subsume, so the finalized state is never lost.
 //!   * **No double-apply.** Recovery resumes from `commit_cursor()`, which is
 //!     advanced once per applied turn inside the commit transaction; a turn whose
 //!     transaction did not commit is simply re-applied (idempotently) on the
 //!     next poll, and one whose transaction *did* commit is never re-applied.
+//!     This holds across compaction: a compacted turn's `block_id` is retained
+//!     (`COMMIT_COMPACTED_BLOCK_IDS`) and still reported by
+//!     [`Self::commit_log_block_ids`], so the identity execution cursor still
+//!     sees it as applied and never re-executes it on top of the checkpoint.
 //!   * **Index agrees with the log.** Every index entry exists *iff* the commit
 //!     log has the corresponding record. [`PersistentStore::verify_index_agrees_with_log`]
 //!     checks this; [`PersistentStore::rebuild_index_from_log`] re-derives the
@@ -127,10 +136,16 @@ impl CommitRecord {
 /// index contains no entries that the log does not justify.
 #[derive(Clone, Debug, Default)]
 pub struct IndexAuditReport {
-    /// Number of commit records examined.
+    /// Number of commit records physically examined in the (possibly compacted)
+    /// log.
     pub records: u64,
-    /// `commit_cursor()` value (must equal `records` for a consistent store).
+    /// `commit_cursor()` value. For a consistent store
+    /// `cursor == records + compacted` (the compaction-aware density invariant;
+    /// `cursor == records` when nothing has been compacted).
     pub cursor: u64,
+    /// `commit_compacted_floor()` value: records compacted away under a covering
+    /// checkpoint. The live log holds ordinals `[compacted, cursor)`.
+    pub compacted: u64,
     /// Index entries missing for a record that the log contains.
     pub missing_entries: Vec<String>,
     /// Index entries present that no log record justifies (orphans).
@@ -141,8 +156,14 @@ pub struct IndexAuditReport {
 
 impl IndexAuditReport {
     /// Whether the index is fully consistent with the log.
+    ///
+    /// The density check is compaction-aware: `cursor == records + compacted`.
+    /// Before any compaction `compacted == 0` and this is the original
+    /// `cursor == records`; after compaction the live record count drops by
+    /// exactly the compaction floor while the cursor (the applied high-water
+    /// mark) is unchanged.
     pub fn ok(&self) -> bool {
-        self.cursor == self.records
+        self.cursor == self.records + self.compacted
             && self.missing_entries.is_empty()
             && self.orphan_entries.is_empty()
             && self.mismatched_entries.is_empty()
@@ -170,10 +191,30 @@ impl PersistentStore {
     }
 
     /// Number of records physically present in the commit log table.
+    ///
+    /// After [`Self::compact_below`] has run, this is strictly less than
+    /// [`Self::commit_cursor`] by exactly [`Self::commit_compacted_floor`]:
+    /// `commit_cursor() == commit_log_len() + commit_compacted_floor()`.
     pub fn commit_log_len(&self) -> Result<u64> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(tables::COMMIT_LOG)?;
         Ok(table.len()?)
+    }
+
+    /// The durable commit-log compaction floor: the number of records compacted
+    /// away by [`Self::compact_below`] = the lowest commit ordinal still
+    /// physically present in the log. Every ordinal in
+    /// `[commit_compacted_floor(), commit_cursor())` resolves to a record;
+    /// ordinals below the floor were compacted because a finalized ledger
+    /// checkpoint at/above their height subsumes their finalized state. Returns
+    /// 0 on a node that has never compacted.
+    pub fn commit_compacted_floor(&self) -> Result<u64> {
+        let read_txn = self.db.begin_read()?;
+        let meta = read_txn.open_table(tables::METADATA)?;
+        Ok(meta
+            .get(tables::META_COMMIT_COMPACTED)?
+            .map(|g| g.value())
+            .unwrap_or(0))
     }
 
     // =========================================================================
@@ -332,23 +373,40 @@ impl PersistentStore {
         }
     }
 
-    /// The blocklace `block_id` of every durably committed turn, in commit
-    /// order.
+    /// The blocklace `block_id` of every durably committed turn this node has
+    /// applied — the LIVE-log ids followed by any COMPACTED ids.
     ///
     /// This is the exact identity set of turn-carrying blocks this node has
     /// durably applied (each id was written atomically with its turn's ledger
     /// commit), and is the turn half of the node's identity execution cursor on
     /// recovery: a turn block is re-executed after a restart iff its id is NOT
     /// here — no lost finalized turn, no double-apply.
+    ///
+    /// COMPACTION-STABILITY (load-bearing for no-double-apply): the contract is
+    /// "every APPLIED turn's id appears here", NOT "every id in the live log".
+    /// [`Self::compact_below`] removes a subsumed record from the live log but
+    /// records its id in `COMMIT_COMPACTED_BLOCK_IDS`; this method unions that
+    /// set back in, so the returned identity set is INVARIANT under compaction —
+    /// a compacted (already-applied) turn is still reported as applied and is
+    /// never re-executed on top of the checkpoint that already includes it.
     pub fn commit_log_block_ids(&self) -> Result<Vec<[u8; 32]>> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(tables::COMMIT_LOG)?;
         let mut out = Vec::new();
+        // Live records first, in ordinal order.
         for entry in table.range(0u64..)? {
             let entry =
                 entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
             let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
             out.push(record.block_id);
+        }
+        // Then the ids of turns whose records were compacted away — still
+        // applied, must remain in the identity execution cursor.
+        let compacted = read_txn.open_table(tables::COMMIT_COMPACTED_BLOCK_IDS)?;
+        for entry in compacted.iter()? {
+            let entry =
+                entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+            out.push(*entry.0.value());
         }
         Ok(out)
     }
@@ -557,6 +615,7 @@ impl PersistentStore {
     pub fn verify_index_agrees_with_log(&self) -> Result<IndexAuditReport> {
         let mut report = IndexAuditReport {
             cursor: self.commit_cursor()?,
+            compacted: self.commit_compacted_floor()?,
             ..Default::default()
         };
 
@@ -749,6 +808,205 @@ impl PersistentStore {
         }
         write_txn.commit()?;
         Ok(replayed)
+    }
+
+    // =========================================================================
+    // Commit-log compaction (bound the WAL below a finalized checkpoint)
+    // =========================================================================
+
+    /// Compact (delete) commit-log records whose finalized state a checkpoint
+    /// at/above `height` already subsumes, bounding the otherwise-unbounded
+    /// write-ahead log. Returns the number of records compacted.
+    ///
+    /// # The safety constraint (provably safe — never best-effort)
+    ///
+    /// A node reconstructs its finalized ledger as `checkpoint ⊕ overlay`, where
+    /// the overlay ([`Self::cell_overlay_since`]) is the post-state of every cell
+    /// touched by a record with `record.height > checkpoint_height` — records
+    /// with `record.height <= checkpoint_height` contribute NOTHING to the
+    /// reconstruction (the checkpoint already folded them in). This is the
+    /// machine-checked recovery model `CrashRecovery.recover_eq_replay`: the
+    /// checkpoint is `replay genesis (take k)` and the overlay is the writes of
+    /// `(drop k)`, so the `take k` records are redundant once the checkpoint
+    /// exists.
+    ///
+    /// Compaction is therefore safe ONLY under a COVERING ledger checkpoint:
+    /// this method removes records iff
+    /// `latest_ledger_checkpoint_height() >= height`, and even then only the
+    /// contiguous ordinal PREFIX of records with `record.height < height` (it
+    /// stops at the first record with `record.height >= height`, so the live log
+    /// `[compacted_floor, cursor)` stays dense — no gap is ever punched). Every
+    /// removed record has `height < height <= checkpoint_height`, i.e. strictly
+    /// below the checkpoint, so the overlay never references it and the
+    /// checkpoint subsumes it.
+    ///
+    /// When there is NO covering checkpoint (`latest_ledger_checkpoint_height()
+    /// < height`), this is a **no-op returning 0**: it refuses to delete any
+    /// record a checkpoint does not subsume (deleting one would lose a finalized
+    /// turn — the load-bearing "no lost finalized turn" invariant). `height == 0`
+    /// is likewise a no-op (nothing is below it).
+    ///
+    /// # What compaction preserves
+    ///
+    /// * **The durable cursor is UNCHANGED.** [`Self::commit_cursor`] still
+    ///   counts every applied turn; only the physical record count drops. The
+    ///   compaction floor ([`Self::commit_compacted_floor`]) advances by exactly
+    ///   the number removed, so `cursor == len + floor` holds and the
+    ///   index-audit density invariant ([`IndexAuditReport::ok`]) is preserved.
+    /// * **No lost finalized turn.** Reconstruction is identical before and
+    ///   after: `checkpoint ⊕ cell_overlay_since(checkpoint_height)` is unchanged
+    ///   because no compacted record was in that overlay (`recover_eq_replay`).
+    /// * **No double-apply.** Each compacted turn's `block_id` is recorded in
+    ///   `COMMIT_COMPACTED_BLOCK_IDS` in the SAME transaction, so
+    ///   [`Self::commit_log_block_ids`] still reports it as applied and the
+    ///   identity execution cursor never re-runs it over the checkpoint.
+    /// * **The index agrees with the log.** The compacted records' receipt /
+    ///   turn / (height, creator) entries are removed, and the cell-by-id index
+    ///   is re-derived from the SURVIVING records (last-writer-wins), so
+    ///   [`Self::verify_index_agrees_with_log`] stays `ok()`.
+    ///
+    /// All of the above land in ONE redb transaction (one fsync boundary): a
+    /// crash mid-compaction leaves the pre-compaction (already-consistent) state
+    /// in place.
+    pub fn compact_below(&self, height: u64) -> Result<u64> {
+        // ── Refuse without a covering checkpoint (the safety guard) ─────────
+        // Compaction is sound only when a finalized ledger checkpoint at/above
+        // `height` captures the state the to-be-removed records reconstruct.
+        // No such checkpoint ⇒ delete nothing (a no-op refusal), never lose a
+        // finalized turn.
+        if height == 0 {
+            return Ok(0);
+        }
+        let checkpoint_height = self.latest_ledger_checkpoint_height()?;
+        if checkpoint_height < height {
+            tracing::debug!(
+                requested_height = height,
+                checkpoint_height,
+                "compact_below: no covering ledger checkpoint at/above the \
+                 requested height — refusing (no-op), records are not subsumed"
+            );
+            return Ok(0);
+        }
+
+        let write_txn = self.db.begin_write()?;
+        let compacted;
+        {
+            // 1. Identify the contiguous ordinal prefix of records strictly
+            //    below `height`, collecting what we need to clean up their
+            //    index entries, and the SURVIVORS' cells for the cell-index
+            //    re-derivation. We stop at the first record with
+            //    `height >= height` so the live log never gains a gap.
+            struct Doomed {
+                ordinal: u64,
+                receipt_hash: [u8; 32],
+                turn_hash: [u8; 32],
+                hc_key: [u8; 48],
+                block_id: [u8; 32],
+            }
+            let mut doomed: Vec<Doomed> = Vec::new();
+            let mut survivors: Vec<CommitRecord> = Vec::new();
+            {
+                let log = write_txn.open_table(tables::COMMIT_LOG)?;
+                let mut prefix_open = true;
+                for entry in log.iter()? {
+                    let entry = entry
+                        .map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+                    let ordinal = entry.0.value();
+                    let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
+                    if prefix_open && record.height < height {
+                        let hc_key = CommitRecord::height_creator_key(
+                            record.height,
+                            &record.creator,
+                            ordinal,
+                        );
+                        doomed.push(Doomed {
+                            ordinal,
+                            receipt_hash: record.receipt_hash,
+                            turn_hash: record.turn_hash,
+                            hc_key,
+                            block_id: record.block_id,
+                        });
+                    } else {
+                        // First record at/above `height` closes the prefix; it
+                        // and everything after it survive.
+                        prefix_open = false;
+                        survivors.push(record);
+                    }
+                }
+            }
+
+            compacted = doomed.len() as u64;
+            if compacted == 0 {
+                // Nothing to do — leave the store (and its cursor) untouched.
+                drop(write_txn);
+                return Ok(0);
+            }
+
+            // 2. Remove the doomed records from the commit log + their receipt /
+            //    turn / (height, creator) index entries.
+            {
+                let mut log = write_txn.open_table(tables::COMMIT_LOG)?;
+                let mut idx_receipt = write_txn.open_table(tables::IDX_RECEIPT_BY_HASH)?;
+                let mut idx_turn = write_txn.open_table(tables::IDX_TURN_BY_HASH)?;
+                let mut idx_hc = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
+                let mut compacted_ids =
+                    write_txn.open_table(tables::COMMIT_COMPACTED_BLOCK_IDS)?;
+                for d in &doomed {
+                    log.remove(d.ordinal)?;
+                    idx_receipt.remove(&d.receipt_hash)?;
+                    idx_turn.remove(&d.turn_hash)?;
+                    idx_hc.remove(d.hc_key.as_slice())?;
+                    // Carry the applied turn's id forward (no double-apply).
+                    compacted_ids.insert(&d.block_id, ())?;
+                }
+            }
+
+            // 3. Re-derive the cell-by-id index from the SURVIVORS alone
+            //    (last-writer-wins). A cell whose only/latest writer was
+            //    compacted drops out of the index — correct: the checkpoint
+            //    now holds it, and the cell index is exactly the deltas ABOVE
+            //    the checkpoint. This keeps the audit's cell-projection check
+            //    exact post-compaction.
+            {
+                let mut idx_cell = write_txn.open_table(tables::IDX_CELL_BY_ID)?;
+                let keys: Vec<[u8; 32]> = idx_cell
+                    .iter()?
+                    .filter_map(|e| e.ok().map(|e| *e.0.value()))
+                    .collect();
+                for k in keys {
+                    idx_cell.remove(&k)?;
+                }
+                // Survivors are already in ascending ordinal order → later
+                // writers overwrite earlier ones (last-writer-wins).
+                for record in &survivors {
+                    for cell in &record.touched_cells {
+                        let cell_bytes = postcard::to_stdvec(cell)
+                            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                        idx_cell.insert(&cell.id().0, cell_bytes.as_slice())?;
+                    }
+                }
+            }
+
+            // 4. Advance the compaction floor by exactly the count removed.
+            //    The commit CURSOR is deliberately UNTOUCHED — it is the applied
+            //    high-water mark, not the physical record count.
+            {
+                let mut meta = write_txn.open_table(tables::METADATA)?;
+                let floor = meta
+                    .get(tables::META_COMMIT_COMPACTED)?
+                    .map(|g| g.value())
+                    .unwrap_or(0);
+                meta.insert(tables::META_COMMIT_COMPACTED, floor + compacted)?;
+            }
+        }
+        write_txn.commit()?;
+        tracing::info!(
+            requested_height = height,
+            checkpoint_height,
+            compacted,
+            "compacted commit-log records subsumed by a covering ledger checkpoint"
+        );
+        Ok(compacted)
     }
 
     /// One-time migration: the `(height, creator)` index key gained a trailing
@@ -1236,5 +1494,350 @@ mod tests {
         };
         assert_eq!(bal(1, 105), Some(105));
         assert_eq!(bal(0, 104), Some(104));
+    }
+
+    // =========================================================================
+    // Commit-log compaction (compact_below) — the WAL-bounding tooth.
+    // =========================================================================
+
+    use dregg_cell::Ledger;
+
+    /// Reconstruct the finalized ledger AS RECOVERY DOES: the latest ledger
+    /// checkpoint ⊕ `cell_overlay_since(checkpoint_height)` (last-writer-wins).
+    /// This is `CrashRecovery.recover`; its root is what a recovered node
+    /// reaches and MUST be invariant under compaction (`recover_eq_replay`).
+    fn recovered_root(store: &PersistentStore) -> [u8; 32] {
+        let cp_height = store.latest_ledger_checkpoint_height().unwrap();
+        let mut ledger = match store.load_ledger_checkpoint_at(cp_height).unwrap() {
+            Some(l) => l,
+            None => Ledger::new(),
+        };
+        for c in store.cell_overlay_since(cp_height).unwrap() {
+            // last-writer-wins overwrite (the overlay is already LWW-projected).
+            let _ = ledger.remove(&c.id());
+            let _ = ledger.insert_cell(c);
+        }
+        ledger.root()
+    }
+
+    /// Take a full-ledger checkpoint at `height` from the records committed
+    /// so far whose `height <= height` (the `replay genesis (take k)` cut), and
+    /// store it. Mirrors `node`'s "checkpoint the live full ledger" but built
+    /// from the log so the test is self-contained. NOTE: stores via the
+    /// low-level table so it does NOT co-drive compaction — the test drives
+    /// `compact_below` explicitly to isolate it.
+    fn checkpoint_from_log_no_codrive(store: &PersistentStore, height: u64) {
+        let mut ledger = Ledger::new();
+        for rec in store.commit_records_from(0).unwrap() {
+            if rec.height <= height {
+                for c in rec.touched_cells {
+                    let _ = ledger.remove(&c.id());
+                    let _ = ledger.insert_cell(c);
+                }
+            }
+        }
+        // Write the ledger checkpoint WITHOUT the checkpoint_ledger co-drive.
+        let snapshot = crate::ledger_store::LedgerCheckpoint {
+            height,
+            cells: ledger.iter().map(|(_, c)| c.clone()).collect(),
+            sovereign_commitments: Vec::new(),
+            sovereign_registrations: Vec::new(),
+        };
+        store
+            .store_ledger_checkpoint_snapshot(&snapshot)
+            .unwrap();
+    }
+
+    /// Commit `n` turns at heights 1..=n (record(k).height == k+1, so turn k
+    /// lands at height k+1), each touching a distinct cell whose id is seeded by
+    /// the turn index (so nothing is dominated and every record contributes a
+    /// surviving cell to the reconstruction).
+    fn commit_distinct(store: &PersistentStore, n: u64) {
+        for k in 0..n {
+            let mut rec = record(k, k * 10, vec![cell(k as u8, 100 + k)]);
+            rec.turn_hash[0] = 0xc0;
+            rec.turn_hash[1] = k as u8;
+            rec.receipt_hash[0] = 0xd0;
+            rec.receipt_hash[1] = k as u8;
+            rec.block_id = [0xb0u8.wrapping_add(k as u8); 32];
+            store.commit_finalized_turn(k, &rec).unwrap();
+        }
+    }
+
+    /// THE SAFETY TOOTH (refuse without a covering checkpoint): with NO ledger
+    /// checkpoint at/above the requested height, `compact_below` deletes NOTHING
+    /// — a record a checkpoint does not subsume is never removed (no lost
+    /// finalized turn). The reconstruction, cursor, floor, and audit are all
+    /// untouched.
+    #[test]
+    fn compact_below_refuses_without_a_covering_checkpoint() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        commit_distinct(&store, 5); // heights 1..=5
+        let before = recovered_root(&store);
+        let cursor_before = store.commit_cursor().unwrap();
+        let len_before = store.commit_log_len().unwrap();
+
+        // No checkpoint at all → refuse (no-op), 0 compacted.
+        assert_eq!(store.compact_below(3).unwrap(), 0);
+
+        // A checkpoint exists but BELOW the requested height → still refuse:
+        // it does not subsume records up to height 4.
+        checkpoint_from_log_no_codrive(&store, 2); // covers heights ≤2 only
+        assert_eq!(
+            store.compact_below(4).unwrap(),
+            0,
+            "checkpoint at 2 does NOT cover a compact_below(4) — must refuse"
+        );
+
+        // Nothing changed.
+        assert_eq!(store.commit_log_len().unwrap(), len_before);
+        assert_eq!(store.commit_cursor().unwrap(), cursor_before);
+        assert_eq!(store.commit_compacted_floor().unwrap(), 0);
+        assert_eq!(recovered_root(&store), before);
+        let report = store.verify_index_agrees_with_log().unwrap();
+        assert!(report.ok(), "audit must hold after a refusal: {report:?}");
+    }
+
+    /// THE COMPACTION TOOTH: a record BELOW a covering checkpoint IS compacted,
+    /// the ledger STILL reconstructs to the same root, and the durable cursor is
+    /// UNCHANGED. reconstruct-after-compact == reconstruct-before-compact.
+    #[test]
+    fn compact_below_removes_subsumed_records_preserving_reconstruction_and_cursor() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        commit_distinct(&store, 6); // heights 1..=6, ordinals 0..6
+        let root_before = recovered_root(&store);
+        let cursor_before = store.commit_cursor().unwrap();
+        assert_eq!(cursor_before, 6);
+
+        // A covering checkpoint at height 3 (subsumes records with height ≤ 3 =
+        // ordinals 0,1,2 → heights 1,2,3). compact_below(3) removes the records
+        // STRICTLY below height 3 = heights 1,2 = ordinals 0,1.
+        checkpoint_from_log_no_codrive(&store, 3);
+        let compacted = store.compact_below(3).unwrap();
+        assert_eq!(compacted, 2, "heights 1 and 2 are strictly below 3");
+
+        // Physical records dropped by 2; the CURSOR is unchanged; the floor rose.
+        assert_eq!(store.commit_log_len().unwrap(), 4);
+        assert_eq!(
+            store.commit_cursor().unwrap(),
+            cursor_before,
+            "the durable applied high-water mark must NOT move under compaction"
+        );
+        assert_eq!(store.commit_compacted_floor().unwrap(), 2);
+
+        // The compacted ordinals are physically gone; the survivors remain dense.
+        assert!(store.commit_record_at(0).unwrap().is_none());
+        assert!(store.commit_record_at(1).unwrap().is_none());
+        for o in 2..6 {
+            assert_eq!(store.commit_record_at(o).unwrap().unwrap().ordinal, o);
+        }
+
+        // THE EQUIVALENCE: reconstruction is byte-for-byte identical.
+        assert_eq!(
+            recovered_root(&store),
+            root_before,
+            "checkpoint ⊕ overlay after compaction must equal the pre-compaction ledger"
+        );
+        // The head record (cursor-1) — recovery's anchors — is intact.
+        assert_eq!(store.commit_record_at(cursor_before - 1).unwrap().unwrap().ordinal, 5);
+        assert_eq!(store.recovered_block_cursor().unwrap(), 5 * 10);
+        assert_eq!(
+            store.recovered_ledger_root().unwrap().unwrap(),
+            store.commit_record_at(5).unwrap().unwrap().ledger_root
+        );
+    }
+
+    /// THE INDEX-AUDIT INVARIANT holds post-compaction: the compacted records'
+    /// receipt / turn / (height,creator) entries are gone (no orphans), the
+    /// cell-by-id index is the surviving log's last-writer-wins projection, and
+    /// the compaction-aware density `cursor == records + compacted` holds.
+    /// Lookups for survivors still resolve; lookups for compacted turns 404.
+    #[test]
+    fn index_audit_holds_after_compaction() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        commit_distinct(&store, 6);
+        // Grab a compacted turn's and a surviving turn's hashes before compaction.
+        let compacted_turn = store.commit_record_at(0).unwrap().unwrap();
+        let surviving_turn = store.commit_record_at(4).unwrap().unwrap();
+
+        checkpoint_from_log_no_codrive(&store, 3);
+        assert_eq!(store.compact_below(3).unwrap(), 2);
+
+        let report = store.verify_index_agrees_with_log().unwrap();
+        assert!(report.ok(), "audit must hold after compaction: {report:?}");
+        assert_eq!(report.records, 4, "4 survivors physically present");
+        assert_eq!(report.compacted, 2);
+        assert_eq!(report.cursor, 6, "cursor unchanged == records + compacted");
+
+        // A compacted turn no longer resolves through the (removed) index entry…
+        assert!(store.lookup_turn(&compacted_turn.turn_hash).unwrap().is_none());
+        assert!(
+            store
+                .lookup_receipt(&compacted_turn.receipt_hash)
+                .unwrap()
+                .is_none()
+        );
+        // …but a survivor still does.
+        assert_eq!(
+            store.lookup_turn(&surviving_turn.turn_hash).unwrap().unwrap().ordinal,
+            4
+        );
+
+        // Rebuilding the index from the (compacted) log re-agrees — the rebuild
+        // is over the survivors and stays consistent.
+        let replayed = store.rebuild_index_from_log().unwrap();
+        assert_eq!(replayed, 4);
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+    }
+
+    /// NO DOUBLE-APPLY across compaction: a compacted turn's `block_id` is
+    /// retained, so `commit_log_block_ids` (the identity execution cursor's turn
+    /// half) still reports EVERY applied turn — the returned id set is invariant
+    /// under compaction. A compacted turn therefore never looks un-executed.
+    #[test]
+    fn compaction_preserves_the_applied_turn_identity_set() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        commit_distinct(&store, 6);
+        let ids_before: std::collections::HashSet<[u8; 32]> =
+            store.commit_log_block_ids().unwrap().into_iter().collect();
+        assert_eq!(ids_before.len(), 6);
+
+        checkpoint_from_log_no_codrive(&store, 3);
+        assert_eq!(store.compact_below(3).unwrap(), 2);
+
+        let ids_after: std::collections::HashSet<[u8; 32]> =
+            store.commit_log_block_ids().unwrap().into_iter().collect();
+        assert_eq!(
+            ids_after, ids_before,
+            "the applied-turn id set must be INVARIANT under compaction \
+             (else a compacted turn re-executes on top of the checkpoint)"
+        );
+    }
+
+    /// THE CHECKPOINT CO-DRIVE: `checkpoint_ledger` at height H drives
+    /// `compact_below(H)`, so taking a finalized full-ledger checkpoint bounds
+    /// the WAL automatically — and the recovered ledger is unchanged.
+    #[test]
+    fn checkpoint_ledger_co_drives_compaction() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        commit_distinct(&store, 6); // heights 1..=6
+        let root_before = recovered_root(&store);
+
+        // Build the FULL live ledger (what node passes to checkpoint_ledger).
+        let mut full = Ledger::new();
+        for rec in store.commit_records_from(0).unwrap() {
+            for c in rec.touched_cells {
+                let _ = full.remove(&c.id());
+                let _ = full.insert_cell(c);
+            }
+        }
+        // Checkpoint at height 6 → co-drives compact_below(6): every record with
+        // height < 6 (ordinals 0..4 = heights 1..5) is subsumed and compacted.
+        store.checkpoint_ledger(&full, 6).unwrap();
+
+        assert_eq!(
+            store.commit_compacted_floor().unwrap(),
+            5,
+            "checkpoint at 6 co-drove compaction of the 5 records below height 6"
+        );
+        assert_eq!(store.commit_log_len().unwrap(), 1, "only height-6 survives");
+        assert_eq!(store.commit_cursor().unwrap(), 6, "cursor unchanged");
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+        assert_eq!(
+            recovered_root(&store),
+            root_before,
+            "co-driven compaction preserves the recovered ledger"
+        );
+    }
+
+    /// Compaction is CRASH-DURABLE: after compaction + reopen, the floor, the
+    /// cursor, the survivors, the retained compacted ids, and the audit all
+    /// survive the restart (one redb transaction = one fsync boundary).
+    #[test]
+    fn compaction_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("compact.redb");
+
+        let (root_before, head_root): ([u8; 32], [u8; 32]);
+        {
+            let store = PersistentStore::open(&path).unwrap();
+            commit_distinct(&store, 6);
+            root_before = recovered_root(&store);
+            head_root = store.commit_record_at(5).unwrap().unwrap().ledger_root;
+            checkpoint_from_log_no_codrive(&store, 4);
+            assert_eq!(store.compact_below(4).unwrap(), 3); // heights 1,2,3
+            drop(store);
+        }
+
+        let store = PersistentStore::open(&path).unwrap();
+        // Durable post-compaction state.
+        assert_eq!(store.commit_compacted_floor().unwrap(), 3);
+        assert_eq!(store.commit_log_len().unwrap(), 3);
+        assert_eq!(store.commit_cursor().unwrap(), 6);
+        // The audit (compaction-aware density) holds across the reopen.
+        let report = store.verify_index_agrees_with_log().unwrap();
+        assert!(report.ok(), "audit after reopen: {report:?}");
+        // The recovered ledger is unchanged across the compaction + restart.
+        assert_eq!(recovered_root(&store), root_before);
+        assert_eq!(store.recovered_ledger_root().unwrap(), Some(head_root));
+        // The applied-turn identity set survived (no-double-apply across restart).
+        assert_eq!(store.commit_log_block_ids().unwrap().len(), 6);
+    }
+
+    /// compact_below stops at the FIRST record at/above `height` — it removes a
+    /// contiguous ordinal PREFIX only, never punching a gap into the live log,
+    /// and never removing a record the overlay still needs (height ≥ the cut).
+    #[test]
+    fn compact_below_removes_only_the_contiguous_below_prefix() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        commit_distinct(&store, 6); // heights 1..=6
+        // Cover up to height 6, but only ask to compact below height 4.
+        checkpoint_from_log_no_codrive(&store, 6);
+        let compacted = store.compact_below(4).unwrap();
+        // heights 1,2,3 are strictly below 4 → ordinals 0,1,2 removed; the
+        // record at height 4 (ordinal 3) and above survive.
+        assert_eq!(compacted, 3);
+        assert_eq!(store.commit_compacted_floor().unwrap(), 3);
+        assert!(store.commit_record_at(2).unwrap().is_none());
+        assert_eq!(store.commit_record_at(3).unwrap().unwrap().height, 4);
+        // The live log [3,6) is dense — no gap.
+        for o in 3..6 {
+            assert!(store.commit_record_at(o).unwrap().is_some());
+        }
+        assert!(store.verify_index_agrees_with_log().unwrap().ok());
+
+        // A second compaction at the same height is an idempotent no-op (the
+        // below-prefix is already gone).
+        assert_eq!(store.compact_below(4).unwrap(), 0);
+        assert_eq!(store.commit_compacted_floor().unwrap(), 3);
+    }
+
+    /// Anti-vacuity: an over-broad deletion (dropping a record the overlay still
+    /// needs) WOULD change the reconstruction — proving the height<cut guard is
+    /// load-bearing, mirroring `CrashRecovery.lost_turn_changes_state`. Here we
+    /// confirm that compacting a record whose cell is NOT dominated and is NOT
+    /// in the checkpoint would lose it — so `compact_below` must (and does)
+    /// refuse to touch records at/above the covering checkpoint's reach.
+    #[test]
+    fn keeping_overlay_records_is_load_bearing() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        commit_distinct(&store, 6); // distinct cells per height → none dominated
+        let full = recovered_root(&store);
+
+        // Checkpoint at height 3 covers heights ≤3. Records at heights 4,5,6 are
+        // the overlay and are LOAD-BEARING (distinct, undominated cells).
+        checkpoint_from_log_no_codrive(&store, 3);
+        assert_eq!(store.compact_below(3).unwrap(), 2); // only heights 1,2 go
+
+        // The overlay records (4,5,6) are untouched and the ledger is intact.
+        assert_eq!(recovered_root(&store), full);
+        assert!(store.commit_record_at(3).unwrap().is_some()); // height 4 survives
+        assert!(store.commit_record_at(5).unwrap().is_some()); // height 6 survives
+
+        // And compact_below can NEVER be asked to remove them while the only
+        // checkpoint is at 3: a request below height 4 leaves them; a request at
+        // height 5 is REFUSED (checkpoint at 3 does not cover it).
+        assert_eq!(store.compact_below(5).unwrap(), 0);
+        assert_eq!(recovered_root(&store), full);
     }
 }
