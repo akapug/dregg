@@ -5,6 +5,28 @@ to waste an hour here is running the whole test gauntlet in debug mode. Don't.
 Read this first. Deeper state lives in `REORIENT.md`; this is just "how do I run
 things.")*
 
+## Orient before you answer — the durable record, not the summary
+
+The other expensive mistake (beside the debug-mode gauntlet): in a fresh or
+post-compaction window, answering a *vision-level* or "how's X?" question from the
+**compaction summary + a shallow shell probe**, instead of reading the durable
+record. It flattens this (deeply layered, mature) project into a wrong one-liner —
+which then gets written back as if it were authoritative.
+
+**Read order — at window-start, and before any vision-level claim:**
+1. `REORIENT.md` — the git-tracked continuity anchor (laws / lanes / gates / board).
+2. `HORIZONLOG.md` — the live named-follow-up burn-down.
+3. the memory index whole, then its flagged (⚑) topic files.
+4. the relevant `docs/` + the **captured artifacts** for the question.
+
+**Probes lie.** `which microkit` ("not found") + `rustup target list` ("no sel4
+target") once "proved" the seL4 toolchain absent — while the Robigalia v0 demo
+BOOTS in QEMU (the SDK is at `~/sel4-sdk`, the target is a `-Z build-std` JSON
+spec, boot logs are at `/tmp/sel4-boot-*.log`). Absent-on-PATH ≠ absent; a probe ≠
+a doc. Read the doc + the captured artifact (boot/test logs), and verify a dated
+memory's `file:line` against HEAD before asserting it. The summary is a map drawn
+from a moving train; the record is the territory — and the reading IS the job.
+
 ## Use `cargo nextest`, not bare `cargo test`
 
 `cargo-nextest` is installed. It gives per-test timing, parallelism, and — the
