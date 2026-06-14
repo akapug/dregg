@@ -2116,6 +2116,16 @@ async fn execute_finalized_turn(
         None
     };
 
+    // FLOW-B ROTATION: capture the actor cell's FULL pre-execution `Cell` (the real
+    // RecordKernelState the rotation producer reads — balance/nonce/fields/c-list/lifecycle/
+    // heap_root/authority), so the live node turn can prove ROTATED. Cloned BEFORE
+    // `execute_via_producer` mutates the ledger; the post-state cell is read after execution.
+    let full_turn_pre_cell: Option<dregg_cell::Cell> = if s.full_turn_proving_enabled {
+        s.ledger.get(&signed_turn.turn.agent).cloned()
+    } else {
+        None
+    };
+
     // AUTHORITY path (cap Phase D): capture the actor cell's CANONICAL
     // pre-execution `capability_root` — the sorted-Poseidon2 root over its
     // c-list (cap Phase A's openable scheme, the same value the Effect-VM
@@ -2302,13 +2312,35 @@ async fn execute_finalized_turn(
                             )
                         }
                         (None, None) => {
-                            // Non-spend turn → self-sovereign Effect-VM path.
+                            // Non-spend turn → self-sovereign Effect-VM path. FLOW-B: build the
+                            // per-turn ROTATION producer witnesses from the REAL before/after
+                            // cells so the live node turn proves ROTATED (the builder's
+                            // self-validating gate returns None for cells the synthetic
+                            // cap-less pre-state cannot represent, falling back to v1).
+                            let rotation = match (
+                                full_turn_pre_cell.as_ref(),
+                                s.ledger.get(&signed_turn.turn.agent),
+                            ) {
+                                (Some(before_cell), Some(after_cell)) => {
+                                    let receipt_hashes = [receipt.receipt_hash()];
+                                    crate::turn_proving::rotation_witness_for_self_sovereign(
+                                        pre_balance,
+                                        pre_nonce,
+                                        before_cell,
+                                        after_cell,
+                                        &receipt_hashes,
+                                        &effects,
+                                    )
+                                }
+                                _ => None,
+                            };
                             crate::turn_proving::prove_and_verify_finalized_turn(
                                 &signed_turn.turn.agent,
                                 pre_balance,
                                 pre_nonce,
                                 &effects,
                                 computed_hash,
+                                rotation,
                             )
                         }
                     };

@@ -253,8 +253,9 @@ pub use embed::{DreggEngine, EmbedError, EngineConfig, WireCodec};
 // [`Receipt::proof`] / [`TurnProof`], not these.)
 pub use full_turn_proof::{
     CapMembershipExpectation, CapMembershipWitness, FullTurnProof, FullTurnVerifyError,
-    FullTurnWitness, NonRevocationWitness, prove_full_turn, prove_turn_self_sovereign,
-    verify_full_turn, verify_full_turn_bound,
+    FullTurnWitness, NonRevocationWitness, RotationTurnWitness, prove_full_turn,
+    prove_turn_self_sovereign, prove_turn_self_sovereign_rotated, verify_full_turn,
+    verify_full_turn_bound,
 };
 
 // Receipt-witness artifact codecs (app-framework re-exports these).

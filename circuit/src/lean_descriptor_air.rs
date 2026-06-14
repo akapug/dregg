@@ -399,6 +399,27 @@ impl<'a> JsonCursor<'a> {
         }
         self.expect(b':')
     }
+
+    /// Parse a bare JSON boolean literal (`true` / `false`). The Lean emitter renders
+    /// `WindowConstraint.onTransition` exactly so (`window_gate`'s `on_transition`).
+    pub(crate) fn parse_bool(&mut self) -> Result<bool, String> {
+        self.skip_ws();
+        let lit = |c: &mut Self, word: &[u8]| -> bool {
+            if c.s[c.i..].starts_with(word) {
+                c.i += word.len();
+                true
+            } else {
+                false
+            }
+        };
+        if lit(self, b"true") {
+            Ok(true)
+        } else if lit(self, b"false") {
+            Ok(false)
+        } else {
+            Err(format!("expected boolean at byte {}", self.i))
+        }
+    }
 }
 
 /// Parse one `<expr>` object: `{"t":"var"|"const"|"add"|"mul", …}`.

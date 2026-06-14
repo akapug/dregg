@@ -2207,6 +2207,33 @@ pub fn prove_turn_self_sovereign(
     prove_full_turn(&witness)
 }
 
+/// Self-sovereign proof with the per-turn ROTATION producer witnesses threaded (cutover FLOW-B):
+/// the effect-vm leg proves through the LEAN-emitted rotated descriptor (`"effect-vm-rotated"`,
+/// a multi-table `Ir2BatchProof`) instead of the v1 hand-AIR. `rotation` carries the acting
+/// cell's before/after [`RotationTurnWitness`] (minted by
+/// `dregg_turn::rotation_witness::produce`). When `rotation` is `None`, this is byte-identical to
+/// [`prove_turn_self_sovereign`]. Under `not(recursion)` a present `rotation` is ignored (the v1
+/// leg runs) so the wasm/no-lean-link build is unaffected.
+pub fn prove_turn_self_sovereign_rotated(
+    initial_state: &CellState,
+    effects: &[effect_vm::Effect],
+    turn_hash: [u8; 32],
+    rotation: Option<RotationTurnWitness>,
+) -> Result<FullTurnProof, SdkError> {
+    let witness = FullTurnWitness {
+        initial_cell_state: initial_state.clone(),
+        effects: effects.to_vec(),
+        authorization: None,
+        membership: None,
+        conservation: None,
+        non_revocation: None,
+        cap_membership: None,
+        turn_hash,
+        rotation,
+    };
+    prove_full_turn(&witness)
+}
+
 /// FRI-free DIRECT witness revalidation for a self-sovereign turn (F-DOS-1).
 ///
 /// Re-executes the turn from `initial_state` to regenerate the Effect-VM trace,

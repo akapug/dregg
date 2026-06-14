@@ -204,6 +204,83 @@ WIP, NEVER committed by this lane — the main loop commits):
     constraints) as a Lean-proved descriptor; the Rust side interprets it (decoupling the
     bilateral AIR from `effect_vm::pi`); re-prove the gauntlet.
   * C5 regen (registry→default, R=24 live, re-pin, reseed FFI) → C7 DELETE + grep-zero.
+
+### §EXEC.3 — WALLS 1-2 LANDED + THE C5/C7 READINESS PACKAGE (2026-06-13, the bilateral+FLOW-B lane)
+
+**WALL 1 (the bilateral Rust interpreter) — DONE (WIP, uncommitted).** The bilateral aggregation
+proves+verifies through the LEAN-emitted descriptor; the hand `BilateralAggregationAir` is retired on the
+live prove/verify path. Pieces:
+  * `circuit/src/descriptor_ir2.rs`: the `windowGate` two-row primitive (`WindowExpr` + `WindowGateSpec` +
+    `VmConstraint2::WindowGate` + `parse_window_expr` + the AIR `eval` arm + `check_descriptor2` bounds);
+    `circuit/src/lean_descriptor_air.rs`: `JsonCursor::parse_bool` (shared infra). The 36 effect
+    descriptors are byte-untouched (additive grammar).
+  * `circuit/descriptors/dregg-bilateral-aggregation-v2.json` (6990 B; `sha256 47222a8c…`; width 87, PI 23,
+    70 constraints, 2 window gates). Accessor `bilateral_aggregation_descriptor()`. Decoupled layout
+    `sched`/`agg`/`outer_pi_v2` + `schedule_block_from_inner_pi` (the 49-felt window `inner_pi[25..74]`).
+    `build_aggregation_trace_v2` + `prove_aggregation_v2`/`verify_aggregation_v2`.
+  * `turn/src/aggregate_bilateral_prover.rs`: `prove_aggregated_bundle` builds the 87-col trace + proves the
+    descriptor; `verify_aggregated_bundle` deserializes the `Ir2BatchProof`, verifies it, and binds the
+    shipped trace BY CANONICAL RECONSTRUCTION (re-derive from the Turn + claimed schedule blocks). Descriptor
+    path is `recursion`/`verifier`-gated; `not(recursion)` (wasm) = stub.
+  * RESIDUAL (named, NOT on the grep-zero critical path): `CrossSideExistenceAir` + `BundleTreeFoldAir` (CG-5
+    + proof-of-proofs, same file) stay custom-STARK — they do NOT read `effect_vm::pi`. Retiring the whole
+    `bilateral_aggregation_air.rs` file is gated on a future lane emitting those two from Lean.
+
+**WALL 2 (node FLOW-B producer threading) — DONE (WIP, uncommitted).** The live node self-sovereign turn
+proves ROTATED. `sdk::prove_turn_self_sovereign_rotated`; `turn_proving::prove_and_verify_finalized_turn`
+gained `rotation: Option<RotationTurnWitness>` + `rotation_witness_for_self_sovereign` (real before/after
+`Cell` → witnesses; self-validating cap-less gate so OLD_COMMIT agrees with the v1 leg). `blocklace_sync.rs`
+captures `full_turn_pre_cell` + wires the `(None,None)` arm. FRESHNESS/CAPABILITY arms stay v1 (the rotated
+38-PI omits `NOTESPEND_NULLIFIER` — the C4 honest boundary).
+
+**THE C5 REGEN RECIPE (do NOT run — the MAIN LOOP runs it as the coordinated VK-settle):**
+  1. `v3Registry → default`: re-emit `EmitAllJson`/the registry so `effect_vm_descriptors.rs` ships the
+     rotated R=24 cohort as the LIVE registry (today `V3_STAGED_REGISTRY_TSV` is staged beside v1). Add the
+     bilateral descriptor JSON to the regen set (it is already byte-pinned, sha `47222a8c…`).
+  2. Cell context: already v9 LIVE (`CANONICAL_COMMITMENT_CONTEXT "…v9"`, cap-crown `53c6e417c`) — no bump
+     needed for the rotation (the cap-crown flag-day did it). Confirm `compute_canonical_state_commitment_v9`
+     is the cell-local default (it is).
+  3. Re-pin: regenerate the ~58 descriptor SHA fingerprints + the 11 drift guards (`columns.rs::rotation`
+     `rotation_layout_matches_lean`, `pi_v3_offsets_match_lean`, the registry cover guards) against the
+     re-emitted artifacts.
+  4. Reseed the FFI closure: `dregg-lean-ffi/scripts/rebuild-dregg2-closure.sh` (the Lean grew the
+     `windowGate` grammar + the bilateral module — the C facet set changed).
+  5. **THE VK EPOCH** — the coordinated cutover-settle. The notify Step-2 felt-encoders
+     (`docs/NOTIFY-STEP2-VK-CHECKLIST.md` / `docs/NOTIFY-CASCADE.md`) MUST batch into the SAME ONE VK bump;
+     two simultaneous bumps break the cell-commitment↔circuit↔verifier contract. This is the ONLY
+     irreversible step and is the main loop's act, NOT a lane's.
+
+**THE C7 DELETION LIST (do NOT delete — gated on C5 + the VK epoch landing green):**
+  * `circuit/src/effect_vm_p3_full_air.rs` (the EffectVmP3Air; 30 self-refs).
+  * `circuit/src/effect_vm_p3_air.rs` (the shape-mirror; 5 ACTIVE_BASE_COUNT refs).
+  * `circuit/src/effect_vm/air.rs` `EffectVmAir` + its `EFFECT_VM_WIDTH=186` consumers (250 refs across 48
+    files — the bulk is `effect_vm/tests.rs` 65 + the integration/perf harnesses).
+  * `circuit/src/bilateral_aggregation_air.rs` `BilateralAggregationAir` + `AggregationInnerRow`/
+    `build_aggregation_trace`/`AGG_WIDTH`/`PI_BUFFER_*`/`EXPECTED_*`/`OUTER_*` (the v1 hand-AIR; SUPERSEDED
+    by the descriptor path this lane — KEEP the file for `CrossSideExistenceAir`/`BundleTreeFoldAir` until
+    their Lean lane; delete only the `BilateralAggregationAir` block + its `StarkAir`/`Air` impls + the v1
+    layout consts + `schedule_block_from_inner_pi`'s `SCHEDULE_PI_BASE` once the WR carries `sched` natively).
+  * `EffectVmP3Proof` + `prove_effect_vm_p3` (the SDK full-turn v1 effect-vm leg type; 152 refs — the heavy
+    consumer is `aggregate_bilateral_prover.rs` 52 [now SUPERSEDED on the bilateral path] + the cutover
+    harnesses).
+  * `generate_effect_vm_trace` (the 186-col v1 generator; 308 refs — the live consumers are the v1 leg in
+    `prove_full_turn`/`turn_proving`/the rotated trace's v1 sub-trace, which moves to the rotated generator
+    at the flip).
+  * `CutoverFallback` (sdk; 8 refs in `full_turn_proof.rs` + 1 test).
+  * `circuit/src/lean_descriptor_air.rs` v1 SURFACE — but NOT the file: `descriptor_ir2.rs` still imports
+    `LeanExpr`/`VmConstraint`/`RangeSpec`/`EffectVmDescriptor`/`i64_to_babybear`/`const_to_expr`/`JsonCursor`/
+    `parse_expr` from it. Delete only `EffectVmDescriptorAir::eval` + the v1-prove/verify (`prove_vm_descriptor`/
+    `verify_vm_descriptor`) once the cutover harnesses retire.
+  * The ~40 v1 test harnesses: `circuit/tests/effect_vm_descriptor_cutover_harness.rs`,
+    `effect_vm_{grant,attenuate,revoke}_non_amp.rs`, + the test call-sites in
+    `effect_vm_p3_descriptor_differential.rs`/`turn_revalidation_vs_prove.rs`.
+
+**WHAT'S STILL GATED (the burn-down before C5 can run):** (a) wall-C — confirm the ~70 produce/verify sites
+are all `rotation: None`-clean or threaded (most need no edit); (b) the rotated generator must subsume the
+v1 `generate_effect_vm_trace` for the FLOW-B flat leg's note-spend + capability paths (today they stay v1 —
+the rotated 38-PI lacks `NOTESPEND_NULLIFIER`); (c) the recursion knots (ivc/joint) already have rotated
+cores (C4-recursion) but their v1 cores delete only at C7; (d) a persvati workspace gauntlet on the
+converged tree before the VK epoch.
   4. C4 = reroute the ~70 v1 call-sites + `aggregate_bilateral_prover.rs` (204→38 PI slice) + un-gate.
   5. C5 = regen (EmitAllJson→v3Registry live, R=16 probe→R=24, re-pin artifacts, reseed FFI closure).
   6. C6 = VK epoch + succession record.
