@@ -1,0 +1,89 @@
+# starbridge-web-surface — the embedded web surface as a cap-confined dregg
+# cell, and the `dregg://` web-of-cells fetch as a verified, attested cross-cell
+# read.
+#
+# This crate is the WEB-SPECIFIC layer over the firmament's already-real surface
+# cap model. It builds NOTHING the protocol already has:
+#
+#   * `docs/EMBEDDED-WEB-SURFACE.md` — a Servo `WebView` is a dregg
+#     `Capability{ target: Surface(cell), rights }` cell; every web authority
+#     (navigate / fetch / new-window / permission / HTTP-auth) is a
+#     `WebViewDelegate` callback, and the embedder's impl of that delegate IS the
+#     cap gate. THIS crate ships that delegate trait (`WebSurfaceDelegate`,
+#     shaped like libservo's real `WebViewDelegate`) and a real in-crate cap-
+#     enforcing impl (`CapGatedDelegate`) over a `MockSurface` standing in for
+#     the libservo `WebView` (the LIBSERVO SEAM — see `src/delegate.rs`).
+#
+#   * `docs/desktop-os-research/DISTRIBUTED-SERVO-FACETS.md` Facet 1 — a
+#     `dregg://<cell>` link is a sturdy ref into a cell; "fetching" it is a
+#     verified cross-cell read returning ATTESTED content (a receipt + a
+#     quorum-signed `AttestedRoot`), and the trusted-path origin chrome is drawn
+#     from the LEDGER (the cell's authority lineage), never the fetched page.
+#     THIS crate ships that resolver (`src/web_of_cells.rs`).
+#
+# It is a STANDALONE Cargo workspace, deliberately NOT a member of the repo-root
+# workspace (its empty `[workspace]` table below makes it its own root) — exactly
+# the `sel4/dregg-firmament` + `pg-dregg` pattern. So `cd starbridge-web-surface
+# && cargo test` builds and runs WITHOUT touching the repo-root `./target` a node
+# lane owns. It path-depends on the REAL dregg crates so the cap discipline is the
+# GENUINE one (`is_attenuation`, `AuthRequired`, `CellId`, the real
+# `TurnExecutor` via `dregg-firmament::SurfaceBacking`) — never a parallel model.
+
+# Empty [workspace] table → this crate is its OWN workspace root, NOT a member of
+# the repo-root workspace. It still path-depends on the real dregg crates; cargo
+# resolves those within the root workspace and links them into THIS crate's local
+# target.
+[workspace]
+
+# THE FORK SEAM (replicated from the breadstuffs-root `Cargo.toml`, adjusted for
+# this crate's depth). Because this crate is its OWN workspace root, the repo-root
+# `[patch]` does NOT apply here — so the transitive `dregg-circuit` (via
+# `dregg-turn`, via `dregg-firmament`) would resolve `p3-recursion` from the
+# PINNED git rev, which lacks the `RecursionInput::NativeBatchStark` variant
+# `dregg-circuit` now calls. We point the patch at the SAME local fork checkout the
+# root + `dregg-firmament` do. `../` = starbridge-web-surface → breadstuffs →
+# dev. Keep in sync with the root/firmament blocks; all revert to the git rev once
+# the fork is pushed.
+[patch."https://github.com/emberian/plonky3-recursion"]
+p3-recursion = { path = "../../plonky3-recursion/recursion" }
+p3-circuit = { path = "../../plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "../../plonky3-recursion/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "../../plonky3-recursion/poseidon2-circuit-air" }
+
+[package]
+name = "starbridge-web-surface"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The embedded web surface as a cap-confined dregg cell + the dregg:// web-of-cells verified-attested fetch. The WebViewDelegate IS the cap gate; a link is a capability; a fetch is a verified turn returning attested content."
+
+[dependencies]
+# The REAL cap-gradation bridge: the `Capability{ target: Surface(cell), rights }`
+# handle, the `SurfaceBacking` (real `Ledger` + `TurnExecutor`, the five surface
+# verbs gating on the genuine `is_attenuation`), and the re-exported real rights
+# lattice + `CellId`. The whole surface authority model rides this; we never
+# reinvent `granted ⊆ held`.
+dregg-firmament = { path = "../sel4/dregg-firmament" }
+
+# The REAL cell types: `AuthRequired`/`is_attenuation` (the rights lattice),
+# `CapabilityRef`/`CapabilitySet` (the c-list), `Cell`/`Ledger`/`Permissions`.
+dregg-cell = { path = "../cell" }
+
+# The REAL attestation primitives: `AttestedRoot` (the quorum-signed,
+# blocklace-bound root) + `merkle_root_of_receipt_hashes` (the receipt-stream
+# Merkle verifier) + `CellId`. The `dregg://` fetch's attested-content envelope is
+# built from these — never a bespoke attestation.
+dregg-types = { path = "../types" }
+
+# Content-addressing (the `content_hash = blake3(bytes)` half of the attested
+# resource) + the receipt-leaf commitment. The SAME `blake3 = "1"` the cell /
+# types crates already pull in (the receipt-tree hash family in
+# `dregg_types::merkle_root_of_receipt_hashes` is blake3) — no new lockfile
+# surface, just naming it directly.
+blake3 = "1"
+
+[dev-dependencies]
+# (tests live inline in each module + in `tests/`)
+
+[profile.release]
+opt-level = "s"
