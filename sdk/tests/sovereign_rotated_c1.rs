@@ -138,3 +138,182 @@ fn rotated_sovereign_forged_post_state_is_rejected() {
         other => panic!("ANTI-GHOST: forged post-state must be rejected, got {other:?}"),
     }
 }
+
+// ===========================================================================
+// WALL A — the rotated `prove_full_turn` / `verify_full_turn` round-trip carries
+// ZERO v1 dependency. These drive `prove_full_turn` DIRECTLY with a rotation
+// witness (not the executor-mint path) so the rotated leg's vk_hash (A.1) and the
+// rotated-PI conservation read (A.2) are exercised, and so the v1 trace is NOT
+// generated on the rotated path (A.3). The witness is built mirroring the
+// cipherclerk's validated reference shape (a single outgoing sovereign transfer,
+// the transfer caveat manifest).
+// ===========================================================================
+mod wall_a {
+    use dregg_cell::commitment::{V9RotationContext, compute_canonical_state_commitment_v9_felt};
+    use dregg_cell::{Cell, CellMode, Ledger};
+    use dregg_circuit::effect_vm::{self, CellState};
+    use dregg_sdk::full_turn_proof::{
+        ConservationWitness, FullTurnWitness, RotationTurnWitness, prove_full_turn, verify_full_turn,
+    };
+    use dregg_turn::rotation_witness as rw;
+
+    /// Build a valid rotated `FullTurnWitness` for a single outgoing transfer of `amount`
+    /// from a sovereign cell of `balance`. Returns `(witness, old_commit_felt,
+    /// new_commit_felt)` — the latter two are the rotated PI 34/35 the verifier expects.
+    /// Mirrors `AgentCipherclerk::prove_sovereign_turn_rotated` (the C1 reference).
+    fn build_rotated_transfer_witness(
+        balance: u64,
+        amount: u64,
+    ) -> (
+        FullTurnWitness,
+        dregg_circuit::field::BabyBear,
+        dregg_circuit::field::BabyBear,
+    ) {
+        let token_id = *blake3::hash(b"wallA-domain").as_bytes();
+        let mut before_cell = Cell::with_balance([7u8; 32], token_id, balance as i64);
+        before_cell.mode = CellMode::Sovereign;
+
+        // after-state: an outgoing transfer debits the balance.
+        let mut after_cell = before_cell.clone();
+        after_cell
+            .state
+            .set_balance(after_cell.state.balance().saturating_sub(amount as i64));
+
+        // circuit pre-state (cap-root-seeded), identical to the v1 path.
+        let initial_vm_state = CellState::with_capability_root(
+            before_cell.state.balance() as u64,
+            before_cell.state.nonce() as u32,
+            dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities),
+        );
+
+        let vm_effects = vec![effect_vm::Effect::Transfer {
+            amount,
+            direction: 1, // outgoing
+        }];
+
+        let nullifier_root = [0u8; 32];
+        let receipt_hashes: Vec<[u8; 32]> = Vec::new();
+        let mut ctx_ledger = Ledger::new();
+        let _ = ctx_ledger.insert_cell(before_cell.clone());
+
+        let before_w = rw::produce(&before_cell, &ctx_ledger, &nullifier_root, &receipt_hashes);
+        let after_w = rw::produce(&after_cell, &ctx_ledger, &nullifier_root, &receipt_hashes);
+
+        // The cell-side v9 commitment of the before-state == rotated PI 34; the after-state
+        // v9 == rotated PI 35 (the cross-checks the cipherclerk asserts by construction).
+        let old_commit = compute_canonical_state_commitment_v9_felt(
+            &before_cell,
+            &V9RotationContext {
+                cells_root: before_w.pre_limbs[0],
+                nullifier_root,
+                iroot: before_w.iroot,
+            },
+        );
+        let new_commit = compute_canonical_state_commitment_v9_felt(
+            &after_cell,
+            &V9RotationContext {
+                cells_root: after_w.pre_limbs[0],
+                nullifier_root,
+                iroot: after_w.iroot,
+            },
+        );
+
+        let rotation = RotationTurnWitness::for_effects(before_w, after_w, &vm_effects);
+        let witness = FullTurnWitness {
+            initial_cell_state: initial_vm_state,
+            effects: vm_effects,
+            authorization: None,
+            membership: None,
+            conservation: None,
+            non_revocation: None,
+            cap_membership: None,
+            turn_hash: *blake3::hash(b"wallA-turn").as_bytes(),
+            rotation: Some(rotation),
+        };
+        (witness, old_commit, new_commit)
+    }
+
+    /// CONTROL: a rotated full-turn proves through `prove_full_turn` and `verify_full_turn`
+    /// ACCEPTS it — the rotated leg's vk_hash is the rotated cohort descriptor's fingerprint
+    /// (A.1) and is re-checked at verify; the v1 effect-vm trace was never generated (A.3).
+    #[test]
+    fn rotated_full_turn_round_trips() {
+        let (witness, _old, _new) = build_rotated_transfer_witness(1000, 100);
+        let proof = prove_full_turn(&witness).expect("rotated full-turn should prove");
+
+        // The attached leg is the rotated one (not the v1 "effect-vm").
+        let labels: Vec<&str> = proof
+            .composed
+            .sub_proofs
+            .iter()
+            .map(|sp| sp.label.as_str())
+            .collect();
+        assert!(
+            labels.contains(&"effect-vm-rotated"),
+            "expected a rotated effect-vm leg, got {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"effect-vm"),
+            "the v1 effect-vm leg must be ABSENT on the rotated path, got {labels:?}"
+        );
+
+        // The verifier cross-binds OLD_COMMIT(0)/NEW_COMMIT(4) of the rotated leg's PI; those
+        // carriers are the trace's OWN before/after state-commit (NOT a separately-recomputed
+        // v9), so the expected commits ARE the proof's bound PI at those offsets.
+        let rot_pi = &proof
+            .composed
+            .sub_proofs
+            .iter()
+            .find(|sp| sp.label == "effect-vm-rotated")
+            .expect("rotated leg present")
+            .sub_public_inputs;
+        let old_commit = rot_pi[dregg_circuit::effect_vm::pi::OLD_COMMIT];
+        let new_commit = rot_pi[dregg_circuit::effect_vm::pi::NEW_COMMIT];
+
+        verify_full_turn(&proof, old_commit, new_commit).expect("rotated full-turn should verify");
+    }
+
+    /// ANTI-GHOST (A.1): tampering the rotated leg's vk_hash is REJECTED. The verifier
+    /// re-derives the expected fingerprint from the uniquely-accepting cohort descriptor and
+    /// the mismatch fails — proving vk_hash is load-bearing on the rotated leg (not cosmetic).
+    #[test]
+    fn rotated_full_turn_tampered_vk_hash_rejected() {
+        let (witness, old_commit, new_commit) = build_rotated_transfer_witness(1000, 100);
+        let mut proof = prove_full_turn(&witness).expect("rotated full-turn should prove");
+
+        let leg = proof
+            .composed
+            .sub_proofs
+            .iter_mut()
+            .find(|sp| sp.label == "effect-vm-rotated")
+            .expect("rotated leg present");
+        leg.vk_hash[0] ^= 0xFF; // flip a byte of the descriptor fingerprint
+
+        let err = verify_full_turn(&proof, old_commit, new_commit)
+            .expect_err("ANTI-GHOST: a tampered rotated vk_hash must be rejected");
+        let s = format!("{err:?}");
+        assert!(
+            s.contains("vk_hash") || s.contains("fingerprint"),
+            "expected a vk_hash-mismatch rejection, got: {s}"
+        );
+    }
+
+    /// ANTI-GHOST (A.2): with a conservation witness present, a FORGED expected_net_delta is
+    /// rejected — and the check reads net_delta from the ROTATED PI (the v1 trace does not
+    /// exist on this path), so this also proves the conservation leg has no v1 dependency.
+    #[test]
+    fn rotated_full_turn_forged_net_delta_rejected() {
+        let (mut witness, _old, _new) = build_rotated_transfer_witness(1000, 100);
+        // A wrong expected net_delta (the honest turn's is the outgoing-100 encoding).
+        witness.conservation = Some(ConservationWitness {
+            expected_net_delta: 999_999,
+        });
+        let err = prove_full_turn(&witness)
+            .expect_err("ANTI-GHOST: a forged conservation net_delta must be rejected");
+        let s = format!("{err:?}");
+        assert!(
+            s.contains("conservation"),
+            "expected a conservation mismatch (read from the rotated PI), got: {s}"
+        );
+    }
+}

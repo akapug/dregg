@@ -2666,7 +2666,17 @@ async fn execute_finalized_turn(
                             )
                         }
                         (None, Some(spent_nullifier)) => {
-                            // SPEND turn → freshness path (bound verify).
+                            // SPEND turn → freshness path (bound verify). FLOW-B (C4 close): unlike
+                            // the sibling arms, this path builds the per-turn ROTATION producer
+                            // witnesses INTERNALLY (from the cap-less synthetic actor cell — the
+                            // SAME pre-state the v1 leg proves over), so a single-spend NoteSpend
+                            // turn proves ROTATED through `noteSpendVmDescriptor2R24`, which pins the
+                            // spent nullifier at PI[38] (`EffectVmEmitRotationV3.noteSpendV3`). The
+                            // no-double-spend binding survives the rotation (`verify_full_turn` step
+                            // 8 reads PI[38]); a multi-spend turn keeps the v1 leg (the rotated
+                            // generator's single-spend gate refuses it, where a 2nd distinct
+                            // nullifier is UNSAT). Under `not(recursion)` the byte-identical v1 leg
+                            // runs (the present rotation witness is ignored).
                             crate::turn_proving::prove_and_verify_finalized_turn_freshness(
                                 &signed_turn.turn.agent,
                                 pre_balance,

@@ -919,6 +919,60 @@ pub fn prove_effect_vm_rotated_ir2_with_caveat(
         .map_err(|e| SdkError::InvalidWitness(format!("rotated IR-v2 proof: {e}")))
 }
 
+/// Resolve the committed rotated cohort descriptor JSON for a turn's effects (the SAME
+/// resolution `prove_effect_vm_rotated_ir2_with_caveat` performs): the lead effect's cohort
+/// name via `rotated_descriptor_name_for_effect`, requiring a homogeneous cohort, then the
+/// registry JSON string from `V3_STAGED_REGISTRY_TSV`. Fails closed for empty / heterogeneous /
+/// non-cohort turns. Returns `(name, json)`.
+#[cfg(feature = "recursion")]
+fn rotated_descriptor_json_for_effects(
+    effects: &[VmEffectKind],
+) -> Result<(&'static str, &'static str), SdkError> {
+    use dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect;
+    use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
+
+    let lead = effects
+        .first()
+        .ok_or_else(|| SdkError::InvalidWitness("rotated vk_hash: empty turn".into()))?;
+    let name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
+        SdkError::InvalidWitness(format!(
+            "rotated vk_hash: effect {lead:?} is not in the rotated cohort (no R=24 descriptor)"
+        ))
+    })?;
+    for e in &effects[1..] {
+        if rotated_descriptor_name_for_effect(e) != Some(name) {
+            return Err(SdkError::InvalidWitness(
+                "rotated vk_hash: heterogeneous multi-effect turn (one rotated descriptor per proof)"
+                    .into(),
+            ));
+        }
+    }
+    let json = V3_STAGED_REGISTRY_TSV
+        .lines()
+        .find_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            if it.next() == Some(name) {
+                let _display = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| SdkError::InvalidWitness(format!("{name} not in staged rotated registry")))?;
+    Ok((name, json))
+}
+
+/// The rotated effect-vm leg's `vk_hash` (Wall A.1): the blake3 fingerprint of the committed
+/// rotated cohort descriptor JSON. This pins the rotated leg to its OWN descriptor — the verifier
+/// re-derives the same fingerprint from the (uniquely) accepting cohort descriptor and rejects a
+/// tampered vk_hash. (The committed registry JSON is the canonical pin the rotated path already
+/// uses to resolve + parse the descriptor at prove/verify time, so fingerprinting it is consistent.)
+#[cfg(feature = "recursion")]
+fn rotated_effect_vm_vk_hash(effects: &[VmEffectKind]) -> Result<[u8; 32], SdkError> {
+    let (_name, json) = rotated_descriptor_json_for_effects(effects)?;
+    Ok(*blake3::hash(json.as_bytes()).as_bytes())
+}
+
 /// Verify an effect-vm sub-proof, SHAPE-DRIVEN — deliberately independent of
 /// `DREGG_DESCRIPTOR_PROVER` (the env var tunes the PROVER only; a peer must accept any
 /// sound proof regardless of its own environment). A proof produced by the descriptor
@@ -976,6 +1030,7 @@ fn verify_effect_vm_proof_with_cutover(
 fn verify_effect_vm_rotated_with_cutover(
     proof_bytes: &[u8],
     public_inputs: &[BabyBear],
+    expected_vk_hash: &[u8; 32],
 ) -> Result<(), String> {
     use dregg_circuit::descriptor_ir2::{
         Ir2BatchProof, DreggStarkConfig, parse_vm_descriptor2, verify_vm_descriptor2,
@@ -985,7 +1040,9 @@ fn verify_effect_vm_rotated_with_cutover(
     let proof: Ir2BatchProof<DreggStarkConfig> = postcard::from_bytes(proof_bytes)
         .map_err(|e| format!("rotated effect-vm proof deserialize: {e}"))?;
 
-    let mut bound: Vec<&str> = Vec::new();
+    // The accepting cohort descriptor(s) AND the JSON each was parsed from (so we can re-derive
+    // and re-check the attached vk_hash — Wall A.1 makes vk_hash load-bearing on the rotated leg).
+    let mut bound: Vec<(&str, &str)> = Vec::new();
     for line in V3_STAGED_REGISTRY_TSV.lines() {
         let mut it = line.splitn(3, '\t');
         let name = match it.next() {
@@ -1001,17 +1058,31 @@ fn verify_effect_vm_rotated_with_cutover(
             if public_inputs.len() >= desc.public_input_count {
                 let dpis = &public_inputs[..desc.public_input_count];
                 if verify_vm_descriptor2(&desc, &proof, dpis).is_ok() {
-                    bound.push(name);
+                    bound.push((name, json));
                 }
             }
         }
     }
     match bound.as_slice() {
-        [_only] => Ok(()),
+        [(_name, json)] => {
+            // Re-derive the rotated vk_hash from the uniquely-accepting cohort descriptor's
+            // committed JSON and pin it to the attached vk_hash. A tampered vk_hash is rejected
+            // even though the proof itself is selector-bound (defends the descriptor-identity
+            // metadata the wire carries).
+            let derived = *blake3::hash(json.as_bytes()).as_bytes();
+            if &derived != expected_vk_hash {
+                return Err(format!(
+                    "rotated effect-vm vk_hash mismatch: attached {expected_vk_hash:?} != \
+                     accepting cohort descriptor fingerprint {derived:?}"
+                ));
+            }
+            Ok(())
+        }
         [] => Err("rotated effect-vm proof verified under NO cohort descriptor".to_string()),
         multi => Err(format!(
-            "rotated effect-vm proof verified under MULTIPLE cohort descriptors {multi:?} — \
-             selector binding ambiguous, rejecting"
+            "rotated effect-vm proof verified under MULTIPLE cohort descriptors {:?} — \
+             selector binding ambiguous, rejecting",
+            multi.iter().map(|(n, _)| *n).collect::<Vec<_>>()
         )),
     }
 }
@@ -1039,8 +1110,25 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // ========================================================================
     // 1. Effect VM proof (state transition)
     // ========================================================================
-    let (effect_trace, effect_pi) =
-        generate_effect_vm_trace(&witness.initial_cell_state, &witness.effects);
+    // STAGED CUTOVER (Wall A.3): the v1 Effect-VM trace + PI are computed ONLY when the
+    // rotated leg is NOT taken (no rotation witness, or `not(recursion)`). On the rotated
+    // path the v1 trace would be dead work whose only escaping value (net_delta for the
+    // conservation leg) is carried in the rotated PI prefix instead — so the rotated branch
+    // is fully self-sufficient and carries ZERO v1 dependency. Under `not(recursion)` a
+    // present `rotation` is ignored, so `use_rotated` is always false and this is byte-identical.
+    #[cfg(feature = "recursion")]
+    let use_rotated = witness.rotation.is_some();
+    #[cfg(not(feature = "recursion"))]
+    let use_rotated = false;
+    #[allow(clippy::type_complexity)]
+    let v1_effect: Option<(Vec<Vec<BabyBear>>, Vec<BabyBear>)> = if use_rotated {
+        None
+    } else {
+        Some(generate_effect_vm_trace(
+            &witness.initial_cell_state,
+            &witness.effects,
+        ))
+    };
     // AUDITED PATH: the Effect VM state transition is proven through the real
     // Plonky3 verifier (`p3-batch-stark`) with REAL in-circuit Poseidon2 for
     // every state-commitment / cap-root hash — NOT the bespoke `stark` (whose
@@ -1080,7 +1168,12 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
             label: "effect-vm-rotated".into(),
             proof_bytes,
             sub_public_inputs: rot_pi.clone(),
-            vk_hash: compute_vk_hash_bytes(&effect_vm_circuit_descriptor()),
+            // Wall A.1: the rotated leg carries the ROTATED cohort descriptor's vk_hash (the
+            // blake3 fingerprint of its committed registry JSON), NOT the v1 descriptor. This
+            // is now LOAD-BEARING: `verify_effect_vm_rotated_with_cutover` re-derives the same
+            // fingerprint from the (uniquely) accepting cohort descriptor and rejects a
+            // tampered vk_hash. Removes the last v1-descriptor reference on the rotated path.
+            vk_hash: rotated_effect_vm_vk_hash(&witness.effects)?,
         });
         Some(rot_pi)
     } else {
@@ -1090,12 +1183,16 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     let rotated_effect_pi: Option<Vec<BabyBear>> = None;
 
     if rotated_effect_pi.is_none() {
+        // The v1 leg: `v1_effect` is `Some` exactly when the rotated leg was NOT taken.
+        let (effect_trace, effect_pi) = v1_effect
+            .as_ref()
+            .expect("v1 effect trace present on the non-rotated path");
         let effect_proof =
-            prove_effect_vm_with_cutover(&witness.effects, &effect_trace, &effect_pi)?;
+            prove_effect_vm_with_cutover(&witness.effects, effect_trace, effect_pi)?;
         let effect_proof_bytes = postcard::to_allocvec(&effect_proof).map_err(|e| {
             SdkError::InvalidWitness(format!("effect-vm p3 proof serialize failed: {e}"))
         })?;
-        all_public_inputs.extend_from_slice(&effect_pi);
+        all_public_inputs.extend_from_slice(effect_pi);
         sub_proofs.push(AttachedSubProof {
             label: "effect-vm".into(),
             proof_bytes: effect_proof_bytes.clone(),
@@ -1186,10 +1283,23 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // We record the component flag but the actual conservation binding is via PI check.
     if let Some(cons_witness) = &witness.conservation {
         // Verify that the Effect VM's net_delta matches the expected conservation.
+        // Wall A.2: read net_delta from whichever effect-vm leg was actually proven. The
+        // rotated PI carries NET_DELTA_MAG(16)/NET_DELTA_SIGN(17) at their v1 offsets (both
+        // < V1_PI_COUNT=34, the carried v1 prefix), so the rotated path reads from `rotated_effect_pi`
+        // with ZERO v1 dependency; the v1 path reads from the v1 `effect_pi`.
+        let conservation_pi: &[BabyBear] = match (rotated_effect_pi.as_ref(), v1_effect.as_ref()) {
+            (Some(rot_pi), _) => rot_pi,
+            (None, Some((_, v1_pi))) => v1_pi,
+            (None, None) => {
+                return Err(SdkError::InvalidWitness(
+                    "conservation: no effect-vm PI available (neither rotated nor v1)".into(),
+                ));
+            }
+        };
         let (effect_delta_mag, effect_delta_sign) =
             effect_vm::encode_net_delta(cons_witness.expected_net_delta);
-        let actual_mag = effect_pi[effect_vm::pi::NET_DELTA_MAG];
-        let actual_sign = effect_pi[effect_vm::pi::NET_DELTA_SIGN];
+        let actual_mag = conservation_pi[effect_vm::pi::NET_DELTA_MAG];
+        let actual_sign = conservation_pi[effect_vm::pi::NET_DELTA_SIGN];
 
         if actual_mag != effect_delta_mag || actual_sign != effect_delta_sign {
             return Err(SdkError::InvalidWitness(format!(
@@ -1482,6 +1592,7 @@ pub fn verify_full_turn_bound(
                 verify_effect_vm_rotated_with_cutover(
                     &attached.proof_bytes,
                     &attached.sub_public_inputs,
+                    &attached.vk_hash,
                 )
             }
             // AUTHORIZATION / MEMBERSHIP / NON-REVOCATION: all now verified by
