@@ -6247,7 +6247,7 @@ fn schedule_projected_wr(
         .iter()
         .map(|row| row.iter().map(|&v| BabyBear::new(v)).collect())
         .collect();
-    dregg_turn::WitnessedReceipt::from_components(
+    let mut wr = dregg_turn::WitnessedReceipt::from_components(
         receipt.clone(),
         hex_decode_var(&material.proof_hex).unwrap_or_default(),
         pi_u32,
@@ -6256,7 +6256,16 @@ fn schedule_projected_wr(
         } else {
             Some(trace_bb.as_slice())
         },
-    )
+    );
+    // ROTATED-WR PRODUCER (ROTATION-CUTOVER §EXEC.3): carry the decoupled 49-felt schedule
+    // block NATIVELY so the aggregator's `build_inner_rows_v2` can consume it WITHOUT the
+    // >=204-wide v1 PI a rotated WR (38/39-PI) does not have. `schedule_block_for_cell` produces
+    // the same block `schedule_block_from_inner_pi` would project from a full v1 PI; the field is
+    // `serde(default)`, so it round-trips through the DWR1 artifact and is ignored by every legacy
+    // consumer. CG-3 in-circuit rejects a divergent block, so the honest construction is safe.
+    wr.bilateral_schedule =
+        Some(dregg_turn::bilateral_schedule::schedule_block_for_cell(turn, cell_id).to_vec());
+    wr
 }
 
 /// Submit a Turn carrying exactly one bilateral effect (Transfer / Grant /

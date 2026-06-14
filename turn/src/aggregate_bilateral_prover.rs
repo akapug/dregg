@@ -1344,6 +1344,144 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // LIVE-PATH ROTATED FLOW — a ROTATED WitnessedReceipt (38/39-felt rotated PI,
+    // NO >=204-wide v1 PI) carrying the decoupled schedule NATIVELY flows end-to-end
+    // through BOTH consumers: the aggregator (`build_inner_rows_v2` via
+    // `prove_aggregated_bundle`) AND the executor cross-check
+    // (`verify_bilateral_chain` -> `verify_bilateral_bundle_with_schedule`).
+    // This is exactly the node WR-producer -> aggregate path post-rotation.
+    // -----------------------------------------------------------------------
+
+    /// Build a ROTATED per-cell WitnessedReceipt: a short (39-felt) rotated EffectVM PI that is
+    /// far too small for the v1 schedule-window projection, plus the standalone 49-felt schedule
+    /// block populated EXACTLY as the node producer does
+    /// (`bilateral_schedule::schedule_block_for_cell`). This is the artifact a rotated node mints.
+    fn fabricate_rotated_wr(turn: &Turn, cell_id: &CellId) -> WitnessedReceipt {
+        // 39 felts = the rotated note-spend PI width; deliberately << ACTIVE_BASE_COUNT (204),
+        // so the legacy v1-PI projection path is structurally unavailable.
+        let short_pi: Vec<u32> = vec![0u32; 39];
+        assert!(short_pi.len() < inner_pi::ACTIVE_BASE_COUNT);
+        let trace = dummy_scope2_trace();
+        let mut wr =
+            WitnessedReceipt::from_components(dummy_receipt(turn.agent.clone()), vec![], short_pi, Some(&trace));
+        wr.bilateral_schedule =
+            Some(crate::bilateral_schedule::schedule_block_for_cell(turn, cell_id).to_vec());
+        wr
+    }
+
+    /// EQUIVALENCE (the load-bearing invariant): the node producer's `schedule_block_for_cell`
+    /// is BYTE-IDENTICAL to the legacy v1-PI projection (`schedule_block_from_inner_pi` over a
+    /// fully-PI'd WR). This is what makes setting `bilateral_schedule` on full-PI producer WRs a
+    /// no-op (`build_inner_rows_v2` prefers the native block, but it equals the projection).
+    #[test]
+    fn schedule_block_for_cell_equals_v1_projection() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+        for cell in [alice, bob] {
+            let native = crate::bilateral_schedule::schedule_block_for_cell(&turn, &cell);
+            let projected = honest_schedule_block(&fabricate_wr(&turn, &cell));
+            assert_eq!(
+                native, projected,
+                "schedule_block_for_cell must equal the v1 PI projection for cell {cell:?}"
+            );
+        }
+    }
+
+    /// The rotated bilateral bundle (short PI + native schedule) PROVES + VERIFIES through the
+    /// aggregator — `build_inner_rows_v2` consumes the native block, never the (absent) v1 PI.
+    #[test]
+    fn rotated_native_schedule_bundle_round_trips_through_aggregator() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let entries = vec![
+            (alice, fabricate_rotated_wr(&turn, &alice)),
+            (bob, fabricate_rotated_wr(&turn, &bob)),
+        ];
+        // Sanity: these WRs genuinely lack the v1 PI — the projection fallback CANNOT serve them.
+        for (_, wr) in &entries {
+            assert!(wr.public_inputs.len() < inner_pi::ACTIVE_BASE_COUNT);
+            assert!(wr.bilateral_schedule.is_some());
+        }
+
+        let bundle =
+            prove_aggregated_bundle(&turn, &entries).expect("rotated native-schedule bundle proves");
+        assert_eq!(bundle.participating_cells.len(), 2);
+        verify_aggregated_bundle(&bundle).expect("verify rotated native-schedule bundle");
+    }
+
+    /// The SAME rotated WRs pass the executor's bilateral cross-check
+    /// (`verify_bilateral_chain` -> `verify_bilateral_bundle_with_schedule`): the WR seam re-bases
+    /// each native schedule block into the v1 PI window so the per-cell counts/roots/IS_AGENT
+    /// checks see the rotated WR's schedule. A FULLY-PI'd v1 WR for the same cell must agree.
+    #[test]
+    fn rotated_wr_passes_executor_bilateral_cross_check() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let a_rot = fabricate_rotated_wr(&turn, &alice);
+        let b_rot = fabricate_rotated_wr(&turn, &bob);
+        let wrs = vec![(alice, &a_rot), (bob, &b_rot)];
+        WitnessedReceipt::verify_bilateral_chain(&wrs, &turn)
+            .expect("rotated WRs must pass the executor bilateral cross-check");
+
+        // EQUIVALENCE: the rotated WR's re-based schedule yields the SAME per-cell verdict as a
+        // fully-PI'd v1 WR (the projection the rotated block reproduces).
+        let a_v1 = fabricate_wr(&turn, &alice);
+        let b_v1 = fabricate_wr(&turn, &bob);
+        let wrs_v1 = vec![(alice, &a_v1), (bob, &b_v1)];
+        WitnessedReceipt::verify_bilateral_chain(&wrs_v1, &turn)
+            .expect("v1 WRs must pass the same cross-check");
+    }
+
+    /// ANTI-GHOST (executor cross-check): a TAMPERED native schedule on a rotated WR is rejected
+    /// by `verify_bilateral_chain` — the forged counts disagree with the canonical schedule the
+    /// executor recomputes from the Turn, so `extract_from_pi`-vs-`schedule.counts_for` fails.
+    #[test]
+    fn rotated_wr_tampered_schedule_rejected_by_cross_check() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let mut a_rot = fabricate_rotated_wr(&turn, &alice);
+        let b_rot = fabricate_rotated_wr(&turn, &bob);
+        // Forge the outbound-transfer count in alice's native block.
+        let mut block = a_rot.bilateral_schedule.clone().unwrap();
+        block[sched::COUNTS_BASE] += BabyBear::new(7);
+        a_rot.bilateral_schedule = Some(block);
+
+        let wrs = vec![(alice, &a_rot), (bob, &b_rot)];
+        let res = WitnessedReceipt::verify_bilateral_chain(&wrs, &turn);
+        assert!(
+            res.is_err(),
+            "ANTI-GHOST: a tampered rotated schedule must be rejected by the cross-check, got {res:?}"
+        );
+    }
+
+    /// A short-PI WR with NO native schedule block is a hard reject (nothing to cross-check) —
+    /// the rotated path must not silently pass a WR that carries neither a v1 PI nor a schedule.
+    #[test]
+    fn short_pi_without_native_schedule_is_rejected_by_cross_check() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let mut a_rot = fabricate_rotated_wr(&turn, &alice);
+        a_rot.bilateral_schedule = None; // strip the only schedule source
+        let b_rot = fabricate_rotated_wr(&turn, &bob);
+
+        let wrs = vec![(alice, &a_rot), (bob, &b_rot)];
+        let res = WitnessedReceipt::verify_bilateral_chain(&wrs, &turn);
+        assert!(
+            res.is_err(),
+            "a short-PI WR with no native schedule must be rejected, got {res:?}"
+        );
+    }
+
     /// **Happy path** — the 3-cell bilateral Transfer-and-Grant ring the
     /// brief asks for. Alice transfers to Bob, Bob grants a capability to
     /// Carol; both happen inside one Turn, all three cells participate,

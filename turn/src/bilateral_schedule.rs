@@ -709,6 +709,118 @@ pub fn extract_from_pi(pi: &[BabyBear]) -> (BilateralCounts, BilateralRoots) {
     (counts, roots)
 }
 
+/// Compute the decoupled 49-felt bilateral-schedule block (`Sched.*` layout) for one cell
+/// directly from `(turn, cell_id)` — WITHOUT needing a ≥204-wide v1 PI vector to project from.
+///
+/// This is the rotated-WR producer's source of truth: a rotated WitnessedReceipt carries only
+/// the 38/39-felt rotated EffectVM PI (no full v1 PI slice), so the standalone schedule block it
+/// stores in [`crate::WitnessedReceipt::bilateral_schedule`] is built here. The output is
+/// byte-identical to what
+/// [`dregg_circuit::bilateral_aggregation_air::schedule_block_from_inner_pi`] would project from a
+/// fully-populated v1 PI, because the two share the same field order (turn-id 13 · counts 7 ·
+/// roots 28 · is_agent 1) — the only coupling between the v1 PI window `[25, 74)` and the decoupled
+/// `sched` block. The aggregator's `build_inner_rows_v2` consumes this block and pairs it with the
+/// canonical-turn `expected_*` projection; CG-3 in-circuit then rejects any block that diverges
+/// from the canonical schedule, so this honest construction carries no tampering vector.
+///
+/// `recursion`/`verifier`-gated alongside `schedule_block_from_inner_pi` (the only feature configs
+/// that compile the aggregation path).
+#[cfg(any(feature = "recursion", feature = "verifier"))]
+pub fn schedule_block_for_cell(
+    turn: &Turn,
+    cell_id: &CellId,
+) -> [BabyBear; dregg_circuit::bilateral_aggregation_air::sched::WIDTH] {
+    use dregg_circuit::bilateral_aggregation_air::sched;
+
+    let mut block = [BabyBear::ZERO; sched::WIDTH];
+
+    // Turn-identity prefix — IDENTICAL to the v1 PI turn-id slots (the executor's
+    // `compute_turn_identity_pi` is the one source of truth; the rotated WR's per-effect proof
+    // pins the same turn hash, so the schedule block stays consistent with the inner proof).
+    let (turn_hash, effects_hash, actor_nonce, prev_receipt_hash) =
+        crate::executor::TurnExecutor::compute_turn_identity_pi(turn);
+    for i in 0..sched::TURN_HASH_LEN {
+        block[sched::TURN_HASH_BASE + i] = turn_hash[i];
+    }
+    for i in 0..sched::EFFECTS_HASH_GLOBAL_LEN {
+        block[sched::EFFECTS_HASH_GLOBAL_BASE + i] = effects_hash[i];
+    }
+    block[sched::ACTOR_NONCE] = BabyBear::new((actor_nonce & 0x7FFF_FFFF) as u32);
+    for i in 0..sched::PREVIOUS_RECEIPT_HASH_LEN {
+        block[sched::PREVIOUS_RECEIPT_HASH_BASE + i] = prev_receipt_hash[i];
+    }
+
+    // Per-cell bilateral counts + accumulator roots from the canonical schedule.
+    let schedule = ExpectedBilateral::from_turn(turn);
+    let counts = schedule.counts_for(cell_id);
+    let roots = schedule.roots_for(cell_id, actor_nonce);
+    let count_vals = [
+        counts.outbound_transfer,
+        counts.inbound_transfer,
+        counts.outbound_grant,
+        counts.inbound_grant,
+        counts.intro_as_introducer,
+        counts.intro_as_recipient,
+        counts.intro_as_target,
+    ];
+    debug_assert_eq!(count_vals.len(), sched::COUNTS_LEN);
+    for (k, v) in count_vals.iter().enumerate() {
+        block[sched::COUNTS_BASE + k] = BabyBear::new(*v);
+    }
+    let root_groups = [
+        roots.outgoing_transfer,
+        roots.incoming_transfer,
+        roots.outgoing_grant,
+        roots.incoming_grant,
+        roots.intro_as_introducer,
+        roots.intro_as_recipient,
+        roots.intro_as_target,
+    ];
+    debug_assert_eq!(root_groups.len() * 4, sched::ROOTS_LEN);
+    for (k, g) in root_groups.iter().enumerate() {
+        for (off, v) in g.iter().enumerate() {
+            block[sched::ROOTS_BASE + k * 4 + off] = *v;
+        }
+    }
+
+    block[sched::IS_AGENT_CELL] = if cell_id == &turn.agent {
+        BabyBear::new(1)
+    } else {
+        BabyBear::ZERO
+    };
+
+    block
+}
+
+/// Re-base a decoupled 49-felt `Sched.*` block back into a full-width v1-PI-shaped vector,
+/// splicing it into the contiguous window `[SCHEDULE_PI_BASE, SCHEDULE_PI_BASE + 49)` and leaving
+/// every other slot zero. The inverse of
+/// [`dregg_circuit::bilateral_aggregation_air::schedule_block_from_inner_pi`].
+///
+/// This lets the executor's bilateral cross-check
+/// ([`crate::executor::TurnExecutor::verify_bilateral_bundle_with_schedule`]) consume a rotated
+/// WitnessedReceipt — which carries the schedule natively but has only a 38/39-felt PI — by
+/// presenting it the v1-PI layout the per-cell checks (`extract_from_pi` at offsets 38/45/73, the
+/// `IS_AGENT_CELL` read) expect. Every schedule-relevant field round-trips exactly because the v1
+/// PI window `[25, 74)` is laid out identically to the `sched` block (turn-id 13 · counts 7 · roots
+/// 28 · is_agent 1). Fields OUTSIDE the window (e.g. the unilateral-attestation accumulator at
+/// v1 offset 168/169) stay zero — the sentinel a bilateral-only rotated WR carries, matching the
+/// empty `unilateral_attestations` schedule.
+#[cfg(any(feature = "recursion", feature = "verifier"))]
+pub fn pi_from_schedule_block(
+    block: &[BabyBear; dregg_circuit::bilateral_aggregation_air::sched::WIDTH],
+) -> Vec<BabyBear> {
+    use dregg_circuit::bilateral_aggregation_air::{SCHEDULE_PI_BASE, sched};
+    use dregg_circuit::effect_vm::pi as p;
+    let mut pi = vec![BabyBear::ZERO; p::ACTIVE_BASE_COUNT];
+    for (i, v) in block.iter().enumerate() {
+        pi[SCHEDULE_PI_BASE + i] = *v;
+    }
+    // SCHEDULE_PI_BASE + sched::WIDTH must land inside the v1 PI base region.
+    debug_assert!(SCHEDULE_PI_BASE + sched::WIDTH <= p::ACTIVE_BASE_COUNT);
+    pi
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

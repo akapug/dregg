@@ -3280,7 +3280,7 @@ async fn post_aggregate_bundle(
                 }));
             }
         };
-        let wr = match dregg_turn::WitnessedReceipt::from_artifact_bytes(&wr_bytes) {
+        let mut wr = match dregg_turn::WitnessedReceipt::from_artifact_bytes(&wr_bytes) {
             Ok(wr) => wr,
             Err(e) => {
                 return Ok(Json(AggregateBundleResponse {
@@ -3291,7 +3291,22 @@ async fn post_aggregate_bundle(
                 }));
             }
         };
-        per_cell.push((CellId(cell_bytes), wr));
+        let cell = CellId(cell_bytes);
+        // ROTATED-WR PRODUCER (ROTATION-CUTOVER §EXEC.3): a rotated WR carries only the 38/39-felt
+        // rotated PI — too short for `build_inner_rows_v2` to project the 49-felt schedule window
+        // (which needs the >=204-wide v1 PI). If such a WR arrived without a native
+        // `bilateral_schedule` (e.g. produced by a peer that did not set it), reconstruct the
+        // honest block here from the canonical Turn. We do NOT overwrite a block the WR already
+        // carries — that one is what the cross-check binds. CG-3 in-circuit rejects a divergent
+        // block, so reconstructing the honest one for the short-PI case adds no tampering vector.
+        if wr.bilateral_schedule.is_none()
+            && wr.public_inputs.len() < dregg_circuit::effect_vm::pi::ACTIVE_BASE_COUNT
+        {
+            wr.bilateral_schedule = Some(
+                dregg_turn::bilateral_schedule::schedule_block_for_cell(&turn, &cell).to_vec(),
+            );
+        }
+        per_cell.push((cell, wr));
     }
     let n_cells = per_cell.len();
 

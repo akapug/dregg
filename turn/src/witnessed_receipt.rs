@@ -498,20 +498,67 @@ impl WitnessedReceipt {
         wrs: &[(dregg_types::CellId, &WitnessedReceipt)],
         turn: &Turn,
     ) -> Result<(), crate::error::TurnError> {
+        let bundle = Self::bilateral_bundle_pi(wrs)?;
+        crate::executor::TurnExecutor::verify_bilateral_bundle(&bundle, turn)
+    }
+
+    /// Resolve each WitnessedReceipt to the v1-PI-shaped vector the executor's bilateral
+    /// cross-check consumes. A fully-PI'd (v1) WR contributes its `public_inputs` directly. A
+    /// ROTATED WR carries only a 38/39-felt rotated EffectVM PI — too short for the per-cell
+    /// schedule checks — but pins the decoupled schedule in its native
+    /// [`WitnessedReceipt::bilateral_schedule`]; for it we re-base that block into the v1 PI
+    /// window via [`crate::bilateral_schedule::pi_from_schedule_block`], exactly mirroring how the
+    /// aggregator's `build_inner_rows_v2` prefers the native schedule over the PI projection.
+    /// A short-PI WR WITHOUT a native schedule block is a hard reject (no schedule to check).
+    fn bilateral_bundle_pi(
+        wrs: &[(dregg_types::CellId, &WitnessedReceipt)],
+    ) -> Result<Vec<(dregg_types::CellId, Vec<dregg_circuit::field::BabyBear>)>, crate::error::TurnError>
+    {
+        use dregg_circuit::effect_vm::pi as p;
         use dregg_circuit::field::BabyBear;
 
-        let bundle: Vec<(dregg_types::CellId, Vec<BabyBear>)> = wrs
-            .iter()
-            .map(|(cid, wr)| {
+        let mut bundle = Vec::with_capacity(wrs.len());
+        for (cid, wr) in wrs {
+            if wr.public_inputs.len() >= p::ACTIVE_BASE_COUNT {
+                // Full v1 PI present — use it directly (the unchanged legacy path).
                 let pi: Vec<BabyBear> = wr
                     .public_inputs
                     .iter()
                     .map(|&v| BabyBear::new_canonical(v))
                     .collect();
-                (cid.clone(), pi)
-            })
-            .collect();
-        crate::executor::TurnExecutor::verify_bilateral_bundle(&bundle, turn)
+                bundle.push((cid.clone(), pi));
+                continue;
+            }
+            // Rotated WR: re-base its native 49-felt schedule block into the v1 PI window, exactly
+            // mirroring how the aggregator's `build_inner_rows_v2` prefers the native schedule over
+            // the PI projection. The schedule-expansion path compiles only where the aggregation
+            // path does (`recursion`/`verifier`); `not(recursion)` (wasm) has no rotated WRs.
+            #[cfg(any(feature = "recursion", feature = "verifier"))]
+            if let Some(block) = &wr.bilateral_schedule {
+                let arr = <[BabyBear;
+                    dregg_circuit::bilateral_aggregation_air::sched::WIDTH]>::try_from(
+                    block.as_slice(),
+                )
+                .map_err(|_| {
+                    crate::error::TurnError::InvalidExecutionProof(format!(
+                        "WR for cell {:?}: native bilateral_schedule has {} felts, expected {}",
+                        cid,
+                        block.len(),
+                        dregg_circuit::bilateral_aggregation_air::sched::WIDTH
+                    ))
+                })?;
+                bundle.push((cid.clone(), crate::bilateral_schedule::pi_from_schedule_block(&arr)));
+                continue;
+            }
+            return Err(crate::error::TurnError::InvalidExecutionProof(format!(
+                "WR for cell {:?}: PI has {} entries (< {} v1 layout) and carries no native \
+                 bilateral_schedule to cross-check",
+                cid,
+                wr.public_inputs.len(),
+                p::ACTIVE_BASE_COUNT
+            )));
+        }
+        Ok(bundle)
     }
 
     /// γ.2 unilateral binding extension: verify a bilateral bundle against
@@ -525,19 +572,7 @@ impl WitnessedReceipt {
         turn: &Turn,
         schedule: &crate::bilateral_schedule::ExpectedBilateral,
     ) -> Result<(), crate::error::TurnError> {
-        use dregg_circuit::field::BabyBear;
-
-        let bundle: Vec<(dregg_types::CellId, Vec<BabyBear>)> = wrs
-            .iter()
-            .map(|(cid, wr)| {
-                let pi: Vec<BabyBear> = wr
-                    .public_inputs
-                    .iter()
-                    .map(|&v| BabyBear::new_canonical(v))
-                    .collect();
-                (cid.clone(), pi)
-            })
-            .collect();
+        let bundle = Self::bilateral_bundle_pi(wrs)?;
         crate::executor::TurnExecutor::verify_bilateral_bundle_with_schedule(
             &bundle, turn, schedule,
         )
