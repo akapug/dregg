@@ -46,6 +46,14 @@ pub const TOPIC_BLOCKLACE: &str = "dregg/blocklace";
 /// to bound storage growth.
 const MAX_RETAINED_CHECKPOINTS: usize = 5;
 
+/// A strictly-monotonic per-process counter stamped into each `Frontier` message
+/// so repeated frontiers are byte-unique and never collapse under the gossip
+/// layer's hash-dedup (see `BlocklaceGossipMessage::Frontier`).
+fn frontier_nonce() -> u64 {
+    static FRONTIER_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    FRONTIER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvalidBlocklaceBundleEvidence {
     pub block_id: BlockId,
@@ -68,7 +76,20 @@ pub enum BlocklaceGossipMessage {
     /// Response to a pull request.
     PullResponse(Vec<Block>),
     /// Lightweight frontier for efficient sync: creator -> tip block ID.
-    Frontier(HashMap<[u8; 32], BlockId>),
+    ///
+    /// `nonce` is a per-send liveness counter that makes every frontier message
+    /// BYTE-UNIQUE. A frontier is a catch-up PING, not content to deduplicate:
+    /// without the nonce, a node STALLED at a fixed tip-set (e.g. waiting for the
+    /// last missing block of its current round under `supermajority == n`) re-emits
+    /// an IDENTICAL frontier every tick, which the gossip layer's hash-dedup drops
+    /// after the first — so the peer's `handle_frontier` never re-fires and the
+    /// missing block is never re-pushed (a permanent bootstrap deadlock). The
+    /// nonce defeats that dedup so a stuck node's repeated frontier always reaches
+    /// the peer and pulls the gap, every tick, until it advances.
+    Frontier {
+        tips: HashMap<[u8; 32], BlockId>,
+        nonce: u64,
+    },
     /// Announce that a checkpoint is available at the given height.
     /// Peers can then request the full checkpoint data via the HTTP API.
     /// Contains just the height and content hash (not the full checkpoint data).
@@ -143,6 +164,16 @@ pub struct BlocklaceHandle {
     /// check tick instead of waiting for the idle heartbeat. Naturally
     /// debounced — any number of pushes between ticks collapse into one ack.
     pub ack_pending: Arc<std::sync::atomic::AtomicBool>,
+    /// Turn/membership payloads awaiting inclusion in a ROUND-DISCIPLINED block
+    /// (the n>1 path). The naive `submit_turn` produced a block IMMEDIATELY,
+    /// linking all current tips — which at n>1 lands the turn at `max_round+1`
+    /// and degenerates the DAG into a single zig-zag CHAIN (one creator per
+    /// round), so `tau` never super-ratifies. Instead, at n>1 a submitted turn is
+    /// STAGED here and the round-driven cadence (`cadence_tick_round_driven`)
+    /// carries it as the payload of its next round block, keeping the DAG
+    /// round-synchronous so waves finalize cross-node. FIFO; drained one payload
+    /// per round. (Solo n=1 bypasses this and produces the turn block directly.)
+    pub pending_payloads: Arc<RwLock<std::collections::VecDeque<Payload>>>,
 }
 
 /// A read-only view of one blocklace block, shaped to mirror the wasm
@@ -332,12 +363,103 @@ impl BlocklaceHandle {
         block_id
     }
 
+    /// ROUND-DISCIPLINED block production (the Stage-5 finality mechanism).
+    ///
+    /// The Cordial-Miners ordering rule (`ordering::tau`) only super-ratifies a
+    /// wave leader once a SUPERMAJORITY of DISTINCT creators have blocks at the
+    /// wave's last round whose causal past cross-links the leader — i.e. the DAG
+    /// must approach the ROUND-SYNCHRONOUS shape (`blocklace/tests/multi_node_convergence.rs`
+    /// `build_rounds`: round-r blocks point at the round-(r−1) cohort). The naive
+    /// producer (`add_block` linking ALL current tips, one block per cadence tick)
+    /// does NOT build that shape: once gossip delivers a peer's block, that tip is
+    /// at a strictly higher round, so each new block sits at `max+1` and the DAG
+    /// degenerates into a single zig-zag CHAIN with exactly ONE creator per round
+    /// — `is_super_ratified` can then never reach a supermajority of creators at
+    /// any round, and `latest_height` stays 0 at n≥2 forever (the observed S5-1
+    /// failure, even with full dissemination).
+    ///
+    /// This producer instead advances the local creator ONE round at a time, in
+    /// lock-step with the committee:
+    ///
+    ///  * If we have authored nothing yet (`my_max_round == 0`), author a GENESIS
+    ///    block (round 1, no predecessors) — the round-1 cohort seed.
+    ///  * Otherwise we want to author round `my_max_round + 1`, and we may do so
+    ///    ONLY once a supermajority of DISTINCT creators have blocks at our current
+    ///    round `my_max_round` (`plan_round_block`). The new block links the WHOLE
+    ///    round-`my_max_round` cohort as predecessors, so it lands at exactly
+    ///    `my_max_round + 1`. Every honest node paces identically, so the round-r
+    ///    cohort fills with a supermajority of creators and waves super-ratify.
+    ///
+    /// `payload` is carried by the produced block (a queued `Turn`/`TurnBundle`,
+    /// else `Payload::Ack` for a heartbeat/reactive-ack). Returns the new block id,
+    /// or `None` when the round cannot yet advance (we lack a supermajority of the
+    /// current round — the caller leaves the work pending and retries next tick).
+    pub async fn produce_round_block(
+        &self,
+        state: &NodeState,
+        payload: Payload,
+    ) -> Option<BlockId> {
+        let supermajority = {
+            let c = self.constitution.read().await;
+            dregg_blocklace::ordering::supermajority_threshold(c.current.participant_count())
+        };
+
+        let block = {
+            let mut lace = self.lace.write().await;
+            let plan = plan_round_block(&lace, lace.self_creator(), supermajority);
+            match plan {
+                RoundPlan::Wait => return None,
+                RoundPlan::Genesis => lace.add_block_with_predecessors(payload, Vec::new()),
+                RoundPlan::Advance { predecessors, .. } => {
+                    lace.add_block_with_predecessors(payload, predecessors)
+                }
+            }
+        };
+
+        let block_id = block.id();
+        Self::persist_block_to_store(state, &block).await;
+        *self.last_produced.write().await = std::time::Instant::now();
+        self.finality_notify.notify_one();
+        self.push_new_blocks().await;
+        debug!(
+            block_id = %block_id,
+            seq = block.seq,
+            npreds = block.predecessors.len(),
+            "produced round-disciplined block"
+        );
+        Some(block_id)
+    }
+
     async fn submit_turn_payload(
         &self,
         state: &NodeState,
         payload: Payload,
     ) -> (BlockId, FinalityLevel) {
-        // Create the block in our local blocklace.
+        let n_participants = {
+            let c = self.constitution.read().await;
+            c.current.participant_count()
+        };
+
+        if n_participants > 1 {
+            // MULTI-PARTY: stage the turn for ROUND-DISCIPLINED production. Emitting
+            // the block right here (linking all current tips) would land it at
+            // `max_round+1` and break the round-synchronous shape `tau` finalizes
+            // over (the DAG would zig-zag into a one-creator-per-round chain that
+            // never super-ratifies). The round-driven cadence
+            // (`cadence_tick_round_driven`) instead carries this payload in its next
+            // round block. We return the payload's CONTENT id as the receipt handle
+            // (the eventual block id differs; all live callers ignore the return),
+            // and `Local` finality (not yet ordered — it orders when its round
+            // block is produced and a wave super-ratifies it cross-node).
+            let receipt = Self::payload_receipt_id(&payload);
+            self.pending_payloads.write().await.push_back(payload);
+            // Nudge the cadence/executor so the staged turn is picked up promptly.
+            self.finality_notify.notify_one();
+            return (receipt, FinalityLevel::Local);
+        }
+
+        // SOLO (n=1): tau finalizes every block trivially in sequence, so produce
+        // the turn block immediately (linking current tips) — no round discipline.
         let block = {
             let mut lace = self.lace.write().await;
             lace.add_block(payload)
@@ -348,24 +470,22 @@ impl BlocklaceHandle {
         Self::persist_block_to_store(state, &block).await;
         *self.last_produced.write().await = std::time::Instant::now();
 
-        // Determine initial finality based on participant count.
-        let constitution = self.constitution.read().await;
-        let initial_finality = if constitution.current.participant_count() <= 1 {
-            // Solo mode: immediately ordered (we're the only participant).
-            // tau() with n=1 trivially finalizes every block.
-            FinalityLevel::Ordered
-        } else {
-            FinalityLevel::Local
-        };
-        drop(constitution);
-
         // Notify the finality executor that new blocks are available.
         self.finality_notify.notify_one();
 
         // Disseminate to all peers via gossip.
         self.push_new_blocks().await;
 
-        (block_id, initial_finality)
+        (block_id, FinalityLevel::Ordered)
+    }
+
+    /// A stable receipt handle for a staged payload (a `BlockId`-shaped digest of
+    /// its content). Used only as the synchronous return of `submit_turn` at n>1,
+    /// where the real round-block id is not yet known; the live call sites discard
+    /// it, and the turn's actual finality is observed via the attested root.
+    fn payload_receipt_id(payload: &Payload) -> BlockId {
+        let bytes = postcard::to_stdvec(payload).unwrap_or_default();
+        BlockId(*blake3::hash(&bytes).as_bytes())
     }
 
     /// Persist a block to the store. Logs a warning on failure but does not
@@ -409,7 +529,10 @@ impl BlocklaceHandle {
             let lace = self.lace.read().await;
             lace.tips().iter().map(|(k, v)| (*k, *v)).collect()
         };
-        let msg = BlocklaceGossipMessage::Frontier(frontier_tips);
+        let msg = BlocklaceGossipMessage::Frontier {
+            tips: frontier_tips,
+            nonce: frontier_nonce(),
+        };
         self.broadcast_gossip_message(&msg).await;
     }
 
@@ -482,7 +605,18 @@ impl BlocklaceHandle {
             causal_deps: vec![],
         };
 
-        if let Err(e) = self.gossip.publish(&self.topic, &peer_msg).await {
+        // Intra-committee block sync uses the DIRECT eager broadcast, NOT the
+        // Dandelion++ stem. The stem hides a public transaction's ORIGIN; a
+        // validator's blocklace blocks have no origin to hide (every committee
+        // member is public), and the BFT ordering rule (`ordering::tau`) only
+        // super-ratifies once a supermajority of creators' round-blocks have
+        // cross-linked — which needs every creator's block to reach every node
+        // PROMPTLY. Routing each block through one random stem relay delivers
+        // blocks asymmetrically at small N (the Stage-5 dissemination gap,
+        // `docs/STAGE5-CONSENSUS-DEVAC.md`); `publish_eager` reaches every
+        // committee peer in one hop so the round-synchronous shape `tau`
+        // finalizes over actually forms on the running node.
+        if let Err(e) = self.gossip.publish_eager(&self.topic, &peer_msg).await {
             debug!(error = %e, "failed to publish blocklace message");
         }
     }
@@ -1233,6 +1367,7 @@ pub async fn run_blocklace_sync(
         ))),
         last_produced: Arc::new(RwLock::new(std::time::Instant::now())),
         ack_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        pending_payloads: Arc::new(RwLock::new(std::collections::VecDeque::new())),
     };
 
     info!("blocklace gossip layer initialized, processing messages");
@@ -1261,7 +1396,10 @@ pub async fn run_blocklace_sync(
                         lace.tips().iter().map(|(k, v)| (*k, *v)).collect();
                     drop(lace);
 
-                    let msg = BlocklaceGossipMessage::Frontier(frontier_tips);
+                    let msg = BlocklaceGossipMessage::Frontier {
+                        tips: frontier_tips,
+                        nonce: frontier_nonce(),
+                    };
                     handle_for_receiver.broadcast_gossip_message(&msg).await;
                 }
                 Some(GossipEvent::PeerLeft(addr)) => {
@@ -1371,8 +1509,8 @@ async fn handle_blocklace_message(
         BlocklaceGossipMessage::PullResponse(blocks) => {
             handle_push(handle, state, from, blocks).await;
         }
-        BlocklaceGossipMessage::Frontier(their_tips) => {
-            handle_frontier(handle, from, their_tips).await;
+        BlocklaceGossipMessage::Frontier { tips, .. } => {
+            handle_frontier(handle, from, tips).await;
         }
         BlocklaceGossipMessage::CheckpointAvailable {
             height,
@@ -1678,6 +1816,87 @@ async fn handle_frontier(
     );
 }
 
+// ─── Round-Disciplined Production Plan ───────────────────────────────────────
+
+/// The predecessor-selection decision for one round-disciplined block, computed
+/// from the local lace and the committee supermajority. Pure so the
+/// round-synchrony property is unit-testable without a running node. See
+/// [`BlocklaceHandle::produce_round_block`] for the rationale.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RoundPlan {
+    /// Author a genesis block (round 1, no predecessors): we have authored
+    /// nothing yet and seed the round-1 cohort.
+    Genesis,
+    /// Author round `next_round` linking the WHOLE round-(`next_round`−1) cohort
+    /// (`predecessors`): a supermajority of distinct creators are present at our
+    /// current round, so we may advance.
+    Advance {
+        predecessors: Vec<BlockId>,
+        next_round: u64,
+    },
+    /// Do not produce: we lack a supermajority of distinct creators at our
+    /// current round, so advancing would link too few of the previous round for
+    /// `tau` to super-ratify. The caller retries on a later tick.
+    Wait,
+}
+
+/// Decide how the local creator advances the DAG by ONE round (Cordial-Miners
+/// round discipline). `my_creator` is this node's public key; `supermajority`
+/// is `supermajority_threshold(participants)`.
+///
+/// Rule:
+///  * No own block yet ⇒ [`RoundPlan::Genesis`].
+///  * Otherwise let `r = my_max_round`. We want round `r+1`. If a supermajority
+///    of DISTINCT creators have a block at round `r`, return [`RoundPlan::Advance`]
+///    linking every round-`r` block; else [`RoundPlan::Wait`].
+///
+/// Linking the full round-`r` cohort makes the new block land at exactly `r+1`,
+/// and — because every honest node paces identically — fills each round with a
+/// supermajority of creators, which is the precondition `is_super_ratified` needs.
+pub(crate) fn plan_round_block(
+    lace: &Blocklace,
+    my_creator: [u8; 32],
+    supermajority: usize,
+) -> RoundPlan {
+    // Round of every block in the lace (DAG depth; genesis = 1).
+    let mut round_of: HashMap<BlockId, u64> = HashMap::new();
+    let mut my_max_round: u64 = 0;
+    for (id, block) in lace.iter() {
+        let r = lace.round_of(id).unwrap_or(0);
+        round_of.insert(*id, r);
+        if block.creator == my_creator {
+            my_max_round = my_max_round.max(r);
+        }
+    }
+
+    if my_max_round == 0 {
+        // We have authored nothing yet: seed round 1.
+        return RoundPlan::Genesis;
+    }
+
+    // The cohort at our current round: distinct creators + the block ids.
+    let mut cohort_creators: std::collections::HashSet<[u8; 32]> =
+        std::collections::HashSet::new();
+    let mut cohort_blocks: Vec<BlockId> = Vec::new();
+    for (id, block) in lace.iter() {
+        if round_of.get(id).copied() == Some(my_max_round) {
+            cohort_creators.insert(block.creator);
+            cohort_blocks.push(*id);
+        }
+    }
+
+    if cohort_creators.len() >= supermajority {
+        // Deterministic predecessor order (independent of HashMap iteration).
+        cohort_blocks.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        RoundPlan::Advance {
+            predecessors: cohort_blocks,
+            next_round: my_max_round + 1,
+        }
+    } else {
+        RoundPlan::Wait
+    }
+}
+
 // ─── Block Production Cadence ────────────────────────────────────────────────
 
 /// What the cadence task does on one check tick. Pure decision so the
@@ -1754,64 +1973,171 @@ fn spawn_block_cadence(
         info!(
             check_ms,
             idle_heartbeat_ms,
-            "block production cadence active (mutation-driven; blocks only on pending turns, reactive acks, or idle heartbeat)"
+            "block production cadence active (round-disciplined at n>1; mutation-driven at n=1)"
         );
+
+        // CONNECTIVITY GATE (multi-party bootstrap): before producing the FIRST
+        // round block, wait until the committee mesh is established (every other
+        // member's QUIC link is up) — or a bounded timeout. The round-1 genesis
+        // block is eager-pushed ONCE; if a peer's connection is not yet up when we
+        // emit it, that peer never receives it (the one-shot push goes to the void)
+        // and — under `supermajority == n`, where ALL members' round-1 blocks are
+        // required to advance — the cluster deadlocks a round apart at the smallest
+        // N, exactly when links are slowest to form. Holding the first block until
+        // the mesh is up makes the genesis cohort reliably cross-propagate, so the
+        // round-synchronous DAG `tau` finalizes over forms deterministically. After
+        // genesis, frontier reconciliation + connection-agnostic fan-out keep it
+        // live; this gate only governs the first block.
+        {
+            let n_participants = {
+                let c = handle.constitution.read().await;
+                c.current.participant_count()
+            };
+            if n_participants > 1 {
+                let want = n_participants - 1; // links to every other committee member
+                let deadline = std::time::Instant::now() + Duration::from_secs(15);
+                loop {
+                    let connected = handle.gossip.connected_peer_count().await;
+                    if connected >= want || std::time::Instant::now() >= deadline {
+                        info!(
+                            connected,
+                            want, "consensus mesh ready (or timed out) — starting round production"
+                        );
+                        // Announce our frontier so any peer that came up first pulls
+                        // whatever it is missing right as we begin producing.
+                        handle.send_frontier().await;
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+
         loop {
             ticker.tick().await;
 
-            let queued: Vec<dregg_sdk::SignedTurn> = {
-                let mut s = state.write().await;
-                std::mem::take(&mut s.consensus_queue)
+            // The committee size decides the production discipline. At n>1 the
+            // Cordial-Miners ordering rule needs the ROUND-SYNCHRONOUS DAG shape,
+            // so production is ROUND-DRIVEN (advance one round per tick when a
+            // supermajority of the current round is present, carrying any queued
+            // turn). At n=1 (solo, scales-to-zero) tau trivially finalizes every
+            // block in sequence, so we keep the MUTATION-DRIVEN cadence (no
+            // empty-block spam while idle). See `produce_round_block`.
+            let n_participants = {
+                let c = handle.constitution.read().await;
+                c.current.participant_count()
             };
-            // LOAD (not consume) the ack flag: if this tick drains turns
-            // instead, the pending ack stays armed for the next tick rather
-            // than being silently swallowed. It is cleared only on the
-            // ReactiveAck branch, just before the ack block is created.
-            let ack_pending = handle
-                .ack_pending
-                .load(std::sync::atomic::Ordering::Relaxed);
-            let idle_for = handle.last_produced.read().await.elapsed();
 
-            match cadence_decision(queued.len(), ack_pending, idle_for, idle_heartbeat_ms) {
-                CadenceAction::DrainTurns => {
-                    let n = queued.len();
-                    for signed in queued {
-                        match postcard::to_stdvec(&signed) {
-                            Ok(turn_data) => {
-                                handle.submit_turn(&state, turn_data).await;
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "failed to encode queued turn for block production");
-                            }
-                        }
-                    }
-                    debug!(
-                        turns = n,
-                        "cadence: produced turn block(s) from consensus queue"
-                    );
-                }
-                CadenceAction::ReactiveAck => {
-                    // Clear BEFORE creating the ack: a push racing in after the
-                    // clear re-arms the flag (worst case one extra ack next
-                    // tick); a push racing in before the ack's lace lock is
-                    // already covered by this ack's tip links.
-                    handle
-                        .ack_pending
-                        .store(false, std::sync::atomic::Ordering::Relaxed);
-                    handle.submit_heartbeat(&state).await;
-                    debug!("cadence: produced reactive ack block for received peer blocks");
-                }
-                CadenceAction::IdleHeartbeat => {
-                    handle.submit_heartbeat(&state).await;
-                    debug!(
-                        idle_heartbeat_ms,
-                        "cadence: produced idle heartbeat block (no mutations for a full idle window)"
-                    );
-                }
-                CadenceAction::Nothing => {}
+            if n_participants > 1 {
+                cadence_tick_round_driven(&state, &handle).await;
+            } else {
+                cadence_tick_solo(&state, &handle, idle_heartbeat_ms).await;
             }
         }
     });
+}
+
+/// ROUND-DRIVEN production tick (the n>1 finality path). Every tick attempts to
+/// advance the local creator by ONE round (gated on a supermajority of the
+/// current round being present, [`plan_round_block`]); the produced block
+/// carries the next queued turn if any, else a `Payload::Ack` heartbeat. Because
+/// `produce_round_block` is supermajority-gated, a node can never outrun the
+/// slowest honest member by more than one round — the cluster paces together and
+/// fills each round with a supermajority of creators, so waves super-ratify and
+/// `tau` finalizes cross-node. This is intentionally NON-quiescent: DAG-BFT
+/// liveness requires rounds to keep advancing, which is exactly what feeds tau.
+async fn cadence_tick_round_driven(state: &NodeState, handle: &BlocklaceHandle) {
+    // Take at most ONE staged turn/membership payload to carry as this round's
+    // block; the rest stay staged (one payload per round keeps the DAG
+    // round-synchronous and drains the backlog at the round cadence). When none
+    // is staged we still advance the round with a `Payload::Ack` heartbeat — the
+    // DAG must keep advancing rounds for waves to close and tau to finalize.
+    let (payload, carried_turn) = {
+        let mut q = handle.pending_payloads.write().await;
+        match q.pop_front() {
+            Some(p) => (p, true),
+            None => (Payload::Ack, false),
+        }
+    };
+
+    let advanced = handle.produce_round_block(state, payload.clone()).await;
+    match advanced {
+        Some(_) => {
+            // A peer's freshly-received non-Ack block has now been attested by our
+            // round advance — clear the reactive-ack flag (the round block IS the
+            // attestation; acks no longer beget separate ack blocks).
+            handle
+                .ack_pending
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        None => {
+            // The round cannot advance yet (we lack a supermajority of DISTINCT
+            // creators at our current round). Re-stage any pulled payload so it is
+            // carried by the next produced round block.
+            if carried_turn {
+                handle.pending_payloads.write().await.push_front(payload);
+            }
+        }
+    }
+
+    // Announce our FRONTIER every tick (cheap: one map of tip ids), so peers PUSH
+    // any round blocks we are missing (`handle_frontier`) — and so peers missing
+    // OUR latest block pull it. At the genesis-strength threshold
+    // (`supermajority_threshold(n) == n` for small n: n=3 needs ALL three), round
+    // advancement requires gap-free per-round delivery; the one-shot eager push
+    // can miss a peer whose QUIC link was not yet up when a block was produced
+    // (a bootstrap delivery race), which deadlocks every node a round apart until
+    // the slow anti-entropy sweep. Continuous frontier reconciliation drains any
+    // such gap within ONE tick, keeping the cluster paced together and live —
+    // independent of bootstrap timing.
+    handle.send_frontier().await;
+}
+
+/// MUTATION-DRIVEN production tick (the n=1 solo path): drain queued turns, answer
+/// received peer blocks with one reactive ack, or emit one idle heartbeat per
+/// `idle_heartbeat_ms` — never an empty block per check tick. Preserved verbatim
+/// from the pre-round-discipline cadence (solo finalizes trivially, no rounds).
+async fn cadence_tick_solo(state: &NodeState, handle: &BlocklaceHandle, idle_heartbeat_ms: u64) {
+    let queued: Vec<dregg_sdk::SignedTurn> = {
+        let mut s = state.write().await;
+        std::mem::take(&mut s.consensus_queue)
+    };
+    let ack_pending = handle
+        .ack_pending
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let idle_for = handle.last_produced.read().await.elapsed();
+
+    match cadence_decision(queued.len(), ack_pending, idle_for, idle_heartbeat_ms) {
+        CadenceAction::DrainTurns => {
+            let n = queued.len();
+            for signed in queued {
+                match postcard::to_stdvec(&signed) {
+                    Ok(turn_data) => {
+                        handle.submit_turn(state, turn_data).await;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to encode queued turn for block production");
+                    }
+                }
+            }
+            debug!(turns = n, "cadence: produced turn block(s) from consensus queue");
+        }
+        CadenceAction::ReactiveAck => {
+            handle
+                .ack_pending
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            handle.submit_heartbeat(state).await;
+            debug!("cadence: produced reactive ack block for received peer blocks");
+        }
+        CadenceAction::IdleHeartbeat => {
+            handle.submit_heartbeat(state).await;
+            debug!(
+                idle_heartbeat_ms,
+                "cadence: produced idle heartbeat block (no mutations for a full idle window)"
+            );
+        }
+        CadenceAction::Nothing => {}
+    }
 }
 
 // ─── Catch-up Driver ─────────────────────────────────────────────────────────
@@ -2155,6 +2481,28 @@ async fn execute_finalized_turn(
     } else {
         Vec::new()
     };
+
+    // UNIFORM CROSS-NODE APPLICATION: a finalized Transfer must execute the SAME on
+    // every node so each emits the same attested root. The submitting node may have
+    // had the destination cell created out of band (e.g. the faucet), but PEERS that
+    // only received the turn over consensus do not — and the executor rejects a
+    // Transfer to an unknown destination ("transfer destination not found"), so the
+    // turn would commit on the submitter but be rejected on peers, and `latest_height`
+    // never agrees cross-node. Materialize any missing Transfer destination as a
+    // zero-balance remote stub BEFORE execution (the same devnet semantics the faucet
+    // applies eagerly), so the finalized application is identical on all nodes. This
+    // is destination provisioning, not the turn's value semantics: the conservation-
+    // checked Transfer still moves the exact amount into the (now-present) stub.
+    for tree in &signed_turn.turn.call_forest.roots {
+        for effect in &tree.action.effects {
+            if let dregg_turn::Effect::Transfer { to, .. } = effect {
+                if s.ledger.get(to).is_none() {
+                    let stub = dregg_cell::Cell::remote_stub_with_id_and_balance(*to, 0);
+                    let _ = s.ledger.insert_cell(stub);
+                }
+            }
+        }
+    }
 
     // THE SWAP — producer mode (authority inversion), now the DEFAULT — through the ONE
     // shared producer gate every ingress uses (`executor_setup::execute_via_producer`,

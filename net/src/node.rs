@@ -339,6 +339,11 @@ impl PeerNode {
         ));
         // Allow migration for NAT rebinding
         server_config.migration(true);
+        // Keep idle connections ALIVE. Without an explicit keep-alive the gossip
+        // mesh's QUIC links — which sit idle between bursts — silently hit the
+        // idle timeout and close; a dropped committee link then deadlocks finality
+        // under a supermajority of `n` (no fault budget). See `peer_transport_config`.
+        server_config.transport_config(peer_transport_config());
 
         Ok(server_config)
     }
@@ -359,10 +364,12 @@ impl PeerNode {
 
         client_crypto.alpn_protocols = vec![DREGG_ALPN.to_vec()];
 
-        let client_config = ClientConfig::new(Arc::new(
+        let mut client_config = ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
                 .map_err(|e| PeerError::Tls(e.to_string()))?,
         ));
+        // Keep-alive so endpoint-default dials also hold idle links open.
+        client_config.transport_config(peer_transport_config());
         Ok(client_config)
     }
 
@@ -408,12 +415,33 @@ impl PeerNode {
             .map_err(|e| PeerError::Tls(e.to_string()))?;
 
         client_crypto.alpn_protocols = vec![DREGG_ALPN.to_vec()];
-        let client_config = ClientConfig::new(Arc::new(
+        let mut client_config = ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
                 .map_err(|e| PeerError::Tls(e.to_string()))?,
         ));
+        // Keep idle gossip links alive (mirrors the server side) so a quiescent
+        // committee connection is not idle-timed-out and dropped — the connectivity
+        // floor the round-synchronous consensus needs at small N.
+        client_config.transport_config(peer_transport_config());
         Ok(client_config)
     }
+}
+
+/// Shared QUIC transport config for gossip/committee links: a generous idle
+/// timeout PLUS an active keep-alive well under it, so an idle connection is
+/// pinged alive rather than silently closed. The gossip mesh is bursty (blocks
+/// arrive in waves, quiet between), and the consensus supermajority of `n` at
+/// small N has NO fault budget — a single idle-timeout-dropped committee link
+/// stalls finality until a slow redial. Keep-alive at 5s under a 30s idle ceiling
+/// keeps every link continuously live without meaningful overhead.
+fn peer_transport_config() -> Arc<quinn::TransportConfig> {
+    let mut tc = quinn::TransportConfig::default();
+    tc.max_idle_timeout(Some(
+        quinn::IdleTimeout::try_from(std::time::Duration::from_secs(30))
+            .expect("30s is a valid QUIC idle timeout"),
+    ));
+    tc.keep_alive_interval(Some(std::time::Duration::from_secs(5)));
+    Arc::new(tc)
 }
 
 impl PeerConnection {

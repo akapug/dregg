@@ -924,6 +924,15 @@ impl GossipNetwork {
         self.state.read().await.scoreboard.is_graylisted(addr)
     }
 
+    /// Number of currently-live QUIC connections (inbound + outbound). Used by the
+    /// consensus layer to hold off the first round block until the committee mesh
+    /// is established, so the genesis block is eager-pushed over real connections
+    /// rather than into the void (eliminating the small-N bootstrap delivery race
+    /// where a block produced before a peer's link is up is never delivered).
+    pub async fn connected_peer_count(&self) -> usize {
+        self.state.read().await.peers.len()
+    }
+
     /// Join a gossip topic, connecting to bootstrap peers.
     pub async fn join_topic(
         &self,
@@ -1102,6 +1111,93 @@ impl GossipNetwork {
         Ok(())
     }
 
+    /// Publish a message to a topic by **eager-pushing the full payload to EVERY
+    /// peer in the topic** (no Dandelion++ stem, no IHave-only lazy split).
+    ///
+    /// This is the dissemination path for **intra-committee block sync** (the
+    /// blocklace consensus DAG): unlike public transaction gossip, where the
+    /// Dandelion++ stem hides the tx ORIGIN, validator-to-validator block
+    /// dissemination has nothing to hide — every committee member's identity and
+    /// participation is public by construction, and the BFT ordering rule
+    /// (`blocklace::ordering::tau`) only super-ratifies a leader once a
+    /// supermajority of creators' round-blocks have causally cross-linked. That
+    /// REQUIRES every honest creator's block to reach every honest node promptly;
+    /// routing each block through a single random stem relay (then a fluff hop)
+    /// delivers blocks asymmetrically at small N on loopback, so no node assembles
+    /// the round-synchronous shape `tau` needs and `is_super_ratified` never fires
+    /// (the Stage-5 / HIGH-6 dissemination gap, `docs/STAGE5-CONSENSUS-DEVAC.md`).
+    ///
+    /// Eager-pushing directly to ALL committee peers closes that gap: each block
+    /// reaches every other validator in ONE hop. The receiver's existing
+    /// `FullMessage` handler still dedups, delivers locally, and re-forwards to
+    /// its own eager peers — so a peer that learns of a block over a *different*
+    /// link than the originator still has it propagated onward (Plumtree repair
+    /// remains intact). Local delivery to this node's own subscribers happens too,
+    /// so the caller's `subscribe` stream observes its own published messages
+    /// (matching [`publish`]).
+    pub async fn publish_eager(
+        &self,
+        topic: &TopicHandle,
+        message: &PeerMessage,
+    ) -> Result<(), GossipError> {
+        let encoded = message.encode_raw();
+        let msg_hash = *blake3::hash(&encoded).as_bytes();
+
+        // Mark seen + cache so we don't re-process our own echo and can answer
+        // Graft/anti-entropy for it, then collect targets as EVERY live connection
+        // (full payload to all; no lazy IHave-only set for consensus dissemination
+        // — every committee member needs the block itself).
+        //
+        // CONNECTION-AGNOSTIC fan-out (the small-N delivery fix): a committee peer
+        // is often reachable only over the connection IT dialed to us — an inbound
+        // QUIC link keyed by its EPHEMERAL source port, NOT the gossip address we
+        // dialed (and our own outbound dial to its listen port may have failed,
+        // e.g. it had not bound yet when we started). The dialed-address peer set
+        // (`all_peers()`) then names a route with no live connection, silently
+        // dropping the block, while the live inbound link is never used — leaving
+        // that peer a round behind forever under `supermajority == n`. Sending over
+        // EVERY live connection delivers the block on whatever link is up (the
+        // receiver dedups, so a duplicate over two links is free). We union with the
+        // topic peers so a freshly-added-but-not-yet-connected target is still
+        // attempted (a no-op if it has no connection).
+        let targets = {
+            let mut state = self.state.write().await;
+            state.seen.insert(msg_hash);
+            state.cache_insert(
+                msg_hash,
+                CachedMessage {
+                    topic_id: topic.topic_id,
+                    payload: encoded.clone(),
+                    cached_at: Instant::now(),
+                },
+            );
+            let mut targets: std::collections::HashSet<SocketAddr> =
+                match state.topics.get(&topic.topic_id) {
+                    Some(topic_state) => topic_state.all_peers().into_iter().collect(),
+                    None => std::collections::HashSet::new(),
+                };
+            targets.extend(state.peers.keys().copied());
+            targets.into_iter().collect::<Vec<_>>()
+        };
+
+        if !targets.is_empty() {
+            self.outgoing_tx
+                .send(OutgoingGossip::EagerPush {
+                    topic_id: topic.topic_id,
+                    message: message.clone(),
+                    msg_hash,
+                    targets,
+                    lazy_targets: Vec::new(),
+                })
+                .map_err(|_| GossipError::Shutdown)?;
+        }
+
+        self.deliver_locally(topic.topic_id, "127.0.0.1:0".parse().unwrap(), message)
+            .await;
+
+        Ok(())
+    }
+
     /// Subscribe to a gossip topic, receiving messages as they arrive.
     pub async fn subscribe(&self, topic: &TopicHandle) -> Result<MessageStream, GossipError> {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -1156,6 +1252,21 @@ impl GossipNetwork {
             .map_err(|e| GossipError::Join(e.to_string()))?
             .await
             .map_err(|e| GossipError::Join(e.to_string()))?;
+
+        // Serve incoming streams on this OUTBOUND connection too — a QUIC link is
+        // full-duplex, and without a reader here this node would never RECEIVE over
+        // a connection IT dialed (only over accepted ones), which is the small-N
+        // delivery asymmetry that stalls round-synchronous consensus. See
+        // `serve_connection`.
+        let serve_conn = conn.clone();
+        let state = self.state.clone();
+        let outgoing_tx = self.outgoing_tx.clone();
+        let key = self.signing_key.clone();
+        let node_id = self.node_id;
+        let peer_keys = self.peer_keys.clone();
+        tokio::spawn(async move {
+            Self::serve_connection(serve_conn, state, outgoing_tx, key, node_id, peer_keys).await;
+        });
 
         Ok(conn)
     }
@@ -1406,96 +1517,121 @@ impl GossipNetwork {
                     s.scoreboard.observe(remote_addr);
                 }
 
-                // Per-connection stream counter to prevent stream flooding.
-                let active_streams = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                Self::serve_connection(conn, state, outgoing_tx, key, our_node_id, peer_keys).await;
+            });
+        }
+    }
 
-                loop {
-                    let Ok(mut recv) = conn.accept_uni().await else {
-                        break;
+    /// Read and dispatch incoming gossip streams on ONE connection until it closes.
+    ///
+    /// Runs for BOTH accepted (inbound) AND dialed (outbound) connections. This is
+    /// the fix for the small-N delivery asymmetry: a QUIC connection is full-duplex,
+    /// but the gossip layer previously read incoming streams ONLY on accepted
+    /// connections — so a node RECEIVED only from peers that DIALED it. With
+    /// bidirectional committee dialing and a startup race (a node not yet bound when
+    /// its peers dialed it has no inbound connection), the late node could SEND over
+    /// its own outbound links but RECEIVE nothing, stalling round advancement under
+    /// `supermajority == n` forever. Serving incoming streams on outbound
+    /// connections too makes every link full-duplex, so delivery no longer depends
+    /// on which side won the dial race.
+    async fn serve_connection(
+        conn: Connection,
+        state: Arc<RwLock<GossipState>>,
+        outgoing_tx: mpsc::UnboundedSender<OutgoingGossip>,
+        signing_key: Arc<SigningKey>,
+        node_id: NodeId,
+        peer_keys: Arc<RwLock<HashMap<NodeId, PublicKey>>>,
+    ) {
+        let remote_addr = conn.remote_address();
+        // Per-connection stream counter to prevent stream flooding.
+        let active_streams = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        loop {
+            let Ok(mut recv) = conn.accept_uni().await else {
+                break;
+            };
+
+            // Enforce per-connection stream limit.
+            let current_streams = active_streams.fetch_add(1, Ordering::SeqCst);
+            if current_streams >= MAX_STREAMS_PER_PEER {
+                active_streams.fetch_sub(1, Ordering::SeqCst);
+                warn!(
+                    "Rejecting stream from {} — at per-peer limit ({})",
+                    remote_addr, MAX_STREAMS_PER_PEER
+                );
+                continue;
+            }
+
+            let state = state.clone();
+            let outgoing_tx = outgoing_tx.clone();
+            let key = signing_key.clone();
+            let peer_keys = peer_keys.clone();
+            let our_node_id = node_id;
+            let streams_counter = active_streams.clone();
+            tokio::spawn(async move {
+                // Decrement stream count when this stream handler completes.
+                struct StreamGuard(Arc<std::sync::atomic::AtomicUsize>);
+                impl Drop for StreamGuard {
+                    fn drop(&mut self) {
+                        self.0.fetch_sub(1, Ordering::SeqCst);
+                    }
+                }
+                let _guard = StreamGuard(streams_counter);
+                if let Ok(signed) = read_signed_envelope(&mut recv).await {
+                    // Look up the sender's public key from the peer registry.
+                    let sender_pk = {
+                        let keys = peer_keys.read().await;
+                        keys.get(&signed.sender).copied()
                     };
 
-                    // Enforce per-connection stream limit.
-                    let current_streams = active_streams.fetch_add(1, Ordering::SeqCst);
-                    if current_streams >= MAX_STREAMS_PER_PEER {
-                        active_streams.fetch_sub(1, Ordering::SeqCst);
+                    let sender_pk = match sender_pk {
+                        Some(pk) => pk,
+                        None => {
+                            warn!(
+                                "Rejecting gossip envelope from {} — unknown sender {:?}",
+                                remote_addr,
+                                &signed.sender[..4]
+                            );
+                            state
+                                .write()
+                                .await
+                                .scoreboard
+                                .penalize(remote_addr, Penalty::ProtocolViolation);
+                            return;
+                        }
+                    };
+
+                    // Verify Ed25519 signature using the sender's public key.
+                    if !signed.verify(&sender_pk) {
                         warn!(
-                            "Rejecting stream from {} — at per-peer limit ({})",
-                            remote_addr, MAX_STREAMS_PER_PEER
+                            "Rejecting gossip envelope from {} — invalid Ed25519 signature",
+                            remote_addr
                         );
-                        continue;
+                        state
+                            .write()
+                            .await
+                            .scoreboard
+                            .penalize(remote_addr, Penalty::ProtocolViolation);
+                        return;
                     }
 
-                    let state = state.clone();
-                    let outgoing_tx = outgoing_tx.clone();
-                    let key = key.clone();
-                    let peer_keys = peer_keys.clone();
-                    let streams_counter = active_streams.clone();
-                    tokio::spawn(async move {
-                        // Decrement stream count when this stream handler completes.
-                        struct StreamGuard(Arc<std::sync::atomic::AtomicUsize>);
-                        impl Drop for StreamGuard {
-                            fn drop(&mut self) {
-                                self.0.fetch_sub(1, Ordering::SeqCst);
-                            }
-                        }
-                        let _guard = StreamGuard(streams_counter);
-                        if let Ok(signed) = read_signed_envelope(&mut recv).await {
-                            // Look up the sender's public key from the peer registry.
-                            let sender_pk = {
-                                let keys = peer_keys.read().await;
-                                keys.get(&signed.sender).copied()
-                            };
+                    let Some(envelope) = signed.decode_inner() else {
+                        warn!(
+                            "Rejecting gossip envelope from {} — decode failed",
+                            remote_addr
+                        );
+                        return;
+                    };
 
-                            let sender_pk = match sender_pk {
-                                Some(pk) => pk,
-                                None => {
-                                    warn!(
-                                        "Rejecting gossip envelope from {} — unknown sender {:?}",
-                                        remote_addr,
-                                        &signed.sender[..4]
-                                    );
-                                    state
-                                        .write()
-                                        .await
-                                        .scoreboard
-                                        .penalize(remote_addr, Penalty::ProtocolViolation);
-                                    return;
-                                }
-                            };
-
-                            // Verify Ed25519 signature using the sender's public key.
-                            if !signed.verify(&sender_pk) {
-                                warn!(
-                                    "Rejecting gossip envelope from {} — invalid Ed25519 signature",
-                                    remote_addr
-                                );
-                                state
-                                    .write()
-                                    .await
-                                    .scoreboard
-                                    .penalize(remote_addr, Penalty::ProtocolViolation);
-                                return;
-                            }
-
-                            let Some(envelope) = signed.decode_inner() else {
-                                warn!(
-                                    "Rejecting gossip envelope from {} — decode failed",
-                                    remote_addr
-                                );
-                                return;
-                            };
-
-                            Self::handle_envelope(
-                                envelope,
-                                remote_addr,
-                                &state,
-                                &outgoing_tx,
-                                &*key,
-                                our_node_id,
-                            )
-                            .await;
-                        }
-                    });
+                    Self::handle_envelope(
+                        envelope,
+                        remote_addr,
+                        &state,
+                        &outgoing_tx,
+                        &*key,
+                        our_node_id,
+                    )
+                    .await;
                 }
             });
         }
@@ -1569,6 +1705,21 @@ impl GossipNetwork {
                     // Reputation: this peer delivered a FRESH (first-seen) message
                     // eagerly — reward it as a useful spanning-tree relay.
                     s.scoreboard.reward_fresh_delivery(remote_addr);
+
+                    // BIDIRECTIONAL membership (the small-N dissemination fix,
+                    // `docs/STAGE5-CONSENSUS-DEVAC.md` S5-1 option (a)): a peer we
+                    // received a full message FROM joins this topic's peer set even
+                    // if WE never dialed it. Without this the eager/lazy split is
+                    // seeded only from the addresses a node DIALS, so an
+                    // inbound-only peer is never a re-forward target — full
+                    // dissemination becomes asymmetric and `tau` never assembles a
+                    // round-synchronous supermajority. Registering the sender makes
+                    // the spanning tree symmetric; a fresh slot starts eager (so the
+                    // first inbound peers relay immediately), with reputation +
+                    // diversity reclassification keeping the steady-state bound.
+                    if let Some(topic_state) = s.topics.get_mut(&topic_id) {
+                        topic_state.add_peer(remote_addr);
+                    }
 
                     let peer_rtt = s.peers.get(&remote_addr).map(|conn| conn.rtt());
 
