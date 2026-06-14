@@ -1476,6 +1476,79 @@ mod pg {
             assert_eq!(dst.balance, 30, "the agent's verified post-balance is mirrored");
         }
 
+        /// TIER-D, the **full SQL write path** through the in-backend executor.
+        /// Where [`the_verified_executor_runs_inside_the_backend`] drives the
+        /// producer directly (Rust-level), this drives the LIVE SQL spine end to
+        /// end: a pg-user `dregg_submit_turn`s a turn, the kernel `dregg_drain_once`s
+        /// it, and — because this is a `tier-d` build — the drainer's PRODUCE gate is
+        /// the REAL verified `execFullForestG` run single-threaded IN this backend
+        /// (the runtime initialized lazily on the first produce, post-fork). We
+        /// assert `runtime_available()` FIRST so the green is HONEST: a marshal-only
+        /// build (no archive) would fail-closed at PRODUCE (drained=0), so a drained
+        /// turn here is a turn the embedded executor genuinely committed, not a fold
+        /// stand-in. The committed `dregg.turns` row + the resolved queue row are the
+        /// real `execFullForestG` receipt landing through `dregg.commit_log`.
+        #[cfg(feature = "tier-d")]
+        #[pg_test]
+        fn drainer_runs_execfullforest_in_backend() {
+            use crate::lean_producer::LeanProducer;
+            // HONEST-GREEN GUARD: the embedded executor must be live in this backend,
+            // or the drain below would fail-closed (proving nothing about execution).
+            assert!(
+                LeanProducer::runtime_available(),
+                "Tier-D: the embedded Lean runtime must be available — else dregg_drain_once \
+                 fails closed at PRODUCE and this would not exercise execFullForestG"
+            );
+
+            let root = root();
+            assert_issuer(&root);
+            Spi::get_one::<String>("SELECT dregg_install_schema()").unwrap();
+            Spi::get_one::<String>("SELECT dregg_install_tier_c()").unwrap();
+            Spi::get_one::<String>("SELECT dregg_install_write_outbox()").unwrap();
+
+            // A pg-user enqueues ONE authorized turn FOR ALICE (the submit_gate RLS
+            // bites as the unprivileged reader; the row captures its submit_token).
+            let alice_hex: String = synth::ALICE.iter().map(|b| format!("{b:02x}")).collect();
+            Spi::run(&format!("SET dregg.token = '{}'", submit_token(&root, "a1"))).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+            let _: Option<pgrx::Uuid> = Spi::get_one(&format!(
+                "SELECT dregg_submit_turn('\\xabcd'::bytea, '\\x{alice_hex}'::bytea)"
+            ))
+            .unwrap();
+            Spi::run("RESET ROLE").unwrap();
+
+            // The kernel drains it: PRODUCE runs the REAL execFullForestG in-backend,
+            // CHAIN admits it onto the head, and the commit_log gate materializes it.
+            Spi::run("SET ROLE dregg_kernel").unwrap();
+            let report: String = Spi::get_one("SELECT dregg_drain_once(16)").unwrap().unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            assert!(
+                report.contains("drained=1"),
+                "the executor-produced turn drained (NOT fail-closed at produce): {report}"
+            );
+            assert!(report.contains("remaining_lag=0"), "the queue emptied: {report}");
+
+            // The verified-turn receipt LANDED: one row in dregg.turns (the real
+            // execFullForestG post-image, admitted through the Tier-C commit_log
+            // chain gate), and the queue row resolved 'executed' with a receipt.
+            let turns: i64 = Spi::get_one("SELECT count(*) FROM dregg.turns").unwrap().unwrap();
+            assert_eq!(turns, 1, "the executor's verified turn committed to the store");
+            let executed: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.submit_queue \
+                 WHERE status='executed' AND receipt_hash IS NOT NULL",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(executed, 1, "the queue row resolved executed with the executor's receipt");
+            // ALICE's post-image is materialized (the executor credited her cell).
+            let alice_rows: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg.cells WHERE cell_id = '\\x{alice_hex}'::bytea"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(alice_rows, 1, "ALICE's executor-verified post-image is in dregg.cells");
+        }
+
         #[pg_test]
         fn admits_and_attenuation_narrows_through_sql() {
             let root = root();
