@@ -249,6 +249,33 @@ pub fn rotation_witness_for_self_sovereign(
     )
 }
 
+/// Public entry: build the per-turn ROTATION producer witnesses for the CAPABILITY-GATED FLOW-B
+/// path from the REAL before/after actor cells + the canonical pre-state `capability_root` the
+/// commit path captured. The live commit path (`blocklace_sync::execute_finalized_turn`) calls this
+/// with the real `full_turn_pre_cell` so the rotated AUTHORITY DIGEST r23 binds the real cell — see
+/// [`rotation_witness_for_capability_turn`]. Returns `None` (⇒ the caller keeps the v1 cap leg) when
+/// the cell cannot be faithfully represented by the v1 capability pre-state.
+#[allow(clippy::too_many_arguments)]
+pub fn rotation_witness_for_capability(
+    pre_balance: u64,
+    pre_nonce: u64,
+    pre_capability_root: BabyBear,
+    before_cell: &dregg_cell::Cell,
+    after_cell: &dregg_cell::Cell,
+    receipt_hashes: &[[u8; 32]],
+    effects: &[dregg_turn::Effect],
+) -> Option<dregg_sdk::RotationTurnWitness> {
+    rotation_witness_for_capability_turn(
+        pre_balance,
+        pre_nonce,
+        pre_capability_root,
+        before_cell,
+        after_cell,
+        receipt_hashes,
+        effects,
+    )
+}
+
 /// Build the rotation witness for a CAP-LESS finalized turn whose actor cell the node does NOT
 /// hand us directly (the FRESHNESS / freshness-bearing arms — `prove_and_verify_finalized_turn_*`
 /// receive only `(agent, pre_balance, pre_nonce)`, not the `Cell`). Synthesize the cap-less
@@ -365,6 +392,126 @@ fn rotation_witness_for_self_sovereign_impl(
     Some(dregg_sdk::RotationTurnWitness::for_effects(
         before_w, after_w, &vm_effects,
     ))
+}
+
+/// Build the per-turn ROTATION producer witnesses for the CAPABILITY-GATED FLOW-B path from the
+/// REAL before/after actor cells + the canonical pre-state `capability_root` the cap-membership
+/// leg binds. This is the AUTHORITY analog of [`rotation_witness_for_self_sovereign_impl`]: a
+/// capability-gated turn's v1 leg proves over `CellState::with_capability_root(pre_balance,
+/// pre_nonce, pre_capability_root)` (the real cap root, zero fields), so the rotated block's welded
+/// scalars (`r0↔balance_lo · r1↔nonce · r2↔balance_hi · r3..r10↔fields · cap_root`) agree with that
+/// pre-state IFF the cell is representable by it.
+///
+/// CRITICAL (the brief's core requirement — do NOT launder a zero-pk stub): the rotated AUTHORITY
+/// DIGEST limb `r23 = compute_authority_digest_felt(before_cell)` is WITNESS-CARRIED (it is NOT
+/// overridden by the per-row v1-state weld), so it folds the REAL cell's identity (`public_key` /
+/// `id` / `token_id`), permissions, VK, delegate, delegation snapshot (the c-list-derived cap
+/// leaves), and program into the rotated OLD/NEW-commit pins (PI 34/35). A cap-less synthetic stub
+/// (`Cell::remote_stub_with_id_and_balance`) carries a ZERO public key and empty permissions/program,
+/// so its r23 would be UNFAITHFUL — a faithful capability rotation REQUIRES the real cell the node
+/// holds in its ledger at the turn's pre-state. We take it directly (the call site passes
+/// `full_turn_pre_cell`), never synthesize it.
+///
+/// SELF-VALIDATING GATE (returns `None` ⇒ graceful v1 fallback, same discipline as the note-spend
+/// cap-less gate): the welded limbs of the rotated leg are OVERRIDDEN per-row from the v1 capability
+/// state block (zero fields, `cap_root = pre_capability_root`), so the rotated OLD_COMMIT pins agree
+/// with the v1 leg ONLY when the real cell's welded scalars match that block —
+/// `balance == pre_balance`, `nonce == pre_nonce`, every field zero (the cap leg's
+/// `with_capability_root` zeroes fields), and the cell's CANONICAL capability root equals
+/// `pre_capability_root` (the value the membership leg + the welded `cap_root` column bind). Any
+/// divergence ⇒ the rotated and v1 legs would attest different commitments ⇒ `None` and the
+/// byte-identical v1 leg runs. (Unlike the self-sovereign gate this does NOT require an EMPTY cap
+/// root — a capability-gated turn's whole point is a NON-empty c-list; it requires the cell's real
+/// root to MATCH the canonical pre-state root the node captured.)
+fn rotation_witness_for_capability_turn(
+    pre_balance: u64,
+    pre_nonce: u64,
+    pre_capability_root: BabyBear,
+    before_cell: &dregg_cell::Cell,
+    after_cell: &dregg_cell::Cell,
+    receipt_hashes: &[[u8; 32]],
+    effects: &[dregg_turn::Effect],
+) -> Option<dregg_sdk::RotationTurnWitness> {
+    use dregg_turn::rotation_witness as rw;
+
+    // SELF-VALIDATING GATE: the welded scalars must match the v1 capability pre-state
+    // (`with_capability_root` ⇒ real balance/nonce, ZERO fields, cap_root = pre_capability_root).
+    // The authority digest r23 (witness-carried, NOT welded) then binds the REAL cell's authority
+    // residue into the rotated commit pins — the faithful binding a synthetic stub cannot provide.
+    let cell_cap_root =
+        dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities);
+    let cell_matches_v1_prestate = before_cell.state.balance() == pre_balance as i64
+        && before_cell.state.nonce() == pre_nonce
+        && before_cell.state.fields.iter().all(|f| *f == [0u8; 32])
+        && cell_cap_root == pre_capability_root;
+    if !cell_matches_v1_prestate {
+        return None;
+    }
+
+    // The turn-context ledger snapshot: a single-cell ledger holding the REAL actor (the same
+    // cells_root shape the C1 sovereign path uses; the before/after blocks share it).
+    let mut ctx_ledger = dregg_cell::Ledger::new();
+    let _ = ctx_ledger.insert_cell(before_cell.clone());
+
+    // A capability-gated turn carries no note in the cohort case routed here → the empty nullifier
+    // root (a cap-gated turn that ALSO spends fails the cohort gate below — its lead effect is not a
+    // single rotated note-spend member — and falls back to the v1 leg, which keeps the freshness
+    // tooth).
+    let nullifier_root = [0u8; 32];
+
+    // COHORT GATE (identical to the self-sovereign builder): only return `Some` when EVERY vm-effect
+    // resolves to the SAME rotated R=24 cohort descriptor; otherwise the caller passes `None` and
+    // the v1 leg runs. The rotated prover fails closed on a non-cohort / heterogeneous turn, so this
+    // keeps live capability-turn proving robust.
+    let vm_effects = AgentCipherclerk::convert_effects_to_vm(&before_cell.id(), effects);
+    let lead_name = vm_effects.first().and_then(
+        dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect,
+    );
+    let cohort_ok = lead_name.is_some()
+        && vm_effects.iter().all(|e| {
+            dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect(e)
+                == lead_name
+        });
+    if !cohort_ok {
+        return None;
+    }
+
+    // BROKEN-DESCRIPTOR GATE (a NAMED SEAM — see below): two rotated R=24 descriptors assert nonce
+    // PASSTHROUGH (`after_nonce == before_nonce`) while their effect TICKS the nonce, so the rotated
+    // prover would fail CLOSED on a real such turn. We fall back to the v1 leg for them rather than
+    // commit to a rotated prove that errors (same graceful discipline as the cohort gate). This is a
+    // circuit/descriptor defect (the Lean `EffectVmEmitRotationV3` SetField/BridgeMint nonce
+    // constraint must model the tick, as `transferVmDescriptor2R24` already does) — OUT OF THIS
+    // LANE's scope (no circuit/ edits). Until it is fixed, a cap-gated turn whose actor effect is a
+    // SetField or BridgeMint keeps the v1 leg; every other rotatable cohort effect (Transfer, Burn,
+    // Grant/Revoke/Attenuate, NoteSpend, …) rotates.
+    if vm_effects
+        .iter()
+        .any(rotated_descriptor_mismodels_nonce_tick)
+    {
+        return None;
+    }
+
+    let before_w = rw::produce(before_cell, &ctx_ledger, &nullifier_root, receipt_hashes);
+    let after_w = rw::produce(after_cell, &ctx_ledger, &nullifier_root, receipt_hashes);
+
+    Some(dregg_sdk::RotationTurnWitness::for_effects(
+        before_w, after_w, &vm_effects,
+    ))
+}
+
+/// The rotated R=24 descriptors that assert nonce PASSTHROUGH but whose effect TICKS the nonce, so
+/// a real such turn is UNSAT on the rotated leg (a circuit/descriptor defect, tracked; NOT fixable
+/// from the node lane). Returns `true` for a vm-effect whose rotated descriptor has this defect, so
+/// the rotation builders fall back to v1 for it. The defect was confirmed by inspecting the staged
+/// registry: `setFieldVmDescriptor2-{0..7}R24` + `mintVmDescriptor2R24` carry the bare
+/// `(after_nonce − before_nonce)` gate, while `transferVmDescriptor2R24` / `noteSpendVmDescriptor2R24`
+/// carry the tick-modelling `(after_nonce − before_nonce) − (1 − selector)` gate. (GrantCapability /
+/// RevokeCapability / AttenuateCapability also carry the bare gate but do NOT tick the nonce, so for
+/// them the bare gate is CORRECT and they rotate — they are deliberately NOT excluded here.)
+fn rotated_descriptor_mismodels_nonce_tick(e: &dregg_circuit::effect_vm::Effect) -> bool {
+    use dregg_circuit::effect_vm::Effect as VmEffect;
+    matches!(e, VmEffect::SetField { .. } | VmEffect::BridgeMint { .. })
 }
 
 pub fn prove_and_verify_finalized_turn(
@@ -625,6 +772,16 @@ pub fn prove_and_verify_finalized_turn_freshness(
 /// is attached and bound exactly as in
 /// [`prove_and_verify_finalized_turn_freshness`] (no-degrade: cap routing never
 /// drops the no-double-spend teeth).
+///
+/// FLOW-B ROTATION (C7 close): when the caller threads the per-turn rotation producer witnesses
+/// (built by [`rotation_witness_for_capability_turn`] from the REAL before/after cells +
+/// `pre_capability_root`), the effect-vm leg proves through the LEAN-emitted rotated descriptor —
+/// the live capability-gated node turn proves ROTATED, and the rotated commit pins (PI 34/35) fold
+/// the REAL authority digest r23. The cap-membership leg + its root/leaf teeth are UNCHANGED and run
+/// ALONGSIDE the rotated leg (`prove_full_turn` composes both), so a cap OVER-GRANT (granted ⊄ held)
+/// is still REFUSED on the rotated path. When `rotation` is `None` (the builder's gate rejected the
+/// turn, or proving disabled) the byte-identical v1 leg runs — same graceful fallback discipline as
+/// the note-spend arm.
 #[allow(clippy::too_many_arguments)]
 pub fn prove_and_verify_finalized_turn_capability(
     agent: &CellId,
@@ -636,6 +793,7 @@ pub fn prove_and_verify_finalized_turn_capability(
     consumed: &dregg_turn::ConsumedCapWitness,
     spent_nullifier: Option<&[u8; 32]>,
     previously_spent: &[[u8; 32]],
+    rotation: Option<dregg_sdk::RotationTurnWitness>,
 ) -> Result<ProvenFinalizedTurn, FullTurnProvingError> {
     // Defence in depth: the receipt witness must be internally consistent AND
     // open to the CANONICAL pre-state capability root the node itself derived.
@@ -691,7 +849,7 @@ pub fn prove_and_verify_finalized_turn_capability(
             .map(|(tree, item_hash)| NonRevocationWitness { tree, item_hash }),
         cap_membership: Some(CapMembershipWitness::from_consumed(consumed)),
         turn_hash,
-        rotation: None,
+        rotation,
     };
     let proof = prove_full_turn(&witness).map_err(FullTurnProvingError::Prove)?;
 
@@ -1291,6 +1449,24 @@ mod tests {
         }
     }
 
+    /// A `send`-gated transfer FROM `from` TO `to` (the actor's own outgoing transfer — the actor's
+    /// Effect-VM projection is `Transfer{direction:1}`, a ROTATABLE cohort effect whose R24
+    /// descriptor models the nonce tick, unlike SetField).
+    fn transfer_action(from: CellId, to: CellId, amount: u64, auth: Authorization) -> Action {
+        Action {
+            target: from,
+            method: symbol("transfer"),
+            args: vec![],
+            authorization: auth,
+            preconditions: Default::default(),
+            effects: vec![dregg_turn::Effect::Transfer { from, to, amount }],
+            may_delegate: DelegationMode::None,
+            commitment_mode: CommitmentMode::Full,
+            balance_change: None,
+            witness_blobs: vec![],
+        }
+    }
+
     fn wrap_turn(agent: CellId, action: Action) -> Turn {
         Turn {
             agent,
@@ -1389,6 +1565,90 @@ mod tests {
         (receipt, agent_id, pre_cap_root, effects)
     }
 
+    /// A capability-gated turn whose effect is the actor's OWN outgoing TRANSFER — the shape that
+    /// ROTATES (the transfer R24 descriptor models the nonce tick; SetField's does NOT — see the
+    /// seam note on the builder). The agent gates its OWN `send` at the Signature tier and holds a
+    /// self-breadstuff-cap (restricted to EXACTLY Transfer) to satisfy it; the action transfers
+    /// `amount` to a recipient. The agent's Effect-VM projection (`convert_effects_to_vm(agent, …)`)
+    /// is then `[Transfer{direction:1}]` — a NON-EMPTY rotatable cohort transition.
+    ///
+    /// (The cross-cell fixture `run_breadstuff_gated_turn` — a SetField on a DIFFERENT cell — yields
+    /// an EMPTY actor projection, a no-op actor transition the v1 leg proves but the rotated prover
+    /// refuses; and a SELF-SetField would tick the nonce against the broken `setFieldVmDescriptor2-*R24`
+    /// nonce-passthrough gate. So this self-Transfer shape is what faithfully exercises the rotated
+    /// capability leg.)
+    ///
+    /// Returns the receipt, agent id, the agent's CANONICAL pre-state cap root, the turn's effects,
+    /// and the agent's REAL before/after `Cell` (the `full_turn_pre_cell` analog + the post-exec
+    /// ledger cell) so the rotated-cap tests build the witness from the REAL cell (faithful r23).
+    fn run_self_cap_gated_turn_full() -> (
+        dregg_turn::TurnReceipt,
+        CellId,
+        BabyBear,
+        Vec<dregg_turn::Effect>,
+        Cell,
+        Cell,
+    ) {
+        let token: [u8; 32] = [0xD5; 32];
+        // The agent gates its OWN send at the Signature tier (so the consumed breadstuff is a
+        // MEANINGFUL authorization), and holds a self-breadstuff-cap to satisfy it.
+        let mut agent = Cell::with_balance([0xA7u8; 32], [0u8; 32], 1_000);
+        let mut perms = open_permissions();
+        perms.send = AuthRequired::Signature;
+        agent.permissions = perms;
+        let agent_id = agent.id();
+
+        // The recipient (its `receive` is open).
+        let recipient = Cell::with_balance([0x3Bu8; 32], [0u8; 32], 0);
+        let recipient_id = recipient.id();
+
+        // A decoy capability so the consumed cap is not the only leaf.
+        agent
+            .capabilities
+            .grant(CellId::from_bytes([0x77u8; 32]), AuthRequired::None);
+        // The SELF breadstuff cap (target == agent), restricted to EXACTLY Transfer (a narrow mask
+        // so an inflated-mask forgery is a REAL amplification, not a no-op).
+        let slot = agent
+            .capabilities
+            .grant_with_breadstuff(agent_id, AuthRequired::None, Some(token))
+            .expect("grant self breadstuff cap");
+        agent
+            .capabilities
+            .iter_mut()
+            .find(|c| c.slot == slot)
+            .expect("granted cap present")
+            .allowed_effects = Some(dregg_cell::facet::EFFECT_TRANSFER);
+
+        let pre_cap_root = dregg_cell::compute_canonical_capability_root_felt(&agent.capabilities);
+        // The REAL before-state cell the commit path holds (real pk + c-list ⇒ faithful r23).
+        let before_cell = agent.clone();
+
+        let mut ledger = Ledger::new();
+        ledger.insert_cell(agent).unwrap();
+        ledger.insert_cell(recipient).unwrap();
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+        // The action transfers 100 FROM the agent TO the recipient, authorized by the self-cap.
+        let turn = wrap_turn(
+            agent_id,
+            transfer_action(agent_id, recipient_id, 100, Authorization::Breadstuff(token)),
+        );
+        let effects: Vec<dregg_turn::Effect> = turn
+            .call_forest
+            .total_effects()
+            .into_iter()
+            .cloned()
+            .collect();
+        let receipt = match executor.execute(&turn, &mut ledger) {
+            TurnResult::Committed { receipt, .. } => receipt,
+            other => panic!("self-cap breadstuff transfer must commit, got {other:?}"),
+        };
+        let after_cell = ledger.get(&agent_id).expect("agent present after exec").clone();
+        (
+            receipt, agent_id, pre_cap_root, effects, before_cell, after_cell,
+        )
+    }
+
     /// ROUTING: a capability-gated receipt is classified onto the cap path
     /// (the actor-held witness is found); a self-sovereign receipt is not.
     #[test]
@@ -1424,6 +1684,7 @@ mod tests {
             consumed,
             None,
             &[],
+            None,
         )
         .expect("honest capability-gated turn must prove + cap-bound-verify");
 
@@ -1474,6 +1735,7 @@ mod tests {
             &tampered,
             None,
             &[],
+            None,
         );
         assert!(
             matches!(
@@ -1495,6 +1757,7 @@ mod tests {
             &consumed,
             None,
             &[],
+            None,
         )
         .expect("honest proof");
         let wrong_root = pre_cap_root + BabyBear::new(1);
@@ -1559,6 +1822,7 @@ mod tests {
             &inflated,
             None,
             &[],
+            None,
         );
         assert!(
             matches!(
@@ -1580,6 +1844,7 @@ mod tests {
             &consumed,
             None,
             &[],
+            None,
         )
         .expect("honest proof");
         let mut inflated_leaf = consumed.cap_leaf();
@@ -1641,6 +1906,7 @@ mod tests {
             &consumed,
             None,
             &[],
+            None,
         );
         assert!(
             matches!(
@@ -1661,6 +1927,7 @@ mod tests {
             &consumed,
             None,
             &[],
+            None,
         )
         .expect("honest proof");
         let expectation = dregg_sdk::CapMembershipExpectation {
@@ -1730,5 +1997,262 @@ mod tests {
             "SOUNDNESS (AUTHORITY): a capability-gated turn without the cap leg must be \
              rejected, got {result:?}"
         );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // FLOW-B ROTATION of the CAPABILITY arm (C7 close — capability turns rotate)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// THE BUILDER GATE: the capability rotation witness is produced from the REAL before/after
+    /// cells when their welded scalars match the v1 capability pre-state (real balance/nonce, zero
+    /// fields, cap_root == the canonical pre-state root) — and is REFUSED (`None` ⇒ graceful v1
+    /// fallback) when the supplied root does NOT match the cell's real c-list root (the faithful-or-
+    /// fallback discipline; never a zero-pk stub).
+    #[test]
+    fn capability_rotation_witness_faithful_or_falls_back() {
+        let (_receipt, _agent_id, pre_cap_root, effects, before_cell, after_cell) =
+            run_self_cap_gated_turn_full();
+        let receipts = [[0x11u8; 32]];
+
+        // Real cell + the matching canonical root ⇒ a faithful rotation witness (its r23 folds the
+        // REAL pk/permissions/c-list).
+        let w = rotation_witness_for_capability(
+            1_000,
+            0,
+            pre_cap_root,
+            &before_cell,
+            &after_cell,
+            &receipts,
+            &effects,
+        );
+        assert!(
+            w.is_some(),
+            "a cap-gated transfer turn over the REAL cell (cap_root == pre_cap_root) must yield a \
+             faithful rotation witness"
+        );
+
+        // A WRONG pre-state root (the empty root — what a cap-less stub would carry) does NOT match
+        // the cell's real c-list root, so the gate refuses rather than mint a leg that disagrees
+        // with the v1 cap pre-state. This is the discipline that keeps a zero-pk/empty-authority
+        // stub from ever being laundered onto the rotated path.
+        let empty_root = dregg_circuit::cap_root::empty_capability_root();
+        assert_ne!(empty_root, pre_cap_root, "the fixture holds a non-empty c-list");
+        let w_bad = rotation_witness_for_capability(
+            1_000,
+            0,
+            empty_root,
+            &before_cell,
+            &after_cell,
+            &receipts,
+            &effects,
+        );
+        assert!(
+            w_bad.is_none(),
+            "a pre-state root that disagrees with the cell's real c-list root must fall back to v1"
+        );
+    }
+
+    /// CONTROL (the C7-closing evidence): an honest capability-gated turn, proven with the rotation
+    /// witness threaded, proves through the ROTATED descriptor (`"effect-vm-rotated"`, NOT the v1
+    /// `"effect-vm"`) AND carries the cap-membership leg — both legs compose. This is the live
+    /// commit-path call (`blocklace_sync` builds the witness from `full_turn_pre_cell` exactly so).
+    #[test]
+    fn flow_b_capability_gated_turn_proves_rotated() {
+        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+            run_self_cap_gated_turn_full();
+        let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
+            .expect("actor-held consumed-cap witness");
+        let receipts = [receipt.receipt_hash()];
+
+        let rotation = rotation_witness_for_capability(
+            1_000,
+            0,
+            pre_cap_root,
+            &before_cell,
+            &after_cell,
+            &receipts,
+            &effects,
+        );
+        assert!(
+            rotation.is_some(),
+            "the honest cap-gated turn must yield a rotation witness (faithful real-cell r23)"
+        );
+
+        let proven = prove_and_verify_finalized_turn_capability(
+            &agent_id,
+            1_000,
+            0,
+            pre_cap_root,
+            &effects,
+            [0xCAu8; 32],
+            consumed,
+            None,
+            &[],
+            rotation,
+        )
+        .expect("the rotated capability-gated turn must prove + cap-bound-verify");
+
+        // Both legs present: the ROTATED effect-vm leg AND the cap-membership leg.
+        let labels: Vec<&str> = proven
+            .proof
+            .composed
+            .sub_proofs
+            .iter()
+            .map(|sp| sp.label.as_str())
+            .collect();
+        assert!(
+            labels.contains(&"effect-vm-rotated"),
+            "the live capability turn must prove through the rotated descriptor; sub-proofs = \
+             {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"effect-vm"),
+            "the v1 effect-vm leg must NOT be present on the rotated capability turn; sub-proofs = \
+             {labels:?}"
+        );
+        assert!(
+            proven.proof.components.has_cap_membership,
+            "the cap-membership leg must still be attached on the rotated path"
+        );
+
+        // Independent re-verification with the cap expectation (a light client's path) accepts.
+        let expectation = dregg_sdk::CapMembershipExpectation {
+            leaf: consumed.cap_leaf(),
+            cap_root: pre_cap_root,
+        };
+        verify_full_turn_bound(
+            &proven.proof,
+            proven.old_commit,
+            proven.new_commit,
+            None,
+            Some(&expectation),
+        )
+        .expect("light-client re-verify of the ROTATED cap turn with the expectation must accept");
+    }
+
+    /// THE CAP SOUNDNESS TOOTH SURVIVES ROTATION — a cap OVER-GRANT / amplification (granted ⊄ held)
+    /// is still REFUSED on the ROTATED leg. We thread a genuine rotation witness (so the turn really
+    /// IS on the rotated path), then present an INFLATED-mask consumed witness (rights amplified
+    /// beyond the Transfer-only grant the c-list actually holds). The non-amp + authority-digest
+    /// bind must bite regardless of the rotation:
+    ///   (a) prover side — the inflated leaf is NOT a member of the canonical pre-state cap_root, so
+    ///       the cap path REFUSES (`ConsumedCapWitnessInvalid`) BEFORE any proof is minted, even with
+    ///       the rotation witness in hand;
+    ///   (b) verifier side — an honest ROTATED proof re-checked against an inflated-leaf expectation
+    ///       mismatches the in-circuit-bound leaf digest (`CapLeafMismatch`).
+    /// This is the evidence the over-grant tooth fires on the rotated path, not only the happy path.
+    #[test]
+    fn cap_over_grant_refused_on_rotated_leg() {
+        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+            run_self_cap_gated_turn_full();
+        let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
+            .unwrap()
+            .clone();
+        let receipts = [receipt.receipt_hash()];
+
+        // The genuine rotation witness for THIS turn (the turn is really on the rotated path).
+        let rotation = rotation_witness_for_capability(
+            1_000,
+            0,
+            pre_cap_root,
+            &before_cell,
+            &after_cell,
+            &receipts,
+            &effects,
+        );
+        assert!(rotation.is_some(), "the turn rotates");
+
+        // The committed grant is NARROW (Transfer only, EFFECT_TRANSFER = 1<<1 = 2) — the inflation
+        // below is a REAL amplification, not a no-op.
+        assert_eq!(consumed.leaf_mask_lo, 2, "fixture grants a Transfer-only mask");
+        assert_eq!(consumed.leaf_mask_hi, 0, "fixture grants a Transfer-only mask");
+
+        // (a) PROVER SIDE on the rotated path: an OVER-GRANTED (inflated-mask) witness has no
+        // membership path to the canonical cap_root → the cap path refuses even WITH the rotation
+        // witness threaded. The amplification cannot ride the rotated leg.
+        let mut over_granted = consumed.clone();
+        over_granted.leaf_mask_lo = 0xFFFF;
+        over_granted.leaf_mask_hi = 0xFFFF;
+        let result = prove_and_verify_finalized_turn_capability(
+            &agent_id,
+            1_000,
+            0,
+            pre_cap_root,
+            &effects,
+            [0xC1u8; 32],
+            &over_granted,
+            None,
+            &[],
+            rotation,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(FullTurnProvingError::ConsumedCapWitnessInvalid { .. })
+            ),
+            "SOUNDNESS (AUTHORITY, ROTATED): an OVER-GRANT (granted ⊄ held) must be REFUSED on the \
+             rotated leg, got {result:?}"
+        );
+
+        // (b) VERIFIER SIDE on the rotated path: prove the honest turn ROTATED, then re-verify
+        // against an inflated-leaf expectation — the rotated leg's row-0-bound leaf digest
+        // mismatches (`CapLeafMismatch`), so the amplification is rejected at verify time too.
+        let rotation2 = rotation_witness_for_capability(
+            1_000,
+            0,
+            pre_cap_root,
+            &before_cell,
+            &after_cell,
+            &receipts,
+            &effects,
+        );
+        let proven = prove_and_verify_finalized_turn_capability(
+            &agent_id,
+            1_000,
+            0,
+            pre_cap_root,
+            &effects,
+            [0xC2u8; 32],
+            &consumed,
+            None,
+            &[],
+            rotation2,
+        )
+        .expect("honest ROTATED cap proof");
+        // Confirm it really IS the rotated leg carrying the cap tooth.
+        assert!(
+            proven
+                .proof
+                .composed
+                .sub_proofs
+                .iter()
+                .any(|sp| sp.label == "effect-vm-rotated"),
+            "the soundness tooth must be exercised on the ROTATED leg"
+        );
+        let mut inflated_leaf = consumed.cap_leaf();
+        let (lo, hi) = dregg_circuit::cap_root::split_effect_mask(0xFFFF_FFFF);
+        inflated_leaf.mask_lo = lo;
+        inflated_leaf.mask_hi = hi;
+        let expectation = dregg_sdk::CapMembershipExpectation {
+            leaf: inflated_leaf,
+            cap_root: pre_cap_root,
+        };
+        match verify_full_turn_bound(
+            &proven.proof,
+            proven.old_commit,
+            proven.new_commit,
+            None,
+            Some(&expectation),
+        ) {
+            Err(FullTurnVerifyError::CapLeafMismatch { expected, got }) => {
+                assert_eq!(expected, inflated_leaf.digest());
+                assert_eq!(got, consumed.cap_leaf().digest());
+            }
+            Ok(()) => panic!(
+                "SOUNDNESS (AUTHORITY, ROTATED): an INFLATED-MASK leaf was ACCEPTED on the rotated \
+                 leg — rights amplification through the proof is OPEN!"
+            ),
+            Err(other) => panic!("expected CapLeafMismatch on the rotated leg, got {other:?}"),
+        }
     }
 }
