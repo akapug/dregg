@@ -25,9 +25,11 @@ real attacks the round-1 `monotonicSeq` toy could not see, each closed by a clau
     debits more than the plan rate is UNSAT (`over_drain_rejected`).
   * **the meter blow-out.** A plan bundles several metered resources (here `api_calls` + `storage`); the
     per-period BUDGET bounds their COMBINED growth, which no single-field counter caveat can express.
-    `meterBudget` = `affineDeltaLe [(1,api_calls),(1,storage)] periodBudget`: the summed per-turn delta
-    of the two meters is capped. A consume that runs the combined meter past the budget is UNSAT
-    (`meter_blowout_rejected`) — even if each meter alone looks small.
+    `meterBudget` = `affineDeltaLeField [(1,api_calls),(1,storage)] budgetF`: the summed per-turn delta of
+    the two meters is capped by the plan's `budget` SLOT. A consume that runs the combined meter past the
+    budget is UNSAT (`meter_blowout_rejected`) — even if each meter alone looks small. The budget is a
+    GOVERNED FIELD the plan tier lifts, not a literal: a `pro` plan stores a higher `budget` and admits a
+    combined-meter move a `free` plan rejects, with no program rewrite (`pro_tier_lifts_meter_budget`).
   * **the tier forgery + the impostor.** The plan `tier` must be one of the published tiers (a consume
     cannot invent `tier 99` to unlock a budget it did not buy); and every consume must be SIGNED by the
     subscriber the cell records, not merely by a capability holder. `tierAllowed` = `memberOf tier
@@ -81,6 +83,11 @@ abbrev subscriberF : FieldName := "subscriber"
 abbrev apiCallsF : FieldName := "api_calls"
 /-- A metered usage counter (combined budget with `api_calls`). -/
 abbrev storageF : FieldName := "storage"
+/-- **The plan's per-period combined METER budget, as a GOVERNED STATE FIELD** (gap-3 field-valued rate).
+The ceiling on the combined meter delta is no longer a baked literal but a slot the plan TIER governs: a
+`pro`/`team` plan stores a higher `budget` and admits a combined-meter move a `free` plan rejects, with NO
+program rewrite — exactly the seam a real metered plan needs (the budget rides the tier). -/
+abbrev budgetF : FieldName := "budget"
 
 /-- Published plan tiers. -/
 abbrev tierFree : Int := 0
@@ -93,8 +100,12 @@ most 10 may be debited per period. (A FLOOR on the delta, the natural shape of a
 out" rate using `balanceDeltaGe`.) -/
 abbrev planRate : Int := -10
 
-/-- The plan's per-period combined METER budget: `Δapi_calls + Δstorage ≤ periodBudget`. -/
-abbrev periodBudget : Int := 100
+/-- The FREE tier's per-period combined METER budget slot value: `100` (`Δapi_calls + Δstorage ≤ 100`).
+A tier upgrade stores a higher `budget` slot. -/
+abbrev freeBudget : Int := 100
+/-- The PRO tier's per-period combined METER budget slot value: `200` — governance lifted the budget by
+upgrading the plan tier, admitting a combined-meter move the free tier rejects (no program change). -/
+abbrev proBudget : Int := 200
 
 /-- The registered subscriber's identity. -/
 abbrev subscriberPk : Int := 0x5B
@@ -112,8 +123,11 @@ The plan's consume program is a conjunction of five clauses, each a constraint o
     old period, or a stalled plateau, is rejected (the round-1 sequence tooth).
   * `balanceDeltaGe planRate` — **the spend-rate floor**: the prepaid balance may not be debited by
     more than the plan rate per period (`Δbalance ≥ planRate`). A single-turn drain is rejected.
-  * `affineDeltaLe [(1,api_calls),(1,storage)] periodBudget` — **the meter budget**: the combined
-    per-period growth of the two meters is capped. A meter blow-out is rejected.
+  * `affineDeltaLeField [(1,api_calls),(1,storage)] budgetF` — **the FIELD-VALUED meter budget** (gap-3):
+    the combined per-period growth of the two meters is capped by the plan's `budget` SLOT — a governed
+    parameter the plan tier lifts, not a baked literal. A meter blow-out is rejected; a missing budget
+    slot grants ZERO allowance (fail-closed); a tier upgrade that raises `budget` raises the allowance
+    with no program rewrite.
   * `memberOf tierF {free, pro, team}` — **the tier allowlist**: the plan tier must be published.
 
 The conjunction is ONE predicate (all-or-nothing). -/
@@ -121,7 +135,7 @@ def consumeConstraints : List StateConstraint :=
   [ .simple (.senderInField subscriberF)                                      -- provenance
   , .simple (.strictMono periodF)                                             -- no replay / no skip-back
   , .simple (.balanceDeltaGe planRate)                                        -- spend-rate floor
-  , .affineDeltaLe [(1, apiCallsF), (1, storageF)] periodBudget               -- combined meter budget
+  , .affineDeltaLeField [(1, apiCallsF), (1, storageF)] budgetF               -- FIELD-VALUED combined meter budget
   , .simple (.memberOf tierF [tierFree, tierPro, tierTeam]) ]                 -- tier allowlist
 
 /-- **The metered-subscription program** — the consume policy as ONE coalgebra structure-map. -/
@@ -202,25 +216,28 @@ theorem over_drain_rejected (ctx : TurnCtx) (m : Nat) (o n : Value) (before afte
   rw [hafter] at hb; injection hb with hb; subst hb
   omega
 
-/-- **④ METER-BLOWOUT TOOTH — a consume running the combined meter past the budget is UNSAT.** A
-consume whose COMBINED per-period meter growth `Δapi_calls + Δstorage` exceeds `periodBudget` is
-rejected: `admitsCtx = false`. The two-meter budget is what no single-field counter caveat can express
-— even if each meter alone looks small, their SUM is capped. -/
-theorem meter_blowout_rejected (ctx : TurnCtx) (m : Nat) (o n : Value) (s : Int)
+/-- **④ METER-BLOWOUT TOOTH — a consume running the combined meter past the (FIELD-VALUED) budget is
+UNSAT.** A consume whose COMBINED per-period meter growth `Δapi_calls + Δstorage` exceeds the plan's
+`budget` SLOT is rejected: `admitsCtx = false`. The two-meter budget is what no single-field counter
+caveat can express — even if each meter alone looks small, their SUM is capped — and the cap is a GOVERNED
+FIELD (a tier upgrade lifts it; `pro_tier_lifts_meter_budget` exercises the lift). -/
+theorem meter_blowout_rejected (ctx : TurnCtx) (m : Nat) (o n : Value) (s bgt : Int)
     (hsum : affineDeltaSum o n [(1, apiCallsF), (1, storageF)] = some s)
-    (hblow : s > periodBudget) :
+    (hbudget : n.scalar budgetF = some bgt)
+    (hblow : s > bgt) :
     planProgram.admitsCtx ctx m o n = false := by
   by_contra hc
   have hne := admits_of_not_false hc
   have hbud := admitted_mem hne
-    (c := .affineDeltaLe [(1, apiCallsF), (1, storageF)] periodBudget)
+    (c := .affineDeltaLeField [(1, apiCallsF), (1, storageF)] budgetF)
     (.tail _ (.tail _ (.tail _ (.head _))))
-  -- affineDeltaLe is ctx-free; evalConstraintCtx delegates to evalConstraint.
-  have hdl : evalConstraint (.affineDeltaLe [(1, apiCallsF), (1, storageF)] periodBudget) o n = true := by
+  -- affineDeltaLeField is ctx-free; evalConstraintCtx delegates to evalConstraint.
+  have hdl : evalConstraint (.affineDeltaLeField [(1, apiCallsF), (1, storageF)] budgetF) o n = true := by
     simpa [evalConstraintCtx] using hbud
-  obtain ⟨s', hs', hle⟩ :=
-    (evalConstraint_affineDeltaLe_iff [(1, apiCallsF), (1, storageF)] periodBudget o n).mp hdl
-  rw [hsum] at hs'; injection hs' with hs'; subst hs'; omega
+  obtain ⟨s', bound, hs', hb, hle⟩ :=
+    (evalConstraint_affineDeltaLeField_iff [(1, apiCallsF), (1, storageF)] budgetF o n).mp hdl
+  rw [hsum] at hs'; injection hs' with hs'; subst hs'
+  rw [hbudget] at hb; injection hb with hb; subst hb; omega
 
 /-- **⑤ FORGED-TIER TOOTH — a consume claiming an unpublished tier is UNSAT.** A consume whose plan
 `tier` is NOT one of the published tiers (it invented `tier 99` to unlock a budget it did not buy) is
@@ -247,14 +264,14 @@ subscriber, advancing the period, debiting within the plan rate, growing the com
 budget, and carrying a published tier, ADMITS. The conjunction of the five teeth is non-vacuous: there
 is a real metered consume the plan lets through. -/
 theorem honest_consume_admits (ctx : TurnCtx) (m : Nat) (o n : Value)
-    (oldP newP before after sumDelta : Int)
+    (oldP newP before after sumDelta bgt : Int)
     (hsender : ctx.sender = some subscriberPk)
     (hsub : n.scalar subscriberF = some subscriberPk)
     (holdP : o.scalar periodF = some oldP) (hnewP : n.scalar periodF = some newP) (hadv : oldP < newP)
     (hbefore : ctx.balanceBefore = some before) (hafter : ctx.balance = some after)
     (hrate : planRate ≤ after - before)
     (hmeter : affineDeltaSum o n [(1, apiCallsF), (1, storageF)] = some sumDelta)
-    (hbudget : sumDelta ≤ periodBudget)
+    (hbudgetSlot : n.scalar budgetF = some bgt) (hbudget : sumDelta ≤ bgt)
     (htier : n.scalar tierF = some tierPro) :
     planProgram.admitsCtx ctx m o n = true := by
   have c1 : evalConstraintCtx ctx (.simple (.senderInField subscriberF)) o n = true := by
@@ -267,10 +284,10 @@ theorem honest_consume_admits (ctx : TurnCtx) (m : Nat) (o n : Value)
   have c3 : evalConstraintCtx ctx (.simple (.balanceDeltaGe planRate)) o n = true := by
     show evalSimpleCtx ctx (.balanceDeltaGe planRate) o n = true
     exact (evalSimpleCtx_balanceDeltaGe_iff ctx planRate o n).mpr ⟨before, after, hbefore, hafter, hrate⟩
-  have c4 : evalConstraintCtx ctx (.affineDeltaLe [(1, apiCallsF), (1, storageF)] periodBudget) o n = true := by
-    show evalConstraint (.affineDeltaLe [(1, apiCallsF), (1, storageF)] periodBudget) o n = true
-    exact (evalConstraint_affineDeltaLe_iff [(1, apiCallsF), (1, storageF)] periodBudget o n).mpr
-      ⟨sumDelta, hmeter, hbudget⟩
+  have c4 : evalConstraintCtx ctx (.affineDeltaLeField [(1, apiCallsF), (1, storageF)] budgetF) o n = true := by
+    show evalConstraint (.affineDeltaLeField [(1, apiCallsF), (1, storageF)] budgetF) o n = true
+    exact (evalConstraint_affineDeltaLeField_iff [(1, apiCallsF), (1, storageF)] budgetF o n).mpr
+      ⟨sumDelta, bgt, hmeter, hbudgetSlot, hbudget⟩
   have c5 : evalConstraintCtx ctx (.simple (.memberOf tierF [tierFree, tierPro, tierTeam])) o n = true := by
     show evalSimpleCtx ctx (.memberOf tierF [tierFree, tierPro, tierTeam]) o n = true
     rw [show evalSimpleCtx ctx (.memberOf tierF [tierFree, tierPro, tierTeam]) o n
@@ -301,14 +318,14 @@ def consumeCtx : TurnCtx :=
   { sender := some subscriberPk, balance := some 92, balanceBefore := some 100 }
 def planNew : Value :=
   .record [(subscriberF, .int subscriberPk), (periodF, .int 6), (tierF, .int tierPro),
-           (apiCallsF, .int 40), (storageF, .int 30)]
+           (apiCallsF, .int 40), (storageF, .int 30), (budgetF, .int freeBudget)]
 def planOld : Value :=
   .record [(subscriberF, .int subscriberPk), (periodF, .int 5), (tierF, .int tierPro),
-           (apiCallsF, .int 10), (storageF, .int 10)]
--- the combined meter delta on this consume: (40−10) + (30−10) = 50 ≤ 100 (within budget).
+           (apiCallsF, .int 10), (storageF, .int 10), (budgetF, .int freeBudget)]
+-- the combined meter delta on this consume: (40−10) + (30−10) = 50 ≤ 100 (within the budget slot).
 
 -- ① COMMIT: a faithful metered consume ADMITS (subscriber-signed, period 5→6, −8 debit within rate,
--- combined meter +50 within budget 100, published tier pro).
+-- combined meter +50 within the budget slot 100, published tier pro).
 #guard planProgram.admitsCtx consumeCtx 0 planOld planNew
 
 -- ① REFUSE (impostor): the SAME consume but signed by an impostor (not the subscriber). REJECTED.
@@ -322,12 +339,12 @@ def planOld : Value :=
 -- ② REFUSE (replay): the new period (5) equals the old (5) — not strictly increasing. REJECTED.
 #guard planProgram.admitsCtx consumeCtx 0 planOld
   (.record [(subscriberF, .int subscriberPk), (periodF, .int 5), (tierF, .int tierPro),
-            (apiCallsF, .int 40), (storageF, .int 30)]) == false
+            (apiCallsF, .int 40), (storageF, .int 30), (budgetF, .int freeBudget)]) == false
 
 -- ② REFUSE (skip-back): the new period (4) is BELOW the old (5). REJECTED.
 #guard planProgram.admitsCtx consumeCtx 0 planOld
   (.record [(subscriberF, .int subscriberPk), (periodF, .int 4), (tierF, .int tierPro),
-            (apiCallsF, .int 40), (storageF, .int 30)]) == false
+            (apiCallsF, .int 40), (storageF, .int 30), (budgetF, .int freeBudget)]) == false
 
 -- ③ REFUSE (over-drain): balance 80 (was 100, a −20 debit) — more than the plan rate −10. REJECTED.
 #guard planProgram.admitsCtx
@@ -337,24 +354,41 @@ def planOld : Value :=
 #guard planProgram.admitsCtx
   { consumeCtx with balanceBefore := none } 0 planOld planNew == false
 
--- ④ REFUSE (meter blow-out): storage jumps to 95 (+85), api_calls +30 → combined +115 > budget 100.
--- Each delta alone looks fine; their SUM blows the budget. REJECTED.
+-- ④ REFUSE (meter blow-out): storage jumps to 95 (+85), api_calls +30 → combined +115 > the budget
+-- slot 100. Each delta alone looks fine; their SUM blows the budget. REJECTED.
 #guard planProgram.admitsCtx consumeCtx 0 planOld
   (.record [(subscriberF, .int subscriberPk), (periodF, .int 6), (tierF, .int tierPro),
-            (apiCallsF, .int 40), (storageF, .int 95)]) == false
+            (apiCallsF, .int 40), (storageF, .int 95), (budgetF, .int freeBudget)]) == false
+
+-- ④ REFUSE (absent budget slot): a consume whose post-state has NO budget field ⇒ the field-valued
+-- meter budget grants ZERO allowance ⇒ fail-closed (a missing tier field is never unbounded).
+#guard planProgram.admitsCtx consumeCtx 0 planOld
+  (.record [(subscriberF, .int subscriberPk), (periodF, .int 6), (tierF, .int tierPro),
+            (apiCallsF, .int 40), (storageF, .int 30)]) == false
 
 -- ⑤ REFUSE (forged tier): tier 99 is not a published tier. REJECTED.
 #guard planProgram.admitsCtx consumeCtx 0 planOld
   (.record [(subscriberF, .int subscriberPk), (periodF, .int 6), (tierF, .int 99),
-            (apiCallsF, .int 40), (storageF, .int 30)]) == false
+            (apiCallsF, .int 40), (storageF, .int 30), (budgetF, .int freeBudget)]) == false
 
 -- ⑤ ADMIT (the OTHER published tiers): tier free (0) and tier team (2) both pass the allowlist.
 #guard planProgram.admitsCtx consumeCtx 0 planOld
   (.record [(subscriberF, .int subscriberPk), (periodF, .int 6), (tierF, .int tierFree),
-            (apiCallsF, .int 40), (storageF, .int 30)])
+            (apiCallsF, .int 40), (storageF, .int 30), (budgetF, .int freeBudget)])
 #guard planProgram.admitsCtx consumeCtx 0 planOld
   (.record [(subscriberF, .int subscriberPk), (periodF, .int 6), (tierF, .int tierTeam),
-            (apiCallsF, .int 40), (storageF, .int 30)])
+            (apiCallsF, .int 40), (storageF, .int 30), (budgetF, .int freeBudget)])
+
+-- ⑥ THE PRO TIER LIFTS THE METER BUDGET (the gap-3 payoff): a combined-meter move of +150
+-- (api_calls +75, storage +75) is OVER the free budget slot (100) but WITHIN the pro budget slot
+-- (200) — the SAME consume program admits on the upgraded tier and rejects on the free tier, NO
+-- program change. The budget is governed STATE the tier upgrade lifted.
+#guard planProgram.admitsCtx consumeCtx 0 planOld
+  (.record [(subscriberF, .int subscriberPk), (periodF, .int 6), (tierF, .int tierPro),
+            (apiCallsF, .int 85), (storageF, .int 85), (budgetF, .int freeBudget)]) == false   -- free: REJECT
+#guard planProgram.admitsCtx consumeCtx 0 planOld
+  (.record [(subscriberF, .int subscriberPk), (periodF, .int 6), (tierF, .int tierPro),
+            (apiCallsF, .int 85), (storageF, .int 85), (budgetF, .int proBudget)])              -- pro: ADMIT
 
 -- The rate FLOOR isolated: a −10 debit (exactly the rate) ADMITS; a −11 debit REJECTS (the boundary).
 #guard evalSimpleCtx { balance := some 90, balanceBefore := some 100 } (.balanceDeltaGe planRate)
@@ -362,13 +396,33 @@ def planOld : Value :=
 #guard evalSimpleCtx { balance := some 89, balanceBefore := some 100 } (.balanceDeltaGe planRate)
   (.record []) (.record []) == false
 
--- The combined-meter budget isolated: +100 (exactly the budget) ADMITS; +101 REJECTS.
-#guard evalConstraint (.affineDeltaLe [(1, apiCallsF), (1, storageF)] periodBudget)
+-- The combined-meter FIELD budget isolated: +100 (exactly the free budget slot) ADMITS; +101 REJECTS;
+-- and on the pro budget slot (200) the +101 move now ADMITS — the field-read ceiling lifts the gate.
+#guard evalConstraint (.affineDeltaLeField [(1, apiCallsF), (1, storageF)] budgetF)
   (.record [(apiCallsF, .int 0), (storageF, .int 0)])
-  (.record [(apiCallsF, .int 60), (storageF, .int 40)])
-#guard evalConstraint (.affineDeltaLe [(1, apiCallsF), (1, storageF)] periodBudget)
+  (.record [(apiCallsF, .int 60), (storageF, .int 40), (budgetF, .int freeBudget)])
+#guard evalConstraint (.affineDeltaLeField [(1, apiCallsF), (1, storageF)] budgetF)
   (.record [(apiCallsF, .int 0), (storageF, .int 0)])
-  (.record [(apiCallsF, .int 60), (storageF, .int 41)]) == false
+  (.record [(apiCallsF, .int 60), (storageF, .int 41), (budgetF, .int freeBudget)]) == false
+#guard evalConstraint (.affineDeltaLeField [(1, apiCallsF), (1, storageF)] budgetF)
+  (.record [(apiCallsF, .int 0), (storageF, .int 0)])
+  (.record [(apiCallsF, .int 60), (storageF, .int 41), (budgetF, .int proBudget)])
+
+/-- **⑥ THE FIELD-VALUED METER BUDGET LIFTS WITH THE TIER (the gap-3 payoff, as a theorem).** The SAME
+combined-meter delta (+150) is REJECTED by the budget gate when the post-state carries the FREE budget
+slot (`100`) and ADMITTED when it carries the PRO budget slot (`200`) — a tier upgrade that raises the
+`budget` field raises the allowance, with NO program change. The budget is governed STATE, not a baked
+literal. -/
+theorem pro_tier_lifts_meter_budget :
+    -- free tier (budget = 100): a +150 combined-meter move is OVER the budget ⇒ the gate REJECTS.
+    evalConstraint (.affineDeltaLeField [(1, apiCallsF), (1, storageF)] budgetF)
+        (.record [(apiCallsF, .int 0), (storageF, .int 0)])
+        (.record [(apiCallsF, .int 75), (storageF, .int 75), (budgetF, .int freeBudget)]) = false ∧
+    -- pro tier (budget = 200): the SAME +150 move is WITHIN the budget ⇒ the gate ADMITS.
+    evalConstraint (.affineDeltaLeField [(1, apiCallsF), (1, storageF)] budgetF)
+        (.record [(apiCallsF, .int 0), (storageF, .int 0)])
+        (.record [(apiCallsF, .int 75), (storageF, .int 75), (budgetF, .int proBudget)]) = true := by
+  decide
 
 end Witnesses
 
@@ -380,7 +434,8 @@ end Witnesses
   over_drain_rejected,
   meter_blowout_rejected,
   forged_tier_rejected,
-  honest_consume_admits
+  honest_consume_admits,
+  pro_tier_lifts_meter_budget
 ]
 
 end Dregg2.Apps.SubscriptionMetered

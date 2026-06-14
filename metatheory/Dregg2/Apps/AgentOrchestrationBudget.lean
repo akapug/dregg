@@ -21,10 +21,13 @@ without enforcement:
      worker aborts the whole turn);
   4. **atomic handoff** — the coordination baton flips only when its CURRENT holder signs the turn;
   5. **surfaces-as-caps** — a worker's reach is an attenuated capability, never amplifiable;
-  6. **async notify wake** — a worker is woken only on a badge its coordinator holds a cap for.
+  6. **async notify wake** — a job-completion is woken (the waiter is notified, not polled), AND the
+     wake authority is a badge its coordinator holds a cap for.
 
-dregg closes all six AT ONE SEAM: the dispatch-board cell's `RecordProgram` + the notify cap.
-Here every primitive is a constraint or a cap, every refusal a theorem.
+dregg closes all six AT ONE SEAM: the dispatch-board cell's `RecordProgram` + the notify cap. Here every
+primitive is a constraint or a cap, every refusal a theorem — and primitive (6) is BOTH: the wake's
+REQUIREMENT is a program clause (`wakeOnResolve`: a settle that forgets to wake is UNSAT) and its
+admissibility/attenuation are the NotifyCap keystones (a wake outside the held mask is refused).
 
 ## The board cell — its state
 
@@ -80,6 +83,17 @@ abbrev spentAF : FieldName := "spent_a"
 abbrev spentBF : FieldName := "spent_b"
 /-- The strictly-monotone dispatch counter (no replay). -/
 abbrev epochF : FieldName := "epoch"
+/-- The swarm's job-completion lifecycle slot: a dispatch that drives it to `stSettled` SETTLES the job
+(pays out + closes it); ordinary dispatches leave it alone. The carrier for the program-enforced
+completion wake (gap-4 `wakeOnResolve`). -/
+abbrev statusF : FieldName := "status"
+
+/-- Lifecycle: the job is SETTLED (paid out + closed). A dispatch driving `status` to this value MUST
+also have woken the waiting coordinator (`wakeOnResolve`); ordinary dispatches never reach it. -/
+abbrev stSettled : Int := 2
+/-- The completion WAKE BADGE the settling dispatch must emit (the async "the job settled — wake the
+waiter" signal). -/
+abbrev settleWakeBadge : Int := 0b001
 
 /-- The appointed lead's identity (a public-key scalar, `EvalContext::sender`). -/
 abbrev leadPk : Int := 0xA1
@@ -105,15 +119,23 @@ The board's program is a conjunction of constraints, each a primitive of the wed
   * `strictMono epochF` — **(no replay)**: every dispatch strictly advances the epoch. A replayed
     dispatch (same/stale epoch) is rejected.
   * `immutable budgetF` — the mandate, once set, cannot be quietly widened mid-swarm.
+  * `wakeOnResolve statusF stSettled settleWakeBadge` — **(6) async wake, now PROGRAM-ENFORCED**: a
+    dispatch that SETTLES the job (drives `status` to `stSettled`) is UNSAT unless the turn ALSO fired the
+    completion wake (badge `settleWakeBadge` in the emitted-wake set). The async notify the swarm needs is
+    no longer a separate §5 section a faithful executor is merely TRUSTED to call — it is a clause of the
+    board program: a settle that pays out but forgets to wake the waiter is refused, the notify dual of
+    the budget/baton teeth. Ordinary (non-settling) dispatches leave `status` alone, so the clause is
+    DORMANT for them (the board operates normally; only the completion turn must wake).
 
-(Capabilities-as-surfaces (5) and the async wake (6) ride the cap algebra in §4/§5 — they are
-not record-field constraints.) -/
+(Capabilities-as-surfaces (5) and the wake's authority-containment ride the cap algebra in §4/§5 — the
+wake's REQUIREMENT is now this clause; its admissibility/attenuation stay the §5 NotifyCap keystones.) -/
 def dispatchConstraints : List StateConstraint :=
   [ .simple (.senderInField leadF)                            -- (1)+(2) signed provenance
   , .affineLe [(1, spentAF), (1, spentBF)] mandate            -- (3) atomic budget
   , .anyOf [.immutable batonF, .senderInField batonF]         -- (4) actor-bound baton handoff
   , .simple (.strictMono epochF)                              -- (no replay)
-  , .simple (.immutable budgetF) ]                            -- immutable mandate
+  , .simple (.immutable budgetF)                              -- immutable mandate
+  , .simple (.wakeOnResolve statusF stSettled settleWakeBadge) ]  -- (6) program-enforced completion wake
 
 /-- **The dispatch board program** — the integrator wedge as ONE coalgebra structure-map. -/
 def boardProgram : RecordProgram := .predicate dispatchConstraints
@@ -285,7 +307,8 @@ theorem honest_dispatch_admits (ctx : TurnCtx) (m : Nat) (o n : Value)
     (hsa : n.scalar spentAF = some 300) (hsb : n.scalar spentBF = some 400)
     (hbatonImm : evalSimple (.immutable batonF) o n = true)
     (heo : o.scalar epochF = some 5) (hen : n.scalar epochF = some 6)
-    (hbudImm : evalSimple (.immutable budgetF) o n = true) :
+    (hbudImm : evalSimple (.immutable budgetF) o n = true)
+    (hstatus : n.scalar statusF = none) :  -- an ordinary dispatch does not settle the job (status absent)
     boardProgram.admitsCtx ctx m o n = true := by
   -- Establish each constraint = true, then the `.all` conjunction follows.
   have c1 : evalConstraintCtx ctx (.simple (.senderInField leadF)) o n = true := by
@@ -304,8 +327,74 @@ theorem honest_dispatch_admits (ctx : TurnCtx) (m : Nat) (o n : Value)
   have c5 : evalConstraintCtx ctx (.simple (.immutable budgetF)) o n = true := by
     have : evalSimpleCtx ctx (.immutable budgetF) o n = true := hbudImm
     simpa [evalConstraintCtx] using this
+  -- c6: the completion-wake clause is DORMANT — an ordinary dispatch leaves `status` absent
+  -- (`goodNew` carries no status field), so the transition does not reach `stSettled` and the clause
+  -- admits regardless of the wake set. The board operates normally; only a settling turn must wake.
+  have c6 : evalConstraintCtx ctx (.simple (.wakeOnResolve statusF stSettled settleWakeBadge)) o n = true := by
+    show evalSimpleCtx ctx (.wakeOnResolve statusF stSettled settleWakeBadge) o n = true
+    refine evalSimpleCtx_wakeOnResolve_dormant ctx statusF stSettled settleWakeBadge o n ?_
+    intro v hv; rw [hstatus] at hv; exact absurd hv (by simp)
   show dispatchConstraints.all (fun c => evalConstraintCtx ctx c o n) = true
-  simp only [dispatchConstraints, List.all_cons, List.all_nil, c1, c2, c3, c4, c5, Bool.and_true]
+  simp only [dispatchConstraints, List.all_cons, List.all_nil, c1, c2, c3, c4, c5, c6, Bool.and_true]
+
+/-- **⑤ UN-WOKEN SETTLE TOOTH — a job-completion dispatch that forgets the async wake is UNSAT.** A
+dispatch DRIVING the board's `status` to `stSettled` (paying out + closing the job) whose emitted-wake
+set does NOT carry the completion badge is rejected: `admitsCtx = false`. The coordinator MUST wake the
+waiter on completion — a settle that pays but forgets to notify is refused. The integrator's async-wake
+primitive (6), now a PROGRAM clause rather than a separately-trusted §5 section: the state transition
+(job settled) and the async signal (waiter woken) are welded. -/
+theorem unsettled_without_wake_rejected (ctx : TurnCtx) (m : Nat) (o n : Value)
+    (hsettle : n.scalar statusF = some stSettled)
+    (hno_wake : ctx.emittedWakes.contains settleWakeBadge = false) :
+    boardProgram.admitsCtx ctx m o n = false := by
+  by_contra hc
+  have hne : boardProgram.admitsCtx ctx m o n = true := by
+    cases h : boardProgram.admitsCtx ctx m o n with
+    | true => rfl
+    | false => exact absurd h hc
+  have hwake := admitted_mem hne
+    (c := .simple (.wakeOnResolve statusF stSettled settleWakeBadge))
+    (.tail _ (.tail _ (.tail _ (.tail _ (.tail _ (.head _))))))
+  have hw : evalSimpleCtx ctx (.wakeOnResolve statusF stSettled settleWakeBadge) o n = true := by
+    simpa [evalConstraintCtx] using hwake
+  rw [wakeOnResolve_resolve_requires_wake ctx statusF stSettled settleWakeBadge o n hsettle hno_wake] at hw
+  exact absurd hw (by simp)
+
+/-- **⑤ THE HONEST COMPLETION SETTLES (the wake clause is not constant-false).** A dispatch that settles
+the job (drives `status` to `stSettled`) signed by the lead, within budget, advancing the epoch, leaving
+the baton + budget fixed, AND firing the completion wake, ADMITS. The wake weld is non-vacuous: a real
+completion turn the board lets through, the dual proof to `unsettled_without_wake_rejected`. -/
+theorem honest_completion_admits (ctx : TurnCtx) (m : Nat) (o n : Value)
+    (hsender : ctx.sender = some leadPk)
+    (hlead : n.scalar leadF = some leadPk)
+    (hsa : n.scalar spentAF = some 300) (hsb : n.scalar spentBF = some 400)
+    (hbatonImm : evalSimple (.immutable batonF) o n = true)
+    (heo : o.scalar epochF = some 5) (hen : n.scalar epochF = some 6)
+    (hbudImm : evalSimple (.immutable budgetF) o n = true)
+    (hsettle : n.scalar statusF = some stSettled)   -- this IS a settling dispatch
+    (hwoke : ctx.emittedWakes.contains settleWakeBadge = true) :  -- and it fired the completion wake
+    boardProgram.admitsCtx ctx m o n = true := by
+  have c1 : evalConstraintCtx ctx (.simple (.senderInField leadF)) o n = true := by
+    simp [evalConstraintCtx, evalSimpleCtx, hsender, hlead]
+  have c2 : evalConstraintCtx ctx (.affineLe [(1, spentAF), (1, spentBF)] mandate) o n = true := by
+    have hsum : affineSum n [(1, spentAF), (1, spentBF)] = some 700 := by
+      simp [affineSum, hsa, hsb]
+    exact (evalConstraint_affineLe_iff _ _ o n).mpr ⟨700, hsum, by show (700:Int) ≤ 1000; omega⟩
+  have c3 : evalConstraintCtx ctx (.anyOf [.immutable batonF, .senderInField batonF]) o n = true := by
+    have hb : evalSimpleCtx ctx (.immutable batonF) o n = true := hbatonImm
+    simp [evalConstraintCtx, hb]
+  have c4 : evalConstraintCtx ctx (.simple (.strictMono epochF)) o n = true := by
+    show evalSimpleCtx ctx (.strictMono epochF) o n = true
+    show evalSimple (.strictMono epochF) o n = true
+    exact (evalSimple_strictMono_iff epochF o n).mpr ⟨5, 6, heo, hen, by omega⟩
+  have c5 : evalConstraintCtx ctx (.simple (.immutable budgetF)) o n = true := by
+    have : evalSimpleCtx ctx (.immutable budgetF) o n = true := hbudImm
+    simpa [evalConstraintCtx] using this
+  have c6 : evalConstraintCtx ctx (.simple (.wakeOnResolve statusF stSettled settleWakeBadge)) o n = true := by
+    show evalSimpleCtx ctx (.wakeOnResolve statusF stSettled settleWakeBadge) o n = true
+    exact (evalSimpleCtx_wakeOnResolve_resolving_iff ctx statusF stSettled settleWakeBadge o n hsettle).mpr hwoke
+  show dispatchConstraints.all (fun c => evalConstraintCtx ctx c o n) = true
+  simp only [dispatchConstraints, List.all_cons, List.all_nil, c1, c2, c3, c4, c5, c6, Bool.and_true]
 
 /-! ## §4 — SURFACES-AS-CAPS: a worker's reach is an ATTENUATED capability (primitive 5).
 
@@ -469,6 +558,33 @@ def goodNew : Value :=
 -- fails closed ⇒ REJECTED.
 #guard boardProgram.admitsCtx {} 0 goodOld goodNew == false
 
+/-! ### §3b the program-enforced completion wake (gap-4 `wakeOnResolve`). A SETTLING dispatch (status →
+stSettled) MUST fire the completion wake; an ordinary dispatch leaves `status` alone and is dormant. -/
+
+-- a settling post-state: the ordinary good dispatch PLUS `status = stSettled` (the job closes).
+section CompletionWitnesses
+def settleNew : Value :=
+  .record [(leadF, .int leadPk), (batonF, .int leadPk), (budgetF, .int mandate),
+           (spentAF, .int 300), (spentBF, .int 400), (epochF, .int 6), (statusF, .int stSettled)]
+
+-- ⑤ COMMIT (honest completion): a settling dispatch signed by the lead that FIRED the completion wake
+-- ADMITS — the state transition (settled) and the async wake are both present.
+#guard boardProgram.admitsCtx
+  { sender := some leadPk, emittedWakes := [settleWakeBadge] } 0 goodOld settleNew
+
+-- ⑤ REFUSE (un-woken settle): the SAME settling dispatch with an EMPTY emitted-wake set is REJECTED —
+-- you cannot settle the job without waking the waiter (the notify dual bites where the budget alone passes).
+#guard boardProgram.admitsCtx
+  { sender := some leadPk, emittedWakes := [] } 0 goodOld settleNew == false
+-- ⑤ REFUSE (wrong wake badge): a settle that fired the WRONG badge (not settleWakeBadge) is REJECTED.
+#guard boardProgram.admitsCtx
+  { sender := some leadPk, emittedWakes := [0b100] } 0 goodOld settleNew == false
+
+-- (dormancy) COMMIT: an ORDINARY dispatch (status absent) with NO wake fired still ADMITS — the wake
+-- clause is dormant off the settling transition (the board operates normally between completions).
+#guard boardProgram.admitsCtx { sender := some leadPk, emittedWakes := [] } 0 goodOld goodNew
+end CompletionWitnesses
+
 /-! ### §4/§5 surface + wake teeth (the notify cap algebra). -/
 
 -- ⑤ surface narrowed: worker A's reach is the compile-only cap (some, not none).
@@ -518,6 +634,8 @@ end Witnesses
   stolen_baton_rejected,
   replayed_dispatch_rejected,
   honest_dispatch_admits,
+  unsettled_without_wake_rejected,
+  honest_completion_admits,
   workerAReach_is_compile_only,
   worker_cannot_widen_reach,
   worker_reach_is_strict,

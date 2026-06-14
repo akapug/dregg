@@ -19,10 +19,12 @@ polarities.
 
   * **the payout drain.** The desk holds escrowed job payments; a settle pays the provider out of the
     desk balance. Without a rate ceiling, a compromised provider key settles the ENTIRE desk balance in
-    one turn. `payoutCeiling` = `balanceDeltaLe payoutRate`: the per-turn balance change may not be MORE
-    than the desk's payout rate (the desk may not GAIN more than the rate — and on a settle the desk
-    LOSES, so a settle within the rate has a bounded movement). An over-rate movement is UNSAT
-    (`over_payout_rejected`).
+    one turn. `payoutCeiling` = `balanceDeltaLeField payoutRateF`: the per-turn balance change may not be
+    MORE than the desk's `payout_rate` SLOT (the desk may not GAIN more than the rate — and on a settle
+    the desk LOSES, so a settle within the rate has a bounded movement). The ceiling is a GOVERNED FIELD,
+    not a literal: a premium-tier desk stores a higher `payout_rate` and admits a movement a basic-tier
+    desk rejects, with no program rewrite (`premium_tier_lifts_payout_ceiling`). An over-rate movement is
+    UNSAT (`over_payout_rejected`).
   * **the nonsense price.** The agreed job RATE must lie in a published price band — a settle at rate 0
     (free work the provider never agreed to) or rate 10^9 (a drain dressed as a price) is rejected.
     `priceBand` = `inRangeTwoSided rate priceLo priceHi` gives `off_band_price_rejected`.
@@ -33,7 +35,7 @@ polarities.
     "settle" that pays partially and leaves value sitting is rejected. `drainOnResolve` =
     `anyOf [not (state = RESOLVED), balanceLe 0]` gives `stranded_escrow_rejected`.
 
-## The async settlement wake (the round-2 notify wedge)
+## The async settlement wake (the round-2 notify wedge) — WELDED into the program
 
 A settled job WAKES the provider — but the desk does not get to wake the provider however it likes. The
 wake rides a `Firmament.NotifyAuthority.NotifyCap`: the desk holds a notify cap to the provider's
@@ -43,6 +45,14 @@ ATTENUATE the cap before handing it to a sub-desk — narrowing the mask, never 
 (`settle_wake_attenuation_no_amplify`). A wake of a badge outside the held mask is REFUSED
 (`out_of_mask_wake_refused`). This is the async coordination the synchronous re-point lacked: the
 provider learns of settlement by a wake, not a poll, and the wake authority is a held, attenuable cap.
+
+The wake is not merely AVAILABLE — it is REQUIRED. The settle program carries
+`wakeOnResolve stateF stRESOLVED settleWakeBadge`: a settle DRIVING the desk to RESOLVED is UNSAT unless
+the turn's emitted-wake set carries the settlement badge (`unwoken_settle_rejected`). So the state
+transition (provider paid) and the async signal (provider woken) are welded — a resolve that pays but
+forgets to notify is refused, the notify dual of the drain tooth, both gated on the same RESOLVED
+transition. The §4 cap algebra below witnesses that the wake the program requires is itself authority-
+contained (the desk can only wake within its held badge mask).
 
 ## The desk cell — its state
 
@@ -81,6 +91,14 @@ open Dregg2.Firmament.SeL4Kernel (Notification)
 abbrev stateF : FieldName := "state"
 /-- The agreed job rate (must lie in the price band). -/
 abbrev rateF : FieldName := "rate"
+/-- **The desk's per-turn payout RATE CEILING, as a GOVERNED STATE FIELD** (gap-3 field-valued rate). The
+ceiling the balance-movement gate reads is no longer a baked literal but a slot a desk-tier governance
+turn can lift: a premium-tier desk stores a higher `payout_rate` and admits a settle movement a basic-tier
+desk rejects, with NO program rewrite. -/
+abbrev payoutRateF : FieldName := "payout_rate"
+/-- The settlement WAKE BADGE the resolving settle must emit (the async "I settled — wake the provider"
+signal; gap-4 program-enforced wake). -/
+abbrev settleWakeBadge : Int := 0b001
 
 /-- Lifecycle: the desk is open (a job is escrowed, awaiting settlement). -/
 abbrev stOPEN : Int := 0
@@ -91,10 +109,13 @@ abbrev stRESOLVED : Int := 1
 abbrev priceLo : Int := 10
 abbrev priceHi : Int := 1000
 
-/-- The desk's per-turn payout RATE CEILING: the sealed balance may not change by more than `payoutRate`
-in one turn (`new.balance − old.balance ≤ payoutRate`). A settle DEBITS the desk (a negative delta, well
-under the ceiling); the ceiling blocks an adversarial CREDIT/movement past the rate. -/
-abbrev payoutRate : Int := 0
+/-- The basic desk tier's payout-rate slot value: `0` — the per-turn balance movement may not exceed
+`new.balance − old.balance ≤ 0` (a settle DEBITS the desk, a negative delta well under the ceiling; the
+ceiling blocks an adversarial CREDIT/movement past the rate). A PREMIUM tier lifts this slot. -/
+abbrev basicPayoutRate : Int := 0
+/-- A premium desk tier's payout-rate slot value: `100` — governance lifted the ceiling, admitting a
+larger per-turn movement the basic tier rejects (the field-valued rate, no program change). -/
+abbrev premiumPayoutRate : Int := 100
 
 /-- The registered provider POOL: the identities authorized to settle (be paid). -/
 abbrev providerSet : List Int := [0x71, 0x72, 0x73]
@@ -110,18 +131,25 @@ The settle program is a conjunction, each clause a constraint of the cell's `Rec
 
   * `senderMemberOf providerSet` — **provider pool**: a settle must be SIGNED BY a registered provider.
   * `inRangeTwoSided rateF priceLo priceHi` — **price band**: the agreed rate must be published.
-  * `balanceDeltaLe payoutRate` — **the payout-rate ceiling**: the per-turn sealed-balance movement is
-    bounded by the desk's rate. (A settle debits, well under the ceiling; an adversarial movement past
-    the rate is rejected.)
+  * `balanceDeltaLeField payoutRateF` — **the FIELD-VALUED payout-rate ceiling** (gap-3): the per-turn
+    sealed-balance movement is bounded by the desk's `payout_rate` SLOT — a governed parameter a tier
+    upgrade lifts, not a baked literal. (A settle debits, well under the ceiling; an adversarial movement
+    past the rate is rejected; a missing rate slot grants ZERO allowance, fail-closed.)
   * `anyOf [not (state = RESOLVED), balanceLe 0]` — **the drain invariant**: a settle driving the desk
     to RESOLVED must drain the escrow to `≤ 0`. Value cannot be stranded.
+  * `wakeOnResolve stateF stRESOLVED settleWakeBadge` — **the PROGRAM-ENFORCED settlement WAKE** (gap-4):
+    a settle driving the desk to RESOLVED must ALSO have fired the async settlement wake (badge
+    `settleWakeBadge` in the turn's emitted-wake set) — the §4 NotifyCap edge welded INTO the program as
+    the notify dual of the drain. A resolve that pays the provider but forgets to wake them is UNSAT.
 
-The conjunction is ONE predicate (all-or-nothing). -/
+The conjunction is ONE predicate (all-or-nothing). The drain AND the wake both gate on the SAME RESOLVED
+transition (`escrowResolveProgram` shape, `Exec/Program.lean`); on an ordinary OPEN turn both are dormant. -/
 def settleConstraints : List StateConstraint :=
   [ .simple (.senderMemberOf providerSet)                                          -- provider pool
   , .simple (.inRangeTwoSided rateF priceLo priceHi)                               -- price band
-  , .simple (.balanceDeltaLe payoutRate)                                           -- payout-rate ceiling
-  , .anyOf [.not (.fieldEquals stateF stRESOLVED), .balanceLe 0] ]                 -- drain on resolve
+  , .simple (.balanceDeltaLeField payoutRateF)                                     -- FIELD-VALUED payout-rate ceiling
+  , .anyOf [.not (.fieldEquals stateF stRESOLVED), .balanceLe 0]                   -- drain on resolve
+  , .simple (.wakeOnResolve stateF stRESOLVED settleWakeBadge) ]                   -- wake on resolve (notify dual)
 
 /-- **The compute-market-desk program** — the settle policy as ONE coalgebra structure-map. -/
 def deskProgram : RecordProgram := .predicate settleConstraints
@@ -196,22 +224,27 @@ theorem off_band_price_rejected (ctx : TurnCtx) (m : Nat) (o n : Value) (r : Int
   rw [hrate] at hx; injection hx with hx; subst hx
   rcases hoff with h | h <;> omega
 
-/-- **③ PAYOUT-RATE TOOTH — a settle movement past the payout rate is UNSAT.** A settle whose per-turn
-sealed-balance change EXCEEDS the desk's payout rate (`Δbalance > payoutRate`) is rejected:
-`admitsCtx = false`. A compromised provider key cannot move the desk balance past the rate in one turn. -/
-theorem over_payout_rejected (ctx : TurnCtx) (m : Nat) (o n : Value) (before after : Int)
+/-- **③ PAYOUT-RATE TOOTH — a settle movement past the (FIELD-VALUED) payout rate is UNSAT.** A settle
+whose per-turn sealed-balance change EXCEEDS the desk's `payout_rate` SLOT (`Δbalance > new[payout_rate]`)
+is rejected: `admitsCtx = false`. A compromised provider key cannot move the desk balance past the
+governed rate in one turn — and the ceiling is a STATE FIELD (a tier upgrade lifts it without a program
+rewrite; the honest-settle witness and the §5 tier-tooth exercise both rates). -/
+theorem over_payout_rejected (ctx : TurnCtx) (m : Nat) (o n : Value) (before after rate : Int)
     (hbefore : ctx.balanceBefore = some before)
     (hafter : ctx.balance = some after)
-    (hover : after - before > payoutRate) :
+    (hrate : n.scalar payoutRateF = some rate)
+    (hover : after - before > rate) :
     deskProgram.admitsCtx ctx m o n = false := by
   by_contra hc
   have hne := admits_of_not_false hc
-  have hrate := admitted_mem hne (c := .simple (.balanceDeltaLe payoutRate)) (.tail _ (.tail _ (.head _)))
-  have hle : evalSimpleCtx ctx (.balanceDeltaLe payoutRate) o n = true := by
-    simpa [evalConstraintCtx] using hrate
-  obtain ⟨a, b, ha, hb, hbound⟩ := (evalSimpleCtx_balanceDeltaLe_iff ctx payoutRate o n).mp hle
+  have hgate := admitted_mem hne (c := .simple (.balanceDeltaLeField payoutRateF)) (.tail _ (.tail _ (.head _)))
+  have hle : evalSimpleCtx ctx (.balanceDeltaLeField payoutRateF) o n = true := by
+    simpa [evalConstraintCtx] using hgate
+  obtain ⟨a, b, bound, ha, hb, hbnd, hbound⟩ :=
+    (evalSimpleCtx_balanceDeltaLeField_iff ctx payoutRateF o n).mp hle
   rw [hbefore] at ha; injection ha with ha; subst ha
   rw [hafter] at hb; injection hb with hb; subst hb
+  rw [hrate] at hbnd; injection hbnd with hbnd; subst hbnd
   omega
 
 /-- **④ STRANDED-ESCROW TOOTH — a settle leaving value in the desk is UNSAT.** A settle driving the desk
@@ -233,16 +266,18 @@ theorem stranded_escrow_rejected (ctx : TurnCtx) (m : Nat) (o n : Value) (bal : 
   rw [hbalance] at hb; injection hb with hb; subst hb; omega
 
 /-- **⑤ THE HONEST SETTLE COMMITS (the gate is not constant-false).** A settle signed by a registered
-provider, at an in-band rate, with a payout movement within the rate, and the escrow drained, ADMITS.
-The conjunction of the teeth is non-vacuous: there is a real settle the desk lets through. -/
+provider, at an in-band rate, with a payout movement within the desk's `payout_rate` slot, the escrow
+drained, AND the settlement wake fired, ADMITS. The conjunction of the (now five) teeth is non-vacuous:
+there is a real settle the desk lets through — the drain dual AND the notify dual both satisfied. -/
 theorem honest_settle_admits (ctx : TurnCtx) (m : Nat) (o n : Value)
-    (before after : Int)
+    (before after rate : Int)
     (hsender : ctx.sender = some providerPk)
-    (_hstate : n.scalar stateF = some stRESOLVED)  -- the scenario: this IS a resolving settle
+    (hstate : n.scalar stateF = some stRESOLVED)   -- the scenario: this IS a resolving settle
     (hrate : n.scalar rateF = some 100)             -- an in-band rate (priceLo ≤ 100 ≤ priceHi)
     (hbefore : ctx.balanceBefore = some before) (hafter : ctx.balance = some after)
-    (hpayout : after - before ≤ payoutRate)
-    (hdrained : ctx.balance = some 0) :
+    (hpayoutRate : n.scalar payoutRateF = some rate) (hpayout : after - before ≤ rate)
+    (hdrained : ctx.balance = some 0)
+    (hwoke : ctx.emittedWakes.contains settleWakeBadge = true) :  -- the settlement wake fired
     deskProgram.admitsCtx ctx m o n = true := by
   have c1 : evalConstraintCtx ctx (.simple (.senderMemberOf providerSet)) o n = true := by
     show evalSimpleCtx ctx (.senderMemberOf providerSet) o n = true
@@ -252,17 +287,54 @@ theorem honest_settle_admits (ctx : TurnCtx) (m : Nat) (o n : Value)
     rw [show evalSimpleCtx ctx (.inRangeTwoSided rateF priceLo priceHi) o n
           = evalSimple (.inRangeTwoSided rateF priceLo priceHi) o n from rfl]
     exact (evalSimple_inRangeTwoSided_iff rateF priceLo priceHi o n).mpr ⟨100, hrate, by decide, by decide⟩
-  have c3 : evalConstraintCtx ctx (.simple (.balanceDeltaLe payoutRate)) o n = true := by
-    show evalSimpleCtx ctx (.balanceDeltaLe payoutRate) o n = true
-    exact (evalSimpleCtx_balanceDeltaLe_iff ctx payoutRate o n).mpr ⟨before, after, hbefore, hafter, hpayout⟩
+  have c3 : evalConstraintCtx ctx (.simple (.balanceDeltaLeField payoutRateF)) o n = true := by
+    show evalSimpleCtx ctx (.balanceDeltaLeField payoutRateF) o n = true
+    exact (evalSimpleCtx_balanceDeltaLeField_iff ctx payoutRateF o n).mpr
+      ⟨before, after, rate, hbefore, hafter, hpayoutRate, hpayout⟩
   have c4 : evalConstraintCtx ctx (.anyOf [.not (.fieldEquals stateF stRESOLVED), .balanceLe 0]) o n = true := by
     have hd : evalSimpleCtx ctx (.balanceLe 0) o n = true :=
       (evalSimpleCtx_balanceLe_iff ctx 0 o n).mpr ⟨0, hdrained, by omega⟩
     show (evalSimpleCtx ctx (.not (.fieldEquals stateF stRESOLVED)) o n
           || (evalSimpleCtx ctx (.balanceLe 0) o n || false)) = true
     rw [hd]; simp
+  have c5 : evalConstraintCtx ctx (.simple (.wakeOnResolve stateF stRESOLVED settleWakeBadge)) o n = true := by
+    show evalSimpleCtx ctx (.wakeOnResolve stateF stRESOLVED settleWakeBadge) o n = true
+    exact (evalSimpleCtx_wakeOnResolve_resolving_iff ctx stateF stRESOLVED settleWakeBadge o n hstate).mpr hwoke
   show settleConstraints.all (fun c => evalConstraintCtx ctx c o n) = true
-  simp only [settleConstraints, List.all_cons, List.all_nil, c1, c2, c3, c4, Bool.and_true]
+  simp only [settleConstraints, List.all_cons, List.all_nil, c1, c2, c3, c4, c5, Bool.and_true]
+
+/-- **⑥ UN-WOKEN SETTLE TOOTH — a resolving settle that forgets the async wake is UNSAT.** A settle
+DRIVING the desk to RESOLVED whose emitted-wake set does NOT carry the settlement badge is rejected:
+`admitsCtx = false`. The provider must be WOKEN on settlement — a resolve that pays but forgets to notify
+is refused, the notify dual of the drain tooth (§4's NotifyCap edge now a PROGRAM clause, not a separate
+section). Gap-4 made enforceable: state→RESOLVED REQUIRES the wake. -/
+theorem unwoken_settle_rejected (ctx : TurnCtx) (m : Nat) (o n : Value)
+    (hres : n.scalar stateF = some stRESOLVED)
+    (hno_wake : ctx.emittedWakes.contains settleWakeBadge = false) :
+    deskProgram.admitsCtx ctx m o n = false := by
+  by_contra hc
+  have hne := admits_of_not_false hc
+  have hwake := admitted_mem hne
+    (c := .simple (.wakeOnResolve stateF stRESOLVED settleWakeBadge))
+    (.tail _ (.tail _ (.tail _ (.tail _ (.head _)))))
+  have hw : evalSimpleCtx ctx (.wakeOnResolve stateF stRESOLVED settleWakeBadge) o n = true := by
+    simpa [evalConstraintCtx] using hwake
+  rw [wakeOnResolve_resolve_requires_wake ctx stateF stRESOLVED settleWakeBadge o n hres hno_wake] at hw
+  exact absurd hw (by simp)
+
+/-- **⑦ THE FIELD-VALUED RATE LIFTS WITH THE TIER (the gap-3 payoff).** The SAME settle program admits a
+per-turn balance movement on a PREMIUM-tier desk (`payout_rate = premiumPayoutRate`) that it REJECTS on a
+basic-tier desk (`payout_rate = basicPayoutRate`) — with NO program change. A `+50` adversarial-looking
+credit is over the basic tier's `0` ceiling but within the premium tier's `100` ceiling: a governance
+upgrade of the `payout_rate` SLOT lifted the allowance. The rate is governed STATE, not a baked literal. -/
+theorem premium_tier_lifts_payout_ceiling :
+    -- basic tier (payout_rate = 0): a +50 movement is OVER the ceiling ⇒ the rate gate REJECTS.
+    evalSimpleCtx { balance := some 150, balanceBefore := some 100 } (.balanceDeltaLeField payoutRateF)
+        (.record []) (.record [(payoutRateF, .int basicPayoutRate)]) = false ∧
+    -- premium tier (payout_rate = 100): the SAME +50 movement is WITHIN the ceiling ⇒ the rate gate ADMITS.
+    evalSimpleCtx { balance := some 150, balanceBefore := some 100 } (.balanceDeltaLeField payoutRateF)
+        (.record []) (.record [(payoutRateF, .int premiumPayoutRate)]) = true := by
+  decide
 
 /-! ## §4 — THE ASYNC SETTLEMENT WAKE (the round-2 notify cap algebra).
 
@@ -313,14 +385,18 @@ polarities. -/
 section Witnesses
 
 /-- A faithful settle context: a registered provider signs, balance 0 (was 50: a −50 payout, well under
-the +0 ceiling), state→RESOLVED, rate 100 (in band). -/
+the basic-tier `0` ceiling), state→RESOLVED, AND the settlement wake fired (badge `settleWakeBadge`). -/
 def settleCtx : TurnCtx :=
-  { sender := some providerPk, balance := some 0, balanceBefore := some 50 }
-def deskNew : Value := .record [(stateF, .int stRESOLVED), (rateF, .int 100)]
-def deskOld : Value := .record [(stateF, .int stOPEN), (rateF, .int 100)]
+  { sender := some providerPk, balance := some 0, balanceBefore := some 50,
+    emittedWakes := [settleWakeBadge] }
+/-- The resolving post-state: RESOLVED, rate 100 (in band), the basic-tier payout-rate slot. -/
+def deskNew : Value :=
+  .record [(stateF, .int stRESOLVED), (rateF, .int 100), (payoutRateF, .int basicPayoutRate)]
+def deskOld : Value :=
+  .record [(stateF, .int stOPEN), (rateF, .int 100), (payoutRateF, .int basicPayoutRate)]
 
--- ⑤ COMMIT: a faithful settle ADMITS (registered provider, in-band rate, −50 payout within ceiling,
--- drained to 0).
+-- ⑤ COMMIT: a faithful settle ADMITS (registered provider, in-band rate, −50 payout within the
+-- payout_rate slot, drained to 0, AND the settlement wake fired).
 #guard deskProgram.admitsCtx settleCtx 0 deskOld deskNew
 
 -- ① REFUSE (non-provider): an outsider signs the settle. REJECTED (only registered providers).
@@ -333,13 +409,13 @@ def deskOld : Value := .record [(stateF, .int stOPEN), (rateF, .int 100)]
 
 -- ② REFUSE (price below band): rate 5 < priceLo 10 (free work the provider never agreed to). REJECTED.
 #guard deskProgram.admitsCtx settleCtx 0 deskOld
-  (.record [(stateF, .int stRESOLVED), (rateF, .int 5)]) == false
+  (.record [(stateF, .int stRESOLVED), (rateF, .int 5), (payoutRateF, .int basicPayoutRate)]) == false
 
 -- ② REFUSE (price above band): rate 5000 > priceHi 1000 (a drain dressed as a price). REJECTED.
 #guard deskProgram.admitsCtx settleCtx 0 deskOld
-  (.record [(stateF, .int stRESOLVED), (rateF, .int 5000)]) == false
+  (.record [(stateF, .int stRESOLVED), (rateF, .int 5000), (payoutRateF, .int basicPayoutRate)]) == false
 
--- ③ REFUSE (over-payout movement): balance 60 (was 50, a +10 movement > the +0 ceiling). REJECTED.
+-- ③ REFUSE (over-payout movement): balance 60 (was 50, a +10 movement > the basic-tier `0` ceiling). REJECTED.
 #guard deskProgram.admitsCtx
   { settleCtx with balance := some 60 } 0 deskOld deskNew == false
 
@@ -347,17 +423,34 @@ def deskOld : Value := .record [(stateF, .int stOPEN), (rateF, .int 100)]
 #guard deskProgram.admitsCtx
   { settleCtx with balanceBefore := none } 0 deskOld deskNew == false
 
+-- ③ REFUSE (absent payout_rate slot): a settle whose post-state has NO payout_rate field ⇒ the
+-- field-valued ceiling grants ZERO allowance ⇒ fail-closed (a missing tier field is never unbounded).
+#guard deskProgram.admitsCtx settleCtx 0 deskOld
+  (.record [(stateF, .int stRESOLVED), (rateF, .int 100)]) == false
+
 -- ④ REFUSE (stranded escrow): the desk resolves but balance is still 30 (value left sitting). REJECTED.
 #guard deskProgram.admitsCtx
   { settleCtx with balance := some 30, balanceBefore := some 50 } 0 deskOld deskNew == false
 
+-- ⑥ REFUSE (un-woken settle): a faithful-LOOKING settle (provider, in-band, drained, in-rate) that
+-- FORGETS the settlement wake (empty emitted-wake set) is REJECTED — the resolve REQUIRES the wake.
+#guard deskProgram.admitsCtx { settleCtx with emittedWakes := [] } 0 deskOld deskNew == false
+-- ⑥ REFUSE (wrong wake badge): a settle that fired the WRONG badge (not settleWakeBadge) is REJECTED.
+#guard deskProgram.admitsCtx { settleCtx with emittedWakes := [0b100] } 0 deskOld deskNew == false
+
+-- ⑦ COMMIT (premium tier lifts the rate): the SAME desk on the PREMIUM tier (payout_rate = 100) admits a
+-- settle whose movement (+0 here; the standalone rate-tooth `premium_tier_lifts_payout_ceiling` exercises
+-- the +50 case) — the ceiling is governed STATE the tier upgrade lifted, no program change.
+#guard deskProgram.admitsCtx settleCtx 0 deskOld
+  (.record [(stateF, .int stRESOLVED), (rateF, .int 100), (payoutRateF, .int premiumPayoutRate)])
+
 -- ⑤ COMMIT (open turn dormant): an OPEN turn (state stays OPEN) by a registered provider with an
--- in-band rate and a within-rate movement ADMITS even with a positive balance — the drain clause is
--- dormant until resolve (the desk is operable until a real settle).
+-- in-band rate and a within-rate movement ADMITS even with a positive balance — the drain AND the wake
+-- clauses are BOTH dormant until resolve (the desk is operable until a real settle, no wake needed).
 #guard deskProgram.admitsCtx
   { sender := some providerPk, balance := some 50, balanceBefore := some 50 } 0
-  (.record [(stateF, .int stOPEN), (rateF, .int 100)])
-  (.record [(stateF, .int stOPEN), (rateF, .int 100)])
+  (.record [(stateF, .int stOPEN), (rateF, .int 100), (payoutRateF, .int basicPayoutRate)])
+  (.record [(stateF, .int stOPEN), (rateF, .int 100), (payoutRateF, .int basicPayoutRate)])
 
 -- The provider pool isolated: a member (0x72) ADMITS, an outsider REJECTS, no sender REJECTS.
 #guard evalSimpleCtx { sender := some providerPk } (.senderMemberOf providerSet) (.record []) (.record [])
@@ -404,6 +497,8 @@ end Witnesses
   over_payout_rejected,
   stranded_escrow_rejected,
   honest_settle_admits,
+  unwoken_settle_rejected,
+  premium_tier_lifts_payout_ceiling,
   settle_wake_commits,
   out_of_mask_wake_refused,
   settle_wake_attenuation_no_amplify
