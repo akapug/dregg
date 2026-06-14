@@ -1490,9 +1490,11 @@ fn vm_site_input_state_concrete(
 /// So `descriptor_air_accepts(d, trace, pi)` ⟺ the `when_transition`-FACTORED conjunction of
 /// `decideVm`'s clauses over the trace domain:
 ///
+/// ```text
 ///     [∀ r < n−1: the gate/transition conjunct at window r]
 ///   ∧ [the boundary/PI conjuncts at the first (r = 0) and last (r = n−1) windows]
 ///   ∧ [∀ r: the hash-site + range conjuncts]
+/// ```
 ///
 /// NOT the verbatim `∀ r. decideVm hash d (window r) (r==0) (r==n−1)`: `decideVm` carries
 /// `gate`/`transition` UNGUARDED on EVERY window — including the `isLast` one — while this AIR's
