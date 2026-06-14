@@ -643,6 +643,118 @@ impl IssuerRootAuthority for StaticIssuerRootAuthority {
     }
 }
 
+/// Host channel resolving a peer cell's **finalized** field value for the
+/// cross-cell verified-observation atom
+/// ([`crate::program::StateConstraint::ObservedFieldEquals`],
+/// `docs/CELL-PROGRAM-LANGUAGE.md` §11.2).
+///
+/// # Why this exists (the cross-cell self-fabrication forge)
+///
+/// `ObservedFieldEquals` gates a turn on "this cell's `local_field` equals
+/// peer `source_cell`'s `source_field` at finalized root `at_root`". A
+/// Merkle-open proof carried in the witness is self-consistent for ANY
+/// `at_root` the prover invents — so a prover could fabricate a one-leaf
+/// tree holding their desired value, point `at_root` at it, and "observe" a
+/// peer value the peer never finalized. This is the exact shape the
+/// [`IssuerRootAuthority`] closes for BlindedSet membership; the cross-cell
+/// read has the same forge, so it gets the same host-authority cure.
+///
+/// A `FinalizedRootAuthority` knows (from the peer cell's finalized
+/// state-commitment in the host's committed history / receipt chain) which
+/// roots are genuinely `source_cell`'s and what each finalized field opens
+/// to. The evaluator consults it and admits ONLY the value the host
+/// confirms — recomputation against the receipt chain, which is what
+/// verifiers already do.
+///
+/// # Cost / coordination (§8)
+///
+/// FREE / coordination-free: a **finalized** value is a monotone,
+/// already-committed fact (it never un-finalizes), the `monotone_terminal`
+/// confluence-keeping case — NOT the live-read ordering pole. That is why
+/// this rung is admissible where a *live* cross-cell read is not (a live
+/// read makes every turn on this cell order against the peer; see §8 / the
+/// `boundDelta` deferral).
+///
+/// # Fail-closed contract
+///
+/// When **no** authority is installed, the evaluator **rejects every
+/// `ObservedFieldEquals`** — it has no channel to the peer's real finalized
+/// roots and cannot soundly distinguish a genuine finalized read from a
+/// self-fabricated one. Refusing is strictly sounder than trusting
+/// attacker-chosen roots ("improve, don't degrade"). The Lean twin is the
+/// empty `TurnCtx.observedFields` carrier (`evalConstraint_observedFieldEquals_fails`).
+pub trait FinalizedRootAuthority: Send + Sync {
+    /// Return `Ok(value)` iff `at_root` is `source_cell`'s genuine FINALIZED
+    /// state-commitment AND `source_field` opens in it to `value`. Return an
+    /// explanatory `Err(reason)` otherwise (unknown/forged root, field
+    /// absent). The returned `value` is what `new[local_field]` must equal.
+    fn observe_finalized_field(
+        &self,
+        source_cell: &[u8; 32],
+        at_root: &[u8; 32],
+        source_field: u8,
+    ) -> Result<crate::FieldElement, String>;
+}
+
+/// A static [`FinalizedRootAuthority`] backed by an in-memory table of
+/// `(source_cell, at_root, source_field) -> value` bindings.
+///
+/// Production hosts that read finalized peer state from the committed
+/// history install their own authority; this one suits hosts that snapshot a
+/// peer's finalized fields and fixed-point test wiring. A triple absent from
+/// the table is rejected — fail-closed by construction (a forged `at_root`,
+/// or a field never finalized at that root, has no binding).
+#[derive(Clone, Debug, Default)]
+pub struct StaticFinalizedRootAuthority {
+    bindings: BTreeMap<([u8; 32], [u8; 32], u8), crate::FieldElement>,
+}
+
+impl StaticFinalizedRootAuthority {
+    /// Construct an empty authority (rejects everything until roots are added).
+    pub fn new() -> Self {
+        Self {
+            bindings: BTreeMap::new(),
+        }
+    }
+
+    /// Bind `source_field`'s finalized `value` for `(source_cell, at_root)` —
+    /// i.e. declare that `at_root` is a genuine finalized commitment of
+    /// `source_cell` in which `source_field` opens to `value`.
+    pub fn authorize(
+        mut self,
+        source_cell: [u8; 32],
+        at_root: [u8; 32],
+        source_field: u8,
+        value: crate::FieldElement,
+    ) -> Self {
+        self.bindings
+            .insert((source_cell, at_root, source_field), value);
+        self
+    }
+}
+
+impl FinalizedRootAuthority for StaticFinalizedRootAuthority {
+    fn observe_finalized_field(
+        &self,
+        source_cell: &[u8; 32],
+        at_root: &[u8; 32],
+        source_field: u8,
+    ) -> Result<crate::FieldElement, String> {
+        match self
+            .bindings
+            .get(&(*source_cell, *at_root, source_field))
+        {
+            Some(value) => Ok(*value),
+            None => Err(
+                "no finalized binding for (source_cell, at_root, source_field); the root is not a \
+                 recognized finalized commitment of the peer, or the field was not finalized at \
+                 that root (self-fabricated cross-cell read rejected)"
+                    .to_string(),
+            ),
+        }
+    }
+}
+
 /// The registry resolving [`WitnessedPredicateKind`]s to their
 /// verifiers.
 ///

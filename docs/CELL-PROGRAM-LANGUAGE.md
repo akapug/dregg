@@ -45,7 +45,7 @@ Sources for the requirements:
 | 3 | no factory-birth creator grant — the adopt-turn workaround (blueprint) | `FactoryDescriptor` birth-grant field (§7) | **STAGED** (design here, executor + Lean lockstep next) |
 | 4 | fee ≡ computron budget couples deal balance to operational cost (blueprint) | not a constraint-language item — needs a second balance lane (§6.3) | **STAGED** (layout rotation) |
 | 5 | no per-slot SENDER binding — WHO flips a slot was capability possession (polis 1) | `SenderIs` / `SenderInSlot` atoms; the binding idiom `AnyOf[Immutable{slot}, SenderIs{pk}]`; `CouncilCharter::with_member_keys` | **LANDED** (e2e: `approval_slots_are_actor_bound`) |
-| 6 | no cross-cell reads — constitution params copied at birth (polis 2) | deliberately NOT a constraint (I-confluence cost, §8); instead first-class imports (§8 of this doc) | **STAGED** (descriptor `imports` block) |
+| 6 | no cross-cell reads — constitution params copied at birth (polis 2) | a *live* read stays NOT-a-constraint (I-confluence cost, §8); the *finalized* read IS a constraint — `ObservedFieldEquals` (§11.2), a witnessed cross-cell read of a peer's finalized field (free because finalized = monotone). The descriptor `imports` block (§8) remains the first-class copied-literal form. | **LANDED** (`ObservedFieldEquals`, §11.2); imports STAGED |
 | 7 | 8-slot budget caps councils at N≤3 (polis 7) | variable-length regions / slot-map grammar | **STAGED** (layout rotation, §6.1) |
 | 8 | executed-action ≟ staged-hash needs receipt recomputation (polis 3) | a turn-payload commitment atom (`TurnEffectsHashIs`) reading the action's effect hash from `TransitionMeta` | **STAGED** (§6.2 — meta widening, no column change; small) |
 | 9 | N≤3 council / multi-admin boards re-enumerate `AnyOf[SenderIs…]` by hand (apps) | `SenderMemberOf { members }` — sender ∈ literal id-set, one atom | **LANDED** (Lean `senderMemberOf`; e2e idiom `AnyOf[Immutable, SenderMemberOf]`) |
@@ -468,7 +468,7 @@ at every slot in the window"). It does not lift the *count* ceiling (still 16),
 but it makes "all N approvals obey the same rule" one atom instead of N copied
 constraints — the council's repetitive shape, today, with zero layout risk.
 
-### 11.2 Cross-cell reads — the verified-observation atom (NOT a live read)
+### 11.2 Cross-cell reads — the verified-observation atom (NOT a live read) — **LANDED**
 
 **The disease.** A polis constitution copies its parameters into every child at
 birth (polis gap 2); an amendment can't propagate. Apps want "this council's
@@ -500,27 +500,45 @@ ObservedFieldEquals {
 }
 ```
 
-Semantics, fail-closed: admits IFF the witness opens `source_field` against the
-peer's *finalized* `at_root` to a value `v`, AND `new[local_field] == v`, AND
-the host's root authority confirms `at_root` is a genuine finalized commitment
-of `source_cell` (the `IssuerRootAuthority` precedent in
-`cell/src/predicate.rs` — the host installs the channel to "which roots are
-real," exactly as the BlindedSet self-fabrication forge is closed). Verification
-is recomputation against the receipt chain — what verifiers already do, minus
-the archaeology — so it is the first-class form of the *already-sound* copied-
-parameter pattern (§8's `imports`), now a program tooth instead of a descriptor
-literal. **Lean twin:** `Exec/Program.lean` `observedFieldEquals` reading a
-`TurnCtx.observedRoots : List (CellId × Felt × Felt)` carrier (the opened
+Semantics, fail-closed: admits IFF the host root authority confirms `at_root` is
+a genuine finalized commitment of `source_cell` AND opens `source_field` in it to
+a value `v`, AND `new[local_field] == v` (the Merkle-open proof rides in the
+witness at `proof_witness_index`; its absence fails closed). The host channel is
+`FinalizedRootAuthority` (`cell/src/predicate.rs`), the cross-cell twin of the
+`IssuerRootAuthority` precedent — the host installs "which roots are real," and
+when *no* authority is installed every `ObservedFieldEquals` REJECTS, exactly as
+a missing `IssuerRootAuthority` rejects every BlindedSet proof (the cross-cell
+self-fabrication forge stays closed). Verification is recomputation against the
+receipt chain — what verifiers already do, minus the archaeology — so it is the
+first-class form of the *already-sound* copied-parameter pattern (§8's
+`imports`), now a program tooth instead of a descriptor literal. **Lean twin:**
+`Exec/Program.lean` `observedFieldEquals` reading a
+`TurnCtx.observedFields : List (Int × FieldName × Int)` carrier (the opened
 `(cell, field, value)` triples the §8 crypto portal hands the evaluator, like
 `exhibitedCommit`); keystone `evalConstraintCtx_observedFieldEquals_iff` =
 "admits IFF the carrier holds `(source_cell, source_field, v)` AND
-`new[local_field] = v`." The Merkle-open + root-authenticity stays in the
+`new[local_field] = v`," with `observedFieldEquals_mismatch_refuses` (the local
+field cannot diverge from the finalized value) and
+`evalConstraintCtx_observedFieldEquals_absent_proof_refuses` (no opened triple ⇒
+reject — the anti-forge tooth). The Merkle-open + root-authenticity stays in the
 portal; the ordering law is proved here. **Cost (§8):** the disclosure is the
 peer's finalized value (already public on the chain); coordination is **free
 for finalized reads** — a monotone, already-committed fact is the
 `monotone_terminal` confluence-keeping case, NOT the live-read ordering pole.
 That distinction (finalized vs live) is *why* this rung is admissible where a
 live read is not, and the doc of the atom must say so.
+
+**LANDED** — the Lean twin is proved (`lake build Dregg2` axiom-clean, 3930
+jobs); the Rust mirror is `StateConstraint::ObservedFieldEquals` +
+`FinalizedRootAuthority` / `StaticFinalizedRootAuthority`
+(`cell/src/predicate.rs`), the evaluator arm in `cell/src/program.rs`, the view
+projection (`StateConstraintView::ObservedFieldEquals`), and the both-polarity
+pin `observed_field_equals_reads_a_finalized_peer_value` (admit on match · reject
+on mismatch · reject on a forged root · reject with no authority · reject with no
+proof). Variant-index-APPENDED, so factory VKs / content addresses stay
+byte-identical (§2). The cross-cell carrier is threaded as
+`WitnessBundle::finalized_roots` (the host installs it like the witnessed
+registry); when the executor does not supply it, the atom fails closed.
 
 ### 11.3 Richer composite leaves — `AnyOfBound` (witnessed branches under ⊔)
 
@@ -568,7 +586,7 @@ single linear `Cases` ladder.
 |---|---|---|
 | 11.1 name-keyed fields | council of 3; deal schema crammed into 8 slots | `approval[m]` for any member id `m`; an unbounded order book |
 | 11.1 `SlotRange` (bridge) | N copied `MemberOf` constraints, one per approval slot | one `forAllSlots` over the approval window |
-| 11.2 `ObservedFieldEquals` | constitution params copied at birth, frozen | "my threshold IS constitution v3's, at height H" — live, amendable, verified |
+| 11.2 `ObservedFieldEquals` **(LANDED)** | constitution params copied at birth, frozen | "my threshold IS constitution v3's, at height H" — live, amendable, verified |
 | 11.3 `AnyOfBound` | a linear `Cases` ladder; witnessed conditions can't disjoin | "release if timeout OR credential-proof" as one gate |
 
 The throughline is the §8 honesty contract: every rung is pinned to its

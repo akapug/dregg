@@ -173,12 +173,21 @@ pub struct WitnessBlobView<'a> {
 
 /// A bundle of witness blobs the executor passes alongside the action
 /// when evaluating a `CellProgram`.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct WitnessBundle<'a> {
     /// The witness blobs the action carries (indexed).
     pub blobs: &'a [WitnessBlobView<'a>],
     /// Registered verifiers for witnessed-predicate dispatch.
     pub registry: Option<&'a WitnessedPredicateRegistry>,
+    /// Host channel resolving a peer cell's FINALIZED field value for the
+    /// cross-cell verified-observation atom
+    /// ([`StateConstraint::ObservedFieldEquals`]). `None` ⇒ every
+    /// `ObservedFieldEquals` fails closed (no channel to the peer's real
+    /// finalized roots — the cross-cell self-fabrication forge stays closed,
+    /// exactly as a missing [`crate::predicate::IssuerRootAuthority`] rejects
+    /// every BlindedSet proof). Appended additively; existing constructions
+    /// default it to `None`.
+    pub finalized_roots: Option<&'a dyn crate::predicate::FinalizedRootAuthority>,
 }
 
 impl<'a> WitnessBundle<'a> {
@@ -186,6 +195,7 @@ impl<'a> WitnessBundle<'a> {
         Self {
             blobs: &[],
             registry: None,
+            finalized_roots: None,
         }
     }
 
@@ -1359,6 +1369,59 @@ pub enum StateConstraint {
     /// post-state-local `SimpleStateConstraint` fragment), exactly as in
     /// Lean. APPEND-ONLY.
     AffineDeltaLe { terms: Vec<(i64, u8)>, c: i64 },
+
+    /// **Cross-cell verified observation** (`docs/CELL-PROGRAM-LANGUAGE.md`
+    /// §11.2): `new[local_field]` must equal the value `source_field` held by
+    /// the PEER cell `source_cell` at the FINALIZED state-commitment root
+    /// `at_root`. THE rung that makes a real app natural — a market cell
+    /// gating on an oracle cell's finalized price, a governance cell on a
+    /// constitution cell's finalized membership ("my threshold IS
+    /// constitution v3's threshold, at height H" — live, amendable,
+    /// verified, instead of a parameter copied and FROZEN at birth, polis
+    /// gap 2 / the §8 `imports` pattern, now a program tooth).
+    ///
+    /// **This is a verified observation of FINALIZED state, NOT a live
+    /// read.** A guard reading the peer's *current* state would make every
+    /// turn on this cell order against every turn on that cell (the
+    /// `relational_decided_by_merge` arm with a non-local relation —
+    /// coordination, always; the same reason [`Self::BoundDelta`] is
+    /// deferred), so a live cross-cell read stays OUT of the language. A
+    /// **finalized** value is monotone (it never un-finalizes), the
+    /// `monotone_terminal` confluence-keeping case, hence FREE — that
+    /// distinction is exactly *why* this rung is admissible.
+    ///
+    /// Witnessed shape (joins the [`crate::predicate::WitnessedPredicate`]
+    /// family in spirit — `proof_witness_index` names its Merkle-open proof
+    /// blob), deliberately a `StateConstraint`, NOT a
+    /// [`SimpleStateConstraint`]: proof-bearing shapes do not survive naive
+    /// disjunction (the §4 discipline — an `AnyOf` branch that fails to open
+    /// a proof must be distinguishable from one that needs none), so it does
+    /// not lift into the composable simple fragment.
+    ///
+    /// Fail-closed: admits IFF the host
+    /// [`crate::predicate::FinalizedRootAuthority`] confirms `at_root` is
+    /// `source_cell`'s genuine finalized commitment AND opens `source_field`
+    /// in it to a value `v`, AND `new[local_field] == v`. When no authority
+    /// is installed (no channel to the peer's real roots) it REJECTS — the
+    /// cross-cell self-fabrication forge stays closed exactly as a missing
+    /// [`crate::predicate::IssuerRootAuthority`] rejects every BlindedSet
+    /// proof; `proof_witness_index` out of range / absent `local_field` /
+    /// forged `at_root` all reject. Lean twin:
+    /// `StateConstraint.observedFieldEquals` +
+    /// `evalConstraintCtx_observedFieldEquals_iff`
+    /// (`metatheory/Dregg2/Exec/Program.lean`), reading the
+    /// `TurnCtx.observedFields` portal carrier (the opened
+    /// `(source_cell, source_field, v)` triples — the host Merkle-open +
+    /// root-authenticity check lives in the portal, the ordering law is
+    /// proved there). APPEND-ONLY (postcard variant indices preserved —
+    /// factory VKs / content addresses byte-identical, §2).
+    ObservedFieldEquals {
+        local_field: u8,
+        source_cell: [u8; 32],
+        source_field: u8,
+        at_root: [u8; 32],
+        proof_witness_index: usize,
+    },
 }
 
 /// Error from evaluating a cell program.
@@ -3131,6 +3194,67 @@ fn evaluate_constraint_full(
             }
             Ok(())
         }
+
+        // ─── Cross-cell verified observation (§11.2) ───
+        StateConstraint::ObservedFieldEquals {
+            local_field,
+            source_cell,
+            source_field,
+            at_root,
+            proof_witness_index,
+        } => {
+            // Mirrors the proven `evalConstraintCtx_observedFieldEquals_iff`:
+            // admits IFF the host `FinalizedRootAuthority` confirms `at_root`
+            // is `source_cell`'s genuine FINALIZED commitment AND opens
+            // `source_field` to `v`, AND `new[local_field] == v`. Every other
+            // path fails CLOSED.
+            let idx = check_index(*local_field)?;
+            // Fail-closed without a host authority: no channel to the peer's
+            // real finalized roots ⇒ a self-fabricated `at_root` is
+            // indistinguishable from a genuine one, so REJECT (the Lean
+            // empty-`observedFields` carrier; the `IssuerRootAuthority`
+            // BlindedSet posture). This is the anti-forge tooth.
+            let Some(authority) = witnesses.finalized_roots else {
+                return Err(ProgramError::WitnessedPredicateRequiresExecutor {
+                    kind_name: "ObservedFieldEquals",
+                });
+            };
+            // The Merkle-open proof rides in the witness at the bound index
+            // (named, not first-of-kind — no cross-match window). Its absence
+            // is fail-closed: the portal cannot have opened a root the prover
+            // did not supply a proof for.
+            let _proof = witnesses.blob(*proof_witness_index).ok_or(
+                ProgramError::WitnessedPredicateRejected {
+                    kind_name: "ObservedFieldEquals",
+                    reason: format!(
+                        "no Merkle-open witness blob at proof_witness_index {proof_witness_index} \
+                         (cross-cell finalized read cannot be opened)"
+                    ),
+                },
+            )?;
+            // Recompute against the receipt chain: the host opens the peer's
+            // finalized field, rejecting a forged `at_root` / a field never
+            // finalized at that root (fail-closed inside the authority).
+            let observed = authority
+                .observe_finalized_field(source_cell, at_root, *source_field)
+                .map_err(|reason| ProgramError::WitnessedPredicateRejected {
+                    kind_name: "ObservedFieldEquals",
+                    reason,
+                })?;
+            // The binding is real: `new[local_field]` MUST equal the peer's
+            // finalized value (the mismatch tooth — a turn cannot diverge its
+            // local field from the observed finalized value).
+            if new_state.fields[idx] != observed {
+                return violated(
+                    constraint,
+                    format!(
+                        "slot[{idx}] != the finalized value of source_field {source_field} on the \
+                         peer cell at the observed root (ObservedFieldEquals)"
+                    ),
+                );
+            }
+            Ok(())
+        }
     }
 }
 
@@ -3901,6 +4025,16 @@ pub enum StateConstraintView {
     /// `Σ kᵢ·(new[slotᵢ] − old[slotᵢ]) <= c` — multi-field delta gate;
     /// `terms` are `(coefficient, slot)` pairs (apps gap 2).
     AffineDeltaLe { terms: Vec<(i64, u8)>, c: i64 },
+    /// `new[local_field]` ≡ the FINALIZED value of `source_field` on peer
+    /// `source_cell` at `at_root` (§11.2 cross-cell verified observation —
+    /// a market reading an oracle's finalized price; cells are 64-hex).
+    ObservedFieldEquals {
+        local_field: u8,
+        source_cell: String,
+        source_field: u8,
+        at_root: String,
+        proof_witness_index: usize,
+    },
 }
 
 /// [`HeapAtom`] view, nested inside [`StateConstraintView::HeapField`].
@@ -4349,6 +4483,19 @@ impl StateConstraint {
             StateConstraint::AffineDeltaLe { terms, c } => StateConstraintView::AffineDeltaLe {
                 terms: terms.clone(),
                 c: *c,
+            },
+            StateConstraint::ObservedFieldEquals {
+                local_field,
+                source_cell,
+                source_field,
+                at_root,
+                proof_witness_index,
+            } => StateConstraintView::ObservedFieldEquals {
+                local_field: *local_field,
+                source_cell: view_hex(source_cell),
+                source_field: *source_field,
+                at_root: view_hex(at_root),
+                proof_witness_index: *proof_witness_index,
             },
         }
     }
@@ -5550,6 +5697,7 @@ mod tests {
         let bundle = WitnessBundle {
             blobs: &blobs,
             registry: Some(&registry),
+            finalized_roots: None,
         };
 
         let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
@@ -5582,6 +5730,7 @@ mod tests {
         let bundle = WitnessBundle {
             blobs: &blobs,
             registry: Some(&registry),
+            finalized_roots: None,
         };
 
         let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
@@ -5620,6 +5769,7 @@ mod tests {
         let bundle = WitnessBundle {
             blobs: &blobs,
             registry: Some(&registry),
+            finalized_roots: None,
         };
 
         let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
@@ -5647,6 +5797,7 @@ mod tests {
         let bundle = WitnessBundle {
             blobs: &[],
             registry: Some(&registry),
+            finalized_roots: None,
         };
         let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
             set: RenouncedSet::BlindedSet {
@@ -5684,6 +5835,7 @@ mod tests {
         let bundle = WitnessBundle {
             blobs: &blobs,
             registry: Some(&registry),
+            finalized_roots: None,
         };
 
         let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
@@ -5725,6 +5877,7 @@ mod tests {
         let bundle = WitnessBundle {
             blobs: &blobs,
             registry: None,
+            finalized_roots: None,
         };
         // Authoritative ctx count is over the cap → MUST reject, the
         // self-attested 0 must be ignored.
@@ -5745,6 +5898,7 @@ mod tests {
         let bundle2 = WitnessBundle {
             blobs: &blobs2,
             registry: None,
+            finalized_roots: None,
         };
         let zero_ctx = ctx_sender(sender, 0);
         p.evaluate_full(
@@ -5805,6 +5959,7 @@ mod tests {
         let bundle = WitnessBundle {
             blobs: &blobs,
             registry: Some(&registry),
+            finalized_roots: None,
         };
         let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
             set: RenouncedSet::PublicRoot { set_root_index: 3 },
@@ -5855,6 +6010,7 @@ mod tests {
         let bundle = WitnessBundle {
             blobs: &blobs,
             registry: Some(&registry),
+            finalized_roots: None,
         };
         let p = CellProgram::Predicate(vec![StateConstraint::TemporalPredicate {
             witness_index: 0,
@@ -5890,6 +6046,7 @@ mod tests {
         let bundle_ok = WitnessBundle {
             blobs: &blobs_ok,
             registry: Some(&registry),
+            finalized_roots: None,
         };
         p.evaluate_full(&s, None, None, &TransitionMeta::wildcard(), &bundle_ok)
             .expect("proof at witness_index+1 accepts via stub verifier");
@@ -6156,6 +6313,112 @@ mod tests {
         ));
     }
 
+    /// §11.2 — the cross-cell verified-observation atom. A market cell's
+    /// `mark` (slot 0) must equal an oracle cell's FINALIZED `price`
+    /// (`source_field` 1) at a finalized root. The host
+    /// [`FinalizedRootAuthority`] is the cross-cell analogue of
+    /// [`crate::predicate::IssuerRootAuthority`]: it confirms `at_root` is the
+    /// peer's genuine finalized commitment and opens the field. Mirrors the
+    /// proven Lean keystone `evalConstraintCtx_observedFieldEquals_iff` +
+    /// `observedFieldEquals_mismatch_refuses` +
+    /// `evalConstraintCtx_observedFieldEquals_absent_proof_refuses`.
+    #[test]
+    fn observed_field_equals_reads_a_finalized_peer_value() {
+        use crate::predicate::{FinalizedRootAuthority, StaticFinalizedRootAuthority};
+
+        let oracle = [0x11u8; 32]; // the peer (oracle) cell
+        let at_root = [0xABu8; 32]; // a finalized state-commitment of the oracle
+        let price = field_from_u64(42); // the oracle's finalized `price` (field 1)
+
+        // The host knows the oracle's finalized root opens field 1 to 42.
+        let authority: std::sync::Arc<dyn FinalizedRootAuthority> = std::sync::Arc::new(
+            StaticFinalizedRootAuthority::new().authorize(oracle, at_root, 1, price),
+        );
+        // The Merkle-open proof rides in the witness at the bound index.
+        let proof_bytes = [0u8; 1];
+        let blobs = [WitnessBlobView {
+            kind: WitnessKindTag::MerklePath,
+            bytes: &proof_bytes,
+        }];
+        let bundle = WitnessBundle {
+            blobs: &blobs,
+            registry: None,
+            finalized_roots: Some(authority.as_ref()),
+        };
+
+        // The market cell: `mark` (slot 0) MUST equal the oracle's finalized price.
+        let market = CellProgram::Predicate(vec![StateConstraint::ObservedFieldEquals {
+            local_field: 0,
+            source_cell: oracle,
+            source_field: 1,
+            at_root,
+            proof_witness_index: 0,
+        }]);
+        let meta = TransitionMeta::wildcard();
+
+        // ADMIT: the market set mark = 42, exactly the oracle's finalized price.
+        let mut matched = CellState::new(0);
+        matched.fields[0] = price;
+        assert!(
+            market
+                .evaluate_full(&matched, None, None, &meta, &bundle)
+                .is_ok(),
+            "mark == the oracle's finalized price must ADMIT (the natural cross-cell read)"
+        );
+
+        // REJECT (the mismatch tooth): the market tried to set mark = 99 while
+        // the oracle's finalized price is 42 — the binding is real, the turn
+        // cannot diverge its local field from the peer's finalized value.
+        let mut mismatched = CellState::new(0);
+        mismatched.fields[0] = field_from_u64(99);
+        assert!(matches!(
+            market.evaluate_full(&mismatched, None, None, &meta, &bundle),
+            Err(ProgramError::ConstraintViolated { .. })
+        ));
+
+        // REJECT (the anti-forge tooth): a FORGED `at_root` the host never
+        // finalized for the oracle — the authority has no binding, fail-closed.
+        let forged = CellProgram::Predicate(vec![StateConstraint::ObservedFieldEquals {
+            local_field: 0,
+            source_cell: oracle,
+            source_field: 1,
+            at_root: [0xCDu8; 32], // not the oracle's finalized root
+            proof_witness_index: 0,
+        }]);
+        assert!(matches!(
+            forged.evaluate_full(&matched, None, None, &meta, &bundle),
+            Err(ProgramError::WitnessedPredicateRejected { .. })
+        ));
+
+        // REJECT (no host authority installed): no channel to the peer's real
+        // finalized roots ⇒ a self-fabricated read is indistinguishable, so the
+        // evaluator refuses (the empty-`observedFields` Lean carrier).
+        let no_authority = WitnessBundle {
+            blobs: &blobs,
+            registry: None,
+            finalized_roots: None,
+        };
+        assert!(matches!(
+            market.evaluate_full(&matched, None, None, &meta, &no_authority),
+            Err(ProgramError::WitnessedPredicateRequiresExecutor {
+                kind_name: "ObservedFieldEquals"
+            })
+        ));
+
+        // REJECT (missing Merkle-open proof): the witness carries no blob at
+        // the bound index ⇒ the portal could not have opened it, fail-closed.
+        let empty_blobs: [WitnessBlobView<'_>; 0] = [];
+        let no_proof = WitnessBundle {
+            blobs: &empty_blobs,
+            registry: None,
+            finalized_roots: Some(authority.as_ref()),
+        };
+        assert!(matches!(
+            market.evaluate_full(&matched, None, None, &meta, &no_proof),
+            Err(ProgramError::WitnessedPredicateRejected { .. })
+        ));
+    }
+
     /// Blueprint gap 1: the committed-value knowledge gate under a state
     /// guard — `state == RELEASED ⇒ PreimageGate` — now expressible
     /// because `PreimageGate` is a `SimpleStateConstraint`.
@@ -6187,6 +6450,7 @@ mod tests {
         let with_reveal = WitnessBundle {
             blobs: &blobs,
             registry: None,
+            finalized_roots: None,
         };
         // Release with the correct reveal: admitted.
         assert!(
@@ -6219,6 +6483,7 @@ mod tests {
         let with_wrong = WitnessBundle {
             blobs: &blobs_wrong,
             registry: None,
+            finalized_roots: None,
         };
         assert!(
             gate.evaluate_full(&state, None, None, &TransitionMeta::wildcard(), &with_wrong)
@@ -6559,6 +6824,16 @@ mod tests {
                 },
                 "AffineDeltaLe",
             ),
+            (
+                StateConstraint::ObservedFieldEquals {
+                    local_field: 0,
+                    source_cell: [9u8; 32],
+                    source_field: 1,
+                    at_root: [7u8; 32],
+                    proof_witness_index: 0,
+                },
+                "ObservedFieldEquals",
+            ),
         ];
 
         // COVERAGE TOOTH: this match must name every variant exactly once.
@@ -6615,7 +6890,8 @@ mod tests {
                 | StateConstraint::SenderMemberOf { .. }
                 | StateConstraint::BalanceDeltaLte { .. }
                 | StateConstraint::BalanceDeltaGte { .. }
-                | StateConstraint::AffineDeltaLe { .. } => {}
+                | StateConstraint::AffineDeltaLe { .. }
+                | StateConstraint::ObservedFieldEquals { .. } => {}
             }
         }
 

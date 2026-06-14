@@ -1847,6 +1847,7 @@ mod tests {
                 &WitnessBundle {
                     blobs: &views,
                     registry: None,
+                    finalized_roots: None,
                 },
             )
         };
