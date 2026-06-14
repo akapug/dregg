@@ -24,9 +24,23 @@ infra (`LeanExpr`/`JsonCursor`/`parse_expr`/…) — those STAY (bucket D).
 | `EffectVmP3Air` | `circuit/src/effect_vm_p3_full_air.rs` | 6 files | the full 186-col AIR; 30 self-refs in-file |
 | `EffectVmP3Air` shape-mirror | `circuit/src/effect_vm_p3_air.rs` | — | 5 `ACTIVE_BASE_COUNT` refs |
 | `EffectVmAir` + `EFFECT_VM_WIDTH=186` | `circuit/src/effect_vm/air.rs` | 36 files | the bulk is `effect_vm/tests.rs` (bucket C) |
-| `EffectVmP3Proof` + `prove_effect_vm_p3` | `circuit/src/…` (+1 sdk) | 7 / 8 files | the v1 SDK effect-vm leg type |
-| `generate_effect_vm_trace` (186-col) | `circuit/src/effect_vm/trace.rs` | 43 files | 33 in circuit; live consumers in bucket B |
+| `EffectVmP3Proof` + `prove_effect_vm_p3` | `circuit/src/…` (+1 sdk) | 7 / 8 files | the v1 SDK effect-vm leg type — **BUT ALSO the recursion/aggregation LEAF type** (`proof_forest.rs:280 ForestNode.proof`, `joint_turn_aggregation.rs:130/197/213 DescriptorParticipant.proof`); the `rotated` leg is only ADDITIVE there → its deletion is GATED on the bucket-F 5-file mandatory-rotated-leaf cutover, NOT a pure delete |
 | `BilateralAggregationAir` block | `circuit/src/bilateral_aggregation_air.rs` | 4 files | KEEP the FILE for `CrossSideExistenceAir`/`BundleTreeFoldAir` (bucket D) — delete only the `BilateralAggregationAir` + `AggregationInnerRow`/`AGG_WIDTH`/`build_aggregation_trace` block |
+
+> **CORRECTION (C7 fix-round-3, 2026-06-14, deep re-trace).** `generate_effect_vm_trace` was
+> listed here as "PURE v1, DELETE." **That is WRONG and would REGRESS the verified-green rotated
+> path.** It is the SHARED canonical trace+PI generator, NOT the v1 old-prover. The rotated leg is
+> literally BUILT ON IT — `effect_vm/trace_rotated.rs:203` (`generate_rotated_effect_vm_trace`)
+> opens with `let (mut trace, pis) = generate_effect_vm_trace(...)` ("the v1 reference trace + PIs —
+> the byte-identical live machinery") and widens each row with the rotated appendix. It is ALSO the
+> generator for the conservation net_delta, the FRI-free `revalidate_turn_self_sovereign`, and EVERY
+> node post-state-commitment derivation (`turn_proving.rs:526/688/821`, `mcp.rs`, `api.rs`). Reaching
+> grep-zero on it in recursion builds requires RE-DERIVING the entire proven 311-column rotated trace
+> generator from scratch (with fresh differential validation) — a multi-week rewrite that REGRESSES
+> the current green rotated machinery. It is moved to **Bucket E** below. The pure-v1 OLD-PROVER
+> symbols (`EffectVmP3Air`/`EffectVmAir`/`EffectVmP3Proof`/`prove_effect_vm_p3`/`EFFECT_VM_WIDTH`/
+> `CutoverFallback`) remain deletable IN PRINCIPLE — but only AFTER bucket F (the recursion-leaf
+> cutover) AND the heterogeneous-turn coverage (Bucket G) land, else the deletion ships RED.
 | `CutoverFallback` | `sdk/src/full_turn_proof.rs` | 2 files | 8 in-file refs + 1 test; retired by Wall A |
 
 ## Bucket B — MIGRATE first, then the v1 ref dies (live consumers)
@@ -59,21 +73,81 @@ differential harnesses (v1-vs-rotated) lose their reason to exist once v1 is gon
 CG-5 / proof-of-proofs; they do NOT read `effect_vm::pi`; retire in a later Lean lane).
 The wasm path keeps v1 UNTIL the Option-A wasm-rotated prover lands (then it joins bucket A).
 
+## Bucket E — SHARED canonical generator, NOT deletable in recursion builds (the scope-correction)
+
+`generate_effect_vm_trace` (`circuit/src/effect_vm/trace.rs`, ~145 src refs). It is NOT v1; it is the
+ONE trace+PI generator the whole system shares, INCLUDING the rotated leg (which is a v1-trace
+SUPERSET — see the CORRECTION box above). It cannot reach grep-zero in recursion builds without a
+from-scratch re-derivation of the proven 311-column rotated generator. **Therefore `generate_effect_vm_trace`
+is REMOVED from the C7 grep-zero target for recursion builds.** Its eventual removal is a future
+"rotated generator stops being a v1-superset" lane (re-derive the rotated trace natively + new
+differential), not part of C7. (It is also the wasm `not(recursion)` floor's generator — see the
+Option-A residual.)
+
+## Bucket F — recursion/aggregation LEAF cutover, MUST precede the `EffectVmP3Proof` delete (5 files)
+
+`proof_forest.rs::ForestNode.proof`, `joint_turn_aggregation.rs::DescriptorParticipant.proof` (×3
+build sites), `ivc_turn_chain.rs`, `joint_turn_recursive.rs`, `recursive_witness_bundle.rs` all carry
+`EffectVmP3Proof` as the recursion LEAF with the `rotated: Option<RotatedParticipantLeg>` only
+ADDITIVE (the in-file comment says the rotated leg becomes mandatory only "once present everywhere" —
+NOT YET). Deleting `EffectVmP3Proof` FORCES first: make the rotated leg MANDATORY in all five, drop
+the v1 field, and fix every host-admission read. This is soundness-bearing (the leaf type is what the
+recursion verifier admits), so it is its own lane — not part of the bucket-A leaf drop.
+
+## Bucket G — HETEROGENEOUS / non-synthetic finalized-turn coverage (the ARGUS-preserving prereq)
+
+The v1 fallback leg in `sdk/src/full_turn_proof.rs:1185-1202` (`prove_effect_vm_with_cutover` →
+`EffectVmP3Proof`) is the AUDITED prover for any finalized turn the node passes `rotation: None` for:
+a HETEROGENEOUS-per-actor turn (e.g. one agent does Transfer AND SetField — `cohort_ok` fails at
+`turn_proving.rs:380-387/468-479` because the rotated AIR is structurally ONE-descriptor-per-proof),
+a NON-synthetic actor cell (`cell_is_synthetic_shaped`/`cell_matches_v1_prestate` gate,
+`turn_proving.rs:353-357/445-448`), or a multi-spend turn. These ARE reachable live turns (a `Turn`
+proves as ONE finalized turn over `signed_turn.turn.agent` with the FULL `call_forest.total_effects()`
+projected onto that actor — `blocklace_sync.rs:2605-2722`; there is NO per-effect decomposition that
+would make them vacuous). **Removing the v1 fallback without first building heterogeneous coverage
+DROPS those turns' per-turn proof = an ARGUS light-client-unfoolability REGRESSION.** The PRESERVE
+fix is multi-cohort CHAINED rotated proving: split the turn into maximal homogeneous cohort-runs,
+prove each rotated (chaining `OLD_COMMIT`/`NEW_COMMIT` s0→s1→…→sN), attach N `effect-vm-rotated`
+legs, and teach `verify_full_turn` (currently `.find(|sp| label==effect-vm*)` at
+`full_turn_proof.rs:1688-1719`, hardcoded to EXACTLY ONE effect-vm leg) to COLLECT + chain-check them
+(leg_k.OLD == leg_{k-1}.NEW; first.OLD == expected_old; last.NEW == expected_new; effects_hash /
+net_delta re-derived across the chain) — a soundness-CORE prover + verifier + chained-witness-builder
+change with its own differential proof (chain ≡ monolithic transition) and Lean re-emission review.
+This is genuine multi-phase circuit+verifier work; it cannot land verified-green in one phase, and a
+half-landed version (prover chains but verifier doesn't, or vice versa) is RED.
+
 ## The grep-zero checklist (run after C7; each must reach 0 in recursion-enabled builds)
 
 ```
-generate_effect_vm_trace · EffectVmAir · EffectVmP3Air · EffectVmP3Proof
-prove_effect_vm_p3 · CutoverFallback · EFFECT_VM_WIDTH · ACTIVE_BASE_COUNT (v1 PI)
+EffectVmAir · EffectVmP3Air · EffectVmP3Proof · prove_effect_vm_p3
+CutoverFallback · EFFECT_VM_WIDTH · ACTIVE_BASE_COUNT (v1 PI)
 BilateralAggregationAir · AggregationInnerRow (v1)
 ```
-Caveat (the Option-A decision): until the wasm-rotated prover lands, the
-`#[cfg(not(feature="recursion"))]` wasm path keeps `generate_effect_vm_trace`
-(3 wasm files) — so the FULL grep-zero is gated on that frontier build; native
-(recursion-enabled) builds reach zero at C7.
+**`generate_effect_vm_trace` is NOT in the recursion-build grep-zero target** (Bucket E — the shared
+generator the rotated leg is built on). The `EffectVmP3Proof`/`prove_effect_vm_p3` zero is GATED on
+Bucket F (recursion-leaf cutover) + Bucket G (heterogeneous coverage); deleting them before those is
+RED. Caveat (the Option-A decision): the `#[cfg(not(feature="recursion"))]` wasm path keeps
+`generate_effect_vm_trace` (3 wasm files) until the wasm-rotated prover lands — but since Bucket E
+removed it from the recursion target, that residual is now purely the wasm-floor lane.
 
 ## Execution shape
 
-C7 is a Workflow fan-out: one agent per bucket-A file (delete + fix the
-compile-fallout in its bucket-B/C dependents, which are already migrated by then),
-a synthesizer that runs the grep-zero checklist + the persvati gauntlet. Gated on:
-the VK epoch landed green (v3Registry default + re-pin + #103 + notify + reseed).
+**REVISED (fix-round-3): C7 is NOT a mechanical fan-out.** The bucket-A leaf drop cannot land green
+on its own — `EffectVmP3Proof`/`prove_effect_vm_p3` are blocked by Bucket F (the 5-file recursion-leaf
+cutover) AND Bucket G (heterogeneous/non-synthetic finalized-turn coverage), and `generate_effect_vm_trace`
+is out of scope entirely (Bucket E). The honest sequence is: **(F)** make the rotated participant leg
+mandatory in the 5 recursion files + drop the `EffectVmP3Proof` field + fix host-admission reads →
+**(G)** build multi-cohort chained rotated proving + the `verify_full_turn` chain-check + the chained
+differential → **(#103)** flip `proof_verify.rs` + `prove_pool.rs` off `EffectVmAir` → **then** the
+bucket-A/C delete fan-out can run and reach grep-zero (minus Bucket E) green. F + G are
+soundness-CORE, multi-phase, and need their own verified-green landings BEFORE any deletion. Doing the
+deletion first ships RED.
+
+**The standing decision (ember's north star).** Bucket G is the fork: PRESERVE (build chained
+heterogeneous proving — keeps every finalized turn proven, ARGUS light-client unfoolability intact;
+a multi-lane circuit+verifier campaign, no crypto primitive, no further decision once chosen) vs
+WEAKEN (explicitly accept that heterogeneous/non-synthetic finalized turns commit proof-pending — a
+smaller code change but a real, deliberate narrowing of the ARGUS per-turn-proof claim). Recommendation:
+PRESERVE. This is the one item the deletion is gated on; it is ember's to spend or keep, never a silent
+side effect of the delete. (Gated on: the VK epoch landed green — v3Registry default + re-pin + #103
++ notify + reseed — which it is.)
