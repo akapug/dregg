@@ -145,8 +145,11 @@ flip:)*
 - ⏳ REMAINING to grep-zero. **UPDATE 2026-06-13: walls (A) + (B) are now ✅ DONE + committed
   (`b0baf026c`) — see the wall-A / wall-B `✅ DONE` entries below. (A)'s only residual is the two
   SIBLING hand-AIRs `CrossSideExistenceAir` + `BundleTreeFoldAir` in the same file (they do NOT read
-  `effect_vm::pi`); a Lean-emission lane for them is now IN FLIGHT. The remaining grep-zero walls are
-  now just (C) + (D).** Original (A) plan, for the record: **(A) the BILATERAL rotated outer AIR** — DECISION =
+  `effect_vm::pi`); their Lean-emission lane ✅ LANDED (`92b41acce` — both emitted axiom-clean, found
+  PURE not recursion; the hand-AIRs are now layout-of-record, deletable at C7). The remaining grep-zero
+  walls are now just (C) + (D), and (b) the rotated note-spend/capability NULLIFIER-in-PI gate (the LAST
+  real flip gate — a lane is IN FLIGHT closing it; until it lands, v1 `generate_effect_vm_trace` cannot
+  be deleted because note-spend/capability turns fall back to v1).** Original (A) plan, for the record: **(A) the BILATERAL rotated outer AIR** — DECISION =
   BUILD, emit from Lean (law #1). `bilateral_aggregation_air.rs::BilateralAggregationAir` is a plain
   hand-authored `StarkAir` reading `wr.public_inputs[..ACTIVE_BASE_COUNT]` and the bilateral-schedule
   PI offsets (`effect_vm::pi::{TURN_HASH_BASE 25..IS_AGENT_CELL 73}`). It does NOT ingest an
