@@ -2,10 +2,10 @@
 //!
 //! Every check here asserts something REAL about the CLI's offline surface
 //! (green-or-bust): exact version string, the config-show report, the
-//! doctor report shape, and a well-formed zsh completion script. Checks
-//! are read-only — `config init` writes to the real `~/.dregg` (it does
-//! not honor an env override yet), so preflight exercises `config show`
-//! instead; see HORIZONLOG for the path-injectable `config init` follow-up.
+//! doctor report shape, the hermetic `config init`, and a well-formed zsh
+//! completion script. `config init` honors `DREGG_HOME`, so preflight runs it
+//! against a throwaway temp root (asserting it writes there + exits 0) without
+//! ever touching the operator's real `~/.dregg`.
 
 use std::process::Command;
 
@@ -20,6 +20,7 @@ pub fn run() -> Vec<CheckResult> {
     vec![
         run_check("cli_version", check_cli_version),
         run_check("cli_config_show", check_cli_config_show),
+        run_check("cli_config_init", check_cli_config_init),
         run_check("cli_doctor", check_cli_doctor),
         run_check("cli_completions", check_cli_completions),
     ]
@@ -83,6 +84,41 @@ fn check_cli_config_show() -> Result<(), String> {
                 "config show must report {needle:?}; got stdout={stdout:?} stderr={stderr:?}"
             ));
         }
+    }
+    Ok(())
+}
+
+/// `dregg config init` is HERMETIC: it honors `DREGG_HOME` (cli/src/config.rs
+/// `config_path`), so preflight runs it against a throwaway temp root and
+/// asserts it writes `$DREGG_HOME/config.toml` and exits 0 — WITHOUT touching
+/// the operator's real `~/.dregg` (the path-injectable follow-up, now closed).
+fn check_cli_config_init() -> Result<(), String> {
+    let dir = std::env::temp_dir().join(format!("dregg-preflight-cfg-{}", std::process::id()));
+    let cfg = dir.join("config.toml");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let output = Command::new("cargo")
+        .args(["run", "-p", "dregg-cli", "--", "config", "init"])
+        .env("DREGG_HOME", &dir)
+        .output()
+        .map_err(|e| format!("failed to spawn cargo: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(format!(
+            "config init (DREGG_HOME-hermetic) must exit 0; got {:?}\nstdout={stdout}\nstderr={stderr}",
+            output.status.code()
+        ));
+    }
+    let wrote = cfg.exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    if !wrote {
+        return Err(format!(
+            "config init must write $DREGG_HOME/config.toml ({}); stdout={stdout} stderr={stderr}",
+            cfg.display()
+        ));
     }
     Ok(())
 }
