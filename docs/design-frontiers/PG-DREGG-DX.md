@@ -290,9 +290,9 @@ mode "no issuer key ⇒ everything denies" is *discoverable*, not silent. The
 production recommendation (mint out-of-database, never place the private key in
 postgres) stays the default; this is explicitly the single-tenant/dev on-ramp.
 
-### S4 — The cap-gated query cookbook (the explorer-as-capabilities surface)
+### S4 — The cap-gated query cookbook (the explorer-as-capabilities surface) *(LANDED)*
 
-The dregg-developer journey's payoff is "the explorer is your capabilities." Ship a
+The dregg-developer journey's payoff is "the explorer is your capabilities." A
 small library of **parameterized, RLS-gated views and recursive queries** as
 copy-paste recipes: the delegation tree (`WITH RECURSIVE` over `cap_edges` rooted at
 one cell), the conservation check (`SELECT sum(balance) FROM dregg.cells` = genesis
@@ -301,6 +301,19 @@ walk with an in-SQL non-omission assertion (`prev_root = lag(ledger_root)`), and
 no-amplification audit (`cap_attenuations` joined against the grantor's effects). Each
 is a teaching artifact AND a real tool. This is pure SQL + docs — zero build risk,
 immediate handoff value.
+
+**Built:** `pg-dregg/sql/cookbook.sql` (the seven runnable recipes, parameterized via
+psql `\set`), `pg-dregg/sql/cookbook-seed.sql` (a demo delegation graph + per-cell
+history with one deliberate amplification for the audit to catch), and
+`pg-dregg/docs/COOKBOOK.md` (the teaching walk-through with live output). Recipes 1–6
+are tested against the live pg18 mirror (`pg_dregg_mirror`) and run top-to-bottom with
+zero errors; recipe 6's narrowing is observed with real minted `dga1_…` tokens (1 / 6 /
+0 rows for prefix-`5e` / `""` / no-token); recipe 7's write gate is the Tier-C engine
+refusing a non-chaining turn on `pg_dregg_e2e`. The **browser twin** is
+`site/explorer/caps-as-rows.html` — present a capability, watch the cell rows narrow,
+the RLS gate respected (a filtered row's value is redacted, never shown) and explained
+(`dregg_cap_explain`'s reason, per row). One glass in SQL, one in the browser, both
+rendering the identical seeded world.
 
 ### S5 — Predicate-algebra reach (the lamesauce exit, applied to pg)
 
@@ -465,3 +478,10 @@ over one trust root. The on-ramp *is* the product.
   on-ramp friction S3 addresses).
 - `pg-dregg/docs/QUICKSTART-pg-user.md` / `QUICKSTART-dregg-dev.md` — the two
   perspectives' existing on-ramps.
+- `pg-dregg/sql/cookbook.sql` + `sql/cookbook-seed.sql` + `docs/COOKBOOK.md` — the
+  cap-gated query cookbook (S4): seven runnable, RLS-gated recipes (delegation tree,
+  no-amplification audit, conservation, receipt-chain non-omission, time-travel,
+  caps-as-rows, the write gate), tested against the live pg18 mirror.
+- `site/explorer/caps-as-rows.html` + `caps-as-rows.js` — the browser twin: present a
+  capability, watch the cell rows narrow (the RLS gate respected + explained). Linked
+  from the explorer header ("Caps as rows").
