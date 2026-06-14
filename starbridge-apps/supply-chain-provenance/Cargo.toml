@@ -48,6 +48,12 @@ serde_json = { workspace = true }
 # handoff forest is run through `analyze()` (conservation + non-amplification +
 # well-formedness) BEFORE submission, exactly as a stranger would pre-flight it.
 dregg-userspace-verify = { path = "../../dregg-userspace-verify" }
+# The deos-app re-expression proof (`tests/reexpress_deos_app.rs`): the SAME app
+# on the composed `DeosApp` bones — smaller + more capable. Drives the mounted
+# axum surface (per-viewer projection + cap-gated fires) end-to-end.
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
 
 [lints]
 workspace = true
