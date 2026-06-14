@@ -56,6 +56,23 @@ pub enum WorldEvent {
     CellDestroyed { cell: CellId },
     /// Value was provably burned from a cell (supply reduced; no credit).
     Burned { cell: CellId, amount: u64 },
+    /// A surface's frame was advanced by a COMMITTED `present()` (the verified
+    /// compositor frame advance — [`crate::scene::VerifiedScene::present`]). This
+    /// is the compositor's "damage": the region(s) a committed present wrote, and
+    /// must be repainted. It fires ONLY on a present the executor's scene-authority
+    /// caveat gate admitted (T1∧T2∧T3) — a refused overpaint / label-spoof /
+    /// double-focus leaves NO damage (fail-closed), so the dynamics stream
+    /// observes only genuine, verified frame advances.
+    SurfaceDamaged {
+        /// The surface owner whose frame advanced (the presenter).
+        owner: CellId,
+        /// The compositor cell whose `present_digest` slot the executor wrote.
+        cell: CellId,
+        /// The new content digest the present committed (the advanced frame).
+        digest: u64,
+        /// How many regions the present painted (the damage extent).
+        region_count: usize,
+    },
     /// An event was emitted by `sender` targeting `cell` (the async notify
     /// edge). This is the SENDER's committed turn record; the RECIPIENT
     /// cell drains it in its OWN separate future turn — NOT a synchronous
@@ -104,6 +121,9 @@ impl WorldEvent {
             WorldEvent::CellUnsealed { .. } => "cell unsealed".into(),
             WorldEvent::CellDestroyed { .. } => "cell destroyed (terminal)".into(),
             WorldEvent::Burned { amount, .. } => format!("burned {amount} (supply reduced)"),
+            WorldEvent::SurfaceDamaged { region_count, digest, .. } => {
+                format!("surface damaged: frame → {digest} ({region_count} region(s) repainted)")
+            }
             WorldEvent::EventEmitted { sender, cell, data_len, .. } => format!(
                 "event emitted: {} → {} ({data_len}B) [notify edge]",
                 crate::reflect::short_hex(sender.as_bytes()),

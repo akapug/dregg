@@ -52,6 +52,8 @@ pub mod reflect;
 #[cfg(feature = "embedded-executor")]
 pub mod replay;
 #[cfg(feature = "embedded-executor")]
+pub mod scene;
+#[cfg(feature = "embedded-executor")]
 pub mod shell;
 #[cfg(feature = "embedded-executor")]
 pub mod surface;
@@ -79,6 +81,11 @@ pub use organs::{
 };
 #[cfg(feature = "embedded-executor")]
 pub use proofs::{AttachStatus, ProofBoard, ProofEntry, VerificationTier};
+#[cfg(feature = "embedded-executor")]
+pub use scene::{
+    baked_admit_table, compositor_program, scene_admit, surface_factory, PresentVerdict,
+    VerifiedScene, PRESENT_DIGEST_SLOT, SURFACE_FACTORY_VK,
+};
 #[cfg(feature = "embedded-executor")]
 pub use swarm::{NotifyEdge, Swarm, SwarmError, SwarmMember, SwarmView};
 #[cfg(feature = "embedded-executor")]
