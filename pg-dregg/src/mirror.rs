@@ -736,6 +736,43 @@ pub mod ddl {
         FED_SUBSCRIBER_TEMPLATE.replace("{PUBLISHER_CONNINFO}", publisher_conninfo)
     }
 
+    /// The recommended pg18 `COPY … ON_ERROR ignore` bulk-load command for the
+    /// OAuth→role bind map (`docs/PG-DREGG-PG18.md` §12), with the CSV path
+    /// substituted. COPY needs a literal path + format, so — like the federation
+    /// runbook — this is emitted as a ready-to-run template rather than executed by
+    /// the extension. It loads `(pg_role, agent_hex, token)` rows into the
+    /// `dregg.role_identity_load` staging table, SKIPPING malformed lines (pg18
+    /// `ON_ERROR ignore` + `REJECT_LIMIT` + `LOG_VERBOSITY silent`) instead of
+    /// aborting the whole load; the DBA then runs
+    /// `SELECT * FROM dregg.promote_role_identity_load();` to validate + upsert each
+    /// staged row through the audited `dregg.bind_role` seam. `reject_limit` caps
+    /// how many bad rows are tolerated before the load DOES fail (0 ⇒ omit the cap,
+    /// tolerate any number).
+    pub fn load_role_identity_sql(csv_path: &str, reject_limit: u64) -> String {
+        let limit = if reject_limit == 0 {
+            String::new()
+        } else {
+            format!(", REJECT_LIMIT {reject_limit}")
+        };
+        LOAD_ROLE_IDENTITY_TEMPLATE
+            .replace("{CSV_PATH}", csv_path)
+            .replace("{REJECT_LIMIT}", &limit)
+    }
+
+    const LOAD_ROLE_IDENTITY_TEMPLATE: &str = r#"
+-- BULK-LOAD the OAuth→role bind map via pg18 COPY ON_ERROR (docs/PG-DREGG-PG18.md
+-- §12). Lands raw (pg_role, agent_hex, token) rows into the staging table,
+-- SKIPPING malformed lines (a bad hex agent, a short row) instead of aborting:
+TRUNCATE dregg.role_identity_load;
+COPY dregg.role_identity_load (pg_role, agent_hex, token)
+    FROM '{CSV_PATH}'
+    WITH (FORMAT csv, HEADER true, ON_ERROR ignore, LOG_VERBOSITY silent{REJECT_LIMIT});
+-- Then VALIDATE + promote each staged row through the audited bind seam (a row
+-- whose agent_hex does not decode is skipped, never written unchecked):
+SELECT * FROM dregg.promote_role_identity_load();   -- (promoted, skipped)
+TRUNCATE dregg.role_identity_load;                  -- clear the staging table
+"#;
+
     const FED_PUBLICATION: &str = r#"
 -- FEDERATION via logical replication (docs/PG-DREGG.md §15) — the PUBLISHER.
 -- The publisher's dregg.turns hash chain IS the replicated feed; a subscriber
@@ -748,6 +785,40 @@ EXCEPTION WHEN duplicate_object THEN
     -- Re-runnable: keep the existing publication (a DBA ALTERs it to add tables).
     NULL;
 END $$;
+-- pg18 logical-replication CONFLICT observability (docs/PG-DREGG-PG18.md §10).
+-- The dregg federation model is single-writer fan-out: the publisher is the ONLY
+-- writer, subscribers are read replicas that RE-VALIDATE the replicated turn
+-- chain (`dregg_revalidate_replicated_chain`) rather than accept local writes —
+-- so an apply CONFLICT (a row the subscriber already holds, a missing update
+-- target, divergent origins) is, by construction, an ANOMALY: it means the
+-- stream is not the clean verified-turn feed the model assumes. pg18 newly
+-- COUNTS those conflicts per-subscription in `pg_stat_subscription_stats` (the
+-- `confl_*` columns); this view surfaces them as a mirror-facing alarm, summing
+-- the seven conflict kinds into `conflicts_total` so a non-zero value is an
+-- immediate "the replicated feed diverged — investigate" signal that COMPOSES
+-- with the chain-tooth re-validation (the tooth catches a substituted ROOT; the
+-- conflict counters catch an apply-level divergence pg itself detected). Empty on
+-- a publisher (no subscriptions); populated on a subscriber. A thin SELECT over
+-- the stats view (no row data). (pg18-only: the confl_* columns are new in 18.)
+CREATE OR REPLACE VIEW dregg.replication_conflicts AS
+    SELECT s.subname,
+           ss.confl_insert_exists,
+           ss.confl_update_origin_differs,
+           ss.confl_update_exists,
+           ss.confl_update_missing,
+           ss.confl_delete_origin_differs,
+           ss.confl_delete_missing,
+           ss.confl_multiple_unique_conflicts,
+           ( coalesce(ss.confl_insert_exists,0)
+           + coalesce(ss.confl_update_origin_differs,0)
+           + coalesce(ss.confl_update_exists,0)
+           + coalesce(ss.confl_update_missing,0)
+           + coalesce(ss.confl_delete_origin_differs,0)
+           + coalesce(ss.confl_delete_missing,0)
+           + coalesce(ss.confl_multiple_unique_conflicts,0) )::bigint AS conflicts_total,
+           ss.stats_reset
+    FROM pg_stat_subscription_stats ss
+    JOIN pg_subscription s ON s.oid = ss.subid;
 "#;
 
     const FED_SUBSCRIBER_TEMPLATE: &str = r#"
@@ -1003,6 +1074,33 @@ CREATE OR REPLACE VIEW dregg.mirror_io_stats AS
     FROM pg_stat_io
     WHERE object IN ('relation')
       AND context IN ('normal','vacuum','bulkread','bulkwrite');
+-- pg18 AIO IN-FLIGHT surface (docs/PG-DREGG-PG18.md §8). pg_stat_io is the
+-- CUMULATIVE counter view; pg18 ALSO ships `pg_aios` — the live view of the I/O
+-- handles a backend currently has OUTSTANDING under the asynchronous I/O
+-- subsystem. For a read-heavy mirror that now issues batched async reads, the
+-- in-flight depth is the companion signal to the cumulative ratio: it shows
+-- whether AIO is actually queueing reads (depth > 0 under a big scan) vs falling
+-- back to synchronous. A thin `SELECT *` so it inherits pg_aios's columns
+-- verbatim (no row data; a system view). The kernel/operator reads it to confirm
+-- AIO is engaged as the ledger grows. (pg18-only: pg_aios does not exist pre-18.)
+CREATE OR REPLACE VIEW dregg.mirror_aio_inflight AS
+    SELECT * FROM pg_aios;
+-- pg18 DATA-INTEGRITY status (docs/PG-DREGG-PG18.md §11). dregg's whole thesis is
+-- integrity-down-to-the-bytes: the kernel commits a sorted-leaf root, the chain
+-- tooth refuses a substituted batch, the IVC light client attests execution. The
+-- STORAGE floor under all of that is page-level integrity — and pg18 makes
+-- `initdb` enable data checksums BY DEFAULT (every heap/index page carries a
+-- checksum the engine verifies on read, so silent on-disk corruption surfaces as
+-- a loud error instead of a wrong byte fed to the mirror). This view makes that
+-- floor LEGIBLE in-database: `data_checksums` is the read-only GUC pg sets from
+-- the cluster's control file (`'on'` when checksums are active), and
+-- `block_size` is the page size the checksum covers. So an operator (or a setup
+-- assertion) can confirm the mirror sits on a checksummed cluster — the page
+-- integrity the higher-tier roots ASSUME. A thin SELECT over GUCs (no row data).
+CREATE OR REPLACE VIEW dregg.integrity_status AS
+    SELECT current_setting('data_checksums')           AS data_checksums,
+           (current_setting('data_checksums') = 'on')   AS checksums_enabled,
+           current_setting('block_size')                AS block_size;
 "#;
 
     const RLS: &str = r#"
@@ -1268,6 +1366,51 @@ BEGIN
             bound_at = now();
 END $$;
 REVOKE ALL ON FUNCTION dregg.bind_role(text, bytea, text) FROM PUBLIC;
+-- BULK ONBOARDING of the OAuth→role bind map via pg18 COPY ON_ERROR
+-- (docs/PG-DREGG-PG18.md §12). Provisioning many federated identities at once
+-- (an IdP export of `pg_role,agent_hex,token` rows) is a real bootstrap path —
+-- and a single malformed line (a bad hex agent, a truncated row) should NOT abort
+-- the whole load. pg18 adds `ON_ERROR ignore` + `REJECT_LIMIT n` + the
+-- `LOG_VERBOSITY silent` level to COPY FROM, so a bulk load skips the malformed
+-- rows (up to the limit) and lands the good ones, instead of the pre-18
+-- all-or-nothing abort. dregg uses it on a TEXT staging table (not directly on
+-- role_identity): COPY lands raw rows in `role_identity_load`, then
+-- `dregg.promote_role_identity_load()` validates each (decode the hex agent; a
+-- bad one is skipped, not fatal) and upserts it through `dregg.bind_role` — so the
+-- trust binding still flows through the ONE audited seam, and the bulk path never
+-- writes role_identity unchecked. The COPY itself needs a literal path/format, so
+-- the recommended command is emitted as a template (`dregg.load_role_identity_sql`,
+-- like the federation runbook); the staging table + promote function are real DDL.
+CREATE TABLE IF NOT EXISTS dregg.role_identity_load (
+    pg_role   text,
+    agent_hex text,
+    token     text);
+REVOKE ALL ON dregg.role_identity_load FROM PUBLIC;
+-- Validate + promote every staged row through the audited bind seam. A row whose
+-- agent_hex does not decode to bytea is SKIPPED (counted), never written — the
+-- bulk path cannot smuggle a malformed binding past dregg.bind_role. Returns the
+-- (promoted, skipped) counts. SECURITY DEFINER (it reads the staging table and
+-- calls bind_role, both PUBLIC-closed); the DBA truncates the staging table after.
+CREATE OR REPLACE FUNCTION dregg.promote_role_identity_load(
+    OUT promoted bigint, OUT skipped bigint)
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE r record; v_agent bytea;
+BEGIN
+    promoted := 0; skipped := 0;
+    FOR r IN SELECT pg_role, agent_hex, token FROM dregg.role_identity_load LOOP
+        BEGIN
+            IF r.pg_role IS NULL OR r.agent_hex IS NULL THEN
+                skipped := skipped + 1; CONTINUE;
+            END IF;
+            v_agent := decode(r.agent_hex, 'hex');   -- a bad hex raises ⇒ skip
+            PERFORM dregg.bind_role(r.pg_role, v_agent, r.token);
+            promoted := promoted + 1;
+        EXCEPTION WHEN OTHERS THEN
+            skipped := skipped + 1;   -- a malformed staged row never aborts the load
+        END;
+    END LOOP;
+END $$;
+REVOKE ALL ON FUNCTION dregg.promote_role_identity_load() FROM PUBLIC;
 -- The role→capability introspection view: which pg roles are bound to which dregg
 -- agent, and whether a default token is installed (the token text itself is NOT
 -- exposed — only its presence — so the binding map is auditable without leaking
@@ -1649,6 +1792,12 @@ mod tests {
         assert!(sql.contains("dregg.memory"));
         // Idempotent (re-runnable).
         assert!(sql.contains("duplicate_object"));
+        // The pg18 logical-replication conflict-observability view ships with the
+        // publication: the confl_* counters summed into a conflicts_total alarm.
+        assert!(sql.contains("CREATE OR REPLACE VIEW dregg.replication_conflicts"));
+        assert!(sql.contains("pg_stat_subscription_stats"));
+        assert!(sql.contains("confl_insert_exists"));
+        assert!(sql.contains("conflicts_total"));
         // The subscriber runbook substitutes the publisher conninfo + names the
         // re-validation sweep (re-validate, do not trust).
         let sub = ddl::federation_subscriber("host=pub dbname=dregg");
@@ -1656,6 +1805,19 @@ mod tests {
         assert!(sub.contains("failover = true"));
         assert!(sub.contains("host=pub dbname=dregg"));
         assert!(sub.contains("dregg_revalidate_replicated_chain"));
+
+        // The pg18 COPY ON_ERROR bulk-load template for the bind map: it stages to
+        // role_identity_load with ON_ERROR ignore (skip malformed) and the path +
+        // reject limit substituted, then promotes through the audited seam.
+        let load = ddl::load_role_identity_sql("/srv/idp/roles.csv", 25);
+        assert!(load.contains("COPY dregg.role_identity_load"));
+        assert!(load.contains("/srv/idp/roles.csv"));
+        assert!(load.contains("ON_ERROR ignore"));
+        assert!(load.contains("REJECT_LIMIT 25"));
+        assert!(load.contains("dregg.promote_role_identity_load()"));
+        // A reject_limit of 0 omits the cap (tolerate any number of bad rows).
+        let load0 = ddl::load_role_identity_sql("/srv/idp/roles.csv", 0);
+        assert!(!load0.contains("REJECT_LIMIT"), "reject_limit 0 omits the cap");
     }
 
     // ----------------------------------------------------------------------
@@ -1847,6 +2009,12 @@ mod tests {
         // The pg18 AIO observability view over pg_stat_io.
         assert!(sql.contains("CREATE OR REPLACE VIEW dregg.mirror_io_stats"));
         assert!(sql.contains("FROM pg_stat_io"));
+        // The pg18 AIO IN-FLIGHT view over pg_aios (the live-handles companion).
+        assert!(sql.contains("CREATE OR REPLACE VIEW dregg.mirror_aio_inflight"));
+        assert!(sql.contains("FROM pg_aios"));
+        // The pg18 data-checksum integrity-status view (the storage integrity floor).
+        assert!(sql.contains("CREATE OR REPLACE VIEW dregg.integrity_status"));
+        assert!(sql.contains("current_setting('data_checksums')"));
     }
 
     /// The pg17 login-binding DDL is emittable and shaped: the role→identity map
@@ -1875,6 +2043,13 @@ mod tests {
         assert!(sql.contains("CREATE OR REPLACE VIEW dregg.role_bindings"));
         // The introspection view exposes token PRESENCE, never the token itself.
         assert!(sql.contains("(default_token IS NOT NULL)         AS has_token"));
+        // The pg18 COPY ON_ERROR bulk-onboarding path: the TEXT staging table + the
+        // validate-and-promote function that upserts each staged row through the
+        // audited bind_role seam (a malformed row is skipped, never written raw).
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS dregg.role_identity_load"));
+        assert!(sql.contains("CREATE OR REPLACE FUNCTION dregg.promote_role_identity_load"));
+        assert!(sql.contains("PERFORM dregg.bind_role(r.pg_role, v_agent, r.token)"));
+        assert!(sql.contains("REVOKE ALL ON dregg.role_identity_load FROM PUBLIC"));
     }
 
     /// The pg17 turn-effects JSON_TABLE view ships in Tier C (it reads the
@@ -1929,6 +2104,10 @@ mod tests {
             "security_invoker = true",          // pg15 RLS-through-views, declared
             "dregg.mirror_io_stats",            // the pg18 AIO (pg_stat_io) observability view
             "pg_stat_io",
+            "dregg.mirror_aio_inflight",        // the pg18 pg_aios in-flight view
+            "pg_aios",
+            "dregg.integrity_status",           // the pg18 data-checksum integrity floor view
+            "current_setting('data_checksums')",
             "CREATE POLICY cells_read",
             "CREATE POLICY turns_read",
             "CREATE POLICY caps_read",
