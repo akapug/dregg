@@ -143,9 +143,18 @@ NOT worked around:
 
 This is the verified turn running on the microkernel — the firmament's heart
 beating on seL4. Two honest notes on what the PD does (NOT claims beyond it):
-- The **crypto floor** is the Rust-PD-supplied stub (`crypto-stub.c`, panic-if-
-  reached); the demo wire is a non-crypto turn, so it never reaches it. A
-  crypto-bearing turn needs the real Poseidon2/blake3/ed25519 wired here.
+- The **crypto floor is now REAL for the hashes** (`executor-pd/scripts/crypto-floor.c`
+  + the `dregg-crypto-floor` staticlib, relinked into `exec-sel4/` and linked by
+  `build.rs`): the 8 `dregg_*` portals are implemented at the exact Lean C ABI,
+  with Poseidon2 + BLAKE3 wired to the SAME carried crypto the verifier-stark PD
+  runs on seL4 (Plonky3-conformant Poseidon2 KAT'd against the circuit). So a turn
+  that hashes (Merkle/commitment/nullifier/transcript) computes a real on-device
+  digest. The demo wire is a non-crypto turn so it exercises the verified
+  decode→step→encode without reaching the floor; the boot receipt is byte-identical
+  with the real floor linked. The 3 not-carried primitives (ed25519/Pedersen/AEAD,
+  a different crypto surface) + the abstract-STARK verify keep an ABI-correct
+  FAIL-CLOSED floor (reject, never a spurious accept) — wiring those is the next
+  step. (Was `crypto-stub.c`: panic-if-reached, wrong arity/types.)
 - `/dev/urandom` + `clock_gettime` + `getrandom` are **deterministic** (zero-fill)
   in this PD. That is faithful for the deterministic verified turn; a PD needing
   real entropy/time would wire a hardware/seL4 source.

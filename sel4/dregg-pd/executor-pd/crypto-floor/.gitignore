@@ -1,0 +1,3 @@
+# Standalone build dir (own target dir for the aarch64-musl staticlib).
+/target
+Cargo.lock

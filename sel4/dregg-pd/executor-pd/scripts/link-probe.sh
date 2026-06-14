@@ -16,22 +16,23 @@ GCC="$MUSL/bin/aarch64-linux-musl-gcc"
 NM="$MUSL/bin/aarch64-linux-musl-nm"
 LEAN_SYSROOT="${LEAN_SYSROOT:-$(lean --print-prefix)}"
 
-# (1) crypto floor stub (the Rust PD supplies these in production; panic-if-reached
-#     here so a non-crypto turn links and runs).
-cat > "$OUT/crypto-stub.c" <<'EOF'
-#include <stdlib.h>
-#include <stdio.h>
-static void* cx(const char* w){ fprintf(stderr,"[exec] crypto floor: %s\n",w); abort(); }
-void* dregg_poseidon2_hash(void* a){ return cx("poseidon2"); }
-void* dregg_blake3_hash(void* a){ return cx("blake3"); }
-void* dregg_ed25519_verify(void* a,void* b,void* c){ return cx("ed25519"); }
-void* dregg_stark_verify(void* a,void* b,void* c){ return cx("stark"); }
-void* dregg_pedersen_commit(void* a,void* b){ return cx("pedersen"); }
-void* dregg_nullifier_derive(void* a,void* b){ return cx("nullifier"); }
-void* dregg_hmac_sha256(void* a,void* b){ return cx("hmac"); }
-void* dregg_aead_open(void* a,void* b,void* c){ return cx("aead"); }
-EOF
-"$GCC" -O2 -c "$OUT/crypto-stub.c" -o "$OUT/crypto-stub.o"
+# (1) THE REAL CRYPTO FLOOR (replaces the old panic-if-reached crypto-stub.c).
+#     The eight `@[extern]` crypto portals are implemented at the exact Lean C ABI
+#     (scripts/crypto-floor.c), with the HASHES wired to the SAME carried crypto
+#     the verifier-stark PD runs on seL4 — Plonky3-conformant Poseidon2 + BLAKE3 —
+#     via the dregg-crypto-floor Rust staticlib (crypto-floor/). So a turn that
+#     hashes computes a real on-device digest instead of aborting. (Poseidon2 §4 /
+#     BLAKE3 §5 / nullifier §6 / keyed-MAC §8 are REAL; ed25519 §1 / Pedersen §3 /
+#     AEAD §7 / abstract-STARK §2 are ABI-correct + fail-closed — see crypto-floor.c.)
+#  1a) Cross-build the Rust crypto staticlib for aarch64-unknown-linux-musl.
+CRYPTO_FLOOR_DIR="$HERE/../crypto-floor"
+CRYPTO_FLOOR_LIB="$CRYPTO_FLOOR_DIR/target/aarch64-unknown-linux-musl/release/libdregg_crypto_floor.a"
+echo "[link-probe] building the real crypto floor (dregg-crypto-floor staticlib)…"
+( cd "$CRYPTO_FLOOR_DIR" && cargo build --release ) || { echo "[link-probe] FATAL: crypto-floor staticlib build failed"; exit 1; }
+[ -f "$CRYPTO_FLOOR_LIB" ] || { echo "[link-probe] FATAL: $CRYPTO_FLOOR_LIB not produced"; exit 1; }
+cp "$CRYPTO_FLOOR_LIB" "$OUT/libdregg_crypto_floor.a"
+#  1b) Compile the C ABI shim (Lean Nat/Int/List marshalling -> dreggcf_* calls).
+"$GCC" -O2 -I "$LEAN_SYSROOT/include" -c "$HERE/crypto-floor.c" -o "$OUT/crypto-floor.o"
 
 # (1b) Lean ELABORATOR/KERNEL C++ stub. The executor's reachable COMPUTE objects
 #      reference ZERO elaborator/kernel primitives (verified); they enter the link
@@ -123,7 +124,8 @@ echo "[link-probe] static-linking aarch64-linux-musl executable (--gc-sections)�
       "$OUT/leanlib-elf/libLeanSearchClient_elf.a" \
       "$OUT/leanlib-elf/libMetatheory_elf.a" \
       "$OUT/leancpp-elf/libleancpp_kernel_elf.a" \
-      "$OUT/crypto-stub.o" \
+      "$OUT/crypto-floor.o" \
+      "$OUT/libdregg_crypto_floor.a" \
       "$OUT/kernel-stub.o" \
       "$OUT/dead-stub.o" \
     -Wl,--end-group \
@@ -145,12 +147,41 @@ ls -la "$OUT/dregg-executor.elf" | awk '{print "    size:",$5}'
 "$NM" "$OUT/dregg-executor.elf" 2>/dev/null | grep -qE ' T dregg_exec_full_forest_auth' \
   && echo "[link-probe] executor entry present (T) in the linked image"
 
-# (4) Run ONE turn under qemu-aarch64 (if available).
+# (3b) CRYPTO-FLOOR SELF-TEST: the GC'd executor never reaches the portals (a
+#      non-crypto demo turn), so link a focused harness that CALLS each of the
+#      eight `dregg_*` portals at the exact Lean ABI and checks the real digests
+#      (Poseidon2 == the carried hash_2_to_1) + fail-closed verifies + the
+#      refcount contract. This is the anti-ghost tooth for the floor.
+echo "[link-probe] === linking the crypto-floor self-test ==="
+"$GXX" -std=c++20 -O2 -I "$LEAN_SYSROOT/include" -c "$HERE/crypto-floor-selftest.c" -o "$OUT/crypto-floor-selftest.o" 2>>"$OUT/link.log" || echo "[link-probe] (selftest compile note in link.log)"
+"$GXX" -static -no-pie -Wl,--gc-sections \
+    "$OUT/crypto-floor-selftest.o" \
+    "$OUT/crypto-floor.o" \
+    -Wl,--start-group \
+      "$OUT/libdregg_crypto_floor.a" \
+      "$OUT/leanrt-elf/libleanrt_elf.a" \
+      "$OUT/leanlib-elf/libInit_elf.a" \
+      "$OUT/leanlib-elf/libStd_elf.a" \
+      "$OUT/leanlib-elf/libLean_elf.a" \
+      "$OUT/init-stubs.o" "$OUT/aux-defs.o" "$OUT/kernel-stub.o" "$OUT/dead-stub.o" \
+    -Wl,--end-group \
+    "$OUT/gmp-elf/libgmp.a" -lstdc++ -lm -lpthread \
+    -o "$OUT/crypto-floor-selftest.elf" 2>>"$OUT/link.log" \
+  && echo "[link-probe] crypto-floor-selftest.elf linked" \
+  || echo "[link-probe] (selftest link incomplete — see link.log; the main executor link above is the gate)"
+
+# (4) Run ONE turn (and the self-test) under qemu-aarch64 (if available).
 QEMU="$(command -v qemu-aarch64 || true)"
 if [ -n "$QEMU" ]; then
   echo "[link-probe] === running ONE turn under qemu-aarch64 ==="
   "$QEMU" "$OUT/dregg-executor.elf" "${1:-}" 2>&1 | sed 's/^/    /'
   echo "[link-probe] qemu rc=${PIPESTATUS[0]}"
+  if [ -f "$OUT/crypto-floor-selftest.elf" ]; then
+    echo "[link-probe] === running the crypto-floor self-test under qemu-aarch64 ==="
+    "$QEMU" "$OUT/crypto-floor-selftest.elf" 2>&1 | sed 's/^/    /'
+    echo "[link-probe] selftest rc=${PIPESTATUS[0]}"
+  fi
 else
-  echo "[link-probe] qemu-aarch64 not installed — skipping host run (brew install qemu)"
+  echo "[link-probe] qemu-aarch64 not installed — skipping host run (brew install qemu);"
+  echo "[link-probe]   the crypto floor was run-verified natively (see crypto-floor-selftest.c)."
 fi

@@ -151,7 +151,11 @@ const GROUP_ARCHIVES: &[&str] = &[
     "libLeanSearchClient_elf.a",
     "libMetatheory_elf.a",
     "libleancpp_kernel_elf.a",
-    "crypto-stub.o",
+    // THE REAL CRYPTO FLOOR (replaces crypto-stub.o): the Lean-ABI shim object
+    // (crypto-floor.o) + the carried-crypto Rust staticlib (libdregg_crypto_floor.a,
+    // Poseidon2 + BLAKE3). A hashing turn in the PD computes a real on-device digest.
+    "crypto-floor.o",
+    "libdregg_crypto_floor.a",
     "kernel-stub.o",
     "dead-stub.o",
 ];
