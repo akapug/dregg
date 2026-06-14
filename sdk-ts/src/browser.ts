@@ -43,12 +43,22 @@ export { Identity } from "./identity";
 export { NodeClient, AgentRuntime, NodeError as NodeClientError } from "./client";
 export type { NodeClientOptions } from "./client";
 export { TurnBuilder, AuthorizedTurn, EmptyTurnError } from "./turns";
+// The anti-blind-signing readings as values — pure, browser-safe (no key, no
+// network): the SAME `Effect::hash`/`Action::hash`-tagged renderings the
+// `AuthorizedTurn.explain()` flow uses, exported so a trusted-path mediator (the
+// browser-extension front door) can render a per-effect plain-language approval
+// of EXACTLY the term it is about to sign.
+export { explainAction, explainEffect, explainTurn, renderTurn } from "./explain";
 export { Receipt, TurnProof } from "./receipt";
 export { NodeEvents } from "./events";
 export type { ReceiptFilter } from "./events";
 // The wire vocabulary as TYPES only — the value-level `Authorization::Unchecked`
 // constructor stays sealed in `@dregg/sdk/raw`, never reachable from this surface.
 export type { Action, AuthRequired, CapabilityRef, CellId, Effect, Turn } from "./internal/wire";
+// Hex codecs — pure, browser-safe helpers a consumer needs to move 32-byte
+// fields across a JSON boundary (e.g. the extension front door re-hydrating a
+// page's turn description). Same functions the main `@dregg/sdk` index exports.
+export { hexDecode, hexEncode } from "./internal/bytes";
 
 // Re-export the organ clients (type-only deps on NodeClient → browser-clean).
 export { TrustlineClient } from "./trustline";

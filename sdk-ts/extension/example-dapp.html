@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dregg front door — example dapp</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 680px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; line-height: 1.5; }
+      h1 { font-size: 22px; }
+      code, pre { font-family: ui-monospace, Menlo, monospace; }
+      pre { background: #f4f5f7; padding: 12px; border-radius: 8px; overflow: auto; font-size: 13px; }
+      button { padding: 10px 16px; border: none; border-radius: 8px; background: #2d6cdf; color: #fff; font-size: 15px; cursor: pointer; margin: 4px 8px 4px 0; }
+      input { padding: 8px; border: 1px solid #ccc; border-radius: 6px; width: 100%; font-family: ui-monospace, monospace; box-sizing: border-box; }
+      .row { margin: 12px 0; }
+      .muted { color: #666; }
+    </style>
+  </head>
+  <body>
+    <h1>🐉 dregg front door — example dapp</h1>
+    <p class="muted">
+      This page holds <strong>no key</strong>. It asks the extension (via
+      <code>window.dregg</code>) to sign and submit a dregg turn. The extension shows
+      you exactly what is being signed and you approve — the key never leaves the
+      extension.
+    </p>
+
+    <div class="row">
+      <button id="connect">1. Connect (read identity)</button>
+      <span id="identity" class="muted"></span>
+    </div>
+
+    <div class="row">
+      <label>Recipient cell id (hex, 64 chars):</label>
+      <input id="to" placeholder="paste a 32-byte cell id in hex" />
+    </div>
+    <div class="row">
+      <label>Amount (computrons):</label>
+      <input id="amount" value="100" />
+    </div>
+
+    <div class="row">
+      <button id="send">2. Request transfer (approve in the extension)</button>
+    </div>
+
+    <h3>Result</h3>
+    <pre id="out">—</pre>
+
+    <script>
+      const out = (x) => (document.getElementById("out").textContent = typeof x === "string" ? x : JSON.stringify(x, null, 2));
+
+      document.getElementById("connect").onclick = async () => {
+        if (!window.dregg) return out("window.dregg is not present — is the extension loaded?");
+        try {
+          const id = await window.dregg.identity();
+          document.getElementById("identity").textContent = `signer cell: ${id.cellIdHex.slice(0, 16)}…`;
+          out(id);
+        } catch (e) {
+          out("identity error: " + e.message);
+        }
+      };
+
+      document.getElementById("send").onclick = async () => {
+        if (!window.dregg) return out("window.dregg is not present — is the extension loaded?");
+        const toHex = document.getElementById("to").value.trim();
+        const amount = Number(document.getElementById("amount").value);
+        if (toHex.length !== 64) return out("recipient must be a 64-char hex cell id");
+        try {
+          out("requesting… approve (or decline) in the extension popup");
+          // The page describes the turn; the extension + user approve; the key stays put.
+          const receipt = await window.dregg.turn({
+            label: "Example transfer from the demo dapp",
+            effects: [{ kind: "transfer", toHex, amount }],
+          });
+          out({ committed: receipt });
+        } catch (e) {
+          out("turn declined or failed: " + e.message);
+        }
+      };
+    </script>
+  </body>
+</html>
