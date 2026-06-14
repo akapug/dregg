@@ -6123,14 +6123,40 @@ async fn post_faucet(
     // proof's pre-state must be captured BEFORE the executor mutates it).
     let pre_ledger = s.ledger.clone();
     let lean_producer_enabled = s.lean_producer_enabled;
-    // ONE executor gate (#171): faucet turns commit through the same
-    // producer-aware path as every other ingress.
-    let exec_result = crate::executor_setup::execute_via_producer(
-        &executor,
-        &faucet_turn,
-        &mut s.ledger,
-        lean_producer_enabled,
-    );
+
+    // MULTI-PARTY: consensus FINALIZATION is the authoritative application of the
+    // faucet turn (the SAME `execute_finalized_turn` runs on every node and emits
+    // the attested root). Eagerly committing here would mutate ONLY this node's
+    // ledger — advancing the faucet cell's nonce so the finalized re-execution is
+    // rejected as a "nonce replay", and creating the recipient cell only locally
+    // so PEERS reject the finalized Transfer as "destination not found" — both of
+    // which block cross-node commit (`latest_height` stuck at 0). So in full mode
+    // we execute against a SCRATCH CLONE purely to build the receipt/proof for the
+    // HTTP response, leaving the authoritative ledger untouched; the finalized
+    // executor then applies the turn uniformly on all nodes (it auto-materializes
+    // the Transfer destination, see `execute_finalized_turn`). Solo (n=1) keeps the
+    // direct authoritative commit — it has no separate finalization pass.
+    let is_solo = s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo);
+    let exec_result = if is_solo {
+        // ONE executor gate (#171): solo faucet turns commit through the same
+        // producer-aware path as every other ingress, authoritatively.
+        crate::executor_setup::execute_via_producer(
+            &executor,
+            &faucet_turn,
+            &mut s.ledger,
+            lean_producer_enabled,
+        )
+    } else {
+        // Full mode: receipt-only execution against a scratch clone; do NOT mutate
+        // the authoritative ledger (finalization is authoritative, cross-node).
+        let mut scratch = s.ledger.clone();
+        crate::executor_setup::execute_via_producer(
+            &executor,
+            &faucet_turn,
+            &mut scratch,
+            lean_producer_enabled,
+        )
+    };
 
     match exec_result {
         dregg_turn::TurnResult::Committed { mut receipt, .. } => {
