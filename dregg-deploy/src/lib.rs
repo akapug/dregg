@@ -29,6 +29,12 @@
 //! - [`check`] — the synthesis: parse → lower → run the four static checks →
 //!   report the [`DeployVerdict`] (the assurance over the cap graph + the
 //!   resolved ids), naming the precise locus on failure.
+//! - [`plan_apply`] — the `apply` flow: parse → lower → **gate on the static
+//!   check** → emit the ordered, receipt-chained per-root [`apply::AppliedPlan`]
+//!   (one `Turn` per effect-group, births → funds → grants, each chained to the
+//!   previous via `previous_receipt_hash`). An amplifying/non-conserving spec is
+//!   [`apply::ApplyError::Refused`] **before any turn is produced** — the check
+//!   is the gate, not an afterthought.
 //!
 //! ## How each SDK consumes the lowered effects (the thin binding)
 //!
@@ -77,15 +83,18 @@
 //! executor rejects, it cannot produce an unsafe deployment the executor would
 //! accept.
 
+pub mod apply;
 pub mod lower;
 pub mod schema;
 
+pub use apply::{plan_apply, plan_apply_toml, AppliedPlan, ApplyError, PlannedTurn};
 pub use lower::{Lowered, LowerError};
 pub use schema::*;
 
 use dregg_userspace_verify::Assurance;
 
-/// Errors from the top-level [`check`] / parse entry points.
+/// Errors from the top-level [`check`] / [`plan_apply_toml`] / parse entry
+/// points.
 #[derive(Debug, thiserror::Error)]
 pub enum DeployError {
     #[error("TOML parse error: {0}")]
@@ -94,6 +103,10 @@ pub enum DeployError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Lower(#[from] LowerError),
+    /// The `apply` flow refused or could not lower the deployment (the gate
+    /// rejected a non-conserving / amplifying spec, see [`apply::ApplyError`]).
+    #[error(transparent)]
+    Apply(#[from] ApplyError),
 }
 
 /// Parse DreggDL TOML text into a [`Deployment`].
