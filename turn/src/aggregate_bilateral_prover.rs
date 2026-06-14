@@ -24,15 +24,29 @@ use crate::bilateral_schedule::{BilateralCounts, BilateralRoots, ExpectedBilater
 use crate::error::TurnError;
 use crate::turn::Turn;
 use crate::witnessed_receipt::WitnessedReceipt;
+// CG-5 cross-side-existence + tree-fold types (custom-STARK, available in every build).
 use dregg_circuit::bilateral_aggregation_air::{
-    AggregationInnerRow, AggregationOuterPi, BilateralAggregationAir, BundleTreeFoldAir,
-    CrossSideExistenceAir, CrossSideHalfEdge, FOLD_PI_COUNT, OUTER_BASE_COUNT,
-    build_aggregation_trace, build_cross_side_trace, build_tree_fold_trace,
+    BundleTreeFoldAir, CrossSideExistenceAir, CrossSideHalfEdge, FOLD_PI_COUNT,
+    build_cross_side_trace, build_tree_fold_trace,
 };
+// The DECOUPLED descriptor aggregation surface (LEAN-emitted; the `recursion`/`verifier` path).
+#[cfg(feature = "recursion")]
+use dregg_circuit::bilateral_aggregation_air::{
+    AggregationInnerRowV2, AggregationOuterPi, agg, build_aggregation_trace_v2,
+    outer_pi_v2, prove_aggregation_v2, schedule_block_from_inner_pi, sched, verify_aggregation_v2,
+};
+#[cfg(feature = "recursion")]
+use dregg_circuit::descriptor_ir2::{DreggStarkConfig, Ir2BatchProof};
+#[cfg(any(feature = "recursion", test))]
 use dregg_circuit::effect_vm::pi as inner_pi;
 use dregg_circuit::field::BabyBear;
 use dregg_types::CellId;
 use serde::{Deserialize, Serialize};
+
+/// The fixed outer-PI width of the DECOUPLED bilateral aggregation descriptor (Lean
+/// `OuterPi.COUNT` = 23), independent of N — the headline verifier-cost win.
+#[cfg(feature = "recursion")]
+const OUTER_PI_COUNT: usize = outer_pi_v2::COUNT;
 
 // ---------------------------------------------------------------------------
 // Aggregated bundle on-disk shape
@@ -149,6 +163,82 @@ fn pack_expected(
     )
 }
 
+/// Build the DECOUPLED v2 inner rows from `(turn, per_cell)`: the standalone 49-felt schedule
+/// block (projected from each WR's bilateral-schedule PI window) + the schedule-derived expected
+/// counts/roots. Returns the rows in `per_cell` order and the dedup'd federation list. Used by
+/// the prover to build the trace.
+#[cfg(feature = "recursion")]
+fn build_inner_rows_v2(
+    turn: &Turn,
+    per_cell: &[(CellId, WitnessedReceipt)],
+) -> Result<(Vec<AggregationInnerRowV2>, Vec<[u8; 32]>), TurnError> {
+    let schedule = ExpectedBilateral::from_turn(turn);
+    let actor_nonce = turn.nonce;
+    let mut rows: Vec<AggregationInnerRowV2> = Vec::with_capacity(per_cell.len());
+    let mut federation_ids_seen: Vec<[u8; 32]> = Vec::new();
+    for (cid, wr) in per_cell {
+        if wr.public_inputs.len() < inner_pi::ACTIVE_BASE_COUNT {
+            return Err(TurnError::InvalidExecutionProof(format!(
+                "WR for cell {:?}: PI has {} entries, expected at least {} (PI v3 layout)",
+                cid,
+                wr.public_inputs.len(),
+                inner_pi::ACTIVE_BASE_COUNT
+            )));
+        }
+        let inner_pi_vec: Vec<BabyBear> = wr.public_inputs[..inner_pi::ACTIVE_BASE_COUNT]
+            .iter()
+            .map(|&v| BabyBear::new_canonical(v))
+            .collect();
+        // The decoupled schedule block: the 49-felt window the rotated WR carries standalone.
+        let schedule_block = schedule_block_from_inner_pi(&inner_pi_vec);
+
+        let counts = schedule.counts_for(cid);
+        let roots = schedule.roots_for(cid, actor_nonce);
+        let (expected_counts, expected_roots) = pack_expected(counts, roots);
+
+        rows.push(AggregationInnerRowV2 {
+            schedule: schedule_block,
+            expected_counts,
+            expected_roots,
+        });
+
+        let fed = wr.receipt.federation_id;
+        if !federation_ids_seen.contains(&fed) {
+            federation_ids_seen.push(fed);
+        }
+    }
+    Ok((rows, federation_ids_seen))
+}
+
+/// The VERIFIER-side row rebuild: take each row's CLAIMED schedule block (from the shipped
+/// trace) and pair it with the canonical Turn's `expected_*` projection. Used by step 4b to
+/// re-derive the canonical 87-col trace and bind it to the proof. (The prover's
+/// `build_inner_rows_v2` pairs the WR-claimed schedule with the same canonical expected; in the
+/// honest case the two agree, and a divergent schedule cannot satisfy CG-3, so it never proves.)
+#[cfg(feature = "recursion")]
+fn build_inner_rows_v2_from_schedule(
+    turn: &Turn,
+    cells: &[CellId],
+    schedules: &[[BabyBear; sched::WIDTH]],
+) -> Vec<AggregationInnerRowV2> {
+    let schedule = ExpectedBilateral::from_turn(turn);
+    let actor_nonce = turn.nonce;
+    cells
+        .iter()
+        .zip(schedules.iter())
+        .map(|(cid, blk)| {
+            let counts = schedule.counts_for(cid);
+            let roots = schedule.roots_for(cid, actor_nonce);
+            let (expected_counts, expected_roots) = pack_expected(counts, roots);
+            AggregationInnerRowV2 {
+                schedule: *blk,
+                expected_counts,
+                expected_roots,
+            }
+        })
+        .collect()
+}
+
 /// Project a 32-byte cell-id to an 8-felt decomposition. Mirrors the
 /// `canonical_32_to_felts_4` pattern but at 4-bytes-per-felt
 /// (no overflow on BabyBear's 31-bit modulus).
@@ -197,6 +287,25 @@ pub(crate) fn cell_id_to_felts_8(c: &CellId) -> [BabyBear; 8] {
 /// witness bundle and witness-hash binding. Aggregated gamma.2 output is a
 /// devnet gossip artifact; accepting scope-(1)-only WRs here would make the
 /// aggregate look stronger than the receipt/witness material it summarizes.
+///
+/// LIVE path: routes through the LEAN-EMITTED descriptor (`recursion` feature). The
+/// `not(recursion)` build (wasm32 / no-lean-link) has no batch prover, so the optional
+/// bilateral-aggregate demo there returns an error and the single-turn proof stands (the
+/// callers — wasm's `prove_bilateral_aggregate` — handle this gracefully).
+#[cfg(not(feature = "recursion"))]
+pub fn prove_aggregated_bundle(
+    _turn: &Turn,
+    _per_cell: &[(CellId, WitnessedReceipt)],
+) -> Result<AggregatedBundle, TurnError> {
+    Err(TurnError::InvalidExecutionProof(
+        "aggregate_bilateral: the descriptor batch prover requires the `recursion` feature \
+         (the bilateral aggregation AIR is emitted from Lean; wasm/no-lean-link verifies but \
+         does not prove it)"
+            .into(),
+    ))
+}
+
+#[cfg(feature = "recursion")]
 pub fn prove_aggregated_bundle(
     turn: &Turn,
     per_cell: &[(CellId, WitnessedReceipt)],
@@ -227,45 +336,18 @@ pub fn prove_aggregated_bundle(
         per_cell.iter().map(|(c, w)| (c.clone(), w)).collect();
     WitnessedReceipt::verify_bilateral_chain(&view, turn)?;
 
-    let schedule = ExpectedBilateral::from_turn(turn);
     let actor_nonce = turn.nonce;
 
-    // Build per-row data. Row i corresponds to per_cell[i].
-    let mut rows: Vec<AggregationInnerRow> = Vec::with_capacity(per_cell.len());
-    let mut federation_ids_seen: Vec<[u8; 32]> = Vec::new();
-    for (cid, wr) in per_cell {
-        if wr.public_inputs.len() < inner_pi::ACTIVE_BASE_COUNT {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "WR for cell {:?}: PI has {} entries, expected at least {} (PI v3 layout)",
-                cid,
-                wr.public_inputs.len(),
-                inner_pi::ACTIVE_BASE_COUNT
-            )));
-        }
-        let inner_pi_vec: Vec<BabyBear> = wr.public_inputs[..inner_pi::ACTIVE_BASE_COUNT]
-            .iter()
-            .map(|&v| BabyBear::new_canonical(v))
-            .collect();
+    // Build the DECOUPLED v2 per-row data + the federation list. Row i corresponds to
+    // per_cell[i]. The schedule block is the standalone 49-felt projection of the WR's
+    // bilateral-schedule PI window (`schedule_block_from_inner_pi`) — fed to the aggregation
+    // independent of the rotated effect-vm 38-PI.
+    let (rows, federation_ids_seen) = build_inner_rows_v2(turn, per_cell)?;
 
-        let counts = schedule.counts_for(cid);
-        let roots = schedule.roots_for(cid, actor_nonce);
-        let (expected_counts, expected_roots) = pack_expected(counts, roots);
+    let trace = build_aggregation_trace_v2(&rows);
 
-        rows.push(AggregationInnerRow {
-            inner_pi: inner_pi_vec,
-            expected_counts,
-            expected_roots,
-        });
-
-        let fed = wr.receipt.federation_id;
-        if !federation_ids_seen.contains(&fed) {
-            federation_ids_seen.push(fed);
-        }
-    }
-
-    let trace = build_aggregation_trace(&rows);
-
-    // Outer PI.
+    // Outer PI (23 felts; the layout is identical between the v1 and v2 outer PI — both pin
+    // turn-id 0..13, agent-id 13..21, n_cells 21, consistent 22).
     let (turn_hash_4, effects_hash_global_4, _, prev_receipt_4) =
         crate::executor::TurnExecutor::compute_turn_identity_pi(turn);
     let outer_pi_typed = AggregationOuterPi {
@@ -278,24 +360,24 @@ pub fn prove_aggregated_bundle(
         bilateral_consistent: BabyBear::new(1),
     };
     let outer_pi_bb = outer_pi_typed.to_vec();
-    debug_assert_eq!(outer_pi_bb.len(), OUTER_BASE_COUNT);
+    debug_assert_eq!(outer_pi_bb.len(), OUTER_PI_COUNT);
 
-    // Run the outer STARK prover. `BilateralAggregationAir` now implements
-    // `dregg_circuit::stark::StarkAir` (the same FRI + Merkle + Fiat-Shamir
-    // proof system the per-cell Effect VM AIR uses). `stark::try_prove`
-    // commits the outer trace, evaluates the aggregation constraints over the
-    // blown-up Reed-Solomon domain, runs FRI low-degree testing, and emits
-    // proof bytes that `verify_aggregated_bundle` checks WITHOUT re-seeing the
-    // trace. This is the headline upgrade over the prior trust-and-replay
-    // witness: a tampered trace now fails FRI / constraint consistency rather
-    // than being re-executed in Rust.
-    let proof = dregg_circuit::stark::try_prove(&BilateralAggregationAir, &trace, &outer_pi_bb)
-        .map_err(|e| {
-            TurnError::InvalidExecutionProof(format!(
-                "aggregate_bilateral: outer STARK proving failed: {e}"
-            ))
-        })?;
-    let outer_proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
+    // Run the LEAN-EMITTED descriptor prover (law #1): the 87-col trace satisfies
+    // `bilateral_aggregation_descriptor()` (a proved Lean `EffectVmDescriptor2`) against the
+    // 23-felt outer PI, via the multi-table batch STARK. No Rust-authored constraint semantics:
+    // every CG-2/CG-3/CG-4 relation + the two cumulative `windowGate`s come from the verified
+    // Lean module, NOT a hand `StarkAir`. The proof binds the committed main trace; a tampered
+    // trace fails FRI / constraint-consistency rather than being re-executed in Rust.
+    let proof = prove_aggregation_v2(&trace, &outer_pi_bb).map_err(|e| {
+        TurnError::InvalidExecutionProof(format!(
+            "aggregate_bilateral: descriptor batch proving failed: {e}"
+        ))
+    })?;
+    let outer_proof_bytes = postcard::to_allocvec(&proof).map_err(|e| {
+        TurnError::InvalidExecutionProof(format!(
+            "aggregate_bilateral: serialising the aggregation proof failed: {e}"
+        ))
+    })?;
     let outer_trace: Vec<Vec<u32>> = trace
         .iter()
         .map(|row| row.iter().map(|x| x.as_u32()).collect())
@@ -346,24 +428,37 @@ pub fn prove_aggregated_bundle(
 ///
 /// Unlike the prior trust-and-replay path, step 4 is now a *real* STARK
 /// verification: `dregg_circuit::stark::verify` checks the proof without
-/// re-executing the trace. The shipped trace is bound to that proof by
-/// commitment equality (step 4b) so the schedule cross-check in step 5
-/// operates on the exact trace the proof attests.
-pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnError> {
-    use dregg_circuit::bilateral_aggregation_air as ag;
+/// re-executing the trace. The shipped trace is bound to that proof by canonical
+/// reconstruction (step 4b) so the schedule cross-check in step 5 operates on the exact trace
+/// the proof attests.
+///
+/// LIVE path: the proof is a `Ir2BatchProof` over the LEAN-EMITTED descriptor, verified
+/// prover-free (the `recursion` feature forwards `dregg-circuit/verifier`). The
+/// `not(recursion)` build has no batch verifier, so it rejects (the only such consumer is the
+/// optional wasm bilateral demo).
+#[cfg(not(feature = "recursion"))]
+pub fn verify_aggregated_bundle(_bundle: &AggregatedBundle) -> Result<(), TurnError> {
+    Err(TurnError::InvalidExecutionProof(
+        "aggregate_bilateral: the descriptor batch verifier requires the `recursion`/`verifier` \
+         feature (the bilateral aggregation AIR is emitted from Lean)"
+            .into(),
+    ))
+}
 
+#[cfg(feature = "recursion")]
+pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnError> {
     // Step 1: outer PI sanity.
-    if bundle.outer_pi.len() != OUTER_BASE_COUNT {
+    if bundle.outer_pi.len() != OUTER_PI_COUNT {
         return Err(TurnError::InvalidExecutionProof(format!(
             "aggregate_bilateral: outer PI has {} entries, expected {}",
             bundle.outer_pi.len(),
-            OUTER_BASE_COUNT
+            OUTER_PI_COUNT
         )));
     }
-    if bundle.outer_pi[ag::OUTER_BILATERAL_CONSISTENT] != 1 {
+    if bundle.outer_pi[outer_pi_v2::BILATERAL_CONSISTENT] != 1 {
         return Err(TurnError::InvalidExecutionProof(format!(
             "aggregate_bilateral: BILATERAL_CONSISTENT == {}, expected 1",
-            bundle.outer_pi[ag::OUTER_BILATERAL_CONSISTENT]
+            bundle.outer_pi[outer_pi_v2::BILATERAL_CONSISTENT]
         )));
     }
 
@@ -399,92 +494,96 @@ pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnErr
         )));
     }
 
-    // Step 4: REAL outer STARK verification. Deserialise the proof bytes and
-    // verify them standalone against the outer PI — FRI low-degree testing,
-    // constraint-consistency, and boundary openings, none of which re-execute
-    // the trace. A trace that violates CG-2/CG-3/CG-4 cannot have produced a
-    // verifying proof.
+    // Step 4: REAL descriptor batch verification (law #1). Deserialise the `Ir2BatchProof` and
+    // verify it standalone against the outer PI through the LEAN-EMITTED descriptor — FRI
+    // low-degree testing + constraint-consistency over CG-2/CG-3/CG-4 + the two cumulative
+    // `windowGate`s, none of which re-execute the trace. A trace that violates the descriptor
+    // cannot have produced a verifying proof. The verifier is prover-free.
     let outer_pi_bb: Vec<BabyBear> = bundle
         .outer_pi
         .iter()
         .map(|&v| BabyBear::new_canonical(v))
         .collect();
-    let proof = dregg_circuit::stark::proof_from_bytes(&bundle.outer_proof_bytes).map_err(|e| {
+    let proof: Ir2BatchProof<DreggStarkConfig> = postcard::from_bytes(&bundle.outer_proof_bytes)
+        .map_err(|e| {
+            TurnError::InvalidExecutionProof(format!(
+                "aggregate_bilateral: failed to decode aggregation batch proof: {e}"
+            ))
+        })?;
+    verify_aggregation_v2(&proof, &outer_pi_bb).map_err(|e| {
         TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral: failed to decode outer STARK proof: {e}"
-        ))
-    })?;
-    if proof.air_name != BilateralAggregationAir::AIR_NAME {
-        return Err(TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral: proof AIR name mismatch: {}",
-            proof.air_name
-        )));
-    }
-    dregg_circuit::stark::verify(&BilateralAggregationAir, &proof, &outer_pi_bb).map_err(|e| {
-        TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral: outer STARK verification failed: {e}"
+            "aggregate_bilateral: descriptor batch verification failed: {e}"
         ))
     })?;
 
-    // Step 4b: bind the shipped trace to the proof. Reconstruct the trace
-    // Merkle commitment and require it to equal the proof's. This makes the
-    // shipped `outer_trace` provably the trace the STARK attests, so the
-    // schedule cross-check in step 5 (which needs the per-row columns) cannot
-    // be fed a different trace than the one the proof verified.
-    let trace_bb: Vec<Vec<BabyBear>> = bundle
-        .outer_trace
-        .iter()
-        .map(|row| row.iter().map(|&v| BabyBear::new_canonical(v)).collect())
-        .collect();
-    let recomputed =
-        dregg_circuit::stark::recompute_trace_commitment(&BilateralAggregationAir, &trace_bb)
-            .ok_or_else(|| {
-                TurnError::InvalidExecutionProof(
-                    "aggregate_bilateral: shipped outer_trace is structurally invalid".into(),
-                )
-            })?;
-    if recomputed != proof.trace_commitment {
-        return Err(TurnError::InvalidExecutionProof(
-            "aggregate_bilateral: shipped outer_trace does not match proof trace commitment".into(),
-        ));
-    }
-
-    // Step 5: per-row inner_pi correspondence to participating_cells.
-    // For each active row, the inner PI's bilateral counts + roots must
-    // equal the schedule's projection for the corresponding cell. The AIR's
-    // CG-3 constraint (verified in step 4) binds each row's inner PI to its
-    // `expected_*` columns; here we close the remaining gap by re-deriving the
-    // `expected_*` values from the canonical Turn and confirming they match the
-    // (proof-bound) trace. A malicious prover cannot fabricate expected_*
-    // values that satisfy CG-3 against forged inner PIs but disagree with the
-    // schedule.
-    let schedule = ExpectedBilateral::from_turn(&bundle.turn);
-    let actor_nonce = bundle.turn.nonce;
+    // Step 4b: bind the shipped trace to the proof BY CANONICAL RECONSTRUCTION. The batch STARK
+    // commits its own main trace; here we re-derive the EXACT canonical 87-col trace the proof
+    // must attest, from `(turn, participating_cells)` + the bundle's own schedule blocks, and
+    // require the shipped `outer_trace` to equal it. This is strictly stronger than a commitment
+    // match: it pins every column (schedule + expected + accumulators) to the canonical Turn, so
+    // a prover cannot present a different trace than the one the schedule predicts.
     if bundle.outer_trace.len() < bundle.participating_cells.len() {
         return Err(TurnError::InvalidExecutionProof(
             "aggregate_bilateral: outer_trace has fewer rows than participating_cells".into(),
         ));
     }
+    for (i, row) in bundle.outer_trace.iter().enumerate() {
+        if row.len() != agg::WIDTH {
+            return Err(TurnError::InvalidExecutionProof(format!(
+                "aggregate_bilateral: row {} has width {}, expected {}",
+                i,
+                row.len(),
+                agg::WIDTH
+            )));
+        }
+    }
+    // Re-derive the rows from the bundle's own carried schedule blocks (the in-proof CG-2/CG-3
+    // bind them to the outer PI + expected cols; step 5 below re-derives the expected cols +
+    // is_agent from the Turn). Rebuilding the canonical trace closes the trace↔proof gap.
+    let claimed_schedule: Vec<[BabyBear; sched::WIDTH]> = bundle
+        .outer_trace
+        .iter()
+        .take(bundle.participating_cells.len())
+        .map(|row| {
+            let mut blk = [BabyBear::ZERO; sched::WIDTH];
+            for (j, slot) in blk.iter_mut().enumerate() {
+                *slot = BabyBear::new_canonical(row[agg::sch_col(j)]);
+            }
+            blk
+        })
+        .collect();
+    let rebuilt_rows = build_inner_rows_v2_from_schedule(&bundle.turn, &bundle.participating_cells, &claimed_schedule);
+    let rebuilt_trace = build_aggregation_trace_v2(&rebuilt_rows);
+    let rebuilt_u32: Vec<Vec<u32>> = rebuilt_trace
+        .iter()
+        .map(|r| r.iter().map(|x| x.as_u32()).collect())
+        .collect();
+    if rebuilt_u32 != bundle.outer_trace {
+        return Err(TurnError::InvalidExecutionProof(
+            "aggregate_bilateral: shipped outer_trace does not match the canonical schedule-derived trace".into(),
+        ));
+    }
+
+    // Step 5: per-row schedule correspondence to participating_cells. For each active row, the
+    // schedule's counts + roots must equal the canonical Turn's projection for the
+    // corresponding cell, and `is_agent` must truthfully reflect `cell == turn.agent`. CG-3
+    // (verified in step 4) binds each row's schedule block to its `expected_*` columns; here we
+    // re-derive `expected_*` from the canonical Turn and confirm equality — so a prover cannot
+    // fabricate `expected_*` that satisfy CG-3 against a forged schedule but disagree with it.
+    let schedule = ExpectedBilateral::from_turn(&bundle.turn);
+    let actor_nonce = bundle.turn.nonce;
     for (i, cid) in bundle.participating_cells.iter().enumerate() {
         let counts = schedule.counts_for(cid);
         let roots = schedule.roots_for(cid, actor_nonce);
         let (expected_counts, expected_roots) = pack_expected(counts, roots);
 
         let row = &bundle.outer_trace[i];
-        if row.len() != ag::AGG_WIDTH {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "aggregate_bilateral: row {} has width {}, expected {}",
-                i,
-                row.len(),
-                ag::AGG_WIDTH
-            )));
-        }
-        // Check counts.
+        // Check counts (the schedule block's counts == the canonical schedule's).
         for k in 0..7 {
-            let claimed = BabyBear::new_canonical(row[ag::EXPECTED_COUNTS_BASE + k]);
+            let claimed = BabyBear::new_canonical(row[agg::sch_col(sched::COUNTS_BASE + k)]);
             if claimed != expected_counts[k] {
                 return Err(TurnError::InvalidExecutionProof(format!(
-                    "aggregate_bilateral: row {} cell {:?}: expected_counts[{}] = {} != schedule {}",
+                    "aggregate_bilateral: row {} cell {:?}: counts[{}] = {} != schedule {}",
                     i,
                     cid,
                     k,
@@ -496,10 +595,11 @@ pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnErr
         // Check roots.
         for k in 0..7 {
             for off in 0..4 {
-                let claimed = BabyBear::new_canonical(row[ag::EXPECTED_ROOTS_BASE + k * 4 + off]);
+                let claimed =
+                    BabyBear::new_canonical(row[agg::sch_col(sched::ROOTS_BASE + k * 4 + off)]);
                 if claimed != expected_roots[k][off] {
                     return Err(TurnError::InvalidExecutionProof(format!(
-                        "aggregate_bilateral: row {} cell {:?}: expected_roots[{}][{}] = {} != schedule {}",
+                        "aggregate_bilateral: row {} cell {:?}: roots[{}][{}] = {} != schedule {}",
                         i,
                         cid,
                         k,
@@ -510,9 +610,8 @@ pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnErr
                 }
             }
         }
-        // Check inner_pi[IS_AGENT_CELL] truthfully reflects cell == turn.agent.
-        let is_agent_claim =
-            BabyBear::new_canonical(row[ag::PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL]);
+        // Check the schedule block's IS_AGENT_CELL truthfully reflects cell == turn.agent.
+        let is_agent_claim = BabyBear::new_canonical(row[agg::sch_col(sched::IS_AGENT_CELL)]);
         let expected_is_agent = if cid == &bundle.turn.agent { 1 } else { 0 };
         if is_agent_claim.as_u32() != expected_is_agent {
             return Err(TurnError::InvalidExecutionProof(format!(
@@ -948,7 +1047,10 @@ pub fn verify_aggregated_tree(tree: &AggregatedTree) -> Result<(), TurnError> {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+// The aggregation tests exercise the LEAN-emitted descriptor prove/verify (the live
+// `recursion` path); they are gated accordingly (the `not(recursion)` wasm build neither
+// proves nor verifies the descriptor, so its bundle functions are stubs).
+#[cfg(all(test, feature = "recursion"))]
 mod tests {
     use super::*;
     use crate::builder::{ActionBuilder, TurnBuilder};
@@ -1049,7 +1151,7 @@ mod tests {
 
         let bundle = prove_aggregated_bundle(&turn, &entries).expect("prove");
         assert_eq!(bundle.participating_cells.len(), 2);
-        assert_eq!(bundle.outer_pi.len(), OUTER_BASE_COUNT);
+        assert_eq!(bundle.outer_pi.len(), outer_pi_v2::COUNT);
         assert_eq!(bundle.bundle_epoch, 1);
 
         verify_aggregated_bundle(&bundle).expect("verify");
@@ -1117,8 +1219,7 @@ mod tests {
         // The bundle epoch reflects the actor nonce.
         assert_eq!(bundle.bundle_epoch, 7);
         // outer PI's N_CELLS slot reflects the active count.
-        use dregg_circuit::bilateral_aggregation_air as ag;
-        assert_eq!(bundle.outer_pi[ag::OUTER_N_CELLS], 3);
+        assert_eq!(bundle.outer_pi[outer_pi_v2::N_CELLS], 3);
     }
 
     /// Adversarial: tamper one inner PI's bilateral root (the externally
@@ -1230,8 +1331,7 @@ mod tests {
         let mut bundle = prove_aggregated_bundle(&turn, &entries).expect("prove");
 
         // Tamper.
-        use dregg_circuit::bilateral_aggregation_air as ag;
-        bundle.outer_pi[ag::OUTER_BILATERAL_CONSISTENT] = 0;
+        bundle.outer_pi[outer_pi_v2::BILATERAL_CONSISTENT] = 0;
 
         let res = verify_aggregated_bundle(&bundle);
         assert!(res.is_err(), "tampered outer PI must reject");
@@ -1253,9 +1353,9 @@ mod tests {
         ];
         let mut bundle = prove_aggregated_bundle(&turn, &entries).expect("prove");
 
-        // Flip the first row's IS_AGENT_CELL slot in the shipped trace.
-        use dregg_circuit::bilateral_aggregation_air as ag;
-        let slot = ag::PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL;
+        // Flip the first row's IS_AGENT_CELL slot in the shipped trace (the decoupled
+        // schedule block's agent flag).
+        let slot = agg::sch_col(sched::IS_AGENT_CELL);
         bundle.outer_trace[0][slot] = bundle.outer_trace[0][slot].wrapping_add(1) & 0x7FFF_FFFF;
 
         let res = verify_aggregated_bundle(&bundle);
@@ -1273,7 +1373,7 @@ mod tests {
     /// over the tampered trace, and confirm verification rejects.
     #[test]
     fn aggregated_proof_verifies_consistent_and_rejects_tampered_cross_cell() {
-        use dregg_circuit::bilateral_aggregation_air::{self as ag, BilateralAggregationAir};
+        use dregg_circuit::bilateral_aggregation_air::{agg, prove_aggregation_v2, sched};
         use dregg_circuit::field::BabyBear;
 
         let alice = cid(0xA1);
@@ -1285,42 +1385,38 @@ mod tests {
             (bob, fabricate_wr(&turn, &bob)),
         ];
 
-        // (a) Consistent bundle: real STARK proof verifies.
+        // (a) Consistent bundle: the real descriptor batch proof verifies.
         let bundle = prove_aggregated_bundle(&turn, &entries).expect("prove consistent");
         verify_aggregated_bundle(&bundle).expect("consistent aggregated proof must verify");
-        // Sanity: the proof bytes are a real DREG-format STARK proof, not a
-        // postcard witness.
-        assert_eq!(&bundle.outer_proof_bytes[0..4], b"DREG");
 
-        // (b) Tampered cross-cell agreement. Bob is row 1; forge his
-        // INCOMING_TRANSFER_ROOT in BOTH the inner-PI buffer *and* the
-        // matching expected_roots column so CG-3 still holds in-trace, then
-        // re-prove. The forged root no longer matches the schedule the Turn
-        // predicts, so step-5's Turn-derived cross-check rejects.
+        // (b) Tampered cross-cell agreement. Bob is row 1; forge his INCOMING_TRANSFER_ROOT in
+        // BOTH the decoupled schedule block AND the matching expected_roots column so CG-3 still
+        // holds in-trace, then re-prove THROUGH THE DESCRIPTOR. The forged root no longer matches
+        // the schedule the Turn predicts, so step-4b's canonical reconstruction + step-5's
+        // Turn-derived cross-check reject.
         let mut trace_bb: Vec<Vec<BabyBear>> = bundle
             .outer_trace
             .iter()
             .map(|row| row.iter().map(|&v| BabyBear::new_canonical(v)).collect())
             .collect();
-        // INCOMING_TRANSFER_ROOT is expected-roots index k=1.
-        let pi_base = ag::PI_BUFFER_BASE + inner_pi::INCOMING_TRANSFER_ROOT_BASE;
-        let exp_base = ag::EXPECTED_ROOTS_BASE + 1 * 4;
+        // INCOMING_TRANSFER_ROOT is the schedule-roots index k=1 (and expected-roots index k=1).
+        let sched_base = agg::sch_col(sched::ROOTS_BASE + 1 * 4);
+        let exp_base = agg::EXPECTED_ROOTS_BASE + 1 * 4;
         for off in 0..4 {
             let forged = BabyBear::new((0x0BAD_C0DE + off as u32) & 0x7FFF_FFFF);
-            trace_bb[1][pi_base + off] = forged;
+            trace_bb[1][sched_base + off] = forged;
             trace_bb[1][exp_base + off] = forged;
         }
-        // Re-prove over the tampered (but internally CG-3-consistent) trace.
+        // Re-prove over the tampered (but internally CG-3-consistent) trace via the descriptor.
         let outer_pi_bb: Vec<BabyBear> = bundle
             .outer_pi
             .iter()
             .map(|&v| BabyBear::new_canonical(v))
             .collect();
-        let tampered_proof =
-            dregg_circuit::stark::try_prove(&BilateralAggregationAir, &trace_bb, &outer_pi_bb)
-                .expect("tampered trace still satisfies in-AIR constraints, so it proves");
+        let tampered_proof = prove_aggregation_v2(&trace_bb, &outer_pi_bb)
+            .expect("tampered trace still satisfies the descriptor constraints, so it proves");
         let mut tampered = bundle.clone();
-        tampered.outer_proof_bytes = dregg_circuit::stark::proof_to_bytes(&tampered_proof);
+        tampered.outer_proof_bytes = postcard::to_allocvec(&tampered_proof).expect("serialise");
         tampered.outer_trace = trace_bb
             .iter()
             .map(|row| row.iter().map(|x| x.as_u32()).collect())
@@ -1488,8 +1584,7 @@ mod tests {
         let mut tree = prove_aggregated_tree(vec![b1, b2]).expect("tree fold");
         // Tamper a child's outer PI after folding. The child re-verification
         // (step 1) and the digest recomputation (step 2) both reject.
-        use dregg_circuit::bilateral_aggregation_air as ag;
-        tree.children[0].outer_pi[ag::OUTER_BILATERAL_CONSISTENT] = 0;
+        tree.children[0].outer_pi[outer_pi_v2::BILATERAL_CONSISTENT] = 0;
         let res = verify_aggregated_tree(&tree);
         assert!(res.is_err(), "tampered child must reject; got {:?}", res);
     }

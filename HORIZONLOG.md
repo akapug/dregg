@@ -106,17 +106,106 @@ flip:)*
   fork; the present leaf-wrap is uni-STARK only) — OR re-architect it — OR freeze a legacy v1 leaf
   for historical turns while live turns rotate (keeps v1 alive ⇒ contradicts grep-zero). Detail in
   ROTATION-CUTOVER §EXEC C3 ⚠. (`proof_forest.rs` has no non-test consumer; dies at C7.)
-- C3-onward (gated on the above decision): FLOW B route `prove_full_turn`→rotated as the only path
-  (`AttachedSubProof`/`compose_aggregate`/`ComposedProof` effect-vm leg) + `verify_full_turn` rotated;
-  **C4** `aggregate_bilateral_prover.rs` 204→38 PI slice + reroute ~70 v1 call-sites
-  (node/sdk/verifier/lightclient/perf/preflight) + un-gate (remove `recursion`/`DREGG_ROTATED_PROVER`).
-  THEN regen EmitAllJson→`v3Registry` live · cell `CANONICAL_COMMITMENT_CONTEXT` v8→v9 · re-emit the
-  R=16 `columns::rotation` staged-probe module at R=24 (the `rotation_layout_matches_lean` drift guard
-  + SHA pin re-anchor — NOTE the LIVE rotated path is ALREADY R=24 via `trace_rotated`/`caveat`; only
-  the staged-probe reference module is R=16) · re-pin ~58 byte artifacts + 11 drift guards · VK epoch +
-  succession · DELETE v1 (`effect_vm_p3_full_air.rs`, `lean_descriptor_air.rs` v1, `CutoverFallback`,
-  the v1 PI layouts, the ~40 test call-sites in `effect_vm_descriptor_cutover_harness.rs` +
-  `effect_vm_{grant,attenuate}_non_amp.rs`). ROTATION-CUTOVER §3 steps 2-6 / §4 pins.
+- ✅ DONE (cutover **C3**, 2026-06-13): the wall FELL via option (a). The rotated multi-table
+  `Ir2BatchProof` leaf-wrap is GREEN (`ivc_turn_chain::prove_descriptor_leaf_rotated[_with_config]`,
+  `RecursionInput::NativeBatchStark`, fork `72ffc56`/circuit `bbea731e7`) AND two rotated leaves
+  AGGREGATE + self-verify at `ir2_leaf_wrap_config` (`983255781`,
+  `rotation_batchstark_leaf_smoke::two_rotated_leaves_aggregate_at_wrap_config`). The recursion
+  ARCHITECTURE is proven (wrap + aggregate).
+- ✅ DONE (cutover **C4 recursion**, 2026-06-13, this lane — WIP, uncommitted): the two recursion
+  consumers are REWIRED onto the rotated leaf-wrap. `DescriptorParticipant` gains a rotated leg
+  (`rotated: Option<RotatedParticipantLeg>` {Ir2BatchProof<DreggRecursionConfig> + EffectVmDescriptor2
+  + 38-PI}, `joint_turn_aggregation.rs`); `ivc_turn_chain::prove_turn_chain_recursive_rotated` +
+  `prove_chain_core_rotated` + `generate_chain_trace_rotated` (reads rotated commits PI 34/35) and
+  `joint_turn_recursive::prove_joint_turn_recursive_rotated` + `prove_joint_core_rotated` +
+  `joint_turn_aggregation::recursion_binding_trace_descriptor_rotated` mint leaves via
+  `prove_descriptor_leaf_rotated_with_config(.., ir2_leaf_wrap_config())` and run the whole tree at
+  the wrap config. The v1 cores stay (deleted at C7). Circuit lib+tests+lightclient build GREEN. The
+  two consumers are lightclient setup/demo-invoked (no node/sdk production loop folds a chain).
+- ✅ DONE (cutover **C4 FLOW-B SDK leg**, 2026-06-13, this lane — WIP, uncommitted): `FullTurnWitness`
+  widened with `rotation: Option<RotationTurnWitness>` (ungated — always-available types); when present,
+  `prove_full_turn` proves the effect-vm leg via `prove_effect_vm_rotated_ir2_with_caveat` and attaches
+  `"effect-vm-rotated"` (a multi-table `Ir2BatchProof`); `verify_full_turn{,_bound}` gains the
+  `"effect-vm-rotated"` arm (`verify_effect_vm_rotated_with_cutover`, selector-bound over the 36-member
+  cohort) + a rotated-aware commit binding (the rotated 38-PI is the v1 prefix `[0..34)` + 4 pins, so
+  OLD/NEW_COMMIT at 0/4 bind unchanged). HONEST BOUNDARY (named, not degraded): the rotated 38-PI does
+  NOT carry `NOTESPEND_NULLIFIER` (offset 198), so a note-spending turn with a freshness binding is
+  REFUSED on the rotated leg and must use v1 until the rotated note-spend descriptor exposes the
+  nullifier in-PI. sdk (default + no-default) + node build GREEN. The 2 node `turn_proving` callers set
+  `rotation: None` (byte-identical v1 default) — threading the real producer witnesses from the live
+  node turn (the Cell/Ledger/nullifier_root/receipt_log → `rotation_witness::produce`) is the next node
+  step.
+- ✅ DONE (cutover **C6**, 2026-06-13): the cell commitment is ALREADY v9 LIVE
+  (`CANONICAL_COMMITMENT_CONTEXT = "…v9"`, the cap-crown flag-day `53c6e417c` bumped it). This lane
+  CLEANED the stale "v8 is LIVE / do NOT bump" comment at `cell/src/commitment.rs:628`. The cell≡circuit
+  v9 differential (`live_cell_v9_equals_circuit_state_commit`) already guards byte-identity.
+- ✅ RESIDUE RESOLVED: the rotated registry has all **36** cohort members incl.
+  `revokeCapabilityVmDescriptor2R24` (graduated by cap-crown) + `customVmDescriptor2R24` — no v1-only
+  descriptor remains (`cut -f1 rotation-v3-staged-registry.tsv | wc -l` = 36).
+- ⏳ REMAINING to grep-zero (the precise walls): **(A) the BILATERAL rotated outer AIR** — DECISION =
+  BUILD, emit from Lean (law #1). `bilateral_aggregation_air.rs::BilateralAggregationAir` is a plain
+  hand-authored `StarkAir` reading `wr.public_inputs[..ACTIVE_BASE_COUNT]` and the bilateral-schedule
+  PI offsets (`effect_vm::pi::{TURN_HASH_BASE 25..IS_AGENT_CELL 73}`). It does NOT ingest an
+  `EffectVmP3Proof` — it reads the witnessed-receipt's bilateral-schedule PI layout (a ~75-felt contract
+  living inside the v1 PI module). Grep-zero needs a Lean-emitted aggregation descriptor (a NEW IR2
+  constraint kind — a general two-row `windowGate` for the cumulative-sum CG-4 — since `EmittedExpr`
+  gate bodies see only `local`, and the WR PI vector restructured so the bilateral schedule is fed
+  independently of the rotated effect-vm 38-PI). Real from-scratch Lean build (`EffectVmEmitBilateralAgg.lean`).
+  LIVE via node HTTP `/turns/aggregate` (`api.rs:1723`) + MCP `dregg_bilateral_action` + WASM + the
+  `teasting/tests/multi_cell_cross_fed_binding.rs` cross-federation gauntlet. **(B) node FLOW-B producer
+  threading** (the 2 `turn_proving` callers → real rotation witnesses). **(C) the ~70 plain-produce/verify
+  + test/demo call-sites** (node mcp/api/prove_pool, the ~40 v1 test harnesses). **(D) C5 regen**
+  (v3Registry→default, re-pin, reseed FFI) → **C7 DELETE** v1 (`effect_vm_p3_full_air.rs`, `effect_vm/air.rs`,
+  186-col `generate_effect_vm_trace`, `ACTIVE_BASE_COUNT`, `CutoverFallback`, `lean_descriptor_air.rs` v1)
+  + grep-zero per ROTATION-CUTOVER §EXEC grep_zero_checklist.
+- ✅ DONE (wall A — the BILATERAL Rust interpreter, 2026-06-13, this lane — WIP, uncommitted): the
+  bilateral aggregation now proves+verifies through the LEAN-emitted descriptor (law #1), retiring the
+  hand-AIR on the live path. (1) **`descriptor_ir2.rs` grew the `windowGate` primitive**: a `WindowExpr`
+  enum (`Loc`/`Nxt`/`Const`/`Add`/`Mul`, the two-row twin of `LeanExpr`) + `WindowGateSpec` + the
+  `VmConstraint2::WindowGate` variant + a `parse_window_expr`/`"window_gate"` decode arm (wire
+  `{"t":"window_gate","on_transition":bool,"body":{loc/nxt/const/add/mul}}`) + `JsonCursor::parse_bool`
+  (in `lean_descriptor_air.rs`, shared infra) + the AIR `eval` arm (`on_transition` → `when_transition()`,
+  else every-row) + the `check_descriptor2` bounds arm. The other 36 descriptors are byte-untouched. (2)
+  **The descriptor artifact** `circuit/descriptors/dregg-bilateral-aggregation-v2.json` (6990 B, emitted
+  from `emitVmJson2 bilateralAggDescriptor`; width 87, PI 23, 70 constraints, 2 window gates) + the
+  accessor `bilateral_aggregation_air::bilateral_aggregation_descriptor()` + the decoupled-layout modules
+  (`sched`/`agg`/`outer_pi_v2`, Lean-mirrored) + `schedule_block_from_inner_pi` (the 49-felt window
+  `inner_pi[25..74]` re-based to 0) + `build_aggregation_trace_v2` + `prove_aggregation_v2`/
+  `verify_aggregation_v2` (route through `descriptor_ir2::{prove,verify}_vm_descriptor2`). Teeth:
+  `bilateral_descriptor_parses_with_lean_pinned_shape`, `schedule_block_offsets_match_v1_pi_window`. (3)
+  **`aggregate_bilateral_prover.rs` rewired**: `prove_aggregated_bundle` builds the 87-col v2 trace (no v1
+  PI buffer) + proves via the descriptor (postcard'd `Ir2BatchProof`); `verify_aggregated_bundle`
+  deserializes + verifies via the descriptor + binds the shipped trace BY CANONICAL RECONSTRUCTION (re-derive
+  the 87-col trace from the Turn + claimed schedule blocks, require equality — strictly stronger than the old
+  commitment match) + the per-row schedule cross-check (step 5). The 7 in-file adversarial tests rewired to
+  the descriptor path. **The descriptor path is `recursion`/`verifier`-gated**; the `not(recursion)` wasm
+  build keeps a stub (returns Err — the bilateral demo there is optional, the single-turn proof stands). This
+  RETIRES `BilateralAggregationAir` on the live path and grep-zeroes `ACTIVE_BASE_COUNT`/`effect_vm::pi` on
+  the bilateral prove/verify (the only residual coupling, `SCHEDULE_PI_BASE = inner_pi::TURN_HASH_BASE`, is a
+  single offset constant, retired when the rotated WR carries `sched` natively). VERIFIED: circuit
+  `--features verifier` green; `dregg-turn` lib green (FFI link). NOTE: `CrossSideExistenceAir` +
+  `BundleTreeFoldAir` (the CG-5 cross-side-existence + proof-of-proofs hand-AIRs, same file) are a SEPARATE
+  soundness layer that does NOT read `effect_vm::pi` — they stay as custom-STARK AIRs (a future Lean-emission
+  lane); retiring the whole `bilateral_aggregation_air.rs` FILE is gated on emitting those two too.
+- ✅ DONE (wall B — node FLOW-B producer threading, 2026-06-13, this lane — WIP, uncommitted): the live
+  node self-sovereign turn proves ROTATED. New `sdk::prove_turn_self_sovereign_rotated` (+ `RotationTurnWitness`
+  re-export) forwards the rotation witnesses into `prove_full_turn`'s rotated effect-vm leg.
+  `turn_proving::prove_and_verify_finalized_turn` gained a `rotation: Option<RotationTurnWitness>` param +
+  `rotation_witness_for_self_sovereign` (builds the before/after witnesses from the REAL pre/post `Cell` +
+  a single-cell ctx-ledger snapshot + the empty nullifier root + the receipt-hash log, mirroring the C1
+  sovereign path). SELF-VALIDATING GATE: returns `Some` only when the actor cell is representable by the
+  cap-less `CellState::new` pre-state (balance/nonce match · all fields zero · empty c-list) — so the
+  rotated leg's OLD_COMMIT (PI 0, the v1 prefix) agrees with the v1 leg `verify_full_turn` checks; any
+  divergence falls back to v1. `blocklace_sync.rs` captures the pre-execution `Cell` (`full_turn_pre_cell`)
+  and wires the `(None,None)` self-sovereign arm. The FRESHNESS (note-spend) + CAPABILITY arms stay v1 by
+  design (the rotated 38-PI omits `NOTESPEND_NULLIFIER` at offset 198 — the C4 honest boundary). 5 test
+  call-sites + the live call-site updated.
+- ⏳ REMAINING (wall C + C5/C7): the ~70 plain-produce/verify sites are CONCENTRATED in
+  `sdk/full_turn_proof.rs` (the impl) + `node/turn_proving.rs` (27) + tests/perf/wasm/verifier — most need
+  NO edit now (they pass `rotation: None` = byte-identical v1; the flip to rotated-default is the C5 regen
+  act). The precise C5/C7 readiness package is in ROTATION-CUTOVER §EXEC.3 (regen recipe + deletion list +
+  what's still gated). The VK epoch is the MAIN-LOOP cutover-settle (must batch with the notify Step-2
+  felt-encoders into ONE VK bump — docs/NOTIFY-CASCADE.md).
 
 ## Metatheory closures (Lean-side, lane-sized — tails of landed work)
 
@@ -128,6 +217,7 @@ flip:)*
 - Quorum unification (#170) consumer migration: `BlsQuorumCert.lean`/`EpochReconfig.lean` still transcribe the historical `n−⌊n/3⌋` + carry `StrictBft`; `MembershipSafety.lean` still has the `n=0↦0` guard. The unified `supermajorityThreshold` Lean twin LANDED (QuorumThreshold.lean) — migrate the consumers onto it (bls_quorum_diff.rs/epoch_diff.rs/membership_safety_differential.rs pin the relations until migration).
 - Channels delegation_epoch wire carrier: the Lean-producer/wire path has no per-cell `delegation_epoch` carrier yet (a `DelegationEpochEquals` program evaluated there fails closed — wire lockstep before channels ride the producer); pre-atom channel cells keep the old program (no live-cell program-upgrade verb).
 - Channels CountGe tails: per-element approval binding (exhibited ≠ "approved THIS turn" — the actor-bound approval-slot ceremony must write the quorum commitment slot before `councilGated` replaces `senderIs admin` in the deployed program); CountGe AIR projection (witness-side scalar only).
+- Cell-program grammar atoms — Rust mirror (cutover-settle lockstep, NOT a separate edit): three new `Exec/Program.lean` atoms LANDED axiom-clean (apps gaps 2/3/4) and need their `cell/src/program.rs` twins APPENDED (variant-index-based, fail-closed, mirroring the Lean evaluator) at the next program.rs cutover-settle: (1) `SimpleStateConstraint::SenderMemberOf { members }` — sender ∈ literal id-set, reads `ctx.sender` (the clean multi-admin form of `AnyOf[SenderIs…]`; `MissingContextField` on no sender); (2) `StateConstraint::AffineDeltaLe { terms, c }` — `Σ cᵢ·(new[fᵢ]−old[fᵢ]) ≤ c`, reads BOTH old+new (a real multi-field budget-delta gate; needs an `affine_delta_sum` over the pre/post state, fail-closed on any absent term either side); (3) `SimpleStateConstraint::BalanceDeltaLte { max }` / `BalanceDeltaGte { min }` — `new.balance−old.balance` rate gates on the sealed kernel balance, read the executor's pre-turn `old_balance` + post-turn `new_balance` (fail-closed on an absent endpoint; the executor must expose the PRE-turn balance to `evaluate_constraint_full`, the `TurnCtx.balanceBefore` twin — today the ctx carries only post). Lean keystones: `evalSimpleCtx_senderMemberOf_iff` · `evalConstraint_affineDeltaLe_iff` · `evalSimpleCtx_balanceDeltaLe_iff`/`_balanceDeltaGe_iff`. COST-class (§8, honored in the atom docs): all three are the BOUNDED/ordering pole EXCEPT `senderMemberOf` which is i-confluent-FREE (single-turn-context predicate). NOTE: `BalanceDeltaGte`/`BalanceDeltaLte` SUPERSEDE the flash-well "relative-balance atom" HORIZONLOG item below (its Lean twin is now this landing). → cell/, post-rotation (variant-index APPEND keeps factory VKs / content addresses byte-identical, per CELL-PROGRAM-LANGUAGE §2).
 
 ## Node / runtime closures
 
@@ -147,14 +237,14 @@ flip:)*
 ## Product surfaces (post-rotation)
 
 - dregg-query: attested-queries feature only (Q2 of docs/EPISTEMIC-DATALOG.md) — NOT the full Datalog engine.
-- Flash-well: `BalanceDeltaGte` relative-balance atom (one evaluator arm + Lean `Exec.Program` twin) collapses the fee-ratchet ladder into one constraint + closes the donation-cushion residue; `Dregg2.Apps.FlashWell` keystones land with it. The blueprint + SDK are AUTHORED (cell/src/blueprint.rs flash-well, sdk/src/flashwell.rs) but sprint-UNVERIFIED.
+- Flash-well: `BalanceDeltaGte` relative-balance atom collapses the fee-ratchet ladder into one constraint + closes the donation-cushion residue; `Dregg2.Apps.FlashWell` keystones land with it. ✅ The Lean `Exec.Program` twin is now LANDED (`balanceDeltaGe`/`balanceDeltaLe`, axiom-clean, keystones `evalSimpleCtx_balanceDeltaGe_iff`/`_balanceDeltaLe_iff`); REMAINING = the Rust evaluator arm (see the cell-program grammar-atoms Rust-mirror item in Metatheory closures above — both ride the same program.rs cutover-settle) + the donation-cushion app keystone. The blueprint + SDK are AUTHORED (cell/src/blueprint.rs flash-well, sdk/src/flashwell.rs) but sprint-UNVERIFIED.
 - Willow geometry for storage caps (3D area caveats, range reconciliation) — adopted design, not scheduled.
 - range-based set reconciliation (§1.5/§3.2d, Willow shape): the shared primitive behind scalable anti-entropy (O(diff·log) not O(state)) AND storage partial-sync; cap chains as the pluggable authorization. Adopt the geometry, keep our proofs.
 - eclipse hardening at scale (§1.1): peer_score buckets by SocketAddr today; add /24·/48 prefix + AS-diversity bucketing so a single cloud /24 cannot fill the eager set.
 - availability route follow-ons (§3.1): swap XOR-prototype erasure (erasure.rs:11) for real Reed–Solomon; real Merkle-path chunk proof vs manifest.root (erasure.rs:226 is integrity-only).
 - proving-modality dial #169 (§4.1): make prove-on-demand vs checkpoint vs eager a CONFIGURED axis, not hardcoded policy; settlement/pipelining depth (§4.2) parameterized by topology (n=1 = immediate settlement). Owns the PI 202/203 slots.
 - Room-as-OS + delay-tolerant polis (docs/ROOM-AS-OS.md, docs/DELAY-TOLERANT-POLIS.md).
-- **pg-dregg M3** (named 2026-06-13; M2 mirror + Tier-C chain-gate + the §11 write outbox LANDED + live on pg17 — `cargo pgrx test pg17` 39 green, `scripts/e2e-live.sh` walks it on a standalone psql db; `node/src/pg_mirror.rs` `pg_live::PgSink` writes through over tokio-postgres incl. caps/memory in one txn): two orthogonal closures. (a) **the outbox drainer** (docs/PG-DREGG.md §11.4): a node-side tokio task drains `dregg.submit_queue` pending rows as `dregg_kernel`, runs the submit gates + `execute_via_producer` (the #171 executor), and resolves the row + mirrors back — closes "a pg-user submits a verified turn FROM pg" end-to-end. (b) **the per-turn PROOF gate** (§10.2): `dregg_verify_turn` honestly does ONLY the structural chain re-validation per-row (a CommitRecord carries no per-turn proof); the soundness half is the whole-chain IVC light client (`circuit::ivc_turn_chain::verify_turn_chain_recursive`) attesting a receipt RANGE — wire it behind the `tier-c` feature as a range-attest SRF, NOT a per-row STARK. → pg-dregg/node, post-flip. Tier D (executor in-backend) stays the north star, gated on the pg/Lean process-model spike.
+- **pg-dregg M3** (named 2026-06-13; M2 mirror + Tier-C chain-gate + the §11 write outbox LANDED + live on pg17/pg18; `node/src/pg_mirror.rs` `pg_live::PgSink` writes through over tokio-postgres incl. caps/memory in one txn). UPDATE 2026-06-13 (pg-dregg wide-safe lane, Opus): the **range-attest SRF SHAPE + the federation subscriber RE-VALIDATION are now BUILT** (`pg-dregg/src/attest.rs` + `mirror::revalidate_replicated_chain` + the `dregg_attest_range`/`dregg_attest_explain`/`dregg_install_federation`/`dregg_revalidate_replicated_chain` externs; core green, 50 `cargo test` + 2 new `#[pg_test]`s; docs/PG-DREGG.md §10.2.1 + §15 rewritten). What REMAINS — the genuinely NODE-/CIRCUIT-touching settle items (this lane does NOT touch node/ or circuit/): (a) **the outbox drainer** (§11.4): a node-side tokio task drains `dregg.submit_queue` as `dregg_kernel`, runs the submit gates + `execute_via_producer` (#171), resolves + mirrors back. (b) **the proof-gate circuit-link S1-S3** (§10.2.1): **S1** serialize `circuit::ivc_turn_chain::WholeChainProof` (it holds plonky3 proof objects, NOT serde today — needs derives + a versioned envelope); **S2** node-side proof PRODUCER (fold finalized turns via `prove_turn_chain_recursive`/`fold_two_turns` → write a `dregg.turn_proofs(lo,hi,genesis_root,final_root,proof bytea,vk)` table the SRF reads); **S3** the `tier-c` feature's `dregg-circuit` dep (`--features verifier`/`recursion`, **Lean-FREE** — §8.1) flips `attest::verify_serialized_proof` from the fail-closed stub to the real `verify_turn_chain_recursive`. Until S1-S3 the SRF attests NOTHING (safe direction, §10.3). Tier D (executor in-backend) stays the north star, gated on the pg/Lean process-model spike. The 4 §6/§13 ember-decisions now carry crisp recommendations (docs/PG-DREGG.md §13.1: instant-revocation default · typed-tables-lead/views-over-memory end-state · C-embed · spike-gated full-D else D-sidecar).
 
 ### SDK polyglot crypto/binding closures
 
@@ -212,11 +302,33 @@ ALL LANDED (a7734efcc / a49448d09 / 152e6b3a5). Remaining lanes:)*
 ## STARBRIDGE-V2 (native gpui shell — embedded verified executor)
 
 *(The master interface EMBEDS the real verified executor + runs a live local dregg world natively
-— headless heart gpui-free + `cargo test`-able, 16 tests green; the window OPENS via gpui
+— headless heart gpui-free + `cargo test`-able, 183 lib tests green; the window OPENS via gpui
 `runtime_shaders`. Build-out lanes from docs/STARBRIDGE-V2.md coverage matrix:)*
 
-- **organ panels** (trustline/channel/mailbox/court — types catalogued) + whole-graph ocap layout (per-cell edges live) + intents/factories/obligations/nullifiers panels.
-- **proof-attach + STARK verification-status view**; native federation/remote-node panel (NodeClient::Http exists; reqwest gated to sel4-thin for now); seal/unseal/destroy/burn/factory-birth verbs (reachable via World::turn — UI affordance); multi-action call-forest composer.
+- LANDED (2026-06-13, the fork-seam unblock + 4 capabilities): the `embedded-executor`
+  feature now COMPILES (the local plonky3-recursion `[patch]` replicated into
+  `starbridge-v2/Cargo.toml` — the standalone workspace did not inherit the breadstuffs
+  root patch, so `dregg-circuit`'s `NativeBatchStark` reference failed to resolve). Then:
+  **organ panels** (`organs::OrganSurvey` — trustline + flash-well LIVE cell-state decoded
+  from the embedded ledger via the published `blueprint` slot constants; channel/mailbox/court
+  surfaced HONESTLY as remote-path, kind·seam·route, never faked; ORGANS tab) · **whole-graph
+  ocap delegation layout** (`graph::OcapGraph` — nodes/edges + MULTI-HOP reachability (BFS
+  transitive closure = a cell's blast radius) + layered delegation-depth layout + cycle
+  detection; GRAPH tab) · **proof-attach + STARK verification-status board** (`proofs::ProofBoard`
+  — the three honest tiers verified-by-construction/executor-signed/STARK-attached + the route
+  to the next; PROOFS tab) · **A2 swarm deepened** (`swarm::Swarm::run_atomic` = N-action
+  atomic forest bundle all-or-nothing; `swarm::Swarm::bind_surface` = per-member cap-confined
+  firmament SurfaceCapability pane). All gpui-free + `cargo test`-able; the three new tabs +
+  ⌘K nav commands wired into the cockpit. (Fixed a pre-existing latent over-grant in
+  `swarm_world()` exposed by the unblock — the test helper granted coord a cap to a worker it
+  did not hold; now seeds both mandate caps at genesis.)
+- **organ OPERATING verbs** (open/draw/repay/settle/close) — the LIVE STATE is reflected
+  (above); the verbs themselves ride `dregg_sdk::trustline::Trustline`/`flashwell::FlashWell`
+  which drive through an `AgentRuntime` (not the embed `DreggEngine` the `World` wraps). To
+  DRIVE organ ops from the cockpit (not just reflect them), bridge `World` → an
+  `AgentRuntime`-shaped surface over the same ledger, OR have `World` expose the four-turn
+  factory-lifecycle helpers directly. (No dregg-core change needed — both organs are embed-core.)
+- **native federation/remote-node panel** (NodeClient::Http exists; reqwest gated to sel4-thin for now); the channel/mailbox/court organs become LIVE reflections once this connects a node.
 - **live node connection** — move reads to gpui's async executor; wire `/api/events/stream` SSE into ReceiptInspector with `cx.notify()` (snapshot today).
 - **seL4 framebuffer backend** — a gpui renderer targeting a framebuffer cap (SEL4-EMBEDDING end state) + **seL4 channel transport** (a `NodeClient::Channel` over an seL4 endpoint, same contract over IPC not TCP).
 - **single-source wire types** — replace `starbridge-v2/src/model/` hand-mirrors with a shared `dregg-wire-types` crate depended on by both node + shell.

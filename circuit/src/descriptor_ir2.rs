@@ -151,7 +151,8 @@ use crate::heap_root::HEAP_TREE_DEPTH;
 use crate::heap_root::{CanonicalHeapTree, HeapLeaf, SENTINEL_MAX, SENTINEL_MIN};
 use crate::lean_descriptor_air::{
     EFFECTVM_STATE_AFTER_BASE, EFFECTVM_STATE_BEFORE_BASE, JsonCursor, LeanExpr, VmConstraint,
-    VmHashSite, VmRow, parse_expr, parse_hash_site, parse_range, parse_vm_constraint_body,
+    VmHashSite, VmRow, const_to_expr, parse_expr, parse_hash_site, parse_range,
+    parse_vm_constraint_body,
 };
 // `i64_to_babybear` is the concrete-eval constant lowering (prover-only, `eval_c`).
 #[cfg(feature = "recursion")]
@@ -435,6 +436,71 @@ pub struct ProofBindSpec {
     pub vk: LeanExpr,
 }
 
+/// A two-row arithmetic expression (Lean `DescriptorIR2.WindowExpr`): a polynomial over BOTH
+/// the current row (`Loc c`) and the next row (`Nxt c`). The base `LeanExpr` reads only the
+/// current row, so a cross-row relation (the aggregation AIR's cumulative
+/// `next[cum] = local[cum] + next[contribution]`) is inexpressible in it; `WindowExpr` adds the
+/// `Nxt` leaf. `Loc c` is the faithful twin of `LeanExpr::Var c`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WindowExpr {
+    /// Current-row column `c`.
+    Loc(usize),
+    /// Next-row column `c`.
+    Nxt(usize),
+    /// A signed integer constant.
+    Const(i64),
+    /// Field addition.
+    Add(Box<WindowExpr>, Box<WindowExpr>),
+    /// Field multiplication.
+    Mul(Box<WindowExpr>, Box<WindowExpr>),
+}
+
+impl WindowExpr {
+    /// Evaluate as an `AB::Expr` polynomial over the current (`local`) + next (`next`) rows.
+    /// Mirrors Lean `WindowExpr.eval` reading `env.loc`/`env.nxt`, and the Rust hand-AIR's
+    /// `local[..]` / `next[..]` reads inside a `builder.when_transition()` arm.
+    pub(crate) fn eval_expr<AB>(&self, local: &[AB::Var], next: &[AB::Var]) -> AB::Expr
+    where
+        AB: AirBuilder,
+        AB::F: PrimeField32,
+    {
+        match self {
+            WindowExpr::Loc(i) => local[*i].into(),
+            WindowExpr::Nxt(i) => next[*i].into(),
+            WindowExpr::Const(c) => const_to_expr::<AB>(*c),
+            WindowExpr::Add(a, b) => a.eval_expr::<AB>(local, next) + b.eval_expr::<AB>(local, next),
+            WindowExpr::Mul(a, b) => a.eval_expr::<AB>(local, next) * b.eval_expr::<AB>(local, next),
+        }
+    }
+
+    /// The maximum column index referenced (over both row tags), if any. The descriptor's
+    /// `windowGate` bounds check uses this; degree is left to the batch prover's symbolic
+    /// analysis (the cumulative-sum bodies are linear).
+    fn max_var(&self) -> Option<usize> {
+        match self {
+            WindowExpr::Loc(i) | WindowExpr::Nxt(i) => Some(*i),
+            WindowExpr::Const(_) => None,
+            WindowExpr::Add(a, b) | WindowExpr::Mul(a, b) => match (a.max_var(), b.max_var()) {
+                (Some(x), Some(y)) => Some(x.max(y)),
+                (Some(x), None) | (None, Some(x)) => Some(x),
+                (None, None) => None,
+            },
+        }
+    }
+}
+
+/// A windowed constraint (Lean `DescriptorIR2.WindowConstraint`): the polynomial `body` (over
+/// the current+next row) must vanish. `on_transition = true` ⇒ asserted only on the transition
+/// (every row but the last — the Rust `builder.when_transition()` arm); `false` ⇒ asserted on
+/// every row (including the last, where `Nxt` is the wrap row).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowGateSpec {
+    /// The two-row polynomial body.
+    pub body: WindowExpr,
+    /// Assert only on the transition (`true`) vs. every row (`false`).
+    pub on_transition: bool,
+}
+
 /// One v2 constraint: a v1 form embedded whole, or one of the new kinds
 /// (Lean `VmConstraint2`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -452,6 +518,10 @@ pub enum VmConstraint2 {
     /// An accumulator / recursive-proof-binding row (the Custom leg — rides the recursion
     /// argument, not a committed table).
     ProofBind(ProofBindSpec),
+    /// A two-row windowed gate (the cumulative-sum primitive: a polynomial over the current
+    /// AND next rows, asserted on the transition or every row). The aggregation AIR's two
+    /// running cumulatives are this kind.
+    WindowGate(WindowGateSpec),
 }
 
 /// The Rust mirror of Lean's `EffectVmDescriptor2` (decoded from `emitVmJson2`).
@@ -638,6 +708,48 @@ fn parse_table_def(c: &mut JsonCursor) -> Result<TableDef2, String> {
     })
 }
 
+/// Parse one `<window_expr>` object: `{"t":"loc"|"nxt"|"const"|"add"|"mul", …}` (Lean
+/// `WindowExpr.toJson`). `loc`/`nxt` carry a column index `c`; the arithmetic nodes reuse the
+/// `l`/`r` shape of `LeanExpr`.
+fn parse_window_expr(c: &mut JsonCursor) -> Result<WindowExpr, String> {
+    c.expect(b'{')?;
+    c.expect_key("t")?;
+    let tag = c.parse_string()?;
+    let expr = match tag.as_str() {
+        "loc" => {
+            c.expect(b',')?;
+            c.expect_key("c")?;
+            WindowExpr::Loc(parse_usize(c, "window loc col")?)
+        }
+        "nxt" => {
+            c.expect(b',')?;
+            c.expect_key("c")?;
+            WindowExpr::Nxt(parse_usize(c, "window nxt col")?)
+        }
+        "const" => {
+            c.expect(b',')?;
+            c.expect_key("v")?;
+            WindowExpr::Const(c.parse_int()?)
+        }
+        "add" | "mul" => {
+            c.expect(b',')?;
+            c.expect_key("l")?;
+            let l = parse_window_expr(c)?;
+            c.expect(b',')?;
+            c.expect_key("r")?;
+            let r = parse_window_expr(c)?;
+            if tag == "add" {
+                WindowExpr::Add(Box::new(l), Box::new(r))
+            } else {
+                WindowExpr::Mul(Box::new(l), Box::new(r))
+            }
+        }
+        other => return Err(format!("unknown window expr tag \"{other}\"")),
+    };
+    c.expect(b'}')?;
+    Ok(expr)
+}
+
 fn parse_constraint2(c: &mut JsonCursor) -> Result<VmConstraint2, String> {
     c.expect(b'{')?;
     c.expect_key("t")?;
@@ -773,6 +885,18 @@ fn parse_constraint2(c: &mut JsonCursor) -> Result<VmConstraint2, String> {
             c.expect_key("vk")?;
             let vk = parse_expr(c)?;
             VmConstraint2::ProofBind(ProofBindSpec { guard, commit, vk })
+        }
+        "window_gate" => {
+            c.expect(b',')?;
+            c.expect_key("on_transition")?;
+            let on_transition = c.parse_bool()?;
+            c.expect(b',')?;
+            c.expect_key("body")?;
+            let body = parse_window_expr(c)?;
+            VmConstraint2::WindowGate(WindowGateSpec {
+                body,
+                on_transition,
+            })
         }
         v1tag => VmConstraint2::Base(parse_vm_constraint_body(c, v1tag)?),
     };
@@ -1124,6 +1248,18 @@ fn check_descriptor2(desc: &EffectVmDescriptor2) -> Result<MainLayout, String> {
                 // the recursion argument, not by a row-local poly here).
                 for e in [&m.guard, &m.commit, &m.vk] {
                     chk(e, "proof_bind field", ci)?;
+                }
+            }
+            VmConstraint2::WindowGate(g) => {
+                // The window body reads BOTH rows; every referenced column (`loc`/`nxt`) must
+                // lie inside the main width.
+                if let Some(m) = g.body.max_var() {
+                    if m >= w {
+                        return Err(format!(
+                            "constraint {ci}: window_gate body references column {m} >= \
+                             trace_width {w}"
+                        ));
+                    }
                 }
             }
         }
@@ -1555,18 +1691,33 @@ where
                 {
                     let mut tb = builder.when_transition();
                     for k in &desc.constraints {
-                        if let VmConstraint2::Base(c) = k {
-                            match c {
-                                VmConstraint::Gate(body) => {
-                                    tb.assert_zero(body.eval_expr::<AB>(&local))
-                                }
-                                VmConstraint::Transition { hi, lo } => {
-                                    let n: AB::Expr = next[EFFECTVM_STATE_BEFORE_BASE + hi].into();
-                                    let l: AB::Expr = local[EFFECTVM_STATE_AFTER_BASE + lo].into();
-                                    tb.assert_zero(n - l);
-                                }
-                                _ => {}
+                        match k {
+                            VmConstraint2::Base(VmConstraint::Gate(body)) => {
+                                tb.assert_zero(body.eval_expr::<AB>(&local))
                             }
+                            VmConstraint2::Base(VmConstraint::Transition { hi, lo }) => {
+                                let n: AB::Expr = next[EFFECTVM_STATE_BEFORE_BASE + hi].into();
+                                let l: AB::Expr = local[EFFECTVM_STATE_AFTER_BASE + lo].into();
+                                tb.assert_zero(n - l);
+                            }
+                            // The two-row windowed gate (Lean `windowGate`): an `on_transition`
+                            // body reads BOTH rows and fires only on the transition — exactly
+                            // the Rust hand-AIR's `builder.when_transition().assert_zero(..)`
+                            // cumulative-sum arm.
+                            VmConstraint2::WindowGate(w) if w.on_transition => {
+                                tb.assert_zero(w.body.eval_expr::<AB>(&local, &next))
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                // -- Every-row windowed gates (Lean `windowGate` with `on_transition = false`):
+                //    the body vanishes on every row (the wrap row included). None of the shipped
+                //    descriptors emit this form today; it is carried for grammar completeness. --
+                for k in &desc.constraints {
+                    if let VmConstraint2::WindowGate(w) = k {
+                        if !w.on_transition {
+                            builder.assert_zero(w.body.eval_expr::<AB>(&local, &next));
                         }
                     }
                 }

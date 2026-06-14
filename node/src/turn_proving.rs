@@ -104,7 +104,7 @@ use dregg_circuit::{CellState, generate_effect_vm_trace};
 use dregg_sdk::{
     AgentCipherclerk, CapMembershipExpectation, CapMembershipWitness, FullTurnProof,
     FullTurnVerifyError, FullTurnWitness, NonRevocationWitness, prove_full_turn,
-    prove_turn_self_sovereign, verify_full_turn_bound,
+    prove_turn_self_sovereign_rotated, verify_full_turn_bound,
 };
 use dregg_types::CellId;
 
@@ -201,6 +201,14 @@ impl std::error::Error for FullTurnProvingError {}
 /// [`prove_and_verify_finalized_turn_freshness`] so the no-double-spend bindings
 /// fire; the caller branches on [`spent_nullifiers`].
 ///
+/// FLOW-B ROTATION: when the caller threads the per-turn rotation producer witnesses
+/// (built by [`rotation_witness_for_self_sovereign`] from the REAL before/after cells +
+/// ledger), the effect-vm leg proves through the LEAN-emitted rotated descriptor — the live
+/// node turn proves ROTATED. The witness is built only when the actor cell is representable by
+/// the cap-less `CellState::new` pre-state (the self-validating gate in the builder), so the
+/// rotated block's welded scalars agree with the v1 sub-trace by construction; otherwise the
+/// caller passes `None` and the byte-identical v1 leg runs.
+///
 /// `pre_balance` / `pre_nonce` are the actor cell's state captured **before**
 /// the executor mutated the ledger (the pre-state the proof's `old_commit`
 /// binds to). `effects` are the turn's effects (the caller passes
@@ -209,12 +217,88 @@ impl std::error::Error for FullTurnProvingError {}
 /// Returns the proven turn on success, or [`FullTurnProvingError`] if proving
 /// fails or — critically — if the freshly generated proof does not verify
 /// against the expected commitments (the verify→accept leg).
+/// Build the per-turn ROTATION producer witnesses for the self-sovereign FLOW-B path from the
+/// REAL before/after actor cells + a turn-context ledger snapshot. Returns `Some` only when the
+/// before-cell is representable by the cap-less `CellState::new(pre_balance, pre_nonce)`
+/// pre-state the self-sovereign leg proves over — i.e. the rotated block's welded scalars
+/// (`r0↔balance_lo · r1↔nonce · r2↔balance_hi · r3..r10↔fields · cap_root`) agree with the v1
+/// sub-trace by construction. A cell carrying non-zero fields or a non-empty c-list does NOT
+/// match that synthetic pre-state, so the rotated leg would bind a different OLD_COMMIT than the
+/// v1 leg attests — we return `None` and let the byte-identical v1 leg run rather than emit a
+/// proof whose two legs disagree.
+///
+/// The non-spend self-sovereign turn carries no note, so the nullifier root is the empty root
+/// on both blocks (mirrors the C1 sovereign path). `cells_root` rides a single-cell ledger
+/// snapshot of the actor (the turn-invariant context shared by the before/after blocks);
+/// `iroot` rides the receipt-hash log.
+pub fn rotation_witness_for_self_sovereign(
+    pre_balance: u64,
+    pre_nonce: u64,
+    before_cell: &dregg_cell::Cell,
+    after_cell: &dregg_cell::Cell,
+    receipt_hashes: &[[u8; 32]],
+    effects: &[dregg_turn::Effect],
+) -> Option<dregg_sdk::RotationTurnWitness> {
+    use dregg_turn::rotation_witness as rw;
+
+    // SELF-VALIDATING GATE: the self-sovereign leg proves over the cap-less
+    // `CellState::new(pre_balance, pre_nonce)` synthetic pre-state (zero fields, empty c-list
+    // root). The rotated block's welded scalars (`r0↔balance_lo · r1↔nonce · r2↔balance_hi ·
+    // r3..r10↔fields[0..8] · cap_root`) are derived from the REAL before-cell, so they agree
+    // with that synthetic state IFF the cell is representable by it: balance/nonce match, all
+    // fields are zero, and the c-list is empty. Any divergence ⇒ the rotated OLD_COMMIT would
+    // disagree with the v1 leg ⇒ return `None` (the byte-identical v1 leg runs instead).
+    let cell_is_synthetic_shaped = before_cell.state.balance() == pre_balance as i64
+        && before_cell.state.nonce() == pre_nonce
+        && before_cell.state.fields.iter().all(|f| *f == [0u8; 32])
+        && dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities)
+            == dregg_circuit::cap_root::empty_capability_root();
+    if !cell_is_synthetic_shaped {
+        return None;
+    }
+
+    // The turn-context ledger snapshot: a single-cell ledger holding the actor (the same
+    // cells_root the C1 sovereign path uses; the before/after blocks share it).
+    let mut ctx_ledger = dregg_cell::Ledger::new();
+    let _ = ctx_ledger.insert_cell(before_cell.clone());
+
+    // The non-spend self-sovereign turn spends no note → the empty nullifier root.
+    let nullifier_root = [0u8; 32];
+
+    // COHORT GATE: the rotated effect-vm prover (`prove_effect_vm_rotated_ir2_with_caveat`) fails
+    // CLOSED on an empty / non-cohort / heterogeneous turn, and `prove_full_turn` propagates that
+    // (there is no silent v1 fallback once a rotation witness is present). So only return `Some`
+    // when EVERY vm-effect resolves to the SAME rotated R=24 cohort descriptor — otherwise the
+    // caller passes `None` and the v1 leg runs. This keeps live-turn proving robust across every
+    // effect shape (no-ops, non-graduated effects) while the cohort proves rotated.
+    let vm_effects = AgentCipherclerk::convert_effects_to_vm(&before_cell.id(), effects);
+    let lead_name = vm_effects.first().and_then(
+        dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect,
+    );
+    let cohort_ok = lead_name.is_some()
+        && vm_effects.iter().all(|e| {
+            dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect(e)
+                == lead_name
+        });
+    if !cohort_ok {
+        return None;
+    }
+
+    let before_w = rw::produce(before_cell, &ctx_ledger, &nullifier_root, receipt_hashes);
+    let after_w = rw::produce(after_cell, &ctx_ledger, &nullifier_root, receipt_hashes);
+
+    Some(dregg_sdk::RotationTurnWitness::for_effects(
+        before_w, after_w, &vm_effects,
+    ))
+}
+
 pub fn prove_and_verify_finalized_turn(
     agent: &CellId,
     pre_balance: u64,
     pre_nonce: u64,
     effects: &[dregg_turn::Effect],
     turn_hash: [u8; 32],
+    rotation: Option<dregg_sdk::RotationTurnWitness>,
 ) -> Result<ProvenFinalizedTurn, FullTurnProvingError> {
     // 1. Marshal the turn's effects onto the actor cell in the Effect-VM
     //    encoding (reuses the cipherclerk's canonical marshaller so the node
@@ -236,9 +320,12 @@ pub fn prove_and_verify_finalized_turn(
     let (_trace, pi) = generate_effect_vm_trace(&initial_vm_state, &vm_effects);
     let new_commit = pi[dregg_circuit::effect_vm::pi::NEW_COMMIT];
 
-    // 4. Generate the real composed full-turn STARK proof.
-    let proof = prove_turn_self_sovereign(&initial_vm_state, &vm_effects, turn_hash)
-        .map_err(FullTurnProvingError::Prove)?;
+    // 4. Generate the real composed full-turn STARK proof. When the caller threaded the
+    //    per-turn rotation producer witnesses (FLOW-B), the effect-vm leg proves through the
+    //    LEAN-emitted rotated descriptor; otherwise the byte-identical v1 leg runs.
+    let proof =
+        prove_turn_self_sovereign_rotated(&initial_vm_state, &vm_effects, turn_hash, rotation)
+            .map_err(FullTurnProvingError::Prove)?;
 
     // 5. VERIFY → ACCEPT leg. Re-verify the proof against the expected
     //    pre/post commitments using the same verifier a remote peer runs.
@@ -574,7 +661,7 @@ mod tests {
         }];
         let turn_hash = [0x11u8; 32];
 
-        let proven = prove_and_verify_finalized_turn(&alice, 1000, 0, &effects, turn_hash)
+        let proven = prove_and_verify_finalized_turn(&alice, 1000, 0, &effects, turn_hash, None)
             .expect("finalized turn should prove and self-verify");
 
         // The proof is real (non-empty wire bytes) and re-verifies.
@@ -603,7 +690,7 @@ mod tests {
         }];
         let turn_hash = [0x22u8; 32];
 
-        let proven = prove_and_verify_finalized_turn(&alice, 1000, 0, &effects, turn_hash)
+        let proven = prove_and_verify_finalized_turn(&alice, 1000, 0, &effects, turn_hash, None)
             .expect("honest turn should prove");
 
         // Forge the post-state commitment: claim a DIFFERENT new state than
@@ -639,7 +726,7 @@ mod tests {
         }];
         let turn_hash = [0x33u8; 32];
 
-        let proven = prove_and_verify_finalized_turn(&alice, 777, 3, &effects, turn_hash)
+        let proven = prove_and_verify_finalized_turn(&alice, 777, 3, &effects, turn_hash, None)
             .expect("honest turn should prove");
 
         let forged_old_commit = proven.old_commit + BabyBear::new(1);
@@ -655,6 +742,112 @@ mod tests {
             }
             other => panic!("expected old_commitment mismatch, got {other:?}"),
         }
+    }
+
+    /// FLOW-B LIVE TURN (the node self-sovereign commit path, ROTATED): build a REAL cap-less
+    /// actor `Cell` (the shape the self-sovereign path serves), apply a transfer to get the
+    /// post-state cell, build the per-turn rotation witnesses via
+    /// [`rotation_witness_for_self_sovereign`] (the SAME call `blocklace_sync` makes), prove the
+    /// finalized turn with `Some(rotation)`, and confirm (a) the verify→accept gate passes and
+    /// (b) the composed proof carries the `"effect-vm-rotated"` leg — i.e. the live node turn
+    /// proved through the LEAN-emitted rotated descriptor, not the v1 hand-AIR.
+    #[test]
+    fn flow_b_self_sovereign_turn_proves_rotated() {
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let pre_balance: u64 = 1_000;
+        let pre_nonce: u64 = 0;
+
+        // The REAL before-cell: a fresh cap-less sovereign cell with a balance (zero fields,
+        // empty c-list — exactly what the synthetic-shaped gate admits). In the live node path
+        // the agent id IS the cell's id (the cell is looked up BY the agent id), so the effect's
+        // `from` + the proving `agent` must be `before_cell.id()`, not an unrelated raw id.
+        let before_cell =
+            dregg_cell::Cell::with_balance([0xA1; 32], [0u8; 32], pre_balance as i64);
+        let alice = before_cell.id();
+        // The after-cell: the transfer debits alice's balance by the amount.
+        let amount: u64 = 100;
+        let mut after_cell = before_cell.clone();
+        after_cell.state.set_balance((pre_balance - amount) as i64);
+
+        let effects = vec![dregg_turn::Effect::Transfer {
+            from: alice,
+            to: bob,
+            amount,
+        }];
+        let turn_hash = [0x5Au8; 32];
+        let receipt_hashes = [[0x11u8; 32]];
+
+        // Build the rotation witness via the node's own builder (the synthetic-shaped + cohort
+        // gates must BOTH pass for a cap-less transfer).
+        let rotation = rotation_witness_for_self_sovereign(
+            pre_balance,
+            pre_nonce,
+            &before_cell,
+            &after_cell,
+            &receipt_hashes,
+            &effects,
+        );
+        assert!(
+            rotation.is_some(),
+            "a cap-less transfer turn must yield a rotation witness (synthetic-shaped + cohort)"
+        );
+
+        // Prove the finalized turn ROTATED + gate acceptance (the live commit-path call).
+        let proven =
+            prove_and_verify_finalized_turn(&alice, pre_balance, pre_nonce, &effects, turn_hash, rotation)
+                .expect("the rotated self-sovereign turn must prove + verify");
+
+        // The composed proof must carry the ROTATED effect-vm leg (not the v1 `"effect-vm"`).
+        let labels: Vec<&str> = proven
+            .proof
+            .composed
+            .sub_proofs
+            .iter()
+            .map(|sp| sp.label.as_str())
+            .collect();
+        assert!(
+            labels.contains(&"effect-vm-rotated"),
+            "the live node turn must prove through the rotated descriptor; sub-proofs = {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"effect-vm"),
+            "the v1 effect-vm leg must NOT be present on the rotated turn; sub-proofs = {labels:?}"
+        );
+    }
+
+    /// FLOW-B FALLBACK: a cell the synthetic cap-less pre-state cannot represent (here: a
+    /// non-zero field) does NOT yield a rotation witness — the builder returns `None` and the
+    /// caller keeps the v1 leg. This is the self-validating gate refusing to mint a proof whose
+    /// two legs would bind different commitments.
+    #[test]
+    fn flow_b_non_synthetic_cell_falls_back_to_v1() {
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let pre_balance: u64 = 1_000;
+
+        let mut before_cell =
+            dregg_cell::Cell::with_balance(alice.0, [0u8; 32], pre_balance as i64);
+        // A non-zero field ⇒ not representable by `CellState::new` ⇒ the gate must refuse.
+        before_cell.state.fields[0] = [0x07u8; 32];
+        let after_cell = before_cell.clone();
+
+        let effects = vec![dregg_turn::Effect::Transfer {
+            from: alice,
+            to: bob,
+            amount: 10,
+        }];
+        let rotation = rotation_witness_for_self_sovereign(
+            pre_balance,
+            0,
+            &before_cell,
+            &after_cell,
+            &[[0x11u8; 32]],
+            &effects,
+        );
+        assert!(
+            rotation.is_none(),
+            "a field-bearing cell must NOT yield a rotation witness (fall back to v1)"
+        );
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -1335,7 +1528,7 @@ mod tests {
             to: bob,
             amount: 25,
         }];
-        let proven = prove_and_verify_finalized_turn(&alice, 500, 1, &effects, [0xD1u8; 32])
+        let proven = prove_and_verify_finalized_turn(&alice, 500, 1, &effects, [0xD1u8; 32], None)
             .expect("self-sovereign turn proves as before");
         assert!(
             !proven.proof.components.has_cap_membership,
@@ -1356,7 +1549,7 @@ mod tests {
 
         // Prove WITHOUT the cap leg (the legacy self-sovereign prover), then
         // try to pass it off as the capability-gated proof.
-        let proven = prove_and_verify_finalized_turn(&agent_id, 1_000, 0, &effects, [0xD2u8; 32])
+        let proven = prove_and_verify_finalized_turn(&agent_id, 1_000, 0, &effects, [0xD2u8; 32], None)
             .expect("legless proof proves");
         let expectation = dregg_sdk::CapMembershipExpectation {
             leaf: consumed.cap_leaf(),
