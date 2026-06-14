@@ -116,6 +116,7 @@ structure CellAffordance (φ : Type) where
   effect   : φ
   /-- A display name (the affordance label shown in the surface). -/
   name     : Nat
+deriving DecidableEq
 
 /-- **`FiredSurface φ`** — the post-state surface a committed fire yields: the REAL effect that fired
 plus the attested root it bound (the `newCommit` of the verified turn's receipt). The "attested
