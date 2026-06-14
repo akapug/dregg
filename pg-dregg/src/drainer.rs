@@ -175,26 +175,40 @@ impl FoldProducer {
     /// A deterministic FNV-1a fold over the chaining context — the stand-in's
     /// `ledger_root` (the executor would supply the kernel's real root). Pinned to
     /// the SAME algorithm `bin/loadgen.rs` uses so the two agree on a post-state.
+    /// Delegates to the shared [`fold_chain_root`] so the Tier-D
+    /// [`crate::lean_producer::LeanProducer`] derives a BIT-IDENTICAL root from the
+    /// same context — a mixed-producer history (some turns from the stand-in, some
+    /// from the verified executor) still chains.
     fn fold_root(prev: [u8; 32], ordinal: u64, touched: &[([u8; 32], i64, u64)]) -> [u8; 32] {
-        // The SAME literals `bin/loadgen.rs` uses, so the two folds are bit-identical.
-        let mut acc: u64 = 0xcbf29ce484222325 ^ ordinal.wrapping_mul(0x100000001b3);
-        for b in prev {
-            acc = (acc ^ b as u64).wrapping_mul(0x100000001b3);
-        }
-        for (id, bal, nonce) in touched {
-            for b in id {
-                acc = (acc ^ *b as u64).wrapping_mul(0x100000001b3);
-            }
-            acc = (acc ^ *bal as u64).wrapping_mul(0x100000001b3);
-            acc = (acc ^ *nonce).wrapping_mul(0x100000001b3);
-        }
-        let mut out = [0u8; 32];
-        for (i, chunk) in out.chunks_mut(8).enumerate() {
-            let v = acc.wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15));
-            chunk.copy_from_slice(&v.to_le_bytes());
-        }
-        out
+        fold_chain_root(prev, ordinal, touched)
     }
+}
+
+/// The deterministic FNV-1a chaining-root fold, shared by [`FoldProducer`] and the
+/// Tier-D [`crate::lean_producer::LeanProducer`] (and bit-identical to
+/// `bin/loadgen.rs`). This is the producers' `ledger_root` over the chaining
+/// context `(prev_root, ordinal, touched-cells)`: the CHAIN gate's anti-substitution
+/// tooth is structural on these roots (the kernel's in-circuit root is the
+/// whole-chain IVC light client's concern, `docs/PG-DREGG.md` §10.2), so a single
+/// shared derivation is what lets the two producers' turns share one chain.
+pub fn fold_chain_root(prev: [u8; 32], ordinal: u64, touched: &[([u8; 32], i64, u64)]) -> [u8; 32] {
+    let mut acc: u64 = 0xcbf29ce484222325 ^ ordinal.wrapping_mul(0x100000001b3);
+    for b in prev {
+        acc = (acc ^ b as u64).wrapping_mul(0x100000001b3);
+    }
+    for (id, bal, nonce) in touched {
+        for b in id {
+            acc = (acc ^ *b as u64).wrapping_mul(0x100000001b3);
+        }
+        acc = (acc ^ *bal as u64).wrapping_mul(0x100000001b3);
+        acc = (acc ^ *nonce).wrapping_mul(0x100000001b3);
+    }
+    let mut out = [0u8; 32];
+    for (i, chunk) in out.chunks_mut(8).enumerate() {
+        let v = acc.wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15));
+        chunk.copy_from_slice(&v.to_le_bytes());
+    }
+    out
 }
 
 impl Producer for FoldProducer {

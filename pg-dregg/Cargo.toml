@@ -98,10 +98,16 @@ pg_test = []
 # the staged shape is explicit and the default build stays circuit-free.
 tier-c = []
 # Tier D (docs/PG-DREGG.md §11) — the EXECUTOR-IN-POSTGRES endgame. Links the
-# verified Lean executor so `dregg_submit_turn` executes a turn inside the
-# backend (AUTHORIZED, §8.1; gated on the pg/Lean process-model spike). Implies
-# tier-c (executing implies verifying).
-tier-d = ["tier-c"]
+# verified Lean executor (`dregg-lean-ffi`) so the drainer's PRODUCE gate runs the
+# REAL `execFullForestG` SINGLE-THREADED, IN the backend process
+# (`docs/EMBEDDABLE-LEAN-RUNTIME.md`: mimalloc is private + the task manager is
+# lazy + the libuv-thread-free init `dregg_ffi_init_st`, so the verified executor
+# lives in a single-threaded `palloc`/`longjmp`/`fork` backend). Implies tier-c
+# (executing implies verifying); pulls the optional `dregg-lean-ffi` dep, which
+# links `libdregg_lean.a`. The default build never sees it (keeps the `FoldProducer`
+# stand-in, no archive). Build the cdylib with `DREGG_LEAN_LINK=shared` (the cdylib
+# link mode, per `dregg-lean-ffi/build.rs` / `sdk-py`).
+tier-d = ["tier-c", "dep:dregg-lean-ffi"]
 
 [dependencies]
 # pgrx is OPTIONAL: only the extension build pulls it (and its postgres
@@ -114,6 +120,13 @@ pgrx-tests = { version = "0.17", optional = true }
 # The whole authorization core. Already circuit-free + offline:
 # `cargo tree -i dregg-circuit -p dregg-auth` is empty.
 dregg-auth = { path = "../dregg-auth" }
+# The verified Lean executor FFI — OPTIONAL, pulled ONLY by the `tier-d` feature
+# (the executor-in-backend producer, `src/lean_producer.rs`). It links
+# `libdregg_lean.a` + the Lean runtime; the default build does not depend on it, so
+# the postgres-free core + the `pgNN` extension stay executor-free (the
+# `FoldProducer` stand-in). On the cdylib (extension `.so` / pgrx) link, the runtime
+# must be linked SHARED (`DREGG_LEAN_LINK=shared`).
+dregg-lean-ffi = { path = "../dregg-lean-ffi", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # libc backs the `drainerd` daemon's graceful-shutdown signal handlers

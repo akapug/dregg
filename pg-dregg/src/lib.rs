@@ -27,6 +27,13 @@ pub mod attest;
 pub mod authz;
 pub mod drainer;
 pub mod jsonpath;
+// The Tier-D in-backend executor producer (the drainer's PRODUCE gate run through
+// the REAL verified `execFullForestG`, single-threaded, IN the postgres backend).
+// Gated behind `tier-d` because it links the verified Lean executor via
+// `dregg-lean-ffi`; the default build keeps the `FoldProducer` stand-in and never
+// pulls the archive. See `docs/EMBEDDABLE-LEAN-RUNTIME.md` + the module header.
+#[cfg(feature = "tier-d")]
+pub mod lean_producer;
 pub mod mirror;
 pub mod synth;
 pub mod workflow;
@@ -747,8 +754,37 @@ mod pg {
     fn dregg_drain_once(batch_limit: i32) -> String {
         sync_issuer_key();
         let limit = batch_limit.clamp(1, 10_000) as usize;
-        let mut drainer = drain_engine_resumed_from_turns();
 
+        // PRODUCE-gate selection. The default (and every `pgNN`) build uses the
+        // deterministic, value-conserving STAND-IN ([`crate::drainer::FoldProducer`])
+        // — the seam the spike named. A `tier-d` build instead runs the REAL verified
+        // `execFullForestG` SINGLE-THREADED, IN this backend process
+        // (`docs/EMBEDDABLE-LEAN-RUNTIME.md`): the embeddable Lean runtime has no
+        // allocator override + no worker thread (the libuv-thread-free
+        // `dregg_ffi_init_st`), so the executor lives in the single-threaded backend.
+        // The runtime init is LAZY (first produce), so it runs AFTER the postmaster
+        // fork, in the draining backend — never in the postmaster. The drain
+        // sequencing below is identical for both producers.
+        #[cfg(feature = "tier-d")]
+        {
+            let mut drainer = lean_drain_engine_resumed_from_turns();
+            run_drain_pass(&mut drainer, limit)
+        }
+        #[cfg(not(feature = "tier-d"))]
+        {
+            let mut drainer = drain_engine_resumed_from_turns();
+            run_drain_pass(&mut drainer, limit)
+        }
+    }
+
+    /// Drive ONE drain pass over a resumed [`crate::drainer::Drainer`], generic over
+    /// the PRODUCE-gate producer (the stand-in or the Tier-D verified executor), so
+    /// the four-gate sequencing + the commit_log apply + the queue resolution are
+    /// the SAME for both. Returns the one-line `dregg_drain_once` summary.
+    fn run_drain_pass<P: crate::drainer::Producer>(
+        drainer: &mut crate::drainer::Drainer<P>,
+        limit: usize,
+    ) -> String {
         // Read up to `limit` pending intents in arrival order (the uuidv7 id is
         // time-sortable, so `ORDER BY id` IS arrival order). The submitter's token
         // is recovered from its bound role identity (the login-binding default
@@ -861,12 +897,40 @@ mod pg {
 
     /// A drainer with the deterministic stand-in producer, resumed from the durable
     /// `dregg.turns` head (so the next drained turn chains onto exactly where the
-    /// store left off).
+    /// store left off). Used by the default + every `pgNN` build; a `tier-d` build
+    /// uses [`lean_drain_engine_resumed_from_turns`] instead.
+    #[cfg(not(feature = "tier-d"))]
     fn drain_engine_resumed_from_turns() -> crate::drainer::Drainer<crate::drainer::FoldProducer> {
         // The stand-in's float source is a fixed reserved cell; the unit is 1. A
-        // real node replaces this whole producer with the verified executor.
+        // `tier-d` build replaces this whole producer with the verified executor.
         let source = [0xc0u8; 32];
         let mut d = crate::drainer::Drainer::new(crate::drainer::FoldProducer::new(
+            source,
+            1_000_000_000,
+            1,
+        ))
+        .with_clock(now_epoch());
+        if let Some((head, next_ordinal)) = durable_head_from_turns() {
+            d.resume_chain(head, next_ordinal);
+        }
+        d
+    }
+
+    /// THE TIER-D drainer: the same chaining engine, but its PRODUCE gate is the
+    /// REAL verified `execFullForestG` run single-threaded IN this backend
+    /// ([`crate::lean_producer::LeanProducer`], `docs/EMBEDDABLE-LEAN-RUNTIME.md`).
+    /// Resumed from the durable `dregg.turns` head exactly as the stand-in is, and
+    /// it derives the SAME chaining root (`crate::drainer::fold_chain_root`), so a
+    /// store written by either producer chains seamlessly. The verified runtime is
+    /// initialized LAZILY on the first produce — i.e. in this draining backend,
+    /// after the postmaster fork, never in the postmaster.
+    #[cfg(feature = "tier-d")]
+    fn lean_drain_engine_resumed_from_turns(
+    ) -> crate::drainer::Drainer<crate::lean_producer::LeanProducer> {
+        // The same fixed reserved float source + unit the stand-in used, so the
+        // produced post-images line up across a producer switch.
+        let source = [0xc0u8; 32];
+        let mut d = crate::drainer::Drainer::new(crate::lean_producer::LeanProducer::new(
             source,
             1_000_000_000,
             1,
@@ -1363,6 +1427,53 @@ mod pg {
                 Some(root.public().to_hex().as_str()),
                 "the server's configured issuer key must be the test root's public key"
             );
+        }
+
+        /// TIER-D, the in-backend executor proof. Runs ONLY in a `tier-d` build
+        /// (`cargo pgrx test pg18 --features tier-d`); proves the verified
+        /// `execFullForestG` initializes (the single-threaded, libuv-thread-free
+        /// `dregg_ffi_init_st`) and EXECUTES a real conserving transfer INSIDE the
+        /// postgres backend process — the literal pillar. The runtime init happens
+        /// lazily on the first produce, i.e. in THIS forked backend (never the
+        /// postmaster), and the backend keeps its own `palloc` allocator (mimalloc
+        /// is Lean-private). A non-`tier-d` build does not compile this test.
+        #[cfg(feature = "tier-d")]
+        #[pg_test]
+        fn the_verified_executor_runs_inside_the_backend() {
+            use crate::drainer::Producer;
+            use crate::lean_producer::LeanProducer;
+
+            // The embeddable runtime must initialize IN this backend (the
+            // libuv-thread-free `dregg_ffi_init_st`). If it does not, the executor
+            // cannot run in-backend — fail the test loudly (it is the Tier-D claim).
+            assert!(
+                LeanProducer::runtime_available(),
+                "Tier-D: the embeddable Lean runtime (dregg_ffi_init_st) must initialize \
+                 inside the postgres backend — execFullForestG cannot run in-backend otherwise"
+            );
+
+            // One real conserving transfer through the VERIFIED executor, in-backend.
+            let source = [0xc0u8; 32];
+            let mut agent = [0x11u8; 32];
+            agent[0] = 0x20;
+            let mut producer = LeanProducer::new(source, 1_000, 30);
+            let intent = crate::drainer::SubmitIntent {
+                id: [1u8; 16],
+                agent,
+                signed_turn: vec![0xab, 0xcd], // non-empty envelope
+                token: String::new(),          // the SUBMIT gate ran upstream
+            };
+            let batch = producer
+                .produce(&intent, 0, crate::workflow::GENESIS_ROOT)
+                .expect("the verified executor commits a conserving transfer in-backend");
+
+            // The post-image carries the executor-VERIFIED post-balances (source
+            // 1000→970, agent 0→30) — the executor genuinely decided, in-backend.
+            assert_eq!(producer.balance(source), 970, "source debited by the in-backend executor");
+            assert_eq!(producer.balance(agent), 30, "agent credited by the in-backend executor");
+            assert_eq!(batch.turn.creator, agent, "the turn is attributed to the acting agent");
+            let dst = batch.cells.iter().find(|c| c.cell_id == agent).expect("agent post-image");
+            assert_eq!(dst.balance, 30, "the agent's verified post-balance is mirrored");
         }
 
         #[pg_test]
