@@ -6000,33 +6000,84 @@ async fn post_faucet(
 
     let mut s = state.write().await;
 
-    // Ensure the faucet cell exists in the ledger (create on first use).
-    // Uses the genesis-derived faucet key so this is the SAME cell genesis
-    // mints the supply into; on a genesis node it already exists.
+    // MULTI-PARTY vs SOLO provisioning split. In a committee (n>1), consensus
+    // FINALIZATION is the single authoritative application of a turn — the SAME
+    // `execute_finalized_turn` runs on every node and provisions any missing
+    // cells DETERMINISTICALLY from the finalized turn's own data (see
+    // `provision_transfer_destinations`). The faucet endpoint must therefore NOT
+    // advance any authoritative state at submission: creating the faucet/recipient
+    // cell here would be LOCAL-ONLY (peers never see it) and, worse, NON-UNIFORM
+    // (the submitter would mint a canonical `with_balance(pk, …)` cell while peers
+    // materialize a zero-pk stub at the same id — divergent ledger content the
+    // attested root does not catch, because it commits only `cell.state`). So in
+    // multi-party mode all provisioning + execution below runs against a SCRATCH
+    // CLONE purely to build the receipt/proof for the HTTP response; the
+    // authoritative ledger is untouched until finalization. Solo (n=1) has no
+    // finalization pass, so it provisions + commits authoritatively here.
+    let is_solo = s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo);
+
+    // Ensure the faucet cell exists (create on first use). Uses the genesis-
+    // derived faucet key so this is the SAME cell genesis mints the supply into;
+    // on a genesis node it already exists on every node. In multi-party mode this
+    // touches only the scratch clone (the genesis faucet cell is already present
+    // authoritatively cross-node).
     let faucet_pubkey = faucet_public_key();
     let faucet_cell_id = dregg_cell::CellId::derive_raw(&faucet_pubkey, &FAUCET_TOKEN_ID);
-    if s.ledger.get(&faucet_cell_id).is_none() {
-        let faucet_cell = dregg_cell::Cell::with_balance(faucet_pubkey, FAUCET_TOKEN_ID, 1_000_000);
-        let _ = s.ledger.insert_cell(faucet_cell);
-    }
 
-    // Ensure the recipient cell exists. With a public key, create the
-    // canonical hosted cell; otherwise preserve the pre-derived id as a stub.
-    let recipient_created = s.ledger.get(&recipient_cell_id).is_none();
-    if recipient_created {
-        let recipient_cell = match recipient_public_key {
-            Some(pk) => {
+    // Recipient provisioning. CROSS-NODE UNIFORMITY: in multi-party mode the
+    // recipient is provisioned by the finalized executor on every node from the
+    // turn data alone (the recipient's public key is NOT carried over consensus,
+    // so every node — including this submitter — must agree on the SAME provisioned
+    // cell). We therefore reuse the identical `remote_stub_with_id_and_balance`
+    // provisioning here (on the scratch clone) that `execute_finalized_turn` uses,
+    // so the receipt this node returns matches the authoritative finalized outcome.
+    // Solo mode mints the canonical hosted cell (with the known pk) directly, since
+    // it is the sole authority.
+    let recipient_created_authoritatively = is_solo && s.ledger.get(&recipient_cell_id).is_none();
+    let provision_recipient = |ledger: &mut dregg_cell::Ledger| {
+        if ledger.get(&recipient_cell_id).is_some() {
+            return;
+        }
+        let recipient_cell = match (is_solo, recipient_public_key) {
+            (true, Some(pk)) => {
                 let default_token_id = *blake3::hash(b"default").as_bytes();
                 dregg_cell::Cell::with_balance(pk, default_token_id, 0)
             }
-            None => dregg_cell::Cell::remote_stub_with_id_and_balance(recipient_cell_id, 0),
+            // Multi-party (or no known pk): the uniform stub provisioning every
+            // node applies in `execute_finalized_turn`.
+            _ => dregg_cell::Cell::remote_stub_with_id_and_balance(recipient_cell_id, 0),
         };
-        let _ = s.ledger.insert_cell(recipient_cell);
+        let _ = ledger.insert_cell(recipient_cell);
+    };
+
+    if is_solo {
+        // Solo: provision authoritatively (no finalization pass).
+        if s.ledger.get(&faucet_cell_id).is_none() {
+            let faucet_cell =
+                dregg_cell::Cell::with_balance(faucet_pubkey, FAUCET_TOKEN_ID, 1_000_000);
+            let _ = s.ledger.insert_cell(faucet_cell);
+        }
+        provision_recipient(&mut s.ledger);
     }
 
     let tx_hash = compute_faucet_activity_hash(&recipient_cell_id, req.amount);
 
     if req.amount == 0 {
+        // Zero-amount is a devnet hosted-cell MATERIALIZATION convenience. There
+        // is no Transfer and no consensus turn, so in multi-party mode there is no
+        // finalized pass to provision the cell — materialize it authoritatively
+        // here regardless of mode (insert-if-absent; idempotent across nodes for a
+        // pk-derived id). This is the one provisioning the faucet still applies
+        // directly under multi-party, and it carries no value.
+        let recipient_created = if is_solo {
+            recipient_created_authoritatively
+        } else {
+            let created = s.ledger.get(&recipient_cell_id).is_none();
+            if created {
+                provision_recipient(&mut s.ledger);
+            }
+            created
+        };
         if recipient_created {
             push_committed_event(
                 &mut s,
@@ -6134,9 +6185,10 @@ async fn post_faucet(
     // we execute against a SCRATCH CLONE purely to build the receipt/proof for the
     // HTTP response, leaving the authoritative ledger untouched; the finalized
     // executor then applies the turn uniformly on all nodes (it auto-materializes
-    // the Transfer destination, see `execute_finalized_turn`). Solo (n=1) keeps the
-    // direct authoritative commit — it has no separate finalization pass.
-    let is_solo = s.solo_consensus.as_ref().is_some_and(|sc| sc.is_solo);
+    // the Transfer destination identically on every node, see
+    // `provision_transfer_destinations` / `execute_finalized_turn`). Solo (n=1)
+    // keeps the direct authoritative commit — it has no separate finalization pass
+    // and already provisioned the faucet + recipient cells above.
     let exec_result = if is_solo {
         // ONE executor gate (#171): solo faucet turns commit through the same
         // producer-aware path as every other ingress, authoritatively.
@@ -6148,8 +6200,18 @@ async fn post_faucet(
         )
     } else {
         // Full mode: receipt-only execution against a scratch clone; do NOT mutate
-        // the authoritative ledger (finalization is authoritative, cross-node).
+        // the authoritative ledger (finalization is authoritative, cross-node). The
+        // scratch must carry the SAME provisioned destination the finalized executor
+        // will install on every node, or the receipt-building Transfer here would hit
+        // `TransferDestNotFound` and diverge from the authoritative outcome. We call
+        // the IDENTICAL provisioning function the finalized path uses, on the SAME
+        // call forest — so the receipt this node returns reflects exactly the
+        // authoritative finalized provisioning (one implementation, no drift).
         let mut scratch = s.ledger.clone();
+        crate::blocklace_sync::provision_transfer_destinations(
+            &mut scratch,
+            &faucet_turn.call_forest,
+        );
         crate::executor_setup::execute_via_producer(
             &executor,
             &faucet_turn,
@@ -7630,6 +7692,16 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let state = NodeState::new(tmp.path(), vec![]).expect("node state");
         state.write().await.unlocked = true;
+        // Single in-process node = a committee of one (solo). Production sets this in
+        // main.rs under `is_solo_mode`; the hardened faucet keys its authoritative
+        // recipient provisioning off it (a real multi-party committee provisions via
+        // `execute_finalized_turn` instead). Without the flag the faucet treats this
+        // node as multi-party and skips eager provisioning -> "cell not found".
+        {
+            let mut s = state.write().await;
+            let sk = s.cclerk.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(sk));
+        }
         let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
         // enable_faucet: the devnet onboarding surface the remote SDK uses.
         let app = router(state.clone(), true, recorder.handle());
