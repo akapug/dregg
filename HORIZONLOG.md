@@ -61,6 +61,35 @@ flip:)*
 
 ### ⚑⚑ THE PRE-FLIP GATE — the REAL gate before the VK epoch (flip-executor inventory, 2026-06-14)
 
+**⚑⚑⚑ NOW EXECUTING (2026-06-14, ember: "it's time, steel ourselves for the horrors" — workflows+agents authorized).**
+THREE lanes running on DISJOINT files (STAGED-ADDITIVE, reversible behind `recursion`; the main loop reviews each
+diff before it rides the VK epoch):
+- **Wall A+B** (agent `a744069d109bf72b4` — `sdk/src/full_turn_proof.rs` + `turn/src/aggregate_bilateral_prover.rs`
+  + the `WitnessedReceipt` struct). REFINED inventory (main-loop, deeper than the flip-executor's): the rotated
+  path already sources the composed PI (`full_turn_proof.rs:1078`) but leans on v1 in THREE spots to sever —
+  (A1) the rotated sub-proof's `vk_hash` is the V1 descriptor (`:1083` → `effect_vm_circuit_descriptor()` =
+  "dregg-effect-vm-v1"); fix to the ROTATED descriptor (`rotated_descriptor_name_for_effect` @`:856`); (A2) the
+  conservation leg reads `effect_pi[NET_DELTA_MAG/SIGN]` from the UNCONDITIONAL v1 `generate_effect_vm_trace`
+  (`:1043`/`:1191`) — read net_delta from the rotated PI instead; (A3) then gate the v1 `generate_effect_vm_trace`
+  to `rotation.is_none()` only. WALL B: `build_inner_rows_v2` (`:193`) PROJECTS the 49-felt schedule from
+  `wr.public_inputs[..ACTIVE_BASE_COUNT]` (v1 PI) — add a native `Option<[BabyBear;49]>` `bilateral_schedule` on
+  `WitnessedReceipt` (Option + projection-fallback so node/ stays unchanged), prefer it in `build_inner_rows_v2`.
+- **Wall C** (agent `a9fe8d40eb8f1e999` — `node/src/blocklace_sync.rs` + `node/src/turn_proving.rs`). Thread
+  `rotateV3WithNullifierPin` (39-PI, nullifier@PI[38], the `cc1e1399c` descriptor — the §EXEC.3(b) "38-PI lacks
+  NULLIFIER" note is STALE) into the `(None,Some(nullifier))` freshness arm, staged behind `recursion`.
+- **pg-dregg maturation** (agent `a71feb983ca8f43ce` — `pg-dregg/` standalone, parallel, zero flip collision):
+  the durable-workflow API + restart pg18.
+
+SEQUENCING (each gated green; the main loop drives): walls A/B/C land + reviewed → **the main loop populates
+`bilateral_schedule` at the node/ WR producer** (`materialize_blocklace_artifacts`, DEFERRED til Wall C lands, to
+avoid the node/ collision) → **the VK epoch (C5/C6) = THE MAIN LOOP's irreversible act** (v3Registry→default regen
++ re-pin ~58 SHAs/11 guards + #103 sovereign graduation + notify Step-2 felt-batch + FFI reseed + the ONE
+VK/cell-commitment bump; §EXEC.3 recipe) → **C7** delete v1 + grep-zero (a Workflow fan-out) → the **Option-A
+wasm-rotated prover** (LAST — gates C7's full grep-zero, not the native cutover) → persvati gauntlet → held push →
+**devnet redeploy = EMBER's act** (fresh genesis). Prize: −65.6% proof size (350.5→120.4 KiB), verify 3.4× faster.
+
+--- (original flip-executor inventory, for the record) ---
+
 The flip was ATTEMPTED and correctly NOT TAKEN: the rotation DESCRIPTORS are all correct+green (lake
 `Dregg2` 3922 jobs axiom-clean; `effect_vm_rotation_flip` 4/4 — the magnesium PROOF is DONE), but the
 LIVE-PATH cutover is NOT. The earlier "flip-safe, all gates closed" was an OVER-CLAIM (rise-to-meet-the-
