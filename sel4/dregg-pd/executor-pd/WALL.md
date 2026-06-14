@@ -59,9 +59,20 @@ the upstream `lean4@d024af099` sources for a **hosted aarch64-linux-musl** targe
    aarch64-musl (the toolchain bundles GMP internally but exposes no `libgmp.a`).
    `-std=gnu17` works around GCC-15's C23 default rejecting GMP's configure probes.
 5. **The link** (`link-probe.sh`) — joins the closure + the four bottom-halves
-   under `--start-group`, GC-reduced from the entry, with three small stub TUs:
-   - `crypto-stub.c` — the 8 `dregg_*` crypto-floor symbols the **Rust PD supplies
-     in production** (panic-if-reached here; a non-crypto turn links + runs).
+   under `--start-group`, GC-reduced from the entry, with the real crypto floor +
+   small stub TUs:
+   - **the REAL crypto floor** (`crypto-floor.c` + the `dregg-crypto-floor`
+     staticlib, `crypto-floor/`) — the 8 `dregg_*` portals at the EXACT Lean C ABI
+     (`lean_object*` in/out, read from `metatheory/.lake/.../PortalFloor.c`), with
+     the HASHES wired to the SAME carried crypto the verifier-stark PD runs on seL4
+     (Plonky3-conformant Poseidon2 over BabyBear + BLAKE3). A turn that hashes now
+     computes a real on-device digest. REAL: Poseidon2 (§4, KAT'd == the circuit's
+     `hash_2_to_1`), BLAKE3 (§5), the Poseidon2-derived nullifier (§6), the
+     BLAKE3-keyed MAC (§8). FAIL-CLOSED (ABI-correct, not reached by a hashing
+     turn): ed25519 (§1), Pedersen (§3), AEAD (§7), abstract-STARK verify (§2) —
+     these live on a crypto surface not carried in verifier-stark. (Was
+     `crypto-stub.c`: panic-if-reached with WRONG arity/types.) Run-verified via
+     `crypto-floor-selftest.c` (calls each portal at the Lean ABI; all checks pass).
    - `init-stubs.c` — no-op `initialize_Lean`/`initialize_aesop_Aesop`/
      `initialize_Dregg2_Dregg2_Tactics`. These cut the **Lean elaborator** out of
      the init-chain: the executor's compute path calls ZERO elaborator/kernel

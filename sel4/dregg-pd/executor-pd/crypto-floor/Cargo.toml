@@ -1,0 +1,39 @@
+# dregg-crypto-floor — the REAL §8 crypto-floor primitives for the executor PD,
+# replacing the panic-if-reached crypto-stub.c with the SAME carried crypto the
+# verifier-stark PD runs on seL4 (Plonky3-conformant Poseidon2 over BabyBear +
+# BLAKE3). A `no_std` staticlib (crate-type = staticlib) cross-built for
+# aarch64-unknown-linux-musl — the same hosted-musl ABI the executor closure links
+# (executor-pd/scripts/link-probe.sh) and that sel4-musl emulates in the PD. The C
+# ABI shim (executor-pd/scripts/crypto-floor.c) owns the Lean Nat/Int/List
+# marshalling and calls these plain-value `dreggcf_*` entry points.
+#
+# Standalone workspace (empty [workspace] table) — like the parent executor-pd
+# crate — so it builds with its own target dir, swarm-safely, NOT a member of the
+# sel4/dregg-pd workspace.
+[workspace]
+
+[package]
+name = "dregg-crypto-floor"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "dregg_crypto_floor"
+crate-type = ["staticlib"]
+
+[dependencies]
+# The Merkle/transcript hash — the EXACT dep + features verifier-stark/Cargo.toml
+# uses: no_std (default-features off), `pure` forces the portable Rust backend (no
+# C/NEON SIMD path, which needs libc headers absent on the bare cross target).
+blake3 = { version = "1", default-features = false, features = ["pure"] }
+
+# A no_std staticlib still needs a panic handler + (with panic=abort) no unwinder.
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"

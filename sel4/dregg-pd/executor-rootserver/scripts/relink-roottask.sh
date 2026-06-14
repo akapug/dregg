@@ -108,7 +108,26 @@ int dl_iterate_phdr(int (*cb)(struct dl_phdr_info *, size_t, void *), void *data
 }
 EOF
 "$GCC" -O2 -isystem "$MUSLSEL4/include" -c "$EXEC_SEL4/libc-compat.c" -o "$EXEC_SEL4/libc-compat.o"
-[ -f "$EPD/crypto-stub.c" ] && "$GCC" -O2 -isystem "$MUSLSEL4/include" -c "$EPD/crypto-stub.c" -o "$EXEC_SEL4/crypto-stub.o"
+# (3b) THE REAL CRYPTO FLOOR (replaces the old crypto-stub.o). The C ABI shim
+#      (executor-pd/scripts/crypto-floor.c) is recompiled against the seL4 musl
+#      headers; the carried crypto comes from the dregg-crypto-floor Rust staticlib
+#      (cross-built for aarch64-unknown-linux-musl — libc-agnostic over malloc/free,
+#      which route through __sysinfo in the PD, same as the runtime). So a hashing
+#      turn IN the PD computes a real on-device Poseidon2/BLAKE3 digest.
+CRYPTO_FLOOR_DIR="$ROOT/../executor-pd/crypto-floor"
+CRYPTO_FLOOR_LIB="$CRYPTO_FLOOR_DIR/target/aarch64-unknown-linux-musl/release/libdregg_crypto_floor.a"
+if [ -d "$CRYPTO_FLOOR_DIR" ]; then
+  echo "[relink] building the real crypto floor (dregg-crypto-floor staticlib)…"
+  ( cd "$CRYPTO_FLOOR_DIR" && cargo build --release ) \
+    && cp "$CRYPTO_FLOOR_LIB" "$EXEC_SEL4/libdregg_crypto_floor.a" \
+    && echo "[relink] libdregg_crypto_floor.a copied" \
+    || echo "[relink] WARN: crypto-floor staticlib build failed; link will be missing the crypto floor"
+fi
+if [ -f "$ROOT/../executor-pd/scripts/crypto-floor.c" ]; then
+  "$GCC" -O2 -isystem "$MUSLSEL4/include" -I "$LEAN_INC" \
+    -c "$ROOT/../executor-pd/scripts/crypto-floor.c" -o "$EXEC_SEL4/crypto-floor.o" \
+    && echo "[relink] crypto-floor.o (the Lean-ABI shim) compiled against seL4 musl"
+fi
 [ -f "$EPD/kernel-stub.c" ] && "$GCC" -O2 -isystem "$MUSLSEL4/include" -c "$EPD/kernel-stub.c" -o "$EXEC_SEL4/kernel-stub.o"
 [ -f "$EPD/dead-stub.c" ]   && recompile_c "$EPD/dead-stub.c"   "$EXEC_SEL4/dead-stub.o"
 [ -f "$ROOT/../executor-pd/scripts/init-stubs.c" ] && recompile_c "$ROOT/../executor-pd/scripts/init-stubs.c" "$EXEC_SEL4/init-stubs.o"
