@@ -296,18 +296,65 @@ roadmap feared.
 
 ---
 
-## 5. The one honest caveat: Linux measurement
+## 5. The Linux measurement — DONE (and the pg-Tier-D in-backend proof is GREEN)
 
 The §2 spike is **macOS** (`dladdr`/mach `task_threads`). The pg deploy target is
-Linux. The two facts the spike turns on — (a) mimalloc override OFF
-(`MI_MALLOC_OVERRIDE` unset in Lean's config), and (b) the lazy task manager — are
-**source/config properties identical on Linux**, and the libuv-thread excision is
-the same init-path change. So the ST runtime is expected to be embeddable on Linux
-too. But per green-or-bust, the Linux equivalent of the §2.2/§2.3 measurement
-(malloc → glibc, threads flat, under the *shared* runtime link a cdylib needs) is
-**not yet run on this host** (no Linux Lean toolchain present). It is the single
-remaining check for the pg frontier — a measurement to confirm, not new work to
-build. The seL4 frontier already runs on Linux/musl semantics (sel4-musl) and boots.
+Linux, and that re-measurement is now **run** (persvati, Lean v4.30.0,
+`x86_64-unknown-linux-gnu`, pg18.4 via cargo-pgrx). Two things were measured.
+
+### 5.1 The pg-Tier-D in-backend executor — GREEN in a live pg18 backend
+
+The keystone: the verified `execFullForestG` runs INSIDE a live pg18 backend,
+under the **shared** runtime link (`DREGG_LEAN_LINK=shared`) a cdylib needs.
+
+```
+$ DREGG_LEAN_LINK=shared cargo pgrx test pg18 --features pg18,tier-d,pg_test
+  …spliced 714 Dregg2 objects into libdregg_lean.a (4034 total members)
+  …closure pass 0: added 12 dependency object(s)        ← archive self-links
+  Finished installing pg_dregg
+  test pg::tests::pg_the_verified_executor_runs_inside_the_backend ... ok
+  test result: ok. 1 passed; 0 failed; … finished in 24.02s
+  test pg::tests::pg_drainer_drains_the_queue_materializes_state_and_resolves_rows ... ok
+  test pg::tests::pg_drainer_runs_execfullforest_in_backend ... ok
+```
+
+That test asserts `LeanProducer::runtime_available()` is TRUE (so `dregg_ffi_init_st`
+succeeded post-fork in the forked backend, shared link) AND that the executor
+committed a real conserving transfer (1000→970, 0→30, executor-verified
+post-balances). The two drainer tests prove the full SQL spine — `dregg_submit_turn`
+→ `dregg_drain_once` → committed `dregg.turns` — drives the REAL `execFullForestG`
+in-backend (not the `FoldProducer` stand-in). **`lean_available()` is TRUE in a live
+pg18 backend; the receipt is `execFullForestG`'s, not a marshal-only fallback.**
+
+### 5.2 PROP-1/2/3, both link modes (the §2.2/§2.3 measurement, on Linux)
+
+`dregg-lean-ffi/tests/embeddable_runtime_probe_linux.rs` (the Linux analogue of the
+macOS probe; `/proc/self/status` + `dladdr`):
+
+| | PROP-1 (malloc) | PROP-2 (threads: before→init→turn) | PROP-3 (turn) |
+|---|---|---|---|
+| **STATIC link** | `/lib/x86_64-linux-gnu/libc.so.6` (glibc, NOT interposed) | **2 → 2 → 2** — libuv-free, turn worker-free | `status:2 ok:1`, `bal [0,0,70],[1,0,35]`; overspend rejected |
+| **SHARED link** (cdylib/pgrx) | glibc, NOT interposed | **2 → 4 → 4** — init adds 2 libuv infra threads; **the turn adds 0** | same — committing + fail-closed |
+
+Two findings, both honest:
+
+- **PROP-1 (allocator) is confirmed on Linux, both modes.** `malloc` resolves to
+  glibc; mimalloc stays Lean-private (`MI_MALLOC_OVERRIDE` off — the source/config
+  property, now MEASURED on the deploy platform). No collision with a backend's
+  `palloc`.
+- **PROP-2 refines the macOS thread count.** STATIC is fully libuv-free (2→2→2, the
+  macOS result reproduced). SHARED — which a cdylib must use — routes `dregg_ffi_init_st`
+  through `lean_initialize_runtime_module`, and on Linux that starts **TWO** libuv
+  infrastructure threads (event loop + helper), not the single thread the macOS spike
+  saw (§1.3 counted one). The load-bearing facts are unchanged: those are libuv infra,
+  NOT Lean worker threads (the task manager stays `nullptr` — **the turn itself spawns
+  ZERO threads, 4→4**), and they are created by the lazy first-produce init AFTER the
+  backend fork, so nothing thread-shaped crosses the fork. The pg keystone passing under
+  the shared link is the proof this is harmless to the single-threaded backend.
+
+The static-link libuv-free path (2→2→2) is what the **seL4** lane and any future
+static in-process host use; the shared-link path (2→4→4, turn-worker-free) is the
+**cdylib/pgrx** reality, and it works.
 
 ---
 
