@@ -17,6 +17,11 @@
       "import": "./dist/raw.mjs",
       "require": "./dist/raw.js"
     },
+    "./pg": {
+      "types": "./dist/pg.d.ts",
+      "import": "./dist/pg.mjs",
+      "require": "./dist/pg.js"
+    },
     "./wasm": {
       "types": "./dist/wasm.d.ts",
       "import": "./dist/wasm.mjs",
@@ -35,7 +40,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/browser.ts src/raw.ts src/wasm.ts --format cjs,esm --dts --clean && npm run build:browser-esm",
+    "build": "tsup src/index.ts src/browser.ts src/raw.ts src/wasm.ts src/pg.ts --format cjs,esm --dts --clean && npm run build:browser-esm",
     "build:browser-esm": "tsup src/browser.ts --format esm --no-splitting --platform browser --out-dir dist",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",

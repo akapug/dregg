@@ -31,3 +31,4 @@ export const distDir = join(here, "..", "dist");
 
 export const sdk = () => import(join(distDir, "index.mjs"));
 export const raw = () => import(join(distDir, "raw.mjs"));
+export const pg = () => import(join(distDir, "pg.mjs"));
