@@ -147,21 +147,22 @@ flip:)*
   SIBLING hand-AIRs `CrossSideExistenceAir` + `BundleTreeFoldAir` in the same file (they do NOT read
   `effect_vm::pi`); their Lean-emission lane ✅ LANDED (`92b41acce` — both emitted axiom-clean, found
   PURE not recursion; the hand-AIRs are now layout-of-record, deletable at C7). The remaining grep-zero
-  walls are now just (C) + (D), and (b) ✅ NOTE-SPEND now ROTATES (`cc1e1399c` — rotated nullifier at
-  PI[38], 39-PI, + the single-spend per-row double-spend GUARD, a model-found bug: the rotated pin was
-  first-row-only while the v1 D5 gate is per-row). (b) ✅ CAPABILITY now ROTATES (this lane, WIP uncommitted —
-  `rotation_witness_for_capability` built from the REAL `full_turn_pre_cell` threaded through
-  `prove_and_verify_finalized_turn_capability`; the rotated commit pins fold the REAL authority digest r23,
-  NOT a zero-pk stub; the cap-membership leg + over-grant tooth survive rotation —
-  `cap_over_grant_refused_on_rotated_leg`). **MODEL-FOUND DESCRIPTOR SEAM (residual, NOT this lane — circuit/Lean):
-  `setFieldVmDescriptor2-{0..7}R24` + `mintVmDescriptor2R24` assert nonce PASSTHROUGH (`after_nonce==before_nonce`)
-  while SetField/BridgeMint TICK the nonce → the rotated prover is UNSAT on such a turn (`transferVmDescriptor2R24` /
-  `noteSpendVmDescriptor2R24` correctly carry the `−(1−selector)` tick term). The `EffectVmEmitRotationV3`
-  SetField/BridgeMint nonce constraint must model the tick. UNTIL FIXED, the two rotation builders fall back to
-  v1 for a SetField/BridgeMint actor effect (`rotated_descriptor_mismodels_nonce_tick`, a graceful None) — every
-  other cohort effect (Transfer/Burn/Grant/Revoke/Attenuate/NoteSpend/…) rotates.** C7's `generate_effect_vm_trace`
-  deletion is now unblocked for note-spend AND capability (both rotate); the SetField/BridgeMint descriptor seam
-  is the remaining gap for a SetField-shaped turn to rotate.** Original (A) plan, for the record: **(A) the BILATERAL rotated outer AIR** — DECISION =
+  walls are now just (C) + (D). **✅✅ ALL COHORT EFFECTS NOW ROTATE — the FLOW-B rotation campaign is COMPLETE
+  and FLIP-SAFE (2026-06-14):** NOTE-SPEND (`cc1e1399c` — nullifier at PI[38], 39-PI, + the single-spend per-row
+  double-spend GUARD, a model-found bug); CAPABILITY (`f967f39b0` — `rotation_witness_for_capability` from the REAL
+  `full_turn_pre_cell`, binds the real authority digest r23, the over-grant tooth survives rotation —
+  `cap_over_grant_refused_on_rotated_leg`); SETFIELD + BRIDGEMINT (`e9d6e357e` — the model found 3 real descriptor
+  mismodels: nonce-passthrough-vs-TICK, payload@param0-vs-param1, ungated-write + `SEL_SET_FIELD=54`-is-`BALANCE_LO`,
+  all enforced-fixed); SOURCE-COHERENCE (`05fe8a500` — the per-effect SetField/Mint SOURCE descriptors reconciled to
+  runtime, the rotated tick-faces proved EQUAL to the source `:= rfl` so the registry routing is no longer a bypass
+  of a buggy source; FULL library 3927-job axiom-clean; JSON byte-identical so the live wire is UNTOUCHED). The
+  dynamic `setFieldDynV3` is proven STRUCTURALLY UNREACHABLE (a `field_idx≥8` SetField panics in v1 trace-gen before
+  any rotated prove) → coherence-only, NOT a flip-blocker; the node v1-fallback predicate is REMOVED. **The model
+  has STOPPED finding flip-blocking gates — the burn-down before C5 is CLOSED, and the flip (C5/C7 + the #103
+  sovereign graduation + the notify Step-2 VK-batch) is READY as the main-loop's ONE coordinated VK-epoch act,
+  HELD for ember at the redeploy point-of-no-return.** Sole non-blocking residue: the unreachable
+  `setFieldDynVmDescriptor2` slot-column (`SLOT:=1` vs runtime field_index@param0) — a separate `EffectVmEmitV2`
+  coherence lane.** Original (A) plan, for the record: **(A) the BILATERAL rotated outer AIR** — DECISION =
   BUILD, emit from Lean (law #1). `bilateral_aggregation_air.rs::BilateralAggregationAir` is a plain
   hand-authored `StarkAir` reading `wr.public_inputs[..ACTIVE_BASE_COUNT]` and the bilateral-schedule
   PI offsets (`effect_vm::pi::{TURN_HASH_BASE 25..IS_AGENT_CELL 73}`). It does NOT ingest an
