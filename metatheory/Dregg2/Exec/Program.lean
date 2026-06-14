@@ -311,6 +311,44 @@ inductive StateConstraint where
   writers; the bound being a field-read does not change the class (n=1 serial keeps it safe). NOT
   i-confluent. Admit-char: `evalConstraint_affineDeltaLeField_iff`. -/
   | affineDeltaLeField (terms : List (Int × FieldName)) (rateField : FieldName)
+  /-- **`observedFieldEquals localField sourceCell sourceField`** (`docs/CELL-PROGRAM-LANGUAGE.md`
+  §11.2 — the cross-cell verified-observation atom) — admits IFF `new[localField]` equals the value
+  field `sourceField` held by the PEER cell `sourceCell` at a FINALIZED state-commitment root. The
+  witnessed cross-cell read: a market cell gates on an oracle cell's finalized price, a governance
+  cell on a constitution cell's finalized membership. THE rung that makes a polis amendment
+  PROPAGATE — "my threshold IS constitution v3's threshold" as a live, verified fact instead of a
+  parameter copied (and frozen) at birth (polis gap 2 / §8 `imports`, now a program tooth).
+
+  WHY THIS IS A `StateConstraint`, NOT A liftable `SimpleConstraint`: it joins the WITNESSED family
+  (`preimageGate`/`countGe`), whose proof-binding does NOT survive naive disjunction (the §4
+  discipline — an `anyOf` branch that fails to open a proof must be distinguishable from one that
+  needs none). So it stays out of the composable simple fragment, exactly as in Rust
+  (`StateConstraint::ObservedFieldEquals`, NOT a `SimpleStateConstraint`).
+
+  THE CARRIER (the §8 crypto-portal seam, exactly as `revealedHash`/`exhibitedCommit`): the portal
+  hands the evaluator `TurnCtx.observedFields : List (Int × FieldName × Int)` — the
+  `(peerCell, peerField, value)` triples it OPENED against genuinely-finalized peer roots (a cell
+  identity is modelled as the `Int` scalar `senderIs`/`senderMemberOf` use). The
+  Merkle-open against the peer's finalized `at_root` AND the host root-authority check that `at_root`
+  is a real finalized commitment of `sourceCell` (the `IssuerRootAuthority` precedent —
+  `cell/src/predicate.rs`, where the BlindedSet self-fabrication forge is closed by the host
+  installing "which roots are real") live IN the portal; this atom only witnesses that the opened
+  triple is present and that `new[localField]` matches its value. Verification is recomputation
+  against the receipt chain — what verifiers already do, minus the archaeology.
+
+  COST (§8): FREE / i-confluent — a FINALIZED read is a MONOTONE, already-committed fact (a finalized
+  value never un-finalizes), the `monotone_terminal` confluence-keeping case, NOT the live-read
+  ordering pole. THAT distinction (finalized vs live) is exactly WHY this rung is admissible where a
+  LIVE cross-cell read is not: a guard reading the peer's CURRENT state would make every turn on this
+  cell order against every turn on that cell (`relational_decided_by_merge` with a non-local
+  relation — coordination, always), which is why `boundDelta` stays deferred and a live read stays
+  OUT of the language. Disclosure is the peer's finalized value (already public on the chain).
+
+  FAIL-CLOSED: a missing opened triple for `(sourceCell, sourceField)` in the carrier (no proof, or
+  a root the host authority rejected, so the portal handed nothing) ⇒ `false`; an absent/ill-typed
+  `localField` ⇒ `false`; the ctx-LESS evaluator (no carrier in scope) ⇒ `false`. Admit-char:
+  `evalConstraintCtx_observedFieldEquals_iff`. -/
+  | observedFieldEquals (localField : FieldName) (sourceCell : Int) (sourceField : FieldName)
   deriving Repr
 
 /-! ## Evaluation — the executable admissibility check. -/
@@ -457,6 +495,12 @@ def evalConstraint : StateConstraint → Value → Value → Bool
       match affineDeltaSum old new terms, new.scalar rateField with
       | some s, some bound => intLe s bound       -- Σ cᵢ·Δfieldᵢ ≤ new[rateField] (the FIELD-VALUED bound)
       | _,      _          => false               -- absent term field OR absent rate field ⇒ fail-closed
+  -- `observedFieldEquals` reads the §8-portal cross-cell carrier (`TurnCtx.observedFields`) — no
+  -- carrier is in scope ctx-LESS, so the cross-cell read is NOT evaluable here and FAILS CLOSED
+  -- (mirrors the witnessed-family `boundDelta`/`preimageGate` ctx-less rejection; the Rust evaluator
+  -- surfaces `ObservedRootUnauthorized`/missing-proof). The ctx-aware semantics live in
+  -- `evalConstraintCtx`; `evalConstraintCtx_empty` proves the two agree.
+  | .observedFieldEquals _ _ _, _, _ => false
 
 /-! ## RecordProgram + TransitionGuard dispatch + default-deny. -/
 
@@ -970,10 +1014,30 @@ structure TurnCtx where
   §8 crypto-portal output. APPENDED (so existing `TurnCtx { … }` literals and the empty context are
   unchanged); a resolving transition whose required badge is absent here FAILS CLOSED. -/
   emittedWakes : List Int := []
+  /-- The cross-cell FINALIZED-read triples the §8 crypto portal OPENED for this turn
+  (`observedFieldEquals`, `docs/CELL-PROGRAM-LANGUAGE.md` §11.2): each `(peerCell, peerField, value)`
+  is a `(sourceCell, sourceField)` the portal opened against a GENUINELY-FINALIZED peer root AND
+  whose root the host root-authority (`IssuerRootAuthority`, `cell/src/predicate.rs`) confirmed is a
+  real finalized commitment of that peer. The Merkle-open and the root-authenticity check stay in the
+  portal; this carrier is exactly its output, exactly as `revealedHash`/`exhibitedCommit` carry a §8
+  portal output WITHOUT importing the crypto. RE-EXHIBITED per turn (a finalized fact is monotone, so
+  re-reading it every turn is the `monotone_terminal` confluence-keeping case — the FREE cost class).
+  A `(sourceCell, sourceField)` ABSENT here (no proof, or a root the host rejected) FAILS CLOSED:
+  `observedFieldEquals` cannot be satisfied without the opened triple. APPENDED (so existing
+  `TurnCtx { … }` literals and the empty context are unchanged). -/
+  observedFields : List (Int × FieldName × Int) := []
   deriving Repr
 
 /-- The empty context: every context atom fails closed under it. -/
 def TurnCtx.empty : TurnCtx := {}
+
+/-- Look up the value the §8 portal opened for a peer cell's finalized field in `observedFields`
+(`none` if the portal handed no opened triple for `(cell, field)` — fail-closed: a missing proof,
+or a root the host root-authority rejected, leaves the carrier without the triple, and
+`observedFieldEquals` then refuses). The first matching `(cell, field)` wins (the portal emits at
+most one opened triple per `(cell, field)` it could authenticate). -/
+def TurnCtx.observedValue (ctx : TurnCtx) (cell : Int) (field : FieldName) : Option Int :=
+  (ctx.observedFields.find? (fun t => t.1 == cell && t.2.1 == field)).map (fun t => t.2.2)
 
 /-- **Ctx-aware simple-constraint evaluation.** Context atoms read `ctx`; every ctx-free atom
 delegates to `evalSimple` (definitionally — the delegation IS the proof obligation discharged
@@ -1022,6 +1086,15 @@ variant is context-free and delegates to `evalConstraint`. -/
 def evalConstraintCtx (ctx : TurnCtx) : StateConstraint → Value → Value → Bool
   | .simple c,  old, new => evalSimpleCtx ctx c old new
   | .anyOf vs,  old, new => vs.any (fun c => evalSimpleCtx ctx c old new)
+  -- The cross-cell verified-observation atom (§11.2): admits IFF the §8 portal opened a finalized
+  -- value `v` for `(sourceCell, sourceField)` AND `new[localField] = v`. The Merkle-open and the
+  -- host root-authenticity check are ALREADY discharged into `observedFields` by the portal; the
+  -- ordering law (which `(cell, field)` and the post-state match) is the part proved HERE. Both
+  -- absences fail closed (no opened triple ⇒ unauthenticated/missing peer read; absent `localField`).
+  | .observedFieldEquals localField sourceCell sourceField, _, new =>
+      match ctx.observedValue sourceCell sourceField, new.scalar localField with
+      | some v, some lv => lv == v
+      | _,      _       => false
   | c,          old, new => evalConstraint c old new
 
 /-- **Ctx-aware admissibility** — `RecordProgram.admits` with the turn context threaded
@@ -1070,6 +1143,11 @@ theorem evalConstraintCtx_empty (c : StateConstraint) (o n : Value) :
   | anyOf vs =>
       simp only [evalConstraintCtx, evalConstraint]
       exact congrArg vs.any (funext fun s => evalSimpleCtx_empty s o n)
+  | observedFieldEquals localField sourceCell sourceField =>
+      -- under the empty ctx, `observedValue _ _ = none` (the carrier is `[]`), so the cross-cell
+      -- match short-circuits to `false`, agreeing with the ctx-less `evalConstraint` arm.
+      simp only [evalConstraintCtx, evalConstraint, TurnCtx.observedValue, TurnCtx.empty,
+        List.find?, Option.map_none]
   | _ => rfl
 
 /-- `admitsCtx` under the empty context is `admits` — the guard-evaluation theorem family
@@ -1363,6 +1441,73 @@ theorem evalSimpleCtx_countGe_quorum (ctx : TurnCtx) (m : Nat) (f : FieldName) (
 theorem evalSimple_countGe_fails (m : Nat) (f : FieldName) (o n : Value) :
     evalSimple (.countGe m f) o n = false := rfl
 
+/-! ### THE cross-cell verified-observation keystone (`docs/CELL-PROGRAM-LANGUAGE.md` §11.2).
+
+`observedFieldEquals localField sourceCell sourceField` is the WITNESSED cross-cell read: a market
+gates on an oracle's finalized price, a governance cell on a constitution's finalized membership.
+The §8 crypto portal does the Merkle-open against the peer's finalized root AND the host
+root-authority check (`IssuerRootAuthority`), handing the evaluator the opened
+`(peerCell, peerField, value)` triples in `TurnCtx.observedFields`. THE ORDERING LAW — that the
+admitted turn's `new[localField]` equals the peer's finalized value — is proved HERE. -/
+
+/-- **`observedFieldEquals` admit-char (THE keystone).** Admits IFF the §8 portal opened a finalized
+value `v` for `(sourceCell, sourceField)` (the triple is in the carrier — so the Merkle-open against
+the peer's finalized root AND the host root-authenticity check already passed) AND
+`new[localField] = v`. The first-class form of the §8 copied-parameter import, now a program tooth:
+"my `localField` IS `sourceCell`'s finalized `sourceField`." -/
+theorem evalConstraintCtx_observedFieldEquals_iff (ctx : TurnCtx)
+    (localField : FieldName) (sourceCell : Int) (sourceField : FieldName) (o n : Value) :
+    evalConstraintCtx ctx (.observedFieldEquals localField sourceCell sourceField) o n = true ↔
+      ∃ v, ctx.observedValue sourceCell sourceField = some v ∧ n.scalar localField = some v := by
+  unfold evalConstraintCtx
+  cases hv : ctx.observedValue sourceCell sourceField with
+  | none   => simp [hv]
+  | some v =>
+    cases hl : n.scalar localField with
+    | none    => simp [hv, hl]
+    | some lv =>
+      simp only [hv, hl, beq_iff_eq]
+      constructor
+      · rintro rfl; exact ⟨lv, rfl, rfl⟩
+      · rintro ⟨x, hx, hx'⟩
+        rw [Option.some.injEq] at hx hx'; rw [hx, hx']
+
+/-- **`observedFieldEquals` fails closed on an UNAUTHENTICATED / missing peer read** — the carrier
+holds no opened triple for `(sourceCell, sourceField)`. This is the anti-forge tooth: a turn whose
+proof did not open (or whose `at_root` the host root-authority rejected — so the portal emitted
+nothing) CANNOT satisfy the atom. The cross-cell read is verified, never asserted. -/
+theorem evalConstraintCtx_observedFieldEquals_absent_proof_refuses (ctx : TurnCtx)
+    (localField : FieldName) (sourceCell : Int) (sourceField : FieldName) (o n : Value)
+    (h : ctx.observedValue sourceCell sourceField = none) :
+    evalConstraintCtx ctx (.observedFieldEquals localField sourceCell sourceField) o n = false := by
+  unfold evalConstraintCtx; cases hl : n.scalar localField <;> simp [h, hl]
+
+/-- **`observedFieldEquals` fails closed on an absent/ill-typed local field** — even with a
+genuinely-opened peer value, a missing `new[localField]` cannot be equated to it. -/
+theorem evalConstraintCtx_observedFieldEquals_absent_local_refuses (ctx : TurnCtx)
+    (localField : FieldName) (sourceCell : Int) (sourceField : FieldName) (o n : Value)
+    (h : n.scalar localField = none) :
+    evalConstraintCtx ctx (.observedFieldEquals localField sourceCell sourceField) o n = false := by
+  unfold evalConstraintCtx
+  cases hv : ctx.observedValue sourceCell sourceField <;> simp [hv, h]
+
+/-- **The mismatch tooth (the REAL teeth).** When the portal opened a finalized value `v` for the
+peer field but `new[localField] = lv ≠ v`, the atom is REJECTED. A turn cannot claim its local
+field equals the peer's finalized value while setting it to something else — the binding is real,
+not decorative. -/
+theorem observedFieldEquals_mismatch_refuses (ctx : TurnCtx)
+    (localField : FieldName) (sourceCell : Int) (sourceField : FieldName) (v lv : Int)
+    (o n : Value) (hv : ctx.observedValue sourceCell sourceField = some v)
+    (hl : n.scalar localField = some lv) (hne : lv ≠ v) :
+    evalConstraintCtx ctx (.observedFieldEquals localField sourceCell sourceField) o n = false := by
+  unfold evalConstraintCtx; simp [hv, hl, hne]
+
+/-- The ctx-LESS evaluator fails closed on `observedFieldEquals` (definitional — no carrier in
+scope, so the cross-cell read is not evaluable; mirrors the witnessed-family ctx-less rejection). -/
+theorem evalConstraint_observedFieldEquals_fails
+    (localField : FieldName) (sourceCell : Int) (sourceField : FieldName) (o n : Value) :
+    evalConstraint (.observedFieldEquals localField sourceCell sourceField) o n = false := rfl
+
 /-! ### THE actor-bound approval keystone (polis gap 5 → dissolved).
 
 `anyOf [immutable f, senderIs k]` is the per-slot actor binding the polis council installs per
@@ -1586,6 +1731,48 @@ def escrowResolveProgram : RecordProgram :=
 #guard evalSimpleCtx TurnCtx.empty (.balanceDeltaLe 5) (.record []) (.record []) == evalSimple (.balanceDeltaLe 5) (.record []) (.record [])
 #guard evalSimpleCtx TurnCtx.empty (.balanceDeltaGe (-5)) (.record []) (.record []) == evalSimple (.balanceDeltaGe (-5)) (.record []) (.record [])
 
+/-! ### observedFieldEquals (§11.2): the cross-cell verified-observation atom. A market cell reads an
+oracle cell's FINALIZED price; a governance cell reads a constitution cell's FINALIZED membership.
+The §8 portal hands the opened `(peerCell, peerField, value)` triples in `observedFields` (the
+Merkle-open against the peer's finalized root + the host root-authenticity check ALREADY discharged);
+the atom binds `new[localField]` to the opened value. Source cell `100` = the oracle; field `"price"`. -/
+
+/-- A market cell whose `mark` slot must equal oracle cell 100's finalized `price`. -/
+def marketReadsOracle : StateConstraint := .observedFieldEquals "mark" 100 "price"
+
+-- MATCH: the portal opened price=42 for (cell 100, "price") AND the market set mark=42 ⇒ ADMITTED.
+-- This is the natural shape: "my mark IS the oracle's finalized price."
+#guard evalConstraintCtx { observedFields := [(100, "price", 42)] } marketReadsOracle
+  (.record []) (.record [("mark", .int 42)])
+-- MISMATCH: the oracle's finalized price is 42 but the market tried to set mark=99 ⇒ REJECTED
+-- (the binding is real — a turn cannot diverge its local field from the peer's finalized value).
+#guard evalConstraintCtx { observedFields := [(100, "price", 42)] } marketReadsOracle
+  (.record []) (.record [("mark", .int 99)]) == false
+-- UNAUTHENTICATED / NO PROOF: the carrier holds no opened triple for (cell 100, "price") — the proof
+-- did not open, or the host root-authority rejected `at_root` ⇒ REJECTED (the anti-forge tooth: a
+-- self-fabricated peer read is refused exactly as the BlindedSet forge is closed).
+#guard evalConstraintCtx {} marketReadsOracle
+  (.record []) (.record [("mark", .int 42)]) == false
+-- WRONG PEER FIELD opened: the portal opened a DIFFERENT field ("volume", not "price") ⇒ REJECTED
+-- (the lookup keys on BOTH cell and field; an unrelated opened triple does not satisfy the read).
+#guard evalConstraintCtx { observedFields := [(100, "volume", 42)] } marketReadsOracle
+  (.record []) (.record [("mark", .int 42)]) == false
+-- WRONG PEER CELL opened: the portal opened cell 999's price, not cell 100's ⇒ REJECTED.
+#guard evalConstraintCtx { observedFields := [(999, "price", 42)] } marketReadsOracle
+  (.record []) (.record [("mark", .int 42)]) == false
+-- ABSENT LOCAL FIELD: even with a genuinely-opened oracle price, a missing `mark` slot ⇒ REJECTED.
+#guard evalConstraintCtx { observedFields := [(100, "price", 42)] } marketReadsOracle
+  (.record []) (.record []) == false
+-- GOVERNANCE shape: a council's `threshold` slot must equal constitution cell 7's finalized
+-- `quorum` — the polis amendment-propagation tooth ("my threshold IS constitution v3's", §11.2).
+#guard evalConstraintCtx { observedFields := [(7, "quorum", 3)] }
+  (.observedFieldEquals "threshold" 7 "quorum") (.record []) (.record [("threshold", .int 3)])
+#guard evalConstraintCtx { observedFields := [(7, "quorum", 3)] }
+  (.observedFieldEquals "threshold" 7 "quorum") (.record []) (.record [("threshold", .int 5)]) == false
+-- conservative extension: ctx-less, the cross-cell read fails closed (no carrier), agreeing with
+-- evalConstraint (which is `false` on observedFieldEquals — definitional).
+#guard evalConstraintCtx TurnCtx.empty marketReadsOracle (.record []) (.record [("mark", .int 42)]) == evalConstraint marketReadsOracle (.record []) (.record [("mark", .int 42)])
+
 #assert_axioms evalSimpleCtx_delegationEpochEquals_iff
 #assert_axioms evalSimpleCtx_delegationEpochEquals_absent_epoch_refuses
 #assert_axioms evalSimpleCtx_delegationEpochEquals_absent_slot_refuses
@@ -1595,6 +1782,11 @@ def escrowResolveProgram : RecordProgram :=
 #assert_axioms evalSimpleCtx_countGe_absent_slot_refuses
 #assert_axioms evalSimpleCtx_countGe_quorum
 #assert_axioms evalSimple_countGe_fails
+#assert_axioms evalConstraintCtx_observedFieldEquals_iff
+#assert_axioms evalConstraintCtx_observedFieldEquals_absent_proof_refuses
+#assert_axioms evalConstraintCtx_observedFieldEquals_absent_local_refuses
+#assert_axioms observedFieldEquals_mismatch_refuses
+#assert_axioms evalConstraint_observedFieldEquals_fails
 #assert_axioms evalSimpleCtx_empty
 #assert_axioms evalConstraintCtx_empty
 #assert_axioms admitsCtx_empty
