@@ -186,6 +186,11 @@ mod ffi {
 
     extern "C" {
         fn dregg_ffi_init() -> i32;
+        /// The SINGLE-THREADED / libuv-thread-free init (the pg-Tier-D-embeddable
+        /// path — see `docs/EMBEDDABLE-LEAN-RUNTIME.md` + `src/lean_init_st.cpp`).
+        /// Runs the libuv-free initializer chain so NO libuv event-loop thread is
+        /// spawned. Same once-per-process contract as `dregg_ffi_init`.
+        fn dregg_ffi_init_st() -> i32;
         fn dregg_exec_full_forest_auth_str(
             in_utf8: *const c_char,
             out: *mut c_char,
@@ -211,6 +216,7 @@ mod ffi {
     }
 
     static INIT: OnceLock<Result<(), String>> = OnceLock::new();
+    static INIT_ST: OnceLock<Result<(), String>> = OnceLock::new();
 
     pub fn lean_init_once() -> Result<(), String> {
         INIT.get_or_init(|| {
@@ -222,6 +228,26 @@ mod ffi {
             }
         })
         .clone()
+    }
+
+    /// Single-threaded / libuv-thread-free init (the pg-Tier-D-embeddable path).
+    /// Drives `dregg_ffi_init_st`, which never starts the libuv event-loop thread.
+    /// A process must pick ONE init flavor: the Lean module initializers are
+    /// once-per-process, so a caller using the single-threaded path must NOT also
+    /// call [`lean_init_once`] (that would run `lean_initialize_runtime_module` and
+    /// spawn the very thread this path omits, and re-init the modules). These are
+    /// separate `OnceLock`s so a test can drive the ST path in isolation.
+    pub fn lean_init_st_once() -> Result<(), String> {
+        INIT_ST
+            .get_or_init(|| {
+                let rc = unsafe { dregg_ffi_init_st() };
+                if rc == 0 {
+                    Ok(())
+                } else {
+                    Err(format!("dregg_ffi_init_st failed (rc={rc})"))
+                }
+            })
+            .clone()
     }
 
     fn lean_string_bridge(
@@ -310,6 +336,10 @@ mod ffi {
         Err("libdregg_lean.a was not present at build time".into())
     }
 
+    pub fn lean_init_st_once() -> Result<(), String> {
+        Err("libdregg_lean.a was not present at build time".into())
+    }
+
     pub fn lean_forest_auth(_wire: &str) -> Result<String, String> {
         Err("Lean static lib not linked".into())
     }
@@ -335,8 +365,33 @@ fn lean_init_once() -> Result<(), String> {
     ffi::lean_init_once()
 }
 
+fn lean_init_st_once() -> Result<(), String> {
+    ffi::lean_init_st_once()
+}
+
 fn ensure_lean_init() -> Result<(), String> {
     lean_init_once()
+}
+
+/// Initialize the Lean runtime in the **single-threaded / libuv-thread-free** mode
+/// (the pg-Tier-D-embeddable path — see `docs/EMBEDDABLE-LEAN-RUNTIME.md`). Unlike
+/// [`lean_available`], this init does NOT start the libuv event-loop thread, so the
+/// runtime executes entirely on the caller's thread — the property a single-threaded
+/// host (a postgres backend) requires. Returns `true` on a successful init.
+///
+/// A process must commit to ONE init flavor: do not mix this with [`lean_available`]
+/// / [`shadow_exec_full_forest_auth`] (the default multi-thread path) in the same
+/// process — the Lean module initializers run once per process.
+pub fn init_single_threaded() -> bool {
+    lean_init_st_once().is_ok()
+}
+
+/// Run the gated complete-turn executor (`execFullForestG`) after a **single-threaded**
+/// init (no libuv event-loop thread). Semantically identical to
+/// [`shadow_exec_full_forest_auth`]; the only difference is the runtime init flavor.
+pub fn shadow_exec_full_forest_auth_single_threaded(wire: &str) -> Result<String, String> {
+    lean_init_st_once()?;
+    lean_forest_auth(wire)
 }
 
 fn lean_forest_auth(wire: &str) -> Result<String, String> {
