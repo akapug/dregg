@@ -40,9 +40,9 @@ use dregg_cell::{AuthRequired, Cell, Ledger, Permissions};
 use dregg_circuit::descriptor_ir2::{
     MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2, verify_vm_descriptor2,
 };
-use dregg_circuit::effect_vm::columns::{STATE_BEFORE_BASE, state};
+use dregg_circuit::effect_vm::columns::{PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE, state};
 use dregg_circuit::effect_vm::trace_rotated::{
-    AFTER_BASE, B_COMMITTED_HEIGHT, B_IROOT, B_STATE_COMMIT, BEFORE_BASE, CAVEAT_BASE, C_SPAN,
+    AFTER_BASE, B_COMMITTED_HEIGHT, B_IROOT, B_STATE_COMMIT, BEFORE_BASE, C_SPAN, CAVEAT_BASE,
     ROT_WIDTH, RotatedBlockWitness, empty_caveat_manifest, generate_rotated_effect_vm_trace,
     rotated_descriptor_name_for_effect, transfer_caveat_manifest,
 };
@@ -71,6 +71,22 @@ fn rotated_transfer_json() -> &'static str {
 /// production the sdk — own this bridge; the generator itself is pure-circuit).
 fn bridge(w: &rw::RotationWitness) -> RotatedBlockWitness {
     RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).expect("31 pre-iroot limbs")
+}
+
+/// Resolve a rotated descriptor JSON by registry key from the committed staged TSV.
+fn rotated_descriptor_json(name: &str) -> &'static str {
+    V3_STAGED_REGISTRY_TSV
+        .lines()
+        .find_map(|l| {
+            let mut it = l.splitn(3, '\t');
+            if it.next() == Some(name) {
+                let _ = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| panic!("{name} not in V3_STAGED_REGISTRY_TSV"))
 }
 
 fn open_permissions() -> Permissions {
@@ -104,8 +120,8 @@ fn producer_cell(balance: i64, nonce: u64) -> Cell {
 
 #[test]
 fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
-    let desc = parse_vm_descriptor2(rotated_transfer_json())
-        .expect("rotated transfer descriptor parses");
+    let desc =
+        parse_vm_descriptor2(rotated_transfer_json()).expect("rotated transfer descriptor parses");
     assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 311");
     assert_eq!(desc.public_input_count, 38, "34 v1 PIs + 4 appended");
 
@@ -187,11 +203,13 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
         (30, "committed_height"),
     ] {
         assert_eq!(
-            after_w.pre_limbs[idx], last[AFTER_BASE + idx],
+            after_w.pre_limbs[idx],
+            last[AFTER_BASE + idx],
             "differential: producer {label} limb == trace after-block limb"
         );
         assert_eq!(
-            before_w.pre_limbs[idx], r0[BEFORE_BASE + idx],
+            before_w.pre_limbs[idx],
+            r0[BEFORE_BASE + idx],
             "differential: producer {label} limb == trace before-block limb"
         );
     }
@@ -233,10 +251,26 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
     );
 
     // -- the four appended PIs were already read by the generator; pin them for clarity. --
-    assert_eq!(dpis[34], r0[BEFORE_BASE + B_STATE_COMMIT], "PI 34 = rotated OLD commit");
-    assert_eq!(dpis[35], last[AFTER_BASE + B_STATE_COMMIT], "PI 35 = rotated NEW commit");
-    assert_eq!(dpis[36], last[AFTER_BASE + B_COMMITTED_HEIGHT], "PI 36 = committed height");
-    assert_eq!(dpis[37], last[CAVEAT_BASE + C_SPAN - 1], "PI 37 = caveat commit");
+    assert_eq!(
+        dpis[34],
+        r0[BEFORE_BASE + B_STATE_COMMIT],
+        "PI 34 = rotated OLD commit"
+    );
+    assert_eq!(
+        dpis[35],
+        last[AFTER_BASE + B_STATE_COMMIT],
+        "PI 35 = rotated NEW commit"
+    );
+    assert_eq!(
+        dpis[36],
+        last[AFTER_BASE + B_COMMITTED_HEIGHT],
+        "PI 36 = committed height"
+    );
+    assert_eq!(
+        dpis[37],
+        last[CAVEAT_BASE + C_SPAN - 1],
+        "PI 37 = caveat commit"
+    );
 
     let mem_boundary = MemBoundaryWitness::default();
     let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
@@ -291,7 +325,10 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
     {
         let mut p = dpis.clone();
         p[35] = p[35] + BabyBear::new(123);
-        assert!(refused(&trace, &p), "forged rotated NEW-commit PI must refuse");
+        assert!(
+            refused(&trace, &p),
+            "forged rotated NEW-commit PI must refuse"
+        );
     }
 
     eprintln!(
@@ -315,8 +352,8 @@ fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
         amount_lo: BabyBear::new(30),
         amount_full: 30,
     };
-    let name = rotated_descriptor_name_for_effect(&burn_effect)
-        .expect("Burn is a rotated cohort member");
+    let name =
+        rotated_descriptor_name_for_effect(&burn_effect).expect("Burn is a rotated cohort member");
     assert_eq!(name, "burnVmDescriptor2R24");
 
     // Resolve its rotated descriptor from the committed registry.
@@ -466,7 +503,11 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
     assert_eq!(trace[0].len(), ROT_WIDTH, "311-col rotated trace");
 
     // THE FIFTH PI: 39 elements, and PI[38] == the row-0 spend's folded nullifier (param0).
-    assert_eq!(dpis.len(), 39, "note-spend rotated PI is 39 (the nullifier slot appended)");
+    assert_eq!(
+        dpis.len(),
+        39,
+        "note-spend rotated PI is 39 (the nullifier slot appended)"
+    );
     let r0 = &trace[0];
     assert_eq!(
         dpis[38],
@@ -474,7 +515,11 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
         "PI 38 = the spend row's folded nullifier (param0)"
     );
     // The four commit pins are undisturbed below it.
-    assert_eq!(dpis[34], r0[BEFORE_BASE + B_STATE_COMMIT], "PI 34 = rotated OLD commit");
+    assert_eq!(
+        dpis[34],
+        r0[BEFORE_BASE + B_STATE_COMMIT],
+        "PI 34 = rotated OLD commit"
+    );
 
     let mem_boundary = MemBoundaryWitness::default();
     let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
@@ -521,4 +566,226 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
             "tampering the spend row's nullifier column away from PI[38] MUST be UNSAT"
         );
     }
+}
+
+/// THE C7 LAST-FLIP-GATE (end-to-end, in-circuit): a real ROTATED `SetField` turn AND a real
+/// ROTATED `BridgeMint` turn each prove + verify through their rotated descriptors
+/// (`setFieldVmDescriptor2-{slot}R24` / `mintVmDescriptor2R24`), and the NONCE-TICK SOUNDNESS
+/// TOOTH bites: a forged nonce delta (the after-nonce NOT equal to before-nonce + 1) is UNSAT.
+///
+/// The model found the bug (`docs/_RUST-LEAN-DIVERGENCE-LEDGER`): the runtime trace generator
+/// TICKS the per-cell nonce on every non-NoOp row (`trace.rs` `Effect::SetField` / `BridgeMint`
+/// → `new_state.nonce += 1`), and `fill_block` copies that ticked nonce into the rotated `r1`
+/// weld — but the rotated SetField/BridgeMint descriptors used to assert nonce PASSTHROUGH, so a
+/// real such turn was UNSAT on the rotated leg (the node fell back to v1). The fix (Lean
+/// `EffectVmEmitRotationV3.{setFieldTickFace,mintTickFace}`) swaps the freeze gate for the
+/// transfer/noteSpend TICK gate `(after_nonce − before_nonce) − (1 − selector)`, so the honest
+/// ticked trace PROVES and a forged passthrough is UNSAT. With this, EVERY cohort effect rotates
+/// and C7's `generate_effect_vm_trace` is fully unblocked.
+#[test]
+fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
+    let mem_boundary = MemBoundaryWitness::default();
+    let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
+
+    // A reusable refuser closure over a descriptor.
+    let refused = |desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+                   t: &Vec<Vec<BabyBear>>,
+                   p: &Vec<BabyBear>|
+     -> bool {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_vm_descriptor2(desc, t, p, &mem_boundary, &map_heaps)
+        }));
+        match r {
+            Err(_) => true,
+            Ok(res) => res.is_err(),
+        }
+    };
+
+    // ===== (A) ROTATED SETFIELD (slot 0): tick nonce, prove+verify, refuse forged delta. =====
+    {
+        let set_field = Effect::SetField {
+            field_idx: 0,
+            value: BabyBear::new(0xABCD),
+        };
+        let name = rotated_descriptor_name_for_effect(&set_field)
+            .expect("SetField is a rotated cohort member");
+        assert_eq!(name, "setFieldVmDescriptor2-0R24");
+        let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
+            .expect("rotated setField descriptor parses");
+        assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 311");
+        assert_eq!(
+            desc.public_input_count, 38,
+            "setField is a 38-PI cohort member"
+        );
+
+        // A real setField turn: the field write ticks the nonce (before 5 → after 6); the
+        // economic block is frozen. (The producer cell carries the pre-write fields; the
+        // generator writes `fields[0] = value` and ticks the nonce on row 0.)
+        let before_balance: i64 = 70_000;
+        let st = CellState::new(before_balance as u64, 5);
+        let effects = vec![set_field];
+
+        let mut ledger = Ledger::new();
+        let before_cell = producer_cell(before_balance, 5);
+        let after_cell = producer_cell(before_balance, 6); // nonce TICKED 5 → 6
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let nullifier_root = [0u8; 32];
+        let receipt_log: Vec<[u8; 32]> = vec![[9u8; 32]];
+
+        let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &receipt_log);
+        let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &receipt_log);
+
+        let caveat = empty_caveat_manifest();
+        let (trace, dpis) = generate_rotated_effect_vm_trace(
+            &st,
+            &effects,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &caveat,
+        )
+        .expect("live rotated generator must produce a setField trace + 38 PIs");
+        assert_eq!(trace[0].len(), ROT_WIDTH, "311-col rotated trace");
+
+        // THE NONCE TICK (the runtime ground truth): the rotated r1 weld carries before+1.
+        let r0 = &trace[0];
+        assert_eq!(
+            r0[STATE_AFTER_BASE + state::NONCE] - r0[STATE_BEFORE_BASE + state::NONCE],
+            BabyBear::ONE,
+            "setField row: after_nonce − before_nonce == 1 (the runtime tick)"
+        );
+        assert_eq!(
+            r0[BEFORE_BASE + 2],
+            r0[STATE_BEFORE_BASE + state::NONCE],
+            "the rotated r1 weld carries the v1 before-nonce"
+        );
+
+        // The field write lands the value at param1 (NEW_VALUE), the column the corrected
+        // descriptor reads; the written field equals it.
+        assert_eq!(
+            r0[76 + 3], // field[0]_after (saCol FIELD_BASE)
+            r0[PARAM_BASE + 1],
+            "setField row: field[0]_after == param1 (the runtime NEW_VALUE column)"
+        );
+
+        // PROVE + VERIFY end-to-end (this is exactly what used to be UNSAT before the fixes).
+        let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+            .expect("rotated setField (ticked nonce) must prove end-to-end");
+        verify_vm_descriptor2(&desc, &proof, &dpis)
+            .expect("rotated setField proof must verify independently");
+        eprintln!("ROTATED SETFIELD (R=24, ticked nonce, LIVE-GENERATED) — PROVED + VERIFIED");
+
+        // SOUNDNESS TOOTH 1 (nonce): forge the after-nonce so the delta is NOT the tick. The tick
+        // gate `(after − before) − (1 − s_noop)` reads the v1 after-nonce column; a forged
+        // passthrough (after := before, delta 0 on a non-NoOp row) FAILS it → UNSAT.
+        {
+            let mut t = trace.clone();
+            for row in t.iter_mut() {
+                row[STATE_AFTER_BASE + state::NONCE] = row[STATE_BEFORE_BASE + state::NONCE];
+            }
+            assert!(
+                refused(&desc, &t, &dpis),
+                "a forged setField nonce passthrough (after == before, not the tick) MUST be UNSAT"
+            );
+        }
+        // SOUNDNESS TOOTH 2 (value column): forge the written field so it no longer matches param1
+        // (the runtime NEW_VALUE column the corrected write gate reads) → UNSAT.
+        {
+            let mut t = trace.clone();
+            for row in t.iter_mut() {
+                row[76 + 3] = row[76 + 3] + BabyBear::ONE; // bump field[0]_after off param1
+            }
+            assert!(
+                refused(&desc, &t, &dpis),
+                "a setField row whose written field ≠ param1 (the value column) MUST be UNSAT"
+            );
+        }
+    }
+
+    // ===== (B) ROTATED BRIDGEMINT: tick nonce, prove+verify, refuse forged delta. =====
+    {
+        let bridge_mint = Effect::BridgeMint {
+            value_lo: BabyBear::new(30),
+            mint_hash: BabyBear::new(0),
+            value_full: 30,
+        };
+        let name = rotated_descriptor_name_for_effect(&bridge_mint)
+            .expect("BridgeMint is a rotated cohort member");
+        assert_eq!(name, "mintVmDescriptor2R24");
+        let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
+            .expect("rotated bridgeMint descriptor parses");
+        assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 311");
+        assert_eq!(
+            desc.public_input_count, 38,
+            "bridgeMint is a 38-PI cohort member"
+        );
+
+        // A real bridge-mint turn: credit bal_lo by `value` (100 → 130), the nonce ticks 5 → 6.
+        let before_balance: i64 = 100;
+        let value: i64 = 30;
+        let st = CellState::new(before_balance as u64, 5);
+        let effects = vec![bridge_mint];
+
+        let mut ledger = Ledger::new();
+        let before_cell = producer_cell(before_balance, 5);
+        let after_cell = producer_cell(before_balance + value, 6); // credit + nonce TICK
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let nullifier_root = [0u8; 32];
+        let receipt_log: Vec<[u8; 32]> = vec![[11u8; 32]];
+
+        let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &receipt_log);
+        let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &receipt_log);
+
+        let caveat = empty_caveat_manifest();
+        let (trace, dpis) = generate_rotated_effect_vm_trace(
+            &st,
+            &effects,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &caveat,
+        )
+        .expect("live rotated generator must produce a bridgeMint trace + 38 PIs");
+
+        let r0 = &trace[0];
+        assert_eq!(
+            r0[STATE_AFTER_BASE + state::NONCE] - r0[STATE_BEFORE_BASE + state::NONCE],
+            BabyBear::ONE,
+            "bridgeMint row: after_nonce − before_nonce == 1 (the runtime tick)"
+        );
+
+        let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+            .expect("rotated bridgeMint (ticked nonce) must prove end-to-end");
+        verify_vm_descriptor2(&desc, &proof, &dpis)
+            .expect("rotated bridgeMint proof must verify independently");
+        eprintln!("ROTATED BRIDGEMINT (R=24, ticked nonce, LIVE-GENERATED) — PROVED + VERIFIED");
+
+        // SOUNDNESS TOOTH 1 (nonce): forged nonce passthrough is UNSAT.
+        {
+            let mut t = trace.clone();
+            for row in t.iter_mut() {
+                row[STATE_AFTER_BASE + state::NONCE] = row[STATE_BEFORE_BASE + state::NONCE];
+            }
+            assert!(
+                refused(&desc, &t, &dpis),
+                "a forged bridgeMint nonce passthrough (after == before) MUST be UNSAT"
+            );
+        }
+        // SOUNDNESS TOOTH 2 (credit column): forge the after-balance so it is NOT before + param1
+        // (the runtime value_lo column the corrected credit gate reads) → UNSAT.
+        {
+            let mut t = trace.clone();
+            for row in t.iter_mut() {
+                row[76 + state::BALANCE_LO] = row[76 + state::BALANCE_LO] + BabyBear::ONE;
+            }
+            assert!(
+                refused(&desc, &t, &dpis),
+                "a bridgeMint row whose post-balance ≠ before + param1 (the credit) MUST be UNSAT"
+            );
+        }
+    }
+
+    eprintln!(
+        "C7 NONCE-TICK GATE GREEN (LIVE): rotated SetField + BridgeMint prove+verify on real \
+         ticked turns through the LIVE generator, and a forged nonce delta is UNSAT — every \
+         cohort effect now rotates."
+    );
 }
