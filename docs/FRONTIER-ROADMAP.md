@@ -267,7 +267,7 @@ bundles for the browser, not just the fetch-only organs. Authorization stays ine
 devnet becomes a real signed turn.*
 
 **N15 — The cap-gated query cookbook + the caps-as-rows explorer** *(pg-dregg SQL/docs
-+ site/; pure SQL + static, zero build risk)*
++ site/; pure SQL + static, zero build risk)* — **LANDED**
 Ship parameterized RLS-gated views + recursive queries as copy-paste recipes — the
 delegation tree (`WITH RECURSIVE` over `cap_edges`), the conservation check
 (`sum(balance) = genesis`), per-cell time-travel, the receipt-chain walk with an in-SQL
@@ -275,6 +275,15 @@ non-omission assertion (`prev_root = lag(ledger_root)`), the no-amplification au
 (`cap_attenuations` vs grantor). Reframe `site/explorer` as **"your capabilities,
 expressed as the rows/cells you may read"** — the same "a cap IS a view" insight, one
 glass in SQL, one in the browser.
+*Built:* `pg-dregg/sql/cookbook.sql` (seven runnable recipes) + `sql/cookbook-seed.sql`
+(a demo delegation graph with one deliberate amplification) + `docs/COOKBOOK.md` (the
+walk-through). Recipes 1–6 run top-to-bottom against the live pg18 mirror with zero
+errors; recipe 6's narrowing is observed with real minted tokens (1/6/0 rows); recipe 7
+is the Tier-C engine refusing a non-chaining turn. The browser twin is
+`site/explorer/caps-as-rows.html` (+ `.js`), linked from the explorer header — present a
+cap, watch the rows narrow (gate respected: filtered values redacted; explained via
+`dregg_cap_explain`). Site builds clean in Docker node:22; the page is verified in a
+headless Playwright render (narrowing + explain + the flagged amplification edge).
 
 **N16 — The per-member authorization boundary + anti-spoof identity** *(starbridge-v2;
 render weld over existing models)*
