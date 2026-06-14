@@ -230,8 +230,10 @@ live prove/verify path. Pieces:
 proves ROTATED. `sdk::prove_turn_self_sovereign_rotated`; `turn_proving::prove_and_verify_finalized_turn`
 gained `rotation: Option<RotationTurnWitness>` + `rotation_witness_for_self_sovereign` (real before/after
 `Cell` → witnesses; self-validating cap-less gate so OLD_COMMIT agrees with the v1 leg). `blocklace_sync.rs`
-captures `full_turn_pre_cell` + wires the `(None,None)` arm. FRESHNESS/CAPABILITY arms stay v1 (the rotated
-38-PI omits `NOTESPEND_NULLIFIER` — the C4 honest boundary).
+captures `full_turn_pre_cell` + wires the `(None,None)` arm. The FRESHNESS arm now ROTATES too (`cc1e1399c`;
+the rotated 39-PI `rotateV3WithNullifierPin` pins the nullifier at PI[38], anti-ghost
+`flow_b_note_spend_rotated_nullifier_pin_is_antighost` 2026-06-14); the CAPABILITY arm stays v1 (the C4
+honest boundary).
 
 **THE C5 REGEN RECIPE (do NOT run — the MAIN LOOP runs it as the coordinated VK-settle):**
   1. `v3Registry → default`: re-emit `EmitAllJson`/the registry so `effect_vm_descriptors.rs` ships the
@@ -276,9 +278,13 @@ captures `full_turn_pre_cell` + wires the `(None,None)` arm. FRESHNESS/CAPABILIT
     `effect_vm_p3_descriptor_differential.rs`/`turn_revalidation_vs_prove.rs`.
 
 **WHAT'S STILL GATED (the burn-down before C5 can run):** (a) wall-C — confirm the ~70 produce/verify sites
-are all `rotation: None`-clean or threaded (most need no edit); (b) the rotated generator must subsume the
-v1 `generate_effect_vm_trace` for the FLOW-B flat leg's note-spend + capability paths (today they stay v1 —
-the rotated 38-PI lacks `NOTESPEND_NULLIFIER`); (c) the recursion knots (ivc/joint) already have rotated
+are all `rotation: None`-clean or threaded (CLOSED 2026-06-14 — the freshness arm ROTATES: the rotation
+witness is built inside `prove_and_verify_finalized_turn_freshness`, and the anti-ghost test
+`flow_b_note_spend_rotated_nullifier_pin_is_antighost` proves the rotated leg pins the nullifier at PI[38] +
+a forged item is rejected on the rotated tooth); (b) the FLOW-B NOTE-SPEND flat leg ROTATES via the 39-PI
+`rotateV3WithNullifierPin` (nullifier@PI[38], `cc1e1399c`) — the prior "rotated 38-PI lacks
+`NOTESPEND_NULLIFIER`" claim is RETIRED (stale); the CAPABILITY flat leg is the remaining flat-leg item; (c)
+the recursion knots (ivc/joint) already have rotated
 cores (C4-recursion) but their v1 cores delete only at C7; (d) a persvati workspace gauntlet on the
 converged tree before the VK epoch.
   4. C4 = reroute the ~70 v1 call-sites + `aggregate_bilateral_prover.rs` (204→38 PI slice) + un-gate.
