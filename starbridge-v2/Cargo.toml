@@ -106,8 +106,19 @@ path = "src/main.rs"
 default = ["native-full"]
 
 # native-full pulls the embedded executor (`embedded-executor`) AND the gpui
-# renderer (`gpui-ui`). This is the headline build.
-native-full = ["embedded-executor", "gpui-ui"]
+# renderer (`gpui-ui`) AND the LIVE-NODE connection (`live-node`, so the master
+# interface can ALSO connect to a remote node/federation). This is the headline build.
+native-full = ["embedded-executor", "gpui-ui", "live-node"]
+
+# The LIVE-NODE connection — the real HTTP+SSE link to a running dregg node
+# (`NodeClient::Http` + the `/api/events/stream` reader). Pulls `reqwest` (its
+# blocking client runs its own internal runtime on a private thread, so it needs
+# NO tokio runtime from the caller — clean to add to the otherwise-async-free
+# embedded build). The PURE layer of `live_node` (the SSE parser + reflection +
+# the receipt-feed cursor) compiles WITHOUT this feature and is `cargo test`-able;
+# only the byte-pull (`LiveNode::sync` + the SSE reader) is gated here. Both
+# `native-full` and `sel4-thin` enable it (the wire contract is shared).
+live-node = ["dep:reqwest"]
 
 # The embedded verified executor + live local world. Links libdregg_lean.a.
 # Headless-usable (the `World` engine + dynamics + reflection are gpui-free and
@@ -132,8 +143,9 @@ gpui-ui = ["dep:gpui", "dep:gpui_platform", "gpui_platform/runtime_shaders"]
 
 # The Lean-free thin-client / verifier path for the seL4 component end-state.
 # Mutually exclusive with native-full at the linker level (no executor, no
-# gpui); selected with `--no-default-features --features sel4-thin`.
-sel4-thin = ["dep:reqwest"]
+# gpui); selected with `--no-default-features --features sel4-thin`. It speaks the
+# same HTTP+SSE wire contract (`live-node`) the embedded build's remote panel uses.
+sel4-thin = ["live-node"]
 
 [dependencies]
 # --- gpui (gated on `gpui-ui`) ----------------------------------------------

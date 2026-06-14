@@ -25,6 +25,32 @@
 //! The wire-contract client (`client`/`model`) lives in the binary crate for
 //! the remote-node + `sel4-thin` paths.
 
+// The wire-contract DATA MODEL (`GET /status`, `/api/cells`, `/api/events/stream`
+// receipt events, the `POST /turn/submit` request shape). Pure serde structs (no
+// reqwest, no gpui), so they compile in BOTH builds and are `cargo test`-able —
+// the embedded build's LIVE-NODE panel reflects a remote node through these, and
+// the sel4-thin build speaks them as its only contract. Single-sourced here (the
+// bin re-exports them) so the live-node lane and the thin client share one mirror.
+#[cfg(any(feature = "embedded-executor", feature = "sel4-thin"))]
+pub mod model;
+// The wire-contract CLIENT (`NodeClient::{Mock,Http}`) + the SSE/snapshot I/O.
+// The HTTP/SSE byte-pull is gated on `live-node` (pulls `reqwest`); the Mock
+// backend + the wire types are always available. Lives in the library so the
+// embedded master interface's live-node panel reuses it (not just the thin bin).
+#[cfg(any(feature = "embedded-executor", feature = "sel4-thin"))]
+pub mod client;
+
+// The LIVE NODE connection — the SSE-drain + live-reflection heart (the pure
+// layer is gpui-free + `cargo test`-able; the reqwest I/O is gated on `live-node`).
+#[cfg(feature = "embedded-executor")]
+pub mod live_node;
+
+// The native deos AFFORDANCE surface — htmx-on-crack with the firing→executed-turn
+// seam CLOSED through the embedded executor (the thesis `starbridge-web-surface`
+// could only model). gpui-free, `cargo test`-able.
+#[cfg(feature = "embedded-executor")]
+pub mod affordance;
+
 #[cfg(feature = "embedded-executor")]
 pub mod agent;
 #[cfg(feature = "embedded-executor")]
@@ -75,9 +101,16 @@ pub mod terminal;
 pub mod world;
 
 #[cfg(feature = "embedded-executor")]
+pub use affordance::{
+    AffordanceIntent, AffordanceSnapshot, AffordanceSurface, CellAffordance, EffectSummary,
+    FireError, FireOutcome, Rehydration,
+};
+#[cfg(feature = "embedded-executor")]
 pub use agent::{AgentActivity, AgentSurface};
 #[cfg(feature = "embedded-executor")]
 pub use buffer::{BufferCell, BufferDoc, BufferError, BufferView};
+#[cfg(feature = "embedded-executor")]
+pub use live_node::{LiveReflection, ReceiptFeed, SseParser, SseRecord};
 #[cfg(feature = "embedded-executor")]
 pub use compositor::{
     label_of, CompositedSurface, Compositor, CompositorScene, FrameCommit, Present, PresentError,

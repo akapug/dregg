@@ -19,14 +19,12 @@
 //! The `NodeClient::{Mock,Http}` surface (`client`/`model`) is compiled in BOTH
 //! builds: the master interface can ALSO connect to remote nodes/federations.
 
-// The wire-contract client + mirrored models — the sel4-thin path (and the
-// seed of a native remote-federation panel). reqwest is only linked under
-// `sel4-thin`, so these are gated to that build for now (a native remote-
-// federation connection is a designed-pending lane — see docs/STARBRIDGE-V2.md).
+// The wire-contract client + mirrored models now live in the LIBRARY
+// (`starbridge_v2::{client, model}`) so BOTH the embedded master interface's
+// live-node panel and the sel4-thin path share one mirror. The thin path below
+// references them through the library crate.
 #[cfg(feature = "sel4-thin")]
-mod client;
-#[cfg(feature = "sel4-thin")]
-mod model;
+use starbridge_v2::client;
 
 // The embedded engine + reflective model + dynamics live in the library crate
 // (`starbridge_v2::{world, dynamics, reflect}`) so they are `cargo test`-able.
@@ -44,6 +42,11 @@ use starbridge_v2::{demo, reflect, world};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let headless = args.iter().any(|a| a == "--headless");
+    // `--node <url>`: ALSO connect the master interface to a LIVE remote dregg
+    // node (its receipt nervous system + cell reflections), alongside the embedded
+    // image. The embedded world is the headline; this is the additional remote
+    // federation panel (the SSE stream advances the live receipt list per receipt).
+    let node_url = node_url_arg(&args);
 
     #[cfg(feature = "embedded-executor")]
     {
@@ -63,15 +66,25 @@ fn main() {
 
         #[cfg(feature = "gpui-ui")]
         {
-            run_window(world, anchors);
+            run_window(world, anchors, node_url);
             return;
         }
     }
+
+    // In the embedded-but-headless build (no gpui), `node_url` is never moved into
+    // `run_window`; consume it so it isn't flagged unused. (With gpui on, the gpui
+    // branch above moved it and returned; with embedded off, the sel4-thin block
+    // below consumes it.)
+    #[cfg(all(feature = "embedded-executor", not(feature = "gpui-ui")))]
+    let _ = node_url;
 
     #[cfg(not(feature = "embedded-executor"))]
     {
         // sel4-thin: no embedded executor. Speak the wire contract to a node.
         let _ = headless;
+        // `--node <url>` resolves the same as the positional base URL below; the
+        // thin path takes the positional form, so just consume the parsed value.
+        let _ = node_url;
         let base = args.iter().nth(1).cloned();
         match base {
             Some(url) if url.starts_with("http") => {
@@ -158,8 +171,27 @@ fn headless_killer_demo() -> i32 {
     }
 }
 
+/// Parse an optional `--node <url>` (or `--node=<url>`) argument — the live
+/// remote-node base URL. Returns `None` when absent.
+fn node_url_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--node" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--node=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
 #[cfg(feature = "gpui-ui")]
-fn run_window(world: world::World, anchors: [dregg_cell::CellId; 3]) {
+fn run_window(
+    world: world::World,
+    anchors: [dregg_cell::CellId; 3],
+    node_url: Option<String>,
+) {
     use gpui::{
         px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions,
     };
@@ -181,9 +213,10 @@ fn run_window(world: world::World, anchors: [dregg_cell::CellId; 3]) {
                 ..Default::default()
             },
             |window, cx| {
+                let node_url = node_url.clone();
                 let view = cx.new(|cx| {
                     let focus = cx.focus_handle();
-                    cockpit::Cockpit::new(shared.clone(), anchors, focus)
+                    cockpit::Cockpit::with_node(shared.clone(), anchors, focus, node_url)
                 });
                 // Focus the cockpit root so it receives ⌘K + palette keystrokes.
                 view.update(cx, |c, cx| c.focus_on_open(window, cx));
