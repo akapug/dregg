@@ -184,6 +184,19 @@ impl World {
         &self.dynamics
     }
 
+    /// Emit a [`WorldEvent`] onto the dynamics stream directly (an observation a
+    /// view-layer model records about a transition the executor already made).
+    ///
+    /// This does NOT bypass the commit path — it is for transitions whose AUTHORITY
+    /// the executor decided (a committed turn) but whose VIEW-LAYER meaning a model
+    /// adds (e.g. the verified compositor's `SurfaceDamaged`, emitted only after a
+    /// `present()`'s `SetField` turn COMMITTED through `commit_turn`). The state
+    /// change itself always went through the real executor; this records the
+    /// observation for the feed.
+    pub fn emit_dynamics(&mut self, event: WorldEvent) {
+        self.dynamics.emit(event);
+    }
+
     pub fn height(&self) -> u64 {
         self.height
     }
@@ -292,6 +305,64 @@ impl World {
     pub fn genesis_install(&mut self, cell: Cell) -> CellId {
         let balance = cell.state.balance();
         self.install_genesis(cell, balance)
+    }
+
+    /// Re-program a cell's [`CellProgram`] in place (a GENESIS-PATH update, like
+    /// seeding the cell — for the trusted window manager that OWNS a cell and
+    /// installs its caveats). Used by the verified compositor
+    /// ([`crate::scene::VerifiedScene`]) to bake the scene-authority admit-table
+    /// onto a compositor cell before a `present()` so the EXECUTOR'S program-check
+    /// gates the frame advance (the Lean `compositorSpec.caveats` closed over the
+    /// live scene). Mirrored into the replay-recorder's ledger so the recorded
+    /// post-state roots stay in lock-step with the live engine (a later present's
+    /// `SetField` re-executes against the SAME program on both ledgers).
+    ///
+    /// This installs AUTHORITY (a slot caveat), it does not move value or commit a
+    /// turn; it is the trusted root's prerogative over a cell it owns, exactly as
+    /// `genesis_install` seeds a cell's initial program. Returns `true` if the
+    /// cell existed (in the live engine ledger) and was re-programmed.
+    pub fn set_cell_program(&mut self, cell: &CellId, program: dregg_cell::CellProgram) -> bool {
+        let existed = if let Some(c) = self.engine.ledger_mut().get_mut(cell) {
+            c.program = program.clone();
+            true
+        } else {
+            false
+        };
+        // Keep the replay tape's ledger in lock-step so its recorded roots match
+        // the live engine's (the compositor cell carries the SAME program on both).
+        if let Some(c) = self.record_ledger.get_mut(cell) {
+            c.program = program;
+        }
+        existed
+    }
+
+    /// Grant `holder` a capability reaching `target` via the GENESIS PATH (the
+    /// trusted window manager installing an owner-grant — the way `surface.rs`
+    /// documents the shell handing the surface cap back when a surface opens). The
+    /// installed cap is unrestricted (`AuthRequired::None`); the executor's
+    /// no-amplification rule still gates any later *delegation* of it. Mirrored
+    /// into the replay-recorder's ledger so the recorded roots stay in lock-step.
+    /// Returns the granted slot (in the live engine ledger), or `None` if the
+    /// holder cell does not exist or its c-list is full.
+    ///
+    /// This is the authority leg of a `present()`: the presenter holds a surface
+    /// cap on the compositor cell (the Lean `compositorState`'s `[.endpoint cell …]`),
+    /// so the executor's cross-cell authority check passes and the SCENE CAVEAT —
+    /// not the cap — is the load-bearing admission gate (faithful to the Lean §10:
+    /// even an authorized-to-present cell cannot overpaint/spoof/steal-focus).
+    pub fn genesis_grant_cap(&mut self, holder: &CellId, target: CellId) -> Option<u32> {
+        let slot = self
+            .engine
+            .ledger_mut()
+            .get_mut(holder)?
+            .capabilities
+            .grant(target, AuthRequired::None);
+        // Mirror into the replay tape's ledger (same holder, same target) so the
+        // recorded roots match the live engine's after a present's SetField.
+        if let Some(c) = self.record_ledger.get_mut(holder) {
+            let _ = c.capabilities.grant(target, AuthRequired::None);
+        }
+        slot
     }
 
     /// Deploy a [`FactoryDescriptor`] into the embedded executor's factory
