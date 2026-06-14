@@ -191,3 +191,25 @@ ceptre:
     type: proceedings
     title: AAAI Conference on Artificial Intelligence and Interactive Digital Entertainment
       (AIIDE)
+capdl:
+  type: article
+  title: 'capDL: A Language for Describing Capability-Based Systems'
+  author:
+  - Kuz, Ihor
+  - Liu, Yan
+  - Gorton, Ian
+  - Heiser, Gernot
+  date: 2010
+  parent:
+    type: proceedings
+    title: ACM Asia-Pacific Workshop on Systems (APSys)
+nitpicker:
+  type: article
+  title: 'A Nitpicker''s Guide to a Minimal-Complexity Secure GUI'
+  author:
+  - Feske, Norman
+  - Helmuth, Christian
+  date: 2005
+  parent:
+    type: proceedings
+    title: Annual Computer Security Applications Conference (ACSAC)

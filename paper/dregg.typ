@@ -111,6 +111,22 @@ Applications are factory-minted cells whose rules are predicate programs
 enforced by the same executor, so application contracts are inherited from
 kernel theorems rather than re-established per app.
 
+The capability is one abstraction across a distance parameter. At its near end
+a local microkernel object and at its far end a distributed cell are the same
+attenuable reference, and the single-machine case is the collapsed limit where
+revocation is immediate and a commit is synchronous, not a degraded subset. On
+that axis the substrate descends to a capability-secure microkernel ($"seL4"$),
+where the kernel's capability graph isolates the protection domains and dregg's
+mediates the cells inside them, with a real prover checking proofs on the
+device; and it descends to a database, where reads are SQL and writes are
+verified turns. It surfaces, too: a window is a capability, an interaction is a
+turn, and a rendered scene is a per-viewer projection whose non-interference,
+attenuation, and liveness-typed rehydration are kernel theorems restated for
+pixels. The proof architecture keeps these claims honest as it evolves --- the
+circuit shape rotates under proof of equivalent enforcement, and every finalized
+turn stays verifiable across shapes --- so a light client's one check covers the
+whole history regardless of where and how it was produced.
+
 #v(1em)
 
 // --- Sections ----------------------------------------------------------------
@@ -122,10 +138,15 @@ kernel theorems rather than re-established per app.
 #include "sections/05-guards.typ"
 #include "sections/06-ordering.typ"
 #include "sections/07-realization.typ"
-#include "sections/08-assurance.typ"
-#include "sections/09-related.typ"
-#include "sections/10-limitations.typ"
-#include "sections/11-conclusion.typ"
+#include "sections/08-proof-architecture.typ"
+#include "sections/09-firmament.typ"
+#include "sections/10-deos.typ"
+#include "sections/11-sel4.typ"
+#include "sections/12-pg-dregg.typ"
+#include "sections/13-assurance.typ"
+#include "sections/14-related.typ"
+#include "sections/15-limitations.typ"
+#include "sections/16-conclusion.typ"
 
 // --- Appendix ----------------------------------------------------------------
 
