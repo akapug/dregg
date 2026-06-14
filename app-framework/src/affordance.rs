@@ -48,7 +48,8 @@
 //! `middleware`/`authorizer` proof/cap check, pointed at the affordance's
 //! `required ⊆ held`.
 
-use dregg_cell::{is_attenuation, AuthRequired};
+use dregg_cell::state::CellState;
+use dregg_cell::{is_attenuation, AuthRequired, CellProgram};
 use dregg_turn::action::Effect;
 use dregg_types::CellId;
 
@@ -229,7 +230,8 @@ pub enum FireError {
     NoSuchAffordance,
     /// The actor's held caps do NOT satisfy the affordance's `required_rights` —
     /// the anti-ghost tooth: a viewer firing an affordance they lack the rights for
-    /// is REFUSED by the REAL `is_attenuation`, never silently run.
+    /// is REFUSED by the REAL `is_attenuation`, never silently run. (The CAP tooth —
+    /// the twin of Lean `fireGated_cap_fail_refuses`.)
     Unauthorized {
         /// The affordance the actor tried to fire.
         affordance: String,
@@ -237,6 +239,21 @@ pub enum FireError {
         required: AuthRequired,
         /// The authority the actor actually held.
         held: AuthRequired,
+    },
+    /// The actor HOLDS the rights, but the cell's live state does NOT admit the fire
+    /// — the **state tooth**: a button is refused when the cell is in the wrong state
+    /// (the proposal is not `PENDING`, the deadline passed, the viewer already voted),
+    /// EVEN for a fully-authorized actor. This is the half a cap-only gate could
+    /// never express — the twin of Lean
+    /// `Dregg2.Deos.GatedAffordance.fireGated_state_fail_refuses`. The gate is the
+    /// REAL [`dregg_cell::CellProgram::evaluate`] (the SAME predicate the executor
+    /// runs every turn), refused IN-BAND before any dispatch.
+    StateConditionUnmet {
+        /// The affordance whose state condition was not met.
+        affordance: String,
+        /// A human-readable reason from the cell-program evaluator (which constraint
+        /// the `(old, new)` transition violated).
+        reason: String,
     },
 }
 
@@ -251,6 +268,13 @@ impl std::fmt::Display for FireError {
             } => write!(
                 f,
                 "unauthorized: firing `{affordance}` requires {required:?} but holder has {held:?}"
+            ),
+            FireError::StateConditionUnmet {
+                affordance,
+                reason,
+            } => write!(
+                f,
+                "state condition unmet: firing `{affordance}` is not admissible in the cell's current state ({reason})"
             ),
         }
     }
@@ -463,6 +487,271 @@ impl AffordanceSurface {
             projected_endpoint: format!("{prefix}/projected"),
             elements,
         }
+    }
+}
+
+// =============================================================================
+// GatedAffordance — the cap∧state conjunction ("htmx on crack" with teeth in TWO
+// dimensions). The Rust twin of `Dregg2.Deos.GatedAffordance` (the freshly-landed
+// Lean rung `metatheory/Dregg2/Deos/GatedAffordance.lean`).
+// =============================================================================
+
+/// A **gated affordance** — a [`CellAffordance`] (the cap-gated effect-template)
+/// PLUS a **live-state condition** the cell must satisfy for the fire to be
+/// admissible. The deos "htmx on crack" element with teeth in TWO dimensions: WHO
+/// may press the button (the cap-gate, in the carried `affordance`) AND whether the
+/// button may be pressed RIGHT NOW (the state-gate, `state_cond`).
+///
+/// This closes the gap the cap-only [`CellAffordance`] left open: an "approve"
+/// button fires only if the viewer HOLDS the approver cap AND the proposal is in
+/// `PENDING` state. That conjunction — a cap-gate AND a live-state predicate over the
+/// SAME interaction — had no home in the cap-only model. A `GatedAffordance` is the
+/// home: it pairs the REAL cap-gate ([`CellAffordance::authorized_for`] =
+/// [`dregg_cell::is_attenuation`]) with a REAL state condition (a
+/// [`dregg_cell::CellProgram`], evaluated by [`dregg_cell::CellProgram::evaluate`] —
+/// the SAME gate the executor runs every turn), and the fire commits IFF **both**
+/// pass.
+///
+/// This is NOT new semantics. The cap-gate is the EXISTING `is_attenuation`; the
+/// state-gate is the EXISTING `CellProgram::evaluate` (the cell program the executor
+/// already enforces). A gated affordance is their CONJUNCTION — `&&` — exactly as the
+/// Lean keystone `fireGated_iff` proves. Both teeth are load-bearing: neither alone
+/// admits the fire ([`GatedAffordance::gated_ok`] + the cross-polarity tests).
+#[derive(Clone, Debug)]
+pub struct GatedAffordance {
+    /// The cap-gated effect-template (the REAL effect + its `required_rights` — the
+    /// `is_attenuation` template). The CAP half of the conjunction.
+    pub affordance: CellAffordance,
+    /// The live-state condition the cell must satisfy for the fire to be admissible
+    /// — a REAL [`dregg_cell::CellProgram`] (the same predicate language the executor
+    /// enforces), evaluated against the touched cell's `(old, new)` transition. The
+    /// STATE half of the conjunction. `CellProgram::None` admits every state (a gated
+    /// affordance whose state condition is `None` degrades to a plain cap-gate).
+    pub state_cond: CellProgram,
+}
+
+impl GatedAffordance {
+    /// A gated affordance pairing `affordance` (the cap-gate) with `state_cond` (the
+    /// live-state gate).
+    pub fn new(affordance: CellAffordance, state_cond: CellProgram) -> Self {
+        GatedAffordance {
+            affordance,
+            state_cond,
+        }
+    }
+
+    /// The affordance name (delegates to the carried [`CellAffordance`]).
+    pub fn name(&self) -> &str {
+        &self.affordance.name
+    }
+
+    /// **The combined gate** — `gated_ok(held, old, new)`: the conjunction of the
+    /// cap-gate and the state-gate as one bool. THE predicate that says "this button
+    /// may fire right now, for this viewer, in this state". The Rust twin of the Lean
+    /// `gatedOK` / the `↔` of `fireGated_iff`: it is `true` IFF the holder's authority
+    /// admits the cap AND the cell-program admits the `(old, new)` transition.
+    ///
+    /// Both gates are REAL: the cap-gate is `is_attenuation`
+    /// ([`CellAffordance::authorized_for`]); the state-gate is the EXISTING
+    /// [`dregg_cell::CellProgram::evaluate`] (the SAME evaluator the executor runs).
+    pub fn gated_ok(&self, held: &AuthRequired, old: &CellState, new: &CellState) -> bool {
+        self.affordance.authorized_for(held) && self.state_admits(old, new).is_ok()
+    }
+
+    /// Evaluate ONLY the state-gate: does the cell program admit the `(old, new)`
+    /// transition? `Ok(())` ⇒ admitted; `Err(reason)` ⇒ refused (the human reason
+    /// from the cell-program evaluator). Calls the EXISTING
+    /// [`dregg_cell::CellProgram::evaluate`] — it authors NO new evaluator semantics.
+    pub fn state_admits(&self, old: &CellState, new: &CellState) -> Result<(), String> {
+        self.state_cond
+            .evaluate(new, Some(old), None)
+            .map_err(|e| e.to_string())
+    }
+
+    /// **Fire** the gated affordance — commit IFF caps AND state both pass. The Rust
+    /// twin of Lean `fireGated`:
+    ///
+    /// 1. the CAP tooth ([`CellAffordance::authorized_for`] = `is_attenuation`) — an
+    ///    unheld fire is [`FireError::Unauthorized`] (the twin of
+    ///    `fireGated_cap_fail_refuses`);
+    /// 2. the STATE tooth ([`dregg_cell::CellProgram::evaluate`]) — a stale-state fire
+    ///    is [`FireError::StateConditionUnmet`] (the twin of
+    ///    `fireGated_state_fail_refuses`), EVEN for a fully-authorized actor;
+    ///
+    /// Both teeth must bite; either refusal is IN-BAND (an `Err`, never a silent run).
+    /// On both passing, yields the verified-turn [`AffordanceIntent`] carrying the
+    /// REAL effect (the leg-4 properties survive the state gate — the twin of
+    /// `fireGated_carries_real_effect`).
+    pub fn fire(
+        &self,
+        actor: CellId,
+        held: &AuthRequired,
+        old: &CellState,
+        new: &CellState,
+    ) -> Result<AffordanceIntent, FireError> {
+        // Tooth 1: the cap-gate (REAL is_attenuation). Refused in-band if unheld.
+        if !self.affordance.authorized_for(held) {
+            return Err(FireError::Unauthorized {
+                affordance: self.affordance.name.clone(),
+                required: self.affordance.required_rights.clone(),
+                held: held.clone(),
+            });
+        }
+        // Tooth 2: the state-gate (REAL CellProgram::evaluate). Refused in-band — and
+        // refused EVEN for a fully-authorized actor — if the live state forbids it.
+        self.state_admits(old, new)
+            .map_err(|reason| FireError::StateConditionUnmet {
+                affordance: self.affordance.name.clone(),
+                reason,
+            })?;
+        // Both teeth bit: the intent carries the REAL effect, surface_cell = the
+        // affordance's cell.
+        Ok(AffordanceIntent {
+            surface_cell: self.affordance_cell_or(actor),
+            affordance: self.affordance.name.clone(),
+            actor,
+            effect: self.affordance.effect_template.clone(),
+        })
+    }
+
+    // A gated affordance's effect knows its own surface cell (the cell the effect
+    // touches); fall back to the actor if the effect names no cell (so the intent
+    // always has a surface_cell). The effect's cell is the authoritative one.
+    fn affordance_cell_or(&self, fallback: CellId) -> CellId {
+        match self.affordance.effect_summary() {
+            EffectSummary::SetField { cell, .. }
+            | EffectSummary::RevokeCapability { cell, .. }
+            | EffectSummary::EmitEvent { cell }
+            | EffectSummary::IncrementNonce { cell } => cell,
+            EffectSummary::Transfer { from, .. } | EffectSummary::GrantCapability { from, .. } => {
+                from
+            }
+            EffectSummary::Other { .. } => fallback,
+        }
+    }
+
+    /// **Fire AND execute** the gated affordance — the cap∧state gate, then the closed
+    /// dispatch seam through the framework's [`EmbeddedExecutor`]. The state gate runs
+    /// IN-BAND **before** any turn is submitted (so a stale-state fire never touches
+    /// the executor — anti-ghost for the state tooth too), exactly as the cap gate
+    /// does in [`AffordanceSurface::fire_through_executor`].
+    ///
+    /// 1. the CAP tooth and the STATE tooth ([`GatedAffordance::fire`]) — a refusal at
+    ///    EITHER is a [`FireExecuteError::Gate`] and NOTHING is submitted;
+    /// 2. the gated effect → a signed turn through the `cipherclerk`, submitted to the
+    ///    `executor`; the executor's OWN [`dregg_turn::TurnReceipt`] is returned.
+    ///
+    /// The executor independently re-enforces the cell's program as part of running
+    /// the verified turn; the in-band state gate here is the SAME predicate, surfaced
+    /// to the AUTHORING layer so the button's verdict (lit/dark, the htmx tooth) is
+    /// decided up front, the receipt is never a stale-state surprise, and the refusal
+    /// carries a precise [`FireError::StateConditionUnmet`].
+    pub fn fire_through_executor(
+        &self,
+        held: &AuthRequired,
+        old: &CellState,
+        new: &CellState,
+        cipherclerk: &AppCipherclerk,
+        executor: &EmbeddedExecutor,
+    ) -> Result<dregg_turn::TurnReceipt, FireExecuteError> {
+        let actor = cipherclerk.cell_id();
+        // Steps 1 (both teeth): the REAL cap∧state gate. Either refusal is in-band and
+        // NOTHING is submitted to the executor.
+        let intent = self
+            .fire(actor, held, old, new)
+            .map_err(FireExecuteError::Gate)?;
+        // Step 2: the gated effect → a signed turn → the executor's OWN receipt.
+        let action =
+            cipherclerk.make_action(intent.surface_cell, &intent.affordance, vec![intent.effect]);
+        let turn = cipherclerk.make_turn(action);
+        executor
+            .submit_turn(&turn)
+            .map_err(FireExecuteError::Executor)
+    }
+}
+
+/// A cell's published **gated affordance surface** — affordances each carrying BOTH a
+/// cap-gate AND a live-state gate. The state-aware analogue of [`AffordanceSurface`].
+///
+/// The per-viewer projection ([`GatedSurface::project_gated_for`]) is the
+/// membrane-negotiated frustum made STATE-AWARE: a button enters/leaves a viewer's
+/// set as the backing cell transitions (the htmx reactivity — the twin of Lean
+/// `projectGatedFor` / `projectGatedFor_state_reactive`).
+#[derive(Clone, Debug)]
+pub struct GatedSurface {
+    /// The cell backing this surface (the object whose affordances these are).
+    pub cell: CellId,
+    /// A human/diagnostic name for the surface (the deos analogue of a page title).
+    pub name: String,
+    /// The declared gated affordances. Names are unique (by the carried affordance's
+    /// name).
+    pub affordances: Vec<GatedAffordance>,
+}
+
+impl GatedSurface {
+    /// A named gated surface over `cell` with no affordances yet.
+    pub fn named(cell: CellId, name: impl Into<String>) -> Self {
+        GatedSurface {
+            cell,
+            name: name.into(),
+            affordances: Vec::new(),
+        }
+    }
+
+    /// Declare (or replace, by affordance name) a gated affordance. Builder-style.
+    pub fn declare(mut self, ga: GatedAffordance) -> Self {
+        self.affordances.retain(|g| g.name() != ga.name());
+        self.affordances.push(ga);
+        self
+    }
+
+    /// Look up a gated affordance by name.
+    pub fn get(&self, name: &str) -> Option<&GatedAffordance> {
+        self.affordances.iter().find(|g| g.name() == name)
+    }
+
+    /// **The per-viewer, per-STATE affordance projection.** Return ONLY the gated
+    /// affordances a holder of `held` authority may fire AGAINST THE CURRENT
+    /// `(old, new)` transition — those for which BOTH the cap-gate AND the state-gate
+    /// pass ([`GatedAffordance::gated_ok`]). The membrane-negotiated frustum, now
+    /// reactive to the cell:
+    ///
+    /// - two viewers DIVERGE by their caps (progressive attenuation, as before);
+    /// - the SAME viewer's set CHANGES as the cell transitions (the htmx tooth) — a
+    ///   button is dark in one state and lit in another.
+    ///
+    /// SOUND: every projected affordance actually fires in the current state (the
+    /// twin of Lean `projectGatedFor_all_fireable` — no offered-but-refused buttons,
+    /// even with the state precondition).
+    pub fn project_gated_for(
+        &self,
+        held: &AuthRequired,
+        old: &CellState,
+        new: &CellState,
+    ) -> Vec<GatedAffordance> {
+        self.affordances
+            .iter()
+            .filter(|g| g.gated_ok(held, old, new))
+            .cloned()
+            .collect()
+    }
+
+    /// The names a viewer may fire against the current state (sorted) — the per-viewer,
+    /// per-state button-set, the thing two different-cap viewers (AND the same viewer
+    /// across states) DIVERGE on.
+    pub fn fireable_names(
+        &self,
+        held: &AuthRequired,
+        old: &CellState,
+        new: &CellState,
+    ) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .project_gated_for(held, old, new)
+            .into_iter()
+            .map(|g| g.name().to_string())
+            .collect();
+        names.sort();
+        names
     }
 }
 
@@ -889,5 +1178,213 @@ mod tests {
         assert_eq!(admin.required_rights, "None");
         assert_eq!(admin.effect_kind, "GrantCapability");
         assert_eq!(admin.fire_endpoint, "/doc-affordances/fire/admin");
+    }
+
+    // ── THE CAP∧STATE CONJUNCTION (GatedAffordance) — the Rust twin of the Lean rung
+    //    `Dregg2.Deos.GatedAffordance`. A button fires IFF caps AND live-state both
+    //    pass; the four cross-polarity teeth + the htmx (state-reactive) tooth. ──
+
+    use dregg_cell::state::CellState;
+    use dregg_cell::{CellProgram, StateConstraint};
+
+    /// A field-element from a small u64, big-endian in the last 8 bytes (the field's
+    /// `FieldEquals`/`FieldGte` comparison reads big-endian) — matches the cell
+    /// crate's `field_to_u64` lift.
+    fn fe(n: u64) -> [u8; 32] {
+        let mut b = [0u8; 32];
+        b[24..32].copy_from_slice(&n.to_be_bytes());
+        b
+    }
+
+    /// The status slot of the proposal cell (1 = PENDING, 2 = RESOLVED).
+    const STATUS_SLOT: usize = 0;
+    const PENDING: u64 = 1;
+    const RESOLVED: u64 = 2;
+
+    /// A cell state whose status slot is `status`.
+    fn proposal_state(status: u64) -> CellState {
+        let mut s = CellState::new(0);
+        s.set_field(STATUS_SLOT, fe(status));
+        s
+    }
+
+    /// The live-state condition for "approve": the proposal must be in PENDING
+    /// (`status == PENDING`). A `Predicate` program with one `FieldEquals` — the
+    /// EXISTING cell-program gate (`CellProgram::evaluate`).
+    fn pending_cond() -> CellProgram {
+        CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+            index: STATUS_SLOT as u8,
+            value: fe(PENDING),
+        }])
+    }
+
+    /// The gated "approve" button: requires the approver cap (`Either`) AND the
+    /// proposal in PENDING. The conjunction the cap-only model could not express.
+    fn approve_btn(cell: CellId) -> GatedAffordance {
+        GatedAffordance::new(
+            CellAffordance::new("approve", AuthRequired::Either, set_field(cell, STATUS_SLOT)),
+            pending_cond(),
+        )
+    }
+
+    // approver holds Either; member holds Signature (NOT an approver).
+    const APPROVER: AuthRequired = AuthRequired::Either;
+    const MEMBER: AuthRequired = AuthRequired::Signature;
+
+    // THE FOUR CORNERS of the conjunction (the gate bites in every quadrant):
+
+    #[test]
+    fn gated_both_pass_fires() {
+        // (1) approver caps ∧ PENDING state ⇒ FIRES (the only firing corner). Twin of
+        //     `fireGated_both_pass`.
+        let doc = cid(1);
+        let btn = approve_btn(doc);
+        let pending = proposal_state(PENDING);
+        assert!(btn.gated_ok(&APPROVER, &pending, &pending));
+        let intent = btn
+            .fire(cid(50), &APPROVER, &pending, &pending)
+            .expect("caps ∧ state both pass ⇒ fires");
+        // The committed fire carries the REAL effect (twin of
+        // `fireGated_carries_real_effect`).
+        assert_eq!(
+            intent.effect_summary(),
+            EffectSummary::SetField { cell: doc, index: STATUS_SLOT }
+        );
+    }
+
+    #[test]
+    fn gated_state_fail_refuses_even_for_an_authorized_actor() {
+        // (2) approver caps ∧ RESOLVED state ⇒ REFUSED. The STATE tooth: holding the
+        //     cap is NOT enough. Twin of `fireGated_state_fail_refuses` — the half the
+        //     cap-only gate could never express.
+        let doc = cid(2);
+        let btn = approve_btn(doc);
+        let resolved = proposal_state(RESOLVED);
+        assert!(!btn.gated_ok(&APPROVER, &resolved, &resolved));
+        match btn.fire(cid(50), &APPROVER, &resolved, &resolved) {
+            Err(FireError::StateConditionUnmet { affordance, .. }) => {
+                assert_eq!(affordance, "approve");
+            }
+            other => panic!("expected StateConditionUnmet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gated_cap_fail_refuses_even_in_the_right_state() {
+        // (3) member caps ∧ PENDING state ⇒ REFUSED. The CAP tooth: the right state is
+        //     NOT enough. Twin of `fireGated_cap_fail_refuses`.
+        let doc = cid(3);
+        let btn = approve_btn(doc);
+        let pending = proposal_state(PENDING);
+        assert!(!btn.gated_ok(&MEMBER, &pending, &pending));
+        match btn.fire(cid(50), &MEMBER, &pending, &pending) {
+            Err(FireError::Unauthorized { affordance, .. }) => assert_eq!(affordance, "approve"),
+            other => panic!("expected Unauthorized, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gated_needs_both_neither_alone_suffices() {
+        // (4) member caps ∧ RESOLVED state ⇒ REFUSED (neither gate passes), AND the
+        //     witness that NEITHER gate alone admits. Twin of `fireGated_needs_both`:
+        //     held-but-stale refuses AND ready-but-unheld refuses.
+        let doc = cid(4);
+        let btn = approve_btn(doc);
+        let pending = proposal_state(PENDING);
+        let resolved = proposal_state(RESOLVED);
+        // held but stale ⇒ refused (state alone insufficient);
+        assert!(btn.fire(cid(50), &APPROVER, &resolved, &resolved).is_err());
+        // ready but unheld ⇒ refused (cap alone insufficient);
+        assert!(btn.fire(cid(50), &MEMBER, &pending, &pending).is_err());
+        // neither ⇒ refused.
+        assert!(!btn.gated_ok(&MEMBER, &resolved, &resolved));
+    }
+
+    #[test]
+    fn gated_reactive_same_viewer_different_verdict_by_state() {
+        // THE HTMX TOOTH: the SAME approver's button reacts to STATE — lit in PENDING,
+        // dark in RESOLVED. Twin of `fireGated_reactive` — the surface is live, not a
+        // frozen ACL.
+        let doc = cid(5);
+        let btn = approve_btn(doc);
+        let pending = proposal_state(PENDING);
+        let resolved = proposal_state(RESOLVED);
+        assert!(btn.gated_ok(&APPROVER, &pending, &pending), "lit in PENDING");
+        assert!(!btn.gated_ok(&APPROVER, &resolved, &resolved), "dark in RESOLVED");
+    }
+
+    #[test]
+    fn project_gated_for_is_per_viewer_and_state_aware() {
+        // The projection under BOTH gates. A "view" button anyone may fire in any
+        // state, beside the gated "approve" button. Twin of `projectGatedFor` +
+        // `projectGatedFor_all_fireable` + `projectGatedFor_state_reactive`.
+        let doc = cid(6);
+        let view = GatedAffordance::new(
+            CellAffordance::new("view", AuthRequired::Signature, emit_event(doc)),
+            CellProgram::None, // admits every state
+        );
+        let surface = GatedSurface::named(doc, "council")
+            .declare(approve_btn(doc))
+            .declare(view);
+        let pending = proposal_state(PENDING);
+        let resolved = proposal_state(RESOLVED);
+
+        // The approver in PENDING sees BOTH (approve lit + view); in RESOLVED sees only
+        // view (approve darkened BY STATE — the SAME viewer, the surface REACTED).
+        assert_eq!(
+            surface.fireable_names(&APPROVER, &pending, &pending),
+            vec!["approve".to_string(), "view".to_string()]
+        );
+        assert_eq!(
+            surface.fireable_names(&APPROVER, &resolved, &resolved),
+            vec!["view".to_string()]
+        );
+        // The member in PENDING sees only view (approve darkened BY CAPS — progressive
+        // attenuation).
+        assert_eq!(
+            surface.fireable_names(&MEMBER, &pending, &pending),
+            vec!["view".to_string()]
+        );
+
+        // SOUNDNESS: every projected affordance actually fires in the current state.
+        for ga in surface.project_gated_for(&APPROVER, &pending, &pending) {
+            assert!(ga.fire(cid(50), &APPROVER, &pending, &pending).is_ok());
+        }
+    }
+
+    #[test]
+    fn gated_fire_through_executor_runs_a_real_turn_when_both_pass_and_refuses_stale_in_band() {
+        // The closed dispatch seam for the gated fire: caps ∧ state both pass ⇒ a REAL
+        // verified turn through the EmbeddedExecutor (the executor's OWN receipt); a
+        // STALE-state fire is refused IN-BAND (FireExecuteError::Gate /
+        // StateConditionUnmet) and NOTHING is submitted (anti-ghost for the state
+        // tooth).
+        let cclerk = AppCipherclerk::new(AgentCipherclerk::new(), [21u8; 32]);
+        let executor = EmbeddedExecutor::new(&cclerk, "default");
+        let cell = cclerk.cell_id();
+        // The proposal is the agent's OWN cell (so the embedded ledger has it); fire a
+        // status bump that lands the cell in a state the program admits.
+        let btn = GatedAffordance::new(
+            CellAffordance::new("approve", AuthRequired::None, set_field(cell, STATUS_SLOT)),
+            pending_cond(),
+        );
+        let pending = proposal_state(PENDING);
+        let resolved = proposal_state(RESOLVED);
+
+        // Stale (RESOLVED): refused in-band, by the state tooth, before any submit.
+        match btn.fire_through_executor(&AuthRequired::None, &resolved, &resolved, &cclerk, &executor) {
+            Err(FireExecuteError::Gate(FireError::StateConditionUnmet { affordance, .. })) => {
+                assert_eq!(affordance, "approve");
+            }
+            other => panic!("expected an in-band StateConditionUnmet refusal, got {other:?}"),
+        }
+
+        // PENDING: caps ∧ state both pass ⇒ a real verified turn; the receipt is the
+        // executor's OWN (non-zero turn_hash, correct agent).
+        let receipt = btn
+            .fire_through_executor(&AuthRequired::None, &pending, &pending, &cclerk, &executor)
+            .expect("caps ∧ state both pass ⇒ a real verified turn");
+        assert_ne!(receipt.turn_hash, [0u8; 32]);
+        assert_eq!(receipt.agent, cell);
     }
 }

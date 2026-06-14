@@ -109,6 +109,23 @@ affordances, and rehydration.
   `MembraneNegotiation` surface (the org-settings page — attenuated, re-shareable,
   liveness-typed, fog-respecting spectator grants). See `DEOS-APPS.md` §"the forcing
   function". (Tier A; the ZK Tier-B vision AIR is the named cross-crate follow-up.)
+- **STEEL (built, tested, in `app-framework` — the composed deos-app framework):** the
+  `DeosApp`/`DeosCell` composition (`src/deos_app.rs`) — affordance surfaces over the
+  `EmbeddedExecutor`, the web-of-cells publish, the rehydration seam, the generated web
+  component — **PLUS the cap∧state `GatedAffordance` rung** (`src/affordance.rs`, the
+  Rust twin of the Lean `Dregg2.Deos.GatedAffordance`): a `GatedAffordance` pairs the
+  GENUINE `is_attenuation` cap-gate with a REAL `CellProgram` live-state gate (the SAME
+  `CellProgram::evaluate` the executor runs), and a button lights IFF caps AND state both
+  pass. `DeosCell::{project_gated_for, fire_gated_through_executor}` read the cell's LIVE
+  state from `EmbeddedExecutor::cell_state` (the author threads no `(old, new)`); the
+  state-tooth refusal is `FireError::StateConditionUnmet`, in-band, before any dispatch.
+  The exemplar is `examples/deos_council_board.rs` (+ `tests/deos_council_board.rs`): a
+  council approval board where the `approve` button lights only for an approver AND only
+  while PENDING, goes DARK the instant the proposal RESOLVES (the htmx tooth — same
+  viewer, the surface reacts to the cell), an unauthorized fire is refused by the cap
+  tooth and a stale-state fire by the state tooth (both anti-ghost, nothing submitted),
+  a both-pass fire runs a real verified turn through the executor, and a frustum-snapshot
+  rehydrates per-viewer (an incomparable identity gets no projection).
 - **QUEUED (fires when the rotation HARDSWAP clears `metatheory/`/`turn/`/`node/`):**
   the verified-deos Lean modeling (the four theorems above) · the membrane wired into
   the live captp sturdyref path (not just the web crate) · starbridge-v2 native cockpit

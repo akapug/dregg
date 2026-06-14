@@ -452,6 +452,27 @@ impl EmbeddedExecutor {
         f(&mut ledger)
     }
 
+    /// The **live [`CellState`]** of `cell` in the embedded ledger, if present.
+    ///
+    /// This is the read the deos affordance layer needs to gate on the cell's
+    /// LIVE STATE (the htmx-on-crack "may the button be pressed RIGHT NOW"): the
+    /// framework reads the cell's current state here, then a
+    /// [`crate::affordance::GatedAffordance`] evaluates its `state_cond` (the REAL
+    /// [`dregg_cell::CellProgram::evaluate`]) against it — so an app author does NOT
+    /// hand-thread `(old, new)` state at the HTTP boundary; the framework supplies
+    /// the live state. Returns `None` if the cell is not in the embedded ledger
+    /// (e.g. a remote cell, or one not yet birthed). A clone, so the lock is not
+    /// held by the caller.
+    ///
+    /// `DEOS-APPS.md` §"the deos app model": durable verified state means "reads are
+    /// free … writes are verified turns." This is the in-process read; the pg-dregg
+    /// seam ([`crate::deos_app::PersistenceSeam::PgDregg`]) is the durable analogue.
+    pub fn cell_state(&self, cell: CellId) -> Option<dregg_cell::state::CellState> {
+        let rt = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        let ledger = rt.ledger().lock().unwrap();
+        ledger.get(&cell).map(|c| c.state.clone())
+    }
+
     /// Submit a pre-built [`Turn`] to the embedded executor and return
     /// its [`TurnReceipt`].
     ///

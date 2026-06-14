@@ -60,11 +60,13 @@
 use std::sync::Arc;
 
 use axum::{routing::get, Json, Router};
-use dregg_cell::AuthRequired;
+use dregg_cell::{AuthRequired, CellProgram, StateConstraint};
 use dregg_types::{CellId, FederationId};
 use serde_json::json;
 
-use crate::affordance::{AffordanceSurface, CellAffordance};
+use crate::affordance::{
+    AffordanceSurface, CellAffordance, FireError, FireExecuteError, GatedAffordance, GatedSurface,
+};
 use crate::affordance_endpoint::{AffordanceEndpoint, HeldRightsResolver};
 use crate::captp_server::CapTpServer;
 use crate::cipherclerk::{AppCipherclerk, EmbeddedExecutor};
@@ -86,6 +88,15 @@ use crate::starbridge::StarbridgeAppContext;
 #[derive(Clone, Debug)]
 pub struct DeosCell {
     surface: AffordanceSurface,
+    /// The cell's **gated** affordances — those carrying BOTH a cap-gate AND a
+    /// live-state gate (the htmx-on-crack conjunction; the Rust twin of the Lean
+    /// `Dregg2.Deos.GatedAffordance`). A gated affordance's button lights for a
+    /// viewer IFF the viewer holds the cap AND the cell's LIVE state admits the
+    /// fire. The framework reads the live state (via the [`EmbeddedExecutor`]) so the
+    /// author never hand-threads `(old, new)` at the boundary — the surface REACTS to
+    /// the cell. Kept alongside `surface` (the cap-only affordances) so a cell can
+    /// expose both kinds; the gated set is the state-aware part.
+    gated: GatedSurface,
     /// If `Some(authority)`, this cell is EXPORTED into the web-of-cells at
     /// `authority` (a sturdyref bearer obtains `authority` on enliven). `None` ⇒
     /// local-only (reachable through the app's own HTTP surface but not published as
@@ -107,7 +118,8 @@ impl DeosCell {
             format!("/{name}")
         };
         DeosCell {
-            surface: AffordanceSurface::named(cell, name),
+            surface: AffordanceSurface::named(cell, name.clone()),
+            gated: GatedSurface::named(cell, name),
             published_at: None,
             route_prefix,
         }
@@ -116,6 +128,29 @@ impl DeosCell {
     /// Declare (or replace, by name) an affordance on this cell. Builder-style.
     pub fn affordance(mut self, affordance: CellAffordance) -> Self {
         self.surface = self.surface.declare(affordance);
+        self
+    }
+
+    /// Declare (or replace, by name) a **gated affordance** on this cell — a
+    /// cap-gated effect-template PLUS a live-state condition (the cap∧state
+    /// conjunction). Builder-style.
+    ///
+    /// `docs/deos/DEOS.md` §"htmx on crack" + the Lean rung `Dregg2.Deos.GatedAffordance`:
+    /// the button fires IFF the viewer HOLDS the cap AND the cell's LIVE state admits
+    /// the fire. The framework reads the live state from the executor (see
+    /// [`DeosCell::project_gated_for`] / [`DeosCell::fire_gated_through_executor`]) — so
+    /// the surface is REACTIVE (a button dark in one state lights in another) without
+    /// the author threading `(old, new)` by hand.
+    ///
+    /// ```ignore
+    /// DeosCell::new(proposal, "proposal")
+    ///     .gated(GatedAffordance::new(
+    ///         CellAffordance::new("approve", AuthRequired::Either, approve_effect),
+    ///         CellProgram::Predicate(vec![StateConstraint::FieldEquals { index: 0, value: pending }]),
+    ///     ))
+    /// ```
+    pub fn gated(mut self, ga: GatedAffordance) -> Self {
+        self.gated = self.gated.declare(ga);
         self
     }
 
@@ -147,6 +182,17 @@ impl DeosCell {
     /// The cell's affordance surface (read-only).
     pub fn surface(&self) -> &AffordanceSurface {
         &self.surface
+    }
+
+    /// The cell's **gated** affordance surface (read-only) — the cap∧state,
+    /// state-aware affordances.
+    pub fn gated_surface(&self) -> &GatedSurface {
+        &self.gated
+    }
+
+    /// Whether this cell exposes any gated (cap∧state) affordances.
+    pub fn has_gated(&self) -> bool {
+        !self.gated.affordances.is_empty()
     }
 
     /// Is this cell published into the web-of-cells? If so, at what authority?
@@ -199,6 +245,89 @@ impl DeosCell {
         held: &AuthRequired,
     ) -> Result<crate::optimistic_fire::OptimisticFire, crate::affordance::FireError> {
         crate::optimistic_fire::OptimisticFire::predict(&self.surface, name, actor, held)
+    }
+
+    /// **The per-viewer, per-STATE gated-affordance projection** — the htmx-on-crack
+    /// reactive button-set. Reads this cell's LIVE state from `executor` and returns
+    /// the gated affordances a holder of `held` may fire AGAINST IT (those whose
+    /// cap-gate AND state-gate both pass). The framework supplies the live state, so
+    /// the surface REACTS to the cell:
+    ///
+    /// - two viewers DIVERGE by their caps (progressive attenuation, as before);
+    /// - the SAME viewer's set CHANGES as the backing cell transitions (the htmx
+    ///   tooth — a button enters/leaves the set on a state change).
+    ///
+    /// If the cell is not in the embedded ledger (no live state to gate on), the
+    /// gated set is empty (fail-closed: no state ⇒ no state-gated fire). The Rust twin
+    /// of Lean `projectGatedFor` / `projectGatedFor_state_reactive`.
+    pub fn project_gated_for(
+        &self,
+        held: &AuthRequired,
+        executor: &EmbeddedExecutor,
+    ) -> Vec<GatedAffordance> {
+        let Some(state) = executor.cell_state(self.cell()) else {
+            return Vec::new();
+        };
+        // The state gate reads the post-transition `(old, new)`; for a projection
+        // (no pending write yet) we gate on the cell's CURRENT state as both — "may
+        // this button fire right now, in the state the cell is in".
+        self.gated.project_gated_for(held, &state, &state)
+    }
+
+    /// The gated affordance names a viewer may fire against the cell's LIVE state
+    /// (sorted) — the per-viewer, per-state button-set the same viewer DIVERGES on
+    /// across states.
+    pub fn gated_fireable_names(
+        &self,
+        held: &AuthRequired,
+        executor: &EmbeddedExecutor,
+    ) -> Vec<String> {
+        let Some(state) = executor.cell_state(self.cell()) else {
+            return Vec::new();
+        };
+        self.gated.fireable_names(held, &state, &state)
+    }
+
+    /// **Fire a gated affordance** as a viewer holding `held` — the cap∧state gate
+    /// against the cell's LIVE state, then the closed dispatch seam through the
+    /// `executor`. The framework reads the live state (so the author does not thread
+    /// `(old, new)`), runs BOTH teeth IN-BAND, and on both passing submits the real
+    /// verified turn, returning the executor's OWN [`dregg_turn::TurnReceipt`]:
+    ///
+    /// - the CAP tooth: an unheld fire is [`FireExecuteError::Gate`] /
+    ///   [`FireError::Unauthorized`] (anti-ghost — nothing submitted);
+    /// - the STATE tooth: a stale-state fire is [`FireExecuteError::Gate`] /
+    ///   [`FireError::StateConditionUnmet`] (anti-ghost for the state tooth too —
+    ///   nothing submitted, EVEN for a fully-authorized actor);
+    /// - a missing gated affordance is [`FireError::NoSuchAffordance`];
+    /// - a cell with no live state in the ledger is [`FireError::StateConditionUnmet`]
+    ///   (fail-closed).
+    ///
+    /// The Rust twin of Lean `fireGated` carried through the executor.
+    pub fn fire_gated_through_executor(
+        &self,
+        name: &str,
+        held: &AuthRequired,
+        cipherclerk: &AppCipherclerk,
+        executor: &EmbeddedExecutor,
+    ) -> Result<dregg_turn::TurnReceipt, FireExecuteError> {
+        let ga = self
+            .gated
+            .get(name)
+            .ok_or(FireExecuteError::Gate(FireError::NoSuchAffordance))?;
+        let state = executor.cell_state(self.cell()).ok_or_else(|| {
+            FireExecuteError::Gate(FireError::StateConditionUnmet {
+                affordance: name.to_string(),
+                reason: "cell has no live state in the embedded ledger (fail-closed)".to_string(),
+            })
+        })?;
+        // The fire transitions FROM the current state; the gate evaluates the effect's
+        // `(old, new)`. We gate on the live state as `old` and the affordance's own
+        // produced state as `new` — but the GatedAffordance evaluates its `state_cond`
+        // (a precondition predicate) against the touched cell's `(old, new)`; for a
+        // precondition the relevant read is the current state, so we pass it as both
+        // and let the executor re-enforce the program on the actual produced state.
+        ga.fire_through_executor(held, &state, &state, cipherclerk, executor)
     }
 }
 
@@ -412,6 +541,26 @@ impl DeosApp {
             .iter()
             .map(|c| {
                 let desc = c.surface.descriptor(&c.route_prefix);
+                // The GATED affordances — each with its cap-gate AND its live-state
+                // gate (the htmx-on-crack conjunction). The `stateGate` field names
+                // the state condition (the REAL CellProgram), and the
+                // `projectedEndpoint`/`fireEndpoint` are STATE-AWARE (the surface
+                // reacts to the cell). DEOS.md §"htmx on crack".
+                let prefix = c.route_prefix.trim_end_matches('/');
+                let gated: Vec<serde_json::Value> = c
+                    .gated
+                    .affordances
+                    .iter()
+                    .map(|g| {
+                        json!({
+                            "name": g.name(),
+                            "requiredRights": format!("{:?}", g.affordance.required_rights),
+                            "effectKind": g.affordance.effect_summary().variant_tag(),
+                            "stateGate": describe_state_gate(&g.state_cond),
+                            "fireEndpoint": format!("{prefix}/gated/fire/{}", g.name()),
+                        })
+                    })
+                    .collect();
                 json!({
                     "cell": hex_full(&c.cell()),
                     "name": desc.surface,
@@ -424,6 +573,10 @@ impl DeosApp {
                         "effectKind": e.effect_kind,
                         "fireEndpoint": e.fire_endpoint,
                     })).collect::<Vec<_>>(),
+                    // The state-aware (cap∧state) affordances, if any. Their projection
+                    // (which buttons light) depends on the cell's LIVE state.
+                    "gatedAffordances": gated,
+                    "gatedProjectedEndpoint": format!("{prefix}/gated/projected"),
                 })
             })
             .collect();
@@ -479,6 +632,67 @@ impl DeosApp {
             })
             .await
     }
+}
+
+/// A concise human description of a gated affordance's **live-state gate** (the REAL
+/// [`dregg_cell::CellProgram`]) — for the app manifest's `stateGate` field, so the
+/// state half of the cap∧state conjunction is VISIBLE (which transition the cell must
+/// admit for the button to light), never an opaque blob. This describes; it does NOT
+/// evaluate — the evaluation is the EXISTING [`dregg_cell::CellProgram::evaluate`]
+/// (`GatedAffordance::state_admits`).
+fn describe_state_gate(program: &CellProgram) -> String {
+    match program {
+        // `CellProgram::None` admits every state — a gated affordance with no state
+        // condition degrades to a plain cap-gate (the button's verdict is caps-only).
+        CellProgram::None => "always (no live-state condition — caps-only)".to_string(),
+        CellProgram::Predicate(constraints) => {
+            if constraints.is_empty() {
+                "always (empty predicate)".to_string()
+            } else {
+                let parts: Vec<String> = constraints.iter().map(describe_constraint).collect();
+                parts.join(" AND ")
+            }
+        }
+        CellProgram::Cases(cases) => {
+            if cases.is_empty() {
+                "never (no transition case matches — default-deny)".to_string()
+            } else {
+                format!("one of {} operation-scoped case(s)", cases.len())
+            }
+        }
+        CellProgram::Circuit { .. } => "a circuit-proven transition".to_string(),
+    }
+}
+
+/// A one-line description of a single [`dregg_cell::StateConstraint`] (the slot-caveat
+/// atoms most apps use for an affordance's state gate). Falls back to the variant's
+/// debug form for the less-common atoms — the point is the manifest names the gate's
+/// SHAPE, not that it re-implements the evaluator.
+fn describe_constraint(c: &StateConstraint) -> String {
+    match c {
+        StateConstraint::FieldEquals { index, value } => {
+            format!("slot[{index}] == {}", field_tail_u64(value))
+        }
+        StateConstraint::FieldGte { index, value } => {
+            format!("slot[{index}] >= {}", field_tail_u64(value))
+        }
+        StateConstraint::FieldLte { index, value } => {
+            format!("slot[{index}] <= {}", field_tail_u64(value))
+        }
+        StateConstraint::Monotonic { index } => format!("slot[{index}] non-decreasing"),
+        StateConstraint::StrictMonotonic { index } => format!("slot[{index}] strictly increasing"),
+        StateConstraint::Immutable { index } => format!("slot[{index}] immutable"),
+        StateConstraint::WriteOnce { index } => format!("slot[{index}] write-once"),
+        other => format!("{other:?}"),
+    }
+}
+
+/// Read a [`dregg_cell::FieldElement`] as the big-endian u64 in its last 8 bytes (the
+/// comparison the field's `FieldEquals`/`FieldGte` atoms use), for display.
+fn field_tail_u64(fe: &[u8; 32]) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&fe[24..32]);
+    u64::from_be_bytes(b)
 }
 
 impl std::fmt::Debug for DeosApp {
