@@ -967,6 +967,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/lean_init.c");
+    println!("cargo:rerun-if-changed=src/lean_init_st.cpp");
 
     // Resolve the toolchain + metatheory location up front so we can both (a) refresh the archive
     // from the Lean source when it changed and (b) drive the link below. `lean_sysroot()` honours
@@ -1122,6 +1123,13 @@ fn main() {
     // `marshal_roundtrip` / `full_turn_differential` link failures.
     let mut shim = cc::Build::new();
     shim.file("src/lean_init.c").include(&lean_include);
+    // The SINGLE-THREADED / libuv-thread-free init (docs/EMBEDDABLE-LEAN-RUNTIME.md).
+    // A C++ TU (it calls the namespaced `lean::initialize_*` runtime initializers
+    // directly, skipping `initialize_libuv` so the libuv event-loop thread is never
+    // spawned — the pg-Tier-D-embeddable path). Compiled into the SAME shim archive so
+    // its `dregg_ffi_init_st` symbol propagates with the C bridges; purely additive (the
+    // default `dregg_ffi_init` path is unchanged). `.cpp` ⇒ cc drives the C++ compiler.
+    shim.file("src/lean_init_st.cpp");
     if handler_present {
         shim.define("DREGG_HANDLER_TURN", None);
     }
