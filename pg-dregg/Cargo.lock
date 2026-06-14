@@ -758,6 +758,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-lean-ffi"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "cc",
+]
+
+[[package]]
 name = "dregg-token"
 version = "0.1.0"
 dependencies = [
@@ -1633,6 +1641,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "dregg-auth",
+ "dregg-lean-ffi",
  "libc",
  "pgrx",
  "pgrx-tests",
