@@ -73,11 +73,13 @@ Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `nati
 -/
 import Dregg2.Exec.Program
 import Dregg2.Authority.CrossCellImport
+import Dregg2.Authority.ImportBinding
 
 namespace Dregg2.Apps.GovernedParameters
 
 open Dregg2.Exec
 open Dregg2.Authority.CrossCellImport (Import SourceHistory importValid readAt)
+open Dregg2.Authority.ImportBinding (ImportedEq)
 
 /-! ## §0 — The parameter cell's field names, the constitution board, identities. -/
 
@@ -126,47 +128,44 @@ def updateConstraints (importedFee : Int) : List StateConstraint :=
 Parameterized by the constitution's committed fee value (the provenanced literal from §2). -/
 def paramProgram (importedFee : Int) : RecordProgram := .predicate (updateConstraints importedFee)
 
-/-! ## §2 — THE PROVENANCE COMPOSITION: the binding cites a PROVED constitution import. -/
+/-! ## §2 — THE PROVENANCE COMPOSITION: the binding IS a first-class `ImportedEq` (gap-2 adoption).
 
-/-- **`paramBinding imp`** — the parameter-binding constraint for a cited constitution import: the local
-fee slot equals the value the import cites. (`imp.value` is the value the constitution field held at
-`imp.provenance`; `importValid` proves that is the truth.) This is the `StateConstraint` form of
-`CrossCellImport.importBindingPred`, here over the cell program's own evaluator. -/
-def paramBinding (imp : Import) : StateConstraint := .affineEq [(1, feeF)] imp.value
+The round-2 `Authority.ImportBinding.ImportedEq` is exactly the construct this app re-derived by hand: a
+cited `Import` PLUS the local field it binds, carrying the provenance obligation (`importValid`, on the
+SAME `Import` object) and projecting the enforcement constraint (`toConstraint` = the EXISTING `affineEq`
+atom). So `paramBinding imp` is now the `ImportedEq`'s `toConstraint` (NOT a re-spelled `affineEq`), and
+its admit-characterization + the composed provenance contract are DIRECT corollaries of the atom's proved
+keystones — the two obligations no longer travel as a hand-threaded pair. (A cited import binds the local
+field `feeF` when `imp.localField = feeF`; the governed cell only ever cites constitution imports for its
+fee slot.) -/
 
-/-- `affineSum [(1, feeF)]` reads exactly the fee field (the single-term affine atom). -/
-private theorem affineSum_fee (rec : Value) :
-    affineSum rec [(1, feeF)] = rec.scalar feeF := by
-  simp only [affineSum, List.foldr]
-  cases rec.scalar feeF <;> simp
+/-- **`paramBinding imp`** — the parameter-binding constraint for a cited constitution import, now the
+first-class `ImportedEq`'s projected enforcement constraint (`ImportedEq.toConstraint ⟨imp⟩` =
+`.affineEq [(1, imp.localField)] imp.value`). For a fee-citing import (`imp.localField = feeF`) this is the
+local fee slot bound to the provenanced value — the binding the cell program enforces, with the provenance
+obligation `importValid` riding the SAME `imp`. -/
+def paramBinding (imp : Import) : StateConstraint := (ImportedEq.mk imp).toConstraint
 
 /-- **`paramBinding_iff`.** The binding constraint holds exactly when the post-state carries the cited
-value at the fee slot. So a cell whose program includes `paramBinding imp` admits a turn iff its fee
-really equals the imported literal — enforced by the same proved closure algebra as every other guard. -/
+value at the import's local field — a DIRECT reuse of `ImportedEq.admits_iff` (the atom's proved
+single-term affine admit-char), no inline `affineSum`/`affineEq` re-derivation. -/
 theorem paramBinding_iff (imp : Import) (o n : Value) :
-    evalConstraint (paramBinding imp) o n = true ↔ n.scalar feeF = some imp.value := by
-  unfold paramBinding
-  rw [evalConstraint_affineEq_iff]
-  constructor
-  · rintro ⟨s, hs, rfl⟩
-    rw [affineSum_fee] at hs; exact hs
-  · intro hn
-    exact ⟨imp.value, by rw [affineSum_fee, hn], rfl⟩
+    evalConstraint (paramBinding imp) o n = true ↔ n.scalar imp.localField = some imp.value :=
+  ImportedEq.admits_iff ⟨imp⟩ o n
 
-/-- **`param_binding_matches_constitution` (THE COMPOSED PROVENANCE CONTRACT).** When the import is VALID
-(`importValid`: the cited constitution receipt is in the constitution's well-linked chain AND the
-constitution field held `imp.value` there) AND the cell admits the binding constraint, the local
-parameter EQUALS the value the constitution committed at the cited receipt. This is the honest cross-cell
-story end-to-end: provenance (the value is the constitution's truth, non-forgeable) + enforcement (the
-cell holds exactly that value). A verifier can recompute it; tooling can date it. -/
+/-- **`param_binding_matches_constitution` (THE COMPOSED PROVENANCE CONTRACT — now a COROLLARY).** When
+the import is VALID (`importValid`: the cited constitution receipt is in the constitution's well-linked
+chain AND the constitution field held `imp.value` there) AND the cell admits the binding constraint, the
+local parameter EQUALS the value the constitution committed at the cited receipt. The whole cross-cell
+contract this app re-derived by hand is now the atom's keystone `importedEq_binds_provenanced_value`,
+applied here — provenance (the value is the constitution's truth, non-forgeable) + enforcement (the cell
+holds exactly that value), fused in ONE construct. -/
 theorem param_binding_matches_constitution
     {H : Receipts.Receipt → Nat} {constitution : SourceHistory} {imp : Import} {o n : Value}
     (hvalid : importValid H constitution imp)
     (hbind : evalConstraint (paramBinding imp) o n = true) :
-    n.scalar feeF = some (readAt constitution imp.provenance imp.sourceField) := by
-  rw [(paramBinding_iff imp o n).mp hbind]
-  -- importValid's third conjunct: readAt constitution imp.provenance imp.sourceField = imp.value.
-  rw [hvalid.2.2]
+    n.scalar imp.localField = some (readAt constitution imp.provenance imp.sourceField) :=
+  Dregg2.Authority.ImportBinding.importedEq_binds_provenanced_value (b := ⟨imp⟩) hvalid hbind
 
 /-! ## §3 — Extraction plumbing (the `EscrowDeskCouncil` pattern). -/
 
