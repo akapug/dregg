@@ -143,8 +143,33 @@ starbridge_v2 (lib, feature embedded-executor)
 │               Every dispatch draws against the ONE pool; a draw past the ceiling
 │               is refused by the counter's gate (not a summation), and total_drawn
 │               CONSERVES (== Σ metered across members), PROVABLY ≤ B. gpui-free.
-└── agent      — AgentActivity/AgentSurface: one agent loop's provable activity
-                (mandate · cap-gated turns + receipts · authorization boundary).
+├── agent      — AgentActivity/AgentSurface: one agent loop's provable activity
+│               (mandate · cap-gated turns + receipts · authorization boundary).
+├── affordance — the native deos AFFORDANCE surface (htmx-on-crack, the seam CLOSED).
+│               A cell publishes named effect-TEMPLATES (`CellAffordance`, a real
+│               `Effect` + the `AuthRequired` a viewer must hold); `project_for`
+│               is per-viewer progressive ATTENUATION (the REAL `is_attenuation`,
+│               `required ⊆ held`); `fire` → `AffordanceIntent` (anti-ghost) →
+│               `fire_through_world` hands the effect to `World::commit_turn` so the
+│               receipt is the EXECUTOR's own (the seam `starbridge-web-surface` could
+│               only model is CLOSED because this process embeds the executor). The
+│               gating window cap IS a firmament `Capability{Surface(cell)}`. Plus the
+│               FRUSTUM-SNAPSHOT (`AffordanceSnapshot` + `rehydrate_for`): a tiny
+│               snapshot (cell + names, not data) that re-expands PER-VIEWER through
+│               the same attenuation gate — the deos rehydration thesis. gpui-free.
+├── model      — the node's wire types (`/status`, `/api/cells`, `/api/events/stream`
+│               receipt events, the `/turn/submit` request). Pure serde; single-sourced
+│               in the library so the live-node panel + the thin client share one mirror.
+├── client     — the wire `NodeClient::{Mock,Http}` + `LiveNode` (the live connection
+│               driver: `sync` snapshot reads + `connect_stream`, the background SSE
+│               reader feeding the pure parser onto an mpsc channel). The reqwest
+│               byte-pull is `live-node`-gated; the Mock backend is always available.
+└── live_node  — the LIVE node connection's PURE heart (gpui-free, `cargo test`-able):
+                `SseParser` (the `text/event-stream` decoder, fixture-tested),
+                `LiveReflection` (remote wire snapshots → the SAME `reflect::Inspectable`
+                the embedded world uses), `ReceiptFeed` (the cursor + bounded ring + the
+                resume model the cockpit drains under `cx.notify()` — REPLACING the
+                snapshot). Only the byte source is `live-node`-gated.
 
 starbridge-v2 (bin)
 ├── cockpit    — the gpui cockpit (feature gpui-ui): the comprehensive panels
@@ -163,9 +188,12 @@ starbridge-v2 (bin)
                 (gpui-free, testable). Every cockpit action is one `CommandId`;
                 the cockpit dispatches a selected command through the SAME
                 `&mut Cockpit` verb the buttons call — no parallel action path.
-├── views      — shared gpui palette/primitives.
-├── client     — the wire-contract NodeClient (feature sel4-thin).
-└── model      — the node's JSON response types, mirrored (feature sel4-thin).
+└── views      — shared gpui palette/primitives.
+
+(`client` + `model` + `live_node` + `affordance` moved into the LIBRARY — see the
+lib block above — so the embedded master interface's live-node panel + the deos
+affordance surface reuse them, not just the thin bin; the bin re-exports `client`
+for the `sel4-thin` `thin_report`.)
 ```
 
 ### The commit path is the whole story
@@ -332,7 +360,8 @@ over EVERY dregg datum and EVERY action. The coverage is an honest burn-down:
 | shell window ops (open surface · focus/raise · move/resize · minimize · close), all cap-gated | **live** (the cap guarantee fires) | `shell::Shell`, SHELL tab |
 | compositor layout (float · tile · stack) | **live** | `shell::Layout`, SHELL tab "cycle layout" |
 | the organ operations (open/draw/repay; create/join/remove; send/drain; evidence) | designed-pending | trustline/flash-well live *state* reflected (ORGANS panel); the operating verbs ride the SDK's `AgentRuntime` (trustline/flashwell in embed-core); channel/mailbox/court need `captp` (remote path) |
-| connect to federations | designed-pending | `NodeClient::Http` exists; native panel pending |
+| fire a cell affordance (htmx-on-crack, the deos interaction) | **live** (runs the real executor) | `affordance::AffordanceSurface::fire` → `AffordanceIntent::fire_through_world` → `World::commit_turn`; the SEAM is CLOSED (the receipt is the executor's own) |
+| connect to a live node + stream its receipts | **live** (headless heart; gpui strip wired) | `client::LiveNode::sync` (snapshot reflections) + `connect_stream` (SSE `/api/events/stream` → `live_node::SseParser` → `ReceiptFeed`, `cx.notify()` per receipt); `--node <url>` |
 
 > **Lifecycle finding — seal/destroy are recorded, the *verbs* enforce
 > terminality, but ordinary effects are not yet gated.** The verified executor

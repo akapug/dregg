@@ -101,6 +101,12 @@ surface/`, 20/0) · sdk pg-native (sdk-py 71/4-skip + sdk-ts 74/0). Open residua
   + `Netlayer::dial` (this crate models the local resolve+attest half); (d) the LIBSERVO SEAM at `delegate.rs`
   `MockSurface` (replace with the real `servo::WebViewDelegate` impl when libservo + Metal/wgpu link). Quorum-sig
   crypto on `AttestedRoot` is the `hints` layer (structural now; the receipt-stream Merkle binding IS real).
+- **ObservedFieldEquals embedded-executor wiring** (named 2026-06-14, the §11.2 cross-cell-read convergence):
+  the turn executor (`turn/src/executor/execute_tree.rs`) hands the `WitnessBundle` `finalized_roots: None`, so
+  the deos cross-cell observed-field atom fails CLOSED on the embedded path — `teasting`'s coverage gate counts
+  it not-yet-covered (ratchet bumped 9→10). CLOSURE: thread a real `FinalizedRootAuthority` (the finalized-state
+  oracle the cell-side evaluator already consumes) into the executor so ObservedFieldEquals can ACCEPT (not only
+  the fail-closed REJECT) + add the accept/reject pair to `coverage_state_constraints.rs` → ratchet back to 9.
 
 ## Rides THE ROTATION (dies at or lands with the one VK epoch — do not do separately)
 
@@ -710,18 +716,59 @@ ALL LANDED (a7734efcc / a49448d09 / 152e6b3a5). Remaining lanes:)*
   `BudgetSlice` the executor's `set_budget_gate` would attach (one model, two surfaces). This is
   the depth lift over N1's per-member FLOOR meter — simbi's "UI counter vs verified conservation
   bound" gap closed.
-- **native federation/remote-node panel** (NodeClient::Http exists; reqwest gated to sel4-thin for now); the channel/mailbox/court organs become LIVE reflections once this connects a node.
-- **live node connection** — move reads to gpui's async executor; wire `/api/events/stream` SSE into ReceiptInspector with `cx.notify()` (snapshot today).
+- **LIVE NODE connection** — LANDED (headless heart green; the gpui strip compiles). The wire
+  client + model (`NodeClient::{Mock,Http}` + `src/model`) MOVED into the LIBRARY (gpui-free,
+  `cargo test`-able) and gained a `live-node` feature (`native-full` + `sel4-thin` both enable it;
+  pulls `reqwest`, whose blocking client needs no caller tokio runtime). `client::LiveNode::sync()`
+  fetches `/status` + `/api/cells` and projects them into the SAME uniform `reflect::Inspectable`
+  the embedded world uses (no parallel view path); `client::LiveNode::connect_stream()` spawns a
+  BACKGROUND SSE reader on `/api/events/stream` that feeds the PURE `live_node::SseParser` and
+  pushes decoded receipts onto an mpsc channel. The cockpit drains it each frame
+  (`drain_live_stream`) and fires `cx.notify()` PER RECEIPT — the ReceiptInspector advances live,
+  REPLACING the snapshot. `live_node::ReceiptFeed` is the cursor + bounded ring + resume model.
+  The PURE layer (SSE parse · live reflection · receipt-feed cursor) is fully `cargo test`-able
+  with byte fixtures (10 new lib tests; the reqwest byte-pull is the only `live-node`-gated part).
+  `--node <url>` wires it through `main.rs` → `Cockpit::with_node`; a LIVE NODE strip in the rail
+  header shows the remote producer/liveness/height + the live receipt feed head + resume cursor.
+  Remaining for the WINDOW: pixels need the Metal Toolchain (host blocker below).
+- **native deos AFFORDANCE surface** — LANDED (`src/affordance.rs`, 5 lib tests). htmx-on-crack with
+  the firing→executed-turn SEAM CLOSED through the embedded executor (the thesis `starbridge-web-
+  surface` could only MODEL — it has no embedded executor). `CellAffordance` (named effect-template +
+  `AuthRequired` a viewer must hold) · `AffordanceSurface::project_for` (progressive ATTENUATION via
+  the REAL `dregg_cell::is_attenuation`, `required ⊆ held`) · `fire` → `AffordanceIntent` (anti-ghost:
+  an unauthorized actor is REFUSED, not run) · `AffordanceIntent::fire_through_world` hands the real
+  `Effect` to `World::commit_turn` so the receipt is the EXECUTOR's own (`FireOutcome::Committed`) and
+  a guarantee-violating fire (over-transfer) is REFUSED by the executor (`FireOutcome::Refused`) —
+  both gates real, in-band. The window cap gating an affordance IS the firmament
+  `Capability{Surface(cell)}` (a window); an affordance-fire is a cap-gated verified turn, the deos
+  thesis native. The FRUSTUM-SNAPSHOT (rehydration) is also real: `AffordanceSnapshot` is TINY (the
+  cell + the declared names, NOT the data); `rehydrate_for` re-expands it PER-VIEWER through the same
+  `is_attenuation` gate (a narrow-cap viewer rehydrates a narrow interactive surface from the SAME
+  snapshot; the live surface is the source of truth, so a dropped affordance does not rehydrate).
+  (Cockpit affordance-PANEL: a follow-up; the surface + snapshot + their 5 tests are the heart.)
+- **native federation/remote-node panel** (the LIVE NODE connection above is the wire; a richer
+  multi-peer federation panel + the channel/mailbox/court LIVE reflections ride a connected node).
 - **seL4 framebuffer backend** — a gpui renderer targeting a framebuffer cap (SEL4-EMBEDDING end state) + **seL4 channel transport** (a `NodeClient::Channel` over an seL4 endpoint, same contract over IPC not TCP).
 - **single-source wire types** — replace `starbridge-v2/src/model/` hand-mirrors with a shared `dregg-wire-types` crate depended on by both node + shell.
 - **finish-the-window (HOST gap, not a crate defect)**: the runtime-shader path opens the window; the offline Metal Toolchain download is blocked by a damaged Xcode `DVTDownloads.framework`. The remaining ahead-of-time-shader option = provision the Metal Toolchain on a healthy Xcode.
 
 ## DREGG-ANALYZER (forensic/observability trace analysis)
 
-*(New crate dregg-analyzer/ — ingests CAPTURED TRACES, ATTESTS via the REAL verifiers, 14 tests.
-Build-out lanes:)*
+*(New crate dregg-analyzer/ — ingests CAPTURED TRACES, ATTESTS via the REAL verifiers. The five
+capture types are EXACT MIRRORS — they import-and-reuse the system's own structs (`CheckpointData`,
+`CommitRecord`, `TurnReceipt`, `CallForest`) rather than redefining them, so a format drift is a
+compile error, not a silent skew. The AnalysisReport is now DEEPENED beyond the per-source summary:
+the blocklace report surfaces the concrete EQUIVOCATION-FORK WITNESS (the real `EquivocationProof`
+`block_a ∥ block_b` pair the protocol would slash on, recovered by re-running the node's own
+`detect_equivocation`); the receipts report builds the RECEIPT-LINK GRAPH (distinct agents +
+federation replay-domain set w/ cross-federation flag + Final/Tentative finality breakdown +
+encrypted-path count + introduction/routing/derivation/consumed-cap edges — all bound into the v3
+receipt hash, so on an intact chain they are attested non-strippable); the WAL report carries the
+RECOVERY OVERLAY (per-record replay detail + touched-cell re-touch count + block-hwm resume anchor)
+AND the ledger-root CONVERGENCE TRAIL (distinct-root count + a stagnant-root-with-touched-cells
+Critical anomaly). Build-out lanes:)*
 
-- **live-capture hooks** — a node trace-export mode emitting `BlocklaceCapture`/`ReceiptStrandCapture`/`WalCapture` from the running node (the on-disk/wire types are already exact, so an export endpoint is a thin dump). → node.
+- **live-capture hooks** (THE TAIL — node-side, out of this crate's scope) — a node trace-export mode emitting `BlocklaceCapture`/`ReceiptStrandCapture`/`WalCapture` from the running node (the on-disk/wire types are already exact mirrors, so an export endpoint is a thin dump). → node.
 - **Studio/Workbench visualization binding** — render the `AnalysisReport` (DAG w/ equivocation fork, finality bar, receipt link graph, WAL replay overlay) in the Starbridge/starbridge-v2 shell (report is already JSON-serializable).
 - **gossip capture provenance** — the network source is `Observed`-only (gossip = liveness); a signed dissemination-receipt would graduate some eclipse signals to `Verified`.
 
