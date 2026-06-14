@@ -1,0 +1,108 @@
+# servo-render — the HOST SWGL render path that IS deos's compositor render pass
+# (Stage A of `docs/desktop-os-research/SERVO-ON-SEL4.md`).
+#
+# ## What this is
+#
+# The compositor-PD (`sel4/dregg-firmament/src/compositor_pd.rs`) carries a
+# `present(region, contentDigest)` where the `contentDigest` is today a PROMISE of
+# pixels — the honestly-labeled F3 fidelity gap. This crate is the thing that makes
+# the pixels REAL: a `RenderingContext` backed by WebRender's **SWGL** (the
+# self-contained, CPU-only, framebuffer-out software GL — `swgl 0.68.0`, which
+# `impl Gl for swgl::Context` so it IS a `gleam::gl::Gl`), rendering a page into a
+# caller-owned RGBA8 `Vec<u8>`, then hashing those bytes to the `content_digest`
+# the compositor's T1/T2/T3 gate admits. No GPU, no EGL, no platform surface.
+#
+# ## The two build paths (the HONEST split)
+#
+#   * **`swgl-standalone` (DEFAULT)** — depends ONLY on `swgl` + `gleam`. This is
+#     the de-risking core: it proves SWGL's C++ rasterizer (clang C++17, `gl.cc`)
+#     COMPILES and produces REAL RGBA8 pixels via `init_default_framebuffer` +
+#     `read_pixels`, independent of the libservo elephant. The `SwglRenderingContext`
+#     shim here implements a LOCAL trait mirror of servo's real
+#     `paint_api::rendering_context::RenderingContext` (identical method
+#     signatures — verified against `servo-paint-api 0.1.0-rc2`), so the wiring is
+#     genuine even before the full engine links. THIS is what the test exercises.
+#
+#   * **`libservo` (OPT-IN)** — adds the real `servo` + `servo-paint-api` deps and
+#     wires the SWGL context into a real `WebView` via `WebViewBuilder`. This pulls
+#     `script` → `mozjs` (the multi-GB SpiderMonkey C++ build) — the known-hard,
+#     known-walked long pole. Behind a feature so the de-risking core builds and
+#     tests WITHOUT grinding the elephant. See `src/webview.rs`.
+#
+# ## Standalone workspace (the firmament / starbridge-web-surface pattern)
+#
+# Empty `[workspace]` table → this crate is its OWN workspace root, NOT a member of
+# the repo-root workspace (whose `./target` a node lane owns). `cd servo-render &&
+# cargo test` builds into THIS crate's local target, touching nothing else. It
+# path-depends on the real `dregg-firmament` so the compositor `present()` seam is
+# the GENUINE one (the real `Present`/`Refusal`/`Scene` teeth), never a parallel
+# model.
+[workspace]
+
+[package]
+name = "servo-render"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The host SWGL render path that IS deos's compositor render pass — a CPU-only software-GL RenderingContext rendering a page into a caller-owned RGBA8 Vec<u8>, hashed to the compositor-PD's content_digest. Stage A of SERVO-ON-SEL4."
+
+[features]
+# DEFAULT: the de-risking core — SWGL + gleam only, no libservo. Proves the C++
+# rasterizer compiles and produces real RGBA8 without the mozjs build.
+default = ["swgl-standalone"]
+swgl-standalone = ["dep:swgl", "dep:gleam"]
+# OPT-IN: the full real-WebView path (pulls servo → script → mozjs, the elephant).
+libservo = ["swgl-standalone", "dep:servo", "dep:servo-paint-api"]
+
+[dependencies]
+# WebRender's SWGL — the self-contained CPU-only software GL. `impl Gl for
+# swgl::Context` (swgl_fns.rs:504) means the context IS a `gleam::gl::Gl`. Its
+# `init_default_framebuffer(x,y,w,h,stride,buf)` (swgl_fns.rs:354) renders FBO 0
+# directly into a caller-owned buffer; `read_pixels`/`get_color_buffer` hand the
+# RGBA8 back. The build needs clang C++17 + the `glsl-to-cxx` / `webrender_build`
+# codegen crates (all on the panamax mirror at 0.68.0).
+swgl = { version = "0.68", optional = true }
+
+# The `gleam::gl::Gl` trait SWGL implements + that servo's `RenderingContext`
+# hands to WebRender. The SAME `gleam 0.15.1` servo 0.1.0-rc2 pins.
+gleam = { version = "0.15", optional = true }
+
+# The REAL compositor-PD `present()` seam: the genuine `Present`/`Refusal`/`Scene`
+# (T1 non-overlap / T2 label-binding / T3 focus-exclusivity) teeth, the
+# `is_attenuation` rights lattice, the framebuffer the compositor SOLELY holds. We
+# feed our SWGL frame's digest into THIS unchanged gate — never reinvent it. (This
+# is the same standalone-workspace path-dep `starbridge-web-surface` uses.)
+dregg-firmament = { path = "../sel4/dregg-firmament" }
+
+# Content-addressing: `content_digest = blake3(rgba8_bytes)` — the bind from real
+# pixels to the compositor's promised digest. The SAME blake3 the cell/types
+# crates use.
+blake3 = "1"
+
+# ── the libservo (real WebView) path — opt-in, pulls the mozjs elephant ──────────
+# The real libservo: `WebView` + `WebViewBuilder` + the `RenderingContext` trait
+# (re-exported from `paint_api`). Published to crates.io as `servo 0.1.0-rc2`
+# (edition 2024) — so the engine is a normal dependency, not a git checkout.
+servo = { version = "0.1.0-rc2", optional = true }
+# The crate that DEFINES `RenderingContext` (so we impl the genuine trait, not the
+# mirror) + `SoftwareRenderingContext` (the surfman-based path SWGL replaces).
+servo-paint-api = { version = "0.1.0-rc2", optional = true }
+
+[dev-dependencies]
+# (tests live inline + in tests/)
+
+# THE FORK SEAM (replicated from dregg-firmament's Cargo.toml, adjusted for this
+# crate's depth). Because this crate is its OWN workspace root, the repo-root
+# `[patch]` does NOT apply, so the transitive `dregg-circuit` (via `dregg-turn` via
+# `dregg-firmament`) would resolve `p3-recursion` from the PINNED git rev, which
+# lacks the `RecursionInput::NativeBatchStark` variant. Point at the SAME local
+# fork checkout. `../` = servo-render → breadstuffs → dev. Keep in sync with the
+# root/firmament blocks; all revert to the git rev once the fork is pushed.
+[patch."https://github.com/emberian/plonky3-recursion"]
+p3-recursion = { path = "../../plonky3-recursion/recursion" }
+p3-circuit = { path = "../../plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "../../plonky3-recursion/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "../../plonky3-recursion/poseidon2-circuit-air" }
+
+[profile.release]
+opt-level = "s"

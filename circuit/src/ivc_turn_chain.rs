@@ -161,19 +161,13 @@ use p3_recursion::{
     build_and_prove_aggregation_layer, build_and_prove_next_layer,
 };
 
-use crate::effect_vm::pi;
 #[cfg(feature = "recursion")]
 use crate::descriptor_ir2::Ir2BatchProof;
-use crate::effect_vm_descriptors::descriptor_for_selector;
 use crate::field::BabyBear;
 use crate::joint_turn_aggregation::{DescriptorParticipant, verify_descriptor_participant};
-use crate::lean_descriptor_air::{
-    EffectVmDescriptorAir, descriptor_recursion_matrix, parse_vm_descriptor,
-};
 use crate::plonky3_recursion_impl::recursive::{
     DreggRecursionConfig, RecursionCompatibleProof, create_recursion_backend,
-    create_recursion_config, prove_inner_for_air, recursion_vk_fingerprint, verify_inner_for_air,
-    verify_recursive_batch_proof,
+    recursion_vk_fingerprint, verify_recursive_batch_proof,
 };
 use crate::poseidon2::hash_4_to_1;
 
@@ -194,44 +188,34 @@ fn to_p3(v: BabyBear) -> P3BabyBear {
 
 /// A single finalized turn in the chain.
 ///
-/// The `participant` carries the per-cell whole-turn DESCRIPTOR-INTERPRETER
-/// proof (`EffectVmP3Proof`, the production cutover wire type) + the public
-/// inputs it attests; host admission is [`verify_descriptor_participant`]
-/// (selector-bound through the Lean descriptor verifier). The aggregator reads
-/// the cell's pre/post state commitment out of the PI prefix as the chain
-/// roots.
-///
-/// `base_trace` is the 186-column EffectVM execution trace the proof attests —
-/// the prover-side witness from which the in-circuit leaf is re-proven (the
-/// fold wraps the REAL descriptor constraint set over THIS trace; see the
-/// module docs' statement-equality argument). The chain prover is the node
-/// that produced the history, so it holds the traces it executed.
+/// **Bucket-F (PATH-PRESERVE Phase 5a):** the `participant` carries the MANDATORY ROTATED leg —
+/// the per-cell whole-turn rotated multi-table `Ir2BatchProof` (the [`RotatedParticipantLeg`])
+/// + its 38-PI vector. Host admission is [`verify_descriptor_participant`] (the rotated proof
+/// verified standalone + selector-bound). The chain roots are read from the ROTATED commitments
+/// (PI 34/35); the in-circuit leaf is the rotated batch re-proven via
+/// [`prove_descriptor_leaf_rotated_with_config`]. The legacy v1 `base_trace` (the 186-column
+/// EffectVM trace the old `prove_descriptor_leaf` wrap consumed) has been DROPPED — the rotated
+/// leaf needs only `leg.{descriptor, proof, public_inputs}`.
 pub struct FinalizedTurn {
-    /// The whole-turn descriptor-interpreter proof for this finalized turn.
+    /// The whole-turn rotated descriptor proof (+ PI) for this finalized turn.
     pub participant: DescriptorParticipant,
-    /// The base EffectVM execution trace the proof attests (width =
-    /// the descriptor's `trace_width`, i.e. `EFFECT_VM_WIDTH`).
-    pub base_trace: Vec<Vec<BabyBear>>,
 }
 
 impl FinalizedTurn {
-    /// Wrap a descriptor participant + its execution trace as a finalized turn.
-    pub fn new(participant: DescriptorParticipant, base_trace: Vec<Vec<BabyBear>>) -> Self {
-        Self {
-            participant,
-            base_trace,
-        }
+    /// Wrap a (rotated) descriptor participant as a finalized turn.
+    pub fn new(participant: DescriptorParticipant) -> Self {
+        Self { participant }
     }
 
-    /// The pre-state root this turn consumes (`OLD_COMMIT` position 0).
+    /// The pre-state root this turn consumes — the ROTATED OLD-commit (PI 34).
     pub fn old_root(&self) -> BabyBear {
-        self.participant.public_inputs[pi::OLD_COMMIT]
+        self.participant.rotated.old_root()
     }
 
-    /// The post-state root this turn produces (`NEW_COMMIT` position 0). This is
-    /// the next finalized turn's required `old_root` — the temporal binding.
+    /// The post-state root this turn produces — the ROTATED NEW-commit (PI 35). This is the next
+    /// finalized turn's required `old_root` (the temporal binding).
     pub fn new_root(&self) -> BabyBear {
-        self.participant.public_inputs[pi::NEW_COMMIT]
+        self.participant.rotated.new_root()
     }
 }
 
@@ -412,74 +396,11 @@ impl<AB: AirBuilder> Air<AB> for TurnChainBindingAir {
 // ============================================================================
 // Trace generation for the chain binding.
 // ============================================================================
-
-/// Host-side chain checks (>= 2 turns, sequential continuity) + the binding
-/// trace. Returns `(trace, public_inputs, chain_digest)`.
-///
-/// Surfaces a [`TurnChainError::ChainBreak`] at the witness level so we never
-/// hand the prover an unsatisfiable trace — but the AIR's constraint 1 rejects
-/// it too (see [`generate_chain_trace_unchecked`]).
-fn generate_chain_trace(
-    turns: &[&FinalizedTurn],
-) -> Result<(Vec<[BabyBear; 4]>, Vec<BabyBear>, BabyBear), TurnChainError> {
-    if turns.len() < 2 {
-        return Err(TurnChainError::TooFewTurns { count: turns.len() });
-    }
-    // Sequential continuity (the temporal tooth, host side).
-    for i in 1..turns.len() {
-        let prev_new = turns[i - 1].new_root();
-        let this_old = turns[i].old_root();
-        if prev_new != this_old {
-            return Err(TurnChainError::ChainBreak {
-                index: i,
-                expected_old_root: prev_new.0,
-                found_old_root: this_old.0,
-            });
-        }
-    }
-    let (trace, pis) = generate_chain_trace_unchecked(turns);
-    let digest = pis[3];
-    Ok((trace, pis, digest))
-}
-
-/// Build the chain-binding trace WITHOUT the host continuity check. The AIR's
-/// constraint 1 still enforces it; the negative test uses this to confirm the
-/// *circuit* rejects a broken order.
-fn generate_chain_trace_unchecked(turns: &[&FinalizedTurn]) -> (Vec<[BabyBear; 4]>, Vec<BabyBear>) {
-    let n = turns.len();
-    let padded_len = n.next_power_of_two().max(2);
-    let mut trace: Vec<[BabyBear; 4]> = Vec::with_capacity(padded_len);
-    let mut acc = BabyBear::ZERO;
-
-    for (i, t) in turns.iter().enumerate() {
-        let old_root = t.old_root();
-        let new_root = t.new_root();
-        let idx = BabyBear::new(i as u32);
-        let acc_out = hash_4_to_1(&[acc, old_root, new_root, idx]);
-        trace.push([old_root, new_root, acc, acc_out]);
-        acc = acc_out;
-    }
-
-    // Pad to power of two. Padding rows are NoOp self-loops on the final root
-    // (old_root == new_root == final new_root) so continuity + digest hold.
-    let final_root = trace.last().unwrap()[1];
-    for i in n..padded_len {
-        let idx = BabyBear::new(i as u32);
-        let acc_out = hash_4_to_1(&[acc, final_root, final_root, idx]);
-        trace.push([final_root, final_root, acc, acc_out]);
-        acc = acc_out;
-    }
-
-    let genesis_root = trace[0][0];
-    let chain_digest = trace.last().unwrap()[3];
-    let pis = vec![
-        genesis_root,
-        final_root,
-        BabyBear::new(n as u32),
-        chain_digest,
-    ];
-    (trace, pis)
-}
+//
+// Bucket-F (PATH-PRESERVE Phase 5a): the v1 `generate_chain_trace` /
+// `generate_chain_trace_unchecked` (which read v1 OLD/NEW_COMMIT at PI 0/4) are DELETED.
+// The rotated fold builds its binding trace via `generate_chain_trace_rotated` (reading the
+// ROTATED commitments at PI 34/35).
 
 fn trace_to_matrix(trace: &[[BabyBear; 4]]) -> RowMajorMatrix<P3BabyBear> {
     let values: Vec<P3BabyBear> = trace
@@ -489,17 +410,14 @@ fn trace_to_matrix(trace: &[[BabyBear; 4]]) -> RowMajorMatrix<P3BabyBear> {
     RowMajorMatrix::new(values, 4)
 }
 
-/// Read a finalized turn's chain roots from its ROTATED leg (PI 34/35), failing closed if no
-/// rotated leg is present.
-fn rotated_roots(t: &FinalizedTurn) -> Result<(BabyBear, BabyBear), TurnChainError> {
-    let leg = t
-        .participant
-        .rotated
-        .as_ref()
-        .ok_or_else(|| TurnChainError::RecursionFailed {
-            reason: "rotated chain trace: a finalized turn carries no rotated leg".to_string(),
-        })?;
-    Ok((leg.old_root(), leg.new_root()))
+/// Read a finalized turn's chain roots from its mandatory ROTATED leg (PI 34/35).
+///
+/// Bucket-F (PATH-PRESERVE Phase 5a): the rotated leg is MANDATORY — `FinalizedTurn` carries
+/// exactly one [`crate::joint_turn_aggregation::RotatedParticipantLeg`], so reading its roots is
+/// infallible (no v1 fallback leg, no `Option`).
+fn rotated_roots(t: &FinalizedTurn) -> (BabyBear, BabyBear) {
+    let leg = &t.participant.rotated;
+    (leg.old_root(), leg.new_root())
 }
 
 /// [`generate_chain_trace`] reading the ROTATED chain roots (PI 34/35) instead of the v1
@@ -512,8 +430,8 @@ fn generate_chain_trace_rotated(
         return Err(TurnChainError::TooFewTurns { count: turns.len() });
     }
     for i in 1..turns.len() {
-        let (_, prev_new) = rotated_roots(turns[i - 1])?;
-        let (this_old, _) = rotated_roots(turns[i])?;
+        let (_, prev_new) = rotated_roots(turns[i - 1]);
+        let (this_old, _) = rotated_roots(turns[i]);
         if prev_new != this_old {
             return Err(TurnChainError::ChainBreak {
                 index: i,
@@ -527,7 +445,7 @@ fn generate_chain_trace_rotated(
     let mut trace: Vec<[BabyBear; 4]> = Vec::with_capacity(padded_len);
     let mut acc = BabyBear::ZERO;
     for (i, t) in turns.iter().enumerate() {
-        let (old_root, new_root) = rotated_roots(t)?;
+        let (old_root, new_root) = rotated_roots(t);
         let idx = BabyBear::new(i as u32);
         let acc_out = hash_4_to_1(&[acc, old_root, new_root, idx]);
         trace.push([old_root, new_root, acc, acc_out]);
@@ -553,50 +471,15 @@ fn generate_chain_trace_rotated(
 }
 
 // ============================================================================
-// Per-turn leaf: the REAL descriptor AIR re-proven recursion-compatibly.
+// Per-turn leaf: the ROTATED descriptor batch re-proven recursion-compatibly.
 // ============================================================================
-
-/// Re-prove one finalized turn's DESCRIPTOR constraint set as a
-/// recursion-compatible uni-STARK over the turn's own execution trace, with the
-/// descriptor PI prefix (carrying the chain roots at `pi::OLD_COMMIT` /
-/// `pi::NEW_COMMIT`) as the public inputs the wrap layer binds in-circuit.
-///
-/// Returns the AIR (needed again by the wrap), the inner proof, and the PI
-/// prefix. The statement is IDENTICAL to the production `EffectVmP3Proof`'s
-/// (same AIR, same extended trace, same PIs) — see the module docs.
-///
-/// A turn whose claimed PIs have no satisfying trace (forged post-commit, stub
-/// trace, absent execution) FAILS here: the prover refuses the unsatisfiable
-/// trace (debug) or the self-verify rejects (release). Either way no leaf
-/// exists to wrap, so no root can be produced.
-pub(crate) fn prove_descriptor_leaf(
-    turn: &FinalizedTurn,
-    selector: usize,
-) -> Result<
-    (
-        EffectVmDescriptorAir,
-        RecursionCompatibleProof,
-        Vec<BabyBear>,
-    ),
-    String,
-> {
-    let json = descriptor_for_selector(selector)
-        .ok_or_else(|| format!("no descriptor registered for selector {selector}"))?;
-    let desc = parse_vm_descriptor(json)?;
-    if turn.participant.public_inputs.len() < desc.public_input_count {
-        return Err(format!(
-            "participant PI vector too short for descriptor: {} < {}",
-            turn.participant.public_inputs.len(),
-            desc.public_input_count
-        ));
-    }
-    let dpis: Vec<BabyBear> = turn.participant.public_inputs[..desc.public_input_count].to_vec();
-    let matrix = descriptor_recursion_matrix(&desc, &turn.base_trace)?;
-    let air = EffectVmDescriptorAir::new(desc);
-    let proof = prove_inner_for_air(&air, matrix, &dpis);
-    verify_inner_for_air(&air, &proof, &dpis)?;
-    Ok((air, proof, dpis))
-}
+//
+// Bucket-F (PATH-PRESERVE Phase 5a): the v1 `prove_descriptor_leaf` (which re-proved the
+// 186-column `EffectVmDescriptorAir` uni-STARK over a `FinalizedTurn::base_trace`) is DELETED.
+// The mandatory per-turn leaf is the ROTATED multi-table `Ir2BatchProof` carried on
+// `participant.rotated`, wrapped in-circuit by `prove_descriptor_leaf_rotated_with_config`
+// below — `FinalizedTurn` no longer carries a v1 `base_trace`, so there is nothing for the v1
+// leaf to consume.
 
 /// The FRI knobs the production IR-v2 descriptor batch (`descriptor_ir2::ir2_config`) is
 /// minted under: `log_blowup = 6`, `log_final_poly_len = 0`, `commit_pow = 0`,
@@ -731,19 +614,6 @@ pub fn prove_descriptor_leaf_rotated_with_config(
     .map_err(|e| format!("rotated native-batch leaf-wrap failed: {e:?}"))
 }
 
-/// Build + prove the chain-binding leaf (the sequential temporal binding).
-fn prove_chain_binding_leaf(
-    turns: &[&FinalizedTurn],
-) -> Result<(RecursionCompatibleProof, Vec<BabyBear>), TurnChainError> {
-    let (trace, pis, _digest) = generate_chain_trace(turns)?;
-    let matrix = trace_to_matrix(&trace);
-    let air = TurnChainBindingAir;
-    let proof = prove_inner_for_air(&air, matrix, &pis);
-    verify_inner_for_air(&air, &proof, &pis)
-        .map_err(|reason| TurnChainError::RecursionFailed { reason })?;
-    Ok((proof, pis))
-}
-
 // ============================================================================
 // The whole-chain IVC artifact (K-fold).
 // ============================================================================
@@ -826,7 +696,7 @@ pub fn prove_turn_chain_recursive(
         selectors.push(s);
     }
     let refs: Vec<&FinalizedTurn> = turns.iter().collect();
-    prove_chain_core(&refs, &selectors)
+    prove_chain_core_rotated(&refs, &selectors)
 }
 
 /// **THE UNGATED PROVER (tamper surface).** Fold a chain WITHOUT the host-side
@@ -845,96 +715,12 @@ pub fn prove_turn_chain_recursive_without_host_gate(
     claimed_selectors: &[usize],
 ) -> Result<WholeChainProof, TurnChainError> {
     let refs: Vec<&FinalizedTurn> = turns.iter().collect();
-    prove_chain_core(&refs, claimed_selectors)
-}
-
-/// The shared fold core (steps 2-6 of [`prove_turn_chain_recursive`]).
-fn prove_chain_core(
-    turns: &[&FinalizedTurn],
-    selectors: &[usize],
-) -> Result<WholeChainProof, TurnChainError> {
-    if selectors.len() != turns.len() {
-        return Err(TurnChainError::RecursionFailed {
-            reason: format!(
-                "selector count {} != turn count {}",
-                selectors.len(),
-                turns.len()
-            ),
-        });
-    }
-    // (2) host-side continuity + the binding witness.
-    let (_, chain_pis, chain_digest) = generate_chain_trace(turns)?;
-    let genesis_root = chain_pis[0];
-    let final_root = chain_pis[1];
-
-    let config = create_recursion_config();
-    let backend = create_recursion_backend();
-    let params = ProveNextLayerParams::default();
-
-    // (3) chain-binding leaf.
-    let (binding_inner, binding_pis) = prove_chain_binding_leaf(turns)?;
-
-    // (4)+(5) one REAL descriptor leaf per finalized turn, each re-proven over
-    // its own execution trace and wrapped uni->batch (verified in-circuit).
-    let mut batch_leaves: Vec<RecursionOutput<DreggRecursionConfig>> =
-        Vec::with_capacity(turns.len() + 1);
-
-    for (i, t) in turns.iter().enumerate() {
-        let (air, leaf_inner, leaf_pis) = prove_descriptor_leaf(t, selectors[i])
-            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-        let p3_pis: Vec<P3BabyBear> = leaf_pis.iter().map(|&v| to_p3(v)).collect();
-        let input = RecursionInput::UniStark {
-            proof: &leaf_inner,
-            air: &air,
-            public_inputs: p3_pis,
-            preprocessed_commit: None,
-        };
-        let wrapped =
-            build_and_prove_next_layer::<DreggRecursionConfig, EffectVmDescriptorAir, _, D>(
-                &input, &config, &backend, &params,
-            )
-            .map_err(|e| TurnChainError::TurnProofInvalid {
-                index: i,
-                reason: format!("recursive descriptor leaf failed: {e:?}"),
-            })?;
-        batch_leaves.push(wrapped);
-    }
-
-    // The chain-binding leaf wrapped uni->batch.
-    {
-        let air = TurnChainBindingAir;
-        let p3_pis: Vec<P3BabyBear> = binding_pis.iter().map(|&v| to_p3(v)).collect();
-        let input = RecursionInput::UniStark {
-            proof: &binding_inner,
-            air: &air,
-            public_inputs: p3_pis,
-            preprocessed_commit: None,
-        };
-        let wrapped =
-            build_and_prove_next_layer::<DreggRecursionConfig, TurnChainBindingAir, _, D>(
-                &input, &config, &backend, &params,
-            )
-            .map_err(|e| TurnChainError::RecursionFailed {
-                reason: format!("recursive chain-binding leaf failed: {e:?}"),
-            })?;
-        batch_leaves.push(wrapped);
-    }
-
-    // (6) Pairwise-aggregate up a binary tree to ONE root batch proof.
-    let root = aggregate_tree(batch_leaves, &config, &backend, &params)?;
-
-    Ok(WholeChainProof {
-        root,
-        binding_proof: binding_inner,
-        genesis_root,
-        final_root,
-        chain_digest,
-        num_turns: turns.len(),
-    })
+    prove_chain_core_rotated(&refs, claimed_selectors)
 }
 
 // ============================================================================
-// C4 — THE ROTATED whole-chain fold (the v1-deletion path).
+// THE ROTATED whole-chain fold (Bucket-F: the ONLY fold — the v1 `prove_chain_core`
+// + v1 leaf are deleted; `prove_turn_chain_recursive` routes straight here).
 // ============================================================================
 
 /// Fold K finalized turns into one whole-chain proof through the ROTATED leaf-wrap.
@@ -1002,14 +788,7 @@ fn prove_chain_core_rotated(
 
     // One rotated descriptor leaf per finalized turn.
     for (i, t) in turns.iter().enumerate() {
-        let leg = t.participant.rotated.as_ref().ok_or_else(|| {
-            TurnChainError::TurnProofInvalid {
-                index: i,
-                reason: "rotated fold: finalized turn carries no rotated leg (participant.rotated \
-                         == None) — mint it with prove_descriptor_leaf_rotated"
-                    .to_string(),
-            }
-        })?;
+        let leg = &t.participant.rotated;
         let wrapped = prove_descriptor_leaf_rotated_with_config(
             &leg.descriptor,
             &leg.proof,
@@ -1053,14 +832,24 @@ fn prove_chain_core_rotated(
 }
 
 /// Build the chain-binding leaf reading the ROTATED chain roots (PI 34/35), at the wrap config.
+///
+/// **Bucket-F fix:** the binding-leaf inner proof MUST be minted at [`ir2_leaf_wrap_config`]
+/// (log_blowup 6), the SAME FRI engine the whole rotated tree runs at — it is wrapped and
+/// aggregated with the rotated descriptor leaves at that config, so proving it at the default
+/// `create_recursion_config` (log_blowup 3) and then wrapping at the wrap config raises
+/// `InvalidProofShape("Fewer siblings in proof than op_ids provided")` in-circuit.
 fn prove_chain_binding_leaf_rotated(
     turns: &[&FinalizedTurn],
 ) -> Result<(RecursionCompatibleProof, Vec<BabyBear>), TurnChainError> {
+    use crate::plonky3_recursion_impl::recursive::{
+        prove_inner_for_air_with_config, verify_inner_for_air_with_config,
+    };
     let (trace, pis, _digest) = generate_chain_trace_rotated(turns)?;
     let matrix = trace_to_matrix(&trace);
     let air = TurnChainBindingAir;
-    let proof = prove_inner_for_air(&air, matrix, &pis);
-    verify_inner_for_air(&air, &proof, &pis)
+    let wrap_config = ir2_leaf_wrap_config();
+    let proof = prove_inner_for_air_with_config(&air, matrix, &pis, &wrap_config);
+    verify_inner_for_air_with_config(&air, &proof, &pis, &wrap_config)
         .map_err(|reason| TurnChainError::RecursionFailed { reason })?;
     Ok((proof, pis))
 }
@@ -1133,15 +922,22 @@ pub fn verify_turn_chain_recursive(
         });
     }
 
-    // (2) Claimed publics, read against the carried binding proof.
+    // (2) Claimed publics, read against the carried binding proof. The binding proof is minted at
+    // the rotated leaf-wrap config (log_blowup 6, `prove_chain_binding_leaf_rotated`), so it must
+    // be verified under that SAME config.
     let claimed_pis = vec![
         proof.genesis_root,
         proof.final_root,
         BabyBear::new(proof.num_turns as u32),
         proof.chain_digest,
     ];
-    verify_inner_for_air(&TurnChainBindingAir, &proof.binding_proof, &claimed_pis)
-        .map_err(|reason| TurnChainError::ClaimedPublicsUnattested { reason })?;
+    crate::plonky3_recursion_impl::recursive::verify_inner_for_air_with_config(
+        &TurnChainBindingAir,
+        &proof.binding_proof,
+        &claimed_pis,
+        &ir2_leaf_wrap_config(),
+    )
+    .map_err(|reason| TurnChainError::ClaimedPublicsUnattested { reason })?;
 
     // (3) The root.
     verify_recursive_batch_proof(&proof.root.0)
@@ -1198,485 +994,16 @@ pub fn fold_two_turns(
             .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
         selectors.push(s);
     }
-    prove_chain_core(&window, &selectors)
+    prove_chain_core_rotated(&window, &selectors)
 }
 
 // ============================================================================
 // Tests
 // ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::effect_vm::columns::{STATE_AFTER_BASE, STATE_BEFORE_BASE, state};
-    use crate::effect_vm::{CellState, EFFECT_VM_WIDTH, Effect, generate_effect_vm_trace, pi, sel};
-    use crate::field::BabyBear;
-    use crate::lean_descriptor_air::prove_vm_descriptor;
-
-    /// Build a REAL finalized turn on the production descriptor path: execute a
-    /// `Transfer` of `amount` (direction 1 = debit) from `(balance, nonce)`,
-    /// prove the 186-column trace through the Lean transfer descriptor
-    /// (`prove_vm_descriptor`, the audited p3 batch prover — the SAME wire
-    /// artifact the SDK cutover path emits), and carry the trace as the leaf
-    /// witness. Returns the finalized turn plus its REAL `(old_root, new_root)`
-    /// — the genuine Poseidon2 state commitments the trace generator derives,
-    /// NOT fabricated values (the descriptor's hash sites bind them to the
-    /// trace, so they cannot be overridden).
-    fn make_turn(balance: u64, nonce: u32, amount: u64) -> (FinalizedTurn, BabyBear, BabyBear) {
-        let state = CellState::new(balance, nonce);
-        let effects = vec![Effect::Transfer {
-            amount,
-            direction: 1,
-        }];
-        let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-        let old_root = public_inputs[pi::OLD_COMMIT];
-        let new_root = public_inputs[pi::NEW_COMMIT];
-        let json = descriptor_for_selector(sel::TRANSFER).expect("transfer descriptor registered");
-        let desc = parse_vm_descriptor(json).expect("transfer descriptor parses");
-        let dpis = &public_inputs[..desc.public_input_count];
-        let proof =
-            prove_vm_descriptor(&desc, &trace, dpis).expect("descriptor proves honest transfer");
-        (
-            FinalizedTurn::new(
-                DescriptorParticipant::v1(proof, public_inputs),
-                trace,
-            ),
-            old_root,
-            new_root,
-        )
-    }
-
-    /// Build a continuous chain of `k` real finalized turns: each turn debits
-    /// `step` from the balance and the next turn starts from the post-state, so
-    /// turn i's real `new_root` is turn i+1's real `old_root`. Returns the turns
-    /// plus the genesis and final roots.
-    fn make_chain(
-        start_balance: u64,
-        start_nonce: u32,
-        step: u64,
-        k: usize,
-    ) -> (Vec<FinalizedTurn>, BabyBear, BabyBear) {
-        let mut turns = Vec::with_capacity(k);
-        let mut balance = start_balance;
-        let mut nonce = start_nonce;
-        let mut genesis = BabyBear::ZERO;
-        let mut final_root = BabyBear::ZERO;
-        for i in 0..k {
-            let (turn, old_root, new_root) = make_turn(balance, nonce, step);
-            if i == 0 {
-                genesis = old_root;
-            } else {
-                // The previous turn's post-state IS this turn's pre-state, so the
-                // real commitments must already chain.
-                assert_eq!(
-                    old_root, final_root,
-                    "turn {i} old_root must equal previous new_root (real chain)"
-                );
-            }
-            final_root = new_root;
-            turns.push(turn);
-            balance -= step;
-            nonce += 1; // one non-NoOp (Transfer) row bumps the nonce by 1.
-        }
-        (turns, genesis, final_root)
-    }
-
-    fn refs(turns: &[FinalizedTurn]) -> Vec<&FinalizedTurn> {
-        turns.iter().collect()
-    }
-
-    /// GOLD whole-chain: fold K=3 REAL finalized turns — REAL descriptor leaves,
-    /// each the full `EffectVmDescriptorAir` constraint set re-proven over its
-    /// own execution trace and verified IN-CIRCUIT by the wrap layer — into ONE
-    /// recursive proof that verifies. Each turn's real post-state commitment is
-    /// the next turn's real pre-state commitment (genesis -> r1 -> r2 -> final).
-    /// The verifier checks only the root (+ the VK pin and the carried binding
-    /// attestation).
-    ///
-    /// Piggybacked REFUSED cases (no extra proving): a mismatched VK anchor is
-    /// refused, and RELABELED carried publics (final_root / chain_digest /
-    /// num_turns / genesis_root spliced after the fold) are refused by the
-    /// claimed-publics attestation — the verify path now reads the publics
-    /// against the carried binding proof instead of trusting bare fields.
-    #[test]
-    fn k_fold_turn_chain_proves_and_verifies() {
-        let (turns, genesis, final_root) = make_chain(1000, 0, 7, 3);
-        assert_eq!(turns.len(), 3);
-
-        let mut whole = prove_turn_chain_recursive(&turns)
-            .expect("a continuous 3-turn finalized chain must fold recursively");
-        assert_eq!(whole.num_turns, 3);
-        assert_eq!(whole.genesis_root, genesis);
-        assert_eq!(whole.final_root, final_root);
-
-        // The trust anchor an honest setup would distribute.
-        let vk = whole.root_vk_fingerprint();
-        verify_turn_chain_recursive(&whole, &vk)
-            .expect("the whole-chain root proof must verify under its honest anchor");
-
-        // REFUSED: a mismatched VK anchor (the caller pinned a different circuit).
-        let mut wrong = vk;
-        wrong.0[0] ^= 0xFF;
-        match verify_turn_chain_recursive(&whole, &wrong) {
-            Err(TurnChainError::VkFingerprintMismatch { .. }) => {}
-            other => panic!("a mismatched VK anchor must be refused; got {other:?}"),
-        }
-
-        // REFUSED: relabeled final_root (splicing a foreign endpoint onto the artifact).
-        let honest_final = whole.final_root;
-        whole.final_root = honest_final + BabyBear::ONE;
-        match verify_turn_chain_recursive(&whole, &vk) {
-            Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
-            other => panic!("a relabeled final_root must be refused; got {other:?}"),
-        }
-        whole.final_root = honest_final;
-
-        // REFUSED: relabeled chain_digest (claiming a different ordered history).
-        let honest_digest = whole.chain_digest;
-        whole.chain_digest = honest_digest + BabyBear::ONE;
-        match verify_turn_chain_recursive(&whole, &vk) {
-            Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
-            other => panic!("a relabeled chain_digest must be refused; got {other:?}"),
-        }
-        whole.chain_digest = honest_digest;
-
-        // REFUSED: relabeled num_turns (the binding proof Fiat–Shamir-binds pv[2]
-        // even though the AIR leaves it unconstrained).
-        let honest_n = whole.num_turns;
-        whole.num_turns = honest_n + 1;
-        match verify_turn_chain_recursive(&whole, &vk) {
-            Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
-            other => panic!("a relabeled num_turns must be refused; got {other:?}"),
-        }
-        whole.num_turns = honest_n;
-
-        // REFUSED: relabeled genesis_root.
-        let honest_genesis = whole.genesis_root;
-        whole.genesis_root = honest_genesis + BabyBear::ONE;
-        match verify_turn_chain_recursive(&whole, &vk) {
-            Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
-            other => panic!("a relabeled genesis_root must be refused; got {other:?}"),
-        }
-        whole.genesis_root = honest_genesis;
-
-        // And the restored artifact still verifies (the refusals were the lies,
-        // not collateral damage).
-        verify_turn_chain_recursive(&whole, &vk)
-            .expect("the restored honest artifact must verify again");
-    }
-
-    /// **THE VK-PIN TOOTH (from-scratch prover, REFUSED).** Today's exact hole,
-    /// closed: `verify_recursive_batch_proof` reconstructs circuit common data
-    /// FROM the proof, so ANY valid recursive proof — here a wrap of the
-    /// unrelated `AggregationAir` — passes the bare root check. The pinned
-    /// verifier must refuse it: its verifier-key fingerprint is not the chain
-    /// fold's. Both halves are asserted: the bare engine ACCEPTS the foreign
-    /// root (showing the pin is load-bearing, not redundant), and
-    /// `verify_turn_chain_recursive` REFUSES it with `VkFingerprintMismatch`.
-    #[test]
-    fn foreign_circuit_root_is_refused_by_vk_pin() {
-        use crate::plonky3_recursion::AggregationAir;
-
-        // An honest K=2 fold (the artifact whose carried publics + binding proof
-        // the attacker will try to pair with a foreign root).
-        let (turns, _g, _f) = make_chain(1000, 0, 7, 2);
-        let mut whole =
-            prove_turn_chain_recursive(&turns).expect("the honest 2-turn chain must fold");
-        let vk = whole.root_vk_fingerprint();
-        verify_turn_chain_recursive(&whole, &vk).expect("honest artifact verifies");
-
-        // A from-scratch prover's root: a perfectly VALID recursive proof — of a
-        // DIFFERENT circuit (the AggregationAir smoke wrap).
-        let foreign = {
-            use crate::plonky3_recursion_impl::recursive::prove_recursive_layer_for_air;
-            use p3_field::PrimeCharacteristicRing;
-            let pv1 = P3BabyBear::from_u64(0xC0FFEE);
-            let rows: Vec<P3BabyBear> = vec![
-                P3BabyBear::ZERO,
-                P3BabyBear::from_u64(1),
-                P3BabyBear::from_u64(2),
-                P3BabyBear::from_u64(10),
-                P3BabyBear::from_u64(10),
-                P3BabyBear::from_u64(3),
-                P3BabyBear::from_u64(4),
-                P3BabyBear::from_u64(20),
-                P3BabyBear::from_u64(20),
-                P3BabyBear::from_u64(5),
-                P3BabyBear::from_u64(6),
-                P3BabyBear::from_u64(30),
-                P3BabyBear::from_u64(30),
-                P3BabyBear::from_u64(7),
-                P3BabyBear::from_u64(8),
-                pv1,
-            ];
-            let matrix = RowMajorMatrix::new(rows, 4);
-            let pis = vec![BabyBear::ZERO, BabyBear::new(0xC0FFEE)];
-            let air = AggregationAir;
-            let inner = prove_inner_for_air(&air, matrix, &pis);
-            prove_recursive_layer_for_air(&air, &inner, &pis)
-                .expect("the foreign AIR wraps fine — it is a VALID recursive proof")
-        };
-
-        // The bare engine check ACCEPTS the foreign root — the exact reason the
-        // pin exists.
-        verify_recursive_batch_proof(&foreign.0)
-            .expect("the bare engine accepts ANY valid recursive proof — the pre-pin hole");
-
-        // Splice the foreign root under the honest carried publics/binding.
-        whole.root = foreign;
-        match verify_turn_chain_recursive(&whole, &vk) {
-            Err(TurnChainError::VkFingerprintMismatch { .. }) => {}
-            Ok(()) => panic!("a foreign circuit's root must NOT verify as the chain fold"),
-            Err(other) => panic!("expected VkFingerprintMismatch, got {other:?}"),
-        }
-    }
-
-    /// TEMPORAL TOOTH (host): a turn whose real old_root != previous new_root
-    /// breaks the finalized order and is rejected at the chain check — before any
-    /// tree. We splice an out-of-sequence turn (a fresh chain's turn, whose
-    /// pre-state commitment does not match) into the middle.
-    #[test]
-    fn broken_order_rejected() {
-        let (mut turns, _g, _f) = make_chain(1000, 0, 7, 3);
-        // Replace turn 1 with a turn from an UNRELATED chain (different starting
-        // balance), so its real old_root does not continue turn 0's new_root.
-        let (foreign, foreign_old, _foreign_new) = make_turn(500, 50, 3);
-        let prev_new = turns[0].new_root();
-        assert_ne!(
-            foreign_old, prev_new,
-            "the foreign turn must NOT continue the chain (that is the point)"
-        );
-        turns[1] = foreign;
-
-        match prove_turn_chain_recursive(&turns) {
-            Err(TurnChainError::ChainBreak {
-                index,
-                expected_old_root,
-                found_old_root,
-            }) => {
-                assert_eq!(index, 1);
-                assert_eq!(expected_old_root, prev_new.0);
-                assert_eq!(found_old_root, foreign_old.0);
-            }
-            Ok(_) => panic!("a broken finalized order must not produce a whole-chain proof"),
-            Err(other) => panic!("expected ChainBreak, got {other:?}"),
-        }
-    }
-
-    /// TEMPORAL TOOTH (circuit): even bypassing the host check, the
-    /// `TurnChainBindingAir` continuity constraint makes a reordered trace
-    /// UNSAT. We build the binding trace for a broken order and confirm the
-    /// inner proof fails to verify (or the prover refuses it in debug).
-    #[test]
-    fn broken_order_unsat_in_circuit() {
-        let (mut turns, _g, _f) = make_chain(1000, 0, 7, 2);
-        let (foreign, _fo, _fn) = make_turn(500, 50, 3);
-        turns[1] = foreign; // breaks continuity
-
-        let (trace, pis) = generate_chain_trace_unchecked(&refs(&turns));
-        // row 0 new_root != row 1 old_root -> continuity broken.
-        assert_ne!(trace[0][1], trace[1][0], "the spliced order must be broken");
-
-        let air = TurnChainBindingAir;
-        let matrix = trace_to_matrix(&trace);
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let inner = prove_inner_for_air(&air, matrix, &pis);
-            verify_inner_for_air(&air, &inner, &pis)
-        }));
-
-        let rejected = match result {
-            Ok(Ok(())) => false, // verified a broken chain — soundness hole!
-            Ok(Err(_)) => true,  // verifier rejected.
-            Err(_) => true,      // prover panicked on unsatisfiable trace.
-        };
-        assert!(
-            rejected,
-            "a reordered finalized chain must be UNSAT under TurnChainBindingAir continuity"
-        );
-    }
-
-    /// **THE LEAF TOOTH (host-gate-skipping prover, forged post-commit).** The
-    /// claim this module makes is that per-turn execution soundness does NOT
-    /// rest on the prover having run the host-side descriptor admission. So:
-    /// run the UNGATED prover on a chain whose second turn LIES about its
-    /// post-state root in the PIs (the execution trace is honest; only the
-    /// claimed `NEW_COMMIT` is forged — exactly the lie a malicious prover
-    /// would tell to advance the chain to a state that never happened). The
-    /// descriptor AIR's PI binding + Poseidon2 state-commit hash sites make
-    /// that leaf UNSATISFIABLE, so the in-circuit re-proof fails and NO
-    /// verifying root can be produced — the host gate was never load-bearing.
-    #[test]
-    fn ungated_prover_with_forged_post_commit_cannot_produce_a_root() {
-        let (t0, _o0, n0) = make_turn(1000, 0, 7);
-        let (mut t1, o1, n1) = make_turn(993, 1, 7);
-        assert_eq!(o1, n0, "honest turns chain by construction");
-
-        // The PI lie: claim a post-state root that execution never reached.
-        let lie = n1 + BabyBear::ONE;
-        t1.participant.public_inputs[pi::NEW_COMMIT] = lie;
-        let turns = [t0, t1];
-
-        // (a) The GATED prover rejects at host admission (the forged PIs no
-        //     longer verify the production descriptor proof).
-        match prove_turn_chain_recursive(&turns) {
-            Err(TurnChainError::TurnProofInvalid { index, .. }) => assert_eq!(index, 1),
-            Ok(_) => panic!("the gated prover accepted a forged post-commit"),
-            Err(other) => panic!("expected TurnProofInvalid at the host gate, got {other:?}"),
-        }
-
-        // (b) THE TOOTH: the UNGATED prover — which never runs the host gate —
-        //     must ALSO fail, at the in-circuit leaf. The unsatisfiable leaf
-        //     surfaces as a prover panic (debug: check_constraints refuses) or
-        //     an Err (release: self-verify rejects). Either is "no root".
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_turn_chain_recursive_without_host_gate(&turns, &[sel::TRANSFER, sel::TRANSFER])
-        }));
-        let rejected = match result {
-            Ok(Ok(_)) => false, // a verifying root for a forged turn — soundness hole!
-            Ok(Err(_)) => true,
-            Err(_) => true,
-        };
-        assert!(
-            rejected,
-            "a host-gate-skipping prover with a forged post-commit must NOT obtain a \
-             whole-chain root — the descriptor leaf is the in-circuit tooth"
-        );
-    }
-
-    /// **THE LEAF TOOTH (host-gate-skipping prover, stub leaf).** The
-    /// pre-cutover fold wrapped fabricated `EffectVmShapeAir`-style passthrough
-    /// traces as leaves; its own docs admitted such a trace would NOT pass the
-    /// full Effect VM AIR. This test pins that a prover trying exactly that
-    /// against TODAY's fold fails: a fabricated 186-column passthrough stub
-    /// (selector row + NoOp rows, claimed roots written into the state-commit
-    /// cells) does not satisfy the REAL descriptor constraint set (the hash
-    /// sites force the commit cells to be genuine Poseidon2 digests of the
-    /// row's state, which the stub's are not), so the ungated fold refuses and
-    /// no root exists.
-    #[test]
-    fn ungated_prover_with_stub_leaf_cannot_produce_a_root() {
-        let (t0, _o0, n0) = make_turn(1000, 0, 7);
-        // A donor proof object for the stub participant: the attacker has SOME
-        // bytes to put in the proof slot (the ungated path never inspects them);
-        // soundness must come from the in-circuit leaf, not the proof slot.
-        let (donor, _do, _dn) = make_turn(500, 50, 3);
-
-        // The stub: claim to continue n0 -> n0+1 with a fabricated passthrough
-        // trace (the OLD shape-stub recipe at the real 186-column width).
-        let claimed_old = n0;
-        let claimed_new = n0 + BabyBear::ONE;
-        let mut stub_trace: Vec<Vec<BabyBear>> = Vec::with_capacity(4);
-        let mut row0 = vec![BabyBear::ZERO; EFFECT_VM_WIDTH];
-        row0[sel::TRANSFER] = BabyBear::ONE;
-        row0[STATE_BEFORE_BASE + state::STATE_COMMIT] = claimed_old;
-        row0[STATE_AFTER_BASE + state::STATE_COMMIT] = claimed_new;
-        stub_trace.push(row0);
-        for _ in 1..4 {
-            let mut row = vec![BabyBear::ZERO; EFFECT_VM_WIDTH];
-            row[sel::NOOP] = BabyBear::ONE;
-            row[STATE_BEFORE_BASE + state::STATE_COMMIT] = claimed_new;
-            row[STATE_AFTER_BASE + state::STATE_COMMIT] = claimed_new;
-            stub_trace.push(row);
-        }
-        let mut stub_pis = vec![BabyBear::ZERO; pi::ACTIVE_BASE_COUNT];
-        stub_pis[pi::OLD_COMMIT] = claimed_old;
-        stub_pis[pi::NEW_COMMIT] = claimed_new;
-
-        let stub_turn = FinalizedTurn::new(
-            DescriptorParticipant::v1(donor.participant.proof, stub_pis),
-            stub_trace,
-        );
-        let turns = [t0, stub_turn];
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_turn_chain_recursive_without_host_gate(&turns, &[sel::TRANSFER, sel::TRANSFER])
-        }));
-        let rejected = match result {
-            Ok(Ok(_)) => false, // a verifying root over a stub leaf — soundness hole!
-            Ok(Err(_)) => true,
-            Err(_) => true,
-        };
-        assert!(
-            rejected,
-            "a host-gate-skipping prover wrapping a fabricated stub leaf must NOT obtain \
-             a whole-chain root — the descriptor constraint set is what the leaf proves"
-        );
-    }
-
-    /// **THE IN-CIRCUIT WRAP TOOTH (the load-bearing one).** A descriptor leaf
-    /// honestly proven for its real `(old_root, new_root)` but fed to the
-    /// recursive verifier layer with public inputs claiming a FORGED post-state
-    /// root. The wrap layer's IN-CIRCUIT verifier pins the claimed PIs against
-    /// the proof, so the mismatched-PI leaf is unsatisfiable and
-    /// `build_and_prove_next_layer` MUST fail. This proves the rejection is the
-    /// recursion itself — even a "valid proof object" cannot be re-labelled
-    /// with different chain roots at the wrap.
-    #[test]
-    fn recursive_layer_rejects_forged_leaf_public_inputs() {
-        let (t, _o, _n) = make_turn(1000, 0, 7);
-        let (air, inner, dpis) =
-            prove_descriptor_leaf(&t, sel::TRANSFER).expect("honest descriptor leaf proves");
-
-        let config = create_recursion_config();
-        let backend = create_recursion_backend();
-        let params = ProveNextLayerParams::default();
-
-        // FORGE the post-state root in the PIs fed to the wrap layer.
-        let mut forged = dpis.clone();
-        forged[pi::NEW_COMMIT] = forged[pi::NEW_COMMIT] + BabyBear::ONE;
-        let p3_forged: Vec<P3BabyBear> = forged.iter().map(|&v| to_p3(v)).collect();
-        let input = RecursionInput::UniStark {
-            proof: &inner,
-            air: &air,
-            public_inputs: p3_forged,
-            preprocessed_commit: None,
-        };
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build_and_prove_next_layer::<DreggRecursionConfig, EffectVmDescriptorAir, _, D>(
-                &input, &config, &backend, &params,
-            )
-        }));
-        let rejected = match result {
-            Ok(Ok(_)) => false, // wrapped a forged-PI leaf — soundness hole!
-            Ok(Err(_)) => true, // recursion returned an error — rejected.
-            Err(_) => true,     // unsatisfiable verifier circuit panicked — rejected.
-        };
-        assert!(
-            rejected,
-            "a descriptor leaf fed forged chain roots must be rejected by the IN-CIRCUIT \
-             recursive verifier — the recursion, not the host check, is the tooth"
-        );
-    }
-
-    /// 2-step inductive core: fold_two_turns over a continuous pair yields a
-    /// verifying whole-chain proof of the 2-turn window (the unbounded loop's
-    /// inductive step).
-    #[test]
-    fn two_step_inductive_core_proves_and_verifies() {
-        let (turns, genesis, final_root) = make_chain(1000, 0, 11, 2);
-
-        let folded =
-            fold_two_turns(&turns[0], &turns[1]).expect("a continuous pair must fold via the core");
-        assert_eq!(folded.num_turns, 2);
-        assert_eq!(folded.genesis_root, genesis);
-        assert_eq!(folded.final_root, final_root);
-        let vk = folded.root_vk_fingerprint();
-        verify_turn_chain_recursive(&folded, &vk).expect("the 2-step folded proof must verify");
-    }
-
-    /// fold_two_turns rejects a discontinuous pair (the inductive step refuses
-    /// to extend the running chain with a turn that does not consume its root).
-    #[test]
-    fn two_step_core_rejects_discontinuity() {
-        let (running, _o, _n) = make_turn(1000, 0, 11);
-        let (bad_next, _bo, _bn) = make_turn(500, 50, 3); // unrelated chain
-
-        match fold_two_turns(&running, &bad_next) {
-            Err(TurnChainError::ChainBreak { index, .. }) => assert_eq!(index, 1),
-            Ok(_) => panic!("a discontinuous pair must not fold"),
-            Err(other) => panic!("expected ChainBreak, got {other:?}"),
-        }
-    }
-}
+//
+// Bucket-F (PATH-PRESERVE Phase 5a): the in-lib `#[cfg(test)] mod tests` (the K-fold,
+// broken-order, ungated-forged-post-commit, stub-leaf, foreign-circuit-VK-pin,
+// in-circuit-wrap, and 2-step-inductive teeth) RELOCATED to the integration test
+// `circuit/tests/ivc_turn_chain_rotated.rs`, which can mint the mandatory ROTATED
+// participant through `dregg_turn::rotation_witness::mint_rotated_participant_leg`
+// (the circuit lib cannot — it has no `dregg-cell` / `dregg-turn` dependency, the cycle).

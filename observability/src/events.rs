@@ -799,6 +799,20 @@ fn constraint_dissect(
             set_commitment_slot,
             ..
         } => ("count_ge", Some(*set_commitment_slot), vec![]),
+        // Sender identity membership over a program-embedded set of pubkeys.
+        SC::SenderMemberOf { .. } => ("sender_member_of", None, vec![]),
+        // Signed balance-delta bounds: no slot binding (delta is implicit in
+        // the turn; upper/lower bounds live in the program body).
+        SC::BalanceDeltaLte { .. } => ("balance_delta_lte", None, vec![]),
+        SC::BalanceDeltaGte { .. } => ("balance_delta_gte", None, vec![]),
+        // Affine-delta version of AffineLe: same slot structure.
+        SC::AffineDeltaLe { terms, .. } => (
+            "affine_delta_le",
+            terms.first().map(|(_, s)| *s),
+            terms.iter().skip(1).map(|(_, s)| *s).collect(),
+        ),
+        // Field-equals against the transition's observed (post-execution) state.
+        SC::ObservedFieldEquals { local_field, .. } => ("observed_field_equals", Some(*local_field), vec![]),
     }
 }
 

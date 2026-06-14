@@ -99,11 +99,11 @@
       "semantics": "Conjunction — match if every child matches."
     }
   ],
-  "constraint_count": 46,
+  "constraint_count": 51,
   "coverage": {
-    "constraints_in_view": 46,
+    "constraints_in_view": 51,
     "locally_evaluable": 15,
-    "simple": 19,
+    "simple": 22,
     "missing_from_view": [],
     "extra_in_view": [
       "Not"
@@ -871,6 +871,91 @@
       "in_view": true,
       "locally_evaluable": false,
       "simple": true
+    },
+    {
+      "name": "SenderMemberOf",
+      "fields": [
+        {
+          "name": "members",
+          "type": "Vec<Hash32>"
+        }
+      ],
+      "semantics": "The turn's sender must be one of `members`.",
+      "in_view": true,
+      "locally_evaluable": false,
+      "simple": true
+    },
+    {
+      "name": "BalanceDeltaLte",
+      "fields": [
+        {
+          "name": "max",
+          "type": "i64"
+        }
+      ],
+      "semantics": "The cell's per-turn balance change is `<= max`.",
+      "in_view": true,
+      "locally_evaluable": false,
+      "simple": true
+    },
+    {
+      "name": "BalanceDeltaGte",
+      "fields": [
+        {
+          "name": "min",
+          "type": "i64"
+        }
+      ],
+      "semantics": "The cell's per-turn balance change is `>= min`.",
+      "in_view": true,
+      "locally_evaluable": false,
+      "simple": true
+    },
+    {
+      "name": "AffineDeltaLe",
+      "fields": [
+        {
+          "name": "terms",
+          "type": "Vec<(i64, u8)>"
+        },
+        {
+          "name": "c",
+          "type": "i64"
+        }
+      ],
+      "semantics": "**Multi-field delta gate:** `Σ kᵢ·(new[fᵢ] − old[fᵢ]) <= c` over named slots (`terms : Vec<(i64 coefficient, u8 slot)>`).",
+      "in_view": true,
+      "locally_evaluable": false,
+      "simple": false
+    },
+    {
+      "name": "ObservedFieldEquals",
+      "fields": [
+        {
+          "name": "local_field",
+          "type": "u8"
+        },
+        {
+          "name": "source_cell",
+          "type": "Hash32"
+        },
+        {
+          "name": "source_field",
+          "type": "u8"
+        },
+        {
+          "name": "at_root",
+          "type": "Hash32"
+        },
+        {
+          "name": "proof_witness_index",
+          "type": "usize"
+        }
+      ],
+      "semantics": "**Cross-cell verified observation** (`docs/CELL-PROGRAM-LANGUAGE.md` §11.2): `new[local_field]` must equal the value `source_field` held by the PEER cell `source_cell` at the FINALIZED state-commitment root `at_root`.",
+      "in_view": true,
+      "locally_evaluable": false,
+      "simple": false
     }
   ],
   "expressibility_limits": [

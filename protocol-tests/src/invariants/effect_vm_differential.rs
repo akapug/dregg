@@ -35,8 +35,10 @@ use dregg_circuit::effect_vm::{
     state as vm_state,
 };
 use dregg_circuit::field::BabyBear;
+use dregg_cell::Permissions;
 use dregg_turn::{
-    Action, Authorization, CallForest, DelegationMode, Effect, turn::Turn,
+    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
+    turn::Turn,
 };
 use proptest::prelude::*;
 

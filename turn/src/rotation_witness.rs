@@ -295,6 +295,66 @@ pub fn produce(
     }
 }
 
+/// **THE ROTATED-LEG MINTING RECIPE (Bucket-F / PATH-PRESERVE Phase 5a).** Build a
+/// [`RotatedParticipantLeg`](dregg_circuit::joint_turn_aggregation::RotatedParticipantLeg) for a
+/// single homogeneous-cohort turn from the real before/after actor `Cell`s: run [`produce`] over
+/// each cell to derive its rotated block witness (`pre_limbs` + `iroot`), then hand those to the
+/// pure-circuit
+/// [`RotatedParticipantLeg::mint_from_block_witnesses`](dregg_circuit::joint_turn_aggregation::RotatedParticipantLeg::mint_from_block_witnesses),
+/// which generates the 311-column rotated trace + 38-PI vector and proves it through the IR-v2
+/// batch prover under the leaf-wrap config (so the minted `Ir2BatchProof` folds directly as a
+/// `NativeBatchStark` recursion leaf). The proof self-verifies natively before return.
+///
+/// This lives in `dregg-turn` (NOT `dregg-circuit`) because it drives [`produce`] over
+/// `dregg_cell::Cell`s, and `dregg-circuit` cannot depend on `dregg-cell` / `dregg-turn` (a
+/// dependency cycle — both depend on `dregg-circuit`). It is the ONE recipe the recursion
+/// consumers (lightclient / wasm / `circuit/tests/proof_economics.rs`) use to build a mandatory
+/// rotated participant; it mirrors `circuit/tests/rotation_batchstark_leaf_smoke.rs`'s mint
+/// sequence exactly.
+///
+/// `turn_id`, when `Some`, overrides the `TURN_HASH` slot of the carried PI prefix (the joint
+/// aggregator's shared-turn-id projection) — pass it for joint-turn participants that must agree
+/// on a shared id; pass `None` for whole-chain turns (the carried hash from the witness stands).
+///
+/// Fails closed if the turn's effect is not a single rotated R=24 cohort member (the generator
+/// rejects a non-cohort / empty / heterogeneous slice).
+#[cfg(feature = "recursion")]
+#[allow(clippy::too_many_arguments)]
+pub fn mint_rotated_participant_leg(
+    initial_state: &dregg_circuit::effect_vm::CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_cell: &Cell,
+    after_cell: &Cell,
+    nullifier_root: &[u8; 32],
+    receipt_log: &[[u8; 32]],
+    turn_id: Option<BabyBear>,
+) -> Result<dregg_circuit::joint_turn_aggregation::RotatedParticipantLeg, String> {
+    use dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness;
+    use dregg_circuit::joint_turn_aggregation::RotatedParticipantLeg;
+
+    // The turn-context ledger snapshot: a single-cell ledger holding the after-cell (the
+    // cells_root shape `produce` reads).
+    let mut ledger = Ledger::new();
+    ledger
+        .insert_cell(after_cell.clone())
+        .map_err(|e| format!("mint_rotated_participant_leg: ledger seed failed: {e:?}"))?;
+
+    let before_w = produce(before_cell, &ledger, nullifier_root, receipt_log);
+    let after_w = produce(after_cell, &ledger, nullifier_root, receipt_log);
+    let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
+        RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map_err(|e| format!("mint_rotated_participant_leg: rotated block witness: {e}"))
+    };
+
+    RotatedParticipantLeg::mint_from_block_witnesses(
+        initial_state,
+        effects,
+        &bridge(&before_w)?,
+        &bridge(&after_w)?,
+        turn_id,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

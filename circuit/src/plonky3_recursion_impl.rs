@@ -456,9 +456,27 @@ pub mod recursive {
     where
         A: RecursableAir,
     {
-        let config = create_recursion_config();
+        prove_inner_for_air_with_config(air, trace, public_inputs, &create_recursion_config())
+    }
+
+    /// [`prove_inner_for_air`] under an EXPLICIT recursion config — needed when the inner
+    /// uni-STARK proof will be wrapped/aggregated at a NON-default FRI engine (e.g. the rotated
+    /// fold's [`crate::ivc_turn_chain::ir2_leaf_wrap_config`], log_blowup 6). Building the inner
+    /// proof under the same config as the wrap layer keeps the FRI Merkle path lengths consistent
+    /// — proving it at the default `create_recursion_config` (log_blowup 3) and then wrapping at
+    /// the log_blowup-6 wrap config raises `InvalidProofShape("Fewer siblings in proof than op_ids
+    /// provided")` in-circuit.
+    pub fn prove_inner_for_air_with_config<A>(
+        air: &A,
+        trace: RowMajorMatrix<P3BabyBear>,
+        public_inputs: &[BabyBear],
+        config: &DreggRecursionConfig,
+    ) -> RecursionCompatibleProof
+    where
+        A: RecursableAir,
+    {
         let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
-        prove(&config, air, trace, &p3_public)
+        prove(config, air, trace, &p3_public)
     }
 
     /// Generic inner proof verifier (paired with [`prove_inner_for_air`]).
@@ -470,9 +488,22 @@ pub mod recursive {
     where
         A: RecursableAir,
     {
-        let config = create_recursion_config();
+        verify_inner_for_air_with_config(air, proof, public_inputs, &create_recursion_config())
+    }
+
+    /// [`verify_inner_for_air`] under an EXPLICIT recursion config (paired with
+    /// [`prove_inner_for_air_with_config`]).
+    pub fn verify_inner_for_air_with_config<A>(
+        air: &A,
+        proof: &RecursionCompatibleProof,
+        public_inputs: &[BabyBear],
+        config: &DreggRecursionConfig,
+    ) -> Result<(), String>
+    where
+        A: RecursableAir,
+    {
         let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
-        verify(&config, air, proof, &p3_public)
+        verify(config, air, proof, &p3_public)
             .map_err(|e| format!("Recursion-compatible verification failed: {:?}", e))
     }
 

@@ -186,7 +186,8 @@
         <tr><td><strong>M0</strong></td><td>a Rust protection-domain prints its banner on seL4</td><td>boots (aarch64)</td></tr>
         <tr><td><strong>M1</strong></td><td>the verifier PD: bundle-in → verify → verdict-out, with an anti-ghost reject</td><td>boots (aarch64)</td></tr>
         <tr><td><strong>M2</strong></td><td>the rbg <code>DirectoryCell</code> PD (versioned CAS, membership ACL, factory slot-caveat) — the Robigalia heart</td><td>boots (aarch64)</td></tr>
-        <tr><td><strong>M-STARK</strong></td><td>the verifier-stark PD: a <strong>real</strong> cryptographic STARK (BabyBear + BLAKE3 + FRI + Fiat-Shamir) proved and verified on-device, with the anti-ghost tooth</td><td>boots (aarch64) — the firmament's verified heart organ</td></tr>
+        <tr><td><strong>M-STARK</strong></td><td>the verifier-stark PD: a <strong>real</strong> cryptographic STARK (BabyBear + BLAKE3 + FRI + Fiat-Shamir) proved and verified on-device, with the anti-ghost tooth</td><td>boots (aarch64) — a verified heart organ</td></tr>
+        <tr><td><strong>executor-PD</strong> <span class="catalog-tag">heart</span></td><td>the Lean kernel <code>execFullForestG</code> itself — the exact gated function the node runs — inside a protection domain: a real turn executes, nonce ticks, the anti-ghost property holds</td><td>boots (aarch64) — the verified heart, running</td></tr>
         <tr><td><strong>M3</strong></td><td>networking: the virtio-net driver PD probes a real device on the wire — <code>device_type=Network</code>, the NIC up with its MAC</td><td>driver boots; the smoltcp client PD + ring assembly remains</td></tr>
         <tr><td><strong>M5</strong></td><td>retarget to riscv64 (OpenSBI → seL4 → userspace → the dregg PD)</td><td>boots (M0 on riscv64)</td></tr>
       </tbody>
@@ -205,22 +206,31 @@ make run            # the rbg DirectoryCell PD (M2)
 make run-riscv      # M0 on riscv64</code></pre>
   </section>
 
-  <!-- ==================== THE HEART BLOCKER (honest) ==================== -->
+  <!-- ==================== THE HEART (running) ==================== -->
   <section class="section section--compact" id="heart">
-    <span class="section__label">The honest frontier</span>
-    <h2 class="section__title">The executor-PD: the one true blocker, characterized</h2>
+    <span class="section__label">The verified heart, running</span>
+    <h2 class="section__title">The executor-PD runs the exact function the node runs</h2>
     <p style="color: var(--fg-dim);">
-      The full vision embeds the Lean-compiled complete-turn executor as the heart PD. That
-      cannot build for the bare seL4 target yet, for two compounding reasons established by
-      direct probe of the toolchain: the compiled Lean closure is a macOS-host object format
-      and must be ELF-recompiled, and the Lean runtime's init ritual pulls in ten
-      libuv-coupled objects the pure executor path never calls. The excision plan is banked and
-      concrete — ELF-recompile the closure under <code>leanc</code>, stub the ten libuv objects
-      and their two init functions, recompile GMP for ELF (or a fixnum-only shim), and host on
-      a musl syscall shim. Until it lands, the firmament leads with the
-      <strong>verifier-stark heart organ</strong> (real STARK, no Lean) plus the net edge — a
-      substrate that does real proof-checking and reaches the distributed end of the cap
-      gradation. The wall is named, not hidden; that is the discipline.
+      The heart of the firmament is the Lean-compiled complete-turn executor —
+      <code>execFullForestG</code>, the same gated function the deployed node calls — embedded
+      as a protection domain. It <strong>boots</strong>: inside a real seL4 protection domain
+      under QEMU a turn arrives, the executor decodes it, runs the verified
+      <code>decode → step → encode</code>, ticks the nonce, emits the receipt, and the
+      anti-ghost property holds. The Lean-runtime port long called the <em>one true blocker</em>
+      is closed — the runtime embeds single-threaded, with no global allocator override and no
+      IO event-loop, the three properties measured rather than assumed (the Lean closure
+      recompiled to ELF, linked against an ELF Lean runtime; GMP for the target real). No model
+      of the node sits in the heart; the function the proofs are about is the function the heart
+      runs.
+    </p>
+    <p style="color: var(--fg-dim);">
+      What remains is <strong>productionization</strong>, not a wall: supplying the cryptographic
+      floor to the executor-PD from the verifier-stark PD (so the heart and the proof checker are
+      distinct authorities), and assembling the decomposed five-PD topology above into one
+      bootable image where each device cap lives only in its owning domain. Until that assembly
+      lands, the demos run the heart organs one at a time — the executor-PD (real verified turn),
+      the verifier-stark PD (real STARK), the net driver (the wire) — each a genuine seL4 boot
+      with serial captured.
     </p>
   </section>
 

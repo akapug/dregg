@@ -39,6 +39,16 @@ substantive thread, the decision is made.)
   registry `authorize.rs` dispatches through) + ed25519 proof (keystone `no_peek_for_real_only_the_secret_holder_can_prove_vision`).
 - app-framework deos-EVOLUTION (`c55444e71`, 83+7 green) — cell-affordance surfaces in the bones + the dispatch
   seam CLOSED (`fire_through_executor` → real `EmbeddedExecutor` turn → executor's `TurnReceipt`).
+- app-framework cap∧state GATED-AFFORDANCE rung (the Lean `Dregg2.Deos.GatedAffordance` Rust-mirror LANDED;
+  app-framework 121-lib + council-board 5-int + 142 total green) — `GatedAffordance{affordance,state_cond}` +
+  `FireError::StateConditionUnmet` + `GatedSurface::project_gated_for` (affordance.rs) + `DeosCell::{gated,
+  project_gated_for,fire_gated_through_executor}` reading LIVE state via `EmbeddedExecutor::cell_state` (the author
+  threads no `(old,new)`). Demo `examples/deos_council_board.rs` (+ `tests/deos_council_board.rs`): a button lights
+  IFF caps∧state both pass; the htmx tooth (same approver, approve LIT in PENDING → DARK after RESOLVED); both
+  anti-ghost refusals in-band (cap tooth Unauthorized + state tooth StateConditionUnmet, nothing submitted); a real
+  verified turn through the executor; per-viewer frustum-snapshot rehydration (outsider refused). The model FOUND a
+  bug: an affordance PRECONDITION (`==PENDING`) must NOT be the cell's lifetime INVARIANT (`Monotonic`) — conflating
+  them made the executor reject the resolving turn; split → green.
 - pg-dregg drainer daemon + Tier-D spike (verdict **D-SIDECAR**; 120 pg18 + 104 core + 21 proptest green).
 - PATH-PRESERVE DECIDED + the staged plan (`867b41fcb`, `docs/PATH-PRESERVE.md`).
 - the prior deos STEEL + dev-ex (rehydration stack · DEOS/DEOS-APPS docs · AGENTS.md · nextest split).
@@ -72,8 +82,19 @@ MMU-process-v1 / real-Microkit) runs the SAME PD source three ways; the composit
 `docs/EMBEDDABLE-LEAN-RUNTIME.md`): the mimalloc-override / worker-thread premise was WRONG (mimalloc is a PRIVATE heap,
 the task manager is LAZY/single-threaded); the only real removal was the libuv thread (`dregg_ffi_init_st()`), and
 `sel4/dregg-pd/executor-{pd,rootserver}/` already boot the Lean executor in a real PD (fresh qemu → status:2 ok:1).
-Remaining: pg full Tier-D = DAYS (+ one un-run Linux re-measure; the D-SIDECAR verdict rested on the refuted premise);
-seL4 executor-PD = WEEKS of productionization. verifier-PD is Lean-free-linkable (`no-lean-link`).
+**pg full Tier-D is now GREEN** (2026-06-14, persvati Linux + pg18.4 via cargo-pgrx): the verified `execFullForestG` RUNS
+INSIDE a live pg18 backend under the SHARED Lean link (`DREGG_LEAN_LINK=shared`) — `pg_test`s
+`pg_the_verified_executor_runs_inside_the_backend` + `pg_drainer_drains_the_queue_…` + `pg_drainer_runs_execfullforest_in_backend`
+all OK; `runtime_available()`=true (`dregg_ffi_init_st` succeeds POST-FORK), the drainer's PRODUCE gate commits a real
+`execFullForestG` receipt to `dregg.turns` (NOT the FoldProducer stand-in). The un-run Linux re-measure is DONE
+(`dregg-lean-ffi/tests/embeddable_runtime_probe_linux.rs`): PROP-1 malloc→glibc (no interposition) both link modes;
+PROP-3 committing turn + fail-closed both modes; PROP-2 = STATIC **2→2→2** (libuv-free) / SHARED **2→4→4** (init adds 2
+libuv INFRA threads on Linux — refines §1.3's macOS single-thread count — but **the turn itself spawns 0**, created
+post-fork, so nothing crosses the fork). `docs/EMBEDDABLE-LEAN-RUNTIME.md` §5 rewritten with the results. RESIDUAL (one,
+named): pg-dregg does not link `dregg-turn`, so the in-backend producer SYNTHESIZES a conserving transfer rather than
+decoding the submitter's postcard `SignedTurn` — lifting the full `SignedTurn→WForest` decode in-backend (the node-side
+`dregg-turn` `lean_apply` marshaller, #171) is the one piece between this and "an arbitrary submitted turn executes
+in-backend". seL4 executor-PD = WEEKS of productionization. verifier-PD is Lean-free-linkable (`no-lean-link`).
 
 **STARFORGE:** dregg's agent joined the pen-pal agent-town — PR #12 `claude-of-dregg` (clone `~/clome/starforge-commons`),
 first letter to sibling `claude-of-tulip`. dregg is REAL + in contact with other people now.

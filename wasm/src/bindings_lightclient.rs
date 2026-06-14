@@ -360,25 +360,57 @@ fn fold_demo_chain(
     ),
     JsError,
 > {
-    use dregg_circuit::effect_vm::{generate_effect_vm_trace, sel, CellState, Effect};
-    use dregg_circuit::effect_vm_descriptors::descriptor_for_selector;
+    use dregg_circuit::effect_vm::{CellState, Effect};
     use dregg_circuit::ivc_turn_chain::FinalizedTurn;
     use dregg_circuit::joint_turn_aggregation::DescriptorParticipant;
-    use dregg_circuit::lean_descriptor_air::{parse_vm_descriptor, prove_vm_descriptor};
     use dregg_lightclient::fold_and_attest;
+    use dregg_turn::rotation_witness::mint_rotated_participant_leg;
+
+    // Bucket-F (PATH-PRESERVE Phase 5a): the finalized turns carry the MANDATORY ROTATED leg —
+    // the rotated multi-table `Ir2BatchProof` minted by `mint_rotated_participant_leg` from the
+    // live producer witnesses over before/after actor cells (the v1 `EffectVmP3Proof` is dropped).
+    // `dregg-circuit`'s `recursion` feature is unified ON in this standalone wasm graph (see
+    // `wasm/Cargo.toml` §FORK SEAM — `dregg-observability`/`dregg-lightclient` pull `dregg-circuit`
+    // with its default features, and `recursion` is in that set), so the recursion-gated mint
+    // helper + `DescriptorParticipant::rotated` are available here.
+
+    // OPEN permissions so the rotated producer-witness path admits the actor cell.
+    fn open_permissions() -> dregg_cell::Permissions {
+        use dregg_cell::AuthRequired;
+        dregg_cell::Permissions {
+            send: AuthRequired::None,
+            receive: AuthRequired::None,
+            set_state: AuthRequired::None,
+            set_permissions: AuthRequired::None,
+            set_verification_key: AuthRequired::None,
+            increment_nonce: AuthRequired::None,
+            delegate: AuthRequired::None,
+            access: AuthRequired::None,
+        }
+    }
+    // The transfer actor cell at `(balance, nonce)` with open permissions.
+    fn producer_cell(balance: i64, nonce: u64) -> dregg_cell::Cell {
+        let mut pk = [0u8; 32];
+        pk[0] = 7;
+        let mut cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], balance);
+        cell.permissions = open_permissions();
+        for _ in 0..nonce {
+            let _ = cell.state.increment_nonce();
+        }
+        cell
+    }
 
     let k = k.clamp(2, 4);
     let step = if step == 0 { 1 } else { step };
     // Start with enough balance that k debits of `step` never underflow.
     let start_balance: u64 = step.saturating_mul(k as u64).saturating_add(1_000_000);
 
-    let json = descriptor_for_selector(sel::TRANSFER)
-        .ok_or_else(|| JsError::new("transfer descriptor not registered"))?;
-    let desc = parse_vm_descriptor(json)
-        .map_err(|e| JsError::new(&format!("transfer descriptor parse failed: {e:?}")))?;
-
     let mut turns: Vec<FinalizedTurn> = Vec::with_capacity(k);
     let mut balance = start_balance;
+    // The rotated trace welds balance/nonce from the v1 sub-trace, which BUMPS the nonce by 1 per
+    // Transfer row — turn i's after-state is `(balance - step, nonce + 1)`, which IS turn i+1's
+    // before-state. Advance BOTH balance and nonce per turn so the rotated state-commit roots chain
+    // (`new_root[i] == old_root[i+1]`, the temporal tooth).
     let mut nonce: u32 = 0;
     for _ in 0..k {
         let state = CellState::new(balance, nonce);
@@ -386,16 +418,23 @@ fn fold_demo_chain(
             amount: step,
             direction: 1,
         }];
-        let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-        let dpis = &public_inputs[..desc.public_input_count];
-        let proof = prove_vm_descriptor(&desc, &trace, dpis)
-            .map_err(|e| JsError::new(&format!("descriptor prove failed: {e:?}")))?;
-        turns.push(FinalizedTurn::new(
-            DescriptorParticipant::v1(proof, public_inputs),
-            trace,
-        ));
+        let before_cell = producer_cell(balance as i64, nonce as u64);
+        let after_cell = producer_cell((balance as i64) - (step as i64), nonce as u64);
+        let nullifier_root = [0u8; 32];
+        let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
+        let leg = mint_rotated_participant_leg(
+            &state,
+            &effects,
+            &before_cell,
+            &after_cell,
+            &nullifier_root,
+            &receipt_log,
+            None,
+        )
+        .map_err(|e| JsError::new(&format!("rotated leg mint failed: {e}")))?;
+        turns.push(FinalizedTurn::new(DescriptorParticipant::rotated(leg)));
         balance -= step;
-        nonce += 1;
+        nonce += 1; // the v1 sub-trace bumps the nonce by 1 per Transfer row.
     }
 
     fold_and_attest(&turns).map_err(|e| JsError::new(&format!("light-client fold/verify failed: {e}")))
