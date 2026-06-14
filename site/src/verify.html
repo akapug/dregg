@@ -17,9 +17,41 @@
       and the deployment matches the code. Here the chain is shorter — the proof is about
       the artifact that runs, and a <a href="/learn/concepts/light-client.html">light
       client</a> can check a whole history against one root without trusting any executor,
-      including ours.
+      including ours. The named foil is <em>the pale ghost</em>: a server presenting a
+      plausible state it never legitimately produced. The architecture exists so that ghost
+      cannot fool a light client — that is the <a href="#unfoolability">unfoolability</a>
+      guarantee below.
     </p>
   </div>
+
+  <section class="section section--compact" id="unfoolability">
+    <span class="section__label">The proof architecture</span>
+    <h2 class="section__title">Unfoolability — ARGUS and the pale ghost</h2>
+    <p style="color: var(--fg-dim); margin-bottom: var(--s4);">
+      The deepest guarantee is not "some valid state exists" — it is that the circuit witnesses
+      the protocol's <em>correct evolution</em>, so a light client cannot be fooled about what
+      actually happened. This is the ARGUS architecture, and it is what makes the pale ghost
+      impossible.
+    </p>
+    <div class="link-cards">
+      <div class="link-card">
+        <span class="link-card__title">Verify everything, re-witness nothing</span>
+        <span class="link-card__desc">A light client checks only <code>verify(agg.root)</code> and learns that every turn executed correctly, the chain is correctly ordered (no drop, insert, or reorder), and the final root is the genuine fold of the whole history — conjoined with conservation derived from verification, with no prover-supplied state-continuity hypothesis. The apex is <code>light_client_verifies_whole_history</code> plus <code>conserves_from_verification</code>.</span>
+      </div>
+      <div class="link-card">
+        <span class="link-card__title">A tampered aggregate cannot bind</span>
+        <span class="link-card__desc">The anti-ghost teeth: a reordered or forged chain forces the binding condition to <code>False</code>, so <em>no</em> verifying aggregate exists for it (<code>tampered_aggregate_cannot_bind</code>). Positional pairing means a verifying leaf cannot be re-pointed to a different step. The fooling game is reduced to breaking the named crypto floor — and is therefore impossible under it.</span>
+      </div>
+      <div class="link-card">
+        <span class="link-card__title">PATH-PRESERVE — finalized stays proven</span>
+        <span class="link-card__desc">A finalized turn keeps its proof as the history grows past it. The aggregate's seam tooth pins each step to the next (<code>new_root[i] = old_root[i+1]</code>), and a light client seeing only the matching roots learns the adjacent kernels coincide — state-equality, not merely commitment-equality. The proof rotation keeps the cost down without breaking the binding.</span>
+      </div>
+      <div class="link-card">
+        <span class="link-card__title">Circuits are emitted from Lean</span>
+        <span class="link-card__desc">Constraint systems are generated from proved Lean modules as byte-pinned descriptors; the prover only interprets them, and Rust authors zero constraints. One Lean term has two provably-agreeing readings — the executor that runs and the circuit that proves — so circuit and executor cannot disagree about what a turn did.</span>
+      </div>
+    </div>
+  </section>
 
   <section class="section section--compact" id="badge">
     <span class="section__label">The proof badge</span>
