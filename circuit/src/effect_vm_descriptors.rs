@@ -807,7 +807,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "a531cf0d073d645729f59e73481b1c28f7026586f82d2e1d06843793bba6bbb5";
+    "19e7e8affbddedfc55411438544b3f2101dbeb92df6f5f7e1b957fe9d39c0350";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
