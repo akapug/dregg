@@ -188,6 +188,13 @@ pub use affordance::{
     AffordanceElement, AffordanceIntent, AffordanceSurface, CellAffordance, EffectSummary,
     FireError, FireExecuteError, SurfaceDescriptor,
 };
+// The cap∧state conjunction (the Rust twin of `Dregg2.Deos.GatedAffordance`): a gated
+// affordance pairs the REAL `is_attenuation` cap-gate with a REAL `CellProgram`
+// live-state gate (`CellProgram::evaluate` — the executor's own predicate). A button
+// lights IFF caps AND state both pass; `GatedSurface::project_gated_for` is the
+// state-aware per-viewer frustum (the htmx reactivity). The state-tooth refusal is
+// `FireError::StateConditionUnmet`, in-band, before any dispatch.
+pub use affordance::{GatedAffordance, GatedSurface};
 pub use affordance_endpoint::{
     AffordanceEndpoint, HeaderHeldRights, HeldRightsResolver, HELD_RIGHTS_HEADER,
 };

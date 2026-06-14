@@ -264,6 +264,20 @@ async fn handle_fire(
                 "unauthorized: firing `{affordance}` requires {required:?} but holder has {held:?}"
             ),
         )),
+        // The state tooth (the cap∧state conjunction's live-state gate): the holder
+        // had the rights but the cell's live state did not admit the fire. 409 CONFLICT
+        // — the request is well-formed and authorized but conflicts with the cell's
+        // current state (the proposal is not PENDING, the deadline passed, …). A
+        // cap-only AffordanceSurface fire never reaches this, but the gated surface's
+        // state tooth does — kept total so the endpoint can route either.
+        Err(FireExecuteError::Gate(FireError::StateConditionUnmet { affordance, reason })) => {
+            Err(api_error(
+                StatusCode::CONFLICT,
+                format!(
+                    "state condition unmet: firing `{affordance}` is not admissible in the cell's current state ({reason})"
+                ),
+            ))
+        }
         Err(FireExecuteError::Executor(e)) => Err(api_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             format!("executor rejected the authorized turn: {e}"),
