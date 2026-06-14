@@ -2483,26 +2483,18 @@ async fn execute_finalized_turn(
     };
 
     // UNIFORM CROSS-NODE APPLICATION: a finalized Transfer must execute the SAME on
-    // every node so each emits the same attested root. The submitting node may have
-    // had the destination cell created out of band (e.g. the faucet), but PEERS that
-    // only received the turn over consensus do not — and the executor rejects a
-    // Transfer to an unknown destination ("transfer destination not found"), so the
-    // turn would commit on the submitter but be rejected on peers, and `latest_height`
-    // never agrees cross-node. Materialize any missing Transfer destination as a
-    // zero-balance remote stub BEFORE execution (the same devnet semantics the faucet
-    // applies eagerly), so the finalized application is identical on all nodes. This
-    // is destination provisioning, not the turn's value semantics: the conservation-
-    // checked Transfer still moves the exact amount into the (now-present) stub.
-    for tree in &signed_turn.turn.call_forest.roots {
-        for effect in &tree.action.effects {
-            if let dregg_turn::Effect::Transfer { to, .. } = effect {
-                if s.ledger.get(to).is_none() {
-                    let stub = dregg_cell::Cell::remote_stub_with_id_and_balance(*to, 0);
-                    let _ = s.ledger.insert_cell(stub);
-                }
-            }
-        }
-    }
+    // every node so each emits the same attested root AND the same ledger content.
+    // No node has the destination's pre-image (the recipient's public key is not
+    // carried over consensus), so provisioning is driven SOLELY by the finalized
+    // turn's data via `provision_transfer_destinations`, which is byte-deterministic:
+    // every node inserts the IDENTICAL zero-balance stub for each missing Transfer
+    // destination. This is what makes the finalized application provably uniform —
+    // not "the submitter created it out of band and peers approximate it" (which
+    // would leave divergent cell content the attested root cannot see, since
+    // `canonical_ledger_root` commits only `cell.state`). The submitter no longer
+    // provisions authoritatively at faucet-submission time in multi-party mode
+    // (see `api.rs`), so it reaches this same path and provisions identically.
+    provision_transfer_destinations(&mut s.ledger, &signed_turn.turn.call_forest);
 
     // THE SWAP — producer mode (authority inversion), now the DEFAULT — through the ONE
     // shared producer gate every ingress uses (`executor_setup::execute_via_producer`,
@@ -3674,6 +3666,293 @@ mod tests {
         dregg_turn::aggregate_bilateral_prover::verify_aggregated_bundle(&bundle)
             .expect("aggregated bundle of gossiped WRs must verify");
     }
+
+    // ── Finalized-execution cross-node UNIFORMITY (S5-1 hardening) ──────────
+    //
+    // The production property: once a turn is finalized, applying it must yield
+    // the IDENTICAL post-state on every node — same ledger content, same
+    // attested root — with no local-only state and no double-apply. These tests
+    // drive the exact production functions the live commit path
+    // (`execute_finalized_turn`) uses: `provision_transfer_destinations` for
+    // deterministic cross-node cell provisioning, the real `TurnExecutor`, and
+    // `canonical_ledger_root` for the attested commitment. A simulated committee
+    // of independent ledgers (one per node) stands in for separate processes —
+    // the load-bearing fact is that each node sees ONLY the finalized turn's
+    // bytes, never the submitter's out-of-band local state.
+
+    /// Build a real ed25519-signed Transfer turn from `sender` to `to`.
+    fn signed_transfer_turn(
+        cclerk: &dregg_sdk::AgentCipherclerk,
+        sender: dregg_cell::CellId,
+        to: dregg_cell::CellId,
+        amount: u64,
+        nonce: u64,
+        federation_id: &[u8; 32],
+    ) -> dregg_sdk::SignedTurn {
+        let transfer = dregg_turn::Effect::Transfer {
+            from: sender,
+            to,
+            amount,
+        };
+        let action = cclerk.make_action(sender, "transfer", vec![transfer], federation_id);
+        let mut call_forest = dregg_turn::CallForest::new();
+        call_forest.add_root(action);
+        let mut turn = dregg_turn::Turn {
+            agent: sender,
+            nonce,
+            fee: 0,
+            memo: None,
+            valid_until: None,
+            call_forest,
+            depends_on: vec![],
+            previous_receipt_hash: None,
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: vec![],
+            cross_effect_dependencies: vec![],
+            effect_witness_index_map: vec![],
+        };
+        // Size the fee (= the executor's computron budget cap) to the estimated
+        // cost so the budget gate passes — exactly as the real faucet does in
+        // `api.rs` (`faucet_turn.fee = executor.estimate_cost(&faucet_turn)`).
+        // A `fee: 0` made every amount>0 Transfer reject as BudgetExceeded
+        // (limit=0, used=100). The estimator and the applying executor both use
+        // `ComputronCosts::default()`, so estimate == charged cost.
+        let est = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        turn.fee = est.estimate_cost(&turn);
+        cclerk.sign_turn(&turn)
+    }
+
+    /// Seed an independent per-node ledger exactly as genesis would: the sender
+    /// (faucet) cell funded; the destination ABSENT (no node has seen it).
+    fn node_genesis_ledger(sender_pk: [u8; 32], balance: i64) -> dregg_cell::Ledger {
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger
+            .insert_cell(dregg_cell::Cell::with_balance(sender_pk, [0u8; 32], balance))
+            .expect("genesis sender cell");
+        ledger
+    }
+
+    /// Apply a finalized turn to one node's ledger via the PRODUCTION path:
+    /// verify the signature (the `execute_finalized_turn` gate), provision any
+    /// missing Transfer destination deterministically, then execute. Returns the
+    /// post-state root.
+    fn apply_finalized_on_node(
+        signed: &dregg_sdk::SignedTurn,
+        ledger: &mut dregg_cell::Ledger,
+    ) -> [u8; 32] {
+        // Signature gate — exactly what `execute_finalized_turn` checks first.
+        let h = signed.turn.hash();
+        assert!(
+            signed.signer.verify(&h, &signed.signature),
+            "finalized turn signature must verify"
+        );
+        // Deterministic cross-node provisioning (the function under test).
+        provision_transfer_destinations(ledger, &signed.turn.call_forest);
+        let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        match executor.execute(&signed.turn, ledger) {
+            dregg_turn::TurnResult::Committed { .. } => {}
+            other => panic!("finalized turn must commit on every node, got: {other:?}"),
+        }
+        canonical_ledger_root(ledger)
+    }
+
+    /// A finalized cross-node Transfer to a FRESH destination applies identically
+    /// on every node: same attested root, byte-identical provisioned cell, exact
+    /// value moved, and a re-apply is rejected (no double-apply).
+    #[test]
+    fn finalized_transfer_to_fresh_dest_is_uniform_across_nodes() {
+        const N: usize = 3;
+        let sender_cclerk =
+            dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(*blake3::hash(
+                b"finalized-uniform:sender",
+            )
+            .as_bytes()));
+        let sender_pk = sender_cclerk.public_key().0;
+        let sender = dregg_cell::CellId::derive_raw(&sender_pk, &[0u8; 32]);
+        // A fresh destination NO node has seen (not derived from any local cell).
+        let dest = dregg_cell::CellId([0x5Du8; 32]);
+        // Sign for the BARE executor each node runs: `apply_finalized_on_node`
+        // builds `TurnExecutor::new(..)` without `set_local_federation_id`, so its
+        // `local_federation_id` is `[0u8; 32]` (see node/src/mcp.rs:154). The
+        // per-action signature binds the federation id (authorize.rs
+        // `compute_signing_message`), so it must match what the executor
+        // reconstructs — i.e. `[0u8; 32]` here, the same convention production
+        // uses when no non-zero federation is configured.
+        let federation_id = [0u8; 32];
+
+        let signed = signed_transfer_turn(&sender_cclerk, sender, dest, 4_200, 0, &federation_id);
+
+        // N independent node ledgers, each seeded identically from "genesis"
+        // (sender funded, dest absent). Each applies ONLY the finalized bytes.
+        let mut roots: Vec<[u8; 32]> = Vec::new();
+        let mut dest_cells: Vec<dregg_cell::Cell> = Vec::new();
+        let mut ledgers: Vec<dregg_cell::Ledger> = Vec::new();
+        for _ in 0..N {
+            let mut ledger = node_genesis_ledger(sender_pk, 1_000_000);
+            let root = apply_finalized_on_node(&signed, &mut ledger);
+            roots.push(root);
+            dest_cells.push(
+                ledger
+                    .get(&dest)
+                    .expect("destination provisioned on this node")
+                    .clone(),
+            );
+            ledgers.push(ledger);
+        }
+
+        // (1) UNIFORM ROOT: every node's attested ledger root is identical.
+        for r in &roots {
+            assert_eq!(
+                r, &roots[0],
+                "finalized application must yield an identical attested root on every node"
+            );
+        }
+
+        // (2) BYTE-IDENTICAL PROVISIONED CELL: the anti-divergence property the
+        // attested root (now over the whole cell) actually witnesses. A
+        // submitter that minted a canonical pk-cell while peers stubbed would
+        // fail HERE even though balances matched.
+        let dest_bytes0 = postcard::to_stdvec(&dest_cells[0]).expect("dest cell encodes");
+        for c in &dest_cells {
+            assert_eq!(
+                postcard::to_stdvec(c).expect("dest cell encodes"),
+                dest_bytes0,
+                "the provisioned destination cell must be byte-identical on every node"
+            );
+        }
+
+        // (3) EXACT VALUE moved into the (provisioned) destination.
+        assert_eq!(
+            dest_cells[0].state.balance(),
+            4_200,
+            "destination must hold exactly the transferred amount"
+        );
+        // Sender debited by the transfer amount AND the turn fee on every node.
+        // The fee is debited in-place (execute.rs:419) and — since the test sets
+        // no fee-well/proposer/treasury cell on the executor — credited nowhere,
+        // i.e. BURNED. That burn is byte-identical on all N nodes, so debiting it
+        // leaves the attested root uniform (the property under test still holds).
+        for ledger in &ledgers {
+            assert_eq!(
+                ledger.get(&sender).expect("sender present").state.balance(),
+                1_000_000 - 4_200 - signed.turn.fee as i64,
+                "sender must be debited (amount + burned fee) identically on every node"
+            );
+        }
+
+        // (4) NO DOUBLE-APPLY: re-applying the SAME finalized turn is rejected on
+        // every node (the nonce already advanced), so a duplicate finalized
+        // delivery cannot move value twice or diverge the ledger.
+        for ledger in &mut ledgers {
+            let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+            // The destination already exists now; provisioning is a no-op.
+            provision_transfer_destinations(ledger, &signed.turn.call_forest);
+            match executor.execute(&signed.turn, ledger) {
+                dregg_turn::TurnResult::Committed { .. } => {
+                    panic!("a finalized turn must not commit twice (double-apply)")
+                }
+                _ => {}
+            }
+            // Value unchanged after the rejected re-apply.
+            assert_eq!(
+                ledger.get(&dest).expect("dest present").state.balance(),
+                4_200,
+                "a rejected re-apply must not move value"
+            );
+        }
+    }
+
+    /// `provision_transfer_destinations` is deterministic and idempotent: the
+    /// stub it inserts is byte-identical regardless of node, and a second call
+    /// (or a destination that already exists) leaves the cell untouched.
+    #[test]
+    fn provision_transfer_destinations_is_deterministic_and_idempotent() {
+        let sender = dregg_cell::CellId([1u8; 32]);
+        let dest = dregg_cell::CellId([0xEEu8; 32]);
+        let mut forest = dregg_turn::CallForest::new();
+        forest.add_root(
+            dregg_turn::ActionBuilder::new_unchecked_for_tests(sender, "t", sender)
+                .effect_transfer(sender, dest, 7)
+                .build(),
+        );
+
+        // Two independent nodes provision from the same forest → identical cell.
+        let mut a = dregg_cell::Ledger::new();
+        let mut b = dregg_cell::Ledger::new();
+        provision_transfer_destinations(&mut a, &forest);
+        provision_transfer_destinations(&mut b, &forest);
+        let ca = a.get(&dest).expect("a provisioned").clone();
+        let cb = b.get(&dest).expect("b provisioned").clone();
+        assert_eq!(
+            postcard::to_stdvec(&ca).unwrap(),
+            postcard::to_stdvec(&cb).unwrap(),
+            "provisioned stub must be byte-identical across nodes"
+        );
+        assert_eq!(ca.state.balance(), 0, "stub starts at zero balance");
+
+        // Idempotent: a second provisioning does not overwrite / duplicate.
+        let before = postcard::to_stdvec(&ca).unwrap();
+        provision_transfer_destinations(&mut a, &forest);
+        let after = postcard::to_stdvec(a.get(&dest).expect("still present")).unwrap();
+        assert_eq!(before, after, "re-provisioning must be a no-op");
+
+        // A destination that already exists (e.g. a real canonical cell) is left
+        // untouched — provisioning only fills genuine absences.
+        let mut c = dregg_cell::Ledger::new();
+        let real = dregg_cell::Cell::with_balance([9u8; 32], [0u8; 32], 500);
+        let real_id = real.id();
+        c.insert_cell(real).expect("insert real");
+        let mut forest2 = dregg_turn::CallForest::new();
+        forest2.add_root(
+            dregg_turn::ActionBuilder::new_unchecked_for_tests(sender, "t", sender)
+                .effect_transfer(sender, real_id, 1)
+                .build(),
+        );
+        provision_transfer_destinations(&mut c, &forest2);
+        assert_eq!(
+            c.get(&real_id).expect("real still present").state.balance(),
+            500,
+            "an existing destination must not be overwritten by provisioning"
+        );
+    }
+
+    /// The attested root now commits the WHOLE cell, so a divergence in
+    /// non-state fields (e.g. a stub vs a canonical pk-cell at the same id, the
+    /// exact pre-hardening faucet bug) produces DIFFERENT roots — the divergence
+    /// is loud, not silent.
+    #[test]
+    fn ledger_root_witnesses_full_cell_divergence() {
+        let id = dregg_cell::CellId([0x7Au8; 32]);
+
+        // Node A: a zero-pk stub at `id` (what peers materialize).
+        let mut a = dregg_cell::Ledger::new();
+        a.insert_cell(dregg_cell::Cell::remote_stub_with_id_and_balance(id, 0))
+            .expect("stub");
+
+        // Node B: a canonical pk-cell whose id ALSO happens to be `id` — same
+        // balance/nonce (state), different public_key. Constructed via the stub
+        // constructor that lets us pin a non-zero pk at the chosen id.
+        let mut b = dregg_cell::Ledger::new();
+        b.insert_cell(dregg_cell::Cell::remote_stub_with_id_pk_balance(
+            id,
+            [0x11u8; 32],
+            0,
+        ))
+        .expect("pk-cell");
+
+        // States are equal (balance 0, nonce 0) — the OLD state-only root would
+        // have called these identical. The whole-cell root does not.
+        assert_ne!(
+            canonical_ledger_root(&a),
+            canonical_ledger_root(&b),
+            "the attested root must witness a public_key divergence at the same id"
+        );
+    }
 }
 
 // ─── Periodic Ledger Checkpointing ─────────────────────────────────────────
@@ -4424,20 +4703,68 @@ fn touched_cell_ids(delta: &dregg_cell::LedgerDelta) -> Vec<dregg_cell::CellId> 
     ids
 }
 
+/// Provision any missing Transfer destination as a deterministic zero-balance
+/// remote stub BEFORE a finalized turn executes, so the application is identical
+/// on every node.
+///
+/// SOUNDNESS / UNIFORMITY. A finalized Transfer must execute the SAME on every
+/// node, both in its attested root AND in resulting ledger content. The executor
+/// rejects a Transfer whose destination cell is absent (`TransferDestNotFound`),
+/// so a destination not yet seen locally must be materialized first. The recipient's
+/// pre-image (its public key / token id) is NOT carried over consensus, so NO node
+/// can reconstruct the canonical cell — instead every node provisions the IDENTICAL
+/// landing site purely from the turn's data: a zero-balance, zero-pk stub at the
+/// destination id (`Cell::remote_stub_with_id_and_balance`). Because the input
+/// (the call forest) and the constructor are byte-deterministic, the provisioned
+/// cell is byte-identical on every node — the submitter (which no longer provisions
+/// authoritatively at faucet-submission in multi-party mode) and every peer.
+///
+/// This is destination PROVISIONING, not the turn's value semantics: the
+/// conservation-checked Transfer still moves the exact amount into the (now-present)
+/// stub. The whole forest is walked (`total_effects`), so a Transfer nested inside a
+/// child action is provisioned too, not only root-level effects.
+///
+/// Idempotent: a destination already present (genesis cell, a prior turn, or a
+/// peer that legitimately holds the canonical cell) is left untouched.
+pub(crate) fn provision_transfer_destinations(
+    ledger: &mut dregg_cell::Ledger,
+    call_forest: &dregg_turn::CallForest,
+) {
+    for effect in call_forest.total_effects() {
+        if let dregg_turn::Effect::Transfer { to, .. } = effect {
+            if ledger.get(to).is_none() {
+                let stub = dregg_cell::Cell::remote_stub_with_id_and_balance(*to, 0);
+                let _ = ledger.insert_cell(stub);
+            }
+        }
+    }
+}
+
 pub(crate) fn canonical_ledger_root(ledger: &dregg_cell::Ledger) -> [u8; 32] {
     let mut entries: Vec<(dregg_types::CellId, [u8; 32])> = ledger
         .iter()
         .map(|(id, cell)| {
-            // Hash the cell's state via postcard serialization. Postcard is
-            // canonical for our types (deterministic field order, fixed
-            // encoding), so this is a stable commitment.
-            let bytes = postcard::to_stdvec(&cell.state).unwrap_or_default();
+            // Hash the WHOLE cell via postcard serialization, not only its
+            // `state`. Postcard is canonical for our types (deterministic field
+            // order, fixed encoding), so this is a stable commitment. Committing
+            // the whole cell (public_key, token_id, capabilities, lifecycle, …)
+            // makes the attested root a real WITNESS of full-ledger uniformity:
+            // two nodes that finalized the same turns but ended with divergent
+            // cell CONTENT (not just balance/nonce) now produce different roots,
+            // so their quorum signatures fail to aggregate — the divergence is
+            // loud, not silent. With deterministic cross-node provisioning
+            // (`provision_transfer_destinations`) honest nodes always agree.
+            let bytes = postcard::to_stdvec(cell).unwrap_or_default();
             let h = *blake3::hash(&bytes).as_bytes();
             (*id, h)
         })
         .collect();
     entries.sort_by(|a, b| a.0.0.cmp(&b.0.0));
-    let mut hasher = blake3::Hasher::new_derive_key("dregg-ledger-root-v1");
+    // v2: domain bumped when the commitment widened from `cell.state` to the
+    // whole `cell` (above). A persisted v1 root is height-only-consumed
+    // (`attested_block_height` reads `.height`, never the hash), so the bump is a
+    // clean break with no stale-root comparison.
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-ledger-root-v2");
     hasher.update(&(entries.len() as u64).to_le_bytes());
     for (id, h) in &entries {
         hasher.update(id.as_bytes());
