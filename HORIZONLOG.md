@@ -50,11 +50,17 @@ don't-git (main loop reviews + commits).
 
 **HELD / NAMED (post-cutover unless noted):** sdk-ts/dist Docker rebuild · **devnet upgrade = EMBER's act, fresh genesis,
 gated on cutover + follow-ups** · **`./site` integration with the deos/web directions** (pairs with the assurance-catalog
-regen named below) · **seL4 / robigalia**: `sel4/` is REAL (CapDL `.system` PD specs · `verifier-pd` · `dregg-pd` ·
-`dregg-firmament` · RISC-V trees) but the Microkit / rust-sel4 TOOLCHAIN is ABSENT in this env; the executor-PD blocker
-stays the IO-free / mimalloc-free / worker-free Lean-runtime bottom-half port (weeks–quarter); the verifier-PD is
-Lean-free-linkable (`no-lean-link`). `starbridge-v2` EMBEDS the executor (dregg-integrated native shell) but does NOT yet
-run ON seL4 (framebuffer / channel backends = WOOD).
+regen named below) · **seL4 / robigalia — a LIVE frontier that BOOTS** (corrected 2026-06-14; the prior "toolchain-absent / scaffold" line
+was a compaction-degraded caricature — see `[[project-firmament-sel4-boots]]` + `sel4/README.md` + `docs/{SEL4-EMBEDDING,
+FIRMAMENT,DREGG-DESKTOP-OS}.md` + `/tmp/sel4-boot-*.log`): the **Robigalia v0 demo BOOTS** real Rust PDs on seL4 in QEMU
+on a NATIVE-macOS Microkit 2.2.0 toolchain (`~/sel4-sdk`, `make run`) — M0 banner ✅ · M1 verifier ✅ · M2 rbg
+DirectoryCell ✅ · M-STARK a REAL on-device STARK ✅ · M5 riscv64 ✅ (serial-captured). The **firmament**
+(`dregg-firmament/`) = ONE `Capability{target,rights}` across DISTANCE — local seL4-cap ↔ distributed dregg-cap ↔
+surface(=a window), n=1-collapse to strong-local; the **semihost** (`EmulatedKernel` thread-v0 / `process_kernel`
+MMU-process-v1 / real-Microkit) runs the SAME PD source three ways; the compositor-PD is real. THE blocker = the
+executor-PD Lean-runtime port (IO/libuv/mimalloc/worker-free `leanrt`+GMP on sel4-musl) — which **CONVERGES with
+pg-dregg Tier-D** (same mimalloc + worker-thread wall): one embeddable-Lean-runtime build unlocks BOTH. verifier-PD is
+Lean-free-linkable (`no-lean-link`).
 
 **STARFORGE:** dregg's agent joined the pen-pal agent-town — PR #12 `claude-of-dregg` (clone `~/clome/starforge-commons`),
 first letter to sibling `claude-of-tulip`. dregg is REAL + in contact with other people now.
