@@ -145,6 +145,9 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 --       agent bytea NOT NULL,            -- the turn's agent cell (the RLS key)
 --       signed_turn bytea NOT NULL,      -- postcard SignedTurn bytes
 --       submitter text NOT NULL DEFAULT current_user,
+--       submit_token text,               -- the bearer the enqueue ran under, so the
+--                                        -- DRAINER re-checks the submit gate at drain
+--                                        -- time (revoked-since-enqueue ⇒ refused)
 --       status text NOT NULL DEFAULT 'pending'
 --              CHECK (status IN ('pending','executed','refused')),
 --       receipt_hash bytea, error text,  -- set by the node on resolution
@@ -156,6 +159,19 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 --       USING (dregg_admits('submit', encode(agent, 'hex')));
 --   GRANT INSERT, SELECT ON dregg.submit_queue TO dregg_reader;  -- the submitter
 --   GRANT SELECT, UPDATE ON dregg.submit_queue TO dregg_kernel;  -- the node drainer
+--
+-- THE DRAINER (the M3 worker — docs/PG-DREGG.md §11.4) is LANDED: the node-side
+-- background worker that turns queued intents into verified state. It runs the
+-- four-gate spine — SUBMIT (re-check the cap) → PRODUCE (the executor seam) →
+-- CHAIN (the RootChain anti-substitution tooth) → MIRROR+resolve (apply through
+-- THIS commit_log gate, then resolve the queue row). In-database:
+--   SET ROLE dregg_kernel;            -- the BYPASSRLS drain reads/writes
+--   SELECT dregg_drain_once(64);      -- one poll cycle (drained/refused/conflict/lag)
+--   SELECT dregg_drain_stats();       -- standing counters (executed/refused/lag/head)
+-- and the standalone daemon `cargo run --bin drainerd` runs the loop continuously
+-- (poll → drain → mirror → resolve, graceful SIGINT/SIGTERM). The executor seam
+-- (PRODUCE) is supplied by a real node; pg-dregg ships the deterministic stand-in
+-- producer (docs/PG-DREGG-TIER-D-SPIKE.md names the executor-link verdict).
 
 -- ===========================================================================
 -- 6.  Tier D preview (docs/PG-DREGG.md §11) — the executor as a pg function.
@@ -171,9 +187,19 @@ REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC;
 --     UPDATE invoices SET paid = true WHERE id = 7;           -- app state changes
 --   COMMIT;                                                    -- both, or neither.
 -- That cross-domain atomicity (kernel + app data in one transaction) is the
--- unique Tier-D payoff no separate node can offer. The §11 outbox above is the
--- realizable slice today (the node executes out-of-process); Tier D is the
--- north-star where postgres executes in-process.
+-- unique Tier-D payoff no separate node can offer. The §11 outbox + drainer above
+-- is the realizable slice today (the node executes out-of-process); Tier D is the
+-- north-star where postgres executes the VERIFIED executor in-process.
+--
+-- THE TIER-D FEASIBILITY VERDICT (docs/PG-DREGG-TIER-D-SPIKE.md): the verified
+-- Lean executor (libdregg_lean.a) DOES link + run in a process on this host, and
+-- a cdylib already links it shared (sdk-py) — so a pgrx extension .so CAN link it.
+-- BUT full in-BACKEND is unsafe: Lean's runtime statically overrides the global
+-- allocator with mimalloc and spawns worker threads, which collide with the
+-- postgres backend's palloc/longjmp single-threaded model. The recommended shape
+-- is therefore D-SIDECAR: host the executor in a co-process (a pgrx
+-- BackgroundWorker or the standalone node) the backend hands intents to — which is
+-- exactly what dregg_drain_once()'s PRODUCE seam plugs into.
 
 -- ===========================================================================
 -- 7.  The whole-chain IVC RANGE attestation (docs/PG-DREGG.md §10.2.1) — the

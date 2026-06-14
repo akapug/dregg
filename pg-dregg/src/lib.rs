@@ -25,6 +25,7 @@
 
 pub mod attest;
 pub mod authz;
+pub mod drainer;
 pub mod jsonpath;
 pub mod mirror;
 pub mod synth;
@@ -698,13 +699,278 @@ mod pg {
     #[pg_extern]
     fn dregg_submit_turn(signed_turn: &[u8], agent: &[u8]) -> pgrx::Uuid {
         // Insert as the calling role so the submit_gate WITH CHECK policy (the
-        // capability admission) gates the enqueue. RETURNING the generated id.
+        // capability admission) gates the enqueue. We also persist the presented
+        // bearer token (the `dregg.token` GUC the enqueue ran under) into
+        // `submit_token`, so the node-side drainer can RE-CHECK the submit gate at
+        // drain time — a capability revoked between enqueue and drain is then
+        // refused before the turn executes (the drainer's defence-in-depth, and the
+        // only check on a row enqueued before a revocation). `current_setting(...,
+        // true)` returns NULL when unset (deny-by-default at drain).
         let id: Option<pgrx::Uuid> = Spi::get_one_with_args(
-            "INSERT INTO dregg.submit_queue (agent, signed_turn) VALUES ($1, $2) RETURNING id",
+            "INSERT INTO dregg.submit_queue (agent, signed_turn, submit_token) \
+             VALUES ($1, $2, current_setting('dregg.token', true)) RETURNING id",
             &[agent.into(), signed_turn.into()],
         )
         .expect("dregg_submit_turn: enqueue failed (RLS refused, or the outbox is not installed)");
         id.expect("dregg_submit_turn: INSERT ... RETURNING id yielded no row")
+    }
+
+    /// `dregg_drain_once(batch_limit int) -> text`. ONE poll cycle of the
+    /// submit-queue DRAINER (`docs/PG-DREGG.md` §11.4, the M3 worker), in-database.
+    ///
+    /// Drives the verified-write spine ([`crate::drainer::Drainer`]) over live SQL:
+    /// it resumes the chain from `dregg.turns` (the durable head), reads up to
+    /// `batch_limit` `pending` rows of `dregg.submit_queue` in arrival order, and
+    /// for each runs the four gates — SUBMIT (re-check the capability) → PRODUCE
+    /// (the executor seam) → CHAIN (the real `RootChain` anti-substitution tooth) →
+    /// MIRROR+resolve — applying each executed turn through the Tier-C
+    /// `dregg.commit_log` gate (so the SAME database-engine chain re-validation
+    /// admits it) and resolving the queue row (`executed` | `refused`). Returns a
+    /// one-line summary (drained / refused / conflict / remaining-lag).
+    ///
+    /// Run as the kernel role (it reads pending rows + writes the verified store +
+    /// resolves the queue; the schema GRANTs `dregg_kernel` exactly those). The
+    /// `src/bin/drainerd.rs` daemon — or a pg18 background worker / a `pg_cron`
+    /// schedule — calls this repeatedly to drain continuously; `dregg_drain_stats`
+    /// reports the standing counters.
+    ///
+    /// THE EXECUTOR SEAM (honest scope, `docs/PG-DREGG-TIER-D-SPIKE.md`): pg-dregg
+    /// does not link the executor (it depends only on `dregg-auth`), so the PRODUCE
+    /// step here uses the deterministic, value-conserving STAND-IN producer
+    /// ([`crate::drainer::FoldProducer`]) — the same stand-in the workflow runtime's
+    /// `FoldProjector` is. A real deployment supplies the verified Lean executor at
+    /// this seam (Tier-D in-backend, or the D-sidecar the spike recommends); every
+    /// OTHER gate (the submit re-check, the live commit_log chain-gate apply, the
+    /// queue resolution, the counters) is the real, realizable spine and is what
+    /// this extern exercises against live pg.
+    #[pg_extern]
+    fn dregg_drain_once(batch_limit: i32) -> String {
+        sync_issuer_key();
+        let limit = batch_limit.clamp(1, 10_000) as usize;
+        let mut drainer = drain_engine_resumed_from_turns();
+
+        // Read up to `limit` pending intents in arrival order (the uuidv7 id is
+        // time-sortable, so `ORDER BY id` IS arrival order). The submitter's token
+        // is recovered from its bound role identity (the login-binding default
+        // token) when present; absent, the SUBMIT re-check denies (fail-closed),
+        // which is correct — an unbound submitter cannot have its intent executed.
+        let intents = read_pending_intents(limit);
+
+        let mut counters = crate::drainer::DrainCounters::default();
+        for intent in &intents {
+            let outcome = drainer.drain(intent);
+            counters.record(&outcome);
+            match &outcome {
+                crate::drainer::DrainOutcome::Executed { receipt_hash } => {
+                    // Apply the produced post-image through the Tier-C commit_log
+                    // gate (the live chain re-validation admits it), then resolve.
+                    let batch = drainer
+                        .last_batch()
+                        .expect("an executed drain stashed its batch")
+                        .clone();
+                    match apply_batch_through_commit_log(&batch) {
+                        Ok(()) => resolve_queue_row(&intent.id, "executed", Some(receipt_hash), None),
+                        Err(e) => {
+                            // The engine refused the apply (a live chain conflict a
+                            // concurrent drainer caused). Record it as a chain
+                            // conflict + resolve refused; the head did advance in the
+                            // in-process chain, but the durable store rejected it, so
+                            // a fresh resume on the next poll re-reads the true head.
+                            counters.conflict += 1;
+                            resolve_queue_row(
+                                &intent.id,
+                                "refused",
+                                None,
+                                Some(&format!("commit_log gate refused the apply: {e}")),
+                            );
+                        }
+                    }
+                }
+                crate::drainer::DrainOutcome::Refused { reason, .. } => {
+                    resolve_queue_row(&intent.id, "refused", None, Some(reason));
+                }
+            }
+        }
+
+        let lag = pending_depth();
+        format!(
+            "drained={} refused={} (unauth={} produce={} conflict={}) remaining_lag={}",
+            counters.drained, counters.refused, counters.unauthorized,
+            counters.produce_refused, counters.conflict, lag,
+        )
+    }
+
+    /// `dregg_drain_stats() -> text`. The drainer observability snapshot, read
+    /// straight from the queue + store (so it reflects the WHOLE history, across
+    /// every drainer restart — the counters `dregg_drain_once` returns are
+    /// per-call). Reports: `executed` / `refused` resolved rows, the pending `lag`,
+    /// and the current durable chain head (ordinal + root). Run as any role that
+    /// can read `dregg.submit_queue` + `dregg.turns` (the kernel/operator).
+    #[pg_extern]
+    fn dregg_drain_stats() -> String {
+        let executed: i64 = Spi::get_one(
+            "SELECT count(*) FROM dregg.submit_queue WHERE status = 'executed'",
+        )
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+        let refused: i64 =
+            Spi::get_one("SELECT count(*) FROM dregg.submit_queue WHERE status = 'refused'")
+                .ok()
+                .flatten()
+                .unwrap_or(0);
+        let lag = pending_depth();
+        let (ordinal, head) = durable_head_from_turns()
+            .map(|(h, n)| (n, h.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+            .unwrap_or((0, "<genesis>".to_string()));
+        format!(
+            "drainer: executed={executed} refused={refused} lag={lag} head=ordinal:{ordinal}/{head}"
+        )
+    }
+
+    // ---- drainer live-SQL helpers -----------------------------------------
+
+    /// The durable chain head from `dregg.turns`: `(ledger_root, next_ordinal)` of
+    /// the max-ordinal row, or `None` if the store is fresh (genesis).
+    fn durable_head_from_turns() -> Option<([u8; 32], u64)> {
+        let row: Option<(Vec<u8>, i64)> = Spi::connect(|client| {
+            let t = client.select(
+                "SELECT ledger_root, ordinal FROM dregg.turns ORDER BY ordinal DESC LIMIT 1",
+                Some(1),
+                &[],
+            )?;
+            let mut it = t.into_iter();
+            Ok::<_, pgrx::spi::Error>(it.next().map(|r| {
+                (
+                    r.get::<Vec<u8>>(1).ok().flatten().unwrap_or_default(),
+                    r.get::<i64>(2).ok().flatten().unwrap_or(0),
+                )
+            }))
+        })
+        .ok()
+        .flatten();
+        let (root_bytes, ordinal) = row?;
+        let mut head = [0u8; 32];
+        if root_bytes.len() == 32 {
+            head.copy_from_slice(&root_bytes);
+            Some((head, ordinal as u64 + 1))
+        } else {
+            None
+        }
+    }
+
+    /// A drainer with the deterministic stand-in producer, resumed from the durable
+    /// `dregg.turns` head (so the next drained turn chains onto exactly where the
+    /// store left off).
+    fn drain_engine_resumed_from_turns() -> crate::drainer::Drainer<crate::drainer::FoldProducer> {
+        // The stand-in's float source is a fixed reserved cell; the unit is 1. A
+        // real node replaces this whole producer with the verified executor.
+        let source = [0xc0u8; 32];
+        let mut d = crate::drainer::Drainer::new(crate::drainer::FoldProducer::new(
+            source,
+            1_000_000_000,
+            1,
+        ))
+        .with_clock(now_epoch());
+        if let Some((head, next_ordinal)) = durable_head_from_turns() {
+            d.resume_chain(head, next_ordinal);
+        }
+        d
+    }
+
+    /// The backend `now()` as a unix epoch (seconds) — the SUBMIT gate's clock.
+    fn now_epoch() -> i64 {
+        Spi::get_one::<i64>("SELECT extract(epoch FROM now())::bigint")
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+    }
+
+    /// Read up to `limit` pending `dregg.submit_queue` rows as drain intents, in
+    /// arrival order. The submitter token is recovered from the submitter role's
+    /// `dregg.role_identity.default_token` when the login binding is installed;
+    /// absent, an empty token (which the SUBMIT re-check denies — fail-closed).
+    fn read_pending_intents(limit: usize) -> Vec<crate::drainer::SubmitIntent> {
+        // `limit` is a clamped usize (1..=10_000), so inlining it is injection-safe
+        // and avoids a bound-parameter dance for a pure integer LIMIT. The token the
+        // SUBMIT re-check needs is the `submit_token` the enqueue persisted (the
+        // bearer the enqueue ran under); NULL ⇒ '' ⇒ the re-check denies (fail-closed).
+        Spi::connect(|client| {
+            let rows = client.select(
+                &format!(
+                    "SELECT id, agent, signed_turn, coalesce(submit_token, '') AS token \
+                     FROM dregg.submit_queue \
+                     WHERE status = 'pending' ORDER BY id LIMIT {limit}"
+                ),
+                Some(limit as i64),
+                &[],
+            )?;
+            let mut out = Vec::new();
+            for r in rows {
+                let id_uuid: Option<pgrx::Uuid> = r.get(1).ok().flatten();
+                let agent_bytes: Vec<u8> = r.get::<Vec<u8>>(2).ok().flatten().unwrap_or_default();
+                let signed: Vec<u8> = r.get::<Vec<u8>>(3).ok().flatten().unwrap_or_default();
+                let token: String = r.get::<String>(4).ok().flatten().unwrap_or_default();
+                let (Some(id_uuid), true) = (id_uuid, agent_bytes.len() == 32) else {
+                    continue;
+                };
+                let mut id = [0u8; 16];
+                id.copy_from_slice(id_uuid.as_bytes());
+                let mut agent = [0u8; 32];
+                agent.copy_from_slice(&agent_bytes);
+                out.push(crate::drainer::SubmitIntent {
+                    id,
+                    agent,
+                    signed_turn: signed,
+                    token,
+                });
+            }
+            Ok::<_, pgrx::spi::Error>(out)
+        })
+        .unwrap_or_default()
+    }
+
+    /// Apply a drained turn's verified post-image through the Tier-C
+    /// `dregg.commit_log` gate (the SAME engine-level chain re-validation +
+    /// MERGE-materialize the mirror path runs). Returns `Err` if the gate refuses
+    /// (e.g. a live conflict), which the drainer records as a chain conflict.
+    fn apply_batch_through_commit_log(b: &crate::mirror::MirrorBatch) -> Result<(), String> {
+        let hx = |x: &[u8]| -> String { x.iter().map(|y| format!("{y:02x}")).collect() };
+        let t = &b.turn;
+        let cells_json = b.cells_json().replace('\'', "''");
+        Spi::run(&format!(
+            "INSERT INTO dregg.commit_log(ordinal,height,block_id,block_executed_up_to,\
+             turn_hash,creator,receipt_hash,ledger_root,prev_root,cells) VALUES \
+             ({},{},'\\x{}',{},'\\x{}','\\x{}','\\x{}','\\x{}','\\x{}','{}'::jsonb)",
+            t.ordinal, t.height, hx(&t.block_id), t.block_executed_up_to,
+            hx(&t.turn_hash), hx(&t.creator), hx(&t.receipt_hash),
+            hx(&t.ledger_root), hx(&t.prev_root), cells_json,
+        ))
+        .map_err(|e| e.to_string())
+    }
+
+    /// Resolve a `dregg.submit_queue` row to its terminal status, stamping the
+    /// receipt hash (on `executed`) or the error (on `refused`) and `resolved_at`.
+    fn resolve_queue_row(id: &[u8; 16], status: &str, receipt: Option<&[u8; 32]>, error: Option<&str>) {
+        let id_hex: String = id.iter().map(|b| format!("{b:02x}")).collect();
+        let receipt_sql = receipt
+            .map(|r| format!("'\\x{}'::bytea", r.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+            .unwrap_or_else(|| "NULL".to_string());
+        let error_sql = error
+            .map(|e| format!("'{}'", e.replace('\'', "''")))
+            .unwrap_or_else(|| "NULL".to_string());
+        let _ = Spi::run(&format!(
+            "UPDATE dregg.submit_queue SET status = '{status}', receipt_hash = {receipt_sql}, \
+             error = {error_sql}, resolved_at = now() WHERE id = '{id_hex}'::uuid"
+        ));
+    }
+
+    /// The current pending depth (the queue lag) — `count(*) WHERE status='pending'`.
+    fn pending_depth() -> u64 {
+        Spi::get_one::<i64>("SELECT count(*) FROM dregg.submit_queue WHERE status = 'pending'")
+            .ok()
+            .flatten()
+            .unwrap_or(0) as u64
     }
 
     /// `dregg_verify_turn(prev_root, ledger_root, ordinal) -> bool`. The Tier-C
@@ -2099,6 +2365,138 @@ mod pg {
                 "SELECT dregg_submit_turn('\\xdeadbeef'::bytea, '\\x{bob_hex}'::bytea)"
             ))
             .unwrap();
+        }
+
+        // ===================================================================
+        // The DRAINER through real SQL (docs/PG-DREGG.md §11.4): the node-side
+        // worker reads dregg.submit_queue, drives the four-gate spine, applies
+        // each executed turn through the Tier-C commit_log gate, and resolves the
+        // queue rows. dregg_drain_once() is one poll cycle; dregg_drain_stats()
+        // reports the standing counters.
+        // ===================================================================
+
+        /// Enqueue `n` pending turns FOR ALICE under an ALICE-submit token (so each
+        /// row captures `submit_token`), as the unprivileged reader.
+        fn enqueue_alice_turns(root: &RootKey, n: usize) {
+            let alice_hex: String = synth::ALICE.iter().map(|b| format!("{b:02x}")).collect();
+            Spi::run(&format!("SET dregg.token = '{}'", submit_token(root, "a1"))).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+            for k in 0..n {
+                // A non-empty signed-turn blob (the stand-in producer accepts it;
+                // a real executor would decode it). Vary it per row so they differ.
+                let _: Option<pgrx::Uuid> = Spi::get_one(&format!(
+                    "SELECT dregg_submit_turn('\\xab{:02x}'::bytea, '\\x{alice_hex}'::bytea)",
+                    k as u8
+                ))
+                .unwrap();
+            }
+            Spi::run("RESET ROLE").unwrap();
+        }
+
+        #[pg_test]
+        fn drainer_drains_the_queue_materializes_state_and_resolves_rows() {
+            let root = root();
+            assert_issuer(&root);
+            Spi::get_one::<String>("SELECT dregg_install_schema()").unwrap();
+            Spi::get_one::<String>("SELECT dregg_install_tier_c()").unwrap();
+            Spi::get_one::<String>("SELECT dregg_install_write_outbox()").unwrap();
+
+            // Enqueue 5 authorized pending turns for ALICE.
+            enqueue_alice_turns(&root, 5);
+            let pending_before: i64 =
+                Spi::get_one("SELECT count(*) FROM dregg.submit_queue WHERE status='pending'")
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(pending_before, 5);
+
+            // Drain them all in one poll, as the kernel (BYPASSRLS, the only role
+            // the schema GRANTs the drain reads/writes to).
+            Spi::run("SET ROLE dregg_kernel").unwrap();
+            let report: String = Spi::get_one("SELECT dregg_drain_once(16)").unwrap().unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            assert!(report.contains("drained=5"), "all five drained: {report}");
+            assert!(report.contains("remaining_lag=0"), "queue emptied: {report}");
+
+            // Every queue row resolved to 'executed' with a receipt + resolved_at.
+            let executed: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.submit_queue \
+                 WHERE status='executed' AND receipt_hash IS NOT NULL AND resolved_at IS NOT NULL",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(executed, 5, "all rows resolved executed with a receipt");
+
+            // The drained turns materialized state: five verified turns recorded,
+            // and the turns table is an unbroken hash chain (the commit_log gate
+            // re-validated each on the way in).
+            let turns: i64 = Spi::get_one("SELECT count(*) FROM dregg.turns").unwrap().unwrap();
+            assert_eq!(turns, 5, "five verified turns landed in the store");
+            let breaks: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.turns t \
+                 JOIN dregg.turns p ON p.ordinal = t.ordinal - 1 \
+                 WHERE t.prev_root IS DISTINCT FROM p.ledger_root",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(breaks, 0, "the drained turns form an unbroken chain");
+
+            // ALICE's cell is materialized (the stand-in credited it each turn).
+            let alice_hex: String = synth::ALICE.iter().map(|b| format!("{b:02x}")).collect();
+            let alice_rows: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg.cells WHERE cell_id = '\\x{alice_hex}'::bytea"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(alice_rows, 1, "ALICE's post-image is materialized");
+
+            // dregg_drain_stats reflects the resolved store.
+            let stats: String = Spi::get_one("SELECT dregg_drain_stats()").unwrap().unwrap();
+            assert!(stats.contains("executed=5"), "stats sees the executed rows: {stats}");
+            assert!(stats.contains("lag=0"), "stats sees an empty queue: {stats}");
+        }
+
+        #[pg_test]
+        fn drainer_refuses_a_revoked_since_enqueue_intent_at_drain() {
+            let root = root();
+            assert_issuer(&root);
+            Spi::get_one::<String>("SELECT dregg_install_schema()").unwrap();
+            Spi::get_one::<String>("SELECT dregg_install_tier_c()").unwrap();
+            Spi::get_one::<String>("SELECT dregg_install_write_outbox()").unwrap();
+
+            // Enqueue one authorized turn, capturing its submit_token.
+            let tok = submit_token(&root, "a1");
+            let alice_hex: String = synth::ALICE.iter().map(|b| format!("{b:02x}")).collect();
+            Spi::run(&format!("SET dregg.token = '{tok}'")).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+            let _: Option<pgrx::Uuid> = Spi::get_one(&format!(
+                "SELECT dregg_submit_turn('\\xabcd'::bytea, '\\x{alice_hex}'::bytea)"
+            ))
+            .unwrap();
+            Spi::run("RESET ROLE").unwrap();
+
+            // REVOKE the capability after enqueue but before drain (by its token,
+            // which dregg_revoke maps to the credential id the per-row check reads).
+            let revoked_id: Option<String> =
+                Spi::get_one(&format!("SELECT dregg_revoke('{tok}')")).unwrap();
+            assert!(revoked_id.is_some(), "the token revoked");
+
+            // Drain: the submit re-check catches the revocation and REFUSES the
+            // intent — it never executes, never touches state.
+            Spi::run("SET ROLE dregg_kernel").unwrap();
+            let report: String = Spi::get_one("SELECT dregg_drain_once(16)").unwrap().unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            assert!(report.contains("drained=0"), "the revoked intent did not execute: {report}");
+            assert!(report.contains("unauth=1"), "it was refused at the submit gate: {report}");
+
+            // The queue row resolved 'refused' with the revocation reason; no turn landed.
+            let refused: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.submit_queue WHERE status='refused' AND error LIKE '%revoked%'",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(refused, 1, "the row resolved refused (revoked)");
+            let turns: i64 = Spi::get_one("SELECT count(*) FROM dregg.turns").unwrap().unwrap();
+            assert_eq!(turns, 0, "no verified turn was produced from a revoked intent");
         }
 
         // ===================================================================

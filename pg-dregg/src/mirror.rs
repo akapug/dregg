@@ -1529,12 +1529,20 @@ CREATE TABLE IF NOT EXISTS dregg.submit_queue (
     agent        bytea NOT NULL,               -- the turn's agent cell (RLS key)
     signed_turn  bytea NOT NULL,               -- postcard SignedTurn bytes
     submitter    text  NOT NULL DEFAULT current_user,
+    submit_token text,                          -- the bearer token the enqueue ran
+                                                -- under (the dregg.token GUC), so the
+                                                -- DRAINER can RE-CHECK the submit gate
+                                                -- at drain time (a revoked-since-enqueue
+                                                -- capability is then refused before it
+                                                -- executes). NULL ⇒ deny-by-default.
     status       text  NOT NULL DEFAULT 'pending'
                  CHECK (status IN ('pending','executed','refused')),
     receipt_hash bytea,                         -- set by the node on success
     error        text,                          -- set by the node on refusal
     submitted_at timestamptz NOT NULL DEFAULT now(),
     resolved_at  timestamptz);
+-- A pre-existing queue (installed before submit_token landed) is migrated in place.
+ALTER TABLE dregg.submit_queue ADD COLUMN IF NOT EXISTS submit_token text;
 CREATE INDEX IF NOT EXISTS submit_queue_pending
     ON dregg.submit_queue (submitted_at) WHERE status = 'pending';
 "#;
