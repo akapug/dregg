@@ -133,6 +133,22 @@ export type { AttestedRoot, Checkpoint } from "./attested";
 // The cell-program constraint language.
 export * as program from "./program";
 
+// pg-dregg-native ergonomics — drive a pg-dregg-enabled postgres idiomatically
+// (connect / submit a verified turn / free-SQL reads / federation health). A
+// thin, typed binding of the real pg-dregg SQL surface; no driver bundled
+// (inject a `pg.Client`/`pg.Pool`). Also importable as `@dregg/sdk/pg`.
+export { Pg, DreggPgError, TOKEN_GUC, READER_ROLE, KERNEL_ROLE } from "./pg";
+export type {
+  PgQueryable,
+  PgConnectOptions,
+  Bytes32,
+  CellBalance,
+  ReceiptRow,
+  CapEdge,
+  Submission,
+  Interval,
+} from "./pg";
+
 // DreggDL — the checkable deployment spec (CapDL for dregg). A thin binding
 // over the REAL dregg-deploy lowering + userspace-verify, via dregg-wasm.
 export { DeployChecker } from "./deploy";

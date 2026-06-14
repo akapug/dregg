@@ -28,6 +28,16 @@ classifiers = [
     "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
 ]
 
+[project.optional-dependencies]
+# `dregg.pg` — the pg-dregg-native binding. Pure Python; needs psycopg (v3) at
+# runtime, imported lazily so the rest of the SDK loads without it.
+pg = ["psycopg[binary]>=3.1"]
+
+[dependency-groups]
+# Dev/test deps (uv reads these; `uv run pytest` installs them). psycopg is here
+# so the pg unit + (skip-gated) integration tests can run.
+dev = ["pytest>=8.0", "psycopg[binary]>=3.1"]
+
 [project.urls]
 Homepage = "https://dregg.dev"
 Repository = "https://github.com/emberian/dregg"
@@ -46,3 +56,6 @@ python-source = "python"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "pg_integration: needs a live pg-dregg-enabled postgres (skipped if none is reachable)",
+]
