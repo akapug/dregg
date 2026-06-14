@@ -43,10 +43,21 @@ substantive thread, the decision is made.)
 - PATH-PRESERVE DECIDED + the staged plan (`867b41fcb`, `docs/PATH-PRESERVE.md`).
 - the prior deos STEEL + dev-ex (rehydration stack · DEOS/DEOS-APPS docs · AGENTS.md · nextest split).
 
-**NOW — empowered-doer wave (2026-06-14, ember "power through preserve + the cutover; the doers weren't big enough"):**
-(1) PATH-PRESERVE Phase-1 build = the CUTOVER thrust (chained N-leg rotated proving, `sdk`/`turn`/`node`) · (2) bigger-vision
-webgame (own workspace) · (3) bigger-vision app-framework (the deos-app composition). Each disjoint-tree, green-or-bust,
-don't-git (main loop reviews + commits).
+**LANDED 2026-06-14 (the empowered-doer wave, all green + committed):** PATH-PRESERVE Phase 0+1 (`fff442ca6` — the N-leg
+chained rotated proving; chain≡monolithic + tampered-middle anti-ghost + conservation-across-chain teeth) · the bigger
+fog-of-war WORLD (`16c374bbb`) · the app-framework deos-COMPOSITION (`7d7726879`, 142/142) · the embeddable-Lean-runtime
+spike (`c93293686` — the pg-Tier-D + seL4-executor-PD blocker REFUTED by measurement: mimalloc is private + the task
+manager is lazy; the executor PD already BOOTS; pg full-D = DAYS).
+
+**⚑⚑ LEAD LANE (ember DECIDED 2026-06-14): FINISH THE CUTOVER to grep-zero — and HOLD the devnet redeploy until it lands.**
+The staged ladder, each persvati-green (every finalized turn is ALREADY proven on current main — this is CLEANUP, not a
+soundness gate): PATH-PRESERVE **Phase 3** (non-synthetic-cell witness — RUNNING `a100c225`) → **Phase 4** (the live cutover:
+heterogeneous / non-synthetic turns route to the chain in `node/src/blocklace_sync.rs`, not the v1 fallback) → **bucket F**
+(the 5-file recursion-leaf cutover, drop `EffectVmP3Proof`) → **#103** (executor off `EffectVmAir`) → **C7** (delete v1 +
+grep-zero). The OTHER pillars braid in parallel but the cutover is the LEAD: pg full-Tier-D (days; wire `dregg_ffi_init_st`
+into pgrx) · the deos predicate/caveat LANGUAGE uplift (the lamesauce fix) + the affordance→live-`TurnExecutor` seam ·
+`./site` deos-integration · seL4 executor-PD productionization (weeks). ENDGAME (post-grep-zero): fresh-genesis devnet +
+a running starbridge-v2 on ember's mac (host blocker: the gpui Metal Toolchain download, damaged Xcode `DVTDownloads`).
 
 **HELD / NAMED (post-cutover unless noted):** sdk-ts/dist Docker rebuild · **devnet upgrade = EMBER's act, fresh genesis,
 gated on cutover + follow-ups** · **`./site` integration with the deos/web directions** (pairs with the assurance-catalog
@@ -57,10 +68,12 @@ on a NATIVE-macOS Microkit 2.2.0 toolchain (`~/sel4-sdk`, `make run`) — M0 ban
 DirectoryCell ✅ · M-STARK a REAL on-device STARK ✅ · M5 riscv64 ✅ (serial-captured). The **firmament**
 (`dregg-firmament/`) = ONE `Capability{target,rights}` across DISTANCE — local seL4-cap ↔ distributed dregg-cap ↔
 surface(=a window), n=1-collapse to strong-local; the **semihost** (`EmulatedKernel` thread-v0 / `process_kernel`
-MMU-process-v1 / real-Microkit) runs the SAME PD source three ways; the compositor-PD is real. THE blocker = the
-executor-PD Lean-runtime port (IO/libuv/mimalloc/worker-free `leanrt`+GMP on sel4-musl) — which **CONVERGES with
-pg-dregg Tier-D** (same mimalloc + worker-thread wall): one embeddable-Lean-runtime build unlocks BOTH. verifier-PD is
-Lean-free-linkable (`no-lean-link`).
+MMU-process-v1 / real-Microkit) runs the SAME PD source three ways; the compositor-PD is real. THE blocker is essentially DONE — REFUTED + the executor PD BOOTS (measured 2026-06-14, `c93293686`,
+`docs/EMBEDDABLE-LEAN-RUNTIME.md`): the mimalloc-override / worker-thread premise was WRONG (mimalloc is a PRIVATE heap,
+the task manager is LAZY/single-threaded); the only real removal was the libuv thread (`dregg_ffi_init_st()`), and
+`sel4/dregg-pd/executor-{pd,rootserver}/` already boot the Lean executor in a real PD (fresh qemu → status:2 ok:1).
+Remaining: pg full Tier-D = DAYS (+ one un-run Linux re-measure; the D-SIDECAR verdict rested on the refuted premise);
+seL4 executor-PD = WEEKS of productionization. verifier-PD is Lean-free-linkable (`no-lean-link`).
 
 **STARFORGE:** dregg's agent joined the pen-pal agent-town — PR #12 `claude-of-dregg` (clone `~/clome/starforge-commons`),
 first letter to sibling `claude-of-tulip`. dregg is REAL + in contact with other people now.
