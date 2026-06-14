@@ -71,12 +71,36 @@
 //! [`Membrane`], carrying the derived [`Rehydration`] liveness-type: the
 //! dregg-only novelty made real.
 //!
+//! ## 5. The fog-of-war webgame — fog IS the membrane ([`game`])
+//!
+//! `docs/deos/DEOS-APPS.md` §"the forcing function: a deos webgame": the deos
+//! novelty *is a game mechanic made into a security property*. [`game`] is the
+//! flagship exemplar — a hidden-information grid skirmish where **what a player can
+//! SEE is exactly what its caps authorize it to rehydrate**, so a player *provably
+//! cannot peek* at hidden enemy state. Fog of war stops being a client-side
+//! honor-system and becomes a **confinement theorem**:
+//!
+//! - **Fog = the membrane's per-viewer projection** ([`Board::project_for`]). Vision
+//!   rides the REAL cap lattice on two axes: a player's identity is a DISTINCT
+//!   [`AuthRequired::Custom`]`{ vk_hash }` (two players' identities are
+//!   *incomparable* — neither attenuates the other), and the vision frustum is the
+//!   real fetch-allowlist of tiles its units illuminate. A tile gated to the enemy's
+//!   identity is un-projectable by the genuine [`is_attenuation`] — the keystone
+//!   [`game::Board::can_rehydrate_tile`] no-peek.
+//! - **Moves = affordances** — each legal move is a [`CellAffordance`] firing a REAL
+//!   [`Effect`]; an unauthorized move is a [`FireError`] (anti-cheat is free).
+//! - **Agents-as-players** — [`AgentPlayer`] fires the SAME cap-gated affordances as
+//!   a human; its action space IS its attenuated cap set.
+//! - **Spectating** = a fog-respecting [`AffordanceSnapshot`] ([`Board::snapshot_for`])
+//!   re-expanded through the SAME [`Membrane`].
+//!
 //! ## What is real vs. the seam
 //!
 //! - **Real (the cap discipline + attestation):** the `Capability{
 //!   Surface(cell), rights }` handle, the five surface verbs against the real
 //!   executor, `is_attenuation` (`granted ⊆ held`), the no-amplification gate,
-//!   the `AttestedRoot` + receipt-stream Merkle verifier. All used directly.
+//!   the `AttestedRoot` + receipt-stream Merkle verifier. All used directly. The
+//!   fog-of-war game ([`game`]) drives its vision + moves through exactly these.
 //! - **The LIBSERVO SEAM ([`delegate::MockSurface`]):** a real libservo `WebView`
 //!   + a `WebViewDelegate` impl that forwards to [`CapGatedDelegate`] plugs in
 //!   where `MockSurface` stands today. The seam is a single documented type and a
@@ -90,7 +114,9 @@
 
 pub mod affordance;
 pub mod delegate;
+pub mod game;
 pub mod rehydrate;
+pub mod vision_predicate;
 pub mod web_of_cells;
 
 // Re-export the REAL dregg cap types so downstream code names the genuine model,
@@ -114,6 +140,14 @@ pub use rehydrate::{
 pub use affordance::{
     rehydrate_affordances, AffordanceIntent, AffordanceRehydrateError, AffordanceSnapshot,
     AffordanceSurface, CellAffordance, EffectSummary, FireError, SurfaceBoundary,
+};
+pub use game::{
+    demo_skirmish, game_cell, side_rights, AgentPlayer, Board, Coord, IllegalMove, MoveOutcome,
+    PlayerView, Side, TileView, Unit,
+};
+pub use vision_predicate::{
+    register_vision_verifier, verify_vision_proof, FogVisionProducer, FogVisionVerifier,
+    VisionKeypair, VisionProgram,
 };
 // Re-export the REAL turn `Effect` so downstream code (and the demo) names the
 // genuine effect the executor runs as an affordance's template — not a parallel one.

@@ -73,41 +73,111 @@ steel into those bones:
 - + wire in **rehydration / frustum-snapshots** (`starbridge-web-surface`) as a new
   framework capability (snapshot an app surface, a peer rehydrates their attenuated view).
 
-## The forcing function: a deos webgame (fog-of-war IS the membrane)
+## The forcing function, BUILT: a deos webgame (fog-of-war IS the membrane)
+
+*(BUILT 2026-06-14. `starbridge-web-surface/src/game.rs` + `src/vision_predicate.rs`
++ `examples/fog_of_war_demo.rs`, on the just-landed affordance + membrane steel. The
+flagship exemplar exists and runs: `cd starbridge-web-surface && cargo run --example
+fog_of_war_demo` narrates a short hidden-information grid skirmish; `--headless` exits
+0. 78 lib tests + 4 integration green. Keystone tests:
+`no_peek_a_player_cannot_rehydrate_an_enemy_tile` (the lattice/membrane axis) and
+`no_peek_for_real_only_the_secret_holder_can_prove_vision` (the PROOF-BACKED axis).)*
 
 The sharpest exemplar is a multiplayer game, because the deos novelty *is a game
-mechanic made into a security property*:
+mechanic made into a security property*. The built game (`game.rs`) is a 5×5 grid
+skirmish where **what a player can SEE is exactly what its caps authorize it to
+rehydrate** — fog of war as a **cap-confinement property**, not a client-side
+visibility flag:
 
-- **Fog of war = the membrane's per-viewer projection.** In a normal game, "what you
-  can see" is a rendering trick the client could cheat. In deos, what an agent can see
-  is *what its caps authorize it to rehydrate* — the membrane will not project the
-  enemy's hidden state to you, and the rehydration is cap-gated + verified, so
-  **you provably cannot peek**. Fog of war stops being client-side honor-system and
-  becomes a confinement theorem.
-- **Moves = affordances** (cap-gated verified turns) → **anti-cheat is free** (an
-  illegal move is a refused turn; the witness-graph records who did what).
-- **Multiplayer = the web-of-cells** (each player a cell; the board a shared cell;
-  federation is the lobby).
-- **Agents-as-players** — AI opponents/allies are first-class users firing the same
-  affordances, attenuated by the same caps. *This* is "agentic desktop."
-- **Spectating = rehydratable frustum-snapshots** — share a snapshot; a spectator
-  rehydrates a *fog-of-war-respecting* view (they see only what their spectator-cap
-  authorizes), and the liveness-type tells them live-vs-replay.
+- **Fog of war = the membrane's per-viewer projection** (`Board::project_for`), backed
+  by a genuine **proof obligation** (`vision_predicate.rs`). In a normal game, "what
+  you can see" is a rendering trick the client could cheat. Here, vision rides the REAL
+  cap lattice on **three** axes:
+  1. **Player identity = `AuthRequired::Custom { vk_hash }`** — two players' identities
+     are *incomparable* (neither attenuates the other), so a tile gated to the enemy's
+     identity is un-projectable by the genuine `is_attenuation` (the membrane mints NO
+     projection — `Board::can_rehydrate_tile` → `Amplification`). This is the structural
+     refusal.
+  2. **The vision frustum = the real `fetch_allow`** allowlist of tiles a side's units
+     illuminate (`SurfaceCapability::may_fetch` per tile).
+  3. **The PROOF axis — the `vk_hash` is EARNED, not inert.** The `vk_hash` is a real
+     `canonical_predicate_vk` of a real vision *program* (the side's Ed25519 public key,
+     domain-tagged), registered in a real `WitnessedPredicateRegistry` with a genuine
+     `WitnessedPredicateVerifier` — **the same registry + dispatch the `dregg-turn`
+     executor runs for `Authorization::Custom`**. To project a side's tiles you must
+     **PRODUCE a proof the registry verifies** (an Ed25519 signature over the canonical
+     turn-bound message), via the paired `WitnessProducer` (the producer⊣verifier
+     adjunction). It is **fail-closed and EUF-CMA**: a player holding only its own side's
+     secret literally *cannot construct* a verifying proof for the enemy's vision
+     (`VisionGateError::NoSecretForSide`), and a forged proof (signed with the wrong
+     key) is rejected by the real verifier. The keystone `no_peek_for_real_…` proves
+     this; the demo's step (ii-b) narrates it live.
 
-A fog-of-war strategy game (or a hidden-information card game) is the smallest thing
-that EXERCISES every hard part (interactive tempo, distribution, agent-as-user,
-rehydration) and EXEMPLIFIES deos (the security properties ARE the game mechanics).
-It is "htmx on crack" you can play.
+  So "**you provably cannot peek**" is no longer the lattice-incomparability pun alone
+  (which left the `vk_hash` an inert tag) — it is a real proof obligation: *you cannot
+  even prove the enemy's vision.* Fog of war stops being honor-system and becomes a
+  confinement theorem with cryptographic teeth.
+- **Moves = affordances** (cap-gated verified turns — each legal move is a real
+  `CellAffordance` firing a real `dregg_turn::Effect::SetField`) → **anti-cheat is
+  free**: an unauthorized move (e.g. Red firing Blue's move) is a refused turn
+  (`FireError::Unauthorized`), the SAME `is_attenuation` gate, in-band.
+- **Multiplayer = the web-of-cells** (each player a cell; the board a shared cell
+  published into a real `WebOfCells`; every tile a cell).
+- **Agents-as-players** (`AgentPlayer`) — an AI opponent fires the SAME cap-gated
+  affordances as a human; its action space IS its attenuated cap set, so it cannot
+  cheat any more than a human can. *This* is "agentic desktop."
+- **Spectating = rehydratable frustum-snapshots** (`Board::snapshot_for`) — a
+  spectator rehydrates a *fog-of-war-respecting* view (a Blue-gated spectator's
+  snapshot names NO Red moves; their membrane refuses Red's facet), and the
+  `Rehydration` liveness-type tells them live-vs-replay.
+
+The fog-of-war skirmish is the smallest thing that EXERCISES every hard part
+(distribution, agent-as-user, rehydration) and EXEMPLIFIES deos (the security
+properties ARE the game mechanics). It is "htmx on crack" you can play.
+
+**The two tiers of the vision proof (honest):** the proof obligation above is
+**Tier A** — a genuine `WitnessedPredicateVerifier` whose `vk_hash =
+canonical_predicate_vk(bytes)`, registered in the real registry, verifying a real
+Ed25519 knowledge-of-secret proof, fail-closed, producer⊣verifier round-tripped. It is
+sound (only the secret-holder can prove a side's vision; forgeries rejected) and needs
+no circuit crate, so it lives in the standalone `starbridge-web-surface`. **Tier B** is
+the *zero-knowledge* form: a `dregg-circuit` AIR for the vision predicate with a layered
+`canonical_predicate_vk_v2(air_fingerprint, …)` hash, proven by plonky3 and verified by
+the circuit-backed verifier the executor installs (a real STARK, not a signature). Tier
+B **cannot** live in this crate — `dregg-cell` must not depend on `dregg-circuit` (the
+design's own dependency-cycle rule, which is *why* the default registry ships
+`NotYetWiredVerifier` fail-closed for the STARK kinds and the host upgrades them). The
+obligation *shape* is identical between tiers (register a `Custom` verifier under a real
+predicate-vk; produce/verify through the registry); Tier B is a swap of the verifier's
+internal algebra (Ed25519 → STARK) + the vk recipe (`_vk` → `_vk_v2`), registered the
+same way in a `dregg-turn` integration. (A Lean model of the vision AIR — the
+`metatheory` circuit-from-Lean path — is the verified-construction route to Tier B.)
+
+**What else remains WOOD (named, not papered):** the interactive/real-time tempo (#169
+optimistic-local + verified-at-boundary) is not yet wired — the game is turn-paced;
+and the move's fired `AffordanceIntent` carries the REAL effect but handing it to a
+live `TurnExecutor` is the same inherited seam `affordance.rs` names (the game mirrors
+the move's effect onto its own board model in the interim, exactly as `MockSurface`
+advances from a gated request). The fog (now proof-backed), the moves, the agent, and
+the spectating are all the genuine cap discipline today.
 
 ## The plan (sequenced behind the HARDSWAP)
 
 - **NOW (parallel, standalone `starbridge-web-surface`, disjoint from the deputy):**
-  the affordance + frustum-snapshot stack (`a9401bb9`) — the deos UI substrate.
+  the affordance + frustum-snapshot stack (`a9401bb9`) — the deos UI substrate — AND
+  **the forcing-function webgame BUILT on it** (`game.rs` + `fog_of_war_demo.rs`):
+  fog-of-war = the membrane's per-viewer projection, the no-peek keystone, moves =
+  cap-gated affordances, an AI agent-player, and a fog-respecting spectator snapshot.
+  This proves the deos thesis end-to-end (the security property IS the game mechanic)
+  on the genuine cap discipline, standalone, without waiting for the HARDSWAP.
 - **The instant the HARDSWAP clears the root workspace + `metatheory`:**
   1. **Rebuild the app-framework as the deos-app composition** (a `deos-app` crate /
      scaffold that wires cells×affordances + pg-dregg state + the sdk surface + the
      web-of-cells distribution + rehydration; `dregg new deos-app`).
-  2. **Build the forcing-function webgame** (fog-of-war = membrane) end-to-end on it.
+  2. **Lift the standalone webgame onto the composed framework** — wire `game.rs`'s
+     moves through a live `TurnExecutor` (close the inherited intent→executed-turn
+     seam) and onto pg-dregg durable state + the web-of-cells lobby, so the skirmish
+     is a multi-node integrated deos app, not a single-process model.
   3. **The #169 tempo dial for interactive** (optimistic local + verified-at-boundary)
      so the game is real-time, not turn-paced.
   4. **Re-express 1-2 existing apps** on the new framework to prove the composition
