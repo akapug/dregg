@@ -1,0 +1,24 @@
+{
+  "id": "swarm-orchestration",
+  "name": "Verifiable Agent-Orchestration Swarm",
+  "description": "Multi-agent task coordination where the coordination is cap-secured, receipted, and verifiable. A factory-born COORDINATOR (dispatch-board) cell holds a conserved budget + a mandate and dispatches sub-tasks to WORKER agent cells via cap-attenuated grants (an over-grant is REFUSED by the verified executor's no-amplification gate); workers coordinate via the async NOTIFY edge (EmitEvent -> the recipient DRAINS in its OWN receipted turn, causality visible and independence proven by two distinct receipt hashes); the shared budget is CONSERVED (spent_a + spent_b <= budget, the affine gate) and a breach is REFUSED BEFORE it runs (fail-closed, no commit); every action leaves a receipt (narration-vs-truth). The dispatch board's installed CellProgram IS the swarm policy, re-checked by the verified executor on every turn (immutable mandate, monotone meters, strict-monotone epoch for no-replay). Rust mirror of metatheory/Dregg2/Apps/AgentOrchestrationBudget.lean (the dispatch-board POLICY, the integrator wedge) + AgentOrchestration.lean (the kernel-executor swarm with attenuated, non-amplifying delegation). Pre-submission assurance via dregg-userspace-verify::analyze (conservation + non-amplification + well-formedness).",
+  "version": "0.1.0",
+  "status": "starbridge",
+  "crate": "starbridge-swarm-orchestration",
+  "runtime_mode": "starbridge-native",
+  "caddy_prefix": "/swarm",
+  "factory_vks": [
+    "737461726272696467652d737761726d2d6f726368657374722d666163747279"
+  ],
+  "page": null,
+  "inspectors": ["swarm-board"],
+  "turn_builders": ["open_board", "dispatch", "drain_dispatch"],
+  "required_apis": ["/turn/submit", "/cells/create-from-factory", "/api/cell/{id}"],
+  "lean_module": "Dregg2.Apps.AgentOrchestrationBudget",
+  "manifest_health": {
+    "status": "starbridge-native",
+    "verified_policy": "AgentOrchestrationBudget.dispatchConstraints (affineLe budget + immutable mandate + strictMono epoch)",
+    "verified_delegation": "AgentOrchestration.worker_authority_subset_orchestrator (derive_no_amplify)",
+    "pre_submission_assurance": "dregg-userspace-verify::analyze (conservation + non-amplification + well-formedness)"
+  }
+}
