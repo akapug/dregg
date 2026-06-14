@@ -397,12 +397,22 @@ mod tests {
 
     /// The full genesis-replay ledger root (the reference recovery must reach),
     /// last-writer-wins (`CrashRecovery.replay`).
+    ///
+    /// Reconstructs via `{latest checkpoint} ⊕ cell_overlay_since(cp_height)` —
+    /// i.e. `CrashRecovery.recover`, which equals full replay (`recover_eq_replay`)
+    /// AND is stable under commit-log compaction (`checkpoint_ledger` co-drives
+    /// `compact_below`, so `commit_records_from(0)` is no longer the full history
+    /// once a checkpoint exists; the checkpoint subsumes the compacted prefix).
+    /// Falls back to a genesis full-log replay when no checkpoint exists.
     fn full_replay_root(store: &PersistentStore) -> [u8; 32] {
-        let mut ledger = Ledger::new();
-        for rec in store.commit_records_from(0).unwrap() {
-            for c in rec.touched_cells {
-                upsert_cell(&mut ledger, c);
-            }
+        let cp_height = store.latest_ledger_checkpoint_height().unwrap();
+        let mut ledger = match store.load_latest_ledger_checkpoint().unwrap() {
+            Some((_, l)) => l,
+            None => Ledger::new(),
+        };
+        let overlay = store.cell_overlay_since(cp_height).unwrap();
+        for c in overlay {
+            upsert_cell(&mut ledger, c);
         }
         ledger.root()
     }

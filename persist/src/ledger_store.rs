@@ -56,6 +56,19 @@ impl PersistentStore {
     ///
     /// The checkpoint is keyed by block height. Also updates the metadata
     /// tracking the latest ledger checkpoint height.
+    ///
+    /// CO-DRIVES COMMIT-LOG COMPACTION (the sibling of attested-root
+    /// `prune_before`): once this finalized checkpoint at `height` is durably
+    /// committed, it SUBSUMES every commit-log record whose finalized state it
+    /// folded in, so they become redundant write-ahead-log. We then drive
+    /// [`PersistentStore::compact_below`]`(height)` to bound that WAL. The
+    /// checkpoint write is committed FIRST and is the load-bearing durability;
+    /// compaction runs as its own transaction and is provably safe (it deletes
+    /// only records this just-written checkpoint at/above `height` subsumes).
+    /// A compaction error is logged but does NOT fail the checkpoint: not
+    /// compacting is always safe (the WAL merely stays larger and the next
+    /// checkpoint retries), so it never masks or rolls back the durable
+    /// checkpoint.
     pub fn checkpoint_ledger(&self, ledger: &Ledger, height: u64) -> Result<()> {
         let snapshot = ledger_to_checkpoint(ledger, height);
         let serialized =
@@ -77,6 +90,25 @@ impl PersistentStore {
             }
         }
         write_txn.commit()?;
+
+        // Co-drive compaction now that a covering checkpoint at `height` exists.
+        // Provably safe (guarded inside `compact_below`); non-fatal on error so
+        // a transient compaction failure never fails an already-durable
+        // checkpoint.
+        match self.compact_below(height) {
+            Ok(0) => {}
+            Ok(n) => tracing::debug!(
+                height,
+                compacted = n,
+                "checkpoint co-drove commit-log compaction"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                height,
+                "checkpoint-driven commit-log compaction failed (checkpoint is \
+                 durable; WAL stays larger, next checkpoint retries)"
+            ),
+        }
         Ok(())
     }
 

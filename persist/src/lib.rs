@@ -182,6 +182,10 @@ impl PersistentStore {
             let _ = write_txn.open_table(tables::IDX_TURN_BY_HASH)?;
             let _ = write_txn.open_table(tables::IDX_TURN_BY_HEIGHT_CREATOR)?;
             let _ = write_txn.open_table(tables::IDX_CELL_BY_ID)?;
+            // Compacted turn block-ids (the no-double-apply carrier for
+            // commit-log compaction: ids of applied turns whose records were
+            // compacted under a covering checkpoint — `compact_below`).
+            let _ = write_txn.open_table(tables::COMMIT_COMPACTED_BLOCK_IDS)?;
             // Forever-digest sets (restart-durable anti-replay carriers).
             let _ = write_txn.open_table(tables::FOREVER_DIGESTS)?;
             // Durable channel rosters (member→seal-pk content; the cell holds
