@@ -69,6 +69,7 @@ use std::sync::{Arc, RwLock};
 
 use dregg_cell::FactoryDescriptor;
 
+use crate::affordance::AffordanceSurface;
 use crate::cipherclerk::{AppCipherclerk, EmbeddedExecutor};
 
 // =============================================================================
@@ -284,6 +285,78 @@ impl std::fmt::Debug for InspectorRegistry {
 }
 
 // =============================================================================
+// AffordanceRegistry
+// =============================================================================
+
+/// In-process registry mapping a surface `cell` -> its [`AffordanceSurface`].
+///
+/// `docs/deos/DEOS-APPS.md` (§"the deos app model"): a deos app is a set of cells
+/// exposing **affordances** (cap-gated verified-turn templates) rendered as web
+/// surfaces. Apps register their affordance surfaces at startup via
+/// [`StarbridgeAppContext::register_affordance_surface`] — alongside the existing
+/// factories/inspectors — so the host can serve the per-viewer-projected surface
+/// descriptors and route cap-gated fires uniformly.
+///
+/// Cheap to clone (internally `Arc<RwLock<BTreeMap<..>>>`).
+#[derive(Clone, Default)]
+pub struct AffordanceRegistry {
+    inner: Arc<RwLock<BTreeMap<[u8; 32], AffordanceSurface>>>,
+}
+
+impl AffordanceRegistry {
+    /// Empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register an affordance surface, keyed by its backing cell. A later
+    /// registration for the same cell REPLACES the prior one (the surface
+    /// declaration is the app's source of truth; re-registering is how a
+    /// dev-mode reload re-publishes it). Returns the surface's cell key.
+    pub fn register(&self, surface: AffordanceSurface) -> [u8; 32] {
+        let key = *surface.cell.as_bytes();
+        self.write().insert(key, surface);
+        key
+    }
+
+    /// Look up a surface by its backing cell.
+    pub fn get(&self, cell: &dregg_types::CellId) -> Option<AffordanceSurface> {
+        self.read().get(cell.as_bytes()).cloned()
+    }
+
+    /// Number of registered surfaces.
+    pub fn len(&self) -> usize {
+        self.read().len()
+    }
+
+    /// True if the registry is empty.
+    pub fn is_empty(&self) -> bool {
+        self.read().is_empty()
+    }
+
+    /// All registered surfaces (snapshot).
+    pub fn surfaces(&self) -> Vec<AffordanceSurface> {
+        self.read().values().cloned().collect()
+    }
+
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, BTreeMap<[u8; 32], AffordanceSurface>> {
+        self.inner.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, BTreeMap<[u8; 32], AffordanceSurface>> {
+        self.inner.write().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl std::fmt::Debug for AffordanceRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AffordanceRegistry")
+            .field("count", &self.len())
+            .finish()
+    }
+}
+
+// =============================================================================
 // StarbridgeAppContext
 // =============================================================================
 
@@ -303,6 +376,10 @@ pub struct StarbridgeAppContext {
     factories: FactoryRegistry,
     /// Studio inspector descriptors registered by starbridge-apps.
     inspectors: InspectorRegistry,
+    /// Affordance surfaces registered by starbridge-apps — the cap-gated
+    /// verified-turn templates a deos app exposes (DEOS-APPS.md §"the deos app
+    /// model"). Rendered per-viewer + fired through the embedded executor.
+    affordances: AffordanceRegistry,
     /// Optional `KnownFederations` reference (the Mega-Federation
     /// registry). Held as `Arc<dyn Any + Send + Sync>` to avoid
     /// coupling app-framework to a specific federation API while
@@ -327,6 +404,7 @@ impl StarbridgeAppContext {
             executor,
             factories: FactoryRegistry::new(),
             inspectors: InspectorRegistry::new(),
+            affordances: AffordanceRegistry::new(),
             known_federations: None,
         }
     }
@@ -414,6 +492,33 @@ impl StarbridgeAppContext {
         self.inspectors.register_with(kind, factory);
     }
 
+    /// The affordance registry (shared by all mounted apps).
+    pub fn affordance_registry(&self) -> &AffordanceRegistry {
+        &self.affordances
+    }
+
+    /// Convenience: register an [`AffordanceSurface`] on the context's affordance
+    /// registry — the deos app model's third registration verb, alongside
+    /// [`Self::register_factory`] and [`Self::register_inspector`].
+    ///
+    /// `docs/deos/DEOS-APPS.md`: `register(ctx)` → also register **affordances**
+    /// (`CellAffordance` surfaces) + their caps, not just factories/inspectors. The
+    /// surface is keyed by its backing cell; the host serves its per-viewer
+    /// projection + routes cap-gated fires (through the embedded executor) for it.
+    /// Returns the surface's cell key.
+    ///
+    /// ```ignore
+    /// let doc = cclerk.cell_id();
+    /// ctx.register_affordance_surface(
+    ///     AffordanceSurface::named(doc, "doc")
+    ///         .declare(CellAffordance::new("view", AuthRequired::Signature, view_effect))
+    ///         .declare(CellAffordance::new("admin", AuthRequired::None, admin_effect)),
+    /// );
+    /// ```
+    pub fn register_affordance_surface(&self, surface: AffordanceSurface) -> [u8; 32] {
+        self.affordances.register(surface)
+    }
+
     /// Downcast the attached `KnownFederations` registry (if any) to
     /// the caller's expected concrete type.
     ///
@@ -437,6 +542,7 @@ impl std::fmt::Debug for StarbridgeAppContext {
             .field("executor", &self.executor)
             .field("factories", &self.factories)
             .field("inspectors", &self.inspectors)
+            .field("affordances", &self.affordances)
             .field("has_known_federations", &self.has_known_federations())
             .finish()
     }
@@ -574,6 +680,33 @@ mod tests {
         let j = registry.to_json();
         assert_eq!(j["name"]["component"], "dregg-name");
         assert_eq!(j["auction"]["component"], "dregg-auction");
+    }
+
+    #[test]
+    fn affordance_registry_register_and_lookup() {
+        use crate::affordance::{AffordanceSurface, CellAffordance};
+        use dregg_cell::AuthRequired;
+        use dregg_turn::action::{Effect, Event};
+
+        let (w, e) = fixture();
+        let ctx = StarbridgeAppContext::new(w, e);
+        let doc = dregg_types::CellId::from_bytes([42u8; 32]);
+        let surface = AffordanceSurface::named(doc, "doc").declare(CellAffordance::new(
+            "view",
+            AuthRequired::Signature,
+            Effect::EmitEvent {
+                cell: doc,
+                event: Event {
+                    topic: [1u8; 32],
+                    data: vec![],
+                },
+            },
+        ));
+        let key = ctx.register_affordance_surface(surface);
+        assert_eq!(key, *doc.as_bytes());
+        assert_eq!(ctx.affordance_registry().len(), 1);
+        let got = ctx.affordance_registry().get(&doc).expect("registered");
+        assert_eq!(got.all_names(), vec!["view".to_string()]);
     }
 
     #[test]

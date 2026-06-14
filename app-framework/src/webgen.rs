@@ -59,6 +59,13 @@ pub struct ConstantsModule {
     /// Extra string constants (e.g. `("FACTORY_VK_HEX", "ab…")`), emitted as
     /// `export const FACTORY_VK_HEX = "…";`.
     pub strings: Vec<(&'static str, String)>,
+    /// Affordance surface descriptors, emitted as a frozen `AFFORDANCES` object
+    /// keyed by surface name. Each carries the surface's elements (the cap-gated
+    /// affordances) with their required rights + effect kinds + the POST fire
+    /// endpoints — the page reads THIS rather than hand-copying endpoint paths +
+    /// rights labels, so the affordance UI cannot drift from the Rust declarations
+    /// (DEOS-APPS.md §"the deos app model"; same anti-drift discipline as `slots`).
+    pub affordance_surfaces: Vec<crate::affordance::SurfaceDescriptor>,
 }
 
 impl ConstantsModule {
@@ -88,6 +95,23 @@ impl ConstantsModule {
     /// Add an extra string constant (factory-vk hex, tombstone prefix, …).
     pub fn string(mut self, js_name: &'static str, value: impl Into<String>) -> Self {
         self.strings.push((js_name, value.into()));
+        self
+    }
+
+    /// Add an **affordance surface descriptor** — the cap-gated verified-turn
+    /// affordances a deos cell exposes, rendered for the page from the Rust source
+    /// of truth.
+    ///
+    /// `docs/deos/DEOS-APPS.md`: `webgen` grows from "emit JS constants" to render
+    /// the affordance SURFACE. Build the descriptor from the live
+    /// [`crate::affordance::AffordanceSurface`] (e.g.
+    /// `surface.descriptor("/doc-affordances")`) so the JS knows each affordance's
+    /// name, the rights a viewer must hold, the effect kind it fires, and the POST
+    /// endpoint that fires it (cap-gated) — WITHOUT the page ever re-declaring those
+    /// strings. The emitted `AFFORDANCES.<surface>` object is the anti-drift mirror
+    /// of the Rust declarations, the same way `TOPICS` mirrors the `symbol()` calls.
+    pub fn affordance_surface(mut self, descriptor: crate::affordance::SurfaceDescriptor) -> Self {
+        self.affordance_surfaces.push(descriptor);
         self
     }
 
@@ -138,6 +162,47 @@ impl ConstantsModule {
             let _ = writeln!(s, "export const TOPICS = Object.freeze({{");
             for (key, topic) in &self.topics {
                 let _ = writeln!(s, "  {}: {},", key, js_string(topic));
+            }
+            let _ = writeln!(s, "}});");
+        }
+
+        if !self.affordance_surfaces.is_empty() {
+            if !self.topics.is_empty() {
+                s.push('\n');
+            }
+            let _ = writeln!(
+                s,
+                "// Affordance surfaces (mirror the `AffordanceSurface` declarations in\n\
+                 // src/lib.rs). Each element is a cap-gated verified-turn affordance: its\n\
+                 // required rights, the effect kind it fires, and the POST endpoint that\n\
+                 // fires it. The page renders the buttons from THIS — never re-declaring\n\
+                 // the endpoint paths or rights labels (anti-drift)."
+            );
+            let _ = writeln!(s, "export const AFFORDANCES = Object.freeze({{");
+            for desc in &self.affordance_surfaces {
+                let _ = writeln!(s, "  {}: Object.freeze({{", js_string(&desc.surface));
+                let _ = writeln!(s, "    cell: {},", js_string(&desc.cell_hex));
+                let _ = writeln!(s, "    routePrefix: {},", js_string(&desc.route_prefix));
+                let _ = writeln!(
+                    s,
+                    "    projectedEndpoint: {},",
+                    js_string(&desc.projected_endpoint)
+                );
+                let _ = writeln!(s, "    elements: Object.freeze([");
+                for el in &desc.elements {
+                    let _ = writeln!(s, "      Object.freeze({{");
+                    let _ = writeln!(s, "        name: {},", js_string(&el.name));
+                    let _ = writeln!(
+                        s,
+                        "        requiredRights: {},",
+                        js_string(&el.required_rights)
+                    );
+                    let _ = writeln!(s, "        effectKind: {},", js_string(&el.effect_kind));
+                    let _ = writeln!(s, "        fireEndpoint: {},", js_string(&el.fire_endpoint));
+                    let _ = writeln!(s, "      }}),");
+                }
+                let _ = writeln!(s, "    ]),");
+                let _ = writeln!(s, "  }}),");
             }
             let _ = writeln!(s, "}});");
         }
@@ -220,6 +285,55 @@ mod tests {
     #[test]
     fn js_string_escapes() {
         assert_eq!(js_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    }
+
+    #[test]
+    fn affordance_surface_renders_anti_drift_descriptor() {
+        use crate::affordance::{AffordanceSurface, CellAffordance};
+        use dregg_cell::AuthRequired;
+        use dregg_turn::action::{Effect, Event};
+
+        let doc = dregg_types::CellId::from_bytes([5u8; 32]);
+        let surface = AffordanceSurface::named(doc, "doc")
+            .declare(CellAffordance::new(
+                "view",
+                AuthRequired::Signature,
+                Effect::EmitEvent {
+                    cell: doc,
+                    event: Event { topic: [1u8; 32], data: vec![] },
+                },
+            ))
+            .declare(CellAffordance::new(
+                "edit",
+                AuthRequired::Either,
+                Effect::SetField { cell: doc, index: 1, value: [0u8; 32] },
+            ));
+
+        let m = ConstantsModule::new("doc-app")
+            .slot("DOC_BODY_SLOT", 1)
+            .affordance_surface(surface.descriptor("/doc-affordances"));
+
+        let a = m.render_js();
+        let b = m.render_js();
+        assert_eq!(a, b, "render must be deterministic");
+
+        // The slots still render.
+        assert!(a.contains("export const DOC_BODY_SLOT = 1;"));
+        // The affordance surface renders as a frozen object the page reads.
+        assert!(a.contains("export const AFFORDANCES = Object.freeze("));
+        assert!(a.contains("\"doc\": Object.freeze("));
+        // Each element carries its required rights, effect kind, and fire endpoint —
+        // from the Rust source of truth (anti-drift).
+        assert!(a.contains("name: \"view\","));
+        assert!(a.contains("requiredRights: \"Signature\","));
+        assert!(a.contains("effectKind: \"EmitEvent\","));
+        assert!(a.contains("fireEndpoint: \"/doc-affordances/fire/view\","));
+        assert!(a.contains("name: \"edit\","));
+        assert!(a.contains("requiredRights: \"Either\","));
+        assert!(a.contains("effectKind: \"SetField\","));
+        assert!(a.contains("fireEndpoint: \"/doc-affordances/fire/edit\","));
+        // The projection endpoint is named.
+        assert!(a.contains("projectedEndpoint: \"/doc-affordances/projected\","));
     }
 
     #[test]
