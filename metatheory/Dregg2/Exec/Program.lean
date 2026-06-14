@@ -191,6 +191,47 @@ inductive SimpleConstraint where
   i-confluent only under the single serializer (n=1). NOT i-confluent. FAIL-CLOSED on an absent
   pre- OR post-balance. Admit-char: `evalSimpleCtx_balanceDeltaGe_iff`. -/
   | balanceDeltaGe (min : Int)
+  /-- **`balanceDeltaLeField rateField`** (apps gap 3 — the FIELD-VALUED rate ceiling) — a rate
+  bound whose limit is READ FROM A STATE FIELD, not a literal: admits iff `new.balance − old.balance ≤
+  new[rateField]`. The `balanceDeltaLe` twin whose ceiling is a governed parameter rather than a baked
+  constant — a TIER UPGRADE that raises `new[rateField]` raises the allowed per-turn movement WITHOUT a
+  program rewrite (the seam both apps lanes hit: a plan stores its rate in a slot a governance turn can
+  lift). Reads the sealed kernel balances (`TurnCtx.balanceBefore`/`TurnCtx.balance`, like
+  `balanceDeltaLe`) AND the post-record's `rateField` scalar (`new.scalar rateField`). Mirrors a
+  `SimpleStateConstraint::BalanceDeltaLteField { rate_field }` reading `old_balance`/`new_balance` from
+  the executor context and `rate_field` from the post-state (the field-bound generalization of
+  `BalanceDeltaLte`). COST (§8): the BOUNDED / ordering pole — a rate-bound on the decrementable balance
+  is i-confluent only under the single serializer (n=1), exactly as `balanceDeltaLe`; the bound being a
+  field-read (not a literal) does not change the confluence class. FAIL-CLOSED on an absent pre- OR
+  post-balance, AND on an absent/ill-typed `rateField` (no rate ⇒ no allowance ⇒ reject — the
+  conservative reading: a missing tier field grants ZERO rate, never an unbounded one). Admit-char:
+  `evalSimpleCtx_balanceDeltaLeField_iff`. -/
+  | balanceDeltaLeField (rateField : FieldName)
+  /-- **`wakeOnResolve stateField resolvedValue badge`** (apps gap 4 — the PROGRAM-ENFORCED async
+  wake) — the NOTIFY DUAL of the `balanceLe`-on-resolve drain tooth. A turn that drives `new[stateField]
+  = resolvedValue` (a state machine reaching its RESOLVED/RELEASED terminal) MUST also have FIRED the
+  async wake carrying `badge` — the executor's emitted-wake set (`TurnCtx.emittedWakes`, the badges the
+  turn's `signal`s actually OR'd, the Rust carrier being the per-turn notify-emission log the executor
+  accumulates while applying effects) must contain `badge`. Otherwise the turn is REJECTED. When the
+  transition does NOT reach `resolvedValue` the clause is DORMANT (vacuously admitted) — exactly the
+  `anyOf [.not (.fieldEquals state R), …]`-on-resolve shape, here for the wake instead of a balance
+  bound.
+
+  THE WELD: today the `notify` cap-algebra (`Firmament/NotifyAuthority.lean` `signalGated`/`NotifyCap`)
+  is proved in a SEPARATE section from `RecordProgram`; *"a turn driving state→RESOLVED also fires the
+  wake"* is DOCUMENTED, not enforced. This atom makes it a PROGRAM CLAUSE: the cell program REQUIRES the
+  wake as a condition of admitting the resolving turn, so the state transition and the async signal are
+  welded — a resolve that forgets to notify is UNSAT, the dual of a resolve that forgets to drain. The
+  ctx carrier (`emittedWakes`) is the seam, exactly as `revealedHash`/`exhibitedCommit` carry the §8
+  crypto-portal output without importing the crypto: the badge-OR object + the cap-gated `signalGated`
+  stay in the firmament; this atom only witnesses that the wake WAS emitted in this turn.
+
+  COST (§8): FREE / i-confluent — a predicate over the single turn's own emitted-wake set and post-state
+  (no cross-turn invariant; the wake is a fact of THIS turn, like `senderIs`). FAIL-CLOSED on a resolving
+  transition whose `emittedWakes` lacks the badge (the un-notified resolve), and in the ctx-less
+  evaluator (no emitted-wake set ⇒ a resolving transition cannot witness the wake ⇒ reject). Admit-char:
+  `evalSimpleCtx_wakeOnResolve_iff`. -/
+  | wakeOnResolve (stateField : FieldName) (resolvedValue : Int) (badge : Int)
   deriving Repr
 
 /-- **The full state-constraint catalog** — simple constraints plus the cross-slot,
@@ -255,6 +296,21 @@ inductive StateConstraint where
   keeps it safe today (n=1), n>1 forces ordering. NOT i-confluent (a rate gate is never
   coordination-free in general). Admit-char: `evalConstraint_affineDeltaLe_iff`. -/
   | affineDeltaLe (terms : List (Int × FieldName)) (c : Int)
+  /-- **`affineDeltaLeField terms rateField`** (apps gap 3 — the FIELD-VALUED multi-field rate gate):
+  `Σ cᵢ·(new[fᵢ] − old[fᵢ]) ≤ new[rateField]`. The `affineDeltaLe` twin whose bound is READ FROM A
+  STATE FIELD instead of being a baked literal — the general record-only rate gate a tier upgrade can
+  lift by raising `new[rateField]` (no program rewrite). Subsumes the single-field balance-record rate
+  as `affineDeltaLeField [(1, "balance")] rateField`, and the combined-outflow budget as
+  `affineDeltaLeField [(1,"out_a"),(1,"out_b")] "budget"`. Distinct from the literal-bound `affineDeltaLe`
+  (its `c` is now a slot read) and from `affineDeltaLe` over a fixed `c`: here the ceiling itself is
+  governed state. Maps to a PLONK linear gate over the `(old, new)` wire pair plus the `rateField` wire.
+  FAIL-CLOSED: any absent/ill-typed term field on EITHER side ⇒ `false` (the delta is not evaluable),
+  AND an absent/ill-typed `rateField` ⇒ `false` (a missing rate grants ZERO allowance — the conservative
+  reading, never an unbounded bound). COST (§8): the BOUNDED / ordering pole — a per-turn change-bound on
+  generally-decrementable quantities is the `bounded_resource_not_iconfluent` case under concurrent
+  writers; the bound being a field-read does not change the class (n=1 serial keeps it safe). NOT
+  i-confluent. Admit-char: `evalConstraint_affineDeltaLeField_iff`. -/
+  | affineDeltaLeField (terms : List (Int × FieldName)) (rateField : FieldName)
   deriving Repr
 
 /-! ## Evaluation — the executable admissibility check. -/
@@ -341,6 +397,17 @@ def evalSimple : SimpleConstraint → Value → Value → Bool
   | .senderMemberOf _,  _,   _   => false
   | .balanceDeltaLe _,  _,   _   => false
   | .balanceDeltaGe _,  _,   _   => false
+  -- `balanceDeltaLeField` reads the SEALED balances (ctx) — no balance in scope here, so FAIL CLOSED
+  -- (mirrors `balanceDeltaLe`; the ctx-aware semantics live in `evalSimpleCtx`).
+  | .balanceDeltaLeField _, _, _ => false
+  -- `wakeOnResolve`: the clause is DORMANT (admit) on a non-resolving transition even ctx-less (so a
+  -- cell carrying it does not reject its ordinary turns); but a RESOLVING transition (new[state] =
+  -- resolvedValue) FAILS CLOSED ctx-less — there is no emitted-wake set to witness the required wake.
+  -- The ctx-aware semantics (reading `emittedWakes`) live in `evalSimpleCtx`.
+  | .wakeOnResolve sf rv _, _, new =>
+      match new.scalar sf with
+      | some v => !(v == rv)        -- resolving ⇒ reject (no wake witness ctx-less); not resolving ⇒ admit
+      | none   => true             -- state field absent ⇒ not resolving ⇒ dormant ⇒ admit
 
 /-- **Evaluate a full state constraint** against `(old, new)`. -/
 def evalConstraint : StateConstraint → Value → Value → Bool
@@ -386,6 +453,10 @@ def evalConstraint : StateConstraint → Value → Value → Bool
   | .affineDeltaLe terms c, old, new =>
       match affineDeltaSum old new terms with
       | some s => intLe s c | none => false       -- absent/ill-typed term field (either side) ⇒ fail-closed
+  | .affineDeltaLeField terms rateField, old, new =>
+      match affineDeltaSum old new terms, new.scalar rateField with
+      | some s, some bound => intLe s bound       -- Σ cᵢ·Δfieldᵢ ≤ new[rateField] (the FIELD-VALUED bound)
+      | _,      _          => false               -- absent term field OR absent rate field ⇒ fail-closed
 
 /-! ## RecordProgram + TransitionGuard dispatch + default-deny. -/
 
@@ -616,6 +687,23 @@ theorem evalConstraint_affineDeltaLe_iff (terms : List (Int × FieldName)) (c : 
   | none   => simp [h]
   | some s => simp [h, intLe]
 
+/-- **`affineDeltaLeField` admit-char (apps gap 3 — FIELD-VALUED rate bound).** Admits IFF every
+term-field reads on BOTH sides (the delta `s` is evaluable) AND the post-record carries a `rateField`
+scalar `bound`, AND `Σ cᵢ·(new[fᵢ] − old[fᵢ]) ≤ bound`. The bound is a STATE READ, so a tier upgrade
+raising `new[rateField]` raises the allowance; an absent rate field fails closed (no rate ⇒ zero
+allowance). -/
+theorem evalConstraint_affineDeltaLeField_iff (terms : List (Int × FieldName)) (rateField : FieldName)
+    (o n : Value) :
+    evalConstraint (.affineDeltaLeField terms rateField) o n = true ↔
+      ∃ s bound, affineDeltaSum o n terms = some s ∧ n.scalar rateField = some bound ∧ s ≤ bound := by
+  unfold evalConstraint
+  cases h : affineDeltaSum o n terms with
+  | none   => simp [h]
+  | some s =>
+    cases hr : n.scalar rateField with
+    | none   => simp [h, hr]
+    | some bound => simp [h, hr, intLe]
+
 /-- **`reachable` ⇒ semantic dominance (soundness).** An admitted `reachable` means the
 source-field's label `dominates`/reaches `toLabel` in `g` (lifting `dominatesD` to the
 `Prop`-level closure via the proved-sound `dominates_of_dominatesD`). The DAG-prerequisite teeth. -/
@@ -779,6 +867,33 @@ example : evalConstraint (.affineDeltaLe [(1,"a"),(1,"b")] 5)
 example : evalConstraint (.affineDeltaLe [(1,"a"),(1,"b")] 5)
   (.record [("a", .int 0),("b", .int 0)]) (.record [("a", .int 4),("b", .int 3)]) = false := by decide
 
+-- affineDeltaLeField (apps gap 3): the COMBINED outflow rate is bounded by a GOVERNED `rate` slot,
+-- not a literal — a tier upgrade that raises `rate` raises the allowance with no program rewrite.
+def tieredBudgetProgram : RecordProgram := .predicate [.affineDeltaLeField [(1, "out_a"), (1, "out_b")] "rate"]
+-- ADMIT (basic tier, rate 5): Δout_a +2, Δout_b +3 → combined +5 ≤ rate 5.
+#guard (tieredBudgetProgram.admits 0
+  (.record [("out_a", .int 10), ("out_b", .int 20), ("rate", .int 5)])
+  (.record [("out_a", .int 12), ("out_b", .int 23), ("rate", .int 5)]))           -- true  (Σ delta 5 ≤ 5)
+-- REJECT (basic tier, rate 5): combined +7 > rate 5 (the over-budget withdrawal).
+#guard (tieredBudgetProgram.admits 0
+  (.record [("out_a", .int 10), ("out_b", .int 20), ("rate", .int 5)])
+  (.record [("out_a", .int 14), ("out_b", .int 23), ("rate", .int 5)])) == false   -- false (Σ delta 7 > 5)
+-- ADMIT (UPGRADED tier, rate 10): the SAME +7 combined outflow now ADMITS — the field-valued bound
+-- lifted (the tier upgrade the apps lanes needed: raise the slot, not rewrite the program).
+#guard (tieredBudgetProgram.admits 0
+  (.record [("out_a", .int 10), ("out_b", .int 20), ("rate", .int 10)])
+  (.record [("out_a", .int 14), ("out_b", .int 23), ("rate", .int 10)]))           -- true  (Σ delta 7 ≤ 10)
+-- REJECT (absent rate field): no tier ⇒ ZERO allowance ⇒ fail-closed even on a tiny delta.
+#guard (tieredBudgetProgram.admits 0
+  (.record [("out_a", .int 10), ("out_b", .int 20)])
+  (.record [("out_a", .int 11), ("out_b", .int 20)])) == false                     -- false (rate absent)
+example : evalConstraint (.affineDeltaLeField [(1,"a")] "r")
+  (.record [("a", .int 0),("r", .int 5)]) (.record [("a", .int 5),("r", .int 5)]) = true := by decide
+example : evalConstraint (.affineDeltaLeField [(1,"a")] "r")
+  (.record [("a", .int 0),("r", .int 5)]) (.record [("a", .int 6),("r", .int 5)]) = false := by decide
+example : evalConstraint (.affineDeltaLeField [(1,"a")] "r")
+  (.record [("a", .int 0)]) (.record [("a", .int 1)]) = false := by decide   -- rate field absent ⇒ reject
+
 -- reachable: a workflow `step` field must reach the prerequisite marker `done` (id 1) in the DAG.
 -- DAG: step-id 2 (review) reaches 1 (drafted); step-id 3 (publish) reaches 2 reaches 1.
 def workflowDag : ClearanceGraph :=
@@ -802,6 +917,7 @@ example : evalConstraint (.reachable workflowDag "step" (Label.id 1)) (.record [
 #assert_axioms evalConstraint_affineLe_iff
 #assert_axioms evalConstraint_affineEq_iff
 #assert_axioms evalConstraint_affineDeltaLe_iff
+#assert_axioms evalConstraint_affineDeltaLeField_iff
 #assert_axioms evalConstraint_reachable_sound
 
 /-! ## Turn-context evaluation (`docs/CELL-PROGRAM-LANGUAGE.md` §3).
@@ -846,6 +962,14 @@ structure TurnCtx where
   `revealedHash` for `preimageGate`, the hash binding itself is the crypto portal; the
   ordering/counting laws are proved here. Absence fails closed. -/
   exhibitedCommit : Option Int := none
+  /-- The badges the turn's async wakes ACTUALLY fired (`wakeOnResolve`, apps gap 4): the
+  emitted-wake set the executor accumulates while applying the turn's effects (each cap-gated
+  `Firmament.NotifyAuthority.signalGated` that COMMITTED OR'd its masked badge; this is the per-turn
+  log of those badges). The seam that lets a cell PROGRAM require an async wake on a state transition
+  WITHOUT importing the firmament's notify object — exactly as `revealedHash`/`exhibitedCommit` carry a
+  §8 crypto-portal output. APPENDED (so existing `TurnCtx { … }` literals and the empty context are
+  unchanged); a resolving transition whose required badge is absent here FAILS CLOSED. -/
+  emittedWakes : List Int := []
   deriving Repr
 
 /-- The empty context: every context atom fails closed under it. -/
@@ -884,6 +1008,12 @@ def evalSimpleCtx (ctx : TurnCtx) : SimpleConstraint → Value → Value → Boo
   | .balanceDeltaGe mn, _,   _   => match ctx.balanceBefore, ctx.balance with
                                     | some a, some b => intLe mn (b - a)
                                     | _,      _      => false
+  | .balanceDeltaLeField rf, _, new => match ctx.balanceBefore, ctx.balance, new.scalar rf with
+                                    | some a, some b, some bound => intLe (b - a) bound
+                                    | _,      _,      _          => false
+  | .wakeOnResolve sf rv badge, _, new => match new.scalar sf with
+                                    | some v => !(v == rv) || ctx.emittedWakes.contains badge
+                                    | none   => true   -- not resolving (state field absent) ⇒ dormant
   | .not c,             old, new => !(evalSimpleCtx ctx c old new)
   | c,                  old, new => evalSimple c old new
 
@@ -917,6 +1047,18 @@ theorem evalSimpleCtx_empty (c : SimpleConstraint) (o n : Value) :
     evalSimpleCtx TurnCtx.empty c o n = evalSimple c o n := by
   induction c with
   | not c ih => simp only [evalSimpleCtx, evalSimple]; rw [ih]
+  | wakeOnResolve sf rv badge =>
+    -- under the empty ctx, `emittedWakes = []`, so `[].contains badge = false` and the `|| false`
+    -- collapses to the ctx-less `!(v == rv)`; the absent-state branch is `true` on both sides.
+    show (match n.scalar sf with
+          | some v => !(v == rv) || TurnCtx.empty.emittedWakes.contains badge
+          | none   => true)
+        = (match n.scalar sf with | some v => !(v == rv) | none => true)
+    cases n.scalar sf with
+    | none   => rfl
+    | some v =>
+      have hc : TurnCtx.empty.emittedWakes.contains badge = false := rfl
+      simp only [hc, Bool.or_false]
   | _ => rfl
 
 /-- `evalConstraintCtx` under the empty context is `evalConstraint`. -/
@@ -1026,6 +1168,98 @@ theorem evalSimpleCtx_balanceDeltaGe_iff (ctx : TurnCtx) (mn : Int) (o n : Value
     cases hb : ctx.balance with
     | none   => simp
     | some b => simp [intLe, decide_eq_true_eq]
+
+/-- **`balanceDeltaLeField` admit-char (apps gap 3 — FIELD-VALUED rate ceiling).** Admits IFF BOTH
+the pre- and post-turn sealed balances are present AND the post-record carries the `rateField` scalar
+`bound` AND the per-turn change is at most that field-read bound: `new.balance − old.balance ≤
+new[rateField]`. The `balanceDeltaLe` twin whose ceiling is governed STATE (a tier upgrade lifts it);
+an absent pre/post balance OR an absent `rateField` fails closed. -/
+theorem evalSimpleCtx_balanceDeltaLeField_iff (ctx : TurnCtx) (rf : FieldName) (o n : Value) :
+    evalSimpleCtx ctx (.balanceDeltaLeField rf) o n = true ↔
+      ∃ a b bound, ctx.balanceBefore = some a ∧ ctx.balance = some b ∧
+        n.scalar rf = some bound ∧ b - a ≤ bound := by
+  unfold evalSimpleCtx
+  cases ha : ctx.balanceBefore with
+  | none   => simp
+  | some a =>
+    cases hb : ctx.balance with
+    | none   => simp
+    | some b =>
+      cases hr : n.scalar rf with
+      | none   => simp
+      | some bound => simp [intLe, decide_eq_true_eq]
+
+/-- **`balanceDeltaLeField` fails closed without an executor stamp** — a ctx-less / legacy
+evaluation (no sealed balance in scope) can never satisfy the field-valued rate gate. -/
+theorem evalSimpleCtx_balanceDeltaLeField_absent_balance_refuses (ctx : TurnCtx) (rf : FieldName)
+    (o n : Value) (h : ctx.balance = none) :
+    evalSimpleCtx ctx (.balanceDeltaLeField rf) o n = false := by
+  cases ha : ctx.balanceBefore <;> simp [evalSimpleCtx, ha, h]
+
+/-- **`balanceDeltaLeField` fails closed on an absent rate field** — a missing tier field grants ZERO
+allowance (the conservative reading), never an unbounded rate. -/
+theorem evalSimpleCtx_balanceDeltaLeField_absent_rate_refuses (ctx : TurnCtx) (rf : FieldName)
+    (o n : Value) (h : n.scalar rf = none) :
+    evalSimpleCtx ctx (.balanceDeltaLeField rf) o n = false := by
+  cases ha : ctx.balanceBefore <;> cases hb : ctx.balance <;> simp [evalSimpleCtx, ha, hb, h]
+
+/-- The ctx-LESS evaluator fails closed on `balanceDeltaLeField` (definitional). -/
+theorem evalSimple_balanceDeltaLeField_fails (rf : FieldName) (o n : Value) :
+    evalSimple (.balanceDeltaLeField rf) o n = false := rfl
+
+/-! ### THE program-enforced wake-on-transition atom (apps gap 4 — the notify weld). -/
+
+/-- **`wakeOnResolve` admit-char ON THE RESOLVING TRANSITION (the weld keystone).** When the transition
+DRIVES the state field to the resolved value (`new[stateField] = resolvedValue`), the clause admits IFF
+the turn's emitted-wake set contains the required `badge` — the async wake MUST have fired. This is the
+program-level requirement that welds the state transition to the notify: a resolve that forgets to wake
+is UNSAT, the dual of a resolve that forgets to drain (`balanceLe`-on-resolve). -/
+theorem evalSimpleCtx_wakeOnResolve_resolving_iff (ctx : TurnCtx) (sf : FieldName) (rv badge : Int)
+    (o n : Value) (hres : n.scalar sf = some rv) :
+    evalSimpleCtx ctx (.wakeOnResolve sf rv badge) o n = true ↔
+      ctx.emittedWakes.contains badge = true := by
+  unfold evalSimpleCtx
+  rw [hres]
+  simp only [beq_self_eq_true, Bool.not_true, Bool.false_or]
+
+/-- **`wakeOnResolve` is DORMANT off the resolved value (the dual is gated, not always-on).** When the
+transition does NOT reach the resolved value (`new[stateField] ≠ resolvedValue`, including the absent
+case), the clause ADMITS regardless of the wake set — an ordinary (non-resolving) turn is unconstrained.
+So the weld fires ONLY on the resolving transition, exactly like the balance-drain tooth. -/
+theorem evalSimpleCtx_wakeOnResolve_dormant (ctx : TurnCtx) (sf : FieldName) (rv badge : Int)
+    (o n : Value) (hne : ∀ v, n.scalar sf = some v → v ≠ rv) :
+    evalSimpleCtx ctx (.wakeOnResolve sf rv badge) o n = true := by
+  unfold evalSimpleCtx
+  cases hv : n.scalar sf with
+  | none   => rfl
+  | some v =>
+    have hne' : v ≠ rv := hne v hv
+    have hbeq : (v == rv) = false := beq_eq_false_iff_ne.mpr hne'
+    simp only [hbeq, Bool.not_false, Bool.true_or]
+
+/-- **`wakeOnResolve_resolve_requires_wake` (THE TEETH, the negative direction).** A RESOLVING
+transition whose emitted-wake set does NOT contain the required badge (`emittedWakes.contains badge =
+false` — the executor applied the resolve but no `signalGated` fired the wake) is REJECTED. This is the
+program-enforced wake: you cannot drive the cell to RESOLVED without having emitted the async wake. -/
+theorem wakeOnResolve_resolve_requires_wake (ctx : TurnCtx) (sf : FieldName) (rv badge : Int)
+    (o n : Value) (hres : n.scalar sf = some rv)
+    (hno_wake : ctx.emittedWakes.contains badge = false) :
+    evalSimpleCtx ctx (.wakeOnResolve sf rv badge) o n = false := by
+  -- on the resolving transition, admit ↔ (badge ∈ emittedWakes); the wake set lacks it, so reject.
+  cases h : evalSimpleCtx ctx (.wakeOnResolve sf rv badge) o n with
+  | false => rfl
+  | true =>
+    have hcontains : ctx.emittedWakes.contains badge = true :=
+      (evalSimpleCtx_wakeOnResolve_resolving_iff ctx sf rv badge o n hres).mp h
+    rw [hno_wake] at hcontains; exact absurd hcontains (by simp)
+
+/-- The ctx-LESS evaluator REJECTS a resolving `wakeOnResolve` (no emitted-wake set to witness the
+required wake) and ADMITS a non-resolving one (dormant). The conservative-extension shape: ctx-less, a
+resolving transition cannot witness the wake, so it fails closed. -/
+theorem evalSimple_wakeOnResolve_resolving_fails (sf : FieldName) (rv badge : Int) (o n : Value)
+    (hres : n.scalar sf = some rv) :
+    evalSimple (.wakeOnResolve sf rv badge) o n = false := by
+  simp only [evalSimple, hres, beq_self_eq_true, Bool.not_true]
 
 /-- **`preimageGate` admit-char.** Admits IFF a reveal was hashed AND the hash equals the
 commitment held in `new[f]`. -/
@@ -1241,6 +1475,22 @@ def boardBound : StateConstraint := .anyOf [.immutable "approve", .senderMemberO
 #guard evalSimpleCtx { balanceBefore := some 100 } (.balanceDeltaGe (-5))
   (.record []) (.record []) == false                                                   -- no post-balance ⇒ fail-closed
 
+-- balanceDeltaLeField (apps gap 3): the per-turn balance movement is bounded by a GOVERNED `rate`
+-- slot, not a literal. Basic tier (rate 5) REJECTS a +10 move; the UPGRADED tier (rate 10) ADMITS the
+-- same move (the slot lifted, no program rewrite); an absent rate field grants ZERO allowance.
+#guard evalSimpleCtx { balance := some 105, balanceBefore := some 100 } (.balanceDeltaLeField "rate")
+  (.record []) (.record [("rate", .int 5)])                                            -- +5 ≤ rate 5
+#guard evalSimpleCtx { balance := some 110, balanceBefore := some 100 } (.balanceDeltaLeField "rate")
+  (.record []) (.record [("rate", .int 5)]) == false                                   -- +10 > rate 5 (over-rate)
+#guard evalSimpleCtx { balance := some 110, balanceBefore := some 100 } (.balanceDeltaLeField "rate")
+  (.record []) (.record [("rate", .int 10)])                                           -- +10 ≤ rate 10 (UPGRADED tier)
+#guard evalSimpleCtx { balance := some 110, balanceBefore := some 100 } (.balanceDeltaLeField "rate")
+  (.record []) (.record []) == false                                                   -- no rate field ⇒ fail-closed (zero allowance)
+#guard evalSimpleCtx { balance := some 105 } (.balanceDeltaLeField "rate")
+  (.record []) (.record [("rate", .int 5)]) == false                                   -- no pre-balance ⇒ fail-closed
+-- conservative extension: fails closed under the empty context (no balance), agreeing with evalSimple.
+#guard evalSimpleCtx TurnCtx.empty (.balanceDeltaLeField "rate") (.record []) (.record [("rate", .int 5)]) == evalSimple (.balanceDeltaLeField "rate") (.record []) (.record [("rate", .int 5)])
+
 /-- The committed-escrow gate (blueprint gap 1): `state = 2 (RELEASED) ⇒ reveal the preimage
 of the commitment held in `commit`.` Composable BECAUSE `preimageGate` is a simple atom. -/
 def committedRelease : StateConstraint := .anyOf [.not (.fieldEquals "state" 2), .preimageGate "commit"]
@@ -1257,6 +1507,47 @@ def committedRelease : StateConstraint := .anyOf [.not (.fieldEquals "state" 2),
 -- Not releasing: the gate is dormant.
 #guard evalConstraintCtx {} committedRelease
   (.record []) (.record [("state", .int 1), ("commit", .int 77)])
+
+/-! ### wakeOnResolve (apps gap 4): the program-enforced async wake — the notify dual of the drain
+tooth. A turn driving `state = 2 (RESOLVED)` MUST have fired the wake carrying badge `7`; a non-resolving
+turn is dormant. -/
+
+/-- The wake-on-resolve clause: reaching `state = 2 (RESOLVED)` REQUIRES the turn to have emitted wake
+badge `7` (the escrow's "I resolved — wake the waiter" signal). -/
+def wakeOnResolveClause : StateConstraint := .simple (.wakeOnResolve "state" 2 7)
+
+-- RESOLVE + WOKE: the turn drives state→2 AND emitted wake 7 ⇒ ADMITTED (the weld is satisfied).
+#guard evalConstraintCtx { emittedWakes := [7] } wakeOnResolveClause
+  (.record [("state", .int 1)]) (.record [("state", .int 2)])
+-- RESOLVE + FORGOT TO WAKE: the turn drives state→2 but emitted NO wake (or the wrong badge) ⇒ REJECTED.
+-- The un-notified resolve is UNSAT — this is the teeth: you cannot resolve without waking.
+#guard evalConstraintCtx { emittedWakes := [] } wakeOnResolveClause
+  (.record [("state", .int 1)]) (.record [("state", .int 2)]) == false
+#guard evalConstraintCtx { emittedWakes := [9] } wakeOnResolveClause
+  (.record [("state", .int 1)]) (.record [("state", .int 2)]) == false
+-- NOT RESOLVING: the turn leaves state at 1 (or any non-2) ⇒ DORMANT (admitted regardless of wakes).
+#guard evalConstraintCtx { emittedWakes := [] } wakeOnResolveClause
+  (.record [("state", .int 0)]) (.record [("state", .int 1)])
+#guard evalConstraintCtx { emittedWakes := [] } wakeOnResolveClause
+  (.record [("state", .int 0)]) (.record [])                                    -- state absent ⇒ dormant
+-- The escrow weld in one program: resolving REQUIRES both the drain (balance ≤ 0) AND the wake (badge 7).
+-- The notify dual sits beside the balance dual — both gated on the same RESOLVED transition.
+def escrowResolveProgram : RecordProgram :=
+  .predicate [ .anyOf [.not (.fieldEquals "state" 2), .balanceLe 0]       -- drain on resolve
+             , .simple (.wakeOnResolve "state" 2 7) ]                     -- wake on resolve
+-- COMMIT: resolves, drains (balance 0), AND wakes (badge 7).
+#guard (escrowResolveProgram.admitsCtx { balance := some 0, emittedWakes := [7] } 0
+  (.record [("state", .int 1)]) (.record [("state", .int 2)]))
+-- REJECT: resolves + drains but FORGETS the wake (the notify weld bites where the drain alone would pass).
+#guard (escrowResolveProgram.admitsCtx { balance := some 0, emittedWakes := [] } 0
+  (.record [("state", .int 1)]) (.record [("state", .int 2)])) == false
+-- REJECT: resolves + wakes but FORGETS the drain (the balance dual still bites independently).
+#guard (escrowResolveProgram.admitsCtx { balance := some 40, emittedWakes := [7] } 0
+  (.record [("state", .int 1)]) (.record [("state", .int 2)])) == false
+-- conservative extension: ctx-less, a resolving wakeOnResolve fails closed (no wake set), agreeing with
+-- evalSimple; a non-resolving one is dormant on both.
+#guard evalSimpleCtx TurnCtx.empty (.wakeOnResolve "state" 2 7) (.record []) (.record [("state", .int 2)]) == evalSimple (.wakeOnResolve "state" 2 7) (.record []) (.record [("state", .int 2)])
+#guard evalSimpleCtx TurnCtx.empty (.wakeOnResolve "state" 2 7) (.record []) (.record [("state", .int 1)]) == evalSimple (.wakeOnResolve "state" 2 7) (.record []) (.record [("state", .int 1)])
 
 -- delegationEpochEquals: ADMIT when the slot equals the stamped epoch; REFUSE divergence
 -- (the forged epoch slot); REFUSE an absent stamp (legacy evaluation); REFUSE an absent slot.
@@ -1314,6 +1605,13 @@ def committedRelease : StateConstraint := .anyOf [.not (.fieldEquals "state" 2),
 #assert_axioms evalSimpleCtx_balanceLe_iff
 #assert_axioms evalSimpleCtx_balanceDeltaLe_iff
 #assert_axioms evalSimpleCtx_balanceDeltaGe_iff
+#assert_axioms evalSimpleCtx_balanceDeltaLeField_iff
+#assert_axioms evalSimpleCtx_balanceDeltaLeField_absent_balance_refuses
+#assert_axioms evalSimpleCtx_balanceDeltaLeField_absent_rate_refuses
+#assert_axioms evalSimpleCtx_wakeOnResolve_resolving_iff
+#assert_axioms evalSimpleCtx_wakeOnResolve_dormant
+#assert_axioms wakeOnResolve_resolve_requires_wake
+#assert_axioms evalSimple_wakeOnResolve_resolving_fails
 #assert_axioms evalSimpleCtx_preimageGate_iff
 #assert_axioms actorBound_owner_flips
 #assert_axioms actorBound_flip_requires_sender
