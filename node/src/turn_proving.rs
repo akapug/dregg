@@ -1314,6 +1314,104 @@ mod tests {
         assert!(proven.proof.components.has_non_revocation);
     }
 
+    /// C4 ANTI-GHOST (the rotated no-double-spend tooth, made EXPLICIT) — the freshness leg's
+    /// nullifier binding survives the rotation, and a FORGED nullifier is REJECTED *through* the
+    /// rotated path. Two halves on the SAME single-spend shape that rotates:
+    ///
+    ///  (1) HONEST: an honest single-spend freshness turn proves ROTATED, the rotated effect-vm
+    ///      leg carries the 39-element PI vector (`ROT_NULLIFIER_PI_COUNT`), and its PI[38]
+    ///      (`ROT_NULLIFIER_PI`) EQUALS the folded spent nullifier — i.e. the rotated leg actually
+    ///      PINS this turn's nullifier (`EffectVmEmitRotationV3.noteSpendV3`), a real cryptographic
+    ///      binding, not a free wire. (`honest_spend_freshness_verifies` proves the turn verifies;
+    ///      this asserts the binding LIVES on the rotated leg specifically.)
+    ///
+    ///  (2) FORGED: a turn that genuinely spends N but whose attached freshness proof attests a
+    ///      DIFFERENT item M is REJECTED by the bound verify→accept leg with `NullifierMismatch`,
+    ///      and — because this single-spend turn rotates — `effect_nullifier` is read from the
+    ///      ROTATED PI[38] (it equals `fold(N)`), proving the rejection fired on the rotated
+    ///      step-8 tooth (not the v1 offset-198 one). This is the anti-ghost evidence that the C4
+    ///      rotation did NOT weaken no-double-spend: a forged/substituted nullifier still UNSAT.
+    #[test]
+    fn flow_b_note_spend_rotated_nullifier_pin_is_antighost() {
+        use dregg_circuit::effect_vm::trace_rotated::{ROT_NULLIFIER_PI, ROT_NULLIFIER_PI_COUNT};
+
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let n = [0x9Au8; 32];
+        let previously: Vec<[u8; 32]> = (10..=15u8).map(|i| [i; 32]).collect();
+        assert!(!previously.contains(&n));
+
+        // ── (1) HONEST: the rotated leg PINS this turn's nullifier at PI[38]. ──
+        let effects = vec![note_spend_effect(n, 750)];
+        let proven = prove_and_verify_finalized_turn_freshness(
+            &alice,
+            1000,
+            0,
+            &effects,
+            [0x9Eu8; 32],
+            &n,
+            &previously,
+        )
+        .expect("honest single-spend freshness turn must prove + bound-verify (rotated)");
+
+        // It rotated (the freshness path threads the cap-less rotation witness internally).
+        let rotated_leg = proven
+            .proof
+            .composed
+            .sub_proofs
+            .iter()
+            .find(|sp| sp.label == "effect-vm-rotated")
+            .expect("the single-spend freshness turn must carry the rotated effect-vm leg (C4)");
+        // The rotated note-spend leg carries the FIFTH appended pin: a 39-element PI vector.
+        assert_eq!(
+            rotated_leg.sub_public_inputs.len(),
+            ROT_NULLIFIER_PI_COUNT,
+            "a single-spend rotated leg must publish the 39-PI note-spend vector (nullifier@38)"
+        );
+        // And PI[38] IS this turn's folded nullifier — the binding is real, not a free wire.
+        assert_eq!(
+            rotated_leg.sub_public_inputs[ROT_NULLIFIER_PI],
+            nullifier_to_field(&n),
+            "rotated PI[38] must pin the spend row's folded nullifier (EffectVmEmitRotationV3.noteSpendV3)"
+        );
+
+        // ── (2) FORGED: a freshness proof for a DIFFERENT item M is rejected THROUGH the rotated
+        // leg (effect_nullifier read from rotated PI[38] == fold(N)). ──
+        let m = [0x4Du8; 32];
+        assert_ne!(n, m);
+        let result = prove_and_verify_finalized_turn_freshness(
+            &alice,
+            1000,
+            0,
+            &effects, // genuinely spends N
+            [0x9Fu8; 32],
+            &m, // but the prover attaches freshness for M
+            &previously,
+        );
+        match result {
+            Err(FullTurnProvingError::Verify(FullTurnVerifyError::NullifierMismatch {
+                proven_item,
+                effect_nullifier,
+            })) => {
+                assert_eq!(
+                    proven_item,
+                    nullifier_to_field(&m),
+                    "the freshness leg proved item M fresh"
+                );
+                assert_eq!(
+                    effect_nullifier,
+                    nullifier_to_field(&n),
+                    "the cross-checked nullifier is THIS turn's N, read from the ROTATED PI[38] — \
+                     the rotated step-8 tooth fired (no-double-spend survived the C4 rotation)"
+                );
+            }
+            Ok(_) => panic!(
+                "ANTI-GHOST (rotated no-double-spend): a spend of N whose freshness attests a \
+                 DIFFERENT item M was ACCEPTED on the rotated leg — the C4 weld weakened the tooth!"
+            ),
+            Err(other) => panic!("expected Verify(NullifierMismatch) on the rotated leg, got {other:?}"),
+        }
+    }
+
     /// SOUNDNESS — the single-spend invariant survives the rotation. A turn with MORE THAN ONE
     /// NoteSpend must NOT commit to the rotated path: the rotated note-spend descriptor's
     /// first-row pin + the single freshness slot only faithfully cover ONE spend, so a second

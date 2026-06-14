@@ -182,20 +182,36 @@ fn build_inner_rows_v2(
     let mut rows: Vec<AggregationInnerRowV2> = Vec::with_capacity(per_cell.len());
     let mut federation_ids_seen: Vec<[u8; 32]> = Vec::new();
     for (cid, wr) in per_cell {
-        if wr.public_inputs.len() < inner_pi::ACTIVE_BASE_COUNT {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "WR for cell {:?}: PI has {} entries, expected at least {} (PI v3 layout)",
-                cid,
-                wr.public_inputs.len(),
-                inner_pi::ACTIVE_BASE_COUNT
-            )));
-        }
-        let inner_pi_vec: Vec<BabyBear> = wr.public_inputs[..inner_pi::ACTIVE_BASE_COUNT]
-            .iter()
-            .map(|&v| BabyBear::new_canonical(v))
-            .collect();
-        // The decoupled schedule block: the 49-felt window the rotated WR carries standalone.
-        let schedule_block = schedule_block_from_inner_pi(&inner_pi_vec);
+        // The decoupled schedule block: the 49-felt window. PREFER the WR's NATIVE
+        // `bilateral_schedule` when present (a rotated WR carries it standalone and has NO
+        // full v1 PI slice to project from); else FALL BACK to projecting the window out of
+        // the v1 PI vector (the unchanged legacy path — every current WR construction).
+        let schedule_block: [BabyBear; sched::WIDTH] = match &wr.bilateral_schedule {
+            Some(block) => <[BabyBear; sched::WIDTH]>::try_from(block.as_slice()).map_err(|_| {
+                TurnError::InvalidExecutionProof(format!(
+                    "WR for cell {:?}: native bilateral_schedule has {} felts, expected {}",
+                    cid,
+                    block.len(),
+                    sched::WIDTH
+                ))
+            })?,
+            None => {
+                if wr.public_inputs.len() < inner_pi::ACTIVE_BASE_COUNT {
+                    return Err(TurnError::InvalidExecutionProof(format!(
+                        "WR for cell {:?}: PI has {} entries, expected at least {} (PI v3 layout) \
+                         and no native bilateral_schedule",
+                        cid,
+                        wr.public_inputs.len(),
+                        inner_pi::ACTIVE_BASE_COUNT
+                    )));
+                }
+                let inner_pi_vec: Vec<BabyBear> = wr.public_inputs[..inner_pi::ACTIVE_BASE_COUNT]
+                    .iter()
+                    .map(|&v| BabyBear::new_canonical(v))
+                    .collect();
+                schedule_block_from_inner_pi(&inner_pi_vec)
+            }
+        };
 
         let counts = schedule.counts_for(cid);
         let roots = schedule.roots_for(cid, actor_nonce);
@@ -1229,6 +1245,105 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // WALL B — the NATIVE `bilateral_schedule` field is PREFERRED over the v1-PI
+    // projection by `build_inner_rows_v2`, with a correct fallback when absent.
+    // -----------------------------------------------------------------------
+
+    /// The honest 49-felt schedule block a fully-PI'd WR would project — what the rotated
+    /// producer will carry natively.
+    fn honest_schedule_block(wr: &WitnessedReceipt) -> [BabyBear; sched::WIDTH] {
+        let inner: Vec<BabyBear> = wr.public_inputs[..inner_pi::ACTIVE_BASE_COUNT]
+            .iter()
+            .map(|&v| BabyBear::new_canonical(v))
+            .collect();
+        schedule_block_from_inner_pi(&inner)
+    }
+
+    /// PREFERENCE (the core Wall B claim, ISOLATED): `build_inner_rows_v2` consumes the
+    /// WR's NATIVE `bilateral_schedule` rather than projecting the window from the PI. We give
+    /// the WR a native block that DIFFERS from its PI projection and assert the built row's
+    /// `schedule` equals the NATIVE block (not the projection). This is the rotated-WR case —
+    /// a WR whose schedule travels standalone, decoupled from a (possibly absent) full PI.
+    #[test]
+    fn build_inner_rows_v2_prefers_native_schedule_over_projection() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let projected = honest_schedule_block(&fabricate_wr(&turn, &alice));
+        // A native block deliberately DISTINCT from the projection.
+        let mut native = projected;
+        native[sched::IS_AGENT_CELL] += BabyBear::new(1);
+        assert_ne!(native, projected, "native must differ from projection for the test");
+
+        let mut alice_wr = fabricate_wr(&turn, &alice);
+        alice_wr.bilateral_schedule = Some(native.to_vec());
+
+        let (rows, _feds) =
+            build_inner_rows_v2(&turn, &[(alice, alice_wr)]).expect("rows build");
+        assert_eq!(
+            rows[0].schedule, native,
+            "build_inner_rows_v2 must use the WR's native bilateral_schedule, not the PI projection"
+        );
+
+        // And with NO native field, it FALLS BACK to the projection (byte-identical legacy).
+        let bare_wr = fabricate_wr(&turn, &alice);
+        let (rows2, _) = build_inner_rows_v2(&turn, &[(alice, bare_wr)]).expect("rows build");
+        assert_eq!(
+            rows2[0].schedule, projected,
+            "absent native schedule must fall back to the PI projection"
+        );
+    }
+
+    /// ROUND-TRIP: a bundle whose WRs carry the (honest) NATIVE schedule proves and verifies —
+    /// the native path produces a valid bundle identical to the projection path. (The brief's
+    /// literal ask: set `bilateral_schedule: Some(..)`, then `prove`/`verify` use it.)
+    #[test]
+    fn native_schedule_bundle_round_trips() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let mut alice_wr = fabricate_wr(&turn, &alice);
+        let mut bob_wr = fabricate_wr(&turn, &bob);
+        alice_wr.bilateral_schedule = Some(honest_schedule_block(&alice_wr).to_vec());
+        bob_wr.bilateral_schedule = Some(honest_schedule_block(&bob_wr).to_vec());
+
+        let entries = vec![(alice, alice_wr), (bob, bob_wr)];
+        let bundle =
+            prove_aggregated_bundle(&turn, &entries).expect("native-schedule bundle proves");
+        assert_eq!(bundle.participating_cells.len(), 2);
+        verify_aggregated_bundle(&bundle).expect("verify native-schedule bundle");
+    }
+
+    /// ANTI-GHOST (Wall B): a TAMPERED native schedule block is rejected. The corrupted
+    /// schedule disagrees with the canonical Turn's expected counts/roots, so the in-circuit
+    /// CG-3 (schedule-vs-expected) constraint is unsatisfiable and the bundle never proves.
+    #[test]
+    fn tampered_native_schedule_is_rejected() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let mut alice_wr = fabricate_wr(&turn, &alice);
+        let bob_wr = fabricate_wr(&turn, &bob);
+
+        // Forge the schedule's bilateral-counts region — a non-trivial CG-3 input. The PI stays
+        // honest (so the upstream PI cross-check passes); only the NATIVE block is corrupted,
+        // so the rejection is attributable to the schedule `build_inner_rows_v2` consumed.
+        let mut block = honest_schedule_block(&alice_wr);
+        block[sched::COUNTS_BASE] += BabyBear::new(7);
+        alice_wr.bilateral_schedule = Some(block.to_vec());
+
+        let entries = vec![(alice, alice_wr), (bob, bob_wr)];
+        let result = prove_aggregated_bundle(&turn, &entries);
+        assert!(
+            result.is_err(),
+            "ANTI-GHOST: a tampered native schedule must not aggregate, got {result:?}"
+        );
+    }
+
     /// **Happy path** — the 3-cell bilateral Transfer-and-Grant ring the
     /// brief asks for. Alice transfers to Bob, Bob grants a capability to
     /// Carol; both happen inside one Turn, all three cells participate,
@@ -1500,7 +1615,10 @@ mod tests {
             .cross_side_existence
             .as_ref()
             .expect("CG-5 proof must be attached");
-        assert_eq!(&cse.proof_bytes[0..4], b"DREG");
+        assert!(
+            !cse.proof_bytes.is_empty(),
+            "CG-5 proof must carry bytes (postcard wire since 92b41acce, not DREG magic)"
+        );
         // Full bundle verification (which now includes the algebraic CG-5
         // step) succeeds.
         verify_aggregated_bundle(&bundle).expect("verify with in-circuit CG-5");
@@ -1605,7 +1723,10 @@ mod tests {
 
         let tree = prove_aggregated_tree(vec![b1, b2]).expect("tree fold");
         assert_eq!(tree.children.len(), 2);
-        assert_eq!(&tree.outer_proof_bytes[0..4], b"DREG");
+        assert!(
+            !tree.outer_proof_bytes.is_empty(),
+            "tree-fold outer proof must carry bytes (postcard wire since 92b41acce, not DREG magic)"
+        );
         verify_aggregated_tree(&tree).expect("tree must verify");
     }
 

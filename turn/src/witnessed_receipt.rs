@@ -264,6 +264,19 @@ pub struct WitnessedReceipt {
     /// `None` in v1.
     #[serde(default)]
     pub aggregate_membership: Option<AggregateMembership>,
+    /// The NATIVE bilateral-schedule block (the 49-felt `Sched.*` window) for the
+    /// decoupled v2 aggregation path. When `Some`, `aggregate_bilateral_prover`'s
+    /// `build_inner_rows_v2` consumes this directly instead of PROJECTING the window
+    /// out of `public_inputs[inner_pi::SCHEDULE_PI_BASE..]` — which a rotated WR
+    /// (38/39-PI, no full v1 PI slice) cannot supply. `None` (the default) preserves the
+    /// existing projection fallback, so every current construction site and on-disk
+    /// artifact stays unchanged. The node-side producer populates this for rotated WRs.
+    ///
+    /// Stored as a length-49 `Vec` (not `[_; 49]`): serde's array `Deserialize` impls only
+    /// cover lengths ≤ 32, and the codebase's felt-collection wire convention is `Vec<BabyBear>`
+    /// (cf. `AggregatedBundle`). The consumer validates the length is exactly `sched::WIDTH`.
+    #[serde(default)]
+    pub bilateral_schedule: Option<Vec<dregg_circuit::field::BabyBear>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -436,6 +449,7 @@ impl WitnessedReceipt {
             witness_bundle,
             witness_hash,
             aggregate_membership: None,
+            bilateral_schedule: None,
         }
     }
 
@@ -458,6 +472,7 @@ impl WitnessedReceipt {
             witness_bundle: Some(wb),
             witness_hash: h,
             aggregate_membership: None,
+            bilateral_schedule: None,
         })
     }
 
