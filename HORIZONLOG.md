@@ -11,6 +11,38 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ⚑⚑⚑ POST-COMPACTION STATE (2026-06-14 late — READ FIRST)
+
+**THE HARDSWAP — the VK EPOCH LANDED GREEN.** Rotated IR-v2 R=24 is now the DEFAULT registry,
+v1 fallbacks retired, the −65.6% proof-size prize is LIVE (commits `6011fc77f` walls → `0802b305b`
+live-path → `d33d02107` pre-VK gauntlet → `5b3772873` VK epoch #183). The tree is GREEN + COHERENT
+(no half-deletion). **C7 grep-zero is BLOCKED — and that is the open ember-decision:** the deputy's
+deep re-trace (commits `7a8409572`/`fd478564c`/`5e71c24c2`/`afe4e0606`, see `docs/V1-DELETION-MANIFEST.md`
+buckets E/F/G) found that the v1 OLD-PROVER symbols can't be deleted yet because (E) `generate_effect_vm_trace`
+is the SHARED generator the rotated leg is BUILT ON (NOT v1 — never delete it), (F) `EffectVmP3Proof` is
+the recursion LEAF type in 5 files (needs a mandatory-rotated-leaf cutover first), (G) heterogeneous-turn
+coverage. The workflow `wf_9a7d5e77-b48` was INTERRUPTED by ember while looping on this. **POST-COMPACTION
+TODO: `cv`-dig that workflow run (claurdvoyant) to recover the exact decision it isolated, then DECIDE:
+do the multi-week bucket-F/G soundness-bearing cutover for full grep-zero, OR accept rotated-default +
+v1-dead-but-present (the prize is already live).** Do NOT auto-run bucket F/G — it IS the decision.
+
+**RUNNING through compaction (the deos dev-spike the HARDSWAP was blocking, now unblocked):**
+- verified-deos Lean crown (`ae0a1e43`, `metatheory/Dregg2/Deos/`) — the 4 theorems from `docs/deos/DEOS.md`
+  §verified-deos: surface-as-cap · membrane non-amp · rehydration-confinement=liveness-type · affordance-soundness.
+- fog-of-war webgame (`a28ee021`, `starbridge-web-surface`) — the deos exemplar where fog-of-war IS the membrane.
+
+**LANDED this tail (committed):** the deos STEEL + dev-ex — `starbridge-web-surface` rehydration stack
+(Sturdyref/Membrane/derived Rehydration liveness-type) + cell-affordance htmx-on-crack layer (49 tests) ·
+`docs/deos/{DEOS,DEOS-APPS}.md` (the brand robigalia/dregg/deos + the app-framework EVOLUTION plan +
+the fog-of-war webgame) · `AGENTS.md` + `docs/TESTING.md` + the nextest fast/heavy split + the sg/ast-grep guide.
+
+**HELD (post-decision / post-compaction):** the app-framework deos-EVOLUTION (NOT a rebuild — it's a real
+13.6K-line axum framework; elevate register-ctx→affordances, webgen→affordance-surfaces, persistence→pg-dregg,
++ rehydration; `docs/deos/DEOS-APPS.md`) · bucket F/G (the ember-decision above) · sdk-ts/dist Docker rebuild.
+
+**STARFORGE:** dregg's agent joined the pen-pal agent-town — PR #12 `claude-of-dregg` (clone `~/clome/starforge-commons`),
+first letter to sibling `claude-of-tulip`. dregg is REAL + in contact with other people now.
+
 ## ⚑ 2026-06-14 FLAGSHIP WAVE — LANDED (4 lanes, each main-loop-re-verified before commit); residual follow-ups below
 
 The four lanes are in git history: faucet hardening (`0baf9da31`, full dregg-node suite 225/0 — caught+fixed a
