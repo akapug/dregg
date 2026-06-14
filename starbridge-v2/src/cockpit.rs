@@ -238,10 +238,37 @@ pub struct Cockpit {
     palette: CommandPalette,
     /// Focus handle for the root, so the cockpit receives key events.
     focus: FocusHandle,
+
+    // --- the LIVE NODE connection (the remote-federation panel) -------------
+    /// An optional LIVE connection to a remote dregg node (`--node <url>`). The
+    /// embedded world is the headline; this is the master interface ALSO watching
+    /// a running federation's receipt nervous system + reflecting its cells. `None`
+    /// when no node URL was supplied (the pure embedded image).
+    live_node: Option<starbridge_v2::client::LiveNode>,
+    /// The background SSE reader handle (`/api/events/stream`). The cockpit drains
+    /// its channel each frame and fires `cx.notify()` per streamed receipt — so the
+    /// live receipt list advances PER RECEIPT, not on a manual snapshot reload.
+    live_stream: Option<starbridge_v2::client::ReceiptStreamHandle>,
+    /// The live receipt feed: the cursor + bounded ring the stream fills (the
+    /// thing that REPLACES the static snapshot). Drained under `cx.notify()`.
+    live_feed: starbridge_v2::live_node::ReceiptFeed,
+    /// The last blocking snapshot of the live node (status + cell reflections),
+    /// projected into the uniform `Inspectable` model. Refreshed by the "sync"
+    /// verb; the per-receipt updates come from `live_stream`.
+    live_snapshot: Option<starbridge_v2::client::LiveSnapshot>,
 }
 
 impl Cockpit {
-    pub fn new(world: Rc<RefCell<World>>, anchors: [CellId; 3], focus: FocusHandle) -> Self {
+    /// Construct the cockpit, optionally connecting to a LIVE remote node at
+    /// `node_url` (the master interface ALSO watching a running federation). When
+    /// present, the SSE receipt stream is opened immediately so the live receipt
+    /// list begins filling (each streamed receipt fires `cx.notify()` on render).
+    pub fn with_node(
+        world: Rc<RefCell<World>>,
+        anchors: [CellId; 3],
+        focus: FocusHandle,
+        node_url: Option<String>,
+    ) -> Self {
         let cells = sorted_cells(&world.borrow());
 
         // Seed the debugger with a demo turn (treasury → user transfer) that
@@ -337,6 +364,24 @@ impl Cockpit {
             )
         };
 
+        // The LIVE NODE connection (`--node <url>`): wrap an HTTP client, open the
+        // SSE receipt stream right away (the reader runs on its own thread and feeds
+        // the pure parser; the cockpit drains the channel under `cx.notify()`), and
+        // take one blocking snapshot for the initial reflections. All best-effort:
+        // an unreachable node leaves the embedded image fully usable.
+        let (live_node, live_stream, live_snapshot) = match node_url {
+            Some(url) => {
+                let ln = starbridge_v2::client::LiveNode::new(
+                    starbridge_v2::client::NodeClient::http(url),
+                );
+                let stream = ln.connect_stream();
+                let snapshot = ln.sync().ok();
+                (Some(ln), stream, snapshot)
+            }
+            None => (None, None, None),
+        };
+        let live_feed = starbridge_v2::live_node::ReceiptFeed::new(256);
+
         Self {
             world,
             cells,
@@ -364,6 +409,10 @@ impl Cockpit {
             killer_demo_lines: Vec::new(),
             palette: CommandPalette::new(),
             focus,
+            live_node,
+            live_stream,
+            live_feed,
+            live_snapshot,
         }
     }
 
@@ -1419,6 +1468,72 @@ impl Cockpit {
                         w.receipts().len()
                     )),
             )
+            .children(self.live_node_strip())
+    }
+
+    /// The LIVE NODE strip in the rail header (only when `--node <url>` connected):
+    /// the remote node's liveness/producer/height + the LIVE receipt feed head
+    /// (the SSE stream filling per receipt) + the resume cursor. This is the
+    /// distribution axis's REMOTE half — the master interface watching a running
+    /// federation alongside its own embedded image.
+    fn live_node_strip(&self) -> Option<gpui::AnyElement> {
+        let ln = self.live_node.as_ref()?;
+        let mut strip = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .mt_2()
+            .pt_2()
+            .border_t_1()
+            .border_color(theme::border())
+            .child(section_title("LIVE NODE · remote federation"));
+        // The connection target + (from the last snapshot) the producer/liveness.
+        let desc = ln.client().describe();
+        strip = strip.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(pill(desc, theme::accent()))
+                .children(self.live_snapshot.as_ref().map(|s| {
+                    pill(
+                        format!(
+                            "{} · producer {}",
+                            if s.status.healthy { "healthy" } else { "DOWN" },
+                            s.status.state_producer
+                        ),
+                        if s.status.healthy { theme::good() } else { theme::warn() },
+                    )
+                }))
+                .children(self.live_snapshot.as_ref().map(|s| {
+                    pill(format!("h{}", s.status.latest_height), theme::accent())
+                })),
+        );
+        // The LIVE receipt feed: head index + count + resume cursor (the SSE drain).
+        let feed = &self.live_feed;
+        let head = feed
+            .latest()
+            .map(|e| format!("#{} · {}", e.chain_index, e.finality))
+            .unwrap_or_else(|| "(awaiting first receipt)".to_string());
+        strip = strip.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(pill(format!("{} streamed", feed.receipts().len()), theme::good()))
+                .child(pill(format!("head {head}"), theme::accent()))
+                .children(
+                    feed.resume_cursor()
+                        .map(|c| pill(format!("cursor {c}"), theme::muted())),
+                ),
+        );
+        strip = strip.child(div().text_xs().text_color(theme::muted()).child(
+            "the SSE receipt stream (/api/events/stream) advances this PER RECEIPT \
+             (cx.notify), not on reload — the live receipt nervous system",
+        ));
+        Some(strip.into_any_element())
     }
 
     fn cell_world(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3025,8 +3140,35 @@ impl Cockpit {
     }
 }
 
+impl Cockpit {
+    /// Drain the LIVE NODE's SSE receipt stream into the feed (called once per
+    /// render). Each streamed receipt is ingested into `live_feed` (deduped by
+    /// chain index); if any were NEW, we `cx.notify()` so the cockpit re-renders
+    /// promptly — that is the per-receipt live update REPLACING the static
+    /// snapshot. When a receipt stream is connected we ALSO schedule a follow-up
+    /// frame (a short deferral) so a continuously-streaming node keeps the loop
+    /// turning even between input events. No-op when no node is connected.
+    fn drain_live_stream(&mut self, cx: &mut Context<Self>) {
+        let Some(stream) = &self.live_stream else {
+            return;
+        };
+        let records = stream.drain();
+        if records.is_empty() {
+            return;
+        }
+        let new = self.live_feed.ingest_records(records);
+        if new > 0 {
+            // The ReceiptInspector advances live — notify to re-render.
+            cx.notify();
+        }
+    }
+}
+
 impl Render for Cockpit {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // LIVE: drain the node's receipt stream first so this frame reflects every
+        // receipt that arrived (per-receipt `cx.notify()`, not a snapshot reload).
+        self.drain_live_stream(cx);
         let palette_open = self.palette.is_open();
         div()
             .id("cockpit-root")
