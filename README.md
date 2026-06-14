@@ -11,6 +11,12 @@ gated by an unforgeable capability, leaves a verifiable receipt, and carries a
 STARK proof that a light client can check without re-running history. Authority
 is *held*, never *owed*; the walls hold by proof, not by trust.
 
+On top of the kernel, **deos** is the agentic desktop userlayer — the same proofs
+made visual and interactive: a window *is* a capability, an interaction *is* a
+verified turn, and a screenshot can re-expand into a live, per-viewer, attenuated
+view of the shared witness-graph. (Naming: **robigalia** the project · **dregg**
+the kernel · **deos** the desktop.)
+
 > ### The question underneath
 >
 > Most systems chase scale, speed, or money. dregg chases a different question,
@@ -182,11 +188,14 @@ BLAKE3 CR, Ed25519 EUF-CMA, HMAC unforgeability, AEAD, FRI/STARK soundness, BLS
 quorum certs, and post-GST synchrony. Higher assumptions reduce onto this floor;
 nothing else is load-bearing.
 
-**Open, named — why this is not security-critical-ready.** A few effect shapes
-still prove on a hand-written AIR fallback (logged, never silent) rather than
-the Lean-descriptor path; that graduation lane is burning down. Cell programs
-today speak a small slot-level grammar; richer named fields and growable
-collections are designed in [docs/REFINEMENT-DESIGN.md](docs/REFINEMENT-DESIGN.md).
+**Open, named — why this is not security-critical-ready.** The proof system is
+mid-cutover to a single rotated multi-table circuit (−65.6% proof size, verify
+3.4× faster); every finalized turn is proven *today* — a chained-cohort prover
+keeps even heterogeneous turns covered — and the legacy hand-AIR path is being
+deleted to reach a single verification key. Cell programs today speak a small
+slot-level grammar; the expressiveness uplift that makes real apps *natural*
+(richer fields, cross-cell reads, growable collections) is in progress
+([docs/REFINEMENT-DESIGN.md](docs/REFINEMENT-DESIGN.md)).
 No independent audit has happened. The seams are enumerated in §3 of
 [docs/ASSURANCE.md](docs/ASSURANCE.md). **Do not use for anything
 security-critical.**
@@ -212,9 +221,16 @@ the same verified kernel.
   as a PostgreSQL Row-Level-Security layer: a policy reads
   `dregg_cap_admits(token, 'read', id, …)` instead of hand-rolled SQL, and the
   decision is the *same one the kernel makes*, from the same token.
-- **starbridge-v2** ([`starbridge-v2/`](starbridge-v2/)). The native master
-  interface — a visual cockpit that *embeds the real verified executor* and is
-  comprehensive for all data and actions.
+- **deos — the agentic desktop** ([`starbridge-v2/`](starbridge-v2/) ·
+  [docs/deos/DEOS.md](docs/deos/DEOS.md)). The userlayer where a *window is a
+  capability* (`Target::Surface(cell)`) and an interaction is a verified turn —
+  htmx-on-crack: a cell declares cap-gated affordances, and pressing one is a
+  turn the witness-graph records. Its one genuine novelty is the **rehydratable
+  frustum-snapshot** — a screenshot that embeds a sturdyref-behind-a-membrane, so
+  *opening the image* re-expands a live, per-viewer, attenuated, liveness-typed
+  view, confined by construction (the fog-of-war non-interference and rehydration
+  theorems are machine-checked in [`metatheory/Dregg2/Deos/`](metatheory/Dregg2/Deos/)).
+  **starbridge-v2** is the native cockpit that *embeds the real verified executor*.
 - **DreggDL** ([`dregg-deploy/`](dregg-deploy/)). Declarative deployment specs;
   an over-grant in a spec is caught as in-forest capability amplification before
   anything deploys.
@@ -222,11 +238,15 @@ the same verified kernel.
   [docs/SEL4-EMBEDDING.md](docs/SEL4-EMBEDDING.md) · [`sel4/`](sel4/)). The
   *firmament* is a seL4-hosted ground that holds deterministic apps inside one
   capability fabric (seL4 caps isolate protection domains; dregg caps mediate
-  the cells inside them). **Today:** the Robigalia v0 demo boots Rust userspace
-  protection domains and a real STARK verifier PD on the seL4 microkernel under
-  QEMU (aarch64, with riscv64 booting too). **In progress:** the executor
-  protection domain — the heart that runs every app turn through
-  `execFullForestG` — is the one true blocker, and is the next milestone.
+  the cells inside them) — an seL4 capability and a dregg capability are the
+  *same* abstraction at two points on a distance parameter. **Today:** the
+  Robigalia v0 demo boots Rust userspace protection domains, a real on-device
+  STARK verifier PD, **and the executor PD itself** — the Lean kernel
+  `execFullForestG` runs inside a real seL4 protection domain — on the seL4
+  microkernel under QEMU (aarch64, riscv64 booting too). The Lean-runtime port
+  long called the *one true blocker* is closed: the runtime embeds single-threaded,
+  no allocator override, IO-free. **Remaining:** productionization — the crypto
+  floor supplied from the verifier-STARK PD, and the decomposed five-PD assembly.
 
 ## Run it yourself
 
