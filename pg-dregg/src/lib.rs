@@ -311,6 +311,20 @@ mod pg {
         crate::mirror::ddl::federation_subscriber(publisher_conninfo)
     }
 
+    /// `dregg_load_role_identity_sql(csv_path text, reject_limit bigint) -> text`.
+    /// The recommended pg18 `COPY … ON_ERROR ignore` bulk-load command for the
+    /// OAuth→role bind map (`docs/PG-DREGG-PG18.md` §12), with the CSV path +
+    /// reject limit substituted. Returns the ready-to-run SQL (COPY needs a literal
+    /// path, so it is a template, not executed here): it stages
+    /// `(pg_role, agent_hex, token)` rows — skipping malformed lines instead of
+    /// aborting — then the DBA runs `SELECT * FROM dregg.promote_role_identity_load()`
+    /// to validate + upsert each through the audited `dregg.bind_role` seam. A
+    /// `reject_limit` of 0 omits the cap (tolerate any number of bad rows).
+    #[pg_extern]
+    fn dregg_load_role_identity_sql(csv_path: &str, reject_limit: i64) -> String {
+        crate::mirror::ddl::load_role_identity_sql(csv_path, reject_limit.max(0) as u64)
+    }
+
     /// `dregg_revalidate_replicated_chain() -> text`. The SUBSCRIBER-side
     /// re-validation sweep (`docs/PG-DREGG.md` §15): read the replicated
     /// `dregg.turns` as `(ordinal, prev_root, ledger_root)` ordered by ordinal and
@@ -2240,6 +2254,159 @@ mod pg {
             .unwrap();
             assert_eq!(bad_ratio, 0, "cache_hit_ratio is a fraction in [0,1]");
             Spi::run("RESET ROLE").unwrap();
+        }
+
+        /// pg18 DATA CHECKSUMS by default (docs/PG-DREGG-PG18.md §11, wired): the
+        /// integrity FLOOR under the dregg root thesis is page-level checksums, and
+        /// pg18's `initdb` enables them by default. The `dregg.integrity_status`
+        /// view makes that legible in-db; we assert the cluster the mirror runs on
+        /// actually has checksums on (the cargo-pgrx pg18 cluster was initdb'd under
+        /// the pg18 default), and that `data_checksums` reads back `'on'`.
+        #[pg_test]
+        fn pg18_data_checksums_are_on_and_integrity_status_reports_it() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_b_and_load_synth();
+
+            // The read-only GUC pg sets from the control file: 'on' under the pg18
+            // initdb default (a fresh pg18 cluster is checksummed unless
+            // --no-data-checksums was passed; cargo-pgrx uses the default).
+            let dc: Option<String> =
+                Spi::get_one("SELECT current_setting('data_checksums')").unwrap();
+            assert_eq!(
+                dc.as_deref(),
+                Some("on"),
+                "pg18 enables data checksums by default — the mirror's integrity floor"
+            );
+
+            // The introspection view reports the same, with the boolean + block size.
+            let (enabled, dc_view): (bool, String) = Spi::get_two(
+                "SELECT checksums_enabled, data_checksums FROM dregg.integrity_status",
+            )
+            .map(|(a, b)| (a.unwrap_or(false), b.unwrap_or_default()))
+            .unwrap();
+            assert!(enabled, "dregg.integrity_status reports checksums_enabled = true");
+            assert_eq!(dc_view, "on", "the view's data_checksums matches the GUC");
+        }
+
+        /// pg18 AIO IN-FLIGHT view (docs/PG-DREGG-PG18.md §8, wired): pg18 ships
+        /// `pg_aios` (the live async-I/O handles), the companion to the cumulative
+        /// `pg_stat_io`. `dregg.mirror_aio_inflight` surfaces it. The in-flight set
+        /// is transient (usually empty at rest), so we assert the view RESOLVES and
+        /// is countable — that the pg18 view exists and the mirror surfaces it —
+        /// rather than pinning a non-deterministic depth.
+        #[pg_test]
+        fn pg18_mirror_aio_inflight_view_resolves_over_pg_aios() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_b_and_load_synth();
+            // pg_aios (via pg_get_aios()) is a PRIVILEGED stats surface — it needs
+            // superuser / pg_read_all_stats, exactly like the underlying function.
+            // The operator reads it as such; the pgrx test session is the bootstrap
+            // superuser, so we do NOT drop to dregg_kernel here. Drive a scan first
+            // so AIO has had work, then the view resolves (>= 0 rows on pg18).
+            let _scan: i64 = Spi::get_one("SELECT count(*) FROM dregg.cells").unwrap().unwrap();
+            let inflight: i64 =
+                Spi::get_one("SELECT count(*) FROM dregg.mirror_aio_inflight").unwrap().unwrap();
+            assert!(inflight >= 0, "dregg.mirror_aio_inflight resolves over pg18 pg_aios");
+        }
+
+        /// pg18 logical-replication CONFLICT observability (docs/PG-DREGG-PG18.md
+        /// §10, wired): pg18 newly counts apply conflicts per-subscription in
+        /// `pg_stat_subscription_stats` (the `confl_*` columns).
+        /// `dregg.replication_conflicts` surfaces them with a `conflicts_total`
+        /// alarm. On this single node there are no subscriptions, so the view is
+        /// EMPTY — but it must RESOLVE (the pg18 columns exist and the view binds
+        /// them), which is the property a publisher/subscriber both rely on. We
+        /// assert it resolves and exposes the conflicts_total alarm column.
+        #[pg_test]
+        fn pg18_replication_conflicts_view_resolves_with_the_total_alarm() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_c_and_submit_story();
+            let _fed: String = Spi::get_one("SELECT dregg_install_federation()").unwrap().unwrap();
+
+            // No subscriptions here ⇒ zero rows, but the view RESOLVES (the pg18
+            // confl_* columns exist and conflicts_total computes over them).
+            let rows: i64 =
+                Spi::get_one("SELECT count(*) FROM dregg.replication_conflicts").unwrap().unwrap();
+            assert_eq!(rows, 0, "no subscriptions on this node ⇒ empty (but resolvable) view");
+            // The alarm column is bound (selecting it does not error on a fresh
+            // pg18). `sum` over zero rows is numeric ⇒ cast to bigint to read it.
+            let total: Option<i64> = Spi::get_one(
+                "SELECT coalesce(sum(conflicts_total), 0)::bigint FROM dregg.replication_conflicts",
+            )
+            .unwrap();
+            assert_eq!(total, Some(0), "conflicts_total sums the seven pg18 confl_* counters");
+        }
+
+        /// pg18 COPY ON_ERROR bulk-load of the OAuth→role bind map
+        /// (docs/PG-DREGG-PG18.md §12, wired): a bulk onboarding CSV with a
+        /// MALFORMED row must SKIP the bad line (pg18 `ON_ERROR ignore`) and land
+        /// the good ones, then promote them through the audited `dregg.bind_role`
+        /// seam — the bulk path never writes role_identity unchecked. We COPY FROM
+        /// PROGRAM (the pgrx test runs as superuser) one good + one type-bad row
+        /// into the staging table, assert ON_ERROR skipped the bad one, then promote
+        /// and assert the good binding reached role_identity via the seam.
+        #[pg_test]
+        fn pg18_copy_on_error_bulk_loads_bind_map_skipping_bad_rows() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_b_and_load_synth();
+            // The login-binding DDL ships role_identity_load + promote_role_identity_load.
+            let lb: String =
+                Spi::get_one("SELECT dregg_install_login_binding()").unwrap().unwrap();
+            assert!(lb.contains("login binding installed"));
+            // COPY FROM PROGRAM needs pg_execute_server_program (a privileged
+            // bootstrap/DBA action — exactly who runs a bulk onboarding load), so we
+            // stay the pgrx superuser session rather than dropping to dregg_kernel.
+
+            // The `agent` column of role_identity_load is TEXT, so a non-integer is
+            // fine there; to exercise ON_ERROR we COPY into a 2-int scratch table
+            // where a non-int row is a genuine parse error pg18 ON_ERROR ignores.
+            Spi::run("CREATE TEMP TABLE on_err_probe (a int, b int)").unwrap();
+            // Three rows: two well-typed, one (the middle) with a non-int in `a`.
+            // pg18 ON_ERROR ignore lands the 2 good rows and skips the bad one;
+            // pre-18 the whole COPY would abort.
+            Spi::run(
+                "COPY on_err_probe (a, b) FROM PROGRAM \
+                 'printf ''1,10\\nNOTANINT,20\\n3,30\\n'' ' \
+                 WITH (FORMAT csv, ON_ERROR ignore, LOG_VERBOSITY silent)",
+            )
+            .expect("pg18 COPY ON_ERROR ignore must parse + run");
+            let good: i64 = Spi::get_one("SELECT count(*) FROM on_err_probe").unwrap().unwrap();
+            assert_eq!(good, 2, "pg18 ON_ERROR ignore landed the 2 good rows, skipped the bad one");
+
+            // Now the REAL bind-map path: stage two role rows (one with a bad hex
+            // agent), promote, and assert only the valid one reached the seam.
+            let alice = "a111111111111111111111111111111111111111111111111111111111111111";
+            Spi::run(&format!(
+                "INSERT INTO dregg.role_identity_load (pg_role, agent_hex, token) VALUES \
+                 ('alice_role', '{alice}', NULL), \
+                 ('bad_role', 'ZZNOTHEX', NULL)",
+            ))
+            .unwrap();
+            let (promoted, skipped): (i64, i64) = Spi::get_two(
+                "SELECT promoted, skipped FROM dregg.promote_role_identity_load()",
+            )
+            .map(|(p, s)| (p.unwrap_or(-1), s.unwrap_or(-1)))
+            .unwrap();
+            assert_eq!(promoted, 1, "the valid staged binding is promoted through bind_role");
+            assert_eq!(skipped, 1, "the bad-hex staged row is skipped, never written unchecked");
+            // The promoted binding is now in role_identity (via the audited seam).
+            let bound: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.role_identity WHERE pg_role = 'alice_role'",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(bound, 1, "the bulk-loaded role reached role_identity via dregg.bind_role");
+            // The bad row never created a binding.
+            let unbound: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.role_identity WHERE pg_role = 'bad_role'",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(unbound, 0, "the malformed staged row created no binding");
         }
 
         // ===================================================================

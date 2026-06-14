@@ -34,10 +34,12 @@ means the opposite on every axis:
 
 | clause | pg-native means | the pg18/pg17 feature | §  |
 |--------|-----------------|------------------|----|
-| **rich reads** | dregg's embedded JSON state is projected into typed, JOINable, index-eligible relations and views | `JSON_TABLE` (17), **virtual generated columns (18)**, builtin-C collation (17), **B-tree skip scan (18)**, **AIO + `pg_stat_io` (18)**, `security_invoker` views (15) | §2–§5, §8 |
+| **rich reads** | dregg's embedded JSON state is projected into typed, JOINable, index-eligible relations and views | `JSON_TABLE` (17), **virtual generated columns (18)**, builtin-C collation (17), **B-tree skip scan (18)**, **AIO + `pg_stat_io` + `pg_aios` (18)**, `security_invoker` views (15) | §2–§5, §8 |
 | **verified-only writes** | a state row exists ONLY as the post-image of a verified turn, applied atomically through ONE door — and the applicator reports the (typed) delta | **`MERGE … RETURNING WITH (OLD/NEW)` (18)**, a `BEFORE INSERT` re-validating trigger | §7 |
 | **postgres re-validates** | the database engine — not a trusted writer — refuses a tampered/reordered/forged batch | the chain re-validator `dregg_verify_turn`, run inside the gate trigger | §7 |
-| **pg-native authz** | a connecting role is bound to its dregg capability by postgres, and rows are gated by it | login event trigger (17) + **OAuth (18)** + RLS cap policies; `uuidv7()` (18) queue keys | §6 |
+| **integrity floor** | the page integrity every higher guarantee assumes is on by default, and made legible | **data checksums by `initdb` default (18)** surfaced as `dregg.integrity_status` | §11 |
+| **federation that re-validates** | a subscriber tails the verified-turn feed and is told when the stream diverged | logical replication + **pg18 `confl_*` conflict counters** as a `conflicts_total` alarm | §10 |
+| **pg-native authz** | a connecting role is bound to its dregg capability by postgres, and rows are gated by it | login event trigger (17) + **OAuth (18)** + RLS cap policies; `uuidv7()` (18) queue keys; **`COPY … ON_ERROR` (18)** bulk onboarding | §6, §12 |
 
 The dregg side stays honest: the *authorization decision* and the *chain
 re-validation* are the verified dregg checks (the Lean↔Rust differential on
@@ -48,8 +50,11 @@ database* as first-class relations, policies, and triggers rather than beside it
 leaner on writes and richer on audit than pg17 allowed.
 
 (`pg13`–`pg17` remain selectable for older deployments; the pg18-only forms
-below — virtual generated columns, `RETURNING old/new`, `uuidv7()`, `oauth` —
-are the primary-target leverage.)
+below — virtual generated columns, `RETURNING old/new`, `uuidv7()`, `oauth`,
+B-tree skip scan, AIO + `pg_aios`, data checksums by default, the
+`confl_*` replication-conflict counters, and `COPY … ON_ERROR` — are the
+primary-target leverage. §13 records the pg18 features deliberately *not* adopted,
+each with its reason.)
 
 ---
 
@@ -453,16 +458,31 @@ by `io_method` and is transparent to the extension). pg-dregg requires nothing
 of it; it is the engine getting faster underneath the read-heavy mirror, and the
 reason the "rich reads" clause stays cheap as the ledger grows.
 
-**The AIO observability surface is wired**, not deferred. pg18's AIO feeds
-`pg_stat_io` (with the new `reads`/`read_bytes` columns and the cache `hits` that
-never touched the OS); `dregg.mirror_io_stats` projects the read-path-relevant
-relation contexts (`normal`, `vacuum`, `bulkread`, `bulkwrite`) into a compact
-mirror-facing view that reports, per (backend type, context), the read/write/extend
-counts and the `cache_hit_ratio` the read-heavy mirror watches as the ledger
-grows. It is a thin SELECT over the system view (no row data, so no RLS concern).
-*Proven by* `pg18_mirror_io_stats_view_reports_the_io_mix` (live pg18: the view
-resolves, reports the `normal` relation context, and the hit ratio is a valid
-fraction).
+**The AIO observability surface is wired**, not deferred — in two complementary
+shapes, the cumulative counters and the live in-flight set. pg18's AIO feeds
+`pg_stat_io` (with the new `reads`/`read_bytes`/`write_bytes`/`extend_bytes`
+columns and the cache `hits` that never touched the OS); `dregg.mirror_io_stats`
+projects the read-path-relevant relation contexts (`normal`, `vacuum`,
+`bulkread`, `bulkwrite`) into a compact mirror-facing view that reports, per
+(backend type, context), the read/write/extend counts and the `cache_hit_ratio`
+the read-heavy mirror watches as the ledger grows. It is a thin SELECT over the
+system view (no row data, so no RLS concern). *Proven by*
+`pg18_mirror_io_stats_view_reports_the_io_mix` (live pg18: the view resolves,
+reports the `normal` relation context, and the hit ratio is a valid fraction).
+
+pg18 *also* ships the brand-new **`pg_aios`** system view — the live set of
+asynchronous-I/O handles a backend currently has *outstanding* (the AIO companion
+to the cumulative `pg_stat_io`). `dregg.mirror_aio_inflight` surfaces it (a thin
+`SELECT * FROM pg_aios`, so it inherits pg_aios's columns verbatim). Where
+`mirror_io_stats` answers *"how much I/O has the mirror done and what was the
+cache hit rate?"*, `mirror_aio_inflight` answers *"is AIO actually queueing reads
+right now, or falling back to synchronous?"* — the in-flight depth under a large
+scan is the signal that the async subsystem is engaged. `pg_aios` is a privileged
+stats surface (it reads through `pg_get_aios()`, which wants superuser /
+`pg_read_all_stats`), so it is an operator/kernel view, not an app-reader one.
+*Proven by* `pg18_mirror_aio_inflight_view_resolves_over_pg_aios` (live pg18: the
+view resolves and is countable — the pg18 view exists and the mirror surfaces it;
+the transient in-flight depth is not pinned).
 
 **B-tree skip scan (pg18) is applied** to the same read paths. The composite
 `cells_by_mode_balance (mode, balance)` index serves *both* `WHERE mode = …` *and*
@@ -537,7 +557,173 @@ land via `dregg.merge_cell`, and the pg side re-validates the chain it received.
 
 ---
 
-## 10. Feature inventory
+## 10. Federation hardening — pg18 logical-replication conflict observability
+
+§15 of `docs/PG-DREGG.md` federates dregg via PostgreSQL's own logical
+replication: the publisher's `dregg.turns` hash chain *is* the replicated feed,
+and a subscriber that tails it re-validates the chain locally
+(`dregg_revalidate_replicated_chain`) rather than trusting the stream. The
+dregg model is **single-writer fan-out**: the publisher is the only writer;
+subscribers are read replicas. That makes an *apply conflict* on a subscriber — a
+row it already holds (`confl_insert_exists`), a missing update/delete target
+(`confl_update_missing` / `confl_delete_missing`), a divergent origin
+(`confl_update_origin_differs`) — a structural **anomaly**: it means the stream is
+not the clean verified-turn feed the model assumes.
+
+pg18 newly **counts those conflicts per subscription**, in
+`pg_stat_subscription_stats` (the seven `confl_*` columns — `confl_insert_exists`,
+`confl_update_origin_differs`, `confl_update_exists`, `confl_update_missing`,
+`confl_delete_origin_differs`, `confl_delete_missing`,
+`confl_multiple_unique_conflicts`). `dregg.replication_conflicts` surfaces them as
+a mirror-facing alarm, joining `pg_subscription` for the subscription name and
+summing the seven kinds into a single `conflicts_total` — so a non-zero value is
+an immediate *"the replicated feed diverged — investigate"* signal. It
+**composes** with the chain-tooth re-validation, on two different layers: the
+tooth catches a substituted *root* (turn N's `ledger_root` ≠ turn N+1's
+`prev_root`); the conflict counters catch an apply-level divergence postgres
+itself detected during replication. The view is empty on a publisher (no
+subscriptions) and populated on a subscriber. It is a thin SELECT over the stats
+view (no row data). *Proven by*
+`pg18_replication_conflicts_view_resolves_with_the_total_alarm` (live pg18: the
+view resolves and binds the pg18 `confl_*` columns; the `conflicts_total` alarm
+sums them).
+
+(The subscriber bootstrap itself stays a `pg_createsubscriber` runbook —
+`dregg_federation_subscriber_runbook` — and the subscription is created `WITH
+(failover = true)` so it survives publisher failover, a pg17 failover-slot
+feature. pg18 additionally adds `pg_createsubscriber --all` and
+`--enable-two-phase`, and `pg_recvlogical --enable-failover`, noted in the runbook
+as operator options.)
+
+---
+
+## 11. The integrity floor — pg18 data checksums by default
+
+dregg's thesis is integrity *all the way down*: the kernel commits a sorted-leaf
+ledger root, the chain tooth refuses a substituted batch (§7), and the whole-chain
+IVC light client attests that every turn executed correctly (`src/attest.rs`).
+Every one of those guarantees is *about the bytes the database holds* — and so all
+of them quietly **assume page-level integrity**: that the heap/index page postgres
+reads back is the page it wrote, not silently-corrupted storage. pg18 makes that
+floor the default: **`initdb` now enables data checksums** (every page carries a
+checksum the engine verifies on read, so on-disk corruption surfaces as a *loud
+error* instead of a wrong byte fed up into the mirror, the root recomputation, or
+a verifier). Pre-18 this required an explicit `initdb --data-checksums` (or an
+offline `pg_checksums --enable`), and was easy to forget.
+
+`pg-dregg` makes the floor **legible and assertable** rather than merely assumed:
+`dregg.integrity_status` projects the read-only `data_checksums` GUC (postgres
+sets it from the cluster's control file — `'on'` when checksums are active), the
+derived boolean `checksums_enabled`, and the `block_size` the checksum covers. A
+setup step (or an operator) reads it to *confirm* the mirror sits on a checksummed
+cluster — the page integrity the higher tiers stand on — and a deployment check
+can fail loudly if it finds `off`. It is a thin SELECT over GUCs (no row data).
+*Proven by* `pg18_data_checksums_are_on_and_integrity_status_reports_it` (live
+pg18: the cargo-pgrx cluster, `initdb`'d under the pg18 default, reads
+`data_checksums = 'on'` both directly and through the view).
+
+> **The honest scope.** Page checksums catch *storage* corruption (a flipped bit
+> on disk, a torn page), not a *malicious authenticated* write — that is the job of
+> the chain tooth and the IVC proof, which sit above this floor. The value pg18
+> adds is that the floor is now on by default, and `dregg.integrity_status` makes
+> the otherwise-invisible "is this cluster checksummed?" a first-class, tested fact
+> of the deployment.
+
+---
+
+## 12. Bulk identity onboarding — pg18 `COPY … ON_ERROR ignore`
+
+The OAuth→role→capability bind map (§6) is a DBA-owned table, `dregg.role_identity`,
+that a login hook reads to bind each connecting role to its dregg capability.
+Provisioning *many* federated identities at once — an IdP export of
+`(pg_role, agent_hex, token)` rows — is a real bootstrap path, and a single
+malformed line in that export (a bad-hex agent, a truncated row) should not abort
+the whole load. pg18 adds **`ON_ERROR ignore`** to `COPY FROM` (with
+`REJECT_LIMIT n` to cap how many bad rows are tolerated before it *does* fail, and
+the `LOG_VERBOSITY silent` level to suppress per-row notices), so a bulk load
+**skips** the malformed rows and lands the good ones, instead of the pre-18
+all-or-nothing abort.
+
+`pg-dregg` wires this **without ever loosening the trust seam**. The COPY targets
+a *text* staging table, `dregg.role_identity_load` — never `role_identity`
+directly — so a malformed row is just a skipped parse error. The DBA then runs
+`SELECT * FROM dregg.promote_role_identity_load()`, which validates each staged
+row (decodes the hex agent; a bad one is *skipped and counted*, never written) and
+upserts the valid ones **through the same audited `dregg.bind_role` seam** the
+single-binding path uses. So the bulk path inherits exactly the one-seam
+discipline: a binding only ever reaches `role_identity` via `bind_role`, in bulk
+or singly; the staging table is a quarantine, not a second door. The COPY command
+itself needs a literal path + format, so the recommended form is emitted as a
+ready-to-run template — `dregg_load_role_identity_sql(csv_path, reject_limit)`,
+like the federation runbook — while the staging table and the validate-and-promote
+function are real, shipped DDL. *Proven by*
+`pg18_copy_on_error_bulk_loads_bind_map_skipping_bad_rows` (live pg18: a CSV with
+a type-bad row is loaded with `ON_ERROR ignore` — the good rows land, the bad one
+is skipped — and a bad-hex staged binding is then *skipped* by the promote step
+while the valid one reaches `role_identity` through `bind_role`).
+
+> Because `COPY … FROM PROGRAM`/`FROM '<path>'` is itself a privileged operation
+> (server-side file/program access), bulk onboarding is a DBA/bootstrap action, not
+> an app-role one — which matches who provisions the identity map in the first
+> place.
+
+---
+
+## 13. What pg18 offers that pg-dregg deliberately does NOT adopt (yet)
+
+Being pg18-native is a discipline of taking the features that serve a dregg
+property and *declining* the ones that do not. Three pg18 capabilities were
+evaluated this pass and are **not** adopted, each for a stated reason — recorded
+here so the inventory is honest about the boundary.
+
+**Temporal constraints (`WITHOUT OVERLAPS` / `PERIOD`) — DEFERRED, needs a
+node-side schema it does not yet have.** pg18 genuinely ships temporal `PRIMARY
+KEY`/`UNIQUE` (`WITHOUT OVERLAPS`) *and* temporal `FOREIGN KEY` (`PERIOD`) — both,
+in 18 (the FK half, reverted from 17, landed for 18; Paul A. Jungwirth). A
+`WITHOUT OVERLAPS` constraint requires its final column to be a **range/multirange
+type**, is implemented internally as `EXCLUDE USING GIST (… WITH =, period WITH
+&&)`, and needs the `btree_gist` extension when the equality columns are scalars
+like `bytea`/`uuid`. The catch for the *current* mirror: it has **no
+validity-interval column** — `dregg.cells` and `dregg.capabilities` are keyed by
+`(cell_id)` / `(holder, slot)` with **"latest post-image wins"** semantics (the
+MERGE upsert in §7 *overwrites in place*). A temporal PK would *forbid* that
+overwrite, breaking the materialization model. The genuine fit is a **bitemporal
+capability-history** surface — a cap's authority over a *validity range*, so an
+auditor can ask *"what could this holder do at time T?"* and a temporal FK can
+enforce that a delegation's lifetime is covered by its grantor's — but that is a
+**new** relation fed by a **node-side projection** of cap validity intervals
+(`pg-dregg` has no `dregg-cell`, so it cannot decode them; that decode lives in
+`node/src/pg_mirror.rs`). It is therefore a node-mirror-paired follow-up, not an
+in-extension change. *Closure plan:* (1) node projects `(holder, slot, target,
+valid_range tstzrange, …)` history rows; (2) a new `dregg.cap_history` table with
+`PRIMARY KEY (holder, slot, valid_range WITHOUT OVERLAPS)` (+ `btree_gist`); (3)
+optionally a temporal FK from a delegation's range to its grantor's. (Note: the
+prior framing of this doc described pg-dregg as already using a "GiST `EXCLUDE`
+idiom" — it does **not**; there is no exclusion constraint or range column in the
+mirror today, which is exactly why temporal constraints are net-new, not a
+swap-in.)
+
+**`COPY … ON_ERROR` into the *state* tables — REJECTED (forbidden by the spine).**
+COPY is a bulk *writer*; the spine invariant is that a state row exists ONLY as a
+verified-turn post-image applied through the ONE door (the `commit_log` trigger,
+§7). A `COPY` into `dregg.cells`/`turns`/`capabilities`/`memory` would be an
+unverified write path, which the Tier-B privilege lockdown explicitly forbids. So
+`ON_ERROR` is adopted ONLY for the non-state, DBA-owned bootstrap surface (the
+identity bind map, §12), never for state.
+
+**Transparent pg18 wins that need no code — noted, not "adopted".** Several pg18
+improvements benefit the mirror with *zero* schema or extension change, so there
+is nothing to wire (claiming them as "added" would be theatre): the **asynchronous
+I/O** engine speeds the mirror's large scans under the existing views (§8);
+**parallel `GIN` index builds** speed building `cells_fields_gin` (the
+`fields_json` jsonb index) with no DDL change; and `EXPLAIN ANALYZE` now includes
+**`BUFFERS` by default**, which the §8 skip-scan plan check benefits from for free.
+These are real reasons to be *on* pg18; they are engine behavior, not features the
+extension declares.
+
+---
+
+## 14. Feature inventory
 
 | pg feature | version | clause served | where |
 |------------|---------|---------------|-------|
@@ -551,13 +737,23 @@ land via `dregg.merge_cell`, and the pg side re-validates the chain it received.
 | login event trigger | 17 | pg-native authz | §6, `dregg.on_login` |
 | **`oauth` authentication method** | **18** | pg-native authz (federated identity → role) | §6, composes with `role_identity`; the bind seam `dregg.bind_role`/`dregg.role_bindings` |
 | **`uuidv7()`** (temporally sortable) | **18** | pg-native authz (the drain-queue key) | §6, `dregg.submit_queue` |
-| **`uuid_extract_timestamp` / `_version`** | **18** | pg-native authz (the queue key AS an audit signal) | §6, `dregg.submit_queue_audit` |
+| **`uuid_extract_timestamp` on v7** (v1-only pre-18) / `uuid_extract_version` (17) | **18** / 17 | pg-native authz (the queue key AS an audit signal) | §6, `dregg.submit_queue_audit` |
 | `MERGE` + `merge_action()` | 17 | verified-only writes (atomic upsert) | §7, `dregg.merge_cell` |
 | **`RETURNING WITH (OLD/NEW)`** | **18** | verified-only writes (the applicator's typed delta audit + conservation) | §7, `dregg.merge_cell` / `dregg.merge_cell_delta` |
 | **asynchronous I/O (AIO)** | **18** | rich reads (faster large scans) | §8, transparent + the `dregg.mirror_io_stats` view over `pg_stat_io` |
+| **`pg_aios` in-flight view** | **18** | rich reads (AIO engaged-or-not signal) | §8, `dregg.mirror_aio_inflight` |
+| **data checksums by `initdb` default** | **18** | integrity floor (page integrity the roots assume) | §11, `dregg.integrity_status` (the `data_checksums` GUC) |
+| **logical-replication `confl_*` counters** | **18** | federation hardening (apply-divergence alarm) | §10, `dregg.replication_conflicts` over `pg_stat_subscription_stats` |
+| **`COPY … ON_ERROR ignore` / `REJECT_LIMIT` / `LOG_VERBOSITY silent`** | **18** | pg-native authz (bulk identity onboarding, skip-bad-rows) | §12, `dregg.role_identity_load` + `dregg.promote_role_identity_load` + the `dregg_load_role_identity_sql` template |
 | `BEFORE INSERT` re-validating trigger | core | verified-only writes (the one door) | §7, `dregg.apply_verified_turn` |
 | `FORCE ROW LEVEL SECURITY` + cap policies | core | read gate + write gate | §6/§7, the RLS |
+| failover slots (`failover = true`) + `pg_createsubscriber` | 17 (+ pg18 `--all`/`--enable-two-phase`) | federation (survive publisher failover; bootstrap) | §10, the subscriber runbook |
+| temporal `WITHOUT OVERLAPS` / `PERIOD` constraints | 18 (ships) | — *DEFERRED* (needs a node-projected cap-validity range; no range column in the mirror today) | §13, the closure plan |
+| `COPY … ON_ERROR` into the *state* tables | 18 | — *REJECTED* (a `COPY` bypasses the verified-write spine; §7) | §13 |
+| AIO / parallel GIN builds / `EXPLAIN BUFFERS` default | 18 | transparent perf — *no code* (engine behavior) | §13 |
 
-For the federation-via-logical-replication path (failover slots,
-`pg_createsubscriber`) and the snapshot/backup complement, see
-`docs/PG-DREGG.md` §15.
+The deferred / rejected rows are spelled out in §13; the version attribution for
+every pg18 feature above was confirmed against the official PostgreSQL 18 release
+notes (`postgresql.org/docs/18/release-18.html`). For the
+federation-via-logical-replication path and the snapshot/backup complement, see
+also `docs/PG-DREGG.md` §15.

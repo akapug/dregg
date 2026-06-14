@@ -359,6 +359,29 @@ CREATE OR REPLACE VIEW dregg.mirror_io_stats AS
     WHERE object IN ('relation')
       AND context IN ('normal','vacuum','bulkread','bulkwrite');
 
+-- pg18 AIO IN-FLIGHT (docs/PG-DREGG-PG18.md §8): pg_stat_io is the cumulative
+-- counter; pg18 ALSO ships `pg_aios`, the live view of the async-I/O handles a
+-- backend currently has outstanding. For a read-heavy mirror issuing batched
+-- async reads, the in-flight depth shows whether AIO is actually queueing reads
+-- vs falling back to synchronous. SELECT * so it inherits pg_aios's columns
+-- verbatim (a system view, no row data). pg18-only: pg_aios does not exist pre-18.
+CREATE OR REPLACE VIEW dregg.mirror_aio_inflight AS
+    SELECT * FROM pg_aios;
+
+-- pg18 DATA-INTEGRITY status (docs/PG-DREGG-PG18.md §11): dregg's thesis is
+-- integrity-down-to-the-bytes; the STORAGE floor under the kernel root + chain
+-- tooth + IVC light client is page-level integrity, and pg18 makes `initdb`
+-- enable data checksums BY DEFAULT (every page carries a checksum verified on
+-- read, so silent on-disk corruption surfaces as a loud error, never a wrong byte
+-- fed to the mirror). This view makes that floor legible: `data_checksums` is the
+-- read-only GUC pg sets from the control file ('on' when active). A thin SELECT
+-- over GUCs (no row data) — an operator/setup-assertion confirms the mirror sits
+-- on a checksummed cluster, the page integrity the higher tiers assume.
+CREATE OR REPLACE VIEW dregg.integrity_status AS
+    SELECT current_setting('data_checksums')           AS data_checksums,
+           (current_setting('data_checksums') = 'on')   AS checksums_enabled,
+           current_setting('block_size')                AS block_size;
+
 -- ===========================================================================
 -- 6.  READ-SIDE RLS — every state table composes with the M1 cap layer.
 -- ===========================================================================
