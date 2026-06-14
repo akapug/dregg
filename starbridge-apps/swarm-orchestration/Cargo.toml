@@ -1,0 +1,48 @@
+[package]
+name = "starbridge-swarm-orchestration"
+version = "0.1.0"
+edition = "2024"
+description = "Verifiable agent-orchestration swarm — a COORDINATOR dispatch-board cell holds a conserved budget + a mandate and dispatches sub-tasks to WORKER agent cells via cap-attenuated grants (no amplification; an over-grant is REFUSED by the verified executor); workers coordinate via the async NOTIFY edge (EmitEvent -> the recipient drains in its OWN receipted turn); the shared budget is CONSERVED (spend <= mandate, a breach REFUSED BEFORE it runs); every action leaves a receipt. Rust mirror of metatheory/Dregg2/Apps/AgentOrchestrationBudget.lean (the dispatch-board POLICY) + AgentOrchestration.lean (the kernel-executor swarm with attenuated, non-amplifying delegation)."
+
+# Mirrors the verified Lean development:
+#   - `metatheory/Dregg2/Apps/AgentOrchestrationBudget.lean` — the dispatch-board
+#     POLICY as ONE `RecordProgram`: the six primitives buildr/builders/sig/simbi
+#     each hand-roll UNGATED (cap-gated authority + signed provenance via
+#     senderInField, atomic budget via affineLe `spent_a + spent_b <= mandate`,
+#     actor-bound baton handoff, no-replay strictMono epoch, immutable mandate,
+#     capped async notify wake) — every refusal a theorem
+#     (forged_dispatch/over_budget/stolen_baton/replayed_dispatch/
+#     worker_cannot_widen_reach/uncapped_wake UNSAT vs honest_dispatch_admits).
+#   - `metatheory/Dregg2/Apps/AgentOrchestration.lean` — the swarm run through the
+#     KERNEL EXECUTOR: an orchestrator spawns least-privilege workers, delegates
+#     each an ATTENUATED slice (`derive_no_amplify`: worker authority subset of
+#     the orchestrator's, strict), and the whole work-forest conserves.
+#
+# This crate is the executable surface: the dispatch-board POLICY is a factory
+# descriptor's `state_constraints` installed as the born cell's `CellProgram`,
+# re-checked by the verified executor (`EmbeddedExecutor`) on EVERY turn — so the
+# over-budget runaway, the stolen baton, the replayed dispatch, and the widened
+# worker reach are REAL executor refusals, not app bookkeeping.
+
+[lib]
+name = "starbridge_swarm_orchestration"
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+dregg-coord = { path = "../../coord" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The userspace "lint your turn before you spend gas" toolkit: the swarm's
+# dispatch forest is run through `analyze()` (conservation + non-amplification +
+# well-formedness) BEFORE submission, exactly as a stranger would pre-flight it.
+dregg-userspace-verify = { path = "../../dregg-userspace-verify" }
+
+[lints]
+workspace = true
