@@ -36,10 +36,16 @@
 use std::sync::Arc;
 
 use dregg_cell::predicate::{
-    PredicateInput, WitnessedPredicateError, WitnessedPredicateKind, WitnessedPredicateRegistry,
-    WitnessedPredicateVerifier,
+    InputRef, PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
+    WitnessedPredicateRegistry, WitnessedPredicateVerifier,
 };
-use dregg_cell::{field_from_u64, CellState, EvalContext};
+use dregg_cell::program::{
+    CustomDescriptor, ReadSet, SimpleStateConstraint, TransitionCase, TransitionGuard,
+    TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag,
+};
+use dregg_cell::{
+    FIELD_ZERO, field_from_u64, CellProgram, CellState, EvalContext, StateConstraint,
+};
 
 // ---------------------------------------------------------------------------
 // helpers

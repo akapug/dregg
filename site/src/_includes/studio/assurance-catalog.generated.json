@@ -55,7 +55,7 @@
   "coverage": {
     "guarantees_with_apex": 6,
     "guarantees_with_pins": 6,
-    "total_pins": 103,
+    "total_pins": 108,
     "total_keystones": 31
   },
   "guarantees": [
@@ -204,6 +204,11 @@
       "pins": [
         "integrity_guarantee_memory_program",
         "integrity_guarantee_whole_turn",
+        "integrity_guarantee_whole_turn_covered",
+        "Dregg2.Exec.ForestMemoryProgram.moveAsset_is_memory_program",
+        "Dregg2.Exec.ForestMemoryProgram.balanceA_step_memprog",
+        "Dregg2.Exec.ForestMemoryProgram.eachStepMemProg_of_all_covered",
+        "Dregg2.Exec.ForestMemoryProgram.forest_of_covered_is_memory_program",
         "integrity_guarantee",
         "Dregg2.Circuit.Argus.Receipt.argus_commits_to_one_receipt",
         "Dregg2.Circuit.Argus.Receipt.argus_circuit_executor_receipts_agree",

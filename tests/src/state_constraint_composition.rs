@@ -13,16 +13,23 @@
 //! `#[ignore = "..."]` with unblock label.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use dregg_cell::predicate::{
-    PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
-    WitnessedPredicateVerifier,
+    InputRef, PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
+    WitnessedPredicateRegistry, WitnessedPredicateVerifier,
 };
-use dregg_cell::{field_from_u64, AuthRequired, Cell, CellId, CellProgram, CellState, Permissions};
+use dregg_cell::program::{
+    SimpleStateConstraint, TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag,
+};
+use dregg_cell::{
+    field_from_u64, AuthRequired, Cell, CellId, CellProgram, CellState, EvalContext, Ledger,
+    Permissions, ProgramError, StateConstraint,
+};
 use dregg_turn::action::{
     symbol, Action, Authorization, CommitmentMode, DelegationMode, WitnessBlob,
 };
-use dregg_turn::{CallForest, Effect, Turn};
+use dregg_turn::{CallForest, ComputronCosts, Effect, Turn, TurnBuilder, TurnExecutor, TurnResult};
 
 fn state_with(field_values: &[(usize, u64)]) -> CellState {
     let mut s = CellState::default();

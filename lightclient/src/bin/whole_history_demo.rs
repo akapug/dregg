@@ -19,41 +19,75 @@
 
 use std::time::Instant;
 
-use dregg_circuit::effect_vm::pi;
-use dregg_circuit::effect_vm::{CellState, Effect, generate_effect_vm_trace, sel};
-use dregg_circuit::effect_vm_descriptors::descriptor_for_selector;
+use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::ivc_turn_chain::FinalizedTurn;
 use dregg_circuit::joint_turn_aggregation::DescriptorParticipant;
-use dregg_circuit::lean_descriptor_air::{parse_vm_descriptor, prove_vm_descriptor};
+use dregg_turn::rotation_witness::mint_rotated_participant_leg;
 
 use dregg_lightclient::{FinalityCert, fold_and_attest, verify_finalized_history, verify_history};
 
-/// Build ONE real finalized turn on the PRODUCTION descriptor path: execute a `Transfer` debit of
-/// `amount` for a cell at `(balance, nonce)`, prove the 186-column trace through the Lean transfer
-/// descriptor (`prove_vm_descriptor`, the audited p3 batch prover — the same wire artifact the SDK
-/// cutover emits), and carry the trace as the in-circuit leaf witness. Returns the turn + its REAL
-/// `(old_root, new_root)` Poseidon2 state commitments (the trace generator derives them; the
-/// descriptor's hash sites bind them — they are not fabricated).
+/// OPEN permissions so the rotated producer-witness path admits the actor cell without auth gating
+/// (mirrors `circuit/tests/rotation_batchstark_leaf_smoke.rs`).
+fn open_permissions() -> dregg_cell::Permissions {
+    use dregg_cell::AuthRequired;
+    dregg_cell::Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    }
+}
+
+/// The transfer actor cell at `(balance, nonce)` with open permissions — the before/after `Cell`
+/// the rotated mint runs `rotation_witness::produce` over.
+fn producer_cell(balance: i64, nonce: u64) -> dregg_cell::Cell {
+    let mut pk = [0u8; 32];
+    pk[0] = 7;
+    let mut cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], balance);
+    cell.permissions = open_permissions();
+    for _ in 0..nonce {
+        let _ = cell.state.increment_nonce();
+    }
+    cell
+}
+
+/// Build ONE real finalized turn on the PRODUCTION descriptor path. **Bucket-F (PATH-PRESERVE
+/// Phase 5a):** the finalized turn carries the MANDATORY ROTATED leg — the rotated multi-table
+/// `Ir2BatchProof` minted by `mint_rotated_participant_leg` from the live producer witnesses over
+/// the before/after actor cells (the v1 `EffectVmP3Proof` leg is dropped). Returns the turn + its
+/// REAL ROTATED `(old_root, new_root)` Poseidon2 state commitments (PI 34/35 — the rotated
+/// before/after `state_commit`, bound by the descriptor's hash sites, not fabricated).
 fn make_turn(balance: u64, nonce: u32, amount: u64) -> (FinalizedTurn, BabyBear, BabyBear) {
     let state = CellState::new(balance, nonce);
     let effects = vec![Effect::Transfer {
         amount,
         direction: 1,
     }];
-    let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-    let old_root = public_inputs[pi::OLD_COMMIT];
-    let new_root = public_inputs[pi::NEW_COMMIT];
-    let json = descriptor_for_selector(sel::TRANSFER).expect("transfer descriptor registered");
-    let desc = parse_vm_descriptor(json).expect("transfer descriptor parses");
-    let dpis = &public_inputs[..desc.public_input_count];
-    let proof =
-        prove_vm_descriptor(&desc, &trace, dpis).expect("descriptor proves honest transfer");
+    // The rotated transfer DEBIT keeps the nonce and decreases the balance by `amount`.
+    let before_cell = producer_cell(balance as i64, nonce as u64);
+    let after_cell = producer_cell((balance as i64) - (amount as i64), nonce as u64);
+    let nullifier_root = [0u8; 32];
+    let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
+    let leg = mint_rotated_participant_leg(
+        &state,
+        &effects,
+        &before_cell,
+        &after_cell,
+        &nullifier_root,
+        &receipt_log,
+        None,
+    )
+    .expect("rotated transfer leg mints + self-verifies");
+    // Read the ROTATED chain roots off the leg BEFORE it moves into the participant.
+    let old_root = leg.old_root();
+    let new_root = leg.new_root();
     (
-        FinalizedTurn::new(
-            DescriptorParticipant::v1(proof, public_inputs),
-            trace,
-        ),
+        FinalizedTurn::new(DescriptorParticipant::rotated(leg)),
         old_root,
         new_root,
     )
@@ -61,7 +95,10 @@ fn make_turn(balance: u64, nonce: u32, amount: u64) -> (FinalizedTurn, BabyBear,
 
 /// A continuous chain of `k` REAL finalized turns: each turn debits `step` and the next turn starts
 /// from the post-state, so turn i's real `new_root` IS turn i+1's real `old_root` (the temporal
-/// tooth holds by construction). Returns the turns + genesis/final roots.
+/// tooth holds by construction). The rotated trace welds balance/nonce from the v1 sub-trace, which
+/// BUMPS the nonce by 1 per Transfer row — so turn i's after-state `(balance - step, nonce + 1)` is
+/// the next turn's before-state, and both balance and nonce advance per turn. Returns the turns +
+/// genesis/final roots.
 fn make_chain(
     start_balance: u64,
     start_nonce: u32,
@@ -70,6 +107,9 @@ fn make_chain(
 ) -> (Vec<FinalizedTurn>, BabyBear, BabyBear) {
     let mut turns = Vec::with_capacity(k);
     let mut balance = start_balance;
+    // The rotated trace welds balance/nonce from the v1 sub-trace, which BUMPS the nonce by 1 per
+    // Transfer row — turn i's after-state is `(balance - step, nonce + 1)`. Advance BOTH balance
+    // and nonce per turn so the rotated state-commit roots link (`old_root[i+1] == new_root[i]`).
     let mut nonce = start_nonce;
     let mut genesis = BabyBear::ZERO;
     let mut final_root = BabyBear::ZERO;
@@ -86,7 +126,7 @@ fn make_chain(
         final_root = new_root;
         turns.push(turn);
         balance -= step;
-        nonce += 1;
+        nonce += 1; // the v1 sub-trace bumps the nonce by 1 per Transfer row.
     }
     (turns, genesis, final_root)
 }

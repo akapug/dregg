@@ -121,26 +121,26 @@ pub fn verify_participant_pub(p: &JointParticipant) -> Result<(), String> {
 // The bespoke `verify_participant` is RETAINED as the transitional guard.
 
 /// A single cell's whole-turn DESCRIPTOR-INTERPRETER proof as a joint-turn
-/// participant. The proof is an `EffectVmP3Proof` (audited p3 batch-stark, the
-/// production cutover wire type); the PI projections the aggregator reads
-/// ([`pi::TURN_HASH_BASE`], [`pi::NEW_COMMIT_BASE`]) are identical to
-/// [`JointParticipant`]'s.
+/// participant. **Bucket-F cutover (PATH-PRESERVE Phase 5a):** the leaf the recursion
+/// path folds is now the ROTATED multi-table `Ir2BatchProof` (the [`RotatedParticipantLeg`]),
+/// MANDATORY — the legacy v1 `EffectVmP3Proof` leg has been dropped from this struct. Host
+/// admission ([`verify_descriptor_participant`]) and the PI projections the aggregator reads
+/// ([`pi::TURN_HASH_BASE`], [`pi::NEW_COMMIT_BASE`]) now read the rotated leg's PI prefix (the
+/// rotated 38-PI vector carries the v1 prefix `[0..34)` unchanged — `trace_rotated.rs:233`).
+///
+/// This whole descriptor-participant surface is `recursion`-gated: it only ever existed to feed
+/// the Gold recursion/aggregation cores ([`crate::ivc_turn_chain`] / [`crate::joint_turn_recursive`]),
+/// which compile only under `recursion`. The non-recursion Silver path uses [`JointParticipant`]
+/// (a bespoke `EffectVmAir` `StarkProof`), unaffected.
+#[cfg(feature = "recursion")]
 pub struct DescriptorParticipant {
-    /// The per-cell whole-turn descriptor-interpreter proof.
-    pub proof: crate::effect_vm_p3_full_air::EffectVmP3Proof,
-    /// The full EffectVM public-input vector this proof attests.
-    pub public_inputs: Vec<BabyBear>,
-    /// THE ROTATED LEG (C4 cutover). When present, the recursion path
-    /// ([`crate::ivc_turn_chain::prove_chain_core`] /
-    /// [`crate::joint_turn_recursive::prove_joint_core`]) mints the in-circuit leaf
-    /// from this rotated multi-table `Ir2BatchProof` via
-    /// [`crate::ivc_turn_chain::prove_descriptor_leaf_rotated_with_config`] instead of
-    /// the v1 uni-STARK `EffectVmDescriptorAir` wrap. The v1 `proof`/`public_inputs`
-    /// above stay carried (host admission still reads them) until C7 deletes the v1 leg
-    /// and the rotated leg becomes mandatory. `serde`-free (proofs are not serialized
-    /// on this struct).
-    #[cfg(feature = "recursion")]
-    pub rotated: Option<RotatedParticipantLeg>,
+    /// THE ROTATED LEG (Bucket-F mandatory leaf). The recursion cores
+    /// ([`crate::ivc_turn_chain::prove_chain_core_rotated`] /
+    /// [`crate::joint_turn_recursive::prove_joint_core_rotated`]) mint the in-circuit leaf from
+    /// this rotated multi-table `Ir2BatchProof` via
+    /// [`crate::ivc_turn_chain::prove_descriptor_leaf_rotated_with_config`]. All PI projections
+    /// read its `public_inputs` prefix. `serde`-free (proofs are not serialized on this struct).
+    pub rotated: RotatedParticipantLeg,
 }
 
 /// The rotated per-cell leg a [`DescriptorParticipant`] carries at/after C4: the rotated
@@ -161,8 +161,127 @@ pub struct RotatedParticipantLeg {
     pub public_inputs: Vec<BabyBear>,
 }
 
+// NOTE (Bucket-F / PATH-PRESERVE Phase 5a): the rotated-leg MINTING recipe
+// (`mint_rotated_participant_leg`) lives in `dregg-turn`
+// (`turn/src/rotation_witness.rs`), NOT here. It drives `rotation_witness::produce`
+// over `dregg_cell::Cell`s, and `dregg-circuit` cannot depend on `dregg-cell` /
+// `dregg-turn` (both depend on `dregg-circuit` — a cycle). The circuit crate owns
+// the LEAF DATA STRUCTURE (`RotatedParticipantLeg` / `DescriptorParticipant`), the
+// host-admission verifier (`verify_descriptor_participant`), and the in-circuit
+// leaf-wrap (`ivc_turn_chain::prove_descriptor_leaf_rotated_with_config`); the
+// `Cell`→witness→leg minting is downstream in `dregg-turn`. The recursion consumers
+// (lightclient / wasm / `circuit/tests/proof_economics.rs`) import the mint from
+// `dregg_turn::rotation_witness::mint_rotated_participant_leg`.
+
 #[cfg(feature = "recursion")]
 impl RotatedParticipantLeg {
+    /// Build a [`RotatedParticipantLeg`] from already-produced rotated block witnesses
+    /// (the `before`/`after` `(pre_limbs, iroot)` pairs `rotation_witness::produce` yields)
+    /// — the PURE-CIRCUIT core of the rotated-leg mint, with NO `dregg-cell` / `dregg-turn`
+    /// dependency. The downstream `dregg_turn::rotation_witness::mint_rotated_participant_leg`
+    /// wrapper feeds this the `Cell`-derived witnesses.
+    ///
+    /// `turn_id`, when `Some`, overrides the `TURN_HASH` slot of the carried PI prefix (the
+    /// joint aggregator's shared-turn-id projection) — pass it for joint-turn participants that
+    /// must agree on a shared id; `None` lets the carried hash stand (whole-chain turns).
+    ///
+    /// Fails closed if the turn's effect is not a single rotated R=24 cohort member (the
+    /// generator rejects a non-cohort / empty / heterogeneous slice).
+    pub fn mint_from_block_witnesses(
+        initial_state: &crate::effect_vm::CellState,
+        effects: &[crate::effect_vm::Effect],
+        before: &crate::effect_vm::trace_rotated::RotatedBlockWitness,
+        after: &crate::effect_vm::trace_rotated::RotatedBlockWitness,
+        turn_id: Option<BabyBear>,
+    ) -> Result<RotatedParticipantLeg, String> {
+        use crate::descriptor_ir2::{
+            MemBoundaryWitness, UMemBoundaryWitness, parse_vm_descriptor2,
+            prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
+        };
+        use crate::effect_vm::trace_rotated::{
+            empty_caveat_manifest, generate_rotated_effect_vm_trace,
+            rotated_descriptor_name_for_effect, transfer_caveat_manifest,
+        };
+        use crate::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
+        use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+
+        // Resolve the rotated descriptor for this turn's single cohort effect — the `*R24` wire
+        // name and the staged-registry JSON, exactly as the live SDK rotated prover does
+        // (`sdk::full_turn_proof::rotated_descriptor_json_for_effects`).
+        let lead = effects
+            .first()
+            .ok_or_else(|| "mint_rotated_participant_leg: empty effect slice".to_string())?;
+        let r24_name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
+            format!("mint_rotated_participant_leg: effect {lead:?} is not a rotated R=24 cohort member")
+        })?;
+        for e in &effects[1..] {
+            if rotated_descriptor_name_for_effect(e) != Some(r24_name) {
+                return Err(
+                    "mint_rotated_participant_leg: heterogeneous multi-effect turn (one rotated \
+                     descriptor per leg)"
+                        .to_string(),
+                );
+            }
+        }
+        let json = V3_STAGED_REGISTRY_TSV
+            .lines()
+            .find_map(|line| {
+                let mut it = line.splitn(3, '\t');
+                if it.next() == Some(r24_name) {
+                    let _display = it.next();
+                    it.next()
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                format!("mint_rotated_participant_leg: '{r24_name}' not in V3_STAGED_REGISTRY_TSV")
+            })?;
+        let desc = parse_vm_descriptor2(json).map_err(|e| {
+            format!("mint_rotated_participant_leg: descriptor '{r24_name}' parse failed: {e}")
+        })?;
+
+        let caveat = match effects {
+            [crate::effect_vm::Effect::Transfer { .. }] => transfer_caveat_manifest(),
+            _ => empty_caveat_manifest(),
+        };
+        let (trace, mut dpis) =
+            generate_rotated_effect_vm_trace(initial_state, effects, before, after, &caveat)
+                .map_err(|e| {
+                    format!("mint_rotated_participant_leg: rotated trace generation failed: {e}")
+                })?;
+
+        // Optional shared-turn-id override (joint participants). The EffectVm AIRs do not
+        // constrain TURN_HASH (it is an executor-trusted shared PI), so overriding the carried
+        // prefix slot and proving against the edited PI yields a still-valid proof binding the
+        // chosen id.
+        if let Some(tid) = turn_id {
+            dpis[pi::TURN_HASH_BASE] = tid;
+        }
+
+        let wrap_config = ir2_leaf_wrap_config();
+        let mem_boundary = MemBoundaryWitness::default();
+        let umem_boundary = UMemBoundaryWitness::default();
+        let proof = prove_vm_descriptor2_for_config(
+            &desc,
+            &trace,
+            &dpis,
+            &mem_boundary,
+            &[],
+            &umem_boundary,
+            &wrap_config,
+        )
+        .map_err(|e| format!("mint_rotated_participant_leg: IR-v2 batch prove failed: {e}"))?;
+        verify_vm_descriptor2_with_config(&desc, &proof, &dpis, &wrap_config).map_err(|e| {
+            format!("mint_rotated_participant_leg: minted proof self-verify failed: {e}")
+        })?;
+
+        Ok(RotatedParticipantLeg {
+            proof,
+            descriptor: desc,
+            public_inputs: dpis,
+        })
+    }
     /// The rotated OLD-state commitment (PI 34 — the row-0 before-block `state_commit`).
     pub fn old_root(&self) -> BabyBear {
         self.public_inputs[crate::effect_vm::trace_rotated::V1_PI_COUNT]
@@ -176,89 +295,124 @@ impl RotatedParticipantLeg {
     pub fn shared_turn_id(&self) -> BabyBear {
         self.public_inputs[pi::TURN_HASH_BASE]
     }
-}
-
-impl DescriptorParticipant {
-    /// The shared turn identity this participant claims (`TURN_HASH` position 0).
-    pub fn shared_turn_id(&self) -> BabyBear {
-        self.public_inputs[pi::TURN_HASH_BASE]
-    }
-
-    /// This cell's post-state commitment (`NEW_COMMIT` position 0).
+    /// This cell's post-state commitment (`NEW_COMMIT` position 0 — the v1-prefix carrier,
+    /// distinct from `new_root()` which is the rotated v9 commitment at PI 35). The joint
+    /// bundle-digest content reads this v1-prefix slot to stay byte-identical with the Silver
+    /// path's projection.
     pub fn cell_commit(&self) -> BabyBear {
         self.public_inputs[pi::NEW_COMMIT_BASE]
     }
+}
 
-    /// Construct a participant with ONLY the v1 leg (the rotated leg absent). Pre-C4
-    /// callers / v1 tests use this; the struct-literal form `DescriptorParticipant { proof,
-    /// public_inputs }` no longer compiles under `recursion` (the `rotated` field), so this
-    /// is the migration shim.
-    pub fn v1(
-        proof: crate::effect_vm_p3_full_air::EffectVmP3Proof,
-        public_inputs: Vec<BabyBear>,
-    ) -> Self {
-        Self {
-            proof,
-            public_inputs,
-            #[cfg(feature = "recursion")]
-            rotated: None,
-        }
+#[cfg(feature = "recursion")]
+impl DescriptorParticipant {
+    /// The shared turn identity this participant claims (`TURN_HASH` position 0 of the rotated
+    /// leg's carried prefix).
+    pub fn shared_turn_id(&self) -> BabyBear {
+        self.rotated.shared_turn_id()
     }
 
-    /// Construct a participant carrying BOTH the v1 leg (for host admission) and the
-    /// rotated leg (for the in-circuit recursion leaf). At/after C4 the recursion cores
-    /// prefer the rotated leg.
-    #[cfg(feature = "recursion")]
-    pub fn with_rotated(
-        proof: crate::effect_vm_p3_full_air::EffectVmP3Proof,
-        public_inputs: Vec<BabyBear>,
-        rotated: RotatedParticipantLeg,
-    ) -> Self {
-        Self {
-            proof,
-            public_inputs,
-            rotated: Some(rotated),
-        }
+    /// This cell's post-state commitment (`NEW_COMMIT` position 0 of the rotated leg's prefix).
+    pub fn cell_commit(&self) -> BabyBear {
+        self.rotated.cell_commit()
+    }
+
+    /// Construct a participant from its mandatory ROTATED leg (Bucket-F: the rotated leaf is the
+    /// sole leg the recursion cores fold).
+    pub fn rotated(rotated: RotatedParticipantLeg) -> Self {
+        Self { rotated }
     }
 }
 
-/// Verify one descriptor participant's per-cell proof SELECTOR-BOUND through the
-/// descriptor interpreter (the cutover replacement for [`verify_participant`]). A
-/// sound descriptor proof verifies under EXACTLY ONE cutover selector — its own
-/// effect; zero (not a graduated descriptor proof) or multiple (ambiguous, must not
-/// happen with the gate in place) are rejected. Returns the bound selector.
+/// Verify one descriptor participant's ROTATED per-cell proof standalone (host admission), then
+/// resolve which cohort the leg attests. The rotated `Ir2BatchProof` is verified against its
+/// carried `EffectVmDescriptor2` via [`crate::descriptor_ir2::verify_vm_descriptor2`] (the
+/// rotated analogue of the v1 `verify_vm_descriptor` selector-bind); the descriptor's `name`
+/// is then mapped back to its effect selector through the staged R=24 registry. Returns the
+/// bound selector. This is the Bucket-F replacement for the v1 `EffectVmP3Proof` selector-bind:
+/// host admission no longer reads a v1 leg.
+///
+/// Soundness note: as in the v1 path, this host gate is an ADMISSION discipline, not the
+/// soundness boundary — the rotated leaf is RE-VERIFIED in-circuit at the wrap
+/// ([`crate::ivc_turn_chain::prove_descriptor_leaf_rotated_with_config`]). A leg whose proof
+/// does not verify against its descriptor, or whose descriptor is not a registry member, is
+/// rejected here.
+#[cfg(feature = "recursion")]
 pub fn verify_descriptor_participant(p: &DescriptorParticipant) -> Result<usize, String> {
-    use crate::effect_vm_descriptors::descriptor_for_selector;
-    use crate::lean_descriptor_air::{parse_vm_descriptor, verify_vm_descriptor};
+    use crate::descriptor_ir2::verify_vm_descriptor2_with_config;
+    use crate::ivc_turn_chain::ir2_leaf_wrap_config;
 
-    let mut bound: Vec<usize> = Vec::new();
+    let leg = &p.rotated;
+    // (1) The rotated proof must verify against its carried descriptor over the carried PI
+    //     vector (full standalone re-verify of the IR-v2 multi-table batch). The leg's proof is
+    //     minted under the leaf-wrap config (recursion-config TYPE, `ir2_config`'s FRI knobs —
+    //     `RotatedParticipantLeg::mint_from_block_witnesses`), so it must be verified under THAT
+    //     config, not the default `ir2_config()` (which is the `DreggStarkConfig` type).
+    verify_vm_descriptor2_with_config(
+        &leg.descriptor,
+        &leg.proof,
+        &leg.public_inputs,
+        &ir2_leaf_wrap_config(),
+    )
+    .map_err(|e| {
+        format!("rotated descriptor participant proof failed standalone verification: {e}")
+    })?;
+    // (2) Map the descriptor's wire name back to its effect selector through the staged
+    //     R=24 registry (the cohort the leg is bound to).
+    rotated_descriptor_selector(&leg.descriptor.name).ok_or_else(|| {
+        format!(
+            "rotated descriptor participant carries descriptor '{}' which is not a known \
+             R=24 cohort member",
+            leg.descriptor.name
+        )
+    })
+}
+
+/// Map a rotated descriptor's wire name (e.g. `"transferVmDescriptor2R24"`) back to the effect
+/// selector whose cohort it proves. Scans the `CUTOVER_READY_SELECTORS` and matches each
+/// selector's rotated descriptor name against `name`. Returns `None` for a name no graduated
+/// selector resolves to (a non-cohort or unknown descriptor).
+///
+/// **The two-name subtlety (Bucket-F fix).** The staged registry TSV row is
+/// `WIRE-name \t DISPLAY-name \t json`, and the parsed descriptor's `.name` is the *DISPLAY*
+/// name (the json's internal `"name"` field, e.g. `"dregg-effectvm-transfer-v1-rot24-v3-staged"`),
+/// NOT the wire name [`rotated_descriptor_name`] returns (`"transferVmDescriptor2R24"`). So this
+/// maps a selector → its wire name → the TSV row → that row's DISPLAY name, and compares THAT to
+/// the leg's `desc.name`. (The earlier version compared the wire name directly to `desc.name` and
+/// therefore rejected every valid rotated leg.)
+#[cfg(feature = "recursion")]
+fn rotated_descriptor_selector(name: &str) -> Option<usize> {
+    use crate::effect_vm::trace_rotated::rotated_descriptor_name;
+    use crate::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
     for &s in crate::proof_forest::CUTOVER_READY_SELECTORS {
-        if let Some(json) = descriptor_for_selector(s) {
-            if let Ok(desc) = parse_vm_descriptor(json) {
-                if p.public_inputs.len() >= desc.public_input_count {
-                    let dpis = &p.public_inputs[..desc.public_input_count];
-                    if verify_vm_descriptor(&desc, &p.proof, dpis).is_ok() {
-                        bound.push(s);
-                    }
-                }
+        let wire = match rotated_descriptor_name(s) {
+            Some(w) => w,
+            None => continue,
+        };
+        // Find the registry row keyed by this selector's WIRE name; its DISPLAY name (field 1) is
+        // the json-internal `name` the parsed descriptor carries.
+        let display = V3_STAGED_REGISTRY_TSV.lines().find_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            if it.next() == Some(wire) {
+                it.next() // the DISPLAY name (== desc.name)
+            } else {
+                None
             }
+        });
+        if display == Some(name) {
+            return Some(s);
         }
     }
-    match bound.as_slice() {
-        [only] => Ok(*only),
-        [] => Err("descriptor participant verified under NO cutover selector".into()),
-        multi => Err(format!(
-            "descriptor participant verified under MULTIPLE cutover selectors {multi:?} — ambiguous"
-        )),
-    }
+    None
 }
 
 /// CG-2 host check + per-cell descriptor soundness over descriptor participants —
 /// the cutover analogue of the precondition gate in [`prove_joint_turn`]. Verifies
-/// (1) `>= 2` participants, (2) each per-cell proof verifies selector-bound through
-/// the descriptor interpreter, (3) all participants agree on the shared turn id.
-/// Returns the agreed shared turn id. (The aggregation trace/proof is shape-identical
-/// to the Silver path and is produced from the same PI projections.)
+/// (1) `>= 2` participants, (2) each per-cell ROTATED proof verifies standalone +
+/// selector-binds through [`verify_descriptor_participant`], (3) all participants agree on the
+/// shared turn id. Returns the agreed shared turn id. (The aggregation trace/proof is
+/// shape-identical to the Silver path and is produced from the same PI projections.)
+#[cfg(feature = "recursion")]
 pub fn check_descriptor_joint_preconditions(
     participants: &[DescriptorParticipant],
 ) -> Result<BabyBear, JointAggError> {
@@ -531,42 +685,17 @@ pub fn recursion_binding_trace(
     Ok((trace_to_matrix(&trace), pis))
 }
 
-/// The descriptor-participant analogue of [`recursion_binding_trace`]: build
-/// the [`JointTurnAggregationAir`] binding trace + public inputs for the Gold
-/// recursive path's DESCRIPTOR-backed per-cell proofs. Same host-side CG-2
-/// rejection (a disagreeing turn id errors here), same trace recipe — the
-/// projections (`shared_turn_id`, `cell_commit`) are read from the same PI
-/// positions; only the per-cell proof type differs.
-pub fn recursion_binding_trace_descriptor(
-    participants: &[&DescriptorParticipant],
-) -> Result<(RowMajorMatrix<P3BabyBear>, Vec<BabyBear>), JointAggError> {
-    if participants.len() < 2 {
-        return Err(JointAggError::TooFewParticipants {
-            count: participants.len(),
-        });
-    }
-    let shared_tid = participants[0].shared_turn_id();
-    for (i, p) in participants.iter().enumerate() {
-        if p.shared_turn_id() != shared_tid {
-            return Err(JointAggError::SharedTurnIdMismatch {
-                index: i,
-                expected: shared_tid.0,
-                found: p.shared_turn_id().0,
-            });
-        }
-    }
-    let pairs: Vec<(BabyBear, BabyBear)> = participants
-        .iter()
-        .map(|p| (p.shared_turn_id(), p.cell_commit()))
-        .collect();
-    let (trace, pis) = generate_joint_trace_pairs_unchecked(&pairs, shared_tid);
-    Ok((trace_to_matrix(&trace), pis))
-}
-
-/// [`recursion_binding_trace_descriptor`] reading each cell's ROTATED post-state commitment
-/// (PI 35) as the bundle-digest content, and the rotated leg's `shared_turn_id` (carried in
-/// the rotated prefix). Used by [`crate::joint_turn_recursive::prove_joint_core_rotated`].
-/// Fails closed if any participant carries no rotated leg.
+/// The descriptor-participant analogue of [`recursion_binding_trace`]: build the
+/// [`JointTurnAggregationAir`] binding trace + public inputs for the Gold recursive path's
+/// DESCRIPTOR-backed per-cell ROTATED proofs. Same host-side CG-2 rejection (a disagreeing turn
+/// id errors here), same trace recipe — reads each cell's ROTATED post-state commitment
+/// (PI 35, `new_root()`) as the bundle-digest content and the rotated leg's `shared_turn_id`
+/// (carried in the rotated prefix). Used by
+/// [`crate::joint_turn_recursive::prove_joint_core_rotated`].
+///
+/// (Bucket-F: the v1 `recursion_binding_trace_descriptor` — which read the v1-prefix
+/// `cell_commit` — was deleted with the v1 joint core; the rotated commitment is the chain root
+/// the in-circuit fold binds.)
 #[cfg(feature = "recursion")]
 pub fn recursion_binding_trace_descriptor_rotated(
     participants: &[&DescriptorParticipant],
@@ -576,18 +705,7 @@ pub fn recursion_binding_trace_descriptor_rotated(
             count: participants.len(),
         });
     }
-    let legs: Vec<&RotatedParticipantLeg> = participants
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            p.rotated
-                .as_ref()
-                .ok_or(JointAggError::ParticipantProofInvalid {
-                    index: i,
-                    reason: "rotated joint binding: participant carries no rotated leg".to_string(),
-                })
-        })
-        .collect::<Result<_, _>>()?;
+    let legs: Vec<&RotatedParticipantLeg> = participants.iter().map(|p| &p.rotated).collect();
     let shared_tid = legs[0].shared_turn_id();
     for (i, leg) in legs.iter().enumerate() {
         if leg.shared_turn_id() != shared_tid {
@@ -1116,59 +1234,15 @@ mod tests {
         );
     }
 
-    /// (DESCRIPTOR CUTOVER) POSITIVE + TEETH: build two descriptor-interpreter
-    /// participants that AGREE on the shared turn id, confirm the descriptor
-    /// per-cell soundness + CG-2 host gate accepts them; then a third that DISAGREES
-    /// is rejected at the shared-turn-id binding — the cross-cell tooth holds on the
-    /// descriptor path exactly as on the bespoke path.
-    #[test]
-    fn descriptor_participants_cg2_binding_holds() {
-        use crate::effect_vm::columns::sel;
-        use crate::effect_vm_descriptors::descriptor_for_selector;
-        use crate::lean_descriptor_air::{parse_vm_descriptor, prove_vm_descriptor};
-
-        let make = |balance: u64, nonce: u32, turn_id: u32| -> DescriptorParticipant {
-            let state = CellState::new(balance, nonce);
-            let effects = vec![Effect::Transfer {
-                amount: 5,
-                direction: 1,
-            }];
-            let (trace, mut public_inputs) = generate_effect_vm_trace(&state, &effects);
-            public_inputs[pi::TURN_HASH_BASE] = BabyBear::new(turn_id);
-            let json = descriptor_for_selector(sel::TRANSFER).unwrap();
-            let desc = parse_vm_descriptor(json).unwrap();
-            let dpis = &public_inputs[..desc.public_input_count];
-            let proof = prove_vm_descriptor(&desc, &trace, dpis)
-                .expect("descriptor proves the honest transfer participant");
-            DescriptorParticipant::v1(proof, public_inputs)
-        };
-
-        let p0 = make(100, 0, 0xABCD);
-        let p1 = make(200, 7, 0xABCD);
-        // Each verifies selector-bound to TRANSFER.
-        assert_eq!(verify_descriptor_participant(&p0).unwrap(), sel::TRANSFER);
-        assert_eq!(verify_descriptor_participant(&p1).unwrap(), sel::TRANSFER);
-        // Agreeing pair passes the descriptor CG-2 gate.
-        let tid = check_descriptor_joint_preconditions(&[p0, p1])
-            .expect("agreeing descriptor participants must pass CG-2");
-        assert_eq!(tid, BabyBear::new(0xABCD));
-
-        // Disagreeing turn id is rejected at the binding (the cross-cell tooth).
-        let q0 = make(100, 0, 0xABCD);
-        let q1 = make(200, 7, 0x1234);
-        match check_descriptor_joint_preconditions(&[q0, q1]) {
-            Err(JointAggError::SharedTurnIdMismatch {
-                index,
-                expected,
-                found,
-            }) => {
-                assert_eq!(index, 1);
-                assert_eq!(expected, 0xABCD);
-                assert_eq!(found, 0x1234);
-            }
-            other => panic!("expected SharedTurnIdMismatch on descriptor path, got {other:?}"),
-        }
-    }
+    // (DESCRIPTOR CUTOVER, CG-2 cross-cell binding) — Bucket-F: the descriptor
+    // participant is now the ROTATED leg, which can only be minted from `dregg_cell::Cell`s
+    // (via `dregg_turn::rotation_witness::mint_rotated_participant_leg`); the circuit lib
+    // cannot build it in a `#[cfg(test)]` unit test (no cell/turn dep — the cycle). The
+    // CG-2 shared-turn-id tooth (`SharedTurnIdMismatch` from
+    // `check_descriptor_joint_preconditions` / `recursion_binding_trace_descriptor_rotated`)
+    // is exercised in the integration tests that DO have cell/turn
+    // (`circuit/tests/proof_economics.rs` + the joint-fold integration suite), where the
+    // rotated participants are minted through the real producer witnesses.
 
     /// (3) NEGATIVE: a single participant is not a joint turn.
     #[test]

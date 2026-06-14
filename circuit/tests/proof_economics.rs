@@ -15,16 +15,16 @@
 
 use std::time::Instant;
 
-use dregg_circuit::effect_vm::{CellState, Effect, generate_effect_vm_trace, pi, sel};
+use dregg_circuit::effect_vm::{CellState, Effect, generate_effect_vm_trace, sel};
 use dregg_circuit::effect_vm_descriptors::descriptor_for_selector;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::ivc_turn_chain::{
     FinalizedTurn, prove_turn_chain_recursive, verify_turn_chain_recursive,
 };
 use dregg_circuit::joint_turn_aggregation::DescriptorParticipant;
+use dregg_turn::rotation_witness::mint_rotated_participant_leg;
 use dregg_circuit::lean_descriptor_air::{
-    EffectVmDescriptorAir, descriptor_recursion_matrix, parse_vm_descriptor, prove_vm_descriptor,
-    verify_vm_descriptor,
+    EffectVmDescriptorAir, descriptor_recursion_matrix, parse_vm_descriptor,
 };
 use dregg_circuit::plonky3_prover::{DreggStarkConfig, create_config_with_fri, to_p3};
 use p3_baby_bear::BabyBear as P3BabyBear;
@@ -33,7 +33,41 @@ use p3_batch_stark::{ProverData, StarkInstance, prove_batch, verify_batch};
 // ============================================================================
 // Shared fixture: one REAL production transfer turn (the same shape the SDK
 // cutover path emits and the ivc_turn_chain tests fold).
+//
+// Bucket-F (PATH-PRESERVE Phase 5a): the finalized turn carries the MANDATORY
+// ROTATED leg (the rotated multi-table `Ir2BatchProof` minted by
+// `mint_rotated_participant_leg`), not the dropped v1 `EffectVmP3Proof`. The
+// chain roots are the ROTATED commitments read off the minted leg (PI 34/35).
 // ============================================================================
+
+/// OPEN permissions so the rotated producer-witness path admits the actor cell
+/// without auth gating (mirrors `rotation_batchstark_leaf_smoke.rs`).
+fn open_permissions() -> dregg_cell::Permissions {
+    use dregg_cell::AuthRequired;
+    dregg_cell::Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    }
+}
+
+/// The transfer actor cell at `(balance, nonce)` with open permissions — the
+/// before/after `Cell` the rotated mint runs `rotation_witness::produce` over.
+fn producer_cell(balance: i64, nonce: u64) -> dregg_cell::Cell {
+    let mut pk = [0u8; 32];
+    pk[0] = 7;
+    let mut cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], balance);
+    cell.permissions = open_permissions();
+    for _ in 0..nonce {
+        let _ = cell.state.increment_nonce();
+    }
+    cell
+}
 
 fn make_turn(balance: u64, nonce: u32, amount: u64) -> (FinalizedTurn, BabyBear, BabyBear) {
     let state = CellState::new(balance, nonce);
@@ -41,19 +75,27 @@ fn make_turn(balance: u64, nonce: u32, amount: u64) -> (FinalizedTurn, BabyBear,
         amount,
         direction: 1,
     }];
-    let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-    let old_root = public_inputs[pi::OLD_COMMIT];
-    let new_root = public_inputs[pi::NEW_COMMIT];
-    let json = descriptor_for_selector(sel::TRANSFER).expect("transfer descriptor registered");
-    let desc = parse_vm_descriptor(json).expect("transfer descriptor parses");
-    let dpis = &public_inputs[..desc.public_input_count];
-    let proof =
-        prove_vm_descriptor(&desc, &trace, dpis).expect("descriptor proves honest transfer");
+    // The rotated transfer DEBIT keeps the nonce and decreases the balance by
+    // `amount`: before/after actor cells at the same nonce, balance - amount.
+    let before_cell = producer_cell(balance as i64, nonce as u64);
+    let after_cell = producer_cell((balance as i64) - (amount as i64), nonce as u64);
+    let nullifier_root = [0u8; 32];
+    let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
+    let leg = mint_rotated_participant_leg(
+        &state,
+        &effects,
+        &before_cell,
+        &after_cell,
+        &nullifier_root,
+        &receipt_log,
+        None,
+    )
+    .expect("rotated transfer leg mints + self-verifies");
+    // Read the ROTATED chain roots off the leg BEFORE it moves into the participant.
+    let old_root = leg.old_root();
+    let new_root = leg.new_root();
     (
-        FinalizedTurn::new(
-            DescriptorParticipant::v1(proof, public_inputs),
-            trace,
-        ),
+        FinalizedTurn::new(DescriptorParticipant::rotated(leg)),
         old_root,
         new_root,
     )
@@ -67,6 +109,10 @@ fn make_chain(
 ) -> (Vec<FinalizedTurn>, BabyBear, BabyBear) {
     let mut turns = Vec::with_capacity(k);
     let mut balance = start_balance;
+    // The rotated trace welds balance/nonce from the v1 sub-trace, which BUMPS the nonce by 1 per
+    // Transfer row — so turn i's after-state is `(balance - step, nonce + 1)`, and the next turn's
+    // before-state must match it. Advance BOTH balance and nonce per turn so the rotated
+    // state-commit roots link (`old_root[i+1] == new_root[i]`).
     let mut nonce = start_nonce;
     let mut genesis = BabyBear::ZERO;
     let mut final_root = BabyBear::ZERO;
@@ -80,7 +126,7 @@ fn make_chain(
         final_root = new_root;
         turns.push(turn);
         balance -= step;
-        nonce += 1;
+        nonce += 1; // the v1 sub-trace bumps the nonce by 1 per Transfer row.
     }
     (turns, genesis, final_root)
 }
@@ -128,17 +174,24 @@ fn census<T: serde::Serialize>(value: &T) -> (usize, usize) {
 }
 
 // ============================================================================
-// T1: the per-turn EffectVM descriptor proof — the artifact the SDK puts on
-// the wire (postcard-serialized `EffectVmP3Proof`, label "effect-vm").
+// T1: the per-turn EffectVM ROTATED descriptor proof — the artifact the SDK
+// now puts on the wire (Bucket-F: the rotated multi-table `Ir2BatchProof`, the
+// mandatory recursion leaf; the v1 `EffectVmP3Proof` is dropped). Same
+// component breakdown (commitments / opened_values / opening_proof / lookups —
+// `BatchProof`'s fields), now measured on the rotated leg.
 // ============================================================================
 
 #[test]
 fn t1_per_turn_descriptor_proof_size() {
+    use dregg_circuit::descriptor_ir2::verify_vm_descriptor2_with_config;
+    use dregg_circuit::ivc_turn_chain::ir2_leaf_wrap_config;
+
     let t0 = Instant::now();
     let (turn, _old, _new) = make_turn(1000, 0, 7);
     let prove_ms = t0.elapsed().as_millis();
 
-    let proof = &turn.participant.proof;
+    let leg = &turn.participant.rotated;
+    let proof = &leg.proof;
     let bytes = postcard::to_allocvec(proof).expect("postcard");
 
     // Component breakdown (the same postcard encoding, field by field).
@@ -149,16 +202,15 @@ fn t1_per_turn_descriptor_proof_size() {
         .unwrap()
         .len();
 
-    let json = descriptor_for_selector(sel::TRANSFER).unwrap();
-    let desc = parse_vm_descriptor(json).unwrap();
-    let dpis = &turn.participant.public_inputs[..desc.public_input_count];
+    let wrap_config = ir2_leaf_wrap_config();
     let t1 = Instant::now();
-    verify_vm_descriptor(&desc, proof, dpis).expect("verifies");
+    verify_vm_descriptor2_with_config(&leg.descriptor, proof, &leg.public_inputs, &wrap_config)
+        .expect("rotated leg verifies natively under the leaf-wrap config");
     let verify_ms = t1.elapsed().as_micros() as f64 / 1000.0;
 
     let (digests, numbers) = census(proof);
 
-    println!("== T1 per-turn EffectVM descriptor proof (transfer, 186-col base trace) ==");
+    println!("== T1 per-turn EffectVM ROTATED descriptor proof (transfer, 311-col rotated trace) ==");
     println!(
         "total: {} bytes ({:.1} KiB) | prove+selfverify: {prove_ms} ms | verify: {verify_ms:.1} ms",
         bytes.len(),
@@ -173,12 +225,9 @@ fn t1_per_turn_descriptor_proof_size() {
     );
     println!("  digest census: {digests} merkle digests, {numbers} field elements total");
     println!(
-        "  descriptor: trace_width(base)={}, extended matrix width={}, rows={}",
-        desc.trace_width,
-        descriptor_recursion_matrix(&desc, &turn.base_trace)
-            .unwrap()
-            .width,
-        turn.base_trace.len(),
+        "  rotated descriptor: trace_width={}, public_input_count={}",
+        leg.descriptor.trace_width,
+        leg.descriptor.public_input_count,
     );
 }
 
@@ -380,8 +429,8 @@ fn t4_joint_turn_aggregation_size() {
     let (turn_a, _, _) = make_turn(1000, 0, 7);
     let (turn_b, _, _) = make_turn(500, 3, 2);
 
-    let pa = postcard::to_allocvec(&turn_a.participant.proof).unwrap();
-    let pb = postcard::to_allocvec(&turn_b.participant.proof).unwrap();
+    let pa = postcard::to_allocvec(&turn_a.participant.rotated.proof).unwrap();
+    let pb = postcard::to_allocvec(&turn_b.participant.rotated.proof).unwrap();
     verify_descriptor_participant(&turn_a.participant).expect("a verifies");
     verify_descriptor_participant(&turn_b.participant).expect("b verifies");
     // Shared-turn preconditions differ (these are independent turns), so only
