@@ -4,17 +4,22 @@
 //!   dregg-deploy check <file.dregg.toml>     parse → lower → static assurance verdict
 //!   dregg-deploy check --ring <file>         also run the ring-balance check
 //!   dregg-deploy check --json <file>         emit the assurance as JSON
+//!   dregg-deploy apply <file.dregg.toml>     GATE on the check, then emit the per-root
+//!                                            turn sequence + receipt-chain shape
+//!   dregg-deploy apply --json <file>         emit the planned turn sequence as JSON
 //!   dregg-deploy lower <file.dregg.toml>     emit the lowered CallForest as JSON
 //!                                            (feed it to `dregg-uverify`)
 //!   dregg-deploy fmt   <file.dregg.toml>     round-trip: parse and re-serialize canonical TOML
 //! ```
 //!
-//! `check` exits 0 on a passing assurance, 1 on findings, 2 on input/parse
-//! error — so it composes into CI / pre-submit hooks.
+//! `check`/`apply` exit 0 on a passing assurance, 1 on findings / a refused
+//! deployment, 2 on input/parse error — so they compose into CI / pre-submit
+//! hooks. `apply` is the gate: it refuses to emit a turn sequence for a
+//! non-conserving / amplifying spec.
 
 use std::process::ExitCode;
 
-use dregg_deploy::{check, parse_toml, serialize_toml, Lowered};
+use dregg_deploy::{check, parse_toml, plan_apply, serialize_toml, ApplyError, Lowered};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -22,6 +27,7 @@ fn main() -> ExitCode {
 
     match cmd {
         Some("check") => run_check(&args[1..]),
+        Some("apply") => run_apply(&args[1..]),
         Some("lower") => run_lower(&args[1..]),
         Some("fmt") => run_fmt(&args[1..]),
         Some("-h") | Some("--help") | None => {
@@ -42,11 +48,13 @@ fn print_help() {
          USAGE:\n  \
            dregg-deploy check [--ring] [--json] <file.dregg.toml>\n      \
                parse → lower → run the static assurance over the whole authority layout\n  \
+           dregg-deploy apply [--ring] [--json] <file.dregg.toml>\n      \
+               GATE on the static check, then emit the per-root turn sequence + receipt chain\n  \
            dregg-deploy lower <file.dregg.toml>\n      \
                emit the lowered dregg_turn::CallForest as JSON (pipe to dregg-uverify)\n  \
            dregg-deploy fmt   <file.dregg.toml>\n      \
                round-trip: parse and re-emit canonical TOML\n\n\
-         EXIT (check): 0 = Pass, 1 = findings, 2 = input/parse error."
+         EXIT (check/apply): 0 = Pass, 1 = findings / refused, 2 = input/parse error."
     );
 }
 
@@ -147,6 +155,89 @@ fn print_human(v: &dregg_deploy::DeployVerdict) {
              rejected by the executor (you'd pay gas to be rejected)."
         );
     }
+}
+
+fn run_apply(args: &[String]) -> ExitCode {
+    let as_ring = args.iter().any(|a| a == "--ring");
+    let as_json = args.iter().any(|a| a == "--json");
+    let text = match read_file(args) {
+        Ok(t) => t,
+        Err(c) => return c,
+    };
+    let dep = match parse_toml(&text) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    // THE GATE: plan_apply runs the static check first and refuses to emit a
+    // turn sequence for a non-conserving / amplifying spec.
+    let plan = match plan_apply(&dep, as_ring) {
+        Ok(p) => p,
+        Err(ApplyError::Refused { assurance }) => {
+            eprintln!(
+                "REFUSED: the static pre-submission check rejected this deployment — \
+                 NO turn sequence emitted (you'd pay gas to be rejected). Findings:"
+            );
+            for f in assurance.all_findings() {
+                eprintln!("  @ {}  —  {}", f.locus, f.message);
+            }
+            return ExitCode::from(1);
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if as_json {
+        // Emit the planned turn sequence (the Turn type is serde-serializable).
+        let turns: Vec<&dregg_turn::turn::Turn> = plan.turns.iter().map(|t| &t.turn).collect();
+        match serde_json::to_string_pretty(&turns) {
+            Ok(j) => println!("{j}"),
+            Err(e) => {
+                eprintln!("error serializing plan: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        print_apply(&plan);
+    }
+    ExitCode::SUCCESS
+}
+
+fn print_apply(plan: &dregg_deploy::AppliedPlan) {
+    println!("dregg-deploy apply: the static check PASSED — emitting the turn sequence.");
+    println!(
+        "  {} turn(s), one per root effect-group (births → funds → grants), receipt-chained:",
+        plan.len()
+    );
+    let hexn = |b: &[u8; 32], n: usize| -> String {
+        b.iter().take(n).map(|x| format!("{x:02x}")).collect()
+    };
+    for (i, pt) in plan.turns.iter().enumerate() {
+        let prev = pt
+            .turn
+            .previous_receipt_hash
+            .map(|h| format!("⟵ {}…", hexn(&h, 6)))
+            .unwrap_or_else(|| "(chain root)".to_string());
+        println!(
+            "    [{i}] {:<6} agent {}…  turn {}…  receipt {}…  {prev}",
+            pt.phase,
+            hexn(pt.agent.as_bytes(), 6),
+            hexn(&pt.turn_hash, 6),
+            hexn(&pt.projected_receipt_hash, 6),
+        );
+    }
+    println!();
+    println!(
+        "The chain is the deployment's causal strand (each turn's \
+         previous_receipt_hash = the prior turn's projected receipt). Submit in \
+         order, re-signed with the operator key. NOTE: a Pass + a projected chain \
+         is the SHAPE — the executor fills the real state commitments, signatures, \
+         and computrons at submit time."
+    );
 }
 
 fn run_lower(args: &[String]) -> ExitCode {
