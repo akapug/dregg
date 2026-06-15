@@ -1,0 +1,64 @@
+{
+  "id": "tool-access-delegation",
+  "name": "Tool Access Delegation",
+  "description": "Verifiable tool / MCP-access delegation — a grantor agent mints a narrowly-attenuated, rate-limited, time-bounded, revocable mandate cell whose rate / expiry / scope caveats are checked by the verified executor on every tool invocation.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d746f6f6c2d6163636573732d64656c65672d666163"
+  ],
+  "inspectors": [
+    "tad-mandate"
+  ],
+  "host_inspectors": [
+    { "id": "mandate", "label": "Mandate", "tag": "dregg-tad-mandate", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "grant_tool_access", "label": "Grant tool access", "builder": "grant_tool_access", "kind": "turn" },
+    { "id": "invoke_tool", "label": "Invoke tool", "builder": "invoke_tool", "kind": "turn" },
+    { "id": "revoke_tool_access", "label": "Revoke tool access", "builder": "revoke_tool_access", "kind": "turn" }
+  ],
+  "turn_builders": [
+    "grant_tool_access",
+    "invoke_tool",
+    "revoke_tool_access"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField"
+  ],
+  "slot_layout": {
+    "CALLS_MADE_SLOT": 0,
+    "RATE_LIMIT_SLOT": 1,
+    "DEADLINE_SLOT": 2,
+    "TOOL_ID_SLOT": 3
+  },
+  "state_constraints": [
+    "WriteOnce(RATE_LIMIT_SLOT)",
+    "WriteOnce(TOOL_ID_SLOT)",
+    "WriteOnce(DEADLINE_SLOT)",
+    "FieldLteField(CALLS_MADE_SLOT, RATE_LIMIT_SLOT)",
+    "MethodIs(invoke_tool) => Monotonic(CALLS_MADE_SLOT)",
+    "MethodIs(invoke_tool) => FieldLteHeight(DEADLINE_SLOT)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "tad_app(cipherclerk, executor)",
+    "cell": "mandate",
+    "discoverable": ["tools", "delegation"],
+    "publish": "Either (the WORKER tier — the narrowest role that holds the mandate and the narrowest cap-only affordance tier; the mandate cell is a dregg:// sturdyref a delegated agent on another federation reacquires at its own tier)",
+    "affordances": {
+      "view_grant": "cap-only, Either (a WORKER reads the mandate's terms)",
+      "grant": "cap-only, None/root, carries the REAL Effect::GrantCapability (the GRANTOR hands the mandate's invoke cap forward NARROWED — the cap-graph half of attenuated delegation)",
+      "invoke": "GATED (cap∧state), Either — budget-remaining precondition (calls < rate); the fire submits the FULL counter-advancing turn (reading the live calls_made), the executor re-enforcing the installed Cases program (FieldLteField(calls<=rate) + Monotonic(calls) + FieldLteHeight(deadline))"
+    },
+    "seam": "CLOSED — the fire runs against the seeded mandate cell carrying the FULL Cases program (WriteOnce rate/tool/deadline + FieldLteField(calls<=rate) + the invoke_tool-scoped Monotonic(calls) + FieldLteHeight(deadline)), so an OVER-BUDGET invocation (calls past rate), a COUNTER REWIND (Monotonic), and a PAST-DEADLINE invocation (height-aware, unreadable by the deos precondition) all BITE in the deos fire / executor-submission path (tests/deos_seam.rs)"
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/tool-access-delegation/src/lib.rs"
+  }
+}

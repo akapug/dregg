@@ -60,9 +60,10 @@
 //!   [`StarbridgeAppContext`].
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
-    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, FieldElement,
-    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellAffordance, CellId, CellMode,
+    CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect, EmbeddedExecutor,
+    Event, FactoryDescriptor, FieldElement, FireExecuteError, GatedAffordance,
+    InspectorDescriptor, StarbridgeAppContext, StateConstraint, TurnReceipt, canonical_program_vk,
     field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
 use dregg_cell::state::STATE_SLOTS;
@@ -303,10 +304,17 @@ pub fn web_constants() -> ConstantsModule {
         .topic("HEAD_ADVANCED", "provenance-head-advanced")
 }
 
-/// Register this starbridge-app on a [`StarbridgeAppContext`].
+/// Register this starbridge-app on a [`StarbridgeAppContext`] — the FLOOR (the
+/// executor-truth layer: the factory descriptor whose `state_constraints` ARE the
+/// append-only/tamper-evident policy, installed on every born log cell) AND the
+/// deos-native composition surface (the [`DeosApp`], folded into the context's affordance
+/// registry via [`register_deos`] — so the same `register(ctx)` mounts BOTH).
 ///
-/// Installs the provenance factory descriptor and the provenance inspector.
-/// Returns the registered factory VK.
+/// The factory + inspector are where SOUNDNESS lives (an overwriting/rewinding append is a
+/// real executor refusal on the born cell). The deos surface is the composition skin:
+/// per-viewer projection, the cap∧state gated fire, the `dregg://` publish, the
+/// rehydratable snapshot, the generated component, the manifest. Returns the factory VK
+/// (the floor's identity) as before so the floor's callers are unchanged.
 pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
     let factory_vk = ctx.register_factory(provenance_factory_descriptor());
 
@@ -328,7 +336,269 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
         }),
     });
 
+    // Mount the deos-native composition surface (the `DeosApp`) on the SAME context.
+    register_deos(ctx);
+
     factory_vk
+}
+
+// =============================================================================
+// The deos-native surface — the LOG as a composed `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the agent-provenance LOG, re-expressed
+// as a composed deos app and SHIPPED from `src/`. The same operations are ONE
+// [`DeosApp`] ([`provenance_app`] below); the framework wires the rest — per-viewer
+// projection, web-of-cells publish (the LOG cell IS a `dregg://` sturdyref), the
+// rehydratable frustum-snapshot, the generated `<dregg-affordance-surface>` component,
+// and the manifest — none of which the floor bones had.
+//
+// **The seam is closed** — a TWO-TEMPO fire (mirror supply-chain-provenance /
+// subscription). The state-mutating operation (`append_entry`) is a [`GatedAffordance`]
+// carrying a live-state PRECONDITION ([`log_initialized_precondition`]); the FULL
+// provenance program ([`provenance_cell_program`] = `Monotonic(HEAD)` +
+// `WriteOnce(entries)`) is INSTALLED on the seeded log cell ([`seed_log`]) and
+// RE-ENFORCED by the executor on every touching turn:
+//
+//   1. the deos PRECONDITION gate (the cap-gate `is_attenuation` AND the live-state
+//      precondition `CellProgram::evaluate`) decides the button's verdict IN-BAND —
+//      nothing submitted on a miss (anti-ghost; the htmx reactivity rides this);
+//   2. [`fire_append_entry`] then submits the FULL multi-effect append turn (read live
+//      `HEAD`, write the new entry's `WriteOnce` slot, advance `HEAD`, point `TIP`, emit
+//      the event), and the executor RE-ENFORCES the installed program — so a REWOUND head
+//      (`Monotonic(HEAD)`) and an OVERWRITE of a sealed entry (`WriteOnce`) are REAL
+//      executor refusals in the SUBMISSION path — the half the floor's `evaluate`-only
+//      tests never exercised through a real signed turn (see `tests/deos_seam.rs`).
+//
+// Both gates are the genuine ones (`is_attenuation` + `CellProgram::evaluate`). The
+// append accumulates: each fire reads the live `HEAD` and writes the NEXT entry, so the
+// same published cap∧state button drives a multi-entry chain (the executor re-enforces
+// `Monotonic`/`WriteOnce` on each produced transition). (`Monotonic` is `>=`, so a
+// no-advance head stays put; the genuine no-replay tooth is a REWIND.)
+
+/// The provenance rights tiers, ON THE REAL ATTENUATION LATTICE — the roles the floor
+/// crate's cap-graph enforces:
+///
+///   - a VERIFIER (the public / a third-party auditor) holds [`AuthRequired::Signature`]
+///     — the narrow read tier: it can `view_provenance` (read + re-derive the chain) and
+///     nothing else;
+///   - a RECORDER (an agent currently appending to its scratchpad) holds
+///     [`AuthRequired::Either`] — it can `append_entry` (a real chain-advancing turn) AND
+///     view;
+///   - the OWNER / ADMIN holds [`AuthRequired::None`]/root — everything a recorder can do.
+///
+/// So `Signature ⊂ Either ⊂ None` IS the verifier ⊂ recorder ⊂ owner ladder.
+pub const VERIFIER_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The recorder rights tier (sig-or-proof — append + view). See [`VERIFIER_RIGHTS`].
+pub const RECORDER_RIGHTS: AuthRequired = AuthRequired::Either;
+/// The owner/admin rights tier (root — all). See [`VERIFIER_RIGHTS`].
+pub const OWNER_RIGHTS: AuthRequired = AuthRequired::None;
+
+/// The `append_entry` **live-state precondition** — the log must be INITIALIZED
+/// (`HEAD >= 0`, i.e. a genesis entry has been seeded). A real [`CellProgram`] read
+/// against the cell's current state, so an `append_entry` button is DARK on an
+/// uninitialized cell and LIT once seeded (the htmx tooth). This gates "may
+/// `append_entry` fire now"; the append INVARIANT (`Monotonic(HEAD)` +
+/// `WriteOnce(entry)`) is the installed [`provenance_cell_program`] the executor
+/// re-enforces on the produced transition.
+pub fn log_initialized_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldGte {
+        index: HEAD_SLOT as u8,
+        value: field_from_u64(0),
+    }])
+}
+
+/// **The agent-provenance LOG as a composed [`DeosApp`]** — the whole interaction
+/// surface, on the deos bones. The log cell is the agent's OWN cell
+/// (`cipherclerk.cell_id()`) so fires execute against the seeded embedded ledger.
+///
+/// Two operations on the LOG cell, on the verifier ⊂ recorder rights ladder:
+///
+///   - `view_provenance` — a cap-only affordance (a VERIFIER reads + re-derives the
+///     chain): `Signature`, an `EmitEvent` (this is [`verify_chain`]'s deos home — a
+///     verifier re-derives the chain from the published claims);
+///   - `append_entry` — a [`GatedAffordance`] (a RECORDER advances the chain): `Either`,
+///     a live-state PRECONDITION (the log is initialized); the real fire
+///     ([`fire_append_entry`]) submits the FULL append, re-enforced by the executor's
+///     installed provenance program (the `Monotonic(HEAD)` + `WriteOnce(entry)` caveats
+///     BITE on the produced transition).
+///
+/// The log cell is published into the web-of-cells at the verifier tier (a third-party
+/// auditor on another federation reacquires the log's provenance across the membrane) and
+/// is discoverable under `provenance` / `audit`.
+///
+/// Seed the cell's program + genesis state with [`seed_log`] so the gated fire has a live
+/// state and the executor re-enforces the caveats.
+pub fn provenance_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let cell = cipherclerk.cell_id();
+
+    // `view_provenance` — a verifier reads + re-derives the chain. Cap-only.
+    let view = CellAffordance::new(
+        "view_provenance",
+        VERIFIER_RIGHTS,
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol("provenance-read"), vec![]),
+        },
+    );
+    // `append_entry` — a RECORDER advances the chain. The GatedAffordance carries the
+    // DECISIVE effect (the `HEAD` cursor advance) as its surface representative AND a
+    // live-state PRECONDITION ([`log_initialized_precondition`]: the log is seeded) — so
+    // the button is dark before seeding and lit after, and the cap∧state gate decides its
+    // verdict in-band. The actual fire ([`fire_append_entry`]) submits the FULL append
+    // (entry `WriteOnce` slot + `HEAD` advance + `TIP` + event), which the executor
+    // re-enforces the installed provenance program on — so `Monotonic(HEAD)` and
+    // `WriteOnce(entry)` BITE: a rewind or an overwrite is REFUSED.
+    let append = GatedAffordance::new(
+        CellAffordance::new(
+            "append_entry",
+            RECORDER_RIGHTS,
+            Effect::SetField {
+                cell,
+                index: HEAD_SLOT,
+                value: field_from_u64(1),
+            },
+        ),
+        log_initialized_precondition(),
+    );
+
+    DeosApp::builder("agent-provenance", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["provenance".into(), "audit".into()])
+        .cell(
+            DeosCell::new(cell, "log")
+                .affordance(view)
+                .gated(append)
+                .publish(VERIFIER_RIGHTS),
+        )
+        .build()
+}
+
+/// **Seed the LOG cell** so the gated fire has live state + the caveats bite: install
+/// the full [`provenance_cell_program`] on the seeded log cell (so the executor
+/// re-enforces it on every touching turn), then write the genesis entry directly into
+/// the embedded ledger — the genesis entry digest at `entry_slot(0)` (its `WriteOnce`
+/// slot, now sealed) and `HEAD = 1` (the cursor past the genesis entry).
+///
+/// After seeding, the log is at `HEAD == 1` with one committed entry — a real `(old,
+/// new)` baseline against which `append_entry` advances. Returns the genesis entry digest
+/// (the chain tip) so a caller can walk the chain.
+pub fn seed_log(executor: &EmbeddedExecutor, genesis_claim: &[u8]) -> FieldElement {
+    let cell = executor.cell_id();
+    executor.install_program(cell, provenance_cell_program());
+    let claim = claim_digest(genesis_claim);
+    let digest = link_hash(&GENESIS_PREV, &claim);
+    executor.with_ledger_mut(|ledger| {
+        if let Some(c) = ledger.get_mut(&cell) {
+            c.state.set_field(entry_slot(0), digest);
+            c.state.set_field(HEAD_SLOT, field_from_u64(1));
+            c.state.set_field(TIP_SLOT, digest);
+        }
+    });
+    digest
+}
+
+/// **`append_entry` effects** — the multi-effect chain-advancing body computed from the
+/// cell's LIVE state: read the current `HEAD` (= the next entry index `i`) and current
+/// `TIP` (= the link predecessor `prev`), then write the new link
+/// `link_hash(prev, claim)` at `entry_slot(i)` (`WriteOnce`), advance `HEAD` to `i + 1`
+/// (`Monotonic` forward), point `TIP` at the new link, and emit `provenance-appended`.
+/// This is the ONE coherent transition the installed program admits — every clause holds
+/// together (`Monotonic(HEAD)` advances, the fresh `WriteOnce` slot takes its first
+/// write). THIS is the turn [`fire_append_entry`] submits, parameterized by the live
+/// state so the same gated button drives a multi-entry chain.
+pub fn append_effects(
+    cell: CellId,
+    live: &dregg_cell::state::CellState,
+    claim: &FieldElement,
+) -> Vec<Effect> {
+    let i = field_to_u64(&live.fields[HEAD_SLOT]) as usize;
+    let prev = live.fields[TIP_SLOT];
+    let digest = link_hash(&prev, claim);
+    vec![
+        Effect::SetField {
+            cell,
+            index: entry_slot(i),
+            value: digest,
+        },
+        Effect::SetField {
+            cell,
+            index: HEAD_SLOT,
+            value: field_from_u64((i + 1) as u64),
+        },
+        Effect::SetField {
+            cell,
+            index: TIP_SLOT,
+            value: digest,
+        },
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol("provenance-appended"), vec![digest, *claim]),
+        },
+    ]
+}
+
+/// **Fire `append_entry`** — the deos cap∧state PRECONDITION gate (anti-ghost, in-band),
+/// then the FULL multi-effect append turn the executor re-enforces the provenance program
+/// on. The two-tempo bridge: the gated affordance decides the button's verdict (cap ⊇
+/// Either AND the log is initialized) WITHOUT touching the executor; on both passing, the
+/// complete chain-advancing turn ([`append_effects`], computed from the cell's live
+/// state) is submitted, and the executor's re-enforcement of [`provenance_cell_program`]
+/// is the SECOND, verified gate (`Monotonic(HEAD)` + `WriteOnce(entry)` bite on the
+/// produced transition). Anti-ghost both ways: a precondition miss never submits; a
+/// program violation is a real executor refusal.
+///
+/// The chain is read from the cell's live state (current `HEAD` ⇒ the next entry index,
+/// current `TIP` ⇒ the link predecessor), so the caller threads only the claim. Use
+/// [`seed_log`] first. `claim` is the 32-byte digest of the content being attested.
+pub fn fire_append_entry(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+    claim: &FieldElement,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let log = cell.cell();
+    let claim = *claim;
+    // The framework reads the live state, runs the cap∧state gate IN-BAND (nothing
+    // submitted on a miss), then submits the FULL append the executor re-enforces the
+    // installed program on. The effects are a pure function of the live state, so the
+    // append accumulates (reads live `HEAD` + 1) across a multi-entry run.
+    cell.fire_gated_through_executor_with(
+        "append_entry",
+        held,
+        cipherclerk,
+        executor,
+        move |live| append_effects(log, live, &claim),
+    )
+}
+
+/// Read a `u64` from the last 8 big-endian bytes of a field element (the inverse of
+/// [`field_from_u64`] for the `HEAD` cursor the provenance log stores).
+fn field_to_u64(f: &FieldElement) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&f[24..32]);
+    u64::from_be_bytes(b)
+}
+
+/// **Mount the deos-native surface** ([`provenance_app`]) on a shared context: build the
+/// composed [`DeosApp`] from the context's cipherclerk + executor, seed the log cell's
+/// program + genesis state (so the gated fire bites), and fold the app into the context's
+/// affordance registry ([`DeosApp::register`]). Returns the live [`DeosApp`] (so a host
+/// can also [`DeosApp::mount`] its axum router / [`DeosApp::publish_all`] into the
+/// web-of-cells). The factory + inspector (mounted by [`register`]) are where SOUNDNESS
+/// lives (a forged/overwriting append is a real executor refusal on the born cell); this
+/// deos surface is the composition skin: per-viewer projection, the cap∧state gated fire,
+/// the `dregg://` publish, the rehydratable snapshot, the generated component, the
+/// manifest.
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = provenance_app(ctx.cipherclerk(), ctx.executor());
+    // Seed the log cell so the gated `append_entry` fire has a live `(old, new)` and the
+    // provenance program (installed here) is re-enforced by the executor on every touching
+    // turn.
+    seed_log(ctx.executor(), b"genesis");
+    app.register(ctx);
+    app
 }
 
 // =============================================================================

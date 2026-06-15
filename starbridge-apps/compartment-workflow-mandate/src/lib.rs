@@ -18,10 +18,11 @@
 #![forbid(unsafe_code)]
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
-    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, InspectorDescriptor,
-    StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard, canonical_program_vk,
-    field_from_bytes, field_from_u64, hex_encode_32, symbol,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellAffordance, CellId, CellMode,
+    CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect, EmbeddedExecutor,
+    Event, FactoryDescriptor, FireExecuteError, GatedAffordance, InspectorDescriptor,
+    StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard, TurnReceipt,
+    canonical_program_vk, field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
 
 // Re-export the field type so differential tests can build the same clearance-label corpus the
@@ -401,7 +402,293 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
         })
     });
 
+    // Mount the deos-native composition surface (the `DeosApp`) on the SAME context —
+    // the census promotion: the deos surface now ships from `src/`. The factory +
+    // inspectors are where SOUNDNESS lives (a skipped/rewound step or a past-terminal
+    // advance is a real executor refusal on the born cell); the deos surface is the
+    // composition skin (per-viewer projection, the cap∧state gated fire, the `dregg://`
+    // publish, the rehydratable snapshot, the manifest).
+    register_deos(ctx);
+
     factory_vk
+}
+
+// =============================================================================
+// The deos-native surface — the MANDATE as a composed `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (the workflow port): the compartment
+// workflow MANDATE, re-expressed as a composed [`DeosApp`] and PROMOTED into
+// `src/lib.rs`. The workflow operations are ONE [`DeosApp`] ([`workflow_app`] below);
+// the framework wires the rest — per-viewer projection, web-of-cells publish (the
+// MANDATE cell IS a `dregg://` sturdyref), the rehydratable frustum-snapshot, the
+// generated `<dregg-affordance-surface>` component, and the manifest — none of which
+// the floor's bones had.
+//
+// **The seam is closed** — a TWO-TEMPO fire (mirror supply-chain-provenance /
+// subscription). The state-advancing operation (`advance_step`) is a
+// [`GatedAffordance`] carrying a live-state PRECONDITION ([`not_at_terminal_precondition`]:
+// the cursor has not reached the charter terminal); the FULL workflow program
+// ([`cwm_cell_program`]: the `Always` invariants — `WriteOnce` config slots +
+// `FieldLteField(STEP_CURSOR <= CHARTER_TERMINAL)` — AND the `advance_step`-scoped
+// `MonotonicSequence(STEP_CURSOR)` exact-`+1`) is INSTALLED on the seeded mandate cell
+// ([`seed_workflow`]) and RE-ENFORCED by the executor on every touching turn:
+//
+//   1. the deos PRECONDITION gate (the cap-gate `is_attenuation` AND the live-state
+//      precondition `CellProgram::evaluate`) decides the button's verdict IN-BAND —
+//      nothing submitted on a miss (anti-ghost; the htmx reactivity rides this);
+//   2. [`fire_advance_step`] then submits the FULL multi-effect advance turn
+//      ([`advance_effects`]: the cursor `SetField` + the step-advanced event), and the
+//      executor RE-ENFORCES the installed program — so a SKIPPED/REPEATED step (a
+//      cursor that does not advance by exactly `+1`, `MonotonicSequence(STEP_CURSOR)`),
+//      a REWOUND cursor (`Monotonic`/`MonotonicSequence` anti-rollback), and a
+//      PAST-TERMINAL advance (`FieldLteField(STEP_CURSOR <= CHARTER_TERMINAL)`) are all
+//      REAL executor refusals in the SUBMISSION path — the half the floor's
+//      `evaluate`-only / `cwm_advance_admits`-only tests never exercised through a real
+//      signed turn (see `tests/deos_seam.rs`).
+//
+// Both gates are the genuine ones (`is_attenuation` + `CellProgram::evaluate`). The
+// `advance_step` cursor advance is read from the cell's LIVE `STEP_CURSOR`, so each fire
+// drives the SAME published button one step further along the charter DAG.
+
+/// The workflow rights tiers, ON THE REAL ATTENUATION LATTICE:
+///
+///   - an OBSERVER (an auditor / a watcher) holds [`AuthRequired::Signature`] — the
+///     narrow read tier: it can `view_workflow` (read the charter cursor) and nothing
+///     else;
+///   - an OPERATOR (a clerk/officer driving the charter) holds [`AuthRequired::None`]/root
+///     — it can `advance_step` (advance the DAG cursor) on top of everything an observer
+///     can do.
+///
+/// So `Signature ⊂ None` IS the observer ⊂ operator ladder.
+pub const OBSERVER_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The operator rights tier (root — advance the workflow cursor + view). See [`OBSERVER_RIGHTS`].
+pub const OPERATOR_RIGHTS: AuthRequired = AuthRequired::None;
+
+/// The `advance_step` **live-state precondition** — the cursor must NOT yet be AT the
+/// charter terminal (`STEP_CURSOR <= CHARTER_TERMINAL - 1`, i.e. `STEP_CURSOR < CHARTER_TERMINAL`).
+/// A real [`CellProgram`] read against the cell's current state, so the `advance_step`
+/// button is LIT while steps remain and DARK once the cursor reaches the terminal (the
+/// htmx tooth). This gates "may `advance_step` fire now"; the charter INVARIANT
+/// (`FieldLteField(STEP_CURSOR <= CHARTER_TERMINAL)` + the `MonotonicSequence(STEP_CURSOR)`
+/// exact-`+1`) is the installed [`cwm_cell_program`] the executor re-enforces on the
+/// produced transition.
+pub fn not_at_terminal_precondition() -> CellProgram {
+    // `cursor < terminal` ≡ `cursor <= terminal - 1` ≡ `FieldLteOther { cursor, terminal, delta: -1 }`.
+    CellProgram::Predicate(vec![StateConstraint::FieldLteOther {
+        index: STEP_CURSOR_SLOT,
+        other: CHARTER_TERMINAL_SLOT,
+        delta: -1,
+    }])
+}
+
+/// **`advance_step` effects** — the multi-effect advance body for a target cursor:
+/// advance `STEP_CURSOR` to `new_cursor` (`MonotonicSequence` enforces the exact `+1`
+/// on the produced transition) and emit `workflow-step-advanced`. This is the ONE
+/// coherent transition the installed program admits (the cursor advances by exactly
+/// one step, the config slots stay frozen, `STEP_CURSOR <= CHARTER_TERMINAL` preserved).
+/// `new_anchor` labels the advanced step in the event (the charter phase compartment
+/// label for the step just entered). THIS is the turn [`fire_advance_step`] submits.
+pub fn advance_effects(cell: CellId, new_cursor: u64, new_anchor: FieldElement) -> Vec<Effect> {
+    let old_field = field_from_u64(new_cursor.saturating_sub(1));
+    let new_field = field_from_u64(new_cursor);
+    vec![
+        Effect::SetField {
+            cell,
+            index: STEP_CURSOR_SLOT as usize,
+            value: new_field,
+        },
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(
+                symbol("workflow-step-advanced"),
+                vec![old_field, new_field, new_anchor],
+            ),
+        },
+    ]
+}
+
+/// The charter-phase compartment label for the step just ENTERED at `cursor` (the
+/// post-advance cursor names the phase whose `step_id == cursor - 1`). Falls back to a
+/// zero label past the charter (the executor refuses such an advance anyway).
+fn phase_label_for(cursor: u64) -> FieldElement {
+    cursor
+        .checked_sub(1)
+        .and_then(|i| WorkflowPhase::CHARTER.get(i as usize).copied())
+        .map(|p| p.compartment_label())
+        .unwrap_or([0u8; 32])
+}
+
+/// **The compartment workflow MANDATE as a composed [`DeosApp`]** — the whole
+/// interaction surface, on the deos bones. The mandate cell is the agent's OWN cell
+/// (`cipherclerk.cell_id()`) so fires execute against the seeded embedded ledger.
+///
+/// Two operations on the MANDATE cell, on the observer ⊂ operator rights ladder:
+///
+///   - `view_workflow` — a cap-only affordance (an OBSERVER reads the charter cursor):
+///     `Signature`, an `EmitEvent`;
+///   - `advance_step` — a [`GatedAffordance`] (an OPERATOR advances the DAG cursor):
+///     `None`/operator, a live-state PRECONDITION (the cursor is not yet at the
+///     terminal); the real fire ([`fire_advance_step`]) submits the FULL advance turn,
+///     re-enforced by the executor's installed program (`MonotonicSequence(STEP_CURSOR)`
+///     exact-`+1` AND `FieldLteField(STEP_CURSOR <= CHARTER_TERMINAL)` BITE on the
+///     produced transition).
+///
+/// The mandate cell is published into the web-of-cells at the observer tier (an auditor
+/// on another federation reacquires the workflow's charter state across the membrane) and
+/// is discoverable under `workflow` / `compartment`.
+///
+/// Seed the cell's program + charter config with [`seed_workflow`] so the gated fire has
+/// a live state and the executor re-enforces the program.
+pub fn workflow_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let cell = cipherclerk.cell_id();
+
+    // `advance_step` — an OPERATOR advances the charter DAG cursor. The GatedAffordance
+    // carries the DECISIVE effect (the cursor `SetField`) as its surface representative
+    // AND a live-state PRECONDITION ([`not_at_terminal_precondition`]: the cursor has not
+    // reached the charter terminal) — so the button is lit while steps remain and dark at
+    // the terminal (the htmx tooth), and the cap∧state gate decides its verdict in-band.
+    // The actual fire ([`fire_advance_step`]) submits the FULL advance turn
+    // ([`advance_effects`]: cursor + step-advanced event) reading the LIVE cursor, which
+    // the executor re-enforces the installed program on — so `MonotonicSequence(STEP_CURSOR)`
+    // BITES: a skipped/repeated/rewound cursor is REFUSED.
+    let advance = GatedAffordance::new(
+        CellAffordance::new(
+            "advance_step",
+            OPERATOR_RIGHTS,
+            Effect::SetField {
+                cell,
+                index: STEP_CURSOR_SLOT as usize,
+                value: field_from_u64(1),
+            },
+        ),
+        not_at_terminal_precondition(),
+    );
+    // `view_workflow` — an observer reads the charter cursor. Cap-only.
+    let view = CellAffordance::new(
+        "view_workflow",
+        OBSERVER_RIGHTS,
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol("workflow-read"), vec![]),
+        },
+    );
+
+    DeosApp::builder("compartment-workflow-mandate", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["workflow".into(), "compartment".into()])
+        .cell(
+            DeosCell::new(cell, "workflow")
+                .affordance(view)
+                .gated(advance)
+                .publish(AuthRequired::Signature),
+        )
+        .build()
+}
+
+/// **Seed the MANDATE cell** so the gated fire has live state + the program bites:
+/// install the full workflow [`cwm_cell_program`] on the seeded mandate cell (so the
+/// executor re-enforces it on every touching turn), then bind the charter config
+/// (`COMMITMENT_ANCHOR`, `CHARTER_TERMINAL`, `CLEARANCE_GRAPH_ROOT`, `SPEND_POLICY` —
+/// `WriteOnce`, frozen after) and set `STEP_CURSOR = 0` directly into the embedded
+/// ledger.
+///
+/// `charter_terminal` is set to a small value (the seam drives the cursor up to and past
+/// it). After seeding, the mandate is at cursor 0 with the charter pinned — a real
+/// `(old, new)` baseline against which `advance_step` advances. Returns the seeded
+/// `CHARTER_TERMINAL` value.
+pub fn seed_workflow(
+    executor: &EmbeddedExecutor,
+    commitment_anchor: u64,
+    charter_terminal: u64,
+    clearance_graph_root: FieldElement,
+    spend_policy: u64,
+) -> u64 {
+    let cell = executor.cell_id();
+    executor.install_program(cell, cwm_cell_program());
+    executor.with_ledger_mut(|ledger| {
+        if let Some(c) = ledger.get_mut(&cell) {
+            c.state
+                .set_field(COMMITMENT_ANCHOR_SLOT as usize, field_from_u64(commitment_anchor));
+            c.state
+                .set_field(CHARTER_TERMINAL_SLOT as usize, field_from_u64(charter_terminal));
+            c.state
+                .set_field(CLEARANCE_GRAPH_ROOT_SLOT as usize, clearance_graph_root);
+            c.state
+                .set_field(SPEND_POLICY_SLOT as usize, field_from_u64(spend_policy));
+            c.state.set_field(STEP_CURSOR_SLOT as usize, field_from_u64(0));
+        }
+    });
+    charter_terminal
+}
+
+/// **Fire `advance_step`** — the deos cap∧state PRECONDITION gate (anti-ghost, in-band),
+/// then the FULL multi-effect advance turn the executor re-enforces the workflow program
+/// on. The two-tempo bridge: the gated affordance decides the button's verdict (cap ⊇
+/// operator AND the cursor is not at the terminal) WITHOUT touching the executor; on both
+/// passing, the complete cursor-advancing turn ([`advance_effects`]) is submitted reading
+/// the LIVE `STEP_CURSOR`, and the executor's re-enforcement of [`cwm_cell_program`] is the
+/// SECOND, verified gate (`MonotonicSequence(STEP_CURSOR)` exact-`+1` AND
+/// `FieldLteField(STEP_CURSOR <= CHARTER_TERMINAL)` bite — a skipped/rewound cursor or a
+/// past-terminal advance is REFUSED). Anti-ghost both ways: a precondition miss never
+/// submits; a program violation is a real executor refusal.
+///
+/// The cursor is read from the cell's live state (current `STEP_CURSOR` ⇒ `+1`), so the
+/// caller threads nothing — each fire advances one step. Use [`seed_workflow`] first.
+pub fn fire_advance_step(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    // The accumulating fire: the cap∧state gate is run in-band by
+    // `fire_gated_through_executor_with`; on both passing, the closure derives the
+    // advance effects from the LIVE cursor (so the button advances each time).
+    cell.fire_gated_through_executor_with(
+        "advance_step",
+        held,
+        cipherclerk,
+        executor,
+        |live| {
+            let live_cursor = field_to_u64(&live.fields[STEP_CURSOR_SLOT as usize]);
+            let next = live_cursor + 1;
+            advance_effects(cell.cell(), next, phase_label_for(next))
+        },
+    )
+}
+
+/// Read a `u64` from the last 8 big-endian bytes of a field element (the inverse of
+/// [`field_from_u64`] for the `STEP_CURSOR` the workflow stores).
+fn field_to_u64(f: &FieldElement) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&f[24..32]);
+    u64::from_be_bytes(b)
+}
+
+/// **Mount the deos-native surface** ([`workflow_app`]) on a shared context: build the
+/// composed [`DeosApp`] from the context's cipherclerk + executor, seed the mandate
+/// cell's program + charter config (so the gated fire bites), and fold the app into the
+/// context's affordance registry ([`DeosApp::register`]). Returns the live [`DeosApp`]
+/// (so a host can also [`DeosApp::mount`] its axum router / [`DeosApp::publish_all`]
+/// into the web-of-cells). This is the PROMOTION the census asks for: the deos surface
+/// now ships from `src/`, not from a side-proof in `tests/`.
+///
+/// Seeds a small charter terminal ([`DEFAULT_CHARTER_STEPS`] = 3) so the seam can drive
+/// the cursor up to and past the terminal.
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = workflow_app(ctx.cipherclerk(), ctx.executor());
+    // Seed the mandate cell so the gated `advance_step` fire has a live `(old, new)` and
+    // the full workflow program (installed here) is re-enforced by the executor on every
+    // touching turn. Charter terminal = 3 (review → redact → sign).
+    seed_workflow(
+        ctx.executor(),
+        DEFAULT_COMMITMENT_ANCHOR,
+        DEFAULT_CHARTER_STEPS,
+        clearance_label("clearance-graph-root"),
+        DEFAULT_STEP_SPEND_POLICY,
+    );
+    app.register(ctx);
+    app
 }
 
 #[cfg(test)]

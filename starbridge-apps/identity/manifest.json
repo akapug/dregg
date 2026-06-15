@@ -54,9 +54,25 @@
     "Monotonic(REVOCATION_ROOT_SLOT)",
     "SenderAuthorized(PublicRoot(ISSUER_AUTH_ROOT_SLOT))"
   ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "identity_app(cipherclerk, executor)",
+    "cell": "issuer",
+    "discoverable": ["identity", "credentials"],
+    "publish": "Signature (the issuer cell is a dregg:// sturdyref a relying party — a verifier on another federation — reacquires to verify credentials across the trust boundary)",
+    "affordances": {
+      "verify": "cap-only, Signature (a VERIFIER reads + re-derives a presentation)",
+      "present": "cap-only, Either (a PRESENTER produces a disclosure; a holder-side read path)",
+      "issue": "GATED (cap∧state), None/root — schema-bound precondition (SCHEMA_COMMITMENT>=1); the fire advances ISSUANCE_COUNTER by exactly +1 off live state, the executor re-enforcing MonotonicSequence(ISSUANCE_COUNTER)",
+      "revoke": "GATED (cap∧state), None/root — something-issued precondition (ISSUANCE_COUNTER>=1); the fire advances REVOCATION_ROOT (strictly greater), the executor re-enforcing Monotonic(REVOCATION_ROOT)"
+    },
+    "seam": "CLOSED — INCLUDING THE AUTHORITY TOOTH. The issue/revoke fires run against the seeded issuer cell carrying the FULL floor issuer_program (WriteOnce(SCHEMA_COMMITMENT) + MonotonicSequence(ISSUANCE_COUNTER) + Monotonic(REVOCATION_ROOT) + SenderAuthorized(PublicRoot(ISSUER_AUTH_ROOT_SLOT))), all four RE-ENFORCED by the executor on the submission path: a non-+1 issuance and a revocation-root rewind BITE, and the now-REAL MerkleMembership STARK verifier (the EmbeddedExecutor's embedded runtime defaults to registry_with_real_verifiers) enforces SenderAuthorized for real. seed_issuer seeds ISSUER_AUTH_ROOT = single_member_authorized_root(signer_pk) and the fires attach single_member_membership_proof(signer_pk) as a MerklePath witness, so the honest issuer's issue/revoke fire GREEN through the real authority tooth; a non-member signer (or the right signer with no/wrong proof) is REFUSED by the real STARK. tests/deos_seam.rs demonstrates both faces: (b) the authorized signer issues green through the real verifier carrying the proof (and (b') the same signer with no proof is refused — the proof does the work); (d) a non-member signer is refused by the real MerkleMembership STARK. (tests/factory_birth.rs — a floor test — still asserts the fail-closed red path on factory-born cells via unwitnessed hostile turns, which the real verifier refuses too.)"
+  },
   "manifest_health": {
     "status": "ready",
     "embedded": true,
+    "deos_native_src": true,
     "source_of_truth": "starbridge-apps/identity/src/lib.rs"
   }
 }

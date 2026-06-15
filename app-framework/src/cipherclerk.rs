@@ -425,6 +425,23 @@ impl EmbeddedExecutor {
         }
     }
 
+    /// Replace the embedded runtime's witnessed-predicate registry.
+    ///
+    /// The embedded runtime defaults to the REAL STARK-backed registry (so
+    /// `SenderAuthorized { PublicRoot }` and the other `dregg-circuit`-backed
+    /// witnessed predicates enforce for real on the honest fire path). Call this
+    /// to opt out — e.g. `dregg_cell::WitnessedPredicateRegistry::empty()` for a
+    /// negative test that wants fail-closed `SenderAuthorized` — or to install a
+    /// host-context-extended registry
+    /// (`dregg_turn::executor::registry_with_real_verifiers_full`).
+    pub fn set_witnessed_registry(
+        &self,
+        registry: dregg_cell::WitnessedPredicateRegistry,
+    ) {
+        let mut rt = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        rt.set_witnessed_registry(registry);
+    }
+
     /// Deploy a [`FactoryDescriptor`] into the embedded runtime's executor.
     ///
     /// This is the app-side birth path: after deploying a starbridge-app's

@@ -42,9 +42,10 @@
 //!   a refund ⇒ `RELEASED == 0, REFUNDED == ESCROWED` (or any conserving split).
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
-    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, FieldElement,
-    InspectorDescriptor, StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellAffordance, CellId, CellMode,
+    CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect, EmbeddedExecutor,
+    Event, FactoryDescriptor, FieldElement, FireExecuteError, GatedAffordance, InspectorDescriptor,
+    StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard, TurnReceipt,
     canonical_program_vk, field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
 
@@ -468,7 +469,408 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
         }),
     });
 
+    // Mount the deos-native composition surface (the `DeosApp`) on the SAME context —
+    // the census Tier-1 promotion: the deos surface now ships from `src/`. The factory +
+    // inspector are where SOUNDNESS lives (an over-ceiling fund / a value-conjuring settle /
+    // a no-advance state are real executor refusals on the seeded cell); the deos surface is
+    // the composition skin (per-viewer projection, the cap∧state gated fires, the `dregg://`
+    // publish, the rehydratable snapshot, the manifest).
+    register_deos(ctx);
+
     factory_vk
+}
+
+// =============================================================================
+// The deos-native surface — the ESCROW as a composed `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: escrow's deos re-expression, PROMOTED
+// into `src/`. The lifecycle operations are ONE [`DeosApp`] ([`escrow_app`] below); the
+// framework wires the rest — per-viewer projection, web-of-cells publish (the ESCROW cell
+// IS a `dregg://` sturdyref), per-viewer rehydration, the generated
+// `<dregg-affordance-surface>` component, and the manifest.
+//
+// **The seam is closed** — a TWO-TEMPO fire (mirror supply-chain-provenance / subscription).
+// The three state-advancing operations (`fund`, `ship`, `settle`) are [`GatedAffordance`]s
+// carrying a live-state PRECONDITION (a STATE check: `fund` needs LISTED, `ship` needs FUNDED,
+// `settle` needs SHIPPED); the FULL escrow program ([`escrow_cell_program`], a method-dispatched
+// `Cases` carrying TRUSTLINE `FieldLteField(ESCROWED <= CEILING)`, MAILBOX `WriteOnce(DELIVERY)`,
+// FLASHWELL `AffineEq(RELEASED + REFUNDED == ESCROWED)` on settle + the universal
+// `AffineLe(<= ESCROWED)`, and LIFECYCLE `StrictMonotonic(STATE)`) is INSTALLED on the seeded
+// escrow cell ([`seed_escrow`]) and RE-ENFORCED by the executor on every touching turn:
+//
+//   1. the deos PRECONDITION gate (the cap-gate `is_attenuation` AND the live-state precondition
+//      `CellProgram::evaluate`) decides the button's verdict IN-BAND — nothing submitted on a miss
+//      (anti-ghost; the htmx reactivity rides this);
+//   2. [`fire_fund`] / [`fire_ship`] / [`fire_settle`] then submit the FULL multi-effect turn
+//      (built from the cell's LIVE state), and the executor RE-ENFORCES the installed program — so
+//      an OVER-CEILING fund (`FieldLteField`), a value-conjuring settle (`AffineEq`/`AffineLe`), and
+//      a non-advancing/rewinding STATE (`StrictMonotonic`) are REAL executor refusals in the
+//      SUBMISSION path — the half the floor's `evaluate_with_meta`-only tests never exercised
+//      through a real signed turn (see `tests/deos_seam.rs`).
+//
+// The installed `Cases` program carries the METHOD SYMBOL (`fund`/`ship`/`settle`), which the
+// executor re-enforces on the submitted full turn; the deos precondition is a SEPARATE small
+// `Predicate` (a state check) the gated affordance evaluates in-band. The settle fire reads live
+// `ESCROWED` and releases it IN FULL, so the FLASHWELL `AffineEq(RELEASED + REFUNDED == ESCROWED)`
+// holds on the honest path.
+
+/// The escrow rights tiers, ON THE REAL ATTENUATION LATTICE — these ARE the roles the floor
+/// crate's cap-graph enforces:
+///
+///   - an OBSERVER (the public / an auditor / a regulator watching the deal) holds
+///     [`AuthRequired::Signature`] — the narrow read tier: it can `view_escrow` (read the order
+///     state) and nothing else;
+///   - the BUYER (the party escrowing funds) holds [`AuthRequired::Either`] — it can `fund`
+///     (escrow `<= CEILING`) AND view;
+///   - the SELLER (the party delivering + settling) holds [`AuthRequired::None`]/root — it can
+///     `ship` (commit the sealed delivery) and `settle` (split the escrow) on top of everything a
+///     buyer can do.
+///
+/// So `Signature ⊂ Either ⊂ None` IS the observer ⊂ buyer ⊂ seller ladder.
+pub const OBSERVER_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The buyer rights tier (sig-or-proof — fund + view). See [`OBSERVER_RIGHTS`].
+pub const BUYER_RIGHTS: AuthRequired = AuthRequired::Either;
+/// The seller rights tier (root — ship, settle + all). See [`OBSERVER_RIGHTS`].
+pub const SELLER_RIGHTS: AuthRequired = AuthRequired::None;
+
+/// The **life-of-cell escrow program** the executor re-enforces on every touching turn — the
+/// canonical method-dispatched [`escrow_cell_program`] (`Always`-case TRUSTLINE/MAILBOX/LIFECYCLE
+/// invariants + the settle-scoped FLASHWELL `AffineEq`). This is the SAME program a factory-born
+/// escrow cell carries FOR LIFE (the one `tests/factory_birth.rs` proves bites on the executor);
+/// installed by [`seed_escrow`] so the gated fires re-enforce it.
+pub fn escrow_program() -> CellProgram {
+    escrow_cell_program()
+}
+
+/// The `fund` **live-state precondition** — the order must be LISTED (`STATE == LISTED`). A real
+/// [`CellProgram`] read against the cell's current state, so a `fund` button is DARK on a
+/// not-yet-listed (or already-funded) order and LIT exactly when the order is open for funding (the
+/// htmx tooth). This gates "may `fund` fire now"; the TRUSTLINE bound (`FieldLteField(ESCROWED <=
+/// CEILING)`) and the LIFECYCLE advance (`StrictMonotonic(STATE)`) are the installed
+/// [`escrow_program`] the executor re-enforces on the produced transition.
+pub fn listed_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+        index: STATE_SLOT as u8,
+        value: field_from_u64(STATE_LISTED),
+    }])
+}
+
+/// The `ship` **live-state precondition** — the order must be FUNDED (`STATE == FUNDED`). So the
+/// `ship` button is DARK until the buyer funds and LIT once funded (the htmx tooth). The executor's
+/// installed `WriteOnce(DELIVERY_HASH)` (the seller commits the sealed delivery exactly once) and
+/// `StrictMonotonic(STATE)` are the second guard.
+pub fn funded_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+        index: STATE_SLOT as u8,
+        value: field_from_u64(STATE_FUNDED),
+    }])
+}
+
+/// The `settle` **live-state precondition** — the order must be SHIPPED (`STATE == SHIPPED`). So
+/// the `settle` button is DARK until the seller ships and LIT once shipped (the htmx tooth). The
+/// executor's installed FLASHWELL `AffineEq(RELEASED + REFUNDED == ESCROWED)` (the settlement
+/// conserves the escrow) and `StrictMonotonic(STATE)` are the second guard.
+pub fn shipped_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+        index: STATE_SLOT as u8,
+        value: field_from_u64(STATE_SHIPPED),
+    }])
+}
+
+/// **The ESCROW as a composed [`DeosApp`]** — the whole interaction surface, on the deos bones.
+/// The escrow cell is the agent's OWN cell (`cipherclerk.cell_id()`) so fires execute against the
+/// seeded embedded ledger.
+///
+/// Four operations on the ESCROW cell, on the observer ⊂ buyer ⊂ seller rights ladder:
+///
+///   - `view_escrow` — a cap-only affordance (an OBSERVER reads the order state): `Signature`, an
+///     `EmitEvent`;
+///   - `fund` — a [`GatedAffordance`] (the BUYER escrows funds): `Either`, a live-state
+///     PRECONDITION (the order is LISTED); the real fire ([`fire_fund`]) submits the FULL fund turn
+///     (BUYER_HASH + ESCROWED + STATE→FUNDED), re-enforced by the executor's installed TRUSTLINE
+///     `FieldLteField(ESCROWED <= CEILING)`;
+///   - `ship` — a [`GatedAffordance`] (the SELLER commits the sealed delivery): `None`, a live-state
+///     PRECONDITION (the order is FUNDED); the real fire ([`fire_ship`]) submits the FULL ship turn
+///     (DELIVERY_HASH + STATE→SHIPPED), re-enforced by the executor's installed MAILBOX
+///     `WriteOnce(DELIVERY_HASH)`;
+///   - `settle` — a [`GatedAffordance`] (the SELLER splits the escrow): `None`, a live-state
+///     PRECONDITION (the order is SHIPPED); the real fire ([`fire_settle`]) reads live `ESCROWED`
+///     and releases it IN FULL (RELEASED := ESCROWED, REFUNDED := 0, STATE→SETTLED), so the executor's
+///     installed FLASHWELL `AffineEq(RELEASED + REFUNDED == ESCROWED)` holds on the honest path.
+///
+/// The escrow cell is published into the web-of-cells at the observer tier (an auditor on another
+/// federation reacquires the order across the membrane) and is discoverable under `escrow` /
+/// `marketplace`.
+///
+/// Seed the cell's program + listed state with [`seed_escrow`] so the gated fires have a live state
+/// and the executor re-enforces the program.
+pub fn escrow_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let cell = cipherclerk.cell_id();
+
+    // `view_escrow` — an observer reads the order state. Cap-only.
+    let view = CellAffordance::new(
+        "view_escrow",
+        OBSERVER_RIGHTS,
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol("escrow-read"), vec![]),
+        },
+    );
+    // `fund` — the BUYER escrows funds. The GatedAffordance carries the DECISIVE effect (the
+    // STATE→FUNDED advance) as its surface representative AND a live-state PRECONDITION
+    // ([`listed_precondition`]: the order is LISTED) — so the button is dark before listing /
+    // after funding and lit exactly while open, and the cap∧state gate decides its verdict in-band.
+    // The actual fire ([`fire_fund`]) submits the FULL fund turn ([`fund_effects`]: buyer + escrowed
+    // + state + event), which the executor re-enforces the installed TRUSTLINE on — so
+    // `FieldLteField(ESCROWED <= CEILING)` BITES: an over-ceiling escrow is REFUSED.
+    let fund = GatedAffordance::new(
+        CellAffordance::new(
+            "fund",
+            BUYER_RIGHTS,
+            Effect::SetField {
+                cell,
+                index: STATE_SLOT,
+                value: field_from_u64(STATE_FUNDED),
+            },
+        ),
+        listed_precondition(),
+    );
+    // `ship` — the SELLER commits the sealed delivery. The decisive effect advances STATE→SHIPPED;
+    // gated on the FUNDED precondition ([`funded_precondition`]). The executor re-enforces the
+    // installed MAILBOX `WriteOnce(DELIVERY_HASH)` (a re-commit is refused).
+    let ship = GatedAffordance::new(
+        CellAffordance::new(
+            "ship",
+            SELLER_RIGHTS,
+            Effect::SetField {
+                cell,
+                index: STATE_SLOT,
+                value: field_from_u64(STATE_SHIPPED),
+            },
+        ),
+        funded_precondition(),
+    );
+    // `settle` — the SELLER splits the escrow. The decisive effect advances STATE→SETTLED; gated on
+    // the SHIPPED precondition ([`shipped_precondition`]). The executor re-enforces the installed
+    // FLASHWELL `AffineEq(RELEASED + REFUNDED == ESCROWED)` (a value-conjuring split is refused).
+    let settle = GatedAffordance::new(
+        CellAffordance::new(
+            "settle",
+            SELLER_RIGHTS,
+            Effect::SetField {
+                cell,
+                index: STATE_SLOT,
+                value: field_from_u64(STATE_SETTLED),
+            },
+        ),
+        shipped_precondition(),
+    );
+
+    DeosApp::builder("escrow-market", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["escrow".into(), "marketplace".into()])
+        .cell(
+            DeosCell::new(cell, "escrow")
+                .affordance(view)
+                .gated(fund)
+                .gated(ship)
+                .gated(settle)
+                .publish(OBSERVER_RIGHTS),
+        )
+        .build()
+}
+
+/// **Seed the ESCROW cell** so the gated fires have live state + the program bites: install the
+/// full escrow [`escrow_program`] on the seeded escrow cell (so the executor re-enforces it on
+/// every touching turn), then bind the listing genesis state directly into the embedded ledger —
+/// bind `SELLER_HASH`, `CEILING` (`WriteOnce`, frozen after), set `STATE = LISTED`, `ESCROWED = 0`
+/// (so the `Always`-case invariants — `FieldLteField(ESCROWED <= CEILING)` and the no-mint
+/// `AffineLe` — already hold at the seeded state).
+///
+/// After seeding, the order is LISTED with a ceiling bound — a real `(old, new)` baseline against
+/// which `fund` advances. Returns the bound `CEILING` value.
+pub fn seed_escrow(executor: &EmbeddedExecutor, seller: &str, ceiling: u64) -> u64 {
+    let cell = executor.cell_id();
+    executor.install_program(cell, escrow_program());
+    executor.with_ledger_mut(|ledger| {
+        if let Some(c) = ledger.get_mut(&cell) {
+            c.state
+                .set_field(SELLER_HASH_SLOT, field_from_bytes(seller.as_bytes()));
+            c.state.set_field(CEILING_SLOT, field_from_u64(ceiling));
+            c.state.set_field(ESCROWED_SLOT, field_from_u64(0));
+            c.state.set_field(STATE_SLOT, field_from_u64(STATE_LISTED));
+        }
+    });
+    ceiling
+}
+
+/// **`fund` effects** — the multi-effect funding body: bind `BUYER_HASH`, write `ESCROWED := amount`
+/// (the TRUSTLINE draw, `<= CEILING`), advance `STATE → FUNDED`, and emit `escrow-funded`. This is
+/// the ONE coherent transition the installed invariants admit (escrowed bounded by ceiling, state
+/// advancing). The deos `fund` gated affordance is the cap∧state PRECONDITION face; THIS is the turn
+/// [`fire_fund`] submits.
+pub fn fund_effects(cell: CellId, buyer: &str, amount: u64) -> Vec<Effect> {
+    let buyer_h = field_from_bytes(buyer.as_bytes());
+    let amount_f = field_from_u64(amount);
+    vec![
+        Effect::SetField {
+            cell,
+            index: BUYER_HASH_SLOT,
+            value: buyer_h,
+        },
+        Effect::SetField {
+            cell,
+            index: ESCROWED_SLOT,
+            value: amount_f,
+        },
+        Effect::SetField {
+            cell,
+            index: STATE_SLOT,
+            value: field_from_u64(STATE_FUNDED),
+        },
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol("escrow-funded"), vec![buyer_h, amount_f]),
+        },
+    ]
+}
+
+/// **`ship` effects** — the multi-effect ship body: commit the sealed-delivery digest into
+/// `DELIVERY_HASH` (`WriteOnce`), advance `STATE → SHIPPED`, and emit `escrow-shipped`. THIS is the
+/// turn [`fire_ship`] submits.
+pub fn ship_effects(cell: CellId, sealed_delivery: &FieldElement) -> Vec<Effect> {
+    vec![
+        Effect::SetField {
+            cell,
+            index: DELIVERY_HASH_SLOT,
+            value: *sealed_delivery,
+        },
+        Effect::SetField {
+            cell,
+            index: STATE_SLOT,
+            value: field_from_u64(STATE_SHIPPED),
+        },
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol("escrow-shipped"), vec![*sealed_delivery]),
+        },
+    ]
+}
+
+/// **`settle` effects** — the multi-effect settle body: write `RELEASED := released`,
+/// `REFUNDED := refunded`, advance `STATE → SETTLED`, and emit `escrow-settled`. The FLASHWELL
+/// `AffineEq(RELEASED + REFUNDED == ESCROWED)` requires `released + refunded == escrowed`; the
+/// honest [`fire_settle`] reads live `ESCROWED` and releases it IN FULL (`released = escrowed`,
+/// `refunded = 0`). THIS is the turn [`fire_settle`] submits.
+pub fn settle_effects(cell: CellId, released: u64, refunded: u64) -> Vec<Effect> {
+    let released_f = field_from_u64(released);
+    let refunded_f = field_from_u64(refunded);
+    vec![
+        Effect::SetField {
+            cell,
+            index: RELEASED_SLOT,
+            value: released_f,
+        },
+        Effect::SetField {
+            cell,
+            index: REFUNDED_SLOT,
+            value: refunded_f,
+        },
+        Effect::SetField {
+            cell,
+            index: STATE_SLOT,
+            value: field_from_u64(STATE_SETTLED),
+        },
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol("escrow-settled"), vec![released_f, refunded_f]),
+        },
+    ]
+}
+
+/// Read a `u64` from the last 8 big-endian bytes of a field element (the inverse of
+/// [`field_from_u64`] for the amount registers the escrow stores).
+fn field_to_u64(f: &FieldElement) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&f[24..32]);
+    u64::from_be_bytes(b)
+}
+
+/// **Fire `fund`** — the deos cap∧state PRECONDITION gate (cap ⊇ Either AND the order is LISTED),
+/// then the FULL multi-effect fund turn ([`fund_effects`]) the executor re-enforces the escrow
+/// program on (`FieldLteField(ESCROWED <= CEILING)` BITES — an over-ceiling escrow is REFUSED). The
+/// `amount` is the buyer's escrow; the executor refuses it if it breaches the ceiling. Anti-ghost
+/// both ways: a precondition miss never submits; a program violation is a real executor refusal.
+/// Use [`seed_escrow`] first.
+pub fn fire_fund(
+    app: &DeosApp,
+    held: &AuthRequired,
+    buyer: &str,
+    amount: u64,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let target = cell.cell();
+    let buyer = buyer.to_string();
+    cell.fire_gated_through_executor_with("fund", held, cipherclerk, executor, move |_live| {
+        fund_effects(target, &buyer, amount)
+    })
+}
+
+/// **Fire `ship`** — the deos cap∧state PRECONDITION gate (cap ⊇ None AND the order is FUNDED), then
+/// the FULL ship turn ([`ship_effects`]). The executor re-enforces the installed MAILBOX
+/// `WriteOnce(DELIVERY_HASH)`. Use after a successful [`fire_fund`].
+pub fn fire_ship(
+    app: &DeosApp,
+    held: &AuthRequired,
+    sealed_delivery: FieldElement,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let target = cell.cell();
+    cell.fire_gated_through_executor_with("ship", held, cipherclerk, executor, move |_live| {
+        ship_effects(target, &sealed_delivery)
+    })
+}
+
+/// **Fire `settle`** — the deos cap∧state PRECONDITION gate (cap ⊇ None AND the order is SHIPPED),
+/// then the FULL settle turn the executor re-enforces the escrow program on. The settle effects read
+/// live `ESCROWED` and release it IN FULL (`RELEASED := ESCROWED`, `REFUNDED := 0`), so the FLASHWELL
+/// `AffineEq(RELEASED + REFUNDED == ESCROWED)` holds on the honest path — the conservation is
+/// computed from the cell's own state, never conjured. `StrictMonotonic(STATE)` re-enforces the
+/// one-way advance. Use after a successful [`fire_ship`].
+pub fn fire_settle(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let target = cell.cell();
+    cell.fire_gated_through_executor_with("settle", held, cipherclerk, executor, move |live| {
+        // Read the live escrow and release it IN FULL — conservation by construction:
+        // released + refunded == escrowed (full delivery: released = escrowed, refunded = 0).
+        let escrowed = field_to_u64(&live.fields[ESCROWED_SLOT]);
+        settle_effects(target, escrowed, 0)
+    })
+}
+
+/// **Mount the deos-native surface** ([`escrow_app`]) on a shared context: build the composed
+/// [`DeosApp`] from the context's cipherclerk + executor, seed the escrow cell's program + listed
+/// state (so the gated fires bite), and fold the app into the context's affordance registry
+/// ([`DeosApp::register`]). Returns the live [`DeosApp`] (so a host can also [`DeosApp::mount`] its
+/// axum router / [`DeosApp::publish_all`] into the web-of-cells). This is the PROMOTION the census
+/// asks for: the deos surface now ships from `src/`, not from a side-proof in `tests/`.
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = escrow_app(ctx.cipherclerk(), ctx.executor());
+    // Seed the escrow cell so the gated `fund` / `ship` / `settle` fires have a live `(old, new)`
+    // and the full escrow program (installed here) is re-enforced by the executor on every touching
+    // turn.
+    seed_escrow(ctx.executor(), "acme-corp", 1000);
+    app.register(ctx);
+    app
 }
 
 // =============================================================================

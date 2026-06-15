@@ -48,7 +48,7 @@ use serde_json::json;
 
 use dregg_cell::AuthRequired;
 
-use crate::affordance::{AffordanceSurface, FireError, FireExecuteError};
+use crate::affordance::{AffordanceSurface, FireError, FireExecuteError, GatedSurface};
 use crate::cipherclerk::{AppCipherclerk, EmbeddedExecutor};
 use crate::server::{api_error, ErrorResponse};
 
@@ -121,6 +121,10 @@ pub fn parse_auth_required(raw: &str) -> Option<AuthRequired> {
 #[derive(Clone)]
 pub struct AffordanceEndpoint {
     surface: AffordanceSurface,
+    /// The cell's GATED (cap∧state) surface — served at `/gated/projected` +
+    /// `/gated/fire/{name}` when present (the htmx-on-crack reactive button-set, where the
+    /// projection + the fire are STATE-AWARE). Empty by default (a cap-only endpoint).
+    gated: GatedSurface,
     cipherclerk: AppCipherclerk,
     executor: EmbeddedExecutor,
     resolver: Arc<dyn HeldRightsResolver>,
@@ -128,18 +132,29 @@ pub struct AffordanceEndpoint {
 
 impl AffordanceEndpoint {
     /// Build an endpoint over `surface`, firing through `cipherclerk` + `executor`,
-    /// with the default header-based held-rights resolver.
+    /// with the default header-based held-rights resolver and NO gated surface.
     pub fn new(
         surface: AffordanceSurface,
         cipherclerk: AppCipherclerk,
         executor: EmbeddedExecutor,
     ) -> Self {
+        let cell = surface.cell;
         Self {
             surface,
+            gated: GatedSurface::named(cell, "gated"),
             cipherclerk,
             executor,
             resolver: Arc::new(HeaderHeldRights),
         }
+    }
+
+    /// Attach a GATED (cap∧state) surface — serves the state-aware `/gated/projected`
+    /// per-viewer button-set + `/gated/fire/{name}` verified-turn fire. The htmx tooth over
+    /// HTTP: a worker fetches `/gated/projected` and sees a button only when the cell's live
+    /// state admits it.
+    pub fn with_gated(mut self, gated: GatedSurface) -> Self {
+        self.gated = gated;
+        self
     }
 
     /// Swap the held-rights resolver (e.g. one backed by the verified presentation
@@ -149,13 +164,15 @@ impl AffordanceEndpoint {
         self
     }
 
-    /// Build the `axum::Router` mounting the three routes. `route_prefix` is the
-    /// path this router will be nested at (used to compute the descriptor's
-    /// endpoint paths so they match where it is actually mounted).
+    /// Build the `axum::Router` mounting the cap-only routes (`/descriptor`, `/projected`,
+    /// `/fire/{name}`) AND, when a gated surface is attached, the state-aware gated routes
+    /// (`/gated/projected`, `/gated/fire/{name}`). `route_prefix` is the path this router will
+    /// be nested at (used to compute the descriptor's endpoint paths so they match).
     pub fn router(self, route_prefix: &str) -> Router {
         let state = EndpointState {
             route_prefix: route_prefix.trim_end_matches('/').to_string(),
             surface: Arc::new(self.surface),
+            gated: Arc::new(self.gated),
             cipherclerk: self.cipherclerk,
             executor: self.executor,
             resolver: self.resolver,
@@ -164,6 +181,11 @@ impl AffordanceEndpoint {
             .route("/descriptor", get(handle_descriptor))
             .route("/projected", get(handle_projected))
             .route("/fire/{name}", post(handle_fire))
+            // The STATE-AWARE gated surface (the htmx-on-crack reactive button-set), served over
+            // HTTP: the per-viewer projection REACTS to the cell's live state, and the fire runs
+            // the cap∧state gate against the live state before the verified turn.
+            .route("/gated/projected", get(handle_gated_projected))
+            .route("/gated/fire/{name}", post(handle_gated_fire))
             .with_state(state)
     }
 }
@@ -172,6 +194,7 @@ impl AffordanceEndpoint {
 struct EndpointState {
     route_prefix: String,
     surface: Arc<AffordanceSurface>,
+    gated: Arc<GatedSurface>,
     cipherclerk: AppCipherclerk,
     executor: EmbeddedExecutor,
     resolver: Arc<dyn HeldRightsResolver>,
@@ -281,6 +304,111 @@ async fn handle_fire(
         Err(FireExecuteError::Executor(e)) => Err(api_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             format!("executor rejected the authorized turn: {e}"),
+        )),
+    }
+}
+
+/// `GET {prefix}/gated/projected` — the STATE-AWARE per-viewer projection: only the gated
+/// affordances the requester's held authority authorizes AND the cell's LIVE STATE admits
+/// (the cap∧state conjunction). The htmx tooth over HTTP: a button enters/leaves the set as
+/// the backing cell transitions. Missing/invalid held-rights ⇒ 401; a cell with no live
+/// state ⇒ an empty set (fail-closed).
+async fn handle_gated_projected(
+    State(state): State<EndpointState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let held = state.resolver.held(&headers).ok_or_else(|| {
+        api_error(
+            StatusCode::UNAUTHORIZED,
+            "no held authority presented (missing/invalid held-rights)",
+        )
+    })?;
+    // The framework reads the cell's LIVE state; the projection gates on it (cap∧state). No
+    // live state ⇒ empty (a state-gated fire needs state).
+    let fireable: Vec<String> = match state.executor.cell_state(state.gated.cell) {
+        Some(live) => state.gated.fireable_names(&held, &live, &live),
+        None => Vec::new(),
+    };
+    let prefix = state.route_prefix.trim_end_matches('/');
+    let elements: Vec<serde_json::Value> = fireable
+        .iter()
+        .map(|name| {
+            json!({
+                "name": name,
+                "fireEndpoint": format!("{prefix}/gated/fire/{name}"),
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "held": format!("{held:?}"),
+        "fireable": fireable,
+        "elements": elements,
+    })))
+}
+
+/// `POST {prefix}/gated/fire/{name}` — fire the named GATED affordance as a verified turn,
+/// the cap∧state gate run IN-BAND against the cell's LIVE state first. Refusals:
+/// - missing/invalid held authority ⇒ 401,
+/// - `required ⊄ held` (the cap tooth) ⇒ 403 (anti-ghost: nothing submitted),
+/// - the live state forbids the fire (the state tooth) ⇒ 409 CONFLICT (anti-ghost),
+/// - no such gated affordance ⇒ 404,
+/// - executor rejected the (authorized) turn ⇒ 422.
+async fn handle_gated_fire(
+    State(state): State<EndpointState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let held = state.resolver.held(&headers).ok_or_else(|| {
+        api_error(
+            StatusCode::UNAUTHORIZED,
+            "no held authority presented (missing/invalid held-rights)",
+        )
+    })?;
+    let ga = state.gated.get(&name).ok_or_else(|| {
+        api_error(
+            StatusCode::NOT_FOUND,
+            format!("no gated affordance named `{name}` on this surface"),
+        )
+    })?;
+    let live = state.executor.cell_state(state.gated.cell).ok_or_else(|| {
+        api_error(
+            StatusCode::CONFLICT,
+            format!("state condition unmet: `{name}` — the cell has no live state (fail-closed)"),
+        )
+    })?;
+    match ga.fire_through_executor(&held, &live, &live, &state.cipherclerk, &state.executor) {
+        Ok(receipt) => Ok(Json(json!({
+            "fired": name,
+            "gated": true,
+            "surface_cell": hex_full(&state.gated.cell),
+            "actor": hex_full(&receipt.agent),
+            "turn_hash": hex_full_arr(&receipt.turn_hash),
+            "post_state_hash": hex_full_arr(&receipt.post_state_hash),
+            "action_count": receipt.action_count,
+        }))),
+        Err(FireExecuteError::Gate(FireError::NoSuchAffordance)) => Err(api_error(
+            StatusCode::NOT_FOUND,
+            format!("no gated affordance named `{name}` on this surface"),
+        )),
+        Err(FireExecuteError::Gate(FireError::Unauthorized { affordance, required, held })) => {
+            Err(api_error(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "unauthorized: firing `{affordance}` requires {required:?} but holder has {held:?}"
+                ),
+            ))
+        }
+        Err(FireExecuteError::Gate(FireError::StateConditionUnmet { affordance, reason })) => {
+            Err(api_error(
+                StatusCode::CONFLICT,
+                format!(
+                    "state condition unmet: firing `{affordance}` is not admissible in the cell's current state ({reason})"
+                ),
+            ))
+        }
+        Err(FireExecuteError::Executor(e)) => Err(api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("executor rejected the authorized gated turn: {e}"),
         )),
     }
 }

@@ -329,6 +329,35 @@ impl DeosCell {
         // and let the executor re-enforce the program on the actual produced state.
         ga.fire_through_executor(held, &state, &state, cipherclerk, executor)
     }
+
+    /// **Fire a STATE-PARAMETERIZED gated affordance** through the executor — the cap∧state
+    /// gate, then a turn whose effects are DERIVED FROM THE CELL'S LIVE STATE by `effects`.
+    ///
+    /// The plain [`DeosCell::fire_gated_through_executor`] submits the affordance's CONSTANT
+    /// effect template (so an accumulating button — a counter, a budget meter — can only fire
+    /// once). This drives the SAME published cap∧state button across a MULTI-STEP run: the
+    /// effects are a pure function of the cell's current [`dregg_cell::state::CellState`], so an
+    /// accumulating fire (`spent := live_spent + cost`, `epoch := live_epoch + 1`) advances each
+    /// time. The gate is unchanged (cap∧state, anti-ghost); the executor re-enforces the cell
+    /// program on the produced transition. Delegates to
+    /// [`crate::affordance::GatedAffordance::fire_through_executor_with`].
+    pub fn fire_gated_through_executor_with<F>(
+        &self,
+        name: &str,
+        held: &AuthRequired,
+        cipherclerk: &AppCipherclerk,
+        executor: &EmbeddedExecutor,
+        effects: F,
+    ) -> Result<dregg_turn::TurnReceipt, FireExecuteError>
+    where
+        F: FnOnce(&dregg_cell::state::CellState) -> Vec<crate::Effect>,
+    {
+        let ga = self
+            .gated
+            .get(name)
+            .ok_or(FireExecuteError::Gate(FireError::NoSuchAffordance))?;
+        ga.fire_through_executor_with(held, cipherclerk, executor, effects)
+    }
 }
 
 // =============================================================================
@@ -518,7 +547,10 @@ impl DeosApp {
 
         for c in &self.cells {
             let mut endpoint =
-                AffordanceEndpoint::new(c.surface.clone(), self.cipherclerk.clone(), self.executor.clone());
+                AffordanceEndpoint::new(c.surface.clone(), self.cipherclerk.clone(), self.executor.clone())
+                    // Thread the cell's GATED (cap∧state) surface so `/gated/projected` +
+                    // `/gated/fire/{name}` are served — the htmx-on-crack reactive button-set over HTTP.
+                    .with_gated(c.gated.clone());
             if let Some(resolver) = &self.resolver {
                 endpoint = endpoint.with_resolver(Arc::clone(resolver));
             }

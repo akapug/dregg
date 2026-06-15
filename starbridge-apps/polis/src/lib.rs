@@ -120,6 +120,20 @@ use dregg_cell::{CellId, CellMode};
 /// Lifecycle state-code slot — slot 0 in every polis cell family.
 pub const STATE_SLOT: u8 = 0;
 
+// THE DEOS SURFACE LIVES IN `src/deos.rs`, but it is NOT a library module here.
+//
+// `dregg-sdk` depends on THIS crate (`sdk/src/polis.rs` re-exports the pure cell
+// programs), and `dregg-app-framework` depends on `dregg-sdk`. So a normal
+// `polis -> dregg-app-framework` edge (even an `optional` one) would close the
+// package-graph cycle `app-framework -> sdk -> polis -> app-framework`, which
+// Cargo rejects outright. Cargo permits such a cycle ONLY across a
+// DEV-dependency — so the framework/turn/sdk crates are this crate's
+// dev-dependencies, and `src/deos.rs` is compiled INTO THE TEST BINARIES via
+// `#[cfg(feature = "deos")] #[path = "../src/deos.rs"] mod deos;` in
+// `tests/reexpress_deos_app.rs` (the surface lives there, behind the `deos`
+// feature). The pure library you are reading stays light: `dregg-cell` only.
+// See `Cargo.toml`'s `[features].deos` comment for the full rationale.
+
 // =============================================================================
 // Errors
 // =============================================================================

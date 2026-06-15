@@ -54,9 +54,10 @@
 //!   [`StarbridgeAppContext`].
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
-    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, FieldElement,
-    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellAffordance, CellId, CellMode,
+    CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect, EmbeddedExecutor,
+    Event, FactoryDescriptor, FieldElement, FireExecuteError, GatedAffordance,
+    InspectorDescriptor, StarbridgeAppContext, StateConstraint, TurnReceipt, canonical_program_vk,
     field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
 
@@ -319,6 +320,364 @@ pub fn state_field(state: u64) -> FieldElement {
 }
 
 // =============================================================================
+// The deos-native surface — the BOUNTY as a composed `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the bounty-board, re-expressed as a
+// composed deos app and PROMOTED into `src/`. The four-state gated lifecycle is ONE
+// [`DeosApp`] ([`bounty_app`] below); the framework wires the rest — per-viewer
+// projection, web-of-cells publish (the BOUNTY cell IS a `dregg://` sturdyref), the
+// rehydratable frustum-snapshot, the generated `<dregg-affordance-surface>` component,
+// and the manifest — none of which the floor's bones had. `register(ctx)` now mounts it
+// (see [`register_deos`]).
+//
+// **The seam is closed** — a TWO-TEMPO fire. The three state-advancing lifecycle ops
+// (`claim`, `submit`, `payout`) are [`GatedAffordance`]s carrying a live-state
+// PRECONDITION (the cell is in exactly the state this op advances FROM); the FULL bounty
+// program ([`bounty_cell_program`] = title/reward/claimant/submission `WriteOnce` +
+// `StrictMonotonic(STATE)`) is INSTALLED on the seeded bounty cell ([`seed_bounty`]) and
+// RE-ENFORCED by the executor on every touching turn:
+//
+//   1. the deos PRECONDITION gate (the cap-gate `is_attenuation` AND the live-state
+//      precondition `CellProgram::evaluate`) decides the button's verdict IN-BAND —
+//      nothing submitted on a miss (anti-ghost; the htmx reactivity rides this), so on a
+//      POSTED bounty `claim` is LIT and `payout` is DARK, and the instant the cell
+//      advances the lit/dark sets flip;
+//   2. [`fire_claim`] / [`fire_submit`] / [`fire_payout`] then submit the FULL
+//      multi-effect lifecycle turn (state-parameterized off the live cell), and the
+//      executor RE-ENFORCES the installed bounty program — so a NO-ADVANCE / REWOUND
+//      `STATE` (`StrictMonotonic(STATE)` requires strict `new > old`) and a CLAIMANT
+//      OVERWRITE (`WriteOnce(CLAIMANT_HASH)`) are REAL executor refusals in the
+//      SUBMISSION path — the half the floor's `program.evaluate`-only tests never
+//      exercised through a real signed turn (see `tests/deos_seam.rs`).
+//
+// Both gates are the genuine ones (`is_attenuation` + `CellProgram::evaluate`). Because
+// `STATE` is `StrictMonotonic` (strict `>`), a no-advance DOES bite (unlike `Monotonic`),
+// so the lifecycle is a true one-way ratchet: each state can be entered exactly once.
+
+/// The bounty rights tiers, ON THE REAL ATTENUATION LATTICE — these ARE the roles the
+/// floor crate's cap-graph enforces:
+///
+///   - a WATCHER (the public / an indexer) holds [`AuthRequired::Signature`] — the narrow
+///     read tier: it can `view_bounty` (read the lifecycle state) and nothing else;
+///   - a WORKER (a claimant / submitter) holds [`AuthRequired::Either`] — it can `claim`
+///     (take an OPEN bounty) and `submit` (deliver work on a CLAIMED bounty) AND view;
+///   - the POSTER (the bounty owner) holds [`AuthRequired::None`]/root — it can `payout`
+///     (settle a SUBMITTED bounty) on top of everything a worker can do.
+///
+/// So `Signature ⊂ Either ⊂ None` IS the watcher ⊂ worker ⊂ poster ladder.
+pub const WATCHER_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The worker rights tier (sig-or-proof — claim + submit + view). See [`WATCHER_RIGHTS`].
+pub const WORKER_RIGHTS: AuthRequired = AuthRequired::Either;
+/// The poster/owner rights tier (root — payout + all). See [`WATCHER_RIGHTS`].
+pub const POSTER_RIGHTS: AuthRequired = AuthRequired::None;
+
+/// The `claim` **live-state precondition** — the bounty must be POSTED/OPEN
+/// (`STATE == STATE_OPEN`). A real [`CellProgram`] read against the cell's current state,
+/// so a `claim` button is LIT on an open bounty and DARK the instant it is claimed (the
+/// htmx tooth). This gates "may `claim` fire now"; the lifecycle INVARIANT
+/// (`StrictMonotonic(STATE)` + `WriteOnce(CLAIMANT_HASH)`, first-claimer-wins) is the
+/// installed [`bounty_cell_program`] the executor re-enforces on the produced transition.
+pub fn posted_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+        index: STATE_SLOT as u8,
+        value: field_from_u64(STATE_OPEN),
+    }])
+}
+
+/// The `submit` **live-state precondition** — the bounty must be CLAIMED
+/// (`STATE == STATE_CLAIMED`). So `submit` is DARK until a worker claims and LIT once
+/// claimed (then DARK again once submitted). The executor's `StrictMonotonic(STATE)` is
+/// the second guard (a submit out of order is a real refusal).
+pub fn claimed_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+        index: STATE_SLOT as u8,
+        value: field_from_u64(STATE_CLAIMED),
+    }])
+}
+
+/// The `payout` **live-state precondition** — the bounty must be SUBMITTED
+/// (`STATE == STATE_SUBMITTED`). So the poster's `payout` button is DARK until work is
+/// submitted and LIT once it is. The executor's `StrictMonotonic(STATE)` re-enforces that
+/// a paid bounty cannot be re-paid (PAID > SUBMITTED, and a second payout is a no-advance
+/// PAID -> PAID which strict-mono refuses).
+pub fn submitted_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+        index: STATE_SLOT as u8,
+        value: field_from_u64(STATE_SUBMITTED),
+    }])
+}
+
+/// **The bounty-board BOUNTY as a composed [`DeosApp`]** — the whole canonical 4-state
+/// gated lifecycle, on the deos bones. The bounty cell is the agent's OWN cell
+/// (`cipherclerk.cell_id()`) so fires execute against the seeded embedded ledger.
+///
+/// Four operations on the BOUNTY cell, on the watcher ⊂ worker ⊂ poster rights ladder:
+///
+///   - `view_bounty` — a cap-only affordance (a WATCHER reads the lifecycle state):
+///     `Signature`, an `EmitEvent`;
+///   - `claim` — a [`GatedAffordance`] (a WORKER takes an OPEN bounty): `Either`, a
+///     live-state PRECONDITION (the bounty is POSTED/OPEN); the real fire ([`fire_claim`])
+///     submits the FULL claim turn (bind `CLAIMANT_HASH` + advance `STATE` OPEN ->
+///     CLAIMED), re-enforced by the executor's installed program (`WriteOnce(CLAIMANT)`
+///     first-claimer-wins + `StrictMonotonic(STATE)`);
+///   - `submit` — a [`GatedAffordance`] (a WORKER delivers): `Either`, a live-state
+///     PRECONDITION (the bounty is CLAIMED); the real fire ([`fire_submit`]) binds
+///     `SUBMISSION_HASH` + advances `STATE` CLAIMED -> SUBMITTED, re-enforced by the
+///     executor;
+///   - `payout` — a [`GatedAffordance`] (the POSTER settles): `None`/root, a live-state
+///     PRECONDITION (the bounty is SUBMITTED); the real fire ([`fire_payout`]) advances
+///     `STATE` SUBMITTED -> PAID (terminal), re-enforced by the executor.
+///
+/// The bounty cell is published into the web-of-cells at the watcher tier (an indexer on
+/// another federation reacquires the bounty's lifecycle across the membrane) and is
+/// discoverable under `bounties`.
+///
+/// Seed the cell's program + POSTED state with [`seed_bounty`] so the gated fires have a
+/// live state and the executor re-enforces the lifecycle program.
+pub fn bounty_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let bounty = cipherclerk.cell_id();
+
+    // `claim` — a WORKER takes an OPEN bounty. The GatedAffordance carries the DECISIVE
+    // effect (the `STATE` advance to CLAIMED) as its surface representative AND a
+    // live-state PRECONDITION ([`posted_precondition`]: the bounty is OPEN) — so the
+    // button is LIT on a posted bounty and DARK once claimed (the htmx tooth) and the
+    // cap∧state gate decides its verdict in-band. The actual fire ([`fire_claim`]) submits
+    // the FULL multi-effect claim ([`claim_effects`]: bind CLAIMANT_HASH + advance STATE),
+    // which the executor re-enforces the FULL bounty program on — so `WriteOnce(CLAIMANT)`
+    // (first-claimer-wins) and `StrictMonotonic(STATE)` BITE: a competing re-claim is
+    // REFUSED.
+    let claim = GatedAffordance::new(
+        CellAffordance::new(
+            "claim",
+            WORKER_RIGHTS,
+            Effect::SetField {
+                cell: bounty,
+                index: STATE_SLOT,
+                value: field_from_u64(STATE_CLAIMED),
+            },
+        ),
+        posted_precondition(),
+    );
+    // `submit` — a WORKER delivers work on a CLAIMED bounty. The decisive effect advances
+    // `STATE` to SUBMITTED; gated on the CLAIMED precondition. The executor re-enforces the
+    // installed program (`StrictMonotonic(STATE)` + `WriteOnce(SUBMISSION_HASH)` bite).
+    let submit = GatedAffordance::new(
+        CellAffordance::new(
+            "submit",
+            WORKER_RIGHTS,
+            Effect::SetField {
+                cell: bounty,
+                index: STATE_SLOT,
+                value: field_from_u64(STATE_SUBMITTED),
+            },
+        ),
+        claimed_precondition(),
+    );
+    // `payout` — the POSTER settles a SUBMITTED bounty. The decisive effect advances
+    // `STATE` to PAID (terminal); gated on the SUBMITTED precondition + the root cap tier
+    // (only the poster pays out). The executor re-enforces `StrictMonotonic(STATE)` — a
+    // re-payout (PAID -> PAID, no advance) is REFUSED.
+    let payout = GatedAffordance::new(
+        CellAffordance::new(
+            "payout",
+            POSTER_RIGHTS,
+            Effect::SetField {
+                cell: bounty,
+                index: STATE_SLOT,
+                value: field_from_u64(STATE_PAID),
+            },
+        ),
+        submitted_precondition(),
+    );
+    // `view_bounty` — a watcher reads the lifecycle state. Cap-only.
+    let view = CellAffordance::new(
+        "view_bounty",
+        WATCHER_RIGHTS,
+        Effect::EmitEvent {
+            cell: bounty,
+            event: Event::new(symbol("bounty-read"), vec![]),
+        },
+    );
+
+    DeosApp::builder("bounty-board", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["bounties".into()])
+        .cell(
+            DeosCell::new(bounty, "bounty")
+                .affordance(view)
+                .gated(claim)
+                .gated(submit)
+                .gated(payout)
+                .publish(WATCHER_RIGHTS),
+        )
+        .build()
+}
+
+/// **Seed the BOUNTY cell** so the gated fires have live state + the caveats bite: install
+/// the full bounty [`bounty_cell_program`] on the seeded bounty cell (so the executor
+/// re-enforces it on every touching turn), then post the genesis state (bind `TITLE_HASH`
+/// + `REWARD` under `WriteOnce`, set `STATE = STATE_OPEN`) directly into the embedded
+/// ledger.
+///
+/// After seeding, the bounty is POSTED/OPEN with its title + reward bound — a real
+/// `(old, new)` baseline against which `claim` advances. Returns the posted `STATE` value.
+pub fn seed_bounty(executor: &EmbeddedExecutor, title: &str, reward: u64) -> u64 {
+    let bounty = executor.cell_id();
+    executor.install_program(bounty, bounty_cell_program());
+    executor.with_ledger_mut(|ledger| {
+        if let Some(cell) = ledger.get_mut(&bounty) {
+            cell.state.set_field(TITLE_HASH_SLOT, title_hash(title));
+            cell.state.set_field(REWARD_SLOT, reward_field(reward));
+            cell.state.set_field(STATE_SLOT, state_field(STATE_OPEN));
+        }
+    });
+    STATE_OPEN
+}
+
+/// **`claim` effects** — the multi-effect claim body: bind `CLAIMANT_HASH` (`WriteOnce` →
+/// first-claimer-wins) and advance `STATE` OPEN -> CLAIMED (`StrictMonotonic`). This is the
+/// ONE coherent transition the installed program admits. The deos `claim` gated affordance
+/// is the cap∧state PRECONDITION face; THIS is the turn [`fire_claim`] submits.
+pub fn claim_effects(bounty: CellId, claimant: &str) -> Vec<Effect> {
+    let claimant_h = claimant_hash(claimant);
+    vec![
+        Effect::SetField {
+            cell: bounty,
+            index: CLAIMANT_HASH_SLOT,
+            value: claimant_h,
+        },
+        Effect::SetField {
+            cell: bounty,
+            index: STATE_SLOT,
+            value: field_from_u64(STATE_CLAIMED),
+        },
+        Effect::EmitEvent {
+            cell: bounty,
+            event: Event::new(symbol("bounty-claimed"), vec![claimant_h]),
+        },
+    ]
+}
+
+/// **`submit` effects** — the multi-effect submit body: bind `SUBMISSION_HASH`
+/// (`WriteOnce`) and advance `STATE` CLAIMED -> SUBMITTED (`StrictMonotonic`). THIS is the
+/// turn [`fire_submit`] submits.
+pub fn submit_effects(bounty: CellId, artifact_uri: &str) -> Vec<Effect> {
+    let artifact_h = field_from_bytes(artifact_uri.as_bytes());
+    vec![
+        Effect::SetField {
+            cell: bounty,
+            index: SUBMISSION_HASH_SLOT,
+            value: artifact_h,
+        },
+        Effect::SetField {
+            cell: bounty,
+            index: STATE_SLOT,
+            value: field_from_u64(STATE_SUBMITTED),
+        },
+        Effect::EmitEvent {
+            cell: bounty,
+            event: Event::new(symbol("bounty-submitted"), vec![artifact_h]),
+        },
+    ]
+}
+
+/// **`payout` effects** — the multi-effect payout body: advance `STATE` SUBMITTED -> PAID
+/// (terminal, `StrictMonotonic`). THIS is the turn [`fire_payout`] submits.
+pub fn payout_effects(bounty: CellId) -> Vec<Effect> {
+    let paid = field_from_u64(STATE_PAID);
+    vec![
+        Effect::SetField {
+            cell: bounty,
+            index: STATE_SLOT,
+            value: paid,
+        },
+        Effect::EmitEvent {
+            cell: bounty,
+            event: Event::new(symbol("bounty-paid"), vec![paid]),
+        },
+    ]
+}
+
+/// **Fire `claim`** — the deos cap∧state PRECONDITION gate (anti-ghost, in-band), then the
+/// FULL multi-effect claim turn the executor re-enforces the bounty program on. The
+/// two-tempo bridge: the gated affordance decides the button's verdict (cap ⊇ Either AND
+/// the bounty is POSTED) WITHOUT touching the executor; on both passing, the complete claim
+/// turn ([`claim_effects`]) is submitted (via [`DeosCell::fire_gated_through_executor_with`],
+/// state-parameterized off the live cell), and the executor's re-enforcement of
+/// [`bounty_cell_program`] is the SECOND, verified gate (`WriteOnce(CLAIMANT)` +
+/// `StrictMonotonic(STATE)` bite). Anti-ghost both ways: a precondition miss never submits;
+/// a program violation is a real executor refusal. Use [`seed_bounty`] first.
+pub fn fire_claim(
+    app: &DeosApp,
+    held: &AuthRequired,
+    claimant: &str,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let bounty = cell.cell();
+    let claimant = claimant.to_string();
+    cell.fire_gated_through_executor_with("claim", held, cipherclerk, executor, move |_live| {
+        claim_effects(bounty, &claimant)
+    })
+}
+
+/// **Fire `submit`** — the deos cap∧state PRECONDITION gate (cap ⊇ Either AND the bounty is
+/// CLAIMED), then the FULL submit turn ([`submit_effects`]). Like [`fire_claim`], the gated
+/// affordance decides the button in-band and the executor's program re-enforcement
+/// (`StrictMonotonic(STATE)` CLAIMED -> SUBMITTED, `WriteOnce(SUBMISSION)`) is the verified
+/// second gate. Use [`seed_bounty`] first.
+pub fn fire_submit(
+    app: &DeosApp,
+    held: &AuthRequired,
+    artifact_uri: &str,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let bounty = cell.cell();
+    let artifact_uri = artifact_uri.to_string();
+    cell.fire_gated_through_executor_with("submit", held, cipherclerk, executor, move |_live| {
+        submit_effects(bounty, &artifact_uri)
+    })
+}
+
+/// **Fire `payout`** — the deos cap∧state PRECONDITION gate (cap ⊇ root AND the bounty is
+/// SUBMITTED), then the FULL payout turn ([`payout_effects`]). The gated affordance decides
+/// the button in-band and the executor's `StrictMonotonic(STATE)` (SUBMITTED -> PAID, and a
+/// re-payout's no-advance PAID -> PAID is REFUSED) is the verified second gate. Use
+/// [`seed_bounty`] first.
+pub fn fire_payout(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let bounty = cell.cell();
+    cell.fire_gated_through_executor_with("payout", held, cipherclerk, executor, move |_live| {
+        payout_effects(bounty)
+    })
+}
+
+/// **Mount the deos-native surface** ([`bounty_app`]) on a shared context: build the
+/// composed [`DeosApp`] from the context's cipherclerk + executor, seed the bounty cell's
+/// program + POSTED state (so the gated fires bite), and fold the app into the context's
+/// affordance registry ([`DeosApp::register`]). Returns the live [`DeosApp`] (so a host
+/// can also [`DeosApp::mount`] its axum router / [`DeosApp::publish_all`] into the
+/// web-of-cells). This is the PROMOTION the census asks for: the deos surface now ships
+/// from `src/`, not from a side-proof in `tests/`.
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = bounty_app(ctx.cipherclerk(), ctx.executor());
+    // Seed the bounty cell so the gated `claim` / `submit` / `payout` fires have a live
+    // `(old, new)` and the full bounty program (installed here) is re-enforced by the
+    // executor on every touching turn.
+    seed_bounty(ctx.executor(), "fix the bug", 500);
+    app.register(ctx);
+    app
+}
+
+// =============================================================================
 // StarbridgeAppContext mount
 // =============================================================================
 
@@ -368,6 +727,13 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
             "child_program_vk_hex": hex_encode_32(&bounty_child_program_vk()),
         }),
     });
+
+    // Mount the deos-native composition surface (the `DeosApp`) on the SAME context — the
+    // census promotion: the deos surface now ships from `src/`. The factory + inspector are
+    // where SOUNDNESS lives (an out-of-order / re-claim turn is a real executor refusal on
+    // the born cell); the deos surface is the composition skin (per-viewer projection, the
+    // cap∧state gated fires, the `dregg://` publish, the rehydratable snapshot, the manifest).
+    register_deos(ctx);
 
     factory_vk
 }

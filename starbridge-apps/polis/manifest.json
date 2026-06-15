@@ -1,0 +1,186 @@
+{
+  "id": "polis",
+  "name": "Polis",
+  "description": "Governance cells — M-of-N councils, forward-certified amendments, constitution-as-program, budgeted worker mandates, and KERI pre-rotation identities — as factory-born cells whose StateConstraint programs ARE the enforced state machines.",
+  "version": "0.1.0",
+  "factory_vks": [],
+  "turn_builders": [
+    "council",
+    "amendment",
+    "constitution",
+    "mandate",
+    "identity"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.polis"
+  ],
+  "families": {
+    "council": {
+      "module": "council",
+      "machine": "DRAFT -> PROPOSED -> {REJECTED, APPROVED -> EXECUTED}, M-of-N gated",
+      "slot_layout": {
+        "STATE_SLOT": 0,
+        "PROPOSAL_HASH_SLOT": 1,
+        "APPROVED_FLAG_SLOT": 2,
+        "FIRST_APPROVAL_SLOT": 3,
+        "MEMBERS_COMMIT_SLOT": 6,
+        "RESERVED_SLOT": 7
+      },
+      "state_constraints": [
+        "AllowedTransitions(STATE_SLOT)",
+        "WriteOnce(PROPOSAL_HASH_SLOT)",
+        "BoundedBy(STATE_SLOT, PROPOSAL_HASH_SLOT)",
+        "MemberOf(APPROVED_FLAG_SLOT, {0,1}) + Monotonic + BoundedBy(PROPOSAL_HASH)",
+        "AffineLe(M*flag - Sum approvals <= 0)  // the threshold gate",
+        "per-member approval slot: MemberOf({0,1}) + Monotonic + BoundedBy(PROPOSAL_HASH)",
+        "non-member approval slots pinned zero",
+        "actor-bound (optional): AnyOf[Immutable(slot_i), SenderIs(member_keys[i])]"
+      ]
+    },
+    "amendment": {
+      "module": "council (amendment variant)",
+      "machine": "council machine + cooling-period TemporalGate on ENACT (EXECUTED)",
+      "state_constraints": [
+        "the council machine",
+        "pin_term(PROPOSAL_HASH_SLOT, new_constitution_hash)  // which successor it enacts",
+        "when_state(EXECUTED, TemporalGate(not_before = enact_not_before))  // the cooling gate"
+      ]
+    },
+    "constitution": {
+      "module": "constitution",
+      "machine": "UNINIT -> ACTIVE -> SUPERSEDED, parameters pinned for life, SUPERSEDED terminal",
+      "slot_layout": {
+        "STATE_SLOT": 0,
+        "VERSION_SLOT": 1,
+        "COUNCIL_THRESHOLD_SLOT": 2,
+        "AMENDMENT_DELAY_SLOT": 3,
+        "TREASURY_CAP_SLOT": 4,
+        "SUCCESSOR_HASH_SLOT": 5
+      },
+      "state_constraints": [
+        "AllowedTransitions(STATE_SLOT)",
+        "pin_term(VERSION / COUNCIL_THRESHOLD / AMENDMENT_DELAY / TREASURY_CAP)  // pinned for life",
+        "WriteOnce(SUCCESSOR_HASH_SLOT)",
+        "when_state(ACTIVE, SUCCESSOR_HASH == 0)",
+        "when_state(SUPERSEDED, SUCCESSOR_HASH != 0)  // the forward certification"
+      ]
+    },
+    "mandate": {
+      "module": "mandate",
+      "machine": "UNINIT -> ACTIVE -> REVOKED, slice/scope pinned, REVOKED terminal/inert",
+      "slot_layout": {
+        "STATE_SLOT": 0,
+        "SLICE_SLOT": 1,
+        "TOOL_SCOPE_SLOT": 2,
+        "ORCHESTRATOR_SLOT": 3,
+        "WORKER_TAG_SLOT": 4
+      },
+      "state_constraints": [
+        "AllowedTransitions(STATE_SLOT)",
+        "pin_term(SLICE / TOOL_SCOPE / ORCHESTRATOR / WORKER_TAG)"
+      ]
+    },
+    "identity": {
+      "module": "identity",
+      "machine": "UNINIT -> ACTIVE -> {ACTIVE, RETIRED}; RETIRED terminal/inert. KERI pre-rotation.",
+      "slot_layout": {
+        "STATE_SLOT": 0,
+        "NEXT_KEYS_DIGEST_SLOT": 1,
+        "CURRENT_KEYS_COMMIT_SLOT": 2,
+        "LAST_ROTATED_AT_SLOT": 3,
+        "COUNCIL_COMMIT_SLOT": 4
+      },
+      "state_constraints": [
+        "AllowedTransitions(STATE_SLOT)",
+        "KeyRotationGate(digest=NEXT_KEYS_DIGEST, current=CURRENT_KEYS_COMMIT, last_rotated=LAST_ROTATED_AT, cooling, Blake3)  // preimage exhibit + fresh re-commit + cooling",
+        "when_state(ACTIVE, NEXT_KEYS_DIGEST != 0)",
+        "when_state(ACTIVE, CURRENT_KEYS_COMMIT != 0)",
+        "pin_term(COUNCIL_COMMIT_SLOT)"
+      ]
+    }
+  },
+  "deos": {
+    "feature": "deos",
+    "feature_note": "The deos surface (src/deos.rs) is GATED behind the `deos` cargo feature. The pure library (default features) ships factory descriptors + cell programs and pulls dregg-cell ONLY — no app-framework / turn / sdk / axum. Enable with `--features deos`.",
+    "build_arrangement": "src/deos.rs is NOT a library module. `dregg-sdk` depends on `starbridge-polis` (sdk/src/polis.rs re-exports the pure cell programs), and `dregg-app-framework` depends on `dregg-sdk`, so a normal `polis -> app-framework` dependency edge (even optional) would close the illegal package cycle `app-framework -> sdk -> polis -> app-framework`, which Cargo rejects. Cargo permits such a cycle ONLY across a dev-dependency, so app-framework/turn/sdk are this crate's [dev-dependencies], and src/deos.rs is compiled INTO THE TEST BINARIES via `#[cfg(feature = \"deos\")] #[path = \"../src/deos.rs\"] mod deos;` in tests/. The SHIPPED library's normal dependency tree is app-framework-free (verified via `cargo tree -p starbridge-polis --edges normal`); the framework appears ONLY under the dev edge.",
+    "surface": "DeosApp (one per family)",
+    "src_factories": [
+      "council_app(cipherclerk, executor)",
+      "amendment_app(cipherclerk, executor)",
+      "constitution_app(cipherclerk, executor)",
+      "mandate_app(cipherclerk, executor)",
+      "identity_app(cipherclerk, executor)"
+    ],
+    "mount": "register_<family>_deos(ctx, ...) builds + seeds + folds each family's composed DeosApp into the StarbridgeAppContext affordance registry; register_all_deos(ctx, ...) mounts all five in family order (council, amendment, constitution, mandate, identity). DeosApp::mount yields the axum router (manifest + /surface.js + per-cell cap-gated fires). The five families share the context's ONE cipherclerk cell, so a host wanting several live concurrently mounts them on DISTINCT contexts.",
+    "rights_ladder": "observer (Signature, cap-only read) ⊂ participant (Either, a gated machine-advancing step) ⊂ authority (None/root, the decisive transition).",
+    "families": {
+      "council": {
+        "cell": "council-proposal",
+        "discoverable": ["polis", "council", "governance"],
+        "publish": "Signature (the proposal cell is a dregg:// sturdyref a council member on another federation reacquires)",
+        "affordances": {
+          "view_council": "cap-only, Signature (an OBSERVER reads the machine + approvals)",
+          "approve": "GATED (cap∧state), Either — PROPOSED precondition; the fire flips member i's approval slot, executor re-enforcing {0,1} + Monotonic + BoundedBy",
+          "certify": "GATED (cap∧state), None/root — PROPOSED precondition; the executor's AffineLe threshold gate arms the flag only with Sum approvals >= M"
+        },
+        "seam": "CLOSED + TOOTHED. fire_council_approve commits (a real verified turn); fire_council_unapprove_attempt is REFUSED by the executor's Monotonic(approval_slot). (tests/deos_seam.rs)"
+      },
+      "amendment": {
+        "cell": "amendment-proposal",
+        "discoverable": ["polis", "amendment", "governance"],
+        "publish": "Signature",
+        "affordances": {
+          "view_amendment": "cap-only, Signature (an OBSERVER reads the staged successor + cooling gate)",
+          "ratify": "GATED (cap∧state), None/root — APPROVED precondition; the fire steps APPROVED -> EXECUTED, the executor's cooling TemporalGate biting against the executor's block height"
+        },
+        "seam": "CLOSED + TOOTHED. fire_amendment_ratify commits on an executor past the cooling gate (embedded_executor_at(_, 1000) with enact_not_before 500); a ratify before the cooling height (executor at height 0) is REFUSED by the executor's TemporalGate. (tests/deos_seam.rs)"
+      },
+      "constitution": {
+        "cell": "constitution",
+        "discoverable": ["polis", "constitution", "governance"],
+        "publish": "Signature",
+        "affordances": {
+          "view_constitution": "cap-only, Signature (an OBSERVER reads the pinned parameters)",
+          "amend": "GATED (cap∧state), None/root — ACTIVE precondition; the fire records a nonzero successor + steps ACTIVE -> SUPERSEDED, the executor re-enforcing the pinned params + nonzero-successor-at-supersede"
+        },
+        "seam": "CLOSED + TOOTHED. fire_constitution_amend commits a named supersede; fire_constitution_anon_supersede_attempt (no successor) is REFUSED by the executor's when_state(SUPERSEDED, successor != 0). (tests/deos_seam.rs)"
+      },
+      "mandate": {
+        "cell": "worker-mandate",
+        "discoverable": ["polis", "mandate", "orchestration"],
+        "publish": "Signature",
+        "affordances": {
+          "view_mandate": "cap-only, Signature (an OBSERVER reads the slice + tool scope + state)",
+          "invoke": "GATED (cap∧state), Either — ACTIVE precondition; the fire is a self-touch under the pins (ACTIVE -> ACTIVE), the executor re-enforcing slice/scope pins",
+          "revoke": "GATED (cap∧state), None/root — ACTIVE precondition; the fire steps ACTIVE -> REVOKED, after which the cell is terminally inert"
+        },
+        "seam": "CLOSED + TOOTHED. fire_mandate_invoke commits, fire_mandate_revoke commits (then a post-revoke invoke is refused — REVOKED is inert); fire_mandate_overspend_attempt (slice inflation) is REFUSED by the executor's pin_term(SLICE). (tests/deos_seam.rs)"
+      },
+      "identity": {
+        "cell": "identity",
+        "discoverable": ["polis", "identity", "keri"],
+        "publish": "Signature (the identity cell is a dregg:// sturdyref a relying party reacquires across the trust boundary)",
+        "affordances": {
+          "view_identity": "cap-only, Signature (an OBSERVER reads the key state + cooling anchor)",
+          "attest": "GATED (cap∧state), Either — ACTIVE precondition; a device self-touch that leaves the key registers ALONE (the Immutable disjunct of the gate)",
+          "rotate": "GATED (cap∧state), None/root — ACTIVE precondition; the fire exhibits the pre-committed Preimage32 + re-commits forward + stamps the height, the executor's KeyRotationGate verifying the exhibit + cooling"
+        },
+        "seam": "CLOSED + TOOTHED. fire_identity_rotate commits a cooled rotation exhibiting the pre-committed preimage (embedded_executor_at(_, 1000), cooling 50, carrying the WitnessBlob::preimage exhibit); a rotation inside the cooling window (executor at height 0) is REFUSED by the executor's KeyRotationGate. (tests/deos_seam.rs)"
+      }
+    }
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "deos_feature_gated": true,
+    "source_of_truth": "starbridge-apps/polis/src/deos.rs (compiled into the test binaries; see deos.build_arrangement)",
+    "tests": [
+      "tests/reexpress_deos_app.rs — the surface re-expression (per-viewer HTTP projection, web-of-cells publish, /surface.js + /manifest); council/mandate/identity FULL, amendment/constitution build+register+gated",
+      "tests/deos_seam.rs — one real fire-path tooth + one happy-path green fire per family (all five fully toothed)"
+    ]
+  }
+}

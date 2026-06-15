@@ -79,11 +79,12 @@
 //! CLIs use.
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellId, CellMode,
-    CellProgram, ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, FieldElement,
-    InputRef, InspectorDescriptor, StarbridgeAppContext, StateConstraint, WitnessedPredicate,
-    WitnessedPredicateKind, canonical_program_vk, field_from_bytes, field_from_u64, hex_encode_32,
-    symbol,
+    Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellAffordance,
+    CellId, CellMode, CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect,
+    EmbeddedExecutor, Event, FactoryDescriptor, FieldElement, FireExecuteError, GatedAffordance,
+    InputRef, InspectorDescriptor, StarbridgeAppContext, StateConstraint, TurnReceipt,
+    WitnessedPredicate, WitnessedPredicateKind, canonical_program_vk, field_from_bytes,
+    field_from_u64, hex_encode_32, symbol,
 };
 
 // =============================================================================
@@ -549,6 +550,328 @@ pub fn resolve_target(uri: &str) -> FieldElement {
 }
 
 // =============================================================================
+// The deos-native surface — the NAME as a composed `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: nameservice is THE web-of-cells
+// keystone. Re-expressed as a composed [`DeosApp`] ([`name_app`] below) and mounted by
+// `register(ctx)` (see [`register_deos`]): the framework wires per-viewer projection,
+// the generated `<dregg-affordance-surface>` component, the manifest, the rehydratable
+// frustum-snapshot — and, the headline here, **web-of-cells publish: each NAME cell is
+// a real `dregg://` sturdyref**. That sturdyref is reacquirable across a federation
+// membrane, so [`RESOLVE_TARGET_SLOT`] can point a name at a LIVE, reacquirable cell ref
+// instead of an opaque `blake3(uri)` digest — the name directory becomes a web OF cells.
+//
+// **The seam is closed** — a TWO-TEMPO fire (mirror supply-chain-provenance /
+// subscription). The three owner-only state-mutating operations (`renew`, `revoke`,
+// `set_target`) are [`GatedAffordance`]s carrying a live-state PRECONDITION; the FULL
+// name program ([`name_cell_program`] = `WriteOnce(NAME_HASH)` · `Monotonic(EXPIRY)` ·
+// `WriteOnce(REVOKED)`) is INSTALLED on the seeded name cell ([`seed_name`]) and
+// RE-ENFORCED by the executor on every touching turn:
+//
+//   1. the deos PRECONDITION gate (the cap-gate `is_attenuation` AND the live-state
+//      precondition `CellProgram::evaluate`) decides the button's verdict IN-BAND —
+//      nothing submitted on a miss (anti-ghost; the htmx reactivity rides this);
+//   2. [`fire_renew`] / [`fire_revoke`] / [`fire_set_target`] then submit the FULL turn
+//      derived from the cell's LIVE state, and the executor RE-ENFORCES the name program
+//      — so a REWOUND expiry (`renew` that rolls the rent backward, `Monotonic(EXPIRY)`),
+//      an UN-REVOKE (`REVOKED` 1 -> 0, `WriteOnce(REVOKED)`), and a name REBIND
+//      (`WriteOnce(NAME_HASH)`) are all REAL executor refusals in the SUBMISSION path —
+//      the half the floor's `program.evaluate`-only tests never exercised through a real
+//      signed turn (see `tests/deos_seam.rs`).
+//
+// The htmx tooth: after a `revoke`, the name is dead — `renew` and `set_target` carry the
+// `REVOKED == 0` precondition, so they go DARK the instant the tombstone lands.
+
+/// The nameservice rights tiers, ON THE REAL ATTENUATION LATTICE — these ARE the roles
+/// the floor crate's cap-graph enforces:
+///
+///   - a RESOLVER (the public / any peer) holds [`AuthRequired::Signature`] — the narrow
+///     read tier: it can `resolve` (read [`RESOLVE_TARGET_SLOT`] and reacquire the cell the
+///     name points at) and nothing else;
+///   - the OWNER holds [`AuthRequired::None`]/root — it can `transfer` (re-key the owner),
+///     `renew` (extend the rent), `revoke` (tombstone the name), and `set_target` (re-point
+///     the name) on top of resolving.
+///
+/// So `Signature ⊂ None` IS the resolver ⊂ owner ladder — a two-tier name authority.
+pub const RESOLVER_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The owner rights tier (root — transfer/renew/revoke/set_target + resolve). See [`RESOLVER_RIGHTS`].
+pub const OWNER_RIGHTS: AuthRequired = AuthRequired::None;
+
+/// The **life-of-cell name invariants** the executor re-enforces on every touching turn —
+/// exactly [`name_cell_program`] (`WriteOnce(NAME_HASH)` · `Monotonic(EXPIRY)` ·
+/// `WriteOnce(REVOKED)`), the same program the factory installs on every born name cell
+/// (the one `tests/factory_birth.rs` proves bites on the executor). Installed by
+/// [`seed_name`] so the gated fires re-enforce it.
+pub fn name_invariants_program() -> CellProgram {
+    name_cell_program()
+}
+
+/// The **not-revoked precondition** — the name must be ACTIVE (`REVOKED == 0`). A real
+/// [`CellProgram`] read against the cell's current state, so an owner-op button is LIT on a
+/// live name and goes DARK the instant the name is revoked (the htmx tooth). This gates
+/// "may `renew` / `revoke` / `set_target` fire now"; the one-way [`WriteOnce(REVOKED)`]
+/// (a re-revoke / un-revoke) is the installed [`name_invariants_program`] the executor
+/// re-enforces on the produced transition.
+pub fn not_revoked_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+        index: REVOKED_SLOT as u8,
+        value: field_from_u64(0),
+    }])
+}
+
+/// **The nameservice NAME as a composed [`DeosApp`]** — the whole interaction surface, on
+/// the deos bones. The name cell is the agent's OWN cell (`cipherclerk.cell_id()`) so fires
+/// execute against the seeded embedded ledger.
+///
+/// Five operations on the NAME cell, on the resolver ⊂ owner rights ladder:
+///
+///   - `resolve` — a cap-only affordance (a RESOLVER reads the target): `Signature`, an
+///     `EmitEvent` reading [`RESOLVE_TARGET_SLOT`]. The published web-of-cells sturdyref is
+///     reacquired at THIS tier;
+///   - `transfer` — a cap-only affordance (the OWNER re-keys [`OWNER_HASH_SLOT`]):
+///     `None`/root, a real `SetField` on the owner slot (an owner re-key is a cap-graph
+///     event, not a gated state-machine step — so it is cap-only);
+///   - `renew` — a [`GatedAffordance`] (the OWNER extends the rent): `None`/root, the
+///     not-revoked PRECONDITION; the real fire ([`fire_renew`]) submits a turn that advances
+///     [`EXPIRY_SLOT`] off the LIVE expiry, re-enforced by the executor's `Monotonic(EXPIRY)`;
+///   - `revoke` — a [`GatedAffordance`] (the OWNER tombstones the name): `None`/root, the
+///     not-revoked PRECONDITION; the real fire ([`fire_revoke`]) sets [`REVOKED_SLOT`] -> 1,
+///     re-enforced by the executor's one-way `WriteOnce(REVOKED)`;
+///   - `set_target` — a [`GatedAffordance`] (the OWNER re-points the name): `None`/root, the
+///     not-revoked PRECONDITION; the real fire ([`fire_set_target`]) sets [`RESOLVE_TARGET_SLOT`].
+///
+/// The name cell is published into the web-of-cells at the resolver tier (a peer on another
+/// federation reacquires the name — and through its `resolve`, the cell the name points at)
+/// and is discoverable under `names`.
+///
+/// Seed the cell's program + genesis state with [`seed_name`] so the gated fires have a live
+/// state and the executor re-enforces the invariants.
+pub fn name_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let cell = cipherclerk.cell_id();
+
+    // `resolve` — a RESOLVER reads the target. Cap-only; an `EmitEvent` reading
+    // RESOLVE_TARGET_SLOT. This is the affordance the published web-of-cells sturdyref
+    // exposes at the resolver tier — a peer reacquires the name AND follows it to the cell
+    // the target points at.
+    let resolve = CellAffordance::new(
+        "resolve",
+        RESOLVER_RIGHTS,
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol("name-resolved"), vec![field_from_u64(RESOLVE_TARGET_SLOT as u64)]),
+        },
+    );
+    // `transfer` — the OWNER re-keys the owner slot. Cap-only (a cap-graph re-key, no gated
+    // state-machine step), carrying the real `SetField` on OWNER_HASH_SLOT.
+    let transfer = CellAffordance::new(
+        "transfer",
+        OWNER_RIGHTS,
+        Effect::SetField {
+            cell,
+            index: OWNER_HASH_SLOT,
+            value: signer_owner_hash(cipherclerk),
+        },
+    );
+    // `renew` — the OWNER extends the rent. The GatedAffordance carries the DECISIVE effect
+    // (the EXPIRY advance) as its surface representative AND the not-revoked PRECONDITION — so
+    // the button is dark on a revoked name and lit on a live one (the htmx tooth), and the
+    // cap∧state gate decides its verdict in-band. The actual fire ([`fire_renew`]) submits a
+    // turn that advances EXPIRY off the LIVE expiry, which the executor re-enforces
+    // `Monotonic(EXPIRY)` on — so a REWOUND expiry is REFUSED.
+    let renew = GatedAffordance::new(
+        CellAffordance::new(
+            "renew",
+            OWNER_RIGHTS,
+            Effect::SetField {
+                cell,
+                index: EXPIRY_SLOT,
+                value: field_from_u64(DEFAULT_RENT_EPOCH_BLOCKS),
+            },
+        ),
+        not_revoked_precondition(),
+    );
+    // `revoke` — the OWNER tombstones the name. The decisive effect sets REVOKED -> 1; gated
+    // on the not-revoked precondition (a live name). The executor re-enforces the one-way
+    // `WriteOnce(REVOKED)` (a re-revoke / un-revoke is a real refusal).
+    let revoke = GatedAffordance::new(
+        CellAffordance::new(
+            "revoke",
+            OWNER_RIGHTS,
+            Effect::SetField {
+                cell,
+                index: REVOKED_SLOT,
+                value: field_from_u64(1),
+            },
+        ),
+        not_revoked_precondition(),
+    );
+    // `set_target` — the OWNER re-points the name. The decisive effect writes
+    // RESOLVE_TARGET_SLOT; gated on the not-revoked precondition. (RESOLVE_TARGET carries no
+    // slot caveat, so the executor admits any re-point on a live name; once revoked, the
+    // precondition darkens it.)
+    let set_target = GatedAffordance::new(
+        CellAffordance::new(
+            "set_target",
+            OWNER_RIGHTS,
+            Effect::SetField {
+                cell,
+                index: RESOLVE_TARGET_SLOT,
+                value: resolve_target("dregg://cell/placeholder"),
+            },
+        ),
+        not_revoked_precondition(),
+    );
+
+    DeosApp::builder("nameservice", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["names".into()])
+        .cell(
+            DeosCell::new(cell, "name")
+                .affordance(resolve)
+                .affordance(transfer)
+                .gated(renew)
+                .gated(revoke)
+                .gated(set_target)
+                .publish(RESOLVER_RIGHTS),
+        )
+        .build()
+}
+
+/// The signer's **owner-hash** — `field_from_bytes(public_key)`, the same shape
+/// [`build_transfer_action`] writes into [`OWNER_HASH_SLOT`] (the field image of an owner's
+/// pubkey). The `transfer` affordance's effect-template carries the APP signer as a surface
+/// representative.
+pub fn signer_owner_hash(cipherclerk: &AppCipherclerk) -> FieldElement {
+    field_from_bytes(&cipherclerk.public_key().0)
+}
+
+/// **Seed the NAME cell** so the gated fires have live state + the caveats bite: install the
+/// full [`name_invariants_program`] on the seeded name cell (so the executor re-enforces it
+/// on every touching turn), then bind the genesis state directly into the embedded ledger —
+/// `NAME_HASH` + `OWNER_HASH` (`WriteOnce`, frozen after), `EXPIRY = initial_expiry`, and
+/// `REVOKED = 0` (active).
+///
+/// After seeding, the name is registered + active with `EXPIRY = initial_expiry` — a real
+/// `(old, new)` baseline against which `renew` advances the expiry, `revoke` tombstones, and
+/// `set_target` re-points. Returns the seeded `NAME_HASH` digest.
+pub fn seed_name(
+    executor: &EmbeddedExecutor,
+    name: &str,
+    owner: [u8; 32],
+    initial_expiry: u64,
+) -> FieldElement {
+    let cell = executor.cell_id();
+    executor.install_program(cell, name_invariants_program());
+    let nh = field_from_bytes(name.as_bytes());
+    executor.with_ledger_mut(|ledger| {
+        if let Some(c) = ledger.get_mut(&cell) {
+            c.state.set_field(NAME_HASH_SLOT, nh);
+            c.state.set_field(OWNER_HASH_SLOT, field_from_bytes(&owner));
+            c.state.set_field(EXPIRY_SLOT, field_from_u64(initial_expiry));
+            c.state.set_field(REVOKED_SLOT, field_from_u64(0));
+        }
+    });
+    nh
+}
+
+/// **Fire `renew`** — the deos cap∧state PRECONDITION gate (cap ⊇ root AND the name is
+/// active), then a turn that advances [`EXPIRY_SLOT`] off the cell's LIVE expiry (by
+/// [`DEFAULT_RENT_EPOCH_BLOCKS`]). The two-tempo bridge: the gated affordance decides the
+/// button in-band (nothing submitted on a precondition miss); on passing, the executor's
+/// re-enforcement of `Monotonic(EXPIRY)` is the SECOND, verified gate — a REWOUND expiry is
+/// a real refusal. Because the new expiry is read from live state, the renew advances each
+/// time (the state-parameterized fire). Use [`seed_name`] first.
+pub fn fire_renew(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let name_cell = cell.cell();
+    cell.fire_gated_through_executor_with("renew", held, cipherclerk, executor, |state| {
+        // The new expiry advances the LIVE expiry by one rent epoch (Monotonic(EXPIRY) holds).
+        let live_expiry = field_to_u64(&state.fields[EXPIRY_SLOT]);
+        let new_expiry = live_expiry + DEFAULT_RENT_EPOCH_BLOCKS;
+        vec![
+            Effect::SetField {
+                cell: name_cell,
+                index: EXPIRY_SLOT,
+                value: field_from_u64(new_expiry),
+            },
+            Effect::EmitEvent {
+                cell: name_cell,
+                event: Event::new(symbol("name-renewed"), vec![field_from_u64(new_expiry)]),
+            },
+        ]
+    })
+}
+
+/// **Fire `revoke`** — the deos cap∧state PRECONDITION gate (cap ⊇ root AND the name is
+/// active), then a turn that sets [`REVOKED_SLOT`] -> 1 (a tombstone). The executor
+/// re-enforces the one-way `WriteOnce(REVOKED)` — once set, the slot is frozen, so a second
+/// revoke / an un-revoke is a real refusal. Use [`seed_name`] first.
+pub fn fire_revoke(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let name_cell = cell.cell();
+    cell.fire_gated_through_executor_with("revoke", held, cipherclerk, executor, |_state| {
+        vec![
+            Effect::SetField {
+                cell: name_cell,
+                index: REVOKED_SLOT,
+                value: field_from_u64(1),
+            },
+            Effect::EmitEvent {
+                cell: name_cell,
+                event: Event::new(symbol("name-revoked"), vec![field_from_u64(1)]),
+            },
+        ]
+    })
+}
+
+/// **Fire `set_target`** — the deos cap∧state PRECONDITION gate (cap ⊇ root AND the name is
+/// active), then a turn that re-points [`RESOLVE_TARGET_SLOT`] at `target`. The web-of-cells
+/// payoff: after [`DeosApp::publish_all`] mints the name cell's `dregg://` sturdyref, an
+/// owner points the name at ANOTHER reacquirable cell ref via this fire — the name directory
+/// is a web OF cells. Use [`seed_name`] first.
+pub fn fire_set_target(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+    target: FieldElement,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let name_cell = cell.cell();
+    cell.fire_gated_through_executor_with("set_target", held, cipherclerk, executor, move |_state| {
+        vec![
+            Effect::SetField {
+                cell: name_cell,
+                index: RESOLVE_TARGET_SLOT,
+                value: target,
+            },
+            Effect::EmitEvent {
+                cell: name_cell,
+                event: Event::new(symbol("name-target-set"), vec![target]),
+            },
+        ]
+    })
+}
+
+/// Read a `u64` from the last 8 big-endian bytes of a field element (the inverse of
+/// [`field_from_u64`] for the `EXPIRY` counter the name cell stores).
+fn field_to_u64(f: &FieldElement) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&f[24..32]);
+    u64::from_be_bytes(b)
+}
+
+// =============================================================================
 // StarbridgeAppContext mount
 // =============================================================================
 
@@ -702,7 +1025,36 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
         })
     });
 
+    // 5. Mount the deos-native composition surface (the `DeosApp`) on the SAME context —
+    // nameservice is THE web-of-cells keystone (each name cell is a `dregg://` sturdyref).
+    // The factory + inspectors are where SOUNDNESS lives (a rebind / expiry-rewind /
+    // un-revoke is a real executor refusal on the born cell); the deos surface is the
+    // composition skin (per-viewer projection, the cap∧state gated fires, the `dregg://`
+    // publish, the rehydratable snapshot, the manifest).
+    register_deos(ctx);
+
     factory_vk
+}
+
+/// **Mount the deos-native surface** ([`name_app`]) on a shared context: build the composed
+/// [`DeosApp`] from the context's cipherclerk + executor, seed the name cell's program +
+/// genesis state (so the gated fires bite), and fold the app into the context's affordance
+/// registry ([`DeosApp::register`]). Returns the live [`DeosApp`] (so a host can also
+/// [`DeosApp::mount`] its axum router / [`DeosApp::publish_all`] into the web-of-cells — the
+/// nameservice keystone: each name cell is exported as a real `dregg://` sturdyref).
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = name_app(ctx.cipherclerk(), ctx.executor());
+    // Seed the name cell so the gated `renew` / `revoke` / `set_target` fires have a live
+    // `(old, new)` and the full name program (installed here) is re-enforced by the executor
+    // on every touching turn. A registered, active name at a real initial expiry.
+    seed_name(
+        ctx.executor(),
+        "deos.dregg",
+        ctx.cipherclerk().public_key().0,
+        DEFAULT_RENT_EPOCH_BLOCKS,
+    );
+    app.register(ctx);
+    app
 }
 
 // =============================================================================

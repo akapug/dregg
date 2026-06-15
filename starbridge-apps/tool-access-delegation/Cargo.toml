@@ -25,5 +25,15 @@ blake3 = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+# The deos-app re-expression proof (`tests/reexpress_deos_app.rs`): the SAME app on the
+# composed `DeosApp` bones — smaller + more capable. + the fire→full-CellProgram seam proof
+# (`tests/deos_seam.rs`). Both drive the mounted axum surface (per-viewer projection +
+# cap∧state gated fires) end-to-end. (`tests/factory_birth.rs` + `tests/lean_differential.rs`
+# — the executor-floor + Lean-differential proofs — are unchanged.)
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+
 [lints]
 workspace = true
