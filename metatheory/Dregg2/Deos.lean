@@ -93,6 +93,13 @@ import Dregg2.Deos.Reactive
 -- (`single_machine_commit_needs_no_binding` = `family_atomicity` at `ι := Unit` — commit ⇔ the one
 -- cell's success, NO CG-5 binding; the cross-cell cut is the price of n≥2). 8 keystones #assert_all_clean.
 import Dregg2.Deos.ReplayMembrane
+-- The CHOREOGRAPHY COHERENCE (2026-06-14, the "composable flows?" question answered): the deos surface
+-- does NOT fork the existing Protocol/Workflow + choreography stack — it RENDERS it. A Protocol.Workflow
+-- step IS a sequenced GatedAffordance/Reactive fire: workflowStep_is_gatedAffordance (a step's
+-- (authorizedParty, precond) IS a cap∧state button), workflow_fires_iff_affordance_fires (exec ↔
+-- gated-fire ∧ attest), phaseTransition_is_reactiveAffordance (a precond→postPhase IS the transition
+-- gate); the order/skip/cap teeth carry through. 10 keystones #assert_all_clean.
+import Dregg2.Deos.WorkflowBridge
 
 namespace Dregg2.Deos
 
