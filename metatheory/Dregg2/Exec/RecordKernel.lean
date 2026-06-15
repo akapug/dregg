@@ -336,7 +336,7 @@ structure RecordKernelState where
   every existing construction/proof that ignores it is unaffected (the additive extension, exactly
   as `nullifiers` were added). This is the destination conserved measure the per-asset
   transition (`§MULTI-ASSET`) preserves; the scalar `balance` field is its legacy asset-view, and
-  the executable `FullAction` dispatch migrates onto `bal` (`DREGG2-GAP-MAP.md FILL 1`). -/
+  the executable `FullAction` dispatch migrates onto `bal`. -/
   bal        : CellId → AssetId → ℤ := fun _ _ => 0
   /-- **The PER-CELL SLOT-CAVEAT registry** (dregg1's `FactoryDescriptor.program` carried per minted
   cell, `cell/src/factory.rs`): the list of `SlotCaveat`s the executor checks on EVERY `SetField` to
@@ -575,7 +575,8 @@ theorem recKExec_frame (k k' : RecordKernelState) (turn : Turn)
 assets, and conservation must be PER-ASSET — a committed turn moving asset `a` must leave EVERY
 other asset's supply *literally untouched*; folding all assets into one aggregate would let a cell
 silently swap asset A for asset B while the scalar stays put (`EFFECT-ISA-DESIGN.md:315,320-323`;
-`DREGG2-GAP-MAP.md FILL 1`, "the #1 soundness gap"). `Exec.MultiAsset` proved exactly this — but
+the per-asset CONSERVATION_VECTOR — the #1 soundness gap of a single-scalar ledger).
+`Exec.MultiAsset` proved exactly this — but
 over a deliberately PARALLEL `MACellId`/`maAuthorizedB` toy that "cannot clash with `Kernel.CellId`"
 and is imported by nothing executable (a sibling law). Here we re-prove it over the REAL
 `RecordKernelState.bal` ledger and the REAL `authorizedB k.caps` gate — the SAME state type and
@@ -638,7 +639,7 @@ theorem recTransferBal_untouched (bal : CellId → AssetId → ℤ) (src dst : C
 /-- **THE KEYSTONE — per-asset conservation, PROVED of the EXECUTABLE record kernel over the REAL
 gate.** Every committed per-asset transfer preserves `recTotalAsset k b` for EVERY asset `b`: the
 moved asset by the debit/credit cancellation, every other asset because its column is untouched.
-This is the `CONSERVATION_VECTOR` (`DREGG2-GAP-MAP.md FILL 1`) on the real executable
+This is the `CONSERVATION_VECTOR` on the real executable
 `RecordKernelState` — the multi-asset refinement of `recKExec_conserves`, not a `MultiAsset`
 sibling toy. -/
 theorem recKExecAsset_conserves_per_asset (k k' : RecordKernelState) (turn : Turn) (a : AssetId)
