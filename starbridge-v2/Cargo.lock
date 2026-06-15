@@ -2330,7 +2330,9 @@ name = "dregg-lightclient"
 version = "0.1.0"
 dependencies = [
  "dregg-blocklace",
+ "dregg-cell",
  "dregg-circuit",
+ "dregg-turn",
 ]
 
 [[package]]
@@ -2456,6 +2458,7 @@ dependencies = [
 name = "dregg-userspace-verify"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "dregg-cell",
  "dregg-turn",
  "dregg-types",
