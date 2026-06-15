@@ -47,7 +47,8 @@ QEMU_DISPLAY ?= cocoa,show-cursor=on
 
 .PHONY: all run run-m0 run-m1 run-m2 run-stark run-net run-assembly run-riscv \
         build-aarch64 build-assembly build-riscv build-graphical run-graphical \
-        run-graphical-headless verify-isolation clean help
+        run-graphical-headless build-tutorial run-tutorial run-tutorial-headless \
+        verify-isolation clean help
 
 help:
 	@echo "dregg Robigalia v0 seL4 image:"
@@ -61,6 +62,8 @@ help:
 	@echo "  make run-assembly — boot the 5-PD FIRMAMENT (verifier+executor+persist+net+app)"
 	@echo "  make run-graphical— boot the compositor-fb PD: REAL ramfb pixels in a QEMU window"
 	@echo "  make run-graphical-headless — same image, -display none, serial-proves ramfb config"
+	@echo "  make run-tutorial — boot the deos ONBOARDING: interactive multi-screen tutorial + keyboard"
+	@echo "  make run-tutorial-headless  — same image, -display none, for screendump capture"
 	@echo "  make run-riscv    — boot M0 on qemu_virt_riscv64 (M5)"
 
 all: build-aarch64
@@ -193,6 +196,41 @@ run-graphical-headless: build-graphical
 	$(QEMU_AARCH64_GRAPHICAL) \
 		-display none \
 		-device loader,file=$(BUILD)/dregg-graphical.img,addr=0x70000000,cpu-num=0 \
+		-serial mon:stdio
+
+# ── THE deos ONBOARDING (deos-tutorial.system) ──────────────────────────────
+# The deos-tutorial PD boots a polished, multi-screen, INTERACTIVE tutorial: it
+# drives ramfb (like compositor-fb) AND a virtio-keyboard-device (virtio-mmio
+# slot 30, the same device-cap discipline the net PD uses), so the newcomer
+# presses SPACE / UP / DOWN to walk a six-screen arc teaching deos from first
+# principles, rendering REAL deos data shapes (a cell's four substances, an
+# affordance's cap-gate, a dregg:// reference). docs/desktop-os-research/
+# GRAPHICAL-SEL4-BOOT.md.
+build-tutorial:
+	cd $(PD_DIR) && cargo build $(CARGO_FLAGS) -p dregg-deos-tutorial-pd
+	mkdir -p $(BUILD)
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-deos-tutorial-pd.elf $(BUILD)/
+	$(MICROKIT) deos-tutorial.system --search-path $(BUILD) --board $(BOARD) --config $(CONFIG) -o $(BUILD)/deos-tutorial.img -r $(BUILD)/deos-tutorial.report.txt
+
+# THE INTERACTIVE WINDOW — run this for ember: a real QEMU window scanning out
+# the tutorial, with a real virtio-keyboard. Press SPACE / UP / DOWN to navigate.
+# Serial stays on stdio so the boot diagnostics + screen transitions print.
+run-tutorial: build-tutorial
+	$(QEMU_AARCH64_GRAPHICAL) \
+		-display $(QEMU_DISPLAY) \
+		-global virtio-mmio.force-legacy=false \
+		-device virtio-keyboard-device,bus=virtio-mmio-bus.30 \
+		-device loader,file=$(BUILD)/deos-tutorial.img,addr=0x70000000,cpu-num=0 \
+		-serial mon:stdio
+
+# Window-less (CI / screendump capture over QMP): the SAME image, -display none.
+# The PD configures ramfb + draws screen 1; drive keys over QMP send-key to step.
+run-tutorial-headless: build-tutorial
+	$(QEMU_AARCH64_GRAPHICAL) \
+		-display none \
+		-global virtio-mmio.force-legacy=false \
+		-device virtio-keyboard-device,bus=virtio-mmio-bus.30 \
+		-device loader,file=$(BUILD)/deos-tutorial.img,addr=0x70000000,cpu-num=0 \
 		-serial mon:stdio
 
 # ── M5: M0 on riscv64 ───────────────────────────────────────────────────────
