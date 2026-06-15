@@ -25,8 +25,25 @@ description = "Starbridge userspace app — TUSSLE, a Toribash-style verified jo
 [dependencies]
 dregg-intent = { path = "../../intent" }
 dregg-cell = { path = "../../cell", default-features = false }
+# The deos-native surface — the figures are composed as a TWO-cell DeosApp
+# (GatedAffordance cap∧state fires through the embedded executor). The typed
+# `sym` enum atom (SymMemberOf) installed on each figure cell BITES as a real
+# executor refusal in the fire path (an illegal joint reveal is rejected by the
+# executor, not by app bookkeeping). See the deos section in `src/lib.rs`.
+dregg-app-framework = { path = "../../app-framework" }
 
 blake3 = "1"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The deos re-expression proof (`tests/reexpress_deos_app.rs`: two-figure app,
+# per-viewer projection, web-of-cells publish, rehydration, surface.js/manifest)
+# + the fire→full-CellProgram seam proof (`tests/deos_seam.rs`: the SymMemberOf
+# typed-enum tooth + the wrong-figure cap tooth + the phase gate, all biting
+# through real signed fires). Both drive the mounted axum surface end-to-end.
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
 
 [lints]
 workspace = true

@@ -14,8 +14,26 @@
   "inspectors": ["bounty"],
   "turn_builders": ["post_bounty", "claim_bounty", "submit_work", "payout_bounty"],
   "required_apis": ["/turn/submit", "/cells/create-from-factory", "/api/cell/{id}"],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "bounty_app(cipherclerk, executor)",
+    "cell": "bounty",
+    "discoverable": ["bounties"],
+    "publish": "Signature (the bounty cell is a dregg:// sturdyref an indexer on another federation reacquires)",
+    "affordances": {
+      "view_bounty": "cap-only, Signature (a WATCHER reads the lifecycle state)",
+      "claim": "GATED (cap∧state), Either — posted precondition (STATE==OPEN); the fire submits the FULL claim (bind CLAIMANT_HASH + advance STATE), the executor re-enforcing WriteOnce(CLAIMANT_HASH) (first-claimer-wins) + StrictMonotonic(STATE)",
+      "submit": "GATED (cap∧state), Either — claimed precondition (STATE==CLAIMED); the fire submits the FULL submit (bind SUBMISSION_HASH + advance STATE), the executor re-enforcing StrictMonotonic(STATE)",
+      "payout": "GATED (cap∧state), None/root — submitted precondition (STATE==SUBMITTED); the fire advances STATE -> PAID (terminal), the executor re-enforcing StrictMonotonic(STATE)"
+    },
+    "seam": "CLOSED — the fire runs against the seeded bounty cell carrying the lifecycle program (WriteOnce title/reward/claimant/submission + StrictMonotonic(STATE)), so a NO-ADVANCE/REWOUND STATE and a CLAIMANT_HASH overwrite BITE in the deos fire path. STATE is StrictMonotonic (strict >), so a no-advance also bites — the lifecycle is a one-way ratchet (tests/deos_seam.rs)"
+  },
   "manifest_health": {
     "status": "starbridge-native",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/bounty-board/src/lib.rs",
     "ported_from": "apps/bounty-board"
   }
 }

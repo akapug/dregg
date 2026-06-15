@@ -11804,3 +11804,219 @@ fn test_note_spend_malformed_value_commitment_rejected() {
         other => panic!("expected Rejected, got: {:?}", other),
     }
 }
+
+// ============================================================================
+// SenderAuthorized { PublicRoot } — REAL STARK-membership enforcement, end to
+// end through the executor's witnessed-predicate registry.
+//
+// This is the keystone proof that the real `MerkleMembershipStarkVerifier` is
+// wired and SOUND on the honest fire path:
+//   * an authorized signer (a genuine Merkle leaf under the slot's root) whose
+//     action carries a real Poseidon2 membership STARK is ACCEPTED, and
+//   * a DIFFERENT signer (not the member) is REFUSED at the STARK level — not
+//     by an executor-side compare, but because the membership circuit cannot
+//     produce a path from `compress(other_pk)` to the authorized root.
+//
+// The slot root and the proof are produced by the mutually-consistent
+// `single_member_authorized_root` / `single_member_membership_proof` pair, so
+// the prover and verifier share the exact leaf/root convention
+// (`leaf = compress(pk)`, `root = root_felt_from_slot(slot)`).
+// ============================================================================
+
+#[cfg(test)]
+mod sender_authorized_membership_e2e {
+    use super::{TestKeypair, make_open_cell};
+    use crate::action::WitnessBlob;
+    use crate::builder::{ActionBuilder, TurnBuilder};
+    use crate::error::TurnError;
+    use crate::executor::membership_verifier::{
+        single_member_authorized_root, single_member_membership_proof,
+    };
+    use crate::executor::{ComputronCosts, TurnExecutor, registry_with_real_sender_membership};
+    use dregg_cell::program::{AuthorizedSet, CellProgram, StateConstraint};
+    use dregg_cell::{AuthRequired, Ledger};
+
+    /// The authorized-set root slot the cell program reads
+    /// (`SenderAuthorized { PublicRoot { set_root_index: ROOT_SLOT } }`).
+    const ROOT_SLOT: u8 = 1;
+
+    /// Build a ledger with:
+    ///   * an agent cell (open perms, `member_pk` as its public key) that holds
+    ///     a capability to the target,
+    ///   * a target cell carrying a `SenderAuthorized { PublicRoot }` program
+    ///     whose root slot (`ROOT_SLOT`) is seeded to `authorized_root`.
+    /// The action's effect writes a DIFFERENT slot (field 0) so the seeded root
+    /// survives into `new_state` (where the constraint reads it).
+    fn setup(
+        agent_seed: u8,
+        authorized_root: [u8; 32],
+    ) -> (Ledger, dregg_cell::CellId, dregg_cell::CellId, TestKeypair) {
+        let mut ledger = Ledger::new();
+
+        let agent_kp = TestKeypair::from_seed(agent_seed);
+        let (mut agent, _) = make_open_cell(agent_seed, 1_000_000);
+        // make_open_cell derives the cell key from the same seed, so the cell's
+        // public_key == agent_kp.public_key — the pk the executor reads as
+        // `ctx.sender` for the SenderAuthorized check.
+        assert_eq!(*agent.public_key(), agent_kp.public_key);
+        let agent_id = agent.id();
+
+        // Target cell: open perms (so only the program gates), seeded root slot,
+        // and the SenderAuthorized program installed.
+        let (mut target, _) = make_open_cell(0xC0u8.wrapping_add(agent_seed), 0);
+        target.state.fields[ROOT_SLOT as usize] = authorized_root;
+        target.program = CellProgram::Predicate(vec![StateConstraint::SenderAuthorized {
+            set: AuthorizedSet::PublicRoot {
+                set_root_index: ROOT_SLOT,
+            },
+        }]);
+        let target_id = target.id();
+
+        agent.capabilities.grant(target_id, AuthRequired::None);
+        ledger.insert_cell(agent).unwrap();
+        ledger.insert_cell(target).unwrap();
+        (ledger, agent_id, target_id, agent_kp)
+    }
+
+    /// Build the firing action: a SetField on the target's field 0 (NOT the root
+    /// slot), carrying the membership proof as a MerklePath witness blob.
+    fn membership_action(
+        agent_id: dregg_cell::CellId,
+        target_id: dregg_cell::CellId,
+        proof_bytes: Vec<u8>,
+    ) -> crate::action::Action {
+        let mut action = ActionBuilder::new_unchecked_for_tests(target_id, "set_field", agent_id)
+            .effect_set_field(target_id, 0, [0x42u8; 32])
+            .build();
+        action.witness_blobs = vec![WitnessBlob::merkle_path(proof_bytes)];
+        action
+    }
+
+    fn wrap(agent_id: dregg_cell::CellId, action: crate::action::Action) -> crate::turn::Turn {
+        let mut b = TurnBuilder::new(agent_id, 0);
+        b.add_action(action);
+        b.fee(0).build()
+    }
+
+    /// ACCEPT: the authorized member, carrying a genuine membership proof for
+    /// its own pk against the slot's root, commits.
+    #[test]
+    fn authorized_member_with_real_proof_commits() {
+        let member_kp = TestKeypair::from_seed(7);
+        let authorized_root = single_member_authorized_root(&member_kp.public_key);
+        let (mut ledger, agent_id, target_id, agent_kp) = setup(7, authorized_root);
+        // Sanity: the agent IS the member.
+        assert_eq!(agent_kp.public_key, member_kp.public_key);
+
+        let proof = single_member_membership_proof(&member_kp.public_key);
+        let action = membership_action(agent_id, target_id, proof);
+        let turn = wrap(agent_id, action);
+
+        let mut executor = TurnExecutor::new(ComputronCosts::zero());
+        executor.set_witnessed_registry(registry_with_real_sender_membership());
+
+        let result = executor.execute(&turn, &mut ledger);
+        assert!(
+            result.is_committed(),
+            "authorized member with a genuine membership STARK must commit, got {result:?}"
+        );
+        // The effect actually applied.
+        assert_eq!(ledger.get(&target_id).unwrap().state.fields[0], [0x42u8; 32]);
+    }
+
+    /// REJECT (control): a DIFFERENT signer (not the authorized member) is
+    /// refused. The slot root authorizes `member_pk`; this turn's agent is
+    /// `other_pk`. Even carrying a perfectly valid membership proof for ITS OWN
+    /// pk, the verifier reads `leaf = compress(other_pk)` against the slot's
+    /// root (which is `member_pk`'s root), so no Merkle path exists → the STARK
+    /// rejects. This is the non-forgeability tooth: not an executor compare.
+    #[test]
+    fn non_member_signer_is_refused() {
+        let member_kp = TestKeypair::from_seed(7);
+        let authorized_root = single_member_authorized_root(&member_kp.public_key);
+
+        // The agent is seed 9 (a DIFFERENT pk than the member at seed 7).
+        let (mut ledger, agent_id, target_id, agent_kp) = setup(9, authorized_root);
+        assert_ne!(
+            agent_kp.public_key, member_kp.public_key,
+            "control requires a non-member signer"
+        );
+
+        // The attacker presents a genuine proof — but for THEIR OWN pk (the only
+        // proof they can make). It reaches a DIFFERENT root than the slot's.
+        let attacker_proof = single_member_membership_proof(&agent_kp.public_key);
+        let action = membership_action(agent_id, target_id, attacker_proof);
+        let turn = wrap(agent_id, action);
+
+        let mut executor = TurnExecutor::new(ComputronCosts::zero());
+        executor.set_witnessed_registry(registry_with_real_sender_membership());
+
+        let result = executor.execute(&turn, &mut ledger);
+        assert!(
+            result.is_rejected(),
+            "a non-member signer must be refused by the membership STARK, got {result:?}"
+        );
+        match result.unwrap_rejected().0 {
+            TurnError::ProgramViolation { reason, .. } => {
+                assert!(
+                    reason.contains("MerkleMembership") || reason.contains("not a member"),
+                    "rejection should name the membership failure, got: {reason}"
+                );
+            }
+            other => panic!("expected ProgramViolation for non-member, got {other:?}"),
+        }
+        // The effect did NOT apply (turn rejected atomically).
+        assert_ne!(ledger.get(&target_id).unwrap().state.fields[0], [0x42u8; 32]);
+    }
+
+    /// REJECT (control 2): even the AUTHORIZED member is refused if it carries
+    /// NO membership witness — the predicate fails closed when the proof blob is
+    /// absent. (Confirms the accept above is the proof doing the work, not an
+    /// always-pass.)
+    #[test]
+    fn authorized_member_without_proof_is_refused() {
+        let member_kp = TestKeypair::from_seed(7);
+        let authorized_root = single_member_authorized_root(&member_kp.public_key);
+        let (mut ledger, agent_id, target_id, _agent_kp) = setup(7, authorized_root);
+
+        // Build the action with NO witness blob.
+        let action = ActionBuilder::new_unchecked_for_tests(target_id, "set_field", agent_id)
+            .effect_set_field(target_id, 0, [0x42u8; 32])
+            .build();
+        let turn = wrap(agent_id, action);
+
+        let mut executor = TurnExecutor::new(ComputronCosts::zero());
+        executor.set_witnessed_registry(registry_with_real_sender_membership());
+
+        let result = executor.execute(&turn, &mut ledger);
+        assert!(
+            result.is_rejected(),
+            "missing membership witness must fail closed, got {result:?}"
+        );
+    }
+
+    /// The same accept path also works through the FULLER production registry
+    /// (`registry_with_real_verifiers`), which is the one the SDK/embedded
+    /// executor installs by default — guarding that the default-on wiring
+    /// accepts the honest member too.
+    #[test]
+    fn authorized_member_commits_through_full_production_registry() {
+        let member_kp = TestKeypair::from_seed(7);
+        let authorized_root = single_member_authorized_root(&member_kp.public_key);
+        let (mut ledger, agent_id, target_id, _agent_kp) = setup(7, authorized_root);
+
+        let proof = single_member_membership_proof(&member_kp.public_key);
+        let action = membership_action(agent_id, target_id, proof);
+        let turn = wrap(agent_id, action);
+
+        let mut executor = TurnExecutor::new(ComputronCosts::zero());
+        executor
+            .set_witnessed_registry(crate::executor::registry_with_real_verifiers());
+
+        let result = executor.execute(&turn, &mut ledger);
+        assert!(
+            result.is_committed(),
+            "honest member must commit through the full production registry, got {result:?}"
+        );
+    }
+}

@@ -784,5 +784,547 @@ impl Match {
     }
 }
 
+// =============================================================================
+// The deos-native surface — the two FIGURES as a composed two-cell `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: TUSSLE re-expressed as a composed
+// [`DeosApp`] — the interaction surface is ONE app with **TWO cells** (figure A and
+// figure B), each carrying the commit→reveal→resolve verbs as affordances; the
+// framework wires the rest (per-viewer projection, the web-of-cells publish — each
+// figure is its own `dregg://` sturdyref —, the rehydratable snapshot, the generated
+// `<dregg-affordance-surface>` component, and the manifest).
+//
+// ## Two figure cells, distinct CellIds (the two-cell subtlety)
+//
+// A `DeosApp`'s cells must have distinct [`CellId`]s. FIGURE A is the agent's OWN cell
+// (`cipherclerk.cell_id()`) so fires execute against the seeded embedded ledger. FIGURE
+// B is a distinct COMPANION cell, derived deterministically from the agent's pubkey
+// under a fixed blinding token ([`figure_b_cell_id`]) and birthed into the SAME embedded
+// ledger ([`seed_figure_b`] does `EmbeddedExecutor::ensure_cell` + grants the agent a
+// cap reaching it, mirroring the privacy-voting companion-cell pattern). BOTH figures
+// are seeded so the gated fires have live state — a fire whose target cell has no live
+// state is fail-closed.
+//
+// ## The fire path is where the typed `sym` atom BITES (the headline)
+//
+// Each seeded figure cell carries [`figure_deos_program`] — the joint-state-enum
+// `SymMemberOf` tooth on every joint slot PLUS a `Monotonic(PHASE_SLOT)` phase gate. The
+// deos fire is a TWO-TEMPO bridge:
+//
+//   1. the deos PRECONDITION gate (the cap-gate `is_attenuation` AND the live-state
+//      precondition `CellProgram::evaluate` — e.g. `PHASE == COMMIT`) decides the
+//      button's verdict IN-BAND — nothing submitted on a miss (anti-ghost; the htmx
+//      reactivity rides this);
+//   2. [`fire_commit_move`] / [`fire_reveal_move`] / [`fire_resolve_frame`] then submit
+//      the FULL turn, and the executor RE-ENFORCES the installed figure program — so a
+//      `reveal_move` writing an ILLEGAL joint value (a `sym` outside
+//      `{Relax,Contract,Hold,Extend}`) is a REAL `SymMemberOf` executor refusal in the
+//      SUBMISSION path (msg "sym … not in enum set"), and a PHASE rewind is a real
+//      `Monotonic(PHASE)` refusal. The typed `sym` atom — deos's hyperadvanced enum atom
+//      — bites a real signed turn, not a side check (see `tests/deos_seam.rs`).
+//
+// The "set joints only on YOUR figure" cap tooth is TUSSLE's native ocap story: a
+// fighter firing `commit_move` on a figure cell it does NOT hold a cap to is REFUSED
+// (the cap-gate, or the executor's c-list authorization on a foreign cell).
+
+use dregg_app_framework::{
+    AppCipherclerk, AuthRequired, CellAffordance, CellId, ConstantsModule, DeosApp, DeosCell,
+    Effect, EmbeddedExecutor, Event, FireExecuteError, GatedAffordance, InspectorDescriptor,
+    StarbridgeAppContext, TurnReceipt, symbol,
+};
+
+/// FIGURE cell slot: the frame PHASE code (`Commit`/`Reveal`/`Resolved`). A scalar `u64`
+/// lane distinct from the joint `sym` slots (0..[`N_JOINTS`]) and the position/score
+/// scalars, so the phase read never collides with a joint enum. Guarded by
+/// `Monotonic(PHASE_SLOT)` — the phase advances forward (a rewind is refused), the deos
+/// face of the `Commit → Reveal → Resolved` state machine ([`FramePhase`]).
+pub const PHASE_SLOT: usize = N_JOINTS + 2; // slot 6 (after POSITION=4, SCORE=5)
+
+/// FIGURE cell slot: the latest sealed move-commitment digest (a BLAKE3 of the
+/// move+blinding, the fog-of-war seal a [`commit_move`](Frame::commit) writes). A read-out
+/// of the figure's pending commit; the reveal opens it.
+pub const COMMIT_SEAL_SLOT: usize = N_JOINTS + 3; // slot 7
+
+/// The frame PHASE codes written into [`PHASE_SLOT`] (non-zero so `Monotonic` treats them
+/// as "set"; strictly ordered so the phase advances `COMMIT < REVEAL < RESOLVED`).
+pub const COMMIT: u64 = 1;
+/// The `Reveal` phase code (commits closed; reveals accepted). See [`COMMIT`].
+pub const REVEAL: u64 = 2;
+/// The `Resolved` phase code (the frame's joint turn ran; terminal). See [`COMMIT`].
+pub const RESOLVED: u64 = 3;
+
+/// The fixed blinding token FIGURE B (the companion fighter cell) is derived under, so its
+/// id ([`figure_b_cell_id`]) is distinct from figure A (the agent's own cell), satisfying
+/// the `DeosApp` distinct-CellId requirement.
+pub const FIGURE_B_TOKEN: [u8; 32] = *b"starbridge-tussle-figure-b-seed!";
+
+/// The TUSSLE rights tiers, ON THE REAL ATTENUATION LATTICE — `Signature ⊂ Either ⊂ None`
+/// IS the spectator ⊂ fighter ⊂ referee ladder:
+///
+///   - a SPECTATOR holds [`AuthRequired::Signature`] — the narrow read tier: it can
+///     `view_figure` (watch a figure's pose) and nothing else;
+///   - a FIGHTER holds [`AuthRequired::Either`] — it can `commit_move` + `reveal_move` on
+///     its OWN figure (the sealed pose, then the open) AND view;
+///   - the REFEREE holds [`AuthRequired::None`]/root — it can `resolve_frame` (advance the
+///     phase to `Resolved`, folding contact) on top of everything a fighter can do.
+pub const SPECTATOR_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The fighter rights tier (sig-or-proof — commit + reveal a move on its own figure + view).
+pub const FIGHTER_RIGHTS: AuthRequired = AuthRequired::Either;
+/// The referee rights tier (root — resolve the frame + all). See [`SPECTATOR_RIGHTS`].
+pub const REFEREE_RIGHTS: AuthRequired = AuthRequired::None;
+
+/// FIGURE B's companion cell id for `agent_pubkey` — `derive_raw(agent_pubkey,
+/// FIGURE_B_TOKEN)`, distinct from figure A (the agent's own cell). The fires that target
+/// figure B name this id, so it must be seeded into the executor ([`seed_figure_b`]) for
+/// the fire to reach live state.
+pub fn figure_b_cell_id(agent_pubkey: &[u8; 32]) -> CellId {
+    CellId::derive_raw(agent_pubkey, &FIGURE_B_TOKEN)
+}
+
+/// **The FIGURE's deos cell program** — the typed `sym` enum tooth ([`Figure::joint_program`]'s
+/// `SymMemberOf` on every joint slot) CONJOINED with the phase gate (`Monotonic(PHASE_SLOT)`:
+/// the frame phase advances forward, a rewind is refused). THIS is what [`seed_figure`]
+/// installs on each figure cell, and what the executor RE-ENFORCES on every touching turn —
+/// so a `reveal_move` writing an out-of-enum joint is a real `SymMemberOf` refusal, and a
+/// `resolve_frame` rewinding the phase is a real `Monotonic` refusal, in the fire path.
+pub fn figure_deos_program() -> CellProgram {
+    let mut constraints = match Figure::joint_program() {
+        CellProgram::Predicate(cs) => cs, // the per-joint SymMemberOf clauses
+        _ => Vec::new(),
+    };
+    constraints.push(StateConstraint::Monotonic {
+        index: PHASE_SLOT as u8,
+    });
+    CellProgram::Predicate(constraints)
+}
+
+/// The `commit_move` / `reveal_move` **live-state precondition factory** — the figure must
+/// be in `phase` (`PHASE == phase`). A real [`CellProgram`] read against the cell's current
+/// state, so a verb's button is LIT only in its phase and DARK otherwise (the htmx tooth:
+/// in `Commit` only `commit_move` lights; after the phase advances to `Reveal`, `reveal_move`
+/// lights). The executor's installed [`figure_deos_program`] is the second guard.
+pub fn phase_is(phase: u64) -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+        index: PHASE_SLOT as u8,
+        value: field_from_u64(phase),
+    }])
+}
+
+/// A legal default joint `sym` value for a `reveal_move`'s decisive effect — `Contract`
+/// (`sym 1`), which satisfies [`StateConstraint::SymMemberOf`]. The real
+/// [`fire_reveal_move`] writes a caller-chosen legal pose; this is the surface representative
+/// the gated affordance carries.
+pub const DEFAULT_REVEAL_SYM: u64 = JointState::Contract as u64;
+
+/// **The TUSSLE two-figure surface as a composed [`DeosApp`]** — the whole interaction
+/// surface, on the deos bones. FIGURE A is the agent's OWN cell (`cipherclerk.cell_id()`);
+/// FIGURE B is the distinct companion ([`figure_b_cell_id`]). Both are seeded so fires
+/// execute against live state.
+///
+/// Per figure cell, on the spectator ⊂ fighter ⊂ referee ladder:
+///
+///   - `view_figure` — a cap-only affordance (a SPECTATOR watches the figure's pose):
+///     `Signature`, an `EmitEvent`;
+///   - `commit_move` — a [`GatedAffordance`] (a FIGHTER seals its next pose): `Either`, a
+///     live-state PRECONDITION (`PHASE == COMMIT`); the real fire ([`fire_commit_move`])
+///     submits the FULL commit turn (the sealed BLAKE3 digest written to [`COMMIT_SEAL_SLOT`]);
+///   - `reveal_move` — a [`GatedAffordance`] (a FIGHTER opens its sealed pose): `Either`, a
+///     live-state PRECONDITION (`PHASE == REVEAL`); the real fire ([`fire_reveal_move`])
+///     writes the revealed joint `sym` values into the joint slots — RE-ENFORCED by the
+///     executor's `SymMemberOf` (an illegal joint value is REFUSED — the headline);
+///   - `resolve_frame` — a [`GatedAffordance`] (the REFEREE resolves the frame): `None`/root,
+///     a live-state PRECONDITION (`PHASE == REVEAL`, both revealed); the real fire
+///     ([`fire_resolve_frame`]) advances `PHASE → RESOLVED` (folding contact via
+///     [`resolve_contact`] off both figures' revealed poses), RE-ENFORCED by
+///     `Monotonic(PHASE)` (a rewind is REFUSED).
+///
+/// Each figure cell is published into the web-of-cells at the spectator tier (a peer on
+/// another federation watches a figure across the membrane) and is discoverable under
+/// `tussle` / `combat`.
+///
+/// Seed both figures with [`seed_figure`] (figure A) + [`seed_figure_b`] (the companion) so
+/// the gated fires have live state and the executor re-enforces the figure program.
+pub fn tussle_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let figure_a = cipherclerk.cell_id();
+    let figure_b = figure_b_cell_id(&cipherclerk.public_key().0);
+
+    DeosApp::builder("tussle", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["tussle".into(), "combat".into()])
+        .cell(figure_cell(figure_a, "figure_a"))
+        .cell(figure_cell(figure_b, "figure_b").at_route("/figure_b"))
+        .build()
+}
+
+/// Build ONE figure cell's deos surface — the four verbs (`view_figure`, `commit_move`,
+/// `reveal_move`, `resolve_frame`) bound to THIS figure cell. The cap teeth bind every verb
+/// to this specific cell (the "set joints only on YOUR figure" tooth), and the gated verbs
+/// carry their phase precondition. Published at the spectator tier.
+fn figure_cell(figure: CellId, label: &'static str) -> DeosCell {
+    // `view_figure` — a SPECTATOR watches this figure's pose. Cap-only (the read surface),
+    // the narrowest tier.
+    let view = CellAffordance::new(
+        "view_figure",
+        SPECTATOR_RIGHTS,
+        Effect::EmitEvent {
+            cell: figure,
+            event: Event::new(symbol("figure-viewed"), vec![]),
+        },
+    );
+
+    // `commit_move` — a FIGHTER seals its next pose on its OWN figure. The GatedAffordance
+    // carries the DECISIVE effect (the sealed-commit write) as its surface representative AND
+    // the `PHASE == COMMIT` precondition — so the button lights only in the commit phase
+    // (the htmx tooth). The actual fire ([`fire_commit_move`]) submits the FULL commit turn.
+    let commit = GatedAffordance::new(
+        CellAffordance::new(
+            "commit_move",
+            FIGHTER_RIGHTS,
+            Effect::SetField {
+                cell: figure,
+                index: COMMIT_SEAL_SLOT,
+                value: field_from_u64(0),
+            },
+        ),
+        phase_is(COMMIT),
+    );
+
+    // `reveal_move` — a FIGHTER opens its sealed pose. The decisive effect writes a legal
+    // joint `sym` into a joint slot; gated on `PHASE == REVEAL`. The executor RE-ENFORCES
+    // `SymMemberOf` on the produced transition — an ILLEGAL joint value is a real refusal.
+    let reveal = GatedAffordance::new(
+        CellAffordance::new(
+            "reveal_move",
+            FIGHTER_RIGHTS,
+            Effect::SetField {
+                cell: figure,
+                index: slot::JOINT_BASE,
+                value: field_from_u64(DEFAULT_REVEAL_SYM),
+            },
+        ),
+        phase_is(REVEAL),
+    );
+
+    // `resolve_frame` — the REFEREE resolves the frame (advances PHASE → RESOLVED). Gated on
+    // `PHASE == REVEAL` (both revealed). The executor RE-ENFORCES `Monotonic(PHASE)` — a
+    // rewind is refused.
+    let resolve = GatedAffordance::new(
+        CellAffordance::new(
+            "resolve_frame",
+            REFEREE_RIGHTS,
+            Effect::SetField {
+                cell: figure,
+                index: PHASE_SLOT,
+                value: field_from_u64(RESOLVED),
+            },
+        ),
+        phase_is(REVEAL),
+    );
+
+    DeosCell::new(figure, label)
+        .affordance(view)
+        .gated(commit)
+        .gated(reveal)
+        .gated(resolve)
+        .publish(SPECTATOR_RIGHTS)
+}
+
+/// **Seed a FIGURE cell** so the gated fires have live state + the typed `sym` tooth bites:
+/// install [`figure_deos_program`] on `cell` (the executor re-enforces it on every touching
+/// turn), then bind the genesis state directly into the embedded ledger — joints at the
+/// `Relax` default (the enum's `0` case), position/score at 0, `PHASE = COMMIT`, the seal
+/// slot empty. After seeding, the figure is in the commit phase with a legal `Relax` pose —
+/// a real `(old, new)` baseline against which the verbs advance. `cell` must already exist
+/// in the ledger (figure A is the agent's own; figure B is birthed by [`seed_figure_b`]).
+pub fn seed_figure(executor: &EmbeddedExecutor, cell: CellId) {
+    executor.install_program(cell, figure_deos_program());
+    executor.with_ledger_mut(|ledger| {
+        if let Some(c) = ledger.get_mut(&cell) {
+            for j in 0..N_JOINTS {
+                c.state
+                    .set_field(slot::JOINT_BASE + j, field_from_u64(JointState::Relax.sym()));
+            }
+            c.state.set_field(slot::POSITION, field_from_u64(0));
+            c.state.set_field(slot::SCORE, field_from_u64(0));
+            c.state.set_field(PHASE_SLOT, field_from_u64(COMMIT));
+            c.state.set_field(COMMIT_SEAL_SLOT, field_from_u64(0));
+        }
+    });
+}
+
+/// **Seed FIGURE B** (the companion fighter cell) so its gated fires have live state + the
+/// `SymMemberOf` tooth bites. Unlike figure A (the agent's own), figure B is a distinct
+/// companion: it is birthed into the SAME embedded ledger via
+/// [`EmbeddedExecutor::ensure_cell`] (a Sovereign cell owned by the agent's pubkey under
+/// [`FIGURE_B_TOKEN`]), carrying [`figure_deos_program`] so the executor re-enforces the
+/// figure caveats, and the agent is granted a `Signature` cap reaching it so the operator
+/// can author the fires. Then [`seed_figure`] binds the genesis pose/phase. Mirrors the
+/// privacy-voting companion-cell pattern. Returns figure B's cell id.
+pub fn seed_figure_b(executor: &EmbeddedExecutor, cipherclerk: &AppCipherclerk) -> CellId {
+    let pk = cipherclerk.public_key().0;
+    let figure_b = figure_b_cell_id(&pk);
+
+    // Birth the companion figure cell into the embedded ledger (Sovereign, agent-owned).
+    let mut cell = dregg_cell::Cell::new(pk, FIGURE_B_TOKEN);
+    cell.program = figure_deos_program();
+    let _ = executor.ensure_cell(cell);
+
+    // Re-assert the program in case the cell already existed (ensure_cell is a no-op then).
+    executor.install_program(figure_b, figure_deos_program());
+
+    // Grant the operator agent an owner cap reaching figure B so its fires can author against
+    // it (the executor's c-list authorization gate requires a reaching cap).
+    let agent = cipherclerk.cell_id();
+    executor.with_ledger_mut(|ledger| {
+        if let Some(agent_cell) = ledger.get_mut(&agent) {
+            agent_cell.capabilities.grant(figure_b, AuthRequired::Signature);
+        }
+    });
+
+    // Bind the genesis pose/phase (figure B exists now).
+    seed_figure(executor, figure_b);
+    figure_b
+}
+
+/// **Fire `commit_move`** on `figure` — the deos cap∧state PRECONDITION gate (cap ⊇ Either
+/// AND `PHASE == COMMIT`), then the FULL commit turn: the sealed move digest
+/// `seal(figure, joints, nonce)` is written to [`COMMIT_SEAL_SLOT`] (the fog-of-war seal) and
+/// a `move-committed` event emitted. The two-tempo bridge: the gated affordance decides the
+/// button's verdict WITHOUT touching the executor; on both passing, the commit turn is
+/// submitted, the executor re-enforcing the figure program (`Monotonic(PHASE)` holds — the
+/// phase is unchanged at `COMMIT`). Anti-ghost both ways. The `figure` id selects which
+/// figure cell — a fighter without a cap reaching it is REFUSED (the wrong-figure cap tooth).
+pub fn fire_commit_move(
+    app: &DeosApp,
+    figure: CellId,
+    held: &AuthRequired,
+    joints: &JointVector,
+    nonce: u64,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    // The low byte the per-figure seal binds to (the figure cell's ledger-id view).
+    let figure_id = figure.as_bytes()[0];
+    let seal = MoveCommit::new(figure_id, *joints, nonce).seal();
+    let cell = app
+        .cell(&figure)
+        .ok_or(FireExecuteError::Gate(dregg_app_framework::FireError::NoSuchAffordance))?;
+    cell.fire_gated_through_executor_with(
+        "commit_move",
+        held,
+        cipherclerk,
+        executor,
+        move |_live| {
+            vec![
+                Effect::SetField {
+                    cell: figure,
+                    index: COMMIT_SEAL_SLOT,
+                    value: seal,
+                },
+                Effect::EmitEvent {
+                    cell: figure,
+                    event: Event::new(symbol("move-committed"), vec![seal]),
+                },
+            ]
+        },
+    )
+}
+
+/// **Fire `reveal_move`** on `figure` — the deos cap∧state PRECONDITION gate (cap ⊇ Either
+/// AND `PHASE == REVEAL`), then the FULL reveal turn: the revealed `joints` pose is written
+/// into the figure's joint `sym` slots (`JOINT_BASE .. JOINT_BASE + N_JOINTS`) and a
+/// `move-revealed` event emitted. The executor RE-ENFORCES the figure program's
+/// [`StateConstraint::SymMemberOf`] on the produced transition — so a pose carrying an
+/// ILLEGAL joint `sym` (a value outside `{Relax,Contract,Hold,Extend}`) is a REAL executor
+/// refusal in the SUBMISSION path (msg "sym … not in enum set"). This is the headline: the
+/// typed enum atom bites a real signed turn. `joints` is given as raw `sym` values so an
+/// out-of-enum value can be submitted to witness the refusal.
+pub fn fire_reveal_move(
+    app: &DeosApp,
+    figure: CellId,
+    held: &AuthRequired,
+    joint_syms: [u64; N_JOINTS],
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = app
+        .cell(&figure)
+        .ok_or(FireExecuteError::Gate(dregg_app_framework::FireError::NoSuchAffordance))?;
+    cell.fire_gated_through_executor_with(
+        "reveal_move",
+        held,
+        cipherclerk,
+        executor,
+        move |_live| {
+            let mut effects: Vec<Effect> = (0..N_JOINTS)
+                .map(|j| Effect::SetField {
+                    cell: figure,
+                    index: slot::JOINT_BASE + j,
+                    value: field_from_u64(joint_syms[j]),
+                })
+                .collect();
+            effects.push(Effect::EmitEvent {
+                cell: figure,
+                event: Event::new(
+                    symbol("move-revealed"),
+                    joint_syms.iter().map(|s| field_from_u64(*s)).collect(),
+                ),
+            });
+            effects
+        },
+    )
+}
+
+/// **Fire `resolve_frame`** on `figure` — the deos cap∧state PRECONDITION gate (cap ⊇ root
+/// AND `PHASE == REVEAL`), then the FULL resolve turn: the frame's deterministic contact is
+/// folded ([`resolve_contact`] over BOTH figures' revealed poses + positions), the
+/// scoring figure's `SCORE`/`POSITION` slots are advanced, and `PHASE` is advanced to
+/// `RESOLVED`. The executor RE-ENFORCES `Monotonic(PHASE)` — the phase advances forward
+/// (`REVEAL → RESOLVED`); a rewind is a real refusal.
+///
+/// `figure` is the COORDINATOR cell the referee fires (figure A by convention); it reads
+/// both figures' live joint poses from the ledger and writes the resolution onto itself, so
+/// a single fire spans both figures' contact without a two-cell entanglement.
+pub fn fire_resolve_frame(
+    app: &DeosApp,
+    figure: CellId,
+    other: CellId,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = app
+        .cell(&figure)
+        .ok_or(FireExecuteError::Gate(dregg_app_framework::FireError::NoSuchAffordance))?;
+    // Read the OTHER figure's revealed pose + position from the ledger (the coordinator
+    // folds contact off both figures).
+    let other_state = executor.cell_state(other);
+    let a_id = figure.as_bytes()[0];
+    let b_id = other.as_bytes()[0];
+    cell.fire_gated_through_executor_with(
+        "resolve_frame",
+        held,
+        cipherclerk,
+        executor,
+        move |live| {
+            let a_joints = read_pose(live);
+            let a_pos = field_to_u64(&live.fields[slot::POSITION]) as i64;
+            let (b_joints, b_pos) = match &other_state {
+                Some(s) => (read_pose(s), field_to_u64(&s.fields[slot::POSITION]) as i64),
+                None => (REST_POSE, 0),
+            };
+            let outcome = resolve_contact((a_id, a_pos, &a_joints), (b_id, b_pos, &b_joints));
+            let a_score = field_to_u64(&live.fields[slot::SCORE]) as i128;
+            // Award figure A its contact points (the verified-ledger fold lives in the
+            // library `Frame::resolve`; here the coordinator mirrors the score onto itself).
+            let a_award = match outcome.contact {
+                Some(c) if c.striker == a_id => c.points,
+                _ => 0,
+            };
+            vec![
+                Effect::SetField {
+                    cell: figure,
+                    index: slot::POSITION,
+                    value: field_from_u64(outcome.new_positions.0 as u64),
+                },
+                Effect::SetField {
+                    cell: figure,
+                    index: slot::SCORE,
+                    value: field_from_u64((a_score + a_award) as u64),
+                },
+                Effect::SetField {
+                    cell: figure,
+                    index: PHASE_SLOT,
+                    value: field_from_u64(RESOLVED),
+                },
+                Effect::EmitEvent {
+                    cell: figure,
+                    event: Event::new(symbol("frame-resolved"), vec![field_from_u64(RESOLVED)]),
+                },
+            ]
+        },
+    )
+}
+
+/// Read a figure cell's joint pose out of its `sym` slots (defensively decoding an
+/// out-of-enum slot to `Relax`). The `(old, new)`-free read the coordinator's
+/// [`fire_resolve_frame`] uses off live state.
+fn read_pose(state: &dregg_cell::state::CellState) -> JointVector {
+    let mut v = REST_POSE;
+    for j in 0..N_JOINTS {
+        let sym = field_to_u64(&state.fields[slot::JOINT_BASE + j]);
+        v[j] = JointState::from_sym(sym).unwrap_or(JointState::Relax);
+    }
+    v
+}
+
+/// The canonical web-constants module (slot layout + phase codes + event topics).
+pub fn web_constants() -> ConstantsModule {
+    ConstantsModule::new("tussle")
+        .slot("JOINT_BASE", slot::JOINT_BASE as u64)
+        .slot("N_JOINTS", N_JOINTS as u64)
+        .slot("POSITION_SLOT", slot::POSITION as u64)
+        .slot("SCORE_SLOT", slot::SCORE as u64)
+        .slot("PHASE_SLOT", PHASE_SLOT as u64)
+        .slot("COMMIT_SEAL_SLOT", COMMIT_SEAL_SLOT as u64)
+        .slot("PHASE_COMMIT", COMMIT)
+        .slot("PHASE_REVEAL", REVEAL)
+        .slot("PHASE_RESOLVED", RESOLVED)
+        .topic("MOVE_COMMITTED", "move-committed")
+        .topic("MOVE_REVEALED", "move-revealed")
+        .topic("FRAME_RESOLVED", "frame-resolved")
+}
+
+/// **Register the TUSSLE starbridge-app** on a shared context — a figure inspector AND the
+/// deos-native composition surface (the two-figure [`DeosApp`], folded into the context's
+/// affordance registry). The deos surface is where the typed `sym` enum tooth bites in the
+/// fire path; [`register_deos`] folds it. Returns the registered figure-cell ids
+/// `(figure_a, figure_b)`.
+pub fn register(ctx: &StarbridgeAppContext) -> (CellId, CellId) {
+    ctx.register_inspector(InspectorDescriptor {
+        kind: "tussle-figure".into(),
+        descriptor: serde_json::json!({
+            "component": "dregg-tussle-figure",
+            "module": "/starbridge-apps/tussle/inspectors.js",
+            "uri_prefix": "dregg://cell/",
+            "summary_fields": ["joints", "position", "score", "phase"],
+            "slot_layout": {
+                "joint_base": slot::JOINT_BASE,
+                "n_joints": N_JOINTS,
+                "position": slot::POSITION,
+                "score": slot::SCORE,
+                "phase": PHASE_SLOT,
+                "commit_seal": COMMIT_SEAL_SLOT,
+            },
+            "phase_codes": { "commit": COMMIT, "reveal": REVEAL, "resolved": RESOLVED },
+            "joint_enum": JointState::enum_set(),
+            "methods": ["commit_move", "reveal_move", "resolve_frame"],
+        }),
+    });
+
+    let figure_a = ctx.cipherclerk().cell_id();
+    let figure_b = figure_b_cell_id(&ctx.cipherclerk().public_key().0);
+    register_deos(ctx);
+    (figure_a, figure_b)
+}
+
+/// **Mount the deos-native surface** ([`tussle_app`]) on a shared context: build the composed
+/// two-figure [`DeosApp`] from the context's cipherclerk + executor, seed BOTH figures (figure
+/// A's program + genesis pose/phase, figure B the companion via [`seed_figure_b`]), and fold
+/// the app into the context's affordance registry ([`DeosApp::register`]). Returns the live
+/// [`DeosApp`] (so a host can also [`DeosApp::mount`] its axum router / [`DeosApp::publish_all`]
+/// into the web-of-cells).
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = tussle_app(ctx.cipherclerk(), ctx.executor());
+    // Seed BOTH figures so the gated fires have live `(old, new)` and the figure program
+    // (the SymMemberOf joint tooth + the phase gate) is re-enforced by the executor on every
+    // touching turn.
+    let figure_a = ctx.cipherclerk().cell_id();
+    seed_figure(ctx.executor(), figure_a);
+    seed_figure_b(ctx.executor(), ctx.cipherclerk());
+    app.register(ctx);
+    app
+}
+
 #[cfg(test)]
 mod tests;

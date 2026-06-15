@@ -17,5 +17,44 @@ dregg-cell = { path = "../../cell", default-features = false }
 blake3 = "1"
 postcard = { version = "1", features = ["alloc"] }
 
+[features]
+# Default is EMPTY: the pure library compiles with no app-framework, no turn,
+# no sdk, no axum/tokio/tower — it ships factory descriptors + cell programs.
+default = []
+# The deos-native surface (`src/deos.rs`): the five governance families
+# re-expressed as composed `DeosApp`s on the app-framework bones. A FEATURE
+# (not a normal optional dep) because of a hard package-graph CYCLE: `dregg-sdk`
+# depends on `starbridge-polis` (it re-exports the pure cell programs from
+# `sdk/src/polis.rs`), and `dregg-app-framework` depends on `dregg-sdk` — so a
+# NORMAL `polis -> dregg-app-framework` edge (even `optional`) closes the cycle
+# `app-framework -> sdk -> polis -> app-framework`, which Cargo rejects. Cargo
+# permits a cycle only across a DEV-dependency, so the framework/turn/sdk crates
+# are dev-dependencies and the deos surface is compiled INTO THE TEST BINARIES
+# (via `#[path = "../src/deos.rs"]` in `tests/`), where dev-deps are in scope.
+# The pure `cargo test`/`cargo build` never touches any of them. Enabling the
+# `deos` feature only flips the `#[cfg]` the test files gate on — it adds no
+# dependency edge to the library graph (so the cycle never forms).
+deos = []
+
+[dev-dependencies]
+# The deos surface (`src/deos.rs`, compiled into the test binaries) + the
+# feature-gated deos tests run against the REAL composed framework. These are
+# DEV-dependencies (Cargo permits the otherwise-illegal `app-framework -> sdk ->
+# polis` cycle to close ONLY across a dev edge), so the pure library graph never
+# pulls them. `dregg-turn` supplies `WitnessBlob` (the identity rotate's
+# `Preimage32` exhibit); `dregg-sdk` supplies `AgentRuntime` (the
+# height-controlled embedded executor the time-gated families — amendment
+# cooling, identity rotation cooling — fire against).
+dregg-app-framework = { path = "../../app-framework" }
+dregg-turn = { path = "../../turn" }
+dregg-sdk = { path = "../../sdk" }
+# Drive the mounted axum surface end-to-end (per-viewer projection over HTTP,
+# /surface.js, /manifest).
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+# The manifest / projection assertions decode the surface's JSON.
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

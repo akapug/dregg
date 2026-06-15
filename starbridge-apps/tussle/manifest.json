@@ -1,0 +1,90 @@
+{
+  "id": "tussle",
+  "name": "Tussle",
+  "description": "A Toribash-style verified joint-combat match: two FIGURES (each a dregg cell) pose their N JOINTS (typed `sym` enum slots) through a commit→reveal→resolve frame machine. The joint-state-is-one-of-the-enum tooth is the typed sym atom SymMemberOf — deos's hyperadvanced enum atom, which BITES as a REAL executor refusal in the deos fire path (an illegal joint value is rejected by the executor, not by app bookkeeping).",
+  "version": "0.1.0",
+  "factory_vks": [],
+  "page": "/starbridge-apps/tussle/pages/index.html",
+  "inspectors": [
+    "tussle-figure"
+  ],
+  "host_inspectors": [
+    { "id": "figure", "label": "Figure", "tag": "dregg-tussle-figure", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "commit_move", "label": "Commit move (seal)", "builder": "commit_move", "kind": "turn" },
+    { "id": "reveal_move", "label": "Reveal move (open)", "builder": "reveal_move", "kind": "turn" },
+    { "id": "resolve_frame", "label": "Resolve frame", "builder": "resolve_frame", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "figure_uri", "label": "Figure URI", "type": "uri", "default": "dregg://cell/tussle-figure-a" },
+    { "id": "phase", "label": "Phase slot", "type": "slot", "slot": 6 }
+  ],
+  "turn_builders": [
+    "commit_move",
+    "reveal_move",
+    "resolve_frame"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.tussle"
+  ],
+  "slot_layout": {
+    "JOINT_BASE": 0,
+    "N_JOINTS": 4,
+    "POSITION_SLOT": 4,
+    "SCORE_SLOT": 5,
+    "PHASE_SLOT": 6,
+    "COMMIT_SEAL_SLOT": 7
+  },
+  "joint_enum": {
+    "RELAX": 0,
+    "CONTRACT": 1,
+    "HOLD": 2,
+    "EXTEND": 3
+  },
+  "phase_machine": {
+    "COMMIT": 1,
+    "REVEAL": 2,
+    "RESOLVED": 3,
+    "order": "COMMIT < REVEAL < RESOLVED (Monotonic(PHASE_SLOT) — the frame never runs backward)"
+  },
+  "state_constraints": [
+    "SymMemberOf(JOINT_BASE+0, {0,1,2,3})",
+    "SymMemberOf(JOINT_BASE+1, {0,1,2,3})",
+    "SymMemberOf(JOINT_BASE+2, {0,1,2,3})",
+    "SymMemberOf(JOINT_BASE+3, {0,1,2,3})",
+    "Monotonic(PHASE_SLOT)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed TWO-cell DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "tussle_app(cipherclerk, executor)",
+    "cells": ["figure_a", "figure_b"],
+    "two_cell_note": "figure A = cipherclerk.cell_id() (the agent's own); figure B = a distinct COMPANION cell (figure_b_cell_id = derive_raw(pubkey, FIGURE_B_TOKEN)), birthed via EmbeddedExecutor::ensure_cell + granted a reaching cap (the privacy-voting companion-cell pattern). BOTH are seeded so the gated fires have live state.",
+    "discoverable": ["tussle", "combat"],
+    "publish": "Signature (each figure cell is a dregg:// sturdyref a spectator on another federation watches across the membrane)",
+    "rights_ladder": "Signature ⊂ Either ⊂ None = spectator ⊂ fighter ⊂ referee",
+    "affordances": {
+      "view_figure": "cap-only, Signature (a SPECTATOR watches a figure's pose)",
+      "commit_move": "GATED (cap∧state), Either — PHASE==COMMIT precondition; the fire submits the FULL commit (the sealed BLAKE3 fog-of-war digest into COMMIT_SEAL_SLOT)",
+      "reveal_move": "GATED (cap∧state), Either — PHASE==REVEAL precondition; the fire writes the revealed joint `sym` values, the executor RE-ENFORCING SymMemberOf (an ILLEGAL joint value is REFUSED — the headline)",
+      "resolve_frame": "GATED (cap∧state), None/root — PHASE==REVEAL precondition; the REFEREE advances PHASE→RESOLVED (folding contact via resolve_contact off both figures), the executor RE-ENFORCING Monotonic(PHASE)"
+    },
+    "headline": "THE TYPED `sym` ENUM ATOM (SymMemberOf) BITES AS A REAL EXECUTOR REFUSAL IN THE DEOS FIRE PATH — a reveal_move writing a joint value outside {Relax,Contract,Hold,Extend} is rejected by the EXECUTOR (msg 'sym … not in enum set'), not by app bookkeeping.",
+    "cap_tooth": "set joints only on YOUR figure — a fighter firing commit_move on a figure cell it does NOT hold a cap to is REFUSED (the wrong-figure tooth: an executor authorization refusal on the foreign Sovereign cell).",
+    "seam": "CLOSED — the fire runs against the seeded figure cells carrying the figure program (per-joint SymMemberOf + Monotonic(PHASE)), so an ILLEGAL joint reveal and a PHASE rewind BITE in the deos fire path (tests/deos_seam.rs)"
+  },
+  "preserved": {
+    "note": "src/resolution.rs (the deterministic contact resolution + the verified-ledger score ring) and src/tests.rs (the library teeth: fog-of-war, cap-gating, reproducibility, the SymMemberOf in-band gate, the verified joint turn) are PRESERVED unchanged — the deos surface is an additive composition skin.",
+    "verified_joint_turn": "the contact score deltas fold as a ring of legs through dregg-intent::verified_settle::settle_ring_verified (the Rust mirror of the Lean Ring.settleRing — atomic + conserving + linked to the real Lean export leg-by-leg)."
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/tussle/src/lib.rs"
+  }
+}

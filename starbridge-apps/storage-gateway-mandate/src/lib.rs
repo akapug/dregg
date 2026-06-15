@@ -15,10 +15,11 @@
 #![forbid(unsafe_code)]
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
-    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, InspectorDescriptor,
-    StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard, canonical_program_vk,
-    field_from_u64, hex_encode_32, symbol,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellAffordance, CellId, CellMode,
+    CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect, EmbeddedExecutor,
+    Event, FactoryDescriptor, FireExecuteError, GatedAffordance, InspectorDescriptor,
+    StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard, TurnReceipt,
+    canonical_program_vk, field_from_u64, hex_encode_32, symbol,
 };
 
 // Re-export the field primitives so differential tests (and downstream callers) can build the
@@ -461,6 +462,313 @@ pub fn build_init_gateway_action(
 }
 
 // =============================================================================
+// The deos-native surface — the GATEWAY as a composed `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the storage-gateway mandate should
+// "actually mount at node startup" — its scaffold floor ([`sgm_cell_program`] /
+// [`sgm_factory_descriptor`]) was executor-truth (the volume-budget caveats bite on a
+// born cell) but had NO deos surface. This PROMOTES it: the three VFS operations are ONE
+// [`DeosApp`] ([`gateway_app`] below); the framework wires the rest — per-viewer
+// projection, web-of-cells publish (the GATEWAY cell IS a `dregg://` sturdyref),
+// per-viewer rehydration, the generated `<dregg-affordance-surface>` component, and the
+// manifest — none of which the floor scaffold had. `register(ctx)` now mounts it (see
+// [`register_deos`]) — the census-flagged unblock (the node-startup wiring is a separate
+// composition TODO; this makes the surface MOUNTABLE).
+//
+// **The seam is closed** — a TWO-TEMPO fire (mirror subscription / supply-chain). The
+// state-advancing operation (`put`) is a [`GatedAffordance`] carrying a live-state
+// PRECONDITION (budget remains — `VOLUME_SPENT < VOLUME_CEILING`); the FULL gateway
+// invariants (the descriptor's flat `state_constraints`: `WriteOnce` anchor/ceiling/
+// prefix/compartment, `Monotonic(VOLUME_SPENT)`, `FieldLteField(VOLUME_SPENT <=
+// VOLUME_CEILING)`) are INSTALLED on the seeded gateway cell ([`seed_gateway`]) and
+// RE-ENFORCED by the executor on every touching turn:
+//
+//   1. the deos PRECONDITION gate (the cap-gate `is_attenuation` AND the live-state
+//      precondition `CellProgram::evaluate`) decides the button's verdict IN-BAND —
+//      nothing submitted on a miss (anti-ghost; the htmx reactivity rides this);
+//   2. [`fire_put`] then submits the FULL multi-effect `put` turn (reading the LIVE
+//      `VOLUME_SPENT` and adding the object size), and the executor RE-ENFORCES the
+//      installed invariants — so an OVER-BUDGET write (spend pushed past the ceiling,
+//      `FieldLteField(VOLUME_SPENT <= VOLUME_CEILING)`) and a REWOUND meter (spend rolled
+//      back to free budget, `Monotonic(VOLUME_SPENT)`) are REAL executor refusals in the
+//      SUBMISSION path — the half the floor's predicate-only tests never exercised through
+//      a real signed turn (see `tests/deos_seam.rs`).
+//
+// The volume budget as a LIVE GATE: each `put` is a metered write that debits the
+// monotonic `VOLUME_SPENT` meter; the executor refuses a write that would exhaust the
+// ceiling (the budget can never be over-spent) AND refuses a rewind that would forge free
+// budget — the storage mandate's Stingray slice is enforced inline, not by app bookkeeping.
+
+/// The storage rights tiers, ON THE REAL ATTENUATION LATTICE — these ARE the roles the
+/// floor crate's cap-graph enforces:
+///
+///   - a READER holds [`AuthRequired::Signature`] — the narrow read tier: it can `get`
+///     (read an object) and `list` (enumerate a prefix), nothing else;
+///   - a WRITER holds [`AuthRequired::Either`] — it can `put` (a metered write that
+///     debits the volume budget) AND read AND list;
+///   - the MANDATE-HOLDER holds [`AuthRequired::None`]/root — it owns the gateway (it can
+///     `init_gateway` / re-key on top of everything a writer can do).
+///
+/// So `Signature ⊂ Either ⊂ None` IS the reader ⊂ writer ⊂ mandate-holder ladder.
+pub const READER_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The writer rights tier (sig-or-proof — put + get + list). See [`READER_RIGHTS`].
+pub const WRITER_RIGHTS: AuthRequired = AuthRequired::Either;
+/// The mandate-holder rights tier (root — init/re-key + all). See [`READER_RIGHTS`].
+pub const MANDATE_RIGHTS: AuthRequired = AuthRequired::None;
+
+/// The **life-of-cell gateway invariants** the executor re-enforces on every touching
+/// turn — exactly the factory descriptor's flat `state_constraints` (`WriteOnce`
+/// anchor/ceiling/prefix/compartment, `Monotonic(VOLUME_SPENT)`, `FieldLteField(VOLUME_SPENT
+/// <= VOLUME_CEILING)`). This is the FLAT predicate a factory-born gateway cell carries
+/// FOR LIFE (the same one the floor's birth path installs on the born cell); the full
+/// operation-scoped [`sgm_cell_program`] `Cases` shape is bound by the child program VK.
+/// Installed by [`seed_gateway`] so the gated fires re-enforce it.
+pub fn gateway_invariants_program() -> CellProgram {
+    CellProgram::Predicate(sgm_factory_descriptor().state_constraints)
+}
+
+/// The `put` **live-state precondition** — the gateway must have BUDGET REMAINING
+/// (`VOLUME_SPENT < VOLUME_CEILING`, i.e. `VOLUME_SPENT <= VOLUME_CEILING - 1`). A real
+/// [`CellProgram`] read against the cell's current state, so a `put` button is DARK on an
+/// exhausted gateway (spend caught up to the ceiling) and LIT while budget remains (the
+/// htmx tooth). This gates "may `put` fire now"; the budget INVARIANT
+/// (`FieldLteField(VOLUME_SPENT <= VOLUME_CEILING)`, the spend never passes the ceiling) is
+/// the installed [`gateway_invariants_program`] the executor re-enforces on the produced
+/// transition.
+pub fn budget_remaining_precondition() -> CellProgram {
+    // `spent < ceiling` ≡ `spent <= ceiling - 1` ≡ `FieldLteOther { spent, ceiling, delta: -1 }`.
+    CellProgram::Predicate(vec![StateConstraint::FieldLteOther {
+        index: VOLUME_SPENT_SLOT,
+        other: VOLUME_CEILING_SLOT,
+        delta: -1,
+    }])
+}
+
+/// **The storage GATEWAY as a composed [`DeosApp`]** — the whole interaction surface, on
+/// the deos bones. The gateway cell is the agent's OWN cell (`cipherclerk.cell_id()`) so
+/// fires execute against the seeded embedded ledger.
+///
+/// Three operations on the GATEWAY cell, on the reader ⊂ writer ⊂ mandate-holder rights
+/// ladder:
+///
+///   - `get` — a cap-only affordance (a READER reads an object): `Signature`, an
+///     `EmitEvent`;
+///   - `list` — a cap-only affordance (a READER enumerates a prefix): `Signature`, an
+///     `EmitEvent`;
+///   - `put` — a [`GatedAffordance`] (a WRITER performs a metered write): `Either`, a
+///     live-state PRECONDITION (budget remains, `VOLUME_SPENT < VOLUME_CEILING`); the real
+///     fire ([`fire_put`]) submits the FULL `put` turn (reading the live spend + adding the
+///     object size), re-enforced by the executor's installed invariants
+///     (`FieldLteField(VOLUME_SPENT <= VOLUME_CEILING)` + `Monotonic(VOLUME_SPENT)`).
+///
+/// The gateway cell is published into the web-of-cells at the reader tier (a peer on
+/// another federation reacquires the gateway across the membrane) and is discoverable
+/// under `storage`.
+///
+/// Seed the cell's program + configured state with [`seed_gateway`] so the gated fires
+/// have a live state and the executor re-enforces the invariants.
+pub fn gateway_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let gateway = cipherclerk.cell_id();
+
+    // `get` — a READER reads an object. Cap-only.
+    let get = CellAffordance::new(
+        "get",
+        READER_RIGHTS,
+        Effect::EmitEvent {
+            cell: gateway,
+            event: Event::new(symbol("storage-get"), vec![]),
+        },
+    );
+    // `list` — a READER enumerates a prefix. Cap-only.
+    let list = CellAffordance::new(
+        "list",
+        READER_RIGHTS,
+        Effect::EmitEvent {
+            cell: gateway,
+            event: Event::new(symbol("storage-list"), vec![]),
+        },
+    );
+    // `put` — a WRITER performs a metered write (recurring). The GatedAffordance carries
+    // the DECISIVE effect (the `VOLUME_SPENT` debit) as its surface representative AND a
+    // live-state PRECONDITION ([`budget_remaining_precondition`]: budget remains) — so the
+    // button is dark when the budget is exhausted and lit while it remains, and the
+    // cap∧state gate decides its verdict in-band. The actual fire ([`fire_put`]) submits
+    // the FULL `put` turn ([`put_effects`]: key + op + new spend + event) reading the LIVE
+    // spend, which the executor re-enforces the installed invariants on — so
+    // `FieldLteField(VOLUME_SPENT <= VOLUME_CEILING)` BITES: an over-budget write is REFUSED.
+    let put = GatedAffordance::new(
+        CellAffordance::new(
+            "put",
+            WRITER_RIGHTS,
+            Effect::SetField {
+                cell: gateway,
+                index: VOLUME_SPENT_SLOT as usize,
+                value: field_from_u64(1),
+            },
+        ),
+        budget_remaining_precondition(),
+    );
+
+    DeosApp::builder("storage-gateway-mandate", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["storage".into()])
+        .cell(
+            DeosCell::new(gateway, "gateway")
+                .affordance(get)
+                .affordance(list)
+                .gated(put)
+                .publish(READER_RIGHTS),
+        )
+        .build()
+}
+
+/// **Seed the GATEWAY cell** so the gated fires have live state + the invariants bite:
+/// install the gateway invariants ([`gateway_invariants_program`]) on the seeded gateway
+/// cell (so the executor re-enforces them on every touching turn), then configure the
+/// genesis state directly into the embedded ledger — bind `COMMITMENT_ANCHOR`,
+/// `VOLUME_CEILING`, `KEY_PREFIX_HASH`, `READ_COMPARTMENT` (`WriteOnce`, frozen after) and
+/// seed `VOLUME_SPENT = 0` (a fresh, fully-funded budget) so a real `(old, new)` baseline
+/// exists against which `put` debits the meter.
+///
+/// After seeding, the gateway is configured with a `ceiling`-byte budget, all spent. A
+/// caller passes a small `ceiling` to exercise the over-budget tooth quickly.
+pub fn seed_gateway(
+    executor: &EmbeddedExecutor,
+    commitment_anchor: u64,
+    volume_ceiling: u64,
+    key_prefix: &str,
+    read_compartment: &str,
+) {
+    let gateway = executor.cell_id();
+    executor.install_program(gateway, gateway_invariants_program());
+    executor.with_ledger_mut(|ledger| {
+        if let Some(cell) = ledger.get_mut(&gateway) {
+            cell.state
+                .set_field(COMMITMENT_ANCHOR_SLOT as usize, field_from_u64(commitment_anchor));
+            cell.state
+                .set_field(VOLUME_CEILING_SLOT as usize, field_from_u64(volume_ceiling));
+            cell.state
+                .set_field(KEY_PREFIX_HASH_SLOT as usize, key_prefix_field(key_prefix));
+            cell.state.set_field(
+                READ_COMPARTMENT_SLOT as usize,
+                field_from_bytes(read_compartment.as_bytes()),
+            );
+            // a fresh, fully-funded budget: nothing spent yet.
+            cell.state
+                .set_field(VOLUME_SPENT_SLOT as usize, field_from_u64(0));
+        }
+    });
+}
+
+/// **`put` effects** — the multi-effect metered-write body: write the object key into
+/// `OBJECT_KEY`, record `LAST_OP = PUT`, advance the producer meter `VOLUME_SPENT` to
+/// `new_spent` (`Monotonic` — never rewound, and `FieldLteField`-bounded by the ceiling),
+/// and emit `storage-op`. This is the ONE coherent transition the installed invariants
+/// admit (the spend advances, anchor/ceiling/prefix/compartment unchanged, `VOLUME_SPENT <=
+/// VOLUME_CEILING` preserved). The deos `put` gated affordance is the cap∧state
+/// PRECONDITION face; THIS is the turn [`fire_put`] submits.
+pub fn put_effects(
+    gateway: CellId,
+    key: &str,
+    new_spent: u64,
+    blob_hash: FieldElement,
+) -> Vec<Effect> {
+    let key_field = object_key_field(key);
+    let op_field = field_from_u64(StorageOp::Put.to_field_value());
+    let spent_field = field_from_u64(new_spent);
+    vec![
+        Effect::SetField {
+            cell: gateway,
+            index: OBJECT_KEY_SLOT as usize,
+            value: key_field,
+        },
+        Effect::SetField {
+            cell: gateway,
+            index: LAST_OP_SLOT as usize,
+            value: op_field,
+        },
+        Effect::SetField {
+            cell: gateway,
+            index: VOLUME_SPENT_SLOT as usize,
+            value: spent_field,
+        },
+        Effect::EmitEvent {
+            cell: gateway,
+            event: Event::new(
+                symbol("storage-op"),
+                vec![op_field, key_field, blob_hash, spent_field],
+            ),
+        },
+    ]
+}
+
+/// **Fire `put`** — the deos cap∧state PRECONDITION gate (anti-ghost, in-band), then the
+/// FULL metered-write turn the executor re-enforces the gateway invariants on. The
+/// two-tempo bridge: the gated affordance decides the button's verdict (cap ⊇ Either AND
+/// budget remains) WITHOUT touching the executor; on both passing, the complete
+/// meter-advancing turn ([`put_effects`]) is submitted, and the executor's re-enforcement
+/// of [`gateway_invariants_program`] is the SECOND, verified gate
+/// (`FieldLteField(VOLUME_SPENT <= VOLUME_CEILING)` + `Monotonic(VOLUME_SPENT)` bite — an
+/// over-budget write OR a rewound meter is REFUSED). Anti-ghost both ways: a precondition
+/// miss never submits; an invariant violation is a real executor refusal.
+///
+/// The meter is read from the cell's live state (current `VOLUME_SPENT` + `object_size` ⇒
+/// the new spend), so the caller threads only the key + size. Use [`seed_gateway`] first.
+pub fn fire_put(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+    key: &str,
+    object_size: u64,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let gateway = cell.cell();
+    // The metered-write turn, with the spend read from LIVE state: the cap∧state
+    // PRECONDITION gate runs IN-BAND (nothing submitted on a miss — anti-ghost), then the
+    // FULL `put` turn ([`put_effects`]) is submitted with `new_spent := live VOLUME_SPENT +
+    // object_size`, and the executor re-enforces the installed invariants on the produced
+    // transition (`FieldLteField(VOLUME_SPENT <= VOLUME_CEILING)` bites an over-budget write;
+    // `Monotonic(VOLUME_SPENT)` bites a rewound meter).
+    let key = key.to_string();
+    let blob = field_from_bytes(key.as_bytes());
+    cell.fire_gated_through_executor_with("put", held, cipherclerk, executor, move |live| {
+        let live_spent = field_to_u64(&live.fields[VOLUME_SPENT_SLOT as usize]);
+        put_effects(gateway, &key, live_spent + object_size, blob)
+    })
+}
+
+/// Read a `u64` from the last 8 big-endian bytes of a field element (the inverse of
+/// [`field_from_u64`] for the volume meter the gateway stores).
+fn field_to_u64(f: &FieldElement) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&f[24..32]);
+    u64::from_be_bytes(b)
+}
+
+/// **Mount the deos-native surface** ([`gateway_app`]) on a shared context: build the
+/// composed [`DeosApp`] from the context's cipherclerk + executor, seed the gateway cell's
+/// program + configured state (so the gated fires bite), and fold the app into the
+/// context's affordance registry ([`DeosApp::register`]). Returns the live [`DeosApp`] (so
+/// a host can also [`DeosApp::mount`] its axum router / [`DeosApp::publish_all`] into the
+/// web-of-cells). This is the census unblock: the storage-gateway now MOUNTS a DeosApp
+/// from `src/` (the node-startup composition is a separate TODO).
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = gateway_app(ctx.cipherclerk(), ctx.executor());
+    // Seed the gateway cell so the gated `put` fire has a live `(old, new)` and the gateway
+    // invariants (installed here) are re-enforced by the executor on every touching turn.
+    seed_gateway(
+        ctx.executor(),
+        DEFAULT_COMMITMENT_ANCHOR,
+        DEFAULT_VOLUME_CEILING,
+        DEFAULT_KEY_PREFIX,
+        DEFAULT_READ_COMPARTMENT,
+    );
+    app.register(ctx);
+    app
+}
+
+// =============================================================================
 // StarbridgeAppContext mount
 // =============================================================================
 
@@ -521,6 +829,14 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
             ],
         })
     });
+
+    // Mount the deos-native composition surface (the `DeosApp`) on the SAME context — the
+    // census unblock: the storage-gateway now mounts a `DeosApp` from `src/`. The factory +
+    // inspectors are where SOUNDNESS lives (an over-budget write is a real executor refusal
+    // on the born cell); the deos surface is the composition skin (per-viewer projection,
+    // the cap∧state gated `put` fire, the `dregg://` publish, the rehydratable snapshot, the
+    // manifest).
+    register_deos(ctx);
 
     factory_vk
 }

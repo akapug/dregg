@@ -1,20 +1,63 @@
 {
   "id": "sealed-auction",
   "name": "Sealed-Intent Multi-Agent Coordination",
-  "description": "Sealed-bid commit-reveal coordination among AI agents: agents COMMIT sealed (hashed) bids for an award (a compute slot / task assignment) before a REVEAL phase, so no agent can peek at or front-run another's bid. The winning bid SETTLES atomically through the verified per-asset executor (dregg-intent::verified_settle, the Rust mirror of the Lean Ring.settleRing / SealedAuction.settle). Guarantees proved in metatheory/Dregg2/Intent/SealedAuction.lean: a commitment opens to exactly its bid (no late-switching, under collision-resistance), no reveal before the commit phase closes, a non-committed party cannot settle, and the award is atomic and value-neutral.",
+  "description": "Sealed-bid commit-reveal coordination among AI agents: agents COMMIT sealed (hashed) bids for an award (a compute slot / task assignment) before a REVEAL phase, so no agent can peek at or front-run another's bid. The commit phase is ON-LEDGER — an auction is a factory-born sovereign cell whose installed CellProgram IS the auction policy: each commit slot is WriteOnce (overwriting a committed bid is an EXECUTOR REFUSAL, the anti-front-running tooth) and the PHASE is anti-rollback (Monotonic floor + StrictMonotonic advance on close_commit/resolve). The winning bid SETTLES atomically through the verified per-asset executor (dregg-intent::verified_settle, the Rust mirror of the Lean Ring.settleRing / SealedAuction.settle). Guarantees proved in metatheory/Dregg2/Intent/SealedAuction.lean: a commitment opens to exactly its bid (no late-switching, under collision-resistance), no reveal before the commit phase closes, a non-committed party cannot settle, and the award is atomic and value-neutral.",
   "version": "0.1.0",
-  "status": "starbridge",
+  "status": "deos-native",
   "crate": "starbridge-sealed-auction",
-  "runtime_mode": "starbridge-native",
+  "runtime_mode": "deos-native",
   "caddy_prefix": "/sealed-auction",
-  "factory_vks": [],
+  "factory_vks": [
+    "737461726272696467652d7365616c65642d61756374696f6e2d666163747279"
+  ],
   "page": null,
   "inspectors": ["auction"],
-  "turn_builders": ["commit_bid", "reveal_bid", "settle_award"],
+  "turn_builders": ["commit_bid", "close_commit", "reveal_bid", "resolve"],
   "required_apis": ["/turn/submit"],
   "lean_module": "Dregg2.Intent.SealedAuction",
+  "slot_layout": {
+    "PHASE_SLOT": 0,
+    "SELLER_SLOT": 1,
+    "HIGH_BID_SLOT": 2,
+    "WINNER_SLOT": 3,
+    "COMMIT_BASE": 4
+  },
+  "phase_codes": {
+    "COMMIT": 0,
+    "REVEAL": 1,
+    "RESOLVED": 2
+  },
+  "state_constraints": [
+    "WriteOnce(SELLER_SLOT)",
+    "WriteOnce(HIGH_BID_SLOT)",
+    "WriteOnce(WINNER_SLOT)",
+    "WriteOnce(COMMIT_BASE + i)  // the anti-front-running commit board — each committed sealed bid is frozen",
+    "Monotonic(PHASE_SLOT)  // the anti-rollback floor (the phase may never rewind), on every method",
+    "MethodIs(close_commit) => StrictMonotonic(PHASE_SLOT)  // COMMIT -> REVEAL, strictly advancing",
+    "MethodIs(resolve) => StrictMonotonic(PHASE_SLOT)  // REVEAL -> RESOLVED, strictly advancing"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry and SEEDS the auction cell (installs the auction program, PHASE = COMMIT); DeosApp::mount yields the axum router",
+    "src_factory": "auction_app(cipherclerk, executor)",
+    "cell": "auction",
+    "discoverable": ["auction", "sealed-bid"],
+    "publish": "Signature (the auction cell is a dregg:// sturdyref a bidder/auditor on another federation reacquires)",
+    "on_ledger_commit_board": "THE PAYOFF — the commit phase is ON-LEDGER: a WriteOnce commit-board cell (slots COMMIT_BASE..STATE_SLOTS). A sealed bid is FROZEN the instant it is committed, so OVERWRITING a committed bid is an EXECUTOR REFUSAL (WriteOnce), not an in-process BTreeMap membership check. This is the anti-front-running guarantee, lifted from a Rust check into the verified executor.",
+    "affordances": {
+      "view_auction": "cap-only, Signature (an OBSERVER reads the board)",
+      "commit_bid": "GATED (cap∧state), Either — COMMIT precondition (PHASE==COMMIT); the fire writes the next free WriteOnce commit slot (read from live state), the executor re-enforcing the WriteOnce commit board (overwriting a committed bid is REFUSED)",
+      "close_commit": "GATED (cap∧state), None/root — COMMIT precondition; advances PHASE COMMIT -> REVEAL, the executor re-enforcing StrictMonotonic(PHASE)",
+      "reveal_bid": "GATED (cap∧state), Either — REVEAL precondition (PHASE==REVEAL); records the revealed value",
+      "resolve": "GATED (cap∧state), None/root — REVEAL precondition; advances PHASE REVEAL -> RESOLVED and writes WINNER / HIGH_BID (frozen by WriteOnce), the executor re-enforcing StrictMonotonic(PHASE)"
+    },
+    "seam": "CLOSED — the fire runs against the seeded auction cell carrying the full auction program (the WriteOnce commit board + result registers + the Monotonic/StrictMonotonic PHASE lifecycle), so OVERWRITING a committed sealed bid (WriteOnce) and a PHASE that rewinds / does-not-advance (StrictMonotonic) BITE in the deos fire path itself (tests/deos_seam.rs). The factory-born cell carries the flat state_constraints predicate, so the anti-front-running and anti-rollback teeth are executor refusals on the born cell too (tests/factory_birth.rs)."
+  },
   "manifest_health": {
-    "status": "starbridge-native",
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/sealed-auction/src/lib.rs",
     "verified_settlement": "dregg-intent::verified_settle::settle_ring_verified"
   }
 }

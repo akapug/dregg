@@ -71,10 +71,15 @@
 #![forbid(unsafe_code)]
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellId, CellMode,
-    CellProgram, ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, FieldElement,
-    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk,
-    field_from_u64, hex_encode_32, symbol,
+    Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellAffordance,
+    CellId, CellMode, CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect,
+    EmbeddedExecutor, Event, FactoryDescriptor, FieldElement, FireError, FireExecuteError,
+    GatedAffordance, InspectorDescriptor, StarbridgeAppContext, StateConstraint, TurnReceipt,
+    canonical_program_vk, field_from_u64, hex_encode_32, symbol,
+};
+use dregg_turn::action::WitnessBlob;
+use dregg_turn::executor::membership_verifier::{
+    single_member_authorized_root, single_member_membership_proof,
 };
 
 pub use dregg_credentials::{
@@ -607,7 +612,472 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
         }),
     });
 
+    // 6. Mount the deos-native composition surface (the `DeosApp`) on the SAME context.
+    // The factory + inspectors are where SOUNDNESS lives (an unwitnessed issuance is a
+    // real executor refusal on the born cell under the floor's `SenderAuthorized` gate);
+    // the deos surface is the composition skin (per-viewer projection, the cap∧state gated
+    // fires, the `dregg://` web-of-cells publish, the rehydratable snapshot, the manifest).
+    register_deos(ctx);
+
     factory_vk
+}
+
+// =============================================================================
+// The deos-native surface — the ISSUER as a composed `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: identity is THE
+// credential-across-trust-boundary web-of-cells story. The issuer's operations are
+// re-expressed as ONE [`DeosApp`] ([`identity_app`] below) and PROMOTED into `src/`;
+// the framework wires the rest — per-viewer projection, web-of-cells publish (the
+// ISSUER cell IS a `dregg://` sturdyref a relying party on ANOTHER federation
+// reacquires to verify credentials across the trust boundary), per-viewer rehydration,
+// the generated `<dregg-affordance-surface>` component, and the manifest — none of
+// which the floor's turn-builders had. `register(ctx)` now mounts it (see
+// [`register_deos`]).
+//
+// **The seam is closed — INCLUDING THE AUTHORITY TOOTH** — a TWO-TEMPO fire (mirror
+// nameservice / supply-chain). The two state-mutating operations (`issue`, `revoke`) are
+// [`GatedAffordance`]s carrying a live-state PRECONDITION; the FLOOR's FULL [`issuer_program`]
+// (all four caveats: `WriteOnce(SCHEMA_COMMITMENT)` + `MonotonicSequence(ISSUANCE_COUNTER)` +
+// `Monotonic(REVOCATION_ROOT)` + `SenderAuthorized(PublicRoot { ISSUER_AUTH_ROOT_SLOT })`) is
+// INSTALLED on the seeded issuer cell ([`seed_issuer`]) and RE-ENFORCED by the executor on
+// every touching turn:
+//
+//   1. the deos PRECONDITION gate ([`DeosCell::gated_fireable_names`] — the cap-gate
+//      `is_attenuation` AND the live-state precondition `CellProgram::evaluate`) decides
+//      the button's verdict IN-BAND, nothing submitted on a miss (anti-ghost);
+//   2. on both passing, [`fire_issue`] / [`fire_revoke`] build the FULL turn derived from
+//      the cell's LIVE state, ATTACH the membership witness ([`issuer_membership_witness`]),
+//      and submit it. The executor RE-ENFORCES the FULL floor program on the produced
+//      transition — so the real `SenderAuthorized` membership STARK admits the authorized
+//      signer (proof attached, signer in the seeded root), an issuance that DOESN'T advance
+//      the counter by exactly +1 (`MonotonicSequence(ISSUANCE_COUNTER)`) is refused, and a
+//      REVOCATION-ROOT REWIND (`Monotonic(REVOCATION_ROOT)`) is refused — all REAL executor
+//      refusals in the SUBMISSION path (the half the floor's `evaluate`-only tests never
+//      exercised through a real signed turn — see `tests/deos_seam.rs`).
+//
+// ## The `SenderAuthorized` seam (the authority tooth) — NOW REAL ON THE GREEN PATH
+//
+// The FLOOR's [`issuer_program`] carries `SenderAuthorized(PublicRoot { ISSUER_AUTH_ROOT_SLOT
+// })` — only an issuer whose pubkey is in the published authorized-set root may submit a
+// state-mutating turn. That tooth dispatches to the executor's witnessed-predicate registry
+// under `MerkleMembership`. The [`EmbeddedExecutor`]'s embedded runtime now defaults to the
+// REAL STARK-backed registry (`registry_with_real_verifiers`), so the verifier is a genuine
+// `MerkleMembershipStarkVerifier` — NOT fail-closed. [`seed_issuer`] seeds
+// `ISSUER_AUTH_ROOT_SLOT` = `single_member_authorized_root(signer_pk)` (the firing signer is
+// the sole authorized issuer; [`issuer_auth_root`]), and the fires attach
+// `single_member_membership_proof(signer_pk)` as a `MerklePath` witness — so the honest
+// issuer's `issue` / `revoke` fire GREEN THROUGH the real authority tooth. `tests/deos_seam.rs`
+// demonstrates BOTH faces of the now-real seam: (b) the authorized signer issues green THROUGH
+// the real verifier carrying the proof (and (b') the SAME signer with NO proof is refused — the
+// proof does the work); (d) a NON-member signer (even carrying a genuine proof for its OWN pk,
+// which reaches a different root) is REFUSED by the real `MerkleMembership` STARK — the
+// authority tooth biting in the submission path.
+//
+// (`tests/factory_birth.rs` — a FLOOR test — still asserts the fail-closed RED path on
+// factory-born cells via UNWITNESSED hostile turns; the real verifier refuses a missing /
+// foreign-root witness too, so those red-path assertions still hold.)
+
+/// The identity rights tiers, ON THE REAL ATTENUATION LATTICE — these ARE the roles the
+/// floor crate's cap-graph enforces:
+///
+///   - a HOLDER / VERIFIER holds [`AuthRequired::Signature`] — the narrow tier: it can
+///     `verify` a presentation (read + re-derive) and nothing that mutates issuer state;
+///   - a PRESENTER holds [`AuthRequired::Either`] — it can `present` (a holder produces a
+///     disclosure) AND verify;
+///   - the ISSUER / federation authority holds [`AuthRequired::None`]/root — it can `issue`
+///     and `revoke` (mutate the issuer cell) on top of everything below.
+///
+/// So `Signature ⊂ Either ⊂ None` IS the holder/verifier ⊂ presenter ⊂ issuer ladder.
+pub const VERIFIER_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The presenter rights tier (sig-or-proof — present + verify). See [`VERIFIER_RIGHTS`].
+pub const PRESENTER_RIGHTS: AuthRequired = AuthRequired::Either;
+/// The issuer rights tier (root — issue, revoke, +all). See [`VERIFIER_RIGHTS`].
+pub const ISSUER_RIGHTS: AuthRequired = AuthRequired::None;
+
+// NOTE: the seeded issuer cell now carries the FULL floor [`issuer_program`] (all four
+// caveats, `SenderAuthorized` included) — the now-real `MerkleMembership` verifier means the
+// authority tooth bites for real on the green fire path, so there is no longer a stripped
+// "in-process-enforceable subset" program. The earlier `issuer_invariants_program()` (the
+// floor program MINUS `SenderAuthorized`, used while that verifier was fail-closed) is gone;
+// [`seed_issuer`] installs [`issuer_program`] directly.
+
+/// The `issue` **live-state precondition** — the issuer must be CONFIGURED (the schema
+/// commitment is bound, `SCHEMA_COMMITMENT >= 1`). A real [`CellProgram`] read against the
+/// cell's current state, so the `issue` button is DARK on an unconfigured issuer and LIT
+/// once the schema is bound (the htmx tooth). This gates "may `issue` fire now"; the
+/// issuance INVARIANT (`MonotonicSequence(ISSUANCE_COUNTER)`, the counter advances by
+/// exactly +1) AND the authority tooth (`SenderAuthorized`) are the installed [`issuer_program`]
+/// the executor re-enforces on the produced transition.
+pub fn schema_bound_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldGte {
+        index: SCHEMA_COMMITMENT_SLOT as u8,
+        value: field_from_u64(1),
+    }])
+}
+
+/// The `revoke` **live-state precondition** — at least one credential must have been issued
+/// (`ISSUANCE_COUNTER >= 1`). So the `revoke` button is DARK on a fresh issuer (nothing to
+/// revoke yet) and LIT once an issuance has landed (the htmx tooth). The executor's
+/// installed `Monotonic(REVOCATION_ROOT)` is the second guard (a revocation-root rewind is
+/// a real refusal).
+pub fn something_issued_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldGte {
+        index: ISSUANCE_COUNTER_SLOT as u8,
+        value: field_from_u64(1),
+    }])
+}
+
+/// The **authorized-issuer root committing exactly one issuer** — `cipherclerk`'s own
+/// pubkey. This is the 32-byte value the floor's
+/// `SenderAuthorized(PublicRoot { ISSUER_AUTH_ROOT_SLOT })` reads off the issuer cell to
+/// decide "is the turn's sender an authorized issuer?". A single-member set whose sole
+/// member is the firing signer, so the signer is authorized for its own issuance
+/// (multi-sig issuance materializes as multiple members under the same root). Seeded into
+/// [`ISSUER_AUTH_ROOT_SLOT`] by [`seed_issuer`].
+///
+/// This delegates to the executor's own [`single_member_authorized_root`] — the SAME
+/// single-leaf Merkle convention the now-real `MerkleMembership` verifier reconstructs the
+/// root from. So the membership proof [`issuer_membership_witness`] attaches
+/// ([`single_member_membership_proof`] of the same pubkey) verifies against this root: the
+/// `SenderAuthorized` clause is REAL-enforced on the green fire path, not fail-closed.
+pub fn issuer_auth_root(cipherclerk: &AppCipherclerk) -> FieldElement {
+    single_member_authorized_root(&cipherclerk.public_key().0)
+}
+
+/// The **membership witness** the honest issuer attaches to its `issue` / `revoke` fire so
+/// the now-real `SenderAuthorized(PublicRoot { ISSUER_AUTH_ROOT_SLOT })` verifier admits it.
+///
+/// The bytes are [`single_member_membership_proof`] of `cipherclerk`'s own pubkey — the
+/// membership STARK proving that pubkey is the sole leaf under the root
+/// [`issuer_auth_root`] seeds into the slot. Carried as a `WitnessKind::MerklePath` blob in
+/// the fired action's `witness_blobs`; the `SenderAuthorized` evaluator binds the unique
+/// such blob and feeds it to the `MerkleMembershipStarkVerifier`, which accepts iff the
+/// proof's committed leaf (`compress(signer_pk)`) reaches the slot's root. A NON-member
+/// signer (or a member with NO/wrong proof) cannot satisfy this — the authority tooth bites.
+pub fn issuer_membership_witness(cipherclerk: &AppCipherclerk) -> WitnessBlob {
+    WitnessBlob::merkle_path(single_member_membership_proof(&cipherclerk.public_key().0))
+}
+
+/// **The ISSUER as a composed [`DeosApp`]** — the whole interaction surface, on the deos
+/// bones. The issuer cell is the agent's OWN cell (`cipherclerk.cell_id()`) so fires
+/// execute against the seeded embedded ledger.
+///
+/// Four operations on the ISSUER cell, on the holder/verifier ⊂ presenter ⊂ issuer rights
+/// ladder:
+///
+///   - `verify` — a cap-only affordance (a VERIFIER reads + re-derives a presentation):
+///     `Signature`, an `EmitEvent`;
+///   - `present` — a cap-only affordance (a PRESENTER produces a disclosure): `Either`, an
+///     `EmitEvent` (no issuer-state mutation — the disclosure is a holder-side read path);
+///   - `issue` — a [`GatedAffordance`] (the ISSUER mints a credential): `None`/root, a
+///     live-state PRECONDITION (the schema is bound); the real fire ([`fire_issue`]) submits
+///     a turn that advances `ISSUANCE_COUNTER` by exactly +1 off LIVE state, re-enforced by
+///     the executor's installed invariants (`MonotonicSequence(ISSUANCE_COUNTER)`);
+///   - `revoke` — a [`GatedAffordance`] (the ISSUER revokes): `None`/root, a live-state
+///     PRECONDITION (something issued); the real fire ([`fire_revoke`]) advances
+///     `REVOCATION_ROOT` (strictly greater), re-enforced by the executor (`Monotonic(
+///     REVOCATION_ROOT)`).
+///
+/// The issuer cell is published into the web-of-cells at the verifier tier — a relying
+/// party (a verifier on ANOTHER federation) reacquires the issuer cell as a `dregg://`
+/// sturdyref to verify credentials ACROSS the trust boundary — and is discoverable under
+/// `identity` / `credentials`.
+///
+/// Seed the cell's program + configured state with [`seed_issuer`] so the gated fires have
+/// a live state and the executor re-enforces the invariants.
+pub fn identity_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let issuer = cipherclerk.cell_id();
+
+    // `verify` — a VERIFIER reads + re-derives a presentation. Cap-only (a read path).
+    let verify = CellAffordance::new(
+        "verify",
+        VERIFIER_RIGHTS,
+        Effect::EmitEvent {
+            cell: issuer,
+            event: Event::new(symbol("presentation-verified"), vec![]),
+        },
+    );
+    // `present` — a PRESENTER produces a disclosure. Cap-only (a holder-side read path; no
+    // issuer-state mutation).
+    let present = CellAffordance::new(
+        "present",
+        PRESENTER_RIGHTS,
+        Effect::EmitEvent {
+            cell: issuer,
+            event: Event::new(symbol("credential-presented"), vec![]),
+        },
+    );
+    // `issue` — the ISSUER mints a credential. The GatedAffordance carries the DECISIVE
+    // effect (the issuance-counter advance) as its surface representative AND a live-state
+    // PRECONDITION ([`schema_bound_precondition`]: the schema is bound) — so the button is
+    // dark before configure and lit after, and the cap∧state gate decides its verdict
+    // in-band. The actual fire ([`fire_issue`]) submits a turn that advances the counter by
+    // exactly +1 off LIVE state, which the executor re-enforces the installed invariants on
+    // — so `MonotonicSequence(ISSUANCE_COUNTER)` BITES: a skip / rewind / no-advance is
+    // REFUSED.
+    let issue = GatedAffordance::new(
+        CellAffordance::new(
+            "issue",
+            ISSUER_RIGHTS,
+            Effect::SetField {
+                cell: issuer,
+                index: ISSUANCE_COUNTER_SLOT,
+                value: field_from_u64(1),
+            },
+        ),
+        schema_bound_precondition(),
+    );
+    // `revoke` — the ISSUER revokes. The decisive effect advances `REVOCATION_ROOT`; gated
+    // on the SOMETHING-ISSUED precondition ([`something_issued_precondition`]: the counter
+    // is `>= 1`). The executor re-enforces the installed invariants (so
+    // `Monotonic(REVOCATION_ROOT)` bites — a revocation-root rewind is refused).
+    let revoke = GatedAffordance::new(
+        CellAffordance::new(
+            "revoke",
+            ISSUER_RIGHTS,
+            Effect::SetField {
+                cell: issuer,
+                index: REVOCATION_ROOT_SLOT,
+                value: field_from_u64(1),
+            },
+        ),
+        something_issued_precondition(),
+    );
+
+    DeosApp::builder("identity", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["identity".into(), "credentials".into()])
+        .cell(
+            DeosCell::new(issuer, "issuer")
+                .affordance(verify)
+                .affordance(present)
+                .gated(issue)
+                .gated(revoke)
+                .publish(VERIFIER_RIGHTS),
+        )
+        .build()
+}
+
+/// **Seed the ISSUER cell** so the gated fires have live state + the FULL floor caveats —
+/// INCLUDING the now-real `SenderAuthorized` authority tooth — bite on the green path.
+///
+/// Installs the FLOOR's [`issuer_program`] (all four perpetual caveats: `WriteOnce(
+/// SCHEMA_COMMITMENT)` + `MonotonicSequence(ISSUANCE_COUNTER)` + `Monotonic(REVOCATION_ROOT)`
+/// + `SenderAuthorized(PublicRoot { ISSUER_AUTH_ROOT_SLOT })`) on the seeded issuer cell, so
+/// the executor re-enforces them on every touching turn. Then binds the genesis state
+/// directly into the embedded ledger — `SCHEMA_COMMITMENT` (`WriteOnce`, frozen after, = the
+/// schema's commitment hash), `ISSUANCE_COUNTER = 0` (the fresh issuer has minted nothing),
+/// `REVOCATION_ROOT = 0` (nothing revoked), and CRUCIALLY [`ISSUER_AUTH_ROOT_SLOT`] =
+/// [`issuer_auth_root`] (`= single_member_authorized_root(signer_pk)`) so the firing signer
+/// (`cipherclerk.public_key().0`) IS the sole authorized issuer the floor's
+/// `SenderAuthorized(PublicRoot)` clause reads — and the proof [`issuer_membership_witness`]
+/// attaches verifies against this exact root.
+///
+/// The seam is now CLOSED for `SenderAuthorized` too: the verifier is real (the embedded
+/// runtime's default STARK-backed registry), so the green `issue` / `revoke` fires carry the
+/// membership witness and PASS the authority tooth — while a non-member signer is REFUSED by
+/// the real `MerkleMembership` STARK (see `tests/deos_seam.rs` tooth (d)).
+///
+/// After seeding, the issuer is configured (schema bound) with counter 0 — a real
+/// `(old, new)` baseline against which every issuer turn (`issue` AND `revoke`) advances the
+/// issuance sequence by exactly +1 (the floor's `MonotonicSequence` is every-turn) and
+/// `revoke` additionally advances the revocation root (strictly greater). Returns the bound
+/// schema commitment.
+pub fn seed_issuer(
+    executor: &EmbeddedExecutor,
+    cipherclerk: &AppCipherclerk,
+    schema: &CredentialSchema,
+) -> FieldElement {
+    let cell = executor.cell_id();
+    // The FULL floor program — `SenderAuthorized` is now re-enforced for real (the embedded
+    // runtime's default registry is STARK-backed), so it bites on the green fire path.
+    executor.install_program(cell, issuer_program());
+    let schema_hash = schema_commitment(schema);
+    let auth_root = issuer_auth_root(cipherclerk);
+    executor.with_ledger_mut(|ledger| {
+        if let Some(c) = ledger.get_mut(&cell) {
+            c.state.set_field(SCHEMA_COMMITMENT_SLOT, schema_hash);
+            c.state.set_field(ISSUANCE_COUNTER_SLOT, field_from_u64(0));
+            c.state.set_field(REVOCATION_ROOT_SLOT, field_from_u64(0));
+            // The single-member authorized-issuer root committing the firing signer — the
+            // floor's `SenderAuthorized(PublicRoot { ISSUER_AUTH_ROOT_SLOT })` reads this, and
+            // `issuer_membership_witness(signer)` proves against it.
+            c.state.set_field(ISSUER_AUTH_ROOT_SLOT, auth_root);
+        }
+    });
+    schema_hash
+}
+
+/// The deos cap∧state PRECONDITION gate, IN-BAND, anti-ghost (nothing submitted on a miss).
+///
+/// Checks [`DeosCell::gated_fireable_names`] (the cap-gate `is_attenuation` AND the
+/// live-state precondition `CellProgram::evaluate`). On a miss, distinguishes the cap miss
+/// from the state miss for a precise [`FireExecuteError::Gate`] refusal — exactly the shape
+/// supply-chain's `fire_accept_custody` uses. Returns the cell's live [`CellState`] on a
+/// pass (the cursor the fire derives its effects from).
+///
+/// This is the FIRST tempo of the two-tempo bridge; the manual fire below it submits the
+/// FULL turn (WITH the membership witness), and the executor re-enforces the FULL floor
+/// program (the now-real `SenderAuthorized` + the `Monotonic`/`MonotonicSequence` caveats)
+/// as the SECOND, verified tempo.
+fn gate_in_band(
+    cell: &DeosCell,
+    name: &str,
+    held: &AuthRequired,
+    executor: &EmbeddedExecutor,
+) -> Result<dregg_cell::state::CellState, FireExecuteError> {
+    let target = cell.cell();
+    if !cell
+        .gated_fireable_names(held, executor)
+        .iter()
+        .any(|n| n == name)
+    {
+        // Distinguish the cap miss from the state miss for a precise refusal.
+        let ga = cell
+            .gated_surface()
+            .get(name)
+            .expect("gated affordance exists");
+        let state = executor.cell_state(target).ok_or_else(|| {
+            FireExecuteError::Gate(FireError::StateConditionUnmet {
+                affordance: name.to_string(),
+                reason: "cell has no live state in the embedded ledger (fail-closed)".to_string(),
+            })
+        })?;
+        return Err(FireExecuteError::Gate(
+            ga.fire(target, held, &state, &state).unwrap_err(),
+        ));
+    }
+    Ok(executor.cell_state(target).expect("checked above"))
+}
+
+/// **Fire `issue`** — the deos cap∧state PRECONDITION gate (cap ⊇ root AND the schema is
+/// bound), then a turn that advances [`ISSUANCE_COUNTER_SLOT`] by exactly +1 off the cell's
+/// LIVE counter (so `MonotonicSequence(ISSUANCE_COUNTER)` admits) CARRYING the issuer's
+/// membership witness ([`issuer_membership_witness`]) so the now-real
+/// `SenderAuthorized(PublicRoot)` authority tooth ADMITS the authorized signer.
+///
+/// The two-tempo bridge: the gated affordance decides the button in-band (nothing submitted
+/// on a precondition miss — [`gate_in_band`]); on passing, [`fire_issue`] builds the FULL
+/// action via `cipherclerk.make_action(issuer, "issue", effects)` off LIVE state, attaches
+/// the [`WitnessBlob::merkle_path`] membership proof to `witness_blobs`, and submits it.
+/// The executor RE-ENFORCES the FULL floor program on the produced transition: the real
+/// `MerkleMembership` STARK admits the signer (proof attached, signer in the seeded root)
+/// AND `MonotonicSequence(ISSUANCE_COUNTER)` holds (exactly +1) — a real verified turn.
+/// Because the new counter is read from live state, each fire advances the counter (the
+/// state-parameterized fire). Use [`seed_issuer`] first.
+pub fn fire_issue(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let issuer = cell.cell();
+    // Tempo 1: the cap∧state gate, in-band, anti-ghost.
+    let state = gate_in_band(cell, "issue", held, executor)?;
+
+    // Tempo 2: the FULL turn off LIVE state, carrying the membership witness, re-enforced by
+    // the executor's FULL floor program (the now-real SenderAuthorized + MonotonicSequence).
+    let live_counter = field_to_u64(&state.fields[ISSUANCE_COUNTER_SLOT]);
+    let new_counter = live_counter + 1;
+    let effects = vec![
+        Effect::SetField {
+            cell: issuer,
+            index: ISSUANCE_COUNTER_SLOT,
+            value: field_from_u64(new_counter),
+        },
+        Effect::EmitEvent {
+            cell: issuer,
+            event: Event::new(symbol("credential-issued"), vec![field_from_u64(new_counter)]),
+        },
+    ];
+    let mut action = cipherclerk.make_action(issuer, "issue", effects);
+    // The membership proof rides as a MerklePath witness blob — the `SenderAuthorized`
+    // evaluator binds it and feeds it to the real `MerkleMembershipStarkVerifier`.
+    action.witness_blobs = vec![issuer_membership_witness(cipherclerk)];
+    executor
+        .submit_action(cipherclerk, action)
+        .map_err(FireExecuteError::Executor)
+}
+
+/// **Fire `revoke`** — the deos cap∧state PRECONDITION gate (cap ⊇ root AND something has
+/// been issued), then a turn that advances [`REVOCATION_ROOT_SLOT`] to a strictly-greater
+/// value (so `Monotonic(REVOCATION_ROOT)` admits) CARRYING the issuer's membership witness
+/// so the now-real `SenderAuthorized(PublicRoot)` authority tooth ADMITS the signer.
+///
+/// Like [`fire_issue`], this is a MANUAL action (built via `make_action`, the membership
+/// [`WitnessBlob::merkle_path`] attached) submitted through the executor, which re-enforces
+/// the FULL floor program. The revoke is an issuer turn, so under the floor's every-turn
+/// `MonotonicSequence(ISSUANCE_COUNTER)` it ALSO advances the issuance sequence by exactly
+/// +1 (the issuance counter is the issuer's monotone per-turn sequence) — and additionally
+/// folds `REVOCATION_ROOT` strictly forward (the append-only revocation move). The executor
+/// re-enforces `Monotonic(REVOCATION_ROOT)` — a rewind is a real refusal. Use [`seed_issuer`]
+/// first.
+pub fn fire_revoke(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let issuer = cell.cell();
+    // Tempo 1: the cap∧state gate, in-band, anti-ghost.
+    let state = gate_in_band(cell, "revoke", held, executor)?;
+
+    // Tempo 2: the FULL turn off LIVE state, carrying the membership witness. The revoke
+    // advances BOTH the issuance sequence (+1, the floor's every-turn MonotonicSequence) and
+    // the revocation root (strictly greater, the append-only Monotonic move).
+    let live_root = field_to_u64(&state.fields[REVOCATION_ROOT_SLOT]);
+    let new_root = live_root + 1;
+    let live_counter = field_to_u64(&state.fields[ISSUANCE_COUNTER_SLOT]);
+    let new_counter = live_counter + 1;
+    let effects = vec![
+        Effect::SetField {
+            cell: issuer,
+            index: REVOCATION_ROOT_SLOT,
+            value: field_from_u64(new_root),
+        },
+        Effect::SetField {
+            cell: issuer,
+            index: ISSUANCE_COUNTER_SLOT,
+            value: field_from_u64(new_counter),
+        },
+        Effect::EmitEvent {
+            cell: issuer,
+            event: Event::new(symbol("credential-revoked"), vec![field_from_u64(new_root)]),
+        },
+    ];
+    let mut action = cipherclerk.make_action(issuer, "revoke", effects);
+    action.witness_blobs = vec![issuer_membership_witness(cipherclerk)];
+    executor
+        .submit_action(cipherclerk, action)
+        .map_err(FireExecuteError::Executor)
+}
+
+/// **Mount the deos-native surface** ([`identity_app`]) on a shared context: build the
+/// composed [`DeosApp`] from the context's cipherclerk + executor, seed the issuer cell's
+/// program + configured state (so the gated fires bite + the floor's `SenderAuthorized`
+/// root is committed to the firing signer), and fold the app into the context's affordance
+/// registry ([`DeosApp::register`]). Returns the live [`DeosApp`] (so a host can also
+/// [`DeosApp::mount`] its axum router / [`DeosApp::publish_all`] into the web-of-cells).
+/// This is the PROMOTION the census asks for: the deos surface now ships from `src/`.
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = identity_app(ctx.cipherclerk(), ctx.executor());
+    // Seed the issuer cell so the gated `issue` / `revoke` fires have a live `(old, new)`
+    // and the issuer invariants (installed here) are re-enforced by the executor on every
+    // touching turn. `kyc_schema` is the default bound schema.
+    seed_issuer(ctx.executor(), ctx.cipherclerk(), &kyc_schema());
+    app.register(ctx);
+    app
+}
+
+/// Read a `u64` from the last 8 big-endian bytes of a field element (the inverse of
+/// [`field_from_u64`] for the issuance/revocation counters the issuer cell stores).
+fn field_to_u64(f: &FieldElement) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&f[24..32]);
+    u64::from_be_bytes(b)
 }
 
 // =============================================================================

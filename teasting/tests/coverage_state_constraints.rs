@@ -13,9 +13,15 @@
 //! `CapabilityUniqueness` (evaluator always returns Ok — structural
 //! declaration only), `BoundDelta` (cross-cell wiring not yet available),
 //! `TemporalPredicate` / `Witnessed` / `Renounced` / `Custom`
-//! (require a `WitnessedPredicateRegistry` with a real verifier wired).
-//! `SenderAuthorized` is skipped per the established idiom (the embedded
-//! executor has no BlindedSet verifier wired).
+//! (require a `WitnessedPredicateRegistry` with a real verifier wired for
+//! the relevant kind; the `Custom` threshold-sig kind is still unwired).
+//!
+//! `SenderAuthorized { PublicRoot }` is NOW COVERED (below): the embedded
+//! executor defaults to `registry_with_real_verifiers()`, whose real
+//! Poseidon2 `MerkleMembership` STARK verifier enforces it — an honest member
+//! commits with a `single_member_membership_proof` witness, a non-member is
+//! rejected at the circuit level. (It was previously skipped as "no verifier
+//! wired"; the wiring landed.)
 
 use dregg_app_framework::{AgentCipherclerk, AppCipherclerk, EmbeddedExecutor};
 use dregg_cell::program::{BoundBranch, CollPred, ElemPredAtom, SimpleStateConstraint};
@@ -1160,5 +1166,99 @@ fn collection_aggregate_accept_and_reject() {
     assert!(
         err.is_err(),
         "CollectionAggregate did not reject a collection failing the CountSatGe statistic"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 26. SenderAuthorized { PublicRoot } — the actor-membership gate, enforced
+//     through the executor commit path by the REAL Poseidon2 `MerkleMembership`
+//     STARK verifier (the embedded executor defaults to
+//     `registry_with_real_verifiers()`). Previously skipped as "no verifier
+//     wired"; the wiring landed, so it is covered here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build a SetField action carrying a `MerklePath` membership witness for the
+/// signer's own public key (the candidate `SenderAuthorized` compresses to a
+/// leaf). Re-signs after attaching the blob so the signature covers the action;
+/// the membership witness itself is carved out of the signing message (the
+/// witness-circularity carve-out), so a stolen proof cannot re-bind a different
+/// sender.
+fn set_field_with_membership(
+    ex: &EmbeddedExecutor,
+    cc: &AppCipherclerk,
+    index: usize,
+    value: [u8; 32],
+    member_pk: &[u8; 32],
+) -> dregg_turn::action::Action {
+    let mut action = set_field(ex, cc, index, value);
+    action.witness_blobs = vec![WitnessBlob {
+        kind: WitnessKind::MerklePath,
+        bytes: dregg_turn::executor::single_member_membership_proof(member_pk),
+    }];
+    cc.sign_action(action)
+}
+
+/// `SenderAuthorized { PublicRoot { set_root_index: 5 } }`: the action's sender
+/// must be a member of the authorized set committed at slot[5].
+///
+/// Accept: seed slot[5] with the single-member root of the SIGNER's own pubkey
+/// and attach the matching membership proof → the real Poseidon2 STARK verifies
+/// a Merkle path from `compress(signer_pk)` to the committed root → the turn
+/// COMMITS.
+///
+/// Reject: seed slot[5] with a DIFFERENT member's root (a stranger), so the
+/// signer is not a leaf under it — no Merkle path exists (Poseidon2 collision
+/// resistance), the STARK fails, and `SenderAuthorized` rejects even though the
+/// signer presents a genuine proof for its own (wrong-root) tree.
+#[test]
+fn sender_authorized_public_root_accept_and_reject() {
+    let (ex, cc) = fresh(27);
+    let cell = ex.cell_id();
+    let signer_pk = cc.public_key().0;
+    let set_root_index = 5u8;
+
+    ex.install_program(
+        cell,
+        CellProgram::Predicate(vec![StateConstraint::SenderAuthorized {
+            set: dregg_cell::program::AuthorizedSet::PublicRoot { set_root_index },
+        }]),
+    );
+
+    // ACCEPT: slot[5] = the signer's own single-member root; witness = the
+    // signer's membership proof. The real MerkleMembership STARK admits it.
+    ex.with_ledger_mut(|ledger| {
+        let c = ledger.get_mut(&cell).expect("agent cell present");
+        c.state.set_field(
+            set_root_index as usize,
+            dregg_turn::executor::single_member_authorized_root(&signer_pk),
+        );
+    });
+    let ok = ex.submit_action(
+        &cc,
+        set_field_with_membership(&ex, &cc, 0, field_from_u64(1), &signer_pk),
+    );
+    assert!(
+        ok.is_ok(),
+        "SenderAuthorized accept (signer is the sole authorized member) failed: {ok:?}"
+    );
+
+    // REJECT: re-seed slot[5] to a STRANGER's root; the signer presents a
+    // genuine proof for its OWN key, but there is no path to the stranger's
+    // root → the STARK rejects (the non-forgeability tooth).
+    let stranger_pk = [0x99u8; 32];
+    ex.with_ledger_mut(|ledger| {
+        let c = ledger.get_mut(&cell).expect("agent cell present");
+        c.state.set_field(
+            set_root_index as usize,
+            dregg_turn::executor::single_member_authorized_root(&stranger_pk),
+        );
+    });
+    let err = ex.submit_action(
+        &cc,
+        set_field_with_membership(&ex, &cc, 0, field_from_u64(2), &signer_pk),
+    );
+    assert!(
+        err.is_err(),
+        "SenderAuthorized did not reject a signer absent from the authorized-set root"
     );
 }

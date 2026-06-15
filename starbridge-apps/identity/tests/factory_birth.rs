@@ -15,22 +15,25 @@
 //!   4. hostile turns are REFUSED through `submit_action` by the caveats
 //!      installed at birth.
 //!
-//! ## Why there is no ACCEPT-path test here (yet) — fail-closed, precisely
+//! ## Why the hostile turns here are REFUSED — the real verifier, precisely
 //!
 //! The issuer descriptor bakes `SenderAuthorized(PublicRoot {
 //! ISSUER_AUTH_ROOT_SLOT })` into the born cell's perpetual constraints, so
 //! EVERY state-changing turn on a factory-born issuer cell must carry a
 //! Merkle-membership witness (`WitnessKind::MerklePath`) verified by the
 //! `MerkleMembership` entry of the executor's witnessed-predicate registry.
-//! The `EmbeddedExecutor`'s underlying `dregg_sdk::AgentRuntime` constructs
-//! its `TurnExecutor` with `WitnessedPredicateRegistry::default_builtins()`,
-//! whose `MerkleMembership` verifier is the FAIL-CLOSED `NotYetWiredVerifier`
-//! (`cell/src/predicate.rs::default_builtins`) — and neither `AgentRuntime`
-//! nor `EmbeddedExecutor` exposes a hook to upgrade it to the real
-//! `dregg_turn::executor::membership_verifier::registry_with_real_sender_membership()`.
-//! Until that hook exists (an sdk/app-framework change, out of this crate's
-//! hands), a factory-born issuer cell REFUSES every turn — sound, never
-//! forgeable, and the refusal is itself asserted below.
+//! The `EmbeddedExecutor`'s underlying `dregg_sdk::AgentRuntime` now constructs
+//! its `TurnExecutor` with `dregg_turn::executor::registry_with_real_verifiers()`,
+//! whose `MerkleMembership` entry is the REAL Poseidon2-STARK
+//! `MerkleMembershipStarkVerifier` (the wiring landed;
+//! `EmbeddedExecutor::set_witnessed_registry` is the hook). An honest issuer's
+//! turn now COMMITS when slot `ISSUER_AUTH_ROOT_SLOT` is seeded with
+//! `single_member_authorized_root(issuer_pk)` and the action carries
+//! `single_member_membership_proof(issuer_pk)` — the ACCEPT path is exercised
+//! green in `tests/deos_seam.rs`. The turns asserted REFUSED *below* carry NO
+//! membership witness (and rebind frozen slots), so they fail closed at the
+//! real verifier — sound and never forgeable, the same teeth, now against the
+//! enforcing gadget rather than a stub.
 
 use dregg_app_framework::{
     AgentCipherclerk, AppCipherclerk, AuthRequired, CellId, CellMode, Effect, EmbeddedExecutor,

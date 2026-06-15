@@ -49,13 +49,31 @@
     "READ_COMPARTMENT_SLOT": 6
   },
   "state_constraints": [
-    "Immutable(COMMITMENT_ANCHOR_SLOT)",
+    "WriteOnce(COMMITMENT_ANCHOR_SLOT)",
+    "WriteOnce(VOLUME_CEILING_SLOT)",
+    "WriteOnce(KEY_PREFIX_HASH_SLOT)",
+    "WriteOnce(READ_COMPARTMENT_SLOT)",
     "Monotonic(VOLUME_SPENT_SLOT)",
     "FieldLteField(VOLUME_SPENT_SLOT, VOLUME_CEILING_SLOT)"
   ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "gateway_app(cipherclerk, executor)",
+    "cell": "gateway",
+    "discoverable": ["storage"],
+    "publish": "Signature (the gateway cell is a dregg:// sturdyref a peer on another federation reacquires)",
+    "affordances": {
+      "get": "cap-only, Signature (a READER reads an object)",
+      "list": "cap-only, Signature (a READER enumerates a prefix)",
+      "put": "GATED (cap∧state), Either — budget-remaining precondition (VOLUME_SPENT < VOLUME_CEILING); the fire submits the FULL metered write (key + op + new spend) reading the LIVE VOLUME_SPENT, the executor re-enforcing FieldLteField(VOLUME_SPENT <= VOLUME_CEILING) + Monotonic(VOLUME_SPENT)"
+    },
+    "seam": "CLOSED — the fire runs against the seeded gateway cell carrying the volume invariants (WriteOnce anchor/ceiling/prefix/compartment + Monotonic(VOLUME_SPENT) + FieldLteField(VOLUME_SPENT<=VOLUME_CEILING)), so the volume budget is a LIVE gate: an OVER-BUDGET write (spend pushed past the ceiling) and a REWOUND meter (spend rolled back to forge free budget) BITE in the deos fire path (tests/deos_seam.rs)"
+  },
   "manifest_health": {
     "status": "ready",
     "embedded": true,
+    "deos_native_src": true,
     "source_of_truth": "starbridge-apps/storage-gateway-mandate/src/lib.rs"
   }
 }

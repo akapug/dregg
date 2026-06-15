@@ -42,13 +42,30 @@
     "SPEND_POLICY_SLOT": 4
   },
   "state_constraints": [
-    "Immutable(COMMITMENT_ANCHOR_SLOT)",
-    "MonotonicSequence(STEP_CURSOR_SLOT)",
-    "FieldLteField(STEP_CURSOR_SLOT, CHARTER_TERMINAL_SLOT)"
+    "WriteOnce(COMMITMENT_ANCHOR_SLOT)",
+    "WriteOnce(CHARTER_TERMINAL_SLOT)",
+    "WriteOnce(CLEARANCE_GRAPH_ROOT_SLOT)",
+    "WriteOnce(SPEND_POLICY_SLOT)",
+    "FieldLteField(STEP_CURSOR_SLOT, CHARTER_TERMINAL_SLOT)",
+    "MethodIs(advance_step) => MonotonicSequence(STEP_CURSOR_SLOT)"
   ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "workflow_app(cipherclerk, executor)",
+    "cell": "workflow",
+    "discoverable": ["workflow", "compartment"],
+    "publish": "Signature (the mandate cell is a dregg:// sturdyref an auditor on another federation reacquires)",
+    "affordances": {
+      "view_workflow": "cap-only, Signature (an OBSERVER reads the charter cursor)",
+      "advance_step": "GATED (cap∧state), None/operator — not-at-terminal precondition (STEP_CURSOR < CHARTER_TERMINAL); the fire submits the FULL advance (cursor + step-advanced event) reading the live cursor, the executor re-enforcing MonotonicSequence(STEP_CURSOR) (exact +1) AND FieldLteField(STEP_CURSOR <= CHARTER_TERMINAL)"
+    },
+    "seam": "CLOSED — the fire runs against the seeded mandate cell carrying the workflow program (WriteOnce charter-config slots + FieldLteField(STEP_CURSOR<=CHARTER_TERMINAL) + advance_step-scoped MonotonicSequence(STEP_CURSOR)), so a SKIPPED/REPEATED step (non-+1) and a PAST-TERMINAL advance BITE in the deos fire path (tests/deos_seam.rs)"
+  },
   "manifest_health": {
     "status": "ready",
     "embedded": true,
+    "deos_native_src": true,
     "source_of_truth": "starbridge-apps/compartment-workflow-mandate/src/lib.rs"
   }
 }

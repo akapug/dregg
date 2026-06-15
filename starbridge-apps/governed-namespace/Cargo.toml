@@ -41,5 +41,13 @@ blake3 = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+# The deos-seam tests drive the composed `DeosApp` over its axum surface (per-viewer
+# projection, the gated propose/vote fires, /surface.js + /manifest) — mirror the
+# subscription / supply-chain-provenance deos test dev-deps.
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+
 [lints]
 workspace = true

@@ -161,13 +161,16 @@
 
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, Authorization, AuthorizedSet, CapTarget, CapTemplate,
-    CellId, CellMode, CellProgram, ChildVkStrategy, ConstantsModule, Effect, Event,
-    FactoryDescriptor, FieldElement, InputRef, InspectorDescriptor, StarbridgeAppContext,
-    StateConstraint, TransitionCase, TransitionGuard, WitnessedPredicate, WitnessedPredicateKind,
+    CellAffordance, CellId, CellMode, CellProgram, ChildVkStrategy, ConstantsModule, DeosApp,
+    DeosCell, Effect, EmbeddedExecutor, Event, FactoryDescriptor, FieldElement, FireError,
+    FireExecuteError, GatedAffordance, InputRef, InspectorDescriptor, StarbridgeAppContext,
+    StateConstraint,
+    TransitionCase, TransitionGuard, TurnReceipt, WitnessedPredicate, WitnessedPredicateKind,
     field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
 use dregg_dfa::{GovernedRouter, KindRegistry, RouteTable, RouteTableBuilder, RouteTarget, Router};
 use dregg_turn::action::WitnessBlob;
+use dregg_turn::executor::{single_member_authorized_root, single_member_membership_proof};
 
 // =============================================================================
 // Slot layout
@@ -1130,6 +1133,14 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
         })
     });
 
+    // Mount the deos-native composition surface (the `DeosApp`) on the SAME context —
+    // the census promotion: the governance board now ships from `src/`. The factory +
+    // inspectors are where SOUNDNESS lives (a version rollback / threshold rebind is a
+    // real executor refusal on the born cell); the deos surface is the composition skin
+    // (per-viewer projection, the cap∧state gated propose/vote fires, the `dregg://`
+    // publish, the rehydratable snapshot, the generated component, the manifest).
+    register_deos(ctx);
+
     factory_vk
 }
 
@@ -1240,6 +1251,469 @@ pub fn register_nameservice_route_action(
     }];
 
     cipherclerk.make_action(namespace_cell, "register_service", effects)
+}
+
+// =============================================================================
+// The deos-native surface — the governance BOARD as a composed `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md`: the governed-namespace governance
+// board, re-expressed as a composed [`DeosApp`] and SHIPPED from `src/`. The same
+// operations are ONE [`DeosApp`] ([`governance_app`] below); the framework wires the
+// rest — per-viewer projection, web-of-cells publish (the governance cell IS a
+// `dregg://` sturdyref a peer federation reacquires), the rehydratable
+// frustum-snapshot, the generated `<dregg-affordance-surface>` component, and the
+// manifest — none of which the floor's bones had.
+//
+// **The seam is closed for the GATEABLE ops** — a TWO-TEMPO fire (mirror
+// supply-chain-provenance / subscription). The two state-advancing committee
+// operations (`propose_table_update`, `vote_on_proposal`) are [`GatedAffordance`]s
+// carrying a live-state PRECONDITION; the FULL governance program ([`governance_program`]
+// = the operation-scoped `Cases`) is INSTALLED on the seeded governance cell
+// ([`seed_governance`]) and RE-ENFORCED by the executor on every touching turn:
+//
+//   1. the deos PRECONDITION gate (the cap-gate `is_attenuation` AND the live-state
+//      precondition `CellProgram::evaluate`) decides the button's verdict IN-BAND —
+//      nothing submitted on a miss (anti-ghost; the htmx reactivity rides this);
+//   2. [`fire_propose`] / [`fire_vote`] then submit the FULL committee turn, and the
+//      executor RE-ENFORCES the installed governance program — so a PENDING-root rewind
+//      (a `propose` whose `pending_proposal_root` decreases, `Monotonic` in the propose
+//      case) and a frozen-slot violation (a `vote` that touches `route_table_root` /
+//      `version`, `Immutable` in the vote case) are REAL executor refusals in the
+//      SUBMISSION path — the half the floor's `evaluate_with_meta`-only tests never
+//      exercised through a real signed turn (see `tests/deos_seam.rs`).
+//
+// **THE `commit_table_update` SEAM, named honestly.** `commit_table_update` rides
+// `Authorization::Custom` + a `WitnessedPredicate { Custom { vk_hash: GOVERNANCE_VK } }`
+// (the constitutional threshold-sig). The `EmbeddedExecutor` wires
+// `WitnessedPredicateRegistry::default_builtins()`, whose witnessed verifiers are the
+// FAIL-CLOSED `NotYetWiredVerifier` — so a turn riding that predicate CANNOT have a
+// happy-path green fire through the embedded executor today. We therefore expose
+// `commit_table_update` as a CAP-AUTHORIZATION-ONLY affordance carrying the existing
+// [`build_commit_table_update_action`] effects as its surface representative, and the
+// deos seam does NOT assert a green commit fire. The cap gate (root clears it) is the
+// real, tested tooth; the full executor acceptance is gated on the
+// `WitnessedPredicateRegistry`-into-executor lane (the same dependency the crate docs
+// name). This is option (b): expose it, name the seam, do not fake it.
+
+/// The governance rights tiers, ON THE REAL ATTENUATION LATTICE — these ARE the roles
+/// the floor crate's cap-graph + `SenderAuthorized(committee_root)` enforces:
+///
+///   - a VIEWER (the public / an auditor) holds [`AuthRequired::Signature`] — the narrow
+///     read tier: it can `view_table` (read the live route table + version) and nothing
+///     else;
+///   - a COMMITTEE MEMBER (a constitutional signer) holds [`AuthRequired::Either`] — it
+///     can `propose_table_update` and `vote_on_proposal` (open + tally a proposal) AND
+///     register services AND view;
+///   - the COMMITTEE AGGREGATE / ADMIN holds [`AuthRequired::None`]/root — it carries the
+///     `commit_table_update` authority (the threshold-sig aggregate enacts the swap) on
+///     top of everything a member can do.
+///
+/// So `Signature ⊂ Either ⊂ None` IS the viewer ⊂ committee-member ⊂ admin ladder. The
+/// committee tier maps onto `Either` because a member acts as themselves (a signature)
+/// OR via a proof on the constitutional propose/vote turns; commit-authority maps onto
+/// `None`/root because the threshold aggregate, not any individual, is what enacts.
+pub const VIEWER_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The committee-member rights tier (sig-or-proof — propose + vote + register + view). See [`VIEWER_RIGHTS`].
+pub const COMMITTEE_RIGHTS: AuthRequired = AuthRequired::Either;
+/// The committee-aggregate / admin rights tier (root — the commit authority + all). See [`VIEWER_RIGHTS`].
+pub const ADMIN_RIGHTS: AuthRequired = AuthRequired::None;
+
+/// The `propose_table_update` **live-state precondition** — there must be NO in-flight
+/// proposal (`pending_proposal_root == 0`). A real [`CellProgram`] read against the
+/// cell's current state, so a `propose` button is LIT on a quiescent board and goes DARK
+/// the instant a proposal opens (the htmx tooth). This gates "may `propose` fire now";
+/// the governance INVARIANTS (the `Monotonic(pending)` + frozen `route_table_root`/
+/// `version`) are the installed [`governance_program`] the executor re-enforces on the
+/// produced transition.
+pub fn no_pending_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+        index: PENDING_PROPOSAL_ROOT_SLOT,
+        value: field_from_u64(0),
+    }])
+}
+
+/// The `vote_on_proposal` **live-state precondition** — a proposal must EXIST
+/// (`pending_proposal_root >= 1`). So the `vote` button is DARK on a quiescent board and
+/// LIT once a proposal is open (the htmx tooth — the dual of [`no_pending_precondition`]).
+/// The executor's installed `vote`-case `Immutable(route_table_root, version)` is the
+/// second guard (a vote that tries to swap the table is a real refusal).
+pub fn proposal_exists_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldGte {
+        index: PENDING_PROPOSAL_ROOT_SLOT,
+        value: field_from_u64(1),
+    }])
+}
+
+/// **The governance BOARD as a composed [`DeosApp`]** — the whole interaction surface,
+/// on the deos bones. The governance cell is the agent's OWN cell
+/// (`cipherclerk.cell_id()`) so fires execute against the seeded embedded ledger.
+///
+/// Five operations on the governance cell, on the viewer ⊂ committee ⊂ admin rights
+/// ladder:
+///
+///   - `view_table` — a cap-only affordance (a VIEWER reads the live route table +
+///     version): `Signature`, an `EmitEvent`;
+///   - `register_service` — a cap-only affordance (any committee member publishes a
+///     service mount): `Either`, carrying the floor's `register_service` `EmitEvent`
+///     effect (the read-then-emit side of the namespace; the floor's `register_service`
+///     case freezes every governance slot, so it is event-bearing only);
+///   - `commit_table_update` — a CAP-ONLY affordance (`None`/root), carrying the EXISTING
+///     [`build_commit_table_update_action`]'s decisive effect (the `route_table_root`
+///     swap) as its surface representative. Its happy-path fire needs the
+///     `WitnessedPredicateRegistry`-into-executor lane (the fail-closed
+///     `NotYetWiredVerifier`), so this affordance is CAP-AUTHORIZATION-ONLY today and the
+///     deos seam does NOT assert a green commit fire (see the module docs — option (b));
+///   - `propose_table_update` — a [`GatedAffordance`] (a COMMITTEE member opens a
+///     proposal): `Either`, a live-state PRECONDITION ([`no_pending_precondition`]: no
+///     in-flight proposal); the real fire ([`fire_propose`]) submits the FULL propose
+///     turn, re-enforced by the executor's installed governance program
+///     (`Monotonic(pending_proposal_root)` + frozen `route_table_root`/`version`);
+///   - `vote_on_proposal` — a [`GatedAffordance`] (a COMMITTEE member tallies a vote):
+///     `Either`, a live-state PRECONDITION ([`proposal_exists_precondition`]: a proposal
+///     exists); the real fire ([`fire_vote`]) submits the FULL vote turn, re-enforced by
+///     the executor (frozen `route_table_root`/`version`/`dispute_window_height`).
+///
+/// The governance cell is published into the web-of-cells at the viewer tier (an auditor
+/// on another federation reacquires the live table across the membrane) and is
+/// discoverable under `governance` / `namespace`.
+///
+/// Seed the cell's program + genesis state with [`seed_governance`] so the gated fires
+/// have a live state and the executor re-enforces the program.
+pub fn governance_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let cell = cipherclerk.cell_id();
+
+    // `view_table` — a viewer reads the live route table + version. Cap-only.
+    let view_table = CellAffordance::new(
+        "view_table",
+        VIEWER_RIGHTS,
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol("table-read"), vec![]),
+        },
+    );
+    // `register_service` — any committee member publishes a service mount. Cap-only,
+    // carrying the floor's event-bearing `register_service` emission (its floor case
+    // freezes every governance slot — purely event-bearing).
+    let register_service = CellAffordance::new(
+        "register_service",
+        COMMITTEE_RIGHTS,
+        Effect::EmitEvent {
+            cell,
+            event: Event::new(symbol("service-registered"), vec![]),
+        },
+    );
+    // `commit_table_update` — the committee aggregate enacts the swap. CAP-ONLY (root),
+    // carrying the EXISTING commit decisive effect (the route_table_root swap) as the
+    // surface representative. Its happy-path fire needs the witnessed-verifier lane (the
+    // fail-closed `NotYetWiredVerifier`) — so this is cap-authorization-only today and the
+    // deos seam does NOT assert a green commit fire (option (b); see the module docs).
+    let commit = CellAffordance::new(
+        "commit_table_update",
+        ADMIN_RIGHTS,
+        Effect::SetField {
+            cell,
+            index: ROUTE_TABLE_ROOT_SLOT as usize,
+            value: field_from_bytes(b"committed-route-table-root"),
+        },
+    );
+    // `propose_table_update` — a COMMITTEE member opens a proposal. The GatedAffordance
+    // carries the DECISIVE effect (the `pending_proposal_root` advance) as its surface
+    // representative AND a live-state PRECONDITION ([`no_pending_precondition`]: no
+    // in-flight proposal) — so the button is lit on a quiescent board and dark once a
+    // proposal opens (the htmx tooth) and the cap∧state gate decides its verdict in-band.
+    // The actual fire ([`fire_propose`]) submits the FULL propose turn, which the executor
+    // re-enforces the governance program on — so `Monotonic(pending_proposal_root)` BITES:
+    // a rewind of the pending root is REFUSED.
+    let propose = GatedAffordance::new(
+        CellAffordance::new(
+            "propose_table_update",
+            COMMITTEE_RIGHTS,
+            Effect::SetField {
+                cell,
+                index: PENDING_PROPOSAL_ROOT_SLOT as usize,
+                value: field_from_u64(1),
+            },
+        ),
+        no_pending_precondition(),
+    );
+    // `vote_on_proposal` — a COMMITTEE member tallies a vote. The decisive effect advances
+    // the `pending_proposal_root` (the floor folds the tally INTO the pending root);
+    // gated on the PROPOSAL-EXISTS precondition ([`proposal_exists_precondition`]:
+    // `pending_proposal_root >= 1`). The executor re-enforces the installed program (so the
+    // vote-case `Immutable(route_table_root, version)` bites — a vote that swaps the table
+    // is refused).
+    let vote = GatedAffordance::new(
+        CellAffordance::new(
+            "vote_on_proposal",
+            COMMITTEE_RIGHTS,
+            Effect::SetField {
+                cell,
+                index: PENDING_PROPOSAL_ROOT_SLOT as usize,
+                value: field_from_u64(2),
+            },
+        ),
+        proposal_exists_precondition(),
+    );
+
+    DeosApp::builder("governed-namespace", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["governance".into(), "namespace".into()])
+        .cell(
+            DeosCell::new(cell, "governance")
+                .affordance(view_table)
+                .affordance(register_service)
+                .affordance(commit)
+                .gated(propose)
+                .gated(vote)
+                .publish(VIEWER_RIGHTS),
+        )
+        .build()
+}
+
+/// Read a `u64` from the last 8 big-endian bytes of a field element (the inverse of
+/// [`field_from_u64`] for the counter the gated propose/vote fires advance the pending
+/// root by).
+fn field_to_u64(f: &FieldElement) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&f[24..32]);
+    u64::from_be_bytes(b)
+}
+
+/// **Seed the governance cell** so the gated fires have live state + the program bites:
+/// install the full [`governance_program`] (`Cases`) on the seeded governance cell (so
+/// the executor re-enforces it on every touching turn), then bind the genesis
+/// constitutional state directly into the embedded ledger — `GOVERNANCE_COMMITTEE_ROOT`
+/// + `THRESHOLD` (`WriteOnce`, frozen after), `VERSION = initial`, `ROUTE_TABLE_ROOT =
+/// initial`, and `PENDING_PROPOSAL_ROOT = 0` (a quiescent board: no in-flight proposal).
+///
+/// **The `SenderAuthorized` membership root (the REAL verifier now bites).** The
+/// `propose` / `vote` cases carry `SenderAuthorized { PublicRoot { set_root_index:
+/// GOVERNANCE_COMMITTEE_ROOT_SLOT } }`, and the embedded executor wires the REAL
+/// STARK-backed [`dregg_turn::executor::MerkleMembershipStarkVerifier`] (no longer the
+/// fail-closed stub). So a `propose`/`vote` turn whose signer is NOT a genuine Merkle
+/// leaf under slot 2's root — or carries no membership witness — is a REAL executor
+/// refusal. We therefore seed slot 2 with [`single_member_authorized_root`] over the
+/// SEEDED CELL'S OWN public key (the cell the gated fires run as), making that signer the
+/// sole authorized committee member; [`fire_propose`] / [`fire_vote`] attach the matching
+/// [`single_member_membership_proof`] so the verifier accepts. (The `committee_root`
+/// parameter is retained for source-shape compatibility but no longer occupies slot 2 —
+/// the authorization root MUST be the membership root the verifier reconstructs, not an
+/// opaque label; a forged label would simply make every committee turn unprovable.)
+///
+/// After seeding, the board is quiescent at `version` with the committee bound — a real
+/// `(old, new)` baseline against which `propose` opens a proposal (pending 0 -> 1) and
+/// `vote` advances the tally. Returns the seeded `version` value.
+pub fn seed_governance(
+    executor: &EmbeddedExecutor,
+    committee_root: FieldElement,
+    threshold: u64,
+    version: u64,
+    route_table_root: FieldElement,
+) -> u64 {
+    let _ = committee_root; // see the doc note: slot 2 now holds the membership root.
+    let cell = executor.cell_id();
+    executor.install_program(cell, governance_program());
+    executor.with_ledger_mut(|ledger| {
+        if let Some(c) = ledger.get_mut(&cell) {
+            // The authorized-committee root the REAL MerkleMembership verifier reads on
+            // every `propose`/`vote`: a single-member set whose sole member is THIS cell's
+            // own public key (the signer the gated fires submit as). The matching proof is
+            // `single_member_membership_proof(&this_pk)`, attached in the fires.
+            let member_pk = *c.public_key();
+            c.state.set_field(
+                GOVERNANCE_COMMITTEE_ROOT_SLOT as usize,
+                single_member_authorized_root(&member_pk),
+            );
+            c.state
+                .set_field(THRESHOLD_SLOT as usize, field_from_u64(threshold));
+            c.state
+                .set_field(VERSION_SLOT as usize, field_from_u64(version));
+            c.state
+                .set_field(ROUTE_TABLE_ROOT_SLOT as usize, route_table_root);
+            // A quiescent board: no in-flight proposal.
+            c.state
+                .set_field(PENDING_PROPOSAL_ROOT_SLOT as usize, field_from_u64(0));
+        }
+    });
+    version
+}
+
+/// **Fire `propose_table_update`** — the deos cap∧state PRECONDITION gate (anti-ghost,
+/// in-band), then the FULL propose turn the executor re-enforces the governance program
+/// on. The two-tempo bridge: the gated affordance decides the button's verdict (cap ⊇
+/// Either AND no in-flight proposal) WITHOUT touching the executor; on both passing, the
+/// complete pending-root-advancing turn is submitted, and the executor's re-enforcement
+/// of [`governance_program`]'s `propose` case is the SECOND, verified gate
+/// (`Monotonic(pending_proposal_root)` + frozen `route_table_root`/`version` bite).
+/// Anti-ghost both ways: a precondition miss never submits; a program violation is a real
+/// executor refusal.
+///
+/// The pending root is advanced past its live value (read from state), so the
+/// `Monotonic(pending_proposal_root)` propose-case caveat holds. Use [`seed_governance`]
+/// first.
+pub fn fire_propose(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = app.cells()[0].cell();
+    fire_committee_gated(
+        app,
+        "propose_table_update",
+        held,
+        cipherclerk,
+        executor,
+        |state| {
+            // Advance the pending root past its live value (Monotonic in the propose case).
+            let pending = field_to_u64(&state.fields[PENDING_PROPOSAL_ROOT_SLOT as usize]);
+            let new_pending = field_from_u64(pending + 1);
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: PENDING_PROPOSAL_ROOT_SLOT as usize,
+                    value: new_pending,
+                },
+                Effect::EmitEvent {
+                    cell,
+                    event: Event::new(symbol("proposal-opened"), vec![new_pending]),
+                },
+            ]
+        },
+    )
+}
+
+/// **The committee-gated manual fire** — the SenderAuthorized-carrying ops (`propose` /
+/// `vote`) fired through the executor against the FULL governance program, with the
+/// Merkle-membership witness attached.
+///
+/// This is the manual analogue of [`DeosCell::fire_gated_through_executor_with`] that the
+/// `SenderAuthorized`-gated ops REQUIRE: the framework helper builds+submits the action
+/// internally and so cannot inject the membership witness blob the now-real
+/// [`dregg_turn::executor::MerkleMembershipStarkVerifier`] demands. We therefore drive
+/// the two-tempo bridge by hand:
+///
+///   1. **the cap∧state gate, IN-BAND (anti-ghost).** Read the cell's live state and run
+///      BOTH teeth via [`GatedAffordance::fire`] (the cap `is_attenuation` AND the
+///      live-state precondition `CellProgram::evaluate`). A miss at either tooth is a
+///      [`FireExecuteError::Gate`] and NOTHING is submitted — the same anti-ghost the
+///      framework helper gives, and the same `FireError::Unauthorized` /
+///      `FireError::StateConditionUnmet` shapes the deos seam tests assert;
+///   2. **the full committee turn, carrying the witness.** On both teeth passing, build
+///      the state-parameterized effects, sign the action via
+///      [`AppCipherclerk::make_action`], ATTACH the single-member membership proof as a
+///      `MerklePath` [`WitnessBlob`] (over the firing signer's own pubkey — the sole
+///      member seeded into slot 2), and submit. The executor RE-ENFORCES the full
+///      governance program INCLUDING the now-real `SenderAuthorized`, which PASSES because
+///      the signer is the seeded root's member AND carries the proof — and the propose/vote
+///      slot caveats (`Monotonic(pending_proposal_root)`, frozen `route_table_root` /
+///      `version`) still BITE on a malformed turn.
+fn fire_committee_gated<F>(
+    app: &DeosApp,
+    name: &str,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+    effects: F,
+) -> Result<TurnReceipt, FireExecuteError>
+where
+    F: FnOnce(&dregg_cell::state::CellState) -> Vec<Effect>,
+{
+    let board = &app.cells()[0];
+    let cell = board.cell();
+    // The live state of the governance cell — the same read the projection gates on.
+    let live = executor.cell_state(cell).ok_or_else(|| {
+        FireExecuteError::Gate(FireError::StateConditionUnmet {
+            affordance: name.to_string(),
+            reason: "cell has no live state in the embedded ledger (fail-closed)".to_string(),
+        })
+    })?;
+    // Tempo 1 — the REAL cap∧state gate, IN-BAND. A miss at EITHER tooth (cap
+    // `Unauthorized` / state `StateConditionUnmet`) is a `Gate` error; nothing submitted.
+    let ga = board
+        .gated_surface()
+        .get(name)
+        .ok_or(FireExecuteError::Gate(FireError::NoSuchAffordance))?;
+    ga.fire(cipherclerk.cell_id(), held, &live, &live)
+        .map_err(FireExecuteError::Gate)?;
+    // Tempo 2 — the full committee turn, carrying the Merkle-membership witness. Sign the
+    // action, attach the single-member membership proof (the ONLY MerklePath/ProofBytes
+    // blob, so the SenderAuthorized evaluator binds it unambiguously), then submit through
+    // the executor, which re-enforces the full governance program (incl. the real
+    // SenderAuthorized).
+    let produced = effects(&live);
+    let mut action = cipherclerk.make_action(cell, name, produced);
+    let member_proof = single_member_membership_proof(&cipherclerk.public_key().0);
+    action.witness_blobs = vec![WitnessBlob::merkle_path(member_proof)];
+    executor
+        .submit_action(cipherclerk, action)
+        .map_err(FireExecuteError::Executor)
+}
+
+/// **Fire `vote_on_proposal`** — the deos cap∧state PRECONDITION gate (cap ⊇ Either AND a
+/// proposal exists), then the FULL vote turn. Like [`fire_propose`], the gated affordance
+/// decides the button in-band and the executor's re-enforcement of the `vote` case
+/// (`Immutable(route_table_root, version, dispute_window_height)`) is the verified second
+/// gate (a vote that swaps the table is a real refusal). The vote case does NOT
+/// `Monotonic`-bind the pending root (a blake3 tally fold has no numeric ordering), so the
+/// fire advances it freely while keeping it non-zero. Use [`seed_governance`] first.
+pub fn fire_vote(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = app.cells()[0].cell();
+    fire_committee_gated(
+        app,
+        "vote_on_proposal",
+        held,
+        cipherclerk,
+        executor,
+        |state| {
+            // Fold the tally into the pending root (the floor's vote semantics); keep it
+            // non-zero so the proposal stays live. The vote case does not Monotonic-bind it.
+            let pending = field_to_u64(&state.fields[PENDING_PROPOSAL_ROOT_SLOT as usize]);
+            let new_pending = field_from_u64(pending + 1);
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: PENDING_PROPOSAL_ROOT_SLOT as usize,
+                    value: new_pending,
+                },
+                Effect::EmitEvent {
+                    cell,
+                    event: Event::new(symbol("vote-cast"), vec![new_pending]),
+                },
+            ]
+        },
+    )
+}
+
+/// **Mount the deos-native surface** ([`governance_app`]) on a shared context: build the
+/// composed [`DeosApp`] from the context's cipherclerk + executor, seed the governance
+/// cell's program + genesis state (so the gated propose/vote fires bite), and fold the app
+/// into the context's affordance registry ([`DeosApp::register`]). Returns the live
+/// [`DeosApp`] (so a host can also [`DeosApp::mount`] its axum router /
+/// [`DeosApp::publish_all`] into the web-of-cells). This is the PROMOTION the census asks
+/// for: the deos surface now ships from `src/`, not from a side-proof in `tests/`.
+///
+/// Seeds a 2-of-N committee at version 1 with an initial route table — a real
+/// constitutional baseline the gated fires advance.
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = governance_app(ctx.cipherclerk(), ctx.executor());
+    // Seed the governance cell so the gated `propose` / `vote` fires have a live
+    // `(old, new)` and the governance program (installed here) is re-enforced by the
+    // executor on every touching turn.
+    seed_governance(
+        ctx.executor(),
+        field_from_bytes(b"committee-v0"),
+        2,
+        1,
+        field_from_bytes(b"genesis-route-table-root"),
+    );
+    app.register(ctx);
+    app
 }
 
 // =============================================================================

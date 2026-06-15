@@ -668,6 +668,62 @@ impl GatedAffordance {
             .submit_turn(&turn)
             .map_err(FireExecuteError::Executor)
     }
+
+    /// **Fire AND execute a STATE-PARAMETERIZED gated affordance** — the cap∧state gate,
+    /// then a turn whose effects are DERIVED FROM THE CELL'S LIVE STATE at fire time.
+    ///
+    /// The cap-only `fire_through_executor` submits the affordance's CONSTANT
+    /// `effect_template` — so a button whose meaning advances with the cell (a counter
+    /// `c → c+1`, a budget meter `spent → spent+cost`) can only fire once before the
+    /// constant target collides with the live value. THIS method closes that gap: the
+    /// button stays the SAME surface affordance (one published cap∧state gate) but its
+    /// committed effects are computed from the cell's current [`CellState`] by `effects`,
+    /// so a gated button drives a genuine MULTI-STEP run. The gate is unchanged:
+    ///
+    /// 1. the CAP tooth and the STATE tooth ([`GatedAffordance::gated_ok`]) run FIRST
+    ///    against the cell's live state — a refusal at EITHER is a
+    ///    [`FireExecuteError::Gate`] and NOTHING is submitted (anti-ghost preserved);
+    /// 2. on both passing, `effects(&live_state)` produces the turn's effects (the
+    ///    state-parameterized payload, e.g. `set spent := live_spent + cost`), submitted
+    ///    through the closed dispatch seam; the executor independently re-enforces the
+    ///    cell program on the produced transition (an over-budget step is REFUSED in-band,
+    ///    a [`FireExecuteError::Executor`]).
+    ///
+    /// The framework reads the live state (`executor.cell_state`) so the author writes the
+    /// effects as a pure function of it; if the cell has no live state, the fire is refused
+    /// at the state gate (fail-closed). This is the general "parameterized gated fire" the
+    /// gated surface needs for any accumulating button.
+    pub fn fire_through_executor_with<F>(
+        &self,
+        held: &AuthRequired,
+        cipherclerk: &AppCipherclerk,
+        executor: &EmbeddedExecutor,
+        effects: F,
+    ) -> Result<dregg_turn::TurnReceipt, FireExecuteError>
+    where
+        F: FnOnce(&CellState) -> Vec<Effect>,
+    {
+        let actor = cipherclerk.cell_id();
+        // The live state of the touched cell — the same read the projection gates on.
+        let surface_cell = self.affordance_cell_or(actor);
+        let live = executor.cell_state(surface_cell).ok_or_else(|| {
+            FireExecuteError::Gate(FireError::StateConditionUnmet {
+                affordance: self.affordance.name.clone(),
+                reason: "cell has no live state in the embedded ledger (fail-closed)".to_string(),
+            })
+        })?;
+        // Step 1 (both teeth): the REAL cap∧state gate, evaluated against the live state as
+        // `(old, new)` (the precondition read) — either refusal is in-band, nothing submitted.
+        self.fire(actor, held, &live, &live)
+            .map_err(FireExecuteError::Gate)?;
+        // Step 2: the STATE-PARAMETERIZED effects → a signed turn → the executor's OWN receipt.
+        let produced = effects(&live);
+        let action = cipherclerk.make_action(surface_cell, self.name(), produced);
+        let turn = cipherclerk.make_turn(action);
+        executor
+            .submit_turn(&turn)
+            .map_err(FireExecuteError::Executor)
+    }
 }
 
 /// A cell's published **gated affordance surface** — affordances each carrying BOTH a
