@@ -68,6 +68,7 @@ pub mod bundle;
 pub mod cascade;
 pub mod document;
 pub mod rehydrate;
+pub mod surface_capture;
 
 // ── The crate's surface: the bundle data model + publish/fetch, the DOM
 //    frustum-snapshot + per-viewer rehydration, and the web-level transclusion
@@ -85,6 +86,16 @@ pub use document::{
 pub use rehydrate::{
     rehydrate_bundle, BundleBoundary, DomSnapshot, RehydratedBundle, SnapshotError,
 };
+// The capture → commit → publish a LIVE rendered surface's DOM state capability: a
+// `RenderedSurface` (the rendered fragment tree + asset refs) captured into a
+// `LiveDomSnapshot` `WebBundle`, published through the REAL `publish_bundle` chain so
+// the published cell IS the DOM state at a committed height; its DOM fragments
+// transclude into a `DreggverseDocument` with provenance (per-viewer, darkenable); a
+// re-publish (`amend`) advances the committed height, the snapshot/live dial tracking.
+pub use surface_capture::{
+    publish_live_surface, AmendError, DomNode, PublishedSurface, RenderedSurface,
+    DOM_STATE_ASSET, RENDERED_VIEW_ASSET,
+};
 
 // Re-export the REAL stable web-of-cells + rehydration + membrane API this crate
 // is a thin layer over — so a consumer names the genuine types directly. We never
@@ -98,6 +109,11 @@ pub use starbridge_web_surface::{
 };
 pub use starbridge_web_surface::rehydrate::{Interaction, InteractionLog};
 pub use starbridge_web_surface::transclusion::{Provenance, TranscludedField, TransclusionError};
+// The REAL SNAPSHOT/LIVE dial (the I-confluence crown made into a dial) — named here
+// so the live-surface amend-tracks-live story (`PublishedSurface::dom_state_snapshot`
+// / `dom_state_live`) uses the genuine versioned-transclusion machinery, never a
+// parallel pinning.
+pub use starbridge_web_surface::transclusion_version::{Pinning, VersionedRead, VersionedTransclusion};
 
 // The REAL content-addressed cell identity (re-exported by starbridge-web-surface,
 // named here so a bundle's boundary cell is the genuine type).
