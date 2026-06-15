@@ -270,6 +270,14 @@ impl WebOfCells {
         }
     }
 
+    /// The federation's current monotone attestation height (the `finality_round` a
+    /// fetch attests at; each [`Self::publish`]/[`Self::amend`] advances it). The
+    /// `at_root` a versioned snapshot dates itself to — a stable, monotone freshness
+    /// field (`DISTRIBUTED-SERVO-FACETS.md §2.2`).
+    pub fn height(&self) -> u64 {
+        self.height
+    }
+
     /// Seed an origin cell with permissive permissions (so a publish's `set_field`
     /// is authorized), returning its [`CellId`]. The deterministic key derivation
     /// mirrors the firmament's `seed_surface` so origins are addressable by seed.
