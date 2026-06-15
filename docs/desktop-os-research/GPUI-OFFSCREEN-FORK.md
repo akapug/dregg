@@ -1,11 +1,13 @@
-# gpui offscreen render — the real renderer, no GPU (a cockpit-shaped Scene on glass, on seL4)
+# gpui offscreen render — the real renderer, no GPU (the LIVE cockpit on glass, on seL4)
 
 The seL4 `qemu_virt_aarch64` machine has no GPU, so starbridge-v2's gpui (wgpu → Vulkan)
 cockpit cannot present to a window there. This is the path that renders a gpui Scene anyway —
 **gpui → software Vulkan (lavapipe) → an offscreen texture → RGBA readback → the seL4
 compositor framebuffer** — so a real gpui render is a Mode inside the VM, beside the live
-image viewer. (What renders today is a hand-built *cockpit-shaped* Scene through this exact
-renderer; swapping in the live `cockpit::Cockpit` element tree is the one named frontier — §below.)
+image viewer. The blitted frame is the **LIVE `cockpit::Cockpit` element tree** (over the
+fully-seeded `world::demo_world` image), captured headless and baked into the PD — see
+§"The live element tree" below. (The first bring-up used a hand-built cockpit-*shaped* Scene
+through this exact renderer; that swap is now closed.)
 
 ## LANDED — a real gpui render is on the seL4 framebuffer (cockpit-shaped; TAB to it)
 
@@ -33,15 +35,35 @@ out of seL4 ramfb) + `patches/deos-image-on-sel4-framebuffer.png` (the cell brow
 `patches/cockpit-render-800x600.png` (the persvati render). Serial confirms
 `ramfb CONFIGURED: addr=0x60600000 XRGB8888 800x600` then `-> MODE: the starbridge-v2 COCKPIT`.
 
-**The honest frontier that remains** (named, not hidden): the blitted frame is a hand-built
-cockpit-shaped gpui `Scene` pushed through the *identical* renderer path the real `Cockpit`
-resolves to — NOT yet the live `cockpit::Cockpit` element tree. Swapping it in needs a
-headless gpui `App`/`Window` driving `cockpit::Cockpit` (its `shell::Scene` is a
-window-manager model that only resolves to a gpui `Scene` inside a live `Window`), then
-`render_scene_to_image` on that Scene → the same `cockpit_frame.rgba` bake. The plumbing
-(render → RGBA → XRGB8888 → ramfb → scanout → TAB mode) is now PROVEN; this is the one
-remaining swap, in starbridge-v2 (a headless cockpit-render entry beside `run_window`,
-`main.rs`).
+## The live element tree (the swap, closed)
+
+The blitted frame is the LIVE `cockpit::Cockpit` element tree, not a hand-built look-alike.
+The mechanism is gpui's own headless capture path, with the missing Linux renderer added:
+
+- **Entry** — `starbridge-v2/src/main.rs::render_cockpit_headless` (`--render-cockpit <out>`,
+  behind a new `headless-render` feature). It builds a `gpui::HeadlessAppContext` over
+  `TestPlatform`, opens a non-shown 800×600 `Window` whose ROOT is the real `Cockpit` over the
+  fully-seeded `world::demo_world` image, drives a frame (`open_window` draws; `refresh()` +
+  `run_until_parked()`), then `capture_screenshot` → `Window::render_to_image` resolves that
+  frame's `gpui::Scene` and renders it offscreen. `cockpit::Cockpit`'s `shell::Scene` (a
+  window-manager model) resolves into a real `gpui::Scene` exactly because it now runs inside a
+  live (headless) `Window` — the thing the hand-built bring-up stood in for.
+- **The renderer** — `Window::render_to_image` routes through a `PlatformHeadlessRenderer`. The
+  offscreen patch grew the Linux one: `gpui_wgpu::WgpuHeadlessRenderer` (wrapping a surfaceless
+  `WgpuRenderer` + the new `render_scene` / existing `render_scene_to_image`), surfaced via
+  `gpui_linux::current_headless_renderer` and `gpui_platform::current_headless_renderer` on
+  Linux (the Metal headless renderer is the macOS counterpart). The `TestWindow`'s sprite atlas
+  IS this renderer's atlas, so glyphs the element tree rasterizes during paint resolve against
+  the very atlas the capture samples.
+- **Scale** — gpui's headless `TestWindow` reports a fixed 2× scale, so 800×600 logical renders
+  at 1600×1200 device px (the full layout) and is Lanczos-downscaled to the framebuffer's
+  800×600.
+
+Byte-proof the bake is the live render: the new `cockpit_frame.rgba` differs from the old
+hand-built one in 1,376,735 / 1,920,000 bytes. Evidence:
+`patches/cockpit-on-sel4-framebuffer-LIVE.png` (live cockpit out of seL4 ramfb) +
+`patches/cockpit-render-800x600-LIVE.png` (the persvati render). The plumbing
+(render → RGBA → XRGB8888 → ramfb → scanout → TAB mode) is unchanged and end-to-end.
 
 ## Proven (not theorized)
 
@@ -71,26 +93,29 @@ modelled on the Metal `render_scene_to_image` (`gpui_macos/src/metal_renderer.rs
 Reproduce: patched fork on persvati `~/src/zed`; harness `/tmp/gpui-offscreen-poc/`; run with
 `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ZED_OFFSCREEN_PREFER_CPU=1`.
 
-## Vendor-into-dregg plan (the next lane)
+## The dregg fork (where the patch lives)
 
 The chain is `starbridge-v2 --features gpui-ui → gpui + gpui_platform → gpui_linux (gpui_wgpu)`,
-so the patch lands exactly where the stack already depends.
+so the patch lands exactly where the stack already depends. It is a dregg-owned fork branch:
 
-1. **Land the patch on starbridge-v2's pinned rev.** starbridge-v2 pins zed
-   `rev = fca2ccd403e8d13c8f4b968cda2f2c322f420f5a` (the PoC fork is at `cccc7b2`). Re-apply the
-   diff onto `fca2ccd`'s `gpui_wgpu` (the `draw`/`new_internal` anchors are stable — expect
-   line-offset fuzz only). **Preferred:** push a dregg-owned fork branch (`breadstuffs/zed@offscreen-fork`
-   off `fca2ccd`) and repoint the `gpui` + `gpui_platform` git deps at it (clean, reviewable,
-   survives rebuilds). Alt: a `[patch]` overlay in starbridge-v2's manifest (lighter, but git-source
-   `[patch]` is finicky workspace-wide).
-2. **Wire it to the seL4 framebuffer.** Implement `PlatformHeadlessRenderer` for a wgpu renderer
-   (using `new_offscreen` + `render_scene_to_image` — ~1 thin impl, the heavy lifting is done), add
-   a headless cockpit-render entry beside `run_window` (`main.rs:124`): build the `Cockpit` element
-   tree in a headless `App` (text_system = `CosmicTextSystem`), drive a frame, `render_scene_to_image`,
-   then blit the RGBA into the VM framebuffer (same byte format the live image-viewer Mode already
-   writes). For first bring-up, push a hand-built Scene (as the PoC does) to prove the seL4 plumbing,
-   then swap in the real cockpit element tree.
+- **`emberian/zed@dregg-offscreen`** — off `fca2ccd` (starbridge-v2's previously-pinned rev; the
+  gpui/gpui_wgpu/gpui_platform/gpui_linux crates are byte-identical to `fca2ccd` there — the one
+  commit between `fca2ccd` and the PoC `cccc7b2` touches only editor/agent_ui), commit
+  `407a6ffd977d82b828e392f92db5cb34edea9549`. starbridge-v2's `gpui` + `gpui_platform` git deps
+  point at it, plus a new `gpui_wgpu` dep at the same rev (the `headless-render` feature pulls the
+  `CosmicTextSystem` text system + `WgpuHeadlessRenderer` directly). The canonical patch file
+  `patches/gpui-offscreen.patch` carries the full diff (8 files: the offscreen renderer +
+  the headless wiring below).
 
-The honest frontier beyond this: the cockpit's `shell::Scene` is a window-manager model, not a gpui
-`Scene` — the real cockpit element tree needs a live headless `App`/`Window` (step 2's harness), which
-this PoC stands in for with a hand-authored cockpit-shaped Scene through the identical renderer path.
+What the patch adds on top of the original surfaceless renderer (`new_offscreen` /
+`render_scene_to_image`, the macOS `MetalRenderer::render_scene_to_image` analogue):
+
+- `gpui_wgpu`: `WgpuRenderer::render_scene` (the no-readback present analogue) +
+  `WgpuHeadlessRenderer: gpui::PlatformHeadlessRenderer` (wraps a surfaceless `WgpuRenderer`),
+  a `test-support` feature (pulls `gpui/test-support` + `image`).
+- `gpui_linux`: `current_headless_renderer()` → the boxed `WgpuHeadlessRenderer`.
+- `gpui_platform`: `current_headless_renderer()` routes to `gpui_linux` on Linux (the Metal
+  headless renderer is the macOS branch; both feed gpui's `HeadlessAppContext`/`TestPlatform`).
+
+This is what makes gpui's own headless capture (`Window::render_to_image`) work on Linux — the
+mechanism `render_cockpit_headless` drives to get the live element tree onto the framebuffer.
