@@ -181,21 +181,25 @@ pub async fn generate_withdrawal_proof(
 ///
 /// # Why this is a separate domain from `dregg_cell::note::Note::nullifier`
 ///
-/// The protocol-internal nullifier (`cell/src/note.rs`) is
+/// The protocol-internal nullifier (`cell/src/note.rs`) is a **Poseidon2** hash
+/// over the STARK-native field:
 ///
 /// ```text
-/// nullifier = blake3("dregg-note nullifier v1", commitment || spending_key || creation_nonce)
+/// nullifier = poseidon2(commitment_felt || spending_key[8 limbs] || creation_nonce[8 limbs])
 /// ```
 ///
-/// and includes `creation_nonce` so two notes that happen to share an owner +
-/// fields + randomness collision-resistantly resolve to distinct nullifiers
-/// inside the in-protocol AIR.
+/// (the structure the note-spending AIR's `NoteSpendingWitness::nullifier`
+/// verifies). It includes `creation_nonce` so two notes that happen to share an
+/// owner + fields + randomness collision-resistantly resolve to distinct
+/// nullifiers inside the in-protocol AIR.
 ///
 /// This crate (`dregg-chain`) is the **SP1 / EVM withdrawal** boundary. Its
 /// nullifier matches what the SP1 guest commits as a public output for the
 /// `DreggVault` contract on EVM — a different circuit with a different
-/// public-input layout. Reconciling these into a single derivation would
-/// require:
+/// public-input layout, hashed with BLAKE3 because that is what the EVM-side
+/// guest and contract verify. The two are doubly separated: a different hash
+/// family (BLAKE3 vs Poseidon2) AND a different domain string. Reconciling them
+/// into a single derivation would require:
 ///
 ///   1. Changing the SP1 guest's PI layout (touches the SP1 circuit, which
 ///      lives outside this workspace) and re-deploying the EVM verifier.
@@ -413,11 +417,15 @@ mod tests {
     }
 
     /// Adversarial: the EVM-side withdrawal nullifier MUST be in a different
-    /// hash domain than the in-protocol `Note::nullifier`. Recompute the
-    /// in-protocol form locally (the chain crate is a standalone workspace and
-    /// cannot depend on `dregg-cell`, so we replay the formula by hand) and
-    /// assert it produces a different output even when the input bytes
-    /// nominally match.
+    /// hash domain than the in-protocol `Note::nullifier`. The in-protocol
+    /// nullifier is a Poseidon2 hash over BabyBear (see
+    /// `dregg_cell::note::Note::nullifier`), so it is already in an entirely
+    /// different hash family from this BLAKE3-based EVM nullifier — the
+    /// strongest possible separation. As a belt-and-suspenders check we ALSO
+    /// confirm the EVM nullifier does not collide with the *legacy* BLAKE3
+    /// `"dregg-note nullifier v1"` domain string (the chain crate is standalone
+    /// and cannot depend on `dregg-cell`, so that string is reproduced here),
+    /// guarding the domain-separator layer independently of the hash family.
     ///
     /// This guards against an attacker reusing a withdrawal proof's revealed
     /// nullifier to fake an in-protocol spend (or vice-versa).
@@ -431,7 +439,9 @@ mod tests {
         // EVM-side withdrawal nullifier (this module).
         let evm_nullifier = derive_nullifier(&key, &commitment);
 
-        // In-protocol nullifier (cell/src/note.rs), replayed here:
+        // The legacy in-protocol BLAKE3 nullifier domain string, reproduced
+        // locally for the domain-separator cross-check (NOT the live scheme,
+        // which is now Poseidon2):
         //   blake3::derive_key("dregg-note nullifier v1",
         //                      commitment || spending_key || creation_nonce)
         let mut input = Vec::with_capacity(96);
