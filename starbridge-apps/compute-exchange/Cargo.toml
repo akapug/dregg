@@ -1,0 +1,53 @@
+[package]
+name = "starbridge-compute-exchange"
+version = "0.1.0"
+edition = "2024"
+description = "Starbridge compute marketplace — a factory-born job/escrow cell that composes the organ semantics: a budget ceiling (bid <= budget), a write-once accepted-bid commitment, a one-way job lifecycle, and an atomic, value-conserving settlement (paid + refunded == budget). One verified cell program, enforced by the real executor every turn."
+
+# The compute marketplace: a requester POSTS a job with an escrowed BUDGET; a
+# provider BIDS a price (which must fit the budget); the job SETTLES — the
+# accepted price is PAID to the provider and the remainder REFUNDED to the
+# requester, ATOMICALLY and value-neutrally. It composes — in the slot-caveat
+# idiom of a single factory-born cell — the guarantees the night's organs
+# provide:
+#
+#   - BUDGET     (bid <= budget): the accepted price can never exceed the job's
+#     escrowed budget — `FieldLteField{ BID, BUDGET }`. The provider draws
+#     against a bounded line, exactly the trustline `drawn <= line` — here the
+#     AffineLe budget gate the prompt asks for.
+#   - ACCEPTED   (write-once bid): the requester accepts a `BID` price under
+#     `WriteOnce`. It is bound exactly once and tamper-evident — the accepted
+#     price cannot be silently re-negotiated after acceptance.
+#   - FLASHWELL  (atomic, conserving settlement): settlement splits the escrowed
+#     budget into PAID (to the provider) and REFUNDED (to the requester) with
+#     `PAID + REFUNDED == BUDGET` enforced by `AffineEq` (+ the universal no-mint
+#     `AffineLe`) — the all-or-nothing, no-mint/no-burn flash-settlement
+#     invariant.
+#   - one-way LIFECYCLE: POSTED->BID->SETTLED under `StrictMonotonic`, so a job
+#     can never regress, double-settle, or re-bid.
+#
+# Composes dregg primitives only (FactoryDescriptor + Effect::SetField +
+# Effect::EmitEvent + StateConstraint slot caveats) — no domain-specific compute
+# Effect, no Authorization::Unchecked, no placeholder signatures. Routes through
+# the REAL verified executor via EmbeddedExecutor / submit_action.
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-types = { path = "../../types" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The on-ledger floor (factory_birth.rs) and the deos re-expression tests
+# (reexpress_deos_app.rs / deos_seam.rs) mount the composed `DeosApp`'s axum
+# surface (per-viewer projection, /surface.js, /manifest) and fire gated
+# affordances through the embedded executor.
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+
+[lints]
+workspace = true

@@ -1,21 +1,89 @@
 {
   "id": "compute-exchange",
   "name": "Compute Exchange",
-  "description": "Legacy compute marketplace app retained for porting; not yet a Starbridge userspace app.",
-  "version": "0.0.0",
-  "status": "unported",
-  "legacy_path": "apps/compute-exchange",
-  "runtime_mode": "legacy-http",
-  "legacy_listen": "compute-exchange:3040",
+  "description": "Compute marketplace starbridge-app: a factory-born job/escrow cell composing BUDGET (bid <= budget, the AffineLe budget gate) + ACCEPTED (write-once accepted bid) + FLASHWELL (conserving settlement, paid + refunded == budget) + LIFECYCLE (one-way POSTED -> BID -> SETTLED), re-enforced by the verified executor every turn. A requester posts a job with an escrowed budget; a provider bids a price that must fit the budget; settlement pays the provider and refunds the remainder atomically and value-neutrally.",
+  "version": "0.1.0",
+  "status": "deos-native",
+  "crate": "starbridge-compute-exchange",
+  "runtime_mode": "deos-native",
   "caddy_prefix": "/compute",
-  "listen_port": 3040,
-  "factory_vks": [],
+  "factory_vks": [
+    "737461726272696467652d636f6d707574652d65786368616e67652d66637472"
+  ],
   "page": null,
-  "inspectors": [],
-  "turn_builders": [],
-  "required_apis": [],
+  "inspectors": [
+    "compute-job"
+  ],
+  "host_inspectors": [
+    { "id": "compute-job", "label": "Compute Job", "tag": "dregg-compute-job", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "post", "label": "Post (open job)", "builder": "post", "kind": "turn" },
+    { "id": "bid", "label": "Bid (offer price)", "builder": "bid", "kind": "turn" },
+    { "id": "settle", "label": "Settle (split budget)", "builder": "settle", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "job_uri", "label": "Job URI", "type": "uri", "default": "dregg://cell/compute-job-default" },
+    { "id": "budget", "label": "Budget slot", "type": "slot", "slot": 4 }
+  ],
+  "turn_builders": [
+    "post",
+    "bid",
+    "settle"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.compute"
+  ],
+  "slot_layout": {
+    "REQUESTER_HASH_SLOT": 2,
+    "PROVIDER_HASH_SLOT": 3,
+    "BUDGET_SLOT": 4,
+    "BID_SLOT": 5,
+    "SPEC_HASH_SLOT": 6,
+    "PAID_SLOT": 7,
+    "REFUNDED_SLOT": 8,
+    "STATE_SLOT": 9
+  },
+  "state_codes": {
+    "POSTED": 1,
+    "BID": 2,
+    "SETTLED": 3
+  },
+  "state_constraints": [
+    "WriteOnce(REQUESTER_HASH_SLOT)",
+    "WriteOnce(PROVIDER_HASH_SLOT)",
+    "WriteOnce(BUDGET_SLOT)",
+    "FieldLteField(BID_SLOT, BUDGET_SLOT)",
+    "WriteOnce(BID_SLOT)",
+    "WriteOnce(SPEC_HASH_SLOT)",
+    "WriteOnce(PAID_SLOT)",
+    "WriteOnce(REFUNDED_SLOT)",
+    "AffineLe(PAID + REFUNDED - BUDGET <= 0)",
+    "StrictMonotonic(STATE_SLOT)",
+    "MethodIs(settle) => AffineEq(PAID + REFUNDED - BUDGET == 0)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry and SEEDS the job cell (installs the job program, POSTED state); DeosApp::mount yields the axum router",
+    "src_factory": "job_app(cipherclerk, executor)",
+    "cell": "compute-job",
+    "discoverable": ["compute", "marketplace"],
+    "publish": "Signature (the job cell is a dregg:// sturdyref a provider/auditor on another federation reacquires)",
+    "affordances": {
+      "view_job": "cap-only, Signature (an OBSERVER reads the job state)",
+      "bid": "GATED (cap∧state), Either — posted precondition (STATE == POSTED); the fire submits the FULL bid (provider + bid + state->BID), the executor re-enforcing BUDGET FieldLteField(BID <= BUDGET)",
+      "settle": "GATED (cap∧state), None/root — bid precondition (STATE == BID); the fire reads live BID + BUDGET and pays the provider in full (paid := bid, refunded := budget - bid, state->SETTLED), the executor re-enforcing FLASHWELL AffineEq(PAID + REFUNDED == BUDGET)"
+    },
+    "rights_ladder": "Signature ⊂ Either ⊂ None IS the observer ⊂ provider ⊂ requester ladder",
+    "seam": "CLOSED — the fire runs against the seeded job cell carrying the full job program (BUDGET + ACCEPTED + FLASHWELL + LIFECYCLE), so an OVER-BUDGET bid (FieldLteField), a VALUE-CONJURING settle (AffineEq/AffineLe), and a NON-ADVANCING state (StrictMonotonic, strict) all BITE in the deos fire path (tests/deos_seam.rs — the three headline teeth). The factory-born cell carries the flat state_constraints predicate, so the budget and conservation teeth are executor refusals on the born cell too (tests/factory_birth.rs)."
+  },
   "manifest_health": {
-    "status": "legacy-http",
-    "porting_target": "starbridge-apps/compute-exchange"
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/compute-exchange/src/lib.rs"
   }
 }

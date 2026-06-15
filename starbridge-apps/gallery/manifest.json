@@ -1,21 +1,62 @@
 {
   "id": "gallery",
   "name": "Gallery",
-  "description": "Legacy private auction/gallery app retained for porting; not yet a Starbridge userspace app.",
-  "version": "0.0.0",
-  "status": "unported",
-  "legacy_path": "apps/gallery",
-  "runtime_mode": "legacy-http",
-  "legacy_listen": "gallery:3040",
+  "description": "Sealed-submission art gallery starbridge-app: artists COMMIT a sealed (hashed) submission during a SUBMISSION phase, the curator CLOSES submissions, artists REVEAL their pieces, and the curator CURATES (features a piece for display). The commit phase is ON-LEDGER — a gallery is a factory-born sovereign cell whose installed CellProgram IS the curation policy: each submission slot is WriteOnce (a sealed submission is FROZEN the instant committed, so a piece cannot be swapped out from under the curator after the call closes; the anti-tamper tooth, an EXECUTOR REFUSAL) and the PHASE is anti-rollback (Monotonic floor + StrictMonotonic advance on close_submissions/curate). Folds onto the sealed-auction commit-reveal pattern: a committed submission opens to exactly its piece (under collision-resistance), no reveal before the call closes, and a non-submitted artist can never be featured.",
+  "version": "0.1.0",
+  "status": "deos-native",
+  "crate": "starbridge-gallery",
+  "runtime_mode": "deos-native",
   "caddy_prefix": "/gallery",
-  "listen_port": 3040,
-  "factory_vks": [],
+  "factory_vks": [
+    "737461726272696467652d67616c6c6572792d6375726174652d666163747279"
+  ],
   "page": null,
-  "inspectors": [],
-  "turn_builders": [],
-  "required_apis": [],
+  "inspectors": ["gallery"],
+  "turn_builders": ["submit", "close_submissions", "reveal", "curate"],
+  "required_apis": ["/turn/submit"],
+  "slot_layout": {
+    "PHASE_SLOT": 0,
+    "CURATOR_SLOT": 1,
+    "FEATURED_SLOT": 2,
+    "FEATURED_HASH_SLOT": 3,
+    "SUBMIT_BASE": 4
+  },
+  "phase_codes": {
+    "SUBMISSION": 0,
+    "REVEAL": 1,
+    "CURATED": 2
+  },
+  "state_constraints": [
+    "WriteOnce(CURATOR_SLOT)",
+    "WriteOnce(FEATURED_SLOT)",
+    "WriteOnce(FEATURED_HASH_SLOT)",
+    "WriteOnce(SUBMIT_BASE + i)  // the anti-tamper submission board — each committed sealed submission is frozen",
+    "Monotonic(PHASE_SLOT)  // the anti-rollback floor (the phase may never rewind), on every method",
+    "MethodIs(close_submissions) => StrictMonotonic(PHASE_SLOT)  // SUBMISSION -> REVEAL, strictly advancing",
+    "MethodIs(curate) => StrictMonotonic(PHASE_SLOT)  // REVEAL -> CURATED, strictly advancing"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry and SEEDS the gallery cell (installs the gallery program, PHASE = SUBMISSION); DeosApp::mount yields the axum router",
+    "src_factory": "gallery_app(cipherclerk, executor)",
+    "cell": "gallery",
+    "discoverable": ["gallery", "art"],
+    "publish": "Signature (the gallery cell is a dregg:// sturdyref a visitor/auditor on another federation reacquires)",
+    "on_ledger_submission_board": "THE PAYOFF — the commit phase is ON-LEDGER: a WriteOnce submission-board cell (slots SUBMIT_BASE..STATE_SLOTS). A sealed submission is FROZEN the instant it is committed, so SWAPPING a committed piece is an EXECUTOR REFUSAL (WriteOnce), not an in-process membership check. This is the anti-tamper guarantee, lifted from a Rust check into the verified executor.",
+    "affordances": {
+      "view_gallery": "cap-only, Signature (a VISITOR browses)",
+      "submit": "GATED (cap∧state), Either — SUBMISSION precondition (PHASE==SUBMISSION); the fire writes the next free WriteOnce submission slot (read from live state), the executor re-enforcing the WriteOnce board (swapping a committed submission is REFUSED)",
+      "close_submissions": "GATED (cap∧state), None/root — SUBMISSION precondition; advances PHASE SUBMISSION -> REVEAL, the executor re-enforcing StrictMonotonic(PHASE)",
+      "reveal": "GATED (cap∧state), Either — REVEAL precondition (PHASE==REVEAL); records the revealed piece",
+      "curate": "GATED (cap∧state), None/root — REVEAL precondition; advances PHASE REVEAL -> CURATED and writes FEATURED / FEATURED_HASH (frozen by WriteOnce), the executor re-enforcing StrictMonotonic(PHASE)"
+    },
+    "rights_ladder": "Signature ⊂ Either ⊂ None IS the visitor ⊂ artist ⊂ curator ladder",
+    "seam": "CLOSED — the fire runs against the seeded gallery cell carrying the full gallery program (the WriteOnce submission board + result registers + the Monotonic/StrictMonotonic PHASE lifecycle), so SWAPPING a committed sealed submission (WriteOnce) and a PHASE that rewinds / does-not-advance (StrictMonotonic) BITE in the deos fire path itself (tests/deos_seam.rs). The factory-born cell carries the flat state_constraints predicate, so the anti-tamper and anti-rollback teeth are executor refusals on the born cell too (tests/factory_birth.rs)."
+  },
   "manifest_health": {
-    "status": "legacy-http",
-    "porting_target": "starbridge-apps/gallery"
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/gallery/src/lib.rs"
   }
 }
