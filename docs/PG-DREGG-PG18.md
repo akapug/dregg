@@ -687,12 +687,59 @@ while the valid one reaches `role_identity` through `bind_role`).
 
 ---
 
-## 13. What pg18 offers that pg-dregg deliberately does NOT adopt (yet)
+## 13. The constraint frontier — what pg18 offers, adopted and deferred
 
 Being pg18-native is a discipline of taking the features that serve a dregg
-property and *declining* the ones that do not. Three pg18 capabilities were
-evaluated this pass and are **not** adopted, each for a stated reason — recorded
-here so the inventory is honest about the boundary.
+property and *declining* the ones that do not. This section records the pg18
+constraint surface specifically: one pair of features **adopted** this pass
+(§13.1), and three capabilities **declined**, each for a stated reason (§13.2),
+so the inventory is honest about the boundary.
+
+### 13.1 ADOPTED — `CHECK … NOT ENFORCED` + `NOT NULL … NOT VALID` (the legibility/lock-light pair)
+
+pg18 added two new constraint *forms* that fit pg-dregg precisely because they
+let the catalog carry an invariant WITHOUT pg becoming a second, weaker authority
+that fights the verified writer. Both ship in `dregg.ddl::invariants()` (the
+`dregg_install_invariants()` extern), `cargo test`-proven by
+`invariants_ddl_uses_the_pg18_constraint_forms`, applied to `dregg.cells`.
+
+**`CHECK (…) NOT ENFORCED` (pg18; Amul Sul, commits `ca87c415e`/`eec0040c4`) —
+ADOPTED to DECLARE the spine's guarantees without double-enforcing them.** The
+verified turn already guarantees that a materialized `balance`/`nonce` is never
+negative and that the read-side `fields_json.balance` projection agrees with the
+authoritative `balance` column (the executor's transition function + conservation,
+`metatheory/Dregg2/`). pg-dregg now *declares* those as named `CHECK`
+constraints — but marks them **`NOT ENFORCED`**, so the catalog and `\d
+dregg.cells` and an auditor see the invariant, yet pg pays **no per-write CHECK**
+and, crucially, can never **REFUSE** a verified post-image. Enforcing them in pg
+would be the double-enforcement anti-pattern (`docs/PG-DREGG.md` §8): a second
+authority, weaker than the spine, that could reject a legitimate verified turn (or
+lull a reader into trusting pg rather than the turn). `NOT ENFORCED` is the honest
+idiom — the invariant is *documentation the catalog carries* plus a target a DBA
+can later `ALTER … ENFORCED` / `VALIDATE` for a one-off spot-audit, without ever
+sitting in the verified-write path. (Before pg18, a `CHECK` was always enforced;
+declaring an invariant you do NOT want pg to police was simply not expressible.)
+
+**`ADD CONSTRAINT … NOT NULL … NOT VALID` + `VALIDATE CONSTRAINT` (pg18; Rushabh
+Lathia, Jian He, commit `a379061a2`) — ADOPTED as the lock-light migration form on
+the live mirror.** Adding a `NOT NULL` constraint to an already-populated table
+historically took an `ACCESS EXCLUSIVE` full-table scan that blocks the read path.
+pg18 lets a `NOT NULL` constraint be added **`NOT VALID`** (a brief lock to record
+it in the catalog, *no scan*), after which a separate **`VALIDATE CONSTRAINT`**
+checks existing rows under a weaker `SHARE UPDATE EXCLUSIVE` lock that does **not**
+block reads or the mirror's writes. `invariants()` pins `cell_root` as a *named*
+`NOT NULL` constraint through exactly this two-step — demonstrating the
+pre-18-impossible lock-light path on a live, populated `dregg.cells` (a named
+constraint is what an auditor references and what a future added column would be
+onboarded through; on a fresh install the table is empty, so VALIDATE is instant).
+
+Both ALTERs are wrapped in catalog-guarded `DO` blocks, so `invariants()` is
+**idempotent** (re-running adds nothing) and a non-pg18 server surfaces a clear
+error rather than a half-applied state. These two are the genuinely-pg18,
+genuinely-unused-until-now constraint forms that *fit* — the deferred/rejected
+ones below are the ones that do not.
+
+### 13.2 DEFERRED / REJECTED
 
 **Temporal constraints (`WITHOUT OVERLAPS` / `PERIOD`) — DEFERRED, needs a
 node-side schema it does not yet have.** pg18 genuinely ships temporal `PRIMARY
@@ -758,6 +805,8 @@ extension declares.
 | **`uuid_extract_timestamp` on v7** (v1-only pre-18) / `uuid_extract_version` (17) | **18** / 17 | pg-native authz (the queue key AS an audit signal) | §6, `dregg.submit_queue_audit` |
 | `MERGE` + `merge_action()` | 17 | verified-only writes (atomic upsert) | §7, `dregg.merge_cell` |
 | **`RETURNING WITH (OLD/NEW)`** | **18** | verified-only writes (the applicator's typed delta audit + conservation) | §7, `dregg.merge_cell` / `dregg.merge_cell_delta` |
+| **`CHECK … NOT ENFORCED`** | **18** | invariant legibility (declare the spine's non-negativity/projection floor WITHOUT double-enforcing it) | §13.1, `dregg.cells` constraints via `dregg.ddl::invariants()` / `dregg_install_invariants()` |
+| **`NOT NULL … NOT VALID` + `VALIDATE CONSTRAINT`** | **18** | lock-light migration (pin a named NOT NULL on the live mirror with no ACCESS EXCLUSIVE scan) | §13.1, `cells_cell_root_present` via `dregg.ddl::invariants()` |
 | **asynchronous I/O (AIO)** | **18** | rich reads (faster large scans) | §8, transparent + the `dregg.mirror_io_stats` view over `pg_stat_io` |
 | **`pg_aios` in-flight view** | **18** | rich reads (AIO engaged-or-not signal) | §8, `dregg.mirror_aio_inflight` |
 | **data checksums by `initdb` default** | **18** | integrity floor (page integrity the roots assume) | §11, `dregg.integrity_status` (the `data_checksums` GUC) |
@@ -766,12 +815,15 @@ extension declares.
 | `BEFORE INSERT` re-validating trigger | core | verified-only writes (the one door) | §7, `dregg.apply_verified_turn` |
 | `FORCE ROW LEVEL SECURITY` + cap policies | core | read gate + write gate | §6/§7, the RLS |
 | failover slots (`failover = true`) + `pg_createsubscriber` | 17 (+ pg18 `--all`/`--enable-two-phase`) | federation (survive publisher failover; bootstrap) | §10, the subscriber runbook |
-| temporal `WITHOUT OVERLAPS` / `PERIOD` constraints | 18 (ships) | — *DEFERRED* (needs a node-projected cap-validity range; no range column in the mirror today) | §13, the closure plan |
-| `COPY … ON_ERROR` into the *state* tables | 18 | — *REJECTED* (a `COPY` bypasses the verified-write spine; §7) | §13 |
-| AIO / parallel GIN builds / `EXPLAIN BUFFERS` default | 18 | transparent perf — *no code* (engine behavior) | §13 |
+| temporal `WITHOUT OVERLAPS` / `PERIOD` constraints | 18 (ships) | — *DEFERRED* (needs a node-projected cap-validity range; no range column in the mirror today) | §13.2, the closure plan |
+| `COPY … ON_ERROR` into the *state* tables | 18 | — *REJECTED* (a `COPY` bypasses the verified-write spine; §7) | §13.2 |
+| AIO / parallel GIN builds / `EXPLAIN BUFFERS` default | 18 | transparent perf — *no code* (engine behavior) | §13.2 |
 
-The deferred / rejected rows are spelled out in §13; the version attribution for
-every pg18 feature above was confirmed against the official PostgreSQL 18 release
-notes (`postgresql.org/docs/18/release-18.html`). For the
-federation-via-logical-replication path and the snapshot/backup complement, see
-also `docs/PG-DREGG.md` §15.
+The adopted constraint pair (`CHECK … NOT ENFORCED`, `NOT NULL … NOT VALID`) is
+spelled out in §13.1; the deferred / rejected rows in §13.2. The version
+attribution for every pg18 feature above was confirmed against the official
+PostgreSQL 18 release notes (`postgresql.org/docs/18/release-18.html`) — including
+the two newly-adopted forms (`CHECK … NOT ENFORCED`: commits `ca87c415e` /
+`eec0040c4`, Amul Sul; `NOT NULL … NOT VALID`: commit `a379061a2`, Rushabh Lathia
+/ Jian He). For the federation-via-logical-replication path and the
+snapshot/backup complement, see also `docs/PG-DREGG.md` §15.

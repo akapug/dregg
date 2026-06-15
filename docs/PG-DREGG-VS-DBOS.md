@@ -140,32 +140,40 @@ pg-dregg/scripts/e2e-live.sh                 # the live write-path gate on a rea
 
 Measured over the postgres-free cores (`cargo bench`; the *algorithmic* cost of
 the verification, isolated from pg/IPC — the honest "what does a verified turn
-cost" number). Representative figures from this machine (Apple Silicon):
+cost" number). Measured figures (Apple M2 Max, single core, 2026-06-15 — the full
+record + reproduction steps live in **`docs/PG-DREGG-BENCHMARKS.md`**):
 
 | path | what it is | latency | throughput |
 |---|---|---|---|
-| `submit_decision/hot_lru_reeval` | the verified-write gate (per row, LRU warm) | ~1.6 µs | ~620K admissions/s |
-| `submit_decision/cold_full_chain_verify` | the verified-write gate (cold, full ed25519 chain verify) | ~54 µs | ~18K/s |
-| `read_projection/rls_filter_rows` | the cap-gated RLS read (per row, hot) | ~2 µs/row | ~470K rows/s |
-| `chain_gate/verify_chain_step` | the anti-substitution tooth (the Tier-C trigger gate) | ~6 ns | ~166M ops/s |
-| `chain_gate/rootchain_extend` | the full chain-gate a MirrorBatch apply pays | ~9 ns | ~109M ops/s |
-| `mirror_apply/from_parts_assemble` | assemble + well-formedness gate a verified turn | ~810 ns | ~1.2M/s |
-| `mirror_serde/encode_batch` / `decode_batch` | the node↔pg wire codec per turn | ~5 µs / ~9.5 µs | ~520 / ~290 MiB/s |
-| `workflow/run_durable_steps/128` | a full durable-workflow run, every step checkpointed (the DBOS-equivalent path) | ~6.3 µs/step | ~158K turns/s |
-| `workflow/crash_recover_resume` | crash → recover (re-validate the whole chain) → resume the tail, exactly-once | ~483 µs (64-step) | ~132K turns/s |
+| `submit_decision/hot_lru_reeval` | the verified-write gate (per row, LRU warm) | ~1.63 µs | ~614K admissions/s |
+| `submit_decision/cold_full_chain_verify` | the verified-write gate (cold, full ed25519 chain verify) | ~55 µs | ~18K/s |
+| `read_projection/rls_filter_rows` | the cap-gated RLS read (per row, hot) | ~1.7 µs/row | ~590K rows/s |
+| `gate_vs_handrolled/dregg_admits` vs `…/handrolled_acl` | the verified gate vs a hand-rolled owner/expiry/revoked ACL | ~1.80 µs vs **~15 ns**/row | the **~120×** the verification costs over a plaintext compare |
+| `chain_gate/verify_chain_step` | the anti-substitution tooth (the Tier-C trigger gate) | ~4 ns | ~254M ops/s |
+| `chain_gate/rootchain_extend` | the full chain-gate a MirrorBatch apply pays | ~4.6 ns | ~215M ops/s |
+| `mirror_apply/from_parts_assemble` | assemble + well-formedness gate a verified turn | ~630 ns | ~1.6M/s |
+| `mirror_serde/encode_batch` / `decode_batch` | the node↔pg wire codec per turn | ~3.3 µs / ~9.3 µs | ~830 / ~291 MiB/s |
+| `workflow/run_durable_steps/128` | a full durable-workflow run, every step checkpointed (the DBOS-equivalent path) | ~6.7 µs/step | ~149K turns/s |
+| `drain_spine/drain_intents/128` | the verified-write OUTBOX drain (SUBMIT→PRODUCE→CHAIN), per turn | ~3.6 µs/turn | ~275K turns/s |
+| `workflow/crash_recover_resume` | crash → recover (re-validate the whole chain) → resume the tail, exactly-once | ~517 µs (64-step) | ~124K turns/s |
 
 The hot per-row gate is **~1.6 µs** because a warm verified-credential LRU pays
 the ed25519 chain verify ONCE per token, then each row re-evaluates only the
 first-party caveats off the *cached, decoded* credential — the per-row cost is a
-revocation-set lookup + a caveat eval, not a fresh decode or signature check.
+revocation-set lookup + a caveat eval, not a fresh decode or signature check. The
+`gate_vs_handrolled` row is the marketable one: the verified gate is ~120× a naive
+ACL string-compare per row, and that overhead is the price of unforgeability +
+attenuation + instant revocation (a hand-rolled plaintext predicate has none of
+them and a bug in it silently loses them). At ~556K cap-gated rows/sec that is a
+price almost every read-path can pay; the comparison exists so it is *legible*.
 
 End-to-end, the load generator (`cargo run --release --bin loadgen`) drives the
 **full verified-write spine** (authz submit-gate + `RootChain` + apply) at
-**~236K sustained verified turns/sec** on a single core, conserving value every
+**~264K sustained verified turns/sec** on a single core, conserving value every
 step (`--agents 8`). With `--latency` it reports the per-turn distribution: the
-hot path is **p50 ≈ 5 µs, p90 ≈ 7 µs**. The per-turn cost is dominated by the
-capability decision (the ed25519 chain verify, amortized by the LRU); the chain
-tooth itself is effectively free (~6 ns).
+hot path is **p50 ≈ 3.1 µs, p90 ≈ 3.3 µs, p99 ≈ 7.4 µs**. The per-turn cost is
+dominated by the capability decision (the ed25519 chain verify, amortized by the
+LRU); the chain tooth itself is effectively free (~4 ns).
 
 The live-pg rate adds the SPI/IPC round-trip and the `MERGE` applicator on top of
 these; it is exercised by `cargo pgrx test pg18` and `scripts/e2e-live.sh`.
