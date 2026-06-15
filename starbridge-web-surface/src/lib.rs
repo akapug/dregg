@@ -110,6 +110,27 @@
 //! and [`game::play_match`] (two [`AgentPlayer`]s to a decision) drive it; the
 //! `deos_world_demo` example narrates the whole thing.
 //!
+//! ## 7. The LIVE receipt stream — the cockpit goes live ([`receipt_stream`])
+//!
+//! `docs/NEXT-WAVE.md` item D: today a surface's organs (channel / mailbox /
+//! court) are SNAPSHOTS. [`receipt_stream`] is the primitive that makes them
+//! **live reflections of the committing node** — a [`ReceiptStream`] is a
+//! subscription over the node's `GET /api/events/stream`
+//! ([`node/src/events.rs`]) receipt nervous system, and each committed receipt
+//! arrives as a [`StreamedReceipt`] (one observed world transition — a committed
+//! turn — the crate-boundary analogue of the cockpit's `WorldEvent::TurnCommitted`,
+//! carrying the REAL [`dregg_turn::TurnReceipt`]). It is built on the genuine
+//! shapes ([`dregg_query::ReceiptEventRow`] envelope + the dense `chain_index`
+//! cursor the node serves as `Last-Event-ID`) and adds the security tooth a live
+//! feed needs: every frame is verified IN-ORDER + UN-FORGED before a surface
+//! reflects it (the real [`dregg_turn::TurnReceipt::receipt_hash`] re-hash +
+//! the [`dregg_types::AttestedRoot`] receipt-stream binding). The pure
+//! [`ReceiptStream::ingest`] state machine is `cargo test`-able with no runtime;
+//! the async [`ReceiptStreamPoll`] (`stream` feature) is the
+//! [`futures_core::Stream`] the cockpit's gpui executor `.await`s. The cockpit
+//! WIRING (the gpui subscription in `starbridge-v2`) is the named follow-on at the
+//! foot of `src/receipt_stream.rs`.
+//!
 //! ## What is real vs. the seam
 //!
 //! - **Real (the cap discipline + attestation):** the `Capability{
@@ -131,6 +152,7 @@
 pub mod affordance;
 pub mod delegate;
 pub mod game;
+pub mod receipt_stream;
 pub mod rehydrate;
 pub mod transclusion;
 pub mod vision_predicate;
@@ -177,6 +199,19 @@ pub use world::{
     GameWorld, Lobby, MembraneNegotiation, NegotiationError, SpectatorGrant, SpectatorScope,
     SpectatorSession,
 };
+// The LIVE receipt-stream primitive — a surface subscribes to the node's
+// committing `/api/events/stream` receipt feed and reflects it LIVE (the "cockpit
+// goes LIVE" foundation). [`ReceiptStream`] verifies each frame (in-order +
+// un-forged via the real [`dregg_turn::TurnReceipt::receipt_hash`] + the
+// [`dregg_types::AttestedRoot`] receipt-stream binding), advances a resume
+// [`Cursor`], and yields [`StreamedReceipt`]s (the `WorldEvent`-shaped item). The
+// async `Stream` edge ([`ReceiptStreamPoll`], `stream` feature) is what the
+// cockpit's gpui executor `.await`s.
+pub use receipt_stream::{
+    Admitted, Cursor, IngestError, ReceiptEnvelope, ReceiptStream, StreamedReceipt,
+};
+#[cfg(feature = "stream")]
+pub use receipt_stream::ReceiptStreamPoll;
 pub use vision_predicate::{
     register_vision_verifier, verify_vision_proof, FogVisionProducer, FogVisionVerifier,
     VisionKeypair, VisionProgram,

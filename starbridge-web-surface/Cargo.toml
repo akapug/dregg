@@ -93,6 +93,36 @@ dregg-turn = { path = "../turn" }
 # surface, just naming it directly.
 blake3 = "1"
 
+# The REAL receipt-row wire shape the node's `/api/events/stream` serves. The
+# `ReceiptStream` primitive (`src/receipt_stream.rs`) consumes EXACTLY
+# `dregg_query::client::ReceiptEventRow` — the crate's already-canonical,
+# transport-agnostic mirror of `node/src/events.rs::ReceiptEvent` (chain_index +
+# receipt_hash + height + cells + kinds). We NAME that receipt-row shape, never
+# reinvent a parallel one; this leaf crate carries no HTTP/async dep itself
+# (exactly the discipline this stream mirrors).
+dregg-query = { path = "../dregg-query" }
+
+# Parse the SSE frame's JSON `data:` payload (the full `ReceiptEvent` envelope,
+# whose `receipt` field is the canonical `dregg_turn::TurnReceipt` the
+# forge-detection re-hashes). The SAME `serde` / `serde_json` `dregg-query`
+# already pulls — no new lockfile surface.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The async `Stream` trait — `futures_core` ONLY (the tiny, runtime-agnostic
+# trait crate, already in the root workspace lock; NOT tokio, NOT an executor).
+# Gated behind the default `stream` feature so the cockpit's gpui async-executor
+# can `.await` a `ReceiptStream` (driving `Stream::poll_next`), while the pure
+# `ingest` verification state machine stays executor-free + always testable. This
+# leaf crate stays transport-and-runtime-agnostic, exactly like `dregg-query`.
+futures-core = { version = "0.3", optional = true }
+
+[features]
+default = ["stream"]
+# The `futures_core::Stream` impl over the receipt feed (the cockpit-async edge).
+# Off → the pure pull `ReceiptStream::ingest` / `next_ready` state machine only.
+stream = ["dep:futures-core"]
+
 [dev-dependencies]
 # (tests live inline in each module + in `tests/`)
 

@@ -323,6 +323,38 @@ impl WebOfCells {
         DreggUri::new(cell_id)
     }
 
+    /// **Amend** an already-published `dregg://` page: advance the SAME origin cell's
+    /// committed/finalized content to `new_content` (a verified state advance), so a
+    /// transclusion that quotes it re-fetches the NEW finalized value at a NEW height.
+    ///
+    /// This is the "the source finalizes a new height" half of the live quote
+    /// (`DISTRIBUTED-SERVO-FACETS.md §2.2`): unlike [`Self::publish`] (which seeds a
+    /// FRESH origin cell), `amend` re-commits into the EXISTING cell `uri.cell` —
+    /// content commitment (slot 0) updated, nonce bumped (so the serve-receipt is a
+    /// DISTINCT leaf), the node byte store re-pointed, and the federation height
+    /// advanced (a new attestation period). The `dregg://` ref is UNCHANGED (same
+    /// content-addressed cell id) — exactly Nelson's unbreakable link: the citation
+    /// still resolves, but to the source's NEW committed value. Returns the advanced
+    /// federation height.
+    ///
+    /// Refuses (`OriginNotFound`) if the ref was never published.
+    pub fn amend(&mut self, uri: &DreggUri, new_content: &[u8]) -> Result<u64, FetchError> {
+        let new_hash = *blake3::hash(new_content).as_bytes();
+        // Advance the EXISTING origin cell's committed state: re-commit the content
+        // hash (slot 0) and bump the nonce, so the serve-receipt for the new content
+        // is a distinct receipt leaf (a genuine state advance, not a silent overwrite).
+        {
+            let cell = self.ledger.get_mut(&uri.cell).ok_or(FetchError::OriginNotFound)?;
+            cell.state.set_field(CONTENT_COMMITMENT_SLOT, new_hash);
+            cell.state.increment_nonce();
+        }
+        // Re-point the node's out-of-band byte store to the new content (keyed by the
+        // same origin cell), and advance the federation's attestation height.
+        self.replace_bytes(&uri.cell, new_content.to_vec());
+        self.height += 1;
+        Ok(self.height)
+    }
+
     /// **Fetch** a `dregg://` ref: read the origin cell's committed content
     /// commitment, serve the bytes, and wrap them in an [`AttestedResource`] whose
     /// receipt hashes into a genuine quorum-signed [`AttestedRoot`].
@@ -456,6 +488,14 @@ impl WebOfCells {
     fn store_bytes(&mut self, cell: &CellId, bytes: Vec<u8>) {
         self.bytes_store.push((*cell, bytes));
     }
+    /// Replace the node's stored bytes for an existing origin cell (the amend path) —
+    /// `served_bytes` then returns the NEW content. Falls back to a store if absent.
+    fn replace_bytes(&mut self, cell: &CellId, bytes: Vec<u8>) {
+        match self.bytes_store.iter_mut().find(|(c, _)| c == cell) {
+            Some(entry) => entry.1 = bytes,
+            None => self.bytes_store.push((*cell, bytes)),
+        }
+    }
     fn served_bytes(&self, cell: &CellId) -> Option<Vec<u8>> {
         self.bytes_store
             .iter()
@@ -503,6 +543,49 @@ mod tests {
         assert_eq!(chrome.cell, uri.cell);
         assert_eq!(chrome.committed_url.as_deref(), Some("dregg://home"));
         assert!(chrome.finalized);
+    }
+
+    #[test]
+    fn amend_advances_the_same_ref_to_a_new_finalized_value() {
+        // The live-quote source advance: publish a constitution at threshold 3, then
+        // AMEND it to threshold 5. The dregg:// ref is UNCHANGED (same cell), but it
+        // re-fetches the NEW committed value with a fresh, still-verifying attestation
+        // and an advanced height — "the source finalizes a new height".
+        let mut web = WebOfCells::new(3);
+        let v0 = b"constitution: quorum threshold = 3";
+        let uri = web.publish(7, v0, "dregg://constitution");
+
+        let (r0, c0) = web.fetch(&uri).expect("v0 fetch");
+        assert_eq!(r0.content_bytes, v0);
+        assert!(r0.verify().is_ok(), "v0 attestation verifies");
+        assert!(c0.finalized);
+        let receipt_v0 = r0.receipt_hash;
+        let h0 = web.height;
+
+        // Amend the SAME source cell to the new threshold (a verified state advance).
+        let v1 = b"constitution: quorum threshold = 5";
+        let new_height = web.amend(&uri, v1).expect("amend resolves");
+        assert!(new_height > h0, "the federation height advanced");
+
+        // The SAME dregg:// ref now resolves to the NEW finalized value (the
+        // unbreakable link: same citation, advanced source).
+        let (r1, c1) = web.fetch(&uri).expect("v1 fetch (same ref)");
+        assert_eq!(r1.content_bytes, v1, "the quote now shows the amended value");
+        assert_ne!(r1.content_hash, r0.content_hash, "a new content commitment");
+        assert!(r1.verify().is_ok(), "v1 attestation still verifies (recomputable)");
+        assert!(c1.finalized);
+        // The serve-receipt advanced (nonce bumped) — a DISTINCT cited receipt, so a
+        // holder of the v0 quote can SEE the source moved (no silent live read).
+        assert_ne!(r1.receipt_hash, receipt_v0, "the cited receipt advanced");
+    }
+
+    #[test]
+    fn amend_of_an_unpublished_ref_is_origin_not_found() {
+        let mut web = WebOfCells::new(3);
+        let mut k = [0u8; 32];
+        k[0] = 88;
+        let dead = DreggUri::new(CellId::derive_raw(&k, &[0u8; 32]));
+        assert_eq!(web.amend(&dead, b"x"), Err(FetchError::OriginNotFound));
     }
 
     #[test]
