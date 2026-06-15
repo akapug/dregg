@@ -55,7 +55,7 @@ QEMU_DISPLAY ?= cocoa,show-cursor=on
         build-assembly-real run-assembly-real \
         build-aarch64 build-assembly build-riscv build-graphical run-graphical \
         run-graphical-headless build-tutorial run-tutorial run-tutorial-headless \
-        build-image run-image run-image-headless \
+        build-image run-image run-image-headless capture-image-modes \
         verify-isolation clean help
 
 help:
@@ -74,6 +74,7 @@ help:
 	@echo "  make run-tutorial-headless  — same image, -display none, for screendump capture"
 	@echo "  make run-image    — boot the deos LIVE IMAGE VIEWER: a live object browser of REAL cells"
 	@echo "  make run-image-headless     — same image, -display none, for screendump capture"
+	@echo "  make capture-image-modes    — boot headless, screendump BOTH modes (image + TAB->gpui cockpit)"
 	@echo "  make run-riscv    — boot M0 on qemu_virt_riscv64 (M5)"
 
 all: build-aarch64
@@ -365,6 +366,16 @@ run-image-headless: build-image
 		-device virtio-keyboard-device,bus=virtio-mmio-bus.30 \
 		-device loader,file=$(BUILD)/deos-image.img,addr=0x70000000,cpu-num=0 \
 		-serial mon:stdio
+
+# EVIDENCE CAPTURE — boot the image headless, drive the virtio-keyboard over QMP,
+# and screendump BOTH modes to PNG: the LIVE IMAGE (the cell browser) and — after
+# a QMP `send-key TAB` — the starbridge-v2 COCKPIT (the REAL gpui render, lavapipe
+# / no GPU, baked into the PD and blitted onto the ramfb framebuffer QEMU scans
+# out — docs/desktop-os-research/GPUI-OFFSCREEN-FORK.md). Writes
+# /tmp/sel4-cockpit-{image,cockpit}-mode.png. This is the gpui->seL4-framebuffer
+# weld's reproducible proof.
+capture-image-modes: build-image
+	python3 scripts/capture-cockpit-mode.py
 
 # ── M5: M0 on riscv64 ───────────────────────────────────────────────────────
 run-riscv: build-riscv
