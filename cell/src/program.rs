@@ -1565,6 +1565,60 @@ pub enum StateConstraint {
     /// `anyOfBound_stripped_proof_branch_fails`. APPEND-ONLY (postcard variant
     /// indices preserved — factory VKs / content addresses byte-identical, §2).
     AnyOfBound { branches: Vec<BoundBranch> },
+
+    // ─── TYPED dig/sym FIELD ATOMS (the identity / ownership / enum rung,
+    //     mirroring the Lean `PredAlgebra` typed atoms `symEq`/`symMemberOf`/
+    //     `digEq`/`digFieldEq`, `metatheory/Dregg2/Exec/PredAlgebra.lean`).
+    //
+    //     THE TYPE-ERASURE SEAM (honest): the Lean `Value` model distinguishes
+    //     three leaves — `.int` (a scalar), `.sym` (an interned identity / enum
+    //     case), `.dig` (a digest / cell-reference) — and these atoms read a
+    //     field BY PROPER TYPE so an ownership-by-digest policy cannot be fooled
+    //     by a coincident scalar word. The dregg1 8-slot substrate here has NO
+    //     such distinction: every slot is one untyped `FieldElement` ([u8;32]).
+    //     So in THIS model a `sym` IS the u64 lane (`field_to_u64`, exactly what
+    //     `MemberOf` already reads) and a `dig` IS the full 32-byte field
+    //     (exactly what `FieldEquals`/`Immutable` already compare). The typed
+    //     atoms therefore carry the Lean atom's INTENT (which leaf the policy
+    //     author means) and the lane the read uses; where the lane already
+    //     coincides with an existing untyped atom the evaluation is identical
+    //     (documented per-variant). The one GENUINELY-NEW capability the untyped
+    //     catalog lacked is `DigFieldEq` — a FULL 32-byte cross-slot equality
+    //     (owner-match), which `FieldLteField` (a u64-lane ORDERING) cannot
+    //     express. APPEND-ONLY (postcard variant indices of all prior variants
+    //     preserved — factory VKs / content addresses byte-identical, §2). ───
+    /// **`SymEq`** — `field_to_u64(new[index]) == sym`: the field's interned
+    /// identity (the u64 lane) equals `sym`. Mirrors Lean `Pred.symEq`. In the
+    /// untyped substrate this reads the SAME u64 lane as [`Self::MemberOf`] over a
+    /// singleton; it names the SYMBOL intent (an identity / enum case, not an
+    /// orderable scalar). Admit-char (Lean): `Pred.symEq_iff`.
+    SymEq { index: u8, sym: u64 },
+
+    /// **`SymMemberOf`** — `field_to_u64(new[index]) ∈ set`: enum membership by
+    /// the symbol lane ("`status ∈ {Draft, Active, Frozen}`"). Mirrors Lean
+    /// `Pred.symMemberOf`. Reads the SAME u64 lane as [`Self::MemberOf`]; the
+    /// distinct variant records that the values are interned ENUM CASES (a
+    /// symbol set), which is what the toy-gap fix is about — an enum over
+    /// identities, not coercible integers. Admit-char (Lean): `Pred.symMemberOf_iff`.
+    SymMemberOf { index: u8, set: Vec<u64> },
+
+    /// **`DigEq`** — `new[index] == digest` as a FULL 32-byte field: the field's
+    /// digest / cell-reference equals `digest`. Mirrors Lean `Pred.digEq`. In the
+    /// untyped substrate this is the full-field compare [`Self::FieldEquals`]
+    /// already performs; the distinct variant names the DIGEST intent (a
+    /// commitment / cell-ref pinned by its whole hash, not its low word).
+    /// Admit-char (Lean): `Pred.digEq_iff`.
+    DigEq { index: u8, digest: FieldElement },
+
+    /// **`DigFieldEq`** — `new[left_index] == new[right_index]` as FULL 32-byte
+    /// fields: two digest slots are equal. THE owner-match tooth (`DigFieldEq {
+    /// left = sender_slot, right = owner_slot }` is "only the owner may act"); a
+    /// surrounding [`SimpleStateConstraint::Not`]/disjunction gives the
+    /// no-self-transfer "from ≠ to". Mirrors Lean `Pred.digFieldEq`. THIS is the
+    /// genuinely-new capability the untyped catalog lacked: [`Self::FieldLteField`]
+    /// compares slots as a u64-lane ORDERING (`<=`), never as a full-digest
+    /// EQUALITY. Admit-char (Lean): `Pred.digFieldEq_iff`.
+    DigFieldEq { left_index: u8, right_index: u8 },
 }
 
 /// A per-element decision predicate over the felt fields of one collection
@@ -3134,6 +3188,59 @@ fn evaluate_constraint_full(
             )
         }
 
+        // ─── TYPED dig/sym field atoms (mirrors Lean `PredAlgebra` typed atoms) ───
+        // The untyped 8-slot substrate has no leaf-type distinction: a `sym` is
+        // the u64 lane (`field_to_u64`), a `dig` is the full 32-byte field. So the
+        // sym/dig EQUALITY/MEMBERSHIP arms read the appropriate lane; `DigFieldEq`
+        // is the genuinely-new full-field cross-slot equality (owner-match).
+        StateConstraint::SymEq { index, sym } => {
+            let idx = check_index(*index)?;
+            let v = field_to_u64(&new_state.fields[idx]);
+            if v != *sym {
+                return violated(constraint, format!("sym field[{idx}] = {v} != {sym}"));
+            }
+            Ok(())
+        }
+
+        StateConstraint::SymMemberOf { index, set } => {
+            let idx = check_index(*index)?;
+            let v = field_to_u64(&new_state.fields[idx]);
+            if !set.contains(&v) {
+                return violated(
+                    constraint,
+                    format!("sym field[{idx}] = {v} not in enum set"),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::DigEq { index, digest } => {
+            let idx = check_index(*index)?;
+            // Full 32-byte digest equality (NOT the u64 lane): a cell-reference /
+            // commitment is pinned by its whole hash.
+            if new_state.fields[idx] != *digest {
+                return violated(constraint, format!("dig field[{idx}] != expected digest"));
+            }
+            Ok(())
+        }
+
+        StateConstraint::DigFieldEq {
+            left_index,
+            right_index,
+        } => {
+            let left = check_index(*left_index)?;
+            let right = check_index(*right_index)?;
+            // Full 32-byte cross-slot equality — the owner-match tooth. Distinct
+            // from `FieldLteField` (a u64-lane ordering): this is digest EQUALITY.
+            if new_state.fields[left] != new_state.fields[right] {
+                return violated(
+                    constraint,
+                    format!("dig field[{left}] != dig field[{right}] (owner-match failed)"),
+                );
+            }
+            Ok(())
+        }
+
         // ─── Policy-combinator core (mirrors Lean `Exec.Program`) ───
         StateConstraint::MemberOf { index, set } => {
             let idx = check_index(*index)?;
@@ -4502,6 +4609,16 @@ pub enum StateConstraintView {
     /// it is the cheap no-proof leg or a witnessed cross-cell read naming its
     /// own proof blob.
     AnyOfBound { branches: Vec<BoundBranchView> },
+    /// `field_to_u64(new[index]) == sym` — the symbol-lane identity equality.
+    SymEq { index: u8, sym: u64 },
+    /// `field_to_u64(new[index]) ∈ set` — enum membership over the symbol lane.
+    SymMemberOf { index: u8, set: Vec<u64> },
+    /// `new[index] == digest` (full 32-byte field) — digest equality. `digest`
+    /// is surfaced hex-encoded like every other [`FieldElement`] view.
+    DigEq { index: u8, digest: String },
+    /// `new[left_index] == new[right_index]` (full 32-byte fields) — the
+    /// digest cross-slot equality (owner-match).
+    DigFieldEq { left_index: u8, right_index: u8 },
 }
 
 /// [`BoundBranch`] view (nested in [`StateConstraintView::AnyOfBound`]). The
@@ -5103,6 +5220,25 @@ impl StateConstraint {
             },
             StateConstraint::AnyOfBound { branches } => StateConstraintView::AnyOfBound {
                 branches: branches.iter().map(|b| b.to_view()).collect(),
+            },
+            StateConstraint::SymEq { index, sym } => StateConstraintView::SymEq {
+                index: *index,
+                sym: *sym,
+            },
+            StateConstraint::SymMemberOf { index, set } => StateConstraintView::SymMemberOf {
+                index: *index,
+                set: set.clone(),
+            },
+            StateConstraint::DigEq { index, digest } => StateConstraintView::DigEq {
+                index: *index,
+                digest: view_hex(digest),
+            },
+            StateConstraint::DigFieldEq {
+                left_index,
+                right_index,
+            } => StateConstraintView::DigFieldEq {
+                left_index: *left_index,
+                right_index: *right_index,
             },
         }
     }
@@ -7955,6 +8091,28 @@ mod tests {
                 },
                 "AnyOfBound",
             ),
+            (StateConstraint::SymEq { index: 0, sym: 7 }, "SymEq"),
+            (
+                StateConstraint::SymMemberOf {
+                    index: 0,
+                    set: vec![0, 1, 2],
+                },
+                "SymMemberOf",
+            ),
+            (
+                StateConstraint::DigEq {
+                    index: 0,
+                    digest: [9u8; 32],
+                },
+                "DigEq",
+            ),
+            (
+                StateConstraint::DigFieldEq {
+                    left_index: 0,
+                    right_index: 1,
+                },
+                "DigFieldEq",
+            ),
         ];
 
         // COVERAGE TOOTH: this match must name every variant exactly once.
@@ -8014,7 +8172,11 @@ mod tests {
                 | StateConstraint::AffineDeltaLe { .. }
                 | StateConstraint::ObservedFieldEquals { .. }
                 | StateConstraint::CollectionAggregate { .. }
-                | StateConstraint::AnyOfBound { .. } => {}
+                | StateConstraint::AnyOfBound { .. }
+                | StateConstraint::SymEq { .. }
+                | StateConstraint::SymMemberOf { .. }
+                | StateConstraint::DigEq { .. }
+                | StateConstraint::DigFieldEq { .. } => {}
             }
         }
 
