@@ -17,9 +17,17 @@
 > forwarding to `dregg-circuit/recursion`); (2) the workspace `exclude` was missing recently-added in-tree
 > separate `[workspace]` roots (`starbridge-web-surface`/`starbridge-v2`/`deos-leptos`/`deos-web-cells`/
 > `servo-render`/`dregg-tui`) — "multiple workspace roots" broke workspace-wide cargo; added to `exclude`.
-> Named residue: the standalone `dregg-verifier` has no rotated replay-chain verify yet (its v1 verify is a
-> fail-closed stub under recursion — a separate lane, like the wasm-rotated Option-A). Gates GREEN on
-> persvati: `cargo build --features recursion -p {circuit,sdk,turn,node}` (exit 0) + `cargo test --features
+> ~~Named residue: the standalone `dregg-verifier` has no rotated replay-chain verify yet.~~ **✅ CLOSED:**
+> the rotated replay-chain verify is now LIVE (`verifier/src/rotated_replay.rs`): under `recursion` a chain
+> of `"effect-vm-rotated"` IR-v2 legs is verified via the audited `descriptor_ir2::verify_vm_descriptor2`
+> (selector-bound + vk_hash-pinned per leg) with the SDK's endpoint+adjacency chain check, plus the
+> `rotated-replay-chain` CLI subcommand. The `not(recursion)` v1 floor (`verify_effect_vm_proof` /
+> `replay_one_with_prev` / the v1 `replay-chain` subcommand + `integration_replay_chain.rs`) is UNCHANGED
+> and STAYS; under `recursion` those v1 entries remain fail-closed (no silent skip) and point callers at the
+> rotated path. Anti-ghost teeth bite (`integration_rotated_replay_chain.rs`): a forged proof byte / tampered
+> vk_hash / wrong-root endpoint / spliced chain are each REJECTED; a real single-leg + a real heterogeneous
+> 2-leg chain VERIFY. (The wasm-rotated Option-A stays a separate ember-decision lane — unrelated.) Gates GREEN
+> on persvati: `cargo build --features recursion -p {circuit,sdk,turn,node}` (exit 0) + `cargo test --features
 > recursion --no-run -p …` (exit 0) + circuit `not(recursion)` floor (exit 0). The steps below are the
 > historical plan (kept for the audit trail).
 

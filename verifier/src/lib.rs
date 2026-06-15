@@ -23,8 +23,15 @@
 //! (`"dregg-effect-vm-v1"`), identified by its 32-byte SHA-256 of the AIR name.
 //! Future versions will support additional cell programs by VK hash lookup.
 
+// The v1 hand-AIR STARK surface (`stark::{verify, proof_from_bytes}`, the `StarkAir`
+// width trait) is the `not(recursion)` floor only; under `recursion` the v1 single-proof
+// verify fails closed and the ROTATED path (`rotated_replay`) is live, so these are absent.
+#[cfg(not(feature = "recursion"))]
 use dregg_circuit::stark::StarkAir;
+#[cfg(not(feature = "recursion"))]
 use dregg_circuit::{field::BabyBear, stark};
+#[cfg(feature = "recursion")]
+use dregg_circuit::field::BabyBear;
 #[cfg(not(feature = "recursion"))]
 use dregg_circuit::EffectVmAir;
 use serde::{Deserialize, Serialize};
@@ -32,8 +39,18 @@ use serde::{Deserialize, Serialize};
 pub mod aggregated_bundle;
 pub mod bilateral_pair;
 pub mod cross_fed;
+/// Rotated replay-chain verify — the recursion-build replacement for the v1
+/// `replay_chain` (the v1 hand-AIR is retired under `recursion`). Verifies a chain
+/// of `"effect-vm-rotated"` IR-v2 legs via the audited `verify_vm_descriptor2`.
+#[cfg(feature = "recursion")]
+pub mod rotated_replay;
 pub use aggregated_bundle::{
     AggregatedBundleVerdict, verify_aggregated_bundle_json, verify_aggregated_bundle_struct,
+};
+#[cfg(feature = "recursion")]
+pub use rotated_replay::{
+    RotatedChainOutput, RotatedReplayLeg, RotatedReplayVerdict, verify_rotated_leg,
+    verify_rotated_replay_chain,
 };
 pub use bilateral_pair::{
     BilateralBundle, BilateralEntry, BilateralVerdict, fabricate_witnessed_receipt,
@@ -131,10 +148,14 @@ pub const AUTO_DETECT_VK_HASH: &str = "auto";
 ///
 /// Returns `VerifierOutput` and the corresponding exit code.
 ///
-/// RECURSION STUB: this is the v1 hand-AIR (`EffectVmAir`) replay-chain verify, retained under
-/// `not(recursion)`. The recursion build retires the v1 verifier; a rotated replay-chain verify
-/// (via `descriptor_ir2::verify_vm_descriptor2`) is a separate lane not yet built, so under
-/// `recursion` this fails closed rather than verify a v1 proof.
+/// RECURSION FENCE: this is the v1 hand-AIR (`EffectVmAir`) single-proof verify, retained under
+/// `not(recursion)` as the v1 floor. The recursion build retires the v1 hand-AIR, so this fails
+/// closed (honest rejection, not a silent skip). The rotated replacement is no longer "a separate
+/// lane": under `recursion` a rotated chain is verified by
+/// [`rotated_replay::verify_rotated_replay_chain`] (the `"effect-vm-rotated"` IR-v2 legs via the
+/// audited `descriptor_ir2::verify_vm_descriptor2`). This entry stays fenced because a SINGLE v1
+/// STARK proof has no rotated single-proof analog — the rotated unit is a chain leg, verified
+/// through that path.
 #[cfg(feature = "recursion")]
 pub fn verify_effect_vm_proof(
     proof_bytes: &[u8],
@@ -144,8 +165,8 @@ pub fn verify_effect_vm_proof(
     let _ = (proof_bytes, public_inputs_u32, vk_hash_hex);
     (
         VerifierOutput::reject(
-            "v1 Effect VM STARK verification is retired under the recursion build; the rotated \
-             replay-chain verify (verify_vm_descriptor2) is a separate lane"
+            "v1 Effect VM STARK verification is retired under the recursion build; verify a \
+             rotated chain via rotated_replay::verify_rotated_replay_chain instead"
                 .to_string(),
         ),
         exit_code::ERROR,
@@ -750,8 +771,8 @@ fn replay_one_with_prev(
     {
         let _ = (&trace_bb, &pi_bb, trace_len, alphas);
         ReplayVerdict::Rejected {
-            reason: "v1 hand-AIR replay-chain verification is retired under the recursion build \
-                     (the rotated replay-chain verify is a separate lane)"
+            reason: "v1 hand-AIR replay-chain verification is retired under the recursion build; \
+                     verify a rotated chain via rotated_replay::verify_rotated_replay_chain"
                 .to_string(),
         }
     }

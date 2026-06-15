@@ -34,8 +34,10 @@ postcard = { version = "1", features = ["alloc"] }
 # which default to it): native builds compile the ROTATED stack, so the v1 hand-AIR (`EffectVmAir`)
 # is absent. It forwards to `dregg-circuit/recursion` so this crate's own `#[cfg(feature =
 # "recursion")]` gates align with the circuit's recursion state. The standalone v1 replay-chain
-# verify (`verify_effect_vm_proof` / `replay_one_with_prev`) is `not(recursion)`-only; a rotated
-# replay-chain verify is a separate lane (the verifier's rotated path is not yet built).
+# verify (`verify_effect_vm_proof` / `replay_one_with_prev`) is `not(recursion)`-only (the v1 floor);
+# under `recursion` it fails closed and the ROTATED replay-chain verify
+# (`rotated_replay::verify_rotated_replay_chain`, the `"effect-vm-rotated"` IR-v2 legs verified via
+# the audited `descriptor_ir2::verify_vm_descriptor2`) is the live path.
 default = ["recursion"]
 recursion = ["dregg-circuit/recursion"]
 
