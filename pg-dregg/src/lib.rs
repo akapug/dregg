@@ -685,6 +685,33 @@ mod pg {
             .to_string()
     }
 
+    /// `dregg_install_invariants() -> text`. Declare the DECLARED-BUT-SPINE-ENFORCED
+    /// state invariants on `dregg.cells` using two pg18-new constraint forms
+    /// (`docs/PG-DREGG-PG18.md` §13.1): `CHECK (...) NOT ENFORCED` for the
+    /// non-negativity / projection-agreement floor the verified turn already
+    /// guarantees (declared for legibility, NOT enforced so pg never fights the
+    /// verified writer), and `ADD CONSTRAINT ... NOT NULL ... NOT VALID` +
+    /// `VALIDATE CONSTRAINT` for the lock-light way to pin a named NOT NULL
+    /// constraint on the already-populated live mirror without an
+    /// `ACCESS EXCLUSIVE` full-table scan. Requires [`dregg_install_schema`] first
+    /// (the `dregg.cells` table must exist). Idempotent (each constraint is added
+    /// only if absent). PostgreSQL 18+ (both constraint forms are pg18 features).
+    /// Run by a DBA/migration role (it `ALTER`s the kernel-owned `dregg.cells`).
+    #[pg_extern]
+    fn dregg_install_invariants() -> String {
+        let ddl = crate::mirror::ddl::invariants();
+        Spi::run(&ddl).expect(
+            "dregg_install_invariants: invariants DDL failed (needs PostgreSQL 18 — the \
+             CHECK NOT ENFORCED + NOT NULL NOT VALID forms are pg18 features — and \
+             dregg_install_schema must have created dregg.cells first)",
+        );
+        "dregg state invariants declared on dregg.cells (pg18): CHECK NOT ENFORCED \
+         (balance/nonce non-negativity + fields_json↔balance agreement, documented \
+         not double-enforced) + a NOT NULL NOT VALID/VALIDATE named constraint on \
+         cell_root (the lock-light migration form)"
+            .to_string()
+    }
+
     /// `dregg_attest_window(lo bigint, hi bigint) RETURNS SETOF (ordinal bigint,
     /// prev_root bytea, ledger_root bytea, proof_attested bool)`. The S2-fed face of
     /// the Tier-C proof gate: instead of taking the proof bytes as an argument (the

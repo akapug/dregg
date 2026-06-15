@@ -927,6 +927,49 @@ pub mod ddl {
         TURN_PROOFS.to_string()
     }
 
+    /// DECLARED-BUT-SPINE-ENFORCED invariants on the materialized state, using two
+    /// pg18 constraint features (`docs/PG-DREGG-PG18.md` §13.1) — the lock-light,
+    /// non-enforcing way to make the verified turn's guarantees LEGIBLE to schema
+    /// tooling, `\d dregg.cells`, and an auditor, WITHOUT the database re-deciding
+    /// (or worse, *fighting*) the verified writer.
+    ///
+    /// Two pg18-new constraint forms, each chosen for a stated reason:
+    ///
+    /// * **`CHECK (...) NOT ENFORCED`** (pg18; Amul Sul) — declares the
+    ///   non-negativity / well-formedness invariants the spine ALREADY guarantees
+    ///   (a materialized balance is never negative; a nonce is never negative; the
+    ///   `fields_json.balance` projection agrees with the `balance` column). The
+    ///   enforcer is the verified TURN (the executor's transition function +
+    ///   conservation), NOT postgres — so the constraint is `NOT ENFORCED`: it is a
+    ///   *documented, machine-readable* invariant the catalog now carries, but pg
+    ///   does not pay a per-write CHECK and (crucially) cannot REFUSE a verified
+    ///   post-image that some future legitimate turn shape produces. Enforcing it in
+    ///   pg would be a SECOND, weaker authority fighting the spine — exactly the
+    ///   double-enforcement anti-pattern (`docs/PG-DREGG.md` §8). Declaring it
+    ///   `NOT ENFORCED` is the honest pg18 idiom: the invariant lives in the catalog
+    ///   as documentation + a target a DBA can later `ALTER ... ENFORCED` to spot-audit.
+    ///
+    /// * **`ADD CONSTRAINT ... NOT NULL ... NOT VALID` + `VALIDATE CONSTRAINT`**
+    ///   (pg18; Rushabh Lathia, Jian He) — the LOCK-LIGHT migration path for adding
+    ///   a NOT NULL constraint to the ALREADY-POPULATED `dregg.cells` without an
+    ///   `ACCESS EXCLUSIVE` full-table scan blocking the live read path. pg18 lets a
+    ///   NOT NULL constraint be added `NOT VALID` (a brief lock to record it, no
+    ///   scan), after which a separate `VALIDATE CONSTRAINT` checks existing rows
+    ///   under a weaker `SHARE UPDATE EXCLUSIVE` lock that does not block reads or
+    ///   the mirror's writes. Here it pins `cell_root` NOT NULL as a named table
+    ///   constraint (the column is already NOT NULL at CREATE, but a named
+    ///   constraint is what an auditor references and what a future column would be
+    ///   added through) — demonstrating the exact pre-18-impossible two-step on a
+    ///   live mirror.
+    ///
+    /// Builds on [`tier_b`] (the `dregg.cells` table must exist). Idempotent: each
+    /// constraint is added only if absent (a `DO` block guarded on the catalog), so
+    /// re-running is safe and a fresh install validates against an empty table
+    /// instantly. Run by a DBA/migration role (it `ALTER`s a kernel-owned table).
+    pub fn invariants() -> String {
+        INVARIANTS.to_string()
+    }
+
     /// The WRITE-path outbox (`docs/PG-DREGG.md` §11; the first-class
     /// bidirectional piece). A pg-user submits a SIGNED turn FROM postgres by
     /// enqueuing it here through `dregg.submit_turn`; the node tails the queue,
@@ -1141,6 +1184,62 @@ CREATE TABLE IF NOT EXISTS dregg.turns (
     committed_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS turns_by_height  ON dregg.turns (height);
 CREATE INDEX IF NOT EXISTS turns_by_creator ON dregg.turns (creator, ordinal);
+"#;
+
+    // DECLARED-BUT-SPINE-ENFORCED invariants (docs/PG-DREGG-PG18.md §13.1), using
+    // two pg18-new constraint forms. These make the verified turn's guarantees
+    // legible to the catalog / `\d` / an auditor WITHOUT pg re-deciding or fighting
+    // the verified writer. See `ddl::invariants()` for the rationale of each.
+    //
+    // Each ALTER is wrapped in a DO block guarded on pg_constraint so the whole
+    // thing is idempotent (re-running adds nothing) and a missing pg18 server
+    // surfaces a clear error rather than a half-applied state.
+    const INVARIANTS: &str = r#"
+-- (1) NON-NEGATIVITY + PROJECTION-AGREEMENT as pg18 `CHECK ... NOT ENFORCED`.
+-- The verified TURN already guarantees these (the executor's transition function
+-- + conservation); we DECLARE them so the catalog documents the floor, but mark
+-- them NOT ENFORCED so pg pays no per-write CHECK and never REFUSES a verified
+-- post-image (the spine is the single enforcer — double-enforcement is the
+-- anti-pattern, docs/PG-DREGG.md §8). A DBA may later `ALTER ... ENFORCED` to run
+-- a one-off audit, or `VALIDATE` it, without changing the write path.
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cells_balance_nonneg') THEN
+        ALTER TABLE dregg.cells
+            ADD CONSTRAINT cells_balance_nonneg CHECK (balance >= 0) NOT ENFORCED;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cells_nonce_nonneg') THEN
+        ALTER TABLE dregg.cells
+            ADD CONSTRAINT cells_nonce_nonneg CHECK (nonce >= 0) NOT ENFORCED;
+    END IF;
+    -- The canonical/derived agreement: the read-side `fields_json.balance`
+    -- projection must equal the authoritative `balance` column. A turn produces
+    -- both consistently; declaring it NOT ENFORCED documents the projection
+    -- contract the §4 generated-column `balance_field` rests on.
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cells_fields_balance_agree') THEN
+        ALTER TABLE dregg.cells
+            ADD CONSTRAINT cells_fields_balance_agree
+            CHECK (fields_json IS NULL OR (fields_json->>'balance')::bigint = balance) NOT ENFORCED;
+    END IF;
+END $$;
+
+-- (2) `cell_root` NOT NULL as a pg18 `NOT VALID` named constraint, then VALIDATE.
+-- The column is already NOT NULL at CREATE, but a NAMED constraint is what an
+-- auditor references and what a future added column would be onboarded through.
+-- pg18 lets a NOT NULL constraint be added NOT VALID (a brief lock to RECORD it,
+-- no full-table scan) and then VALIDATEd under a weaker lock that does not block
+-- the live read path or the mirror's writes — the pre-18-impossible lock-light
+-- two-step, demonstrated on the live, already-populated mirror.
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cells_cell_root_present') THEN
+        -- Step A: add NOT VALID — brief lock, no scan (pg18 NOT NULL NOT VALID).
+        ALTER TABLE dregg.cells
+            ADD CONSTRAINT cells_cell_root_present NOT NULL cell_root NOT VALID;
+        -- Step B: VALIDATE existing rows under SHARE UPDATE EXCLUSIVE (reads + the
+        -- mirror's writes proceed). On a fresh install the table is empty, so this
+        -- is instant; on a large live mirror it does not block the read path.
+        ALTER TABLE dregg.cells VALIDATE CONSTRAINT cells_cell_root_present;
+    END IF;
+END $$;
 "#;
 
     // The cells table carries GENERATED COLUMNS for the canonical derived state
@@ -2411,6 +2510,56 @@ mod tests {
         let sql = ddl::tier_c();
         assert!(sql.contains("CREATE OR REPLACE VIEW dregg.turn_effects"));
         assert!(sql.contains("JSON_TABLE(cl.cells, '$[*]'"));
+    }
+
+    /// The pg18 INVARIANTS DDL is emittable and uses BOTH pg18-new constraint
+    /// forms (docs/PG-DREGG-PG18.md §13.1): `CHECK ... NOT ENFORCED` (declared,
+    /// not double-enforced) for the non-negativity/projection floor the spine
+    /// guarantees, and `ADD CONSTRAINT ... NOT NULL ... NOT VALID` + `VALIDATE
+    /// CONSTRAINT` (the lock-light migration form) for a named cell_root NOT NULL.
+    /// Idempotent (every ALTER is guarded on pg_constraint).
+    #[test]
+    fn invariants_ddl_uses_the_pg18_constraint_forms() {
+        let sql = ddl::invariants();
+        // (1) the pg18 CHECK ... NOT ENFORCED form — declared, NOT double-enforced.
+        assert!(
+            sql.contains("CHECK (balance >= 0) NOT ENFORCED"),
+            "balance non-negativity declared as a pg18 NOT ENFORCED check"
+        );
+        assert!(
+            sql.contains("CHECK (nonce >= 0) NOT ENFORCED"),
+            "nonce non-negativity declared as a pg18 NOT ENFORCED check"
+        );
+        // The projection-agreement invariant (fields_json.balance == balance).
+        assert!(sql.contains("cells_fields_balance_agree"));
+        assert!(sql.contains("NOT ENFORCED"));
+        // CRUCIAL: the spine is the enforcer, so NO constraint may be APPLIED as
+        // ENFORCED. A `) ENFORCED` clause (without the NOT) would mean pg re-decides
+        // the verified writer — the double-enforcement anti-pattern. The applied
+        // form is always `) NOT ENFORCED`; assert the bare `) ENFORCED` never
+        // appears. (The word "ENFORCED" does occur in an explanatory comment about
+        // `ALTER ... ENFORCED` to spot-audit, which is documentation, not a clause —
+        // so we check the constraint-clause shape, not the bare word.)
+        assert!(
+            !sql.contains(") ENFORCED"),
+            "no constraint may be APPLIED as ENFORCED — the verified turn is the single enforcer"
+        );
+        // (2) the pg18 NOT NULL ... NOT VALID + VALIDATE lock-light migration form.
+        assert!(
+            sql.contains("ADD CONSTRAINT cells_cell_root_present NOT NULL cell_root NOT VALID"),
+            "cell_root pinned via the pg18 NOT NULL NOT VALID form (brief lock, no scan)"
+        );
+        assert!(
+            sql.contains("VALIDATE CONSTRAINT cells_cell_root_present"),
+            "the NOT VALID constraint is then VALIDATEd (the lock-light second step)"
+        );
+        // Idempotence: each ALTER is guarded on the catalog so re-running is safe.
+        assert!(sql.contains("FROM pg_constraint WHERE conname ="));
+        assert_eq!(
+            sql.matches("DO $$ BEGIN").count(),
+            2,
+            "two guarded DO blocks: the NOT ENFORCED checks, and the NOT VALID/VALIDATE step"
+        );
     }
 
     /// ANTI-DRIFT: the committed `sql/schema-tierB.sql` and the Rust DDL emitter

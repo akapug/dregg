@@ -26,16 +26,32 @@
 //!   5. `mirror_serde/*` — the `MirrorBatch` wire codec (postcard-free here: the
 //!      serde_json + bincode-shaped round-trip the node↔pg boundary pays per turn)
 //!      and `cells_json` (the Tier-C trigger payload the gate consumes).
+//!   6. `workflow/*` — the END-TO-END DBOS-shaped path: a full durable-workflow run
+//!      (every step checkpointed) + the crash→recover→resume cycle.
+//!   7. `gate_vs_handrolled/*` — THE MARKETABLE COMPARISON: the per-row cost of the
+//!      dregg `dregg_admits` decision (`authz::decide`, the real RLS gate, hot LRU)
+//!      vs a HAND-ROLLED policy — the owner/expiry/revoked predicate a developer
+//!      writes by hand (`USING (owner = current_user AND expires > now() AND NOT
+//!      revoked)`), modeled as the equivalent Rust so both are measured on the SAME
+//!      axis. NOT apples-to-apples on GUARANTEES (the hand-rolled ACL is a
+//!      string-compare a bug bypasses; the dregg gate is an unforgeable, attenuable,
+//!      instantly-revocable capability decision) — it answers "what does the per-row
+//!      decision cost, dregg vs naive?" so the overhead of verified authz is legible.
+//!   8. `drain_spine/*` — the WRITE PATH as the node drains it: N intents through the
+//!      real [`Drainer`] / [`FoldProducer`] four-gate spine (SUBMIT re-check → PRODUCE
+//!      → CHAIN → advance), the per-turn cost of the verified-write outbox drain.
 //!
 //! Each is reported as time-per-op AND, where it is a per-row cost, with a
 //! throughput element so the bench prints rows/s directly.
 
+use std::collections::HashSet;
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use dregg_auth::credential::{Caveat, Pred, RootKey};
 use pg_dregg::authz;
+use pg_dregg::drainer::{Drainer, FoldProducer, SubmitIntent};
 use pg_dregg::mirror::{verify_chain_step, MirrorBatch, RootChain};
 use pg_dregg::synth::{self, ALICE, GENESIS_ROOT};
 use pg_dregg::workflow::{
@@ -369,6 +385,209 @@ fn bench_workflow(c: &mut Criterion) {
     g.finish();
 }
 
+// ===========================================================================
+// 7. THE MARKETABLE COMPARISON — dregg_admits vs a hand-rolled SQL policy.
+//
+// The single most-asked question when pitching "dregg capabilities as RLS": what
+// does the verified gate COST versus the owner/expiry/revoked predicate I'd write
+// by hand? This group answers it on the per-row decision axis.
+//
+// The hand-rolled baseline is the Rust equivalent of the policy a developer
+// writes without dregg:
+//     USING (owner_of(resource) = current_user      -- an ACL membership check
+//            AND expires_at > now()                   -- an expiry compare
+//            AND id NOT IN (SELECT id FROM revoked))  -- a revocation lookup
+// i.e. a string/extract + a HashSet membership + an integer compare + a HashSet
+// revocation lookup. That is a fair model of the *work* a hand-rolled SQL RLS
+// predicate does per candidate row (the planner inlines it; the cost is these
+// comparisons, not IPC).
+//
+// The dregg side is `authz::decide(token, "read", resource, now)` with a WARM LRU
+// — the realistic large-scan steady state (the ed25519 chain verify is paid ONCE
+// per token, then each row re-evaluates the first-party caveats off the cached,
+// decoded credential).
+//
+// HONEST FRAMING (stated in the bench output too): this is NOT apples-to-apples on
+// GUARANTEES. The hand-rolled ACL is a plaintext comparison a bug / stale cache /
+// SQL-injection can bypass, with no attenuation and no cryptographic
+// unforgeability; the dregg gate is an unforgeable, attenuable, instantly-revocable
+// capability decision. The comparison isolates the per-row DECISION COST so the
+// overhead of *verified* authz over a *naive* ACL is legible — that overhead is
+// what buys the no-amplification + instant-revocation + unforgeability properties
+// the rest of this crate's tests prove.
+// ===========================================================================
+
+/// The hand-rolled baseline policy: the owner/expiry/revoked predicate a developer
+/// writes by hand, as the equivalent Rust. `owner_acl` is the allow-set the naive
+/// `owner = current_user` check consults; `revoked` is the `NOT IN (revoked)` set.
+/// Returns whether the row is admitted — exactly the bool a hand-coded RLS `USING`
+/// clause returns, doing the same comparisons.
+#[inline]
+fn handrolled_policy(
+    resource: &str,
+    now: i64,
+    not_after: i64,
+    owner_acl: &HashSet<String>,
+    revoked: &HashSet<String>,
+) -> bool {
+    // owner_of(resource): the naive policy derives the row's owner from the
+    // resource id (here its 2-char prefix, the same shape dregg attenuates on).
+    let owner = &resource[..resource.len().min(2)];
+    // owner = current_user (ACL membership) AND expires > now() AND NOT revoked.
+    owner_acl.contains(owner) && now < not_after && !revoked.contains(resource)
+}
+
+fn bench_gate_vs_handrolled(c: &mut Criterion) {
+    let token = fixture_token();
+    let now = 1_000i64;
+    // The SAME 255 distinct cell-id resources `read_projection` scans, so the two
+    // groups are directly comparable.
+    let resources: Vec<String> = (0u8..255)
+        .map(|t| {
+            let mut id = [0x11u8; 32];
+            id[0] = t;
+            hx(&id)
+        })
+        .collect();
+
+    // Warm the dregg LRU (the steady-state the per-row scan rides).
+    authz::set_issuer_pubkey(RootKey::from_seed([7u8; 32]).public());
+    authz::lru_clear();
+    authz::revoked_clear();
+    let _ = authz::decide(&token, "read", &resources[0], now);
+
+    // The hand-rolled policy's state: the owner allow-set admits every prefix the
+    // resources use (so the two policies admit the SAME rows — a fair cost
+    // comparison, not one short-circuiting on a denial), an expiry, an empty
+    // revocation set.
+    let owner_acl: HashSet<String> = (0u8..255)
+        .map(|t| {
+            let mut id = [0x11u8; 32];
+            id[0] = t;
+            hx(&id)[..2].to_string()
+        })
+        .collect();
+    let revoked: HashSet<String> = HashSet::new();
+    let not_after = 1_000_000i64;
+
+    let mut g = c.benchmark_group("gate_vs_handrolled");
+    for n in [100usize, 1000] {
+        g.throughput(Throughput::Elements(n as u64));
+
+        // (a) the dregg gate — the real verified capability decision, hot LRU.
+        g.bench_with_input(BenchmarkId::new("dregg_admits", n), &n, |b, &n| {
+            b.iter(|| {
+                let mut admitted = 0u64;
+                for i in 0..n {
+                    let r = &resources[i % resources.len()];
+                    if authz::decide(black_box(&token), "read", black_box(r), now).allowed() {
+                        admitted += 1;
+                    }
+                }
+                black_box(admitted)
+            })
+        });
+
+        // (b) the hand-rolled baseline — the owner/expiry/revoked ACL predicate.
+        g.bench_with_input(BenchmarkId::new("handrolled_acl", n), &n, |b, &n| {
+            b.iter(|| {
+                let mut admitted = 0u64;
+                for i in 0..n {
+                    let r = &resources[i % resources.len()];
+                    if handrolled_policy(
+                        black_box(r),
+                        now,
+                        not_after,
+                        black_box(&owner_acl),
+                        black_box(&revoked),
+                    ) {
+                        admitted += 1;
+                    }
+                }
+                black_box(admitted)
+            })
+        });
+    }
+    g.finish();
+}
+
+// ===========================================================================
+// 8. THE WRITE PATH as the node drains it — the four-gate spine over N intents.
+//
+// `workflow/*` measures the engine-driven durable run; this measures the OTHER
+// realizable write surface: the node-side DRAINER pulling intents off the submit
+// outbox and running each through SUBMIT (re-check the capability) → PRODUCE (the
+// executor seam, the deterministic `FoldProducer` stand-in here) → CHAIN (the
+// anti-substitution tooth) → advance. The per-turn cost here is "what does one
+// drained verified-write turn cost" — the number next to the workflow per-step
+// figure, for the queue-drain deployment shape.
+// ===========================================================================
+fn bench_drain_spine(c: &mut Criterion) {
+    // One issuer + a single broad submit token the drained agents present (each
+    // drain still runs the full SUBMIT-gate decision against it).
+    let issuer = RootKey::from_seed([7u8; 32]);
+    authz::set_issuer_pubkey(issuer.public());
+    let submit_token = issuer
+        .mint([
+            Caveat::FirstParty(Pred::AttrEq { key: "action".into(), value: "submit".into() }),
+            Caveat::FirstParty(Pred::AttrPrefix { key: "resource".into(), prefix: "".into() }),
+            Caveat::FirstParty(Pred::NotAfter { at: 1_000_000 }),
+        ])
+        .encode();
+
+    // The float source the stand-in producer debits, and a ring of drained agents.
+    let source = [0xc0u8; 32];
+    let agents: Vec<[u8; 32]> = (0u8..8)
+        .map(|k| {
+            let mut id = [0x11u8; 32];
+            id[0] = 0x40 + k;
+            id
+        })
+        .collect();
+
+    // Pre-build the intents (the bench times the DRAIN, not the intent assembly).
+    // A non-empty `signed_turn` so the stand-in produces (it refuses an empty one),
+    // the agent its capability is scoped to, the submit token it presents.
+    let make_intents = |n: usize| -> Vec<SubmitIntent> {
+        (0..n)
+            .map(|i| SubmitIntent {
+                id: {
+                    let mut id = [0u8; 16];
+                    id[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                    id
+                },
+                agent: agents[i % agents.len()],
+                signed_turn: vec![1u8, 2, 3], // non-empty envelope (stand-in produces)
+                token: submit_token.clone(),
+            })
+            .collect()
+    };
+
+    let mut g = c.benchmark_group("drain_spine");
+    for n in [16usize, 128] {
+        g.throughput(Throughput::Elements(n as u64));
+        g.bench_with_input(BenchmarkId::new("drain_intents", n), &n, |b, &n| {
+            let intents = make_intents(n);
+            b.iter(|| {
+                authz::lru_clear();
+                authz::revoked_clear();
+                // A fresh drainer with the deterministic stand-in producer, funded
+                // float, unit 1 — the SAME shape `dregg_drain_once` resumes.
+                let mut drainer = Drainer::new(FoldProducer::new(source, 1_000_000_000, 1))
+                    .with_clock(1_000);
+                let mut executed = 0u64;
+                for intent in &intents {
+                    if drainer.drain(black_box(intent)).is_executed() {
+                        executed += 1;
+                    }
+                }
+                black_box(executed)
+            })
+        });
+    }
+    g.finish();
+}
+
 criterion_group!(
     benches,
     bench_submit_decision,
@@ -377,5 +596,7 @@ criterion_group!(
     bench_mirror_apply,
     bench_mirror_serde,
     bench_workflow,
+    bench_gate_vs_handrolled,
+    bench_drain_spine,
 );
 criterion_main!(benches);
