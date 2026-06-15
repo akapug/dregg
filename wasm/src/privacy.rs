@@ -1469,6 +1469,11 @@ pub fn compose_proofs(proofs_json: &str, mode: &str) -> Result<JsValue, JsError>
     // performed. We now return `valid: false` and emit the BLAKE3 hash only
     // as an opaque content-addressable identifier (`composed_proof`) — not as
     // a verifiable proof.
+    //
+    // For a composition whose `valid` MEANS SOMETHING, callers use
+    // [`compose_and_verify_proofs`]: it deserializes each tagged proof, runs
+    // the REAL verifier for its kind, and returns the real boolean
+    // composition over those verdicts.
     let result = ComposedResult {
         composed_proof: hex_encode(&composed_commitment),
         mode: composition_mode.to_string(),
@@ -1476,6 +1481,256 @@ pub fn compose_proofs(proofs_json: &str, mode: &str) -> Result<JsValue, JsError>
         valid: false,
     };
     Ok(serde_wasm_bindgen::to_value(&result)?)
+}
+
+/// Verify each input proof for real, then return the boolean composition of
+/// the per-proof verdicts under `mode`.
+///
+/// This is the honest counterpart to [`compose_proofs`]: where that function
+/// only content-addresses the inputs (and so always reports `valid: false`),
+/// this one actually discharges each proof against its canonical verifier and
+/// reports a `valid` that is the genuine conjunction / disjunction of REAL
+/// verifications — no BLAKE3 stand-in.
+///
+/// `proofs_json` is a JSON array of tagged verification envelopes. Each entry
+/// carries a `kind` plus exactly the inputs that kind's verifier needs:
+///
+/// ```json
+/// [
+///   { "kind": "membership",   "proof_json": "<StarkProof JSON>" },
+///   { "kind": "range",        "commitment_hex": "<64-hex>", "range_proof_hex": "<hex>" },
+///   { "kind": "conservation", "input_commitments": ["<64-hex>", ...],
+///                             "output_commitments": ["<64-hex>", ...],
+///                             "proof": { "excess_commitment": "...",
+///                                        "nonce_commitment": "...",
+///                                        "response": "..." },
+///                             "message_hex": "<hex>",
+///                             "output_range_proofs": ["<hex>", ...] }
+/// ]
+/// ```
+///
+/// `mode`:
+/// - `"and"` — the composition holds iff EVERY proof verifies (the default
+///   conjunction `O(1)`-verification target).
+/// - `"or"` — holds iff at least ONE proof verifies.
+/// - `"chain"` — sequential: holds iff every proof verifies (and the per-proof
+///   results report the first break point).
+/// - `"aggregate"` — batch: same verdict as `"and"`, framed as one pass.
+///
+/// Returns JSON:
+/// ```json
+/// { "composed_proof": "<hex content id>", "mode": "and",
+///   "input_count": 3, "valid": true,
+///   "results": [ { "kind": "range", "valid": true, "error": null }, ... ] }
+/// ```
+#[wasm_bindgen]
+pub fn compose_and_verify_proofs(proofs_json: &str, mode: &str) -> Result<JsValue, JsError> {
+    use dregg_cell::value_commitment::{
+        ConservationProof, ValueCommitment, ValueCommitmentBytes, verify_conservation,
+        verify_full_conservation_bytes,
+    };
+    use dregg_circuit::field::BabyBear;
+    use dregg_circuit::stark::{MerkleStarkAir, StarkProof, verify as stark_verify};
+
+    #[derive(Deserialize)]
+    struct ConservationProofJson {
+        excess_commitment: String,
+        nonce_commitment: String,
+        response: String,
+    }
+
+    #[derive(Deserialize)]
+    struct ProofEnvelope {
+        kind: String,
+        // membership
+        #[serde(default)]
+        proof_json: Option<String>,
+        // range
+        #[serde(default)]
+        commitment_hex: Option<String>,
+        #[serde(default)]
+        range_proof_hex: Option<String>,
+        // conservation
+        #[serde(default)]
+        input_commitments: Option<Vec<String>>,
+        #[serde(default)]
+        output_commitments: Option<Vec<String>>,
+        #[serde(default)]
+        proof: Option<ConservationProofJson>,
+        #[serde(default)]
+        message_hex: Option<String>,
+        #[serde(default)]
+        output_range_proofs: Option<Vec<String>>,
+    }
+
+    let proofs: Vec<ProofEnvelope> =
+        serde_json::from_str(proofs_json).map_err(|e| JsError::new(&e.to_string()))?;
+    if proofs.is_empty() {
+        return Err(JsError::new("at least one proof required"));
+    }
+
+    let composition_mode = match mode {
+        "and" | "AND" => "and",
+        "or" | "OR" => "or",
+        "chain" | "CHAIN" => "chain",
+        "aggregate" | "AGGREGATE" => "aggregate",
+        _ => return Err(JsError::new(&format!("unknown composition mode: {mode}"))),
+    };
+
+    // Decode a list of hex commitments into real Ristretto value commitments;
+    // fails closed (Err) on any non-canonical point.
+    fn decode_commitments(list: &[String]) -> Result<Vec<ValueCommitment>, String> {
+        let mut out = Vec::with_capacity(list.len());
+        for (i, h) in list.iter().enumerate() {
+            let bytes = decode_hex_32(h).map_err(|e| format!("commitment[{i}]: {e}"))?;
+            let vc = ValueCommitment::from_bytes(&ValueCommitmentBytes(bytes))
+                .ok_or_else(|| format!("commitment[{i}]: not a valid Ristretto point"))?;
+            out.push(vc);
+        }
+        Ok(out)
+    }
+
+    // Run the REAL verifier for one tagged proof; returns Ok(()) iff it
+    // verifies, Err(reason) otherwise. Any decode failure is a fail-closed
+    // verification failure (never a thrown error).
+    fn verify_one(p: &ProofEnvelope) -> Result<(), String> {
+        match p.kind.as_str() {
+            "membership" | "merkle" | "stark" => {
+                let pj = p
+                    .proof_json
+                    .as_ref()
+                    .ok_or("membership requires 'proof_json'")?;
+                let proof: StarkProof =
+                    serde_json::from_str(pj).map_err(|e| format!("proof_json: {e}"))?;
+                let public_inputs: Vec<BabyBear> =
+                    proof.public_inputs.iter().map(|&v| BabyBear(v)).collect();
+                stark_verify(&MerkleStarkAir, &proof, &public_inputs)
+            }
+            "range" => {
+                let ch = p
+                    .commitment_hex
+                    .as_ref()
+                    .ok_or("range requires 'commitment_hex'")?;
+                let rp = p
+                    .range_proof_hex
+                    .as_ref()
+                    .ok_or("range requires 'range_proof_hex'")?;
+                let commit = decode_hex_32(ch).map_err(|e| format!("commitment_hex: {e}"))?;
+                let range_proof = decode_hex_vec(rp).map_err(|e| format!("range_proof_hex: {e}"))?;
+                dregg_cell::value_commitment::verify_range_bytes(&commit, &range_proof)
+                    .map_err(|e| e.to_string())
+            }
+            "conservation" => {
+                let inputs = decode_commitments(
+                    p.input_commitments
+                        .as_ref()
+                        .ok_or("conservation requires 'input_commitments'")?,
+                )?;
+                let outputs = decode_commitments(
+                    p.output_commitments
+                        .as_ref()
+                        .ok_or("conservation requires 'output_commitments'")?,
+                )?;
+                let pj = p
+                    .proof
+                    .as_ref()
+                    .ok_or("conservation requires 'proof'")?;
+                let proof = ConservationProof {
+                    excess_commitment: decode_hex_32(&pj.excess_commitment)
+                        .map_err(|e| format!("excess_commitment: {e}"))?,
+                    nonce_commitment: decode_hex_32(&pj.nonce_commitment)
+                        .map_err(|e| format!("nonce_commitment: {e}"))?,
+                    response: decode_hex_32(&pj.response)
+                        .map_err(|e| format!("response: {e}"))?,
+                };
+                let message = match &p.message_hex {
+                    None => Vec::new(),
+                    Some(m) if m.is_empty() => Vec::new(),
+                    Some(m) => decode_hex_vec(m).map_err(|e| format!("message_hex: {e}"))?,
+                };
+                match &p.output_range_proofs {
+                    None => verify_conservation(&inputs, &outputs, &proof, &message)
+                        .map_err(|e| format!("conservation: {e}")),
+                    Some(rp_hex) => {
+                        let range_proofs: Vec<Vec<u8>> = rp_hex
+                            .iter()
+                            .enumerate()
+                            .map(|(i, h)| {
+                                decode_hex_vec(h).map_err(|e| format!("range_proof[{i}]: {e}"))
+                            })
+                            .collect::<Result<_, _>>()?;
+                        let in_bytes: Vec<[u8; 32]> = inputs.iter().map(|c| c.to_bytes().0).collect();
+                        let out_bytes: Vec<[u8; 32]> =
+                            outputs.iter().map(|c| c.to_bytes().0).collect();
+                        verify_full_conservation_bytes(
+                            &in_bytes, &out_bytes, &proof, &range_proofs, &message,
+                        )
+                        .map_err(|e| format!("full conservation: {e}"))
+                    }
+                }
+            }
+            other => Err(format!("unknown proof kind: {other}")),
+        }
+    }
+
+    #[derive(Serialize)]
+    struct PerProof {
+        kind: String,
+        valid: bool,
+        error: Option<String>,
+    }
+
+    let mut results = Vec::with_capacity(proofs.len());
+    for p in &proofs {
+        match verify_one(p) {
+            Ok(()) => results.push(PerProof {
+                kind: p.kind.clone(),
+                valid: true,
+                error: None,
+            }),
+            Err(e) => results.push(PerProof {
+                kind: p.kind.clone(),
+                valid: false,
+                error: Some(e),
+            }),
+        }
+    }
+
+    // The composition's validity is the genuine boolean function of the real
+    // per-proof verdicts — not a hash stand-in.
+    let valid = match composition_mode {
+        "or" => results.iter().any(|r| r.valid),
+        // and / chain / aggregate all require every proof to verify.
+        _ => results.iter().all(|r| r.valid),
+    };
+
+    // A content-addressable id over the inputs (handy for caching / display),
+    // kept SEPARATE from the verdict so it can never be mistaken for one.
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-proof-composition-v1");
+    hasher.update(composition_mode.as_bytes());
+    for (i, p) in proofs.iter().enumerate() {
+        hasher.update(&(i as u32).to_le_bytes());
+        hasher.update(p.kind.as_bytes());
+    }
+    let composed_commitment = *hasher.finalize().as_bytes();
+
+    #[derive(Serialize)]
+    struct ComposedVerifiedResult {
+        composed_proof: String,
+        mode: String,
+        input_count: usize,
+        valid: bool,
+        results: Vec<PerProof>,
+    }
+
+    let out = ComposedVerifiedResult {
+        composed_proof: hex_encode(&composed_commitment),
+        mode: composition_mode.to_string(),
+        input_count: proofs.len(),
+        valid,
+        results,
+    };
+    Ok(serde_wasm_bindgen::to_value(&out)?)
 }
 
 // ============================================================================

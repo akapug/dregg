@@ -44,8 +44,18 @@ export function initComposition(wasm) {
 
   if (!wasm) return;
 
-  let proofs = []; // { type, proof_json, public_inputs, description }
+  // Each proof carries `envelope`: the EXACT inputs `compose_and_verify_proofs`
+  // re-runs the canonical verifier over (a tagged { kind, ... } object). That
+  // is what makes the composed `valid` a real conjunction of real
+  // verifications — not a BLAKE3 stand-in.
+  let proofs = []; // { type, proof_json, public_inputs, description, envelope }
   let composedResult = null;
+
+  // Convert a byte array (number[] | Uint8Array) to lowercase hex.
+  function bytesToHex(arr) {
+    const u = arr instanceof Uint8Array ? arr : Uint8Array.from(arr);
+    return Array.from(u, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
   const proofsDiv = container.querySelector('#comp-proofs-display');
   const resultDiv = container.querySelector('#comp-result');
   const explainerDiv = container.querySelector('#comp-explainer');
@@ -82,10 +92,14 @@ export function initComposition(wasm) {
     }
 
     if (composedResult) {
+      const perProofRows = (composedResult.results || [])
+        .map((r, i) => `<br><span style="color:var(--text-muted);">  proof #${i + 1} (${r.kind}): ${r.valid ? 'verified ✓' : 'FAILED ✗' + (r.error ? ' — ' + r.error : '')}</span>`)
+        .join('');
       html += `<div class="result-panel" style="margin-top:12px;"><div class="result-panel__header"><span class="result-panel__title">Composed Proof</span><span class="result-panel__timing">${composedResult.mode.toUpperCase()}</span></div><div class="result-panel__body">
         <div class="output-entry ${composedResult.valid ? 'success' : 'error'}">
-          Mode: ${composedResult.mode} | Inputs: ${composedResult.input_count} | Valid: ${composedResult.valid}
-          <br>Composed proof: ${composedResult.composed_proof.slice(0, 40)}...
+          Mode: ${composedResult.mode} | Inputs: ${composedResult.input_count} | Valid: <strong>${composedResult.valid}</strong> (real ${composedResult.mode === 'or' ? 'disjunction' : 'conjunction'} of canonical verifications)
+          ${perProofRows}
+          <br>Content id: ${composedResult.composed_proof.slice(0, 40)}...
         </div>
       </div></div>`;
     }
@@ -101,10 +115,12 @@ export function initComposition(wasm) {
   container.querySelector('#comp-gen-membership').addEventListener('click', () => {
     const t0 = performance.now();
     const leafValue = Math.floor(Math.random() * 1000);
-    let proofJson;
+    let proofJson, innerStark;
     try {
       const result = wasm.generate_demo_stark_proof(leafValue, 3);
       proofJson = JSON.stringify(result);
+      // result.proof_json IS the raw StarkProof JSON the verifier re-checks.
+      innerStark = result.proof_json;
     } catch (e) {
       // No fabrication: a wasm proof failure is surfaced, not faked.
       showResult(resultDiv, 'error', `generate_demo_stark_proof failed: ${e && e.message || e}`);
@@ -117,6 +133,8 @@ export function initComposition(wasm) {
       proof_json: proofJson,
       public_inputs: [leafValue, 3],
       description: `Proves leaf ${leafValue} exists in tree of depth 3`,
+      // Re-verified for real at compose time via verify_demo_stark_proof.
+      envelope: { kind: 'membership', proof_json: innerStark },
     });
 
     state.proofCount++;
@@ -136,7 +154,7 @@ export function initComposition(wasm) {
     const commitBytes = new Uint8Array(32);
     crypto.getRandomValues(commitBytes);
 
-    let proofJson, rangeVerdict;
+    let proofJson, rangeVerdict, rangeEnvelope;
     try {
       // REAL Bulletproof: commitment is recomputed from (amount, blinding) so
       // it always matches the proof. Then verify it for real, in-browser.
@@ -146,6 +164,12 @@ export function initComposition(wasm) {
         new Uint8Array(result.range_proof)
       );
       proofJson = JSON.stringify({ ...result, verdict: rangeVerdict, type: 'range' });
+      // Envelope for the real re-verification at compose time.
+      rangeEnvelope = {
+        kind: 'range',
+        commitment_hex: bytesToHex(result.commitment),
+        range_proof_hex: bytesToHex(result.range_proof),
+      };
     } catch (e) {
       showResult(resultDiv, 'error', `generate_range_proof failed: ${e && e.message || e}`);
       return;
@@ -157,6 +181,7 @@ export function initComposition(wasm) {
       proof_json: proofJson,
       public_inputs: [amount % 256, 64], // public: commitment byte, bit-width
       description: `REAL Bulletproof range proof over [0, 2^64): valid=${rangeVerdict.valid} (${JSON.parse(proofJson).proof_size_bytes}-byte proof)`,
+      envelope: rangeEnvelope,
     });
 
     state.proofCount++;
@@ -179,7 +204,7 @@ export function initComposition(wasm) {
     const outBlinding2 = randomHex(32);
     const messageHex = randomHex(32);
 
-    let proofJson, verdict;
+    let proofJson, verdict, conservationEnvelope;
     try {
       const proved = wasm.prove_conservation(
         JSON.stringify([{ value: 1000, blinding_hex: inputBlinding }]),
@@ -198,6 +223,16 @@ export function initComposition(wasm) {
         JSON.stringify(proved.output_range_proofs)
       );
       proofJson = JSON.stringify({ ...proved, verdict, type: 'conservation' });
+      // Envelope for the real re-verification at compose time: the full
+      // Schnorr-excess + per-output Bulletproof conservation check.
+      conservationEnvelope = {
+        kind: 'conservation',
+        input_commitments: proved.input_commitments,
+        output_commitments: proved.output_commitments,
+        proof: proved.proof,
+        message_hex: proved.message_hex,
+        output_range_proofs: proved.output_range_proofs,
+      };
     } catch (e) {
       // No fabrication: a wasm failure is surfaced, not faked as valid.
       showResult(resultDiv, 'error', `conservation prove/verify failed: ${e && e.message || e}`);
@@ -210,6 +245,7 @@ export function initComposition(wasm) {
       proof_json: proofJson,
       public_inputs: [1, 2], // input_count, output_count
       description: `REAL full proof: Schnorr excess + per-output Bulletproof range proofs, valid=${verdict.valid}, range_proofs_checked=${verdict.range_proofs_checked}`,
+      envelope: conservationEnvelope,
     });
 
     state.proofCount++;
@@ -223,26 +259,23 @@ export function initComposition(wasm) {
     showResult(resultDiv, verdict.valid ? 'success' : 'warning', `Generated + verified conservation proof: ${label} (${elapsed}ms)`);
   });
 
-  // Compose proofs
+  // Compose proofs — REAL composition: compose_and_verify_proofs deserializes
+  // each tagged proof, runs its canonical verifier (verify_demo_stark_proof /
+  // verify_range_proof / verify_conservation_proof), and returns the genuine
+  // boolean composition of those verdicts. `valid` MEANS something now.
   composeBtn.addEventListener('click', () => {
     if (proofs.length < 2) return;
     const mode = container.querySelector('#comp-mode').value;
 
     const t0 = performance.now();
-    const proofsInput = proofs.map(p => ({
-      proof_json: p.proof_json,
-      public_inputs: p.public_inputs,
-    }));
+    // Each proof's `envelope` carries exactly the inputs its verifier needs.
+    const envelopes = proofs.map(p => p.envelope);
 
-    // WASM-side audit fix: compose_proofs returns `valid: false` because it
-    // doesn't actually verify input proofs (just BLAKE3-hashes their JSON).
-    // The `composed_proof` field is an opaque content-addressable identifier,
-    // not a verifiable proof.
     let result;
     try {
-      result = wasm.compose_proofs(JSON.stringify(proofsInput), mode);
+      result = wasm.compose_and_verify_proofs(JSON.stringify(envelopes), mode);
     } catch (e) {
-      showResult(resultDiv, 'error', `compose_proofs failed: ${e && e.message || e}`);
+      showResult(resultDiv, 'error', `compose_and_verify_proofs failed: ${e && e.message || e}`);
       return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
@@ -259,13 +292,18 @@ export function initComposition(wasm) {
       aggregate: 'All proofs are batch-verified in a single pass (amortized cost)',
     };
 
+    // Per-proof real verdicts (kind + valid + error) from the wasm verifiers.
+    const perProof = (result.results || [])
+      .map((r, i) => `  ${i + 1}. ${proofs[i] ? proofs[i].type : r.kind}: ${r.valid ? 'verified ✓' : `FAILED ✗${r.error ? ' (' + r.error + ')' : ''}`}`)
+      .join('\n');
+
     const validityLabel = result.valid
-      ? 'VALID'
-      : 'STUB (compose_proofs does not yet verify input proofs)';
+      ? `VALID — real ${mode.toUpperCase()} of ${result.input_count} verified proofs`
+      : `INVALID — the ${mode.toUpperCase()} of the real per-proof verdicts is false`;
     showExplainer(explainerDiv, {
       prover: `Composed ${proofs.length} proofs in "${mode}" mode:\n${proofs.map((p, i) => `  ${i + 1}. ${p.type}`).join('\n')}\n\nContent identifier: ${result.composed_proof.slice(0, 24)}...`,
-      verifier: `Verification mode: ${mode.toUpperCase()}\n${modeDescriptions[mode]}\n\nResult: ${validityLabel}\nInput proofs: ${result.input_count}`,
-      delta: `Composition target: O(1) verification of the conjunction. Current WASM implementation only emits a content-addressable identifier; real composition (deserialize each proof, verify, return conjunction) is pending.`,
+      verifier: `Verification mode: ${mode.toUpperCase()}\n${modeDescriptions[mode]}\n\nReal per-proof verdicts:\n${perProof}\n\nResult: ${validityLabel}`,
+      delta: `Each proof was re-verified for real in WASM by its canonical verifier (STARK / Bulletproof / Schnorr-excess); the composed “valid” is the genuine ${mode === 'or' ? 'disjunction' : 'conjunction'} of those verdicts — not a BLAKE3 stand-in.`,
       timing: elapsed,
     });
   });
