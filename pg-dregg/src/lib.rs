@@ -3586,6 +3586,209 @@ mod pg {
             )
             .unwrap();
         }
+
+        // ===================================================================
+        // THE INTEGRATED FLAGSHIP, THROUGH LIVE pg18 SQL — one narrative tying
+        // the three pieces DBOS cannot do, end to end on a real database:
+        //
+        //   (1) CAPS-AS-RLS — a pg-user with an ALICE-scoped capability may
+        //       submit a turn for ALICE, and is REFUSED (by Row-Level Security,
+        //       not application code) submitting for BOB. The write gate is the
+        //       capability calculus, not a hand-rolled SQL predicate.
+        //   (2) THE IN-BACKEND EXECUTOR PRODUCES AN ATTESTED RECEIPT — the
+        //       kernel drains the queued turn; its PRODUCE gate is the verified
+        //       executor (the deterministic stand-in in a default build; the
+        //       REAL execFullForestG run single-threaded IN this backend under
+        //       `--features tier-d`), and the produced receipt lands through the
+        //       Tier-C `dregg.commit_log` chain gate.
+        //   (3) VERIFIED TURNS AS ROWS — the receipt is an ordinary queryable
+        //       row in `dregg.turns` (with its receipt_hash + the chaining
+        //       roots), the post-image is in `dregg.cells`, and a free-SQL read
+        //       over the mirror NARROWS to exactly the cells the reader's
+        //       capability admits. Reads are free SQL; the chain is unbroken.
+        //
+        // Where `examples/supply_chain.rs` proves this over the postgres-free
+        // cores, THIS proves the same integrated story through real pg18 SQL in
+        // one test — the live twin of the flagship demo. It runs in BOTH the
+        // default build (stand-in producer) and a `tier-d` build (the real
+        // in-backend executor); the assertions are identical because every gate
+        // BUT the producer seam is the real, realizable spine.
+        // ===================================================================
+        #[pg_test]
+        fn integrated_flagship_caps_rls_executor_receipt_through_live_sql() {
+            let root = root();
+            assert_issuer(&root);
+            // The whole substrate: the mirror tables (Tier B), the verified-store
+            // commit_log gate (Tier C), and the write outbox (the submit path).
+            Spi::get_one::<String>("SELECT dregg_install_schema()").unwrap();
+            Spi::get_one::<String>("SELECT dregg_install_tier_c()").unwrap();
+            Spi::get_one::<String>("SELECT dregg_install_write_outbox()").unwrap();
+
+            let alice_hex: String = synth::ALICE.iter().map(|b| format!("{b:02x}")).collect();
+            let bob_hex: String = synth::BOB.iter().map(|b| format!("{b:02x}")).collect();
+
+            // ---- (1) CAPS-AS-RLS: the capability gates the WRITE submission. ----
+            // The pg-user presents an ALICE-scoped submit capability and acts as the
+            // unprivileged reader role, so the `submit_gate` RLS policy
+            //   WITH CHECK (dregg_admits('submit', encode(agent,'hex')))
+            // is the live gate on the enqueue.
+            //
+            // We FIRST show the capability calculus IS the write gate, the way the
+            // policy itself evaluates it — `dregg_admits('submit', <cell>)` under the
+            // presented token — because a non-admitted write RAISEs an RLS violation
+            // that would abort this test's surrounding transaction (pgrx wraps each
+            // #[pg_test] in one transaction). The negative ENQUEUE — a BOB turn under
+            // an ALICE token RAISEd by RLS — is its own dedicated test
+            // (`write_path_rls_refuses_submitting_for_an_unauthorized_agent`); here we
+            // assert the SAME predicate that gate uses, non-abortingly, then enqueue
+            // only the ALICE turn the policy admits.
+            Spi::run(&format!("SET dregg.token = '{}'", submit_token(&root, "a1"))).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+            // The exact predicate the submit_gate WITH CHECK evaluates: ALICE admitted,
+            // BOB refused — the bearer capability narrows what this role may write.
+            let admits_alice: bool = Spi::get_one(&format!(
+                "SELECT dregg_admits('submit', '{alice_hex}')"
+            ))
+            .unwrap()
+            .unwrap();
+            let admits_bob: bool = Spi::get_one(&format!(
+                "SELECT dregg_admits('submit', '{bob_hex}')"
+            ))
+            .unwrap()
+            .unwrap();
+            assert!(admits_alice, "the ALICE capability admits submitting for ALICE's cell");
+            assert!(
+                !admits_bob,
+                "the ALICE capability does NOT admit submitting for BOB's cell — the RLS write gate refuses it"
+            );
+
+            // Enqueue the turn the policy admits (the submit_gate RLS lets it through).
+            let ok_id: Option<pgrx::Uuid> = Spi::get_one(&format!(
+                "SELECT dregg_submit_turn('\\xabcd'::bytea, '\\x{alice_hex}'::bytea)"
+            ))
+            .unwrap();
+            assert!(ok_id.is_some(), "an authorized submit (ALICE token, ALICE turn) enqueues");
+            Spi::run("RESET ROLE").unwrap();
+
+            let pending: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg.submit_queue \
+                 WHERE status='pending' AND agent = '\\x{alice_hex}'::bytea"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(pending, 1, "exactly one authorized ALICE turn stands pending");
+            let bob_queued: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg.submit_queue WHERE agent = '\\x{bob_hex}'::bytea"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(bob_queued, 0, "no BOB intent exists — the capability never admitted it");
+
+            // ---- (2) THE EXECUTOR PRODUCES AN ATTESTED RECEIPT, IN-BACKEND. ----
+            // The kernel drains: PRODUCE runs the verified executor (the stand-in by
+            // default; the REAL execFullForestG single-threaded in THIS backend under
+            // `tier-d`), CHAIN admits the receipt onto the head, and the Tier-C
+            // commit_log gate materializes it — one verified turn becomes one row.
+            Spi::run("SET ROLE dregg_kernel").unwrap();
+            let report: String = Spi::get_one("SELECT dregg_drain_once(16)").unwrap().unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            assert!(report.contains("drained=1"), "the queued turn drained to a receipt: {report}");
+            assert!(report.contains("remaining_lag=0"), "the queue emptied: {report}");
+
+            // ---- (3) VERIFIED TURNS AS ROWS — the receipt is a queryable row. ----
+            // The receipt landed as one row in dregg.turns, with a receipt_hash and
+            // the chaining roots; the queue row resolved 'executed' carrying it.
+            let turns: i64 = Spi::get_one("SELECT count(*) FROM dregg.turns").unwrap().unwrap();
+            assert_eq!(turns, 1, "the executor's verified receipt is a row in dregg.turns");
+            let receipted: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.turns WHERE receipt_hash IS NOT NULL AND ledger_root IS NOT NULL",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(receipted, 1, "the turn row carries the attested receipt + post-state root");
+            let executed: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.submit_queue \
+                 WHERE status='executed' AND receipt_hash IS NOT NULL",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(executed, 1, "the queue row resolved executed, bound to the receipt");
+
+            // The chain is unbroken (genesis ord 0 has no predecessor; any later turn
+            // chains onto its parent's ledger_root — the spine invariant on the rows).
+            let breaks: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg.turns t \
+                 JOIN dregg.turns p ON p.ordinal = t.ordinal - 1 \
+                 WHERE t.prev_root IS DISTINCT FROM p.ledger_root",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(breaks, 0, "the verified turns form an unbroken hash chain");
+
+            // ALICE's post-image is materialized — the executor credited her cell, and
+            // it is now an ordinary queryable row (reads are free SQL over the mirror).
+            let alice_rows: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg.cells WHERE cell_id = '\\x{alice_hex}'::bytea"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(alice_rows, 1, "ALICE's executor-produced post-image is in dregg.cells");
+
+            // ---- (3b) CAPS-AS-RLS on the READ side — the same capability narrows. ----
+            // A reader presenting the ALICE-scoped READ token sees ALICE's cell through
+            // the RLS-gated mirror but NOT a foreign cell. We seed a BOB cell directly
+            // as the kernel (BYPASSRLS writer) so there is a row the reader must NOT
+            // see, then read as the reader under an ALICE-only read token.
+            Spi::run("SET ROLE dregg_kernel").unwrap();
+            Spi::run(&format!(
+                "SELECT dregg.merge_cell('\\x{bob_hex}'::bytea, 'Hosted', 500, 0, '\\x'::bytea, \
+                 '{{\"balance\":500,\"nonce\":0}}'::jsonb, 'Active', 0, '\\x{bob_hex}'::bytea)"
+            ))
+            .unwrap();
+            Spi::run("RESET ROLE").unwrap();
+
+            let read_tok = root
+                .mint([
+                    Caveat::FirstParty(Pred::AttrEq { key: "action".into(), value: "read".into() }),
+                    Caveat::FirstParty(Pred::AttrPrefix { key: "resource".into(), prefix: "a1".into() }),
+                ])
+                .encode();
+            Spi::run(&format!("SET dregg.token = '{read_tok}'")).unwrap();
+            Spi::run("SET ROLE dregg_reader").unwrap();
+            let visible: i64 =
+                Spi::get_one("SELECT count(*) FROM dregg.cells").unwrap().unwrap();
+            let sees_alice: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg.cells WHERE cell_id = '\\x{alice_hex}'::bytea"
+            ))
+            .unwrap()
+            .unwrap();
+            let sees_bob: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg.cells WHERE cell_id = '\\x{bob_hex}'::bytea"
+            ))
+            .unwrap()
+            .unwrap();
+            Spi::run("RESET ROLE").unwrap();
+            assert_eq!(sees_alice, 1, "the ALICE-scoped reader sees ALICE's cell");
+            assert_eq!(sees_bob, 0, "the ALICE-scoped reader does NOT see BOB's cell (RLS narrows the read)");
+            assert_eq!(visible, 1, "the reader's whole view is exactly the cells its capability admits");
+
+            // ---- (4) THE SPINE — no bare-write door exists for an app. ----
+            // The integrated guarantee: the reader role has NO write grant on the
+            // state tables, so the DBOS money-printing bug (a bare UPDATE that forges
+            // a balance) is not even a representable statement for an application.
+            let reader_can_write: i64 = Spi::get_one(
+                "SELECT count(*) FROM information_schema.role_table_grants \
+                 WHERE grantee = 'dregg_reader' AND table_schema = 'dregg' \
+                   AND table_name = 'cells' AND privilege_type IN ('INSERT','UPDATE','DELETE')",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                reader_can_write, 0,
+                "the app/reader role has NO write grant on dregg.cells — a bare UPDATE \
+                 (the DBOS money-printing bug) has no door; state mutates only through a verified turn"
+            );
+        }
     }
 }
 

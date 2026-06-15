@@ -1,14 +1,17 @@
-//! pg-dregg LOAD GENERATOR — sustained verified-turn throughput, the dummy load.
+//! pg-dregg LOAD GENERATOR — sustained verified-turn throughput + latency, the
+//! dummy load.
 //!
 //! ```text
 //! cargo run --release --bin loadgen                 # default: 3s, 4 agents
 //! cargo run --release --bin loadgen -- --secs 10    # run for 10 seconds
 //! cargo run --release --bin loadgen -- --secs 5 --agents 16
+//! cargo run --release --bin loadgen -- --latency    # also sample per-turn latency
 //! ```
 //!
 //! It drives sustained load through the **full verified-write spine** — the same
 //! three gates the flagship demo and the live pg path enforce — and reports the
-//! observed sustained rate (turns/sec) so we can show pg-dregg under load:
+//! observed sustained rate (turns/sec) AND, with `--latency`, the per-turn
+//! latency distribution (p50/p99/max), so we can show pg-dregg under load:
 //!
 //!   1. AUTHZ — each turn's acting agent passes the `submit_gate` RLS admission
 //!      (`authz::decide(token, "submit", cell, now)`), against an attenuated,
@@ -24,8 +27,9 @@
 //!
 //! The load is a continuous stream of two-party transfers between a rotating set
 //! of agent cells, each a real receipted verified turn, conserving value every
-//! step (one debit, one credit). It runs for `--secs` seconds and prints the
-//! count, the elapsed time, and the sustained turns/sec.
+//! step (one debit, one credit) — a DBOS-shaped workload (each turn is one
+//! durable step). It runs for `--secs` seconds and prints the count, the elapsed
+//! time, the sustained turns/sec, and (under `--latency`) the per-turn p50/p99/max.
 
 use std::time::{Duration, Instant};
 
@@ -120,6 +124,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut secs: u64 = 3;
     let mut n_agents: usize = 4;
+    let mut latency = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -131,14 +136,18 @@ fn main() {
                 n_agents = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(4).max(2);
                 i += 2;
             }
+            "--latency" => {
+                latency = true;
+                i += 1;
+            }
             other => {
-                eprintln!("unknown arg: {other} (use --secs N, --agents N)");
+                eprintln!("unknown arg: {other} (use --secs N, --agents N, --latency)");
                 i += 1;
             }
         }
     }
 
-    println!("pg-dregg loadgen — sustained verified-turn throughput");
+    println!("pg-dregg loadgen — sustained verified-turn throughput{}", if latency { " + per-turn latency" } else { "" });
     println!("  duration: {secs}s   agents: {n_agents}   (each turn: authz submit-gate + RootChain + apply)");
 
     // ---- trust root + per-agent attenuated tokens -----------------------
@@ -194,6 +203,11 @@ fn main() {
     let mut turns: u64 = 0;
     let mut refused: u64 = 0;
     let mut sender_idx = 0usize;
+    // Per-turn latency samples (nanoseconds), collected only under --latency. We
+    // time the WHOLE spine of a turn (the three gates + apply); the timer overhead
+    // is negligible against a ~µs verified turn. Reserved generously to avoid
+    // reallocation skewing the tail.
+    let mut samples: Vec<u64> = if latency { Vec::with_capacity(2_000_000) } else { Vec::new() };
 
     // We rotate which agent sends; the receiver is the next agent round-robin. The
     // sender always holds the float (it received it last round), so a unit
@@ -204,6 +218,8 @@ fn main() {
         for _ in 0..256 {
             let from = agents[holder];
             let to = agents[(holder + 1) % n_agents];
+            // Time the full spine of this turn when sampling latency.
+            let t0 = if latency { Some(Instant::now()) } else { None };
 
             // GATE 1: authz submit-gate (the acting agent submits for its own cell).
             let token = &tokens[&from];
@@ -249,6 +265,9 @@ fn main() {
             }
             durable_log_len += 1;
             turns += 1;
+            if let Some(t0) = t0 {
+                samples.push(t0.elapsed().as_nanos() as u64);
+            }
 
             // The receiver now holds (almost) the float; move the holder forward so
             // the next sender has balance. (Every agent keeps a tiny balance; the
@@ -274,6 +293,26 @@ fn main() {
         if total == float { "✓" } else { "✗ BROKEN" });
     assert_eq!(total, float, "load must conserve value end-to-end");
     let _ = sender_idx;
+
+    if !samples.is_empty() {
+        samples.sort_unstable();
+        let pct = |p: f64| -> u64 {
+            // Nearest-rank percentile over the sorted samples.
+            let idx = ((p / 100.0) * samples.len() as f64).ceil() as usize;
+            samples[idx.saturating_sub(1).min(samples.len() - 1)]
+        };
+        let us = |ns: u64| ns as f64 / 1_000.0;
+        let mean = samples.iter().sum::<u64>() as f64 / samples.len() as f64;
+        println!("\n── per-turn latency (full spine: authz + chain + apply) ─");
+        println!("  samples:                  {}", samples.len());
+        println!("  mean:                     {:.3} µs", us(mean as u64));
+        println!("  p50:                      {:.3} µs", us(pct(50.0)));
+        println!("  p90:                      {:.3} µs", us(pct(90.0)));
+        println!("  p99:                      {:.3} µs", us(pct(99.0)));
+        println!("  p99.9:                    {:.3} µs", us(pct(99.9)));
+        println!("  max:                      {:.3} µs", us(*samples.last().unwrap()));
+    }
+
     println!("\n  (postgres-free core rate — the verification cost per turn. The live-pg");
     println!("   rate adds SPI/IPC + the MERGE applicator; see scripts/e2e-live.sh.)");
 }
