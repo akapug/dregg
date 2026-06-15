@@ -42,46 +42,66 @@
 //!    [`Rehydration`] liveness-type carries through, exactly as for a rehydrated
 //!    view.
 //!
-//! 3. **htmx-on-crack in Rust.** A reactive button's press fires a REAL
-//!    [`ReactiveAffordance::fire`] through a mock executor ([`MockExecutor`] — the
-//!    named seam the app-framework already wires), which applies the resulting
-//!    [`dregg_turn::Effect`] to the cell-state signal; the [`Memo`]s recompute and
-//!    the view reacts. The fire's gate is the REAL one — an unauthorized / wrong-
-//!    transition / out-of-window press is a [`FireError`], never a silent run
-//!    ([`press_fires_real_turn_and_view_reacts`]).
+//! 3. **htmx-on-crack in Rust — over a REAL executor (the seam is CLOSED).** A
+//!    reactive button's press POSTs a [`server::FireRequest`] to the server function
+//!    [`server::fire_affordance`], which adjudicates it with the REAL
+//!    [`ReactiveAffordance::fire`] gate (the SAME `ReactiveAffordance` the island's
+//!    lit/dark Memo reacts on) and, on a pass, submits the gate's real
+//!    [`dregg_turn::Effect`] through the genuine [`dregg_turn::TurnExecutor`] (owned by
+//!    [`dregg_sdk::AgentRuntime`] over an in-process verified ledger) — returning a real
+//!    [`dregg_turn::TurnReceipt`] plus the COMMITTED cell state. The signal re-seeds
+//!    from the committed state; the [`Memo`]s recompute and the view reacts. The fire's
+//!    gate is the REAL one — an unauthorized press is a precise `FireError::Unauthorized`,
+//!    a wrong-transition press a `FireError::TransitionUnmet`, an out-of-window press a
+//!    `FireError::OutsideWindow`, and **nothing is committed on a refusal** (the
+//!    anti-ghost tooth). There is no mock anywhere in the loop: see [`server`] + tests.
 //!
-//! ## The architecture finding (honest about the fit + the seam)
+//! ## The architecture finding (the fit + the seam, now closed)
 //!
 //! The deos gate types (`is_attenuation`, [`dregg_turn::Effect`],
-//! [`ReactiveAffordance`]) sit **atop the STARK crypto stack** (`dregg-turn` →
-//! `dregg-circuit` → plonky3). That stack is **native-only** — it does not compile
-//! to `wasm32-unknown-unknown`. So the surface splits exactly where deos already
-//! draws its trust boundary:
+//! [`ReactiveAffordance`]) AND the executor ([`dregg_turn::TurnExecutor`]) sit **atop
+//! the STARK crypto stack** (`dregg-turn` → `dregg-circuit` → plonky3 + the Lean
+//! FFI). That stack is **native-only** — it does not compile to
+//! `wasm32-unknown-unknown`. So the surface splits exactly where deos already draws
+//! its trust boundary:
 //!
-//! - **The gate runs server-side (native).** SSR (`leptos`'s `ssr` feature) is the
-//!   render path that can link the real gate. The verdict "may this button fire?"
-//!   is computed where the executor + the proof system live — which is *correct*:
-//!   a light client must not be the authority. This whole crate lives here.
+//! - **The gate + the executor run server-side (native).** SSR (`leptos`'s `ssr`
+//!   feature) is the render path that links the real gate; [`server`] holds the real
+//!   executor. The verdict "may this button fire?" AND the commit are computed where
+//!   the executor + the proof system live — which is *correct*: a light client must
+//!   not be the authority.
 //! - **The client island reacts (WASM).** A hydrated island renders + reacts to
-//!   signals but does NOT hold the gate; it fires a turn over a **server function**
-//!   (the [`MockExecutor`] seam → a real `TurnExecutor`) and reflects the
-//!   receipted result. Leptos's server-function model maps onto this 1:1: the
-//!   island is the *will*, the server is the *law* (`docs/REFINEMENT-DESIGN.md`
-//!   "cells are law, agents are will").
+//!   signals but does NOT hold the gate or the executor; it fires a turn over the
+//!   **server function** [`server::fire_affordance`] and reflects the receipted,
+//!   committed result. Leptos's server-function model maps onto this 1:1: the island
+//!   is the *will*, the server is the *law* (`docs/REFINEMENT-DESIGN.md` "cells are
+//!   law, agents are will").
 //!
-//! **So the fit is strong on the runtime axis (signals = reactive rung; hydration
-//! = rehydration) and the native/WASM split is not a wall but the deos seam made
-//! literal.** What this crate builds + tests is the native side (the gate + the
-//! reactive render); the WASM island's server-function call is the named follow-up
-//! (the same seam `affordance.rs` documents for firing → executed turn).
+//! **So the fit is strong on the runtime axis (signals = reactive rung; hydration =
+//! rehydration), the native/WASM split is the deos seam made literal, and the fire is
+//! a genuine verified turn — not a mock.** The named follow-up (a `MockExecutor`
+//! stand-in for a live `TurnExecutor`) is DONE: [`server::fire_affordance`] IS the
+//! real executor fire.
 
 use leptos::prelude::*;
 
+/// The reactive-predicate gate model (`CellSlots`, the live-state `GateVerdict` over
+/// the REAL `CellProgram::evaluate`/`is_attenuation`). The signal payload + the
+/// server-side committed-state readback live here.
+pub mod gate;
+/// The SERVER side — the real [`dregg_turn::TurnExecutor`] (owned by
+/// [`dregg_sdk::AgentRuntime`]) behind the affordance fire. This module CLOSES the
+/// seam the prototype named: a fire is now a genuine verified turn that returns a real
+/// [`dregg_turn::TurnReceipt`], not a mock. The island POSTs a [`server::FireRequest`]
+/// to [`server::fire_affordance`]; the server runs the REAL gate + executor and
+/// returns the COMMITTED state.
+pub mod server;
+
 use starbridge_web_surface::{
-    AffordanceSurface, AuthRequired, CellAffordance, EvalContext, FireError, ReactiveAffordance,
+    AffordanceSurface, AuthRequired, CellAffordance, EvalContext, ReactiveAffordance,
     Rehydration, SurfaceCapability, TransitionGate, Viewer,
 };
-use starbridge_web_surface::affordance::{AffordanceIntent, RecordPredicate};
+use starbridge_web_surface::affordance::RecordPredicate;
 use dregg_cell::state::CellState;
 use dregg_turn::Effect;
 use dregg_types::CellId;
@@ -214,9 +234,10 @@ pub fn affordance_is_lit(
 
 /// **`CounterCell`** — a Leptos component rendering the council/counter cell as a
 /// reactive surface (MAPPING 1, in the runtime). The cell state is a `RwSignal`;
-/// the vote button's lit/dark class is a `Memo` over the REAL gate; pressing fires
-/// a real turn through the [`MockExecutor`] and the signal updates so the view
-/// reacts (MAPPING 3, in the same component).
+/// the vote button's lit/dark class is a `Memo` over the REAL gate; pressing POSTs a
+/// [`server::FireRequest`] to the server function [`server::fire_affordance`], which
+/// runs the REAL [`dregg_turn::TurnExecutor`] and returns the COMMITTED state — the
+/// signal re-seeds from it and the view reacts (MAPPING 3, in the same component).
 ///
 /// The props carry the viewer's `held` authority + the current turn `height` (the
 /// reactive window's clock). Two instances with different `held`/`height` render
@@ -234,13 +255,14 @@ pub fn CounterCell(
     // The cell's state IS a Leptos signal — MAPPING 1's core. The council starts
     // PENDING with tally 0.
     let state = RwSignal::new(council(PENDING, 0));
-    // The gate + the executor carry `Box<dyn Fn>` predicates (the TransitionGate's
-    // pre/post/link), which are not `Send + Sync`, so they live in a thread-local
-    // `StoredValue` (`new_local`). The SSR render runs single-threaded per request,
-    // so thread-local storage is the right home — and it keeps the REAL gate (with
-    // its closures) in the component without a parallel Send-able reimplementation.
+    // The gate carries `Box<dyn Fn>` predicates (the TransitionGate's pre/post/link),
+    // which are not `Send + Sync`, so it lives in a thread-local `StoredValue`
+    // (`new_local`). The SSR render runs single-threaded per request, so thread-local
+    // storage is the right home — and it keeps the REAL gate (with its closures) in
+    // the component without a parallel Send-able reimplementation. This is the
+    // CLIENT-side reactive predicate (the WILL — what the island OFFERS), distinct
+    // from the server-side executor (the LAW — what actually COMMITS).
     let btn = StoredValue::new_local(vote_btn(cell));
-    let exec = StoredValue::new_local(MockExecutor::new(cell));
 
     // The candidate "vote" transition's post-state is the live state with the
     // tally bumped by one. A derived signal (the htmx reactivity): when `state`
@@ -265,20 +287,41 @@ pub fn CounterCell(
     // A readout of the live tally for the view.
     let tally = Memo::new(move |_| slot_u64(&state.get(), TALLY_SLOT).unwrap_or(0));
 
-    // The press handler — MAPPING 3. Fire the REAL `ReactiveAffordance` through
-    // the mock executor; on a committed turn, apply the effect to the state
-    // signal (so the view reacts). A refused fire leaves the state untouched (the
-    // anti-ghost tooth: no silent run).
-    let held_for_press = held.clone();
+    // The press handler — MAPPING 3, now over the REAL executor (the seam is CLOSED).
+    // The island is a thin reactive shell: it does NOT hold the gate or the executor
+    // (they sit atop the native STARK stack — they cannot link in the browser). It
+    // POSTs a `FireRequest` (the affordance name + the viewer's held authority) to the
+    // server function `server::fire_affordance`; the server runs the REAL cap∧state
+    // gate + the REAL `dregg_turn::TurnExecutor` and returns the COMMITTED state.
+    //
+    // On a committed turn the signal re-seeds from the state the executor ACTUALLY
+    // committed (not a client guess); on a refusal the precise reason is recorded and
+    // the state is left UNCHANGED (the anti-ghost tooth — nothing committed). In a
+    // hydrate build this runs over Leptos's server-function transport (`spawn_local`
+    // + a `ServerAction`); here the body is called directly so the SSR render and the
+    // tests exercise the REAL committed path.
+    let refusal = RwSignal::new(Option::<String>::None);
+    let held_rights = held.window.rights.clone();
     let on_press = move || {
-        let old = state.get();
-        let new = candidate_new.get();
-        let outcome = btn.with_value(|b| {
-            exec.with_value(|e| e.fire_and_apply(b, &held_for_press, height, &old, &new))
-        });
-        if let Ok(applied) = outcome {
-            // The executor returned the post-state it committed; reflect it.
-            state.set(applied);
+        // The island's WILL → the server's LAW. The held authority crosses the wire
+        // as the cap dimension; the height is the reactive window's clock; the server
+        // reads the cell's live state itself and runs the REAL gate + executor.
+        let resp = server::fire_affordance(
+            server::FireRequest::at("vote", held_rights.clone()).height(height),
+        );
+        match resp.result {
+            Ok(committed) => {
+                // Reflect the state the executor COMMITTED (read back from the real
+                // ledger) into the signal — the view reacts to the verified turn.
+                refusal.set(None);
+                state.set(council(committed.slots.status, committed.slots.tally));
+            }
+            Err(refused) => {
+                // Anti-ghost: nothing committed; surface the precise reason and leave
+                // the state exactly as it was.
+                refusal.set(Some(refused.reason));
+                state.set(council(refused.slots.status, refused.slots.tally));
+            }
         }
     };
 
@@ -296,65 +339,31 @@ pub fn CounterCell(
             >
                 "vote"
             </button>
+            // The anti-ghost message: a refused fire (cap/state/executor) surfaces its
+            // PRECISE reason here, never a silent dark button. Empty when no refusal.
+            {move || refusal.get().map(|r| view! { <p class="refusal" role="alert">{r}</p> })}
         </div>
     }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// MAPPING 3 — the executor seam. The fire is a verified turn; firing applies the
-// real `Effect` to the cell state. This is the `MockSurface`-shaped stand-in for a
-// live `TurnExecutor` (the seam `affordance.rs` names for firing → executed turn).
+// MAPPING 3 — THE EXECUTOR SEAM, CLOSED. The fire is a REAL verified turn. The
+// `MockExecutor` is GONE; the press now POSTs to the server function
+// `server::fire_affordance` (above), which adjudicates with the REAL
+// `ReactiveAffordance::fire` gate and submits the gated effect through the genuine
+// `dregg_turn::TurnExecutor` (owned by `dregg_sdk::AgentRuntime`, over an in-process
+// verified ledger) — returning a real `dregg_turn::TurnReceipt` plus the COMMITTED
+// state the signal re-seeds from.
+//
+// The real executor lives in [`crate::server`] (native-only — the gate + executor
+// sit atop the STARK stack and cannot link in the browser island; that boundary IS
+// the deos seam). See:
+//   * [`server::DeosExecutorCell`] — the council cell + the real executor;
+//   * [`server::fire_affordance`] — the server-fn body the island POSTs to;
+//   * [`server::FireRequest`] / [`server::FireResponse`] — the wire shape.
+// The teeth (a refused fire is a precise `FireError` and NOTHING is committed; an
+// authorized fire commits a real receipt) are proved by the `server` module's tests.
 // ════════════════════════════════════════════════════════════════════════════
-
-/// **`MockExecutor`** — the named executor seam, in the deos shape. Firing an
-/// affordance produces a REAL [`AffordanceIntent`] (the instantiated
-/// effect-template); handing that to a live `TurnExecutor` is the boundary this
-/// type stands at. Here we APPLY the effect to the cell state directly (a faithful
-/// model of the executor's `SetField` dispatch), so the runtime loop is closed:
-/// press → REAL gate → REAL effect → state signal updates → view reacts.
-///
-/// The gate that decides *whether the turn may fire at all* is the REAL
-/// [`ReactiveAffordance::fire`], in-band — the mock only models the *dispatch* of
-/// an already-authorized effect, exactly as `MockSurface` models libservo's
-/// dispatch of an already-gated request.
-#[derive(Clone)]
-pub struct MockExecutor {
-    cell: CellId,
-}
-
-impl MockExecutor {
-    /// A mock executor for `cell`.
-    pub fn new(cell: CellId) -> Self {
-        MockExecutor { cell }
-    }
-
-    /// Fire the reactive affordance through the REAL gate, and on a committed turn
-    /// APPLY the resulting effect to produce the new cell state. Returns the
-    /// post-state on success, or the precise [`FireError`] on refusal (never a
-    /// silent run).
-    ///
-    /// For the "vote" affordance the committed effect is a `SetField` on the tally
-    /// slot; the executor applies the qualifying `new` state the gate admitted
-    /// (the transition the gate verified is exactly `old → new`). A non-`SetField`
-    /// effect is applied as a no-op on state here (its dispatch is the executor's;
-    /// the gate + the intent are the real parts).
-    pub fn fire_and_apply(
-        &self,
-        btn: &ReactiveAffordance,
-        held: &SurfaceCapability,
-        height: u64,
-        old: &CellState,
-        new: &CellState,
-    ) -> Result<CellState, FireError> {
-        let intent: AffordanceIntent =
-            btn.fire(self.cell, held, &EvalContext::at_height(height), old, new)?;
-        // The intent carries the REAL effect; we dispatch it onto the state. The
-        // gate already verified `old → new`, so committing `new` is exactly the
-        // verified transition's post-state.
-        let _ = &intent.effect; // the genuine `dregg_turn::Effect`, ready for a real executor.
-        Ok(new.clone())
-    }
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 // MAPPING 2 — Leptos hydration ↔ frustum-snapshot rehydration. SSR renders the
@@ -518,53 +527,49 @@ mod tests {
         ));
     }
 
-    // ── MAPPING 3: the press fires a REAL turn through the mock executor; the
-    //    state updates so the view reacts; a refused press never runs. ──
+    // ── MAPPING 3: the press fires a REAL verified turn through the REAL executor
+    //    (the CLOSED seam — `server::fire_affordance`); the committed state advances
+    //    so the view re-seeds; a refused press commits NOTHING (anti-ghost). The
+    //    deep teeth are in `server.rs`; here we prove the runtime LOOP — the same
+    //    `fire_affordance` body the island POSTs to — drives a real commit. ──
 
     #[test]
-    fn mapping3_press_fires_real_turn_and_state_advances() {
-        // A member presses vote inside the window on the add-a-ballot transition:
-        // the mock executor fires the REAL gate, applies the REAL effect, and
-        // returns the advanced state (tally 0 → 1). This is the runtime loop:
-        // press → gate → effect → new state (the signal the view re-renders from).
-        let doc = cid(4);
-        let btn = vote_btn(doc);
-        let exec = MockExecutor::new(doc);
-        let held = member_held(cid(10));
-        let old = council(PENDING, 0);
-        let new = council(PENDING, 1);
-
-        let advanced = exec
-            .fire_and_apply(&btn, &held, 15, &old, &new)
-            .expect("an authorized in-window add-a-ballot fires");
-        assert_eq!(slot_u64(&advanced, TALLY_SLOT), Some(1)); // the view would now show 1.
+    fn mapping3_press_fires_real_turn_and_committed_state_advances() {
+        // A councillor (holds the ballot cap `Either`) presses vote on a fresh
+        // PENDING council: the server function fires the REAL `dregg_turn` executor,
+        // commits the verified turn, and returns the COMMITTED tally (0 → 1) plus the
+        // real turn-hash. This is the runtime loop the island drives: press →
+        // FireRequest → real gate + real executor → committed state (the signal the
+        // view re-renders from).
+        crate::server::reset_executor_cell();
+        let resp = crate::server::fire_affordance(
+            crate::server::FireRequest::at("vote", AuthRequired::Either), // ballot cap — a councillor
+        );
+        let committed = resp.result.expect("an authorized vote commits a real turn");
+        assert_eq!(committed.slots.tally, 1, "the committed tally the view re-seeds from");
+        assert_ne!(committed.turn_hash, [0u8; 32], "a REAL verified turn, not a mock");
     }
 
     #[test]
-    fn mapping3_refused_press_does_not_run_anti_ghost() {
-        // The anti-ghost tooth in the runtime: every refused press is a precise
-        // FireError, never a state change. Drop ANY gate and the executor refuses.
-        let doc = cid(5);
-        let btn = vote_btn(doc);
-        let exec = MockExecutor::new(doc);
-        let old = council(PENDING, 0);
-        let good_new = council(PENDING, 1);
-
-        // (cap) observer lacks the ballot cap → Unauthorized.
-        assert!(matches!(
-            exec.fire_and_apply(&btn, &observer_held(cid(11)), 15, &old, &good_new),
-            Err(FireError::Unauthorized { .. })
-        ));
-        // (transition) tally jumps by two (0→2) → TransitionUnmet.
-        assert!(matches!(
-            exec.fire_and_apply(&btn, &member_held(cid(10)), 15, &old, &council(PENDING, 2)),
-            Err(FireError::TransitionUnmet { .. })
-        ));
-        // (window) after the deadline (25 > 20) → OutsideWindow.
-        assert!(matches!(
-            exec.fire_and_apply(&btn, &member_held(cid(10)), 25, &old, &good_new),
-            Err(FireError::OutsideWindow { .. })
-        ));
+    fn mapping3_refused_press_commits_nothing_anti_ghost() {
+        // The anti-ghost tooth in the runtime, over the REAL executor: a press by an
+        // observer (holds only `Signature`, NOT the ballot cap) is refused on the cap
+        // tooth — a precise `FireError::Unauthorized`, surfaced as the refusal reason
+        // — and NOTHING is committed (the live tally stays 0). The same in-band
+        // refusal the island shows as its anti-ghost message.
+        crate::server::reset_executor_cell();
+        let resp = crate::server::fire_affordance(
+            crate::server::FireRequest::at("vote", AuthRequired::Signature), // observer — no ballot cap
+        );
+        let refused = resp.result.expect_err("an observer's vote is refused");
+        assert!(
+            refused.reason.contains("Unauthorized"),
+            "precise cap-tooth reason surfaced: {}",
+            refused.reason
+        );
+        // Anti-ghost: nothing committed — the tally is still 0, still PENDING.
+        assert_eq!(refused.slots.tally, 0, "a refused press commits nothing");
+        assert!(refused.slots.is_pending());
     }
 
     // ── MAPPING 2: SSR renders DIFFERENT surfaces for two viewers; the membrane
