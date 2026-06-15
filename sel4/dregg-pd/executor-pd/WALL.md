@@ -73,16 +73,29 @@ the upstream `lean4@d024af099` sources for a **hosted aarch64-linux-musl** targe
      verbatim and exposes `dreggcf_stark_verify_bytes(proof, pi)`: decode the
      structured proof, resolve the carried AIR, run `stark::verify` — ACCEPT a
      sound proof, REJECT a tampered proof / wrong PI (the anti-ghost + boundary
-     teeth). (The Lean `dregg_stark_verify` *abstract Nat-pair* portal still fails
-     closed — two opaque Nats carry no checkable proof; the real check is the byte
-     channel the proof-carrying turn feeds.) FAIL-CLOSED (ABI-correct, not reached
-     by a hashing turn, a genuinely different elliptic-curve surface not in
+     teeth). **§2.1 — the LIVE proof-carrying-turn admission path is now wired**:
+     `dreggcf_admit_proof_carrying_turn(wire)` decodes a turn's `PCT1` envelope (the
+     proof bytes + public inputs a producer ships OUT OF BAND alongside the turn —
+     `magic + turn_id + len-prefixed proof + len-prefixed PI`), pulls the *carried*
+     proof + PI, routes them through `dreggcf_stark_verify_bytes`, and returns the
+     ADMISSION verdict (1 = ADMIT iff the carried proof verifies, 0 = REFUSE,
+     fail-closed). So a LIVE turn's proof bytes reach the real verifier — not just
+     the in-line selftest (which mints + verifies in one breath). The anti-ghost
+     teeth now bite ON THE ADMISSION PATH: a genuine turn ADMITS, a tampered-proof /
+     wrong-PI / malformed-envelope turn REFUSES (`dreggcf_admit_selftest()` → `0x7`).
+     (The Lean `dregg_stark_verify` *abstract Nat-pair* portal still fails closed —
+     two opaque Nats carry no checkable proof; the real check is the byte channel
+     the proof-carrying turn feeds.) FAIL-CLOSED (ABI-correct, not reached by a
+     hashing turn, a genuinely different elliptic-curve surface not in
      verifier-stark): ed25519 (§1), Pedersen (§3), AEAD (§7). (Was `crypto-stub.c`:
      panic-if-reached with WRONG arity/types.) Run-verified via
      `crypto-floor-selftest.c` (calls each portal at the Lean ABI + the STARK
-     verify teeth; the ELF now links — the harness's C++-mangling bug is fixed) and
-     `sel4/crypto-floor-hosttest/` (the STARK verify teeth run natively on the host,
-     bitmask `0x7`).
+     verify teeth + the LIVE admission teeth; the ELF links clean — 0 undefined
+     symbols, both `dreggcf_admit_*` present as defined text after `--gc-sections`)
+     and `sel4/crypto-floor-hosttest/` (the byte-channel AND the LIVE-turn admission
+     teeth run natively on the host, bitmask `0x7`; on-device RUN of the selftest
+     ELF awaits a user-mode `qemu-aarch64`, absent on macOS — the link is the
+     on-device checkpoint).
    - `init-stubs.c` — no-op `initialize_Lean`/`initialize_aesop_Aesop`/
      `initialize_Dregg2_Dregg2_Tactics`. These cut the **Lean elaborator** out of
      the init-chain: the executor's compute path calls ZERO elaborator/kernel

@@ -150,22 +150,29 @@ beating on seL4. Two honest notes on what the PD does (NOT claims beyond it):
   SAME carried crypto the verifier-stark PD runs on seL4 (Plonky3-conformant
   Poseidon2 KAT'd against the circuit). So a turn that hashes
   (Merkle/commitment/nullifier/transcript) computes a real on-device digest.
-  **NEW — §2 STARK verify is now a REAL byte-channel verifier**, not the
-  abstract-Nat fail-closed stub: the staticlib carries the verifier-stark
-  `stark_core` (BabyBear+BLAKE3+FRI+Fiat-Shamir, the same STARK) verbatim and
-  exposes `dreggcf_stark_verify_bytes(proof, pi)` — decode the structured proof
-  bytes, resolve the carried AIR by name, run `stark::verify`. ACCEPTS a sound
-  proof, REJECTS a tampered proof + a wrong public input (the anti-ghost +
-  boundary teeth, the executor-PD analogue of verifier-stark's boot teeth). The
-  Lean portal `dregg_stark_verify` (abstract Nat-pair) STILL fails closed (two
-  opaque Nats carry no checkable proof) — the real check is the byte channel the
-  executor PD's proof-carrying turn feeds. Witnessed: `sel4/crypto-floor-hosttest/`
-  runs prove→verify-bytes natively (bitmask `0x7`, all teeth bite); the on-device
-  selftest `dreggcf_stark_selftest()` runs the same teeth, asserted in
-  `crypto-floor-selftest.c` (the ELF now LINKS — a pre-existing C++-mangling bug
-  in the harness's externs is fixed). The demo wire is a non-crypto turn so it
-  exercises the verified decode→step→encode without reaching the floor; the boot
-  receipt is byte-identical with the real floor linked. The 3 not-carried
+  **§2 STARK verify is a REAL byte-channel verifier**, not the abstract-Nat
+  fail-closed stub: the staticlib carries the verifier-stark `stark_core`
+  (BabyBear+BLAKE3+FRI+Fiat-Shamir, the same STARK) verbatim and exposes
+  `dreggcf_stark_verify_bytes(proof, pi)` — decode the structured proof bytes,
+  resolve the carried AIR by name, run `stark::verify`. ACCEPTS a sound proof,
+  REJECTS a tampered proof + a wrong public input (the anti-ghost + boundary
+  teeth, the executor-PD analogue of verifier-stark's boot teeth). **NEW — §2.1
+  the LIVE proof-carrying-turn admission path is wired**:
+  `dreggcf_admit_proof_carrying_turn(wire)` decodes a turn's `PCT1` envelope (the
+  proof bytes + PI a producer ships OUT OF BAND with the turn) and ADMITS the turn
+  iff the *carried* proof verifies (fail-closed) — so a live turn's proof bytes
+  reach the real verifier, not just the in-line selftest. The Lean portal
+  `dregg_stark_verify` (abstract Nat-pair) STILL fails closed (two opaque Nats
+  carry no checkable proof) — the real check is the byte channel the executor PD's
+  proof-carrying turn feeds. Witnessed: `sel4/crypto-floor-hosttest/` runs
+  prove→verify-bytes AND the LIVE-turn admission (genuine ADMITS, tampered/wrong-PI
+  /malformed REFUSE) natively (bitmask `0x7`, all teeth bite); the on-device
+  selftests `dreggcf_stark_selftest()` + `dreggcf_admit_selftest()` run the same
+  teeth, asserted in `crypto-floor-selftest.c` (the ELF LINKS clean — 0 undefined
+  symbols; on-device RUN awaits a user-mode `qemu-aarch64`, absent on macOS). The
+  demo wire is a non-crypto turn so it exercises the verified decode→step→encode
+  without reaching the floor; the boot receipt is byte-identical with the real
+  floor linked. The 3 not-carried
   primitives (ed25519/Pedersen/AEAD, a genuinely different elliptic-curve crypto
   surface NOT in verifier-stark) keep an ABI-correct FAIL-CLOSED floor (reject,
   never a spurious accept) — wiring those is the next step. (Was `crypto-stub.c`:

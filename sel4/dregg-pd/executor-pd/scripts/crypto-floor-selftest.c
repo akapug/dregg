@@ -47,6 +47,15 @@ extern uint8_t dreggcf_stark_selftest(void);
 extern uint8_t dreggcf_stark_verify_bytes(const uint8_t *proof, size_t proof_len,
                                           const uint8_t *pi, size_t pi_len);
 
+/* The LIVE proof-carrying-turn ADMISSION path: the producer ships a turn's proof
+ * bytes + PI in a PCT1 wire envelope, the executor PD DECODES it and ADMITS the
+ * turn iff the carried proof verifies (fail-closed). `dreggcf_admit_selftest()`
+ * builds three real turn wires (genuine / tampered-proof / wrong-PI) and drives
+ * `dreggcf_admit_proof_carrying_turn` — the anti-ghost teeth on the LIVE-turn path
+ * (proof bytes routed from the turn wire, not minted in-line). 0x7 = all bite. */
+extern uint8_t dreggcf_admit_selftest(void);
+extern uint8_t dreggcf_admit_proof_carrying_turn(const uint8_t *wire, size_t wire_len);
+
 extern void lean_initialize_runtime_module(void);
 
 #ifdef __cplusplus
@@ -163,6 +172,29 @@ int main(void) {
         uint8_t ev = dreggcf_stark_verify_bytes((const uint8_t *)0, 0,
                                                 (const uint8_t *)&pi0, sizeof pi0);
         CHECK(ev == 0, "real STARK verify: empty proof fails closed (rejects)");
+    }
+
+    /* --- §2.1 the LIVE proof-carrying-turn ADMISSION path: the teeth bite on the
+     * ADMISSION entry, where the proof bytes arrive from the turn wire (decoded),
+     * not minted in-line. dreggcf_admit_selftest() builds three turn wires and
+     * drives dreggcf_admit_proof_carrying_turn: a genuine turn ADMITS (0x1), a
+     * tampered-proof turn REFUSES (0x2), a wrong-PI turn REFUSES (0x4). This is the
+     * §4 next step (docs/EMBEDDABLE-LEAN-RUNTIME.md): a LIVE turn's proof bytes
+     * reach the real verifier, admitted iff verify == 1. */
+    {
+        uint8_t am = dreggcf_admit_selftest();
+        CHECK((am & 0x1) != 0, "live-turn admit: ADMITS a genuine proof-carrying turn");
+        CHECK((am & 0x2) != 0, "live-turn admit: REFUSES a turn carrying a tampered proof");
+        CHECK((am & 0x4) != 0, "live-turn admit: REFUSES a turn carrying a wrong PI (boundary)");
+        CHECK(am == 0x7, "live proof-carrying-turn admission: ALL teeth bite (0x7)");
+
+        /* a malformed turn envelope must fail closed at decode (never admit). */
+        uint8_t bad_wire[32];
+        for (int i = 0; i < 32; i++) bad_wire[i] = 0x00; /* bad magic */
+        uint8_t bm = dreggcf_admit_proof_carrying_turn(bad_wire, sizeof bad_wire);
+        CHECK(bm == 0, "live-turn admit: malformed turn wire fails closed (refuses)");
+        uint8_t em = dreggcf_admit_proof_carrying_turn((const uint8_t *)0, 0);
+        CHECK(em == 0, "live-turn admit: empty turn wire fails closed (refuses)");
     }
 
     /* --- §3 pedersen placeholder: total + deterministic over Int args. --- */
