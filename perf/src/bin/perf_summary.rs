@@ -1,5 +1,7 @@
 //! Standalone turn-proof performance summary — prints a table of real
-//! prove/verify wall-clock times for the production `prove_effect_vm_p3` path.
+//! prove/verify wall-clock times for the production self-sovereign turn path
+//! (`prove_turn_self_sovereign` / `verify_full_turn`). Under the `recursion`
+//! default the EffectVM leg proves through the rotated IR-v2 descriptor tower.
 //!
 //! Run: `cargo run --release -p dregg-perf --bin perf-summary`
 //!
@@ -10,8 +12,11 @@
 
 use std::time::Instant;
 
-use dregg_circuit::effect_vm_p3_full_air::{prove_effect_vm_p3, verify_effect_vm_p3};
+use dregg_circuit::effect_vm::pi;
 use dregg_perf::{build_trace, workloads};
+use dregg_sdk::{prove_turn_self_sovereign, verify_full_turn};
+
+const TURN_HASH: [u8; 32] = [7u8; 32];
 
 fn fmt(secs: f64) -> String {
     if secs < 1e-3 {
@@ -31,16 +36,19 @@ fn main() {
     println!("{}", "-".repeat(54));
 
     for w in workloads() {
-        let (trace, pis) = build_trace(&w);
+        let (_trace, pis) = build_trace(&w);
+        let old_commit = pis[pi::OLD_COMMIT];
+        let new_commit = pis[pi::NEW_COMMIT];
 
         // Warm + correctness gate.
-        let proof = prove_effect_vm_p3(&trace, &pis).expect("honest turn must prove");
-        verify_effect_vm_p3(&proof, &pis).expect("honest proof must verify");
+        let proof = prove_turn_self_sovereign(&w.initial, &w.effects, TURN_HASH)
+            .expect("honest turn must prove");
+        verify_full_turn(&proof, old_commit, new_commit).expect("honest proof must verify");
 
         let prove_iters = 5u32;
         let t0 = Instant::now();
         for _ in 0..prove_iters {
-            let p = prove_effect_vm_p3(&trace, &pis).expect("prove");
+            let p = prove_turn_self_sovereign(&w.initial, &w.effects, TURN_HASH).expect("prove");
             std::hint::black_box(&p);
         }
         let prove_mean = t0.elapsed().as_secs_f64() / prove_iters as f64;
@@ -48,7 +56,7 @@ fn main() {
         let verify_iters = 50u32;
         let t1 = Instant::now();
         for _ in 0..verify_iters {
-            verify_effect_vm_p3(&proof, &pis).expect("verify");
+            verify_full_turn(&proof, old_commit, new_commit).expect("verify");
         }
         let verify_mean = t1.elapsed().as_secs_f64() / verify_iters as f64;
 

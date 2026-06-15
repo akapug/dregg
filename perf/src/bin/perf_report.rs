@@ -21,22 +21,15 @@
 use std::time::Instant;
 
 use dregg_circuit::dsl::membership::create_test_witness;
-use dregg_circuit::effect_vm::{CellState, Effect, EffectVmAir, generate_effect_vm_trace, pi};
+use dregg_circuit::effect_vm::{CellState, Effect, generate_effect_vm_trace, pi};
 use dregg_circuit::effect_vm_descriptors::descriptor_for_selector;
-use dregg_circuit::effect_vm_p3_full_air::{
-    effect_vm_p3_width, extend_trace_with_hashes, prove_effect_vm_p3, verify_effect_vm_p3,
-};
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::joint_turn_aggregation::{
-    JointParticipant, prove_joint_turn, verify_joint_turn,
-};
 use dregg_circuit::lean_descriptor_air::{
-    parse_vm_descriptor, prove_vm_descriptor, verify_vm_descriptor,
+    descriptor_recursion_matrix, parse_vm_descriptor, prove_vm_descriptor, verify_vm_descriptor,
 };
 use dregg_circuit::merkle_air::{
     membership_public_inputs, prove_membership_p3, verify_membership_p3,
 };
-use dregg_circuit::stark;
 
 use dregg_perf::{fmt_bytes, fmt_secs, single_transfer, time_mean};
 
@@ -60,91 +53,65 @@ fn main() {
     println!("  dregg prover performance report");
     println!("  machine: {}", machine());
     println!("  config: BabyBear, FRI log_blowup=3 (8x LDE), 50 queries, 16 PoW bits");
-    println!(
-        "  EffectVM AIR: base width 186, +{} Poseidon2-aux cols => full width {}",
-        effect_vm_p3_width() - 186,
-        effect_vm_p3_width()
-    );
+    println!("  live EffectVM path: rotated IR-v2 descriptor-interpreter (the v1 hand-AIR is retired under recursion)");
 
-    section("1. EffectVM state-transition proof — HAND-AIR (live default path)");
+    // selector 1 = TRANSFER — the validated descriptor every transfer workload proves against.
+    let transfer_desc = descriptor_for_selector(1)
+        .map(|json| parse_vm_descriptor(json).expect("parse transfer descriptor"));
+
+    section("1. EffectVM state-transition proof — DESCRIPTOR-INTERPRETER (live path)");
     println!(
         "  {:<22} {:>5} {:>6} {:>13} {:>13} {:>11}",
         "workload", "effs", "rows", "prove", "verify", "proof"
     );
-    for (name, st, effs) in effectvm_workloads() {
-        let (trace, pis) = generate_effect_vm_trace(&st, &effs);
-        let rows = trace.len();
-        let proof = prove_effect_vm_p3(&trace, &pis).expect("prove");
-        verify_effect_vm_p3(&proof, &pis).expect("verify");
-        let prove = time_mean(5, || prove_effect_vm_p3(&trace, &pis).expect("prove"));
-        let verify = time_mean(30, || verify_effect_vm_p3(&proof, &pis).expect("verify"));
-        println!(
-            "  {:<22} {:>5} {:>6} {:>13} {:>13} {:>11}",
-            name,
-            effs.len(),
-            rows,
-            fmt_secs(prove),
-            fmt_secs(verify),
-            fmt_bytes(p3_proof_bytes(&proof))
-        );
-    }
-
-    section("2. EffectVM — DESCRIPTOR-INTERPRETER (verified-by-construction cutover)");
-    {
-        let (st, effs) = single_transfer();
-        let (trace, full_pis) = generate_effect_vm_trace(&st, &effs);
-        // selector 1 = TRANSFER; the validated cutover-ready descriptor.
-        if let Some(json) = descriptor_for_selector(1) {
-            let desc = parse_vm_descriptor(json).expect("parse transfer descriptor");
+    if let Some(desc) = transfer_desc.as_ref() {
+        for (name, st, effs) in effectvm_workloads() {
+            let (trace, full_pis) = generate_effect_vm_trace(&st, &effs);
+            let rows = trace.len();
             let dpis = full_pis[..desc.public_input_count].to_vec();
-            let proof = prove_vm_descriptor(&desc, &trace, &dpis).expect("descriptor prove");
-            verify_vm_descriptor(&desc, &proof, &dpis).expect("descriptor verify");
-            let prove = time_mean(5, || {
-                prove_vm_descriptor(&desc, &trace, &dpis).expect("descriptor prove")
-            });
-            let verify = time_mean(30, || {
-                verify_vm_descriptor(&desc, &proof, &dpis).expect("descriptor verify")
-            });
-            // hand-AIR baseline for the SAME single transfer (apples to apples).
-            let hand = prove_effect_vm_p3(&trace, &full_pis).expect("hand prove");
-            let hand_prove = time_mean(5, || prove_effect_vm_p3(&trace, &full_pis).expect("hand"));
+            let proof = prove_vm_descriptor(desc, &trace, &dpis).expect("prove");
+            verify_vm_descriptor(desc, &proof, &dpis).expect("verify");
+            let prove = time_mean(5, || prove_vm_descriptor(desc, &trace, &dpis).expect("prove"));
+            let verify =
+                time_mean(30, || verify_vm_descriptor(desc, &proof, &dpis).expect("verify"));
             println!(
-                "  {:<32} {:>13} {:>13} {:>11}",
-                "path", "prove", "verify", "proof"
-            );
-            println!(
-                "  {:<32} {:>13} {:>13} {:>11}",
-                "transfer  (descriptor-interp)",
+                "  {:<22} {:>5} {:>6} {:>13} {:>13} {:>11}",
+                name,
+                effs.len(),
+                rows,
                 fmt_secs(prove),
                 fmt_secs(verify),
                 fmt_bytes(p3_proof_bytes(&proof))
             );
-            println!(
-                "  {:<32} {:>13} {:>13} {:>11}",
-                "transfer  (hand-AIR, default)",
-                fmt_secs(hand_prove),
-                "(see §1)",
-                fmt_bytes(p3_proof_bytes(&hand))
-            );
-            let overhead = (prove / hand_prove - 1.0) * 100.0;
-            println!("  => descriptor-interpreter prove overhead vs hand-AIR: {overhead:+.1}%");
-        } else {
-            println!("  (no transfer descriptor registered — skipped)");
         }
+    } else {
+        println!("  (no transfer descriptor registered — skipped)");
     }
 
+    section("2. EffectVM — DESCRIPTOR-INTERPRETER (verified-by-construction cutover)");
+    println!(
+        "  (the descriptor-interpreter IS the live path — see §1 for its prove/verify/proof numbers;"
+    );
+    println!(
+        "   the v1 hand-AIR baseline this section once compared against is retired under recursion.)"
+    );
+
     section("3. Where the time goes inside ONE EffectVM proof (witness-gen vs prove)");
-    {
+    if let Some(desc) = transfer_desc.as_ref() {
         let (st, effs) = single_transfer();
-        let (base_trace, pis) = generate_effect_vm_trace(&st, &effs);
+        let (base_trace, full_pis) = generate_effect_vm_trace(&st, &effs);
+        let dpis = full_pis[..desc.public_input_count].to_vec();
         // (a) witness-gen: building the base trace from state+effects.
         let wgen = time_mean(50, || generate_effect_vm_trace(&st, &effs));
-        // (b) hash-aux extension: filling the Poseidon2 aux blocks.
-        let hashext = time_mean(50, || extend_trace_with_hashes(&base_trace));
+        // (b) descriptor witness extension: base wires -> full descriptor-AIR matrix
+        //     (Poseidon2 site-aux + range bits), the surface `prove_vm_descriptor` consumes.
+        let hashext = time_mean(50, || {
+            descriptor_recursion_matrix(desc, &base_trace).expect("descriptor matrix")
+        });
         // (c) total prove (includes (b) internally) and (d) verify.
-        let total = time_mean(5, || prove_effect_vm_p3(&base_trace, &pis).expect("prove"));
-        let proof = prove_effect_vm_p3(&base_trace, &pis).expect("prove");
-        let verify = time_mean(30, || verify_effect_vm_p3(&proof, &pis).expect("verify"));
+        let total = time_mean(5, || prove_vm_descriptor(desc, &base_trace, &dpis).expect("prove"));
+        let proof = prove_vm_descriptor(desc, &base_trace, &dpis).expect("prove");
+        let verify = time_mean(30, || verify_vm_descriptor(desc, &proof, &dpis).expect("verify"));
         println!("  {:<40} {:>13}", "stage", "time");
         println!(
             "  {:<40} {:>13}",
@@ -153,7 +120,7 @@ fn main() {
         );
         println!(
             "  {:<40} {:>13}",
-            "Poseidon2-aux extension (hash witness)",
+            "descriptor matrix extension (aux witness)",
             fmt_secs(hashext)
         );
         println!(
@@ -171,6 +138,8 @@ fn main() {
             "  => witness-gen is {:.2}% of prove; FRI/commit dominates.",
             (wgen + hashext) / total * 100.0
         );
+    } else {
+        println!("  (no transfer descriptor registered — skipped)");
     }
 
     section("4. Sub-proof primitive: Merkle c-list MEMBERSHIP (depth scaling)");
@@ -198,39 +167,15 @@ fn main() {
     }
 
     section("5. Bespoke `stark` vs audited p3 (the TCB-shrinking cost)");
-    {
-        let (st, effs) = single_transfer();
-        let (trace, pis) = generate_effect_vm_trace(&st, &effs);
-        // bespoke stark over EffectVmAir (the legacy / aggregation per-cell prover)
-        let air = EffectVmAir::new(trace.len());
-        let bproof = stark::prove(&air, &trace, &pis);
-        stark::verify(&air, &bproof, &pis).expect("bespoke verify");
-        let bprove = time_mean(10, || stark::prove(&air, &trace, &pis));
-        let bverify = time_mean(50, || stark::verify(&air, &bproof, &pis).expect("bverify"));
-        // audited p3 over the same transition
-        let pproof = prove_effect_vm_p3(&trace, &pis).expect("p3 prove");
-        let pprove = time_mean(5, || prove_effect_vm_p3(&trace, &pis).expect("p3 prove"));
-        let pverify = time_mean(30, || {
-            verify_effect_vm_p3(&pproof, &pis).expect("p3 verify")
-        });
-        println!("  {:<28} {:>13} {:>13}", "prover", "prove", "verify");
-        println!(
-            "  {:<28} {:>13} {:>13}",
-            "bespoke stark (legacy/agg)",
-            fmt_secs(bprove),
-            fmt_secs(bverify)
-        );
-        println!(
-            "  {:<28} {:>13} {:>13}",
-            "audited p3 (live commit path)",
-            fmt_secs(pprove),
-            fmt_secs(pverify)
-        );
-        println!(
-            "  => the audited p3 path costs {:.1}x the bespoke prover (real in-circuit Poseidon2 + log_blowup=3)",
-            pprove / bprove
-        );
-    }
+    println!(
+        "  (RETIRED under recursion: both legs measured the v1 hand-AIR — the bespoke `stark` over"
+    );
+    println!(
+        "   `EffectVmAir` and the audited `prove_effect_vm_p3`. The live path is the rotated IR-v2"
+    );
+    println!(
+        "   descriptor (§1); the audited multi-table batch verifier is `descriptor_ir2::verify_vm_descriptor2`.)"
+    );
 
     section("6. FULL-TURN COMMIT PATH — the real node number (prove_turn_self_sovereign)");
     {
@@ -279,30 +224,23 @@ fn main() {
 
     section("7. Silver joint-turn AGGREGATION (N-cell private joint turn)");
     println!(
-        "  {:<14} {:>15} {:>13} {:>11}",
-        "cells", "prove (agg+cells)", "verify", "proof"
+        "  (RETIRED under recursion: the v1 silver aggregation re-verified per-cell `EffectVmAir`"
     );
-    for n in [2usize, 4, 8] {
-        let proof = prove_joint_turn(build_participants(n)).expect("joint prove");
-        verify_joint_turn(&proof).expect("joint verify");
-        let prove = time_mean(3, || {
-            prove_joint_turn(build_participants(n)).expect("joint prove")
-        });
-        let verify = time_mean(10, || verify_joint_turn(&proof).expect("joint verify"));
-        let bytes = postcard::to_allocvec(&proof.aggregation_proof)
-            .map(|v| v.len())
-            .unwrap_or(0);
-        println!(
-            "  {:<14} {:>15} {:>13} {:>11}",
-            n,
-            fmt_secs(prove),
-            fmt_secs(verify),
-            fmt_bytes(bytes)
-        );
-    }
-    println!("  NOTE: silver aggregation re-verifies every per-cell proof (no recursion);");
-    println!("        verify cost grows ~linearly in cells. Gold recursive path collapses this");
-    println!("        to one succinct proof (joint_turn_recursive) at higher prove cost.");
+    println!(
+        "   proofs via `prove_joint_turn`. The rotated cohort now carries `DescriptorParticipant`"
+    );
+    println!(
+        "   legs (minted by `dregg_turn::rotation_witness::mint_rotated_participant_leg`), verified"
+    );
+    println!(
+        "   by `joint_turn_aggregation::verify_descriptor_participant`; the recursive fold is"
+    );
+    println!(
+        "   `joint_turn_recursive::prove_joint_turn_recursive_rotated`. Wiring an N-cell rotated"
+    );
+    println!(
+        "   joint bench needs the full per-cell rotation witness set — tracked, not measured here.)"
+    );
 
     println!();
     rule();
@@ -342,29 +280,6 @@ fn effectvm_workloads() -> Vec<(&'static str, CellState, Vec<Effect>)> {
                 .collect(),
         ),
     ]
-}
-
-/// Build N agreeing joint-turn participants, each a real EffectVm whole-turn
-/// proof through the bespoke `stark` per-cell prover (the substrate
-/// `proof_forest` / aggregation use), with a shared turn id.
-fn build_participants(n: usize) -> Vec<JointParticipant> {
-    (0..n)
-        .map(|i| {
-            let state = CellState::new(100 + i as u64 * 10, i as u32);
-            let effects = vec![Effect::Transfer {
-                amount: 5,
-                direction: 1,
-            }];
-            let (trace, mut public_inputs) = generate_effect_vm_trace(&state, &effects);
-            public_inputs[pi::TURN_HASH_BASE] = BabyBear::new(0xABCD);
-            let air = EffectVmAir::new(trace.len());
-            let proof = stark::prove(&air, &trace, &public_inputs);
-            JointParticipant {
-                proof,
-                public_inputs,
-            }
-        })
-        .collect()
 }
 
 fn machine() -> String {
