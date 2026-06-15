@@ -46,6 +46,10 @@ fn main() {
     if args.len() >= 2 && args[1] == "scope-recursive" {
         run_scope_recursive(&args[2..]);
     }
+    #[cfg(feature = "recursion")]
+    if args.len() >= 2 && args[1] == "rotated-replay-chain" {
+        run_rotated_replay_chain(&args[2..]);
+    }
     if args.len() >= 2 && (args[1] == "verify-cross-fed-bundle" || args[1] == "cross-fed") {
         run_verify_cross_fed_bundle(&args[2..]);
     }
@@ -412,6 +416,81 @@ fn run_scope_recursive(args: &[String]) -> ! {
     };
 
     let output = replay_chain_recursive(&entries);
+    let json = serde_json::to_string_pretty(&output).unwrap_or_else(|_| {
+        r#"{"overall_verified":false,"summary":"serialisation error"}"#.to_string()
+    });
+    println!("{}", json);
+
+    let code = if output.overall_verified {
+        exit_code::VERIFIED
+    } else {
+        exit_code::REJECTED
+    };
+    process::exit(code);
+}
+
+// ---------------------------------------------------------------------------
+// rotated-replay-chain subcommand (recursion build — the v1 replay-chain twin)
+// ---------------------------------------------------------------------------
+
+/// On-disk request for the rotated replay-chain verify: the chained
+/// `"effect-vm-rotated"` legs plus the caller's trusted pre/post commitments.
+#[cfg(feature = "recursion")]
+#[derive(serde::Deserialize)]
+struct RotatedReplayRequest {
+    /// The rotated legs in chain order (`s0 → s1 → … → sN`).
+    legs: Vec<dregg_verifier::RotatedReplayLeg>,
+    /// The turn's pre-state commitment (canonical BabyBear `u32`) the first leg's
+    /// `OLD_COMMIT` must match.
+    expected_old_commit: u32,
+    /// The turn's post-state commitment (canonical BabyBear `u32`) the last leg's
+    /// `NEW_COMMIT` must match.
+    expected_new_commit: u32,
+}
+
+/// `dregg-verifier rotated-replay-chain <path-to-request.json>`
+///
+/// Reads `{ "legs": [..], "expected_old_commit": u32, "expected_new_commit": u32 }`
+/// and runs the ROTATED replay-chain verify (the recursion-build replacement for
+/// the v1 `replay-chain` subcommand, whose v1 hand-AIR is retired under
+/// `recursion`). Each leg is an `"effect-vm-rotated"` IR-v2 batch proof verified
+/// SELECTOR-BOUND via the audited `verify_vm_descriptor2`; the chain's endpoints
+/// and interior adjacency are then checked against the caller's commitments.
+///
+/// Exit code: 0 = chain verified, 1 = at least one rejection, 2 = read/parse error.
+#[cfg(feature = "recursion")]
+fn run_rotated_replay_chain(args: &[String]) -> ! {
+    use dregg_verifier::verify_rotated_replay_chain;
+
+    let path = match args.first() {
+        Some(p) => p,
+        None => {
+            eprintln!("Usage: dregg-verifier rotated-replay-chain <path-to-request.json>");
+            process::exit(exit_code::ERROR);
+        }
+    };
+
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("cannot read {}: {}", path, e);
+            process::exit(exit_code::ERROR);
+        }
+    };
+
+    let req: RotatedReplayRequest = match serde_json::from_str(&text) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("cannot parse rotated-replay-chain request JSON: {}", e);
+            process::exit(exit_code::ERROR);
+        }
+    };
+
+    let output = verify_rotated_replay_chain(
+        &req.legs,
+        dregg_circuit::field::BabyBear::new_canonical(req.expected_old_commit),
+        dregg_circuit::field::BabyBear::new_canonical(req.expected_new_commit),
+    );
     let json = serde_json::to_string_pretty(&output).unwrap_or_else(|_| {
         r#"{"overall_verified":false,"summary":"serialisation error"}"#.to_string()
     });
