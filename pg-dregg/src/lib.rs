@@ -36,6 +36,11 @@ pub mod jsonpath;
 pub mod lean_producer;
 pub mod mirror;
 pub mod synth;
+// S2 (docs/PG-DREGG.md §10.2): the node-side whole-chain PROOF producer — fold
+// finalized turns into ONE recursive proof (the `circuit::ivc_turn_chain` fold,
+// behind a `ChainFolder` seam so the default build stays circuit-free) and write the
+// `dregg.turn_proofs` rows the range-attest SRF reads. Postgres-free core.
+pub mod turn_proofs;
 pub mod workflow;
 
 // The PG_MODULE_MAGIC block + the `__pgrx_marker` the schema generator links
@@ -661,6 +666,114 @@ mod pg {
                 )
             })
             .collect()
+    }
+
+    /// `dregg_install_turn_proofs() -> text`. Install the Tier-C PROOF store
+    /// (`docs/PG-DREGG.md` §10.2): the `dregg.turn_proofs` table the node-side
+    /// whole-chain proof producer ([`crate::turn_proofs::TurnProofProducer`], S2)
+    /// writes and the range-attest SRF reads — ONE row per folded finalized window
+    /// `(lo, hi, genesis_root, final_root, proof bytea, vk)`. Requires
+    /// [`dregg_install_schema`] first (the role model). Idempotent. Run by a
+    /// DBA/migration role (it creates a kernel-write-locked table).
+    #[pg_extern]
+    fn dregg_install_turn_proofs() -> String {
+        let ddl = crate::mirror::ddl::turn_proofs();
+        Spi::run(&ddl).expect("dregg_install_turn_proofs: turn_proofs DDL failed");
+        "dregg Tier-C proof store installed: dregg.turn_proofs (one whole-chain proof \
+         per folded finalized window; the node producer writes it, dregg_attest_window \
+         reads it)"
+            .to_string()
+    }
+
+    /// `dregg_attest_window(lo bigint, hi bigint) RETURNS SETOF (ordinal bigint,
+    /// prev_root bytea, ledger_root bytea, proof_attested bool)`. The S2-fed face of
+    /// the Tier-C proof gate: instead of taking the proof bytes as an argument (the
+    /// [`dregg_attest_range`] form), it LOOKS UP the whole-chain proof covering
+    /// `[lo, hi]` in `dregg.turn_proofs` (the row the node producer wrote), reads its
+    /// `(proof, vk)`, and verifies that proof against its own anchor — then returns
+    /// one row per attested ordinal (from `dregg.turns`), each tagged
+    /// `proof_attested = true`. Fail-closed: no covering proof row, or a proof that
+    /// does not verify (or the unwired circuit stub), yields ZERO rows.
+    ///
+    /// This is the natural consumer surface — a caller asks "is the window `[lo, hi]`
+    /// proof-attested?" and the gate finds the proof for it, rather than the caller
+    /// having to carry the proof bytes. The covering row is the one whose
+    /// `[lo, hi]` ⊇ the asked window (the producer writes dense, non-overlapping
+    /// windows, so at most one covers any ordinal range).
+    #[pg_extern]
+    fn dregg_attest_window(
+        lo: i64,
+        hi: i64,
+    ) -> TableIterator<
+        'static,
+        (
+            name!(ordinal, i64),
+            name!(prev_root, Vec<u8>),
+            name!(ledger_root, Vec<u8>),
+            name!(proof_attested, bool),
+        ),
+    > {
+        let rows = match lookup_turn_proof(lo, hi) {
+            Some((proof, vk)) => attest_range_rows(&proof, &vk, lo, hi),
+            None => Vec::new(), // no covering proof row ⇒ attest nothing (fail-closed)
+        };
+        TableIterator::new(rows.into_iter())
+    }
+
+    /// `dregg_attest_window_explain(lo bigint, hi bigint) -> text`. The verdict reason
+    /// for [`dregg_attest_window`] (the explain face): `'attested: …'`, `'REFUSED: no
+    /// whole-chain proof covers [lo, hi] in dregg.turn_proofs'`, or the proof's own
+    /// refusal reason (including the unwired circuit-link settle item).
+    #[pg_extern]
+    fn dregg_attest_window_explain(lo: i64, hi: i64) -> String {
+        if lo < 0 || hi < 0 {
+            return "REFUSED: lo/hi must be non-negative ordinals".to_string();
+        }
+        match lookup_turn_proof(lo, hi) {
+            Some((proof, vk)) => {
+                let Some(anchor) = slice_to_root(&vk) else {
+                    return "REFUSED: dregg.turn_proofs row has a malformed vk (must be 32 bytes)"
+                        .to_string();
+                };
+                let req = crate::attest::AttestRequest {
+                    proof_bytes: &proof,
+                    vk_anchor: anchor,
+                    lo: lo as u64,
+                    hi: hi as u64,
+                };
+                crate::attest::attest_range(&req).reason()
+            }
+            None => format!(
+                "REFUSED: no whole-chain proof covers [{lo}, {hi}] in dregg.turn_proofs"
+            ),
+        }
+    }
+
+    /// Find the `dregg.turn_proofs` row whose window COVERS `[lo, hi]` (i.e.
+    /// `row.lo <= lo AND row.hi >= hi`) and return its `(proof, vk)` bytes. `None` if
+    /// no row covers the asked window (fail-closed: the gate then attests nothing).
+    /// The producer writes dense, non-overlapping windows, so at most one covers a
+    /// given range; if several somehow match, the tightest (largest `lo`) is used.
+    fn lookup_turn_proof(lo: i64, hi: i64) -> Option<(Vec<u8>, Vec<u8>)> {
+        if lo < 0 || hi < 0 {
+            return None;
+        }
+        Spi::connect(|client| {
+            let rows = client.select(
+                "SELECT proof, vk FROM dregg.turn_proofs \
+                 WHERE lo <= $1 AND hi >= $2 ORDER BY lo DESC LIMIT 1",
+                Some(1),
+                &[lo.into(), hi.into()],
+            )?;
+            let mut it = rows.into_iter();
+            Ok::<Option<(Vec<u8>, Vec<u8>)>, pgrx::spi::Error>(it.next().and_then(|r| {
+                let proof: Vec<u8> = r.get::<Vec<u8>>(1).ok().flatten()?;
+                let vk: Vec<u8> = r.get::<Vec<u8>>(2).ok().flatten()?;
+                Some((proof, vk))
+            }))
+        })
+        .ok()
+        .flatten()
     }
 
     /// `dregg_bind_role(pg_role text, agent bytea, token text) -> bool`. Bind a
@@ -3368,27 +3481,62 @@ mod pg {
             install_tier_c_and_submit_story(); // dregg.turns has 4 turns
 
             let vk = "0000000000000000000000000000000000000000000000000000000000000000";
-            // A non-empty (but unverifiable, since the link is stubbed) proof + a
-            // claimed window [0,3]. The SRF must return ZERO rows (fail-closed).
+
+            // (A) A WELL-FORMED S1 transport (the verify-sufficient subset of a
+            // WholeChainProof, postcard-encoded by the core) claiming the window
+            // [0,3]. It DECODES — but with the circuit-link UNWIRED (the default,
+            // circuit-free build) the proof gate STILL attests NOTHING: the SRF
+            // returns ZERO rows and the explain names the settle item. This is the
+            // §10.3 safe direction on a GENUINE transport, not "garbage happens to be
+            // refused" — a labeled proof gate that does not verify must say
+            // "unattested", never "attested".
+            let good = crate::attest::SerializedWholeChainProof::new(
+                vec![0xa1, 0xa2, 0xa3], // non-empty root-proof blob (stub never decodes it)
+                vec![0xb1, 0xb2],       // non-empty binding-proof blob
+                [0u8; 32],
+                [9u8; 32],
+                [5u8; 32],
+                4, // 4 turns — would cover [0,3] IF it verified
+            )
+            .to_bytes();
+            let good_hex: String = good.iter().map(|b| format!("{b:02x}")).collect();
+
             let attested: i64 = Spi::get_one(&format!(
-                "SELECT count(*) FROM dregg_attest_range('\\xdeadbeef'::bytea, '\\x{vk}'::bytea, 0, 3)"
+                "SELECT count(*) FROM dregg_attest_range('\\x{good_hex}'::bytea, '\\x{vk}'::bytea, 0, 3)"
             ))
             .unwrap()
             .unwrap();
-            assert_eq!(attested, 0, "the unwired proof gate attests NOTHING (fail-closed)");
+            assert_eq!(attested, 0, "the unwired proof gate attests NOTHING even on a valid transport (fail-closed)");
 
-            // The explain names the circuit-link settle item (not a silent deny).
             let why: String = Spi::get_one(&format!(
-                "SELECT dregg_attest_explain('\\xdeadbeef'::bytea, '\\x{vk}'::bytea, 0, 3)"
+                "SELECT dregg_attest_explain('\\x{good_hex}'::bytea, '\\x{vk}'::bytea, 0, 3)"
             ))
             .unwrap()
             .unwrap();
             assert!(
                 why.contains("not yet wired") || why.contains("settle item"),
-                "the refusal names the circuit-link settle item: {why}"
+                "a valid transport refused at the unwired verifier names the settle item: {why}"
             );
 
-            // A bad VK anchor (wrong length) is refused, not panicked.
+            // (B) GARBAGE bytes (not a valid transport) fail closed at the S1 decode,
+            // BEFORE any circuit check — zero rows, and the explain names the decode.
+            let garbage: i64 = Spi::get_one(&format!(
+                "SELECT count(*) FROM dregg_attest_range('\\xdeadbeef'::bytea, '\\x{vk}'::bytea, 0, 3)"
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(garbage, 0, "garbage proof bytes attest nothing (fail-closed at decode)");
+            let why_g: String = Spi::get_one(&format!(
+                "SELECT dregg_attest_explain('\\xdeadbeef'::bytea, '\\x{vk}'::bytea, 0, 3)"
+            ))
+            .unwrap()
+            .unwrap();
+            assert!(
+                why_g.contains("does not decode") || why_g.contains("transport"),
+                "garbage bytes are refused at the transport decode: {why_g}"
+            );
+
+            // (C) A bad VK anchor (wrong length) is refused, not panicked.
             let bad_vk: String = Spi::get_one(
                 "SELECT dregg_attest_explain('\\xde'::bytea, '\\x00'::bytea, 0, 1)",
             )
@@ -3396,13 +3544,79 @@ mod pg {
             .unwrap();
             assert!(bad_vk.contains("32 bytes"), "a malformed VK anchor fails closed: {bad_vk}");
 
-            // An inverted/empty window is refused too (zero rows).
+            // (D) An inverted/empty window is refused too (zero rows).
             let inverted: i64 = Spi::get_one(&format!(
                 "SELECT count(*) FROM dregg_attest_range('\\xde'::bytea, '\\x{vk}'::bytea, 5, 4)"
             ))
             .unwrap()
             .unwrap();
             assert_eq!(inverted, 0, "an inverted window attests nothing");
+        }
+
+        /// S2 through real SQL: install the `dregg.turn_proofs` store, write a
+        /// producer-shaped proof row (a WELL-FORMED S1 transport covering a window),
+        /// and confirm the table-fed gate `dregg_attest_window` LOOKS UP the covering
+        /// proof and STILL fails closed with the circuit link unwired (the safe
+        /// direction), while a window with NO covering proof row also yields nothing.
+        #[pg_test]
+        fn tier_c_turn_proofs_store_and_window_gate_fail_closed() {
+            let root = root();
+            assert_issuer(&root);
+            install_tier_c_and_submit_story(); // dregg.turns has 4 turns
+            Spi::run(&crate::mirror::ddl::turn_proofs())
+                .expect("install dregg.turn_proofs");
+
+            // A producer-shaped proof row covering [0,3] (the S1 transport bytes +
+            // the 32-byte VK anchor), written as the kernel would.
+            let proof = crate::attest::SerializedWholeChainProof::new(
+                vec![0x5a; 8],
+                vec![0xb1; 8],
+                [0u8; 32],
+                [9u8; 32],
+                [5u8; 32],
+                4,
+            )
+            .to_bytes();
+            let proof_hex: String = proof.iter().map(|b| format!("{b:02x}")).collect();
+            let vk_hex = "00000000000000000000000000000000000000000000000000000000000000aa";
+            Spi::run(&format!(
+                "INSERT INTO dregg.turn_proofs (lo, hi, genesis_root, final_root, proof, vk) \
+                 VALUES (0, 3, '\\x00'::bytea, '\\x09'::bytea, '\\x{proof_hex}'::bytea, '\\x{vk_hex}'::bytea)"
+            ))
+            .expect("write a turn_proofs row");
+
+            // The window gate FINDS the covering proof (so it does not refuse at
+            // lookup) but STILL attests nothing with the verifier unwired — the
+            // explain names the settle item, NOT "no proof covers".
+            let attested: i64 = Spi::get_one(
+                "SELECT count(*) FROM dregg_attest_window(0, 3)",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(attested, 0, "the unwired window gate attests nothing (fail-closed)");
+            let why: String = Spi::get_one("SELECT dregg_attest_window_explain(0, 3)")
+                .unwrap()
+                .unwrap();
+            assert!(
+                why.contains("not yet wired") || why.contains("settle item"),
+                "the covering proof was FOUND, then refused at the unwired verifier: {why}"
+            );
+
+            // A window with NO covering proof row (ordinals beyond the only row) is
+            // refused at lookup — the explain says so.
+            let why_missing: String =
+                Spi::get_one("SELECT dregg_attest_window_explain(10, 20)")
+                    .unwrap()
+                    .unwrap();
+            assert!(
+                why_missing.contains("no whole-chain proof covers"),
+                "a window with no covering proof row is refused at lookup: {why_missing}"
+            );
+            let none: i64 =
+                Spi::get_one("SELECT count(*) FROM dregg_attest_window(10, 20)")
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(none, 0, "no covering proof ⇒ zero rows");
         }
 
         // ===================================================================

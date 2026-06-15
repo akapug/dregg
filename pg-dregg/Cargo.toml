@@ -129,6 +129,13 @@ dregg-auth = { path = "../dregg-auth" }
 dregg-lean-ffi = { path = "../dregg-lean-ffi", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# postcard backs the S1 whole-chain-proof transport (`attest::SerializedWholeChainProof`)
+# + the S2 producer's serialized proof bytes (`turn_proofs`): the verify-sufficient subset
+# of `circuit::ivc_turn_chain::WholeChainProof` crosses the SQL boundary as `bytea`,
+# postcard-encoded — the SAME codec `dregg-auth` already pulls and the circuit's recursion
+# VK fingerprint uses. Already in the resolved tree (via dregg-auth); named directly here
+# because `attest`/`turn_proofs` encode + decode the transport in the postgres-free core.
+postcard = { version = "1", features = ["use-std"] }
 # libc backs the `drainerd` daemon's graceful-shutdown signal handlers
 # (SIGINT/SIGTERM → an atomic stop flag). Already in the resolved tree; used only
 # by the `src/bin/drainerd.rs` worker, never by the postgres-free library core.
