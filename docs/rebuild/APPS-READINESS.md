@@ -236,15 +236,24 @@ threshold), `Monotonic`(version, dispute-window), `MonotonicSequence`,
 `SenderAuthorized{PublicRoot}` per method (`governance_program()`,
 `lib.rs:285-460`).
 
-**Gap.** All the *state* constraints are in `Program.lean`. The two real
-blockers: (a) **`Authorization::Custom` propagation** — the kernel must
-route a custom verifier vk_hash to a registered threshold-sig verifier;
-in dregg2 this is the predicate-registry / verifier portal
-(`Authority/Predicate.lean`, the `WitnessedPredicateKind::Custom` slot).
-(b) **`SenderAuthorized{PublicRoot}`** (shared seam). This is the
-heaviest app: defer it to last. **Net gap = SetField+Cases FFI wiring +
-custom-verifier portal + PublicRoot portal + the threshold-sig verifier
-binding (the same machinery the Bridge predicate already exercises).**
+**Status.** All the *state* constraints are in `Program.lean`. The
+**`Authorization::Custom` threshold-sig fire is WIRED** — `commit_table_update`'s
+`Custom{ vk_hash: GOVERNANCE_VK }` routes through the executor's
+`WitnessedPredicateRegistry` to `dregg_turn::executor::ThresholdSigVerifier`, a
+real BLS12-381 + KZG weighted-threshold-signature check (`hints::verify_aggregate`:
+the constant-size aggregate QC's SNARK proof + final BLS pairing — the same
+primitive `dregg-federation`'s `FederationCommittee`/`ThresholdQC` wrap, welded
+DIRECTLY from `hints` rather than `dregg-federation` to avoid the
+federation→turn cycle, the same move `BridgePredicateStarkVerifier` makes vs.
+`dregg-bridge`). A host installs it with `register_threshold_sig_verifier` under
+`GOVERNANCE_VK`, backed by a `StaticThresholdSigPolicy` that pins the committee
+VK + k-of-n floor (so neither can be chosen by the prover). The fire COMMITS
+under a valid k-of-n aggregate and is REFUSED under under-threshold / forged /
+wrong-committee signatures — both polarities proven end-to-end through the full
+`EmbeddedExecutor` in `governed-namespace/tests/commit_threshold_sig.rs`, plus
+turn-layer unit teeth in `membership_verifier.rs::tests::threshold_sig`.
+**Remaining gap** = the shared **`SenderAuthorized{PublicRoot}`** Lean portal +
+SetField+Cases FFI wiring (the membership seam shared with sub/id).
 
 ---
 

@@ -29,6 +29,11 @@
 
 use std::sync::Arc;
 
+// Threshold-sig (gated): the `CanonicalSerialize`/`CanonicalDeserialize` traits
+// must be in scope for `Signature::{serialize_compressed,deserialize_compressed}`.
+#[cfg(feature = "threshold-sig")]
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+
 use dregg_cell::predicate::{
     IssuerRootAuthority, NeighborAdjacencyVerifier, PredicateInput, WitnessedPredicateError,
     WitnessedPredicateKind, WitnessedPredicateRegistry, WitnessedPredicateVerifier,
@@ -1057,6 +1062,289 @@ pub fn bridge_predicate_range_proof_bytes(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// ThresholdSig — real BLS12-381 + KZG weighted-threshold-signature verifier
+// for `Authorization::Custom { vk_hash }` (the governed-namespace
+// `commit_table_update` `GOVERNANCE_VK` fire). Welded from the `hints` crate
+// directly (the same primitive `dregg-federation`'s `FederationCommittee` /
+// `ThresholdQC` wrap) — NOT via `dregg-federation`, because federation depends
+// on `dregg-turn`, so the edge would cycle. This mirrors how
+// `BridgePredicateStarkVerifier` welds from `dregg-circuit` rather than
+// `dregg-bridge`.
+// ─────────────────────────────────────────────────────────────────────────
+//
+// # What `Authorization::Custom` hands this verifier
+//
+// The executor (`authorize.rs::verify_custom_authorization`) resolves the
+// predicate's `InputRef::SigningMessage` to the canonical custom signing
+// message — which binds `federation_id` (T6 cross-fed replay), `turn_nonce`
+// (T11 stale-proof), action position, and the action's target / method / args
+// / effect-hashes / preconditions (T2 forge-effects), but NOT the proof bytes
+// in `witness_blobs` (that would be circular). It then calls
+//   `verify(commitment, PredicateInput::SigningMessage(msg), proof_bytes)`
+// where `proof_bytes` is the `witness_blobs[proof_witness_index]` payload and
+// `commitment` is the predicate's commitment (for governed-namespace, the
+// `governance_committee_root` — the cell's slot-2 value, which identifies
+// *which committee* must have signed).
+//
+// So this verifier:
+//   1. maps `commitment` → a host-trusted [`ThresholdSigCommittee`]
+//      (the committee's `hints::Verifier` VK + the minimum k-of-n threshold),
+//   2. deserializes `proof_bytes` as a `hints::Signature` (the constant-size
+//      aggregate QC), and
+//   3. runs `hints::verify_aggregate(verifier, &sig, msg)` — the SNARK proof
+//      check + final BLS pairing — and ADDITIONALLY enforces
+//      `sig.threshold >= k` (the host floor).
+//
+// # Why the host policy supplies BOTH the VK and the threshold floor
+//
+// `verify_aggregate` already rejects when `sig.proof.agg_weight < sig.threshold`
+// (not enough weight signed for the QC's *own* claimed threshold). But the QC's
+// embedded `threshold` is chosen by the aggregator; a malicious aggregator could
+// set it to 1 and present a 1-of-n QC as if it satisfied a k-of-n policy. So —
+// exactly as `dregg-federation`'s `FederationCommittee::verify` adds
+// `if qc.threshold < self.threshold { reject }` ON TOP of `verify_aggregate`,
+// and exactly as `BridgePredicate` consults a [`BridgePredicatePolicyAuthority`]
+// for the authoritative threshold — this verifier pins the floor from the
+// host-trusted [`ThresholdSigCommittee`], NOT the QC. A commitment with no
+// registered committee fails closed (an unknown / self-declared committee is
+// never trusted).
+
+/// A host-trusted threshold-signing committee: the `hints` verifier key (which
+/// binds the committee's weighted public keys) plus the minimum k-of-n weighted
+/// threshold a QC must meet. Both come from the host, never the proof — so a
+/// prover can neither swap in their own committee nor lower the threshold.
+#[cfg(feature = "threshold-sig")]
+#[derive(Clone)]
+pub struct ThresholdSigCommittee {
+    /// The committee's `hints` verifier (KZG VK; encodes the weighted member
+    /// public keys). The aggregate QC's SNARK proof is checked against this.
+    pub verifier: hints::Verifier,
+    /// The minimum weighted threshold (k of n) the QC must certify. The QC's
+    /// own embedded threshold is pinned to be `>= threshold_k`, defeating the
+    /// aggregator-chosen-low-threshold forge.
+    pub threshold_k: u64,
+}
+
+#[cfg(feature = "threshold-sig")]
+impl ThresholdSigCommittee {
+    /// Construct a committee policy from a `hints::Verifier` and a k-of-n floor.
+    pub fn new(verifier: hints::Verifier, threshold_k: u64) -> Self {
+        Self {
+            verifier,
+            threshold_k,
+        }
+    }
+}
+
+#[cfg(feature = "threshold-sig")]
+impl core::fmt::Debug for ThresholdSigCommittee {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ThresholdSigCommittee")
+            .field("threshold_k", &self.threshold_k)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Host-installed authority mapping a [`WitnessedPredicateKind::Custom`]
+/// predicate `commitment` (e.g. the governed-namespace `governance_committee_root`)
+/// to the authoritative [`ThresholdSigCommittee`] the aggregate QC must satisfy.
+///
+/// This is the threshold-sig analogue of [`BridgePredicatePolicyAuthority`] /
+/// [`TemporalPolicyAuthority`]: it keeps the committee VK + threshold floor
+/// host-trusted so neither can be chosen by the prover.
+#[cfg(feature = "threshold-sig")]
+pub trait ThresholdSigPolicyAuthority: Send + Sync {
+    /// Return the authoritative committee for `commitment`, or `None` if no
+    /// committee is registered (the verifier then fails closed).
+    fn committee(&self, commitment: &[u8; 32]) -> Option<ThresholdSigCommittee>;
+}
+
+/// A static [`ThresholdSigPolicyAuthority`] backed by an in-memory table of
+/// `commitment -> ThresholdSigCommittee`. A commitment absent from the table is
+/// rejected (fail-closed by construction).
+#[cfg(feature = "threshold-sig")]
+#[derive(Clone, Default)]
+pub struct StaticThresholdSigPolicy {
+    committees: std::collections::BTreeMap<[u8; 32], ThresholdSigCommittee>,
+}
+
+#[cfg(feature = "threshold-sig")]
+impl StaticThresholdSigPolicy {
+    /// Construct an empty authority (rejects everything until a committee is added).
+    pub fn new() -> Self {
+        Self {
+            committees: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Authorize `committee` for `commitment`.
+    pub fn authorize(mut self, commitment: [u8; 32], committee: ThresholdSigCommittee) -> Self {
+        self.committees.insert(commitment, committee);
+        self
+    }
+}
+
+#[cfg(feature = "threshold-sig")]
+impl ThresholdSigPolicyAuthority for StaticThresholdSigPolicy {
+    fn committee(&self, commitment: &[u8; 32]) -> Option<ThresholdSigCommittee> {
+        self.committees.get(commitment).cloned()
+    }
+}
+
+/// Real BLS12-381 + KZG threshold-signature-backed verifier for an
+/// `Authorization::Custom { vk_hash }` discharge.
+///
+/// Holds the `vk_hash` it answers for (so it registers via
+/// [`WitnessedPredicateRegistry::register_custom`]) and a host-trusted
+/// [`ThresholdSigPolicyAuthority`] mapping the predicate `commitment` to the
+/// authoritative committee. `verify` deserializes the aggregate QC, looks up the
+/// committee for `commitment`, runs `hints::verify_aggregate` (SNARK + final BLS
+/// pairing) against the executor-supplied `SigningMessage`, and pins the QC's
+/// threshold `>= k`. A commitment with no registered committee, a malformed QC,
+/// a QC that does not certify the signing message, or an under-threshold QC
+/// fails closed.
+#[cfg(feature = "threshold-sig")]
+#[derive(Clone)]
+pub struct ThresholdSigVerifier {
+    vk_hash: [u8; 32],
+    policies: Arc<dyn ThresholdSigPolicyAuthority>,
+}
+
+#[cfg(feature = "threshold-sig")]
+impl ThresholdSigVerifier {
+    /// Construct a verifier answering for `vk_hash`, backed by a host-trusted
+    /// committee policy authority.
+    pub fn new(vk_hash: [u8; 32], policies: Arc<dyn ThresholdSigPolicyAuthority>) -> Self {
+        Self { vk_hash, policies }
+    }
+}
+
+#[cfg(feature = "threshold-sig")]
+impl WitnessedPredicateVerifier for ThresholdSigVerifier {
+    fn name(&self) -> &'static str {
+        "threshold-sig-bls"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::Custom {
+            vk_hash: self.vk_hash,
+        }
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        // The signing message the QC must certify. `Authorization::Custom`
+        // resolves `InputRef::SigningMessage` to the canonical custom signing
+        // message; that is the *only* shape this verifier accepts (the message
+        // binds federation_id + nonce + action shape, which is what authorizes).
+        let message: &[u8] = match input {
+            PredicateInput::SigningMessage(m) => m,
+            PredicateInput::Bytes(b) => b,
+            other => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: "ThresholdSig",
+                    expected: "SigningMessage (canonical custom-auth message bytes)",
+                    actual: match other {
+                        PredicateInput::Slot(_) => "Slot",
+                        PredicateInput::PublicInput(_) => "PublicInput",
+                        PredicateInput::Sender(_) => "Sender",
+                        // SigningMessage / Bytes handled above.
+                        _ => "unexpected",
+                    },
+                });
+            }
+        };
+
+        // The host-trusted committee for this commitment. Fail closed if none —
+        // an unknown / self-declared committee is never trusted.
+        let committee = self.policies.committee(commitment).ok_or_else(|| {
+            WitnessedPredicateError::Rejected {
+                kind_name: "ThresholdSig",
+                reason:
+                    "no threshold-sig committee registered for this commitment (committee root); \
+                     the committee is not host-trusted, so the proof fails closed"
+                        .into(),
+            }
+        })?;
+
+        // Deserialize the aggregate QC (compressed arkworks, matching
+        // `dregg-federation`'s `ThresholdQC::to_bytes`/`from_bytes`).
+        let sig = hints::Signature::deserialize_compressed(proof_bytes).map_err(|e| {
+            WitnessedPredicateError::Rejected {
+                kind_name: "ThresholdSig",
+                reason: format!("threshold-sig aggregate QC did not deserialize: {e}"),
+            }
+        })?;
+
+        // Threshold-downgrade defense: pin the QC's threshold to the host floor.
+        // `verify_aggregate` only checks `agg_weight >= sig.threshold` (the QC's
+        // OWN claimed threshold); a malicious aggregator could set that low.
+        // Reject any QC whose certified threshold is below the host's k-of-n.
+        let floor = hints::F::from(committee.threshold_k);
+        if sig.threshold < floor {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "ThresholdSig",
+                reason: format!(
+                    "aggregate QC certifies a threshold below the host policy floor of {} \
+                     (k-of-n downgrade attempt)",
+                    committee.threshold_k
+                ),
+            });
+        }
+
+        // Authoritative cryptographic gate: SNARK proof check + final BLS
+        // pairing against the committee VK and the signing message. A QC that
+        // does not certify `message` under `committee` (wrong message, forged
+        // proof, under-weight aggregate, wrong committee) is rejected here.
+        hints::verify_aggregate(&committee.verifier, &sig, message).map_err(|e| {
+            WitnessedPredicateError::Rejected {
+                kind_name: "ThresholdSig",
+                reason: format!("threshold-sig aggregate verification rejected: {e}"),
+            }
+        })
+    }
+}
+
+/// Install a real [`ThresholdSigVerifier`] for `vk_hash` into `registry`,
+/// backed by `policy`.
+///
+/// This is the app-side wiring helper (the threshold-sig analogue of the
+/// `register_builtin(...)` calls inside [`registry_with_real_verifiers`]): an
+/// app that mints an `Authorization::Custom { vk_hash }` discharge — e.g.
+/// `starbridge-governed-namespace`'s `commit_table_update` under `GOVERNANCE_VK`
+/// — builds its base production registry ([`registry_with_real_verifiers`] or
+/// [`registry_with_real_verifiers_full`]), then calls this to make its custom
+/// threshold-sig fire enforce for real. `vk_hash` is supplied by the app (it is
+/// the app's `Custom { vk_hash }`), so this verifier is generic across apps and
+/// does not hardcode any app-level constant.
+#[cfg(feature = "threshold-sig")]
+pub fn register_threshold_sig_verifier(
+    registry: &mut WitnessedPredicateRegistry,
+    vk_hash: [u8; 32],
+    policy: Arc<dyn ThresholdSigPolicyAuthority>,
+) {
+    registry.register_custom(vk_hash, Arc::new(ThresholdSigVerifier::new(vk_hash, policy)));
+}
+
+/// Serialize a `hints::Signature` aggregate QC into the proof-blob bytes a
+/// [`ThresholdSigVerifier`] consumes (compressed arkworks, the same wire as
+/// `dregg-federation`'s `ThresholdQC::to_bytes`).
+///
+/// Wrap the returned bytes in a `WitnessBlob` and attach them at the action's
+/// `proof_witness_index`; the `Authorization::Custom` discharge feeds them here.
+#[cfg(feature = "threshold-sig")]
+pub fn threshold_sig_proof_bytes(sig: &hints::Signature) -> Vec<u8> {
+    let mut buf = Vec::new();
+    sig.serialize_compressed(&mut buf)
+        .expect("hints::Signature compressed serialization is infallible");
+    buf
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -1825,5 +2113,215 @@ mod tests {
                 .name(),
             "bridge-predicate-stark"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // ThresholdSig — turn-layer teeth (welded from `hints` directly; no
+    // `dregg-federation` dependency, which would cycle). The full
+    // executor-driven end-to-end proof lives in
+    // `starbridge-apps/governed-namespace/tests/commit_threshold_sig.rs`; here
+    // we prove the verifier in isolation against a REAL k-of-n BLS committee.
+    // ─────────────────────────────────────────────────────────────────────
+    #[cfg(feature = "threshold-sig")]
+    mod threshold_sig {
+        use super::*;
+        use hints::{
+            GlobalData, Hint, PartialSignature, PublicKey as BlsPk, SecretKey as BlsSk, Verifier,
+            generate_hint, setup_universe, sign as bls_sign, sign_aggregate,
+        };
+
+        const VK_HASH: [u8; 32] = *b"threshold-sig-turn-layer-test!!!";
+        const COMMITMENT: [u8; 32] = [0x55u8; 32];
+
+        /// A minimal real `hints` committee (`n` real members, equal weight 1,
+        /// `next_power_of_two(n+1) - 1` total slots with zero-weight padding —
+        /// the same shape `dregg-federation::FederationCommittee` builds). Uses
+        /// a deterministic test RNG (toxic-waste known; tests only).
+        struct TestCommittee {
+            verifier: Verifier,
+            members: Vec<BlsSk>,
+            indices: Vec<usize>,
+            threshold: hints::F,
+            agg: hints::Aggregator,
+        }
+
+        fn build_committee(n: usize, threshold_k: u64) -> TestCommittee {
+            build_committee_seeded(n, threshold_k, [0x42u8; 32])
+        }
+
+        fn build_committee_seeded(n: usize, threshold_k: u64, seed: [u8; 32]) -> TestCommittee {
+            use ark_ff::One;
+            use ark_std::rand::{SeedableRng, rngs::StdRng};
+            let domain = (n + 1).next_power_of_two();
+            let mut rng = StdRng::from_seed(seed);
+            let gd = GlobalData::new(domain, &mut rng).unwrap();
+
+            let total_slots = domain - 1;
+            let mut sks: Vec<BlsSk> = Vec::new();
+            let mut pks: Vec<BlsPk> = Vec::new();
+            let mut hints_v: Vec<Hint> = Vec::new();
+            let mut weights: Vec<hints::F> = Vec::new();
+            for i in 0..n {
+                let sk = BlsSk::random(&mut rng);
+                let pk = sk.public(&gd);
+                hints_v.push(generate_hint(&gd, &sk, domain, i).unwrap());
+                weights.push(hints::F::one());
+                sks.push(sk);
+                pks.push(pk);
+            }
+            // Zero-weight padding to fill the power-of-2 domain.
+            let dummy_sk = BlsSk::dummy();
+            let dummy_pk = dummy_sk.public(&gd);
+            for i in n..total_slots {
+                pks.push(dummy_pk.clone());
+                hints_v.push(generate_hint(&gd, &dummy_sk, domain, i).unwrap());
+                weights.push(hints::F::from(0u64));
+            }
+            let universe = setup_universe(&gd, pks, &hints_v, weights).unwrap();
+            assert!(universe.party_errors.is_empty(), "committee setup clean");
+            TestCommittee {
+                verifier: universe.verifier(),
+                members: sks,
+                indices: (0..n).collect(),
+                threshold: hints::F::from(threshold_k),
+                agg: universe.aggregator(),
+            }
+        }
+
+        impl TestCommittee {
+            fn qc_bytes(&self, msg: &[u8], signers: &[usize]) -> Vec<u8> {
+                let shares: Vec<(usize, PartialSignature)> = signers
+                    .iter()
+                    .map(|&i| (self.indices[i], bls_sign(&self.members[i], msg)))
+                    .collect();
+                let sig = sign_aggregate(&self.agg, self.threshold, &shares, msg).unwrap();
+                threshold_sig_proof_bytes(&sig)
+            }
+        }
+
+        fn policy(committee: &TestCommittee, threshold_k: u64) -> Arc<StaticThresholdSigPolicy> {
+            Arc::new(StaticThresholdSigPolicy::new().authorize(
+                COMMITMENT,
+                ThresholdSigCommittee::new(committee.verifier.clone(), threshold_k),
+            ))
+        }
+
+        /// A valid 2-of-3 aggregate over the message verifies through the real
+        /// ThresholdSigVerifier (SNARK + BLS pairing + threshold floor).
+        #[test]
+        fn valid_quorum_verifies() {
+            let c = build_committee(3, 2);
+            let msg = b"dregg-custom-sig-v1: governance commit";
+            let qc = c.qc_bytes(msg, &[0, 1]);
+            let v = ThresholdSigVerifier::new(VK_HASH, policy(&c, 2));
+            v.verify(&COMMITMENT, &PredicateInput::SigningMessage(msg), &qc)
+                .expect("a genuine 2-of-3 aggregate must verify");
+        }
+
+        /// THE TEETH: the same valid QC over a DIFFERENT message is rejected
+        /// (the BLS pairing binds the message — T11 stale-proof defense).
+        #[test]
+        fn wrong_message_rejected() {
+            let c = build_committee(3, 2);
+            let qc = c.qc_bytes(b"message A", &[0, 1]);
+            let v = ThresholdSigVerifier::new(VK_HASH, policy(&c, 2));
+            assert!(
+                v.verify(&COMMITMENT, &PredicateInput::SigningMessage(b"message B"), &qc)
+                    .is_err(),
+                "a QC over a different message must be rejected"
+            );
+        }
+
+        /// THE TEETH: a QC that certifies threshold 2, presented under a host
+        /// policy that requires a floor of 3, is rejected (downgrade defense) —
+        /// the floor comes from the HOST policy, not the QC.
+        #[test]
+        fn under_host_floor_rejected() {
+            let c = build_committee(4, 2);
+            let msg = b"under-floor attempt";
+            // A real 2-of-4 QC (its embedded threshold is 2).
+            let qc = c.qc_bytes(msg, &[0, 1]);
+            // Host policy demands a floor of 3.
+            let v = ThresholdSigVerifier::new(VK_HASH, policy(&c, 3));
+            assert!(
+                v.verify(&COMMITMENT, &PredicateInput::SigningMessage(msg), &qc)
+                    .is_err(),
+                "a QC below the host threshold floor must be rejected (downgrade defense)"
+            );
+        }
+
+        /// A QC from a DIFFERENT committee than the host-trusted one is rejected
+        /// (the SNARK proof is checked against the host VK).
+        #[test]
+        fn wrong_committee_rejected() {
+            let host = build_committee_seeded(3, 2, [0x11u8; 32]);
+            let attacker = build_committee_seeded(3, 2, [0x99u8; 32]); // genuinely distinct keys
+            let msg = b"wrong committee";
+            let forged = attacker.qc_bytes(msg, &[0, 1]);
+            let v = ThresholdSigVerifier::new(VK_HASH, policy(&host, 2));
+            assert!(
+                v.verify(&COMMITMENT, &PredicateInput::SigningMessage(msg), &forged)
+                    .is_err(),
+                "a QC from a non-host committee must be rejected"
+            );
+        }
+
+        /// An unregistered commitment fails closed (unknown committee never trusted).
+        #[test]
+        fn unregistered_commitment_fails_closed() {
+            let c = build_committee(3, 2);
+            let msg = b"unregistered";
+            let qc = c.qc_bytes(msg, &[0, 1]);
+            let v = ThresholdSigVerifier::new(VK_HASH, policy(&c, 2));
+            let unknown = [0xAAu8; 32];
+            assert!(
+                v.verify(&unknown, &PredicateInput::SigningMessage(msg), &qc)
+                    .is_err(),
+                "a commitment with no registered committee must fail closed"
+            );
+        }
+
+        /// Malformed proof bytes and a non-SigningMessage input shape are rejected.
+        #[test]
+        fn malformed_and_wrong_shape_rejected() {
+            let c = build_committee(3, 2);
+            let v = ThresholdSigVerifier::new(VK_HASH, policy(&c, 2));
+            // Garbage QC bytes → deserialization fails.
+            assert!(
+                v.verify(&COMMITMENT, &PredicateInput::SigningMessage(b"x"), b"not-a-qc")
+                    .is_err(),
+                "malformed QC bytes must be rejected"
+            );
+            // Wrong input shape (Slot, not SigningMessage/Bytes).
+            let dummy = [0u8; 32];
+            let qc = c.qc_bytes(b"x", &[0, 1]);
+            assert!(
+                matches!(
+                    v.verify(&COMMITMENT, &PredicateInput::Slot(&dummy), &qc),
+                    Err(WitnessedPredicateError::InputShapeMismatch { .. })
+                ),
+                "a non-SigningMessage/Bytes input shape must be an InputShapeMismatch"
+            );
+        }
+
+        /// `register_threshold_sig_verifier` installs the verifier into a registry
+        /// under the given vk_hash, and the registry routes `Custom { vk_hash }`
+        /// to it.
+        #[test]
+        fn registry_routing_via_register_helper() {
+            let c = build_committee(3, 2);
+            let msg = b"routed through the registry";
+            let qc = c.qc_bytes(msg, &[0, 1]);
+            let mut reg = registry_with_real_verifiers();
+            register_threshold_sig_verifier(&mut reg, VK_HASH, policy(&c, 2));
+            let wp = WitnessedPredicate::custom(VK_HASH, COMMITMENT, PredicateInputRefSigningMessage(), 0);
+            reg.verify(&wp, &PredicateInput::SigningMessage(msg), &qc)
+                .expect("the registry must route Custom { vk_hash } to the threshold-sig verifier");
+        }
+
+        #[allow(non_snake_case)]
+        fn PredicateInputRefSigningMessage() -> dregg_cell::predicate::InputRef {
+            dregg_cell::predicate::InputRef::SigningMessage
+        }
     }
 }
