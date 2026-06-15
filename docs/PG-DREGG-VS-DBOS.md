@@ -127,6 +127,10 @@ multi-step verified-durable workflow. It is the DBOS comparison made concrete:
 ```text
 cargo run --example supply_chain            # the postgres-free cores, end to end
 cargo pgrx test pg18                         # the same surface through real pg18 SQL
+                                             #   (incl. integrated_flagship_caps_rls_executor_receipt_through_live_sql:
+                                             #    caps-as-RLS + an in-backend-executor receipt as a row, one SQL narrative)
+cargo run --release --bin loadgen -- --latency   # the spine under sustained load + per-turn p50/p99
+cargo bench                                  # the per-gate + DBOS-shaped workflow numbers
 pg-dregg/scripts/e2e-live.sh                 # the live write-path gate on a real db
 ```
 
@@ -140,20 +144,28 @@ cost" number). Representative figures from this machine (Apple Silicon):
 
 | path | what it is | latency | throughput |
 |---|---|---|---|
-| `submit_decision/hot_lru_reeval` | the verified-write gate (per row, LRU warm) | ~27 µs | ~37K admissions/s |
-| `submit_decision/cold_full_chain_verify` | the verified-write gate (cold, full ed25519 chain verify) | ~75 µs | ~13K/s |
-| `read_projection/rls_filter_rows` | the cap-gated RLS read (per row, hot) | ~26 µs/row | ~38K rows/s |
-| `chain_gate/verify_chain_step` | the anti-substitution tooth (the Tier-C trigger gate) | ~3.5 ns | ~283M ops/s |
-| `chain_gate/rootchain_extend` | the full chain-gate a MirrorBatch apply pays | ~4.3 ns | ~230M ops/s |
-| `mirror_apply/from_parts_assemble` | assemble + well-formedness gate a verified turn | ~540 ns | ~1.85M/s |
-| `mirror_serde/encode_batch` / `decode_batch` | the node↔pg wire codec per turn | ~2.9 µs / ~7.9 µs | ~920 / ~345 MiB/s |
+| `submit_decision/hot_lru_reeval` | the verified-write gate (per row, LRU warm) | ~1.6 µs | ~620K admissions/s |
+| `submit_decision/cold_full_chain_verify` | the verified-write gate (cold, full ed25519 chain verify) | ~54 µs | ~18K/s |
+| `read_projection/rls_filter_rows` | the cap-gated RLS read (per row, hot) | ~2 µs/row | ~470K rows/s |
+| `chain_gate/verify_chain_step` | the anti-substitution tooth (the Tier-C trigger gate) | ~6 ns | ~166M ops/s |
+| `chain_gate/rootchain_extend` | the full chain-gate a MirrorBatch apply pays | ~9 ns | ~109M ops/s |
+| `mirror_apply/from_parts_assemble` | assemble + well-formedness gate a verified turn | ~810 ns | ~1.2M/s |
+| `mirror_serde/encode_batch` / `decode_batch` | the node↔pg wire codec per turn | ~5 µs / ~9.5 µs | ~520 / ~290 MiB/s |
+| `workflow/run_durable_steps/128` | a full durable-workflow run, every step checkpointed (the DBOS-equivalent path) | ~6.3 µs/step | ~158K turns/s |
+| `workflow/crash_recover_resume` | crash → recover (re-validate the whole chain) → resume the tail, exactly-once | ~483 µs (64-step) | ~132K turns/s |
+
+The hot per-row gate is **~1.6 µs** because a warm verified-credential LRU pays
+the ed25519 chain verify ONCE per token, then each row re-evaluates only the
+first-party caveats off the *cached, decoded* credential — the per-row cost is a
+revocation-set lookup + a caveat eval, not a fresh decode or signature check.
 
 End-to-end, the load generator (`cargo run --release --bin loadgen`) drives the
 **full verified-write spine** (authz submit-gate + `RootChain` + apply) at
-**~22K sustained verified turns/sec** on a single core, conserving value every
-step. The per-turn cost is dominated by the capability decision (the ed25519
-chain verify, amortized by the verified-credential LRU); the chain tooth itself
-is effectively free (~3.5 ns).
+**~236K sustained verified turns/sec** on a single core, conserving value every
+step (`--agents 8`). With `--latency` it reports the per-turn distribution: the
+hot path is **p50 ≈ 5 µs, p90 ≈ 7 µs**. The per-turn cost is dominated by the
+capability decision (the ed25519 chain verify, amortized by the LRU); the chain
+tooth itself is effectively free (~6 ns).
 
 The live-pg rate adds the SPI/IPC round-trip and the `MERGE` applicator on top of
 these; it is exercised by `cargo pgrx test pg18` and `scripts/e2e-live.sh`.

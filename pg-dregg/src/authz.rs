@@ -655,42 +655,53 @@ pub fn decide(token: &str, action: &str, resource: &str, now: i64) -> Outcome {
         return Outcome::Denied("clock is negative".to_string());
     };
 
-    // Revocation is consulted BEFORE we trust any cached verification, and on
-    // every call — instant revocation, not bounded-staleness.
-    if let Some(id) = cap_id(token) {
-        if is_revoked(&id) {
-            return Outcome::Denied("revoked".to_string());
-        }
-    }
-
-    let mut ctx = Context::new()
+    // Build the request context's action/resource/clock now; the credential's
+    // own `subject` (when it carries one) is bound below from the DECODED
+    // credential, never by re-parsing the token string a second time.
+    let base_ctx = Context::new()
         .at(now)
         .attr("action", action)
         .attr("resource", resource);
-    // The `subject` attribute, when the credential carries one, is bound to the
-    // credential's OWN declared subject (read off the chain). This makes the
-    // subject caveat self-satisfying — it identifies the holder, it does not
-    // gate the request — while keeping the subject on the signed chain so
-    // `dregg_cap_subject` can recover it and an auditor can trust it. (A token
-    // that wanted to gate on a *request-supplied* subject would use a different
-    // attribute key; `subject` is reserved for the credential's own identity.)
-    if let Some(subj) = subject_of_decoded(token) {
-        ctx = ctx.attr("subject", subj);
+
+    // ---- HOT PATH: the credential is already decoded + chain-verified. ------
+    // On a cache hit we hold the decoded `Credential`, so the per-row cost is
+    // exactly (a) the revocation lookup, keyed on the cached chain's `tail()`,
+    // and (b) the first-party caveat re-evaluation. CRUCIALLY we do NOT re-decode
+    // the token string for the revocation id or the subject — both come off the
+    // cached credential. (The naive form decoded the base64url+postcard chain
+    // THREE times per hot row — once for `cap_id`, once for the subject, once in
+    // the miss path — which is the dominant per-row RLS cost; this collapses it
+    // to the one decode the cold path already paid.) Revocation stays consulted
+    // on EVERY call, so it remains instant, not bounded-staleness.
+    {
+        let mut l = lru().lock().unwrap();
+        if l.map.contains_key(token) {
+            l.touch(token);
+            let cred = l.map.get(token).expect("just checked");
+            if is_revoked(&hex(&cred.tail())) {
+                return Outcome::Denied("revoked".to_string());
+            }
+            let ctx = match subject_in(cred) {
+                Some(subj) => base_ctx.attr("subject", subj),
+                None => base_ctx,
+            };
+            // The chain is already verified; re-evaluate first-party caveats only.
+            return verdict(reverify_caveats_only(cred, &ctx));
+        }
     }
 
-    let mut l = lru().lock().unwrap();
-    if l.map.contains_key(token) {
-        l.touch(token);
-        let cred = l.map.get(token).expect("just checked");
-        // Cache hit: the chain is already verified; re-evaluate caveats only.
-        return verdict(reverify_caveats_only(cred, &ctx));
-    }
-
-    // Cache miss: decode + full verify (signature chain + caveats) against the
-    // issuer key. On a verified chain, cache the credential for future rows.
+    // ---- COLD PATH: decode once, full verify (signature chain + caveats). ----
     let cred = match Credential::decode(token) {
         Ok(c) => c,
         Err(e) => return Outcome::Denied(format!("decode failed: {e}")),
+    };
+    // Revocation, off the freshly-decoded chain (no second decode).
+    if is_revoked(&hex(&cred.tail())) {
+        return Outcome::Denied("revoked".to_string());
+    }
+    let ctx = match subject_in(&cred) {
+        Some(subj) => base_ctx.attr("subject", subj),
+        None => base_ctx,
     };
     let result = cred.verify(&pk, &ctx);
     // Cache iff the signature chain itself is sound. A caveat refusal still
@@ -702,6 +713,7 @@ pub fn decide(token: &str, action: &str, resource: &str, now: i64) -> Outcome {
         Err(r) => !is_chain_refusal(r),
     };
     if chain_sound {
+        let mut l = lru().lock().unwrap();
         l.insert(token.to_string(), cred);
     }
     verdict(result)
@@ -808,14 +820,10 @@ pub fn subject(token: &str) -> Option<String> {
 }
 
 /// Read the declared subject off a DECODED credential (no issuer-key check):
-/// the value of the first-party `AttrEq { key: "subject", … }` caveat. Used both
-/// to bind the self-identifying `subject` attribute in `decide` and (after a
-/// chain check) by `subject`.
-fn subject_of_decoded(token: &str) -> Option<String> {
-    let cred = Credential::decode(token).ok()?;
-    subject_in(&cred)
-}
-
+/// the value of the first-party `AttrEq { key: "subject", … }` caveat. `decide`
+/// binds the self-identifying `subject` attribute from the credential it already
+/// holds (cached on the hot path, freshly decoded on the cold path), so it never
+/// re-parses the token string just to find the subject.
 fn subject_in(cred: &Credential) -> Option<String> {
     for (_, caveat) in cred.caveats() {
         if let Caveat::FirstParty(Pred::AttrEq { key, value }) = caveat {

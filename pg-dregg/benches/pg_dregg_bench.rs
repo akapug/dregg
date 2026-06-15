@@ -38,6 +38,9 @@ use dregg_auth::credential::{Caveat, Pred, RootKey};
 use pg_dregg::authz;
 use pg_dregg::mirror::{verify_chain_step, MirrorBatch, RootChain};
 use pg_dregg::synth::{self, ALICE, GENESIS_ROOT};
+use pg_dregg::workflow::{
+    recover_from_durable, FoldProjector, MapTokens, MemLog, Step, Workflow, WorkflowEngine,
+};
 
 fn hx(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
@@ -238,6 +241,134 @@ fn bench_mirror_serde(c: &mut Criterion) {
     g.finish();
 }
 
+// ===========================================================================
+// 6. THE DBOS-SHAPED WORKLOAD — a full durable workflow run + crash recovery.
+//
+// Groups 1-5 isolate the individual gates; this group measures the END-TO-END
+// path a DBOS user actually rides: a multi-step durable workflow driven through
+// the whole verified-write spine (the API `examples/supply_chain` is built on),
+// AND the crash → recover → resume cycle that is DBOS's headline feature. The
+// per-turn cost here is the realistic "what does one verified durable-workflow
+// step cost" — the number to put next to DBOS's per-step checkpoint.
+// ===========================================================================
+
+/// A fixed issuer + a token store binding the workload agents to broad-but-real
+/// `submit` capabilities (each turn still runs the full submit-gate decision).
+fn workflow_tokens(agents: &[[u8; 32]]) -> MapTokens {
+    let issuer = RootKey::from_seed([7u8; 32]);
+    authz::set_issuer_pubkey(issuer.public());
+    authz::lru_clear();
+    authz::revoked_clear();
+    let mut t = MapTokens::new();
+    for &a in agents {
+        let tok = issuer
+            .mint([
+                Caveat::FirstParty(Pred::AttrEq { key: "action".into(), value: "submit".into() }),
+                Caveat::FirstParty(Pred::AttrPrefix { key: "resource".into(), prefix: "".into() }),
+                Caveat::FirstParty(Pred::NotAfter { at: 1_000_000 }),
+            ])
+            .encode();
+        t.bind(a, tok);
+    }
+    t
+}
+
+const fn wf_agent(tag: u8) -> [u8; 32] {
+    let mut id = [0x11u8; 32];
+    id[0] = tag;
+    id
+}
+
+/// An `n`-step conserving workflow: a genesis mint, then a ring of transfers that
+/// keeps Σ balances constant — the same shape `loadgen` drives, expressed as the
+/// reusable `Workflow` API so the bench measures the real durable runtime.
+fn ring_workflow(n: usize, agents: &[[u8; 32]]) -> Workflow {
+    let float = 1_000_000i64;
+    let mut wf = Workflow::new("dbos-shaped ring");
+    wf.push(Step::new("genesis", agents[0]).set(agents[0], float, 0));
+    // Each later step moves one unit around the ring (1 debit + 1 credit, Σδ = 0).
+    let mut holder = 0usize;
+    let mut bal: Vec<i64> = vec![0; agents.len()];
+    bal[0] = float;
+    let mut nonce: Vec<u64> = vec![1; agents.len()];
+    for _ in 1..n {
+        let to = (holder + 1) % agents.len();
+        bal[holder] -= 1;
+        bal[to] += 1;
+        wf.push(
+            Step::new("xfer", agents[holder])
+                .set(agents[holder], bal[holder], nonce[holder])
+                .set(agents[to], bal[to], nonce[to]),
+        );
+        nonce[holder] += 1;
+        nonce[to] += 1;
+        holder = to;
+    }
+    wf
+}
+
+fn bench_workflow(c: &mut Criterion) {
+    let agents: Vec<[u8; 32]> = (0..4).map(|k| wf_agent(0x30 + k as u8)).collect();
+
+    let mut g = c.benchmark_group("workflow");
+
+    // (a) Run an N-step durable workflow end-to-end through the spine, CHECKPOINTING
+    //     every committed turn to an external durable log (the DBOS-equivalent
+    //     "each step persisted"). Throughput is in turns so the bench prints the
+    //     per-step verified-durable-workflow rate directly.
+    for n in [16usize, 128] {
+        g.throughput(Throughput::Elements(n as u64));
+        g.bench_with_input(BenchmarkId::new("run_durable_steps", n), &n, |b, &n| {
+            let wf = ring_workflow(n, &agents);
+            b.iter(|| {
+                let mut engine = WorkflowEngine::new(workflow_tokens(&agents)).with_clock(1_000);
+                let mut durable = MemLog::new();
+                let out = engine.run_durable(black_box(&wf), &mut durable).unwrap();
+                black_box(out.committed)
+            })
+        });
+    }
+
+    // (b) The DBOS headline: crash → recover → resume. Pre-build a durable log of a
+    //     committed prefix, then time recover_from_durable (re-validate every
+    //     persisted turn) + resume the uncommitted tail — exactly-once. This is the
+    //     cost of surviving a crash, which is the thing DBOS sells.
+    {
+        let n = 64usize;
+        let wf = ring_workflow(n, &agents);
+        // Commit the whole workflow once to capture a realistic durable log; the
+        // bench resumes from a PREFIX of it (half committed, half to replay).
+        let half = n / 2;
+        let prefix = Workflow {
+            name: wf.name.clone(),
+            steps: wf.steps[..half].to_vec(),
+        };
+        let mut seed_engine = WorkflowEngine::new(workflow_tokens(&agents)).with_clock(1_000);
+        let mut seed_log = MemLog::new();
+        seed_engine.run_durable(&prefix, &mut seed_log).unwrap();
+
+        g.throughput(Throughput::Elements(n as u64));
+        g.bench_function("crash_recover_resume", |b| {
+            b.iter(|| {
+                // Recover from the durable prefix (re-validates the chain on the way
+                // up) and resume the tail — the full exactly-once crash-recovery path.
+                let mut engine = recover_from_durable(
+                    workflow_tokens(&agents),
+                    FoldProjector,
+                    black_box(&seed_log),
+                )
+                .expect("the durable log re-validates")
+                .with_clock(1_000);
+                let mut durable = seed_log.clone();
+                let out = engine.resume_durable(black_box(&wf), &mut durable).unwrap();
+                black_box((out.skipped, out.committed))
+            })
+        });
+    }
+
+    g.finish();
+}
+
 criterion_group!(
     benches,
     bench_submit_decision,
@@ -245,5 +376,6 @@ criterion_group!(
     bench_chain_gate,
     bench_mirror_apply,
     bench_mirror_serde,
+    bench_workflow,
 );
 criterion_main!(benches);
