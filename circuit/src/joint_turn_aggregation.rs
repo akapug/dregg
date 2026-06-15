@@ -161,6 +161,26 @@ pub struct RotatedParticipantLeg {
     pub public_inputs: Vec<BabyBear>,
 }
 
+#[cfg(feature = "recursion")]
+impl Clone for RotatedParticipantLeg {
+    /// `Ir2BatchProof` (the p3 `BatchProof`) is `Serialize`/`Deserialize` but NOT
+    /// `Clone`, so the leg cannot `#[derive(Clone)]`. Round-trip the proof through
+    /// postcard to clone it (cheap relative to proving); the descriptor + PI vector
+    /// clone directly. A downstream snapshot consumer (`app-framework`'s STARK-gated
+    /// rehydration) needs an owned copy for its tamper-rejection teeth.
+    fn clone(&self) -> Self {
+        let proof_bytes =
+            postcard::to_allocvec(&self.proof).expect("Ir2BatchProof serializes for clone");
+        let proof =
+            postcard::from_bytes(&proof_bytes).expect("Ir2BatchProof round-trips for clone");
+        Self {
+            proof,
+            descriptor: self.descriptor.clone(),
+            public_inputs: self.public_inputs.clone(),
+        }
+    }
+}
+
 // NOTE (Bucket-F / PATH-PRESERVE Phase 5a): the rotated-leg MINTING recipe
 // (`mint_rotated_participant_leg`) lives in `dregg-turn`
 // (`turn/src/rotation_witness.rs`), NOT here. It drives `rotation_witness::produce`

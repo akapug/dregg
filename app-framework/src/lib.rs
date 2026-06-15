@@ -65,6 +65,7 @@ pub mod optimistic_fire;
 pub mod persistence;
 pub mod queue_endpoint;
 pub mod rehydration;
+pub mod stark_rehydrate;
 pub mod ring_trade;
 pub mod scaffold;
 pub mod server;
@@ -214,6 +215,16 @@ pub use deos_app::{DeosApp, DeosAppBuilder, DeosCell, PersistenceSeam};
 pub use rehydration::{
     Interaction, InteractionLog, Membrane, RehydratedSurface, RehydrateError, Rehydration,
     Sturdyref, meet_authority,
+};
+
+// TIER B (DEOS-APPS.md §"the two tiers"): the SAME frustum-snapshot, but re-expansion is
+// gated by a REAL STARK proof (the rotated `Ir2BatchProof` / the `WholeChainProof` ROOT)
+// instead of a witness-replay over the receipt chain — opening the image VERIFIES the
+// STARK (light-client style), so a tampered surface state / forged proof / wrong-root
+// proof is rejected at rehydration, with NO receipt-chain walk.
+pub use stark_rehydrate::{
+    mint_stark_snapshot, mint_transfer_leg, verify_stark_leg, witness_replay_is_genuine,
+    RotatedParticipantLeg, StarkRehydrateError, StarkSnapshot, TransferTurn,
 };
 
 // The interactive-tempo bridge (DEOS-APPS.md §"the interactive/real-time tempo gap";
