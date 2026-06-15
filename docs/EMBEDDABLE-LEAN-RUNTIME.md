@@ -267,12 +267,32 @@ needs a from-source ELF runtime anyway):
 
 The PD boots and runs a turn; it is **not** yet a production executor PD:
 
-1. **The crypto floor is stubbed.** `link-probe.sh`'s `crypto-stub.c` panics-if-
-   reached on the 8 `dregg_*` crypto symbols (poseidon2/blake3/ed25519/stark/…). A
-   non-crypto turn links + runs; a turn that hashes/verifies would abort. Production
-   supplies these from the **Rust PD** (the firmament's `verifier-stark` PD already
-   runs a real STARK on seL4 — `docs/SEL4-EMBEDDING.md` §8 M-STARK). Wiring the Rust
-   crypto floor into the executor PD is the next real step.
+1. **The crypto floor is REAL for the hashes + STARK verify (incl. the LIVE
+   proof-carrying-turn admission path); 3 elliptic-curve primitives stay
+   fail-closed.** The floor is no longer the panic-if-reached `crypto-stub.c`: the
+   `dregg-crypto-floor` staticlib (`executor-pd/crypto-floor/`) carries the SAME
+   Poseidon2/BLAKE3/FRI the `verifier-stark` PD runs on seL4, with the 8 `dregg_*`
+   portals at the exact Lean C ABI. REAL: Poseidon2 (§4, KAT'd == the circuit),
+   BLAKE3 (§5), the nullifier (§6), the keyed MAC (§8), AND §2 STARK verification —
+   `dreggcf_stark_verify_bytes(proof, pi)` decodes a structured `StarkProof`,
+   resolves the carried AIR, runs `stark::verify` (ACCEPT a sound proof, REJECT a
+   tampered one / wrong PI). **The LIVE proof-carrying-turn path is now wired:**
+   `dreggcf_admit_proof_carrying_turn(wire)` decodes a turn's `PCT1` envelope (the
+   proof bytes + public inputs a producer ships OUT OF BAND with the turn), routes
+   the *carried* proof through the same verifier, and ADMITS the turn iff it
+   verifies (fail-closed) — so a live turn's proof bytes reach the real verifier,
+   not just the in-line selftest. Run-verified natively in
+   `sel4/crypto-floor-hosttest/` (the SAME carried code; a genuine turn ADMITS, a
+   tampered-proof / wrong-PI / malformed turn REFUSES; `dreggcf_admit_selftest()`
+   bitmask `0x7`), and the new entries link clean into the full on-device ELF
+   (`crypto-floor-selftest.elf`, 0 undefined symbols, both `dreggcf_admit_*` present
+   as defined text after `--gc-sections` — reachable from the C selftest's `main`).
+   *On-device RUN of the selftest ELF awaits a user-mode `qemu-aarch64` (absent on
+   macOS — only `qemu-system-aarch64` for the full PD boot is present); the link is
+   the macOS on-device checkpoint, the host-test is the runnable witness.* STILL
+   fail-closed (ABI-correct, a genuinely different elliptic-curve surface NOT in
+   `verifier-stark`, not reached by a hashing turn): ed25519 (§1), Pedersen (§3),
+   AEAD (§7) — wiring those is the next real step.
 2. **The elaborator is cut at init.** `init-stubs.c` no-ops
    `initialize_Lean`/`initialize_aesop_Aesop`/`initialize_Dregg2_Dregg2_Tactics` —
    the executor's compute path calls ZERO elaborator/kernel primitives (verified),

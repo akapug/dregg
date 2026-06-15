@@ -446,6 +446,194 @@ pub extern "C" fn dreggcf_stark_selftest() -> u8 {
 }
 
 // ===========================================================================
+// §2.1 — LIVE proof-carrying-turn admission. The byte channel above is exercised
+// by the selftest (which MINTS a proof and verifies it in one breath). A LIVE turn
+// is different: the executor PD receives a turn whose STARK proof bytes + public
+// inputs arrived OUT OF BAND (decoded from a wire the producer shipped — the PD
+// never mints them), and the turn is ADMITTED iff that carried proof verifies. The
+// entry below closes that wiring: it DECODES a proof-carrying-turn wire, extracts
+// the carried proof + PI exactly as a live turn ships them, routes them through the
+// SAME `dreggcf_stark_verify_bytes` (the one carried verifier — no second check),
+// and returns the admission verdict (1 = ADMIT, 0 = REFUSE) FAIL-CLOSED.
+// ===========================================================================
+
+/// The proof-carrying-turn wire framing (the bytes a producer ships alongside a
+/// turn for the executor PD to admit). Self-describing, length-prefixed, so the PD
+/// can decode it WITHOUT trusting a sender-declared total length:
+///
+/// ```text
+///   [0..4)   magic         b"PCT1"  (proof-carrying turn, v1)
+///   [4..12)  turn_id        u64 LE  (the turn this proof attests; opaque here, the
+///                                    executor binds it — carried so the wire is a
+///                                    real turn envelope, not a bare proof blob)
+///   [12..16) proof_len      u32 LE
+///   [16..16+proof_len)      the StarkProof bytes (`stark::proof_to_bytes` form)
+///   [.. +4)  pi_len         u32 LE  (BYTE length, a multiple of 4)
+///   [.. +pi_len)            the public inputs (LE u32 BabyBear limbs)
+/// ```
+///
+/// This is the executor-PD analogue of the §8 SEAM in the Lean model
+/// (`Dregg2/Exec/ProofForest.lean`'s `StepProofValid`): the proof is opaque to the
+/// verified turn logic, and ADMISSION ≡ "this carried proof verifies against its
+/// carried PI". Here that proposition is DISCHARGED on-device by the carried STARK
+/// verifier — not assumed.
+const PCT_MAGIC: &[u8; 4] = b"PCT1";
+
+/// Decode a proof-carrying-turn wire into `(turn_id, proof_bytes, pi_bytes)`.
+/// Returns `None` on ANY framing error (bad magic, truncation, a declared length
+/// that overruns the buffer) — fail-closed: a malformed turn envelope is never
+/// admitted. Pure slicing over the borrowed wire (no allocation, no copy).
+fn pct_decode(wire: &[u8]) -> Option<(u64, &[u8], &[u8])> {
+    // magic + turn_id(8) + proof_len(4) = 16-byte minimum header
+    if wire.len() < 16 || &wire[0..4] != PCT_MAGIC {
+        return None;
+    }
+    let turn_id = u64::from_le_bytes([
+        wire[4], wire[5], wire[6], wire[7], wire[8], wire[9], wire[10], wire[11],
+    ]);
+    let proof_len = u32::from_le_bytes([wire[12], wire[13], wire[14], wire[15]]) as usize;
+    let proof_start: usize = 16;
+    let proof_end = proof_start.checked_add(proof_len)?;
+    // need proof bytes + the 4-byte pi_len that follows
+    if proof_end.checked_add(4)? > wire.len() {
+        return None;
+    }
+    let proof_bytes = &wire[proof_start..proof_end];
+    let pi_len = u32::from_le_bytes([
+        wire[proof_end],
+        wire[proof_end + 1],
+        wire[proof_end + 2],
+        wire[proof_end + 3],
+    ]) as usize;
+    let pi_start = proof_end + 4;
+    let pi_end = pi_start.checked_add(pi_len)?;
+    if pi_end > wire.len() {
+        return None;
+    }
+    let pi_bytes = &wire[pi_start..pi_end];
+    Some((turn_id, proof_bytes, pi_bytes))
+}
+
+/// ADMIT a LIVE proof-carrying turn. Given the turn's wire envelope (`PCT1` framing
+/// above — the producer's proof bytes + public inputs as they arrive out of band),
+/// decode it, route the CARRIED proof + PI through `dreggcf_stark_verify_bytes`
+/// (the one carried STARK verifier), and return the admission verdict:
+///   `1` — the carried proof cryptographically verifies against its carried PI →
+///         the turn is ADMITTED;
+///   `0` — a framing error, a decode error, an unknown AIR, OR a failed
+///         cryptographic check → the turn is REFUSED (FAIL-CLOSED).
+///
+/// This is the entry the executor PD calls when it applies a proof-bearing turn:
+/// the LIVE turn's proof bytes reach the real verifier here, and the turn is
+/// admitted IFF the verify returns 1 — exactly the §4 next step
+/// (`docs/EMBEDDABLE-LEAN-RUNTIME.md`). Unlike `dreggcf_stark_selftest`, the proof
+/// is NOT minted here; it is the bytes the wire carried.
+///
+/// # Safety
+/// `wire` must point to `wire_len` readable bytes (or be null iff `wire_len == 0`).
+#[no_mangle]
+pub unsafe extern "C" fn dreggcf_admit_proof_carrying_turn(wire: *const u8, wire_len: usize) -> u8 {
+    let wire_bytes: &[u8] = if wire.is_null() || wire_len == 0 {
+        return 0; // an empty turn envelope carries no proof — refuse
+    } else {
+        core::slice::from_raw_parts(wire, wire_len)
+    };
+
+    // Decode the turn envelope; a malformed wire is refused (never admitted).
+    let (_turn_id, proof_bytes, pi_bytes) = match pct_decode(wire_bytes) {
+        Some(parts) => parts,
+        None => return 0,
+    };
+
+    // Route the CARRIED proof + PI through the one carried verifier. The verdict IS
+    // the admission decision: ADMIT iff the carried proof verifies (fail-closed).
+    dreggcf_stark_verify_bytes(
+        proof_bytes.as_ptr(),
+        proof_bytes.len(),
+        pi_bytes.as_ptr(),
+        pi_bytes.len(),
+    )
+}
+
+/// On-device anti-ghost witness for the LIVE proof-carrying-turn ADMISSION path
+/// (the §2.1 analogue of `dreggcf_stark_selftest`, but exercising the admission
+/// entry, not the bare byte channel). It mints a real proof ON THE PRODUCER SIDE,
+/// ENCODES three turn wires (the bytes a producer would ship), and drives
+/// `dreggcf_admit_proof_carrying_turn` — the verify input flows through the wire
+/// decode, the live-turn path. Returns a bitmask:
+///   bit 0 (0x1): a GENUINE turn (sound proof + correct PI) is ADMITTED;
+///   bit 1 (0x2): a turn carrying a TAMPERED proof is REFUSED;
+///   bit 2 (0x4): a turn carrying the good proof but a WRONG PI is REFUSED.
+/// A fully-correct admission path returns `0x7`. The teeth bite on the LIVE-turn
+/// path — not just the selftest.
+#[no_mangle]
+pub extern "C" fn dreggcf_admit_selftest() -> u8 {
+    use stark_core::field::BabyBear;
+    use stark_core::stark::{proof_to_bytes, prove};
+
+    // ---- producer side: mint a real proof for the carried AIR ----
+    let air = carried_air::CounterSquareAir;
+    let pi = [BabyBear::new(0)]; // row0 col0 == 0, the boundary-bound PI
+    let pi_bytes: alloc::vec::Vec<u8> =
+        pi.iter().flat_map(|x| x.as_u32().to_le_bytes()).collect();
+    let trace: alloc::vec::Vec<alloc::vec::Vec<BabyBear>> = (0u32..4)
+        .map(|i| alloc::vec![BabyBear::new(i), BabyBear::new(i * i)])
+        .collect();
+    let proof = prove(&air, &trace, &pi);
+    let proof_bytes = proof_to_bytes(&proof);
+
+    // helper: ENCODE a PCT1 turn wire from carried proof bytes + PI bytes.
+    fn pct_encode(turn_id: u64, proof_bytes: &[u8], pi_bytes: &[u8]) -> alloc::vec::Vec<u8> {
+        let mut w = alloc::vec::Vec::with_capacity(16 + proof_bytes.len() + 4 + pi_bytes.len());
+        w.extend_from_slice(PCT_MAGIC);
+        w.extend_from_slice(&turn_id.to_le_bytes());
+        w.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
+        w.extend_from_slice(proof_bytes);
+        w.extend_from_slice(&(pi_bytes.len() as u32).to_le_bytes());
+        w.extend_from_slice(pi_bytes);
+        w
+    }
+
+    let mut mask: u8 = 0;
+
+    // bit 0 — a GENUINE turn must be ADMITTED.
+    let genuine = pct_encode(0x7777, &proof_bytes, &pi_bytes);
+    let admit = unsafe { dreggcf_admit_proof_carrying_turn(genuine.as_ptr(), genuine.len()) };
+    if admit == 1 {
+        mask |= 0x1;
+    }
+
+    // bit 1 — a turn carrying a TAMPERED proof must be REFUSED. The producer's wire
+    // is intact framing; only the carried proof payload is corrupted (one flipped
+    // byte mid-proof), exactly the bytes a cheater would ship.
+    let mut tampered_proof = proof_bytes.clone();
+    if !tampered_proof.is_empty() {
+        let mid = tampered_proof.len() / 2;
+        tampered_proof[mid] ^= 0xff;
+    }
+    let tampered_turn = pct_encode(0x7777, &tampered_proof, &pi_bytes);
+    let refuse_tampered =
+        unsafe { dreggcf_admit_proof_carrying_turn(tampered_turn.as_ptr(), tampered_turn.len()) };
+    if refuse_tampered == 0 {
+        mask |= 0x2;
+    }
+
+    // bit 2 — a turn carrying the good proof but a WRONG PI must be REFUSED (the
+    // boundary tooth on the admission path: the carried PI binds the trace start).
+    let wrong_pi = [BabyBear::new(1)];
+    let wrong_pi_bytes: alloc::vec::Vec<u8> =
+        wrong_pi.iter().flat_map(|x| x.as_u32().to_le_bytes()).collect();
+    let wrong_turn = pct_encode(0x7777, &proof_bytes, &wrong_pi_bytes);
+    let refuse_wrong =
+        unsafe { dreggcf_admit_proof_carrying_turn(wrong_turn.as_ptr(), wrong_turn.len()) };
+    if refuse_wrong == 0 {
+        mask |= 0x4;
+    }
+
+    mask
+}
+
+// ===========================================================================
 // Build-time conformance witnesses (these run on the HOST via `cargo test`, and
 // the constants are checked at link by the boot; they pin that the carried
 // Poseidon2 here matches the audited circuit/verifier-stark digests).
@@ -551,5 +739,85 @@ mod tests {
         assert_eq!(r, 0, "garbage proof must reject");
         let e = unsafe { dreggcf_stark_verify_bytes(core::ptr::null(), 0, pi.as_ptr(), pi.len()) };
         assert_eq!(e, 0, "empty proof must reject");
+    }
+
+    #[test]
+    fn admit_proof_carrying_turn_live_teeth() {
+        // The LIVE proof-carrying-turn ADMISSION path: a genuine turn ADMITS, a
+        // tampered-proof turn REFUSES, a wrong-PI turn REFUSES — the anti-ghost
+        // teeth on the ADMISSION entry (proof bytes arrive via the wire decode,
+        // not minted in-line). The selftest entry drives all three.
+        assert_eq!(
+            dreggcf_admit_selftest(),
+            0x7,
+            "live proof-carrying-turn admission teeth"
+        );
+    }
+
+    #[test]
+    fn admit_proof_carrying_turn_malformed_wire_fails_closed() {
+        // A malformed turn envelope must be REFUSED at decode — never admitted.
+        // empty
+        let e = unsafe { dreggcf_admit_proof_carrying_turn(core::ptr::null(), 0) };
+        assert_eq!(e, 0, "empty turn wire must refuse");
+        // bad magic
+        let bad_magic = [0u8; 32];
+        let m = unsafe { dreggcf_admit_proof_carrying_turn(bad_magic.as_ptr(), bad_magic.len()) };
+        assert_eq!(m, 0, "bad-magic turn wire must refuse");
+        // good magic, but a proof_len that overruns the buffer (allocation-bomb /
+        // truncation guard) — must refuse, not panic.
+        let mut overrun = alloc::vec::Vec::new();
+        overrun.extend_from_slice(PCT_MAGIC);
+        overrun.extend_from_slice(&0u64.to_le_bytes()); // turn_id
+        overrun.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // proof_len >> buffer
+        let o = unsafe { dreggcf_admit_proof_carrying_turn(overrun.as_ptr(), overrun.len()) };
+        assert_eq!(o, 0, "overrun proof_len must refuse");
+    }
+
+    #[test]
+    fn admit_decode_roundtrips_and_binds_carried_proof() {
+        // The wire the admission path decodes carries the PRODUCER's proof bytes —
+        // routing them through the verifier must ADMIT exactly when the bare byte
+        // channel would, proving the admission entry adds framing without changing
+        // the verdict (the carried proof is the load-bearing object, not a re-mint).
+        use stark_core::field::BabyBear;
+        use stark_core::stark::{proof_to_bytes, prove};
+        let air = carried_air::CounterSquareAir;
+        let pi = [BabyBear::new(0)];
+        let pi_bytes: alloc::vec::Vec<u8> =
+            pi.iter().flat_map(|x| x.as_u32().to_le_bytes()).collect();
+        let trace: alloc::vec::Vec<alloc::vec::Vec<BabyBear>> = (0u32..4)
+            .map(|i| alloc::vec![BabyBear::new(i), BabyBear::new(i * i)])
+            .collect();
+        let proof = prove(&air, &trace, &pi);
+        let proof_bytes = proof_to_bytes(&proof);
+
+        // hand-build the PCT1 wire (the producer's framing).
+        let mut wire = alloc::vec::Vec::new();
+        wire.extend_from_slice(PCT_MAGIC);
+        wire.extend_from_slice(&42u64.to_le_bytes());
+        wire.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
+        wire.extend_from_slice(&proof_bytes);
+        wire.extend_from_slice(&(pi_bytes.len() as u32).to_le_bytes());
+        wire.extend_from_slice(&pi_bytes);
+
+        // decode binds back to the exact carried proof + PI + turn_id.
+        let (tid, dp, dpi) = pct_decode(&wire).expect("well-formed wire decodes");
+        assert_eq!(tid, 42);
+        assert_eq!(dp, &proof_bytes[..]);
+        assert_eq!(dpi, &pi_bytes[..]);
+
+        // and the admission verdict matches the bare byte-channel verdict (ADMIT).
+        let bare = unsafe {
+            dreggcf_stark_verify_bytes(
+                proof_bytes.as_ptr(),
+                proof_bytes.len(),
+                pi_bytes.as_ptr(),
+                pi_bytes.len(),
+            )
+        };
+        let admitted = unsafe { dreggcf_admit_proof_carrying_turn(wire.as_ptr(), wire.len()) };
+        assert_eq!(bare, 1, "the bare byte channel admits the sound proof");
+        assert_eq!(admitted, bare, "admission verdict == byte-channel verdict");
     }
 }
