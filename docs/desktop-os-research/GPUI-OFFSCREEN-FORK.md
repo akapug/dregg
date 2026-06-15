@@ -1,10 +1,45 @@
-# gpui offscreen render — the real cockpit, no GPU (proven)
+# gpui offscreen render — the real cockpit, no GPU (on glass, on seL4)
 
 The seL4 `qemu_virt_aarch64` machine has no GPU, so starbridge-v2's gpui (wgpu → Vulkan)
-cockpit cannot present to a window there. This is the proven path to render it anyway —
+cockpit cannot present to a window there. This is the path that renders it anyway —
 **gpui → software Vulkan (lavapipe) → an offscreen texture → RGBA readback → the seL4
-compositor framebuffer** — so the real cockpit can be a Mode/tab inside the VM, beside the
-live image viewer.
+compositor framebuffer** — so the real cockpit is a Mode inside the VM, beside the live
+image viewer.
+
+## LANDED — the real gpui cockpit is on the seL4 framebuffer (TAB to it)
+
+The weld is closed end-to-end. The deos-image PD (`sel4/dregg-pd/deos-image/`) now has
+**two live modes on one framebuffer**, switched with **TAB**:
+- `Mode::Image` — the Pharo/Smalltalk object browser of the six real deos cells.
+- `Mode::Cockpit` — the **real gpui-rendered starbridge-v2 cockpit**, blitted onto the
+  ramfb framebuffer QEMU scans out (`src/cockpit_frame.rs`).
+
+The cockpit frame is rendered at the framebuffer's exact `800×600` by the **actual gpui
+renderer** (`gpui_wgpu::WgpuRenderer::render_scene_to_image`, the patch below) on lavapipe
+(llvmpipe, `type=Cpu`, no GPU/window) on persvati — `21` quads + `322` monochrome glyph
+sprites, the title bar + the three master columns (WORLD/SHELL/REFLECT) + the four-substance
+tiles + the status bar — then baked into the `#![no_std]` PD as raw RGBA8
+(`src/cockpit_frame.rgba`, 1.92 MiB) exactly as `image_data.rs` bakes real cells. At blit
+time the PD swizzles RGBA→XRGB8888 straight into the mapped framebuffer. A keypress (TAB,
+evdev 15) → the PD's `notified()` handler toggles the mode and repaints — real gpui pixels
+on glass.
+
+Reproduce + capture (both modes to PNG): `cd sel4 && make capture-image-modes` — boots
+headless, screendumps the live image, `send-key TAB` over QMP, screendumps the cockpit.
+Evidence: `patches/cockpit-on-sel4-framebuffer.png` (the gpui cockpit, scanned out of seL4
+ramfb) + `patches/deos-image-on-sel4-framebuffer.png` (the cell browser, same boot) +
+`patches/cockpit-render-800x600.png` (the persvati render). Serial confirms
+`ramfb CONFIGURED: addr=0x60600000 XRGB8888 800x600` then `-> MODE: the starbridge-v2 COCKPIT`.
+
+**The honest frontier that remains** (named, not hidden): the blitted frame is a hand-built
+cockpit-shaped gpui `Scene` pushed through the *identical* renderer path the real `Cockpit`
+resolves to — NOT yet the live `cockpit::Cockpit` element tree. Swapping it in needs a
+headless gpui `App`/`Window` driving `cockpit::Cockpit` (its `shell::Scene` is a
+window-manager model that only resolves to a gpui `Scene` inside a live `Window`), then
+`render_scene_to_image` on that Scene → the same `cockpit_frame.rgba` bake. The plumbing
+(render → RGBA → XRGB8888 → ramfb → scanout → TAB mode) is now PROVEN; this is the one
+remaining swap, in starbridge-v2 (a headless cockpit-render entry beside `run_window`,
+`main.rs`).
 
 ## Proven (not theorized)
 

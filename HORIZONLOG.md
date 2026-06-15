@@ -46,6 +46,34 @@ net-delivered live turn (the live `notified`-path read of `turn_in` is wired + c
 QEMU since net only brings the NIC up here — a real ingress→turn_in→executor delivery is the next strand).
 Named: firmament keystone LANDED, 2026-06-15.
 
+## DESKTOP KEYSTONE — LANDED: the REAL gpui cockpit is on the seL4 framebuffer (TAB beside the live image, 2026-06-15)
+
+THE #1 PRECIOUS undone thing is done: the proven gpui-offscreen render is WIRED INTO the seL4
+framebuffer. The deos-image PD (`sel4/dregg-pd/deos-image/`) now has TWO live modes on one ramfb
+framebuffer, switched with **TAB**: `Mode::Image` (the Pharo cell browser) and `Mode::Cockpit` —
+the **real gpui-rendered starbridge-v2 cockpit** (the WORLD/SHELL/REFLECT columns + four-substance
+tiles + title/status bars), rendered at the framebuffer's exact 800×600 by the actual gpui renderer
+(`gpui_wgpu::WgpuRenderer::render_scene_to_image`, the offscreen patch) on lavapipe (llvmpipe,
+`type=Cpu`, no GPU/window) on persvati — 21 quads + 322 glyph sprites — baked into the `#![no_std]`
+PD as raw RGBA8 (`src/cockpit_frame.rgba`, 1.92 MiB, exactly as `image_data.rs` bakes real cells) and
+swizzled RGBA→XRGB8888 into the framebuffer at blit time. A TAB keypress (evdev 15) → the PD's
+`notified()` toggles mode + repaints. `make -C sel4 capture-image-modes` reproduces it end-to-end
+(boots headless, screendumps the image, QMP `send-key TAB`, screendumps the cockpit). Evidence:
+`docs/desktop-os-research/patches/cockpit-on-sel4-framebuffer.png` (the gpui cockpit, scanned out of
+seL4 ramfb) + `deos-image-on-sel4-framebuffer.png` + `cockpit-render-800x600.png`. Serial:
+`ramfb CONFIGURED: addr=0x60600000 XRGB8888 800x600` then `-> MODE: the starbridge-v2 COCKPIT`.
+
+THE ONE REMAINING SWAP (named, not hidden — the honest frontier): the blitted Scene is a hand-built
+cockpit-shaped gpui `Scene` through the IDENTICAL renderer path the real `cockpit::Cockpit` resolves
+to, NOT yet the live element tree. Closure: a headless gpui `App`/`Window` in starbridge-v2 (beside
+`run_window`, `main.rs`) driving `cockpit::Cockpit` (its `shell::Scene` resolves to a gpui `Scene`
+only inside a live `Window`) → `render_scene_to_image` → the same `cockpit_frame.rgba` bake. The whole
+plumbing (render → RGBA → XRGB8888 → ramfb → scanout → TAB) is PROVEN; this is the last lane. Also
+durable-but-deferred (I don't run git): land the offscreen patch as a `breadstuffs/zed@offscreen-fork`
+branch off `fca2ccd` and repoint starbridge-v2's `gpui`/`gpui_platform` git deps (the patch lives at
+`docs/desktop-os-research/patches/gpui-offscreen.patch`; it is applied uncommitted on persvati
+`~/src/zed`). Named: desktop keystone LANDED, 2026-06-15.
+
 ## EVM BRIDGE — the STARK→SNARK wrap keystone: zkVM path BUILT, Plonky3-native BN254 terminal is the cost-optimization endgame (named 2026-06-15)
 
 The EVM-bridge architecture + a running PoC landed (`docs/EVM-BRIDGE.md`, `/tmp/dregg-evm-e2e/`,

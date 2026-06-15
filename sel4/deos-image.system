@@ -7,7 +7,9 @@
   "image" of real `dregg_cell::CellState`s — real content-addressed ids, real
   signed balances, real c-lists, real fields, real proofs), and the main pane
   inspects the FOCUSED cell. UP/DOWN walk between cells; ENTER drills INTO a
-  cell's four substances; ESC backs out. "cell 3/6" = cell 3 of 6 LIVE.
+  cell's four substances; ESC backs out. "cell 3/6" = cell 3 of 6 LIVE. TAB
+  switches to the starbridge-v2 COCKPIT mode — a REAL gpui render (lavapipe / no
+  GPU) baked in and blitted onto this same framebuffer.
 
   It GROWS deos-tutorial.system (the interactive graphical edge) — the SAME
   fw_cfg/ramfb display + virtio-keyboard device-cap discipline, but the fixed

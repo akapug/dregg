@@ -8,7 +8,8 @@
 //! Unlike the tutorial's two-way (next/prev) nav, the image viewer is a real
 //! object browser: UP/DOWN move BETWEEN cells in the rail, ENTER drills INTO the
 //! focused cell (and pages its substances), ESC backs OUT. SPACE acts as ENTER
-//! (drill / advance) so a one-key newcomer can still walk everything.
+//! (drill / advance) so a one-key newcomer can still walk everything. TAB
+//! switches the top-level MODE (the live image <-> the gpui cockpit).
 //!
 //! virtio-input delivers Linux evdev events `{ event_type, code, value }`:
 //!   event_type EV_KEY = 1, value 1 = press (0 = release, 2 = autorepeat).
@@ -37,6 +38,7 @@ pub const KBD_DMA_SIZE: usize = 0x10_0000; // 1 MiB for the small event rings
 // evdev keycodes we navigate by.
 const KEY_ESC: u16 = 1;
 const KEY_BACKSPACE: u16 = 14;
+const KEY_TAB: u16 = 15;
 const KEY_ENTER: u16 = 28;
 const KEY_SPACE: u16 = 57;
 const KEY_UP: u16 = 103;
@@ -57,6 +59,8 @@ pub enum Nav {
     Enter,
     /// Back OUT of a drill-in (ESC / BACKSPACE).
     Back,
+    /// Switch the top-level MODE — the live image <-> the gpui cockpit (TAB).
+    Toggle,
     /// No navigable key in this batch.
     None,
 }
@@ -119,6 +123,7 @@ pub fn drain(dev: &mut Keyboard) -> Nav {
             KEY_DOWN | KEY_RIGHT => nav = Nav::Down,
             KEY_ENTER | KEY_SPACE => nav = Nav::Enter,
             KEY_ESC | KEY_BACKSPACE => nav = Nav::Back,
+            KEY_TAB => nav = Nav::Toggle,
             _ => {}
         }
     }
