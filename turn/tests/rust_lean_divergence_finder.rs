@@ -350,6 +350,146 @@ fn build_corpus() -> Vec<CorpusCase> {
     // (VERB-LOCKSTEP: the CreateSealPair still-GAP case died with the Effect variant —
     // the seal-pair family is the caps-in-slots factory story now.)
 
+    // ---- MULTI-LEVEL DELEGATION TREE (the forest→tree weld, no longer a linear null-cap chain) ----
+    // A turn whose root acts on cell A AND carries a real `CallTree` CHILD that ALSO acts on cell A
+    // (a same-cell delegation edge). The producer marshaller now reconstructs this as a NESTED Lean
+    // `WForest` (root with a child subtree), not a flattened sequential chain — and the verified
+    // gated executor (`execFullChildrenG`) runs the child as a `null`-cap subtree under its own
+    // credential (same-cell ⇒ no cap handoff). Both effects commit on cell A, so apply.rs and the
+    // verified executor must AGREE. This exercises the recursive `tree_to_wforest` edge (a CHILD that
+    // the old flatten would have appended as a peer; the structure is now preserved through the wire).
+    {
+        let (ledger, ida, _idb) = two_cell_ledger(100, 100);
+        let root_action = Action {
+            target: ida,
+            method: [0u8; 32],
+            args: vec![],
+            authorization: Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects: vec![Effect::SetField {
+                cell: ida,
+                index: 2,
+                value: field_from_u64(11),
+            }],
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        let mut root = dregg_turn::CallTree::new(root_action);
+        // The child acts on the SAME cell A (same-cell edge ⇒ marshalled as a direct null-cap subtree).
+        root.add_child(Action {
+            target: ida,
+            method: [0u8; 32],
+            args: vec![],
+            authorization: Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects: vec![Effect::SetField {
+                cell: ida,
+                index: 3,
+                value: field_from_u64(22),
+            }],
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+            witness_blobs: vec![],
+        });
+        let mut forest = CallForest::new();
+        forest.roots.push(root);
+        let turn = Turn {
+            agent: ida,
+            nonce: 0,
+            call_forest: forest,
+            fee: 0,
+            memo: None,
+            valid_until: Some(1_000_000),
+            previous_receipt_hash: None,
+            depends_on: vec![],
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        };
+        cases.push(CorpusCase {
+            label: "DelegateTree/same-cell-child",
+            turn,
+            ledger,
+        });
+    }
+
+    // ---- CROSS-CELL CHILD under a non-delegating mode: correctly INELIGIBLE (a GAP, not a commit) ----
+    // A root on A with a child targeting a DIFFERENT cell B under `DelegationMode::None`. apply.rs
+    // REJECTS this (DelegationDenied) before the body commits; the producer marshaller correctly
+    // marks it INELIGIBLE (the cross-cell authority model has no verdict-equivalent wire image), so it
+    // reports GAP — never marshalled as committable (which would risk admitting what apply.rs denies).
+    {
+        let (ledger, ida, idb) = two_cell_ledger(100, 100);
+        let root_action = Action {
+            target: ida,
+            method: [0u8; 32],
+            args: vec![],
+            authorization: Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects: vec![Effect::SetField {
+                cell: ida,
+                index: 2,
+                value: field_from_u64(11),
+            }],
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        let mut root = dregg_turn::CallTree::new(root_action);
+        root.add_child(Action {
+            target: idb, // DIFFERENT cell ⇒ cross-cell child under None ⇒ executor denies
+            method: [0u8; 32],
+            args: vec![],
+            authorization: Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects: vec![Effect::SetField {
+                cell: idb,
+                index: 2,
+                value: field_from_u64(33),
+            }],
+            may_delegate: DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+            witness_blobs: vec![],
+        });
+        let mut forest = CallForest::new();
+        forest.roots.push(root);
+        let turn = Turn {
+            agent: ida,
+            nonce: 0,
+            call_forest: forest,
+            fee: 0,
+            memo: None,
+            valid_until: Some(1_000_000),
+            previous_receipt_hash: None,
+            depends_on: vec![],
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        };
+        cases.push(CorpusCase {
+            label: "DelegateTree/cross-cell-none-INELIGIBLE",
+            turn,
+            ledger,
+        });
+    }
+
     cases
 }
 

@@ -15,8 +15,10 @@
 //! whitespace but REORDERS object keys and cannot reproduce the Lean grammar's
 //! array-positional encoding. We hand-roll every byte.
 //!
-//!     WIRE := {"state":STATEW,"turn":TURNW}                       (input)
-//!     OUT  := {"state":STATEW,"loglen":N,"ok":B}                  (output, B in {0,1})
+//! ```text
+//! WIRE := {"state":STATEW,"turn":TURNW}                       (input)
+//! OUT  := {"state":STATEW,"loglen":N,"ok":B}                  (output, B in {0,1})
+//! ```
 //!
 //! # Scope (be blunt about what crosses)
 //!
@@ -29,7 +31,9 @@
 //!   * all 30 `FullActionA` arms via `WireAction` (byte-exact with `encodeActionW`);
 //!   * dregg1 `GrantCapability` / `RevokeCapability` map to `Delegate` / `Revoke` on the wire;
 //!   * dregg1 `BiscuitIssuer` / `CellScopedMacaroon` map to `Token` / `Custom` via
-//!     `auth_biscuit_issuer` / `auth_cell_macaroon`.
+//!     `auth_biscuit_issuer` / `auth_cell_macaroon`, folding the `encoded`/`discharges`
+//!     caveat-chain into the `sig`/`proof` `Nat` (`token_chain_commitment`) so the WHO leg is
+//!     discharge-sensitive — not blind to the chain (the issuer key alone is no longer the whole leg).
 //!
 //! What is DEFERRED (documented, NEVER silently mis-encoded — a dropped field is worse
 //! than an error). See `MarshalError` and the `// GAP:` comments:
@@ -300,9 +304,10 @@ pub enum WireAuth {
     },
     /// {"bread":[N]} — breadstuff(token).
     Breadstuff { token: u64 },
-    /// {"bearer":["H64",P,B]} — bearer(delegMsg, delegSig, starkDelegation).
-    /// GAP: the full `BearerCapProof` collapses to (delegMsg, delegSig, starkBool); the
-    /// SignedDelegation|StarkDelegation distinction is the ONLY bit that survives.
+    /// {"bearer":["H64",P,B]} — bearer(delegMsg, delegSig, starkDelegation). `deleg_sig` carries
+    /// the FULL 64-byte ed25519 sig / STARK proof hashed to a low-u64 (not the truncated last 8
+    /// bytes), so the WHO leg is sensitive to the WHOLE delegation signature (a forged sig ⇒ a
+    /// different `deleg_sig`). The SignedDelegation|StarkDelegation distinction rides `stark`.
     Bearer {
         deleg_msg: Digest,
         deleg_sig: u64,
@@ -332,24 +337,55 @@ pub enum WireAuth {
         sig: u64,
     },
     /// {"token":["H64",P]} — token(issuerKey, sig). `issuer_key` is a full 256-bit digest
-    /// (the biscuit issuer pubkey / macaroon root anchor the gate authenticates).
-    /// GAP: the dregg1 `Token` `encoded`/`discharges` blobs are DROPPED (the issuer key + sig
-    /// are the load-bearing WHO-leg; the encoded caveats are a separate verifier concern).
+    /// (the biscuit issuer pubkey / macaroon root anchor the gate authenticates); `sig` carries the
+    /// `token_chain_commitment(encoded, discharges)` low-u64 so the WHO leg is sensitive to the
+    /// FULL caveat-discharge chain (a bad discharge ⇒ a different `sig`), not just the issuer key.
     Token { issuer_key: Digest, sig: u64 },
 }
 
-/// Map dregg1 `BiscuitIssuer` to the wire `token` arm (the issuer pubkey crosses in full;
-/// the encoded caveat-blob is dropped at the seam — it is a separate verifier concern).
-pub fn auth_biscuit_issuer(issuer_key: Digest) -> WireAuth {
-    WireAuth::Token { issuer_key, sig: 0 }
+/// The 32-byte commitment to a Token credential's `encoded` blob AND its `discharges` caveat-chain
+/// (length-prefixed so it is injective in the discharge SET). This is the WHO-leg's
+/// discharge-sensitive `sig`/`proof` Nat preimage: a tampered/absent discharge changes the
+/// commitment, so the verified gate's WHO leg is sensitive to the FULL caveat chain — not just the
+/// issuer key. Mirrors `turn::lean_shadow::token_chain_hash`.
+pub fn token_chain_commitment(encoded: &[u8], discharges: &[Vec<u8>]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-lean-shadow-token-chain-v1");
+    hasher.update(&(encoded.len() as u64).to_le_bytes());
+    hasher.update(encoded);
+    hasher.update(&(discharges.len() as u64).to_le_bytes());
+    for d in discharges {
+        hasher.update(&(d.len() as u64).to_le_bytes());
+        hasher.update(d);
+    }
+    *hasher.finalize().as_bytes()
 }
 
-/// Map dregg1 `CellScopedMacaroon` to the wire `custom` arm (the cell-scoped root anchor
-/// crosses as the `kind_stmt` digest; the encoded caveat-blob is dropped at the seam).
-pub fn auth_cell_macaroon(cell: Digest) -> WireAuth {
+/// The low-u64 (big-endian) of a 32-byte commitment — the wire `sig`/`proof` `Nat` carrier (the
+/// kernel reads the proof field as a `Nat`; the low 64 bits are the carried width).
+fn commitment_low_u64(c: &[u8; 32]) -> u64 {
+    u64::from_be_bytes(c[24..32].try_into().unwrap())
+}
+
+/// Map dregg1 `BiscuitIssuer` to the wire `token` arm. The issuer pubkey crosses in full as the
+/// WHO-leg digest, and the `encoded` credential + its `discharges` caveat-chain are FOLDED into the
+/// `sig` `Nat` (`token_chain_commitment`) so the verified gate authenticates the issuer key AND is
+/// sensitive to the discharge chain (a bad discharge ⇒ a different `sig` ⇒ the WHO leg can
+/// reproduce the rejection). Previously `sig:0` dropped the chain entirely.
+pub fn auth_biscuit_issuer(issuer_key: Digest, encoded: &[u8], discharges: &[Vec<u8>]) -> WireAuth {
+    WireAuth::Token {
+        issuer_key,
+        sig: commitment_low_u64(&token_chain_commitment(encoded, discharges)),
+    }
+}
+
+/// Map dregg1 `CellScopedMacaroon` to the wire `custom` arm. The cell-scoped root anchor crosses as
+/// the `kind_stmt` digest, and the `encoded` macaroon + its `discharges` chain are FOLDED into the
+/// `proof` `Nat` (`token_chain_commitment`) so the verified gate is sensitive to the discharge
+/// chain. Previously `proof:0` dropped it.
+pub fn auth_cell_macaroon(cell: Digest, encoded: &[u8], discharges: &[Vec<u8>]) -> WireAuth {
     WireAuth::Custom {
         kind_stmt: cell,
-        proof: 0,
+        proof: commitment_low_u64(&token_chain_commitment(encoded, discharges)),
     }
 }
 

@@ -3550,6 +3550,125 @@ theorem caveat_teeth_coordinated :
     caveatsDischarged (liftForestG (caveatTurn 3 0).root).auth cavePre = false := by
   rfl
 
+/-! ### §WG-eval-bearer — THE BEARER-CREDENTIAL TEETH (the forged-delegation-sig rollback).
+
+This closes the Theme-2 bearer gap: the producer marshaller (`turn::lean_shadow::auth_to_wire`) no
+longer COLLAPSES the delegation sig to a low-u64 (`sig64_to_nat` = the last 8 bytes, which a forged
+sig sharing its tail would have slipped past). It now carries the FULL ed25519 sig / STARK proof
+hashed into the wire `deleg_sig` `Nat`, so the verified WHO leg (`portalVerify .bearer msg sig =
+CryptoKernel.verify msg sig`) is sensitive to the WHOLE signature: a forged sig changes the hash ⇒
+the wire `deleg_sig` ⇒ the portal verdict. The same-wire contrast: a GENUINE bearer (the carried
+`deleg_sig` reproduces the delegation message, `.bearer 7 7 false`) COMMITS; a FORGED bearer (the
+carried `deleg_sig` does NOT reproduce it, `.bearer 7 8 false`) ROLLS BACK — the WHO leg is the only
+discriminator. (The `Crypto.Reference` portal models the reproduction as `msg = sig`; the
+`@[extern]` realization swaps in real ed25519 over the full sig the wire now carries.) -/
+
+/-- A gated turn whose root carries a BEARER credential `(delegMsg, delegSig, stark)` on a transfer
+(30 of asset 0, cell 0 → cell 1). `delegSig = delegMsg` ⇒ the portal reproduces it (genuine);
+`delegSig ≠ delegMsg` ⇒ forged. Same transfer/state as `gatedDemoTurn`; only the bearer arm varies. -/
+def bearerTurn (delegMsg delegSig : Nat) (stark : Bool) : WTurn :=
+  { agent := 0, nonce := 7, fee := 5, validUntil := 1000, prevHash := 0
+    root := ⟨ .bearer delegMsg delegSig stark, [], .balanceA { actor := 0, src := 0, dst := 1, amt := 30 } 0, [] ⟩ }
+
+/-- The wire for a bearer turn (over `wideDemoState`). -/
+def bearerInput (delegMsg delegSig : Nat) (stark : Bool) : String :=
+  encodeWWire { state := wideDemoState, turn := bearerTurn delegMsg delegSig stark }
+
+/-- GENUINE bearer: the carried `delegSig` (7) reproduces the delegation message (7) ⇒ WHO admits. -/
+def genuineBearerInput : String := bearerInput 7 7 false
+/-- FORGED bearer: the carried `delegSig` (8) does NOT reproduce the message (7) ⇒ WHO fail-closes
+(exactly the case the OLD truncating marshal could let slip if the forged sig shared its low 8 bytes). -/
+def forgedBearerInput : String := bearerInput 7 8 false
+
+-- THE TEETH (same wire path, only the bearer `delegSig` differs):
+-- GENUINE bearer ⇒ body COMMITS (status:2/ok:1):
+#guard (wireOk1 (execFullForestAuthStep genuineBearerInput))
+#guard (wireStatusIs 2 (execFullForestAuthStep genuineBearerInput))  --  body-committed
+-- FORGED bearer ⇒ the WHO leg fail-closes ⇒ forest body ABORTS ⇒ status:1/ok:0 (prologue charged, REJECTED):
+#guard (wireOk0 (execFullForestAuthStep forgedBearerInput))
+#guard (wireStatusIs 1 (execFullForestAuthStep forgedBearerInput))  --  prologue-committed-body-failed
+-- the contrast is EXACTLY the WHO leg (read off the lifted root auth):
+#guard ((match parseWWire genuineBearerInput with
+       | some w => credentialValidG (liftForestG w.turn.root).auth
+       | none => false))  --  true  (genuine bearer ⇒ WHO admits)
+#guard ((match parseWWire forgedBearerInput with
+       | some w => credentialValidG (liftForestG w.turn.root).auth
+       | none => false)) == false  --  false (forged bearer ⇒ WHO fail-closes)
+-- ...whereas the UNGATED §W7 export COMMITS the forged-bearer turn (the credential is dead there — the gap):
+#guard (wireOk1 (execFullTurnWide forgedBearerInput))
+
+/-- **`bearer_teeth_same_wire` — THE BEARER SOUNDNESS-GAP-CLOSED THEOREM (non-vacuous).** Over the
+SAME wire path, the lifted root's WHO leg ADMITS the genuine bearer (`delegSig` reproduces the
+message) and REJECTS the forged one (`delegSig ≠` the message). The ONLY difference is the carried
+`deleg_sig` — which now derives from the FULL signature (not a truncation). This proves the verified
+bearer-auth WHO leg CONSULTS the transported delegation signature: a forged sig fail-closes the gate
+⇒ whole-forest rollback. -/
+theorem bearer_teeth_same_wire :
+    credentialValidG (liftForestG (bearerTurn 7 7 false).root).auth = true
+    ∧
+    credentialValidG (liftForestG (bearerTurn 7 8 false).root).auth = false := by
+  refine ⟨?_, ?_⟩ <;> rfl
+
+/-! ### §WG-eval-discharge — THE TOKEN-DISCHARGE TEETH (the bad-macaroon/biscuit-discharge rollback).
+
+This closes the Theme-2 discharge gap: the producer marshaller no longer DROPS the biscuit/macaroon
+`encoded`/`discharges` blobs (`auth_biscuit_issuer`/`auth_cell_macaroon` previously emitted `sig:0`/
+`proof:0`, so the gate authenticated the issuer key but was BLIND to the caveat-discharge chain). It
+now FOLDS `encoded ‖ discharges` into the wire `sig`/`proof` `Nat` (`token_chain_commitment`), so the
+verified WHO leg (`portalVerify .token key sig = CryptoKernel.verify key sig`, and `.custom` for the
+cell-scoped macaroon) is sensitive to the FULL chain: a tampered/absent discharge changes the folded
+`Nat` ⇒ the portal verdict. The same-wire contrast: a credential whose discharge chain DiScHaRgEs
+(the folded `sig` reproduces the issuer anchor, `.token 9 9`) COMMITS; one whose chain is BAD (the
+folded `sig` does NOT, `.token 9 8`) ROLLS BACK. (The `Crypto.Reference` portal models the discharge
+check as `key = sig`; the `@[extern]` realization runs the real biscuit/macaroon
+`from_encoded_with_discharges` over the chain the wire now carries.) -/
+
+/-- A gated turn whose root carries a TOKEN credential `(issuerKey, sig)` on a transfer (30 of asset
+0). `sig = issuerKey` ⇒ the folded discharge chain reproduces the anchor (genuine); `sig ≠ issuerKey`
+⇒ a bad/absent discharge. Same transfer/state as `gatedDemoTurn`; only the token arm varies. -/
+def tokenTurn (issuerKey sig : Nat) : WTurn :=
+  { agent := 0, nonce := 7, fee := 5, validUntil := 1000, prevHash := 0
+    root := ⟨ .token issuerKey sig, [], .balanceA { actor := 0, src := 0, dst := 1, amt := 30 } 0, [] ⟩ }
+
+/-- The wire for a token turn (over `wideDemoState`). -/
+def tokenInput (issuerKey sig : Nat) : String :=
+  encodeWWire { state := wideDemoState, turn := tokenTurn issuerKey sig }
+
+/-- GENUINE discharge: the folded chain `sig` (9) reproduces the issuer anchor (9) ⇒ WHO admits. -/
+def goodDischargeInput : String := tokenInput 9 9
+/-- BAD discharge: the folded chain `sig` (8) does NOT reproduce the anchor (9) ⇒ WHO fail-closes
+(exactly the case the OLD `sig:0` marshal admitted — the chain was dropped, so the gate could not see it). -/
+def badDischargeInput : String := tokenInput 9 8
+
+-- THE TEETH (same wire path, only the folded discharge `sig` differs):
+-- GENUINE discharge ⇒ body COMMITS (status:2/ok:1):
+#guard (wireOk1 (execFullForestAuthStep goodDischargeInput))
+#guard (wireStatusIs 2 (execFullForestAuthStep goodDischargeInput))  --  body-committed
+-- BAD discharge ⇒ the WHO leg fail-closes ⇒ forest body ABORTS ⇒ status:1/ok:0 (prologue charged, REJECTED):
+#guard (wireOk0 (execFullForestAuthStep badDischargeInput))
+#guard (wireStatusIs 1 (execFullForestAuthStep badDischargeInput))  --  prologue-committed-body-failed
+-- the contrast is EXACTLY the WHO leg (the folded discharge chain):
+#guard ((match parseWWire goodDischargeInput with
+       | some w => credentialValidG (liftForestG w.turn.root).auth
+       | none => false))  --  true  (good discharge ⇒ WHO admits)
+#guard ((match parseWWire badDischargeInput with
+       | some w => credentialValidG (liftForestG w.turn.root).auth
+       | none => false)) == false  --  false (bad discharge ⇒ WHO fail-closes)
+-- ...whereas the UNGATED §W7 export COMMITS the bad-discharge turn (the chain is dead there — the gap):
+#guard (wireOk1 (execFullTurnWide badDischargeInput))
+
+/-- **`discharge_teeth_same_wire` — THE DISCHARGE SOUNDNESS-GAP-CLOSED THEOREM (non-vacuous).** Over
+the SAME wire path, the lifted root's WHO leg ADMITS the good-discharge token (the folded chain
+reproduces the issuer anchor) and REJECTS the bad-discharge one (it does not). The ONLY difference is
+the carried `sig` — which now folds in the `encoded ‖ discharges` chain (not `0`). This proves the
+verified token WHO leg CONSULTS the transported discharge chain: a bad discharge fail-closes the gate
+⇒ whole-forest rollback. -/
+theorem discharge_teeth_same_wire :
+    credentialValidG (liftForestG (tokenTurn 9 9).root).auth = true
+    ∧
+    credentialValidG (liftForestG (tokenTurn 9 8).root).auth = false := by
+  refine ⟨?_, ?_⟩ <;> rfl
+
 /-! ### §WG-eval-capauth — THE CAP-AUTHORITY (WHAT-leg) TEETH (the amplifying-delegation rollback).
 
 This closes A1: the cap-attenuation theory (`authModeAdmits`'s `granted ≤ held`) is now LOAD-BEARING
@@ -3661,6 +3780,8 @@ instances pull `Classical.choice`/`Quot.sound`). -/
 #assert_axioms liftCaveatsW
 #assert_axioms caveat_teeth_same_wire
 #assert_axioms caveat_teeth_coordinated
+#assert_axioms bearer_teeth_same_wire
+#assert_axioms discharge_teeth_same_wire
 
 /-! # §WH — the HANDLER-CUTOVER complete-turn step (DIAGNOSTIC, NOT a node-callable ABI).
 
