@@ -46,6 +46,18 @@ p3-circuit = { path = "../../plonky3-recursion/circuit" }
 p3-circuit-prover = { path = "../../plonky3-recursion/circuit-prover" }
 p3-poseidon2-circuit-air = { path = "../../plonky3-recursion/poseidon2-circuit-air" }
 
+# THE ARK-SERIALIZE FORK SEAM (replicated from the repo-root `[patch.crates-io]`).
+# Closing the executor seam pulls in `dregg-app-framework` → `dregg-sdk`/`dregg-intent`
+# → `dregg-federation`, which requires `ark-serialize` with the `serde_with` feature.
+# That feature lives only in the root's pinned fork (`emberian/algebra` branch
+# `serde-integration`); upstream `ark-serialize 0.5.0` lacks it. Because this crate is
+# its OWN workspace root, the repo-root `[patch.crates-io]` does NOT apply — so we
+# mirror it here, EXACTLY as the root does. Keep in sync with the repo-root
+# `[patch.crates-io]`; reverts once the fork lands upstream.
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
 [package]
 name = "deos-leptos"
 version = "0.1.0"
@@ -69,6 +81,25 @@ starbridge-web-surface = { path = "../starbridge-web-surface" }
 dregg-cell = { path = "../cell" }
 dregg-types = { path = "../types" }
 dregg-turn = { path = "../turn" }
+
+# THE REAL EXECUTOR — this is the seam-closer. `dregg_sdk::AgentRuntime` OWNS a genuine
+# `dregg_turn::TurnExecutor` over an in-process verified ledger; its `AgentCipherclerk`
+# signs the action with a REAL `Authorization::Signature`; `execute_turn(&Turn)` runs
+# the verified turn and returns a real `dregg_turn::TurnReceipt`. The prototype's
+# MockExecutor is DELETED in favour of this.
+#
+# We drive `AgentRuntime` DIRECTLY rather than through `dregg-app-framework`'s
+# `EmbeddedExecutor` wrapper: app-framework carries an in-flight, currently-uncompilable
+# `stark_rehydrate` module (an UNTRACKED WIP that calls the non-generic
+# `verify_vm_descriptor2` with a recursion-config proof — a type mismatch that fails in
+# the ROOT workspace too, unrelated to this crate). Driving the SDK runtime directly is
+# both the working path AND the cleaner architecture: a Leptos SSR crate atop the SDK
+# runtime, not dragging app-framework's axum/captp/rehydrate surface. The gate stays the
+# REAL one — `starbridge_web_surface::ReactiveAffordance` (the SAME gate the island's
+# lit/dark Memo uses), so the client-will predicate and the server-law gate are byte-
+# identical. (The browser island still cannot link this: it sits atop the native STARK
+# stack — exactly why the executor is server-side and the island POSTs to a server-fn.)
+dregg-sdk = { path = "../sdk" }
 
 # Leptos, server-side-render mode. 0.8 resolves to 0.8.19 (current max-stable,
 # upstream-verified). `ssr` is the feature that renders a reactive view tree to an
