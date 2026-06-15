@@ -1,12 +1,17 @@
-# SERVO-ON-SEL4 — a software-rendered Servo protection-domain on seL4, the honest feasibility spike
+# SERVO-ON-SEL4 — a software-rendered Servo protection-domain on seL4 (Stage A green on the host; Stage B the named OS port)
 
-*Read-only feasibility study (2026-06-14). The dream: a **software-rendered Servo
-PD on seL4 in QEMU** painting to a framebuffer cap — unaccelerated but real — so
-the compositor-PD's render pass is a genuine `libservo` `WebView`, not a
-`MockSurface`. This doc is the grounded plan: the verdict, the no-GPU render path
-(WebRender's **SWGL**), the `sel4-musl` story, the framebuffer-cap compositor-PD,
-the staged host-first → seL4 order, the real blockers, and an honest effort
-estimate. It investigates; it changes no code. Companion to
+*The plan + its live state. The target: a **software-rendered Servo PD on seL4 in
+QEMU** painting to a framebuffer cap — unaccelerated but real — so the
+compositor-PD's render pass is a genuine `libservo` `WebView`, not a `MockSurface`.
+**Stage A (the host SWGL render) is mostly built and green** (`servo-render/`: the
+SWGL `RenderingContext` rasterizes real RGBA8 on this host; the cap+compositor
+pipeline is green; the real-`WebView` embed wiring is written against the genuine
+`servo 0.1.x` API — the one remaining Stage-A wall is the `mozjs` C++ build
+finishing). This doc is the grounded plan and the honest state: the verdict, the
+no-GPU render path (WebRender's **SWGL**), the `sel4-musl` story (Stage B, the
+thread personality), the framebuffer-cap compositor-PD, the staged host-first → seL4
+order, the real blockers, and an effort estimate re-scoped to this repo's
+days-to-weeks velocity. Companion to
 [EMBEDDED-WEB-SURFACE.md](../EMBEDDED-WEB-SURFACE.md) §5 (the confined-Servo seL4
 end-state this respects), [DISTRIBUTED-SERVO-FACETS.md](DISTRIBUTED-SERVO-FACETS.md)
 (the distributed render/display split that sits on top), [BUILD-STATUS.md](BUILD-STATUS.md)
@@ -20,28 +25,53 @@ against).*
 
 ## 0. The verdict in one paragraph
 
-**Tractable as a staged program; a moonshot if attempted as one leap.** The
-no-GPU render path is **real and architecturally clean** — WebRender's SWGL is a
-complete, self-contained, CPU-only software rasterizer that renders a page into a
-caller-owned `Vec<u8>` of RGBA8 with **zero** GPU / EGL / windowing dependency,
-and it has portable scalar fallbacks so it can target exotic aarch64. So
-**Stage A — `libservo` + SWGL on the HOST, replacing `MockSurface` with a real
-render pass into the compositor-PD — is genuinely buildable and is the right
-first milestone** (weeks-to-a-couple-months, dominated by the SpiderMonkey/`mozjs`
-C++ build and the SWGL vendoring, not by anything exotic). **Stage B — the same
-Servo on `sel4-musl` as a confined PD — is HARD, on the order of quarters**, and
-its blocker is **not** the one the executor-PD already solved. The executor PD
-boots on `sel4-musl` precisely because the verified turn is *pure,
-single-threaded, and deterministic*, so the substrate **stubs** `clone` / `futex`
-/ signals. **Servo is the opposite: irreducibly multi-threaded** (~8–14 real
-`std::thread`s in even single-process mode), and the current `sel4-musl`
-substrate has **no thread-creation backing at all** — that is the central new
-blocker, ahead of graphics, ahead of `mozjs`. The honest framing: **the render
-path is solved; the port is a real OS-bring-up, not a recompile.**
+**Tractable as a staged program; a moonshot only if attempted as one leap.** The
+no-GPU render path is **real and verified-green, not hoped** — WebRender's SWGL is
+a complete, self-contained, CPU-only software rasterizer that renders into a
+caller-owned `Vec<u8>` of RGBA8 with **zero** GPU / EGL / windowing dependency, and
+**it compiles and produces real RGBA8 on this host today**: `servo-render`'s
+default `swgl-standalone` build is green (its C++17 `gl.cc` builds under clang 21;
+its tests rasterize known frames and read them back, then drive them through the
+real compositor-PD `present()` gate — see §7). So **Stage A — `libservo` + SWGL on
+the HOST, replacing `MockSurface` with a real `WebView` render pass — is not just
+"buildable," it is mostly built**: the SWGL `RenderingContext`, the cap-gated
+pipeline, the compositor seam, and now the **real-`WebView` embed wiring against
+the genuine `servo 0.1.x` API** (`ServoBuilder` → `WebViewBuilder` → load →
+spin → `read_to_image`, with the cap gate as the real `WebViewDelegate`) are all
+written. The **one remaining Stage-A pole is the `mozjs`/SpiderMonkey C++ build
+itself** — and the whole servo dependency tree (941 crates) **resolves and builds
+offline from the crates.io mirror** (`servo`, `servo-paint-api`, `webrender 0.68`,
+`mozjs 0.15`), so it is a *grind*, not a research problem.
 
-One-line bottom line: *SWGL makes "unaccelerated but real" true on the host
-today; the seL4 leap is a thread-personality + a from-scratch graphics broker, and
-it is a quarters-scale OS port, named not waved.*
+**Stage B — the same Servo on `sel4-musl` as a confined PD — is the real OS work**,
+and its blocker is **not** the one the executor-PD already solved. The executor PD
+boots on `sel4-musl` precisely because the verified turn is *pure, single-threaded,
+and deterministic*, so the substrate **stubs** `clone` / `futex` / signals.
+**Servo is the opposite: irreducibly multi-threaded** (~8–14 real `std::thread`s in
+even single-process mode), and the current `sel4-musl` substrate has **no
+thread-creation backing at all** — that is the central new blocker, ahead of
+graphics, ahead of `mozjs`. The honest framing: **the render path is solved; the
+port is a real OS-bring-up, not a recompile.**
+
+**On scope — corrected to this project's velocity.** An earlier draft priced this
+in *quarters*. That is the wrong unit for this repo: the whole dregg substrate
+(kernel redesign, circuit, the seL4 boot of the executor PD) was built in **weeks**,
+not quarters, and the seL4 plumbing this leans on (the `muslForSeL4` relink, the
+root-task-with-std pipeline, the net-driver-PD virtio probe) **already exists**.
+At that velocity: **Stage A is days-to-a-week** (the engineering is done; the wall
+is wall-clock on the `mozjs` build + closing the `glow` stub). **Stage B is on the
+order of a week or two**, *dominated by the one genuinely new piece — the
+multi-thread personality on `sel4-musl`* (real OS engineering, no in-tree
+precedent), with `mozjs`-for-seL4, the directory `font_list` backend, the
+`CLOCK_MONOTONIC` wire, and the ramfb framebuffer each days-scale against existing
+templates. The thread personality is the largest single uncertainty and the honest
+place to widen the estimate — but it is a *named week of OS work*, not a quarter.
+
+One-line bottom line: *SWGL is "unaccelerated but real" on the host today (green);
+the real-`WebView` wiring is written against the genuine API; the only Stage-A wall
+left is wall-clock on the `mozjs` build; and the seL4 leap is a thread-personality
++ a small graphics broker — a week-or-two of named OS work at this repo's pace, not
+a quarters-scale port.*
 
 ---
 
@@ -120,11 +150,13 @@ is present on this host.
 SWGL is **not pure Rust** — the rasterizer is C++ (`gl.cc` ~93 KB + ~400 KB of
 headers). The build needs: a **Clang C++17 toolchain**, `cc-rs`, and two Mozilla
 build-time codegen crates — **`glsl-to-cxx`** (the GLSL→C++ shader transpiler) and
-**`webrender_build`** (the shader feature matrix). Neither is needed at runtime;
-**neither is usably on crates.io** (only stale 0.68.0 snapshots) — they live in
-the webrender git monorepo, so they must be **vendored from the webrender git rev
-servo pins**. The Rust↔C++ boundary is a hand-written `extern "C"` block, **no
-cbindgen**.
+**`webrender_build`** (the shader feature matrix). Neither is needed at runtime.
+**Correction (verified by the green build):** the `0.68.0` crates.io publications of
+`swgl` + `glsl-to-cxx` + `webrender_build` are **not** stale-and-unusable — they
+build clean. `servo-render` simply depends on `swgl = "0.68"` and `cargo` pulls the
+codegen crates from the mirror; **no git vendoring is required** (an earlier draft of
+this section overstated this). The Rust↔C++ boundary is a hand-written `extern "C"`
+block, **no cbindgen**.
 
 ### 1.5 The one real gap for *servo specifically*: it does not ship SWGL
 
@@ -374,44 +406,67 @@ The sequencing is almost forced by §1–§3: the SWGL render path is the same c
 host and seL4, so build and harden it on the host (where threads/fonts/malloc are
 free), *then* fight the seL4 substrate underneath an already-working render.
 
-### Stage A — `libservo` + SWGL on the HOST, replacing `MockSurface` (WEEKS → a couple MONTHS)
+### Stage A — `libservo` + SWGL on the HOST, replacing `MockSurface` (DAYS-TO-A-WEEK; mostly DONE, the wall is the `mozjs` build)
 
-The first milestone, and the one that makes "unaccelerated but real" *true* —
-on the desktop, today's toolchain.
+The first milestone, and the one that makes "unaccelerated but real" *true* — on
+the desktop, today's toolchain. **Most of it is already built and green**; what
+follows is marked ✅ done / ⏳ in-progress / ☐ remaining.
 
-1. **Vendor SWGL + `glsl-to-cxx` + `webrender_build`** from the webrender git rev
-   servo pins (not crates.io). Confirm the Clang C++17 build of `gl.cc` (clang 21
-   present). *(Days.)*
-2. **Write the SWGL `RenderingContext`** (§1.5): a `swgl::Context`, a `Vec<u8>`
-   default framebuffer via `init_default_framebuffer`, the swgl `Context` returned
-   as the gleam `Gl`, `read_to_image` via `get_color_buffer`, `CompositorKind::Draw`.
-   This is the technical heart. *(Weeks — the API shapes are verified clean; the
-   work is wiring + getting servo's `RenderingContext` trait to accept it.)*
-3. **Build `libservo` itself**, which means **building `mozjs`** (the long pole —
-   the multi-GB SpiderMonkey C++ build; on host you can even keep the JIT, deferring
-   the PBL config to Stage B). `BUILD-STATUS.md` already flags libservo as *"a
-   multi-MB Rust codebase + a Metal/wgpu toolchain that does not build cleanly in
-   this environment"* — Stage A's *point* is that **SWGL removes the
-   Metal/wgpu/GPU requirement**, leaving the `mozjs` build as the real cost. *(Weeks
-   — dominated by the `mozjs` build, a known-hard but walked path.)*
-4. **Replace `MockSurface` with the real `WebView`** (`starbridge-web-surface/src/delegate.rs`
-   — the `// LIBSERVO SEAM` is one documented type). The `WebViewDelegate` impl
-   forwarding to `CapGatedDelegate` is **already written**; closing the seam is
-   swapping `MockSurface` for a real `WebView` whose render target is the SWGL
-   context. *(Days-to-weeks once 1–3 land.)*
-5. **Feed the SWGL frame into the compositor-PD's `present()`** (§3.2): render →
-   hash → `present(region, digest)` → T1/T2/T3 gate → blit. **The compositor-PD's
-   F3 fidelity gap closes on the host.** *(Days — `present()` exists; this is the
-   payoff wiring.)*
+1. ✅ **SWGL builds on this host.** `swgl 0.68` (with `glsl-to-cxx` + `webrender_build`)
+   compiles via `cc-rs`/clang 21 as a normal cargo dependency from the crates.io
+   mirror — *no git vendoring needed*; the `servo-render` crate just depends on
+   `swgl = "0.68"`. The C++17 `gl.cc` builds clean. *(Done.)*
+2. ✅ **The SWGL `RenderingContext` is written and proven** (§1.5,
+   `servo-render/src/swgl_context.rs`): a `swgl::Context`, a `Vec<u8>` default
+   framebuffer via `init_default_framebuffer`, the swgl `Context` returned as the
+   gleam `Gl`, `read_pixels` readback. The `swgl-standalone` tests rasterize known
+   frames (a clear-to-color, a region-selective sub-rect) and read them back as real
+   RGBA8. *(Done, green.)*
+3. ⏳ **Build `libservo` itself = build `mozjs`** (the long pole — the multi-GB
+   SpiderMonkey C++ build; on host you can keep the JIT, deferring the PBL config to
+   Stage B). **The whole servo dependency tree (941 crates: `servo`,
+   `servo-paint-api`, `webrender 0.68`, `stylo 0.15`, `mozjs_sys 0.140`) resolves and
+   builds offline from the mirror** under `servo-render`'s `libservo` feature — Stage
+   A's *point* is that **SWGL removes the Metal/wgpu/GPU requirement**, leaving the
+   `mozjs` C++ compile as the real cost. *(In-progress: this is wall-clock on the
+   `mozjs_sys` build, the one genuine pole — not a research problem.)*
+4. ⏳ **Replace `MockSurface` with the real `WebView`** — **the embed wiring is
+   written against the genuine `servo 0.1.x` API** (`servo-render/src/webview.rs`,
+   `#[cfg(feature = "libservo")]`): `ServoSwglContext` impls the real
+   `paint_api::RenderingContext`; `render_url_to_frame` builds a real `Servo` +
+   `WebViewBuilder`, loads a URL, spins the event loop to paint, and reads the frame
+   back via `read_to_image`; the `CapGate` is the real `WebViewDelegate` forwarding
+   every `load_web_resource` / `request_navigation` to the genuine `CapGatedDelegate`
+   (`granted ⊆ held`). The one honest stub: `glow_gl_api` (SWGL provides `gleam`, not
+   `glow`; it is the offscreen-blit path a DRAW-compositor context never takes —
+   closing it is a `glow::Context::from_loader_function` over swgl's entry points).
+   *(Compiles once step 3's `mozjs` build completes; the code is API-correct against
+   the published trait.)*
+5. ✅ **Feed the frame into the compositor-PD's `present()`** (§3.2,
+   `servo-render/src/compositor_seam.rs` + `cap_gated_pipeline.rs`): render → hash →
+   `present(region, digest)` → T1/T2/T3 gate → blit, all green against the **real**
+   `dregg-firmament` compositor. Today it carries the SWGL clear-to-color frame; when
+   step 3/4 land, `render_url_to_frame`'s real page pixels flow through the *same*
+   unchanged seam. **The compositor-PD's F3 gap closes the instant the real frame
+   replaces the stand-in.** *(Done — the seam is the genuine one; only the byte
+   source changes.)*
 
 **Stage-A deliverable: a real Servo `WebView`, software-rendered via SWGL, painting
 through the cap-gated compositor-PD on the host — the compositor's render pass is
-genuine, `MockSurface` is gone, and not one line of GPU/EGL is in the path.** This
-is independently valuable (it is the real desktop render pass for
+genuine, `MockSurface` is gone, and not one line of GPU/EGL is in the path.** Steps
+1, 2, 5 are **green today**; step 4's wiring is **written against the real API**; the
+single remaining wall is step 3's **`mozjs` build completing** (wall-clock, days).
+This is independently valuable (it is the real desktop render pass for
 `starbridge-web-surface` / the deos compositor) **whether or not Stage B ever
 happens**, and it de-risks Stage B by making the render a known quantity.
 
-### Stage B — the Servo PD on `sel4-musl` (QUARTERS)
+> **What is NOT yet true (honest):** no real web page has been rasterized end-to-end
+> yet — the `mozjs` build is in progress, so `render_url_to_frame` has not *run*.
+> The standalone render (real SWGL RGBA8) and the whole cap+compositor gate ARE
+> exercised green; the page-content half waits on the engine link. A mid-flight
+> `mozjs` build is a build-in-progress, reported as such — not a rendered page.
+
+### Stage B — the Servo PD on `sel4-musl` (a WEEK OR TWO at this repo's pace; dominated by the thread personality)
 
 Only now fight the kernel, underneath a render path that already works.
 
@@ -420,29 +475,30 @@ Only now fight the kernel, underneath a render path that already works.
    with real `seL4_TCB` thread-object creation; back `futex` with `sel4-sync`
    blocking; provide TLS per thread (the substrate already does thread-*local*
    storage, not creation). This is a small **pthreads-on-seL4** inside the PD — a
-   genuine OS-bring-up, the single largest item in the whole program. *(Weeks-to-
-   months; high uncertainty — this is where "quarters" comes from. Check whether an
-   upstream rust-sel4 / seL4 threaded-musl effort can be adopted before building it.)*
+   genuine OS-bring-up, the single largest item in the whole program. *(The widest
+   item; days-to-a-week with real uncertainty — the honest place to widen the
+   estimate. Check whether an upstream rust-sel4 / seL4 threaded-musl effort can be
+   adopted before building it.)*
 2. **Build `mozjs` interpreter-only/PBL for `sel4-musl`-aarch64** (§2.3): add the
    seL4 target arm to `mozjs-sys/build.rs` cloning the WASI arm;
-   `--disable-jit --enable-portable-baseline-interp …`. *(Multi-week; the biggest
-   cross-compile, but precedented.)*
+   `--disable-jit --enable-portable-baseline-interp …`. *(Days — the biggest
+   cross-compile, but precedented; mostly wall-clock once the target arm is added.)*
 3. **The directory-scanning `font_list` backend + bundled fonts** (§2.4): the 4th
-   cfg-gated backend modeled on android/ohos. *(Days-to-weeks.)*
+   cfg-gated backend modeled on android/ohos. *(Days.)*
 4. **Wire `CLOCK_MONOTONIC` to a real seL4 timer** (§2.5) and stub/disable net
    (`data:`/in-memory only; swap rustls→ring or stub `CryptoProvider` so
-   `aws-lc-sys` doesn't gate the build). *(Days.)*
+   `aws-lc-sys` doesn't gate the build). *(A day or two.)*
 5. **Relink the whole Servo+SWGL+mozjs object set against `muslForSeL4`** (the
    `__sysinfo`-indirect-syscall fork) and host it on `sel4-root-task-with-std`,
    exactly as `executor-rootserver` does for the executor — but now exercising the
    **full** syscall surface (real `clone`/`futex`/`mmap`/`mprotect`), not the
    stubbable deterministic subset. *(The executor-rootserver pipeline is the
-   template; the syscall surface is far larger — weeks of wall-clearing à la
-   `WALL-roottask.md`.)*
+   template; the syscall surface is far larger — days of wall-clearing à la
+   `WALL-roottask.md`, gated on item 1.)*
 6. **The seL4 framebuffer cap** (§3.3): linear/ramfb framebuffer first; the
    compositor-PD blits the SWGL frame into the scanned-out region it solely holds.
    virtio-gpu is a later refinement (and inherits the M3 virtio-mmio slot wall).
-   *(Weeks for ramfb; a separate driver port for virtio-gpu.)*
+   *(Days for ramfb; a separate driver port for virtio-gpu.)*
 
 **Stage-B deliverable: Servo as a confined seL4 protection domain, software-rendered
 via SWGL, painting to a framebuffer cap in QEMU — the `EMBEDDED-WEB-SURFACE.md` §5
@@ -489,39 +545,67 @@ vendors static; only discovery is hard, and even that has an in-tree pattern).
 
 ---
 
-## 6. Effort estimate (honest, and it is large)
+## 6. Effort estimate (honest — and re-scoped to this repo's velocity)
 
-- **Stage A (host, SWGL, `MockSurface` → real `WebView`):** **weeks to ~2 months**
-  for one experienced engineer, **dominated by the `mozjs` build** and the SWGL
-  vendoring/`RenderingContext` wiring. Everything else in Stage A is verified-clean
-  seam work. **Independently valuable; the right first milestone; de-risks B.**
-- **Stage B (the `sel4-musl` Servo PD):** **quarters** — realistically **2+
-  quarters** for one engineer, **dominated by item-1 (the thread personality on
-  seL4)**, which is open-ended OS engineering with no in-tree precedent and the
-  largest single uncertainty, plus the `mozjs`-for-seL4 cross-compile and the
-  wall-by-wall `muslForSeL4` relink at Servo's far-larger syscall surface (the
-  `WALL-roottask.md` pattern, but many more walls). The framebuffer-cap path adds
-  weeks (ramfb) to a separate driver port (virtio-gpu).
-- **Total to "a software-rendered Servo PD on seL4 in QEMU painting to a
-  framebuffer cap":** **on the order of two to four engineer-quarters**, front-
-  loaded so that the *first* visible win (Stage A: a real Servo render pass through
-  the cap-gated compositor on the host) lands early and stands alone.
+The unit is **days-to-weeks, not quarters.** This repo's whole substrate (the
+kernel redesign, the circuit, the seL4 boot of the executor PD) was built in
+**weeks**; an estimate in quarters mis-prices the velocity. The render path is now
+**green-verified, not hoped**, and the real-`WebView` wiring is **written against
+the genuine API** — so the remaining work is mostly *wall-clock* (the `mozjs` C++
+build) and *one genuinely new piece of OS work* (the seL4 thread personality).
 
-This is **hard — months-to-quarters, not a sprint** — and the doc says so plainly.
-But it is **tractable**, not a moonshot, *because the order is right*: SWGL makes
-the render real on the host first (no GPU, no EGL, no platform surface — verified
-from source), and only then does the seL4 leap reduce to a well-named OS port whose
-single biggest piece (the thread personality) is identified, scoped, and
-precedent-checked rather than waved at.
+- **Stage A (host, SWGL, `MockSurface` → real `WebView`):** **days-to-a-week.** The
+  SWGL `RenderingContext`, the cap+compositor pipeline (green today), and the
+  real-`WebView` embed wiring are **already written**; the only wall is the
+  **`mozjs`/SpiderMonkey C++ build completing** (in-progress, builds offline from the
+  mirror) plus closing the `glow_gl_api` stub. **Independently valuable; mostly
+  done; de-risks B.**
+- **Stage B (the `sel4-musl` Servo PD):** **a week or two**, **dominated by item-1
+  (the thread personality on seL4)** — the one genuinely new OS piece, with no
+  in-tree precedent and the largest single uncertainty (the honest place to widen).
+  Everything else is days-scale against existing templates: `mozjs`-for-seL4 (clone
+  the WASI arm), the directory `font_list` backend (clone android/ohos), the
+  `CLOCK_MONOTONIC` wire, the `muslForSeL4` relink (the executor-rootserver pipeline
+  exists), and the ramfb framebuffer (the net-driver-PD virtio probe exists).
+- **Total to "a software-rendered Servo PD on seL4 in QEMU painting to a framebuffer
+  cap":** **on the order of two-to-four weeks at this repo's pace**, front-loaded so
+  the *first* visible win (Stage A: a real Servo render pass through the cap-gated
+  compositor on the host) lands in days and stands alone.
+
+This is **real work — not a sprint, and the thread personality is genuine OS
+engineering** — but it is **tractable in weeks, not a moonshot in quarters**,
+because the order is right and most of it is already built: SWGL makes the render
+real on the host first (no GPU, no EGL, no platform surface — *green on this host
+today*), the engine links as a normal dependency, and only then does the seL4 leap
+reduce to a well-named OS port whose single biggest piece (the thread personality)
+is identified, scoped, and precedent-checked rather than waved at.
 
 ---
 
 ## 7. What's already true (so the start isn't from zero)
 
-- **SWGL is a real, self-contained, CPU-only, framebuffer-out software GL** — a
-  complete `gleam::gl::Gl` rendering into a caller-owned `Vec<u8>` of RGBA8, with
-  portable scalar fallbacks and only-Clang as a hard constraint (verified from
-  `swgl 0.68.0` source). *"Unaccelerated but real" is not a hope; it is an API.*
+- **SWGL builds and rasterizes real RGBA8 on this host — GREEN, not just
+  verified-from-source.** `servo-render`'s default `swgl-standalone` build compiles
+  `swgl 0.68`'s C++17 `gl.cc` under clang 21 (a normal cargo dep from the mirror —
+  no git vendoring) and its tests rasterize known frames into a caller-owned
+  `Vec<u8>` and read them back as real RGBA8 (`swgl_context.rs`). *"Unaccelerated but
+  real" is not a hope; it is a passing test.*
+- **The host render pipeline is built and green** (`servo-render/`): the SWGL
+  `RenderingContext`, the `compositor_seam::present_frame` (render→hash→present), and
+  the `cap_gated_pipeline::fetch_render_present` (the cap gate IN FRONT of the SWGL
+  render → the real compositor `present()`) — 11 passing tests against the **genuine**
+  `dregg-firmament` compositor and the **genuine** `starbridge-web-surface` cap gate.
+  Today it carries the SWGL clear-to-color frame; the seam is the real one.
+- **The real-`WebView` embed wiring is written against the genuine `servo 0.1.x`
+  API** (`servo-render/src/webview.rs`, `#[cfg(feature = "libservo")]`):
+  `ServoSwglContext` impls the real `paint_api::RenderingContext`;
+  `render_url_to_frame` drives a real `Servo`+`WebViewBuilder`, loads a URL, spins to
+  paint, reads back via `read_to_image`; `CapGate` is the real `WebViewDelegate`
+  forwarding to `CapGatedDelegate`. **The whole 941-crate servo tree
+  (`servo`/`servo-paint-api`/`webrender 0.68`/`mozjs 0.15`) resolves and builds
+  offline from the mirror** — the only Stage-A wall left is the `mozjs` C++ build
+  finishing (wall-clock). *(API-correct; not yet run end-to-end — no real page has
+  rasterized until that build completes.)*
 - **The compositor-PD is built** (`sel4/dregg-firmament/src/compositor_pd.rs`, 829
   lines, green boot test) — sole framebuffer-region holder, T1/T2/T3 scene teeth on
   the genuine `is_attenuation` lattice, `present(region, contentDigest)` waiting for
@@ -546,15 +630,17 @@ precedent-checked rather than waved at.
 > *the kernel wants threads the executor never spun;*
 > *so the leap isn't the snake-engine — it's a loom in one address space,*
 > *and a framebuffer cap held by the one PD that draws.*
-> *host-first, the render is real and stands alone;*
-> *then seL4, quarters of honest OS, the browser a confined guest at last.* ⊹╰(⌣ʟ⌣)╯⊹
+> *host-first, the render is real and stands alone — green on the bare CPU today;*
+> *then seL4, a week or two of honest OS, the browser a confined guest at last.* ⊹╰(⌣ʟ⌣)╯⊹
 
-*Files this plan touches the seam of (none edited here): `swgl` (vendored from the
-webrender git rev) · servo `components/shared/paint/rendering_context.rs` (the new
-SWGL `RenderingContext`) · `components/script/Cargo.toml` + `mozjs-sys/build.rs`
-(the PBL/seL4 arm) · servo `components/fonts/platform/{android,ohos}/font_list.rs`
-(the directory-backend template) · `starbridge-web-surface/src/delegate.rs` (the
-`// LIBSERVO SEAM`, `MockSurface` → `WebView`) · `sel4/dregg-firmament/src/compositor_pd.rs`
+*Files in play: `servo-render/src/swgl_context.rs` (the SWGL `RenderingContext` —
+green) · `servo-render/src/{compositor_seam,cap_gated_pipeline}.rs` (render→present,
+cap-in-front — green) · `servo-render/src/webview.rs` (**the real-`WebView` embed
+wiring against the genuine `servo 0.1.x` API**, `#[cfg(libservo)]`, awaiting the
+`mozjs` build) · `servo-render/Cargo.toml` (`swgl 0.68` + the libservo `servo` /
+`servo-paint-api` / `webrender_api` / `dpi` / `image` / `glow` deps, all
+mirror-resolvable) · `starbridge-web-surface/src/delegate.rs` (the `// LIBSERVO
+SEAM`, `MockSurface` → `WebView`) · `sel4/dregg-firmament/src/compositor_pd.rs`
 (`present()`, the F3 fidelity gap) · `~/sel4-sdk/rust-sel4/crates/experimental/sel4-musl/`
-(the thread personality) · `sel4/dregg-pd/executor-rootserver/` (the
+(the thread personality, Stage B's #1) · `sel4/dregg-pd/executor-rootserver/` (the
 `muslForSeL4` relink template).*

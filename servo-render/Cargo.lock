@@ -1707,6 +1707,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-query"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "hex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "dregg-token"
 version = "0.1.0"
 dependencies = [
@@ -3626,6 +3637,7 @@ dependencies = [
  "moxcms",
  "num-traits",
  "png 0.18.1",
+ "qoi",
  "ravif",
  "rayon",
  "rgb",
@@ -5756,6 +5768,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0c5ccf5294c6ccd63a74f1565028353830a9c2f5eb0c682c355c471726a6e3f"
 
 [[package]]
+name = "qoi"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7567,12 +7588,17 @@ name = "servo-render"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "dpi",
  "dregg-firmament",
  "gleam",
+ "glow",
+ "image",
  "servo",
  "servo-paint-api",
  "starbridge-web-surface",
  "swgl",
+ "url",
+ "webrender_api",
 ]
 
 [[package]]
@@ -8212,8 +8238,12 @@ dependencies = [
  "blake3",
  "dregg-cell",
  "dregg-firmament",
+ "dregg-query",
  "dregg-turn",
  "dregg-types",
+ "futures-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
