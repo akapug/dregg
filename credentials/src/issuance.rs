@@ -47,7 +47,7 @@ pub struct IssuerKeys {
     /// signature key. Bound into the macaroon's `kid`.
     pub kid: Vec<u8>,
     /// Macaroon location field. By convention this is a stable identifier
-    /// for the issuer's domain (e.g., `"dregg.dev"`).
+    /// for the issuer's domain (e.g., `"dregg.fg-goose.online"`).
     pub location: String,
 }
 

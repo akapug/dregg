@@ -28,6 +28,10 @@
 #[cfg(not(feature = "recursion"))]
 use crate::effect_vm::EffectVmAir;
 #[cfg(not(feature = "recursion"))]
+use crate::effect_vm::pi;
+#[cfg(not(feature = "recursion"))]
+use crate::field::BabyBear;
+#[cfg(not(feature = "recursion"))]
 use crate::stark::{self, StarkProof};
 
 /// One node in the proof forest: a standalone EffectVm STARK proof plus the

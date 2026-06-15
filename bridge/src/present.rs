@@ -3196,7 +3196,7 @@ mod tests {
         let mut builder = BridgePresentationBuilder::new(key, test_federation_root());
         assert_eq!(builder.chain_length(), 0);
 
-        let token = MacaroonToken::mint(key, b"kid-1", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-1", "dregg.fg-goose.online");
         builder.set_root_token(token);
         assert_eq!(builder.chain_length(), 1);
         assert!(builder.final_state().is_some());
@@ -3221,7 +3221,7 @@ mod tests {
     fn test_builder_empty_attenuation_fails() {
         let key = test_key();
         let mut builder = BridgePresentationBuilder::new(key, test_federation_root());
-        let token = MacaroonToken::mint(key, b"kid-1", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-1", "dregg.fg-goose.online");
 
         builder.set_root_token(token);
 
@@ -3396,7 +3396,7 @@ mod tests {
 
         let mut builder =
             BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-        let token = MacaroonToken::mint(key, b"kid-p2", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-p2", "dregg.fg-goose.online");
         builder.set_root_token(token);
 
         // Use unrestricted token (no attenuations) to avoid pre-existing
@@ -3469,7 +3469,7 @@ mod tests {
 
         let mut builder =
             BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-        let token = MacaroonToken::mint(key, b"kid-163", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-163", "dregg.fg-goose.online");
         builder.set_root_token(token);
 
         let request = AuthRequest {
@@ -3543,7 +3543,7 @@ mod tests {
 
         let mut builder =
             BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-        let token = MacaroonToken::mint(key, b"kid-163b", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-163b", "dregg.fg-goose.online");
         builder.set_root_token(token);
 
         let request = AuthRequest {
@@ -3585,12 +3585,12 @@ mod tests {
         // Generate two proofs from the same issuer.
         let mut builder1 =
             BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-        let token1 = MacaroonToken::mint(key, b"kid-ring1", "dregg.dev");
+        let token1 = MacaroonToken::mint(key, b"kid-ring1", "dregg.fg-goose.online");
         builder1.set_root_token(token1);
 
         let mut builder2 =
             BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-        let token2 = MacaroonToken::mint(key, b"kid-ring2", "dregg.dev");
+        let token2 = MacaroonToken::mint(key, b"kid-ring2", "dregg.fg-goose.online");
         builder2.set_root_token(token2);
 
         let request = AuthRequest {
@@ -3672,7 +3672,7 @@ mod tests {
 
         let mut builder =
             BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-        let token = MacaroonToken::mint(key, b"kid-verify", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-verify", "dregg.fg-goose.online");
         builder.set_root_token(token);
 
         let request = AuthRequest {
@@ -3702,7 +3702,7 @@ mod tests {
         let wrong_root = test_federation_root(); // This won't match the synthetic path
 
         let mut builder = BridgePresentationBuilder::new(key, wrong_root);
-        let token = MacaroonToken::mint(key, b"kid-invalid", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-invalid", "dregg.fg-goose.online");
         builder.set_root_token(token);
 
         let request = AuthRequest {
@@ -3864,12 +3864,12 @@ mod tests {
         // Generate two presentations from the SAME token (same cipherclerk, same key).
         let mut builder1 =
             BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-        let token1 = MacaroonToken::mint(key, b"kid-tag-test", "dregg.dev");
+        let token1 = MacaroonToken::mint(key, b"kid-tag-test", "dregg.fg-goose.online");
         builder1.set_root_token(token1);
 
         let mut builder2 =
             BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-        let token2 = MacaroonToken::mint(key, b"kid-tag-test", "dregg.dev");
+        let token2 = MacaroonToken::mint(key, b"kid-tag-test", "dregg.fg-goose.online");
         builder2.set_root_token(token2);
 
         let request = AuthRequest {

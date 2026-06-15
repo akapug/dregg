@@ -51,9 +51,13 @@ impl DslP3Air {
         for (i, c) in self.descriptor.constraints.iter().enumerate() {
             if Self::constraint_uses_hash(c) {
                 return Err(format!(
-                    "Constraint {} uses Hash/Hash2to1/Hash4to1 which requires compile-time \
-                     P3 AIR generation via gen_plonky3.rs. Runtime DslP3Air cannot inline \
-                     Poseidon2 round constraints.",
+                    "Constraint {} uses a form this runtime DslP3Air cannot soundly inline \
+                     (Hash/Hash2to1/Hash4to1/MerkleHash Poseidon2 rounds, the cross-row/PI-seeded \
+                     running hashes ChainedHash2to1/SeedHash2to1, or the bivariate-interpolation \
+                     TableFunction). These need compile-time P3 AIR generation (gen_plonky3.rs) or \
+                     the native crate::stark prover; admitting them here would leave the constraint \
+                     un-enforced (its symbolic eval is ZERO). Route the descriptor through \
+                     crate::stark instead.",
                     i
                 ));
             }
@@ -61,12 +65,25 @@ impl DslP3Air {
         Ok(())
     }
 
+    /// Whether a constraint is one this RUNTIME p3-uni-stark AIR cannot soundly emit into its
+    /// `AB::Expr` path — i.e. one whose `eval_constraint_expr_from_vecs` returns the vacuous
+    /// `ZERO`. It is the SOUNDNESS GUARD for `prove_dsl_plonky3`: every form whose symbolic
+    /// expansion this AIR does not emit MUST be rejected here, or a descriptor carrying it would
+    /// be vacuously "proved" (ZERO is always satisfied). Kept in lockstep with the ZERO-returning
+    /// arms of `eval_constraint_expr_from_vecs` and with `dsl_p3_air::check_algebraic`'s rejection
+    /// set: the Poseidon2 hash forms (need inlined round constraints), the cross-row
+    /// `ChainedHash2to1` / PI-seeded `SeedHash2to1` running hashes (span local/next or bind a PI),
+    /// and `TableFunction` (bivariate-Lagrange expansion not yet emitted). The name is historical
+    /// (it began as a hash-only check); it now gates the full non-emitted set.
     fn constraint_uses_hash(expr: &ConstraintExpr) -> bool {
         match expr {
             ConstraintExpr::Hash { .. }
             | ConstraintExpr::Hash2to1 { .. }
             | ConstraintExpr::Hash4to1 { .. }
-            | ConstraintExpr::MerkleHash { .. } => true,
+            | ConstraintExpr::MerkleHash { .. }
+            | ConstraintExpr::ChainedHash2to1 { .. }
+            | ConstraintExpr::SeedHash2to1 { .. }
+            | ConstraintExpr::TableFunction { .. } => true,
             ConstraintExpr::Gated { inner, .. } => Self::constraint_uses_hash(inner),
             ConstraintExpr::InvertedGated { inner, .. } => Self::constraint_uses_hash(inner),
             ConstraintExpr::Squared { inner } => Self::constraint_uses_hash(inner),
@@ -270,6 +287,20 @@ where
         | ConstraintExpr::Hash2to1 { .. }
         | ConstraintExpr::Hash4to1 { .. }
         | ConstraintExpr::MerkleHash { .. } => (AB::Expr::ZERO, false),
+        // Cross-row (`ChainedHash2to1`) and PI-seeded (`SeedHash2to1`) running-hash forms
+        // span the local/next windows (or bind a public input), and `TableFunction` is a
+        // genuine low-degree polynomial whose bivariate-Lagrange symbolic expansion is not
+        // yet emitted into this `AB::Expr` path — all three route through the native
+        // `crate::stark` prover instead of this single-row p3-uni-stark surface. This is the
+        // SAME disposition the sibling `dsl_p3_air.rs` records: `check_algebraic` rejects all
+        // three as `NonAlgebraicConstraint`, and its own symbolic-eval returns `AB::Expr::ZERO`
+        // for them (dsl_p3_air.rs §eval). They are unconditional `ConstraintExpr` variants, so
+        // this match MUST cover them or it is non-exhaustive on every `plonky3`-featured build;
+        // returning ZERO (the constraint checker / native STARK handles verification) is the
+        // faithful classification, not a stopgap.
+        ConstraintExpr::ChainedHash2to1 { .. }
+        | ConstraintExpr::SeedHash2to1 { .. }
+        | ConstraintExpr::TableFunction { .. } => (AB::Expr::ZERO, false),
         // Lookup constraints are verified via membership check (non-algebraic).
         // In a full Plonky3 deployment, this would compile to a LogUp argument.
         // For now, return ZERO (the constraint checker handles verification).
@@ -524,6 +555,54 @@ mod tests {
         };
         let result = prove_dsl_plonky3(&d, &vec![vec![BabyBear::ZERO; 4]; 2], &[]);
         assert!(result.is_err() && result.unwrap_err().contains("Hash"));
+    }
+
+    /// Anti-vacuity tooth: the forms whose symbolic eval is the vacuous `ZERO`
+    /// (`ChainedHash2to1`, `SeedHash2to1`, `TableFunction`) MUST be REJECTED by
+    /// `prove_dsl_plonky3`'s soundness guard, never silently admitted — admitting one
+    /// would "prove" it trivially (ZERO is always satisfied). This is the invalid-rejects
+    /// polarity for the `constraint_uses_hash` extension; the valid-admits polarity is
+    /// covered by the algebraic tests above (Equality/Transition/Polynomial round-trip).
+    #[test]
+    fn dsl_p3_nonemitted_forms_rejected_not_vacuous() {
+        let mk = |c: ConstraintExpr| CircuitDescriptor {
+            name: "nonemitted-test".to_string(),
+            trace_width: 4,
+            max_degree: 2,
+            columns: vec![],
+            constraints: vec![c],
+            boundaries: vec![],
+            public_input_count: 1,
+            lookup_tables: vec![],
+        };
+        let trace = vec![vec![BabyBear::ZERO; 4]; 2];
+        for c in [
+            ConstraintExpr::ChainedHash2to1 {
+                output_next_col: 0,
+                seed_local_col: 1,
+                input_next_col: 2,
+            },
+            ConstraintExpr::SeedHash2to1 {
+                output_col: 0,
+                seed_pi_index: 0,
+                input_col: 1,
+            },
+            ConstraintExpr::TableFunction {
+                a_col: 0,
+                b_col: 1,
+                out_col: 2,
+                a_values: vec![0, 1],
+                b_values: vec![0, 1],
+                outputs: vec![0, 1, 1, 0],
+            },
+        ] {
+            let d = mk(c.clone());
+            let result = prove_dsl_plonky3(&d, &trace, &[BabyBear::ZERO]);
+            assert!(
+                result.is_err(),
+                "non-emitted form {c:?} must be REJECTED (else it is vacuously proved), got Ok"
+            );
+        }
     }
 
     #[test]

@@ -13,14 +13,14 @@ fn bench_macaroon_mint(c: &mut Criterion) {
     let key = macaroon_root_key();
     c.bench_function("token_macaroon_mint", |b| {
         b.iter(|| {
-            black_box(MacaroonToken::mint(key, b"kid", "dregg.dev"));
+            black_box(MacaroonToken::mint(key, b"kid", "dregg.fg-goose.online"));
         });
     });
 }
 
 fn bench_macaroon_verify(c: &mut Criterion) {
     let key = macaroon_root_key();
-    let token = MacaroonToken::mint(key, b"kid", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid", "dregg.fg-goose.online");
     let request = AuthRequest::default();
     c.bench_function("token_macaroon_verify", |b| {
         b.iter(|| {
@@ -31,7 +31,7 @@ fn bench_macaroon_verify(c: &mut Criterion) {
 
 fn bench_macaroon_attenuate(c: &mut Criterion) {
     let key = macaroon_root_key();
-    let token = MacaroonToken::mint(key, b"kid", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid", "dregg.fg-goose.online");
     let attenuation = Attenuation {
         apps: vec![("my-app".into(), "r".into())],
         not_after: Some(1700000000),
@@ -114,7 +114,7 @@ fn bench_format_detection(c: &mut Criterion) {
 
 fn bench_macaroon_encode_decode(c: &mut Criterion) {
     let key = macaroon_root_key();
-    let token = MacaroonToken::mint(key, b"kid", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid", "dregg.fg-goose.online");
     let encoded = token.to_encoded().unwrap();
 
     c.bench_function("token_macaroon_encode", |b| {
@@ -135,7 +135,7 @@ fn bench_attenuation_chain_verify(c: &mut Criterion) {
 
     for &depth in &[1usize, 5, 10, 20] {
         let key = macaroon_root_key();
-        let root = MacaroonToken::mint(key, b"kid-1", "dregg.dev");
+        let root = MacaroonToken::mint(key, b"kid-1", "dregg.fg-goose.online");
         let mut token: Box<dyn AuthToken> = Box::new(root);
         for i in 0..depth {
             let att = Attenuation {
@@ -187,7 +187,7 @@ fn bench_token_serialization_size(c: &mut Criterion) {
     // Macaroon encode/decode with varying caveat counts
     for &num_caveats in &[0usize, 1, 5, 10] {
         let key = macaroon_root_key();
-        let root = MacaroonToken::mint(key, b"kid-1", "dregg.dev");
+        let root = MacaroonToken::mint(key, b"kid-1", "dregg.fg-goose.online");
         let mut token: Box<dyn AuthToken> = Box::new(root);
         for i in 0..num_caveats {
             let att = Attenuation {

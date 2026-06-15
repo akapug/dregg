@@ -1648,8 +1648,25 @@ mod tests {
     use dregg_circuit::dsl::circuit::{
         CellProgram, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
     };
+    use dregg_circuit::dsl::dfa_routing::{
+        build_routing_witness, dfa_routing_descriptor, pi as routing_pi,
+    };
     use dregg_circuit::field::BABYBEAR_P;
     use std::collections::HashMap;
+
+    /// The EXACT `dregg-dfa-routing-v1` 4-state router transition table
+    /// (`dregg-tests/src/dfa_circuit.rs:56`): IDLE=0, LOCAL=1, REMOTE=2, REJECT=3;
+    /// symbols internal=0, external=1, privileged=2, unknown=3. Flattened triples.
+    fn router_transitions() -> Vec<(u32, u32, u32)> {
+        let table = [[1, 2, 1, 3], [1, 2, 1, 3], [1, 2, 3, 3], [3, 3, 3, 3]];
+        let mut out = Vec::new();
+        for (state, row) in table.iter().enumerate() {
+            for (symbol, &next) in row.iter().enumerate() {
+                out.push((state as u32, symbol as u32, next));
+            }
+        }
+        out
+    }
 
     /// A minimal balance-conservation DSL descriptor (the canonical 6-column
     /// sovereign transition): `new = old - transfer + 2*dir*transfer`, `dir`
@@ -1802,6 +1819,116 @@ mod tests {
         let dummy = [0u8; 32];
         reg.verify(&wp, &PredicateInput::Sender(&dummy), &proof)
             .expect("Dfa must verify through the full production registry");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // LIVE route-commitment binding: the real `dregg-dfa-routing-v1` AIR
+    // (Lean `Dregg2.Crypto.DfaAcceptanceAir`) wired through the production
+    // `DslCircuitDfaVerifier` — the same verifier the relay-operator template's
+    // `Witnessed { Dfa }` caveat dispatches to. This binds the message-routing
+    // decision to the running-hash route commitment, so a router CANNOT claim a
+    // delivery (final state / route commitment) it did not make.
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Deploy the routing program, build an honest routing witness, and prove the
+    /// wire bytes the live `DslCircuitDfaVerifier` consumes. Returns the deployed
+    /// registry, the program `vk_hash` (the relay's `route_table_root`), the wire
+    /// bytes, and the honest public inputs.
+    fn route_proof(
+        symbols: &[u32],
+    ) -> (Arc<ProgramRegistry>, [u8; 32], Vec<u8>, Vec<dregg_circuit::field::BabyBear>) {
+        let transitions = router_transitions();
+        let descriptor = dfa_routing_descriptor("dregg-dfa-routing-v1", &transitions);
+        let program = CellProgram::new(descriptor, 1);
+        let mut programs = ProgramRegistry::new();
+        let vk_hash = programs.deploy(program).unwrap();
+        let programs = Arc::new(programs);
+
+        let (witness, public_inputs) = build_routing_witness(&transitions, 0, symbols)
+            .expect("router accepts this input");
+        let num_rows = witness.get("current_state").map(|v| v.len()).unwrap();
+        let wire = prove_dfa_transition(&programs, &vk_hash, &witness, num_rows, &public_inputs)
+            .expect("routing proof wire builds");
+        (programs, vk_hash, wire, public_inputs)
+    }
+
+    /// TOOTH (valid admits): an honest route verifies through the live
+    /// `DslCircuitDfaVerifier` (the relay's verifier), binding the route commitment.
+    #[test]
+    fn live_routing_verifier_accepts_correct_route() {
+        // internal, external, internal: IDLE -> LOCAL -> REMOTE -> LOCAL.
+        let (programs, vk_hash, wire, _pi) = route_proof(&[0, 1, 0]);
+        let v = DslCircuitDfaVerifier::new(programs);
+        let dummy = [0u8; 32];
+        v.verify(&vk_hash, &PredicateInput::Sender(&dummy), &wire)
+            .expect("a correct route must verify against its route_commitment");
+    }
+
+    /// TOOTH (forged final state rejected): tampering the wire's `final_state` PI —
+    /// a router claiming a classification it did not compute — is rejected by the B2
+    /// boundary. This is the live form of "can't claim a delivery you didn't make".
+    #[test]
+    fn live_routing_verifier_rejects_forged_final_state() {
+        let (programs, vk_hash, wire, _pi) = route_proof(&[0, 1, 0]);
+        // Decode the wire, forge the final_state PI (claim REJECT=3 not LOCAL=1).
+        let mut decoded: DfaProofWire = postcard::from_bytes(&wire).unwrap();
+        decoded.public_inputs[routing_pi::FINAL_STATE] = 3;
+        let forged = postcard::to_allocvec(&decoded).unwrap();
+
+        let v = DslCircuitDfaVerifier::new(programs);
+        let dummy = [0u8; 32];
+        assert!(
+            v.verify(&vk_hash, &PredicateInput::Sender(&dummy), &forged)
+                .is_err(),
+            "a forged final_state must be rejected by the live routing verifier"
+        );
+    }
+
+    /// TOOTH (forged route commitment rejected): tampering the wire's
+    /// `route_commitment` PI fails the B3 boundary — the commitment binds the trace.
+    #[test]
+    fn live_routing_verifier_rejects_forged_route_commitment() {
+        let (programs, vk_hash, wire, _pi) = route_proof(&[0, 1, 0]);
+        let mut decoded: DfaProofWire = postcard::from_bytes(&wire).unwrap();
+        decoded.public_inputs[routing_pi::ROUTE_COMMITMENT] = 0xDEAD;
+        let forged = postcard::to_allocvec(&decoded).unwrap();
+
+        let v = DslCircuitDfaVerifier::new(programs);
+        let dummy = [0u8; 32];
+        assert!(
+            v.verify(&vk_hash, &PredicateInput::Sender(&dummy), &forged)
+                .is_err(),
+            "a forged route_commitment must be rejected by the live routing verifier"
+        );
+    }
+
+    /// TOOTH (full production registry, end-to-end): the routing proof verifies
+    /// through `registry_with_real_verifiers_full` (the executor-default Dfa wiring)
+    /// against a `WitnessedPredicate::dfa` whose commitment is the routing program's
+    /// `vk_hash` — exactly the relay's `Witnessed { Dfa }` dispatch.
+    #[test]
+    fn live_routing_via_full_registry_binds_and_rejects() {
+        let (programs, vk_hash, wire, _pi) = route_proof(&[0, 1, 0]);
+        let reg = registry_with_real_verifiers_full(
+            programs,
+            Arc::new(EmptyTemporalPolicy),
+            Arc::new(StaticIssuerRootAuthority::new()),
+            Arc::new(StaticBridgePredicatePolicy::new()),
+        );
+        let wp = WitnessedPredicate::dfa(vk_hash, PredicateInputRefSender(), 0);
+        let dummy = [0u8; 32];
+        reg.verify(&wp, &PredicateInput::Sender(&dummy), &wire)
+            .expect("honest route binds through the full production registry");
+
+        // Forge the final state through the same registry path → rejected.
+        let mut decoded: DfaProofWire = postcard::from_bytes(&wire).unwrap();
+        decoded.public_inputs[routing_pi::FINAL_STATE] = 3;
+        let forged = postcard::to_allocvec(&decoded).unwrap();
+        assert!(
+            reg.verify(&wp, &PredicateInput::Sender(&dummy), &forged)
+                .is_err(),
+            "a forged route classification must fail through the full registry"
+        );
     }
 
     /// Temporal policy authority for tests.

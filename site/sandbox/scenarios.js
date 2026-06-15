@@ -11,7 +11,7 @@ const root = await dregg.generateRootKey();
 console.log("Root key:", root.key_hex);
 
 // Mint a root token
-const minted = await dregg.mintToken(root.key_bytes, "dregg.dev");
+const minted = await dregg.mintToken(root.key_bytes, "dregg.fg-goose.online");
 console.log("Minted token:", minted.token.slice(0, 40) + "...");
 
 // Attenuate: restrict to DNS service, read-only, 1hr expiry
@@ -205,7 +205,7 @@ console.log("Key:", root.key_hex.slice(0, 16) + "...");
 
 // Step 2: Mint token
 console.log("\\n=== Step 2: Mint Token ===");
-const minted = await dregg.mintToken(root.key_bytes, "dregg.dev");
+const minted = await dregg.mintToken(root.key_bytes, "dregg.fg-goose.online");
 console.log("Token:", minted.token.slice(0, 32) + "...");
 
 // Step 3: Attenuate

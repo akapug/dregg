@@ -1054,7 +1054,7 @@ mod tests {
 
         let root_key = crypto::random_key();
         let shared_key = crypto::random_key();
-        let location = "https://gateway.dregg.dev";
+        let location = "https://gateway.dregg.fg-goose.online";
 
         // 1. Issuer creates token with 3P caveat.
         let mut token = Macaroon::new(

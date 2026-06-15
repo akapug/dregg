@@ -88,7 +88,7 @@ fn test_end_to_end_macaroon_to_zk_proof() {
     let root_key = test_root_key();
 
     // ── Step 1: Mint a root token ───────────────────────────────────────────
-    let root_token = MacaroonToken::mint(root_key, b"issuer-kid-42", "dregg.dev");
+    let root_token = MacaroonToken::mint(root_key, b"issuer-kid-42", "dregg.fg-goose.online");
 
     // Verify the root token works.
     let root_clearance = root_token.verify(&AuthRequest::default()).unwrap();
@@ -197,7 +197,7 @@ fn test_end_to_end_denial() {
     let root_key = test_root_key();
     let federation_root = test_federation_root();
 
-    let root_token = MacaroonToken::mint(root_key, b"kid-deny", "dregg.dev");
+    let root_token = MacaroonToken::mint(root_key, b"kid-deny", "dregg.fg-goose.online");
 
     let mut builder = BridgePresentationBuilder::new(root_key, federation_root);
     builder.set_root_token(root_token);
@@ -229,7 +229,7 @@ fn test_end_to_end_denial() {
 #[test]
 fn test_conversion_preserves_semantics() {
     let root_key = test_root_key();
-    let token = MacaroonToken::mint(root_key, b"kid-sem", "dregg.dev");
+    let token = MacaroonToken::mint(root_key, b"kid-sem", "dregg.fg-goose.online");
 
     // Attenuate with multiple restrictions.
     let att = Attenuation {
@@ -361,7 +361,7 @@ fn test_circuit_fold_proofs() {
     let root_key = test_root_key();
     let federation_root = test_federation_root();
 
-    let root_token = MacaroonToken::mint(root_key, b"kid-circuit", "dregg.dev");
+    let root_token = MacaroonToken::mint(root_key, b"kid-circuit", "dregg.fg-goose.online");
 
     let mut builder = BridgePresentationBuilder::new(root_key, federation_root);
     builder.set_root_token(root_token);
@@ -393,7 +393,7 @@ fn test_circuit_fold_proofs() {
 fn test_service_scoped_full_pipeline() {
     let root_key = test_root_key();
 
-    let root_token = MacaroonToken::mint(root_key, b"kid-svc", "dregg.dev");
+    let root_token = MacaroonToken::mint(root_key, b"kid-svc", "dregg.fg-goose.online");
 
     let mut builder = test_builder_with_matching_root(root_key);
     builder.set_root_token(root_token);
@@ -440,7 +440,7 @@ fn test_service_scoped_full_pipeline() {
 fn test_unrestricted_token_proof() {
     let root_key = test_root_key();
 
-    let root_token = MacaroonToken::mint(root_key, b"kid-unr", "dregg.dev");
+    let root_token = MacaroonToken::mint(root_key, b"kid-unr", "dregg.fg-goose.online");
 
     let mut builder = test_builder_with_matching_root(root_key);
     builder.set_root_token(root_token);
@@ -480,7 +480,7 @@ fn test_multiple_features_attenuation() {
     let root_key = test_root_key();
     let federation_root = test_federation_root();
 
-    let root_token = MacaroonToken::mint(root_key, b"kid-feat", "dregg.dev");
+    let root_token = MacaroonToken::mint(root_key, b"kid-feat", "dregg.fg-goose.online");
 
     let mut builder = BridgePresentationBuilder::new(root_key, federation_root);
     builder.set_root_token(root_token);
@@ -529,7 +529,7 @@ fn test_issuer_membership_circuit_rejects_wrong_federation_root() {
 fn test_presentation_air_full_verification() {
     let root_key = test_root_key();
 
-    let root_token = MacaroonToken::mint(root_key, b"kid-full", "dregg.dev");
+    let root_token = MacaroonToken::mint(root_key, b"kid-full", "dregg.fg-goose.online");
 
     let mut builder = test_builder_with_matching_root(root_key);
     builder.set_root_token(root_token);
@@ -569,7 +569,7 @@ fn test_presentation_air_full_verification() {
 fn test_proof_metadata() {
     let root_key = test_root_key();
 
-    let root_token = MacaroonToken::mint(root_key, b"kid-meta", "dregg.dev");
+    let root_token = MacaroonToken::mint(root_key, b"kid-meta", "dregg.fg-goose.online");
 
     let mut builder = test_builder_with_matching_root(root_key);
     builder.set_root_token(root_token);
@@ -619,7 +619,7 @@ fn test_deterministic_verification() {
     let root_key = test_root_key();
 
     let build_and_prove = || {
-        let root_token = MacaroonToken::mint(root_key, b"kid-det", "dregg.dev");
+        let root_token = MacaroonToken::mint(root_key, b"kid-det", "dregg.fg-goose.online");
         let mut builder = test_builder_with_matching_root(root_key);
         builder.set_root_token(root_token);
 
@@ -665,7 +665,7 @@ fn test_deterministic_verification() {
 #[test]
 fn test_fact_set_merkle_commitment() {
     let root_key = test_root_key();
-    let token = MacaroonToken::mint(root_key, b"kid-merkle", "dregg.dev");
+    let token = MacaroonToken::mint(root_key, b"kid-merkle", "dregg.fg-goose.online");
 
     let att = Attenuation {
         apps: vec![("app-a".into(), "r".into())],

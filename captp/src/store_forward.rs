@@ -422,6 +422,55 @@ impl MessageRelay {
         Ok(())
     }
 
+    /// Accept custody of a message AND return a SIGNED [`CustodyReceipt`] binding the
+    /// relay to it.
+    ///
+    /// This is the accountability seam: unlike [`Self::enqueue`] (which returns nothing
+    /// and leaves a drop unprovable), `accept_custody` makes the relay SIGN a receipt over
+    /// `(relay, content_hash, inbox_owner, old_root, new_root, accept_by)` — so a later
+    /// drop is convictable against this relay by its own signature, while an honest
+    /// delivery/refund acquits it (see [`crate::custody`], the Rust realization of
+    /// `Dregg2.Exec.Custody`).
+    ///
+    /// * `relay_id` / `relay_key` — the operator's identity and Ed25519 signing key. In
+    ///   the unified-lace model `relay_id` IS the relay's public key; the receipt is only
+    ///   well-formed if they match.
+    /// * `old_root` / `new_root` — the inbox-root transition the relay PROMISES to effect
+    ///   on delivery (the queue head root before/after appending this box).
+    /// * `accept_by` — the deadline height: deliver or refund by here, else dropped.
+    ///
+    /// On enqueue failure the relay accepted nothing, so NO receipt is minted (the error
+    /// is propagated). On success the box is queued and the signed receipt is returned to
+    /// the sender.
+    #[allow(clippy::too_many_arguments)]
+    pub fn accept_custody(
+        &mut self,
+        msg: QueuedMessage,
+        relay_id: FederationId,
+        relay_key: &dregg_types::SigningKey,
+        inbox_owner: FederationId,
+        old_root: [u8; 32],
+        new_root: [u8; 32],
+        accept_by: u64,
+    ) -> Result<crate::custody::CustodyReceipt, RelayError> {
+        // Content-address the box exactly as the relay stores it: BLAKE3 over the
+        // ciphertext envelope the relay holds (the bytes the receipt commits to).
+        let content_hash = *blake3::hash(&msg.encrypted_payload).as_bytes();
+
+        // Enqueue first: only mint a receipt if custody was actually taken.
+        self.enqueue(msg)?;
+
+        Ok(crate::custody::CustodyReceipt::sign(
+            relay_id,
+            relay_key,
+            content_hash,
+            inbox_owner,
+            old_root,
+            new_root,
+            accept_by,
+        ))
+    }
+
     /// Destination comes online: drain all pending messages.
     ///
     /// Returns messages in FIFO order (earliest queued first). The queue for this

@@ -3938,11 +3938,13 @@ where
     )
 }
 
-/// **`ir2_airs_and_common_for_config`** — the generic-config sibling of
-/// [`ir2_airs_and_common`]: the present-table `Ir2Air` set, per-table public-input vectors,
-/// and the symbolic `CommonData<SC>` for a batch proved under a caller-supplied `SC` config.
-/// Used by the rotated leaf-wrap to obtain the `(airs, table_public_inputs, common)` triple
-/// matching a recursion-config-typed `BatchProof<SC>`. The `common` is built by the SAME
+/// **`ir2_airs_and_common_for_config`** — the verify-path `(airs, table_public_inputs, common)`
+/// triple for a proven descriptor under a caller-supplied `SC` config: the present-table
+/// `Ir2Air` set, per-table public-input vectors (descriptor PIs on the main instance, empty
+/// elsewhere), and the symbolic `CommonData<SC>`. Used by the rotated leaf-wrap
+/// ([`ivc_turn_chain::prove_descriptor_leaf_rotated_with_config`](crate::ivc_turn_chain::prove_descriptor_leaf_rotated_with_config))
+/// to assemble a `RecursionInput::NativeBatchStark` leaf matching a recursion-config-typed
+/// `BatchProof<SC>`. The `common` is built by the SAME
 /// `ProverData::from_airs_and_degrees(config, ..)` path the inner prover/verifier use, so it
 /// is the canonical common for this batch under `SC`.
 #[cfg(feature = "recursion")]
@@ -4041,57 +4043,6 @@ where
     verify_batch(config, &airs, proof, &pvs, &common)
         .map_err(|e| format!("IR v2 verification failed: {e:?}"))
 }
-
-/// The verify-path's `(airs, table_public_inputs, common)` triple for a proven
-/// descriptor — the exact ingredients the recursion fork's `RecursionInput::BatchStark`
-/// leaf-wrap consumes (THREAD 1 of the C3 cutover). `airs` is the present-table
-/// `Ir2Air` set, `table_public_inputs[main_idx]` is the descriptor's PI vector (empty
-/// for the other tables), and `common` is the symbolic `CommonData` derived from
-/// `ProverData::from_airs_and_degrees(..)` — the SAME `common` `verify_vm_descriptor2`
-/// passes to `verify_batch`. Built under the deployed `ir2_config()`.
-///
-/// Exposed so the IVC leaf-wrap (`ivc_turn_chain.rs`) can assemble a BatchStark leaf
-/// from a rotated `Ir2BatchProof` without re-deriving the private presence/layout
-/// machinery. `CommonData` is re-exported as [`Ir2CommonData`].
-// IR-v2 leaf-wrap surface: the deployed-config convenience sibling of
-// `ir2_airs_and_common_for_config`; kept as the non-generic entry the leaf-wrap binds to.
-#[allow(dead_code)]
-#[cfg(any(feature = "recursion", feature = "verifier"))]
-pub(crate) fn ir2_airs_and_common(
-    desc: &EffectVmDescriptor2,
-    proof: &BatchProof<DreggStarkConfig>,
-    public_inputs: &[BabyBear],
-) -> Result<
-    (
-        Vec<Ir2Air>,
-        Vec<Vec<P3BabyBear>>,
-        p3_batch_stark::CommonData<DreggStarkConfig>,
-    ),
-    String,
-> {
-    let config = ir2_config();
-    let layout = check_descriptor2(desc)?;
-    let presence = Presence::of(desc, &layout);
-    let airs = instance_airs(desc, layout, presence);
-    if proof.degree_bits.len() != airs.len() {
-        return Err(format!(
-            "IR v2 proof carries {} instances but present-table set is {}",
-            proof.degree_bits.len(),
-            airs.len()
-        ));
-    }
-    let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
-    let mut table_public_inputs: Vec<Vec<P3BabyBear>> = vec![pis];
-    table_public_inputs.resize(airs.len(), vec![]);
-    let common = ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).common;
-    Ok((airs, table_public_inputs, common))
-}
-
-/// The IR-v2 batch proof's symbolic common data type (re-exported for the leaf-wrap).
-// IR-v2 leaf-wrap surface: the named CommonData alias the leaf-wrap binds to.
-#[allow(dead_code)]
-#[cfg(any(feature = "recursion", feature = "verifier"))]
-pub(crate) type Ir2CommonData = p3_batch_stark::CommonData<DreggStarkConfig>;
 
 // ============================================================================
 // Tests (run on persvati with the batched validation, not by the build lane)

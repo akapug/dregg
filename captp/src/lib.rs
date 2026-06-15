@@ -81,6 +81,7 @@
 // on the identifier (see FEDERATION-UNIFICATION-DESIGN.md §2).
 pub use dregg_types::FederationId;
 
+pub mod custody;
 pub mod gc;
 pub mod handoff;
 pub mod netlayer;

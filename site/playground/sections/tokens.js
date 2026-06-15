@@ -28,7 +28,7 @@ export function initTokens(wasm) {
     <div class="controls-row">
       <div class="control-group">
         <label>Location</label>
-        <input type="text" id="tk-location" value="dregg.dev" spellcheck="false" style="width: 160px;">
+        <input type="text" id="tk-location" value="dregg.fg-goose.online" spellcheck="false" style="width: 160px;">
       </div>
       <button class="btn btn-primary" id="tk-mint" disabled>Mint Token</button>
     </div>
@@ -135,7 +135,7 @@ export function initTokens(wasm) {
       return;
     }
     const keyBytes = hexToBytes(keyHex);
-    const location = container.querySelector('#tk-location').value.trim() || 'dregg.dev';
+    const location = container.querySelector('#tk-location').value.trim() || 'dregg.fg-goose.online';
 
     const t0 = performance.now();
     try {

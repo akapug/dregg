@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn test_unrestricted_token_to_factset() {
         let key = test_key();
-        let token = MacaroonToken::mint(key, b"kid-1", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-1", "dregg.fg-goose.online");
 
         let (mut factset, symbols) = macaroon_to_factset(&token);
         assert_eq!(factset.len(), 1);
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn test_attenuated_token_to_factset() {
         let key = test_key();
-        let token = MacaroonToken::mint(key, b"kid-1", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-1", "dregg.fg-goose.online");
 
         // Use the inner macaroon API to attenuate and reconstruct.
         let restricted = token
@@ -585,7 +585,7 @@ mod tests {
     #[test]
     fn test_secure_unrestricted_token() {
         let key = test_key();
-        let token = MacaroonToken::mint(key, b"kid-sec", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-sec", "dregg.fg-goose.online");
 
         let (factset, symbols) = macaroon_to_factset_secure(&token);
         assert_eq!(factset.len(), 1);
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn test_secure_attenuated_token() {
         let key = test_key();
-        let token = MacaroonToken::mint(key, b"kid-sec", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"kid-sec", "dregg.fg-goose.online");
 
         let restricted = token
             .attenuate(&Attenuation {

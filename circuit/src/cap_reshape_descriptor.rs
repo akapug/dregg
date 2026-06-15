@@ -65,6 +65,10 @@ pub fn cap_reshape_descriptor() -> Result<EffectVmDescriptor, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The constraint AST forms inspected by the anti-amplify / production-authority teeth.
+    // These live in `lean_descriptor_air` (plonky3-gated, same as this module's descriptor
+    // types) and are not part of this module's runtime surface, so they're imported here.
+    use crate::lean_descriptor_air::{LeanExpr, VmConstraint};
 
     /// Self-contained SHA-256 (FIPS 180-4), no external dep (mirrors the registry test's
     /// `sha256_hex`), so the drift fingerprint is reproducible from this file alone.

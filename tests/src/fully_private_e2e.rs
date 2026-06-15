@@ -87,7 +87,7 @@ fn test_fully_private_end_to_end() {
     // Phase 2: Mint a token with specific capabilities
     // =========================================================================
     let root_key = test_key("issuer-root-key");
-    let root_token = cclerk.mint_token(&root_key, "storage.dregg.dev");
+    let root_token = cclerk.mint_token(&root_key, "storage.dregg.fg-goose.online");
 
     // The root token should be held in the cclerk
     assert_eq!(cclerk.tokens().len(), 1);
@@ -450,7 +450,7 @@ fn test_fully_private_attenuated_token() {
     let mut cclerk = AgentCipherclerk::from_mnemonic(&mnemonic, "").unwrap();
 
     let root_key = test_key("attenuated-issuer");
-    let root_token = cclerk.mint_token(&root_key, "compute.dregg.dev");
+    let root_token = cclerk.mint_token(&root_key, "compute.dregg.fg-goose.online");
 
     // The root token with unrestricted access should work for any request
     let any_request = AuthRequest {
@@ -493,7 +493,7 @@ fn test_fully_private_deterministic_conclusion() {
     let mut cclerk = AgentCipherclerk::from_mnemonic(&mnemonic, "det-test").unwrap();
 
     let root_key = test_key("det-issuer");
-    let root_token = cclerk.mint_token(&root_key, "dns.dregg.dev");
+    let root_token = cclerk.mint_token(&root_key, "dns.dregg.fg-goose.online");
 
     let request = AuthRequest {
         service: Some("dns".into()),
@@ -555,8 +555,8 @@ fn test_fully_private_sub_agent() {
     let main_root_key = test_key("main-issuer");
     let sub_root_key = test_key("sub-issuer");
 
-    let main_token = main_cclerk.mint_token(&main_root_key, "api.dregg.dev");
-    let sub_token = sub_cclerk.mint_token(&sub_root_key, "api.dregg.dev");
+    let main_token = main_cclerk.mint_token(&main_root_key, "api.dregg.fg-goose.online");
+    let sub_token = sub_cclerk.mint_token(&sub_root_key, "api.dregg.fg-goose.online");
 
     let request = AuthRequest {
         service: Some("api".into()),

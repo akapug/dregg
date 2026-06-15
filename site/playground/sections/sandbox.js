@@ -38,7 +38,7 @@ export function initSandbox(wasm) {
 const key = await dregg.generateRootKey();
 console.log('Root key:', key.key_hex);
 
-const minted = await dregg.mintToken(key.key_bytes, 'dregg.dev');
+const minted = await dregg.mintToken(key.key_bytes, 'dregg.fg-goose.online');
 console.log('Token:', minted.token.slice(0, 40) + '...');
 "></textarea>
 
@@ -331,7 +331,7 @@ console.log('Token:', minted.token.slice(0, 40) + '...');
 const root = await dregg.generateRootKey();
 console.log("Root key:", root.key_hex);
 
-const minted = await dregg.mintToken(root.key_bytes, "dregg.dev");
+const minted = await dregg.mintToken(root.key_bytes, "dregg.fg-goose.online");
 console.log("Minted:", minted.token.slice(0, 40) + "...");
 
 const att = await dregg.attenuate(minted.token, root.key_bytes, "dns", "read", 3600n);
@@ -391,7 +391,7 @@ const t0 = performance.now();
 const root = await dregg.generateRootKey();
 console.log("1. Key:", root.key_hex.slice(0, 16) + "...");
 
-const minted = await dregg.mintToken(root.key_bytes, "dregg.dev");
+const minted = await dregg.mintToken(root.key_bytes, "dregg.fg-goose.online");
 console.log("2. Token:", minted.token.slice(0, 32) + "...");
 
 const att = await dregg.attenuate(minted.token, root.key_bytes, "dns", "read", 3600n);

@@ -67,7 +67,17 @@ use dregg_circuit::effect_vm::{self, CellState, Effect as VmEffectKind, generate
 use dregg_circuit::effect_vm_p3_full_air::{
     EffectVmP3Proof, prove_effect_vm_p3, verify_effect_vm_p3,
 };
+// The cutover descriptor-interpreter leg of `prove_effect_vm_with_cutover` /
+// `verify_effect_vm_proof_with_cutover` — both `not(recursion)`-gated v1-floor functions — so
+// these imports are gated to match (the recursion tower routes through the rotated IR-v2
+// descriptor in `dregg_circuit::descriptor_ir2` instead).
+#[cfg(not(feature = "recursion"))]
+use dregg_circuit::effect_vm_descriptors::descriptor_for_selector;
 use dregg_circuit::field::BabyBear;
+#[cfg(not(feature = "recursion"))]
+use dregg_circuit::lean_descriptor_air::{
+    parse_vm_descriptor, prove_vm_descriptor, verify_vm_descriptor,
+};
 use dregg_circuit::merkle_air::{
     MembershipP3Proof, membership_public_inputs, prove_membership_p3, verify_membership_p3,
 };

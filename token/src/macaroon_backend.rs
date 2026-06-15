@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn test_mint_attenuate_verify() {
         let key = test_root_key();
-        let token = MacaroonToken::mint(key, b"test-kid", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"test-kid", "dregg.fg-goose.online");
 
         // Root token verifies with default request
         let clearance = token.verify(&AuthRequest::default()).unwrap();
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn test_encode_decode_roundtrip() {
         let key = test_root_key();
-        let token = MacaroonToken::mint(key, b"test-kid", "dregg.dev");
+        let token = MacaroonToken::mint(key, b"test-kid", "dregg.fg-goose.online");
         let encoded = token.to_encoded().unwrap();
         assert!(encoded.starts_with("em2_"));
 
