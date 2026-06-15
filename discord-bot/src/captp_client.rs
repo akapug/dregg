@@ -15,7 +15,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::db::{CaptpExportRecord, CaptpHeldRecord, CaptpLocalHandoffRecord, Database};
 use dregg_captp::FederationId as GroupId;
 use dregg_captp::uri::DreggUri;
+use dregg_types::CellId;
 use serde::{Deserialize, Serialize};
+// The REAL `dregg://` web-of-cells verified attested resolve — the genuine
+// "enliven" for a published web-of-cells cell (the local analogue of dialing the
+// node + enlivening the swiss). Distinct from `dregg_captp::uri::DreggUri` (which
+// carries a swiss number); the web-of-cells ref is keyed on the content-addressed
+// cell id.
+use starbridge_web_surface::web_of_cells::{DreggUri as WocUri, WebOfCells};
 use tracing::info;
 
 /// A held capability reference with metadata.
@@ -162,9 +169,18 @@ impl CapTPClient {
             .map(export_from_record)
             .transpose()?
         else {
-            return Err(CapTPError::Unsupported(format!(
-                "remote enliven is not implemented; URI `{cell_id}` was not exported by this bot instance"
-            )));
+            // FAIL CLOSED, NAMED. The dregg node serves no `/captp/enliven` HTTP
+            // endpoint (see the module header), so a remote enliven over the node's
+            // wire is genuinely unavailable. The REAL enliven path for a `dregg://`
+            // ref is the web-of-cells verified attested resolve
+            // ([`Self::enliven_via_web_of_cells`]) — but that resolves only cells
+            // this bot has published as web-of-cells content. This URI is neither a
+            // local export nor (here) a published web-of-cells cell, so there is
+            // nothing for the bot to enliven. This is a precise refusal, never a
+            // silent success on an un-enlivened ref.
+            return Err(CapTPError::EnlivenUnavailable {
+                cell_id: cell_id.clone(),
+            });
         };
         if export.revoked {
             return Err(CapTPError::NotFound(format!(
@@ -190,6 +206,56 @@ impl CapTPClient {
             .map_err(storage_error)?;
         info!(cell_id, "Enlivened and holding capability");
         Ok(cap)
+    }
+
+    /// **Enliven a `dregg://` ref via the web-of-cells verified attested resolve**
+    /// — the REAL URI-fetch enliven (the implemented half of the
+    /// `captp_client.rs:165` toy finding).
+    ///
+    /// This is the genuine `dregg://` enliven: it performs the verified cross-cell
+    /// finalized read against `web` ([`WebOfCells::fetch`]), runs the full
+    /// content→commitment→receipt→quorum-root verification chain
+    /// ([`starbridge_web_surface::web_of_cells::AttestedResource::verify`]), and —
+    /// only on success — holds the live reference. A cell that was never published,
+    /// or whose content/attestation does not verify, is REFUSED
+    /// ([`CapTPError::EnlivenVerifyFailed`]): confinement before relation, never an
+    /// un-enlivened ref held as live.
+    ///
+    /// `web` is the bot's web-of-cells (the deos surfaces it published). This is the
+    /// bounded-but-genuine remote enliven: the node serves no `/captp/enliven`, but
+    /// a `dregg://` ref into a published web-of-cells cell IS enlivenable, here, by
+    /// the real verified read. Returns the held cap AND the verified content bytes.
+    pub async fn enliven_via_web_of_cells(
+        &self,
+        db: &Database,
+        web: &WebOfCells,
+        cell_id: &CellId,
+    ) -> Result<(HeldCapability, Vec<u8>), CapTPError> {
+        // The verified attested resolve — the genuine `dregg://` enliven. Run the
+        // full verification chain BEFORE holding the ref (confinement first); a
+        // refusal here means the ref is NEVER held as live.
+        let content_bytes = resolve_via_web_of_cells(web, cell_id)?;
+
+        let cell_hex = hex::encode(cell_id.0);
+        // Build the captp sturdy-ref form so the held record is uniform with the
+        // rest of the bot's held caps (the swiss is derived from the verified cell).
+        let captp_uri = DreggUri {
+            federation_id: self.federation_id.0,
+            cell_id: cell_id.0,
+            swiss: new_swiss(&cell_hex, &self.bot_cell_id, self.federation_id.0),
+        };
+        let cap = HeldCapability {
+            uri: captp_uri,
+            label: Some("enliven:web-of-cells".to_string()),
+            shared_by: None,
+            acquired_at: current_epoch(),
+            live: true,
+        };
+        db.upsert_captp_held_ref(&CaptpHeldRecord::from_cap(&cell_hex, &cap))
+            .await
+            .map_err(storage_error)?;
+        info!(cell_id = cell_hex, "Enlivened via web-of-cells verified resolve");
+        Ok((cap, content_bytes))
     }
 
     /// Create a handoff certificate delegating a capability to a recipient.
@@ -410,6 +476,20 @@ pub enum CapTPError {
     Forbidden(String),
     /// Durable local handoff store failed.
     Storage(String),
+    /// **Enliven fail-closed (named).** The `dregg://` ref names a cell this bot
+    /// neither exported locally nor published as web-of-cells content, and the
+    /// dregg node serves no remote `/captp/enliven` endpoint — so there is nothing
+    /// for the bot to enliven. The REAL enliven path for a published web-of-cells
+    /// cell is [`CapTPClient::enliven_via_web_of_cells`] (the verified attested
+    /// resolve). This is a precise refusal, never a silent un-enlivened success.
+    EnlivenUnavailable {
+        /// The cell id (hex) that could not be enlivened.
+        cell_id: String,
+    },
+    /// The web-of-cells verified attested resolve refused this `dregg://` ref (the
+    /// cell was not published, or its content/attestation did not verify) — the
+    /// genuine `dregg://` enliven gate, fail-closed. Carries a human reason.
+    EnlivenVerifyFailed(String),
 }
 
 impl std::fmt::Display for CapTPError {
@@ -420,6 +500,15 @@ impl std::fmt::Display for CapTPError {
             CapTPError::Unsupported(message) => write!(f, "unsupported: {message}"),
             CapTPError::Forbidden(message) => write!(f, "forbidden: {message}"),
             CapTPError::Storage(message) => write!(f, "storage error: {message}"),
+            CapTPError::EnlivenUnavailable { cell_id } => write!(
+                f,
+                "cannot enliven `{cell_id}`: not a local export, not a published web-of-cells \
+                 cell, and the node serves no remote `/captp/enliven`. Publish it as a deos \
+                 surface (web-of-cells) or accept a locally-exported ref."
+            ),
+            CapTPError::EnlivenVerifyFailed(message) => {
+                write!(f, "dregg:// enliven verification failed: {message}")
+            }
         }
     }
 }
@@ -499,6 +588,23 @@ fn sign_handoff(
 
 fn storage_error(error: sqlx::Error) -> CapTPError {
     CapTPError::Storage(error.to_string())
+}
+
+/// The pure `dregg://` enliven core: verified attested resolve of `cell_id`
+/// against `web` (no DB). Performs the fetch + the full
+/// content→commitment→receipt→quorum-root verification chain; returns the verified
+/// content bytes on success, [`CapTPError::EnlivenVerifyFailed`] on any miss (cell
+/// never published, content does not match its commitment, attestation invalid).
+/// Confinement before relation — a ref that does not verify yields NO content.
+fn resolve_via_web_of_cells(web: &WebOfCells, cell_id: &CellId) -> Result<Vec<u8>, CapTPError> {
+    let woc_uri = WocUri::new(*cell_id);
+    let (resource, _chrome) = web
+        .fetch(&woc_uri)
+        .map_err(|e| CapTPError::EnlivenVerifyFailed(format!("fetch: {e:?}")))?;
+    resource
+        .verify()
+        .map_err(|e| CapTPError::EnlivenVerifyFailed(format!("attestation: {e:?}")))?;
+    Ok(resource.content_bytes)
 }
 
 impl From<&ExportedCapability> for CaptpExportRecord {
@@ -584,4 +690,51 @@ fn handoff_from_record(record: CaptpLocalHandoffRecord) -> Option<HandoffRecord>
         created_at: record.created_at as u64,
         redeemed_at: record.redeemed_at.map(|value| value as u64),
     })
+}
+
+#[cfg(test)]
+mod enliven_tests {
+    use super::*;
+
+    fn cid(b: u8) -> CellId {
+        CellId::from_bytes([b; 32])
+    }
+
+    // THE REAL `dregg://` ENLIVEN: a published web-of-cells cell resolves to its
+    // verified content (the implemented half of the captp_client.rs:165 finding).
+    #[test]
+    fn enliven_resolves_a_published_web_of_cells_cell() {
+        let mut web = WebOfCells::new(3);
+        let uri = web.publish(7, b"the enlivened cell content", "dregg://deos/cap");
+
+        // The verified attested resolve returns EXACTLY the committed bytes.
+        let bytes = resolve_via_web_of_cells(&web, &uri.cell)
+            .expect("a published, attested cell enlivens via the verified resolve");
+        assert_eq!(bytes, b"the enlivened cell content");
+    }
+
+    // FAIL CLOSED: a cell that was never published does NOT enliven — the verified
+    // resolve refuses (confinement before relation, never an un-enlivened success).
+    #[test]
+    fn enliven_refuses_an_unpublished_cell() {
+        let web = WebOfCells::new(3); // nothing published
+        let r = resolve_via_web_of_cells(&web, &cid(200));
+        assert!(
+            matches!(r, Err(CapTPError::EnlivenVerifyFailed(_))),
+            "an unpublished cell must be refused by the verified resolve, got {r:?}"
+        );
+    }
+
+    // The named fail-closed error renders an actionable message (never a silent
+    // un-enlivened ref).
+    #[test]
+    fn enliven_unavailable_error_is_named_and_actionable() {
+        let err = CapTPError::EnlivenUnavailable {
+            cell_id: "deadbeef".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("deadbeef"));
+        assert!(msg.contains("enliven"));
+        assert!(msg.contains("web-of-cells"));
+    }
 }

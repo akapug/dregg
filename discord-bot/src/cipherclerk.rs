@@ -63,11 +63,7 @@ impl UserCipherclerk {
     pub fn derive(bot_secret: &[u8; 32], discord_user_id: u64, federation_id: [u8; 32]) -> Self {
         // Step 1: derive the deterministic 32-byte seed (matches the
         // legacy scheme so existing user→cell mappings persist).
-        let user_id_bytes = discord_user_id.to_le_bytes();
-        let mut input = Vec::with_capacity(32 + 8);
-        input.extend_from_slice(bot_secret);
-        input.extend_from_slice(&user_id_bytes);
-        let seed = blake3::derive_key("dregg-discord-bot-v1", &input);
+        let seed = seed_for(bot_secret, discord_user_id);
 
         // Step 2: build a canonical AgentCipherclerk from the seed. Wrapping
         // the secret in `Zeroizing` here ensures the temporary copy
@@ -130,6 +126,20 @@ impl UserCipherclerk {
     pub fn private_key_hex(&self) -> String {
         hex::encode(self.legacy_secret)
     }
+}
+
+/// The deterministic 32-byte custodial seed for a Discord user — the SINGLE
+/// source of truth for `seed = BLAKE3_derive_key("dregg-discord-bot-v1",
+/// bot_secret || discord_user_id)`. This seed IS the Ed25519 secret fed to
+/// `AgentCipherclerk::from_key_bytes`, so reconstructing the same user's
+/// cipherclerk (e.g. to generate a selective-disclosure proof on their behalf in
+/// `identity_proof.rs`) uses this exact value — the identity is reproducible.
+pub fn seed_for(bot_secret: &[u8; 32], discord_user_id: u64) -> [u8; 32] {
+    let user_id_bytes = discord_user_id.to_le_bytes();
+    let mut input = Vec::with_capacity(32 + 8);
+    input.extend_from_slice(bot_secret);
+    input.extend_from_slice(&user_id_bytes);
+    blake3::derive_key("dregg-discord-bot-v1", &input)
 }
 
 /// Sign a string action using the legacy BLAKE3-MAC scheme accepted by

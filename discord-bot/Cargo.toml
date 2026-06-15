@@ -38,6 +38,12 @@ futures-util = { version = "0.3" }
 dregg-app-framework = { path = "../app-framework" }
 dregg-sdk = { path = "../sdk" }
 dregg-turn = { path = "../turn" }
+# The predicate-proof primitives for REAL selective disclosure: `PredicateType`
+# (the comparator) + `BabyBear` (the threshold field element), the inputs to the
+# SDK's `AgentCipherclerk::prove_predicate_unlinkable` (`sdk/src/privacy.rs`).
+# Already in the build graph via dregg-sdk / dregg-app-framework; named directly
+# so `/credential verify` emits a genuine STARK proof, not a null placeholder.
+dregg-circuit = { path = "../circuit" }
 starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace" }
 starbridge-nameservice = { path = "../starbridge-apps/nameservice" }
 starbridge-identity = { path = "../starbridge-apps/identity" }
@@ -51,6 +57,14 @@ dregg-storage = { path = "../storage" }
 # than bot-local placeholder BLAKE3-MAC records.
 dregg-types = { path = "../types" }
 dregg-cell = { path = "../cell" }
+# The deos web-forward primitives — the `dregg://` web-of-cells verified-attested
+# fetch, transclusion (the REAL `TranscludedField`), the per-viewer `Membrane`,
+# the cap-gated `AffordanceSurface`, and `Backlinks` (what-links-here). Already
+# resolved in the root lock via `dregg-app-framework` (which path-depends on it),
+# so this names the genuine primitives directly without adding anything new to the
+# build graph. The bot surfaces them as Discord buttons/embeds/links
+# (`src/deos_surface.rs`).
+starbridge-web-surface = { path = "../starbridge-web-surface" }
 bs58 = "0.5"
 zeroize = { workspace = true }
 
