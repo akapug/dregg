@@ -971,20 +971,46 @@ mod tests {
     /// expected pre/post commitments (the verify→accept leg succeeds).
     #[test]
     fn committed_turn_carries_verifying_proof() {
-        let alice = CellId::from_bytes([0xA1; 32]);
         let bob = CellId::from_bytes([0xB2; 32]);
+        let pre_balance: u64 = 1000;
+        let pre_nonce: u64 = 0;
 
-        // Alice sends 100 to Bob. From Alice's actor-cell perspective this is
-        // an outgoing transfer (balance debits by 100).
+        // The REAL before/after cells the live commit path holds: Alice sends 100 to Bob, so from
+        // Alice's actor-cell perspective this is an outgoing transfer (balance debits by 100). The
+        // agent id IS the cell's id on the live path, so the effect's `from` + the proving `agent`
+        // are `before_cell.id()`.
+        let before_cell =
+            dregg_cell::Cell::with_balance([0xA1; 32], [0u8; 32], pre_balance as i64);
+        let alice = before_cell.id();
+        let amount: u64 = 100;
+        let mut after_cell = before_cell.clone();
+        after_cell.state.set_balance((pre_balance - amount) as i64);
+
         let effects = vec![dregg_turn::Effect::Transfer {
             from: alice,
             to: bob,
-            amount: 100,
+            amount,
         }];
         let turn_hash = [0x11u8; 32];
+        let receipt_hashes = [[0x11u8; 32]];
 
-        let proven = prove_and_verify_finalized_turn(&alice, 1000, 0, &effects, turn_hash, None)
-            .expect("finalized turn should prove and self-verify");
+        // Thread the per-turn ROTATION witness (the live node always does — under `recursion` the v1
+        // effect-vm leg is retired, so a finalized turn proves through the rotated descriptor).
+        let rotation = rotation_witness_for_self_sovereign(
+            pre_balance,
+            pre_nonce,
+            &before_cell,
+            &after_cell,
+            &receipt_hashes,
+            &effects,
+        );
+        assert!(
+            rotation.is_some(),
+            "a cap-less transfer turn must yield a rotation witness"
+        );
+        let proven =
+            prove_and_verify_finalized_turn(&alice, pre_balance, pre_nonce, &effects, turn_hash, rotation)
+                .expect("finalized turn should prove and self-verify");
 
         // The proof is real (non-empty wire bytes) and re-verifies.
         assert!(!proven.proof_bytes().is_empty());
@@ -1002,18 +1028,36 @@ mod tests {
     /// returns `CommitmentMismatch`.
     #[test]
     fn forged_post_state_is_rejected() {
-        let alice = CellId::from_bytes([0xA1; 32]);
         let bob = CellId::from_bytes([0xB2; 32]);
+        let pre_balance: u64 = 1000;
+        let pre_nonce: u64 = 0;
+
+        let before_cell =
+            dregg_cell::Cell::with_balance([0xA1; 32], [0u8; 32], pre_balance as i64);
+        let alice = before_cell.id();
+        let amount: u64 = 100;
+        let mut after_cell = before_cell.clone();
+        after_cell.state.set_balance((pre_balance - amount) as i64);
 
         let effects = vec![dregg_turn::Effect::Transfer {
             from: alice,
             to: bob,
-            amount: 100,
+            amount,
         }];
         let turn_hash = [0x22u8; 32];
+        let receipt_hashes = [[0x11u8; 32]];
 
-        let proven = prove_and_verify_finalized_turn(&alice, 1000, 0, &effects, turn_hash, None)
-            .expect("honest turn should prove");
+        let rotation = rotation_witness_for_self_sovereign(
+            pre_balance,
+            pre_nonce,
+            &before_cell,
+            &after_cell,
+            &receipt_hashes,
+            &effects,
+        );
+        let proven =
+            prove_and_verify_finalized_turn(&alice, pre_balance, pre_nonce, &effects, turn_hash, rotation)
+                .expect("honest turn should prove");
 
         // Forge the post-state commitment: claim a DIFFERENT new state than
         // the one the proof actually attests.
@@ -1038,18 +1082,37 @@ mod tests {
     /// started from a different cell state than it did) is also REJECTED.
     #[test]
     fn forged_pre_state_is_rejected() {
-        let alice = CellId::from_bytes([0xA1; 32]);
         let bob = CellId::from_bytes([0xB2; 32]);
+        let pre_balance: u64 = 777;
+        let pre_nonce: u64 = 3;
+
+        let mut before_cell =
+            dregg_cell::Cell::with_balance([0xA1; 32], [0u8; 32], pre_balance as i64);
+        before_cell.state.set_nonce(pre_nonce);
+        let alice = before_cell.id();
+        let amount: u64 = 50;
+        let mut after_cell = before_cell.clone();
+        after_cell.state.set_balance((pre_balance - amount) as i64);
 
         let effects = vec![dregg_turn::Effect::Transfer {
             from: alice,
             to: bob,
-            amount: 50,
+            amount,
         }];
         let turn_hash = [0x33u8; 32];
+        let receipt_hashes = [[0x11u8; 32]];
 
-        let proven = prove_and_verify_finalized_turn(&alice, 777, 3, &effects, turn_hash, None)
-            .expect("honest turn should prove");
+        let rotation = rotation_witness_for_self_sovereign(
+            pre_balance,
+            pre_nonce,
+            &before_cell,
+            &after_cell,
+            &receipt_hashes,
+            &effects,
+        );
+        let proven =
+            prove_and_verify_finalized_turn(&alice, pre_balance, pre_nonce, &effects, turn_hash, rotation)
+                .expect("honest turn should prove");
 
         let forged_old_commit = proven.old_commit + BabyBear::new(1);
         let result =
@@ -2180,10 +2243,27 @@ mod tests {
     /// capability root and the receipt-disclosed consumed-cap leaf.
     #[test]
     fn honest_capability_gated_turn_proves_with_cap_leg() {
-        let (receipt, agent_id, pre_cap_root, effects) = run_breadstuff_gated_turn();
+        // The SELF-Transfer cap fixture (the shape that ROTATES — the live cap-gated commit path
+        // proves through the rotated descriptor under `recursion`, the v1 cap leg being retired).
+        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+            run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .expect("actor-held consumed-cap witness");
+        let receipts = [receipt.receipt_hash()];
 
+        let rotation = rotation_witness_for_capability(
+            1_000,
+            0,
+            pre_cap_root,
+            &before_cell,
+            &after_cell,
+            &receipts,
+            &effects,
+        );
+        assert!(
+            rotation.is_some(),
+            "the honest cap-gated turn must yield a rotation witness (faithful real-cell r23)"
+        );
         let proven = prove_and_verify_finalized_turn_capability(
             &agent_id,
             1_000,
@@ -2194,7 +2274,7 @@ mod tests {
             consumed,
             None,
             &[],
-            None,
+            rotation,
         )
         .expect("honest capability-gated turn must prove + cap-bound-verify");
 
@@ -2226,13 +2306,26 @@ mod tests {
     /// a different expected root fails with `CapRootMismatch`.
     #[test]
     fn cap_witness_path_not_reaching_prestate_root_is_rejected() {
-        let (receipt, agent_id, pre_cap_root, effects) = run_breadstuff_gated_turn();
+        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+            run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .unwrap()
             .clone();
+        let receipts = [receipt.receipt_hash()];
+        let rotation = || {
+            rotation_witness_for_capability(
+                1_000,
+                0,
+                pre_cap_root,
+                &before_cell,
+                &after_cell,
+                &receipts,
+                &effects,
+            )
+        };
 
         // (a) Tamper a sibling: the path no longer recomputes the witness's
-        // own root — the prover refuses (no sound leg exists).
+        // own root — the prover refuses (no sound leg exists), even WITH a rotation witness in hand.
         let mut tampered = consumed.clone();
         tampered.siblings[2] ^= 1;
         let result = prove_and_verify_finalized_turn_capability(
@@ -2245,7 +2338,7 @@ mod tests {
             &tampered,
             None,
             &[],
-            None,
+            rotation(),
         );
         assert!(
             matches!(
@@ -2255,7 +2348,7 @@ mod tests {
             "a tampered membership path must be refused, got {result:?}"
         );
 
-        // (b) Honest proof, verified against a DIFFERENT expected root: the
+        // (b) Honest proof (ROTATED), verified against a DIFFERENT expected root: the
         // cap leg's in-circuit-bound root mismatches → CapRootMismatch.
         let proven = prove_and_verify_finalized_turn_capability(
             &agent_id,
@@ -2267,7 +2360,7 @@ mod tests {
             &consumed,
             None,
             &[],
-            None,
+            rotation(),
         )
         .expect("honest proof");
         let wrong_root = pre_cap_root + BabyBear::new(1);
@@ -2301,24 +2394,38 @@ mod tests {
     /// canonical root, so the prover refuses it outright.
     #[test]
     fn inflated_mask_leaf_tamper_is_rejected() {
-        let (receipt, agent_id, pre_cap_root, effects) = run_breadstuff_gated_turn();
+        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+            run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .unwrap()
             .clone();
+        let receipts = [receipt.receipt_hash()];
+        let rotation = || {
+            rotation_witness_for_capability(
+                1_000,
+                0,
+                pre_cap_root,
+                &before_cell,
+                &after_cell,
+                &receipts,
+                &effects,
+            )
+        };
 
-        // The committed cap's rights are NARROW (exactly SetField) — the
-        // inflation below is a REAL amplification, not a no-op.
+        // The committed cap's rights are NARROW (exactly Transfer, EFFECT_TRANSFER = 1<<1 = 2) —
+        // the inflation below is a REAL amplification, not a no-op.
         assert_eq!(
-            consumed.leaf_mask_lo, 1,
-            "fixture grants a SetField-only mask"
+            consumed.leaf_mask_lo, 2,
+            "fixture grants a Transfer-only mask"
         );
         assert_eq!(
             consumed.leaf_mask_hi, 0,
-            "fixture grants a SetField-only mask"
+            "fixture grants a Transfer-only mask"
         );
 
-        // (a) Prover side: an inflated-mask witness has no membership path to
-        // the canonical root (the inflated leaf is NOT in the tree).
+        // (a) Prover side (rotated): an inflated-mask witness has no membership path to
+        // the canonical root (the inflated leaf is NOT in the tree), so the cap path refuses even
+        // with the rotation witness threaded.
         let mut inflated = consumed.clone();
         inflated.leaf_mask_lo = 0xFFFF;
         inflated.leaf_mask_hi = 0xFFFF;
@@ -2332,7 +2439,7 @@ mod tests {
             &inflated,
             None,
             &[],
-            None,
+            rotation(),
         );
         assert!(
             matches!(
@@ -2342,7 +2449,7 @@ mod tests {
             "an inflated-mask leaf must be refused (not in the canonical tree), got {result:?}"
         );
 
-        // (b) Verifier side: an honest proof checked against an inflated-leaf
+        // (b) Verifier side: an honest ROTATED proof checked against an inflated-leaf
         // expectation mismatches the in-circuit-bound leaf digest.
         let proven = prove_and_verify_finalized_turn_capability(
             &agent_id,
@@ -2354,7 +2461,7 @@ mod tests {
             &consumed,
             None,
             &[],
-            None,
+            rotation(),
         )
         .expect("honest proof");
         let mut inflated_leaf = consumed.cap_leaf();
@@ -2389,10 +2496,12 @@ mod tests {
     /// canonical root fails (prover refusal AND verifier `CapRootMismatch`).
     #[test]
     fn different_cells_cap_root_splice_is_rejected() {
-        let (receipt, agent_id, pre_cap_root, effects) = run_breadstuff_gated_turn();
+        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+            run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .unwrap()
             .clone();
+        let receipts = [receipt.receipt_hash()];
 
         // A DIFFERENT cell with a different c-list ⇒ a different canonical root.
         let mut other = Cell::with_balance([0x99u8; 32], [0u8; 32], 10);
@@ -2405,7 +2514,8 @@ mod tests {
             "distinct c-lists ⇒ distinct roots"
         );
 
-        // (a) Prover refuses: the witness does not open to the other cell's root.
+        // (a) Prover refuses: the witness does not open to the other cell's root (the consumed
+        // cap_root != the supplied root check fires before the rotated leg is built).
         let result = prove_and_verify_finalized_turn_capability(
             &agent_id,
             1_000,
@@ -2426,7 +2536,16 @@ mod tests {
             "a witness for the agent's tree must not prove under another cell's root"
         );
 
-        // (b) Verifier rejects an honest proof bound to the other cell's root.
+        // (b) Verifier rejects an honest ROTATED proof bound to the other cell's root.
+        let rotation = rotation_witness_for_capability(
+            1_000,
+            0,
+            pre_cap_root,
+            &before_cell,
+            &after_cell,
+            &receipts,
+            &effects,
+        );
         let proven = prove_and_verify_finalized_turn_capability(
             &agent_id,
             1_000,
@@ -2437,7 +2556,7 @@ mod tests {
             &consumed,
             None,
             &[],
-            None,
+            rotation,
         )
         .expect("honest proof");
         let expectation = dregg_sdk::CapMembershipExpectation {
@@ -2461,15 +2580,33 @@ mod tests {
     /// and the plain verify path still accepts.
     #[test]
     fn self_sovereign_turn_unchanged_no_cap_leg() {
-        let alice = CellId::from_bytes([0xA1; 32]);
         let bob = CellId::from_bytes([0xB2; 32]);
+        let pre_balance: u64 = 500;
+        let pre_nonce: u64 = 1;
+        let mut before_cell =
+            dregg_cell::Cell::with_balance([0xA1; 32], [0u8; 32], pre_balance as i64);
+        before_cell.state.set_nonce(pre_nonce);
+        let alice = before_cell.id();
+        let amount: u64 = 25;
+        let mut after_cell = before_cell.clone();
+        after_cell.state.set_balance((pre_balance - amount) as i64);
         let effects = vec![dregg_turn::Effect::Transfer {
             from: alice,
             to: bob,
-            amount: 25,
+            amount,
         }];
-        let proven = prove_and_verify_finalized_turn(&alice, 500, 1, &effects, [0xD1u8; 32], None)
-            .expect("self-sovereign turn proves as before");
+        let receipt_hashes = [[0x11u8; 32]];
+        let rotation = rotation_witness_for_self_sovereign(
+            pre_balance,
+            pre_nonce,
+            &before_cell,
+            &after_cell,
+            &receipt_hashes,
+            &effects,
+        );
+        let proven =
+            prove_and_verify_finalized_turn(&alice, pre_balance, pre_nonce, &effects, [0xD1u8; 32], rotation)
+                .expect("self-sovereign turn proves as before");
         assert!(
             !proven.proof.components.has_cap_membership,
             "a self-sovereign turn carries NO cap-membership leg"
@@ -2482,15 +2619,26 @@ mod tests {
     /// when verified with the expectation (the leg cannot be stripped).
     #[test]
     fn missing_cap_leg_is_rejected_for_capability_gated_turn() {
-        let (receipt, agent_id, pre_cap_root, effects) = run_breadstuff_gated_turn();
+        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+            run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .unwrap()
             .clone();
+        let receipts = [receipt.receipt_hash()];
 
-        // Prove WITHOUT the cap leg (the legacy self-sovereign prover), then
-        // try to pass it off as the capability-gated proof.
+        // Prove WITHOUT the cap leg (the legacy self-sovereign prover, ROTATED), then
+        // try to pass it off as the capability-gated proof. The actor's own outgoing transfer is a
+        // self-sovereign-shaped rotatable projection, so the cap-less rotation witness admits it.
+        let rotation = rotation_witness_for_self_sovereign(
+            1_000,
+            0,
+            &before_cell,
+            &after_cell,
+            &receipts,
+            &effects,
+        );
         let proven =
-            prove_and_verify_finalized_turn(&agent_id, 1_000, 0, &effects, [0xD2u8; 32], None)
+            prove_and_verify_finalized_turn(&agent_id, 1_000, 0, &effects, [0xD2u8; 32], rotation)
                 .expect("legless proof proves");
         let expectation = dregg_sdk::CapMembershipExpectation {
             leaf: consumed.cap_leaf(),
