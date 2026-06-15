@@ -178,6 +178,11 @@ fn state_constraint_executor_coverage(c: &StateConstraint) -> bool {
         StateConstraint::PreimageGate { .. } => true,
         StateConstraint::AllowedTransitions { .. } => true,
         StateConstraint::AnyOf { .. } => true,
+        // coverage_state_constraints::any_of_bound_accept_and_reject — the §11.3
+        // witnessed-disjunction carrier; the cheap-branch disjunction is enforced
+        // through the executor commit path (the witnessed-branch anti-strip is
+        // pinned in Lean: anyOfBound_stripped_proof_branch_fails).
+        StateConstraint::AnyOfBound { .. } => true,
 
         // Policy-combinator core (Lean `Exec.Program` algebra) — enforced by
         // the scalar `evaluate_constraint_full` post-state evaluator.

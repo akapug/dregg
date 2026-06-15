@@ -382,7 +382,14 @@ pub fn project_slot_caveat_manifest(
             // supplied finalized roots (fails closed when absent), no SlotCaveat
             // AIR projection in this wave (deferred like the other cross-cell
             // relational atoms above).
-            | dregg_cell::StateConstraint::ObservedFieldEquals { .. } => None,
+            | dregg_cell::StateConstraint::ObservedFieldEquals { .. }
+            // Witnessed branches under ⊔ (CELL-PROGRAM-LANGUAGE.md §11.3): the
+            // disjunction carries witnessed cross-cell + context-reading
+            // branches, none of which project to a single register slot in this
+            // wave — executor-enforced by the scalar evaluator (each branch
+            // calls the evaluator the executor already owns), no SlotCaveat AIR
+            // projection (deferred like `AnyOf` / `ObservedFieldEquals`).
+            | dregg_cell::StateConstraint::AnyOfBound { .. } => None,
         };
         if let Some(e) = entry {
             entries[count] = e;

@@ -18,7 +18,7 @@
 //! executor has no BlindedSet verifier wired).
 
 use dregg_app_framework::{AgentCipherclerk, AppCipherclerk, EmbeddedExecutor};
-use dregg_cell::program::{CollPred, ElemPredAtom, SimpleStateConstraint};
+use dregg_cell::program::{BoundBranch, CollPred, ElemPredAtom, SimpleStateConstraint};
 use dregg_cell::{CellProgram, StateConstraint, field_from_u64};
 use dregg_turn::action::{Effect, WitnessBlob, WitnessKind};
 
@@ -767,6 +767,49 @@ fn any_of_accept_and_reject() {
     assert!(
         err.is_err(),
         "AnyOf did not reject value matching no branch"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 18b. AnyOfBound (§11.3 — witnessed branches under ⊔; here the cheap-branch
+//      disjunction exercised through the executor commit path)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `AnyOfBound { branches: [Simple(FieldEquals{0,10}), Simple(FieldEquals{0,20})] }`:
+/// slot[0] must be 10 OR 20 — the same disjunction as AnyOf, but over the
+/// witnessed-capable `BoundBranch` carrier. (The anti-strip soundness of a
+/// *witnessed* branch is pinned in Lean — `anyOfBound_stripped_proof_branch_fails`
+/// — and in the cell-lib unit suite; here we confirm the executor enforces the
+/// disjunction on the real commit path.)
+/// Accept: set slot[0] = 20 (second branch). Reject: set slot[0] = 99.
+#[test]
+fn any_of_bound_accept_and_reject() {
+    let (ex, cc) = fresh(20);
+    ex.install_program(
+        ex.cell_id(),
+        CellProgram::Predicate(vec![StateConstraint::AnyOfBound {
+            branches: vec![
+                BoundBranch::Simple(SimpleStateConstraint::FieldEquals {
+                    index: 0,
+                    value: field_from_u64(10),
+                }),
+                BoundBranch::Simple(SimpleStateConstraint::FieldEquals {
+                    index: 0,
+                    value: field_from_u64(20),
+                }),
+            ],
+        }]),
+    );
+
+    // Accept: 20 matches the second branch.
+    let ok = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(20)));
+    assert!(ok.is_ok(), "AnyOfBound accept (value=20) failed: {ok:?}");
+
+    // Reject: 99 matches neither branch (and no witnessed branch can rescue it).
+    let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(99)));
+    assert!(
+        err.is_err(),
+        "AnyOfBound did not reject value matching no branch"
     );
 }
 

@@ -910,6 +910,49 @@ impl StateConstraint {
 /// state, **not** against the replayer's current chain view. The
 /// `EvalContext` passed at replay time should be reconstructed from the
 /// receipt, not from the replayer's live ledger.
+/// A single branch of an [`StateConstraint::AnyOfBound`] disjunction
+/// (`docs/CELL-PROGRAM-LANGUAGE.md` §11.3). The branch shape that lets a
+/// WITNESSED (proof-bearing) leaf sit beside a CHEAP (no-proof) leaf under
+/// `⊔` WITHOUT the proof-stripping unsoundness §4 warns of: each witnessed
+/// branch names its OWN proof carrier (`proof_witness_index`), so "this
+/// branch needs a proof" is STRUCTURAL, and a stripped/absent proof makes
+/// that branch FAIL (it cannot masquerade as a no-proof branch — the
+/// anti-strip tooth).
+///
+/// Lean twin (LAW #1, the source of truth): `Dregg2.Exec.BoundBranch`
+/// (`metatheory/Dregg2/Exec/Program.lean`), whose `witnessed` arm IS the
+/// `observedFieldEquals` cross-cell read. The Rust evaluator never authors
+/// new semantics — each arm CALLS the evaluator the executor already owns
+/// (`evaluate_simple_constraint` for the cheap leg; the existing
+/// `ObservedFieldEquals` verification for the witnessed leg).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BoundBranch {
+    /// The cheap, no-proof leg: a plain [`SimpleStateConstraint`] (a timeout,
+    /// a state guard, a sender binding). Evaluated by the EXISTING
+    /// [`evaluate_simple_constraint`]. THIS is the "cheaper branch" §4 says a
+    /// submitter would try to slide down by stripping a proof. Lean twin
+    /// `BoundBranch.simple`.
+    Simple(SimpleStateConstraint),
+    /// The proof-bearing leg: the cross-cell verified-observation read — admits
+    /// IFF the host [`crate::predicate::FinalizedRootAuthority`] opens a
+    /// genuinely-FINALIZED `source_field` on peer `source_cell` at `at_root` to
+    /// a value `v` AND `new[local_field] == v`. The SAME proven
+    /// [`StateConstraint::ObservedFieldEquals`] semantics, now as a disjunction
+    /// branch: the witnessed branch names its OWN Merkle-open proof blob via
+    /// `proof_witness_index` (the audit-item-4 binding stays — a stripped proof
+    /// CLOSES this branch). Lean twin `BoundBranch.witnessed localField
+    /// sourceCell sourceField`; the anti-strip tooth
+    /// `anyOfBound_stripped_proof_branch_fails` reduces to
+    /// `evalConstraintCtx_observedFieldEquals_absent_proof_refuses`.
+    Witnessed {
+        local_field: u8,
+        source_cell: [u8; 32],
+        source_field: u8,
+        at_root: [u8; 32],
+        proof_witness_index: usize,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StateConstraint {
     // ─── Static post-state predicates (existing) ───
@@ -1483,6 +1526,45 @@ pub enum StateConstraint {
         /// The aggregate predicate over the read-out collection.
         pred: CollPred,
     },
+
+    /// **Witnessed branches under disjunction** (`docs/CELL-PROGRAM-LANGUAGE.md`
+    /// §11.3 — the `AnyOfBound` rung) — admits IFF SOME `branches` element
+    /// admits. The rung that lets a real escrow/governance ceremony express
+    /// "release if EITHER the timeout passed OR a finalized-read proof
+    /// verifies" — a WITNESSED branch beside a CHEAP branch — which the plain
+    /// [`Self::AnyOf`] ([`SimpleStateConstraint`]-only) cannot, because
+    /// proof-bearing leaves do not survive a naive lift (§4: an `AnyOf` branch
+    /// that fails to open a proof must be DISTINGUISHABLE from one that needs
+    /// none, or a submitter strips the proof and slides down the cheap branch).
+    ///
+    /// THE SOUNDNESS CORE: a [`BoundBranch::Witnessed`] branch whose proof is
+    /// absent/invalid (no Merkle-open blob at its `proof_witness_index`, or the
+    /// host [`crate::predicate::FinalizedRootAuthority`] rejected `at_root`)
+    /// does NOT admit. It cannot masquerade as a no-proof branch: the witnessed
+    /// branch STRUCTURALLY names its own blob, exactly as the standalone
+    /// [`Self::ObservedFieldEquals`] does, and the global unique-blob scan
+    /// (audit item 4) stays for the legacy witnessed shapes. A proof-strip
+    /// therefore CLOSES the witnessed branch rather than opening a cheaper
+    /// path; the only branches a stripped turn can take are the genuinely-cheap
+    /// [`BoundBranch::Simple`] ones.
+    ///
+    /// The evaluator arm CALLS the executor's existing evaluators — the cheap
+    /// leg through [`evaluate_simple_constraint`], the witnessed leg through the
+    /// same `ObservedFieldEquals` verification — so NO new semantics are
+    /// authored (LAW #1). COST (§5/§8): the MAX of the branch costs — a
+    /// disjunction is as coordinated as its most-coordinated TAKEN branch (a
+    /// cheap `Simple` branch is free; a `Witnessed` finalized-read branch is the
+    /// FREE finalized-read class; an ordering-pole simple branch makes the whole
+    /// gate ordering when taken); disclosure is the union of what the taken
+    /// branch reveals.
+    ///
+    /// Lean twin (LAW #1, the source of truth — APPENDED last, after the Lean
+    /// was green): `Dregg2.Exec.StateConstraint.anyOfBound`
+    /// (`metatheory/Dregg2/Exec/Program.lean`), admit-char
+    /// `evalConstraint_anyOfBound_iff`, anti-strip tooth
+    /// `anyOfBound_stripped_proof_branch_fails`. APPEND-ONLY (postcard variant
+    /// indices preserved — factory VKs / content addresses byte-identical, §2).
+    AnyOfBound { branches: Vec<BoundBranch> },
 }
 
 /// A per-element decision predicate over the felt fields of one collection
@@ -2995,6 +3077,63 @@ fn evaluate_constraint_full(
             )
         }
 
+        // ─── Witnessed branches under ⊔ (§11.3, the AnyOfBound rung) ───
+        // Mirrors the proven Lean `evalConstraint_anyOfBound_iff` (admits IFF
+        // SOME branch admits) + `anyOfBound_stripped_proof_branch_fails` (a
+        // witnessed branch with an absent/invalid proof FAILS — it cannot
+        // masquerade as a no-proof branch). Each branch CALLS the executor's
+        // existing evaluator (LAW #1 — no new semantics): the cheap `Simple`
+        // leg through `evaluate_simple_constraint`; the `Witnessed` leg by
+        // dispatching the EXACT same `ObservedFieldEquals` verification (so the
+        // witnessed branch's anti-strip behaviour IS the standalone atom's —
+        // missing blob / forged `at_root` / no authority all fail closed, and
+        // the per-branch `proof_witness_index` keeps the audit-item-4 binding).
+        StateConstraint::AnyOfBound { branches } => {
+            if branches.is_empty() {
+                return violated(constraint, "AnyOfBound with no branches".into());
+            }
+            let mut last_err: Option<ProgramError> = None;
+            for branch in branches {
+                let result = match branch {
+                    BoundBranch::Simple(c) => {
+                        evaluate_simple_constraint(c, new_state, old_state, ctx, meta, witnesses)
+                    }
+                    BoundBranch::Witnessed {
+                        local_field,
+                        source_cell,
+                        source_field,
+                        at_root,
+                        proof_witness_index,
+                    } => {
+                        // The witnessed leg IS the cross-cell verified-observation
+                        // atom — dispatch the same proven arm, so a stripped proof
+                        // closes THIS branch exactly as it refuses the standalone
+                        // `ObservedFieldEquals`.
+                        let observed = StateConstraint::ObservedFieldEquals {
+                            local_field: *local_field,
+                            source_cell: *source_cell,
+                            source_field: *source_field,
+                            at_root: *at_root,
+                            proof_witness_index: *proof_witness_index,
+                        };
+                        evaluate_constraint_full(
+                            &observed, new_state, old_state, ctx, meta, witnesses,
+                        )
+                    }
+                };
+                match result {
+                    Ok(()) => return Ok(()),
+                    Err(e) => last_err = Some(e),
+                }
+            }
+            Err(
+                last_err.unwrap_or_else(|| ProgramError::ConstraintViolated {
+                    constraint: constraint.clone(),
+                    description: "no AnyOfBound branch satisfied".into(),
+                }),
+            )
+        }
+
         // ─── Policy-combinator core (mirrors Lean `Exec.Program`) ───
         StateConstraint::MemberOf { index, set } => {
             let idx = check_index(*index)?;
@@ -4358,6 +4497,52 @@ pub enum StateConstraintView {
         fuel: u32,
         pred: CollPredView,
     },
+    /// Witnessed branches under disjunction (§11.3 — the `AnyOfBound` rung).
+    /// Admits IFF some branch admits; each [`BoundBranchView`] surfaces whether
+    /// it is the cheap no-proof leg or a witnessed cross-cell read naming its
+    /// own proof blob.
+    AnyOfBound { branches: Vec<BoundBranchView> },
+}
+
+/// [`BoundBranch`] view (nested in [`StateConstraintView::AnyOfBound`]). The
+/// cheap leg projects its inner [`SimpleStateConstraint`] view; the witnessed
+/// leg surfaces the cross-cell read it names (peer cell / field / finalized
+/// root / proof index, cells & roots as 64-hex).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "branch")]
+pub enum BoundBranchView {
+    Simple { constraint: Box<StateConstraintView> },
+    Witnessed {
+        local_field: u8,
+        source_cell: String,
+        source_field: u8,
+        at_root: String,
+        proof_witness_index: usize,
+    },
+}
+
+impl BoundBranch {
+    /// Project this `AnyOfBound` branch to its serving view. TOTAL: no wildcard.
+    pub fn to_view(&self) -> BoundBranchView {
+        match self {
+            BoundBranch::Simple(c) => BoundBranchView::Simple {
+                constraint: Box::new(c.to_view()),
+            },
+            BoundBranch::Witnessed {
+                local_field,
+                source_cell,
+                source_field,
+                at_root,
+                proof_witness_index,
+            } => BoundBranchView::Witnessed {
+                local_field: *local_field,
+                source_cell: view_hex(source_cell),
+                source_field: *source_field,
+                at_root: view_hex(at_root),
+                proof_witness_index: *proof_witness_index,
+            },
+        }
+    }
 }
 
 /// [`ElemPredAtom`] view (nested in [`CollPredView`]). 32-byte values are
@@ -4915,6 +5100,9 @@ impl StateConstraint {
                 stride: *stride,
                 fuel: *fuel,
                 pred: pred.to_view(),
+            },
+            StateConstraint::AnyOfBound { branches } => StateConstraintView::AnyOfBound {
+                branches: branches.iter().map(|b| b.to_view()).collect(),
             },
         }
     }
@@ -7157,6 +7345,167 @@ mod tests {
         ));
     }
 
+    /// §11.3 — `AnyOfBound`: witnessed branches under ⊔. An escrow releases when
+    /// EITHER the cheap `Simple` timeout branch (`state >= 2`) holds OR the
+    /// `Witnessed` cross-cell finalized-read branch opens (`mark` (slot 0) ==
+    /// oracle 0x11's finalized `price`). Mirrors the proven Lean keystones
+    /// `evalConstraint_anyOfBound_iff` (admit iff some branch admits),
+    /// `anyOfBound_stripped_proof_branch_fails` (THE anti-strip tooth — a
+    /// witnessed branch with an absent proof FAILS, cannot masquerade as a
+    /// no-proof branch), and `BoundBranch.witnessed_iff` (the witnessed branch
+    /// has real teeth). LAW #1: each branch CALLS the evaluator the executor
+    /// already owns (`evaluate_simple_constraint` / the `ObservedFieldEquals`
+    /// verification) — no new semantics.
+    #[test]
+    fn any_of_bound_disjoins_witnessed_and_cheap_branches() {
+        use crate::predicate::{FinalizedRootAuthority, StaticFinalizedRootAuthority};
+
+        let oracle = [0x11u8; 32];
+        let at_root = [0xABu8; 32];
+        let price = field_from_u64(7); // the oracle's finalized `price` (field 1)
+
+        let authority: std::sync::Arc<dyn FinalizedRootAuthority> = std::sync::Arc::new(
+            StaticFinalizedRootAuthority::new().authorize(oracle, at_root, 1, price),
+        );
+        let proof_bytes = [0u8; 1];
+        let blobs = [WitnessBlobView {
+            kind: WitnessKindTag::MerklePath,
+            bytes: &proof_bytes,
+        }];
+        // Bundle WITH the host authority + Merkle-open proof (the witnessed
+        // branch can open).
+        let opened = WitnessBundle {
+            blobs: &blobs,
+            registry: None,
+            finalized_roots: Some(authority.as_ref()),
+        };
+        // Bundle with NO host authority (the witnessed branch's proof is
+        // effectively STRIPPED — no channel to the peer's real finalized roots).
+        let stripped = WitnessBundle::empty();
+        let meta = TransitionMeta::wildcard();
+
+        // The escrow: release if `state >= 2` (cheap timeout) OR mark == oracle's
+        // finalized price (witnessed cross-cell read).
+        let escrow = CellProgram::Predicate(vec![StateConstraint::AnyOfBound {
+            branches: vec![
+                BoundBranch::Simple(SimpleStateConstraint::FieldGte {
+                    index: 1, // `state` slot
+                    value: field_from_u64(2),
+                }),
+                BoundBranch::Witnessed {
+                    local_field: 0, // `mark` slot
+                    source_cell: oracle,
+                    source_field: 1,
+                    at_root,
+                    proof_witness_index: 0,
+                },
+            ],
+        }]);
+
+        // ADMIT via the CHEAP branch (state = 2 >= 2) — no proof needed; even the
+        // stripped bundle admits because the cheap leg carries the turn.
+        let mut timed_out = CellState::new(0);
+        timed_out.fields[1] = field_from_u64(2);
+        timed_out.fields[0] = field_from_u64(999); // mark mismatches — irrelevant, cheap leg wins
+        assert!(
+            escrow
+                .evaluate_full(&timed_out, None, None, &meta, &stripped)
+                .is_ok(),
+            "the cheap timeout branch must admit with no proof (AnyOfBound is a disjunction)"
+        );
+
+        // ADMIT via the WITNESSED branch (mark = 7 == oracle's finalized price),
+        // even though the cheap branch FAILS (state = 1 < 2). The witnessed
+        // branch has real teeth (`BoundBranch.witnessed_iff`).
+        let mut credentialed = CellState::new(0);
+        credentialed.fields[1] = field_from_u64(1); // cheap branch fails
+        credentialed.fields[0] = price; // mark == finalized price
+        assert!(
+            escrow
+                .evaluate_full(&credentialed, None, None, &meta, &opened)
+                .is_ok(),
+            "the witnessed finalized-read branch must admit when its proof opens"
+        );
+
+        // REFUSE-ALL (THE anti-strip tooth, `anyOfBound_stripped_proof_branch_fails`):
+        // the cheap branch fails (state = 1 < 2) AND the witnessed branch's proof
+        // is STRIPPED (no host authority) — the witnessed branch CANNOT masquerade
+        // as a no-proof branch, so the whole gate REFUSES. A submitter stripping
+        // the proof does NOT slide down a cheaper path (§4).
+        assert!(
+            matches!(
+                escrow.evaluate_full(&credentialed, None, None, &meta, &stripped),
+                Err(_)
+            ),
+            "a stripped witnessed branch must FAIL, not masquerade as a no-proof branch"
+        );
+
+        // REFUSE: the witnessed proof opens but MISMATCHES (mark = 9 != finalized
+        // 7) and the cheap branch fails — the binding has teeth in both
+        // directions (`observedFieldEquals_mismatch_refuses`).
+        let mut diverged = CellState::new(0);
+        diverged.fields[1] = field_from_u64(1); // cheap branch fails
+        diverged.fields[0] = field_from_u64(9); // mark != finalized price
+        assert!(matches!(
+            escrow.evaluate_full(&diverged, None, None, &meta, &opened),
+            Err(_)
+        ));
+
+        // A PURELY-witnessed AnyOfBound with the proof stripped refuses entirely
+        // (no cheap fallback) — the strongest form of the anti-strip tooth.
+        let witnessed_only = CellProgram::Predicate(vec![StateConstraint::AnyOfBound {
+            branches: vec![BoundBranch::Witnessed {
+                local_field: 0,
+                source_cell: oracle,
+                source_field: 1,
+                at_root,
+                proof_witness_index: 0,
+            }],
+        }]);
+        assert!(
+            matches!(
+                witnessed_only.evaluate_full(&credentialed, None, None, &meta, &stripped),
+                Err(_)
+            ),
+            "a purely-witnessed AnyOfBound with no proof must refuse (no cheap path exists)"
+        );
+        // …but admits once the finalized read opens (real teeth).
+        assert!(
+            witnessed_only
+                .evaluate_full(&credentialed, None, None, &meta, &opened)
+                .is_ok()
+        );
+
+        // An empty AnyOfBound is fail-closed (no branch can admit).
+        let empty = CellProgram::Predicate(vec![StateConstraint::AnyOfBound { branches: vec![] }]);
+        assert!(matches!(
+            empty.evaluate_full(&timed_out, None, None, &meta, &opened),
+            Err(ProgramError::ConstraintViolated { .. })
+        ));
+
+        // The view projection round-trips (the StateConstraintView arm is total).
+        let view = StateConstraint::AnyOfBound {
+            branches: vec![
+                BoundBranch::Simple(SimpleStateConstraint::FieldGte {
+                    index: 1,
+                    value: field_from_u64(2),
+                }),
+                BoundBranch::Witnessed {
+                    local_field: 0,
+                    source_cell: oracle,
+                    source_field: 1,
+                    at_root,
+                    proof_witness_index: 0,
+                },
+            ],
+        }
+        .to_view();
+        assert!(matches!(
+            view,
+            StateConstraintView::AnyOfBound { branches } if branches.len() == 2
+        ));
+    }
+
     /// Blueprint gap 1: the committed-value knowledge gate under a state
     /// guard — `state == RELEASED ⇒ PreimageGate` — now expressible
     /// because `PreimageGate` is a `SimpleStateConstraint`.
@@ -7588,6 +7937,24 @@ mod tests {
                 },
                 "CollectionAggregate",
             ),
+            (
+                StateConstraint::AnyOfBound {
+                    branches: vec![
+                        BoundBranch::Simple(SimpleStateConstraint::FieldGte {
+                            index: 1,
+                            value: field_from_u64(2),
+                        }),
+                        BoundBranch::Witnessed {
+                            local_field: 0,
+                            source_cell: [9u8; 32],
+                            source_field: 1,
+                            at_root: [7u8; 32],
+                            proof_witness_index: 0,
+                        },
+                    ],
+                },
+                "AnyOfBound",
+            ),
         ];
 
         // COVERAGE TOOTH: this match must name every variant exactly once.
@@ -7646,7 +8013,8 @@ mod tests {
                 | StateConstraint::BalanceDeltaGte { .. }
                 | StateConstraint::AffineDeltaLe { .. }
                 | StateConstraint::ObservedFieldEquals { .. }
-                | StateConstraint::CollectionAggregate { .. } => {}
+                | StateConstraint::CollectionAggregate { .. }
+                | StateConstraint::AnyOfBound { .. } => {}
             }
         }
 
