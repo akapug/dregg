@@ -83,14 +83,27 @@ drives them live: `dregg voting open|tally|close|show` and
 `dregg bounty post|claim|submit|payout|show` (a rejected second claim or
 a shrinking tally is the caveat biting on the verified commit path).
 
-Two entries remain **roadmap stubs**, not apps: `compute-exchange` and
-`gallery`. Each is a single `manifest.json` with `"status": "unported"`
-and `"runtime_mode": "legacy-http"`, pointing at its still-running legacy
-implementation under `../apps/<name>/` (its `porting_target` is the
-starbridge-app to build). They are deliberately *not* faked into
-half-working crates — porting one follows the nameservice exemplar (the
-documented paint-by-numbers template) and is tracked work, not shipped
-work.
+| `compute-exchange` | post job (budget) → bid (≤ budget) → settle (paid + refunded == budget); an escrow/budget-gate state machine |
+| `gallery` | submit (sealed) → close submissions → reveal → curate; a commit-reveal curation state machine with an on-ledger WriteOnce submission board |
+
+`compute-exchange` is the escrow/budget shape: a factory-born job cell whose
+installed `CellProgram` enforces a BUDGET gate (`FieldLteField(BID ≤ BUDGET)`,
+the AffineLe budget bound), a write-once accepted bid, a conserving settlement
+(`AffineEq(PAID + REFUNDED == BUDGET)`, with the universal no-mint `AffineLe`),
+and a one-way `POSTED → BID → SETTLED` lifecycle (`StrictMonotonic`) — so an
+over-budget bid, a value-conjuring settle, and a double-settle are all executor
+refusals on the verified commit path (`tests/deos_seam.rs`, `tests/factory_birth.rs`).
+
+`gallery` is the commit-reveal curation shape (the sealed-auction pattern applied
+to art): a factory-born gallery cell whose `WriteOnce` submission board freezes a
+sealed piece the instant it is committed (swapping a committed submission is an
+executor refusal — the anti-tamper tooth, lifted from an in-process membership
+check onto the ledger), and whose `Monotonic`/`StrictMonotonic` PHASE lifecycle
+makes `SUBMISSION → REVEAL → CURATED` one-way. It reconciles against
+sealed-auction by sharing the same commit-reveal core (an in-process
+`Submission`/`Gallery` machine witnessing the seal binding + phase gate) while
+standing alone as a distinct surface: it features a piece for *display/curation*
+rather than awarding a slot through verified settlement.
 
 ### Anti-drift: generated JS constants
 

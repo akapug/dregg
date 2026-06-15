@@ -1,0 +1,46 @@
+[package]
+name = "starbridge-gallery"
+version = "0.1.0"
+edition = "2024"
+description = "Starbridge content/art gallery — sealed (commit-reveal) submissions curated for display. Artists COMMIT a sealed (hashed) submission during a SUBMISSION phase, the curator CLOSES submissions, artists REVEAL their pieces, and the curator CURATES (picks the featured piece). The commit phase is ON-LEDGER: a gallery is a factory-born sovereign cell whose installed CellProgram IS the curation policy — each submission slot is WriteOnce (a sealed submission is FROZEN the instant committed, so it cannot be swapped after the call closes; the anti-tamper tooth, an EXECUTOR REFUSAL) and the PHASE is anti-rollback (Monotonic floor + StrictMonotonic advance on close_submissions/curate). One verified cell program, enforced by the real executor every turn."
+
+# The art gallery with a sealed-submission curation lifecycle. It folds onto the
+# sealed-auction commit-reveal + verified-settlement pattern: a gallery is a
+# factory-born sovereign cell whose installed CellProgram IS the policy, re-checked
+# by the verified executor on EVERY touching turn:
+#
+#   - the COMMIT BOARD (anti-tamper): each submission slot is `WriteOnce` — a sealed
+#     submission is FROZEN the instant it is committed, so a piece cannot be swapped
+#     out from under the curator after the open call closes (the headline tooth, an
+#     EXECUTOR REFUSAL, not an in-process membership check).
+#   - the PHASE lifecycle (anti-rollback): `Monotonic(PHASE)` floor on every method +
+#     `StrictMonotonic(PHASE)` advance on the phase-advancing methods, so the call
+#     SUBMISSION -> REVEAL -> CURATED only advances, never rewinds, never re-fires.
+#   - the RESULT registers: `CURATOR` (bound at seed), `FEATURED` / `FEATURED_HASH`
+#     (written at curate) are `WriteOnce` — the curation result freezes once announced.
+#
+# Composes dregg primitives only (FactoryDescriptor + Effect::SetField +
+# Effect::EmitEvent + StateConstraint slot caveats) — no domain-specific gallery
+# Effect, no Authorization::Unchecked, no placeholder signatures. Routes through the
+# REAL verified executor via EmbeddedExecutor / submit_action.
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-types = { path = "../../types" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The on-ledger floor (factory_birth.rs) and the deos re-expression tests
+# (reexpress_deos_app.rs / deos_seam.rs) mount the composed `DeosApp`'s axum
+# surface (per-viewer projection, /surface.js, /manifest) and fire gated
+# affordances through the embedded executor.
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+
+[lints]
+workspace = true
