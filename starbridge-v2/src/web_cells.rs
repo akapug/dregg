@@ -150,6 +150,79 @@ pub struct Transclusion {
     pub source_finalized: bool,
 }
 
+/// **Semi-reinteractive transclusion = powerbox × transclusion.**
+///
+/// A plain [`Transclusion`] is **read-only**: it is the verified cross-cell finalized
+/// READ (the bytes the source committed, with provenance), and that read is *free* —
+/// no authority over the source is conferred by quoting it (the membrane non-amp:
+/// `TranscludedField::project_for` hands a viewer at most their own held authority).
+/// A quote is a read, never a key.
+///
+/// **Semi-reinteractive** lifts exactly one rung higher, and ONLY through the
+/// powerbox: if the user designates it, the transclusion carries an **attenuated
+/// AFFORDANCE capability** — the host document can FIRE one of the source's
+/// affordances (attenuated to what the user conferred), not merely read it. The read
+/// stays the free verified observation; the *interact* is a powerbox-mediated
+/// attenuated grant (a real [`crate::powerbox::Powerbox::grant`] turn that mints a
+/// cap reaching the source into the host's c-list). So:
+///
+/// - a plain transclusion → read-only (no affordance fires);
+/// - a powerbox-upgraded transclusion → fires EXACTLY the granted (attenuated)
+///   affordance and **no more** (an affordance needing wider authority than the user
+///   conferred is still refused, by the same real `is_attenuation` the affordance
+///   surface gates on).
+///
+/// This is the powerbox's whole guarantee applied to a quote: the host never sees the
+/// source's namespace, gets precisely the one designated, attenuated affordance, and
+/// the grant is a real verified turn. It reinvents nothing — it composes the proven
+/// [`TranscludedField`] read with the proven powerbox grant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SemiReinteractiveTransclusion {
+    /// The underlying read-only transclusion (the verified finalized READ). Always
+    /// present — the read is free and unconditional.
+    pub read: Transclusion,
+    /// Whether the powerbox has UPGRADED this quote to interactive. `false` = a plain
+    /// read-only transclusion (the default); `true` = the user designated it and the
+    /// host now holds an attenuated affordance cap reaching the source.
+    pub interactive: bool,
+    /// IF upgraded: the single affordance name the host may now fire on the source
+    /// (the one the user designated). `None` for a read-only transclusion.
+    pub granted_affordance: Option<String>,
+    /// IF upgraded: the attenuated authority the powerbox conferred over the source —
+    /// the ceiling the granted affordance fires at. The host can fire affordances
+    /// whose `required ⊆ conferred`, and NO wider ones (the same real `is_attenuation`
+    /// gate). `None` for a read-only transclusion.
+    pub conferred_rights: Option<AuthRequired>,
+}
+
+impl SemiReinteractiveTransclusion {
+    /// A plain, **read-only** transclusion — the verified finalized read, no interact.
+    /// This is what a transclusion is by default: a quote you can check, not act on.
+    pub fn read_only(read: Transclusion) -> Self {
+        SemiReinteractiveTransclusion {
+            read,
+            interactive: false,
+            granted_affordance: None,
+            conferred_rights: None,
+        }
+    }
+
+    /// Is this quote read-only (no powerbox upgrade)? Then no affordance may fire.
+    pub fn is_read_only(&self) -> bool {
+        !self.interactive
+    }
+
+    /// A one-line readout of the read-vs-interact state (for the panel + tests).
+    pub fn affordance_note(&self) -> String {
+        match (&self.granted_affordance, &self.conferred_rights) {
+            (Some(name), Some(rights)) => format!(
+                "INTERACTIVE (powerbox-upgraded): may fire `{name}` on the source, attenuated to {rights:?} — and no wider affordance"
+            ),
+            _ => "READ-ONLY: the verified quote is free; firing an affordance on the source needs a powerbox grant".to_string(),
+        }
+    }
+}
+
 /// THE WEB-OF-CELLS BROWSER MODEL — the whole `dregg://` docuverse as the cockpit
 /// browses it, built fresh from the live [`World`]. The numbers + addresses +
 /// attestations it shows are the running image's actual cells.
@@ -353,6 +426,90 @@ impl WebCellsBrowser {
             effect: intent.effect,
         };
         Ok(cockpit_intent.fire_through_world(world))
+    }
+
+    // ── SEMI-REINTERACTIVE TRANSCLUSION (powerbox × transclusion) ──────────────
+
+    /// **Upgrade a read-only transclusion to interactive — through the POWERBOX.**
+    ///
+    /// The read ([`Transclusion`]) is already the free verified observation. This lifts
+    /// it one rung: it runs a REAL [`crate::powerbox::Powerbox::grant`] so the granting
+    /// `principal` (the cockpit user) confers an ATTENUATED cap reaching the
+    /// transclusion's SOURCE into its HOST document's c-list. The host can then fire one
+    /// of the source's affordances, attenuated to `confer_rights` — but ONLY if the user
+    /// actually holds authority over the source (`mint_needs_held_factory`) and
+    /// `confer_rights ⊆` the user's held authority (`gen_conferral_is_attenuation`),
+    /// both enforced by the real powerbox + executor.
+    ///
+    /// Returns the upgraded [`SemiReinteractiveTransclusion`] (with the conferred rights
+    /// + the affordance the host may now fire) on a real grant, or the read-only quote
+    /// UNCHANGED plus the denial reason if the powerbox refused (no authority conferred —
+    /// the read is still free, the interact is simply not unlocked).
+    pub fn upgrade_transclusion_via_powerbox(
+        world: &mut World,
+        read: Transclusion,
+        principal: CellId,
+        affordance_name: &str,
+        confer_rights: AuthRequired,
+    ) -> Result<SemiReinteractiveTransclusion, (SemiReinteractiveTransclusion, String)> {
+        // The interact is a powerbox-mediated grant: confer an attenuated cap reaching
+        // the SOURCE into the HOST document. The powerbox enforces held-authority +
+        // non-amplification; the executor is the backstop. A denial leaves the read
+        // free and the quote read-only.
+        let outcome = crate::powerbox::Powerbox::grant(
+            world,
+            principal,
+            read.host,   // the host document is the grantee (it gains the affordance cap)
+            read.source, // reaching the transcluded source cell
+            confer_rights.clone(),
+        );
+        match outcome {
+            crate::powerbox::PowerboxOutcome::Granted { conferred, .. } => {
+                Ok(SemiReinteractiveTransclusion {
+                    read,
+                    interactive: true,
+                    granted_affordance: Some(affordance_name.to_string()),
+                    conferred_rights: Some(conferred.conferred_rights),
+                })
+            }
+            crate::powerbox::PowerboxOutcome::Denied { reason } => {
+                Err((SemiReinteractiveTransclusion::read_only(read), reason))
+            }
+        }
+    }
+
+    /// **Fire an affordance on the transcluded SOURCE — only what the powerbox granted.**
+    ///
+    /// On a READ-ONLY transclusion this is refused immediately (a quote is a read, not a
+    /// key): no powerbox grant, no interact. On an INTERACTIVE (powerbox-upgraded)
+    /// transclusion, the host fires the source's affordance at the CONFERRED attenuation
+    /// — so an affordance whose `required ⊆ conferred` fires (through the real embedded
+    /// executor, a verified turn), and a WIDER affordance is refused IN-BAND by the same
+    /// real `is_attenuation` the affordance surface gates on (the anti-ghost tooth). The
+    /// host can fire exactly the granted affordance and no more.
+    pub fn fire_transcluded_affordance(
+        world: &mut World,
+        upgraded: &SemiReinteractiveTransclusion,
+        affordance_name: &str,
+    ) -> Result<FireOutcome, String> {
+        let Some(conferred) = upgraded.conferred_rights.clone() else {
+            return Err(
+                "READ-ONLY transclusion: a quote is a read, not a key — firing an affordance on \
+                 the source needs a powerbox grant first (no authority was conferred)"
+                    .to_string(),
+            );
+        };
+        // The host now fires the SOURCE's affordance surface, but holding ONLY the
+        // conferred (attenuated) authority — so the real is_attenuation gate admits
+        // exactly the affordances `required ⊆ conferred`, and refuses anything wider.
+        // The host (the upgraded read's host) is the actor; the source is the surface.
+        Self::fire_affordance(
+            world,
+            upgraded.read.source,
+            upgraded.read.host,
+            conferred,
+            affordance_name,
+        )
     }
 
     /// The SERVO layer note — stated in the model so it is VISIBLE in the panel,
@@ -769,5 +926,154 @@ mod tests {
         assert!(blob.contains("rehydration:"), "names the rehydration liveness-type");
         // It names the servo NEXT layer honestly (integrated vs named-next).
         assert!(blob.contains("servo"), "names the servo next layer");
+    }
+
+    // ── SEMI-REINTERACTIVE TRANSCLUSION (powerbox × transclusion) tests ────────
+
+    use crate::world::{make_open_cell, World};
+
+    /// A world for the semi-reinteractive flow: a HOST document, a SOURCE cell (whose
+    /// affordance surface is the canonical {view@Signature, comment/edit@Either,
+    /// admin@None}), and a granting PRINCIPAL that holds `Signature` authority over the
+    /// source (so it can confer at most a Signature-tier affordance — a real attenuation
+    /// ceiling). A read-only [`Transclusion`] of source-by-host is returned too.
+    /// Returns `(world, principal, transclusion)`.
+    fn semi_reinteractive_world() -> (World, CellId, Transclusion) {
+        let mut w = World::new();
+        let host = w.genesis_cell(0x40, 0); // the document doing the including
+        let source = w.genesis_cell(0x50, 0); // the cell whose field is transcluded
+
+        // The granting principal holds a real (Signature-tier) cap reaching the source —
+        // it legitimately holds source authority, so the powerbox can confer it.
+        let mut principal_cell = make_open_cell(0x5A, 0);
+        principal_cell
+            .capabilities
+            .grant(source, AuthRequired::Signature)
+            .expect("fresh c-list slot for the source cap");
+        let principal = w.genesis_install(principal_cell);
+
+        // A read-only transclusion: host includes source's finalized field. (The fields
+        // are display strings; the host/source ids are what the interact path acts on.)
+        let read = Transclusion {
+            host,
+            source,
+            transcluded_field: "abcd".to_string(),
+            provenance_receipt: "ef01".to_string(),
+            source_finalized: true,
+        };
+        (w, principal, read)
+    }
+
+    #[test]
+    fn a_plain_transclusion_is_read_only_no_affordance_fires() {
+        // THE READ-VS-ACT DISTINCTION (read-only half): a plain transclusion is the
+        // free verified READ — a quote is a read, not a key. Firing an affordance on the
+        // source is refused: no powerbox grant, no interact.
+        let (mut world, _principal, read) = semi_reinteractive_world();
+        let plain = SemiReinteractiveTransclusion::read_only(read);
+        assert!(plain.is_read_only(), "a plain transclusion is read-only");
+        assert!(plain.granted_affordance.is_none(), "no affordance is granted on a plain quote");
+
+        let err = WebCellsBrowser::fire_transcluded_affordance(&mut world, &plain, "view")
+            .expect_err("a read-only transclusion refuses to fire");
+        assert!(
+            err.contains("READ-ONLY") && err.contains("powerbox grant"),
+            "the refusal names the read-only/powerbox-grant boundary, got: {err}"
+        );
+        assert!(plain.affordance_note().starts_with("READ-ONLY"));
+    }
+
+    #[test]
+    fn a_powerbox_upgraded_transclusion_fires_exactly_the_granted_affordance_and_no_more() {
+        // THE READ-VS-ACT DISTINCTION (interact half): the user designates the quote
+        // through the powerbox, conferring a Signature-tier affordance reaching the
+        // source. The host can now fire `view` (Signature ⊆ Signature) as a REAL
+        // verified turn — but NOT `admin` (which needs the wider root tier): exactly the
+        // granted affordance and no more, by the same real is_attenuation gate.
+        let (mut world, principal, read) = semi_reinteractive_world();
+        let receipts_before = world.receipts().len();
+
+        // Upgrade via the powerbox: confer Signature (= the user's held ceiling). The
+        // host gains an attenuated affordance cap reaching the source — a real grant turn.
+        let upgraded = WebCellsBrowser::upgrade_transclusion_via_powerbox(
+            &mut world,
+            read,
+            principal,
+            "view",
+            AuthRequired::Signature,
+        )
+        .expect("the user holds Signature over the source → the powerbox grants");
+        assert!(upgraded.interactive, "the quote is now interactive");
+        assert_eq!(upgraded.granted_affordance.as_deref(), Some("view"));
+        assert_eq!(upgraded.conferred_rights, Some(AuthRequired::Signature));
+        assert!(upgraded.affordance_note().starts_with("INTERACTIVE"));
+
+        // The powerbox upgrade itself was a REAL grant turn (a receipt landed).
+        assert!(
+            world.receipts().len() > receipts_before,
+            "the powerbox upgrade is a real verified grant turn"
+        );
+
+        // FIRE the granted affordance: `view` requires Signature, conferred is Signature
+        // → it fires through the real embedded executor (a verified turn, not a model).
+        let fired = WebCellsBrowser::fire_transcluded_affordance(&mut world, &upgraded, "view")
+            .expect("`view` (Signature) ⊆ the conferred Signature → it fires");
+        assert!(
+            fired.is_committed(),
+            "the granted affordance fired a real verified turn on the source: {fired:?}"
+        );
+
+        // NO MORE: `admin` requires the root (None) tier — WIDER than the conferred
+        // Signature — so it is REFUSED IN-BAND by the real is_attenuation (the host holds
+        // only the attenuated affordance, never the source's full authority).
+        let refused = WebCellsBrowser::fire_transcluded_affordance(&mut world, &upgraded, "admin")
+            .expect_err("`admin` needs wider authority than was conferred → refused");
+        assert!(
+            refused.contains("Unauthorized"),
+            "firing a wider affordance than granted is refused in-band (anti-ghost), got: {refused}"
+        );
+    }
+
+    #[test]
+    fn the_powerbox_refuses_to_upgrade_a_quote_the_user_lacks_authority_over() {
+        // The upgrade is powerbox-mediated: if the user does NOT hold authority over the
+        // source, the powerbox refuses (mint_needs_held_factory) — the read stays free,
+        // the quote stays read-only, no affordance cap is conferred.
+        let mut world = World::new();
+        let host = world.genesis_cell(0x60, 0);
+        let source = world.genesis_cell(0x70, 0);
+        // A principal that holds NOTHING reaching the source.
+        let empty_principal = world.genesis_cell(0x6A, 0);
+        let read = Transclusion {
+            host,
+            source,
+            transcluded_field: "1234".to_string(),
+            provenance_receipt: "5678".to_string(),
+            source_finalized: true,
+        };
+        let receipts_before = world.receipts().len();
+
+        let (still_read_only, reason) = WebCellsBrowser::upgrade_transclusion_via_powerbox(
+            &mut world,
+            read,
+            empty_principal,
+            "view",
+            AuthRequired::Signature,
+        )
+        .expect_err("the user holds no source authority → the powerbox refuses the upgrade");
+        assert!(still_read_only.is_read_only(), "the quote stays read-only after a refused upgrade");
+        assert!(still_read_only.conferred_rights.is_none(), "no affordance cap was conferred");
+        assert!(
+            reason.contains("mint_needs_held_factory") || reason.contains("does not hold"),
+            "the refusal cites the held-authority requirement, got: {reason}"
+        );
+        // No grant turn ran (a refused upgrade confers nothing).
+        assert_eq!(world.receipts().len(), receipts_before, "a refused upgrade runs no grant turn");
+
+        // And firing on the still-read-only quote is refused (no interact unlocked).
+        assert!(
+            WebCellsBrowser::fire_transcluded_affordance(&mut world, &still_read_only, "view").is_err(),
+            "a read-only quote (refused upgrade) fires nothing"
+        );
     }
 }

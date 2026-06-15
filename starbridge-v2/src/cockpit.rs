@@ -105,10 +105,18 @@ pub enum Tab {
     /// rehydration liveness-type, firing through the embedded executor. See
     /// [`starbridge_v2::web_cells`].
     WebOfCells,
+    /// The POWERBOX tab (CapDesk) — the trusted designation flow: a confined
+    /// app-cell requests a capability it lacks; the TRUSTED powerbox (the cockpit
+    /// principal, NOT the app) presents a picker filtered to what the USER actually
+    /// holds (`mint_needs_held_factory` made visible — you can't grant what you
+    /// don't hold); the user designates a target + the rights to confer; the
+    /// powerbox MINTS a fresh ATTENUATED capability into the app's c-list via a REAL
+    /// grant turn through the embedded executor. See [`starbridge_v2::powerbox`].
+    Powerbox,
 }
 
 impl Tab {
-    const ALL: [Tab; 16] = [
+    const ALL: [Tab; 17] = [
         Tab::Home,
         Tab::Shell,
         Tab::Agent,
@@ -117,6 +125,7 @@ impl Tab {
         Tab::Organs,
         Tab::Proofs,
         Tab::WebOfCells,
+        Tab::Powerbox,
         Tab::Buffer,
         Tab::Terminal,
         Tab::Composer,
@@ -136,6 +145,7 @@ impl Tab {
             Tab::Organs => "ORGANS",
             Tab::Proofs => "PROOFS",
             Tab::WebOfCells => "WEB-OF-CELLS",
+            Tab::Powerbox => "POWERBOX",
             Tab::Buffer => "BUFFER",
             Tab::Terminal => "TERMINAL",
             Tab::Composer => "COMPOSER",
@@ -290,6 +300,25 @@ pub struct Cockpit {
     /// verdict — committed receipt / refused-with-reason, or the in-band
     /// anti-ghost refusal).
     web_cells_outcome: Option<String>,
+
+    // --- the POWERBOX (CapDesk) panel state --------------------------------
+    /// The confined APP-cell whose capability request the powerbox is mediating —
+    /// a real cell in the live ledger holding NO ambient authority (a freshly
+    /// "launched" app-as-cell). The powerbox grants designated, attenuated caps
+    /// INTO this cell's c-list. Set once at boot (a demo app); a real launcher
+    /// would set it per app.
+    powerbox_app: Option<CellId>,
+    /// The rights tier the powerbox would CONFER on the next designation — the
+    /// attenuation the user picks (the granted cap is `≤` the user's held
+    /// authority; the powerbox refuses to amplify past the held ceiling). Defaults
+    /// to the narrow `Signature` so a click demonstrates real attenuation away from
+    /// a wider held right; toggleable to the wider tiers (still gated by the held
+    /// ceiling + the executor's no-amplification rule).
+    powerbox_confer_rights: dregg_cell::AuthRequired,
+    /// The last powerbox designation outcome banner (a REAL grant-turn verdict —
+    /// the executor's own receipt on a mint, or the in-band amplification/
+    /// no-such-target refusal).
+    powerbox_outcome: Option<String>,
 }
 
 impl Cockpit {
@@ -372,6 +401,18 @@ impl Cockpit {
              // editing is free; COMMIT is a cap-gated verified turn.\n",
         );
 
+        // The POWERBOX (CapDesk) demo: birth a fresh CONFINED app-cell that holds
+        // NO ambient authority (a freshly-launched app-as-cell), and seed the user
+        // principal (the cockpit's own identity, `user`) with a held cap reaching
+        // the `service` cell — so the powerbox picker is non-empty (the user has
+        // SOMETHING to designate) and a grant demonstrates real attenuation away
+        // from the held authority. The user genuinely holds this cap; the powerbox
+        // can only ever offer the user's own authority (`mint_needs_held_factory`).
+        let powerbox_app = world.borrow_mut().genesis_cell(0xA9, 0);
+        // The user holds full (None) authority reaching `service` — the powerbox can
+        // confer this or any narrower right, never wider.
+        let _ = world.borrow_mut().genesis_grant_cap(&user, service);
+
         // The A1 TERMINAL surface: the SERVICE cell backs it — it holds a REAL
         // cap reaching the user cell (a genuine mandate), so a command targeting
         // the user is in-mandate (commits) and one targeting an out-of-reach cell
@@ -453,6 +494,11 @@ impl Cockpit {
             web_cells_opened: None,
             web_cells_viewer_rights: dregg_cell::AuthRequired::Either,
             web_cells_outcome: None,
+            powerbox_app: Some(powerbox_app),
+            // Default to the narrow Signature tier so a click demonstrates real
+            // attenuation away from the user's wider (None) held authority.
+            powerbox_confer_rights: dregg_cell::AuthRequired::Signature,
+            powerbox_outcome: None,
         }
     }
 
@@ -1327,6 +1373,7 @@ impl Cockpit {
             CommandId::GoGraph => self.set_tab(Tab::Graph, cx),
             CommandId::GoOrgans => self.set_tab(Tab::Organs, cx),
             CommandId::GoProofs => self.set_tab(Tab::Proofs, cx),
+            CommandId::GoPowerbox => self.set_tab(Tab::Powerbox, cx),
 
             CommandId::BufferType => self.buffer_type_demo(cx),
             CommandId::BufferCommit => self.buffer_commit(cx),
@@ -1819,6 +1866,7 @@ impl Cockpit {
             Tab::Organs => self.organs_panel().into_any_element(),
             Tab::Proofs => self.proofs_panel().into_any_element(),
             Tab::WebOfCells => self.web_of_cells_panel(cx).into_any_element(),
+            Tab::Powerbox => self.powerbox_panel(cx).into_any_element(),
             Tab::Buffer => self.buffer_panel(cx).into_any_element(),
             Tab::Terminal => self.terminal_panel(cx).into_any_element(),
             Tab::Composer => self.composer(cx).into_any_element(),
@@ -3220,6 +3268,209 @@ impl Cockpit {
                         .child(browser.servo_layer_note()),
                 ),
         );
+        col
+    }
+
+    /// THE POWERBOX panel (CapDesk) — the trusted designation flow, rendered.
+    ///
+    /// The cockpit `user` principal is the GRANTING identity; a confined demo
+    /// app-cell (`powerbox_app`) is the requester. The panel presents the powerbox
+    /// over the live world: the app's request, then the picker of GRANTABLE targets
+    /// (every cell the USER actually holds a cap reaching — `mint_needs_held_factory`
+    /// made visible). Designating a target MINTS a fresh attenuated cap into the
+    /// app's c-list via a REAL [`Powerbox::grant`] turn through the embedded executor
+    /// — the conferral is `≤` the user's held authority (the powerbox refuses to
+    /// amplify; the executor is the backstop). The panel content is exactly the
+    /// powerbox model's [`Powerbox::all_text`], so the gpui-free `cargo test` proves
+    /// the rendered tree without a GPU.
+    fn powerbox_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use starbridge_v2::powerbox::{CapabilityRequest, Powerbox};
+
+        let principal = self.anchors[2]; // the cockpit's own `user` identity — the granter
+        let app = self
+            .powerbox_app
+            .unwrap_or(principal); // the confined requester (a demo app-as-cell)
+        let confer = self.powerbox_confer_rights.clone();
+
+        // The app's standing request (it holds no authority; it can only ask). A real
+        // launcher would carry the app's own reason; the demo app asks to message a peer.
+        let request = CapabilityRequest::new(
+            app,
+            "this app needs to reach one peer/resource — designate exactly one",
+            dregg_cell::AuthRequired::None,
+        );
+        let pb = {
+            let w = self.world.borrow();
+            Powerbox::present(&w, principal, &request)
+        };
+
+        let mut col = div().flex().flex_col().gap_1().p_3().size_full().overflow_hidden();
+        col = col.child(
+            section_title("POWERBOX · CapDesk — designate a held cap into a confined app").mb_1(),
+        );
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .child(pill(
+                    format!("you (granter) {}", reflect::short_hex(&principal.0)),
+                    theme::accent(),
+                ))
+                .child(pill(
+                    format!("app (requester) {}", reflect::short_hex(&app.0)),
+                    theme::good(),
+                ))
+                // The confer-tier toggle: the rights the next designation confers. The
+                // grant is ≤ the user's held authority; the powerbox refuses to amplify
+                // past the held ceiling, so a wider tier than the user holds is refused.
+                .child(
+                    div()
+                        .id("powerbox-tier-toggle")
+                        .px_2()
+                        .py_0p5()
+                        .rounded_md()
+                        .bg(theme::panel_hi())
+                        .border_1()
+                        .border_color(theme::border())
+                        .text_xs()
+                        .text_color(theme::accent())
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::border()))
+                        .child(format!("confer: {confer:?} (cycle)"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _ev, _w, cx| {
+                                // Cycle Signature → Either → None → Signature: from the
+                                // narrowest (a strong attenuation) up through the wider
+                                // tiers (still gated by the held ceiling + the executor).
+                                this.powerbox_confer_rights = match this.powerbox_confer_rights {
+                                    dregg_cell::AuthRequired::Signature => {
+                                        dregg_cell::AuthRequired::Either
+                                    }
+                                    dregg_cell::AuthRequired::Either => {
+                                        dregg_cell::AuthRequired::None
+                                    }
+                                    _ => dregg_cell::AuthRequired::Signature,
+                                };
+                                cx.notify();
+                            }),
+                        ),
+                ),
+        );
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "The app holds NO ambient authority — it can only ASK. The powerbox (this \
+             trusted UI, NOT the app) can grant ONLY from YOUR own held caps: you can't \
+             grant what you don't hold (mint_needs_held_factory). Designating a target \
+             MINTS a fresh ATTENUATED cap into the app via a real verified grant turn.",
+        ));
+        col = col.child(div().text_xs().text_color(theme::muted()).italic().child(format!(
+            "reason: {}",
+            pb.reason
+        )));
+
+        // The last designation outcome banner (a REAL grant-turn verdict).
+        if let Some(banner) = &self.powerbox_outcome {
+            let good = banner.starts_with("granted");
+            col = col.child(
+                div()
+                    .mt_1()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(theme::panel_hi())
+                    .text_xs()
+                    .text_color(if good { theme::good() } else { theme::warn() })
+                    .child(banner.clone()),
+            );
+        }
+
+        // ── THE PICKER: every target the USER holds (the only things designable) ──
+        col = col.child(
+            section_title(format!(
+                "designate a target you hold · {} grantable (you can't grant what you don't hold)",
+                pb.grantable.len()
+            ))
+            .mt_2()
+            .mb_1(),
+        );
+        if pb.grantable.is_empty() {
+            col = col.child(div().text_xs().text_color(theme::warn()).child(
+                "(you hold no grantable targets — the powerbox can confer nothing, by construction)",
+            ));
+        }
+        for g in &pb.grantable {
+            let target = g.target;
+            let held = g.held_rights.clone();
+            let confer_now = confer.clone();
+            col = col.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "powerbox-target-{}",
+                        reflect::short_hex(&target.0)
+                    )))
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::border())
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::panel_hi()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev, _w, cx| {
+                            // THE DESIGNATION: mint a fresh attenuated cap into the app
+                            // via a REAL grant turn through the embedded executor.
+                            let outcome = {
+                                let mut w = this.world.borrow_mut();
+                                Powerbox::grant(
+                                    &mut w,
+                                    this.anchors[2],
+                                    this.powerbox_app.unwrap_or(this.anchors[2]),
+                                    target,
+                                    this.powerbox_confer_rights.clone(),
+                                )
+                            };
+                            this.powerbox_outcome = Some(match outcome {
+                                starbridge_v2::powerbox::PowerboxOutcome::Granted {
+                                    conferred,
+                                    receipt,
+                                } => format!(
+                                    "granted: app {} now holds {:?} reaching {} (slot {}) — receipt {}",
+                                    reflect::short_hex(&conferred.app_cell.0),
+                                    conferred.conferred_rights,
+                                    reflect::short_hex(&conferred.target.0),
+                                    conferred.slot,
+                                    reflect::short_hex(&receipt.receipt_hash())
+                                ),
+                                starbridge_v2::powerbox::PowerboxOutcome::Denied { reason } => {
+                                    format!("denied: {reason}")
+                                }
+                            });
+                            this.refresh_cells();
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text())
+                            .child(format!("{}  (you hold {:?})", g.label, held)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::accent())
+                            .child(format!("→ grant {confer_now:?}")),
+                    ),
+            );
+        }
+
         col
     }
 

@@ -60,6 +60,15 @@ pub mod affordance;
 #[cfg(feature = "embedded-executor")]
 pub mod web_cells;
 
+// The interactive POWERBOX (CapDesk) — the trusted designation flow: an app-cell
+// requests a capability it lacks; the trusted UI (the cockpit principal, NOT the app)
+// presents a picker filtered to what the USER actually holds (mint_needs_held_factory
+// made visible); the user designates a target + attenuated rights; the powerbox mints
+// a fresh attenuated cap into the app's c-list via a REAL grant turn through the
+// embedded executor. gpui-free, `cargo test`-able (pure flow model, like `web_cells`).
+#[cfg(feature = "embedded-executor")]
+pub mod powerbox;
+
 #[cfg(feature = "embedded-executor")]
 pub mod agent;
 #[cfg(feature = "embedded-executor")]
@@ -117,7 +126,13 @@ pub use affordance::{
     FireError, FireOutcome, Rehydration,
 };
 #[cfg(feature = "embedded-executor")]
-pub use web_cells::{AffordanceRow, CellRow, Transclusion, WebCellsBrowser};
+pub use web_cells::{
+    AffordanceRow, CellRow, SemiReinteractiveTransclusion, Transclusion, WebCellsBrowser,
+};
+#[cfg(feature = "embedded-executor")]
+pub use powerbox::{
+    CapabilityRequest, GrantableTarget, GrantedCap, Powerbox, PowerboxOutcome,
+};
 #[cfg(feature = "embedded-executor")]
 pub use agent::{AgentActivity, AgentSurface};
 #[cfg(feature = "embedded-executor")]
