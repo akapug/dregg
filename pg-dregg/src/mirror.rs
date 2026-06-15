@@ -903,6 +903,30 @@ pub mod ddl {
         s
     }
 
+    /// The Tier-C PROOF store (`docs/PG-DREGG.md` §10.2) — the `dregg.turn_proofs`
+    /// table the node-side whole-chain PROOF producer
+    /// ([`crate::turn_proofs::TurnProofProducer`], S2) writes and the range-attest
+    /// SRF (`dregg_attest_range`) reads. ONE row per folded finalized WINDOW: a
+    /// recursive proof (`proof bytea`) attesting that all turns in `[lo, hi]`
+    /// executed correctly and the root chain advanced from `genesis_root` to
+    /// `final_root`, with the `vk` anchor the SRF verifies it against.
+    ///
+    /// This is the ORTHOGONAL soundness half the per-row chain tooth
+    /// (`dregg_verify_turn`) honestly does NOT do (§10.2): a `CommitRecord` carries
+    /// no per-turn STARK, so the proof gate is whole-chain (one proof per window),
+    /// not per-row. The table is the durable handoff from the producer to the SRF.
+    /// Builds on [`tier_b`] (the role model). Idempotent. (The producer is node-side
+    /// / a `tier-c` build; the table + its grants ship here so the SRF has somewhere
+    /// to read from regardless of which build wrote the rows.)
+    ///
+    /// Write-locked to the kernel (the producer runs as `dregg_kernel`); readable by
+    /// reader + kernel so the SRF can join it. A row is append-mostly (a producer
+    /// extends the proven prefix); the windows are dense + non-overlapping by the
+    /// producer's watermark discipline (`[lo,hi]` then `[hi+1,…]`).
+    pub fn turn_proofs() -> String {
+        TURN_PROOFS.to_string()
+    }
+
     /// The WRITE-path outbox (`docs/PG-DREGG.md` §11; the first-class
     /// bidirectional piece). A pg-user submits a SIGNED turn FROM postgres by
     /// enqueuing it here through `dregg.submit_turn`; the node tails the queue,
@@ -1592,6 +1616,39 @@ GRANT SELECT ON dregg.submit_queue_audit TO dregg_reader, dregg_kernel;
 "#;
 
     // ----------------------------------------------------------------------
+    // The Tier-C PROOF store (docs/PG-DREGG.md §10.2) — the dregg.turn_proofs
+    // table: ONE row per folded finalized WINDOW, written by the node-side
+    // whole-chain proof producer (crate::turn_proofs, S2) and read by the
+    // range-attest SRF (dregg_attest_range). The proof half the per-row chain
+    // tooth (dregg_verify_turn) does NOT do (a CommitRecord carries no per-turn
+    // STARK — §10.2); the proof is whole-chain (one per window), not per-row.
+    // ----------------------------------------------------------------------
+    const TURN_PROOFS: &str = r#"
+CREATE TABLE IF NOT EXISTS dregg.turn_proofs (
+    lo           bigint NOT NULL,             -- inclusive lower ordinal attested
+    hi           bigint NOT NULL,             -- inclusive upper ordinal attested
+    genesis_root bytea  NOT NULL,             -- pre-root of `lo`  (window start)
+    final_root   bytea  NOT NULL,             -- post-root of `hi` (window end)
+    proof        bytea  NOT NULL,             -- serialized whole-chain proof transport
+                                              -- (attest::SerializedWholeChainProof bytes)
+    vk           bytea  NOT NULL,             -- the 32-byte RecursionVk anchor the SRF
+                                              -- verifies `proof` against (trust root)
+    num_turns    bigint GENERATED ALWAYS AS (hi - lo + 1) STORED,  -- the window length
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (lo, hi),
+    CHECK (hi >= lo));                        -- a window is never inverted
+-- Resume the producer watermark from the max-hi row (the durable proof head); the
+-- SRF finds the proof covering an ordinal via the [lo, hi] range index.
+CREATE INDEX IF NOT EXISTS turn_proofs_hi ON dregg.turn_proofs (hi);
+-- Write-locked to the kernel (the producer runs as dregg_kernel); readable by
+-- reader + kernel so the SRF can join it against dregg.turns. Reads stay free SQL;
+-- the proof rows are produced by the node, never by an application.
+REVOKE ALL ON dregg.turn_proofs FROM PUBLIC;
+GRANT SELECT ON dregg.turn_proofs TO dregg_reader, dregg_kernel;
+GRANT INSERT, SELECT, UPDATE, DELETE ON dregg.turn_proofs TO dregg_kernel;
+"#;
+
+    // ----------------------------------------------------------------------
     // The pg17 LOGIN EVENT TRIGGER authz binding (docs/PG-DREGG-PG18.md §6) —
     // bind a connecting pg role to its dregg agent identity at connection time.
     // ----------------------------------------------------------------------
@@ -2239,6 +2296,26 @@ mod tests {
         // audits the verified-store door); PUBLIC gets nothing.
         assert!(sql.contains("GRANT INSERT, SELECT ON dregg.commit_log TO dregg_kernel"));
         assert!(sql.contains("REVOKE INSERT, UPDATE, DELETE ON dregg.commit_log FROM PUBLIC"));
+    }
+
+    #[test]
+    fn turn_proofs_ddl_is_emittable_and_kernel_write_locked() {
+        // The Tier-C PROOF store (§10.2): the dregg.turn_proofs table the S2 producer
+        // writes and the range-attest SRF reads — ONE row per folded finalized window.
+        let sql = ddl::turn_proofs();
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS dregg.turn_proofs"));
+        // The §10.2 columns: (lo, hi, genesis_root, final_root, proof bytea, vk).
+        for col in ["lo", "hi", "genesis_root", "final_root", "proof", "vk"] {
+            assert!(sql.contains(col), "turn_proofs is missing the `{col}` column");
+        }
+        // A window is keyed + never inverted; the producer extends a dense prefix.
+        assert!(sql.contains("PRIMARY KEY (lo, hi)"));
+        assert!(sql.contains("CHECK (hi >= lo)"));
+        // Write-locked to the kernel (the producer is node-side / dregg_kernel);
+        // PUBLIC gets nothing; reader + kernel may SELECT so the SRF can join it.
+        assert!(sql.contains("REVOKE ALL ON dregg.turn_proofs FROM PUBLIC"));
+        assert!(sql.contains("GRANT SELECT ON dregg.turn_proofs TO dregg_reader, dregg_kernel"));
+        assert!(sql.contains("GRANT INSERT, SELECT, UPDATE, DELETE ON dregg.turn_proofs TO dregg_kernel"));
     }
 
     #[test]

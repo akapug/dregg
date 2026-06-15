@@ -211,76 +211,236 @@ pub struct ProofPublics {
     pub num_turns: u64,
 }
 
+// ============================================================================
+// S1 — the SQL-crossable transport for a whole-chain proof.
+// ============================================================================
+//
+// docs/PG-DREGG.md §10.2 names S1 as "serialize WholeChainProof". The honest
+// shape of that, established by reading the circuit:
+//
+//   `circuit::ivc_turn_chain::WholeChainProof` is
+//       { root: RecursionOutput<SC>, binding_proof: RecursionCompatibleProof,
+//         genesis_root: BabyBear, final_root: BabyBear,
+//         chain_digest: BabyBear, num_turns: usize }
+//   where `RecursionOutput<SC>(pub BatchStarkProof<SC>, pub Rc<CircuitProverData<SC>>)`.
+//
+// `BatchStarkProof` (`root.0`) and `RecursionCompatibleProof` (= a uni-STARK
+// `Proof`, the `binding_proof`) BOTH derive `Serialize`/`Deserialize`
+// (`#[serde(bound = "")]`); the four publics are `BabyBear`/`usize`. The ONLY
+// non-serde field is `root.1` — `Rc<CircuitProverData>`, the PROVER-CHAINING
+// data. And the verifier never reads it: `verify_turn_chain_recursive` touches
+// only `root.0`, `binding_proof`, and the four publics (the three teeth —
+// `recursion_vk_fingerprint(&root.0)`, the binding-proof publics check, and
+// `verify_recursive_batch_proof_with_config(&root.0, …)`). So the
+// VERIFY-SUFFICIENT subset of a `WholeChainProof` is `{root.0, binding_proof,
+// 4 publics}` — and every member of that subset IS serde.
+//
+// Therefore the transport carries exactly that subset, with the two proof
+// components as opaque postcard blobs (so this crate's transport type needs NO
+// circuit types — the default build stays circuit-free), plus the publics in the
+// SQL-crossable byte form. The `tier-c` real leg decodes the two blobs into the
+// concrete circuit types and verifies from the PARTS.
+//
+// The one residual that is genuinely circuit-side (NOT reachable from
+// `pg-dregg/src/`, named precisely): a `WholeChainProof` VALUE cannot be
+// reconstructed from these bytes, because `root.1` (`Rc<CircuitProverData>`) is
+// not serde and is prover-only. So the circuit must expose a parts verifier —
+// `verify_turn_chain_recursive_from_parts(root_0: &BatchStarkProof, binding: &Proof,
+// genesis/final/digest: BabyBear, num_turns)` — a ~6-line split of the existing
+// `verify_turn_chain_recursive` body (which already only uses those parts). That
+// wrapper is the remaining S3 circuit-dep line; the producer/transport/decode are
+// done and `cargo test`-proven here.
+
+/// The on-the-wire version tag of [`SerializedWholeChainProof`]. Bumped if the
+/// transport layout changes, so a stale producer's bytes are refused (fail-closed)
+/// rather than misread.
+pub const WHOLE_CHAIN_PROOF_TRANSPORT_V1: u16 = 1;
+
+/// The versioned, `bytea`-crossable transport of a whole-chain IVC proof — the S1
+/// artifact (`docs/PG-DREGG.md` §10.2). It carries the VERIFY-SUFFICIENT subset of
+/// `circuit::ivc_turn_chain::WholeChainProof` (the prover-only `root.1`
+/// `Rc<CircuitProverData>` is omitted — the verifier never reads it), so the node
+/// (S2) ships a proof as `bytea` and the SRF (S3) decodes + verifies it from the
+/// parts.
+///
+/// The two proof components ride as opaque postcard blobs so THIS crate's transport
+/// type needs no circuit types (the default build stays circuit-free); the `tier-c`
+/// real leg postcard-decodes `root_proof` into a `BatchStarkProof<DreggRecursionConfig>`
+/// and `binding_proof` into a `Proof<DreggRecursionConfig>`. The four publics are the
+/// SQL-crossable hints the SRF/`dregg.turn_proofs` row index by; they are NOT trusted
+/// blindly — tooth 2 of the verifier re-checks them against the binding proof's
+/// Fiat–Shamir-bound publics, so a relabeled hint is refused at verify.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerializedWholeChainProof {
+    /// The transport version ([`WHOLE_CHAIN_PROOF_TRANSPORT_V1`]).
+    pub version: u16,
+    /// Postcard bytes of `WholeChainProof.root.0` — the root `BatchStarkProof`
+    /// (`#[serde(bound = "")]`, so it postcard-encodes). The verifier's tooth 1
+    /// (VK-fingerprint pin) and tooth 3 (root batch verify) both read exactly this.
+    pub root_proof: Vec<u8>,
+    /// Postcard bytes of `WholeChainProof.binding_proof` — the chain-binding
+    /// uni-STARK `Proof`. Tooth 2 verifies the carried publics AS its public inputs.
+    pub binding_proof: Vec<u8>,
+    /// The genesis root the chain starts from (the `BabyBear` packed little-endian
+    /// into 32 bytes — a `BabyBear` is one field element; the high bytes are zero).
+    pub genesis_root: [u8; 32],
+    /// The final root the chain reaches.
+    pub final_root: [u8; 32],
+    /// The running digest committing to the ordered (old_root, new_root) pairs.
+    pub chain_digest: [u8; 32],
+    /// The number of finalized turns folded.
+    pub num_turns: u64,
+}
+
+impl SerializedWholeChainProof {
+    /// Build a transport from already-serialized proof-component blobs + the publics.
+    /// The producer (S2) calls this with `postcard::to_allocvec(&whole.root.0)` and
+    /// `postcard::to_allocvec(&whole.binding_proof)` (done in the `tier-c` build,
+    /// where the circuit types are in scope) and the four publics mapped to bytes.
+    pub fn new(
+        root_proof: Vec<u8>,
+        binding_proof: Vec<u8>,
+        genesis_root: [u8; 32],
+        final_root: [u8; 32],
+        chain_digest: [u8; 32],
+        num_turns: u64,
+    ) -> Self {
+        SerializedWholeChainProof {
+            version: WHOLE_CHAIN_PROOF_TRANSPORT_V1,
+            root_proof,
+            binding_proof,
+            genesis_root,
+            final_root,
+            chain_digest,
+            num_turns,
+        }
+    }
+
+    /// Encode the transport to `bytea`-ready bytes (postcard). Infallible (the alloc
+    /// serializer never fails on a well-formed value).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("SerializedWholeChainProof postcard-encodes")
+    }
+
+    /// Decode a transport from `bytea` bytes. Fail-closed: malformed bytes, a wrong
+    /// version, or an empty proof component is an `Err` (never a silently-accepted
+    /// half-proof) — so the SRF/seam refuses rather than verifying garbage.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.is_empty() {
+            return Err("empty whole-chain proof transport".to_string());
+        }
+        let t: SerializedWholeChainProof = postcard::from_bytes(bytes)
+            .map_err(|e| format!("whole-chain proof transport does not decode: {e}"))?;
+        if t.version != WHOLE_CHAIN_PROOF_TRANSPORT_V1 {
+            return Err(format!(
+                "unsupported whole-chain proof transport version {} (this build reads v{})",
+                t.version, WHOLE_CHAIN_PROOF_TRANSPORT_V1
+            ));
+        }
+        if t.root_proof.is_empty() {
+            return Err("whole-chain proof transport carries an empty root proof".to_string());
+        }
+        if t.binding_proof.is_empty() {
+            return Err("whole-chain proof transport carries an empty binding proof".to_string());
+        }
+        Ok(t)
+    }
+}
+
 /// The ONE seam the circuit link plugs into. Verify a serialized whole-chain
 /// proof against the VK anchor and, on success, return the publics it bound.
 ///
-/// * **`tier-c` OFF (default, the stub):** returns `Err("…not yet wired…")` — the
-///   SAFE direction. The Tier-A/B/chain-gate build stays circuit-free, and the
-///   range-attest SRF honestly attests nothing (fail-closed). This is NOT the
-///   §10.3 forbidden failure mode: that is a stub returning *success* (attesting
-///   forged state); this stub returns *refusal* (attesting nothing).
+/// Both builds now DECODE the [`SerializedWholeChainProof`] transport (the S1
+/// artifact) first — a malformed / wrong-version / empty-component transport is
+/// refused identically in both, so the SRF never even reaches the circuit check on
+/// garbage. They differ only in whether the decoded parts are then verified:
 ///
-/// * **`tier-c` ON (the settle item S1–S3):** deserializes `proof_bytes` into a
-///   `circuit::ivc_turn_chain::WholeChainProof` (needs S1, the serialization),
-///   converts `vk_anchor` into `circuit::plonky3_recursion_impl::RecursionVk`,
-///   runs `circuit::ivc_turn_chain::verify_turn_chain_recursive(&proof, &vk)`,
-///   and on `Ok(())` returns the proof's `{genesis_root, final_root,
-///   chain_digest, num_turns}` (mapped from `BabyBear`/`usize` to the bytes form
-///   here). On any error returns `Err(reason)`.
+/// * **`tier-c` OFF (default):** after decode, returns `Err("…not yet wired…")` —
+///   the SAFE direction. The Tier-A/B/chain-gate build stays circuit-free, the
+///   range-attest SRF honestly attests nothing (fail-closed). This is NOT the §10.3
+///   forbidden failure mode: that is a stub returning *success* (attesting forged
+///   state); this returns *refusal* (attesting nothing) even on a well-formed
+///   transport.
 ///
-/// The signature is identical in both builds, so the SRF logic above is written
-/// ONCE against this seam and does not branch on the feature.
+/// * **`tier-c` ON (the settle item):** postcard-decodes the transport's
+///   `root_proof` into `BatchStarkProof<DreggRecursionConfig>` and `binding_proof`
+///   into `Proof<DreggRecursionConfig>`, maps `vk_anchor` to `RecursionVk`, and runs
+///   the circuit's PARTS verifier (`verify_turn_chain_recursive_from_parts` — the
+///   named ~6-line split of `verify_turn_chain_recursive`, which already uses only
+///   `root.0` + `binding_proof` + the publics, never the prover-only `root.1`). On
+///   `Ok(())` returns the transport's `{genesis_root, final_root, chain_digest,
+///   num_turns}`. On any error returns `Err(reason)`.
+///
+/// The signature is identical in both builds, so [`attest_range`] is written ONCE
+/// against this seam and does not branch on the feature.
 pub fn verify_serialized_proof(
     proof_bytes: &[u8],
     vk_anchor: &VkAnchor,
 ) -> Result<ProofPublics, String> {
-    // Fail-closed input hygiene shared by both builds: empty bytes never verify.
-    if proof_bytes.is_empty() {
-        return Err("empty proof bytes".to_string());
-    }
+    // S1: decode the transport (shared by both builds — fail-closed on malformed,
+    // wrong-version, or empty-component bytes). This is real in EVERY build, so the
+    // `bytea` → typed-parts boundary is exercised by plain `cargo test`.
+    let transport = SerializedWholeChainProof::from_bytes(proof_bytes)?;
     let _ = vk_anchor;
 
     #[cfg(not(feature = "tier-c"))]
     {
-        // THE STUB (safe direction). The circuit verifier is not linked in the
-        // default build; attest nothing. Wiring S1–S3 replaces this arm.
+        // SAFE DIRECTION. The circuit verifier is not linked in the default build;
+        // the transport decoded fine, but we attest NOTHING (refusal), never a false
+        // attest. Turning on `tier-c` + wiring the parts verifier replaces this arm.
+        let _ = &transport;
         Err(
-            "proof verification not yet wired (Tier-C circuit-link settle item \
-             S1–S3, docs/PG-DREGG.md §10.2): the whole-chain IVC verifier \
-             (circuit::ivc_turn_chain::verify_turn_chain_recursive) is not linked \
-             in this build — the range-attest SRF fails closed (attests nothing)"
+            "proof verification not yet wired (Tier-C circuit-link settle item, \
+             docs/PG-DREGG.md §10.2): the transport decoded, but the whole-chain IVC \
+             parts verifier (circuit::ivc_turn_chain::verify_turn_chain_recursive_from_parts) \
+             is not linked in this build — the range-attest SRF fails closed (attests nothing)"
                 .to_string(),
         )
     }
 
     #[cfg(feature = "tier-c")]
     {
-        // THE REAL LEG (settle item). When the `tier-c` feature is on, this arm
-        // links the Lean-FREE circuit verifier (§8.1) and runs the real check.
-        // The body is written against the named circuit API; it compiles once the
-        // `dregg-circuit` dep is wired into the `tier-c` feature (S3) AND
-        // `WholeChainProof` gains its serialization (S1). Until then the feature
-        // is declared-but-depless, so this arm is dead behind the cfg and the
-        // default (stub) build is what ships — the honest staged shape.
+        // THE REAL LEG. With `tier-c` on, this arm links the Lean-FREE circuit
+        // verifier (§8.1) and verifies the decoded PARTS. It compiles once the
+        // `dregg-circuit` dep is wired into the `tier-c` feature AND the circuit
+        // exposes `verify_turn_chain_recursive_from_parts` (the named split of the
+        // existing `verify_turn_chain_recursive`, which already uses only these
+        // parts). The flip is then mechanical — the transport decode above and the
+        // publics mapping below are already live + tested.
         //
         // ```ignore
-        // use dregg_circuit::ivc_turn_chain::{verify_turn_chain_recursive, WholeChainProof};
-        // use dregg_circuit::plonky3_recursion_impl::RecursionVk;
-        // let proof: WholeChainProof = WholeChainProof::from_bytes(proof_bytes)   // S1
-        //     .map_err(|e| format!("proof does not decode: {e}"))?;
+        // use dregg_circuit::ivc_turn_chain::verify_turn_chain_recursive_from_parts;
+        // use dregg_circuit::plonky3_recursion_impl::{RecursionVk, RecursionCompatibleProof};
+        // use dregg_circuit::p3_circuit_prover::BatchStarkProof;
+        // use dregg_circuit::plonky3_recursion_impl::DreggRecursionConfig;
+        // let root_proof: BatchStarkProof<DreggRecursionConfig> =
+        //     postcard::from_bytes(&transport.root_proof)
+        //         .map_err(|e| format!("root proof does not decode: {e}"))?;
+        // let binding_proof: RecursionCompatibleProof =
+        //     postcard::from_bytes(&transport.binding_proof)
+        //         .map_err(|e| format!("binding proof does not decode: {e}"))?;
         // let vk = RecursionVk(*vk_anchor);
-        // verify_turn_chain_recursive(&proof, &vk)
-        //     .map_err(|e| format!("proof did not verify against the anchor: {e:?}"))?;
+        // verify_turn_chain_recursive_from_parts(
+        //     &root_proof, &binding_proof,
+        //     bytes_to_babybear(&transport.genesis_root),
+        //     bytes_to_babybear(&transport.final_root),
+        //     bytes_to_babybear(&transport.chain_digest),
+        //     transport.num_turns as usize,
+        //     &vk,
+        // ).map_err(|e| format!("proof did not verify against the anchor: {e}"))?;
         // return Ok(ProofPublics {
-        //     genesis_root: babybear_to_bytes(proof.genesis_root),
-        //     final_root:   babybear_to_bytes(proof.final_root),
-        //     chain_digest: babybear_to_bytes(proof.chain_digest),
-        //     num_turns:    proof.num_turns as u64,
+        //     genesis_root: transport.genesis_root,
+        //     final_root:   transport.final_root,
+        //     chain_digest: transport.chain_digest,
+        //     num_turns:    transport.num_turns,
         // });
         // ```
+        let _ = &transport;
         Err(
             "tier-c feature is enabled but the circuit dep is not yet wired (settle \
-             item S3, docs/PG-DREGG.md §10.2) — fails closed"
+             item: add the dregg-circuit verifier/recursion dep + the circuit-side \
+             verify_turn_chain_recursive_from_parts split, docs/PG-DREGG.md §10.2) — \
+             fails closed"
                 .to_string(),
         )
     }
@@ -359,6 +519,24 @@ mod tests {
         }
     }
 
+    /// A WELL-FORMED transport carrying `num_turns` (non-empty placeholder proof
+    /// blobs — the transport hygiene only requires non-empty components; the actual
+    /// proof verify is the `tier-c` circuit's job, stubbed off here). Used to prove
+    /// that even a structurally-valid transport attests NOTHING under the default
+    /// (circuit-free) build — the real safe-direction property, not "garbage bytes
+    /// happen to be refused".
+    fn good_transport(num_turns: u64) -> Vec<u8> {
+        SerializedWholeChainProof::new(
+            vec![0xa1, 0xa2, 0xa3],           // non-empty root-proof blob (stub never decodes it)
+            vec![0xb1, 0xb2],                 // non-empty binding-proof blob
+            [1u8; 32],                        // genesis_root hint
+            [9u8; 32],                        // final_root hint
+            [5u8; 32],                        // chain_digest hint
+            num_turns,
+        )
+        .to_bytes()
+    }
+
     #[test]
     fn empty_window_is_refused() {
         let r = attest_range(&req(&[1, 2, 3], 5, 4));
@@ -375,17 +553,37 @@ mod tests {
     }
 
     #[test]
-    fn stub_attests_nothing_fail_closed() {
-        // THE LOAD-BEARING SAFETY PROPERTY: with the circuit link unwired (the
-        // default build), a well-formed-looking request still attests NOTHING —
-        // the stub returns the SAFE direction (refusal), never a false attest.
-        // This is the §10.3 discipline: a labeled proof gate that does not verify
-        // must say "unattested", never "attested".
+    fn malformed_transport_bytes_fail_closed() {
+        // Raw garbage that is NOT a valid transport ⇒ refused at the S1 decode
+        // (fail-closed), before any circuit check. The reason names the decode.
         let r = attest_range(&req(&[0xde, 0xad, 0xbe, 0xef], 0, 10));
-        assert!(!r.attested(), "the unwired stub must NEVER attest (fail-closed)");
+        assert!(!r.attested(), "garbage bytes must never attest");
+        assert!(
+            r.reason().contains("does not decode") || r.reason().contains("transport"),
+            "the refusal names the transport decode: {}",
+            r.reason()
+        );
+        assert!(attested_rows(&r, &recorded(0, 10)).is_empty());
+    }
+
+    #[test]
+    fn well_formed_transport_attests_nothing_fail_closed() {
+        // THE LOAD-BEARING SAFETY PROPERTY: with the circuit link unwired (the
+        // default build), a STRUCTURALLY-VALID transport (it decodes fine) STILL
+        // attests NOTHING — the stub returns the SAFE direction (refusal), never a
+        // false attest. This is the §10.3 discipline: a labeled proof gate that does
+        // not verify must say "unattested", never "attested". (The transport decodes;
+        // it is the circuit *verify* that is stubbed off.)
+        let t = good_transport(11); // 11 turns ⇒ would cover [0,10] IF it verified
+        let r = attest_range(&req(&t, 0, 10));
+        assert!(
+            !r.attested(),
+            "a valid transport must STILL not attest with the verifier unwired: {}",
+            r.reason()
+        );
         assert!(
             r.reason().contains("not yet wired") || r.reason().contains("settle item"),
-            "the refusal names the circuit-link settle item: {}",
+            "the refusal names the circuit-link settle item, not a decode error: {}",
             r.reason()
         );
         // And it emits zero rows.
@@ -438,6 +636,56 @@ mod tests {
     fn refused_verdict_emits_no_rows() {
         let verdict = RangeAttestation::Refused("nope".to_string());
         assert!(attested_rows(&verdict, &recorded(0, 5)).is_empty());
+    }
+
+    // ── S1: the whole-chain-proof transport (encode/decode round-trip + hygiene) ──
+
+    #[test]
+    fn transport_round_trips() {
+        // The S1 artifact: the verify-sufficient subset of a WholeChainProof crosses
+        // the SQL boundary as bytes and decodes back bit-identically.
+        let t = SerializedWholeChainProof::new(
+            vec![1, 2, 3, 4, 5],
+            vec![9, 8, 7],
+            [0x11; 32],
+            [0x22; 32],
+            [0x33; 32],
+            42,
+        );
+        let bytes = t.to_bytes();
+        let back = SerializedWholeChainProof::from_bytes(&bytes).expect("decodes");
+        assert_eq!(back, t, "transport round-trips through postcard");
+        assert_eq!(back.version, WHOLE_CHAIN_PROOF_TRANSPORT_V1);
+        assert_eq!(back.num_turns, 42);
+        assert_eq!(back.genesis_root, [0x11; 32]);
+    }
+
+    #[test]
+    fn transport_decode_is_fail_closed() {
+        // Empty bytes ⇒ refused.
+        assert!(SerializedWholeChainProof::from_bytes(&[]).is_err());
+        // Garbage that is not a valid postcard transport ⇒ refused (named).
+        let e = SerializedWholeChainProof::from_bytes(&[0xff, 0xff, 0xff, 0xff]).unwrap_err();
+        assert!(e.contains("does not decode") || e.contains("transport"), "{e}");
+        // A transport with an EMPTY root proof component ⇒ refused (a half-proof is
+        // never silently accepted).
+        let empty_root = SerializedWholeChainProof::new(vec![], vec![1], [0; 32], [0; 32], [0; 32], 1);
+        let e = SerializedWholeChainProof::from_bytes(&empty_root.to_bytes()).unwrap_err();
+        assert!(e.contains("empty root proof"), "{e}");
+        // ... and an empty binding proof component ⇒ refused.
+        let empty_bind = SerializedWholeChainProof::new(vec![1], vec![], [0; 32], [0; 32], [0; 32], 1);
+        let e = SerializedWholeChainProof::from_bytes(&empty_bind.to_bytes()).unwrap_err();
+        assert!(e.contains("empty binding proof"), "{e}");
+    }
+
+    #[test]
+    fn transport_wrong_version_is_refused() {
+        // A transport tagged with an unknown version is refused (fail-closed) rather
+        // than misread — the staged-format discipline.
+        let mut t = SerializedWholeChainProof::new(vec![1], vec![1], [0; 32], [0; 32], [0; 32], 1);
+        t.version = 9999;
+        let e = SerializedWholeChainProof::from_bytes(&t.to_bytes()).unwrap_err();
+        assert!(e.contains("unsupported") && e.contains("version"), "{e}");
     }
 
     fn recorded_one(ord: u64) -> AttestedTurn {

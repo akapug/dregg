@@ -1645,6 +1645,7 @@ dependencies = [
  "libc",
  "pgrx",
  "pgrx-tests",
+ "postcard",
  "proptest",
  "serde",
  "serde_json",
